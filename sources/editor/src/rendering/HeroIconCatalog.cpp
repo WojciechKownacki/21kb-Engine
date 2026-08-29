@@ -20,6 +20,8 @@ HeroIconGlyph HeroIconCatalog::Glyph(HeroIconKind icon) noexcept {
         return HeroIconAssets::TransportStop();
     case HeroIconKind::XMark:
         return HeroIconAssets::XMark();
+    case HeroIconKind::Check:
+        return HeroIconAssets::Check();
     case HeroIconKind::Cube:
         return HeroIconAssets::Cube();
     case HeroIconKind::Folder:
@@ -60,6 +62,30 @@ HeroIconGlyph HeroIconCatalog::Glyph(HeroIconKind icon) noexcept {
         return HeroIconAssets::Camera();
     case HeroIconKind::Skeleton:
         return HeroIconAssets::Skeleton();
+    case HeroIconKind::LockClosed:
+        return HeroIconAssets::LockClosed();
+    case HeroIconKind::Server:
+        return HeroIconAssets::Server();
+    case HeroIconKind::WrenchScrewdriver:
+        return HeroIconAssets::WrenchScrewdriver();
+    case HeroIconKind::CodeBracket:
+        return HeroIconAssets::CodeBracket();
+    case HeroIconKind::RocketLaunch:
+        return HeroIconAssets::RocketLaunch();
+    case HeroIconKind::Save:
+        return HeroIconAssets::Save();
+    case HeroIconKind::PlatformWindows:
+        return HeroIconAssets::PlatformWindows();
+    case HeroIconKind::PlatformAndroid:
+        return HeroIconAssets::PlatformAndroid();
+    case HeroIconKind::PlatformLinux:
+        return HeroIconAssets::PlatformLinux();
+    case HeroIconKind::PlatformServer:
+        return HeroIconAssets::PlatformServer();
+    case HeroIconKind::DisclosureCollapsed:
+        return HeroIconAssets::DisclosureCollapsed();
+    case HeroIconKind::DisclosureExpanded:
+        return HeroIconAssets::DisclosureExpanded();
     default:
         return {};
     }

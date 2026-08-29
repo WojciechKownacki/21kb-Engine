@@ -297,7 +297,6 @@ private:
     [[nodiscard]] bool SubmitPendingPaint();
     void ReportAaTrace(std::string_view message, bool force = false);
     void ReportAaRouteTrace(std::string_view message, bool force = false);
-    void ReportAaPipelineTrace(std::string_view message, bool force = false);
     void SetFailureDetail(std::string detail);
     void TrackPaintHost(HWND parent) noexcept;
     void FailRender(const char* reason) noexcept;
@@ -327,7 +326,6 @@ private:
     std::function<void(std::string_view)> aaTraceReporter_{};
     std::string lastConsoleAaTrace_{};
     std::string lastConsoleAaRouteTrace_{};
-    std::string lastConsoleAaPipelineTrace_{};
     std::string failureDetail_{};
     std::string graphShaderCacheRoot_{};
     render::Renderer renderer_;

@@ -42,6 +42,20 @@ struct PhysicsField {
 
 class InspectorPhysicsModel {
 public:
+    // How many rows a component shows. Every list below is a fixed one, so the count
+    // is known without building a single string - and both the panel's height and its
+    // hit testing want only the count. They used to build the whole display list for
+    // it, on every repaint and on every mouse move across the panel.
+    [[nodiscard]] static constexpr int FieldCount(PhysicsComponentKind component) noexcept {
+        switch (component) {
+        case PhysicsComponentKind::Rigidbody: return 12;
+        case PhysicsComponentKind::Collider: return 13;
+        case PhysicsComponentKind::CharacterController: return 9;
+        case PhysicsComponentKind::Joint: return 13;
+        }
+        return 0;
+    }
+
     // The index-stable field rows for a component, in render order.
     [[nodiscard]] static std::vector<PhysicsField> Fields(const kb::scene::RigidbodyComponent& component);
     [[nodiscard]] static std::vector<PhysicsField> Fields(const kb::scene::ColliderComponent& component);

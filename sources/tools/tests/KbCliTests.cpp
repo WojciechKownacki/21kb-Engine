@@ -5,6 +5,7 @@
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/input/InputAssetIO.hpp"
 #include "engine/input/InputKey.hpp"
+#include "engine/project/ProjectSettings.hpp"
 #include "engine/project/ProjectManager.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -71,9 +72,12 @@ void WriteProjectDescriptor(
     bool withPhysics,
     std::string physicsLayersAsset = {}) {
     kb::project::ProjectDescriptor descriptor;
-    descriptor.name = "KbCliRuntimeTest";
-    descriptor.defaultScene = "/Game/Scenes/Main.21kbscene";
-    descriptor.physicsLayersAsset = std::move(physicsLayersAsset);
+    // The settings the runtime reads live beside the descriptor now.
+    kb::project::ProjectSettings settings;
+    settings.name = "KbCliRuntimeTest";
+    settings.gameName = settings.name;
+    settings.defaultMap = "/Game/Scenes/Main.21kbscene";
+    settings.physicsLayersAsset = std::move(physicsLayersAsset);
     if (withPhysics) {
         Require(
             !std::filesystem::path{ KB_PHYSICS_JOLT_PLUGIN_PATH }.empty(),
@@ -90,6 +94,11 @@ void WriteProjectDescriptor(
     Require(
         kb::project::ProjectManager::SaveProject(root / "Project.21kbproject", descriptor),
         "kb_cli test project descriptor could not be written");
+    std::string settingsError;
+    Require(
+        kb::project::ProjectSettingsStore::Save(
+            kb::project::ProjectSettingsStore::FilePath(root), settings, settingsError),
+        "kb_cli test project settings could not be written");
 }
 
 [[nodiscard]] bool Contains(const std::string& text, std::string_view needle) {
@@ -255,7 +264,6 @@ void RunRunCommandTests() {
     Require(Contains(run.output, "0 diagnostics"), "run summary is wrong");
 
     kb::project::ProjectDescriptor brokenDescriptor;
-    brokenDescriptor.name = "KbCliMissingPluginTest";
     brokenDescriptor.plugins.push_back(kb::project::ProjectPluginReference{
         .name = "Physics.Missing",
         .binaryPath = "kb_plugin_that_does_not_exist.dll",
@@ -1960,10 +1968,16 @@ void RunProjectileTemplateTests() {
     kb::project::ProjectDescriptorReadResult descriptor =
         kb::project::ProjectManager::LoadProject(TestRoot() / "Project.21kbproject");
     Require(descriptor.succeeded, "LIB-129 CLI failure-path test could not reload the valid project descriptor");
-    const kb::project::ProjectDescriptor validDescriptor = descriptor.descriptor;
-    descriptor.descriptor.physicsLayersAsset = "/Game/Config/Missing.21kbphysicslayers";
+    const std::filesystem::path settingsFile =
+        kb::project::ProjectSettingsStore::FilePath(TestRoot());
+    const auto validSettings = kb::project::ProjectSettingsStore::Load(settingsFile);
+    Require(validSettings.Succeeded() && validSettings.found,
+        "LIB-129 CLI failure-path test could not reload the valid project settings");
+    kb::project::ProjectSettings missingSettings = validSettings.settings;
+    missingSettings.physicsLayersAsset = "/Game/Config/Missing.21kbphysicslayers";
+    std::string settingsError;
     Require(
-        kb::project::ProjectManager::SaveProject(TestRoot() / "Project.21kbproject", descriptor.descriptor),
+        kb::project::ProjectSettingsStore::Save(settingsFile, missingSettings, settingsError),
         "LIB-129 CLI failure-path test could not persist a missing configured asset");
     const CommandRun missingLayers = Run(&kb::cli::RunRunCommand, {
         "--project", root,
@@ -1975,8 +1989,8 @@ void RunProjectileTemplateTests() {
     Require(Contains(missingLayers.output, "project physics layers could not be loaded and applied"),
         "LIB-129 kb_cli did not expose the configured physics layers activation failure");
     Require(
-        kb::project::ProjectManager::SaveProject(TestRoot() / "Project.21kbproject", validDescriptor),
-        "LIB-129 CLI failure-path test did not restore the valid production fixture descriptor");
+        kb::project::ProjectSettingsStore::Save(settingsFile, validSettings.settings, settingsError),
+        "LIB-129 CLI failure-path test did not restore the valid production fixture settings");
 }
 
 void RunApiCommandTests() {

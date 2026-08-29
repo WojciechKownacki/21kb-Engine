@@ -25,6 +25,11 @@ Vendored subset used by the Win32 editor:
 - `optimized/24/solid/cube.svg`
 - `optimized/24/solid/folder.svg`
 - `optimized/24/solid/sun.svg`
+- `optimized/24/solid/lock-closed.svg`
+- `optimized/24/solid/server.svg`
+- `optimized/24/solid/wrench-screwdriver.svg`
+- `optimized/24/solid/code-bracket.svg`
+- `optimized/24/solid/rocket-launch.svg`
 
 The editor embeds the selected SVG path data in read-only code data and renders
 it as vector paths at runtime. The SVG files stay in `third_party` as the

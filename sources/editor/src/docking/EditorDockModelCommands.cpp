@@ -1,5 +1,7 @@
 #include "docking/EditorDockModelCommands.hpp"
 
+#include "docking/DefaultDockWorkspace.hpp"
+#include "docking/DockLayoutSerializer.hpp"
 #include "docking/DockLeafPanelOrder.hpp"
 #include "docking/DockNodeFactory.hpp"
 #include "docking/DockNodeQuery.hpp"
@@ -30,6 +32,46 @@ EditorDockModelCommands::EditorDockModelCommands(DockPanelCollection& panels, st
     , root_(root)
     , nextNodeId_(nextNodeId)
     , maximizedLeafId_(maximizedLeafId) {}
+
+void EditorDockModelCommands::ResetWorkspace() {
+    panels_.Reset(DefaultDockWorkspace{}.CreatePanels());
+    nextNodeId_ = 1U;
+    root_ = DefaultDockWorkspace{}.CreateRoot(nextNodeId_);
+    maximizedLeafId_ = 0U;
+}
+
+bool EditorDockModelCommands::RestoreWorkspace(std::string_view tree) {
+    std::vector<std::uint32_t> knownPanels;
+    knownPanels.reserve(panels_.All().size());
+    for (const DockPanel& panel : panels_.All()) {
+        knownPanels.push_back(panel.id);
+    }
+
+    std::uint32_t nextNodeId = 1U;
+    std::unique_ptr<DockNode> restored = DockLayoutSerializer::Parse(tree, knownPanels, nextNodeId);
+    if (restored == nullptr) {
+        return false;
+    }
+    root_ = std::move(restored);
+    nextNodeId_ = nextNodeId;
+    maximizedLeafId_ = 0U;
+    // Panels the saved layout does not place - closed when it was written, or added by
+    // a later build - stay out of the tree. Marking them hidden keeps the model honest
+    // and lets the caller reopen or float them from the saved session.
+    for (const DockPanel& panel : panels_.All()) {
+        if (DockNodeQuery::FindLeafContaining(root_.get(), panel.id) != nullptr) {
+            continue;
+        }
+        if (DockPanel* hidden = panels_.Find(panel.id); hidden != nullptr) {
+            hidden->visible = false;
+        }
+    }
+    return true;
+}
+
+std::string EditorDockModelCommands::SerializeWorkspace() const {
+    return DockLayoutSerializer::Serialize(root_.get());
+}
 
 void EditorDockModelCommands::ActivatePanel(std::uint32_t panelId) {
     DockLeafPanelOrder::Activate(root_.get(), panelId);
@@ -63,6 +105,9 @@ void EditorDockModelCommands::ReorderPanelInLeaf(std::uint32_t panelId, std::uin
 void EditorDockModelCommands::UndockPanel(std::uint32_t panelId, DockRect floatingRect) {
     maximizedLeafId_ = 0;
     DockPanelDocking::Undock(panels_, root_, panelId, floatingRect);
+    if (DockPanel* panel = panels_.Find(panelId); panel != nullptr && panel->area == DockArea::Floating) {
+        panel->visible = true;
+    }
 }
 
 void EditorDockModelCommands::DockPanelTo(std::uint32_t panelId, const DockDropPreview& target) {

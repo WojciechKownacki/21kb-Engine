@@ -25,7 +25,7 @@ struct AddComponentRow {
     std::string id; // category name (Category) or component id (Component)
 };
 
-// Pure layout for the Unity-style Add Component menu: which rows are visible in
+// Pure layout for the Add Component menu: which rows are visible in
 // the current view, plus the scroll/virtualization arithmetic. No editor state,
 // so it is unit-testable against the catalog directly.
 class InspectorAddComponentBrowserModel {

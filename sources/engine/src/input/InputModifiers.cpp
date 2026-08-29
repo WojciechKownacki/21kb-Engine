@@ -16,7 +16,7 @@ namespace {
 }
 
 InputValue ApplyNegate(InputValue value, const InputModifierDesc& modifier) {
-    // Default (all params zero) negates every axis, matching Unreal's defaults;
+    // Default (all params zero) negates every axis - the documented default;
     // otherwise only the axes whose flag is set are negated.
     const bool anyFlag = modifier.params[0] != 0.0F || modifier.params[1] != 0.0F || modifier.params[2] != 0.0F;
     const bool negX = !anyFlag || modifier.params[0] != 0.0F;

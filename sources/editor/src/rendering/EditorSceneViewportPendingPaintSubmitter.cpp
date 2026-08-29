@@ -22,6 +22,11 @@ namespace {
     return EditorSceneViewportGeometry::RectHeight(rect);
 }
 
+// A renderer stage this slow is a stall worth a trace line. Below it the frame is healthy
+// and nothing is written, so nothing may be formatted either.
+constexpr double kSlowStageMs = 4.0;
+constexpr double kSlowPaintStageMs = 8.0;
+
 [[nodiscard]] const char* BoolText(bool value) noexcept {
     return value ? "1" : "0";
 }
@@ -51,29 +56,42 @@ bool EditorSceneBgfxViewport::PendingPaintSubmitter::Submit(std::span<const Pend
     const std::vector<PendingPresentBatch> batches = PendingPresentBatchBuilder::Build(pendingPresents);
     const double batchMs = std::chrono::duration<double, std::milli>(
         std::chrono::steady_clock::now() - batchStart).count();
-    std::ostringstream detail;
-    detail << "presents=" << pendingPresents.size() << " batches=" << batches.size();
-    diagnostics::EditorLagTrace::Slow("viewport-batch-build", eventId, batchMs, detail.str(), 8.0);
+    // Built only for a stage that actually stalled. Formatting it on every frame cost four
+    // string allocations to describe frames nobody would ever read about.
+    const auto detail = [&pendingPresents, &batches] {
+        std::ostringstream text;
+        text << "presents=" << pendingPresents.size() << " batches=" << batches.size();
+        return text.str();
+    };
+    if (batchMs >= kSlowPaintStageMs) {
+        diagnostics::EditorLagTrace::Slow("viewport-batch-build", eventId, batchMs, detail(), kSlowPaintStageMs);
+    }
     const auto prepareStart = std::chrono::steady_clock::now();
     if (!BuildPendingSubmissions(std::span<const PendingPresentBatch>{batches.data(), batches.size()})) {
         return false;
     }
     const double prepareMs = std::chrono::duration<double, std::milli>(
         std::chrono::steady_clock::now() - prepareStart).count();
-    diagnostics::EditorLagTrace::Slow("viewport-prepare", eventId, prepareMs, detail.str(), 8.0);
+    if (prepareMs >= kSlowPaintStageMs) {
+        diagnostics::EditorLagTrace::Slow("viewport-prepare", eventId, prepareMs, detail(), kSlowPaintStageMs);
+    }
     const auto submitStart = std::chrono::steady_clock::now();
     if (!SubmitPreparedSubmissions()) {
         return false;
     }
     const double submitMs = std::chrono::duration<double, std::milli>(
         std::chrono::steady_clock::now() - submitStart).count();
-    diagnostics::EditorLagTrace::Slow("viewport-render-frame", eventId, submitMs, detail.str(), 8.0);
+    if (submitMs >= kSlowPaintStageMs) {
+        diagnostics::EditorLagTrace::Slow("viewport-render-frame", eventId, submitMs, detail(), kSlowPaintStageMs);
+    }
 
     const auto showStart = std::chrono::steady_clock::now();
     viewport_.hostSurfaceStore_.ShowPresentedWindows();
     const double showMs = std::chrono::duration<double, std::milli>(
         std::chrono::steady_clock::now() - showStart).count();
-    diagnostics::EditorLagTrace::Slow("viewport-show-windows", eventId, showMs, detail.str(), 8.0);
+    if (showMs >= kSlowPaintStageMs) {
+        diagnostics::EditorLagTrace::Slow("viewport-show-windows", eventId, showMs, detail(), kSlowPaintStageMs);
+    }
     return true;
 }
 
@@ -152,53 +170,38 @@ bool EditorSceneBgfxViewport::PendingPaintSubmitter::SubmitPreparedSubmissions()
     if (viewport_.pendingSubmissions_.empty()) {
         return true;
     }
+    const auto frameStart = std::chrono::steady_clock::now();
     if (viewport_.backendSettings_ != nullptr) {
         render::ScenePostProcessSettings settings = viewport_.renderer_.DefaultPostProcessSettings();
-        {
-            std::ostringstream message;
-            message << "PendingPaint before renderer default sync"
-                    << " uiFxaa=" << BoolText(viewport_.backendSettings_->FxaaEnabled())
-                    << " uiTaa=" << BoolText(viewport_.backendSettings_->TemporalAntiAliasingEnabled())
-                    << " uiMsaaSamples=" << static_cast<unsigned>(viewport_.backendSettings_->MsaaSamples())
-                    << " rendererDefaultFxaa=" << BoolText(settings.fxaaEnabled)
-                    << " rendererDefaultTaa=" << BoolText(settings.temporalAntiAliasingEnabled)
-                    << " rendererDefaultJitter=" << BoolText(settings.temporalJitterEnabled);
-        }
         settings.fxaaEnabled = viewport_.backendSettings_->FxaaEnabled();
         settings.temporalAntiAliasingEnabled = viewport_.backendSettings_->TemporalAntiAliasingEnabled();
         settings.temporalJitterEnabled = viewport_.backendSettings_->TemporalAntiAliasingEnabled();
         settings.bloomEnabled = viewport_.backendSettings_->BloomEnabled();
         viewport_.renderer_.SetDefaultPostProcessSettings(settings);
-        {
-            const render::ScenePostProcessSettings confirmed = viewport_.renderer_.DefaultPostProcessSettings();
-            std::ostringstream message;
-            message << "PendingPaint after renderer default sync"
-                    << " confirmedFxaa=" << BoolText(confirmed.fxaaEnabled)
-                    << " confirmedTaa=" << BoolText(confirmed.temporalAntiAliasingEnabled)
-                    << " confirmedJitter=" << BoolText(confirmed.temporalJitterEnabled)
-                    << " confirmedBloom=" << BoolText(confirmed.bloomEnabled);
-        }
     }
     const std::uint64_t eventId = diagnostics::EditorLagTrace::NextEventId();
-    std::ostringstream frameDetail;
-    const std::size_t fullSyncCount = std::ranges::count_if(
-        viewport_.pendingSubmissions_, [](const render::Renderer::SceneFrameSubmission& submission) {
-            return submission.desc.synchronizeScene;
-        });
-    const std::size_t runtimeTransformSyncCount = std::ranges::count_if(
-        viewport_.pendingSubmissions_, [](const render::Renderer::SceneFrameSubmission& submission) {
-            return submission.desc.transformAffineSync;
-        });
-    std::size_t dirtyEntityCount = 0U;
-    for (const render::Renderer::SceneFrameSubmission& submission : viewport_.pendingSubmissions_) {
-        dirtyEntityCount += submission.desc.dirtySceneEntityIds.size();
-    }
-    frameDetail << "submissions=" << viewport_.pendingSubmissions_.size()
-                << " presents=" << viewport_.pendingPresents_.size()
-                << " fullSync=" << fullSyncCount
-                << " runtimeTransformSync=" << runtimeTransformSyncCount
-                << " dirtyEntities=" << dirtyEntityCount
-                << " backend=" << viewport_.ActiveBackendLabel();
+    const auto frameDetail = [this] {
+        const std::size_t fullSyncCount = std::ranges::count_if(
+            viewport_.pendingSubmissions_, [](const render::Renderer::SceneFrameSubmission& submission) {
+                return submission.desc.synchronizeScene;
+            });
+        const std::size_t runtimeTransformSyncCount = std::ranges::count_if(
+            viewport_.pendingSubmissions_, [](const render::Renderer::SceneFrameSubmission& submission) {
+                return submission.desc.transformAffineSync;
+            });
+        std::size_t dirtyEntityCount = 0U;
+        for (const render::Renderer::SceneFrameSubmission& submission : viewport_.pendingSubmissions_) {
+            dirtyEntityCount += submission.desc.dirtySceneEntityIds.size();
+        }
+        std::ostringstream detail;
+        detail << "submissions=" << viewport_.pendingSubmissions_.size()
+               << " presents=" << viewport_.pendingPresents_.size()
+               << " fullSync=" << fullSyncCount
+               << " runtimeTransformSync=" << runtimeTransformSyncCount
+               << " dirtyEntities=" << dirtyEntityCount
+               << " backend=" << viewport_.ActiveBackendLabel();
+        return detail.str();
+    };
     const auto beginStart = std::chrono::steady_clock::now();
     if (!viewport_.renderer_.BeginFrame()) {
         viewport_.SetFailureDetail("Renderer BeginFrame failed while presenting queued editor viewports.");
@@ -206,32 +209,38 @@ bool EditorSceneBgfxViewport::PendingPaintSubmitter::SubmitPreparedSubmissions()
     }
     const double beginMs = std::chrono::duration<double, std::milli>(
         std::chrono::steady_clock::now() - beginStart).count();
-    diagnostics::EditorLagTrace::Slow("renderer-begin-frame", eventId, beginMs, frameDetail.str(), 4.0);
+    if (beginMs >= kSlowStageMs) {
+        diagnostics::EditorLagTrace::Slow("renderer-begin-frame", eventId, beginMs, frameDetail(), kSlowStageMs);
+    }
 
     const auto submitStart = std::chrono::steady_clock::now();
     const bool submitted = viewport_.renderer_.SubmitScenes(viewport_.pendingSubmissions_);
     const double submitMs = std::chrono::duration<double, std::milli>(
         std::chrono::steady_clock::now() - submitStart).count();
-    diagnostics::EditorLagTrace::Slow("renderer-submit-scenes", eventId, submitMs, frameDetail.str(), 4.0);
+    if (submitMs >= kSlowStageMs) {
+        diagnostics::EditorLagTrace::Slow("renderer-submit-scenes", eventId, submitMs, frameDetail(), kSlowStageMs);
+    }
     const auto endStart = std::chrono::steady_clock::now();
     viewport_.renderer_.EndFrame();
     const double endMs = std::chrono::duration<double, std::milli>(
         std::chrono::steady_clock::now() - endStart).count();
-    if (endMs >= 4.0) {
+    if (endMs >= kSlowStageMs) {
+        std::ostringstream detail;
+        detail << frameDetail();
         if (const bgfx::Stats* stats = bgfx::getStats(); stats != nullptr) {
             const double timerToMs = stats->cpuTimerFreq > 0
                 ? 1000.0 / static_cast<double>(stats->cpuTimerFreq)
                 : 0.0;
-            frameDetail << " waitSubmit=" << static_cast<double>(stats->waitSubmit) * timerToMs << "ms"
-                        << " waitRender=" << static_cast<double>(stats->waitRender) * timerToMs << "ms"
-                        << " cpuFrame=" << static_cast<double>(stats->cpuTimeFrame) * timerToMs << "ms"
-                        << " draws=" << stats->numDraw
-                        << " compute=" << stats->numCompute
-                        << " blit=" << stats->numBlit
-                        << " views=" << stats->numViews
-                        << " framebuffers=" << stats->numFrameBuffers;
+            detail << " waitSubmit=" << static_cast<double>(stats->waitSubmit) * timerToMs << "ms"
+                   << " waitRender=" << static_cast<double>(stats->waitRender) * timerToMs << "ms"
+                   << " cpuFrame=" << static_cast<double>(stats->cpuTimeFrame) * timerToMs << "ms"
+                   << " draws=" << stats->numDraw
+                   << " compute=" << stats->numCompute
+                   << " blit=" << stats->numBlit
+                   << " views=" << stats->numViews
+                   << " framebuffers=" << stats->numFrameBuffers;
         }
-        diagnostics::EditorLagTrace::Slow("renderer-end-frame", eventId, endMs, frameDetail.str(), 4.0);
+        diagnostics::EditorLagTrace::Slow("renderer-end-frame", eventId, endMs, detail.str(), kSlowStageMs);
     }
     if (!submitted) {
         viewport_.SetFailureDetail("Renderer SubmitScenes failed while presenting queued editor viewports.");
@@ -261,16 +270,6 @@ bool EditorSceneBgfxViewport::PendingPaintSubmitter::SubmitPreparedSubmissions()
     const bool effectiveTemporalJitter = postProcessActive &&
         postProcessSettings.temporalAntiAliasingEnabled &&
         postProcessSettings.temporalJitterEnabled;
-    {
-        std::ostringstream message;
-        message << "Toolbar/render display stats"
-                << " postProcessActive=" << BoolText(postProcessActive)
-                << " finalCompositeActive=" << BoolText(finalCompositeActive)
-                << " displayedTaaActive=" << BoolText(postProcessActive && postProcessSettings.temporalAntiAliasingEnabled)
-                << " displayedMsaaSamples=" << static_cast<unsigned>(viewport_.rendererMsaaSamples_)
-                << " actualSceneMsaaSamples=" << static_cast<unsigned>(actualSceneMsaaSamples)
-                << " displayedBloomActive=" << BoolText(postProcessActive && postProcessSettings.bloomEnabled && postProcessSettings.bloomStrength > 0.0F);
-    }
     {
         std::ostringstream message;
         message << "AA state"
@@ -308,19 +307,8 @@ bool EditorSceneBgfxViewport::PendingPaintSubmitter::SubmitPreparedSubmissions()
                 << " autoExposure=" << BoolText(postProcessSettings.outputTransform.autoExposure.enabled);
         viewport_.ReportAaRouteTrace(message.str());
     }
-    SceneViewportToolbarRenderer::RecordRenderStats(SceneViewportToolbarRenderStats{
-        .submittedDrawCalls = stats.submittedDrawCallCount,
-        .submittedMeshes = stats.submittedMeshCount,
-        .gpuDispatches = stats.gpuCullingDispatchCount,
-        .msaaSamples = viewport_.rendererMsaaSamples_,
-        .gpuDrivenActive = stats.gpuDrivenFeatureState != render::SceneGpuDrivenFeatureState::Disabled &&
-            stats.gpuDrivenFeatureState != render::SceneGpuDrivenFeatureState::CpuValidationOnly,
-        .postProcessActive = postProcessActive,
-        .temporalAntiAliasingActive = postProcessActive && postProcessSettings.temporalAntiAliasingEnabled,
-        .bloomActive = postProcessActive && postProcessSettings.bloomEnabled && postProcessSettings.bloomStrength > 0.0F,
-        .finalCompositeActive = finalCompositeActive,
-    });
-    SceneViewportToolbarRenderer::RecordPresentedFrame();
+    SceneViewportToolbarRenderer::RecordFrameMilliseconds(
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - frameStart).count());
     return true;
 }
 

@@ -17,42 +17,49 @@ void SvgGraphicsPathBuilder::Build(Gdiplus::GraphicsPath& path) {
         if (command == '\0') {
             break;
         }
-        Execute(figure, command);
+        // A command this builder does not implement reads nothing, and the character after
+        // it is not a command either - so without this the loop would sit on the same spot
+        // forever. One malformed path must cost the rest of that path, not the editor.
+        // Progress is the wrong test for that: a close consumes nothing either, and using it
+        // stopped every icon at its first subpath.
+        if (!Execute(figure, command)) {
+            break;
+        }
     }
 }
 
-void SvgGraphicsPathBuilder::Execute(SvgPathFigureBuilder& figure, char command) {
+bool SvgGraphicsPathBuilder::Execute(SvgPathFigureBuilder& figure, char command) {
     switch (command) {
     case 'M':
     case 'm':
         ReadMove(figure, command == 'm');
-        return;
+        return true;
     case 'L':
     case 'l':
         ReadLines(figure, command == 'l');
-        return;
+        return true;
     case 'H':
     case 'h':
         ReadHorizontal(figure, command == 'h');
-        return;
+        return true;
     case 'V':
     case 'v':
         ReadVertical(figure, command == 'v');
-        return;
+        return true;
     case 'C':
     case 'c':
         ReadCubics(figure, command == 'c');
-        return;
+        return true;
     case 'A':
     case 'a':
         ReadArcs(figure, command == 'a');
-        return;
+        return true;
     case 'Z':
     case 'z':
         figure.Close();
-        return;
+        return true;
     default:
-        return;
+        return false;
     }
 }
 
@@ -102,9 +109,22 @@ void SvgGraphicsPathBuilder::ReadCubics(SvgPathFigureBuilder& figure, bool relat
 }
 
 void SvgGraphicsPathBuilder::ReadArcs(SvgPathFigureBuilder& figure, bool relative) {
-    std::array<double, 7> values{};
-    while (ReadValues(values)) {
-        figure.Arc(values[0], values[1], values[2], values[3] != 0.0, values[4] != 0.0, values[5], values[6], relative);
+    // Read in the arc's own shape rather than as seven numbers: the large-arc and sweep
+    // flags are single digits that the grammar allows to abut the coordinate after them.
+    while (true) {
+        double rx = 0.0;
+        double ry = 0.0;
+        double rotation = 0.0;
+        bool largeArc = false;
+        bool sweep = false;
+        double x = 0.0;
+        double y = 0.0;
+        if (!cursor_.ReadNumber(rx) || !cursor_.ReadNumber(ry) || !cursor_.ReadNumber(rotation) ||
+            !cursor_.ReadFlag(largeArc) || !cursor_.ReadFlag(sweep) ||
+            !cursor_.ReadNumber(x) || !cursor_.ReadNumber(y)) {
+            return;
+        }
+        figure.Arc(rx, ry, rotation, largeArc, sweep, x, y, relative);
     }
 }
 

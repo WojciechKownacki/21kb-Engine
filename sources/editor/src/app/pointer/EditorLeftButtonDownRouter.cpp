@@ -1,5 +1,7 @@
 #include "app/pointer/EditorLeftButtonDownRouter.hpp"
 
+#include "rendering/BuildGamePanelRenderer.hpp"
+
 #if defined(_WIN32)
 #include "app/EditorAssetBrowserPointerHandler.hpp"
 #include "app/EditorCrashBreadcrumbs.hpp"
@@ -441,7 +443,7 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
     if (pendingTextEdits.CommitPendingEdits()) {
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
     }
-    if (EditorWindowToolbarPointerHandler::HandleLeftButtonDown(mainWindow_, messageWindow, x, y, dockModel_, sceneContext_, sceneViewport_, playMode_, shellInteraction_, metrics_)) {
+    if (EditorWindowToolbarPointerHandler::HandleLeftButtonDown(mainWindow_, messageWindow, x, y, dockModel_, floatingWindows_, sceneContext_, sceneViewport_, renderBackendSettings_, playMode_, shellInteraction_, metrics_)) {
         return;
     }
     if (messageWindow == mainWindow_) {
@@ -1840,7 +1842,11 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
 
     if (panelHit.inProjectSettingsPanel) {
         EditorProjectSettingsPointerController projectSettingsPointer(sceneContext_);
-        if (projectSettingsPointer.HandlePointerDown(*panelHit.projectSettingsContent, x, y)) {
+        if (projectSettingsPointer.HandlePointerDown(
+                *panelHit.projectSettingsContent,
+                x,
+                y,
+                renderBackendSettings_)) {
             sceneViewport_.RequestPresent();
         }
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
@@ -1849,7 +1855,7 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
 
     if (panelHit.inEditorSettingsPanel) {
         EditorSettingsPointerController editorSettingsPointer(sceneContext_);
-        if (editorSettingsPointer.HandlePointerDown(*panelHit.editorSettingsContent, x, y, renderBackendSettings_)) {
+        if (editorSettingsPointer.HandlePointerDown(*panelHit.editorSettingsContent, x, y)) {
             sceneViewport_.RequestPresent();
         }
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
@@ -1875,6 +1881,32 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
     // action, not a scene action, so it must NOT clear the scene selection (the
     // Inspector keeps showing the selected object). Only a click that hit no dock
     // element and landed outside the Hierarchy/Console falls through to deselect.
+    if (const std::optional<RECT> buildGameContent = EditorPanelContentResolver::Resolve(
+            DockPanelKind::BuildGame, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
+        buildGameContent.has_value()) {
+        const BuildGamePanelRenderer::SidebarHit sidebar =
+            BuildGamePanelRenderer::HitTestSidebar(*buildGameContent, x, y);
+        if (sidebar.target >= 0) {
+            if (sceneContext_.SetBuildGameSelectedTarget(sidebar.target)) {
+                EditorWindowInvalidator::InvalidatePanel(messageWindow, *buildGameContent);
+            }
+            return;
+        }
+        if (sidebar.profile >= 0) {
+            if (sceneContext_.SetBuildGameSelectedProfile(sidebar.profile)) {
+                EditorWindowInvalidator::InvalidatePanel(messageWindow, *buildGameContent);
+            }
+            return;
+        }
+        const BuildGamePanelRenderer::RowHit hit =
+            BuildGamePanelRenderer::HitTest(*buildGameContent, sceneContext_, x, y);
+        if (hit.section >= 0 && hit.row < 0) {
+            sceneContext_.ToggleBuildGameSection(hit.section);
+            EditorWindowInvalidator::InvalidatePanel(messageWindow, *buildGameContent);
+            return;
+        }
+    }
+
     const bool dockConsumed = dockController_.HandlePointerDown(messageWindow, x, y);
     if (dockConsumed) {
         sceneViewport_.RequestPresent();

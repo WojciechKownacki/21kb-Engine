@@ -48,6 +48,13 @@
     { "op": "assert_selected_entity", "entity": "lastCamera" },
     { "op": "set_entity_position", "entity": "particleEntity", "x": 2.25, "y": 1.0, "z": 0.0 },
     { "op": "advance_autosave", "seconds": 600.0 },
+    { "op": "delete_entity", "entity": "particleEntity" },
+    { "op": "step_editor_particles", "frames": 1, "dt": 0.019607843 },
+    { "op": "assert_particle_scene_empty" },
+    { "op": "assert_particle_dependency_navigation" },
+    { "op": "copy_asset", "asset": "particleEffect", "destination": "/Game/Vfx" },
+    { "op": "assert_asset", "path": "/Game/Vfx/NewParticleEffect.kbvfx", "type": "ParticleEffect" },
+    { "op": "assert_asset", "path": "/Game/Vfx/NewParticleEffect_2.kbvfx", "type": "ParticleEffect" },
     { "op": "assert_no_errors" }
   ]
 }

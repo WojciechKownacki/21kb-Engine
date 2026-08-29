@@ -25,7 +25,9 @@ public:
     void Build(Gdiplus::GraphicsPath& path);
 
 private:
-    void Execute(SvgPathFigureBuilder& figure, char command);
+    // False when the command is one this builder does not implement, which is the
+    // signal to stop rather than sit on it.
+    [[nodiscard]] bool Execute(SvgPathFigureBuilder& figure, char command);
     void ReadMove(SvgPathFigureBuilder& figure, bool relative);
     void ReadLines(SvgPathFigureBuilder& figure, bool relative);
     void ReadHorizontal(SvgPathFigureBuilder& figure, bool relative);

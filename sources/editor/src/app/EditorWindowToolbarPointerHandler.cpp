@@ -4,13 +4,22 @@
 
 #if defined(_WIN32)
 #include "app/EditorSceneLifecycleGuard.hpp"
+#include "app/EditorWorkspaceSession.hpp"
+#include "docking/EditorWorkspaceArrangement.hpp"
+#include "docking/EditorFloatingWindowSync.hpp"
+#include "platform/win32/EditorChoiceDialog.hpp"
 #include "platform/win32/EditorSceneFileDialog.hpp"
+#include "platform/win32/EditorTextEntryDialog.hpp"
+#include "settings/EditorLayoutLibrary.hpp"
 #include "project/EditorProjectPaths.hpp"
 #include "rendering/SceneViewportPresentationPolicy.hpp"
 #include "rendering/EditorToolbarRenderer.hpp"
 
 #include <filesystem>
 #include <optional>
+#include <string>
+#include <utility>
+#include <vector>
 
 namespace kb::editor {
 namespace {
@@ -30,9 +39,10 @@ void IncludeRect(RECT& target, const RECT& source) noexcept {
     target = combined;
 }
 
-[[nodiscard]] RECT MenuInvalidationRect(const DockLayout& layout, EditorMenuCommand openMenu) noexcept {
+[[nodiscard]] RECT MenuInvalidationRect(
+    const DockLayout& layout, EditorMenuCommand openMenu, int rowCount) noexcept {
     RECT rect = ToRect(layout.menu);
-    const EditorMenuRects menu = EditorToolbarRenderer::ResolveMenu(rect, openMenu);
+    const EditorMenuRects menu = EditorToolbarRenderer::ResolveMenu(rect, openMenu, rowCount);
     if (openMenu != EditorMenuCommand::None) {
         IncludeRect(rect, menu.dropdown);
     }
@@ -45,10 +55,134 @@ void InvalidateMainRect(HWND mainWindow, const RECT& rect) noexcept {
     }
 }
 
-void InvalidateMenuChange(HWND mainWindow, const DockLayout& layout, EditorMenuCommand oldMenu, EditorMenuCommand newMenu) noexcept {
-    RECT rect = MenuInvalidationRect(layout, oldMenu);
-    IncludeRect(rect, MenuInvalidationRect(layout, newMenu));
+void InvalidateMenuChange(
+    HWND mainWindow,
+    const DockLayout& layout,
+    const EditorShellInteractionState& shellInteraction,
+    EditorMenuCommand oldMenu,
+    EditorMenuCommand newMenu) noexcept {
+    RECT rect = MenuInvalidationRect(layout, oldMenu, shellInteraction.MenuRowCount(oldMenu));
+    IncludeRect(rect, MenuInvalidationRect(layout, newMenu, shellInteraction.MenuRowCount(newMenu)));
     InvalidateMainRect(mainWindow, rect);
+}
+
+// The Layout menu lists what the project actually holds, so it is built the moment
+// the menu opens rather than carried between openings.
+void RefreshLayoutMenu(
+    EditorShellInteractionState& shellInteraction,
+    const EditorSceneContext& sceneContext,
+    bool deleting) {
+    const std::vector<std::string> saved =
+        EditorLayoutLibrary::List(EditorProjectPaths::ProjectRoot());
+    EditorLayoutMenuModel model;
+    if (deleting) {
+        model.RebuildForDelete(saved);
+    } else {
+        model.Rebuild(saved, sceneContext.EditorConfig().layoutName);
+    }
+    shellInteraction.SetLayoutMenu(std::move(model));
+}
+
+// Switching arrangements replaces the whole workspace, so the torn-off windows are
+// brought back in line with it before the new arrangement is recorded as current.
+void AdoptWorkspace(
+    EditorDockModel& dockModel,
+    EditorFloatingWindowManager& floatingWindows,
+    EditorSceneContext& sceneContext,
+    std::string layoutName) {
+    EditorFloatingWindowSync::Reconcile(dockModel, floatingWindows);
+    EditorWorkspaceSession::SaveAs(dockModel, sceneContext, std::move(layoutName));
+}
+
+void ApplySavedLayout(
+    EditorDockModel& dockModel,
+    EditorFloatingWindowManager& floatingWindows,
+    EditorSceneContext& sceneContext,
+    const std::string& name) {
+    const std::optional<EditorLayoutPreset> preset =
+        EditorLayoutLibrary::Load(EditorProjectPaths::ProjectRoot(), name);
+    if (!preset.has_value()) {
+        sceneContext.Console().Error("Layout", "Layout " + name + " could not be read.");
+        return;
+    }
+    if (!EditorWorkspaceArrangement::Apply(dockModel, *preset)) {
+        sceneContext.Console().Warning("Layout",
+            "Layout " + name + " does not fit this build and was only partly applied.");
+    }
+    AdoptWorkspace(dockModel, floatingWindows, sceneContext, name);
+    sceneContext.Console().Info("Layout", "Layout " + name + " applied.");
+}
+
+void SaveCurrentLayout(
+    HWND mainWindow,
+    EditorDockModel& dockModel,
+    EditorSceneContext& sceneContext) {
+    const std::optional<std::string> name = EditorTextEntryDialog::Show(mainWindow, {
+        .title = "Save Layout",
+        .label = "Layout name",
+        .value = sceneContext.EditorConfig().layoutName,
+        .hint = "Letters, digits, spaces, dashes and underscores.",
+        .acceptLabel = "Save",
+        .icon = HeroIconKind::RectangleGroup,
+    });
+    if (!name.has_value()) {
+        return;
+    }
+    if (!EditorLayoutLibrary::IsValidName(*name)) {
+        sceneContext.Console().Error("Layout",
+            "A layout name may only use letters, digits, spaces, dashes and underscores.");
+        return;
+    }
+    const bool overwriting =
+        EditorLayoutLibrary::Load(EditorProjectPaths::ProjectRoot(), *name).has_value();
+    if (overwriting && EditorChoiceDialog::Show(mainWindow, {
+            .title = "Save Layout",
+            .message = "Replace the layout " + *name + "?",
+            .supportingText = "Its saved arrangement is overwritten with the one on screen.",
+            .primaryLabel = "Replace",
+            .cancelLabel = "Cancel",
+            .icon = HeroIconKind::RectangleGroup,
+        }) != EditorChoiceDialogResult::Primary) {
+        return;
+    }
+
+    std::string error;
+    if (!EditorLayoutLibrary::Save(
+            EditorProjectPaths::ProjectRoot(), *name,
+            EditorWorkspaceArrangement::Capture(dockModel), error)) {
+        sceneContext.Console().Error("Layout",
+            error.empty() ? "The layout could not be saved." : error);
+        return;
+    }
+    EditorWorkspaceSession::SaveAs(dockModel, sceneContext, *name);
+    sceneContext.Console().Info("Layout", "Layout " + *name + " saved.");
+}
+
+void DeleteSavedLayout(
+    HWND mainWindow,
+    EditorDockModel& dockModel,
+    EditorSceneContext& sceneContext,
+    const std::string& name) {
+    if (EditorChoiceDialog::Show(mainWindow, {
+            .title = "Delete Layout",
+            .message = "Delete the layout " + name + "?",
+            .supportingText = "The arrangement on screen stays as it is; only the saved layout goes.",
+            .primaryLabel = "Delete",
+            .cancelLabel = "Cancel",
+            .icon = HeroIconKind::RectangleGroup,
+            .primaryTone = EditorDialogButtonTone::Destructive,
+        }) != EditorChoiceDialogResult::Primary) {
+        return;
+    }
+    if (!EditorLayoutLibrary::Delete(EditorProjectPaths::ProjectRoot(), name)) {
+        sceneContext.Console().Error("Layout", "Layout " + name + " could not be deleted.");
+        return;
+    }
+    // The workspace does not change, but it is no longer that layout's.
+    if (sceneContext.EditorConfig().layoutName == name) {
+        EditorWorkspaceSession::SaveAs(dockModel, sceneContext, {});
+    }
+    sceneContext.Console().Info("Layout", "Layout " + name + " deleted.");
 }
 
 void InvalidateToolbar(HWND mainWindow, const DockLayout& layout) noexcept {
@@ -69,38 +203,28 @@ void InvalidateToolbar(HWND mainWindow, const DockLayout& layout) noexcept {
         metrics.tabStripHeight,
         metrics.tabMinWidth,
         metrics.tabWidth,
-        metrics.splitterSize,
-        metrics.panelPadding);
+        metrics.splitterSize);
 }
 
-void ActivateProjectSettingsPanel(HWND mainWindow, EditorDockModel& dockModel) {
-    for (const DockPanel& panel : dockModel.Queries().Panels()) {
-        if (panel.kind == DockPanelKind::ProjectSettings) {
-            dockModel.Commands().ActivatePanel(panel.id);
-            InvalidateRect(mainWindow, nullptr, FALSE);
-            return;
-        }
+// Brings a panel up wherever it belongs. A panel the saved workspace never heard of is
+// in the model but in no leaf, and ActivatePanelKind drops it into `fallbackArea` - which
+// is what lets a panel added after a layout was saved still be reachable from the menu.
+void ActivatePanel(
+    HWND mainWindow,
+    EditorDockModel& dockModel,
+    EditorSceneBgfxViewport& sceneViewport,
+    DockPanelKind kind,
+    DockArea fallbackArea) {
+    if (!dockModel.Commands().ActivatePanelKind(kind, fallbackArea)) {
+        return;
     }
-}
-
-void ActivateEditorSettingsPanel(HWND mainWindow, EditorDockModel& dockModel) {
-    for (const DockPanel& panel : dockModel.Queries().Panels()) {
-        if (panel.kind == DockPanelKind::EditorSettings) {
-            dockModel.Commands().ActivatePanel(panel.id);
-            InvalidateRect(mainWindow, nullptr, FALSE);
-            return;
-        }
-    }
-}
-
-void ActivatePluginsPanel(HWND mainWindow, EditorDockModel& dockModel) {
-    for (const DockPanel& panel : dockModel.Queries().Panels()) {
-        if (panel.kind == DockPanelKind::Plugins) {
-            dockModel.Commands().ActivatePanel(panel.id);
-            InvalidateRect(mainWindow, nullptr, FALSE);
-            return;
-        }
-    }
+    InvalidateRect(mainWindow, nullptr, FALSE);
+    // The panel this one replaces may own a child render surface, and that surface is only
+    // taken down inside a present - EndPaintLayout hides every host surface the frame did
+    // not lay out. Repainting alone leaves the outgoing viewport's window sitting on top of
+    // the panel that just took its place, which is what a tab click avoids by asking for a
+    // present of its own.
+    sceneViewport.RequestPresent();
 }
 
 [[nodiscard]] bool HandleMenuLeftButtonDown(
@@ -109,15 +233,27 @@ void ActivatePluginsPanel(HWND mainWindow, EditorDockModel& dockModel) {
     int y,
     const DockLayout& layout,
     EditorDockModel& dockModel,
+    EditorFloatingWindowManager& floatingWindows,
     EditorSceneContext& sceneContext,
     EditorSceneBgfxViewport& sceneViewport,
+    EditorRenderBackendSettings& renderBackendSettings,
     EditorShellInteractionState& shellInteraction) {
-    const EditorMenuRects menu = EditorToolbarRenderer::ResolveMenu(ToRect(layout.menu), shellInteraction.OpenMenu());
+    const EditorMenuRects menu = EditorToolbarRenderer::ResolveMenu(
+        ToRect(layout.menu), shellInteraction.OpenMenu(),
+        shellInteraction.MenuRowCount(shellInteraction.OpenMenu()));
     if (const EditorMenuCommand hitMenu = EditorToolbarRenderer::HitTestMenu(menu, x, y); hitMenu != EditorMenuCommand::None) {
         const EditorMenuCommand oldMenu = shellInteraction.OpenMenu();
+        const RECT oldRect = MenuInvalidationRect(layout, oldMenu, shellInteraction.MenuRowCount(oldMenu));
         static_cast<void>(shellInteraction.SetHoveredMenu(hitMenu));
         static_cast<void>(shellInteraction.SetOpenMenu(hitMenu));
-        InvalidateMenuChange(mainWindow, layout, oldMenu, hitMenu);
+        if (shellInteraction.OpenMenu() == EditorMenuCommand::Layout) {
+            RefreshLayoutMenu(shellInteraction, sceneContext, false);
+        }
+        RECT rect = oldRect;
+        IncludeRect(rect, MenuInvalidationRect(
+            layout, shellInteraction.OpenMenu(),
+            shellInteraction.MenuRowCount(shellInteraction.OpenMenu())));
+        InvalidateMainRect(mainWindow, rect);
         return true;
     }
 
@@ -153,6 +289,8 @@ void ActivatePluginsPanel(HWND mainWindow, EditorDockModel& dockModel) {
                 if (path.has_value() && sceneContext.SaveCurrentSceneAs(*path)) {
                     sceneViewport.RequestPresent();
                 }
+            } else if (*row == 4) {
+                ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::BuildGame, DockArea::Center);
             }
         } else if (shellInteraction.OpenMenu() == EditorMenuCommand::Edit) {
             // Through the policy's pointer route: these rows used to call the context directly and so did
@@ -171,25 +309,72 @@ void ActivatePluginsPanel(HWND mainWindow, EditorDockModel& dockModel) {
                     sceneViewport.RequestPresent();
                 }
             } else if (*row == 3) {
-                ActivatePluginsPanel(mainWindow, dockModel);
+                ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::Plugins, DockArea::Right);
             }
+        } else if (shellInteraction.OpenMenu() == EditorMenuCommand::Layout) {
+            const EditorLayoutMenuRow* layoutRow = shellInteraction.LayoutMenu().Row(*row);
+            if (layoutRow == nullptr || !layoutRow->enabled) {
+                // The caption of the delete list: it says what the list is, and clicking
+                // it must not put the list away.
+                return true;
+            }
+            switch (layoutRow->action) {
+            case EditorLayoutMenuAction::Default:
+                dockModel.Commands().ResetWorkspace();
+                AdoptWorkspace(dockModel, floatingWindows, sceneContext, {});
+                sceneContext.Console().Info("Layout", "Default layout applied.");
+                break;
+            case EditorLayoutMenuAction::Apply:
+                ApplySavedLayout(dockModel, floatingWindows, sceneContext, layoutRow->layoutName);
+                break;
+            case EditorLayoutMenuAction::Save:
+                SaveCurrentLayout(mainWindow, dockModel, sceneContext);
+                break;
+            case EditorLayoutMenuAction::Delete: {
+                // Second step of the same menu: which one goes.
+                const RECT before = MenuInvalidationRect(
+                    layout, EditorMenuCommand::Layout,
+                    shellInteraction.MenuRowCount(EditorMenuCommand::Layout));
+                RefreshLayoutMenu(shellInteraction, sceneContext, true);
+                static_cast<void>(shellInteraction.SetHoveredMenuRow(std::nullopt));
+                RECT rect = before;
+                IncludeRect(rect, MenuInvalidationRect(
+                    layout, EditorMenuCommand::Layout,
+                    shellInteraction.MenuRowCount(EditorMenuCommand::Layout)));
+                InvalidateMainRect(mainWindow, rect);
+                return true;
+            }
+            case EditorLayoutMenuAction::Remove:
+                DeleteSavedLayout(mainWindow, dockModel, sceneContext, layoutRow->layoutName);
+                break;
+            }
+            sceneViewport.RequestPresent();
         } else if (shellInteraction.OpenMenu() == EditorMenuCommand::Options) {
-            if (*row == 2) {
-                ActivateProjectSettingsPanel(mainWindow, dockModel);
-            } else if (*row == 3) {
-                ActivateEditorSettingsPanel(mainWindow, dockModel);
+            if (*row == 0) {
+                // Renderer: step to the next graphics backend. The viewport rebuilds on
+                // the settings generation, so the change lands on the next present.
+                renderBackendSettings.CycleBackend();
+                sceneContext.Console().Info("Renderer",
+                    std::string{"Render backend: "} +
+                        EditorRenderBackendLabel(renderBackendSettings.Backend()) +
+                        ". Reopen the editor to apply.");
+                sceneViewport.RequestPresent();
+            } else if (*row == 1) {
+                ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::ProjectSettings, DockArea::Right);
+            } else if (*row == 2) {
+                ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::EditorSettings, DockArea::Right);
             }
         }
         const EditorMenuCommand oldMenu = shellInteraction.OpenMenu();
         shellInteraction.CloseMenu();
-        InvalidateMenuChange(mainWindow, layout, oldMenu, EditorMenuCommand::None);
+        InvalidateMenuChange(mainWindow, layout, shellInteraction, oldMenu, EditorMenuCommand::None);
         InvalidateRect(mainWindow, nullptr, FALSE);
         return true;
     }
 
     const EditorMenuCommand oldMenu = shellInteraction.OpenMenu();
     shellInteraction.CloseMenu();
-    InvalidateMenuChange(mainWindow, layout, oldMenu, EditorMenuCommand::None);
+    InvalidateMenuChange(mainWindow, layout, shellInteraction, oldMenu, EditorMenuCommand::None);
     return false;
 }
 
@@ -309,8 +494,10 @@ bool EditorWindowToolbarPointerHandler::HandleLeftButtonDown(
     int x,
     int y,
     EditorDockModel& dockModel,
+    EditorFloatingWindowManager& floatingWindows,
     EditorSceneContext& sceneContext,
     EditorSceneBgfxViewport& sceneViewport,
+    EditorRenderBackendSettings& renderBackendSettings,
     EditorPlayModeState& playMode,
     EditorShellInteractionState& shellInteraction,
     const EditorMetrics& metrics) {
@@ -323,7 +510,7 @@ bool EditorWindowToolbarPointerHandler::HandleLeftButtonDown(
         return false;
     }
 
-    if (HandleMenuLeftButtonDown(mainWindow, x, y, *layout, dockModel, sceneContext, sceneViewport, shellInteraction)) {
+    if (HandleMenuLeftButtonDown(mainWindow, x, y, *layout, dockModel, floatingWindows, sceneContext, sceneViewport, renderBackendSettings, shellInteraction)) {
         return true;
     }
 
@@ -352,7 +539,9 @@ bool EditorWindowToolbarPointerHandler::HandleMouseMove(
         return false;
     }
 
-    const EditorMenuRects menu = EditorToolbarRenderer::ResolveMenu(ToRect(layout->menu), shellInteraction.OpenMenu());
+    const EditorMenuRects menu = EditorToolbarRenderer::ResolveMenu(
+        ToRect(layout->menu), shellInteraction.OpenMenu(),
+        shellInteraction.MenuRowCount(shellInteraction.OpenMenu()));
     bool changed = false;
     changed = shellInteraction.SetHoveredMenu(EditorToolbarRenderer::HitTestMenu(menu, x, y)) || changed;
     changed = shellInteraction.SetHoveredMenuRow(EditorToolbarRenderer::HitTestMenuRow(menu, x, y)) || changed;
@@ -360,7 +549,9 @@ bool EditorWindowToolbarPointerHandler::HandleMouseMove(
     changed = shellInteraction.SetHoveredSave(EditorToolbarRenderer::HitTestSave(toolbar, x, y)) || changed;
     changed = shellInteraction.SetHoveredTransport(EditorToolbarRenderer::HitTestTransport(toolbar, x, y)) || changed;
     if (changed) {
-        RECT rect = MenuInvalidationRect(*layout, shellInteraction.OpenMenu());
+        RECT rect = MenuInvalidationRect(
+            *layout, shellInteraction.OpenMenu(),
+            shellInteraction.MenuRowCount(shellInteraction.OpenMenu()));
         IncludeRect(rect, ToRect(layout->toolbar));
         InvalidateMainRect(mainWindow, rect);
     }

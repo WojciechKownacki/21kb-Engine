@@ -202,6 +202,11 @@ const std::vector<LibraryComponentDesc>& EngineLibraryComponentRegistry::Catalog
             .serializable = true,
         },
         LibraryComponentDesc{
+            .name = "Particle Effect",
+            .id = ComputeLibraryComponentId("Particle Effect"),
+            .serializable = true,
+        },
+        LibraryComponentDesc{
             .name = "Echo soczewki",
             .id = ComputeLibraryComponentId("Echo soczewki"),
             .serializable = true,

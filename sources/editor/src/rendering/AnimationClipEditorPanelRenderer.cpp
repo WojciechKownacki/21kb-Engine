@@ -20,6 +20,18 @@ constexpr int kHeaderHeight = 30;
 constexpr int kTransportControlWidth = 28;
 constexpr int kTransportControlCount = 9;
 
+[[nodiscard]] COLORREF ThemeColor(EditorColor color) noexcept {
+    return RGB(color.r, color.g, color.b);
+}
+
+[[nodiscard]] COLORREF Blend(COLORREF a, COLORREF b, int percentB) noexcept {
+    const int percentA = 100 - percentB;
+    return RGB(
+        (GetRValue(a) * percentA + GetRValue(b) * percentB) / 100,
+        (GetGValue(a) * percentA + GetGValue(b) * percentB) / 100,
+        (GetBValue(a) * percentA + GetBValue(b) * percentB) / 100);
+}
+
 [[nodiscard]] RECT TransportControlRect(const RECT& content, std::uint8_t index) noexcept {
     const int right = static_cast<int>(content.right) - 8 -
         static_cast<int>(index) * kTransportControlWidth;
@@ -39,8 +51,12 @@ constexpr int kTransportControlCount = 9;
     return RGB(207, 214, 222);
 }
 
-void PaintTimeline(HDC dc, const RECT& rect, const AnimationClipTimelineState& timeline) {
-    GdiDrawing::FillRectColor(dc, rect, RGB(25, 27, 31));
+void PaintTimeline(HDC dc, const RECT& rect, const AnimationClipTimelineState& timeline, const EditorTheme& theme) {
+    const COLORREF background = ThemeColor(theme.background);
+    const COLORREF panel = ThemeColor(theme.panel);
+    const COLORREF strip = ThemeColor(theme.strip);
+    const COLORREF accent = ThemeColor(theme.accent);
+    GdiDrawing::FillRectColor(dc, rect, background);
     const int left = static_cast<int>(rect.left);
     const int top = static_cast<int>(rect.top);
     const int right = static_cast<int>(rect.right);
@@ -49,12 +65,12 @@ void PaintTimeline(HDC dc, const RECT& rect, const AnimationClipTimelineState& t
     const int tracksLeft = left + outlinerWidth;
     const int headerHeight = 24;
     const int rowHeight = 20;
-    GdiDrawing::FillRectColor(dc, RECT{ left, top, tracksLeft, bottom }, RGB(31, 34, 39));
-    GdiDrawing::FillRectColor(dc, RECT{ tracksLeft, top, right, top + headerHeight }, RGB(34, 37, 43));
+    GdiDrawing::FillRectColor(dc, RECT{ left, top, tracksLeft, bottom }, panel);
+    GdiDrawing::FillRectColor(dc, RECT{ tracksLeft, top, right, top + headerHeight }, strip);
     const ScopedFont font{ 12, FW_NORMAL };
     const ScopedGdiObject selectedFont(dc, font.handle);
     SetBkMode(dc, TRANSPARENT);
-    SetTextColor(dc, RGB(161, 172, 186));
+    SetTextColor(dc, ThemeColor(theme.textSecondary));
     RECT outlinerTitle{ left + 8, top, tracksLeft - 4, top + headerHeight };
     DrawTextA(dc, "Track", -1, &outlinerTitle, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 
@@ -63,7 +79,7 @@ void PaintTimeline(HDC dc, const RECT& rect, const AnimationClipTimelineState& t
     const int trackWidth = std::max(1, right - tracksLeft - 1);
     for (int division = 0; division <= 4; ++division) {
         const int x = tracksLeft + (trackWidth * division) / 4;
-        GdiDrawing::FillRectColor(dc, RECT{ x, top + headerHeight, x + 1, bottom }, RGB(49, 53, 61));
+        GdiDrawing::FillRectColor(dc, RECT{ x, top + headerHeight, x + 1, bottom }, ThemeColor(theme.gridLine));
         const std::string label = std::to_string(visibleStart + (visibleDuration * static_cast<float>(division)) / 4.0F) + "s";
         RECT tick{ x + 3, top, std::min(right, x + 60), top + headerHeight };
         DrawTextA(dc, label.c_str(), -1, &tick, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
@@ -75,9 +91,10 @@ void PaintTimeline(HDC dc, const RECT& rect, const AnimationClipTimelineState& t
         if (rowTop >= bottom) break;
         const int rowBottom = std::min(bottom, rowTop + rowHeight);
         if (timeline.SelectedTrack() == index) {
-            GdiDrawing::FillRectColor(dc, RECT{ left, rowTop, right, rowBottom }, RGB(55, 71, 91));
+            GdiDrawing::FillRectColor(dc, RECT{ left, rowTop, right, rowBottom }, Blend(panel, accent, 24));
+            GdiDrawing::FillRectColor(dc, RECT{ left, rowTop, left + 3, rowBottom }, accent);
         } else if ((index & 1U) != 0U) {
-            GdiDrawing::FillRectColor(dc, RECT{ tracksLeft, rowTop, right, rowBottom }, RGB(29, 32, 37));
+            GdiDrawing::FillRectColor(dc, RECT{ tracksLeft, rowTop, right, rowBottom }, Blend(background, panel, 48));
         }
         SetTextColor(dc, TrackColor(tracks[index].kind));
         RECT label{ left + 8, rowTop, tracksLeft - 6, rowBottom };
@@ -104,22 +121,23 @@ void AnimationClipEditorPanelRenderer::Paint(
     EditorSceneBgfxViewport* sceneViewport) const {
     if (!sceneContext.HasAnimationClipEditorAsset() ||
         sceneContext.AnimationClipEditorPreviewScene() == nullptr) {
-        GdiDrawing::FillRectColor(dc, content, RGB(27, 29, 33));
+        GdiDrawing::FillRectColor(dc, content, ThemeColor(theme.background));
         const ScopedFont font{ 15, FW_NORMAL };
         const ScopedGdiObject selectedFont(dc, font.handle);
         SetBkMode(dc, TRANSPARENT);
-        SetTextColor(dc, RGB(168, 178, 190));
+        SetTextColor(dc, ThemeColor(theme.textSecondary));
         RECT text = content;
         DrawTextA(dc, "Open an Animation Clip asset to begin editing.", -1, &text,
             DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
         return;
     }
 
-    GdiDrawing::FillRectColor(dc, RECT{ content.left, content.top, content.right, content.top + kHeaderHeight }, RGB(34, 37, 43));
+    GdiDrawing::FillRectColor(dc, RECT{ content.left, content.top, content.right, content.top + kHeaderHeight }, ThemeColor(theme.strip));
+    GdiDrawing::FillRectColor(dc, RECT{ content.left, content.top, content.left + 3, content.top + kHeaderHeight }, ThemeColor(theme.accent));
     const ScopedFont titleFont{ 13, FW_SEMIBOLD };
     const ScopedGdiObject selectedTitleFont(dc, titleFont.handle);
     SetBkMode(dc, TRANSPARENT);
-    SetTextColor(dc, RGB(219, 225, 233));
+    SetTextColor(dc, ThemeColor(theme.textPrimary));
     RECT title{ content.left + 10, content.top, content.right - kTransportControlCount * kTransportControlWidth - 12, content.top + kHeaderHeight };
     const kb::assets::AssetMetadata* metadata =
         sceneContext.Scene().Assets().Manager().Registry().Find(sceneContext.AnimationClipEditorAssetId());
@@ -146,15 +164,18 @@ void AnimationClipEditorPanelRenderer::Paint(
         const RECT button = TransportControlRect(content, index);
         const bool active = (index == 4U && sceneContext.AnimationClipEditorTimeline().SnappingEnabled()) ||
             (index == 5U && transport.Loops());
-        GdiDrawing::FillRectColor(dc, button, active ? RGB(62, 86, 114) : RGB(47, 51, 58));
-        SetTextColor(dc, RGB(220, 226, 234));
+        const COLORREF buttonFill = active ? ThemeColor(theme.accent) : ThemeColor(theme.toolbarButton);
+        GdiDrawing::DrawSharpFrame(dc, button, buttonFill,
+            active ? ThemeColor(theme.accent) : ThemeColor(theme.borderPanel));
+        SetTextColor(dc, ThemeColor(theme.textPrimary));
         RECT textRect = button;
         DrawTextA(dc, labels[index], -1, &textRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     }
 
     const int timelineHeight = std::clamp((static_cast<int>(content.bottom) - static_cast<int>(content.top)) / 3, 150, 300);
     const RECT viewport{ content.left, content.top + kHeaderHeight, content.right, content.bottom - timelineHeight };
-    PaintTimeline(dc, RECT{ content.left, viewport.bottom, content.right, content.bottom }, sceneContext.AnimationClipEditorTimeline());
+    PaintTimeline(dc, RECT{ content.left, viewport.bottom, content.right, content.bottom },
+        sceneContext.AnimationClipEditorTimeline(), theme);
     if (sceneViewport == nullptr) return;
     const std::uint64_t revision = sceneContext.AnimationClipEditorPreviewRevision();
     EditorSceneBgfxViewport::PresentSettings settings{};

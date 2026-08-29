@@ -1,6 +1,7 @@
 #include "CliCommands.hpp"
 
 #include "engine/assets/AssetRegistry.hpp"
+#include "engine/project/ProjectSettings.hpp"
 #include "engine/project/ProjectManager.hpp"
 #include "engine/project/ParticleProjectPolicy.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
@@ -188,7 +189,13 @@ int RunRunCommand(const ArgumentList& arguments, CommandIo io) {
         }
     }
 
-    const std::string physicsLayersAsset = loadedProject.descriptor.physicsLayersAsset;
+    // The physics layers a project uses are a setting, read from the project's own
+    // settings file; an older project still carries them in its descriptor.
+    const kb::project::ProjectSettingsLoadResult projectSettings =
+        kb::project::ProjectSettingsStore::Load(kb::project::ProjectSettingsStore::FilePath(projectRoot));
+    const std::string physicsLayersAsset = projectSettings.found && projectSettings.Succeeded()
+        ? projectSettings.settings.physicsLayersAsset
+        : loadedProject.legacySettings.physicsLayersAsset;
     kb::scene::Scene scene{ std::move(loadedProject.descriptor) };
     if (!scene.ModuleDiagnostics().empty()) {
         for (const std::string& diagnostic : scene.ModuleDiagnostics()) {

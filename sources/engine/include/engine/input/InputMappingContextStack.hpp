@@ -68,8 +68,8 @@ struct InputRuntimeRebindResult {
 };
 
 // Owns the prioritized stack of active mapping contexts and turns mapping-context
-// assets into ResolvedMappings via the configured resolvers. Mirrors the
-// "pushed contexts" half of Unreal's Enhanced Input subsystem.
+// assets into ResolvedMappings via the configured resolvers. This is the
+// "pushed contexts" half of the input stack; InputSubsystem owns evaluation.
 //
 // Single responsibility: which contexts are active, in what priority order, with
 // their resolved per-frame mappings.

@@ -20,7 +20,7 @@ class Scene;
 // already-existing default/explicit-submit-desc behavior), not a crash.
 //
 // Deliberately scene-global rather than a spatial "volume" with bounding-box priority
-// blending (the Unity/Unreal sense of "post-process volume") - that is a substantially larger
+// blending (the usual sense of a "post-process volume") - that is a substantially larger
 // feature (spatial queries, blend weights, priority resolution across overlapping volumes)
 // explicitly out of scope for this ticket; "profile" is the part LIB-142 actually delivers.
 class ScenePostProcessAccess {

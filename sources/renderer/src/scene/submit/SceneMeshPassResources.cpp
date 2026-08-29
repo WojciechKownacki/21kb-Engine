@@ -1085,6 +1085,7 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
     bgfx::setUniform(materialFlagsUniform_, materialBinding.flags.data());
     bgfx::setUniform(materialUvTransformUniform_, materialBinding.uvTransform.data());
 
+    const std::array<float, 16> disabledShadowViewProj{};
     const std::array<float, 4> disabledShadowParams{};
     bgfx::setTexture(1U, normalSampler_, materialBinding.normalTexture);
     bgfx::setTexture(2U, metallicRoughnessSampler_, materialBinding.metallicRoughnessTexture);
@@ -1105,7 +1106,7 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
     bgfx::setUniform(environmentZenithUniform_, desc.lighting.environmentZenith.data());
     bgfx::setUniform(environmentGroundUniform_, desc.lighting.environmentGround.data());
     bgfx::setUniform(environmentParamsUniform_, desc.lighting.environmentParams.data());
-    bgfx::setUniform(shadowViewProjUniform_, desc.shadowMap != nullptr && desc.shadowMap->IsValid() ? desc.shadowMap->lightViewProjection.data() : disabledShadowParams.data());
+    bgfx::setUniform(shadowViewProjUniform_, desc.shadowMap != nullptr && desc.shadowMap->IsValid() ? desc.shadowMap->lightViewProjection.data() : disabledShadowViewProj.data());
     bgfx::setUniform(shadowParamsUniform_, desc.shadowMap != nullptr && desc.shadowMap->IsValid() ? desc.shadowMap->params.data() : disabledShadowParams.data());
 
     return resolution.program;

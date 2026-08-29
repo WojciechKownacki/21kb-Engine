@@ -18,7 +18,13 @@
 #include "scene/AnimationClipEditorDocumentState.hpp"
 #include "scene/AnimatorEditorGraphDocumentState.hpp"
 #include "scene/EditorAutosaveState.hpp"
-#include "scene/ParticleEditorHostSessionStore.hpp"
+#include "docking/DockLeafLayoutBuilder.hpp"
+#include "docking/DockLayoutBuildSettings.hpp"
+#include "docking/EditorWorkspaceArrangement.hpp"
+#include "rendering/FloatingPanelGeometry.hpp"
+#include "settings/EditorConfigurationStore.hpp"
+#include "settings/EditorLayoutLibrary.hpp"
+#include "settings/EditorLayoutMenuModel.hpp"
 #include "windowing/FloatingWindowControlHitTester.hpp"
 #include "windowing/FloatingWindowControlLayout.hpp"
 
@@ -27,6 +33,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <optional>
+#include <string>
 #include <vector>
 
 namespace {
@@ -41,8 +48,7 @@ namespace {
         metrics.tabStripHeight,
         metrics.tabMinWidth,
         metrics.tabWidth,
-        metrics.splitterSize,
-        metrics.panelPadding);
+        metrics.splitterSize);
 }
 
 [[nodiscard]] const kb::editor::DockPanelLayout* FindPanelLayout(const kb::editor::DockLayout& layout, std::uint32_t panelId) noexcept {
@@ -397,6 +403,46 @@ void RunClosedMaterialEditorReopensInCenterDockTest() {
     kb::editor::tests::Require(scene != nullptr && reopened->leafId == scene->leafId, "Reopened Material Editor should return to the center workspace group");
 }
 
+void RunBuildGameMenuAndWorkspaceActivationTest() {
+    // The panel is only ever reached through File > Build Game, so the row has to be
+    // there and has to be the one the handler acts on.
+    kb::editor::tests::Require(
+        kb::editor::EditorToolbarLayout::FixedRowCount(kb::editor::EditorMenuCommand::File) == 5,
+        "The File menu must list five rows once Build Game joins it");
+    kb::editor::tests::Require(
+        kb::editor::EditorToolbarLayout::DropdownLabel(kb::editor::EditorMenuCommand::File, 4) == "Build Game",
+        "File row 4 must be Build Game, which is the row the pointer handler opens the panel from");
+
+    kb::editor::EditorDockModel model;
+    const kb::editor::DockPanel* panel = RequirePanel(model, 16U);
+    kb::editor::tests::Require(
+        panel->kind == kb::editor::DockPanelKind::BuildGame && panel->title == "Build Game",
+        "Default workspace should register the Build Game panel");
+
+    // The case that actually bites: a workspace saved before this panel existed restores a
+    // tree with no leaf for it. The panel is then in the model but on no screen, and the
+    // menu row is the only way back to it - so activating by kind has to place it.
+    kb::editor::tests::Require(model.Commands().ClosePanel(16U),
+        "Closing Build Game should succeed");
+    const kb::editor::DockLayout closedLayout = BuildDefaultLayout(model);
+    kb::editor::tests::Require(FindPanelLayout(closedLayout, 16U) == nullptr,
+        "A closed Build Game panel must be in no leaf, the way an older saved layout leaves it");
+    kb::editor::tests::Require(
+        model.Commands().ActivatePanelKind(
+            kb::editor::DockPanelKind::BuildGame,
+            kb::editor::DockArea::Center),
+        "File > Build Game must reopen the panel even when no saved leaf holds it");
+    const kb::editor::DockLayout reopenedLayout = BuildDefaultLayout(model);
+    const kb::editor::DockPanelLayout* reopened = FindPanelLayout(reopenedLayout, 16U);
+    kb::editor::tests::Require(reopened != nullptr && reopened->active,
+        "Reopened Build Game panel should receive focus");
+    const kb::editor::DockLeafLayout* sceneLeaf = FindLeafForPanel(reopenedLayout, 2U);
+    const kb::editor::DockLeafLayout* buildLeaf = FindLeafForPanel(reopenedLayout, 16U);
+    kb::editor::tests::Require(
+        sceneLeaf != nullptr && buildLeaf != nullptr && sceneLeaf->leafId == buildLeaf->leafId,
+        "Build Game should open in the central workspace, beside the Scene View");
+}
+
 void RunSkeletalMeshEditorWorkspaceActivationTest() {
     kb::editor::EditorDockModel model;
     const kb::editor::DockPanel* panel = RequirePanel(model, 11U);
@@ -618,6 +664,266 @@ void RunSkeletalMeshEditorDefaultLayoutTest() {
         "Skeletal Mesh Editor panel resizing should preserve the minimum viewport width");
 }
 
+void RunClosedUtilityPanelsReopenInRightDockTest() {
+    constexpr std::array utilityPanels{
+        kb::editor::DockPanelKind::ProjectSettings,
+        kb::editor::DockPanelKind::EditorSettings,
+        kb::editor::DockPanelKind::Plugins,
+    };
+
+    kb::editor::EditorDockModel model;
+    for (const kb::editor::DockPanelKind kind : utilityPanels) {
+        const auto panel = std::ranges::find_if(
+            model.Queries().Panels(),
+            [kind](const kb::editor::DockPanel& candidate) {
+                return candidate.kind == kind;
+            });
+        kb::editor::tests::Require(
+            panel != model.Queries().Panels().end(),
+            "Utility panel should be registered in the default workspace");
+        const std::uint32_t panelId = panel->id;
+
+        kb::editor::tests::Require(
+            model.Commands().ClosePanel(panelId),
+            "Utility panel should close before the reopen test");
+        kb::editor::tests::Require(
+            FindPanelLayout(BuildDefaultLayout(model), panelId) == nullptr,
+            "Closed utility panel should leave the dock layout");
+        kb::editor::tests::Require(
+            model.Commands().ActivatePanelKind(kind, kb::editor::DockArea::Right),
+            "Utility panel command should reopen a closed tab");
+
+        const kb::editor::DockLayout reopenedLayout = BuildDefaultLayout(model);
+        const kb::editor::DockPanelLayout* reopened =
+            FindPanelLayout(reopenedLayout, panelId);
+        const kb::editor::DockPanelLayout* inspector =
+            FindPanelLayout(reopenedLayout, 4U);
+        kb::editor::tests::Require(
+            reopened != nullptr && reopened->active,
+            "Reopened utility panel should become the active tab");
+        kb::editor::tests::Require(
+            inspector != nullptr && reopened->leafId == inspector->leafId,
+            "Reopened utility panel should return to the right dock group");
+    }
+}
+
+void RunWorkspaceLayoutPersistenceTest() {
+    kb::editor::EditorDockModel model;
+
+    std::uint32_t floatedPanel = 0U;
+    std::uint32_t closedPanel = 0U;
+    for (const kb::editor::DockPanel& panel : model.Queries().Panels()) {
+        if (!panel.visible || !panel.detachable || panel.id == 14U) {
+            continue;
+        }
+        if (floatedPanel == 0U) {
+            floatedPanel = panel.id;
+        } else if (closedPanel == 0U) {
+            closedPanel = panel.id;
+        }
+    }
+    kb::editor::tests::Require(floatedPanel != 0U && closedPanel != 0U,
+        "default workspace should offer two detachable panels to rearrange");
+
+    model.Commands().UndockPanel(floatedPanel, kb::editor::DockRect{ 220, 180, 900, 640 });
+    kb::editor::tests::Require(model.Commands().ClosePanel(closedPanel),
+        "a visible docked panel should be closable");
+    const std::string arranged = model.Commands().SerializeWorkspace();
+    kb::editor::tests::Require(!arranged.empty(), "an arranged workspace should serialize to text");
+
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_workspace_layout_persistence";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    kb::editor::EditorConfiguration configuration;
+    configuration.layout = arranged;
+    std::string saveError;
+    const std::filesystem::path statePath = kb::editor::EditorConfigurationStore::FilePath(root);
+    kb::editor::tests::Require(
+        kb::editor::EditorConfigurationStore::Save(statePath, root, configuration, saveError),
+        "editor configuration carrying a workspace layout could not be saved");
+    const auto loaded = kb::editor::EditorConfigurationStore::Load(statePath, root);
+    kb::editor::tests::Require(loaded.Succeeded() && loaded.found && loaded.configuration.layout == arranged,
+        "the workspace layout did not survive the settings file roundtrip");
+
+    kb::editor::EditorDockModel restored;
+    const std::string defaults = restored.Commands().SerializeWorkspace();
+    kb::editor::tests::Require(defaults != arranged,
+        "rearranging the workspace should produce a layout different from the default one");
+    kb::editor::tests::Require(restored.Commands().RestoreWorkspace(loaded.configuration.layout),
+        "a layout written by this build should be accepted on the next launch");
+    kb::editor::tests::Require(restored.Commands().SerializeWorkspace() == arranged,
+        "restoring a saved layout should reproduce the arrangement exactly");
+    const kb::editor::DockPanel* floated = restored.Queries().FindPanel(floatedPanel);
+    const kb::editor::DockPanel* closed = restored.Queries().FindPanel(closedPanel);
+    kb::editor::tests::Require(floated != nullptr && !floated->visible && closed != nullptr && !closed->visible,
+        "panels the saved layout does not place should be left out of the restored tree");
+
+    const std::string truncated = arranged.substr(0U, arranged.size() / 2U);
+    const std::string unknownPanel = arranged + " 4096";
+    kb::editor::tests::Require(!restored.Commands().RestoreWorkspace(truncated),
+        "a truncated layout should be refused rather than half-applied");
+    kb::editor::tests::Require(!restored.Commands().RestoreWorkspace(unknownPanel),
+        "a layout with trailing tokens should be refused");
+    kb::editor::tests::Require(!restored.Commands().RestoreWorkspace("L 1 2 4096 4097"),
+        "a layout naming panels this build does not have should be refused");
+    kb::editor::tests::Require(!restored.Commands().RestoreWorkspace("L 1 0"),
+        "a layout with an empty leaf should be refused");
+    kb::editor::tests::Require(!restored.Commands().RestoreWorkspace("S H 1.5 L 1 1 1 L 1 1 2"),
+        "a layout with an out-of-range split ratio should be refused");
+    kb::editor::tests::Require(restored.Commands().SerializeWorkspace() == arranged,
+        "a refused layout should leave the current workspace untouched");
+    std::filesystem::remove_all(root, error);
+}
+
+void RunFloatingPanelContentMatchesDockedTest() {
+    const kb::editor::EditorMetrics metrics{};
+    const kb::editor::DockRect frame{ 40, 60, 900, 640 };
+
+    kb::editor::DockNode leaf;
+    leaf.id = 1U;
+    leaf.kind = kb::editor::DockNode::Kind::Leaf;
+    leaf.panels = { 5U };
+    leaf.activePanelId = 5U;
+    kb::editor::DockLayout layout;
+    kb::editor::DockLeafLayoutBuilder{}.Build(leaf, frame, layout, kb::editor::DockLayoutBuildSettings{
+        .tabStripHeight = metrics.tabStripHeight,
+        .tabMinWidth = metrics.tabMinWidth,
+        .tabWidth = metrics.tabWidth,
+        .splitterSize = metrics.splitterSize,
+    });
+    kb::editor::tests::Require(layout.leaves.size() == 1U, "a leaf should lay out exactly once");
+    const kb::editor::DockRect docked = layout.leaves.front().content;
+
+    const RECT client{ frame.x, frame.y, frame.x + frame.width, frame.y + frame.height };
+    const RECT floating = kb::editor::FloatingPanelGeometry::Content(client, metrics.tabStripHeight);
+    kb::editor::tests::Require(
+        floating.left == docked.x && floating.top == docked.y &&
+            (floating.right - floating.left) == docked.width &&
+            (floating.bottom - floating.top) == docked.height,
+        "a panel torn off into its own window should sit exactly where it sits when docked");
+    // Checked against the numbers rather than only against each other: both sides now
+    // come from one function, so comparing them alone would agree on a wrong answer.
+    kb::editor::tests::Require(
+        floating.left == frame.x + 1 &&
+            floating.top == frame.y + metrics.tabStripHeight + 1 &&
+            floating.right == frame.x + frame.width - 1 &&
+            floating.bottom == frame.y + frame.height - 1,
+        "a torn-off panel should start under its tab strip and reach every window edge");
+
+    // A window too small for a tab strip must not produce an upside-down rectangle.
+    const RECT tiny = kb::editor::FloatingPanelGeometry::Content(RECT{ 0, 0, 4, 4 }, metrics.tabStripHeight);
+    kb::editor::tests::Require(tiny.right >= tiny.left && tiny.bottom >= tiny.top,
+        "a window smaller than its own chrome should still resolve to an empty content area");
+}
+
+void RunSavedLayoutLibraryTest() {
+    const std::filesystem::path root =
+        std::filesystem::temp_directory_path() / "21kb_saved_layout_library";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+
+    kb::editor::tests::Require(
+        kb::editor::EditorLayoutLibrary::List(root).empty(),
+        "a project with no layouts folder should offer no layouts");
+
+    kb::editor::EditorDockModel model;
+    std::uint32_t floatedPanel = 0U;
+    for (const kb::editor::DockPanel& panel : model.Queries().Panels()) {
+        if (panel.visible && panel.detachable && panel.id != 14U) {
+            floatedPanel = panel.id;
+            break;
+        }
+    }
+    kb::editor::tests::Require(floatedPanel != 0U, "the default workspace should offer a detachable panel");
+    model.Commands().UndockPanel(floatedPanel, kb::editor::DockRect{ 240, 200, 880, 620 });
+    const kb::editor::EditorLayoutPreset captured = kb::editor::EditorWorkspaceArrangement::Capture(model);
+    kb::editor::tests::Require(!captured.tree.empty() && !captured.panels.empty(),
+        "capturing the workspace should yield both a dock tree and the panel placements");
+
+    std::string saveError;
+    kb::editor::tests::Require(
+        kb::editor::EditorLayoutLibrary::Save(root, "Animation Pass", captured, saveError),
+        "a layout with a plain name should be saved");
+    kb::editor::tests::Require(
+        !kb::editor::EditorLayoutLibrary::Save(root, "../Escape", captured, saveError) &&
+            !kb::editor::EditorLayoutLibrary::Save(root, "", captured, saveError) &&
+            !kb::editor::EditorLayoutLibrary::Save(root, " Padded ", captured, saveError),
+        "a layout name that could reach outside the layouts folder should be refused");
+    kb::editor::tests::Require(
+        !kb::editor::EditorLayoutLibrary::Save(root, "CON", captured, saveError) &&
+            !kb::editor::EditorLayoutLibrary::Save(root, "lpt1", captured, saveError),
+        "a layout named after a device the system reserves should be refused with a reason");
+    kb::editor::tests::Require(
+        !kb::editor::EditorLayoutLibrary::Save(root, "Empty", kb::editor::EditorLayoutPreset{}, saveError),
+        "a workspace with no arrangement should not be saved as a layout");
+
+    const std::vector<std::string> listed = kb::editor::EditorLayoutLibrary::List(root);
+    kb::editor::tests::Require(listed.size() == 1U && listed.front() == "Animation Pass",
+        "a saved layout should be the one and only entry the library lists");
+
+    const std::optional<kb::editor::EditorLayoutPreset> loaded =
+        kb::editor::EditorLayoutLibrary::Load(root, "Animation Pass");
+    kb::editor::tests::Require(loaded.has_value() && loaded->tree == captured.tree,
+        "a saved layout should come back with the arrangement it was saved from");
+    kb::editor::tests::Require(!kb::editor::EditorLayoutLibrary::Load(root, "Missing").has_value(),
+        "a layout that was never saved should not load");
+
+    kb::editor::EditorDockModel reopened;
+    kb::editor::tests::Require(kb::editor::EditorWorkspaceArrangement::Apply(reopened, *loaded),
+        "a layout saved by this build should apply to a fresh workspace");
+    kb::editor::tests::Require(
+        reopened.Commands().SerializeWorkspace() == captured.tree,
+        "applying a saved layout should reproduce its arrangement exactly");
+    const kb::editor::DockPanel* floated = reopened.Queries().FindPanel(floatedPanel);
+    kb::editor::tests::Require(
+        floated != nullptr && floated->visible && floated->area == kb::editor::DockArea::Floating &&
+            floated->floatingRect.width == 880,
+        "applying a saved layout should tear off the panels the layout had torn off");
+
+    kb::editor::tests::Require(kb::editor::EditorLayoutLibrary::Delete(root, "Animation Pass"),
+        "a saved layout should be deletable");
+    kb::editor::tests::Require(
+        kb::editor::EditorLayoutLibrary::List(root).empty() &&
+            !kb::editor::EditorLayoutLibrary::Delete(root, "Animation Pass"),
+        "deleting a layout twice should report the second attempt as nothing to delete");
+    std::filesystem::remove_all(root, error);
+}
+
+void RunLayoutMenuModelTest() {
+    kb::editor::EditorLayoutMenuModel model;
+    model.Rebuild({ "Animation", "Lighting" }, "Lighting");
+    const std::vector<kb::editor::EditorLayoutMenuRow>& rows = model.Rows();
+    kb::editor::tests::Require(rows.size() == 5U,
+        "the Layout menu should offer the default arrangement, every saved layout, and the two commands");
+    kb::editor::tests::Require(
+        rows[0].label == "Default" && rows[0].action == kb::editor::EditorLayoutMenuAction::Default &&
+            !rows[0].active,
+        "the default arrangement should lead the menu and lose its mark once a layout is in use");
+    kb::editor::tests::Require(
+        rows[1].label == "Animation" && rows[1].layoutName == "Animation" && !rows[1].active &&
+            rows[2].label == "Lighting" && rows[2].active,
+        "the layout in use should be the one marked in the menu");
+    kb::editor::tests::Require(
+        rows[3].action == kb::editor::EditorLayoutMenuAction::Save &&
+            rows[4].action == kb::editor::EditorLayoutMenuAction::Delete,
+        "saving and deleting should close the menu");
+
+    model.Rebuild({}, {});
+    kb::editor::tests::Require(model.Rows().size() == 3U && model.Rows().front().active,
+        "with no saved layouts the menu should be the default arrangement and the two commands");
+
+    model.RebuildForDelete({ "Animation", "Lighting" });
+    kb::editor::tests::Require(
+        model.Rows().size() == 3U && !model.Rows().front().enabled &&
+            model.Rows()[1].action == kb::editor::EditorLayoutMenuAction::Remove &&
+            model.Rows()[1].layoutName == "Animation",
+        "the delete list should be a caption over the layouts it can remove");
+    kb::editor::tests::Require(model.Row(-1) == nullptr && model.Row(9) == nullptr,
+        "a row outside the menu should resolve to nothing");
+}
+
 void RunParticleEditorWorkspaceAndSessionPersistenceTest() {
     kb::editor::EditorDockModel model;
     const kb::editor::DockPanel* panel = RequirePanel(model, 14U);
@@ -650,28 +956,32 @@ void RunParticleEditorWorkspaceAndSessionPersistenceTest() {
     std::error_code error;
     std::filesystem::remove_all(root, error);
     std::filesystem::create_directories(root / "Assets", error);
-    kb::editor::ParticleEditorHostSession session{
+    kb::editor::EditorConfiguration configuration;
+    configuration.panels.push_back(kb::editor::EditorPanelSession{
+        .panelId = 14U,
         .visible = true,
         .area = panel->area,
         .floatingRect = panel->floatingRect,
         .documentPath = root / "Assets" / "Open.kbvfx",
-    };
+    });
     std::string saveError;
-    const std::filesystem::path statePath = root / ".21kb" / "ParticleEditorSession.txt";
+    const std::filesystem::path statePath = kb::editor::EditorConfigurationStore::FilePath(root);
     kb::editor::tests::Require(
-        kb::editor::ParticleEditorHostSessionStore::Save(statePath, root, session, saveError),
-        "particle editor host session could not be saved atomically");
-    const auto loaded = kb::editor::ParticleEditorHostSessionStore::Load(statePath, root);
+        kb::editor::EditorConfigurationStore::Save(statePath, root, configuration, saveError),
+        "editor configuration could not be saved atomically");
+    const auto loaded = kb::editor::EditorConfigurationStore::Load(statePath, root);
+    const kb::editor::EditorPanelSession* restored = loaded.configuration.FindPanel(14U);
     kb::editor::tests::Require(
-        loaded.Succeeded() && loaded.found && loaded.session.visible &&
-            loaded.session.area == kb::editor::DockArea::Floating &&
-            loaded.session.floatingRect.width == 940 &&
-            loaded.session.documentPath.lexically_normal() == session.documentPath.lexically_normal(),
+        loaded.Succeeded() && loaded.found && restored != nullptr && restored->visible &&
+            restored->area == kb::editor::DockArea::Floating &&
+            restored->floatingRect.width == 940 &&
+            restored->documentPath.lexically_normal() ==
+                configuration.panels.front().documentPath.lexically_normal(),
         "particle editor layout/session path did not survive persistence roundtrip");
-    session.documentPath = root.parent_path() / "Outside.kbvfx";
+    configuration.panels.front().documentPath = root.parent_path() / "Outside.kbvfx";
     kb::editor::tests::Require(
-        !kb::editor::ParticleEditorHostSessionStore::Save(statePath, root, session, saveError),
-        "particle editor host session accepted a document path outside the project");
+        !kb::editor::EditorConfigurationStore::Save(statePath, root, configuration, saveError),
+        "editor configuration accepted a document path outside the project");
 }
 
 void RunSkeletalMeshEditorTreeStateTest() {
@@ -693,12 +1003,12 @@ void RunSkeletalMeshEditorTreeStateTest() {
             unfilteredRows[1].label == "Root Socket" && unfilteredRows[1].depth == 1U &&
             unfilteredRows[3].label == "Hand" && unfilteredRows[4].label == "Weapon" &&
             unfilteredRows[4].depth == 3U,
-        "Skeleton Tree should render sockets directly under their owning bones with UE-style indentation");
+        "Skeleton Tree should render sockets directly under their owning bones with nested indentation");
     kb::editor::tests::Require(
         unfilteredRows[0].hasChildren && unfilteredRows[0].expanded &&
             unfilteredRows[2].hasChildren && unfilteredRows[2].expanded &&
             unfilteredRows[3].hasChildren && unfilteredRows[3].expanded,
-        "Skeleton Tree should initially expand every hierarchy branch like UE Persona");
+        "Skeleton Tree should initially expand every hierarchy branch by default");
     kb::editor::tests::Require(tree.ToggleExpanded(20U) && !tree.IsExpanded(20U),
         "Skeleton Tree disclosure should retain an independent collapsed state per bone");
     const std::vector<kb::editor::SkeletalMeshEditorTreeRow> collapsedRows = tree.Rows();
@@ -1083,10 +1393,16 @@ void RunEditorDockingTests() {
     RunDefaultWorkspaceRegistersMaterialEditorPanelTest();
     RunMaterialEditorPanelActivationTest();
     RunClosedMaterialEditorReopensInCenterDockTest();
+    RunClosedUtilityPanelsReopenInRightDockTest();
+    RunBuildGameMenuAndWorkspaceActivationTest();
     RunSkeletalMeshEditorWorkspaceActivationTest();
     RunAnimationClipEditorWorkspaceActivationTest();
     RunAnimatorEditorWorkspaceActivationTest();
     RunParticleEditorWorkspaceAndSessionPersistenceTest();
+    RunWorkspaceLayoutPersistenceTest();
+    RunSavedLayoutLibraryTest();
+    RunFloatingPanelContentMatchesDockedTest();
+    RunLayoutMenuModelTest();
     RunAnimatorEditorDefaultLayoutTest();
     RunAnimatorEditorGraphDocumentStateTest();
     RunSkeletalMeshEditorDefaultLayoutTest();

@@ -1,6 +1,7 @@
 #include "HubProjectActions.hpp"
 
 #include "HubText.hpp"
+#include "engine/project/ProjectSettings.hpp"
 #include "engine/project/ProjectManager.hpp"
 
 #if defined(_WIN32)
@@ -34,15 +35,21 @@ namespace {
     return std::filesystem::path{ buffer };
 }
 
-[[nodiscard]] kb::project::ProjectDescriptor MakeDescriptor(std::wstring_view name) {
+[[nodiscard]] kb::project::ProjectDescriptor MakeDescriptor() {
     kb::project::ProjectDescriptor descriptor;
-    descriptor.name = HubText::WideToUtf8(name);
-    descriptor.category = "Game";
-    descriptor.description = "21kb project";
     descriptor.contentRoot = "Assets";
-    descriptor.defaultScene = "/Game/Scenes/Main.21kbscene";
     descriptor.targetPlatforms = { "Windows" };
     return descriptor;
+}
+
+[[nodiscard]] kb::project::ProjectSettings MakeSettings(std::wstring_view name) {
+    kb::project::ProjectSettings settings;
+    settings.name = HubText::WideToUtf8(name);
+    settings.gameName = settings.name;
+    settings.category = "Game";
+    settings.description = "21kb project";
+    settings.defaultMap = "/Game/Scenes/Main.21kbscene";
+    return settings;
 }
 
 [[nodiscard]] std::wstring Quote(std::wstring value) {
@@ -230,10 +237,22 @@ HubCreateProjectResult HubProjectActions::CreateProjectFile(const std::filesyste
         return HubCreateProjectResult{ .succeeded = false, .projectFile = descriptorFile, .error = L"Prefab folder could not be created." };
     }
 
-    kb::project::ProjectDescriptor descriptor = MakeDescriptor(projectName);
+    kb::project::ProjectDescriptor descriptor = MakeDescriptor();
     if (!kb::project::ProjectManager::CreateProject(descriptorFile, descriptor)) {
         std::filesystem::remove_all(projectRoot / "Assets", error);
         return HubCreateProjectResult{ .succeeded = false, .projectFile = descriptorFile, .error = L"Project descriptor could not be written." };
+    }
+
+    // A new project starts with the settings file the editor and the game both read,
+    // rather than waiting for the editor to seed it on first open.
+    std::string settingsError;
+    if (!kb::project::ProjectSettingsStore::Save(
+            kb::project::ProjectSettingsStore::FilePath(projectRoot),
+            MakeSettings(projectName),
+            settingsError)) {
+        std::filesystem::remove_all(projectRoot / "Assets", error);
+        std::filesystem::remove(descriptorFile, error);
+        return HubCreateProjectResult{ .succeeded = false, .projectFile = descriptorFile, .error = L"Project settings could not be written." };
     }
 
     return HubCreateProjectResult{ .succeeded = true, .projectFile = descriptorFile, .error = {} };

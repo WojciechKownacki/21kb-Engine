@@ -6,8 +6,8 @@
 
 namespace kb::input {
 
-// Outcome of a single trigger for the current frame, mirroring Unreal's
-// ETriggerState progression.
+// Outcome of a single trigger for the current frame - the progression a
+// trigger walks from idle through in-progress to fired.
 enum class TriggerState : std::uint8_t {
     None,     // Not actuated / not satisfied.
     Ongoing,  // Actuated and progressing toward firing (e.g. Hold counting up).

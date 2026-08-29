@@ -17,6 +17,7 @@ public:
     [[nodiscard]] const DockPanel* Find(std::uint32_t panelId) const noexcept;
     [[nodiscard]] DockPanel* Find(std::uint32_t panelId) noexcept;
 
+    void Reset(std::vector<DockPanel> panels) noexcept;
     void MoveFloatingPanel(std::uint32_t panelId, int x, int y) noexcept;
     void ResizeFloatingPanel(std::uint32_t panelId, int width, int height) noexcept;
 

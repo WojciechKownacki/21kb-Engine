@@ -17,7 +17,7 @@ public:
     [[nodiscard]] const std::vector<DockPanel>& Panels() const noexcept;
     [[nodiscard]] std::vector<DockPanel> PanelsInArea(DockArea area) const;
     [[nodiscard]] const DockPanel* FindPanel(std::uint32_t panelId) const noexcept;
-    [[nodiscard]] DockLayout BuildLayout(int clientWidth, int clientHeight, int menuHeight, int toolbarHeight, int tabStripHeight, int tabMinWidth, int tabWidth, int splitterSize, int panelPadding) const;
+    [[nodiscard]] DockLayout BuildLayout(int clientWidth, int clientHeight, int menuHeight, int toolbarHeight, int tabStripHeight, int tabMinWidth, int tabWidth, int splitterSize) const;
     [[nodiscard]] DockHit HitTest(const DockLayout& layout, int x, int y) const;
     [[nodiscard]] std::optional<DockDropPreview> ResolveDropPreview(const DockLayout& layout, int x, int y) const;
     [[nodiscard]] std::uint32_t PanelCountInLeaf(std::uint32_t leafId) const noexcept;

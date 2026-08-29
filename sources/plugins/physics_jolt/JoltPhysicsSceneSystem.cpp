@@ -667,7 +667,7 @@ struct PhysicsBodySnapshot {
 
 using PhysicsBodyQuery = kb::ecs::Query<TransformComponent, RigidbodyComponent, ColliderComponent>;
 
-// Unity-like: an entity with a Collider but NO Rigidbody is an implicit STATIC
+// By design: an entity with a Collider but NO Rigidbody is an implicit STATIC
 // body (a plain static collider). This query finds every collider; the ones that
 // also have a Rigidbody are skipped (handled by PhysicsBodyQuery with their real
 // Rigidbody), and the rest get a synthesized Static RigidbodyComponent.
@@ -1628,7 +1628,7 @@ private:
                 }
             });
         }
-        // Unity-like: a Collider without a Rigidbody becomes an implicit Static body.
+        // By design: a Collider without a Rigidbody becomes an implicit Static body.
         {
             ColliderOnlyBodyQuery colliderQuery = context.EcsWorld().CreateQuery<TransformComponent, ColliderComponent>();
             colliderQuery.ForEachBatchKernel(settings, [this, &rigidbodyEntities](const ColliderOnlyBodyQuery::Batch& batch) {

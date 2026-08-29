@@ -32,24 +32,24 @@ void ScriptEditorPanelRenderer::Paint(
     const EditorTheme& theme,
     const EditorSceneContext& sceneContext,
     bool dirty) const {
-    static_cast<void>(theme);
     const EditorScriptEditorState& script = sceneContext.ScriptEditor();
 
-    GdiDrawing::FillRectColor(dc, content, RGB(20, 22, 24));
+    GdiDrawing::FillRectColor(dc, content, GdiDrawing::ToColorRef(theme.background));
 
     const RECT header{ content.left, content.top, content.right, content.top + kHeaderHeight };
-    GdiDrawing::FillRectColor(dc, header, RGB(32, 35, 39));
-    GdiDrawing::FillRectColor(dc, RECT{ header.left, header.bottom - 1, header.right, header.bottom }, RGB(13, 14, 16));
+    GdiDrawing::FillRectColor(dc, header, GdiDrawing::ToColorRef(theme.strip));
+    GdiDrawing::FillRectColor(dc, RECT{ header.left, header.top, header.left + 3, header.bottom }, GdiDrawing::ToColorRef(theme.accent));
+    GdiDrawing::FillRectColor(dc, RECT{ header.left, header.bottom - 1, header.right, header.bottom }, GdiDrawing::ToColorRef(theme.borderChrome));
 
     if (!script.IsOpen()) {
-        DrawText(dc, RECT{ header.left + 12, header.top, header.right - 12, header.bottom }, "Script Editor", RGB(176, 184, 194), 12, FW_SEMIBOLD);
-        DrawText(dc, BodyRect(content), "Double-click a .lua file in Project Files to edit it.", RGB(110, 118, 130), 12, FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        DrawText(dc, RECT{ header.left + 12, header.top, header.right - 12, header.bottom }, "Script Editor", GdiDrawing::ToColorRef(theme.textSecondary), 12, FW_SEMIBOLD);
+        DrawText(dc, BodyRect(content), "Double-click a .lua file in Project Files to edit it.", GdiDrawing::ToColorRef(theme.textDisabled), 12, FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         return;
     }
 
     const std::string title = (dirty ? "\xE2\x97\x8F " : "") + script.Title(); // U+25CF bullet marks unsaved edits.
-    DrawText(dc, RECT{ header.left + 12, header.top, header.right - 110, header.bottom }, title.c_str(), dirty ? RGB(226, 196, 120) : RGB(226, 230, 235), 12, FW_SEMIBOLD);
-    DrawText(dc, RECT{ header.right - 104, header.top, header.right - 12, header.bottom }, "Ctrl+S to save", RGB(120, 128, 140), 11, FW_NORMAL, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+    DrawText(dc, RECT{ header.left + 12, header.top, header.right - 110, header.bottom }, title.c_str(), dirty ? RGB(226, 196, 120) : GdiDrawing::ToColorRef(theme.textPrimary), 12, FW_SEMIBOLD);
+    DrawText(dc, RECT{ header.right - 104, header.top, header.right - 12, header.bottom }, "Ctrl+S to save", GdiDrawing::ToColorRef(theme.textDisabled), 11, FW_NORMAL, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
 }
 
 } // namespace kb::editor

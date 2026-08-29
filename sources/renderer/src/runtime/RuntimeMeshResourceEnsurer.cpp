@@ -154,7 +154,7 @@ void RuntimeMeshResourceEnsurer::Ensure(
             return true;
         }
         if (cacheIt != meshes.end() && cacheIt->second.contentHash == metadata->contentHash &&
-            cacheIt->second.sourceAsset == asset.Get() &&
+            cacheIt->second.HasSourceAsset(asset.Get()) &&
             context.sceneRenderer.Resources().ContainsMesh(cacheIt->second.handle) &&
             context.sceneRenderer.Resources().UpdateMeshVertices(
                 cacheIt->second.handle, resource->desc, 0U, resource->desc.vertexCount)) {
@@ -174,7 +174,7 @@ void RuntimeMeshResourceEnsurer::Ensure(
         }
         meshes[runtimeKey] = RuntimeMeshResource{
             .handle = handle,
-            .sourceAsset = asset.Get(),
+            .sourceAsset = asset.Shared(),
             .sourceAssetId = sourceAssetId.value,
             .contentHash = metadata->contentHash,
             .lastReferencedFrame = context.currentFrame,
@@ -257,7 +257,7 @@ void RuntimeMeshResourceEnsurer::Ensure(
             }
             meshes[runtimeKey] = RuntimeMeshResource{
                 .handle = handle,
-                .sourceAsset = asset.Get(),
+                .sourceAsset = asset.Shared(),
                 .contentHash = metadata->contentHash,
                 .lastReferencedFrame = context.currentFrame,
             };
@@ -279,9 +279,11 @@ void RuntimeMeshResourceEnsurer::Ensure(
 
         // Terrain material painting mutates only the weight texture and per-layer active flags of the
         // editor-published working asset. Keep the existing geometry buffers and upload those subresources
-        // directly. Pointer identity makes the metadata-only commit safe: a genuinely replaced asset still
-        // falls through to the normal rebuild path.
-        if (cacheIt != meshes.end() && cacheIt->second.sourceAsset == asset.Get() &&
+        // directly. Object identity - not a bare address match - makes the metadata-only commit safe:
+        // HasSourceAsset only agrees while the payload this mesh was built from is still the live one, so
+        // a genuinely replaced asset (its old payload freed by rediscovery, even when the reload lands on
+        // the same heap address) still falls through to the normal rebuild path.
+        if (cacheIt != meshes.end() && cacheIt->second.HasSourceAsset(asset.Get()) &&
             cacheIt->second.dynamicTopologyKey == asset->dynamicTopologyKey &&
             cacheIt->second.dynamicVertexUpdateCount == asset->dynamicVertexUpdateRanges.size() &&
             cacheIt->second.dynamicSectionUpdateCount <= asset->dynamicSectionUpdateIndices.size() &&
@@ -419,7 +421,7 @@ void RuntimeMeshResourceEnsurer::Ensure(
                     static_cast<std::uint16_t>(maxY - minY));
             }
             if (updated) {
-                cacheIt->second.sourceAsset = asset.Get();
+                cacheIt->second.sourceAsset = asset.Shared();
                 cacheIt->second.contentHash = metadata->contentHash;
                 cacheIt->second.dynamicVertexUpdateCount = asset->dynamicVertexUpdateRanges.size();
                 cacheIt->second.dynamicSectionUpdateCount = asset->dynamicSectionUpdateIndices.size();
@@ -502,7 +504,7 @@ void RuntimeMeshResourceEnsurer::Ensure(
 
         meshes[runtimeKey] = RuntimeMeshResource{
             .handle = handle,
-            .sourceAsset = asset.Get(),
+            .sourceAsset = asset.Shared(),
             .contentHash = metadata->contentHash,
             .dynamicTopologyKey = asset->dynamicTopologyKey,
             .dynamicVertexUpdateCount = asset->dynamicVertexUpdateRanges.size(),

@@ -34,8 +34,7 @@ DockLayout EditorHierarchyMainContentResolver::BuildLayout(HWND mainWindow, cons
         metrics.tabStripHeight,
         metrics.tabMinWidth,
         metrics.tabWidth,
-        metrics.splitterSize,
-        metrics.panelPadding);
+        metrics.splitterSize);
 }
 
 } // namespace kb::editor

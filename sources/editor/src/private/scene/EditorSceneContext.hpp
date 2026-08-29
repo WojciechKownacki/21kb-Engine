@@ -13,6 +13,7 @@
 #include "engine/assets/AssetKind.hpp"
 #include "engine/script/ScriptValue.hpp"
 #include "engine/project/ProjectDescriptor.hpp"
+#include "engine/project/ProjectSettings.hpp"
 #include "project/EditorProjectBootstrap.hpp"
 #include "assets/EditorAssetBrowserState.hpp"
 #include "commands/EditorCommandStack.hpp"
@@ -23,7 +24,7 @@
 #include "scene/EditorHierarchySelectionState.hpp"
 #include "scene/EditorPluginsState.hpp"
 #include "scene/EditorProjectSettingsState.hpp"
-#include "settings/EditorSettingsState.hpp"
+#include "settings/EditorConfigurationStore.hpp"
 #include "scene/EditorScriptEditorState.hpp"
 #include "scene/EditorSceneObjectEditTypes.hpp"
 #include "scene/EditorSceneDocumentIdentity.hpp"
@@ -108,8 +109,6 @@ struct TerrainLayerPaintSettings;
 } // namespace kb::terrain_editor
 
 namespace kb::editor {
-
-class EditorRenderBackendSettings;
 
 enum class PhysicsComponentKind; // inspection/InspectorPhysicsModel.hpp
 class EditorSceneCommandController;
@@ -241,13 +240,19 @@ public:
     [[nodiscard]] const EditorSceneGizmoState& Gizmo() const noexcept;
     [[nodiscard]] EditorProjectSettingsState& ProjectSettings() noexcept;
     [[nodiscard]] const EditorProjectSettingsState& ProjectSettings() const noexcept;
-    [[nodiscard]] EditorSettingsState& EditorSettings() noexcept;
-    [[nodiscard]] const EditorSettingsState& EditorSettings() const noexcept;
+    // Everything the editor remembers about itself for this project, as loaded from
+    // Config/EditorSettings.ini. One reader and one writer, both here.
+    [[nodiscard]] const EditorConfiguration& EditorConfig() const noexcept;
+    [[nodiscard]] bool SaveEditorConfig(EditorConfiguration configuration);
     [[nodiscard]] EditorPluginsState& Plugins() noexcept;
     [[nodiscard]] const EditorPluginsState& Plugins() const noexcept;
     [[nodiscard]] EditorScriptEditorState& ScriptEditor() noexcept;
     [[nodiscard]] const EditorScriptEditorState& ScriptEditor() const noexcept;
     [[nodiscard]] const kb::project::ProjectDescriptor& Project() const noexcept;
+    // The project's settings as loaded from Config/ProjectSettings.ini. This is the
+    // surface the editor reads and edits; the descriptor carries a mirror of the same
+    // values for consumers that still read the project file, written only here.
+    [[nodiscard]] const kb::project::ProjectSettings& ProjectConfiguration() const noexcept;
     [[nodiscard]] const std::filesystem::path& ProjectFile() const noexcept;
     [[nodiscard]] const std::filesystem::path& CurrentScenePath() const noexcept;
     [[nodiscard]] std::uint64_t SceneDocumentGeneration() const noexcept;
@@ -258,11 +263,9 @@ public:
     [[nodiscard]] bool SceneDocumentDirty() const noexcept;
     [[nodiscard]] bool TickAutosave(double elapsedSeconds, bool saveEligible);
     [[nodiscard]] const EditorAutosaveState& Autosave() const noexcept;
-    [[nodiscard]] EditorWorkspacePreferences CaptureEditorWorkspacePreferences() const noexcept;
-    [[nodiscard]] bool LoadEditorSettings(EditorRenderBackendSettings& renderer);
-    [[nodiscard]] bool CommitEditorSettings(
-        const EditorWorkspacePreferences& preferences,
-        const EditorRenderBackendSettings& renderer);
+    [[nodiscard]] EditorSavingPreferences CaptureEditorSavingPreferences() const noexcept;
+    [[nodiscard]] bool LoadEditorSettings();
+    [[nodiscard]] bool CommitEditorSettings(const EditorSavingPreferences& preferences);
     void MarkSceneRenderDirty() noexcept;
     void MarkSceneEntitiesRenderDirty(std::span<const kb::scene::SceneEntity> entities);
     void AcknowledgeSceneRenderSubmitted() noexcept;
@@ -367,6 +370,25 @@ public:
     [[nodiscard]] std::size_t HierarchyRowCount() const;
     [[nodiscard]] const EditorHierarchyRow* HierarchyRowAt(std::size_t rowIndex) const;
     [[nodiscard]] int HierarchyScrollOffset() const noexcept;
+    // Build Game settings column: the panel is taller than any dock leaf it fits in.
+    [[nodiscard]] int BuildGameScrollOffset() const noexcept;
+    // Which settings sections are folded away, and which row the pointer is over
+    // (row -1 means the section bar itself; section -1 means nothing).
+    [[nodiscard]] bool IsBuildGameSectionCollapsed(int section) const noexcept;
+    void ToggleBuildGameSection(int section) noexcept;
+    // Which target and profile the left column has selected, and which of its rows the
+    // pointer is over (-1 for none).
+    [[nodiscard]] int BuildGameSelectedTarget() const noexcept;
+    [[nodiscard]] bool SetBuildGameSelectedTarget(int target) noexcept;
+    [[nodiscard]] int BuildGameSelectedProfile() const noexcept;
+    [[nodiscard]] bool SetBuildGameSelectedProfile(int profile) noexcept;
+    [[nodiscard]] int BuildGameHoveredTarget() const noexcept;
+    [[nodiscard]] int BuildGameHoveredProfile() const noexcept;
+    [[nodiscard]] bool SetBuildGameSidebarHover(int target, int profile) noexcept;
+    [[nodiscard]] int BuildGameHoveredSection() const noexcept;
+    [[nodiscard]] int BuildGameHoveredRow() const noexcept;
+    [[nodiscard]] bool SetBuildGameHover(int section, int row) noexcept;
+    [[nodiscard]] bool SetBuildGameScrollOffset(int offset, int maxOffset) noexcept;
     [[nodiscard]] bool IsHierarchyScrollbarDragging() const noexcept;
     [[nodiscard]] bool SetHierarchyScrollOffset(int offset, int maxOffset) noexcept;
     void BeginHierarchyScrollbarDrag(int y) noexcept;
@@ -452,7 +474,9 @@ public:
     [[nodiscard]] bool CreateMaterialFromGraphAsset(kb::assets::AssetId graphAssetId);
     [[nodiscard]] bool CreateMaterialFromMaterialTypeAsset(kb::assets::AssetId materialTypeAssetId);
     [[nodiscard]] bool DuplicateMaterialAsset(kb::assets::AssetId materialAssetId);
+    [[nodiscard]] bool DuplicateAsset(kb::assets::AssetId assetId);
     [[nodiscard]] bool FindMaterialReferences(kb::assets::AssetId materialAssetId);
+    [[nodiscard]] bool FindParticleEffectReferences(kb::assets::AssetId effectAssetId);
     [[nodiscard]] bool ExtractEmbeddedMaterials(kb::assets::AssetId meshAssetId);
     [[nodiscard]] bool CreateLuaScriptAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool OpenLuaScript(kb::assets::AssetId id);
@@ -1076,8 +1100,14 @@ public:
         const std::filesystem::path& path,
         const std::filesystem::path& virtualPath,
         kb::scene::Vec3 position);
+    [[nodiscard]] kb::scene::SceneEntity CreatePrefabAssetEntity(
+        const std::filesystem::path& path,
+        const std::filesystem::path& virtualPath,
+        kb::scene::Vec3 position,
+        bool logCreation);
     [[nodiscard]] kb::scene::SceneEntity CreateMeshAssetEntity(kb::assets::AssetId assetId);
     [[nodiscard]] kb::scene::SceneEntity CreateParticleEffectEntity(kb::assets::AssetId assetId);
+    [[nodiscard]] kb::scene::SceneEntity CreateParticleEffectEntity(kb::assets::AssetId assetId, kb::scene::Vec3 position, bool logCreation);
     [[nodiscard]] kb::scene::SceneEntity CreateMeshAssetEntity(kb::assets::AssetId assetId, kb::scene::Vec3 position, bool logCreation);
     [[nodiscard]] bool SetMeshRendererMeshAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId);
     [[nodiscard]] bool AddBehaviourAssetToEntity(kb::assets::AssetId assetId, kb::scene::SceneEntity entity);
@@ -1138,6 +1168,10 @@ public:
         bool overridden = false;
     };
     [[nodiscard]] std::vector<EntityScriptVariable> EntityScriptExposedVariables(kb::scene::SceneEntity entity) const;
+    // How many rows the script section shows. The panel's height and its hit testing
+    // want only this, and building the values for it copied a script value and a name
+    // per variable on every repaint and every mouse move across the panel.
+    [[nodiscard]] std::size_t EntityScriptExposedVariableCount(kb::scene::SceneEntity entity) const;
     // Authors a per-instance override; if the value equals the script's declared
     // default the override is dropped instead (store-only-non-default). Undoable.
     [[nodiscard]] bool SetEntityScriptVariable(kb::scene::SceneEntity entity, std::string name, kb::script::ScriptValue value);
@@ -1179,7 +1213,9 @@ public:
     [[nodiscard]] bool HasActiveTransformEdit() const noexcept;
 
 private:
-    [[nodiscard]] bool FinalizeParticleEditorCommand(kb::particle_editor::ParticleEditorResult result);
+    [[nodiscard]] bool SpawnEditRequiresPreviewRestart(const kb::scene::ParticleSpawnAsset& spawn) const;
+    [[nodiscard]] bool FinalizeParticleEditorCommand(kb::particle_editor::ParticleEditorResult result,
+                                                     bool restartPreview = false);
     [[nodiscard]] bool FinalizeLoadedSkeletalMeshEditorAsset(
         kb::assets::AssetId meshId,
         kb::assets::AssetId skeletonId,
@@ -1244,6 +1280,9 @@ private:
     void SurfaceScriptLibraryStartupReport();
     void ResetScriptRuntimeStateForPlayMode();
     [[nodiscard]] bool SaveProjectDescriptor();
+    [[nodiscard]] bool SaveProjectConfiguration();
+    // Records the document the author has open, so reopening the project returns to it.
+    void RememberLastOpenMap();
     void ClearSceneDocumentDirty() noexcept;
     void ReleaseRenderedSceneResources();
     void InvalidateHierarchyRows() noexcept;
@@ -1260,6 +1299,7 @@ private:
     // scene wires its subsystems through the engine module host.
     EditorProjectBootstrapResult projectBootstrap_;
     kb::project::ProjectDescriptor project_;
+    kb::project::ProjectSettings projectConfig_;
     std::filesystem::path projectFile_;
     std::unique_ptr<kb::scene::Scene> scene_;
     std::function<void(const kb::scene::Scene&)> renderSceneReleaseHandler_;
@@ -1309,7 +1349,7 @@ private:
     std::optional<kb::render::RenderMaterialAssetData> materialNodePreviewWorkingCopy_;
     bool materialPreviewNodePreviewEnabled_ = false;
     EditorProjectSettingsState projectSettings_;
-    EditorSettingsState editorSettings_;
+    EditorConfiguration editorConfig_;
     EditorPluginsState plugins_;
     bool particleProviderMigrationResolved_ = false;
     EditorScriptEditorState scriptEditor_;
@@ -1455,6 +1495,14 @@ private:
     EditorPlayModeSelectionSnapshot playModeSelectionSnapshot_;
     kb::scene::SceneEntity playCameraEntity_{};
     int hierarchyScrollOffset_ = 0;
+    int buildGameScrollOffset_ = 0;
+    std::uint32_t buildGameCollapsedSections_ = 0U;
+    int buildGameSelectedTarget_ = 0;
+    int buildGameSelectedProfile_ = 0;
+    int buildGameHoveredTarget_ = -1;
+    int buildGameHoveredProfile_ = -1;
+    int buildGameHoveredSection_ = -1;
+    int buildGameHoveredRow_ = -1;
     int hierarchyScrollbarDragY_ = 0;
     int hierarchyScrollbarDragStartOffset_ = 0;
     bool hierarchyScrollbarDragging_ = false;

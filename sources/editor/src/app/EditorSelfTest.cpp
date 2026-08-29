@@ -283,25 +283,29 @@ void RunProjectSettingsSuite(Report& report) {
     report.Check(HitKindAt(context, click.optionRow1) == ProjectSettingsHitKind::MappingContextOption, "Open-list row hit-tests as MappingContextOption");
     const std::string expected = options[1];
     report.Check(controller.HandlePointerDown(kContent, click.optionRow1.x, click.optionRow1.y), "Clicking option is handled");
-    report.Check(context.Project().inputMappingContext == expected, "Selected mapping context applied to project (" + expected + ")");
+    report.Check(context.ProjectConfiguration().inputMappingContext == expected, "Selected mapping context applied to project (" + expected + ")");
     report.Check(!context.ProjectSettings().IsMappingContextDropdownOpen(), "Dropdown closed after selection");
 
     // Persistence: reload the descriptor from disk.
     {
         const kb::project::ProjectDescriptorReadResult reloaded = kb::project::ProjectManager::LoadProject(context.ProjectFile());
         report.Check(reloaded.succeeded, "Project descriptor reloads from disk");
-        report.Check(reloaded.succeeded && reloaded.descriptor.inputMappingContext == expected, "Mapping context persisted to descriptor");
-        report.Check(reloaded.succeeded && reloaded.descriptor.fileVersion >= 2U, "Descriptor written at file version >= 2");
+        const auto stored = kb::project::ProjectSettingsStore::Load(
+            kb::project::ProjectSettingsStore::FilePath(context.ProjectFile().parent_path()));
+        report.Check(stored.Succeeded() && stored.found && stored.settings.inputMappingContext == expected,
+            "Mapping context persisted to the settings file");
     }
 
     // Enabled checkbox toggles + persists.
-    const bool enabledBefore = context.Project().inputEnabled;
+    const bool enabledBefore = context.ProjectConfiguration().inputEnabled;
     report.Check(HitKindAt(context, click.checkbox) == ProjectSettingsHitKind::EnabledCheckbox, "Checkbox point hit-tests as EnabledCheckbox");
     report.Check(controller.HandlePointerDown(kContent, click.checkbox.x, click.checkbox.y), "Clicking checkbox is handled");
-    report.Check(context.Project().inputEnabled == !enabledBefore, "Enabled flag toggled");
+    report.Check(context.ProjectConfiguration().inputEnabled == !enabledBefore, "Enabled flag toggled");
     {
-        const kb::project::ProjectDescriptorReadResult reloaded = kb::project::ProjectManager::LoadProject(context.ProjectFile());
-        report.Check(reloaded.succeeded && reloaded.descriptor.inputEnabled == !enabledBefore, "Enabled flag persisted to descriptor");
+        const auto stored = kb::project::ProjectSettingsStore::Load(
+            kb::project::ProjectSettingsStore::FilePath(context.ProjectFile().parent_path()));
+        report.Check(stored.Succeeded() && stored.found && stored.settings.inputEnabled == !enabledBefore,
+            "Enabled flag persisted to the settings file");
     }
 
     // Reopen the dropdown, then click empty panel space -> dismisses.
@@ -315,19 +319,23 @@ void RunProjectSettingsSuite(Report& report) {
     report.Check(context.ProjectSettings().SelectedCategory() == static_cast<int>(ProjectSettingsCategory::Graphics), "Graphics category active after click");
     report.Check(HitKindAt(context, click.forwardPlusLightingPath) == ProjectSettingsHitKind::LightingPathOption, "Forward+ lighting path point hit-tests as LightingPathOption");
     report.Check(controller.HandlePointerDown(kContent, click.forwardPlusLightingPath.x, click.forwardPlusLightingPath.y), "Clicking Forward+ lighting path is handled");
-    report.Check(context.Project().sceneLightingPath == kb::project::ProjectSceneLightingPath::ForwardPlus, "Project lighting path changed to Forward+");
+    report.Check(context.ProjectConfiguration().lightingPath == kb::project::ProjectSceneLightingPath::ForwardPlus, "Project lighting path changed to Forward+");
     {
-        const kb::project::ProjectDescriptorReadResult reloaded = kb::project::ProjectManager::LoadProject(context.ProjectFile());
-        report.Check(reloaded.succeeded && reloaded.descriptor.sceneLightingPath == kb::project::ProjectSceneLightingPath::ForwardPlus, "Forward+ lighting path persisted to descriptor");
-        report.Check(reloaded.succeeded && reloaded.descriptor.fileVersion >= 4U, "Descriptor written at file version >= 4 after Forward+");
+        const auto stored = kb::project::ProjectSettingsStore::Load(
+            kb::project::ProjectSettingsStore::FilePath(context.ProjectFile().parent_path()));
+        report.Check(stored.Succeeded() && stored.found &&
+                stored.settings.lightingPath == kb::project::ProjectSceneLightingPath::ForwardPlus,
+            "Forward+ lighting path persisted to the settings file");
     }
     report.Check(HitKindAt(context, click.deferredLightingPath) == ProjectSettingsHitKind::LightingPathOption, "Deferred lighting path point hit-tests as LightingPathOption");
     report.Check(controller.HandlePointerDown(kContent, click.deferredLightingPath.x, click.deferredLightingPath.y), "Clicking Deferred lighting path is handled");
-    report.Check(context.Project().sceneLightingPath == kb::project::ProjectSceneLightingPath::Deferred, "Project lighting path changed to Deferred");
+    report.Check(context.ProjectConfiguration().lightingPath == kb::project::ProjectSceneLightingPath::Deferred, "Project lighting path changed to Deferred");
     {
-        const kb::project::ProjectDescriptorReadResult reloaded = kb::project::ProjectManager::LoadProject(context.ProjectFile());
-        report.Check(reloaded.succeeded && reloaded.descriptor.sceneLightingPath == kb::project::ProjectSceneLightingPath::Deferred, "Deferred lighting path persisted to descriptor");
-        report.Check(reloaded.succeeded && reloaded.descriptor.fileVersion >= 4U, "Descriptor written at file version >= 4");
+        const auto stored = kb::project::ProjectSettingsStore::Load(
+            kb::project::ProjectSettingsStore::FilePath(context.ProjectFile().parent_path()));
+        report.Check(stored.Succeeded() && stored.found &&
+                stored.settings.lightingPath == kb::project::ProjectSceneLightingPath::Deferred,
+            "Deferred lighting path persisted to the settings file");
     }
 }
 
@@ -354,10 +362,14 @@ void RunProjectPhysicsLayersRuntimeSuite(Report& report) {
         kb::scene::WritePhysicsLayersAsset(layersPath, layers),
         "LIB-129 write editor project physics layers asset");
 
-    kb::project::ProjectDescriptor descriptor = bootstrap.descriptor;
-    descriptor.physicsLayersAsset = kLayersVirtualPath;
+    kb::project::ProjectSettings settings = bootstrap.settings;
+    settings.physicsLayersAsset = kLayersVirtualPath;
+    std::string settingsWriteError;
     report.Check(
-        kb::project::ProjectManager::SaveProject(bootstrap.projectFile, descriptor),
+        kb::project::ProjectSettingsStore::Save(
+            kb::project::ProjectSettingsStore::FilePath(bootstrap.projectFile.parent_path()),
+            settings,
+            settingsWriteError),
         "LIB-129 persist editor project physics layers reference");
 
     EditorSceneContext context;
@@ -395,7 +407,7 @@ void RunProjectPhysicsLayersRuntimeSuite(Report& report) {
         projectSettingsController.HandlePointerDown(kContent, projectSettingsClick.optionRow1.x, projectSettingsClick.optionRow1.y),
         "LIB-129 selecting collision layers asset through project settings is handled");
     report.Check(
-        !context.ProjectSettings().IsPhysicsLayersDropdownOpen() && context.Project().physicsLayersAsset == kLayersVirtualPath,
+        !context.ProjectSettings().IsPhysicsLayersDropdownOpen() && context.ProjectConfiguration().physicsLayersAsset == kLayersVirtualPath,
         "LIB-129 Physics project setting retains the selected collision layers asset");
 
     const auto createMatrixBody = [&context](
@@ -4223,7 +4235,7 @@ void RunMaterialGraphCommentEditingSuite(Report& report) {
 }
 
 // Finding 27 (a diagnostic jumps to its node): a node-tied diagnostic line is clickable and centres the graph
-// on the offending node, the way Unreal's error list focuses the node instead of leaving the user to hunt.
+// on the offending node, instead of leaving the user to hunt for it.
 void RunMaterialGraphDiagnosticJumpSuite(Report& report) {
     EditorSceneContext context;
     std::error_code error;
@@ -4290,7 +4302,7 @@ void RunMaterialGraphDiagnosticJumpSuite(Report& report) {
 }
 
 // Finding 28 (material preview camera control): the preview object was locked to one head-on angle. Drag now
-// orbits it and the wheel dollies in/out, the way Unreal's material-preview viewport reads.
+// orbits it and the wheel dollies in/out.
 void RunMaterialPreviewCameraControlSuite(Report& report) {
     EditorSceneContext context;
     std::error_code error;
@@ -4392,7 +4404,7 @@ void RunMaterialPreviewCameraControlSuite(Report& report) {
 
     // The heart of the lag fix: none of the orbit/zoom above bumped the preview revision, so the viewport
     // never re-synced the scene to the GPU for a camera move. The preview redraws from the per-frame present
-    // override alone - matching UE, where an orbit ends in Viewport->InvalidateDisplay() (viewport pixels
+    // override alone - an orbit ends in a viewport display invalidation (viewport pixels
     // only), not a scene rebuild.
     report.Check(context.MaterialPreviewRevision() == revisionBeforeCameraMoves,
         "Finding 28: orbiting and zooming never bump the preview revision (no per-frame GPU re-sync)");
@@ -5470,7 +5482,7 @@ void RunPluginsPanelSuite(Report& report) {
     report.Check(boxTransform.localPosition.y < 4.0F, "Jolt plugin loaded through editor reload moves a dynamic body");
     report.Check(boxTransform.localPosition.y > 0.35F, "Jolt plugin loaded through editor reload keeps the body above the floor");
 
-    // Unity-like: a Collider WITHOUT a Rigidbody is an implicit static body, so a
+    // A Collider WITHOUT a Rigidbody is an implicit static body, so a
     // dynamic body lands on it instead of tunneling through. Placed far from the
     // first floor so the two scenarios never interact.
     const kb::scene::SceneEntity colliderOnlyFloor = context.CreateHierarchyObject();
@@ -5663,7 +5675,7 @@ void RunMaterialGraphInteractionLifecycleSuite(Report& report) {
         "Finding 14: restore the link for the remaining checks");
 
     // Parked-menu regression (2026-07-22): a wire dropped on empty canvas parks the pin-connection menu but
-    // deliberately KEEPS the pending connection so a picked node connects to it (UE-style). The move router
+    // deliberately KEEPS the pending connection so a picked node connects to it. The move router
     // used to cancel that pending connection on the very first mouse move (its !leftButtonDown loose-wire
     // path), after which the pick created nothing - "selecting the list just cancels". The router now guards
     // that path with !IsMaterialGraphContextMenuOpen(); this models the exact predicate so a regression fails

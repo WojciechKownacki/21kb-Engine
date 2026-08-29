@@ -468,6 +468,22 @@ const std::vector<LibraryComponentInspectorDesc>& EngineLibraryComponentInspecto
             },
         },
         LibraryComponentInspectorDesc{
+            .componentName = "Particle Effect",
+            .displayName = "Particle Effect",
+            .category = "Rendering",
+            .fields = {
+                LibraryComponentInspectorFieldDesc{ "effectAssetId", "Effect Asset", "Particle effect asset instantiated by this component." },
+                LibraryComponentInspectorFieldDesc{ "deterministicSeed", "Deterministic Seed", "Stable seed used to reproduce the particle simulation." },
+                LibraryComponentInspectorFieldDesc{ "rateMultiplier", "Rate Multiplier", "Multiplier applied to authored emission rates." },
+                LibraryComponentInspectorFieldDesc{ "maxParticlesOverride", "Max Particles Override", "Optional runtime particle-count limit; zero uses the asset limit." },
+                LibraryComponentInspectorFieldDesc{ "ownerDeathPolicy", "Owner Death Policy", "Whether remaining particles drain or clear when their owner is destroyed." },
+                LibraryComponentInspectorFieldDesc{ "enabled", "Enabled", "Whether this component participates in particle simulation." },
+                LibraryComponentInspectorFieldDesc{ "autoPlay", "Auto Play", "Whether playback starts automatically when the component becomes active." },
+                LibraryComponentInspectorFieldDesc{ "followTransform", "Follow Transform", "Whether live particles continue following the owning transform." },
+                LibraryComponentInspectorFieldDesc{ "restartOnActivate", "Restart On Activate", "Whether reactivation restarts playback from the deterministic seed." },
+            },
+        },
+        LibraryComponentInspectorDesc{
             .componentName = "Echo soczewki",
             .displayName = "Echo soczewki",
             .category = "Rendering",

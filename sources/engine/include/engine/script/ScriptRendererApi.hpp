@@ -9,7 +9,7 @@ class ScriptRuntimeHost;
 // (kb::scene::SceneRenderFeedback). All four are pure CPU reads of state the renderer
 // already computed while culling the scene's most recent submit: no GPU occlusion query,
 // readback, fence, or any other GPU synchronization is ever involved, and the results carry
-// the inherent one-frame latency Unity's Renderer.isVisible has for the same reason (see
+// the inherent one-frame latency any such visibility query has for the same reason (see
 // SceneRenderFeedback.hpp's own doc comment for the full publish/latency contract).
 //
 // IsVisible/GetBounds take an entity (defaulting to the calling entity, like

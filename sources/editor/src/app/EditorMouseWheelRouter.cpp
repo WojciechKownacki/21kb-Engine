@@ -1,9 +1,12 @@
+#include "app/EditorWindowInvalidator.hpp"
 #include "app/EditorMouseWheelRouter.hpp"
 
 #if defined(_WIN32)
 #include "app/console/EditorConsolePointerController.hpp"
 #include "app/inspector/EditorInspectorPointerController.hpp"
 #include "app/plugins/EditorPluginsPointerController.hpp"
+#include "rendering/BuildGamePanelLayout.hpp"
+#include "rendering/BuildGamePanelRenderer.hpp"
 #include "app/project_files/EditorProjectFilesMouseWheelController.hpp"
 #include "app/scene_viewport/EditorSceneViewportCameraController.hpp"
 #include "assets/EditorAssetBrowserGeometry.hpp"
@@ -160,10 +163,7 @@ bool EditorMouseWheelRouter::HandleMouseWheel(int x, int y, int wheelDelta) {
                 wheelDelta,
                 MaterialEditorPanelRenderer::GraphTexturePickerMaxScroll(*materialEditorContent, sceneContext_));
             if (scrolled) {
-                InvalidateRect(messageWindow_, nullptr, FALSE);
-                if (messageWindow_ != mainWindow_) {
-                    InvalidateRect(mainWindow_, nullptr, FALSE);
-                }
+                EditorWindowInvalidator::InvalidatePanel(messageWindow_, *materialEditorContent);
             }
             return true;
         }
@@ -173,10 +173,7 @@ bool EditorMouseWheelRouter::HandleMouseWheel(int x, int y, int wheelDelta) {
                 wheelDelta,
                 MaterialEditorGraphContextMenuMaxScroll(sceneContext_));
             if (scrolled) {
-                InvalidateRect(messageWindow_, nullptr, FALSE);
-                if (messageWindow_ != mainWindow_) {
-                    InvalidateRect(mainWindow_, nullptr, FALSE);
-                }
+                EditorWindowInvalidator::InvalidatePanel(messageWindow_, *materialEditorContent);
             }
             return true;
         }
@@ -203,10 +200,7 @@ bool EditorMouseWheelRouter::HandleMouseWheel(int x, int y, int wheelDelta) {
                     sceneContext_.MaterialEditorDetailsScrollOffset());
                 const bool scrolled = sceneContext_.ScrollMaterialEditorDetails(wheelDelta, details.maxScroll);
                 if (scrolled) {
-                    InvalidateRect(messageWindow_, nullptr, FALSE);
-                    if (messageWindow_ != mainWindow_) {
-                        InvalidateRect(mainWindow_, nullptr, FALSE);
-                    }
+                    EditorWindowInvalidator::InvalidatePanel(messageWindow_, *materialEditorContent);
                 }
             }
             return true;
@@ -216,10 +210,7 @@ bool EditorMouseWheelRouter::HandleMouseWheel(int x, int y, int wheelDelta) {
         if (Contains(layout.previewFrame, x, y)) {
             const float scale = wheelDelta > 0 ? 0.9F : (wheelDelta < 0 ? 1.0F / 0.9F : 1.0F);
             if (sceneContext_.ZoomMaterialPreviewCamera(scale)) {
-                InvalidateRect(messageWindow_, nullptr, FALSE);
-                if (messageWindow_ != mainWindow_) {
-                    InvalidateRect(mainWindow_, nullptr, FALSE);
-                }
+                EditorWindowInvalidator::InvalidatePanel(messageWindow_, *materialEditorContent);
             }
             return true;
         }
@@ -265,19 +256,29 @@ bool EditorMouseWheelRouter::HandleMouseWheel(int x, int y, int wheelDelta) {
     const std::optional<RECT> inspectorContent = EditorPanelContentResolver::Resolve(DockPanelKind::Inspector, messageWindow_, mainWindow_, dockModel_, floatingWindows_, metrics_);
     EditorInspectorPointerController inspectorPointer(sceneContext_);
     if (inspectorContent.has_value() && inspectorPointer.HandleMouseWheel(*inspectorContent, x, y, wheelDelta)) {
-        InvalidateRect(messageWindow_, nullptr, FALSE);
-        if (messageWindow_ != mainWindow_) {
-            InvalidateRect(mainWindow_, nullptr, FALSE);
-        }
+        EditorWindowInvalidator::InvalidatePanel(messageWindow_, *inspectorContent);
         return true;
     }
 
     const std::optional<RECT> pluginsContent = EditorPanelContentResolver::Resolve(DockPanelKind::Plugins, messageWindow_, mainWindow_, dockModel_, floatingWindows_, metrics_);
     EditorPluginsPointerController pluginsPointer(sceneContext_);
     if (pluginsContent.has_value() && pluginsPointer.HandleMouseWheel(*pluginsContent, x, y, wheelDelta)) {
-        InvalidateRect(messageWindow_, nullptr, FALSE);
-        if (messageWindow_ != mainWindow_) {
-            InvalidateRect(mainWindow_, nullptr, FALSE);
+        EditorWindowInvalidator::InvalidatePanel(messageWindow_, *pluginsContent);
+        return true;
+    }
+
+    const std::optional<RECT> buildGameContent = EditorPanelContentResolver::Resolve(DockPanelKind::BuildGame, messageWindow_, mainWindow_, dockModel_, floatingWindows_, metrics_);
+    if (buildGameContent.has_value() &&
+        x >= buildGameContent->left && x < buildGameContent->right &&
+        y >= buildGameContent->top && y < buildGameContent->bottom) {
+        const BuildGamePanelLayoutRects rects = BuildGamePanelLayout::Resolve(*buildGameContent);
+        const int maxScroll = BuildGamePanelLayout::MaxScrollOffset(
+            rects.body, BuildGamePanelRenderer::SettingsContentHeight(sceneContext_));
+        const int wheelDirection = wheelDelta > 0 ? 1 : -1;
+        if (sceneContext_.SetBuildGameScrollOffset(
+                sceneContext_.BuildGameScrollOffset() - wheelDirection * BuildGamePanelLayout::kOptionRowHeight * 3,
+                maxScroll)) {
+            EditorWindowInvalidator::InvalidatePanel(messageWindow_, *buildGameContent);
         }
         return true;
     }

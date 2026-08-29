@@ -43,9 +43,9 @@ struct InputActionEvent {
 // The runtime input subsystem. Platform code fills MutableDeviceState() each frame;
 // the polling system calls Evaluate(dt); scripts query action states by name.
 //
-// This is the engine-side equivalent of Unreal's Enhanced Input Local Player
-// Subsystem: it owns a prioritized stack of mapping contexts and resolves them
-// into per-action values + trigger events every frame.
+// This is the per-local-player half of the input stack: it owns a prioritized
+// stack of mapping contexts and resolves them into per-action values + trigger
+// events every frame.
 class InputSubsystem {
 public:
     using ActionResolver = InputMappingContextStack::ActionResolver;

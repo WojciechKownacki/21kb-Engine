@@ -23,6 +23,11 @@ bool FloatingWindowCreator::Create(
     }
 
     registry.Add(panelId, floating);
+    // Only now is the window known to be a floating one, so ask Windows to work out
+    // the frame again: the first pass during creation still used the default one.
+    SetWindowPos(
+        floating, nullptr, 0, 0, 0, 0,
+        SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
     ShowWindow(floating, SW_SHOW);
     UpdateWindow(floating);
     return true;

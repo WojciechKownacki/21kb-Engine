@@ -14,7 +14,7 @@ public:
     // proxy (the schema is parsed statically from the source), so declarations do
     // not error at load; during execution (context != nullptr) every read/write of
     // `Inspector.name` routes to the CURRENT entity's exposed-variable instance
-    // (the per-entity Godot/Unity semantics), mirroring Self:Get/SetVariable.
+    // (per-entity instance semantics), mirroring Self:Get/SetVariable.
     static void AttachInspector(lua_State* state, int environmentIndex, ScriptExecutionContext* context);
 };
 

@@ -39,6 +39,15 @@ constexpr std::uint32_t kMaxEditorViewportIndex =
     return lhs.left == rhs.left && lhs.top == rhs.top && lhs.right == rhs.right && lhs.bottom == rhs.bottom;
 }
 
+// "Has this store already shown the child window?" is a question about the child's own WS_VISIBLE
+// bit. IsWindowVisible() also requires every ancestor to be visible, so it answers 0 for a perfectly
+// shown surface whenever the host is minimized or otherwise not on screen -- which turned the
+// present request below into an unconditional per-iteration RequestPresent().
+[[nodiscard]] bool HasVisibleStyle(HWND window) noexcept {
+    return window != nullptr && IsWindow(window) != 0 &&
+        (GetWindowLongPtrW(window, GWL_STYLE) & WS_VISIBLE) != 0;
+}
+
 [[nodiscard]] RECT CenteredRectFor(const RECT& bounds, std::uint32_t renderWidth, std::uint32_t renderHeight, EditorViewportFitMode fitMode) noexcept {
     return EditorSceneViewportGeometry::CenteredRectFor(bounds, renderWidth, renderHeight, fitMode);
 }
@@ -280,7 +289,10 @@ void EditorSceneBgfxViewport::SyncHostSurfaceLayouts(HWND parent, std::span<cons
             static_cast<void>(EnsureHostSurfaceWindow(*surface, layoutBounds));
         }
 
-        if (surface->clipWindow != nullptr && IsWindow(surface->clipWindow) != 0 && IsWindowVisible(surface->clipWindow) == 0) {
+        if (surface->clipWindow != nullptr && IsWindow(surface->clipWindow) != 0 && !HasVisibleStyle(surface->clipWindow)) {
+            // Self-terminating: the present this asks for runs ShowPresentedWindows, which sets
+            // WS_VISIBLE, so the next sync stops requesting. Testing IsWindowVisible() here never
+            // terminated while the host was off screen and pinned the editor at full present rate.
             RequestPresent();
         }
         hostSurfaceStore_.MarkLayoutActive(*surface);
@@ -870,17 +882,6 @@ void EditorSceneBgfxViewport::ReportAaRouteTrace(std::string_view message, bool 
     }
     lastConsoleAaRouteTrace_ = std::string{ message };
     aaTraceReporter_(lastConsoleAaRouteTrace_);
-}
-
-void EditorSceneBgfxViewport::ReportAaPipelineTrace(std::string_view message, bool force) {
-    if (!aaTraceReporter_) {
-        return;
-    }
-    if (!force && lastConsoleAaPipelineTrace_ == message) {
-        return;
-    }
-    lastConsoleAaPipelineTrace_ = std::string{ message };
-    aaTraceReporter_(lastConsoleAaPipelineTrace_);
 }
 
 void EditorSceneBgfxViewport::FailRender(const char* reason) noexcept {

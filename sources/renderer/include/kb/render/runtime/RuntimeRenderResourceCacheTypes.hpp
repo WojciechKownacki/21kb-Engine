@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 namespace kb::render {
@@ -42,7 +43,20 @@ struct RuntimeTextureAssetKeyHash {
 
 struct RuntimeMeshResource {
     RenderMeshHandle handle{};
-    const void* sourceAsset = nullptr;
+    // LIB-146: the payload this GPU mesh was built from, observed WEAKLY and never by raw
+    // address. RuntimeMeshResourceEnsurer's in-place-update fast paths use "is this the same
+    // live asset object?" to decide that the cached GPU buffers may be kept and only
+    // sub-resources re-uploaded (terrain painting mutates the editor's published working
+    // asset in place, so its contentHash changes while the object does not). A raw pointer
+    // cannot express that question: when a mesh file changes on disk,
+    // kb::assets::AssetDiscoveryService drops the AssetManager cache entry, the old payload
+    // is freed, and the reload's std::make_shared routinely hands back the very same
+    // address - an ABA that made a genuinely replaced mesh look like an in-place edit and
+    // left the stale GPU buffers bound (a model edited on disk kept rendering its old
+    // geometry). A weak_ptr holds the control block, so the storage it describes cannot be
+    // recycled behind our back: an expired observation is honest, and a matching address
+    // always means the same object.
+    std::weak_ptr<const void> sourceAsset{};
     std::uint64_t sourceAssetId = 0U;
     std::uint64_t contentHash = 0;
     std::uint64_t dynamicTopologyKey = 0;
@@ -52,6 +66,13 @@ struct RuntimeMeshResource {
     std::uint64_t lastReferencedFrame = 0;
     bool dynamicVertexUpdates = false;
     bool dynamicTerrainLayerUpdates = false;
+
+    // True only when `candidate` is the very same, still-live payload this resource was
+    // built from - never merely an object that reuses its address.
+    [[nodiscard]] bool HasSourceAsset(const void* candidate) const noexcept {
+        const std::shared_ptr<const void> alive = sourceAsset.lock();
+        return alive != nullptr && candidate != nullptr && alive.get() == candidate;
+    }
 };
 
 struct RuntimeMaterialResource {

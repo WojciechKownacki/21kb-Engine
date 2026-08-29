@@ -90,6 +90,7 @@
 #include "engine/scene/FacingPanelComponent.hpp"
 #include "engine/scene/SpaceStrokeComponent.hpp"
 #include "engine/scene/HistoryRibbonComponent.hpp"
+#include "engine/scene/ParticleEffectComponent.hpp"
 #include "engine/scene/SceneLoadedContent.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/SceneRuntime.hpp"
@@ -2808,6 +2809,11 @@ void RunEngineLibraryComponentRegistryTest() {
         .meshAssetId = 906U, .materialAssetId = 907U, .lifetimeSeconds = 2.0F, .width = 0.3F,
         .sampleIntervalSeconds = 0.1F, .layer = 3U, .castsShadow = true, .receivesShadow = false, .enabled = true,
     });
+    source.Components().ParticleEffects().Set(object.Entity(), kb::scene::ParticleEffectComponent{
+        .effectAssetId = 908U, .deterministicSeed = 123456U, .rateMultiplier = 1.25F,
+        .maxParticlesOverride = 512U, .ownerDeathPolicy = kb::scene::ParticleOwnerDeathPolicy::Clear,
+        .enabled = true, .autoPlay = false, .followTransform = false, .restartOnActivate = false,
+    });
 
     const std::filesystem::path testRoot = std::filesystem::temp_directory_path() / "21kb_engine_library_component_registry_tests";
     std::error_code removeError;
@@ -2947,6 +2953,15 @@ void RunEngineLibraryComponentRegistryTest() {
                             kb::tests::NearlyEqual(restoredRibbon->lifetimeSeconds, 2.0F) && kb::tests::NearlyEqual(restoredRibbon->width, 0.3F) &&
                             kb::tests::NearlyEqual(restoredRibbon->sampleIntervalSeconds, 0.1F) && restoredRibbon->enabled,
         "Engine21kbLibrary component registry: Wstęga historii must survive real save/load with its sampling policy");
+    const kb::scene::ParticleEffectComponent* restoredParticleEffect = target.Components().ParticleEffects().TryGet(restored);
+    kb::tests::Require(restoredParticleEffect != nullptr && restoredParticleEffect->effectAssetId == 908U &&
+                            restoredParticleEffect->deterministicSeed == 123456U &&
+                            kb::tests::NearlyEqual(restoredParticleEffect->rateMultiplier, 1.25F) &&
+                            restoredParticleEffect->maxParticlesOverride == 512U &&
+                            restoredParticleEffect->ownerDeathPolicy == kb::scene::ParticleOwnerDeathPolicy::Clear &&
+                            restoredParticleEffect->enabled && !restoredParticleEffect->autoPlay &&
+                            !restoredParticleEffect->followTransform && !restoredParticleEffect->restartOnActivate,
+        "Engine21kbLibrary component registry: Particle Effect must survive real save/load with its playback policy");
 
     for (const kb::library::LibraryComponentDesc& desc : catalog) {
         kb::tests::Require(desc.serializable,
@@ -3272,7 +3287,8 @@ void RunComponentInspectorDescCatalogTest() {
     // 117 described fields across 12 components.
     // Light remains a public compatibility alias for 3D Radiance Emitter and
     // intentionally reuses the canonical inspector metadata for its 16 fields.
-    kb::tests::Require(fieldsChecked == 276U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (276, including the Light compatibility alias) across all components");
+    // Particle Effect contributes nine authoring and playback fields.
+    kb::tests::Require(fieldsChecked == 285U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (285, including the Light compatibility alias) across all components");
 
     for (const kb::library::LibraryComponentInspectorDesc& desc : catalog) {
         const bool foundInScriptNames = std::ranges::find(scriptComponentNames, desc.componentName) != scriptComponentNames.end();

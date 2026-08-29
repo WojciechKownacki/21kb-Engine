@@ -5,6 +5,7 @@
 #include "rendering/ConsoleDetailTextOverlay.hpp"
 #include "rendering/EditorSurfacePainter.hpp"
 #include "rendering/FloatingEditorWindowRenderer.hpp"
+#include "rendering/FloatingPanelGeometry.hpp"
 #include "rendering/GdiBackBufferRenderer.hpp"
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/InspectorAddComponentOverlayWindow.hpp"
@@ -31,18 +32,13 @@ struct FloatingWindowPaintContext {
     EditorSceneBgfxViewport* sceneViewport = nullptr;
 };
 
-[[nodiscard]] RECT FloatingPanelContentRect(const RECT& client, const DockPanel& panel, const EditorMetrics& metrics) noexcept {
-    RECT panelRect = GdiDrawing::Inset(client, 1);
-    RECT content = panel.kind == DockPanelKind::Scene
-        ? panelRect
-        : GdiDrawing::Inset(panelRect, metrics.panelPadding);
-    content.top += metrics.tabStripHeight;
-    return content;
+[[nodiscard]] RECT FloatingPanelContentRect(const RECT& client, const EditorMetrics& metrics) noexcept {
+    return FloatingPanelGeometry::Content(client, metrics.tabStripHeight);
 }
 
 void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
     auto* paintContext = static_cast<FloatingWindowPaintContext*>(context);
-    const RECT content = FloatingPanelContentRect(paint.client, *paintContext->panel, *paintContext->metrics);
+    const RECT content = FloatingPanelContentRect(paint.client, *paintContext->metrics);
 
     std::vector<EditorSceneBgfxViewport::HostSurfaceLayout> layouts;
     if (paintContext->panel->kind == DockPanelKind::Scene) {
@@ -124,7 +120,7 @@ void FloatingWindowBackBufferPainter::Paint(HWND window, const DockPanel& panel,
          terrainTool.brushMenuOpen || terrainTool.brushShapeMenuOpen)) {
         RECT content{};
         GetClientRect(window, &content);
-        content = FloatingPanelContentRect(content, panel, metrics);
+        content = FloatingPanelContentRect(content, metrics);
         FloatingSceneToolbarDropdownOverlay().Show(window, content, panel.id, theme, sceneContext);
     } else {
         FloatingSceneToolbarDropdownOverlay().Hide();
@@ -132,7 +128,7 @@ void FloatingWindowBackBufferPainter::Paint(HWND window, const DockPanel& panel,
     if (panel.kind == DockPanelKind::Inspector && sceneContext.Inspector().IsAddComponentBrowserOpen()) {
         RECT content{};
         GetClientRect(window, &content);
-        content = FloatingPanelContentRect(content, panel, metrics);
+        content = FloatingPanelContentRect(content, metrics);
         FloatingAddComponentOverlay().Show(window, content, theme, sceneContext);
     } else {
         FloatingAddComponentOverlay().HideForOwner(window);

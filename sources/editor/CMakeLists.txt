@@ -5,6 +5,7 @@ add_executable(kb_editor WIN32
     include/kb/editor/theme/EditorTheme.hpp
     src/app/EditorApplication.cpp
     src/app/EditorApplicationLifecycle.cpp
+    src/app/EditorWorkspaceSession.cpp
     src/app/EditorCrashBreadcrumbs.cpp
     src/app/EditorApplicationMessageDispatcher.cpp
     src/app/EditorApplicationMessageLoop.cpp
@@ -95,7 +96,7 @@ add_executable(kb_editor WIN32
     src/app/scene_viewport/gizmo/EditorSceneViewportGizmoToolBehavior.cpp
     src/app/scene_viewport/EditorSceneViewportHitResolver.cpp
     src/app/scene_viewport/EditorSceneViewportMath.cpp
-    src/app/scene_viewport/EditorSceneViewportMeshDragPreview.cpp
+    src/app/scene_viewport/EditorSceneViewportAssetDragPreview.cpp
     src/app/scene_viewport/EditorSceneViewportMeshPicker.cpp
     src/app/scene_viewport/EditorSceneViewportObjectInteraction.cpp
     src/app/scene_viewport/EditorSceneViewportSelectionController.cpp
@@ -162,6 +163,9 @@ add_executable(kb_editor WIN32
     src/docking/DockCenterPanelInserter.cpp
     src/docking/DockLayoutBuilder.cpp
     src/docking/DockLeafLayoutBuilder.cpp
+    src/docking/DockLayoutSerializer.cpp
+    src/docking/EditorFloatingWindowSync.cpp
+    src/docking/EditorWorkspaceArrangement.cpp
     src/docking/DockLeafPanelOrder.cpp
     src/docking/DockModelQueries.cpp
     src/docking/DockMainLayoutResolver.cpp
@@ -221,6 +225,9 @@ add_executable(kb_editor WIN32
     src/private/docking/DockLeafPanelOrder.hpp
     src/private/docking/DockModelQueries.hpp
     src/private/docking/DockMainLayoutResolver.hpp
+    src/private/docking/DockLayoutSerializer.hpp
+    src/private/docking/EditorFloatingWindowSync.hpp
+    src/private/docking/EditorWorkspaceArrangement.hpp
     src/private/docking/DockNode.hpp
     src/private/docking/DockNodeFactory.hpp
     src/private/docking/DockNodeFinder.hpp
@@ -285,6 +292,7 @@ add_executable(kb_editor WIN32
     src/private/console/EditorConsoleLayout.hpp
     src/private/console/EditorConsoleState.hpp
     src/private/app/EditorApplicationLifecycle.hpp
+    src/private/app/EditorWorkspaceSession.hpp
     src/private/app/EditorApplicationMessageDispatcher.hpp
     src/private/app/EditorApplicationMessageLoop.hpp
     src/private/app/EditorApplicationState.hpp
@@ -366,7 +374,7 @@ add_executable(kb_editor WIN32
     src/private/app/scene_viewport/gizmo/EditorSceneViewportGizmoTargetResolver.hpp
     src/private/app/scene_viewport/gizmo/EditorSceneViewportGizmoToolBehavior.hpp
     src/private/app/scene_viewport/EditorSceneViewportHitResolver.hpp
-    src/private/app/scene_viewport/EditorSceneViewportMeshDragPreview.hpp
+    src/private/app/scene_viewport/EditorSceneViewportAssetDragPreview.hpp
     src/private/app/scene_viewport/EditorSceneViewportMeshPicker.hpp
     src/private/app/scene_viewport/EditorSceneViewportObjectInteraction.hpp
     src/private/app/scene_viewport/EditorSceneViewportSelectionController.hpp
@@ -435,6 +443,10 @@ add_executable(kb_editor WIN32
     src/private/project/EditorProjectAssetIndex.hpp
     src/private/project/EditorProjectBootstrap.hpp
     src/private/project/EditorProjectPanelHitTester.hpp
+    src/private/settings/EditorConfigurationStore.hpp
+    src/private/settings/EditorLayoutLibrary.hpp
+    src/private/settings/EditorLayoutMenuModel.hpp
+    src/private/settings/EditorPanelSessionText.hpp
     src/private/project/EditorProjectPaths.hpp
     src/private/rendering/DockDropPreviewRenderer.hpp
     src/private/rendering/DockDropPreviewOverlayWindow.hpp
@@ -458,6 +470,7 @@ add_executable(kb_editor WIN32
     src/private/rendering/EditorToolbarLayout.hpp
     src/private/rendering/FloatingEditorWindowRenderer.hpp
     src/private/rendering/FloatingWindowBackBufferPainter.hpp
+    src/private/rendering/FloatingPanelGeometry.hpp
     src/private/rendering/FloatingWindowControlRenderer.hpp
     src/private/rendering/GdiBackBufferRenderer.hpp
     src/private/rendering/EditorGdiRenderer.hpp
@@ -476,6 +489,7 @@ add_executable(kb_editor WIN32
     src/private/rendering/gdi/GdiFramePainter.hpp
     src/private/rendering/gdi/GdiRect.hpp
     src/private/rendering/gdi/GdiRectPainter.hpp
+    src/private/rendering/gdi/EditorFontCache.hpp
     src/private/rendering/gdi/GdiTextPainter.hpp
     src/private/rendering/gdi/ScopedBitmap.hpp
     src/private/rendering/gdi/ScopedBrush.hpp
@@ -580,8 +594,6 @@ add_executable(kb_editor WIN32
     src/private/scene/EditorPluginCatalog.hpp
     src/private/scene/EditorPluginsState.hpp
     src/private/scene/EditorProjectSettingsState.hpp
-    src/private/settings/EditorSettingsState.hpp
-    src/private/settings/EditorSettingsStore.hpp
     src/private/scene/EditorScriptAssetGateway.hpp
     src/private/scene/EditorScriptEditorState.hpp
     src/private/scene/EditorSceneAssetBrowserCommands.hpp
@@ -633,6 +645,7 @@ add_executable(kb_editor WIN32
     src/private/scene/audio/EditorAudioMixerAuthoring.hpp
     src/private/scene/audio/EditorSceneAudioSettingsService.hpp
     src/private/scene/EditorSceneDocumentIdentity.hpp
+    src/private/windowing/EditorFloatingWindowFrame.hpp
     src/private/windowing/FloatingWindowControlActions.hpp
     src/private/windowing/FloatingWindowControlHitTester.hpp
     src/private/windowing/FloatingWindowControlInteractor.hpp
@@ -689,6 +702,7 @@ add_executable(kb_editor WIN32
     src/rendering/ConsoleDetailTextOverlay.cpp
     src/rendering/FloatingEditorWindowRenderer.cpp
     src/rendering/FloatingWindowBackBufferPainter.cpp
+    src/rendering/FloatingPanelGeometry.cpp
     src/rendering/FloatingWindowControlRenderer.cpp
     src/rendering/GdiBackBufferRenderer.cpp
     src/rendering/GdiDrawing.cpp
@@ -696,6 +710,7 @@ add_executable(kb_editor WIN32
     src/rendering/gdi/GdiFramePainter.cpp
     src/rendering/gdi/GdiRect.cpp
     src/rendering/gdi/GdiRectPainter.cpp
+    src/rendering/gdi/EditorFontCache.cpp
     src/rendering/gdi/GdiTextPainter.cpp
     src/rendering/HierarchyPanelRenderer.cpp
     src/rendering/HierarchyPanelStyle.cpp
@@ -735,6 +750,7 @@ add_executable(kb_editor WIN32
     src/rendering/AnimatorEditorPanelRenderer.cpp
     src/rendering/SkeletalMeshEditorPanelRenderer.cpp
     src/rendering/ProjectFilesAssetListRenderer.cpp
+    src/assets/EditorAssetOpenPolicy.cpp
     src/rendering/ProjectFilesAssetIconResolver.cpp
     src/rendering/ProjectFilesAssetTileFrameRenderer.cpp
     src/rendering/ProjectFilesAssetTileMetrics.cpp
@@ -750,6 +766,8 @@ add_executable(kb_editor WIN32
     src/rendering/ProjectFilesTileTextRenderer.cpp
     src/rendering/ProjectFilesToolbarRenderer.cpp
     src/rendering/ProjectFilesTreeRenderer.cpp
+    src/rendering/BuildGamePanelLayout.cpp
+    src/rendering/BuildGamePanelRenderer.cpp
     src/rendering/PluginsPanelRenderer.cpp
     src/rendering/ProjectSettingsPanelLayout.cpp
     src/rendering/ProjectSettingsPanelRenderer.cpp
@@ -828,7 +846,6 @@ add_executable(kb_editor WIN32
     src/scene/EditorParticleEditorHost.cpp
     src/private/scene/ParticleEditorBakeHostCommand.hpp
     src/scene/ParticleEditorBakeHostCommand.cpp
-    src/scene/ParticleEditorHostSessionStore.cpp
     src/scene/EditorSceneDocumentLifecycle.cpp
     src/scene/EditorSceneHierarchyActions.cpp
     src/scene/EditorSceneMaterialAssetActions.cpp
@@ -838,13 +855,17 @@ add_executable(kb_editor WIN32
     src/scene/EditorScenePrefabActions.cpp
     src/scene/EditorSceneSelectionPivot.cpp
     src/scene/EditorSceneViewportStateStore.cpp
-    src/settings/EditorSettingsStore.cpp
+    src/settings/EditorConfigurationStore.cpp
+    src/settings/EditorLayoutLibrary.cpp
+    src/settings/EditorLayoutMenuModel.cpp
+    src/settings/EditorPanelSessionText.cpp
     src/scene/EditorViewportCameraState.cpp
     src/scene/EditorViewportPreviewState.cpp
     src/scene/material/EditorMaterialAssetAuthoring.cpp
     src/scene/material/EditorMaterialAssetEditCommand.cpp
     src/scene/material/EditorMaterialAssetGateway.cpp
     src/scene/material/EditorMaterialReferenceFinder.cpp
+    src/scene/particle/EditorParticleEffectReferenceFinder.cpp
     src/scene/material/EditorEmbeddedMaterialAssetWriter.cpp
     src/scene/material/EditorEmbeddedMaterialExtractor.cpp
     src/scene/material/EditorEmbeddedMaterialTextureResolver.cpp
@@ -868,6 +889,7 @@ add_executable(kb_editor WIN32
     src/scene/audio/EditorAudioMixerAssetGateway.cpp
     src/scene/audio/EditorAudioMixerAuthoring.cpp
     src/scene/audio/EditorSceneAudioSettingsService.cpp
+    src/windowing/EditorFloatingWindowFrame.cpp
     src/windowing/FloatingWindowControlActions.cpp
     src/windowing/FloatingWindowFactory.cpp
     src/windowing/FloatingWindowHitTestResolver.cpp
@@ -1135,7 +1157,8 @@ if(BUILD_TESTING)
         src/docking/DockHitTester.cpp
         src/docking/DockLayoutBuilder.cpp
         src/docking/DockLeafLayoutBuilder.cpp
-        src/docking/DockLeafPanelOrder.cpp
+        src/docking/DockLayoutSerializer.cpp
+    src/docking/DockLeafPanelOrder.cpp
         src/docking/DockMainLayoutResolver.cpp
         src/docking/DockModelQueries.cpp
         src/docking/DockNodeFactory.cpp
@@ -1157,8 +1180,13 @@ if(BUILD_TESTING)
         src/docking/EditorDockModel.cpp
         src/docking/EditorDockModelCommands.cpp
         src/docking/EditorDockModelQueries.cpp
-        src/scene/ParticleEditorHostSessionStore.cpp
-        src/settings/EditorSettingsStore.cpp
+            src/settings/EditorConfigurationStore.cpp
+            src/docking/EditorWorkspaceArrangement.cpp
+            src/rendering/FloatingPanelGeometry.cpp
+            src/rendering/gdi/EditorFontCache.cpp
+            src/settings/EditorLayoutLibrary.cpp
+            src/settings/EditorLayoutMenuModel.cpp
+            src/settings/EditorPanelSessionText.cpp
         src/rendering/SvgPathArcMath.cpp
         src/rendering/SvgPathCursor.cpp
         src/assets/EditorAssetBrowserAssetRows.cpp
@@ -1226,6 +1254,7 @@ if(BUILD_TESTING)
     src/scene/material/EditorMaterialAssetEditCommand.cpp
     src/scene/material/EditorMaterialAssetGateway.cpp
     src/scene/material/EditorMaterialReferenceFinder.cpp
+    src/scene/particle/EditorParticleEffectReferenceFinder.cpp
     src/scene/material/EditorEmbeddedMaterialAssetWriter.cpp
     src/scene/material/EditorEmbeddedMaterialExtractor.cpp
     src/scene/material/EditorEmbeddedMaterialTextureResolver.cpp
@@ -1242,6 +1271,14 @@ if(BUILD_TESTING)
         src/rendering/EditorRenderBackendSettings.cpp
         src/rendering/EditorToolbarLayout.cpp
         src/rendering/scene_viewport_toolbar/SceneViewportToolbarLayout.cpp
+        src/rendering/scene_viewport_toolbar/SceneViewportToolbarState.cpp
+        src/rendering/SvgGraphicsPathBuilder.cpp
+        src/rendering/SvgPathCursor.cpp
+        src/rendering/SvgPathFigureBuilder.cpp
+        src/rendering/SvgPathArcConverter.cpp
+        src/rendering/SvgPathArcMath.cpp
+        src/rendering/SvgPathArcSegment.cpp
+        src/assets/EditorAssetOpenPolicy.cpp
         src/rendering/ProjectFilesAssetIconResolver.cpp
         src/rendering/ProjectFilesMaterialPreviewThumbnailModel.cpp
         src/rendering/EditorMeshPreviewRasterizer.cpp
@@ -1353,6 +1390,7 @@ if(BUILD_TESTING)
     target_link_libraries(kb_editor_material_graph_canvas_tests
         PRIVATE
             kb_renderer
+            kb_21kb_particle_editor_core
     )
 
     add_test(NAME kb_editor_material_graph_canvas_tests COMMAND $<TARGET_FILE:kb_editor_material_graph_canvas_tests>)

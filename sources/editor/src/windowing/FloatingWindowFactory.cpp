@@ -8,17 +8,13 @@
 namespace kb::editor {
 
 HWND FloatingWindowFactory::Create(HINSTANCE instance, HWND owner, const wchar_t* className, const std::string& titleText, const DockRect& rect) noexcept {
-    // WS_THICKFRAME is what lets DefWindowProc act on the HTLEFT/HTBOTTOMRIGHT... codes that
-    // FloatingWindowHitTestResolver already returns for the border strip; without it the edges are inert
-    // and an undocked panel is stuck at its initial size.
-    constexpr DWORD floatingStyle = WS_POPUP | WS_SYSMENU | WS_THICKFRAME | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
     const std::wstring title(titleText.begin(), titleText.end());
     const LONG_PTR ownerApplication = GetWindowLongPtrW(owner, GWLP_USERDATA);
     HWND floating = CreateWindowExW(
-        WS_EX_TOOLWINDOW,
+        ExtendedStyle,
         className,
         title.c_str(),
-        floatingStyle,
+        Style,
         rect.x,
         rect.y,
         rect.width,
@@ -35,8 +31,14 @@ HWND FloatingWindowFactory::Create(HINSTANCE instance, HWND owner, const wchar_t
 
     SetWindowLongPtrW(floating, GWLP_USERDATA, ownerApplication);
 
+    // DWMWA_USE_IMMERSIVE_DARK_MODE
     const BOOL darkMode = TRUE;
     DwmSetWindowAttribute(floating, 20, &darkMode, sizeof(darkMode));
+    // DWMWA_BORDER_COLOR / DWMWA_COLOR_NONE: the editor draws this window's outline
+    // itself, and the system's own border would sit on top of it as a lighter line
+    // along the top edge. Older builds do not know the attribute and simply say so.
+    const COLORREF noBorder = 0xFFFFFFFE;
+    static_cast<void>(DwmSetWindowAttribute(floating, 34, &noBorder, sizeof(noBorder)));
     return floating;
 }
 

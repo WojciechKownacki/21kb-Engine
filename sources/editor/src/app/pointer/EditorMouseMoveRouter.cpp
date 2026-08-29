@@ -9,6 +9,7 @@
 #include "app/console/EditorConsolePointerController.hpp"
 #include "app/cursor/EditorInternalSplitterCursorController.hpp"
 #include "app/inspector/EditorInspectorPointerController.hpp"
+#include "rendering/BuildGamePanelRenderer.hpp"
 #include "app/plugins/EditorPluginsPointerController.hpp"
 #include "app/project_settings/EditorProjectSettingsPointerController.hpp"
 #include "app/scene_viewport/EditorSceneViewportCameraController.hpp"
@@ -31,6 +32,35 @@
 
 namespace kb::editor {
 namespace {
+
+// The row a value drag started on, clipped to the panel. Falls back to the whole
+// panel when the drag did not come from a row - a mesh preview orbit, say.
+// The two rows a hover change affects, clipped to the panel. Falls back to the whole
+// panel when either is unknown - leaving the panel entirely, say, where the row the
+// pointer left still has to lose its highlight.
+[[nodiscard]] RECT HoveredInspectorRowsRect(const EditorSceneContext& sceneContext, const RECT& panel) noexcept {
+    const InspectorRowBounds entered = sceneContext.Inspector().HoveredRowBounds();
+    const InspectorRowBounds left = sceneContext.Inspector().PreviousHoveredRowBounds();
+    if (entered.Empty() || left.Empty()) {
+        return panel;
+    }
+    const RECT enteredRect{ entered.left, entered.top, entered.right, entered.bottom };
+    const RECT leftRect{ left.left, left.top, left.right, left.bottom };
+    RECT both{};
+    UnionRect(&both, &enteredRect, &leftRect);
+    RECT clipped{};
+    return IntersectRect(&clipped, &both, &panel) != 0 ? clipped : panel;
+}
+
+[[nodiscard]] RECT DraggedInspectorRowRect(const EditorSceneContext& sceneContext, const RECT& panel) noexcept {
+    const InspectorRowBounds row = sceneContext.Inspector().DraggedRowBounds();
+    if (!sceneContext.Inspector().IsDraggingFloat() || row.Empty()) {
+        return panel;
+    }
+    const RECT bounds{ row.left, row.top, row.right, row.bottom };
+    RECT clipped{};
+    return IntersectRect(&clipped, &bounds, &panel) != 0 ? clipped : panel;
+}
 
 [[nodiscard]] int RectHeight(const RECT& rect) noexcept {
     return std::max(0L, rect.bottom - rect.top);
@@ -143,11 +173,6 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
         }
         sceneViewport_.RequestPresent();
         return;
-    }
-
-    const std::optional<RECT> sceneContent = EditorPanelContentResolver::Resolve(DockPanelKind::Scene, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
-    if (SceneViewportToolbarRenderer::UpdateInfoHover(sceneContent.value_or(RECT{}), x, y)) {
-        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
     }
 
     EditorSceneViewportCameraController sceneCamera(mainWindow_, dockModel_, floatingWindows_, metrics_, sceneContext_, sceneViewport_);
@@ -264,7 +289,10 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
                 std::max(1, RectHeight(track) - RectHeight(thumb)),
                 SkeletalMeshEditorPanelRenderer::TreeMaxScroll(*skeletalMeshEditorContent, sceneContext_));
         }
-        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        if (const std::optional<RECT> skeletalMeshEditorPanel = EditorPanelContentResolver::Resolve(
+                DockPanelKind::SkeletalMeshEditor, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_)) {
+            EditorWindowInvalidator::InvalidatePanel(messageWindow, *skeletalMeshEditorPanel);
+        }
         return;
     }
 
@@ -284,7 +312,10 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
                 std::max(1, RectHeight(track) - RectHeight(thumb)),
                 SkeletalMeshEditorPanelRenderer::DetailsMaxScroll(*skeletalMeshEditorContent, sceneContext_));
         }
-        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        if (const std::optional<RECT> skeletalMeshEditorPanel = EditorPanelContentResolver::Resolve(
+                DockPanelKind::SkeletalMeshEditor, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_)) {
+            EditorWindowInvalidator::InvalidatePanel(messageWindow, *skeletalMeshEditorPanel);
+        }
         return;
     }
 
@@ -296,7 +327,10 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
             const RECT list = HierarchyToolbarLayout::Resolve(*hierarchyContent).listContent;
             sceneContext_.DragHierarchyScrollbar(y, std::max(1, RectHeight(list) - 24), HierarchyMaxScroll(*hierarchyContent, sceneContext_));
         }
-        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        if (const std::optional<RECT> hierarchyPanel = EditorPanelContentResolver::Resolve(
+                DockPanelKind::Hierarchy, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_)) {
+            EditorWindowInvalidator::InvalidatePanel(messageWindow, *hierarchyPanel);
+        }
         return;
     }
 
@@ -314,9 +348,9 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
         // NOT a GDI-drawn widget like the graph nodes. Orbiting therefore needs only a viewport present
         // - never a Material Editor panel repaint. Repainting the whole panel (graph nodes + chrome) on
         // every mouse pixel ran at the raw mouse-move rate and starved the preview's per-frame present:
-        // THAT was the orbit lag, not GPU re-sync. This mirrors UE exactly - FEditorViewportClient orbit
-        // ends in Invalidate(false, false) -> Viewport->InvalidateDisplay(), i.e. the viewport's display
-        // pixels only, leaving the surrounding editor UI (graph, details, toolbars) untouched.
+        // THAT was the orbit lag, not GPU re-sync. An orbit therefore ends in a viewport-only
+        // display invalidation - the preview surface's own pixels and nothing else -
+        // leaving the surrounding editor UI (graph, details, toolbars) untouched.
         sceneViewport_.RequestPresent();
         return;
     }
@@ -358,8 +392,8 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
     }
 
     // While the "what do you want to connect?" menu is parked open (a wire was dropped on empty canvas),
-    // the pending connection is deliberately kept so picking a node connects it - exactly like UE, where a
-    // pin drag-drop opens a filtered action menu that remembers the from-pin. It is NOT an active drag, so
+    // the pending connection is deliberately kept so picking a node connects it - a pin drag-drop
+    // opens a filtered action menu that remembers the from-pin. It is NOT an active drag, so
     // this branch must be skipped: otherwise the first mouse move toward the menu (button up) would hit the
     // !leftButtonDown path and cancel the pending connection, and the pick would then create nothing
     // (AddMaterialGraphNodeForPendingConnection finds no pending pin) - the "selecting just cancels" bug.
@@ -398,7 +432,7 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
             changed = sceneContext_.ClearMaterialGraphContextMenuHover();
         }
         if (changed) {
-            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            InvalidateMaterialGraphPanel(messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
         }
         return;
     }
@@ -408,7 +442,14 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
         if (!draggingMeshPreview) {
             sceneViewport_.RequestPresent();
         }
-        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        if (inspectorContent.has_value()) {
+            // Dragging a value changes one row's text. Asking for the whole panel back
+            // costs more than drawing the 3D scene, and the scene is what the person is
+            // watching, so only the row being dragged is repainted.
+            EditorWindowInvalidator::InvalidatePanel(
+                messageWindow,
+                DraggedInspectorRowRect(sceneContext_, *inspectorContent));
+        }
         return;
     }
 
@@ -429,20 +470,45 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
 
     const std::optional<RECT> consoleContent = EditorPanelContentResolver::Resolve(DockPanelKind::Console, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
     EditorConsolePointerController consolePointer(messageWindow, sceneContext_);
-    if (consolePointer.UpdateHoverOrClear(consoleContent, x, y)) {
-        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+    if (consolePointer.UpdateHoverOrClear(consoleContent, x, y) && consoleContent.has_value()) {
+        EditorWindowInvalidator::InvalidatePanel(messageWindow, *consoleContent);
     }
     if (consolePointer.HandlePointerMove(consoleContent, y, leftButtonDown)) {
-        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        if (consoleContent.has_value()) {
+            EditorWindowInvalidator::InvalidatePanel(messageWindow, *consoleContent);
+        }
         return;
     }
 
     if (EditorAssetBrowserPointerHandler::HandlePointerMove(messageWindow, mainWindow_, x, y, leftButtonDown, dockModel_, floatingWindows_, metrics_, sceneContext_)) {
-        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        if (const std::optional<RECT> assetsContent = EditorPanelContentResolver::Resolve(
+                DockPanelKind::Assets, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_)) {
+            EditorWindowInvalidator::InvalidatePanel(messageWindow, *assetsContent);
+        }
         return;
     }
-    if (inspectorPointer.UpdateHoverOrClear(inspectorContent, x, y)) {
-        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+    if (const std::optional<RECT> buildGameContent = EditorPanelContentResolver::Resolve(
+            DockPanelKind::BuildGame, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
+        buildGameContent.has_value()) {
+        // A row lights up under the pointer the way an Inspector row does, and only the
+        // panel is repainted for it - the scene is what the person is looking at.
+        const BuildGamePanelRenderer::RowHit hit =
+            BuildGamePanelRenderer::HitTest(*buildGameContent, sceneContext_, x, y);
+        const BuildGamePanelRenderer::SidebarHit sidebar =
+            BuildGamePanelRenderer::HitTestSidebar(*buildGameContent, x, y);
+        const bool rowChanged = sceneContext_.SetBuildGameHover(hit.section, hit.row);
+        const bool sidebarChanged = sceneContext_.SetBuildGameSidebarHover(sidebar.target, sidebar.profile);
+        if (rowChanged || sidebarChanged) {
+            EditorWindowInvalidator::InvalidatePanel(messageWindow, *buildGameContent);
+        }
+    }
+
+    if (inspectorPointer.UpdateHoverOrClear(inspectorContent, x, y) && inspectorContent.has_value()) {
+        // Moving the pointer changes how two rows look: the one it left and the one it
+        // entered. Asking for the whole panel back per row crossed cost several
+        // milliseconds each time.
+        EditorWindowInvalidator::InvalidatePanel(
+            messageWindow, HoveredInspectorRowsRect(sceneContext_, *inspectorContent));
     }
     if (inspectorPointer.Contains(inspectorContent, x, y)) {
         return;
@@ -450,8 +516,9 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
 
     const std::optional<RECT> projectSettingsContent = EditorPanelContentResolver::Resolve(DockPanelKind::ProjectSettings, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
     EditorProjectSettingsPointerController projectSettingsPointer(sceneContext_);
-    if (projectSettingsPointer.UpdateHoverOrClear(projectSettingsContent, x, y)) {
-        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+    if (projectSettingsPointer.UpdateHoverOrClear(projectSettingsContent, x, y) &&
+        projectSettingsContent.has_value()) {
+        EditorWindowInvalidator::InvalidatePanel(messageWindow, *projectSettingsContent);
     }
     if (projectSettingsPointer.Contains(projectSettingsContent, x, y)) {
         return;
@@ -460,7 +527,9 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
     const std::optional<RECT> pluginsContent = EditorPanelContentResolver::Resolve(DockPanelKind::Plugins, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
     EditorPluginsPointerController pluginsPointer(sceneContext_);
     if (pluginsPointer.HandlePointerMove(pluginsContent, x, y, leftButtonDown)) {
-        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        if (pluginsContent.has_value()) {
+            EditorWindowInvalidator::InvalidatePanel(messageWindow, *pluginsContent);
+        }
         if (sceneContext_.Plugins().IsScrollbarDragging()) {
             return;
         }

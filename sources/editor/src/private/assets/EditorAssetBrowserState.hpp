@@ -172,6 +172,7 @@ public:
 
 private:
     [[nodiscard]] bool ContextMenuTargetFolderCanMutate(const kb::assets::AssetManager& manager) const;
+    [[nodiscard]] bool ContextMenuTargetIsProjectContent(const kb::assets::AssetManager& manager) const;
 
     EditorAssetBrowserSelectionState selection_;
     EditorAssetBrowserViewState view_;

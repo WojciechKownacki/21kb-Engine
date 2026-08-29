@@ -2,12 +2,12 @@
 
 #if defined(_WIN32)
 #include "app/scene_viewport/EditorSceneViewportGizmoInteraction.hpp"
-#include "app/scene_viewport/EditorSceneViewportMeshDragPreview.hpp"
+#include "app/scene_viewport/EditorSceneViewportAssetDragPreview.hpp"
 #include "app/scene_viewport/EditorSceneViewportSelectionInteraction.hpp"
 
 namespace kb::editor {
 
-bool EditorSceneViewportObjectInteraction::UpdateMeshDragPreview(
+bool EditorSceneViewportObjectInteraction::UpdateScenePlacementPreview(
     HWND sourceWindow,
     HWND mainWindow,
     int x,
@@ -17,10 +17,10 @@ bool EditorSceneViewportObjectInteraction::UpdateMeshDragPreview(
     const EditorMetrics& metrics,
     EditorSceneContext& sceneContext,
     EditorPointerDragState& drag) {
-    return EditorSceneViewportMeshDragPreview::Update(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag);
+    return EditorSceneViewportAssetDragPreview::Update(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag);
 }
 
-bool EditorSceneViewportObjectInteraction::CommitMeshDragPreview(
+bool EditorSceneViewportObjectInteraction::CommitScenePlacementPreview(
     HWND sourceWindow,
     HWND mainWindow,
     int x,
@@ -30,11 +30,11 @@ bool EditorSceneViewportObjectInteraction::CommitMeshDragPreview(
     const EditorMetrics& metrics,
     EditorSceneContext& sceneContext,
     EditorPointerDragState& drag) {
-    return EditorSceneViewportMeshDragPreview::Commit(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag);
+    return EditorSceneViewportAssetDragPreview::Commit(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag);
 }
 
-void EditorSceneViewportObjectInteraction::CancelMeshDragPreview(EditorSceneContext& sceneContext, EditorPointerDragState& drag) noexcept {
-    EditorSceneViewportMeshDragPreview::Cancel(sceneContext, drag);
+void EditorSceneViewportObjectInteraction::CancelScenePlacementPreview(EditorSceneContext& sceneContext, EditorPointerDragState& drag) noexcept {
+    EditorSceneViewportAssetDragPreview::Cancel(sceneContext, drag);
 }
 
 bool EditorSceneViewportObjectInteraction::BeginGizmoDrag(

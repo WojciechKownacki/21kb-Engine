@@ -1,6 +1,9 @@
 #include "TestSupport.hpp"
 #include "TestSuites.hpp"
 
+#include "project/ProjectDescriptorIntegrity.hpp"
+#include "project/ProjectDescriptorMetaWriter.hpp"
+#include "engine/config/IniDocument.hpp"
 #include "engine/project/ProjectManager.hpp"
 #include "engine/assets/AssetHandle.hpp"
 #include "engine/assets/AssetMetadata.hpp"
@@ -107,20 +110,73 @@ private:
     SceneDocumentSystemProbe& probe_;
 };
 
+void RunIniDocumentRoundTripTest() {
+    CleanTempRoot();
+    const std::filesystem::path file = TempRoot() / "Config" / "Sample.ini";
+
+    kb::config::IniDocument written;
+    written.SetString("Project.Identity", "Name", "Sample Project");
+    written.SetString("Project.Identity", "GameName", "Sample Game");
+    written.SetInt("Project.Rendering", "MaxFps", 144);
+    written.SetBool("Project.Input", "Enabled", true);
+    std::string error;
+    Require(written.Save(file, error) && error.empty(), "Configuration file was not written");
+    Require(std::filesystem::is_regular_file(file), "Configuration file is missing after a successful save");
+    Require(!std::filesystem::exists(std::filesystem::path{file}.concat(".tmp")),
+        "Configuration save left its temporary file behind");
+
+    kb::config::IniDocument read;
+    Require(read.Load(file, error) && error.empty(), "Configuration file was not read back");
+    Require(read.GetString("Project.Identity", "Name") == "Sample Project", "Configuration lost a string value");
+    Require(read.GetString("Project.Identity", "GameName") == "Sample Game", "Configuration lost a second key of the same section");
+    Require(read.GetInt("Project.Rendering", "MaxFps") == 144, "Configuration lost an integer value");
+    Require(read.GetBool("Project.Input", "Enabled") == true, "Configuration lost a boolean value");
+    Require(!read.GetString("Project.Identity", "Missing").has_value(), "Configuration invented a missing key");
+    Require(!read.GetString("Absent.Section", "Name").has_value(), "Configuration invented a missing section");
+
+    Require(read.Remove("Project.Identity", "GameName"), "Configuration did not remove an existing key");
+    Require(!read.Remove("Project.Identity", "GameName"), "Configuration removed the same key twice");
+    Require(read.GetString("Project.Identity", "Name") == "Sample Project", "Removing one key dropped its neighbour");
+}
+
+void RunIniDocumentToleratesAuthoredTextTest() {
+    CleanTempRoot();
+    const std::filesystem::path file = TempRoot() / "Authored.ini";
+    {
+        std::ofstream output{file, std::ios::binary | std::ios::trunc};
+        output << "; a comment\r\n"
+               << "# another comment\r\n"
+               << "\r\n"
+               << "  [ Project.Maps ]  \r\n"
+               << "  DefaultMap = /Game/Scenes/Main.21kbscene  \r\n"
+               << "LastOpenMap=\r\n"
+               << "DefaultMap=/Game/Scenes/Second.21kbscene\r\n";
+    }
+
+    kb::config::IniDocument document;
+    std::string error;
+    Require(document.Load(file, error) && error.empty(), "An authored configuration file was rejected");
+    Require(document.GetString("Project.Maps", "DefaultMap") == "/Game/Scenes/Second.21kbscene",
+        "A repeated key must keep its last assignment");
+    Require(document.GetString("Project.Maps", "LastOpenMap") == "", "An empty value must read back as empty, not missing");
+    Require(!document.GetInt("Project.Maps", "DefaultMap").has_value(), "A non-numeric value must not parse as an integer");
+
+    {
+        std::ofstream output{file, std::ios::binary | std::ios::trunc};
+        output << "[Project.Maps\n";
+    }
+    Require(!document.Load(file, error) && !error.empty(), "A malformed section header must be reported, not guessed");
+    Require(document.Empty(), "A rejected configuration must not leave half-parsed values behind");
+}
+
 void RunProjectDescriptorRoundTripTest() {
     CleanTempRoot();
     const std::filesystem::path projectFile = TempRoot() / "Sample.21kbproject";
 
     kb::project::ProjectDescriptor descriptor;
-    descriptor.name = "Sample";
-    descriptor.category = "Game";
-    descriptor.description = "Roundtrip descriptor";
-    descriptor.defaultScene = "/Game/Scenes/Test.21kbscene";
     descriptor.targetPlatforms = { "Windows", "Linux" };
     descriptor.modules.push_back(kb::project::ProjectModuleDescriptor{ .name = "SampleRuntime", .type = "Runtime", .loadingPhase = "Default" });
     descriptor.plugins.push_back(kb::project::ProjectPluginReference{ .name = "GameplayTools", .binaryPath = "Plugins/GameplayTools.dll", .enabled = true });
-    // LIB-129: named collision layers asset reference, file version >= 5.
-    descriptor.physicsLayersAsset = "/Game/Physics/GameplayLayers.21kbphysicslayers";
 
     Require(kb::project::ProjectManager::CreateProject(projectFile, descriptor), "Project descriptor was not created");
     Require(std::filesystem::is_regular_file(projectFile), "Project descriptor file was not written");
@@ -139,14 +195,84 @@ void RunProjectDescriptorRoundTripTest() {
     }
     const kb::project::ProjectDescriptorReadResult loaded = kb::project::ProjectManager::LoadProject(projectFile);
     Require(loaded.succeeded, "Project descriptor did not load");
-    Require(loaded.descriptor.name == "Sample", "Project descriptor name did not roundtrip");
-    Require(loaded.descriptor.defaultScene == "/Game/Scenes/Test.21kbscene", "Project descriptor default scene did not roundtrip");
     Require(loaded.descriptor.targetPlatforms.size() == 2, "Project descriptor target platforms did not roundtrip");
     Require(!loaded.descriptor.modules.empty() && loaded.descriptor.modules.front().name == "SampleRuntime", "Project descriptor modules did not roundtrip");
     Require(!loaded.descriptor.plugins.empty() && loaded.descriptor.plugins.front().name == "GameplayTools", "Project descriptor plugins did not roundtrip");
     Require(loaded.descriptor.plugins.front().binaryPath == "Plugins/GameplayTools.dll", "Project descriptor plugin binary path did not roundtrip");
-    Require(loaded.descriptor.physicsLayersAsset == "/Game/Physics/GameplayLayers.21kbphysicslayers", "LIB-129 project descriptor physics layers asset path did not roundtrip");
-    Require(loaded.descriptor.fileVersion >= 5U, "LIB-129 project descriptor written at file version >= 5");
+    Require(loaded.descriptor.fileVersion == kb::project::ProjectDescriptor::CurrentFileVersion,
+        "Project descriptor was not written at the current file version");
+    Require(!loaded.legacySettings.present,
+        "A descriptor written by this build carries no settings to migrate");
+}
+
+// A project written before the settings file existed must keep its configuration:
+// the reader hands the old fields back so they can be carried into the new file.
+void RunLegacyProjectDescriptorCarriesItsSettingsTest() {
+    CleanTempRoot();
+    const std::filesystem::path projectFile = TempRoot() / "Legacy.21kbproject";
+
+    // A version 5 descriptor, byte for byte as the previous build wrote one.
+    std::vector<std::uint8_t> bytes;
+    const auto writeString = [&bytes](std::string_view value) {
+        const auto size = static_cast<std::uint32_t>(value.size());
+        for (int shift = 0; shift < 32; shift += 8) {
+            bytes.push_back(static_cast<std::uint8_t>((size >> shift) & 0xFFU));
+        }
+        bytes.insert(bytes.end(), value.begin(), value.end());
+    };
+    const auto writeUInt32 = [&bytes](std::uint32_t value) {
+        for (int shift = 0; shift < 32; shift += 8) {
+            bytes.push_back(static_cast<std::uint8_t>((value >> shift) & 0xFFU));
+        }
+    };
+    bytes.insert(bytes.end(), kProjectMagic.begin(), kProjectMagic.end());
+    writeUInt32(5U);
+    writeString("21kb");
+    writeString("LegacyProject");
+    writeString("Game");
+    writeString("Legacy description");
+    writeString("Assets");
+    writeString("/Game/Scenes/Legacy.21kbscene");
+    bytes.push_back(0U);
+    writeUInt32(0U);
+    writeUInt32(0U);
+    writeUInt32(0U);
+    writeString("/Game/Input/Legacy.21kbinputcontext");
+    bytes.push_back(0U);
+    writeUInt32(2U);
+    writeString("/Game/Physics/Legacy.21kbphysicslayers");
+    {
+        std::ofstream output{ projectFile, std::ios::binary | std::ios::trunc };
+        output.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    }
+    const kb::project::ProjectDescriptorIntegrity integrity =
+        kb::project::ProjectDescriptorIntegrityService::ComputeFile(projectFile);
+    const kb::project::ProjectDescriptorMeta meta{
+        .fileVersion = kb::project::ProjectDescriptorMeta::CurrentFileVersion,
+        .engineAssociation = "21kb",
+        .projectFile = projectFile.filename(),
+        .byteSize = integrity.byteSize,
+        .contentHashFnv1a64 = integrity.contentHashFnv1a64,
+        .contentChecksumCrc32 = integrity.contentChecksumCrc32,
+    };
+    Require(kb::project::ProjectDescriptorMetaWriter::Write(
+                projectFile.parent_path() / "Legacy.meta", meta),
+        "legacy project fixture could not be given a matching meta file");
+
+    const kb::project::ProjectDescriptorReadResult loaded = kb::project::ProjectManager::LoadProject(projectFile);
+    Require(loaded.succeeded, "a project written before the settings file no longer loads");
+    Require(loaded.legacySettings.present, "an older project must report the settings it carries");
+
+    const kb::project::ProjectSettings carried =
+        kb::project::ProjectSettingsStore::FromLegacy(loaded.legacySettings, projectFile);
+    Require(carried.name == "LegacyProject", "the project name was lost on the way to the settings file");
+    Require(carried.category == "Game", "the project category was lost");
+    Require(carried.description == "Legacy description", "the project description was lost");
+    Require(carried.defaultMap == "/Game/Scenes/Legacy.21kbscene", "the default map was lost");
+    Require(carried.lightingPath == kb::project::ProjectSceneLightingPath::ForwardPlus, "the lighting path was lost");
+    Require(!carried.inputEnabled, "the input enabled flag was lost");
+    Require(carried.inputMappingContext == "/Game/Input/Legacy.21kbinputcontext", "the input mapping context was lost");
+    Require(carried.physicsLayersAsset == "/Game/Physics/Legacy.21kbphysicslayers", "the physics layers asset was lost");
 }
 
 void RunProjectDescriptorRejectsChecksumMismatchTest() {
@@ -154,10 +280,6 @@ void RunProjectDescriptorRejectsChecksumMismatchTest() {
     const std::filesystem::path projectFile = TempRoot() / "Tamper.21kbproject";
 
     kb::project::ProjectDescriptor descriptor;
-    descriptor.name = "Tamper";
-    descriptor.category = "Game";
-    descriptor.description = "Tamper descriptor";
-    descriptor.defaultScene = "/Game/Scenes/Main.21kbscene";
     descriptor.targetPlatforms = { "Windows" };
 
     Require(kb::project::ProjectManager::CreateProject(projectFile, descriptor), "Project descriptor tamper fixture was not created");
@@ -1293,7 +1415,10 @@ void RunSceneAssetRejectsChecksumMismatchTest() {
 } // namespace
 
 void RunProjectSceneTests() {
+    RunIniDocumentRoundTripTest();
+    RunIniDocumentToleratesAuthoredTextTest();
     RunProjectDescriptorRoundTripTest();
+    RunLegacyProjectDescriptorCarriesItsSettingsTest();
     RunProjectDescriptorRejectsChecksumMismatchTest();
     RunSceneDocumentRoundTripTest();
     RunSceneRadianceEmitterReflectionSerializationTest();

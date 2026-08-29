@@ -75,6 +75,7 @@ public:
     static constexpr int Padding = 10;
     static constexpr int CloseButtonSize = 22;
     static constexpr int ScrollbarWidth = 8;
+    static constexpr int ButtonRadius = 6;
 
     [[nodiscard]] static COLORREF Color(EditorColor color) noexcept;
     [[nodiscard]] static COLORREF Blend(COLORREF first, COLORREF second, int secondPercent) noexcept;

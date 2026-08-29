@@ -30,7 +30,10 @@ void DrawListHeader(HDC dc, const EditorAssetBrowserLayoutRects& layout, const E
 
 void DrawFolderRow(HDC dc, RECT row, const EditorTheme& theme, const EditorAssetFolderRow& folder, const EditorAssetBrowserState& state) {
     if (folder.selected) {
-        GdiDrawing::FillRectColor(dc, row, Draw::Blend(Draw::Color(theme.panel), RGB(96, 108, 126), state.IsSelectionFocused() ? 34 : 20));
+        GdiDrawing::FillRectColor(dc, row, Draw::Blend(Draw::Color(theme.panel), Draw::Color(theme.accent), state.IsSelectionFocused() ? 18 : 10));
+        if (state.IsSelectionFocused()) {
+            GdiDrawing::FillRectColor(dc, RECT{ row.left, row.top, row.left + 3, row.bottom }, Draw::Color(theme.accent));
+        }
     }
     RECT icon{ row.left + 6, row.top + 4, row.left + 24, row.bottom - 4 };
     Draw::DrawIconWithShadow(dc, icon, HeroIconKind::Folder, Draw::FolderColor(folder.selected), 1);
@@ -48,7 +51,10 @@ void DrawFolderRow(HDC dc, RECT row, const EditorTheme& theme, const EditorAsset
 
 void DrawAssetRow(HDC dc, RECT row, const EditorTheme& theme, const EditorAssetItemRow& asset, const EditorAssetBrowserState& state) {
     if (asset.selected) {
-        GdiDrawing::FillRectColor(dc, row, Draw::Blend(Draw::Color(theme.panel), RGB(96, 108, 126), state.IsSelectionFocused() ? 34 : 20));
+        GdiDrawing::FillRectColor(dc, row, Draw::Blend(Draw::Color(theme.panel), Draw::Color(theme.accent), state.IsSelectionFocused() ? 18 : 10));
+        if (state.IsSelectionFocused()) {
+            GdiDrawing::FillRectColor(dc, RECT{ row.left, row.top, row.left + 3, row.bottom }, Draw::Color(theme.accent));
+        }
     }
     RECT icon{ row.left + 6, row.top + 4, row.left + 22, row.bottom - 4 };
     const ProjectFilesAssetIcon assetIcon = ProjectFilesAssetIconResolver::Resolve(asset.metadata, asset.selected);
@@ -74,7 +80,6 @@ void DrawAssetRow(HDC dc, RECT row, const EditorTheme& theme, const EditorAssetI
 }
 
 void DrawScrollbar(HDC dc, const EditorAssetBrowserLayoutRects& layout, const EditorTheme& theme, const EditorAssetBrowserState& state, int contentHeight) {
-    static_cast<void>(theme);
     const RECT viewport = EditorAssetBrowserLayout::AssetViewportRect(layout);
     const int viewportHeight = static_cast<int>(viewport.bottom - viewport.top - EditorAssetBrowserLayout::AssetHeaderHeight);
     if (contentHeight <= viewportHeight) {
@@ -83,9 +88,9 @@ void DrawScrollbar(HDC dc, const EditorAssetBrowserLayoutRects& layout, const Ed
     RECT track = EditorAssetBrowserLayout::AssetScrollbarTrackRect(layout);
     track.top += EditorAssetBrowserLayout::AssetHeaderHeight;
     const RECT thumb = EditorAssetBrowserLayout::ScrollbarThumbRect(track, viewportHeight, contentHeight, state.ContentScrollOffset());
-    GdiDrawing::DrawSharpFrame(dc, track, RGB(22, 24, 27), RGB(38, 42, 47));
-    const COLORREF thumbColor = state.IsContentScrollbarDragging() ? RGB(104, 116, 130) : RGB(76, 86, 98);
-    const COLORREF thumbBorder = state.IsContentScrollbarDragging() ? RGB(128, 142, 158) : RGB(94, 105, 118);
+    GdiDrawing::DrawSharpFrame(dc, track, Draw::Color(theme.chrome), Draw::Color(theme.borderChrome));
+    const COLORREF thumbColor = Draw::Color(state.IsContentScrollbarDragging() ? theme.accent : theme.borderPanel);
+    const COLORREF thumbBorder = Draw::Color(state.IsContentScrollbarDragging() ? theme.textSecondary : theme.borderPanel);
     GdiDrawing::DrawSharpFrame(dc, thumb, thumbColor, thumbBorder);
 }
 

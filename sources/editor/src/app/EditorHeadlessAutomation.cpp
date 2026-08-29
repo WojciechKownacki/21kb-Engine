@@ -1,9 +1,15 @@
 #include "app/EditorHeadlessAutomation.hpp"
 
 #if defined(_WIN32)
+#include "app/EditorWorkspaceSession.hpp"
+#include "docking/EditorWorkspaceArrangement.hpp"
+#include "windowing/EditorFloatingWindowFrame.hpp"
+#include "windowing/FloatingWindowFactory.hpp"
 #include "app/EditorPlayModeState.hpp"
 #include "app/EditorPointerDragState.hpp"
 #include "app/EditorShellInteractionState.hpp"
+#include "app/ParticleEditorPanelInteraction.hpp"
+#include "assets/EditorAssetBrowserState.hpp"
 #include "docking/EditorDockModel.hpp"
 #include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorPanelInteraction.hpp"
@@ -12,6 +18,8 @@
 #include "rendering/FloatingWindowBackBufferPainter.hpp"
 #include "rendering/HeroIconGdiplusRuntime.hpp"
 #include "rendering/EditorRenderBackendSettings.hpp"
+#include "rendering/EditorHostSurfaceLayoutResolver.hpp"
+#include "rendering/EditorPanelContentResolver.hpp"
 #include "rendering/EditorParticleThumbnailService.hpp"
 #include "rendering/ParticleThumbnailTimeline.hpp"
 #include "rendering/EditorSceneBgfxViewport.hpp"
@@ -19,10 +27,14 @@
 #include "rendering/InspectorPanelRenderer.hpp"
 #include "rendering/MainWindowBackBufferPainter.hpp"
 #include "rendering/PanelContentRenderer.hpp"
+#include "rendering/ParticleEditorPanelLayout.hpp"
 #include "rendering/ScriptEditorPanelRenderer.hpp"
 #include "rendering/script_editor/ScriptEditorWindow.hpp"
 #include "scene/EditorSceneContext.hpp"
 #include "scene/EditorViewportPreviewState.hpp"
+#include "settings/EditorConfigurationStore.hpp"
+#include "settings/EditorLayoutLibrary.hpp"
+#include "project/EditorProjectPaths.hpp"
 
 #include "engine/input/InputDeviceState.hpp"
 #include "engine/input/InputHaptics.hpp"
@@ -279,6 +291,7 @@ FindInspectorHit(
         return DockPanelKind::ScriptEditor;
     }
     if (panel == "plugins") return DockPanelKind::Plugins;
+    if (panel == "build_game") return DockPanelKind::BuildGame;
     if (panel == "material_editor") {
         return DockPanelKind::MaterialEditor;
     }
@@ -434,6 +447,41 @@ template <typename Paint>
         },
         reinterpret_cast<LPARAM>(&context));
     return context.found;
+}
+
+// A torn-off panel's window, built exactly as the editor builds one, so the frame
+// Windows keeps can be measured rather than guessed at.
+LRESULT CALLBACK FloatingFrameProbeProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
+    if (message == WM_NCCALCSIZE) {
+        return EditorFloatingWindowFrame::HandleNonClientCalcSize(window, wparam, lparam);
+    }
+    return DefWindowProcW(window, message, wparam, lparam);
+}
+
+[[nodiscard]] int ReservedFrameHeight(HINSTANCE instance, const wchar_t* className, WNDPROC windowProc) {
+    WNDCLASSEXW windowClass{};
+    windowClass.cbSize = sizeof(windowClass);
+    windowClass.lpfnWndProc = windowProc;
+    windowClass.hInstance = instance;
+    windowClass.lpszClassName = className;
+    if (RegisterClassExW(&windowClass) == 0 && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
+        return -1;
+    }
+
+    int reserved = -1;
+    HWND window = CreateWindowExW(
+        FloatingWindowFactory::ExtendedStyle, className, L"", FloatingWindowFactory::Style,
+        0, 0, 900, 640, nullptr, nullptr, instance, nullptr);
+    if (window != nullptr) {
+        RECT frame{};
+        RECT client{};
+        if (GetWindowRect(window, &frame) != FALSE && GetClientRect(window, &client) != FALSE) {
+            reserved = static_cast<int>((frame.bottom - frame.top) - (client.bottom - client.top));
+        }
+        DestroyWindow(window);
+    }
+    UnregisterClassW(className, instance);
+    return reserved;
 }
 
 [[nodiscard]] HWND FindOwnedWindowByClass(
@@ -985,6 +1033,551 @@ EditorHeadlessAutomation::VerifyParticleThumbnail(
     if (!result.succeeded) {
         thumbnails.CancelPendingWork(&impl_->viewport);
     }
+    return result;
+}
+
+EditorHeadlessAutomation::InspectorDragProfile
+EditorHeadlessAutomation::ProfileInspectorTransformDrag(std::size_t steps) {
+    InspectorDragProfile result{};
+    if (steps == 0U || steps > 1000U) {
+        Trace("profile_inspector_drag", false, "step-count-out-of-range");
+        return result;
+    }
+    const kb::scene::SceneEntity entity = context_.SelectedEntity();
+    if (!context_.Scene().Entities().IsAlive(entity)) {
+        Trace("profile_inspector_drag", false, "no-selection");
+        return result;
+    }
+    if (!context_.BeginSelectedTransformEdit("Edit Transform")) {
+        Trace("profile_inspector_drag", false, "transform-edit-refused");
+        return result;
+    }
+
+    // Exactly what a held mouse button does: the same apply the pointer route calls,
+    // once per drag step.
+    const float start = context_.ActiveTransformEditPropertyStart(InspectorPropertyId::PositionX);
+    const auto applyStart = std::chrono::steady_clock::now();
+    for (std::size_t step = 0U; step < steps; ++step) {
+        static_cast<void>(context_.ApplyActiveTransformEditProperty(
+            InspectorPropertyId::PositionX, start + (static_cast<float>(step + 1U) * 0.01F)));
+    }
+    const double applyTotal =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - applyStart).count();
+    context_.CancelActiveTransformEdit();
+
+    // The Inspector panel repaints on every one of those steps, because that is the
+    // panel the pointer is over.
+    double paintTotal = 0.0;
+    double heightTotal = 0.0;
+    double rowPaintTotal = 0.0;
+    double hitTestTotal = 0.0;
+    HDC screen = GetDC(nullptr);
+    HDC memory = screen == nullptr ? nullptr : CreateCompatibleDC(screen);
+    HBITMAP bitmap = memory == nullptr
+        ? nullptr
+        : CreateCompatibleBitmap(screen, kInspectorContent.right, kInspectorContent.bottom);
+    HGDIOBJ previous = bitmap == nullptr ? nullptr : SelectObject(memory, bitmap);
+    if (previous != nullptr) {
+        HeroIconGdiplusRuntime::EnsureStarted();
+        const EditorTheme theme = MakeEditorDarkTheme();
+        const auto paintStart = std::chrono::steady_clock::now();
+        for (std::size_t step = 0U; step < steps; ++step) {
+            InspectorPanelRenderer{}.Paint(memory, kInspectorContent, theme, context_);
+        }
+        paintTotal =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - paintStart).count();
+        // The same measurement of the panel's content, which the paint asks for before
+        // drawing anything: how much of a repaint is spent working out how tall the
+        // Inspector is rather than putting pixels down.
+        const auto heightStart = std::chrono::steady_clock::now();
+        for (std::size_t step = 0U; step < steps; ++step) {
+            static_cast<void>(InspectorPanelRenderer::MaxScrollOffset(kInspectorContent, context_));
+        }
+        heightTotal =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - heightStart).count();
+        // The same repaint with only one property row left unclipped: what a drag would
+        // cost if it asked for the row it is changing instead of the whole panel.
+        const auto rowStart = std::chrono::steady_clock::now();
+        for (std::size_t step = 0U; step < steps; ++step) {
+            const int saved = SaveDC(memory);
+            IntersectClipRect(memory, kInspectorContent.left, kInspectorContent.top + 120,
+                kInspectorContent.right, kInspectorContent.top + 148);
+            InspectorPanelRenderer{}.Paint(memory, kInspectorContent, theme, context_);
+            RestoreDC(memory, saved);
+        }
+        rowPaintTotal =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - rowStart).count();
+        SelectObject(memory, previous);
+    }
+    if (bitmap != nullptr) DeleteObject(bitmap);
+    if (memory != nullptr) DeleteDC(memory);
+    if (screen != nullptr) ReleaseDC(nullptr, screen);
+
+    // Moving the pointer across the panel without pressing anything asks where it is,
+    // once per mouse move. That answer is worked out by walking the whole panel.
+    const auto hitStart = std::chrono::steady_clock::now();
+    for (std::size_t step = 0U; step < steps; ++step) {
+        static_cast<void>(InspectorPanelRenderer::HitTest(
+            kInspectorContent, context_, kInspectorContent.left + 200,
+            kInspectorContent.top + 120 + static_cast<int>(step % 8U)));
+    }
+    hitTestTotal =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - hitStart).count();
+
+    // And the scene has to be submitted again for the object to be seen moving.
+    const auto sceneStart = std::chrono::steady_clock::now();
+    std::size_t scenePresents = 0U;
+    for (std::size_t step = 0U; step < steps; ++step) {
+        if (impl_->RenderScene(context_, 1U, true)) {
+            ++scenePresents;
+        }
+    }
+    const double sceneTotal =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - sceneStart).count();
+
+    const auto divisor = static_cast<double>(steps);
+    result.steps = steps;
+    result.applyMs = applyTotal / divisor;
+    result.inspectorPaintMs = paintTotal / divisor;
+    result.inspectorHeightMs = heightTotal / divisor;
+    result.inspectorRowPaintMs = rowPaintTotal / divisor;
+    result.inspectorHitTestMs = hitTestTotal / divisor;
+    result.scenePresentMs = sceneTotal / divisor;
+    // Repainting one row of the Inspector must cost a fraction of repainting the whole
+    // panel. That is what makes dragging a value cheap, and it only holds while the
+    // panel skips the sections the repaint was not asked for; if that culling goes, the
+    // two costs converge and a drag drowns the scene again. The margin is wide enough
+    // that machine load cannot trip it: culled it costs about a fifth of a full
+    // repaint, and without the culling about a half.
+    const bool rowRepaintIsCheap = result.inspectorPaintMs > 0.0 &&
+        result.inspectorRowPaintMs < (result.inspectorPaintMs * 0.35);
+    result.succeeded = previous != nullptr && scenePresents == steps && rowRepaintIsCheap;
+    Trace("profile_inspector_drag", result.succeeded,
+        std::to_string(result.applyMs) + "/" + std::to_string(result.inspectorPaintMs) +
+            "/" + std::to_string(result.scenePresentMs));
+    return result;
+}
+
+EditorHeadlessAutomation::IdleFrameProfile
+EditorHeadlessAutomation::ProfileIdleSceneFrame(std::size_t steps) {
+    IdleFrameProfile result{};
+    if (steps == 0U || steps > 1000U) {
+        Trace("profile_idle_scene_frame", false, "step-count-out-of-range");
+        return result;
+    }
+    HWND window = impl_->window;
+    if (window == nullptr) {
+        Trace("profile_idle_scene_frame", false, "no-host-window");
+        return result;
+    }
+
+    // The same furniture the message loop resolves against: the workspace a new
+    // project opens with, no torn-off panels, stock metrics.
+    EditorDockModel dockModel;
+    EditorFloatingWindowManager floatingWindows;
+    const EditorMetrics metrics;
+
+    RECT client{};
+    GetClientRect(window, &client);
+    const auto buildLayout = [&]() {
+        return dockModel.Queries().BuildLayout(
+            client.right - client.left,
+            client.bottom - client.top,
+            metrics.menuHeight,
+            metrics.toolbarHeight,
+            metrics.tabStripHeight,
+            metrics.tabMinWidth,
+            metrics.tabWidth,
+            metrics.splitterSize);
+    };
+
+    // A sink every stage feeds, so nothing measured can be discarded as unused.
+    std::size_t sink = 0U;
+    const auto sample = [&](auto&& body) {
+        const auto start = std::chrono::steady_clock::now();
+        for (std::size_t step = 0U; step < steps; ++step) {
+            body();
+        }
+        return std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - start).count() / static_cast<double>(steps);
+    };
+
+    result.dockLayoutMs = sample([&] { sink += buildLayout().panels.size(); });
+    result.hostSurfaceResolveMs = sample([&] {
+        sink += EditorHostSurfaceLayoutResolver::ResolveMainWindow(
+            window, dockModel, metrics, context_).size();
+    });
+    result.panelResolveMs = sample([&] {
+        sink += EditorPanelContentResolver::Resolve(
+            DockPanelKind::Inspector, window, window, dockModel, floatingWindows, metrics)
+            .has_value() ? 1U : 0U;
+    });
+    // What ParticleEditorPanelIsVisible does: another whole layout, walked for one panel kind.
+    result.particleVisibleMs = sample([&] {
+        const DockLayout layout = buildLayout();
+        bool visible = false;
+        for (const DockPanelLayout& panelLayout : layout.panels) {
+            if (!panelLayout.active) continue;
+            const DockPanel* panel = dockModel.Queries().FindPanel(panelLayout.panelId);
+            if (panel != nullptr && panel->kind == DockPanelKind::ParticleEditor) visible = true;
+        }
+        sink += visible ? 1U : 0U;
+    });
+    result.materialPreviewProbeMs = sample([&] {
+        const kb::assets::AssetId inspectorAsset = context_.AssetBrowser().InspectorAsset();
+        const kb::assets::AssetId materialAsset = context_.MaterialEditor().OpenAssetId();
+        const auto& registry = context_.Scene().Assets().Manager().Registry();
+        sink += (inspectorAsset.IsValid() && registry.Find(inspectorAsset) != nullptr) ? 1U : 0U;
+        sink += (materialAsset.IsValid() && registry.Find(materialAsset) != nullptr) ? 1U : 0U;
+    });
+
+    // The non-render half of the frame the way it used to be performed: one layout for the
+    // panel walk, one inside the host-surface resolve, and one inside each of the three
+    // panel-content resolves. Five walks of one unchanged tree to ask it five questions.
+    result.dockLayoutBuildsPerFrame = 5U;
+    result.geometryTotalMs = sample([&] {
+        sink += buildLayout().panels.size();
+        sink += EditorHostSurfaceLayoutResolver::ResolveMainWindow(window, dockModel, metrics, context_).size();
+        for (const DockPanelKind kind : { DockPanelKind::Inspector, DockPanelKind::MaterialEditor, DockPanelKind::Assets }) {
+            sink += EditorPanelContentResolver::Resolve(
+                kind, window, window, dockModel, floatingWindows, metrics).has_value() ? 1U : 0U;
+        }
+    });
+
+    // The same answers, derived from a single layout build: what the frame does now.
+    result.sharedGeometryMs = sample([&] {
+        const DockLayout layout = buildLayout();
+        sink += EditorHostSurfaceLayoutResolver::ResolveMainWindow(layout, dockModel, context_).size();
+        for (const DockPanelKind kind : { DockPanelKind::Inspector, DockPanelKind::MaterialEditor, DockPanelKind::Assets }) {
+            sink += EditorPanelContentResolver::Resolve(
+                kind, layout, window, window, dockModel, floatingWindows, metrics).has_value() ? 1U : 0U;
+        }
+    });
+
+    // The GPU half. One full sync first so the sampled frames are the steady state an
+    // idle editor sits in - nothing dirty, nothing to re-upload - rather than the
+    // first-frame cost of publishing the whole scene.
+    static_cast<void>(impl_->RenderScene(context_, 1U, true));
+    context_.AcknowledgeSceneRenderSubmitted();
+    constexpr RECT bounds{ 0, 0, 640, 360 };
+    std::size_t submitted = 0U;
+    result.sceneSubmitMs = sample([&] {
+        EditorSceneBgfxViewport::PresentSettings settings{};
+        settings.renderWidth = 640U;
+        settings.renderHeight = 360U;
+        settings.viewportKey = 1U;
+        kb::render::SceneRenderCamera camera{};
+        bx::mtxLookAt(camera.view.data(), bx::Vec3{ 4.0F, 3.0F, 4.0F }, bx::Vec3{ 0.0F, 0.0F, 0.0F });
+        kb::render::SceneDepthPolicy::MakePerspective(
+            camera.projection.data(), 60.0F, 640.0F / 360.0F, 0.05F, 100.0F,
+            kb::render::SceneDepthPolicy::HomogeneousDepth());
+        settings.cameraOverride = camera;
+        settings.sceneRevision = context_.SceneRenderRevision();
+        settings.sceneDirtyBaseRevision = context_.SceneRenderDirtyBaseRevision();
+        settings.sceneFullSyncRequired = context_.SceneRenderFullDirty();
+        settings.editorSceneOverlaysEnabled = true;
+        settings.selectionMaskEnabled = false;
+        settings.selectionOutlineEnabled = false;
+        settings.drawSafeArea = false;
+        impl_->viewport.BeginPaintLayout(window);
+        impl_->viewport.Present(window, bounds, context_.Scene(), settings);
+        impl_->viewport.EndPaintLayout();
+        context_.AcknowledgeSceneRenderSubmitted();
+        ++submitted;
+    });
+    result.idleFrameMs = result.geometryTotalMs + result.sceneSubmitMs;
+    result.steps = steps;
+    // Answering five questions about one dock tree must not cost five tree walks. Sharing the
+    // layout removes four of the five builds and measures at about 0.28 of the naive cost;
+    // dropping the shared layout on the floor puts it back at about 0.84. The gate sits
+    // between the two with room on both sides, so machine load cannot decide the outcome.
+    const bool sharedLayoutIsCheaper = result.geometryTotalMs > 0.0 &&
+        result.sharedGeometryMs < (result.geometryTotalMs * 0.6);
+    result.succeeded = submitted == steps && sink > 0U &&
+        result.sceneSubmitMs > 0.0 && result.geometryTotalMs > 0.0 && sharedLayoutIsCheaper;
+    Trace("profile_idle_scene_frame", result.succeeded,
+        std::to_string(result.idleFrameMs) + "/" + std::to_string(result.geometryTotalMs) +
+            "/" + std::to_string(result.sceneSubmitMs));
+    return result;
+}
+
+EditorHeadlessAutomation::FloatingWindowFrame
+EditorHeadlessAutomation::VerifyFloatingWindowFrame() {
+    FloatingWindowFrame result{};
+    HINSTANCE instance = GetModuleHandleW(nullptr);
+    result.reservedWithoutHandler =
+        ReservedFrameHeight(instance, L"21kbFloatingFrameDefault", &DefWindowProcW);
+    result.reservedWithHandler =
+        ReservedFrameHeight(instance, L"21kbFloatingFrameEditor", &FloatingFrameProbeProc);
+    // The editor draws the whole of a torn-off panel, so Windows must be left holding
+    // none of it. What it would otherwise keep is reported beside it.
+    result.succeeded = result.reservedWithHandler == 0;
+    Trace("assert_floating_window_frame", result.succeeded,
+        std::to_string(result.reservedWithHandler));
+    return result;
+}
+
+EditorHeadlessAutomation::SavedLayoutRoundTrip
+EditorHeadlessAutomation::VerifySavedLayoutRoundTrip() {
+    SavedLayoutRoundTrip result{};
+    const std::string name = "Headless Check";
+    const std::filesystem::path root = EditorProjectPaths::ProjectRoot();
+
+    // The project has to be handed back exactly as it was found: this runs inside a
+    // scenario, not in a sandbox of its own.
+    const EditorConfiguration original = context_.EditorConfig();
+
+    EditorDockModel arranged;
+    std::uint32_t floatedPanel = 0U;
+    std::uint32_t closedPanel = 0U;
+    for (const DockPanel& panel : arranged.Queries().Panels()) {
+        if (!panel.visible || !panel.detachable || panel.id == 14U) {
+            continue;
+        }
+        if (floatedPanel == 0U) {
+            floatedPanel = panel.id;
+        } else if (closedPanel == 0U) {
+            closedPanel = panel.id;
+        }
+    }
+    if (floatedPanel == 0U || closedPanel == 0U || !arranged.Commands().ClosePanel(closedPanel)) {
+        Trace("assert_saved_layout_roundtrip", false, "no-rearrangeable-panels");
+        return result;
+    }
+    arranged.Commands().UndockPanel(floatedPanel, DockRect{ 240, 200, 880, 620 });
+    const EditorLayoutPreset captured = EditorWorkspaceArrangement::Capture(arranged);
+    result.layout = captured.tree;
+
+    std::string error;
+    if (!EditorLayoutLibrary::Save(root, name, captured, error)) {
+        Trace("assert_saved_layout_roundtrip", false, error);
+        return result;
+    }
+    const std::vector<std::string> listed = EditorLayoutLibrary::List(root);
+    result.listed = std::ranges::find(listed, name) != listed.end();
+
+    // A layout is only worth anything if it can be put back on a workspace that is
+    // nothing like it, so this starts from the arrangement a new project gets.
+    EditorDockModel reopened;
+    const std::optional<EditorLayoutPreset> loaded = EditorLayoutLibrary::Load(root, name);
+    result.applied = loaded.has_value() &&
+        EditorWorkspaceArrangement::Apply(reopened, *loaded) &&
+        reopened.Commands().SerializeWorkspace() == captured.tree;
+    const DockPanel* floated = reopened.Queries().FindPanel(floatedPanel);
+    const DockPanel* closed = reopened.Queries().FindPanel(closedPanel);
+    result.applied = result.applied && floated != nullptr && closed != nullptr &&
+        floated->visible && floated->area == DockArea::Floating &&
+        floated->floatingRect.width == 880 && !closed->visible;
+
+    EditorWorkspaceSession::SaveAs(reopened, context_, name);
+    const auto stored = EditorConfigurationStore::Load(
+        EditorConfigurationStore::FilePath(root), root);
+    result.named = stored.Succeeded() && stored.found && stored.configuration.layoutName == name;
+
+    const std::vector<std::string> remaining =
+        (static_cast<void>(EditorLayoutLibrary::Delete(root, name)), EditorLayoutLibrary::List(root));
+    result.deleted = std::ranges::find(remaining, name) == remaining.end();
+
+    result.succeeded = result.listed && result.applied && result.named && result.deleted;
+    static_cast<void>(context_.SaveEditorConfig(original));
+    Trace("assert_saved_layout_roundtrip", result.succeeded, result.layout);
+    return result;
+}
+
+EditorHeadlessAutomation::WorkspaceLayoutPersistence
+EditorHeadlessAutomation::VerifyWorkspaceLayoutPersistence() {
+    WorkspaceLayoutPersistence result{};
+
+    // Whatever the project is really set up with has to come back untouched, so the
+    // rest of the scenario keeps running against the workspace it started with.
+    const EditorConfiguration original = context_.EditorConfig();
+
+    EditorDockModel arranged;
+    std::uint32_t floatedPanel = 0U;
+    std::uint32_t closedPanel = 0U;
+    for (const DockPanel& panel : arranged.Queries().Panels()) {
+        if (!panel.visible || !panel.detachable || panel.id == 14U) {
+            continue;
+        }
+        if (floatedPanel == 0U) {
+            floatedPanel = panel.id;
+        } else if (closedPanel == 0U) {
+            closedPanel = panel.id;
+        }
+    }
+    if (floatedPanel == 0U || closedPanel == 0U) {
+        Trace("assert_workspace_layout_persistence", false, "no-rearrangeable-panels");
+        return result;
+    }
+    arranged.Commands().UndockPanel(floatedPanel, DockRect{ 220, 180, 900, 640 });
+    if (!arranged.Commands().ClosePanel(closedPanel)) {
+        Trace("assert_workspace_layout_persistence", false, "close-failed");
+        return result;
+    }
+
+    // A dragged splitter lives only in the dock tree - no per-panel session can carry
+    // it - so the arrangement proves the tree itself made the round trip.
+    const EditorMetrics metrics{};
+    const DockLayout layout = arranged.Queries().BuildLayout(
+        1600, 960, metrics.menuHeight, metrics.toolbarHeight, metrics.tabStripHeight,
+        metrics.tabMinWidth, metrics.tabWidth, metrics.splitterSize);
+    if (layout.splitters.empty()) {
+        Trace("assert_workspace_layout_persistence", false, "no-splitters");
+        return result;
+    }
+    const DockSplitterLayout& splitter = layout.splitters.front();
+    arranged.Commands().ResizeSplitter(splitter.nodeId, splitter.rect.x - 64, splitter.rect.y - 64, layout);
+    result.savedLayout = arranged.Commands().SerializeWorkspace();
+
+    EditorWorkspaceSession::Save(arranged, context_);
+    const auto stored = EditorConfigurationStore::Load(
+        EditorConfigurationStore::FilePath(EditorProjectPaths::ProjectRoot()),
+        EditorProjectPaths::ProjectRoot());
+    result.storedOnDisk = stored.Succeeded() && stored.found &&
+        stored.configuration.layout == result.savedLayout;
+
+    EditorDockModel reopened;
+    EditorWorkspaceSession::Restore(reopened, context_);
+    result.restoredLayout = reopened.Commands().SerializeWorkspace();
+    const DockPanel* floated = reopened.Queries().FindPanel(floatedPanel);
+    const DockPanel* closed = reopened.Queries().FindPanel(closedPanel);
+    result.succeeded = result.storedOnDisk && !result.savedLayout.empty() &&
+        result.restoredLayout == result.savedLayout && floated != nullptr && closed != nullptr &&
+        floated->visible && floated->area == DockArea::Floating &&
+        floated->floatingRect.width == 900 && !closed->visible;
+
+    static_cast<void>(context_.SaveEditorConfig(original));
+    Trace("assert_workspace_layout_persistence", result.succeeded, result.restoredLayout);
+    return result;
+}
+
+
+EditorHeadlessAutomation::ParticleDependencyNavigation
+EditorHeadlessAutomation::VerifyParticleDependencyNavigation() {
+    ParticleDependencyNavigation result{};
+    if (!context_.HasParticleEditorAsset()) {
+        Trace("assert_particle_dependency_navigation", false, "no-open-effect");
+        return result;
+    }
+
+    const auto inspector = context_.ParticleEditorInspector();
+    result.dependencyCount = inspector.dependencies.size();
+    if (inspector.dependencies.empty()) {
+        Trace("assert_particle_dependency_navigation", false, "no-dependencies");
+        return result;
+    }
+    result.expectedAsset = inspector.dependencies.front().assetId;
+
+    const auto rows = context_.ParticleEditorEmitterRows();
+    const auto recipes = context_.ParticleEditorRecipes();
+    const auto resolveLayout = [&]() {
+        return ParticleEditorPanelLayoutResolver::Resolve(
+            kInspectorContent, rows,
+            context_.ParticleEditorWorkspace().ComposerScrollOffset(), 96U,
+            &inspector, recipes.size(), &context_.ParticleEditorWorkspace());
+    };
+    const auto inside = [](const RECT& rect, int x, int y) {
+        return x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom;
+    };
+    // The composer is a scrolling stream and its hit test ignores anything outside the
+    // visible list, so reach a target the way an author does: scroll it into view first,
+    // in the same 108-pixel steps the production wheel router uses.
+    const auto scrollIntoView = [&](auto&& target) -> std::optional<ParticleEditorPanelLayout> {
+        for (int step = 0; step < 64; ++step) {
+            ParticleEditorPanelLayout layout = resolveLayout();
+            const RECT rect = target(layout);
+            if (inside(layout.emitterList, (rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2)) {
+                return layout;
+            }
+            const int maximum = ParticleEditorPanelLayoutResolver::MaximumComposerScroll(layout, 96U);
+            const int current = context_.ParticleEditorWorkspace().ComposerScrollOffset();
+            if (current >= maximum) {
+                return std::nullopt;
+            }
+            context_.SetParticleEditorComposerScrollOffset(std::min(maximum, current + 108));
+        }
+        return std::nullopt;
+    };
+    const auto clickCentre = [&](const ParticleEditorPanelLayout& layout, const RECT& target) {
+        return ParticleEditorPanelLayoutResolver::HitTest(
+            layout, (target.left + target.right) / 2, (target.top + target.bottom) / 2);
+    };
+
+    // An assertion must not leave the editor somewhere else than it found it: later steps
+    // read the live Asset Browser selection and composer state.
+    const kb::assets::AssetId originalAsset = context_.AssetBrowser().SelectedAsset();
+    const int originalScroll = context_.ParticleEditorWorkspace().ComposerScrollOffset();
+    const bool startedExpanded = context_.ParticleEditorWorkspace().ComposerSectionExpanded(
+        kb::particle_editor::ParticleEditorComposerSection::Dependencies);
+    const auto restore = [&]() {
+        if (context_.AssetBrowser().SelectedAsset() != originalAsset) {
+            context_.AssetBrowser().ClearSelection();
+            if (originalAsset.IsValid()) {
+                static_cast<void>(context_.AssetBrowser().SelectAsset(
+                    originalAsset, context_.Scene().Assets().Manager()));
+            }
+        }
+        if (!startedExpanded &&
+            context_.ParticleEditorWorkspace().ComposerSectionExpanded(
+                kb::particle_editor::ParticleEditorComposerSection::Dependencies)) {
+            context_.ToggleParticleEditorComposerSection(
+                kb::particle_editor::ParticleEditorComposerSection::Dependencies);
+        }
+        context_.SetParticleEditorComposerScrollOffset(originalScroll);
+    };
+
+    // The Dependencies section starts collapsed, so open it through the section header
+    // the panel actually draws rather than by poking workspace state.
+    if (!startedExpanded) {
+        const auto header = scrollIntoView(
+            [](const ParticleEditorPanelLayout& layout) { return layout.dependencyHeader; });
+        if (!header.has_value()) {
+            Trace("assert_particle_dependency_navigation", false, "dependency-header-unreachable");
+            restore();
+            return result;
+        }
+        const ParticleEditorPanelHit headerHit = clickCentre(*header, header->dependencyHeader);
+        if (headerHit.action != ParticleEditorPanelAction::ToggleComposerSection ||
+            headerHit.composerSection !=
+                kb::particle_editor::ParticleEditorComposerSection::Dependencies ||
+            !ParticleEditorPanelInteraction::Execute(context_, headerHit)) {
+            Trace("assert_particle_dependency_navigation", false, "section-toggle-failed");
+            restore();
+            return result;
+        }
+    }
+
+    if (resolveLayout().dependencyRowCount == 0U) {
+        Trace("assert_particle_dependency_navigation", false, "no-dependency-rows");
+        restore();
+        return result;
+    }
+    const auto rowLayout = scrollIntoView(
+        [](const ParticleEditorPanelLayout& layout) { return layout.dependencyRows[0]; });
+    if (!rowLayout.has_value()) {
+        Trace("assert_particle_dependency_navigation", false, "dependency-row-unreachable");
+        restore();
+        return result;
+    }
+
+    const ParticleEditorPanelHit hit = clickCentre(*rowLayout, rowLayout->dependencyRows[0]);
+    if (hit.action != ParticleEditorPanelAction::NavigateDependency || hit.dependencyIndex != 0U) {
+        Trace("assert_particle_dependency_navigation", false, "unexpected-row-action");
+        restore();
+        return result;
+    }
+
+    // Start from an empty Asset Browser selection so the assertion proves the navigation
+    // performed the reveal instead of reading a selection that was already there.
+    context_.AssetBrowser().ClearSelection();
+    const bool navigated = ParticleEditorPanelInteraction::Execute(context_, hit);
+    result.selectedAsset = context_.AssetBrowser().SelectedAsset();
+    result.succeeded = navigated && result.expectedAsset.IsValid() &&
+        result.selectedAsset == result.expectedAsset;
+    restore();
+    Trace("assert_particle_dependency_navigation", result.succeeded,
+        std::string{"navigated="} + (navigated ? "1" : "0") +
+            ", path=" + inspector.dependencies.front().virtualPath);
     return result;
 }
 
@@ -1583,8 +2176,10 @@ bool EditorHeadlessAutomation::CapturePanelScreenshotMatrix(
                     if (!floating) {
                         EditorPlayModeState playMode;
                         EditorShellInteractionState shellInteraction;
+                        const RECT fullSurface{
+                            0, 0, profile.dimensions.logicalWidth, profile.dimensions.logicalHeight };
                         DockWorkspaceRenderer{}.Paint(
-                            impl_->window, memory,
+                            impl_->window, memory, fullSurface,
                             profile.dimensions.logicalWidth,
                             profile.dimensions.logicalHeight, dockModel,
                             theme, metrics, context_, settings, nullptr,

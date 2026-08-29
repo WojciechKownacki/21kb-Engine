@@ -26,14 +26,18 @@ ProjectDescriptorMetaReadResult ProjectDescriptorMetaReader::Read(const std::fil
     std::array<std::uint8_t, ProjectDescriptorFormat::MetaMagic.size()> magic{};
     ProjectDescriptorMeta meta;
     std::string projectFile;
+    // Version 1 carried the project name and default scene here; both are settings
+    // now, so they are read past rather than kept.
+    std::string retiredProjectName;
+    std::string retiredDefaultScene;
     if (!input.ReadRaw(magic.data(), magic.size()) ||
         magic != ProjectDescriptorFormat::MetaMagic ||
         !input.ReadUInt32(meta.fileVersion) ||
         meta.fileVersion == 0U ||
         meta.fileVersion > ProjectDescriptorMeta::CurrentFileVersion ||
-        !input.ReadString(meta.projectName) ||
+        (meta.fileVersion < 2U && !input.ReadString(retiredProjectName)) ||
         !input.ReadString(meta.engineAssociation) ||
-        !input.ReadString(meta.defaultScene) ||
+        (meta.fileVersion < 2U && !input.ReadString(retiredDefaultScene)) ||
         !input.ReadString(projectFile) ||
         !input.ReadUInt64(meta.byteSize) ||
         !input.ReadUInt64(meta.contentHashFnv1a64) ||
@@ -51,7 +55,7 @@ ProjectDescriptorMetaReadResult ProjectDescriptorMetaReader::Read(const std::fil
     if (!input.Exhausted()) {
         return ProjectDescriptorMetaReadResult{ .succeeded = false, .meta = {}, .error = "Project meta contains trailing data." };
     }
-    if (meta.projectName.empty() || meta.engineAssociation.empty() || meta.projectFile.empty() ||
+    if (meta.engineAssociation.empty() || meta.projectFile.empty() ||
         meta.byteSize == 0U || meta.contentHashFnv1a64 == 0U) {
         return ProjectDescriptorMetaReadResult{ .succeeded = false, .meta = {}, .error = "Project meta summary is incomplete." };
     }

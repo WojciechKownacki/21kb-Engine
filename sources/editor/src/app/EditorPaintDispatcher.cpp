@@ -99,7 +99,7 @@ namespace {
         .viewportKey = viewportKey,
         .editorSceneOverlaysEnabled = false,
         .meshPassMode = kb::render::SceneRenderMeshPassMode::OpaqueAndTransparent,
-        .lightingConfig = BuildMaterialPreviewLightingConfig(previewSettings, sceneContext.Project().sceneLightingPath),
+        .lightingConfig = BuildMaterialPreviewLightingConfig(previewSettings, sceneContext.ProjectConfiguration().lightingPath),
         .materialGraphContext = kb::render::RenderMaterialGraphBuildContext{
             .qualityLevel = previewSettings.qualityLevel,
             .variantUsage = previewSurface == EditorMaterialPreviewSurface::MaterialEditor &&
@@ -200,8 +200,7 @@ void AppendMaterialPreviewLayout(
             metrics.tabStripHeight,
             metrics.tabMinWidth,
             metrics.tabWidth,
-            metrics.splitterSize,
-            metrics.panelPadding);
+            metrics.splitterSize);
         for (const DockPanelLayout& panelLayout : layout.panels) {
             if (!panelLayout.active) {
                 continue;
@@ -356,8 +355,7 @@ void AppendMaterialPreviewLayout(
             metrics.tabStripHeight,
             metrics.tabMinWidth,
             metrics.tabWidth,
-            metrics.splitterSize,
-            metrics.panelPadding);
+            metrics.splitterSize);
         for (const DockPanelLayout& panelLayout : layout.panels) {
             if (!panelLayout.active) {
                 continue;

@@ -67,6 +67,7 @@ bool EditorSceneViewportSelectionInteraction::SelectAt(
         hit->localX,
         hit->localY,
         hit->ray);
+    sceneContext.AssetBrowser().ClearSelection();
     EditorSceneViewportSelectionController::ApplyClick(sceneContext, pick.entity, CurrentSelectionMode());
     return true;
 }
@@ -146,6 +147,7 @@ bool EditorSceneViewportSelectionInteraction::CommitBoxSelection(EditorSceneCont
         camera,
         selection.renderArea,
         selectionRect);
+    sceneContext.AssetBrowser().ClearSelection();
     EditorSceneViewportSelectionController::ApplyBox(
         sceneContext,
         entities,

@@ -49,8 +49,8 @@ bool EditorPointerDragInteraction::Move(HWND sourceWindow, HWND mainWindow, int 
 
     ApplyDragCursor();
     drag.overlayDirty = true;
-    if (drag.assetCreatesMeshEntity) {
-        drag.meshPreviewUpdatePending = true;
+    if (drag.CreatesScenePlacement()) {
+        drag.scenePlacementPreviewUpdatePending = true;
     }
     return true;
 }
@@ -81,14 +81,15 @@ bool EditorPointerDragInteraction::Complete(
     const bool wasActive = drag.Active();
     bool handledDrop = false;
     if (wasActive) {
-        handledDrop = drag.assetCreatesMeshEntity
-            && EditorSceneViewportObjectInteraction::CommitMeshDragPreview(dropWindow, mainWindow, dropPoint.x, dropPoint.y, dockModel, floatingWindows, metrics, sceneContext, drag);
+        handledDrop = drag.CreatesScenePlacement()
+            && EditorSceneViewportObjectInteraction::CommitScenePlacementPreview(dropWindow, mainWindow, dropPoint.x, dropPoint.y, dockModel, floatingWindows, metrics, sceneContext, drag);
         if (!handledDrop) {
+            EditorSceneViewportObjectInteraction::CancelScenePlacementPreview(sceneContext, drag);
             handledDrop = EditorPointerDropHandler::Drop(dropWindow, mainWindow, dropPoint.x, dropPoint.y, dockModel, floatingWindows, metrics, sceneContext, drag);
         }
     }
 
-    EditorSceneViewportObjectInteraction::CancelMeshDragPreview(sceneContext, drag);
+    EditorSceneViewportObjectInteraction::CancelScenePlacementPreview(sceneContext, drag);
     drag.Clear();
     if (GetCapture() == sourceWindow) {
         ReleaseCapture();

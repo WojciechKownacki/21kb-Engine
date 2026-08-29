@@ -1,5 +1,6 @@
 #include "docking/EditorDockModelQueries.hpp"
 
+#include "docking/DockGeometry.hpp"
 #include "docking/DockLeafPanelOrder.hpp"
 #include "docking/DockModelQueries.hpp"
 
@@ -29,8 +30,8 @@ namespace {
     DockLeafLayout leaf{
         .leafId = leafId,
         .frame = base.workspace,
-        .tabStrip = MakeRect(base.workspace.x + 1, base.workspace.y + 1, std::max(0, base.workspace.width - 2), tabStripHeight),
-        .content = MakeRect(base.workspace.x + 1, base.workspace.y + tabStripHeight + 1, std::max(0, base.workspace.width - 2), std::max(0, base.workspace.height - tabStripHeight - 2)),
+        .tabStrip = DockGeometry::PanelTabStrip(base.workspace, tabStripHeight),
+        .content = DockGeometry::PanelContent(base.workspace, tabStripHeight),
         .activePanelId = 0,
     };
 
@@ -100,9 +101,8 @@ DockLayout EditorDockModelQueries::BuildLayout(
     int tabStripHeight,
     int tabMinWidth,
     int tabWidth,
-    int splitterSize,
-    int panelPadding) const {
-    DockLayout layout = DockModelQueries::BuildLayout(root_, clientWidth, clientHeight, menuHeight, toolbarHeight, tabStripHeight, tabMinWidth, tabWidth, splitterSize, panelPadding);
+    int splitterSize) const {
+    DockLayout layout = DockModelQueries::BuildLayout(root_, clientWidth, clientHeight, menuHeight, toolbarHeight, tabStripHeight, tabMinWidth, tabWidth, splitterSize);
     if (maximizedLeafId_ == 0) {
         return layout;
     }

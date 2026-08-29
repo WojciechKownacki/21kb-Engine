@@ -9,6 +9,7 @@
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/ParticleEffectComponent.hpp"
+#include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAnimators.hpp"
 #include "engine/scene/SceneAssets.hpp"
@@ -30,6 +31,8 @@
 #include "rendering/ParticleThumbnailTimeline.hpp"
 #include "rendering/scene_viewport_toolbar/SceneViewportToolbarLayout.hpp"
 #include "rendering/scene_viewport_toolbar/SceneViewportToolbarLabelFormat.hpp"
+#include "rendering/SvgGraphicsPathBuilder.hpp"
+#include "rendering/scene_viewport_toolbar/SceneViewportToolbarState.hpp"
 #include "scene/EditorViewportCameraState.hpp"
 #include "scene/EditorViewportPreviewState.hpp"
 #include "scene/EditorPlayCameraResolver.hpp"
@@ -41,6 +44,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
@@ -976,6 +980,77 @@ void RunViewportMeshPickerNearestMeshRendererTest() {
     kb::editor::tests::Require(pick.entity == nearEntity, "Viewport mesh picker should choose the nearest Mesh Renderer under the ray");
 }
 
+void RunViewportMeshPickerUsesSynchronizedWorldTransformsTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity parent = scene.Entities().CreateEntity(
+        kb::scene::SceneObjectDesc{ .name = "Moved Prefab Root" });
+    const kb::scene::SceneEntity child = scene.Entities().CreateEntity(
+        kb::scene::SceneObjectDesc{ .name = "Nested Mesh" });
+    kb::editor::tests::Require(
+        scene.Hierarchy().SetParent(child, parent),
+        "Nested picker fixture should parent the mesh below the moved root");
+    scene.Components().MeshRenderers().Set(
+        child, kb::scene::MeshRendererComponent{ .meshAssetId = 404U });
+    scene.Transforms().Set(
+        parent,
+        kb::scene::TransformComponent{
+            .localPosition = kb::scene::Vec3{ 6.0F, 0.0F, 0.0F },
+        });
+    scene.Transforms().Set(
+        child,
+        kb::scene::TransformComponent{
+            .localPosition = kb::scene::Vec3{ 0.0F, 0.0F, 5.0F },
+        });
+
+    const kb::editor::EditorSceneViewportPickResult pick =
+        kb::editor::EditorSceneViewportMeshPicker::PickNearest(
+            scene,
+            kb::editor::EditorSceneViewportRay{
+                .origin = kb::scene::Vec3{ 6.0F, 0.0F, -8.0F },
+                .direction = kb::scene::Vec3{ 0.0F, 0.0F, 1.0F },
+            });
+
+    kb::editor::tests::Require(
+        pick.IsValid() && pick.entity == child,
+        "Viewport picker should hit a nested mesh at its world position after its root moves");
+}
+
+void RunViewportMeshPickerSkipsHiddenMeshesTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity hidden = scene.Entities().CreateEntity(
+        kb::scene::SceneObjectDesc{ .name = "Hidden Mesh" });
+    const kb::scene::SceneEntity visible = scene.Entities().CreateEntity(
+        kb::scene::SceneObjectDesc{ .name = "Visible Mesh" });
+    scene.Components().MeshRenderers().Set(
+        hidden, kb::scene::MeshRendererComponent{ .meshAssetId = 405U });
+    scene.Components().MeshRenderers().Set(
+        visible, kb::scene::MeshRendererComponent{ .meshAssetId = 406U });
+    scene.Components().Visibility().Set(
+        hidden, kb::scene::VisibilityComponent{ .visible = false });
+    scene.Transforms().Set(
+        hidden,
+        kb::scene::TransformComponent{
+            .localPosition = kb::scene::Vec3{ 0.0F, 0.0F, 0.0F },
+        });
+    scene.Transforms().Set(
+        visible,
+        kb::scene::TransformComponent{
+            .localPosition = kb::scene::Vec3{ 0.0F, 0.0F, 5.0F },
+        });
+
+    const kb::editor::EditorSceneViewportPickResult pick =
+        kb::editor::EditorSceneViewportMeshPicker::PickNearest(
+            scene,
+            kb::editor::EditorSceneViewportRay{
+                .origin = kb::scene::Vec3{ 0.0F, 0.0F, -8.0F },
+                .direction = kb::scene::Vec3{ 0.0F, 0.0F, 1.0F },
+            });
+
+    kb::editor::tests::Require(
+        pick.IsValid() && pick.entity == visible,
+        "Viewport picker should ignore a hidden mesh in front of a visible mesh");
+}
+
 kb::editor::EditorSceneViewportRay BuildViewportRay(
     const kb::editor::EditorViewportCameraState& camera,
     const RECT& renderArea,
@@ -1222,6 +1297,134 @@ void RunViewportParticleIconPickerSelectsParticleEffectTest() {
         "Viewport picker should select the visible particle icon with the same forgiving target as light icons");
 }
 
+void RunViewportPickerSelectsEntityWithoutRenderableComponentTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity projectile = scene.Entities().CreateEntity(
+        kb::scene::SceneObjectDesc{ .name = "Projectile" });
+    scene.Components().Rigidbodies().Set(projectile, kb::scene::RigidbodyComponent{});
+
+    const kb::editor::EditorViewportCameraState camera;
+    const kb::editor::EditorViewportCameraAxes axes = camera.Axes();
+    const kb::scene::Vec3 position = axes.position + axes.forward * 5.0F;
+    scene.Transforms().Set(
+        projectile,
+        kb::scene::TransformComponent{ .localPosition = position });
+
+    const RECT renderArea{0, 0, 960, 540};
+    float screenX = 0.0F;
+    float screenY = 0.0F;
+    kb::editor::tests::Require(
+        kb::editor::EditorSceneViewportMath::WorldToScreen(
+            camera, renderArea, position, screenX, screenY),
+        "Non-renderable entity test point should project into the viewport");
+
+    const kb::editor::EditorSceneViewportPickResult pick =
+        kb::editor::EditorSceneViewportMeshPicker::PickNearest(
+            scene,
+            camera,
+            renderArea,
+            screenX + 8.0F,
+            screenY,
+            BuildViewportRay(camera, renderArea, screenX + 8.0F, screenY));
+    kb::editor::tests::Require(
+        pick.IsValid() && pick.entity == projectile,
+        "Viewport picker should select an entity that has no mesh, light, or particle component");
+
+    const kb::editor::EditorSceneViewportPickResult miss =
+        kb::editor::EditorSceneViewportMeshPicker::PickNearest(
+            scene,
+            camera,
+            renderArea,
+            screenX + 40.0F,
+            screenY,
+            BuildViewportRay(camera, renderArea, screenX + 40.0F, screenY));
+    kb::editor::tests::Require(
+        !miss.IsValid(),
+        "The unmarked entity origin target must stay bounded instead of claiming distant clicks");
+}
+
+void RunViewportMeshWinsOverEntityOriginPickTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity group = scene.Entities().CreateEntity(
+        kb::scene::SceneObjectDesc{ .name = "Group" });
+    const kb::scene::SceneEntity mesh = scene.Entities().CreateEntity(
+        kb::scene::SceneObjectDesc{ .name = "Mesh At Group Origin" });
+    scene.Components().MeshRenderers().Set(
+        mesh, kb::scene::MeshRendererComponent{ .meshAssetId = 707U });
+
+    const kb::editor::EditorViewportCameraState camera;
+    const kb::editor::EditorViewportCameraAxes axes = camera.Axes();
+    const kb::scene::Vec3 position = axes.position + axes.forward * 5.0F;
+    scene.Transforms().Set(group, kb::scene::TransformComponent{ .localPosition = position });
+    scene.Transforms().Set(mesh, kb::scene::TransformComponent{ .localPosition = position });
+
+    const RECT renderArea{0, 0, 960, 540};
+    float screenX = 0.0F;
+    float screenY = 0.0F;
+    kb::editor::tests::Require(
+        kb::editor::EditorSceneViewportMath::WorldToScreen(
+            camera, renderArea, position, screenX, screenY),
+        "Shared origin test point should project into the viewport");
+
+    const kb::editor::EditorSceneViewportPickResult pick =
+        kb::editor::EditorSceneViewportMeshPicker::PickNearest(
+            scene,
+            camera,
+            renderArea,
+            screenX,
+            screenY,
+            BuildViewportRay(camera, renderArea, screenX, screenY));
+    kb::editor::tests::Require(
+        pick.IsValid() && pick.entity == mesh,
+        "A mesh must keep the click against a grouping entity that shares its origin");
+}
+
+void RunViewportBoxPickerIncludesVisibleComponentOverlaysTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity light = scene.Entities().CreateEntity(
+        kb::scene::SceneObjectDesc{ .name = "Box Selected Light" });
+    const kb::scene::SceneEntity particle = scene.Entities().CreateEntity(
+        kb::scene::SceneObjectDesc{ .name = "Box Selected Particle" });
+    const kb::scene::SceneEntity projectile = scene.Entities().CreateEntity(
+        kb::scene::SceneObjectDesc{ .name = "Box Selected Projectile" });
+    scene.Components().Lights().Set(light, kb::scene::LightComponent{});
+    scene.Components().Rigidbodies().Set(projectile, kb::scene::RigidbodyComponent{});
+    scene.Components().ParticleEffects().Set(
+        particle,
+        kb::scene::ParticleEffectComponent{ .effectAssetId = 100U });
+
+    const kb::editor::EditorViewportCameraState camera;
+    const kb::editor::EditorViewportCameraAxes axes = camera.Axes();
+    const kb::scene::Vec3 center = axes.position + axes.forward * 5.0F;
+    scene.Transforms().Set(
+        light,
+        kb::scene::TransformComponent{
+            .localPosition = center - axes.right * 0.5F,
+        });
+    scene.Transforms().Set(
+        particle,
+        kb::scene::TransformComponent{
+            .localPosition = center + axes.right * 0.5F,
+        });
+    scene.Transforms().Set(
+        projectile,
+        kb::scene::TransformComponent{ .localPosition = center });
+
+    const RECT renderArea{0, 0, 960, 540};
+    const std::vector<kb::scene::SceneEntity> picked =
+        kb::editor::EditorSceneViewportMeshPicker::PickInsideRect(
+            scene, camera, renderArea, RECT{400, 220, 560, 320});
+    kb::editor::tests::Require(
+        std::ranges::find(picked, light) != picked.end(),
+        "Viewport box picker should include a visible light overlay");
+    kb::editor::tests::Require(
+        std::ranges::find(picked, particle) != picked.end(),
+        "Viewport box picker should include a visible particle overlay");
+    kb::editor::tests::Require(
+        std::ranges::find(picked, projectile) != picked.end(),
+        "Viewport box picker should include an entity that has no renderable component");
+}
+
 void RunEditorBackendSelectionTest() {
     constexpr std::array supported{
         bgfx::RendererType::Direct3D12,
@@ -1281,19 +1484,112 @@ void RunToolbarHudLabelFormatTest() {
     using kb::editor::SceneViewportToolbarLabelFormat;
 
     std::array<char, 16> fpsBuffer{};
-    kb::editor::tests::Require(SceneViewportToolbarLabelFormat::Fps(std::span<char>{ fpsBuffer }, 144) == "FPS 144", "FPS label must format a positive frame rate as \"FPS 144\"");
-    kb::editor::tests::Require(SceneViewportToolbarLabelFormat::Fps(std::span<char>{ fpsBuffer }, 0) == "FPS --", "FPS label must fall back to \"FPS --\" for a non-positive frame rate");
+    kb::editor::tests::Require(SceneViewportToolbarLabelFormat::Fps(std::span<char>{ fpsBuffer }, 144, true) == "FPS 144", "FPS label must format a positive frame rate as \"FPS 144\"");
+    kb::editor::tests::Require(SceneViewportToolbarLabelFormat::Fps(std::span<char>{ fpsBuffer }, 0, true) == "FPS --", "FPS label must fall back to \"FPS --\" for a non-positive frame rate");
+    // A held reading must not be dressed as a live one. The editor draws on demand, so
+    // "no frames right now" is the normal state, not a fault - but the counter has to say
+    // it instead of leaving the last number standing as if it were current.
+    kb::editor::tests::Require(SceneViewportToolbarLabelFormat::Fps(std::span<char>{ fpsBuffer }, 452, false) == "IDLE 452", "A held frame-rate reading must be labelled IDLE, not FPS");
+    kb::editor::tests::Require(SceneViewportToolbarLabelFormat::Fps(std::span<char>{ fpsBuffer }, 0, false) == "FPS --", "With no measurement at all the counter must show \"FPS --\" whether idle or not");
+}
 
-    std::array<char, 16> dcBuffer{};
-    kb::editor::tests::Require(SceneViewportToolbarLabelFormat::DrawCalls(std::span<char>{ dcBuffer }, 1234U) == "DC 1234", "Draw-call label must format as \"DC 1234\"");
-    kb::editor::tests::Require(SceneViewportToolbarLabelFormat::DrawCalls(std::span<char>{ dcBuffer }, 0U) == "DC 0", "Draw-call label must format zero as \"DC 0\"");
+// The scene-view FPS counter is fed by actual presents, and the editor presents only when
+// something asks it to. That is the right design - burning the GPU on an untouched viewport
+// would be worse - but it means the meter stops receiving samples the moment the user stops
+// interacting. This proves the meter reports that state instead of silently freezing: the
+// number is kept (it is still the honest cost of the last frame drawn) and marked not live,
+// and the live -> idle crossing is announced exactly once so the toolbar can be repainted
+// to show it.
+void RunToolbarFpsCounterIdleReportingTest() {
+    using kb::editor::SceneViewportToolbarState;
 
-    std::array<char, 16> meshBuffer{};
-    kb::editor::tests::Require(SceneViewportToolbarLabelFormat::Meshes(std::span<char>{ meshBuffer }, 57U) == "M 57", "Mesh label must format as \"M 57\"");
+    SceneViewportToolbarState::Reset();
+    const auto start = std::chrono::steady_clock::time_point{} + std::chrono::seconds{ 100 };
 
-    std::array<char, 32> ecsBuffer{};
-    kb::editor::tests::Require(SceneViewportToolbarLabelFormat::EcsMilliseconds(std::span<char>{ ecsBuffer }, true, 3.14159) == "ECS 3.14 ms", "ECS label must format a valid frame time to two decimals as \"ECS 3.14 ms\"");
-    kb::editor::tests::Require(SceneViewportToolbarLabelFormat::EcsMilliseconds(std::span<char>{ ecsBuffer }, false, 0.0) == "ECS --", "ECS label must fall back to \"ECS --\" when no ECS frame is present");
+    kb::editor::tests::Require(!SceneViewportToolbarState::CurrentReading(start).live, "A counter that has never seen a frame must not claim a live reading");
+    kb::editor::tests::Require(SceneViewportToolbarState::CurrentReading(start).fps == 0, "A counter that has never seen a frame must report no rate");
+    kb::editor::tests::Require(!SceneViewportToolbarState::ConsumeIdleTransition(start), "A counter with no samples at all has no live reading to lose");
+
+    // One 2 ms frame: 500 FPS, live.
+    SceneViewportToolbarState::RecordFrameMilliseconds(2.0, start);
+    kb::editor::tests::Require(SceneViewportToolbarState::CurrentReading(start).fps == 500, "A 2 ms frame must read as 500 FPS");
+    kb::editor::tests::Require(SceneViewportToolbarState::CurrentReading(start).live, "The reading must be live immediately after a frame");
+    kb::editor::tests::Require(!SceneViewportToolbarState::ConsumeIdleTransition(start), "A live counter must not announce an idle crossing");
+
+    // Still live just inside the window, so ordinary 60 Hz interaction never blinks.
+    const auto justInside = start + SceneViewportToolbarState::kLiveFor - std::chrono::milliseconds{ 1 };
+    kb::editor::tests::Require(SceneViewportToolbarState::CurrentReading(justInside).live, "A reading must stay live for the whole live window");
+
+    // Past the window the rate is kept but is no longer a current reading.
+    const auto afterIdle = start + SceneViewportToolbarState::kLiveFor + std::chrono::milliseconds{ 1 };
+    kb::editor::tests::Require(!SceneViewportToolbarState::CurrentReading(afterIdle).live, "A reading older than the live window must not be reported as live");
+    kb::editor::tests::Require(SceneViewportToolbarState::CurrentReading(afterIdle).fps == 500, "Going idle must keep the last measured cost, not zero the counter");
+    kb::editor::tests::Require(SceneViewportToolbarState::ConsumeIdleTransition(afterIdle), "The live -> idle crossing must be announced so the counter can be repainted");
+    kb::editor::tests::Require(!SceneViewportToolbarState::ConsumeIdleTransition(afterIdle + std::chrono::seconds{ 5 }), "The idle crossing must be announced once, not on every poll, so an idle editor stays idle");
+
+    // Drawing again re-arms both the reading and the crossing.
+    const auto resumed = afterIdle + std::chrono::seconds{ 5 };
+    SceneViewportToolbarState::RecordFrameMilliseconds(2.0, resumed);
+    kb::editor::tests::Require(SceneViewportToolbarState::CurrentReading(resumed).live, "A new frame must make the reading live again");
+    kb::editor::tests::Require(SceneViewportToolbarState::ConsumeIdleTransition(resumed + SceneViewportToolbarState::kLiveFor + std::chrono::milliseconds{ 1 }), "Each quiet spell must be announced, not only the first");
+    SceneViewportToolbarState::Reset();
+}
+
+// The brand marks are vendored artwork whose subpaths lean on parts of the path grammar the
+// hand-written glyphs never used: several coordinate pairs behind one command letter, and a
+// relative moveto straight after a close, which must start from the point the close returned
+// to. A pane silently landing in the wrong place - or not at all - is invisible in a build
+// log and easy to miss at row height, so the shape is checked here rather than by eye.
+void RunSvgPathMultiSubpathTest() {
+    // Four separate 10x10 squares: the second reached by an absolute move, the third and
+    // fourth by a relative move straight after a close.
+    constexpr std::string_view fourSquares =
+        "M0 0h10v10H0zM20 0h10v10H20zm-20 20h10v10H0zm20 0h10v10H20z";
+    Gdiplus::GraphicsPath path(Gdiplus::FillModeAlternate);
+    kb::editor::SvgGraphicsPathBuilder(fourSquares).Build(path);
+
+    Gdiplus::RectF bounds{};
+    kb::editor::tests::Require(path.GetBounds(&bounds) == Gdiplus::Ok,
+        "A four-square path must produce measurable bounds");
+    kb::editor::tests::Require(path.GetPointCount() > 0,
+        "A four-square path must produce points");
+    // All four squares span x 0..30 and y 0..30. If a relative moveto after a close starts
+    // from the wrong point, or a later subpath is dropped, the box shrinks.
+    kb::editor::tests::Require(bounds.X <= 0.5F && bounds.Y <= 0.5F,
+        "The path must start at the origin, so no subpath drifted off");
+    kb::editor::tests::Require(bounds.Width >= 29.0F && bounds.Height >= 29.0F,
+        "Every one of the four squares must be present: a 30x30 box, not one square's worth");
+
+    // The vendored Windows mark, which is four panes on a 128 viewBox reached the same way.
+    constexpr std::string_view windowsMark =
+        "M126 1.637l-67 9.834v49.831l67-.534zM1.647 66.709l.003 42.404 50.791 6.983-.04-49.057zm56.82.68l.094 49.465 67.376 9.509.016-58.863zM1.61 19.297l.047 42.383 50.791-.289-.023-49.016z";
+    Gdiplus::GraphicsPath mark(Gdiplus::FillModeAlternate);
+    kb::editor::SvgGraphicsPathBuilder(windowsMark).Build(mark);
+    Gdiplus::RectF markBounds{};
+    kb::editor::tests::Require(mark.GetBounds(&markBounds) == Gdiplus::Ok,
+        "The Windows mark must produce measurable bounds");
+    kb::editor::tests::Require(markBounds.Width >= 120.0F && markBounds.Height >= 120.0F,
+        "All four panes of the Windows mark must be present, filling its 128 viewBox");
+
+    // Bounds only prove the figures were added. What matters is what fills: a subpath can
+    // be in the path and still not be painted, which is how three of these four panes went
+    // missing on screen while every measurement above passed.
+    kb::editor::tests::Require(mark.IsVisible(90.0F, 30.0F),
+        "The top-right pane of the Windows mark must be filled");
+    kb::editor::tests::Require(mark.IsVisible(27.0F, 37.0F),
+        "The top-left pane of the Windows mark must be filled");
+    kb::editor::tests::Require(mark.IsVisible(27.0F, 92.0F),
+        "The bottom-left pane of the Windows mark must be filled");
+    kb::editor::tests::Require(mark.IsVisible(92.0F, 97.0F),
+        "The bottom-right pane of the Windows mark must be filled");
+
+    // And under the non-zero rule, which is what a source declaring no fill-rule asks for
+    // and what the editor actually draws this mark with.
+    Gdiplus::GraphicsPath winding(Gdiplus::FillModeWinding);
+    kb::editor::SvgGraphicsPathBuilder(windowsMark).Build(winding);
+    kb::editor::tests::Require(winding.IsVisible(90.0F, 30.0F) && winding.IsVisible(27.0F, 37.0F) &&
+            winding.IsVisible(27.0F, 92.0F) && winding.IsVisible(92.0F, 97.0F),
+        "All four panes must fill under the non-zero rule too");
 }
 
 // Guards the LockBits fast path in EditorTexturePreviewService::DecodeGdiplus, which replaced a
@@ -1389,6 +1685,7 @@ void RunEditorViewportPreviewTests() {
     RunTerrainToolbarAndStrokeTickPolicyTest();
     RunTexturePreviewLockBitsDecodeTest();
     RunToolbarHudLabelFormatTest();
+    RunToolbarFpsCounterIdleReportingTest();
     RunProfileCycleAndResolutionTest();
     RunFitCameraAndCustomTest();
     RunRenderProfileCycleTest();
@@ -1399,9 +1696,14 @@ void RunEditorViewportPreviewTests() {
     RunViewportCameraOrbitTest();
     RunViewportCameraTrackDirectionTest();
     RunViewportMeshPickerNearestMeshRendererTest();
+    RunViewportMeshPickerUsesSynchronizedWorldTransformsTest();
+    RunViewportMeshPickerSkipsHiddenMeshesTest();
     RunViewportLightWireframePickerChoosesNestedInnerWireframeTest();
     RunViewportLightIconPickerSelectsLightIconsTest();
     RunViewportParticleIconPickerSelectsParticleEffectTest();
+    RunViewportPickerSelectsEntityWithoutRenderableComponentTest();
+    RunViewportMeshWinsOverEntityOriginPickTest();
+    RunViewportBoxPickerIncludesVisibleComponentOverlaysTest();
     RunViewportMeshPickerWinsInsideLightWireframeVolumeTest();
     RunRenderBackendSettingsTest();
     RunEditorBackendSelectionTest();

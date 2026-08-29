@@ -3831,7 +3831,7 @@ void RunForwardGraphExpLogSrgbNodesCookTest() {
         // Transform/TransformPosition default to tangent->world, which multiplies by the interpolated TBN.
         { RenderMaterialGraphNodeKind::Transform, "mat3(ctx.tangent", "value", 0x5015U },
         { RenderMaterialGraphNodeKind::TransformPosition, "mat3(ctx.tangent", "value", 0x5016U },
-        // UE-style fast inverse trig nodes emit shared polynomial helpers and must still cook to DXBC.
+        // The fast inverse trig nodes emit shared polynomial helpers and must still cook to DXBC.
         { RenderMaterialGraphNodeKind::ArcSineFast, "kbAsinFast(", "value", 0x5018U },
         { RenderMaterialGraphNodeKind::ArcCosineFast, "kbAcosFast(", "value", 0x5019U },
         { RenderMaterialGraphNodeKind::ArcTangentFast, "kbAtanFast(", "value", 0x501AU },
