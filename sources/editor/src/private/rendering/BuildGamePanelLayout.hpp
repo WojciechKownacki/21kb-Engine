@@ -6,6 +6,8 @@
 #include <Windows.h>
 #endif
 
+#include "rendering/EditorPanelStyle.hpp"
+
 #include <span>
 
 namespace kb::editor {
@@ -34,10 +36,11 @@ class BuildGamePanelLayout {
 public:
     BuildGamePanelLayout() = delete;
 
-    // Row heights the renderer advances by as it walks the settings column.
-    static constexpr int kSectionHeaderHeight = 26;
-    static constexpr int kSectionSpacing = 10;
-    static constexpr int kOptionRowHeight = 25;
+    // Row heights the renderer advances by as it walks the settings column. They are the
+    // shared panel metrics, so a Build Game row lines up with an Inspector row.
+    static constexpr int kSectionHeaderHeight = panel_style::kSectionHeaderHeight;
+    static constexpr int kSectionSpacing = 8;
+    static constexpr int kOptionRowHeight = panel_style::kFieldRowHeight;
     static constexpr int kTargetRowHeight = 42;
     static constexpr int kGroupCaptionHeight = 22;
     static constexpr int kProfileRowHeight = 44;

@@ -18,7 +18,7 @@ constexpr int kBuildButtonWidth = 176;
 constexpr int kBuildButtonHeight = 34;
 constexpr int kLabelColumnWidth = 596;
 constexpr int kMinLabelColumnWidth = 150;
-constexpr int kRowInsetX = 12;
+constexpr int kRowInsetX = panel_style::kRowPadX;
 constexpr int kScrollbarWidth = 10;
 constexpr int kScrollbarMinThumb = 28;
 
@@ -121,7 +121,10 @@ RECT BuildGamePanelLayout::OptionLabel(const RECT& row) noexcept {
 
 RECT BuildGamePanelLayout::OptionValueBox(const RECT& row) noexcept {
     const int boxLeft = std::min(static_cast<int>(row.right), ValueColumnLeft(row));
-    return RECT{ boxLeft, row.top + 1, std::max(boxLeft, static_cast<int>(row.right) - 4), row.bottom - 1 };
+    const int height = panel_style::kValueHeight;
+    const int top = static_cast<int>(row.top) + ((static_cast<int>(row.bottom - row.top) - height) / 2);
+    return RECT{ boxLeft, top,
+        std::max(boxLeft, static_cast<int>(row.right) - panel_style::kRowPadX), top + height };
 }
 
 RECT BuildGamePanelLayout::IconBox(const RECT& row, int size) noexcept {
