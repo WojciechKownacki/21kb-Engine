@@ -46,6 +46,20 @@ char SvgPathCursor::ReadCommand() {
     return position_ < text_.size() ? text_[position_++] : '\0';
 }
 
+bool SvgPathCursor::ReadFlag(bool& output) {
+    SkipSeparators();
+    if (position_ >= text_.size()) {
+        return false;
+    }
+    const char value = text_[position_];
+    if (value != '0' && value != '1') {
+        return false;
+    }
+    output = value == '1';
+    ++position_;
+    return true;
+}
+
 bool SvgPathCursor::ReadNumber(double& output) {
     SkipSeparators();
     if (position_ >= text_.size()) {
