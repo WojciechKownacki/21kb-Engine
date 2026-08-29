@@ -370,6 +370,9 @@ public:
     [[nodiscard]] std::size_t HierarchyRowCount() const;
     [[nodiscard]] const EditorHierarchyRow* HierarchyRowAt(std::size_t rowIndex) const;
     [[nodiscard]] int HierarchyScrollOffset() const noexcept;
+    // Build Game settings column: the panel is taller than any dock leaf it fits in.
+    [[nodiscard]] int BuildGameScrollOffset() const noexcept;
+    [[nodiscard]] bool SetBuildGameScrollOffset(int offset, int maxOffset) noexcept;
     [[nodiscard]] bool IsHierarchyScrollbarDragging() const noexcept;
     [[nodiscard]] bool SetHierarchyScrollOffset(int offset, int maxOffset) noexcept;
     void BeginHierarchyScrollbarDrag(int y) noexcept;
@@ -1476,6 +1479,7 @@ private:
     EditorPlayModeSelectionSnapshot playModeSelectionSnapshot_;
     kb::scene::SceneEntity playCameraEntity_{};
     int hierarchyScrollOffset_ = 0;
+    int buildGameScrollOffset_ = 0;
     int hierarchyScrollbarDragY_ = 0;
     int hierarchyScrollbarDragStartOffset_ = 0;
     bool hierarchyScrollbarDragging_ = false;
