@@ -9,6 +9,7 @@
 #include "app/console/EditorConsolePointerController.hpp"
 #include "app/cursor/EditorInternalSplitterCursorController.hpp"
 #include "app/inspector/EditorInspectorPointerController.hpp"
+#include "rendering/BuildGamePanelRenderer.hpp"
 #include "app/plugins/EditorPluginsPointerController.hpp"
 #include "app/project_settings/EditorProjectSettingsPointerController.hpp"
 #include "app/scene_viewport/EditorSceneViewportCameraController.hpp"
@@ -486,6 +487,22 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
         }
         return;
     }
+    if (const std::optional<RECT> buildGameContent = EditorPanelContentResolver::Resolve(
+            DockPanelKind::BuildGame, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
+        buildGameContent.has_value()) {
+        // A row lights up under the pointer the way an Inspector row does, and only the
+        // panel is repainted for it - the scene is what the person is looking at.
+        const BuildGamePanelRenderer::RowHit hit =
+            BuildGamePanelRenderer::HitTest(*buildGameContent, sceneContext_, x, y);
+        const BuildGamePanelRenderer::SidebarHit sidebar =
+            BuildGamePanelRenderer::HitTestSidebar(*buildGameContent, x, y);
+        const bool rowChanged = sceneContext_.SetBuildGameHover(hit.section, hit.row);
+        const bool sidebarChanged = sceneContext_.SetBuildGameSidebarHover(sidebar.target, sidebar.profile);
+        if (rowChanged || sidebarChanged) {
+            EditorWindowInvalidator::InvalidatePanel(messageWindow, *buildGameContent);
+        }
+    }
+
     if (inspectorPointer.UpdateHoverOrClear(inspectorContent, x, y) && inspectorContent.has_value()) {
         // Moving the pointer changes how two rows look: the one it left and the one it
         // entered. Asking for the whole panel back per row crossed cost several

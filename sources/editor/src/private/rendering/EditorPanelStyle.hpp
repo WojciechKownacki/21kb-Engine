@@ -9,6 +9,8 @@
 #include "kb/editor/theme/EditorTheme.hpp"
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/GdiResources.hpp"
+#include "rendering/HeroIconKind.hpp"
+#include "rendering/HeroIconPainter.hpp"
 #include "rendering/ProjectFilesPanelDrawing.hpp"
 #include "rendering/HeroIconGdiplusRuntime.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
@@ -264,6 +266,22 @@ inline void DrawDivider(HDC dc, const EditorTheme& theme, int left, int right, i
 
 inline void DrawTriangle(HDC dc, RECT rect, bool expanded, COLORREF color) {
     ProjectFilesPanelDrawing::DrawDisclosureTriangle(dc, rect, color, expanded);
+}
+
+// The disclosure caret, drawn through the icon painter so it is antialiased. The GDI
+// Polygon it replaces stepped its edges, which is what made the arrow look ragged at the
+// small size a category bar gives it.
+inline void DrawDisclosureCaret(HDC dc, const RECT& rect, COLORREF color, bool expanded) {
+    HeroIconPainter::Draw(dc, rect,
+        expanded ? HeroIconKind::DisclosureExpanded : HeroIconKind::DisclosureCollapsed, color);
+}
+
+// The hairline between two stacked rows. Inset at both ends so it reads as a separator
+// inside a card rather than a line across the panel.
+inline void DrawRowDivider(HDC dc, const RECT& row, const EditorTheme& theme) {
+    const RECT line{ row.left + kSectionDividerInset, row.bottom - kDividerHeight,
+        row.right - kSectionDividerInset, row.bottom };
+    GdiDrawing::FillRectColor(dc, line, Color(theme.borderPanel));
 }
 
 } // namespace kb::editor::panel_style
