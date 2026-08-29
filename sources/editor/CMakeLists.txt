@@ -766,6 +766,8 @@ add_executable(kb_editor WIN32
     src/rendering/ProjectFilesTileTextRenderer.cpp
     src/rendering/ProjectFilesToolbarRenderer.cpp
     src/rendering/ProjectFilesTreeRenderer.cpp
+    src/rendering/BuildGamePanelLayout.cpp
+    src/rendering/BuildGamePanelRenderer.cpp
     src/rendering/PluginsPanelRenderer.cpp
     src/rendering/ProjectSettingsPanelLayout.cpp
     src/rendering/ProjectSettingsPanelRenderer.cpp
