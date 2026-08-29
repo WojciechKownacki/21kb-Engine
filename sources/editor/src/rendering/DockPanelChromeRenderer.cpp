@@ -73,6 +73,9 @@ void DrawTabChrome(HDC dc, const RECT& tab, bool active, const EditorTheme& them
     case DockPanelKind::ParticleEditor:
         icon = HeroIconKind::Bolt;
         return true;
+    case DockPanelKind::BuildGame:
+        icon = HeroIconKind::WrenchScrewdriver;
+        return true;
     default:
         return false;
     }
