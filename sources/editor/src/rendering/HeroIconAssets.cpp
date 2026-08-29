@@ -133,9 +133,10 @@ static constexpr std::array<HeroIconPath, 3> kWrenchScrewdriver{
     HeroIconPath{ "M10.076 8.64 7.875 6.44V4.874a.75.75 0 0 0-.364-.643l-3.75-2.25a.75.75 0 0 0-.916.113l-.75.75a.75.75 0 0 0-.113.916l2.25 3.75a.75.75 0 0 0 .643.364h1.564l2.062 2.062 1.575-1.297Z", true },
     HeroIconPath{ "M12.556 17.329 16.739 21.511a3.375 3.375 0 0 0 4.773-4.773l-3.306-3.305a6.803 6.803 0 0 1-1.53.043c-.394-.034-.682-.006-.867.042a.589.589 0 0 0-.167.063l-3.086 3.748Zm3.414-1.36a.75.75 0 0 1 1.06 0l1.875 1.876a.75.75 0 1 1-1.06 1.06L15.97 17.03a.75.75 0 0 1 0-1.06Z", true },
 };
-// Heroicons solid "code-bracket" (MIT).
+// Fluent UI System Icons `ic_fluent_code_24_filled` (MIT). The Heroicons code-bracket
+// this replaces lost its angle brackets at row height and read as a bare slash.
 static constexpr std::array<HeroIconPath, 1> kCodeBracket{
-    HeroIconPath{ "M14.447 3.026a.75.75 0 0 1 .527.921l-4.5 16.5a.75.75 0 0 1-1.448-.394l4.5-16.5a.75.75 0 0 1 .921-.527ZM16.72 6.22a.75.75 0 0 1 1.06 0l5.25 5.25a.75.75 0 0 1 0 1.06l-5.25 5.25a.75.75 0 1 1-1.06-1.06L21.44 12l-4.72-4.72a.75.75 0 0 1 0-1.06Zm-9.44 0a.75.75 0 0 1 0 1.06L2.56 12l4.72 4.72a.75.75 0 0 1-1.06 1.06L.97 12.53a.75.75 0 0 1 0-1.06l5.25-5.25a.75.75 0 0 1 1.06 0Z", true },
+    HeroIconPath{ "M8.08553 18.6112L14.0817 4.60666C14.299 4.09895 14.8868 3.8636 15.3946 4.08097C15.866 4.28283 16.1026 4.80407 15.96 5.284L15.9202 5.39385L9.92409 19.3984C9.70671 19.9061 9.11892 20.1414 8.61121 19.9241C8.13977 19.7222 7.90316 19.201 8.04581 18.721L8.08553 18.6112L14.0817 4.60666L8.08553 18.6112ZM2.29289 11.2931L6.29289 7.29315C6.68342 6.90263 7.31658 6.90263 7.70711 7.29315C8.06759 7.65363 8.09532 8.22087 7.7903 8.61316L7.70711 8.70736L4.41421 12.0003L7.70711 15.2931C8.09763 15.6837 8.09763 16.3168 7.70711 16.7074C7.34662 17.0678 6.77939 17.0956 6.3871 16.7906L6.29289 16.7074L2.29289 12.7074C1.93241 12.3469 1.90468 11.7796 2.2097 11.3874L2.29289 11.2931L6.29289 7.29315L2.29289 11.2931ZM16.2921 7.29191C16.6526 6.93144 17.2198 6.90374 17.6121 7.20878L17.7063 7.29198L21.7071 11.2932C22.0678 11.6538 22.0953 12.2214 21.7899 12.6136L21.7066 12.7078L17.7058 16.7034C17.315 17.0936 16.6818 17.0932 16.2916 16.7024C15.9313 16.3417 15.904 15.7744 16.2093 15.3824L16.2925 15.2882L19.5854 11.9998L16.292 8.70613C15.9015 8.31558 15.9015 7.68242 16.2921 7.29191Z", true },
 };
 // Heroicons solid "rocket-launch" (MIT).
 static constexpr std::array<HeroIconPath, 2> kRocketLaunch{
@@ -148,53 +149,31 @@ static constexpr std::array<HeroIconPath, 3> kSave{
     HeroIconPath{ "M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7", false },
     HeroIconPath{ "M7 3v4a1 1 0 0 0 1 1h7", false },
 };
-// Platform marks, drawn here in the brand colours rather than vendored. No permissively
-// licensed icon set carries these - Simple Icons dropped the Microsoft ones over trademark
-// policy and ships the rest as single-colour silhouettes - and the official artwork comes
-// under brand guidelines, not a licence we could audit into third_party. So these are our
-// shapes wearing the official colours: recognisable at row height, and honestly ours.
-constexpr COLORREF kWindowsBlue = RGB(0, 120, 212);
+// Platform marks and the dedicated-server glyph, vendored rather than drawn. Brand marks
+// name a build target here, which is what they are for. Sources and licences are recorded
+// in third_party/devicon and third_party/fluentui-system-icons.
+constexpr COLORREF kWindowsBlue = RGB(0, 173, 239);
 constexpr COLORREF kAndroidGreen = RGB(61, 220, 132);
-// Tux is black on white artwork. A black body disappears into a dark panel, so the body
-// carries the lightest shade that still reads as "dark bird" against it; the belly, beak
-// and feet keep their real colours, which is what actually makes the mark readable.
-constexpr COLORREF kTuxBody = RGB(63, 70, 84);
-constexpr COLORREF kTuxBelly = RGB(244, 246, 250);
-constexpr COLORREF kTuxBeak = RGB(247, 181, 41);
-constexpr COLORREF kServerChassis = RGB(104, 122, 152);
-constexpr COLORREF kServerFace = RGB(147, 165, 194);
-constexpr COLORREF kServerLed = RGB(74, 222, 128);
+// Tux is black-on-white artwork and would disappear into a dark panel, so the silhouette
+// is drawn in one light tone. The shape is untouched.
+constexpr COLORREF kTuxTone = RGB(226, 232, 240);
+constexpr COLORREF kServerTone = RGB(147, 165, 194);
 
-static constexpr std::array<HeroIconPath, 4> kPlatformWindows{
-    HeroIconPath{ "M3 3.75h8.25V12H3V3.75Z", true, true, kWindowsBlue },
-    HeroIconPath{ "M12.75 3.75H21V12h-8.25V3.75Z", true, true, kWindowsBlue },
-    HeroIconPath{ "M3 13.5h8.25v6.75H3V13.5Z", true, true, kWindowsBlue },
-    HeroIconPath{ "M12.75 13.5H21v6.75h-8.25V13.5Z", true, true, kWindowsBlue },
+// devicon `icons/windows8/windows8-original.svg` (MIT), brand colour kept.
+static constexpr std::array<HeroIconPath, 1> kPlatformWindows{
+    HeroIconPath{ "M126 1.637l-67 9.834v49.831l67-.534zM1.647 66.709l.003 42.404 50.791 6.983-.04-49.057zm56.82.68l.094 49.465 67.376 9.509.016-58.863zM1.61 19.297l.047 42.383 50.791-.289-.023-49.016z", true, false, kWindowsBlue },
 };
-// The dome and its two eyes are one path so the even-odd rule punches the eyes out of it.
-static constexpr std::array<HeroIconPath, 4> kPlatformAndroid{
-    HeroIconPath{ "M7.1 3.1 8.6 5.6M16.9 3.1 15.4 5.6", false, true, kAndroidGreen },
-    HeroIconPath{ "M4 11.4a8 8 0 0 1 16 0H4Zm5.1-2.6a.95.95 0 1 0 0-1.9.95.95 0 0 0 0 1.9Zm5.8 0a.95.95 0 1 0 0-1.9.95.95 0 0 0 0 1.9Z", true, true, kAndroidGreen },
-    HeroIconPath{ "M4.6 12.8h14.8v6.4a2 2 0 0 1-2 2H6.6a2 2 0 0 1-2-2v-6.4Z", true, true, kAndroidGreen },
-    HeroIconPath{ "M1.15 14.15a1.35 1.35 0 0 1 2.7 0v4.1a1.35 1.35 0 0 1-2.7 0v-4.1Zm19 0a1.35 1.35 0 0 1 2.7 0v4.1a1.35 1.35 0 0 1-2.7 0v-4.1Z", true, true, kAndroidGreen },
+// devicon `icons/android/android-plain.svg` (MIT), drawn in the current brand green.
+static constexpr std::array<HeroIconPath, 1> kPlatformAndroid{
+    HeroIconPath{ "M21.005 43.003c-4.053-.002-7.338 3.291-7.339 7.341l.005 30.736a7.338 7.338 0 007.342 7.343 7.33 7.33 0 007.338-7.342V50.34a7.345 7.345 0 00-7.346-7.337m59.193-27.602l5.123-9.355a1.023 1.023 0 00-.401-1.388 1.022 1.022 0 00-1.382.407l-5.175 9.453c-4.354-1.938-9.227-3.024-14.383-3.019-5.142-.005-10.013 1.078-14.349 3.005L44.45 5.075a1.01 1.01 0 00-1.378-.406 1.007 1.007 0 00-.404 1.38l5.125 9.349c-10.07 5.193-16.874 15.083-16.868 26.438l66.118-.008c.002-11.351-6.79-21.221-16.845-26.427M48.942 29.858a2.772 2.772 0 01.003-5.545 2.78 2.78 0 012.775 2.774 2.776 2.776 0 01-2.778 2.771m30.106-.005a2.77 2.77 0 01-2.772-2.771 2.793 2.793 0 012.773-2.778 2.79 2.79 0 012.767 2.779 2.767 2.767 0 01-2.768 2.77M31.195 44.39l.011 47.635a7.822 7.822 0 007.832 7.831l5.333.002.006 16.264c-.001 4.05 3.291 7.342 7.335 7.342 4.056 0 7.342-3.295 7.343-7.347l-.004-16.26 9.909-.003.004 16.263c0 4.047 3.293 7.346 7.338 7.338 4.056.003 7.344-3.292 7.343-7.344l-.005-16.259 5.352-.004a7.835 7.835 0 007.836-7.834l-.009-47.635-65.624.011zm83.134 5.943a7.338 7.338 0 00-7.341-7.339c-4.053-.004-7.337 3.287-7.337 7.342l.006 30.738a7.334 7.334 0 007.339 7.339 7.337 7.337 0 007.338-7.343l-.005-30.737z", true, false, kAndroidGreen },
 };
-// Body, then the white belly and face over it, then the pupils, beak and feet.
-static constexpr std::array<HeroIconPath, 6> kPlatformLinux{
-    HeroIconPath{ "M12 2.2c-2.6 0-4.4 2-4.4 4.6v2.1c0 1-.4 1.7-1 2.5C5.3 13 4.6 15 4.6 16.9c0 2.6 1.9 4.6 4.3 4.6h6.2c2.4 0 4.3-2 4.3-4.6 0-1.9-.7-3.9-2-5.5-.6-.8-1-1.5-1-2.5V6.8c0-2.6-1.8-4.6-4.4-4.6Z", true, true, kTuxBody },
-    HeroIconPath{ "M12 11.2c2.6 0 4.4 2.4 4.4 5.2 0 2.4-1.9 4.1-4.4 4.1-2.5 0-4.4-1.7-4.4-4.1 0-2.8 1.8-5.2 4.4-5.2Z", true, true, kTuxBelly },
-    HeroIconPath{ "M10.1 5.2a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3Zm3.8 0a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3Z", true, true, kTuxBelly },
-    HeroIconPath{ "M10.2 6a.75.75 0 1 1 0 1.5.75.75 0 0 1 0-1.5Zm3.6 0a.75.75 0 1 1 0 1.5.75.75 0 0 1 0-1.5Z", true, true, kTuxBody },
-    HeroIconPath{ "M10.4 8.6h3.2L12 10.5 10.4 8.6Z", true, true, kTuxBeak },
-    HeroIconPath{ "M7.4 20.6c-.9.5-2 .8-2.9.6-.7-.2-.8-.9-.2-1.3l2.4-1.5 .7 2.2Zm9.2 0c.9.5 2 .8 2.9.6.7-.2.8-.9.2-1.3l-2.4-1.5-.7 2.2Z", true, true, kTuxBeak },
+// devicon `icons/linux/linux-plain.svg` (MIT): the full Tux silhouette.
+static constexpr std::array<HeroIconPath, 1> kPlatformLinux{
+    HeroIconPath{ "M113.823 104.595c-1.795-1.478-3.629-2.921-5.308-4.525-1.87-1.785-3.045-3.944-2.789-6.678.147-1.573-.216-2.926-2.113-3.452.446-1.154.864-1.928 1.033-2.753.188-.92.178-1.887.204-2.834.264-9.96-3.334-18.691-8.663-26.835-2.454-3.748-5.017-7.429-7.633-11.066-4.092-5.688-5.559-12.078-5.633-18.981a47.564 47.564 0 00-1.081-9.475C80.527 11.956 77.291 7.233 71.422 4.7c-4.497-1.942-9.152-2.327-13.901-1.084-6.901 1.805-11.074 6.934-10.996 14.088.074 6.885.417 13.779.922 20.648.288 3.893-.312 7.252-2.895 10.34-2.484 2.969-4.706 6.172-6.858 9.397-1.229 1.844-2.317 3.853-3.077 5.931-2.07 5.663-3.973 11.373-7.276 16.5-1.224 1.9-1.363 4.026-.494 6.199.225.563.363 1.429.089 1.882-2.354 3.907-5.011 7.345-10.066 8.095-3.976.591-4.172 1.314-4.051 5.413.1 3.337.061 6.705-.28 10.021-.363 3.555.008 4.521 3.442 5.373 7.924 1.968 15.913 3.647 23.492 6.854 3.227 1.365 6.465.891 9.064-1.763 2.713-2.771 6.141-3.855 9.844-3.859 6.285-.005 12.572.298 18.86.369 1.702.02 2.679.653 3.364 2.199.84 1.893 2.26 3.284 4.445 3.526 4.193.462 8.013-.16 11.19-3.359 3.918-3.948 8.436-7.066 13.615-9.227 1.482-.619 2.878-1.592 4.103-2.648 2.231-1.922 2.113-3.146-.135-5zM62.426 24.12c.758-2.601 2.537-4.289 5.243-4.801 2.276-.43 4.203.688 5.639 3.246 1.546 2.758 2.054 5.64.734 8.658-1.083 2.474-1.591 2.707-4.123 1.868-.474-.157-.937-.343-1.777-.652.708-.594 1.154-1.035 1.664-1.382 1.134-.772 1.452-1.858 1.346-3.148-.139-1.694-1.471-3.194-2.837-3.175-1.225.017-2.262 1.167-2.4 2.915-.086 1.089.095 2.199.173 3.589-3.446-1.023-4.711-3.525-3.662-7.118zm-12.75-2.251c1.274-1.928 3.197-2.314 5.101-1.024 2.029 1.376 3.547 5.256 2.763 7.576-.285.844-1.127 1.5-1.716 2.241l-.604-.374c-.23-1.253-.276-2.585-.757-3.733-.304-.728-1.257-1.184-1.919-1.762-.622.739-1.693 1.443-1.757 2.228-.088 1.084.477 2.28.969 3.331.311.661 1.001 1.145 1.713 1.916l-1.922 1.51c-3.018-2.7-3.915-8.82-1.871-11.909zM87.34 86.075c-.203 2.604-.5 2.713-3.118 3.098-1.859.272-2.359.756-2.453 2.964a101.744 101.744 0 00-.012 7.753c.061 1.77-.537 3.158-1.755 4.393-6.764 6.856-14.845 10.105-24.512 8.926-4.17-.509-6.896-3.047-9.097-6.639.98-.363 1.705-.607 2.412-.894 3.122-1.27 3.706-3.955 1.213-6.277-1.884-1.757-3.986-3.283-6.007-4.892-1.954-1.555-3.934-3.078-5.891-4.629-1.668-1.323-2.305-3.028-2.345-5.188-.094-5.182.972-10.03 3.138-14.747 1.932-4.209 3.429-8.617 5.239-12.885.935-2.202 1.906-4.455 3.278-6.388 1.319-1.854 2.134-3.669 1.988-5.94-.084-1.276-.016-2.562-.016-3.843l.707-.352c1.141.985 2.302 1.949 3.423 2.959 4.045 3.646 7.892 3.813 12.319.67 1.888-1.341 3.93-2.47 5.927-3.652.497-.294 1.092-.423 1.934-.738 2.151 5.066 4.262 10.033 6.375 15 1.072 2.524 1.932 5.167 3.264 7.547 2.671 4.775 4.092 9.813 4.07 15.272-.012 2.83.137 5.67-.081 8.482z", true, true, kTuxTone },
 };
-// Original editor glyph: a two-unit rack. There is no brand mark for a dedicated server,
-// so this is a plain object drawn to sit beside the platform marks without competing.
-static constexpr std::array<HeroIconPath, 5> kPlatformServer{
-    HeroIconPath{ "M3.6 4h16.8A1.6 1.6 0 0 1 22 5.6v3.8a1.6 1.6 0 0 1-1.6 1.6H3.6A1.6 1.6 0 0 1 2 9.4V5.6A1.6 1.6 0 0 1 3.6 4Z", true, true, kServerChassis },
-    HeroIconPath{ "M3.6 13h16.8a1.6 1.6 0 0 1 1.6 1.6v3.8a1.6 1.6 0 0 1-1.6 1.6H3.6A1.6 1.6 0 0 1 2 18.4v-3.8A1.6 1.6 0 0 1 3.6 13Z", true, true, kServerChassis },
-    HeroIconPath{ "M4.8 6.8h7.4v1.4H4.8V6.8Z", true, true, kServerFace },
-    HeroIconPath{ "M4.8 15.8h7.4v1.4H4.8v-1.4Z", true, true, kServerFace },
-    HeroIconPath{ "M18.4 6.35a1.15 1.15 0 1 1 0 2.3 1.15 1.15 0 0 1 0-2.3Zm0 9a1.15 1.15 0 1 1 0 2.3 1.15 1.15 0 0 1 0-2.3Z", true, true, kServerLed },
+// Fluent UI System Icons `ic_fluent_server_24_filled` (MIT).
+static constexpr std::array<HeroIconPath, 1> kPlatformServer{
+    HeroIconPath{ "M9 2C7.34315 2 6 3.34315 6 5V19C6 20.6569 7.34315 22 9 22H15C16.6569 22 18 20.6569 18 19V5C18 3.34315 16.6569 2 15 2H9ZM8.5 6.75C8.5 6.33579 8.83579 6 9.25 6H14.75C15.1642 6 15.5 6.33579 15.5 6.75C15.5 7.16421 15.1642 7.5 14.75 7.5H9.25C8.83579 7.5 8.5 7.16421 8.5 6.75ZM8.5 17.75C8.5 17.3358 8.83579 17 9.25 17H14.75C15.1642 17 15.5 17.3358 15.5 17.75C15.5 18.1642 15.1642 18.5 14.75 18.5H9.25C8.83579 18.5 8.5 18.1642 8.5 17.75ZM8.5 14.75C8.5 14.3358 8.83579 14 9.25 14H14.75C15.1642 14 15.5 14.3358 15.5 14.75C15.5 15.1642 15.1642 15.5 14.75 15.5H9.25C8.83579 15.5 8.5 15.1642 8.5 14.75Z", true, false, kServerTone },
 };
 
 // Original editor glyph: the disclosure caret. Heroicons and Lucide both carry chevrons
@@ -347,15 +326,15 @@ HeroIconGlyph HeroIconAssets::Save() noexcept {
 }
 
 HeroIconGlyph HeroIconAssets::PlatformWindows() noexcept {
-    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kPlatformWindows } };
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kPlatformWindows }, .viewBoxSize = 128.0F };
 }
 
 HeroIconGlyph HeroIconAssets::PlatformAndroid() noexcept {
-    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kPlatformAndroid }, .strokeWidth = 1.7F };
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kPlatformAndroid }, .viewBoxSize = 128.0F };
 }
 
 HeroIconGlyph HeroIconAssets::PlatformLinux() noexcept {
-    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kPlatformLinux } };
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kPlatformLinux }, .viewBoxSize = 128.0F };
 }
 
 HeroIconGlyph HeroIconAssets::PlatformServer() noexcept {
