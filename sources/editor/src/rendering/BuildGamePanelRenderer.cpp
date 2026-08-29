@@ -72,8 +72,8 @@ constexpr std::array<BuildTarget, 5> kTargets{{
     { "Windows 64 bit", "Game", HeroIconKind::PlatformWindows },
     { "Android ASTC", "Player package  |  arm64-v8a  |  APK", HeroIconKind::PlatformAndroid },
     { "Linux 64 bit", "Player package  |  x86-64  |  Portable folder", HeroIconKind::PlatformLinux },
-    { "Windows Dedicated Server", "Dedicated server  |  x86-64  |  Portable folder", HeroIconKind::Server },
-    { "Linux Dedicated Server", "Dedicated server  |  x86-64  |  Portable folder", HeroIconKind::Server },
+    { "Windows Dedicated Server", "Dedicated server  |  x86-64  |  Portable folder", HeroIconKind::PlatformServer },
+    { "Linux Dedicated Server", "Dedicated server  |  x86-64  |  Portable folder", HeroIconKind::PlatformServer },
 }};
 
 struct BuildProfile {

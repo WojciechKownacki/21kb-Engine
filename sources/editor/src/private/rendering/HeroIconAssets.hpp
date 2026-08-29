@@ -45,6 +45,7 @@ public:
     [[nodiscard]] static HeroIconGlyph PlatformWindows() noexcept;
     [[nodiscard]] static HeroIconGlyph PlatformAndroid() noexcept;
     [[nodiscard]] static HeroIconGlyph PlatformLinux() noexcept;
+    [[nodiscard]] static HeroIconGlyph PlatformServer() noexcept;
     [[nodiscard]] static HeroIconGlyph DisclosureCollapsed() noexcept;
     [[nodiscard]] static HeroIconGlyph DisclosureExpanded() noexcept;
 };
