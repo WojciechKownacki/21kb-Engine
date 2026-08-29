@@ -2,6 +2,7 @@
 
 #if defined(_WIN32)
 #include "rendering/BuildGamePanelLayout.hpp"
+#include "rendering/EditorPanelStyle.hpp"
 #include "rendering/GdiDrawing.hpp"
 #include "scene/EditorSceneContext.hpp"
 #include "rendering/HeroIconPainter.hpp"
@@ -16,6 +17,13 @@
 
 namespace kb::editor {
 namespace {
+
+// Every rounded frame, colour and row metric comes from the shared panel style, so
+// this panel and the Inspector stay one look rather than two that drift.
+using panel_style::DrawInputFrame;
+using panel_style::DrawSectionCardOutline;
+using panel_style::FillSectionHeaderBackground;
+using panel_style::HoverFill;
 
 [[nodiscard]] COLORREF Color(EditorColor color) noexcept {
     return GdiDrawing::ToColorRef(color);
@@ -169,9 +177,10 @@ void DrawHeader(HDC dc, const RECT& header, const BuildTarget& target, const Edi
 }
 
 void DrawCheckbox(HDC dc, const RECT& box, const EditorTheme& theme) {
-    const RECT square{ box.left, box.top + 4, box.left + 14, box.top + 18 };
-    GdiDrawing::DrawSharpFrame(dc, square,
-        Blend(Color(theme.panel), Color(theme.background), 40), Color(theme.borderPanel));
+    const int size = panel_style::kCheckboxSize;
+    const int top = box.top + (((box.bottom - box.top) - size) / 2);
+    DrawInputFrame(dc, RECT{ box.left, top, box.left + size, top + size },
+        Color(theme.chrome), Color(theme.borderPanel));
 }
 
 // One settings section: an uppercase caption with its glyph, then its rows. Returns the
@@ -183,23 +192,26 @@ void DrawCheckbox(HDC dc, const RECT& box, const EditorTheme& theme) {
     const OptionSection& section,
     const EditorTheme& theme) {
     const RECT header = BuildGamePanelLayout::SectionHeaderRow(body, y);
-    GdiDrawing::FillRectColor(dc, header, Blend(Color(theme.panel), Color(theme.chrome), 55));
-    const RECT icon = BuildGamePanelLayout::IconBox(header, 14);
+    const RECT card{ body.left, header.top, body.right,
+        header.bottom + (static_cast<int>(section.rows.size()) * BuildGamePanelLayout::kOptionRowHeight) };
+    DrawSectionCardOutline(dc, card, theme);
+    FillSectionHeaderBackground(dc, header, Color(theme.strip));
+    const RECT icon = BuildGamePanelLayout::IconBox(header, 15);
     HeroIconPainter::Draw(dc, icon, section.icon, Color(theme.textSecondary));
     DrawText(dc, RECT{ icon.right + 9, header.top, header.right - 8, header.bottom },
-        section.title, Color(theme.textSecondary), 10, FW_SEMIBOLD);
+        section.title, Color(theme.textPrimary), 12, FW_SEMIBOLD);
     y = header.bottom;
 
     for (const OptionRowSpec& spec : section.rows) {
         const RECT row = BuildGamePanelLayout::OptionRow(body, y);
-        DrawText(dc, BuildGamePanelLayout::OptionLabel(row), spec.label, Color(theme.textSecondary), 11);
+        DrawText(dc, BuildGamePanelLayout::OptionLabel(row), spec.label, Color(theme.textPrimary), 12);
         const RECT value = BuildGamePanelLayout::OptionValueBox(row);
         if (spec.value.empty()) {
             DrawCheckbox(dc, value, theme);
         } else {
-            GdiDrawing::FillRectColor(dc, value, Blend(Color(theme.panel), Color(theme.background), 55));
+            DrawInputFrame(dc, value, Color(theme.chrome), Color(theme.borderPanel));
             DrawText(dc, RECT{ value.left + 8, value.top, value.right - 8, value.bottom },
-                spec.value, Color(theme.textPrimary), 11);
+                spec.value, Color(theme.textPrimary), 12);
         }
         y = row.bottom;
     }
