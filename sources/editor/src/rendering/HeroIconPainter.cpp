@@ -125,7 +125,7 @@ struct CachedRasterIcon {
 };
 
 [[nodiscard]] CachedHeroIconGlyph& CachedGlyph(HeroIconKind icon) {
-    static std::array<CachedHeroIconGlyph, static_cast<std::size_t>(HeroIconKind::Skeleton) + 1U> cache{};
+    static std::array<CachedHeroIconGlyph, static_cast<std::size_t>(HeroIconKind::Count)> cache{};
     CachedHeroIconGlyph& cached = cache[static_cast<std::size_t>(icon)];
     if (cached.initialized) {
         return cached;
@@ -136,7 +136,8 @@ struct CachedRasterIcon {
     cached.strokeWidth = glyph.strokeWidth;
     cached.paths.reserve(glyph.paths.size());
     for (const HeroIconPath& pathData : glyph.paths) {
-        auto path = std::make_unique<Gdiplus::GraphicsPath>(pathData.filled ? Gdiplus::FillModeAlternate : Gdiplus::FillModeWinding);
+        auto path = std::make_unique<Gdiplus::GraphicsPath>(
+            pathData.filled && pathData.evenOdd ? Gdiplus::FillModeAlternate : Gdiplus::FillModeWinding);
         SvgGraphicsPathBuilder(pathData.data).Build(*path);
         cached.paths.push_back(CachedHeroIconPath{ .path = std::move(path), .filled = pathData.filled });
     }

@@ -36,6 +36,15 @@ public:
     [[nodiscard]] static HeroIconGlyph RotationSnap() noexcept;
     [[nodiscard]] static HeroIconGlyph Camera() noexcept;
     [[nodiscard]] static HeroIconGlyph Skeleton() noexcept;
+    [[nodiscard]] static HeroIconGlyph LockClosed() noexcept;
+    [[nodiscard]] static HeroIconGlyph Server() noexcept;
+    [[nodiscard]] static HeroIconGlyph WrenchScrewdriver() noexcept;
+    [[nodiscard]] static HeroIconGlyph CodeBracket() noexcept;
+    [[nodiscard]] static HeroIconGlyph RocketLaunch() noexcept;
+    [[nodiscard]] static HeroIconGlyph Save() noexcept;
+    [[nodiscard]] static HeroIconGlyph PlatformWindows() noexcept;
+    [[nodiscard]] static HeroIconGlyph PlatformAndroid() noexcept;
+    [[nodiscard]] static HeroIconGlyph PlatformLinux() noexcept;
 };
 
 } // namespace kb::editor
