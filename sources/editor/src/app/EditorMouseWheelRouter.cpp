@@ -273,7 +273,7 @@ bool EditorMouseWheelRouter::HandleMouseWheel(int x, int y, int wheelDelta) {
         y >= buildGameContent->top && y < buildGameContent->bottom) {
         const BuildGamePanelLayoutRects rects = BuildGamePanelLayout::Resolve(*buildGameContent);
         const int maxScroll = BuildGamePanelLayout::MaxScrollOffset(
-            rects.body, BuildGamePanelRenderer::SettingsContentHeight());
+            rects.body, BuildGamePanelRenderer::SettingsContentHeight(sceneContext_));
         const int wheelDirection = wheelDelta > 0 ? 1 : -1;
         if (sceneContext_.SetBuildGameScrollOffset(
                 sceneContext_.BuildGameScrollOffset() - wheelDirection * BuildGamePanelLayout::kOptionRowHeight * 3,

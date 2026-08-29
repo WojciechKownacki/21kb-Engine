@@ -372,6 +372,22 @@ public:
     [[nodiscard]] int HierarchyScrollOffset() const noexcept;
     // Build Game settings column: the panel is taller than any dock leaf it fits in.
     [[nodiscard]] int BuildGameScrollOffset() const noexcept;
+    // Which settings sections are folded away, and which row the pointer is over
+    // (row -1 means the section bar itself; section -1 means nothing).
+    [[nodiscard]] bool IsBuildGameSectionCollapsed(int section) const noexcept;
+    void ToggleBuildGameSection(int section) noexcept;
+    // Which target and profile the left column has selected, and which of its rows the
+    // pointer is over (-1 for none).
+    [[nodiscard]] int BuildGameSelectedTarget() const noexcept;
+    [[nodiscard]] bool SetBuildGameSelectedTarget(int target) noexcept;
+    [[nodiscard]] int BuildGameSelectedProfile() const noexcept;
+    [[nodiscard]] bool SetBuildGameSelectedProfile(int profile) noexcept;
+    [[nodiscard]] int BuildGameHoveredTarget() const noexcept;
+    [[nodiscard]] int BuildGameHoveredProfile() const noexcept;
+    [[nodiscard]] bool SetBuildGameSidebarHover(int target, int profile) noexcept;
+    [[nodiscard]] int BuildGameHoveredSection() const noexcept;
+    [[nodiscard]] int BuildGameHoveredRow() const noexcept;
+    [[nodiscard]] bool SetBuildGameHover(int section, int row) noexcept;
     [[nodiscard]] bool SetBuildGameScrollOffset(int offset, int maxOffset) noexcept;
     [[nodiscard]] bool IsHierarchyScrollbarDragging() const noexcept;
     [[nodiscard]] bool SetHierarchyScrollOffset(int offset, int maxOffset) noexcept;
@@ -1480,6 +1496,13 @@ private:
     kb::scene::SceneEntity playCameraEntity_{};
     int hierarchyScrollOffset_ = 0;
     int buildGameScrollOffset_ = 0;
+    std::uint32_t buildGameCollapsedSections_ = 0U;
+    int buildGameSelectedTarget_ = 0;
+    int buildGameSelectedProfile_ = 0;
+    int buildGameHoveredTarget_ = -1;
+    int buildGameHoveredProfile_ = -1;
+    int buildGameHoveredSection_ = -1;
+    int buildGameHoveredRow_ = -1;
     int hierarchyScrollbarDragY_ = 0;
     int hierarchyScrollbarDragStartOffset_ = 0;
     bool hierarchyScrollbarDragging_ = false;

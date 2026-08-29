@@ -127,6 +127,12 @@ RECT BuildGamePanelLayout::OptionValueBox(const RECT& row) noexcept {
         std::max(boxLeft, static_cast<int>(row.right) - panel_style::kRowPadX), top + height };
 }
 
+RECT BuildGamePanelLayout::CaretBox(const RECT& header) noexcept {
+    constexpr int size = 12;
+    const int top = static_cast<int>(header.top) + ((static_cast<int>(header.bottom - header.top) - size) / 2);
+    return RECT{ header.left + kRowInsetX, top, header.left + kRowInsetX + size, top + size };
+}
+
 RECT BuildGamePanelLayout::IconBox(const RECT& row, int size) noexcept {
     const int top = static_cast<int>(row.top) + ((static_cast<int>(row.bottom - row.top) - size) / 2);
     return RECT{ row.left + kRowInsetX, top, row.left + kRowInsetX + size, top + size };

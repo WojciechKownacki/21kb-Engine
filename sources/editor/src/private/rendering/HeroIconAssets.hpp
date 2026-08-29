@@ -45,6 +45,8 @@ public:
     [[nodiscard]] static HeroIconGlyph PlatformWindows() noexcept;
     [[nodiscard]] static HeroIconGlyph PlatformAndroid() noexcept;
     [[nodiscard]] static HeroIconGlyph PlatformLinux() noexcept;
+    [[nodiscard]] static HeroIconGlyph DisclosureCollapsed() noexcept;
+    [[nodiscard]] static HeroIconGlyph DisclosureExpanded() noexcept;
 };
 
 } // namespace kb::editor
