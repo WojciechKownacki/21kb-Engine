@@ -12,6 +12,7 @@ Vendored subset used by the Win32 editor:
 - `icons/step-forward.svg`
 - `icons/square.svg`
 - `icons/gamepad-2.svg`
+- `icons/save.svg`
 
 The editor embeds the selected SVG path data in read-only code data and renders
 it as vector paths at runtime. The SVG files stay in `third_party` as the
