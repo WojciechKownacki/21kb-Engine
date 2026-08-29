@@ -1,5 +1,7 @@
 #pragma once
 
+#include "rendering/gdi/EditorFontCache.hpp"
+
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -17,29 +19,12 @@ namespace detail {
 
 } // namespace detail
 
+// The font a piece of drawing wants, taken from the shared cache. It is not owned
+// here: making one costs Windows a face lookup, and the panels ask for the same
+// handful over and over.
 struct ScopedFont {
     ScopedFont(int pointSize, int weight)
-        : handle(CreateFontW(
-              -pointSize,
-              0,
-              0,
-              0,
-              weight,
-              FALSE,
-              FALSE,
-              FALSE,
-              DEFAULT_CHARSET,
-              OUT_DEFAULT_PRECIS,
-              CLIP_DEFAULT_PRECIS,
-              CLEARTYPE_QUALITY,
-              DEFAULT_PITCH | FF_DONTCARE,
-              detail::EditorUiFontFamily())) {}
-
-    ~ScopedFont() {
-        if (handle != nullptr) {
-            DeleteObject(handle);
-        }
-    }
+        : handle(EditorFontCache::Acquire(pointSize, weight)) {}
 
     ScopedFont(const ScopedFont&) = delete;
     ScopedFont& operator=(const ScopedFont&) = delete;

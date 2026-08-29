@@ -173,9 +173,14 @@
     { "op": "capture", "panel": "project_settings", "checkpoint": "04-project-settings" },
     { "op": "capture", "panel": "editor_settings", "checkpoint": "04b-editor-settings" },
     { "op": "capture", "panel": "plugins", "checkpoint": "05-plugins" },
+    { "op": "capture", "panel": "build_game", "checkpoint": "05b-build-game" },
 
     { "op": "select_entity", "entity": "player" },
+    { "op": "set_project_input_enabled", "enabled": false },
+    { "op": "assert_file", "path": "Config/ProjectSettings.ini", "contains": "Enabled=0" },
     { "op": "set_project_input_enabled", "enabled": true },
+    { "op": "assert_file", "path": "Config/ProjectSettings.ini", "contains": "Enabled=1" },
+    { "op": "assert_file", "path": "Config/ProjectSettings.ini", "contains": "LastOpenMap=/Game/Scenes/" },
     { "op": "set_plugin", "id": "Physics.Jolt", "enabled": true },
     { "op": "set_plugin", "id": "Audio.Miniaudio", "enabled": true },
     { "op": "set_plugin", "id": "Rendering.BasicLighting", "enabled": true },
@@ -248,6 +253,11 @@
     { "op": "assert_property", "entity": "player", "component": "Transform", "property": "localPosition.x", "value": 0.0, "tolerance": 0.0001 },
     { "op": "capture", "panel": "hierarchy", "checkpoint": "10-restored-hierarchy" },
     { "op": "open_scene", "path": "Assets/Scenes/UniversalScenario.21kbscene" },
-    { "op": "capture", "panel": "hierarchy", "checkpoint": "11-reloaded-scene" }
+    { "op": "capture", "panel": "hierarchy", "checkpoint": "11-reloaded-scene" },
+    { "op": "profile_inspector_drag", "steps": 60 },
+    { "op": "profile_idle_scene_frame", "steps": 60 },
+    { "op": "assert_floating_window_frame" },
+    { "op": "assert_saved_layout_roundtrip" },
+    { "op": "assert_workspace_layout_persistence" }
   ]
 }

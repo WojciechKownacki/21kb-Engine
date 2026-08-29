@@ -113,7 +113,7 @@ bool EditorAssetBrowserPointerHandler::HandlePointerDown(
         return EditorAssetBrowserDeleteConfirmPointerHandler::HandlePointerDown(*content, hit, x, y, sceneContext);
     }
 
-    if (const std::optional<bool> handled = EditorAssetBrowserContextMenuPointerHandler::HandleOpenMenuPointerDown(hit, sceneContext)) {
+    if (const std::optional<bool> handled = EditorAssetBrowserContextMenuPointerHandler::HandleOpenMenuPointerDown(mainWindow, hit, sceneContext)) {
         return *handled;
     }
 
@@ -136,7 +136,7 @@ bool EditorAssetBrowserPointerHandler::HandleRightButtonDown(
     }
 
     return EditorAssetBrowserContextMenuPointerHandler::HandleRightButtonDown(
-        sourceWindow, *content, x, y, sceneContext);
+        sourceWindow, mainWindow, *content, x, y, sceneContext);
 }
 
 EditorAssetBrowserDoubleClickResult EditorAssetBrowserPointerHandler::HandleDoubleClick(

@@ -73,7 +73,6 @@
 #include "engine/modules/EngineModuleHost.hpp"
 #include "engine/project/ProjectDescriptorWriter.hpp"
 #include "project/EditorProjectPaths.hpp"
-#include "rendering/EditorRenderBackendSettings.hpp"
 #include "engine/script/ScriptApiCatalog.hpp"
 #include "engine/script/ScriptModule.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
@@ -1184,53 +1183,10 @@ void LogAssetImportReport(EditorConsoleState& console, const kb::assets::AssetIm
     }
 }
 
-[[nodiscard]] EditorRenderSettingsRecord CaptureRendererSettings(
-    const EditorRenderBackendSettings& renderer) noexcept {
-    return {
-        .renderBackend = renderer.Backend(),
-        .shadowsEnabled = renderer.ShadowsEnabled(),
-        .postProcessEnabled = renderer.PostProcessEnabled(),
-        .antiAliasingMode = renderer.AntiAliasingMode(),
-        .msaaSamples = renderer.MsaaSamples(),
-        .bloomEnabled = renderer.BloomEnabled(),
-        .selectionOutlineEnabled = renderer.SelectionOutlineEnabled(),
-        .gpuDrivenEnabled = renderer.GpuDrivenEnabled(),
-    };
-}
-
-void ApplyRendererSettings(
-    const EditorRenderSettingsRecord& settings,
-    EditorRenderBackendSettings& renderer) noexcept {
-    renderer.SetBackend(settings.renderBackend);
-    renderer.SetShadowsEnabled(settings.shadowsEnabled);
-    renderer.SetPostProcessEnabled(settings.postProcessEnabled);
-    renderer.SetAntiAliasingMode(settings.antiAliasingMode);
-    if (settings.antiAliasingMode == EditorAntiAliasingMode::Msaa) {
-        renderer.SetMsaaSamples(settings.msaaSamples);
-    }
-    renderer.SetBloomEnabled(settings.bloomEnabled);
-    renderer.SetSelectionOutlineEnabled(settings.selectionOutlineEnabled);
-    renderer.SetGpuDrivenEnabled(settings.gpuDrivenEnabled);
-}
-
-void ApplyWorkspacePreferences(
-    const EditorWorkspacePreferences& preferences,
-    EditorAutosaveState& autosave,
-    EditorSceneViewportStateStore& viewportState,
-    EditorAssetBrowserState& assetBrowser) noexcept {
+void ApplySavingPreferences(
+    const EditorSavingPreferences& preferences,
+    EditorAutosaveState& autosave) noexcept {
     autosave.Configure(preferences.autosaveEnabled, preferences.autosaveIntervalMinutes);
-    viewportState.ConfigurePreviewDefaults(
-        preferences.gridVisible,
-        preferences.gridSpacing,
-        preferences.snapEnabled,
-        preferences.snapStep,
-        preferences.rotationSnapDegrees);
-    assetBrowser.SetRecursive(preferences.assetBrowserRecursive);
-    assetBrowser.SetViewMode(preferences.assetViewMode);
-    assetBrowser.SetSortMode(preferences.assetSortMode);
-    if (assetBrowser.ShowFolders() != preferences.assetShowFolders) assetBrowser.ToggleShowFolders();
-    if (assetBrowser.ShowTemplates() != preferences.assetShowTemplates) assetBrowser.ToggleShowTemplates();
-    assetBrowser.SetThumbnailScale(preferences.assetThumbnailScale);
 }
 
 } // namespace
@@ -1240,6 +1196,7 @@ EditorSceneContext::EditorSceneContext()
     // scene's engine module host honours the project's enabled/disabled module set.
     : projectBootstrap_(EditorProjectBootstrap::BootstrapDefaultProject())
     , project_(projectBootstrap_.succeeded ? projectBootstrap_.descriptor : kb::project::ProjectDescriptor{})
+    , projectConfig_(projectBootstrap_.settings)
     , projectFile_(projectBootstrap_.succeeded ? projectBootstrap_.projectFile : EditorProjectPaths::ProjectFile())
     , scene_(std::make_unique<kb::scene::Scene>(project_))
     , inspectorMaterialPreviewScene_(std::make_unique<EditorMaterialPreviewScene>())
@@ -1249,6 +1206,12 @@ EditorSceneContext::EditorSceneContext()
     , materialGraphCookService_(std::make_unique<EditorMaterialGraphCookService>(EditorMaterialGraphCookConfig::Resolve(graphShaderCacheRoot_))) {
     if (projectBootstrap_.succeeded) {
         console_.Info("Project", projectBootstrap_.created ? "Created project descriptor." : "Loaded project descriptor.");
+        if (!projectBootstrap_.settingsError.empty()) {
+            console_.Error("Project", projectBootstrap_.settingsError);
+        }
+        if (projectBootstrap_.descriptorMirrorStale && SaveProjectConfiguration()) {
+            console_.Info("Project", "Applied project settings edited outside the editor.");
+        }
         if (!projectBootstrap_.particlePolicy.IsRunnable()) {
             console_.Warning("Project", projectBootstrap_.particlePolicy.diagnostic +
                 " Choose Add Rendering.21kbParticle or Cancel before running the project.");
@@ -1666,12 +1629,19 @@ const EditorProjectSettingsState& EditorSceneContext::ProjectSettings() const no
     return projectSettings_;
 }
 
-EditorSettingsState& EditorSceneContext::EditorSettings() noexcept {
-    return editorSettings_;
+const EditorConfiguration& EditorSceneContext::EditorConfig() const noexcept {
+    return editorConfig_;
 }
 
-const EditorSettingsState& EditorSceneContext::EditorSettings() const noexcept {
-    return editorSettings_;
+bool EditorSceneContext::SaveEditorConfig(EditorConfiguration configuration) {
+    std::string error;
+    const std::filesystem::path path = EditorConfigurationStore::FilePath(EditorProjectPaths::ProjectRoot());
+    if (!EditorConfigurationStore::Save(path, EditorProjectPaths::ProjectRoot(), configuration, error)) {
+        console_.Error("Editor Settings", error.empty() ? "Editor settings could not be saved." : error);
+        return false;
+    }
+    editorConfig_ = std::move(configuration);
+    return true;
 }
 
 EditorPluginsState& EditorSceneContext::Plugins() noexcept {
@@ -1772,51 +1742,34 @@ const EditorAutosaveState& EditorSceneContext::Autosave() const noexcept {
     return autosave_;
 }
 
-EditorWorkspacePreferences EditorSceneContext::CaptureEditorWorkspacePreferences() const noexcept {
-    const EditorViewportPreviewState& preview = viewportState_.PreviewDefaults();
+EditorSavingPreferences EditorSceneContext::CaptureEditorSavingPreferences() const noexcept {
     return {
         .autosaveEnabled = autosave_.Enabled(),
         .autosaveIntervalMinutes = static_cast<std::uint32_t>(std::clamp(
             std::lround(autosave_.ConfiguredIntervalSeconds() / 60.0), 1L, 120L)),
-        .gridVisible = preview.GridVisible(),
-        .gridSpacing = preview.GridSpacing(),
-        .snapEnabled = preview.SnapEnabled(),
-        .snapStep = preview.SnapStep(),
-        .rotationSnapDegrees = preview.RotationSnapDegrees(),
-        .assetBrowserRecursive = assetBrowser_.Recursive(),
-        .assetViewMode = assetBrowser_.ViewMode(),
-        .assetSortMode = assetBrowser_.SortMode(),
-        .assetShowFolders = assetBrowser_.ShowFolders(),
-        .assetShowTemplates = assetBrowser_.ShowTemplates(),
-        .assetThumbnailScale = assetBrowser_.ThumbnailScale(),
     };
 }
 
-bool EditorSceneContext::LoadEditorSettings(EditorRenderBackendSettings& renderer) {
-    std::string error;
-    EditorSettingsDocument settings;
-    if (!editorSettings_.Load(EditorProjectPaths::EditorSettingsFile(), settings, error)) {
-        console_.Warning("Editor Settings", error);
+bool EditorSceneContext::LoadEditorSettings() {
+    const std::filesystem::path root = EditorProjectPaths::ProjectRoot();
+    EditorConfigurationLoadResult loaded = EditorConfigurationStore::Load(
+        EditorConfigurationStore::FilePath(root), root);
+    if (!loaded.Succeeded()) {
+        console_.Warning("Editor Settings", loaded.error);
         return false;
     }
-    ApplyRendererSettings(settings.renderer, renderer);
-    ApplyWorkspacePreferences(settings.workspace, autosave_, viewportState_, assetBrowser_);
+    editorConfig_ = std::move(loaded.configuration);
+    ApplySavingPreferences(editorConfig_.saving, autosave_);
     return true;
 }
 
-bool EditorSceneContext::CommitEditorSettings(
-    const EditorWorkspacePreferences& preferences,
-    const EditorRenderBackendSettings& renderer) {
-    std::string error;
-    const EditorSettingsDocument settings{
-        .renderer = CaptureRendererSettings(renderer),
-        .workspace = preferences,
-    };
-    if (!editorSettings_.Commit(settings, error)) {
-        if (!error.empty()) console_.Error("Editor Settings", error);
+bool EditorSceneContext::CommitEditorSettings(const EditorSavingPreferences& preferences) {
+    EditorConfiguration configuration = editorConfig_;
+    configuration.saving = preferences;
+    if (!SaveEditorConfig(std::move(configuration))) {
         return false;
     }
-    ApplyWorkspacePreferences(preferences, autosave_, viewportState_, assetBrowser_);
+    ApplySavingPreferences(preferences, autosave_);
     console_.Info("Editor Settings", "Editor settings saved.");
     return true;
 }
@@ -2497,6 +2450,89 @@ const EditorHierarchyRow* EditorSceneContext::HierarchyRowAt(std::size_t rowInde
 
 int EditorSceneContext::HierarchyScrollOffset() const noexcept {
     return hierarchyScrollOffset_;
+}
+
+int EditorSceneContext::BuildGameScrollOffset() const noexcept {
+    return buildGameScrollOffset_;
+}
+
+bool EditorSceneContext::IsBuildGameSectionCollapsed(int section) const noexcept {
+    return section >= 0 && section < 32 &&
+        (buildGameCollapsedSections_ & (1U << static_cast<unsigned>(section))) != 0U;
+}
+
+void EditorSceneContext::ToggleBuildGameSection(int section) noexcept {
+    if (section < 0 || section >= 32) {
+        return;
+    }
+    buildGameCollapsedSections_ ^= (1U << static_cast<unsigned>(section));
+}
+
+int EditorSceneContext::BuildGameSelectedTarget() const noexcept {
+    return buildGameSelectedTarget_;
+}
+
+bool EditorSceneContext::SetBuildGameSelectedTarget(int target) noexcept {
+    if (target < 0 || buildGameSelectedTarget_ == target) {
+        return false;
+    }
+    buildGameSelectedTarget_ = target;
+    return true;
+}
+
+int EditorSceneContext::BuildGameSelectedProfile() const noexcept {
+    return buildGameSelectedProfile_;
+}
+
+bool EditorSceneContext::SetBuildGameSelectedProfile(int profile) noexcept {
+    if (profile < 0 || buildGameSelectedProfile_ == profile) {
+        return false;
+    }
+    buildGameSelectedProfile_ = profile;
+    return true;
+}
+
+int EditorSceneContext::BuildGameHoveredTarget() const noexcept {
+    return buildGameHoveredTarget_;
+}
+
+int EditorSceneContext::BuildGameHoveredProfile() const noexcept {
+    return buildGameHoveredProfile_;
+}
+
+bool EditorSceneContext::SetBuildGameSidebarHover(int target, int profile) noexcept {
+    if (buildGameHoveredTarget_ == target && buildGameHoveredProfile_ == profile) {
+        return false;
+    }
+    buildGameHoveredTarget_ = target;
+    buildGameHoveredProfile_ = profile;
+    return true;
+}
+
+int EditorSceneContext::BuildGameHoveredSection() const noexcept {
+    return buildGameHoveredSection_;
+}
+
+int EditorSceneContext::BuildGameHoveredRow() const noexcept {
+    return buildGameHoveredRow_;
+}
+
+bool EditorSceneContext::SetBuildGameHover(int section, int row) noexcept {
+    if (buildGameHoveredSection_ == section && buildGameHoveredRow_ == row) {
+        return false;
+    }
+    buildGameHoveredSection_ = section;
+    buildGameHoveredRow_ = row;
+    return true;
+}
+
+bool EditorSceneContext::SetBuildGameScrollOffset(int offset, int maxOffset) noexcept {
+    const int clamped = std::clamp(offset, 0, std::max(0, maxOffset));
+    if (buildGameScrollOffset_ == clamped) {
+        return false;
+    }
+    buildGameScrollOffset_ = clamped;
+    return true;
 }
 
 bool EditorSceneContext::IsHierarchyScrollbarDragging() const noexcept {
@@ -3406,6 +3442,17 @@ bool EditorSceneContext::DuplicateMaterialAsset(kb::assets::AssetId materialAsse
 
     console_.Info("Materials", "Material duplicated: " + duplicatePath->generic_string());
     return true;
+}
+
+// Duplicating an asset is copying it back into its own folder: the shared copy
+// command already resolves a free name there and selects the result.
+bool EditorSceneContext::DuplicateAsset(kb::assets::AssetId assetId) {
+    const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(assetId);
+    if (metadata == nullptr) {
+        console_.Error("Assets", "Duplicate requires an existing asset.");
+        return false;
+    }
+    return CopyAssetToFolder(assetId, metadata->virtualPath.parent_path());
 }
 
 bool EditorSceneContext::FindMaterialReferences(kb::assets::AssetId materialAssetId) {
@@ -8064,8 +8111,8 @@ bool EditorSceneContext::HasActiveMaterialAssetEdit() const noexcept {
 }
 
 bool EditorSceneContext::ToggleProjectInputEnabled() {
-    project_.inputEnabled = !project_.inputEnabled;
-    return SaveProjectDescriptor();
+    projectConfig_.inputEnabled = !projectConfig_.inputEnabled;
+    return SaveProjectConfiguration();
 }
 
 std::vector<std::string> EditorSceneContext::ProjectInputMappingContextOptions() const {
@@ -8081,19 +8128,19 @@ std::vector<std::string> EditorSceneContext::ProjectInputMappingContextOptions()
 }
 
 bool EditorSceneContext::SetProjectInputMappingContext(std::string virtualPath) {
-    if (project_.inputMappingContext == virtualPath) {
+    if (projectConfig_.inputMappingContext == virtualPath) {
         return false;
     }
-    project_.inputMappingContext = std::move(virtualPath);
-    return SaveProjectDescriptor();
+    projectConfig_.inputMappingContext = std::move(virtualPath);
+    return SaveProjectConfiguration();
 }
 
 bool EditorSceneContext::SetProjectSceneLightingPath(kb::project::ProjectSceneLightingPath path) {
-    if (project_.sceneLightingPath == path) {
+    if (projectConfig_.lightingPath == path) {
         return false;
     }
-    project_.sceneLightingPath = path;
-    const bool saved = SaveProjectDescriptor();
+    projectConfig_.lightingPath = path;
+    const bool saved = SaveProjectConfiguration();
     if (saved) {
         sceneGraphCookPending_ = true;
         RequestOpenMaterialSceneGraphCook();
@@ -8161,11 +8208,11 @@ std::vector<std::string> EditorSceneContext::ProjectPhysicsLayersAssetOptions() 
 }
 
 bool EditorSceneContext::SetProjectPhysicsLayersAsset(std::string virtualPath) {
-    if (project_.physicsLayersAsset == virtualPath) {
+    if (projectConfig_.physicsLayersAsset == virtualPath) {
         return false;
     }
-    project_.physicsLayersAsset = std::move(virtualPath);
-    return SaveProjectDescriptor();
+    projectConfig_.physicsLayersAsset = std::move(virtualPath);
+    return SaveProjectConfiguration();
 }
 
 bool EditorSceneContext::CloseProjectSettingsDropdowns() noexcept {
@@ -8232,29 +8279,66 @@ bool EditorSceneContext::ToggleProjectPlugin(std::size_t catalogIndex) {
 }
 
 void EditorSceneContext::ActivateProjectInput() {
-    if (!project_.inputEnabled || project_.inputMappingContext.empty()) {
+    if (!projectConfig_.inputEnabled || projectConfig_.inputMappingContext.empty()) {
         return;
     }
-    const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().FindByPath(project_.inputMappingContext);
+    const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().FindByPath(projectConfig_.inputMappingContext);
     if (metadata != nullptr && metadata->type == "InputMappingContext") {
         static_cast<void>(scene_->Input().AddMappingContext(metadata->id.value, 0));
     }
 }
 
 bool EditorSceneContext::ActivateProjectPhysicsLayers(kb::scene::Scene& scene) {
-    if (project_.physicsLayersAsset.empty()) {
+    if (projectConfig_.physicsLayersAsset.empty()) {
         return true;
     }
-    if (kb::scene::PhysicsBackend::LoadAndConfigureLayers(scene, project_.physicsLayersAsset)) {
+    if (kb::scene::PhysicsBackend::LoadAndConfigureLayers(scene, projectConfig_.physicsLayersAsset)) {
         return true;
     }
-    std::string error = "Project physics layers could not be loaded and applied: " + project_.physicsLayersAsset;
+    std::string error = "Project physics layers could not be loaded and applied: " + projectConfig_.physicsLayersAsset;
     const std::string assetError = scene.Assets().Manager().LastError();
     if (!assetError.empty()) {
         error += " (" + assetError + ")";
     }
     console_.Error("Physics", error);
     return false;
+}
+
+const kb::project::ProjectSettings& EditorSceneContext::ProjectConfiguration() const noexcept {
+    return projectConfig_;
+}
+
+// Stored as the project-relative virtual path, matching how the default map is
+// written, so the value stays meaningful if the project folder moves.
+void EditorSceneContext::RememberLastOpenMap() {
+    std::string virtualPath;
+    if (!currentScenePath_.empty()) {
+        const auto* metadata = scene_->Assets().Manager().Registry().FindByPath(
+            scene_->Assets().Manager().Mounts().ToVirtual(currentScenePath_).value_or(std::filesystem::path{}));
+        if (metadata != nullptr) {
+            virtualPath = metadata->virtualPath.generic_string();
+        } else if (const auto mapped = scene_->Assets().Manager().Mounts().ToVirtual(currentScenePath_)) {
+            virtualPath = mapped->generic_string();
+        }
+    }
+    if (projectConfig_.lastOpenMap == virtualPath) {
+        return;
+    }
+    projectConfig_.lastOpenMap = std::move(virtualPath);
+    static_cast<void>(SaveProjectConfiguration());
+}
+
+// The one writer of the project's settings, and now the only place they are
+// stored: the descriptor no longer keeps a copy to drift out of step.
+bool EditorSceneContext::SaveProjectConfiguration() {
+    std::string error;
+    const std::filesystem::path settingsFile =
+        kb::project::ProjectSettingsStore::FilePath(EditorProjectPaths::ProjectRoot());
+    if (!kb::project::ProjectSettingsStore::Save(settingsFile, projectConfig_, error)) {
+        console_.Error("Project", error.empty() ? "Project settings could not be saved." : error);
+        return false;
+    }
+    return SaveProjectDescriptor();
 }
 
 bool EditorSceneContext::SaveProjectDescriptor() {
@@ -8330,29 +8414,44 @@ bool EditorSceneContext::InstantiatePrefabAssetAt(
     const std::filesystem::path& path,
     const std::filesystem::path& virtualPath,
     kb::scene::Vec3 position) {
+    return CreatePrefabAssetEntity(path, virtualPath, position, true).IsValid();
+}
+
+kb::scene::SceneEntity EditorSceneContext::CreatePrefabAssetEntity(
+    const std::filesystem::path& path,
+    const std::filesystem::path& virtualPath,
+    kb::scene::Vec3 position,
+    bool logCreation) {
     if (pendingSceneTransactionLabel_.has_value()) {
         console_.Warning("Edit", "Scene command ignored while another scene transaction is active.");
-        return false;
+        return {};
     }
 
     const std::optional<kb::scene::SceneEntity> root = EditorScenePrefabActions::InstantiateAsset(*scene_, path, virtualPath, {});
     if (!root.has_value() || !scene_->Entities().IsAlive(*root)) {
         console_.Error("Prefabs", "Prefab instantiation failed: " + (virtualPath.empty() ? path.generic_string() : virtualPath.generic_string()));
-        return false;
+        return {};
     }
 
     kb::scene::TransformComponent transform = scene_->Transforms().Get(*root);
     transform.localPosition = position;
     scene_->Transforms().Set(*root, transform);
+    scene_->Runtime().SynchronizeTransforms();
+    if (!logCreation) {
+        SelectEntity(*root);
+        MarkSceneRenderDirty();
+        return *root;
+    }
+
     const std::array<kb::scene::SceneEntity, 1U> created{ *root };
     if (!AdoptCreatedHierarchyEntities("Instantiate Prefab", created)) {
         scene_->Entities().Destroy(*root);
         console_.Error("Prefabs", "Prefab instantiation failed: " + (virtualPath.empty() ? path.generic_string() : virtualPath.generic_string()));
-        return false;
+        return {};
     }
 
     console_.Info("Prefabs", "Prefab instantiated: " + (virtualPath.empty() ? path.generic_string() : virtualPath.generic_string()));
-    return true;
+    return *root;
 }
 
 kb::scene::SceneEntity EditorSceneContext::CreateMeshAssetEntity(kb::assets::AssetId assetId) {
@@ -8360,6 +8459,13 @@ kb::scene::SceneEntity EditorSceneContext::CreateMeshAssetEntity(kb::assets::Ass
 }
 
 kb::scene::SceneEntity EditorSceneContext::CreateParticleEffectEntity(kb::assets::AssetId assetId) {
+    return CreateParticleEffectEntity(assetId, {}, true);
+}
+
+kb::scene::SceneEntity EditorSceneContext::CreateParticleEffectEntity(
+    kb::assets::AssetId assetId,
+    kb::scene::Vec3 position,
+    bool logCreation) {
     if (!assetId.IsValid()) {
         console_.Warning("Particles", "Particle Effect entity creation ignored for invalid asset.");
         return {};
@@ -8375,12 +8481,15 @@ kb::scene::SceneEntity EditorSceneContext::CreateParticleEffectEntity(kb::assets
         return {};
     }
 
-    kb::scene::SceneEntity entity{};
-    const bool created = ExecuteSceneCommand("Create Particle Effect Entity", [this, &entity, assetId, metadata]() {
-        entity = scene_->Entities().CreateEntity(kb::scene::SceneObjectDesc{.name = metadata->name});
+    const auto createEntity = [this, assetId, metadata, position]() {
+        const kb::scene::SceneEntity entity = scene_->Entities().CreateEntity(kb::scene::SceneObjectDesc{.name = metadata->name});
         if (!entity.IsValid()) {
-            return false;
+            return kb::scene::SceneEntity{};
         }
+        kb::scene::TransformComponent authoredTransform = scene_->Transforms().Get(entity);
+        authoredTransform.localPosition = position;
+        scene_->Transforms().Set(entity, authoredTransform);
+        scene_->Runtime().SynchronizeTransforms();
         scene_->Components().ParticleEffects().Set(entity, kb::scene::ParticleEffectComponent{
             .effectAssetId = assetId.value,
         });
@@ -8398,6 +8507,26 @@ kb::scene::SceneEntity EditorSceneContext::CreateParticleEffectEntity(kb::assets
                 }
                 static_cast<void>(kb::particles::ParticlePlayback::Play(*scene_, created.instanceId));
             }
+        }
+        return entity;
+    };
+
+    kb::scene::SceneEntity entity{};
+    if (!logCreation) {
+        entity = createEntity();
+        if (!entity.IsValid()) {
+            console_.Error("Particles", "Particle Effect entity could not be created: " + metadata->name);
+            return {};
+        }
+        SelectEntity(entity);
+        MarkSceneRenderDirty();
+        return entity;
+    }
+
+    const bool created = ExecuteSceneCommand("Create Particle Effect Entity", [this, &entity, &createEntity]() {
+        entity = createEntity();
+        if (!entity.IsValid()) {
+            return false;
         }
         SelectEntity(entity);
         return true;
@@ -8749,6 +8878,16 @@ std::string EditorSceneContext::EntityScriptName(kb::scene::SceneEntity entity) 
 bool EditorSceneContext::EntityScriptEnabled(kb::scene::SceneEntity entity) const {
     const kb::scene::BehaviourComponent* behaviour = scene_->Components().Behaviours().TryGet(entity);
     return behaviour != nullptr && behaviour->enabled;
+}
+
+std::size_t EditorSceneContext::EntityScriptExposedVariableCount(kb::scene::SceneEntity entity) const {
+    const kb::scene::BehaviourComponent* behaviour = scene_->Components().Behaviours().TryGet(entity);
+    if (behaviour == nullptr) {
+        return 0U;
+    }
+    const kb::assets::AssetHandle<kb::script::LuaScriptAsset> asset =
+        scene_->Assets().Manager().Load<kb::script::LuaScriptAsset>(kb::assets::AssetId{ behaviour->behaviourAssetId });
+    return asset.IsLoaded() ? asset.Get()->exposedVariables.size() : 0U;
 }
 
 std::vector<EditorSceneContext::EntityScriptVariable> EditorSceneContext::EntityScriptExposedVariables(kb::scene::SceneEntity entity) const {
@@ -12190,13 +12329,13 @@ void EditorSceneContext::RequestOpenMaterialSceneGraphCook() {
             << " graphNodes=" << material.graph.nodes.size()
             << " graphLinks=" << material.graph.links.size()
             << " outputNormalLinked=" << (MaterialGraphDebugOutputHasLink(material.graph, "normal") ? "true" : "false")
-            << " sceneLightingPath=" << static_cast<int>(project_.sceneLightingPath);
+            << " sceneLightingPath=" << static_cast<int>(projectConfig_.lightingPath);
         LogMaterialGraphDebug(console_, row.str());
     }
     static_cast<void>(materialGraphCookService_->RequestCook(
         openAsset,
         material,
-        SceneMaterialGraphBuildContext(openAsset, metadata, project_.sceneLightingPath)));
+        SceneMaterialGraphBuildContext(openAsset, metadata, projectConfig_.lightingPath)));
 }
 
 void EditorSceneContext::CookSceneGraphMaterials() {
@@ -12245,7 +12384,7 @@ void EditorSceneContext::CookSceneGraphMaterials() {
         static_cast<void>(materialGraphCookService_->RequestCook(
             id,
             *material,
-            SceneMaterialGraphBuildContext(id, metadata, project_.sceneLightingPath)));
+            SceneMaterialGraphBuildContext(id, metadata, projectConfig_.lightingPath)));
     }
 }
 
@@ -12269,9 +12408,9 @@ std::filesystem::path EditorSceneContext::ResolveProjectVirtualPath(const std::f
 }
 
 std::filesystem::path EditorSceneContext::ResolveDefaultScenePath() const {
-    const std::filesystem::path defaultScene = project_.defaultScene.empty()
+    const std::filesystem::path defaultScene = projectConfig_.defaultMap.empty()
         ? std::filesystem::path{ "/Game/Scenes/Main.21kbscene" }
-        : std::filesystem::path{ project_.defaultScene };
+        : std::filesystem::path{ projectConfig_.defaultMap };
     return ResolveProjectVirtualPath(defaultScene);
 }
 

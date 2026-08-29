@@ -9,8 +9,8 @@
 namespace kb::editor {
 
 // LIB-062: allocation-free formatting of the scene-viewport toolbar's
-// per-frame numeric HUD labels (FPS counter, draw-call/mesh chips, ECS
-// frame-time chip), built on kb::library::TextFormatBuffer over a
+// per-frame numeric HUD label (the FPS counter), built on
+// kb::library::TextFormatBuffer over a
 // caller-provided stack buffer. This is deliberately platform-independent
 // (no GDI/HDC) so the formatting — the part LIB-062 is about — is directly
 // unit-testable; the Win32 GDI renderer (SceneViewportToolbarInfoRenderer)
@@ -23,39 +23,18 @@ namespace kb::editor {
 // returned view's size explicitly (the buffer is not null-terminated past
 // the logical length).
 struct SceneViewportToolbarLabelFormat {
-    [[nodiscard]] static std::string_view Fps(std::span<char> out, int fps) {
+    // `live` is whether the viewport has drawn a frame recently enough for `fps` to be a
+    // current reading. The editor draws on demand, so it frequently has not, and a bare
+    // number left standing then claims a rate nothing is achieving. "IDLE 452" keeps the
+    // measurement - the last frame really did cost 2.2 ms - while saying plainly that no
+    // frames are being produced right now.
+    [[nodiscard]] static std::string_view Fps(std::span<char> out, int fps, bool live) {
         kb::library::TextFormatBuffer buffer{ out };
         if (fps > 0) {
-            static_cast<void>(buffer.Append("FPS "));
+            static_cast<void>(buffer.Append(live ? "FPS " : "IDLE "));
             static_cast<void>(buffer.AppendInt(fps));
         } else {
             static_cast<void>(buffer.Append("FPS --"));
-        }
-        return buffer.View();
-    }
-
-    [[nodiscard]] static std::string_view DrawCalls(std::span<char> out, std::uint32_t count) {
-        kb::library::TextFormatBuffer buffer{ out };
-        static_cast<void>(buffer.Append("DC "));
-        static_cast<void>(buffer.AppendUInt(count));
-        return buffer.View();
-    }
-
-    [[nodiscard]] static std::string_view Meshes(std::span<char> out, std::uint32_t count) {
-        kb::library::TextFormatBuffer buffer{ out };
-        static_cast<void>(buffer.Append("M "));
-        static_cast<void>(buffer.AppendUInt(count));
-        return buffer.View();
-    }
-
-    [[nodiscard]] static std::string_view EcsMilliseconds(std::span<char> out, bool valid, double milliseconds) {
-        kb::library::TextFormatBuffer buffer{ out };
-        if (valid) {
-            static_cast<void>(buffer.Append("ECS "));
-            static_cast<void>(buffer.AppendFloat(milliseconds, 2));
-            static_cast<void>(buffer.Append(" ms"));
-        } else {
-            static_cast<void>(buffer.Append("ECS --"));
         }
         return buffer.View();
     }

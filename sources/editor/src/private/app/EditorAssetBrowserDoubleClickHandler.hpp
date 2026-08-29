@@ -41,6 +41,11 @@ public:
             : EditorAssetBrowserDoubleClickResult::None;
     }
 
+    // The single open route shared by double-click and the Open command.
+    [[nodiscard]] static EditorAssetBrowserDoubleClickResult OpenAsset(
+        HWND owner,
+        const kb::assets::AssetMetadata& metadata,
+        EditorSceneContext& sceneContext);
     [[nodiscard]] static EditorAssetBrowserDoubleClickResult HandleDoubleClick(HWND owner, const RECT& content, int x, int y, EditorSceneContext& sceneContext);
 };
 

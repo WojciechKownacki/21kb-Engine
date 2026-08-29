@@ -15,6 +15,7 @@ public:
     [[nodiscard]] static HeroIconGlyph Stop() noexcept;
     [[nodiscard]] static HeroIconGlyph TransportStop() noexcept;
     [[nodiscard]] static HeroIconGlyph XMark() noexcept;
+    [[nodiscard]] static HeroIconGlyph Check() noexcept;
     [[nodiscard]] static HeroIconGlyph Cube() noexcept;
     [[nodiscard]] static HeroIconGlyph Folder() noexcept;
     [[nodiscard]] static HeroIconGlyph Eye() noexcept;
@@ -35,6 +36,18 @@ public:
     [[nodiscard]] static HeroIconGlyph RotationSnap() noexcept;
     [[nodiscard]] static HeroIconGlyph Camera() noexcept;
     [[nodiscard]] static HeroIconGlyph Skeleton() noexcept;
+    [[nodiscard]] static HeroIconGlyph LockClosed() noexcept;
+    [[nodiscard]] static HeroIconGlyph Server() noexcept;
+    [[nodiscard]] static HeroIconGlyph WrenchScrewdriver() noexcept;
+    [[nodiscard]] static HeroIconGlyph CodeBracket() noexcept;
+    [[nodiscard]] static HeroIconGlyph RocketLaunch() noexcept;
+    [[nodiscard]] static HeroIconGlyph Save() noexcept;
+    [[nodiscard]] static HeroIconGlyph PlatformWindows() noexcept;
+    [[nodiscard]] static HeroIconGlyph PlatformAndroid() noexcept;
+    [[nodiscard]] static HeroIconGlyph PlatformLinux() noexcept;
+    [[nodiscard]] static HeroIconGlyph PlatformServer() noexcept;
+    [[nodiscard]] static HeroIconGlyph DisclosureCollapsed() noexcept;
+    [[nodiscard]] static HeroIconGlyph DisclosureExpanded() noexcept;
 };
 
 } // namespace kb::editor

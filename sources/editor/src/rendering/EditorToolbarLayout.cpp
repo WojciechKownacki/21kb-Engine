@@ -19,19 +19,32 @@ constexpr int kDropdownTopGap = 4;
 constexpr int kDropdownWidth = 230;
 constexpr int kDropdownRowHeight = 30;
 
-constexpr std::array<EditorMenuDescriptor, 4> kMenus{{
+constexpr std::array<EditorMenuDescriptor, 5> kMenus{{
     { EditorMenuCommand::File, "File", 54 },
     { EditorMenuCommand::Edit, "Edit", 54 },
+    { EditorMenuCommand::Layout, "Layout", 72 },
     { EditorMenuCommand::Options, "Options", 82 },
     { EditorMenuCommand::Help, "Help", 58 },
 }};
 
-constexpr std::array<std::array<std::string_view, 4>, 4> kDropdownRows{{
-    { "New Scene", "Open Scene...", "Save", "Save As..." },
-    { "Undo", "Redo", "Duplicate", "Plugins" },
-    { "Renderer", "Layout", "Project Settings", "Editor Settings" },
-    { "Documentation", "Report Issue", "Release Notes", "About" },
+// The Layout menu is missing here on purpose: its rows are the layouts a project
+// holds, so they are built when the menu opens rather than fixed by the build.
+constexpr std::array<std::array<std::string_view, 5>, 5> kDropdownRows{{
+    { "New Scene", "Open Scene...", "Save", "Save As...", "Build Game" },
+    { "Undo", "Redo", "Duplicate", "Plugins", "" },
+    { "", "", "", "", "" },
+    { "Renderer", "Project Settings", "Editor Settings", "", "" },
+    { "Documentation", "Report Issue", "Release Notes", "About", "" },
 }};
+
+// How many of those rows each menu actually shows. Layout counts zero here: its
+// length comes from the project, not from the build.
+constexpr std::array<int, 5> kDropdownRowCounts{ 5, 4, 0, 3, 4 };
+
+// The Layout menu is the only one whose length the project decides, so the row
+// geometry has to have room for the longest one the menu model can produce.
+static_assert(EditorMenuRects::MaximumRows >= EditorLayoutMenuModel::MaximumRows,
+    "the menu geometry must fit every row the Layout menu can list");
 
 [[nodiscard]] bool PointInRect(const RECT& rect, int x, int y) noexcept {
     return x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom;
@@ -61,11 +74,12 @@ constexpr std::array<std::array<std::string_view, 4>, 4> kDropdownRows{{
 
 } // namespace
 
-const std::array<EditorMenuDescriptor, 4>& EditorToolbarLayout::MenuDescriptors() noexcept {
+const std::array<EditorMenuDescriptor, 5>& EditorToolbarLayout::MenuDescriptors() noexcept {
     return kMenus;
 }
 
-EditorMenuRects EditorToolbarLayout::ResolveMenu(const RECT& rect, EditorMenuCommand openMenu) noexcept {
+EditorMenuRects EditorToolbarLayout::ResolveMenu(
+    const RECT& rect, EditorMenuCommand openMenu, int rowCount) noexcept {
     EditorMenuRects menu{};
     menu.menuBar = rect;
     int left = rect.left + kMenuLeftInset;
@@ -83,6 +97,9 @@ EditorMenuRects EditorToolbarLayout::ResolveMenu(const RECT& rect, EditorMenuCom
         case EditorMenuCommand::Edit:
             menu.edit = item;
             break;
+        case EditorMenuCommand::Layout:
+            menu.layout = item;
+            break;
         case EditorMenuCommand::Options:
             menu.options = item;
             break;
@@ -98,10 +115,12 @@ EditorMenuRects EditorToolbarLayout::ResolveMenu(const RECT& rect, EditorMenuCom
 
     const RECT anchor = MenuRectByCommand(menu, openMenu);
     if (openMenu != EditorMenuCommand::None) {
+        menu.dropdownRowCount = std::clamp(
+            rowCount, 0, static_cast<int>(EditorMenuRects::MaximumRows));
         const int dropX = std::min(std::max(rect.left + 4, anchor.left), std::max(rect.left + 4, rect.right - kDropdownWidth - 4));
         const int dropY = rect.bottom + kDropdownTopGap;
-        menu.dropdown = RECT{ dropX, dropY, dropX + kDropdownWidth, dropY + (kDropdownRowHeight * 4) };
-        for (int i = 0; i < 4; ++i) {
+        menu.dropdown = RECT{ dropX, dropY, dropX + kDropdownWidth, dropY + (kDropdownRowHeight * menu.dropdownRowCount) };
+        for (int i = 0; i < menu.dropdownRowCount; ++i) {
             menu.dropdownRows[static_cast<std::size_t>(i)] = RECT{
                 menu.dropdown.left,
                 menu.dropdown.top + (i * kDropdownRowHeight),
@@ -136,6 +155,9 @@ EditorMenuCommand EditorToolbarLayout::HitTestMenu(const EditorMenuRects& rects,
     if (PointInRect(rects.edit, x, y)) {
         return EditorMenuCommand::Edit;
     }
+    if (PointInRect(rects.layout, x, y)) {
+        return EditorMenuCommand::Layout;
+    }
     if (PointInRect(rects.options, x, y)) {
         return EditorMenuCommand::Options;
     }
@@ -146,7 +168,8 @@ EditorMenuCommand EditorToolbarLayout::HitTestMenu(const EditorMenuRects& rects,
 }
 
 std::optional<int> EditorToolbarLayout::HitTestMenuRow(const EditorMenuRects& rects, int x, int y) noexcept {
-    for (std::size_t i = 0; i < rects.dropdownRows.size(); ++i) {
+    const auto count = static_cast<std::size_t>(std::max(0, rects.dropdownRowCount));
+    for (std::size_t i = 0; i < std::min(count, rects.dropdownRows.size()); ++i) {
         if (PointInRect(rects.dropdownRows[i], x, y)) {
             return static_cast<int>(i);
         }
@@ -177,10 +200,12 @@ int EditorToolbarLayout::MenuIndex(EditorMenuCommand menu) noexcept {
         return 0;
     case EditorMenuCommand::Edit:
         return 1;
-    case EditorMenuCommand::Options:
+    case EditorMenuCommand::Layout:
         return 2;
-    case EditorMenuCommand::Help:
+    case EditorMenuCommand::Options:
         return 3;
+    case EditorMenuCommand::Help:
+        return 4;
     case EditorMenuCommand::None:
     default:
         return -1;
@@ -193,6 +218,8 @@ RECT EditorToolbarLayout::MenuRectByCommand(const EditorMenuRects& rects, Editor
         return rects.file;
     case EditorMenuCommand::Edit:
         return rects.edit;
+    case EditorMenuCommand::Layout:
+        return rects.layout;
     case EditorMenuCommand::Options:
         return rects.options;
     case EditorMenuCommand::Help:
@@ -203,9 +230,14 @@ RECT EditorToolbarLayout::MenuRectByCommand(const EditorMenuRects& rects, Editor
     }
 }
 
+int EditorToolbarLayout::FixedRowCount(EditorMenuCommand menu) noexcept {
+    const int index = MenuIndex(menu);
+    return index < 0 ? 0 : kDropdownRowCounts[static_cast<std::size_t>(index)];
+}
+
 std::string_view EditorToolbarLayout::DropdownLabel(EditorMenuCommand menu, int row) noexcept {
     const int index = MenuIndex(menu);
-    if (index < 0 || row < 0 || row >= 4) {
+    if (index < 0 || row < 0 || row >= FixedRowCount(menu)) {
         return {};
     }
     return kDropdownRows[static_cast<std::size_t>(index)][static_cast<std::size_t>(row)];

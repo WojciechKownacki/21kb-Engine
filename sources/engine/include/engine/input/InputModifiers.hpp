@@ -20,7 +20,7 @@ struct ModifierRuntimeState {
 [[nodiscard]] InputValue ApplyModifier(InputValue value, const InputModifierDesc& modifier, float dt,
                                        ModifierRuntimeState& state);
 
-// Applies an ordered modifier stack (left to right, like Unreal).
+// Applies an ordered modifier stack (left to right, in declaration order).
 [[nodiscard]] InputValue ApplyModifierStack(InputValue value, std::span<const InputModifierDesc> modifiers,
                                             float dt, ModifierRuntimeState& state);
 

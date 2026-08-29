@@ -29,6 +29,7 @@ namespace {
 struct CachedHeroIconPath {
     std::unique_ptr<Gdiplus::GraphicsPath> path{};
     bool filled = false;
+    COLORREF color = CLR_INVALID;
 };
 
 struct CachedHeroIconGlyph {
@@ -125,7 +126,7 @@ struct CachedRasterIcon {
 };
 
 [[nodiscard]] CachedHeroIconGlyph& CachedGlyph(HeroIconKind icon) {
-    static std::array<CachedHeroIconGlyph, static_cast<std::size_t>(HeroIconKind::Skeleton) + 1U> cache{};
+    static std::array<CachedHeroIconGlyph, static_cast<std::size_t>(HeroIconKind::Count)> cache{};
     CachedHeroIconGlyph& cached = cache[static_cast<std::size_t>(icon)];
     if (cached.initialized) {
         return cached;
@@ -136,9 +137,11 @@ struct CachedRasterIcon {
     cached.strokeWidth = glyph.strokeWidth;
     cached.paths.reserve(glyph.paths.size());
     for (const HeroIconPath& pathData : glyph.paths) {
-        auto path = std::make_unique<Gdiplus::GraphicsPath>(pathData.filled ? Gdiplus::FillModeAlternate : Gdiplus::FillModeWinding);
+        auto path = std::make_unique<Gdiplus::GraphicsPath>(
+            pathData.filled && pathData.evenOdd ? Gdiplus::FillModeAlternate : Gdiplus::FillModeWinding);
         SvgGraphicsPathBuilder(pathData.data).Build(*path);
-        cached.paths.push_back(CachedHeroIconPath{ .path = std::move(path), .filled = pathData.filled });
+        cached.paths.push_back(CachedHeroIconPath{
+            .path = std::move(path), .filled = pathData.filled, .color = pathData.color });
     }
     cached.initialized = true;
     return cached;
@@ -166,7 +169,10 @@ void PaintVectorIcon(Gdiplus::Graphics& graphics, const RECT& rect, CachedHeroIc
 
     for (CachedHeroIconPath& pathData : glyph.paths) {
         HeroIconPath paintInfo{ .filled = pathData.filled };
-        HeroIconPathPainter::Paint(graphics, *pathData.path, paintInfo, iconColor, effectiveStrokeWidth);
+        const Gdiplus::Color pathColor = pathData.color == CLR_INVALID
+            ? iconColor
+            : ToGdiplusColor(pathData.color);
+        HeroIconPathPainter::Paint(graphics, *pathData.path, paintInfo, pathColor, effectiveStrokeWidth);
     }
 
     graphics.ResetTransform();

@@ -60,8 +60,8 @@ public:
     [[nodiscard]] std::size_t DrainDeferredDestroys() noexcept;
 
     // Per-instance overrides of a behaviour's exposed ("@expose") script
-    // variables, authored in the Inspector. Delta-over-default (the Unity/
-    // Unreal/Godot/O3DE model): only variables whose value differs from the
+    // variables, authored in the Inspector. Delta-over-default (the standard
+    // scene-authoring model): only variables whose value differs from the
     // script's declared default are stored; setting one back to its default
     // drops the override. Read returns the stored deltas (empty span if none).
     [[nodiscard]] std::span<const BehaviourVariableOverride> BehaviourVariableOverrides(SceneEntity entity) const noexcept;

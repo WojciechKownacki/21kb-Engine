@@ -9,6 +9,7 @@
 #include "engine/platform/win32/Win32InputCollector.hpp"
 #include "engine/platform/win32/Win32XInputHapticsBackend.hpp"
 #include "engine/project/ProjectDescriptor.hpp"
+#include "engine/project/ProjectSettings.hpp"
 #include "engine/project/ProjectManager.hpp"
 #include "engine/project/ParticleProjectPolicy.hpp"
 #include "engine/scene/AudioListenerComponent.hpp"
@@ -753,11 +754,25 @@ struct StandaloneProjectRuntimeConfig {
         }
     }
 
+    // The game reads the same settings file the editor writes, so shipping a change
+    // means editing one file rather than rebuilding the project descriptor.
+    const kb::project::ProjectSettingsLoadResult settings =
+        kb::project::ProjectSettingsStore::Load(
+            kb::project::ProjectSettingsStore::FilePath(config.projectRoot));
+    if (!settings.Succeeded()) {
+        std::fprintf(stderr, "Project settings could not be read: %s\n", settings.error.c_str());
+        return false;
+    }
+    // A package built before the settings file existed still carries its settings in
+    // the descriptor, so it keeps running rather than starting with no scene.
+    const kb::project::ProjectSettings resolved = settings.found
+        ? settings.settings
+        : kb::project::ProjectSettingsStore::FromLegacy(loaded.legacySettings, projectFile);
     config.sceneReference =
-        options.scenePath.empty() ? loaded.descriptor.defaultScene : options.scenePath;
-    config.physicsLayersAsset = loaded.descriptor.physicsLayersAsset;
-    config.inputMappingContext = loaded.descriptor.inputMappingContext;
-    config.inputEnabled = loaded.descriptor.inputEnabled;
+        options.scenePath.empty() ? resolved.defaultMap : options.scenePath;
+    config.physicsLayersAsset = resolved.physicsLayersAsset;
+    config.inputMappingContext = resolved.inputMappingContext;
+    config.inputEnabled = resolved.inputEnabled;
     config.descriptor = std::move(loaded.descriptor);
     return true;
 }
@@ -1079,8 +1094,6 @@ struct StandaloneProjectRuntimeConfig {
     }
 
     kb::project::ProjectDescriptor descriptor{};
-    descriptor.name = "CameraRuntimeSelfTest";
-    descriptor.defaultScene = "/Game/Scenes/CameraRuntime.21kbscene";
     descriptor.plugins.push_back(kb::project::ProjectPluginReference{
         .name = "Rendering.BasicLighting",
         .binaryPath = (
@@ -1106,6 +1119,25 @@ struct StandaloneProjectRuntimeConfig {
         std::fprintf(stderr,
             "kb_standalone_player: camera runtime project descriptor write failed\n");
         return false;
+    }
+
+    // A packaged game reads its settings file, so the self test ships one rather
+    // than leaning on the descriptor fallback kept for older packages.
+    {
+        kb::project::ProjectSettings selfTestSettings;
+        selfTestSettings.name = "CameraRuntimeSelfTest";
+        selfTestSettings.gameName = selfTestSettings.name;
+        selfTestSettings.defaultMap = "/Game/Scenes/CameraRuntime.21kbscene";
+        std::string settingsError;
+        if (!kb::project::ProjectSettingsStore::Save(
+                kb::project::ProjectSettingsStore::FilePath(packageRoot),
+                selfTestSettings,
+                settingsError)) {
+            std::fprintf(stderr,
+                "kb_standalone_player: camera runtime project settings write failed: %s\n",
+                settingsError.c_str());
+            return false;
+        }
     }
 
     kb::scene::Scene authoringScene;
@@ -1476,11 +1508,22 @@ struct StandaloneProjectRuntimeConfig {
         static_cast<const kb::scene::Scene&>(scene)
             .Particles()
             .LiveInstanceIds();
+    const kb::assets::AssetMetadata* runtimeParticleMetadata =
+        scene.Assets().Manager().Registry().FindByPath("/Game/runtime.kbvfx");
+    const bool scriptedParticleInstanceValid =
+        runtimeParticleMetadata != nullptr &&
+        std::any_of(
+            particleInstances.begin(), particleInstances.end(),
+            [&](std::uint64_t instanceId) {
+                const kb::particles::ParticleRuntimeQueryResult query =
+                    kb::particles::ParticlePlayback::Query(scene, instanceId);
+                return query.Succeeded() && query.state &&
+                    query.assetId == runtimeParticleMetadata->id.value &&
+                    query.liveParticleCount == 2U;
+            });
     const bool particleRuntimeValid =
-        !kb::particles::ParticlePlayback::HasBackend(scene) &&
-        scene.Particles().CreateDetailed(1U, {}).status ==
-            kb::particles::ParticleRuntimeStatus::BackendUnavailable &&
-        particleInstances.empty();
+        kb::particles::ParticlePlayback::HasBackend(scene) &&
+        scriptedParticleInstanceValid;
     const bool scriptHasRenderFrame = scriptHost != nullptr &&
         scriptHost->SharedState()
             .Get("runtimeHasRenderFrame")

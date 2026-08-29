@@ -35,6 +35,13 @@ std::vector<std::string> g_recentCategories;
     return std::filesystem::current_path() / "Saved" / "Logs" / "editor-crash-breadcrumbs.log";
 }
 
+// Where the previous run's trail is kept. A crash is usually reported after the editor
+// has been started again, and truncating on start threw away the one thing worth reading:
+// the last step before the process died.
+[[nodiscard]] std::filesystem::path PreviousBreadcrumbPath() {
+    return std::filesystem::current_path() / "Saved" / "Logs" / "editor-crash-breadcrumbs.prev.log";
+}
+
 [[nodiscard]] std::filesystem::path CrashReportPath() {
     return std::filesystem::current_path() / "Saved" / "Crashes" / "editor-crash-report.json";
 }
@@ -163,6 +170,12 @@ void EditorCrashBreadcrumbs::Reset() {
     g_recentCategories.clear();
     std::error_code error;
     std::filesystem::create_directories(BreadcrumbPath().parent_path(), error);
+    // Keep the run that just ended before starting a new trail over it. Only one is kept:
+    // the interesting session is the one that died, and it is the one that just finished.
+    if (std::filesystem::exists(BreadcrumbPath(), error)) {
+        std::filesystem::remove(PreviousBreadcrumbPath(), error);
+        std::filesystem::rename(BreadcrumbPath(), PreviousBreadcrumbPath(), error);
+    }
     std::ofstream output{BreadcrumbPath(), std::ios::out | std::ios::trunc};
     if (!output.is_open()) {
         return;

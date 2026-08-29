@@ -40,7 +40,6 @@ struct EditorMetrics {
     int tabMinWidth = 92;
     int tabWidth = 156;
     int splitterSize = 6;
-    int panelPadding = 18;
 };
 
 [[nodiscard]] constexpr EditorColor Color(float r, float g, float b) {
@@ -53,23 +52,23 @@ struct EditorMetrics {
 
 [[nodiscard]] constexpr EditorTheme MakeEditorDarkTheme() {
     return EditorTheme{
-        .background = Color(0.059F, 0.063F, 0.071F),
-        .chrome = Color(0.078F, 0.084F, 0.094F),
-        .panel = Color(0.122F, 0.127F, 0.137F),
-        .strip = Color(0.086F, 0.090F, 0.102F),
-        .tabInactive = Color(0.098F, 0.104F, 0.116F),
-        .tabActive = Color(0.180F, 0.188F, 0.204F),
-        .menuBar = Color(0.067F, 0.071F, 0.080F),
-        .toolbar = Color(0.082F, 0.086F, 0.098F),
-        .toolbarButton = Color(0.118F, 0.125F, 0.141F),
-        .splitter = Color(0.043F, 0.047F, 0.055F),
-        .gridLine = Color(0.164F, 0.176F, 0.196F),
-        .borderChrome = Color(0.204F, 0.216F, 0.235F),
-        .borderPanel = Color(0.255F, 0.267F, 0.286F),
-        .textPrimary = Color(0.910F, 0.925F, 0.945F),
-        .textSecondary = Color(0.670F, 0.700F, 0.745F),
-        .textDisabled = Color(0.455F, 0.480F, 0.525F),
-        .accent = Color(0.900F, 0.680F, 0.180F),
+        .background = EditorColor{ 9, 12, 18 },
+        .chrome = EditorColor{ 13, 17, 25 },
+        .panel = EditorColor{ 18, 23, 32 },
+        .strip = EditorColor{ 22, 27, 37 },
+        .tabInactive = EditorColor{ 18, 23, 32 },
+        .tabActive = EditorColor{ 31, 37, 50 },
+        .menuBar = EditorColor{ 10, 13, 20 },
+        .toolbar = EditorColor{ 16, 21, 30 },
+        .toolbarButton = EditorColor{ 29, 35, 47 },
+        .splitter = EditorColor{ 5, 8, 13 },
+        .gridLine = EditorColor{ 37, 44, 58 },
+        .borderChrome = EditorColor{ 36, 43, 56 },
+        .borderPanel = EditorColor{ 49, 58, 75 },
+        .textPrimary = EditorColor{ 235, 238, 247 },
+        .textSecondary = EditorColor{ 184, 192, 211 },
+        .textDisabled = EditorColor{ 105, 115, 137 },
+        .accent = EditorColor{ 117, 92, 255 },
     };
 }
 

@@ -3115,12 +3115,12 @@ ReadScriptValue(
     if (*operation == "set_project_input_enabled") {
         const auto enabled = BoolMember(step, "enabled", error);
         if (!enabled) return { false, error };
-        if (state.context.Project().inputEnabled != *enabled &&
+        if (state.context.ProjectConfiguration().inputEnabled != *enabled &&
             !state.context.ToggleProjectInputEnabled()) {
             return { false, "project input toggle failed" };
         }
         return {
-            state.context.Project().inputEnabled == *enabled,
+            state.context.ProjectConfiguration().inputEnabled == *enabled,
             *enabled ? "enabled" : "disabled" };
     }
 
@@ -3246,6 +3246,24 @@ ReadScriptValue(
             "actual=" + std::to_string(emitter->outputOrigin.x) + ',' +
                 std::to_string(emitter->outputOrigin.y) + ',' +
                 std::to_string(emitter->outputOrigin.z) };
+    }
+
+    if (*operation == "assert_particle_scene_empty") {
+        const std::vector<std::uint64_t> liveInstances =
+            kb::particles::ParticlePlayback::LiveInstanceIds(state.context.Scene());
+        const auto snapshot = kb::particles::ParticlePlayback::ReadRenderSnapshot(
+            state.context.Scene());
+        const std::size_t emitterCount = snapshot == nullptr ? 0U : snapshot->Emitters().size();
+        const std::size_t particleCount = snapshot == nullptr ? 0U : snapshot->Particles().size();
+        const bool empty = liveInstances.empty() && snapshot != nullptr &&
+            emitterCount == 0U && particleCount == 0U;
+        return {
+            empty,
+            "liveInstances=" + std::to_string(liveInstances.size()) +
+                ", emitters=" + std::to_string(emitterCount) +
+                ", particles=" + std::to_string(particleCount) +
+                ", snapshotRevision=" +
+                std::to_string(snapshot == nullptr ? 0U : snapshot->Revision()) };
     }
 
     if (*operation == "attach_script") {
@@ -3685,6 +3703,86 @@ ReadScriptValue(
         return {
             state.automation.VerifyParticlePickerInteraction(),
             "modeless selection contract" };
+    }
+
+    if (*operation == "assert_particle_dependency_navigation") {
+        const auto navigation =
+            state.automation.VerifyParticleDependencyNavigation();
+        return {
+            navigation.succeeded,
+            "dependencies=" + std::to_string(navigation.dependencyCount) +
+                ", expected=" + std::to_string(navigation.expectedAsset.value) +
+                ", selected=" + std::to_string(navigation.selectedAsset.value) };
+    }
+
+    if (*operation == "profile_inspector_drag") {
+        const auto steps = NumberMember(step, "steps", error, false).value_or(60.0);
+        if (steps < 1.0 || steps > 1000.0 || std::floor(steps) != steps) {
+            return { false, "steps must be a positive integer up to 1000" };
+        }
+        const auto profile = state.automation.ProfileInspectorTransformDrag(
+            static_cast<std::size_t>(steps));
+        std::ostringstream detail;
+        detail.imbue(std::locale::classic());
+        detail << "steps=" << profile.steps
+               << " apply=" << profile.applyMs
+               << "ms inspectorPaint=" << profile.inspectorPaintMs
+               << "ms inspectorHeight=" << profile.inspectorHeightMs
+               << "ms inspectorRowPaint=" << profile.inspectorRowPaintMs
+               << "ms inspectorHitTest=" << profile.inspectorHitTestMs
+               << "ms scenePresent=" << profile.scenePresentMs << "ms";
+        return { profile.succeeded, detail.str() };
+    }
+
+    if (*operation == "profile_idle_scene_frame") {
+        const auto steps = NumberMember(step, "steps", error, false).value_or(60.0);
+        if (steps < 1.0 || steps > 1000.0 || std::floor(steps) != steps) {
+            return { false, "steps must be a positive integer up to 1000" };
+        }
+        const auto profile = state.automation.ProfileIdleSceneFrame(
+            static_cast<std::size_t>(steps));
+        std::ostringstream detail;
+        detail.imbue(std::locale::classic());
+        detail << "steps=" << profile.steps
+               << " idleFrame=" << profile.idleFrameMs
+               << "ms geometry=" << profile.geometryTotalMs
+               << "ms sharedGeometry=" << profile.sharedGeometryMs
+               << "ms sceneSubmit=" << profile.sceneSubmitMs
+               << "ms dockLayout=" << profile.dockLayoutMs
+               << "ms(x" << profile.dockLayoutBuildsPerFrame
+               << ") hostSurfaceResolve=" << profile.hostSurfaceResolveMs
+               << "ms panelResolve=" << profile.panelResolveMs
+               << "ms particleVisible=" << profile.particleVisibleMs
+               << "ms materialPreviewProbe=" << profile.materialPreviewProbeMs << "ms";
+        return { profile.succeeded, detail.str() };
+    }
+
+    if (*operation == "assert_floating_window_frame") {
+        const auto frame = state.automation.VerifyFloatingWindowFrame();
+        return {
+            frame.succeeded,
+            "reserved=" + std::to_string(frame.reservedWithHandler) +
+                ", default=" + std::to_string(frame.reservedWithoutHandler) };
+    }
+
+    if (*operation == "assert_saved_layout_roundtrip") {
+        const auto saved = state.automation.VerifySavedLayoutRoundTrip();
+        return {
+            saved.succeeded,
+            std::string{ "listed=" } + (saved.listed ? "true" : "false") +
+                ", applied=" + (saved.applied ? "true" : "false") +
+                ", named=" + (saved.named ? "true" : "false") +
+                ", deleted=" + (saved.deleted ? "true" : "false") +
+                ", layout=" + saved.layout };
+    }
+
+    if (*operation == "assert_workspace_layout_persistence") {
+        const auto workspace = state.automation.VerifyWorkspaceLayoutPersistence();
+        return {
+            workspace.succeeded,
+            std::string{ "stored=" } + (workspace.storedOnDisk ? "true" : "false") +
+                ", saved=" + workspace.savedLayout +
+                ", restored=" + workspace.restoredLayout };
     }
 
     if (*operation == "assert_particle_thumbnail") {

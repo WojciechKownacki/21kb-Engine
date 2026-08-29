@@ -2,6 +2,12 @@
 
 #include "assets/EditorAssetBrowserPathUtils.hpp"
 
+#include "assets/EditorAssetOpenPolicy.hpp"
+
+#include "engine/scene/ParticleEffectAssetIO.hpp"
+
+#include <algorithm>
+
 namespace kb::editor {
 namespace {
 
@@ -11,6 +17,13 @@ namespace {
         || metadata.type == "RenderMaterialFunction"
         || metadata.type == "RenderMaterialGraph"
         || metadata.type == "RenderMaterialType";
+}
+
+// Commands that only read. Everything else writes to disk, and outside the project's
+// own content there is nothing the editor may rewrite.
+[[nodiscard]] bool IsReadOnlyCommand(EditorAssetContextCommand command) noexcept {
+    return command == EditorAssetContextCommand::Open || command == EditorAssetContextCommand::FindReferences ||
+        command == EditorAssetContextCommand::Refresh;
 }
 
 [[nodiscard]] std::vector<EditorAssetContextMenuItem> MaterialContextMenuItems(const kb::assets::AssetMetadata& metadata) {
@@ -41,13 +54,36 @@ std::vector<EditorAssetContextMenuItem> EditorAssetBrowserState::ContextMenuItem
     if (contextMenu_.TargetKind() == EditorAssetContextTargetKind::Asset) {
         const kb::assets::AssetMetadata* metadata = manager.Registry().Find(contextMenu_.TargetAsset());
         if (metadata != nullptr && IsMaterialAsset(*metadata)) {
-            return MaterialContextMenuItems(*metadata);
+            items = MaterialContextMenuItems(*metadata);
+        } else if (metadata != nullptr) {
+            items.insert(items.begin(), EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Duplicate, .label = "Duplicate", .separatorAfter = true });
+            if (EditorAssetOpenPolicy::CanOpen(*metadata)) {
+                items.insert(items.begin(), EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Open, .label = "Open" });
+            }
         }
         if (metadata != nullptr && (metadata->type == "RenderMesh" || metadata->importCategory == "Mesh")) {
             items.insert(items.begin(), EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::ExtractMaterials, .label = "Extract Material Instances", .separatorAfter = true });
         }
+        // Particle effects are the second asset kind whose scene usage can be
+        // queried, so they carry the same entry the material menu already has,
+        // in the same place: after Delete and before Refresh.
+        if (metadata != nullptr && metadata->type == kb::scene::kParticleEffectAssetType) {
+            const auto refresh = std::ranges::find(items, EditorAssetContextCommand::Refresh, &EditorAssetContextMenuItem::command);
+            items.insert(refresh, EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::FindReferences, .label = "Find References", .separatorAfter = true });
+        }
+    }
+    if (!ContextMenuTargetIsProjectContent(manager)) {
+        std::erase_if(items, [](const EditorAssetContextMenuItem& item) { return !IsReadOnlyCommand(item.command); });
     }
     return items;
+}
+
+bool EditorAssetBrowserState::ContextMenuTargetIsProjectContent(const kb::assets::AssetManager& manager) const {
+    if (contextMenu_.TargetKind() == EditorAssetContextTargetKind::Asset) {
+        const kb::assets::AssetMetadata* metadata = manager.Registry().Find(contextMenu_.TargetAsset());
+        return metadata != nullptr && asset_browser::IsProjectContent(metadata->virtualPath);
+    }
+    return asset_browser::IsProjectContent(contextMenu_.TargetFolder());
 }
 
 void EditorAssetBrowserState::OpenContextMenuForBackground(int x, int y) {

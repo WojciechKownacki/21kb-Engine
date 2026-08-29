@@ -10,7 +10,6 @@
 
 namespace kb::editor {
 
-class EditorRenderBackendSettings;
 class EditorSceneContext;
 
 class EditorSettingsPointerController final {
@@ -20,8 +19,7 @@ public:
     [[nodiscard]] bool HandlePointerDown(
         const RECT& content,
         int x,
-        int y,
-        EditorRenderBackendSettings& renderSettings);
+        int y);
 #endif
 
 private:

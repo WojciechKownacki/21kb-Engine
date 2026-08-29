@@ -40,6 +40,10 @@ DockPanel* DockPanelCollection::Find(std::uint32_t panelId) noexcept {
     return nullptr;
 }
 
+void DockPanelCollection::Reset(std::vector<DockPanel> panels) noexcept {
+    panels_ = std::move(panels);
+}
+
 void DockPanelCollection::MoveFloatingPanel(std::uint32_t panelId, int x, int y) noexcept {
     if (DockPanel* panel = Find(panelId); panel != nullptr) {
         panel->floatingRect.x = x;

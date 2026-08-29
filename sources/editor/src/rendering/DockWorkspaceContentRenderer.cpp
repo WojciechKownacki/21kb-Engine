@@ -8,7 +8,7 @@
 
 namespace kb::editor {
 
-void DockWorkspaceContentRenderer::Paint(HWND parent, HDC dc, const DockLayout& layout, const EditorDockModel& dockModel, const EditorTheme& theme, const EditorMetrics& metrics, EditorSceneContext& sceneContext, const EditorRenderBackendSettings& renderBackendSettings, EditorSceneBgfxViewport* sceneViewport) const {
+void DockWorkspaceContentRenderer::Paint(HWND parent, HDC dc, const RECT& dirty, const DockLayout& layout, const EditorDockModel& dockModel, const EditorTheme& theme, const EditorMetrics& metrics, EditorSceneContext& sceneContext, const EditorRenderBackendSettings& renderBackendSettings, EditorSceneBgfxViewport* sceneViewport) const {
     ScopedFont bodyFont(14, FW_NORMAL);
     const ScopedGdiObject selectedFont(dc, bodyFont.handle);
     const RECT workspace = GdiDrawing::ToRect(layout.workspace);
@@ -21,11 +21,20 @@ void DockWorkspaceContentRenderer::Paint(HWND parent, HDC dc, const DockLayout& 
             continue;
         }
 
+        paintedConsole = paintedConsole || panel->kind == DockPanelKind::Console;
+
         const RECT content = GdiDrawing::ToRect(panelLayout.content);
         const RECT panelFrame = GdiDrawing::ToRect(panelLayout.frame);
         const RECT contentClip = GdiDrawing::ToRect(panelLayout.contentClip);
+        // Console and Script Editor position their own child windows from inside their
+        // paint, so they must run even when their pixels are untouched.
+        const bool ownsChildSurface = panel->kind == DockPanelKind::Console ||
+            panel->kind == DockPanelKind::ScriptEditor;
+        RECT intersection{};
+        if (!ownsChildSurface && IntersectRect(&intersection, &panelFrame, &dirty) == 0) {
+            continue;
+        }
         contentRenderer.Paint(dc, content, panelFrame, contentClip, workspace, *panel, theme, metrics, sceneContext, renderBackendSettings, false, sceneViewport, parent);
-        paintedConsole = paintedConsole || panel->kind == DockPanelKind::Console;
     }
     if (!paintedConsole) {
         ConsoleDetailTextOverlay::Hide(parent);

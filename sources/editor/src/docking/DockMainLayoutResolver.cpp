@@ -15,8 +15,7 @@ DockLayout DockMainLayoutResolver::Resolve(HWND mainWindow, const EditorDockMode
         metrics.tabStripHeight,
         metrics.tabMinWidth,
         metrics.tabWidth,
-        metrics.splitterSize,
-        metrics.panelPadding);
+        metrics.splitterSize);
 }
 
 } // namespace kb::editor

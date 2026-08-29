@@ -62,6 +62,7 @@ void AppendAddSubmenu(HMENU menu) {
 
 [[nodiscard]] bool ExecuteNativeProjectFilesMenu(
     HWND window,
+    HWND owner,
     int x,
     int y,
     EditorSceneContext& sceneContext) {
@@ -75,12 +76,12 @@ void AppendAddSubmenu(HMENU menu) {
     if (command == EditorAssetContextCommand::None) {
         return true;
     }
-    return EditorAssetBrowserContextCommandExecutor::Execute(command, sceneContext);
+    return EditorAssetBrowserContextCommandExecutor::Execute(command, sceneContext, owner);
 }
 
 } // namespace
 
-std::optional<bool> EditorAssetBrowserContextMenuPointerHandler::HandleOpenMenuPointerDown(const EditorAssetBrowserHit& hit, EditorSceneContext& sceneContext) {
+std::optional<bool> EditorAssetBrowserContextMenuPointerHandler::HandleOpenMenuPointerDown(HWND owner, const EditorAssetBrowserHit& hit, EditorSceneContext& sceneContext) {
     EditorAssetBrowserState& state = sceneContext.AssetBrowser();
     if (!state.IsContextMenuOpen()) {
         return std::nullopt;
@@ -91,7 +92,7 @@ std::optional<bool> EditorAssetBrowserContextMenuPointerHandler::HandleOpenMenuP
             static_cast<void>(state.SetContextMenuHoveredCommand(EditorAssetContextCommand::AddLighting));
             return true;
         }
-        static_cast<void>(EditorAssetBrowserContextCommandExecutor::Execute(hit.command, sceneContext));
+        static_cast<void>(EditorAssetBrowserContextCommandExecutor::Execute(hit.command, sceneContext, owner));
         state.CloseContextMenu();
         return true;
     }
@@ -105,6 +106,7 @@ std::optional<bool> EditorAssetBrowserContextMenuPointerHandler::HandleOpenMenuP
 
 bool EditorAssetBrowserContextMenuPointerHandler::HandleRightButtonDown(
     HWND window,
+    HWND owner,
     const RECT& content,
     int x,
     int y,
@@ -125,7 +127,7 @@ bool EditorAssetBrowserContextMenuPointerHandler::HandleRightButtonDown(
             return false;
         }
         static_cast<void>(state.SelectAsset(*id, manager));
-        return state.OpenContextMenuForAsset(x, y, *id, manager) && ExecuteNativeProjectFilesMenu(window, x, y, sceneContext);
+        return state.OpenContextMenuForAsset(x, y, *id, manager) && ExecuteNativeProjectFilesMenu(window, owner, x, y, sceneContext);
     }
     case EditorAssetBrowserHitKind::ContentFolder: {
         const std::optional<std::filesystem::path> folder = EditorAssetBrowserHitPayloadResolver::FolderAt(hit, state, manager);
@@ -133,7 +135,7 @@ bool EditorAssetBrowserContextMenuPointerHandler::HandleRightButtonDown(
             return false;
         }
         static_cast<void>(state.SelectContentFolder(*folder, manager));
-        return state.OpenContextMenuForFolder(x, y, *folder, manager) && ExecuteNativeProjectFilesMenu(window, x, y, sceneContext);
+        return state.OpenContextMenuForFolder(x, y, *folder, manager) && ExecuteNativeProjectFilesMenu(window, owner, x, y, sceneContext);
     }
     case EditorAssetBrowserHitKind::FolderDisclosure:
     case EditorAssetBrowserHitKind::Folder: {
@@ -142,11 +144,11 @@ bool EditorAssetBrowserContextMenuPointerHandler::HandleRightButtonDown(
             return false;
         }
         static_cast<void>(state.SelectFolder(*folder, manager));
-        return state.OpenContextMenuForFolder(x, y, *folder, manager) && ExecuteNativeProjectFilesMenu(window, x, y, sceneContext);
+        return state.OpenContextMenuForFolder(x, y, *folder, manager) && ExecuteNativeProjectFilesMenu(window, owner, x, y, sceneContext);
     }
     case EditorAssetBrowserHitKind::DropTarget:
         state.OpenContextMenuForBackground(x, y);
-        return ExecuteNativeProjectFilesMenu(window, x, y, sceneContext);
+        return ExecuteNativeProjectFilesMenu(window, owner, x, y, sceneContext);
     case EditorAssetBrowserHitKind::DeleteConfirmBody:
     case EditorAssetBrowserHitKind::DeleteConfirmListBody:
     case EditorAssetBrowserHitKind::DeleteConfirmCheckbox:

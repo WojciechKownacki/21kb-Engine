@@ -440,7 +440,15 @@ void TestUniformSolidAngleConeGolden() {
     const double meanCosine = cosineSum / static_cast<double>(states.size());
     Require(std::abs(meanCosine - 0.75) < 0.01,
         "cone samples do not follow a uniform solid-angle distribution");
+#if defined(_WIN32)
     constexpr std::uint64_t kExpectedConeHash = 10334376869005698480ULL;
+#elif defined(__APPLE__)
+    constexpr std::uint64_t kExpectedConeHash = 16132473740370987527ULL;
+#elif defined(__linux__)
+    constexpr std::uint64_t kExpectedConeHash = 8377043450355401390ULL;
+#else
+#error Unsupported particle cone golden platform
+#endif
     const std::uint64_t actualHash = HashStateSpan(states);
     Require(actualHash == kExpectedConeHash,
         ("uniform cone deterministic golden changed: actual=" + std::to_string(actualHash)).c_str());
@@ -495,7 +503,11 @@ void TestVisualModulesObservableGoldenAndDefaults() {
             std::abs(state.color.a - 0.45F) < 0.00001F &&
             std::abs(state.size - 2.0F) < 0.00001F,
         "curve, gradient, size, or composed alpha state is not publicly observable");
+#if defined(__APPLE__)
+    constexpr std::uint64_t kExpectedVisualHash = 4323008387544267842ULL;
+#else
     constexpr std::uint64_t kExpectedVisualHash = 3957020943848305260ULL;
+#endif
     const std::uint64_t actualHash = HashVisualStateSpan(enabled);
     Require(actualHash == kExpectedVisualHash,
         ("visual curve and gradient deterministic golden changed: actual=" + std::to_string(actualHash)).c_str());

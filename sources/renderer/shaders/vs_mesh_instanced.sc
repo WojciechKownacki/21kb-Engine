@@ -37,7 +37,7 @@ void main()
     v_tangent = tangent;
     v_bitangent = normalize(cross(normal, tangent) * handedness);
     v_texcoord0 = a_texcoord0;
-    // Per-vertex color (UE-style) modulated by the per-instance tint; default vertex color is white
+    // Per-vertex color modulated by the per-instance tint; default vertex color is white
     // so existing instance tinting is unchanged (MAT-74). i_data4.w sign still encodes shadow-receive.
     v_color0 = a_color0 * vec4(i_data4.rgb, abs(i_data4.w));
 }

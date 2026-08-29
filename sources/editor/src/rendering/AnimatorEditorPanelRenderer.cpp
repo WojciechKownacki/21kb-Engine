@@ -16,6 +16,18 @@ namespace {
 
 constexpr int kHeaderHeight = 30;
 
+[[nodiscard]] COLORREF ThemeColor(EditorColor color) noexcept {
+    return RGB(color.r, color.g, color.b);
+}
+
+[[nodiscard]] COLORREF Blend(COLORREF a, COLORREF b, int percentB) noexcept {
+    const int percentA = 100 - percentB;
+    return RGB(
+        (GetRValue(a) * percentA + GetRValue(b) * percentB) / 100,
+        (GetGValue(a) * percentA + GetGValue(b) * percentB) / 100,
+        (GetBValue(a) * percentA + GetBValue(b) * percentB) / 100);
+}
+
 [[nodiscard]] const char* ParameterTypeLabel(kb::scene::AnimatorParameterType type) noexcept {
     switch (type) {
     case kb::scene::AnimatorParameterType::Bool: return "Bool";
@@ -49,10 +61,13 @@ void DrawText(HDC dc, RECT rect, const char* text, COLORREF color, int pointSize
 }
 
 void PaintGraph(HDC dc, const RECT& rect, const kb::scene::AnimatorController* controller,
-    const kb::scene::AnimatorDebugInstanceSnapshot* debug) {
-    GdiDrawing::FillRectColor(dc, rect, RGB(29, 32, 37));
-    GdiDrawing::DrawSharpFrame(dc, rect, RGB(29, 32, 37), RGB(56, 61, 69));
-    DrawText(dc, RECT{ rect.left + 10, rect.top + 4, rect.right - 10, rect.top + 28 }, "State Machine", RGB(204, 212, 221), 12, FW_SEMIBOLD);
+    const kb::scene::AnimatorDebugInstanceSnapshot* debug, const EditorTheme& theme) {
+    const COLORREF panel = ThemeColor(theme.panel);
+    const COLORREF accent = ThemeColor(theme.accent);
+    GdiDrawing::FillRectColor(dc, rect, panel);
+    GdiDrawing::DrawSharpFrame(dc, rect, panel, ThemeColor(theme.borderPanel));
+    DrawText(dc, RECT{ rect.left + 10, rect.top + 4, rect.right - 10, rect.top + 28 }, "State Machine",
+        ThemeColor(theme.textPrimary), 12, FW_SEMIBOLD);
     if (controller == nullptr) return;
 
     const int nodeWidth = std::clamp((static_cast<int>(rect.right) - static_cast<int>(rect.left)) / 4, 104, 168);
@@ -63,7 +78,7 @@ void PaintGraph(HDC dc, const RECT& rect, const kb::scene::AnimatorController* c
         const kb::scene::AnimatorControllerLayer& layer = controller->layers[layerIndex];
         const int rowTop = rect.top + 30 + static_cast<int>(layerIndex) * layerHeight;
         if (rowTop >= rect.bottom) break;
-        DrawText(dc, RECT{ rect.left + 10, rowTop, rect.right - 10, rowTop + 18 }, layer.name.c_str(), RGB(130, 167, 205), 11, FW_SEMIBOLD);
+        DrawText(dc, RECT{ rect.left + 10, rowTop, rect.right - 10, rowTop + 18 }, layer.name.c_str(), accent, 11, FW_SEMIBOLD);
         constexpr int entryWidth = 48;
         const RECT entry{ rect.left + 12, rowTop + 22, rect.left + 12 + entryWidth, rowTop + 22 + nodeHeight };
         GdiDrawing::DrawSharpFrame(dc, entry, RGB(57, 67, 48), RGB(132, 172, 106));
@@ -84,10 +99,10 @@ void PaintGraph(HDC dc, const RECT& rect, const kb::scene::AnimatorController* c
                     return value.activeStateId == state.id;
                 });
             GdiDrawing::DrawSharpFrame(dc, node,
-                activeState ? RGB(47, 84, 58) : (defaultState ? RGB(42, 72, 91) : RGB(42, 46, 53)),
-                activeState ? RGB(111, 205, 126) : (defaultState ? RGB(90, 156, 210) : RGB(78, 84, 93)));
+                activeState ? RGB(47, 84, 58) : (defaultState ? Blend(panel, accent, 28) : ThemeColor(theme.toolbarButton)),
+                activeState ? RGB(111, 205, 126) : (defaultState ? accent : ThemeColor(theme.borderPanel)));
             DrawText(dc, RECT{ node.left + 7, node.top + 3, node.right - 7, node.bottom - 3 },
-                state.name.c_str(), RGB(224, 230, 237), 11, FW_SEMIBOLD);
+                state.name.c_str(), ThemeColor(theme.textPrimary), 11, FW_SEMIBOLD);
             if (defaultState) {
                 const int middle = node.top + (node.bottom - node.top) / 2;
                 GdiDrawing::FillRectColor(dc, RECT{ entry.right, middle, node.left, middle + 2 }, RGB(132, 172, 106));
@@ -112,14 +127,16 @@ void PaintGraph(HDC dc, const RECT& rect, const kb::scene::AnimatorController* c
 }
 
 void PaintDetails(HDC dc, const RECT& rect, const kb::scene::AnimatorController* controller,
-    const kb::scene::AnimatorDebugInstanceSnapshot* debug) {
-    GdiDrawing::FillRectColor(dc, rect, RGB(27, 29, 33));
-    GdiDrawing::DrawSharpFrame(dc, rect, RGB(27, 29, 33), RGB(56, 61, 69));
-    DrawText(dc, RECT{ rect.left + 10, rect.top + 4, rect.right - 10, rect.top + 28 }, "Details / Assets", RGB(204, 212, 221), 12, FW_SEMIBOLD);
+    const kb::scene::AnimatorDebugInstanceSnapshot* debug, const EditorTheme& theme) {
+    const COLORREF panel = ThemeColor(theme.panel);
+    GdiDrawing::FillRectColor(dc, rect, panel);
+    GdiDrawing::DrawSharpFrame(dc, rect, panel, ThemeColor(theme.borderPanel));
+    DrawText(dc, RECT{ rect.left + 10, rect.top + 4, rect.right - 10, rect.top + 28 }, "Details / Assets",
+        ThemeColor(theme.textPrimary), 12, FW_SEMIBOLD);
     if (controller == nullptr) return;
     int y = rect.top + 36;
     const auto row = [&](const std::string& label) {
-        DrawText(dc, RECT{ rect.left + 10, y, rect.right - 10, y + 19 }, label.c_str(), RGB(168, 178, 190), 11);
+        DrawText(dc, RECT{ rect.left + 10, y, rect.right - 10, y + 19 }, label.c_str(), ThemeColor(theme.textSecondary), 11);
         y += 20;
     };
     if (debug != nullptr) {
@@ -186,7 +203,7 @@ void PaintDetails(HDC dc, const RECT& rect, const kb::scene::AnimatorController*
     }
     row("Constraints: " + std::to_string(controller->rigConstraints.size()));
     y += 5;
-    DrawText(dc, RECT{ rect.left + 10, y, rect.right - 10, y + 19 }, "Transitions", RGB(130, 167, 205), 11, FW_SEMIBOLD);
+    DrawText(dc, RECT{ rect.left + 10, y, rect.right - 10, y + 19 }, "Transitions", ThemeColor(theme.accent), 11, FW_SEMIBOLD);
     y += 21;
     for (const kb::scene::AnimatorControllerLayer& layer : controller->layers) {
         for (const kb::scene::AnimatorControllerTransition& transition : layer.transitions) {
@@ -198,7 +215,7 @@ void PaintDetails(HDC dc, const RECT& rect, const kb::scene::AnimatorController*
             if (y >= rect.bottom) return;
         }
     }
-    DrawText(dc, RECT{ rect.left + 10, y, rect.right - 10, y + 19 }, "Referenced clips", RGB(130, 167, 205), 11, FW_SEMIBOLD);
+    DrawText(dc, RECT{ rect.left + 10, y, rect.right - 10, y + 19 }, "Referenced clips", ThemeColor(theme.accent), 11, FW_SEMIBOLD);
     y += 21;
     for (const kb::scene::AnimatorControllerLayer& layer : controller->layers) {
         for (const kb::scene::AnimatorControllerState& state : layer.states) {
@@ -224,13 +241,14 @@ void AnimatorEditorPanelRenderer::Paint(
     const EditorRenderBackendSettings& renderBackendSettings,
     EditorSceneBgfxViewport* sceneViewport) const {
     if (!sceneContext.HasAnimatorEditorAsset() || sceneContext.AnimatorEditorPreviewScene() == nullptr) {
-        GdiDrawing::FillRectColor(dc, content, RGB(27, 29, 33));
-        DrawText(dc, content, "Open an Animator Controller asset to begin editing.", RGB(168, 178, 190), 15,
+        GdiDrawing::FillRectColor(dc, content, ThemeColor(theme.background));
+        DrawText(dc, content, "Open an Animator Controller asset to begin editing.", ThemeColor(theme.textSecondary), 15,
             FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         return;
     }
 
-    GdiDrawing::FillRectColor(dc, RECT{ content.left, content.top, content.right, content.top + kHeaderHeight }, RGB(34, 37, 43));
+    GdiDrawing::FillRectColor(dc, RECT{ content.left, content.top, content.right, content.top + kHeaderHeight }, ThemeColor(theme.strip));
+    GdiDrawing::FillRectColor(dc, RECT{ content.left, content.top, content.left + 3, content.top + kHeaderHeight }, ThemeColor(theme.accent));
     const kb::assets::AssetMetadata* metadata =
         sceneContext.Scene().Assets().Manager().Registry().Find(sceneContext.AnimatorEditorAssetId());
     const kb::assets::AssetMetadata* previewMesh =
@@ -249,29 +267,29 @@ void AnimatorEditorPanelRenderer::Paint(
         (previewMesh == nullptr ? std::string{} : "  |  Preview " + previewMesh->name) +
         "  |  Debug " + sceneContext.AnimatorEditorDebugTargetLabel() + " (click to switch)";
     DrawText(dc, RECT{ content.left + 10, content.top, content.right - 10, content.top + kHeaderHeight },
-        (title + "  >  " + (motion == nullptr ? "State Machine" : motion->name)).c_str(), RGB(219, 225, 233), 13, FW_SEMIBOLD);
+        (title + "  >  " + (motion == nullptr ? "State Machine" : motion->name)).c_str(), ThemeColor(theme.textPrimary), 13, FW_SEMIBOLD);
 
     const AnimatorEditorPanelLayout layout = ResolveLayout(
         RECT{ content.left, content.top + kHeaderHeight, content.right, content.bottom });
-    GdiDrawing::FillRectColor(dc, layout.preview, RGB(20, 23, 28));
-    if (motion == nullptr) PaintGraph(dc, layout.graph, controller, debug);
+    GdiDrawing::FillRectColor(dc, layout.preview, ThemeColor(theme.background));
+    if (motion == nullptr) PaintGraph(dc, layout.graph, controller, debug, theme);
     else {
-        GdiDrawing::FillRectColor(dc, layout.graph, RGB(29, 32, 37));
-        DrawText(dc, RECT{ layout.graph.left + 12, layout.graph.top + 10, layout.graph.right - 12, layout.graph.top + 34 }, "Motion / Blend Document", RGB(204, 212, 221), 13, FW_SEMIBOLD);
+        GdiDrawing::FillRectColor(dc, layout.graph, ThemeColor(theme.panel));
+        DrawText(dc, RECT{ layout.graph.left + 12, layout.graph.top + 10, layout.graph.right - 12, layout.graph.top + 34 }, "Motion / Blend Document", ThemeColor(theme.textPrimary), 13, FW_SEMIBOLD);
         if (!motion->clipReference.empty()) {
-            DrawText(dc, RECT{ layout.graph.left + 12, layout.graph.top + 42, layout.graph.right - 12, layout.graph.top + 62 }, motion->clipReference.c_str(), RGB(168, 178, 190), 12);
+            DrawText(dc, RECT{ layout.graph.left + 12, layout.graph.top + 42, layout.graph.right - 12, layout.graph.top + 62 }, motion->clipReference.c_str(), ThemeColor(theme.textSecondary), 12);
         } else {
             DrawText(dc, RECT{ layout.graph.left + 12, layout.graph.top + 42, layout.graph.right - 12, layout.graph.top + 62 },
-                ("1D Blend Tree | " + motion->blendParameter).c_str(), RGB(130, 167, 205), 12, FW_SEMIBOLD);
+                ("1D Blend Tree | " + motion->blendParameter).c_str(), ThemeColor(theme.accent), 12, FW_SEMIBOLD);
             int y = layout.graph.top + 70;
             for (const kb::scene::AnimatorControllerState::BlendChild& child : motion->blendChildren) {
                 const std::string row = std::to_string(child.threshold) + "  |  " + child.clipReference;
-                DrawText(dc, RECT{ layout.graph.left + 20, y, layout.graph.right - 12, y + 20 }, row.c_str(), RGB(168, 178, 190), 11);
+                DrawText(dc, RECT{ layout.graph.left + 20, y, layout.graph.right - 12, y + 20 }, row.c_str(), ThemeColor(theme.textSecondary), 11);
                 y += 22;
             }
         }
     }
-    PaintDetails(dc, layout.details, controller, debug);
+    PaintDetails(dc, layout.details, controller, debug, theme);
     if (sceneViewport == nullptr) return;
     const std::uint64_t revision = sceneContext.AnimatorEditorPreviewRevision();
     EditorSceneBgfxViewport::PresentSettings settings{};

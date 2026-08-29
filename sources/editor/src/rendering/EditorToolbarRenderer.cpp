@@ -154,8 +154,9 @@ void FillRoundedAlpha(HDC dc, const RECT& rect, COLORREF color, BYTE alpha, floa
 
 } // namespace
 
-EditorMenuRects EditorToolbarRenderer::ResolveMenu(const RECT& rect, EditorMenuCommand openMenu) noexcept {
-    return EditorToolbarLayout::ResolveMenu(rect, openMenu);
+EditorMenuRects EditorToolbarRenderer::ResolveMenu(
+    const RECT& rect, EditorMenuCommand openMenu, int rowCount) noexcept {
+    return EditorToolbarLayout::ResolveMenu(rect, openMenu, rowCount);
 }
 
 EditorToolbarRects EditorToolbarRenderer::ResolveToolbar(const RECT& rect) noexcept {
@@ -178,9 +179,31 @@ bool EditorToolbarRenderer::HitTestSave(const EditorToolbarRects& rects, int x, 
     return EditorToolbarLayout::HitTestSave(rects, x, y);
 }
 
+namespace {
+
+[[nodiscard]] HeroIconKind LayoutRowIcon(const EditorLayoutMenuRow& row) noexcept {
+    if (row.active) {
+        return HeroIconKind::Check;
+    }
+    switch (row.action) {
+    case EditorLayoutMenuAction::Save:
+        return HeroIconKind::Plus;
+    case EditorLayoutMenuAction::Delete:
+    case EditorLayoutMenuAction::Remove:
+        return HeroIconKind::XMark;
+    case EditorLayoutMenuAction::Default:
+    case EditorLayoutMenuAction::Apply:
+    default:
+        return HeroIconKind::RectangleGroup;
+    }
+}
+
+} // namespace
+
 void EditorToolbarRenderer::PaintMenu(HDC dc, const RECT& rect, const EditorTheme& theme, const EditorShellInteractionState& interaction) const {
     EditorSurfacePainter::Fill(dc, rect, theme, EditorSurfaceKind::HeaderStrip);
-    const EditorMenuRects menu = ResolveMenu(rect, interaction.OpenMenu());
+    const EditorMenuRects menu =
+        ResolveMenu(rect, interaction.OpenMenu(), interaction.MenuRowCount(interaction.OpenMenu()));
     const COLORREF textPrimary = ThemeColor(theme.textPrimary);
     const COLORREF textSecondary = ThemeColor(theme.textSecondary);
     const COLORREF hoverFill = RGB(34, 39, 48);
@@ -209,18 +232,28 @@ void EditorToolbarRenderer::PaintMenu(HDC dc, const RECT& rect, const EditorThem
     FillRound(dc, shadow, RGB(0, 0, 0), RGB(0, 0, 0), kDropdownRadius);
     EditorDialogStyle::PaintSurface(dc, menu.dropdown, theme);
 
-    for (int row = 0; row < 4; ++row) {
+    const bool layoutMenu = interaction.OpenMenu() == EditorMenuCommand::Layout;
+    for (int row = 0; row < menu.dropdownRowCount; ++row) {
         const RECT rowRect = menu.dropdownRows[static_cast<std::size_t>(row)];
         const bool hovered = interaction.HoveredMenuRow().has_value() && *interaction.HoveredMenuRow() == row;
+        const EditorLayoutMenuRow* layoutRow =
+            layoutMenu ? interaction.LayoutMenu().Row(row) : nullptr;
+        const std::string_view label = layoutRow != nullptr
+            ? std::string_view{ layoutRow->label }
+            : EditorToolbarLayout::DropdownLabel(interaction.OpenMenu(), row);
+        const bool enabled = layoutRow == nullptr || layoutRow->enabled;
+        // Every row of the Layout menu carries an icon, the layout in use a tick.
+        // Giving one only to that row would indent its label alone and leave the list
+        // ragged, because the icon is what the label is measured from.
         EditorDialogStyle::PaintMenuRow(
             dc,
             RECT{ rowRect.left + 4, rowRect.top + 1, rowRect.right - 4, rowRect.bottom - 1 },
             theme,
-            EditorToolbarLayout::DropdownLabel(interaction.OpenMenu(), row),
-            HeroIconKind::RectangleGroup,
-            hovered,
-            true,
-            false);
+            label,
+            layoutRow != nullptr ? LayoutRowIcon(*layoutRow) : HeroIconKind::RectangleGroup,
+            hovered && enabled,
+            enabled,
+            layoutRow != nullptr);
     }
 }
 

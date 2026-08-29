@@ -390,7 +390,7 @@ void ApplyDisplayTransformAndFinish(EditorMaterialThumbnailImage& image) {
         .meshPassMode = kb::render::SceneRenderMeshPassMode::OpaqueAndTransparent,
         .lightingConfig = MaterialPreviewRenderPolicy::NeutralPbrLightingConfig(
             previewSettings,
-            sceneContext.Project().sceneLightingPath),
+            sceneContext.ProjectConfiguration().lightingPath),
         .postProcessSettings = MaterialPreviewRenderPolicy::StableExposurePostProcessSettings(previewSettings),
         .shadowPassEnabled = false,
         .postProcessEnabled = previewSettings.postProcessEnabled && !previewSettings.normalDebugView,

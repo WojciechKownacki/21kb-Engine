@@ -172,8 +172,7 @@ void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
         paintContext->metrics->tabStripHeight,
         paintContext->metrics->tabMinWidth,
         paintContext->metrics->tabWidth,
-        paintContext->metrics->splitterSize,
-        paintContext->metrics->panelPadding);
+        paintContext->metrics->splitterSize);
     const std::vector<EditorSceneBgfxViewport::HostSurfaceLayout> viewportLayouts =
         EditorHostSurfaceLayoutResolver::ResolveMainWindow(
             paintContext->window,
@@ -205,6 +204,7 @@ void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
     DockWorkspaceRenderer{}.Paint(
         paintContext->window,
         paint.dc,
+        paint.dirty,
         paint.width,
         paint.height,
         *paintContext->dockModel,
@@ -302,8 +302,7 @@ void MainWindowBackBufferPainter::Paint(HWND window, const EditorDockModel& dock
         metrics.tabStripHeight,
         metrics.tabMinWidth,
         metrics.tabWidth,
-        metrics.splitterSize,
-        metrics.panelPadding);
+        metrics.splitterSize);
     if (sceneContext.AssetBrowser().IsFilterMenuOpen()) {
         if (const std::optional<RECT> assetContent = ResolveAssetContent(layout, dockModel); assetContent.has_value()) {
             MainFilterMenuOverlay().Show(window, *assetContent, theme, sceneContext);

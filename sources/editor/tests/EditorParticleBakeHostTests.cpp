@@ -79,8 +79,15 @@ void RunHostBakeCommandTest() {
         "production host Bake did not use the project cache root or mutated the source document");
 
     auto unsupported = working;
-    unsupported.emitters[0].output.type = kb::scene::ParticleOutputType::Trail;
-    unsupported.emitters[0].output.payload = kb::scene::ParticleTrailOutput{};
+    unsupported.eventBindings.push_back({
+        .sourceEmitterId = unsupported.emitters[0].emitterId,
+        .trigger = kb::scene::ParticleEventTrigger::Death,
+        .action = kb::scene::ParticleEventAction::EmitEffectAsset,
+        .targetEffect = {.assetId = 4U},
+        .count = 1U,
+        .maxDepth = 1U,
+        .perStepBudget = 1U,
+    });
     const auto rejected = kb::editor::ParticleEditorBakeHostCommand::Execute(
         unsupported, owner, registry, root, console);
     const kb::editor::EditorConsoleEntry& diagnostic = console.Entries().back();
@@ -88,7 +95,7 @@ void RunHostBakeCommandTest() {
             !rejected.diagnostics.empty() &&
             rejected.diagnostics.front().code == kb::scene::ParticleEffectDiagnosticCode::UnsupportedCapability &&
             diagnostic.level == kb::editor::EditorConsoleLevel::Error &&
-            diagnostic.message.find("effect.emitter[0].output.type") != std::string::npos &&
+            diagnostic.message.find("effect.eventBinding[0].action") != std::string::npos &&
             ReadBytes(sourcePath) == sourceBytes,
         "host Bake did not surface the typed unsupported diagnostic or changed source bytes");
 
