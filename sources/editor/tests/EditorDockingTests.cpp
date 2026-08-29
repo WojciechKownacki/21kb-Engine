@@ -403,6 +403,46 @@ void RunClosedMaterialEditorReopensInCenterDockTest() {
     kb::editor::tests::Require(scene != nullptr && reopened->leafId == scene->leafId, "Reopened Material Editor should return to the center workspace group");
 }
 
+void RunBuildGameMenuAndWorkspaceActivationTest() {
+    // The panel is only ever reached through File > Build Game, so the row has to be
+    // there and has to be the one the handler acts on.
+    kb::editor::tests::Require(
+        kb::editor::EditorToolbarLayout::FixedRowCount(kb::editor::EditorMenuCommand::File) == 5,
+        "The File menu must list five rows once Build Game joins it");
+    kb::editor::tests::Require(
+        kb::editor::EditorToolbarLayout::DropdownLabel(kb::editor::EditorMenuCommand::File, 4) == "Build Game",
+        "File row 4 must be Build Game, which is the row the pointer handler opens the panel from");
+
+    kb::editor::EditorDockModel model;
+    const kb::editor::DockPanel* panel = RequirePanel(model, 16U);
+    kb::editor::tests::Require(
+        panel->kind == kb::editor::DockPanelKind::BuildGame && panel->title == "Build Game",
+        "Default workspace should register the Build Game panel");
+
+    // The case that actually bites: a workspace saved before this panel existed restores a
+    // tree with no leaf for it. The panel is then in the model but on no screen, and the
+    // menu row is the only way back to it - so activating by kind has to place it.
+    kb::editor::tests::Require(model.Commands().ClosePanel(16U),
+        "Closing Build Game should succeed");
+    const kb::editor::DockLayout closedLayout = BuildDefaultLayout(model);
+    kb::editor::tests::Require(FindPanelLayout(closedLayout, 16U) == nullptr,
+        "A closed Build Game panel must be in no leaf, the way an older saved layout leaves it");
+    kb::editor::tests::Require(
+        model.Commands().ActivatePanelKind(
+            kb::editor::DockPanelKind::BuildGame,
+            kb::editor::DockArea::Center),
+        "File > Build Game must reopen the panel even when no saved leaf holds it");
+    const kb::editor::DockLayout reopenedLayout = BuildDefaultLayout(model);
+    const kb::editor::DockPanelLayout* reopened = FindPanelLayout(reopenedLayout, 16U);
+    kb::editor::tests::Require(reopened != nullptr && reopened->active,
+        "Reopened Build Game panel should receive focus");
+    const kb::editor::DockLeafLayout* sceneLeaf = FindLeafForPanel(reopenedLayout, 2U);
+    const kb::editor::DockLeafLayout* buildLeaf = FindLeafForPanel(reopenedLayout, 16U);
+    kb::editor::tests::Require(
+        sceneLeaf != nullptr && buildLeaf != nullptr && sceneLeaf->leafId == buildLeaf->leafId,
+        "Build Game should open in the central workspace, beside the Scene View");
+}
+
 void RunSkeletalMeshEditorWorkspaceActivationTest() {
     kb::editor::EditorDockModel model;
     const kb::editor::DockPanel* panel = RequirePanel(model, 11U);
@@ -1354,6 +1394,7 @@ void RunEditorDockingTests() {
     RunMaterialEditorPanelActivationTest();
     RunClosedMaterialEditorReopensInCenterDockTest();
     RunClosedUtilityPanelsReopenInRightDockTest();
+    RunBuildGameMenuAndWorkspaceActivationTest();
     RunSkeletalMeshEditorWorkspaceActivationTest();
     RunAnimationClipEditorWorkspaceActivationTest();
     RunAnimatorEditorWorkspaceActivationTest();

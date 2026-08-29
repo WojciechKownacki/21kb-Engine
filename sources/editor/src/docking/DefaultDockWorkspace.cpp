@@ -22,12 +22,13 @@ std::vector<DockPanel> DefaultDockWorkspace::CreatePanels() const {
         DockPanel{ .id = 13, .kind = DockPanelKind::AnimatorEditor, .title = "Animator Editor", .area = DockArea::Center, .floatingRect = DockRect{ 144, 136, 860, 620 } },
         DockPanel{ .id = 14, .kind = DockPanelKind::ParticleEditor, .title = "21kb Particle System", .area = DockArea::Center, .floatingRect = DockRect{ 148, 140, 900, 640 } },
         DockPanel{ .id = 15, .kind = DockPanelKind::EditorSettings, .title = "Editor Settings", .area = DockArea::Right, .floatingRect = DockRect{ 168, 128, 720, 600 } },
+        DockPanel{ .id = 16, .kind = DockPanelKind::BuildGame, .title = "Build Game", .area = DockArea::Center, .floatingRect = DockRect{ 152, 144, 1180, 720 } },
     };
 }
 
 std::unique_ptr<DockNode> DefaultDockWorkspace::CreateRoot(std::uint32_t& nextNodeId) const {
     auto left = DockNodeFactory::MakeLeaf(Next(nextNodeId), { 1 });
-    auto center = DockNodeFactory::MakeLeaf(Next(nextNodeId), { 2, 8, 10, 11, 12, 13, 14 });
+    auto center = DockNodeFactory::MakeLeaf(Next(nextNodeId), { 2, 8, 10, 11, 12, 13, 14, 16 });
     auto right = DockNodeFactory::MakeLeaf(Next(nextNodeId), { 4, 7, 15, 9 });
     auto bottom = DockNodeFactory::MakeLeaf(Next(nextNodeId), { 5, 6 });
     auto middle = DockNodeFactory::MakeSplit(Next(nextNodeId), DockSplitAxis::Horizontal, 0.72F, std::move(center), std::move(right));
