@@ -969,6 +969,15 @@ void EditorApplicationMessageLoop::Run(EditorApplicationState& state) {
             }
             if (isPaint) {
                 paintMs += dispatchMs;
+                // One repaint per pump, then let the frame run. Invalidating a row on every
+                // mouse move - which is what dragging a value does - makes the next peek
+                // hand back the WM_PAINT that move just caused, so the pump alternates
+                // move/paint/move/paint until it hits its own message cap: measured at 128
+                // messages and 134 ms of WM_PAINT around a single 2.5 ms frame tick, which is
+                // why the scene crawled while the row it was following repainted. Leaving the
+                // rest to the frame gate also puts consecutive mouse moves back next to each
+                // other, which is the only way they can be coalesced.
+                break;
             }
         }
         const double pumpMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - pumpStart).count();
