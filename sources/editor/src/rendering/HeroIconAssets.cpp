@@ -118,6 +118,61 @@ static constexpr std::array<HeroIconPath, 2> kSkeleton{
     HeroIconPath{ "M12 6.75v6.5m0-4.5-5 1.75m5-1.75 5 1.75m-5 2.75L9 18m3-4.75L15 18", false },
 };
 
+// Heroicons solid "lock-closed" (MIT).
+static constexpr std::array<HeroIconPath, 1> kLockClosed{
+    HeroIconPath{ "M12 1.5a5.25 5.25 0 0 0-5.25 5.25v3a3 3 0 0 0-3 3v6.75a3 3 0 0 0 3 3h10.5a3 3 0 0 0 3-3v-6.75a3 3 0 0 0-3-3v-3c0-2.9-2.35-5.25-5.25-5.25Zm3.75 8.25v-3a3.75 3.75 0 1 0-7.5 0v3h7.5Z", true },
+};
+// Heroicons solid "server" (MIT).
+static constexpr std::array<HeroIconPath, 2> kServer{
+    HeroIconPath{ "M4.08 5.227A3 3 0 0 1 6.979 3H17.02a3 3 0 0 1 2.9 2.227l2.113 7.926A5.228 5.228 0 0 0 18.75 12H5.25a5.228 5.228 0 0 0-3.284 1.153L4.08 5.227Z", true },
+    HeroIconPath{ "M5.25 13.5a3.75 3.75 0 1 0 0 7.5h13.5a3.75 3.75 0 1 0 0-7.5H5.25Zm10.5 4.5a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5Zm3.75-.75a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0Z", true },
+};
+// Heroicons solid "wrench-screwdriver" (MIT).
+static constexpr std::array<HeroIconPath, 3> kWrenchScrewdriver{
+    HeroIconPath{ "M12 6.75a5.25 5.25 0 0 1 6.775-5.025.75.75 0 0 1 .313 1.248l-3.32 3.319c.063.475.276.934.641 1.299.365.365.824.578 1.3.64l3.318-3.319a.75.75 0 0 1 1.248.313 5.25 5.25 0 0 1-5.472 6.756c-1.018-.086-1.87.1-2.309.634L7.344 21.3A3.298 3.298 0 1 1 2.7 16.657l8.684-7.151c.533-.44.72-1.291.634-2.309A5.342 5.342 0 0 1 12 6.75ZM4.117 19.125a.75.75 0 0 1 .75-.75h.008a.75.75 0 0 1 .75.75v.008a.75.75 0 0 1-.75.75h-.008a.75.75 0 0 1-.75-.75v-.008Z", true },
+    HeroIconPath{ "M10.076 8.64 7.875 6.44V4.874a.75.75 0 0 0-.364-.643l-3.75-2.25a.75.75 0 0 0-.916.113l-.75.75a.75.75 0 0 0-.113.916l2.25 3.75a.75.75 0 0 0 .643.364h1.564l2.062 2.062 1.575-1.297Z", true },
+    HeroIconPath{ "M12.556 17.329 16.739 21.511a3.375 3.375 0 0 0 4.773-4.773l-3.306-3.305a6.803 6.803 0 0 1-1.53.043c-.394-.034-.682-.006-.867.042a.589.589 0 0 0-.167.063l-3.086 3.748Zm3.414-1.36a.75.75 0 0 1 1.06 0l1.875 1.876a.75.75 0 1 1-1.06 1.06L15.97 17.03a.75.75 0 0 1 0-1.06Z", true },
+};
+// Heroicons solid "code-bracket" (MIT).
+static constexpr std::array<HeroIconPath, 1> kCodeBracket{
+    HeroIconPath{ "M14.447 3.026a.75.75 0 0 1 .527.921l-4.5 16.5a.75.75 0 0 1-1.448-.394l4.5-16.5a.75.75 0 0 1 .921-.527ZM16.72 6.22a.75.75 0 0 1 1.06 0l5.25 5.25a.75.75 0 0 1 0 1.06l-5.25 5.25a.75.75 0 1 1-1.06-1.06L21.44 12l-4.72-4.72a.75.75 0 0 1 0-1.06Zm-9.44 0a.75.75 0 0 1 0 1.06L2.56 12l4.72 4.72a.75.75 0 0 1-1.06 1.06L.97 12.53a.75.75 0 0 1 0-1.06l5.25-5.25a.75.75 0 0 1 1.06 0Z", true },
+};
+// Heroicons solid "rocket-launch" (MIT).
+static constexpr std::array<HeroIconPath, 2> kRocketLaunch{
+    HeroIconPath{ "M9.315 7.584C12.195 3.883 16.695 1.5 21.75 1.5a.75.75 0 0 1 .75.75c0 5.056-2.383 9.555-6.084 12.436A6.75 6.75 0 0 1 9.75 22.5a.75.75 0 0 1-.75-.75v-4.131A15.838 15.838 0 0 1 6.382 15H2.25a.75.75 0 0 1-.75-.75 6.75 6.75 0 0 1 7.815-6.666ZM15 6.75a2.25 2.25 0 1 0 0 4.5 2.25 2.25 0 0 0 0-4.5Z", true },
+    HeroIconPath{ "M5.26 17.242a.75.75 0 1 0-.897-1.203 5.243 5.243 0 0 0-2.05 5.022.75.75 0 0 0 .625.627 5.243 5.243 0 0 0 5.022-2.051.75.75 0 1 0-1.202-.897 3.744 3.744 0 0 1-3.008 1.51c0-1.23.592-2.323 1.51-3.008Z", true },
+};
+// Lucide "save" (ISC).
+static constexpr std::array<HeroIconPath, 3> kSave{
+    HeroIconPath{ "M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z", false },
+    HeroIconPath{ "M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7", false },
+    HeroIconPath{ "M7 3v4a1 1 0 0 0 1 1h7", false },
+};
+// Original editor glyph. No permissively licensed UI icon set ships brand marks, so the
+// platform glyphs below are drawn here rather than vendored: four panes on a 2x2 grid,
+// which is what the mark reduces to at row height anyway.
+static constexpr std::array<HeroIconPath, 4> kPlatformWindows{
+    HeroIconPath{ "M3 3.75h8.25V12H3V3.75Z", true },
+    HeroIconPath{ "M12.75 3.75H21V12h-8.25V3.75Z", true },
+    HeroIconPath{ "M3 13.5h8.25v6.75H3V13.5Z", true },
+    HeroIconPath{ "M12.75 13.5H21v6.75h-8.25V13.5Z", true },
+};
+// Original editor glyph: a robot reduced to dome, body, arms and antennae. The dome and
+// its two eyes are one path so the even-odd rule punches the eyes out of it.
+static constexpr std::array<HeroIconPath, 4> kPlatformAndroid{
+    HeroIconPath{ "M7.1 3.1 8.6 5.6M16.9 3.1 15.4 5.6", false },
+    HeroIconPath{ "M4 11.4a8 8 0 0 1 16 0H4Zm5.1-2.6a.95.95 0 1 0 0-1.9.95.95 0 0 0 0 1.9Zm5.8 0a.95.95 0 1 0 0-1.9.95.95 0 0 0 0 1.9Z", true },
+    HeroIconPath{ "M4.6 12.8h14.8v6.4a2 2 0 0 1-2 2H6.6a2 2 0 0 1-2-2v-6.4Z", true },
+    HeroIconPath{ "M1.15 14.15a1.35 1.35 0 0 1 2.7 0v4.1a1.35 1.35 0 0 1-2.7 0v-4.1Zm19 0a1.35 1.35 0 0 1 2.7 0v4.1a1.35 1.35 0 0 1-2.7 0v-4.1Z", true },
+};
+// Original editor glyph: a penguin silhouette. Body and eyes are one path so the even-odd
+// rule leaves the eyes open; the beak and feet are separate marks.
+static constexpr std::array<HeroIconPath, 3> kPlatformLinux{
+    HeroIconPath{ "M12 2.2c-2.6 0-4.4 2-4.4 4.6v2.1c0 1-.4 1.7-1 2.5C5.3 13 4.6 15 4.6 16.9c0 2.6 1.9 4.6 4.3 4.6h6.2c2.4 0 4.3-2 4.3-4.6 0-1.9-.7-3.9-2-5.5-.6-.8-1-1.5-1-2.5V6.8c0-2.6-1.8-4.6-4.4-4.6Zm-1.9 4.9a.85.85 0 1 1 0 1.7.85.85 0 0 1 0-1.7Zm3.8 0a.85.85 0 1 1 0 1.7.85.85 0 0 1 0-1.7Z", true },
+    HeroIconPath{ "M10.4 9.6h3.2L12 11.5 10.4 9.6Z", true },
+    HeroIconPath{ "M7.4 20.6c-.9.5-2 .8-2.9.6-.7-.2-.8-.9-.2-1.3l2.4-1.5 .7 2.2Zm9.2 0c.9.5 2 .8 2.9.6.7-.2.8-.9.2-1.3l-2.4-1.5-.7 2.2Z", true },
+};
+
 } // namespace
 
 HeroIconGlyph HeroIconAssets::Minus() noexcept {
@@ -230,6 +285,42 @@ HeroIconGlyph HeroIconAssets::Camera() noexcept {
 
 HeroIconGlyph HeroIconAssets::Skeleton() noexcept {
     return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kSkeleton }, .strokeWidth = 1.8F };
+}
+
+HeroIconGlyph HeroIconAssets::LockClosed() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kLockClosed } };
+}
+
+HeroIconGlyph HeroIconAssets::Server() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kServer } };
+}
+
+HeroIconGlyph HeroIconAssets::WrenchScrewdriver() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kWrenchScrewdriver } };
+}
+
+HeroIconGlyph HeroIconAssets::CodeBracket() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kCodeBracket } };
+}
+
+HeroIconGlyph HeroIconAssets::RocketLaunch() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kRocketLaunch } };
+}
+
+HeroIconGlyph HeroIconAssets::Save() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kSave }, .strokeWidth = 2.0F };
+}
+
+HeroIconGlyph HeroIconAssets::PlatformWindows() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kPlatformWindows } };
+}
+
+HeroIconGlyph HeroIconAssets::PlatformAndroid() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kPlatformAndroid }, .strokeWidth = 1.7F };
+}
+
+HeroIconGlyph HeroIconAssets::PlatformLinux() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kPlatformLinux } };
 }
 
 } // namespace kb::editor
