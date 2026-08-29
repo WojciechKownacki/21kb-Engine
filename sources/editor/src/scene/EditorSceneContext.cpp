@@ -2456,6 +2456,76 @@ int EditorSceneContext::BuildGameScrollOffset() const noexcept {
     return buildGameScrollOffset_;
 }
 
+bool EditorSceneContext::IsBuildGameSectionCollapsed(int section) const noexcept {
+    return section >= 0 && section < 32 &&
+        (buildGameCollapsedSections_ & (1U << static_cast<unsigned>(section))) != 0U;
+}
+
+void EditorSceneContext::ToggleBuildGameSection(int section) noexcept {
+    if (section < 0 || section >= 32) {
+        return;
+    }
+    buildGameCollapsedSections_ ^= (1U << static_cast<unsigned>(section));
+}
+
+int EditorSceneContext::BuildGameSelectedTarget() const noexcept {
+    return buildGameSelectedTarget_;
+}
+
+bool EditorSceneContext::SetBuildGameSelectedTarget(int target) noexcept {
+    if (target < 0 || buildGameSelectedTarget_ == target) {
+        return false;
+    }
+    buildGameSelectedTarget_ = target;
+    return true;
+}
+
+int EditorSceneContext::BuildGameSelectedProfile() const noexcept {
+    return buildGameSelectedProfile_;
+}
+
+bool EditorSceneContext::SetBuildGameSelectedProfile(int profile) noexcept {
+    if (profile < 0 || buildGameSelectedProfile_ == profile) {
+        return false;
+    }
+    buildGameSelectedProfile_ = profile;
+    return true;
+}
+
+int EditorSceneContext::BuildGameHoveredTarget() const noexcept {
+    return buildGameHoveredTarget_;
+}
+
+int EditorSceneContext::BuildGameHoveredProfile() const noexcept {
+    return buildGameHoveredProfile_;
+}
+
+bool EditorSceneContext::SetBuildGameSidebarHover(int target, int profile) noexcept {
+    if (buildGameHoveredTarget_ == target && buildGameHoveredProfile_ == profile) {
+        return false;
+    }
+    buildGameHoveredTarget_ = target;
+    buildGameHoveredProfile_ = profile;
+    return true;
+}
+
+int EditorSceneContext::BuildGameHoveredSection() const noexcept {
+    return buildGameHoveredSection_;
+}
+
+int EditorSceneContext::BuildGameHoveredRow() const noexcept {
+    return buildGameHoveredRow_;
+}
+
+bool EditorSceneContext::SetBuildGameHover(int section, int row) noexcept {
+    if (buildGameHoveredSection_ == section && buildGameHoveredRow_ == row) {
+        return false;
+    }
+    buildGameHoveredSection_ = section;
+    buildGameHoveredRow_ = row;
+    return true;
+}
+
 bool EditorSceneContext::SetBuildGameScrollOffset(int offset, int maxOffset) noexcept {
     const int clamped = std::clamp(offset, 0, std::max(0, maxOffset));
     if (buildGameScrollOffset_ == clamped) {

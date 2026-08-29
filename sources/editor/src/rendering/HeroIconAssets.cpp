@@ -173,6 +173,17 @@ static constexpr std::array<HeroIconPath, 3> kPlatformLinux{
     HeroIconPath{ "M7.4 20.6c-.9.5-2 .8-2.9.6-.7-.2-.8-.9-.2-1.3l2.4-1.5 .7 2.2Zm9.2 0c.9.5 2 .8 2.9.6.7-.2.8-.9.2-1.3l-2.4-1.5-.7 2.2Z", true },
 };
 
+// Original editor glyph: the disclosure caret. Heroicons and Lucide both carry chevrons
+// rather than a filled triangle, and the panels want the triangle - so it is drawn here,
+// but drawn through the icon painter, which antialiases. The GDI Polygon it replaces did
+// not, which is the whole of why the old arrow looked ragged.
+static constexpr std::array<HeroIconPath, 1> kDisclosureCollapsed{
+    HeroIconPath{ "M9 5.5 17 12l-8 6.5V5.5Z", true },
+};
+static constexpr std::array<HeroIconPath, 1> kDisclosureExpanded{
+    HeroIconPath{ "M5.5 9H18.5L12 17 5.5 9Z", true },
+};
+
 } // namespace
 
 HeroIconGlyph HeroIconAssets::Minus() noexcept {
@@ -321,6 +332,14 @@ HeroIconGlyph HeroIconAssets::PlatformAndroid() noexcept {
 
 HeroIconGlyph HeroIconAssets::PlatformLinux() noexcept {
     return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kPlatformLinux } };
+}
+
+HeroIconGlyph HeroIconAssets::DisclosureCollapsed() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kDisclosureCollapsed } };
+}
+
+HeroIconGlyph HeroIconAssets::DisclosureExpanded() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kDisclosureExpanded } };
 }
 
 } // namespace kb::editor

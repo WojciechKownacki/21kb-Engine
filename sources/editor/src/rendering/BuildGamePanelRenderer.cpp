@@ -24,6 +24,8 @@ using panel_style::DrawInputFrame;
 using panel_style::DrawSectionCardOutline;
 using panel_style::FillSectionHeaderBackground;
 using panel_style::HoverFill;
+using panel_style::DrawDisclosureCaret;
+using panel_style::DrawRowDivider;
 
 [[nodiscard]] COLORREF Color(EditorColor color) noexcept {
     return GdiDrawing::ToColorRef(color);
@@ -64,13 +66,12 @@ struct BuildTarget {
 };
 
 // The five targets the panel offers, split into the two groups the sidebar shows.
-constexpr std::array<BuildTarget, 3> kPlayerTargets{{
+// Player rows first, then the dedicated server rows: one list, so a row index means the
+// same thing to the painter, the hit test and the selection.
+constexpr std::array<BuildTarget, 5> kTargets{{
     { "Windows 64 bit", "Game", HeroIconKind::PlatformWindows },
     { "Android ASTC", "Player package  |  arm64-v8a  |  APK", HeroIconKind::PlatformAndroid },
     { "Linux 64 bit", "Player package  |  x86-64  |  Portable folder", HeroIconKind::PlatformLinux },
-}};
-
-constexpr std::array<BuildTarget, 2> kServerTargets{{
     { "Windows Dedicated Server", "Dedicated server  |  x86-64  |  Portable folder", HeroIconKind::Server },
     { "Linux Dedicated Server", "Dedicated server  |  x86-64  |  Portable folder", HeroIconKind::Server },
 }};
@@ -137,7 +138,11 @@ void DrawTargetRow(
     const RECT& row,
     const BuildTarget& target,
     bool selected,
+    bool hovered,
     const EditorTheme& theme) {
+    if (!selected && hovered) {
+        GdiDrawing::FillRectColor(dc, row, HoverFill(theme));
+    }
     if (selected) {
         GdiDrawing::FillRectColor(dc, row, Blend(Color(theme.panel), Color(theme.accent), 18));
         GdiDrawing::FillRectColor(dc, RECT{ row.left, row.top, row.left + 3, row.bottom }, Color(theme.accent));
@@ -150,7 +155,10 @@ void DrawTargetRow(
         12, selected ? FW_SEMIBOLD : FW_NORMAL);
 }
 
-void DrawProfileRow(HDC dc, const RECT& row, const BuildProfile& profile, bool selected, const EditorTheme& theme) {
+void DrawProfileRow(HDC dc, const RECT& row, const BuildProfile& profile, bool selected, bool hovered, const EditorTheme& theme) {
+    if (!selected && hovered) {
+        GdiDrawing::FillRectColor(dc, row, HoverFill(theme));
+    }
     if (selected) {
         GdiDrawing::FillRectColor(dc, row, Blend(Color(theme.panel), Color(theme.accent), 18));
         GdiDrawing::FillRectColor(dc, RECT{ row.left, row.top, row.left + 3, row.bottom }, Color(theme.accent));
@@ -163,7 +171,7 @@ void DrawProfileRow(HDC dc, const RECT& row, const BuildProfile& profile, bool s
         12, selected ? FW_SEMIBOLD : FW_NORMAL);
 }
 
-void DrawHeader(HDC dc, const RECT& header, const BuildTarget& target, const EditorTheme& theme) {
+void DrawHeader(HDC dc, const RECT& header, const BuildTarget& target, std::string_view profile, const EditorTheme& theme) {
     GdiDrawing::FillRectColor(dc, header, Blend(Color(theme.panel), Color(theme.chrome), 40));
     const RECT icon = BuildGamePanelLayout::IconBox(header, 26);
     HeroIconPainter::Draw(dc, icon, target.icon, Color(theme.accent));
@@ -171,8 +179,8 @@ void DrawHeader(HDC dc, const RECT& header, const BuildTarget& target, const Edi
     DrawText(dc, title, target.name, Color(theme.textPrimary), 14, FW_SEMIBOLD);
     const RECT subtitle{ icon.right + 12, header.top + 28, header.right - 140, header.bottom - 8 };
     DrawText(dc, subtitle, target.summary, Color(theme.textSecondary), 11);
-    const RECT profile{ header.right - 132, header.top, header.right - 12, header.bottom };
-    DrawText(dc, profile, kBuildProfiles[0].name, Color(theme.textSecondary), 11, FW_NORMAL,
+    const RECT profileRect{ header.right - 132, header.top, header.right - 12, header.bottom };
+    DrawText(dc, profileRect, profile, Color(theme.textSecondary), 11, FW_NORMAL,
         DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
 }
 
@@ -189,21 +197,38 @@ void DrawCheckbox(HDC dc, const RECT& box, const EditorTheme& theme) {
     HDC dc,
     const RECT& body,
     int y,
+    int sectionIndex,
     const OptionSection& section,
-    const EditorTheme& theme) {
+    const EditorTheme& theme,
+    const EditorSceneContext& sceneContext) {
+    const bool collapsed = sceneContext.IsBuildGameSectionCollapsed(sectionIndex);
+    const int visibleRows = collapsed ? 0 : static_cast<int>(section.rows.size());
+    const bool headerHovered = sceneContext.BuildGameHoveredSection() == sectionIndex &&
+        sceneContext.BuildGameHoveredRow() < 0;
     const RECT header = BuildGamePanelLayout::SectionHeaderRow(body, y);
     const RECT card{ body.left, header.top, body.right,
-        header.bottom + (static_cast<int>(section.rows.size()) * BuildGamePanelLayout::kOptionRowHeight) };
+        header.bottom + (visibleRows * BuildGamePanelLayout::kOptionRowHeight) };
     DrawSectionCardOutline(dc, card, theme);
-    FillSectionHeaderBackground(dc, header, Color(theme.strip));
-    const RECT icon = BuildGamePanelLayout::IconBox(header, 15);
+    FillSectionHeaderBackground(dc, header, headerHovered ? HoverFill(theme) : Color(theme.strip));
+    const RECT caret = BuildGamePanelLayout::CaretBox(header);
+    DrawDisclosureCaret(dc, caret, Color(theme.textSecondary), !collapsed);
+    const RECT icon{ caret.right + 6, caret.top, caret.right + 21, caret.top + 15 };
     HeroIconPainter::Draw(dc, icon, section.icon, Color(theme.textSecondary));
     DrawText(dc, RECT{ icon.right + 9, header.top, header.right - 8, header.bottom },
         section.title, Color(theme.textPrimary), 12, FW_SEMIBOLD);
     y = header.bottom;
+    if (collapsed) {
+        return y + BuildGamePanelLayout::kSectionSpacing;
+    }
 
+    int rowIndex = 0;
     for (const OptionRowSpec& spec : section.rows) {
         const RECT row = BuildGamePanelLayout::OptionRow(body, y);
+        if (sceneContext.BuildGameHoveredSection() == sectionIndex &&
+            sceneContext.BuildGameHoveredRow() == rowIndex) {
+            GdiDrawing::FillRectColor(dc,
+                RECT{ row.left + 1, row.top, row.right - 1, row.bottom }, HoverFill(theme));
+        }
         DrawText(dc, BuildGamePanelLayout::OptionLabel(row), spec.label, Color(theme.textPrimary), 12);
         const RECT value = BuildGamePanelLayout::OptionValueBox(row);
         if (spec.value.empty()) {
@@ -213,7 +238,11 @@ void DrawCheckbox(HDC dc, const RECT& box, const EditorTheme& theme) {
             DrawText(dc, RECT{ value.left + 8, value.top, value.right - 8, value.bottom },
                 spec.value, Color(theme.textPrimary), 12);
         }
+        if (rowIndex + 1 < visibleRows) {
+            DrawRowDivider(dc, row, theme);
+        }
         y = row.bottom;
+        ++rowIndex;
     }
     return y + BuildGamePanelLayout::kSectionSpacing;
 }
@@ -229,6 +258,16 @@ void DrawFooter(HDC dc, const BuildGamePanelLayoutRects& rects, const EditorThem
         DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 
+[[nodiscard]] std::array<OptionSection, 5> Sections() noexcept {
+    return {{
+        { "PROJECT", HeroIconKind::WrenchScrewdriver, kProjectRows },
+        { "WINDOWS APPLICATION", HeroIconKind::Cube, kApplicationRows },
+        { "CONTENT", HeroIconKind::DocumentText, kContentRows },
+        { "SIGNING", HeroIconKind::LockClosed, kSigningRows },
+        { "OUTPUT", HeroIconKind::Save, kOutputRows },
+    }};
+}
+
 [[nodiscard]] std::array<int, 5> SectionRowCounts() noexcept {
     return {
         static_cast<int>(kProjectRows.size()),
@@ -241,9 +280,74 @@ void DrawFooter(HDC dc, const BuildGamePanelLayoutRects& rects, const EditorThem
 
 } // namespace
 
-int BuildGamePanelRenderer::SettingsContentHeight() noexcept {
-    const std::array<int, 5> rows = SectionRowCounts();
+int BuildGamePanelRenderer::SectionCount() noexcept {
+    return static_cast<int>(Sections().size());
+}
+
+int BuildGamePanelRenderer::SettingsContentHeight(const EditorSceneContext& sceneContext) noexcept {
+    std::array<int, 5> rows = SectionRowCounts();
+    for (std::size_t index = 0U; index < rows.size(); ++index) {
+        if (sceneContext.IsBuildGameSectionCollapsed(static_cast<int>(index))) {
+            rows[index] = 0;
+        }
+    }
     return BuildGamePanelLayout::ContentHeight(std::span<const int>{ rows });
+}
+
+BuildGamePanelRenderer::SidebarHit BuildGamePanelRenderer::HitTestSidebar(
+    const RECT& content, int x, int y) {
+    const BuildGamePanelLayoutRects rects = BuildGamePanelLayout::Resolve(content);
+    SidebarHit hit{};
+    if (x < rects.sidebar.left || x >= rects.sidebar.right) {
+        return hit;
+    }
+    for (int index = 0; index < static_cast<int>(kTargets.size()); ++index) {
+        const RECT row = BuildGamePanelLayout::TargetRow(rects.platformsList, index);
+        if (y >= row.top && y < row.bottom && row.bottom <= rects.platformsList.bottom) {
+            hit.target = index;
+            return hit;
+        }
+    }
+    for (int index = 0; index < static_cast<int>(kBuildProfiles.size()); ++index) {
+        const RECT row = BuildGamePanelLayout::ProfileRow(rects.profilesList, index);
+        if (y >= row.top && y < row.bottom) {
+            hit.profile = index;
+            return hit;
+        }
+    }
+    return hit;
+}
+
+BuildGamePanelRenderer::RowHit BuildGamePanelRenderer::HitTest(
+    const RECT& content, const EditorSceneContext& sceneContext, int x, int y) {
+    const BuildGamePanelLayoutRects rects = BuildGamePanelLayout::Resolve(content);
+    if (x < rects.body.left || x >= rects.body.right || y < rects.body.top || y >= rects.body.bottom) {
+        return RowHit{};
+    }
+    const int maxScroll = BuildGamePanelLayout::MaxScrollOffset(
+        rects.body, SettingsContentHeight(sceneContext));
+    int cursor = static_cast<int>(rects.body.top) -
+        std::clamp(sceneContext.BuildGameScrollOffset(), 0, maxScroll);
+    const std::array<OptionSection, 5> sections = Sections();
+    for (int index = 0; index < static_cast<int>(sections.size()); ++index) {
+        const int headerBottom = cursor + BuildGamePanelLayout::kSectionHeaderHeight;
+        if (y >= cursor && y < headerBottom) {
+            return RowHit{ .section = index, .row = -1 };
+        }
+        cursor = headerBottom;
+        if (!sceneContext.IsBuildGameSectionCollapsed(index)) {
+            const OptionSection& section = sections[static_cast<std::size_t>(index)];
+            for (int row = 0; row < static_cast<int>(section.rows.size()); ++row) {
+                const int rowBottom = cursor + BuildGamePanelLayout::kOptionRowHeight;
+                if (y >= cursor && y < rowBottom) {
+                    return RowHit{ .section = index, .row = row };
+                }
+                cursor = rowBottom;
+            }
+        }
+        cursor += BuildGamePanelLayout::kSectionSpacing;
+    }
+    return RowHit{};
 }
 
 void BuildGamePanelRenderer::Paint(
@@ -256,34 +360,32 @@ void BuildGamePanelRenderer::Paint(
 
     GdiDrawing::FillRectColor(dc, rects.sidebar, Color(theme.chrome));
     GdiDrawing::FillRectColor(dc, rects.divider, Color(theme.borderChrome));
+    const int selectedTarget = std::clamp(sceneContext.BuildGameSelectedTarget(), 0,
+        static_cast<int>(kTargets.size()) - 1);
+    const int selectedProfile = std::clamp(sceneContext.BuildGameSelectedProfile(), 0,
+        static_cast<int>(kBuildProfiles.size()) - 1);
+
     DrawSidebarCaption(dc, rects.platformsCaption, "PLATFORMS", theme);
     DrawSidebarCaption(dc, BuildGamePanelLayout::TargetGroupCaption(rects.platformsList, 0), "Player", theme);
-    for (int index = 0; index < static_cast<int>(kPlayerTargets.size()); ++index) {
-        DrawTargetRow(dc, BuildGamePanelLayout::TargetRow(rects.platformsList, index),
-            kPlayerTargets[static_cast<std::size_t>(index)], index == 0, theme);
-    }
     DrawSidebarCaption(dc, BuildGamePanelLayout::TargetGroupCaption(rects.platformsList, 1), "Dedicated server", theme);
-    for (int index = 0; index < static_cast<int>(kServerTargets.size()); ++index) {
-        DrawTargetRow(dc, BuildGamePanelLayout::TargetRow(rects.platformsList, index + 3),
-            kServerTargets[static_cast<std::size_t>(index)], false, theme);
+    for (int index = 0; index < static_cast<int>(kTargets.size()); ++index) {
+        DrawTargetRow(dc, BuildGamePanelLayout::TargetRow(rects.platformsList, index),
+            kTargets[static_cast<std::size_t>(index)], index == selectedTarget,
+            sceneContext.BuildGameHoveredTarget() == index, theme);
     }
 
     DrawSidebarCaption(dc, rects.profilesCaption, "BUILD PROFILES", theme);
     for (int index = 0; index < static_cast<int>(kBuildProfiles.size()); ++index) {
         DrawProfileRow(dc, BuildGamePanelLayout::ProfileRow(rects.profilesList, index),
-            kBuildProfiles[static_cast<std::size_t>(index)], index == 0, theme);
+            kBuildProfiles[static_cast<std::size_t>(index)], index == selectedProfile,
+            sceneContext.BuildGameHoveredProfile() == index, theme);
     }
 
-    DrawHeader(dc, rects.header, kPlayerTargets[0], theme);
+    DrawHeader(dc, rects.header, kTargets[static_cast<std::size_t>(selectedTarget)],
+        kBuildProfiles[static_cast<std::size_t>(selectedProfile)].name, theme);
 
-    const std::array<OptionSection, 5> sections{{
-        { "PROJECT", HeroIconKind::WrenchScrewdriver, kProjectRows },
-        { "WINDOWS APPLICATION", HeroIconKind::Cube, kApplicationRows },
-        { "CONTENT", HeroIconKind::DocumentText, kContentRows },
-        { "SIGNING", HeroIconKind::LockClosed, kSigningRows },
-        { "OUTPUT", HeroIconKind::Save, kOutputRows },
-    }};
-    const int contentHeight = SettingsContentHeight();
+    const std::array<OptionSection, 5> sections = Sections();
+    const int contentHeight = SettingsContentHeight(sceneContext);
     const int maxScroll = BuildGamePanelLayout::MaxScrollOffset(rects.body, contentHeight);
     const int scroll = std::clamp(sceneContext.BuildGameScrollOffset(), 0, maxScroll);
 
@@ -292,9 +394,10 @@ void BuildGamePanelRenderer::Paint(
     // by the clip instead of vanishing.
     const int savedDc = SaveDC(dc);
     IntersectClipRect(dc, rects.body.left, rects.body.top, rects.body.right, rects.body.bottom);
-    int y = rects.body.top - scroll;
-    for (const OptionSection& section : sections) {
-        y = DrawSection(dc, rects.body, y, section, theme);
+    int y = static_cast<int>(rects.body.top) - scroll;
+    for (int index = 0; index < static_cast<int>(sections.size()); ++index) {
+        y = DrawSection(dc, rects.body, y, index,
+            sections[static_cast<std::size_t>(index)], theme, sceneContext);
     }
     RestoreDC(dc, savedDc);
 
