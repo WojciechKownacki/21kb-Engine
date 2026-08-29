@@ -10,6 +10,10 @@ namespace kb::editor {
 struct HeroIconPath {
     std::string_view data{};
     bool filled = false;
+    // How a filled path decides what is inside it. The vendored solid Heroicons declare
+    // fill-rule="evenodd", so that stays the default; a glyph whose subpaths are meant to
+    // stack rather than punch holes in each other sets this false.
+    bool evenOdd = true;
 };
 
 struct HeroIconGlyph {
