@@ -2,6 +2,8 @@
 
 #include "engine/assets/ImportedAsset.hpp"
 #include "engine/assets/ImportedAssetLoader.hpp"
+#include "engine/assets/bake/AssetPackReader.hpp"
+#include "kb/render/bake/TextureBaker.hpp"
 
 #include <bimg/decode.h>
 #include <bx/allocator.h>
@@ -420,6 +422,13 @@ std::uint64_t& DecodedTextureDecodeCounter() {
     return nullptr;
 }
 
+// What one cache entry actually costs. A baked texture holds its payload in gpuBlocks and
+// leaves rgba8 empty, so charging the cache rgba8.size() would let it retain any number of
+// baked textures for free.
+[[nodiscard]] std::size_t RetainedTextureBytes(const RenderTextureAssetData& asset) noexcept {
+    return asset.rgba8.size() + (asset.gpuBlocks.has_value() ? asset.gpuBlocks->blocks.size() : 0U);
+}
+
 void StoreDecodedTexture(
     const std::string& path,
     std::filesystem::file_time_type writeTime,
@@ -451,7 +460,52 @@ void StoreDecodedTexture(
     }
 }
 
+// The one production path from a baked package to a runtime texture, and the first producer of
+// RenderTextureAssetData::gpuBlocks outside a test: everything else this loader can open is a
+// source image, which it decodes to RGBA8 exactly as it always has.
+//
+// A pack is addressed as a whole, and the texture it carries is the ONE artifact in it whose
+// type is the texture baker's. A pack holding several of them is refused rather than guessed
+// at: a profile may carry more than one compression family (a browser guarantees BC or ASTC
+// and only says which at runtime), the family is folded into the bake key rather than spelled
+// out in the index, and picking the wrong one would hand a device blocks it has to unpack on
+// the CPU - the exact cost the bake exists to remove. Choosing between families is a runtime
+// selection that does not exist yet, and a silent wrong answer is worse than a refusal.
+[[nodiscard]] std::optional<RenderTextureAssetData> LoadBakedTexturePack(const std::filesystem::path& path) {
+    kb::assets::bake::AssetPackReader pack;
+    if (pack.Mount(path) != kb::assets::bake::AssetPackReadStatus::Success) {
+        return std::nullopt;
+    }
+    const kb::assets::bake::AssetPackArtifactEntry* texture = nullptr;
+    for (const kb::assets::bake::AssetPackArtifactEntry& artifact : pack.Artifacts()) {
+        if (artifact.assetTypeId != kb::render::bake::kTextureBakedAssetTypeId) {
+            continue;
+        }
+        if (texture != nullptr) {
+            return std::nullopt;
+        }
+        texture = &artifact;
+    }
+    if (texture == nullptr) {
+        return std::nullopt;
+    }
+
+    std::vector<std::uint8_t> primaryBlock;
+    if (pack.ReadBlock(*texture, kb::assets::bake::kBakedAssetPrimaryBlockName, primaryBlock) !=
+        kb::assets::bake::AssetPackReadStatus::Success) {
+        return std::nullopt;
+    }
+    RenderTextureAssetData asset{};
+    if (!kb::render::bake::ReadBakedTexture(primaryBlock, asset)) {
+        return std::nullopt;
+    }
+    return asset;
+}
+
 [[nodiscard]] std::optional<RenderTextureAssetData> DecodeTextureFile(const std::filesystem::path& path) {
+    if (LowerExtension(path) == kb::assets::bake::kAssetPackFileExtension) {
+        return LoadBakedTexturePack(path);
+    }
     if (LowerExtension(path) == ".21kb") {
         return LoadImportedTextureContainer(path);
     }
@@ -505,7 +559,8 @@ void AsyncTextureDecodeWork(AsyncTextureDecodeState* state) {
                     ++DecodedTextureDecodeCounter();
                 }
                 StoreDecodedTexture(
-                    path, writeTime, fileSize, std::make_shared<const RenderTextureAssetData>(*decoded), decoded->rgba8.size());
+                    path, writeTime, fileSize, std::make_shared<const RenderTextureAssetData>(*decoded),
+                    RetainedTextureBytes(*decoded));
             }
         }
         {
@@ -659,7 +714,8 @@ std::type_index RenderTextureAssetLoader::PayloadType() const noexcept {
 }
 
 std::vector<std::string> RenderTextureAssetLoader::Extensions() const {
-    return { ".kbtex", ".png", ".jpg", ".jpeg", ".bmp", ".tga", ".dds", ".ktx" };
+    return { ".kbtex", ".png", ".jpg", ".jpeg", ".bmp", ".tga", ".dds", ".ktx",
+        std::string{ kb::assets::bake::kAssetPackFileExtension } };
 }
 
 kb::assets::AssetLoadResult RenderTextureAssetLoader::Load(const kb::assets::AssetLoadRequest& request) {
@@ -696,7 +752,8 @@ std::optional<RenderTextureAssetData> RenderTextureAssetLoader::LoadTexture(cons
             ++DecodedTextureDecodeCounter();
         }
         StoreDecodedTexture(
-            key, writeTime, fileSize, std::make_shared<const RenderTextureAssetData>(*decoded), decoded->rgba8.size());
+            key, writeTime, fileSize, std::make_shared<const RenderTextureAssetData>(*decoded),
+            RetainedTextureBytes(*decoded));
     }
     return decoded;
 }

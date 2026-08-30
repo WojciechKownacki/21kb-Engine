@@ -85,6 +85,17 @@ enum class BakedAssetSinkStatus : std::uint8_t {
     // created, because a path that cannot be opened cannot be repaired either.
     PathTooLong,
     WriteFailed,
+    // The target profile a container sink was built for is not bakeable
+    // (IsValidBakeTargetProfile said no). A loose sink never reports it: it
+    // stores no profile, because it places nothing.
+    InvalidProfile,
+    // The block is larger than a container may hold in one piece
+    // (kMaxAssetPackBlockBytes). Reported before a byte of it is written.
+    BlockTooLarge,
+    // A container sink was asked to take more work after it published its
+    // package. Only a container sink reports it; a loose sink publishes per
+    // artifact and is never finished.
+    PackAlreadyFinished,
 };
 
 [[nodiscard]] std::string_view ToString(BakedAssetSinkStatus status) noexcept;

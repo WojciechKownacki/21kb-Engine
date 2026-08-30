@@ -1,10 +1,27 @@
 #include "RendererTestSupport.hpp"
 
+#include "engine/assets/AssetManager.hpp"
+#include "engine/assets/AssetMetadata.hpp"
 #include "engine/assets/bake/AssetBakeKey.hpp"
+#include "engine/assets/bake/AssetPackReader.hpp"
+#include "engine/assets/bake/AssetPackWriter.hpp"
 #include "engine/assets/bake/BakeTargetProfile.hpp"
 #include "engine/assets/bake/BakedAssetSink.hpp"
+#include "engine/scene/MeshRendererComponent.hpp"
+#include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneObjectDesc.hpp"
+#include "engine/scene/TransformComponent.hpp"
+#include "kb/render/RenderSurface.hpp"
+#include "kb/render/Renderer.hpp"
 #include "kb/render/bake/TextureBaker.hpp"
+#include "kb/render/resources/RenderMaterialAssetLoader.hpp"
+#include "kb/render/resources/RenderMeshAssetLoader.hpp"
+#include "kb/render/resources/RenderResourceRegistry.hpp"
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
+#include "kb/render/scene/SceneRenderResourceMap.hpp"
 
 #include <bgfx/bgfx.h>
 #include <bimg/bimg.h>
@@ -17,12 +34,23 @@
 #include <array>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <memory>
+#include <optional>
 #include <span>
+#include <sstream>
 #include <string>
 #include <system_error>
 #include <vector>
+
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <Windows.h>
+#endif
 
 namespace kb::render::tests {
 namespace {
@@ -1570,6 +1598,571 @@ void RunBakedTextureDeviceCapabilityTest() {
     }
 }
 
+// ---------------------------------------------------------------------------------------
+// The container, end to end: a real bake into a real pack on disk, mounted and read back
+// through the production reader, and then through the production texture loader - which is
+// the first producer of RenderTextureAssetData::gpuBlocks outside a test this engine has
+// ever had.
+//
+// Red when: the pack loses or reorders the baked bytes, the loader stops recognising a pack,
+// or it starts guessing which of several baked textures a pack means.
+void RunBakedTexturePackRoundTripTest() {
+    const BakeTargetProfile profile = DesktopTestProfile();
+    TempStore store{ "21kb_texture_pack_roundtrip" };
+    const std::filesystem::path packPath = store.Root() / "albedo.kbpack";
+
+    const std::vector<std::uint8_t> source = MakePngSource(MakeRgba8Gradient(32U, 16U, 0xFFU), 32U, 16U);
+    TextureBakeOutput baked{};
+    {
+        kb::assets::bake::AssetPackWriter writer{ packPath, profile };
+        baked = BakeTextureBytes(
+            source,
+            TextureBakeSettings{ .semantic = RenderTextureAssetSemantic::BaseColor,
+                .colorSpace = RenderTextureAssetColorSpace::Srgb },
+            profile,
+            TextureCompressionFamily::BlockCompressedBaseline,
+            writer);
+        Require(baked.status == TextureBakeStatus::Success, "A texture bake into a pack writer did not succeed");
+        Require(writer.Finish() == kb::assets::bake::BakedAssetSinkStatus::Success,
+            "The pack holding a baked texture was not published");
+    }
+
+    kb::assets::bake::AssetPackReader pack;
+    Require(pack.Mount(packPath) == kb::assets::bake::AssetPackReadStatus::Success,
+        "A pack a texture was baked into does not mount");
+    const kb::assets::bake::AssetPackArtifactEntry* entry = pack.FindArtifact(baked.key.Digest());
+    Require(entry != nullptr && entry->assetTypeId == kb::render::bake::kTextureBakedAssetTypeId,
+        "The pack does not hold the baked texture under its own bake key");
+    std::vector<std::uint8_t> primaryBlock;
+    Require(pack.ReadBlock(*entry, kb::assets::bake::kBakedAssetPrimaryBlockName, primaryBlock) ==
+            kb::assets::bake::AssetPackReadStatus::Success,
+        "The baked texture's primary block could not be read out of the pack");
+    Require(primaryBlock == baked.primaryBlock,
+        "The container handed back different bytes than the baker put into it");
+    pack.Unmount();
+
+    // The bytes that came out of the pack build the same runtime texture the baker's own
+    // return value does: the container is transport, not a transformation.
+    RenderTextureAssetData fromPack{};
+    RenderTextureAssetData fromBaker{};
+    Require(kb::render::bake::ReadBakedTexture(primaryBlock, fromPack) &&
+            kb::render::bake::ReadBakedTexture(baked.primaryBlock, fromBaker),
+        "A primary block that came out of a pack is not a readable baked texture");
+    Require(fromPack.gpuBlocks.has_value() && fromPack.gpuBlocks->format == baked.format &&
+            fromPack.gpuBlocks->blocks == fromBaker.gpuBlocks->blocks && fromPack.rgba8.empty(),
+        "A baked texture read out of a pack does not match the one the baker returned");
+
+    // ...and the production loader gets there on its own, from nothing but the path.
+    const std::optional<RenderTextureAssetData> loaded = RenderTextureAssetLoader::LoadTexture(packPath);
+    Require(loaded.has_value(), "The texture loader could not load a baked pack");
+    Require(loaded->gpuBlocks.has_value(), "The texture loader decoded a baked pack instead of keeping its blocks");
+    Require(loaded->gpuBlocks->format == baked.format && loaded->gpuBlocks->blocks == fromBaker.gpuBlocks->blocks,
+        "The texture loader produced different blocks than the pack holds");
+    Require(loaded->rgba8.empty() && loaded->width == baked.width && loaded->height == baked.height &&
+            loaded->mipCount == baked.mipCount,
+        "The texture loader lost the baked texture's shape");
+
+    // A pack carrying two baked textures is refused rather than guessed at: the compression
+    // family is folded into the bake key, not spelled out in the index, so picking one of them
+    // would be picking blindly - and picking the family this device cannot sample costs
+    // exactly the CPU decode the bake exists to remove.
+    const std::filesystem::path ambiguousPath = store.Root() / "ambiguous.kbpack";
+    {
+        kb::assets::bake::AssetPackWriter writer{ ambiguousPath, profile };
+        const TextureBakeOutput first = BakeTextureBytes(
+            source,
+            TextureBakeSettings{ .semantic = RenderTextureAssetSemantic::BaseColor,
+                .colorSpace = RenderTextureAssetColorSpace::Srgb },
+            profile,
+            TextureCompressionFamily::BlockCompressedBaseline,
+            writer);
+        const TextureBakeOutput second = BakeTextureBytes(
+            source,
+            TextureBakeSettings{ .semantic = RenderTextureAssetSemantic::BaseColor,
+                .colorSpace = RenderTextureAssetColorSpace::Srgb },
+            profile,
+            TextureCompressionFamily::BlockCompressedExtended,
+            writer);
+        Require(first.status == TextureBakeStatus::Success && second.status == TextureBakeStatus::Success,
+            "Two family bakes into one pack did not succeed");
+        Require(writer.Finish() == kb::assets::bake::BakedAssetSinkStatus::Success,
+            "The two-family pack was not published");
+    }
+    Require(!RenderTextureAssetLoader::LoadTexture(ambiguousPath).has_value(),
+        "The texture loader picked one of two baked textures in a pack instead of refusing");
+
+    // A pack holding nothing this loader can read is a refusal, not a crash.
+    const std::filesystem::path foreignPath = store.Root() / "foreign.kbpack";
+    {
+        kb::assets::bake::AssetPackWriter writer{ foreignPath, profile };
+        kb::assets::bake::AssetBakeKey key{};
+        key.sourceContentHash = 7U;
+        key.bakerId = "SkeletalMesh";
+        key.bakerVersion = "1";
+        key.targetProfileId = "Test.Desktop";
+        key.targetProfileHash = kb::assets::bake::BakeTargetProfileFingerprint(profile);
+        const std::array<std::uint8_t, 8U> payload{ 1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U };
+        Require(writer.BeginAsset(BakedAssetDescriptor{ .key = key, .assetTypeId = "SkeletalMesh" }) ==
+                kb::assets::bake::BakedAssetSinkStatus::Success,
+            "A mesh artifact could not be put into a pack");
+        Require(writer.WritePrimaryBlock(payload, profile.packageBlockAlignmentBytes) ==
+                kb::assets::bake::BakedAssetSinkStatus::Success,
+            "A mesh artifact's payload could not be put into a pack");
+        Require(writer.CommitAsset() == kb::assets::bake::BakedAssetSinkStatus::Success,
+            "A mesh artifact could not be committed into a pack");
+        Require(writer.Finish() == kb::assets::bake::BakedAssetSinkStatus::Success,
+            "The mesh-only pack was not published");
+    }
+    Require(!RenderTextureAssetLoader::LoadTexture(foreignPath).has_value(),
+        "The texture loader read a pack that holds no baked texture");
+}
+
+#if defined(_WIN32)
+
+// Publishes one baked texture as its own pack and returns the format it was baked to.
+[[nodiscard]] bgfx::TextureFormat::Enum PublishTexturePack(
+    const std::filesystem::path& packPath,
+    const BakeTargetProfile& profile,
+    TextureCompressionFamily family,
+    const TextureBakeSettings& settings,
+    std::uint16_t width,
+    std::uint16_t height,
+    const std::vector<std::uint8_t>& rgba8) {
+    kb::assets::bake::AssetPackWriter writer{ packPath, profile };
+    const TextureBakeOutput baked = BakeTextureBytes(
+        MakePngSource(rgba8, width, height), settings, profile, family, writer);
+    Require(baked.status == TextureBakeStatus::Success, "A texture bake for a pack fixture did not succeed");
+    Require(writer.Finish() == kb::assets::bake::BakedAssetSinkStatus::Success,
+        "A pack fixture was not published");
+    return baked.format;
+}
+
+class NativeTestSurface final : public RenderSurface {
+public:
+    NativeTestSurface() {
+        window_ = CreateWindowExW(0U, L"STATIC", L"KB Baked Texture Upload", WS_OVERLAPPEDWINDOW, 0, 0,
+            static_cast<int>(kExtent), static_cast<int>(kExtent), nullptr, nullptr, GetModuleHandleW(nullptr),
+            nullptr);
+    }
+
+    ~NativeTestSurface() override {
+        if (window_ != nullptr) {
+            DestroyWindow(window_);
+        }
+    }
+
+    NativeTestSurface(const NativeTestSurface&) = delete;
+    NativeTestSurface& operator=(const NativeTestSurface&) = delete;
+
+    [[nodiscard]] bool IsValid() const noexcept { return window_ != nullptr; }
+    [[nodiscard]] std::uint32_t Width() const noexcept override { return kExtent; }
+    [[nodiscard]] std::uint32_t Height() const noexcept override { return kExtent; }
+    [[nodiscard]] void* NativeWindowHandle() const noexcept override { return window_; }
+    [[nodiscard]] void* NativeDisplayHandle() const noexcept override { return nullptr; }
+
+    static constexpr std::uint16_t kExtent = 64U;
+
+private:
+    HWND window_ = nullptr;
+};
+
+[[nodiscard]] kb::scene::TransformComponent TransformAtOrigin() {
+    return kb::scene::TransformComponent{
+        .localPosition = kb::scene::Vec3{ 0.0F, 0.0F, 0.0F },
+        .worldPosition = kb::scene::Vec3{ 0.0F, 0.0F, 0.0F },
+        .worldDirty = false,
+    };
+}
+
+[[nodiscard]] SceneRenderCamera IdentityRenderCamera() noexcept {
+    return SceneRenderCamera{
+        .view = { 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F },
+        .projection = { 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F,
+            1.0F },
+    };
+}
+
+// ---------------------------------------------------------------------------------------
+// The debt this stage exists to pay. Until now nothing in production built a gpuBlocks
+// payload from disk, so the baked-texture branch of RuntimeTextureResourceEnsurer::Ensure was
+// unreachable BY CONSTRUCTION: a negator deleted the whole branch and the full renderer suite
+// stayed green.
+//
+// This drives the real ensurer, through a real Renderer::SubmitScene, on a real Direct3D11
+// device, with two baked packs on disk in one material:
+//   * the albedo slot carries BC1, which the device samples -> the blocks go to the GPU as
+//     they are, and the registered texture is still BC1;
+//   * the normal slot carries ASTC4x4, which no Direct3D11 driver samples -> the branch has to
+//     decode it back to RGBA8, and the registered texture is RGBA8 with a runtime mip chain.
+// Deleting the branch leaves the ASTC blocks on their way to createTexture and the second
+// assertion goes red.
+void RunBakedTextureEnsuredFromPackTest() {
+    TempStore store{ "21kb_texture_pack_ensure" };
+    const BakeTargetProfile desktop = DesktopTestProfile();
+    const BakeTargetProfile mobile = MobileTestProfile();
+
+    const std::filesystem::path albedoPack = store.Root() / "albedo.kbpack";
+    const bgfx::TextureFormat::Enum albedoFormat = PublishTexturePack(albedoPack, desktop,
+        TextureCompressionFamily::BlockCompressedBaseline,
+        TextureBakeSettings{ .semantic = RenderTextureAssetSemantic::BaseColor,
+            .colorSpace = RenderTextureAssetColorSpace::Srgb },
+        16U, 16U, MakeRgba8Gradient(16U, 16U, 0xFFU));
+    const std::filesystem::path normalPack = store.Root() / "normal.kbpack";
+    const bgfx::TextureFormat::Enum normalFormat = PublishTexturePack(normalPack, mobile,
+        TextureCompressionFamily::AdaptiveScalable,
+        TextureBakeSettings{ .semantic = RenderTextureAssetSemantic::Normal,
+            .colorSpace = RenderTextureAssetColorSpace::Linear },
+        16U, 16U, MakeRgba8Solid(16U, 16U, { 0x80U, 0x80U, 0xFFU, 0xFFU }));
+    Require(albedoFormat == bgfx::TextureFormat::BC1 && normalFormat == bgfx::TextureFormat::ASTC4x4,
+        "The pack fixtures were not baked to the formats this test reasons about");
+
+    {
+        std::ofstream mesh{ store.Root() / "triangle.obj", std::ios::trunc };
+        mesh << "v -0.1 -0.1 0.0\n"
+             << "v 0.1 -0.1 0.0\n"
+             << "v 0.0 0.1 0.0\n"
+             << "vt 0 0\n"
+             << "vt 1 0\n"
+             << "vt 0.5 1\n"
+             << "vn 0 0 1\n"
+             << "f 1/1/1 2/2/1 3/3/1\n";
+    }
+
+    kb::scene::Scene scene;
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    Require(manager.RegisterLoader(std::make_unique<RenderMeshAssetLoader>()) &&
+            manager.RegisterLoader(std::make_unique<RenderMaterialAssetLoader>()) &&
+            manager.RegisterLoader(std::make_unique<RenderTextureAssetLoader>()),
+        "The baked texture ensure test could not register its asset loaders");
+    Require(manager.Mounts().Mount("Game", store.Root()), "The baked texture ensure test could not mount its root");
+    Require(manager.DiscoverMountedAssets() >= 3U,
+        "The baked texture ensure test did not discover its mesh and its two packs");
+
+    std::uint64_t albedoAssetId = 0U;
+    std::uint64_t normalAssetId = 0U;
+    {
+        const kb::assets::AssetMetadata* albedo = manager.Registry().FindByPath("/Game/albedo.kbpack");
+        const kb::assets::AssetMetadata* normal = manager.Registry().FindByPath("/Game/normal.kbpack");
+        Require(albedo != nullptr && normal != nullptr, "A published pack was not discovered as an asset");
+        Require(albedo->type == "RenderTexture" && normal->type == "RenderTexture",
+            "A published pack was not discovered as a texture asset");
+        albedoAssetId = albedo->id.value;
+        normalAssetId = normal->id.value;
+    }
+
+    {
+        std::ofstream material{ store.Root() / "packed.kbmat", std::ios::trunc };
+        material << "baseColor 1 1 1 1\n"
+                 << "metallicFactor 0.2\n"
+                 << "roughnessFactor 0.55\n"
+                 << "normalScale 1.0\n"
+                 << "alphaMode OPAQUE\n"
+                 << "albedoTextureAssetId " << albedoAssetId << "\n"
+                 << "normalTextureAssetId " << normalAssetId << "\n";
+    }
+    // Discovery may replace registry metadata wholesale, so every id this test still needs is
+    // taken as a value and every pointer is fetched after the last pass.
+    static_cast<void>(manager.DiscoverMountedAssets());
+    std::uint64_t meshAssetId = 0U;
+    std::uint64_t materialAssetId = 0U;
+    {
+        const kb::assets::AssetMetadata* mesh = manager.Registry().FindByPath("/Game/triangle.obj");
+        const kb::assets::AssetMetadata* material = manager.Registry().FindByPath("/Game/packed.kbmat");
+        Require(mesh != nullptr && material != nullptr,
+            "The baked texture ensure test did not discover its mesh and material");
+        meshAssetId = mesh->id.value;
+        materialAssetId = material->id.value;
+        Require(manager.Registry().Find(kb::assets::AssetId{ albedoAssetId }) != nullptr &&
+                manager.Registry().Find(kb::assets::AssetId{ normalAssetId }) != nullptr,
+            "A pack asset lost its identity when the material was discovered");
+    }
+
+    const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "Baked Texture Mesh",
+        .transform = TransformAtOrigin(),
+    });
+    scene.Components().MeshRenderers().Set(entity,
+        kb::scene::MeshRendererComponent{
+            .meshAssetId = meshAssetId,
+            .materialAssetId = materialAssetId,
+        });
+
+    NativeTestSurface surface;
+    Require(surface.IsValid(), "The baked texture ensure test could not create a native surface");
+    DisplayConfig config{};
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config),
+        "The baked texture ensure test requires a Direct3D11 device");
+
+    // The device's own answers, asserted before they are relied on: if a future device samples
+    // ASTC, this test would be proving the wrong branch and has to say so instead.
+    Require(RenderDeviceSupportsTextureFormat(bgfx::TextureFormat::BC1, RenderTextureColorSpace::Srgb),
+        "This device cannot sample BC1 as sRGB, so the accepted-format branch cannot be reached here");
+    Require(!RenderDeviceSupportsTextureFormat(bgfx::TextureFormat::ASTC4x4, RenderTextureColorSpace::Linear),
+        "This device samples ASTC4x4, so the refused-format branch cannot be reached here");
+
+    Require(renderer.BeginFrame(), "The baked texture ensure test could not begin a frame");
+    const RenderSceneSubmitDesc desc{
+        .target = RenderSceneTargetBinding{
+            .viewport = RenderViewportDesc{
+                .id = RenderViewportId{ 1U },
+                .extent = RenderExtent{ NativeTestSurface::kExtent, NativeTestSurface::kExtent },
+                .viewportIndex = 0U,
+            },
+        },
+        .cameraOverride = IdentityRenderCamera(),
+        .editorSceneOverlaysEnabled = false,
+        .shadowPassEnabled = false,
+        .postProcessEnabled = false,
+        .selectionMaskEnabled = false,
+        .selectionOutlineEnabled = false,
+    };
+    Require(renderer.SubmitScene(scene, desc), "The baked texture ensure test could not submit its scene");
+    renderer.EndFrame();
+
+    const SceneRenderResourceMap* resourceMap = renderer.SceneResourceMap();
+    const RenderResourceRegistry* resources = renderer.SceneResources();
+    Require(resourceMap != nullptr && resources != nullptr,
+        "The baked texture ensure test could not reach the renderer's resources");
+
+    const RenderTextureHandle albedoHandle =
+        resourceMap->ResolveTexture(albedoAssetId, RenderTextureColorSpace::Srgb);
+    const RenderTextureResource* albedoResource = resources->FindTexture(albedoHandle);
+    Require(albedoResource != nullptr,
+        "A baked texture from a pack was never bound, so the ensurer's baked branch was not reached");
+    Require(albedoResource->format == bgfx::TextureFormat::BC1,
+        "A baked texture the device can sample was not uploaded in its baked format");
+    Require(albedoResource->mipCount == ExpectedMipCount(16U, 16U),
+        "A baked texture the device can sample lost the mip chain the bake built");
+    Require(bgfx::isValid(albedoResource->texture),
+        "A baked block payload did not produce a live GPU texture");
+
+    const RenderTextureHandle normalHandle =
+        resourceMap->ResolveTexture(normalAssetId, RenderTextureColorSpace::Linear);
+    const RenderTextureResource* normalResource = resources->FindTexture(normalHandle);
+    Require(normalResource != nullptr, "A baked texture the device refuses was never bound at all");
+    Require(normalResource->format == bgfx::TextureFormat::RGBA8,
+        "A baked texture the device cannot sample was handed to the GPU in its baked format anyway");
+    Require(normalResource->width == 16U && normalResource->height == 16U,
+        "The fallback decode changed the texture's shape");
+    Require(bgfx::isValid(normalResource->texture),
+        "The fallback decode did not produce a live GPU texture");
+
+    renderer.Shutdown();
+}
+
+// ---------------------------------------------------------------------------------------
+// The second half of the debt: until now bgfx::createTexture2D had never been handed a single
+// baked block, so "it reaches the GPU without a CPU decode" was verified at the descriptor
+// level only.
+//
+// This hands a real Direct3D11 device the BC1 blocks that came out of a pack on disk, samples
+// that texture in a real fragment shader, and reads the rendered pixels back. Nothing on the
+// CPU decodes anything on the way; the only thing that can turn those blocks into colour is
+// the GPU's own block decoder. The expected value is bimg's decode of the SAME bytes, which is
+// an independent decoder, so agreement is evidence about the bytes rather than about either
+// decoder.
+void RunBakedTextureGpuUploadTest() {
+    const char* const shadercPath = KB_TEST_GRAPH_SHADERC_PATH;
+    TempStore store{ "21kb_texture_pack_gpu_upload" };
+    const BakeTargetProfile profile = DesktopTestProfile();
+
+    // A flat colour: BC1 reproduces it almost exactly, so the comparison is about whether the
+    // block reached the GPU at all rather than about the encoder's error on a gradient.
+    constexpr std::uint16_t kExtent = 16U;
+    const std::array<std::uint8_t, 4U> sourceColor{ 0x20U, 0x60U, 0xE0U, 0xFFU };
+    const std::filesystem::path packPath = store.Root() / "flat.kbpack";
+    const bgfx::TextureFormat::Enum format = PublishTexturePack(packPath, profile,
+        TextureCompressionFamily::BlockCompressedBaseline,
+        TextureBakeSettings{ .semantic = RenderTextureAssetSemantic::BaseColor,
+            .colorSpace = RenderTextureAssetColorSpace::Linear },
+        kExtent, kExtent, MakeRgba8Solid(kExtent, kExtent, sourceColor));
+    Require(format == bgfx::TextureFormat::BC1, "The GPU upload fixture was not baked to BC1");
+
+    const std::optional<RenderTextureAssetData> asset = RenderTextureAssetLoader::LoadTexture(packPath);
+    Require(asset.has_value() && asset->gpuBlocks.has_value() && !asset->gpuBlocks->blocks.empty(),
+        "The GPU upload fixture did not load as baked blocks");
+
+    // What the same bytes decode to on the CPU, for the comparison below.
+    const std::uint32_t level0Bytes = bimg::imageGetSize(
+        nullptr, kExtent, kExtent, 1U, false, false, 1U, bimg::TextureFormat::BC1);
+    const std::vector<std::uint8_t> expected = DecodeLevelToRgba8(
+        std::span<const std::uint8_t>{ asset->gpuBlocks->blocks.data(), level0Bytes },
+        kExtent,
+        kExtent,
+        bgfx::TextureFormat::BC1);
+    Require(expected.size() == static_cast<std::size_t>(kExtent) * kExtent * 4U,
+        "The GPU upload fixture could not be decoded on the CPU for comparison");
+
+    const std::filesystem::path shaderDirectory = store.Root() / "shaders";
+    std::error_code shaderDirectoryError;
+    std::filesystem::create_directories(shaderDirectory, shaderDirectoryError);
+    const std::filesystem::path varyingDef = shaderDirectory / "varying.def.sc";
+    {
+        std::ofstream out{ varyingDef, std::ios::trunc };
+        out << "vec2 v_texcoord0 : TEXCOORD0;\n"
+            << "vec3 a_position  : POSITION;\n"
+            << "vec2 a_texcoord0 : TEXCOORD0;\n";
+    }
+    const std::filesystem::path vertexSource = shaderDirectory / "vs_blit.sc";
+    {
+        std::ofstream out{ vertexSource, std::ios::trunc };
+        out << "$input a_position, a_texcoord0\n"
+            << "$output v_texcoord0\n"
+            << "#include <bgfx_shader.sh>\n"
+            << "void main()\n{\n"
+            << "    gl_Position = vec4(a_position, 1.0);\n"
+            << "    v_texcoord0 = a_texcoord0;\n"
+            << "}\n";
+    }
+    const std::filesystem::path fragmentSource = shaderDirectory / "fs_blit.sc";
+    {
+        std::ofstream out{ fragmentSource, std::ios::trunc };
+        out << "$input v_texcoord0\n"
+            << "#include <bgfx_shader.sh>\n"
+            << "SAMPLER2D(s_baked, 0);\n"
+            << "void main()\n{\n"
+            << "    gl_FragColor = texture2D(s_baked, v_texcoord0);\n"
+            << "}\n";
+    }
+
+    const auto cook = [&](const std::filesystem::path& source, const std::filesystem::path& output,
+                          const char* type, const char* profileName) {
+        std::ostringstream command;
+        command << '"' << '"' << shadercPath << '"' << " --type " << type << " --platform windows --profile "
+                << profileName << " -f \"" << source.generic_string() << "\" -o \"" << output.generic_string()
+                << "\" --varyingdef \"" << varyingDef.generic_string() << "\" -i \""
+                << KB_TEST_GRAPH_BGFX_SHADER_INCLUDE_DIR << "\" -O 3" << '"';
+        std::error_code removeError;
+        std::filesystem::remove(output, removeError);
+        const int code = std::system(command.str().c_str());
+        std::error_code sizeError;
+        Require(code == 0 && std::filesystem::file_size(output, sizeError) > 0U && !sizeError,
+            "The GPU upload test could not cook its sampling shaders");
+    };
+    const std::filesystem::path vertexBinary = shaderDirectory / "vs_blit.bin";
+    const std::filesystem::path fragmentBinary = shaderDirectory / "fs_blit.bin";
+    cook(vertexSource, vertexBinary, "vertex", "s_5_0");
+    cook(fragmentSource, fragmentBinary, "fragment", "s_5_0");
+    const std::vector<std::uint8_t> vertexBytes = ReadAllBytes(vertexBinary);
+    const std::vector<std::uint8_t> fragmentBytes = ReadAllBytes(fragmentBinary);
+
+    NativeTestSurface surface;
+    Require(surface.IsValid(), "The GPU upload test could not create a native surface");
+    bgfx::Init init;
+    init.type = bgfx::RendererType::Direct3D11;
+    init.resolution.width = NativeTestSurface::kExtent;
+    init.resolution.height = NativeTestSurface::kExtent;
+    init.resolution.reset = BGFX_RESET_NONE;
+    init.platformData.nwh = surface.NativeWindowHandle();
+    Require(bgfx::init(init), "The GPU upload test requires a Direct3D11 device");
+
+    bool sampledMatches = false;
+    std::array<std::uint8_t, 4U> sampled{};
+    {
+        // THE POINT OF THE WHOLE TEST: the baked blocks, exactly as they came off the disk,
+        // handed straight to bgfx::createTexture2D in their baked format.
+        const bgfx::Memory* memory = bgfx::copy(asset->gpuBlocks->blocks.data(),
+            static_cast<std::uint32_t>(asset->gpuBlocks->blocks.size()));
+        const bgfx::TextureHandle baked = bgfx::createTexture2D(kExtent, kExtent, asset->mipCount > 1U,
+            1U, asset->gpuBlocks->format, BGFX_SAMPLER_POINT | BGFX_SAMPLER_UVW_CLAMP, memory);
+        Require(bgfx::isValid(baked), "A Direct3D11 device refused a baked block payload");
+
+        bgfx::VertexLayout layout;
+        layout.begin()
+            .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
+            .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
+            .end();
+        const std::array<float, 15U> triangle{
+            -1.0F, -3.0F, 0.0F, 0.0F, 2.0F,
+            -1.0F, 1.0F, 0.0F, 0.0F, 0.0F,
+            3.0F, 1.0F, 0.0F, 2.0F, 0.0F,
+        };
+        const bgfx::VertexBufferHandle vertices =
+            bgfx::createVertexBuffer(bgfx::copy(triangle.data(), sizeof(triangle)), layout);
+        const bgfx::TextureHandle color = bgfx::createTexture2D(NativeTestSurface::kExtent,
+            NativeTestSurface::kExtent, false, 1U, bgfx::TextureFormat::RGBA8,
+            BGFX_TEXTURE_RT | BGFX_TEXTURE_BLIT_DST);
+        const bgfx::TextureHandle readback = bgfx::createTexture2D(NativeTestSurface::kExtent,
+            NativeTestSurface::kExtent, false, 1U, bgfx::TextureFormat::RGBA8,
+            BGFX_TEXTURE_READ_BACK | BGFX_TEXTURE_BLIT_DST);
+        const bgfx::FrameBufferHandle frameBuffer = bgfx::createFrameBuffer(1U, &color, false);
+        const bgfx::UniformHandle sampler = bgfx::createUniform("s_baked", bgfx::UniformType::Sampler);
+        const bgfx::ShaderHandle vertexShader =
+            bgfx::createShader(bgfx::copy(vertexBytes.data(), static_cast<std::uint32_t>(vertexBytes.size())));
+        const bgfx::ShaderHandle fragmentShader =
+            bgfx::createShader(bgfx::copy(fragmentBytes.data(), static_cast<std::uint32_t>(fragmentBytes.size())));
+        const bgfx::ProgramHandle program = bgfx::createProgram(vertexShader, fragmentShader, true);
+        Require(bgfx::isValid(vertices) && bgfx::isValid(frameBuffer) && bgfx::isValid(program) &&
+                bgfx::isValid(readback),
+            "The GPU upload test could not build its sampling pipeline");
+
+        bgfx::setViewFrameBuffer(0U, frameBuffer);
+        bgfx::setViewRect(0U, 0U, 0U, NativeTestSurface::kExtent, NativeTestSurface::kExtent);
+        bgfx::setViewClear(0U, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0x000000FFU, 1.0F, 0U);
+        bgfx::touch(0U);
+        bgfx::setTexture(0U, sampler, baked, BGFX_SAMPLER_POINT | BGFX_SAMPLER_UVW_CLAMP);
+        bgfx::setVertexBuffer(0U, vertices);
+        bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
+        bgfx::submit(0U, program);
+        bgfx::frame();
+
+        std::vector<std::uint8_t> pixels(
+            static_cast<std::size_t>(NativeTestSurface::kExtent) * NativeTestSurface::kExtent * 4U, 0U);
+        bgfx::blit(1U, readback, 0U, 0U, color, 0U, 0U, NativeTestSurface::kExtent, NativeTestSurface::kExtent);
+        const std::uint32_t readyFrame = bgfx::readTexture(readback, pixels.data());
+        std::uint32_t frame = bgfx::frame();
+        for (std::uint32_t guard = 0U; frame < readyFrame && guard < 8U; ++guard) {
+            frame = bgfx::frame();
+        }
+        Require(frame >= readyFrame, "The GPU upload test's readback did not complete");
+
+        // bgfx's RGBA8 read-back comes out in the backbuffer's channel order, so the comparison
+        // is against both orders: what is being proved is that the GPU decoded the block, not
+        // which way round the swizzle went.
+        const auto closeEnough = [](std::uint8_t lhs, std::uint8_t rhs) noexcept {
+            const int difference = static_cast<int>(lhs) - static_cast<int>(rhs);
+            return (difference < 0 ? -difference : difference) <= 6;
+        };
+        // EVERY pixel, not one: the source is a flat colour, so every texel of every block has
+        // to come back the same. Sampling a single texel would leave a corrupted block outside
+        // the sampled tile invisible, which is exactly what a mutation test showed.
+        sampledMatches = true;
+        for (std::size_t pixel = 0U; pixel < pixels.size() && sampledMatches; pixel += 4U) {
+            const std::array<std::uint8_t, 4U> texel{ pixels[pixel + 0U], pixels[pixel + 1U],
+                pixels[pixel + 2U], pixels[pixel + 3U] };
+            const bool matches = (closeEnough(texel[0], expected[0]) && closeEnough(texel[1], expected[1]) &&
+                                     closeEnough(texel[2], expected[2])) ||
+                (closeEnough(texel[0], expected[2]) && closeEnough(texel[1], expected[1]) &&
+                    closeEnough(texel[2], expected[0]));
+            if (!matches) {
+                sampled = texel;
+                sampledMatches = false;
+            }
+        }
+
+        bgfx::destroy(program);
+        bgfx::destroy(sampler);
+        bgfx::destroy(frameBuffer);
+        bgfx::destroy(readback);
+        bgfx::destroy(color);
+        bgfx::destroy(vertices);
+        bgfx::destroy(baked);
+    }
+    bgfx::shutdown();
+
+    if (!sampledMatches) {
+        std::fprintf(stderr,
+            "baked block sampled on the GPU as %u %u %u %u, CPU decode of the same bytes is %u %u %u\n",
+            sampled[0], sampled[1], sampled[2], sampled[3], expected[0], expected[1], expected[2]);
+    }
+    Require(sampledMatches,
+        "A baked block handed straight to createTexture2D did not sample as the colour those bytes decode to");
+}
+
+#endif
+
 } // namespace
 
 void RunTextureBakeTests() {
@@ -1587,6 +2180,11 @@ void RunTextureBakeTests() {
     RunBakedTextureRuntimeUploadPathTest();
     RunBakedTextureSinkContractTest();
     RunBakedTextureDeviceCapabilityTest();
+    RunBakedTexturePackRoundTripTest();
+#if defined(_WIN32)
+    RunBakedTextureEnsuredFromPackTest();
+    RunBakedTextureGpuUploadTest();
+#endif
 }
 
 } // namespace kb::render::tests
