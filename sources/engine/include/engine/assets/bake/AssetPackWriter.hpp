@@ -93,6 +93,11 @@ private:
     };
 
     [[nodiscard]] BakedAssetSinkStatus EnsureStagingOpen();
+    // The staging payload carries a stamp naming the writer that created it, and this is what
+    // reads it back. Staging names are derived from the destination, so this is the only thing
+    // between "a second writer aimed at this package" and a published package whose blocks
+    // hold another bake's bytes.
+    [[nodiscard]] BakedAssetSinkStatus VerifyPayloadStamp();
     [[nodiscard]] BakedAssetSinkStatus AppendPayload(std::span<const std::uint8_t> bytes, std::uint64_t& offsetOut);
     [[nodiscard]] BakedAssetSinkStatus AssembleStagingPack();
     void DiscardStaging() noexcept;
@@ -110,6 +115,7 @@ private:
     std::vector<PendingArtifact> artifacts_;
     PendingArtifact openArtifact_;
     std::uint64_t payloadBytes_ = 0U;
+    std::uint64_t payloadStamp_ = 0U;
     std::uint64_t openArtifactPayloadStart_ = 0U;
     bool stagingOpen_ = false;
     bool open_ = false;

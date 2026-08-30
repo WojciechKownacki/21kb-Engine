@@ -40,6 +40,10 @@ constexpr std::size_t kHeaderProfileHashOffset = 16U;
 constexpr std::size_t kHeaderFileBytesOffset = 64U;
 constexpr std::size_t kHeaderProfileIdLengthOffset = 96U;
 constexpr std::size_t kHeaderFragmentIndexOffsetOffset = 72U;
+constexpr std::size_t kHeaderHeaderBytesOffset = 12U;
+constexpr std::size_t kHeaderPackageAlignmentOffset = 52U;
+constexpr std::size_t kHeaderMappedAlignmentOffset = 56U;
+constexpr std::size_t kHeaderReservedWordOffset = 60U;
 constexpr std::uint64_t kHeaderBytes = 256U;
 
 // Windows refuses to delete a file something still has open, and the throwing overload of
@@ -615,6 +619,70 @@ void AHostilePackIsRefusedRatherThanTrusted() {
             PokeUInt32(file, kHeaderArtifactCountOffset, PeekUInt32(file, kHeaderArtifactCountOffset) - 1U);
         },
         true, bake::AssetPackReadStatus::IndexCorrupt, "An index with bytes past its own count was accepted");
+    // The fixed layout is a rule, not a convention: everything downstream computes against
+    // "the index starts at kAssetPackHeaderBytes and the header is that long", including the
+    // floor ValidateBlockRange uses to keep a block out of the catalogue that describes it.
+    // Removing both header checks left the whole suite green.
+    requireRefusal(
+        "index-somewhere-else",
+        [](std::vector<std::uint8_t>& file) { PokeUInt64(file, kHeaderIndexOffsetOffset, kHeaderBytes * 2U); },
+        false, bake::AssetPackReadStatus::HeaderCorrupt,
+        "A pack whose index does not start where the format puts it was mounted");
+    requireRefusal(
+        "header-a-different-size",
+        [](std::vector<std::uint8_t>& file) { PokeUInt32(file, kHeaderHeaderBytesOffset, kHeaderBytes * 2U); },
+        false, bake::AssetPackReadStatus::HeaderCorrupt,
+        "A pack claiming a header this build does not lay out was mounted");
+    // The alignments are what every block offset in the file is checked against, so a pack
+    // that declares nonsense for them disarms the block checks rather than only itself.
+    requireRefusal(
+        "package-alignment-not-a-power-of-two",
+        [](std::vector<std::uint8_t>& file) { PokeUInt32(file, kHeaderPackageAlignmentOffset, 96U); }, true,
+        bake::AssetPackReadStatus::HeaderCorrupt, "A pack declaring an impossible block alignment was mounted");
+    requireRefusal(
+        "mapped-alignment-below-the-package-alignment",
+        [](std::vector<std::uint8_t>& file) { PokeUInt32(file, kHeaderMappedAlignmentOffset, 128U); }, true,
+        bake::AssetPackReadStatus::HeaderCorrupt,
+        "A pack whose mapping granularity is not a multiple of its block alignment was mounted");
+    // Reserved means reserved on both sides. The fragment fields have a fixture; the spare
+    // word beside them did not, and deleting its check changed nothing.
+    requireRefusal(
+        "reserved-header-word",
+        [](std::vector<std::uint8_t>& file) { PokeUInt32(file, kHeaderReservedWordOffset, 1U); }, true,
+        bake::AssetPackReadStatus::HeaderCorrupt,
+        "A pack using a header field this build does not know was mounted anyway");
+    // Only the None method exists, so the two sizes must agree. If they may disagree, a block
+    // is handed back at its stored length while the caller was told a different one.
+    requireRefusal(
+        "stored-length-disagrees-with-uncompressed",
+        [&](std::vector<std::uint8_t>& file) {
+            const std::vector<ObservedArtifact> observed = ObservePack(file);
+            const ObservedBlock& block = observed.front().blocks.front();
+            PokeUInt64(file, block.storedBytesFieldOffset + 8U, block.storedBytes + 1U);
+        },
+        true, bake::AssetPackReadStatus::IndexCorrupt,
+        "A block whose stored and uncompressed lengths disagree was accepted under a method that cannot resize it");
+    // Two blocks on one range. Memory-safe -- both lie inside the file -- and semantically
+    // ruinous: whichever of them a caller asks for, it is handed the other one's payload, so a
+    // content-addressed key answers with bytes that were baked under a different key.
+    requireRefusal(
+        "overlapping-blocks",
+        [&](std::vector<std::uint8_t>& file) {
+            const std::vector<ObservedArtifact> observed = ObservePack(file);
+            Require(observed.front().blocks.size() >= 2U, "The overlap fixture needs an artifact with two blocks");
+            PokeUInt64(file, observed.front().blocks[1U].offsetFieldOffset, observed.front().blocks.front().offset);
+        },
+        true, bake::AssetPackReadStatus::IndexCorrupt, "Two blocks pointed at one range were trusted");
+    // A count is a 32-bit field a hostile header owns outright, and it sizes a reservation
+    // before a single byte of the index has been looked at. kMaxAssetPackIndexBytes exists to
+    // stop exactly that, and it does not cover this field.
+    requireRefusal(
+        "artifact-count-enormous",
+        [](std::vector<std::uint8_t>& file) {
+            PokeUInt32(file, kHeaderArtifactCountOffset, 0xFFFFFFFFU);
+        },
+        true, bake::AssetPackReadStatus::IndexCorrupt,
+        "A header claiming four billion artifacts was allowed to size an allocation");
     requireRefusal(
         "zero-profile-fingerprint",
         [](std::vector<std::uint8_t>& file) { PokeUInt64(file, kHeaderProfileHashOffset, 0U); }, true,
@@ -1054,6 +1122,177 @@ void ManyArtifactsShareOneHandle() {
     PurgeDirectory(root);
 }
 
+// Red when: the whole-file fallback is not one, i.e. when WholeFile quietly answers through
+// the ranged path. Both modes hand back the same bytes from a file that is sitting still, so
+// "the bytes match" cannot tell them apart and a reader that dropped the buffer entirely
+// passes every other test in this file. The property that actually distinguishes them is that
+// a WholeFile mount does not touch the file again: the pack is already in the reader.
+//
+// This is not an optimisation to be relaxed. HTTP range support is a MAY (RFC 9110 14.2), and
+// a packaged Android build whose AAsset_openFileDescriptor refuses has the same problem, so
+// this mode is the only one some hosts leave us. If it silently seeks, it works on a desktop
+// and fails on exactly the hosts it exists for.
+void TheWholeFileFallbackReallyReadsTheWholeFile() {
+    const std::filesystem::path root = TestRoot() / "wholefile";
+    PurgeDirectory(root);
+    std::filesystem::create_directories(root);
+
+    const bake::BakeTargetProfile profile = bake::WindowsX64BakeTargetProfile();
+    const std::filesystem::path packPath = root / ("fallback" + std::string{ bake::kAssetPackFileExtension });
+    const std::vector<WrittenArtifact> expected = BakeSamplePack(packPath, profile);
+    const std::vector<std::uint8_t> good = ReadFileBytes(packPath);
+
+    bake::AssetPackReader wholeFile;
+    Require(wholeFile.Mount(packPath, bake::AssetPackAccess::WholeFile) == bake::AssetPackReadStatus::Success,
+        "A pack did not mount through the whole-file fallback");
+
+    // The file underneath is replaced with something that is not a pack at all. A reader that
+    // took the whole file at mount does not notice; a reader that seeks per block hands back
+    // the rubbish.
+    WriteFileBytes(packPath, std::vector<std::uint8_t>(good.size(), 0xEEU));
+    RequireMountedPackMatches(wholeFile, expected,
+        "The whole-file fallback went back to the file for a block, so it is the ranged path wearing another name");
+    Require(wholeFile.OpenCount() == 1U, "The whole-file fallback opened the pack more than once");
+
+    // ...and it does not hold the file either, which is the same fact from the other side and
+    // the one an Android build needs: the descriptor is gone once the bytes are in.
+    std::error_code removeError;
+    Require(std::filesystem::remove(packPath, removeError) && !removeError,
+        "A whole-file mount still holds the pack file open, so it never read the whole file");
+    RequireMountedPackMatches(wholeFile, expected,
+        "A whole-file mount stopped answering once its file was gone");
+    wholeFile.Unmount();
+
+    // The ranged reader is the other half of the contract: it DOES go back to the file, which
+    // is what makes the two modes two modes. Asserted so that a change collapsing them into
+    // one is visible from both sides rather than only from the fallback's.
+    WriteFileBytes(packPath, good);
+    bake::AssetPackReader ranged;
+    Require(ranged.Mount(packPath, bake::AssetPackAccess::Ranged) == bake::AssetPackReadStatus::Success,
+        "A pack did not mount through the ranged reader");
+#if defined(_WIN32)
+    std::error_code busyError;
+    Require(!std::filesystem::remove(packPath, busyError),
+        "A ranged mount does not hold the pack open, so it is not reading through a handle at all");
+#endif
+    ranged.Unmount();
+
+    PurgeDirectory(root);
+}
+
+// Red when: the alignment helper wraps instead of refusing. The overflow branch is
+// unreachable through any pack that fits kMaxAssetPackBytes -- it would take a file near 2^64
+// -- so it is tested here directly, against the arithmetic rather than against a fixture.
+void AligningAnOffsetRefusesToWrap() {
+    constexpr std::uint64_t kMax = ~static_cast<std::uint64_t>(0U);
+    std::uint64_t aligned = 0U;
+
+    Require(bake::TryAlignAssetPackOffset(0U, 256U, aligned) && aligned == 0U,
+        "Aligning zero moved it");
+    Require(bake::TryAlignAssetPackOffset(1U, 256U, aligned) && aligned == 256U,
+        "Aligning one did not reach the first boundary");
+    Require(bake::TryAlignAssetPackOffset(256U, 256U, aligned) && aligned == 256U,
+        "Aligning a value already on its boundary moved it");
+    Require(bake::TryAlignAssetPackOffset(257U, 65536U, aligned) && aligned == 65536U,
+        "Aligning to the mapping granularity did not reach it");
+    Require(bake::TryAlignAssetPackOffset(kMax, 1U, aligned) && aligned == kMax,
+        "Aligning to one is not the identity");
+
+    // One past the last 256-boundary below 2^64: rounding up wraps to zero, and a wrapped
+    // offset passes every "is it inside the file?" test there is.
+    aligned = 0xDEADBEEFU;
+    Require(!bake::TryAlignAssetPackOffset(kMax, 256U, aligned),
+        "An offset one below 2^64 was rounded up past the end of the address space");
+    Require(aligned == 0xDEADBEEFU, "A refused alignment wrote to its output anyway");
+    Require(!bake::TryAlignAssetPackOffset(kMax - 254U, 256U, aligned),
+        "The last offset that cannot be aligned without wrapping was aligned anyway");
+    Require(bake::TryAlignAssetPackOffset(kMax - 255U, 256U, aligned) && aligned == kMax - 255U,
+        "The last offset that CAN be aligned was refused");
+
+    // Not a power of two, and zero, are refusals rather than divisions by zero.
+    Require(!bake::TryAlignAssetPackOffset(0U, 0U, aligned), "Zero was accepted as an alignment");
+    Require(!bake::TryAlignAssetPackOffset(0U, 96U, aligned), "A non-power-of-two was accepted as an alignment");
+}
+
+// Red when: a second writer aimed at the same package can make the first one publish bytes
+// that are not the ones it was given. The staging names are derived from the destination --
+// deliberately, so a killed run's debris is what the next run truncates -- and the price is
+// that two writers share them. Measured on the code before this test existed: the second
+// writer truncated the first one's payload and wrote its own bytes at offset zero, and the
+// first writer's Finish then returned Success and published a package that mounts, checksums,
+// and hands back bytes belonging to NEITHER writer under a key that names one of them.
+//
+// That is the silent-wrong-artifact failure the whole content-addressed store exists to
+// prevent, so the only acceptable outcomes here are "publishes its own bytes" or "refuses".
+void TwoWritersOnOnePackDoNotForgeEachOthersBytes() {
+    const std::filesystem::path root = TestRoot() / "two-writers";
+    PurgeDirectory(root);
+    std::filesystem::create_directories(root);
+
+    const bake::BakeTargetProfile profile = bake::WindowsX64BakeTargetProfile();
+    const std::filesystem::path packPath = root / ("shared" + std::string{ bake::kAssetPackFileExtension });
+
+    // Large enough that neither writer's bytes can be sitting unflushed in a stream buffer:
+    // with a small block the first writer's own flush happened to repair the damage, which is
+    // luck, not a guarantee.
+    const std::vector<std::uint8_t> alphaBytes = Filler(701U, 300000U);
+    const std::vector<std::uint8_t> betaBytes = Filler(702U, 300000U);
+    const bake::BakedAssetDescriptor alphaDescriptor = MakeDescriptor(71U);
+    const bake::BakedAssetDescriptor betaDescriptor = MakeDescriptor(72U);
+
+    {
+        bake::AssetPackWriter alpha{ packPath, profile };
+        Require(alpha.BeginAsset(alphaDescriptor) == bake::BakedAssetSinkStatus::Success,
+            "The first writer could not begin its artifact");
+        Require(alpha.WritePrimaryBlock(alphaBytes, profile.packageBlockAlignmentBytes) ==
+                bake::BakedAssetSinkStatus::Success,
+            "The first writer could not write its primary block");
+        Require(alpha.CommitAsset() == bake::BakedAssetSinkStatus::Success,
+            "The first writer could not commit its artifact");
+
+        {
+            bake::AssetPackWriter beta{ packPath, profile };
+            Require(beta.BeginAsset(betaDescriptor) == bake::BakedAssetSinkStatus::Success,
+                "The second writer could not begin its artifact");
+            Require(beta.WritePrimaryBlock(betaBytes, profile.packageBlockAlignmentBytes) ==
+                    bake::BakedAssetSinkStatus::Success,
+                "The second writer could not write its primary block");
+            Require(beta.CommitAsset() == bake::BakedAssetSinkStatus::Success,
+                "The second writer could not commit its artifact");
+            Require(beta.Finish() == bake::BakedAssetSinkStatus::Success, "The second writer could not publish");
+        }
+
+        Require(alpha.Finish() == bake::BakedAssetSinkStatus::StagingConflict,
+            "A writer whose staging file was taken over published anyway instead of refusing");
+    }
+
+    // The refusal leaves the package the OTHER writer published exactly as it was.
+    bake::AssetPackReader reader;
+    Require(reader.Mount(packPath) == bake::AssetPackReadStatus::Success,
+        "The package the second writer published does not mount after the first one refused");
+    Require(reader.Artifacts().size() == 1U && reader.FindArtifact(alphaDescriptor.key.Digest()) == nullptr,
+        "A refused writer still put its artifact into the published package");
+    const bake::AssetPackArtifactEntry* entry = reader.FindArtifact(betaDescriptor.key.Digest());
+    Require(entry != nullptr, "The package lost the artifact its own writer published");
+    std::vector<std::uint8_t> read;
+    Require(reader.ReadBlock(*entry, "primary", read) == bake::AssetPackReadStatus::Success,
+        "The published block could not be read back");
+    // The assertion that actually catches the defect: whatever is under this key must be the
+    // bytes baked under it, not the other writer's and not a mixture of the two.
+    Require(read == betaBytes, "A published block holds bytes that were never baked under its key");
+    Require(read != alphaBytes, "A published block holds the other writer's bytes");
+    reader.Unmount();
+
+    // A writer that refused must not have left its staging files behind either.
+    std::size_t strays = 0U;
+    for (const std::filesystem::directory_entry& stray : std::filesystem::directory_iterator{ root }) {
+        strays += (stray.path() != packPath) ? 1U : 0U;
+    }
+    Require(strays == 0U, "A refused writer left its staging files behind");
+
+    PurgeDirectory(root);
+}
+
 } // namespace
 
 void RunAssetPackTests() {
@@ -1065,6 +1304,9 @@ void RunAssetPackTests() {
     TheWriterRefusesProtocolViolations();
     AnOverlongPackPathIsRefusedBeforeAnythingIsWritten();
     ManyArtifactsShareOneHandle();
+    TheWholeFileFallbackReallyReadsTheWholeFile();
+    AligningAnOffsetRefusesToWrap();
+    TwoWritersOnOnePackDoNotForgeEachOthersBytes();
     PurgeDirectory(TestRoot());
 }
 
