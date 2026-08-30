@@ -29,9 +29,14 @@ void RunSceneRenderTargetFormatTests();
 void RunSceneRenderExtractorTests();
 void RunShaderManifestTests();
 void RunShaderPrewarmParseTests();
+void RunTextureBakeTests();
 }
 
 int main(int argc, char** argv) {
+    if (argc == 2 && std::string_view{ argv[1] } == "texture-bake") {
+        kb::render::tests::RunTextureBakeTests();
+        return EXIT_SUCCESS;
+    }
     if (argc == 2 && std::string_view{ argv[1] } == "frame-pipeline") {
         kb::render::tests::RunRenderFramePipelineTests();
         return EXIT_SUCCESS;
@@ -117,5 +122,6 @@ int main(int argc, char** argv) {
     kb::render::tests::RunSceneRenderExtractorTests();
     kb::render::tests::RunShaderManifestTests();
     kb::render::tests::RunShaderPrewarmParseTests();
+    kb::render::tests::RunTextureBakeTests();
     return EXIT_SUCCESS;
 }
