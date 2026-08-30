@@ -113,9 +113,19 @@ const char* ShaderProfileDirectoryForRenderer(bgfx::RendererType::Enum renderer)
         return "shaders/essl";
     case bgfx::RendererType::Metal:
         return "shaders/metal";
-    default:
-        return "shaders/dxbc";
+    case bgfx::RendererType::WebGPU:
+        return "shaders/wgsl";
+    // Console backends. We ship no bytecode for them, and there is deliberately
+    // no `default:` label above: a renderer type this function has not been
+    // taught about must reach the nullptr below, never inherit a neighbour's
+    // directory, and adding one to bgfx must show up here as an unhandled case.
+    case bgfx::RendererType::Agc:
+    case bgfx::RendererType::Gnm:
+    case bgfx::RendererType::Nvn:
+    case bgfx::RendererType::Count:
+        break;
     }
+    return nullptr;
 }
 
 std::span<const ShaderManifestEntry> RequiredShaderManifest() noexcept {
