@@ -21,12 +21,6 @@ namespace {
 using SceneAssetBinaryIO::ByteReader;
 using SceneAssetBinaryIO::ReadAllBytes;
 
-[[nodiscard]] std::filesystem::path MetaPathFor(const std::filesystem::path& scenePath) {
-    std::filesystem::path metaPath = scenePath;
-    metaPath.replace_extension(".meta");
-    return metaPath;
-}
-
 [[nodiscard]] std::uint32_t RootCount(const ScenePrefab& prefab) noexcept {
     std::uint32_t count = 0;
     for (const ScenePrefabNodeDesc& node : prefab.Nodes()) {
@@ -90,7 +84,7 @@ using SceneAssetBinaryIO::ReadAllBytes;
 }
 
 [[nodiscard]] SceneDocumentLoadResult ValidateMeta(const std::filesystem::path& path, const SceneDocument& scene, std::uint32_t rootCount, std::uint32_t nodeCount) {
-    const SceneAssetMetaReadResult metaResult = SceneAssetMetaReader::Read(MetaPathFor(path));
+    const SceneAssetMetaReadResult metaResult = SceneAssetMetaReader::Read(SceneAssetMetaPath(path));
     if (!metaResult.succeeded) {
         return SceneDocumentLoadResult{ .succeeded = false, .document = {}, .error = metaResult.error };
     }

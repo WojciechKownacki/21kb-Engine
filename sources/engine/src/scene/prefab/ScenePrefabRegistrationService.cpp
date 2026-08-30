@@ -29,19 +29,40 @@ ScenePrefabHandle ScenePrefabRegistrationService::Register(ScenePrefabRecordStor
     return record.has_value() ? records.Insert(std::move(*record)) : ScenePrefabHandle{};
 }
 
-ScenePrefabHandle ScenePrefabRegistrationService::RegisterLoaded(ScenePrefabRecordStore& records, std::string guid, std::string name, ScenePrefab prefab) {
+ScenePrefabHandle ScenePrefabRegistrationService::RegisterLoaded(ScenePrefabRecordStore& records, std::string guid, std::string name, ScenePrefab prefab, std::string sourcePath) {
     if (const ScenePrefabHandle existing = records.FindByGuid(guid); existing.IsValid()) {
         const ScenePrefabRecord* record = records.Find(existing);
         if (record != nullptr && record->contentHash == ScenePrefabHasher::Hash(prefab)) {
             return existing;
         }
 
+        // A guid is an identity, and copying a ".kbprefab" copies its guid, so two
+        // files can end up declaring one. Whichever of them were to keep it would
+        // be decided by load order alone, while asset dependency discovery sees
+        // both files at once and can only ever pick by a rule of its own - the two
+        // answers would differ and a cooked build would package one prefab and
+        // instantiate the other. A contested guid therefore names nothing: the
+        // incumbent is moved off it here and the newcomer below never takes it, so
+        // the reference fails to resolve, identically and on both sides, until the
+        // duplicate file is given an identity of its own.
+        if (record != nullptr && !sourcePath.empty() && !record->sourcePath.empty() && record->sourcePath != sourcePath) {
+            static_cast<void>(records.RetireGuid(existing));
+        }
+
         std::optional<ScenePrefabRecord> uniqueRecord = ScenePrefabRecordFactory::CreateTemplate(std::move(name), std::move(prefab), records.NextId());
-        return uniqueRecord.has_value() ? records.Insert(std::move(*uniqueRecord)) : ScenePrefabHandle{};
+        if (!uniqueRecord.has_value()) {
+            return {};
+        }
+        uniqueRecord->sourcePath = std::move(sourcePath);
+        return records.Insert(std::move(*uniqueRecord));
     }
 
     std::optional<ScenePrefabRecord> record = ScenePrefabRecordFactory::CreateLoadedTemplate(std::move(guid), std::move(name), std::move(prefab));
-    return record.has_value() ? records.Insert(std::move(*record)) : ScenePrefabHandle{};
+    if (!record.has_value()) {
+        return {};
+    }
+    record->sourcePath = std::move(sourcePath);
+    return records.Insert(std::move(*record));
 }
 
 ScenePrefabHandle ScenePrefabRegistrationService::RegisterVariant(ScenePrefabRecordStore& records, std::string name, ScenePrefabHandle basePrefab, std::vector<ScenePrefabPropertyOverride> overrides) {

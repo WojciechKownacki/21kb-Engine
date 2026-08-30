@@ -30,6 +30,16 @@ struct SceneAssetMeta {
     std::vector<SceneAssetDependency> dependencies;
 };
 
+// The sidecar path a scene asset's ".meta" descriptor lives at: the scene file
+// with its extension replaced. Single source of truth for that mapping, shared by
+// SceneAssetWriter (which writes it), SceneAssetReader (which verifies integrity
+// against it) and SceneAssetLoader (which reads the dependency list out of it).
+[[nodiscard]] inline std::filesystem::path SceneAssetMetaPath(const std::filesystem::path& scenePath) {
+    std::filesystem::path metaPath = scenePath;
+    metaPath.replace_extension(".meta");
+    return metaPath;
+}
+
 struct SceneAssetIntegrity {
     std::uint64_t byteSize = 0;
     std::uint64_t contentHashFnv1a64 = 0;
