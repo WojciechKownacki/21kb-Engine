@@ -133,6 +133,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <type_traits>
 #include <utility>
 #include <variant>
@@ -4676,10 +4677,18 @@ void RunNavigationFoundationContractTest() {
     kb::scene::NavPathAsyncRequest asynchronous;
     kb::tests::Require(asynchronous.Start(graph, 0U, 3U, routing), "Navigation async path request did not start");
     kb::scene::NavPath asynchronousPath;
-    for (std::size_t attempt = 0U; attempt < 1000U; ++attempt) {
+    // Wait on a clock, not on a fixed number of yields. A yield budget measures how
+    // often this thread was scheduled, not how long the worker was given, so on a busy
+    // machine the budget ran out while the request was still perfectly healthy and the
+    // assertion below failed for a reason no code change caused. The deadline is far
+    // longer than the work (a four-node path) so it still catches a request that never
+    // completes, and sleeping rather than spinning stops this thread starving the
+    // worker it is waiting for.
+    const auto navigationDeadline = std::chrono::steady_clock::now() + std::chrono::seconds{ 30 };
+    while (std::chrono::steady_clock::now() < navigationDeadline) {
         asynchronousPath = asynchronous.Poll();
         if (asynchronousPath.status != kb::scene::NavPathStatus::Pending) break;
-        std::this_thread::yield();
+        std::this_thread::sleep_for(std::chrono::milliseconds{ 1 });
     }
     kb::tests::Require(asynchronousPath.Succeeded() && asynchronousPath.corners.size() == excludedPath.corners.size() &&
             asynchronousPath.corners.size() == 3U && asynchronousPath.corners[1].z == excludedPath.corners[1].z,
@@ -4696,10 +4705,11 @@ void RunNavigationFoundationContractTest() {
     kb::tests::Require(unloadRequest.Start(unloadMesh, 0U, 3U, routing), "Navigation request could not start before scene unload");
     unloadMesh = {};
     kb::scene::NavPath unloadedPath;
-    for (std::size_t attempt = 0U; attempt < 1000U; ++attempt) {
+    const auto unloadDeadline = std::chrono::steady_clock::now() + std::chrono::seconds{ 30 };
+    while (std::chrono::steady_clock::now() < unloadDeadline) {
         unloadedPath = unloadRequest.Poll();
         if (unloadedPath.status != kb::scene::NavPathStatus::Pending) break;
-        std::this_thread::yield();
+        std::this_thread::sleep_for(std::chrono::milliseconds{ 1 });
     }
     kb::tests::Require(unloadedPath.Succeeded(), "Navigation request did not retain a safe navmesh snapshot across scene unload");
     kb::scene::NavAgent steeringAgent;

@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <limits>
 #include <system_error>
+#include <utility>
 
 namespace kb::assets::bake {
 
@@ -135,13 +136,28 @@ AssetPackReadStatus AssetPackReader::Mount(const std::filesystem::path& path, As
 
     // Every block is checked against the real file NOW, so nothing downstream has to wonder
     // whether the entry it was handed was ever validated.
+    std::vector<std::pair<std::uint64_t, std::uint64_t>> ranges;
     for (const AssetPackArtifactEntry& artifact : artifacts_) {
+        ranges.reserve(ranges.size() + artifact.blocks.size());
         for (const AssetPackBlockEntry& block : artifact.blocks) {
             if (const AssetPackReadStatus status = ValidateBlockRange(block);
                 status != AssetPackReadStatus::Success) {
                 Unmount();
                 return status;
             }
+            ranges.emplace_back(block.offset, block.offset + block.storedBytes);
+        }
+    }
+    // ...and no two of them may be the same bytes. Every range above lies inside the file, so
+    // an overlap is memory-safe -- and it is still a pack that answers one content-addressed
+    // key with a payload baked under another, which is the failure this store exists to make
+    // impossible. The sum below cannot wrap: ValidateBlockRange has already established that
+    // offset + storedBytes <= fileBytes_.
+    std::ranges::sort(ranges);
+    for (std::size_t index = 1U; index < ranges.size(); ++index) {
+        if (ranges[index].first < ranges[index - 1U].second) {
+            Unmount();
+            return AssetPackReadStatus::IndexCorrupt;
         }
     }
 
