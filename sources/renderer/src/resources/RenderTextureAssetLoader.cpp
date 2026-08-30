@@ -5,6 +5,7 @@
 
 #include <bimg/decode.h>
 #include <bx/allocator.h>
+#include <bx/error.h>
 
 #include <atomic>
 #include <cstddef>
@@ -231,12 +232,22 @@ template <typename T>
     }
 
     bx::DefaultAllocator allocator;
+    // The error object is not optional in practice. Left null, bimg substitutes a temporary
+    // guarded by a scope object that asserts on destruction that nothing set an error - and
+    // refusing a file IS setting one, "Unrecognized image format." among them. A debug build
+    // therefore breaks into the debugger on any texture it cannot read, so a single corrupt
+    // or misnamed file in a project takes the editor down instead of failing one load.
+    bx::Error parseError;
     bimg::ImageContainer* image = bimg::imageParse(
         &allocator,
         data,
         static_cast<std::uint32_t>(size),
-        bimg::TextureFormat::RGBA8);
-    if (image == nullptr) {
+        bimg::TextureFormat::RGBA8,
+        &parseError);
+    if (image == nullptr || !parseError.isOk()) {
+        if (image != nullptr) {
+            bimg::imageFree(image);
+        }
         return std::nullopt;
     }
 
