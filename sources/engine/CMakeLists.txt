@@ -41,6 +41,9 @@ add_library(kb_engine STATIC
     include/engine/assets/ImportedAssetHeaderReader.hpp
     include/engine/assets/ImportedAssetLoader.hpp
     include/engine/assets/IAssetLoader.hpp
+    include/engine/assets/bake/AssetBakeKey.hpp
+    include/engine/assets/bake/BakeTargetProfile.hpp
+    include/engine/assets/bake/BakedAssetSink.hpp
     include/engine/math/EngineMath.hpp
     include/engine/network/NetworkModel.hpp
     include/engine/network/NetworkObject.hpp
@@ -495,6 +498,9 @@ add_library(kb_engine STATIC
     src/assets/AssetRuntimeLoadService.cpp
     src/assets/ImportedAssetHeaderReader.cpp
     src/assets/ImportedAssetLoader.cpp
+    src/assets/bake/AssetBakeKey.cpp
+    src/assets/bake/BakeTargetProfile.cpp
+    src/assets/bake/BakedAssetSink.cpp
     src/project/ProjectDescriptorBinaryIO.cpp
     src/project/ProjectDescriptorIntegrity.cpp
     src/project/ProjectDescriptorMetaReader.cpp
@@ -684,6 +690,7 @@ add_library(kb_engine STATIC
     src/scene/asset/io/SceneAssetReader.cpp
     src/scene/asset/io/SceneAssetWriter.cpp
     src/scene/assets/SceneAssetLoader.cpp
+    src/scene/assets/ScenePrefabGuidAssetIndex.cpp
     src/scene/components/SceneCameraApi.cpp
     src/scene/components/SceneCameraStorage.cpp
     src/scene/components/SceneAnimatorApi.cpp
@@ -1164,6 +1171,8 @@ add_library(kb_engine STATIC
     src/private/scene/SceneTimerService.hpp
     src/private/scene/SceneTransformService.hpp
     src/private/scene/assets/SceneAssetLoader.hpp
+    src/private/scene/assets/ScenePrefabGuidAssetIndex.hpp
+    src/private/scene/asset/SceneComponentAssetReferences.hpp
     src/private/scene/asset/io/SceneAssetFormat.hpp
     src/private/scene/asset/io/SceneAssetBinaryIO.hpp
     src/private/scene/asset/io/SceneAssetComponentCodec.hpp
@@ -1549,6 +1558,7 @@ if(BUILD_TESTING)
         tests/EcsComponentApiTests.cpp
         tests/EcsCommandBufferTests.cpp
         tests/AssetRuntimeTests.cpp
+        tests/AssetBakeTests.cpp
         tests/SaveGameTests.cpp
         tests/EcsConfigTests.cpp
         tests/EcsEventTests.cpp

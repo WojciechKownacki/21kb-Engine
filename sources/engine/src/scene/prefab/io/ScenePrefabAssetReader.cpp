@@ -69,4 +69,24 @@ bool ScenePrefabAssetReader::Read(const std::filesystem::path& path, ScenePrefab
     return true;
 }
 
+bool ScenePrefabAssetReader::ReadGuid(const std::filesystem::path& path, std::string& guid) {
+    std::ifstream input{ path, std::ios::binary };
+    if (!input.is_open()) {
+        return false;
+    }
+
+    std::string line;
+    if (!ScenePrefabAssetFieldParser::ReadLine(input, line) || line != ScenePrefabAssetFormat::HeaderV2) {
+        return false;
+    }
+
+    ScenePrefabAssetReadResult header;
+    if (!ReadV2Header(input, header) || header.guid.empty()) {
+        return false;
+    }
+
+    guid = std::move(header.guid);
+    return true;
+}
+
 } // namespace kb::scene

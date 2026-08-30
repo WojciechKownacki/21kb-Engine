@@ -20,6 +20,14 @@ public:
     [[nodiscard]] const ScenePrefabRecord* Find(ScenePrefabHandle handle) const noexcept;
     [[nodiscard]] ScenePrefabRecord* FindMutable(ScenePrefabHandle handle) noexcept;
     [[nodiscard]] ScenePrefabHandle FindByGuid(std::string_view guid) const noexcept;
+    // Moves `handle` off the guid it currently owns and onto a freshly generated
+    // one, so the contested guid stops naming any prefab at all. Used when a
+    // second asset file turns out to declare a guid this record already holds:
+    // whichever file were to keep it would depend on load order, and a scene's
+    // nested-prefab reference must not resolve to one file here and to another in
+    // the asset dependency graph. Returns false for an unknown or guid-less
+    // record.
+    [[nodiscard]] bool RetireGuid(ScenePrefabHandle handle);
     [[nodiscard]] std::vector<ScenePrefabHandle> VariantChildrenOf(ScenePrefabHandle baseHandle) const;
     [[nodiscard]] std::size_t Count() const noexcept;
     [[nodiscard]] bool Remove(ScenePrefabHandle handle) noexcept;

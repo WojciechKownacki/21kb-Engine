@@ -1,5 +1,7 @@
 #include "scene/prefab/ScenePrefabRecordStore.hpp"
 
+#include "scene/prefab/ScenePrefabGuid.hpp"
+
 #include <algorithm>
 #include <utility>
 
@@ -48,6 +50,34 @@ ScenePrefabHandle ScenePrefabRecordStore::FindByGuid(std::string_view guid) cons
 
     const auto iterator = guidIndex_.find(std::string{ guid });
     return iterator == guidIndex_.end() ? ScenePrefabHandle{} : iterator->second;
+}
+
+bool ScenePrefabRecordStore::RetireGuid(ScenePrefabHandle handle) {
+    if (!handle.IsValid()) {
+        return false;
+    }
+
+    const auto iterator = records_.find(handle.id_);
+    if (iterator == records_.end() || iterator->second.guid.empty()) {
+        return false;
+    }
+
+    ScenePrefabRecord& record = iterator->second;
+    // The record id is unique for the lifetime of the store, so the generated
+    // guid differs from every guid this store generated before; the loop only
+    // covers the case of a loaded file having declared that exact string.
+    std::string replacement = ScenePrefabGuid::Create(record.name, record.prefab, handle.id_);
+    for (std::uint64_t attempt = 1U; guidIndex_.contains(replacement); ++attempt) {
+        replacement = ScenePrefabGuid::Create(record.name, record.prefab, handle.id_ + attempt);
+    }
+
+    const auto guidIterator = guidIndex_.find(record.guid);
+    if (guidIterator != guidIndex_.end() && guidIterator->second == handle) {
+        guidIndex_.erase(guidIterator);
+    }
+    record.guid = std::move(replacement);
+    guidIndex_[record.guid] = handle;
+    return true;
 }
 
 std::vector<ScenePrefabHandle> ScenePrefabRecordStore::VariantChildrenOf(ScenePrefabHandle baseHandle) const {
