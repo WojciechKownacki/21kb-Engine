@@ -10,6 +10,7 @@ add_executable(kb_standalone_player
 
 target_link_libraries(kb_standalone_player
     PRIVATE
+        kb_game_core
         kb_renderer
         user32
         gdi32
