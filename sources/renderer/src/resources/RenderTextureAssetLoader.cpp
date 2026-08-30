@@ -587,6 +587,18 @@ RenderTextureUploadPath SelectRenderTextureUploadPath(
     return deviceSupportsBakedFormat ? RenderTextureUploadPath::GpuBlocks : RenderTextureUploadPath::DecodedRgba8;
 }
 
+bool RenderTextureFormatCapabilitySatisfied(
+    std::uint32_t formatCapabilities,
+    RenderTextureColorSpace colorSpace) noexcept {
+    // TEXTURE_2D means the device samples the format natively. The EMULATED bit is deliberately
+    // not accepted: bgfx satisfies it by converting the surface on the CPU, which is the cost a
+    // baked block format exists to avoid, and for a block format there is no conversion anyway.
+    const std::uint32_t required = colorSpace == RenderTextureColorSpace::Srgb
+        ? static_cast<std::uint32_t>(BGFX_CAPS_FORMAT_TEXTURE_2D | BGFX_CAPS_FORMAT_TEXTURE_2D_SRGB)
+        : static_cast<std::uint32_t>(BGFX_CAPS_FORMAT_TEXTURE_2D);
+    return (formatCapabilities & required) == required;
+}
+
 bool RenderDeviceSupportsTextureFormat(bgfx::TextureFormat::Enum format, RenderTextureColorSpace colorSpace) noexcept {
     if (format < 0 || format >= bgfx::TextureFormat::Count) {
         return false;
@@ -595,14 +607,8 @@ bool RenderDeviceSupportsTextureFormat(bgfx::TextureFormat::Enum format, RenderT
     // only filled in by bgfx::init, so it is never null and it reads all-zero before a device
     // comes up. That zero is the answer we want with no device: nothing is supported, so a
     // caller decodes instead of guessing.
-    const std::uint32_t support = bgfx::getCaps()->formats[static_cast<std::size_t>(format)];
-    // TEXTURE_2D means the device samples the format natively. The EMULATED bit is deliberately
-    // not accepted: bgfx satisfies it by converting the surface on the CPU, which is the cost a
-    // baked block format exists to avoid, and for a block format there is no conversion anyway.
-    const std::uint32_t required = colorSpace == RenderTextureColorSpace::Srgb
-        ? static_cast<std::uint32_t>(BGFX_CAPS_FORMAT_TEXTURE_2D | BGFX_CAPS_FORMAT_TEXTURE_2D_SRGB)
-        : static_cast<std::uint32_t>(BGFX_CAPS_FORMAT_TEXTURE_2D);
-    return (support & required) == required;
+    return RenderTextureFormatCapabilitySatisfied(
+        bgfx::getCaps()->formats[static_cast<std::size_t>(format)], colorSpace);
 }
 
 std::optional<RenderTextureAssetData> DecodeRenderTextureToRgba8(const RenderTextureAssetData& asset) {

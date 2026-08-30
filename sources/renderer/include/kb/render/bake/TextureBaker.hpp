@@ -25,7 +25,11 @@ namespace kb::render::bake {
 // Identity of this baker inside a bake key. `bakerId` scopes `bakerVersion`, so bumping the
 // version below re-bakes every texture and leaves every other baker's cache untouched.
 inline constexpr std::string_view kTextureBakerId = "Texture";
-inline constexpr std::string_view kTextureBakerVersion = "1";
+// 2: alpha that the format table decided not to keep is flattened to opaque before anything is
+// encoded. BC1's alpha is one bit and squish spends it: a texel below 128 was being encoded in
+// DXT1's punch-through mode, which forces its RGB to black. Versions 1 and 2 disagree byte for
+// byte for every source with a non-opaque alpha channel and a semantic that does not sample it.
+inline constexpr std::string_view kTextureBakerVersion = "2";
 
 // Runtime type of the artifact this baker publishes; a path component of the bake store.
 inline constexpr std::string_view kTextureBakedAssetTypeId = "Texture2D";
@@ -93,6 +97,12 @@ struct TextureBakeOutput {
 // bimg's Quality::NormalMap* setting, which for ASTC compresses through an RRRG swizzle -
 // would leave those shaders sampling channels that no longer hold what they read. That is a
 // silent rendering fault, not a load error, so this baker does not emit one.
+//
+// "Not paying for alpha" means the bake DISCARDS it, and BakeTextureBytes flattens it to
+// opaque before encoding: BC1's alpha is a single bit that squish actually spends, encoding
+// every texel below 128 in punch-through mode and forcing its RGB to black. Choosing BC1 for a
+// semantic that does not sample alpha is only safe because the residue never reaches the
+// encoder - the format choice alone would corrupt the colour those shaders do read.
 //
 // Returns false for a combination it has no format for, leaving `format` untouched.
 [[nodiscard]] bool TryChooseBakedTextureFormat(

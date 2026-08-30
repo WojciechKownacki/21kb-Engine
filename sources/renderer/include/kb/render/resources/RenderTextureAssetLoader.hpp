@@ -78,11 +78,26 @@ enum class RenderTextureUploadPath : std::uint8_t {
     const RenderTextureAssetData& asset,
     bool deviceSupportsBakedFormat) noexcept;
 
+// The rule behind RenderDeviceSupportsTextureFormat, applied to one entry of bgfx's
+// per-format capability table instead of to the running device. Separated so the rule can be
+// stated as a truth table: asked through the device it can only ever be compared against
+// whatever device happens to be up, and the two answers a device-independent test can give
+// ("nothing is claimed for a format the device says nothing about", "sRGB is never a wider
+// claim than linear") are both satisfied by a rule that ignores the sRGB bit entirely.
+//
+// BGFX_CAPS_FORMAT_TEXTURE_2D means the device samples the format natively and is required in
+// both colour spaces. BGFX_CAPS_FORMAT_TEXTURE_2D_SRGB is required ON TOP of it for an sRGB
+// binding, because a device may take a block format and still refuse to decode it as sRGB, and
+// sampling that texture as linear would wash out every surface it is on.
+// BGFX_CAPS_FORMAT_TEXTURE_2D_EMULATED is deliberately not accepted: bgfx satisfies it by
+// converting the surface on the CPU, which is the cost a baked block format exists to avoid.
+[[nodiscard]] bool RenderTextureFormatCapabilitySatisfied(
+    std::uint32_t formatCapabilities,
+    RenderTextureColorSpace colorSpace) noexcept;
+
 // Whether the running device can sample `format` as a 2D texture, read from
-// bgfx::getCaps()->formats[]. sRGB is asked for separately because bgfx reports it as its own
-// capability bit: a device may take the block format and still refuse to decode it as sRGB,
-// and sampling that texture as linear would wash out every surface it is on. Answers false
-// when bgfx is not initialised, so a caller with no device decodes rather than guesses.
+// bgfx::getCaps()->formats[] and answered by RenderTextureFormatCapabilitySatisfied. Answers
+// false when bgfx is not initialised, so a caller with no device decodes rather than guesses.
 [[nodiscard]] bool RenderDeviceSupportsTextureFormat(
     bgfx::TextureFormat::Enum format,
     RenderTextureColorSpace colorSpace) noexcept;
