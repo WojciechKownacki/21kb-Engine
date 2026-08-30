@@ -18,7 +18,37 @@ void ShaderProfileDirectoryMapsProductionBackends() {
     Require(std::string_view{ShaderProfileDirectoryForRenderer(bgfx::RendererType::Direct3D11)} == "shaders/dxbc", "D3D11 shader profile should be dxbc");
     Require(std::string_view{ShaderProfileDirectoryForRenderer(bgfx::RendererType::Direct3D12)} == "shaders/dxil", "D3D12 shader profile should be dxil");
     Require(std::string_view{ShaderProfileDirectoryForRenderer(bgfx::RendererType::Vulkan)} == "shaders/spirv", "Vulkan shader profile should be spirv");
+    Require(std::string_view{ShaderProfileDirectoryForRenderer(bgfx::RendererType::OpenGL)} == "shaders/glsl", "OpenGL shader profile should be glsl");
+    Require(std::string_view{ShaderProfileDirectoryForRenderer(bgfx::RendererType::OpenGLES)} == "shaders/essl", "OpenGL ES shader profile should be essl");
     Require(std::string_view{ShaderProfileDirectoryForRenderer(bgfx::RendererType::Metal)} == "shaders/metal", "Metal shader profile should be metal");
+}
+
+// Red when: an unmapped renderer type inherits some other backend's directory
+// instead of admitting it has none. Before this test the function ended in
+// `default: return "shaders/dxbc"`, so WebGPU, AGC, GNM and NVN all answered
+// "shaders/dxbc" and every assertion below failed.
+//
+// This is not a cosmetic mapping. A bgfx .bin header carries no backend
+// identifier, so a backend handed another backend's blob does not reject it --
+// it takes a hard BGFX_FATAL. Answering "shaders/dxbc" for WebGPU hands D3D
+// bytecode to a WebGPU device; a null answer stops the load with the shader
+// simply missing, which is the failure the caller already handles.
+void UnmappedRenderersGetNoShaderDirectoryInsteadOfAWrongOne() {
+    Require(ShaderProfileDirectoryForRenderer(bgfx::RendererType::WebGPU) != nullptr,
+        "WebGPU must resolve to its own shader profile directory");
+    Require(std::string_view{ShaderProfileDirectoryForRenderer(bgfx::RendererType::WebGPU)} == "shaders/wgsl",
+        "WebGPU must load wgsl binaries, never another backend's bytecode");
+
+    constexpr std::array<bgfx::RendererType::Enum, 4U> unshipped{
+        bgfx::RendererType::Agc,
+        bgfx::RendererType::Gnm,
+        bgfx::RendererType::Nvn,
+        bgfx::RendererType::Count,
+    };
+    for (const bgfx::RendererType::Enum renderer : unshipped) {
+        Require(ShaderProfileDirectoryForRenderer(renderer) == nullptr,
+            "A renderer we ship no bytecode for must report no shader directory, not fall back to one");
+    }
 }
 
 void ShaderManifestDeclaresRuntimePrograms() {
@@ -131,6 +161,7 @@ void MotionVectorShaderUsesTopLeftUvToNdcMapping() {
 
 void RunShaderManifestTests() {
     ShaderProfileDirectoryMapsProductionBackends();
+    UnmappedRenderersGetNoShaderDirectoryInsteadOfAWrongOne();
     ShaderManifestDeclaresRuntimePrograms();
     PrebuiltShaderProfilesContainRequiredManifest();
     ShaderManifestCoversEveryPrebuiltShaderVariant();

@@ -113,20 +113,44 @@ namespace bake = kb::assets::bake;
 // still looks for, a non-power-of-two alignment, a macOS profile reappearing
 // while the target is frozen, or the 3x16-bit stride trap being enabled on a
 // backend set that spans both of bgfx's attribute-size tables.
+//
+// Also red on the 256-byte package alignment regressing: the table loop below
+// pins it for EVERY shipped profile, so it fired on all three profiles at the
+// 16 bytes they carried before, and it fires again the moment one of them
+// drifts back to a value Vulkan's min*BufferOffsetAlignment or WebGPU's
+// bytesPerRow rule cannot accept.
 void ProfilesAnswerQuestionsAboutTheirTarget() {
     const std::span<const bake::BakeTargetProfile> profiles = bake::BakeTargetProfiles();
-    Require(profiles.size() == 3U, "BakeTargetProfiles must ship exactly Windows x64, Linux x64 and Android arm64");
+    Require(profiles.size() == 4U,
+        "BakeTargetProfiles must ship exactly Windows x64, Linux x64, Android arm64 and Web wasm32");
     for (const bake::BakeTargetProfile& profile : profiles) {
         Require(bake::IsValidBakeTargetProfile(profile), "A shipped bake target profile is not bakeable");
         Require(bake::IsValidBakeCacheName(profile.identifier),
             "A bake target profile identifier is not usable as a path component");
         Require(!bake::HasShaderBakeBackend(profile.shaderBackends, bake::ShaderBakeBackend::Metal),
             "A shipped profile bakes Metal although the macOS target is frozen");
+        Require(!bake::HasShaderBakeBackend(profile.shaderBackends, bake::ShaderBakeBackend::Wgsl),
+            "A shipped profile bakes WGSL although bgfx's WebGPU backend is compiled out on Emscripten");
+        Require(profile.textureCompressions != 0U,
+            "A shipped profile bakes no texture compression family at all");
+        // 256 is a floor shared by every target we ship to: Vulkan's required
+        // limits cap minUniformBufferOffsetAlignment, minStorageBufferOffset-
+        // Alignment and minTexelBufferOffsetAlignment at 256, and WebGPU wants a
+        // copy's bytesPerRow to be a multiple of 256. Anything finer produces a
+        // block that cannot be bound or copied from where it was baked.
+        Require(profile.packageBlockAlignmentBytes == 256U,
+            "A shipped profile aligns package blocks to something other than 256 bytes");
+        Require(profile.mappedBlockAlignmentBytes >= profile.packageBlockAlignmentBytes &&
+                profile.mappedBlockAlignmentBytes % profile.packageBlockAlignmentBytes == 0U,
+            "A shipped profile's mapped alignment is not a whole number of package alignments");
     }
 
     const bake::BakeTargetProfile windows = bake::WindowsX64BakeTargetProfile();
-    Require(windows.textureCompression == bake::TextureCompressionFamily::BlockCompressed,
-        "Windows x64 must bake block-compressed textures");
+    Require(bake::HasTextureCompressionFamily(
+                windows.textureCompressions, bake::TextureCompressionFamily::BlockCompressedBaseline) &&
+            bake::HasTextureCompressionFamily(
+                windows.textureCompressions, bake::TextureCompressionFamily::BlockCompressedExtended),
+        "Windows x64 must bake the whole BCn range, baseline and extended");
     Require(bake::HasShaderBakeBackend(windows.shaderBackends, bake::ShaderBakeBackend::Dxbc) &&
             bake::HasShaderBakeBackend(windows.shaderBackends, bake::ShaderBakeBackend::Dxil) &&
             bake::HasShaderBakeBackend(windows.shaderBackends, bake::ShaderBakeBackend::Spirv),
@@ -151,11 +175,24 @@ void ProfilesAnswerQuestionsAboutTheirTarget() {
     const bake::BakeTargetProfile linuxX64 = bake::LinuxX64BakeTargetProfile();
     Require(!bake::BakeTargetProfileHasUniformVertexStride(linuxX64) && !linuxX64.allowsThreeComponent16BitAttributes,
         "Linux x64 spans both bgfx stride families and must forbid 3x16-bit attributes");
+    // x86-64 fixes the base page at 4 KiB, so unlike arm64 this one really is
+    // the page size and not an assumption inherited from a smaller-page era.
     Require(linuxX64.mappedBlockAlignmentBytes == 4096U, "Linux x64 mmap offsets must be page-size multiples");
 
     const bake::BakeTargetProfile android = bake::AndroidArm64BakeTargetProfile();
-    Require(android.textureCompression == bake::TextureCompressionFamily::AdaptiveScalable,
+    Require(bake::HasTextureCompressionFamily(
+                android.textureCompressions, bake::TextureCompressionFamily::AdaptiveScalable),
         "Android arm64 must bake ASTC textures");
+    Require(!bake::HasTextureCompressionFamily(
+                android.textureCompressions, bake::TextureCompressionFamily::BlockCompressedBaseline) &&
+            !bake::HasTextureCompressionFamily(
+                android.textureCompressions, bake::TextureCompressionFamily::BlockCompressedExtended),
+        "Android arm64 must not pay for BCn textures no shipped device decodes");
+    // Android 15 ships 16 KiB-page devices, where mmap rejects a 4 KiB-aligned
+    // file offset. 16384 is a whole number of pages on a 4 KiB device too, so
+    // one package serves both; trimming this back to 4096 is the regression.
+    Require(android.mappedBlockAlignmentBytes == 16384U,
+        "Android arm64 mapped blocks must clear the 16 KiB page Android 15 ships");
     Require(bake::BakeIndexWidthBytes(android.indexWidth) == 2U, "Android arm64 must bake 16-bit indices");
     Require(!bake::BakeTargetProfileHasUniformVertexStride(android) && !android.allowsThreeComponent16BitAttributes,
         "Android arm64 spans both bgfx stride families and must forbid 3x16-bit attributes");
@@ -167,7 +204,8 @@ void ProfilesAnswerQuestionsAboutTheirTarget() {
             bake::ShaderBakeBackendName(bake::ShaderBakeBackend::Spirv) == "spirv" &&
             bake::ShaderBakeBackendName(bake::ShaderBakeBackend::Glsl) == "glsl" &&
             bake::ShaderBakeBackendName(bake::ShaderBakeBackend::Essl) == "essl" &&
-            bake::ShaderBakeBackendName(bake::ShaderBakeBackend::Metal) == "metal",
+            bake::ShaderBakeBackendName(bake::ShaderBakeBackend::Metal) == "metal" &&
+            bake::ShaderBakeBackendName(bake::ShaderBakeBackend::Wgsl) == "wgsl",
         "Shader backend names no longer match the renderer's shaders/<name> profile directories");
 
     bake::BakeTargetProfile found = android;
@@ -191,13 +229,85 @@ void ProfilesAnswerQuestionsAboutTheirTarget() {
         "A single-stride-family profile must be allowed to use 3x16-bit attributes");
 }
 
+// Red when: there is no Web profile at all (it did not exist before this test,
+// so every assertion below failed at TryFindBakeTargetProfile), or when the one
+// there is stops matching what a browser build can actually execute --
+//
+//  * baking WGSL, which bgfx's Emscripten build cannot load because
+//    BGFX_CONFIG_RENDERER_WEBGPU leaves BX_PLATFORM_EMSCRIPTEN commented out;
+//  * dropping ESSL, the only flavour a WebGL2 context (RendererType::OpenGLES)
+//    can be handed;
+//  * dropping either texture family -- a browser guarantees BC *or* ASTC and
+//    says which only at runtime, so both must be in the package;
+//  * baking BC4/BC5/BC6H/BC7, which bgfx on Emscripten reports unsupported from
+//    a fixed format list however capable the GPU is;
+//  * allowing 3x16-bit attributes, which WebGPU has no vertex format for at all;
+//  * padding blocks out to a mapping granularity that does not exist in a
+//    browser, where a `Mapped` block is a range request, not an mmap;
+//  * letting a chunk grow to the desktop budget, which a wasm32 heap has to hold
+//    twice while it is fetched.
+//
+// The Wgsl stride classification is checked here rather than on the profile,
+// because no profile carries the enumerator: it is a D3D-style row in bgfx's
+// table, and getting that wrong is what would let a mixed web profile bake a
+// vertex buffer whose stride changes under it.
+void WebProfileMatchesWhatABrowserBuildCanRun() {
+    bake::BakeTargetProfile web{};
+    Require(bake::TryFindBakeTargetProfile("Web.wasm32", web), "There is no Web bake target profile");
+    Require(web == bake::WebWasm32BakeTargetProfile(),
+        "The registered Web profile is not the one the factory returns");
+    Require(bake::IsValidBakeTargetProfile(web), "The Web bake target profile is not bakeable");
+
+    Require(bake::HasShaderBakeBackend(web.shaderBackends, bake::ShaderBakeBackend::Essl),
+        "Web must bake essl -- WebGL2 arrives as bgfx RendererType::OpenGLES");
+    Require(!bake::HasShaderBakeBackend(web.shaderBackends, bake::ShaderBakeBackend::Wgsl),
+        "Web must not bake wgsl while bgfx's WebGPU backend is compiled out on Emscripten");
+
+    Require(bake::HasTextureCompressionFamily(
+                web.textureCompressions, bake::TextureCompressionFamily::BlockCompressedBaseline) &&
+            bake::HasTextureCompressionFamily(
+                web.textureCompressions, bake::TextureCompressionFamily::AdaptiveScalable),
+        "Web must bake both BC1/BC3 and ASTC -- a browser guarantees one family or the other, not which");
+    Require(!bake::HasTextureCompressionFamily(
+                web.textureCompressions, bake::TextureCompressionFamily::BlockCompressedExtended),
+        "Web must not bake BC4/BC5/BC6H/BC7 -- bgfx on Emscripten reports them unsupported");
+
+    Require(!web.allowsThreeComponent16BitAttributes,
+        "Web must forbid 3x16-bit attributes -- WebGPU has no 3-component 16-bit vertex format");
+    Require(web.packageBlockAlignmentBytes == 256U,
+        "Web package blocks must be 256-aligned for WebGPU's bytesPerRow rule");
+    Require(web.mappedBlockAlignmentBytes == web.packageBlockAlignmentBytes,
+        "Web has no memory mapping, so a mapped block must cost no alignment beyond the package one");
+    Require(web.maxGeometryChunkBytes < bake::WindowsX64BakeTargetProfile().maxGeometryChunkBytes,
+        "Web must bake smaller geometry chunks than desktop -- a wasm32 heap holds a chunk twice while fetching");
+
+    Require(bake::ShaderBakeBackendStrideFamily(bake::ShaderBakeBackend::Wgsl) ==
+            bake::VertexAttributeStrideFamily::Direct3DStyle,
+        "WGSL must be classified D3D-style: bgfx sizes WebGPU vertex attributes from s_attribTypeSizeD3D1x");
+    Require(bake::ShaderBakeBackendStrideFamily(bake::ShaderBakeBackend::Essl) ==
+            bake::VertexAttributeStrideFamily::OpenGLStyle,
+        "ESSL must stay GL-style, otherwise the mixed-stride rule cannot see a web profile split");
+
+    // A hypothetical web profile that gained WGSL would span both stride tables,
+    // which is exactly why the shipped one may not claim 3x16-bit portability.
+    bake::BakeTargetProfile withWebGpu = web;
+    withWebGpu.shaderBackends |= bake::ShaderBakeBackendBit(bake::ShaderBakeBackend::Wgsl);
+    Require(!bake::BakeTargetProfileHasUniformVertexStride(withWebGpu),
+        "essl plus wgsl must read as a mixed-stride backend set");
+    withWebGpu.allowsThreeComponent16BitAttributes = true;
+    Require(!bake::IsValidBakeTargetProfile(withWebGpu),
+        "A web profile spanning WebGL and WebGPU must not claim portable 3x16-bit attributes");
+}
+
 // Red when: ANY ONE of the validator's rejection rules stops firing. Every
 // rejected case below differs from a bakeable profile by exactly one rule, so
-// dropping the identifier check, the empty-backend-set check, the unknown-bit
+// dropping the identifier check, either empty-set check, either unknown-bit
 // check, either power-of-two check, the mapped-versus-package divisibility
 // check, the chunk-budget check or the 3x16-bit stride rule turns exactly one
 // named case red instead of hiding behind the rules that still work. The
-// accepted cases stop the validator from simply refusing everything.
+// accepted cases stop the validator from simply refusing everything -- and the
+// shipped Web profile is among them, so a Web profile whose alignments do not
+// satisfy mapped % package == 0 is rejected here rather than shipped.
 void ProfileValidationCoversEveryRejectionRule() {
     const bake::BakeTargetProfile uniform = bake::WindowsX64BakeTargetProfile();
     const bake::BakeTargetProfile mixed = bake::LinuxX64BakeTargetProfile();
@@ -214,8 +324,18 @@ void ProfileValidationCoversEveryRejectionRule() {
     cases.push_back({ "the shipped Windows x64 profile", uniform, true });
     cases.push_back({ "the shipped Linux x64 profile", mixed, true });
     cases.push_back({ "the shipped Android arm64 profile", bake::AndroidArm64BakeTargetProfile(), true });
+    cases.push_back({ "the shipped Web wasm32 profile", bake::WebWasm32BakeTargetProfile(), true });
 
     bake::BakeTargetProfile probe = uniform;
+    probe.textureCompressions = 0U;
+    cases.push_back({ "a profile that bakes no texture compression family at all", probe, false });
+
+    probe = uniform;
+    probe.textureCompressions |= static_cast<bake::TextureCompressionFamilyMask>(1U)
+        << bake::kTextureCompressionFamilyCount;
+    cases.push_back({ "a profile carrying a texture compression family bit no baker knows", probe, false });
+
+    probe = uniform;
     probe.identifier = {};
     cases.push_back({ "a profile with an empty identifier", probe, false });
 
@@ -834,6 +954,7 @@ void SinkRejectsProtocolViolations() {
 
 void RunAssetBakeTests() {
     ProfilesAnswerQuestionsAboutTheirTarget();
+    WebProfileMatchesWhatABrowserBuildCanRun();
     ProfileValidationCoversEveryRejectionRule();
     ReservedWin32DeviceNamesAreAllRejected();
     KeyIsDeterministicAndMachineIndependent();
