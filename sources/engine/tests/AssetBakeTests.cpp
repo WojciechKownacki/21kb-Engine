@@ -59,6 +59,10 @@ namespace bake = kb::assets::bake;
     key.bakerId = "SkeletalMesh";
     key.bakerVersion = "3";
     key.targetProfileId = "Windows.x64";
+    // A literal, not BakeTargetProfileFingerprint(WindowsX64BakeTargetProfile()): the golden
+    // below must move when the key ENCODING changes and stay put when a shipped profile is
+    // edited, which is a different test's job.
+    key.targetProfileHash = 0x0F1E2D3C4B5A6978ULL;
     key.settingsHash = 0xFEDCBA9876543210ULL;
     key.dependencies = { bake::AssetBakeDigest{ .high = 1U, .low = 2U },
         bake::AssetBakeDigest{ .high = 1U, .low = 2U }, bake::AssetBakeDigest{ .high = 0U, .low = 9U } };
@@ -457,8 +461,71 @@ void KeyIsDeterministicAndMachineIndependent() {
     Require(shuffled.Digest() == first.Digest(),
         "Dependency order or duplication leaked into the bake key");
 
-    Require(first.ToString() == "03f0977c6cd0f1f5f2427d19264fa535",
+    Require(first.ToString() == "d617b6e706fcffa5c4abcab1ec993c83",
         "The canonical bake key encoding changed; every cached artifact would be orphaned");
+}
+
+// Red when: the key stops carrying what a profile SAYS and carries only what it
+// is CALLED. A profile identifier is stable by design -- "Windows.x64" is still
+// "Windows.x64" after its alignment doubles -- so a key built from the name
+// alone would hand back artifacts baked under answers no baker gives any more,
+// with nothing to notice it. Also red if a baker can leave the fingerprint out:
+// an unfingerprinted key must be refused, not written.
+void KeyCarriesWhatTheProfileSaysNotOnlyItsName() {
+    const bake::BakeTargetProfile windows = bake::WindowsX64BakeTargetProfile();
+    Require(bake::BakeTargetProfileFingerprint(windows) != 0U,
+        "A profile fingerprint of zero is indistinguishable from a key that never asked");
+    Require(bake::BakeTargetProfileFingerprint(windows) == bake::BakeTargetProfileFingerprint(windows),
+        "A profile fingerprint is not stable across calls");
+
+    // Every field a baker reads must move the fingerprint. Each edit below leaves
+    // the identifier alone, which is exactly the case the name could not catch.
+    bake::BakeTargetProfile edited = windows;
+    edited.packageBlockAlignmentBytes = 512U;
+    Require(bake::BakeTargetProfileFingerprint(edited) != bake::BakeTargetProfileFingerprint(windows),
+        "A block alignment change did not move the profile fingerprint");
+    edited = windows;
+    edited.textureCompressions |= bake::TextureCompressionFamilyBit(bake::TextureCompressionFamily::AdaptiveScalable);
+    Require(bake::BakeTargetProfileFingerprint(edited) != bake::BakeTargetProfileFingerprint(windows),
+        "A texture family change did not move the profile fingerprint");
+    edited = windows;
+    edited.shaderBackends |= bake::ShaderBakeBackendBit(bake::ShaderBakeBackend::Glsl);
+    Require(bake::BakeTargetProfileFingerprint(edited) != bake::BakeTargetProfileFingerprint(windows),
+        "A shader backend change did not move the profile fingerprint");
+    edited = windows;
+    edited.indexWidth = bake::BakeIndexWidth::Bits16;
+    Require(bake::BakeTargetProfileFingerprint(edited) != bake::BakeTargetProfileFingerprint(windows),
+        "An index width change did not move the profile fingerprint");
+    edited = windows;
+    edited.allowsThreeComponent16BitAttributes = !windows.allowsThreeComponent16BitAttributes;
+    Require(bake::BakeTargetProfileFingerprint(edited) != bake::BakeTargetProfileFingerprint(windows),
+        "The 3x16-bit attribute rule did not move the profile fingerprint");
+    edited = windows;
+    edited.mappedBlockAlignmentBytes = windows.mappedBlockAlignmentBytes * 2U;
+    Require(bake::BakeTargetProfileFingerprint(edited) != bake::BakeTargetProfileFingerprint(windows),
+        "A mapping alignment change did not move the profile fingerprint");
+    edited = windows;
+    edited.maxGeometryChunkBytes = windows.maxGeometryChunkBytes / 2U;
+    Require(bake::BakeTargetProfileFingerprint(edited) != bake::BakeTargetProfileFingerprint(windows),
+        "A geometry chunk budget change did not move the profile fingerprint");
+
+    // Two profiles that differ in a field but not in a name must not share a key.
+    bake::AssetBakeKey before = MakeMeshKey();
+    before.targetProfileHash = bake::BakeTargetProfileFingerprint(windows);
+    bake::BakeTargetProfile widened = windows;
+    widened.packageBlockAlignmentBytes = 512U;
+    bake::AssetBakeKey after = before;
+    after.targetProfileHash = bake::BakeTargetProfileFingerprint(widened);
+    Require(before.targetProfileId == after.targetProfileId,
+        "This test only means something while both keys carry the same profile name");
+    Require(before.Digest() != after.Digest(),
+        "An edited profile kept its bake key, so artifacts baked under the old one stay addressable");
+
+    // And a baker that never asked is refused rather than quietly written.
+    bake::AssetBakeKey unfingerprinted = before;
+    unfingerprinted.targetProfileHash = 0U;
+    Require(before.IsValid() && !unfingerprinted.IsValid(),
+        "A key with no profile fingerprint must be refused, not written");
 }
 
 // Red when: bakerVersion, targetProfileId, sourceContentHash or settingsHash
@@ -958,6 +1025,7 @@ void RunAssetBakeTests() {
     ProfileValidationCoversEveryRejectionRule();
     ReservedWin32DeviceNamesAreAllRejected();
     KeyIsDeterministicAndMachineIndependent();
+    KeyCarriesWhatTheProfileSaysNotOnlyItsName();
     KeyInvalidationIsScopedAndPropagates();
     KeyIsUsableAsAFileName();
     CommittedAssetIsReadable();

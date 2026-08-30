@@ -85,6 +85,12 @@ struct AssetBakeKey {
     std::string bakerVersion;
     // BakeTargetProfile::identifier of the platform being baked for.
     std::string targetProfileId;
+    // BakeTargetProfileFingerprint of that profile. A name does not change when
+    // the profile behind it does, so the name alone would leave artifacts baked
+    // under a since-edited profile addressable under the same key. Required to
+    // be non-zero by IsValid(), so a baker cannot forget to ask: the sink
+    // refuses the key rather than writing an artifact nobody can invalidate.
+    std::uint64_t targetProfileHash = 0U;
     // Hash of the bake settings that are not already covered by the profile.
     // Anything positional (slot order, channel order) must be folded in here:
     // `dependencies` is an unordered set and cannot carry position.
@@ -92,8 +98,9 @@ struct AssetBakeKey {
     // Digests of the artifacts this one is built from.
     std::vector<AssetBakeDigest> dependencies;
 
-    // True when every id that becomes a path component is a portable name and
-    // the baker version is present. A sink must refuse an invalid key.
+    // True when every id that becomes a path component is a portable name, the
+    // baker version is present and the profile fingerprint was filled in. A
+    // sink must refuse an invalid key.
     [[nodiscard]] bool IsValid() const noexcept;
 
     [[nodiscard]] AssetBakeDigest Digest() const;

@@ -222,6 +222,18 @@ struct BakeTargetProfile {
     return seen;
 }
 
+// Digest of everything in the profile except its identifier, for AssetBakeKey.
+//
+// The key carries the profile's NAME, and a name does not change when the
+// profile behind it does. Widening an alignment or adding a texture family
+// while "Windows.x64" stays "Windows.x64" would leave every artifact baked
+// under the old answers addressable under the same key -- a cache that returns
+// output no baker would produce today, silently. This closes that: the key
+// carries what the profile SAYS, not only what it is called.
+//
+// Never zero, so a key that forgot to ask is distinguishable from one that did.
+[[nodiscard]] std::uint64_t BakeTargetProfileFingerprint(const BakeTargetProfile& profile) noexcept;
+
 // Rejects a profile that cannot be baked for: a non-portable identifier, an
 // empty texture family set, an empty backend set, a non-power-of-two or
 // inconsistent alignment, a zero chunk budget, or the 3x16-bit trap above
