@@ -14,7 +14,7 @@ namespace kb::audio_miniaudio {
 struct MiniaudioSound::MemoryDecoderState final {
     ma_decoder decoder{};
     ma_decoder flatDecoder{};
-    std::shared_ptr<const kb::assets::ImportedAsset> payload;
+    std::shared_ptr<const void> payload;
     bool decoderInitialized = false;
     bool flatDecoderInitialized = false;
 
@@ -243,7 +243,7 @@ ma_result MiniaudioSound::Initialize(
         return MA_SUCCESS;
     }
     memoryDecoder_ = std::make_unique<MemoryDecoderState>();
-    memoryDecoder_->payload = clip.imported;
+    memoryDecoder_->payload = clip.EncodedOwner();
     ma_result result = InitDecoder(
         clip.EncodedBytes(), clip.extension, memoryDecoder_->decoder);
     memoryDecoder_->decoderInitialized = result == MA_SUCCESS;

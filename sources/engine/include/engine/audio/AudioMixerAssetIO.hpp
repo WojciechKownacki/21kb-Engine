@@ -2,8 +2,10 @@
 
 #include "engine/audio/AudioMixerAsset.hpp"
 
+#include <cstdint>
 #include <filesystem>
 #include <optional>
+#include <span>
 
 namespace kb::audio {
 
@@ -23,6 +25,7 @@ public:
     AudioMixerAssetIO() = delete;
 
     [[nodiscard]] static std::optional<AudioMixerAsset> Load(const std::filesystem::path& path);
+    [[nodiscard]] static std::optional<AudioMixerAsset> Load(std::span<const std::uint8_t> bytes);
     [[nodiscard]] static bool Save(const std::filesystem::path& path, const AudioMixerAsset& asset);
 };
 

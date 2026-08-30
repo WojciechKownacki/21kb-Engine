@@ -21,7 +21,15 @@ std::vector<std::string> ParticleEffectAssetLoader::Extensions() const {
 }
 
 kb::assets::AssetLoadResult ParticleEffectAssetLoader::Load(const kb::assets::AssetLoadRequest& request) {
-    ParticleEffectLoadResult result = ParticleEffectAssetIO::LoadDetailed(request.resolvedPath);
+    std::vector<std::uint8_t> sourceBytes;
+    std::string readError;
+    if (!request.ReadSourceBytes(sourceBytes, readError)) {
+        return kb::assets::AssetLoadResult{.asset = {}, .error = std::move(readError)};
+    }
+    const std::string_view source = sourceBytes.empty()
+        ? std::string_view{}
+        : std::string_view{reinterpret_cast<const char*>(sourceBytes.data()), sourceBytes.size()};
+    ParticleEffectLoadResult result = ParticleEffectAssetIO::Parse(source);
     if (!result.Succeeded()) {
         std::string error;
         for (const ParticleEffectDiagnostic& diagnostic : result.diagnostics) {
@@ -51,6 +59,23 @@ ParticleEffectAssetLoader::ValidateDependencies(const kb::assets::AssetMetadata&
     for (std::size_t index = 0U; index < result.diagnostics.size(); ++index) {
         if (index != 0U)
             message << '\n';
+        message << FormatParticleEffectDiagnostic(result.diagnostics[index]);
+    }
+    return message.str();
+}
+
+std::optional<std::string>
+ParticleEffectAssetLoader::ValidateRuntimeDependencies(const kb::assets::AssetLoadRequest& request,
+                                                       const kb::assets::AssetRegistry& registry) const {
+    if (!request.IsPackaged()) {
+        return ValidateDependencies(request.metadata, registry);
+    }
+    const ParticleEffectDependencyResult result =
+        ParticleEffectAssetValidator::ValidateRuntimeDependencies(request, registry);
+    if (result.diagnostics.empty()) return std::nullopt;
+    std::ostringstream message;
+    for (std::size_t index = 0U; index < result.diagnostics.size(); ++index) {
+        if (index != 0U) message << '\n';
         message << FormatParticleEffectDiagnostic(result.diagnostics[index]);
     }
     return message.str();

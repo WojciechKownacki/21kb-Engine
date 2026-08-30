@@ -87,8 +87,17 @@ bool RenderMeshDescValidator::IsValid(const RenderMeshDesc& desc) noexcept {
     }
     for (std::uint32_t sectionIndex = 0; sectionIndex < desc.sectionCount; ++sectionIndex) {
         const RenderMeshSectionDesc& section = desc.sections[sectionIndex];
-        if (section.indexCount == 0U || section.indexStart >= desc.indexCount || section.indexCount > desc.indexCount - section.indexStart) {
+        const std::uint32_t sectionVertexCount = RenderMeshDescGeometry::SectionVertexCount(desc, section);
+        if (section.indexCount == 0U || section.indexStart >= desc.indexCount ||
+            section.indexCount > desc.indexCount - section.indexStart || sectionVertexCount == 0U ||
+            (desc.indexFormat == RenderIndexFormat::Uint16 && sectionVertexCount > 65536U) ||
+            (section.vertexCount != 0U && section.vertexCount > desc.vertexCount - section.vertexStart)) {
             return false;
+        }
+        for (std::uint32_t indexOffset = 0U; indexOffset < section.indexCount; ++indexOffset) {
+            if (RenderMeshDescGeometry::IndexAt(desc, section.indexStart + indexOffset) >= sectionVertexCount) {
+                return false;
+            }
         }
     }
     if (desc.gpuDriven.meshletCount > 0U && desc.gpuDriven.meshlets == nullptr) {
@@ -97,6 +106,7 @@ bool RenderMeshDescValidator::IsValid(const RenderMeshDesc& desc) noexcept {
     if (desc.gpuDriven.lodCount > 0U && desc.gpuDriven.lods == nullptr) {
         return false;
     }
+    std::uint32_t previousMeshletSection = 0U;
     for (std::uint32_t meshletIndex = 0U; meshletIndex < desc.gpuDriven.meshletCount; ++meshletIndex) {
         const RenderMeshletDesc& meshlet = desc.gpuDriven.meshlets[meshletIndex];
         if (!meshlet.IsValid() ||
@@ -105,6 +115,35 @@ bool RenderMeshDescValidator::IsValid(const RenderMeshDesc& desc) noexcept {
             meshlet.vertexStart >= desc.vertexCount ||
             meshlet.vertexCount > desc.vertexCount - meshlet.vertexStart) {
             return false;
+        }
+        std::uint32_t sectionVertexStart = 0U;
+        std::uint32_t sectionVertexCount = desc.vertexCount;
+        if (desc.sectionCount > 0U) {
+            if (meshlet.sectionIndex >= desc.sectionCount ||
+                (meshletIndex != 0U && meshlet.sectionIndex < previousMeshletSection)) {
+                return false;
+            }
+            const RenderMeshSectionDesc& section = desc.sections[meshlet.sectionIndex];
+            sectionVertexStart = section.vertexStart;
+            sectionVertexCount = RenderMeshDescGeometry::SectionVertexCount(desc, section);
+            if (meshlet.vertexStart < sectionVertexStart ||
+                meshlet.vertexStart - sectionVertexStart > sectionVertexCount ||
+                meshlet.vertexCount > sectionVertexCount - (meshlet.vertexStart - sectionVertexStart)) {
+                return false;
+            }
+            previousMeshletSection = meshlet.sectionIndex;
+        }
+        for (std::uint32_t indexOffset = 0U; indexOffset < meshlet.indexCount; ++indexOffset) {
+            const std::uint32_t localIndex = RenderMeshDescGeometry::IndexAt(
+                desc, meshlet.indexStart + indexOffset);
+            if (localIndex >= sectionVertexCount) {
+                return false;
+            }
+            const std::uint32_t globalIndex = sectionVertexStart + localIndex;
+            if (globalIndex < meshlet.vertexStart ||
+                globalIndex - meshlet.vertexStart >= meshlet.vertexCount) {
+                return false;
+            }
         }
     }
     for (std::uint32_t lodIndex = 0U; lodIndex < desc.gpuDriven.lodCount; ++lodIndex) {
@@ -117,9 +156,11 @@ bool RenderMeshDescValidator::IsValid(const RenderMeshDesc& desc) noexcept {
             return false;
         }
     }
-    for (std::uint32_t index = 0U; index < desc.indexCount; ++index) {
-        if (RenderMeshDescGeometry::IndexAt(desc, index) >= desc.vertexCount) {
-            return false;
+    if (desc.sectionCount == 0U) {
+        for (std::uint32_t index = 0U; index < desc.indexCount; ++index) {
+            if (RenderMeshDescGeometry::IndexAt(desc, index) >= desc.vertexCount) {
+                return false;
+            }
         }
     }
     return true;

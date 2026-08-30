@@ -1,5 +1,6 @@
 #include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
 
+#include "engine/assets/AssetMemoryInputStream.hpp"
 #include "engine/assets/AssetRegistry.hpp"
 #include "resources/RenderMaterialAssetParser.hpp"
 
@@ -259,8 +260,9 @@ void AddDiagnostic(
     case RenderMaterialGraphNodeKind::Sobol:
     case RenderMaterialGraphNodeKind::Uv:
         return std::nullopt;
+    default:
+        return std::nullopt;
     }
-    return std::nullopt;
 }
 
 [[nodiscard]] std::string StableParameterIdForGraphNode(const RenderMaterialGraphNode& node) {
@@ -335,6 +337,8 @@ void AddDiagnostic(
     case RenderMaterialGraphNodeKind::NormalUnpack:
     case RenderMaterialGraphNodeKind::Sobol:
     case RenderMaterialGraphNodeKind::Uv:
+        break;
+    default:
         break;
     }
     return "parameter" + std::to_string(node.id);
@@ -989,7 +993,17 @@ std::vector<std::string> RenderMaterialInstanceAssetLoader::Extensions() const {
 }
 
 kb::assets::AssetLoadResult RenderMaterialInstanceAssetLoader::Load(const kb::assets::AssetLoadRequest& request) {
-    RenderMaterialInstanceAssetParseResult material = LoadInstanceWithDiagnostics(request.resolvedPath, request.metadata.id);
+    std::vector<std::uint8_t> sourceBytes;
+    std::string error;
+    if (!request.ReadSourceBytes(sourceBytes, error)) {
+        return kb::assets::AssetLoadResult{ .asset = {}, .error = std::move(error) };
+    }
+    kb::assets::AssetMemoryInputStream input{ sourceBytes };
+    RenderMaterialInstanceAssetParseResult material = LoadInstanceWithDiagnostics(input);
+    for (RenderMaterialInstanceAssetParseDiagnostic& diagnostic : material.diagnostics) {
+        diagnostic.assetId = request.metadata.id;
+        diagnostic.path = request.resolvedPath;
+    }
     if (!material.asset.has_value()) {
         return kb::assets::AssetLoadResult{ .asset = {}, .error = material.ErrorMessage() };
     }

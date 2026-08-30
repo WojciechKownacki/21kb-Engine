@@ -314,6 +314,7 @@ void AppendCookBudgetWarnings(const EditorMaterialGraphCookConfig& config, Edito
         request.dependencyFiles = config.dependencyFiles;
         request.cacheRoot = config.cacheRoot;
         request.pass = pass;
+        request.shaderPlatform = config.shaderPlatform;
         request.materialTypeVersion = material.materialTypeVersion;
 
         const kb::render::RenderMaterialGraphShaderArtifactResult cook =
@@ -430,6 +431,15 @@ EditorMaterialGraphCookConfig EditorMaterialGraphCookConfig::Resolve(std::string
     EditorMaterialGraphCookConfig config{};
     config.cacheRoot = std::move(cacheRoot);
     config.backend = BackendForActiveRenderer();
+#if defined(_WIN32)
+    config.shaderPlatform = kb::assets::bake::ShaderBakePlatform::Windows;
+#elif defined(__ANDROID__)
+    config.shaderPlatform = kb::assets::bake::ShaderBakePlatform::Android;
+#elif defined(__EMSCRIPTEN__)
+    config.shaderPlatform = kb::assets::bake::ShaderBakePlatform::WebGl;
+#else
+    config.shaderPlatform = kb::assets::bake::ShaderBakePlatform::Linux;
+#endif
 
     // KB_GRAPH_SHADERC env override takes precedence so a non-default toolchain can be used
     // without rebuilding the editor; otherwise fall back to the compile-time prebuilt path.

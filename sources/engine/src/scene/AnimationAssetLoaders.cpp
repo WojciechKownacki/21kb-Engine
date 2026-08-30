@@ -15,7 +15,14 @@ std::type_index AnimationClipAssetLoader::PayloadType() const noexcept { return 
 std::vector<std::string> AnimationClipAssetLoader::Extensions() const { return { kAnimationClipAssetExtension }; }
 kb::assets::AssetLoadResult AnimationClipAssetLoader::Load(const kb::assets::AssetLoadRequest& request) {
     std::string error;
-    auto value = AnimationAssetIO::LoadClip(request.resolvedPath, &error);
+    if (request.SourceExtension() != kAnimationClipAssetExtension) {
+        return kb::assets::AssetLoadResult{ {}, "Animation clip has an unexpected file extension." };
+    }
+    std::vector<std::uint8_t> sourceBytes;
+    if (!request.ReadSourceBytes(sourceBytes, error)) {
+        return kb::assets::AssetLoadResult{ {}, std::move(error) };
+    }
+    auto value = AnimationAssetIO::LoadClip(sourceBytes, &error);
     return value ? kb::assets::AssetLoadResult{ std::make_shared<AnimationClip>(std::move(*value)), {} }
                  : kb::assets::AssetLoadResult{ {}, std::move(error) };
 }
@@ -51,12 +58,53 @@ std::optional<std::string> AnimationClipAssetLoader::ValidateDependencies(
     return std::nullopt;
 }
 
+std::optional<std::string> AnimationClipAssetLoader::ValidateRuntimeDependencies(
+    const kb::assets::AssetLoadRequest& request,
+    const kb::assets::AssetRegistry& registry) const {
+    if (!request.IsPackaged()) {
+        return ValidateDependencies(request.metadata, registry);
+    }
+
+    std::string error;
+    std::vector<std::uint8_t> clipBytes;
+    if (!request.ReadSourceBytes(clipBytes, error)) {
+        return error;
+    }
+    const auto clip = AnimationAssetIO::LoadClip(clipBytes, &error);
+    if (!clip) return error;
+    if (clip->targetSkeletonAssetId == 0U) return std::nullopt;
+
+    const kb::assets::AssetMetadata* skeletonMetadata = registry.Find(
+        kb::assets::AssetId{ clip->targetSkeletonAssetId });
+    if (skeletonMetadata == nullptr) return std::nullopt;
+    if (skeletonMetadata->type != kSkeletonAssetType) {
+        return "references an asset that is not a Skeleton.";
+    }
+    std::vector<std::uint8_t> skeletonBytes;
+    if (!request.ReadDependencySourceBytes(*skeletonMetadata, skeletonBytes, error)) {
+        return "references a Skeleton that cannot be loaded: " + error;
+    }
+    const auto skeleton = SkeletonAssetIO::Load(skeletonBytes, &error);
+    if (!skeleton) return "references a Skeleton that cannot be loaded: " + error;
+    if (SkeletonCompatibilitySignature(*skeleton) != clip->targetSkeletonCompatibilitySignature) {
+        return "references a Skeleton with an incompatible compatibility signature.";
+    }
+    return std::nullopt;
+}
+
 std::string_view AnimatorControllerAssetLoader::Type() const noexcept { return kAnimatorControllerAssetType; }
 std::type_index AnimatorControllerAssetLoader::PayloadType() const noexcept { return typeid(AnimatorController); }
 std::vector<std::string> AnimatorControllerAssetLoader::Extensions() const { return { kAnimatorControllerAssetExtension }; }
 kb::assets::AssetLoadResult AnimatorControllerAssetLoader::Load(const kb::assets::AssetLoadRequest& request) {
     std::string error;
-    auto value = AnimationAssetIO::LoadController(request.resolvedPath, &error);
+    if (request.SourceExtension() != kAnimatorControllerAssetExtension) {
+        return kb::assets::AssetLoadResult{ {}, "Animator controller has an unexpected file extension." };
+    }
+    std::vector<std::uint8_t> sourceBytes;
+    if (!request.ReadSourceBytes(sourceBytes, error)) {
+        return kb::assets::AssetLoadResult{ {}, std::move(error) };
+    }
+    auto value = AnimationAssetIO::LoadController(sourceBytes, &error);
     return value ? kb::assets::AssetLoadResult{ std::make_shared<AnimatorController>(std::move(*value)), {} }
                  : kb::assets::AssetLoadResult{ {}, std::move(error) };
 }

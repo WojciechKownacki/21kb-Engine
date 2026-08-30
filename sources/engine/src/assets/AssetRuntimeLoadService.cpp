@@ -13,6 +13,7 @@ std::shared_ptr<void> AssetRuntimeLoadService::LoadUntyped(
     const AssetRegistry& registry,
     const AssetMountTable& mounts,
     const std::vector<std::unique_ptr<IAssetLoader>>& loaders,
+    const std::shared_ptr<bake::RuntimeAssetPack>& runtimePack,
     std::unordered_map<std::uint64_t, AssetManager::CachedAsset>& cache,
     std::mutex& loaderExecutionMutex,
     std::string& errorMessage) {
@@ -57,22 +58,26 @@ std::shared_ptr<void> AssetRuntimeLoadService::LoadUntyped(
         errorMessage = "Requested payload type does not match asset loader";
         return {};
     }
-    if (const std::optional<std::string> diagnostic = loader->ValidateDependencies(*metadata, registry);
-        diagnostic.has_value()) {
-        errorMessage = "Asset dependency validation failed: " + *diagnostic;
+    const std::filesystem::path resolvedPath = AssetPathUtilities::ResolvePhysicalPath(mounts, *metadata);
+    if (resolvedPath.empty() && runtimePack == nullptr) {
+        errorMessage = "Asset path could not be resolved: " + NormalizeAssetPath(metadata->virtualPath);
         return {};
     }
-
-    const std::filesystem::path resolvedPath = AssetPathUtilities::ResolvePhysicalPath(mounts, *metadata);
-    if (resolvedPath.empty()) {
-        errorMessage = "Asset path could not be resolved: " + NormalizeAssetPath(metadata->virtualPath);
+    const AssetLoadRequest request{
+        .metadata = *metadata,
+        .resolvedPath = resolvedPath,
+        .runtimePack = runtimePack,
+    };
+    if (const std::optional<std::string> diagnostic = loader->ValidateRuntimeDependencies(request, registry);
+        diagnostic.has_value()) {
+        errorMessage = "Asset dependency validation failed: " + *diagnostic;
         return {};
     }
 
     AssetLoadResult result;
     {
         std::scoped_lock lock{ loaderExecutionMutex };
-        result = loader->Load(AssetLoadRequest{ .metadata = *metadata, .resolvedPath = resolvedPath });
+        result = loader->Load(request);
     }
     if (!result.Succeeded()) {
         errorMessage = result.error.empty() ? "Asset loader failed" : std::move(result.error);

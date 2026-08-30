@@ -50,6 +50,10 @@ bool ScenePrefabAssetReader::Read(const std::filesystem::path& path, ScenePrefab
         return false;
     }
 
+    return Read(input, output);
+}
+
+bool ScenePrefabAssetReader::Read(std::istream& input, ScenePrefabAssetReadResult& output) {
     ScenePrefabAssetReadResult result;
     std::string line;
     if (!ScenePrefabAssetFieldParser::ReadLine(input, line)) {

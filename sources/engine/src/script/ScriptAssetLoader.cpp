@@ -7,8 +7,6 @@
 #include <charconv>
 #include <cstdlib>
 #include <cstdint>
-#include <fstream>
-#include <iterator>
 #include <memory>
 #include <optional>
 #include <sstream>
@@ -18,19 +16,15 @@
 namespace kb::script {
 namespace {
 
-[[nodiscard]] std::string ReadWholeFile(const std::filesystem::path& path, std::string& error) {
-    std::ifstream input{ path, std::ios::binary };
-    if (!input.is_open()) {
-        error = "Script asset file could not be opened";
+[[nodiscard]] std::string ReadSource(const kb::assets::AssetLoadRequest& request, std::string& error) {
+    std::vector<std::uint8_t> bytes;
+    if (!request.ReadSourceBytes(bytes, error)) {
         return {};
     }
-
-    std::string content{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
-    if (!input.good() && !input.eof()) {
-        error = "Script asset file could not be read";
+    if (bytes.empty()) {
         return {};
     }
-    return content;
+    return std::string{ reinterpret_cast<const char*>(bytes.data()), bytes.size() };
 }
 
 [[nodiscard]] std::string_view Trim(std::string_view text) noexcept {
@@ -511,7 +505,7 @@ std::vector<std::string> LuaScriptAssetLoader::Extensions() const {
 
 kb::assets::AssetLoadResult LuaScriptAssetLoader::Load(const kb::assets::AssetLoadRequest& request) {
     std::string error;
-    std::string source = ReadWholeFile(request.resolvedPath, error);
+    std::string source = ReadSource(request, error);
     if (!error.empty()) {
         return kb::assets::AssetLoadResult{ .asset = {}, .error = std::move(error) };
     }
@@ -538,7 +532,7 @@ std::vector<std::string> NativeBehaviourDescriptorAssetLoader::Extensions() cons
 
 kb::assets::AssetLoadResult NativeBehaviourDescriptorAssetLoader::Load(const kb::assets::AssetLoadRequest& request) {
     std::string error;
-    std::string source = ReadWholeFile(request.resolvedPath, error);
+    std::string source = ReadSource(request, error);
     if (!error.empty()) {
         return kb::assets::AssetLoadResult{ .asset = {}, .error = std::move(error) };
     }

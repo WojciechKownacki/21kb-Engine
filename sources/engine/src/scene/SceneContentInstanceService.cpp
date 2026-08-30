@@ -113,11 +113,7 @@ void Release(Scene& scene, ContentInstanceRuntimeRecord& runtime, bool preserve)
 [[nodiscard]] bool ActivateScene(Scene& scene, SceneEntity owner, const ContentInstanceComponent& component, ContentInstanceRuntimeRecord& runtime) {
     const kb::assets::AssetMetadata* metadata = scene.Assets().Manager().Registry().Find(kb::assets::AssetId{ component.assetId });
     if (metadata == nullptr) return false;
-    const std::filesystem::path path = metadata->physicalPath.empty()
-        ? scene.Assets().Manager().Mounts().Resolve(metadata->virtualPath).value_or(std::filesystem::path{})
-        : metadata->physicalPath;
-    if (path.empty()) return false;
-    const std::uint64_t loadedId = scene.LoadedContent().Load(path, true);
+    const std::uint64_t loadedId = scene.LoadedContent().Load(metadata->virtualPath, true);
     if (loadedId == 0U) return false;
     SceneState& state = SceneAccess::State(scene);
     const auto record = std::ranges::find_if(state.loadedScenes, [loadedId](const SceneState::LoadedSceneRecord& item) { return item.id == loadedId; });

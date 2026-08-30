@@ -40,6 +40,8 @@ struct MeshDrawCommand {
     std::uint32_t meshletCount = 0;
     std::uint32_t indexStart = 0;
     std::uint32_t indexCount = 0;
+    std::uint32_t vertexStart = 0;
+    std::uint32_t vertexCount = 0;
     std::uint8_t lodLevel = 0;
     std::uint8_t terrainLayerIndex = UINT8_MAX;
     std::uint16_t depthBucket = 0;

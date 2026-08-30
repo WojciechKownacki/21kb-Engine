@@ -4,6 +4,7 @@ add_library(kb_renderer STATIC
     include/kb/render/Renderer.hpp
     include/kb/render/RendererCapabilityReport.hpp
     include/kb/render/RenderSurface.hpp
+    include/kb/render/bake/MeshBaker.hpp
     include/kb/render/bake/TextureBaker.hpp
     include/kb/render/SceneDeferredLightingPass.hpp
     include/kb/render/SceneDepthPolicy.hpp
@@ -14,6 +15,8 @@ add_library(kb_renderer STATIC
     include/kb/render/SceneRenderTargetFormat.hpp
     include/kb/render/ShaderManifest.hpp
     include/kb/render/ShaderLoader.hpp
+    include/kb/render/ShaderBinaryProvider.hpp
+    include/kb/render/RuntimeAssetShaderProvider.hpp
     include/kb/render/frame/FinalCompositePass.hpp
     include/kb/render/frame/FullscreenTexturePass.hpp
     include/kb/render/frame/EditorRenderPassSubmitter.hpp
@@ -103,7 +106,8 @@ add_library(kb_renderer STATIC
     include/kb/render/shadow/ShadowMapResource.hpp
     include/kb/render/ViewIdPolicy.hpp
     src/BgfxContext.cpp
-    src/bake/TextureBaker.cpp
+    src/bake/MeshBaker.cpp
+    src/bake/TextureBakedPayload.cpp
     src/DisplayConfig.cpp
     src/Renderer.cpp
     src/RendererCapabilityReport.cpp
@@ -138,6 +142,7 @@ add_library(kb_renderer STATIC
     src/SceneRenderTargetFormat.cpp
     src/ShaderManifest.cpp
     src/ShaderLoader.cpp
+    src/RuntimeAssetShaderProvider.cpp
     src/MaterialProgramRegistry.cpp
     src/frame/EditorRenderPassSubmitter.cpp
     src/frame/FinalCompositePass.cpp
@@ -334,7 +339,30 @@ add_library(kb_renderer STATIC
     ${CMAKE_SOURCE_DIR}/third_party/bgfx.cmake/bgfx/3rdparty/meshoptimizer/src/overdrawoptimizer.cpp
     ${CMAKE_SOURCE_DIR}/third_party/bgfx.cmake/bgfx/3rdparty/meshoptimizer/src/vcacheoptimizer.cpp
     ${CMAKE_SOURCE_DIR}/third_party/bgfx.cmake/bgfx/3rdparty/meshoptimizer/src/vfetchoptimizer.cpp
+    # The mesh baker's half of the same vendored library: clusters and their bounds, the
+    # simplifier behind the LOD chain, and the two codecs a packed geometry chunk is encoded
+    # with. bgfx ships all seventeen files of the release; compiling five of them was what the
+    # renderer happened to call, not what the library offers.
+    ${CMAKE_SOURCE_DIR}/third_party/bgfx.cmake/bgfx/3rdparty/meshoptimizer/src/clusterizer.cpp
+    ${CMAKE_SOURCE_DIR}/third_party/bgfx.cmake/bgfx/3rdparty/meshoptimizer/src/partition.cpp
+    ${CMAKE_SOURCE_DIR}/third_party/bgfx.cmake/bgfx/3rdparty/meshoptimizer/src/simplifier.cpp
+    ${CMAKE_SOURCE_DIR}/third_party/bgfx.cmake/bgfx/3rdparty/meshoptimizer/src/vertexcodec.cpp
+    ${CMAKE_SOURCE_DIR}/third_party/bgfx.cmake/bgfx/3rdparty/meshoptimizer/src/indexcodec.cpp
 )
+
+if(NOT CMAKE_CROSSCOMPILING)
+    # The release validator deliberately links the same hostile-input mesh and texture
+    # readers as the shipped runtime. A container-only validator can prove checksums, but
+    # cannot prove that a correctly checksummed typed payload is loadable.
+    add_executable(kb_runtime_asset_pack_validator
+        ${CMAKE_SOURCE_DIR}/sources/engine/tools/RuntimeAssetPackValidator.cpp
+    )
+    target_include_directories(kb_runtime_asset_pack_validator PRIVATE
+        ${CMAKE_SOURCE_DIR}/sources/game/src/private
+    )
+    target_link_libraries(kb_runtime_asset_pack_validator PRIVATE kb_renderer)
+    kb_apply_quality_gates(kb_runtime_asset_pack_validator)
+endif()
 
 set(KB_RENDERER_SHADER_PROFILES
     dxbc
@@ -397,6 +425,17 @@ file(GLOB_RECURSE KB_RENDERER_PREBUILT_SHADER_FILES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/prebuilt_shaders/*"
 )
 set(KB_RENDERER_SHADER_RUNTIME_DIR "${CMAKE_BINARY_DIR}/shaders")
+if(WIN32)
+    set(KB_RENDERER_SHADER_PLATFORM_DIR "windows")
+elseif(ANDROID)
+    set(KB_RENDERER_SHADER_PLATFORM_DIR "android")
+elseif(EMSCRIPTEN)
+    set(KB_RENDERER_SHADER_PLATFORM_DIR "asm.js")
+elseif(APPLE)
+    set(KB_RENDERER_SHADER_PLATFORM_DIR "osx")
+else()
+    set(KB_RENDERER_SHADER_PLATFORM_DIR "linux")
+endif()
 set(KB_RENDERER_SHADER_STAGE_STAMP "${KB_RENDERER_SHADER_RUNTIME_DIR}/.kb_renderer_shaders.stamp")
 set(KB_RENDERER_SHADER_MANIFEST_STAMP "${KB_RENDERER_SHADER_RUNTIME_DIR}/.kb_renderer_shader_manifest.stamp")
 set_property(GLOBAL PROPERTY KB_RENDERER_SHADER_STAGE_STAMP "${KB_RENDERER_SHADER_STAGE_STAMP}")
@@ -493,6 +532,12 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
         COMMAND ${CMAKE_COMMAND} -E copy_directory
             ${KB_RENDERER_GENERATED_SHADER_DIR}
             ${KB_RENDERER_SHADER_RUNTIME_DIR}
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            ${CMAKE_CURRENT_SOURCE_DIR}/prebuilt_shaders
+            ${KB_RENDERER_SHADER_RUNTIME_DIR}/${KB_RENDERER_SHADER_PLATFORM_DIR}
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            ${KB_RENDERER_GENERATED_SHADER_DIR}
+            ${KB_RENDERER_SHADER_RUNTIME_DIR}/${KB_RENDERER_SHADER_PLATFORM_DIR}
         COMMAND ${CMAKE_COMMAND} -E touch "${KB_RENDERER_SHADER_STAGE_STAMP}"
         DEPENDS
             ${KB_RENDERER_PREBUILT_SHADER_FILES}
@@ -510,6 +555,9 @@ else()
         COMMAND ${CMAKE_COMMAND} -E copy_directory
             ${CMAKE_CURRENT_SOURCE_DIR}/prebuilt_shaders
             ${KB_RENDERER_SHADER_RUNTIME_DIR}
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            ${CMAKE_CURRENT_SOURCE_DIR}/prebuilt_shaders
+            ${KB_RENDERER_SHADER_RUNTIME_DIR}/${KB_RENDERER_SHADER_PLATFORM_DIR}
         COMMAND ${CMAKE_COMMAND} -E touch "${KB_RENDERER_SHADER_STAGE_STAMP}"
         DEPENDS ${KB_RENDERER_PREBUILT_SHADER_FILES}
         COMMENT "Stage prebuilt bgfx shaders"
@@ -558,12 +606,16 @@ target_link_libraries(kb_renderer
         bx
         bimg
         bimg_decode
-        bimg_encode
         kb_ufbx
 )
 
 if(WIN32)
     target_link_libraries(kb_renderer PUBLIC d3d11 dxgi d3dcompiler user32 gdi32)
+elseif(ANDROID)
+    # bgfx keeps OpenGL ES as the compatibility backend beside Vulkan. These
+    # platform libraries belong to the renderer target so every final Android
+    # shared library receives them after the static bgfx archive that uses them.
+    target_link_libraries(kb_renderer PUBLIC EGL GLESv3)
 endif()
 
 target_compile_definitions(kb_renderer
@@ -574,7 +626,62 @@ target_compile_definitions(kb_renderer
 
 kb_apply_quality_gates(kb_renderer)
 
-if(BUILD_TESTING)
+# Compression belongs to the host cooker. Mobile/browser runtimes consume only
+# immutable GPU blocks and do not link encoder code. etcpak's upstream project
+# builds a CLI and pulls unrelated packages, so the engine owns this minimal,
+# pinned static target instead of adding the upstream build.
+if(NOT ANDROID AND NOT EMSCRIPTEN)
+    FetchContent_Declare(
+        kb_etcpak_source
+        URL https://github.com/wolfpld/etcpak/archive/refs/tags/2.0.tar.gz
+        URL_HASH SHA256=dc7a1b23a039594b3d0e9d00581a7d3d2ef4b6656ad532f7ed2b844bd9b4ba39
+        DOWNLOAD_EXTRACT_TIMESTAMP FALSE
+        SOURCE_SUBDIR kb_no_upstream_build
+    )
+    FetchContent_MakeAvailable(kb_etcpak_source)
+
+    add_library(kb_etcpak STATIC
+        ${kb_etcpak_source_SOURCE_DIR}/Dither.cpp
+        ${kb_etcpak_source_SOURCE_DIR}/ProcessRGB.cpp
+        ${kb_etcpak_source_SOURCE_DIR}/Tables.cpp
+    )
+    target_include_directories(kb_etcpak SYSTEM PUBLIC ${kb_etcpak_source_SOURCE_DIR})
+    target_compile_definitions(kb_etcpak PRIVATE
+        REFERENCE_IMPLEMENTATION
+        $<$<BOOL:${WIN32}>:NOMINMAX>
+        $<$<BOOL:${WIN32}>:WIN32_LEAN_AND_MEAN>
+    )
+    if(MSVC)
+        target_compile_options(kb_etcpak PRIVATE /W0 /EHsc /fp:strict)
+    else()
+        target_compile_options(kb_etcpak PRIVATE
+            -w -mno-avx -mno-avx2 -mno-sse4.1 -ffp-contract=off)
+        set_target_properties(kb_etcpak PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    endif()
+
+    add_library(kb_renderer_bake STATIC
+        include/kb/render/bake/TextureBaker.hpp
+        src/bake/TextureBaker.cpp
+    )
+    target_include_directories(kb_renderer_bake
+        PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_link_libraries(kb_renderer_bake
+        PUBLIC kb_renderer
+        PRIVATE kb_etcpak bimg_encode
+    )
+    kb_apply_quality_gates(kb_renderer_bake)
+endif()
+
+if((ANDROID OR EMSCRIPTEN) AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    # bx's public assertion macro uses the established GNU `, ##__VA_ARGS__`
+    # extension. Keep warnings strict for our code without treating expansion
+    # of that vendored macro as a first-party error.
+    target_compile_options(kb_renderer PRIVATE -Wno-gnu-zero-variadic-macro-arguments)
+endif()
+
+if(BUILD_TESTING AND TARGET kb_renderer_bake)
     add_executable(kb_renderer_tests
         tests/RendererTests.cpp
         tests/RendererTestSupport.hpp
@@ -598,17 +705,20 @@ if(BUILD_TESTING)
         tests/SceneRenderExtractorTests.cpp
         tests/ShaderManifestTests.cpp
         tests/ShaderPrewarmParseTests.cpp
+        tests/MeshBakeTests.cpp
         tests/TextureBakeTests.cpp
     )
 
     target_link_libraries(kb_renderer_tests
         PRIVATE
             kb_renderer
+            kb_renderer_bake
     )
 
     target_include_directories(kb_renderer_tests
         PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/src
+            ${CMAKE_SOURCE_DIR}/third_party/bgfx.cmake/bgfx/3rdparty
     )
 
     add_test(NAME kb_renderer_tests COMMAND $<TARGET_FILE:kb_renderer_tests>)

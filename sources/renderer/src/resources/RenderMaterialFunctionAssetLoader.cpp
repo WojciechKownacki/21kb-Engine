@@ -1,11 +1,13 @@
 #include "kb/render/resources/RenderMaterialFunctionAssetLoader.hpp"
 
+#include "engine/assets/AssetMemoryInputStream.hpp"
 #include "engine/assets/AssetRegistry.hpp"
 #include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialParameterCollection.hpp"
 #include "RenderMaterialAtomicFileWriter.hpp"
 
 #include <memory>
+#include <utility>
 
 namespace kb::render {
 namespace {
@@ -70,7 +72,17 @@ std::vector<std::string> RenderMaterialFunctionAssetLoader::Extensions() const {
 }
 
 kb::assets::AssetLoadResult RenderMaterialFunctionAssetLoader::Load(const kb::assets::AssetLoadRequest& request) {
-    RenderMaterialAssetParseResult result = LoadFunctionWithDiagnostics(request.resolvedPath, request.metadata.id);
+    std::vector<std::uint8_t> sourceBytes;
+    std::string error;
+    if (!request.ReadSourceBytes(sourceBytes, error)) {
+        return kb::assets::AssetLoadResult{ .asset = {}, .error = std::move(error) };
+    }
+    kb::assets::AssetMemoryInputStream input{ sourceBytes };
+    RenderMaterialAssetParseResult result = LoadFunctionWithDiagnostics(input);
+    for (RenderMaterialAssetParseDiagnostic& diagnostic : result.diagnostics) {
+        diagnostic.assetId = request.metadata.id;
+        diagnostic.path = request.resolvedPath;
+    }
     if (!result.asset.has_value()) {
         return kb::assets::AssetLoadResult{ .asset = {}, .error = result.ErrorMessage() };
     }

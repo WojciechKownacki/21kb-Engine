@@ -13,6 +13,7 @@
 #include "engine/script/ScriptRuntimeHost.hpp"
 #include "kb/render/DisplayConfig.hpp"
 #include "kb/render/Renderer.hpp"
+#include "kb/render/RuntimeAssetShaderProvider.hpp"
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -130,6 +131,38 @@ int RunGame(const GameOptions& options) {
         return EXIT_FAILURE;
     }
 
+    kb::render::DisplayConfig displayConfig{};
+    displayConfig.enableEditorRendering = false;
+    kb::render::Renderer renderer;
+    if (projectRuntime.IsPackaged()) {
+        std::string providerError;
+        const std::shared_ptr<kb::render::RuntimeAssetShaderProvider> provider =
+            kb::render::RuntimeAssetShaderProvider::Create(projectRuntime.assetPack, providerError);
+        if (provider == nullptr || !renderer.SetShaderBinaryProvider(provider)) {
+            std::cerr << "kb_game: packaged shader provider could not be configured: "
+                      << providerError << '\n';
+            return EXIT_FAILURE;
+        }
+    } else {
+        // A cache directory whose name cannot be spelled exactly in this
+        // machine's code page is worse than no cache directory.
+        const std::filesystem::path shaderCacheRoot =
+            kb::game::ExecutableDirectory() / ".cache" / "graph_shaders";
+        if (std::optional<std::string> cacheRoot =
+                kb::game::TryNarrow(shaderCacheRoot.generic_wstring());
+            cacheRoot.has_value()) {
+            renderer.SetGraphShaderCacheRoot(*std::move(cacheRoot));
+        } else {
+            std::cerr << "kb_game: graph shader cache disabled: "
+                      << kb::game::NarrowForDiagnostics(shaderCacheRoot)
+                      << " cannot be named in this system's code page\n";
+        }
+    }
+    if (!renderer.Initialize(window, &displayConfig)) {
+        std::cerr << "kb_game: renderer initialization failed\n";
+        return EXIT_FAILURE;
+    }
+
     auto scriptModuleOwner = std::make_unique<kb::script::ScriptModule>();
     kb::script::ScriptModule* scriptModule = scriptModuleOwner.get();
     std::vector<std::unique_ptr<kb::modules::IEngineModule>> staticModules;
@@ -156,27 +189,6 @@ int RunGame(const GameOptions& options) {
               << " assets=" << discoveredAssets
               << " modules=" << scene.ActiveModuleCount() << '\n';
     std::cout.flush();
-
-    kb::render::DisplayConfig displayConfig{};
-    kb::render::Renderer renderer;
-    // A cache directory whose name cannot be spelled exactly in this machine's
-    // code page is worse than no cache directory: the renderer would read and
-    // write somewhere else entirely. The game runs without the cache instead.
-    const std::filesystem::path shaderCacheRoot =
-        kb::game::ExecutableDirectory() / ".cache" / "graph_shaders";
-    if (std::optional<std::string> cacheRoot =
-            kb::game::TryNarrow(shaderCacheRoot.generic_wstring());
-        cacheRoot.has_value()) {
-        renderer.SetGraphShaderCacheRoot(*std::move(cacheRoot));
-    } else {
-        std::cerr << "kb_game: graph shader cache disabled: "
-                  << kb::game::NarrowForDiagnostics(shaderCacheRoot)
-                  << " cannot be named in this system's code page\n";
-    }
-    if (!renderer.Initialize(window, &displayConfig)) {
-        std::cerr << "kb_game: renderer initialization failed\n";
-        return EXIT_FAILURE;
-    }
 
     kb::input::Win32XInputHapticsBackend hapticsBackend;
     kb::input::InputHaptics::RegisterBackend(scene, hapticsBackend);

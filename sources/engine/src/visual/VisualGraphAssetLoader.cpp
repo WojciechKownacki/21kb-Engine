@@ -1,8 +1,8 @@
 #include "engine/visual/VisualGraphAssetLoader.hpp"
 
+#include "engine/assets/AssetMemoryInputStream.hpp"
 #include "visual/VisualGraphParser.hpp"
 
-#include <fstream>
 #include <memory>
 
 namespace kb::visual {
@@ -20,10 +20,12 @@ std::vector<std::string> VisualGraphAssetLoader::Extensions() const {
 }
 
 kb::assets::AssetLoadResult VisualGraphAssetLoader::Load(const kb::assets::AssetLoadRequest& request) {
-    std::ifstream input{request.resolvedPath, std::ios::binary};
-    if (!input.is_open()) {
-        return kb::assets::AssetLoadResult{.asset = {}, .error = "Visual graph file could not be opened"};
+    std::vector<std::uint8_t> sourceBytes;
+    std::string readError;
+    if (!request.ReadSourceBytes(sourceBytes, readError)) {
+        return kb::assets::AssetLoadResult{.asset = {}, .error = std::move(readError)};
     }
+    kb::assets::AssetMemoryInputStream input{sourceBytes};
 
     VisualGraphParseResult parsed = VisualGraphParser::Parse(input);
     if (!parsed.Succeeded()) {

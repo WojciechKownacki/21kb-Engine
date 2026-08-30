@@ -255,7 +255,7 @@ std::optional<RenderMeshAssetData> RenderTerrainMeshBuilder::Build(const kb::ass
                             .materialSlot = layer,
                             .lodLevel = static_cast<std::uint8_t>(lod),
                             .terrainLayerIndex = terrain.materialLayers.empty()
-                                ? UINT8_MAX
+                                ? static_cast<std::uint8_t>(UINT8_MAX)
                                 : static_cast<std::uint8_t>(layer),
                             .terrainLayerActive = chunkLayerActive[activeIndex] != 0U,
                         });

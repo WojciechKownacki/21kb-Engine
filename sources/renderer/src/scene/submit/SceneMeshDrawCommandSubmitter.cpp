@@ -162,6 +162,9 @@ void SceneMeshDrawCommandSubmitter::Submit(const SceneMeshDrawCommandSubmitDesc&
     }
     for (const MeshDrawCommand& command : desc.commands) {
         if (command.meshResource == nullptr ||
+            command.vertexCount == 0U ||
+            command.vertexStart >= command.meshResource->vertexCount ||
+            command.vertexCount > command.meshResource->vertexCount - command.vertexStart ||
             (!bgfx::isValid(command.meshResource->vertexBuffer) &&
              !bgfx::isValid(command.meshResource->dynamicVertexBuffer)) ||
             !bgfx::isValid(command.meshResource->indexBuffer)) {
@@ -232,9 +235,9 @@ void SceneMeshDrawCommandSubmitter::Submit(const SceneMeshDrawCommandSubmitDesc&
 
         bgfx::setInstanceDataBuffer(&instanceBuffer, 0U, static_cast<std::uint32_t>(availableInstances));
         if (bgfx::isValid(command.meshResource->dynamicVertexBuffer)) {
-            bgfx::setVertexBuffer(0, command.meshResource->dynamicVertexBuffer);
+            bgfx::setVertexBuffer(0, command.meshResource->dynamicVertexBuffer, command.vertexStart, command.vertexCount);
         } else {
-            bgfx::setVertexBuffer(0, command.meshResource->vertexBuffer);
+            bgfx::setVertexBuffer(0, command.meshResource->vertexBuffer, command.vertexStart, command.vertexCount);
         }
         bgfx::setIndexBuffer(command.meshResource->indexBuffer, command.indexStart, command.indexCount);
         const bgfx::ProgramHandle program = desc.passResources.Bind(SceneMeshPassBindDesc{
@@ -309,6 +312,8 @@ void SceneMeshDrawCommandSubmitter::Submit(const SceneMeshDrawCommandSubmitDesc&
                     << " instances=" << availableInstances << '/' << instanceCount
                     << " indexStart=" << command.indexStart
                     << " indexCount=" << command.indexCount
+                    << " vertexStart=" << command.vertexStart
+                    << " vertexCount=" << command.vertexCount
                     << " vb=" << (bgfx::isValid(command.meshResource->dynamicVertexBuffer)
                         ? HandleValue(command.meshResource->dynamicVertexBuffer)
                         : HandleValue(command.meshResource->vertexBuffer))

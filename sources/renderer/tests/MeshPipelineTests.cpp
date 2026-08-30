@@ -662,12 +662,16 @@ void RunMeshPipelineBuildsCommandsPerSectionAndMaterialSlotTest() {
         RenderMeshSection{
             .indexStart = 0U,
             .indexCount = 6U,
+            .vertexStart = 0U,
+            .vertexCount = 8U,
             .materialSlot = 0U,
             .bounds = RenderBoundsSphere{ .center = { 0.0F, 0.0F, 0.0F }, .radius = 1.0F },
         },
         RenderMeshSection{
             .indexStart = 6U,
             .indexCount = 12U,
+            .vertexStart = 8U,
+            .vertexCount = 16U,
             .materialSlot = 1U,
             .bounds = RenderBoundsSphere{ .center = { 0.0F, 0.0F, 0.0F }, .radius = 1.0F },
         },
@@ -677,6 +681,7 @@ void RunMeshPipelineBuildsCommandsPerSectionAndMaterialSlotTest() {
         RenderMaterialSlot{ .defaultMaterialAssetId = 102U },
     };
     RenderMeshResource mesh{};
+    mesh.vertexCount = 24U;
     mesh.indexCount = 18U;
     mesh.sections = sections;
     mesh.materialSlots = materialSlots;
@@ -703,8 +708,12 @@ void RunMeshPipelineBuildsCommandsPerSectionAndMaterialSlotTest() {
     Require(result.commands.size() == 2U, "MeshPipeline did not emit one command per mesh section");
     Require(result.commands[0].materialAssetId == 999U, "MeshPipeline did not prefer the Mesh Renderer main material over section slot 0 default material");
     Require(result.commands[0].indexStart == 0U && result.commands[0].indexCount == 6U, "MeshPipeline section 0 did not preserve index range");
+    Require(result.commands[0].vertexStart == 0U && result.commands[0].vertexCount == 8U,
+        "MeshPipeline section 0 did not preserve vertex range");
     Require(result.commands[1].materialAssetId == 999U, "MeshPipeline did not prefer the Mesh Renderer main material over section slot 1 default material");
     Require(result.commands[1].indexStart == 6U && result.commands[1].indexCount == 12U, "MeshPipeline section 1 did not preserve index range");
+    Require(result.commands[1].vertexStart == 8U && result.commands[1].vertexCount == 16U,
+        "MeshPipeline section 1 did not preserve its rebased vertex range");
     Require(result.commands[0].instances.size() == 2U && result.commands[1].instances.size() == 2U, "MeshPipeline section commands did not preserve instancing");
 }
 

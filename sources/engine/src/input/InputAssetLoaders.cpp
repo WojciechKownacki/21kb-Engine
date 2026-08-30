@@ -22,7 +22,12 @@ std::vector<std::string> InputActionAssetLoader::Extensions() const {
 }
 
 kb::assets::AssetLoadResult InputActionAssetLoader::Load(const kb::assets::AssetLoadRequest& request) {
-    InputAssetLoadResult<InputActionAsset> loaded = ReadInputAction(request.resolvedPath);
+    std::vector<std::uint8_t> sourceBytes;
+    std::string error;
+    if (!request.ReadSourceBytes(sourceBytes, error)) {
+        return kb::assets::AssetLoadResult{.asset = {}, .error = std::move(error)};
+    }
+    InputAssetLoadResult<InputActionAsset> loaded = DecodeInputAction(sourceBytes);
     if (!loaded.succeeded) {
         return kb::assets::AssetLoadResult{.asset = {}, .error = std::move(loaded.error)};
     }
@@ -43,7 +48,12 @@ std::vector<std::string> InputMappingContextAssetLoader::Extensions() const {
 }
 
 kb::assets::AssetLoadResult InputMappingContextAssetLoader::Load(const kb::assets::AssetLoadRequest& request) {
-    InputAssetLoadResult<InputMappingContextAsset> loaded = ReadInputMappingContext(request.resolvedPath);
+    std::vector<std::uint8_t> sourceBytes;
+    std::string error;
+    if (!request.ReadSourceBytes(sourceBytes, error)) {
+        return kb::assets::AssetLoadResult{.asset = {}, .error = std::move(error)};
+    }
+    InputAssetLoadResult<InputMappingContextAsset> loaded = DecodeInputMappingContext(sourceBytes);
     if (!loaded.succeeded) {
         return kb::assets::AssetLoadResult{.asset = {}, .error = std::move(loaded.error)};
     }

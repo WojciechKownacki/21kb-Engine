@@ -29,18 +29,6 @@ using ProjectDescriptorBinaryIO::WriteUInt32;
     return value.size() <= ProjectDescriptorFormat::MaxStringBytes;
 }
 
-[[nodiscard]] std::uint32_t SceneLightingPathValue(ProjectSceneLightingPath path) noexcept {
-    switch (path) {
-    case ProjectSceneLightingPath::Deferred:
-        return 1U;
-    case ProjectSceneLightingPath::ForwardPlus:
-        return 2U;
-    case ProjectSceneLightingPath::Forward:
-    default:
-        return 0U;
-    }
-}
-
 [[nodiscard]] bool CanWrite(const ProjectDescriptor& descriptor) {
     if (descriptor.engineAssociation.empty() ||
         descriptor.contentRoot.empty() ||

@@ -108,6 +108,10 @@ std::uint64_t HashBakeText(std::string_view text) noexcept {
         std::span<const std::uint8_t>{ reinterpret_cast<const std::uint8_t*>(text.data()), text.size() });
 }
 
+AssetBakeDigest HashBakeDigest(std::span<const std::uint8_t> bytes) noexcept {
+    return DigestBytes(bytes);
+}
+
 bool IsValidBakeCacheName(std::string_view name) noexcept {
     if (name.empty() || name.size() > kMaxBakeCacheNameBytes) {
         return false;

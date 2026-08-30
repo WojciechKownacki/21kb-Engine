@@ -1,5 +1,6 @@
 #include "engine/scene/TimelineAssetLoader.hpp"
 
+#include "engine/assets/AssetMemoryInputStream.hpp"
 #include "engine/scene/TimelineAsset.hpp"
 #include "engine/scene/TimelineAssetIO.hpp"
 
@@ -21,8 +22,13 @@ std::vector<std::string> TimelineAssetLoader::Extensions() const {
 
 kb::assets::AssetLoadResult TimelineAssetLoader::Load(
     const kb::assets::AssetLoadRequest& request) {
-    std::optional<TimelineAsset> asset =
-        TimelineAssetIO::Load(request.resolvedPath);
+    std::vector<std::uint8_t> sourceBytes;
+    std::string error;
+    if (!request.ReadSourceBytes(sourceBytes, error)) {
+        return kb::assets::AssetLoadResult{ {}, std::move(error) };
+    }
+    kb::assets::AssetMemoryInputStream input{ sourceBytes };
+    std::optional<TimelineAsset> asset = TimelineAssetIO::Load(input);
     return asset
         ? kb::assets::AssetLoadResult{
               std::make_shared<TimelineAsset>(std::move(*asset)), {} }

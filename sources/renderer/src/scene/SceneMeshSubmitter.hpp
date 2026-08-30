@@ -64,6 +64,7 @@ public:
         SceneGpuDrivenFeatureSupport gpuDrivenSupport = {},
         bool terrainLayersOnly = false) noexcept;
     [[nodiscard]] bool IsInitialized() const noexcept;
+    [[nodiscard]] bool GpuDrivenDispatchReady() const noexcept { return gpuDrivenCullingPass_.IsInitialized(); }
     [[nodiscard]] MaterialProgramRegistryStats ProgramRegistryStats() const noexcept { return passResources_.ProgramRegistryStats(); }
     // Reset once per scene submit (before its passes) so the per-material GPU/fallback dedup accumulates
     // across all of a submit's passes; read after the submit for the true GPU-vs-fallback material counts.

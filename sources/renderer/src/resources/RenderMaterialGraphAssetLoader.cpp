@@ -1,5 +1,6 @@
 #include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
 
+#include "engine/assets/AssetMemoryInputStream.hpp"
 #include "engine/assets/AssetRegistry.hpp"
 #include "kb/render/resources/RenderMaterialFunctionAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialParameterCollection.hpp"
@@ -131,7 +132,17 @@ std::vector<std::string> RenderMaterialGraphAssetLoader::Extensions() const {
 }
 
 kb::assets::AssetLoadResult RenderMaterialGraphAssetLoader::Load(const kb::assets::AssetLoadRequest& request) {
-    RenderMaterialAssetParseResult result = LoadGraphWithDiagnostics(request.resolvedPath, request.metadata.id);
+    std::vector<std::uint8_t> sourceBytes;
+    std::string error;
+    if (!request.ReadSourceBytes(sourceBytes, error)) {
+        return kb::assets::AssetLoadResult{ .asset = {}, .error = std::move(error) };
+    }
+    kb::assets::AssetMemoryInputStream input{ sourceBytes };
+    RenderMaterialAssetParseResult result = LoadGraphWithDiagnostics(input);
+    for (RenderMaterialAssetParseDiagnostic& diagnostic : result.diagnostics) {
+        diagnostic.assetId = request.metadata.id;
+        diagnostic.path = request.resolvedPath;
+    }
     if (!result.asset.has_value()) {
         return kb::assets::AssetLoadResult{ .asset = {}, .error = result.ErrorMessage() };
     }

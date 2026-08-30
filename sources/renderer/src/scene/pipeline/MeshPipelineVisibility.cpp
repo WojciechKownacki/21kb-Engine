@@ -203,20 +203,16 @@ std::pair<std::uint32_t, std::uint32_t> MeshPipelineVisibility::MeshletRangeForS
         return {0U, 0U};
     }
 
-    std::uint32_t first = 0U;
-    std::uint32_t count = 0U;
-    bool found = false;
-    for (std::uint32_t meshletIndex = 0U; meshletIndex < mesh->meshlets.size(); ++meshletIndex) {
-        if (mesh->meshlets[meshletIndex].sectionIndex != sectionIndex) {
-            continue;
-        }
-        if (!found) {
-            first = meshletIndex;
-            found = true;
-        }
-        ++count;
-    }
-    return {first, count};
+    const auto first = std::lower_bound(
+        mesh->meshlets.begin(), mesh->meshlets.end(), sectionIndex,
+        [](const RenderMeshletDesc& meshlet, std::uint32_t value) { return meshlet.sectionIndex < value; });
+    const auto last = std::upper_bound(
+        first, mesh->meshlets.end(), sectionIndex,
+        [](std::uint32_t value, const RenderMeshletDesc& meshlet) { return value < meshlet.sectionIndex; });
+    return {
+        static_cast<std::uint32_t>(std::distance(mesh->meshlets.begin(), first)),
+        static_cast<std::uint32_t>(std::distance(first, last)),
+    };
 }
 
 } // namespace kb::render

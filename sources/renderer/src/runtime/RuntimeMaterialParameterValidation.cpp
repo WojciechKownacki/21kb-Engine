@@ -57,27 +57,26 @@ struct CachedMaterialParameterSchema {
 }
 
 [[nodiscard]] CachedMaterialParameterSchema LoadSchema(
-    const kb::assets::AssetManager& assets,
+    kb::assets::AssetManager& assets,
     const kb::assets::AssetMetadata& material) {
     CachedMaterialParameterSchema cached{};
     cached.initialized = true;
     cached.materialContentHash = material.contentHash;
 
-    RenderMaterialAssetParseResult loaded =
-        RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(
-            ResolveRuntimeMaterialAssetPhysicalPath(assets, material), material.id);
-    if (!loaded.asset.has_value()) {
+    const kb::assets::AssetHandle<RenderMaterialAssetData> loaded =
+        assets.Load<RenderMaterialAssetData>(material.id);
+    if (!loaded.IsLoaded()) {
         return cached;
     }
 
-    cached.sourceGraphAssetId = loaded.asset->graphSourceAssetId;
-    cached.sourceGraphPath = loaded.asset->graphSourceAssetPath;
+    cached.sourceGraphAssetId = loaded->graphSourceAssetId;
+    cached.sourceGraphPath = loaded->graphSourceAssetPath;
     const kb::assets::AssetMetadata* source = ResolveSourceGraphMetadata(
         assets, cached.sourceGraphAssetId, cached.sourceGraphPath);
     cached.sourceGraphContentHash = source == nullptr ? 0U : source->contentHash;
 
     const RuntimeMaterialSourceGraphLoadResult authoritativeGraph =
-        LoadRuntimeMaterialSourceGraph(assets, *loaded.asset);
+        LoadRuntimeMaterialSourceGraph(assets, *loaded);
     if (!authoritativeGraph.graph.has_value()) {
         return cached;
     }
@@ -93,7 +92,7 @@ class RuntimeMaterialParameterSchemaValidator final
     : public kb::scene::MaterialParameterSchemaValidator {
 public:
     [[nodiscard]] bool Validate(
-        const kb::assets::AssetManager& assets,
+        kb::assets::AssetManager& assets,
         std::uint64_t parentMaterialAssetId,
         std::string_view name,
         kb::scene::MaterialParameterType type) const noexcept override {

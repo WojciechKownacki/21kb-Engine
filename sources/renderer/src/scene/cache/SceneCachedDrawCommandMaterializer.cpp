@@ -12,6 +12,8 @@ void SceneCachedDrawCommandMaterializer::ApplyTemplate(const SceneCachedDrawComm
     outCommand.meshletCount = cachedCommand.key.meshletCount;
     outCommand.indexStart = cachedCommand.key.indexStart;
     outCommand.indexCount = cachedCommand.key.indexCount;
+    outCommand.vertexStart = cachedCommand.key.vertexStart;
+    outCommand.vertexCount = cachedCommand.key.vertexCount;
     outCommand.lodLevel = cachedCommand.key.lodLevel;
     outCommand.terrainLayerIndex = cachedCommand.key.terrainLayerIndex;
     outCommand.mesh = cachedCommand.mesh;

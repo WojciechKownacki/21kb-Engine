@@ -142,7 +142,7 @@ bgfx::ProgramHandle MaterialProgramRegistry::Acquire(const MaterialProgramKey& k
             }
             return entry->handle;
         }
-        const bgfx::ProgramHandle handle = loader_ ? loader_(key) : bgfx::ProgramHandle{ BGFX_INVALID_HANDLE };
+        const bgfx::ProgramHandle handle = loader_ ? loader_(key) : bgfx::ProgramHandle{ bgfx::kInvalidHandle };
         if (bgfx::isValid(handle)) {
             entry->handle = handle;
             entry->lastGood = handle;
@@ -161,7 +161,7 @@ bgfx::ProgramHandle MaterialProgramRegistry::Acquire(const MaterialProgramKey& k
     }
 
     ++stats_.misses;
-    const bgfx::ProgramHandle handle = loader_ ? loader_(key) : bgfx::ProgramHandle{ BGFX_INVALID_HANDLE };
+    const bgfx::ProgramHandle handle = loader_ ? loader_(key) : bgfx::ProgramHandle{ bgfx::kInvalidHandle };
     if (!bgfx::isValid(handle)) {
         ++stats_.failures;
         if (key.graphProgram) {
@@ -205,7 +205,7 @@ bgfx::ProgramHandle MaterialProgramRegistry::Reload(const MaterialProgramKey& ke
         return Acquire(key);
     }
 
-    const bgfx::ProgramHandle handle = loader_ ? loader_(key) : bgfx::ProgramHandle{ BGFX_INVALID_HANDLE };
+    const bgfx::ProgramHandle handle = loader_ ? loader_(key) : bgfx::ProgramHandle{ bgfx::kInvalidHandle };
     if (bgfx::isValid(handle)) {
         if (bgfx::isValid(entry->handle) && entry->handle.idx != handle.idx) {
             OrphanHandle(entry->handle);
@@ -244,7 +244,7 @@ bgfx::ProgramHandle MaterialProgramRegistry::Find(const MaterialProgramKey& key)
                 (entry != nullptr && bgfx::isValid(entry->handle) ? "hit handle=" + std::to_string(entry->handle.idx) + " " : "miss ") +
                 MaterialProgramKeyDebugString(key));
     }
-    return entry != nullptr ? entry->handle : bgfx::ProgramHandle{ BGFX_INVALID_HANDLE };
+    return entry != nullptr ? entry->handle : bgfx::ProgramHandle{ bgfx::kInvalidHandle };
 }
 
 std::uint32_t MaterialProgramRegistry::RefCount(const MaterialProgramKey& key) const noexcept {

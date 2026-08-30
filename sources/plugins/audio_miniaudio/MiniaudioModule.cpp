@@ -44,6 +44,7 @@ void MiniaudioModule::OnSceneDetach(kb::scene::Scene& scene) {
 
 } // namespace kb::audio_miniaudio
 
+#if !defined(KB_ENGINE_MODULE_STATIC_LINK)
 extern "C" KB_ENGINE_MODULE_EXPORT std::uint32_t kb_engine_module_abi_version() {
     return kb::modules::kEngineModuleAbiVersion;
 }
@@ -59,3 +60,4 @@ extern "C" KB_ENGINE_MODULE_EXPORT kb::modules::IEngineModule* kb_create_engine_
 extern "C" KB_ENGINE_MODULE_EXPORT void kb_destroy_engine_module(kb::modules::IEngineModule* module) {
     delete module;
 }
+#endif

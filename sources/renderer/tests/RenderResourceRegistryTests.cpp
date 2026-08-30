@@ -3,7 +3,12 @@
 #include "engine/assets/AssetImportService.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/ImportedAssetLoader.hpp"
+#include "engine/assets/bake/AssetPackWriter.hpp"
+#include "engine/assets/bake/BakeTargetProfile.hpp"
+#include "engine/assets/bake/RuntimeAssetManifest.hpp"
+#include "engine/assets/bake/RuntimeAssetPack.hpp"
 #include "engine/save/SaveGameService.hpp"
+#include "kb/render/RuntimeAssetShaderProvider.hpp"
 #include "kb/render/resources/RenderAssetRefs.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialCookPayload.hpp"
@@ -20,10 +25,13 @@
 #include "kb/render/resources/RenderSkinningPaletteAllocator.hpp"
 #include "kb/render/resources/SkeletalMeshRenderResourceBuilder.hpp"
 #include "engine/scene/SkeletalMeshAsset.hpp"
+#include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneDocumentService.hpp"
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
 #include "resources/RenderTextureResourceBuilder.hpp"
 #include "resources/RenderMeshResourceBuilder.hpp"
 #include "runtime/RuntimeTextureMipChain.hpp"
+#include "runtime/RuntimeMaterialGraphDependencyLoader.hpp"
 #include "kb/render/runtime/RuntimeMaterialResolver.hpp"
 #include "kb/render/scene/SceneRenderResourceMap.hpp"
 #include "kb/render/scene/SceneRenderer.hpp"
@@ -32,13 +40,16 @@
 #include <chrono>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <sstream>
+#include <span>
 #include <string>
 #include <thread>
 #include <type_traits>
@@ -417,6 +428,213 @@ void RunStaticMeshVertexFormatsExposeExpectedStridesTest() {
     Require(RenderStaticMeshVertexStride(RenderVertexFormat::P3N3T4UV2) == sizeof(RenderStaticMeshVertexP3N3T4UV2), "P3N3T4UV2 stride mismatch");
     Require(RenderStaticMeshVertexStride(RenderVertexFormat::SkinnedP3N3T4UV2J4W4) == sizeof(RenderStaticMeshVertexSkinned), "Skinned static mesh stride mismatch");
     Require(RenderStaticMeshVertexLayout(RenderVertexFormat::P3N3UV2).getStride() == sizeof(RenderStaticMeshVertexP3N3UV2), "P3N3UV2 layout stride mismatch");
+}
+
+[[nodiscard]] std::vector<std::uint8_t> MaterialDocumentBytes(const std::function<void(std::ostream&)>& write) {
+    std::ostringstream output;
+    write(output);
+    const std::string text = output.str();
+    return { reinterpret_cast<const std::uint8_t*>(text.data()),
+        reinterpret_cast<const std::uint8_t*>(text.data()) + text.size() };
+}
+
+[[nodiscard]] kb::assets::bake::AssetBakeDigest StoreRuntimePackArtifact(
+    kb::assets::bake::AssetPackWriter& writer,
+    const kb::assets::bake::BakeTargetProfile& profile,
+    std::span<const std::uint8_t> bytes,
+    std::string_view assetType,
+    std::string_view settings) {
+    kb::assets::bake::AssetBakeKey key{
+        .sourceContentHash = kb::assets::bake::HashBakeBytes(bytes),
+        .bakerId = "RendererRuntimePackTest",
+        .bakerVersion = "1",
+        .targetProfileId = std::string{ profile.identifier },
+        .targetProfileHash = kb::assets::bake::BakeTargetProfileFingerprint(profile),
+        .settingsHash = kb::assets::bake::HashBakeText(settings),
+    };
+    Require(writer.BeginAsset(kb::assets::bake::BakedAssetDescriptor{
+                .key = key,
+                .assetTypeId = std::string{ assetType },
+            }) == kb::assets::bake::BakedAssetSinkStatus::Success &&
+            writer.WritePrimaryBlock(bytes, profile.packageBlockAlignmentBytes) ==
+                kb::assets::bake::BakedAssetSinkStatus::Success &&
+            writer.CommitAsset() == kb::assets::bake::BakedAssetSinkStatus::Success,
+        "Packaged material test could not store an artifact");
+    return key.Digest();
+}
+
+[[nodiscard]] kb::assets::bake::AssetBakeDigest StoreRuntimePackSource(
+    kb::assets::bake::AssetPackWriter& writer,
+    const kb::assets::bake::BakeTargetProfile& profile,
+    std::span<const std::uint8_t> bytes,
+    std::string_view settings) {
+    std::vector<std::uint8_t> sourceBlob;
+    Require(kb::assets::bake::EncodeRuntimeSourceBlob(bytes, sourceBlob),
+        "Packaged material test could not encode source bytes");
+    return StoreRuntimePackArtifact(
+        writer, profile, sourceBlob, kb::assets::bake::kSourceAssetTypeId, settings);
+}
+
+void RunRuntimeShaderProviderRejectsTrailingQualifierFieldTest() {
+    namespace bake = kb::assets::bake;
+
+    const bake::BakeTargetProfile profile = bake::WindowsX64BakeTargetProfile();
+    const std::filesystem::path root =
+        std::filesystem::temp_directory_path() / "21kb_runtime_shader_qualifier_test";
+    const std::filesystem::path packPath = root / "malformed.kbpack";
+    const std::filesystem::path sceneFile = root / "Main.21kbscene";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    kb::scene::Scene authoredScene;
+    Require(!error && kb::scene::SceneDocumentService::Save(authoredScene, sceneFile, "Main"),
+        "Runtime shader qualifier fixture could not write its Scene");
+    std::ifstream sceneInput{ sceneFile, std::ios::binary };
+    const std::vector<std::uint8_t> sceneBytes{
+        std::istreambuf_iterator<char>{ sceneInput }, std::istreambuf_iterator<char>{} };
+    const std::vector<std::uint8_t> materialBytes{ 'm', 'a', 't' };
+    const std::vector<std::uint8_t> shaderBytes{ 's', 'h', 'd' };
+    const std::string scenePath = "/Game/Scenes/Main.21kbscene";
+    const std::string materialPath = "/Game/Materials/Malformed.kbmat";
+
+    bake::AssetPackWriter writer{ packPath, profile };
+    const bake::AssetBakeDigest sceneDigest =
+        StoreRuntimePackSource(writer, profile, sceneBytes, scenePath);
+    const bake::AssetBakeDigest materialDigest =
+        StoreRuntimePackSource(writer, profile, materialBytes, materialPath);
+    const bake::AssetBakeDigest shaderDigest = StoreRuntimePackArtifact(
+        writer, profile, shaderBytes, bake::kMaterialShaderAssetTypeId, "malformed-qualifier");
+
+    bake::RuntimeAssetManifest manifest{
+        .targetProfileId = std::string{ profile.identifier },
+        .targetProfileHash = bake::BakeTargetProfileFingerprint(profile),
+    };
+    manifest.descriptor.targetPlatforms = { "Windows" };
+    manifest.settings.name = "MalformedShaderQualifier";
+    manifest.settings.defaultMap = scenePath;
+    manifest.assets = {
+        bake::RuntimeAssetManifestEntry{
+            .id = kb::assets::MakeAssetId(scenePath + ":Scene"),
+            .type = "Scene",
+            .name = "Main",
+            .virtualPath = scenePath,
+            .sourceExtension = ".21kbscene",
+            .contentHash = bake::HashBakeBytes(sceneBytes),
+            .artifacts = { bake::RuntimeArtifactReference{
+                .digest = sceneDigest,
+                .encoding = bake::RuntimeArtifactEncoding::SourceBytes,
+            } },
+        },
+        bake::RuntimeAssetManifestEntry{
+            .id = kb::assets::MakeAssetId(materialPath + ":RenderMaterial"),
+            .type = "RenderMaterial",
+            .name = "Malformed",
+            .virtualPath = materialPath,
+            .sourceExtension = ".kbmat",
+            .contentHash = bake::HashBakeBytes(materialBytes),
+            .artifacts = {
+                bake::RuntimeArtifactReference{
+                    .digest = materialDigest,
+                    .encoding = bake::RuntimeArtifactEncoding::SourceBytes,
+                },
+                bake::RuntimeArtifactReference{
+                    .digest = shaderDigest,
+                    .encoding = bake::RuntimeArtifactEncoding::MaterialShader,
+                    .qualifier = "1:2:BaseOpaque:dxbc:windows:fragment:junk",
+                },
+            },
+        },
+    };
+    std::vector<std::uint8_t> manifestBytes;
+    Require(bake::EncodeRuntimeAssetManifest(manifest, manifestBytes) ==
+            bake::RuntimeAssetManifestStatus::Success,
+        "Runtime shader qualifier fixture manifest could not be encoded");
+    static_cast<void>(StoreRuntimePackArtifact(
+        writer, profile, manifestBytes, bake::kRuntimeManifestAssetTypeId, "runtime-manifest"));
+    Require(writer.Finish() == bake::BakedAssetSinkStatus::Success,
+        "Runtime shader qualifier fixture pack could not be published");
+
+    auto pack = std::make_shared<bake::RuntimeAssetPack>();
+    Require(pack->Mount(packPath, profile) == bake::RuntimeAssetPackStatus::Success,
+        "Runtime shader qualifier fixture pack could not be mounted");
+    std::string providerError;
+    Require(RuntimeAssetShaderProvider::Create(pack, providerError) == nullptr &&
+            providerError.find("malformed material shader qualifier") != std::string::npos,
+        "Runtime shader provider accepted a qualifier with a trailing field");
+    std::filesystem::remove_all(root, error);
+}
+
+void RunMeshResourceBuildsSectionLocalVertexRangesTest() {
+    const std::array<RenderStaticMeshVertex, 6U> vertices{
+        RenderStaticMeshVertex{ .x = 0.0F, .y = 0.0F, .z = 0.0F },
+        RenderStaticMeshVertex{ .x = 1.0F, .y = 0.0F, .z = 0.0F },
+        RenderStaticMeshVertex{ .x = 0.0F, .y = 1.0F, .z = 0.0F },
+        RenderStaticMeshVertex{ .x = 10.0F, .y = 0.0F, .z = 0.0F },
+        RenderStaticMeshVertex{ .x = 11.0F, .y = 0.0F, .z = 0.0F },
+        RenderStaticMeshVertex{ .x = 10.0F, .y = 1.0F, .z = 0.0F },
+    };
+    const std::array<std::uint16_t, 6U> indices{ 0U, 1U, 2U, 0U, 1U, 2U };
+    const std::array<RenderMeshSectionDesc, 2U> sections{
+        RenderMeshSectionDesc{
+            .indexStart = 0U,
+            .indexCount = 3U,
+            .vertexStart = 0U,
+            .vertexCount = 3U,
+        },
+        RenderMeshSectionDesc{
+            .indexStart = 3U,
+            .indexCount = 3U,
+            .vertexStart = 3U,
+            .vertexCount = 3U,
+        },
+    };
+    const RenderMeshDesc desc{
+        .vertices = vertices.data(),
+        .vertexCount = static_cast<std::uint32_t>(vertices.size()),
+        .indices = indices.data(),
+        .indexCount = static_cast<std::uint32_t>(indices.size()),
+        .sections = sections.data(),
+        .sectionCount = static_cast<std::uint32_t>(sections.size()),
+    };
+
+    Require(RenderMeshResourceBuilder::IsValidDesc(desc),
+        "Mesh registration rejected valid section-local 16-bit indices");
+    const RenderMeshResource resource = RenderMeshResourceBuilder::Build(
+        desc, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE);
+    Require(resource.sections.size() == 2U &&
+            resource.sections[1].vertexStart == 3U && resource.sections[1].vertexCount == 3U,
+        "Mesh registration lost a rebased section vertex range");
+    Require(resource.sections[0].bounds.center[0] < 1.0F && resource.sections[1].bounds.center[0] > 10.0F,
+        "Section bounds were computed without applying the section vertex base");
+
+    std::array<std::uint16_t, 6U> invalidIndices = indices;
+    invalidIndices[5] = 3U;
+    RenderMeshDesc invalid = desc;
+    invalid.indices = invalidIndices.data();
+    Require(!RenderMeshResourceBuilder::IsValidDesc(invalid),
+        "Mesh registration accepted an index outside its section-local vertex range");
+
+    std::vector<RenderStaticMeshVertex> boundaryVertices(65'537U);
+    const std::array<std::uint16_t, 3U> boundaryIndices{ 65'533U, 65'534U, 65'535U };
+    RenderMeshSectionDesc boundarySection{
+        .indexStart = 0U,
+        .indexCount = 3U,
+        .vertexStart = 0U,
+        .vertexCount = 65'536U,
+    };
+    RenderMeshDesc boundaryDesc{
+        .vertices = boundaryVertices.data(),
+        .vertexCount = static_cast<std::uint32_t>(boundaryVertices.size()),
+        .indices = boundaryIndices.data(),
+        .indexCount = static_cast<std::uint32_t>(boundaryIndices.size()),
+        .sections = &boundarySection,
+        .sectionCount = 1U,
+    };
+    Require(RenderMeshResourceBuilder::IsValidDesc(boundaryDesc),
+        "Mesh registration rejected the exact 65,536-vertex 16-bit boundary");
+    boundarySection.vertexCount = 65'537U;
+    Require(!RenderMeshResourceBuilder::IsValidDesc(boundaryDesc),
+        "Mesh registration accepted a 16-bit section above 65,536 vertices");
 }
 
 void RunSkinnedMeshRegistrationContractTest() {
@@ -1728,6 +1946,195 @@ void RunMaterialGraphAndTypeAssetDiscoveryTest() {
     std::filesystem::remove_all(root, error);
 }
 
+void RunPackagedMaterialDependencyMemoryTest() {
+    namespace bake = kb::assets::bake;
+
+    const bake::BakeTargetProfile profile = bake::WindowsX64BakeTargetProfile();
+    const std::filesystem::path packPath =
+        std::filesystem::temp_directory_path() / "21kb_renderer_packaged_material_dependencies.kbpack";
+    std::error_code removeError;
+    std::filesystem::remove(packPath, removeError);
+
+    const std::string materialPath = "/Game/Materials/Packaged.kbmat";
+    const std::string graphPath = "/Game/Materials/Packaged.kbmaterialgraph";
+    const std::string functionPath = "/Game/Materials/Tint.kbmatfn";
+    const std::string collectionPath = "/Game/Materials/Globals.kbmpc";
+    const std::string typePath = "/Game/Materials/Packaged.kbmaterialtype";
+    const std::string scenePath = "/Game/Scenes/PackagedMaterial.21kbscene";
+    const kb::assets::AssetId materialId = kb::assets::MakeAssetId(materialPath + ":RenderMaterial");
+    const kb::assets::AssetId graphId = kb::assets::MakeAssetId(graphPath + ":" + kRenderMaterialGraphAssetType);
+    const kb::assets::AssetId functionId = kb::assets::MakeAssetId(functionPath + ":" + kRenderMaterialFunctionAssetType);
+    const kb::assets::AssetId collectionId = kb::assets::MakeAssetId(collectionPath + ":" + kRenderMaterialParameterCollectionAssetType);
+    const kb::assets::AssetId typeId = kb::assets::MakeAssetId(typePath + ":" + kRenderMaterialTypeAssetType);
+
+    RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+    graph.storageModel = "material-graph-asset";
+    graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = RenderMaterialGraphNodeKind::MaterialFunctionCall,
+        .parameter = RenderMaterialGraphParameterMetadata{ .stableId = std::to_string(functionId.value) },
+    });
+    RenderMaterialGraphDocument functionGraph{};
+    functionGraph.storageModel = "material-function-asset";
+    functionGraph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 1U,
+        .kind = RenderMaterialGraphNodeKind::FunctionOutput,
+        .parameter = RenderMaterialGraphParameterMetadata{
+            .stableId = "Output",
+            .defaultValueHint = "float4",
+        },
+    });
+    functionGraph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = RenderMaterialGraphNodeKind::CollectionParameter,
+        .parameter = RenderMaterialGraphParameterMetadata{
+            .stableId = "GlobalTint",
+            .defaultValueHint = std::to_string(collectionId.value),
+        },
+    });
+
+    RenderMaterialParameterCollectionData collection{};
+    collection.displayName = "Packaged Globals";
+    collection.parameters.push_back(RenderMaterialParameterCollectionParameter{
+        .stableId = "GlobalTint",
+        .displayName = "Global Tint",
+        .type = RenderMaterialParameterCollectionValueType::Vector,
+        .defaultValue = { 0.25F, 0.50F, 0.75F, 1.0F },
+    });
+
+    RenderMaterialTypeDocument type = GetBuiltInPbrMaterialTypeDocument();
+    type.stableTypeId = "packaged.surface";
+    type.displayName = "Packaged Surface";
+    type.schema.typeName = type.stableTypeId;
+
+    RenderMaterialAssetData material{};
+    material.materialType = type.stableTypeId;
+    material.materialTypeVersion = type.version;
+    material.hasExplicitMaterialType = true;
+    material.hasExplicitMaterialTypeVersion = true;
+    material.materialTypeAssetId = typeId.value;
+    material.materialTypeAssetPath = typePath;
+    material.graphSourceAssetId = graphId.value;
+    material.graphSourceAssetPath = graphPath;
+
+    const std::vector<std::uint8_t> materialBytes = MaterialDocumentBytes(
+        [&material](std::ostream& output) { RenderMaterialAssetWriter::Write(output, material); });
+    const std::vector<std::uint8_t> graphBytes = MaterialDocumentBytes(
+        [&graph](std::ostream& output) { WriteRenderMaterialGraphDocument(output, graph); });
+    const std::vector<std::uint8_t> functionBytes = MaterialDocumentBytes(
+        [&functionGraph](std::ostream& output) { WriteRenderMaterialGraphDocument(output, functionGraph); });
+    const std::vector<std::uint8_t> collectionBytes = MaterialDocumentBytes(
+        [&collection](std::ostream& output) { RenderMaterialParameterCollectionWriter::Write(output, collection); });
+    const std::vector<std::uint8_t> typeBytes = MaterialDocumentBytes(
+        [&type](std::ostream& output) { WriteRenderMaterialTypeDocument(output, type); });
+
+    bake::RuntimeAssetManifest manifest{
+        .targetProfileId = std::string{ profile.identifier },
+        .targetProfileHash = bake::BakeTargetProfileFingerprint(profile),
+    };
+    manifest.descriptor.targetPlatforms = { "Windows" };
+    manifest.settings.name = "PackagedMaterialDependencies";
+    manifest.settings.defaultMap = scenePath;
+
+    bake::AssetPackWriter writer{ packPath, profile };
+    const auto appendSource = [&](kb::assets::AssetId id,
+                                  std::string typeName,
+                                  std::string path,
+                                  std::string extension,
+                                  const std::vector<std::uint8_t>& bytes,
+                                  std::vector<kb::assets::AssetId> dependencies) {
+        const bake::AssetBakeDigest digest = StoreRuntimePackSource(writer, profile, bytes, path);
+        manifest.assets.push_back(bake::RuntimeAssetManifestEntry{
+            .id = id,
+            .type = std::move(typeName),
+            .name = std::filesystem::path{ path }.stem().string(),
+            .virtualPath = std::move(path),
+            .sourceExtension = std::move(extension),
+            .contentHash = bake::HashBakeBytes(bytes),
+            .dependencies = std::move(dependencies),
+            .artifacts = { bake::RuntimeArtifactReference{
+                .digest = digest,
+                .encoding = bake::RuntimeArtifactEncoding::SourceBytes,
+            } },
+        });
+    };
+    appendSource(materialId, "RenderMaterial", materialPath, ".kbmat", materialBytes, { graphId, typeId });
+    appendSource(graphId, kRenderMaterialGraphAssetType, graphPath, kRenderMaterialGraphAssetExtension,
+        graphBytes, { functionId });
+    appendSource(functionId, kRenderMaterialFunctionAssetType, functionPath, kRenderMaterialFunctionAssetExtension,
+        functionBytes, { collectionId });
+    appendSource(collectionId, kRenderMaterialParameterCollectionAssetType, collectionPath,
+        kRenderMaterialParameterCollectionAssetExtension, collectionBytes, {});
+    appendSource(typeId, kRenderMaterialTypeAssetType, typePath, kRenderMaterialTypeAssetExtension, typeBytes, {});
+    const std::filesystem::path authoredScenePath =
+        std::filesystem::temp_directory_path() / "21kb_renderer_packaged_material_scene.21kbscene";
+    kb::scene::Scene authoredScene;
+    Require(kb::scene::SceneDocumentService::Save(authoredScene, authoredScenePath, "PackagedMaterial"),
+        "Packaged material fixture could not write its runtime Scene");
+    std::ifstream authoredSceneInput{ authoredScenePath, std::ios::binary };
+    const std::vector<std::uint8_t> sceneBytes{
+        std::istreambuf_iterator<char>{ authoredSceneInput }, std::istreambuf_iterator<char>{} };
+    appendSource(
+        kb::assets::MakeAssetId(scenePath + ":Scene"),
+        "Scene",
+        scenePath,
+        ".21kbscene",
+        sceneBytes,
+        {});
+    std::filesystem::remove(authoredScenePath, removeError);
+
+    std::vector<std::uint8_t> manifestBytes;
+    Require(bake::EncodeRuntimeAssetManifest(manifest, manifestBytes) == bake::RuntimeAssetManifestStatus::Success,
+        "Packaged material manifest could not be encoded");
+    static_cast<void>(StoreRuntimePackArtifact(
+        writer, profile, manifestBytes, bake::kRuntimeManifestAssetTypeId, "runtime-manifest"));
+    Require(writer.Finish() == bake::BakedAssetSinkStatus::Success,
+        "Packaged material pack could not be published");
+
+    auto runtimePack = std::make_shared<bake::RuntimeAssetPack>();
+    Require(runtimePack->Mount(packPath, profile) == bake::RuntimeAssetPackStatus::Success,
+        "Packaged material pack could not be mounted");
+    kb::assets::AssetManager manager;
+    Require(manager.RegisterLoader(std::make_unique<RenderMaterialAssetLoader>()) &&
+            manager.RegisterLoader(std::make_unique<RenderMaterialGraphAssetLoader>()) &&
+            manager.RegisterLoader(std::make_unique<RenderMaterialFunctionAssetLoader>()) &&
+            manager.RegisterLoader(std::make_unique<RenderMaterialParameterCollectionAssetLoader>()) &&
+            manager.RegisterLoader(std::make_unique<RenderMaterialTypeAssetLoader>()) &&
+            manager.MountRuntimePack(runtimePack),
+        "Packaged material runtime could not register loaders and mount its pathless pack");
+    Require(manager.Mounts().Resolve(graphPath).has_value() == false,
+        "Packaged material fixture unexpectedly exposed a loose filesystem path");
+
+    const kb::assets::AssetHandle<RenderMaterialAssetData> loadedMaterial =
+        manager.Load<RenderMaterialAssetData>(materialId);
+    Require(loadedMaterial.IsLoaded(), "Packaged base material did not load from source bytes");
+    const RuntimeMaterialSourceGraphLoadResult loadedGraph =
+        LoadRuntimeMaterialSourceGraph(manager, *loadedMaterial);
+    Require(loadedGraph.graph.has_value() && loadedGraph.graph->storageModel == "material-graph-asset",
+        "Packaged material source graph bypassed the memory loader");
+
+    const RuntimeMaterialFunctionLibraryBuildResult functions =
+        BuildRuntimeMaterialFunctionLibrary(manager, *loadedGraph.graph);
+    Require(functions.diagnostics.empty() && functions.library.entries.size() == 1U &&
+            functions.library.entries.front().assetId == functionId.value,
+        "Packaged material function library did not load through AssetManager");
+    static_cast<void>(GlobalRenderMaterialParameterCollectionStore().UnloadCollection(collectionId.value));
+    const std::vector<RenderMaterialGraphDiagnostic> collectionDiagnostics =
+        LoadRuntimeMaterialParameterCollectionDefaults(manager, *loadedGraph.graph);
+    const auto globalTint = GlobalRenderMaterialParameterCollectionStore().Resolve(collectionId.value, "GlobalTint");
+    Require(collectionDiagnostics.empty() && globalTint.has_value() && NearlyEqual(globalTint->value[2], 0.75F),
+        "Packaged material parameter collection defaults did not load through AssetManager");
+    const RenderMaterialTypeReferenceValidationResult typeValidation =
+        ValidateRenderMaterialTypeReference(*loadedMaterial, *manager.Registry().Find(materialId), manager);
+    Require(typeValidation.Succeeded() && typeValidation.materialType.has_value() &&
+            typeValidation.materialType->stableTypeId == type.stableTypeId,
+        "Packaged Material Type reference did not load through AssetManager");
+
+    static_cast<void>(GlobalRenderMaterialParameterCollectionStore().UnloadCollection(collectionId.value));
+    runtimePack->Unmount();
+    std::filesystem::remove(packPath, removeError);
+}
+
 void RunStandaloneMaterialGraphCodecParityAndAtomicSaveTest() {
     const std::uint32_t fromPinId = RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind::TextureSample, "color", true);
     const std::uint32_t toPinId = RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind::MaterialOutput, "baseColor", false);
@@ -2975,6 +3382,14 @@ void RunRendererTypedAssetReferenceSaveRoundTripTest() {
 
 } // namespace
 
+void RunRuntimeAssetShaderProviderTests() {
+    RunRuntimeShaderProviderRejectsTrailingQualifierFieldTest();
+}
+
+void RunPackagedMaterialRuntimeTests() {
+    RunPackagedMaterialDependencyMemoryTest();
+}
+
 void RunRenderResourceRegistryTests() {
     RunMaterialHandlesAreGenerationalTest();
     RunGraphBlendModeDrivesResourceRenderStateTest();
@@ -2983,6 +3398,7 @@ void RunRenderResourceRegistryTests() {
     RunShutdownInvalidatesLiveHandlesTest();
     RunReserveAndStatsReportPoolPressureTest();
     RunStaticMeshVertexFormatsExposeExpectedStridesTest();
+    RunMeshResourceBuildsSectionLocalVertexRangesTest();
     RunSkinnedMeshRegistrationContractTest();
     RunSkeletalMeshLodResourceUsesStablePaletteTest();
     RunSkeletalMeshValidatedBuildMatchesCheckedBuildTest();
@@ -3002,6 +3418,7 @@ void RunRenderResourceRegistryTests() {
     RunRenderMaterialAssetLoaderDiscoversAndLoadsMaterialThroughAssetManagerTest();
     RunMaterialAssetDiscoveryBuildsMaterialDependencyGraphTest();
     RunMaterialGraphAndTypeAssetDiscoveryTest();
+    RunPackagedMaterialDependencyMemoryTest();
     RunStandaloneMaterialGraphCodecParityAndAtomicSaveTest();
     RunMaterialTypeReferenceValidationDrivesRuntimeErrorMaterialTest();
     RunMaterialCookPayloadContainsParamsTextureDepsTypeVersionAndHashTest();

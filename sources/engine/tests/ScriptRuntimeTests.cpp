@@ -3980,7 +3980,7 @@ class TestMaterialParameterSchemaValidator final
     : public kb::scene::MaterialParameterSchemaValidator {
 public:
     [[nodiscard]] bool Validate(
-        const kb::assets::AssetManager&,
+        kb::assets::AssetManager&,
         std::uint64_t,
         std::string_view name,
         kb::scene::MaterialParameterType type) const noexcept override {

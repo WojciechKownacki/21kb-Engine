@@ -47,10 +47,14 @@ bool SceneMeshSubmitter::Initialize() {
         return true;
     }
 
-    if (!passResources_.Initialize() || !gpuDrivenCullingPass_.Initialize()) {
+    if (!passResources_.Initialize()) {
         Shutdown();
         return false;
     }
+    // Compute culling is an acceleration feature, not a renderer prerequisite.
+    // WebGL2 and baseline Android GLES3 have a complete CPU visibility/submit
+    // path and must not attempt to load or create compute resources.
+    static_cast<void>(gpuDrivenCullingPass_.Initialize());
     transparentSubmissionScratch_.reserve(4'096U + kParticleGpuMaxBatches);
     meshBatchSubmissionScratch_.reserve(kb::particles::kParticleRenderSnapshotMaxEmitterRecords);
     particleMeshBatchBuilder_.Warmup(4'096U);

@@ -59,6 +59,20 @@ constexpr std::uint64_t kSkinnedGraphPipelineStateBit = 1ULL << 63U;
 
 [[nodiscard]] const char* GraphBackendDirectoryForKey(std::uint32_t backend) noexcept;
 
+[[nodiscard]] const char* GraphPlatformDirectoryForRuntime() noexcept {
+#if defined(_WIN32)
+    return "windows";
+#elif defined(__ANDROID__)
+    return "android";
+#elif defined(__EMSCRIPTEN__)
+    return "asm.js";
+#elif defined(__APPLE__)
+    return "osx";
+#else
+    return "linux";
+#endif
+}
+
 [[nodiscard]] MaterialProgramKey BuiltinMeshProgramKey(std::string pass, bool skinned = false) {
     return MaterialProgramKey{
         .materialTypeId = kBuiltinMeshMaterialTypeId,
@@ -79,14 +93,21 @@ constexpr std::uint64_t kSkinnedGraphPipelineStateBit = 1ULL << 63U;
     std::uint64_t variantKey,
     std::string_view pass,
     std::uint32_t backend) {
+    if (ShaderLoader::HasBinaryProvider()) {
+        return ShaderLoader::MaterialBinaryRevision(sourceHash, variantKey, pass, backend);
+    }
     if (cacheRoot.empty()) {
         return 0U;
     }
+    const char* const backendDirectory = GraphBackendDirectoryForKey(backend);
+    if (backendDirectory == nullptr) {
+        return 0U;
+    }
     const std::filesystem::path root = std::filesystem::path{ cacheRoot } /
+        GraphPlatformDirectoryForRuntime() /
         ("graph_" + std::to_string(sourceHash)) /
         ("variant_" + std::to_string(variantKey)) /
-        pass /
-        GraphBackendDirectoryForKey(backend);
+        pass / backendDirectory;
     std::uint64_t hash = 1469598103934665603ULL;
     for (const char* name : { "fs.bin.hash", "vs.bin.hash" }) {
         std::ifstream input{ root / name, std::ios::binary };
@@ -161,9 +182,14 @@ void AppendUniqueValue(std::vector<T>& values, const T& value) {
         return "essl";
     case bgfx::RendererType::Metal:
         return "metal";
-    default:
-        return "dxbc";
+    case bgfx::RendererType::WebGPU:
+    case bgfx::RendererType::Agc:
+    case bgfx::RendererType::Gnm:
+    case bgfx::RendererType::Nvn:
+    case bgfx::RendererType::Count:
+        break;
     }
+    return nullptr;
 }
 
 [[nodiscard]] const char* GraphBackendDirectoryForKey(std::uint32_t backend) noexcept {
@@ -569,25 +595,47 @@ bgfx::ProgramHandle SceneMeshPassResources::LoadProgramForKey(const MaterialProg
     if (!key.graphProgram) {
         return LoadBuiltinMeshProgram(key);
     }
-    if (graphShaderCacheRoot_.empty()) {
-        return BGFX_INVALID_HANDLE;
+    std::vector<std::uint8_t> fragmentBytes;
+    std::vector<std::uint8_t> vertexBytes;
+    if (ShaderLoader::HasBinaryProvider()) {
+        std::uint64_t fragmentRevision = 0U;
+        if (!ShaderLoader::ReadMaterialBinary(
+                key.graphSourceHash,
+                key.variantKey,
+                key.pass,
+                key.backend,
+                "fragment",
+                fragmentBytes,
+                fragmentRevision)) {
+            return BGFX_INVALID_HANDLE;
+        }
+        std::uint64_t vertexRevision = 0U;
+        static_cast<void>(ShaderLoader::ReadMaterialBinary(
+            key.graphSourceHash,
+            key.variantKey,
+            key.pass,
+            key.backend,
+            "vertex",
+            vertexBytes,
+            vertexRevision));
+    } else {
+        const char* const backendDirectory = GraphBackendDirectoryForKey(key.backend);
+        if (graphShaderCacheRoot_.empty() || backendDirectory == nullptr) {
+            return BGFX_INVALID_HANDLE;
+        }
+        const std::filesystem::path artifactRoot = std::filesystem::path{ graphShaderCacheRoot_ } /
+            GraphPlatformDirectoryForRuntime() /
+            ("graph_" + std::to_string(key.graphSourceHash)) /
+            ("variant_" + std::to_string(key.variantKey)) / key.pass / backendDirectory;
+        fragmentBytes = ReadShaderBinaryFile(artifactRoot / "fs.bin");
+        vertexBytes = ReadShaderBinaryFile(artifactRoot / "vs.bin");
     }
-    const std::filesystem::path fragmentPath = std::filesystem::path{ graphShaderCacheRoot_ } /
-        ("graph_" + std::to_string(key.graphSourceHash)) /
-        ("variant_" + std::to_string(key.variantKey)) / key.pass /
-        GraphBackendDirectoryForKey(key.backend) / "fs.bin";
-    const std::vector<std::uint8_t> fragmentBytes = ReadShaderBinaryFile(fragmentPath);
     if (fragmentBytes.empty()) {
         return BGFX_INVALID_HANDLE;
     }
     // MAT-81/#19: a world-position-offset graph cooks its own vertex shader (vs.bin) next to the fragment
     // shader. When present, pair it with the graph fragment shader so the scene moves real geometry;
     // otherwise use the fixed instanced mesh vertex shader.
-    const std::filesystem::path vertexPath = std::filesystem::path{ graphShaderCacheRoot_ } /
-        ("graph_" + std::to_string(key.graphSourceHash)) /
-        ("variant_" + std::to_string(key.variantKey)) / key.pass /
-        GraphBackendDirectoryForKey(key.backend) / "vs.bin";
-    const std::vector<std::uint8_t> vertexBytes = ReadShaderBinaryFile(vertexPath);
     bgfx::ShaderHandle vertex = BGFX_INVALID_HANDLE;
     if (!vertexBytes.empty()) {
         const bgfx::Memory* vertexMemory = bgfx::copy(vertexBytes.data(), static_cast<std::uint32_t>(vertexBytes.size()));

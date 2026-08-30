@@ -3,6 +3,7 @@
 #include "engine/assets/ImportedAsset.hpp"
 #include "engine/assets/ImportedAssetLoader.hpp"
 #include "engine/assets/bake/AssetPackReader.hpp"
+#include "engine/assets/bake/RuntimeAssetPack.hpp"
 #include "kb/render/bake/TextureBaker.hpp"
 
 #include <bimg/decode.h>
@@ -10,6 +11,7 @@
 #include <bx/error.h>
 
 #include <atomic>
+#include <array>
 #include <cstddef>
 #include <charconv>
 #include <cctype>
@@ -476,6 +478,9 @@ void StoreDecodedTexture(
     if (pack.Mount(path) != kb::assets::bake::AssetPackReadStatus::Success) {
         return std::nullopt;
     }
+    if (pack.Artifacts().size() != 1U) {
+        return std::nullopt;
+    }
     const kb::assets::bake::AssetPackArtifactEntry* texture = nullptr;
     for (const kb::assets::bake::AssetPackArtifactEntry& artifact : pack.Artifacts()) {
         if (artifact.assetTypeId != kb::render::bake::kTextureBakedAssetTypeId) {
@@ -500,6 +505,63 @@ void StoreDecodedTexture(
         return std::nullopt;
     }
     return asset;
+}
+
+[[nodiscard]] std::optional<RenderTextureAssetData> LoadBakedTexturePayload(
+    const kb::assets::AssetLoadRequest& request,
+    std::string& error) {
+    const kb::assets::bake::RuntimeAssetManifestEntry* entry =
+        request.runtimePack == nullptr ? nullptr : request.runtimePack->FindAsset(request.metadata.id);
+    if (entry == nullptr) {
+        error = "Packaged texture manifest entry is missing";
+        return std::nullopt;
+    }
+    constexpr std::array<std::string_view, 4U> preference{
+        "bc-extended", "astc", "etc2", "bc-baseline"
+    };
+    bool foundVariant = false;
+    for (const std::string_view qualifier : preference) {
+        const auto reference = std::ranges::find_if(
+            entry->artifacts,
+            [qualifier](const kb::assets::bake::RuntimeArtifactReference& candidate) {
+                return candidate.encoding == kb::assets::bake::RuntimeArtifactEncoding::BakedTexture &&
+                    candidate.qualifier == qualifier;
+            });
+        if (reference == entry->artifacts.end()) {
+            continue;
+        }
+        foundVariant = true;
+        kb::assets::bake::RuntimeAssetPayload payload{};
+        if (!request.ReadPackagedPayload(
+                kb::assets::bake::RuntimeArtifactEncoding::BakedTexture,
+                qualifier,
+                payload,
+                error) || payload.blocks.size() != 1U ||
+            payload.blocks.front().name != kb::assets::bake::kBakedAssetPrimaryBlockName) {
+            if (error.empty()) {
+                error = "Packaged texture payload shape is invalid";
+            }
+            return std::nullopt;
+        }
+        RenderTextureAssetData texture{};
+        if (!kb::render::bake::ReadBakedTexture(payload.blocks.front().bytes, texture) ||
+            !texture.gpuBlocks.has_value() ||
+            !kb::render::bake::BakedTextureFormatMatchesFamily(texture.gpuBlocks->format, qualifier)) {
+            error = "Packaged texture encoding does not match its manifest qualifier";
+            return std::nullopt;
+        }
+        const RenderTextureColorSpace requiredColorSpace =
+            texture.colorSpace == RenderTextureAssetColorSpace::Linear
+                ? RenderTextureColorSpace::Linear
+                : RenderTextureColorSpace::Srgb;
+        if (RenderDeviceSupportsTextureFormat(texture.gpuBlocks->format, requiredColorSpace)) {
+            return texture;
+        }
+    }
+    error = foundVariant
+        ? "The running GPU supports none of this package's native texture variants"
+        : "Packaged texture has no cooked variant";
+    return std::nullopt;
 }
 
 [[nodiscard]] std::optional<RenderTextureAssetData> DecodeTextureFile(const std::filesystem::path& path) {
@@ -718,10 +780,20 @@ std::vector<std::string> RenderTextureAssetLoader::Extensions() const {
         std::string{ kb::assets::bake::kAssetPackFileExtension } };
 }
 
+std::vector<std::string> RenderTextureAssetLoader::BakedAssetTypes() const {
+    return { std::string{ kb::render::bake::kTextureBakedAssetTypeId } };
+}
+
 kb::assets::AssetLoadResult RenderTextureAssetLoader::Load(const kb::assets::AssetLoadRequest& request) {
-    std::optional<RenderTextureAssetData> texture = LoadTexture(request.resolvedPath);
+    std::string error;
+    std::optional<RenderTextureAssetData> texture = request.IsPackaged()
+        ? LoadBakedTexturePayload(request, error)
+        : LoadTexture(request.resolvedPath);
     if (!texture.has_value()) {
-        return kb::assets::AssetLoadResult{ .asset = {}, .error = "Render texture asset load failed" };
+        return kb::assets::AssetLoadResult{
+            .asset = {},
+            .error = error.empty() ? "Render texture asset load failed" : std::move(error),
+        };
     }
     return kb::assets::AssetLoadResult{
         .asset = std::make_shared<RenderTextureAssetData>(std::move(*texture)),

@@ -75,15 +75,7 @@ ScriptFunctionCallResult Load(const ScriptFunctionCallContext& context, std::spa
     if (pathText.empty()) {
         return Error("scene path is empty");
     }
-    std::filesystem::path path{ pathText };
-    kb::assets::AssetManager& assets = context.scene->Assets().Manager();
-    if (assets.Mounts().Resolve(path).has_value()) {
-        const kb::assets::AssetMetadata* metadata = assets.Registry().FindByPath(path);
-        if (metadata == nullptr || metadata->physicalPath.empty()) {
-            return Error("scene asset could not be resolved: " + pathText);
-        }
-        path = metadata->physicalPath;
-    }
+    const std::filesystem::path path{ pathText };
     const ScriptValue* additiveValue = FindArg(arguments, "additive");
     const bool additive = additiveValue != nullptr && additiveValue->AsBool(false);
     const std::uint64_t id = context.scene->LoadedContent().Load(path, additive);

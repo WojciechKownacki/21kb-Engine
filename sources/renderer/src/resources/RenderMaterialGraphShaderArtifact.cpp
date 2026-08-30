@@ -421,22 +421,6 @@ std::string_view RenderMaterialGraphShaderBackendProfile(RenderMaterialGraphShad
     return "spirv";
 }
 
-std::string_view RenderMaterialGraphShaderBackendPlatform(RenderMaterialGraphShaderBackend backend) noexcept {
-    switch (backend) {
-    case RenderMaterialGraphShaderBackend::Dxbc:
-    case RenderMaterialGraphShaderBackend::Dxil:
-        return "windows";
-    case RenderMaterialGraphShaderBackend::Metal:
-        return "osx";
-    case RenderMaterialGraphShaderBackend::Essl:
-        return "android";
-    case RenderMaterialGraphShaderBackend::Spirv:
-    case RenderMaterialGraphShaderBackend::Glsl:
-        return "linux";
-    }
-    return "linux";
-}
-
 std::string_view RenderMaterialGraphShaderBackendDirectory(RenderMaterialGraphShaderBackend backend) noexcept {
     return RenderMaterialGraphShaderBackendName(backend);
 }
@@ -450,6 +434,24 @@ std::optional<RenderMaterialGraphShaderBackend> ParseRenderMaterialGraphShaderBa
     if (text == "glsl") return RenderMaterialGraphShaderBackend::Glsl;
     return std::nullopt;
 }
+
+namespace {
+
+[[nodiscard]] std::optional<kb::assets::bake::ShaderBakeBackend> ToBakeShaderBackend(
+    RenderMaterialGraphShaderBackend backend) noexcept {
+    using kb::assets::bake::ShaderBakeBackend;
+    switch (backend) {
+    case RenderMaterialGraphShaderBackend::Dxbc: return ShaderBakeBackend::Dxbc;
+    case RenderMaterialGraphShaderBackend::Dxil: return ShaderBakeBackend::Dxil;
+    case RenderMaterialGraphShaderBackend::Spirv: return ShaderBakeBackend::Spirv;
+    case RenderMaterialGraphShaderBackend::Metal: return ShaderBakeBackend::Metal;
+    case RenderMaterialGraphShaderBackend::Essl: return ShaderBakeBackend::Essl;
+    case RenderMaterialGraphShaderBackend::Glsl: return ShaderBakeBackend::Glsl;
+    }
+    return std::nullopt;
+}
+
+} // namespace
 
 const RenderMaterialGraphShaderBinary* RenderMaterialGraphShaderArtifact::FindBinary(RenderMaterialGraphShaderBackend backend) const noexcept {
     for (const RenderMaterialGraphShaderBinary& binary : binaries) {
@@ -788,10 +790,21 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
     const RenderMaterialGraphShaderArtifactRequest& request) {
     RenderMaterialGraphShaderArtifactResult result{};
 
-    if (request.shadercPath.empty() || request.cacheRoot.empty()) {
+    if (request.shadercPath.empty() || request.cacheRoot.empty() || !request.shaderPlatform.has_value()) {
         AddArtifactDiagnostic(result.diagnostics, RenderMaterialGraphDiagnosticSeverity::Error,
-            "Material graph shader cook requires a shaderc tool path and a cache root.");
+            "Material graph shader cook requires a shaderc tool path, cache root and explicit target platform.");
         return result;
+    }
+    for (const RenderMaterialGraphShaderBackend backend : backends) {
+        const std::optional<kb::assets::bake::ShaderBakeBackend> bakeBackend = ToBakeShaderBackend(backend);
+        if (!bakeBackend.has_value() ||
+            !kb::assets::bake::ShaderBakePlatformSupportsBackend(*request.shaderPlatform, *bakeBackend)) {
+            AddArtifactDiagnostic(result.diagnostics, RenderMaterialGraphDiagnosticSeverity::Error,
+                "Material graph shader backend '" + std::string{ RenderMaterialGraphShaderBackendName(backend) } +
+                    "' is not valid for shader platform '" +
+                    std::string{ kb::assets::bake::ShaderBakePlatformName(*request.shaderPlatform) } + "'.");
+            return result;
+        }
     }
 
     RenderMaterialGraphShaderArtifact artifact{};
@@ -800,6 +813,7 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
     artifact.pass = request.pass;
     artifact.entryPoint = shader.entryPoint;
     artifact.graphGenerated = true;
+    artifact.shaderPlatform = *request.shaderPlatform;
     artifact.wrapperSource = BuildGraphFragmentWrapperSource(shader, request.pass);
     std::uint64_t wrapperHash = 1469598103934665603ULL;
     HashString64(wrapperHash, artifact.wrapperSource);
@@ -874,6 +888,7 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
     HashU64(artifactHash, artifact.dependencyHash);
     HashU64(artifactHash, artifact.reflectionHash);
     HashU64(artifactHash, artifact.materialTypeVersion);
+    HashU64(artifactHash, static_cast<std::uint64_t>(artifact.shaderPlatform));
     artifact.artifactHash = artifactHash;
 
     // The per-binary cache key combines the wrapper, its dependencies and the material type version,
@@ -883,9 +898,11 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
     HashU64(cookKey, artifact.wrapperHash);
     HashU64(cookKey, artifact.dependencyHash);
     HashU64(cookKey, artifact.materialTypeVersion);
+    HashU64(cookKey, static_cast<std::uint64_t>(artifact.shaderPlatform));
 
     std::error_code error;
     const std::filesystem::path passRoot = std::filesystem::path{ request.cacheRoot } /
+        std::string{ kb::assets::bake::ShaderBakePlatformName(artifact.shaderPlatform) } /
         ("graph_" + std::to_string(shader.sourceHash)) /
         ("variant_" + std::to_string(artifact.variantKey)) /
         request.pass;
@@ -926,7 +943,8 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
         const std::string shadercExe = std::filesystem::path{ request.shadercPath }.make_preferred().string();
         std::string command = QuotePath(shadercExe);
         command += " --type fragment";
-        command += " --platform " + std::string{ RenderMaterialGraphShaderBackendPlatform(backend) };
+        command += " --platform " +
+            std::string{ kb::assets::bake::ShaderBakePlatformName(artifact.shaderPlatform) };
         command += " --profile " + std::string{ RenderMaterialGraphShaderBackendProfile(backend) };
         command += " -f " + QuotePath(wrapperPath.generic_string());
         command += " -o " + QuotePath(binaryPath.generic_string());
@@ -1005,6 +1023,7 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
         HashString64(vsCookKey, artifact.vertexWrapperSource);
         HashU64(vsCookKey, artifact.dependencyHash);
         HashU64(vsCookKey, artifact.materialTypeVersion);
+        HashU64(vsCookKey, static_cast<std::uint64_t>(artifact.shaderPlatform));
 
         for (const RenderMaterialGraphShaderBackend backend : backends) {
             const std::filesystem::path backendDir = passRoot / std::string{ RenderMaterialGraphShaderBackendDirectory(backend) };
@@ -1031,7 +1050,8 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
             const std::string shadercExe = std::filesystem::path{ request.shadercPath }.make_preferred().string();
             std::string command = QuotePath(shadercExe);
             command += " --type vertex";
-            command += " --platform " + std::string{ RenderMaterialGraphShaderBackendPlatform(backend) };
+            command += " --platform " +
+                std::string{ kb::assets::bake::ShaderBakePlatformName(artifact.shaderPlatform) };
             command += " --profile " + std::string{ RenderMaterialGraphShaderBackendProfile(backend) };
             command += " -f " + QuotePath(vsWrapperPath.generic_string());
             command += " -o " + QuotePath(vsBinaryPath.generic_string());
@@ -1105,6 +1125,7 @@ RenderMaterialGraphShaderManifest BuildRenderMaterialGraphShaderManifest(
                 .materialTypeVersion = artifact.materialTypeVersion,
                 .pass = artifact.pass,
                 .backend = binary.backend,
+                .shaderPlatform = artifact.shaderPlatform,
                 .binaryPath = binary.binaryPath,
                 .graphGenerated = artifact.graphGenerated,
             });
@@ -1135,6 +1156,7 @@ RenderMaterialGraphShaderManifest BuildRenderMaterialGraphShaderManifest(
         HashU64(manifestHash, entry.materialTypeVersion);
         HashString64(manifestHash, entry.pass);
         HashU64(manifestHash, static_cast<std::uint64_t>(entry.backend));
+        HashU64(manifestHash, static_cast<std::uint64_t>(entry.shaderPlatform));
         HashString64(manifestHash, entry.binaryPath);
         HashU64(manifestHash, entry.graphGenerated ? 1U : 0U);
     }
@@ -1168,13 +1190,14 @@ std::vector<RenderMaterialGraphDiagnostic> ValidateRenderMaterialGraphShaderMani
 }
 
 void WriteRenderMaterialGraphShaderManifest(std::ostream& output, const RenderMaterialGraphShaderManifest& manifest) {
-    output << "graphShaderManifest 2\n";
+    output << "graphShaderManifest 3\n";
     output << "manifestHash " << manifest.manifestHash << '\n';
     for (const RenderMaterialGraphShaderManifestEntry& entry : manifest.entries) {
         output << "graphArtifact "
             << entry.graphSourceHash << ' '
             << entry.variantKey << ' '
             << RenderMaterialGraphShaderBackendName(entry.backend) << ' '
+            << kb::assets::bake::ShaderBakePlatformName(entry.shaderPlatform) << ' '
             << entry.wrapperHash << ' '
             << entry.reflectionHash << ' '
             << entry.dependencyHash << ' '
@@ -1207,13 +1230,21 @@ RenderMaterialGraphShaderManifest ParseRenderMaterialGraphShaderManifest(std::is
         }
         RenderMaterialGraphShaderManifestEntry entry{};
         std::string backendName;
+        std::string platformName;
         std::string pass;
         std::uint32_t graphGenerated = 1U;
         stream >> entry.graphSourceHash;
         if (version >= 2U) {
             stream >> entry.variantKey;
         }
-        stream >> backendName >> entry.wrapperHash >> entry.reflectionHash >>
+        stream >> backendName;
+        if (version >= 3U) {
+            stream >> platformName;
+            if (!kb::assets::bake::TryParseShaderBakePlatform(platformName, entry.shaderPlatform)) {
+                continue;
+            }
+        }
+        stream >> entry.wrapperHash >> entry.reflectionHash >>
             entry.dependencyHash >> entry.artifactHash >> entry.materialTypeVersion >> graphGenerated >> pass;
         entry.backend = ParseRenderMaterialGraphShaderBackend(backendName).value_or(RenderMaterialGraphShaderBackend::Spirv);
         entry.graphGenerated = graphGenerated != 0U;

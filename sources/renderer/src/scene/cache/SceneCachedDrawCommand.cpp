@@ -51,6 +51,8 @@ void HashCombine(std::size_t& seed, std::uint64_t value) noexcept {
         .meshletCount = desc.meshletCount,
         .indexStart = desc.indexStart,
         .indexCount = desc.indexCount,
+        .vertexStart = desc.vertexStart,
+        .vertexCount = desc.vertexCount,
         .lodLevel = desc.lodLevel,
         .terrainLayerIndex = desc.terrainLayerIndex,
         .state = desc.state,
@@ -88,6 +90,8 @@ std::size_t SceneCachedDrawCommandKeyHash::operator()(const SceneCachedDrawComma
     HashCombine(seed, key.meshletCount);
     HashCombine(seed, key.indexStart);
     HashCombine(seed, key.indexCount);
+    HashCombine(seed, key.vertexStart);
+    HashCombine(seed, key.vertexCount);
     HashCombine(seed, key.lodLevel);
     HashCombine(seed, key.terrainLayerIndex);
     HashCombine(seed, key.state);

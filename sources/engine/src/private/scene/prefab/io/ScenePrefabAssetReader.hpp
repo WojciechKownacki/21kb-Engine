@@ -6,6 +6,7 @@
 #include "scene/prefab/io/ScenePrefabAssetFormat.hpp"
 
 #include <filesystem>
+#include <istream>
 #include <string>
 #include <vector>
 
@@ -30,6 +31,7 @@ public:
     ScenePrefabAssetReader() = delete;
 
     [[nodiscard]] static bool Read(const std::filesystem::path& path, ScenePrefabAssetReadResult& output);
+    [[nodiscard]] static bool Read(std::istream& input, ScenePrefabAssetReadResult& output);
 
     // Reads ONLY a prefab asset's identity header (format line, kind, guid) and
     // stops before its node list. Asset dependency discovery has to map a scene's

@@ -1,11 +1,11 @@
 #include "engine/assets/ImportedAssetLoader.hpp"
 
+#include "engine/assets/AssetMemoryInputStream.hpp"
 #include "engine/assets/ImportedAsset.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cstddef>
-#include <fstream>
 #include <iterator>
 #include <limits>
 #include <memory>
@@ -78,10 +78,12 @@ std::vector<std::string> ImportedAssetLoader::Extensions() const {
 }
 
 AssetLoadResult ImportedAssetLoader::Load(const AssetLoadRequest& request) {
-    std::ifstream input{ request.resolvedPath, std::ios::binary };
-    if (!input.is_open()) {
-        return AssetLoadResult{ .asset = {}, .error = "Imported asset could not be opened." };
+    std::vector<std::uint8_t> sourceBytes;
+    std::string error;
+    if (!request.ReadSourceBytes(sourceBytes, error)) {
+        return AssetLoadResult{ .asset = {}, .error = std::move(error) };
     }
+    AssetMemoryInputStream input{ sourceBytes };
 
     std::array<char, AssetMagic.size()> magic{};
     input.read(magic.data(), static_cast<std::streamsize>(magic.size()));

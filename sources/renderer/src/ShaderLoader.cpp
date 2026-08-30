@@ -1,11 +1,14 @@
 #include "kb/render/ShaderLoader.hpp"
 
+#include "kb/render/ShaderBinaryProvider.hpp"
 #include "kb/render/ShaderManifest.hpp"
 
 #include <bgfx/bgfx.h>
 #include <bx/string.h>
 
 #include <fstream>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -15,6 +18,14 @@
 
 namespace kb::render {
 namespace {
+
+std::mutex gProviderMutex;
+std::shared_ptr<const ShaderBinaryProvider> gProvider;
+
+[[nodiscard]] std::shared_ptr<const ShaderBinaryProvider> ActiveProvider() noexcept {
+    std::scoped_lock lock{ gProviderMutex };
+    return gProvider;
+}
 
 [[nodiscard]] std::string ExecutableDirectory() {
 #if defined(_WIN32)
@@ -54,25 +65,40 @@ namespace {
 
 [[nodiscard]] std::vector<std::uint8_t> ReadFileBytes(const char* path) {
     std::ifstream file(path, std::ios::binary | std::ios::ate);
-    if (!file.is_open()) {
-        return {};
+    if (file.is_open()) {
+        const std::streamsize size = file.tellg();
+        if (size <= 0) {
+            return {};
+        }
+
+        file.seekg(0, std::ios::beg);
+        std::vector<std::uint8_t> bytes(static_cast<std::size_t>(size));
+        if (!file.read(reinterpret_cast<char*>(bytes.data()), size)) {
+            return {};
+        }
+        return bytes;
     }
 
-    const std::streamsize size = file.tellg();
-    if (size <= 0) {
-        return {};
-    }
-
-    file.seekg(0, std::ios::beg);
-    std::vector<std::uint8_t> bytes(static_cast<std::size_t>(size));
-    if (!file.read(reinterpret_cast<char*>(bytes.data()), size)) {
-        return {};
-    }
-
-    return bytes;
+    return {};
 }
 
 } // namespace
+
+void ShaderLoader::SetBinaryProvider(std::shared_ptr<const ShaderBinaryProvider> provider) noexcept {
+    std::scoped_lock lock{ gProviderMutex };
+    gProvider = std::move(provider);
+}
+
+void ShaderLoader::ClearBinaryProvider(const std::shared_ptr<const ShaderBinaryProvider>& provider) noexcept {
+    std::scoped_lock lock{ gProviderMutex };
+    if (gProvider == provider) {
+        gProvider.reset();
+    }
+}
+
+bool ShaderLoader::HasBinaryProvider() noexcept {
+    return ActiveProvider() != nullptr;
+}
 
 bgfx::ShaderHandle ShaderLoader::Load(const char* name) {
     // No profile directory means we ship no binaries for the renderer that came
@@ -84,16 +110,28 @@ bgfx::ShaderHandle ShaderLoader::Load(const char* name) {
         return BGFX_INVALID_HANDLE;
     }
 
-    const std::string exeDir = ExecutableDirectory();
     std::vector<std::uint8_t> bytes;
     char resolvedPath[512]{};
-    for (const std::string& root : ShaderSearchRoots(exeDir)) {
-        char path[512]{};
-        bx::snprintf(path, sizeof(path), "%s/%s/%s.bin", root.empty() ? "." : root.c_str(), profileDirectory, name);
-        bytes = ReadFileBytes(path);
-        if (!bytes.empty()) {
-            bx::strCopy(resolvedPath, sizeof(resolvedPath), path);
-            break;
+    if (const std::shared_ptr<const ShaderBinaryProvider> provider = ActiveProvider(); provider != nullptr) {
+        std::uint64_t revision = 0U;
+        if (!provider->ReadFixedShader(bgfx::getRendererType(), name, bytes, revision) || bytes.empty()) {
+            return BGFX_INVALID_HANDLE;
+        }
+        bx::snprintf(resolvedPath, sizeof(resolvedPath), "package:%s/%s", profileDirectory, name);
+    } else {
+        const std::string exeDir = ExecutableDirectory();
+        for (const std::string& root : ShaderSearchRoots(exeDir)) {
+            char path[512]{};
+            if (root.empty() || root == ".") {
+                bx::snprintf(path, sizeof(path), "%s/%s.bin", profileDirectory, name);
+            } else {
+                bx::snprintf(path, sizeof(path), "%s/%s/%s.bin", root.c_str(), profileDirectory, name);
+            }
+            bytes = ReadFileBytes(path);
+            if (!bytes.empty()) {
+                bx::strCopy(resolvedPath, sizeof(resolvedPath), path);
+                break;
+            }
         }
     }
     if (bytes.empty()) {
@@ -128,6 +166,41 @@ bgfx::ProgramHandle ShaderLoader::LoadComputeProgram(const char* computeShader) 
     }
 
     return bgfx::createProgram(compute, true);
+}
+
+bool ShaderLoader::ReadMaterialBinary(
+    std::uint64_t graphSourceHash,
+    std::uint64_t variantKey,
+    std::string_view pass,
+    std::uint32_t renderer,
+    std::string_view stage,
+    std::vector<std::uint8_t>& bytes,
+    std::uint64_t& revision) {
+    const std::shared_ptr<const ShaderBinaryProvider> provider = ActiveProvider();
+    return provider != nullptr && renderer < static_cast<std::uint32_t>(bgfx::RendererType::Count) &&
+        provider->ReadMaterialShader(
+            graphSourceHash,
+            variantKey,
+            pass,
+            static_cast<bgfx::RendererType::Enum>(renderer),
+            stage,
+            bytes,
+            revision);
+}
+
+std::uint64_t ShaderLoader::MaterialBinaryRevision(
+    std::uint64_t graphSourceHash,
+    std::uint64_t variantKey,
+    std::string_view pass,
+    std::uint32_t renderer) noexcept {
+    const std::shared_ptr<const ShaderBinaryProvider> provider = ActiveProvider();
+    return provider != nullptr && renderer < static_cast<std::uint32_t>(bgfx::RendererType::Count)
+        ? provider->MaterialShaderRevision(
+              graphSourceHash,
+              variantKey,
+              pass,
+              static_cast<bgfx::RendererType::Enum>(renderer))
+        : 0U;
 }
 
 } // namespace kb::render

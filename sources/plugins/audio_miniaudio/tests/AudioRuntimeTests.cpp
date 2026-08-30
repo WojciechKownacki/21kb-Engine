@@ -1,6 +1,11 @@
 #include "assets/MiniaudioClipResolver.hpp"
 #include "engine/assets/AssetImportService.hpp"
 #include "engine/assets/AssetMetadata.hpp"
+#include "engine/assets/bake/AssetPackWriter.hpp"
+#include "engine/assets/bake/BakeTargetProfile.hpp"
+#include "engine/assets/bake/RuntimeAssetManifest.hpp"
+#include "engine/assets/bake/RuntimeAssetPack.hpp"
+#include "engine/audio/AudioClipAsset.hpp"
 #include "engine/audio/AudioClipFormats.hpp"
 #include "engine/audio/AudioMixerAsset.hpp"
 #include "engine/audio/AudioMixerAssetIO.hpp"
@@ -8,6 +13,7 @@
 #include "engine/scene/AudioSourceComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneAudioMixerAccess.hpp"
 #include "engine/scene/SceneAudioListenerAccess.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -101,6 +107,15 @@ constexpr std::array<AudioFixture, 3U> kAudioFixtures{
     std::ifstream input{ path, std::ios::binary };
     Require(input.is_open(), "Audio fixture could not be opened");
     return { std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+}
+
+[[nodiscard]] std::vector<std::uint8_t> ReadFileBytesU8(const std::filesystem::path& path) {
+    const std::vector<char> bytes = ReadFileBytes(path);
+    std::vector<std::uint8_t> result(bytes.size());
+    std::ranges::transform(bytes, result.begin(), [](char value) {
+        return static_cast<std::uint8_t>(static_cast<unsigned char>(value));
+    });
+    return result;
 }
 
 void WriteBytes(const std::filesystem::path& path, std::span<const char> bytes) {
@@ -652,6 +667,267 @@ void RunFormatRejectionTest() {
         ids.push_back(result.items.front().id);
     }
     return ids;
+}
+
+struct PackagedAudioCase final {
+    kb::assets::bake::RuntimeAssetManifestEntry manifestEntry;
+    std::vector<std::uint8_t> sourceBytes;
+    std::string encodedExtension;
+    std::size_t encodedBytes = 0U;
+    bool imported = false;
+};
+
+[[nodiscard]] kb::assets::bake::AssetBakeDigest StorePackagedAudioBytes(
+    kb::assets::bake::AssetPackWriter& writer,
+    const kb::assets::bake::BakeTargetProfile& profile,
+    std::span<const std::uint8_t> bytes,
+    std::string_view assetType,
+    std::string_view bakerId,
+    std::string_view settings) {
+    kb::assets::bake::AssetBakeKey key{
+        .sourceContentHash = kb::assets::bake::HashBakeBytes(bytes),
+        .bakerId = std::string{ bakerId },
+        .bakerVersion = "1",
+        .targetProfileId = std::string{ profile.identifier },
+        .targetProfileHash = kb::assets::bake::BakeTargetProfileFingerprint(profile),
+        .settingsHash = kb::assets::bake::HashBakeText(settings),
+    };
+    const kb::assets::bake::BakedAssetDescriptor descriptor{
+        .key = key,
+        .assetTypeId = std::string{ assetType },
+    };
+    Require(writer.BeginAsset(descriptor) == kb::assets::bake::BakedAssetSinkStatus::Success
+            && writer.WritePrimaryBlock(bytes, profile.packageBlockAlignmentBytes)
+                == kb::assets::bake::BakedAssetSinkStatus::Success
+            && writer.CommitAsset() == kb::assets::bake::BakedAssetSinkStatus::Success,
+        "Packaged audio cook could not store an artifact");
+    return key.Digest();
+}
+
+[[nodiscard]] kb::assets::bake::AssetBakeDigest StorePackagedAudioSource(
+    kb::assets::bake::AssetPackWriter& writer,
+    const kb::assets::bake::BakeTargetProfile& profile,
+    std::span<const std::uint8_t> sourceBytes,
+    std::string_view settings) {
+    std::vector<std::uint8_t> sourceBlob;
+    Require(kb::assets::bake::EncodeRuntimeSourceBlob(sourceBytes, sourceBlob),
+        "Packaged audio cook could not encode source bytes");
+    return StorePackagedAudioBytes(
+        writer,
+        profile,
+        sourceBlob,
+        kb::assets::bake::kSourceAssetTypeId,
+        "AudioSource",
+        settings);
+}
+
+void RunPackagedAudioMemoryTest() {
+    namespace bake = kb::assets::bake;
+
+    const std::filesystem::path authoringRoot = TestRoot() / "PackagedAudioAuthoring";
+    const std::filesystem::path inputRoot = authoringRoot / "Input";
+    const std::filesystem::path packPath = TestRoot() / "packaged-audio.kbpack";
+    std::error_code error;
+    std::filesystem::remove_all(authoringRoot, error);
+    std::filesystem::remove(packPath, error);
+    std::filesystem::create_directories(inputRoot, error);
+    Require(!error, "Packaged audio authoring root could not be prepared");
+
+    std::vector<PackagedAudioCase> cases;
+    cases.reserve(kAudioFixtures.size() * 2U);
+    for (const AudioFixture& fixture : kAudioFixtures) {
+        const std::string stem = fixture.extension == ".wav"
+            ? "Wave"
+            : fixture.extension == ".flac" ? "Flac" : "Mp3";
+        const std::filesystem::path sourcePath = inputRoot / ("Direct" + stem + std::string{ fixture.extension });
+        std::filesystem::copy_file(
+            FixturePath(fixture), sourcePath, std::filesystem::copy_options::overwrite_existing, error);
+        Require(!error, "Packaged direct audio source could not be staged");
+        std::vector<std::uint8_t> sourceBytes = ReadFileBytesU8(sourcePath);
+        const std::string virtualPath = "/Game/Audio/Direct" + stem + std::string{ fixture.extension };
+        cases.push_back(PackagedAudioCase{
+            .manifestEntry = bake::RuntimeAssetManifestEntry{
+                .id = kb::assets::MakeAssetId(virtualPath + ":AudioClip"),
+                .type = "AudioClip",
+                .name = "Direct" + stem,
+                .virtualPath = virtualPath,
+                .sourceExtension = std::string{ fixture.extension },
+                .contentHash = bake::HashBakeBytes(sourceBytes),
+            },
+            .sourceBytes = std::move(sourceBytes),
+            .encodedExtension = std::string{ fixture.extension },
+            .encodedBytes = static_cast<std::size_t>(fixture.expectedBytes),
+            .imported = false,
+        });
+    }
+
+    {
+        kb::scene::Scene importScene;
+        const std::filesystem::path projectRoot = authoringRoot / "ImportedProject";
+        Require(importScene.Assets().MountProject(projectRoot),
+            "Packaged imported audio project could not be mounted");
+        for (const AudioFixture& fixture : kAudioFixtures) {
+            const std::string stem = fixture.extension == ".wav"
+                ? "Wave"
+                : fixture.extension == ".flac" ? "Flac" : "Mp3";
+            const std::filesystem::path sourcePath = inputRoot / ("Imported" + stem + std::string{ fixture.extension });
+            std::filesystem::copy_file(
+                FixturePath(fixture), sourcePath, std::filesystem::copy_options::overwrite_existing, error);
+            Require(!error, "Packaged imported audio source could not be staged");
+            const std::array<std::filesystem::path, 1U> sources{ sourcePath };
+            const kb::assets::AssetImportResult imported = kb::assets::AssetImportService::ImportFiles(
+                importScene.Assets().Manager(), sources, "/Game/Audio");
+            Require(imported.Succeeded() && imported.items.size() == 1U,
+                "Packaged imported audio source could not enter the asset pipeline");
+            const kb::assets::AssetImportItemResult& item = imported.items.front();
+            std::vector<std::uint8_t> containerBytes = ReadFileBytesU8(item.assetPhysicalPath);
+            const std::string virtualPath = item.virtualPath.generic_string();
+            cases.push_back(PackagedAudioCase{
+                .manifestEntry = bake::RuntimeAssetManifestEntry{
+                    .id = item.id,
+                    .type = "ImportedAsset",
+                    .importCategory = "Audio",
+                    .name = "Imported" + stem,
+                    .virtualPath = virtualPath,
+                    .sourceExtension = item.assetPhysicalPath.extension().generic_string(),
+                    .contentHash = bake::HashBakeBytes(containerBytes),
+                },
+                .sourceBytes = std::move(containerBytes),
+                .encodedExtension = std::string{ fixture.extension },
+                .encodedBytes = static_cast<std::size_t>(fixture.expectedBytes),
+                .imported = true,
+            });
+        }
+    }
+
+    const bake::BakeTargetProfile profile = bake::WindowsX64BakeTargetProfile();
+    bake::AssetPackWriter writer{ packPath, profile };
+    bake::RuntimeAssetManifest manifest{
+        .targetProfileId = std::string{ profile.identifier },
+        .targetProfileHash = bake::BakeTargetProfileFingerprint(profile),
+    };
+    manifest.descriptor.targetPlatforms = { "Windows" };
+    manifest.settings.name = "PackagedAudioTest";
+    const std::string scenePath = "/Game/Scenes/AudioRuntime.21kbscene";
+    manifest.settings.defaultMap = scenePath;
+    manifest.assets.reserve(cases.size() + 1U);
+    const std::filesystem::path authoredScenePath = authoringRoot / "AudioRuntime.21kbscene";
+    kb::scene::Scene authoredScene;
+    Require(kb::scene::SceneDocumentService::Save(
+                authoredScene, authoredScenePath, "AudioRuntime"),
+        "Packaged audio fixture could not write its runtime Scene");
+    const std::vector<std::uint8_t> sceneBytes = ReadFileBytesU8(authoredScenePath);
+    const bake::AssetBakeDigest sceneDigest = StorePackagedAudioSource(
+        writer, profile, sceneBytes, scenePath);
+    manifest.assets.push_back(bake::RuntimeAssetManifestEntry{
+        .id = kb::assets::MakeAssetId(scenePath + ":Scene"),
+        .type = "Scene",
+        .name = "AudioRuntime",
+        .virtualPath = scenePath,
+        .sourceExtension = ".21kbscene",
+        .contentHash = bake::HashBakeBytes(sceneBytes),
+        .artifacts = { bake::RuntimeArtifactReference{
+            .digest = sceneDigest,
+            .encoding = bake::RuntimeArtifactEncoding::SourceBytes,
+        } },
+    });
+    for (PackagedAudioCase& testCase : cases) {
+        const std::string settings = testCase.manifestEntry.type + ":"
+            + testCase.manifestEntry.sourceExtension + ":" + testCase.manifestEntry.virtualPath;
+        const bake::AssetBakeDigest digest = StorePackagedAudioSource(
+            writer, profile, testCase.sourceBytes, settings);
+        testCase.manifestEntry.artifacts.push_back(bake::RuntimeArtifactReference{
+            .digest = digest,
+            .encoding = bake::RuntimeArtifactEncoding::SourceBytes,
+        });
+        manifest.assets.push_back(testCase.manifestEntry);
+    }
+    std::vector<std::uint8_t> manifestBytes;
+    Require(bake::EncodeRuntimeAssetManifest(manifest, manifestBytes)
+            == bake::RuntimeAssetManifestStatus::Success,
+        "Packaged audio runtime manifest could not be encoded");
+    static_cast<void>(StorePackagedAudioBytes(
+        writer,
+        profile,
+        manifestBytes,
+        bake::kRuntimeManifestAssetTypeId,
+        "RuntimeManifest",
+        "packaged-audio-memory"));
+    Require(writer.Finish() == bake::BakedAssetSinkStatus::Success,
+        "Packaged audio cook could not publish its pack");
+
+    std::filesystem::remove_all(authoringRoot, error);
+    Require(!error && !std::filesystem::exists(authoringRoot),
+        "Packaged audio authoring sources could not be removed before runtime mount");
+
+    auto runtimePack = std::make_shared<bake::RuntimeAssetPack>();
+    Require(runtimePack->Mount(packPath, profile) == bake::RuntimeAssetPackStatus::Success,
+        "Packaged audio pack could not be mounted");
+    kb::scene::Scene runtimeScene;
+    kb::assets::AssetManager& manager = runtimeScene.Assets().Manager();
+    Require(manager.MountRuntimePack(runtimePack)
+            && manager.IsRuntimePackMounted()
+            && manager.Mounts().Resolve("/Game/Audio").has_value() == false,
+        "Packaged audio runtime did not enter pathless package mode");
+
+    kb::audio_miniaudio::MiniaudioClipResolver resolver;
+    kb::audio_miniaudio::MiniaudioPlaybackBackend backend;
+    Require(backend.ReinitializeForTesting(runtimeScene, true)
+            == kb::audio::AudioDeviceStatus::NoPlaybackDevice,
+        "Packaged audio offline backend could not initialize");
+    for (const PackagedAudioCase& testCase : cases) {
+        if (testCase.imported) {
+            const kb::assets::AssetHandle<kb::assets::ImportedAsset> loaded =
+                manager.Load<kb::assets::ImportedAsset>(testCase.manifestEntry.id);
+            Require(loaded.IsLoaded() && loaded->payload.size() == testCase.encodedBytes,
+                "Packaged imported audio did not load its encoded payload from the pack");
+        } else {
+            const kb::assets::AssetHandle<kb::audio::AudioClipAsset> loaded =
+                manager.Load<kb::audio::AudioClipAsset>(testCase.manifestEntry.id);
+            Require(loaded.IsLoaded() && loaded->IsMemoryBacked() && loaded->path.empty()
+                    && loaded->encodedBytes.size() == testCase.encodedBytes,
+                "Packaged direct audio did not load its encoded payload from the pack");
+        }
+        Require(manager.Unload(testCase.manifestEntry.id),
+            "Packaged audio preload could not be released before resolver validation");
+        {
+            const kb::audio_miniaudio::MiniaudioClipResolver::Resolution resolved =
+                resolver.Resolve(runtimeScene, testCase.manifestEntry.id.value);
+            Require(resolved.Succeeded() && resolved.clip.IsMemoryBacked()
+                    && resolved.clip.path.empty()
+                    && resolved.clip.extension == testCase.encodedExtension
+                    && resolved.clip.EncodedBytes().size() == testCase.encodedBytes,
+                "Packaged audio resolver did not return the expected memory-backed clip");
+        }
+        const kb::audio::AudioPlayResult voice = backend.PlayOneShotForTesting(
+            runtimeScene,
+            kb::audio::AudioPlayDesc{
+                .clipAssetId = testCase.manifestEntry.id.value,
+                .volume = 1.0F,
+                .loop = true,
+                .spatial = false,
+            });
+        Require(voice.Succeeded()
+                && backend.ResourcesForTesting().decoders == 1U
+                && backend.ResourcesForTesting().encodedPayloads == 1U
+                && !backend.VoiceUsesResourceManagerStreamForTesting(voice.voiceId),
+            "Packaged audio playback did not create exactly one memory decoder and payload owner");
+        Require(manager.Unload(testCase.manifestEntry.id),
+            "Packaged audio cache could not release its payload while a decoder owned it");
+        RequireVoiceDecodeEvidence(
+            backend,
+            runtimeScene,
+            voice.voiceId,
+            testCase.imported ? "Packaged imported audio" : "Packaged direct audio");
+        Require(backend.StopVoice(runtimeScene, voice.voiceId)
+                && SameResources(backend.ResourcesForTesting(), {}),
+            "Packaged audio voice retained a decoder or encoded payload after stop");
+    }
+    const auto validation = resolver.StatsForTesting();
+    Require(validation.attempts == cases.size()
+            && validation.payloadHashAttempts == kAudioFixtures.size(),
+        "Packaged audio validation did not distinguish pack-verified direct bytes from imported payload integrity");
+    backend.Shutdown();
 }
 
 void RunImportedMemoryLifecycleTest() {
@@ -2142,6 +2418,9 @@ int RunTests(int argc, char** argv) {
     }
     if (filter.empty() || filter == "import-memory") {
         RunImportedMemoryLifecycleTest();
+    }
+    if (filter.empty() || filter == "package-memory") {
+        RunPackagedAudioMemoryTest();
     }
     if (filter.empty() || filter == "sound") {
         RunSoundStateTest(clipPath);
