@@ -16,7 +16,10 @@
 
 #include <limits>
 #include <memory>
+#include <optional>
 #include <sstream>
+#include <utility>
+#include <vector>
 
 namespace kb::render {
 namespace {
@@ -110,16 +113,34 @@ void RuntimeTextureResourceEnsurer::Ensure(
                 asset = std::make_shared<const RenderTextureAssetData>(std::move(*decoded));
             }
         }
+        // A baked texture arrives in a GPU block format with its mip chain already built. The
+        // device decides whether it stays that way: bgfx reports per-format support in
+        // getCaps(), and handing createTexture a format this device cannot sample is a hard
+        // failure, so an unsupported bake is decoded back to RGBA8 and takes the path below
+        // exactly as an unbaked texture does.
+        if (asset != nullptr && asset->gpuBlocks.has_value()) {
+            const bool deviceSupports = RenderDeviceSupportsTextureFormat(asset->gpuBlocks->format, colorSpace);
+            if (SelectRenderTextureUploadPath(*asset, deviceSupports) == RenderTextureUploadPath::DecodedRgba8) {
+                std::optional<RenderTextureAssetData> decoded = DecodeRenderTextureToRgba8(*asset);
+                asset = decoded.has_value()
+                    ? std::make_shared<const RenderTextureAssetData>(std::move(*decoded))
+                    : nullptr;
+            }
+        }
+
         const TextureRef textureRef{ assetId, asset };
-        if (!textureRef.IsLoaded() || textureRef->rgba8.empty() ||
-            textureRef->rgba8.size() > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
+        const std::vector<std::uint8_t>* uploadBytes = textureRef.IsLoaded() && textureRef->gpuBlocks.has_value()
+            ? &textureRef->gpuBlocks->blocks
+            : (textureRef.IsLoaded() ? &textureRef->rgba8 : nullptr);
+        if (uploadBytes == nullptr || uploadBytes->empty() ||
+            uploadBytes->size() > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
             context.sceneRenderer.ResourceMap().UnbindTexture(textureAssetId, colorSpace);
             return;
         }
 
-        const std::vector<std::uint8_t>* uploadBytes = &textureRef->rgba8;
         std::optional<RuntimeTextureMipChain> generatedMipChain;
-        if (textureRef->dimension == RenderTextureDimension::Texture2D && textureRef->mipCount == 1U) {
+        if (!textureRef->gpuBlocks.has_value() && textureRef->dimension == RenderTextureDimension::Texture2D &&
+            textureRef->mipCount == 1U) {
             generatedMipChain = BuildRuntimeTexture2DMipChain(textureRef->rgba8, textureRef->width, textureRef->height, colorSpace);
             if (!generatedMipChain.has_value() ||
                 generatedMipChain->rgba8.size() > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {

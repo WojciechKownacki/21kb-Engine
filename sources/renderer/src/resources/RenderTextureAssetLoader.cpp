@@ -555,11 +555,82 @@ RenderTextureDesc RenderTextureAssetData::MakeDesc(const bgfx::Memory* memory, R
         .layers = layers,
         .mipCount = mipCount,
         .dimension = dimension,
-        .format = bgfx::TextureFormat::RGBA8,
+        .format = gpuBlocks.has_value() ? gpuBlocks->format : bgfx::TextureFormat::RGBA8,
         .flags = BGFX_SAMPLER_NONE | (runtimeColorSpace == RenderTextureColorSpace::Srgb ? BGFX_TEXTURE_SRGB : 0ULL),
         .memory = memory,
         .colorSpace = runtimeColorSpace,
     };
+}
+
+RenderTextureUploadPath SelectRenderTextureUploadPath(
+    const RenderTextureAssetData& asset,
+    bool deviceSupportsBakedFormat) noexcept {
+    if (!asset.gpuBlocks.has_value() || asset.gpuBlocks->blocks.empty()) {
+        return RenderTextureUploadPath::DecodedRgba8;
+    }
+    // A baked payload that somehow says RGBA8 is not a block format and has nothing to gain
+    // from this path; treat it as unbaked rather than inventing a second RGBA8 upload route.
+    if (asset.gpuBlocks->format == bgfx::TextureFormat::RGBA8) {
+        return RenderTextureUploadPath::DecodedRgba8;
+    }
+    return deviceSupportsBakedFormat ? RenderTextureUploadPath::GpuBlocks : RenderTextureUploadPath::DecodedRgba8;
+}
+
+bool RenderDeviceSupportsTextureFormat(bgfx::TextureFormat::Enum format, RenderTextureColorSpace colorSpace) noexcept {
+    if (format < 0 || format >= bgfx::TextureFormat::Count) {
+        return false;
+    }
+    // bgfx::getCaps() hands back a pointer to a global that exists from process start and is
+    // only filled in by bgfx::init, so it is never null and it reads all-zero before a device
+    // comes up. That zero is the answer we want with no device: nothing is supported, so a
+    // caller decodes instead of guessing.
+    const std::uint32_t support = bgfx::getCaps()->formats[static_cast<std::size_t>(format)];
+    // TEXTURE_2D means the device samples the format natively. The EMULATED bit is deliberately
+    // not accepted: bgfx satisfies it by converting the surface on the CPU, which is the cost a
+    // baked block format exists to avoid, and for a block format there is no conversion anyway.
+    const std::uint32_t required = colorSpace == RenderTextureColorSpace::Srgb
+        ? static_cast<std::uint32_t>(BGFX_CAPS_FORMAT_TEXTURE_2D | BGFX_CAPS_FORMAT_TEXTURE_2D_SRGB)
+        : static_cast<std::uint32_t>(BGFX_CAPS_FORMAT_TEXTURE_2D);
+    return (support & required) == required;
+}
+
+std::optional<RenderTextureAssetData> DecodeRenderTextureToRgba8(const RenderTextureAssetData& asset) {
+    if (!asset.gpuBlocks.has_value()) {
+        return asset;
+    }
+    if (asset.width == 0U || asset.height == 0U || asset.dimension != RenderTextureDimension::Texture2D ||
+        asset.depth != 1U || asset.layers != 1U) {
+        return std::nullopt;
+    }
+
+    const auto format = static_cast<bimg::TextureFormat::Enum>(asset.gpuBlocks->format);
+    // Only a block format is decoded back. bimg's uncompressed fall-through fills the target
+    // with a checkerboard for anything it does not know, and a checkerboard rendered as if it
+    // were the texture is precisely the silent wrongness this fallback exists to prevent.
+    if (format < 0 || format >= bimg::TextureFormat::Count || !bimg::isCompressed(format)) {
+        return std::nullopt;
+    }
+    const std::uint32_t levelBytes = bimg::imageGetSize(
+        nullptr, asset.width, asset.height, 1U, false, false, 1U, format);
+    if (levelBytes == 0U || asset.gpuBlocks->blocks.size() < levelBytes) {
+        return std::nullopt;
+    }
+
+    RenderTextureAssetData decoded = asset;
+    decoded.gpuBlocks.reset();
+    decoded.mipCount = 1U;
+    decoded.rgba8.assign(static_cast<std::size_t>(asset.width) * asset.height * 4U, 0U);
+
+    bx::DefaultAllocator allocator;
+    bimg::imageDecodeToRgba8(
+        &allocator,
+        decoded.rgba8.data(),
+        asset.gpuBlocks->blocks.data(),
+        asset.width,
+        asset.height,
+        static_cast<std::uint32_t>(asset.width) * 4U,
+        format);
+    return decoded;
 }
 
 std::string_view RenderTextureAssetLoader::Type() const noexcept {

@@ -4,6 +4,7 @@ add_library(kb_renderer STATIC
     include/kb/render/Renderer.hpp
     include/kb/render/RendererCapabilityReport.hpp
     include/kb/render/RenderSurface.hpp
+    include/kb/render/bake/TextureBaker.hpp
     include/kb/render/SceneDeferredLightingPass.hpp
     include/kb/render/SceneDepthPolicy.hpp
     include/kb/render/SceneFramebuffer.hpp
@@ -102,6 +103,7 @@ add_library(kb_renderer STATIC
     include/kb/render/shadow/ShadowMapResource.hpp
     include/kb/render/ViewIdPolicy.hpp
     src/BgfxContext.cpp
+    src/bake/TextureBaker.cpp
     src/DisplayConfig.cpp
     src/Renderer.cpp
     src/RendererCapabilityReport.cpp
@@ -556,6 +558,7 @@ target_link_libraries(kb_renderer
         bx
         bimg
         bimg_decode
+        bimg_encode
         kb_ufbx
 )
 
@@ -595,6 +598,7 @@ if(BUILD_TESTING)
         tests/SceneRenderExtractorTests.cpp
         tests/ShaderManifestTests.cpp
         tests/ShaderPrewarmParseTests.cpp
+        tests/TextureBakeTests.cpp
     )
 
     target_link_libraries(kb_renderer_tests

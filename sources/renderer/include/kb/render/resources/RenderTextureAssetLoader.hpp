@@ -28,6 +28,18 @@ enum class RenderTextureAssetSemantic : std::uint8_t {
     Emissive,
 };
 
+// A texture that reached the runtime ALREADY in a GPU block format, which is what a bake
+// produces. `blocks` is the complete mip chain in `format`, level 0 first and levels packed
+// back to back, i.e. exactly the layout bgfx::createTexture2D expects for its memory.
+//
+// This is the one payload the CPU never touches: decoding it back to RGBA8 would give back
+// every byte the bake saved and add a decoder on the load path, which is the whole reason a
+// texture is baked at all.
+struct RenderTextureGpuBlocks {
+    bgfx::TextureFormat::Enum format = bgfx::TextureFormat::Count;
+    std::vector<std::uint8_t> blocks;
+};
+
 struct RenderTextureAssetData {
     std::uint16_t width = 0;
     std::uint16_t height = 0;
@@ -41,9 +53,46 @@ struct RenderTextureAssetData {
     RenderTextureAssetColorSpace colorSpace = RenderTextureAssetColorSpace::Unknown;
     RenderTextureAssetSemantic semantic = RenderTextureAssetSemantic::Unknown;
     std::vector<std::uint8_t> rgba8;
+    // Set only for a baked texture. `gpuBlocks` and `rgba8` are alternatives, never both: when
+    // this holds a value `rgba8` is empty and `mipCount` counts the levels inside it, and when
+    // it is empty the asset is exactly what it has always been - `rgba8` holding LOD0.
+    std::optional<RenderTextureGpuBlocks> gpuBlocks;
 
     [[nodiscard]] RenderTextureDesc MakeDesc(const bgfx::Memory* memory, RenderTextureColorSpace runtimeColorSpace = RenderTextureColorSpace::Linear) const noexcept;
 };
+
+// How a loaded texture is allowed to reach the GPU.
+enum class RenderTextureUploadPath : std::uint8_t {
+    // Hand the bytes to bgfx unchanged. The only path that keeps a bake's savings.
+    GpuBlocks,
+    // Decode LOD0 back to RGBA8 first and take the path every unbaked texture takes.
+    DecodedRgba8,
+};
+
+// The device, not the baker, has the last word. `deviceSupportsBakedFormat` is
+// RenderDeviceSupportsTextureFormat's answer for this asset's baked format; a format the
+// device cannot sample is a hard bgfx failure at createTexture, not a quality drop, so an
+// unsupported bake falls back rather than being handed over and hoped for. An asset with no
+// baked payload always answers DecodedRgba8 - there is nothing else it could mean.
+[[nodiscard]] RenderTextureUploadPath SelectRenderTextureUploadPath(
+    const RenderTextureAssetData& asset,
+    bool deviceSupportsBakedFormat) noexcept;
+
+// Whether the running device can sample `format` as a 2D texture, read from
+// bgfx::getCaps()->formats[]. sRGB is asked for separately because bgfx reports it as its own
+// capability bit: a device may take the block format and still refuse to decode it as sRGB,
+// and sampling that texture as linear would wash out every surface it is on. Answers false
+// when bgfx is not initialised, so a caller with no device decodes rather than guesses.
+[[nodiscard]] bool RenderDeviceSupportsTextureFormat(
+    bgfx::TextureFormat::Enum format,
+    RenderTextureColorSpace colorSpace) noexcept;
+
+// LOD0 of a baked texture, decoded back to RGBA8 - the fallback for a device that cannot
+// sample the baked format. Returns the asset unchanged when it carries no baked payload, and
+// nullopt when the payload cannot be decoded, which is a bad bake rather than a texture to
+// salvage. The result has no mip chain, so it re-enters the same runtime mip generation an
+// unbaked texture goes through.
+[[nodiscard]] std::optional<RenderTextureAssetData> DecodeRenderTextureToRgba8(const RenderTextureAssetData& asset);
 
 class RenderTextureAssetLoader final : public kb::assets::IAssetLoader {
 public:
