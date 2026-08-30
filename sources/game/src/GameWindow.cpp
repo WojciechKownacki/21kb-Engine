@@ -66,14 +66,29 @@ bool GameWindow::Open(
         return false;
     }
 
+    // Windows overrides the first ShowWindow of a process whose launcher passed
+    // STARTF_USESHOWWINDOW, so a shortcut set to "Run: minimized" - or any
+    // launcher that starts the game minimized - lands here with a zero client
+    // area, which no renderer can be initialized against. The game asks for its
+    // window back rather than refusing to start.
+    ShowWindow(window_, SW_SHOWNORMAL);
     RECT client{};
     if (GetClientRect(window_, &client) == 0) {
         return false;
     }
+    if (client.right <= client.left || client.bottom <= client.top) {
+        ShowWindow(window_, SW_RESTORE);
+        if (GetClientRect(window_, &client) == 0) {
+            return false;
+        }
+    }
+    if (client.right <= client.left || client.bottom <= client.top) {
+        return false;
+    }
     width_ = static_cast<std::uint32_t>(client.right - client.left);
     height_ = static_cast<std::uint32_t>(client.bottom - client.top);
+    resizePending_ = true;
 
-    ShowWindow(window_, SW_SHOWNORMAL);
     UpdateWindow(window_);
     return true;
 }

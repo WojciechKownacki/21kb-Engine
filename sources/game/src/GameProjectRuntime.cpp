@@ -26,12 +26,85 @@
 #endif
 #include <Windows.h>
 
+#include <algorithm>
+#include <limits>
 #include <memory>
 #include <ostream>
 #include <system_error>
 #include <utility>
 
 namespace kb::game {
+
+float RuntimeDeltaSeconds(
+    std::chrono::steady_clock::time_point previous,
+    std::chrono::steady_clock::time_point current) noexcept {
+    const std::chrono::duration<float> delta = current - previous;
+    return std::clamp(delta.count(), 0.0F, kMaximumRuntimeDeltaSeconds);
+}
+
+std::optional<std::string> TryNarrow(std::wstring_view text) {
+    if (text.empty()) {
+        return std::string{};
+    }
+    if (text.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+        return std::nullopt;
+    }
+    const UINT codePage = GetACP();
+    // WC_NO_BEST_FIT_CHARS and a replacement character are rejected outright for
+    // UTF-8, which is also the one code page that can spell everything.
+    const bool utf8 = codePage == CP_UTF8;
+    const DWORD flags = utf8 ? 0UL : static_cast<DWORD>(WC_NO_BEST_FIT_CHARS);
+    const char* const replacement = utf8 ? nullptr : "?";
+    const auto length = static_cast<int>(text.size());
+    const int required =
+        WideCharToMultiByte(codePage, flags, text.data(), length, nullptr, 0, replacement, nullptr);
+    if (required <= 0) {
+        return std::nullopt;
+    }
+    std::string narrow(static_cast<std::size_t>(required), '\0');
+    BOOL usedReplacement = FALSE;
+    const int written = WideCharToMultiByte(
+        codePage,
+        flags,
+        text.data(),
+        length,
+        narrow.data(),
+        required,
+        replacement,
+        utf8 ? nullptr : &usedReplacement);
+    if (written <= 0 || usedReplacement != FALSE) {
+        return std::nullopt;
+    }
+    narrow.resize(static_cast<std::size_t>(written));
+    return narrow;
+}
+
+std::string NarrowForDiagnostics(std::wstring_view text) {
+    if (std::optional<std::string> exact = TryNarrow(text); exact.has_value()) {
+        return *std::move(exact);
+    }
+    if (text.empty() || text.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+        return std::string{ "<unprintable>" };
+    }
+    const auto length = static_cast<int>(text.size());
+    const int required =
+        WideCharToMultiByte(CP_ACP, 0UL, text.data(), length, nullptr, 0, "?", nullptr);
+    if (required <= 0) {
+        return std::string{ "<unprintable>" };
+    }
+    std::string narrow(static_cast<std::size_t>(required), '\0');
+    const int written = WideCharToMultiByte(
+        CP_ACP, 0UL, text.data(), length, narrow.data(), required, "?", nullptr);
+    if (written <= 0) {
+        return std::string{ "<unprintable>" };
+    }
+    narrow.resize(static_cast<std::size_t>(written));
+    return narrow;
+}
+
+std::string NarrowForDiagnostics(const std::filesystem::path& path) {
+    return NarrowForDiagnostics(std::wstring_view{ path.native() });
+}
 
 std::filesystem::path ExecutableDirectory() {
     std::wstring buffer;
@@ -59,7 +132,7 @@ bool ReadGameProjectRuntime(
     const std::filesystem::path absoluteInput =
         std::filesystem::absolute(projectPath, pathError).lexically_normal();
     if (pathError) {
-        err << "project path could not be resolved: " << projectPath.string() << '\n';
+        err << "project path could not be resolved: " << NarrowForDiagnostics(projectPath) << '\n';
         return false;
     }
 
@@ -68,7 +141,7 @@ bool ReadGameProjectRuntime(
         projectFile /= "Project.21kbproject";
     }
     if (pathError || !std::filesystem::is_regular_file(projectFile, pathError) || pathError) {
-        err << "project descriptor was not found: " << projectFile.string() << '\n';
+        err << "project descriptor was not found: " << NarrowForDiagnostics(projectFile) << '\n';
         return false;
     }
 
@@ -105,7 +178,13 @@ bool ReadGameProjectRuntime(
         const std::filesystem::path projectLocalPath = runtime.projectRoot / configuredPath;
         std::error_code pluginError;
         if (std::filesystem::is_regular_file(projectLocalPath, pluginError) && !pluginError) {
-            plugin.binaryPath = projectLocalPath.string();
+            // A project-local binary is only worth naming when the name survives
+            // the trip through the process code page; a path that cannot be
+            // spelled exactly keeps the portable filename the descriptor stored.
+            if (std::optional<std::string> exact = TryNarrow(projectLocalPath.native());
+                exact.has_value()) {
+                plugin.binaryPath = *std::move(exact);
+            }
         }
     }
 
@@ -177,7 +256,7 @@ bool LoadGameProjectScene(
         return false;
     }
     if (!scene.Assets().MountProject(runtime.projectRoot)) {
-        err << "project assets could not be mounted: " << runtime.projectRoot.string() << '\n';
+        err << "project assets could not be mounted: " << NarrowForDiagnostics(runtime.projectRoot) << '\n';
         return false;
     }
     discoveredAssets = scene.Assets().Discover();
@@ -202,7 +281,7 @@ bool LoadGameProjectScene(
         }
     }
     if (!kb::scene::SceneDocumentService::LoadFileIntoScene(scene, loadedScenePath)) {
-        err << "project scene could not be loaded: " << loadedScenePath.string() << '\n';
+        err << "project scene could not be loaded: " << NarrowForDiagnostics(loadedScenePath) << '\n';
         return false;
     }
 

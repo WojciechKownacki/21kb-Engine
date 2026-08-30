@@ -51,6 +51,24 @@ kb_target_copy_bgfx_runtime_shaders(kb_game)
 kb_target_stage_material_graph_shader_cache(kb_game)
 
 if(BUILD_TESTING)
+    # The shared bootstrap, run directly. The launch test drives the executable
+    # against a project with no plugins, no physics layers and no input mapping,
+    # so it cannot reach most of what kb_game_core does.
+    add_executable(kb_game_core_tests
+        tests/KbGameCoreTests.cpp
+    )
+
+    target_link_libraries(kb_game_core_tests PRIVATE kb_game_core)
+
+    add_test(NAME kb_game_core COMMAND $<TARGET_FILE:kb_game_core_tests>)
+    set_tests_properties(kb_game_core PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        LABELS "game;runtime"
+        TIMEOUT 120
+    )
+
+    kb_apply_quality_gates(kb_game_core_tests)
+
     add_executable(kb_game_tests
         tests/KbGameLaunchTests.cpp
     )
@@ -68,7 +86,9 @@ if(BUILD_TESTING)
     set_tests_properties(kb_game_launch PROPERTIES
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
         LABELS "game;runtime"
-        TIMEOUT 180
+        # Nine launches of the real executable, four of which have to be given
+        # long enough to prove they are a refusal rather than a hang.
+        TIMEOUT 420
     )
 
     kb_apply_quality_gates(kb_game_tests)
