@@ -75,12 +75,21 @@ namespace {
 } // namespace
 
 bgfx::ShaderHandle ShaderLoader::Load(const char* name) {
+    // No profile directory means we ship no binaries for the renderer that came
+    // up. Fail here rather than search some other backend's directory: bgfx's
+    // .bin header has no backend identifier, so a mismatched blob is a hard
+    // BGFX_FATAL, not a load error the caller could recover from.
+    const char* profileDirectory = ShaderProfileDirectoryForRenderer(bgfx::getRendererType());
+    if (profileDirectory == nullptr) {
+        return BGFX_INVALID_HANDLE;
+    }
+
     const std::string exeDir = ExecutableDirectory();
     std::vector<std::uint8_t> bytes;
     char resolvedPath[512]{};
     for (const std::string& root : ShaderSearchRoots(exeDir)) {
         char path[512]{};
-        bx::snprintf(path, sizeof(path), "%s/%s/%s.bin", root.empty() ? "." : root.c_str(), ShaderProfileDirectoryForRenderer(bgfx::getRendererType()), name);
+        bx::snprintf(path, sizeof(path), "%s/%s/%s.bin", root.empty() ? "." : root.c_str(), profileDirectory, name);
         bytes = ReadFileBytes(path);
         if (!bytes.empty()) {
             bx::strCopy(resolvedPath, sizeof(resolvedPath), path);

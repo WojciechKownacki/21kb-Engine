@@ -41,6 +41,15 @@ struct ShaderManifestValidationResult {
 };
 
 [[nodiscard]] const char* ShaderStageName(ShaderStage stage) noexcept;
+
+// Leaf directory holding the shader binaries for `renderer`, e.g.
+// "shaders/spirv". Returns NULLPTR for a backend we ship no bytecode for, and
+// callers must treat that as "this renderer has no shaders", not substitute one.
+//
+// There is no fallback on purpose: a bgfx .bin header carries no backend
+// identifier, so a backend handed another backend's blob does not fail to load,
+// it takes a hard BGFX_FATAL. A wrong directory is therefore strictly worse than
+// no directory.
 [[nodiscard]] const char* ShaderProfileDirectoryForRenderer(bgfx::RendererType::Enum renderer) noexcept;
 [[nodiscard]] std::span<const ShaderManifestEntry> RequiredShaderManifest() noexcept;
 [[nodiscard]] std::span<const ShaderProgramManifestEntry> RequiredShaderProgramManifest() noexcept;

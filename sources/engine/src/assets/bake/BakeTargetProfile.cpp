@@ -7,10 +7,11 @@
 namespace kb::assets::bake {
 namespace {
 
-constexpr std::array<BakeTargetProfile, 3U> kProfiles{
+constexpr std::array<BakeTargetProfile, 4U> kProfiles{
     WindowsX64BakeTargetProfile(),
     LinuxX64BakeTargetProfile(),
     AndroidArm64BakeTargetProfile(),
+    WebWasm32BakeTargetProfile(),
 };
 
 [[nodiscard]] constexpr bool IsPowerOfTwo(std::uint32_t value) noexcept {
@@ -33,12 +34,19 @@ std::string_view ShaderBakeBackendName(ShaderBakeBackend backend) noexcept {
         return "essl";
     case ShaderBakeBackend::Metal:
         return "metal";
+    case ShaderBakeBackend::Wgsl:
+        return "wgsl";
     }
     return {};
 }
 
 bool IsValidBakeTargetProfile(const BakeTargetProfile& profile) noexcept {
     if (!IsValidBakeCacheName(profile.identifier)) {
+        return false;
+    }
+    constexpr TextureCompressionFamilyMask kKnownFamilies =
+        (static_cast<TextureCompressionFamilyMask>(1U) << kTextureCompressionFamilyCount) - 1U;
+    if (profile.textureCompressions == 0U || (profile.textureCompressions & ~kKnownFamilies) != 0U) {
         return false;
     }
     constexpr ShaderBakeBackendMask kKnownBackends =
