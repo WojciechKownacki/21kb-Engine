@@ -6,6 +6,7 @@
 #include "project/EditorProjectPaths.hpp"
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
 
+#include <exception>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -89,7 +90,9 @@ int RunEditor() {
 } // namespace
 
 #if defined(_WIN32)
-int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
+namespace {
+
+int RunEditorEntryPoint() {
     int argc = 0;
     wchar_t** argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     bool selfTest = false;
@@ -144,6 +147,31 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     // synchronous, deterministic binding is wanted.)
     kb::render::RenderTextureAssetLoader::SetAsyncTextureDecodeEnabled(true);
     return RunEditor();
+}
+
+} // namespace
+
+int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
+    // The editor is a windowed process: it owns no console, so an escaped C++
+    // exception does not print anything and stop - it reaches std::terminate and
+    // abort(), which puts up a modal runtime dialog and waits. Nothing dismisses
+    // that dialog in an automated run and nobody can act on it in an interactive
+    // one, so the editor appears to hang rather than to fail. The unhandled
+    // exception logger installed above catches structured exceptions; this
+    // catches C++ ones, and writes what it caught where the crash breadcrumbs
+    // already are, so a report survives.
+    try {
+        return RunEditorEntryPoint();
+    } catch (const std::exception& error) {
+        kb::editor::EditorCrashBreadcrumbs::Write("app", "unhandled exception");
+        kb::editor::EditorCrashBreadcrumbs::Write("app", error.what());
+        kb::editor::EditorCrashBreadcrumbs::WriteCrashReport("unhandled C++ exception");
+        return 3;
+    } catch (...) {
+        kb::editor::EditorCrashBreadcrumbs::Write("app", "unhandled exception of unknown type");
+        kb::editor::EditorCrashBreadcrumbs::WriteCrashReport("unhandled C++ exception");
+        return 3;
+    }
 }
 #else
 int main(int argc, char** argv) {

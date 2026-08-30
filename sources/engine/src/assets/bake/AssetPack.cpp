@@ -201,6 +201,17 @@ AssetPackReadStatus DecodeAssetPackIndex(
     std::span<const std::uint8_t> bytes,
     std::uint32_t artifactCount,
     std::vector<AssetPackArtifactEntry>& out) {
+    // Every artifact entry costs at least this much of the index -- a 128-bit key, a
+    // length-prefixed type name and a block count -- so a count the buffer could not possibly
+    // hold is refused BEFORE it sizes a reservation. kMaxAssetPackIndexBytes bounds what a
+    // hostile header can make a reader READ; on its own it does not bound what one can make a
+    // reader ALLOCATE, because the artifact count is a 32-bit field of the header's own and a
+    // count of 2^32-1 asks for hundreds of gigabytes here. The same guard the block count
+    // below already had, for the same reason.
+    constexpr std::size_t kMinArtifactEntryBytes = 8U + 8U + 1U + 4U;
+    if (bytes.size() / kMinArtifactEntryBytes < artifactCount) {
+        return AssetPackReadStatus::IndexCorrupt;
+    }
     std::vector<AssetPackArtifactEntry> artifacts;
     artifacts.reserve(artifactCount);
 

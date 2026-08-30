@@ -168,6 +168,8 @@ std::string_view ToString(BakedAssetSinkStatus status) noexcept {
         return "BlockTooLarge";
     case BakedAssetSinkStatus::PackAlreadyFinished:
         return "PackAlreadyFinished";
+    case BakedAssetSinkStatus::StagingConflict:
+        return "StagingConflict";
     }
     return "Unknown";
 }

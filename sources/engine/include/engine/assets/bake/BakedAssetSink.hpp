@@ -96,6 +96,13 @@ enum class BakedAssetSinkStatus : std::uint8_t {
     // package. Only a container sink reports it; a loose sink publishes per
     // artifact and is never finished.
     PackAlreadyFinished,
+    // Something else took the staging files this container sink was building
+    // its package in. The staging names are derived from the destination, so a
+    // second writer aimed at the same package truncates them -- and the bytes
+    // that come back at assembly time are then somebody else's. Reported
+    // instead of publishing a package whose blocks do not belong to the keys
+    // that name them; the destination is left untouched.
+    StagingConflict,
 };
 
 [[nodiscard]] std::string_view ToString(BakedAssetSinkStatus status) noexcept;

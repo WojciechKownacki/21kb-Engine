@@ -2019,11 +2019,17 @@ void RunBakedTextureGpuUploadTest() {
     const std::filesystem::path fragmentSource = shaderDirectory / "fs_blit.sc";
     {
         std::ofstream out{ fragmentSource, std::ios::trunc };
+        // An EXPLICIT level, not the one the hardware would pick. With an implicit LOD this
+        // test reaches level 0 and nothing else, which leaves every mip the baker built --
+        // 56 of this fixture's 184 payload bytes -- handed to createTexture2D and never looked
+        // at. Measured: corrupting the last two bytes of the payload before the upload was
+        // invisible until this uniform existed.
         out << "$input v_texcoord0\n"
             << "#include <bgfx_shader.sh>\n"
             << "SAMPLER2D(s_baked, 0);\n"
+            << "uniform vec4 u_bakedLevel;\n"
             << "void main()\n{\n"
-            << "    gl_FragColor = texture2D(s_baked, v_texcoord0);\n"
+            << "    gl_FragColor = texture2DLod(s_baked, v_texcoord0, u_bakedLevel.x);\n"
             << "}\n";
     }
 
@@ -2060,6 +2066,7 @@ void RunBakedTextureGpuUploadTest() {
 
     bool sampledMatches = false;
     std::array<std::uint8_t, 4U> sampled{};
+    std::uint16_t sampledLevel = 0U;
     {
         // THE POINT OF THE WHOLE TEST: the baked blocks, exactly as they came off the disk,
         // handed straight to bgfx::createTexture2D in their baked format.
@@ -2089,34 +2096,15 @@ void RunBakedTextureGpuUploadTest() {
             BGFX_TEXTURE_READ_BACK | BGFX_TEXTURE_BLIT_DST);
         const bgfx::FrameBufferHandle frameBuffer = bgfx::createFrameBuffer(1U, &color, false);
         const bgfx::UniformHandle sampler = bgfx::createUniform("s_baked", bgfx::UniformType::Sampler);
+        const bgfx::UniformHandle levelUniform = bgfx::createUniform("u_bakedLevel", bgfx::UniformType::Vec4);
         const bgfx::ShaderHandle vertexShader =
             bgfx::createShader(bgfx::copy(vertexBytes.data(), static_cast<std::uint32_t>(vertexBytes.size())));
         const bgfx::ShaderHandle fragmentShader =
             bgfx::createShader(bgfx::copy(fragmentBytes.data(), static_cast<std::uint32_t>(fragmentBytes.size())));
         const bgfx::ProgramHandle program = bgfx::createProgram(vertexShader, fragmentShader, true);
         Require(bgfx::isValid(vertices) && bgfx::isValid(frameBuffer) && bgfx::isValid(program) &&
-                bgfx::isValid(readback),
+                bgfx::isValid(readback) && bgfx::isValid(levelUniform),
             "The GPU upload test could not build its sampling pipeline");
-
-        bgfx::setViewFrameBuffer(0U, frameBuffer);
-        bgfx::setViewRect(0U, 0U, 0U, NativeTestSurface::kExtent, NativeTestSurface::kExtent);
-        bgfx::setViewClear(0U, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0x000000FFU, 1.0F, 0U);
-        bgfx::touch(0U);
-        bgfx::setTexture(0U, sampler, baked, BGFX_SAMPLER_POINT | BGFX_SAMPLER_UVW_CLAMP);
-        bgfx::setVertexBuffer(0U, vertices);
-        bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
-        bgfx::submit(0U, program);
-        bgfx::frame();
-
-        std::vector<std::uint8_t> pixels(
-            static_cast<std::size_t>(NativeTestSurface::kExtent) * NativeTestSurface::kExtent * 4U, 0U);
-        bgfx::blit(1U, readback, 0U, 0U, color, 0U, 0U, NativeTestSurface::kExtent, NativeTestSurface::kExtent);
-        const std::uint32_t readyFrame = bgfx::readTexture(readback, pixels.data());
-        std::uint32_t frame = bgfx::frame();
-        for (std::uint32_t guard = 0U; frame < readyFrame && guard < 8U; ++guard) {
-            frame = bgfx::frame();
-        }
-        Require(frame >= readyFrame, "The GPU upload test's readback did not complete");
 
         // bgfx's RGBA8 read-back comes out in the backbuffer's channel order, so the comparison
         // is against both orders: what is being proved is that the GPU decoded the block, not
@@ -2125,23 +2113,55 @@ void RunBakedTextureGpuUploadTest() {
             const int difference = static_cast<int>(lhs) - static_cast<int>(rhs);
             return (difference < 0 ? -difference : difference) <= 6;
         };
-        // EVERY pixel, not one: the source is a flat colour, so every texel of every block has
-        // to come back the same. Sampling a single texel would leave a corrupted block outside
-        // the sampled tile invisible, which is exactly what a mutation test showed.
+
+        // ONE PASS PER MIP LEVEL, at an explicit LOD. The source is a flat colour, so every
+        // level of the chain decodes to the same colour and the expected value costs nothing
+        // extra -- but a corrupted block in ANY level now changes pixels that are read back.
+        // Measured on the version of this test that sampled an implicit LOD: corrupting the
+        // last two bytes of the payload, which are the 1x1 level, left the suite green.
         sampledMatches = true;
-        for (std::size_t pixel = 0U; pixel < pixels.size() && sampledMatches; pixel += 4U) {
-            const std::array<std::uint8_t, 4U> texel{ pixels[pixel + 0U], pixels[pixel + 1U],
-                pixels[pixel + 2U], pixels[pixel + 3U] };
-            const bool matches = (closeEnough(texel[0], expected[0]) && closeEnough(texel[1], expected[1]) &&
-                                     closeEnough(texel[2], expected[2])) ||
-                (closeEnough(texel[0], expected[2]) && closeEnough(texel[1], expected[1]) &&
-                    closeEnough(texel[2], expected[0]));
-            if (!matches) {
-                sampled = texel;
-                sampledMatches = false;
+        for (std::uint16_t level = 0U; level < asset->mipCount && sampledMatches; ++level) {
+            const std::array<float, 4U> levelValue{ static_cast<float>(level), 0.0F, 0.0F, 0.0F };
+            bgfx::setViewFrameBuffer(0U, frameBuffer);
+            bgfx::setViewRect(0U, 0U, 0U, NativeTestSurface::kExtent, NativeTestSurface::kExtent);
+            bgfx::setViewClear(0U, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0x000000FFU, 1.0F, 0U);
+            bgfx::touch(0U);
+            bgfx::setTexture(0U, sampler, baked, BGFX_SAMPLER_POINT | BGFX_SAMPLER_UVW_CLAMP);
+            bgfx::setUniform(levelUniform, levelValue.data());
+            bgfx::setVertexBuffer(0U, vertices);
+            bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
+            bgfx::submit(0U, program);
+            bgfx::frame();
+
+            std::vector<std::uint8_t> pixels(
+                static_cast<std::size_t>(NativeTestSurface::kExtent) * NativeTestSurface::kExtent * 4U, 0U);
+            bgfx::blit(1U, readback, 0U, 0U, color, 0U, 0U, NativeTestSurface::kExtent, NativeTestSurface::kExtent);
+            const std::uint32_t readyFrame = bgfx::readTexture(readback, pixels.data());
+            std::uint32_t frame = bgfx::frame();
+            for (std::uint32_t guard = 0U; frame < readyFrame && guard < 8U; ++guard) {
+                frame = bgfx::frame();
+            }
+            Require(frame >= readyFrame, "The GPU upload test's readback did not complete");
+
+            // EVERY pixel, not one: the source is a flat colour, so every texel of every block
+            // has to come back the same. Sampling a single texel would leave a corrupted block
+            // outside the sampled tile invisible, which is exactly what a mutation test showed.
+            for (std::size_t pixel = 0U; pixel < pixels.size() && sampledMatches; pixel += 4U) {
+                const std::array<std::uint8_t, 4U> texel{ pixels[pixel + 0U], pixels[pixel + 1U],
+                    pixels[pixel + 2U], pixels[pixel + 3U] };
+                const bool matches = (closeEnough(texel[0], expected[0]) && closeEnough(texel[1], expected[1]) &&
+                                         closeEnough(texel[2], expected[2])) ||
+                    (closeEnough(texel[0], expected[2]) && closeEnough(texel[1], expected[1]) &&
+                        closeEnough(texel[2], expected[0]));
+                if (!matches) {
+                    sampled = texel;
+                    sampledLevel = level;
+                    sampledMatches = false;
+                }
             }
         }
 
+        bgfx::destroy(levelUniform);
         bgfx::destroy(program);
         bgfx::destroy(sampler);
         bgfx::destroy(frameBuffer);
@@ -2154,8 +2174,9 @@ void RunBakedTextureGpuUploadTest() {
 
     if (!sampledMatches) {
         std::fprintf(stderr,
-            "baked block sampled on the GPU as %u %u %u %u, CPU decode of the same bytes is %u %u %u\n",
-            sampled[0], sampled[1], sampled[2], sampled[3], expected[0], expected[1], expected[2]);
+            "baked block at level %u sampled on the GPU as %u %u %u %u, CPU decode of the same bytes is %u %u %u\n",
+            static_cast<unsigned>(sampledLevel), sampled[0], sampled[1], sampled[2], sampled[3], expected[0],
+            expected[1], expected[2]);
     }
     Require(sampledMatches,
         "A baked block handed straight to createTexture2D did not sample as the colour those bytes decode to");

@@ -4,7 +4,10 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <system_error>
 #include <utility>
@@ -21,6 +24,32 @@ constexpr std::wstring_view kStagingPayloadSuffix = L".kbpackpayload";
 // Chunk the assembly pass copies with. Big enough that the copy is bound by the disk rather
 // than by the loop, small enough that it is not a memory decision.
 constexpr std::size_t kAssemblyChunkBytes = 1024U * 1024U;
+
+// The staging payload opens with a stamp: a constant, and a value unique to the writer that
+// created the file. The staging names are DERIVED FROM THE DESTINATION -- deliberately, so a
+// killed run's debris is what the next run truncates -- and the price of that is that a second
+// writer aimed at the same package truncates the first one's payload and writes its own bytes
+// where the first one's offsets point. Measured: the published package then mounts, checksums
+// and hands back bytes belonging to neither writer under a key that names one of them, which
+// is the silent-wrong-artifact failure the whole store exists to prevent. Sixteen bytes at the
+// front of a staging file turn it into a refusal.
+constexpr std::uint64_t kPayloadStampMagic = 0x3231'4B42'5041'594CULL;
+constexpr std::uint64_t kPayloadStampBytes = 16U;
+
+[[nodiscard]] std::uint64_t NextPayloadStamp() noexcept {
+    static std::atomic<std::uint64_t> counter{ 0U };
+    const std::uint64_t ticks =
+        static_cast<std::uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
+    const std::uint64_t sequence = counter.fetch_add(1U, std::memory_order_relaxed) + 1U;
+    // The counter separates writers inside one process and the clock separates processes; the
+    // address separates two processes that managed to start in the same clock tick, which is
+    // what makes the answer "no" rather than "very unlikely".
+    const auto address = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(&counter));
+    // Never zero: a zero stamp is what a file of zeros would present, and that has to read as
+    // "not this writer's payload" rather than as a match.
+    return ((ticks * 0x9E37'79B9'7F4A'7C15ULL) ^ (sequence * 0xD1B5'4A32'D192'ED03ULL) ^
+        (address * 0xBF58'476D'1CE4'E5B9ULL)) | 1U;
+}
 
 [[nodiscard]] std::filesystem::path WithSuffix(const std::filesystem::path& path, std::wstring_view suffix) {
 #if defined(_WIN32)
@@ -109,8 +138,48 @@ BakedAssetSinkStatus AssetPackWriter::EnsureStagingOpen() {
         }
     }
 
-    payloadBytes_ = 0U;
+    // Block payloads start after the stamp, so payloadBytes_ is an absolute position in the
+    // staging payload from here on and every recorded block offset already clears it.
+    payloadStamp_ = NextPayloadStamp();
+    std::array<std::uint8_t, kPayloadStampBytes> stamp{};
+    for (std::uint32_t index = 0U; index < 8U; ++index) {
+        stamp[index] = static_cast<std::uint8_t>((kPayloadStampMagic >> (index * 8U)) & 0xFFU);
+        stamp[8U + index] = static_cast<std::uint8_t>((payloadStamp_ >> (index * 8U)) & 0xFFU);
+    }
+    payload_.seekp(0, std::ios::beg);
+    payload_.write(reinterpret_cast<const char*>(stamp.data()), static_cast<std::streamsize>(stamp.size()));
+    if (!payload_) {
+        payload_.close();
+        return BakedAssetSinkStatus::WriteFailed;
+    }
+
+    payloadBytes_ = kPayloadStampBytes;
     stagingOpen_ = true;
+    return BakedAssetSinkStatus::Success;
+}
+
+// Is the staging payload still the one this writer opened? Called once, at assembly, before a
+// single payload byte is believed.
+BakedAssetSinkStatus AssetPackWriter::VerifyPayloadStamp() {
+    payload_.flush();
+    payload_.clear();
+    payload_.seekg(0, std::ios::beg);
+    std::array<char, kPayloadStampBytes> stamp{};
+    payload_.read(stamp.data(), static_cast<std::streamsize>(stamp.size()));
+    if (payload_.gcount() != static_cast<std::streamsize>(stamp.size())) {
+        payload_.clear();
+        return BakedAssetSinkStatus::StagingConflict;
+    }
+    std::uint64_t magic = 0U;
+    std::uint64_t written = 0U;
+    for (std::uint32_t index = 0U; index < 8U; ++index) {
+        magic |= static_cast<std::uint64_t>(static_cast<std::uint8_t>(stamp[index])) << (index * 8U);
+        written |= static_cast<std::uint64_t>(static_cast<std::uint8_t>(stamp[8U + index])) << (index * 8U);
+    }
+    payload_.clear();
+    if (magic != kPayloadStampMagic || written != payloadStamp_) {
+        return BakedAssetSinkStatus::StagingConflict;
+    }
     return BakedAssetSinkStatus::Success;
 }
 
@@ -279,6 +348,9 @@ void AssetPackWriter::AbortAsset() noexcept {
 }
 
 BakedAssetSinkStatus AssetPackWriter::AssembleStagingPack() {
+    if (const BakedAssetSinkStatus stamp = VerifyPayloadStamp(); stamp != BakedAssetSinkStatus::Success) {
+        return stamp;
+    }
     std::vector<AssetPackArtifactEntry> entries;
     entries.reserve(artifacts_.size());
     for (const PendingArtifact& artifact : artifacts_) {
