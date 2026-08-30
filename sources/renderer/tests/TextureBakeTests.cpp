@@ -441,6 +441,64 @@ void RunBakedTextureBakeKeyTest() {
                              .Digest(),
         "Changing the target profile did not move the bake key");
 
+    // The profile's CONTENT, not only its name. A profile identifier is stable by design, so a
+    // key that carried the identifier alone would leave every artifact baked under the old
+    // answers addressable after the profile behind that name was edited. Each field is varied
+    // on its own, with the identifier held fixed, so a key that carries a constant where the
+    // fingerprint belongs fails here instead of passing on the strength of two profiles that
+    // also happen to have different names.
+    {
+        struct ProfileEdit {
+            void (*apply)(BakeTargetProfile&);
+            const char* label;
+        };
+        const std::array edits{
+            ProfileEdit{ [](BakeTargetProfile& profile) { profile.packageBlockAlignmentBytes = 512U; },
+                "package block alignment" },
+            ProfileEdit{ [](BakeTargetProfile& profile) { profile.mappedBlockAlignmentBytes = 4096U; },
+                "mapped block alignment" },
+            ProfileEdit{ [](BakeTargetProfile& profile) { profile.indexWidth = BakeIndexWidth::Bits16; },
+                "index width" },
+            ProfileEdit{ [](BakeTargetProfile& profile) { profile.allowsThreeComponent16BitAttributes = false; },
+                "three-component 16-bit attributes" },
+            ProfileEdit{ [](BakeTargetProfile& profile) { profile.maxGeometryChunkBytes = 8ULL * 1024ULL * 1024ULL; },
+                "geometry chunk budget" },
+            ProfileEdit{ [](BakeTargetProfile& profile) {
+                            profile.textureCompressions |=
+                                TextureCompressionFamilyBit(TextureCompressionFamily::AdaptiveScalable);
+                        },
+                "compression family set" },
+            ProfileEdit{ [](BakeTargetProfile& profile) {
+                            profile.shaderBackends |= ShaderBakeBackendBit(ShaderBakeBackend::Dxil);
+                        },
+                "shader backend set" },
+        };
+        for (const ProfileEdit& edit : edits) {
+            BakeTargetProfile edited = desktop;
+            edit.apply(edited);
+            Require(edited.identifier == desktop.identifier,
+                "The profile edit under test renamed the profile, which is not what is being tested");
+            Require(kb::assets::bake::IsValidBakeTargetProfile(edited),
+                "The profile edit under test produced a profile no baker would accept");
+            if (reference == kb::render::bake::MakeTextureBakeKey(
+                                 pngA, edited, TextureCompressionFamily::BlockCompressedBaseline, baseSettings)
+                                 .Digest()) {
+                std::fprintf(stderr, "bake key: editing %s left the key where it was\n", edit.label);
+            }
+            Require(reference != kb::render::bake::MakeTextureBakeKey(
+                                     pngA, edited, TextureCompressionFamily::BlockCompressedBaseline, baseSettings)
+                                     .Digest(),
+                "Editing the target profile without renaming it did not move the bake key");
+        }
+        // ... and a profile that was not edited still answers with the same key, so the rule
+        // above is not satisfied by a key that simply moves whenever it is asked twice.
+        BakeTargetProfile untouched = desktop;
+        Require(reference == kb::render::bake::MakeTextureBakeKey(
+                                 pngA, untouched, TextureCompressionFamily::BlockCompressedBaseline, baseSettings)
+                                 .Digest(),
+            "An unedited copy of the target profile produced a different bake key");
+    }
+
     Require(reference != kb::render::bake::MakeTextureBakeKey(
                              pngA, desktop, TextureCompressionFamily::BlockCompressedExtended, baseSettings)
                              .Digest(),
@@ -491,8 +549,13 @@ void RunBakedTextureBakeKeyTest() {
         "The texture bake key does not carry the baker version");
     Require(key.targetProfileId == desktop.identifier, "The texture bake key does not carry the profile id");
 
+    // Derived from the shipped version rather than written out, because a literal here is a
+    // version this baker may one day actually ship - and on the day it does, this assertion
+    // stops testing anything and starts failing. (It did: the literal was "2".)
     kb::assets::bake::AssetBakeKey bumped = key;
-    bumped.bakerVersion = "2";
+    bumped.bakerVersion = std::string{ kb::render::bake::kTextureBakerVersion } + ".bumped";
+    Require(bumped.bakerVersion != kb::render::bake::kTextureBakerVersion,
+        "The bumped baker version under test is the version the baker ships");
     Require(bumped.Digest() != reference, "Bumping the baker version did not move the bake key");
 }
 
@@ -680,10 +743,18 @@ void RunBakedTextureDimensionRuleTest() {
     const std::array cases{
         Case{ 16U, 16U, true, "16x16 is a whole number of 4x4 blocks" },
         Case{ 12U, 8U, true, "12x8 is a whole number of 4x4 blocks" },
+        Case{ 4U, 4U, true, "4x4 is exactly one block, the smallest source this rule admits" },
         Case{ 6U, 6U, false, "6x6 is not a whole number of 4x4 blocks" },
         Case{ 16U, 6U, false, "a height that is not a multiple of the block footprint is refused" },
         Case{ 6U, 16U, false, "a width that is not a multiple of the block footprint is refused" },
         Case{ 15U, 15U, false, "15x15 is not a whole number of 4x4 blocks" },
+        // The degenerate sizes. A single texel is smaller than a block, so it is refused by the
+        // same rule rather than padded into one - the browser's s3tc extension would reject the
+        // level whatever the padding did.
+        Case{ 1U, 1U, false, "a single-texel source is smaller than one block" },
+        Case{ 2U, 2U, false, "a 2x2 source is smaller than one block" },
+        Case{ 4U, 1U, false, "a source one texel high is smaller than one block" },
+        Case{ 1U, 4U, false, "a source one texel wide is smaller than one block" },
     };
 
     for (const Case& testCase : cases) {
@@ -856,6 +927,87 @@ void RunBakedTextureQualityTest() {
         const std::vector<std::uint8_t> unrelated = MakeRgba8Solid(edge, edge, { 255U, 0U, 255U, 255U });
         Require(MeanAbsoluteError(reference, unrelated) > testCase.maxMeanAbsoluteError,
             "The quality floor is loose enough to pass an unrelated image");
+
+        // Every level, not only the base. Levels below one block are padded to a whole block
+        // before they are encoded, so they are decoded back into a whole block here and only
+        // the real texels are compared. The reference chain is halved here rather than taken
+        // from the baker's own mip builder, and the floor is set to separate an encoded level
+        // from an unencoded one - the base level's floor above is what certifies quality.
+        std::vector<std::uint8_t> levelReference = reference;
+        std::uint32_t levelWidth = edge;
+        std::uint32_t levelHeight = edge;
+        std::size_t levelOffset = 0U;
+        std::uint16_t blockWidth = 0U;
+        std::uint16_t blockHeight = 0U;
+        Require(kb::render::bake::BakedTextureBlockFootprint(baked.format, blockWidth, blockHeight),
+            "Quality test could not resolve the block footprint");
+        const std::uint32_t blockSize =
+            bimg::getBlockInfo(static_cast<bimg::TextureFormat::Enum>(baked.format)).blockSize;
+        for (std::uint8_t lod = 0U; lod < baked.mipCount; ++lod) {
+            const std::uint32_t paddedWidth = ((levelWidth + blockWidth - 1U) / blockWidth) * blockWidth;
+            const std::uint32_t paddedHeight = ((levelHeight + blockHeight - 1U) / blockHeight) * blockHeight;
+            const std::size_t levelBlockBytes =
+                static_cast<std::size_t>(paddedWidth / blockWidth) * (paddedHeight / blockHeight) * blockSize;
+            Require(levelOffset + levelBlockBytes <= asset.gpuBlocks->blocks.size(),
+                "The baked payload is shorter than the levels it claims");
+            const std::vector<std::uint8_t> levelDecoded = DecodeLevelToRgba8(
+                std::span<const std::uint8_t>{ asset.gpuBlocks->blocks.data() + levelOffset, levelBlockBytes },
+                static_cast<std::uint16_t>(paddedWidth), static_cast<std::uint16_t>(paddedHeight), baked.format);
+            std::uint64_t total = 0U;
+            std::uint64_t samples = 0U;
+            for (std::uint32_t y = 0U; y < levelHeight; ++y) {
+                for (std::uint32_t x = 0U; x < levelWidth; ++x) {
+                    for (std::uint32_t channel = 0U; channel < 3U; ++channel) {
+                        const int expected =
+                            levelReference[(static_cast<std::size_t>(y) * levelWidth + x) * 4U + channel];
+                        const int actual =
+                            levelDecoded[(static_cast<std::size_t>(y) * paddedWidth + x) * 4U + channel];
+                        total += static_cast<std::uint64_t>(expected > actual ? expected - actual : actual - expected);
+                        ++samples;
+                    }
+                }
+            }
+            const double levelError = static_cast<double>(total) / static_cast<double>(samples);
+            if (levelError > 60.0) {
+                std::fprintf(stderr, "%s level %u (%ux%u): mean abs error %.3f\n", testCase.label,
+                    static_cast<unsigned>(lod), levelWidth, levelHeight, levelError);
+            }
+            Require(levelError <= 60.0, "A level of the baked chain does not hold the image it should");
+
+            levelOffset += levelBlockBytes;
+            if (levelWidth == 1U && levelHeight == 1U) {
+                break;
+            }
+            const std::uint32_t nextWidth = levelWidth > 1U ? levelWidth / 2U : 1U;
+            const std::uint32_t nextHeight = levelHeight > 1U ? levelHeight / 2U : 1U;
+            std::vector<std::uint8_t> nextReference(
+                static_cast<std::size_t>(nextWidth) * nextHeight * 4U, 0U);
+            const std::uint32_t xStep = levelWidth / nextWidth;
+            const std::uint32_t yStep = levelHeight / nextHeight;
+            for (std::uint32_t y = 0U; y < nextHeight; ++y) {
+                for (std::uint32_t x = 0U; x < nextWidth; ++x) {
+                    for (std::uint32_t channel = 0U; channel < 4U; ++channel) {
+                        std::uint32_t sum = 0U;
+                        std::uint32_t count = 0U;
+                        for (std::uint32_t sourceY = y * yStep; sourceY < (y + 1U) * yStep; ++sourceY) {
+                            for (std::uint32_t sourceX = x * xStep; sourceX < (x + 1U) * xStep; ++sourceX) {
+                                sum += levelReference[(static_cast<std::size_t>(sourceY) * levelWidth + sourceX) *
+                                           4U +
+                                    channel];
+                                ++count;
+                            }
+                        }
+                        nextReference[(static_cast<std::size_t>(y) * nextWidth + x) * 4U + channel] =
+                            static_cast<std::uint8_t>((sum + count / 2U) / count);
+                    }
+                }
+            }
+            levelReference = std::move(nextReference);
+            levelWidth = nextWidth;
+            levelHeight = nextHeight;
+        }
+        Require(levelOffset == asset.gpuBlocks->blocks.size(),
+            "The levels walked here are not the whole baked payload");
     }
 }
 
@@ -920,26 +1072,76 @@ void RunBakedTextureReadBackTest() {
     Require(!kb::render::bake::ReadBakedTexture(uncompressedKtx, uncompressed),
         "An uncompressed container was accepted as a baked texture");
 
-    // A container that claims more levels than the image can have. The declared count must be
-    // refused in its own right, before the payload is walked: bimg's raw-data walk reads each
-    // level's length field at an offset it derives from the header, with no bound check of its
-    // own, so an over-declared chain steps off the end of the block. The fixture is sized to
-    // exactly the length such a header implies, so the length guard passes and only the
-    // declared-count rule is left to refuse it.
-    const std::uint32_t declaredMips = 255U;
+    // A container whose declared mip count is not the count the image implies. The declared
+    // count must be refused in its own right, before the payload is walked: bimg's raw-data
+    // walk reads each level's length field at an offset it derives from the header, with no
+    // bound check of its own, so a wrongly declared chain steps off the end of the block.
+    //
+    // KTX 1.1 header, byte offsets from the start of the file: the 12-byte identifier, then
+    // endianness (12), glType (16), glTypeSize (20), glFormat (24), glInternalFormat (28),
+    // glBaseInternalFormat (32), pixelWidth (36), pixelHeight (40), pixelDepth (44),
+    // numberOfArrayElements (48), numberOfFaces (52), numberOfMipmapLevels (56),
+    // bytesOfKeyValueData (60). Written in that order by bimg's imageWriteKtxHeader.
     const std::uint32_t ktxHeaderBytes = 64U;
+    const std::size_t mipCountFieldOffset = 56U; // KTX 1.1: numberOfMipmapLevels
+    const std::size_t internalFormatFieldOffset = 28U; // KTX 1.1: glInternalFormat
     const std::uint32_t completeChainBytes = bimg::imageGetSize(
         nullptr, edge, edge, 1U, false, true, 1U, static_cast<bimg::TextureFormat::Enum>(baked.format));
-    std::vector<std::uint8_t> overDeclared = baked.primaryBlock;
-    const std::size_t mipCountFieldOffset = 28U; // KTX 1.1: numberOfMipmapLevels
-    overDeclared[mipCountFieldOffset + 0U] = static_cast<std::uint8_t>(declaredMips);
-    overDeclared[mipCountFieldOffset + 1U] = 0U;
-    overDeclared[mipCountFieldOffset + 2U] = 0U;
-    overDeclared[mipCountFieldOffset + 3U] = 0U;
-    overDeclared.resize(ktxHeaderBytes + declaredMips * sizeof(std::uint32_t) + completeChainBytes, 0U);
-    RenderTextureAssetData overRead{};
-    Require(!kb::render::bake::ReadBakedTexture(overDeclared, overRead),
-        "A container claiming more mip levels than the image can have was read anyway");
+
+    const auto withDeclaredMipCount = [&](std::uint32_t declaredMips, bool padToImpliedLength) {
+        std::vector<std::uint8_t> container = baked.primaryBlock;
+        container[mipCountFieldOffset + 0U] = static_cast<std::uint8_t>(declaredMips & 0xFFU);
+        container[mipCountFieldOffset + 1U] = static_cast<std::uint8_t>((declaredMips >> 8U) & 0xFFU);
+        container[mipCountFieldOffset + 2U] = static_cast<std::uint8_t>((declaredMips >> 16U) & 0xFFU);
+        container[mipCountFieldOffset + 3U] = static_cast<std::uint8_t>((declaredMips >> 24U) & 0xFFU);
+        if (padToImpliedLength) {
+            // Sized to exactly the length such a header implies, so the length guard passes and
+            // only the declared-count rule is left to refuse it.
+            container.resize(
+                ktxHeaderBytes + declaredMips * sizeof(std::uint32_t) + completeChainBytes, 0U);
+        }
+        return container;
+    };
+
+    for (const std::uint32_t declaredMips : { 255U, 6U, 4U, 1U }) {
+        const bool over = declaredMips > baked.mipCount;
+        const std::vector<std::uint8_t> container = withDeclaredMipCount(declaredMips, over);
+        // The fixture is anchored: bimg must read back the mip count this test wrote, or the
+        // rule under test is not the rule being exercised. Patching the wrong header field
+        // would leave the container refused for a reason that has nothing to do with the
+        // declared chain length, and the assertion below would pass without covering anything.
+        bimg::ImageContainer parsed{};
+        bx::Error parseError;
+        Require(bimg::imageParse(parsed, container.data(), static_cast<std::uint32_t>(container.size()),
+                    &parseError) &&
+                parseError.isOk(),
+            "The declared-mip-count fixture is not a container bimg can parse");
+        Require(parsed.m_numMips == declaredMips,
+            "The declared-mip-count fixture did not change the field it meant to change");
+        Require(static_cast<int>(parsed.m_format) == static_cast<int>(baked.format),
+            "The declared-mip-count fixture disturbed the container's format");
+        const std::uint64_t impliedLength = static_cast<std::uint64_t>(parsed.m_offset) +
+            static_cast<std::uint64_t>(parsed.m_numMips) * sizeof(std::uint32_t) + completeChainBytes;
+        Require(container.size() >= impliedLength || !over,
+            "An over-declared fixture is short enough for the length guard to refuse it first");
+        RenderTextureAssetData damaged{};
+        Require(!kb::render::bake::ReadBakedTexture(container, damaged),
+            "A container whose declared mip count is not the image's complete chain was read anyway");
+    }
+
+    // A container whose format field was damaged is refused too. This is what the fixture above
+    // used to test by accident, when it wrote the mip count into glInternalFormat; keeping it
+    // as its own case means correcting that offset takes no coverage away.
+    {
+        std::vector<std::uint8_t> damagedFormat = baked.primaryBlock;
+        damagedFormat[internalFormatFieldOffset + 0U] = 0xFFU;
+        damagedFormat[internalFormatFieldOffset + 1U] = 0U;
+        damagedFormat[internalFormatFieldOffset + 2U] = 0U;
+        damagedFormat[internalFormatFieldOffset + 3U] = 0U;
+        RenderTextureAssetData damaged{};
+        Require(!kb::render::bake::ReadBakedTexture(damagedFormat, damaged),
+            "A container whose internal format is not one bimg knows was read as a texture");
+    }
 }
 
 // ---------------------------------------------------------------------------------------
@@ -1028,6 +1230,20 @@ void RunBakedTextureRuntimeUploadPathTest() {
     Require(plainDesc.format == bgfx::TextureFormat::RGBA8,
         "An unbaked texture stopped describing itself as RGBA8");
 
+    // The descriptor, the payload and bgfx have to agree about how long the memory is.
+    // RenderResourceRegistry hands createTexture2D a hasMips BIT, not a level count, and bgfx
+    // derives the count itself and then reads a complete chain out of the block it was given:
+    // a payload shorter than the size bgfx computes is a read past the end of that memory, and
+    // a longer one is a level bgfx never uploads. Asked of bgfx's own size arithmetic, which
+    // is where createTexture2D gets its answer, and which needs no device to answer.
+    bgfx::TextureInfo bakedInfo{};
+    bgfx::calcTextureSize(bakedInfo, bakedDesc.width, bakedDesc.height, 1U, false, bakedDesc.mipCount > 1U, 1U,
+        bakedDesc.format);
+    Require(bakedInfo.numMips == bakedAsset.mipCount,
+        "bgfx derives a different level count from the descriptor than the baked chain holds");
+    Require(bakedInfo.storageSize == bakedAsset.gpuBlocks->blocks.size(),
+        "The baked payload is not the length bgfx computes for the texture it is asked to create");
+
     // The fallback really produces the old shape: RGBA8, one level, no baked payload, and
     // pixels that still look like the source.
     const std::optional<RenderTextureAssetData> fallback = DecodeRenderTextureToRgba8(bakedAsset);
@@ -1039,6 +1255,15 @@ void RunBakedTextureRuntimeUploadPathTest() {
         "The RGBA8 fallback still described itself as a block format");
     Require(MeanAbsoluteError(reference, fallback->rgba8) <= 4.0,
         "The RGBA8 fallback did not decode the baked texture back to something like its source");
+
+    // Same size question for the fallback, whose chain is generated at upload time: one level
+    // in the asset, so bgfx must be told there are no mips and must want exactly LOD0's bytes.
+    const RenderTextureDesc fallbackDesc = fallback->MakeDesc(nullptr, RenderTextureColorSpace::Linear);
+    bgfx::TextureInfo fallbackInfo{};
+    bgfx::calcTextureSize(fallbackInfo, fallbackDesc.width, fallbackDesc.height, 1U, false,
+        fallbackDesc.mipCount > 1U, 1U, fallbackDesc.format);
+    Require(fallbackInfo.numMips == 1U && fallbackInfo.storageSize == fallback->rgba8.size(),
+        "The decoded fallback is not the length bgfx computes for the texture it describes");
 
     Require(!RenderDeviceSupportsTextureFormat(bgfx::TextureFormat::Count, RenderTextureColorSpace::Linear),
         "An out-of-range format was reported as device-supported");
@@ -1060,10 +1285,296 @@ void RunBakedTextureRuntimeUploadPathTest() {
     }
 }
 
+// ---------------------------------------------------------------------------------------
+// Alpha the format table decided not to keep must never reach the encoder.
+//
+// BC1's alpha is a single bit and squish spends it: ColourSet drops every texel whose alpha is
+// below 128 from the colour fit and codes the block in DXT1's punch-through mode, whose decoded
+// value for those texels is RGB 0. The semantics that are given BC1 in spite of an alpha
+// channel are exactly the ones whose shaders read RGB - a normal map as `.xyz`, a
+// metallic-roughness map as `.g`/`.b` - so authoring residue in the alpha channel would blacken
+// the channels the bake exists to deliver, with no load error anywhere. 128 is the threshold,
+// which is why a fixture whose alpha is 0x80 passes either way.
+void RunBakedTextureAlphaResidueTest() {
+    const std::uint16_t edge = 16U;
+    // A flat surface normal: the encoder has nothing to lose on RGB, so any difference in the
+    // output is the alpha channel's doing and not the encoder's.
+    const std::array<std::uint8_t, 4U> flatNormal{ 128U, 128U, 255U, 255U };
+    const std::vector<std::uint8_t> opaque = MakeRgba8Solid(edge, edge, flatNormal);
+
+    TempStore store{ "21kb_texture_bake_alpha_residue" };
+    LooseBakedAssetSink sink{ store.Root() };
+
+    const TextureBakeOutput reference = BakeTextureBytes(
+        MakePngSource(opaque, edge, edge),
+        TextureBakeSettings{ RenderTextureAssetSemantic::Normal, RenderTextureAssetColorSpace::Linear },
+        DesktopTestProfile(),
+        TextureCompressionFamily::BlockCompressedBaseline,
+        sink);
+    Require(reference.status == TextureBakeStatus::Success && reference.format == bgfx::TextureFormat::BC1,
+        "Alpha residue test could not bake its opaque reference");
+
+    const std::array semantics{ RenderTextureAssetSemantic::Normal,
+        RenderTextureAssetSemantic::MetallicRoughness, RenderTextureAssetSemantic::Occlusion,
+        RenderTextureAssetSemantic::Emissive };
+    // 0, 100 and 127 sit below squish's punch-through threshold; 128 is the first value above
+    // it. All four are residue as far as the format table is concerned.
+    const std::array<std::uint8_t, 4U> residues{ 0U, 100U, 127U, 128U };
+
+    for (const RenderTextureAssetSemantic semantic : semantics) {
+        for (const std::uint8_t residue : residues) {
+            // Residue on part of each block rather than all of it, so no block is uniformly
+            // transparent and the encoder still has real texels to fit.
+            std::vector<std::uint8_t> pixels = opaque;
+            for (std::size_t index = 3U; index < pixels.size(); index += 4U) {
+                pixels[index] = ((index / 4U) % 3U) == 0U ? residue : 0xFFU;
+            }
+            const TextureBakeOutput baked = BakeTextureBytes(
+                MakePngSource(pixels, edge, edge),
+                TextureBakeSettings{ semantic, RenderTextureAssetColorSpace::Linear },
+                DesktopTestProfile(),
+                TextureCompressionFamily::BlockCompressedBaseline,
+                sink);
+            Require(baked.status == TextureBakeStatus::Success, "Alpha residue test could not bake a source");
+            Require(baked.format == bgfx::TextureFormat::BC1,
+                "A semantic that does not sample alpha stopped getting BC1");
+
+            // What the bake does not keep, it does not encode: the container is the one the
+            // same colours produce with no alpha channel to discard. The semantic and the
+            // colour space are the same in both bakes, so the format and the container header
+            // are too, and the only thing that could move these bytes is the alpha.
+            Require(baked.primaryBlock == reference.primaryBlock,
+                "Alpha the bake decided not to keep still changed the bytes it wrote");
+
+            // Stated a second time without reference to the first, so a bake that discards the
+            // alpha AND the colour cannot satisfy it: every texel still carries what went in.
+            RenderTextureAssetData asset{};
+            Require(kb::render::bake::ReadBakedTexture(baked.primaryBlock, asset),
+                "Alpha residue test could not read a baked container back");
+            const std::optional<RenderTextureAssetData> decoded = DecodeRenderTextureToRgba8(asset);
+            Require(decoded.has_value() && decoded->rgba8.size() == opaque.size(),
+                "Alpha residue test could not decode a baked base level");
+            const double error = MeanAbsoluteError(opaque, decoded->rgba8);
+            if (error > 4.0) {
+                std::fprintf(stderr, "alpha residue: semantic %u, alpha %u -> mean abs error %.3f\n",
+                    static_cast<unsigned>(semantic), static_cast<unsigned>(residue), error);
+            }
+            Require(error <= 4.0,
+                "An alpha channel the bake does not sample damaged the colour channels it does");
+        }
+    }
+
+    // The other side of the same rule: alpha the table DOES keep must survive. Without this a
+    // baker that simply threw every alpha channel away would satisfy everything above.
+    std::vector<std::uint8_t> masked = MakeRgba8Solid(edge, edge, { 200U, 60U, 40U, 255U });
+    for (std::size_t index = 3U; index < masked.size(); index += 4U) {
+        masked[index] = ((index / 4U) % 3U) == 0U ? 0U : 0xFFU;
+    }
+    const TextureBakeOutput baseColor = BakeTextureBytes(
+        MakePngSource(masked, edge, edge),
+        TextureBakeSettings{ RenderTextureAssetSemantic::BaseColor, RenderTextureAssetColorSpace::Linear },
+        DesktopTestProfile(),
+        TextureCompressionFamily::BlockCompressedBaseline,
+        sink);
+    Require(baseColor.status == TextureBakeStatus::Success && baseColor.format == bgfx::TextureFormat::BC3,
+        "A base colour with a real alpha mask stopped getting BC3");
+    RenderTextureAssetData maskedAsset{};
+    Require(kb::render::bake::ReadBakedTexture(baseColor.primaryBlock, maskedAsset),
+        "Alpha residue test could not read the base colour bake back");
+    const std::optional<RenderTextureAssetData> maskedDecoded = DecodeRenderTextureToRgba8(maskedAsset);
+    Require(maskedDecoded.has_value() && maskedDecoded->rgba8.size() == masked.size(),
+        "Alpha residue test could not decode the base colour bake");
+    for (std::size_t index = 0U; index < masked.size(); index += 4U) {
+        const bool transparent = masked[index + 3U] == 0U;
+        Require(transparent ? maskedDecoded->rgba8[index + 3U] < 32U : maskedDecoded->rgba8[index + 3U] > 223U,
+            "A base colour's alpha mask did not survive the bake");
+    }
+    Require(MeanAbsoluteError(std::span<const std::uint8_t>{ masked },
+                std::span<const std::uint8_t>{ maskedDecoded->rgba8 }) <= 4.0,
+        "A base colour with an alpha mask did not survive the bake");
+}
+
+// ---------------------------------------------------------------------------------------
+// What the baker tells the sink. The sink owns layout and publication, so everything the
+// profile has to say about placement reaches it through this one call or not at all.
+namespace {
+
+class RecordingSink final : public kb::assets::bake::IBakedAssetSink {
+public:
+    enum class FailAt : std::uint8_t { Nothing, Begin, Write, Commit };
+
+    explicit RecordingSink(FailAt failAt) noexcept
+        : failAt_{ failAt } {}
+
+    kb::assets::bake::BakedAssetSinkStatus BeginAsset(const BakedAssetDescriptor& descriptor) override {
+        calls.emplace_back("begin");
+        began = descriptor;
+        return failAt_ == FailAt::Begin ? kb::assets::bake::BakedAssetSinkStatus::InvalidKey
+                                        : kb::assets::bake::BakedAssetSinkStatus::Success;
+    }
+
+    kb::assets::bake::BakedAssetSinkStatus WritePrimaryBlock(
+        std::span<const std::uint8_t> bytes,
+        std::uint32_t alignmentBytes) override {
+        calls.emplace_back("write");
+        written.assign(bytes.begin(), bytes.end());
+        alignment = alignmentBytes;
+        return failAt_ == FailAt::Write ? kb::assets::bake::BakedAssetSinkStatus::WriteFailed
+                                        : kb::assets::bake::BakedAssetSinkStatus::Success;
+    }
+
+    kb::assets::bake::BakedAssetSinkStatus WriteAuxiliaryBlock(
+        const kb::assets::bake::BakedAssetBlock& block,
+        std::span<const std::uint8_t> bytes) override {
+        BX_UNUSED(block, bytes);
+        calls.emplace_back("auxiliary");
+        return kb::assets::bake::BakedAssetSinkStatus::Success;
+    }
+
+    kb::assets::bake::BakedAssetSinkStatus CommitAsset() override {
+        calls.emplace_back("commit");
+        return failAt_ == FailAt::Commit ? kb::assets::bake::BakedAssetSinkStatus::WriteFailed
+                                         : kb::assets::bake::BakedAssetSinkStatus::Success;
+    }
+
+    void AbortAsset() noexcept override { calls.emplace_back("abort"); }
+
+    std::vector<std::string> calls;
+    BakedAssetDescriptor began{};
+    std::vector<std::uint8_t> written;
+    std::uint32_t alignment = 0U;
+
+private:
+    FailAt failAt_;
+};
+
+} // namespace
+
+void RunBakedTextureSinkContractTest() {
+    const std::uint16_t edge = 8U;
+    const std::vector<std::uint8_t> png = MakePngSource(MakeRgba8Gradient(edge, edge, 0xFFU), edge, edge);
+    const TextureBakeSettings settings{
+        RenderTextureAssetSemantic::BaseColor, RenderTextureAssetColorSpace::Srgb
+    };
+    BakeTargetProfile profile = DesktopTestProfile();
+    profile.packageBlockAlignmentBytes = 1024U;
+    Require(kb::assets::bake::IsValidBakeTargetProfile(profile), "Sink contract test built an invalid profile");
+
+    {
+        RecordingSink sink{ RecordingSink::FailAt::Nothing };
+        const TextureBakeOutput baked = BakeTextureBytes(
+            png, settings, profile, TextureCompressionFamily::BlockCompressedBaseline, sink);
+        Require(baked.status == TextureBakeStatus::Success, "Sink contract test could not bake the source");
+        Require(sink.calls == std::vector<std::string>{ "begin", "write", "commit" },
+            "The baker did not follow the sink protocol exactly once, in order");
+        Require(sink.began.key.Digest() == baked.key.Digest(),
+            "The descriptor handed to the sink does not carry the key the bake reports");
+        Require(sink.began.assetTypeId == kb::render::bake::kTextureBakedAssetTypeId,
+            "The descriptor handed to the sink does not carry this baker's asset type");
+        Require(sink.began.key.IsValid(), "The baker opened an artifact under a key no sink may accept");
+        // The one thing the profile says about placement that only this call can carry. A
+        // block written at the wrong alignment is a container the runtime cannot map, and
+        // nothing downstream can recover the number the baker was given.
+        Require(sink.alignment == profile.packageBlockAlignmentBytes,
+            "The baker did not hand the sink the target profile's package block alignment");
+        Require(sink.written == baked.primaryBlock,
+            "The bytes handed to the sink are not the bytes the bake reports");
+    }
+
+    // A refusal at any stage is reported as the sink's, carries the sink's own status, leaves
+    // no artifact claimed, and - past BeginAsset - closes the artifact it opened.
+    struct FailureCase {
+        RecordingSink::FailAt failAt;
+        kb::assets::bake::BakedAssetSinkStatus expected;
+        std::vector<std::string> expectedCalls;
+    };
+    const std::array failures{
+        FailureCase{ RecordingSink::FailAt::Begin, kb::assets::bake::BakedAssetSinkStatus::InvalidKey,
+            { "begin" } },
+        FailureCase{ RecordingSink::FailAt::Write, kb::assets::bake::BakedAssetSinkStatus::WriteFailed,
+            { "begin", "write", "abort" } },
+        FailureCase{ RecordingSink::FailAt::Commit, kb::assets::bake::BakedAssetSinkStatus::WriteFailed,
+            { "begin", "write", "commit", "abort" } },
+    };
+    for (const FailureCase& failure : failures) {
+        RecordingSink sink{ failure.failAt };
+        const TextureBakeOutput baked = BakeTextureBytes(
+            png, settings, profile, TextureCompressionFamily::BlockCompressedBaseline, sink);
+        Require(baked.status == TextureBakeStatus::SinkRejected,
+            "A sink that refused the artifact was not reported as the reason");
+        Require(baked.sinkStatus == failure.expected, "The sink's own status did not reach the caller");
+        Require(baked.primaryBlock.empty(), "A bake the sink refused still handed its bytes back");
+        Require(sink.calls == failure.expectedCalls,
+            "A sink failure did not leave the artifact closed behind it");
+    }
+}
+
+// ---------------------------------------------------------------------------------------
+// The device-capability rule as a truth table. Asked through the running device it can only be
+// compared against whatever device is up - and in a full suite run that device already exists,
+// which is how the order-dependent version of this assertion was lost. Stated over the
+// capability word instead, every bit of the rule is pinned without a device at all.
+void RunBakedTextureDeviceCapabilityTest() {
+    const auto texture2d = static_cast<std::uint32_t>(BGFX_CAPS_FORMAT_TEXTURE_2D);
+    const auto srgb = static_cast<std::uint32_t>(BGFX_CAPS_FORMAT_TEXTURE_2D_SRGB);
+    const auto emulated = static_cast<std::uint32_t>(BGFX_CAPS_FORMAT_TEXTURE_2D_EMULATED);
+    const auto vertex = static_cast<std::uint32_t>(BGFX_CAPS_FORMAT_TEXTURE_VERTEX);
+    const auto image = static_cast<std::uint32_t>(BGFX_CAPS_FORMAT_TEXTURE_IMAGE_READ);
+
+    struct Case {
+        std::uint32_t capabilities;
+        bool linear;
+        bool srgb;
+        const char* label;
+    };
+    const std::array cases{
+        Case{ 0U, false, false, "a device that says nothing supports nothing" },
+        Case{ texture2d, true, false,
+            "2D sampling alone is not a promise to decode the format as sRGB" },
+        Case{ texture2d | srgb, true, true, "2D sampling plus the sRGB bit satisfies both" },
+        Case{ srgb, false, false, "the sRGB bit alone is not 2D sampling" },
+        Case{ emulated, false, false,
+            "emulation is a CPU conversion, which is the cost a bake exists to avoid" },
+        Case{ texture2d | emulated, true, false, "emulation neither adds nor removes anything" },
+        Case{ srgb | emulated, false, false, "emulated sRGB is still not native 2D sampling" },
+        Case{ texture2d | srgb | emulated, true, true, "the emulation bit does not veto a native format" },
+        Case{ vertex | image, false, false, "capabilities of other stages are not 2D sampling" },
+        Case{ texture2d | vertex | image, true, false, "unrelated bits do not stand in for the sRGB bit" },
+        Case{ 0xFFFFFFFFU, true, true, "a device that reports everything supports both" },
+    };
+    for (const Case& testCase : cases) {
+        const bool linear =
+            RenderTextureFormatCapabilitySatisfied(testCase.capabilities, RenderTextureColorSpace::Linear);
+        const bool asSrgb =
+            RenderTextureFormatCapabilitySatisfied(testCase.capabilities, RenderTextureColorSpace::Srgb);
+        if (linear != testCase.linear || asSrgb != testCase.srgb) {
+            std::fprintf(stderr, "device capability: %s -> linear %d (expected %d), srgb %d (expected %d)\n",
+                testCase.label, static_cast<int>(linear), static_cast<int>(testCase.linear),
+                static_cast<int>(asSrgb), static_cast<int>(testCase.srgb));
+        }
+        Require(linear == testCase.linear, testCase.label);
+        Require(asSrgb == testCase.srgb, testCase.label);
+    }
+
+    // The device query is that rule and nothing else, for every format bgfx names - so a rule
+    // that is right here cannot be applied wrongly there, whatever device happens to be up.
+    for (std::uint32_t index = 0U; index < static_cast<std::uint32_t>(bgfx::TextureFormat::Count); ++index) {
+        const auto format = static_cast<bgfx::TextureFormat::Enum>(index);
+        const std::uint32_t capabilities = bgfx::getCaps()->formats[index];
+        Require(RenderDeviceSupportsTextureFormat(format, RenderTextureColorSpace::Linear) ==
+                RenderTextureFormatCapabilitySatisfied(capabilities, RenderTextureColorSpace::Linear),
+            "The device query does not answer with the capability rule it documents");
+        Require(RenderDeviceSupportsTextureFormat(format, RenderTextureColorSpace::Srgb) ==
+                RenderTextureFormatCapabilitySatisfied(capabilities, RenderTextureColorSpace::Srgb),
+            "The device query does not answer with the capability rule it documents");
+    }
+}
+
 } // namespace
 
 void RunTextureBakeTests() {
     RunBakedTextureFormatChoiceTest();
+    RunBakedTextureAlphaResidueTest();
     RunBakedTextureDeterminismTest();
     RunBakedTextureBakeKeyTest();
     RunBakedTextureMipChainTest();
@@ -1074,6 +1585,8 @@ void RunTextureBakeTests() {
     RunBakedTextureReadBackTest();
     RunBakedTextureFallbackGuardTest();
     RunBakedTextureRuntimeUploadPathTest();
+    RunBakedTextureSinkContractTest();
+    RunBakedTextureDeviceCapabilityTest();
 }
 
 } // namespace kb::render::tests

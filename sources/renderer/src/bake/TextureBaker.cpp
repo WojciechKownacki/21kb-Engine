@@ -334,14 +334,34 @@ TextureBakeOutput BakeTextureBytes(
         return output;
     }
 
+    // Alpha this baker decided not to keep has to be DISCARDED, not merely left unpaid for.
+    // BC1 is the one format emitted whose alpha is a single bit, and squish does not ignore
+    // that bit: any texel whose alpha is below 128 is encoded in DXT1's punch-through mode,
+    // which forces that texel's RGB to black in the decoded block. A normal, metallic-
+    // roughness, occlusion or emissive map carries alpha as authoring residue, and the format
+    // table above deliberately gives it BC1 rather than paying BC3's doubled size for a
+    // channel no shader samples - but leaving the residue in the encoder's input would let it
+    // destroy the three channels every one of those shaders DOES sample, with no load error
+    // anywhere. Flattening it here is a no-op for a source that was already opaque, so the
+    // only bytes it changes are the ones that were wrong.
+    std::span<const std::uint8_t> baseRgba8{ baseLevel.m_data, baseLevel.m_size };
+    std::vector<std::uint8_t> opaqueBaseLevel;
+    if (format == bgfx::TextureFormat::BC1 && sourceHasAlpha) {
+        opaqueBaseLevel.assign(baseLevel.m_data, baseLevel.m_data + baseLevel.m_size);
+        for (std::size_t index = 3U; index < opaqueBaseLevel.size(); index += 4U) {
+            opaqueBaseLevel[index] = 0xFFU;
+        }
+        baseRgba8 = std::span<const std::uint8_t>{ opaqueBaseLevel };
+    }
+
     // Colour space belongs to the mip chain, not to the format: averaging sRGB code values as
     // if they were light darkens every level below the first. A normal map is linear by
     // construction and an sRGB one was already refused above.
     const RenderTextureColorSpace mipColorSpace = settings.colorSpace == RenderTextureAssetColorSpace::Srgb
         ? RenderTextureColorSpace::Srgb
         : RenderTextureColorSpace::Linear;
-    const std::optional<RuntimeTextureMipChain> chain = BuildRuntimeTexture2DMipChain(
-        std::span<const std::uint8_t>{ baseLevel.m_data, baseLevel.m_size }, width, height, mipColorSpace);
+    const std::optional<RuntimeTextureMipChain> chain =
+        BuildRuntimeTexture2DMipChain(baseRgba8, width, height, mipColorSpace);
     if (!chain.has_value() || chain->mipCount == 0U) {
         output.status = TextureBakeStatus::EncodeFailed;
         return output;
