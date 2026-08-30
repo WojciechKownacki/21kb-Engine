@@ -37,6 +37,7 @@
 namespace {
 
 constexpr DWORD kProcessTimeoutMilliseconds = 120000U;
+constexpr DWORD kRefusalTimeoutMilliseconds = 30000U;
 
 void Require(bool condition, const char* message) {
     if (!condition) {
@@ -52,6 +53,28 @@ void Require(bool condition, const char* message) {
 
 [[nodiscard]] bool Contains(const std::string& text, const std::string& needle) {
     return text.find(needle) != std::string::npos;
+}
+
+// Han, Cyrillic and Greek in one name: no single-byte code page can spell all
+// three. kb_game keeps the real command line (CommandLineToArgvW), so every
+// narrowing conversion on the way to a diagnostic is a place an exception can
+// escape a windowed process - where it becomes abort() behind a modal dialog
+// that neither a player nor an automated run can dismiss.
+[[nodiscard]] std::wstring UnspellableName() {
+    static constexpr wchar_t letters[] = { 0x65E5, 0x672C, 0x8A9E, 0x0416, 0x03A9, 0 };
+    return std::wstring{ L"21kb_game_negator_" } + letters;
+}
+
+[[nodiscard]] unsigned long CountReported(const std::string& text, const std::string& marker) {
+    const std::size_t at = text.find(marker);
+    Require(at != std::string::npos, ("kb_game did not report " + marker).c_str());
+    return std::strtoul(text.c_str() + at + marker.size(), nullptr, 10);
+}
+
+[[nodiscard]] double SecondsReported(const std::string& text, const std::string& marker) {
+    const std::size_t at = text.find(marker);
+    Require(at != std::string::npos, ("kb_game did not report " + marker).c_str());
+    return std::strtod(text.c_str() + at + marker.size(), nullptr);
 }
 
 [[nodiscard]] unsigned long FramesReported(const std::string& text) {
@@ -128,7 +151,9 @@ struct LaunchedProcess {
 };
 
 [[nodiscard]] LaunchedProcess LaunchGame(
-    const std::wstring& arguments, const std::filesystem::path& logPath) {
+    const std::wstring& arguments,
+    const std::filesystem::path& logPath,
+    bool startMinimized = false) {
     SECURITY_ATTRIBUTES inheritable{};
     inheritable.nLength = sizeof(inheritable);
     inheritable.bInheritHandle = TRUE;
@@ -145,6 +170,13 @@ struct LaunchedProcess {
     STARTUPINFOW startup{};
     startup.cb = sizeof(startup);
     startup.dwFlags = STARTF_USESTDHANDLES;
+    if (startMinimized) {
+        // Windows applies this to the process's first ShowWindow call whatever
+        // the program itself asked for, which is how a shortcut set to
+        // "Run: minimized" reaches a game.
+        startup.dwFlags |= STARTF_USESHOWWINDOW;
+        startup.wShowWindow = SW_SHOWMINIMIZED;
+    }
     startup.hStdInput = nullptr;
     startup.hStdOutput = log;
     startup.hStdError = log;
@@ -174,8 +206,10 @@ struct LaunchedProcess {
 }
 
 [[nodiscard]] ProcessRun FinishGame(
-    const LaunchedProcess& launched, const std::filesystem::path& logPath) {
-    const DWORD waited = WaitForSingleObject(launched.process, kProcessTimeoutMilliseconds);
+    const LaunchedProcess& launched,
+    const std::filesystem::path& logPath,
+    DWORD timeoutMilliseconds = kProcessTimeoutMilliseconds) {
+    const DWORD waited = WaitForSingleObject(launched.process, timeoutMilliseconds);
     if (waited != WAIT_OBJECT_0) {
         static_cast<void>(TerminateProcess(launched.process, 258U));
         static_cast<void>(WaitForSingleObject(launched.process, 5000U));
@@ -197,6 +231,19 @@ struct LaunchedProcess {
 
 [[nodiscard]] ProcessRun RunGame(const std::wstring& arguments, const std::filesystem::path& logPath) {
     return FinishGame(LaunchGame(arguments, logPath), logPath);
+}
+
+[[nodiscard]] ProcessRun RunGameMinimized(
+    const std::wstring& arguments, const std::filesystem::path& logPath) {
+    return FinishGame(LaunchGame(arguments, logPath, true), logPath);
+}
+
+// A run that has to refuse its arguments has to refuse them promptly: the
+// failure pinned by these used to be an abort() behind a modal dialog, which is
+// indistinguishable from a hang until the whole suite times out.
+[[nodiscard]] ProcessRun RunGameExpectingRefusal(
+    const std::wstring& arguments, const std::filesystem::path& logPath) {
+    return FinishGame(LaunchGame(arguments, logPath), logPath, kRefusalTimeoutMilliseconds);
 }
 
 struct WindowSearch {
@@ -309,6 +356,18 @@ end
     Require(
         Contains(defaultMap.output, "frames=3 shutdown=clean"),
         "kb_game did not run the requested frames and shut down cleanly");
+    // A frame counter counts loop iterations, which a loop that draws nothing
+    // and steps nothing also produces. These are the two things the frame was
+    // for: the renderer accepted it, and the scene runtime was stepped by it.
+    Require(
+        CountReported(defaultMap.output, "rendered=") == 3UL,
+        "kb_game counted frames the renderer never accepted");
+    Require(
+        CountReported(defaultMap.output, "ticks=") == 3UL,
+        "kb_game counted frames the scene runtime was never stepped for");
+    Require(
+        SecondsReported(defaultMap.output, "simulated=") > 0.0,
+        "kb_game stepped its scene by no time at all");
 
     const ProcessRun overridden = RunGame(
         projectArgument + L"--scene=/Game/Scenes/Alternate.21kbscene --frames=2",
@@ -324,6 +383,12 @@ end
     Require(
         Contains(overridden.output, "frames=2 shutdown=clean"),
         "kb_game did not run the requested frames on the overridden scene");
+    Require(
+        CountReported(overridden.output, "rendered=") == 2UL,
+        "kb_game counted overridden-scene frames the renderer never accepted");
+    Require(
+        CountReported(overridden.output, "ticks=") == 2UL,
+        "kb_game counted overridden-scene frames the scene runtime never ran");
 
     // The shipping behaviour: no frame budget at all, the loop runs until the
     // player closes the window, and the teardown that follows must be clean.
@@ -339,6 +404,30 @@ end
     Require(
         Contains(closed.output, "shutdown=clean"),
         "kb_game did not complete its shutdown after the window closed");
+    Require(
+        CountReported(closed.output, "ticks=") == FramesReported(closed.output),
+        "kb_game did not step its scene once per frame of an unbounded run");
+    Require(
+        CountReported(closed.output, "rendered=") > 1U,
+        "kb_game submitted nothing to the renderer while its window was open");
+    Require(
+        SecondsReported(closed.output, "simulated=") > 0.0,
+        "kb_game ran an unbounded loop that simulated no time");
+
+    // A shortcut set to "Run: minimized" is an ordinary way to start a program.
+    // The game used to refuse to start at all: its first ShowWindow is the
+    // launcher's, and the renderer cannot be initialized against a zero client
+    // area.
+    const ProcessRun minimized =
+        RunGameMinimized(projectArgument + L"--frames=3", root / "minimized.log");
+    Report("minimized launch", minimized);
+    Require(minimized.exitCode == 0U, "kb_game did not start when it was launched minimized");
+    Require(
+        Contains(minimized.output, "frames=3 shutdown=clean"),
+        "kb_game launched minimized did not run the requested frames");
+    Require(
+        CountReported(minimized.output, "rendered=") == 3UL,
+        "kb_game launched minimized rendered nothing");
 
     const ProcessRun missing = RunGame(
         projectArgument + L"--scene=/Game/Scenes/Absent.21kbscene --frames=1",
@@ -348,6 +437,55 @@ end
     Require(
         Contains(missing.output, "project scene asset was not found"),
         "kb_game did not name the missing scene asset");
+
+    // Every refusal below names a path or an argument this machine's code page
+    // cannot spell. Narrowing one throws, and an escaped exception ends a
+    // windowed process in abort() behind a modal dialog: the branches whose only
+    // job is to reject bad input used to hang the game instead. Each must
+    // refuse, promptly, and say which rule was broken.
+    const std::wstring unspellable = UnspellableName();
+    const std::wstring quote{ L'"' };
+
+    const ProcessRun unspellableFrames = RunGameExpectingRefusal(
+        projectArgument + L"--frames=" + unspellable, root / "unspellable_frames.log");
+    Report("unspellable --frames", unspellableFrames);
+    Require(
+        unspellableFrames.exitCode != 0U,
+        "kb_game accepted a frame count that is not a number");
+    Require(
+        Contains(unspellableFrames.output, "--frames expects a positive frame count"),
+        "kb_game did not refuse an unspellable frame count by name");
+
+    const ProcessRun unspellableOption = RunGameExpectingRefusal(
+        L"--" + unspellable + L"=1", root / "unspellable_option.log");
+    Report("unspellable option", unspellableOption);
+    Require(unspellableOption.exitCode != 0U, "kb_game accepted an unknown option");
+    Require(
+        Contains(unspellableOption.output, "unknown option"),
+        "kb_game did not refuse an unspellable option by name");
+
+    const ProcessRun unspellableProject = RunGameExpectingRefusal(
+        L"--project=" + quote + (root / L"absent").wstring() + L"_" + unspellable + quote +
+            L" --frames=1",
+        root / "unspellable_project.log");
+    Report("unspellable --project", unspellableProject);
+    Require(
+        unspellableProject.exitCode != 0U,
+        "kb_game reported success for a project directory that does not exist");
+    Require(
+        Contains(unspellableProject.output, "project descriptor was not found"),
+        "kb_game did not name the missing descriptor of an unspellable project path");
+
+    const ProcessRun unspellableScene = RunGameExpectingRefusal(
+        projectArgument + L"--scene=/Game/Scenes/" + unspellable + L".21kbscene --frames=1",
+        root / "unspellable_scene.log");
+    Report("unspellable --scene", unspellableScene);
+    Require(
+        unspellableScene.exitCode != 0U,
+        "kb_game reported success for a scene asset that does not exist");
+    Require(
+        Contains(unspellableScene.output, "project scene asset was not found"),
+        "kb_game did not name the missing scene asset of an unspellable reference");
 
     std::fputs("kb_game launch tests passed\n", stdout);
     return EXIT_SUCCESS;
