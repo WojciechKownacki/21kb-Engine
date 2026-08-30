@@ -155,8 +155,9 @@ void RunGraphShaderWrapperSourceTest() {
 void RunGraphShaderBackendMetadataTest() {
     Require(RenderMaterialGraphShaderBackendProfile(RenderMaterialGraphShaderBackend::Spirv) == std::string_view{ "spirv" },
         "KBMAT-MAT04: SPIR-V backend must map to the spirv shaderc profile");
-    Require(RenderMaterialGraphShaderBackendPlatform(RenderMaterialGraphShaderBackend::Dxbc) == std::string_view{ "windows" },
-        "KBMAT-MAT04: DXBC backend must compile against the windows platform");
+    Require(kb::assets::bake::ShaderBakePlatformName(kb::assets::bake::ShaderBakePlatform::Windows) ==
+            std::string_view{ "windows" },
+        "KBMAT-MAT04: Windows shader platform must use shaderc's canonical spelling");
     Require(RenderMaterialGraphShaderBackendDirectory(RenderMaterialGraphShaderBackend::Glsl) == std::string_view{ "glsl" },
         "KBMAT-MAT04: Backend staging directory must match the backend name");
     Require(ParseRenderMaterialGraphShaderBackend("dxil") == RenderMaterialGraphShaderBackend::Dxil,
@@ -245,7 +246,13 @@ void RunGraphShaderManifestValidationTest() {
     request.includeDirs = { KB_TEST_GRAPH_SHADER_INCLUDE_DIR, KB_TEST_GRAPH_BGFX_SHADER_INCLUDE_DIR };
     request.cacheRoot = KB_TEST_GRAPH_SHADER_CACHE_DIR;
     request.pass = std::move(pass);
+    request.shaderPlatform = kb::assets::bake::ShaderBakePlatform::Linux;
     return request;
+}
+
+[[nodiscard]] std::filesystem::path TestGraphCacheRoot(std::uint64_t sourceHash) {
+    return std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "linux" /
+        ("graph_" + std::to_string(sourceHash));
 }
 
 void RunGraphShaderCookProducesBinaryTest() {
@@ -253,7 +260,7 @@ void RunGraphShaderCookProducesBinaryTest() {
     const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Spirv };
 
     std::error_code error;
-    std::filesystem::remove_all(std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / ("graph_" + std::to_string(shader.sourceHash)), error);
+    std::filesystem::remove_all(TestGraphCacheRoot(shader.sourceHash), error);
 
     const RenderMaterialGraphShaderArtifactResult first = CookRenderMaterialGraphShaderArtifact(shader, backends, MakeCookRequest("BaseOpaque"));
     Require(first.Succeeded(), "KBMAT-MAT04: Cooking a simple graph material must succeed");
@@ -263,8 +270,7 @@ void RunGraphShaderCookProducesBinaryTest() {
     Require(!spirv->cacheHit, "KBMAT-MAT04: First cook of a fresh graph must be a real shaderc compile, not a cache hit");
     Require(std::filesystem::exists(spirv->binaryPath, error) && std::filesystem::file_size(spirv->binaryPath, error) > 0U,
         "KBMAT-MAT04: Cooked graph fragment binary must exist on disk in the staging cache");
-    const std::filesystem::path graphCacheRoot =
-        std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / ("graph_" + std::to_string(shader.sourceHash));
+    const std::filesystem::path graphCacheRoot = TestGraphCacheRoot(shader.sourceHash);
     const bool leftCompilerLog = std::ranges::any_of(
         std::filesystem::recursive_directory_iterator(graphCacheRoot),
         [](const std::filesystem::directory_entry& entry) {
@@ -383,7 +389,7 @@ void RunGraphShaderCookShadercFailureTest() {
 
     const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Spirv };
     std::error_code error;
-    std::filesystem::remove_all(std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / ("graph_" + std::to_string(broken.sourceHash)), error);
+    std::filesystem::remove_all(TestGraphCacheRoot(broken.sourceHash), error);
 
     const RenderMaterialGraphShaderArtifactResult result = CookRenderMaterialGraphShaderArtifact(broken, backends, MakeCookRequest("BaseOpaque"));
     Require(!result.Succeeded(), "KBMAT-MAT04: A graph that fails shaderc compilation must not report success");
@@ -394,8 +400,7 @@ void RunGraphShaderCookShadercFailureTest() {
         }
     }
     Require(hasError, "KBMAT-MAT04: shaderc compilation failure must produce an error diagnostic");
-    const std::filesystem::path brokenCacheRoot =
-        std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / ("graph_" + std::to_string(broken.sourceHash));
+    const std::filesystem::path brokenCacheRoot = TestGraphCacheRoot(broken.sourceHash);
     const bool leftFailureLog = std::filesystem::exists(brokenCacheRoot, error) && std::ranges::any_of(
         std::filesystem::recursive_directory_iterator(brokenCacheRoot),
         [](const std::filesystem::directory_entry& entry) {
@@ -428,6 +433,7 @@ void RunGraphShaderArtifactDependencyInvalidationTest() {
     request.dependencyFiles = { dependency.generic_string() };
     request.cacheRoot = cacheRoot.generic_string();
     request.pass = "BaseOpaque";
+    request.shaderPlatform = kb::assets::bake::ShaderBakePlatform::Linux;
     request.materialTypeVersion = 1U;
 
     const RenderMaterialGraphShaderArtifactResult first = CookRenderMaterialGraphShaderArtifact(shader, backends, request);

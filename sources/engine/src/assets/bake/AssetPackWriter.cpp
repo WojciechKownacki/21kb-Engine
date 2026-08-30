@@ -12,6 +12,20 @@
 #include <system_error>
 #include <utility>
 
+#if defined(_WIN32)
+    #ifndef WIN32_LEAN_AND_MEAN
+        #define WIN32_LEAN_AND_MEAN
+    #endif
+    #ifndef NOMINMAX
+        #define NOMINMAX
+    #endif
+    #include <Windows.h>
+#else
+    #include <fcntl.h>
+    #include <sys/file.h>
+    #include <unistd.h>
+#endif
+
 namespace kb::assets::bake {
 namespace {
 
@@ -20,6 +34,7 @@ namespace {
 // back to a COPY across volumes, and a copy is not a publication.
 constexpr std::wstring_view kStagingPackSuffix = L".kbpackstaging";
 constexpr std::wstring_view kStagingPayloadSuffix = L".kbpackpayload";
+constexpr std::wstring_view kLockSuffix = L".kbpacklock";
 
 // Chunk the assembly pass copies with. Big enough that the copy is bound by the disk rather
 // than by the loop, small enough that it is not a memory decision.
@@ -92,6 +107,7 @@ AssetPackWriter::AssetPackWriter(std::filesystem::path packPath, const BakeTarge
     , profileIsValid_{ IsValidBakeTargetProfile(profile) } {
     stagingPackPath_ = WithSuffix(packPath_, kStagingPackSuffix);
     payloadPath_ = WithSuffix(packPath_, kStagingPayloadSuffix);
+    lockPath_ = WithSuffix(packPath_, kLockSuffix);
 }
 
 AssetPackWriter::~AssetPackWriter() {
@@ -102,16 +118,66 @@ AssetPackWriter::~AssetPackWriter() {
     if (!finished_) {
         DiscardStaging();
     }
+    ReleaseDestinationLock();
+}
+
+bool AssetPackWriter::AcquireDestinationLock() {
+    if (lockHeld_) {
+        return true;
+    }
+#if defined(_WIN32)
+    HANDLE const handle = CreateFileW(
+        lockPath_.c_str(),
+        GENERIC_READ | GENERIC_WRITE,
+        0U,
+        nullptr,
+        OPEN_ALWAYS,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr);
+    if (handle == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+    lockHandle_ = reinterpret_cast<std::intptr_t>(handle);
+#else
+    const int descriptor = open(lockPath_.c_str(), O_CREAT | O_RDWR, 0666);
+    if (descriptor < 0) {
+        return false;
+    }
+    if (flock(descriptor, LOCK_EX | LOCK_NB) != 0) {
+        close(descriptor);
+        return false;
+    }
+    lockHandle_ = descriptor;
+#endif
+    lockHeld_ = true;
+    return true;
+}
+
+void AssetPackWriter::ReleaseDestinationLock() noexcept {
+    if (!lockHeld_) {
+        return;
+    }
+#if defined(_WIN32)
+    static_cast<void>(CloseHandle(reinterpret_cast<HANDLE>(lockHandle_)));
+#else
+    const int descriptor = static_cast<int>(lockHandle_);
+    static_cast<void>(::flock(descriptor, LOCK_UN));
+    static_cast<void>(::close(descriptor));
+#endif
+    lockHandle_ = -1;
+    lockHeld_ = false;
+    std::error_code removeError;
+    std::filesystem::remove(lockPath_, removeError);
 }
 
 BakedAssetSinkStatus AssetPackWriter::EnsureStagingOpen() {
     if (stagingOpen_) {
         return BakedAssetSinkStatus::Success;
     }
-    // Checked BEFORE anything is created, and against the longer of the two staging names, so
+    // Checked BEFORE anything is created, and against the longest staging name, so
     // that a destination the platform cannot open is refused rather than half-written.
-    const std::size_t worstCase =
-        std::max(stagingPackPath_.native().size(), payloadPath_.native().size());
+    const std::size_t worstCase = std::max({
+        stagingPackPath_.native().size(), payloadPath_.native().size(), lockPath_.native().size() });
     if (packPath_.empty() || worstCase > kMaxBakeStorePathLength) {
         return BakedAssetSinkStatus::PathTooLong;
     }
@@ -124,16 +190,23 @@ BakedAssetSinkStatus AssetPackWriter::EnsureStagingOpen() {
         }
     }
 
+    if (!AcquireDestinationLock()) {
+        return BakedAssetSinkStatus::StagingConflict;
+    }
+
     // Truncating rather than requiring absence: the staging names are derived from the
     // destination, so debris a killed process left behind is exactly what a new run overwrites.
     payload_.open(payloadPath_, std::ios::binary | std::ios::in | std::ios::out | std::ios::trunc);
     if (!payload_.is_open()) {
+        ReleaseDestinationLock();
         return BakedAssetSinkStatus::WriteFailed;
     }
     {
         std::ofstream stagingPack{ stagingPackPath_, std::ios::binary | std::ios::trunc };
         if (!stagingPack.is_open()) {
             payload_.close();
+            std::filesystem::remove(payloadPath_, error);
+            ReleaseDestinationLock();
             return BakedAssetSinkStatus::WriteFailed;
         }
     }
@@ -150,6 +223,10 @@ BakedAssetSinkStatus AssetPackWriter::EnsureStagingOpen() {
     payload_.write(reinterpret_cast<const char*>(stamp.data()), static_cast<std::streamsize>(stamp.size()));
     if (!payload_) {
         payload_.close();
+        std::error_code cleanupError;
+        std::filesystem::remove(stagingPackPath_, cleanupError);
+        std::filesystem::remove(payloadPath_, cleanupError);
+        ReleaseDestinationLock();
         return BakedAssetSinkStatus::WriteFailed;
     }
 
@@ -208,6 +285,10 @@ BakedAssetSinkStatus AssetPackWriter::BeginAsset(const BakedAssetDescriptor& des
     if (!descriptor.key.IsValid()) {
         return BakedAssetSinkStatus::InvalidKey;
     }
+    if (descriptor.key.targetProfileId != targetProfileId_ ||
+        descriptor.key.targetProfileHash != targetProfileHash_) {
+        return BakedAssetSinkStatus::InvalidProfile;
+    }
     if (!IsValidBakeCacheName(descriptor.assetTypeId)) {
         return BakedAssetSinkStatus::InvalidAssetType;
     }
@@ -253,6 +334,7 @@ BakedAssetSinkStatus AssetPackWriter::WritePrimaryBlock(std::span<const std::uin
         .alignmentBytes = alignmentBytes,
         .payloadOffset = payloadOffset,
         .bytes = bytes.size(),
+        .payloadDigest = HashBakeDigest(bytes),
     });
     primaryWritten_ = true;
     return BakedAssetSinkStatus::Success;
@@ -269,6 +351,11 @@ BakedAssetSinkStatus AssetPackWriter::WriteAuxiliaryBlock(const BakedAssetBlock&
     }
     if (!store::IsPowerOfTwo(block.alignmentBytes)) {
         return BakedAssetSinkStatus::InvalidAlignment;
+    }
+    if (block.fragment.has_value() &&
+        (block.residency != BakedAssetBlockResidency::Streaming ||
+            !IsValidBakedAssetBlockFragment(*block.fragment))) {
+        return BakedAssetSinkStatus::InvalidFragment;
     }
     // Case-insensitive, exactly as in the loose store: the same artifact must name the same
     // blocks whichever sink it was published through.
@@ -297,6 +384,8 @@ BakedAssetSinkStatus AssetPackWriter::WriteAuxiliaryBlock(const BakedAssetBlock&
         .alignmentBytes = block.alignmentBytes,
         .payloadOffset = payloadOffset,
         .bytes = bytes.size(),
+        .payloadDigest = HashBakeDigest(bytes),
+        .fragment = block.fragment,
     });
     return BakedAssetSinkStatus::Success;
 }
@@ -310,14 +399,12 @@ BakedAssetSinkStatus AssetPackWriter::CommitAsset() {
         return BakedAssetSinkStatus::MissingPrimaryBlock;
     }
 
-    const auto existing = std::ranges::find_if(artifacts_, [this](const PendingArtifact& artifact) {
-        return artifact.key == openArtifact_.key;
-    });
-    if (existing != artifacts_.end()) {
+    const auto existing = artifactTypes_.find(openArtifact_.key);
+    if (existing != artifactTypes_.end()) {
         // The store is content-addressed, so the same key is the same artifact and taking it
         // twice is not an error -- but only if it is the same artifact. A key claimed by two
         // asset types is a caller mistake that would put an ambiguous entry in the catalogue.
-        if (existing->assetTypeId != openArtifact_.assetTypeId) {
+        if (existing->second != openArtifact_.assetTypeId) {
             return BakedAssetSinkStatus::InvalidAssetType;
         }
         payloadBytes_ = openArtifactPayloadStart_;
@@ -327,6 +414,7 @@ BakedAssetSinkStatus AssetPackWriter::CommitAsset() {
         return BakedAssetSinkStatus::Success;
     }
 
+    artifactTypes_.emplace(openArtifact_.key, openArtifact_.assetTypeId);
     artifacts_.push_back(std::move(openArtifact_));
     openArtifact_ = PendingArtifact{};
     primaryWritten_ = false;
@@ -351,6 +439,9 @@ BakedAssetSinkStatus AssetPackWriter::AssembleStagingPack() {
     if (const BakedAssetSinkStatus stamp = VerifyPayloadStamp(); stamp != BakedAssetSinkStatus::Success) {
         return stamp;
     }
+    // A pack is content-addressed output: task completion order must not affect its bytes.
+    // Block order remains baker-defined because streaming fragment order is semantic.
+    std::ranges::sort(artifacts_, {}, &PendingArtifact::key);
     std::vector<AssetPackArtifactEntry> entries;
     entries.reserve(artifacts_.size());
     for (const PendingArtifact& artifact : artifacts_) {
@@ -368,6 +459,7 @@ BakedAssetSinkStatus AssetPackWriter::AssembleStagingPack() {
                 .offset = 0U,
                 .storedBytes = block.bytes,
                 .uncompressedBytes = block.bytes,
+                .payloadDigest = block.payloadDigest,
             });
         }
         entries.push_back(std::move(entry));
@@ -380,8 +472,25 @@ BakedAssetSinkStatus AssetPackWriter::AssembleStagingPack() {
     if (indexBytes > kMaxAssetPackIndexBytes) {
         return BakedAssetSinkStatus::WriteFailed;
     }
+    // The fragment index is fixed-width too, so its length is known here, before any block has
+    // an offset -- which is what lets it sit between the artifact index and the payload rather
+    // than at the end where a streaming reader would have to go looking for it.
+    std::uint64_t fragmentCount = 0U;
+    for (const PendingArtifact& artifact : artifacts_) {
+        for (const PendingBlock& block : artifact.blocks) {
+            fragmentCount += block.fragment.has_value() ? 1U : 0U;
+        }
+    }
+    if (fragmentCount > std::numeric_limits<std::uint32_t>::max()) {
+        return BakedAssetSinkStatus::WriteFailed;
+    }
+    const std::uint64_t fragmentIndexBytes = fragmentCount * kAssetPackFragmentEntryBytes;
+    if (fragmentIndexBytes > kMaxAssetPackFragmentIndexBytes) {
+        return BakedAssetSinkStatus::WriteFailed;
+    }
     std::uint64_t cursor = 0U;
-    if (!TryAlignAssetPackOffset(kAssetPackHeaderBytes + indexBytes, packageAlignmentBytes_, cursor)) {
+    if (!TryAlignAssetPackOffset(
+            kAssetPackHeaderBytes + indexBytes + fragmentIndexBytes, packageAlignmentBytes_, cursor)) {
         return BakedAssetSinkStatus::WriteFailed;
     }
     const std::uint64_t dataStart = cursor;
@@ -405,16 +514,51 @@ BakedAssetSinkStatus AssetPackWriter::AssembleStagingPack() {
         return BakedAssetSinkStatus::WriteFailed;
     }
 
+    // Built only now: a fragment names the block's FINAL place in the file, so that a reader
+    // can match the two and refuse a fragment index that describes anything but whole blocks.
+    std::vector<AssetPackFragmentEntry> fragments;
+    fragments.reserve(static_cast<std::size_t>(fragmentCount));
+    for (std::size_t artifactIndex = 0U; artifactIndex < artifacts_.size(); ++artifactIndex) {
+        const PendingArtifact& artifact = artifacts_[artifactIndex];
+        for (std::size_t blockIndex = 0U; blockIndex < artifact.blocks.size(); ++blockIndex) {
+            const PendingBlock& block = artifact.blocks[blockIndex];
+            if (!block.fragment.has_value()) {
+                continue;
+            }
+            const AssetPackBlockEntry& placed = entries[artifactIndex].blocks[blockIndex];
+            fragments.push_back(AssetPackFragmentEntry{
+                .offset = placed.offset,
+                .bytes = placed.storedBytes,
+                .clusterCount = block.fragment->clusterCount,
+                .boundsMin = block.fragment->boundsMin,
+                .boundsMax = block.fragment->boundsMax,
+            });
+        }
+    }
+    const std::vector<std::uint8_t> fragmentIndex = EncodeAssetPackFragmentIndex(fragments);
+    if (fragmentIndex.size() != fragmentIndexBytes) {
+        return BakedAssetSinkStatus::WriteFailed;
+    }
+
     AssetPackHeader header{};
     header.targetProfileId = targetProfileId_;
     header.targetProfileHash = targetProfileHash_;
     header.indexOffset = kAssetPackHeaderBytes;
     header.indexBytes = indexBytes;
-    header.indexChecksum = HashBakeBytes(index);
+    header.indexChecksum = AssetPackIndexChecksum(index, fragmentIndex);
     header.artifactCount = static_cast<std::uint32_t>(entries.size());
     header.packageBlockAlignmentBytes = packageAlignmentBytes_;
     header.mappedBlockAlignmentBytes = mappedAlignmentBytes_;
     header.fileBytes = cursor;
+    if (fragmentCount != 0U) {
+        header.fragmentIndexOffset = kAssetPackHeaderBytes + indexBytes;
+        header.fragmentIndexBytes = fragmentIndexBytes;
+        header.fragmentCount = static_cast<std::uint32_t>(fragmentCount);
+        // Every fragment is a block, so it already sits at the package alignment and nothing
+        // coarser was asked of it. Recording the value the placement actually satisfied, rather
+        // than a constant, is what keeps this field a statement about the file.
+        header.fragmentAlignmentBytes = packageAlignmentBytes_;
+    }
     const std::vector<std::uint8_t> headerBytes = EncodeAssetPackHeader(header);
 
     // Reopened in place rather than recreated: the staging file's identity is what the
@@ -425,12 +569,14 @@ BakedAssetSinkStatus AssetPackWriter::AssembleStagingPack() {
     }
     output.write(reinterpret_cast<const char*>(headerBytes.data()), static_cast<std::streamsize>(headerBytes.size()));
     output.write(reinterpret_cast<const char*>(index.data()), static_cast<std::streamsize>(index.size()));
+    output.write(
+        reinterpret_cast<const char*>(fragmentIndex.data()), static_cast<std::streamsize>(fragmentIndex.size()));
 
     // Padding never exceeds the coarsest alignment a block can ask for, so a small run of
     // zeros written repeatedly costs nothing and keeps a megabyte off the stack.
     const std::array<char, 4096U> zeros{};
     std::vector<char> buffer(kAssemblyChunkBytes);
-    std::uint64_t written = kAssetPackHeaderBytes + indexBytes;
+    std::uint64_t written = kAssetPackHeaderBytes + indexBytes + fragmentIndexBytes;
     auto padTo = [&](std::uint64_t target) {
         while (written < target && output) {
             const std::uint64_t chunk = std::min<std::uint64_t>(target - written, zeros.size());
@@ -509,17 +655,18 @@ BakedAssetSinkStatus AssetPackWriter::Finish() {
     std::filesystem::remove(payloadPath_, removeError);
     finished_ = true;
     stagingOpen_ = false;
+    ReleaseDestinationLock();
     return BakedAssetSinkStatus::Success;
 }
 
 void AssetPackWriter::DiscardStaging() noexcept {
-    if (!stagingOpen_) {
-        return;
+    if (stagingOpen_) {
+        std::error_code error;
+        std::filesystem::remove(stagingPackPath_, error);
+        std::filesystem::remove(payloadPath_, error);
+        stagingOpen_ = false;
     }
-    std::error_code error;
-    std::filesystem::remove(stagingPackPath_, error);
-    std::filesystem::remove(payloadPath_, error);
-    stagingOpen_ = false;
+    ReleaseDestinationLock();
 }
 
 } // namespace kb::assets::bake

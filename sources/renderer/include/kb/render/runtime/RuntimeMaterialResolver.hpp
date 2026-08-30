@@ -115,7 +115,7 @@ public:
         const RenderMeshEmbeddedMaterial& embeddedMaterial) const;
 
     [[nodiscard]] ResolvedRuntimeMaterialDesc ResolveLoadedMaterial(
-        const kb::assets::AssetManager& manager,
+        kb::assets::AssetManager& manager,
         const kb::assets::AssetMetadata& materialMetadata,
         const RenderMaterialAssetData& materialAsset) const;
 

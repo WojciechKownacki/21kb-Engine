@@ -1,6 +1,7 @@
 #include "engine/scene/ParticleEffectAssetValidation.hpp"
 
 #include "engine/assets/AssetKind.hpp"
+#include "engine/assets/IAssetLoader.hpp"
 #include "engine/assets/AssetRegistry.hpp"
 #include "engine/scene/ParticleEffectAssetIO.hpp"
 
@@ -9,6 +10,7 @@
 #include <functional>
 #include <optional>
 #include <set>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -134,7 +136,8 @@ struct DependencyReference {
 
 static ParticleEffectDependencyResult
 ValidateDependenciesImpl(const ParticleEffectAsset& rootAsset, const kb::assets::AssetMetadata& metadata,
-                         const kb::assets::AssetRegistry& registry) {
+                         const kb::assets::AssetRegistry& registry,
+                         const std::function<ParticleEffectLoadResult(const kb::assets::AssetMetadata&)>& loadEffect) {
     ParticleEffectDependencyResult analysis;
     std::set<std::uint64_t> directDependencyIds;
     std::set<std::uint64_t> transitiveDependencyIds;
@@ -166,7 +169,7 @@ ValidateDependenciesImpl(const ParticleEffectAsset& rootAsset, const kb::assets:
             }
             if (visited.contains(resolved->id.value))
                 continue;
-            ParticleEffectLoadResult loaded = ParticleEffectAssetIO::LoadDetailed(resolved->physicalPath);
+            ParticleEffectLoadResult loaded = loadEffect(*resolved);
             if (!loaded.Succeeded()) {
                 AddDiagnostic(analysis, ParticleEffectDiagnosticCode::MissingDependency, owner, dependency.path,
                               "external particle effect dependency cannot be loaded", dependency.emitterId,
@@ -199,14 +202,70 @@ ParticleEffectAssetValidator::ValidateDependencies(const kb::assets::AssetMetada
         result.diagnostics = std::move(loaded.diagnostics);
         return result;
     }
-    return ValidateDependenciesImpl(*loaded.asset, metadata, registry);
+    return ValidateDependenciesImpl(
+        *loaded.asset,
+        metadata,
+        registry,
+        [](const kb::assets::AssetMetadata& dependency) {
+            return ParticleEffectAssetIO::LoadDetailed(dependency.physicalPath);
+        });
+}
+
+ParticleEffectDependencyResult
+ParticleEffectAssetValidator::ValidateRuntimeDependencies(
+    const kb::assets::AssetLoadRequest& request,
+    const kb::assets::AssetRegistry& registry) {
+    std::vector<std::uint8_t> sourceBytes;
+    std::string readError;
+    if (!request.ReadSourceBytes(sourceBytes, readError)) {
+        ParticleEffectDependencyResult result;
+        result.diagnostics.push_back(ParticleEffectDiagnostic{
+            .code = ParticleEffectDiagnosticCode::FileAccessFailed,
+            .message = std::move(readError),
+        });
+        return result;
+    }
+    const auto parse = [](std::span<const std::uint8_t> bytes) {
+        return ParticleEffectAssetIO::Parse(bytes.empty()
+            ? std::string_view{}
+            : std::string_view{ reinterpret_cast<const char*>(bytes.data()), bytes.size() });
+    };
+    ParticleEffectLoadResult loaded = parse(sourceBytes);
+    if (!loaded.Succeeded()) {
+        ParticleEffectDependencyResult result;
+        result.diagnostics = std::move(loaded.diagnostics);
+        return result;
+    }
+    return ValidateDependenciesImpl(
+        *loaded.asset,
+        request.metadata,
+        registry,
+        [&request, &parse](const kb::assets::AssetMetadata& dependency) {
+            std::vector<std::uint8_t> dependencyBytes;
+            std::string dependencyError;
+            if (!request.ReadDependencySourceBytes(dependency, dependencyBytes, dependencyError)) {
+                ParticleEffectLoadResult result;
+                result.diagnostics.push_back(ParticleEffectDiagnostic{
+                    .code = ParticleEffectDiagnosticCode::FileAccessFailed,
+                    .message = std::move(dependencyError),
+                });
+                return result;
+            }
+            return parse(dependencyBytes);
+        });
 }
 
 ParticleEffectDependencyResult
 ParticleEffectAssetValidator::ValidateDependencies(const ParticleEffectAsset& workingAsset,
                                                    const kb::assets::AssetMetadata& metadata,
                                                    const kb::assets::AssetRegistry& registry) {
-    return ValidateDependenciesImpl(workingAsset, metadata, registry);
+    return ValidateDependenciesImpl(
+        workingAsset,
+        metadata,
+        registry,
+        [](const kb::assets::AssetMetadata& dependency) {
+            return ParticleEffectAssetIO::LoadDetailed(dependency.physicalPath);
+        });
 }
 
 } // namespace kb::scene

@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <optional>
+#include <span>
 #include <string>
 
 namespace kb::scene {
@@ -23,8 +24,14 @@ public:
     [[nodiscard]] static std::optional<AnimationClip> LoadClip(
         const std::filesystem::path& path,
         std::string* error = nullptr);
+    [[nodiscard]] static std::optional<AnimationClip> LoadClip(
+        std::span<const std::uint8_t> bytes,
+        std::string* error = nullptr);
     [[nodiscard]] static std::optional<AnimatorController> LoadController(
         const std::filesystem::path& path,
+        std::string* error = nullptr);
+    [[nodiscard]] static std::optional<AnimatorController> LoadController(
+        std::span<const std::uint8_t> bytes,
         std::string* error = nullptr);
     [[nodiscard]] static bool SaveClip(const std::filesystem::path& path, const AnimationClip& clip);
     [[nodiscard]] static bool ValidateController(const AnimatorController& controller, std::string* error = nullptr);

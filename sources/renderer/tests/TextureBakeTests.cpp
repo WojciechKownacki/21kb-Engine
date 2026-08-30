@@ -97,6 +97,7 @@ private:
         .textureCompressions = TextureCompressionFamilyBit(TextureCompressionFamily::BlockCompressedBaseline) |
             TextureCompressionFamilyBit(TextureCompressionFamily::BlockCompressedExtended),
         .shaderBackends = ShaderBakeBackendBit(ShaderBakeBackend::Spirv),
+        .shaderPlatform = kb::assets::bake::ShaderBakePlatform::Windows,
         .indexWidth = BakeIndexWidth::Bits32,
         .allowsThreeComponent16BitAttributes = true,
         .packageBlockAlignmentBytes = 256U,
@@ -108,8 +109,10 @@ private:
 [[nodiscard]] BakeTargetProfile MobileTestProfile() noexcept {
     return BakeTargetProfile{
         .identifier = "Test.Mobile",
-        .textureCompressions = TextureCompressionFamilyBit(TextureCompressionFamily::AdaptiveScalable),
+        .textureCompressions = TextureCompressionFamilyBit(TextureCompressionFamily::AdaptiveScalable) |
+            TextureCompressionFamilyBit(TextureCompressionFamily::Ericsson2),
         .shaderBackends = ShaderBakeBackendBit(ShaderBakeBackend::Spirv),
+        .shaderPlatform = kb::assets::bake::ShaderBakePlatform::Android,
         .indexWidth = BakeIndexWidth::Bits16,
         .allowsThreeComponent16BitAttributes = false,
         .packageBlockAlignmentBytes = 256U,
@@ -306,6 +309,12 @@ void RunBakedTextureFormatChoiceTest() {
             bgfx::TextureFormat::ASTC4x4, "ASTC base colour is ASTC4x4" },
         Case{ TextureCompressionFamily::AdaptiveScalable, RenderTextureAssetSemantic::Normal, false,
             bgfx::TextureFormat::ASTC4x4, "ASTC normal map is ASTC4x4" },
+        Case{ TextureCompressionFamily::Ericsson2, RenderTextureAssetSemantic::BaseColor, false,
+            bgfx::TextureFormat::ETC2, "ETC2 opaque base colour is RGB8" },
+        Case{ TextureCompressionFamily::Ericsson2, RenderTextureAssetSemantic::BaseColor, true,
+            bgfx::TextureFormat::ETC2A, "ETC2 translucent base colour keeps full EAC alpha" },
+        Case{ TextureCompressionFamily::Ericsson2, RenderTextureAssetSemantic::Normal, true,
+            bgfx::TextureFormat::ETC2, "ETC2 normal map drops an alpha no shader samples" },
     };
 
     for (const Case& testCase : cases) {
@@ -371,15 +380,72 @@ void RunBakedTextureFormatChoiceTest() {
     Require(mobile.status == TextureBakeStatus::Success && mobile.format == bgfx::TextureFormat::ASTC4x4,
         "Baking for the ASTC family did not produce ASTC4x4");
 
+    const TextureBakeOutput etc2 = BakeTextureBytes(
+        translucentPng,
+        TextureBakeSettings{ RenderTextureAssetSemantic::BaseColor, RenderTextureAssetColorSpace::Srgb },
+        MobileTestProfile(),
+        TextureCompressionFamily::Ericsson2,
+        sink);
+    Require(etc2.status == TextureBakeStatus::Success && etc2.format == bgfx::TextureFormat::ETC2A,
+        "Baking a translucent ETC2 base colour did not produce ETC2 RGBA8");
+
     // The family drives the choice, so one source baked for two families of one profile lands
     // in two different formats and two different artifacts.
     Require(opaqueBaseColor.key.Digest() != mobile.key.Digest(),
         "Two compression families of the same source must not share a bake key");
 }
 
+void RunBakedTextureEtc2AlphaTest() {
+    constexpr std::uint16_t edge = 32U;
+    std::vector<std::uint8_t> source = MakeRgba8Gradient(edge, edge, 0xFFU);
+    for (std::uint16_t y = 0U; y < edge; ++y) {
+        for (std::uint16_t x = 0U; x < edge; ++x) {
+            source[(static_cast<std::size_t>(y) * edge + x) * 4U + 3U] =
+                static_cast<std::uint8_t>((static_cast<std::uint32_t>(x) * 7U +
+                    static_cast<std::uint32_t>(y) * 11U) & 0xFFU);
+        }
+    }
+
+    TempStore store{ "21kb_texture_bake_etc2_alpha" };
+    LooseBakedAssetSink sink{ store.Root() };
+    const TextureBakeOutput baked = BakeTextureBytes(
+        MakePngSource(source, edge, edge),
+        TextureBakeSettings{ RenderTextureAssetSemantic::BaseColor, RenderTextureAssetColorSpace::Linear },
+        MobileTestProfile(),
+        TextureCompressionFamily::Ericsson2,
+        sink);
+    Require(baked.status == TextureBakeStatus::Success && baked.format == bgfx::TextureFormat::ETC2A,
+        "A nontrivial alpha texture was not baked as ETC2 RGBA8");
+
+    RenderTextureAssetData asset{};
+    Require(kb::render::bake::ReadBakedTexture(baked.primaryBlock, asset) && asset.gpuBlocks.has_value(),
+        "The ETC2 RGBA8 KTX payload could not be read back");
+    Require(asset.mipCount == ExpectedMipCount(edge, edge) &&
+            asset.gpuBlocks->blocks.size() == bimg::imageGetSize(
+                nullptr, edge, edge, 1U, false, true, 1U, bimg::TextureFormat::ETC2A),
+        "The ETC2 RGBA8 payload does not contain one complete, correctly sized mip chain");
+
+    const std::optional<RenderTextureAssetData> decoded = DecodeRenderTextureToRgba8(asset);
+    Require(decoded.has_value() && decoded->rgba8.size() == source.size(),
+        "The independent bimg decoder could not decode the ETC2 RGBA8 base level");
+    std::uint64_t alphaError = 0U;
+    std::uint8_t decodedMinAlpha = 0xFFU;
+    std::uint8_t decodedMaxAlpha = 0U;
+    for (std::size_t index = 3U; index < source.size(); index += 4U) {
+        const int difference = static_cast<int>(source[index]) - static_cast<int>(decoded->rgba8[index]);
+        alphaError += static_cast<std::uint64_t>(difference < 0 ? -difference : difference);
+        decodedMinAlpha = std::min(decodedMinAlpha, decoded->rgba8[index]);
+        decodedMaxAlpha = std::max(decodedMaxAlpha, decoded->rgba8[index]);
+    }
+    const double meanAlphaError = static_cast<double>(alphaError) /
+        static_cast<double>(static_cast<std::size_t>(edge) * edge);
+    Require(meanAlphaError <= 8.0 && decodedMinAlpha < 48U && decodedMaxAlpha > 207U,
+        "ETC2 RGBA8 did not preserve the authored alpha range with production quality");
+}
+
 // ---------------------------------------------------------------------------------------
 // Determinism: the same source and the same arguments produce the same bytes, twice, into two
-// independent stores. Run for BC7 and ASTC, the two encoders with the most internal state.
+// independent stores. Run every encoder family, including the ETC2 RGBA path.
 void RunBakedTextureDeterminismTest() {
     const std::uint16_t edge = 16U;
     const std::vector<std::uint8_t> png = MakePngSource(MakeRgba8Gradient(edge, edge, 0xC0U), edge, edge);
@@ -393,6 +459,7 @@ void RunBakedTextureDeterminismTest() {
         Case{ DesktopTestProfile(), TextureCompressionFamily::BlockCompressedExtended, "BC7" },
         Case{ DesktopTestProfile(), TextureCompressionFamily::BlockCompressedBaseline, "BC3" },
         Case{ MobileTestProfile(), TextureCompressionFamily::AdaptiveScalable, "ASTC4x4" },
+        Case{ MobileTestProfile(), TextureCompressionFamily::Ericsson2, "ETC2A" },
     };
 
     for (const Case& testCase : cases) {
@@ -435,6 +502,21 @@ void RunBakedTextureDeterminismTest() {
         Require(ReadAllBytes(firstBlock) == firstBytes, "Re-baking an unchanged source rewrote the artifact");
         static_cast<void>(testCase.label);
     }
+
+    using kb::render::bake::BakedTextureFormatMatchesFamily;
+    Require(BakedTextureFormatMatchesFamily(bgfx::TextureFormat::BC1, "bc-baseline") &&
+            BakedTextureFormatMatchesFamily(bgfx::TextureFormat::BC3, "bc-baseline") &&
+            BakedTextureFormatMatchesFamily(bgfx::TextureFormat::BC7, "bc-extended") &&
+            BakedTextureFormatMatchesFamily(bgfx::TextureFormat::ASTC4x4, "astc") &&
+            BakedTextureFormatMatchesFamily(bgfx::TextureFormat::ETC2, "etc2") &&
+            BakedTextureFormatMatchesFamily(bgfx::TextureFormat::ETC2A, "etc2"),
+        "A production texture family no longer accepts the format emitted by its baker");
+    Require(!BakedTextureFormatMatchesFamily(bgfx::TextureFormat::BC7, "bc-baseline") &&
+            !BakedTextureFormatMatchesFamily(bgfx::TextureFormat::ETC2, "astc") &&
+            !BakedTextureFormatMatchesFamily(bgfx::TextureFormat::ASTC4x4, "etc2") &&
+            !BakedTextureFormatMatchesFamily(bgfx::TextureFormat::RGBA8, "bc-baseline") &&
+            !BakedTextureFormatMatchesFamily(bgfx::TextureFormat::BC1, "unknown"),
+        "A mismatched or unknown manifest texture qualifier was accepted");
 }
 
 // ---------------------------------------------------------------------------------------
@@ -922,6 +1004,7 @@ void RunBakedTextureQualityTest() {
     const std::array cases{
         Case{ DesktopTestProfile(), TextureCompressionFamily::BlockCompressedBaseline, 4.0, 0.90F, "BC1" },
         Case{ MobileTestProfile(), TextureCompressionFamily::AdaptiveScalable, 4.0, 0.90F, "ASTC4x4" },
+        Case{ MobileTestProfile(), TextureCompressionFamily::Ericsson2, 8.0, 0.85F, "ETC2 RGB8" },
     };
 
     for (const Case& testCase : cases) {
@@ -2188,6 +2271,7 @@ void RunBakedTextureGpuUploadTest() {
 
 void RunTextureBakeTests() {
     RunBakedTextureFormatChoiceTest();
+    RunBakedTextureEtc2AlphaTest();
     RunBakedTextureAlphaResidueTest();
     RunBakedTextureDeterminismTest();
     RunBakedTextureBakeKeyTest();

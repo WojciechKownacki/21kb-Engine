@@ -53,14 +53,33 @@ struct TangentAccum {
         : Vec3{};
 }
 
+[[nodiscard]] std::uint32_t MeshAssetVertexCount(const RenderMeshAssetData& asset) noexcept {
+    return static_cast<std::uint32_t>(asset.tangentVertices.empty() ? asset.vertices.size() : asset.tangentVertices.size());
+}
+
+[[nodiscard]] std::uint32_t SectionVertexCount(
+    const RenderMeshAssetData& asset,
+    const RenderMeshSectionDesc& section) noexcept {
+    const std::uint32_t vertexCount = MeshAssetVertexCount(asset);
+    if (section.vertexStart >= vertexCount) return 0U;
+    return section.vertexCount == 0U ? vertexCount - section.vertexStart : section.vertexCount;
+}
+
 void CompactIndices(RenderMeshAssetData& asset) {
+    // Finalize accepts indices32 as its canonical input. Do not let stale 16-bit storage win
+    // RefreshDesc when the geometry must remain wide.
+    asset.indices16.clear();
+    for (const RenderMeshSectionDesc& section : asset.sections) {
+        if (SectionVertexCount(asset, section) > 65536U) {
+            return;
+        }
+    }
     for (const std::uint32_t index : asset.indices32) {
         if (index > 0xFFFFU) {
             return;
         }
     }
 
-    asset.indices16.clear();
     asset.indices16.reserve(asset.indices32.size());
     for (const std::uint32_t index : asset.indices32) {
         asset.indices16.push_back(static_cast<std::uint16_t>(index));
@@ -72,18 +91,24 @@ void CompactIndices(RenderMeshAssetData& asset) {
     return asset.indices16.empty() ? asset.indices32[index] : asset.indices16[index];
 }
 
-[[nodiscard]] RenderBoundsSphere ComputeBounds(const RenderMeshAssetData& asset, std::uint32_t indexStart, std::uint32_t indexCount) noexcept {
-    const std::uint32_t vertexCount = static_cast<std::uint32_t>(asset.tangentVertices.empty() ? asset.vertices.size() : asset.tangentVertices.size());
+[[nodiscard]] RenderBoundsSphere ComputeBounds(
+    const RenderMeshAssetData& asset,
+    std::uint32_t indexStart,
+    std::uint32_t indexCount,
+    std::uint32_t vertexStart = 0U) noexcept {
+    const std::uint32_t vertexCount = MeshAssetVertexCount(asset);
     const std::uint32_t totalIndexCount = static_cast<std::uint32_t>(asset.indices16.empty() ? asset.indices32.size() : asset.indices16.size());
-    if (vertexCount == 0U || indexCount == 0U || indexStart >= totalIndexCount || indexCount > totalIndexCount - indexStart) {
+    if (vertexCount == 0U || vertexStart >= vertexCount || indexCount == 0U ||
+        indexStart >= totalIndexCount || indexCount > totalIndexCount - indexStart) {
         return {};
     }
     const std::uint32_t indexEnd = indexStart + indexCount;
 
-    const std::uint32_t firstVertexIndex = IndexAt(asset, indexStart);
-    if (firstVertexIndex >= vertexCount) {
+    const std::uint32_t firstLocalIndex = IndexAt(asset, indexStart);
+    if (firstLocalIndex >= vertexCount - vertexStart) {
         return {};
     }
+    const std::uint32_t firstVertexIndex = vertexStart + firstLocalIndex;
 
     auto vertexPosition = [&asset](std::uint32_t vertexIndex) noexcept {
         if (!asset.tangentVertices.empty()) {
@@ -102,10 +127,11 @@ void CompactIndices(RenderMeshAssetData& asset) {
     float maxY = first[1];
     float maxZ = first[2];
     for (std::uint32_t index = indexStart; index < indexEnd; ++index) {
-        const std::uint32_t vertexIndex = IndexAt(asset, index);
-        if (vertexIndex >= vertexCount) {
+        const std::uint32_t localIndex = IndexAt(asset, index);
+        if (localIndex >= vertexCount - vertexStart) {
             continue;
         }
+        const std::uint32_t vertexIndex = vertexStart + localIndex;
         const std::array<float, 3> position = vertexPosition(vertexIndex);
         minX = std::min(minX, position[0]);
         minY = std::min(minY, position[1]);
@@ -122,10 +148,11 @@ void CompactIndices(RenderMeshAssetData& asset) {
     };
     float radiusSquared = 0.0F;
     for (std::uint32_t index = indexStart; index < indexEnd; ++index) {
-        const std::uint32_t vertexIndex = IndexAt(asset, index);
-        if (vertexIndex >= vertexCount) {
+        const std::uint32_t localIndex = IndexAt(asset, index);
+        if (localIndex >= vertexCount - vertexStart) {
             continue;
         }
+        const std::uint32_t vertexIndex = vertexStart + localIndex;
         const std::array<float, 3> position = vertexPosition(vertexIndex);
         const float dx = position[0] - center[0];
         const float dy = position[1] - center[1];
@@ -139,14 +166,36 @@ void CompactIndices(RenderMeshAssetData& asset) {
     };
 }
 
+[[nodiscard]] RenderBoundsSphere MergeBounds(RenderBoundsSphere lhs, RenderBoundsSphere rhs) noexcept {
+    if (!lhs.IsValid()) return rhs;
+    if (!rhs.IsValid()) return lhs;
+    const Vec3 delta{
+        rhs.center[0] - lhs.center[0],
+        rhs.center[1] - lhs.center[1],
+        rhs.center[2] - lhs.center[2],
+    };
+    const float distance = std::sqrt(Dot(delta, delta));
+    if (lhs.radius >= distance + rhs.radius) return lhs;
+    if (rhs.radius >= distance + lhs.radius) return rhs;
+    const float radius = (distance + lhs.radius + rhs.radius) * 0.5F;
+    if (distance > 0.0F) {
+        const float shift = (radius - lhs.radius) / distance;
+        lhs.center[0] += delta.x * shift;
+        lhs.center[1] += delta.y * shift;
+        lhs.center[2] += delta.z * shift;
+    }
+    lhs.radius = radius;
+    return lhs;
+}
+
 void ComputeAssetBounds(RenderMeshAssetData& asset) noexcept {
     const std::uint32_t indexCount = static_cast<std::uint32_t>(asset.indices16.empty() ? asset.indices32.size() : asset.indices16.size());
-    asset.bounds = ComputeBounds(asset, 0U, indexCount);
+    RenderBoundsSphere meshBounds{};
     for (RenderMeshSectionDesc& section : asset.sections) {
-        if (!section.bounds.IsValid()) {
-            section.bounds = ComputeBounds(asset, section.indexStart, section.indexCount);
-        }
+        section.bounds = ComputeBounds(asset, section.indexStart, section.indexCount, section.vertexStart);
+        meshBounds = MergeBounds(meshBounds, section.bounds);
     }
+    asset.bounds = asset.sections.empty() ? ComputeBounds(asset, 0U, indexCount) : meshBounds;
 }
 
 void BuildGpuDrivenMetadata(RenderMeshAssetData& asset) {
@@ -163,8 +212,8 @@ void BuildGpuDrivenMetadata(RenderMeshAssetData& asset) {
         asset.meshlets.push_back(RenderMeshletDesc{
             .indexStart = section.indexStart,
             .indexCount = section.indexCount,
-            .vertexStart = 0U,
-            .vertexCount = vertexCount,
+            .vertexStart = section.vertexStart,
+            .vertexCount = SectionVertexCount(asset, section),
             .sectionIndex = sectionIndex,
             .bounds = section.bounds.IsValid() ? section.bounds : asset.bounds,
             .cone = { 0.0F, 0.0F, 1.0F, 1.0F },
@@ -181,26 +230,28 @@ void BuildGpuDrivenMetadata(RenderMeshAssetData& asset) {
     });
 }
 
-[[nodiscard]] std::uint32_t MeshAssetVertexCount(const RenderMeshAssetData& asset) noexcept {
-    return static_cast<std::uint32_t>(asset.tangentVertices.empty() ? asset.vertices.size() : asset.tangentVertices.size());
-}
-
 [[nodiscard]] bool ValidateMeshAssetIndices(const RenderMeshAssetData& asset) noexcept {
     const std::uint32_t vertexCount = MeshAssetVertexCount(asset);
     if (vertexCount == 0U || asset.indices32.empty()) {
         return false;
     }
-    for (const std::uint32_t index : asset.indices32) {
-        if (index >= vertexCount) {
-            return false;
+    if (asset.sections.empty()) {
+        for (const std::uint32_t index : asset.indices32) {
+            if (index >= vertexCount) return false;
         }
     }
     for (const RenderMeshSectionDesc& section : asset.sections) {
+        const std::uint32_t sectionVertexCount = SectionVertexCount(asset, section);
         if (section.indexCount == 0U ||
             section.indexStart >= asset.indices32.size() ||
             section.indexCount > asset.indices32.size() - section.indexStart ||
-            section.indexCount % 3U != 0U) {
+            section.indexCount % 3U != 0U ||
+            sectionVertexCount == 0U ||
+            (section.vertexCount != 0U && section.vertexCount > vertexCount - section.vertexStart)) {
             return false;
+        }
+        for (std::uint32_t offset = 0U; offset < section.indexCount; ++offset) {
+            if (asset.indices32[section.indexStart + offset] >= sectionVertexCount) return false;
         }
     }
     return asset.indices32.size() % 3U == 0U;
@@ -226,7 +277,7 @@ void OptimizeMeshAssetVertexCache(RenderMeshAssetData& asset) {
             optimizedSection.data(),
             asset.indices32.data() + section.indexStart,
             section.indexCount,
-            vertexCount);
+            SectionVertexCount(asset, section));
         std::copy(optimizedSection.begin(), optimizedSection.end(), asset.indices32.begin() + static_cast<std::ptrdiff_t>(section.indexStart));
     }
 }
@@ -278,40 +329,73 @@ void OptimizeMeshAssetVertexFetch(std::vector<Vertex>& vertices, std::vector<std
         return accum;
     }
 
-    for (std::uint32_t index = 0U; index + 2U < totalIndexCount; index += 3U) {
-        const std::uint32_t ia = IndexAt(asset, index);
-        const std::uint32_t ib = IndexAt(asset, index + 1U);
-        const std::uint32_t ic = IndexAt(asset, index + 2U);
-        if (ia >= asset.vertices.size() || ib >= asset.vertices.size() || ic >= asset.vertices.size()) {
-            continue;
+    const auto accumulateRange = [&asset, &accum](
+                                     std::uint32_t indexStart,
+                                     std::uint32_t indexCount,
+                                     std::uint32_t vertexStart,
+                                     std::uint32_t vertexCount) {
+        if (indexStart >= (asset.indices16.empty() ? asset.indices32.size() : asset.indices16.size()) ||
+            indexCount > (asset.indices16.empty() ? asset.indices32.size() : asset.indices16.size()) - indexStart) {
+            return;
         }
+        const std::uint32_t indexEnd = indexStart + indexCount;
+        for (std::uint32_t index = indexStart; index + 2U < indexEnd; index += 3U) {
+            const std::uint32_t localA = IndexAt(asset, index);
+            const std::uint32_t localB = IndexAt(asset, index + 1U);
+            const std::uint32_t localC = IndexAt(asset, index + 2U);
+            if (localA >= vertexCount || localB >= vertexCount || localC >= vertexCount) {
+                continue;
+            }
+            const std::uint32_t ia = vertexStart + localA;
+            const std::uint32_t ib = vertexStart + localB;
+            const std::uint32_t ic = vertexStart + localC;
+            if (ia >= asset.vertices.size() || ib >= asset.vertices.size() || ic >= asset.vertices.size()) {
+                continue;
+            }
 
-        const RenderStaticMeshVertexP3N3UV2& a = asset.vertices[ia];
-        const RenderStaticMeshVertexP3N3UV2& b = asset.vertices[ib];
-        const RenderStaticMeshVertexP3N3UV2& c = asset.vertices[ic];
-        const Vec3 p0{ a.x, a.y, a.z };
-        const Vec3 p1{ b.x, b.y, b.z };
-        const Vec3 p2{ c.x, c.y, c.z };
-        const Vec3 edge1 = Subtract(p1, p0);
-        const Vec3 edge2 = Subtract(p2, p0);
-        const float du1 = b.u - a.u;
-        const float dv1 = b.v - a.v;
-        const float du2 = c.u - a.u;
-        const float dv2 = c.v - a.v;
-        const float denominator = (du1 * dv2) - (du2 * dv1);
-        if (std::abs(denominator) <= 0.000001F) {
-            continue;
+            const RenderStaticMeshVertexP3N3UV2& a = asset.vertices[ia];
+            const RenderStaticMeshVertexP3N3UV2& b = asset.vertices[ib];
+            const RenderStaticMeshVertexP3N3UV2& c = asset.vertices[ic];
+            const Vec3 p0{ a.x, a.y, a.z };
+            const Vec3 p1{ b.x, b.y, b.z };
+            const Vec3 p2{ c.x, c.y, c.z };
+            const Vec3 edge1 = Subtract(p1, p0);
+            const Vec3 edge2 = Subtract(p2, p0);
+            const float du1 = b.u - a.u;
+            const float dv1 = b.v - a.v;
+            const float du2 = c.u - a.u;
+            const float dv2 = c.v - a.v;
+            const float denominator = (du1 * dv2) - (du2 * dv1);
+            if (std::abs(denominator) <= 0.000001F) {
+                continue;
+            }
+
+            const float scale = 1.0F / denominator;
+            const Vec3 tangent = Scale(Subtract(Scale(edge1, dv2), Scale(edge2, dv1)), scale);
+            const Vec3 bitangent = Scale(Subtract(Scale(edge2, du1), Scale(edge1, du2)), scale);
+            accum[ia].tangent = Add(accum[ia].tangent, tangent);
+            accum[ib].tangent = Add(accum[ib].tangent, tangent);
+            accum[ic].tangent = Add(accum[ic].tangent, tangent);
+            accum[ia].bitangent = Add(accum[ia].bitangent, bitangent);
+            accum[ib].bitangent = Add(accum[ib].bitangent, bitangent);
+            accum[ic].bitangent = Add(accum[ic].bitangent, bitangent);
         }
+    };
 
-        const float scale = 1.0F / denominator;
-        const Vec3 tangent = Scale(Subtract(Scale(edge1, dv2), Scale(edge2, dv1)), scale);
-        const Vec3 bitangent = Scale(Subtract(Scale(edge2, du1), Scale(edge1, du2)), scale);
-        accum[ia].tangent = Add(accum[ia].tangent, tangent);
-        accum[ib].tangent = Add(accum[ib].tangent, tangent);
-        accum[ic].tangent = Add(accum[ic].tangent, tangent);
-        accum[ia].bitangent = Add(accum[ia].bitangent, bitangent);
-        accum[ib].bitangent = Add(accum[ib].bitangent, bitangent);
-        accum[ic].bitangent = Add(accum[ic].bitangent, bitangent);
+    if (asset.sections.empty()) {
+        accumulateRange(0U, totalIndexCount, 0U, static_cast<std::uint32_t>(asset.vertices.size()));
+    } else {
+        for (const RenderMeshSectionDesc& section : asset.sections) {
+            const std::uint32_t sectionVertexCount = section.vertexStart < asset.vertices.size()
+                ? (section.vertexCount == 0U
+                      ? static_cast<std::uint32_t>(asset.vertices.size()) - section.vertexStart
+                      : section.vertexCount)
+                : 0U;
+            if (sectionVertexCount == 0U || sectionVertexCount > asset.vertices.size() - section.vertexStart) {
+                continue;
+            }
+            accumulateRange(section.indexStart, section.indexCount, section.vertexStart, sectionVertexCount);
+        }
     }
     return accum;
 }
@@ -369,6 +453,14 @@ bool RenderMeshAssetFinalizer::Finalize(
     RenderMeshAssetData& asset,
     const RenderMeshFinalizeOptions& options) {
     if (!ValidateMeshAssetIndices(asset)) {
+        return false;
+    }
+    const bool hasExplicitVertexRanges = std::any_of(
+        asset.sections.begin(), asset.sections.end(),
+        [](const RenderMeshSectionDesc& section) {
+            return section.vertexStart != 0U || section.vertexCount != 0U;
+        });
+    if (options.optimizeVertexFetch && hasExplicitVertexRanges) {
         return false;
     }
     EnsureTangentVertexStorage(asset);

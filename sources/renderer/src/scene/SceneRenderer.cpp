@@ -309,6 +309,8 @@ SceneRenderLightingConfig SceneRenderer::DefaultLightingConfig() const noexcept 
 }
 
 void SceneRenderer::SetGpuDrivenRuntimeSupport(SceneGpuDrivenFeatureSupport support) noexcept {
+    support.runtimeGpuDispatchSupported = support.runtimeGpuDispatchSupported &&
+        meshSubmitter_ != nullptr && meshSubmitter_->GpuDrivenDispatchReady();
     gpuDrivenRuntimeSupport_ = support;
 }
 

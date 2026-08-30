@@ -4,6 +4,7 @@
 #include "kb/render/RendererCapabilityReport.hpp"
 #include "kb/render/RenderSurface.hpp"
 #include "kb/render/SceneDeferredLightingPass.hpp"
+#include "kb/render/ShaderLoader.hpp"
 #include "kb/render/ViewIdPolicy.hpp"
 #include "engine/ecs/WorkerPool.hpp"
 #include "engine/assets/AssetManager.hpp"
@@ -255,6 +256,8 @@ bool Renderer::Initialize(RenderSurface& surface, const DisplayConfig* config) {
         return false;
     }
 
+    ShaderLoader::SetBinaryProvider(shaderBinaryProvider_);
+
     sceneRenderer_ = std::make_unique<SceneRenderer>();
     if (!sceneRenderer_->Initialize()) {
         Shutdown();
@@ -291,7 +294,7 @@ bool Renderer::Initialize(RenderSurface& surface, const DisplayConfig* config) {
         Shutdown();
         return false;
     }
-    if (!editorPassSubmitter_.Initialize()) {
+    if (displayConfig_.enableEditorRendering && !editorPassSubmitter_.Initialize()) {
         Shutdown();
         return false;
     }
@@ -377,6 +380,7 @@ void Renderer::Shutdown() {
         context_->Shutdown();
         context_.reset();
     }
+    ShaderLoader::ClearBinaryProvider(shaderBinaryProvider_);
 }
 
 bool Renderer::BeginFrame() {
@@ -534,6 +538,13 @@ bool Renderer::SubmitScenes(std::span<const SceneFrameSubmission> submissions) {
     }
 
     std::vector<SceneFrameSubmission> expandedSubmissions{submissions.begin(), submissions.end()};
+    if (!displayConfig_.enableEditorRendering) {
+        for (SceneFrameSubmission& submission : expandedSubmissions) {
+            submission.desc.editorSceneOverlaysEnabled = false;
+            submission.desc.selectionMaskEnabled = false;
+            submission.desc.selectionOutlineEnabled = false;
+        }
+    }
     std::vector<AuxFramePanoramaConversion> panoramaConversions;
     std::array<bool, 7U> occupiedViewportIndices{};
     for (const SceneFrameSubmission& submission : expandedSubmissions) {
@@ -1789,6 +1800,15 @@ void Renderer::SetGraphShaderCacheRoot(std::string root) {
 
 const std::string& Renderer::GraphShaderCacheRoot() const noexcept {
     return graphShaderCacheRoot_;
+}
+
+bool Renderer::SetShaderBinaryProvider(
+    std::shared_ptr<const ShaderBinaryProvider> provider) noexcept {
+    if (context_ != nullptr || sceneRenderer_ != nullptr) {
+        return false;
+    }
+    shaderBinaryProvider_ = std::move(provider);
+    return true;
 }
 
 void Renderer::SetFrameDeltaSeconds(float seconds) noexcept {

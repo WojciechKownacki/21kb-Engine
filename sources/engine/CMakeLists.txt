@@ -47,6 +47,8 @@ add_library(kb_engine STATIC
     include/engine/assets/bake/AssetPackWriter.hpp
     include/engine/assets/bake/BakeTargetProfile.hpp
     include/engine/assets/bake/BakedAssetSink.hpp
+    include/engine/assets/bake/RuntimeAssetManifest.hpp
+    include/engine/assets/bake/RuntimeAssetPack.hpp
     include/engine/math/EngineMath.hpp
     include/engine/network/NetworkModel.hpp
     include/engine/network/NetworkObject.hpp
@@ -490,6 +492,7 @@ add_library(kb_engine STATIC
     src/assets/TerrainAsset.cpp
     src/assets/TerrainAssetIO.cpp
     src/assets/AssetImportService.cpp
+    src/assets/AssetLoadRequest.cpp
     src/assets/AssetImportTypes.cpp
     src/assets/AssetLoaderRegistry.cpp
     src/assets/AssetManager.cpp
@@ -507,6 +510,8 @@ add_library(kb_engine STATIC
     src/assets/bake/AssetPackWriter.cpp
     src/assets/bake/BakeTargetProfile.cpp
     src/assets/bake/BakedAssetSink.cpp
+    src/assets/bake/RuntimeAssetManifest.cpp
+    src/assets/bake/RuntimeAssetPack.cpp
     src/private/assets/bake/BakeStorePath.hpp
     src/project/ProjectDescriptorBinaryIO.cpp
     src/project/ProjectDescriptorIntegrity.cpp
@@ -1503,6 +1508,18 @@ endif()
 
 kb_apply_quality_gates(kb_engine)
 
+if(NOT CMAKE_CROSSCOMPILING)
+    # Host-side release gate used before platform packaging. It deliberately
+    # links the production reader instead of duplicating the container parser
+    # in Gradle or another build-system language.
+    add_executable(kb_asset_pack_validator
+        tools/AssetPackValidator.cpp
+    )
+    target_link_libraries(kb_asset_pack_validator PRIVATE kb_engine)
+    kb_apply_quality_gates(kb_asset_pack_validator)
+
+endif()
+
 if(BUILD_TESTING)
     add_library(kb_engine_old_abi_test_plugin SHARED
         tests/OldEngineModuleAbiPlugin.cpp
@@ -1632,6 +1649,15 @@ if(BUILD_TESTING)
     set_tests_properties(kb_engine_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
     kb_apply_quality_gates(kb_engine_tests)
+
+    # Produces a real, writer-validated package used by the Android packaging
+    # gate. It is a test fixture generator, not a release cooker: release builds
+    # must pass the package emitted by their project bake pipeline explicitly.
+    add_executable(kb_asset_pack_fixture_generator
+        tests/AssetPackFixtureGenerator.cpp
+    )
+    target_link_libraries(kb_asset_pack_fixture_generator PRIVATE kb_engine)
+    kb_apply_quality_gates(kb_asset_pack_fixture_generator)
 
     # LIB-251: a focused library gate must not pull the editor/UI target into
     # its dependency graph. Keep the executable deliberately limited to the

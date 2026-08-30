@@ -42,9 +42,24 @@ std::optional<SkeletonAsset> SkeletonAssetIO::Load(
     }
     const std::optional<std::string> text = ReadText(path);
     if (!text) return fail("Skeleton asset could not be read.");
+    return Load(std::span<const std::uint8_t>{
+        reinterpret_cast<const std::uint8_t*>(text->data()), text->size() }, error);
+}
+
+std::optional<SkeletonAsset> SkeletonAssetIO::Load(
+    std::span<const std::uint8_t> bytes,
+    std::string* error) {
+    const auto fail = [error](std::string message) -> std::optional<SkeletonAsset> {
+        if (error != nullptr) *error = std::move(message);
+        return std::nullopt;
+    };
+    if (bytes.empty()) {
+        return fail("Skeleton asset could not be read.");
+    }
+    const std::string text{ reinterpret_cast<const char*>(bytes.data()), bytes.size() };
 
     SkeletonAsset asset{};
-    std::istringstream file{ *text };
+    std::istringstream file{ text };
     file.imbue(std::locale::classic());
     std::string line;
     bool schemaRead = false;

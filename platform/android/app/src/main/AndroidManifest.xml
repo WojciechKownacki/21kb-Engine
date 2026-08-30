@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-feature android:glEsVersion="0x00030000" android:required="true" />
+    <uses-feature android:name="android.hardware.vulkan.level" android:version="1" android:required="false" />
+
+    <application
+        android:allowBackup="false"
+        android:label="${kbApplicationLabel}"
+        android:theme="@style/Application.Fullscreen">
+        <activity
+            android:name=".MainActivity"
+            android:configChanges="orientation|keyboardHidden|screenSize|screenLayout|smallestScreenSize|uiMode"
+            android:exported="true"
+            android:screenOrientation="sensorLandscape">
+            <meta-data
+                android:name="android.app.lib_name"
+                android:value="kb_game_android" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

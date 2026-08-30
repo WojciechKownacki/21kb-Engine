@@ -21,7 +21,12 @@ std::vector<std::string> AudioMixerAssetLoader::Extensions() const {
 }
 
 kb::assets::AssetLoadResult AudioMixerAssetLoader::Load(const kb::assets::AssetLoadRequest& request) {
-    std::optional<AudioMixerAsset> asset = AudioMixerAssetIO::Load(request.resolvedPath);
+    std::vector<std::uint8_t> sourceBytes;
+    std::string error;
+    if (!request.ReadSourceBytes(sourceBytes, error)) {
+        return kb::assets::AssetLoadResult{ .asset = {}, .error = std::move(error) };
+    }
+    std::optional<AudioMixerAsset> asset = AudioMixerAssetIO::Load(sourceBytes);
     if (!asset.has_value()) {
         return kb::assets::AssetLoadResult{ .asset = {}, .error = "Audio mixer asset could not be loaded, parsed, or validated." };
     }

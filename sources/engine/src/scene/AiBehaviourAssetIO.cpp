@@ -49,6 +49,11 @@ std::optional<AiBehaviourAsset> AiBehaviourAssetIO::Load(const std::filesystem::
     if (path.extension() != kAiBehaviourAssetExtension) return std::nullopt;
     const std::vector<std::uint8_t> bytes = SceneAssetBinaryIO::ReadAllBytes(path);
     if (bytes.empty()) return std::nullopt;
+    return Load(bytes);
+}
+
+std::optional<AiBehaviourAsset> AiBehaviourAssetIO::Load(std::span<const std::uint8_t> bytes) {
+    if (bytes.empty()) return std::nullopt;
     std::istringstream input{ std::string{ reinterpret_cast<const char*>(bytes.data()), bytes.size() } };
     std::string magic;
     std::uint32_t version = 0U;

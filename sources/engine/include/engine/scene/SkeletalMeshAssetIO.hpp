@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <optional>
+#include <span>
 #include <string>
 
 namespace kb::scene {
@@ -26,6 +27,9 @@ public:
         std::string* error = nullptr);
     [[nodiscard]] static std::optional<SkeletalMeshAsset> Load(
         const std::filesystem::path& path,
+        std::string* error = nullptr);
+    [[nodiscard]] static std::optional<SkeletalMeshAsset> Load(
+        std::span<const std::uint8_t> bytes,
         std::string* error = nullptr);
     [[nodiscard]] static std::optional<SkeletalMeshAsset> LoadDerivedData(
         const std::filesystem::path& sourcePath,

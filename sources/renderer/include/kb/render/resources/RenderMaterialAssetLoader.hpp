@@ -162,6 +162,10 @@ struct RenderMaterialAssetParseSourceContext {
 [[nodiscard]] RenderMaterialTypeReferenceValidationResult ValidateRenderMaterialTypeReference(
     const RenderMaterialAssetData& material,
     const kb::assets::AssetMetadata& materialMetadata,
+    kb::assets::AssetManager& manager);
+[[nodiscard]] RenderMaterialTypeReferenceValidationResult ValidateRenderMaterialTypeReference(
+    const RenderMaterialAssetData& material,
+    const kb::assets::AssetMetadata& materialMetadata,
     const kb::assets::AssetManager& manager);
 
 struct RenderMaterialAssetParseResult {

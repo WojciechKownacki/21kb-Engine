@@ -73,6 +73,9 @@ bool SceneGpuDrivenCullingPass::Initialize() {
     if (IsInitialized()) {
         return true;
     }
+    if ((bgfx::getCaps()->supported & BGFX_CAPS_COMPUTE) == 0U) {
+        return false;
+    }
 
     clearProgram_ = ShaderLoader::LoadComputeProgram("cs_instance_cull_clear.sc");
     cullProgram_ = ShaderLoader::LoadComputeProgram("cs_instance_cull.sc");

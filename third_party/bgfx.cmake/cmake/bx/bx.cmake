@@ -99,11 +99,15 @@ target_compile_features(bx PUBLIC cxx_std_14)
 # (note: see bx\scripts\toolchain.lua for equivalent compiler flag)
 target_compile_options(bx PUBLIC $<$<CXX_COMPILER_ID:MSVC>:/Zc:__cplusplus /Zc:preprocessor>)
 
-# bx/include/bx/simd_t.h includes smmintrin.h unconditionally, so x86/x64 builds need SSE4.2.
-include(CheckCXXCompilerFlag)
-check_cxx_compiler_flag(-msse4.2 BX_HAS_MSSE42)
-if(BX_HAS_MSSE42)
-	target_compile_options(bx PUBLIC -msse4.2)
+# bx/include/bx/simd_t.h includes smmintrin.h on x86/x64, so those builds need
+# SSE4.2. A compiler accepting the option is not enough: Android Clang silently
+# accepts it for arm64 and then leaks the unusable flag to every bx consumer.
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64|i[3-6]86)$")
+	include(CheckCXXCompilerFlag)
+	check_cxx_compiler_flag(-msse4.2 BX_HAS_MSSE42)
+	if(BX_HAS_MSSE42)
+		target_compile_options(bx PUBLIC -msse4.2)
+	endif()
 endif()
 
 # Link against psapi on Windows

@@ -4,7 +4,9 @@
 #include "assets/AssetLoaderRegistry.hpp"
 #include "assets/AssetPathUtilities.hpp"
 #include "engine/assets/ImportedAssetHeaderReader.hpp"
+#include "engine/assets/bake/AssetPackReader.hpp"
 
+#include <algorithm>
 #include <set>
 #include <system_error>
 #include <unordered_map>
@@ -16,6 +18,56 @@ constexpr const char* kEditorLiveAssetOverrideCategory = "EditorLiveOverride";
 
 [[nodiscard]] bool IsEditorLiveAssetOverride(const AssetMetadata& metadata) noexcept {
     return metadata.importCategory == kEditorLiveAssetOverrideCategory && metadata.runtimeLoadable;
+}
+
+// Which loader owns a baked package, asked of the PACKAGE rather than deduced from its
+// extension. Every package ends in .kbpack whatever is inside it, so the extension says only
+// "this is a package"; the artifact index says whether it holds textures or geometry.
+//
+// A package whose artifacts do not all load through one loader has no single asset type, and a
+// discovery that picked one of them would put a type in the registry that the runtime then
+// disagrees with -- the same silent divergence between catalogue and runtime that the prefab
+// guid collision produced. It is left undiscovered instead, and so is a package this build
+// cannot mount at all.
+[[nodiscard]] IAssetLoader* LoaderForBakedPackage(
+    const std::vector<std::unique_ptr<IAssetLoader>>& loaders,
+    const std::filesystem::path& path) {
+    kb::assets::bake::AssetPackReader reader;
+    if (reader.Mount(path, kb::assets::bake::AssetPackAccess::Ranged) !=
+        kb::assets::bake::AssetPackReadStatus::Success) {
+        return nullptr;
+    }
+    // Current runtime loaders address a package as one asset and deliberately refuse a second
+    // artifact of the same kind because metadata carries no digest/subasset selector. Discovery
+    // must make the same decision or it registers an asset that can never load.
+    if (reader.Artifacts().size() != 1U) {
+        return nullptr;
+    }
+    IAssetLoader* owner = nullptr;
+    for (const kb::assets::bake::AssetPackArtifactEntry& artifact : reader.Artifacts()) {
+        IAssetLoader* match = nullptr;
+        for (const std::unique_ptr<IAssetLoader>& candidate : loaders) {
+            const std::vector<std::string> baked = candidate->BakedAssetTypes();
+            if (std::ranges::find(baked, artifact.assetTypeId) == baked.end()) {
+                continue;
+            }
+            // Type-id ownership has to be unique just like ordinary loader Type() ownership.
+            // Taking the first claimant makes discovery depend on registration order and can
+            // register a runtime type whose loader cannot actually decode this artifact.
+            if (match != nullptr) {
+                return nullptr;
+            }
+            match = candidate.get();
+        }
+        if (match == nullptr) {
+            return nullptr;
+        }
+        if (owner != nullptr && owner != match) {
+            return nullptr;
+        }
+        owner = match;
+    }
+    return owner;
 }
 
 } // namespace
@@ -50,6 +102,13 @@ std::size_t AssetDiscoveryService::DiscoverMountedAssets(
             IAssetLoader* loader = AssetLoaderRegistry::FindByExtension(loaders, entry.path().extension());
             if (loader == nullptr) {
                 continue;
+            }
+            if (AssetPathUtilities::LowerExtension(entry.path().extension()) ==
+                kb::assets::bake::kAssetPackFileExtension) {
+                loader = LoaderForBakedPackage(loaders, entry.path());
+                if (loader == nullptr) {
+                    continue;
+                }
             }
 
             std::optional<std::filesystem::path> virtualPath = mounts.ToVirtual(entry.path());
@@ -90,6 +149,7 @@ std::size_t AssetDiscoveryService::DiscoverMountedAssets(
                 .name = entry.path().stem().string(),
                 .virtualPath = *virtualPath,
                 .physicalPath = entry.path(),
+                .sourceExtension = AssetPathUtilities::LowerExtension(entry.path().extension()),
                 .contentHash = contentHash,
                 .dependencies = {},
                 .runtimeLoadable = true,
@@ -129,6 +189,10 @@ std::size_t AssetDiscoveryService::DiscoverMountedAssets(
             continue;
         }
         IAssetLoader* loader = AssetLoaderRegistry::FindByExtension(loaders, metadata->physicalPath.extension());
+        if (loader != nullptr && AssetPathUtilities::LowerExtension(metadata->physicalPath.extension()) ==
+                kb::assets::bake::kAssetPackFileExtension) {
+            loader = LoaderForBakedPackage(loaders, metadata->physicalPath);
+        }
         if (loader == nullptr) {
             metadata->dependencies.clear();
             continue;
@@ -144,10 +208,17 @@ std::size_t AssetDiscoveryService::DiscoverMountedAssets(
 
         const std::filesystem::path physical = AssetPathUtilities::ResolvePhysicalPath(mounts, metadata);
         std::error_code error;
+        IAssetLoader* physicalLoader = physical.empty()
+            ? nullptr
+            : AssetLoaderRegistry::FindByExtension(loaders, physical.extension());
+        if (physicalLoader != nullptr && AssetPathUtilities::LowerExtension(physical.extension()) ==
+                kb::assets::bake::kAssetPackFileExtension) {
+            physicalLoader = LoaderForBakedPackage(loaders, physical);
+        }
         if (discoveredVirtualPaths.contains(normalizedVirtualPath)
             || physical.empty()
             || !std::filesystem::is_regular_file(physical, error)
-            || AssetLoaderRegistry::FindByExtension(loaders, physical.extension()) == nullptr) {
+            || physicalLoader == nullptr) {
             static_cast<void>(registry.Remove(metadata.id));
             static_cast<void>(cache.erase(metadata.id.value));
         }

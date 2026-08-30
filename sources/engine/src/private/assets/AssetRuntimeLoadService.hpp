@@ -21,6 +21,7 @@ public:
         const AssetRegistry& registry,
         const AssetMountTable& mounts,
         const std::vector<std::unique_ptr<IAssetLoader>>& loaders,
+        const std::shared_ptr<bake::RuntimeAssetPack>& runtimePack,
         std::unordered_map<std::uint64_t, AssetManager::CachedAsset>& cache,
         std::mutex& loaderExecutionMutex,
         std::string& error);

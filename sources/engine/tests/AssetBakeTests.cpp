@@ -2,6 +2,7 @@
 #include "TestSuites.hpp"
 
 #include "engine/assets/bake/AssetBakeKey.hpp"
+#include "engine/assets/bake/AssetPack.hpp"
 #include "engine/assets/bake/BakeTargetProfile.hpp"
 #include "engine/assets/bake/BakedAssetSink.hpp"
 
@@ -126,7 +127,7 @@ namespace bake = kb::assets::bake;
 void ProfilesAnswerQuestionsAboutTheirTarget() {
     const std::span<const bake::BakeTargetProfile> profiles = bake::BakeTargetProfiles();
     Require(profiles.size() == 4U,
-        "BakeTargetProfiles must ship exactly Windows x64, Linux x64, Android arm64 and Web wasm32");
+        "BakeTargetProfiles must ship exactly Windows x64, Linux x64, Android arm64 and WebGL wasm32");
     for (const bake::BakeTargetProfile& profile : profiles) {
         Require(bake::IsValidBakeTargetProfile(profile), "A shipped bake target profile is not bakeable");
         Require(bake::IsValidBakeCacheName(profile.identifier),
@@ -161,6 +162,8 @@ void ProfilesAnswerQuestionsAboutTheirTarget() {
         "Windows x64 must bake dxbc, dxil and spirv shader binaries");
     Require(!bake::HasShaderBakeBackend(windows.shaderBackends, bake::ShaderBakeBackend::Glsl),
         "Windows x64 must not bake glsl shader binaries");
+    Require(windows.shaderPlatform == bake::ShaderBakePlatform::Windows,
+        "Windows x64 must compile shaders with Windows platform defines");
     Require(bake::BakeIndexWidthBytes(windows.indexWidth) == 4U, "Windows x64 must allow 32-bit indices");
     Require(windows.mappedBlockAlignmentBytes == 65536U,
         "Windows x64 mapped blocks must honour the Win32 64 KiB allocation granularity");
@@ -184,9 +187,15 @@ void ProfilesAnswerQuestionsAboutTheirTarget() {
     Require(linuxX64.mappedBlockAlignmentBytes == 4096U, "Linux x64 mmap offsets must be page-size multiples");
 
     const bake::BakeTargetProfile android = bake::AndroidArm64BakeTargetProfile();
+    Require(android.shaderPlatform == bake::ShaderBakePlatform::Android,
+        "Android arm64 must compile shaders with Android platform defines");
     Require(bake::HasTextureCompressionFamily(
-                android.textureCompressions, bake::TextureCompressionFamily::AdaptiveScalable),
-        "Android arm64 must bake ASTC textures");
+                android.textureCompressions, bake::TextureCompressionFamily::AdaptiveScalable) &&
+            bake::HasTextureCompressionFamily(
+                android.textureCompressions, bake::TextureCompressionFamily::Ericsson2),
+        "Android arm64 must bake preferred ASTC and guaranteed ETC2 fallback textures");
+    Require(bake::TextureCompressionFamilyName(bake::TextureCompressionFamily::Ericsson2) == "etc2",
+        "ETC2 must keep its stable runtime-manifest qualifier");
     Require(!bake::HasTextureCompressionFamily(
                 android.textureCompressions, bake::TextureCompressionFamily::BlockCompressedBaseline) &&
             !bake::HasTextureCompressionFamily(
@@ -241,7 +250,7 @@ void ProfilesAnswerQuestionsAboutTheirTarget() {
 //    BGFX_CONFIG_RENDERER_WEBGPU leaves BX_PLATFORM_EMSCRIPTEN commented out;
 //  * dropping ESSL, the only flavour a WebGL2 context (RendererType::OpenGLES)
 //    can be handed;
-//  * dropping either texture family -- a browser guarantees BC *or* ASTC and
+//  * dropping either texture family -- a WebGL2 browser guarantees BC *or* ETC2 and
 //    says which only at runtime, so both must be in the package;
 //  * baking BC4/BC5/BC6H/BC7, which bgfx on Emscripten reports unsupported from
 //    a fixed format list however capable the GPU is;
@@ -257,8 +266,8 @@ void ProfilesAnswerQuestionsAboutTheirTarget() {
 // vertex buffer whose stride changes under it.
 void WebProfileMatchesWhatABrowserBuildCanRun() {
     bake::BakeTargetProfile web{};
-    Require(bake::TryFindBakeTargetProfile("Web.wasm32", web), "There is no Web bake target profile");
-    Require(web == bake::WebWasm32BakeTargetProfile(),
+    Require(bake::TryFindBakeTargetProfile("WebGL.wasm32", web), "There is no WebGL bake target profile");
+    Require(web == bake::WebGlWasm32BakeTargetProfile(),
         "The registered Web profile is not the one the factory returns");
     Require(bake::IsValidBakeTargetProfile(web), "The Web bake target profile is not bakeable");
 
@@ -270,11 +279,13 @@ void WebProfileMatchesWhatABrowserBuildCanRun() {
     Require(bake::HasTextureCompressionFamily(
                 web.textureCompressions, bake::TextureCompressionFamily::BlockCompressedBaseline) &&
             bake::HasTextureCompressionFamily(
-                web.textureCompressions, bake::TextureCompressionFamily::AdaptiveScalable),
-        "Web must bake both BC1/BC3 and ASTC -- a browser guarantees one family or the other, not which");
+                web.textureCompressions, bake::TextureCompressionFamily::Ericsson2),
+        "WebGL must bake both BC1/BC3 and ETC2 -- a browser guarantees one family or the other, not which");
     Require(!bake::HasTextureCompressionFamily(
-                web.textureCompressions, bake::TextureCompressionFamily::BlockCompressedExtended),
-        "Web must not bake BC4/BC5/BC6H/BC7 -- bgfx on Emscripten reports them unsupported");
+                web.textureCompressions, bake::TextureCompressionFamily::BlockCompressedExtended) &&
+            !bake::HasTextureCompressionFamily(
+                web.textureCompressions, bake::TextureCompressionFamily::AdaptiveScalable),
+        "WebGL must not bake desktop-only BC extensions or treat optional ASTC as its fallback");
 
     Require(!web.allowsThreeComponent16BitAttributes,
         "Web must forbid 3x16-bit attributes -- WebGPU has no 3-component 16-bit vertex format");
@@ -328,7 +339,7 @@ void ProfileValidationCoversEveryRejectionRule() {
     cases.push_back({ "the shipped Windows x64 profile", uniform, true });
     cases.push_back({ "the shipped Linux x64 profile", mixed, true });
     cases.push_back({ "the shipped Android arm64 profile", bake::AndroidArm64BakeTargetProfile(), true });
-    cases.push_back({ "the shipped Web wasm32 profile", bake::WebWasm32BakeTargetProfile(), true });
+    cases.push_back({ "the shipped WebGL wasm32 profile", bake::WebGlWasm32BakeTargetProfile(), true });
 
     bake::BakeTargetProfile probe = uniform;
     probe.textureCompressions = 0U;
@@ -366,6 +377,14 @@ void ProfileValidationCoversEveryRejectionRule() {
     cases.push_back({ "a profile carrying a shader backend bit the renderer does not know", probe, false });
 
     probe = uniform;
+    probe.shaderPlatform = static_cast<bake::ShaderBakePlatform>(bake::kShaderBakePlatformCount);
+    cases.push_back({ "a profile carrying an unknown shader platform", probe, false });
+
+    probe = uniform;
+    probe.shaderPlatform = bake::ShaderBakePlatform::Android;
+    cases.push_back({ "a profile pairing Windows shader backends with Android platform defines", probe, false });
+
+    probe = uniform;
     probe.packageBlockAlignmentBytes = 0U;
     cases.push_back({ "a profile with a zero package block alignment", probe, false });
 
@@ -387,6 +406,10 @@ void ProfileValidationCoversEveryRejectionRule() {
     probe.maxGeometryChunkBytes = 0U;
     cases.push_back({ "a profile with no geometry chunk budget", probe, false });
 
+    probe = uniform;
+    probe.maxGeometryChunkBytes = bake::kMaxAssetPackBlockBytes + 1U;
+    cases.push_back({ "a profile whose geometry chunk exceeds the package block ceiling", probe, false });
+
     probe = mixed;
     probe.allowsThreeComponent16BitAttributes = true;
     cases.push_back({ "a mixed-stride profile claiming portable 3x16-bit attributes", probe, false });
@@ -398,6 +421,7 @@ void ProfileValidationCoversEveryRejectionRule() {
 
     probe = uniform;
     probe.shaderBackends = bake::ShaderBakeBackendBit(bake::ShaderBakeBackend::Metal);
+    probe.shaderPlatform = bake::ShaderBakePlatform::MacOS;
     cases.push_back({ "a Metal-only profile, whose bit is a known backend", probe, true });
 
     for (const ProfileCase& item : cases) {
@@ -492,6 +516,10 @@ void KeyCarriesWhatTheProfileSaysNotOnlyItsName() {
     edited.shaderBackends |= bake::ShaderBakeBackendBit(bake::ShaderBakeBackend::Glsl);
     Require(bake::BakeTargetProfileFingerprint(edited) != bake::BakeTargetProfileFingerprint(windows),
         "A shader backend change did not move the profile fingerprint");
+    edited = windows;
+    edited.shaderPlatform = bake::ShaderBakePlatform::Linux;
+    Require(bake::BakeTargetProfileFingerprint(edited) != bake::BakeTargetProfileFingerprint(windows),
+        "A shader platform change did not move the profile fingerprint");
     edited = windows;
     edited.indexWidth = bake::BakeIndexWidth::Bits16;
     Require(bake::BakeTargetProfileFingerprint(edited) != bake::BakeTargetProfileFingerprint(windows),

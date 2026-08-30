@@ -419,8 +419,20 @@ std::optional<AnimationClip> AnimationAssetIO::LoadClip(
     }
     const auto text = ReadText(path);
     if (!text) return fail("Animation clip could not be read.");
+    return LoadClip(std::span<const std::uint8_t>{
+        reinterpret_cast<const std::uint8_t*>(text->data()), text->size() }, error);
+}
+
+std::optional<AnimationClip> AnimationAssetIO::LoadClip(
+    std::span<const std::uint8_t> bytes,
+    std::string* error) {
+    if (bytes.empty()) {
+        if (error != nullptr) *error = "Animation clip could not be read.";
+        return std::nullopt;
+    }
+    const std::string text{ reinterpret_cast<const char*>(bytes.data()), bytes.size() };
     AnimationClip clip{};
-    std::istringstream file{ *text };
+    std::istringstream file{ text };
     file.imbue(std::locale::classic());
     std::string line;
     bool schemaRead = false;
@@ -561,8 +573,20 @@ std::optional<AnimatorController> AnimationAssetIO::LoadController(
     }
     const auto text = ReadText(path);
     if (!text) return fail("Animator controller could not be read.");
+    return LoadController(std::span<const std::uint8_t>{
+        reinterpret_cast<const std::uint8_t*>(text->data()), text->size() }, error);
+}
+
+std::optional<AnimatorController> AnimationAssetIO::LoadController(
+    std::span<const std::uint8_t> bytes,
+    std::string* error) {
+    if (bytes.empty()) {
+        if (error != nullptr) *error = "Animator controller could not be read.";
+        return std::nullopt;
+    }
+    const std::string text{ reinterpret_cast<const char*>(bytes.data()), bytes.size() };
     AnimatorController controller{};
-    std::istringstream file{ *text };
+    std::istringstream file{ text };
     file.imbue(std::locale::classic());
     std::string line;
     bool schemaRead = false;

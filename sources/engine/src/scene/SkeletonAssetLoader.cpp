@@ -12,7 +12,14 @@ std::vector<std::string> SkeletonAssetLoader::Extensions() const { return { kSke
 
 kb::assets::AssetLoadResult SkeletonAssetLoader::Load(const kb::assets::AssetLoadRequest& request) {
     std::string error;
-    std::optional<SkeletonAsset> asset = SkeletonAssetIO::Load(request.resolvedPath, &error);
+    if (request.SourceExtension() != kSkeletonAssetExtension) {
+        return kb::assets::AssetLoadResult{ {}, "Skeleton asset has an unexpected file extension." };
+    }
+    std::vector<std::uint8_t> sourceBytes;
+    if (!request.ReadSourceBytes(sourceBytes, error)) {
+        return kb::assets::AssetLoadResult{ {}, std::move(error) };
+    }
+    std::optional<SkeletonAsset> asset = SkeletonAssetIO::Load(sourceBytes, &error);
     return asset ? kb::assets::AssetLoadResult{ std::make_shared<SkeletonAsset>(std::move(*asset)), {} }
                  : kb::assets::AssetLoadResult{ {}, std::move(error) };
 }

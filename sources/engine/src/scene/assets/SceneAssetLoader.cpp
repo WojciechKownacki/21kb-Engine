@@ -54,7 +54,19 @@ std::vector<std::string> SceneAssetLoader::Extensions() const {
 }
 
 kb::assets::AssetLoadResult SceneAssetLoader::Load(const kb::assets::AssetLoadRequest& request) {
-    SceneDocumentLoadResult loaded = SceneAssetReader::Read(request.resolvedPath);
+    SceneDocumentLoadResult loaded;
+    if (request.IsPackaged()) {
+        std::vector<std::uint8_t> sourceBytes;
+        std::string error;
+        if (!request.ReadSourceBytes(sourceBytes, error)) {
+            return kb::assets::AssetLoadResult{.asset = {}, .error = std::move(error)};
+        }
+        loaded = SceneAssetReader::Read(std::move(sourceBytes));
+    } else {
+        // Loose scenes retain their .meta integrity check. Packaged payloads are
+        // authenticated by RuntimeAssetPack and intentionally have no sidecar.
+        loaded = SceneAssetReader::Read(request.resolvedPath);
+    }
     if (!loaded.succeeded) {
         return kb::assets::AssetLoadResult{.asset = {}, .error = std::move(loaded.error)};
     }

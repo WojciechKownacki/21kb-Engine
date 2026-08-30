@@ -199,6 +199,7 @@ bool IsRenderMaterialGraphInputPin(RenderMaterialGraphNodeKind kind, std::string
     case RenderMaterialGraphNodeKind::ConstantVector:
     case RenderMaterialGraphNodeKind::ConstantColor:
     case RenderMaterialGraphNodeKind::ConstantBool:
+    case RenderMaterialGraphNodeKind::StaticBoolParameter:
     case RenderMaterialGraphNodeKind::ParameterScalar:
     case RenderMaterialGraphNodeKind::ParameterVector:
     case RenderMaterialGraphNodeKind::ParameterColor:
@@ -209,6 +210,7 @@ bool IsRenderMaterialGraphInputPin(RenderMaterialGraphNodeKind kind, std::string
     case RenderMaterialGraphNodeKind::TextureObjectVolume:
     case RenderMaterialGraphNodeKind::TextureObject2DArray:
     case RenderMaterialGraphNodeKind::Uv:
+    case RenderMaterialGraphNodeKind::TextureCoordinate:
     case RenderMaterialGraphNodeKind::Time:
     case RenderMaterialGraphNodeKind::DeltaTime:
     case RenderMaterialGraphNodeKind::DynamicParameter:
@@ -227,6 +229,19 @@ bool IsRenderMaterialGraphInputPin(RenderMaterialGraphNodeKind kind, std::string
     case RenderMaterialGraphNodeKind::ObjectOrientation:
     case RenderMaterialGraphNodeKind::PreSkinnedPosition:
     case RenderMaterialGraphNodeKind::PreSkinnedNormal:
+    case RenderMaterialGraphNodeKind::ViewportUV:
+    case RenderMaterialGraphNodeKind::CameraPosition:
+    case RenderMaterialGraphNodeKind::CameraVector:
+    case RenderMaterialGraphNodeKind::ReflectionVector:
+    case RenderMaterialGraphNodeKind::LightVector:
+    case RenderMaterialGraphNodeKind::PixelNormalWS:
+    case RenderMaterialGraphNodeKind::VertexNormalWS:
+    case RenderMaterialGraphNodeKind::VertexTangentWS:
+    case RenderMaterialGraphNodeKind::ViewProperty:
+    case RenderMaterialGraphNodeKind::ViewSize:
+    case RenderMaterialGraphNodeKind::TwoSidedSign:
+    case RenderMaterialGraphNodeKind::SceneDepth:
+    case RenderMaterialGraphNodeKind::PixelDepth:
     case RenderMaterialGraphNodeKind::NamedRerouteUsage:
     case RenderMaterialGraphNodeKind::FunctionInput:
         return false;

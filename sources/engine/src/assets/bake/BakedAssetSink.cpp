@@ -4,6 +4,8 @@
 #include "scene/asset/io/SceneAssetBinaryIO.hpp"
 
 #include <algorithm>
+#include <cmath>
+#include <cstddef>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -170,8 +172,27 @@ std::string_view ToString(BakedAssetSinkStatus status) noexcept {
         return "PackAlreadyFinished";
     case BakedAssetSinkStatus::StagingConflict:
         return "StagingConflict";
+    case BakedAssetSinkStatus::InvalidFragment:
+        return "InvalidFragment";
     }
     return "Unknown";
+}
+
+bool IsValidBakedAssetBlockFragment(const BakedAssetBlockFragment& fragment) noexcept {
+    if (fragment.clusterCount == 0U) {
+        return false;
+    }
+    for (std::size_t axis = 0U; axis < fragment.boundsMin.size(); ++axis) {
+        const float low = fragment.boundsMin[axis];
+        const float high = fragment.boundsMax[axis];
+        // A NaN fails every comparison, so `!(low <= high)` rejects it as well as an
+        // inside-out box; the infinity test is separate because an infinite edge compares
+        // in the right order and still makes every distance to the page infinite.
+        if (!std::isfinite(low) || !std::isfinite(high) || !(low <= high)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 LooseBakedAssetSink::LooseBakedAssetSink(std::filesystem::path root)
@@ -300,6 +321,11 @@ BakedAssetSinkStatus LooseBakedAssetSink::WriteAuxiliaryBlock(const BakedAssetBl
     }
     if (!IsPowerOfTwo(block.alignmentBytes)) {
         return BakedAssetSinkStatus::InvalidAlignment;
+    }
+    if (block.fragment.has_value() &&
+        (block.residency != BakedAssetBlockResidency::Streaming ||
+            !IsValidBakedAssetBlockFragment(*block.fragment))) {
+        return BakedAssetSinkStatus::InvalidFragment;
     }
     // Case-insensitive: two blocks whose names differ only in case would become
     // one file the moment the artifact lands on a case-insensitive file system.

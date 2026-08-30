@@ -3,6 +3,7 @@
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/assets/AssetRegistry.hpp"
+#include "engine/assets/bake/RuntimeAssetPack.hpp"
 #include "engine/input/InputSubsystem.hpp"
 #include "engine/project/ParticleProjectPolicy.hpp"
 #include "engine/project/ProjectManager.hpp"
@@ -14,19 +15,27 @@
 #include "engine/scene/SceneInputActivation.hpp"
 #include "kb/render/resources/PostProcessProfileAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialFunctionAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialParameterCollection.hpp"
+#include "kb/render/resources/RenderMaterialTypeAssetLoader.hpp"
 #include "kb/render/resources/RenderMeshAssetLoader.hpp"
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
 #include "kb/render/runtime/RuntimeMaterialParameterValidation.hpp"
 
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
+#if defined(_WIN32)
+    #ifndef WIN32_LEAN_AND_MEAN
+        #define WIN32_LEAN_AND_MEAN
+    #endif
+    #ifndef NOMINMAX
+        #define NOMINMAX
+    #endif
+    #include <Windows.h>
 #endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <Windows.h>
 
 #include <algorithm>
+#include <cctype>
 #include <limits>
 #include <memory>
 #include <ostream>
@@ -35,6 +44,90 @@
 
 namespace kb::game {
 
+namespace {
+
+[[nodiscard]] kb::assets::bake::BakeTargetProfile HostBakeTargetProfile() noexcept {
+#if defined(_WIN32)
+    return kb::assets::bake::WindowsX64BakeTargetProfile();
+#elif defined(__ANDROID__)
+    return kb::assets::bake::AndroidArm64BakeTargetProfile();
+#elif defined(__EMSCRIPTEN__)
+    return kb::assets::bake::WebGlWasm32BakeTargetProfile();
+#else
+    return kb::assets::bake::LinuxX64BakeTargetProfile();
+#endif
+}
+
+[[nodiscard]] std::string LowerExtension(const std::filesystem::path& path) {
+    std::string extension = path.extension().string();
+    std::ranges::transform(extension, extension.begin(), [](unsigned char value) {
+        return static_cast<char>(std::tolower(value));
+    });
+    return extension;
+}
+
+[[nodiscard]] bool ReadPackagedGameProjectRuntime(
+    const std::filesystem::path& packPath,
+    std::string_view sceneOverride,
+    GameProjectRuntime& runtime,
+    std::ostream& err) {
+    auto pack = std::make_shared<kb::assets::bake::RuntimeAssetPack>();
+    const kb::assets::bake::RuntimeAssetPackStatus status =
+        pack->Mount(packPath, HostBakeTargetProfile());
+    if (status != kb::assets::bake::RuntimeAssetPackStatus::Success) {
+        err << "runtime package could not be mounted: "
+            << kb::assets::bake::ToString(status) << '\n';
+        return false;
+    }
+    return ReadMountedGameProjectRuntime(
+        std::move(pack), packPath.parent_path(), sceneOverride, runtime, err);
+}
+
+} // namespace
+
+bool ReadMountedGameProjectRuntime(
+    std::shared_ptr<kb::assets::bake::RuntimeAssetPack> pack,
+    std::filesystem::path projectRoot,
+    std::string_view sceneOverride,
+    GameProjectRuntime& runtime,
+    std::ostream& err) {
+    if (pack == nullptr || !pack->IsMounted()) {
+        err << "runtime package is not mounted\n";
+        return false;
+    }
+    const kb::assets::bake::RuntimeAssetManifest& manifest = pack->Manifest();
+    const std::string sceneReference = sceneOverride.empty()
+        ? manifest.settings.defaultMap
+        : std::string{ sceneOverride };
+    const kb::assets::bake::RuntimeAssetManifestEntry* sceneAsset =
+        pack->FindAsset(sceneReference);
+    if (sceneReference.empty() || sceneReference.front() != '/' ||
+        sceneAsset == nullptr || sceneAsset->type != "Scene" || !sceneAsset->runtimeLoadable) {
+        err << "runtime package scene is missing or is not a loadable Scene: "
+            << sceneReference << '\n';
+        return false;
+    }
+
+    GameProjectRuntime packaged{};
+    packaged.descriptor = manifest.descriptor;
+    packaged.projectRoot = std::move(projectRoot);
+    packaged.gameName = manifest.settings.gameName.empty()
+        ? manifest.settings.name
+        : manifest.settings.gameName;
+    packaged.sceneReference = sceneReference;
+    packaged.physicsLayersAsset = manifest.settings.physicsLayersAsset;
+    packaged.inputMappingContext = manifest.settings.inputMappingContext;
+    packaged.inputEnabled = manifest.settings.inputEnabled;
+    for (const kb::project::ProjectPluginReference& plugin : packaged.descriptor.plugins) {
+        if (plugin.enabled && !plugin.name.empty()) {
+            packaged.requiredModules.push_back(plugin.name);
+        }
+    }
+    packaged.assetPack = std::move(pack);
+    runtime = std::move(packaged);
+    return true;
+}
+
 float RuntimeDeltaSeconds(
     std::chrono::steady_clock::time_point previous,
     std::chrono::steady_clock::time_point current) noexcept {
@@ -42,6 +135,7 @@ float RuntimeDeltaSeconds(
     return std::clamp(delta.count(), 0.0F, kMaximumRuntimeDeltaSeconds);
 }
 
+#if defined(_WIN32)
 std::optional<std::string> TryNarrow(std::wstring_view text) {
     if (text.empty()) {
         return std::string{};
@@ -102,10 +196,17 @@ std::string NarrowForDiagnostics(std::wstring_view text) {
     return narrow;
 }
 
+#endif
+
 std::string NarrowForDiagnostics(const std::filesystem::path& path) {
+#if defined(_WIN32)
     return NarrowForDiagnostics(std::wstring_view{ path.native() });
+#else
+    return path.native();
+#endif
 }
 
+#if defined(_WIN32)
 std::filesystem::path ExecutableDirectory() {
     std::wstring buffer;
     buffer.resize(MAX_PATH);
@@ -122,6 +223,7 @@ std::filesystem::path ExecutableDirectory() {
         buffer.resize(buffer.size() * 2U);
     }
 }
+#endif
 
 bool ReadGameProjectRuntime(
     const std::filesystem::path& projectPath,
@@ -135,6 +237,16 @@ bool ReadGameProjectRuntime(
         err << "project path could not be resolved: " << NarrowForDiagnostics(projectPath) << '\n';
         return false;
     }
+
+    std::filesystem::path packageCandidate = absoluteInput;
+    if (std::filesystem::is_directory(absoluteInput, pathError) && !pathError) {
+        packageCandidate /= "Game.kbpack";
+    }
+    if (!pathError && std::filesystem::is_regular_file(packageCandidate, pathError) && !pathError &&
+        LowerExtension(packageCandidate) == kb::assets::bake::kAssetPackFileExtension) {
+        return ReadPackagedGameProjectRuntime(packageCandidate, sceneOverride, runtime, err);
+    }
+    pathError.clear();
 
     std::filesystem::path projectFile = absoluteInput;
     if (std::filesystem::is_directory(absoluteInput, pathError) && !pathError) {
@@ -178,6 +290,7 @@ bool ReadGameProjectRuntime(
         const std::filesystem::path projectLocalPath = runtime.projectRoot / configuredPath;
         std::error_code pluginError;
         if (std::filesystem::is_regular_file(projectLocalPath, pluginError) && !pluginError) {
+#if defined(_WIN32)
             // A project-local binary is only worth naming when the name survives
             // the trip through the process code page; a path that cannot be
             // spelled exactly keeps the portable filename the descriptor stored.
@@ -185,6 +298,11 @@ bool ReadGameProjectRuntime(
                 exact.has_value()) {
                 plugin.binaryPath = *std::move(exact);
             }
+#else
+            // POSIX paths are byte strings. Preserve the exact spelling that was
+            // successfully used for the filesystem probe above.
+            plugin.binaryPath = projectLocalPath.native();
+#endif
         }
     }
 
@@ -222,6 +340,26 @@ bool RegisterGameAssetLoaders(kb::scene::Scene& scene, std::ostream& err) {
         err << "material loader registration failed\n";
         return false;
     }
+    if (!manager.RegisterLoader(std::make_unique<kb::render::RenderMaterialFunctionAssetLoader>())) {
+        err << "material function loader registration failed\n";
+        return false;
+    }
+    if (!manager.RegisterLoader(std::make_unique<kb::render::RenderMaterialGraphAssetLoader>())) {
+        err << "material graph loader registration failed\n";
+        return false;
+    }
+    if (!manager.RegisterLoader(std::make_unique<kb::render::RenderMaterialInstanceAssetLoader>())) {
+        err << "material instance loader registration failed\n";
+        return false;
+    }
+    if (!manager.RegisterLoader(std::make_unique<kb::render::RenderMaterialParameterCollectionAssetLoader>())) {
+        err << "material parameter collection loader registration failed\n";
+        return false;
+    }
+    if (!manager.RegisterLoader(std::make_unique<kb::render::RenderMaterialTypeAssetLoader>())) {
+        err << "material type loader registration failed\n";
+        return false;
+    }
     if (!manager.RegisterLoader(std::make_unique<kb::render::RenderTextureAssetLoader>())) {
         err << "texture loader registration failed\n";
         return false;
@@ -255,11 +393,20 @@ bool LoadGameProjectScene(
     if (!RegisterGameAssetLoaders(scene, err)) {
         return false;
     }
-    if (!scene.Assets().MountProject(runtime.projectRoot)) {
-        err << "project assets could not be mounted: " << NarrowForDiagnostics(runtime.projectRoot) << '\n';
-        return false;
+    if (runtime.IsPackaged()) {
+        if (!scene.Assets().Manager().MountRuntimePack(runtime.assetPack)) {
+            err << "runtime package registry could not be mounted: "
+                << scene.Assets().Manager().LastError() << '\n';
+            return false;
+        }
+        discoveredAssets = runtime.assetPack->Manifest().assets.size();
+    } else {
+        if (!scene.Assets().MountProject(runtime.projectRoot)) {
+            err << "project assets could not be mounted: " << NarrowForDiagnostics(runtime.projectRoot) << '\n';
+            return false;
+        }
+        discoveredAssets = scene.Assets().Discover();
     }
-    discoveredAssets = scene.Assets().Discover();
     if (!runtime.physicsLayersAsset.empty() &&
         !kb::scene::PhysicsBackend::LoadAndConfigureLayers(scene, runtime.physicsLayersAsset)) {
         err << "project physics layers could not be applied: " << runtime.physicsLayersAsset << '\n';
@@ -269,20 +416,38 @@ bool LoadGameProjectScene(
     if (!runtime.sceneReference.empty() && runtime.sceneReference.front() == '/') {
         const kb::assets::AssetMetadata* metadata =
             scene.Assets().Manager().Registry().FindByPath(runtime.sceneReference);
-        if (metadata == nullptr) {
+        if (metadata == nullptr || metadata->type != "Scene") {
             err << "project scene asset was not found: " << runtime.sceneReference << '\n';
             return false;
         }
-        loadedScenePath = metadata->physicalPath;
+        const kb::assets::AssetHandle<kb::scene::SceneDocument> document =
+            scene.Assets().Manager().Load<kb::scene::SceneDocument>(metadata->id);
+        if (!document.IsLoaded() ||
+            !kb::scene::SceneDocumentService::LoadIntoScene(scene, *document)) {
+            err << "project scene could not be loaded: " << runtime.sceneReference;
+            const std::string loadError = scene.Assets().Manager().LastError();
+            if (!loadError.empty()) {
+                err << " (" << loadError << ")";
+            }
+            err << '\n';
+            return false;
+        }
+        loadedScenePath = runtime.IsPackaged()
+            ? std::filesystem::path{ runtime.sceneReference }
+            : metadata->physicalPath;
     } else {
+        if (runtime.IsPackaged()) {
+            err << "packaged project scene must use a /Game virtual path\n";
+            return false;
+        }
         loadedScenePath = std::filesystem::path{ runtime.sceneReference };
         if (loadedScenePath.is_relative()) {
             loadedScenePath = runtime.projectRoot / loadedScenePath;
         }
-    }
-    if (!kb::scene::SceneDocumentService::LoadFileIntoScene(scene, loadedScenePath)) {
-        err << "project scene could not be loaded: " << NarrowForDiagnostics(loadedScenePath) << '\n';
-        return false;
+        if (!kb::scene::SceneDocumentService::LoadFileIntoScene(scene, loadedScenePath)) {
+            err << "project scene could not be loaded: " << NarrowForDiagnostics(loadedScenePath) << '\n';
+            return false;
+        }
     }
 
     kb::scene::SceneInputActivation::Apply(scene);

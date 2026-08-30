@@ -41,16 +41,31 @@ std::uint32_t RenderMeshDescGeometry::IndexAt(const RenderMeshDesc& desc, std::u
     return desc.indexFormat == RenderIndexFormat::Uint32 ? desc.indices32[index] : desc.indices[index];
 }
 
-RenderBoundsSphere RenderMeshDescGeometry::ComputeBounds(const RenderMeshDesc& desc, std::uint32_t indexStart, std::uint32_t indexCount) noexcept {
-    if (desc.vertexCount == 0U || indexCount == 0U || indexStart >= desc.indexCount || indexCount > desc.indexCount - indexStart) {
+std::uint32_t RenderMeshDescGeometry::SectionVertexCount(
+    const RenderMeshDesc& desc,
+    const RenderMeshSectionDesc& section) noexcept {
+    if (section.vertexStart >= desc.vertexCount) {
+        return 0U;
+    }
+    return section.vertexCount == 0U ? desc.vertexCount - section.vertexStart : section.vertexCount;
+}
+
+RenderBoundsSphere RenderMeshDescGeometry::ComputeBounds(
+    const RenderMeshDesc& desc,
+    std::uint32_t indexStart,
+    std::uint32_t indexCount,
+    std::uint32_t vertexStart) noexcept {
+    if (desc.vertexCount == 0U || vertexStart >= desc.vertexCount || indexCount == 0U ||
+        indexStart >= desc.indexCount || indexCount > desc.indexCount - indexStart) {
         return {};
     }
     const std::uint32_t indexEnd = indexStart + indexCount;
 
-    const std::uint32_t firstVertexIndex = IndexAt(desc, indexStart);
-    if (firstVertexIndex >= desc.vertexCount) {
+    const std::uint32_t firstLocalIndex = IndexAt(desc, indexStart);
+    if (firstLocalIndex >= desc.vertexCount - vertexStart) {
         return {};
     }
+    const std::uint32_t firstVertexIndex = vertexStart + firstLocalIndex;
 
     const std::array<float, 3> first = VertexPosition(desc, firstVertexIndex);
     float minX = first[0];
@@ -60,10 +75,11 @@ RenderBoundsSphere RenderMeshDescGeometry::ComputeBounds(const RenderMeshDesc& d
     float maxY = first[1];
     float maxZ = first[2];
     for (std::uint32_t index = indexStart; index < indexEnd; ++index) {
-        const std::uint32_t vertexIndex = IndexAt(desc, index);
-        if (vertexIndex >= desc.vertexCount) {
+        const std::uint32_t localIndex = IndexAt(desc, index);
+        if (localIndex >= desc.vertexCount - vertexStart) {
             continue;
         }
+        const std::uint32_t vertexIndex = vertexStart + localIndex;
         const std::array<float, 3> position = VertexPosition(desc, vertexIndex);
         minX = std::min(minX, position[0]);
         minY = std::min(minY, position[1]);
@@ -80,10 +96,11 @@ RenderBoundsSphere RenderMeshDescGeometry::ComputeBounds(const RenderMeshDesc& d
     };
     float radiusSquared = 0.0F;
     for (std::uint32_t index = indexStart; index < indexEnd; ++index) {
-        const std::uint32_t vertexIndex = IndexAt(desc, index);
-        if (vertexIndex >= desc.vertexCount) {
+        const std::uint32_t localIndex = IndexAt(desc, index);
+        if (localIndex >= desc.vertexCount - vertexStart) {
             continue;
         }
+        const std::uint32_t vertexIndex = vertexStart + localIndex;
         const std::array<float, 3> position = VertexPosition(desc, vertexIndex);
         const float dx = position[0] - center[0];
         const float dy = position[1] - center[1];

@@ -47,6 +47,7 @@ class RendererScreenCapture;
 class SceneParticleRenderSynchronizer;
 class AuxFrameRenderer;
 class SceneRenderer;
+class ShaderBinaryProvider;
 
 } // namespace kb::render
 
@@ -221,6 +222,8 @@ public:
     [[nodiscard]] bool GpuDrivenRuntimeDispatchEnabled() const noexcept;
     void SetGraphShaderCacheRoot(std::string root);
     [[nodiscard]] const std::string& GraphShaderCacheRoot() const noexcept;
+    [[nodiscard]] bool SetShaderBinaryProvider(
+        std::shared_ptr<const ShaderBinaryProvider> provider) noexcept;
     // MAT-72: seconds advanced per completed frame; drives material u_time (Time/animation nodes).
     void SetFrameDeltaSeconds(float seconds) noexcept;
     [[nodiscard]] float FrameDeltaSeconds() const noexcept;
@@ -306,6 +309,7 @@ private:
     std::optional<RenderMaterialGraphShaderStage> lastRuntimeMaterialShaderStage_;
     std::optional<RenderMaterialGraphVariantUsage> lastRuntimeMaterialVariantUsage_;
     std::string graphShaderCacheRoot_;
+    std::shared_ptr<const ShaderBinaryProvider> shaderBinaryProvider_;
     float frameDeltaSeconds_ = 1.0F / 60.0F;
     bool gpuDrivenRuntimeDispatchEnabled_ = true;
     std::uint32_t lastUnresolvedMaterialTexturePathCount_ = 0;

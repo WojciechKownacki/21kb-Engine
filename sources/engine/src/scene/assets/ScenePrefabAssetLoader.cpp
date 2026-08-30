@@ -1,6 +1,7 @@
 #include "scene/assets/ScenePrefabAssetLoader.hpp"
 
 #include "engine/assets/AssetId.hpp"
+#include "engine/assets/AssetMemoryInputStream.hpp"
 #include "engine/assets/AssetRegistry.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/ScenePrefab.hpp"
@@ -134,7 +135,23 @@ std::vector<std::string> ScenePrefabAssetLoader::Extensions() const {
 }
 
 kb::assets::AssetLoadResult ScenePrefabAssetLoader::Load(const kb::assets::AssetLoadRequest& request) {
-    const ScenePrefabHandle handle = ScenePrefabAssetService::Load(scene_, request.resolvedPath);
+    ScenePrefabHandle handle;
+    if (request.IsPackaged()) {
+        std::vector<std::uint8_t> sourceBytes;
+        std::string error;
+        if (!request.ReadSourceBytes(sourceBytes, error)) {
+            return kb::assets::AssetLoadResult{ .asset = {}, .error = std::move(error) };
+        }
+        kb::assets::AssetMemoryInputStream input{ sourceBytes };
+        ScenePrefabAssetReadResult asset;
+        if (!ScenePrefabAssetReader::Read(input, asset)) {
+            return kb::assets::AssetLoadResult{ .asset = {}, .error = "Scene prefab asset parse failed" };
+        }
+        handle = ScenePrefabAssetService::LoadReadOnly(
+            scene_, std::move(asset), request.metadata.virtualPath.generic_string());
+    } else {
+        handle = ScenePrefabAssetService::Load(scene_, request.resolvedPath);
+    }
     if (!handle.IsValid()) {
         return kb::assets::AssetLoadResult{ .asset = {}, .error = "Scene prefab asset load failed" };
     }

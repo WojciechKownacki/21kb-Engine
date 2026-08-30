@@ -39,15 +39,15 @@ struct RuntimeMaterialFunctionLibraryBuildResult {
     const kb::assets::AssetMetadata& metadata);
 
 [[nodiscard]] RuntimeMaterialSourceGraphLoadResult LoadRuntimeMaterialSourceGraph(
-    const kb::assets::AssetManager& manager,
+    kb::assets::AssetManager& manager,
     const RenderMaterialAssetData& material);
 
 [[nodiscard]] RuntimeMaterialFunctionLibraryBuildResult BuildRuntimeMaterialFunctionLibrary(
-    const kb::assets::AssetManager& manager,
+    kb::assets::AssetManager& manager,
     const RenderMaterialGraphDocument& graph);
 
 [[nodiscard]] std::vector<RenderMaterialGraphDiagnostic> LoadRuntimeMaterialParameterCollectionDefaults(
-    const kb::assets::AssetManager& manager,
+    kb::assets::AssetManager& manager,
     const RenderMaterialGraphDocument& graph);
 
 [[nodiscard]] std::string RuntimeMaterialParseDiagnosticMessage(

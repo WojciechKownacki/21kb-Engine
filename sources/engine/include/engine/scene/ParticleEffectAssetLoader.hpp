@@ -17,6 +17,9 @@ class ParticleEffectAssetLoader final : public kb::assets::IAssetLoader {
     [[nodiscard]] std::optional<std::string>
     ValidateDependencies(const kb::assets::AssetMetadata& metadata,
                          const kb::assets::AssetRegistry& registry) const override;
+    [[nodiscard]] std::optional<std::string>
+    ValidateRuntimeDependencies(const kb::assets::AssetLoadRequest& request,
+                                const kb::assets::AssetRegistry& registry) const override;
     [[nodiscard]] std::string DiscoverBrowseTag(const std::filesystem::path& path) const override;
 };
 

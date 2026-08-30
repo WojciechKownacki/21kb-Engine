@@ -175,10 +175,19 @@ struct LightRig {
         for (std::uint16_t index : mesh.indices16) {
             indices.push_back(index);
         }
-        return indices;
+    } else if (!mesh.indices32.empty()) {
+        indices = mesh.indices32;
     }
-    if (!mesh.indices32.empty()) {
-        return mesh.indices32;
+
+    for (const kb::render::RenderMeshSectionDesc& section : mesh.sections) {
+        if (section.vertexStart == 0U || section.indexStart >= indices.size() ||
+            section.indexCount > indices.size() - section.indexStart) {
+            continue;
+        }
+        const std::size_t indexEnd = static_cast<std::size_t>(section.indexStart) + section.indexCount;
+        for (std::size_t index = section.indexStart; index < indexEnd; ++index) {
+            indices[index] += section.vertexStart;
+        }
     }
     return indices;
 }

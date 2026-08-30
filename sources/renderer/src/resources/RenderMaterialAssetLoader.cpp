@@ -1,6 +1,7 @@
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 
 #include "engine/assets/AssetManager.hpp"
+#include "engine/assets/AssetMemoryInputStream.hpp"
 #include "engine/assets/AssetRegistry.hpp"
 #include "resources/RenderMaterialAssetParser.hpp"
 #include "kb/render/resources/RenderMaterialFunctionAssetLoader.hpp"
@@ -498,10 +499,12 @@ RenderMaterialSchemaRefreshResult RefreshRenderMaterialGraphBackedMaterialSchema
     return result;
 }
 
-RenderMaterialTypeReferenceValidationResult ValidateRenderMaterialTypeReference(
+template <typename LoadMaterialType>
+RenderMaterialTypeReferenceValidationResult ValidateRenderMaterialTypeReferenceImpl(
     const RenderMaterialAssetData& material,
     const kb::assets::AssetMetadata& materialMetadata,
-    const kb::assets::AssetManager& manager) {
+    const kb::assets::AssetManager& manager,
+    LoadMaterialType&& loadMaterialType) {
     RenderMaterialTypeReferenceValidationResult result{};
     const bool builtInPbr =
         material.materialType.empty() ||
@@ -578,46 +581,91 @@ RenderMaterialTypeReferenceValidationResult ValidateRenderMaterialTypeReference(
         return result;
     }
 
-    const std::filesystem::path typePath = ResolveAssetPath(manager, *typeMetadata);
-    if (typePath.empty()) {
+    const std::filesystem::path resolvedPath = ResolveAssetPath(manager, *typeMetadata);
+    const std::filesystem::path diagnosticPath = resolvedPath.empty() ? typeMetadata->virtualPath : resolvedPath;
+    std::optional<RenderMaterialTypeDocument> loadedType;
+    std::string loadError;
+    if (!loadMaterialType(*typeMetadata, resolvedPath, loadedType, loadError) || !loadedType.has_value()) {
         AppendMaterialTypeReferenceDiagnostic(
             result,
             RenderMaterialTypeReferenceDiagnosticCode::MaterialTypeAssetLoadFailed,
             typeMetadata->id,
-            typeMetadata->virtualPath,
-            "Material Type asset path could not be resolved.");
+            diagnosticPath,
+            loadError.empty()
+                ? "Material Type asset could not be loaded."
+                : "Material Type asset could not be loaded: " + loadError);
         return result;
     }
 
-    const RenderMaterialTypeDocumentParseResult loadedType = RenderMaterialTypeAssetLoader::LoadTypeWithDiagnostics(typePath);
-    if (!loadedType.document.has_value()) {
-        AppendMaterialTypeReferenceDiagnostic(
-            result,
-            RenderMaterialTypeReferenceDiagnosticCode::MaterialTypeAssetLoadFailed,
-            typeMetadata->id,
-            typePath,
-            "Material Type asset could not be loaded.");
-        return result;
-    }
-
-    result.materialType = *loadedType.document;
-    if (loadedType.document->stableTypeId != material.materialType) {
+    result.materialType = *loadedType;
+    if (loadedType->stableTypeId != material.materialType) {
         AppendMaterialTypeReferenceDiagnostic(
             result,
             RenderMaterialTypeReferenceDiagnosticCode::IncompatibleMaterialType,
             typeMetadata->id,
-            typePath,
-            "Material Type asset stable id '" + loadedType.document->stableTypeId + "' does not match material type '" + material.materialType + "'.");
+            diagnosticPath,
+            "Material Type asset stable id '" + loadedType->stableTypeId + "' does not match material type '" + material.materialType + "'.");
     }
-    if (loadedType.document->version != material.materialTypeVersion) {
+    if (loadedType->version != material.materialTypeVersion) {
         AppendMaterialTypeReferenceDiagnostic(
             result,
             RenderMaterialTypeReferenceDiagnosticCode::IncompatibleMaterialTypeVersion,
             typeMetadata->id,
-            typePath,
-            "Material Type asset version " + std::to_string(loadedType.document->version) + " does not match material version " + std::to_string(material.materialTypeVersion) + ".");
+            diagnosticPath,
+            "Material Type asset version " + std::to_string(loadedType->version) + " does not match material version " + std::to_string(material.materialTypeVersion) + ".");
     }
     return result;
+}
+
+RenderMaterialTypeReferenceValidationResult ValidateRenderMaterialTypeReference(
+    const RenderMaterialAssetData& material,
+    const kb::assets::AssetMetadata& materialMetadata,
+    kb::assets::AssetManager& manager) {
+    return ValidateRenderMaterialTypeReferenceImpl(
+        material,
+        materialMetadata,
+        manager,
+        [&manager](
+            const kb::assets::AssetMetadata& metadata,
+            const std::filesystem::path&,
+            std::optional<RenderMaterialTypeDocument>& out,
+            std::string& error) {
+            const kb::assets::AssetHandle<RenderMaterialTypeDocument> loaded =
+                manager.Load<RenderMaterialTypeDocument>(metadata.id);
+            if (!loaded.IsLoaded()) {
+                error = manager.LastError();
+                return false;
+            }
+            out = *loaded;
+            return true;
+        });
+}
+
+RenderMaterialTypeReferenceValidationResult ValidateRenderMaterialTypeReference(
+    const RenderMaterialAssetData& material,
+    const kb::assets::AssetMetadata& materialMetadata,
+    const kb::assets::AssetManager& manager) {
+    return ValidateRenderMaterialTypeReferenceImpl(
+        material,
+        materialMetadata,
+        manager,
+        [](const kb::assets::AssetMetadata&,
+           const std::filesystem::path& path,
+           std::optional<RenderMaterialTypeDocument>& out,
+           std::string& error) {
+            if (path.empty()) {
+                error = "Material Type asset path could not be resolved.";
+                return false;
+            }
+            RenderMaterialTypeDocumentParseResult loaded =
+                RenderMaterialTypeAssetLoader::LoadTypeWithDiagnostics(path);
+            if (!loaded.document.has_value()) {
+                error = "Material Type asset document could not be parsed.";
+                return false;
+            }
+            out = std::move(*loaded.document);
+            return true;
+        });
 }
 
 bool RenderMaterialTypeReferenceValidationResult::Succeeded() const noexcept {
@@ -710,7 +758,18 @@ std::vector<std::string> RenderMaterialAssetLoader::Extensions() const {
 }
 
 kb::assets::AssetLoadResult RenderMaterialAssetLoader::Load(const kb::assets::AssetLoadRequest& request) {
-    RenderMaterialAssetParseResult material = LoadMaterialWithDiagnostics(request.resolvedPath, request.metadata.id);
+    std::vector<std::uint8_t> sourceBytes;
+    std::string error;
+    if (!request.ReadSourceBytes(sourceBytes, error)) {
+        return kb::assets::AssetLoadResult{ .asset = {}, .error = std::move(error) };
+    }
+    kb::assets::AssetMemoryInputStream input{ sourceBytes };
+    RenderMaterialAssetParseResult material = LoadMaterialWithDiagnostics(
+        input,
+        RenderMaterialAssetParseSourceContext{
+            .assetId = request.metadata.id,
+            .path = request.resolvedPath,
+        });
     if (!material.asset.has_value()) {
         return kb::assets::AssetLoadResult{ .asset = {}, .error = material.ErrorMessage() };
     }

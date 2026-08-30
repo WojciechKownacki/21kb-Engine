@@ -219,6 +219,28 @@ void RunSceneStaticModuleInjectionTest() {
     kb::tests::Require(probe.sceneSystemUpdates == 1, "Scene did not attach the injected static module system");
 }
 
+void RunStaticModuleReplacesConfiguredDynamicBinaryTest() {
+    ModuleProbe probe;
+    kb::project::ProjectDescriptor project;
+    project.disableEnginePluginsByDefault = true;
+    project.plugins.push_back(kb::project::ProjectPluginReference{
+        .name = "Static.PlatformProvider",
+        .binaryPath = "provider-that-must-not-be-loaded.dll",
+        .enabled = true,
+    });
+
+    kb::scene::Scene scene;
+    EngineModuleHost host{ project };
+    host.Add(std::make_unique<ProbeModule>(
+        "Static.PlatformProvider", Phase::Default, std::vector<std::string>{}, probe));
+    host.Load(scene.Runtime().EcsWorld());
+
+    kb::tests::Require(host.Diagnostics().empty(),
+        "A configured desktop binary was loaded despite a matching static platform module");
+    kb::tests::Require(host.IsActive("Static.PlatformProvider") && probe.loadOrder.size() == 1U,
+        "The matching static platform module did not replace the configured dynamic binary");
+}
+
 void RunSceneModuleReloadLifecycleTest() {
     ModuleProbe probe;
     kb::project::ProjectDescriptor project;
@@ -525,6 +547,7 @@ void RunEngineModuleTests() {
     RunDisabledByProjectTest();
     RunOptInDefaultTest();
     RunSceneStaticModuleInjectionTest();
+    RunStaticModuleReplacesConfiguredDynamicBinaryTest();
     RunSceneModuleReloadLifecycleTest();
     RunDependencyOrderTest();
     RunPhaseOrderTest();

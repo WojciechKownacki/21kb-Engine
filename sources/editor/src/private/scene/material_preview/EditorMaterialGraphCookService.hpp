@@ -95,6 +95,8 @@ struct EditorMaterialGraphCookConfig {
     std::uint32_t cacheEntryWarningThreshold = 4096U;
     std::uint64_t cacheByteWarningThreshold = 256ULL * 1024ULL * 1024ULL;
     kb::render::RenderMaterialGraphShaderBackend backend = kb::render::RenderMaterialGraphShaderBackend::Dxbc;
+    kb::assets::bake::ShaderBakePlatform shaderPlatform =
+        kb::assets::bake::ShaderBakePlatform::Windows;
 
     // Resolve the cook backend that matches an active bgfx renderer so the cooked binary
     // lands in the directory the runtime program loader reads from.

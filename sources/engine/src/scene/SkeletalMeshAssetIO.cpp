@@ -454,8 +454,23 @@ std::optional<SkeletalMeshAsset> SkeletalMeshAssetIO::Load(
     }
     const auto text = Read(path);
     if (!text) return fail("Skeletal mesh asset could not be read.");
+    return Load(std::span<const std::uint8_t>{
+        reinterpret_cast<const std::uint8_t*>(text->data()), text->size() }, error);
+}
+
+std::optional<SkeletalMeshAsset> SkeletalMeshAssetIO::Load(
+    std::span<const std::uint8_t> bytes,
+    std::string* error) {
+    const auto fail = [error](std::string message) -> std::optional<SkeletalMeshAsset> {
+        if (error != nullptr) *error = std::move(message);
+        return std::nullopt;
+    };
+    if (bytes.empty()) {
+        return fail("Skeletal mesh asset could not be read.");
+    }
+    const std::string text{ reinterpret_cast<const char*>(bytes.data()), bytes.size() };
     SkeletalMeshAsset asset{}; std::vector<SkeletalMeshMorphTarget> morphs;
-    std::string_view remaining{ *text };
+    std::string_view remaining{ text };
     bool schemaRead = false;
     bool fixedBoundsRead = false;
     std::size_t lineNumber = 0U;

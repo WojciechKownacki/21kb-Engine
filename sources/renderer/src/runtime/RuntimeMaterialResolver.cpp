@@ -306,6 +306,27 @@ void AppendInstanceValidationDiagnostics(
     }
 }
 
+[[nodiscard]] RenderMaterialAssetParseResult LoadRuntimeMaterialDocument(
+    kb::assets::AssetManager& manager,
+    const kb::assets::AssetMetadata& metadata) {
+    const kb::assets::AssetHandle<RenderMaterialAssetData> loaded =
+        manager.Load<RenderMaterialAssetData>(metadata.id);
+    if (loaded.IsLoaded()) {
+        return RenderMaterialAssetParseResult{ .asset = *loaded };
+    }
+    RenderMaterialAssetParseResult result{};
+    const std::filesystem::path resolvedPath = ResolveAssetPhysicalPath(manager, metadata);
+    result.diagnostics.push_back(RenderMaterialAssetParseDiagnostic{
+        .code = RenderMaterialAssetParseDiagnosticCode::FileOpenFailed,
+        .assetId = metadata.id,
+        .path = resolvedPath.empty() ? metadata.virtualPath : resolvedPath,
+        .message = manager.LastError().empty()
+            ? "Material asset could not be loaded."
+            : manager.LastError(),
+    });
+    return result;
+}
+
 [[nodiscard]] EffectiveRuntimeMaterialDocumentResult LoadEffectiveRuntimeMaterialDocument(
     kb::assets::AssetManager& manager,
     const kb::assets::AssetMetadata& metadata,
@@ -323,8 +344,7 @@ void AppendInstanceValidationDiagnostics(
     }
 
     if (metadata.type == "RenderMaterial") {
-        const std::filesystem::path path = ResolveAssetPhysicalPath(manager, metadata);
-        RenderMaterialAssetParseResult loaded = RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(path, metadata.id);
+        RenderMaterialAssetParseResult loaded = LoadRuntimeMaterialDocument(manager, metadata);
         if (!loaded.asset.has_value()) {
             AppendParentMaterialParseDiagnostics(result, loaded, metadata.id, metadata.id);
             visited.erase(metadata.id.value);
@@ -694,6 +714,8 @@ void ApplyGraphTextureSlotValuesToPbrDesc(RenderMaterialDesc& desc, const Render
     case RenderMaterialGraphNodeKind::NormalUnpack:
     case RenderMaterialGraphNodeKind::Sobol:
     case RenderMaterialGraphNodeKind::Uv:
+        break;
+    default:
         break;
     }
     return "parameter" + std::to_string(node.id);
@@ -1602,6 +1624,8 @@ struct MaterialGraphRuntimeValue {
         break;
     case RenderMaterialGraphNodeKind::MaterialOutput:
         break;
+    default:
+        break;
     }
 
     stack.pop_back();
@@ -1820,7 +1844,7 @@ ResolvedRuntimeMaterialDesc RuntimeMaterialResolver::ResolveEmbeddedMaterial(
 }
 
 ResolvedRuntimeMaterialDesc RuntimeMaterialResolver::ResolveLoadedMaterial(
-    const kb::assets::AssetManager& manager,
+    kb::assets::AssetManager& manager,
     const kb::assets::AssetMetadata& materialMetadata,
     const RenderMaterialAssetData& inlineMaterialAsset) const {
     ResolvedRuntimeMaterialDesc resolved{};
@@ -2009,7 +2033,7 @@ ResolvedRuntimeMaterialAsset RuntimeMaterialResolver::ResolveAsset(
     if (metadata.type == "RenderMaterial") {
         const std::uint64_t runtimeContentHash = MaterialRuntimeContentHash(manager, metadata);
         const std::filesystem::path path = ResolveAssetPhysicalPath(manager, metadata);
-        RenderMaterialAssetParseResult loaded = RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(path, metadata.id);
+        RenderMaterialAssetParseResult loaded = LoadRuntimeMaterialDocument(manager, metadata);
         if (!loaded.asset.has_value()) {
             ResolvedRuntimeMaterialAsset fallback = FallbackMaterial(
                 RuntimeMaterialResolveStatus::ErrorMaterial,
@@ -2319,7 +2343,7 @@ ResolvedRuntimeMaterialAsset RuntimeMaterialResolver::ResolveAssetWithParameterO
 
     const std::uint64_t runtimeContentHash = MaterialRuntimeContentHash(manager, *metadata);
     const std::filesystem::path path = ResolveAssetPhysicalPath(manager, *metadata);
-    RenderMaterialAssetParseResult loaded = RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(path, metadata->id);
+    RenderMaterialAssetParseResult loaded = LoadRuntimeMaterialDocument(manager, *metadata);
     if (!loaded.asset.has_value()) {
         ResolvedRuntimeMaterialAsset fallback = FallbackMaterial(
             RuntimeMaterialResolveStatus::ErrorMaterial,

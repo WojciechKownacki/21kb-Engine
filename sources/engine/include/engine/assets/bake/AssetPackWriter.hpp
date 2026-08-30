@@ -7,6 +7,8 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <map>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -84,6 +86,8 @@ private:
         std::uint32_t alignmentBytes = 1U;
         std::uint64_t payloadOffset = 0U;
         std::uint64_t bytes = 0U;
+        AssetBakeDigest payloadDigest{};
+        std::optional<BakedAssetBlockFragment> fragment{};
     };
 
     struct PendingArtifact {
@@ -93,6 +97,8 @@ private:
     };
 
     [[nodiscard]] BakedAssetSinkStatus EnsureStagingOpen();
+    [[nodiscard]] bool AcquireDestinationLock();
+    void ReleaseDestinationLock() noexcept;
     // The staging payload carries a stamp naming the writer that created it, and this is what
     // reads it back. Staging names are derived from the destination, so this is the only thing
     // between "a second writer aimed at this package" and a published package whose blocks
@@ -105,6 +111,7 @@ private:
     std::filesystem::path packPath_;
     std::filesystem::path stagingPackPath_;
     std::filesystem::path payloadPath_;
+    std::filesystem::path lockPath_;
     std::string targetProfileId_;
     std::uint64_t targetProfileHash_ = 0U;
     std::uint32_t packageAlignmentBytes_ = 0U;
@@ -113,10 +120,13 @@ private:
 
     std::fstream payload_;
     std::vector<PendingArtifact> artifacts_;
+    std::map<AssetBakeDigest, std::string> artifactTypes_;
     PendingArtifact openArtifact_;
     std::uint64_t payloadBytes_ = 0U;
     std::uint64_t payloadStamp_ = 0U;
     std::uint64_t openArtifactPayloadStart_ = 0U;
+    std::intptr_t lockHandle_ = -1;
+    bool lockHeld_ = false;
     bool stagingOpen_ = false;
     bool open_ = false;
     bool primaryWritten_ = false;

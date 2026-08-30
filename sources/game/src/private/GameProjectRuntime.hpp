@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <filesystem>
 #include <iosfwd>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -14,6 +15,11 @@
 namespace kb::scene {
 class Scene;
 }
+
+namespace kb::assets::bake {
+class RuntimeAssetPack;
+}
+
 
 namespace kb::game {
 
@@ -30,12 +36,12 @@ struct GameProjectRuntime {
     std::string inputMappingContext;
     bool inputEnabled = true;
     std::vector<std::string> requiredModules;
-};
+    std::shared_ptr<kb::assets::bake::RuntimeAssetPack> assetPack;
 
-// Directory holding the running executable. A packaged game keeps its project
-// beside the binary, so this is also where the runtime looks when no project
-// path was given on the command line.
-[[nodiscard]] std::filesystem::path ExecutableDirectory();
+    [[nodiscard]] bool IsPackaged() const noexcept {
+        return assetPack != nullptr;
+    }
+};
 
 // A frame that took longer than this is stepped as if it had taken exactly this
 // long, so a stall cannot tunnel a moving body through the world.
@@ -48,21 +54,37 @@ inline constexpr float kMaximumRuntimeDeltaSeconds = 1.0F / 15.0F;
     std::chrono::steady_clock::time_point previous,
     std::chrono::steady_clock::time_point current) noexcept;
 
-// std::filesystem::path::string() THROWS when the text holds a character the
-// process code page cannot spell, and a windowed process that lets an exception
-// escape ends in abort() behind a modal dialog nobody can dismiss. Both of these
-// are total: TryNarrow reports the loss instead of hiding it, so a caller that
-// needs an exact name (a plugin binary, a cache directory) can decline rather
-// than build a wrong one, and NarrowForDiagnostics always yields something
-// printable so an error message can never be the thing that kills the game.
+// Windows-only conversions for APIs and command lines that use UTF-16. They are
+// total: TryNarrow reports a lossy process-code-page conversion, while the
+// diagnostic variant always returns printable text.
+#if defined(_WIN32)
 [[nodiscard]] std::optional<std::string> TryNarrow(std::wstring_view text);
 [[nodiscard]] std::string NarrowForDiagnostics(std::wstring_view text);
+#endif
+
+// Directory holding the running Windows executable. Other runtime hosts receive
+// their packaged storage roots from the platform lifecycle instead.
+#if defined(_WIN32)
+[[nodiscard]] std::filesystem::path ExecutableDirectory();
+#endif
+
+// Converts a native path for logs without changing the path used for I/O.
 [[nodiscard]] std::string NarrowForDiagnostics(const std::filesystem::path& path);
 
 // Reads <project>/Project.21kbproject plus <project>/Config/ProjectSettings.ini.
 // `sceneOverride` wins over ProjectSettings::defaultMap when it is not empty.
 [[nodiscard]] bool ReadGameProjectRuntime(
     const std::filesystem::path& projectPath,
+    std::string_view sceneOverride,
+    GameProjectRuntime& runtime,
+    std::ostream& err);
+
+// Platform package hosts may already own a zero-copy/memory-mapped pack (Android APK assets,
+// browser fetch buffers). Resolve the same project runtime without extracting or remounting it
+// through a filesystem path.
+[[nodiscard]] bool ReadMountedGameProjectRuntime(
+    std::shared_ptr<kb::assets::bake::RuntimeAssetPack> pack,
+    std::filesystem::path projectRoot,
     std::string_view sceneOverride,
     GameProjectRuntime& runtime,
     std::ostream& err);

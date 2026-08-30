@@ -92,6 +92,10 @@ std::optional<TimelineAsset> TimelineAssetIO::Load(
     const std::filesystem::path& path) {
     std::ifstream input(path);
     if (!input) return std::nullopt;
+    return Load(input);
+}
+
+std::optional<TimelineAsset> TimelineAssetIO::Load(std::istream& input) {
     TimelineAsset asset{};
     asset.bindings.clear();
     std::string line;

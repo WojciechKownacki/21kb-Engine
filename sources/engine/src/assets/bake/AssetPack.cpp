@@ -3,8 +3,11 @@
 #include "assets/bake/BakeStorePath.hpp"
 
 #include <algorithm>
+#include <bit>
+#include <cmath>
 #include <cstring>
 #include <limits>
+#include <set>
 
 namespace kb::assets::bake {
 namespace {
@@ -122,6 +125,10 @@ private:
     std::size_t offset_ = 0U;
 };
 
+void PutFloat(std::vector<std::uint8_t>& bytes, float value) {
+    PutUInt32(bytes, std::bit_cast<std::uint32_t>(value));
+}
+
 void PutName(std::vector<std::uint8_t>& bytes, std::string_view name) {
     bytes.push_back(static_cast<std::uint8_t>(name.size()));
     bytes.insert(bytes.end(), name.begin(), name.end());
@@ -145,10 +152,14 @@ std::string_view ToString(AssetPackReadStatus status) noexcept {
         return "SizeMismatch";
     case AssetPackReadStatus::IndexCorrupt:
         return "IndexCorrupt";
+    case AssetPackReadStatus::FragmentIndexCorrupt:
+        return "FragmentIndexCorrupt";
     case AssetPackReadStatus::BlockOutOfRange:
         return "BlockOutOfRange";
     case AssetPackReadStatus::BlockTooLarge:
         return "BlockTooLarge";
+    case AssetPackReadStatus::PayloadCorrupt:
+        return "PayloadCorrupt";
     case AssetPackReadStatus::PackTooLarge:
         return "PackTooLarge";
     case AssetPackReadStatus::ArtifactNotFound:
@@ -192,6 +203,8 @@ std::vector<std::uint8_t> EncodeAssetPackIndex(std::span<const AssetPackArtifact
             PutUInt64(bytes, block.offset);
             PutUInt64(bytes, block.storedBytes);
             PutUInt64(bytes, block.uncompressedBytes);
+            PutUInt64(bytes, block.payloadDigest.high);
+            PutUInt64(bytes, block.payloadDigest.low);
         }
     }
     return bytes;
@@ -214,6 +227,7 @@ AssetPackReadStatus DecodeAssetPackIndex(
     }
     std::vector<AssetPackArtifactEntry> artifacts;
     artifacts.reserve(artifactCount);
+    std::set<AssetBakeDigest> artifactKeys;
 
     IndexReader reader{ bytes };
     for (std::uint32_t artifactIndex = 0U; artifactIndex < artifactCount; ++artifactIndex) {
@@ -228,11 +242,13 @@ AssetPackReadStatus DecodeAssetPackIndex(
         }
         // Every block entry costs at least this much, so a count that could not possibly fit
         // is refused before the reservation rather than after it.
-        constexpr std::size_t kMinBlockEntryBytes = 1U + 1U + 1U + 1U + 1U + 4U + 8U + 8U + 8U;
+        constexpr std::size_t kMinBlockEntryBytes =
+            1U + 1U + 1U + 1U + 1U + 4U + 8U + 8U + 8U + 8U + 8U;
         if (reader.Remaining() / kMinBlockEntryBytes < blockCount) {
             return AssetPackReadStatus::IndexCorrupt;
         }
         artifact.blocks.reserve(blockCount);
+        std::set<std::string> blockNames;
         for (std::uint32_t blockIndex = 0U; blockIndex < blockCount; ++blockIndex) {
             AssetPackBlockEntry block{};
             std::uint8_t residency = 0U;
@@ -241,7 +257,9 @@ AssetPackReadStatus DecodeAssetPackIndex(
             if (!reader.ReadName(block.name) || !reader.ReadUInt8(residency) || !reader.ReadUInt8(compression) ||
                 !reader.ReadUInt8(reserved) || !reader.ReadUInt32(block.alignmentBytes) ||
                 !reader.ReadUInt64(block.offset) || !reader.ReadUInt64(block.storedBytes) ||
-                !reader.ReadUInt64(block.uncompressedBytes)) {
+                !reader.ReadUInt64(block.uncompressedBytes) ||
+                !reader.ReadUInt64(block.payloadDigest.high) ||
+                !reader.ReadUInt64(block.payloadDigest.low)) {
                 return AssetPackReadStatus::IndexCorrupt;
             }
             if (!IsValidBakeCacheName(block.name) || reserved != 0U) {
@@ -261,13 +279,16 @@ AssetPackReadStatus DecodeAssetPackIndex(
             if (block.storedBytes == 0U || !store::IsPowerOfTwo(block.alignmentBytes)) {
                 return AssetPackReadStatus::IndexCorrupt;
             }
+            if (block.payloadDigest.high == 0U && block.payloadDigest.low == 0U) {
+                return AssetPackReadStatus::IndexCorrupt;
+            }
             block.residency = static_cast<BakedAssetBlockResidency>(residency);
             block.compression = static_cast<AssetPackBlockCompression>(compression);
-            const bool duplicateName =
-                std::ranges::any_of(artifact.blocks, [&block](const AssetPackBlockEntry& written) noexcept {
-                    return store::EqualsIgnoreAsciiCase(written.name, block.name);
-                });
-            if (duplicateName) {
+            std::string canonicalBlockName = block.name;
+            std::ranges::transform(canonicalBlockName, canonicalBlockName.begin(), [](char value) noexcept {
+                return value >= 'A' && value <= 'Z' ? static_cast<char>(value - 'A' + 'a') : value;
+            });
+            if (!blockNames.insert(std::move(canonicalBlockName)).second) {
                 return AssetPackReadStatus::IndexCorrupt;
             }
             artifact.blocks.push_back(std::move(block));
@@ -282,10 +303,7 @@ AssetPackReadStatus DecodeAssetPackIndex(
         if (!hasPrimary) {
             return AssetPackReadStatus::IndexCorrupt;
         }
-        const bool duplicateKey = std::ranges::any_of(artifacts, [&artifact](const AssetPackArtifactEntry& written) {
-            return written.key == artifact.key;
-        });
-        if (duplicateKey) {
+        if (!artifactKeys.insert(artifact.key).second) {
             return AssetPackReadStatus::IndexCorrupt;
         }
         artifacts.push_back(std::move(artifact));
@@ -297,6 +315,98 @@ AssetPackReadStatus DecodeAssetPackIndex(
     }
 
     out = std::move(artifacts);
+    return AssetPackReadStatus::Success;
+}
+
+std::vector<std::uint8_t> EncodeAssetPackFragmentIndex(std::span<const AssetPackFragmentEntry> fragments) {
+    if (fragments.size() > kMaxAssetPackFragmentIndexBytes / kAssetPackFragmentEntryBytes) {
+        return {};
+    }
+    std::vector<std::uint8_t> bytes;
+    bytes.reserve(fragments.size() * static_cast<std::size_t>(kAssetPackFragmentEntryBytes));
+    for (const AssetPackFragmentEntry& fragment : fragments) {
+        PutUInt64(bytes, fragment.offset);
+        PutUInt64(bytes, fragment.bytes);
+        PutUInt32(bytes, fragment.clusterCount);
+        // Reserved: keeps the box on an eight-byte boundary and leaves a word for the
+        // compression the format already promises a fragment may gain without a re-bake.
+        PutUInt32(bytes, 0U);
+        for (const float value : fragment.boundsMin) {
+            PutFloat(bytes, value);
+        }
+        for (const float value : fragment.boundsMax) {
+            PutFloat(bytes, value);
+        }
+    }
+    return bytes;
+}
+
+std::uint64_t AssetPackIndexChecksum(
+    std::span<const std::uint8_t> artifactIndex,
+    std::span<const std::uint8_t> fragmentIndex) {
+    if (fragmentIndex.empty()) {
+        return HashBakeBytes(artifactIndex);
+    }
+    std::vector<std::uint8_t> catalog;
+    catalog.reserve(artifactIndex.size() + fragmentIndex.size());
+    catalog.insert(catalog.end(), artifactIndex.begin(), artifactIndex.end());
+    catalog.insert(catalog.end(), fragmentIndex.begin(), fragmentIndex.end());
+    return HashBakeBytes(catalog);
+}
+
+AssetPackReadStatus DecodeAssetPackFragmentIndex(
+    std::span<const std::uint8_t> bytes,
+    std::uint32_t fragmentCount,
+    std::vector<AssetPackFragmentEntry>& out) {
+    // Fixed width, so the length is an exact statement rather than a ceiling: a buffer that is
+    // not the count's length disagrees with the header about where the fragment index ends.
+    const std::uint64_t expectedBytes = static_cast<std::uint64_t>(fragmentCount) * kAssetPackFragmentEntryBytes;
+    if (expectedBytes > kMaxAssetPackFragmentIndexBytes ||
+        expectedBytes > std::numeric_limits<std::size_t>::max() || bytes.size() != expectedBytes) {
+        return AssetPackReadStatus::FragmentIndexCorrupt;
+    }
+    std::vector<AssetPackFragmentEntry> fragments;
+    fragments.reserve(fragmentCount);
+
+    IndexReader reader{ bytes };
+    for (std::uint32_t index = 0U; index < fragmentCount; ++index) {
+        AssetPackFragmentEntry fragment{};
+        std::uint32_t reserved = 0U;
+        if (!reader.ReadUInt64(fragment.offset) || !reader.ReadUInt64(fragment.bytes) ||
+            !reader.ReadUInt32(fragment.clusterCount) || !reader.ReadUInt32(reserved)) {
+            return AssetPackReadStatus::FragmentIndexCorrupt;
+        }
+        if (reserved != 0U || fragment.clusterCount == 0U || fragment.bytes == 0U) {
+            return AssetPackReadStatus::FragmentIndexCorrupt;
+        }
+        for (std::size_t axis = 0U; axis < fragment.boundsMin.size(); ++axis) {
+            std::uint32_t low = 0U;
+            if (!reader.ReadUInt32(low)) {
+                return AssetPackReadStatus::FragmentIndexCorrupt;
+            }
+            fragment.boundsMin[axis] = std::bit_cast<float>(low);
+        }
+        for (std::size_t axis = 0U; axis < fragment.boundsMax.size(); ++axis) {
+            std::uint32_t high = 0U;
+            if (!reader.ReadUInt32(high)) {
+                return AssetPackReadStatus::FragmentIndexCorrupt;
+            }
+            fragment.boundsMax[axis] = std::bit_cast<float>(high);
+        }
+        for (std::size_t axis = 0U; axis < fragment.boundsMin.size(); ++axis) {
+            const float low = fragment.boundsMin[axis];
+            const float high = fragment.boundsMax[axis];
+            // NaN fails every comparison, so the ordering test refuses it too; the finiteness
+            // test is separate because an infinite edge orders correctly and still makes every
+            // distance to the fragment infinite.
+            if (!std::isfinite(low) || !std::isfinite(high) || !(low <= high)) {
+                return AssetPackReadStatus::FragmentIndexCorrupt;
+            }
+        }
+        fragments.push_back(fragment);
+    }
+
+    out = std::move(fragments);
     return AssetPackReadStatus::Success;
 }
 
@@ -372,11 +482,33 @@ AssetPackReadStatus DecodeAssetPackHeader(std::span<const std::uint8_t> bytes, A
         header.mappedBlockAlignmentBytes % header.packageBlockAlignmentBytes != 0U) {
         return AssetPackReadStatus::HeaderCorrupt;
     }
-    // The fragment fields are reserved. A pack that fills them was written by something that
-    // knows a layout this build does not, and reading its blocks would be a guess.
-    if (header.fragmentIndexOffset != 0U || header.fragmentIndexBytes != 0U || header.fragmentCount != 0U ||
-        header.fragmentAlignmentBytes != 0U) {
-        return AssetPackReadStatus::HeaderCorrupt;
+    // The four fragment fields describe one thing, so they are all set or all clear; a pack
+    // that fills some of them was written by something that knows a layout this build does not.
+    const bool hasFragments = header.fragmentCount != 0U;
+    if (!hasFragments) {
+        if (header.fragmentIndexOffset != 0U || header.fragmentIndexBytes != 0U ||
+            header.fragmentAlignmentBytes != 0U) {
+            return AssetPackReadStatus::HeaderCorrupt;
+        }
+    } else {
+        // The format puts the fragment index immediately after the artifact index. It is not a
+        // free offset, so a fragment index found anywhere else is not this layout.
+        if (header.fragmentIndexOffset != header.indexOffset + header.indexBytes) {
+            return AssetPackReadStatus::FragmentIndexCorrupt;
+        }
+        if (header.fragmentIndexBytes !=
+            static_cast<std::uint64_t>(header.fragmentCount) * kAssetPackFragmentEntryBytes) {
+            return AssetPackReadStatus::FragmentIndexCorrupt;
+        }
+        if (header.fragmentIndexBytes > kMaxAssetPackFragmentIndexBytes) {
+            return AssetPackReadStatus::FragmentIndexCorrupt;
+        }
+        // A fragment is a block, and a block already sits at the package alignment, so nothing
+        // finer can be claimed for one.
+        if (!store::IsPowerOfTwo(header.fragmentAlignmentBytes) ||
+            header.fragmentAlignmentBytes % header.packageBlockAlignmentBytes != 0U) {
+            return AssetPackReadStatus::FragmentIndexCorrupt;
+        }
     }
     if (PeekUInt32(bytes, kHeaderReservedWordOffset) != 0U) {
         return AssetPackReadStatus::HeaderCorrupt;
@@ -389,6 +521,9 @@ AssetPackReadStatus DecodeAssetPackHeader(std::span<const std::uint8_t> bytes, A
     }
     if (header.fileBytes < kAssetPackHeaderBytes + header.indexBytes) {
         return AssetPackReadStatus::IndexCorrupt;
+    }
+    if (header.fileBytes - kAssetPackHeaderBytes - header.indexBytes < header.fragmentIndexBytes) {
+        return AssetPackReadStatus::FragmentIndexCorrupt;
     }
 
     out = std::move(header);

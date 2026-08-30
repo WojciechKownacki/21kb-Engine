@@ -7,6 +7,7 @@
 #include "kb/render/resources/RenderMaterialFunctionAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialParameterCollection.hpp"
 #include "kb/render/resources/RenderMaterialTypeAssetLoader.hpp"
 #include "kb/render/resources/PostProcessProfileAssetLoader.hpp"
 #include "kb/render/resources/RenderMeshAssetLoader.hpp"
@@ -35,6 +36,8 @@ void RuntimeRenderAssetDiscovery::Ensure(kb::scene::Scene& scene, std::uint64_t 
         RegisterLoaderIfMissing<RenderMaterialFunctionAssetLoader>(manager, kRenderMaterialFunctionAssetType);
         RegisterLoaderIfMissing<RenderMaterialGraphAssetLoader>(manager, kRenderMaterialGraphAssetType);
         RegisterLoaderIfMissing<RenderMaterialInstanceAssetLoader>(manager, "RenderMaterialInstance");
+        RegisterLoaderIfMissing<RenderMaterialParameterCollectionAssetLoader>(
+            manager, kRenderMaterialParameterCollectionAssetType);
         RegisterLoaderIfMissing<RenderMaterialTypeAssetLoader>(manager, kRenderMaterialTypeAssetType);
         RegisterLoaderIfMissing<PostProcessProfileAssetLoader>(manager, kPostProcessProfileAssetType);
         RegisterLoaderIfMissing<RenderTextureAssetLoader>(manager, "RenderTexture");

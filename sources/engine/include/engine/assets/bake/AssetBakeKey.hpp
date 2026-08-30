@@ -57,6 +57,11 @@ struct AssetBakeDigest {
 [[nodiscard]] std::uint64_t HashBakeBytes(std::span<const std::uint8_t> bytes) noexcept;
 [[nodiscard]] std::uint64_t HashBakeText(std::string_view text) noexcept;
 
+// A wider checksum for persisted payloads. It uses the same deterministic,
+// machine-independent two-lane digest as AssetBakeKey. This detects storage and
+// transfer corruption; package signing remains the authentication boundary.
+[[nodiscard]] AssetBakeDigest HashBakeDigest(std::span<const std::uint8_t> bytes) noexcept;
+
 // Identity of one baked artifact.
 //
 // Determinism contract: Digest() depends on nothing but the field values below.

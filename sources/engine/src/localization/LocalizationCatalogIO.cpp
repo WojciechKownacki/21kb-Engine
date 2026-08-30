@@ -57,6 +57,11 @@ namespace {
 std::optional<LocalizationCatalog> LocalizationCatalogIO::Load(const std::filesystem::path& path) {
     const std::vector<std::uint8_t> bytes = kb::scene::SceneAssetBinaryIO::ReadAllBytes(path);
     if (bytes.empty()) return std::nullopt;
+    return Load(bytes);
+}
+
+std::optional<LocalizationCatalog> LocalizationCatalogIO::Load(std::span<const std::uint8_t> bytes) {
+    if (bytes.empty()) return std::nullopt;
     std::istringstream input{ std::string{ reinterpret_cast<const char*>(bytes.data()), bytes.size() } };
     LocalizationCatalog catalog{};
     std::string token;

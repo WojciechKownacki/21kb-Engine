@@ -1,5 +1,7 @@
 #include "engine/assets/AssetManager.hpp"
 
+#include "engine/assets/bake/RuntimeAssetPack.hpp"
+
 #include "assets/AssetDiscoveryService.hpp"
 #include "assets/AssetFileOperations.hpp"
 #include "assets/AssetFileSystem.hpp"
@@ -88,6 +90,10 @@ bool AssetManager::RegisterLoader(std::unique_ptr<IAssetLoader> loader) {
 }
 
 bool AssetManager::RegisterAsset(AssetMetadata metadata) {
+    if (runtimePack_ != nullptr) {
+        lastError_ = "Packaged runtime registry is immutable";
+        return false;
+    }
     if (metadata.id.IsValid()) {
         const AssetId id = metadata.id;
         const bool changed = registry_.Upsert(std::move(metadata));
@@ -111,8 +117,71 @@ bool AssetManager::RegisterAsset(AssetMetadata metadata) {
     return changed;
 }
 
+bool AssetManager::MountRuntimePack(std::shared_ptr<bake::RuntimeAssetPack> pack) {
+    lastError_.clear();
+    if (pack == nullptr || !pack->IsMounted()) {
+        lastError_ = "Runtime asset pack is not mounted";
+        return false;
+    }
+
+    std::vector<AssetMetadata> packaged;
+    packaged.reserve(pack->Manifest().assets.size());
+    for (const bake::RuntimeAssetManifestEntry& entry : pack->Manifest().assets) {
+        if (!entry.id.IsValid() || entry.type.empty() || entry.virtualPath.empty()) {
+            lastError_ = "Runtime asset manifest contains an invalid registry entry";
+            return false;
+        }
+        packaged.push_back(AssetMetadata{
+            .id = entry.id,
+            .type = entry.type,
+            .importCategory = entry.importCategory,
+            .browseTag = entry.browseTag,
+            .name = entry.name,
+            .virtualPath = entry.virtualPath,
+            .physicalPath = {},
+            .sourceExtension = entry.sourceExtension,
+            .contentHash = entry.contentHash,
+            .dependencies = entry.dependencies,
+            .runtimeLoadable = entry.runtimeLoadable,
+        });
+    }
+
+    StopAsyncWorker();
+    asyncLoads_.clear();
+    asyncLoadErrors_.clear();
+    asyncLoadGenerations_.clear();
+    cache_.clear();
+    registry_.Clear();
+    mounts_.Clear();
+    for (AssetMetadata& metadata : packaged) {
+        if (!registry_.Upsert(std::move(metadata))) {
+            registry_.Clear();
+            lastError_ = "Runtime asset manifest could not populate the registry";
+            return false;
+        }
+    }
+    runtimePack_ = std::move(pack);
+    cachedVirtualFolders_.clear();
+    cachedVirtualFoldersRevision_ = 0U;
+    ++revision_;
+    RestartAsyncLoads();
+    return true;
+}
+
+bool AssetManager::IsRuntimePackMounted() const noexcept {
+    return runtimePack_ != nullptr;
+}
+
+std::shared_ptr<bake::RuntimeAssetPack> AssetManager::RuntimePack() const noexcept {
+    return runtimePack_;
+}
+
 bool AssetManager::RefreshAsset(AssetId id) {
     lastError_.clear();
+    if (runtimePack_ != nullptr) {
+        lastError_ = "Packaged runtime assets are immutable";
+        return false;
+    }
     const AssetMetadata* registered = registry_.Find(id);
     if (!id.IsValid() || registered == nullptr) {
         lastError_ = "Asset is not registered";
@@ -188,6 +257,10 @@ bool AssetManager::RefreshAsset(AssetId id) {
 }
 
 std::size_t AssetManager::DiscoverMountedAssets() {
+    if (runtimePack_ != nullptr) {
+        lastError_ = "Packaged runtime assets are indexed by their manifest";
+        return 0U;
+    }
     // Discovery calls loader dependency scanners and may replace registry
     // metadata. Do not race either operation with queued loader calls, and
     // never publish a payload decoded from pre-discovery metadata.
@@ -248,6 +321,10 @@ std::vector<std::filesystem::path> AssetManager::VirtualFolders() const {
 
 bool AssetManager::CreateFolder(const std::filesystem::path& virtualFolder) {
     lastError_.clear();
+    if (runtimePack_ != nullptr) {
+        lastError_ = "Packaged runtime assets are immutable";
+        return false;
+    }
     const bool created = AssetFolderOperations::CreateFolder(mounts_, virtualFolder, lastError_);
     if (created) {
         ++revision_;
@@ -257,6 +334,10 @@ bool AssetManager::CreateFolder(const std::filesystem::path& virtualFolder) {
 
 std::optional<std::filesystem::path> AssetManager::CreateUniqueFolder(const std::filesystem::path& parentVirtualFolder, std::string baseName) {
     lastError_.clear();
+    if (runtimePack_ != nullptr) {
+        lastError_ = "Packaged runtime assets are immutable";
+        return std::nullopt;
+    }
     std::optional<std::filesystem::path> created = AssetFolderOperations::CreateUniqueFolder(mounts_, VirtualFolders(), parentVirtualFolder, std::move(baseName), lastError_);
     if (created.has_value()) {
         ++revision_;
@@ -266,6 +347,10 @@ std::optional<std::filesystem::path> AssetManager::CreateUniqueFolder(const std:
 
 bool AssetManager::RenameFolder(const std::filesystem::path& virtualFolder, std::string newName) {
     lastError_.clear();
+    if (runtimePack_ != nullptr) {
+        lastError_ = "Packaged runtime assets are immutable";
+        return false;
+    }
     if (!AssetFolderOperations::RenameFolder(mounts_, virtualFolder, std::move(newName), lastError_)) {
         return false;
     }
@@ -277,6 +362,10 @@ bool AssetManager::RenameFolder(const std::filesystem::path& virtualFolder, std:
 
 bool AssetManager::DeleteFolder(const std::filesystem::path& virtualFolder) {
     lastError_.clear();
+    if (runtimePack_ != nullptr) {
+        lastError_ = "Packaged runtime assets are immutable";
+        return false;
+    }
     if (!AssetFolderOperations::DeleteFolder(mounts_, virtualFolder, lastError_)) {
         return false;
     }
@@ -288,6 +377,10 @@ bool AssetManager::DeleteFolder(const std::filesystem::path& virtualFolder) {
 
 bool AssetManager::RenameAsset(AssetId id, std::string newName) {
     lastError_.clear();
+    if (runtimePack_ != nullptr) {
+        lastError_ = "Packaged runtime assets are immutable";
+        return false;
+    }
     const AssetMetadata* existing = registry_.Find(id);
     if (existing == nullptr) {
         lastError_ = "Asset is not registered";
@@ -315,6 +408,10 @@ bool AssetManager::RenameAsset(AssetId id, std::string newName) {
 
 AssetMoveResult AssetManager::MoveAssetIntoFolder(AssetId id, const std::filesystem::path& destinationVirtualFolder) {
     lastError_.clear();
+    if (runtimePack_ != nullptr) {
+        lastError_ = "Packaged runtime assets are immutable";
+        return {};
+    }
     const AssetMetadata* metadata = registry_.Find(id);
     const std::filesystem::path previousVirtualPath = metadata == nullptr ? std::filesystem::path{} : metadata->virtualPath;
     const AssetMoveResult moved = AssetFileOperations::MoveAssetIntoFolder(registry_, mounts_, id, destinationVirtualFolder, lastError_);
@@ -335,6 +432,10 @@ bool AssetManager::MoveAsset(AssetId id, const std::filesystem::path& destinatio
 
 AssetMoveResult AssetManager::MoveFolderIntoFolder(const std::filesystem::path& sourceVirtualFolder, const std::filesystem::path& destinationVirtualFolder) {
     lastError_.clear();
+    if (runtimePack_ != nullptr) {
+        lastError_ = "Packaged runtime assets are immutable";
+        return {};
+    }
     const AssetMoveResult moved = AssetFolderOperations::MoveFolderIntoFolder(mounts_, sourceVirtualFolder, destinationVirtualFolder, lastError_);
     if (!moved.succeeded) {
         return moved;
@@ -353,6 +454,10 @@ bool AssetManager::MoveFolder(const std::filesystem::path& sourceVirtualFolder, 
 
 bool AssetManager::DeleteAsset(AssetId id) {
     lastError_.clear();
+    if (runtimePack_ != nullptr) {
+        lastError_ = "Packaged runtime assets are immutable";
+        return false;
+    }
     if (!AssetFileOperations::DeleteAsset(registry_, mounts_, id, lastError_)) {
         return false;
     }
@@ -436,16 +541,21 @@ bool AssetManager::RequestLoadAsync(AssetId id, AssetUnloadPolicy policy) {
         asyncLoadErrors_[id.value] = lastError_;
         return true;
     }
-    if (const std::optional<std::string> diagnostic =
-            loader->ValidateDependencies(*registered, registry_);
-        diagnostic.has_value()) {
-        lastError_ = "Asset dependency validation failed: " + *diagnostic;
+    const std::filesystem::path resolvedPath = ResolvePhysicalPath(*registered);
+    if (resolvedPath.empty() && runtimePack_ == nullptr) {
+        lastError_ = "Asset path could not be resolved: " + NormalizeAssetPath(registered->virtualPath);
         asyncLoadErrors_[id.value] = lastError_;
         return true;
     }
-    const std::filesystem::path resolvedPath = ResolvePhysicalPath(*registered);
-    if (resolvedPath.empty()) {
-        lastError_ = "Asset path could not be resolved: " + NormalizeAssetPath(registered->virtualPath);
+    const AssetLoadRequest request{
+        .metadata = *registered,
+        .resolvedPath = resolvedPath,
+        .runtimePack = runtimePack_,
+    };
+    if (const std::optional<std::string> diagnostic =
+            loader->ValidateRuntimeDependencies(request, registry_);
+        diagnostic.has_value()) {
+        lastError_ = "Asset dependency validation failed: " + *diagnostic;
         asyncLoadErrors_[id.value] = lastError_;
         return true;
     }
@@ -467,6 +577,7 @@ bool AssetManager::RequestLoadAsync(AssetId id, AssetUnloadPolicy policy) {
                 .loader = loader,
                 .metadata = *registered,
                 .resolvedPath = resolvedPath,
+                .runtimePack = runtimePack_,
                 .typeName = payloadTypeName,
                 .state = std::move(state),
             });
@@ -517,7 +628,7 @@ void AssetManager::RestartAsyncLoads() {
         }
 
         const std::filesystem::path resolvedPath = ResolvePhysicalPath(*metadata);
-        if (resolvedPath.empty()) {
+        if (resolvedPath.empty() && runtimePack_ == nullptr) {
             asyncLoadErrors_[assetValue] = "Asset path is not mounted";
             continue;
         }
@@ -538,6 +649,7 @@ void AssetManager::RestartAsyncLoads() {
                 .loader = loader,
                 .metadata = *metadata,
                 .resolvedPath = resolvedPath,
+                .runtimePack = runtimePack_,
                 .typeName = typeName,
                 .state = state,
             });
@@ -568,7 +680,11 @@ void AssetManager::RunAsyncWorker() noexcept {
         try {
             std::scoped_lock lock{ loaderExecutionMutex_ };
             prepared = AsyncPreparedAsset{
-                .result = job.loader->Load(AssetLoadRequest{ .metadata = job.metadata, .resolvedPath = job.resolvedPath }),
+                .result = job.loader->Load(AssetLoadRequest{
+                    .metadata = job.metadata,
+                    .resolvedPath = job.resolvedPath,
+                    .runtimePack = std::move(job.runtimePack),
+                }),
                 .typeName = job.typeName,
             };
         } catch (const std::exception& exception) {
@@ -764,8 +880,14 @@ AssetCompatibilityReport AssetManager::ValidateCompatibility(AssetId id) const {
                 .dependency = {},
                 .message = "Asset " + DescribeAsset(*metadata) + " has type \"" + metadata->type + "\" which has no registered loader in this runtime",
             });
-        } else if (const std::optional<std::string> diagnostic =
-                       loader->ValidateDependencies(*metadata, registry_);
+        } else if (const std::optional<std::string> diagnostic = [&]() {
+                       const AssetLoadRequest request{
+                           .metadata = *metadata,
+                           .resolvedPath = ResolvePhysicalPath(*metadata),
+                           .runtimePack = runtimePack_,
+                       };
+                       return loader->ValidateRuntimeDependencies(request, registry_);
+                   }();
                    diagnostic.has_value()) {
             report.diagnostics.push_back(AssetCompatibilityDiagnostic{
                 .issue = AssetCompatibilityIssue::IncompatibleDependency,
@@ -815,6 +937,7 @@ void AssetManager::Clear() noexcept {
     cache_.clear();
     registry_.Clear();
     mounts_.Clear();
+    runtimePack_.reset();
     loaders_.clear();
     lastError_.clear();
     cachedVirtualFolders_.clear();
@@ -823,7 +946,16 @@ void AssetManager::Clear() noexcept {
 }
 
 std::shared_ptr<void> AssetManager::LoadUntyped(AssetId id, std::type_index expectedType) {
-    return AssetRuntimeLoadService::LoadUntyped(id, expectedType, registry_, mounts_, loaders_, cache_, loaderExecutionMutex_, lastError_);
+    return AssetRuntimeLoadService::LoadUntyped(
+        id,
+        expectedType,
+        registry_,
+        mounts_,
+        loaders_,
+        runtimePack_,
+        cache_,
+        loaderExecutionMutex_,
+        lastError_);
 }
 
 IAssetLoader* AssetManager::LoaderForType(std::string_view type) const noexcept {

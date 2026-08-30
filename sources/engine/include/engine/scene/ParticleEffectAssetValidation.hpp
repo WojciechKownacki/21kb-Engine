@@ -9,6 +9,7 @@
 #include <vector>
 
 namespace kb::assets {
+struct AssetLoadRequest;
 struct AssetMetadata;
 class AssetRegistry;
 } // namespace kb::assets
@@ -87,6 +88,9 @@ class ParticleEffectAssetValidator final {
     [[nodiscard]] static ParticleEffectValidationResult ValidateStructure(const ParticleEffectAsset& asset);
     [[nodiscard]] static ParticleEffectDependencyResult ValidateDependencies(const kb::assets::AssetMetadata& metadata,
                                                                              const kb::assets::AssetRegistry& registry);
+    [[nodiscard]] static ParticleEffectDependencyResult ValidateRuntimeDependencies(
+        const kb::assets::AssetLoadRequest& request,
+        const kb::assets::AssetRegistry& registry);
     [[nodiscard]] static ParticleEffectDependencyResult ValidateDependencies(const ParticleEffectAsset& workingAsset,
                                                                              const kb::assets::AssetMetadata& metadata,
                                                                              const kb::assets::AssetRegistry& registry);

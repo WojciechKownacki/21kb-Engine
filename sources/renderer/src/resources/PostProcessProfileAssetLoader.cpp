@@ -1,5 +1,6 @@
 #include "kb/render/resources/PostProcessProfileAssetLoader.hpp"
 
+#include "engine/assets/AssetMemoryInputStream.hpp"
 #include "RenderMaterialAtomicFileWriter.hpp"
 #include "kb/render/resources/RenderMaterialNumericParsing.hpp"
 
@@ -7,6 +8,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <utility>
 
 namespace kb::render {
 namespace {
@@ -125,9 +127,7 @@ namespace {
 [[nodiscard]] std::optional<ScenePostProcessSettings> ParseProfile(std::istream& input) {
     ScenePostProcessSettings settings{};
     std::string line;
-    std::size_t lineNumber = 0U;
     while (std::getline(input, line)) {
-        ++lineNumber;
         const std::string_view content = Trim(StripComment(line));
         if (content.empty()) {
             continue;
@@ -184,7 +184,13 @@ std::vector<std::string> PostProcessProfileAssetLoader::Extensions() const {
 }
 
 kb::assets::AssetLoadResult PostProcessProfileAssetLoader::Load(const kb::assets::AssetLoadRequest& request) {
-    const std::optional<ScenePostProcessSettings> settings = LoadProfile(request.resolvedPath);
+    std::vector<std::uint8_t> sourceBytes;
+    std::string error;
+    if (!request.ReadSourceBytes(sourceBytes, error)) {
+        return kb::assets::AssetLoadResult{ .asset = {}, .error = std::move(error) };
+    }
+    kb::assets::AssetMemoryInputStream input{ sourceBytes };
+    const std::optional<ScenePostProcessSettings> settings = ParseProfile(input);
     if (!settings.has_value()) {
         return kb::assets::AssetLoadResult{ .asset = {}, .error = "Post-process profile asset could not be loaded or parsed." };
     }

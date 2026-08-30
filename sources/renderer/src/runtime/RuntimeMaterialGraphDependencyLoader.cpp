@@ -84,7 +84,7 @@ std::string RuntimeMaterialParseDiagnosticMessage(const RenderMaterialAssetParse
 }
 
 RuntimeMaterialSourceGraphLoadResult LoadRuntimeMaterialSourceGraph(
-    const kb::assets::AssetManager& manager,
+    kb::assets::AssetManager& manager,
     const RenderMaterialAssetData& material) {
     if (material.graphSourceAssetId == 0U && material.graphSourceAssetPath.empty()) {
         return RuntimeMaterialSourceGraphLoadResult{ .graph = material.graph };
@@ -113,15 +113,25 @@ RuntimeMaterialSourceGraphLoadResult LoadRuntimeMaterialSourceGraph(
     RuntimeMaterialSourceGraphLoadResult result{};
     result.assetId = metadata->id;
     result.path = ResolveRuntimeMaterialAssetPhysicalPath(manager, *metadata);
-    result.parseResult = RenderMaterialGraphAssetLoader::LoadGraphWithDiagnostics(result.path, result.assetId);
-    if (result.parseResult.asset.has_value()) {
-        result.graph = result.parseResult.asset->graph;
+    const kb::assets::AssetHandle<RenderMaterialGraphDocument> loaded =
+        manager.Load<RenderMaterialGraphDocument>(metadata->id);
+    if (loaded.IsLoaded()) {
+        result.graph = *loaded;
+    } else {
+        result.parseResult.diagnostics.push_back(RenderMaterialAssetParseDiagnostic{
+            .code = RenderMaterialAssetParseDiagnosticCode::FileOpenFailed,
+            .assetId = metadata->id,
+            .path = result.path.empty() ? metadata->virtualPath : result.path,
+            .message = manager.LastError().empty()
+                ? "Material graph asset could not be loaded."
+                : manager.LastError(),
+        });
     }
     return result;
 }
 
 RuntimeMaterialFunctionLibraryBuildResult BuildRuntimeMaterialFunctionLibrary(
-    const kb::assets::AssetManager& manager,
+    kb::assets::AssetManager& manager,
     const RenderMaterialGraphDocument& graph) {
     RuntimeMaterialFunctionLibraryBuildResult result{};
     std::vector<std::uint64_t> pending = DiscoverRenderMaterialGraphFunctionDependencies(graph);
@@ -140,19 +150,18 @@ RuntimeMaterialFunctionLibraryBuildResult BuildRuntimeMaterialFunctionLibrary(
             continue;
         }
 
-        const std::filesystem::path path = ResolveRuntimeMaterialAssetPhysicalPath(manager, *metadata);
-        const RenderMaterialAssetParseResult loaded = RenderMaterialFunctionAssetLoader::LoadFunctionWithDiagnostics(path, metadata->id);
-        if (!loaded.asset.has_value()) {
-            if (loaded.diagnostics.empty()) {
-                AppendRuntimeFunctionLibraryDiagnostic(
-                    result, assetId, path, "Material function asset " + std::to_string(assetId) + " could not be loaded.");
-            } else {
-                for (const RenderMaterialAssetParseDiagnostic& diagnostic : loaded.diagnostics) {
-                    AppendRuntimeFunctionLibraryDiagnostic(
-                        result, assetId, diagnostic.path.empty() ? path : diagnostic.path,
-                        "Material function asset could not be loaded: " + RuntimeMaterialParseDiagnosticMessage(diagnostic));
-                }
-            }
+        const std::filesystem::path resolvedPath = ResolveRuntimeMaterialAssetPhysicalPath(manager, *metadata);
+        const std::filesystem::path diagnosticPath = resolvedPath.empty() ? metadata->virtualPath : resolvedPath;
+        const kb::assets::AssetHandle<RenderMaterialFunctionAssetData> loaded =
+            manager.Load<RenderMaterialFunctionAssetData>(metadata->id);
+        if (!loaded.IsLoaded()) {
+            AppendRuntimeFunctionLibraryDiagnostic(
+                result,
+                assetId,
+                diagnosticPath,
+                manager.LastError().empty()
+                    ? "Material function asset " + std::to_string(assetId) + " could not be loaded."
+                    : "Material function asset could not be loaded: " + manager.LastError());
             continue;
         }
 
@@ -160,9 +169,9 @@ RuntimeMaterialFunctionLibraryBuildResult BuildRuntimeMaterialFunctionLibrary(
             .assetId = metadata->id.value,
             .contentHash = metadata->contentHash,
             .name = metadata->virtualPath.generic_string(),
-            .graph = loaded.asset->graph,
+            .graph = loaded->graph,
         });
-        for (const std::uint64_t nestedAssetId : DiscoverRenderMaterialGraphFunctionDependencies(loaded.asset->graph)) {
+        for (const std::uint64_t nestedAssetId : DiscoverRenderMaterialGraphFunctionDependencies(loaded->graph)) {
             if (!visited.contains(nestedAssetId)) {
                 pending.push_back(nestedAssetId);
             }
@@ -172,10 +181,47 @@ RuntimeMaterialFunctionLibraryBuildResult BuildRuntimeMaterialFunctionLibrary(
 }
 
 std::vector<RenderMaterialGraphDiagnostic> LoadRuntimeMaterialParameterCollectionDefaults(
-    const kb::assets::AssetManager& manager,
+    kb::assets::AssetManager& manager,
     const RenderMaterialGraphDocument& graph) {
     std::vector<RenderMaterialGraphDiagnostic> diagnostics;
-    for (const std::uint64_t assetId : DiscoverRenderMaterialGraphParameterCollectionDependencies(graph)) {
+    std::vector<std::uint64_t> collectionAssetIds =
+        DiscoverRenderMaterialGraphParameterCollectionDependencies(graph);
+    std::unordered_set<std::uint64_t> discoveredCollections{
+        collectionAssetIds.begin(), collectionAssetIds.end() };
+    std::vector<std::uint64_t> pendingFunctions =
+        DiscoverRenderMaterialGraphFunctionDependencies(graph);
+    std::unordered_set<std::uint64_t> visitedFunctions;
+    while (!pendingFunctions.empty()) {
+        const std::uint64_t functionAssetId = pendingFunctions.back();
+        pendingFunctions.pop_back();
+        if (functionAssetId == 0U || !visitedFunctions.insert(functionAssetId).second) {
+            continue;
+        }
+        const kb::assets::AssetMetadata* functionMetadata =
+            manager.Registry().Find(kb::assets::AssetId{ functionAssetId });
+        if (functionMetadata == nullptr || functionMetadata->type != kRenderMaterialFunctionAssetType) {
+            continue;
+        }
+        const kb::assets::AssetHandle<RenderMaterialFunctionAssetData> function =
+            manager.Load<RenderMaterialFunctionAssetData>(functionMetadata->id);
+        if (!function.IsLoaded()) {
+            continue;
+        }
+        for (const std::uint64_t collectionAssetId :
+             DiscoverRenderMaterialGraphParameterCollectionDependencies(function->graph)) {
+            if (collectionAssetId != 0U && discoveredCollections.insert(collectionAssetId).second) {
+                collectionAssetIds.push_back(collectionAssetId);
+            }
+        }
+        for (const std::uint64_t nestedFunctionAssetId :
+             DiscoverRenderMaterialGraphFunctionDependencies(function->graph)) {
+            if (!visitedFunctions.contains(nestedFunctionAssetId)) {
+                pendingFunctions.push_back(nestedFunctionAssetId);
+            }
+        }
+    }
+
+    for (const std::uint64_t assetId : collectionAssetIds) {
         if (assetId == 0U) {
             continue;
         }
@@ -186,23 +232,21 @@ std::vector<RenderMaterialGraphDiagnostic> LoadRuntimeMaterialParameterCollectio
             continue;
         }
 
-        const std::filesystem::path path = ResolveRuntimeMaterialAssetPhysicalPath(manager, *metadata);
-        const RenderMaterialParameterCollectionParseResult loaded =
-            RenderMaterialParameterCollectionAssetLoader::LoadCollectionWithDiagnostics(path, metadata->id);
-        if (!loaded.collection.has_value()) {
-            if (loaded.diagnostics.empty()) {
-                AppendRuntimeMaterialParameterCollectionDiagnostic(
-                    diagnostics, assetId, path, "Material parameter collection asset " + std::to_string(assetId) + " could not be loaded.");
-            } else {
-                for (const RenderMaterialAssetParseDiagnostic& diagnostic : loaded.diagnostics) {
-                    AppendRuntimeMaterialParameterCollectionDiagnostic(
-                        diagnostics, assetId, diagnostic.path.empty() ? path : diagnostic.path,
-                        "Material parameter collection could not be loaded: " + RuntimeMaterialParseDiagnosticMessage(diagnostic));
-                }
-            }
+        const std::filesystem::path resolvedPath = ResolveRuntimeMaterialAssetPhysicalPath(manager, *metadata);
+        const std::filesystem::path diagnosticPath = resolvedPath.empty() ? metadata->virtualPath : resolvedPath;
+        const kb::assets::AssetHandle<RenderMaterialParameterCollectionData> loaded =
+            manager.Load<RenderMaterialParameterCollectionData>(metadata->id);
+        if (!loaded.IsLoaded()) {
+            AppendRuntimeMaterialParameterCollectionDiagnostic(
+                diagnostics,
+                assetId,
+                diagnosticPath,
+                manager.LastError().empty()
+                    ? "Material parameter collection asset " + std::to_string(assetId) + " could not be loaded."
+                    : "Material parameter collection could not be loaded: " + manager.LastError());
             continue;
         }
-        static_cast<void>(GlobalRenderMaterialParameterCollectionStore().LoadDefaults(metadata->id.value, *loaded.collection));
+        static_cast<void>(GlobalRenderMaterialParameterCollectionStore().LoadDefaults(metadata->id.value, *loaded));
     }
     return diagnostics;
 }

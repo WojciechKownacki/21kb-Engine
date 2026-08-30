@@ -142,6 +142,12 @@ struct RenderBoundsSphere {
 struct RenderMeshSectionDesc {
     std::uint32_t indexStart = 0;
     std::uint32_t indexCount = 0;
+    // Indices in this section are local to this contiguous vertex range:
+    // globalVertex = vertexStart + sectionIndex. A zero vertexCount is accepted
+    // as the legacy spelling of "the remainder of the mesh" and is normalized
+    // when the runtime resource is built.
+    std::uint32_t vertexStart = 0;
+    std::uint32_t vertexCount = 0;
     std::uint32_t materialSlot = 0;
     RenderBoundsSphere bounds{};
     std::uint8_t lodLevel = 0;
@@ -153,6 +159,8 @@ struct RenderMeshSectionDesc {
 struct RenderMeshSection {
     std::uint32_t indexStart = 0;
     std::uint32_t indexCount = 0;
+    std::uint32_t vertexStart = 0;
+    std::uint32_t vertexCount = 0;
     std::uint32_t materialSlot = 0;
     RenderBoundsSphere bounds{};
     std::uint8_t lodLevel = 0;

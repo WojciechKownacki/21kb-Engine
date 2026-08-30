@@ -239,6 +239,7 @@ void AddLayerStackDiagnostic(
     case RenderMaterialGraphPinType::Texture3D:
     case RenderMaterialGraphPinType::Texture2DArray:
     case RenderMaterialGraphPinType::Sampler:
+    case RenderMaterialGraphPinType::Bool:
     case RenderMaterialGraphPinType::MaterialAttributes:
         return false;
     }
@@ -264,6 +265,7 @@ void AddLayerStackDiagnostic(
     case RenderMaterialGraphPinType::Texture3D:
     case RenderMaterialGraphPinType::Texture2DArray:
     case RenderMaterialGraphPinType::Sampler:
+    case RenderMaterialGraphPinType::Bool:
     case RenderMaterialGraphPinType::MaterialAttributes:
         return {};
     }
@@ -288,6 +290,7 @@ void AddLayerStackDiagnostic(
     case RenderMaterialGraphPinType::Texture3D:
     case RenderMaterialGraphPinType::Texture2DArray:
     case RenderMaterialGraphPinType::Sampler:
+    case RenderMaterialGraphPinType::Bool:
     case RenderMaterialGraphPinType::MaterialAttributes:
         return RenderMaterialGraphNodeKind::ConstantScalar;
     }
@@ -312,6 +315,7 @@ void AddLayerStackDiagnostic(
     case RenderMaterialGraphPinType::Texture3D:
     case RenderMaterialGraphPinType::Texture2DArray:
     case RenderMaterialGraphPinType::Sampler:
+    case RenderMaterialGraphPinType::Bool:
     case RenderMaterialGraphPinType::MaterialAttributes:
         return "value";
     }
@@ -391,17 +395,6 @@ void AddLayerStackDiagnostic(
     std::uint32_t nodeId) noexcept {
     for (const FunctionEndpointSignature& endpoint : endpoints) {
         if (endpoint.nodeId == nodeId) {
-            return &endpoint;
-        }
-    }
-    return nullptr;
-}
-
-[[nodiscard]] const FunctionEndpointSignature* FindFunctionEndpointByName(
-    std::span<const FunctionEndpointSignature> endpoints,
-    std::string_view name) noexcept {
-    for (const FunctionEndpointSignature& endpoint : endpoints) {
-        if (endpoint.name == name) {
             return &endpoint;
         }
     }
