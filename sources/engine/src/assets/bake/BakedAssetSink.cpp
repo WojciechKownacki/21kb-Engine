@@ -1,5 +1,6 @@
 #include "engine/assets/bake/BakedAssetSink.hpp"
 
+#include "assets/bake/BakeStorePath.hpp"
 #include "scene/asset/io/SceneAssetBinaryIO.hpp"
 
 #include <algorithm>
@@ -28,59 +29,11 @@ constexpr std::size_t kMaxStagingEntryNameLength = 32U + 1U + 20U;
 // it into place, so the path budget has to cover that suffix as well.
 constexpr std::size_t kAtomicWriteSuffixLength = 4U;
 
-[[nodiscard]] constexpr char ToLowerAscii(char character) noexcept {
-    return (character >= 'A' && character <= 'Z') ? static_cast<char>(character - 'A' + 'a') : character;
-}
-
-[[nodiscard]] bool EqualsIgnoreAsciiCase(std::string_view lhs, std::string_view rhs) noexcept {
-    return std::ranges::equal(lhs, rhs, [](char left, char right) noexcept {
-        return ToLowerAscii(left) == ToLowerAscii(right);
-    });
-}
-
-[[nodiscard]] constexpr bool IsPowerOfTwo(std::uint32_t value) noexcept {
-    return value != 0U && (value & (value - 1U)) == 0U;
-}
+using store::EqualsIgnoreAsciiCase;
+using store::IsPowerOfTwo;
 
 [[nodiscard]] std::filesystem::path BlockFileName(std::string_view blockName) {
     return std::filesystem::path{ std::string{ blockName } + std::string{ kBakedAssetBlockExtension } };
-}
-
-// Win32 resolves an ordinary path against MAX_PATH (260 characters); only the
-// extended-length prefix lifts that ceiling to 32767. A loose-cache path built
-// from names at kMaxBakeCacheNameBytes spends about 240 characters before the
-// store root is even counted, and an ordinary path then fails in the worst
-// possible way: the directory creates and the rename report success, the block
-// inside cannot be opened, and remove_all cannot delete it again. Normalising
-// the root once makes every path derived from it extended-length, including the
-// ones AssetDirectory and BlockPath hand back to a reader.
-[[nodiscard]] std::filesystem::path NormalizeStoreRoot(std::filesystem::path root) {
-#if defined(_WIN32)
-    if (root.empty() || root.native().starts_with(LR"(\\?\)") || root.native().starts_with(LR"(\\.\)")) {
-        return root;
-    }
-    std::error_code error;
-    const std::filesystem::path absoluteRoot = std::filesystem::absolute(root, error);
-    if (error) {
-        return root;
-    }
-    // An extended-length path is passed to the object manager verbatim: no '/'
-    // separators, no '.' or '..' components and no trailing separator, or the
-    // final name resolves to something other than the directory meant.
-    const std::filesystem::path normalized = absoluteRoot.lexically_normal();
-    std::wstring native = normalized.native();
-    std::ranges::replace(native, L'/', L'\\');
-    const std::size_t rootLength = normalized.root_path().native().size();
-    while (native.size() > rootLength && native.back() == L'\\') {
-        native.pop_back();
-    }
-    if (native.starts_with(LR"(\\)")) {
-        return std::filesystem::path{ std::wstring{ LR"(\\?\UNC)" } + native.substr(1U) };
-    }
-    return std::filesystem::path{ std::wstring{ LR"(\\?\)" } + native };
-#else
-    return root;
-#endif
 }
 
 // Longest path the sink can be asked to create inside `directory`: a separator,
@@ -209,12 +162,18 @@ std::string_view ToString(BakedAssetSinkStatus status) noexcept {
         return "PathTooLong";
     case BakedAssetSinkStatus::WriteFailed:
         return "WriteFailed";
+    case BakedAssetSinkStatus::InvalidProfile:
+        return "InvalidProfile";
+    case BakedAssetSinkStatus::BlockTooLarge:
+        return "BlockTooLarge";
+    case BakedAssetSinkStatus::PackAlreadyFinished:
+        return "PackAlreadyFinished";
     }
     return "Unknown";
 }
 
 LooseBakedAssetSink::LooseBakedAssetSink(std::filesystem::path root)
-    : root_{ NormalizeStoreRoot(std::move(root)) } {}
+    : root_{ store::Normalize(std::move(root)) } {}
 
 LooseBakedAssetSink::~LooseBakedAssetSink() {
     // An artifact still open here means the bake died mid-way. Publishing it
