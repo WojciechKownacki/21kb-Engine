@@ -385,6 +385,7 @@ struct ImportedAssetHeader {
         .name = result.assetPhysicalPath.stem().string(),
         .virtualPath = result.virtualPath,
         .physicalPath = result.assetPhysicalPath,
+        .sourceExtension = AssetPathUtilities::LowerExtension(result.assetPhysicalPath.extension()),
         .contentHash = result.assetHash,
         .dependencies = {},
         .runtimeLoadable = true,

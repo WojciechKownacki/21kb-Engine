@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <optional>
+#include <span>
 #include <string>
 
 namespace kb::scene {
@@ -19,6 +20,9 @@ public:
 
     [[nodiscard]] static std::optional<SkeletonAsset> Load(
         const std::filesystem::path& path,
+        std::string* error = nullptr);
+    [[nodiscard]] static std::optional<SkeletonAsset> Load(
+        std::span<const std::uint8_t> bytes,
         std::string* error = nullptr);
     [[nodiscard]] static bool Save(const std::filesystem::path& path, const SkeletonAsset& asset);
 };

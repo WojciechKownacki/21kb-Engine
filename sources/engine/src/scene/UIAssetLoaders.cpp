@@ -11,7 +11,12 @@ std::string_view UIDocumentAssetLoader::Type() const noexcept { return kUIDocume
 std::type_index UIDocumentAssetLoader::PayloadType() const noexcept { return typeid(UIDocument); }
 std::vector<std::string> UIDocumentAssetLoader::Extensions() const { return { kUIDocumentAssetExtension }; }
 kb::assets::AssetLoadResult UIDocumentAssetLoader::Load(const kb::assets::AssetLoadRequest& request) {
-    auto document = UIAssetIO::LoadDocument(request.resolvedPath);
+    std::vector<std::uint8_t> sourceBytes;
+    std::string error;
+    if (!request.ReadSourceBytes(sourceBytes, error)) {
+        return kb::assets::AssetLoadResult{ {}, std::move(error) };
+    }
+    auto document = UIAssetIO::LoadDocument(sourceBytes);
     return document ? kb::assets::AssetLoadResult{ std::make_shared<UIDocument>(std::move(*document)), {} }
                     : kb::assets::AssetLoadResult{ {}, "UI document could not be loaded or parsed." };
 }
@@ -30,7 +35,12 @@ std::string_view UIStyleAssetLoader::Type() const noexcept { return kUIStyleAsse
 std::type_index UIStyleAssetLoader::PayloadType() const noexcept { return typeid(UIStyleAsset); }
 std::vector<std::string> UIStyleAssetLoader::Extensions() const { return { kUIStyleAssetExtension }; }
 kb::assets::AssetLoadResult UIStyleAssetLoader::Load(const kb::assets::AssetLoadRequest& request) {
-    auto style = UIAssetIO::LoadStyle(request.resolvedPath);
+    std::vector<std::uint8_t> sourceBytes;
+    std::string error;
+    if (!request.ReadSourceBytes(sourceBytes, error)) {
+        return kb::assets::AssetLoadResult{ {}, std::move(error) };
+    }
+    auto style = UIAssetIO::LoadStyle(sourceBytes);
     return style ? kb::assets::AssetLoadResult{ std::make_shared<UIStyleAsset>(std::move(*style)), {} }
                  : kb::assets::AssetLoadResult{ {}, "UI style asset could not be loaded or parsed." };
 }

@@ -10,6 +10,8 @@ void RunFinalCompositePassTests();
 void RunPostProcessChainTests();
 void RunRenderFramePipelineTests();
 void RunRenderResourceRegistryTests();
+void RunRuntimeAssetShaderProviderTests();
+void RunPackagedMaterialRuntimeTests();
 void RunRenderMaterialTypeSchemaTests();
 void RunGraphShaderArtifactCookTests();
 void RunMaterialProgramRegistryTests();
@@ -29,12 +31,25 @@ void RunSceneRenderTargetFormatTests();
 void RunSceneRenderExtractorTests();
 void RunShaderManifestTests();
 void RunShaderPrewarmParseTests();
+void RunMeshBakeTests();
 void RunTextureBakeTests();
 }
 
 int main(int argc, char** argv) {
+    if (argc == 2 && std::string_view{ argv[1] } == "mesh-bake") {
+        kb::render::tests::RunMeshBakeTests();
+        return EXIT_SUCCESS;
+    }
     if (argc == 2 && std::string_view{ argv[1] } == "texture-bake") {
         kb::render::tests::RunTextureBakeTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "graph-shader-artifact") {
+        kb::render::tests::RunGraphShaderArtifactCookTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "shader-manifest") {
+        kb::render::tests::RunShaderManifestTests();
         return EXIT_SUCCESS;
     }
     if (argc == 2 && std::string_view{ argv[1] } == "frame-pipeline") {
@@ -43,6 +58,14 @@ int main(int argc, char** argv) {
     }
     if (argc == 2 && std::string_view{ argv[1] } == "resource-registry") {
         kb::render::tests::RunRenderResourceRegistryTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "runtime-shader-provider") {
+        kb::render::tests::RunRuntimeAssetShaderProviderTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "packaged-material") {
+        kb::render::tests::RunPackagedMaterialRuntimeTests();
         return EXIT_SUCCESS;
     }
     if (argc == 2 && std::string_view{ argv[1] } == "mesh-pipeline") {
@@ -107,6 +130,7 @@ int main(int argc, char** argv) {
     kb::render::tests::RunPostProcessChainTests();
     kb::render::tests::RunRenderFramePipelineTests();
     kb::render::tests::RunRenderResourceRegistryTests();
+    kb::render::tests::RunRuntimeAssetShaderProviderTests();
     kb::render::tests::RunRenderMaterialTypeSchemaTests();
     kb::render::tests::RunGraphShaderArtifactCookTests();
     kb::render::tests::RunMaterialProgramRegistryTests();
@@ -122,6 +146,7 @@ int main(int argc, char** argv) {
     kb::render::tests::RunSceneRenderExtractorTests();
     kb::render::tests::RunShaderManifestTests();
     kb::render::tests::RunShaderPrewarmParseTests();
+    kb::render::tests::RunMeshBakeTests();
     kb::render::tests::RunTextureBakeTests();
     return EXIT_SUCCESS;
 }

@@ -1,6 +1,7 @@
 #include "kb/render/resources/RenderMaterialParameterCollection.hpp"
 
 #include "engine/assets/AssetId.hpp"
+#include "engine/assets/AssetMemoryInputStream.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -347,7 +348,17 @@ std::vector<std::string> RenderMaterialParameterCollectionAssetLoader::Extension
 }
 
 kb::assets::AssetLoadResult RenderMaterialParameterCollectionAssetLoader::Load(const kb::assets::AssetLoadRequest& request) {
-    RenderMaterialParameterCollectionParseResult result = LoadCollectionWithDiagnostics(request.resolvedPath, request.metadata.id);
+    std::vector<std::uint8_t> sourceBytes;
+    std::string error;
+    if (!request.ReadSourceBytes(sourceBytes, error)) {
+        return kb::assets::AssetLoadResult{ .asset = {}, .error = std::move(error) };
+    }
+    kb::assets::AssetMemoryInputStream input{ sourceBytes };
+    RenderMaterialParameterCollectionParseResult result = LoadCollectionWithDiagnostics(input);
+    for (RenderMaterialAssetParseDiagnostic& diagnostic : result.diagnostics) {
+        diagnostic.assetId = request.metadata.id;
+        diagnostic.path = request.resolvedPath;
+    }
     if (!result.collection.has_value()) {
         return kb::assets::AssetLoadResult{ .asset = {}, .error = result.ErrorMessage() };
     }

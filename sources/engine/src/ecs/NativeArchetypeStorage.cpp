@@ -31,9 +31,11 @@ constexpr std::uint32_t kInvalidEntityIndex = std::numeric_limits<std::uint32_t>
 static_assert(sizeof(Entity) == sizeof(Entity::IdType), "Native ECS query batches require Entity to store exactly one id");
 static_assert(alignof(Entity) == alignof(Entity::IdType), "Native ECS query batches require Entity id-compatible alignment");
 
+#if !defined(NDEBUG)
 [[nodiscard]] bool IsAlignedAddress(const void* pointer, std::size_t alignment) noexcept {
     return pointer != nullptr && alignment != 0U && (reinterpret_cast<std::uintptr_t>(pointer) % alignment) == 0U;
 }
+#endif
 
 [[nodiscard]] const ComponentTypeInfo* FindComponentType(std::span<const ComponentTypeInfo> componentTypes, ComponentId componentId) noexcept {
     for (const ComponentTypeInfo& componentType : componentTypes) {

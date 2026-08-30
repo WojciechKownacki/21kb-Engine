@@ -11,6 +11,8 @@
 
 namespace kb::assets::bake {
 
+struct BakeTargetProfile;
+
 // How a mounted pack gets at its bytes.
 enum class AssetPackAccess : std::uint8_t {
     // Seek to a block and read only that block. One open file handle for the whole pack.
@@ -49,6 +51,12 @@ public:
     // Reads and validates the header and the index. A failure leaves nothing mounted.
     [[nodiscard]] AssetPackReadStatus Mount(const std::filesystem::path& path,
                                             AssetPackAccess access = AssetPackAccess::Ranged);
+
+    // Mounts bytes owned by the caller without copying them. The span must remain valid until
+    // Unmount() or destruction. This is the Android APK path: AAssetManager keeps one
+    // uncompressed, zipaligned asset mapping alive and the reader validates and slices that
+    // mapping instead of reopening the APK once per artifact.
+    [[nodiscard]] AssetPackReadStatus MountMemory(std::span<const std::uint8_t> bytes);
     void Unmount() noexcept;
 
     [[nodiscard]] bool IsMounted() const noexcept {
@@ -59,8 +67,21 @@ public:
         return header_;
     }
 
+    // True only for a mounted pack whose recorded stable profile id and full
+    // settings fingerprint match `profile`. Packaging tools and runtime hosts
+    // use this same check so a release cannot accept what the device refuses.
+    [[nodiscard]] bool MatchesTargetProfile(const BakeTargetProfile& profile) const noexcept;
+
     [[nodiscard]] std::span<const AssetPackArtifactEntry> Artifacts() const noexcept {
         return artifacts_;
+    }
+
+    // The streaming fragments of this pack, in the order the writer laid them down. Every one
+    // of them was matched to a block of this pack at mount, so a fragment is a second view of
+    // bytes the artifact index already describes -- never a region only the fragment index
+    // knows about.
+    [[nodiscard]] std::span<const AssetPackFragmentEntry> Fragments() const noexcept {
+        return fragments_;
     }
 
     // The artifact under this bake digest, or nullptr. Linear: an index lookup happens once
@@ -84,15 +105,18 @@ public:
 private:
     [[nodiscard]] AssetPackReadStatus ReadRange(std::uint64_t offset, std::uint64_t bytes, std::vector<std::uint8_t>& out);
     [[nodiscard]] AssetPackReadStatus ValidateBlockRange(const AssetPackBlockEntry& block) const noexcept;
+    [[nodiscard]] AssetPackReadStatus ValidateAndFinishMount();
 
     std::filesystem::path path_;
     AssetPackAccess access_ = AssetPackAccess::Ranged;
     AssetPackHeader header_{};
     std::vector<AssetPackArtifactEntry> artifacts_;
+    std::vector<AssetPackFragmentEntry> fragments_;
     // Ranged mode: the single handle. WholeFile mode: the single buffer. Exactly one of the
     // two is populated while a pack is mounted.
     std::ifstream stream_;
     std::vector<std::uint8_t> bytes_;
+    std::span<const std::uint8_t> borrowedBytes_{};
     std::uint64_t fileBytes_ = 0U;
     std::uint64_t openCount_ = 0U;
     bool mounted_ = false;

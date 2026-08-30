@@ -16,8 +16,8 @@
 // Turns a source image into the exact bytes a GPU samples: the profile's compression family,
 // the complete mip chain, no CPU decode left for the runtime to pay.
 //
-// It lives in kb_renderer rather than beside the rest of the bake seam in kb_engine because
-// kb_engine links neither bgfx nor bimg, and the encoders are bimg's. The seam itself
+// It lives in the host-only kb_renderer_bake target rather than beside the rest of the bake seam
+// in kb_engine. Runtime kb_renderer keeps only the compressed-payload reader. The seam itself
 // (BakeTargetProfile, AssetBakeKey, IBakedAssetSink) stays in kb_engine where every baker
 // reaches it; only this baker, which needs the image stack, sits on the renderer's side.
 namespace kb::render::bake {
@@ -25,11 +25,9 @@ namespace kb::render::bake {
 // Identity of this baker inside a bake key. `bakerId` scopes `bakerVersion`, so bumping the
 // version below re-bakes every texture and leaves every other baker's cache untouched.
 inline constexpr std::string_view kTextureBakerId = "Texture";
-// 2: alpha that the format table decided not to keep is flattened to opaque before anything is
-// encoded. BC1's alpha is one bit and squish spends it: a texel below 128 was being encoded in
-// DXT1's punch-through mode, which forces its RGB to black. Versions 1 and 2 disagree byte for
-// byte for every source with a non-opaque alpha channel and a semantic that does not sample it.
-inline constexpr std::string_view kTextureBakerVersion = "2";
+// 3 adds the pinned, scalar etcpak 2.0 ETC2 RGB/RGBA encoder. Version 2 flattened alpha that a
+// format did not retain; version 3 keeps that rule and changes the set of supported families.
+inline constexpr std::string_view kTextureBakerVersion = "3";
 
 // Runtime type of the artifact this baker publishes; a path component of the bake store.
 inline constexpr std::string_view kTextureBakedAssetTypeId = "Texture2D";
@@ -137,9 +135,10 @@ struct TextureBakeOutput {
 
 // Bakes `sourceBytes` for one compression family and hands the result to `sink` as the
 // artifact's primary block. Deterministic: the same source and the same arguments produce
-// byte-identical output on every run and every machine.
+// byte-identical output on repeated supported x86-64 cooker runs. Cross-OS identity is a release
+// gate before Windows and Linux may share a remote bake cache.
 //
-// A profile may list several families (a browser guarantees BC or ASTC and only says which at
+// A profile may list several families (a WebGL2 browser guarantees BC or ETC2 and only says which at
 // runtime), so a caller bakes once per family; the family is part of the key, so the two
 // artifacts never collide.
 [[nodiscard]] TextureBakeOutput BakeTextureBytes(
@@ -162,5 +161,12 @@ struct TextureBakeOutput {
 // decoded. Returns false for anything that is not a 2D block-compressed container this baker
 // could have produced.
 [[nodiscard]] bool ReadBakedTexture(std::span<const std::uint8_t> primaryBlock, RenderTextureAssetData& out);
+
+// Keeps the manifest qualifier and the GPU payload format under one runtime-owned contract.
+// The package validator and the runtime loader both call this function so neither can accept
+// a variant that the other later rejects.
+[[nodiscard]] bool BakedTextureFormatMatchesFamily(
+    bgfx::TextureFormat::Enum format,
+    std::string_view qualifier) noexcept;
 
 } // namespace kb::render::bake

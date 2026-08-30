@@ -25,6 +25,10 @@ rules.ninja
 Makefile
 cmake-build-*/
 CMakeUserPresets.json
+platform/android/.gradle/
+platform/android/build/
+platform/android/app/.cxx/
+platform/android/app/build/
 
 # =========================
 # Compiler / linker artifacts

@@ -145,9 +145,9 @@ void AddDiagnostic(
 }
 
 [[nodiscard]] std::string_view DomainName(RenderMaterialDomain domain) noexcept {
-    switch (domain) {
-    case RenderMaterialDomain::Surface: return "Surface";
-    }
+    // Material Type assets currently support only Surface. Keep their established
+    // on-disk spelling independent from the graph-domain display spelling.
+    static_cast<void>(domain);
     return "Surface";
 }
 

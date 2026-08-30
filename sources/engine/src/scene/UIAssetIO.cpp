@@ -177,8 +177,15 @@ bool ValidateStyle(const UIStyleAsset& style) {
 std::optional<UIDocument> UIAssetIO::LoadDocument(const std::filesystem::path& path) {
     const auto text = ReadText(path);
     if (!text) return std::nullopt;
+    return LoadDocument(std::span<const std::uint8_t>{
+        reinterpret_cast<const std::uint8_t*>(text->data()), text->size() });
+}
+
+std::optional<UIDocument> UIAssetIO::LoadDocument(std::span<const std::uint8_t> bytes) {
+    if (bytes.empty()) return std::nullopt;
+    const std::string text{ reinterpret_cast<const char*>(bytes.data()), bytes.size() };
     UIDocument document{};
-    std::istringstream file{ *text };
+    std::istringstream file{ text };
     file.imbue(std::locale::classic());
     std::string line;
     while (std::getline(file, line)) {
@@ -238,8 +245,15 @@ std::optional<UIDocument> UIAssetIO::LoadDocument(const std::filesystem::path& p
 std::optional<UIStyleAsset> UIAssetIO::LoadStyle(const std::filesystem::path& path) {
     const auto text = ReadText(path);
     if (!text) return std::nullopt;
+    return LoadStyle(std::span<const std::uint8_t>{
+        reinterpret_cast<const std::uint8_t*>(text->data()), text->size() });
+}
+
+std::optional<UIStyleAsset> UIAssetIO::LoadStyle(std::span<const std::uint8_t> bytes) {
+    if (bytes.empty()) return std::nullopt;
+    const std::string text{ reinterpret_cast<const char*>(bytes.data()), bytes.size() };
     UIStyleAsset style{};
-    std::istringstream file{ *text };
+    std::istringstream file{ text };
     file.imbue(std::locale::classic());
     std::string line;
     while (std::getline(file, line)) {

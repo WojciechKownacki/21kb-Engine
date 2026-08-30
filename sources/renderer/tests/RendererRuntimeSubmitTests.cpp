@@ -2136,6 +2136,7 @@ void RunRendererPublicGraphShaderCacheRootBindsCookedProgramTest() {
     request.includeDirs = { KB_TEST_GRAPH_SHADER_INCLUDE_DIR, KB_TEST_GRAPH_BGFX_SHADER_INCLUDE_DIR };
     request.cacheRoot = cacheRoot.generic_string();
     request.pass = "BaseOpaque";
+    request.shaderPlatform = kb::assets::bake::ShaderBakePlatform::Windows;
     const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Dxbc };
     Require(CookRenderMaterialGraphShaderArtifact(compiled.shader, backends, request).Succeeded(),
         "MAT-31 public cache root test must cook a DXBC graph binary");
@@ -2247,6 +2248,7 @@ void RunRendererSceneRendersMultipleCookedGraphMaterialsTest() {
         request.includeDirs = { KB_TEST_GRAPH_SHADER_INCLUDE_DIR, KB_TEST_GRAPH_BGFX_SHADER_INCLUDE_DIR };
         request.cacheRoot = cacheRoot.generic_string();
         request.pass = "BaseOpaque";
+        request.shaderPlatform = kb::assets::bake::ShaderBakePlatform::Windows;
         const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Dxbc };
         Require(CookRenderMaterialGraphShaderArtifact(compiled.shader, backends, request).Succeeded(),
             "MAT-84 scene multi-graph test must cook each graph material");
@@ -3858,6 +3860,7 @@ void RunRendererPreservesGraphTextureDimensionsThroughProductionPipelineTest() {
         request.includeDirs = { KB_TEST_GRAPH_SHADER_INCLUDE_DIR, KB_TEST_GRAPH_BGFX_SHADER_INCLUDE_DIR };
         request.cacheRoot = cacheRoot.generic_string();
         request.pass = "BaseOpaque";
+        request.shaderPlatform = kb::assets::bake::ShaderBakePlatform::Windows;
         Require(CookRenderMaterialGraphShaderArtifact(compiled.shader, backends, request).Succeeded(),
             "Graph texture dimension test could not cook the production graph program");
         Require(RenderMaterialAssetWriter::Save(root / materialCase.filename, material),
@@ -5204,6 +5207,7 @@ void RunGraphMaterialReportsGpuMaterialGraphModeTest() {
         request.includeDirs = { KB_TEST_GRAPH_SHADER_INCLUDE_DIR, KB_TEST_GRAPH_BGFX_SHADER_INCLUDE_DIR };
         request.cacheRoot = cacheRoot.generic_string();
         request.pass = "BaseOpaque";
+        request.shaderPlatform = kb::assets::bake::ShaderBakePlatform::Windows;
         const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Dxbc };
         Require(CookRenderMaterialGraphShaderArtifact(compiled.shader, backends, request).Succeeded(),
             "MAT-27 GPU material mode test must cook the graph binary");

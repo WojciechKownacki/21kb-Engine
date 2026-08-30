@@ -57,7 +57,7 @@ public:
     virtual ~MaterialParameterSchemaValidator() = default;
 
     [[nodiscard]] virtual bool Validate(
-        const kb::assets::AssetManager& assets,
+        kb::assets::AssetManager& assets,
         std::uint64_t parentMaterialAssetId,
         std::string_view name,
         MaterialParameterType type) const noexcept = 0;

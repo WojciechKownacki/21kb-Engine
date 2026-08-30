@@ -77,7 +77,9 @@ private:
 
     NativeArchetypeStorage* nativeStorage_ = nullptr;
     std::shared_ptr<QueryPlan> plan_;
-    MutableComponentBorrowLocks* mutableBorrowLocks_ = nullptr;
+    // Runtime borrow checks are deliberately compiled out with assertions; the constructor
+    // contract stays identical between build types, so the stored hook is unused in release.
+    [[maybe_unused]] MutableComponentBorrowLocks* mutableBorrowLocks_ = nullptr;
     StructuralChangeValidator* structuralChangeValidator_ = nullptr;
     WorldTelemetryCounters* telemetryCounters_ = nullptr;
     std::size_t defaultExecutionGrainSize_ = kDefaultQueryExecutionGrainSize;

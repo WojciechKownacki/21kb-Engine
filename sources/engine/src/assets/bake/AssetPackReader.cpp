@@ -1,6 +1,7 @@
 #include "engine/assets/bake/AssetPackReader.hpp"
 
 #include "assets/bake/BakeStorePath.hpp"
+#include "engine/assets/bake/BakeTargetProfile.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -8,6 +9,12 @@
 #include <utility>
 
 namespace kb::assets::bake {
+
+bool AssetPackReader::MatchesTargetProfile(const BakeTargetProfile& profile) const noexcept {
+    return mounted_ && IsValidBakeTargetProfile(profile) &&
+        header_.targetProfileId == profile.identifier &&
+        header_.targetProfileHash == BakeTargetProfileFingerprint(profile);
+}
 
 AssetPackReadStatus AssetPackReader::ValidateBlockRange(const AssetPackBlockEntry& block) const noexcept {
     if (block.storedBytes > kMaxAssetPackBlockBytes) {
@@ -19,8 +26,9 @@ AssetPackReadStatus AssetPackReader::ValidateBlockRange(const AssetPackBlockEntr
     if (block.offset > fileBytes_ || block.storedBytes > fileBytes_ - block.offset) {
         return AssetPackReadStatus::BlockOutOfRange;
     }
-    // A block must not begin inside the catalogue that describes it.
-    if (block.offset < header_.indexOffset + header_.indexBytes) {
+    // A block must not begin inside either catalogue that describes it -- the artifact index
+    // or the fragment index that follows it.
+    if (block.offset < header_.indexOffset + header_.indexBytes + header_.fragmentIndexBytes) {
         return AssetPackReadStatus::BlockOutOfRange;
     }
     if (!store::IsPowerOfTwo(block.alignmentBytes) || block.alignmentBytes < header_.packageBlockAlignmentBytes ||
@@ -45,6 +53,13 @@ AssetPackReadStatus AssetPackReader::ReadRange(std::uint64_t offset, std::uint64
     }
     out.assign(static_cast<std::size_t>(bytes), 0U);
     if (bytes == 0U) {
+        return AssetPackReadStatus::Success;
+    }
+    if (!borrowedBytes_.empty()) {
+        std::copy_n(
+            borrowedBytes_.begin() + static_cast<std::ptrdiff_t>(offset),
+            static_cast<std::size_t>(bytes),
+            out.begin());
         return AssetPackReadStatus::Success;
     }
     if (access_ == AssetPackAccess::WholeFile) {
@@ -99,6 +114,24 @@ AssetPackReadStatus AssetPackReader::Mount(const std::filesystem::path& path, As
         }
     }
 
+    return ValidateAndFinishMount();
+}
+
+AssetPackReadStatus AssetPackReader::MountMemory(std::span<const std::uint8_t> bytes) {
+    Unmount();
+    if (bytes.size() > kMaxAssetPackBytes) {
+        return AssetPackReadStatus::PackTooLarge;
+    }
+    if (bytes.size() < kAssetPackHeaderBytes) {
+        return AssetPackReadStatus::Unreadable;
+    }
+
+    borrowedBytes_ = bytes;
+    fileBytes_ = static_cast<std::uint64_t>(bytes.size());
+    return ValidateAndFinishMount();
+}
+
+AssetPackReadStatus AssetPackReader::ValidateAndFinishMount() {
     std::vector<std::uint8_t> headerBytes;
     if (const AssetPackReadStatus status = ReadRange(0U, kAssetPackHeaderBytes, headerBytes);
         status != AssetPackReadStatus::Success) {
@@ -124,7 +157,16 @@ AssetPackReadStatus AssetPackReader::Mount(const std::filesystem::path& path, As
         Unmount();
         return status;
     }
-    if (HashBakeBytes(indexBytes) != header_.indexChecksum) {
+    std::vector<std::uint8_t> fragmentBytes;
+    if (header_.fragmentCount != 0U) {
+        if (const AssetPackReadStatus status =
+                ReadRange(header_.fragmentIndexOffset, header_.fragmentIndexBytes, fragmentBytes);
+            status != AssetPackReadStatus::Success) {
+            Unmount();
+            return status;
+        }
+    }
+    if (AssetPackIndexChecksum(indexBytes, fragmentBytes) != header_.indexChecksum) {
         Unmount();
         return AssetPackReadStatus::IndexCorrupt;
     }
@@ -137,6 +179,7 @@ AssetPackReadStatus AssetPackReader::Mount(const std::filesystem::path& path, As
     // Every block is checked against the real file NOW, so nothing downstream has to wonder
     // whether the entry it was handed was ever validated.
     std::vector<std::pair<std::uint64_t, std::uint64_t>> ranges;
+    std::vector<std::pair<std::uint64_t, std::uint64_t>> streamingRanges;
     for (const AssetPackArtifactEntry& artifact : artifacts_) {
         ranges.reserve(ranges.size() + artifact.blocks.size());
         for (const AssetPackBlockEntry& block : artifact.blocks) {
@@ -146,8 +189,12 @@ AssetPackReadStatus AssetPackReader::Mount(const std::filesystem::path& path, As
                 return status;
             }
             ranges.emplace_back(block.offset, block.offset + block.storedBytes);
+            if (block.residency == BakedAssetBlockResidency::Streaming) {
+                streamingRanges.emplace_back(block.offset, block.offset + block.storedBytes);
+            }
         }
     }
+    std::ranges::sort(streamingRanges);
     // ...and no two of them may be the same bytes. Every range above lies inside the file, so
     // an overlap is memory-safe -- and it is still a pack that answers one content-addressed
     // key with a payload baked under another, which is the failure this store exists to make
@@ -161,6 +208,46 @@ AssetPackReadStatus AssetPackReader::Mount(const std::filesystem::path& path, As
         }
     }
 
+    if (header_.fragmentCount != 0U) {
+        if (const AssetPackReadStatus status =
+                DecodeAssetPackFragmentIndex(fragmentBytes, header_.fragmentCount, fragments_);
+            status != AssetPackReadStatus::Success) {
+            Unmount();
+            return status;
+        }
+        // A fragment must BE a block, byte for byte. That is the container's whole share of
+        // "a cluster group may not straddle a fragment": a fragment that is exactly one block
+        // has no boundary inside it for a group to cross, and a fragment that is anything else
+        // -- half a block, two blocks, a gap between them -- describes a page whose contents
+        // the baker never guaranteed anything about.
+        std::uint64_t previousFragmentOffset = 0U;
+        bool hasPreviousFragment = false;
+        for (const AssetPackFragmentEntry& fragment : fragments_) {
+            if (fragment.offset % header_.fragmentAlignmentBytes != 0U) {
+                Unmount();
+                return AssetPackReadStatus::FragmentIndexCorrupt;
+            }
+            // The writer lays blocks, and therefore fragments, in strictly increasing file
+            // order. Requiring that order rejects duplicate declarations in the same pass and
+            // lets the already-sorted block ranges be searched logarithmically. The previous
+            // all-block scan followed by an all-fragment duplicate scan made a legal package
+            // with many small fragments quadratic to mount.
+            if (hasPreviousFragment && fragment.offset <= previousFragmentOffset) {
+                Unmount();
+                return AssetPackReadStatus::FragmentIndexCorrupt;
+            }
+            const std::pair<std::uint64_t, std::uint64_t> fragmentRange{
+                fragment.offset, fragment.offset + fragment.bytes
+            };
+            if (!std::ranges::binary_search(streamingRanges, fragmentRange)) {
+                Unmount();
+                return AssetPackReadStatus::FragmentIndexCorrupt;
+            }
+            previousFragmentOffset = fragment.offset;
+            hasPreviousFragment = true;
+        }
+    }
+
     mounted_ = true;
     return AssetPackReadStatus::Success;
 }
@@ -170,7 +257,9 @@ void AssetPackReader::Unmount() noexcept {
     stream_.clear();
     bytes_.clear();
     bytes_.shrink_to_fit();
+    borrowedBytes_ = {};
     artifacts_.clear();
+    fragments_.clear();
     header_ = AssetPackHeader{};
     path_.clear();
     fileBytes_ = 0U;
@@ -213,7 +302,15 @@ AssetPackReadStatus AssetPackReader::ReadBlock(const AssetPackArtifactEntry& art
     if (const AssetPackReadStatus status = ValidateBlockRange(*block); status != AssetPackReadStatus::Success) {
         return status;
     }
-    return ReadRange(block->offset, block->storedBytes, out);
+    const AssetPackReadStatus readStatus = ReadRange(block->offset, block->storedBytes, out);
+    if (readStatus != AssetPackReadStatus::Success) {
+        return readStatus;
+    }
+    if (HashBakeDigest(out) != block->payloadDigest) {
+        out.clear();
+        return AssetPackReadStatus::PayloadCorrupt;
+    }
+    return AssetPackReadStatus::Success;
 }
 
 } // namespace kb::assets::bake

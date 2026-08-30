@@ -3,6 +3,7 @@
 #include "engine/scene/TimelineAsset.hpp"
 
 #include <filesystem>
+#include <istream>
 #include <optional>
 
 namespace kb::scene {
@@ -15,6 +16,7 @@ public:
     TimelineAssetIO() = delete;
     [[nodiscard]] static std::optional<TimelineAsset> Load(
         const std::filesystem::path& path);
+    [[nodiscard]] static std::optional<TimelineAsset> Load(std::istream& input);
     [[nodiscard]] static bool Save(
         const std::filesystem::path& path, const TimelineAsset& asset);
 };

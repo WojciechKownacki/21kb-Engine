@@ -264,6 +264,13 @@ std::optional<AudioMixerAsset> AudioMixerAssetIO::Load(const std::filesystem::pa
     if (bytes.empty()) {
         return std::nullopt;
     }
+    return Load(bytes);
+}
+
+std::optional<AudioMixerAsset> AudioMixerAssetIO::Load(std::span<const std::uint8_t> bytes) {
+    if (bytes.empty()) {
+        return std::nullopt;
+    }
     return ParseAsset(std::string_view{ reinterpret_cast<const char*>(bytes.data()), bytes.size() });
 }
 

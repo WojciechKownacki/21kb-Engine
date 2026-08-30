@@ -54,6 +54,8 @@ std::optional<MeshPassType> MeshPassForRenderPassKind(RenderPassKind kind) noexc
     case RenderPassKind::PostProcessBloomBlurH:
     case RenderPassKind::PostProcessBloomBlurV:
     case RenderPassKind::PostProcessHdrCombine:
+    case RenderPassKind::PostProcessExposureReadback:
+    case RenderPassKind::PostProcessTaaResolve:
     case RenderPassKind::PostProcessHdrFinalize:
     case RenderPassKind::EditorSceneOverlays:
     case RenderPassKind::FinalComposite:

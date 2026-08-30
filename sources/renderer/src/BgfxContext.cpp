@@ -19,6 +19,8 @@
 
 #if defined(_WIN32)
 #include <Windows.h>
+#elif defined(__ANDROID__)
+#include <android/log.h>
 #endif
 
 namespace kb::render {
@@ -42,27 +44,55 @@ namespace {
     return "Unknown";
 }
 
-[[nodiscard]] std::string BgfxLogPath() {
+[[nodiscard]] std::filesystem::path BgfxLogPath(std::string_view writableStorageRoot) {
+    if (!writableStorageRoot.empty()) {
+        return std::filesystem::path{ writableStorageRoot } / "Saved" / "Logs" /
+            "bgfx-fatal.log";
+    }
 #if defined(_WIN32)
     char tempPath[MAX_PATH]{};
     if (GetTempPathA(MAX_PATH, tempPath) != 0U) {
-        return std::string{ tempPath } + "21kb_bgfx_fatal.log";
+        return std::filesystem::path{ tempPath } / "21kb_bgfx_fatal.log";
     }
-    return "21kb_bgfx_fatal.log";
+    return std::filesystem::path{ "21kb_bgfx_fatal.log" };
 #else
-    return "/tmp/21kb_bgfx_fatal.log";
+    return {};
 #endif
 }
 
-void AppendBgfxLog(std::string_view text) {
-    std::ofstream output(BgfxLogPath(), std::ios::out | std::ios::app);
-    output << text;
+[[nodiscard]] std::filesystem::path BgfxPsoTracePath(
+    std::string_view writableStorageRoot) {
+    std::error_code error;
+    const std::filesystem::path root = writableStorageRoot.empty()
+        ? std::filesystem::current_path(error)
+        : std::filesystem::path{ writableStorageRoot };
+    return error || root.empty()
+        ? std::filesystem::path{}
+        : root / "Saved" / "Logs" / "bgfx-pso-trace.log";
+}
+
+void AppendBgfxLog(const std::filesystem::path& path, std::string_view text) {
+    if (!path.empty()) {
+        std::error_code error;
+        std::filesystem::create_directories(path.parent_path(), error);
+        if (!error) {
+            std::ofstream output(path, std::ios::out | std::ios::app);
+            output << text;
+        }
+    }
 #if defined(_WIN32)
     OutputDebugStringA(std::string{ text }.c_str());
+#elif defined(__ANDROID__)
+    __android_log_write(ANDROID_LOG_ERROR, "21kb", std::string{ text }.c_str());
 #endif
 }
 
-void WriteBgfxFatalLog(const char* filePath, std::uint16_t line, bgfx::Fatal::Enum code, const char* message) {
+void WriteBgfxFatalLog(
+    const std::filesystem::path& logPath,
+    const char* filePath,
+    std::uint16_t line,
+    bgfx::Fatal::Enum code,
+    const char* message) {
     std::string text = "\nbgfx fatal ";
     text += BgfxFatalCodeName(code);
     text += " at ";
@@ -72,10 +102,11 @@ void WriteBgfxFatalLog(const char* filePath, std::uint16_t line, bgfx::Fatal::En
     text += "\n";
     text += message != nullptr ? message : "<no message>";
     text += "\n";
-    AppendBgfxLog(text);
+    AppendBgfxLog(logPath, text);
 }
 
 void AppendBgfxPsoTrace(
+    const std::filesystem::path& path,
     std::uint64_t id,
     double durationMs,
     std::uint32_t cachedSize,
@@ -84,24 +115,22 @@ void AppendBgfxPsoTrace(
     if (durationMs < 4.0) {
         return;
     }
+    if (path.empty()) {
+        return;
+    }
     static std::mutex traceMutex;
-    static std::ofstream trace = [] {
-        std::error_code error;
-        const std::filesystem::path path = std::filesystem::current_path(error) /
-            "Saved" / "Logs" / "bgfx-pso-trace.log";
-        if (!error) {
-            std::filesystem::create_directories(path.parent_path(), error);
-        }
-        return error
-            ? std::ofstream{}
-            : std::ofstream{path, std::ios::out | std::ios::app};
-    }();
-    if (!trace.is_open()) {
+    std::error_code error;
+    std::filesystem::create_directories(path.parent_path(), error);
+    if (error) {
         return;
     }
     const auto epochMs = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
     std::scoped_lock lock(traceMutex);
+    std::ofstream trace{path, std::ios::out | std::ios::app};
+    if (!trace.is_open()) {
+        return;
+    }
     trace << "epoch_ms=" << epochMs
           << " pso=0x" << std::hex << id << std::dec
           << " duration=" << durationMs << "ms"
@@ -112,9 +141,13 @@ void AppendBgfxPsoTrace(
     trace.flush();
 }
 
-[[nodiscard]] std::filesystem::path BgfxCacheRoot(bgfx::RendererType::Enum backend) {
+[[nodiscard]] std::filesystem::path BgfxCacheRoot(
+    bgfx::RendererType::Enum backend,
+    std::string_view writableStorageRoot) {
     std::error_code error;
-    std::filesystem::path root = std::filesystem::current_path(error);
+    std::filesystem::path root = writableStorageRoot.empty()
+        ? std::filesystem::current_path(error)
+        : std::filesystem::path{ writableStorageRoot };
     if (error) {
         error.clear();
         root = std::filesystem::temp_directory_path(error);
@@ -130,8 +163,12 @@ void AppendBgfxPsoTrace(
 
 class BgfxEngineCallback final : public bgfx::CallbackI {
 public:
-    explicit BgfxEngineCallback(std::filesystem::path cacheRoot)
-        : cacheRoot_(std::move(cacheRoot)) {
+    BgfxEngineCallback(
+        std::filesystem::path cacheRoot,
+        std::string_view writableStorageRoot)
+        : cacheRoot_(std::move(cacheRoot)),
+          fatalLogPath_(BgfxLogPath(writableStorageRoot)),
+          psoTracePath_(BgfxPsoTracePath(writableStorageRoot)) {
         if (!cacheRoot_.empty()) {
             std::error_code error;
             std::filesystem::create_directories(cacheRoot_, error);
@@ -139,7 +176,7 @@ public:
     }
 
     void fatal(const char* filePath, std::uint16_t line, bgfx::Fatal::Enum code, const char* message) override {
-        WriteBgfxFatalLog(filePath, line, code, message);
+        WriteBgfxFatalLog(fatalLogPath_, filePath, line, code, message);
 #if defined(_WIN32)
         if (code == bgfx::Fatal::DeviceLost) {
             MessageBoxA(nullptr, message != nullptr ? message : "bgfx device lost", "21kb Engine - bgfx fatal", MB_OK | MB_ICONERROR);
@@ -213,7 +250,8 @@ public:
         if (hasTrace) {
             const double durationMs = std::chrono::duration<double, std::milli>(
                 completed - trace.started).count();
-            AppendBgfxPsoTrace(id, durationMs, trace.cachedSize, trace.readSucceeded, size);
+            AppendBgfxPsoTrace(
+                psoTracePath_, id, durationMs, trace.cachedSize, trace.readSucceeded, size);
         }
         if (data == nullptr || size == 0U || size > kMaximumCacheEntrySize || cacheRoot_.empty()) {
             return;
@@ -278,6 +316,8 @@ private:
     }
 
     std::filesystem::path cacheRoot_;
+    std::filesystem::path fatalLogPath_;
+    std::filesystem::path psoTracePath_;
     std::mutex cacheMutex_;
     std::unordered_map<std::uint64_t, CacheTraceState> cacheTrace_;
 };
@@ -306,7 +346,9 @@ bool BgfxContext::InitializeImpl(std::uint32_t width, std::uint32_t height, void
         return false;
     }
 
-    callback_ = std::make_unique<BgfxEngineCallback>(BgfxCacheRoot(preferredBackend));
+    callback_ = std::make_unique<BgfxEngineCallback>(
+        BgfxCacheRoot(preferredBackend, config.writableStorageRoot),
+        config.writableStorageRoot);
     nativeWindowHandle_ = nwh;
     nativeDisplayHandle_ = ndt;
 

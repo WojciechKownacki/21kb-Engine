@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/assets/bake/BakeTargetProfile.hpp"
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
 
 #include <cstdint>
@@ -25,7 +26,6 @@ enum class RenderMaterialGraphShaderBackend : std::uint8_t {
 
 [[nodiscard]] std::string_view RenderMaterialGraphShaderBackendName(RenderMaterialGraphShaderBackend backend) noexcept;
 [[nodiscard]] std::string_view RenderMaterialGraphShaderBackendProfile(RenderMaterialGraphShaderBackend backend) noexcept;
-[[nodiscard]] std::string_view RenderMaterialGraphShaderBackendPlatform(RenderMaterialGraphShaderBackend backend) noexcept;
 [[nodiscard]] std::string_view RenderMaterialGraphShaderBackendDirectory(RenderMaterialGraphShaderBackend backend) noexcept;
 [[nodiscard]] std::optional<RenderMaterialGraphShaderBackend> ParseRenderMaterialGraphShaderBackend(std::string_view text) noexcept;
 
@@ -36,6 +36,9 @@ struct RenderMaterialGraphShaderArtifactRequest {
     std::vector<std::string> dependencyFiles;
     std::string cacheRoot;
     std::string pass = "BaseOpaque";
+    // Required. shaderc platform defines cannot be derived from the binary
+    // backend: SPIR-V targets three shipped platforms and ESSL targets two.
+    std::optional<kb::assets::bake::ShaderBakePlatform> shaderPlatform;
     std::uint32_t materialTypeVersion = 1U;
     bool debug = false;
 };
@@ -63,6 +66,8 @@ struct RenderMaterialGraphShaderArtifact {
     std::string pass;
     std::string entryPoint = "EvaluateMaterialGraph";
     std::string wrapperSource;
+    kb::assets::bake::ShaderBakePlatform shaderPlatform =
+        kb::assets::bake::ShaderBakePlatform::Windows;
     std::vector<RenderMaterialGraphShaderBinary> binaries;
     std::vector<RenderMaterialGraphArtifactDependency> dependencies;
     bool graphGenerated = true;
@@ -94,6 +99,8 @@ struct RenderMaterialGraphShaderManifestEntry {
     std::uint32_t materialTypeVersion = 1U;
     std::string pass;
     RenderMaterialGraphShaderBackend backend = RenderMaterialGraphShaderBackend::Spirv;
+    kb::assets::bake::ShaderBakePlatform shaderPlatform =
+        kb::assets::bake::ShaderBakePlatform::Windows;
     std::string binaryPath;
     bool graphGenerated = true;
 };

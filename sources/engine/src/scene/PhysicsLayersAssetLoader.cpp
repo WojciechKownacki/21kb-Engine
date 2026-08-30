@@ -20,7 +20,12 @@ std::vector<std::string> PhysicsLayersAssetLoader::Extensions() const {
 }
 
 kb::assets::AssetLoadResult PhysicsLayersAssetLoader::Load(const kb::assets::AssetLoadRequest& request) {
-    PhysicsLayersAssetLoadResult loaded = ReadPhysicsLayersAsset(request.resolvedPath);
+    std::vector<std::uint8_t> sourceBytes;
+    std::string error;
+    if (!request.ReadSourceBytes(sourceBytes, error)) {
+        return kb::assets::AssetLoadResult{ .asset = {}, .error = std::move(error) };
+    }
+    PhysicsLayersAssetLoadResult loaded = DecodePhysicsLayersAsset(sourceBytes);
     if (!loaded.succeeded) {
         return kb::assets::AssetLoadResult{ .asset = {}, .error = std::move(loaded.error) };
     }

@@ -66,6 +66,8 @@ void ResetCommandKeepingInstanceStorage(MeshDrawCommand& command) noexcept {
     command.meshletCount = 0U;
     command.indexStart = 0U;
     command.indexCount = 0U;
+    command.vertexStart = 0U;
+    command.vertexCount = 0U;
     command.lodLevel = 0U;
     command.terrainLayerIndex = UINT8_MAX;
     command.depthBucket = 0U;

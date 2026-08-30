@@ -1,6 +1,7 @@
 #include "engine/assets/bake/BakeTargetProfile.hpp"
 
 #include "engine/assets/bake/AssetBakeKey.hpp"
+#include "engine/assets/bake/AssetPack.hpp"
 
 #include <array>
 
@@ -11,7 +12,7 @@ constexpr std::array<BakeTargetProfile, 4U> kProfiles{
     WindowsX64BakeTargetProfile(),
     LinuxX64BakeTargetProfile(),
     AndroidArm64BakeTargetProfile(),
-    WebWasm32BakeTargetProfile(),
+    WebGlWasm32BakeTargetProfile(),
 };
 
 [[nodiscard]] constexpr bool IsPowerOfTwo(std::uint32_t value) noexcept {
@@ -19,6 +20,20 @@ constexpr std::array<BakeTargetProfile, 4U> kProfiles{
 }
 
 } // namespace
+
+std::string_view TextureCompressionFamilyName(TextureCompressionFamily family) noexcept {
+    switch (family) {
+    case TextureCompressionFamily::BlockCompressedBaseline:
+        return "bc-baseline";
+    case TextureCompressionFamily::BlockCompressedExtended:
+        return "bc-extended";
+    case TextureCompressionFamily::AdaptiveScalable:
+        return "astc";
+    case TextureCompressionFamily::Ericsson2:
+        return "etc2";
+    }
+    return {};
+}
 
 std::string_view ShaderBakeBackendName(ShaderBakeBackend backend) noexcept {
     switch (backend) {
@@ -40,6 +55,33 @@ std::string_view ShaderBakeBackendName(ShaderBakeBackend backend) noexcept {
     return {};
 }
 
+std::string_view ShaderBakePlatformName(ShaderBakePlatform platform) noexcept {
+    switch (platform) {
+    case ShaderBakePlatform::Windows:
+        return "windows";
+    case ShaderBakePlatform::Linux:
+        return "linux";
+    case ShaderBakePlatform::Android:
+        return "android";
+    case ShaderBakePlatform::MacOS:
+        return "osx";
+    case ShaderBakePlatform::WebGl:
+        return "asm.js";
+    }
+    return {};
+}
+
+bool TryParseShaderBakePlatform(std::string_view name, ShaderBakePlatform& out) noexcept {
+    for (std::uint32_t index = 0U; index < kShaderBakePlatformCount; ++index) {
+        const auto candidate = static_cast<ShaderBakePlatform>(index);
+        if (ShaderBakePlatformName(candidate) == name) {
+            out = candidate;
+            return true;
+        }
+    }
+    return false;
+}
+
 bool IsValidBakeTargetProfile(const BakeTargetProfile& profile) noexcept {
     if (!IsValidBakeCacheName(profile.identifier)) {
         return false;
@@ -54,6 +96,16 @@ bool IsValidBakeTargetProfile(const BakeTargetProfile& profile) noexcept {
     if (profile.shaderBackends == 0U || (profile.shaderBackends & ~kKnownBackends) != 0U) {
         return false;
     }
+    if (static_cast<std::uint32_t>(profile.shaderPlatform) >= kShaderBakePlatformCount) {
+        return false;
+    }
+    for (std::uint32_t index = 0U; index < kShaderBakeBackendCount; ++index) {
+        const auto backend = static_cast<ShaderBakeBackend>(index);
+        if (HasShaderBakeBackend(profile.shaderBackends, backend) &&
+            !ShaderBakePlatformSupportsBackend(profile.shaderPlatform, backend)) {
+            return false;
+        }
+    }
     if (!IsPowerOfTwo(profile.packageBlockAlignmentBytes) || !IsPowerOfTwo(profile.mappedBlockAlignmentBytes)) {
         return false;
     }
@@ -62,7 +114,7 @@ bool IsValidBakeTargetProfile(const BakeTargetProfile& profile) noexcept {
     if (profile.mappedBlockAlignmentBytes % profile.packageBlockAlignmentBytes != 0U) {
         return false;
     }
-    if (profile.maxGeometryChunkBytes == 0U) {
+    if (profile.maxGeometryChunkBytes == 0U || profile.maxGeometryChunkBytes > kMaxAssetPackBlockBytes) {
         return false;
     }
     // The 3x16-bit stride trap, enforced rather than merely documented: a raw
@@ -99,6 +151,7 @@ std::uint64_t BakeTargetProfileFingerprint(const BakeTargetProfile& profile) noe
     };
     absorb(profile.textureCompressions, 4U);
     absorb(profile.shaderBackends, 4U);
+    absorb(static_cast<std::uint64_t>(profile.shaderPlatform), 1U);
     absorb(static_cast<std::uint64_t>(profile.indexWidth), 1U);
     absorb(profile.allowsThreeComponent16BitAttributes ? 1U : 0U, 1U);
     absorb(profile.packageBlockAlignmentBytes, 4U);

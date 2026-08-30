@@ -27,6 +27,7 @@ include(FetchContent)
 
 option(KB_BUILD_EDITOR "Build the Win32 editor application and editor tests" ${WIN32})
 option(KB_BUILD_RENDERER "Build the bgfx renderer module and smoke executable" ${WIN32})
+option(KB_BUILD_ANDROID_HOST "Build the GameActivity shared-library host" OFF)
 option(KB_ENABLE_SANITIZERS "Build project targets with AddressSanitizer and UndefinedBehaviorSanitizer where supported" OFF)
 option(KB_ENGINE_ENABLE_NATIVE_AVX2 "Opt in to AVX2 code generation for engine targets and consumers; produced binaries require AVX2-capable CPUs" OFF)
 option(KB_GENERATE_RENDERER_SHADERS "Generate renderer shaders with bgfx shaderc instead of staging prebuilt shaders" OFF)
@@ -333,8 +334,9 @@ if(TARGET kb_cli_tests)
 endif()
 
 if(KB_BUILD_RENDERER)
-    if(NOT WIN32)
-        message(FATAL_ERROR "KB_BUILD_RENDERER currently requires the Win32 bgfx surface integration. Configure with -DKB_BUILD_RENDERER=OFF on non-Windows hosts.")
+    if(NOT WIN32 AND NOT ANDROID AND NOT EMSCRIPTEN AND
+       NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        message(FATAL_ERROR "KB_BUILD_RENDERER currently supports Win32, Linux, Android, and Emscripten/WebGL bgfx integrations. Configure with -DKB_BUILD_RENDERER=OFF on other hosts.")
     endif()
 
     set(BGFX_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)

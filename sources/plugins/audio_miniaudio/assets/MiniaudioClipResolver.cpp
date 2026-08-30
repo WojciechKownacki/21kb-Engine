@@ -6,6 +6,7 @@
 #include "engine/assets/AssetImportCatalog.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/AssetMetadata.hpp"
+#include "engine/audio/AudioClipAsset.hpp"
 #include "engine/audio/AudioClipFormats.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
@@ -440,24 +441,6 @@ struct CompressedFrame final {
     return true;
 }
 
-[[nodiscard]] std::filesystem::path ResolveMountedAudio(
-    kb::scene::Scene& scene,
-    const kb::assets::AssetMetadata& metadata) {
-    std::filesystem::path resolved = metadata.physicalPath;
-    if (resolved.empty()) {
-        const std::optional<std::filesystem::path> mountedPath =
-            scene.Assets().Manager().Mounts().Resolve(metadata.virtualPath);
-        if (!mountedPath.has_value()) {
-            return {};
-        }
-        resolved = *mountedPath;
-    }
-    std::error_code error;
-    return std::filesystem::is_regular_file(resolved, error) && !error
-        ? resolved
-        : std::filesystem::path{};
-}
-
 } // namespace
 
 MiniaudioClipResolver::Resolution MiniaudioClipResolver::ResolveImportedAudio(
@@ -482,6 +465,7 @@ MiniaudioClipResolver::Resolution MiniaudioClipResolver::ResolveImportedAudio(
         .identity = std::to_string(clipAssetId) + ":" + std::to_string(metadataContentHash)
             + ":" + std::to_string(imported->sourceHash) + ":"
             + std::to_string(imported->payload.size()) + ":" + std::string{ extension },
+        .expectedEncodedHash = imported->sourceHash,
     };
     return ValidateDecodeReady(clipAssetId, clip)
         ? Resolution{ .status = ResolutionStatus::Resolved, .clip = std::move(clip) }
@@ -499,13 +483,13 @@ bool MiniaudioClipResolver::ValidateDecodeReady(
 #if defined(KB_AUDIO_MINIAUDIO_TESTING)
     ++validationStats_.attempts;
 #endif
-    if (clip.IsMemoryBacked()) {
+    if (clip.IsMemoryBacked() && clip.expectedEncodedHash != 0U) {
         const std::span<const std::byte> payload = clip.EncodedBytes();
 #if defined(KB_AUDIO_MINIAUDIO_TESTING)
         ++validationStats_.payloadHashAttempts;
         validationStats_.payloadBytesHashed += payload.size();
 #endif
-        if (HashBytes(payload) != clip.imported->sourceHash) {
+        if (HashBytes(payload) != clip.expectedEncodedHash) {
             StoreValidation(clipAssetId, clip.identity, false);
             return false;
         }
@@ -594,8 +578,7 @@ MiniaudioClipResolver::Resolution MiniaudioClipResolver::Resolve(
         ? metadata->virtualPath
         : metadata->physicalPath;
     if (kb::assets::AssetImportCatalog::IsEngineAssetExtension(authoredPath.extension())) {
-        if (metadata->type != "ImportedAsset" || metadata->importCategory != "Audio"
-            || ResolveMountedAudio(scene, *metadata).empty()) {
+        if (metadata->type != "ImportedAsset" || metadata->importCategory != "Audio") {
             ForgetValidation(clipAssetId);
             return { .status = ResolutionStatus::MissingOrInvalid };
         }
@@ -605,18 +588,31 @@ MiniaudioClipResolver::Resolution MiniaudioClipResolver::Resolve(
         ForgetValidation(clipAssetId);
         return { .status = ResolutionStatus::MissingOrInvalid };
     }
-    const std::string_view extension =
-        kb::audio::CanonicalAudioClipExtension(authoredPath.extension().string());
-    const std::filesystem::path resolved = ResolveMountedAudio(scene, *metadata);
-    if (extension.empty() || resolved.empty()) {
+    const kb::assets::AssetHandle<kb::audio::AudioClipAsset> audioClip =
+        scene.Assets().Manager().Load<kb::audio::AudioClipAsset>(kb::assets::AssetId{ clipAssetId });
+    if (!audioClip.IsLoaded()) {
+        ForgetValidation(clipAssetId);
+        return { .status = ResolutionStatus::MissingOrInvalid };
+    }
+    const std::string_view extension = kb::audio::CanonicalAudioClipExtension(
+        audioClip->sourceExtension.empty()
+            ? authoredPath.extension().string()
+            : audioClip->sourceExtension);
+    const bool memoryBacked = audioClip->IsMemoryBacked();
+    if (extension.empty()
+        || (memoryBacked && (!audioClip->path.empty() || audioClip->encodedBytes.empty()))
+        || (!memoryBacked && audioClip->path.empty())) {
         ForgetValidation(clipAssetId);
         return { .status = ResolutionStatus::MissingOrInvalid };
     }
     ResolvedAudioClip clip{
-        .path = resolved,
+        .path = memoryBacked ? std::filesystem::path{} : audioClip->path,
+        .audioClip = memoryBacked ? audioClip.Shared() : nullptr,
         .extension = std::string{ extension },
         .identity = std::to_string(clipAssetId) + ":" + std::to_string(metadata->contentHash)
-            + ":" + resolved.generic_string(),
+            + ":" + (memoryBacked
+                ? std::to_string(audioClip->encodedBytes.size()) + ":memory"
+                : audioClip->path.generic_string()),
     };
     return ValidateDecodeReady(clipAssetId, clip)
         ? Resolution{ .status = ResolutionStatus::Resolved, .clip = std::move(clip) }

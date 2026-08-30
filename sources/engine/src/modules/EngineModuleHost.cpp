@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <filesystem>
+#include <set>
 #include <unordered_map>
 #include <utility>
 
@@ -264,8 +265,19 @@ void EngineModuleHost::LoadProjectPluginModules() {
     projectPluginCandidateStart_ = candidates_.size();
     hasProjectPluginCandidates_ = true;
 
+    // Platform hosts inject providers as static modules when the platform cannot ship or
+    // load project DLLs (Android/Web) or when a monolithic build was requested. A descriptor
+    // still carries its portable desktop binary name; do not load a second copy after the
+    // matching static provider has already been supplied by the host.
+    std::set<std::string> staticModuleNames;
+    for (const std::unique_ptr<IEngineModule>& candidate : candidates_) {
+        if (candidate != nullptr) {
+            staticModuleNames.insert(candidate->Metadata().name);
+        }
+    }
+
     for (const kb::project::ProjectPluginReference& plugin : project_.plugins) {
-        if (!plugin.enabled || plugin.binaryPath.empty()) {
+        if (!plugin.enabled || plugin.binaryPath.empty() || staticModuleNames.contains(plugin.name)) {
             continue;
         }
         std::unique_ptr<IEngineModule> module = LoadDynamicModule(plugin, moduleLoader_, diagnostics_);

@@ -5,6 +5,7 @@
 #include "engine/assets/bake/AssetPackReader.hpp"
 #include "engine/assets/bake/AssetPackWriter.hpp"
 #include "engine/assets/bake/BakeTargetProfile.hpp"
+#include "engine/assets/bake/RuntimeAssetManifest.hpp"
 
 #include "assets/bake/BakeStorePath.hpp"
 
@@ -129,6 +130,7 @@ struct ObservedBlock {
     std::uint64_t offset = 0U;
     std::uint64_t storedBytes = 0U;
     std::uint64_t uncompressedBytes = 0U;
+    bake::AssetBakeDigest payloadDigest{};
     std::size_t alignmentFieldOffset = 0U;
     std::size_t offsetFieldOffset = 0U;
     std::size_t storedBytesFieldOffset = 0U;
@@ -185,6 +187,10 @@ struct ObservedArtifact {
             block.storedBytes = PeekUInt64(file, cursor);
             cursor += 8U;
             block.uncompressedBytes = PeekUInt64(file, cursor);
+            cursor += 8U;
+            block.payloadDigest.high = PeekUInt64(file, cursor);
+            cursor += 8U;
+            block.payloadDigest.low = PeekUInt64(file, cursor);
             cursor += 8U;
             artifact.blocks.push_back(std::move(block));
         }
@@ -297,6 +303,7 @@ struct WrittenArtifact {
                 .bytes = Filler(6U, 33U) } });
 
     Require(writer.Finish() == bake::BakedAssetSinkStatus::Success, "The pack writer did not publish the sample pack");
+    std::ranges::sort(expected, {}, &WrittenArtifact::key);
     return expected;
 }
 
@@ -335,6 +342,10 @@ void EveryBlockSurvivesTheContainer() {
     Require(ranged.Header().targetProfileId == "Windows.x64" &&
             ranged.Header().targetProfileHash == bake::BakeTargetProfileFingerprint(profile),
         "The pack header does not carry the profile it was baked for");
+    Require(ranged.MatchesTargetProfile(profile),
+        "The mounted pack did not match the exact profile that wrote it");
+    Require(!ranged.MatchesTargetProfile(bake::AndroidArm64BakeTargetProfile()),
+        "A Windows package was accepted as an Android package");
     Require(ranged.Header().packageBlockAlignmentBytes == profile.packageBlockAlignmentBytes &&
             ranged.Header().mappedBlockAlignmentBytes == profile.mappedBlockAlignmentBytes,
         "The pack header does not carry the alignments its blocks were placed at");
@@ -386,6 +397,193 @@ void EveryBlockSurvivesTheContainer() {
         "A pack could not be deleted after every reader that mounted it was unmounted");
 
     PurgeDirectory(root);
+}
+
+// Red when: payload bytes can change without changing the catalogue. The index checksum
+// protects metadata; each block digest independently protects the bytes served to runtime.
+void CorruptPayloadIsNeverReturned() {
+    const std::filesystem::path root = TestRoot() / "payload-integrity";
+    PurgeDirectory(root);
+    std::filesystem::create_directories(root);
+
+    const bake::BakeTargetProfile profile = bake::WindowsX64BakeTargetProfile();
+    const std::filesystem::path packPath = root / "corrupt.kbpack";
+    static_cast<void>(BakeSamplePack(packPath, profile));
+
+    std::vector<std::uint8_t> file = ReadFileBytes(packPath);
+    const std::vector<ObservedArtifact> observed = ObservePack(file);
+    Require(!observed.empty() && !observed.front().blocks.empty(),
+        "The payload-integrity fixture contains no block");
+    const ObservedBlock& damaged = observed.front().blocks.front();
+    Require(damaged.storedBytes != 0U && damaged.offset < file.size(),
+        "The payload-integrity fixture points outside its file");
+    file[static_cast<std::size_t>(damaged.offset)] ^= 0x80U;
+    WriteFileBytes(packPath, file);
+
+    bake::AssetPackReader reader;
+    Require(reader.Mount(packPath, bake::AssetPackAccess::Ranged) == bake::AssetPackReadStatus::Success,
+        "Changing payload bytes unexpectedly damaged the front catalogue");
+    const bake::AssetPackArtifactEntry* artifact = reader.FindArtifact(observed.front().key);
+    Require(artifact != nullptr, "The damaged block's artifact disappeared from the catalogue");
+    std::vector<std::uint8_t> payload{ 0xAAU };
+    Require(reader.ReadBlock(*artifact, damaged.name, payload) == bake::AssetPackReadStatus::PayloadCorrupt,
+        "A block whose payload disagrees with its digest was returned as valid");
+    Require(payload.empty(), "Bytes from a corrupt payload escaped through the reader");
+
+    reader.Unmount();
+    PurgeDirectory(root);
+}
+
+// Red when: thread scheduling changes the published file. A content-addressed package is a
+// build product, so identical inputs must produce identical bytes in any completion order.
+void PackageBytesDoNotDependOnArtifactOrder() {
+    const std::filesystem::path root = TestRoot() / "deterministic-order";
+    PurgeDirectory(root);
+    std::filesystem::create_directories(root);
+
+    const bake::BakeTargetProfile profile = bake::WindowsX64BakeTargetProfile();
+    const bake::BakedAssetDescriptor first = MakeDescriptor(801U, "Texture2D");
+    const bake::BakedAssetDescriptor second = MakeDescriptor(802U, "SkeletalMesh");
+    const std::vector<std::uint8_t> firstBytes = Filler(801U, 701U);
+    const std::vector<std::uint8_t> secondBytes = Filler(802U, 1703U);
+
+    const auto publish = [&](const std::filesystem::path& path, bool reverse) {
+        bake::AssetPackWriter writer{ path, profile };
+        const auto write = [&](const bake::BakedAssetDescriptor& descriptor,
+                               const std::vector<std::uint8_t>& payload) {
+            Require(writer.BeginAsset(descriptor) == bake::BakedAssetSinkStatus::Success,
+                "The deterministic pack refused an artifact");
+            Require(writer.WritePrimaryBlock(payload, profile.packageBlockAlignmentBytes) ==
+                    bake::BakedAssetSinkStatus::Success,
+                "The deterministic pack refused an artifact payload");
+            Require(writer.CommitAsset() == bake::BakedAssetSinkStatus::Success,
+                "The deterministic pack refused an artifact commit");
+        };
+        if (reverse) {
+            write(second, secondBytes);
+            write(first, firstBytes);
+        } else {
+            write(first, firstBytes);
+            write(second, secondBytes);
+        }
+        Require(writer.Finish() == bake::BakedAssetSinkStatus::Success,
+            "The deterministic pack was not published");
+    };
+
+    const std::filesystem::path forwardPath = root / "forward.kbpack";
+    const std::filesystem::path reversePath = root / "reverse.kbpack";
+    publish(forwardPath, false);
+    publish(reversePath, true);
+    Require(ReadFileBytes(forwardPath) == ReadFileBytes(reversePath),
+        "Identical artifacts produced different package bytes when their completion order changed");
+
+    PurgeDirectory(root);
+}
+
+void RuntimeManifestIsCanonicalAndHostileInputSafe() {
+    const bake::BakeTargetProfile profile = bake::WindowsX64BakeTargetProfile();
+    bake::RuntimeAssetManifest first{};
+    first.targetProfileId = std::string{ profile.identifier };
+    first.targetProfileHash = bake::BakeTargetProfileFingerprint(profile);
+    first.descriptor.targetPlatforms = { "Windows" };
+    first.descriptor.modules = { { .name = "Game" } };
+    first.descriptor.plugins = { { .name = "Physics", .binaryPath = "Physics.dll", .enabled = true } };
+    first.settings.name = "CookedProject";
+    first.settings.gameName = "Cooked Game";
+    first.settings.defaultMap = "/Game/Scenes/Main.21kbscene";
+    first.assets = {
+        bake::RuntimeAssetManifestEntry{
+            .id = kb::assets::MakeAssetId("/Game/Textures/Albedo.png:RenderTexture"),
+            .type = "RenderTexture",
+            .name = "Albedo",
+            .virtualPath = "/Game/Textures/Albedo.png",
+            .sourceExtension = ".png",
+            .contentHash = 202U,
+            .dependencies = { kb::assets::AssetId{ 9U }, kb::assets::AssetId{ 3U } },
+            .artifacts = {
+                { .digest = { 9U, 8U },
+                    .encoding = bake::RuntimeArtifactEncoding::BakedTexture,
+                    .qualifier = "bc-baseline" },
+                { .digest = { 7U, 6U },
+                    .encoding = bake::RuntimeArtifactEncoding::SourceBytes },
+            },
+        },
+        bake::RuntimeAssetManifestEntry{
+            .id = kb::assets::MakeAssetId("/Game/Scenes/Main.21kbscene:Scene"),
+            .type = "Scene",
+            .name = "Main",
+            .virtualPath = "/Game/Scenes/Main.21kbscene",
+            .sourceExtension = ".21kbscene",
+            .contentHash = 101U,
+            .artifacts = { { .digest = { 5U, 4U },
+                .encoding = bake::RuntimeArtifactEncoding::SourceBytes } },
+        },
+    };
+    first.auxiliaryFiles = {
+        { .virtualPath = "/Game/Scenes/Main.21kbscene.meta",
+            .contentHash = 303U,
+            .artifactDigest = { 3U, 2U } },
+    };
+
+    bake::RuntimeAssetManifest second = first;
+    std::ranges::reverse(second.assets);
+    std::ranges::reverse(second.assets.back().dependencies);
+    std::ranges::reverse(second.assets.back().artifacts);
+
+    std::vector<std::uint8_t> firstBytes;
+    std::vector<std::uint8_t> secondBytes;
+    Require(bake::EncodeRuntimeAssetManifest(first, firstBytes) == bake::RuntimeAssetManifestStatus::Success &&
+            bake::EncodeRuntimeAssetManifest(second, secondBytes) == bake::RuntimeAssetManifestStatus::Success,
+        "A valid runtime manifest could not be encoded");
+    Require(firstBytes == secondBytes,
+        "Runtime manifest bytes depend on discovery or task completion order");
+
+    bake::RuntimeAssetManifest decoded{};
+    Require(bake::DecodeRuntimeAssetManifest(firstBytes, decoded) == bake::RuntimeAssetManifestStatus::Success,
+        "A runtime manifest could not be decoded after encoding");
+    Require(decoded.targetProfileId == first.targetProfileId &&
+            decoded.targetProfileHash == first.targetProfileHash && decoded.settings == first.settings &&
+            decoded.assets.size() == 2U &&
+            std::ranges::any_of(decoded.assets, [](const bake::RuntimeAssetManifestEntry& asset) {
+                return asset.virtualPath == "/Game/Textures/Albedo.png" &&
+                    asset.dependencies.front().value == 3U;
+            }) &&
+            decoded.auxiliaryFiles.size() == 1U,
+        "A runtime manifest changed its project or asset catalogue during the round trip");
+
+    std::vector<std::uint8_t> unsupported = firstBytes;
+    PokeUInt32(unsupported, 8U, bake::kRuntimeAssetManifestVersion + 1U);
+    Require(bake::DecodeRuntimeAssetManifest(unsupported, decoded) ==
+            bake::RuntimeAssetManifestStatus::UnsupportedVersion,
+        "A runtime manifest from an unsupported version was accepted");
+    std::vector<std::uint8_t> trailing = firstBytes;
+    trailing.push_back(0U);
+    Require(bake::DecodeRuntimeAssetManifest(trailing, decoded) == bake::RuntimeAssetManifestStatus::Malformed,
+        "A runtime manifest with trailing bytes was accepted");
+
+    bake::RuntimeAssetManifest duplicate = first;
+    duplicate.auxiliaryFiles.front().virtualPath = duplicate.assets.front().virtualPath;
+    std::vector<std::uint8_t> ignored;
+    Require(bake::EncodeRuntimeAssetManifest(duplicate, ignored) ==
+            bake::RuntimeAssetManifestStatus::DuplicateEntry,
+        "Two runtime files were allowed to claim one virtual path");
+
+    bake::RuntimeAssetManifest wrongDefaultMapType = first;
+    wrongDefaultMapType.settings.defaultMap = "/Game/Textures/Albedo.png";
+    Require(bake::EncodeRuntimeAssetManifest(wrongDefaultMapType, ignored) ==
+            bake::RuntimeAssetManifestStatus::InvalidProject,
+        "A runtime manifest accepted a default map that is not a Scene asset");
+
+    bake::RuntimeAssetManifest editorOnlyDefaultMap = first;
+    const auto scene = std::ranges::find(
+        editorOnlyDefaultMap.assets,
+        editorOnlyDefaultMap.settings.defaultMap,
+        &bake::RuntimeAssetManifestEntry::virtualPath);
+    Require(scene != editorOnlyDefaultMap.assets.end(), "The default-map fixture lost its scene");
+    scene->runtimeLoadable = false;
+    Require(bake::EncodeRuntimeAssetManifest(editorOnlyDefaultMap, ignored) ==
+            bake::RuntimeAssetManifestStatus::InvalidProject,
+        "A runtime manifest accepted an editor-only default Scene");
 }
 
 // Red when: the writer reports an alignment it did not honour, a block is placed at an offset
@@ -669,8 +867,16 @@ void AHostilePackIsRefusedRatherThanTrusted() {
         "overlapping-blocks",
         [&](std::vector<std::uint8_t>& file) {
             const std::vector<ObservedArtifact> observed = ObservePack(file);
-            Require(observed.front().blocks.size() >= 2U, "The overlap fixture needs an artifact with two blocks");
-            PokeUInt64(file, observed.front().blocks[1U].offsetFieldOffset, observed.front().blocks.front().offset);
+            const auto artifact = std::ranges::find_if(observed, [](const ObservedArtifact& candidate) {
+                return std::ranges::any_of(candidate.blocks, [](const ObservedBlock& block) {
+                    return block.name == "lod-tail";
+                });
+            });
+            Require(artifact != observed.end(), "The overlap fixture needs an artifact with two blocks");
+            const auto overlapping = std::ranges::find_if(artifact->blocks, [](const ObservedBlock& block) {
+                return block.name == "lod-tail";
+            });
+            PokeUInt64(file, overlapping->offsetFieldOffset, artifact->blocks.front().offset);
         },
         true, bake::AssetPackReadStatus::IndexCorrupt, "Two blocks pointed at one range were trusted");
     // A count is a 32-bit field a hostile header owns outright, and it sizes a reservation
@@ -906,6 +1112,12 @@ void TheWriterRefusesProtocolViolations() {
     invalidType.assetTypeId = "not/a/name";
     Require(writer.BeginAsset(invalidType) == bake::BakedAssetSinkStatus::InvalidAssetType,
         "The writer took an artifact whose type is not a portable name");
+    bake::BakedAssetDescriptor wrongProfile = MakeDescriptor(51U);
+    wrongProfile.key.targetProfileId = "Android.arm64";
+    wrongProfile.key.targetProfileHash =
+        bake::BakeTargetProfileFingerprint(bake::AndroidArm64BakeTargetProfile());
+    Require(writer.BeginAsset(wrongProfile) == bake::BakedAssetSinkStatus::InvalidProfile,
+        "A Windows pack accepted an artifact baked for Android");
 
     const bake::BakedAssetDescriptor descriptor = MakeDescriptor(51U);
     Require(writer.BeginAsset(descriptor) == bake::BakedAssetSinkStatus::Success, "Protocol pack BeginAsset failed");
@@ -1180,6 +1392,45 @@ void TheWholeFileFallbackReallyReadsTheWholeFile() {
     PurgeDirectory(root);
 }
 
+// Red when: the Android package path copies the whole container into a second engine-owned
+// buffer, reopens a filesystem path that does not exist inside an APK, or skips the same
+// hostile-input validation the file-backed mounts use.
+void BorrowedPackageMemoryUsesTheValidatedReaderPath() {
+    const std::filesystem::path root = TestRoot() / "borrowed-memory";
+    PurgeDirectory(root);
+    std::filesystem::create_directories(root);
+
+    const bake::BakeTargetProfile profile = bake::WindowsX64BakeTargetProfile();
+    const std::filesystem::path packPath = root / ("mapped" + std::string{ bake::kAssetPackFileExtension });
+    const std::vector<WrittenArtifact> expected = BakeSamplePack(packPath, profile);
+    const std::vector<std::uint8_t> mappedBytes = ReadFileBytes(packPath);
+
+    bake::AssetPackReader reader;
+    Require(reader.MountMemory(mappedBytes) == bake::AssetPackReadStatus::Success,
+        "A valid package memory view did not mount");
+    Require(reader.OpenCount() == 0U,
+        "Mounting an existing package memory view opened a second handle");
+    RequireMountedPackMatches(reader, expected,
+        "A package mounted from borrowed memory did not return the bytes the writer published");
+
+    // APK assets do not have ordinary filesystem paths. Removing the temporary file proves
+    // that every block is now served from the caller-owned view rather than by reopening it.
+    std::error_code removeError;
+    Require(std::filesystem::remove(packPath, removeError) && !removeError,
+        "The borrowed-memory mount unexpectedly kept the source file open");
+    RequireMountedPackMatches(reader, expected,
+        "A borrowed-memory mount went back to the removed source file");
+    reader.Unmount();
+
+    std::vector<std::uint8_t> hostile = mappedBytes;
+    hostile[kHeaderMagicOffset] ^= 0xFFU;
+    Require(reader.MountMemory(hostile) == bake::AssetPackReadStatus::NotAnAssetPack,
+        "A hostile memory view bypassed the normal package-header validation");
+    Require(!reader.IsMounted(), "A refused memory view remained mounted");
+
+    PurgeDirectory(root);
+}
+
 // Red when: the alignment helper wraps instead of refusing. The overflow branch is
 // unreachable through any pack that fits kMaxAssetPackBytes -- it would take a file near 2^64
 // -- so it is tested here directly, against the arithmetic rather than against a fixture.
@@ -1214,16 +1465,9 @@ void AligningAnOffsetRefusesToWrap() {
     Require(!bake::TryAlignAssetPackOffset(0U, 96U, aligned), "A non-power-of-two was accepted as an alignment");
 }
 
-// Red when: a second writer aimed at the same package can make the first one publish bytes
-// that are not the ones it was given. The staging names are derived from the destination --
-// deliberately, so a killed run's debris is what the next run truncates -- and the price is
-// that two writers share them. Measured on the code before this test existed: the second
-// writer truncated the first one's payload and wrote its own bytes at offset zero, and the
-// first writer's Finish then returned Success and published a package that mounts, checksums,
-// and hands back bytes belonging to NEITHER writer under a key that names one of them.
-//
-// That is the silent-wrong-artifact failure the whole content-addressed store exists to
-// prevent, so the only acceptable outcomes here are "publishes its own bytes" or "refuses".
+// Red when: a second writer aimed at the same package can share or truncate the first one's
+// staging files. Destination ownership is exclusive from the first staged byte through the
+// publication rename.
 void TwoWritersOnOnePackDoNotForgeEachOthersBytes() {
     const std::filesystem::path root = TestRoot() / "two-writers";
     PurgeDirectory(root);
@@ -1252,35 +1496,28 @@ void TwoWritersOnOnePackDoNotForgeEachOthersBytes() {
 
         {
             bake::AssetPackWriter beta{ packPath, profile };
-            Require(beta.BeginAsset(betaDescriptor) == bake::BakedAssetSinkStatus::Success,
-                "The second writer could not begin its artifact");
-            Require(beta.WritePrimaryBlock(betaBytes, profile.packageBlockAlignmentBytes) ==
-                    bake::BakedAssetSinkStatus::Success,
-                "The second writer could not write its primary block");
-            Require(beta.CommitAsset() == bake::BakedAssetSinkStatus::Success,
-                "The second writer could not commit its artifact");
-            Require(beta.Finish() == bake::BakedAssetSinkStatus::Success, "The second writer could not publish");
+            Require(beta.BeginAsset(betaDescriptor) == bake::BakedAssetSinkStatus::StagingConflict,
+                "A second writer acquired a destination already owned by the first writer");
         }
 
-        Require(alpha.Finish() == bake::BakedAssetSinkStatus::StagingConflict,
-            "A writer whose staging file was taken over published anyway instead of refusing");
+        Require(alpha.Finish() == bake::BakedAssetSinkStatus::Success,
+            "The destination owner could not publish after a competing writer was refused");
     }
 
-    // The refusal leaves the package the OTHER writer published exactly as it was.
     bake::AssetPackReader reader;
     Require(reader.Mount(packPath) == bake::AssetPackReadStatus::Success,
-        "The package the second writer published does not mount after the first one refused");
-    Require(reader.Artifacts().size() == 1U && reader.FindArtifact(alphaDescriptor.key.Digest()) == nullptr,
+        "The package owner published a package that does not mount");
+    Require(reader.Artifacts().size() == 1U && reader.FindArtifact(betaDescriptor.key.Digest()) == nullptr,
         "A refused writer still put its artifact into the published package");
-    const bake::AssetPackArtifactEntry* entry = reader.FindArtifact(betaDescriptor.key.Digest());
-    Require(entry != nullptr, "The package lost the artifact its own writer published");
+    const bake::AssetPackArtifactEntry* entry = reader.FindArtifact(alphaDescriptor.key.Digest());
+    Require(entry != nullptr, "The package lost its owner's artifact");
     std::vector<std::uint8_t> read;
     Require(reader.ReadBlock(*entry, "primary", read) == bake::AssetPackReadStatus::Success,
         "The published block could not be read back");
     // The assertion that actually catches the defect: whatever is under this key must be the
     // bytes baked under it, not the other writer's and not a mixture of the two.
-    Require(read == betaBytes, "A published block holds bytes that were never baked under its key");
-    Require(read != alphaBytes, "A published block holds the other writer's bytes");
+    Require(read == alphaBytes, "A published block holds bytes that were never baked under its key");
+    Require(read != betaBytes, "A published block holds the refused writer's bytes");
     reader.Unmount();
 
     // A writer that refused must not have left its staging files behind either.
@@ -1297,6 +1534,9 @@ void TwoWritersOnOnePackDoNotForgeEachOthersBytes() {
 
 void RunAssetPackTests() {
     EveryBlockSurvivesTheContainer();
+    CorruptPayloadIsNeverReturned();
+    PackageBytesDoNotDependOnArtifactOrder();
+    RuntimeManifestIsCanonicalAndHostileInputSafe();
     AlignmentIsMeasuredInTheFileNotReported();
     AHostilePackIsRefusedRatherThanTrusted();
     PublicationIsOneRenameOfAFinishedPack();
@@ -1305,6 +1545,7 @@ void RunAssetPackTests() {
     AnOverlongPackPathIsRefusedBeforeAnythingIsWritten();
     ManyArtifactsShareOneHandle();
     TheWholeFileFallbackReallyReadsTheWholeFile();
+    BorrowedPackageMemoryUsesTheValidatedReaderPath();
     AligningAnOffsetRefusesToWrap();
     TwoWritersOnOnePackDoNotForgeEachOthersBytes();
     PurgeDirectory(TestRoot());

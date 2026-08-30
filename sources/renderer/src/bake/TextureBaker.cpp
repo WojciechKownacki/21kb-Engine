@@ -9,10 +9,13 @@
 #include <bx/error.h>
 #include <bx/readerwriter.h>
 
+#include <ProcessRGB.hpp>
+
 #include <array>
 #include <cstddef>
 #include <fstream>
 #include <limits>
+#include <cstring>
 #include <memory>
 #include <optional>
 #include <string>
@@ -34,6 +37,8 @@ static_assert(static_cast<int>(bgfx::TextureFormat::BC1) == static_cast<int>(bim
 static_assert(static_cast<int>(bgfx::TextureFormat::BC3) == static_cast<int>(bimg::TextureFormat::BC3));
 static_assert(static_cast<int>(bgfx::TextureFormat::BC7) == static_cast<int>(bimg::TextureFormat::BC7));
 static_assert(static_cast<int>(bgfx::TextureFormat::ASTC4x4) == static_cast<int>(bimg::TextureFormat::ASTC4x4));
+static_assert(static_cast<int>(bgfx::TextureFormat::ETC2) == static_cast<int>(bimg::TextureFormat::ETC2));
+static_assert(static_cast<int>(bgfx::TextureFormat::ETC2A) == static_cast<int>(bimg::TextureFormat::ETC2A));
 static_assert(static_cast<int>(bgfx::TextureFormat::RGBA8) == static_cast<int>(bimg::TextureFormat::RGBA8));
 static_assert(static_cast<int>(bgfx::TextureFormat::Count) == static_cast<int>(bimg::TextureFormat::Count));
 
@@ -135,6 +140,44 @@ void CopyLevelIntoBlockAlignedBuffer(
     }
 }
 
+[[nodiscard]] bool EncodeEtc2Level(
+    std::span<const std::uint8_t> rgba8,
+    std::uint32_t width,
+    std::uint32_t height,
+    bool keepAlpha,
+    std::span<std::uint8_t> destination) {
+    if (width == 0U || height == 0U || width % 4U != 0U || height % 4U != 0U ||
+        rgba8.size() != static_cast<std::size_t>(width) * height * 4U) {
+        return false;
+    }
+    const std::uint32_t blockCount = (width / 4U) * (height / 4U);
+    const std::size_t wordCount = static_cast<std::size_t>(blockCount) * (keepAlpha ? 2U : 1U);
+    if (blockCount == 0U || destination.size() != wordCount * sizeof(std::uint64_t)) {
+        return false;
+    }
+
+    // etcpak consumes one little-endian BGRA word per texel. Build the words
+    // explicitly instead of reinterpreting RGBA bytes, so channel order and
+    // alignment are independent of the source buffer representation.
+    std::vector<std::uint32_t> bgra(static_cast<std::size_t>(width) * height);
+    for (std::size_t index = 0U; index < bgra.size(); ++index) {
+        const std::size_t source = index * 4U;
+        bgra[index] = static_cast<std::uint32_t>(rgba8[source + 2U]) |
+            (static_cast<std::uint32_t>(rgba8[source + 1U]) << 8U) |
+            (static_cast<std::uint32_t>(rgba8[source + 0U]) << 16U) |
+            (static_cast<std::uint32_t>(rgba8[source + 3U]) << 24U);
+    }
+
+    std::vector<std::uint64_t> encoded(wordCount, 0U);
+    if (keepAlpha) {
+        CompressEtc2Rgba(bgra.data(), encoded.data(), blockCount, width, true);
+    } else {
+        CompressEtc2Rgb(bgra.data(), encoded.data(), blockCount, width, true);
+    }
+    std::memcpy(destination.data(), encoded.data(), destination.size());
+    return true;
+}
+
 [[nodiscard]] bool ReadFileBytes(const std::filesystem::path& path, std::vector<std::uint8_t>& bytes) {
     std::ifstream input{ path, std::ios::binary };
     if (!input) {
@@ -203,6 +246,9 @@ bool TryChooseBakedTextureFormat(
         // this baker enforces would then refuse the content rather than the footprint. 4x4
         // also puts ASTC at BC7's rate, so the two families are comparable at the same size.
         format = bgfx::TextureFormat::ASTC4x4;
+        return true;
+    case TextureCompressionFamily::Ericsson2:
+        format = needsAlpha ? bgfx::TextureFormat::ETC2A : bgfx::TextureFormat::ETC2;
         return true;
     }
     return false;
@@ -346,7 +392,7 @@ TextureBakeOutput BakeTextureBytes(
     // only bytes it changes are the ones that were wrong.
     std::span<const std::uint8_t> baseRgba8{ baseLevel.m_data, baseLevel.m_size };
     std::vector<std::uint8_t> opaqueBaseLevel;
-    if (format == bgfx::TextureFormat::BC1 && sourceHasAlpha) {
+    if ((format == bgfx::TextureFormat::BC1 || format == bgfx::TextureFormat::ETC2) && sourceHasAlpha) {
         opaqueBaseLevel.assign(baseLevel.m_data, baseLevel.m_data + baseLevel.m_size);
         for (std::size_t index = 3U; index < opaqueBaseLevel.size(); index += 4U) {
             opaqueBaseLevel[index] = 0xFFU;
@@ -409,20 +455,32 @@ TextureBakeOutput BakeTextureBytes(
 
         CopyLevelIntoBlockAlignedBuffer(
             chain->rgba8.data() + levelSourceOffset, levelWidth, levelHeight, paddedWidth, paddedHeight, paddedLevel);
-        bimg::imageEncode(
-            &allocator,
-            blocks.data() + levelDestinationOffset,
-            paddedLevel.data(),
-            bimg::TextureFormat::RGBA8,
-            paddedWidth,
-            paddedHeight,
-            1U,
-            bimgFormat,
-            bimg::Quality::Default,
-            &encodeError);
-        if (!encodeError.isOk()) {
-            output.status = TextureBakeStatus::EncodeFailed;
-            return output;
+        if (format == bgfx::TextureFormat::ETC2 || format == bgfx::TextureFormat::ETC2A) {
+            if (!EncodeEtc2Level(
+                    paddedLevel,
+                    paddedWidth,
+                    paddedHeight,
+                    format == bgfx::TextureFormat::ETC2A,
+                    std::span<std::uint8_t>{ blocks }.subspan(levelDestinationOffset, encodedLevelBytes))) {
+                output.status = TextureBakeStatus::EncodeFailed;
+                return output;
+            }
+        } else {
+            bimg::imageEncode(
+                &allocator,
+                blocks.data() + levelDestinationOffset,
+                paddedLevel.data(),
+                bimg::TextureFormat::RGBA8,
+                paddedWidth,
+                paddedHeight,
+                1U,
+                bimgFormat,
+                bimg::Quality::Default,
+                &encodeError);
+            if (!encodeError.isOk()) {
+                output.status = TextureBakeStatus::EncodeFailed;
+                return output;
+            }
         }
 
         levelSourceOffset += levelBytes;
@@ -501,82 +559,6 @@ TextureBakeOutput BakeTexture(
         return output;
     }
     return BakeTextureBytes(sourceBytes, settings, profile, family, sink);
-}
-
-bool ReadBakedTexture(std::span<const std::uint8_t> primaryBlock, RenderTextureAssetData& out) {
-    if (primaryBlock.empty() ||
-        primaryBlock.size() > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
-        return false;
-    }
-
-    bimg::ImageContainer container{};
-    bx::Error parseError;
-    if (!bimg::imageParse(
-            container, primaryBlock.data(), static_cast<std::uint32_t>(primaryBlock.size()), &parseError) ||
-        !parseError.isOk()) {
-        return false;
-    }
-    if (!container.m_ktx || container.m_cubeMap || container.m_depth != 1U || container.m_numLayers != 1U) {
-        return false;
-    }
-    if (container.m_width == 0U || container.m_height == 0U ||
-        container.m_width > std::numeric_limits<std::uint16_t>::max() ||
-        container.m_height > std::numeric_limits<std::uint16_t>::max()) {
-        return false;
-    }
-
-    const auto format = static_cast<bimg::TextureFormat::Enum>(container.m_format);
-    if (format < 0 || format >= bimg::TextureFormat::Count || !bimg::isCompressed(format)) {
-        return false;
-    }
-
-    const auto width = static_cast<std::uint16_t>(container.m_width);
-    const auto height = static_cast<std::uint16_t>(container.m_height);
-    // A partial chain is refused rather than uploaded: bgfx sizes the memory it is handed from
-    // a complete chain, so a container missing its tail is a bake this runtime cannot use.
-    if (container.m_numMips != bimg::imageGetNumMips(format, width, height)) {
-        return false;
-    }
-
-    const std::uint32_t payloadSize = bimg::imageGetSize(nullptr, width, height, 1U, false, true, 1U, format);
-    // Each KTX level is preceded by its own 4-byte size field. Checked before any level is
-    // read, because bimg's raw-data walk trusts the buffer to be long enough.
-    const std::uint64_t expectedSize = static_cast<std::uint64_t>(container.m_offset) +
-        static_cast<std::uint64_t>(container.m_numMips) * sizeof(std::uint32_t) + payloadSize;
-    if (payloadSize == 0U || primaryBlock.size() < expectedSize) {
-        return false;
-    }
-
-    RenderTextureGpuBlocks gpuBlocks{};
-    gpuBlocks.format = static_cast<bgfx::TextureFormat::Enum>(format);
-    gpuBlocks.blocks.reserve(payloadSize);
-    for (std::uint8_t lod = 0U; lod < container.m_numMips; ++lod) {
-        bimg::ImageMip mip{};
-        if (!bimg::imageGetRawData(
-                container, 0U, lod, primaryBlock.data(), static_cast<std::uint32_t>(primaryBlock.size()), mip) ||
-            mip.m_data == nullptr) {
-            return false;
-        }
-        gpuBlocks.blocks.insert(gpuBlocks.blocks.end(), mip.m_data, mip.m_data + mip.m_size);
-    }
-    if (gpuBlocks.blocks.size() != payloadSize) {
-        return false;
-    }
-
-    RenderTextureAssetData asset{};
-    asset.width = width;
-    asset.height = height;
-    asset.depth = 1U;
-    asset.layers = 1U;
-    asset.mipCount = container.m_numMips;
-    asset.dimension = RenderTextureDimension::Texture2D;
-    asset.colorSpace = container.m_srgb ? RenderTextureAssetColorSpace::Srgb : RenderTextureAssetColorSpace::Linear;
-    // KTX carries no authoring semantic. It is not reconstructed from the format either: a
-    // guess here would be indistinguishable from a declaration everywhere it is read.
-    asset.semantic = RenderTextureAssetSemantic::Unknown;
-    asset.gpuBlocks = std::move(gpuBlocks);
-    out = std::move(asset);
-    return true;
 }
 
 } // namespace kb::render::bake

@@ -1,6 +1,7 @@
 #include "scene/SceneLoadedContentService.hpp"
 
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
@@ -11,6 +12,45 @@
 
 namespace kb::scene {
 namespace {
+
+[[nodiscard]] SceneDocumentLoadResult LoadSceneDocument(
+    Scene& scene,
+    const std::filesystem::path& path) {
+    const std::string normalized = kb::assets::NormalizeAssetPath(path);
+    if (!normalized.empty() && normalized.front() == '/') {
+        kb::assets::AssetManager& manager = scene.Assets().Manager();
+        const kb::assets::AssetMetadata* metadata = manager.Registry().FindByPath(path);
+        if (metadata == nullptr || metadata->type != "Scene") {
+            return SceneDocumentLoadResult{
+                .succeeded = false,
+                .document = {},
+                .error = "Scene asset is not registered.",
+            };
+        }
+        const kb::assets::AssetHandle<SceneDocument> loaded =
+            manager.Load<SceneDocument>(metadata->id);
+        if (!loaded.IsLoaded()) {
+            return SceneDocumentLoadResult{
+                .succeeded = false,
+                .document = {},
+                .error = manager.LastError(),
+            };
+        }
+        return SceneDocumentLoadResult{
+            .succeeded = true,
+            .document = *loaded,
+            .error = {},
+        };
+    }
+    if (scene.Assets().Manager().IsRuntimePackMounted()) {
+        return SceneDocumentLoadResult{
+            .succeeded = false,
+            .document = {},
+            .error = "Packaged runtime scenes require a /Game virtual path.",
+        };
+    }
+    return SceneDocumentService::Load(path);
+}
 
 [[nodiscard]] SceneState::LoadedSceneRecord* FindRecord(SceneState& state, std::uint64_t id) noexcept {
     const auto iterator = std::ranges::find_if(state.loadedScenes, [id](const SceneState::LoadedSceneRecord& record) { return record.id == id; });
@@ -37,7 +77,7 @@ void QueueLifecycleEvent(SceneState& state, std::string name, std::uint64_t scen
 } // namespace
 
 std::uint64_t SceneLoadedContentService::Load(Scene& scene, const std::filesystem::path& path, bool additive) {
-    const SceneDocumentLoadResult loaded = SceneDocumentService::Load(path);
+    const SceneDocumentLoadResult loaded = LoadSceneDocument(scene, path);
     if (!loaded.succeeded) {
         return 0U;
     }

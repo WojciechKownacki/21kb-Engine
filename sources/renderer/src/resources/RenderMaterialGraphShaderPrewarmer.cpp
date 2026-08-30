@@ -68,6 +68,7 @@ struct BlobCursor {
     }
 };
 
+#if defined(_WIN32)
 [[nodiscard]] std::uint64_t HashBytes(const void* data, std::uint32_t size) noexcept {
     std::uint64_t hash = 0xcbf29ce484222325ULL;
     const auto* bytes = static_cast<const std::uint8_t*>(data);
@@ -77,6 +78,7 @@ struct BlobCursor {
     }
     return hash;
 }
+#endif
 
 std::mutex& PrewarmMutex() noexcept {
     static std::mutex mutex;
@@ -93,6 +95,7 @@ std::uint64_t g_prewarmCount = 0U;
 // DIAGNOSTIC (temporary): append one line per warmed shader so we can see, from a real editing session,
 // whether the driver caches CreatePixelShader by bytecode (second create fast) or recompiles every time
 // (second create as slow as the first). Best-effort; failures are swallowed.
+#if defined(_WIN32)
 void AppendPrewarmLog(PrewarmShaderStage stage, std::uint32_t size, double firstMs, double secondMs) noexcept {
     try {
         const std::filesystem::path path = std::filesystem::path{ "Saved" } / "Logs" / "editor-shader-prewarm.log";
@@ -111,6 +114,7 @@ void AppendPrewarmLog(PrewarmShaderStage stage, std::uint32_t size, double first
         // diagnostic only
     }
 }
+#endif
 
 } // namespace
 

@@ -22,6 +22,9 @@ namespace kb::assets {
 
 class AssetDiscoveryService;
 class AssetRuntimeLoadService;
+namespace bake {
+class RuntimeAssetPack;
+}
 
 // LIB-158: how the runtime cache retains a loaded asset's payload.
 //   Retain (default): the cache holds its own strong reference — the payload
@@ -83,6 +86,12 @@ public:
 
     [[nodiscard]] bool RegisterLoader(std::unique_ptr<IAssetLoader> loader);
     [[nodiscard]] bool RegisterAsset(AssetMetadata metadata);
+    // Enters immutable packaged-runtime mode and transactionally rebuilds the registry from
+    // the validated manifest. Packaged mode never resolves a physical path or falls back to
+    // discovery; loader requests retain shared ownership of this exact pack.
+    [[nodiscard]] bool MountRuntimePack(std::shared_ptr<bake::RuntimeAssetPack> pack);
+    [[nodiscard]] bool IsRuntimePackMounted() const noexcept;
+    [[nodiscard]] std::shared_ptr<bake::RuntimeAssetPack> RuntimePack() const noexcept;
     // Refreshes one already-registered asset after an atomic authoring write.
     // Unlike DiscoverMountedAssets(), this hashes and re-analyses only the
     // requested file while preserving registry and cache coherency.
@@ -318,6 +327,7 @@ private:
         IAssetLoader* loader = nullptr;
         AssetMetadata metadata;
         std::filesystem::path resolvedPath;
+        std::shared_ptr<bake::RuntimeAssetPack> runtimePack;
         std::string typeName;
         std::shared_ptr<AsyncPreparedState> state;
     };
@@ -344,6 +354,7 @@ private:
     [[nodiscard]] static std::uint64_t HashFile(const std::filesystem::path& path) noexcept;
     AssetMountTable mounts_;
     AssetRegistry registry_;
+    std::shared_ptr<bake::RuntimeAssetPack> runtimePack_;
     std::vector<std::unique_ptr<IAssetLoader>> loaders_;
     std::unordered_map<std::uint64_t, CachedAsset> cache_;
     mutable std::mutex loaderExecutionMutex_;

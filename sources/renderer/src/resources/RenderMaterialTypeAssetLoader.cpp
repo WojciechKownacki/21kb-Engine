@@ -1,10 +1,12 @@
 #include "kb/render/resources/RenderMaterialTypeAssetLoader.hpp"
 
+#include "engine/assets/AssetMemoryInputStream.hpp"
 #include "RenderMaterialAtomicFileWriter.hpp"
 
 #include <fstream>
 #include <memory>
 #include <sstream>
+#include <utility>
 
 namespace kb::render {
 namespace {
@@ -43,7 +45,13 @@ std::vector<std::string> RenderMaterialTypeAssetLoader::Extensions() const {
 }
 
 kb::assets::AssetLoadResult RenderMaterialTypeAssetLoader::Load(const kb::assets::AssetLoadRequest& request) {
-    RenderMaterialTypeDocumentParseResult result = LoadTypeWithDiagnostics(request.resolvedPath);
+    std::vector<std::uint8_t> sourceBytes;
+    std::string error;
+    if (!request.ReadSourceBytes(sourceBytes, error)) {
+        return kb::assets::AssetLoadResult{ .asset = {}, .error = std::move(error) };
+    }
+    kb::assets::AssetMemoryInputStream input{ sourceBytes };
+    RenderMaterialTypeDocumentParseResult result = LoadTypeWithDiagnostics(input);
     if (!result.document.has_value()) {
         return kb::assets::AssetLoadResult{ .asset = {}, .error = MaterialTypeDocumentErrorMessage(result) };
     }

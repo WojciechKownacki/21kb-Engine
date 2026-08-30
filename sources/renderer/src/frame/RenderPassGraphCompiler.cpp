@@ -144,7 +144,7 @@ void BuildBarriers(
         if (!pass.enabled) {
             continue;
         }
-        const auto transition = [&result, &lastAccess, &lastPass, resources, &pass](RenderGraphResourceId resourceId, RenderGraphResourceAccess afterAccess) {
+        const auto transition = [&result, &lastAccess, &lastPass, &pass](RenderGraphResourceId resourceId, RenderGraphResourceAccess afterAccess) {
             if (resourceId.value >= lastAccess.size()) {
                 return;
             }

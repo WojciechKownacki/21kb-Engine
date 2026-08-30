@@ -111,6 +111,23 @@ SceneDocumentLoadResult SceneAssetReader::Read(const std::filesystem::path& path
         return SceneDocumentLoadResult{ .succeeded = false, .document = {}, .error = "Scene asset could not be opened." };
     }
 
+    SceneDocumentLoadResult loaded = Read(std::move(bytes));
+    if (!loaded.succeeded) {
+        return loaded;
+    }
+    const std::uint32_t rootCount = RootCount(loaded.document.worldPrefab);
+    const std::uint32_t nodeCount = static_cast<std::uint32_t>(loaded.document.worldPrefab.NodeCount());
+    SceneDocumentLoadResult metaValidation = ValidateMeta(path, loaded.document, rootCount, nodeCount);
+    if (!metaValidation.succeeded) {
+        return metaValidation;
+    }
+    return loaded;
+}
+
+SceneDocumentLoadResult SceneAssetReader::Read(std::vector<std::uint8_t> bytes) {
+    if (bytes.empty()) {
+        return SceneDocumentLoadResult{ .succeeded = false, .document = {}, .error = "Scene asset is empty." };
+    }
     ByteReader input{ std::move(bytes) };
     std::array<std::uint8_t, SceneAssetFormat::Magic.size()> magic{};
     std::uint32_t fileVersion = 0;
@@ -184,10 +201,6 @@ SceneDocumentLoadResult SceneAssetReader::Read(const std::filesystem::path& path
         return SceneDocumentLoadResult{ .succeeded = false, .document = {}, .error = "Scene asset hierarchy is invalid." };
     }
 
-    SceneDocumentLoadResult metaValidation = ValidateMeta(path, scene, rootCount, nodeCount);
-    if (!metaValidation.succeeded) {
-        return metaValidation;
-    }
     return SceneDocumentLoadResult{ .succeeded = true, .document = std::move(scene), .error = {} };
 }
 

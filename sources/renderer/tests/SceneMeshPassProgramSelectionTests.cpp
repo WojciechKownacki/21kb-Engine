@@ -168,6 +168,7 @@ namespace {
     request.includeDirs = { KB_TEST_GRAPH_SHADER_INCLUDE_DIR, KB_TEST_GRAPH_BGFX_SHADER_INCLUDE_DIR };
     request.cacheRoot = cacheRoot;
     request.pass = pass;
+    request.shaderPlatform = kb::assets::bake::ShaderBakePlatform::Windows;
     const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Dxbc };
     const RenderMaterialGraphShaderArtifactResult result = CookRenderMaterialGraphShaderArtifact(shader, backends, request);
     return result.Succeeded();

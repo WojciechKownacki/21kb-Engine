@@ -3,6 +3,7 @@
 #include "engine/assets/bake/AssetBakeKey.hpp"
 #include "engine/assets/bake/BakedAssetSink.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -16,6 +17,7 @@
 //
 //     +0        fixed header, kAssetPackHeaderBytes long
 //     +256      index: every artifact, its blocks, and where each block lies
+//     ...       optional fixed-width fragment index, immediately after the artifact index
 //     ...       block payloads, each at an offset that satisfies its alignment
 //
 // THE INDEX IS AT THE FRONT, which is a deliberate departure from the usual trailing-directory
@@ -44,19 +46,20 @@
 //  4. A BLOCK HAS A CEILING (kMaxAssetPackBlockBytes) so that one range request fits a wasm32
 //     budget, and the pack itself has one (kMaxAssetPackBytes) so that "read the whole file"
 //     is a budgeted fallback rather than an assumption.
-//  5. THE STREAMING FRAGMENT BOUNDARY HAS ITS FIELDS FROM DAY ONE. A cluster group may not
-//     straddle a page, offsets inside a page are relative to it, and load priority is computed
-//     from the page's bounds -- all of which the baker decides. Adding that later would mean
-//     re-baking every asset, so the header carries the fragment index's offset, size, count and
-//     alignment now. They are zero in every pack this stage writes; nothing implements
-//     clustering yet.
+//  5. THE STREAMING FRAGMENT BOUNDARY IS THE BAKER'S. A cluster group may not straddle a
+//     fragment, offsets inside a fragment are relative to it, and load priority is computed
+//     from the fragment's bounds -- all of which the baker decides, so the header carries the
+//     fragment index's offset, size, count and alignment. A fragment IS one block, exactly:
+//     that is the whole of "a group may not straddle a fragment" seen from the container,
+//     because a run of groups that fits one block cannot cross a boundary the block does not
+//     have. The four fields stay zero for a pack whose bakers declared no fragment.
 namespace kb::assets::bake {
 
 // First bytes of every pack. Eight bytes, no terminator.
 inline constexpr std::string_view kAssetPackMagic = "21KBPACK";
 
 // Bumped whenever the layout below stops being readable by the previous reader.
-inline constexpr std::uint32_t kAssetPackFormatVersion = 1U;
+inline constexpr std::uint32_t kAssetPackFormatVersion = 2U;
 
 // The fixed header occupies a whole alignment unit, so the index starts at a block-aligned
 // offset like everything else in the file.
@@ -90,6 +93,11 @@ inline constexpr std::uint64_t kMaxAssetPackBytes = 1536ULL * 1024ULL * 1024ULL;
 // something over a million blocks -- far past any pack that fits kMaxAssetPackBytes.
 inline constexpr std::uint64_t kMaxAssetPackIndexBytes = 64ULL * 1024ULL * 1024ULL;
 
+// The fragment catalogue is read before any fragment is useful, so it has the same bounded
+// allocation contract as the artifact catalogue. Without a separate ceiling a sparse hostile
+// pack could spend almost the entire 1.5 GiB pack budget on fixed-width fragment entries.
+inline constexpr std::uint64_t kMaxAssetPackFragmentIndexBytes = 64ULL * 1024ULL * 1024ULL;
+
 // Where one block's bytes are, and what they are. Offsets and sizes are absolute file
 // positions and byte counts; nothing in a pack is relative to anything but the file.
 struct AssetPackBlockEntry {
@@ -102,7 +110,26 @@ struct AssetPackBlockEntry {
     std::uint64_t offset = 0U;
     std::uint64_t storedBytes = 0U;
     std::uint64_t uncompressedBytes = 0U;
+    // Digest of the uncompressed bytes the baker submitted. Checked whenever
+    // the block is read and by the release validator before packaging.
+    AssetBakeDigest payloadDigest{};
 };
+
+// One streaming fragment: a block that holds whole cluster groups and nothing that continues
+// outside it. `offset` and `bytes` must name a block of this pack byte for byte -- the fragment
+// index is a second view of blocks the artifact index already describes, never a region of its
+// own -- and the box is what a loader computes a priority from before it has read the payload.
+struct AssetPackFragmentEntry {
+    std::uint64_t offset = 0U;
+    std::uint64_t bytes = 0U;
+    std::uint32_t clusterCount = 0U;
+    std::array<float, 3> boundsMin{};
+    std::array<float, 3> boundsMax{};
+};
+
+// Fixed width, so the fragment index measures the same before and after the block offsets are
+// known -- the same property that lets the artifact index sit at the front of the file.
+inline constexpr std::uint64_t kAssetPackFragmentEntryBytes = 48U;
 
 struct AssetPackArtifactEntry {
     AssetBakeDigest key{};
@@ -120,8 +147,9 @@ struct AssetPackHeader {
     std::uint64_t targetProfileHash = 0U;
     std::uint64_t indexOffset = kAssetPackHeaderBytes;
     std::uint64_t indexBytes = 0U;
-    // HashBakeBytes over the index region. An index that disagrees with the file it describes
-    // is the one corruption a reader cannot detect from the offsets alone.
+    // Checksum over both catalogue regions: the artifact index and, when present, the fragment
+    // index. A valid-but-wrong fragment box changes streaming priority without breaking any
+    // offset, so it must be protected just like the artifact catalogue.
     std::uint64_t indexChecksum = 0U;
     std::uint32_t artifactCount = 0U;
     std::uint32_t packageBlockAlignmentBytes = 0U;
@@ -129,11 +157,15 @@ struct AssetPackHeader {
     // Total length of the pack. Recorded so a truncated or extended file is refused without
     // the reader having to trust its own stat against a length it never wrote down.
     std::uint64_t fileBytes = 0U;
-    // Reserved for the streaming fragment boundary (rule 5). All zero until a cluster baker
-    // exists; a reader refuses a pack that claims a fragment index it cannot read.
+    // The streaming fragment boundary (rule 5). The fragment index follows the artifact index
+    // immediately, so its offset is fixed by the format rather than chosen; a reader that
+    // finds it anywhere else is looking at a layout this build did not write. All four are
+    // zero together for a pack no baker declared a fragment in.
     std::uint64_t fragmentIndexOffset = 0U;
     std::uint64_t fragmentIndexBytes = 0U;
     std::uint32_t fragmentCount = 0U;
+    // Alignment every fragment's first byte satisfies. At least the package alignment, because
+    // a fragment is a block and a block already has that floor.
     std::uint32_t fragmentAlignmentBytes = 0U;
 };
 
@@ -152,10 +184,15 @@ enum class AssetPackReadStatus : std::uint8_t {
     SizeMismatch,
     // The index does not decode, does not checksum, or describes an artifact that cannot be.
     IndexCorrupt,
+    // The fragment index is not where the format puts it, is not the length its count implies,
+    // or names a range that is not one of this pack's blocks.
+    FragmentIndexCorrupt,
     // A block's offset or length runs past the end of the file, or the two overflow together.
     BlockOutOfRange,
     // A block claims more than kMaxAssetPackBlockBytes.
     BlockTooLarge,
+    // A block's bytes do not match the digest protected by the index checksum.
+    PayloadCorrupt,
     // The pack claims more than kMaxAssetPackBytes.
     PackTooLarge,
     // Nothing in this pack carries that key.
@@ -182,6 +219,25 @@ enum class AssetPackReadStatus : std::uint8_t {
     std::span<const std::uint8_t> bytes,
     std::uint32_t artifactCount,
     std::vector<AssetPackArtifactEntry>& out);
+
+// Serialises the fragment index region, in the same little-endian, fixed-width style as the
+// artifact index. Floats go out as their IEEE-754 bit patterns, byte at a time, so the bytes do
+// not depend on the compiler that wrote them.
+[[nodiscard]] std::vector<std::uint8_t> EncodeAssetPackFragmentIndex(
+    std::span<const AssetPackFragmentEntry> fragments);
+
+// Hashes the two catalogue regions as one byte stream. With no fragment index this is exactly
+// HashBakeBytes(artifactIndex), preserving the bytes of pre-fragment packages.
+[[nodiscard]] std::uint64_t AssetPackIndexChecksum(
+    std::span<const std::uint8_t> artifactIndex,
+    std::span<const std::uint8_t> fragmentIndex);
+
+// The exact inverse. Refuses a buffer whose length is not the count's, an empty fragment, a
+// non-finite or inside-out box, and a non-zero reserved field.
+[[nodiscard]] AssetPackReadStatus DecodeAssetPackFragmentIndex(
+    std::span<const std::uint8_t> bytes,
+    std::uint32_t fragmentCount,
+    std::vector<AssetPackFragmentEntry>& out);
 
 // The fixed header, written into exactly kAssetPackHeaderBytes bytes.
 [[nodiscard]] std::vector<std::uint8_t> EncodeAssetPackHeader(const AssetPackHeader& header);

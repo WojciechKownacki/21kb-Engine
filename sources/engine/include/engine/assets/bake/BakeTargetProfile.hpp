@@ -19,15 +19,19 @@ enum class TextureCompressionFamily : std::uint8_t {
     BlockCompressedBaseline,
     // BC4, BC5, BC6H and BC7. Desktop GPUs only, for the reason above.
     BlockCompressedExtended,
-    // ASTC. The only family every Android arm64 device we ship on decodes.
+    // ASTC. Preferred on Android devices that expose the native format.
     AdaptiveScalable,
+    // ETC2 RGB8/RGBA8. APPENDED because this ordinal is part of bake settings.
+    // It is the guaranteed Android GLES 3 fallback and one half of the WebGL2
+    // compressed-texture portability contract.
+    Ericsson2,
 };
 
-inline constexpr std::uint32_t kTextureCompressionFamilyCount = 3U;
+inline constexpr std::uint32_t kTextureCompressionFamilyCount = 4U;
 
 // A set of families. A target may genuinely need more than one baked: a browser
-// guarantees BC *or* ASTC and only says which at runtime, so the web package has
-// to carry both. Same mask idiom as ShaderBakeBackendMask below.
+// Different devices within one target can expose different native families, so
+// a package may need more than one. Same mask idiom as ShaderBakeBackendMask below.
 using TextureCompressionFamilyMask = std::uint32_t;
 
 [[nodiscard]] constexpr TextureCompressionFamilyMask
@@ -39,6 +43,9 @@ TextureCompressionFamilyBit(TextureCompressionFamily family) noexcept {
 HasTextureCompressionFamily(TextureCompressionFamilyMask mask, TextureCompressionFamily family) noexcept {
     return (mask & TextureCompressionFamilyBit(family)) != 0U;
 }
+
+// Stable manifest qualifier: "bc-baseline", "bc-extended", "astc", "etc2".
+[[nodiscard]] std::string_view TextureCompressionFamilyName(TextureCompressionFamily family) noexcept;
 
 // Shader binary flavours the renderer can load. The names below are exactly
 // the leaf directories the renderer looks under (`shaders/<name>` -- see
@@ -84,6 +91,44 @@ using ShaderBakeBackendMask = std::uint32_t;
 
 // "dxbc", "dxil", "spirv", "glsl", "essl", "metal", "wgsl".
 [[nodiscard]] std::string_view ShaderBakeBackendName(ShaderBakeBackend backend) noexcept;
+
+// shaderc's target platform is independent from the binary backend. In
+// particular, SPIR-V is emitted for Windows, Linux and Android with different
+// platform defines, while ESSL differs between Android and Emscripten. Keeping
+// this in the target profile prevents cross-platform cache collisions and
+// binaries compiled with the wrong BX_PLATFORM_* contract.
+enum class ShaderBakePlatform : std::uint8_t {
+    Windows,
+    Linux,
+    Android,
+    MacOS,
+    WebGl,
+};
+
+inline constexpr std::uint32_t kShaderBakePlatformCount = 5U;
+
+// Canonical shaderc --platform spellings.
+[[nodiscard]] std::string_view ShaderBakePlatformName(ShaderBakePlatform platform) noexcept;
+[[nodiscard]] bool TryParseShaderBakePlatform(std::string_view name, ShaderBakePlatform& out) noexcept;
+
+[[nodiscard]] constexpr bool ShaderBakePlatformSupportsBackend(
+    ShaderBakePlatform platform,
+    ShaderBakeBackend backend) noexcept {
+    switch (platform) {
+    case ShaderBakePlatform::Windows:
+        return backend == ShaderBakeBackend::Dxbc || backend == ShaderBakeBackend::Dxil ||
+            backend == ShaderBakeBackend::Spirv;
+    case ShaderBakePlatform::Linux:
+        return backend == ShaderBakeBackend::Spirv || backend == ShaderBakeBackend::Glsl;
+    case ShaderBakePlatform::Android:
+        return backend == ShaderBakeBackend::Spirv || backend == ShaderBakeBackend::Essl;
+    case ShaderBakePlatform::MacOS:
+        return backend == ShaderBakeBackend::Metal;
+    case ShaderBakePlatform::WebGl:
+        return backend == ShaderBakeBackend::Essl;
+    }
+    return false;
+}
 
 // Which of bgfx's two vertex-attribute size tables a backend is sized by.
 // bgfx picks the table from the ACTIVE renderer, not from the layout, so this
@@ -144,8 +189,14 @@ struct BakeTargetProfile {
     // contain. A profile with an empty set bakes no shaders and is invalid.
     ShaderBakeBackendMask shaderBackends = 0U;
 
-    // Widest index buffer the target is guaranteed to accept. A baker must
-    // split a mesh that would need more indices than this fits.
+    // Explicit shaderc platform shared by all shader backends in this package.
+    // A backend alone is insufficient to derive it (for example SPIR-V is
+    // valid on Windows, Linux and Android).
+    ShaderBakePlatform shaderPlatform = ShaderBakePlatform::Windows;
+
+    // Index width emitted for this profile. A baker using 16-bit indices must
+    // split draw sections into independently addressable vertex ranges rather
+    // than reject a large mesh; the API may still support wider indices.
     BakeIndexWidth indexWidth = BakeIndexWidth::Bits32;
 
     // TRAP -- read before baking any vertex buffer as raw bytes.
@@ -252,6 +303,7 @@ struct BakeTargetProfile {
             TextureCompressionFamilyBit(TextureCompressionFamily::BlockCompressedExtended),
         .shaderBackends = ShaderBakeBackendBit(ShaderBakeBackend::Dxbc) |
             ShaderBakeBackendBit(ShaderBakeBackend::Dxil) | ShaderBakeBackendBit(ShaderBakeBackend::Spirv),
+        .shaderPlatform = ShaderBakePlatform::Windows,
         .indexWidth = BakeIndexWidth::Bits32,
         .allowsThreeComponent16BitAttributes = true,
         .packageBlockAlignmentBytes = 256U,
@@ -272,6 +324,7 @@ struct BakeTargetProfile {
             TextureCompressionFamilyBit(TextureCompressionFamily::BlockCompressedExtended),
         .shaderBackends =
             ShaderBakeBackendBit(ShaderBakeBackend::Spirv) | ShaderBakeBackendBit(ShaderBakeBackend::Glsl),
+        .shaderPlatform = ShaderBakePlatform::Linux,
         .indexWidth = BakeIndexWidth::Bits32,
         .allowsThreeComponent16BitAttributes = false,
         .packageBlockAlignmentBytes = 256U,
@@ -293,9 +346,11 @@ struct BakeTargetProfile {
 [[nodiscard]] constexpr BakeTargetProfile AndroidArm64BakeTargetProfile() noexcept {
     return BakeTargetProfile{
         .identifier = "Android.arm64",
-        .textureCompressions = TextureCompressionFamilyBit(TextureCompressionFamily::AdaptiveScalable),
+        .textureCompressions = TextureCompressionFamilyBit(TextureCompressionFamily::AdaptiveScalable) |
+            TextureCompressionFamilyBit(TextureCompressionFamily::Ericsson2),
         .shaderBackends =
             ShaderBakeBackendBit(ShaderBakeBackend::Spirv) | ShaderBakeBackendBit(ShaderBakeBackend::Essl),
+        .shaderPlatform = ShaderBakePlatform::Android,
         .indexWidth = BakeIndexWidth::Bits16,
         .allowsThreeComponent16BitAttributes = false,
         .packageBlockAlignmentBytes = 256U,
@@ -318,10 +373,11 @@ struct BakeTargetProfile {
 // content re-cooked -- the day that backend lands, which is exactly the cost
 // this field exists to avoid.
 //
-// Textures: BC1/BC3 and ASTC, both. A WebGPU adapter must expose
-// texture-compression-bc OR (etc2 AND astc), and a WebGL2 context guarantees
+// Textures: BC1/BC3 and ETC2, both. A WebGL2 context guarantees
 // WEBGL_compressed_texture_etc OR the s3tc trio, so neither family alone covers
-// every browser. The BC half stops at BC3 because bgfx on Emscripten answers for
+// every browser. ASTC is deliberately absent: it is not the WebGL2 portability
+// fallback and WebGPU is a separate, currently unsupported target. The BC half
+// stops at BC3 because bgfx on Emscripten answers for
 // compressed formats from a fixed list that has no BC4/BC5/BC6H/BC7 case.
 //
 // Mapping: none exists. Emscripten's mmap implements MAP_PRIVATE by copying the
@@ -334,12 +390,13 @@ struct BakeTargetProfile {
 // response that is buffered before it reaches the GPU, and growing the heap to
 // hold it copies the entire heap, so the chunk is resident twice at the worst
 // moment. A smaller chunk also makes a failed or unsatisfied range cheap to retry.
-[[nodiscard]] constexpr BakeTargetProfile WebWasm32BakeTargetProfile() noexcept {
+[[nodiscard]] constexpr BakeTargetProfile WebGlWasm32BakeTargetProfile() noexcept {
     return BakeTargetProfile{
-        .identifier = "Web.wasm32",
+        .identifier = "WebGL.wasm32",
         .textureCompressions = TextureCompressionFamilyBit(TextureCompressionFamily::BlockCompressedBaseline) |
-            TextureCompressionFamilyBit(TextureCompressionFamily::AdaptiveScalable),
+            TextureCompressionFamilyBit(TextureCompressionFamily::Ericsson2),
         .shaderBackends = ShaderBakeBackendBit(ShaderBakeBackend::Essl),
+        .shaderPlatform = ShaderBakePlatform::WebGl,
         // WebGL2 is OpenGL ES 3.0, where 32-bit indices are core rather than an
         // extension, so the widest guaranteed index buffer really is 32-bit.
         .indexWidth = BakeIndexWidth::Bits32,

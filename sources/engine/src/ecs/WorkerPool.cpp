@@ -59,9 +59,17 @@ void PinCurrentThreadToCore(std::size_t coreIndex) {
     cpu_set_t set;
     CPU_ZERO(&set);
     CPU_SET(coreIndex, &set);
+#if defined(__ANDROID__)
+    const int result = sched_setaffinity(0, sizeof(set), &set);
+    const int errorCode = errno;
+#else
     const int result = pthread_setaffinity_np(pthread_self(), sizeof(set), &set);
+#endif
     if (result != 0) {
-        throw std::runtime_error("ECS worker affinity failed: " + std::string{ std::strerror(result) });
+#if !defined(__ANDROID__)
+        const int errorCode = result;
+#endif
+        throw std::runtime_error("ECS worker affinity failed: " + std::string{ std::strerror(errorCode) });
     }
 #else
     static_cast<void>(coreIndex);

@@ -145,6 +145,37 @@ ScenePrefabHandle ScenePrefabAssetService::Load(Scene& scene, const std::filesys
     return SaveMigratedAsset(scene, handle, path, handle.IsValid() && needsMigration) ? handle : ScenePrefabHandle{};
 }
 
+ScenePrefabHandle ScenePrefabAssetService::LoadReadOnly(Scene& scene, ScenePrefabAssetReadResult asset, std::string sourceIdentity) {
+    if (asset.kind == ScenePrefabAssetKind::Template && !ScenePrefabValidator::IsValid(asset.prefab)) {
+        return {};
+    }
+
+    SceneState& state = SceneAccess::State(scene);
+    if (asset.kind == ScenePrefabAssetKind::Variant) {
+        if (asset.missingOverrideNodeIds && !FillMissingVariantOverrideNodeIds(state.prefabs, asset.baseGuid, asset.overrides)) {
+            return {};
+        }
+        return state.prefabs.RegisterLoadedVariant(
+            std::move(asset.guid),
+            std::move(asset.name),
+            std::move(asset.baseGuid),
+            std::move(asset.overrides),
+            std::move(asset.addedChildren));
+    }
+
+    if (asset.missingOverrideNodeIds) {
+        static_cast<void>(FillMissingNestedOverrideNodeIds(state.prefabs, asset.prefab));
+    }
+    if (asset.guid.empty()) {
+        return state.prefabs.Register(std::move(asset.name), std::move(asset.prefab));
+    }
+    return state.prefabs.RegisterLoaded(
+        std::move(asset.guid),
+        std::move(asset.name),
+        std::move(asset.prefab),
+        std::move(sourceIdentity));
+}
+
 bool ScenePrefabAssetService::SaveInstancePrefab(Scene& scene, ScenePrefabInstanceHandle handle, const std::filesystem::path& path) {
     SceneState& state = SceneAccess::State(scene);
     const ScenePrefabInstanceRecord* instance = state.prefabInstances.Find(handle);

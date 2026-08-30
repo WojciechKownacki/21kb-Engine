@@ -199,6 +199,8 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
         const RenderMeshSection fallbackSection{
             .indexStart = 0U,
             .indexCount = meshResource == nullptr ? 0U : meshResource->indexCount,
+            .vertexStart = 0U,
+            .vertexCount = meshResource == nullptr ? 0U : meshResource->vertexCount,
             .materialSlot = 0U,
             .bounds = meshResource == nullptr ? RenderBoundsSphere{} : meshResource->bounds,
         };
@@ -206,6 +208,11 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
         const std::uint32_t sectionCount = sections == nullptr || sections->empty() ? 1U : static_cast<std::uint32_t>(sections->size());
         for (std::uint32_t sectionIndex = 0U; sectionIndex < sectionCount; ++sectionIndex) {
             const RenderMeshSection& section = sections == nullptr || sections->empty() ? fallbackSection : (*sections)[sectionIndex];
+            const std::uint32_t sectionVertexCount = section.vertexCount != 0U
+                ? section.vertexCount
+                : (meshResource != nullptr && section.vertexStart < meshResource->vertexCount
+                      ? meshResource->vertexCount - section.vertexStart
+                      : 0U);
             if (desc.terrainLayersOnly &&
                 (section.terrainLayerIndex == UINT8_MAX || section.terrainLayerIndex == 0U)) {
                 continue;
@@ -310,6 +317,8 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                         .meshletCount = meshletRange.second,
                         .indexStart = section.indexStart,
                         .indexCount = section.indexCount,
+                        .vertexStart = section.vertexStart,
+                        .vertexCount = sectionVertexCount,
                         .lodLevel = section.lodLevel,
                         .terrainLayerIndex = section.terrainLayerIndex,
                         .mesh = meshHandle,

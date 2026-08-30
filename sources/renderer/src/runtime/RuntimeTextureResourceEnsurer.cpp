@@ -95,14 +95,28 @@ void RuntimeTextureResourceEnsurer::Ensure(
             textures.erase(cacheIt);
         }
 
-        const std::filesystem::path texturePath = ResolveAssetPhysicalPath(manager, *metadata);
+        const std::shared_ptr<kb::assets::bake::RuntimeAssetPack> runtimePack = manager.RuntimePack();
+        const bool packaged = runtimePack != nullptr;
+        const std::filesystem::path texturePath = packaged
+            ? std::filesystem::path{}
+            : ResolveAssetPhysicalPath(manager, *metadata);
         // When streaming is enabled (editor app), bind the texture only once it is decoded: on the first
         // reference the decode is queued on a background worker and the slot is left unbound for now, so picking
         // a texture / opening a material no longer freezes the render thread ~1s on a large image - the texture
         // streams in a frame or two later. When disabled (tests, headless captures) decode synchronously so a
         // texture is deterministically bound in the same submit.
         std::shared_ptr<const RenderTextureAssetData> asset;
-        if (!texturePath.empty()) {
+        if (packaged) {
+            RenderTextureAssetLoader loader;
+            kb::assets::AssetLoadResult loaded = loader.Load(kb::assets::AssetLoadRequest{
+                .metadata = *metadata,
+                .resolvedPath = {},
+                .runtimePack = runtimePack,
+            });
+            if (loaded.Succeeded()) {
+                asset = std::static_pointer_cast<const RenderTextureAssetData>(std::move(loaded.asset));
+            }
+        } else if (!texturePath.empty()) {
             if (RenderTextureAssetLoader::IsAsyncTextureDecodeEnabled()) {
                 asset = RenderTextureAssetLoader::TryAcquireDecodedTexture(texturePath);
                 if (asset == nullptr) {
@@ -121,10 +135,16 @@ void RuntimeTextureResourceEnsurer::Ensure(
         if (asset != nullptr && asset->gpuBlocks.has_value()) {
             const bool deviceSupports = RenderDeviceSupportsTextureFormat(asset->gpuBlocks->format, colorSpace);
             if (SelectRenderTextureUploadPath(*asset, deviceSupports) == RenderTextureUploadPath::DecodedRgba8) {
+                if (packaged) {
+                    // A release package must carry a native variant for the active device.
+                    // Expanding cooked blocks on the CPU would hide an invalid target matrix.
+                    asset.reset();
+                } else {
                 std::optional<RenderTextureAssetData> decoded = DecodeRenderTextureToRgba8(*asset);
                 asset = decoded.has_value()
                     ? std::make_shared<const RenderTextureAssetData>(std::move(*decoded))
                     : nullptr;
+                }
             }
         }
 

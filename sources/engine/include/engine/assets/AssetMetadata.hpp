@@ -30,6 +30,10 @@ struct AssetMetadata {
     std::string name;
     std::filesystem::path virtualPath;
     std::filesystem::path physicalPath;
+    // Original extension retained by a runtime package whose assets intentionally have no
+    // physical path. Loose discovery fills it too, so loaders use one dispatch field in both
+    // modes instead of inventing pseudo-paths for packaged data.
+    std::string sourceExtension;
     std::uint64_t contentHash = 0;
     std::vector<AssetId> dependencies;
     bool runtimeLoadable = true;

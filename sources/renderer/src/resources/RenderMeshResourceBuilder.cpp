@@ -4,6 +4,7 @@
 #include "resources/RenderMeshDescValidator.hpp"
 
 #include <algorithm>
+#include <cmath>
 
 namespace kb::render {
 namespace {
@@ -14,6 +15,8 @@ namespace {
             RenderMeshSection{
                 .indexStart = 0U,
                 .indexCount = desc.indexCount,
+                .vertexStart = 0U,
+                .vertexCount = desc.vertexCount,
                 .materialSlot = 0U,
                 .bounds = meshBounds,
             },
@@ -27,14 +30,57 @@ namespace {
         sections.push_back(RenderMeshSection{
             .indexStart = section.indexStart,
             .indexCount = section.indexCount,
+            .vertexStart = section.vertexStart,
+            .vertexCount = RenderMeshDescGeometry::SectionVertexCount(desc, section),
             .materialSlot = section.materialSlot,
-            .bounds = section.bounds.IsValid() ? section.bounds : RenderMeshDescGeometry::ComputeBounds(desc, section.indexStart, section.indexCount),
+            .bounds = section.bounds.IsValid()
+                ? section.bounds
+                : RenderMeshDescGeometry::ComputeBounds(desc, section.indexStart, section.indexCount, section.vertexStart),
             .lodLevel = section.lodLevel,
             .terrainLayerIndex = section.terrainLayerIndex,
             .terrainLayerActive = section.terrainLayerActive,
         });
     }
     return sections;
+}
+
+[[nodiscard]] RenderBoundsSphere MergeBounds(RenderBoundsSphere lhs, RenderBoundsSphere rhs) noexcept {
+    if (!lhs.IsValid()) return rhs;
+    if (!rhs.IsValid()) return lhs;
+
+    const float dx = rhs.center[0] - lhs.center[0];
+    const float dy = rhs.center[1] - lhs.center[1];
+    const float dz = rhs.center[2] - lhs.center[2];
+    const float distance = std::sqrt(dx * dx + dy * dy + dz * dz);
+    if (lhs.radius >= distance + rhs.radius) return lhs;
+    if (rhs.radius >= distance + lhs.radius) return rhs;
+
+    const float radius = (distance + lhs.radius + rhs.radius) * 0.5F;
+    if (distance > 0.0F) {
+        const float shift = (radius - lhs.radius) / distance;
+        lhs.center[0] += dx * shift;
+        lhs.center[1] += dy * shift;
+        lhs.center[2] += dz * shift;
+    }
+    lhs.radius = radius;
+    return lhs;
+}
+
+[[nodiscard]] RenderBoundsSphere ComputeMeshBounds(const RenderMeshDesc& desc) noexcept {
+    if (desc.bounds.IsValid()) return desc.bounds;
+    if (desc.sectionCount == 0U) {
+        return RenderMeshDescGeometry::ComputeBounds(desc, 0U, desc.indexCount);
+    }
+
+    RenderBoundsSphere bounds{};
+    for (std::uint32_t sectionIndex = 0U; sectionIndex < desc.sectionCount; ++sectionIndex) {
+        const RenderMeshSectionDesc& section = desc.sections[sectionIndex];
+        const RenderBoundsSphere sectionBounds = section.bounds.IsValid()
+            ? section.bounds
+            : RenderMeshDescGeometry::ComputeBounds(desc, section.indexStart, section.indexCount, section.vertexStart);
+        bounds = MergeBounds(bounds, sectionBounds);
+    }
+    return bounds;
 }
 
 [[nodiscard]] std::vector<RenderMaterialSlot> BuildMaterialSlots(const RenderMeshDesc& desc, const std::vector<RenderMeshSection>& sections) {
@@ -83,8 +129,12 @@ const void* RenderMeshResourceBuilder::VertexData(const RenderMeshDesc& desc) no
     return RenderMeshDescGeometry::VertexData(desc);
 }
 
-RenderBoundsSphere RenderMeshResourceBuilder::ComputeBounds(const RenderMeshDesc& desc, std::uint32_t indexStart, std::uint32_t indexCount) noexcept {
-    return RenderMeshDescGeometry::ComputeBounds(desc, indexStart, indexCount);
+RenderBoundsSphere RenderMeshResourceBuilder::ComputeBounds(
+    const RenderMeshDesc& desc,
+    std::uint32_t indexStart,
+    std::uint32_t indexCount,
+    std::uint32_t vertexStart) noexcept {
+    return RenderMeshDescGeometry::ComputeBounds(desc, indexStart, indexCount, vertexStart);
 }
 
 RenderMeshResource RenderMeshResourceBuilder::Build(
@@ -92,7 +142,7 @@ RenderMeshResource RenderMeshResourceBuilder::Build(
     bgfx::VertexBufferHandle vertexBuffer,
     bgfx::DynamicVertexBufferHandle dynamicVertexBuffer,
     bgfx::IndexBufferHandle indexBuffer) {
-    const RenderBoundsSphere meshBounds = desc.bounds.IsValid() ? desc.bounds : RenderMeshDescGeometry::ComputeBounds(desc, 0U, desc.indexCount);
+    const RenderBoundsSphere meshBounds = ComputeMeshBounds(desc);
     std::vector<RenderMeshSection> sections = BuildSections(desc, meshBounds);
     std::vector<RenderMaterialSlot> materialSlots = BuildMaterialSlots(desc, sections);
 

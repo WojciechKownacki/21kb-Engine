@@ -2,10 +2,12 @@
 
 #include "engine/assets/bake/AssetBakeKey.hpp"
 
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -48,6 +50,25 @@ enum class BakedAssetBlockResidency : std::uint8_t {
     Mapped,
 };
 
+// Declares the block to be one streaming fragment: a self-contained run of whole
+// cluster groups whose every internal offset is relative to the block's first byte.
+//
+// A group may not straddle a fragment, so the baker -- the only party that knows
+// where a group ends -- states the boundary here rather than leaving a container
+// to cut the bytes wherever they happen to fall. The bounds are the world-space
+// box of the geometry in the fragment, which is what a loading priority is
+// computed from; the count says how many clusters the group contains.
+struct BakedAssetBlockFragment {
+    std::array<float, 3> boundsMin{};
+    std::array<float, 3> boundsMax{};
+    std::uint32_t clusterCount = 0U;
+};
+
+// A fragment declaration a sink may act on: a real group count and a box that is
+// finite and not inside out. Checked by both sinks, because an artifact must be
+// describable through either of them.
+[[nodiscard]] bool IsValidBakedAssetBlockFragment(const BakedAssetBlockFragment& fragment) noexcept;
+
 struct BakedAssetBlock {
     // Unique within the artifact and a portable file name
     // (IsValidBakeCacheName). Compared case-insensitively against the other
@@ -60,6 +81,11 @@ struct BakedAssetBlock {
     // file, whose first byte satisfies any alignment, so it validates the value
     // and does not otherwise act on it.
     std::uint32_t alignmentBytes = 1U;
+    // Set when the block is a streaming fragment. A container sink builds the
+    // pack's fragment index out of these; a loose sink places nothing, so it
+    // validates the declaration and does not otherwise act on it, exactly as it
+    // treats `alignmentBytes`.
+    std::optional<BakedAssetBlockFragment> fragment{};
 };
 
 struct BakedAssetDescriptor {
@@ -103,6 +129,10 @@ enum class BakedAssetSinkStatus : std::uint8_t {
     // instead of publishing a package whose blocks do not belong to the keys
     // that name them; the destination is left untouched.
     StagingConflict,
+    // The block declares itself a streaming fragment with no cluster groups in
+    // it, or with a box that is not finite or is inside out. A fragment index
+    // built from that describes a page nothing can be prioritised against.
+    InvalidFragment,
 };
 
 [[nodiscard]] std::string_view ToString(BakedAssetSinkStatus status) noexcept;

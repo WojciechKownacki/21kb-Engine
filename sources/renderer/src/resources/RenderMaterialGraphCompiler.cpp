@@ -51,70 +51,11 @@ std::atomic<std::uint64_t> g_renderMaterialGraphCompileTotalMicros{ 0U };
     return true;
 }
 
-[[nodiscard]] constexpr std::uint32_t PinId(std::uint16_t nodeKind, std::uint8_t direction, std::uint16_t ordinal) noexcept {
-    return (static_cast<std::uint32_t>(nodeKind) << 16U) |
-        (static_cast<std::uint32_t>(direction) << 12U) |
-        static_cast<std::uint32_t>(ordinal);
-}
-
-void HashUInt32(std::uint32_t& hash, std::uint32_t value) noexcept {
-    for (int index = 0; index < 4; ++index) {
-        hash ^= static_cast<std::uint8_t>((value >> static_cast<unsigned>(index * 8)) & 0xFFU);
-        hash *= 16777619U;
-    }
-}
-
 void HashString64(std::uint64_t& hash, std::string_view value) noexcept {
     for (const char ch : value) {
         hash ^= static_cast<unsigned char>(ch);
         hash *= 1099511628211ULL;
     }
-}
-
-[[nodiscard]] std::string EncodeToken(std::string_view value) {
-    std::string encoded;
-    for (const char ch : value) {
-        switch (ch) {
-        case '%': encoded += "%25"; break;
-        case ' ': encoded += "%20"; break;
-        case '\t': encoded += "%09"; break;
-        case '\n': encoded += "%0A"; break;
-        case '\r': encoded += "%0D"; break;
-        case '#': encoded += "%23"; break;
-        default: encoded += ch; break;
-        }
-    }
-    return encoded;
-}
-
-[[nodiscard]] std::string EncodeCustomPinSpec(std::span<const RenderMaterialGraphCustomPin> pins) {
-    if (pins.empty()) {
-        return "_";
-    }
-    std::string spec;
-    for (std::size_t index = 0U; index < pins.size(); ++index) {
-        if (index != 0U) {
-            spec += ",";
-        }
-        spec += EncodeToken(pins[index].name);
-        spec += ":";
-        spec += RenderMaterialGraphPinTypeName(pins[index].type);
-    }
-    return spec;
-}
-
-[[nodiscard]] std::string EncodeGraphNodeIdList(std::span<const std::uint32_t> nodeIds) {
-    if (nodeIds.empty()) {
-        return "_";
-    }
-    std::string text;
-    for (std::size_t index = 0U; index < nodeIds.size(); ++index) {
-        if (index != 0U) {
-            text += ",";
-        }
-        text += std::to_string(nodeIds[index]);
-    }
-    return text;
 }
 
 [[nodiscard]] std::vector<float> ParseDefaultNumbers(std::string_view text) {
@@ -137,14 +78,6 @@ void HashString64(std::uint64_t& hash, std::string_view value) noexcept {
         text += ".0";
     }
     return text;
-}
-
-[[nodiscard]] bool IsRenderMaterialGraphConstantNode(RenderMaterialGraphNodeKind kind) noexcept {
-    return kind == RenderMaterialGraphNodeKind::ConstantScalar ||
-        kind == RenderMaterialGraphNodeKind::ConstantVector2 ||
-        kind == RenderMaterialGraphNodeKind::ConstantVector ||
-        kind == RenderMaterialGraphNodeKind::ConstantColor ||
-        kind == RenderMaterialGraphNodeKind::ConstantBool;
 }
 
 [[nodiscard]] bool IsRenderMaterialGraphPassThroughNode(RenderMaterialGraphNodeKind kind) noexcept {
@@ -188,40 +121,6 @@ void HashString64(std::uint64_t& hash, std::string_view value) noexcept {
         return node.parameter.displayName;
     }
     return {};
-}
-
-[[nodiscard]] bool ShouldPersistGraphNodeMetadata(const RenderMaterialGraphNode& node) noexcept {
-    return IsRenderMaterialGraphParameterNode(node.kind) ||
-        IsRenderMaterialGraphConstantNode(node.kind) ||
-        IsRenderMaterialGraphOrganizationNode(node.kind) ||
-        node.kind == RenderMaterialGraphNodeKind::StaticBoolParameter ||
-        node.kind == RenderMaterialGraphNodeKind::StaticSwitch ||
-        node.kind == RenderMaterialGraphNodeKind::StaticComponentMask ||
-        node.kind == RenderMaterialGraphNodeKind::CollectionParameter ||
-        node.kind == RenderMaterialGraphNodeKind::ColorRamp ||
-        node.kind == RenderMaterialGraphNodeKind::FunctionInput ||
-        node.kind == RenderMaterialGraphNodeKind::FunctionOutput ||
-        node.kind == RenderMaterialGraphNodeKind::MaterialFunctionCall ||
-        node.kind == RenderMaterialGraphNodeKind::LayerStack ||
-        ((node.kind == RenderMaterialGraphNodeKind::TextureSample ||
-          node.kind == RenderMaterialGraphNodeKind::TextureObject ||
-          node.kind == RenderMaterialGraphNodeKind::TextureSampleCube ||
-          node.kind == RenderMaterialGraphNodeKind::TextureObjectCube ||
-          node.kind == RenderMaterialGraphNodeKind::TextureSampleVolume ||
-          node.kind == RenderMaterialGraphNodeKind::TextureObjectVolume ||
-          node.kind == RenderMaterialGraphNodeKind::TextureSample2DArray ||
-          node.kind == RenderMaterialGraphNodeKind::TextureObject2DArray) &&
-            !node.parameter.stableId.empty()) ||
-        (node.kind == RenderMaterialGraphNodeKind::Uv && !node.parameter.defaultValueHint.empty());
-}
-
-[[nodiscard]] std::string_view ParameterGroupName(RenderMaterialParameterGroup group) noexcept {
-    switch (group) {
-    case RenderMaterialParameterGroup::Core: return "Core";
-    case RenderMaterialParameterGroup::Surface: return "Surface";
-    case RenderMaterialParameterGroup::Advanced: return "Advanced";
-    }
-    return "Core";
 }
 
 [[nodiscard]] std::string_view TextureColorSpaceName(RenderMaterialTextureColorSpace colorSpace) noexcept {
@@ -1325,22 +1224,6 @@ void AddShaderGenerationDiagnostic(
     }
 }
 
-[[nodiscard]] std::string_view SamplerFilterName(RenderMaterialGraphSamplerFilter filter) noexcept {
-    return filter == RenderMaterialGraphSamplerFilter::Point ? "Point" : "Linear";
-}
-
-[[nodiscard]] std::string_view SamplerWrapName(RenderMaterialGraphSamplerWrap wrap) noexcept {
-    switch (wrap) {
-    case RenderMaterialGraphSamplerWrap::Clamp:
-        return "Clamp";
-    case RenderMaterialGraphSamplerWrap::Mirror:
-        return "Mirror";
-    case RenderMaterialGraphSamplerWrap::Repeat:
-        return "Repeat";
-    }
-    return "Repeat";
-}
-
 [[nodiscard]] bool IsTextureObjectNode(RenderMaterialGraphNodeKind kind) noexcept {
     switch (kind) {
     case RenderMaterialGraphNodeKind::ParameterTexture:
@@ -1445,20 +1328,6 @@ void AddShaderGenerationDiagnostic(
     default:
         return RenderMaterialGraphTextureDimension::Texture2D;
     }
-}
-
-[[nodiscard]] RenderMaterialGraphPinType TexturePinTypeForDimension(RenderMaterialGraphTextureDimension dimension) noexcept {
-    switch (dimension) {
-    case RenderMaterialGraphTextureDimension::TextureCube:
-        return RenderMaterialGraphPinType::TextureCube;
-    case RenderMaterialGraphTextureDimension::Texture3D:
-        return RenderMaterialGraphPinType::Texture3D;
-    case RenderMaterialGraphTextureDimension::Texture2DArray:
-        return RenderMaterialGraphPinType::Texture2DArray;
-    case RenderMaterialGraphTextureDimension::Texture2D:
-        return RenderMaterialGraphPinType::Texture2D;
-    }
-    return RenderMaterialGraphPinType::Texture2D;
 }
 
 [[nodiscard]] std::string_view TextureSamplerMacro(RenderMaterialGraphTextureDimension dimension) noexcept {
@@ -1661,19 +1530,6 @@ void AppendCustomCodeFunctionDefinitions(
         return RenderMaterialGraphShaderStagePinName(context.shaderStage);
     default:
         return "result";
-    }
-}
-
-[[nodiscard]] bool IsStaticVariantSwitchNode(RenderMaterialGraphNodeKind kind) noexcept {
-    switch (kind) {
-    case RenderMaterialGraphNodeKind::StaticSwitch:
-    case RenderMaterialGraphNodeKind::QualitySwitch:
-    case RenderMaterialGraphNodeKind::FeatureLevelSwitch:
-    case RenderMaterialGraphNodeKind::ShadingPathSwitch:
-    case RenderMaterialGraphNodeKind::ShaderStageSwitch:
-        return true;
-    default:
-        return false;
     }
 }
 
@@ -2804,6 +2660,15 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::InverseLerp:
     case RenderMaterialGraphNodeKind::SphereMask:
     case RenderMaterialGraphNodeKind::AppendVector:
+    case RenderMaterialGraphNodeKind::Reroute:
+    case RenderMaterialGraphNodeKind::NamedRerouteDeclaration:
+    case RenderMaterialGraphNodeKind::NamedRerouteUsage:
+    case RenderMaterialGraphNodeKind::CompositeInput:
+    case RenderMaterialGraphNodeKind::CompositeOutput:
+    case RenderMaterialGraphNodeKind::FunctionInput:
+    case RenderMaterialGraphNodeKind::FunctionOutput:
+    case RenderMaterialGraphNodeKind::MaterialFunctionCall:
+    case RenderMaterialGraphNodeKind::LayerStack:
         break;
     }
     return "parameter" + std::to_string(node.id);
@@ -3015,6 +2880,16 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::InverseLerp:
     case RenderMaterialGraphNodeKind::SphereMask:
     case RenderMaterialGraphNodeKind::AppendVector:
+    case RenderMaterialGraphNodeKind::Reroute:
+    case RenderMaterialGraphNodeKind::NamedRerouteDeclaration:
+    case RenderMaterialGraphNodeKind::NamedRerouteUsage:
+    case RenderMaterialGraphNodeKind::CompositeInput:
+    case RenderMaterialGraphNodeKind::CompositeOutput:
+    case RenderMaterialGraphNodeKind::FunctionInput:
+    case RenderMaterialGraphNodeKind::FunctionOutput:
+    case RenderMaterialGraphNodeKind::MaterialFunctionCall:
+    case RenderMaterialGraphNodeKind::LayerStack:
+    case RenderMaterialGraphNodeKind::CollectionParameter:
         break;
     }
     return RenderMaterialParameterType::Scalar;
@@ -3179,12 +3054,6 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     return false;
 }
 
-[[nodiscard]] bool IsSingleOutputOnlyGraph(const RenderMaterialGraphDocument& graph) noexcept {
-    return graph.nodes.size() == 1U &&
-        graph.links.empty() &&
-        graph.nodes[0].kind == RenderMaterialGraphNodeKind::MaterialOutput;
-}
-
 [[nodiscard]] bool HasInputLink(
     const RenderMaterialGraphDocument& graph,
     std::uint32_t nodeId,
@@ -3308,12 +3177,6 @@ struct FunctionSignature {
     std::vector<FunctionEndpointSignature> inputs;
     std::vector<FunctionEndpointSignature> outputs;
 };
-
-[[nodiscard]] bool HasGraphDiagnosticError(std::span<const RenderMaterialGraphDiagnostic> diagnostics) noexcept {
-    return std::any_of(diagnostics.begin(), diagnostics.end(), [](const RenderMaterialGraphDiagnostic& diagnostic) {
-        return diagnostic.severity == RenderMaterialGraphDiagnosticSeverity::Error;
-    });
-}
 
 [[nodiscard]] bool IsDeferredSceneBindingNode(RenderMaterialGraphNodeKind kind) noexcept {
     return kind == RenderMaterialGraphNodeKind::SceneDepth ||

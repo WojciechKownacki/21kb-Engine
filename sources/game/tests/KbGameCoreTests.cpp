@@ -7,6 +7,8 @@
 // green. These run the bootstrap directly, on projects that have those things.
 
 #include "GameProjectRuntime.hpp"
+#include "PackagedRuntimeModuleContract.hpp"
+#include "ProjectCooker.hpp"
 
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/AssetMetadata.hpp"
@@ -37,8 +39,10 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <vector>
 
@@ -117,6 +121,66 @@ void RunRuntimeDeltaTests() {
                              std::chrono::duration<float>{ kb::game::kMaximumRuntimeDeltaSeconds })) <=
             kb::game::kMaximumRuntimeDeltaSeconds,
         "A frame exactly at the ceiling must not step past it");
+}
+
+void RunPackagedRuntimeModuleContractTests() {
+    kb::project::ProjectDescriptor supported{};
+    for (const kb::game::PackagedRuntimeModuleDesc& module : kb::game::kPackagedRuntimeModules) {
+        supported.plugins.push_back(kb::project::ProjectPluginReference{
+            .name = std::string{ module.name },
+            .binaryPath = "desktop-name-is-irrelevant.dll",
+            .enabled = true,
+        });
+    }
+    Require(
+        !kb::game::FirstUnsupportedPackagedRuntimeModule("Android.arm64", supported).has_value(),
+        "Android rejected a provider compiled into its packaged runtime host");
+
+    kb::project::ProjectDescriptor unsupported = supported;
+    unsupported.plugins.push_back(kb::project::ProjectPluginReference{
+        .name = "Company.CustomDesktopPlugin",
+        .binaryPath = "custom_plugin.dll",
+        .enabled = true,
+    });
+    const std::optional<std::string_view> rejected =
+        kb::game::FirstUnsupportedPackagedRuntimeModule("Android.arm64", unsupported);
+    Require(rejected.has_value() && *rejected == "Company.CustomDesktopPlugin",
+        "Android accepted a descriptor module its static host cannot construct");
+
+    unsupported.plugins.back().enabled = false;
+    Require(
+        !kb::game::FirstUnsupportedPackagedRuntimeModule("Android.arm64", unsupported).has_value(),
+        "Android rejected a disabled module that is not part of the shipped runtime");
+    unsupported.plugins.back().enabled = true;
+    Require(
+        !kb::game::FirstUnsupportedPackagedRuntimeModule("Windows.x64", unsupported).has_value(),
+        "The dynamic Windows host was accidentally restricted to Android's static providers");
+
+    const std::filesystem::path projectRoot = TestRoot() / "unsupported_android_module";
+    std::error_code error;
+    std::filesystem::create_directories(projectRoot, error);
+    Require(!error, "Android module rejection fixture could not be created");
+    Require(
+        kb::project::ProjectManager::SaveProject(
+            projectRoot / "Project.21kbproject", unsupported),
+        "Android module rejection descriptor could not be written");
+
+    const std::filesystem::path outputPack = projectRoot / "must_not_exist.kbpack";
+    std::ostringstream diagnostics;
+    const kb::game::ProjectCookResult cook = kb::game::CookProject(
+        kb::game::ProjectCookRequest{
+            .projectPath = projectRoot,
+            .targetProfileId = "Android.arm64",
+            .outputPackPath = outputPack,
+        },
+        diagnostics);
+    Require(!cook.succeeded, "Android cooker accepted a module absent from its static host");
+    Require(
+        Mentions(cook.error, "Company.CustomDesktopPlugin"),
+        "Android cooker rejection did not identify the unsupported module");
+    Require(
+        !std::filesystem::exists(outputPack),
+        "Android cooker wrote a package after rejecting an unsupported module");
 }
 
 // -------------------------------------------------------------------------
@@ -534,6 +598,7 @@ int main() {
     Require(!error, "kb_game_core test root could not be prepared");
 
     RunRuntimeDeltaTests();
+    RunPackagedRuntimeModuleContractTests();
     RunNarrowingTests();
     RunSettingsTests();
     RunLegacySettingsFallbackTests();
