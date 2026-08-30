@@ -33,6 +33,12 @@ struct ScenePrefabVariantAddedSubtree {
 struct ScenePrefabRecord {
     ScenePrefabRecordKind kind = ScenePrefabRecordKind::Template;
     std::string guid;
+    // The asset file this record was loaded from, resolved to one canonical
+    // spelling; empty for a prefab registered in memory. It is what tells a
+    // genuine identity collision (two DIFFERENT ".kbprefab" files declaring one
+    // guid, which copying a prefab file produces) apart from the same file being
+    // read again after its content changed - only the former retires the guid.
+    std::string sourcePath;
     std::string name;
     ScenePrefab prefab;
     ScenePrefabHandle basePrefab{};

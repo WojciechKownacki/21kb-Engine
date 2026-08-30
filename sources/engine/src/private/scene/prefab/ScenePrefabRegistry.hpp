@@ -16,7 +16,7 @@ namespace kb::scene {
 class ScenePrefabRegistry {
 public:
     [[nodiscard]] ScenePrefabHandle Register(std::string name, ScenePrefab prefab);
-    [[nodiscard]] ScenePrefabHandle RegisterLoaded(std::string guid, std::string name, ScenePrefab prefab);
+    [[nodiscard]] ScenePrefabHandle RegisterLoaded(std::string guid, std::string name, ScenePrefab prefab, std::string sourcePath);
     [[nodiscard]] ScenePrefabHandle RegisterVariant(std::string name, ScenePrefabHandle basePrefab, std::vector<ScenePrefabPropertyOverride> overrides);
     [[nodiscard]] ScenePrefabHandle RegisterLoadedVariant(std::string guid, std::string name, std::string basePrefabGuid, std::vector<ScenePrefabPropertyOverride> overrides, std::vector<ScenePrefabVariantAddedSubtree> addedChildren = {});
     [[nodiscard]] bool Contains(ScenePrefabHandle handle) const noexcept;

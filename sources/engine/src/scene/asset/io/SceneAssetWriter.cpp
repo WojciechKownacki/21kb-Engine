@@ -2,6 +2,7 @@
 
 #include "engine/assets/AssetId.hpp"
 #include "engine/scene/SceneAssetMeta.hpp"
+#include "scene/asset/SceneComponentAssetReferences.hpp"
 #include "scene/asset/io/SceneAssetBinaryIO.hpp"
 #include "scene/asset/io/SceneAssetComponentCodec.hpp"
 #include "scene/asset/io/SceneAssetFormat.hpp"
@@ -26,12 +27,6 @@ using SceneAssetBinaryIO::WriteString;
 using SceneAssetBinaryIO::WriteUInt8;
 using SceneAssetBinaryIO::WriteUInt32;
 using SceneAssetBinaryIO::WriteUInt64;
-
-[[nodiscard]] std::filesystem::path MetaPathFor(const std::filesystem::path& scenePath) {
-    std::filesystem::path metaPath = scenePath;
-    metaPath.replace_extension(".meta");
-    return metaPath;
-}
 
 [[nodiscard]] std::uint32_t RootCount(const ScenePrefab& prefab) noexcept {
     std::uint32_t count = 0;
@@ -90,25 +85,27 @@ void AddDependency(std::vector<SceneAssetDependency>& dependencies, std::set<std
     std::set<std::uint64_t> seen;
     AddDependency(dependencies, seen, scene.audioMixerAssetId, "audioMixer");
     for (const ScenePrefabNodeDesc& node : scene.worldPrefab.Nodes()) {
-        if (node.components.meshRenderer.has_value()) {
-            AddDependency(dependencies, seen, node.components.meshRenderer->meshAssetId, "mesh");
-            AddDependency(dependencies, seen, node.components.meshRenderer->materialAssetId, "material");
-            for (std::uint32_t slot = 0U; slot < node.components.meshRenderer->materialSlotOverrideCount && slot < kMaxMeshRendererMaterialSlotOverrides; ++slot) {
-                AddDependency(dependencies, seen, node.components.meshRenderer->materialSlotAssetIds[slot], "materialSlot");
-            }
-        }
+        // Every component field that names an asset comes from one shared walker,
+        // so this sidecar and ScenePrefabAssetLoader's prefab edges can never
+        // cover different subsets of the components.
+        SceneComponentAssetReferences::ForEachReference(
+            node.components,
+            [&dependencies, &seen](std::uint64_t rawId, std::string_view role) {
+                AddDependency(dependencies, seen, rawId, std::string{ role });
+            });
         if (!node.nestedPrefabGuid.empty()) {
+            // Every other role records an id the asset registry already owns. A
+            // nested prefab is the one reference a scene node holds by guid alone,
+            // and a guid says nothing about the file the prefab lives in, so no
+            // registry id can be computed here - the writer has no registry. The
+            // recorded value is therefore MakeAssetId(guid): a stable, role-tagged
+            // encoding of the guid, translated into the registry's own identifier
+            // (MakeAssetId(NormalizeAssetPath(virtualPath) + ":" + type)) by
+            // SceneAssetLoader::DiscoverDependencies, which is the first point that
+            // sees both this reference and the registered prefab assets. Nothing
+            // outside that translation may treat this value as a registry id.
             const kb::assets::AssetId nestedId = kb::assets::MakeAssetId(node.nestedPrefabGuid);
             AddDependency(dependencies, seen, nestedId.value, "nestedPrefab");
-        }
-        if (node.components.audioSource.has_value()) {
-            AddDependency(dependencies, seen, node.components.audioSource->clipAssetId, "audioClip");
-        }
-        if (node.components.behaviour.has_value()) {
-            AddDependency(dependencies, seen, node.components.behaviour->behaviourAssetId, "behaviour");
-        }
-        if (node.components.particleEffect.has_value()) {
-            AddDependency(dependencies, seen, node.components.particleEffect->effectAssetId, "particleEffect");
         }
     }
     std::ranges::sort(dependencies, [](const SceneAssetDependency& left, const SceneAssetDependency& right) {
@@ -178,7 +175,7 @@ bool SceneAssetWriter::Write(const std::filesystem::path& path, const SceneDocum
         .nodeCount = static_cast<std::uint32_t>(scene.worldPrefab.NodeCount()),
         .dependencies = CollectDependencies(scene),
     };
-    return SceneAssetMetaWriter::Write(MetaPathFor(path), meta);
+    return SceneAssetMetaWriter::Write(SceneAssetMetaPath(path), meta);
 }
 
 } // namespace kb::scene

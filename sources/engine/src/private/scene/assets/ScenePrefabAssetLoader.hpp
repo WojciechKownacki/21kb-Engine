@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/assets/IAssetLoader.hpp"
+#include "scene/assets/ScenePrefabGuidAssetIndex.hpp"
 
 namespace kb::scene {
 
@@ -14,9 +15,15 @@ public:
     [[nodiscard]] std::type_index PayloadType() const noexcept override;
     [[nodiscard]] std::vector<std::string> Extensions() const override;
     [[nodiscard]] kb::assets::AssetLoadResult Load(const kb::assets::AssetLoadRequest& request) override;
+    [[nodiscard]] std::vector<kb::assets::AssetId> DiscoverDependencies(
+        const kb::assets::AssetMetadata& metadata,
+        const kb::assets::AssetRegistry& registry) const override;
 
 private:
     Scene& scene_;
+    // Only consulted for a prefab that nests another prefab; see SceneAssetLoader
+    // for why it is cached against the registry generation.
+    mutable ScenePrefabGuidAssetIndex nestedPrefabGuidIndex_;
 };
 
 } // namespace kb::scene

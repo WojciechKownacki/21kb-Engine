@@ -28,8 +28,8 @@ ScenePrefabHandle ScenePrefabRegistry::Register(std::string name, ScenePrefab pr
     return ScenePrefabRegistrationService::Register(records_, std::move(name), std::move(prefab));
 }
 
-ScenePrefabHandle ScenePrefabRegistry::RegisterLoaded(std::string guid, std::string name, ScenePrefab prefab) {
-    return ScenePrefabRegistrationService::RegisterLoaded(records_, std::move(guid), std::move(name), std::move(prefab));
+ScenePrefabHandle ScenePrefabRegistry::RegisterLoaded(std::string guid, std::string name, ScenePrefab prefab, std::string sourcePath) {
+    return ScenePrefabRegistrationService::RegisterLoaded(records_, std::move(guid), std::move(name), std::move(prefab), std::move(sourcePath));
 }
 
 ScenePrefabHandle ScenePrefabRegistry::RegisterVariant(std::string name, ScenePrefabHandle basePrefab, std::vector<ScenePrefabPropertyOverride> overrides) {

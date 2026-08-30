@@ -10,6 +10,8 @@ namespace {
 bool RunSuite(std::string_view suite) {
     if (suite == "assets") {
         kb::tests::RunAssetRuntimeTests();
+    } else if (suite == "asset-bake") {
+        kb::tests::RunAssetBakeTests();
     } else if (suite == "save") {
         kb::tests::RunSaveGameTests();
     } else if (suite == "ecs") {
@@ -64,6 +66,7 @@ bool RunSuite(std::string_view suite) {
 
 void RunAllSuites() {
     kb::tests::RunAssetRuntimeTests();
+    kb::tests::RunAssetBakeTests();
     kb::tests::RunSaveGameTests();
     kb::tests::RunEcsRuntimeTests();
     kb::tests::RunSceneHierarchyTests();

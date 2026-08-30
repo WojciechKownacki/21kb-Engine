@@ -9,6 +9,7 @@
 
 #include <cstdint>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -81,6 +82,17 @@ namespace {
     return !required || ScenePrefabAssetService::Save(scene, handle, path);
 }
 
+// One canonical spelling per asset file, so "the same prefab file loaded twice"
+// and "a second prefab file declaring the same guid" are distinguishable by a
+// string compare. Falls back to the lexically normalized path for a file the
+// filesystem cannot resolve, which at worst makes the collision check miss and
+// leaves the previous behaviour in place.
+[[nodiscard]] std::string CanonicalSourcePath(const std::filesystem::path& path) {
+    std::error_code error;
+    const std::filesystem::path resolved = std::filesystem::weakly_canonical(path, error);
+    return (error || resolved.empty()) ? path.lexically_normal().generic_string() : resolved.generic_string();
+}
+
 } // namespace
 
 bool ScenePrefabAssetService::Save(Scene& scene, ScenePrefabHandle handle, const std::filesystem::path& path) {
@@ -128,7 +140,7 @@ ScenePrefabHandle ScenePrefabAssetService::Load(Scene& scene, const std::filesys
     if (asset.guid.empty()) {
         handle = state.prefabs.Register(std::move(asset.name), std::move(asset.prefab));
     } else {
-        handle = state.prefabs.RegisterLoaded(std::move(asset.guid), std::move(asset.name), std::move(asset.prefab));
+        handle = state.prefabs.RegisterLoaded(std::move(asset.guid), std::move(asset.name), std::move(asset.prefab), CanonicalSourcePath(path));
     }
     return SaveMigratedAsset(scene, handle, path, handle.IsValid() && needsMigration) ? handle : ScenePrefabHandle{};
 }

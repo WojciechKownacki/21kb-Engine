@@ -7,15 +7,23 @@
 #include "engine/assets/AssetImportCatalog.hpp"
 #include "engine/assets/AssetImportService.hpp"
 #include "engine/assets/AssetKind.hpp"
+#include "engine/assets/AssetCompatibility.hpp"
 #include "engine/assets/AssetManager.hpp"
+#include "engine/assets/AssetRegistry.hpp"
 #include "engine/assets/ImportedAsset.hpp"
 #include "engine/assets/ImportedAssetLoader.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneAssetMeta.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneDocument.hpp"
+#include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneObject.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
+#include "engine/scene/GeometrySwarmComponent.hpp"
+#include "engine/scene/ScenePrefab.hpp"
+#include "engine/scene/ScenePrefabNode.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/script/ScriptAsset.hpp"
 #include "engine/script/ScriptBehaviourAsset.hpp"
@@ -25,12 +33,14 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <future>
 #include <iterator>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <typeindex>
@@ -1097,6 +1107,644 @@ void RunInspectorDeclarationParseTest() {
         "Inspector[\"dashPower\"] bracket declaration did not infer a Float");
 }
 
+[[nodiscard]] bool ContainsAssetId(std::span<const kb::assets::AssetId> ids, kb::assets::AssetId id) noexcept {
+    return std::ranges::any_of(ids, [id](kb::assets::AssetId candidate) noexcept {
+        return candidate.value == id.value;
+    });
+}
+
+// A scene must publish everything that has to be pulled alongside it, and every id
+// it publishes must be the id the registry itself gave that asset.
+//
+// Turns red if: SceneAssetLoader::DiscoverDependencies is removed or falls back to
+// the IAssetLoader default (the dependency list comes back empty); if the nested
+// prefab is reported in the sidecar's raw MakeAssetId(guid) form instead of the
+// registry's MakeAssetId(path + ":" + type) form (the registry-id membership check
+// fails and the guid-derived-id check fires); or if the mesh/material entries are
+// dropped or rewritten (the count and membership checks fail).
+void RunSceneAssetDependencyDiscoveryTest() {
+    ResetTestRoot();
+
+    const std::filesystem::path projectRoot = TestRoot() / "SceneDependencyProject";
+    const std::filesystem::path assetsRoot = projectRoot / "Assets";
+    const std::filesystem::path sourceRoot = TestRoot() / "SceneDependencySources";
+    WriteTextFile(sourceRoot / "Block.obj", "o Block\nv 0.0 0.0 0.0\n");
+    WriteTextFile(sourceRoot / "Surface.mtl", "newmtl Surface\n");
+
+    // Author the referenced assets the way the editor does, so their ids come from
+    // the registry's own scheme rather than from arithmetic repeated in the test.
+    kb::scene::Scene authoring;
+    kb::tests::Require(authoring.Assets().MountProject(projectRoot), "Scene dependency project mount failed");
+
+    const std::array<std::filesystem::path, 2> sources{ sourceRoot / "Block.obj", sourceRoot / "Surface.mtl" };
+    const kb::assets::AssetImportResult imported =
+        kb::assets::AssetImportService::ImportFiles(authoring.Assets().Manager(), sources, "/Game/Imported");
+    kb::tests::Require(imported.Succeeded() && imported.CreatedCount() == 2U, "Scene dependency source assets were not imported");
+    kb::tests::Require(imported.items[0].sourcePath.filename() == "Block.obj" && imported.items[1].sourcePath.filename() == "Surface.mtl",
+        "Scene dependency import did not preserve the requested source order");
+    const kb::assets::AssetId meshId = imported.items[0].id;
+    const kb::assets::AssetId materialId = imported.items[1].id;
+    const std::filesystem::path meshVirtualPath = imported.items[0].virtualPath;
+    const std::filesystem::path materialVirtualPath = imported.items[1].virtualPath;
+
+    // The nested prefab asset, written by the real prefab writer so it carries the
+    // guid the scene node will reference.
+    const std::filesystem::path prefabPath = assetsRoot / "Prefabs" / "Nested.kbprefab";
+    const kb::scene::SceneObject prefabRoot = authoring.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Nested Root" });
+    const kb::scene::ScenePrefabHandle nestedPrefab = authoring.Prefabs().CaptureRegistered(prefabRoot, "NestedPrefab");
+    kb::tests::Require(nestedPrefab.IsValid(), "Nested prefab registration failed");
+    kb::tests::Require(authoring.Prefabs().Save(nestedPrefab, prefabPath), "Nested prefab asset save failed");
+    const std::string nestedPrefabGuid = authoring.Prefabs().Guid(nestedPrefab);
+    kb::tests::Require(!nestedPrefabGuid.empty(), "Nested prefab asset was saved without a guid");
+
+    kb::scene::SceneDocument document;
+    document.name = "DependencyScene";
+    document.guid = "scene:DependencyScene";
+    static_cast<void>(document.worldPrefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .stableId = 1U,
+        .name = "Mesh Node",
+        .components = kb::scene::ScenePrefabNodeComponents{
+            .meshRenderer = kb::scene::MeshRendererComponent{
+                .meshAssetId = meshId.value,
+                .materialAssetId = materialId.value,
+            },
+        },
+    }));
+    static_cast<void>(document.worldPrefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .stableId = 2U,
+        .name = "Nested Prefab Node",
+        .nestedPrefabGuid = nestedPrefabGuid,
+    }));
+
+    const std::filesystem::path scenePath = assetsRoot / "Scenes" / "DependencyScene.21kbscene";
+    std::error_code sceneDirectoryError;
+    std::filesystem::create_directories(scenePath.parent_path(), sceneDirectoryError);
+    kb::tests::Require(!sceneDirectoryError, "Scene dependency scene directory could not be created");
+    kb::tests::Require(kb::scene::SceneDocumentService::Save(document, scenePath), "Scene dependency scene asset save failed");
+    kb::tests::Require(std::filesystem::is_regular_file(kb::scene::SceneAssetMetaPath(scenePath)),
+        "Scene dependency scene asset did not write its .meta sidecar");
+
+    // Rediscover from disk in a fresh scene: the reported ids have to come out of a
+    // plain discovery pass, not out of the authoring scene's memory.
+    kb::scene::Scene runtime;
+    kb::tests::Require(runtime.Assets().MountProject(projectRoot), "Scene dependency runtime project mount failed");
+    kb::tests::Require(runtime.Assets().Discover() == 4U, "Scene dependency discovery did not find the mesh, material, prefab and scene");
+
+    const kb::assets::AssetRegistry& registry = runtime.Assets().Manager().Registry();
+    const kb::assets::AssetMetadata* sceneMetadata = registry.FindByPath("/Game/Scenes/DependencyScene.21kbscene");
+    kb::tests::Require(sceneMetadata != nullptr && sceneMetadata->type == "Scene", "Scene asset was not registered by discovery");
+    const kb::assets::AssetMetadata* prefabMetadata = registry.FindByPath("/Game/Prefabs/Nested.kbprefab");
+    kb::tests::Require(prefabMetadata != nullptr && prefabMetadata->type == "ScenePrefab", "Nested prefab asset was not registered by discovery");
+    const kb::assets::AssetMetadata* meshMetadata = registry.FindByPath(meshVirtualPath);
+    kb::tests::Require(meshMetadata != nullptr && meshMetadata->id.value == meshId.value, "Imported mesh id did not survive rediscovery");
+    const kb::assets::AssetMetadata* materialMetadata = registry.FindByPath(materialVirtualPath);
+    kb::tests::Require(materialMetadata != nullptr && materialMetadata->id.value == materialId.value, "Imported material id did not survive rediscovery");
+
+    // Both sides of the identifier scheme, computed independently: the registry's
+    // MakeAssetId(NormalizeAssetPath(virtualPath) + ":" + type) for each asset, and
+    // the ids the scene loader reports for those same assets.
+    const kb::assets::AssetId expectedPrefabId = kb::assets::MakeAssetId(
+        kb::assets::NormalizeAssetPath(prefabMetadata->virtualPath) + ":" + prefabMetadata->type);
+    kb::tests::Require(prefabMetadata->id.value == expectedPrefabId.value, "Registry prefab id did not follow the path-and-type scheme");
+    const kb::assets::AssetId expectedMeshId = kb::assets::MakeAssetId(
+        kb::assets::NormalizeAssetPath(meshMetadata->virtualPath) + ":" + meshMetadata->type);
+    kb::tests::Require(meshMetadata->id.value == expectedMeshId.value, "Registry mesh id did not follow the path-and-type scheme");
+
+    const std::span<const kb::assets::AssetId> dependencies{ sceneMetadata->dependencies };
+    kb::tests::Require(dependencies.size() == 3U, "Scene dependency discovery did not report exactly the mesh, material and nested prefab");
+    kb::tests::Require(ContainsAssetId(dependencies, meshId), "Scene dependency discovery did not report the mesh asset");
+    kb::tests::Require(ContainsAssetId(dependencies, materialId), "Scene dependency discovery did not report the material asset");
+    kb::tests::Require(ContainsAssetId(dependencies, expectedPrefabId), "Scene dependency discovery did not report the nested prefab under its registry id");
+    kb::tests::Require(!ContainsAssetId(dependencies, kb::assets::MakeAssetId(nestedPrefabGuid)),
+        "Scene dependency discovery still reports the nested prefab under its guid-derived id");
+    for (const kb::assets::AssetId dependency : dependencies) {
+        kb::tests::Require(registry.Find(dependency) != nullptr, "Scene dependency discovery reported an id the registry cannot resolve");
+    }
+}
+
+// A scene file whose sidecar is absent must not break discovery and must not be
+// credited with dependencies it cannot prove.
+//
+// Turns red if: DiscoverDependencies dereferences or trusts an unread sidecar (the
+// process dies, or the scene stops being registered); or if it invents dependencies
+// from anywhere but the sidecar (the empty-list check fails).
+void RunSceneAssetDependencyWithoutSidecarTest() {
+    ResetTestRoot();
+
+    const std::filesystem::path projectRoot = TestRoot() / "SidecarlessSceneProject";
+    const std::filesystem::path scenePath = projectRoot / "Assets" / "Scenes" / "Sidecarless.21kbscene";
+
+    kb::scene::SceneDocument document;
+    document.name = "Sidecarless";
+    document.guid = "scene:Sidecarless";
+    static_cast<void>(document.worldPrefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .stableId = 1U,
+        .name = "Mesh Node",
+        .components = kb::scene::ScenePrefabNodeComponents{
+            .meshRenderer = kb::scene::MeshRendererComponent{
+                .meshAssetId = 0x1234U,
+                .materialAssetId = 0x5678U,
+            },
+        },
+    }));
+
+    std::error_code sceneDirectoryError;
+    std::filesystem::create_directories(scenePath.parent_path(), sceneDirectoryError);
+    kb::tests::Require(!sceneDirectoryError, "Sidecarless scene directory could not be created");
+    kb::tests::Require(kb::scene::SceneDocumentService::Save(document, scenePath), "Sidecarless scene asset save failed");
+
+    std::error_code metaRemoveError;
+    kb::tests::Require(std::filesystem::remove(kb::scene::SceneAssetMetaPath(scenePath), metaRemoveError) && !metaRemoveError,
+        "Sidecarless scene test could not remove the .meta sidecar");
+
+    kb::scene::Scene runtime;
+    kb::tests::Require(runtime.Assets().MountProject(projectRoot), "Sidecarless scene project mount failed");
+    kb::tests::Require(runtime.Assets().Discover() == 1U, "Sidecarless scene discovery did not find the scene file");
+
+    const kb::assets::AssetMetadata* sceneMetadata =
+        runtime.Assets().Manager().Registry().FindByPath("/Game/Scenes/Sidecarless.21kbscene");
+    kb::tests::Require(sceneMetadata != nullptr && sceneMetadata->type == "Scene", "Sidecarless scene asset was not registered by discovery");
+    kb::tests::Require(sceneMetadata->dependencies.empty(), "Sidecarless scene asset reported dependencies without a sidecar");
+}
+
+
+[[nodiscard]] std::string ReadTextFileContents(const std::filesystem::path& path) {
+    std::ifstream input{ path, std::ios::binary };
+    kb::tests::Require(input.is_open(), "Asset runtime test file could not be read");
+    return std::string{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+}
+
+void ReplaceAllOccurrences(std::string& text, std::string_view from, std::string_view to) {
+    std::size_t position = text.find(from);
+    while (position != std::string::npos) {
+        text.replace(position, from.size(), to);
+        position = text.find(from, position + to.size());
+    }
+}
+
+[[nodiscard]] kb::assets::AssetId RegistryIdFor(std::string_view virtualPath, std::string_view type) {
+    return kb::assets::MakeAssetId(kb::assets::NormalizeAssetPath(std::string{ virtualPath }) + ":" + std::string{ type });
+}
+
+// Copying a .kbprefab copies its guid, so two prefab FILES can declare the same
+// guid with different contents. Discovery resolves the scene's nested-prefab
+// reference by "lowest registry id wins" (SceneAssetLoader.cpp
+// BuildNestedPrefabGuidIndex); the prefab runtime resolves the very same guid by
+// "first loaded owns the guid" (ScenePrefabRegistrationService::RegisterLoaded -
+// a second file with the same guid and different content is re-registered under a
+// freshly generated guid). The two rules are unrelated, so the file the dependency
+// graph names and the file the runtime instantiates can be different files, and
+// nothing anywhere reports the collision.
+//
+// Turns red if: the two rules disagree for a given pair of colliding files - which
+// is exactly the state that makes a cooked build ship one prefab and run another.
+void RunSceneAssetNestedPrefabGuidCollisionTest() {
+    ResetTestRoot();
+    const std::filesystem::path projectRoot = TestRoot() / "GuidCollisionProject";
+    const std::filesystem::path assetsRoot = projectRoot / "Assets";
+
+    kb::scene::Scene authoring;
+    kb::tests::Require(authoring.Assets().MountProject(projectRoot), "Guid collision project mount failed");
+    const kb::scene::SceneObject root = authoring.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Alpha Root" });
+    const kb::scene::ScenePrefabHandle handle = authoring.Prefabs().CaptureRegistered(root, "AlphaPrefab");
+    kb::tests::Require(handle.IsValid(), "Guid collision prefab registration failed");
+    const std::filesystem::path alphaPath = assetsRoot / "Prefabs" / "Alpha.kbprefab";
+    kb::tests::Require(authoring.Prefabs().Save(handle, alphaPath), "Guid collision prefab save failed");
+    const std::string guid = authoring.Prefabs().Guid(handle);
+    kb::tests::Require(!guid.empty(), "Guid collision prefab was saved without a guid");
+
+    // The copy keeps the guid and changes the content - a copied-then-edited prefab.
+    std::string betaText = ReadTextFileContents(alphaPath);
+    ReplaceAllOccurrences(betaText, "AlphaPrefab", "BetaPrefab");
+    ReplaceAllOccurrences(betaText, "Alpha Root", "Beta Root");
+    const std::filesystem::path betaPath = assetsRoot / "Prefabs" / "Beta.kbprefab";
+    WriteTextFile(betaPath, betaText);
+
+    kb::scene::SceneDocument document;
+    document.name = "CollisionScene";
+    document.guid = "scene:CollisionScene";
+    static_cast<void>(document.worldPrefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .stableId = 1U,
+        .name = "Nested Prefab Node",
+        .nestedPrefabGuid = guid,
+    }));
+    const std::filesystem::path scenePath = assetsRoot / "Scenes" / "CollisionScene.21kbscene";
+    kb::tests::Require(kb::scene::SceneDocumentService::Save(document, scenePath), "Guid collision scene save failed");
+
+    kb::scene::Scene runtime;
+    kb::tests::Require(runtime.Assets().MountProject(projectRoot), "Guid collision runtime mount failed");
+    static_cast<void>(runtime.Assets().Discover());
+    const kb::assets::AssetMetadata* sceneMetadata =
+        runtime.Assets().Manager().Registry().FindByPath("/Game/Scenes/CollisionScene.21kbscene");
+    kb::tests::Require(sceneMetadata != nullptr, "Guid collision scene asset was not registered");
+
+    const kb::assets::AssetId betaId = RegistryIdFor("/Game/Prefabs/Beta.kbprefab", "ScenePrefab");
+    const bool dependencyNamesBeta = sceneMetadata->dependencies.size() == 1U &&
+        sceneMetadata->dependencies[0].value == betaId.value;
+
+    // Load Beta first: the prefab runtime binds the scene node's guid to Beta.
+    kb::scene::Scene betaFirst;
+    kb::tests::Require(betaFirst.Assets().MountProject(projectRoot), "Guid collision runtime-order mount failed");
+    const kb::scene::ScenePrefabHandle betaHandle = betaFirst.Prefabs().Load(betaPath);
+    const kb::scene::ScenePrefabHandle alphaHandle = betaFirst.Prefabs().Load(alphaPath);
+    kb::tests::Require(betaHandle.IsValid() && alphaHandle.IsValid(), "Guid collision prefab load failed");
+    const kb::scene::ScenePrefab bound = betaFirst.Prefabs().Get(betaHandle);
+    const bool runtimeResolvesToBeta = betaFirst.Prefabs().Guid(betaHandle) == guid &&
+        !bound.Nodes().empty() && bound.Nodes()[0].name == "Beta Root";
+
+    kb::tests::Require(dependencyNamesBeta == runtimeResolvesToBeta,
+        "Colliding prefab guids: the prefab the dependency graph names is not the prefab the runtime resolves that guid to");
+}
+
+// A scene node can reference assets through components the sidecar's dependency
+// collector never reads (SceneAssetWriter.cpp CollectDependencies covers only
+// audioMixer, meshRenderer mesh/material/materialSlot, nestedPrefab, audioClip,
+// behaviour and particleEffect). Everything else - GeometrySwarm's mesh and
+// material, SkeletonBinding's skeleton, DrawD3DeformedGeometry's skeletal mesh and
+// material slots, WorldBackdrop's environment, ContentInstance's asset, Animator's
+// controller - leaves no entry at all, so the scene is cooked without them.
+//
+// Turns red if a scene that renders a GeometrySwarm reports no dependency on the
+// mesh and material that swarm draws.
+void RunSceneAssetDependencyCoversEveryComponentTest() {
+    ResetTestRoot();
+    const std::filesystem::path projectRoot = TestRoot() / "ComponentRolesProject";
+    const std::filesystem::path assetsRoot = projectRoot / "Assets";
+    const std::filesystem::path sourceRoot = TestRoot() / "ComponentRolesSources";
+    WriteTextFile(sourceRoot / "Swarm.obj", "o Swarm\nv 0.0 0.0 0.0\n");
+    WriteTextFile(sourceRoot / "SwarmMat.mtl", "newmtl SwarmMat\n");
+
+    kb::scene::Scene authoring;
+    kb::tests::Require(authoring.Assets().MountProject(projectRoot), "Component roles project mount failed");
+    const std::array<std::filesystem::path, 2> sources{ sourceRoot / "Swarm.obj", sourceRoot / "SwarmMat.mtl" };
+    const kb::assets::AssetImportResult imported =
+        kb::assets::AssetImportService::ImportFiles(authoring.Assets().Manager(), sources, "/Game/Imported");
+    kb::tests::Require(imported.Succeeded() && imported.CreatedCount() == 2U, "Component roles source assets were not imported");
+    const kb::assets::AssetId swarmMeshId = imported.items[0].id;
+    const kb::assets::AssetId swarmMaterialId = imported.items[1].id;
+
+    kb::scene::ScenePrefabNodeComponents components{};
+    kb::scene::GeometrySwarmComponent swarm{};
+    swarm.meshAssetId = swarmMeshId.value;
+    swarm.materialAssetId = swarmMaterialId.value;
+    swarm.enabled = true;
+    components.geometrySwarm = swarm;
+
+    kb::scene::SceneDocument document;
+    document.name = "ComponentRolesScene";
+    document.guid = "scene:ComponentRolesScene";
+    static_cast<void>(document.worldPrefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .stableId = 1U,
+        .name = "Swarm Node",
+        .components = components,
+    }));
+    const std::filesystem::path scenePath = assetsRoot / "Scenes" / "ComponentRolesScene.21kbscene";
+    kb::tests::Require(kb::scene::SceneDocumentService::Save(document, scenePath), "Component roles scene save failed");
+
+    kb::scene::Scene runtime;
+    kb::tests::Require(runtime.Assets().MountProject(projectRoot), "Component roles runtime mount failed");
+    static_cast<void>(runtime.Assets().Discover());
+    const kb::assets::AssetMetadata* sceneMetadata =
+        runtime.Assets().Manager().Registry().FindByPath("/Game/Scenes/ComponentRolesScene.21kbscene");
+    kb::tests::Require(sceneMetadata != nullptr, "Component roles scene asset was not registered");
+    kb::tests::Require(ContainsAssetId(sceneMetadata->dependencies, swarmMeshId),
+        "A scene node's GeometrySwarm mesh never reaches the dependency graph");
+    kb::tests::Require(ContainsAssetId(sceneMetadata->dependencies, swarmMaterialId),
+        "A scene node's GeometrySwarm material never reaches the dependency graph");
+}
+
+// The scene now names its nested prefab, but a graph is only useful if it
+// continues: ScenePrefabAssetLoader declares no DiscoverDependencies at all, so a
+// prefab's own mesh and material are not edges and a cook that follows the graph
+// from a scene still stops one hop short of the art.
+//
+// Turns red while a registered prefab asset reports an empty dependency list
+// although the prefab file references a registered mesh.
+void RunScenePrefabAssetDependencyDiscoveryTest() {
+    ResetTestRoot();
+    const std::filesystem::path projectRoot = TestRoot() / "PrefabEdgeProject";
+    const std::filesystem::path assetsRoot = projectRoot / "Assets";
+    const std::filesystem::path sourceRoot = TestRoot() / "PrefabEdgeSources";
+    WriteTextFile(sourceRoot / "Block.obj", "o Block\nv 0.0 0.0 0.0\n");
+
+    kb::scene::Scene authoring;
+    kb::tests::Require(authoring.Assets().MountProject(projectRoot), "Prefab edge project mount failed");
+    const std::array<std::filesystem::path, 1> sources{ sourceRoot / "Block.obj" };
+    const kb::assets::AssetImportResult imported =
+        kb::assets::AssetImportService::ImportFiles(authoring.Assets().Manager(), sources, "/Game/Imported");
+    kb::tests::Require(imported.Succeeded() && imported.CreatedCount() == 1U, "Prefab edge mesh was not imported");
+    const kb::assets::AssetId meshId = imported.items[0].id;
+
+    const kb::scene::SceneObject prefabRoot =
+        authoring.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Art Root" });
+    kb::scene::MeshRendererComponent meshRenderer{};
+    meshRenderer.meshAssetId = meshId.value;
+    authoring.Components().MeshRenderers().Set(prefabRoot.Entity(), meshRenderer);
+    const kb::scene::ScenePrefabHandle handle = authoring.Prefabs().CaptureRegistered(prefabRoot, "ArtPrefab");
+    kb::tests::Require(handle.IsValid(), "Prefab edge prefab registration failed");
+    kb::tests::Require(authoring.Prefabs().Save(handle, assetsRoot / "Prefabs" / "Art.kbprefab"),
+        "Prefab edge prefab save failed");
+
+    kb::scene::Scene runtime;
+    kb::tests::Require(runtime.Assets().MountProject(projectRoot), "Prefab edge runtime mount failed");
+    static_cast<void>(runtime.Assets().Discover());
+    const kb::assets::AssetMetadata* prefabMetadata =
+        runtime.Assets().Manager().Registry().FindByPath("/Game/Prefabs/Art.kbprefab");
+    kb::tests::Require(prefabMetadata != nullptr, "Prefab edge prefab asset was not registered");
+    kb::tests::Require(ContainsAssetId(prefabMetadata->dependencies, meshId),
+        "A prefab asset does not report the mesh it renders - the dependency graph stops at the prefab");
+}
+
+// A sidecar that is empty, truncated, wrongly magicked or filled with noise must
+// not take discovery down with it and must not conjure dependencies.
+//
+// Turns red if a damaged sidecar crashes discovery, costs the scene its
+// registration, or yields dependency entries.
+void RunSceneAssetDependencyDamagedSidecarTest() {
+    const std::array<std::string, 5> payloads{
+        std::string{},
+        std::string{ "garbage-not-a-meta-file" },
+        std::string{ "21KBMETA" },
+        std::string(4096U, '\xAB'),
+        std::string{ "\x00\x01\x02\x03", 4U },
+    };
+    for (const std::string& payload : payloads) {
+        ResetTestRoot();
+        const std::filesystem::path projectRoot = TestRoot() / "DamagedSidecarProject";
+        const std::filesystem::path scenePath = projectRoot / "Assets" / "Scenes" / "Damaged.21kbscene";
+
+        kb::scene::SceneDocument document;
+        document.name = "Damaged";
+        document.guid = "scene:Damaged";
+        static_cast<void>(document.worldPrefab.AddNode(kb::scene::ScenePrefabNodeDesc{ .stableId = 1U, .name = "Node" }));
+        kb::tests::Require(kb::scene::SceneDocumentService::Save(document, scenePath), "Damaged sidecar scene save failed");
+        WriteTextFile(kb::scene::SceneAssetMetaPath(scenePath), payload);
+
+        kb::scene::Scene runtime;
+        kb::tests::Require(runtime.Assets().MountProject(projectRoot), "Damaged sidecar project mount failed");
+        static_cast<void>(runtime.Assets().Discover());
+        const kb::assets::AssetMetadata* sceneMetadata =
+            runtime.Assets().Manager().Registry().FindByPath("/Game/Scenes/Damaged.21kbscene");
+        kb::tests::Require(sceneMetadata != nullptr, "A damaged sidecar cost the scene its registration");
+        kb::tests::Require(sceneMetadata->dependencies.empty(), "A damaged sidecar produced dependency entries");
+    }
+}
+
+// Discovery registers every asset before it refreshes any dependency list
+// (AssetDiscoveryService.cpp: the dependency pass runs over registry.All() after
+// the scan loop), so a scene scanned before its prefab must still get the edge.
+//
+// Turns red if dependency discovery is ever moved into the scan loop, where a
+// scene would resolve its nested-prefab guid against a half-filled registry and
+// silently drop the reference.
+void RunSceneAssetDependencyIgnoresScanOrderTest() {
+    ResetTestRoot();
+    const std::filesystem::path projectRoot = TestRoot() / "ScanOrderProject";
+    const std::filesystem::path assetsRoot = projectRoot / "Assets";
+
+    kb::scene::Scene authoring;
+    kb::tests::Require(authoring.Assets().MountProject(projectRoot), "Scan order project mount failed");
+    const kb::scene::SceneObject root = authoring.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Late Root" });
+    const kb::scene::ScenePrefabHandle handle = authoring.Prefabs().CaptureRegistered(root, "LatePrefab");
+    kb::tests::Require(handle.IsValid(), "Scan order prefab registration failed");
+    // "ZZZ" sorts after "AAA", so the directory walk reaches the scene first.
+    kb::tests::Require(authoring.Prefabs().Save(handle, assetsRoot / "ZZZ" / "Late.kbprefab"), "Scan order prefab save failed");
+    const std::string guid = authoring.Prefabs().Guid(handle);
+
+    kb::scene::SceneDocument document;
+    document.name = "ScanOrderScene";
+    document.guid = "scene:ScanOrderScene";
+    static_cast<void>(document.worldPrefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .stableId = 1U,
+        .name = "Nested Prefab Node",
+        .nestedPrefabGuid = guid,
+    }));
+    kb::tests::Require(kb::scene::SceneDocumentService::Save(document, assetsRoot / "AAA" / "ScanOrder.21kbscene"),
+        "Scan order scene save failed");
+
+    kb::scene::Scene runtime;
+    kb::tests::Require(runtime.Assets().MountProject(projectRoot), "Scan order runtime mount failed");
+    static_cast<void>(runtime.Assets().Discover());
+    const kb::assets::AssetRegistry& registry = runtime.Assets().Manager().Registry();
+    const kb::assets::AssetMetadata* sceneMetadata = registry.FindByPath("/Game/AAA/ScanOrder.21kbscene");
+    const kb::assets::AssetMetadata* prefabMetadata = registry.FindByPath("/Game/ZZZ/Late.kbprefab");
+    kb::tests::Require(sceneMetadata != nullptr && prefabMetadata != nullptr, "Scan order assets were not registered");
+    kb::tests::Require(ContainsAssetId(sceneMetadata->dependencies, prefabMetadata->id),
+        "A scene scanned before its nested prefab lost the dependency edge");
+}
+
+// The rule a contested prefab guid resolves by, pinned from both ends.
+//
+// A guid names an identity, so exactly one file may declare it: while that holds,
+// a scene's nested-prefab reference resolves to that one prefab asset. Once a
+// second file declares the same guid the reference resolves to NOTHING - in the
+// dependency graph and in the prefab runtime alike - and the collision is
+// reported by name instead of a file being chosen.
+//
+// Turns red if "resolves to nothing" is ever traded back for a rule that picks a
+// winner: any such rule (lowest registry id, highest, first scanned, first
+// loaded) makes the contested scene report an edge again, and any rule that
+// depends on load order makes the two runtime orders below disagree. It also
+// turns red if a UNIQUE guid stops resolving, so the fix cannot degenerate into
+// "nested prefabs are never edges".
+void RunSceneAssetNestedPrefabGuidRuleTest() {
+    ResetTestRoot();
+    const std::filesystem::path projectRoot = TestRoot() / "GuidRuleProject";
+    const std::filesystem::path assetsRoot = projectRoot / "Assets";
+    const std::filesystem::path alphaPath = assetsRoot / "Prefabs" / "Alpha.kbprefab";
+    const std::filesystem::path betaPath = assetsRoot / "Prefabs" / "Beta.kbprefab";
+
+    kb::scene::Scene authoring;
+    kb::tests::Require(authoring.Assets().MountProject(projectRoot), "Guid rule project mount failed");
+    const kb::scene::SceneObject root = authoring.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Alpha Root" });
+    const kb::scene::ScenePrefabHandle handle = authoring.Prefabs().CaptureRegistered(root, "AlphaPrefab");
+    kb::tests::Require(handle.IsValid(), "Guid rule prefab registration failed");
+    kb::tests::Require(authoring.Prefabs().Save(handle, alphaPath), "Guid rule prefab save failed");
+    const std::string guid = authoring.Prefabs().Guid(handle);
+    kb::tests::Require(!guid.empty(), "Guid rule prefab was saved without a guid");
+
+    kb::scene::SceneDocument document;
+    document.name = "GuidRuleScene";
+    document.guid = "scene:GuidRuleScene";
+    static_cast<void>(document.worldPrefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .stableId = 1U,
+        .name = "Nested Prefab Node",
+        .nestedPrefabGuid = guid,
+    }));
+    const std::filesystem::path scenePath = assetsRoot / "Scenes" / "GuidRuleScene.21kbscene";
+    kb::tests::Require(kb::scene::SceneDocumentService::Save(document, scenePath), "Guid rule scene save failed");
+
+    const kb::assets::AssetId alphaId = RegistryIdFor("/Game/Prefabs/Alpha.kbprefab", "ScenePrefab");
+    const kb::assets::AssetId betaId = RegistryIdFor("/Game/Prefabs/Beta.kbprefab", "ScenePrefab");
+
+    // One file declares the guid: the reference resolves, and to that file.
+    kb::scene::Scene unique;
+    kb::tests::Require(unique.Assets().MountProject(projectRoot), "Guid rule unique-claim mount failed");
+    static_cast<void>(unique.Assets().Discover());
+    const kb::assets::AssetMetadata* uniqueScene =
+        unique.Assets().Manager().Registry().FindByPath("/Game/Scenes/GuidRuleScene.21kbscene");
+    kb::tests::Require(uniqueScene != nullptr, "Guid rule scene was not registered");
+    kb::tests::Require(uniqueScene->dependencies.size() == 1U && uniqueScene->dependencies[0].value == alphaId.value,
+        "A prefab guid declared by exactly one asset must resolve to that asset");
+    kb::tests::Require(unique.Assets().Manager().ValidateCompatibility(uniqueScene->id).compatible,
+        "A scene nesting an unambiguously identified prefab must validate");
+
+    // The copy keeps the guid and changes the content - a copied-then-edited prefab.
+    std::string betaText = ReadTextFileContents(alphaPath);
+    ReplaceAllOccurrences(betaText, "AlphaPrefab", "BetaPrefab");
+    ReplaceAllOccurrences(betaText, "Alpha Root", "Beta Root");
+    WriteTextFile(betaPath, betaText);
+
+    kb::scene::Scene contested;
+    kb::tests::Require(contested.Assets().MountProject(projectRoot), "Guid rule contested-claim mount failed");
+    static_cast<void>(contested.Assets().Discover());
+    const kb::assets::AssetMetadata* contestedScene =
+        contested.Assets().Manager().Registry().FindByPath("/Game/Scenes/GuidRuleScene.21kbscene");
+    kb::tests::Require(contestedScene != nullptr, "Guid rule scene lost its registration to the collision");
+    kb::tests::Require(contestedScene->dependencies.empty(),
+        "A prefab guid two files declare must name neither of them in the dependency graph");
+    kb::tests::Require(!ContainsAssetId(contestedScene->dependencies, alphaId) &&
+            !ContainsAssetId(contestedScene->dependencies, betaId),
+        "A contested prefab guid still picked a winner in the dependency graph");
+
+    // ...and the collision is reported, naming both files rather than staying silent.
+    const kb::assets::AssetCompatibilityReport report =
+        contested.Assets().Manager().ValidateCompatibility(contestedScene->id);
+    const std::string diagnostics = report.FormatDiagnostics();
+    kb::tests::Require(!report.compatible, "A contested prefab guid was not reported at all");
+    kb::tests::Require(diagnostics.find("/Game/Prefabs/Alpha.kbprefab") != std::string::npos &&
+            diagnostics.find("/Game/Prefabs/Beta.kbprefab") != std::string::npos,
+        "The prefab guid collision diagnostic does not name both colliding files");
+
+    // The prefab runtime resolves the contested guid the same way - to nothing -
+    // and does so whichever file is loaded first.
+    for (const bool loadBetaFirst : { false, true }) {
+        kb::scene::Scene runtime;
+        kb::tests::Require(runtime.Assets().MountProject(projectRoot), "Guid rule runtime mount failed");
+        const kb::scene::ScenePrefabHandle first = runtime.Prefabs().Load(loadBetaFirst ? betaPath : alphaPath);
+        const kb::scene::ScenePrefabHandle second = runtime.Prefabs().Load(loadBetaFirst ? alphaPath : betaPath);
+        kb::tests::Require(first.IsValid() && second.IsValid(),
+            "A prefab guid collision must not cost either file its prefab record");
+        kb::tests::Require(runtime.Prefabs().Guid(first) != guid && runtime.Prefabs().Guid(second) != guid,
+            "A contested prefab guid still names a prefab at runtime, so load order decides which one");
+    }
+
+    // Deleting the duplicate returns the identity to its owner: the rule is a
+    // refusal to guess, not a permanent loss of the edge.
+    std::error_code removeError;
+    kb::tests::Require(std::filesystem::remove(betaPath, removeError) && !removeError,
+        "Guid rule test could not remove the duplicate prefab");
+    kb::scene::Scene repaired;
+    kb::tests::Require(repaired.Assets().MountProject(projectRoot), "Guid rule repaired mount failed");
+    static_cast<void>(repaired.Assets().Discover());
+    const kb::assets::AssetMetadata* repairedScene =
+        repaired.Assets().Manager().Registry().FindByPath("/Game/Scenes/GuidRuleScene.21kbscene");
+    kb::tests::Require(repairedScene != nullptr &&
+            repairedScene->dependencies.size() == 1U &&
+            repairedScene->dependencies[0].value == alphaId.value,
+        "Removing the duplicate prefab did not restore the nested-prefab edge");
+    static_cast<void>(betaId);
+}
+
+// Discovery must cost the same order of work whether or not the scenes nest
+// prefabs. Resolving a nested-prefab guid needs an index over every prefab
+// asset's guid; building that index per SCENE makes a discovery pass
+// O(scenes x prefabs) file opens, which is invisible on a toy project and turns
+// a re-discovery cycle on a real one into tens of seconds.
+//
+// The threshold is a RATIO against an identical project whose scenes nest
+// nothing, not a wall-clock budget, so it does not depend on the machine. The
+// per-scene index rebuild measured 10x on a 200x200 project and grew with
+// project size; building it once per pass measures at parity, so 4x separates
+// the two with room to spare on a loaded machine.
+void RunSceneAssetDiscoveryStaysLinearInNestedPrefabsTest() {
+    ResetTestRoot();
+    constexpr std::size_t kPrefabCount = 150U;
+    constexpr std::size_t kSceneCount = 150U;
+    constexpr double kMaximumNestedOverheadRatio = 3.0;
+
+    // Both projects hold the SAME number of prefab and scene files, so the cost of
+    // scanning, hashing and parsing them cancels in the ratio and what is left is
+    // exactly the price of resolving the nested-prefab references.
+    const auto buildProject = [](const std::filesystem::path& projectRoot, bool nested) {
+        const std::filesystem::path assetsRoot = projectRoot / "Assets";
+        kb::scene::Scene authoring;
+        kb::tests::Require(authoring.Assets().MountProject(projectRoot), "Discovery scaling project mount failed");
+
+        std::vector<std::string> guids;
+        guids.reserve(kPrefabCount);
+        for (std::size_t index = 0U; index < kPrefabCount; ++index) {
+            const std::string suffix = std::to_string(index);
+            const kb::scene::SceneObject prefabRoot =
+                authoring.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Prefab Root " + suffix });
+            const kb::scene::ScenePrefabHandle prefabHandle =
+                authoring.Prefabs().CaptureRegistered(prefabRoot, "Prefab" + suffix);
+            kb::tests::Require(prefabHandle.IsValid(), "Discovery scaling prefab registration failed");
+            kb::tests::Require(
+                authoring.Prefabs().Save(prefabHandle, assetsRoot / "Prefabs" / ("Prefab" + suffix + ".kbprefab")),
+                "Discovery scaling prefab save failed");
+            guids.push_back(authoring.Prefabs().Guid(prefabHandle));
+            kb::tests::Require(!guids.back().empty(), "Discovery scaling prefab was saved without a guid");
+        }
+
+        for (std::size_t index = 0U; index < kSceneCount; ++index) {
+            const std::string suffix = std::to_string(index);
+            kb::scene::SceneDocument document;
+            document.name = "Scene" + suffix;
+            document.guid = "scene:Scene" + suffix;
+            kb::scene::ScenePrefabNodeDesc node{ .stableId = 1U, .name = "Node " + suffix };
+            if (nested) {
+                node.nestedPrefabGuid = guids[index % kPrefabCount];
+            }
+            static_cast<void>(document.worldPrefab.AddNode(node));
+            kb::tests::Require(
+                kb::scene::SceneDocumentService::Save(document, assetsRoot / "Scenes" / ("Scene" + suffix + ".21kbscene")),
+                "Discovery scaling scene save failed");
+        }
+    };
+
+    // The first pass warms the file cache and fills the registry; the second is the
+    // steady-state re-discovery cycle the runtime actually repeats.
+    const auto measureRediscovery = [](kb::scene::Scene& runtime, const std::filesystem::path& projectRoot) {
+        kb::tests::Require(runtime.Assets().MountProject(projectRoot), "Discovery scaling runtime mount failed");
+        kb::tests::Require(runtime.Assets().Discover() == kPrefabCount + kSceneCount,
+            "Discovery scaling project did not register every prefab and scene");
+        const std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+        static_cast<void>(runtime.Assets().Discover());
+        return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    };
+
+    const std::filesystem::path flatRoot = TestRoot() / "DiscoveryScalingFlat";
+    const std::filesystem::path nestedRoot = TestRoot() / "DiscoveryScalingNested";
+    buildProject(flatRoot, false);
+    buildProject(nestedRoot, true);
+
+    kb::scene::Scene flatRuntime;
+    kb::scene::Scene nestedRuntime;
+    const double flatMilliseconds = measureRediscovery(flatRuntime, flatRoot);
+    const double nestedMilliseconds = measureRediscovery(nestedRuntime, nestedRoot);
+
+    // A pass that resolved nothing would make the ratio meaningless, so prove the
+    // edges are actually there before trusting the timing.
+    const kb::assets::AssetRegistry& nestedRegistry = nestedRuntime.Assets().Manager().Registry();
+    for (const std::size_t index : { std::size_t{ 0U }, kSceneCount / 2U, kSceneCount - 1U }) {
+        const std::string suffix = std::to_string(index);
+        const kb::assets::AssetMetadata* scene =
+            nestedRegistry.FindByPath("/Game/Scenes/Scene" + suffix + ".21kbscene");
+        const kb::assets::AssetMetadata* prefab =
+            nestedRegistry.FindByPath("/Game/Prefabs/Prefab" + std::to_string(index % kPrefabCount) + ".kbprefab");
+        kb::tests::Require(scene != nullptr && prefab != nullptr, "Discovery scaling assets were not registered");
+        kb::tests::Require(scene->dependencies.size() == 1U && scene->dependencies[0].value == prefab->id.value,
+            "Discovery scaling scene did not resolve its nested prefab, so the timing proves nothing");
+    }
+
+    const double ratio = nestedMilliseconds / (flatMilliseconds > 0.001 ? flatMilliseconds : 0.001);
+    const std::string overspend = "Nesting a prefab in every scene made discovery cost " + std::to_string(ratio) +
+        "x a nesting-free project of the same size (" + std::to_string(nestedMilliseconds) + " ms vs " +
+        std::to_string(flatMilliseconds) + " ms): the prefab guid index is being rebuilt per scene again";
+    kb::tests::Require(ratio <= kMaximumNestedOverheadRatio, overspend.c_str());
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -1117,6 +1765,15 @@ void RunAssetRuntimeTests() {
     RunAssetImportServiceBinaryContainerTest();
     RunAssetImportServiceReportsCreatedReusedMissingAndUnsupportedTest();
     RunScenePrefabRuntimeAssetTest();
+    RunSceneAssetDependencyDiscoveryTest();
+    RunSceneAssetDependencyWithoutSidecarTest();
+    RunSceneAssetDependencyDamagedSidecarTest();
+    RunSceneAssetDependencyIgnoresScanOrderTest();
+    RunSceneAssetNestedPrefabGuidCollisionTest();
+    RunSceneAssetDependencyCoversEveryComponentTest();
+    RunScenePrefabAssetDependencyDiscoveryTest();
+    RunSceneAssetNestedPrefabGuidRuleTest();
+    RunSceneAssetDiscoveryStaysLinearInNestedPrefabsTest();
     RunSceneAudioClipAssetDiscoveryTest();
     RunAudioClipFormatCatalogTest();
     RunScriptAssetPipelineTest();
