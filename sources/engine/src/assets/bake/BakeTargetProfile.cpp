@@ -85,4 +85,28 @@ bool TryFindBakeTargetProfile(std::string_view identifier, BakeTargetProfile& ou
     return false;
 }
 
+
+std::uint64_t BakeTargetProfileFingerprint(const BakeTargetProfile& profile) noexcept {
+    // FNV-1a over an explicit little-endian stream, the same shape AssetBakeKey
+    // hashes with, so the two agree about what "the same input" means. Fields
+    // are fixed-width and written in declaration order; the identifier is left
+    // out because the key already carries it in full.
+    std::uint64_t hash = 14695981039346656037ULL;
+    const auto absorb = [&hash](std::uint64_t value, std::uint32_t byteCount) noexcept {
+        for (std::uint32_t shift = 0U; shift < byteCount * 8U; shift += 8U) {
+            hash = (hash ^ static_cast<std::uint8_t>((value >> shift) & 0xFFU)) * 1099511628211ULL;
+        }
+    };
+    absorb(profile.textureCompressions, 4U);
+    absorb(profile.shaderBackends, 4U);
+    absorb(static_cast<std::uint64_t>(profile.indexWidth), 1U);
+    absorb(profile.allowsThreeComponent16BitAttributes ? 1U : 0U, 1U);
+    absorb(profile.packageBlockAlignmentBytes, 4U);
+    absorb(profile.mappedBlockAlignmentBytes, 4U);
+    absorb(profile.maxGeometryChunkBytes, 8U);
+    // A profile whose fields happened to hash to zero would be indistinguishable
+    // from a key that never asked for a fingerprint, which IsValid() rejects.
+    return hash == 0U ? 1U : hash;
+}
+
 } // namespace kb::assets::bake

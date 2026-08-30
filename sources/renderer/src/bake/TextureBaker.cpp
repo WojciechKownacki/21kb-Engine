@@ -239,6 +239,7 @@ AssetBakeKey MakeTextureBakeKey(
     key.bakerId = std::string{ kTextureBakerId };
     key.bakerVersion = std::string{ kTextureBakerVersion };
     key.targetProfileId = std::string{ profile.identifier };
+    key.targetProfileHash = kb::assets::bake::BakeTargetProfileFingerprint(profile);
     key.settingsHash = kb::assets::bake::HashBakeBytes(std::span<const std::uint8_t>{ serialized });
     return key;
 }
