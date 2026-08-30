@@ -13,7 +13,7 @@ namespace {
 // Bumping this moves every key in the store at once. It exists so the canonical
 // encoding below can change (a new field, a different field order) without the
 // new keys ever colliding with the old ones.
-constexpr std::uint8_t kAssetBakeKeyEncodingVersion = 1U;
+constexpr std::uint8_t kAssetBakeKeyEncodingVersion = 2U;
 
 constexpr std::uint64_t kFnvOffsetBasis = 14695981039346656037ULL;
 constexpr std::uint64_t kFnvPrime = 1099511628211ULL;
@@ -129,7 +129,8 @@ bool IsValidBakeCacheName(std::string_view name) noexcept {
 
 bool AssetBakeKey::IsValid() const noexcept {
     return IsValidBakeCacheName(bakerId) && !bakerVersion.empty() &&
-        bakerVersion.size() <= kMaxBakeCacheNameBytes && IsValidBakeCacheName(targetProfileId);
+        bakerVersion.size() <= kMaxBakeCacheNameBytes && IsValidBakeCacheName(targetProfileId) &&
+        targetProfileHash != 0U;
 }
 
 AssetBakeDigest AssetBakeKey::Digest() const {
@@ -154,6 +155,7 @@ AssetBakeDigest AssetBakeKey::Digest() const {
     kb::scene::SceneAssetBinaryIO::WriteString(stream, bakerId);
     kb::scene::SceneAssetBinaryIO::WriteString(stream, bakerVersion);
     kb::scene::SceneAssetBinaryIO::WriteString(stream, targetProfileId);
+    kb::scene::SceneAssetBinaryIO::WriteUInt64(stream, targetProfileHash);
     kb::scene::SceneAssetBinaryIO::WriteUInt64(stream, settingsHash);
     kb::scene::SceneAssetBinaryIO::WriteUInt32(stream, static_cast<std::uint32_t>(canonicalDependencies.size()));
     for (const AssetBakeDigest& dependency : canonicalDependencies) {
