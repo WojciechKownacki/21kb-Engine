@@ -52,6 +52,7 @@
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
 #include "kb/render/runtime/RuntimeMaterialParameterValidation.hpp"
 #include "kb/render/scene/SceneRenderTypes.hpp"
+#include "GameProjectRuntime.hpp"
 #include "StandaloneInputRuntime.hpp"
 
 #include <bgfx/bgfx.h>
@@ -73,6 +74,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <memory>
 #include <optional>
 #include <span>
@@ -228,19 +230,7 @@ struct StandaloneOptions {
 }
 
 [[nodiscard]] std::filesystem::path ExeDirectory() {
-    std::wstring buffer;
-    buffer.resize(MAX_PATH);
-    for (;;) {
-        const DWORD written = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
-        if (written == 0U) {
-            return std::filesystem::current_path();
-        }
-        if (written < buffer.size() - 1U) {
-            buffer.resize(written);
-            return std::filesystem::path{ buffer }.parent_path();
-        }
-        buffer.resize(buffer.size() * 2U);
-    }
+    return kb::game::ExecutableDirectory();
 }
 
 [[nodiscard]] std::optional<std::uint32_t> ParseUInt(std::string_view text) noexcept {
@@ -585,27 +575,7 @@ void WriteLittleEndian32(std::ofstream& output, std::uint32_t value) {
 }
 
 [[nodiscard]] bool RegisterRuntimeAssetLoaders(kb::scene::Scene& scene) {
-    kb::assets::AssetManager& manager = scene.Assets().Manager();
-    if (!manager.RegisterLoader(std::make_unique<kb::render::RenderMeshAssetLoader>())) {
-        std::fprintf(stderr, "kb_standalone_player: mesh loader registration failed\n");
-        return false;
-    }
-    if (!manager.RegisterLoader(std::make_unique<kb::render::RenderMaterialAssetLoader>())) {
-        std::fprintf(stderr, "kb_standalone_player: material loader registration failed\n");
-        return false;
-    }
-    if (!manager.RegisterLoader(std::make_unique<kb::render::RenderTextureAssetLoader>())) {
-        std::fprintf(stderr, "kb_standalone_player: texture loader registration failed\n");
-        return false;
-    }
-    if (!manager.RegisterLoader(
-            std::make_unique<kb::render::PostProcessProfileAssetLoader>())) {
-        std::fprintf(stderr,
-            "kb_standalone_player: post-process profile loader registration failed\n");
-        return false;
-    }
-    kb::render::InstallRuntimeMaterialParameterValidation(scene);
-    return true;
+    return kb::game::RegisterGameAssetLoaders(scene, std::cerr);
 }
 
 [[nodiscard]] bool BuildSceneFromAssets(const StandaloneOptions& options, kb::scene::Scene& scene) {
@@ -681,178 +651,23 @@ void WriteLittleEndian32(std::ofstream& output, std::uint32_t value) {
     return true;
 }
 
-struct StandaloneProjectRuntimeConfig {
-    kb::project::ProjectDescriptor descriptor{};
-    std::filesystem::path projectRoot;
-    std::string sceneReference;
-    std::string physicsLayersAsset;
-    std::string inputMappingContext;
-    bool inputEnabled = true;
-    std::vector<std::string> requiredModules;
-};
+using StandaloneProjectRuntimeConfig = kb::game::GameProjectRuntime;
 
 [[nodiscard]] bool ReadProjectRuntimeConfig(
     const StandaloneOptions& options,
     StandaloneProjectRuntimeConfig& config) {
-    std::error_code pathError;
-    const std::filesystem::path absoluteInput =
-        std::filesystem::absolute(options.projectPath, pathError).lexically_normal();
-    if (pathError) {
-        std::fprintf(stderr,
-            "kb_standalone_player: project path could not be resolved: %s\n",
-            options.projectPath.string().c_str());
-        return false;
-    }
-
-    std::filesystem::path projectFile = absoluteInput;
-    if (std::filesystem::is_directory(absoluteInput, pathError) && !pathError) {
-        projectFile /= "Project.21kbproject";
-    }
-    if (pathError ||
-        !std::filesystem::is_regular_file(projectFile, pathError) ||
-        pathError) {
-        std::fprintf(stderr,
-            "kb_standalone_player: project descriptor was not found: %s\n",
-            projectFile.string().c_str());
-        return false;
-    }
-
-    kb::project::ProjectDescriptorReadResult loaded =
-        kb::project::ProjectManager::LoadProject(projectFile);
-    if (!loaded.succeeded) {
-        std::fprintf(stderr,
-            "kb_standalone_player: project descriptor load failed: %s\n",
-            loaded.error.c_str());
-        return false;
-    }
-
-    const kb::project::ParticleProjectPolicyResult particlePolicy =
-        kb::project::ParticleProjectPolicy::Inspect(projectFile.parent_path(), loaded.descriptor);
-    if (!particlePolicy.IsRunnable()) {
-        std::fprintf(stderr, "kb_standalone_player: %s\n", particlePolicy.diagnostic.c_str());
-        return false;
-    }
-
-    config.projectRoot = projectFile.parent_path();
-    for (kb::project::ProjectPluginReference& plugin : loaded.descriptor.plugins) {
-        if (!plugin.enabled) {
-            continue;
-        }
-        if (!plugin.name.empty()) {
-            config.requiredModules.push_back(plugin.name);
-        }
-        const std::filesystem::path configuredPath{ plugin.binaryPath };
-        if (configuredPath.empty() || configuredPath.is_absolute()) {
-            continue;
-        }
-        const std::filesystem::path projectLocalPath =
-            config.projectRoot / configuredPath;
-        std::error_code pluginError;
-        if (std::filesystem::is_regular_file(projectLocalPath, pluginError) &&
-            !pluginError) {
-            plugin.binaryPath = projectLocalPath.string();
-        }
-    }
-
-    // The game reads the same settings file the editor writes, so shipping a change
-    // means editing one file rather than rebuilding the project descriptor.
-    const kb::project::ProjectSettingsLoadResult settings =
-        kb::project::ProjectSettingsStore::Load(
-            kb::project::ProjectSettingsStore::FilePath(config.projectRoot));
-    if (!settings.Succeeded()) {
-        std::fprintf(stderr, "Project settings could not be read: %s\n", settings.error.c_str());
-        return false;
-    }
-    // A package built before the settings file existed still carries its settings in
-    // the descriptor, so it keeps running rather than starting with no scene.
-    const kb::project::ProjectSettings resolved = settings.found
-        ? settings.settings
-        : kb::project::ProjectSettingsStore::FromLegacy(loaded.legacySettings, projectFile);
-    config.sceneReference =
-        options.scenePath.empty() ? resolved.defaultMap : options.scenePath;
-    config.physicsLayersAsset = resolved.physicsLayersAsset;
-    config.inputMappingContext = resolved.inputMappingContext;
-    config.inputEnabled = resolved.inputEnabled;
-    config.descriptor = std::move(loaded.descriptor);
-    return true;
+    return kb::game::ReadGameProjectRuntime(
+        options.projectPath, options.scenePath, config, std::cerr);
 }
 
 [[nodiscard]] bool LoadProjectScene(
     const StandaloneProjectRuntimeConfig& config,
     kb::scene::Scene& scene) {
-    if (!scene.ModuleDiagnostics().empty()) {
-        for (const std::string& diagnostic : scene.ModuleDiagnostics()) {
-            std::fprintf(stderr,
-                "kb_standalone_player: module diagnostic: %s\n",
-                diagnostic.c_str());
-        }
-        return false;
-    }
-    for (const std::string& module : config.requiredModules) {
-        if (!scene.IsModuleActive(module)) {
-            std::fprintf(stderr,
-                "kb_standalone_player: configured module is not active: %s\n",
-                module.c_str());
-            return false;
-        }
-    }
-    if (!RegisterRuntimeAssetLoaders(scene)) {
-        return false;
-    }
-    if (!scene.Assets().MountProject(config.projectRoot)) {
-        std::fprintf(stderr,
-            "kb_standalone_player: project assets could not be mounted: %s\n",
-            config.projectRoot.string().c_str());
-        return false;
-    }
-    const std::size_t discovered = scene.Assets().Discover();
-    if (!config.physicsLayersAsset.empty() &&
-        !kb::scene::PhysicsBackend::LoadAndConfigureLayers(
-            scene, config.physicsLayersAsset)) {
-        std::fprintf(stderr,
-            "kb_standalone_player: project physics layers could not be applied: %s\n",
-            config.physicsLayersAsset.c_str());
-        return false;
-    }
-
     std::filesystem::path scenePath;
-    if (!config.sceneReference.empty() && config.sceneReference.front() == '/') {
-        const kb::assets::AssetMetadata* metadata =
-            scene.Assets().Manager().Registry().FindByPath(config.sceneReference);
-        if (metadata == nullptr) {
-            std::fprintf(stderr,
-                "kb_standalone_player: project scene asset was not found: %s\n",
-                config.sceneReference.c_str());
-            return false;
-        }
-        scenePath = metadata->physicalPath;
-    } else {
-        scenePath = std::filesystem::path{ config.sceneReference };
-        if (scenePath.is_relative()) {
-            scenePath = config.projectRoot / scenePath;
-        }
-    }
-    if (!kb::scene::SceneDocumentService::LoadFileIntoScene(scene, scenePath)) {
-        std::fprintf(stderr,
-            "kb_standalone_player: project scene could not be loaded: %s\n",
-            scenePath.string().c_str());
+    std::size_t discovered = 0U;
+    if (!kb::game::LoadGameProjectScene(config, scene, scenePath, discovered, std::cerr)) {
         return false;
     }
-
-    kb::scene::SceneInputActivation::Apply(scene);
-    if (config.inputEnabled && !config.inputMappingContext.empty()) {
-        const kb::assets::AssetMetadata* input =
-            scene.Assets().Manager().Registry().FindByPath(config.inputMappingContext);
-        if (input == nullptr ||
-            input->type != "InputMappingContext" ||
-            !scene.Input().AddMappingContext(input->id.value, 0)) {
-            std::fprintf(stderr,
-                "kb_standalone_player: project input mapping could not be activated: %s\n",
-                config.inputMappingContext.c_str());
-            return false;
-        }
-    }
-
     std::fprintf(stdout,
         "kb_standalone_player: project=%s scene=%s assets=%zu modules=%zu\n",
         config.projectRoot.string().c_str(),
