@@ -136,6 +136,38 @@ void RunRenderTextureTextAssetPreservesDimensionTest() {
             "Render texture descriptor lost text asset dimension metadata");
     }
 
+    // A file that is not a decodable image must fail the load and nothing more. bimg's parse
+    // takes an optional bx::Error and, given none, substitutes a temporary whose scope object
+    // asserts on destruction that no error was set -- and "Unrecognized image format." is an
+    // error. So refusing a corrupt texture breaks into the debugger in a debug build instead
+    // of returning empty, and a project cannot be allowed to bring the editor down by
+    // containing one unreadable .png.
+    {
+        const std::filesystem::path corruptRoot =
+            std::filesystem::temp_directory_path() / "kb_corrupt_texture_tests";
+        std::filesystem::remove_all(corruptRoot);
+        std::filesystem::create_directories(corruptRoot);
+        const std::array<std::pair<const char*, std::string>, 4> corrupt{ {
+            // Recognised by no parser at all: takes the "Unrecognized image format." path.
+            { "prose.png", std::string{ "not an image at all, just prose" } },
+            // A real PNG signature with nothing behind it: recognised, then fails to decode.
+            { "truncated.png", std::string{ "\x89PNG\r\n\x1a\n" } + "IHDR but not really" },
+            // Likewise for a container the DDS parser claims by magic and cannot read.
+            { "truncated.dds", std::string{ "DDS " } + std::string( 16U, char{ 0 } ) },
+            { "zeroes.png", std::string( 64U, char{ 0 } ) },
+        } };
+        for (const auto& [name, bytes] : corrupt) {
+            const std::filesystem::path file = corruptRoot / name;
+            {
+                std::ofstream output{ file, std::ios::binary };
+                output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+            }
+            Require(!RenderTextureAssetLoader::LoadTexture(file).has_value(),
+                "A file that is not a decodable image must fail the load, not abort the process");
+        }
+        std::filesystem::remove_all(corruptRoot);
+    }
+
     std::istringstream invalidVolume{ "dimension 3d\nsize 2 2\ndepth 1\nrgba8 1 2 3 255\n" };
     Require(!RenderTextureAssetLoader::LoadTexture(invalidVolume).has_value(),
         "A depth-1 texture must not be accepted as Texture3D because bgfx classifies it as Texture2D");
