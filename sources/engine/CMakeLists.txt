@@ -42,6 +42,9 @@ add_library(kb_engine STATIC
     include/engine/assets/ImportedAssetLoader.hpp
     include/engine/assets/IAssetLoader.hpp
     include/engine/assets/bake/AssetBakeKey.hpp
+    include/engine/assets/bake/AssetPack.hpp
+    include/engine/assets/bake/AssetPackReader.hpp
+    include/engine/assets/bake/AssetPackWriter.hpp
     include/engine/assets/bake/BakeTargetProfile.hpp
     include/engine/assets/bake/BakedAssetSink.hpp
     include/engine/math/EngineMath.hpp
@@ -499,8 +502,12 @@ add_library(kb_engine STATIC
     src/assets/ImportedAssetHeaderReader.cpp
     src/assets/ImportedAssetLoader.cpp
     src/assets/bake/AssetBakeKey.cpp
+    src/assets/bake/AssetPack.cpp
+    src/assets/bake/AssetPackReader.cpp
+    src/assets/bake/AssetPackWriter.cpp
     src/assets/bake/BakeTargetProfile.cpp
     src/assets/bake/BakedAssetSink.cpp
+    src/private/assets/bake/BakeStorePath.hpp
     src/project/ProjectDescriptorBinaryIO.cpp
     src/project/ProjectDescriptorIntegrity.cpp
     src/project/ProjectDescriptorMetaReader.cpp
@@ -1559,6 +1566,7 @@ if(BUILD_TESTING)
         tests/EcsCommandBufferTests.cpp
         tests/AssetRuntimeTests.cpp
         tests/AssetBakeTests.cpp
+        tests/AssetPackTests.cpp
         tests/SaveGameTests.cpp
         tests/EcsConfigTests.cpp
         tests/EcsEventTests.cpp
