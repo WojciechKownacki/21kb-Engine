@@ -1596,6 +1596,27 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
         }
     }
 
+    for (const RenderMaterialGraphShaderBinary& fragmentBinary : artifact.binaries) {
+        const auto vertex = std::ranges::find_if(
+            artifact.vertexBinaries,
+            [&fragmentBinary](const RenderMaterialGraphShaderBinary& candidate) {
+                return candidate.backend == fragmentBinary.backend;
+            });
+        const std::filesystem::path fragmentPath{ fragmentBinary.binaryPath };
+        const std::string vertexFilename = vertex == artifact.vertexBinaries.end()
+            ? "-"
+            : std::filesystem::path{ vertex->binaryPath }.filename().generic_string();
+        if (!WriteShaderTextAtomically(
+                fragmentPath.parent_path() / "program.current",
+                fragmentPath.filename().generic_string() + " " + vertexFilename + "\n")) {
+            AddArtifactDiagnostic(result.diagnostics, RenderMaterialGraphDiagnosticSeverity::Error,
+                "Material graph shader program cache pointer could not be published atomically.",
+                request.pass,
+                std::string{ RenderMaterialGraphShaderBackendName(fragmentBinary.backend) });
+            return result;
+        }
+    }
+
     result.artifact = std::move(artifact);
     return result;
 }
