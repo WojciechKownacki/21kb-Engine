@@ -5,6 +5,7 @@
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
+#include "assets/AssetPathUtilities.hpp"
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneState.hpp"
 
@@ -16,11 +17,10 @@ namespace {
 [[nodiscard]] SceneDocumentLoadResult LoadSceneDocument(
     Scene& scene,
     const std::filesystem::path& path) {
-    const std::string normalized = kb::assets::NormalizeAssetPath(path);
-    if (!normalized.empty() && normalized.front() == '/') {
-        kb::assets::AssetManager& manager = scene.Assets().Manager();
-        const kb::assets::AssetMetadata* metadata = manager.Registry().FindByPath(path);
-        if (metadata == nullptr || metadata->type != "Scene") {
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    const kb::assets::AssetMetadata* metadata = manager.Registry().FindByPath(path);
+    if (metadata != nullptr) {
+        if (metadata->type != "Scene") {
             return SceneDocumentLoadResult{
                 .succeeded = false,
                 .document = {},
@@ -42,7 +42,18 @@ namespace {
             .error = {},
         };
     }
-    if (scene.Assets().Manager().IsRuntimePackMounted()) {
+    // A leading slash is not enough to identify a virtual asset: POSIX physical
+    // paths are absolute too. Only an actual mount owns an unregistered virtual
+    // path. This keeps editor/dev physical loads working on Linux while still
+    // failing missing /Game assets explicitly.
+    if (kb::assets::AssetPathUtilities::IsMountedVirtualPath(manager.Mounts(), path)) {
+        return SceneDocumentLoadResult{
+            .succeeded = false,
+            .document = {},
+            .error = "Scene asset is not registered.",
+        };
+    }
+    if (manager.IsRuntimePackMounted()) {
         return SceneDocumentLoadResult{
             .succeeded = false,
             .document = {},
