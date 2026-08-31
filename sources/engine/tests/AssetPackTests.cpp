@@ -1273,10 +1273,14 @@ void PublicationIsOneRenameOfAFinishedPack() {
         "The published pack lost its payload");
     reader.Unmount();
 
-    // No debris: neither staging file may outlive a successful publication.
+    // No staging debris may outlive a successful publication. POSIX intentionally keeps the
+    // destination lock inode so another writer cannot lock a replacement inode while an older
+    // writer still holds the original; that coordination file is not staging debris.
     std::size_t strays = 0U;
     for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator{ root }) {
-        strays += (entry.path() != packPath) ? 1U : 0U;
+        const bool persistentPosixLock =
+            entry.path().filename().generic_string().ends_with(".kbpacklock");
+        strays += (entry.path() != packPath && !persistentPosixLock) ? 1U : 0U;
     }
     Require(strays == 0U, "A published pack left staging files behind");
 
