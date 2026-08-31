@@ -32,7 +32,7 @@ Commands:
                  --project <dir> --scene <path> [--frames <n>] [--dt <seconds>]
                  [--quiet]
   mcp          Serve the commands above as MCP tools over stdio (newline-
-               delimited JSON-RPC), for use from VS Code / Claude Code.
+               delimited JSON-RPC), for use from MCP-compatible clients.
                  [--project <dir>]
 
 Scene paths may be physical (relative to the project root) or virtual
