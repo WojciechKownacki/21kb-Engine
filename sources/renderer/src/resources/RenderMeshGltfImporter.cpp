@@ -7,6 +7,8 @@
 #include <cgltf/cgltf.h>
 
 #include <array>
+#include <algorithm>
+#include <cstring>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -275,20 +277,10 @@ void AppendGltfIndex(RenderMeshAssetData& asset, std::uint32_t index) {
     return true;
 }
 
-} // namespace
-
-std::optional<RenderMeshAssetData> RenderMeshGltfImporter::Load(const std::filesystem::path& path, const RenderMeshGltfImportDesc& desc) {
-    const std::string pathString = path.string();
-    cgltf_options options{};
-    cgltf_data* rawData = nullptr;
-    if (cgltf_parse_file(&options, pathString.c_str(), &rawData) != cgltf_result_success || rawData == nullptr) {
-        return std::nullopt;
-    }
-    const std::unique_ptr<cgltf_data, decltype(&cgltf_free)> data(rawData, &cgltf_free);
-    if (cgltf_load_buffers(&options, data.get(), pathString.c_str()) != cgltf_result_success) {
-        return std::nullopt;
-    }
-    if (cgltf_validate(data.get()) != cgltf_result_success) {
+[[nodiscard]] std::optional<RenderMeshAssetData> BuildGltfMesh(
+    cgltf_data* data,
+    const RenderMeshGltfImportDesc& desc) {
+    if (cgltf_validate(data) != cgltf_result_success) {
         return std::nullopt;
     }
 
@@ -310,6 +302,71 @@ std::optional<RenderMeshAssetData> RenderMeshGltfImporter::Load(const std::files
         return std::nullopt;
     }
     return asset;
+}
+
+} // namespace
+
+std::optional<RenderMeshAssetData> RenderMeshGltfImporter::Load(const std::filesystem::path& path, const RenderMeshGltfImportDesc& desc) {
+    const std::string pathString = path.string();
+    cgltf_options options{};
+    cgltf_data* rawData = nullptr;
+    if (cgltf_parse_file(&options, pathString.c_str(), &rawData) != cgltf_result_success || rawData == nullptr) {
+        return std::nullopt;
+    }
+    const std::unique_ptr<cgltf_data, decltype(&cgltf_free)> data(rawData, &cgltf_free);
+    if (cgltf_load_buffers(&options, data.get(), pathString.c_str()) != cgltf_result_success) {
+        return std::nullopt;
+    }
+    return BuildGltfMesh(data.get(), desc);
+}
+
+std::optional<RenderMeshAssetData> RenderMeshGltfImporter::Load(
+    std::span<const std::uint8_t> bytes,
+    const std::filesystem::path& sourcePath,
+    const RenderMeshGltfImportDesc& desc) {
+    if (bytes.empty()) {
+        return std::nullopt;
+    }
+    const std::string pathString = sourcePath.string();
+    cgltf_options options{};
+    cgltf_data* rawData = nullptr;
+    if (cgltf_parse(&options, bytes.data(), bytes.size(), &rawData) != cgltf_result_success || rawData == nullptr) {
+        return std::nullopt;
+    }
+    const std::unique_ptr<cgltf_data, decltype(&cgltf_free)> data(rawData, &cgltf_free);
+    const char* const bufferBasePath = sourcePath.empty() ? nullptr : pathString.c_str();
+    if (cgltf_load_buffers(&options, data.get(), bufferBasePath) != cgltf_result_success) {
+        return std::nullopt;
+    }
+    return BuildGltfMesh(data.get(), desc);
+}
+
+std::optional<std::vector<std::filesystem::path>> RenderMeshGltfImporter::ExternalBufferUris(
+    std::span<const std::uint8_t> bytes) {
+    if (bytes.empty()) return std::nullopt;
+    cgltf_options options{};
+    cgltf_data* rawData = nullptr;
+    if (cgltf_parse(&options, bytes.data(), bytes.size(), &rawData) != cgltf_result_success ||
+        rawData == nullptr) {
+        return std::nullopt;
+    }
+    const std::unique_ptr<cgltf_data, decltype(&cgltf_free)> data(rawData, &cgltf_free);
+    std::vector<std::filesystem::path> uris;
+    for (cgltf_size index = 0U; index < data->buffers_count; ++index) {
+        const char* const uri = data->buffers[index].uri;
+        if (uri == nullptr || std::strncmp(uri, "data:", 5U) == 0) continue;
+        if (std::strstr(uri, "://") != nullptr) return std::nullopt;
+        std::string decoded{ uri };
+        static_cast<void>(cgltf_decode_uri(decoded.data()));
+        decoded.resize(std::strlen(decoded.c_str()));
+        const std::filesystem::path path{ decoded };
+        if (path.empty() || path.is_absolute()) return std::nullopt;
+        const std::filesystem::path normalized = path.lexically_normal();
+        if (std::ranges::find(uris, normalized) == uris.end()) {
+            uris.push_back(normalized);
+        }
+    }
+    return uris;
 }
 
 } // namespace kb::render

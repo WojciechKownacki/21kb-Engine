@@ -11,6 +11,7 @@ void RunPostProcessChainTests();
 void RunRenderFramePipelineTests();
 void RunRenderResourceRegistryTests();
 void RunRuntimeAssetShaderProviderTests();
+void RunRuntimeAssetPackValidationTests();
 void RunPackagedMaterialRuntimeTests();
 void RunRenderMaterialTypeSchemaTests();
 void RunGraphShaderArtifactCookTests();
@@ -62,6 +63,10 @@ int main(int argc, char** argv) {
     }
     if (argc == 2 && std::string_view{ argv[1] } == "runtime-shader-provider") {
         kb::render::tests::RunRuntimeAssetShaderProviderTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "runtime-pack-validation") {
+        kb::render::tests::RunRuntimeAssetPackValidationTests();
         return EXIT_SUCCESS;
     }
     if (argc == 2 && std::string_view{ argv[1] } == "packaged-material") {
@@ -131,6 +136,7 @@ int main(int argc, char** argv) {
     kb::render::tests::RunRenderFramePipelineTests();
     kb::render::tests::RunRenderResourceRegistryTests();
     kb::render::tests::RunRuntimeAssetShaderProviderTests();
+    kb::render::tests::RunRuntimeAssetPackValidationTests();
     kb::render::tests::RunRenderMaterialTypeSchemaTests();
     kb::render::tests::RunGraphShaderArtifactCookTests();
     kb::render::tests::RunMaterialProgramRegistryTests();

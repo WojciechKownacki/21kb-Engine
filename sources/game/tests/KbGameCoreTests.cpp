@@ -13,6 +13,8 @@
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/assets/AssetRegistry.hpp"
+#include "engine/assets/bake/BakeTargetProfile.hpp"
+#include "engine/assets/bake/RuntimeAssetPack.hpp"
 #include "engine/input/InputAssetIO.hpp"
 #include "engine/input/InputMappingContextAsset.hpp"
 #include "engine/input/InputSubsystem.hpp"
@@ -20,10 +22,19 @@
 #include "engine/project/ProjectSettings.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneObject.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
+#include "engine/scene/MeshRendererComponent.hpp"
+#include "kb/render/RuntimeAssetShaderProvider.hpp"
+#include "kb/render/resources/RenderMaterialAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialAssetWriter.hpp"
+#include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialGraphDocument.hpp"
+#include "kb/render/resources/RenderMaterialGraphShaderArtifact.hpp"
+#include "kb/render/resources/RenderMaterialParameterCollection.hpp"
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -33,12 +44,14 @@
 #endif
 #include <Windows.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -263,6 +276,440 @@ void WriteSettings(const std::filesystem::path& root, const kb::project::Project
         kb::project::ProjectSettingsStore::Save(
             kb::project::ProjectSettingsStore::FilePath(root), settings, error),
         "kb_game_core test project settings could not be written");
+}
+
+class ScopedExternalCookOutputLock final {
+public:
+    explicit ScopedExternalCookOutputLock(const std::filesystem::path& outputPath) {
+        lockPath_ = std::filesystem::path{ outputPath.native() + std::wstring{ L".kbpacklock" } };
+        handle_ = CreateFileW(
+            lockPath_.c_str(),
+            GENERIC_READ | GENERIC_WRITE,
+            0,
+            nullptr,
+            OPEN_ALWAYS,
+            FILE_ATTRIBUTE_NORMAL,
+            nullptr);
+        Require(handle_ != INVALID_HANDLE_VALUE,
+            "External cook-output lock fixture could not acquire its lock");
+    }
+    ScopedExternalCookOutputLock(const ScopedExternalCookOutputLock&) = delete;
+    ScopedExternalCookOutputLock& operator=(const ScopedExternalCookOutputLock&) = delete;
+    ~ScopedExternalCookOutputLock() {
+        if (handle_ != INVALID_HANDLE_VALUE) {
+            static_cast<void>(CloseHandle(handle_));
+            std::error_code removeError;
+            std::filesystem::remove(lockPath_, removeError);
+        }
+    }
+
+private:
+    std::filesystem::path lockPath_;
+    HANDLE handle_ = INVALID_HANDLE_VALUE;
+};
+
+void RunCookOutputLockTest() {
+    const Fixture fixture = BuildFixture(TestRoot() / "cook_output_lock", "Project");
+    kb::project::ProjectSettings settings;
+    settings.defaultMap = fixture.sceneVirtualPath;
+    settings.physicsLayersAsset.clear();
+    settings.inputEnabled = false;
+    WriteSettings(fixture.root, settings);
+
+    const std::filesystem::path outputPack = fixture.root / "Game.kbpack";
+    WriteTextFile(outputPack, "previous published package");
+    {
+        const ScopedExternalCookOutputLock lock{ outputPack };
+        std::ostringstream diagnostics;
+        const kb::game::ProjectCookResult cook = kb::game::CookProject(
+            kb::game::ProjectCookRequest{
+                .projectPath = fixture.root,
+                .targetProfileId = "Windows.x64",
+                .outputPackPath = outputPack,
+            },
+            diagnostics);
+        Require(!cook.succeeded && Mentions(cook.error, "already being cooked"),
+            "CookProject did not fail closed when its exact output was locked");
+
+        std::ifstream published{ outputPack, std::ios::binary };
+        const std::string bytes{
+            std::istreambuf_iterator<char>{ published }, std::istreambuf_iterator<char>{} };
+        Require(bytes == "previous published package",
+            "A cook without the output lock replaced the previously published package");
+        const bool leftCandidate = std::ranges::any_of(
+            std::filesystem::directory_iterator(fixture.root),
+            [](const std::filesystem::directory_entry& entry) {
+                const std::string name = entry.path().filename().generic_string();
+                return name.starts_with(".kb-cook-") && name != ".kb-cook-cache";
+            });
+        Require(!leftCandidate,
+            "CookProject created a candidate before acquiring the final-output lock");
+    }
+}
+
+void RunSceneMetaCookValidationTests() {
+    const auto requireRejectedCook = [](
+        const Fixture& fixture,
+        std::string_view validationDiagnostic,
+        std::string_view readerDiagnostic) {
+        kb::project::ProjectSettings settings;
+        settings.defaultMap = fixture.sceneVirtualPath;
+        settings.physicsLayersAsset.clear();
+        settings.inputEnabled = false;
+        WriteSettings(fixture.root, settings);
+
+        const std::filesystem::path outputPack = fixture.root / "must_not_exist.kbpack";
+        std::ostringstream diagnostics;
+        const kb::game::ProjectCookResult cook = kb::game::CookProject(
+            kb::game::ProjectCookRequest{
+                .projectPath = fixture.root,
+                .targetProfileId = "Windows.x64",
+                .outputPackPath = outputPack,
+            },
+            diagnostics);
+        Require(!cook.succeeded, "Cooker accepted a scene without readable metadata");
+        Require(
+            Mentions(cook.error, fixture.sceneVirtualPath) &&
+                Mentions(cook.error, std::string{ validationDiagnostic }),
+            "Cooker rejection did not identify the scene metadata failure");
+        Require(
+            Mentions(cook.error, std::string{ readerDiagnostic }),
+            "Cooker rejection did not preserve the metadata reader diagnostic");
+        Require(
+            !std::filesystem::exists(outputPack),
+            "Cooker published a package after rejecting unreadable scene metadata");
+    };
+
+    {
+        const Fixture fixture = BuildFixture(TestRoot() / "cook_missing_scene_meta", "Project");
+        const std::filesystem::path metaPath =
+            fixture.root / "Assets" / "Scenes" / "Main.meta";
+        std::error_code error;
+        Require(std::filesystem::remove(metaPath, error) && !error,
+            "Missing-meta cook fixture could not remove its scene metadata");
+        requireRejectedCook(fixture, "no readable scene metadata sidecar", "could not be opened");
+    }
+
+    {
+        const Fixture fixture = BuildFixture(TestRoot() / "cook_corrupt_scene_meta", "Project");
+        WriteTextFile(
+            fixture.root / "Assets" / "Scenes" / "Main.meta",
+            "not a 21kb scene metadata descriptor");
+        requireRejectedCook(fixture, "no readable scene metadata sidecar", "descriptor fields are invalid");
+    }
+
+    {
+        const Fixture fixture = BuildFixture(TestRoot() / "cook_stale_scene_meta", "Project");
+        const std::filesystem::path scenePath =
+            fixture.root / "Assets" / "Scenes" / "Main.21kbscene";
+        const std::filesystem::path metaPath =
+            fixture.root / "Assets" / "Scenes" / "Main.meta";
+        const std::filesystem::path oldMetaPath = fixture.root / "Main.original.meta";
+        std::error_code copyError;
+        Require(std::filesystem::copy_file(metaPath, oldMetaPath, copyError) && !copyError,
+            "Stale-meta cook fixture could not preserve the original metadata");
+
+        kb::scene::Scene updated;
+        for (std::size_t index = 0U; index < 4U; ++index) {
+            static_cast<void>(updated.Entities().CreateObject(kb::scene::SceneObjectDesc{
+                .name = "Updated_" + std::to_string(index),
+            }));
+        }
+        Require(kb::scene::SceneDocumentService::Save(updated, scenePath, "Main"),
+            "Stale-meta cook fixture could not write the updated scene");
+        copyError.clear();
+        Require(std::filesystem::copy_file(
+                oldMetaPath, metaPath, std::filesystem::copy_options::overwrite_existing, copyError) && !copyError,
+            "Stale-meta cook fixture could not restore the original metadata");
+        requireRejectedCook(fixture, "does not match scene metadata sidecar", "integrity does not match");
+    }
+}
+
+void RunAuthoritativeMaterialGraphCookTest() {
+    namespace bake = kb::assets::bake;
+
+    const auto makeColorOutputLink = [] {
+        kb::render::RenderMaterialGraphLink link{
+            .fromNodeId = 2U,
+            .fromPinId = kb::render::RenderMaterialGraphStablePinId(
+                kb::render::RenderMaterialGraphNodeKind::ConstantColor, "rgba", true),
+            .fromPin = "rgba",
+            .toNodeId = 1U,
+            .toPinId = kb::render::RenderMaterialGraphStablePinId(
+                kb::render::RenderMaterialGraphNodeKind::MaterialOutput, "baseColor", false),
+            .toPin = "baseColor",
+        };
+        link.id = kb::render::MakeRenderMaterialGraphLinkId(link);
+        return link;
+    };
+    const auto authorMaterialScene = [](const Fixture& fixture, kb::assets::AssetId materialId) {
+        kb::scene::Scene scene;
+        const kb::scene::SceneObject object = scene.Entities().CreateObject(
+            kb::scene::SceneObjectDesc{ .name = "GraphMaterial" });
+        scene.Components().MeshRenderers().Set(
+            object.Entity(), kb::scene::MeshRendererComponent{ .materialAssetId = materialId.value });
+        Require(kb::scene::SceneDocumentService::Save(
+                    scene, fixture.root / "Assets" / "Scenes" / "Main.21kbscene", "Main"),
+            "Graph-material cook fixture could not write its scene dependency");
+    };
+    const auto authorMaterial = [](const Fixture& fixture,
+                                   const kb::render::RenderMaterialGraphDocument& inlineGraph,
+                                   std::string graphPath,
+                                   kb::assets::AssetId graphId) {
+        kb::render::RenderMaterialAssetData material{};
+        material.graph = inlineGraph;
+        material.graphSourceAssetId = graphId.value;
+        material.graphSourceAssetPath = std::move(graphPath);
+        const std::filesystem::path materialPath =
+            fixture.root / "Assets" / "Materials" / "External.kbmat";
+        std::error_code directoryError;
+        std::filesystem::create_directories(materialPath.parent_path(), directoryError);
+        Require(!directoryError && kb::render::RenderMaterialAssetWriter::Save(materialPath, material),
+            "Graph-material cook fixture could not write its material");
+    };
+
+    const std::string materialVirtualPath = "/Game/Materials/External.kbmat";
+    const std::string graphVirtualPath = "/Game/Materials/Authoritative.kbmaterialgraph";
+    const kb::assets::AssetId materialId =
+        kb::assets::MakeAssetId(materialVirtualPath + ":RenderMaterial");
+
+    kb::render::RenderMaterialGraphDocument inlineGraph =
+        kb::render::MakeDefaultRenderMaterialGraphDocument();
+    kb::render::RenderMaterialGraphDocument authoritativeGraph =
+        kb::render::MakeDefaultRenderMaterialGraphDocument();
+    inlineGraph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::ConstantColor,
+        .parameter = kb::render::RenderMaterialGraphParameterMetadata{
+            .defaultValueHint = "1 0 0 1" },
+    });
+    inlineGraph.links.push_back(makeColorOutputLink());
+    authoritativeGraph.storageModel = "material-graph-asset";
+    authoritativeGraph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::ConstantColor,
+        .parameter = kb::render::RenderMaterialGraphParameterMetadata{
+            .defaultValueHint = "0 0 1 1" },
+    });
+    authoritativeGraph.links.push_back(makeColorOutputLink());
+    const kb::render::RenderMaterialGraphCompileResult inlineCompile =
+        kb::render::CompileRenderMaterialGraphToShaderSource(inlineGraph);
+    const kb::render::RenderMaterialGraphCompileResult authoritativeCompile =
+        kb::render::CompileRenderMaterialGraphToShaderSource(authoritativeGraph);
+    Require(inlineCompile.Succeeded() && authoritativeCompile.Succeeded() &&
+            inlineCompile.shader.sourceHash != authoritativeCompile.shader.sourceHash,
+        "Graph-material fixture did not produce distinct valid inline A and sourceGraph B shaders");
+    const std::uint64_t authoritativeVariant =
+        kb::render::ComputeRenderMaterialGraphVariantKey(authoritativeCompile.shader);
+
+    const Fixture fixture = BuildFixture(TestRoot() / "authoritative_graph_cook", "Project");
+    const std::filesystem::path graphPath =
+        fixture.root / "Assets" / "Materials" / "Authoritative.kbmaterialgraph";
+    std::error_code directoryError;
+    std::filesystem::create_directories(graphPath.parent_path(), directoryError);
+    Require(!directoryError &&
+            kb::render::RenderMaterialGraphAssetLoader::SaveGraph(graphPath, authoritativeGraph),
+        "Graph-material cook fixture could not write sourceGraph B");
+    authorMaterial(fixture, inlineGraph, graphVirtualPath, {});
+    authorMaterialScene(fixture, materialId);
+    kb::project::ProjectSettings settings;
+    settings.defaultMap = fixture.sceneVirtualPath;
+    settings.physicsLayersAsset.clear();
+    settings.inputEnabled = false;
+    WriteSettings(fixture.root, settings);
+
+    const std::filesystem::path outputPack = fixture.root / "Game.kbpack";
+    std::ostringstream diagnostics;
+    const kb::game::ProjectCookResult cook = kb::game::CookProject(
+        kb::game::ProjectCookRequest{
+            .projectPath = fixture.root,
+            .targetProfileId = "WebGL.wasm32",
+            .outputPackPath = outputPack,
+        },
+        diagnostics);
+    Require(cook.succeeded, cook.error.c_str());
+    Require(cook.shaderArtifactCount != 0U && std::filesystem::is_regular_file(outputPack),
+        "CookProject failed to publish the authoritative sourceGraph package");
+    const bool leftCookCandidate = std::ranges::any_of(
+        std::filesystem::directory_iterator(fixture.root),
+        [](const std::filesystem::directory_entry& entry) {
+            const std::string name = entry.path().filename().generic_string();
+            return name.starts_with(".kb-cook-") && name != ".kb-cook-cache";
+        });
+    Require(!leftCookCandidate,
+        "CookProject left its validated package candidate or lock beside the published package");
+
+    const bake::BakeTargetProfile profile = bake::WebGlWasm32BakeTargetProfile();
+    auto pack = std::make_shared<bake::RuntimeAssetPack>();
+    Require(pack->Mount(outputPack, profile) == bake::RuntimeAssetPackStatus::Success,
+        "Authoritative sourceGraph package did not mount");
+    kb::assets::AssetManager runtimeManager;
+    Require(runtimeManager.RegisterLoader(std::make_unique<kb::render::RenderMaterialAssetLoader>()) &&
+            runtimeManager.RegisterLoader(std::make_unique<kb::render::RenderMaterialGraphAssetLoader>()) &&
+            runtimeManager.MountRuntimePack(pack),
+        "Authoritative sourceGraph package did not register its runtime assets");
+    const kb::assets::AssetHandle<kb::render::RenderMaterialAssetData> runtimeMaterial =
+        runtimeManager.Load<kb::render::RenderMaterialAssetData>(materialId);
+    Require(runtimeMaterial.IsLoaded(), "Cooked material source bytes did not load from the package");
+    const kb::assets::AssetMetadata* runtimeMetadata = runtimeManager.Registry().Find(materialId);
+    Require(runtimeMetadata != nullptr, "Cooked material metadata was absent from the package");
+    const kb::render::RenderMaterialSourceGraphResolveResult runtimeGraph =
+        kb::render::ResolveRenderMaterialSourceGraph(runtimeManager, *runtimeMetadata, *runtimeMaterial);
+    Require(runtimeGraph.graph.has_value(), "Packaged runtime could not resolve sourceGraph B");
+    const kb::render::RenderMaterialGraphCompileResult runtimeCompile =
+        kb::render::CompileRenderMaterialGraphToShaderSource(*runtimeGraph.graph);
+    Require(runtimeCompile.Succeeded() &&
+            runtimeCompile.shader.sourceHash == authoritativeCompile.shader.sourceHash &&
+            runtimeCompile.shader.sourceHash != inlineCompile.shader.sourceHash,
+        "Packaged runtime resolved stale inline graph A instead of sourceGraph B");
+
+    std::string providerError;
+    const std::shared_ptr<kb::render::RuntimeAssetShaderProvider> provider =
+        kb::render::RuntimeAssetShaderProvider::Create(pack, providerError);
+    std::vector<std::uint8_t> shaderBytes;
+    std::uint64_t revision = 0U;
+    Require(provider != nullptr && provider->ReadMaterialShader(
+                authoritativeCompile.shader.sourceHash,
+                authoritativeVariant,
+                "BaseOpaque",
+                bgfx::RendererType::OpenGLES,
+                "fragment",
+                shaderBytes,
+                revision) &&
+            !shaderBytes.empty() && revision != 0U,
+        "Runtime shader provider could not read sourceGraph B's cooked material shader");
+    Require(!provider->ReadMaterialShader(
+                inlineCompile.shader.sourceHash,
+                kb::render::ComputeRenderMaterialGraphVariantKey(inlineCompile.shader),
+                "BaseOpaque",
+                bgfx::RendererType::OpenGLES,
+                "fragment",
+                shaderBytes,
+                revision),
+        "Cooked package unexpectedly contains stale inline graph A's shader");
+    pack->Unmount();
+
+    const Fixture missing = BuildFixture(TestRoot() / "missing_authoritative_graph_cook", "Project");
+    authorMaterial(missing, inlineGraph, "/Game/Materials/Missing.kbmaterialgraph", {});
+    authorMaterialScene(missing, materialId);
+    WriteSettings(missing.root, settings);
+    const std::filesystem::path rejectedPack = missing.root / "must_not_exist.kbpack";
+    std::ostringstream rejectedDiagnostics;
+    const kb::game::ProjectCookResult rejected = kb::game::CookProject(
+        kb::game::ProjectCookRequest{
+            .projectPath = missing.root,
+            .targetProfileId = "WebGL.wasm32",
+            .outputPackPath = rejectedPack,
+        },
+        rejectedDiagnostics);
+    Require(!rejected.succeeded && Mentions(rejected.error, "sourceGraph") &&
+            !std::filesystem::exists(rejectedPack),
+        "CookProject published a material whose path-only sourceGraph was missing");
+
+    const Fixture missingCollection =
+        BuildFixture(TestRoot() / "missing_graph_collection_cook", "Project");
+    const kb::assets::AssetId missingCollectionId = kb::assets::MakeAssetId(
+        "/Game/Materials/Missing.kbmpc:" +
+        std::string{ kb::render::kRenderMaterialParameterCollectionAssetType });
+    kb::render::RenderMaterialGraphDocument collectionGraph = authoritativeGraph;
+    collectionGraph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 3U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::CollectionParameter,
+        .parameter = kb::render::RenderMaterialGraphParameterMetadata{
+            .stableId = "GlobalTint",
+            .defaultValueHint = std::to_string(missingCollectionId.value),
+        },
+    });
+    const std::filesystem::path collectionGraphPath =
+        missingCollection.root / "Assets" / "Materials" / "Authoritative.kbmaterialgraph";
+    directoryError.clear();
+    std::filesystem::create_directories(collectionGraphPath.parent_path(), directoryError);
+    Require(!directoryError && kb::render::RenderMaterialGraphAssetLoader::SaveGraph(
+                collectionGraphPath, collectionGraph),
+        "Missing-MPC fixture could not write its authoritative graph");
+    authorMaterial(missingCollection, inlineGraph, graphVirtualPath, {});
+    authorMaterialScene(missingCollection, materialId);
+    WriteSettings(missingCollection.root, settings);
+    const std::filesystem::path missingCollectionPack =
+        missingCollection.root / "must_not_exist.kbpack";
+    std::ostringstream collectionDiagnostics;
+    const kb::game::ProjectCookResult collectionCook = kb::game::CookProject(
+        kb::game::ProjectCookRequest{
+            .projectPath = missingCollection.root,
+            .targetProfileId = "WebGL.wasm32",
+            .outputPackPath = missingCollectionPack,
+        },
+        collectionDiagnostics);
+    Require(!collectionCook.succeeded && Mentions(collectionCook.error, "parameter collection") &&
+            !std::filesystem::exists(missingCollectionPack),
+        "CookProject published a graph whose required parameter collection was missing");
+
+    const Fixture missingCollectionMember =
+        BuildFixture(TestRoot() / "missing_graph_collection_member_cook", "Project");
+    const std::string collectionVirtualPath = "/Game/Materials/Globals.kbmpc";
+    const kb::assets::AssetId collectionId = kb::assets::MakeAssetId(
+        collectionVirtualPath + ":" +
+        std::string{ kb::render::kRenderMaterialParameterCollectionAssetType });
+    kb::render::RenderMaterialParameterCollectionData collection{};
+    collection.parameters.push_back(kb::render::RenderMaterialParameterCollectionParameter{
+        .stableId = "Exposure",
+        .displayName = "Exposure",
+        .type = kb::render::RenderMaterialParameterCollectionValueType::Scalar,
+        .defaultValue = { 1.0F, 0.0F, 0.0F, 0.0F },
+    });
+    const std::filesystem::path collectionPath =
+        missingCollectionMember.root / "Assets" / "Materials" / "Globals.kbmpc";
+    directoryError.clear();
+    std::filesystem::create_directories(collectionPath.parent_path(), directoryError);
+    Require(!directoryError && kb::render::RenderMaterialParameterCollectionWriter::Save(
+                collectionPath, collection),
+        "Missing-MPC-member fixture could not write its parameter collection");
+
+    kb::render::RenderMaterialGraphDocument missingMemberGraph =
+        kb::render::MakeDefaultRenderMaterialGraphDocument();
+    missingMemberGraph.storageModel = "material-graph-asset";
+    missingMemberGraph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::CollectionParameter,
+        .parameter = kb::render::RenderMaterialGraphParameterMetadata{
+            .stableId = "MissingTint",
+            .defaultValueHint = std::to_string(collectionId.value),
+        },
+    });
+    kb::render::RenderMaterialGraphLink collectionOutputLink{
+        .fromNodeId = 2U,
+        .fromPinId = kb::render::RenderMaterialGraphStablePinId(
+            kb::render::RenderMaterialGraphNodeKind::CollectionParameter, "rgba", true),
+        .fromPin = "rgba",
+        .toNodeId = 1U,
+        .toPinId = kb::render::RenderMaterialGraphStablePinId(
+            kb::render::RenderMaterialGraphNodeKind::MaterialOutput, "baseColor", false),
+        .toPin = "baseColor",
+    };
+    collectionOutputLink.id = kb::render::MakeRenderMaterialGraphLinkId(collectionOutputLink);
+    missingMemberGraph.links.push_back(collectionOutputLink);
+    const std::filesystem::path missingMemberGraphPath =
+        missingCollectionMember.root / "Assets" / "Materials" / "Authoritative.kbmaterialgraph";
+    Require(kb::render::RenderMaterialGraphAssetLoader::SaveGraph(
+                missingMemberGraphPath, missingMemberGraph),
+        "Missing-MPC-member fixture could not write its authoritative graph");
+    authorMaterial(missingCollectionMember, inlineGraph, graphVirtualPath, {});
+    authorMaterialScene(missingCollectionMember, materialId);
+    WriteSettings(missingCollectionMember.root, settings);
+    const std::filesystem::path missingCollectionMemberPack =
+        missingCollectionMember.root / "must_not_exist.kbpack";
+    std::ostringstream missingMemberDiagnostics;
+    const kb::game::ProjectCookResult missingMemberCook = kb::game::CookProject(
+        kb::game::ProjectCookRequest{
+            .projectPath = missingCollectionMember.root,
+            .targetProfileId = "WebGL.wasm32",
+            .outputPackPath = missingCollectionMemberPack,
+        },
+        missingMemberDiagnostics);
+    Require(!missingMemberCook.succeeded && Mentions(missingMemberCook.error, "MissingTint") &&
+            Mentions(missingMemberCook.error, "parameter collection") &&
+            !std::filesystem::exists(missingCollectionMemberPack),
+        "CookProject published a graph whose parameter collection member was missing");
 }
 
 // -------------------------------------------------------------------------
@@ -599,6 +1046,9 @@ int main() {
 
     RunRuntimeDeltaTests();
     RunPackagedRuntimeModuleContractTests();
+    RunCookOutputLockTest();
+    RunSceneMetaCookValidationTests();
+    RunAuthoritativeMaterialGraphCookTest();
     RunNarrowingTests();
     RunSettingsTests();
     RunLegacySettingsFallbackTests();

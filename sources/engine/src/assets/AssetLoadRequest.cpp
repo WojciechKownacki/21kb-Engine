@@ -61,6 +61,10 @@ bool AssetLoadRequest::ReadSourceBytes(
     std::vector<std::uint8_t>& out,
     std::string& error) const {
     error.clear();
+    if (sourceBytes.has_value()) {
+        out.assign(sourceBytes->begin(), sourceBytes->end());
+        return true;
+    }
     if (runtimePack != nullptr) {
         return ReadPackagedSourceBytes(runtimePack, metadata.id, out, error);
     }

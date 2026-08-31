@@ -18,6 +18,12 @@ public:
     [[nodiscard]] std::vector<kb::assets::AssetId> DiscoverDependencies(
         const kb::assets::AssetMetadata& metadata,
         const kb::assets::AssetRegistry& registry) const override;
+    [[nodiscard]] std::optional<std::string> ValidateDependencies(
+        const kb::assets::AssetMetadata& metadata,
+        const kb::assets::AssetRegistry& registry) const override;
+    [[nodiscard]] std::optional<std::string> ValidateRuntimeDependencies(
+        const kb::assets::AssetLoadRequest& request,
+        const kb::assets::AssetRegistry& registry) const override;
 
 private:
     Scene& scene_;

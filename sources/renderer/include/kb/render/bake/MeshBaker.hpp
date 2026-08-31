@@ -171,4 +171,12 @@ struct MeshBakeOutput {
     std::span<const std::vector<std::uint8_t>> chunks,
     RenderMeshAssetData& out);
 
+// Verifies the target-dependent promises that are intentionally not part of generic payload
+// decoding: index width and the maximum encoded streaming-fragment size. Call after (or beside)
+// ReadBakedMesh when accepting a package for a concrete target profile.
+[[nodiscard]] bool BakedMeshMatchesTargetProfile(
+    std::span<const std::uint8_t> primaryBlock,
+    std::span<const std::vector<std::uint8_t>> chunks,
+    const kb::assets::bake::BakeTargetProfile& profile) noexcept;
+
 } // namespace kb::render::bake

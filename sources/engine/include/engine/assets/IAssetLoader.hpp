@@ -24,9 +24,16 @@ struct AssetLoadRequest {
     const AssetMetadata& metadata;
     std::filesystem::path resolvedPath;
     std::shared_ptr<bake::RuntimeAssetPack> runtimePack;
+    // Optional immutable source snapshot supplied by deterministic tools such as the cooker.
+    // The view is non-owning and must outlive this request and every synchronous loader call.
+    std::optional<std::span<const std::uint8_t>> sourceBytes;
 
     [[nodiscard]] bool IsPackaged() const noexcept {
         return runtimePack != nullptr;
+    }
+
+    [[nodiscard]] bool HasSourceBytes() const noexcept {
+        return sourceBytes.has_value();
     }
 
     [[nodiscard]] std::string SourceExtension() const {

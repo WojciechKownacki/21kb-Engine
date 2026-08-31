@@ -15,6 +15,8 @@
 #include <charconv>
 #include <cstdint>
 #include <memory>
+#include <optional>
+#include <string>
 #include <string_view>
 #include <utility>
 
@@ -36,8 +38,13 @@ void AppendUnique(std::vector<kb::assets::AssetId>& dependencies, kb::assets::As
 // A prefab node's nested-prefab reference is a guid, exactly like a scene node's,
 // and resolves through the same index - including its refusal to name a file for
 // a guid two prefab files both declare.
+struct ScenePrefabDependencyResolution {
+    std::vector<kb::assets::AssetId> dependencies;
+    std::optional<std::string> diagnostic;
+};
+
 void AppendNestedPrefab(
-    std::vector<kb::assets::AssetId>& dependencies,
+    ScenePrefabDependencyResolution& result,
     ScenePrefabGuidAssetIndex& guidIndex,
     const kb::assets::AssetRegistry& registry,
     const std::string& guid) {
@@ -45,9 +52,23 @@ void AppendNestedPrefab(
         return;
     }
     const ScenePrefabGuidClaim* claim = guidIndex.Find(registry, kb::assets::MakeAssetId(guid));
-    if (claim != nullptr) {
-        AppendUnique(dependencies, claim->assetId);
+    if (claim == nullptr) {
+        if (!result.diagnostic.has_value()) {
+            result.diagnostic = "references nested prefab guid \"" + guid +
+                "\" which no registered ScenePrefab asset declares";
+        }
+        return;
     }
+    if (claim->IsContested()) {
+        if (!result.diagnostic.has_value()) {
+            result.diagnostic = "references nested prefab guid \"" + guid +
+                "\" which is declared by " + std::to_string(claim->claimCount) +
+                " prefab assets (" + claim->firstVirtualPath + ", " +
+                claim->secondVirtualPath + ") and cannot be resolved deterministically";
+        }
+        return;
+    }
+    AppendUnique(result.dependencies, claim->assetId);
 }
 
 // Every property path that names an asset in this engine ends in "assetId",
@@ -101,20 +122,48 @@ void AppendOverrideReferences(
 }
 
 void AppendNodeReferences(
-    std::vector<kb::assets::AssetId>& dependencies,
+    ScenePrefabDependencyResolution& result,
     ScenePrefabGuidAssetIndex& guidIndex,
     const kb::assets::AssetRegistry& registry,
     const ScenePrefab& prefab) {
     for (const ScenePrefabNodeDesc& node : prefab.Nodes()) {
         SceneComponentAssetReferences::ForEachReference(
             node.components,
-            [&dependencies](std::uint64_t rawId, std::string_view role) {
+            [&result](std::uint64_t rawId, std::string_view role) {
                 static_cast<void>(role);
-                AppendUnique(dependencies, kb::assets::AssetId{ rawId });
+                AppendUnique(result.dependencies, kb::assets::AssetId{ rawId });
             });
-        AppendNestedPrefab(dependencies, guidIndex, registry, node.nestedPrefabGuid);
-        AppendOverrideReferences(dependencies, registry, node.nestedPrefabOverrides);
+        AppendNestedPrefab(result, guidIndex, registry, node.nestedPrefabGuid);
+        AppendOverrideReferences(result.dependencies, registry, node.nestedPrefabOverrides);
     }
+}
+
+[[nodiscard]] ScenePrefabDependencyResolution ResolveScenePrefabDependencies(
+    const ScenePrefabAssetReadResult& asset,
+    const kb::assets::AssetRegistry& registry,
+    ScenePrefabGuidAssetIndex& guidIndex) {
+    ScenePrefabDependencyResolution result;
+    AppendNodeReferences(result, guidIndex, registry, asset.prefab);
+    if (asset.kind == ScenePrefabAssetKind::Variant) {
+        AppendNestedPrefab(result, guidIndex, registry, asset.baseGuid);
+        AppendOverrideReferences(result.dependencies, registry, asset.overrides);
+        for (const ScenePrefabVariantAddedSubtree& added : asset.addedChildren) {
+            AppendNodeReferences(result, guidIndex, registry, added.subtree);
+        }
+    }
+    return result;
+}
+
+[[nodiscard]] std::vector<std::uint64_t> SortedDependencyIds(
+    const std::vector<kb::assets::AssetId>& dependencies) {
+    std::vector<std::uint64_t> ids;
+    ids.reserve(dependencies.size());
+    for (const kb::assets::AssetId dependency : dependencies) {
+        ids.push_back(dependency.value);
+    }
+    std::ranges::sort(ids);
+    ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+    return ids;
 }
 
 } // namespace
@@ -180,18 +229,38 @@ std::vector<kb::assets::AssetId> ScenePrefabAssetLoader::DiscoverDependencies(
         return {};
     }
 
-    std::vector<kb::assets::AssetId> dependencies;
-    AppendNodeReferences(dependencies, nestedPrefabGuidIndex_, registry, asset.prefab);
-    if (asset.kind == ScenePrefabAssetKind::Variant) {
-        // A variant carries no nodes of its own: what it needs is its base prefab,
-        // the subtrees it adds on top of it, and any asset its overrides swap in.
-        AppendNestedPrefab(dependencies, nestedPrefabGuidIndex_, registry, asset.baseGuid);
-        AppendOverrideReferences(dependencies, registry, asset.overrides);
-        for (const ScenePrefabVariantAddedSubtree& added : asset.addedChildren) {
-            AppendNodeReferences(dependencies, nestedPrefabGuidIndex_, registry, added.subtree);
-        }
+    return ResolveScenePrefabDependencies(asset, registry, nestedPrefabGuidIndex_).dependencies;
+}
+
+std::optional<std::string> ScenePrefabAssetLoader::ValidateDependencies(
+    const kb::assets::AssetMetadata& metadata,
+    const kb::assets::AssetRegistry& registry) const {
+    ScenePrefabAssetReadResult asset;
+    if (metadata.physicalPath.empty() || !ScenePrefabAssetReader::Read(metadata.physicalPath, asset)) {
+        return "has no readable scene prefab source \"" + metadata.physicalPath.generic_string() + "\"";
     }
-    return dependencies;
+
+    ScenePrefabGuidAssetIndex guidIndex;
+    ScenePrefabDependencyResolution current = ResolveScenePrefabDependencies(asset, registry, guidIndex);
+    if (current.diagnostic.has_value()) {
+        return current.diagnostic;
+    }
+    if (SortedDependencyIds(current.dependencies) != SortedDependencyIds(metadata.dependencies)) {
+        return "dependency metadata changed after asset discovery; retry before cooking";
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string> ScenePrefabAssetLoader::ValidateRuntimeDependencies(
+    const kb::assets::AssetLoadRequest& request,
+    const kb::assets::AssetRegistry& registry) const {
+    // Runtime packages carry the dependency closure in their authenticated manifest,
+    // while prefab guid discovery currently reads loose prefab headers. The cooker
+    // validates every prefab before creating that manifest.
+    if (request.IsPackaged()) {
+        return std::nullopt;
+    }
+    return ValidateDependencies(request.metadata, registry);
 }
 
 } // namespace kb::scene

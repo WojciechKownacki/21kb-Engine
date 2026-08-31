@@ -296,12 +296,12 @@ void HashGraphParameterValues(std::uint64_t& hash, const std::vector<RenderMater
     return hash;
 }
 
-} // namespace
-
-RenderMaterialCookPayload RenderMaterialCookPayloadBuilder::Build(
+[[nodiscard]] RenderMaterialCookPayload BuildPayloadWithFunctionLibrary(
     const RenderMaterialAssetData& material,
     const kb::assets::AssetMetadata& metadata,
-    const kb::assets::AssetRegistry& registry) {
+    const kb::assets::AssetRegistry& registry,
+    const RenderMaterialGraphFunctionLibrary& functionLibrary,
+    std::vector<RenderMaterialGraphDiagnostic> functionDiagnostics) {
     RenderMaterialCookPayload payload{};
     payload.materialType = material.materialType.empty() ? kRenderMaterialAssetBuiltInPbrType : material.materialType;
     payload.materialTypeVersion = material.materialTypeVersion == 0U ? kRenderMaterialAssetBuiltInPbrTypeVersion : material.materialTypeVersion;
@@ -313,20 +313,21 @@ RenderMaterialCookPayload RenderMaterialCookPayloadBuilder::Build(
     payload.textureDependencies = BuildTextureDependencies(material, metadata, registry);
     payload.graphBacked = IsGraphBackedMaterial(material);
     if (payload.graphBacked) {
-        const std::vector<RenderMaterialGraphDependencyHashInput> graphDependencies = BuildGraphDependencyHashes(payload.textureDependencies, registry);
-        CookMaterialFunctionLibraryBuildResult functionLibrary = BuildCookMaterialFunctionLibrary(material.graph, registry);
+        const std::vector<RenderMaterialGraphDependencyHashInput> graphDependencies =
+            BuildGraphDependencyHashes(payload.textureDependencies, registry);
         RenderMaterialGraphBuildContext graphContext{
             .assetId = metadata.id.value,
             .sourcePath = metadata.virtualPath.generic_string(),
-            .functionLibrary = &functionLibrary.library,
+            .functionLibrary = &functionLibrary,
         };
-        payload.graphCompileKey = BuildRenderMaterialGraphCompileArtifactCacheKey(material.graph, graphDependencies, 0U, graphContext);
+        payload.graphCompileKey = BuildRenderMaterialGraphCompileArtifactCacheKey(
+            material.graph, graphDependencies, 0U, graphContext);
         const RenderMaterialGraphCompileResult graphCompile = CompileRenderMaterialGraphToShaderSource(
             material.graph,
             graphContext);
         payload.graphCompileSucceeded = graphCompile.Succeeded();
         payload.graphShader = graphCompile.shader;
-        payload.graphDiagnostics = std::move(functionLibrary.diagnostics);
+        payload.graphDiagnostics = std::move(functionDiagnostics);
         payload.graphDiagnostics.insert(
             payload.graphDiagnostics.end(),
             graphCompile.diagnostics.begin(),
@@ -334,6 +335,30 @@ RenderMaterialCookPayload RenderMaterialCookPayloadBuilder::Build(
     }
     payload.payloadHash = BuildPayloadHash(payload);
     return payload;
+}
+
+} // namespace
+
+RenderMaterialCookPayload RenderMaterialCookPayloadBuilder::Build(
+    const RenderMaterialAssetData& material,
+    const kb::assets::AssetMetadata& metadata,
+    const kb::assets::AssetRegistry& registry) {
+    CookMaterialFunctionLibraryBuildResult functionLibrary =
+        BuildCookMaterialFunctionLibrary(material.graph, registry);
+    return BuildPayloadWithFunctionLibrary(
+        material,
+        metadata,
+        registry,
+        functionLibrary.library,
+        std::move(functionLibrary.diagnostics));
+}
+
+RenderMaterialCookPayload RenderMaterialCookPayloadBuilder::Build(
+    const RenderMaterialAssetData& material,
+    const kb::assets::AssetMetadata& metadata,
+    const kb::assets::AssetRegistry& registry,
+    const RenderMaterialGraphFunctionLibrary& functionLibrary) {
+    return BuildPayloadWithFunctionLibrary(material, metadata, registry, functionLibrary, {});
 }
 
 RenderMaterialCookManifest RenderMaterialCookManifestBuilder::Build(

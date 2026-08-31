@@ -33,14 +33,13 @@ struct CachedMaterialParameterSchema {
 
 [[nodiscard]] const kb::assets::AssetMetadata* ResolveSourceGraphMetadata(
     const kb::assets::AssetManager& assets,
+    const kb::assets::AssetMetadata& owner,
     std::uint64_t assetId,
     std::string_view path) noexcept {
-    const kb::assets::AssetMetadata* metadata =
-        assetId == 0U ? nullptr : assets.Registry().Find(kb::assets::AssetId{ assetId });
-    if ((metadata == nullptr || metadata->type != kRenderMaterialGraphAssetType) && !path.empty()) {
-        metadata = assets.Registry().FindByPath(std::filesystem::path{ path });
-    }
-    return metadata != nullptr && metadata->type == kRenderMaterialGraphAssetType ? metadata : nullptr;
+    RenderMaterialAssetData reference;
+    reference.graphSourceAssetId = assetId;
+    reference.graphSourceAssetPath = path;
+    return ResolveRenderMaterialSourceGraphMetadata(assets.Registry(), owner, reference);
 }
 
 [[nodiscard]] bool CacheIsCurrent(
@@ -51,7 +50,8 @@ struct CachedMaterialParameterSchema {
         return false;
     }
     const kb::assets::AssetMetadata* source =
-        ResolveSourceGraphMetadata(assets, cached.sourceGraphAssetId, cached.sourceGraphPath);
+        ResolveSourceGraphMetadata(
+            assets, material, cached.sourceGraphAssetId, cached.sourceGraphPath);
     const std::uint64_t currentSourceHash = source == nullptr ? 0U : source->contentHash;
     return currentSourceHash == cached.sourceGraphContentHash;
 }
@@ -72,11 +72,11 @@ struct CachedMaterialParameterSchema {
     cached.sourceGraphAssetId = loaded->graphSourceAssetId;
     cached.sourceGraphPath = loaded->graphSourceAssetPath;
     const kb::assets::AssetMetadata* source = ResolveSourceGraphMetadata(
-        assets, cached.sourceGraphAssetId, cached.sourceGraphPath);
+        assets, material, cached.sourceGraphAssetId, cached.sourceGraphPath);
     cached.sourceGraphContentHash = source == nullptr ? 0U : source->contentHash;
 
     const RuntimeMaterialSourceGraphLoadResult authoritativeGraph =
-        LoadRuntimeMaterialSourceGraph(assets, *loaded);
+        LoadRuntimeMaterialSourceGraph(assets, material, *loaded);
     if (!authoritativeGraph.graph.has_value()) {
         return cached;
     }

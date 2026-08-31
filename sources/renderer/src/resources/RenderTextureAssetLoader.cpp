@@ -2,6 +2,7 @@
 
 #include "engine/assets/ImportedAsset.hpp"
 #include "engine/assets/ImportedAssetLoader.hpp"
+#include "engine/assets/AssetMemoryInputStream.hpp"
 #include "engine/assets/bake/AssetPackReader.hpp"
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
 #include "kb/render/bake/TextureBaker.hpp"
@@ -339,18 +340,10 @@ template <typename T>
     return LoadImageBytes(bytes->data(), bytes->size());
 }
 
-[[nodiscard]] std::optional<RenderTextureAssetData> LoadImportedTextureContainer(const std::filesystem::path& path) {
-    kb::assets::AssetMetadata metadata{};
-    metadata.physicalPath = path;
-    metadata.virtualPath = path.filename();
-    metadata.type = "Texture";
-    metadata.importCategory = "Texture";
-
+[[nodiscard]] std::optional<RenderTextureAssetData> LoadImportedTextureContainer(
+    const kb::assets::AssetLoadRequest& request) {
     kb::assets::ImportedAssetLoader importedLoader;
-    kb::assets::AssetLoadResult result = importedLoader.Load(kb::assets::AssetLoadRequest{
-        .metadata = metadata,
-        .resolvedPath = path,
-    });
+    kb::assets::AssetLoadResult result = importedLoader.Load(request);
     if (!result.Succeeded()) {
         return std::nullopt;
     }
@@ -360,6 +353,36 @@ template <typename T>
         return std::nullopt;
     }
     return LoadImageBytes(imported->payload.data(), imported->payload.size());
+}
+
+[[nodiscard]] std::optional<RenderTextureAssetData> LoadImportedTextureContainer(const std::filesystem::path& path) {
+    kb::assets::AssetMetadata metadata{};
+    metadata.physicalPath = path;
+    metadata.virtualPath = path.filename();
+    metadata.type = "Texture";
+    metadata.importCategory = "Texture";
+
+    return LoadImportedTextureContainer(kb::assets::AssetLoadRequest{
+        .metadata = metadata,
+        .resolvedPath = path,
+    });
+}
+
+[[nodiscard]] std::optional<RenderTextureAssetData> DecodeTextureSnapshot(
+    const kb::assets::AssetLoadRequest& request) {
+    std::string extension = request.SourceExtension();
+    std::ranges::transform(extension, extension.begin(), [](unsigned char value) {
+        return static_cast<char>(std::tolower(value));
+    });
+    if (extension == ".21kb") {
+        return LoadImportedTextureContainer(request);
+    }
+    if (extension == ".kbtex") {
+        kb::assets::AssetMemoryInputStream input{ *request.sourceBytes };
+        return RenderTextureAssetLoader::LoadTexture(input);
+    }
+    const std::span<const std::uint8_t> source = *request.sourceBytes;
+    return LoadImageBytes(source.data(), source.size());
 }
 
 // ---- Decoded-texture cache ---------------------------------------------------------------------------
@@ -788,7 +811,7 @@ kb::assets::AssetLoadResult RenderTextureAssetLoader::Load(const kb::assets::Ass
     std::string error;
     std::optional<RenderTextureAssetData> texture = request.IsPackaged()
         ? LoadBakedTexturePayload(request, error)
-        : LoadTexture(request.resolvedPath);
+        : (request.HasSourceBytes() ? DecodeTextureSnapshot(request) : LoadTexture(request.resolvedPath));
     if (!texture.has_value()) {
         return kb::assets::AssetLoadResult{
             .asset = {},

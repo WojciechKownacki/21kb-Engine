@@ -13,19 +13,6 @@
 namespace kb::render {
 namespace {
 
-[[nodiscard]] const kb::assets::AssetMetadata* ResolveMaterialSourceGraphMetadata(
-    const kb::assets::AssetManager& manager,
-    const RenderMaterialAssetData& material) {
-    const kb::assets::AssetMetadata* metadata = material.graphSourceAssetId != 0U
-        ? manager.Registry().Find(kb::assets::AssetId{ material.graphSourceAssetId })
-        : nullptr;
-    if ((metadata == nullptr || metadata->type != kRenderMaterialGraphAssetType) &&
-        !material.graphSourceAssetPath.empty()) {
-        metadata = manager.Registry().FindByPath(std::filesystem::path{ material.graphSourceAssetPath });
-    }
-    return metadata != nullptr && metadata->type == kRenderMaterialGraphAssetType ? metadata : nullptr;
-}
-
 void AppendRuntimeFunctionLibraryDiagnostic(
     RuntimeMaterialFunctionLibraryBuildResult& result,
     std::uint64_t assetId,
@@ -85,49 +72,26 @@ std::string RuntimeMaterialParseDiagnosticMessage(const RenderMaterialAssetParse
 
 RuntimeMaterialSourceGraphLoadResult LoadRuntimeMaterialSourceGraph(
     kb::assets::AssetManager& manager,
+    const kb::assets::AssetMetadata& owner,
     const RenderMaterialAssetData& material) {
-    if (material.graphSourceAssetId == 0U && material.graphSourceAssetPath.empty()) {
-        return RuntimeMaterialSourceGraphLoadResult{ .graph = material.graph };
+    RenderMaterialSourceGraphResolveResult resolved =
+        ResolveRenderMaterialSourceGraph(manager, owner, material);
+    const bool usedInlineFallback =
+        resolved.external && !resolved.graph.has_value() && !manager.IsRuntimePackMounted();
+    if (usedInlineFallback) {
+        resolved.graph = material.graph;
+        for (RenderMaterialAssetParseDiagnostic& diagnostic : resolved.parseResult.diagnostics) {
+            diagnostic.severity = RenderMaterialAssetParseDiagnosticSeverity::Warning;
+            diagnostic.message += " Rendering the inline editor snapshot as a loose-runtime fallback.";
+        }
     }
-    const kb::assets::AssetMetadata* metadata = ResolveMaterialSourceGraphMetadata(manager, material);
-    if (metadata == nullptr) {
-        // Finding 1 (fail-safe fallback): the authoritative external source graph is no
-        // longer registered (renamed / deleted / re-imported). Rather than resolving to
-        // the error material and turning every mesh using it magenta, fall back to the
-        // complete graph still embedded in the .kbmat so the material keeps rendering,
-        // and surface the missing dependency as a warning. Because this branch is only
-        // reached when the external graph does NOT resolve, a *changed* (still-present)
-        // external graph remains authoritative — the P1.9 authoring invariant holds.
-        RuntimeMaterialSourceGraphLoadResult fallback{};
-        fallback.graph = material.graph;
-        fallback.usedInlineFallback = true;
-        fallback.path = material.graphSourceAssetPath;
-        fallback.parseResult.diagnostics.push_back(RenderMaterialAssetParseDiagnostic{
-            .code = RenderMaterialAssetParseDiagnosticCode::InvalidGraphField,
-            .severity = RenderMaterialAssetParseDiagnosticSeverity::Warning,
-            .path = material.graphSourceAssetPath,
-            .message = "Authoritative source graph asset is missing; rendering the graph embedded in the material as a fallback.",
-        });
-        return fallback;
-    }
-    RuntimeMaterialSourceGraphLoadResult result{};
-    result.assetId = metadata->id;
-    result.path = ResolveRuntimeMaterialAssetPhysicalPath(manager, *metadata);
-    const kb::assets::AssetHandle<RenderMaterialGraphDocument> loaded =
-        manager.Load<RenderMaterialGraphDocument>(metadata->id);
-    if (loaded.IsLoaded()) {
-        result.graph = *loaded;
-    } else {
-        result.parseResult.diagnostics.push_back(RenderMaterialAssetParseDiagnostic{
-            .code = RenderMaterialAssetParseDiagnosticCode::FileOpenFailed,
-            .assetId = metadata->id,
-            .path = result.path.empty() ? metadata->virtualPath : result.path,
-            .message = manager.LastError().empty()
-                ? "Material graph asset could not be loaded."
-                : manager.LastError(),
-        });
-    }
-    return result;
+    return RuntimeMaterialSourceGraphLoadResult{
+        .graph = std::move(resolved.graph),
+        .parseResult = std::move(resolved.parseResult),
+        .assetId = resolved.assetId,
+        .path = std::move(resolved.path),
+        .usedInlineFallback = usedInlineFallback,
+    };
 }
 
 RuntimeMaterialFunctionLibraryBuildResult BuildRuntimeMaterialFunctionLibrary(
