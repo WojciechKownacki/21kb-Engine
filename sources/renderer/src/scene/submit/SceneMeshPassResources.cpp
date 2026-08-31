@@ -87,6 +87,41 @@ constexpr std::uint64_t kSkinnedGraphPipelineStateBit = 1ULL << 63U;
     };
 }
 
+struct CurrentGraphShaderProgram {
+    std::filesystem::path fragment;
+    std::optional<std::filesystem::path> vertex;
+};
+
+[[nodiscard]] std::optional<CurrentGraphShaderProgram> CurrentGraphShaderProgramPaths(
+    const std::filesystem::path& backendRoot) {
+    std::ifstream pointer{ backendRoot / "program.current", std::ios::binary };
+    std::string fragmentFilename;
+    std::string vertexFilename;
+    std::string trailing;
+    if (!(pointer >> fragmentFilename >> vertexFilename) || (pointer >> trailing)) {
+        return std::nullopt;
+    }
+    const auto resolveLeaf = [&backendRoot](
+                                 const std::string& filename,
+                                 std::string_view stage) -> std::optional<std::filesystem::path> {
+        const std::filesystem::path leaf{ filename };
+        const std::string prefix = std::string{ stage } + "_";
+        if (leaf.empty() || leaf.has_parent_path() || leaf.filename() != leaf ||
+            !filename.starts_with(prefix) || !filename.ends_with(".bin")) {
+            return std::nullopt;
+        }
+        return backendRoot / leaf;
+    };
+    const std::optional<std::filesystem::path> fragment = resolveLeaf(fragmentFilename, "fs");
+    if (!fragment.has_value()) return std::nullopt;
+    std::optional<std::filesystem::path> vertex;
+    if (vertexFilename != "-") {
+        vertex = resolveLeaf(vertexFilename, "vs");
+        if (!vertex.has_value()) return std::nullopt;
+    }
+    return CurrentGraphShaderProgram{ .fragment = *fragment, .vertex = std::move(vertex) };
+}
+
 [[nodiscard]] std::uint64_t GraphBinaryRevision(
     std::string_view cacheRoot,
     std::uint64_t sourceHash,
@@ -109,18 +144,25 @@ constexpr std::uint64_t kSkinnedGraphPipelineStateBit = 1ULL << 63U;
         ("variant_" + std::to_string(variantKey)) /
         pass / backendDirectory;
     std::uint64_t hash = 1469598103934665603ULL;
-    for (const char* name : { "fs.bin.hash", "vs.bin.hash" }) {
-        std::ifstream input{ root / name, std::ios::binary };
-        if (!input) {
-            continue;
+    const std::optional<CurrentGraphShaderProgram> program = CurrentGraphShaderProgramPaths(root);
+    if (program.has_value()) {
+        std::vector<std::filesystem::path> identityPaths{
+            root / "program.current",
+            std::filesystem::path{ program->fragment.string() + ".meta" },
+        };
+        if (program->vertex.has_value()) {
+            identityPaths.emplace_back(program->vertex->string() + ".meta");
         }
-        char ch = 0;
-        while (input.get(ch)) {
-            hash ^= static_cast<unsigned char>(ch);
+        for (const std::filesystem::path& path : identityPaths) {
+            std::ifstream input{ path, std::ios::binary };
+            char ch = 0;
+            while (input.get(ch)) {
+                hash ^= static_cast<unsigned char>(ch);
+                hash *= 1099511628211ULL;
+            }
+            hash ^= 0xffU;
             hash *= 1099511628211ULL;
         }
-        hash ^= 0xffU;
-        hash *= 1099511628211ULL;
     }
     return hash;
 }
@@ -627,8 +669,14 @@ bgfx::ProgramHandle SceneMeshPassResources::LoadProgramForKey(const MaterialProg
             GraphPlatformDirectoryForRuntime() /
             ("graph_" + std::to_string(key.graphSourceHash)) /
             ("variant_" + std::to_string(key.variantKey)) / key.pass / backendDirectory;
-        fragmentBytes = ReadShaderBinaryFile(artifactRoot / "fs.bin");
-        vertexBytes = ReadShaderBinaryFile(artifactRoot / "vs.bin");
+        const std::optional<CurrentGraphShaderProgram> program =
+            CurrentGraphShaderProgramPaths(artifactRoot);
+        if (program.has_value()) {
+            fragmentBytes = ReadShaderBinaryFile(program->fragment);
+            if (program->vertex.has_value()) {
+                vertexBytes = ReadShaderBinaryFile(*program->vertex);
+            }
+        }
     }
     if (fragmentBytes.empty()) {
         return BGFX_INVALID_HANDLE;

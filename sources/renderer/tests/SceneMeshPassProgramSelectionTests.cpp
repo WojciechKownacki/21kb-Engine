@@ -15,6 +15,7 @@
 #include <array>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <string_view>
 
@@ -406,21 +407,30 @@ void RunSceneMeshPassProgramSelectionTest() {
                 !missingRequiredShadowResolution.fellBackToBuiltin,
             "P0.5: missing WPO/masked ShadowDepth binary must fail closed instead of using position-only/opaque fallback");
 
-        const std::filesystem::path wpoVertexPath = cacheRoot /
+        const std::filesystem::path wpoBackendRoot = cacheRoot /
+            "windows" /
             ("graph_" + std::to_string(wpoShader.sourceHash)) /
             ("variant_" + std::to_string(wpoVariant)) /
             "BaseOpaque" /
-            "dxbc" /
-            "vs.bin";
-        Require(std::filesystem::exists(wpoVertexPath), "KBMAT-MAT99-19: WPO cook must leave a scene vs.bin on disk");
+            "dxbc";
+        std::ifstream vertexPointer{ wpoBackendRoot / "program.current", std::ios::binary };
+        std::string fragmentFilename;
+        std::string vertexFilename;
+        std::string unexpectedPointerToken;
+        Require((vertexPointer >> fragmentFilename >> vertexFilename) &&
+                !(vertexPointer >> unexpectedPointerToken),
+            "KBMAT-MAT99-19: WPO cook must atomically publish one current scene shader program");
+        const std::filesystem::path wpoVertexPath = wpoBackendRoot / vertexFilename;
+        Require(std::filesystem::exists(wpoVertexPath),
+            "KBMAT-MAT99-19: WPO current pointer must reference an immutable scene vertex binary");
         std::filesystem::remove(wpoVertexPath, error);
-        Require(!error, "KBMAT-MAT99-19: WPO test could not remove generated vs.bin");
+        Require(!error, "KBMAT-MAT99-19: WPO test could not remove the current generated vertex binary");
         registryStatsBefore = passResources.ProgramRegistryStats();
         const RenderMaterialResource missingWpoVsMaterial = MakeGraphMaterialResource(
             wpoShader.sourceHash,
-            wpoVariant ^ 0x0100'0000'0000'0000ULL,
+            wpoVariant,
             wpoPipeline,
-            0xC0DEU,
+            0xC0DFU,
             1U,
             true);
         const SceneMeshPassProgramResolution missingWpoVs = passResources.ResolveMeshPassProgram(&missingWpoVsMaterial, MeshPassType::BaseOpaque);
@@ -428,7 +438,7 @@ void RunSceneMeshPassProgramSelectionTest() {
                 missingWpoVs.status == SceneRenderMaterialProgramStatus::GraphFallback &&
                 missingWpoVs.key.requiresGeneratedVertexShader &&
                 passResources.ProgramRegistryStats().failures == registryStatsBefore.failures + 1U,
-            "KBMAT-MAT99-19: missing WPO vs.bin must not silently bind the fixed mesh vertex shader as a graph program");
+            "KBMAT-MAT99-19: missing current WPO vertex binary must not silently bind the fixed mesh vertex shader as a graph program");
 
         Require(passResources.ProgramBindStats().graphProgramBindCount == 10U,
             "KBMAT-MAT07/P0.5/SMA-36: static and skinned graph program binds must be counted in submit stats");
