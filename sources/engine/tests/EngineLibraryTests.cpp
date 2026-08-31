@@ -5122,8 +5122,12 @@ void RunLifecycleSoakTest() {
     kb::tests::Require(deliveries == kSubscriptionCycles, "Soak subscribe/unsubscribe delivery count drifted");
 
     const std::filesystem::path scenePath = std::filesystem::temp_directory_path() / "21kb-library-soak-scene.21kbscene";
+    std::filesystem::path sceneMetaPath = scenePath;
+    sceneMetaPath.replace_extension(".meta");
     std::error_code sceneFileError;
     std::filesystem::remove(scenePath, sceneFileError);
+    sceneFileError.clear();
+    std::filesystem::remove(sceneMetaPath, sceneFileError);
     {
         kb::scene::Scene source;
         static_cast<void>(source.Entities().CreateObject({ .name = "SoakLoadedRoot" }));
@@ -5134,14 +5138,21 @@ void RunLifecycleSoakTest() {
         kb::scene::Scene loadedScene;
         for (std::size_t index = 0U; index < kLoadUnloadCycles; ++index) {
             const std::uint64_t loadedId = loadedScene.LoadedContent().Load(scenePath, true);
-            kb::tests::Require(
-                loadedId != 0U && loadedScene.LoadedContent().Exists(loadedId) &&
-                    loadedScene.LoadedContent().Progress(loadedId) == 1.0F && loadedScene.LoadedContent().Unload(loadedId) &&
-                    !loadedScene.LoadedContent().Exists(loadedId) && loadedScene.Entities().Count() == 0U,
-                "Soak load/unload leaked loaded scene content");
+            kb::tests::Require(loadedId != 0U, "Soak scene load failed");
+            kb::tests::Require(loadedScene.LoadedContent().Exists(loadedId),
+                "Soak scene load did not register its content record");
+            kb::tests::Require(loadedScene.LoadedContent().Progress(loadedId) == 1.0F,
+                "Soak scene load did not report completion");
+            kb::tests::Require(loadedScene.LoadedContent().Unload(loadedId), "Soak scene unload failed");
+            kb::tests::Require(!loadedScene.LoadedContent().Exists(loadedId),
+                "Soak scene unload left its content record behind");
+            kb::tests::Require(loadedScene.Entities().Count() == 0U,
+                "Soak scene unload left instantiated entities behind");
         }
     }
     std::filesystem::remove(scenePath, sceneFileError);
+    sceneFileError.clear();
+    std::filesystem::remove(sceneMetaPath, sceneFileError);
 
     SoakReloadCounter reloadCounter;
     kb::project::ProjectDescriptor reloadProject;

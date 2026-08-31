@@ -1383,7 +1383,9 @@ void AnUnfinishedPackNeverReachesTheDestination() {
         "A pack that was never finished replaced the one that was already published");
     std::size_t strays = 0U;
     for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator{ root }) {
-        strays += (entry.path() != packPath) ? 1U : 0U;
+        const bool persistentPosixLock =
+            entry.path().filename().generic_string().ends_with(".kbpacklock");
+        strays += (entry.path() != packPath && !persistentPosixLock) ? 1U : 0U;
     }
     Require(strays == 0U, "An abandoned pack writer left its staging files behind");
 
@@ -1891,7 +1893,9 @@ void TwoWritersOnOnePackDoNotForgeEachOthersBytes() {
     // A writer that refused must not have left its staging files behind either.
     std::size_t strays = 0U;
     for (const std::filesystem::directory_entry& stray : std::filesystem::directory_iterator{ root }) {
-        strays += (stray.path() != packPath) ? 1U : 0U;
+        const bool persistentPosixLock =
+            stray.path().filename().generic_string().ends_with(".kbpacklock");
+        strays += (stray.path() != packPath && !persistentPosixLock) ? 1U : 0U;
     }
     Require(strays == 0U, "A refused writer left its staging files behind");
 
