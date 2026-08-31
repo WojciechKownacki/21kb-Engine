@@ -2,12 +2,15 @@
 
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/assets/bake/AssetPack.hpp"
+#include "project/ProjectDescriptorFormat.hpp"
 
 #include <algorithm>
 #include <array>
 #include <filesystem>
 #include <limits>
+#include <new>
 #include <set>
+#include <stdexcept>
 #include <tuple>
 #include <utility>
 
@@ -17,9 +20,14 @@ namespace {
 constexpr std::array<std::uint8_t, 8U> kMagic{ '2', '1', 'K', 'B', 'R', 'M', 'F', 0U };
 constexpr std::array<std::uint8_t, 8U> kSourceMagic{ '2', '1', 'K', 'B', 'S', 'R', 'C', 0U };
 constexpr std::uint64_t kMaxManifestBytes = 64ULL * 1024ULL * 1024ULL;
-constexpr std::uint32_t kMaxEntries = 1'000'000U;
-constexpr std::uint32_t kMaxDependenciesPerAsset = 1'000'000U;
+constexpr std::uint32_t kMaxDescriptorTargetPlatforms =
+    kb::project::ProjectDescriptorFormat::MaxTargetPlatformCount;
+constexpr std::uint32_t kMaxDescriptorModules = kb::project::ProjectDescriptorFormat::MaxModuleCount;
+constexpr std::uint32_t kMaxDescriptorPlugins = kb::project::ProjectDescriptorFormat::MaxPluginCount;
+constexpr std::uint32_t kMaxAssets = 65'536U;
+constexpr std::uint32_t kMaxDependenciesPerAsset = 65'536U;
 constexpr std::uint32_t kMaxArtifactsPerAsset = 64U;
+constexpr std::uint32_t kMaxAuxiliaryFiles = 131'072U;
 constexpr std::uint32_t kMaxShortStringBytes = 255U;
 constexpr std::uint32_t kMaxPathBytes = 4096U;
 constexpr std::uint32_t kMaxDescriptionBytes = 65535U;
@@ -94,10 +102,31 @@ public:
         return cursor_ == bytes_.size();
     }
 
+    [[nodiscard]] std::size_t Remaining() const noexcept {
+        return bytes_.size() - cursor_;
+    }
+
 private:
     std::span<const std::uint8_t> bytes_;
     std::size_t cursor_ = 0U;
 };
+
+[[nodiscard]] RuntimeAssetManifestStatus ReadBoundedCount(
+    Reader& reader,
+    std::uint32_t& count,
+    std::uint32_t maximumCount,
+    std::size_t minimumEntryBytes) noexcept {
+    if (!reader.ReadUInt32(count)) {
+        return RuntimeAssetManifestStatus::Malformed;
+    }
+    if (count > maximumCount) {
+        return RuntimeAssetManifestStatus::TooLarge;
+    }
+    if (minimumEntryBytes == 0U || count > reader.Remaining() / minimumEntryBytes) {
+        return RuntimeAssetManifestStatus::Malformed;
+    }
+    return RuntimeAssetManifestStatus::Success;
+}
 
 [[nodiscard]] bool IsCleanText(std::string_view text) noexcept {
     return std::ranges::none_of(text, [](char value) { return value == '\0'; });
@@ -185,11 +214,14 @@ private:
         manifest.targetProfileHash != BakeTargetProfileFingerprint(profile)) {
         return RuntimeAssetManifestStatus::InvalidProfile;
     }
+    if (manifest.descriptor.targetPlatforms.size() > kMaxDescriptorTargetPlatforms ||
+        manifest.descriptor.modules.size() > kMaxDescriptorModules ||
+        manifest.descriptor.plugins.size() > kMaxDescriptorPlugins || manifest.assets.size() > kMaxAssets ||
+        manifest.auxiliaryFiles.size() > kMaxAuxiliaryFiles) {
+        return RuntimeAssetManifestStatus::TooLarge;
+    }
     if (!IsValidDescriptor(manifest.descriptor) || !IsValidSettings(manifest.settings)) {
         return RuntimeAssetManifestStatus::InvalidProject;
-    }
-    if (manifest.assets.size() > kMaxEntries || manifest.auxiliaryFiles.size() > kMaxEntries) {
-        return RuntimeAssetManifestStatus::TooLarge;
     }
 
     std::ranges::sort(manifest.assets, [](const RuntimeAssetManifestEntry& lhs, const RuntimeAssetManifestEntry& rhs) {
@@ -198,12 +230,15 @@ private:
     std::set<std::uint64_t> assetIds;
     std::set<std::string> virtualPaths;
     for (RuntimeAssetManifestEntry& asset : manifest.assets) {
+        if (asset.dependencies.size() > kMaxDependenciesPerAsset ||
+            asset.artifacts.size() > kMaxArtifactsPerAsset) {
+            return RuntimeAssetManifestStatus::TooLarge;
+        }
         if (!asset.id.IsValid() || !IsValidBakeCacheName(asset.type) ||
             asset.importCategory.size() > kMaxShortStringBytes || asset.browseTag.size() > kMaxShortStringBytes ||
             asset.name.empty() || asset.name.size() > kMaxShortStringBytes ||
             !IsGameVirtualPath(asset.virtualPath) || asset.sourceExtension.size() > kMaxShortStringBytes ||
-            asset.contentHash == 0U || asset.dependencies.size() > kMaxDependenciesPerAsset ||
-            asset.artifacts.empty() || asset.artifacts.size() > kMaxArtifactsPerAsset ||
+            asset.contentHash == 0U || asset.artifacts.empty() ||
             !IsCleanText(asset.importCategory) || !IsCleanText(asset.browseTag) ||
             !IsCleanText(asset.name) || !IsCleanText(asset.sourceExtension)) {
             return RuntimeAssetManifestStatus::InvalidAsset;
@@ -282,51 +317,59 @@ void EncodeDescriptor(std::vector<std::uint8_t>& bytes, const kb::project::Proje
     PutUInt8(bytes, descriptor.disableEnginePluginsByDefault ? 1U : 0U);
 }
 
-[[nodiscard]] bool DecodeDescriptor(Reader& reader, kb::project::ProjectDescriptor& descriptor) {
+[[nodiscard]] RuntimeAssetManifestStatus DecodeDescriptor(
+    Reader& reader,
+    kb::project::ProjectDescriptor& descriptor) {
     std::uint32_t targetCount = 0U;
     std::uint32_t moduleCount = 0U;
     std::uint32_t pluginCount = 0U;
     if (!reader.ReadUInt32(descriptor.fileVersion) ||
         !reader.ReadString(descriptor.engineAssociation, kMaxShortStringBytes) ||
-        !reader.ReadString(descriptor.contentRoot, kMaxPathBytes) || !reader.ReadUInt32(targetCount) ||
-        targetCount > kMaxEntries) {
-        return false;
+        !reader.ReadString(descriptor.contentRoot, kMaxPathBytes)) {
+        return RuntimeAssetManifestStatus::Malformed;
+    }
+    RuntimeAssetManifestStatus countStatus =
+        ReadBoundedCount(reader, targetCount, kMaxDescriptorTargetPlatforms, 4U);
+    if (countStatus != RuntimeAssetManifestStatus::Success) {
+        return countStatus;
     }
     descriptor.targetPlatforms.resize(targetCount);
     for (std::string& target : descriptor.targetPlatforms) {
         if (!reader.ReadString(target, kMaxShortStringBytes)) {
-            return false;
+            return RuntimeAssetManifestStatus::Malformed;
         }
     }
-    if (!reader.ReadUInt32(moduleCount) || moduleCount > kMaxEntries) {
-        return false;
+    countStatus = ReadBoundedCount(reader, moduleCount, kMaxDescriptorModules, 12U);
+    if (countStatus != RuntimeAssetManifestStatus::Success) {
+        return countStatus;
     }
     descriptor.modules.resize(moduleCount);
     for (kb::project::ProjectModuleDescriptor& module : descriptor.modules) {
         if (!reader.ReadString(module.name, kMaxShortStringBytes) ||
             !reader.ReadString(module.type, kMaxShortStringBytes) ||
             !reader.ReadString(module.loadingPhase, kMaxShortStringBytes)) {
-            return false;
+            return RuntimeAssetManifestStatus::Malformed;
         }
     }
-    if (!reader.ReadUInt32(pluginCount) || pluginCount > kMaxEntries) {
-        return false;
+    countStatus = ReadBoundedCount(reader, pluginCount, kMaxDescriptorPlugins, 9U);
+    if (countStatus != RuntimeAssetManifestStatus::Success) {
+        return countStatus;
     }
     descriptor.plugins.resize(pluginCount);
     for (kb::project::ProjectPluginReference& plugin : descriptor.plugins) {
         std::uint8_t enabled = 0U;
         if (!reader.ReadString(plugin.name, kMaxShortStringBytes) ||
             !reader.ReadString(plugin.binaryPath, kMaxPathBytes) || !reader.ReadUInt8(enabled) || enabled > 1U) {
-            return false;
+            return RuntimeAssetManifestStatus::Malformed;
         }
         plugin.enabled = enabled != 0U;
     }
     std::uint8_t disabled = 0U;
     if (!reader.ReadUInt8(disabled) || disabled > 1U) {
-        return false;
+        return RuntimeAssetManifestStatus::Malformed;
     }
     descriptor.disableEnginePluginsByDefault = disabled != 0U;
-    return true;
+    return RuntimeAssetManifestStatus::Success;
 }
 
 void EncodeSettings(std::vector<std::uint8_t>& bytes, const kb::project::ProjectSettings& settings) {
@@ -437,6 +480,7 @@ RuntimeAssetManifestStatus EncodeRuntimeAssetManifest(
 RuntimeAssetManifestStatus DecodeRuntimeAssetManifest(
     std::span<const std::uint8_t> bytes,
     RuntimeAssetManifest& out) {
+    try {
     if (bytes.size() > kMaxManifestBytes || bytes.size() > kMaxAssetPackBlockBytes) {
         return RuntimeAssetManifestStatus::TooLarge;
     }
@@ -455,14 +499,21 @@ RuntimeAssetManifestStatus DecodeRuntimeAssetManifest(
     }
     if (!reader.ReadUInt32(reserved) || reserved != 0U ||
         !reader.ReadString(manifest.targetProfileId, kMaxShortStringBytes) ||
-        !reader.ReadUInt64(manifest.targetProfileHash) || !DecodeDescriptor(reader, manifest.descriptor) ||
-        !DecodeSettings(reader, manifest.settings)) {
+        !reader.ReadUInt64(manifest.targetProfileHash)) {
+        return RuntimeAssetManifestStatus::Malformed;
+    }
+    const RuntimeAssetManifestStatus descriptorStatus = DecodeDescriptor(reader, manifest.descriptor);
+    if (descriptorStatus != RuntimeAssetManifestStatus::Success) {
+        return descriptorStatus;
+    }
+    if (!DecodeSettings(reader, manifest.settings)) {
         return RuntimeAssetManifestStatus::Malformed;
     }
 
     std::uint32_t assetCount = 0U;
-    if (!reader.ReadUInt32(assetCount) || assetCount > kMaxEntries) {
-        return RuntimeAssetManifestStatus::Malformed;
+    RuntimeAssetManifestStatus countStatus = ReadBoundedCount(reader, assetCount, kMaxAssets, 49U);
+    if (countStatus != RuntimeAssetManifestStatus::Success) {
+        return countStatus;
     }
     manifest.assets.resize(assetCount);
     for (RuntimeAssetManifestEntry& asset : manifest.assets) {
@@ -476,9 +527,12 @@ RuntimeAssetManifestStatus DecodeRuntimeAssetManifest(
             !reader.ReadString(asset.virtualPath, kMaxPathBytes) ||
             !reader.ReadString(asset.sourceExtension, kMaxShortStringBytes) ||
             !reader.ReadUInt64(asset.contentHash) || !reader.ReadUInt8(runtimeLoadable) ||
-            runtimeLoadable > 1U || !reader.ReadUInt32(dependencyCount) ||
-            dependencyCount > kMaxDependenciesPerAsset) {
+            runtimeLoadable > 1U) {
             return RuntimeAssetManifestStatus::Malformed;
+        }
+        countStatus = ReadBoundedCount(reader, dependencyCount, kMaxDependenciesPerAsset, 8U);
+        if (countStatus != RuntimeAssetManifestStatus::Success) {
+            return countStatus;
         }
         asset.runtimeLoadable = runtimeLoadable != 0U;
         asset.dependencies.resize(dependencyCount);
@@ -487,8 +541,9 @@ RuntimeAssetManifestStatus DecodeRuntimeAssetManifest(
                 return RuntimeAssetManifestStatus::Malformed;
             }
         }
-        if (!reader.ReadUInt32(artifactCount) || artifactCount > kMaxArtifactsPerAsset) {
-            return RuntimeAssetManifestStatus::Malformed;
+        countStatus = ReadBoundedCount(reader, artifactCount, kMaxArtifactsPerAsset, 24U);
+        if (countStatus != RuntimeAssetManifestStatus::Success) {
+            return countStatus;
         }
         asset.artifacts.resize(artifactCount);
         for (RuntimeArtifactReference& artifact : asset.artifacts) {
@@ -508,8 +563,9 @@ RuntimeAssetManifestStatus DecodeRuntimeAssetManifest(
     }
 
     std::uint32_t auxiliaryCount = 0U;
-    if (!reader.ReadUInt32(auxiliaryCount) || auxiliaryCount > kMaxEntries) {
-        return RuntimeAssetManifestStatus::Malformed;
+    countStatus = ReadBoundedCount(reader, auxiliaryCount, kMaxAuxiliaryFiles, 28U);
+    if (countStatus != RuntimeAssetManifestStatus::Success) {
+        return countStatus;
     }
     manifest.auxiliaryFiles.resize(auxiliaryCount);
     for (RuntimeAuxiliaryFileEntry& file : manifest.auxiliaryFiles) {
@@ -528,6 +584,16 @@ RuntimeAssetManifestStatus DecodeRuntimeAssetManifest(
     }
     out = std::move(manifest);
     return RuntimeAssetManifestStatus::Success;
+    } catch (const std::bad_alloc&) {
+        return RuntimeAssetManifestStatus::TooLarge;
+    } catch (const std::length_error&) {
+        return RuntimeAssetManifestStatus::TooLarge;
+    } catch (const std::exception&) {
+        // Filesystem path conversion and normalization are allowed to reject hostile byte
+        // sequences. A decoder is a trust boundary: such input is malformed, never an
+        // exception that may escape into the runtime mount path.
+        return RuntimeAssetManifestStatus::Malformed;
+    }
 }
 
 bool EncodeRuntimeSourceBlob(

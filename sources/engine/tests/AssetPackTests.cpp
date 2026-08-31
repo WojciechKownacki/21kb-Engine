@@ -120,6 +120,169 @@ void PokeUInt64(std::vector<std::uint8_t>& bytes, std::size_t offset, std::uint6
     }
 }
 
+[[nodiscard]] std::size_t SkipRuntimeManifestString(
+    std::span<const std::uint8_t> bytes,
+    std::size_t cursor) {
+    const std::uint32_t length = PeekUInt32(bytes, cursor);
+    cursor += 4U;
+    Require(length <= bytes.size() - cursor,
+        "Runtime-manifest fixture string extends past the encoded manifest");
+    return cursor + length;
+}
+
+struct RuntimeManifestCountOffsets {
+    std::size_t targetPlatforms = 0U;
+    std::size_t modules = 0U;
+    std::size_t plugins = 0U;
+    std::size_t assets = 0U;
+    std::size_t firstAssetDependencies = 0U;
+    std::size_t firstAssetArtifacts = 0U;
+    std::size_t auxiliaryFiles = 0U;
+};
+
+// Independent walk of the runtime-manifest wire layout. The hostile-count tests must not ask
+// the production decoder where its own count fields live, because a shared offset bug would
+// otherwise mutate an unrelated field and still appear to exercise the intended guard.
+[[nodiscard]] RuntimeManifestCountOffsets ObserveRuntimeManifestCountOffsets(
+    std::span<const std::uint8_t> bytes) {
+    Require(bytes.size() >= 16U, "Runtime-manifest fixture is shorter than its fixed prefix");
+    std::size_t cursor = 16U; // magic, version and reserved word
+    cursor = SkipRuntimeManifestString(bytes, cursor);
+    cursor += 8U; // target profile hash
+
+    cursor += 4U; // descriptor file version
+    cursor = SkipRuntimeManifestString(bytes, cursor); // engine association
+    cursor = SkipRuntimeManifestString(bytes, cursor); // content root
+
+    RuntimeManifestCountOffsets offsets{};
+    offsets.targetPlatforms = cursor;
+    const std::uint32_t targetCount = PeekUInt32(bytes, cursor);
+    cursor += 4U;
+    for (std::uint32_t index = 0U; index < targetCount; ++index) {
+        cursor = SkipRuntimeManifestString(bytes, cursor);
+    }
+
+    offsets.modules = cursor;
+    const std::uint32_t moduleCount = PeekUInt32(bytes, cursor);
+    cursor += 4U;
+    for (std::uint32_t index = 0U; index < moduleCount; ++index) {
+        cursor = SkipRuntimeManifestString(bytes, cursor);
+        cursor = SkipRuntimeManifestString(bytes, cursor);
+        cursor = SkipRuntimeManifestString(bytes, cursor);
+    }
+
+    offsets.plugins = cursor;
+    const std::uint32_t pluginCount = PeekUInt32(bytes, cursor);
+    cursor += 4U;
+    for (std::uint32_t index = 0U; index < pluginCount; ++index) {
+        cursor = SkipRuntimeManifestString(bytes, cursor);
+        cursor = SkipRuntimeManifestString(bytes, cursor);
+        cursor += 1U; // enabled
+    }
+    cursor += 1U; // disableEnginePluginsByDefault
+
+    for (std::uint32_t index = 0U; index < 6U; ++index) {
+        cursor = SkipRuntimeManifestString(bytes, cursor);
+    }
+    cursor += 4U; // lighting path
+    cursor += 1U; // input enabled
+    cursor = SkipRuntimeManifestString(bytes, cursor);
+    cursor = SkipRuntimeManifestString(bytes, cursor);
+
+    offsets.assets = cursor;
+    const std::uint32_t assetCount = PeekUInt32(bytes, cursor);
+    Require(assetCount != 0U, "Runtime-manifest hostile-count fixture has no asset");
+    cursor += 4U;
+    for (std::uint32_t assetIndex = 0U; assetIndex < assetCount; ++assetIndex) {
+        cursor += 8U; // asset id
+        for (std::uint32_t stringIndex = 0U; stringIndex < 6U; ++stringIndex) {
+            cursor = SkipRuntimeManifestString(bytes, cursor);
+        }
+        cursor += 8U; // content hash
+        cursor += 1U; // runtime loadable
+
+        if (assetIndex == 0U) {
+            offsets.firstAssetDependencies = cursor;
+        }
+        const std::uint32_t dependencyCount = PeekUInt32(bytes, cursor);
+        cursor += 4U + static_cast<std::size_t>(dependencyCount) * 8U;
+
+        if (assetIndex == 0U) {
+            offsets.firstAssetArtifacts = cursor;
+        }
+        const std::uint32_t artifactCount = PeekUInt32(bytes, cursor);
+        cursor += 4U;
+        for (std::uint32_t artifactIndex = 0U; artifactIndex < artifactCount; ++artifactIndex) {
+            cursor += 20U; // digest, encoding and three reserved bytes
+            cursor = SkipRuntimeManifestString(bytes, cursor);
+        }
+    }
+
+    offsets.auxiliaryFiles = cursor;
+    const std::uint32_t auxiliaryCount = PeekUInt32(bytes, cursor);
+    cursor += 4U;
+    for (std::uint32_t index = 0U; index < auxiliaryCount; ++index) {
+        cursor = SkipRuntimeManifestString(bytes, cursor);
+        cursor += 24U; // content hash and artifact digest
+    }
+    Require(cursor == bytes.size(), "Runtime-manifest fixture walk did not consume the manifest");
+    return offsets;
+}
+
+[[nodiscard]] bake::RuntimeAssetManifest RuntimeManifestOutputSentinel() {
+    bake::RuntimeAssetManifest sentinel{};
+    sentinel.targetProfileId = "unchanged-profile";
+    sentinel.targetProfileHash = 0x1122334455667788ULL;
+    sentinel.descriptor.fileVersion = 3U;
+    sentinel.descriptor.engineAssociation = "unchanged-engine";
+    sentinel.descriptor.contentRoot = "UnchangedAssets";
+    sentinel.descriptor.targetPlatforms = { "UnchangedTarget" };
+    sentinel.descriptor.modules = { { .name = "UnchangedModule", .type = "Editor",
+        .loadingPhase = "PostDefault" } };
+    sentinel.descriptor.plugins = { { .name = "UnchangedPlugin", .binaryPath = "Unchanged.dll",
+        .enabled = false } };
+    sentinel.descriptor.disableEnginePluginsByDefault = true;
+    sentinel.settings.name = "UnchangedSettings";
+    sentinel.settings.gameName = "UnchangedGame";
+    sentinel.settings.defaultMap = "/Game/Unchanged.21kbscene";
+    sentinel.assets = { bake::RuntimeAssetManifestEntry{
+        .id = kb::assets::AssetId{ 77U },
+        .type = "UnchangedAsset",
+        .name = "Unchanged",
+        .virtualPath = "/Game/Unchanged.asset",
+        .contentHash = 88U,
+    } };
+    sentinel.auxiliaryFiles = { bake::RuntimeAuxiliaryFileEntry{
+        .virtualPath = "/Engine/Unchanged.bin",
+        .contentHash = 99U,
+        .artifactDigest = { 100U, 101U },
+    } };
+    return sentinel;
+}
+
+[[nodiscard]] bool IsRuntimeManifestOutputSentinel(const bake::RuntimeAssetManifest& value) {
+    return value.targetProfileId == "unchanged-profile" &&
+        value.targetProfileHash == 0x1122334455667788ULL && value.descriptor.fileVersion == 3U &&
+        value.descriptor.engineAssociation == "unchanged-engine" &&
+        value.descriptor.contentRoot == "UnchangedAssets" &&
+        value.descriptor.targetPlatforms == std::vector<std::string>{ "UnchangedTarget" } &&
+        value.descriptor.modules.size() == 1U &&
+        value.descriptor.modules.front().name == "UnchangedModule" &&
+        value.descriptor.modules.front().type == "Editor" &&
+        value.descriptor.modules.front().loadingPhase == "PostDefault" &&
+        value.descriptor.plugins.size() == 1U &&
+        value.descriptor.plugins.front().name == "UnchangedPlugin" &&
+        value.descriptor.plugins.front().binaryPath == "Unchanged.dll" &&
+        !value.descriptor.plugins.front().enabled && value.descriptor.disableEnginePluginsByDefault &&
+        value.settings.name == "UnchangedSettings" && value.settings.gameName == "UnchangedGame" &&
+        value.settings.defaultMap == "/Game/Unchanged.21kbscene" && value.assets.size() == 1U &&
+        value.assets.front().id.value == 77U && value.assets.front().type == "UnchangedAsset" &&
+        value.assets.front().contentHash == 88U && value.auxiliaryFiles.size() == 1U &&
+        value.auxiliaryFiles.front().virtualPath == "/Engine/Unchanged.bin" &&
+        value.auxiliaryFiles.front().contentHash == 99U &&
+        value.auxiliaryFiles.front().artifactDigest == bake::AssetBakeDigest{ 100U, 101U };
+}
+
 // Where every field of one block entry lies inside the file, walked by the TEST's own reading
 // of the layout. Nothing here comes from the writer's report of what it did.
 struct ObservedBlock {
@@ -399,6 +562,42 @@ void EveryBlockSurvivesTheContainer() {
     PurgeDirectory(root);
 }
 
+// The fingerprint describes the target recipe, while these fields describe the actual file
+// layout. A copied fingerprint must not make a pack with doctored alignment claims compatible.
+void ProfileMatchIncludesRecordedAlignments() {
+    const std::filesystem::path root = TestRoot() / "profile-layout";
+    PurgeDirectory(root);
+    std::filesystem::create_directories(root);
+
+    const bake::BakeTargetProfile profile = bake::WindowsX64BakeTargetProfile();
+    const std::filesystem::path source = root / "source.kbpack";
+    const std::filesystem::path doctored = root / "doctored.kbpack";
+    static_cast<void>(BakeSamplePack(source, profile));
+
+    std::vector<std::uint8_t> bytes = ReadFileBytes(source);
+    const std::uint32_t doctoredPackageAlignment = profile.packageBlockAlignmentBytes / 2U;
+    const std::uint32_t doctoredMappedAlignment = profile.mappedBlockAlignmentBytes / 2U;
+    Require(doctoredPackageAlignment != 0U && doctoredMappedAlignment != 0U,
+        "Profile-alignment fixture cannot produce smaller valid alignments");
+    PokeUInt32(bytes, kHeaderPackageAlignmentOffset, doctoredPackageAlignment);
+    PokeUInt32(bytes, kHeaderMappedAlignmentOffset, doctoredMappedAlignment);
+    WriteFileBytes(doctored, bytes);
+
+    bake::AssetPackReader reader;
+    Require(reader.Mount(doctored) == bake::AssetPackReadStatus::Success,
+        "A valid pack with independently valid doctored alignment claims did not mount");
+    Require(reader.Header().targetProfileId == profile.identifier &&
+            reader.Header().targetProfileHash == bake::BakeTargetProfileFingerprint(profile),
+        "Profile-alignment fixture accidentally changed the profile identity");
+    Require(reader.Header().packageBlockAlignmentBytes != profile.packageBlockAlignmentBytes &&
+            reader.Header().mappedBlockAlignmentBytes != profile.mappedBlockAlignmentBytes,
+        "Profile-alignment fixture did not reach the fields under test");
+    Require(!reader.MatchesTargetProfile(profile),
+        "A pack with different recorded alignments matched the target profile by fingerprint alone");
+
+    PurgeDirectory(root);
+}
+
 // Red when: payload bytes can change without changing the catalogue. The index checksum
 // protects metadata; each block digest independently protects the bytes served to runtime.
 void CorruptPayloadIsNeverReturned() {
@@ -560,6 +759,48 @@ void RuntimeManifestIsCanonicalAndHostileInputSafe() {
     trailing.push_back(0U);
     Require(bake::DecodeRuntimeAssetManifest(trailing, decoded) == bake::RuntimeAssetManifestStatus::Malformed,
         "A runtime manifest with trailing bytes was accepted");
+
+    const RuntimeManifestCountOffsets countOffsets = ObserveRuntimeManifestCountOffsets(firstBytes);
+    struct HostileCountCase {
+        std::string_view name;
+        std::size_t offset = 0U;
+        std::uint32_t count = 0U;
+    };
+    // These values are independently one above the decoder's production budgets. Descriptor
+    // limits mirror the persisted project format; runtime assets/dependencies/auxiliary files
+    // have separate aggregate budgets, while one asset has at most 64 artifact variants.
+    const std::array hostileCounts{
+        HostileCountCase{ "descriptor target platforms", countOffsets.targetPlatforms, 257U },
+        HostileCountCase{ "descriptor modules", countOffsets.modules, 4'097U },
+        HostileCountCase{ "descriptor plugins", countOffsets.plugins, 4'097U },
+        HostileCountCase{ "runtime assets", countOffsets.assets, 65'537U },
+        HostileCountCase{ "asset dependencies", countOffsets.firstAssetDependencies, 65'537U },
+        HostileCountCase{ "asset artifacts", countOffsets.firstAssetArtifacts, 65U },
+        HostileCountCase{ "auxiliary files", countOffsets.auxiliaryFiles, 131'073U },
+    };
+    for (const HostileCountCase& hostileCount : hostileCounts) {
+        std::vector<std::uint8_t> hostile = firstBytes;
+        PokeUInt32(hostile, hostileCount.offset, hostileCount.count);
+        bake::RuntimeAssetManifest transactionalOutput = RuntimeManifestOutputSentinel();
+        bake::RuntimeAssetManifestStatus status = bake::RuntimeAssetManifestStatus::Success;
+        bool threw = false;
+        try {
+            status = bake::DecodeRuntimeAssetManifest(hostile, transactionalOutput);
+        } catch (...) {
+            threw = true;
+        }
+        const std::string exceptionMessage = std::string{ "A hostile " } +
+            std::string{ hostileCount.name } +
+            " count escaped the runtime-manifest decoder as an exception";
+        Require(!threw, exceptionMessage.c_str());
+        const std::string budgetMessage = std::string{ "A hostile " } +
+            std::string{ hostileCount.name } +
+            " count was not refused by its explicit resource budget";
+        Require(status == bake::RuntimeAssetManifestStatus::TooLarge, budgetMessage.c_str());
+        const std::string outputMessage = std::string{ "Refusing a hostile " } +
+            std::string{ hostileCount.name } + " count changed the caller's output manifest";
+        Require(IsRuntimeManifestOutputSentinel(transactionalOutput), outputMessage.c_str());
+    }
 
     bake::RuntimeAssetManifest duplicate = first;
     duplicate.auxiliaryFiles.front().virtualPath = duplicate.assets.front().virtualPath;
@@ -772,6 +1013,24 @@ void AHostilePackIsRefusedRatherThanTrusted() {
         },
         true, bake::AssetPackReadStatus::BlockOutOfRange, "A block placed off its own alignment was trusted");
     requireRefusal(
+        "mapped-block-understates-alignment",
+        [&](std::vector<std::uint8_t>& file) {
+            const std::vector<ObservedArtifact> observed = ObservePack(file);
+            const auto artifact = std::ranges::find_if(observed, [](const ObservedArtifact& candidate) {
+                return std::ranges::any_of(candidate.blocks, [](const ObservedBlock& block) {
+                    return block.name == "mapped-pages";
+                });
+            });
+            Require(artifact != observed.end(), "The mapped-alignment fixture needs a mapped block");
+            const auto mapped = std::ranges::find_if(artifact->blocks, [](const ObservedBlock& block) {
+                return block.name == "mapped-pages";
+            });
+            PokeUInt32(file, mapped->alignmentFieldOffset,
+                PeekUInt32(file, kHeaderPackageAlignmentOffset));
+        },
+        true, bake::AssetPackReadStatus::BlockOutOfRange,
+        "A mapped block that claimed less than the mapping granularity was trusted");
+    requireRefusal(
         "offset-inside-index",
         [&](std::vector<std::uint8_t>& file) {
             const std::vector<ObservedArtifact> observed = ObservePack(file);
@@ -981,6 +1240,9 @@ void PublicationIsOneRenameOfAFinishedPack() {
 
     Require(std::filesystem::exists(writer.StagingPackPath()),
         "The writer has no staging file to publish, so publication cannot be a rename");
+    Require(writer.StagingPackPath().filename() == "staging.kbpack" &&
+            writer.StagingPackPath().parent_path().filename().generic_string().starts_with(".kbpack-work-"),
+        "The writer did not place its staging file in an atomically-created private directory");
     const std::filesystem::path stagingLink = linkDirectory / "staging.hardlink";
     std::filesystem::create_hard_link(writer.StagingPackPath(), stagingLink);
 
@@ -1019,6 +1281,74 @@ void PublicationIsOneRenameOfAFinishedPack() {
     Require(strays == 0U, "A published pack left staging files behind");
 
     PurgeDirectory(linkDirectory);
+    PurgeDirectory(root);
+}
+
+// Red when the writer returns to deterministic staging leaves beside the destination. Such a
+// leaf may be a stale or hostile symlink; opening it with truncation overwrites its target.
+void PreexistingStagingSymlinksNeverReachTheirSentinel() {
+    const std::filesystem::path root = TestRoot() / "staging-symlink";
+    const std::filesystem::path sentinelRoot = TestRoot() / "staging-symlink-sentinel";
+    PurgeDirectory(root);
+    PurgeDirectory(sentinelRoot);
+    std::filesystem::create_directories(root);
+    std::filesystem::create_directories(sentinelRoot);
+
+    const std::filesystem::path packPath = root / "published.kbpack";
+    const std::filesystem::path sentinel = sentinelRoot / "must-remain-unchanged.bin";
+    const std::vector<std::uint8_t> sentinelBytes = Bytes("staging symlink sentinel");
+    WriteFileBytes(sentinel, sentinelBytes);
+    const std::string packFileName = packPath.filename().generic_string();
+    const std::filesystem::path legacyPayload = root / (packFileName + ".kbpackpayload");
+    const std::filesystem::path legacyPack = root / (packFileName + ".kbpackstaging");
+
+    std::error_code linkError;
+    std::filesystem::create_symlink(sentinel, legacyPayload, linkError);
+    bool symbolicLinksAvailable = !linkError;
+    if (symbolicLinksAvailable) {
+        std::filesystem::create_symlink(sentinel, legacyPack, linkError);
+        symbolicLinksAvailable = !linkError;
+    }
+    if (!symbolicLinksAvailable) {
+        // Windows without Developer Mode cannot create a symlink in a normal test process.
+        // A hard link exercises the same forbidden truncation without privilege, so the test
+        // remains red against the old deterministic staging leaves on every test host.
+        linkError.clear();
+        std::filesystem::remove(legacyPayload, linkError);
+        linkError.clear();
+        std::filesystem::remove(legacyPack, linkError);
+        linkError.clear();
+        std::filesystem::create_hard_link(sentinel, legacyPayload, linkError);
+        Require(!linkError, "Private-staging regression could not create its payload link");
+        std::filesystem::create_hard_link(sentinel, legacyPack, linkError);
+        Require(!linkError, "Private-staging regression could not create its pack link");
+    }
+
+    const bake::BakeTargetProfile profile = bake::WindowsX64BakeTargetProfile();
+    bake::AssetPackWriter writer{ packPath, profile };
+    const bake::BakedAssetDescriptor descriptor = MakeDescriptor(12U);
+    const std::vector<std::uint8_t> payload = Filler(12U, 256U);
+    Require(writer.BeginAsset(descriptor) == bake::BakedAssetSinkStatus::Success,
+        "Private-staging regression could not begin an artifact");
+    Require(writer.WritePrimaryBlock(payload, profile.packageBlockAlignmentBytes) ==
+            bake::BakedAssetSinkStatus::Success,
+        "Private-staging regression could not write its payload");
+    Require(writer.CommitAsset() == bake::BakedAssetSinkStatus::Success &&
+            writer.Finish() == bake::BakedAssetSinkStatus::Success,
+        "Private-staging regression could not publish its package");
+    Require(ReadFileBytes(sentinel) == sentinelBytes,
+        "The pack writer followed a pre-existing staging symlink and overwrote its sentinel");
+    if (symbolicLinksAvailable) {
+        Require(std::filesystem::is_symlink(std::filesystem::symlink_status(legacyPayload)) &&
+                std::filesystem::is_symlink(std::filesystem::symlink_status(legacyPack)),
+            "The pack writer consumed deterministic staging symlinks it does not own");
+    } else {
+        Require(std::filesystem::equivalent(legacyPayload, sentinel) &&
+                std::filesystem::equivalent(legacyPack, sentinel),
+            "The pack writer consumed deterministic staging links it does not own");
+    }
+
+    PurgeDirectory(sentinelRoot);
     PurgeDirectory(root);
 }
 
@@ -1167,13 +1497,47 @@ void TheWriterRefusesProtocolViolations() {
     }
     writer.AbortAsset();
 
-    // The same key twice is the same artifact, and the store is content-addressed - but a key
-    // claimed by two different asset types is a caller mistake, not a duplicate.
+    // The same key may be deduplicated only when it describes the same complete artifact.
+    // Otherwise caller order would decide which layout or bytes are published under the digest.
     Require(writer.BeginAsset(descriptor) == bake::BakedAssetSinkStatus::Success, "Protocol pack re-bake failed");
     Require(writer.WritePrimaryBlock(payload, 256U) == bake::BakedAssetSinkStatus::Success,
         "Protocol pack re-bake WritePrimaryBlock failed");
+    Require(writer.WriteAuxiliaryBlock({ .name = "extra", .alignmentBytes = 256U }, payload) ==
+            bake::BakedAssetSinkStatus::Success,
+        "Protocol pack re-bake WriteAuxiliaryBlock failed");
     Require(writer.CommitAsset() == bake::BakedAssetSinkStatus::Success,
         "The writer refused the same artifact baked twice");
+
+    Require(writer.BeginAsset(descriptor) == bake::BakedAssetSinkStatus::Success,
+        "Protocol pack layout-collision BeginAsset failed");
+    Require(writer.WritePrimaryBlock(payload, 256U) == bake::BakedAssetSinkStatus::Success,
+        "Protocol pack layout-collision WritePrimaryBlock failed");
+    Require(writer.CommitAsset() == bake::BakedAssetSinkStatus::InvalidKey,
+        "The writer deduplicated one digest and type with a different block set");
+    writer.AbortAsset();
+
+    Require(writer.BeginAsset(descriptor) == bake::BakedAssetSinkStatus::Success,
+        "Protocol pack alignment-collision BeginAsset failed");
+    Require(writer.WritePrimaryBlock(payload, 512U) == bake::BakedAssetSinkStatus::Success,
+        "Protocol pack alignment-collision WritePrimaryBlock failed");
+    Require(writer.WriteAuxiliaryBlock({ .name = "extra", .alignmentBytes = 256U }, payload) ==
+            bake::BakedAssetSinkStatus::Success,
+        "Protocol pack alignment-collision WriteAuxiliaryBlock failed");
+    Require(writer.CommitAsset() == bake::BakedAssetSinkStatus::InvalidKey,
+        "The writer deduplicated one digest and type with a different effective alignment");
+    writer.AbortAsset();
+
+    Require(writer.BeginAsset(descriptor) == bake::BakedAssetSinkStatus::Success,
+        "Protocol pack payload-collision BeginAsset failed");
+    Require(writer.WritePrimaryBlock(Filler(42U, payload.size()), 256U) == bake::BakedAssetSinkStatus::Success,
+        "Protocol pack payload-collision WritePrimaryBlock failed");
+    Require(writer.WriteAuxiliaryBlock({ .name = "extra", .alignmentBytes = 256U }, payload) ==
+            bake::BakedAssetSinkStatus::Success,
+        "Protocol pack payload-collision WriteAuxiliaryBlock failed");
+    Require(writer.CommitAsset() == bake::BakedAssetSinkStatus::InvalidKey,
+        "The writer deduplicated one digest and type with different block bytes");
+    writer.AbortAsset();
+
     bake::BakedAssetDescriptor clashing = descriptor;
     clashing.assetTypeId = "Texture2D";
     Require(writer.BeginAsset(clashing) == bake::BakedAssetSinkStatus::Success, "Protocol pack clash BeginAsset failed");
@@ -1534,12 +1898,14 @@ void TwoWritersOnOnePackDoNotForgeEachOthersBytes() {
 
 void RunAssetPackTests() {
     EveryBlockSurvivesTheContainer();
+    ProfileMatchIncludesRecordedAlignments();
     CorruptPayloadIsNeverReturned();
     PackageBytesDoNotDependOnArtifactOrder();
     RuntimeManifestIsCanonicalAndHostileInputSafe();
     AlignmentIsMeasuredInTheFileNotReported();
     AHostilePackIsRefusedRatherThanTrusted();
     PublicationIsOneRenameOfAFinishedPack();
+    PreexistingStagingSymlinksNeverReachTheirSentinel();
     AnUnfinishedPackNeverReachesTheDestination();
     TheWriterRefusesProtocolViolations();
     AnOverlongPackPathIsRefusedBeforeAnythingIsWritten();

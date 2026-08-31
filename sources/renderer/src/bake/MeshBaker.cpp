@@ -1569,6 +1569,23 @@ MeshBakeOutput BakeMesh(
     return output;
 }
 
+bool BakedMeshMatchesTargetProfile(
+    std::span<const std::uint8_t> primaryBlock,
+    std::span<const std::vector<std::uint8_t>> chunks,
+    const kb::assets::bake::BakeTargetProfile& profile) noexcept {
+    if (!kb::assets::bake::IsValidBakeTargetProfile(profile) ||
+        primaryBlock.size() < kPrimaryHeaderBytes ||
+        std::memcmp(primaryBlock.data(), kBakedMeshMagic.data(), kBakedMeshMagic.size()) != 0 ||
+        PeekUInt32(primaryBlock, 8U) != kBakedMeshFormatVersion ||
+        PeekUInt32(primaryBlock, 20U) != kb::assets::bake::BakeIndexWidthBytes(profile.indexWidth) ||
+        PeekUInt32(primaryBlock, 44U) != chunks.size()) {
+        return false;
+    }
+    return std::ranges::all_of(chunks, [&profile](const std::vector<std::uint8_t>& chunk) {
+        return !chunk.empty() && chunk.size() <= profile.maxGeometryChunkBytes;
+    });
+}
+
 [[nodiscard]] static bool ReadBakedMeshImpl(
     std::span<const std::uint8_t> primaryBlock,
     std::span<const std::vector<std::uint8_t>> chunks,

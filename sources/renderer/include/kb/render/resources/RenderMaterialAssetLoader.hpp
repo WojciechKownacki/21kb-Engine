@@ -179,6 +179,23 @@ struct RenderMaterialAssetParseResult {
     [[nodiscard]] std::string ErrorMessage() const;
 };
 
+struct RenderMaterialSourceGraphResolveResult {
+    std::optional<RenderMaterialGraphDocument> graph;
+    RenderMaterialAssetParseResult parseResult;
+    kb::assets::AssetId assetId{};
+    std::filesystem::path path;
+    bool external = false;
+};
+
+[[nodiscard]] const kb::assets::AssetMetadata* ResolveRenderMaterialSourceGraphMetadata(
+    const kb::assets::AssetRegistry& registry,
+    const kb::assets::AssetMetadata& owner,
+    const RenderMaterialAssetData& material);
+[[nodiscard]] RenderMaterialSourceGraphResolveResult ResolveRenderMaterialSourceGraph(
+    kb::assets::AssetManager& manager,
+    const kb::assets::AssetMetadata& owner,
+    const RenderMaterialAssetData& material);
+
 class RenderMaterialAssetLoader final : public kb::assets::IAssetLoader {
 public:
     [[nodiscard]] std::string_view Type() const noexcept override;

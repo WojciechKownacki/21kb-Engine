@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <iterator>
 #include <sstream>
 #include <string>
@@ -292,6 +293,19 @@ void RunGraphShaderCookProducesBinaryTest() {
     Require(cachedSpirv != nullptr && cachedSpirv->cacheHit,
         "KBMAT-MAT04: Rebuilding an unchanged graph must hit the shader binary cache");
 
+    {
+        std::ofstream corrupt{ cachedSpirv->binaryPath, std::ios::binary | std::ios::trunc };
+        corrupt << "corrupt";
+    }
+    const RenderMaterialGraphShaderArtifactResult repaired =
+        CookRenderMaterialGraphShaderArtifact(shader, backends, MakeCookRequest("BaseOpaque"));
+    const RenderMaterialGraphShaderBinary* repairedSpirv = repaired.artifact.has_value()
+        ? repaired.artifact->FindBinary(RenderMaterialGraphShaderBackend::Spirv)
+        : nullptr;
+    Require(repaired.Succeeded() && repairedSpirv != nullptr && !repairedSpirv->cacheHit &&
+            repairedSpirv->byteSize > 7U,
+        "Corrupt material graph cache binary must be rejected and rebuilt from shader inputs");
+
     const RenderMaterialGraphShaderArtifactResult gbuffer = CookRenderMaterialGraphShaderArtifact(shader, backends, MakeCookRequest("GBuffer"));
     Require(gbuffer.Succeeded() && gbuffer.artifact.has_value(), "Deferred graph GBuffer cook must produce a shader binary");
     const RenderMaterialGraphShaderBinary* gbufferSpirv = gbuffer.artifact->FindBinary(RenderMaterialGraphShaderBackend::Spirv);
@@ -354,10 +368,60 @@ void RunGraphShaderVariantArtifactCoexistenceTest() {
                     paths[index].generic_string().find("variant_" + std::to_string(identities[index])) != std::string::npos,
                 "P0.7: cooking another variant overwrote or hid an existing binary");
         }
+        RenderMaterialGraphShaderArtifactRequest repeatRequest = MakeCookRequest("BaseOpaque");
+        repeatRequest.cacheRoot = root.generic_string();
+        const RenderMaterialGraphShaderArtifactResult repeated =
+            CookRenderMaterialGraphShaderArtifact(defaultOpaque, backends, repeatRequest);
+        const RenderMaterialGraphShaderBinary* repeatedBinary = repeated.artifact.has_value()
+            ? repeated.artifact->FindBinary(RenderMaterialGraphShaderBackend::Spirv)
+            : nullptr;
+        Require(repeated.Succeeded() && repeatedBinary != nullptr && repeatedBinary->cacheHit &&
+                repeatedBinary->binaryPath == paths[0].generic_string(),
+            "P0.7: an A-B-A variant cook must reuse A without publishing B under A's key");
     };
 
     cookOrder("forward", forwardOrder);
     cookOrder("reverse", reverseOrder);
+}
+
+void RunGraphShaderSameKeyConcurrentCookTest() {
+    const RenderMaterialGraphShaderSource shader = CompileConstantColorGraph("0.12 0.34 0.56 1");
+    const std::array<RenderMaterialGraphShaderBackend, 1U> backends{
+        RenderMaterialGraphShaderBackend::Spirv };
+    const std::filesystem::path cacheRoot =
+        std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "p1_same_key_concurrency";
+    std::error_code error;
+    std::filesystem::remove_all(cacheRoot, error);
+
+    std::array<std::future<RenderMaterialGraphShaderArtifactResult>, 4U> cooks;
+    for (auto& cook : cooks) {
+        cook = std::async(std::launch::async, [shader, backends, cacheRoot]() {
+            RenderMaterialGraphShaderArtifactRequest request = MakeCookRequest("BaseOpaque");
+            request.cacheRoot = cacheRoot.generic_string();
+            return CookRenderMaterialGraphShaderArtifact(shader, backends, request);
+        });
+    }
+    std::size_t cacheMisses = 0U;
+    std::filesystem::path publishedPath;
+    for (auto& cook : cooks) {
+        const RenderMaterialGraphShaderArtifactResult result = cook.get();
+        const RenderMaterialGraphShaderBinary* binary = result.artifact.has_value()
+            ? result.artifact->FindBinary(RenderMaterialGraphShaderBackend::Spirv)
+            : nullptr;
+        Require(result.Succeeded() && binary != nullptr &&
+                std::filesystem::is_regular_file(binary->binaryPath, error) &&
+                std::filesystem::file_size(binary->binaryPath, error) > 0U,
+            "Concurrent same-key graph cooks must all observe a complete published binary");
+        cacheMisses += binary->cacheHit ? 0U : 1U;
+        if (publishedPath.empty()) {
+            publishedPath = binary->binaryPath;
+        } else {
+            Require(publishedPath == binary->binaryPath,
+                "Concurrent same-key graph cooks must agree on one keyed cache path");
+        }
+    }
+    Require(cacheMisses == 1U,
+        "Concurrent same-key graph cooks must compile once and serialize all cache readers");
 }
 
 void RunGraphShadowDepthVertexAndAlphaCookTest() {
@@ -621,6 +685,7 @@ void RunGraphShaderArtifactCookTests() {
 #if defined(KB_TEST_GRAPH_SHADERC_PATH)
     RunGraphShaderCookProducesBinaryTest();
     RunGraphShaderVariantArtifactCoexistenceTest();
+    RunGraphShaderSameKeyConcurrentCookTest();
     RunGraphShadowDepthVertexAndAlphaCookTest();
     RunGraphShaderCookShadercFailureTest();
     RunGraphShaderArtifactDependencyInvalidationTest();

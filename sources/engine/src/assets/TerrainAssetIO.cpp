@@ -66,6 +66,16 @@ std::optional<TerrainAsset> TerrainAssetIO::Load(const std::filesystem::path& pa
         SetError(error, "Terrain asset could not be read completely");
         return std::nullopt;
     }
+    return Load(bytes, error);
+}
+
+std::optional<TerrainAsset> TerrainAssetIO::Load(
+    std::span<const std::uint8_t> bytes,
+    std::string* error) {
+    if (bytes.size() < kVersion1HeaderBytes || bytes.size() > 512U * 1024U * 1024U) {
+        SetError(error, "Terrain asset has an invalid file size");
+        return std::nullopt;
+    }
     if (!std::equal(kMagic.begin(), kMagic.end(), bytes.begin())) {
         SetError(error, "Terrain asset magic is invalid");
         return std::nullopt;

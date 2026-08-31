@@ -12,6 +12,7 @@
 #include "engine/assets/AssetRegistry.hpp"
 #include "engine/assets/ImportedAsset.hpp"
 #include "engine/assets/ImportedAssetLoader.hpp"
+#include "engine/assets/bake/RuntimeAssetPack.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssetMeta.hpp"
 #include "engine/scene/SceneAssets.hpp"
@@ -29,6 +30,7 @@
 #include "engine/script/ScriptBehaviourAsset.hpp"
 #include "engine/script/ScriptBehaviourBindingService.hpp"
 #include "engine/visual/VisualGraphTypes.hpp"
+#include "scene/assets/SceneAssetLoader.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1222,8 +1224,9 @@ void RunSceneAssetDependencyDiscoveryTest() {
     }
 }
 
-// A scene file whose sidecar is absent must not break discovery and must not be
-// credited with dependencies it cannot prove.
+// A scene file whose sidecar is absent must not break discovery or be credited
+// with dependencies it cannot prove, but it must fail compatibility validation
+// so a cooker cannot publish the empty dependency closure.
 //
 // Turns red if: DiscoverDependencies dereferences or trusts an unread sidecar (the
 // process dies, or the scene stops being registered); or if it invents dependencies
@@ -1265,6 +1268,36 @@ void RunSceneAssetDependencyWithoutSidecarTest() {
         runtime.Assets().Manager().Registry().FindByPath("/Game/Scenes/Sidecarless.21kbscene");
     kb::tests::Require(sceneMetadata != nullptr && sceneMetadata->type == "Scene", "Sidecarless scene asset was not registered by discovery");
     kb::tests::Require(sceneMetadata->dependencies.empty(), "Sidecarless scene asset reported dependencies without a sidecar");
+    const kb::assets::AssetCompatibilityReport report =
+        runtime.Assets().Manager().ValidateCompatibility(sceneMetadata->id);
+    const std::string diagnostics = report.FormatDiagnostics();
+    kb::tests::Require(!report.compatible, "A sidecarless scene passed compatibility validation");
+    kb::tests::Require(diagnostics.find("/Game/Scenes/Sidecarless.21kbscene") != std::string::npos &&
+            diagnostics.find("no readable scene metadata sidecar") != std::string::npos &&
+            diagnostics.find("could not be opened") != std::string::npos,
+        "A sidecarless scene validation error did not identify the scene and metadata failure");
+}
+
+void RunPackagedSceneDoesNotRequireLooseMetaTest() {
+    const kb::assets::AssetMetadata metadata{
+        .id = kb::assets::AssetId{ 0x5343454E45U },
+        .type = "Scene",
+        .name = "PackagedScene",
+        .virtualPath = "/Game/Scenes/Packaged.21kbscene",
+        .sourceExtension = ".21kbscene",
+        .contentHash = 1U,
+    };
+    const auto runtimePack = std::make_shared<kb::assets::bake::RuntimeAssetPack>();
+    const kb::assets::AssetLoadRequest request{
+        .metadata = metadata,
+        .resolvedPath = {},
+        .runtimePack = runtimePack,
+    };
+    const kb::assets::AssetRegistry registry;
+    kb::scene::SceneAssetLoader loader;
+    kb::tests::Require(
+        !loader.ValidateRuntimeDependencies(request, registry).has_value(),
+        "A packaged scene was rejected because its authored .meta sidecar was not deployed");
 }
 
 
@@ -1455,8 +1488,67 @@ void RunScenePrefabAssetDependencyDiscoveryTest() {
         "A prefab asset does not report the mesh it renders - the dependency graph stops at the prefab");
 }
 
+void RunMissingNestedPrefabDependencyValidationTest() {
+    ResetTestRoot();
+    const std::filesystem::path projectRoot = TestRoot() / "MissingNestedPrefabProject";
+    const std::filesystem::path assetsRoot = projectRoot / "Assets";
+    const std::string missingGuid = "missing:nested-prefab-guid";
+
+    kb::scene::Scene authoring;
+    kb::tests::Require(authoring.Assets().MountProject(projectRoot),
+        "Missing nested prefab project mount failed");
+
+    kb::scene::ScenePrefab outerPrefab;
+    static_cast<void>(outerPrefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .stableId = 1U,
+        .name = "Missing Nested Prefab Node",
+        .nestedPrefabGuid = missingGuid,
+    }));
+    const kb::scene::ScenePrefabHandle outerHandle =
+        authoring.Prefabs().Register("OuterPrefab", std::move(outerPrefab));
+    kb::tests::Require(outerHandle.IsValid() &&
+            authoring.Prefabs().Save(outerHandle, assetsRoot / "Prefabs" / "Outer.kbprefab"),
+        "Missing nested prefab outer asset save failed");
+
+    kb::scene::SceneDocument document;
+    document.name = "MissingNestedPrefabScene";
+    document.guid = "scene:MissingNestedPrefabScene";
+    static_cast<void>(document.worldPrefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .stableId = 1U,
+        .name = "Missing Nested Prefab Node",
+        .nestedPrefabGuid = missingGuid,
+    }));
+    kb::tests::Require(kb::scene::SceneDocumentService::Save(
+            document, assetsRoot / "Scenes" / "MissingNestedPrefab.21kbscene"),
+        "Missing nested prefab scene save failed");
+
+    kb::scene::Scene runtime;
+    kb::tests::Require(runtime.Assets().MountProject(projectRoot),
+        "Missing nested prefab runtime project mount failed");
+    static_cast<void>(runtime.Assets().Discover());
+    const kb::assets::AssetRegistry& registry = runtime.Assets().Manager().Registry();
+    for (const std::string_view virtualPath : {
+             std::string_view{ "/Game/Scenes/MissingNestedPrefab.21kbscene" },
+             std::string_view{ "/Game/Prefabs/Outer.kbprefab" },
+         }) {
+        const kb::assets::AssetMetadata* metadata = registry.FindByPath(virtualPath);
+        kb::tests::Require(metadata != nullptr,
+            "Missing nested prefab fixture asset was not registered");
+        kb::tests::Require(metadata->dependencies.empty(),
+            "An unresolved prefab guid produced a dependency edge to a nonexistent asset");
+        const kb::assets::AssetCompatibilityReport report =
+            runtime.Assets().Manager().ValidateCompatibility(metadata->id);
+        const std::string diagnostics = report.FormatDiagnostics();
+        kb::tests::Require(!report.compatible &&
+                diagnostics.find(std::string{ virtualPath }) != std::string::npos &&
+                diagnostics.find("no registered ScenePrefab asset declares") != std::string::npos,
+            "An unresolved nested prefab guid passed compatibility validation without a clear diagnostic");
+    }
+}
+
 // A sidecar that is empty, truncated, wrongly magicked or filled with noise must
-// not take discovery down with it and must not conjure dependencies.
+// not take discovery down with it or conjure dependencies, but each form must be
+// rejected by compatibility validation before a cooker can use the closure.
 //
 // Turns red if a damaged sidecar crashes discovery, costs the scene its
 // registration, or yields dependency entries.
@@ -1487,7 +1579,124 @@ void RunSceneAssetDependencyDamagedSidecarTest() {
             runtime.Assets().Manager().Registry().FindByPath("/Game/Scenes/Damaged.21kbscene");
         kb::tests::Require(sceneMetadata != nullptr, "A damaged sidecar cost the scene its registration");
         kb::tests::Require(sceneMetadata->dependencies.empty(), "A damaged sidecar produced dependency entries");
+        const kb::assets::AssetCompatibilityReport report =
+            runtime.Assets().Manager().ValidateCompatibility(sceneMetadata->id);
+        const std::string diagnostics = report.FormatDiagnostics();
+        kb::tests::Require(!report.compatible, "A damaged scene sidecar passed compatibility validation");
+        kb::tests::Require(diagnostics.find("/Game/Scenes/Damaged.21kbscene") != std::string::npos &&
+                diagnostics.find("no readable scene metadata sidecar") != std::string::npos,
+            "A damaged scene sidecar validation error did not identify the scene and metadata failure");
     }
+}
+
+void RunSceneAssetDependencyStaleSidecarTest() {
+    ResetTestRoot();
+    const std::filesystem::path projectRoot = TestRoot() / "StaleSidecarProject";
+    const std::filesystem::path scenePath =
+        projectRoot / "Assets" / "Scenes" / "Stale.21kbscene";
+    const std::filesystem::path metaPath = kb::scene::SceneAssetMetaPath(scenePath);
+    const std::filesystem::path oldMetaPath = TestRoot() / "Stale.original.meta";
+
+    kb::scene::SceneDocument original;
+    original.name = "Stale";
+    original.guid = "scene:Stale";
+    static_cast<void>(original.worldPrefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .stableId = 1U,
+        .name = "Node",
+    }));
+    kb::tests::Require(kb::scene::SceneDocumentService::Save(original, scenePath),
+        "Stale sidecar original scene save failed");
+    std::error_code copyError;
+    kb::tests::Require(std::filesystem::copy_file(metaPath, oldMetaPath, copyError) && !copyError,
+        "Stale sidecar original metadata backup failed");
+
+    kb::scene::SceneDocument updated;
+    updated.name = original.name;
+    updated.guid = original.guid;
+    static_cast<void>(updated.worldPrefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .stableId = 1U,
+        .name = "Node",
+        .components = kb::scene::ScenePrefabNodeComponents{
+            .meshRenderer = kb::scene::MeshRendererComponent{
+                .meshAssetId = 0x1234U,
+                .materialAssetId = 0x5678U,
+            },
+        },
+    }));
+    kb::tests::Require(kb::scene::SceneDocumentService::Save(updated, scenePath),
+        "Stale sidecar updated scene save failed");
+    copyError.clear();
+    kb::tests::Require(std::filesystem::copy_file(
+            oldMetaPath, metaPath, std::filesystem::copy_options::overwrite_existing, copyError) && !copyError,
+        "Stale sidecar metadata restore failed");
+
+    kb::scene::Scene runtime;
+    kb::tests::Require(runtime.Assets().MountProject(projectRoot), "Stale sidecar project mount failed");
+    static_cast<void>(runtime.Assets().Discover());
+    const kb::assets::AssetMetadata* sceneMetadata =
+        runtime.Assets().Manager().Registry().FindByPath("/Game/Scenes/Stale.21kbscene");
+    kb::tests::Require(sceneMetadata != nullptr, "A stale sidecar cost the scene its registration");
+    kb::tests::Require(sceneMetadata->dependencies.empty(),
+        "The stale sidecar fixture did not expose its outdated dependency closure");
+    const kb::assets::AssetCompatibilityReport report =
+        runtime.Assets().Manager().ValidateCompatibility(sceneMetadata->id);
+    const std::string diagnostics = report.FormatDiagnostics();
+    kb::tests::Require(!report.compatible, "A well-formed but stale scene sidecar passed compatibility validation");
+    kb::tests::Require(diagnostics.find("/Game/Scenes/Stale.21kbscene") != std::string::npos &&
+            diagnostics.find("integrity does not match") != std::string::npos,
+        "A stale scene sidecar validation error did not identify the scene integrity mismatch");
+}
+
+void RunSceneAssetDependencyChangesAfterDiscoveryTest() {
+    ResetTestRoot();
+    const std::filesystem::path projectRoot = TestRoot() / "ChangedAfterDiscoveryProject";
+    const std::filesystem::path scenePath =
+        projectRoot / "Assets" / "Scenes" / "Changing.21kbscene";
+
+    kb::scene::SceneDocument original;
+    original.name = "Changing";
+    original.guid = "scene:Changing";
+    static_cast<void>(original.worldPrefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .stableId = 1U,
+        .name = "Node",
+    }));
+    kb::tests::Require(kb::scene::SceneDocumentService::Save(original, scenePath),
+        "Changed-after-discovery original scene save failed");
+
+    kb::scene::Scene runtime;
+    kb::tests::Require(runtime.Assets().MountProject(projectRoot),
+        "Changed-after-discovery project mount failed");
+    static_cast<void>(runtime.Assets().Discover());
+    const kb::assets::AssetMetadata* sceneMetadata =
+        runtime.Assets().Manager().Registry().FindByPath("/Game/Scenes/Changing.21kbscene");
+    kb::tests::Require(sceneMetadata != nullptr && sceneMetadata->dependencies.empty(),
+        "Changed-after-discovery original dependency snapshot was not empty");
+    const kb::assets::AssetId sceneId = sceneMetadata->id;
+
+    kb::scene::SceneDocument updated;
+    updated.name = original.name;
+    updated.guid = original.guid;
+    static_cast<void>(updated.worldPrefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .stableId = 1U,
+        .name = "Node",
+        .components = kb::scene::ScenePrefabNodeComponents{
+            .meshRenderer = kb::scene::MeshRendererComponent{
+                .meshAssetId = 0x1234U,
+                .materialAssetId = 0x5678U,
+            },
+        },
+    }));
+    kb::tests::Require(kb::scene::SceneDocumentService::Save(updated, scenePath),
+        "Changed-after-discovery updated scene save failed");
+
+    const kb::assets::AssetCompatibilityReport report =
+        runtime.Assets().Manager().ValidateCompatibility(sceneId);
+    const std::string diagnostics = report.FormatDiagnostics();
+    kb::tests::Require(!report.compatible,
+        "A scene changed after dependency discovery passed compatibility validation");
+    kb::tests::Require(diagnostics.find("/Game/Scenes/Changing.21kbscene") != std::string::npos &&
+            diagnostics.find("changed after asset discovery") != std::string::npos,
+        "A scene changed after discovery did not request a clean retry");
 }
 
 // Discovery registers every asset before it refreshes any dependency list
@@ -1595,6 +1804,18 @@ void RunSceneAssetNestedPrefabGuidRuleTest() {
     ReplaceAllOccurrences(betaText, "Alpha Root", "Beta Root");
     WriteTextFile(betaPath, betaText);
 
+    kb::scene::ScenePrefab outerPrefab;
+    static_cast<void>(outerPrefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .stableId = 1U,
+        .name = "Contested Nested Prefab Node",
+        .nestedPrefabGuid = guid,
+    }));
+    const kb::scene::ScenePrefabHandle outerHandle =
+        authoring.Prefabs().Register("OuterPrefab", std::move(outerPrefab));
+    kb::tests::Require(outerHandle.IsValid() && authoring.Prefabs().Save(
+            outerHandle, assetsRoot / "Prefabs" / "Outer.kbprefab"),
+        "Guid rule outer prefab save failed");
+
     kb::scene::Scene contested;
     kb::tests::Require(contested.Assets().MountProject(projectRoot), "Guid rule contested-claim mount failed");
     static_cast<void>(contested.Assets().Discover());
@@ -1615,6 +1836,18 @@ void RunSceneAssetNestedPrefabGuidRuleTest() {
     kb::tests::Require(diagnostics.find("/Game/Prefabs/Alpha.kbprefab") != std::string::npos &&
             diagnostics.find("/Game/Prefabs/Beta.kbprefab") != std::string::npos,
         "The prefab guid collision diagnostic does not name both colliding files");
+
+    const kb::assets::AssetMetadata* contestedOuter =
+        contested.Assets().Manager().Registry().FindByPath("/Game/Prefabs/Outer.kbprefab");
+    kb::tests::Require(contestedOuter != nullptr && contestedOuter->dependencies.empty(),
+        "A prefab nesting a contested guid unexpectedly chose one claimant");
+    const kb::assets::AssetCompatibilityReport outerReport =
+        contested.Assets().Manager().ValidateCompatibility(contestedOuter->id);
+    const std::string outerDiagnostics = outerReport.FormatDiagnostics();
+    kb::tests::Require(!outerReport.compatible &&
+            outerDiagnostics.find("/Game/Prefabs/Alpha.kbprefab") != std::string::npos &&
+            outerDiagnostics.find("/Game/Prefabs/Beta.kbprefab") != std::string::npos,
+        "A prefab nesting a contested guid passed validation or failed to name both claimants");
 
     // The prefab runtime resolves the contested guid the same way - to nothing -
     // and does so whichever file is loaded first.
@@ -1767,11 +2000,15 @@ void RunAssetRuntimeTests() {
     RunScenePrefabRuntimeAssetTest();
     RunSceneAssetDependencyDiscoveryTest();
     RunSceneAssetDependencyWithoutSidecarTest();
+    RunPackagedSceneDoesNotRequireLooseMetaTest();
     RunSceneAssetDependencyDamagedSidecarTest();
+    RunSceneAssetDependencyStaleSidecarTest();
+    RunSceneAssetDependencyChangesAfterDiscoveryTest();
     RunSceneAssetDependencyIgnoresScanOrderTest();
     RunSceneAssetNestedPrefabGuidCollisionTest();
     RunSceneAssetDependencyCoversEveryComponentTest();
     RunScenePrefabAssetDependencyDiscoveryTest();
+    RunMissingNestedPrefabDependencyValidationTest();
     RunSceneAssetNestedPrefabGuidRuleTest();
     RunSceneAssetDiscoveryStaysLinearInNestedPrefabsTest();
     RunSceneAudioClipAssetDiscoveryTest();

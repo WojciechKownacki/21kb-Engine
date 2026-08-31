@@ -13,7 +13,9 @@ namespace kb::assets::bake {
 bool AssetPackReader::MatchesTargetProfile(const BakeTargetProfile& profile) const noexcept {
     return mounted_ && IsValidBakeTargetProfile(profile) &&
         header_.targetProfileId == profile.identifier &&
-        header_.targetProfileHash == BakeTargetProfileFingerprint(profile);
+        header_.targetProfileHash == BakeTargetProfileFingerprint(profile) &&
+        header_.packageBlockAlignmentBytes == profile.packageBlockAlignmentBytes &&
+        header_.mappedBlockAlignmentBytes == profile.mappedBlockAlignmentBytes;
 }
 
 AssetPackReadStatus AssetPackReader::ValidateBlockRange(const AssetPackBlockEntry& block) const noexcept {
@@ -38,7 +40,8 @@ AssetPackReadStatus AssetPackReader::ValidateBlockRange(const AssetPackBlockEntr
     // The mapping granularity is not advice: a mapped block placed off it is a block whose
     // file offset the platform's mapping call refuses outright.
     if (block.residency == BakedAssetBlockResidency::Mapped &&
-        block.offset % header_.mappedBlockAlignmentBytes != 0U) {
+        (block.alignmentBytes < header_.mappedBlockAlignmentBytes ||
+            block.offset % header_.mappedBlockAlignmentBytes != 0U)) {
         return AssetPackReadStatus::BlockOutOfRange;
     }
     return AssetPackReadStatus::Success;

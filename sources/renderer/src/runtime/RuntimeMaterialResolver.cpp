@@ -1849,7 +1849,7 @@ ResolvedRuntimeMaterialDesc RuntimeMaterialResolver::ResolveLoadedMaterial(
     const RenderMaterialAssetData& inlineMaterialAsset) const {
     ResolvedRuntimeMaterialDesc resolved{};
     const RuntimeMaterialSourceGraphLoadResult authoritativeGraph =
-        LoadRuntimeMaterialSourceGraph(manager, inlineMaterialAsset);
+        LoadRuntimeMaterialSourceGraph(manager, materialMetadata, inlineMaterialAsset);
     for (const RenderMaterialAssetParseDiagnostic& diagnostic : authoritativeGraph.parseResult.diagnostics) {
         resolved.graphDiagnostics.push_back(RenderMaterialGraphDiagnostic{
             .severity = diagnostic.severity == RenderMaterialAssetParseDiagnosticSeverity::Warning
@@ -2058,7 +2058,7 @@ ResolvedRuntimeMaterialAsset RuntimeMaterialResolver::ResolveAsset(
         }
 
         const RuntimeMaterialSourceGraphLoadResult authoritativeGraph =
-            LoadRuntimeMaterialSourceGraph(manager, *loaded.asset);
+            LoadRuntimeMaterialSourceGraph(manager, metadata, *loaded.asset);
         if (!authoritativeGraph.graph.has_value()) {
             ResolvedRuntimeMaterialAsset fallback = FallbackMaterial(
                 RuntimeMaterialResolveStatus::ErrorMaterial,
@@ -2368,7 +2368,7 @@ ResolvedRuntimeMaterialAsset RuntimeMaterialResolver::ResolveAssetWithParameterO
     }
 
     const RuntimeMaterialSourceGraphLoadResult authoritativeGraph =
-        LoadRuntimeMaterialSourceGraph(manager, *loaded.asset);
+        LoadRuntimeMaterialSourceGraph(manager, *metadata, *loaded.asset);
     if (!authoritativeGraph.graph.has_value()) {
         ResolvedRuntimeMaterialAsset fallback = FallbackMaterial(
             RuntimeMaterialResolveStatus::ErrorMaterial,

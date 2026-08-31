@@ -109,6 +109,12 @@ public:
     [[nodiscard]] static std::optional<RenderMeshAssetData> LoadObj(const std::filesystem::path& path, const RenderMeshObjImportDesc& desc = {});
     [[nodiscard]] static std::optional<RenderMeshAssetData> LoadObj(std::istream& input, const RenderMeshObjImportDesc& desc = {});
     [[nodiscard]] static std::optional<RenderMeshAssetData> LoadGltf(const std::filesystem::path& path, const RenderMeshGltfImportDesc& desc = {});
+    [[nodiscard]] static std::optional<RenderMeshAssetData> LoadGltf(
+        std::span<const std::uint8_t> bytes,
+        const std::filesystem::path& sourcePath,
+        const RenderMeshGltfImportDesc& desc = {});
+    [[nodiscard]] static std::optional<std::vector<std::filesystem::path>> GltfExternalBufferUris(
+        std::span<const std::uint8_t> bytes);
     [[nodiscard]] static std::optional<RenderMeshAssetData> LoadFbx(const std::filesystem::path& path, const RenderMeshFbxImportDesc& desc = {});
     [[nodiscard]] static std::optional<RenderMeshAssetData> LoadFbx(std::span<const std::byte> data, const RenderMeshFbxImportDesc& desc = {});
     [[nodiscard]] static bool Finalize(

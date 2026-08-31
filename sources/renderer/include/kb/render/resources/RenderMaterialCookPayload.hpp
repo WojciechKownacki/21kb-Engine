@@ -62,6 +62,12 @@ public:
         const RenderMaterialAssetData& material,
         const kb::assets::AssetMetadata& metadata,
         const kb::assets::AssetRegistry& registry);
+
+    [[nodiscard]] static RenderMaterialCookPayload Build(
+        const RenderMaterialAssetData& material,
+        const kb::assets::AssetMetadata& metadata,
+        const kb::assets::AssetRegistry& registry,
+        const RenderMaterialGraphFunctionLibrary& functionLibrary);
 };
 
 class RenderMaterialCookManifestBuilder final {

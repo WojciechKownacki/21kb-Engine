@@ -5,6 +5,7 @@
 #include "engine/assets/AssetRegistry.hpp"
 #include "resources/RenderMaterialAssetParser.hpp"
 #include "kb/render/resources/RenderMaterialFunctionAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialNumericParsing.hpp"
 #include "kb/render/resources/RenderMaterialParameterCollection.hpp"
 #include "kb/render/resources/RenderMaterialTypeAssetLoader.hpp"
@@ -32,14 +33,6 @@ void AppendUnique(std::vector<kb::assets::AssetId>& dependencies, kb::assets::As
         }
     }
     dependencies.push_back(id);
-}
-
-[[nodiscard]] kb::assets::AssetId MaterialTypeDependencyId(std::string_view materialType, std::uint32_t materialTypeVersion) {
-    std::string key{ "MaterialType:" };
-    key += materialType;
-    key += ':';
-    key += std::to_string(materialTypeVersion);
-    return kb::assets::MakeAssetId(key);
 }
 
 [[nodiscard]] bool IsMaterialTypeAsset(const kb::assets::AssetMetadata& metadata) noexcept {
@@ -71,25 +64,6 @@ void AppendUnique(std::vector<kb::assets::AssetId>& dependencies, kb::assets::As
         return std::nullopt;
     }
     return materialType->id;
-}
-
-[[nodiscard]] std::optional<kb::assets::AssetId> ResolveMaterialGraphPathDependency(
-    std::string_view graphPath,
-    const kb::assets::AssetMetadata& owner,
-    const kb::assets::AssetRegistry& registry) {
-    if (graphPath.empty()) {
-        return std::nullopt;
-    }
-
-    const std::filesystem::path authoredPath{ std::string{ graphPath } };
-    const std::filesystem::path candidate = authoredPath.is_absolute()
-        ? authoredPath.lexically_normal()
-        : (owner.virtualPath.parent_path() / authoredPath).lexically_normal();
-    const kb::assets::AssetMetadata* graph = registry.FindByPath(candidate);
-    if (graph == nullptr || !IsMaterialGraphAsset(*graph)) {
-        return std::nullopt;
-    }
-    return graph->id;
 }
 
 [[nodiscard]] std::optional<kb::assets::AssetId> ResolveTexturePathDependency(
@@ -745,6 +719,81 @@ std::string RenderMaterialAssetParseResult::ErrorMessage() const {
     return output.str();
 }
 
+const kb::assets::AssetMetadata* ResolveRenderMaterialSourceGraphMetadata(
+    const kb::assets::AssetRegistry& registry,
+    const kb::assets::AssetMetadata& owner,
+    const RenderMaterialAssetData& material) {
+    const kb::assets::AssetMetadata* metadata = material.graphSourceAssetId != 0U
+        ? registry.Find(kb::assets::AssetId{ material.graphSourceAssetId })
+        : nullptr;
+    if ((metadata == nullptr || !IsMaterialGraphAsset(*metadata)) &&
+        !material.graphSourceAssetPath.empty()) {
+        const std::filesystem::path authoredPath{ material.graphSourceAssetPath };
+        const std::filesystem::path candidate = authoredPath.is_absolute()
+            ? authoredPath.lexically_normal()
+            : (owner.virtualPath.parent_path() / authoredPath).lexically_normal();
+        metadata = registry.FindByPath(candidate);
+    }
+    return metadata != nullptr && IsMaterialGraphAsset(*metadata) ? metadata : nullptr;
+}
+
+RenderMaterialSourceGraphResolveResult ResolveRenderMaterialSourceGraph(
+    kb::assets::AssetManager& manager,
+    const kb::assets::AssetMetadata& owner,
+    const RenderMaterialAssetData& material) {
+    if (material.graphSourceAssetId == 0U && material.graphSourceAssetPath.empty()) {
+        return RenderMaterialSourceGraphResolveResult{
+            .graph = material.graph,
+            .assetId = owner.id,
+            .path = owner.physicalPath.empty() ? owner.virtualPath : owner.physicalPath,
+        };
+    }
+
+    RenderMaterialSourceGraphResolveResult result{ .external = true };
+    const kb::assets::AssetMetadata* metadata =
+        ResolveRenderMaterialSourceGraphMetadata(manager.Registry(), owner, material);
+    if (metadata == nullptr) {
+        result.path = material.graphSourceAssetPath;
+        result.parseResult.diagnostics.push_back(RenderMaterialAssetParseDiagnostic{
+            .code = RenderMaterialAssetParseDiagnosticCode::InvalidGraphField,
+            .severity = RenderMaterialAssetParseDiagnosticSeverity::Error,
+            .assetId = owner.id,
+            .path = result.path,
+            .field = "sourceGraph",
+            .message = "Authoritative sourceGraph asset is missing or has an incompatible type.",
+        });
+        return result;
+    }
+
+    result.assetId = metadata->id;
+    result.path = metadata->physicalPath.empty() ? metadata->virtualPath : metadata->physicalPath;
+    if (!metadata->physicalPath.empty()) {
+        result.parseResult = RenderMaterialGraphAssetLoader::LoadGraphWithDiagnostics(
+            metadata->physicalPath, metadata->id);
+        if (result.parseResult.Succeeded()) {
+            result.graph = result.parseResult.asset->graph;
+        }
+        return result;
+    }
+    const kb::assets::AssetHandle<RenderMaterialGraphDocument> loaded =
+        manager.Load<RenderMaterialGraphDocument>(metadata->id);
+    if (loaded.IsLoaded()) {
+        result.graph = *loaded;
+        return result;
+    }
+    result.parseResult.diagnostics.push_back(RenderMaterialAssetParseDiagnostic{
+        .code = RenderMaterialAssetParseDiagnosticCode::FileOpenFailed,
+        .severity = RenderMaterialAssetParseDiagnosticSeverity::Error,
+        .assetId = metadata->id,
+        .path = result.path,
+        .field = "sourceGraph",
+        .message = manager.LastError().empty()
+            ? "Authoritative sourceGraph asset could not be loaded."
+            : manager.LastError(),
+    });
+    return result;
+}
+
 std::string_view RenderMaterialAssetLoader::Type() const noexcept {
     return "RenderMaterial";
 }
@@ -821,31 +870,36 @@ std::vector<kb::assets::AssetId> RenderMaterialAssetLoader::DiscoverMaterialDepe
     dependencies.reserve(16U);
     if (material.materialTypeAssetId != 0U) {
         AppendUnique(dependencies, kb::assets::AssetId{ material.materialTypeAssetId });
-    } else {
-        AppendUnique(dependencies, MaterialTypeDependencyId(material.materialType, material.materialTypeVersion));
     }
     if (std::optional<kb::assets::AssetId> materialTypePathDependency = ResolveMaterialTypePathDependency(material.materialTypeAssetPath, metadata, registry); materialTypePathDependency.has_value()) {
         AppendUnique(dependencies, *materialTypePathDependency);
     }
-    if (material.graphSourceAssetId != 0U) {
-        AppendUnique(dependencies, kb::assets::AssetId{ material.graphSourceAssetId });
-    }
-    if (std::optional<kb::assets::AssetId> graphSourcePathDependency = ResolveMaterialGraphPathDependency(material.graphSourceAssetPath, metadata, registry); graphSourcePathDependency.has_value()) {
-        AppendUnique(dependencies, *graphSourcePathDependency);
-    }
-    AppendUnique(dependencies, kb::assets::AssetId{ material.graph.lastGoodArtifact.assetId });
-    for (const std::uint64_t functionAssetId : DiscoverRenderMaterialGraphFunctionDependencies(material.graph)) {
-        const kb::assets::AssetId id{ functionAssetId };
-        const kb::assets::AssetMetadata* functionMetadata = registry.Find(id);
-        if (functionMetadata != nullptr && functionMetadata->type == kRenderMaterialFunctionAssetType) {
-            AppendUnique(dependencies, id);
+    const bool hasExternalGraph =
+        material.graphSourceAssetId != 0U || !material.graphSourceAssetPath.empty();
+    if (hasExternalGraph) {
+        if (const kb::assets::AssetMetadata* graph =
+                ResolveRenderMaterialSourceGraphMetadata(registry, metadata, material);
+            graph != nullptr) {
+            AppendUnique(dependencies, graph->id);
+        } else if (material.graphSourceAssetId != 0U) {
+            AppendUnique(dependencies, kb::assets::AssetId{ material.graphSourceAssetId });
         }
     }
-    for (const std::uint64_t collectionAssetId : DiscoverRenderMaterialGraphParameterCollectionDependencies(material.graph)) {
-        const kb::assets::AssetId id{ collectionAssetId };
-        const kb::assets::AssetMetadata* collectionMetadata = registry.Find(id);
-        if (collectionMetadata != nullptr && collectionMetadata->type == kRenderMaterialParameterCollectionAssetType) {
-            AppendUnique(dependencies, id);
+    if (!hasExternalGraph) {
+        AppendUnique(dependencies, kb::assets::AssetId{ material.graph.lastGoodArtifact.assetId });
+        for (const std::uint64_t functionAssetId : DiscoverRenderMaterialGraphFunctionDependencies(material.graph)) {
+            const kb::assets::AssetId id{ functionAssetId };
+            const kb::assets::AssetMetadata* functionMetadata = registry.Find(id);
+            if (functionMetadata != nullptr && functionMetadata->type == kRenderMaterialFunctionAssetType) {
+                AppendUnique(dependencies, id);
+            }
+        }
+        for (const std::uint64_t collectionAssetId : DiscoverRenderMaterialGraphParameterCollectionDependencies(material.graph)) {
+            const kb::assets::AssetId id{ collectionAssetId };
+            const kb::assets::AssetMetadata* collectionMetadata = registry.Find(id);
+            if (collectionMetadata != nullptr && collectionMetadata->type == kRenderMaterialParameterCollectionAssetType) {
+                AppendUnique(dependencies, id);
+            }
         }
     }
 

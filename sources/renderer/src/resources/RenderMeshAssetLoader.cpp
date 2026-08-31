@@ -2,6 +2,7 @@
 
 #include "engine/assets/ImportedAsset.hpp"
 #include "engine/assets/ImportedAssetLoader.hpp"
+#include "engine/assets/AssetMemoryInputStream.hpp"
 #include "engine/assets/bake/AssetPackReader.hpp"
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
 #include "kb/render/bake/MeshBaker.hpp"
@@ -48,34 +49,13 @@ namespace {
     return RenderMeshAssetBuilder::LoadObj(input);
 }
 
-[[nodiscard]] std::filesystem::path TempImportedMeshPath(const kb::assets::AssetLoadRequest& request, const kb::assets::ImportedAsset& imported) {
-    std::filesystem::path extension = imported.sourceExtension.empty() ? std::filesystem::path{ ".gltf" } : std::filesystem::path{ imported.sourceExtension };
-    const std::string filename = "21kb_imported_mesh_"
-        + std::to_string(request.metadata.id.value)
-        + "_"
-        + std::to_string(request.metadata.contentHash)
-        + extension.string();
-    return (std::filesystem::temp_directory_path() / filename).lexically_normal();
-}
-
 [[nodiscard]] std::optional<RenderMeshAssetData> LoadGltfPayload(const kb::assets::AssetLoadRequest& request, const kb::assets::ImportedAsset& imported) {
-    const std::filesystem::path tempPath = TempImportedMeshPath(request, imported);
-    std::error_code error;
-    bool wrote = false;
-    {
-        std::ofstream output{ tempPath, std::ios::binary | std::ios::trunc };
-        if (!output.is_open()) {
-            return std::nullopt;
-        }
-        output.write(reinterpret_cast<const char*>(imported.payload.data()), static_cast<std::streamsize>(imported.payload.size()));
-        wrote = output.good();
-    }
-    if (!wrote) {
-        std::filesystem::remove(tempPath, error);
-        return std::nullopt;
-    }
-
-    std::optional<RenderMeshAssetData> mesh = RenderMeshAssetBuilder::LoadGltf(tempPath);
+    const auto payload = std::span<const std::uint8_t>{
+        reinterpret_cast<const std::uint8_t*>(imported.payload.data()),
+        imported.payload.size(),
+    };
+    std::optional<RenderMeshAssetData> mesh =
+        RenderMeshAssetBuilder::LoadGltf(payload, {});
     if (mesh.has_value() &&
         (imported.importOptions & kb::assets::kAssetImportOptionMeshImportMaterials) != 0U) {
         std::vector<RenderMeshAssetMaterialBinding> bindings;
@@ -89,12 +69,11 @@ namespace {
                     kb::assets::NormalizeAssetPath(path) + ":RenderMaterial").value,
             });
         }
-        mesh = RenderMeshAssetBuilder::LoadGltf(tempPath, RenderMeshGltfImportDesc{
+        mesh = RenderMeshAssetBuilder::LoadGltf(payload, {}, RenderMeshGltfImportDesc{
             .materialBindings = bindings.data(),
             .materialBindingCount = static_cast<std::uint32_t>(bindings.size()),
         });
     }
-    std::filesystem::remove(tempPath, error);
     return mesh;
 }
 
@@ -408,6 +387,22 @@ namespace {
         mesh = LoadBakedMeshPack(request.resolvedPath);
     } else if (extension == ".21kb") {
         mesh = LoadImportedMesh(request);
+    } else if (request.HasSourceBytes()) {
+        const std::span<const std::uint8_t> source = *request.sourceBytes;
+        if (extension == ".kbterrain") {
+            const std::optional<kb::assets::TerrainAsset> terrain =
+                kb::assets::TerrainAssetIO::Load(source);
+            if (terrain.has_value()) mesh = RenderTerrainMeshBuilder::Build(*terrain);
+        } else if (extension == ".gltf" || extension == ".glb") {
+            mesh = RenderMeshAssetBuilder::LoadGltf(source, request.resolvedPath);
+        } else if (extension == ".fbx") {
+            const auto bytes = std::span<const std::byte>{
+                reinterpret_cast<const std::byte*>(source.data()), source.size() };
+            mesh = RenderMeshAssetBuilder::LoadFbx(bytes);
+        } else {
+            kb::assets::AssetMemoryInputStream input{ source };
+            mesh = RenderMeshAssetBuilder::LoadObj(input);
+        }
     } else {
         if (extension == ".kbterrain") {
             const std::optional<kb::assets::TerrainAsset> terrain = kb::assets::TerrainAssetIO::Load(request.resolvedPath);

@@ -350,6 +350,27 @@ add_library(kb_renderer STATIC
     ${CMAKE_SOURCE_DIR}/third_party/bgfx.cmake/bgfx/3rdparty/meshoptimizer/src/indexcodec.cpp
 )
 
+if(NOT ANDROID AND NOT EMSCRIPTEN)
+    add_library(kb_runtime_asset_pack_validation STATIC
+        include/kb/render/bake/RuntimeAssetPackValidation.hpp
+        src/bake/RuntimeAssetPackValidation.cpp
+    )
+    target_include_directories(kb_runtime_asset_pack_validation
+        PUBLIC
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/src
+            ${CMAKE_SOURCE_DIR}/third_party/bgfx.cmake/bgfx/3rdparty
+    )
+    target_link_libraries(kb_runtime_asset_pack_validation
+        PUBLIC
+            kb_renderer
+        PRIVATE
+            kb_audio_miniaudio_asset_runtime
+    )
+    kb_apply_quality_gates(kb_runtime_asset_pack_validation)
+endif()
+
 if(NOT CMAKE_CROSSCOMPILING)
     # The release validator deliberately links the same hostile-input mesh and texture
     # readers as the shipped runtime. A container-only validator can prove checksums, but
@@ -360,7 +381,7 @@ if(NOT CMAKE_CROSSCOMPILING)
     target_include_directories(kb_runtime_asset_pack_validator PRIVATE
         ${CMAKE_SOURCE_DIR}/sources/game/src/private
     )
-    target_link_libraries(kb_runtime_asset_pack_validator PRIVATE kb_renderer)
+    target_link_libraries(kb_runtime_asset_pack_validator PRIVATE kb_runtime_asset_pack_validation)
     kb_apply_quality_gates(kb_runtime_asset_pack_validator)
 endif()
 
@@ -681,7 +702,7 @@ if((ANDROID OR EMSCRIPTEN) AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     target_compile_options(kb_renderer PRIVATE -Wno-gnu-zero-variadic-macro-arguments)
 endif()
 
-if(BUILD_TESTING AND TARGET kb_renderer_bake)
+if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_validation)
     add_executable(kb_renderer_tests
         tests/RendererTests.cpp
         tests/RendererTestSupport.hpp
@@ -689,6 +710,7 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake)
         tests/PostProcessChainTests.cpp
         tests/RenderFramePipelineTests.cpp
         tests/RenderResourceRegistryTests.cpp
+        tests/RuntimeAssetPackValidationTests.cpp
         tests/RenderMaterialTypeSchemaTests.cpp
         tests/GraphShaderArtifactCookTests.cpp
         tests/MaterialProgramRegistryTests.cpp
@@ -713,12 +735,18 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake)
         PRIVATE
             kb_renderer
             kb_renderer_bake
+            kb_runtime_asset_pack_validation
     )
 
     target_include_directories(kb_renderer_tests
         PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/src
             ${CMAKE_SOURCE_DIR}/third_party/bgfx.cmake/bgfx/3rdparty
+    )
+
+    target_compile_definitions(kb_renderer_tests
+        PRIVATE
+            KB_TEST_AUDIO_ASSET_DIR="${CMAKE_SOURCE_DIR}/sources/plugins/audio_miniaudio/tests/assets"
     )
 
     add_test(NAME kb_renderer_tests COMMAND $<TARGET_FILE:kb_renderer_tests>)

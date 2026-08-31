@@ -33,8 +33,10 @@ namespace kb::assets::bake {
 //    written through the destination path, so a reader cannot observe a half-written pack
 //    under a name that claims to be a pack, and a failure anywhere before the rename leaves
 //    the destination untouched.
-//  * The staging files live beside the destination, which keeps the rename a rename: Win32's
-//    MoveFileEx is allowed to fall back to a copy across volumes, and a copy is not atomic.
+//  * A private staging directory lives beside the destination, which keeps the rename a rename:
+//    Win32's MoveFileEx is allowed to fall back to a copy across volumes, and a copy is not
+//    atomic. Atomically creating that directory also means stale or hostile staging symlinks
+//    are never opened or truncated.
 //  * The path budget is checked against the WORST case before anything is created, and the
 //    destination is addressed through an extended-length path on Windows.
 //  * An artifact still open at destruction is aborted, never published.
@@ -43,8 +45,8 @@ namespace kb::assets::bake {
 // payload file as they arrive (so a pack is never held in memory), and Finish assembles the
 // header, the index and the payload into the staging pack. That costs one extra pass over the
 // bytes, which is what putting the catalogue at the head of the file is worth -- see
-// AssetPack.hpp. Debris from a killed process is bounded without a sweep: the staging names
-// are derived from the destination, so the next run truncates them.
+// AssetPack.hpp. The two files live inside an atomically-created writer-private directory;
+// ordinary failure and destruction remove both files and the directory as one owned unit.
 class AssetPackWriter final : public IBakedAssetSink {
 public:
     // `profile` is read here and not retained: the pack records its identifier, its
@@ -97,18 +99,22 @@ private:
     };
 
     [[nodiscard]] BakedAssetSinkStatus EnsureStagingOpen();
+    [[nodiscard]] BakedAssetSinkStatus CreatePrivateStagingDirectory();
     [[nodiscard]] bool AcquireDestinationLock();
     void ReleaseDestinationLock() noexcept;
-    // The staging payload carries a stamp naming the writer that created it, and this is what
-    // reads it back. Staging names are derived from the destination, so this is the only thing
-    // between "a second writer aimed at this package" and a published package whose blocks
-    // hold another bake's bytes.
+    // The staging payload carries a stamp naming the writer that created it, and this reads it
+    // back before assembly. The destination lock excludes cooperating writers; the stamp also
+    // detects replacement of the private payload after it was opened.
     [[nodiscard]] BakedAssetSinkStatus VerifyPayloadStamp();
     [[nodiscard]] BakedAssetSinkStatus AppendPayload(std::span<const std::uint8_t> bytes, std::uint64_t& offsetOut);
     [[nodiscard]] BakedAssetSinkStatus AssembleStagingPack();
+    [[nodiscard]] bool ArtifactLayoutsMatch(
+        const PendingArtifact& lhs,
+        const PendingArtifact& rhs) const noexcept;
     void DiscardStaging() noexcept;
 
     std::filesystem::path packPath_;
+    std::filesystem::path stagingDirectoryPath_;
     std::filesystem::path stagingPackPath_;
     std::filesystem::path payloadPath_;
     std::filesystem::path lockPath_;
@@ -121,12 +127,16 @@ private:
     std::fstream payload_;
     std::vector<PendingArtifact> artifacts_;
     std::map<AssetBakeDigest, std::string> artifactTypes_;
+    AssetPackHeader assembledHeader_{};
+    std::vector<AssetPackArtifactEntry> assembledArtifacts_;
+    std::vector<AssetPackFragmentEntry> assembledFragments_;
     PendingArtifact openArtifact_;
     std::uint64_t payloadBytes_ = 0U;
     std::uint64_t payloadStamp_ = 0U;
     std::uint64_t openArtifactPayloadStart_ = 0U;
     std::intptr_t lockHandle_ = -1;
     bool lockHeld_ = false;
+    bool stagingDirectoryOwned_ = false;
     bool stagingOpen_ = false;
     bool open_ = false;
     bool primaryWritten_ = false;
