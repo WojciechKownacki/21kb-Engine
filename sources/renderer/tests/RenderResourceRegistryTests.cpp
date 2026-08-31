@@ -1065,6 +1065,25 @@ void RunRenderMeshAssetLoaderDiscoversAndLoadsObjThroughAssetManagerTest() {
     Require(asset->materialSlots.size() == 2U && asset->sections.size() == 2U, "Loaded OBJ mesh did not preserve material slots");
     Require(asset->sections[0].materialSlot == 0U && asset->sections[1].materialSlot == 1U, "Loaded OBJ mesh did not preserve section material slot mapping");
 
+    const std::string snapshotObj =
+        "v 0 0 0\n"
+        "v 2 0 0\n"
+        "v 0 2 0\n"
+        "f 1 2 3\n";
+    const std::vector<std::uint8_t> snapshotBytes{ snapshotObj.begin(), snapshotObj.end() };
+    RenderMeshAssetLoader snapshotLoader;
+    kb::assets::AssetMetadata snapshotMetadata = *metadata;
+    snapshotMetadata.sourceExtension = ".obj";
+    const kb::assets::AssetLoadResult snapshot = snapshotLoader.Load(kb::assets::AssetLoadRequest{
+        .metadata = snapshotMetadata,
+        .resolvedPath = root / "missing.obj",
+        .sourceBytes = std::span<const std::uint8_t>{ snapshotBytes },
+    });
+    Require(snapshot.Succeeded(), "Render mesh loader did not consume an immutable source snapshot");
+    const auto snapshotMesh = std::static_pointer_cast<RenderMeshAssetData>(snapshot.asset);
+    Require(snapshotMesh->desc.vertexCount == 3U && snapshotMesh->desc.indexCount == 3U,
+        "Render mesh loader reread the filesystem instead of its source snapshot");
+
     std::filesystem::remove_all(root, error);
 }
 
@@ -1266,6 +1285,36 @@ void RunRenderMeshAssetLoaderDiscoversAndLoadsGltfThroughAssetManagerTest() {
     Require(asset->sections.size() == 1U && asset->sections[0].indexCount == 3U, "glTF importer did not create one primitive section");
     Require(asset->materialNames.size() == 1U && asset->materialNames[0] == "surface", "glTF importer did not preserve material slot name");
     Require(asset->embeddedMaterials.size() == 1U, "glTF importer did not preserve embedded material data");
+    std::ifstream gltfSnapshotInput{ gltfPath, std::ios::binary };
+    const std::vector<std::uint8_t> gltfSnapshot{
+        std::istreambuf_iterator<char>{ gltfSnapshotInput }, std::istreambuf_iterator<char>{} };
+    RenderMeshAssetLoader snapshotLoader;
+    kb::assets::AssetMetadata snapshotMetadata = *metadata;
+    snapshotMetadata.sourceExtension = ".gltf";
+    const std::filesystem::path snapshotRoot = root / "cook-snapshot";
+    std::filesystem::create_directories(snapshotRoot, error);
+    Require(!error, "glTF cooker snapshot mirror could not be created");
+    std::filesystem::copy_file(
+        binPath, snapshotRoot / "mesh.bin", std::filesystem::copy_options::overwrite_existing, error);
+    Require(!error, "glTF external buffer could not be copied into the cooker snapshot mirror");
+    std::filesystem::remove(binPath, error);
+    Require(!error, "glTF snapshot test could not remove the live external buffer");
+    const kb::assets::AssetLoadResult snapshot = snapshotLoader.Load(kb::assets::AssetLoadRequest{
+        .metadata = snapshotMetadata,
+        .resolvedPath = snapshotRoot / "triangle.gltf",
+        .sourceBytes = std::span<const std::uint8_t>{ gltfSnapshot },
+    });
+    Require(snapshot.Succeeded(), "glTF loader did not resolve external buffers from the cooker snapshot mirror");
+    const auto snapshotMesh = std::static_pointer_cast<RenderMeshAssetData>(snapshot.asset);
+    Require(snapshotMesh->desc.vertexCount == 3U && snapshotMesh->desc.indexCount == 3U,
+        "glTF loader reread live files instead of the complete cooker snapshot");
+    const kb::assets::AssetLoadResult missingSidecar = snapshotLoader.Load(kb::assets::AssetLoadRequest{
+        .metadata = snapshotMetadata,
+        .resolvedPath = root / "missing.gltf",
+        .sourceBytes = std::span<const std::uint8_t>{ gltfSnapshot },
+    });
+    Require(!missingSidecar.Succeeded(),
+        "glTF loader accepted a source snapshot whose external buffer was not captured");
     Require(NearlyEqual(asset->embeddedMaterials[0].desc.baseColor[0], 0.2F), "glTF importer did not preserve embedded material base color");
     Require(NearlyEqual(asset->embeddedMaterials[0].desc.baseColor[3], 0.5F), "glTF importer did not preserve embedded material alpha");
     Require(NearlyEqual(asset->embeddedMaterials[0].desc.metallicFactor, 0.7F), "glTF importer did not preserve embedded material metallic factor");
@@ -1805,10 +1854,12 @@ void RunMaterialAssetDiscoveryBuildsMaterialDependencyGraphTest() {
     Require(parentMetadata != nullptr && instanceMetadata != nullptr && albedoMetadata != nullptr && normalMetadata != nullptr, "Material dependency graph test lost discovered assets");
 
     const kb::assets::AssetId materialTypeDependency = kb::assets::MakeAssetId("MaterialType:builtin.pbr:1");
-    Require(ContainsDependency(parentMetadata->dependencies, materialTypeDependency), "Material dependency graph did not link material to material type");
+    Require(!ContainsDependency(parentMetadata->dependencies, materialTypeDependency),
+        "Built-in PBR was emitted as a dependency even though it is code, not a registered asset");
     Require(ContainsDependency(parentMetadata->dependencies, albedoMetadata->id), "Material dependency graph did not link material to texture path dependency");
     Require(ContainsDependency(instanceMetadata->dependencies, parentMetadata->id), "Material dependency graph did not link instance to parent material");
-    Require(ContainsDependency(instanceMetadata->dependencies, materialTypeDependency), "Material dependency graph did not link instance override to material type");
+    Require(!ContainsDependency(instanceMetadata->dependencies, materialTypeDependency),
+        "Material instance emitted the built-in PBR code type as an unresolved asset dependency");
     Require(ContainsDependency(instanceMetadata->dependencies, normalMetadata->id), "Material dependency graph did not link instance override to texture dependency");
 
     std::filesystem::remove_all(root, error);
@@ -1896,6 +1947,7 @@ void RunMaterialGraphAndTypeAssetDiscoveryTest() {
     material.hasExplicitMaterialTypeVersion = true;
     material.materialTypeAssetPath = "/Game/MaterialTypes/GraphSurface.kbmaterialtype";
     material.graphSourceAssetPath = "/Game/Graphs/Surface.kbmaterialgraph";
+    material.graph.lastGoodArtifact.assetId = 0xDEADBEEFU;
     Require(RenderMaterialAssetWriter::Save(root / "GraphBacked.kbmat", material),
         "KBMAT-GRAPH-0005: Graph-backed material writer failed");
 
@@ -1927,10 +1979,39 @@ void RunMaterialGraphAndTypeAssetDiscoveryTest() {
         manager.Load<RenderMaterialGraphDocument>(graphMetadata->id);
     const kb::assets::AssetHandle<RenderMaterialTypeDocument> typeHandle =
         manager.Load<RenderMaterialTypeDocument>(typeMetadata->id);
+    const kb::assets::AssetHandle<RenderMaterialAssetData> materialHandle =
+        manager.Load<RenderMaterialAssetData>(materialMetadata->id);
     Require(graphHandle.IsLoaded() && graphHandle->storageModel == "material-graph-asset",
         "KBMAT-GRAPH-0005: Material Graph asset should be runtime loadable");
     Require(typeHandle.IsLoaded() && typeHandle->stableTypeId == "graph.surface" && !typeHandle->schema.parameters.empty(),
         "KBMAT-GRAPH-0005: Material Type asset should be runtime loadable with schema");
+    Require(materialHandle.IsLoaded(),
+        "KBMAT-GRAPH-0005: Graph-backed material should be runtime loadable");
+    const RenderMaterialSourceGraphResolveResult sourceGraph =
+        ResolveRenderMaterialSourceGraph(manager, *materialMetadata, *materialHandle);
+    Require(sourceGraph.graph.has_value() && sourceGraph.external &&
+            sourceGraph.graph->storageModel == "material-graph-asset",
+        "The authoritative material sourceGraph resolver used the stale inline snapshot");
+    RenderMaterialAssetData missingLooseReference = *materialHandle;
+    missingLooseReference.graphSourceAssetId = 0U;
+    missingLooseReference.graphSourceAssetPath = "/Game/Graphs/Missing.kbmaterialgraph";
+    const RuntimeMaterialSourceGraphLoadResult looseFallback =
+        LoadRuntimeMaterialSourceGraph(manager, *materialMetadata, missingLooseReference);
+    Require(looseFallback.graph.has_value() && looseFallback.usedInlineFallback &&
+            looseFallback.parseResult.HasWarnings() && !looseFallback.parseResult.HasErrors(),
+        "The loose runtime lost its explicit inline editor-snapshot fallback diagnostic");
+    const RenderMaterialCookPayload inlinePayload =
+        RenderMaterialCookPayloadBuilder::Build(
+            *materialHandle, *materialMetadata, manager.Registry());
+    RenderMaterialAssetData authoritativeMaterial = *materialHandle;
+    authoritativeMaterial.graph = *sourceGraph.graph;
+    const RenderMaterialCookPayload authoritativePayload =
+        RenderMaterialCookPayloadBuilder::Build(
+            authoritativeMaterial, *materialMetadata, manager.Registry());
+    Require(!inlinePayload.graphBacked && authoritativePayload.graphBacked &&
+            authoritativePayload.graphCompileKey.graphContentHash != 0U &&
+            authoritativePayload.payloadHash != inlinePayload.payloadHash,
+        "The cook payload did not switch from inline snapshot A to authoritative sourceGraph B");
     Require(ContainsDependency(graphMetadata->dependencies, kb::assets::AssetId{ 0xA771U }),
         "KBMAT-GRAPH-0005: Material Graph dependency discovery should include last-good artifact asset id");
     Require(ContainsDependency(graphMetadata->dependencies, functionId) &&
@@ -1942,6 +2023,8 @@ void RunMaterialGraphAndTypeAssetDiscoveryTest() {
         "KBMAT-GRAPH-0005: .kbmat dependency discovery should link to referenced Material Type asset");
     Require(ContainsDependency(materialMetadata->dependencies, graphMetadata->id),
         "KBMAT-GRAPH-0304: .kbmat dependency discovery should link to source Material Graph asset");
+    Require(!ContainsDependency(materialMetadata->dependencies, kb::assets::AssetId{ 0xDEADBEEFU }),
+        "A material with an external sourceGraph retained a stale inline-graph dependency");
 
     std::filesystem::remove_all(root, error);
 }
@@ -2109,9 +2192,34 @@ void RunPackagedMaterialDependencyMemoryTest() {
         manager.Load<RenderMaterialAssetData>(materialId);
     Require(loadedMaterial.IsLoaded(), "Packaged base material did not load from source bytes");
     const RuntimeMaterialSourceGraphLoadResult loadedGraph =
-        LoadRuntimeMaterialSourceGraph(manager, *loadedMaterial);
+        LoadRuntimeMaterialSourceGraph(manager, *manager.Registry().Find(materialId), *loadedMaterial);
     Require(loadedGraph.graph.has_value() && loadedGraph.graph->storageModel == "material-graph-asset",
         "Packaged material source graph bypassed the memory loader");
+
+    RenderMaterialAssetData relativeReference = *loadedMaterial;
+    relativeReference.graphSourceAssetId = 0U;
+    relativeReference.graphSourceAssetPath = "Packaged.kbmaterialgraph";
+    const RuntimeMaterialSourceGraphLoadResult relativeGraph =
+        LoadRuntimeMaterialSourceGraph(
+            manager, *manager.Registry().Find(materialId), relativeReference);
+    Require(relativeGraph.graph.has_value() &&
+            relativeGraph.graph->storageModel == "material-graph-asset",
+        "A relative sourceGraph path was resolved differently from its packaged material owner");
+
+    RenderMaterialAssetData missingReference = *loadedMaterial;
+    missingReference.graphSourceAssetId = 0U;
+    missingReference.graphSourceAssetPath = "Missing.kbmaterialgraph";
+    const RenderMaterialSourceGraphResolveResult missingGraph =
+        ResolveRenderMaterialSourceGraph(
+            manager, *manager.Registry().Find(materialId), missingReference);
+    Require(!missingGraph.graph.has_value() && missingGraph.parseResult.HasErrors(),
+        "The authoritative sourceGraph resolver accepted a missing external graph");
+    const RuntimeMaterialSourceGraphLoadResult packagedMissingGraph =
+        LoadRuntimeMaterialSourceGraph(
+            manager, *manager.Registry().Find(materialId), missingReference);
+    Require(!packagedMissingGraph.graph.has_value() && !packagedMissingGraph.usedInlineFallback &&
+            packagedMissingGraph.parseResult.HasErrors(),
+        "The packaged runtime accepted an inline editor snapshot after sourceGraph resolution failed");
 
     const RuntimeMaterialFunctionLibraryBuildResult functions =
         BuildRuntimeMaterialFunctionLibrary(manager, *loadedGraph.graph);
@@ -3136,6 +3244,22 @@ void RunRenderTextureAssetLoaderDiscoversAndLoadsTextureThroughAssetManagerTest(
     Require(asset->width == 2U && asset->height == 2U, "Loaded texture did not preserve dimensions");
     Require(asset->rgba8.size() == 16U, "Loaded texture did not allocate RGBA8 pixels");
     Require(asset->rgba8[0] == 10U && asset->rgba8[1] == 20U && asset->rgba8[2] == 30U && asset->rgba8[3] == 255U, "Loaded texture did not preserve RGBA8 fill color");
+
+    const std::string snapshotText = "size 1 1\nrgba8 90 80 70 255\n";
+    const std::vector<std::uint8_t> snapshotBytes{ snapshotText.begin(), snapshotText.end() };
+    RenderTextureAssetLoader snapshotLoader;
+    kb::assets::AssetMetadata snapshotMetadata = *metadata;
+    snapshotMetadata.sourceExtension = ".kbtex";
+    const kb::assets::AssetLoadResult snapshot = snapshotLoader.Load(kb::assets::AssetLoadRequest{
+        .metadata = snapshotMetadata,
+        .resolvedPath = root / "missing.kbtex",
+        .sourceBytes = std::span<const std::uint8_t>{ snapshotBytes },
+    });
+    Require(snapshot.Succeeded(), "Render texture loader did not consume an immutable source snapshot");
+    const auto snapshotTexture = std::static_pointer_cast<RenderTextureAssetData>(snapshot.asset);
+    Require(snapshotTexture->width == 1U && snapshotTexture->height == 1U &&
+            snapshotTexture->rgba8 == std::vector<std::uint8_t>({ 90U, 80U, 70U, 255U }),
+        "Render texture loader reread the filesystem instead of its source snapshot");
 
     std::filesystem::remove_all(root, error);
 }

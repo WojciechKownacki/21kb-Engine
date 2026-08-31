@@ -1,3 +1,28 @@
+add_library(kb_audio_miniaudio_asset_runtime STATIC
+    assets/MiniaudioEncodingFormat.hpp
+    assets/ResolvedAudioClip.hpp
+    assets/MiniaudioClipResolver.hpp
+    assets/MiniaudioClipResolver.cpp
+)
+
+target_include_directories(kb_audio_miniaudio_asset_runtime
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_link_libraries(kb_audio_miniaudio_asset_runtime
+    PUBLIC
+        kb_engine
+    PRIVATE
+        miniaudio
+)
+
+set_target_properties(kb_audio_miniaudio_asset_runtime PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+)
+
+kb_apply_quality_gates(kb_audio_miniaudio_asset_runtime)
+
 set(KB_AUDIO_MINIAUDIO_PLUGIN_LIBRARY_TYPE STATIC)
 if(KB_BUILD_PROVIDER_MODULES_AS_DLL)
     set(KB_AUDIO_MINIAUDIO_PLUGIN_LIBRARY_TYPE SHARED)
@@ -11,7 +36,6 @@ add_library(kb_audio_miniaudio_plugin ${KB_AUDIO_MINIAUDIO_PLUGIN_LIBRARY_TYPE}
     assets/MiniaudioEncodingFormat.hpp
     assets/ResolvedAudioClip.hpp
     assets/MiniaudioClipResolver.hpp
-    assets/MiniaudioClipResolver.cpp
     playback/MiniaudioVoicePool.hpp
     playback/MiniaudioVoicePool.cpp
     runtime/MiniaudioEngine.hpp
@@ -38,6 +62,7 @@ target_include_directories(kb_audio_miniaudio_plugin
 target_link_libraries(kb_audio_miniaudio_plugin
     PRIVATE
         kb_engine
+        kb_audio_miniaudio_asset_runtime
         miniaudio
 )
 

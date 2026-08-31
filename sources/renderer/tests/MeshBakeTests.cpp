@@ -943,6 +943,20 @@ void RunBakedMeshFormatSelfCheckTest() {
     Require(view.lodCount >= 1U && view.sectionCount >= 1U && view.meshletCount >= 1U && view.chunkCount >= 1U,
         "A baked sphere came back with an empty table");
     Require(output.chunks.size() == view.chunkCount, "The baker returned a different number of chunks than it declared");
+    Require(kb::render::bake::BakedMeshMatchesTargetProfile(
+                output.primaryBlock, output.chunks,
+                kb::assets::bake::WindowsX64BakeTargetProfile()),
+        "A baked mesh did not retain the index width and chunk budget of its target profile");
+    Require(!kb::render::bake::BakedMeshMatchesTargetProfile(
+                output.primaryBlock, output.chunks,
+                kb::assets::bake::AndroidArm64BakeTargetProfile()),
+        "The target gate accepted a 32-bit desktop mesh as an Android 16-bit-index artifact");
+    kb::assets::bake::BakeTargetProfile undersizedChunkProfile =
+        kb::assets::bake::WindowsX64BakeTargetProfile();
+    undersizedChunkProfile.maxGeometryChunkBytes = output.chunks.front().size() - 1U;
+    Require(!kb::render::bake::BakedMeshMatchesTargetProfile(
+                output.primaryBlock, output.chunks, undersizedChunkProfile),
+        "The target gate accepted a geometry chunk larger than the profile budget");
     Require(view.materialSlotCount == 1U, "The baked mesh lost the material slot its source declared");
     Require(view.boundsRadius > 0.0F, "A baked sphere has no bounds");
 

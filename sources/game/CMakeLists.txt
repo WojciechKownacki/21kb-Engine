@@ -20,7 +20,13 @@ if(NOT ANDROID AND NOT EMSCRIPTEN)
     )
 
     target_include_directories(kb_cooker_core PUBLIC src/private)
-    target_link_libraries(kb_cooker_core PUBLIC kb_renderer kb_renderer_bake)
+    target_link_libraries(kb_cooker_core
+        PUBLIC
+            kb_renderer
+            kb_renderer_bake
+        PRIVATE
+            kb_runtime_asset_pack_validation
+    )
     target_compile_definitions(kb_cooker_core
         PRIVATE
             KB_COOKER_DEFAULT_ENGINE_ROOT="${CMAKE_SOURCE_DIR}"

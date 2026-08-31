@@ -3,22 +3,28 @@
 
 #include "engine/assets/AssetCompatibility.hpp"
 #include "engine/assets/AssetManager.hpp"
+#include "engine/assets/AssetMemoryInputStream.hpp"
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/assets/ImportedAsset.hpp"
 #include "engine/assets/ImportedAssetLoader.hpp"
 #include "engine/assets/bake/AssetPackWriter.hpp"
+#include "engine/assets/bake/RuntimeAssetPack.hpp"
 #include "engine/assets/bake/RuntimeAssetManifest.hpp"
 #include "engine/project/ParticleProjectPolicy.hpp"
 #include "engine/project/ProjectManager.hpp"
 #include "engine/project/ProjectSettings.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneAssetMeta.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "kb/render/ShaderManifest.hpp"
 #include "kb/render/bake/MeshBaker.hpp"
+#include "kb/render/bake/RuntimeAssetPackValidation.hpp"
 #include "kb/render/bake/TextureBaker.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialCookPayload.hpp"
+#include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialGraphShaderArtifact.hpp"
+#include "kb/render/resources/RenderMaterialFunctionAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialParameterCollection.hpp"
 #include "kb/render/resources/RenderMeshAssetLoader.hpp"
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
@@ -34,6 +40,7 @@
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -48,6 +55,7 @@
 #include <string_view>
 #include <system_error>
 #include <utility>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -62,6 +70,7 @@
 #else
     #include <fcntl.h>
     #include <spawn.h>
+    #include <sys/file.h>
     #include <sys/wait.h>
     #include <unistd.h>
     extern char** environ;
@@ -136,6 +145,857 @@ private:
         bytes.clear();
         error = "file could not be read completely: " + path.generic_string();
         return false;
+    }
+    return true;
+}
+
+struct SourceSnapshot {
+    std::filesystem::path path;
+    struct TrackedFile {
+        std::filesystem::path sourcePath;
+        std::filesystem::path snapshotPath;
+        std::uint64_t discoveryHash = 0U;
+    };
+    std::vector<TrackedFile> trackedFiles;
+};
+
+using SourceSnapshotMap = std::unordered_map<std::uint64_t, SourceSnapshot>;
+
+class ScopedCookDirectory final {
+public:
+    explicit ScopedCookDirectory(std::filesystem::path path) noexcept
+        : path_{ std::move(path) } {}
+    ScopedCookDirectory(const ScopedCookDirectory&) = delete;
+    ScopedCookDirectory& operator=(const ScopedCookDirectory&) = delete;
+    ~ScopedCookDirectory() {
+        std::error_code error;
+        std::filesystem::remove_all(path_, error);
+    }
+
+private:
+    std::filesystem::path path_;
+};
+
+[[nodiscard]] std::filesystem::path WithCookFileSuffix(
+    const std::filesystem::path& path,
+    std::string_view suffix) {
+#if defined(_WIN32)
+    std::wstring wideSuffix;
+    wideSuffix.reserve(suffix.size());
+    for (const char character : suffix) {
+        wideSuffix.push_back(static_cast<wchar_t>(static_cast<unsigned char>(character)));
+    }
+    return std::filesystem::path{ path.native() + wideSuffix };
+#else
+    return std::filesystem::path{ path.native() + std::string{ suffix } };
+#endif
+}
+
+class ScopedCookOutputLock final {
+public:
+    ScopedCookOutputLock() = default;
+    ScopedCookOutputLock(const ScopedCookOutputLock&) = delete;
+    ScopedCookOutputLock& operator=(const ScopedCookOutputLock&) = delete;
+    ~ScopedCookOutputLock() {
+#if defined(_WIN32)
+        if (handle_ != INVALID_HANDLE_VALUE) {
+            static_cast<void>(CloseHandle(handle_));
+            handle_ = INVALID_HANDLE_VALUE;
+            std::error_code removeError;
+            std::filesystem::remove(lockPath_, removeError);
+        }
+#else
+        if (descriptor_ >= 0) {
+            static_cast<void>(flock(descriptor_, LOCK_UN));
+            static_cast<void>(close(descriptor_));
+            descriptor_ = -1;
+            // Do not unlink POSIX advisory lock files. Removing a locked inode lets
+            // another process create and lock a different inode for the same output.
+        }
+#endif
+    }
+
+    [[nodiscard]] bool Acquire(const std::filesystem::path& outputPath, std::string& error) {
+        if (outputPath.empty() || outputPath.filename().empty()) {
+            error = "output package path is empty or has no filename";
+            return false;
+        }
+        std::filesystem::path parent = outputPath.parent_path();
+        if (parent.empty()) {
+            parent = ".";
+        }
+        std::error_code directoryError;
+        std::filesystem::create_directories(parent, directoryError);
+        if (directoryError) {
+            error = "output package directory could not be created: " + parent.generic_string();
+            return false;
+        }
+        lockPath_ = WithCookFileSuffix(outputPath, ".kbpacklock");
+#if defined(_WIN32)
+        handle_ = CreateFileW(
+            lockPath_.c_str(),
+            GENERIC_READ | GENERIC_WRITE,
+            0,
+            nullptr,
+            OPEN_ALWAYS,
+            FILE_ATTRIBUTE_NORMAL,
+            nullptr);
+        if (handle_ == INVALID_HANDLE_VALUE) {
+            error = "output package is already being cooked or its publication lock is unavailable: " +
+                outputPath.generic_string();
+            return false;
+        }
+#else
+        descriptor_ = open(lockPath_.c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0666);
+        if (descriptor_ < 0 || flock(descriptor_, LOCK_EX | LOCK_NB) != 0) {
+            if (descriptor_ >= 0) {
+                static_cast<void>(close(descriptor_));
+                descriptor_ = -1;
+            }
+            error = "output package is already being cooked or its publication lock is unavailable: " +
+                outputPath.generic_string();
+            return false;
+        }
+#endif
+        return true;
+    }
+
+private:
+    std::filesystem::path lockPath_;
+#if defined(_WIN32)
+    HANDLE handle_ = INVALID_HANDLE_VALUE;
+#else
+    int descriptor_ = -1;
+#endif
+};
+
+class ScopedCookPackCandidate final {
+public:
+    explicit ScopedCookPackCandidate(std::filesystem::path path) noexcept
+        : path_{ std::move(path) } {}
+    ScopedCookPackCandidate(const ScopedCookPackCandidate&) = delete;
+    ScopedCookPackCandidate& operator=(const ScopedCookPackCandidate&) = delete;
+    ~ScopedCookPackCandidate() {
+        std::error_code error;
+        std::filesystem::remove(path_, error);
+        for (const std::string_view suffix : {
+                 std::string_view{ ".kbpackstaging" },
+                 std::string_view{ ".kbpackpayload" },
+                 std::string_view{ ".kbpacklock" } }) {
+            error.clear();
+            std::filesystem::remove(WithCookFileSuffix(path_, suffix), error);
+        }
+    }
+
+private:
+    std::filesystem::path path_;
+};
+
+[[nodiscard]] std::filesystem::path CreateCookPackCandidatePath(
+    const std::filesystem::path& outputPath,
+    std::string& error) {
+    std::filesystem::path parent = outputPath.parent_path();
+    if (parent.empty()) {
+        parent = ".";
+    }
+#if defined(_WIN32)
+    const std::uint64_t processId = static_cast<std::uint64_t>(GetCurrentProcessId());
+#else
+    const std::uint64_t processId = static_cast<std::uint64_t>(getpid());
+#endif
+    static std::atomic<std::uint64_t> nextCandidate{ 0U };
+    for (std::uint32_t attempt = 0U; attempt < 256U; ++attempt) {
+        const std::uint64_t sequence = nextCandidate.fetch_add(1U, std::memory_order_relaxed);
+        const std::filesystem::path candidate = parent /
+            (".kb-cook-" + std::to_string(processId) + "-" + std::to_string(sequence) + ".kbpack");
+        if (candidate.lexically_normal() == outputPath.lexically_normal()) {
+            continue;
+        }
+        bool available = true;
+        std::error_code statusError;
+        for (const std::filesystem::path& path : {
+                 candidate,
+                 WithCookFileSuffix(candidate, ".kbpackstaging"),
+                 WithCookFileSuffix(candidate, ".kbpackpayload"),
+                 WithCookFileSuffix(candidate, ".kbpacklock") }) {
+            const std::filesystem::file_status status = std::filesystem::symlink_status(path, statusError);
+            if (statusError && statusError != std::errc::no_such_file_or_directory) {
+                error = "cook package candidate path could not be inspected: " + path.generic_string();
+                return {};
+            }
+            statusError.clear();
+            if (status.type() != std::filesystem::file_type::not_found) {
+                available = false;
+                break;
+            }
+        }
+        if (available) {
+            return candidate;
+        }
+    }
+    error = "a unique cook package candidate path could not be allocated";
+    return {};
+}
+
+[[nodiscard]] bool PublishValidatedCookPack(
+    const std::filesystem::path& candidate,
+    const std::filesystem::path& destination) noexcept {
+#if defined(_WIN32)
+    return MoveFileExW(
+        candidate.c_str(), destination.c_str(),
+        MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != FALSE;
+#else
+    return ::rename(candidate.c_str(), destination.c_str()) == 0;
+#endif
+}
+
+[[nodiscard]] std::filesystem::path CreateCookSnapshotDirectory(
+    const std::filesystem::path& cacheRoot,
+    std::string_view category,
+    std::string& error) {
+    const std::filesystem::path parent = cacheRoot / category;
+    std::error_code directoryError;
+    std::filesystem::create_directories(parent, directoryError);
+    if (directoryError) {
+        error = "cook snapshot directory could not be created: " + parent.generic_string();
+        return {};
+    }
+#if defined(_WIN32)
+    const std::uint64_t processId = static_cast<std::uint64_t>(GetCurrentProcessId());
+#else
+    const std::uint64_t processId = static_cast<std::uint64_t>(getpid());
+#endif
+    static std::atomic<std::uint64_t> nextDirectory{ 0U };
+    for (std::uint32_t attempt = 0U; attempt < 256U; ++attempt) {
+        const std::uint64_t sequence = nextDirectory.fetch_add(1U, std::memory_order_relaxed);
+        const std::filesystem::path candidate =
+            parent / (std::to_string(processId) + "-" + std::to_string(sequence));
+        directoryError.clear();
+        if (std::filesystem::create_directory(candidate, directoryError)) {
+            return candidate;
+        }
+        if (directoryError) {
+            error = "cook snapshot directory could not be created: " + candidate.generic_string();
+            return {};
+        }
+    }
+    error = "a unique cook snapshot directory could not be allocated";
+    return {};
+}
+
+[[nodiscard]] bool CopySourceSnapshot(
+    const std::filesystem::path& source,
+    const std::filesystem::path& destination,
+    std::uint64_t& discoveryHash,
+    std::string& error) {
+    std::error_code sizeError;
+    const std::uintmax_t size = std::filesystem::file_size(source, sizeError);
+    constexpr std::uint64_t kEnvelopeBytes = 16U;
+    if (sizeError || size > asset_bake::kMaxAssetPackBlockBytes - kEnvelopeBytes) {
+        error = "file is unreadable or exceeds the package block budget: " + source.generic_string();
+        return false;
+    }
+    std::error_code directoryError;
+    std::filesystem::create_directories(destination.parent_path(), directoryError);
+    if (directoryError) {
+        error = "source snapshot parent directory could not be created: " +
+            destination.parent_path().generic_string();
+        return false;
+    }
+    std::ifstream input{ source, std::ios::binary };
+    std::ofstream output{ destination, std::ios::binary | std::ios::trunc };
+    if (!input.is_open() || !output.is_open()) {
+        error = "source snapshot file could not be opened: " + source.generic_string();
+        return false;
+    }
+
+    std::array<std::uint8_t, 64U * 1024U> buffer{};
+    std::uintmax_t copied = 0U;
+    std::uint64_t hash = 14695981039346656037ULL;
+    while (input) {
+        input.read(reinterpret_cast<char*>(buffer.data()), static_cast<std::streamsize>(buffer.size()));
+        const std::streamsize read = input.gcount();
+        if (read <= 0) break;
+        output.write(reinterpret_cast<const char*>(buffer.data()), read);
+        if (!output) {
+            error = "source snapshot file could not be written: " + destination.generic_string();
+            return false;
+        }
+        copied += static_cast<std::uintmax_t>(read);
+        for (std::streamsize index = 0; index < read; ++index) {
+            hash ^= buffer[static_cast<std::size_t>(index)];
+            hash *= 1099511628211ULL;
+        }
+    }
+    output.flush();
+    if (input.bad() || !input.eof() || !output || copied != size) {
+        error = "source changed or could not be copied completely: " + source.generic_string();
+        return false;
+    }
+    discoveryHash = hash == 0U ? 1099511628211ULL : hash;
+    return true;
+}
+
+[[nodiscard]] bool CanonicalRelativePathWithin(
+    const std::filesystem::path& child,
+    const std::filesystem::path& parent,
+    std::filesystem::path& relative) {
+    std::error_code childError;
+    std::error_code parentError;
+    const std::filesystem::path canonicalChild = std::filesystem::weakly_canonical(child, childError);
+    const std::filesystem::path canonicalParent = std::filesystem::weakly_canonical(parent, parentError);
+    if (childError || parentError) return false;
+    relative = canonicalChild.lexically_relative(canonicalParent);
+    return !relative.empty() && !relative.is_absolute() && *relative.begin() != "..";
+}
+
+[[nodiscard]] bool HashSourceFile(
+    const std::filesystem::path& source,
+    std::uint64_t& discoveryHash) {
+    std::ifstream input{ source, std::ios::binary };
+    if (!input.is_open()) return false;
+    std::array<std::uint8_t, 64U * 1024U> buffer{};
+    std::uint64_t hash = 14695981039346656037ULL;
+    while (input) {
+        input.read(reinterpret_cast<char*>(buffer.data()), static_cast<std::streamsize>(buffer.size()));
+        const std::streamsize read = input.gcount();
+        if (read <= 0) break;
+        for (std::streamsize index = 0; index < read; ++index) {
+            hash ^= buffer[static_cast<std::size_t>(index)];
+            hash *= 1099511628211ULL;
+        }
+    }
+    if (input.bad() || !input.eof()) return false;
+    discoveryHash = hash == 0U ? 1099511628211ULL : hash;
+    return true;
+}
+
+struct CookConfigurationInputFingerprint {
+    std::filesystem::path path;
+    bool present = false;
+    std::uint64_t contentHash = 0U;
+};
+
+using CookConfigurationSnapshot = std::array<CookConfigurationInputFingerprint, 3U>;
+
+[[nodiscard]] bool CaptureCookConfigurationInput(
+    const std::filesystem::path& path,
+    bool required,
+    CookConfigurationInputFingerprint& fingerprint,
+    std::string& error) {
+    fingerprint = CookConfigurationInputFingerprint{ .path = path };
+    std::error_code statusError;
+    const std::filesystem::file_status status = std::filesystem::status(path, statusError);
+    if (statusError && statusError != std::errc::no_such_file_or_directory) {
+        error = "cook configuration input could not be inspected: " + path.generic_string();
+        return false;
+    }
+    if (statusError == std::errc::no_such_file_or_directory ||
+        status.type() == std::filesystem::file_type::not_found) {
+        if (required) {
+            error = "required cook configuration input is missing: " + path.generic_string();
+            return false;
+        }
+        return true;
+    }
+    if (!std::filesystem::is_regular_file(status)) {
+        error = "cook configuration input is not a regular file: " + path.generic_string();
+        return false;
+    }
+    fingerprint.present = true;
+    if (!HashSourceFile(path, fingerprint.contentHash)) {
+        error = "cook configuration input could not be fingerprinted: " + path.generic_string();
+        return false;
+    }
+    return true;
+}
+
+[[nodiscard]] bool VerifyCookConfigurationInputsUnchanged(
+    const CookConfigurationSnapshot& snapshot,
+    std::string& error) {
+    for (const CookConfigurationInputFingerprint& expected : snapshot) {
+        CookConfigurationInputFingerprint current;
+        if (!CaptureCookConfigurationInput(expected.path, false, current, error)) {
+            return false;
+        }
+        if (current.present != expected.present ||
+            (current.present && current.contentHash != expected.contentHash)) {
+            error = "cook configuration input changed while cooking: " +
+                expected.path.generic_string();
+            return false;
+        }
+    }
+    return true;
+}
+
+struct CookerToolInputFingerprint {
+    std::filesystem::path path;
+    std::filesystem::path snapshotPath;
+    std::uint64_t contentHash = 0U;
+    std::filesystem::file_time_type lastWriteTime{};
+};
+
+struct CookerToolInputSnapshot {
+    std::vector<CookerToolInputFingerprint> inputs;
+    std::filesystem::path shaderSourceRoot;
+    std::filesystem::path bgfxIncludeRoot;
+};
+
+[[nodiscard]] bool CollectCookerToolInputPaths(
+    const ProjectCookRequest& request,
+    std::vector<std::filesystem::path>& paths,
+    std::string& error) {
+    paths.clear();
+    if (request.shadercPath.empty() || !std::filesystem::is_regular_file(request.shadercPath)) {
+        error = "the pinned renderer shader compiler was not found";
+        return false;
+    }
+    paths.push_back(request.shadercPath);
+    for (const std::string_view siblingName : { std::string_view{ "dxcompiler.dll" },
+                                                std::string_view{ "libdxcompiler.so" } }) {
+        const std::filesystem::path sibling = request.shadercPath.parent_path() / siblingName;
+        std::error_code typeError;
+        if (std::filesystem::is_regular_file(sibling, typeError) && !typeError) {
+            paths.push_back(sibling);
+        }
+    }
+    const std::array<std::filesystem::path, 2U> roots{
+        request.engineRoot / "sources" / "renderer" / "shaders",
+        request.engineRoot / "third_party" / "bgfx.cmake" / "bgfx" / "src",
+    };
+    for (const std::filesystem::path& root : roots) {
+        if (!std::filesystem::is_directory(root)) {
+            error = "renderer shader input directory is unavailable: " + root.generic_string();
+            return false;
+        }
+        std::error_code iteratorError;
+        std::filesystem::recursive_directory_iterator iterator{ root, iteratorError };
+        const std::filesystem::recursive_directory_iterator end;
+        if (iteratorError) {
+            error = "renderer shader input directory could not be enumerated: " + root.generic_string();
+            return false;
+        }
+        for (; iterator != end; iterator.increment(iteratorError)) {
+            if (iteratorError) {
+                error = "renderer shader input directory changed while it was enumerated: " +
+                    root.generic_string();
+                return false;
+            }
+            std::error_code typeError;
+            if (iterator->is_regular_file(typeError) && !typeError) {
+                std::filesystem::path ignored;
+                if (!CanonicalRelativePathWithin(iterator->path(), root, ignored)) {
+                    error = "renderer shader input resolves outside its declared root: " +
+                        iterator->path().generic_string();
+                    return false;
+                }
+                paths.push_back(iterator->path());
+            }
+        }
+        if (iteratorError) {
+            error = "renderer shader input directory changed while it was enumerated: " +
+                root.generic_string();
+            return false;
+        }
+    }
+    std::ranges::sort(paths, [](const std::filesystem::path& lhs, const std::filesystem::path& rhs) {
+        return lhs.generic_string() < rhs.generic_string();
+    });
+    paths.erase(std::unique(paths.begin(), paths.end()), paths.end());
+    return true;
+}
+
+[[nodiscard]] bool CaptureCookerToolInputs(
+    const ProjectCookRequest& request,
+    const std::filesystem::path& snapshotRoot,
+    CookerToolInputSnapshot& snapshot,
+    std::string& error) {
+    snapshot = {};
+    snapshot.shaderSourceRoot = snapshotRoot / "renderer-shaders";
+    snapshot.bgfxIncludeRoot = snapshotRoot / "bgfx-src";
+    const std::array<std::filesystem::path, 2U> roots{
+        request.engineRoot / "sources" / "renderer" / "shaders",
+        request.engineRoot / "third_party" / "bgfx.cmake" / "bgfx" / "src",
+    };
+    const std::array<std::filesystem::path, 2U> capturedRoots{
+        snapshot.shaderSourceRoot,
+        snapshot.bgfxIncludeRoot,
+    };
+    std::error_code directoryError;
+    for (const std::filesystem::path& root : capturedRoots) {
+        std::filesystem::create_directories(root, directoryError);
+        if (directoryError) {
+            error = "renderer shader snapshot directory could not be created: " + root.generic_string();
+            return false;
+        }
+    }
+
+    std::vector<std::filesystem::path> paths;
+    if (!CollectCookerToolInputPaths(request, paths, error)) {
+        return false;
+    }
+    snapshot.inputs.reserve(paths.size());
+    for (const std::filesystem::path& path : paths) {
+        std::filesystem::path capturedPath;
+        for (std::size_t rootIndex = 0U; rootIndex < roots.size(); ++rootIndex) {
+            std::filesystem::path relative;
+            if (CanonicalRelativePathWithin(path, roots[rootIndex], relative)) {
+                const std::filesystem::path lexicalRelative = path.lexically_relative(roots[rootIndex]);
+                if (lexicalRelative.empty() || lexicalRelative.is_absolute() ||
+                    *lexicalRelative.begin() == "..") {
+                    error = "renderer shader input has no safe snapshot path: " + path.generic_string();
+                    return false;
+                }
+                capturedPath = capturedRoots[rootIndex] / lexicalRelative;
+                break;
+            }
+        }
+
+        std::uint64_t snapshotHash = 0U;
+        if (!capturedPath.empty() &&
+            !CopySourceSnapshot(path, capturedPath, snapshotHash, error)) {
+            return false;
+        }
+        std::uint64_t currentHash = 0U;
+        std::error_code timeError;
+        const std::filesystem::file_time_type lastWriteTime =
+            std::filesystem::last_write_time(path, timeError);
+        if (timeError || !HashSourceFile(path, currentHash) ||
+            (!capturedPath.empty() && currentHash != snapshotHash)) {
+            error = "renderer shader compiler input could not be fingerprinted: " + path.generic_string();
+            return false;
+        }
+        snapshot.inputs.push_back(CookerToolInputFingerprint{
+            .path = path,
+            .snapshotPath = capturedPath,
+            .contentHash = currentHash,
+            .lastWriteTime = lastWriteTime,
+        });
+    }
+    return true;
+}
+
+[[nodiscard]] bool VerifyCookerToolInputsUnchanged(
+    const ProjectCookRequest& request,
+    const CookerToolInputSnapshot& snapshot,
+    std::string& error) {
+    std::vector<std::filesystem::path> currentPaths;
+    if (!CollectCookerToolInputPaths(request, currentPaths, error)) {
+        return false;
+    }
+    if (currentPaths.size() != snapshot.inputs.size() ||
+        !std::ranges::equal(currentPaths, snapshot.inputs, {},
+            [](const std::filesystem::path& path) { return path.generic_string(); },
+            [](const CookerToolInputFingerprint& input) { return input.path.generic_string(); })) {
+        error = "renderer shader compiler input set changed while cooking";
+        return false;
+    }
+    for (const CookerToolInputFingerprint& input : snapshot.inputs) {
+        std::uint64_t currentHash = 0U;
+        std::error_code timeError;
+        const std::filesystem::file_time_type currentWriteTime =
+            std::filesystem::last_write_time(input.path, timeError);
+        if (timeError || currentWriteTime != input.lastWriteTime ||
+            !HashSourceFile(input.path, currentHash) || currentHash != input.contentHash) {
+            error = "renderer shader compiler input changed while cooking: " +
+                input.path.generic_string();
+            return false;
+        }
+        if (!input.snapshotPath.empty()) {
+            std::uint64_t snapshotHash = 0U;
+            if (!HashSourceFile(input.snapshotPath, snapshotHash) || snapshotHash != input.contentHash) {
+                error = "renderer shader input snapshot changed while cooking: " +
+                    input.snapshotPath.generic_string();
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] bool VerifyCookerExecutablesUnchanged(
+    const CookerToolInputSnapshot& snapshot,
+    std::string& error) {
+    for (const CookerToolInputFingerprint& input : snapshot.inputs) {
+        if (!input.snapshotPath.empty()) {
+            continue;
+        }
+        std::uint64_t currentHash = 0U;
+        std::error_code timeError;
+        const std::filesystem::file_time_type currentWriteTime =
+            std::filesystem::last_write_time(input.path, timeError);
+        if (timeError || currentWriteTime != input.lastWriteTime ||
+            !HashSourceFile(input.path, currentHash) || currentHash != input.contentHash) {
+            error = "renderer shader compiler executable changed while cooking: " +
+                input.path.generic_string();
+            return false;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] bool CaptureSourceSnapshots(
+    std::span<const kb::assets::AssetMetadata> assets,
+    const std::filesystem::path& contentRoot,
+    const std::filesystem::path& snapshotRoot,
+    SourceSnapshotMap& snapshots,
+    std::string& error) {
+    snapshots.clear();
+    snapshots.reserve(assets.size());
+    for (const kb::assets::AssetMetadata& metadata : assets) {
+        std::filesystem::path relativeSource;
+        if (!CanonicalRelativePathWithin(metadata.physicalPath, contentRoot, relativeSource)) {
+            error = "asset source resolves outside the project content root: " +
+                kb::assets::NormalizeAssetPath(metadata.virtualPath);
+            return false;
+        }
+        const std::filesystem::path assetSnapshotRoot =
+            snapshotRoot / std::to_string(metadata.id.value);
+        const std::filesystem::path snapshotPath = assetSnapshotRoot / relativeSource;
+        std::uint64_t snapshotHash = 0U;
+        if (!CopySourceSnapshot(metadata.physicalPath, snapshotPath, snapshotHash, error)) {
+            error = "asset source snapshot failed for " +
+                kb::assets::NormalizeAssetPath(metadata.virtualPath) + ": " + error;
+            return false;
+        }
+        if (metadata.contentHash == 0U || snapshotHash != metadata.contentHash) {
+            error = "asset source changed after discovery: " +
+                kb::assets::NormalizeAssetPath(metadata.virtualPath);
+            return false;
+        }
+        SourceSnapshot sourceSnapshot{
+            .path = snapshotPath,
+            .trackedFiles = { SourceSnapshot::TrackedFile{
+                .sourcePath = metadata.physicalPath,
+                .snapshotPath = snapshotPath,
+                .discoveryHash = snapshotHash,
+            } },
+        };
+
+        // A scene's sidecar is an authored cooker input: it defines the dependency closure
+        // and authenticates the scene bytes. It is intentionally not shipped, but it must be
+        // captured and rechecked like the source so a concurrent save cannot publish a pack
+        // whose manifest describes an older .meta state.
+        if (metadata.type == "Scene") {
+            const std::filesystem::path metaSource = kb::scene::SceneAssetMetaPath(metadata.physicalPath);
+            std::filesystem::path relativeMeta;
+            if (!CanonicalRelativePathWithin(metaSource, contentRoot, relativeMeta)) {
+                error = "scene metadata sidecar resolves outside the project content root: " +
+                    kb::assets::NormalizeAssetPath(metadata.virtualPath);
+                return false;
+            }
+            const std::filesystem::path metaSnapshot = assetSnapshotRoot / relativeMeta;
+            std::uint64_t metaHash = 0U;
+            if (!CopySourceSnapshot(metaSource, metaSnapshot, metaHash, error)) {
+                error = "scene metadata sidecar snapshot failed for " +
+                    kb::assets::NormalizeAssetPath(metadata.virtualPath) + ": " + error;
+                return false;
+            }
+            sourceSnapshot.trackedFiles.push_back(SourceSnapshot::TrackedFile{
+                .sourcePath = metaSource,
+                .snapshotPath = metaSnapshot,
+                .discoveryHash = metaHash,
+            });
+        }
+
+        std::string extension = metadata.physicalPath.extension().generic_string();
+        std::ranges::transform(extension, extension.begin(), [](unsigned char value) {
+            return static_cast<char>(std::tolower(value));
+        });
+        if (metadata.type == "RenderMesh" && extension == ".gltf") {
+            std::vector<std::uint8_t> gltfBytes;
+            if (!ReadFileBytes(snapshotPath, gltfBytes, error)) {
+                error = "glTF source snapshot could not be read: " +
+                    kb::assets::NormalizeAssetPath(metadata.virtualPath);
+                return false;
+            }
+            const std::optional<std::vector<std::filesystem::path>> externalUris =
+                kb::render::RenderMeshAssetBuilder::GltfExternalBufferUris(gltfBytes);
+            if (!externalUris.has_value()) {
+                error = "glTF contains an invalid or unsupported external buffer URI: " +
+                    kb::assets::NormalizeAssetPath(metadata.virtualPath);
+                return false;
+            }
+            for (const std::filesystem::path& uri : *externalUris) {
+                const std::filesystem::path externalSource =
+                    (metadata.physicalPath.parent_path() / uri).lexically_normal();
+                std::filesystem::path relativeExternal;
+                if (!CanonicalRelativePathWithin(externalSource, contentRoot, relativeExternal)) {
+                    error = "glTF external buffer resolves outside the project content root: " +
+                        externalSource.generic_string();
+                    return false;
+                }
+                const std::filesystem::path externalSnapshot =
+                    assetSnapshotRoot / relativeExternal;
+                std::uint64_t externalHash = 0U;
+                if (!CopySourceSnapshot(externalSource, externalSnapshot, externalHash, error)) {
+                    error = "glTF external buffer snapshot failed: " + error;
+                    return false;
+                }
+                sourceSnapshot.trackedFiles.push_back(SourceSnapshot::TrackedFile{
+                    .sourcePath = externalSource,
+                    .snapshotPath = externalSnapshot,
+                    .discoveryHash = externalHash,
+                });
+            }
+        }
+
+        if (!snapshots.emplace(metadata.id.value, std::move(sourceSnapshot)).second) {
+            error = "runtime closure contains a duplicate asset id: " + kb::assets::ToString(metadata.id);
+            return false;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] bool VerifySourceSnapshotIntegrity(
+    const SourceSnapshot& snapshot,
+    std::string& error) {
+    for (const SourceSnapshot::TrackedFile& tracked : snapshot.trackedFiles) {
+        std::uint64_t snapshotHash = 0U;
+        if (!HashSourceFile(tracked.snapshotPath, snapshotHash) ||
+            snapshotHash != tracked.discoveryHash) {
+            error = "captured asset source snapshot was modified: " +
+                tracked.snapshotPath.generic_string();
+            return false;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] bool VerifySnapshotSourcesUnchanged(
+    std::span<const kb::assets::AssetMetadata> assets,
+    const SourceSnapshotMap& snapshots,
+    std::string& error) {
+    for (const kb::assets::AssetMetadata& metadata : assets) {
+        const auto snapshot = snapshots.find(metadata.id.value);
+        if (snapshot == snapshots.end()) {
+            error = "asset source snapshot disappeared: " + kb::assets::ToString(metadata.id);
+            return false;
+        }
+        if (!VerifySourceSnapshotIntegrity(snapshot->second, error)) return false;
+        for (const SourceSnapshot::TrackedFile& tracked : snapshot->second.trackedFiles) {
+            std::uint64_t currentHash = 0U;
+            if (!HashSourceFile(tracked.sourcePath, currentHash) ||
+                currentHash != tracked.discoveryHash) {
+                error = "asset source changed while cooking: " +
+                    kb::assets::NormalizeAssetPath(metadata.virtualPath) +
+                    " (" + tracked.sourcePath.generic_string() + ")";
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] bool ReadSourceSnapshot(
+    const SourceSnapshotMap& snapshots,
+    std::uint64_t assetId,
+    std::vector<std::uint8_t>& bytes,
+    std::string& error) {
+    const auto snapshot = snapshots.find(assetId);
+    if (snapshot == snapshots.end()) {
+        error = "asset source snapshot is missing: " + std::to_string(assetId);
+        return false;
+    }
+    if (!VerifySourceSnapshotIntegrity(snapshot->second, error)) return false;
+    return ReadFileBytes(snapshot->second.path, bytes, error);
+}
+
+[[nodiscard]] bool ValidateMaterialGraphRuntimeDependencies(
+    const kb::render::RenderMaterialGraphDocument& rootGraph,
+    kb::assets::AssetManager& manager,
+    const SourceSnapshotMap& snapshots,
+    kb::render::RenderMaterialGraphFunctionLibrary& functionLibrary,
+    std::unordered_map<std::uint64_t, kb::render::RenderMaterialParameterCollectionData>& collections,
+    std::string& error) {
+    functionLibrary.entries.clear();
+    collections.clear();
+    std::vector<std::uint64_t> pendingFunctions =
+        kb::render::DiscoverRenderMaterialGraphFunctionDependencies(rootGraph);
+    std::vector<std::uint64_t> collectionIds =
+        kb::render::DiscoverRenderMaterialGraphParameterCollectionDependencies(rootGraph);
+    std::unordered_set<std::uint64_t> visitedFunctions;
+    std::unordered_set<std::uint64_t> discoveredCollections{
+        collectionIds.begin(), collectionIds.end() };
+
+    while (!pendingFunctions.empty()) {
+        const std::uint64_t functionId = pendingFunctions.back();
+        pendingFunctions.pop_back();
+        if (functionId == 0U || !visitedFunctions.insert(functionId).second) {
+            continue;
+        }
+        const kb::assets::AssetMetadata* metadata =
+            manager.Registry().Find(kb::assets::AssetId{ functionId });
+        if (metadata == nullptr || metadata->type != kb::render::kRenderMaterialFunctionAssetType ||
+            !metadata->runtimeLoadable) {
+            error = "material graph requires a missing, editor-only, or wrong-type function asset: " +
+                std::to_string(functionId);
+            return false;
+        }
+        std::vector<std::uint8_t> functionBytes;
+        if (!ReadSourceSnapshot(snapshots, functionId, functionBytes, error)) {
+            error = "material graph function is absent from the runtime closure: " +
+                kb::assets::NormalizeAssetPath(metadata->virtualPath);
+            return false;
+        }
+        kb::assets::AssetMemoryInputStream input{ functionBytes };
+        const kb::render::RenderMaterialAssetParseResult parsed =
+            kb::render::RenderMaterialFunctionAssetLoader::LoadFunctionWithDiagnostics(input);
+        if (!parsed.Succeeded()) {
+            error = "material graph function could not be parsed: " +
+                kb::assets::NormalizeAssetPath(metadata->virtualPath) + "\n" + parsed.ErrorMessage();
+            return false;
+        }
+        const std::uint64_t packagedContentHash = asset_bake::HashBakeBytes(functionBytes);
+        functionLibrary.entries.push_back(kb::render::RenderMaterialGraphFunctionLibraryEntry{
+            .assetId = metadata->id.value,
+            .contentHash = packagedContentHash == 0U ? 1U : packagedContentHash,
+            .name = metadata->virtualPath.generic_string(),
+            .graph = parsed.asset->graph,
+        });
+        for (const std::uint64_t nestedId :
+             kb::render::DiscoverRenderMaterialGraphFunctionDependencies(parsed.asset->graph)) {
+            if (!visitedFunctions.contains(nestedId)) pendingFunctions.push_back(nestedId);
+        }
+        for (const std::uint64_t collectionId :
+             kb::render::DiscoverRenderMaterialGraphParameterCollectionDependencies(parsed.asset->graph)) {
+            if (collectionId != 0U && discoveredCollections.insert(collectionId).second) {
+                collectionIds.push_back(collectionId);
+            }
+        }
+    }
+
+    for (const std::uint64_t collectionId : collectionIds) {
+        if (collectionId == 0U) continue;
+        const kb::assets::AssetMetadata* metadata =
+            manager.Registry().Find(kb::assets::AssetId{ collectionId });
+        if (metadata == nullptr ||
+            metadata->type != kb::render::kRenderMaterialParameterCollectionAssetType ||
+            !metadata->runtimeLoadable) {
+            error = "material graph requires a missing, editor-only, or wrong-type parameter collection asset: " +
+                std::to_string(collectionId);
+            return false;
+        }
+        std::vector<std::uint8_t> collectionBytes;
+        if (!ReadSourceSnapshot(snapshots, collectionId, collectionBytes, error)) {
+            error = "material parameter collection is absent from the runtime closure: " +
+                kb::assets::NormalizeAssetPath(metadata->virtualPath);
+            return false;
+        }
+        kb::assets::AssetMemoryInputStream input{ collectionBytes };
+        const kb::render::RenderMaterialParameterCollectionParseResult parsed =
+            kb::render::RenderMaterialParameterCollectionAssetLoader::LoadCollectionWithDiagnostics(input);
+        if (!parsed.Succeeded()) {
+            error = "material parameter collection could not be parsed: " +
+                kb::assets::NormalizeAssetPath(metadata->virtualPath) + "\n" + parsed.ErrorMessage();
+            return false;
+        }
+        if (!collections.emplace(collectionId, std::move(*parsed.collection)).second) {
+            error = "material graph dependency validation encountered a duplicate parameter collection: " +
+                std::to_string(collectionId);
+            return false;
+        }
     }
     return true;
 }
@@ -246,8 +1106,8 @@ private:
     const std::filesystem::path& parent) {
     std::error_code childError;
     std::error_code parentError;
-    const std::filesystem::path absoluteChild = std::filesystem::absolute(child, childError).lexically_normal();
-    const std::filesystem::path absoluteParent = std::filesystem::absolute(parent, parentError).lexically_normal();
+    const std::filesystem::path absoluteChild = std::filesystem::weakly_canonical(child, childError);
+    const std::filesystem::path absoluteParent = std::filesystem::weakly_canonical(parent, parentError);
     if (childError || parentError) {
         return false;
     }
@@ -307,6 +1167,7 @@ private:
         kb::assets::AssetLoadResult loaded = loader.Load(kb::assets::AssetLoadRequest{
             .metadata = metadata,
             .resolvedPath = metadata.physicalPath,
+            .sourceBytes = std::span<const std::uint8_t>{ fileBytes },
         });
         if (!loaded.Succeeded()) {
             error = "imported texture container could not be decoded: " + metadata.virtualPath.generic_string();
@@ -420,16 +1281,57 @@ private:
 
 [[nodiscard]] bool CookGraphShaders(
     const ProjectCookRequest& request,
+    const CookerToolInputSnapshot& toolInputs,
     const asset_bake::BakeTargetProfile& profile,
     const kb::assets::AssetMetadata& metadata,
     const kb::render::RenderMaterialAssetData& material,
-    const kb::assets::AssetRegistry& registry,
+    kb::assets::AssetManager& manager,
+    const SourceSnapshotMap& snapshots,
     asset_bake::AssetPackWriter& writer,
     std::vector<asset_bake::RuntimeArtifactReference>& references,
     std::size_t& shaderArtifactCount,
     std::string& error) {
+    kb::render::RenderMaterialGraphDocument graph = material.graph;
+    if (material.graphSourceAssetId != 0U || !material.graphSourceAssetPath.empty()) {
+        const kb::assets::AssetMetadata* graphMetadata =
+            kb::render::ResolveRenderMaterialSourceGraphMetadata(
+                manager.Registry(), metadata, material);
+        if (graphMetadata == nullptr) {
+            error = "authoritative material sourceGraph could not be resolved: " +
+                metadata.virtualPath.generic_string();
+            return false;
+        }
+        std::vector<std::uint8_t> graphBytes;
+        if (!ReadSourceSnapshot(snapshots, graphMetadata->id.value, graphBytes, error)) {
+            error = "authoritative material sourceGraph is absent from the runtime closure: " +
+                kb::assets::NormalizeAssetPath(graphMetadata->virtualPath);
+            return false;
+        }
+        kb::assets::AssetMemoryInputStream graphInput{ graphBytes };
+        kb::render::RenderMaterialAssetParseResult sourceGraph =
+            kb::render::RenderMaterialGraphAssetLoader::LoadGraphWithDiagnostics(graphInput);
+        if (!sourceGraph.Succeeded()) {
+            error = "authoritative material sourceGraph could not be parsed: " +
+                kb::assets::NormalizeAssetPath(graphMetadata->virtualPath);
+            const std::string details = sourceGraph.ErrorMessage();
+            if (!details.empty()) error += "\n" + details;
+            return false;
+        }
+        graph = std::move(sourceGraph.asset->graph);
+    }
+    kb::render::RenderMaterialAssetData materialForCook = material;
+    materialForCook.graph = std::move(graph);
+    kb::render::RenderMaterialGraphFunctionLibrary functionLibrary;
+    std::unordered_map<std::uint64_t, kb::render::RenderMaterialParameterCollectionData> collections;
+    if (!ValidateMaterialGraphRuntimeDependencies(
+            materialForCook.graph, manager, snapshots, functionLibrary, collections, error)) {
+        error = "material graph dependency validation failed for " +
+            metadata.virtualPath.generic_string() + "\n" + error;
+        return false;
+    }
     const kb::render::RenderMaterialCookPayload payload =
-        kb::render::RenderMaterialCookPayloadBuilder::Build(material, metadata, registry);
+        kb::render::RenderMaterialCookPayloadBuilder::Build(
+            materialForCook, metadata, manager.Registry(), functionLibrary);
     if (!payload.graphBacked) {
         return true;
     }
@@ -442,11 +1344,34 @@ private:
         }
         return false;
     }
+    for (const kb::render::RenderMaterialGraphReflectionUniform& uniform :
+         payload.graphShader.reflection.uniforms) {
+        if (uniform.source !=
+            kb::render::RenderMaterialGraphReflectionUniformSource::ParameterCollection) {
+            continue;
+        }
+        const auto collection = collections.find(uniform.collectionAssetId);
+        const bool parameterExists = collection != collections.end() && std::ranges::any_of(
+            collection->second.parameters,
+            [&](const kb::render::RenderMaterialParameterCollectionParameter& parameter) {
+                return parameter.stableId == uniform.collectionParameterStableId;
+            });
+        if (!parameterExists) {
+            const kb::assets::AssetMetadata* collectionMetadata =
+                manager.Registry().Find(kb::assets::AssetId{ uniform.collectionAssetId });
+            error = "material graph requires missing parameter '" +
+                uniform.collectionParameterStableId + "' from parameter collection " +
+                (collectionMetadata != nullptr
+                    ? kb::assets::NormalizeAssetPath(collectionMetadata->virtualPath)
+                    : std::to_string(uniform.collectionAssetId));
+            return false;
+        }
+    }
     if (request.shadercPath.empty() || !std::filesystem::is_regular_file(request.shadercPath)) {
         error = "material graph requires shaderc, but the compiler was not found";
         return false;
     }
-    const std::filesystem::path shaderSources = request.engineRoot / "sources" / "renderer" / "shaders";
+    const std::filesystem::path& shaderSources = toolInputs.shaderSourceRoot;
     if (!std::filesystem::is_regular_file(shaderSources / "varying.def.sc")) {
         error = "renderer shader sources were not found under engine root";
         return false;
@@ -473,7 +1398,7 @@ private:
         shaderRequest.varyingDefPath = (shaderSources / "varying.def.sc").generic_string();
         shaderRequest.includeDirs = {
             shaderSources.generic_string(),
-            (request.engineRoot / "third_party" / "bgfx.cmake" / "bgfx" / "src").generic_string(),
+            toolInputs.bgfxIncludeRoot.generic_string(),
         };
         shaderRequest.dependencyFiles = {
             (shaderSources / "pbr_graph_forward.sh").generic_string(),
@@ -697,21 +1622,6 @@ private:
     return text;
 }
 
-class ScopedCookDirectory final {
-public:
-    explicit ScopedCookDirectory(std::filesystem::path path) noexcept
-        : path_{ std::move(path) } {}
-    ScopedCookDirectory(const ScopedCookDirectory&) = delete;
-    ScopedCookDirectory& operator=(const ScopedCookDirectory&) = delete;
-    ~ScopedCookDirectory() {
-        std::error_code error;
-        std::filesystem::remove_all(path_, error);
-    }
-
-private:
-    std::filesystem::path path_;
-};
-
 [[nodiscard]] std::filesystem::path CreateFixedShaderWorkDirectory(
     const std::filesystem::path& cacheRoot,
     std::string_view shaderPlatform,
@@ -748,6 +1658,7 @@ private:
 
 [[nodiscard]] bool AddFixedShaders(
     const ProjectCookRequest& request,
+    const CookerToolInputSnapshot& toolInputs,
     const asset_bake::BakeTargetProfile& profile,
     asset_bake::AssetPackWriter& writer,
     asset_bake::RuntimeAssetManifest& manifest,
@@ -757,9 +1668,8 @@ private:
         error = "the pinned renderer shader compiler was not found";
         return false;
     }
-    const std::filesystem::path sourceRoot = request.engineRoot / "sources" / "renderer" / "shaders";
-    const std::filesystem::path bgfxInclude =
-        request.engineRoot / "third_party" / "bgfx.cmake" / "bgfx" / "src";
+    const std::filesystem::path& sourceRoot = toolInputs.shaderSourceRoot;
+    const std::filesystem::path& bgfxInclude = toolInputs.bgfxIncludeRoot;
     const std::filesystem::path varyingDef = sourceRoot / "varying.def.sc";
     if (!std::filesystem::is_directory(sourceRoot) || !std::filesystem::is_directory(bgfxInclude) ||
         !std::filesystem::is_regular_file(varyingDef)) {
@@ -831,7 +1741,14 @@ private:
             };
             std::filesystem::remove(binaryPath, directoryError);
             directoryError.clear();
+            if (!VerifyCookerExecutablesUnchanged(toolInputs, error)) {
+                return false;
+            }
             const int exitCode = RunCookerTool(request.shadercPath, arguments, diagnosticPath);
+            if (!VerifyCookerExecutablesUnchanged(toolInputs, error)) {
+                std::filesystem::remove(binaryPath, directoryError);
+                return false;
+            }
             const bool produced = exitCode == 0 && std::filesystem::is_regular_file(binaryPath) &&
                 std::filesystem::file_size(binaryPath, directoryError) > 0U && !directoryError;
             if (!produced) {
@@ -907,9 +1824,23 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
     if (!asset_bake::TryFindBakeTargetProfile(request.targetProfileId, profile)) {
         return Failure("unknown target profile: " + request.targetProfileId);
     }
+    const std::filesystem::path projectRoot = projectFile.parent_path();
+    const std::filesystem::path settingsPath =
+        kb::project::ProjectSettingsStore::FilePath(projectRoot);
+    std::filesystem::path projectMetaPath = projectFile;
+    projectMetaPath.replace_extension(".meta");
+    CookConfigurationSnapshot configurationSnapshot{};
+    if (!CaptureCookConfigurationInput(projectFile, true, configurationSnapshot[0], error) ||
+        !CaptureCookConfigurationInput(projectMetaPath, true, configurationSnapshot[1], error) ||
+        !CaptureCookConfigurationInput(settingsPath, false, configurationSnapshot[2], error)) {
+        return Failure(std::move(error));
+    }
     const kb::project::ProjectDescriptorReadResult project = kb::project::ProjectManager::LoadProject(projectFile);
     if (!project.succeeded) {
         return Failure("project descriptor load failed: " + project.error);
+    }
+    if (!VerifyCookConfigurationInputsUnchanged(configurationSnapshot, error)) {
+        return Failure(std::move(error));
     }
     if (const std::optional<std::string_view> unsupported =
             kb::game::FirstUnsupportedPackagedRuntimeModule(profile.identifier, project.descriptor);
@@ -918,16 +1849,18 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
             "target " + std::string{ profile.identifier } +
             " cannot ship configured runtime module: " + std::string{ *unsupported });
     }
-    const std::filesystem::path projectRoot = projectFile.parent_path();
     const kb::project::ParticleProjectPolicyResult particlePolicy =
         kb::project::ParticleProjectPolicy::Inspect(projectRoot, project.descriptor);
     if (!particlePolicy.IsRunnable()) {
         return Failure(particlePolicy.diagnostic);
     }
-    const kb::project::ProjectSettingsLoadResult settingsLoad = kb::project::ProjectSettingsStore::Load(
-        kb::project::ProjectSettingsStore::FilePath(projectRoot));
+    const kb::project::ProjectSettingsLoadResult settingsLoad =
+        kb::project::ProjectSettingsStore::Load(settingsPath);
     if (!settingsLoad.Succeeded()) {
         return Failure("project settings load failed: " + settingsLoad.error);
+    }
+    if (!VerifyCookConfigurationInputsUnchanged(configurationSnapshot, error)) {
+        return Failure(std::move(error));
     }
     const kb::project::ProjectSettings settings = settingsLoad.found
         ? settingsLoad.settings
@@ -947,6 +1880,16 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
     }
     if (request.cacheRoot.empty()) {
         request.cacheRoot = request.outputPackPath.parent_path() / ".kb-cook-cache" / request.targetProfileId;
+    }
+    const std::filesystem::path toolSnapshotRoot =
+        CreateCookSnapshotDirectory(request.cacheRoot, "shader-input-snapshots", error);
+    if (toolSnapshotRoot.empty()) {
+        return Failure(std::move(error));
+    }
+    const ScopedCookDirectory toolSnapshotCleanup{ toolSnapshotRoot };
+    CookerToolInputSnapshot cookerToolInputs;
+    if (!CaptureCookerToolInputs(request, toolSnapshotRoot, cookerToolInputs, error)) {
+        return Failure(std::move(error));
     }
 
     // Cooking needs the canonical loader registry, not a running gameplay
@@ -972,9 +1915,40 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
     if (!CollectRuntimeAssetClosure(manager, settings, assets, error)) {
         return Failure(std::move(error));
     }
+    for (const kb::assets::AssetMetadata& metadata : assets) {
+        std::string extension = metadata.physicalPath.extension().generic_string();
+        std::ranges::transform(extension, extension.begin(), [](unsigned char value) {
+            return static_cast<char>(std::tolower(value));
+        });
+        if (extension == asset_bake::kAssetPackFileExtension) {
+            return Failure(
+                "prebuilt target-specific package cannot be used as a source asset: " +
+                kb::assets::NormalizeAssetPath(metadata.virtualPath));
+        }
+    }
     diagnostics << "selected " << assets.size() << " assets in the runtime dependency closure\n";
+    const std::filesystem::path sourceSnapshotRoot =
+        CreateCookSnapshotDirectory(request.cacheRoot, "source-snapshots", error);
+    if (sourceSnapshotRoot.empty()) {
+        return Failure(std::move(error));
+    }
+    const ScopedCookDirectory sourceSnapshotCleanup{ sourceSnapshotRoot };
+    SourceSnapshotMap sourceSnapshots;
+    if (!CaptureSourceSnapshots(assets, contentRoot, sourceSnapshotRoot, sourceSnapshots, error)) {
+        return Failure(std::move(error));
+    }
 
-    asset_bake::AssetPackWriter writer{ request.outputPackPath, profile };
+    ScopedCookOutputLock outputLock;
+    if (!outputLock.Acquire(request.outputPackPath, error)) {
+        return Failure(std::move(error));
+    }
+    const std::filesystem::path packCandidatePath =
+        CreateCookPackCandidatePath(request.outputPackPath, error);
+    if (packCandidatePath.empty()) {
+        return Failure(std::move(error));
+    }
+    const ScopedCookPackCandidate packCandidateCleanup{ packCandidatePath };
+    asset_bake::AssetPackWriter writer{ packCandidatePath, profile };
     asset_bake::RuntimeAssetManifest manifest{};
     manifest.targetProfileId = std::string{ profile.identifier };
     manifest.targetProfileHash = asset_bake::BakeTargetProfileFingerprint(profile);
@@ -983,7 +1957,7 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
     std::set<std::string> packagedPaths;
     ProjectCookResult result{};
 
-    if (!AddFixedShaders(request, profile, writer, manifest, packagedPaths, error)) {
+    if (!AddFixedShaders(request, cookerToolInputs, profile, writer, manifest, packagedPaths, error)) {
         return Failure(std::move(error));
     }
 
@@ -992,9 +1966,13 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
         if (!packagedPaths.insert(virtualPath).second) {
             return Failure("two assets claim one package path: " + virtualPath);
         }
+        const auto sourceSnapshot = sourceSnapshots.find(metadata.id.value);
+        if (sourceSnapshot == sourceSnapshots.end()) {
+            return Failure("asset source snapshot is missing: " + virtualPath);
+        }
         std::vector<std::uint8_t> fileBytes;
-        if (!ReadFileBytes(metadata.physicalPath, fileBytes, error)) {
-            return Failure(std::move(error));
+        if (!ReadSourceSnapshot(sourceSnapshots, metadata.id.value, fileBytes, error)) {
+            return Failure("asset source snapshot could not be read: " + virtualPath + "\n" + error);
         }
 
         asset_bake::RuntimeAssetManifestEntry entry{
@@ -1014,11 +1992,17 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
         };
 
         if (IsTextureAsset(metadata)) {
-            const std::optional<kb::render::RenderTextureAssetData> texture =
-                kb::render::RenderTextureAssetLoader::LoadTexture(metadata.physicalPath);
-            if (!texture.has_value()) {
+            kb::render::RenderTextureAssetLoader loader;
+            const kb::assets::AssetLoadResult loaded = loader.Load(kb::assets::AssetLoadRequest{
+                .metadata = metadata,
+                .resolvedPath = sourceSnapshot->second.path,
+                .sourceBytes = std::span<const std::uint8_t>{ fileBytes },
+            });
+            if (!loaded.Succeeded()) {
                 return Failure("texture could not be decoded for cooking: " + virtualPath);
             }
+            const std::shared_ptr<kb::render::RenderTextureAssetData> texture =
+                std::static_pointer_cast<kb::render::RenderTextureAssetData>(loaded.asset);
             std::vector<std::uint8_t> textureSource;
             if (!TextureBakeSource(metadata, fileBytes, *texture, textureSource, error)) {
                 return Failure(std::move(error));
@@ -1055,7 +2039,8 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
             kb::render::RenderMeshAssetLoader loader;
             const kb::assets::AssetLoadResult loaded = loader.Load(kb::assets::AssetLoadRequest{
                 .metadata = metadata,
-                .resolvedPath = metadata.physicalPath,
+                .resolvedPath = sourceSnapshot->second.path,
+                .sourceBytes = std::span<const std::uint8_t>{ fileBytes },
             });
             if (!loaded.Succeeded()) {
                 return Failure("mesh import failed for cooking: " + virtualPath + "\n  " + loaded.error);
@@ -1086,18 +2071,26 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
                 .encoding = asset_bake::RuntimeArtifactEncoding::SourceBytes,
             });
             if (IsMaterialAsset(metadata)) {
+                kb::assets::AssetMemoryInputStream materialInput{ fileBytes };
                 const kb::render::RenderMaterialAssetParseResult material =
-                    kb::render::RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(metadata.physicalPath, metadata.id);
+                    kb::render::RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(
+                        materialInput,
+                        kb::render::RenderMaterialAssetParseSourceContext{
+                            .assetId = metadata.id,
+                            .path = metadata.physicalPath,
+                        });
                 if (!material.Succeeded()) {
                     return Failure("material could not be parsed for cooking: " + virtualPath +
                         "\n" + material.ErrorMessage());
                 }
                 if (!CookGraphShaders(
                         request,
+                        cookerToolInputs,
                         profile,
                         metadata,
                         *material.asset,
-                        manager.Registry(),
+                        manager,
+                        sourceSnapshots,
                         writer,
                         entry.artifacts,
                         result.shaderArtifactCount,
@@ -1106,7 +2099,17 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
                 }
             }
         }
+        if (!VerifySourceSnapshotIntegrity(sourceSnapshot->second, error)) {
+            return Failure("asset source snapshot changed during import: " + virtualPath + "\n" + error);
+        }
         manifest.assets.push_back(std::move(entry));
+    }
+
+    if (!VerifySnapshotSourcesUnchanged(assets, sourceSnapshots, error)) {
+        return Failure(std::move(error));
+    }
+    if (!VerifyCookerToolInputsUnchanged(request, cookerToolInputs, error)) {
+        return Failure(std::move(error));
     }
 
     std::vector<std::uint8_t> manifestBytes;
@@ -1132,6 +2135,45 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
     const asset_bake::BakedAssetSinkStatus finish = writer.Finish();
     if (finish != asset_bake::BakedAssetSinkStatus::Success) {
         return Failure("package publication failed: " + std::string{ asset_bake::ToString(finish) });
+    }
+
+    auto validationPack = std::make_shared<asset_bake::RuntimeAssetPack>();
+    const asset_bake::RuntimeAssetPackStatus mountStatus =
+        validationPack->Mount(writer.PackPath(), profile);
+    if (mountStatus != asset_bake::RuntimeAssetPackStatus::Success) {
+        return Failure("cooked package failed its runtime mount gate: " +
+            std::string{ asset_bake::ToString(mountStatus) });
+    }
+    if (const std::optional<std::string_view> unsupported =
+            kb::game::FirstUnsupportedPackagedRuntimeModule(
+                profile.identifier, validationPack->Manifest().descriptor);
+        unsupported.has_value()) {
+        return Failure("cooked package contains a runtime module unsupported by target " +
+            std::string{ profile.identifier } + ": " + std::string{ *unsupported });
+    }
+    const kb::render::RuntimeAssetPackValidationResult validation =
+        kb::render::ValidateRuntimeAssetPack(validationPack, profile);
+    if (!validation.Succeeded()) {
+        return Failure("cooked package failed semantic runtime validation: " + validation.error);
+    }
+    validationPack.reset();
+    // The runtime gate can be deliberately expensive (all assets, shader variants and
+    // payloads). Recheck both authored inputs and cooker tools after it, immediately before
+    // the one publication rename, so a save during validation cannot be reported as a
+    // successful cook of the current project state.
+    if (!VerifySnapshotSourcesUnchanged(assets, sourceSnapshots, error)) {
+        return Failure(std::move(error));
+    }
+    if (!VerifyCookerToolInputsUnchanged(request, cookerToolInputs, error)) {
+        return Failure(std::move(error));
+    }
+    if (!VerifyCookConfigurationInputsUnchanged(configurationSnapshot, error)) {
+        return Failure(std::move(error));
+    }
+    const std::filesystem::path publicationPath =
+        writer.PackPath().parent_path() / request.outputPackPath.filename();
+    if (!PublishValidatedCookPack(writer.PackPath(), publicationPath)) {
+        return Failure("validated package could not be published atomically");
     }
 
     result.succeeded = true;

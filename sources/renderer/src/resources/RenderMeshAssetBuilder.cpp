@@ -53,6 +53,18 @@ std::optional<RenderMeshAssetData> RenderMeshAssetBuilder::LoadGltf(const std::f
     return RenderMeshGltfImporter::Load(path, desc);
 }
 
+std::optional<RenderMeshAssetData> RenderMeshAssetBuilder::LoadGltf(
+    std::span<const std::uint8_t> bytes,
+    const std::filesystem::path& sourcePath,
+    const RenderMeshGltfImportDesc& desc) {
+    return RenderMeshGltfImporter::Load(bytes, sourcePath, desc);
+}
+
+std::optional<std::vector<std::filesystem::path>> RenderMeshAssetBuilder::GltfExternalBufferUris(
+    std::span<const std::uint8_t> bytes) {
+    return RenderMeshGltfImporter::ExternalBufferUris(bytes);
+}
+
 std::optional<RenderMeshAssetData> RenderMeshAssetBuilder::LoadFbx(const std::filesystem::path& path, const RenderMeshFbxImportDesc& desc) {
     return RenderMeshFbxImporter::Load(path, desc);
 }

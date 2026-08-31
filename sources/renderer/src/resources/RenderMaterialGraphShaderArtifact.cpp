@@ -2,12 +2,15 @@
 #include "kb/render/SceneGBufferContract.hpp"
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <bit>
 #include <cctype>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <memory>
 #include <sstream>
 #include <system_error>
 #include <unordered_set>
@@ -20,6 +23,13 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#else
+#include <fcntl.h>
+#include <spawn.h>
+#include <sys/file.h>
+#include <sys/wait.h>
+#include <unistd.h>
+extern char** environ;
 #endif
 
 namespace kb::render {
@@ -246,20 +256,223 @@ struct ResolvedShaderDependency {
     return true;
 }
 
-[[nodiscard]] std::string QuotePath(const std::string& value) {
-    return "\"" + value + "\"";
+[[nodiscard]] bool ShaderCompilerInputsUnchanged(
+    std::span<const ResolvedShaderDependency> dependencies,
+    const std::filesystem::path& shadercPath,
+    std::string_view shadercBytes) {
+    std::string current;
+    if (!ReadTextFileStrict(shadercPath, current) || current != shadercBytes) return false;
+    for (const ResolvedShaderDependency& dependency : dependencies) {
+        if (!ReadTextFileStrict(dependency.path, current) || current != dependency.content) {
+            return false;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] bool IsNonEmptyRegularFile(const std::filesystem::path& path) {
+    std::error_code error;
+    return std::filesystem::is_regular_file(path, error) && !error &&
+        std::filesystem::file_size(path, error) > 0U && !error;
+}
+
+struct ShaderCacheFileIdentity {
+    std::uint64_t bytes = 0U;
+    std::uint64_t digest = 0U;
+};
+
+class ScopedShaderInputDirectory final {
+public:
+    explicit ScopedShaderInputDirectory(std::filesystem::path path) noexcept
+        : path_{ std::move(path) } {}
+    ScopedShaderInputDirectory(const ScopedShaderInputDirectory&) = delete;
+    ScopedShaderInputDirectory& operator=(const ScopedShaderInputDirectory&) = delete;
+    ~ScopedShaderInputDirectory() {
+        std::error_code error;
+        std::filesystem::remove_all(path_, error);
+    }
+
+private:
+    std::filesystem::path path_;
+};
+
+class ShaderCacheFileLock final {
+public:
+    ShaderCacheFileLock() = default;
+    ShaderCacheFileLock(const ShaderCacheFileLock&) = delete;
+    ShaderCacheFileLock& operator=(const ShaderCacheFileLock&) = delete;
+    ~ShaderCacheFileLock() {
+#if defined(_WIN32)
+        if (handle_ != INVALID_HANDLE_VALUE) {
+            OVERLAPPED overlapped{};
+            static_cast<void>(UnlockFileEx(handle_, 0U, 1U, 0U, &overlapped));
+            static_cast<void>(CloseHandle(handle_));
+        }
+#else
+        if (descriptor_ >= 0) {
+            static_cast<void>(flock(descriptor_, LOCK_UN));
+            static_cast<void>(close(descriptor_));
+        }
+#endif
+    }
+
+    [[nodiscard]] bool Acquire(const std::filesystem::path& path) {
+#if defined(_WIN32)
+        handle_ = CreateFileW(
+            path.c_str(),
+            GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            nullptr,
+            OPEN_ALWAYS,
+            FILE_ATTRIBUTE_NORMAL,
+            nullptr);
+        if (handle_ == INVALID_HANDLE_VALUE) return false;
+        OVERLAPPED overlapped{};
+        return LockFileEx(handle_, LOCKFILE_EXCLUSIVE_LOCK, 0U, 1U, 0U, &overlapped) != FALSE;
+#else
+        descriptor_ = open(path.c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0666);
+        return descriptor_ >= 0 && flock(descriptor_, LOCK_EX) == 0;
+#endif
+    }
+
+private:
+#if defined(_WIN32)
+    HANDLE handle_ = INVALID_HANDLE_VALUE;
+#else
+    int descriptor_ = -1;
+#endif
+};
+
+[[nodiscard]] bool RelativePathWithin(
+    const std::filesystem::path& child,
+    const std::filesystem::path& parent,
+    std::filesystem::path& relative) {
+    relative = child.lexically_relative(parent);
+    return !relative.empty() && !relative.is_absolute() && *relative.begin() != "..";
+}
+
+[[nodiscard]] bool WriteCapturedShaderInput(
+    const std::filesystem::path& path,
+    std::string_view content) {
+    std::error_code error;
+    std::filesystem::create_directories(path.parent_path(), error);
+    if (error) return false;
+    std::ofstream output{ path, std::ios::binary | std::ios::trunc };
+    if (!output) return false;
+    output.write(content.data(), static_cast<std::streamsize>(content.size()));
+    return output.good();
+}
+
+[[nodiscard]] bool BuildCapturedShaderInputMirror(
+    const RenderMaterialGraphShaderArtifactRequest& request,
+    std::span<const ResolvedShaderDependency> dependencies,
+    const std::filesystem::path& mirrorRoot,
+    std::vector<std::string>& includeDirs,
+    std::filesystem::path& varyingDefPath) {
+    includeDirs.clear();
+    includeDirs.reserve(request.includeDirs.size());
+    std::vector<std::filesystem::path> canonicalIncludeDirs;
+    canonicalIncludeDirs.reserve(request.includeDirs.size());
+    for (std::size_t index = 0U; index < request.includeDirs.size(); ++index) {
+        std::error_code canonicalError;
+        const std::filesystem::path canonical =
+            std::filesystem::weakly_canonical(request.includeDirs[index], canonicalError);
+        if (canonicalError) return false;
+        canonicalIncludeDirs.push_back(canonical);
+        const std::filesystem::path mirror = mirrorRoot / "include" / std::to_string(index);
+        std::error_code directoryError;
+        std::filesystem::create_directories(mirror, directoryError);
+        if (directoryError) return false;
+        includeDirs.push_back(mirror.generic_string());
+    }
+
+    std::error_code varyingCanonicalError;
+    const std::filesystem::path canonicalVarying = request.varyingDefPath.empty()
+        ? std::filesystem::path{}
+        : std::filesystem::weakly_canonical(request.varyingDefPath, varyingCanonicalError);
+    if (varyingCanonicalError) return false;
+    bool varyingWritten = request.varyingDefPath.empty();
+    for (const ResolvedShaderDependency& dependency : dependencies) {
+        for (std::size_t index = 0U; index < canonicalIncludeDirs.size(); ++index) {
+            std::filesystem::path relative;
+            if (RelativePathWithin(dependency.path, canonicalIncludeDirs[index], relative) &&
+                !WriteCapturedShaderInput(
+                    std::filesystem::path{ includeDirs[index] } / relative,
+                    dependency.content)) {
+                return false;
+            }
+        }
+        if (!canonicalVarying.empty() && dependency.path == canonicalVarying) {
+            varyingDefPath = mirrorRoot / "varying" / canonicalVarying.filename();
+            if (!WriteCapturedShaderInput(varyingDefPath, dependency.content)) return false;
+            varyingWritten = true;
+        }
+    }
+    return varyingWritten;
+}
+
+[[nodiscard]] bool ReadShaderCacheFileIdentity(
+    const std::filesystem::path& path,
+    ShaderCacheFileIdentity& identity) {
+    std::ifstream input{ path, std::ios::binary };
+    if (!input) return false;
+    std::array<std::uint8_t, 64U * 1024U> buffer{};
+    std::uint64_t hash = 1469598103934665603ULL;
+    std::uint64_t bytes = 0U;
+    while (input) {
+        input.read(reinterpret_cast<char*>(buffer.data()), static_cast<std::streamsize>(buffer.size()));
+        const std::streamsize read = input.gcount();
+        if (read <= 0) break;
+        bytes += static_cast<std::uint64_t>(read);
+        for (std::streamsize index = 0; index < read; ++index) {
+            HashByte(hash, buffer[static_cast<std::size_t>(index)]);
+        }
+    }
+    if (input.bad() || !input.eof() || bytes == 0U) return false;
+    identity = ShaderCacheFileIdentity{ .bytes = bytes, .digest = hash };
+    return true;
+}
+
+[[nodiscard]] std::string ShaderCacheMarker(
+    std::uint64_t cookKey,
+    const ShaderCacheFileIdentity& identity) {
+    return "1 " + std::to_string(cookKey) + " " + std::to_string(identity.bytes) + " " +
+        std::to_string(identity.digest) + "\n";
+}
+
+[[nodiscard]] bool ShaderCacheEntryIsValid(
+    const std::filesystem::path& binaryPath,
+    const std::filesystem::path& markerPath,
+    std::uint64_t cookKey,
+    ShaderCacheFileIdentity* identityOut = nullptr) {
+    std::istringstream marker{ ReadTextFile(markerPath) };
+    std::uint32_t version = 0U;
+    std::uint64_t markerKey = 0U;
+    ShaderCacheFileIdentity expected{};
+    std::string trailing;
+    if (!(marker >> version >> markerKey >> expected.bytes >> expected.digest) ||
+        (marker >> trailing) || version != 1U || markerKey != cookKey || expected.bytes == 0U) {
+        return false;
+    }
+    ShaderCacheFileIdentity actual{};
+    if (!ReadShaderCacheFileIdentity(binaryPath, actual) ||
+        actual.bytes != expected.bytes || actual.digest != expected.digest) {
+        return false;
+    }
+    if (identityOut != nullptr) *identityOut = actual;
+    return true;
 }
 
 #if defined(_WIN32)
-[[nodiscard]] std::wstring ShaderCompilerWideCommand(std::string_view command) {
-    if (command.empty()) {
+[[nodiscard]] std::wstring ShaderCompilerWideArgument(std::string_view argument) {
+    if (argument.empty()) {
         return {};
     }
     const int size = MultiByteToWideChar(
         CP_UTF8,
-        0,
-        command.data(),
-        static_cast<int>(command.size()),
+        MB_ERR_INVALID_CHARS,
+        argument.data(),
+        static_cast<int>(argument.size()),
         nullptr,
         0);
     if (size <= 0) {
@@ -268,21 +481,58 @@ struct ResolvedShaderDependency {
     std::wstring result(static_cast<std::size_t>(size), L'\0');
     if (MultiByteToWideChar(
             CP_UTF8,
-            0,
-            command.data(),
-            static_cast<int>(command.size()),
+            MB_ERR_INVALID_CHARS,
+            argument.data(),
+            static_cast<int>(argument.size()),
             result.data(),
             size) != size) {
         return {};
     }
     return result;
 }
+
+[[nodiscard]] std::wstring QuoteWindowsShaderCompilerArgument(std::wstring_view value) {
+    std::wstring quoted{ L"\"" };
+    std::size_t backslashes = 0U;
+    for (const wchar_t character : value) {
+        if (character == L'\\') {
+            ++backslashes;
+            continue;
+        }
+        if (character == L'\"') {
+            quoted.append(backslashes * 2U + 1U, L'\\');
+            quoted.push_back(character);
+            backslashes = 0U;
+            continue;
+        }
+        quoted.append(backslashes, L'\\');
+        backslashes = 0U;
+        quoted.push_back(character);
+    }
+    quoted.append(backslashes * 2U, L'\\');
+    quoted.push_back(L'\"');
+    return quoted;
+}
 #endif
 
 [[nodiscard]] int RunShaderCompilerHidden(
-    const std::string& command,
+    const std::filesystem::path& executable,
+    const std::vector<std::string>& arguments,
     const std::filesystem::path& diagnosticPath) {
 #if defined(_WIN32)
+    const std::wstring executableWide = executable.wstring();
+    if (executableWide.empty()) {
+        return -1;
+    }
+    std::wstring commandLine = QuoteWindowsShaderCompilerArgument(executableWide);
+    for (const std::string& argument : arguments) {
+        const std::wstring wide = ShaderCompilerWideArgument(argument);
+        if (!argument.empty() && wide.empty()) {
+            return -1;
+        }
+        commandLine.push_back(L' ');
+        commandLine += QuoteWindowsShaderCompilerArgument(wide);
+    }
     SECURITY_ATTRIBUTES security{
         .nLength = sizeof(SECURITY_ATTRIBUTES),
         .lpSecurityDescriptor = nullptr,
@@ -316,9 +566,8 @@ struct ResolvedShaderDependency {
     startup.hStdOutput = diagnostic;
     startup.hStdError = diagnostic;
     PROCESS_INFORMATION process{};
-    std::wstring commandLine = ShaderCompilerWideCommand(command);
-    const BOOL created = !commandLine.empty() && CreateProcessW(
-        nullptr,
+    const BOOL created = CreateProcessW(
+        executableWide.c_str(),
         commandLine.data(),
         nullptr,
         nullptr,
@@ -343,8 +592,43 @@ struct ResolvedShaderDependency {
     CloseHandle(process.hProcess);
     return static_cast<int>(exitCode);
 #else
-    const std::string shellCommand = command + " > " + QuotePath(diagnosticPath.generic_string()) + " 2>&1";
-    return std::system(shellCommand.c_str());
+    posix_spawn_file_actions_t actions{};
+    if (posix_spawn_file_actions_init(&actions) != 0) {
+        return -1;
+    }
+    const std::string diagnostic = diagnosticPath.string();
+    const int inputAction = posix_spawn_file_actions_addopen(
+        &actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
+    const int outputAction = posix_spawn_file_actions_addopen(
+        &actions, STDOUT_FILENO, diagnostic.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    const int errorAction = posix_spawn_file_actions_adddup2(
+        &actions, STDOUT_FILENO, STDERR_FILENO);
+    if (inputAction != 0 || outputAction != 0 || errorAction != 0) {
+        static_cast<void>(posix_spawn_file_actions_destroy(&actions));
+        return -1;
+    }
+    std::vector<std::string> ownedArguments;
+    ownedArguments.reserve(arguments.size() + 1U);
+    ownedArguments.push_back(executable.string());
+    ownedArguments.insert(ownedArguments.end(), arguments.begin(), arguments.end());
+    std::vector<char*> argv;
+    argv.reserve(ownedArguments.size() + 1U);
+    for (std::string& argument : ownedArguments) {
+        argv.push_back(argument.data());
+    }
+    argv.push_back(nullptr);
+    pid_t process = 0;
+    const int spawned = posix_spawn(
+        &process, ownedArguments.front().c_str(), &actions, nullptr, argv.data(), environ);
+    static_cast<void>(posix_spawn_file_actions_destroy(&actions));
+    if (spawned != 0) {
+        return -1;
+    }
+    int status = 0;
+    if (waitpid(process, &status, 0) < 0 || !WIFEXITED(status)) {
+        return -1;
+    }
+    return WEXITSTATUS(status);
 #endif
 }
 
@@ -433,6 +717,53 @@ std::optional<RenderMaterialGraphShaderBackend> ParseRenderMaterialGraphShaderBa
     if (text == "essl") return RenderMaterialGraphShaderBackend::Essl;
     if (text == "glsl") return RenderMaterialGraphShaderBackend::Glsl;
     return std::nullopt;
+}
+
+[[nodiscard]] std::filesystem::path UniqueShaderTemporaryPath(
+    const std::filesystem::path& destination,
+    std::string_view suffix) {
+    static std::atomic<std::uint64_t> serial{ 0U };
+#if defined(_WIN32)
+    const std::uint64_t processId = static_cast<std::uint64_t>(GetCurrentProcessId());
+#else
+    const std::uint64_t processId = static_cast<std::uint64_t>(getpid());
+#endif
+    std::filesystem::path temporary = destination;
+    temporary += "." + std::string{ suffix } + "." + std::to_string(processId) + "." +
+        std::to_string(serial.fetch_add(1U, std::memory_order_relaxed));
+    return temporary;
+}
+
+[[nodiscard]] bool PublishShaderFileAtomically(
+    const std::filesystem::path& staging,
+    const std::filesystem::path& destination) noexcept {
+#if defined(_WIN32)
+    return MoveFileExW(
+        staging.c_str(), destination.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != FALSE;
+#else
+    return ::rename(staging.c_str(), destination.c_str()) == 0;
+#endif
+}
+
+[[nodiscard]] bool WriteShaderTextAtomically(
+    const std::filesystem::path& destination,
+    std::string_view text) {
+    const std::filesystem::path staging = UniqueShaderTemporaryPath(destination, "write.tmp");
+    {
+        std::ofstream output{ staging, std::ios::binary | std::ios::trunc };
+        if (!output) return false;
+        output.write(text.data(), static_cast<std::streamsize>(text.size()));
+        if (!output) {
+            output.close();
+            std::error_code error;
+            std::filesystem::remove(staging, error);
+            return false;
+        }
+    }
+    if (PublishShaderFileAtomically(staging, destination)) return true;
+    std::error_code error;
+    std::filesystem::remove(staging, error);
+    return false;
 }
 
 namespace {
@@ -865,6 +1196,29 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
         .name = "shaderc:" + shadercPath.generic_string(),
         .contentHash = shadercHash,
     });
+    const std::array<std::filesystem::path, 2U> shadercRuntimeCandidates{
+        shadercPath.parent_path() / "dxcompiler.dll",
+        shadercPath.parent_path() / "libdxcompiler.so",
+    };
+    for (const std::filesystem::path& runtimeCandidate : shadercRuntimeCandidates) {
+        std::error_code runtimeError;
+        if (!std::filesystem::is_regular_file(runtimeCandidate, runtimeError) || runtimeError) continue;
+        std::error_code canonicalError;
+        const std::filesystem::path canonicalRuntime =
+            std::filesystem::weakly_canonical(runtimeCandidate, canonicalError);
+        std::string runtimeBytes;
+        if (canonicalError || !ReadTextFileStrict(canonicalRuntime, runtimeBytes)) {
+            AddArtifactDiagnostic(result.diagnostics, RenderMaterialGraphDiagnosticSeverity::Error,
+                "Material graph shader compiler runtime identity could not be read: " +
+                    runtimeCandidate.generic_string() + ".");
+            return result;
+        }
+        dependencies.push_back(ResolvedShaderDependency{
+            .path = canonicalRuntime,
+            .name = "shaderc-runtime:" + canonicalRuntime.filename().generic_string(),
+            .content = std::move(runtimeBytes),
+        });
+    }
 
     HashU64(dependencyHash, dependencies.size());
     for (const ResolvedShaderDependency& dependency : dependencies) {
@@ -899,6 +1253,7 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
     HashU64(cookKey, artifact.dependencyHash);
     HashU64(cookKey, artifact.materialTypeVersion);
     HashU64(cookKey, static_cast<std::uint64_t>(artifact.shaderPlatform));
+    HashU64(cookKey, request.debug ? 1U : 0U);
 
     std::error_code error;
     const std::filesystem::path passRoot = std::filesystem::path{ request.cacheRoot } /
@@ -907,63 +1262,114 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
         ("variant_" + std::to_string(artifact.variantKey)) /
         request.pass;
     std::filesystem::create_directories(passRoot, error);
-    const std::filesystem::path wrapperPath = passRoot / "fs_graph.sc";
-    {
-        std::ofstream wrapperOut{ wrapperPath, std::ios::binary | std::ios::trunc };
-        if (!wrapperOut) {
-            AddArtifactDiagnostic(result.diagnostics, RenderMaterialGraphDiagnosticSeverity::Error,
-                "Material graph shader cook could not write the shader wrapper to " + wrapperPath.generic_string() + ".");
-            return result;
-        }
-        wrapperOut << artifact.wrapperSource;
+    if (error) {
+        AddArtifactDiagnostic(result.diagnostics, RenderMaterialGraphDiagnosticSeverity::Error,
+            "Material graph shader cache directory could not be created: " + passRoot.generic_string() + ".");
+        return result;
     }
+    std::filesystem::path inputMirrorRoot;
+    std::unique_ptr<ScopedShaderInputDirectory> inputMirrorCleanup;
+    std::vector<std::string> capturedIncludeDirs;
+    std::filesystem::path capturedVaryingDefPath;
+    const auto ensureInputMirror = [&]() {
+        if (inputMirrorCleanup != nullptr) return true;
+        inputMirrorRoot = UniqueShaderTemporaryPath(passRoot / "inputs", "work");
+        error.clear();
+        if (!std::filesystem::create_directory(inputMirrorRoot, error) || error ||
+            !BuildCapturedShaderInputMirror(
+                request,
+                dependencies,
+                inputMirrorRoot,
+                capturedIncludeDirs,
+                capturedVaryingDefPath)) {
+            std::filesystem::remove_all(inputMirrorRoot, error);
+            return false;
+        }
+        inputMirrorCleanup = std::make_unique<ScopedShaderInputDirectory>(inputMirrorRoot);
+        return true;
+    };
+    std::filesystem::path wrapperPath;
+    bool fragmentWrapperCaptured = false;
 
     for (const RenderMaterialGraphShaderBackend backend : backends) {
         const std::filesystem::path backendDir = passRoot / std::string{ RenderMaterialGraphShaderBackendDirectory(backend) };
+        error.clear();
         std::filesystem::create_directories(backendDir, error);
-        const std::filesystem::path binaryPath = backendDir / "fs.bin";
-        const std::filesystem::path hashPath = backendDir / "fs.bin.hash";
+        if (error) {
+            AddArtifactDiagnostic(result.diagnostics, RenderMaterialGraphDiagnosticSeverity::Error,
+                "Material graph shader backend cache directory could not be created: " + backendDir.generic_string() + ".");
+            continue;
+        }
+        const std::filesystem::path binaryPath =
+            backendDir / ("fs_" + std::to_string(cookKey) + ".bin");
+        const std::filesystem::path markerPath = binaryPath.string() + ".meta";
+        ShaderCacheFileLock cacheLock;
+        if (!cacheLock.Acquire(binaryPath.string() + ".lock")) {
+            AddArtifactDiagnostic(result.diagnostics, RenderMaterialGraphDiagnosticSeverity::Error,
+                "Material graph shader cache entry could not be locked for publication.",
+                request.pass,
+                std::string{ RenderMaterialGraphShaderBackendName(backend) });
+            continue;
+        }
 
-        const std::string cachedHash = TrimDiagnosticText(ReadTextFile(hashPath));
-        const bool cached = !cachedHash.empty() &&
-            cachedHash == std::to_string(cookKey) &&
-            std::filesystem::exists(binaryPath, error) &&
-            std::filesystem::file_size(binaryPath, error) > 0U;
-        if (cached) {
+        ShaderCacheFileIdentity cachedIdentity{};
+        if (ShaderCacheEntryIsValid(binaryPath, markerPath, cookKey, &cachedIdentity) &&
+            ShaderCompilerInputsUnchanged(dependencies, shadercPath, shadercBytes)) {
             artifact.binaries.push_back(RenderMaterialGraphShaderBinary{
                 .backend = backend,
                 .binaryPath = binaryPath.generic_string(),
-                .byteSize = std::filesystem::file_size(binaryPath, error),
+                .byteSize = cachedIdentity.bytes,
                 .cacheHit = true,
             });
             continue;
         }
-
-        const std::filesystem::path errorPath = backendDir / "fs.shaderc.tmp";
-        const std::string shadercExe = std::filesystem::path{ request.shadercPath }.make_preferred().string();
-        std::string command = QuotePath(shadercExe);
-        command += " --type fragment";
-        command += " --platform " +
-            std::string{ kb::assets::bake::ShaderBakePlatformName(artifact.shaderPlatform) };
-        command += " --profile " + std::string{ RenderMaterialGraphShaderBackendProfile(backend) };
-        command += " -f " + QuotePath(wrapperPath.generic_string());
-        command += " -o " + QuotePath(binaryPath.generic_string());
-        if (!request.varyingDefPath.empty()) {
-            command += " --varyingdef " + QuotePath(request.varyingDefPath);
+        if (!ensureInputMirror()) {
+            AddArtifactDiagnostic(result.diagnostics, RenderMaterialGraphDiagnosticSeverity::Error,
+                "Material graph shader compiler inputs could not be captured into an immutable snapshot.");
+            continue;
         }
-        for (const std::string& includeDir : request.includeDirs) {
-            command += " -i " + QuotePath(includeDir);
+        if (!fragmentWrapperCaptured) {
+            wrapperPath = inputMirrorRoot / ("fs_graph_" + std::to_string(cookKey) + ".sc");
+            if (!WriteShaderTextAtomically(wrapperPath, artifact.wrapperSource)) {
+                AddArtifactDiagnostic(result.diagnostics, RenderMaterialGraphDiagnosticSeverity::Error,
+                    "Material graph shader cook could not write its captured fragment wrapper.");
+                continue;
+            }
+            fragmentWrapperCaptured = true;
         }
-        command += request.debug ? " -O 0 --debug" : " -O 3";
 
-        std::filesystem::remove(binaryPath, error);
-        const int exitCode = RunShaderCompilerHidden(command, errorPath);
+        const std::filesystem::path stagingBinary =
+            UniqueShaderTemporaryPath(binaryPath, "compile.tmp");
+        const std::filesystem::path errorPath =
+            UniqueShaderTemporaryPath(binaryPath, "shaderc.tmp");
+        std::vector<std::string> arguments{
+            "--type", "fragment",
+            "--platform", std::string{ kb::assets::bake::ShaderBakePlatformName(artifact.shaderPlatform) },
+            "--profile", std::string{ RenderMaterialGraphShaderBackendProfile(backend) },
+            "-f", wrapperPath.generic_string(),
+            "-o", stagingBinary.generic_string(),
+        };
+        if (!capturedVaryingDefPath.empty()) {
+            arguments.emplace_back("--varyingdef");
+            arguments.push_back(capturedVaryingDefPath.generic_string());
+        }
+        for (const std::string& includeDir : capturedIncludeDirs) {
+            arguments.emplace_back("-i");
+            arguments.push_back(includeDir);
+        }
+        arguments.emplace_back("-O");
+        arguments.emplace_back(request.debug ? "0" : "3");
+        if (request.debug) {
+            arguments.emplace_back("--debug");
+        }
 
-        const bool produced = std::filesystem::exists(binaryPath, error) &&
-            std::filesystem::file_size(binaryPath, error) > 0U;
+        const int exitCode = RunShaderCompilerHidden(shadercPath, arguments, errorPath);
+
+        const bool produced = IsNonEmptyRegularFile(stagingBinary);
         if (exitCode != 0 || !produced) {
             std::string log = TrimDiagnosticText(ReadTextFile(errorPath));
             std::filesystem::remove(errorPath, error);
+            std::filesystem::remove(stagingBinary, error);
             error.clear();
             if (log.empty()) {
                 log = "shaderc exited with code " + std::to_string(exitCode) + " without producing a binary.";
@@ -977,24 +1383,50 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
         }
         std::filesystem::remove(errorPath, error);
         error.clear();
-
-        {
-            std::ofstream hashOut{ hashPath, std::ios::binary | std::ios::trunc };
-            if (hashOut) {
-                hashOut << cookKey;
-            }
+        if (!ShaderCompilerInputsUnchanged(dependencies, shadercPath, shadercBytes)) {
+            std::filesystem::remove(stagingBinary, error);
+            AddArtifactDiagnostic(result.diagnostics, RenderMaterialGraphDiagnosticSeverity::Error,
+                "Material graph shader compiler inputs changed while cooking; no cache artifact was published.",
+                request.pass,
+                std::string{ RenderMaterialGraphShaderBackendName(backend) });
+            continue;
+        }
+        ShaderCacheFileIdentity compiledIdentity{};
+        if (!ReadShaderCacheFileIdentity(stagingBinary, compiledIdentity)) {
+            std::filesystem::remove(stagingBinary, error);
+            AddArtifactDiagnostic(result.diagnostics, RenderMaterialGraphDiagnosticSeverity::Error,
+                "Material graph shader compiler produced an unreadable binary cache artifact.",
+                request.pass,
+                std::string{ RenderMaterialGraphShaderBackendName(backend) });
+            continue;
+        }
+        if (!PublishShaderFileAtomically(stagingBinary, binaryPath)) {
+            std::filesystem::remove(stagingBinary, error);
+            AddArtifactDiagnostic(result.diagnostics, RenderMaterialGraphDiagnosticSeverity::Error,
+                "Material graph shader binary could not be published atomically: " + binaryPath.generic_string() + ".",
+                request.pass,
+                std::string{ RenderMaterialGraphShaderBackendName(backend) });
+            continue;
+        }
+        if (!WriteShaderTextAtomically(markerPath, ShaderCacheMarker(cookKey, compiledIdentity)) ||
+            !ShaderCacheEntryIsValid(binaryPath, markerPath, cookKey, &compiledIdentity)) {
+            AddArtifactDiagnostic(result.diagnostics, RenderMaterialGraphDiagnosticSeverity::Error,
+                "Material graph shader binary cache integrity marker could not be published or verified.",
+                request.pass,
+                std::string{ RenderMaterialGraphShaderBackendName(backend) });
+            continue;
         }
         artifact.binaries.push_back(RenderMaterialGraphShaderBinary{
             .backend = backend,
             .binaryPath = binaryPath.generic_string(),
-            .byteSize = std::filesystem::file_size(binaryPath, error),
+            .byteSize = compiledIdentity.bytes,
             .cacheHit = false,
         });
     }
 
-    if (artifact.binaries.empty()) {
+    if (artifact.binaries.size() != backends.size()) {
         AddArtifactDiagnostic(result.diagnostics, RenderMaterialGraphDiagnosticSeverity::Error,
-            "Material graph shader cook produced no backend binaries.");
+            "Material graph shader cook did not produce every requested backend binary.");
         return result;
     }
 
@@ -1008,69 +1440,98 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
     if (hasVertexDomainOutput) {
         artifact.hasVertexShader = true;
         artifact.vertexWrapperSource = BuildGraphVertexWrapperSource(shader);
-        const std::filesystem::path vsWrapperPath = passRoot / "vs_graph.sc";
-        {
-            std::ofstream vsWrapperOut{ vsWrapperPath, std::ios::binary | std::ios::trunc };
-            if (!vsWrapperOut) {
-                AddArtifactDiagnostic(result.diagnostics, RenderMaterialGraphDiagnosticSeverity::Error,
-                    "Material graph shader cook could not write the vertex wrapper to " + vsWrapperPath.generic_string() + ".");
-                return result;
-            }
-            vsWrapperOut << artifact.vertexWrapperSource;
-        }
 
         std::uint64_t vsCookKey = 1469598103934665603ULL;
         HashString64(vsCookKey, artifact.vertexWrapperSource);
         HashU64(vsCookKey, artifact.dependencyHash);
         HashU64(vsCookKey, artifact.materialTypeVersion);
         HashU64(vsCookKey, static_cast<std::uint64_t>(artifact.shaderPlatform));
+        HashU64(vsCookKey, request.debug ? 1U : 0U);
+
+        std::filesystem::path vsWrapperPath;
+        bool vertexWrapperCaptured = false;
 
         for (const RenderMaterialGraphShaderBackend backend : backends) {
             const std::filesystem::path backendDir = passRoot / std::string{ RenderMaterialGraphShaderBackendDirectory(backend) };
+            error.clear();
             std::filesystem::create_directories(backendDir, error);
-            const std::filesystem::path vsBinaryPath = backendDir / "vs.bin";
-            const std::filesystem::path vsHashPath = backendDir / "vs.bin.hash";
+            if (error) {
+                AddArtifactDiagnostic(result.diagnostics, RenderMaterialGraphDiagnosticSeverity::Error,
+                    "Material graph vertex shader backend cache directory could not be created: " +
+                        backendDir.generic_string() + ".");
+                continue;
+            }
+            const std::filesystem::path vsBinaryPath =
+                backendDir / ("vs_" + std::to_string(vsCookKey) + ".bin");
+            const std::filesystem::path vsMarkerPath = vsBinaryPath.string() + ".meta";
+            ShaderCacheFileLock vsCacheLock;
+            if (!vsCacheLock.Acquire(vsBinaryPath.string() + ".lock")) {
+                AddArtifactDiagnostic(result.diagnostics, RenderMaterialGraphDiagnosticSeverity::Error,
+                    "Material graph vertex shader cache entry could not be locked for publication.",
+                    request.pass,
+                    std::string{ RenderMaterialGraphShaderBackendName(backend) });
+                continue;
+            }
 
-            const std::string cachedVsHash = TrimDiagnosticText(ReadTextFile(vsHashPath));
-            const bool cached = !cachedVsHash.empty() &&
-                cachedVsHash == std::to_string(vsCookKey) &&
-                std::filesystem::exists(vsBinaryPath, error) &&
-                std::filesystem::file_size(vsBinaryPath, error) > 0U;
-            if (cached) {
+            ShaderCacheFileIdentity cachedVsIdentity{};
+            if (ShaderCacheEntryIsValid(
+                    vsBinaryPath, vsMarkerPath, vsCookKey, &cachedVsIdentity) &&
+                ShaderCompilerInputsUnchanged(dependencies, shadercPath, shadercBytes)) {
                 artifact.vertexBinaries.push_back(RenderMaterialGraphShaderBinary{
                     .backend = backend,
                     .binaryPath = vsBinaryPath.generic_string(),
-                    .byteSize = std::filesystem::file_size(vsBinaryPath, error),
+                    .byteSize = cachedVsIdentity.bytes,
                     .cacheHit = true,
                 });
                 continue;
             }
-
-            const std::filesystem::path vsErrorPath = backendDir / "vs.shaderc.tmp";
-            const std::string shadercExe = std::filesystem::path{ request.shadercPath }.make_preferred().string();
-            std::string command = QuotePath(shadercExe);
-            command += " --type vertex";
-            command += " --platform " +
-                std::string{ kb::assets::bake::ShaderBakePlatformName(artifact.shaderPlatform) };
-            command += " --profile " + std::string{ RenderMaterialGraphShaderBackendProfile(backend) };
-            command += " -f " + QuotePath(vsWrapperPath.generic_string());
-            command += " -o " + QuotePath(vsBinaryPath.generic_string());
-            if (!request.varyingDefPath.empty()) {
-                command += " --varyingdef " + QuotePath(request.varyingDefPath);
+            if (!ensureInputMirror()) {
+                AddArtifactDiagnostic(result.diagnostics, RenderMaterialGraphDiagnosticSeverity::Error,
+                    "Material graph vertex shader compiler inputs could not be captured into an immutable snapshot.");
+                continue;
             }
-            for (const std::string& includeDir : request.includeDirs) {
-                command += " -i " + QuotePath(includeDir);
+            if (!vertexWrapperCaptured) {
+                vsWrapperPath = inputMirrorRoot / ("vs_graph_" + std::to_string(vsCookKey) + ".sc");
+                if (!WriteShaderTextAtomically(vsWrapperPath, artifact.vertexWrapperSource)) {
+                    AddArtifactDiagnostic(result.diagnostics, RenderMaterialGraphDiagnosticSeverity::Error,
+                        "Material graph shader cook could not write its captured vertex wrapper.");
+                    continue;
+                }
+                vertexWrapperCaptured = true;
             }
-            command += request.debug ? " -O 0 --debug" : " -O 3";
 
-            std::filesystem::remove(vsBinaryPath, error);
-            const int exitCode = RunShaderCompilerHidden(command, vsErrorPath);
+            const std::filesystem::path stagingVsBinary =
+                UniqueShaderTemporaryPath(vsBinaryPath, "compile.tmp");
+            const std::filesystem::path vsErrorPath =
+                UniqueShaderTemporaryPath(vsBinaryPath, "shaderc.tmp");
+            std::vector<std::string> arguments{
+                "--type", "vertex",
+                "--platform", std::string{ kb::assets::bake::ShaderBakePlatformName(artifact.shaderPlatform) },
+                "--profile", std::string{ RenderMaterialGraphShaderBackendProfile(backend) },
+                "-f", vsWrapperPath.generic_string(),
+                "-o", stagingVsBinary.generic_string(),
+            };
+            if (!capturedVaryingDefPath.empty()) {
+                arguments.emplace_back("--varyingdef");
+                arguments.push_back(capturedVaryingDefPath.generic_string());
+            }
+            for (const std::string& includeDir : capturedIncludeDirs) {
+                arguments.emplace_back("-i");
+                arguments.push_back(includeDir);
+            }
+            arguments.emplace_back("-O");
+            arguments.emplace_back(request.debug ? "0" : "3");
+            if (request.debug) {
+                arguments.emplace_back("--debug");
+            }
 
-            const bool produced = std::filesystem::exists(vsBinaryPath, error) &&
-                std::filesystem::file_size(vsBinaryPath, error) > 0U;
+            const int exitCode = RunShaderCompilerHidden(shadercPath, arguments, vsErrorPath);
+
+            const bool produced = IsNonEmptyRegularFile(stagingVsBinary);
             if (exitCode != 0 || !produced) {
                 std::string log = TrimDiagnosticText(ReadTextFile(vsErrorPath));
                 std::filesystem::remove(vsErrorPath, error);
+                std::filesystem::remove(stagingVsBinary, error);
                 error.clear();
                 if (log.empty()) {
                     log = "shaderc exited with code " + std::to_string(exitCode) + " without producing a vertex binary.";
@@ -1084,24 +1545,53 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
             }
             std::filesystem::remove(vsErrorPath, error);
             error.clear();
-
-            {
-                std::ofstream vsHashOut{ vsHashPath, std::ios::binary | std::ios::trunc };
-                if (vsHashOut) {
-                    vsHashOut << vsCookKey;
-                }
+            if (!ShaderCompilerInputsUnchanged(dependencies, shadercPath, shadercBytes)) {
+                std::filesystem::remove(stagingVsBinary, error);
+                AddArtifactDiagnostic(result.diagnostics, RenderMaterialGraphDiagnosticSeverity::Error,
+                    "Material graph vertex shader compiler inputs changed while cooking; no cache artifact was published.",
+                    request.pass,
+                    std::string{ RenderMaterialGraphShaderBackendName(backend) });
+                continue;
+            }
+            ShaderCacheFileIdentity compiledVsIdentity{};
+            if (!ReadShaderCacheFileIdentity(stagingVsBinary, compiledVsIdentity)) {
+                std::filesystem::remove(stagingVsBinary, error);
+                AddArtifactDiagnostic(result.diagnostics, RenderMaterialGraphDiagnosticSeverity::Error,
+                    "Material graph vertex shader compiler produced an unreadable binary cache artifact.",
+                    request.pass,
+                    std::string{ RenderMaterialGraphShaderBackendName(backend) });
+                continue;
+            }
+            if (!PublishShaderFileAtomically(stagingVsBinary, vsBinaryPath)) {
+                std::filesystem::remove(stagingVsBinary, error);
+                AddArtifactDiagnostic(result.diagnostics, RenderMaterialGraphDiagnosticSeverity::Error,
+                    "Material graph vertex shader binary could not be published atomically: " +
+                        vsBinaryPath.generic_string() + ".",
+                    request.pass,
+                    std::string{ RenderMaterialGraphShaderBackendName(backend) });
+                continue;
+            }
+            if (!WriteShaderTextAtomically(
+                    vsMarkerPath, ShaderCacheMarker(vsCookKey, compiledVsIdentity)) ||
+                !ShaderCacheEntryIsValid(
+                    vsBinaryPath, vsMarkerPath, vsCookKey, &compiledVsIdentity)) {
+                AddArtifactDiagnostic(result.diagnostics, RenderMaterialGraphDiagnosticSeverity::Error,
+                    "Material graph vertex shader binary cache integrity marker could not be published or verified.",
+                    request.pass,
+                    std::string{ RenderMaterialGraphShaderBackendName(backend) });
+                continue;
             }
             artifact.vertexBinaries.push_back(RenderMaterialGraphShaderBinary{
                 .backend = backend,
                 .binaryPath = vsBinaryPath.generic_string(),
-                .byteSize = std::filesystem::file_size(vsBinaryPath, error),
+                .byteSize = compiledVsIdentity.bytes,
                 .cacheHit = false,
             });
         }
 
-        if (artifact.vertexBinaries.empty()) {
+        if (artifact.vertexBinaries.size() != backends.size()) {
             AddArtifactDiagnostic(result.diagnostics, RenderMaterialGraphDiagnosticSeverity::Error,
-            "Material graph shader cook produced no vertex binaries for a vertex-domain graph.");
+                "Material graph shader cook did not produce every requested vertex backend binary.");
             return result;
         }
     }

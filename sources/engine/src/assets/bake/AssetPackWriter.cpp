@@ -1,10 +1,13 @@
 #include "engine/assets/bake/AssetPackWriter.hpp"
+#include "engine/assets/bake/AssetPackReader.hpp"
 
 #include "assets/bake/BakeStorePath.hpp"
 
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bit>
+#include <cerrno>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -23,31 +26,28 @@
 #else
     #include <fcntl.h>
     #include <sys/file.h>
+    #include <sys/stat.h>
     #include <unistd.h>
 #endif
 
 namespace kb::assets::bake {
 namespace {
 
-// Suffixes of the two files Finish works with. Derived from the destination so that they sit
-// on the same volume: std::filesystem::rename lowers to MoveFileEx, which is allowed to fall
-// back to a COPY across volumes, and a copy is not a publication.
-constexpr std::wstring_view kStagingPackSuffix = L".kbpackstaging";
-constexpr std::wstring_view kStagingPayloadSuffix = L".kbpackpayload";
+// The directory is atomically created beside the destination. Fixed file names are safe only
+// inside that newly-owned directory; no pre-existing leaf can be a symlink or reparse point.
+constexpr std::string_view kStagingDirectoryPrefix = ".kbpack-work-";
+constexpr std::string_view kStagingPackFileName = "staging.kbpack";
+constexpr std::string_view kStagingPayloadFileName = "payload.bin";
 constexpr std::wstring_view kLockSuffix = L".kbpacklock";
+constexpr std::uint32_t kPrivateDirectoryCreateAttempts = 256U;
 
 // Chunk the assembly pass copies with. Big enough that the copy is bound by the disk rather
 // than by the loop, small enough that it is not a memory decision.
 constexpr std::size_t kAssemblyChunkBytes = 1024U * 1024U;
 
-// The staging payload opens with a stamp: a constant, and a value unique to the writer that
-// created the file. The staging names are DERIVED FROM THE DESTINATION -- deliberately, so a
-// killed run's debris is what the next run truncates -- and the price of that is that a second
-// writer aimed at the same package truncates the first one's payload and writes its own bytes
-// where the first one's offsets point. Measured: the published package then mounts, checksums
-// and hands back bytes belonging to neither writer under a key that names one of them, which
-// is the silent-wrong-artifact failure the whole store exists to prevent. Sixteen bytes at the
-// front of a staging file turn it into a refusal.
+// The staging payload opens with a stamp naming its writer. The private directory and
+// destination lock exclude normal collisions; this stamp additionally turns replacement of
+// the already-open payload into an explicit refusal before assembly trusts any staged byte.
 constexpr std::uint64_t kPayloadStampMagic = 0x3231'4B42'5041'594CULL;
 constexpr std::uint64_t kPayloadStampBytes = 16U;
 
@@ -96,6 +96,48 @@ constexpr std::uint64_t kPayloadStampBytes = 16U;
     return alignment;
 }
 
+[[nodiscard]] std::uint64_t CurrentProcessId() noexcept {
+#if defined(_WIN32)
+    return static_cast<std::uint64_t>(GetCurrentProcessId());
+#else
+    return static_cast<std::uint64_t>(getpid());
+#endif
+}
+
+[[nodiscard]] bool FlushFileToDisk(const std::filesystem::path& path) noexcept {
+#if defined(_WIN32)
+    HANDLE const handle = CreateFileW(
+        path.c_str(),
+        GENERIC_READ | GENERIC_WRITE,
+        FILE_SHARE_READ,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr);
+    if (handle == INVALID_HANDLE_VALUE) return false;
+    const bool flushed = FlushFileBuffers(handle) != FALSE;
+    static_cast<void>(CloseHandle(handle));
+    return flushed;
+#else
+    const int descriptor = open(path.c_str(), O_RDONLY | O_CLOEXEC);
+    if (descriptor < 0) return false;
+    const bool flushed = fsync(descriptor) == 0;
+    static_cast<void>(close(descriptor));
+    return flushed;
+#endif
+}
+
+[[nodiscard]] bool PublishStagingFile(
+    const std::filesystem::path& staging,
+    const std::filesystem::path& destination) noexcept {
+#if defined(_WIN32)
+    return MoveFileExW(
+        staging.c_str(), destination.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != FALSE;
+#else
+    return ::rename(staging.c_str(), destination.c_str()) == 0;
+#endif
+}
+
 } // namespace
 
 AssetPackWriter::AssetPackWriter(std::filesystem::path packPath, const BakeTargetProfile& profile)
@@ -105,8 +147,6 @@ AssetPackWriter::AssetPackWriter(std::filesystem::path packPath, const BakeTarge
     , packageAlignmentBytes_{ profile.packageBlockAlignmentBytes }
     , mappedAlignmentBytes_{ profile.mappedBlockAlignmentBytes }
     , profileIsValid_{ IsValidBakeTargetProfile(profile) } {
-    stagingPackPath_ = WithSuffix(packPath_, kStagingPackSuffix);
-    payloadPath_ = WithSuffix(packPath_, kStagingPayloadSuffix);
     lockPath_ = WithSuffix(packPath_, kLockSuffix);
 }
 
@@ -115,10 +155,11 @@ AssetPackWriter::~AssetPackWriter() {
     // owner never asked for one. Neither may reach the destination.
     AbortAsset();
     payload_.close();
-    if (!finished_) {
+    if (!finished_ || stagingDirectoryOwned_) {
         DiscardStaging();
+    } else {
+        ReleaseDestinationLock();
     }
-    ReleaseDestinationLock();
 }
 
 bool AssetPackWriter::AcquireDestinationLock() {
@@ -166,8 +207,46 @@ void AssetPackWriter::ReleaseDestinationLock() noexcept {
 #endif
     lockHandle_ = -1;
     lockHeld_ = false;
+#if defined(_WIN32)
+    // Windows refuses this removal while another no-sharing lock handle is open. POSIX does
+    // not: unlinking there would let a third writer lock a new inode beside the second writer.
     std::error_code removeError;
     std::filesystem::remove(lockPath_, removeError);
+#endif
+}
+
+BakedAssetSinkStatus AssetPackWriter::CreatePrivateStagingDirectory() {
+    std::filesystem::path parent = packPath_.parent_path();
+    if (parent.empty()) {
+        parent = ".";
+    }
+    const std::string process = std::to_string(CurrentProcessId());
+    for (std::uint32_t attempt = 0U; attempt < kPrivateDirectoryCreateAttempts; ++attempt) {
+        const std::filesystem::path candidate = parent /
+            (std::string{ kStagingDirectoryPrefix } + process + "-" +
+                std::to_string(NextPayloadStamp()));
+#if defined(_WIN32)
+        if (CreateDirectoryW(candidate.c_str(), nullptr) == FALSE) {
+            if (GetLastError() == ERROR_ALREADY_EXISTS) {
+                continue;
+            }
+            return BakedAssetSinkStatus::WriteFailed;
+        }
+#else
+        if (::mkdir(candidate.c_str(), S_IRWXU) != 0) {
+            if (errno == EEXIST) {
+                continue;
+            }
+            return BakedAssetSinkStatus::WriteFailed;
+        }
+#endif
+        stagingDirectoryPath_ = candidate;
+        stagingPackPath_ = stagingDirectoryPath_ / std::filesystem::path{ kStagingPackFileName };
+        payloadPath_ = stagingDirectoryPath_ / std::filesystem::path{ kStagingPayloadFileName };
+        stagingDirectoryOwned_ = true;
+        return BakedAssetSinkStatus::Success;
+    }
+    return BakedAssetSinkStatus::StagingConflict;
 }
 
 BakedAssetSinkStatus AssetPackWriter::EnsureStagingOpen() {
@@ -176,8 +255,18 @@ BakedAssetSinkStatus AssetPackWriter::EnsureStagingOpen() {
     }
     // Checked BEFORE anything is created, and against the longest staging name, so
     // that a destination the platform cannot open is refused rather than half-written.
+    std::filesystem::path stagingParent = packPath_.parent_path();
+    if (stagingParent.empty()) {
+        stagingParent = ".";
+    }
+    const std::string longestPrivateDirectoryName = std::string{ kStagingDirectoryPrefix } +
+        "18446744073709551615-18446744073709551615";
+    const std::filesystem::path longestPrivateDirectory =
+        stagingParent / longestPrivateDirectoryName;
     const std::size_t worstCase = std::max({
-        stagingPackPath_.native().size(), payloadPath_.native().size(), lockPath_.native().size() });
+        (longestPrivateDirectory / std::filesystem::path{ kStagingPackFileName }).native().size(),
+        (longestPrivateDirectory / std::filesystem::path{ kStagingPayloadFileName }).native().size(),
+        lockPath_.native().size() });
     if (packPath_.empty() || worstCase > kMaxBakeStorePathLength) {
         return BakedAssetSinkStatus::PathTooLong;
     }
@@ -194,19 +283,25 @@ BakedAssetSinkStatus AssetPackWriter::EnsureStagingOpen() {
         return BakedAssetSinkStatus::StagingConflict;
     }
 
-    // Truncating rather than requiring absence: the staging names are derived from the
-    // destination, so debris a killed process left behind is exactly what a new run overwrites.
+    const BakedAssetSinkStatus directoryStatus = CreatePrivateStagingDirectory();
+    if (directoryStatus != BakedAssetSinkStatus::Success) {
+        ReleaseDestinationLock();
+        return directoryStatus;
+    }
+
+    // These leaves cannot have existed before this writer atomically created their parent.
+    // Keeping both fixed names inside the private directory avoids ever truncating stale
+    // deterministic paths beside the destination.
     payload_.open(payloadPath_, std::ios::binary | std::ios::in | std::ios::out | std::ios::trunc);
     if (!payload_.is_open()) {
-        ReleaseDestinationLock();
+        DiscardStaging();
         return BakedAssetSinkStatus::WriteFailed;
     }
     {
         std::ofstream stagingPack{ stagingPackPath_, std::ios::binary | std::ios::trunc };
         if (!stagingPack.is_open()) {
             payload_.close();
-            std::filesystem::remove(payloadPath_, error);
-            ReleaseDestinationLock();
+            DiscardStaging();
             return BakedAssetSinkStatus::WriteFailed;
         }
     }
@@ -223,10 +318,7 @@ BakedAssetSinkStatus AssetPackWriter::EnsureStagingOpen() {
     payload_.write(reinterpret_cast<const char*>(stamp.data()), static_cast<std::streamsize>(stamp.size()));
     if (!payload_) {
         payload_.close();
-        std::error_code cleanupError;
-        std::filesystem::remove(stagingPackPath_, cleanupError);
-        std::filesystem::remove(payloadPath_, cleanupError);
-        ReleaseDestinationLock();
+        DiscardStaging();
         return BakedAssetSinkStatus::WriteFailed;
     }
 
@@ -407,6 +499,16 @@ BakedAssetSinkStatus AssetPackWriter::CommitAsset() {
         if (existing->second != openArtifact_.assetTypeId) {
             return BakedAssetSinkStatus::InvalidAssetType;
         }
+        const auto committed = std::ranges::find(artifacts_, openArtifact_.key, &PendingArtifact::key);
+        if (committed == artifacts_.end()) {
+            return BakedAssetSinkStatus::WriteFailed;
+        }
+        // A digest collision must not silently turn into deduplication. The content-addressed
+        // key may be reused only when the complete effective layout and every block digest are
+        // identical; otherwise which caller arrived first would decide what that key means.
+        if (!ArtifactLayoutsMatch(*committed, openArtifact_)) {
+            return BakedAssetSinkStatus::InvalidKey;
+        }
         payloadBytes_ = openArtifactPayloadStart_;
         openArtifact_ = PendingArtifact{};
         primaryWritten_ = false;
@@ -420,6 +522,52 @@ BakedAssetSinkStatus AssetPackWriter::CommitAsset() {
     primaryWritten_ = false;
     open_ = false;
     return BakedAssetSinkStatus::Success;
+}
+
+bool AssetPackWriter::ArtifactLayoutsMatch(
+    const PendingArtifact& lhs,
+    const PendingArtifact& rhs) const noexcept {
+    if (lhs.assetTypeId != rhs.assetTypeId || lhs.blocks.size() != rhs.blocks.size()) {
+        return false;
+    }
+    const auto sameFloatBits = [](float left, float right) noexcept {
+        return std::bit_cast<std::uint32_t>(left) == std::bit_cast<std::uint32_t>(right);
+    };
+    const auto sameFragment = [&sameFloatBits](
+        const std::optional<BakedAssetBlockFragment>& left,
+        const std::optional<BakedAssetBlockFragment>& right) noexcept {
+        if (left.has_value() != right.has_value()) {
+            return false;
+        }
+        if (!left.has_value()) {
+            return true;
+        }
+        if (left->clusterCount != right->clusterCount) {
+            return false;
+        }
+        for (std::size_t axis = 0U; axis < left->boundsMin.size(); ++axis) {
+            if (!sameFloatBits(left->boundsMin[axis], right->boundsMin[axis]) ||
+                !sameFloatBits(left->boundsMax[axis], right->boundsMax[axis])) {
+                return false;
+            }
+        }
+        return true;
+    };
+
+    for (std::size_t index = 0U; index < lhs.blocks.size(); ++index) {
+        const PendingBlock& left = lhs.blocks[index];
+        const PendingBlock& right = rhs.blocks[index];
+        if (left.name != right.name || left.residency != right.residency ||
+            EffectiveAlignment(
+                left.alignmentBytes, left.residency, packageAlignmentBytes_, mappedAlignmentBytes_) !=
+                EffectiveAlignment(
+                    right.alignmentBytes, right.residency, packageAlignmentBytes_, mappedAlignmentBytes_) ||
+            left.bytes != right.bytes || left.payloadDigest != right.payloadDigest ||
+            !sameFragment(left.fragment, right.fragment)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 void AssetPackWriter::AbortAsset() noexcept {
@@ -436,6 +584,9 @@ void AssetPackWriter::AbortAsset() noexcept {
 }
 
 BakedAssetSinkStatus AssetPackWriter::AssembleStagingPack() {
+    assembledHeader_ = AssetPackHeader{};
+    assembledArtifacts_.clear();
+    assembledFragments_.clear();
     if (const BakedAssetSinkStatus stamp = VerifyPayloadStamp(); stamp != BakedAssetSinkStatus::Success) {
         return stamp;
     }
@@ -617,7 +768,13 @@ BakedAssetSinkStatus AssetPackWriter::AssembleStagingPack() {
         return BakedAssetSinkStatus::WriteFailed;
     }
     output.close();
-    return output.good() ? BakedAssetSinkStatus::Success : BakedAssetSinkStatus::WriteFailed;
+    if (!output.good()) {
+        return BakedAssetSinkStatus::WriteFailed;
+    }
+    assembledHeader_ = std::move(header);
+    assembledArtifacts_ = std::move(entries);
+    assembledFragments_ = std::move(fragments);
+    return BakedAssetSinkStatus::Success;
 }
 
 BakedAssetSinkStatus AssetPackWriter::Finish() {
@@ -641,18 +798,43 @@ BakedAssetSinkStatus AssetPackWriter::Finish() {
         return assembled;
     }
 
-    payload_.close();
-
-    // ONE operation. The pack is never written through the destination path, so no reader can
-    // observe a name that claims to be a pack while it is still being filled.
-    std::error_code renameError;
-    std::filesystem::rename(stagingPackPath_, packPath_, renameError);
-    if (renameError) {
+    {
+        AssetPackReader verification;
+        if (verification.Mount(stagingPackPath_) != AssetPackReadStatus::Success ||
+            EncodeAssetPackHeader(verification.Header()) != EncodeAssetPackHeader(assembledHeader_) ||
+            EncodeAssetPackIndex(verification.Artifacts()) != EncodeAssetPackIndex(assembledArtifacts_) ||
+            EncodeAssetPackFragmentIndex(verification.Fragments()) !=
+                EncodeAssetPackFragmentIndex(assembledFragments_)) {
+            return BakedAssetSinkStatus::WriteFailed;
+        }
+        std::vector<std::uint8_t> verifiedPayload;
+        for (const AssetPackArtifactEntry& artifact : verification.Artifacts()) {
+            for (const AssetPackBlockEntry& block : artifact.blocks) {
+                if (verification.ReadBlock(artifact, block.name, verifiedPayload) != AssetPackReadStatus::Success) {
+                    return BakedAssetSinkStatus::WriteFailed;
+                }
+            }
+        }
+    }
+    if (!FlushFileToDisk(stagingPackPath_)) {
         return BakedAssetSinkStatus::WriteFailed;
     }
 
+    payload_.close();
     std::error_code removeError;
     std::filesystem::remove(payloadPath_, removeError);
+
+    // ONE operation. The pack is never written through the destination path, so no reader can
+    // observe a name that claims to be a pack while it is still being filled.
+    if (!PublishStagingFile(stagingPackPath_, packPath_)) {
+        return BakedAssetSinkStatus::WriteFailed;
+    }
+
+    removeError.clear();
+    std::filesystem::remove(stagingDirectoryPath_, removeError);
+    if (!removeError) {
+        stagingDirectoryOwned_ = false;
+    }
     finished_ = true;
     stagingOpen_ = false;
     ReleaseDestinationLock();
@@ -660,12 +842,19 @@ BakedAssetSinkStatus AssetPackWriter::Finish() {
 }
 
 void AssetPackWriter::DiscardStaging() noexcept {
-    if (stagingOpen_) {
+    payload_.close();
+    if (stagingDirectoryOwned_) {
         std::error_code error;
         std::filesystem::remove(stagingPackPath_, error);
+        error.clear();
         std::filesystem::remove(payloadPath_, error);
-        stagingOpen_ = false;
+        error.clear();
+        std::filesystem::remove(stagingDirectoryPath_, error);
+        if (!error) {
+            stagingDirectoryOwned_ = false;
+        }
     }
+    stagingOpen_ = false;
     ReleaseDestinationLock();
 }
 

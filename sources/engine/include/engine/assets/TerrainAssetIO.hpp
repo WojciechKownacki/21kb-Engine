@@ -4,6 +4,7 @@
 
 #include <filesystem>
 #include <optional>
+#include <span>
 #include <string>
 
 namespace kb::assets {
@@ -14,6 +15,9 @@ public:
 
     [[nodiscard]] static std::optional<TerrainAsset> Load(
         const std::filesystem::path& path,
+        std::string* error = nullptr);
+    [[nodiscard]] static std::optional<TerrainAsset> Load(
+        std::span<const std::uint8_t> bytes,
         std::string* error = nullptr);
     [[nodiscard]] static bool Save(
         const std::filesystem::path& path,

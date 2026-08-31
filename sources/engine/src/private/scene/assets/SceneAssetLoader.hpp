@@ -17,6 +17,9 @@ public:
     [[nodiscard]] std::optional<std::string> ValidateDependencies(
         const kb::assets::AssetMetadata& metadata,
         const kb::assets::AssetRegistry& registry) const override;
+    [[nodiscard]] std::optional<std::string> ValidateRuntimeDependencies(
+        const kb::assets::AssetLoadRequest& request,
+        const kb::assets::AssetRegistry& registry) const override;
 
 private:
     // Cached across one dependency-discovery pass only (keyed on the registry
