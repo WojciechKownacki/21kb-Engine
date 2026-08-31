@@ -29,8 +29,8 @@ struct ScriptAgentProjectFilesResult {
     bool wroteProjectAsset = false;
 };
 
-// Provisions a game project directory for AI coding agents (VS Code + Claude
-// Code / Copilot / Cursor): AGENTS.md working instructions, a .luarc.json for
+// Provisions a game project directory for AI coding agents and editors:
+// AGENTS.md working instructions, a .luarc.json for
 // the Lua Language Server, generated API artifacts under .kb/api/, and a
 // minimal Assets/Logic/PlayerController.lua starter behaviour (LIB-013) —
 // the exact script AGENTS.md's own worked example references. AGENTS.md,

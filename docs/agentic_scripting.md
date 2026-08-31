@@ -27,10 +27,10 @@ with editor autocompletion support.
 **In VS Code:**
 
 1. Install the **Lua** extension — you get autocompletion for the engine API.
-2. Connect the engine to your agent (Claude Code example):
+2. Connect the engine to your MCP-compatible agent:
 
 ```powershell
-claude mcp add kb-engine -- <path>\kb_cli.exe mcp --project H:\MyGame
+<agent-cli> mcp add kb-engine -- <path>\kb_cli.exe mcp --project H:\MyGame
 ```
 
 ## How to work
