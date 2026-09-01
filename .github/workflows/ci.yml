@@ -160,7 +160,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends \
             build-essential cmake ninja-build python3 \
-            libx11-dev libgl1-mesa-dev libvulkan1 mesa-vulkan-drivers \
+            libx11-dev libwayland-dev libgl1-mesa-dev libvulkan1 mesa-vulkan-drivers \
             xvfb xauth
 
       - name: Recreate verified package fixture
