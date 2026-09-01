@@ -307,7 +307,7 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                               .resourceMap = desc.resourceMap,
                           })
                         : 0U;
-                    const SceneCachedDrawCommand& cachedCommand = SceneDrawCommandCache::Resolve(result.drawCommandCache, SceneCachedDrawCommandDesc{
+                    const SceneCachedDrawCommandDesc cachedCommandDesc{
                         .pass = desc.pass,
                         .meshAssetId = batch.meshAssetId,
                         .materialAssetId = materialAssetId,
@@ -329,7 +329,9 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                         .materialResourceVersion = materialResource == nullptr ? 0U : materialResource->version,
                         .materialTextureDependencySignature = materialTextureDependencySignature,
                         .state = commandState,
-                    }, result.stats);
+                    };
+                    const SceneCachedDrawCommand& cachedCommand =
+                        SceneDrawCommandCache::Resolve(result.drawCommandCache, cachedCommandDesc, result.stats);
                     command = &MeshPipelineCommandBuilder::WritableCommand(result, writeCommandCount);
                     SceneCachedDrawCommandMaterializer::ApplyTemplate(cachedCommand, *command);
                     command->currentSkinningPalette = instance.currentSkinningPalette;
