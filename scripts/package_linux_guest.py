@@ -10,6 +10,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
@@ -232,6 +233,72 @@ def _verify_linux_runtime(root: Path, executable_name: str, receipt: dict[str, o
     return player
 
 
+def _visible_display_environment(display: str) -> dict[str, str]:
+    match = re.fullmatch(r":([0-9]{1,5})(?:\.([0-9]{1,5}))?", display)
+    if match is None:
+        raise GuestError("X11 display is invalid")
+    server_number = int(match.group(1))
+    server = f":{server_number}"
+    socket_path = Path(f"/tmp/.X11-unix/X{server_number}")
+    try:
+        socket_state = socket_path.lstat()
+    except OSError as error:
+        raise GuestError(f"X11 display socket is unavailable: {error}") from error
+    if not stat.S_ISSOCK(socket_state.st_mode):
+        raise GuestError("X11 display socket is not a local socket")
+
+    try:
+        xorg = subprocess.run(
+            ["pgrep", "-xo", "Xorg"],
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise GuestError(f"X11 display process could not be inspected: {error}") from error
+    pid = xorg.stdout.strip()
+    if xorg.returncode != 0 or not pid.isdigit():
+        raise GuestError("X11 display process is unavailable")
+    try:
+        command_bytes = Path(f"/proc/{pid}/cmdline").read_bytes()
+    except OSError as error:
+        raise GuestError(f"X11 display process could not be inspected: {error}") from error
+    if not command_bytes.endswith(b"\0"):
+        raise GuestError("X11 display process has an invalid command line")
+    command = command_bytes.split(b"\0")[:-1]
+    if not command or any(not token for token in command):
+        raise GuestError("X11 display process has an invalid command line")
+    server_token = server.encode("ascii")
+    auth_indexes = [index for index, token in enumerate(command) if token == b"-auth"]
+    local_only = any(
+        command[index] == b"-nolisten" and command[index + 1] == b"tcp"
+        for index in range(len(command) - 1)
+    )
+    if (command.count(server_token) != 1 or b"-noreset" not in command or b"-ac" in command or
+            not local_only or len(auth_indexes) != 1 or auth_indexes[0] + 1 >= len(command)):
+        raise GuestError("X11 display process does not use the required authenticated local configuration")
+    authority_text = os.fsdecode(command[auth_indexes[0] + 1])
+    authority_posix = PurePosixPath(authority_text)
+    if not authority_text or not authority_posix.is_absolute():
+        raise GuestError("X11 authority path is invalid")
+    authority = Path(str(authority_posix))
+    try:
+        authority_state = authority.lstat()
+    except OSError as error:
+        raise GuestError(f"X11 authority is unavailable: {error}") from error
+    if (not stat.S_ISREG(authority_state.st_mode) or authority_state.st_uid != os.getuid() or
+            stat.S_IMODE(authority_state.st_mode) != 0o600):
+        raise GuestError("X11 authority must be a user-owned regular file with mode 0600")
+
+    environment = os.environ.copy()
+    environment["DISPLAY"] = display
+    environment["XAUTHORITY"] = str(authority)
+    return environment
+
+
 def _remove_launch_child(launch_root: Path, candidate: Path) -> None:
     resolved_root = launch_root.resolve(strict=True)
     if candidate.parent != launch_root or candidate.is_symlink():
@@ -300,6 +367,7 @@ def _deploy_and_launch_runtime(
     receipt: dict[str, object],
     display: str,
 ) -> None:
+    environment = _visible_display_environment(display)
     deployed = launch_root / identity
     candidate = launch_root / f".{identity}.candidate-{os.getpid()}"
     pid_file = launch_root / f"{identity}.pid"
@@ -312,8 +380,6 @@ def _deploy_and_launch_runtime(
         _remove_launch_child(launch_root, deployed)
     os.replace(candidate, deployed)
     deployed_player = _verify_linux_runtime(deployed, executable_name, receipt)
-    environment = os.environ.copy()
-    environment["DISPLAY"] = display
     smoke = subprocess.run(
         [deployed_player, "--frames=1"], cwd=deployed, env=environment,
         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,

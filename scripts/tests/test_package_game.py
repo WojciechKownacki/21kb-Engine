@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import io
+import stat
 import sys
 import tarfile
 import tempfile
@@ -232,6 +233,103 @@ class PackageGameTests(unittest.TestCase):
                     )
             sha256.assert_not_called()
 
+    def test_linux_visible_display_preserves_screen_and_uses_authenticated_server(self) -> None:
+        command = (
+            b"/usr/lib/xorg/Xorg\0:0\0vt7\0-nolisten\0tcp\0-noreset\0-auth\0"
+            b"/run/user/1000/Xauthority\0"
+        )
+        xorg = mock.Mock(returncode=0, stdout="4145\n")
+
+        def lstat(path: Path) -> mock.Mock:
+            if path.name == "X0":
+                return mock.Mock(st_mode=stat.S_IFSOCK | 0o777)
+            if path.name == "Xauthority":
+                return mock.Mock(st_mode=stat.S_IFREG | 0o600, st_uid=1000)
+            raise FileNotFoundError(path)
+
+        with mock.patch.object(package_linux_guest.subprocess, "run", return_value=xorg), \
+                mock.patch.object(Path, "read_bytes", return_value=command), \
+                mock.patch.object(Path, "lstat", autospec=True, side_effect=lstat), \
+                mock.patch.object(package_linux_guest.os, "getuid", return_value=1000, create=True):
+            environment = package_linux_guest._visible_display_environment(":0.0")
+
+        self.assertEqual(":0.0", environment["DISPLAY"])
+        self.assertEqual(str(Path("/run/user/1000/Xauthority")), environment["XAUTHORITY"])
+
+    def test_linux_visible_display_rejects_unsafe_xorg_inputs(self) -> None:
+        base = [
+            b"/usr/lib/xorg/Xorg", b":0", b"vt7", b"-nolisten", b"tcp", b"-noreset",
+            b"-auth", b"/run/user/1000/Xauthority",
+        ]
+        xorg = mock.Mock(returncode=0, stdout="4145\n")
+
+        def reject(
+            command: list[bytes],
+            *,
+            socket_mode: int = stat.S_IFSOCK | 0o777,
+            authority_mode: int = stat.S_IFREG | 0o600,
+            authority_uid: int = 1000,
+        ) -> None:
+            def lstat(path: Path) -> mock.Mock:
+                if path.name == "X0":
+                    return mock.Mock(st_mode=socket_mode)
+                return mock.Mock(st_mode=authority_mode, st_uid=authority_uid)
+
+            command_bytes = b"\0".join(command) + b"\0"
+            with mock.patch.object(package_linux_guest.subprocess, "run", return_value=xorg), \
+                    mock.patch.object(Path, "read_bytes", return_value=command_bytes), \
+                    mock.patch.object(Path, "lstat", autospec=True, side_effect=lstat), \
+                    mock.patch.object(package_linux_guest.os, "getuid", return_value=1000, create=True):
+                with self.assertRaises(package_linux_guest.GuestError):
+                    package_linux_guest._visible_display_environment(":0")
+
+        cases = (
+            ("regular socket path", base, stat.S_IFREG | 0o600, stat.S_IFREG | 0o600, 1000),
+            ("symlink socket path", base, stat.S_IFLNK | 0o777, stat.S_IFREG | 0o600, 1000),
+            ("missing auth", base[:-2], stat.S_IFSOCK | 0o777, stat.S_IFREG | 0o600, 1000),
+            ("duplicate auth", base + [b"-auth", b"/tmp/other"], stat.S_IFSOCK | 0o777, stat.S_IFREG | 0o600, 1000),
+            ("empty auth argument", base[:-1] + [b"", base[-1]], stat.S_IFSOCK | 0o777, stat.S_IFREG | 0o600, 1000),
+            ("empty nolisten argument", base[:4] + [b"", *base[4:]], stat.S_IFSOCK | 0o777, stat.S_IFREG | 0o600, 1000),
+            ("access control disabled", base + [b"-ac"], stat.S_IFSOCK | 0o777, stat.S_IFREG | 0o600, 1000),
+            ("relative authority", base[:-1] + [b"relative"], stat.S_IFSOCK | 0o777, stat.S_IFREG | 0o600, 1000),
+            ("symlink authority", base, stat.S_IFSOCK | 0o777, stat.S_IFLNK | 0o777, 1000),
+            ("wrong authority owner", base, stat.S_IFSOCK | 0o777, stat.S_IFREG | 0o600, 2000),
+            ("wrong authority mode", base, stat.S_IFSOCK | 0o777, stat.S_IFREG | 0o644, 1000),
+        )
+        for name, command, socket_mode, authority_mode, authority_uid in cases:
+            with self.subTest(name=name):
+                reject(
+                    list(command),
+                    socket_mode=socket_mode,
+                    authority_mode=authority_mode,
+                    authority_uid=authority_uid,
+                )
+
+    def test_linux_display_failure_does_not_mutate_the_existing_deployment(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_text:
+            root = Path(temporary_text)
+            launch_root = root / "runs"
+            deployed = launch_root / ("d" * 64)
+            deployed.mkdir(parents=True)
+            sentinel = deployed / "running.bin"
+            sentinel.write_bytes(b"preserved")
+            with mock.patch.object(
+                    package_linux_guest,
+                    "_visible_display_environment",
+                    side_effect=package_linux_guest.GuestError("unsafe display"),
+            ), mock.patch.object(package_linux_guest.shutil, "copytree") as copytree:
+                with self.assertRaisesRegex(package_linux_guest.GuestError, "unsafe display"):
+                    package_linux_guest._deploy_and_launch_runtime(
+                        root / "runtime",
+                        launch_root,
+                        "d" * 64,
+                        "Game",
+                        {},
+                        ":0",
+                    )
+            copytree.assert_not_called()
+            self.assertEqual(b"preserved", sentinel.read_bytes())
+
     def test_linux_launch_accepts_only_an_exact_sealed_unit(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_text:
             root = Path(temporary_text) / "package"
@@ -290,10 +388,12 @@ class PackageGameTests(unittest.TestCase):
             }
             process = RunningProcess()
             completed = mock.Mock(returncode=0, stdout="frames=1 rendered=1 shutdown=clean")
+            environment = {"DISPLAY": ":1", "XAUTHORITY": "/authority"}
             with mock.patch.object(Path, "home", return_value=root / "home"), \
                     mock.patch.object(package_linux_guest, "_extract_input"), \
                     mock.patch.object(package_linux_guest, "_verify_package_unit", return_value=receipt), \
                     mock.patch.object(package_linux_guest, "_verify_linux_runtime", return_value=Path("Game")), \
+                    mock.patch.object(package_linux_guest, "_visible_display_environment", return_value=environment), \
                     mock.patch.object(package_linux_guest.subprocess, "run", return_value=completed), \
                     mock.patch.object(package_linux_guest.subprocess, "Popen", return_value=process), \
                     mock.patch.object(package_linux_guest.time, "sleep"), \
@@ -330,6 +430,7 @@ class PackageGameTests(unittest.TestCase):
                     mock.patch.object(package_linux_guest, "_extract_input"), \
                     mock.patch.object(package_linux_guest, "_verify_package_unit", return_value=receipt), \
                     mock.patch.object(package_linux_guest, "_verify_linux_runtime", return_value=Path("Game")), \
+                    mock.patch.object(package_linux_guest, "_visible_display_environment", return_value={}), \
                     mock.patch.object(package_linux_guest.os, "kill") as signal_probe, \
                     mock.patch.object(package_linux_guest, "_GuestFileLock", return_value=mock.MagicMock()), \
                     mock.patch.object(package_linux_guest.subprocess, "Popen") as popen:
@@ -370,6 +471,12 @@ class PackageGameTests(unittest.TestCase):
             lock = LockProbe()
             original_copytree = package_linux_guest.shutil.copytree
             events: list[str] = []
+            environment = {"DISPLAY": ":1", "XAUTHORITY": "/authority"}
+
+            def display_environment(value: str) -> dict[str, str]:
+                self.assertEqual(":1", value)
+                events.append("display")
+                return environment
 
             def probe(_path: Path) -> bool:
                 self.assertTrue(lock.active)
@@ -386,8 +493,13 @@ class PackageGameTests(unittest.TestCase):
                 self.assertEqual(9876, pid)
                 events.append("pid")
 
-            def start(*_args: object, **_kwargs: object) -> RunningProcess:
+            def smoke(*_args: object, **kwargs: object) -> mock.Mock:
+                self.assertIs(environment, kwargs["env"])
+                return completed
+
+            def start(*_args: object, **kwargs: object) -> RunningProcess:
                 self.assertTrue(lock.active)
+                self.assertIs(environment, kwargs["env"])
                 events.append("start")
                 return RunningProcess()
 
@@ -395,16 +507,18 @@ class PackageGameTests(unittest.TestCase):
                     mock.patch.object(package_linux_guest, "_extract_input"), \
                     mock.patch.object(package_linux_guest, "_verify_package_unit", return_value=receipt), \
                     mock.patch.object(package_linux_guest, "_verify_linux_runtime", return_value=Path("Game")), \
+                    mock.patch.object(package_linux_guest, "_visible_display_environment", side_effect=display_environment) as display_probe, \
                     mock.patch.object(package_linux_guest, "_GuestFileLock", return_value=lock), \
                     mock.patch.object(package_linux_guest, "_recorded_launch_is_alive", side_effect=probe), \
                     mock.patch.object(package_linux_guest.shutil, "copytree", side_effect=copytree), \
-                    mock.patch.object(package_linux_guest.subprocess, "run", return_value=completed), \
+                    mock.patch.object(package_linux_guest.subprocess, "run", side_effect=smoke), \
                     mock.patch.object(package_linux_guest.subprocess, "Popen", side_effect=start), \
                     mock.patch.object(package_linux_guest.time, "sleep"), \
                     mock.patch.object(package_linux_guest, "_write_pid_atomically", side_effect=publish_pid):
                 package_linux_guest._launch_package(args)
 
-            self.assertEqual(["probe", "deploy", "start", "pid"], events)
+            display_probe.assert_called_once_with(":1")
+            self.assertEqual(["display", "probe", "deploy", "start", "pid"], events)
 
     def test_remote_linux_launch_uploads_the_shared_fingerprint_contract(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_text:
