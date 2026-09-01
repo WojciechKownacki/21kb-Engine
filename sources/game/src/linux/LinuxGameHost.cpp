@@ -15,6 +15,7 @@
 #include <X11/keysym.h>
 #include <X11/Xutil.h>
 #undef None
+#undef Success
 
 #include <chrono>
 #include <cstdint>
