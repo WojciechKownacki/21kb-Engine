@@ -20,6 +20,20 @@ from package_contract import PackagingError, seal_unit  # noqa: E402
 from windows_pe_resources import _version_resource, _version_tuple  # noqa: E402
 
 
+def seal_with_first_frame(root: Path, fields: dict[str, object]) -> None:
+    probe, observed = package_contract.runtime_first_frame_observation(fields["target"])
+    seal_unit(
+        root,
+        fields,
+        runtime_first_frame={
+            "schema": 1,
+            "probe": probe,
+            "observed": observed,
+            "payloadManifestSha256": package_contract.payload_manifest_sha256(root),
+        },
+    )
+
+
 class PackageGameTests(unittest.TestCase):
     @staticmethod
     def _windows_launch_package(root: Path) -> argparse.Namespace:
@@ -27,7 +41,7 @@ class PackageGameTests(unittest.TestCase):
         output = root / "published"
         output.mkdir()
         (output / "Game.exe").write_bytes(b"player")
-        seal_unit(output, {
+        seal_with_first_frame(output, {
             "target": "Windows.x64",
             "configuration": "Development",
             "inputs": {"engineSha256": "0" * 64},
@@ -45,7 +59,7 @@ class PackageGameTests(unittest.TestCase):
         output = root / "published-web"
         output.mkdir()
         (output / "Game.html").write_bytes(b"<html></html>")
-        seal_unit(output, {
+        seal_with_first_frame(output, {
             "target": "WebGL.wasm32",
             "configuration": "Development",
             "inputs": {"engineSha256": "0" * 64},
@@ -58,6 +72,7 @@ class PackageGameTests(unittest.TestCase):
         )
 
     def test_required_target_matrix_is_exact(self) -> None:
+        self.assertIs(package_contract.PACKAGE_TARGETS, package_game.TARGETS)
         self.assertEqual(
             {
                 "Windows.x64",
@@ -160,13 +175,20 @@ class PackageGameTests(unittest.TestCase):
             root = Path(temporary_text) / "package"
             root.mkdir()
             (root / "player").write_bytes(b"payload")
-            seal_unit(root, {
+            seal_with_first_frame(root, {
                 "target": "Linux.x64",
                 "configuration": "Development",
                 "inputs": {"engineSha256": "0" * 64},
             })
             receipt = package_linux_guest._verify_package_unit(root)
             self.assertEqual("Linux.x64", receipt["target"])
+            receipt_path = root / "package.receipt.json"
+            receipt["runtimeFirstFrame"]["observed"] = "changed"
+            receipt_path.write_bytes(package_contract.canonical_json_bytes(receipt))
+            with self.assertRaisesRegex(package_linux_guest.GuestError, "invalid runtime first-frame evidence"):
+                package_linux_guest._verify_package_unit(root)
+            receipt["runtimeFirstFrame"]["observed"] = "frames=1 rendered=1 shutdown=clean"
+            receipt_path.write_bytes(package_contract.canonical_json_bytes(receipt))
             (root / "unexpected").write_bytes(b"extra")
             with self.assertRaisesRegex(package_linux_guest.GuestError, "file set"):
                 package_linux_guest._verify_package_unit(root)
@@ -328,7 +350,7 @@ class PackageGameTests(unittest.TestCase):
             output = root / "published"
             output.mkdir()
             (output / "Game").write_bytes(b"\x7fELF")
-            seal_unit(output, {
+            seal_with_first_frame(output, {
                 "target": "Linux.x64",
                 "configuration": "Development",
                 "inputs": {"engineSha256": "0" * 64},
@@ -426,6 +448,184 @@ class PackageGameTests(unittest.TestCase):
         ])
         self.assertEqual("Android.ETC2.arm64", parsed.target)
         self.assertIsNone(parsed.android_signing_broker)
+
+    def test_android_first_frame_failure_force_stops_the_started_application(self) -> None:
+        args = argparse.Namespace(
+            target="Android.ETC2.arm64",
+            android_application_id="com.example.game",
+        )
+        adb = Path("adb.exe")
+        apk = Path("stage/Game-etc2.apk")
+
+        def run(arguments: list[object], **_kwargs: object) -> mock.Mock:
+            output = "FATAL EXCEPTION: main" if "-d" in arguments else ""
+            return mock.Mock(output=output)
+
+        with mock.patch.object(package_game, "run_checked", side_effect=run) as checked:
+            with self.assertRaisesRegex(PackagingError, "failed before its first frame"):
+                package_game._verify_android_first_frame(args, apk, adb)
+
+        force_stops = [
+            call for call in checked.call_args_list
+            if call.args[0][1:4] == ["shell", "am", "force-stop"]
+        ]
+        self.assertEqual(2, len(force_stops))
+
+    def test_android_stage_uses_adb_only_for_explicit_launch_and_probes_final_apk(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_text:
+            root = Path(temporary_text)
+            engine = root / "engine"
+            wrapper = engine / "platform/android/gradle/wrapper/gradle-wrapper.jar"
+            wrapper.parent.mkdir(parents=True)
+            wrapper.write_bytes(b"gradle")
+            source_apk = engine / "platform/android/app/build/outputs/apk/etc2/debug/Game.apk"
+            source_apk.parent.mkdir(parents=True)
+            source_apk.write_bytes(b"final-apk")
+            build_tools = root / "sdk/build-tools/35.0.0"
+            (build_tools / "lib").mkdir(parents=True)
+            (build_tools / "lib/apksigner.jar").write_bytes(b"signer")
+            zipalign = build_tools / "zipalign.exe"
+            zipalign.write_bytes(b"tool")
+            pack = root / "Game.kbpack"
+            pack.write_bytes(b"pack")
+            adb = root / "adb.exe"
+            adb.write_bytes(b"tool")
+            args = argparse.Namespace(
+                target="Android.ETC2.arm64",
+                configuration="Development",
+                engine_root=engine,
+                build_root=root / "build",
+                executable_name="Game",
+                product_name="Game",
+                version="1.0",
+                application_icon=None,
+                android_application_id="com.example.game",
+                android_version_code=1,
+                android_label=None,
+                android_min_sdk=28,
+                android_target_sdk=35,
+                launch=False,
+            )
+
+            def stage(launch: bool) -> tuple[package_game.StageResult, Path, mock.Mock, mock.Mock]:
+                args.launch = launch
+                destination = root / ("stage-launch" if launch else "stage-build")
+                destination.mkdir()
+                job = root / ("job-launch" if launch else "job-build")
+                job.mkdir()
+                with mock.patch.object(package_game, "_android_sdk", return_value=root / "sdk"), \
+                        mock.patch.object(package_game, "_latest_android_build_tools", return_value=build_tools), \
+                        mock.patch.object(package_game, "_build_tool_path", return_value=Path("validator.exe")), \
+                        mock.patch.object(package_game, "_stage_licenses"), \
+                        mock.patch.object(package_game, "_java", return_value=Path("java.exe")), \
+                        mock.patch.object(package_game, "run_checked"), \
+                        mock.patch.object(package_game, "_verify_android_apk"), \
+                        mock.patch.object(package_game, "_android_adb", return_value=adb) as resolve_adb, \
+                        mock.patch.object(package_game, "_verify_android_first_frame") as probe, \
+                        mock.patch.object(package_game, "_try_android_force_stop") as force_stop:
+                    result = package_game._stage_android(args, pack, destination, job)
+                self.assertEqual(b"final-apk", (destination / "Game-etc2.apk").read_bytes())
+                force_stop.assert_not_called()
+                return result, destination, resolve_adb, probe
+
+            build_result, _, build_adb, build_probe = stage(False)
+            self.assertIsNone(build_result.first_frame)
+            self.assertIsNone(build_result.running_android_adb)
+            build_adb.assert_not_called()
+            build_probe.assert_not_called()
+
+            launch_result, launch_stage, launch_adb, launch_probe = stage(True)
+            launch_adb.assert_called_once_with()
+            launch_probe.assert_called_once_with(args, launch_stage / "Game-etc2.apk", adb)
+            self.assertEqual(adb, launch_result.running_android_adb)
+            self.assertEqual("android-logcat", launch_result.first_frame.probe)
+            self.assertEqual(
+                package_contract.payload_manifest_sha256(launch_stage),
+                launch_result.first_frame.payload_manifest_sha256,
+            )
+
+    def test_android_package_failure_after_probe_force_stops_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_text:
+            root = Path(temporary_text)
+            args = argparse.Namespace(
+                target="Android.ASTC.arm64",
+                configuration="Development",
+                build_root=root / "build",
+                output=root / "package",
+                engine_root=root,
+                project=root / "Project.21kbproject",
+                launch=True,
+                android_application_id="com.example.game",
+            )
+            adb = Path("adb.exe")
+            first_frame = package_game.FirstFrameResult(
+                "android-logcat",
+                "profile=Android.ASTC.arm64 first-frame=rendered",
+                "a" * 64,
+            )
+            stage_result = package_game.StageResult((), first_frame, adb)
+            lock = mock.MagicMock()
+            with mock.patch.object(package_game, "_validate_arguments"), \
+                    mock.patch.object(package_game, "_required_executable", return_value=Path("cmake.exe")), \
+                    mock.patch.object(package_game, "FileLock", return_value=lock), \
+                    mock.patch.object(package_game, "_project_source_fingerprint", return_value="p" * 64), \
+                    mock.patch.object(package_game, "_copy_project_snapshot", return_value=Path("snapshot")), \
+                    mock.patch.object(package_game, "_engine_fingerprint", return_value="e" * 64), \
+                    mock.patch.object(package_game, "_ensure_host_tools", return_value=(Path("cooker"), Path("validator"))), \
+                    mock.patch.object(package_game, "_cook", return_value=Path("Game.kbpack")), \
+                    mock.patch.object(package_game, "_stage_target", return_value=stage_result), \
+                    mock.patch.object(package_game, "_receipt", return_value={"target": args.target}), \
+                    mock.patch.object(package_game, "seal_unit", side_effect=PackagingError("seal failed")), \
+                    mock.patch.object(package_game, "_try_android_force_stop") as force_stop:
+                with self.assertRaisesRegex(PackagingError, "seal failed"):
+                    package_game.package(args)
+
+            force_stop.assert_called_once_with(adb, args.android_application_id, root)
+            self.assertFalse(any((args.build_root / "package-jobs").iterdir()))
+
+    def test_successful_android_package_transfers_runtime_without_second_launch(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_text:
+            root = Path(temporary_text)
+            args = argparse.Namespace(
+                target="Android.ASTC.arm64",
+                configuration="Development",
+                build_root=root / "build",
+                output=root / "package",
+                engine_root=root,
+                project=root / "Project.21kbproject",
+                launch=True,
+                android_application_id="com.example.game",
+            )
+            adb = Path("adb.exe")
+            first_frame = package_game.FirstFrameResult(
+                "android-logcat",
+                "profile=Android.ASTC.arm64 first-frame=rendered",
+                "a" * 64,
+            )
+            stage_result = package_game.StageResult((), first_frame, adb)
+
+            def publish(_candidate: Path, output: Path) -> None:
+                output.mkdir()
+
+            with mock.patch.object(package_game, "_validate_arguments"), \
+                    mock.patch.object(package_game, "_required_executable", return_value=Path("cmake.exe")), \
+                    mock.patch.object(package_game, "FileLock", return_value=mock.MagicMock()), \
+                    mock.patch.object(package_game, "_project_source_fingerprint", return_value="p" * 64), \
+                    mock.patch.object(package_game, "_copy_project_snapshot", return_value=Path("snapshot")), \
+                    mock.patch.object(package_game, "_engine_fingerprint", return_value="e" * 64), \
+                    mock.patch.object(package_game, "_ensure_host_tools", return_value=(Path("cooker"), Path("validator"))), \
+                    mock.patch.object(package_game, "_cook", return_value=Path("Game.kbpack")), \
+                    mock.patch.object(package_game, "_stage_target", return_value=stage_result), \
+                    mock.patch.object(package_game, "_receipt", return_value={"target": args.target}), \
+                    mock.patch.object(package_game, "seal_unit"), \
+                    mock.patch.object(package_game, "verify_unit"), \
+                    mock.patch.object(package_game, "atomic_publish", side_effect=publish), \
+                    mock.patch.object(package_game, "_launch") as launch, \
+                    mock.patch.object(package_game, "_try_android_force_stop") as force_stop:
+                package_game.package(args)
+
+            launch.assert_not_called()
+            force_stop.assert_not_called()
 
     def test_application_icon_must_be_project_png(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_text:

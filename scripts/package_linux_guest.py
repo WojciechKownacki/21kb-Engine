@@ -18,7 +18,7 @@ import time
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO
 
-from package_contract import PackagingError, engine_source_fingerprint
+from package_contract import PackagingError, engine_source_fingerprint, verify_unit
 
 
 class GuestError(RuntimeError):
@@ -200,50 +200,10 @@ def _load_json(path: Path) -> dict[str, object]:
 
 
 def _verify_package_unit(root: Path) -> dict[str, object]:
-    manifest_path = root / "package.manifest.json"
-    receipt_path = root / "package.receipt.json"
-    manifest = _load_json(manifest_path)
-    receipt = _load_json(receipt_path)
-    if manifest.get("schema") != 1 or receipt.get("schema") != 1:
-        raise GuestError("unsupported package metadata schema")
-    canonical_manifest = (json.dumps(
-        manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
-    ).encode("utf-8")
-    if hashlib.sha256(canonical_manifest).hexdigest() != receipt.get("manifestSha256"):
-        raise GuestError("package receipt does not match its manifest")
-    entries = manifest.get("files")
-    if not isinstance(entries, list) or not entries:
-        raise GuestError("package manifest contains no payload files")
-    expected: set[str] = set()
-    folded: set[str] = set()
-    for entry in entries:
-        if not isinstance(entry, dict):
-            raise GuestError("package manifest entry is invalid")
-        relative = entry.get("path")
-        size = entry.get("size")
-        digest = entry.get("sha256")
-        if not isinstance(relative, str) or not isinstance(size, int) or size < 0:
-            raise GuestError("package manifest path or size is invalid")
-        if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
-            raise GuestError("package manifest hash is invalid")
-        path = PurePosixPath(relative)
-        if path.is_absolute() or "\\" in relative or any(part in ("", ".", "..") for part in path.parts):
-            raise GuestError("package manifest path is unsafe")
-        if relative in expected or relative.casefold() in folded:
-            raise GuestError("package manifest contains duplicate paths")
-        expected.add(relative)
-        folded.add(relative.casefold())
-        payload = root.joinpath(*path.parts)
-        if payload.is_symlink() or not payload.is_file():
-            raise GuestError(f"package payload is missing: {relative}")
-        if payload.stat().st_size != size or _sha256(payload) != digest:
-            raise GuestError(f"package payload failed integrity verification: {relative}")
-    actual = {
-        relative for relative, _ in _files(root)
-        if relative not in ("package.manifest.json", "package.receipt.json")
-    }
-    if actual != expected:
-        raise GuestError("package file set differs from its manifest")
+    try:
+        receipt = verify_unit(root)
+    except PackagingError as error:
+        raise GuestError(str(error)) from error
     if receipt.get("target") != "Linux.x64" or receipt.get("configuration") not in ("Development", "Release"):
         raise GuestError("package is not an exact Linux player unit")
     return receipt

@@ -32,6 +32,7 @@ from typing import Iterable, Iterator, Mapping, Sequence
 
 from package_contract import (
     FileLock,
+    PACKAGE_TARGETS,
     PackagingError,
     atomic_publish,
     canonical_json_bytes,
@@ -40,9 +41,11 @@ from package_contract import (
     emit_diagnostic,
     emit_stage,
     make_job_directory,
+    payload_manifest_sha256,
     regular_files,
     remove_tree,
     run_checked,
+    runtime_first_frame_observation,
     seal_unit,
     sha256_file,
     tool_fingerprint,
@@ -53,21 +56,33 @@ from windows_pe_resources import WindowsResourceError, apply_windows_resources
 
 
 @dataclass(frozen=True)
-class Target:
-    profile_id: str
-    platform: str
-    texture_family: str
-    shader_format: str
+class FirstFrameResult:
+    probe: str
+    observed: str
+    payload_manifest_sha256: str
+
+    def receipt_fields(self) -> dict[str, object]:
+        return {
+            "schema": 1,
+            "probe": self.probe,
+            "observed": self.observed,
+            "payloadManifestSha256": self.payload_manifest_sha256,
+        }
 
 
-TARGETS: dict[str, Target] = {
-    "Windows.x64": Target("Windows.x64", "windows", "BC1-BC7", "DXBC+DXIL+SPIR-V"),
-    "Linux.x64": Target("Linux.x64", "linux", "BC1-BC7", "SPIR-V+GLSL"),
-    "Android.ASTC.arm64": Target("Android.ASTC.arm64", "android", "ASTC", "SPIR-V+ESSL"),
-    "Android.ETC2.arm64": Target("Android.ETC2.arm64", "android", "ETC2", "SPIR-V+ESSL"),
-    "WebGL.wasm32": Target("WebGL.wasm32", "webgl", "BC1-BC3+ETC2", "ESSL"),
-    "WebGPU.wasm32": Target("WebGPU.wasm32", "webgpu", "BC1-BC3+ASTC+ETC2", "WGSL"),
-}
+@dataclass(frozen=True)
+class StageResult:
+    tools: tuple[Path, ...]
+    first_frame: FirstFrameResult | None = None
+    running_android_adb: Path | None = None
+
+
+def _first_frame_result(target: str, stage: Path) -> FirstFrameResult:
+    probe, observed = runtime_first_frame_observation(target)
+    return FirstFrameResult(probe, observed, payload_manifest_sha256(stage))
+
+
+TARGETS = PACKAGE_TARGETS
 CONFIGURATIONS = {"Development": "Debug", "Release": "Release"}
 _SAFE_EXECUTABLE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_. -]{0,79}\Z")
 _ANDROID_APPLICATION_ID = re.compile(r"[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+\Z")
@@ -339,7 +354,7 @@ def _stage_licenses(engine_root: Path, stage: Path, target: str) -> None:
     )
 
 
-def _stage_windows(args: argparse.Namespace, cmake: Path, pack: Path, stage: Path, job: Path) -> list[Path]:
+def _stage_windows(args: argparse.Namespace, cmake: Path, pack: Path, stage: Path, job: Path) -> StageResult:
     configuration = CONFIGURATIONS[args.configuration]
     plugin_targets = (
         "kb_physics_jolt_plugin",
@@ -394,7 +409,7 @@ def _stage_windows(args: argparse.Namespace, cmake: Path, pack: Path, stage: Pat
     finally:
         if smoke.exists():
             remove_tree(smoke, allowed_parent=job)
-    return [game, *plugin_paths]
+    return StageResult((game, *plugin_paths), _first_frame_result(args.target, stage))
 
 
 def _android_sdk() -> Path:
@@ -565,7 +580,64 @@ def _request_android_signature(
         raise PackagingError("Android signing broker refused or did not create the signed APK")
 
 
-def _stage_android(args: argparse.Namespace, pack: Path, stage: Path, job: Path) -> list[Path]:
+def _android_adb() -> Path:
+    adb = _android_sdk() / "platform-tools" / ("adb.exe" if os.name == "nt" else "adb")
+    if not adb.is_file():
+        raise PackagingError(f"Android platform tool is missing: {adb}")
+    return adb.resolve(strict=True)
+
+
+def _android_force_stop(adb: Path, application_id: str, cwd: Path) -> None:
+    run_checked([adb, "shell", "am", "force-stop", application_id], cwd=cwd, timeout_seconds=30)
+
+
+def _try_android_force_stop(adb: Path, application_id: str, cwd: Path) -> None:
+    try:
+        _android_force_stop(adb, application_id, cwd)
+    except (OSError, PackagingError) as error:
+        emit_diagnostic("Warning", f"Android runtime cleanup failed: {error}")
+
+
+def _verify_android_first_frame(args: argparse.Namespace, apk: Path, adb: Path) -> None:
+    try:
+        run_checked([adb, "install", "-r", apk], cwd=apk.parent, timeout_seconds=300)
+        _android_force_stop(adb, args.android_application_id, apk.parent)
+        run_checked([adb, "logcat", "-c"], cwd=apk.parent, timeout_seconds=30)
+        run_checked(
+            [adb, "shell", "monkey", "-p", args.android_application_id, "1"],
+            cwd=apk.parent,
+            timeout_seconds=60,
+        )
+        expected = runtime_first_frame_observation(args.target)[1]
+        deadline = time.monotonic() + 60.0
+        latest = ""
+        while time.monotonic() < deadline:
+            latest = run_checked(
+                [
+                    adb, "logcat", "-d", "-v", "brief", "21kb:I", "AndroidRuntime:E",
+                    "libc:F", "DEBUG:F", "*:S",
+                ],
+                cwd=apk.parent,
+                timeout_seconds=30,
+            ).output
+            if expected in latest:
+                return
+            if (
+                "required-texture-capability=missing" in latest
+                or "FATAL EXCEPTION" in latest
+                or "Fatal signal" in latest
+            ):
+                raise PackagingError(f"Android launch failed before its first frame: {latest[-2000:].strip()}")
+            time.sleep(0.25)
+        raise PackagingError(
+            f"Android launch did not prove the requested profile and first frame: {latest[-2000:].strip()}"
+        )
+    except BaseException:
+        _try_android_force_stop(adb, args.android_application_id, apk.parent)
+        raise
+
+
+def _stage_android(args: argparse.Namespace, pack: Path, stage: Path, job: Path) -> StageResult:
     sdk = _android_sdk()
     build_tools = _latest_android_build_tools(sdk)
     gradle_root = args.engine_root / "platform/android"
@@ -652,7 +724,21 @@ def _stage_android(args: argparse.Namespace, pack: Path, stage: Path, job: Path)
         build_tools=build_tools,
         expected_debuggable=args.configuration == "Development",
     )
-    return [_java(), gradle_wrapper.resolve(strict=True), _apksigner_jar(build_tools), _android_tool(build_tools, "zipalign")]
+    tools = (
+        _java(),
+        gradle_wrapper.resolve(strict=True),
+        _apksigner_jar(build_tools),
+        _android_tool(build_tools, "zipalign"),
+    )
+    if not args.launch:
+        return StageResult(tools)
+    adb = _android_adb()
+    _verify_android_first_frame(args, destination, adb)
+    try:
+        return StageResult((*tools, adb), _first_frame_result(args.target, stage), adb)
+    except BaseException:
+        _try_android_force_stop(adb, args.android_application_id, stage)
+        raise
 
 
 def _emsdk_root(args: argparse.Namespace) -> Path:
@@ -821,7 +907,7 @@ def _verify_web_first_frame(stage: Path, html_name: str, backend: str, job: Path
         thread.join(timeout=5)
 
 
-def _stage_web(args: argparse.Namespace, cmake: Path, pack: Path, stage: Path, job: Path) -> list[Path]:
+def _stage_web(args: argparse.Namespace, cmake: Path, pack: Path, stage: Path, job: Path) -> StageResult:
     emsdk = _emsdk_root(args)
     ninja = _ninja_for_cmake(cmake)
     configuration = CONFIGURATIONS[args.configuration]
@@ -935,7 +1021,10 @@ def _stage_web(args: argparse.Namespace, cmake: Path, pack: Path, stage: Path, j
     if f"{args.executable_name}.js" not in final_html or "WebAssembly" not in javascript:
         raise PackagingError(f"{backend} loader does not reference its JavaScript/WebAssembly runtime")
     chrome = _verify_web_first_frame(stage, html_path.name, backend, job)
-    return [ninja, emsdk / "upstream/emscripten/emcc.py", chrome]
+    return StageResult(
+        (ninja, emsdk / "upstream/emscripten/emcc.py", chrome),
+        _first_frame_result(args.target, stage),
+    )
 
 
 def _create_deterministic_tar(source: Path, destination: Path) -> None:
@@ -1132,7 +1221,7 @@ def _extract_linux_result(archive_path: Path, destination: Path) -> None:
             target.chmod(member.mode & 0o777)
 
 
-def _stage_target(args: argparse.Namespace, cmake: Path, pack: Path, stage: Path, job: Path) -> list[Path]:
+def _stage_target(args: argparse.Namespace, cmake: Path, pack: Path, stage: Path, job: Path) -> StageResult:
     if TARGETS[args.target].platform == "windows":
         return _stage_windows(args, cmake, pack, stage, job)
     if TARGETS[args.target].platform == "android":
@@ -1152,7 +1241,7 @@ def _stage_target(args: argparse.Namespace, cmake: Path, pack: Path, stage: Path
         archive = stage / f"{args.executable_name}-linux-x64.tar.gz"
         _create_deterministic_tar(linux_stage, archive)
         _verify_linux_release_archive(archive, args.executable_name)
-    return tools
+    return StageResult(tuple(tools), _first_frame_result(args.target, stage))
 
 
 def _verify_linux_release_archive(archive: Path, executable_name: str) -> None:
@@ -1301,37 +1390,7 @@ def _launch(args: argparse.Namespace) -> None:
                     terminate_process_tree(process)
                     process.wait(timeout=5)
     elif target == "android":
-        adb = _android_sdk() / "platform-tools" / ("adb.exe" if os.name == "nt" else "adb")
-        apk = next(args.output.glob("*.apk"))
-        run_checked([adb, "install", "-r", apk], cwd=args.output, timeout_seconds=300)
-        run_checked([adb, "shell", "am", "force-stop", args.android_application_id], cwd=args.output, timeout_seconds=30)
-        run_checked([adb, "logcat", "-c"], cwd=args.output, timeout_seconds=30)
-        run_checked([adb, "shell", "monkey", "-p", args.android_application_id, "1"], cwd=args.output, timeout_seconds=60)
-        expected = f"profile={args.target} first-frame=rendered"
-        deadline = time.monotonic() + 60.0
-        latest = ""
-        while time.monotonic() < deadline:
-            latest = run_checked(
-                [
-                    adb, "logcat", "-d", "-v", "brief", "21kb:I", "AndroidRuntime:E",
-                    "libc:F", "DEBUG:F", "*:S",
-                ],
-                cwd=args.output,
-                timeout_seconds=30,
-            ).output
-            if expected in latest:
-                break
-            if (
-                "required-texture-capability=missing" in latest
-                or "FATAL EXCEPTION" in latest
-                or "Fatal signal" in latest
-            ):
-                raise PackagingError(f"Android launch failed before its first frame: {latest[-2000:].strip()}")
-            time.sleep(0.25)
-        else:
-            raise PackagingError(
-                f"Android launch did not prove the requested profile and first frame: {latest[-2000:].strip()}"
-            )
+        raise PackagingError("Android launch must be verified before package sealing")
     elif target in ("webgl", "webgpu"):
         with _published_launch_copy(args) as deployed:
             html_path = deployed / f"{args.executable_name}.html"
@@ -1469,6 +1528,8 @@ def package(args: argparse.Namespace) -> None:
     output_lock = args.output.parent / f".{args.output.name}.package.lock"
     host_build_lock = args.build_root / "package-locks" / "host-build.lock"
     build_lock = args.build_root / "package-locks" / f"{target.platform}.lock"
+    running_android_adb: Path | None = None
+    published = False
     try:
         with FileLock(output_lock), FileLock(host_build_lock), FileLock(build_lock):
             emit_stage("Validate", 5, f"Validating {args.target} {args.configuration}")
@@ -1485,7 +1546,8 @@ def package(args: argparse.Namespace) -> None:
 
             emit_stage("Stage", 55, f"Building and staging {args.target}")
             candidate.mkdir(mode=0o700)
-            platform_tools = _stage_target(args, cmake, pack, candidate, job)
+            stage_result = _stage_target(args, cmake, pack, candidate, job)
+            running_android_adb = stage_result.running_android_adb
             if _engine_fingerprint(args.engine_root) != engine_fingerprint:
                 raise PackagingError("engine package inputs changed while the job was running")
             if _project_source_fingerprint(args.project) != project_fingerprint:
@@ -1495,19 +1557,32 @@ def package(args: argparse.Namespace) -> None:
             emit_stage("Verify", 82, "Sealing exact package file set")
             seal_unit(
                 candidate,
-                _receipt(args, project_fingerprint, engine_fingerprint, (cmake, cooker, validator, *platform_tools)),
+                _receipt(
+                    args,
+                    project_fingerprint,
+                    engine_fingerprint,
+                    (cmake, cooker, validator, *stage_result.tools),
+                ),
+                runtime_first_frame=(
+                    stage_result.first_frame.receipt_fields()
+                    if stage_result.first_frame is not None
+                    else None
+                ),
             )
             verify_unit(candidate)
             atomic_publish(candidate, args.output)
             verify_unit(args.output)
+            published = True
             emit_stage("Verify", 100, "Final package verified and published")
             print(f"RESULT|{args.output.resolve(strict=True)}", flush=True)
-        if args.launch:
+        if args.launch and target.platform != "android":
             try:
                 _launch(args)
             except PackagingError as error:
                 emit_diagnostic("Warning", f"Package succeeded, but launch failed: {error}")
     finally:
+        if running_android_adb is not None and not published:
+            _try_android_force_stop(running_android_adb, args.android_application_id, candidate.parent)
         if candidate.exists():
             remove_tree(candidate, allowed_parent=candidate.parent)
         if job.exists():

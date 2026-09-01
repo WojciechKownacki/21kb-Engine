@@ -66,6 +66,47 @@ _SOURCE_TEXT_NAMES = frozenset((
     "CMakeLists.txt", "CODEOWNERS", "COPYING", "Doxyfile", "gradlew", "LICENSE",
     "README", "updateGrammar", "WORKSPACE",
 ))
+_SOURCE_GENERATED_DIRECTORY_NAMES = frozenset((".gradle", "cmakefiles"))
+_SOURCE_GENERATED_FILE_NAMES = frozenset(("cmake_install.cmake",))
+_SOURCE_GENERATED_FILE_SUFFIXES = (".vcxproj", ".vcxproj.filters")
+
+
+@dataclass(frozen=True)
+class PackageTarget:
+    profile_id: str
+    platform: str
+    texture_family: str
+    shader_format: str
+    first_frame_probe: str
+    first_frame_observed: str
+
+
+PACKAGE_TARGETS: dict[str, PackageTarget] = {
+    "Windows.x64": PackageTarget(
+        "Windows.x64", "windows", "BC1-BC7", "DXBC+DXIL+SPIR-V",
+        "native-stdout", "frames=1 rendered=1 shutdown=clean",
+    ),
+    "Linux.x64": PackageTarget(
+        "Linux.x64", "linux", "BC1-BC7", "SPIR-V+GLSL",
+        "linux-build-receipt", "frames=1 rendered=1 shutdown=clean",
+    ),
+    "Android.ASTC.arm64": PackageTarget(
+        "Android.ASTC.arm64", "android", "ASTC", "SPIR-V+ESSL",
+        "android-logcat", "profile=Android.ASTC.arm64 first-frame=rendered",
+    ),
+    "Android.ETC2.arm64": PackageTarget(
+        "Android.ETC2.arm64", "android", "ETC2", "SPIR-V+ESSL",
+        "android-logcat", "profile=Android.ETC2.arm64 first-frame=rendered",
+    ),
+    "WebGL.wasm32": PackageTarget(
+        "WebGL.wasm32", "webgl", "BC1-BC3+ETC2", "ESSL",
+        "browser-fragment", "kb-ready-webgl",
+    ),
+    "WebGPU.wasm32": PackageTarget(
+        "WebGPU.wasm32", "webgpu", "BC1-BC3+ASTC+ETC2", "WGSL",
+        "browser-fragment", "kb-ready-webgpu",
+    ),
+}
 
 
 class PackagingError(RuntimeError):
@@ -111,9 +152,42 @@ def source_file_fingerprint(path: Path) -> tuple[int, str]:
     return len(canonical), sha256_bytes(canonical)
 
 
+def _source_files(root: Path) -> list[tuple[str, Path]]:
+    root = root.resolve(strict=True)
+    if not root.is_dir() or root.is_symlink() or _is_reparse(root):
+        raise PackagingError(f"source root must be a regular directory: {root}")
+    files: list[tuple[str, Path]] = []
+    folded: dict[str, str] = {}
+    for directory, names, file_names in os.walk(root, topdown=True, followlinks=False):
+        directory_path = Path(directory)
+        names[:] = [name for name in names if name.casefold() not in _SOURCE_GENERATED_DIRECTORY_NAMES]
+        for name in tuple(names):
+            child = directory_path / name
+            if child.is_symlink() or _is_reparse(child):
+                raise PackagingError(f"symbolic links and reparse points are not source inputs: {child}")
+        for name in file_names:
+            folded_name = name.casefold()
+            if (folded_name in _SOURCE_GENERATED_FILE_NAMES or
+                    any(folded_name.endswith(suffix) for suffix in _SOURCE_GENERATED_FILE_SUFFIXES)):
+                continue
+            child = directory_path / name
+            if child.is_symlink() or _is_reparse(child) or not child.is_file():
+                raise PackagingError(f"source input is not a regular file: {child}")
+            relative = child.relative_to(root).as_posix()
+            _validate_relative_path(relative)
+            collision_key = relative.casefold()
+            previous = folded.get(collision_key)
+            if previous is not None and previous != relative:
+                raise PackagingError(f"case-insensitive source path collision: {previous!r} and {relative!r}")
+            folded[collision_key] = relative
+            files.append((relative, child))
+    files.sort(key=lambda item: item[0].encode("utf-8"))
+    return files
+
+
 def source_tree_fingerprint(root: Path) -> str:
     digest = hashlib.sha256()
-    for relative, path in regular_files(root):
+    for relative, path in _source_files(root):
         size, file_digest = source_file_fingerprint(path)
         digest.update(relative.encode("utf-8"))
         digest.update(b"\0")
@@ -233,7 +307,33 @@ def create_manifest(root: Path) -> dict[str, object]:
     return {"schema": 1, "files": entries}
 
 
-def seal_unit(root: Path, receipt_fields: Mapping[str, object]) -> None:
+def payload_manifest_sha256(root: Path) -> str:
+    return sha256_bytes(canonical_json_bytes(create_manifest(root)))
+
+
+def runtime_first_frame_observation(target: object) -> tuple[str, str]:
+    if not isinstance(target, str) or target not in PACKAGE_TARGETS:
+        raise PackagingError("runtime first-frame evidence has an unsupported target")
+    contract = PACKAGE_TARGETS[target]
+    return contract.first_frame_probe, contract.first_frame_observed
+
+
+def _runtime_first_frame(target: object, manifest_sha256: str) -> dict[str, object]:
+    probe, observed = runtime_first_frame_observation(target)
+    return {
+        "schema": 1,
+        "probe": probe,
+        "observed": observed,
+        "payloadManifestSha256": manifest_sha256,
+    }
+
+
+def seal_unit(
+    root: Path,
+    receipt_fields: Mapping[str, object],
+    *,
+    runtime_first_frame: Mapping[str, object] | None = None,
+) -> None:
     root = root.resolve(strict=True)
     for envelope in _ENVELOPE_FILES:
         existing = root / envelope
@@ -241,8 +341,28 @@ def seal_unit(root: Path, receipt_fields: Mapping[str, object]) -> None:
             raise PackagingError(f"reserved package file already exists: {existing}")
     manifest = create_manifest(root)
     manifest_bytes = canonical_json_bytes(manifest)
+    manifest_sha256 = sha256_bytes(manifest_bytes)
+    if "runtimeFirstFrame" in receipt_fields:
+        raise PackagingError("runtime first-frame evidence is reserved for the package sealer")
+    receipt = {"schema": 1, **receipt_fields, "manifestSha256": manifest_sha256}
+    target = receipt.get("target")
+    if not isinstance(target, str) or target not in PACKAGE_TARGETS:
+        raise PackagingError("package receipt has an unsupported target")
+    if runtime_first_frame is not None:
+        if not isinstance(runtime_first_frame, Mapping):
+            raise PackagingError("runtime first-frame observation must be an object")
+        expected = _runtime_first_frame(target, manifest_sha256)
+        observed = dict(runtime_first_frame)
+        observed_payload_sha256 = observed.pop("payloadManifestSha256", None)
+        expected_payload_sha256 = expected.pop("payloadManifestSha256")
+        if observed != expected:
+            raise PackagingError("runtime first-frame observation does not match the package target")
+        if observed_payload_sha256 != expected_payload_sha256:
+            raise PackagingError("package payload changed after its runtime first-frame probe")
+        receipt["runtimeFirstFrame"] = dict(runtime_first_frame)
+    elif PACKAGE_TARGETS[target].platform != "android":
+        raise PackagingError("package target requires runtime first-frame evidence")
     (root / MANIFEST_NAME).write_bytes(manifest_bytes)
-    receipt = {"schema": 1, **receipt_fields, "manifestSha256": sha256_bytes(manifest_bytes)}
     (root / RECEIPT_NAME).write_bytes(canonical_json_bytes(receipt))
     verify_unit(root)
 
@@ -257,7 +377,7 @@ def _load_object(path: Path) -> dict[str, object]:
     return value
 
 
-def verify_unit(root: Path) -> dict[str, object]:
+def verify_unit(root: Path, *, allow_legacy_first_frame: bool = False) -> dict[str, object]:
     root = root.resolve(strict=True)
     manifest_path = root / MANIFEST_NAME
     receipt_path = root / RECEIPT_NAME
@@ -269,6 +389,15 @@ def verify_unit(root: Path) -> dict[str, object]:
         raise PackagingError("unsupported package manifest or receipt schema")
     if receipt.get("manifestSha256") != sha256_file(manifest_path):
         raise PackagingError("package receipt does not match its manifest")
+    target = receipt.get("target")
+    runtime_first_frame = receipt.get("runtimeFirstFrame")
+    if not isinstance(target, str) or target not in PACKAGE_TARGETS:
+        raise PackagingError("package receipt has an unsupported target")
+    if runtime_first_frame is None:
+        if PACKAGE_TARGETS[target].platform != "android" and not allow_legacy_first_frame:
+            raise PackagingError("package receipt is missing runtime first-frame evidence")
+    elif runtime_first_frame != _runtime_first_frame(target, str(receipt["manifestSha256"])):
+        raise PackagingError("package receipt has invalid runtime first-frame evidence")
     raw_entries = manifest.get("files")
     if not isinstance(raw_entries, list) or not raw_entries:
         raise PackagingError("package manifest contains no payload files")
@@ -381,7 +510,7 @@ def atomic_publish(candidate: Path, destination: Path) -> None:
         if destination.exists():
             if destination.is_symlink() or _is_reparse(destination) or not destination.is_dir():
                 raise PackagingError(f"existing package destination is not a regular directory: {destination}")
-            verify_unit(destination)
+            verify_unit(destination, allow_legacy_first_frame=True)
             destination.rename(backup)
             moved_old = True
         candidate.rename(destination)
