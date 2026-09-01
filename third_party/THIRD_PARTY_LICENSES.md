@@ -77,13 +77,12 @@ substantial portions of the software.
 ## etcpak
 
 - Repository: https://github.com/wolfpld/etcpak
-- Fetched release: `2.0` (`a43d6925bee49277945cf3e311e4a022ae0c2073`)
-- Archive SHA-256: `dc7a1b23a039594b3d0e9d00581a7d3d2ef4b6656ad532f7ed2b844bd9b4ba39`
+- Local path: `third_party/bgfx.cmake/bimg/3rdparty/etc2`
 - License: BSD 3-Clause
-- License file: `third_party/licenses/etcpak-2.0.txt`
+- License file: `third_party/bgfx.cmake/bimg/3rdparty/etc2/LICENSE.txt`
 
-Only the host-side ETC2 encoder subset is compiled. Its copyright notice,
-license conditions, and disclaimer must accompany source and binary distributions.
+The ETC2 codec is the copy embedded by bimg. Its copyright notice, license
+conditions, and disclaimer must accompany source and binary distributions.
 
 ## Box2D
 
