@@ -9,13 +9,10 @@
 #include <bx/error.h>
 #include <bx/readerwriter.h>
 
-#include <ProcessRGB.hpp>
-
 #include <array>
 #include <cstddef>
 #include <fstream>
 #include <limits>
-#include <cstring>
 #include <memory>
 #include <optional>
 #include <string>
@@ -138,44 +135,6 @@ void CopyLevelIntoBlockAlignedBuffer(
             padded[destination + 3U] = level[source + 3U];
         }
     }
-}
-
-[[nodiscard]] bool EncodeEtc2Level(
-    std::span<const std::uint8_t> rgba8,
-    std::uint32_t width,
-    std::uint32_t height,
-    bool keepAlpha,
-    std::span<std::uint8_t> destination) {
-    if (width == 0U || height == 0U || width % 4U != 0U || height % 4U != 0U ||
-        rgba8.size() != static_cast<std::size_t>(width) * height * 4U) {
-        return false;
-    }
-    const std::uint32_t blockCount = (width / 4U) * (height / 4U);
-    const std::size_t wordCount = static_cast<std::size_t>(blockCount) * (keepAlpha ? 2U : 1U);
-    if (blockCount == 0U || destination.size() != wordCount * sizeof(std::uint64_t)) {
-        return false;
-    }
-
-    // etcpak consumes one little-endian BGRA word per texel. Build the words
-    // explicitly instead of reinterpreting RGBA bytes, so channel order and
-    // alignment are independent of the source buffer representation.
-    std::vector<std::uint32_t> bgra(static_cast<std::size_t>(width) * height);
-    for (std::size_t index = 0U; index < bgra.size(); ++index) {
-        const std::size_t source = index * 4U;
-        bgra[index] = static_cast<std::uint32_t>(rgba8[source + 2U]) |
-            (static_cast<std::uint32_t>(rgba8[source + 1U]) << 8U) |
-            (static_cast<std::uint32_t>(rgba8[source + 0U]) << 16U) |
-            (static_cast<std::uint32_t>(rgba8[source + 3U]) << 24U);
-    }
-
-    std::vector<std::uint64_t> encoded(wordCount, 0U);
-    if (keepAlpha) {
-        CompressEtc2Rgba(bgra.data(), encoded.data(), blockCount, width, true);
-    } else {
-        CompressEtc2Rgb(bgra.data(), encoded.data(), blockCount, width, true);
-    }
-    std::memcpy(destination.data(), encoded.data(), destination.size());
-    return true;
 }
 
 [[nodiscard]] bool ReadFileBytes(const std::filesystem::path& path, std::vector<std::uint8_t>& bytes) {
@@ -455,32 +414,20 @@ TextureBakeOutput BakeTextureBytes(
 
         CopyLevelIntoBlockAlignedBuffer(
             chain->rgba8.data() + levelSourceOffset, levelWidth, levelHeight, paddedWidth, paddedHeight, paddedLevel);
-        if (format == bgfx::TextureFormat::ETC2 || format == bgfx::TextureFormat::ETC2A) {
-            if (!EncodeEtc2Level(
-                    paddedLevel,
-                    paddedWidth,
-                    paddedHeight,
-                    format == bgfx::TextureFormat::ETC2A,
-                    std::span<std::uint8_t>{ blocks }.subspan(levelDestinationOffset, encodedLevelBytes))) {
-                output.status = TextureBakeStatus::EncodeFailed;
-                return output;
-            }
-        } else {
-            bimg::imageEncode(
-                &allocator,
-                blocks.data() + levelDestinationOffset,
-                paddedLevel.data(),
-                bimg::TextureFormat::RGBA8,
-                paddedWidth,
-                paddedHeight,
-                1U,
-                bimgFormat,
-                bimg::Quality::Default,
-                &encodeError);
-            if (!encodeError.isOk()) {
-                output.status = TextureBakeStatus::EncodeFailed;
-                return output;
-            }
+        bimg::imageEncode(
+            &allocator,
+            blocks.data() + levelDestinationOffset,
+            paddedLevel.data(),
+            bimg::TextureFormat::RGBA8,
+            paddedWidth,
+            paddedHeight,
+            1U,
+            bimgFormat,
+            bimg::Quality::Default,
+            &encodeError);
+        if (!encodeError.isOk()) {
+            output.status = TextureBakeStatus::EncodeFailed;
+            return output;
         }
 
         levelSourceOffset += levelBytes;

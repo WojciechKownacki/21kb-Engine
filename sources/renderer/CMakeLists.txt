@@ -654,38 +654,9 @@ target_compile_definitions(kb_renderer
 kb_apply_quality_gates(kb_renderer)
 
 # Compression belongs to the host cooker. Mobile/browser runtimes consume only
-# immutable GPU blocks and do not link encoder code. etcpak's upstream project
-# builds a CLI and pulls unrelated packages, so the engine owns this minimal,
-# pinned static target instead of adding the upstream build.
+# immutable GPU blocks and do not link encoder code. bimg_encode is the single
+# compression backend used by the renderer and its host-side baker.
 if(NOT ANDROID AND NOT EMSCRIPTEN)
-    FetchContent_Declare(
-        kb_etcpak_source
-        URL https://github.com/wolfpld/etcpak/archive/refs/tags/2.0.tar.gz
-        URL_HASH SHA256=dc7a1b23a039594b3d0e9d00581a7d3d2ef4b6656ad532f7ed2b844bd9b4ba39
-        DOWNLOAD_EXTRACT_TIMESTAMP FALSE
-        SOURCE_SUBDIR kb_no_upstream_build
-    )
-    FetchContent_MakeAvailable(kb_etcpak_source)
-
-    add_library(kb_etcpak STATIC
-        ${kb_etcpak_source_SOURCE_DIR}/Dither.cpp
-        ${kb_etcpak_source_SOURCE_DIR}/ProcessRGB.cpp
-        ${kb_etcpak_source_SOURCE_DIR}/Tables.cpp
-    )
-    target_include_directories(kb_etcpak SYSTEM PUBLIC ${kb_etcpak_source_SOURCE_DIR})
-    target_compile_definitions(kb_etcpak PRIVATE
-        REFERENCE_IMPLEMENTATION
-        $<$<BOOL:${WIN32}>:NOMINMAX>
-        $<$<BOOL:${WIN32}>:WIN32_LEAN_AND_MEAN>
-    )
-    if(MSVC)
-        target_compile_options(kb_etcpak PRIVATE /W0 /EHsc /fp:strict)
-    else()
-        target_compile_options(kb_etcpak PRIVATE
-            -w -mno-avx -mno-avx2 -mno-sse4.1 -ffp-contract=off)
-        set_target_properties(kb_etcpak PROPERTIES POSITION_INDEPENDENT_CODE ON)
-    endif()
-
     add_library(kb_renderer_bake STATIC
         include/kb/render/bake/TextureBaker.hpp
         src/bake/TextureBaker.cpp
@@ -696,7 +667,7 @@ if(NOT ANDROID AND NOT EMSCRIPTEN)
     )
     target_link_libraries(kb_renderer_bake
         PUBLIC kb_renderer
-        PRIVATE kb_etcpak bimg_encode
+        PRIVATE bimg_encode
     )
     kb_apply_quality_gates(kb_renderer_bake)
 endif()
