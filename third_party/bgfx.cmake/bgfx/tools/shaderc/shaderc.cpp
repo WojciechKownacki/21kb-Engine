@@ -1370,8 +1370,15 @@ namespace bgfx
 		else if (0 == bx::strCmpI(platform, "asm.js") )
 		{
 			preprocessor.setDefine("BX_PLATFORM_EMSCRIPTEN=1");
-			preprocessor.setDefine(glslDefine);
-			preprocessor.setDefine(esslDefine);
+			if (profile->lang == ShadingLang::WGSL)
+			{
+				preprocessor.setDefine("BGFX_SHADER_LANGUAGE_WGSL=1");
+			}
+			else
+			{
+				preprocessor.setDefine(glslDefine);
+				preprocessor.setDefine(esslDefine);
+			}
 		}
 		else if (0 == bx::strCmpI(platform, "linux") )
 		{

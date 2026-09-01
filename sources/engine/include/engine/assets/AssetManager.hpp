@@ -335,6 +335,7 @@ private:
     void StartAsyncWorker();
     void StopAsyncWorker() noexcept;
     void RestartAsyncLoads();
+    void PrepareAsyncLoad(AsyncLoadJob job) noexcept;
     void RunAsyncWorker() noexcept;
     [[nodiscard]] std::shared_ptr<void> LoadUntyped(AssetId id, std::type_index expectedType);
 

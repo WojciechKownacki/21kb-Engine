@@ -201,6 +201,13 @@ void RunSceneMeshPassProgramSelectionTest() {
         Require(selectionResolution.program.idx != builtinResolution.program.idx,
             "KBMAT-MAT07: Selection program must differ from the opaque program");
 
+        const SceneMeshPassProgramResolution motionVectorResolution =
+            passResources.ResolveMeshPassProgram(&builtinMaterial, MeshPassType::MotionVectors);
+        Require(bgfx::isValid(motionVectorResolution.program) &&
+                motionVectorResolution.program.idx != builtinResolution.program.idx &&
+                motionVectorResolution.key.pass == "MotionVectors",
+            "Static motion-vector draws must use the dedicated motion-vector shader program");
+
         for (const MeshPassType pass : {
                  MeshPassType::BaseOpaque,
                  MeshPassType::GBuffer,

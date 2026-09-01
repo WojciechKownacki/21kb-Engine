@@ -393,6 +393,12 @@ set(KB_RENDERER_SHADER_PROFILES
     essl
     metal
 )
+if(BGFX_CONFIG_RENDERER_WEBGPU AND KB_GENERATE_RENDERER_SHADERS AND
+   TARGET bgfx::shaderc AND COMMAND bgfx_compile_shaders)
+    # bgfx_compile_shaders emits the WGSL directory in this configuration;
+    # include it in the same staged-manifest validation as every other backend.
+    list(APPEND KB_RENDERER_SHADER_PROFILES wgsl)
+endif()
 
 set(KB_RENDERER_SHADER_MANIFEST
     cs_hzb_downsample.sc

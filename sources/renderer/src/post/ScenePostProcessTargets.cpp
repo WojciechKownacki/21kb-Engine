@@ -117,7 +117,7 @@ bool ScenePostProcessTargets::CreateTargets(std::uint32_t width, std::uint32_t h
         if (bloomPyramidTarget) {
             WriteBreadcrumb("post_targets", "create bloom framebuffer index=" + std::to_string(index));
             bgfx::Attachment attachment{};
-            attachment.init(textures_[index]);
+            attachment.init(textures_[index], bgfx::Access::Write, 0U, 1U, 0U, BGFX_RESOLVE_NONE);
             frameBuffers_[index] = bgfx::createFrameBuffer(1U, &attachment, false);
         } else {
             WriteBreadcrumb("post_targets", "create framebuffer index=" + std::to_string(index));
@@ -152,7 +152,7 @@ bool ScenePostProcessTargets::CreateBloomPyramidTargets(std::uint32_t width, std
         bloomMipExtents_[mip] = RenderExtent{mipWidth, mipHeight};
 
         bgfx::Attachment bloomAttachment{};
-        bloomAttachment.init(textures_[Bloom], bgfx::Access::Write, 0U, 1U, mip);
+        bloomAttachment.init(textures_[Bloom], bgfx::Access::Write, 0U, 1U, mip, BGFX_RESOLVE_NONE);
         WriteBreadcrumb("post_targets", "create bloom mip framebuffer begin mip=" + std::to_string(mip));
         bloomMipFrameBuffers_[mip] = bgfx::createFrameBuffer(1U, &bloomAttachment, false);
         if (!bgfx::isValid(bloomMipFrameBuffers_[mip])) {
@@ -166,7 +166,7 @@ bool ScenePostProcessTargets::CreateBloomPyramidTargets(std::uint32_t width, std
         WriteBreadcrumb("post_targets", "set bloom mip name end mip=" + std::to_string(mip));
 
         bgfx::Attachment pingAttachment{};
-        pingAttachment.init(textures_[Ping], bgfx::Access::Write, 0U, 1U, mip);
+        pingAttachment.init(textures_[Ping], bgfx::Access::Write, 0U, 1U, mip, BGFX_RESOLVE_NONE);
         WriteBreadcrumb("post_targets", "create ping mip framebuffer begin mip=" + std::to_string(mip));
         pingMipFrameBuffers_[mip] = bgfx::createFrameBuffer(1U, &pingAttachment, false);
         if (!bgfx::isValid(pingMipFrameBuffers_[mip])) {

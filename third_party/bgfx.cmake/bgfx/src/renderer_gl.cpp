@@ -2919,7 +2919,7 @@ namespace bgfx { namespace gl
 				g_caps.supported |= false
 					|| s_extension[Extension::EXT_texture_array].m_supported
 					|| s_extension[Extension::EXT_gpu_shader4].m_supported
-					|| (m_gles3 && !BX_ENABLED(BX_PLATFORM_EMSCRIPTEN) )
+					|| m_gles3
 					? BGFX_CAPS_TEXTURE_2D_ARRAY
 					: 0
 					;
@@ -2946,7 +2946,7 @@ namespace bgfx { namespace gl
 					;
 
 				g_caps.limits.maxTextureSize     = uint32_t(glGet(GL_MAX_TEXTURE_SIZE) );
-				g_caps.limits.maxTextureLayers   = BX_ENABLED(BGFX_CONFIG_RENDERER_OPENGL >= 30) || BX_ENABLED(BGFX_CONFIG_RENDERER_OPENGLES >= 30) || s_extension[Extension::EXT_texture_array].m_supported ? uint16_t(bx::max(glGet(GL_MAX_ARRAY_TEXTURE_LAYERS), 1) ) : 1;
+				g_caps.limits.maxTextureLayers   = BX_ENABLED(BGFX_CONFIG_RENDERER_OPENGL >= 30) || BX_ENABLED(BGFX_CONFIG_RENDERER_OPENGLES >= 30) || m_gles3 || s_extension[Extension::EXT_texture_array].m_supported ? uint16_t(bx::max(glGet(GL_MAX_ARRAY_TEXTURE_LAYERS), 1) ) : 1;
 				g_caps.limits.maxComputeBindings = computeSupport ? BGFX_MAX_COMPUTE_BINDINGS : 0;
 				g_caps.limits.maxVertexStreams   = BGFX_CONFIG_MAX_VERTEX_STREAMS;
 
@@ -6879,7 +6879,29 @@ namespace bgfx { namespace gl
 							);
 					}
 
-					bx::write(&writer, code.getPtr(), code.getLength(), &err);
+					if (BX_ENABLED(BX_PLATFORM_EMSCRIPTEN)
+					&&  m_type == GL_FRAGMENT_SHADER
+					&&  g_caps.limits.maxFBAttachments < BGFX_CONFIG_MAX_FRAME_BUFFER_ATTACHMENTS)
+					{
+						const bx::StringView declaredArray = bx::strFind(code, "bgfx_FragData[8]");
+						if (!declaredArray.isEmpty() )
+						{
+							const int32_t prefixLength = int32_t(declaredArray.getPtr() - code.getPtr() )
+								+ bx::strLen("bgfx_FragData[");
+							bx::write(&writer, code.getPtr(), prefixLength, &err);
+							bx::write(&writer, &err, "%u", g_caps.limits.maxFBAttachments);
+							const char* suffix = declaredArray.getPtr() + bx::strLen("bgfx_FragData[8");
+							bx::write(&writer, suffix, uint32_t(code.getTerm() - suffix), &err);
+						}
+						else
+						{
+							bx::write(&writer, code.getPtr(), code.getLength(), &err);
+						}
+					}
+					else
+					{
+						bx::write(&writer, code.getPtr(), code.getLength(), &err);
+					}
 					bx::write(&writer, '\0', &err);
 				}
 
