@@ -134,6 +134,7 @@ void SceneSubmitDescRequiresValidFinalCompositeExtentWhenEnabled() {
         .bloomTexture = bgfx::TextureHandle{4U},
         .pingFrameBuffer = bgfx::FrameBufferHandle{5U},
         .pingTexture = bgfx::TextureHandle{6U},
+        .bloomScratchTexture = bgfx::TextureHandle{18U},
         .motionVectorFrameBuffer = bgfx::FrameBufferHandle{11U},
         .motionVectorTexture = bgfx::TextureHandle{12U},
         .temporalHistoryFrameBuffer = bgfx::FrameBufferHandle{13U},
@@ -167,6 +168,14 @@ void SceneSubmitDescRequiresValidFinalCompositeExtentWhenEnabled() {
             BGFX_INVALID_HANDLE,
             BGFX_INVALID_HANDLE,
         }},
+        .bloomScratchMipFrameBuffers = {{
+            bgfx::FrameBufferHandle{19U},
+            BGFX_INVALID_HANDLE,
+            BGFX_INVALID_HANDLE,
+            BGFX_INVALID_HANDLE,
+            BGFX_INVALID_HANDLE,
+            BGFX_INVALID_HANDLE,
+        }},
         .bloomMipExtents = {{
             RenderExtent{320U, 200U},
             RenderExtent{},
@@ -180,6 +189,19 @@ void SceneSubmitDescRequiresValidFinalCompositeExtentWhenEnabled() {
         .enabled = true,
     };
     Require(desc.IsValid(), "RenderSceneSubmitDesc rejected enabled final composite with valid post-process target");
+
+    const RenderPostProcessTargetBinding validPostProcess = desc.postProcess;
+    desc.postProcess.bloomScratchTexture = BGFX_INVALID_HANDLE;
+    Require(!desc.IsValid(), "RenderSceneSubmitDesc accepted a missing bloom scratch texture");
+    desc.postProcess = validPostProcess;
+    desc.postProcess.bloomScratchMipFrameBuffers[0] = BGFX_INVALID_HANDLE;
+    Require(!desc.IsValid(), "RenderSceneSubmitDesc accepted a missing bloom scratch framebuffer");
+    desc.postProcess = validPostProcess;
+    desc.postProcess.bloomScratchTexture = desc.postProcess.bloomTexture;
+    Require(!desc.IsValid(), "RenderSceneSubmitDesc accepted a bloom scratch texture aliasing bloom");
+    desc.postProcess = validPostProcess;
+    desc.postProcess.bloomScratchTexture = desc.postProcess.pingTexture;
+    Require(!desc.IsValid(), "RenderSceneSubmitDesc accepted a bloom scratch texture aliasing ping");
 }
 
 void SceneSubmitDescUsesExplicitOverlayDepthWhenPresent() {

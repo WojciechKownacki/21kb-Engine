@@ -98,6 +98,10 @@ int main(int argc, char** argv) {
         kb::render::tests::RunRenderSceneSyncTests();
         return EXIT_SUCCESS;
     }
+    if (argc == 2 && std::string_view{ argv[1] } == "scene-render-target-format") {
+        kb::render::tests::RunSceneRenderTargetFormatTests();
+        return EXIT_SUCCESS;
+    }
     if (argc == 2 && std::string_view{ argv[1] } == "particle-mesh-submit") {
         kb::render::tests::RunRendererParticleMeshSnapshotSubmitTest();
         return EXIT_SUCCESS;

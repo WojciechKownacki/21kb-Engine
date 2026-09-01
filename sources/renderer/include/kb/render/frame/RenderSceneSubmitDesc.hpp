@@ -64,6 +64,7 @@ struct RenderPostProcessTargetBinding {
     bgfx::TextureHandle bloomTexture = BGFX_INVALID_HANDLE;
     bgfx::FrameBufferHandle pingFrameBuffer = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle pingTexture = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle bloomScratchTexture = BGFX_INVALID_HANDLE;
     bgfx::FrameBufferHandle motionVectorFrameBuffer = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle motionVectorTexture = BGFX_INVALID_HANDLE;
     bgfx::FrameBufferHandle temporalHistoryFrameBuffer = BGFX_INVALID_HANDLE;
@@ -98,6 +99,14 @@ struct RenderPostProcessTargetBinding {
         BGFX_INVALID_HANDLE,
         BGFX_INVALID_HANDLE,
     }};
+    std::array<bgfx::FrameBufferHandle, kMaxBloomPyramidMips> bloomScratchMipFrameBuffers{{
+        BGFX_INVALID_HANDLE,
+        BGFX_INVALID_HANDLE,
+        BGFX_INVALID_HANDLE,
+        BGFX_INVALID_HANDLE,
+        BGFX_INVALID_HANDLE,
+        BGFX_INVALID_HANDLE,
+    }};
     std::array<RenderExtent, kMaxBloomPyramidMips> bloomMipExtents{};
     std::uint8_t bloomMipCount = 0;
     RenderExtent extent{};
@@ -111,6 +120,10 @@ struct RenderPostProcessTargetBinding {
             bgfx::isValid(selectionMaskFrameBuffer) && bgfx::isValid(selectionMaskTexture) &&
             bgfx::isValid(bloomFrameBuffer) && bgfx::isValid(bloomTexture) &&
             bgfx::isValid(pingFrameBuffer) && bgfx::isValid(pingTexture) &&
+            bgfx::isValid(bloomScratchTexture) &&
+            bloomTexture.idx != pingTexture.idx &&
+            bloomTexture.idx != bloomScratchTexture.idx &&
+            pingTexture.idx != bloomScratchTexture.idx &&
             bgfx::isValid(motionVectorFrameBuffer) && bgfx::isValid(motionVectorTexture) &&
             bgfx::isValid(temporalHistoryFrameBuffers[0]) && bgfx::isValid(temporalHistoryFrameBuffers[1]) &&
             bgfx::isValid(temporalHistoryTextures[0]) && bgfx::isValid(temporalHistoryTextures[1]) &&
@@ -123,6 +136,7 @@ struct RenderPostProcessTargetBinding {
         }
         for (std::uint8_t mip = 0; mip < bloomMipCount; ++mip) {
             if (!bgfx::isValid(bloomMipFrameBuffers[mip]) || !bgfx::isValid(pingMipFrameBuffers[mip]) ||
+                !bgfx::isValid(bloomScratchMipFrameBuffers[mip]) ||
                 !bloomMipExtents[mip].IsValid()) {
                 return false;
             }

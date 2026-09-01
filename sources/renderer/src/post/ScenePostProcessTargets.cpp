@@ -21,6 +21,7 @@ constexpr std::array<const char*, ScenePostProcessTargets::kTargetCount> kTarget
     "KB Editor Selection Mask",
     "KB Post Bloom HDR",
     "KB Post Ping HDR",
+    "KB Post Bloom Scratch HDR",
     "KB Post Motion Vectors",
     "KB Post Temporal History 0",
     "KB Post Temporal History 1",
@@ -97,7 +98,7 @@ bool ScenePostProcessTargets::CreateTargets(std::uint32_t width, std::uint32_t h
         const bgfx::TextureFormat::Enum textureFormat = index == SelectionMask
             ? bgfx::TextureFormat::RGBA8
             : (index == MotionVectors ? bgfx::TextureFormat::RGBA16F : colorSelection_.format);
-        const bool bloomPyramidTarget = index == Bloom || index == Ping;
+        const bool bloomPyramidTarget = index == Bloom || index == Ping || index == BloomScratch;
         textures_[index] = bgfx::createTexture2D(
             static_cast<std::uint16_t>(width),
             static_cast<std::uint16_t>(height),
@@ -179,6 +180,20 @@ bool ScenePostProcessTargets::CreateBloomPyramidTargets(std::uint32_t width, std
         bgfx::setName(pingMipFrameBuffers_[mip], pingName);
         WriteBreadcrumb("post_targets", "set ping mip name end mip=" + std::to_string(mip));
 
+        bgfx::Attachment scratchAttachment{};
+        scratchAttachment.init(textures_[BloomScratch], bgfx::Access::Write, 0U, 1U, mip, BGFX_RESOLVE_NONE);
+        WriteBreadcrumb("post_targets", "create bloom scratch mip framebuffer begin mip=" + std::to_string(mip));
+        bloomScratchMipFrameBuffers_[mip] = bgfx::createFrameBuffer(1U, &scratchAttachment, false);
+        if (!bgfx::isValid(bloomScratchMipFrameBuffers_[mip])) {
+            WriteBreadcrumb("post_targets", "create bloom scratch mip framebuffer failed mip=" + std::to_string(mip));
+            return false;
+        }
+        char scratchName[64]{};
+        static_cast<void>(std::snprintf(scratchName, sizeof(scratchName), "KB Post Bloom Scratch Mip %u", static_cast<unsigned>(mip)));
+        WriteBreadcrumb("post_targets", "set bloom scratch mip name begin mip=" + std::to_string(mip));
+        bgfx::setName(bloomScratchMipFrameBuffers_[mip], scratchName);
+        WriteBreadcrumb("post_targets", "set bloom scratch mip name end mip=" + std::to_string(mip));
+
         mipWidth = std::max(1U, mipWidth / 2U);
         mipHeight = std::max(1U, mipHeight / 2U);
     }
@@ -200,6 +215,12 @@ void ScenePostProcessTargets::Shutdown() noexcept {
         }
     }
     for (bgfx::FrameBufferHandle& frameBuffer : pingMipFrameBuffers_) {
+        if (bgfx::isValid(frameBuffer)) {
+            bgfx::destroy(frameBuffer);
+            frameBuffer = BGFX_INVALID_HANDLE;
+        }
+    }
+    for (bgfx::FrameBufferHandle& frameBuffer : bloomScratchMipFrameBuffers_) {
         if (bgfx::isValid(frameBuffer)) {
             bgfx::destroy(frameBuffer);
             frameBuffer = BGFX_INVALID_HANDLE;
@@ -244,6 +265,9 @@ bool ScenePostProcessTargets::IsValid() const noexcept {
            }) &&
            std::ranges::all_of(std::span{pingMipFrameBuffers_}.first(bloomMipCount_), [](bgfx::FrameBufferHandle frameBuffer) {
                return bgfx::isValid(frameBuffer);
+           }) &&
+           std::ranges::all_of(std::span{bloomScratchMipFrameBuffers_}.first(bloomMipCount_), [](bgfx::FrameBufferHandle frameBuffer) {
+               return bgfx::isValid(frameBuffer);
            });
 }
 
@@ -264,6 +288,7 @@ RenderPostProcessTargetBinding ScenePostProcessTargets::Binding() const noexcept
         .bloomTexture = textures_[Bloom],
         .pingFrameBuffer = frameBuffers_[Ping],
         .pingTexture = textures_[Ping],
+        .bloomScratchTexture = textures_[BloomScratch],
         .motionVectorFrameBuffer = frameBuffers_[MotionVectors],
         .motionVectorTexture = textures_[MotionVectors],
         .temporalHistoryFrameBuffer = frameBuffers_[TemporalHistory0],
@@ -283,6 +308,7 @@ RenderPostProcessTargetBinding ScenePostProcessTargets::Binding() const noexcept
         .finalTexture = textures_[Final],
         .bloomMipFrameBuffers = bloomMipFrameBuffers_,
         .pingMipFrameBuffers = pingMipFrameBuffers_,
+        .bloomScratchMipFrameBuffers = bloomScratchMipFrameBuffers_,
         .bloomMipExtents = bloomMipExtents_,
         .bloomMipCount = bloomMipCount_,
         .extent = Extent(),
