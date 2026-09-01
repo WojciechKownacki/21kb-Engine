@@ -211,6 +211,8 @@ def _verify_package_unit(root: Path) -> dict[str, object]:
 
 def _verify_linux_runtime(root: Path, executable_name: str, receipt: dict[str, object]) -> Path:
     player = root / executable_name
+    if not player.is_file() or not os.access(player, os.X_OK):
+        raise GuestError("published Linux player is not executable")
     pack = root / "Game.kbpack"
     build_receipt = _load_json(root / "linux-build.receipt.json")
     inputs = receipt.get("inputs")
