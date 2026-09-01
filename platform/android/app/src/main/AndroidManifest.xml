@@ -5,6 +5,7 @@
 
     <application
         android:allowBackup="false"
+        android:icon="${kbApplicationIcon}"
         android:label="${kbApplicationLabel}"
         android:theme="@style/Application.Fullscreen">
         <activity

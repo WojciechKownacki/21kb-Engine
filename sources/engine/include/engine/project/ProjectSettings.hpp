@@ -2,6 +2,7 @@
 
 #include "engine/project/ProjectDescriptor.hpp"
 
+#include <cstdint>
 #include <filesystem>
 #include <string>
 
@@ -20,6 +21,20 @@ struct ProjectSettings {
     std::string gameName;
     std::string category;
     std::string description;
+
+    // Shipping identity. These values are consumed by every platform packager and
+    // deliberately live in one project file instead of per-platform editor state.
+    std::string publisher;
+    std::string version = "1.0.0";
+    std::string executableName;
+    // Project-relative path. Importing an icon copies it into the project before
+    // this value is committed, so builds never depend on a workstation path.
+    std::string applicationIcon;
+
+    // Android package metadata. The human-readable version is `version` above.
+    std::string androidApplicationId;
+    std::uint32_t androidVersionCode = 1U;
+    std::string androidLabel;
 
     // Maps
     // The scene the game starts from. A new project points at the scene the editor

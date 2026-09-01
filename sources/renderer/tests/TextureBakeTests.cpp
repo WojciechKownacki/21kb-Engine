@@ -7,6 +7,8 @@
 #include "engine/assets/bake/AssetPackWriter.hpp"
 #include "engine/assets/bake/BakeTargetProfile.hpp"
 #include "engine/assets/bake/BakedAssetSink.hpp"
+#include "engine/assets/bake/RuntimeAssetManifest.hpp"
+#include "engine/assets/bake/RuntimeAssetPack.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
@@ -1800,6 +1802,164 @@ void RunBakedTexturePackRoundTripTest() {
         "The texture loader read a pack that holds no baked texture");
 }
 
+// A runtime package does not assume that WebGPU exposes one of its optional compressed
+// texture features. This exercises the production manifest/payload loader with no bgfx device
+// initialised, where every compressed capability is absent and RGBA8 is the required result.
+void RunPackagedWebGpuTextureFallbackTest() {
+    namespace asset_bake = kb::assets::bake;
+
+    const BakeTargetProfile profile = asset_bake::WebGpuWasm32BakeTargetProfile();
+    TempStore store{ "21kb_webgpu_runtime_texture_fallback" };
+    const std::filesystem::path packPath = store.Root() / "webgpu.kbpack";
+    const std::string texturePath = "/Game/Textures/Fallback.png";
+    const std::string scenePath = "/Game/Scenes/Main.21kbscene";
+    const kb::assets::AssetId textureId = kb::assets::MakeAssetId(texturePath + ":RenderTexture");
+    const kb::assets::AssetId sceneId = kb::assets::MakeAssetId(scenePath + ":Scene");
+    const std::vector<std::uint8_t> source =
+        MakePngSource(MakeRgba8Gradient(16U, 16U, 0xFFU), 16U, 16U);
+
+    asset_bake::AssetPackWriter writer{ packPath, profile };
+    const TextureBakeOutput bc = BakeTextureBytes(
+        source,
+        TextureBakeSettings{ RenderTextureAssetSemantic::BaseColor, RenderTextureAssetColorSpace::Linear },
+        profile,
+        TextureCompressionFamily::BlockCompressedBaseline,
+        writer);
+    const TextureBakeOutput astc = BakeTextureBytes(
+        source,
+        TextureBakeSettings{ RenderTextureAssetSemantic::BaseColor, RenderTextureAssetColorSpace::Linear },
+        profile,
+        TextureCompressionFamily::AdaptiveScalable,
+        writer);
+    const TextureBakeOutput etc2 = BakeTextureBytes(
+        source,
+        TextureBakeSettings{ RenderTextureAssetSemantic::BaseColor, RenderTextureAssetColorSpace::Linear },
+        profile,
+        TextureCompressionFamily::Ericsson2,
+        writer);
+    Require(bc.status == TextureBakeStatus::Success &&
+            astc.status == TextureBakeStatus::Success &&
+            etc2.status == TextureBakeStatus::Success,
+        "WebGPU runtime fallback fixture could not bake every package texture family");
+    Require(!RenderDeviceSupportsTextureFormat(bc.format, RenderTextureColorSpace::Linear) &&
+            !RenderDeviceSupportsTextureFormat(astc.format, RenderTextureColorSpace::Linear) &&
+            !RenderDeviceSupportsTextureFormat(etc2.format, RenderTextureColorSpace::Linear),
+        "WebGPU runtime fallback fixture unexpectedly has a compressed-capable bgfx device");
+
+    const std::array<std::uint8_t, 5U> sceneSource{ 's', 'c', 'e', 'n', 'e' };
+    std::vector<std::uint8_t> sceneBlob;
+    Require(asset_bake::EncodeRuntimeSourceBlob(sceneSource, sceneBlob),
+        "WebGPU runtime fallback fixture could not encode its scene source");
+    asset_bake::AssetBakeKey sceneKey{
+        .sourceContentHash = asset_bake::HashBakeBytes(sceneSource),
+        .bakerId = "RuntimeSource",
+        .bakerVersion = "1",
+        .targetProfileId = std::string{ profile.identifier },
+        .targetProfileHash = asset_bake::BakeTargetProfileFingerprint(profile),
+        .settingsHash = asset_bake::HashBakeText(scenePath),
+    };
+    Require(writer.BeginAsset(BakedAssetDescriptor{
+                .key = sceneKey,
+                .assetTypeId = std::string{ asset_bake::kSourceAssetTypeId },
+            }) == asset_bake::BakedAssetSinkStatus::Success &&
+            writer.WritePrimaryBlock(sceneBlob, profile.packageBlockAlignmentBytes) ==
+                asset_bake::BakedAssetSinkStatus::Success &&
+            writer.CommitAsset() == asset_bake::BakedAssetSinkStatus::Success,
+        "WebGPU runtime fallback fixture could not store its scene source");
+
+    asset_bake::RuntimeAssetManifest manifest{
+        .targetProfileId = std::string{ profile.identifier },
+        .targetProfileHash = asset_bake::BakeTargetProfileFingerprint(profile),
+    };
+    manifest.descriptor.targetPlatforms = { "WebGPU" };
+    manifest.settings.name = "WebGpuFallback";
+    manifest.settings.defaultMap = scenePath;
+    manifest.assets = {
+        asset_bake::RuntimeAssetManifestEntry{
+            .id = sceneId,
+            .type = "Scene",
+            .name = "Main",
+            .virtualPath = scenePath,
+            .sourceExtension = ".21kbscene",
+            .contentHash = asset_bake::HashBakeBytes(sceneSource),
+            .artifacts = { asset_bake::RuntimeArtifactReference{
+                .digest = sceneKey.Digest(),
+                .encoding = asset_bake::RuntimeArtifactEncoding::SourceBytes,
+            } },
+        },
+        asset_bake::RuntimeAssetManifestEntry{
+            .id = textureId,
+            .type = "RenderTexture",
+            .name = "Fallback",
+            .virtualPath = texturePath,
+            .sourceExtension = ".png",
+            .contentHash = asset_bake::HashBakeBytes(source),
+            .artifacts = {
+                asset_bake::RuntimeArtifactReference{
+                    .digest = bc.key.Digest(),
+                    .encoding = asset_bake::RuntimeArtifactEncoding::BakedTexture,
+                    .qualifier = "bc-baseline",
+                },
+                asset_bake::RuntimeArtifactReference{
+                    .digest = astc.key.Digest(),
+                    .encoding = asset_bake::RuntimeArtifactEncoding::BakedTexture,
+                    .qualifier = "astc",
+                },
+                asset_bake::RuntimeArtifactReference{
+                    .digest = etc2.key.Digest(),
+                    .encoding = asset_bake::RuntimeArtifactEncoding::BakedTexture,
+                    .qualifier = "etc2",
+                },
+            },
+        },
+    };
+    std::vector<std::uint8_t> manifestBytes;
+    Require(asset_bake::EncodeRuntimeAssetManifest(manifest, manifestBytes) ==
+            asset_bake::RuntimeAssetManifestStatus::Success,
+        "WebGPU runtime fallback fixture manifest could not be encoded");
+    asset_bake::AssetBakeKey manifestKey{
+        .sourceContentHash = asset_bake::HashBakeBytes(manifestBytes),
+        .bakerId = "RuntimeManifest",
+        .bakerVersion = "1",
+        .targetProfileId = std::string{ profile.identifier },
+        .targetProfileHash = asset_bake::BakeTargetProfileFingerprint(profile),
+    };
+    Require(writer.BeginAsset(BakedAssetDescriptor{
+                .key = manifestKey,
+                .assetTypeId = std::string{ asset_bake::kRuntimeManifestAssetTypeId },
+            }) == asset_bake::BakedAssetSinkStatus::Success &&
+            writer.WritePrimaryBlock(manifestBytes, profile.packageBlockAlignmentBytes) ==
+                asset_bake::BakedAssetSinkStatus::Success &&
+            writer.CommitAsset() == asset_bake::BakedAssetSinkStatus::Success &&
+            writer.Finish() == asset_bake::BakedAssetSinkStatus::Success,
+        "WebGPU runtime fallback fixture could not publish its package");
+
+    auto pack = std::make_shared<asset_bake::RuntimeAssetPack>();
+    const asset_bake::RuntimeAssetPackStatus mountStatus = pack->Mount(packPath, profile);
+    Require(mountStatus == asset_bake::RuntimeAssetPackStatus::Success,
+        "WebGPU runtime fallback package could not be mounted");
+    kb::assets::AssetManager manager;
+    Require(manager.RegisterLoader(std::make_unique<RenderTextureAssetLoader>(bgfx::RendererType::WebGPU)),
+        "WebGPU runtime fallback package could not register its texture loader");
+    Require(manager.MountRuntimePack(pack),
+        "WebGPU runtime fallback package could not register its texture loader");
+    const kb::assets::AssetHandle<RenderTextureAssetData> loaded =
+        manager.Load<RenderTextureAssetData>(textureId);
+    Require(loaded.IsLoaded() && !loaded->gpuBlocks.has_value() && loaded->mipCount == 1U &&
+            loaded->rgba8.size() == 16U * 16U * 4U,
+        "WebGPU runtime package did not decode an unsupported compressed texture to RGBA8");
+
+    kb::assets::AssetManager nonWebGpuManager;
+    Require(nonWebGpuManager.RegisterLoader(
+                std::make_unique<RenderTextureAssetLoader>(bgfx::RendererType::Direct3D11)) &&
+            nonWebGpuManager.MountRuntimePack(pack),
+        "Non-WebGPU runtime fallback guard fixture could not mount the package");
+    const kb::assets::AssetHandle<RenderTextureAssetData> rejected =
+        nonWebGpuManager.Load<RenderTextureAssetData>(textureId);
+    Require(!rejected.IsLoaded(),
+        "A packaged non-WebGPU renderer silently decoded an unsupported compressed texture");
+}
+
 #if defined(_WIN32)
 
 // Publishes one baked texture as its own pack and returns the format it was baked to.
@@ -2269,6 +2429,10 @@ void RunBakedTextureGpuUploadTest() {
 
 } // namespace
 
+void RunPackagedWebGpuTextureFallbackTestOnly() {
+    RunPackagedWebGpuTextureFallbackTest();
+}
+
 void RunTextureBakeTests() {
     RunBakedTextureFormatChoiceTest();
     RunBakedTextureEtc2AlphaTest();
@@ -2286,6 +2450,7 @@ void RunTextureBakeTests() {
     RunBakedTextureSinkContractTest();
     RunBakedTextureDeviceCapabilityTest();
     RunBakedTexturePackRoundTripTest();
+    RunPackagedWebGpuTextureFallbackTest();
 #if defined(_WIN32)
     RunBakedTextureEnsuredFromPackTest();
     RunBakedTextureGpuUploadTest();

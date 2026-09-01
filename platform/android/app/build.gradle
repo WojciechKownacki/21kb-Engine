@@ -19,6 +19,10 @@ abstract class ValidateRuntimeAssetPackTask extends DefaultTask {
     @Optional
     abstract Property<String> getValidatorPath()
 
+    @Input
+    @Optional
+    abstract Property<String> getTargetProfile()
+
     @Inject
     protected abstract ExecOperations getExecOperations()
 
@@ -54,35 +58,15 @@ abstract class ValidateRuntimeAssetPackTask extends DefaultTask {
                 "kb_runtime_asset_pack_validator executable, not a container-only validator: " +
                 "${validator}")
         }
+        if (!targetProfile.isPresent() ||
+                !["Android.ASTC.arm64", "Android.ETC2.arm64"].contains(targetProfile.get())) {
+            throw new GradleException(
+                "kbTargetProfile must be Android.ASTC.arm64 or Android.ETC2.arm64")
+        }
 
         execOperations.exec {
-            commandLine validator.absolutePath, "Android.arm64", pack.absolutePath
+            commandLine validator.absolutePath, targetProfile.get(), pack.absolutePath
         }.assertNormalExitValue()
-    }
-}
-
-abstract class ValidateReleaseConfigurationTask extends DefaultTask {
-    @Input
-    abstract ListProperty<String> getMissingSigningValues()
-
-    @Input
-    @Optional
-    abstract Property<String> getSigningStorePath()
-
-    @TaskAction
-    void validateRelease() {
-        if (!missingSigningValues.get().isEmpty()) {
-            throw new GradleException(
-                "Android release signing is incomplete. Configure: " +
-                missingSigningValues.get().join(", ") +
-                ". Use Gradle properties or the documented KB_ANDROID_SIGNING_* " +
-                "environment variables; never commit signing secrets.")
-        }
-        File store = new File(signingStorePath.get())
-        if (!store.isAbsolute() || !store.isFile()) {
-            throw new GradleException(
-                "Android release signing store must be an existing absolute file: ${store}")
-        }
     }
 }
 
@@ -94,6 +78,7 @@ def repositoryRoot = rootProject.layout.projectDirectory.dir("../..")
 def stagedRuntimeAssets = layout.buildDirectory.get().dir("generated/runtime-assets").asFile
 def requestedAssetPackPath = providers.gradleProperty("kbAssetPack")
 def requestedValidatorPath = providers.gradleProperty("kbRuntimeAssetPackValidator")
+def requestedTargetProfile = providers.gradleProperty("kbTargetProfile")
 def requestedApplicationId = propertyOrEnvironment(
     "kbApplicationId", "KB_ANDROID_APPLICATION_ID").orElse("com.kbengine.runtime")
 def requestedVersionCode = propertyOrEnvironment(
@@ -102,34 +87,23 @@ def requestedVersionName = propertyOrEnvironment(
     "kbVersionName", "KB_ANDROID_VERSION_NAME").orElse("1.0")
 def requestedApplicationLabel = propertyOrEnvironment(
     "kbApplicationLabel", "KB_ANDROID_APPLICATION_LABEL").orElse("21kb Game")
-
-def requestedSigningStorePath = propertyOrEnvironment(
-    "kbSigningStoreFile", "KB_ANDROID_SIGNING_STORE_FILE")
-def requestedSigningStorePassword = propertyOrEnvironment(
-    "kbSigningStorePassword", "KB_ANDROID_SIGNING_STORE_PASSWORD")
-def requestedSigningKeyAlias = propertyOrEnvironment(
-    "kbSigningKeyAlias", "KB_ANDROID_SIGNING_KEY_ALIAS")
-def requestedSigningKeyPassword = propertyOrEnvironment(
-    "kbSigningKeyPassword", "KB_ANDROID_SIGNING_KEY_PASSWORD")
-def signingValues = [
-    [requestedSigningStorePath, "kbSigningStoreFile / KB_ANDROID_SIGNING_STORE_FILE"],
-    [requestedSigningStorePassword, "kbSigningStorePassword / KB_ANDROID_SIGNING_STORE_PASSWORD"],
-    [requestedSigningKeyAlias, "kbSigningKeyAlias / KB_ANDROID_SIGNING_KEY_ALIAS"],
-    [requestedSigningKeyPassword, "kbSigningKeyPassword / KB_ANDROID_SIGNING_KEY_PASSWORD"]
-]
-def missingSigningValueNames = signingValues.findAll { value ->
-    !value[0].isPresent() || value[0].get().trim().isEmpty()
-}.collect { value -> value[1] }
-def releaseSigningConfigured = missingSigningValueNames.isEmpty()
+def requestedMinSdk = providers.gradleProperty("kbMinSdk").orElse("28")
+def requestedTargetSdk = providers.gradleProperty("kbTargetSdk").orElse("35")
+def requestedApplicationIcon = providers.gradleProperty("kbApplicationIcon")
+def requestedLegalAssets = providers.gradleProperty("kbLegalAssets")
 
 def applicationIdValue = requestedApplicationId.get().trim()
 def versionNameValue = requestedVersionName.get().trim()
 def applicationLabelValue = requestedApplicationLabel.get().trim()
 int versionCodeValue
+int minSdkValue
+int targetSdkValue
 try {
     versionCodeValue = Integer.parseInt(requestedVersionCode.get().trim())
+    minSdkValue = Integer.parseInt(requestedMinSdk.get().trim())
+    targetSdkValue = Integer.parseInt(requestedTargetSdk.get().trim())
 } catch (NumberFormatException ignored) {
-    throw new GradleException("kbVersionCode / KB_ANDROID_VERSION_CODE must be a positive integer")
+    throw new GradleException("Android version code and SDK levels must be integers")
 }
 if (applicationIdValue.isEmpty()) {
     throw new GradleException("kbApplicationId / KB_ANDROID_APPLICATION_ID must not be empty")
@@ -143,30 +117,42 @@ if (versionNameValue.isEmpty()) {
 if (applicationLabelValue.isEmpty()) {
     throw new GradleException("kbApplicationLabel / KB_ANDROID_APPLICATION_LABEL must not be empty")
 }
+if (minSdkValue < 28 || targetSdkValue < minSdkValue || targetSdkValue > 36) {
+    throw new GradleException("Android SDK levels must satisfy 28 <= minimum <= target <= 36")
+}
+def requestedTaskNames = gradle.startParameter.taskNames.collect { it.toLowerCase(Locale.ROOT) }
+if (requestedTargetProfile.isPresent()) {
+    def expectedFlavor = requestedTargetProfile.get() == "Android.ASTC.arm64" ? "astc" : "etc2"
+    if (requestedTaskNames.any { it.contains("assemble") } &&
+            !requestedTaskNames.any { it.contains(expectedFlavor) }) {
+        throw new GradleException(
+            "The requested Gradle flavor does not match kbTargetProfile=${requestedTargetProfile.get()}")
+    }
+}
+
+def generatedRuntimeResources = layout.buildDirectory.get().dir("generated/runtime-resources").asFile
+String applicationIconResource = "@drawable/kb_launcher"
+if (requestedApplicationIcon.isPresent()) {
+    File icon = new File(requestedApplicationIcon.get())
+    if (!icon.isAbsolute() || !icon.isFile() || !icon.name.toLowerCase(Locale.ROOT).endsWith(".png")) {
+        throw new GradleException("kbApplicationIcon must name an existing absolute PNG file")
+    }
+    applicationIconResource = "@drawable/kb_custom_launcher"
+}
 
 android {
     namespace = "com.kbengine.runtime"
     compileSdk = 36
     ndkVersion = "29.0.14206865"
 
-    signingConfigs {
-        if (releaseSigningConfigured) {
-            release {
-                storeFile = file(requestedSigningStorePath.get())
-                storePassword = requestedSigningStorePassword.get()
-                keyAlias = requestedSigningKeyAlias.get()
-                keyPassword = requestedSigningKeyPassword.get()
-            }
-        }
-    }
-
     defaultConfig {
         applicationId = applicationIdValue
-        minSdk = 28
-        targetSdk = 35
+        minSdk = minSdkValue
+        targetSdk = targetSdkValue
         versionCode = versionCodeValue
         versionName = versionNameValue
         manifestPlaceholders["kbApplicationLabel"] = applicationLabelValue
+        manifestPlaceholders["kbApplicationIcon"] = applicationIconResource
 
         ndk {
             abiFilters += ["arm64-v8a"]
@@ -177,6 +163,7 @@ android {
                 targets += ["kb_game_android"]
                 arguments += [
                     "-DKB_BUILD_ANDROID_HOST=ON",
+                    "-DKB_BUILD_PACKAGED_GAME_HOST=ON",
                     "-DKB_BUILD_RENDERER=ON",
                     "-DBUILD_TESTING=OFF",
                     "-DKB_BUILD_EDITOR=OFF",
@@ -188,6 +175,18 @@ android {
         }
     }
 
+    flavorDimensions += ["texture"]
+    productFlavors {
+        astc {
+            dimension = "texture"
+            externalNativeBuild.cmake.arguments += ["-DKB_ANDROID_TEXTURE_PROFILE=ASTC"]
+        }
+        etc2 {
+            dimension = "texture"
+            externalNativeBuild.cmake.arguments += ["-DKB_ANDROID_TEXTURE_PROFILE=ETC2"]
+        }
+    }
+
     buildTypes {
         debug {
             debuggable = true
@@ -195,9 +194,6 @@ android {
         release {
             debuggable = false
             minifyEnabled = false
-            if (releaseSigningConfigured) {
-                signingConfig = signingConfigs.release
-            }
         }
     }
 
@@ -224,6 +220,7 @@ android {
 
     sourceSets {
         main.assets.srcDir(stagedRuntimeAssets)
+        main.res.srcDir(generatedRuntimeResources)
     }
 }
 
@@ -236,34 +233,44 @@ def validateRuntimeAssetPack = tasks.register(
         "validateRuntimeAssetPack", ValidateRuntimeAssetPackTask) {
     assetPackPath.set(requestedAssetPackPath)
     validatorPath.set(requestedValidatorPath)
-}
-
-def validateReleaseConfiguration = tasks.register(
-        "validateReleaseConfiguration", ValidateReleaseConfigurationTask) {
-    missingSigningValues.set(missingSigningValueNames)
-    if (requestedSigningStorePath.isPresent()) {
-        signingStorePath.set(requestedSigningStorePath.get())
-    }
+    targetProfile.set(requestedTargetProfile)
 }
 
 tasks.register("stageRuntimeAssets", Sync) {
     dependsOn(validateRuntimeAssetPack)
     into(stagedRuntimeAssets)
 
+    doFirst {
+        if (!requestedLegalAssets.isPresent()) {
+            throw new GradleException(
+                "kbLegalAssets must name the staged third-party notices directory")
+        }
+        File legalAssetsDirectory = new File(requestedLegalAssets.get())
+        if (!legalAssetsDirectory.isAbsolute() || !legalAssetsDirectory.isDirectory()) {
+            throw new GradleException("kbLegalAssets must name an existing absolute directory")
+        }
+    }
+
     if (requestedAssetPackPath.isPresent()) {
         from(new File(requestedAssetPackPath.get())) {
             rename { "game.kbpack" }
         }
     }
+    if (requestedLegalAssets.isPresent()) {
+        from(new File(requestedLegalAssets.get()))
+    }
+}
 
+tasks.register("stageApplicationIcon", Sync) {
+    into(new File(generatedRuntimeResources, "drawable-nodpi"))
+    if (requestedApplicationIcon.isPresent()) {
+        from(new File(requestedApplicationIcon.get())) {
+            rename { "kb_custom_launcher.png" }
+        }
+    }
 }
 
 tasks.named("preBuild").configure {
     dependsOn("stageRuntimeAssets")
-}
-
-// Android creates variant lifecycle tasks after this script has been evaluated.
-// Configure the release gate lazily so every release artifact is blocked before work starts.
-tasks.matching { task -> task.name == "preReleaseBuild" }.configureEach {
-    dependsOn(validateReleaseConfiguration)
+    dependsOn("stageApplicationIcon")
 }

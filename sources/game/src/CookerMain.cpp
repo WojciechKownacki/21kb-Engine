@@ -12,7 +12,8 @@ void PrintUsage() {
     std::cerr << "usage: kb_cooker --project <Project.21kbproject|directory> "
                  "--target <profile> --output <file.kbpack> "
                  "[--shaderc <executable>] "
-                 "[--engine-root <directory>] [--cache <directory>]\n";
+                 "[--engine-root <directory>] [--cache <directory>] "
+                 "[--runtime-modules-output <directory>]\n";
 }
 
 [[nodiscard]] bool ReadValue(int argc, char** argv, int& index, std::string& out) {
@@ -42,6 +43,8 @@ int main(int argc, char** argv) {
             request.engineRoot = std::filesystem::path{ value };
         } else if (option == "--cache" && ReadValue(argc, argv, index, value)) {
             request.cacheRoot = std::filesystem::path{ value };
+        } else if (option == "--runtime-modules-output" && ReadValue(argc, argv, index, value)) {
+            request.runtimeModulesOutputDirectory = std::filesystem::path{ value };
         } else {
             PrintUsage();
             return 2;

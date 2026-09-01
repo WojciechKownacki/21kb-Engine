@@ -54,6 +54,14 @@ inline constexpr float kMaximumRuntimeDeltaSeconds = 1.0F / 15.0F;
     std::chrono::steady_clock::time_point previous,
     std::chrono::steady_clock::time_point current) noexcept;
 
+// Advances the frame clock while a host is paused without advancing the
+// simulation. The first frame after resume then measures only active time.
+inline void ResetRuntimeDeltaOrigin(
+    std::chrono::steady_clock::time_point& previous,
+    std::chrono::steady_clock::time_point current) noexcept {
+    previous = current;
+}
+
 // Windows-only conversions for APIs and command lines that use UTF-16. They are
 // total: TryNarrow reports a lossy process-code-page conversion, while the
 // diagnostic variant always returns printable text.

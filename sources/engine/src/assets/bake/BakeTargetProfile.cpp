@@ -8,11 +8,13 @@
 namespace kb::assets::bake {
 namespace {
 
-constexpr std::array<BakeTargetProfile, 4U> kProfiles{
+constexpr std::array<BakeTargetProfile, 6U> kProfiles{
     WindowsX64BakeTargetProfile(),
     LinuxX64BakeTargetProfile(),
-    AndroidArm64BakeTargetProfile(),
+    AndroidAstcArm64BakeTargetProfile(),
+    AndroidEtc2Arm64BakeTargetProfile(),
     WebGlWasm32BakeTargetProfile(),
+    WebGpuWasm32BakeTargetProfile(),
 };
 
 [[nodiscard]] constexpr bool IsPowerOfTwo(std::uint32_t value) noexcept {
@@ -67,6 +69,8 @@ std::string_view ShaderBakePlatformName(ShaderBakePlatform platform) noexcept {
         return "osx";
     case ShaderBakePlatform::WebGl:
         return "asm.js";
+    case ShaderBakePlatform::WebGpu:
+        return "webgpu";
     }
     return {};
 }
@@ -80,6 +84,23 @@ bool TryParseShaderBakePlatform(std::string_view name, ShaderBakePlatform& out) 
         }
     }
     return false;
+}
+
+std::string_view ShaderBakePlatformShadercToken(ShaderBakePlatform platform) noexcept {
+    switch (platform) {
+    case ShaderBakePlatform::Windows:
+        return "windows";
+    case ShaderBakePlatform::Linux:
+        return "linux";
+    case ShaderBakePlatform::Android:
+        return "android";
+    case ShaderBakePlatform::MacOS:
+        return "osx";
+    case ShaderBakePlatform::WebGl:
+    case ShaderBakePlatform::WebGpu:
+        return "asm.js";
+    }
+    return {};
 }
 
 bool IsValidBakeTargetProfile(const BakeTargetProfile& profile) noexcept {

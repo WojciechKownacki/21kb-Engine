@@ -689,6 +689,7 @@ std::string_view RenderMaterialGraphShaderBackendName(RenderMaterialGraphShaderB
     case RenderMaterialGraphShaderBackend::Metal: return "metal";
     case RenderMaterialGraphShaderBackend::Essl: return "essl";
     case RenderMaterialGraphShaderBackend::Glsl: return "glsl";
+    case RenderMaterialGraphShaderBackend::Wgsl: return "wgsl";
     }
     return "spirv";
 }
@@ -701,6 +702,7 @@ std::string_view RenderMaterialGraphShaderBackendProfile(RenderMaterialGraphShad
     case RenderMaterialGraphShaderBackend::Metal: return "metal";
     case RenderMaterialGraphShaderBackend::Essl: return "300_es";
     case RenderMaterialGraphShaderBackend::Glsl: return "440";
+    case RenderMaterialGraphShaderBackend::Wgsl: return "wgsl";
     }
     return "spirv";
 }
@@ -716,6 +718,7 @@ std::optional<RenderMaterialGraphShaderBackend> ParseRenderMaterialGraphShaderBa
     if (text == "metal") return RenderMaterialGraphShaderBackend::Metal;
     if (text == "essl") return RenderMaterialGraphShaderBackend::Essl;
     if (text == "glsl") return RenderMaterialGraphShaderBackend::Glsl;
+    if (text == "wgsl") return RenderMaterialGraphShaderBackend::Wgsl;
     return std::nullopt;
 }
 
@@ -728,10 +731,9 @@ std::optional<RenderMaterialGraphShaderBackend> ParseRenderMaterialGraphShaderBa
 #else
     const std::uint64_t processId = static_cast<std::uint64_t>(getpid());
 #endif
-    std::filesystem::path temporary = destination;
-    temporary += "." + std::string{ suffix } + "." + std::to_string(processId) + "." +
-        std::to_string(serial.fetch_add(1U, std::memory_order_relaxed));
-    return temporary;
+    return destination.parent_path() /
+        (".kb-" + std::string{ suffix } + "." + std::to_string(processId) + "." +
+            std::to_string(serial.fetch_add(1U, std::memory_order_relaxed)));
 }
 
 [[nodiscard]] bool PublishShaderFileAtomically(
@@ -778,6 +780,7 @@ namespace {
     case RenderMaterialGraphShaderBackend::Metal: return ShaderBakeBackend::Metal;
     case RenderMaterialGraphShaderBackend::Essl: return ShaderBakeBackend::Essl;
     case RenderMaterialGraphShaderBackend::Glsl: return ShaderBakeBackend::Glsl;
+    case RenderMaterialGraphShaderBackend::Wgsl: return ShaderBakeBackend::Wgsl;
     }
     return std::nullopt;
 }
@@ -1344,7 +1347,7 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
             UniqueShaderTemporaryPath(binaryPath, "shaderc.tmp");
         std::vector<std::string> arguments{
             "--type", "fragment",
-            "--platform", std::string{ kb::assets::bake::ShaderBakePlatformName(artifact.shaderPlatform) },
+            "--platform", std::string{ kb::assets::bake::ShaderBakePlatformShadercToken(artifact.shaderPlatform) },
             "--profile", std::string{ RenderMaterialGraphShaderBackendProfile(backend) },
             "-f", wrapperPath.generic_string(),
             "-o", stagingBinary.generic_string(),
@@ -1506,7 +1509,7 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
                 UniqueShaderTemporaryPath(vsBinaryPath, "shaderc.tmp");
             std::vector<std::string> arguments{
                 "--type", "vertex",
-                "--platform", std::string{ kb::assets::bake::ShaderBakePlatformName(artifact.shaderPlatform) },
+                "--platform", std::string{ kb::assets::bake::ShaderBakePlatformShadercToken(artifact.shaderPlatform) },
                 "--profile", std::string{ RenderMaterialGraphShaderBackendProfile(backend) },
                 "-f", vsWrapperPath.generic_string(),
                 "-o", stagingVsBinary.generic_string(),

@@ -1,6 +1,26 @@
 # The project bootstrap a runtime host performs before it can tick a scene.
 # It is a library rather than part of kb_game so the standalone runtime sample
 # and the shipped game read a project through the same code.
+if(WIN32)
+    set(KB_GAME_TARGET_PROFILE_ID "Windows.x64")
+elseif(ANDROID)
+    if(KB_ANDROID_TEXTURE_PROFILE STREQUAL "ASTC")
+        set(KB_GAME_TARGET_PROFILE_ID "Android.ASTC.arm64")
+    else()
+        set(KB_GAME_TARGET_PROFILE_ID "Android.ETC2.arm64")
+    endif()
+elseif(EMSCRIPTEN)
+    if(KB_WEB_RENDERER STREQUAL "WEBGPU")
+        set(KB_GAME_TARGET_PROFILE_ID "WebGPU.wasm32")
+    else()
+        set(KB_GAME_TARGET_PROFILE_ID "WebGL.wasm32")
+    endif()
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(KB_GAME_TARGET_PROFILE_ID "Linux.x64")
+else()
+    set(KB_GAME_TARGET_PROFILE_ID "")
+endif()
+
 add_library(kb_game_core STATIC
     src/GameProjectRuntime.cpp
     src/private/GameProjectRuntime.hpp
@@ -10,6 +30,9 @@ add_library(kb_game_core STATIC
 target_include_directories(kb_game_core PUBLIC src/private)
 
 target_link_libraries(kb_game_core PUBLIC kb_renderer)
+target_compile_definitions(kb_game_core PRIVATE
+    "KB_GAME_TARGET_PROFILE_ID=\"${KB_GAME_TARGET_PROFILE_ID}\""
+)
 
 kb_apply_quality_gates(kb_game_core)
 
@@ -46,6 +69,43 @@ if(NOT ANDROID AND NOT EMSCRIPTEN)
     kb_apply_quality_gates(kb_cooker)
 endif()
 
+if(NOT WIN32 AND (KB_BUILD_PACKAGED_GAME_HOST OR (ANDROID AND KB_BUILD_ANDROID_HOST)))
+    add_library(kb_packaged_game_host_core STATIC
+        src/PackagedGameRuntime.cpp
+        src/PackagedRuntimeModules.cpp
+        src/private/PackagedGameRuntime.hpp
+        src/private/PackagedRuntimeModules.hpp
+    )
+    target_include_directories(kb_packaged_game_host_core
+        PUBLIC src/private
+        PRIVATE
+            ${CMAKE_SOURCE_DIR}/sources/plugins/physics_jolt
+            ${CMAKE_SOURCE_DIR}/sources/plugins/audio_miniaudio
+            ${CMAKE_SOURCE_DIR}/sources/plugins/basic_lighting
+            ${CMAKE_SOURCE_DIR}/sources/plugins/21kb_particle
+    )
+    target_compile_definitions(kb_packaged_game_host_core PRIVATE
+        "KB_GAME_TARGET_PROFILE_ID=\"${KB_GAME_TARGET_PROFILE_ID}\""
+    )
+    target_link_libraries(kb_packaged_game_host_core
+        PUBLIC kb_game_core
+        PRIVATE
+            kb_physics_jolt_plugin
+            kb_audio_miniaudio_plugin
+            kb_basic_lighting_plugin
+            kb_21kb_particle_plugin
+    )
+    set_target_properties(kb_packaged_game_host_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    kb_apply_quality_gates(kb_packaged_game_host_core)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        # Renderer.hpp exposes bx assertion macros that deliberately use the
+        # established GNU empty-variadic extension.
+        target_compile_options(kb_packaged_game_host_core
+            PRIVATE -Wno-gnu-zero-variadic-macro-arguments
+        )
+    endif()
+endif()
+
 if(ANDROID AND KB_BUILD_ANDROID_HOST)
     find_package(game-activity REQUIRED CONFIG)
 
@@ -56,10 +116,7 @@ if(ANDROID AND KB_BUILD_ANDROID_HOST)
     target_link_libraries(kb_game_android
         PRIVATE
             kb_game_core
-            kb_physics_jolt_plugin
-            kb_audio_miniaudio_plugin
-            kb_basic_lighting_plugin
-            kb_21kb_particle_plugin
+            kb_packaged_game_host_core
             game-activity::game-activity_static
             android
             log
@@ -86,6 +143,58 @@ if(ANDROID AND KB_BUILD_ANDROID_HOST)
     # diagnostic in the host translation unit that includes Renderer.hpp.
     target_compile_options(kb_game_android
         PRIVATE -Wno-gnu-zero-variadic-macro-arguments
+    )
+endif()
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND KB_BUILD_PACKAGED_GAME_HOST)
+    find_package(X11 REQUIRED)
+    add_executable(kb_game_linux src/linux/LinuxGameHost.cpp)
+    target_link_libraries(kb_game_linux PRIVATE kb_packaged_game_host_core X11::X11)
+    set_target_properties(kb_game_linux PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+    )
+    kb_apply_quality_gates(kb_game_linux)
+endif()
+
+if(EMSCRIPTEN AND KB_BUILD_PACKAGED_GAME_HOST)
+    if(KB_WEB_RENDERER STREQUAL "WEBGPU")
+        set(KB_GAME_WEB_TARGET kb_game_webgpu)
+    else()
+        set(KB_GAME_WEB_TARGET kb_game_webgl)
+    endif()
+    add_executable(${KB_GAME_WEB_TARGET} src/web/WebGameHost.cpp)
+    target_link_libraries(${KB_GAME_WEB_TARGET} PRIVATE kb_packaged_game_host_core)
+    target_link_options(${KB_GAME_WEB_TARGET} PRIVATE
+        "-sFETCH=1"
+        "-sALLOW_MEMORY_GROWTH=1"
+        "-sMAXIMUM_MEMORY=2147483648"
+        "-sSTACK_SIZE=1048576"
+        "-sASSERTIONS=0"
+    )
+    if(KB_WEB_RENDERER STREQUAL "WEBGPU")
+        target_compile_definitions(${KB_GAME_WEB_TARGET} PRIVATE KB_WEB_RENDERER_WEBGPU=1)
+        target_compile_options(${KB_GAME_WEB_TARGET} PRIVATE "--use-port=emdawnwebgpu")
+        target_link_options(${KB_GAME_WEB_TARGET} PRIVATE
+            "--use-port=emdawnwebgpu"
+            "-sASYNCIFY=1"
+            "-sASYNCIFY_STACK_SIZE=65536"
+        )
+    else()
+        target_link_options(${KB_GAME_WEB_TARGET} PRIVATE
+            "-sMIN_WEBGL_VERSION=2"
+            "-sMAX_WEBGL_VERSION=2"
+            "-sFULL_ES3=1"
+        )
+    endif()
+    set_target_properties(${KB_GAME_WEB_TARGET} PROPERTIES
+        OUTPUT_NAME "Game"
+        SUFFIX ".html"
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+    )
+    kb_apply_quality_gates(${KB_GAME_WEB_TARGET})
+    target_compile_options(${KB_GAME_WEB_TARGET} PRIVATE
+        -Wno-gnu-zero-variadic-macro-arguments
+        -Wno-dollar-in-identifier-extension
     )
 endif()
 
@@ -128,6 +237,14 @@ kb_target_copy_bgfx_runtime_shaders(kb_game)
 kb_target_stage_material_graph_shader_cache(kb_game)
 
 if(BUILD_TESTING)
+    add_library(kb_windows_runtime_module_test_plugin SHARED
+        tests/WindowsRuntimeModuleTestPlugin.cpp
+    )
+    target_include_directories(kb_windows_runtime_module_test_plugin
+        PRIVATE ${CMAKE_SOURCE_DIR}/sources/engine/include
+    )
+    kb_apply_quality_gates(kb_windows_runtime_module_test_plugin)
+
     # The shared bootstrap, run directly. The launch test drives the executable
     # against a project with no plugins, no physics layers and no input mapping,
     # so it cannot reach most of what kb_game_core does.
@@ -136,11 +253,28 @@ if(BUILD_TESTING)
     )
 
     target_link_libraries(kb_game_core_tests PRIVATE kb_game_core kb_cooker_core)
+    add_dependencies(kb_game_core_tests
+        kb_windows_runtime_module_test_plugin
+        kb_physics_jolt_plugin
+    )
+    target_compile_definitions(kb_game_core_tests PRIVATE
+        "KB_WINDOWS_RUNTIME_MODULE_TEST_PLUGIN_PATH=\"$<TARGET_FILE:kb_windows_runtime_module_test_plugin>\""
+        "KB_WINDOWS_PHYSICS_PLUGIN_PATH=\"$<TARGET_FILE:kb_physics_jolt_plugin>\""
+        "KB_GAME_CORE_TEST_ROOT=\"${CMAKE_BINARY_DIR}/game-core-test-scratch\""
+    )
 
     add_test(NAME kb_game_core COMMAND $<TARGET_FILE:kb_game_core_tests>)
+    add_test(NAME kb_windows_runtime_module_package
+        COMMAND $<TARGET_FILE:kb_game_core_tests> --windows-runtime-modules
+    )
     set_tests_properties(kb_game_core PROPERTIES
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
         LABELS "game;runtime"
+        TIMEOUT 300
+    )
+    set_tests_properties(kb_windows_runtime_module_package PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        LABELS "game;runtime;packaging"
         TIMEOUT 120
     )
 
