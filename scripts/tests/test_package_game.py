@@ -171,6 +171,32 @@ class PackageGameTests(unittest.TestCase):
                 package_game._extract_linux_result(archive_path, destination)
             self.assertFalse((root / "escape").exists())
 
+    def test_linux_guest_smoke_cannot_add_runtime_artifacts_to_result_archive(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_text:
+            root = Path(temporary_text)
+            stage = root / "stage"
+            stage.mkdir()
+            (stage / "Game").write_bytes(b"\x7fELF")
+            (stage / "Game.kbpack").write_bytes(b"pack")
+
+            def run(arguments: list[object], cwd: Path, timeout: int) -> str:
+                self.assertEqual(["xvfb-run", "-a", cwd / "Game", "--frames=1"], arguments)
+                self.assertEqual(180, timeout)
+                artifact = cwd / "Saved/Logs/bgfx-pso-trace.log"
+                artifact.parent.mkdir(parents=True)
+                artifact.write_text("epoch_ms=1\n", encoding="ascii")
+                return "frames=1 rendered=1 shutdown=clean"
+
+            with mock.patch.object(package_linux_guest, "_run", side_effect=run):
+                output = package_linux_guest._run_linux_first_frame(stage, "Game", "xvfb-run")
+
+            self.assertEqual("frames=1 rendered=1 shutdown=clean", output)
+            self.assertFalse((stage / "Saved").exists())
+            archive_path = root / "result.tar.gz"
+            package_linux_guest._create_archive(stage, archive_path)
+            with tarfile.open(archive_path, "r:gz") as archive:
+                self.assertNotIn("Saved/Logs/bgfx-pso-trace.log", archive.getnames())
+
     def test_linux_runtime_tar_marks_only_the_root_player_executable(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_text:
             root = Path(temporary_text)

@@ -190,6 +190,13 @@ def _create_archive(source: Path, destination: Path) -> None:
     os.replace(temporary, destination)
 
 
+def _run_linux_first_frame(stage: Path, executable_name: str, xvfb: str) -> str:
+    with tempfile.TemporaryDirectory(prefix="21kb-linux-smoke-") as temporary_text:
+        runtime = Path(temporary_text) / "runtime"
+        shutil.copytree(stage, runtime)
+        return _run([xvfb, "-a", runtime / executable_name, "--frames=1"], runtime, 180)
+
+
 def _load_json(path: Path) -> dict[str, object]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
@@ -509,7 +516,7 @@ def main() -> int:
             dependencies = _run(["ldd", player], stage, 120)
             if "not found" in dependencies:
                 raise GuestError("Linux player has unresolved shared-library dependencies")
-            smoke = _run([xvfb, "-a", player, "--frames=1"], stage, 180)
+            smoke = _run_linux_first_frame(stage, args.executable_name, xvfb)
             if "frames=1" not in smoke or "rendered=1" not in smoke or "shutdown=clean" not in smoke:
                 raise GuestError("Linux player did not prove a clean first frame")
             receipt = {
