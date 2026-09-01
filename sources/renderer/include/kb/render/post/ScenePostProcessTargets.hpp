@@ -22,7 +22,7 @@ struct ScenePostProcessTargetsDesc {
 
 class ScenePostProcessTargets {
 public:
-    static constexpr std::size_t kTargetCount = 8U;
+    static constexpr std::size_t kTargetCount = 9U;
 
     ScenePostProcessTargets() = default;
     ~ScenePostProcessTargets();
@@ -43,17 +43,19 @@ private:
         SelectionMask = 0U,
         Bloom = 1U,
         Ping = 2U,
-        MotionVectors = 3U,
-        TemporalHistory0 = 4U,
-        TemporalHistory1 = 5U,
-        Combine = 6U,
-        Final = 7U,
+        BloomScratch = 3U,
+        MotionVectors = 4U,
+        TemporalHistory0 = 5U,
+        TemporalHistory1 = 6U,
+        Combine = 7U,
+        Final = 8U,
     };
 
     [[nodiscard]] bool CreateTargets(std::uint32_t width, std::uint32_t height, SceneColorFormatPolicy colorPolicy);
     [[nodiscard]] bool CreateBloomPyramidTargets(std::uint32_t width, std::uint32_t height);
 
     std::array<bgfx::TextureHandle, kTargetCount> textures_{{
+        BGFX_INVALID_HANDLE,
         BGFX_INVALID_HANDLE,
         BGFX_INVALID_HANDLE,
         BGFX_INVALID_HANDLE,
@@ -72,6 +74,7 @@ private:
         BGFX_INVALID_HANDLE,
         BGFX_INVALID_HANDLE,
         BGFX_INVALID_HANDLE,
+        BGFX_INVALID_HANDLE,
     }};
     std::array<bgfx::FrameBufferHandle, RenderPostProcessTargetBinding::kMaxBloomPyramidMips> bloomMipFrameBuffers_{{
         BGFX_INVALID_HANDLE,
@@ -82,6 +85,14 @@ private:
         BGFX_INVALID_HANDLE,
     }};
     std::array<bgfx::FrameBufferHandle, RenderPostProcessTargetBinding::kMaxBloomPyramidMips> pingMipFrameBuffers_{{
+        BGFX_INVALID_HANDLE,
+        BGFX_INVALID_HANDLE,
+        BGFX_INVALID_HANDLE,
+        BGFX_INVALID_HANDLE,
+        BGFX_INVALID_HANDLE,
+        BGFX_INVALID_HANDLE,
+    }};
+    std::array<bgfx::FrameBufferHandle, RenderPostProcessTargetBinding::kMaxBloomPyramidMips> bloomScratchMipFrameBuffers_{{
         BGFX_INVALID_HANDLE,
         BGFX_INVALID_HANDLE,
         BGFX_INVALID_HANDLE,
