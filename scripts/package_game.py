@@ -1027,12 +1027,19 @@ def _stage_web(args: argparse.Namespace, cmake: Path, pack: Path, stage: Path, j
     )
 
 
-def _create_deterministic_tar(source: Path, destination: Path) -> None:
+def _create_deterministic_tar(
+    source: Path,
+    destination: Path,
+    *,
+    executable_name: str | None = None,
+) -> None:
     with destination.open("wb") as output:
         with gzip.GzipFile(filename="", mode="wb", fileobj=output, mtime=0) as compressed:
             with tarfile.open(fileobj=compressed, mode="w", format=tarfile.PAX_FORMAT) as archive:
                 for relative, path in regular_files(source):
                     info = archive.gettarinfo(str(path), arcname=relative)
+                    if relative == executable_name:
+                        info.mode = 0o755
                     info.uid = info.gid = 0
                     info.uname = info.gname = ""
                     info.mtime = 0
@@ -1239,12 +1246,21 @@ def _stage_target(args: argparse.Namespace, cmake: Path, pack: Path, stage: Path
     _verify_linux_stage(linux_stage, args)
     if args.configuration == "Release":
         archive = stage / f"{args.executable_name}-linux-x64.tar.gz"
-        _create_deterministic_tar(linux_stage, archive)
+        _create_deterministic_tar(
+            linux_stage,
+            archive,
+            executable_name=args.executable_name,
+        )
         _verify_linux_release_archive(archive, args.executable_name)
     return StageResult(tuple(tools), _first_frame_result(args.target, stage))
 
 
 def _verify_linux_release_archive(archive: Path, executable_name: str) -> None:
+    with tarfile.open(archive, "r:gz") as package:
+        player_members = [member for member in package.getmembers() if member.name == executable_name]
+        if (len(player_members) != 1 or not player_members[0].isfile() or
+                player_members[0].mode & 0o777 != 0o755):
+            raise PackagingError("Linux Release archive player must be a root executable with mode 0755")
     with tempfile.TemporaryDirectory(prefix="21kb-linux-verify-", dir=archive.parent) as temporary_text:
         extracted = Path(temporary_text)
         _extract_linux_result(archive, extracted)
@@ -1269,7 +1285,11 @@ def _launch_linux(args: argparse.Namespace) -> None:
     launch_job = make_job_directory(launch_root)
     try:
         archive = launch_job / "published-package.tar.gz"
-        _create_deterministic_tar(args.output, archive)
+        _create_deterministic_tar(
+            args.output,
+            archive,
+            executable_name=args.executable_name,
+        )
         if sys.platform == "linux":
             run_checked(
                 [

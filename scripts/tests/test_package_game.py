@@ -170,6 +170,68 @@ class PackageGameTests(unittest.TestCase):
                 package_game._extract_linux_result(archive_path, destination)
             self.assertFalse((root / "escape").exists())
 
+    def test_linux_runtime_tar_marks_only_the_root_player_executable(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_text:
+            root = Path(temporary_text)
+            source = root / "source"
+            source.mkdir()
+            (source / "Game").write_bytes(b"\x7fELF")
+            (source / "data.bin").write_bytes(b"data")
+            nested = source / "nested"
+            nested.mkdir()
+            (nested / "Game").write_bytes(b"nested")
+            archive_path = root / "package.tar.gz"
+
+            package_game._create_deterministic_tar(
+                source,
+                archive_path,
+                executable_name="Game",
+            )
+
+            with tarfile.open(archive_path, "r:gz") as archive:
+                modes = {member.name: member.mode & 0o777 for member in archive.getmembers()}
+            self.assertEqual(0o755, modes["Game"])
+            self.assertEqual(0, modes["data.bin"] & 0o111)
+            self.assertEqual(0, modes["nested/Game"] & 0o111)
+
+    def test_linux_release_archive_requires_root_player_mode_0755(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_text:
+            root = Path(temporary_text)
+            archive_path = root / "release.tar.gz"
+
+            def write_archive(player_mode: int) -> None:
+                with tarfile.open(archive_path, "w:gz") as archive:
+                    for name, data, mode in (
+                        ("Game", b"\x7fELF", player_mode),
+                        ("Game.kbpack", b"pack", 0o644),
+                        ("linux-build.receipt.json", b"{}\n", 0o644),
+                    ):
+                        info = tarfile.TarInfo(name)
+                        info.size = len(data)
+                        info.mode = mode
+                        archive.addfile(info, io.BytesIO(data))
+
+            write_archive(0o644)
+            with self.assertRaisesRegex(PackagingError, "mode 0755"):
+                package_game._verify_linux_release_archive(archive_path, "Game")
+
+            write_archive(0o755)
+            package_game._verify_linux_release_archive(archive_path, "Game")
+
+    def test_linux_runtime_rejects_a_non_executable_player_before_hashing(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_text:
+            root = Path(temporary_text)
+            (root / "Game").write_bytes(b"\x7fELF")
+            with mock.patch.object(package_linux_guest.os, "access", return_value=False), \
+                    mock.patch.object(package_linux_guest, "_sha256") as sha256:
+                with self.assertRaisesRegex(package_linux_guest.GuestError, "not executable"):
+                    package_linux_guest._verify_linux_runtime(
+                        root,
+                        "Game",
+                        {"configuration": "Development", "inputs": {"engineSha256": "0" * 64}},
+                    )
+            sha256.assert_not_called()
+
     def test_linux_launch_accepts_only_an_exact_sealed_unit(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_text:
             root = Path(temporary_text) / "package"
