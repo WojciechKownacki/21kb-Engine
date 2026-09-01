@@ -5,12 +5,19 @@ on:
     branches: [Release, main, master, "1.0"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      linux_package:
+        description: Run the Linux package acceptance gate
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
 
 jobs:
   build-and-test:
+    if: github.event_name != 'workflow_dispatch' || !inputs.linux_package
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     strategy:
@@ -131,3 +138,120 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
           }
+
+  linux-package:
+    if: github.event_name == 'workflow_dispatch' && inputs.linux_package
+    name: Linux package acceptance
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out exact sources
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Verify checkout identity
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Install Linux runtime and build dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            build-essential cmake ninja-build python3 \
+            libx11-dev libgl1-mesa-dev libvulkan1 mesa-vulkan-drivers \
+            xvfb xauth
+
+      - name: Recreate verified package fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture="$RUNNER_TEMP/camera-fixture"
+          mkdir -p "$fixture/Assets/Scenes"
+          printf '%s' 'MjFLQlBSSgAFAAAABAAAADIxa2IVAAAAQ2FtZXJhUnVudGltZVNlbGZUZXN0AAAAAAAAAAAGAAAAQXNzZXRzJAAAAC9HYW1lL1NjZW5lcy9DYW1lcmFSdW50aW1lLjIxa2JzY2VuZQAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAA' | base64 --decode > "$fixture/Project.21kbproject"
+          printf '%s' 'MjFLQlBNVAABAAAAFQAAAENhbWVyYVJ1bnRpbWVTZWxmVGVzdAQAAAAyMWtiJAAAAC9HYW1lL1NjZW5lcy9DYW1lcmFSdW50aW1lLjIxa2JzY2VuZRMAAABQcm9qZWN0LjIxa2Jwcm9qZWN0gQAAAAAAAAAFHamhN6T380J44xQAAAAAAAAAAAAAAAA=' | base64 --decode > "$fixture/Project.meta"
+          printf '%s' 'MjFLQlNDTgAEAAAAEwAAAHNjZW5lOkNhbWVyYVJ1bnRpbWUNAAAAQ2FtZXJhUnVudGltZQYAAABFZGl0b3ICAAAAAgAAAAEAAAAAAAAADwAAAEZhbGxiYWNrIENhbWVyYQAAAAAAAAAA/////wAAwMAAAAAAAACAwAAAAAAAAAAAAAAAAAAAgD8AAIA/AACAPwAAgD8BAQAAAAAAAAAAAJJCAAAgQc3MzD0AAPpDAQAAAAAKAAAA/////wAAAAAAAAAAAAAAAAAAAAACAAAAAAAAAA8AAABTZWxlY3RlZCBDYW1lcmEAAAAAAAAAAP////8AAMBAAAAAQAAAgMAAAAAAAAAAAAAAAAAAAIA/AACAPwAAgD8AAIA/AQEAAAAAAAAAAAAUQgAAYEEAAIA+AICgQwEBAAAAZAAAAP////8AAAAAAAAAAAAAAAAAAAAA' | base64 --decode > "$fixture/Assets/Scenes/CameraRuntime.21kbscene"
+          printf '%s' 'MjFLQlNNVAABAAAAEwAAAHNjZW5lOkNhbWVyYVJ1bnRpbWUNAAAAQ2FtZXJhUnVudGltZQYAAABFZGl0b3IXAAAAQ2FtZXJhUnVudGltZS4yMWtic2NlbmVQAQAAAAAAAN09H7uDbRtb+7k7ZwIAAAACAAAAAAAAAA==' | base64 --decode > "$fixture/Assets/Scenes/CameraRuntime.meta"
+          cd "$fixture"
+          sha256sum --check <<'EOF'
+          543e1b12d7985fe21649ed0dfd182bd0dc61014095c8ba27eff6349cf11f2ba5  Assets/Scenes/CameraRuntime.21kbscene
+          66afb398c531eb13b380396a6d2b87c61e8de9095131699e6ba9e8e275bfcb23  Assets/Scenes/CameraRuntime.meta
+          1da2bec03c298b6262fb2117c3bcaee4fb398024ebda34c07d40120deeceb9f1  Project.21kbproject
+          63b20fa9489bd2685c4ada024543a49707ca23fbb5241bc094e143cd307d337c  Project.meta
+          EOF
+
+      - name: Configure package host tools
+        shell: bash
+        run: |
+          cmake -S . -B build/package-linux-host -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DKB_BUILD_EDITOR=OFF \
+            -DKB_BUILD_RENDERER=ON \
+            -DKB_BUILD_PACKAGED_GAME_HOST=OFF \
+            -DKB_BUILD_PROVIDER_MODULES_AS_DLL=OFF \
+            -DKB_BUILD_GRAPH_SHADERC=OFF \
+            -DKB_GENERATE_RENDERER_SHADERS=OFF \
+            -DBUILD_TESTING=OFF
+
+      - name: Package and prove Linux first frame
+        shell: bash
+        run: |
+          python3 scripts/package_game.py \
+            --project "$RUNNER_TEMP/camera-fixture/Project.21kbproject" \
+            --target Linux.x64 \
+            --configuration Development \
+            --output "$GITHUB_WORKSPACE/build/package-linux-final/PackagingAcceptance-Linux.x64" \
+            --engine-root "$GITHUB_WORKSPACE" \
+            --build-root "$GITHUB_WORKSPACE/build/package-linux-host" \
+            --product-name "Packaging Acceptance" \
+            --publisher "21kb" \
+            --version 1.2.3 \
+            --executable-name PackagingAcceptance
+
+      - name: Verify sealed Linux package
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os
+          import sys
+          from pathlib import Path
+
+          sys.path.insert(0, str(Path("scripts").resolve()))
+          from package_contract import engine_source_fingerprint, verify_unit
+          from package_game import _project_source_fingerprint
+
+          unit = Path("build/package-linux-final/PackagingAcceptance-Linux.x64")
+          receipt = verify_unit(unit)
+          assert receipt["target"] == "Linux.x64"
+          assert receipt["configuration"] == "Development"
+          fixture = Path(os.environ["RUNNER_TEMP"]) / "camera-fixture" / "Project.21kbproject"
+          assert receipt["inputs"] == {
+              "engineSha256": engine_source_fingerprint(Path(".")),
+              "projectSha256": _project_source_fingerprint(fixture),
+          }
+          evidence = receipt["runtimeFirstFrame"]
+          assert evidence["probe"] == "linux-build-receipt"
+          assert evidence["observed"] == "frames=1 rendered=1 shutdown=clean"
+          assert evidence["payloadManifestSha256"] == receipt["manifestSha256"]
+          assert (unit / "linux-build.receipt.json").is_file()
+          assert "E:\\" not in (unit / "package.receipt.json").read_text(encoding="utf-8")
+          print(receipt["manifestSha256"])
+          PY
+
+      - name: Archive sealed Linux package
+        shell: bash
+        run: |
+          tar --sort=name --mtime='UTC 1970-01-01' \
+            --owner=0 --group=0 --numeric-owner \
+            -czf build/PackagingAcceptance-Linux.x64.tar.gz \
+            -C build/package-linux-final PackagingAcceptance-Linux.x64
+          tar -tzf build/PackagingAcceptance-Linux.x64.tar.gz >/dev/null
+
+      - name: Upload sealed Linux package
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-package-acceptance-${{ github.sha }}
+          path: build/PackagingAcceptance-Linux.x64.tar.gz
+          if-no-files-found: error
+          retention-days: 7
