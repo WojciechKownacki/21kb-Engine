@@ -564,13 +564,23 @@ bool AssetManager::RequestLoadAsync(AssetId id, AssetUnloadPolicy policy) {
     const std::string payloadTypeName = loader->PayloadType().name();
     auto state = std::make_shared<AsyncPreparedState>();
     asyncLoadErrors_.erase(id.value);
-    StartAsyncWorker();
     asyncLoads_.emplace(id.value, AsyncLoadRecord{
         .state = state,
         .policy = policy,
         .generation = generation,
     });
     try {
+#if defined(__EMSCRIPTEN__)
+        PrepareAsyncLoad(AsyncLoadJob{
+            .loader = loader,
+            .metadata = *registered,
+            .resolvedPath = resolvedPath,
+            .runtimePack = runtimePack_,
+            .typeName = payloadTypeName,
+            .state = std::move(state),
+        });
+#else
+        StartAsyncWorker();
         {
             std::scoped_lock lock{ asyncWorkerMutex_ };
             asyncWorkerQueue_.push_back(AsyncLoadJob{
@@ -583,6 +593,7 @@ bool AssetManager::RequestLoadAsync(AssetId id, AssetUnloadPolicy policy) {
             });
         }
         asyncWorkerWake_.notify_one();
+#endif
     } catch (...) {
         asyncLoads_.erase(id.value);
         throw;
@@ -642,8 +653,18 @@ void AssetManager::RestartAsyncLoads() {
         const std::string typeName = loader->PayloadType().name();
         const std::shared_ptr<AsyncPreparedState> state = record.state;
         asyncLoads_.emplace(assetValue, std::move(record));
-        StartAsyncWorker();
         try {
+#if defined(__EMSCRIPTEN__)
+            PrepareAsyncLoad(AsyncLoadJob{
+                .loader = loader,
+                .metadata = *metadata,
+                .resolvedPath = resolvedPath,
+                .runtimePack = runtimePack_,
+                .typeName = typeName,
+                .state = state,
+            });
+#else
+            StartAsyncWorker();
             std::scoped_lock lock{ asyncWorkerMutex_ };
             asyncWorkerQueue_.push_back(AsyncLoadJob{
                 .loader = loader,
@@ -653,12 +674,42 @@ void AssetManager::RestartAsyncLoads() {
                 .typeName = typeName,
                 .state = state,
             });
+#endif
         } catch (...) {
             asyncLoads_.erase(assetValue);
             throw;
         }
+#if !defined(__EMSCRIPTEN__)
         asyncWorkerWake_.notify_one();
+#endif
     }
+}
+
+void AssetManager::PrepareAsyncLoad(AsyncLoadJob job) noexcept {
+    AsyncPreparedAsset prepared;
+    try {
+        std::scoped_lock lock{ loaderExecutionMutex_ };
+        prepared = AsyncPreparedAsset{
+            .result = job.loader->Load(AssetLoadRequest{
+                .metadata = job.metadata,
+                .resolvedPath = job.resolvedPath,
+                .runtimePack = std::move(job.runtimePack),
+            }),
+            .typeName = job.typeName,
+        };
+    } catch (const std::exception& exception) {
+        prepared = AsyncPreparedAsset{
+            .result = AssetLoadResult{ .asset = {}, .error = "Asset loader threw an exception: " + std::string{ exception.what() } },
+            .typeName = job.typeName,
+        };
+    } catch (...) {
+        prepared = AsyncPreparedAsset{
+            .result = AssetLoadResult{ .asset = {}, .error = "Asset loader threw a non-standard exception" },
+            .typeName = job.typeName,
+        };
+    }
+    std::scoped_lock stateLock{ job.state->mutex };
+    job.state->prepared = std::move(prepared);
 }
 
 void AssetManager::RunAsyncWorker() noexcept {
@@ -676,30 +727,7 @@ void AssetManager::RunAsyncWorker() noexcept {
             asyncWorkerQueue_.pop_front();
         }
 
-        AsyncPreparedAsset prepared;
-        try {
-            std::scoped_lock lock{ loaderExecutionMutex_ };
-            prepared = AsyncPreparedAsset{
-                .result = job.loader->Load(AssetLoadRequest{
-                    .metadata = job.metadata,
-                    .resolvedPath = job.resolvedPath,
-                    .runtimePack = std::move(job.runtimePack),
-                }),
-                .typeName = job.typeName,
-            };
-        } catch (const std::exception& exception) {
-            prepared = AsyncPreparedAsset{
-                .result = AssetLoadResult{ .asset = {}, .error = "Asset loader threw an exception: " + std::string{ exception.what() } },
-                .typeName = job.typeName,
-            };
-        } catch (...) {
-            prepared = AsyncPreparedAsset{
-                .result = AssetLoadResult{ .asset = {}, .error = "Asset loader threw a non-standard exception" },
-                .typeName = job.typeName,
-            };
-        }
-        std::scoped_lock stateLock{ job.state->mutex };
-        job.state->prepared = std::move(prepared);
+        PrepareAsyncLoad(std::move(job));
     }
 }
 

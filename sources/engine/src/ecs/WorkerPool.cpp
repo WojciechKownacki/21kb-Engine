@@ -183,6 +183,9 @@ public:
 
     explicit WorkerPoolState(WorkerPoolConfig config)
         : config_(config) {
+#if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)
+        config_.singleThreaded = true;
+#endif
         config_.workerCount = config_.singleThreaded ? 1U : WorkerPool::ResolveWorkerCount(config_.workerCount);
     }
 

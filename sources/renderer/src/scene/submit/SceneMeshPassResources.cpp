@@ -836,18 +836,19 @@ SceneMeshPassProgramResolution SceneMeshPassResources::ResolveMeshPassProgram(
                 (pass == MeshPassType::ShadowDepth ? "ShadowDepth" :
                     (pass == MeshPassType::MotionVectors ? "MotionVectors" : GraphMeshPassName(pass))),
             skinned);
-        resolution.program = skinned
+        const bool registryProgram = skinned || pass == MeshPassType::MotionVectors;
+        resolution.program = registryProgram
             ? programRegistry_.Find(resolution.key)
             : ((pass == MeshPassType::ShadowDepth || pass == MeshPassType::Depth)
                 ? shadowProgram_
                 : (pass == MeshPassType::GBuffer ? gbufferProgram_ : meshProgram_));
-        if (skinned && !bgfx::isValid(resolution.program)) {
+        if (registryProgram && !bgfx::isValid(resolution.program)) {
             resolution.program = programRegistry_.Acquire(resolution.key);
             if (bgfx::isValid(resolution.program)) {
                 AppendUniqueValue(residentProgramKeys_, resolution.key);
             }
         }
-        if (skinned && bgfx::isValid(resolution.program)) {
+        if (registryProgram && bgfx::isValid(resolution.program)) {
             AppendUniqueValue(usedProgramKeys_, resolution.key);
         }
         resolution.materialProgramIdentity = MaterialProgramKeyIdentityHash(resolution.key);

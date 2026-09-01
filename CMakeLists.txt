@@ -28,6 +28,8 @@ include(FetchContent)
 option(KB_BUILD_EDITOR "Build the Win32 editor application and editor tests" ${WIN32})
 option(KB_BUILD_RENDERER "Build the bgfx renderer module and smoke executable" ${WIN32})
 option(KB_BUILD_ANDROID_HOST "Build the GameActivity shared-library host" OFF)
+set(KB_WEB_RENDERER "WEBGL" CACHE STRING "Browser package renderer: WEBGL or WEBGPU")
+set_property(CACHE KB_WEB_RENDERER PROPERTY STRINGS WEBGL WEBGPU)
 option(KB_ENABLE_SANITIZERS "Build project targets with AddressSanitizer and UndefinedBehaviorSanitizer where supported" OFF)
 option(KB_ENGINE_ENABLE_NATIVE_AVX2 "Opt in to AVX2 code generation for engine targets and consumers; produced binaries require AVX2-capable CPUs" OFF)
 option(KB_GENERATE_RENDERER_SHADERS "Generate renderer shaders with bgfx shaderc instead of staging prebuilt shaders" OFF)
@@ -35,6 +37,10 @@ option(KB_BUILD_GRAPH_SHADERC "Build bgfx shaderc for the Material Editor graph 
 option(KB_STRICT_OWN_WARNINGS "Treat warnings from first-party targets as build errors" ON)
 set(KB_DXCOMPILER_RUNTIME "" CACHE FILEPATH "Path to dxcompiler.dll copied next to shaderc for DXIL graph cooking")
 option(KB_BUILD_PROVIDER_MODULES_AS_DLL "Build provider engine modules as hot-reloadable DLL/shared libraries instead of static libraries" ON)
+
+if(EMSCRIPTEN AND NOT KB_WEB_RENDERER MATCHES "^(WEBGL|WEBGPU)$")
+    message(FATAL_ERROR "KB_WEB_RENDERER must be WEBGL or WEBGPU")
+endif()
 
 set(KB_MSVC_ASAN_RUNTIME_DIR "" CACHE PATH "Directory containing the MSVC-compatible LLVM AddressSanitizer runtime")
 set(KB_MSVC_STL_ASAN_RUNTIME_DIR "" CACHE PATH "Directory containing the MSVC AddressSanitizer STL runtime")
@@ -196,6 +202,19 @@ set(FLECS_STATIC ON CACHE BOOL "Build Flecs as a static library" FORCE)
 set(FLECS_SHARED OFF CACHE BOOL "Do not build Flecs as a shared library" FORCE)
 set(FLECS_TESTS OFF CACHE BOOL "Do not build Flecs tests with the engine" FORCE)
 add_subdirectory(third_party/flecs third_party/flecs EXCLUDE_FROM_ALL)
+if(EMSCRIPTEN)
+    # The browser player uses Flecs storage, systems and its pipeline. Exclude
+    # editor-facing addons (HTTP, REST, JSON, script, metrics and units) so
+    # world startup does not bootstrap unused modules on the browser main loop.
+    target_compile_definitions(flecs_static PUBLIC
+        FLECS_CUSTOM_BUILD
+        FLECS_LOG
+        FLECS_MODULE
+        FLECS_NO_OS_API_IMPL
+        FLECS_PIPELINE
+        FLECS_SYSTEM
+    )
+endif()
 
 set(ENABLE_ALL_WARNINGS OFF CACHE BOOL "Do not enable Jolt warnings for the vendored build" FORCE)
 set(INTERPROCEDURAL_OPTIMIZATION OFF CACHE BOOL "Do not enable Jolt LTO from the vendored build" FORCE)
@@ -336,7 +355,7 @@ endif()
 if(KB_BUILD_RENDERER)
     if(NOT WIN32 AND NOT ANDROID AND NOT EMSCRIPTEN AND
        NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
-        message(FATAL_ERROR "KB_BUILD_RENDERER currently supports Win32, Linux, Android, and Emscripten/WebGL bgfx integrations. Configure with -DKB_BUILD_RENDERER=OFF on other hosts.")
+        message(FATAL_ERROR "KB_BUILD_RENDERER currently supports Win32, Linux, Android, and Emscripten browser integrations. Configure with -DKB_BUILD_RENDERER=OFF on other hosts.")
     endif()
 
     set(BGFX_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
@@ -355,7 +374,17 @@ if(KB_BUILD_RENDERER)
     set(BGFX_BUILD_TOOLS_TEXTURE OFF CACHE BOOL "" FORCE)
     set(BGFX_INSTALL OFF CACHE BOOL "" FORCE)
     set(BGFX_CUSTOM_TARGETS OFF CACHE BOOL "" FORCE)
+    if(EMSCRIPTEN)
+        if(KB_WEB_RENDERER STREQUAL "WEBGPU")
+            set(BGFX_CONFIG_RENDERER_WEBGPU ON CACHE BOOL "" FORCE)
+        else()
+            set(BGFX_CONFIG_RENDERER_WEBGPU OFF CACHE BOOL "" FORCE)
+        endif()
+    endif()
     kb_add_bgfx_subdirectory()
+    if(EMSCRIPTEN AND KB_WEB_RENDERER STREQUAL "WEBGL")
+        target_compile_definitions(bgfx PRIVATE BGFX_GL_CONFIG_BLIT_EMULATION=1)
+    endif()
 
     include(CMake/KbBgfxRuntimeShaders.cmake)
     add_subdirectory(sources/renderer renderer)

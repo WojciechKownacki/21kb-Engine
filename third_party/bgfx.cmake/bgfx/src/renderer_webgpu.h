@@ -24,8 +24,12 @@
 #	define WGPU_CHECK(_call) _call
 #endif // BGFX_CONFIG_DEBUG
 
-#define WGPU_SKIP_DECLARATIONS
-#include <dawn/include/webgpu/webgpu.h>
+#if BX_PLATFORM_EMSCRIPTEN
+#	include <webgpu/webgpu.h>
+#else
+#	define WGPU_SKIP_DECLARATIONS
+#	include <dawn/include/webgpu/webgpu.h>
+#endif // BX_PLATFORM_EMSCRIPTEN
 
 #if USE_WEBGPU_DYNAMIC_LIB
 #	define WGPU_IMPORT                                                              \
@@ -710,19 +714,24 @@ namespace bgfx { namespace wgpu
 		SwapChainWGPU()
 			: m_nwh(NULL)
 			, m_surface(NULL)
+			, m_texture(NULL)
 			, m_textureView(NULL)
 			, m_msaaTextureView(NULL)
 			, m_depthStencilView(NULL)
+			, m_configured(false)
 		{
 		}
 
 		bool create(void* _nwh, const Resolution& _resolution);
 		void destroy();
-		void update(void* _nwh, const Resolution& _resolution);
+		bool update(void* _nwh, const Resolution& _resolution);
 
 		bool createSurface(void* _nwh);
 
 		bool configure(const Resolution& _resolution);
+		bool acquire();
+		void releaseCurrentTexture();
+		void discardConfiguration();
 		void present();
 
 		void* m_nwh;
@@ -730,9 +739,11 @@ namespace bgfx { namespace wgpu
 		WGPUSurfaceConfiguration m_surfaceConfig;
 
 		WGPUSurface m_surface;
+		WGPUTexture m_texture;
 		WGPUTextureView m_textureView;
 		WGPUTextureView m_msaaTextureView;
 		WGPUTextureView m_depthStencilView;
+		bool m_configured;
 
 		uint8_t m_formatDepthStencil;
 	};
@@ -756,7 +767,7 @@ namespace bgfx { namespace wgpu
 		void preReset();
 		void postReset();
 
-		void update(const Resolution& _resolution);
+		bool update(const Resolution& _resolution);
 
 		void present();
 

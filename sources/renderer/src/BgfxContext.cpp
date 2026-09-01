@@ -17,6 +17,10 @@
 #include <unordered_map>
 #include <utility>
 
+#if defined(__EMSCRIPTEN__)
+#include <emscripten/emscripten.h>
+#endif
+
 #if defined(_WIN32)
 #include <Windows.h>
 #elif defined(__ANDROID__)
@@ -177,6 +181,14 @@ public:
 
     void fatal(const char* filePath, std::uint16_t line, bgfx::Fatal::Enum code, const char* message) override {
         WriteBgfxFatalLog(fatalLogPath_, filePath, line, code, message);
+#if defined(__EMSCRIPTEN__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdollar-in-identifier-extension"
+        EM_ASM({
+            location.hash = 'kb-error-renderer-' + encodeURIComponent(UTF8ToString($0));
+        }, message != nullptr ? message : "unknown renderer failure");
+#pragma clang diagnostic pop
+#endif
 #if defined(_WIN32)
         if (code == bgfx::Fatal::DeviceLost) {
             MessageBoxA(nullptr, message != nullptr ? message : "bgfx device lost", "21kb Engine - bgfx fatal", MB_OK | MB_ICONERROR);
@@ -384,7 +396,11 @@ bool BgfxContext::InitializeImpl(std::uint32_t width, std::uint32_t height, void
     height_ = height;
     initialized_ = true;
     capabilityReport_ = BuildRendererCapabilityReport(preferredBackend);
+#if defined(__EMSCRIPTEN__)
+    bgfx::setDebug(BGFX_DEBUG_NONE);
+#else
     bgfx::setDebug(BGFX_DEBUG_TEXT);
+#endif
     return true;
 }
 

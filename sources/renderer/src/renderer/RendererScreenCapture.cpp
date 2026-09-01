@@ -95,7 +95,10 @@ void ConvertToRgba8(bgfx::TextureFormat::Enum format, const std::vector<std::uin
 } // namespace
 
 RendererScreenCapture::RendererScreenCapture()
-    : worker_{[this] { WorkerLoop(); }} {}
+#if !defined(__EMSCRIPTEN__)
+    : worker_{[this] { WorkerLoop(); }}
+#endif
+{}
 
 RendererScreenCapture::~RendererScreenCapture() { StopWorker(); }
 
@@ -294,12 +297,20 @@ void RendererScreenCapture::QueueEncoding() {
         .format = format_,
         .bytes = std::move(bytes_),
     };
+#if defined(__EMSCRIPTEN__)
+    encoding_ = true;
+    completedEncode_ = EncodeCompletion{
+        .generation = job.generation,
+        .succeeded = EncodeAndWritePng(job),
+    };
+#else
     {
         std::scoped_lock lock{workerMutex_};
         pendingEncode_ = std::move(job);
         encoding_ = true;
     }
     workerWake_.notify_one();
+#endif
 }
 
 void RendererScreenCapture::PumpEncodingCompletion() {
