@@ -25,6 +25,7 @@
 #include "scene/EditorPluginsState.hpp"
 #include "scene/EditorProjectSettingsState.hpp"
 #include "settings/EditorConfigurationStore.hpp"
+#include "settings/EditorBuildGameSettingsStore.hpp"
 #include "scene/EditorScriptEditorState.hpp"
 #include "scene/EditorSceneObjectEditTypes.hpp"
 #include "scene/EditorSceneDocumentIdentity.hpp"
@@ -124,6 +125,9 @@ struct EditorMaterialPreviewTelemetry;
 class EditorMaterialGraphCookService;
 struct EditorMaterialGraphCookResult;
 struct EditorTerrainConfiguration;
+class EditorProjectPackageService;
+struct EditorPackageSnapshot;
+enum class BuildGameField : std::uint8_t;
 
 enum class EditorMaterialPreviewSurface : std::uint8_t {
     Inspector,
@@ -389,6 +393,31 @@ public:
     [[nodiscard]] int BuildGameHoveredRow() const noexcept;
     [[nodiscard]] bool SetBuildGameHover(int section, int row) noexcept;
     [[nodiscard]] bool SetBuildGameScrollOffset(int offset, int maxOffset) noexcept;
+    [[nodiscard]] kb::packaging::PackagingTarget BuildGameTarget() const noexcept;
+    [[nodiscard]] const EditorBuildGameSettings& BuildGameSettings() const noexcept;
+    [[nodiscard]] EditorPackageSnapshot BuildGamePackageSnapshot() const;
+    [[nodiscard]] bool IsBuildGameTextEditing() const noexcept;
+    [[nodiscard]] BuildGameField BuildGameEditingField() const noexcept;
+    [[nodiscard]] std::string_view BuildGameEditBuffer() const noexcept;
+    [[nodiscard]] bool HasBuildGameStorePassword() const noexcept;
+    [[nodiscard]] bool HasBuildGameKeyPassword() const noexcept;
+    void ClearBuildGameSigningPasswords() noexcept;
+    [[nodiscard]] bool BeginBuildGameTextEdit(BuildGameField field);
+    [[nodiscard]] bool AppendBuildGameText(wchar_t character);
+    [[nodiscard]] bool InsertBuildGameText(std::string_view text);
+    [[nodiscard]] bool BackspaceBuildGameText();
+    [[nodiscard]] bool SelectAllBuildGameText() noexcept;
+    [[nodiscard]] bool CommitBuildGameTextEdit();
+    void CancelBuildGameTextEdit() noexcept;
+    [[nodiscard]] bool FocusAdjacentBuildGameTextField(bool backwards);
+    [[nodiscard]] bool SetBuildGameOutputDirectory(const std::filesystem::path& path);
+    [[nodiscard]] bool SetBuildGameBuildRoot(const std::filesystem::path& path);
+    [[nodiscard]] bool SetBuildGameToolchainDirectory(BuildGameField field, const std::filesystem::path& path);
+    [[nodiscard]] bool SetBuildGameLocalFile(BuildGameField field, const std::filesystem::path& path);
+    [[nodiscard]] bool ImportBuildGameApplicationIcon(const std::filesystem::path& path);
+    [[nodiscard]] bool ToggleBuildGameLaunchAfterBuild();
+    [[nodiscard]] bool StartBuildGamePackage();
+    void CancelBuildGamePackage() noexcept;
     [[nodiscard]] bool IsHierarchyScrollbarDragging() const noexcept;
     [[nodiscard]] bool SetHierarchyScrollOffset(int offset, int maxOffset) noexcept;
     void BeginHierarchyScrollbarDrag(int y) noexcept;
@@ -1503,6 +1532,14 @@ private:
     int buildGameHoveredProfile_ = -1;
     int buildGameHoveredSection_ = -1;
     int buildGameHoveredRow_ = -1;
+    EditorBuildGameSettings buildGameSettings_{};
+    std::unique_ptr<EditorProjectPackageService> buildGamePackageService_;
+    BuildGameField buildGameEditingField_{};
+    std::string buildGameEditBuffer_;
+    std::string buildGameEditOriginal_;
+    bool buildGameEditSelectAll_ = false;
+    std::string buildGameStorePassword_;
+    std::string buildGameKeyPassword_;
     int hierarchyScrollbarDragY_ = 0;
     int hierarchyScrollbarDragStartOffset_ = 0;
     bool hierarchyScrollbarDragging_ = false;

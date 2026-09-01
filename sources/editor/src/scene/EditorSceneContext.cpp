@@ -73,6 +73,7 @@
 #include "engine/modules/EngineModuleHost.hpp"
 #include "engine/project/ProjectDescriptorWriter.hpp"
 #include "project/EditorProjectPaths.hpp"
+#include "packaging/EditorProjectPackageService.hpp"
 #include "engine/script/ScriptApiCatalog.hpp"
 #include "engine/script/ScriptModule.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
@@ -1204,6 +1205,21 @@ EditorSceneContext::EditorSceneContext()
     , animationPreviewScene_(std::make_unique<EditorAnimationPreviewScene>())
     , graphShaderCacheRoot_((EditorProjectPaths::ProjectRoot() / ".cache" / "graph_shaders").generic_string())
     , materialGraphCookService_(std::make_unique<EditorMaterialGraphCookService>(EditorMaterialGraphCookConfig::Resolve(graphShaderCacheRoot_))) {
+    const EditorBuildGameSettingsLoadResult packageSettings = EditorBuildGameSettingsStore::Load(
+        EditorBuildGameSettingsStore::FilePath(EditorProjectPaths::ProjectRoot()));
+    if (packageSettings.Succeeded()) {
+        if (packageSettings.found) {
+            buildGameSettings_ = packageSettings.settings;
+        }
+    } else {
+        console_.Error("Packaging", packageSettings.error);
+    }
+#if defined(KB_EDITOR_BUILD_ROOT)
+    if (buildGameSettings_.buildRoot.empty()) {
+        buildGameSettings_.buildRoot = KB_EDITOR_BUILD_ROOT;
+    }
+#endif
+    buildGamePackageService_ = std::make_unique<EditorProjectPackageService>();
     if (projectBootstrap_.succeeded) {
         console_.Info("Project", projectBootstrap_.created ? "Created project descriptor." : "Loaded project descriptor.");
         if (!projectBootstrap_.settingsError.empty()) {
@@ -1252,6 +1268,7 @@ EditorSceneContext::EditorSceneContext()
 }
 
 EditorSceneContext::~EditorSceneContext() {
+    ClearBuildGameSigningPasswords();
     if (assetImportWorker_.joinable()) {
         assetImportWorker_.join();
     }
@@ -2473,9 +2490,12 @@ int EditorSceneContext::BuildGameSelectedTarget() const noexcept {
 }
 
 bool EditorSceneContext::SetBuildGameSelectedTarget(int target) noexcept {
-    if (target < 0 || buildGameSelectedTarget_ == target) {
+    if (target < 0 || target >= static_cast<int>(kb::packaging::PackagingTargets().size()) ||
+        buildGameSelectedTarget_ == target) {
         return false;
     }
+    CancelBuildGameTextEdit();
+    ClearBuildGameSigningPasswords();
     buildGameSelectedTarget_ = target;
     return true;
 }
@@ -2485,9 +2505,11 @@ int EditorSceneContext::BuildGameSelectedProfile() const noexcept {
 }
 
 bool EditorSceneContext::SetBuildGameSelectedProfile(int profile) noexcept {
-    if (profile < 0 || buildGameSelectedProfile_ == profile) {
+    if (profile < 0 || profile > 1 || buildGameSelectedProfile_ == profile) {
         return false;
     }
+    CancelBuildGameTextEdit();
+    ClearBuildGameSigningPasswords();
     buildGameSelectedProfile_ = profile;
     return true;
 }

@@ -2,6 +2,8 @@
 
 #include "kb/editor/theme/EditorTheme.hpp"
 
+#include <cstdint>
+
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -13,14 +15,11 @@ namespace kb::editor {
 #if defined(_WIN32)
 
 class EditorSceneContext;
+enum class BuildGameField : std::uint8_t;
 
 // Paints the Build Game panel: the build targets and profiles on the left, the selected
-// target's project, application, content, signing and output settings on the right, and
+// target's project, application, content, signing, toolchain and output settings on the right, and
 // the status line and build action along the foot.
-//
-// Presentation only for now. Nothing here reads or writes project state, and no row
-// responds to the pointer; the panel shows the shape of a build and the values it will
-// ask for, and the packaging service is wired to it separately.
 class BuildGamePanelRenderer {
 public:
     void Paint(HDC dc, const RECT& content, const EditorTheme& theme, EditorSceneContext& sceneContext) const;
@@ -44,8 +43,9 @@ public:
         int profile = -1;
     };
     [[nodiscard]] static SidebarHit HitTestSidebar(const RECT& content, int x, int y);
+    [[nodiscard]] static BuildGameField FieldForHit(const EditorSceneContext& sceneContext, RowHit hit) noexcept;
+    [[nodiscard]] static bool HitTestBuildButton(const RECT& content, int x, int y) noexcept;
 
-    [[nodiscard]] static int SectionCount() noexcept;
 };
 
 #endif

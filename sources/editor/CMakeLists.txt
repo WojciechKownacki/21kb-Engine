@@ -27,6 +27,7 @@ add_executable(kb_editor WIN32
     src/app/EditorAssetBrowserDeleteConfirmPointerHandler.cpp
     src/app/EditorAssetBrowserDoubleClickHandler.cpp
     src/app/EditorAssetBrowserInputHandler.cpp
+    src/app/EditorBuildGameInputHandler.cpp
     src/private/app/ParticleEditorPanelInteraction.hpp
     src/app/ParticleEditorPanelInteraction.cpp
     src/app/EditorAssetBrowserPointerHandler.cpp
@@ -55,6 +56,11 @@ add_executable(kb_editor WIN32
     src/app/EditorHierarchySearchInputHandler.cpp
     src/app/EditorSkeletalMeshTreeSearchInputHandler.cpp
     src/app/EditorMouseWheelRouter.cpp
+    src/settings/EditorBuildGameSettingsStore.cpp
+    src/packaging/EditorProjectPackageService.cpp
+    src/packaging/EditorAndroidSigningBroker.cpp
+    src/packaging/EditorPackageProcessEnvironment.cpp
+    src/packaging/EditorProjectIconTransaction.cpp
     src/app/inspector/EditorInspectorPointerController.cpp
     src/app/plugins/EditorPluginsPointerController.cpp
     src/app/EditorWindowLifecycleHandler.cpp
@@ -594,6 +600,17 @@ add_executable(kb_editor WIN32
     src/private/scene/EditorPluginCatalog.hpp
     src/private/scene/EditorPluginsState.hpp
     src/private/scene/EditorProjectSettingsState.hpp
+    src/private/app/EditorBuildGameInputHandler.hpp
+    src/private/settings/EditorBuildGameSettingsStore.hpp
+    src/private/packaging/EditorAndroidSigningBroker.hpp
+    src/private/packaging/EditorPackageInputValidation.hpp
+    src/private/packaging/EditorPackageProcessEnvironment.hpp
+    src/private/packaging/EditorProjectIconTransaction.hpp
+    src/private/packaging/EditorProjectPackageService.hpp
+    src/private/platform/win32/EditorBuildGameFileDialog.hpp
+    src/private/rendering/BuildGamePanelLayout.hpp
+    src/private/rendering/BuildGamePanelModel.hpp
+    src/private/rendering/BuildGamePanelRenderer.hpp
     src/private/scene/EditorScriptAssetGateway.hpp
     src/private/scene/EditorScriptEditorState.hpp
     src/private/scene/EditorSceneAssetBrowserCommands.hpp
@@ -663,6 +680,7 @@ add_executable(kb_editor WIN32
     src/platform/win32/EditorMeshAssetPickerDialog.cpp
     src/platform/win32/EditorSceneDirtyPrompt.cpp
     src/platform/win32/EditorSceneFileDialog.cpp
+    src/platform/win32/EditorBuildGameFileDialog.cpp
     src/platform/win32/EditorWindowClassRegistry.cpp
     src/platform/win32/Win32ErrorReporter.cpp
     src/platform/win32/Win32InputDebugLogger.cpp
@@ -767,6 +785,7 @@ add_executable(kb_editor WIN32
     src/rendering/ProjectFilesToolbarRenderer.cpp
     src/rendering/ProjectFilesTreeRenderer.cpp
     src/rendering/BuildGamePanelLayout.cpp
+    src/rendering/BuildGamePanelModel.cpp
     src/rendering/BuildGamePanelRenderer.cpp
     src/rendering/PluginsPanelRenderer.cpp
     src/rendering/ProjectSettingsPanelLayout.cpp
@@ -843,6 +862,7 @@ add_executable(kb_editor WIN32
     src/scene/EditorSceneAudioAssetActions.cpp
     src/scene/EditorSceneCommandController.cpp
     src/scene/EditorSceneContext.cpp
+    src/scene/EditorSceneBuildGame.cpp
     src/scene/EditorParticleEditorHost.cpp
     src/private/scene/ParticleEditorBakeHostCommand.hpp
     src/scene/ParticleEditorBakeHostCommand.cpp
@@ -1033,6 +1053,10 @@ if(TARGET kb_terrain_editor_plugin)
 endif()
 
 target_link_libraries(kb_editor PRIVATE user32 gdi32 gdiplus ole32 dwmapi msimg32 comdlg32 shell32 xinput)
+target_compile_definitions(kb_editor PRIVATE
+    "KB_EDITOR_ENGINE_ROOT=\"${CMAKE_SOURCE_DIR}\""
+    "KB_EDITOR_BUILD_ROOT=\"${CMAKE_BINARY_DIR}\""
+)
 
 # MAT-30: graph shader cook toolchain (shaderc + engine shader sources) wired into the editor so
 # EditorMaterialGraphCookService can cook authored graphs into per-backend binaries at runtime.
@@ -1092,6 +1116,25 @@ kb_target_copy_bgfx_runtime_shaders(kb_editor)
 kb_apply_quality_gates(kb_editor)
 
 if(BUILD_TESTING)
+    add_executable(kb_editor_build_game_tests
+        tests/EditorBuildGameTests.cpp
+        src/rendering/BuildGamePanelLayout.cpp
+        src/rendering/BuildGamePanelModel.cpp
+        src/settings/EditorBuildGameSettingsStore.cpp
+        src/packaging/EditorProjectPackageService.cpp
+        src/packaging/EditorAndroidSigningBroker.cpp
+        src/packaging/EditorPackageProcessEnvironment.cpp
+        src/packaging/EditorProjectIconTransaction.cpp
+    )
+    target_include_directories(kb_editor_build_game_tests PRIVATE include src/private)
+    target_compile_definitions(kb_editor_build_game_tests PRIVATE
+        "KB_EDITOR_BUILD_GAME_TEST_ROOT=\"${CMAKE_BINARY_DIR}/editor-build-game-test-scratch\""
+    )
+    target_link_libraries(kb_editor_build_game_tests PRIVATE kb_engine ole32 shell32)
+    add_test(NAME kb_editor_build_game_tests COMMAND $<TARGET_FILE:kb_editor_build_game_tests>)
+    set_tests_properties(kb_editor_build_game_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+    kb_apply_quality_gates(kb_editor_build_game_tests)
+
     add_executable(kb_editor_particle_authoring_tests
         tests/ParticleEditorAuthoringTests.cpp
         src/rendering/ParticleEditorPanelLayout.cpp

@@ -9,6 +9,9 @@ EditorPendingTextEditCommitter::EditorPendingTextEditCommitter(EditorSceneContex
     : sceneContext_(sceneContext) {}
 
 bool EditorPendingTextEditCommitter::CommitPendingEdits() {
+    const bool committedBuildGame = sceneContext_.IsBuildGameTextEditing()
+        ? sceneContext_.CommitBuildGameTextEdit()
+        : false;
     const bool committedNewFolder = CommitPendingNewAssetFolder();
     const bool committedHierarchyRename = CommitPendingHierarchyRename();
     const bool committedMaterialGraphConstant = sceneContext_.IsMaterialGraphConstantInlineEditing()
@@ -17,7 +20,8 @@ bool EditorPendingTextEditCommitter::CommitPendingEdits() {
     const bool committedMaterialGraphRename = sceneContext_.IsMaterialGraphNodeRenameEditing()
         ? sceneContext_.CommitMaterialGraphNodeRenameEdit()
         : false;
-    return committedNewFolder || committedHierarchyRename || committedMaterialGraphConstant || committedMaterialGraphRename;
+    return committedBuildGame || committedNewFolder || committedHierarchyRename ||
+        committedMaterialGraphConstant || committedMaterialGraphRename;
 }
 
 bool EditorPendingTextEditCommitter::CommitPendingNewAssetFolder() {

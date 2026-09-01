@@ -24,12 +24,12 @@ namespace {
     return wide;
 }
 
-[[nodiscard]] std::string ToEditorText(const wchar_t* text) {
+[[nodiscard]] std::string ToEditorText(const wchar_t* text, std::size_t maximumLength) {
     std::string result;
     if (text == nullptr) {
         return result;
     }
-    for (const wchar_t* cursor = text; *cursor != L'\0'; ++cursor) {
+    for (const wchar_t* cursor = text; *cursor != L'\0' && result.size() < maximumLength; ++cursor) {
         if (*cursor >= 32 && *cursor < 127) {
             result.push_back(static_cast<char>(*cursor));
         }
@@ -88,7 +88,7 @@ bool EditorTextInputShortcuts::CopyToClipboard(HWND owner, std::string_view text
     return true;
 }
 
-std::optional<std::string> EditorTextInputShortcuts::PasteFromClipboard(HWND owner) {
+std::optional<std::string> EditorTextInputShortcuts::PasteFromClipboard(HWND owner, std::size_t maximumLength) {
     if (!OpenClipboard(owner)) {
         return std::nullopt;
     }
@@ -105,7 +105,7 @@ std::optional<std::string> EditorTextInputShortcuts::PasteFromClipboard(HWND own
         return std::nullopt;
     }
 
-    std::string result = ToEditorText(text);
+    std::string result = ToEditorText(text, maximumLength);
     GlobalUnlock(handle);
     CloseClipboard();
     return result;

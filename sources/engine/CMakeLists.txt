@@ -71,6 +71,7 @@ add_library(kb_engine STATIC
     include/engine/project/ProjectDescriptorReader.hpp
     include/engine/project/ProjectDescriptorWriter.hpp
     include/engine/project/ProjectManager.hpp
+    include/engine/packaging/PackagingTargetCatalog.hpp
     include/engine/save/SaveDomain.hpp
     include/engine/save/SaveGame.hpp
     include/engine/save/SaveGameMigration.hpp
@@ -522,6 +523,7 @@ add_library(kb_engine STATIC
     src/project/ProjectSettingsStore.cpp
     src/project/ProjectDescriptorWriter.cpp
     src/project/ProjectManager.cpp
+    src/packaging/PackagingTargetCatalog.cpp
     src/ecs/ComponentRegistry.cpp
     src/ecs/CommandBuffer.cpp
     src/ecs/ComponentEventMapper.cpp
