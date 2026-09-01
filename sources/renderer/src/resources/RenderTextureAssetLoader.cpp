@@ -11,6 +11,7 @@
 #include <bx/allocator.h>
 #include <bx/error.h>
 
+#include <algorithm>
 #include <atomic>
 #include <array>
 #include <cstddef>
