@@ -1,4 +1,5 @@
 #include "GameProjectRuntime.hpp"
+#include "PackagedRuntimeModuleContract.hpp"
 
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/AssetMetadata.hpp"
@@ -46,17 +47,9 @@ namespace kb::game {
 
 namespace {
 
-[[nodiscard]] kb::assets::bake::BakeTargetProfile HostBakeTargetProfile() noexcept {
-#if defined(_WIN32)
-    return kb::assets::bake::WindowsX64BakeTargetProfile();
-#elif defined(__ANDROID__)
-    return kb::assets::bake::AndroidArm64BakeTargetProfile();
-#elif defined(__EMSCRIPTEN__)
-    return kb::assets::bake::WebGlWasm32BakeTargetProfile();
-#else
-    return kb::assets::bake::LinuxX64BakeTargetProfile();
+#ifndef KB_GAME_TARGET_PROFILE_ID
+#define KB_GAME_TARGET_PROFILE_ID ""
 #endif
-}
 
 [[nodiscard]] std::string LowerExtension(const std::filesystem::path& path) {
     std::string extension = path.extension().string();
@@ -66,14 +59,74 @@ namespace {
     return extension;
 }
 
+#if defined(_WIN32)
+[[nodiscard]] bool ResolvePackagedWindowsRuntimeModules(
+    kb::project::ProjectDescriptor& descriptor,
+    const std::filesystem::path& projectRoot,
+    std::ostream& err) {
+    std::error_code rootError;
+    const std::filesystem::path absoluteRoot =
+        std::filesystem::absolute(projectRoot, rootError).lexically_normal();
+    const std::filesystem::path canonicalRoot =
+        std::filesystem::weakly_canonical(absoluteRoot, rootError);
+    if (rootError || !std::filesystem::is_directory(canonicalRoot, rootError) || rootError) {
+        err << "packaged runtime root is unavailable\n";
+        return false;
+    }
+    for (kb::project::ProjectPluginReference& plugin : descriptor.plugins) {
+        if (!plugin.enabled) {
+            continue;
+        }
+        const std::filesystem::path relativePath{ plugin.binaryPath };
+        if (!IsSafeWindowsRuntimeModuleRelativePath(relativePath)) {
+            err << "packaged Windows runtime module path is not a safe relative DLL: "
+                << plugin.name << '\n';
+            return false;
+        }
+        const std::filesystem::path unresolvedPath = canonicalRoot / relativePath;
+        std::error_code moduleError;
+        const std::filesystem::file_status unresolvedStatus =
+            std::filesystem::symlink_status(unresolvedPath, moduleError);
+        if (moduleError || unresolvedStatus.type() != std::filesystem::file_type::regular) {
+            err << "packaged Windows runtime module DLL is missing: " << plugin.name << '\n';
+            return false;
+        }
+        const std::filesystem::path resolvedPath =
+            std::filesystem::weakly_canonical(unresolvedPath, moduleError);
+        const std::filesystem::path relativeToRoot =
+            resolvedPath.lexically_relative(canonicalRoot);
+        if (moduleError || relativeToRoot.empty() || relativeToRoot.is_absolute() ||
+            *relativeToRoot.begin() == "..") {
+            err << "packaged Windows runtime module DLL escapes the package root: "
+                << plugin.name << '\n';
+            return false;
+        }
+        std::optional<std::string> exact = TryNarrow(resolvedPath.native());
+        if (!exact.has_value()) {
+            err << "packaged Windows runtime module path cannot be represented exactly: "
+                << plugin.name << '\n';
+            return false;
+        }
+        plugin.binaryPath = *std::move(exact);
+    }
+    return true;
+}
+#endif
+
 [[nodiscard]] bool ReadPackagedGameProjectRuntime(
     const std::filesystem::path& packPath,
     std::string_view sceneOverride,
     GameProjectRuntime& runtime,
     std::ostream& err) {
+    kb::assets::bake::BakeTargetProfile targetProfile{};
+    if (!kb::assets::bake::TryFindBakeTargetProfile(
+            KB_GAME_TARGET_PROFILE_ID, targetProfile)) {
+        err << "runtime host has no valid package target identity\n";
+        return false;
+    }
     auto pack = std::make_shared<kb::assets::bake::RuntimeAssetPack>();
     const kb::assets::bake::RuntimeAssetPackStatus status =
-        pack->Mount(packPath, HostBakeTargetProfile());
+        pack->Mount(packPath, targetProfile);
     if (status != kb::assets::bake::RuntimeAssetPackStatus::Success) {
         err << "runtime package could not be mounted: "
             << kb::assets::bake::ToString(status) << '\n';
@@ -111,6 +164,13 @@ bool ReadMountedGameProjectRuntime(
     GameProjectRuntime packaged{};
     packaged.descriptor = manifest.descriptor;
     packaged.projectRoot = std::move(projectRoot);
+#if defined(_WIN32)
+    if (std::string_view{ KB_GAME_TARGET_PROFILE_ID } == "Windows.x64" &&
+        !ResolvePackagedWindowsRuntimeModules(
+            packaged.descriptor, packaged.projectRoot, err)) {
+        return false;
+    }
+#endif
     packaged.gameName = manifest.settings.gameName.empty()
         ? manifest.settings.name
         : manifest.settings.gameName;

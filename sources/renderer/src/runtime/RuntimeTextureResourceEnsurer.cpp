@@ -107,7 +107,8 @@ void RuntimeTextureResourceEnsurer::Ensure(
         // texture is deterministically bound in the same submit.
         std::shared_ptr<const RenderTextureAssetData> asset;
         if (packaged) {
-            RenderTextureAssetLoader loader;
+            const bgfx::RendererType::Enum rendererType = bgfx::getRendererType();
+            RenderTextureAssetLoader loader{ rendererType };
             kb::assets::AssetLoadResult loaded = loader.Load(kb::assets::AssetLoadRequest{
                 .metadata = *metadata,
                 .resolvedPath = {},
@@ -135,15 +136,13 @@ void RuntimeTextureResourceEnsurer::Ensure(
         if (asset != nullptr && asset->gpuBlocks.has_value()) {
             const bool deviceSupports = RenderDeviceSupportsTextureFormat(asset->gpuBlocks->format, colorSpace);
             if (SelectRenderTextureUploadPath(*asset, deviceSupports) == RenderTextureUploadPath::DecodedRgba8) {
-                if (packaged) {
-                    // A release package must carry a native variant for the active device.
-                    // Expanding cooked blocks on the CPU would hide an invalid target matrix.
-                    asset.reset();
+                if (!packaged || CanDecodeUnsupportedPackagedTexture(runtimePack.get(), bgfx::getRendererType())) {
+                    std::optional<RenderTextureAssetData> decoded = DecodeRenderTextureToRgba8(*asset);
+                    asset = decoded.has_value()
+                        ? std::make_shared<const RenderTextureAssetData>(std::move(*decoded))
+                        : nullptr;
                 } else {
-                std::optional<RenderTextureAssetData> decoded = DecodeRenderTextureToRgba8(*asset);
-                asset = decoded.has_value()
-                    ? std::make_shared<const RenderTextureAssetData>(std::move(*decoded))
-                    : nullptr;
+                    asset.reset();
                 }
             }
         }

@@ -109,8 +109,18 @@ enum class RenderTextureUploadPath : std::uint8_t {
 // unbaked texture goes through.
 [[nodiscard]] std::optional<RenderTextureAssetData> DecodeRenderTextureToRgba8(const RenderTextureAssetData& asset);
 
+// CPU decode of an unsupported packaged block format is a WebGPU-only contract: that API's
+// compression features are optional. Every other package target must carry a native format.
+[[nodiscard]] bool CanDecodeUnsupportedPackagedTexture(
+    const kb::assets::bake::RuntimeAssetPack* pack,
+    bgfx::RendererType::Enum rendererType) noexcept;
+
 class RenderTextureAssetLoader final : public kb::assets::IAssetLoader {
 public:
+    RenderTextureAssetLoader() = default;
+    explicit RenderTextureAssetLoader(bgfx::RendererType::Enum rendererType) noexcept
+        : rendererTypeOverride_{ rendererType } {}
+
     [[nodiscard]] std::string_view Type() const noexcept override;
     [[nodiscard]] std::type_index PayloadType() const noexcept override;
     [[nodiscard]] std::vector<std::string> Extensions() const override;
@@ -139,6 +149,9 @@ public:
     // tests and one-shot render/thumbnail captures).
     static void SetAsyncTextureDecodeEnabled(bool enabled) noexcept;
     [[nodiscard]] static bool IsAsyncTextureDecodeEnabled() noexcept;
+
+private:
+    std::optional<bgfx::RendererType::Enum> rendererTypeOverride_;
 };
 
 } // namespace kb::render

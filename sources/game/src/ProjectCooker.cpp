@@ -168,12 +168,18 @@ public:
     ScopedCookDirectory(const ScopedCookDirectory&) = delete;
     ScopedCookDirectory& operator=(const ScopedCookDirectory&) = delete;
     ~ScopedCookDirectory() {
+        if (!owned_) return;
         std::error_code error;
         std::filesystem::remove_all(path_, error);
     }
 
+    void Release() noexcept {
+        owned_ = false;
+    }
+
 private:
     std::filesystem::path path_;
+    bool owned_ = true;
 };
 
 [[nodiscard]] std::filesystem::path WithCookFileSuffix(
@@ -1115,6 +1121,183 @@ struct CookerToolInputSnapshot {
     return !relative.empty() && *relative.begin() != "..";
 }
 
+struct WindowsRuntimeModulePlan {
+    std::filesystem::path sourcePath;
+    std::filesystem::path relativeDestination;
+};
+
+struct WindowsRuntimeModuleSnapshot {
+    std::filesystem::path sourcePath;
+    std::filesystem::path stagedPath;
+    std::uint64_t contentHash = 0U;
+};
+
+[[nodiscard]] bool CopyWindowsRuntimeModuleSnapshot(
+    const std::filesystem::path& source,
+    const std::filesystem::path& destination,
+    std::uint64_t& contentHash,
+    std::string& error) {
+    std::error_code sizeError;
+    const std::uintmax_t size = std::filesystem::file_size(source, sizeError);
+    if (sizeError) {
+        error = "Windows runtime module DLL size could not be read: " + source.generic_string();
+        return false;
+    }
+    std::error_code directoryError;
+    std::filesystem::create_directories(destination.parent_path(), directoryError);
+    if (directoryError) {
+        error = "Windows runtime module staging parent could not be created: " +
+            destination.parent_path().generic_string();
+        return false;
+    }
+    std::ifstream input{ source, std::ios::binary };
+    std::ofstream output{ destination, std::ios::binary | std::ios::trunc };
+    if (!input.is_open() || !output.is_open()) {
+        error = "Windows runtime module DLL could not be staged: " + source.generic_string();
+        return false;
+    }
+    std::array<std::uint8_t, 64U * 1024U> buffer{};
+    std::uintmax_t copied = 0U;
+    std::uint64_t hash = 14695981039346656037ULL;
+    while (input) {
+        input.read(reinterpret_cast<char*>(buffer.data()),
+            static_cast<std::streamsize>(buffer.size()));
+        const std::streamsize read = input.gcount();
+        if (read <= 0) {
+            break;
+        }
+        output.write(reinterpret_cast<const char*>(buffer.data()), read);
+        if (!output) {
+            error = "Windows runtime module DLL could not be written completely: " +
+                destination.generic_string();
+            return false;
+        }
+        copied += static_cast<std::uintmax_t>(read);
+        for (std::streamsize index = 0; index < read; ++index) {
+            hash ^= buffer[static_cast<std::size_t>(index)];
+            hash *= 1099511628211ULL;
+        }
+    }
+    output.flush();
+    if (input.bad() || !input.eof() || !output || copied != size) {
+        error = "Windows runtime module DLL changed or could not be copied completely: " +
+            source.generic_string();
+        return false;
+    }
+    contentHash = hash == 0U ? 1099511628211ULL : hash;
+    return true;
+}
+
+[[nodiscard]] std::string WindowsPathKey(const std::filesystem::path& path) {
+    std::string key = path.generic_string();
+    std::ranges::transform(key, key.begin(), [](unsigned char value) {
+        return static_cast<char>(std::tolower(value));
+    });
+    return key;
+}
+
+[[nodiscard]] bool PlanWindowsRuntimeModules(
+    kb::project::ProjectDescriptor& descriptor,
+    const std::filesystem::path& projectRoot,
+    std::vector<WindowsRuntimeModulePlan>& plans,
+    std::string& error) {
+    plans.clear();
+    std::unordered_map<std::string, std::filesystem::path> plannedDestinations;
+    for (kb::project::ProjectPluginReference& plugin : descriptor.plugins) {
+        if (!plugin.enabled) {
+            continue;
+        }
+        if (const PackagedRuntimeModuleDesc* const builtIn =
+                FindPackagedRuntimeModule(plugin.name);
+            builtIn != nullptr) {
+            plugin.binaryPath = std::string{ builtIn->windowsBinaryName };
+            continue;
+        }
+
+        const std::filesystem::path configuredPath{ plugin.binaryPath };
+        if (!IsSafeWindowsRuntimeModuleRelativePath(configuredPath)) {
+            error = "Windows runtime module must use a safe project-relative DLL path: " +
+                plugin.name;
+            return false;
+        }
+        const std::filesystem::path configuredSource = projectRoot / configuredPath;
+        std::error_code statusError;
+        const std::filesystem::file_status sourceStatus =
+            std::filesystem::symlink_status(configuredSource, statusError);
+        if (statusError || sourceStatus.type() != std::filesystem::file_type::regular) {
+            error = "Windows runtime module DLL is missing or is not a regular project file: " +
+                plugin.name;
+            return false;
+        }
+        std::filesystem::path canonicalRelative;
+        if (!CanonicalRelativePathWithin(configuredSource, projectRoot, canonicalRelative) ||
+            !IsSafeWindowsRuntimeModuleRelativePath(canonicalRelative)) {
+            error = "Windows runtime module DLL escapes the project snapshot: " + plugin.name;
+            return false;
+        }
+        const std::filesystem::path sourcePath = projectRoot / canonicalRelative;
+        const std::filesystem::path relativeDestination = canonicalRelative.lexically_normal();
+        const std::string destinationKey = WindowsPathKey(relativeDestination);
+        const auto [destination, inserted] =
+            plannedDestinations.emplace(destinationKey, sourcePath);
+        if (!inserted && destination->second.lexically_normal() != sourcePath.lexically_normal()) {
+            error = "two Windows runtime module DLLs claim one package path: " +
+                relativeDestination.generic_string();
+            return false;
+        }
+        if (inserted) {
+            plans.push_back(WindowsRuntimeModulePlan{
+                .sourcePath = sourcePath,
+                .relativeDestination = relativeDestination,
+            });
+        }
+        plugin.binaryPath =
+            (std::filesystem::path{ kWindowsCustomRuntimeModuleDirectory } /
+                relativeDestination).generic_string();
+    }
+    return true;
+}
+
+[[nodiscard]] bool StageWindowsRuntimeModules(
+    const std::vector<WindowsRuntimeModulePlan>& plans,
+    const std::filesystem::path& outputDirectory,
+    std::vector<WindowsRuntimeModuleSnapshot>& snapshots,
+    std::string& error) {
+    snapshots.clear();
+    snapshots.reserve(plans.size());
+    for (const WindowsRuntimeModulePlan& plan : plans) {
+        const std::filesystem::path destination = outputDirectory / plan.relativeDestination;
+        std::uint64_t contentHash = 0U;
+        if (!CopyWindowsRuntimeModuleSnapshot(
+                plan.sourcePath, destination, contentHash, error)) {
+            return false;
+        }
+        snapshots.push_back(WindowsRuntimeModuleSnapshot{
+            .sourcePath = plan.sourcePath,
+            .stagedPath = destination,
+            .contentHash = contentHash,
+        });
+    }
+    return true;
+}
+
+[[nodiscard]] bool VerifyWindowsRuntimeModulesUnchanged(
+    const std::vector<WindowsRuntimeModuleSnapshot>& snapshots,
+    std::string& error) {
+    for (const WindowsRuntimeModuleSnapshot& snapshot : snapshots) {
+        std::uint64_t sourceHash = 0U;
+        std::uint64_t stagedHash = 0U;
+        if (!HashSourceFile(snapshot.sourcePath, sourceHash) ||
+            !HashSourceFile(snapshot.stagedPath, stagedHash) ||
+            sourceHash != snapshot.contentHash || stagedHash != snapshot.contentHash) {
+            error = "Windows runtime module DLL changed during cooking: " +
+                snapshot.sourcePath.generic_string();
+            return false;
+        }
+    }
+    return true;
+}
+
 [[nodiscard]] std::optional<kb::render::RenderMaterialGraphShaderBackend> MaterialBackend(
     asset_bake::ShaderBakeBackend backend) noexcept {
     using GraphBackend = kb::render::RenderMaterialGraphShaderBackend;
@@ -1125,7 +1308,7 @@ struct CookerToolInputSnapshot {
     case asset_bake::ShaderBakeBackend::Glsl: return GraphBackend::Glsl;
     case asset_bake::ShaderBakeBackend::Essl: return GraphBackend::Essl;
     case asset_bake::ShaderBakeBackend::Metal: return GraphBackend::Metal;
-    case asset_bake::ShaderBakeBackend::Wgsl: return std::nullopt;
+    case asset_bake::ShaderBakeBackend::Wgsl: return GraphBackend::Wgsl;
     }
     return std::nullopt;
 }
@@ -1472,7 +1655,7 @@ struct CookerToolInputSnapshot {
     case asset_bake::ShaderBakeBackend::Glsl: return "440";
     case asset_bake::ShaderBakeBackend::Essl: return "300_es";
     case asset_bake::ShaderBakeBackend::Metal: return "metal";
-    case asset_bake::ShaderBakeBackend::Wgsl: break;
+    case asset_bake::ShaderBakeBackend::Wgsl: return "wgsl";
     }
     return {};
 }
@@ -1677,6 +1860,7 @@ struct CookerToolInputSnapshot {
         return false;
     }
     const std::string shaderPlatform{ asset_bake::ShaderBakePlatformName(profile.shaderPlatform) };
+    const std::string shadercPlatform{ asset_bake::ShaderBakePlatformShadercToken(profile.shaderPlatform) };
     const std::filesystem::path targetRoot =
         CreateFixedShaderWorkDirectory(request.cacheRoot, shaderPlatform, error);
     if (targetRoot.empty()) {
@@ -1730,7 +1914,7 @@ struct CookerToolInputSnapshot {
             const std::filesystem::path diagnosticPath = profileRoot / (std::string{ shader.name } + ".log");
             const std::vector<std::string> arguments{
                 "--type", std::string{ FixedShaderStageName(shader.stage) },
-                "--platform", shaderPlatform,
+                "--platform", shadercPlatform,
                 "--profile", profileName,
                 "-f", sourcePath.generic_string(),
                 "-o", binaryPath.generic_string(),
@@ -1878,6 +2062,57 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
     if (PathIsWithin(request.outputPackPath, contentRoot)) {
         return Failure("output package must not be written inside the project's content root");
     }
+
+    kb::project::ProjectDescriptor packagedDescriptor = project.descriptor;
+    std::vector<WindowsRuntimeModulePlan> windowsRuntimeModulePlans;
+    std::vector<WindowsRuntimeModuleSnapshot> windowsRuntimeModuleSnapshots;
+    std::unique_ptr<ScopedCookDirectory> windowsRuntimeModuleCleanup;
+    if (profile.identifier == "Windows.x64") {
+        if (!PlanWindowsRuntimeModules(
+                packagedDescriptor, projectRoot, windowsRuntimeModulePlans, error)) {
+            return Failure(std::move(error));
+        }
+        if (!windowsRuntimeModulePlans.empty()) {
+            if (request.runtimeModulesOutputDirectory.empty()) {
+                return Failure(
+                    "Windows package has custom runtime modules but no staging directory was provided");
+            }
+            std::error_code outputError;
+            request.runtimeModulesOutputDirectory = std::filesystem::absolute(
+                request.runtimeModulesOutputDirectory, outputError).lexically_normal();
+            if (outputError || request.runtimeModulesOutputDirectory.filename().empty() ||
+                PathIsWithin(request.runtimeModulesOutputDirectory, projectRoot)) {
+                return Failure(
+                    "Windows runtime module staging directory must be outside the project snapshot");
+            }
+            const std::filesystem::file_status outputStatus =
+                std::filesystem::symlink_status(request.runtimeModulesOutputDirectory, outputError);
+            if (outputError && outputError != std::errc::no_such_file_or_directory) {
+                return Failure("Windows runtime module staging directory could not be inspected");
+            }
+            if (outputStatus.type() != std::filesystem::file_type::not_found) {
+                return Failure("Windows runtime module staging directory already exists");
+            }
+            outputError.clear();
+            std::filesystem::create_directories(
+                request.runtimeModulesOutputDirectory.parent_path(), outputError);
+            if (outputError ||
+                !std::filesystem::create_directory(
+                    request.runtimeModulesOutputDirectory, outputError) || outputError) {
+                return Failure(
+                    "Windows runtime module staging directory could not be created exclusively");
+            }
+            windowsRuntimeModuleCleanup =
+                std::make_unique<ScopedCookDirectory>(request.runtimeModulesOutputDirectory);
+            if (!StageWindowsRuntimeModules(
+                    windowsRuntimeModulePlans,
+                    request.runtimeModulesOutputDirectory,
+                    windowsRuntimeModuleSnapshots,
+                    error)) {
+                return Failure(std::move(error));
+            }
+        }
+    }
     if (request.cacheRoot.empty()) {
         request.cacheRoot = request.outputPackPath.parent_path() / ".kb-cook-cache" / request.targetProfileId;
     }
@@ -1952,7 +2187,7 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
     asset_bake::RuntimeAssetManifest manifest{};
     manifest.targetProfileId = std::string{ profile.identifier };
     manifest.targetProfileHash = asset_bake::BakeTargetProfileFingerprint(profile);
-    manifest.descriptor = project.descriptor;
+    manifest.descriptor = std::move(packagedDescriptor);
     manifest.settings = settings;
     std::set<std::string> packagedPaths;
     ProjectCookResult result{};
@@ -2111,6 +2346,9 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
     if (!VerifyCookerToolInputsUnchanged(request, cookerToolInputs, error)) {
         return Failure(std::move(error));
     }
+    if (!VerifyWindowsRuntimeModulesUnchanged(windowsRuntimeModuleSnapshots, error)) {
+        return Failure(std::move(error));
+    }
 
     std::vector<std::uint8_t> manifestBytes;
     const asset_bake::RuntimeAssetManifestStatus manifestStatus =
@@ -2170,10 +2408,16 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
     if (!VerifyCookConfigurationInputsUnchanged(configurationSnapshot, error)) {
         return Failure(std::move(error));
     }
+    if (!VerifyWindowsRuntimeModulesUnchanged(windowsRuntimeModuleSnapshots, error)) {
+        return Failure(std::move(error));
+    }
     const std::filesystem::path publicationPath =
         writer.PackPath().parent_path() / request.outputPackPath.filename();
     if (!PublishValidatedCookPack(writer.PackPath(), publicationPath)) {
         return Failure("validated package could not be published atomically");
+    }
+    if (windowsRuntimeModuleCleanup != nullptr) {
+        windowsRuntimeModuleCleanup->Release();
     }
 
     result.succeeded = true;

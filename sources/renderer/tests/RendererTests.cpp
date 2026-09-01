@@ -34,6 +34,7 @@ void RunShaderManifestTests();
 void RunShaderPrewarmParseTests();
 void RunMeshBakeTests();
 void RunTextureBakeTests();
+void RunPackagedWebGpuTextureFallbackTestOnly();
 }
 
 int main(int argc, char** argv) {
@@ -43,6 +44,10 @@ int main(int argc, char** argv) {
     }
     if (argc == 2 && std::string_view{ argv[1] } == "texture-bake") {
         kb::render::tests::RunTextureBakeTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "webgpu-texture-fallback") {
+        kb::render::tests::RunPackagedWebGpuTextureFallbackTestOnly();
         return EXIT_SUCCESS;
     }
     if (argc == 2 && std::string_view{ argv[1] } == "graph-shader-artifact") {

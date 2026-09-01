@@ -487,15 +487,9 @@ void StoreDecodedTexture(
 
 // The one production path from a baked package to a runtime texture, and the first producer of
 // RenderTextureAssetData::gpuBlocks outside a test: everything else this loader can open is a
-// source image, which it decodes to RGBA8 exactly as it always has.
-//
-// A pack is addressed as a whole, and the texture it carries is the ONE artifact in it whose
-// type is the texture baker's. A pack holding several of them is refused rather than guessed
-// at: a profile may carry more than one compression family (a browser guarantees BC or ASTC
-// and only says which at runtime), the family is folded into the bake key rather than spelled
-// out in the index, and picking the wrong one would hand a device blocks it has to unpack on
-// the CPU - the exact cost the bake exists to remove. Choosing between families is a runtime
-// selection that does not exist yet, and a silent wrong answer is worse than a refusal.
+// source image, which it decodes to RGBA8 exactly as it always has. The packaged runtime path
+// below selects a native variant from the manifest and decodes one verified variant only when
+// the active device exposes none of the optional compressed formats.
 [[nodiscard]] std::optional<RenderTextureAssetData> LoadBakedTexturePack(const std::filesystem::path& path) {
     kb::assets::bake::AssetPackReader pack;
     if (pack.Mount(path) != kb::assets::bake::AssetPackReadStatus::Success) {
@@ -532,6 +526,7 @@ void StoreDecodedTexture(
 
 [[nodiscard]] std::optional<RenderTextureAssetData> LoadBakedTexturePayload(
     const kb::assets::AssetLoadRequest& request,
+    bool allowDecodeFallback,
     std::string& error) {
     const kb::assets::bake::RuntimeAssetManifestEntry* entry =
         request.runtimePack == nullptr ? nullptr : request.runtimePack->FindAsset(request.metadata.id);
@@ -543,6 +538,7 @@ void StoreDecodedTexture(
         "bc-extended", "astc", "etc2", "bc-baseline"
     };
     bool foundVariant = false;
+    std::optional<RenderTextureAssetData> decodeFallback;
     for (const std::string_view qualifier : preference) {
         const auto reference = std::ranges::find_if(
             entry->artifacts,
@@ -580,6 +576,17 @@ void StoreDecodedTexture(
         if (RenderDeviceSupportsTextureFormat(texture.gpuBlocks->format, requiredColorSpace)) {
             return texture;
         }
+        if (allowDecodeFallback && !decodeFallback.has_value()) {
+            decodeFallback = std::move(texture);
+        }
+    }
+    if (decodeFallback.has_value()) {
+        std::optional<RenderTextureAssetData> decoded = DecodeRenderTextureToRgba8(*decodeFallback);
+        if (decoded.has_value()) {
+            return decoded;
+        }
+        error = "Packaged texture fallback could not be decoded";
+        return std::nullopt;
     }
     error = foundVariant
         ? "The running GPU supports none of this package's native texture variants"
@@ -790,6 +797,13 @@ std::optional<RenderTextureAssetData> DecodeRenderTextureToRgba8(const RenderTex
     return decoded;
 }
 
+bool CanDecodeUnsupportedPackagedTexture(
+    const kb::assets::bake::RuntimeAssetPack* pack,
+    bgfx::RendererType::Enum rendererType) noexcept {
+    return rendererType == bgfx::RendererType::WebGPU && pack != nullptr && pack->IsMounted() &&
+        pack->Manifest().targetProfileId == "WebGPU.wasm32";
+}
+
 std::string_view RenderTextureAssetLoader::Type() const noexcept {
     return "RenderTexture";
 }
@@ -809,8 +823,12 @@ std::vector<std::string> RenderTextureAssetLoader::BakedAssetTypes() const {
 
 kb::assets::AssetLoadResult RenderTextureAssetLoader::Load(const kb::assets::AssetLoadRequest& request) {
     std::string error;
+    const bgfx::RendererType::Enum rendererType = rendererTypeOverride_.value_or(bgfx::getRendererType());
     std::optional<RenderTextureAssetData> texture = request.IsPackaged()
-        ? LoadBakedTexturePayload(request, error)
+        ? LoadBakedTexturePayload(
+            request,
+            CanDecodeUnsupportedPackagedTexture(request.runtimePack.get(), rendererType),
+            error)
         : (request.HasSourceBytes() ? DecodeTextureSnapshot(request) : LoadTexture(request.resolvedPath));
     if (!texture.has_value()) {
         return kb::assets::AssetLoadResult{

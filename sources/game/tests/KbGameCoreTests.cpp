@@ -45,6 +45,7 @@
 #include <Windows.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -59,6 +60,18 @@
 #include <system_error>
 #include <vector>
 
+#ifndef KB_WINDOWS_RUNTIME_MODULE_TEST_PLUGIN_PATH
+#error KB_WINDOWS_RUNTIME_MODULE_TEST_PLUGIN_PATH must name the real package-module test DLL
+#endif
+
+#ifndef KB_WINDOWS_PHYSICS_PLUGIN_PATH
+#error KB_WINDOWS_PHYSICS_PLUGIN_PATH must name the real Windows physics provider DLL
+#endif
+
+#ifndef KB_GAME_CORE_TEST_ROOT
+#error KB_GAME_CORE_TEST_ROOT must name repository-local test scratch
+#endif
+
 namespace {
 
 using Clock = std::chrono::steady_clock;
@@ -72,7 +85,11 @@ void Require(bool condition, const char* message) {
 }
 
 [[nodiscard]] std::filesystem::path TestRoot() {
-    return std::filesystem::temp_directory_path() / "21kb_engine_kb_game_core_tests";
+    static const std::filesystem::path root =
+        std::filesystem::path{ KB_GAME_CORE_TEST_ROOT } /
+        ("run-" + std::to_string(GetCurrentProcessId()) + "-" +
+            std::to_string(Clock::now().time_since_epoch().count()));
+    return root;
 }
 
 void WriteTextFile(const std::filesystem::path& path, const std::string& text) {
@@ -134,9 +151,25 @@ void RunRuntimeDeltaTests() {
                              std::chrono::duration<float>{ kb::game::kMaximumRuntimeDeltaSeconds })) <=
             kb::game::kMaximumRuntimeDeltaSeconds,
         "A frame exactly at the ceiling must not step past it");
+
+    Clock::time_point pausedOrigin = base;
+    const Clock::time_point resumed = base + std::chrono::hours{ 1 };
+    kb::game::ResetRuntimeDeltaOrigin(pausedOrigin, resumed);
+    const float resumedDelta = kb::game::RuntimeDeltaSeconds(
+        pausedOrigin, resumed + std::chrono::milliseconds{ 5 });
+    Require(
+        std::fabs(resumedDelta - 0.005F) < 1.0e-4F,
+        "A resumed host included paused wall time in its first simulation step");
 }
 
 void RunPackagedRuntimeModuleContractTests() {
+    Require(
+        kb::game::IsSafeWindowsRuntimeModuleRelativePath("RuntimeModules/Company/custom.dll") &&
+            !kb::game::IsSafeWindowsRuntimeModuleRelativePath("../outside.dll") &&
+            !kb::game::IsSafeWindowsRuntimeModuleRelativePath("C:/outside.dll") &&
+            !kb::game::IsSafeWindowsRuntimeModuleRelativePath("RuntimeModules/NUL.dll") &&
+            !kb::game::IsSafeWindowsRuntimeModuleRelativePath("COM1/custom.dll"),
+        "Windows cooker and mounted runtime do not share a strict relative-DLL path contract");
     kb::project::ProjectDescriptor supported{};
     for (const kb::game::PackagedRuntimeModuleDesc& module : kb::game::kPackagedRuntimeModules) {
         supported.plugins.push_back(kb::project::ProjectPluginReference{
@@ -145,9 +178,18 @@ void RunPackagedRuntimeModuleContractTests() {
             .enabled = true,
         });
     }
-    Require(
-        !kb::game::FirstUnsupportedPackagedRuntimeModule("Android.arm64", supported).has_value(),
-        "Android rejected a provider compiled into its packaged runtime host");
+    constexpr std::array<std::string_view, 5U> kMonolithicTargets{
+        "Android.ASTC.arm64",
+        "Android.ETC2.arm64",
+        "Linux.x64",
+        "WebGL.wasm32",
+        "WebGPU.wasm32",
+    };
+    for (const std::string_view target : kMonolithicTargets) {
+        Require(
+            !kb::game::FirstUnsupportedPackagedRuntimeModule(target, supported).has_value(),
+            "A monolithic host rejected a provider compiled into its package");
+    }
 
     kb::project::ProjectDescriptor unsupported = supported;
     unsupported.plugins.push_back(kb::project::ProjectPluginReference{
@@ -156,13 +198,13 @@ void RunPackagedRuntimeModuleContractTests() {
         .enabled = true,
     });
     const std::optional<std::string_view> rejected =
-        kb::game::FirstUnsupportedPackagedRuntimeModule("Android.arm64", unsupported);
+        kb::game::FirstUnsupportedPackagedRuntimeModule("Android.ASTC.arm64", unsupported);
     Require(rejected.has_value() && *rejected == "Company.CustomDesktopPlugin",
         "Android accepted a descriptor module its static host cannot construct");
 
     unsupported.plugins.back().enabled = false;
     Require(
-        !kb::game::FirstUnsupportedPackagedRuntimeModule("Android.arm64", unsupported).has_value(),
+        !kb::game::FirstUnsupportedPackagedRuntimeModule("Android.ETC2.arm64", unsupported).has_value(),
         "Android rejected a disabled module that is not part of the shipped runtime");
     unsupported.plugins.back().enabled = true;
     Require(
@@ -183,7 +225,7 @@ void RunPackagedRuntimeModuleContractTests() {
     const kb::game::ProjectCookResult cook = kb::game::CookProject(
         kb::game::ProjectCookRequest{
             .projectPath = projectRoot,
-            .targetProfileId = "Android.arm64",
+            .targetProfileId = "Android.ASTC.arm64",
             .outputPackPath = outputPack,
         },
         diagnostics);
@@ -242,7 +284,6 @@ struct Fixture {
 
 [[nodiscard]] Fixture BuildFixture(const std::filesystem::path& root, const std::string& projectName) {
     std::error_code error;
-    std::filesystem::remove_all(root, error);
     std::filesystem::create_directories(root, error);
     Require(!error, "kb_game_core test project directory could not be prepared");
 
@@ -328,8 +369,10 @@ void RunCookOutputLockTest() {
                 .outputPackPath = outputPack,
             },
             diagnostics);
+        const std::string lockFailure =
+            "CookProject did not fail closed when its exact output was locked: " + cook.error;
         Require(!cook.succeeded && Mentions(cook.error, "already being cooked"),
-            "CookProject did not fail closed when its exact output was locked");
+            lockFailure.c_str());
 
         std::ifstream published{ outputPack, std::ios::binary };
         const std::string bytes{
@@ -345,6 +388,178 @@ void RunCookOutputLockTest() {
         Require(!leftCandidate,
             "CookProject created a candidate before acquiring the final-output lock");
     }
+}
+
+void RunWindowsRuntimeModulePackagingTests() {
+    namespace bake = kb::assets::bake;
+
+    const Fixture fixture = BuildFixture(TestRoot() / "windows_custom_plugin_project", "Project");
+    kb::project::ProjectSettings settings;
+    settings.defaultMap = fixture.sceneVirtualPath;
+    settings.physicsLayersAsset.clear();
+    settings.inputEnabled = false;
+    WriteSettings(fixture.root, settings);
+    std::error_code copyError;
+    std::filesystem::create_directories(fixture.root / "Binaries", copyError);
+    Require(!copyError && std::filesystem::copy_file(
+                std::filesystem::path{ KB_WINDOWS_RUNTIME_MODULE_TEST_PLUGIN_PATH },
+                fixture.root / "Binaries" / "custom.dll",
+                std::filesystem::copy_options::overwrite_existing,
+                copyError) && !copyError,
+        "Real Windows runtime-module test DLL could not be copied into the project snapshot");
+
+    kb::project::ProjectDescriptor descriptor;
+    descriptor.plugins = {
+        kb::project::ProjectPluginReference{
+            .name = "Tests.PackagedWindowsRuntime",
+            .binaryPath = "Binaries/custom.dll",
+            .enabled = true,
+        },
+        kb::project::ProjectPluginReference{
+            .name = "Physics.Jolt",
+            .binaryPath = "authoring-path-must-not-ship.dll",
+            .enabled = true,
+        },
+    };
+    Require(kb::project::ProjectManager::SaveProject(
+                fixture.root / "Project.21kbproject", descriptor),
+        "Windows runtime-module fixture descriptor could not be written");
+
+    const std::filesystem::path sealedRoot = TestRoot() / "windows_custom_plugin_package";
+    std::error_code directoryError;
+    std::filesystem::create_directories(sealedRoot, directoryError);
+    Require(!directoryError, "Windows runtime-module package root could not be created");
+    const std::filesystem::path packPath = sealedRoot / "Game.kbpack";
+    const std::filesystem::path stagedModules = sealedRoot / "RuntimeModules";
+    std::ostringstream diagnostics;
+    const kb::game::ProjectCookResult cook = kb::game::CookProject(
+        kb::game::ProjectCookRequest{
+            .projectPath = fixture.root,
+            .targetProfileId = "Windows.x64",
+            .outputPackPath = packPath,
+            .runtimeModulesOutputDirectory = stagedModules,
+        },
+        diagnostics);
+    Require(cook.succeeded, cook.error.c_str());
+    Require(
+        std::filesystem::is_regular_file(stagedModules / "Binaries" / "custom.dll"),
+        "Windows cooker did not stage the custom DLL under RuntimeModules");
+    copyError.clear();
+    Require(std::filesystem::copy_file(
+                std::filesystem::path{ KB_WINDOWS_PHYSICS_PLUGIN_PATH },
+                sealedRoot / "kb_physics_jolt_plugin.dll",
+                std::filesystem::copy_options::overwrite_existing,
+                copyError) && !copyError,
+        "Real Windows physics provider DLL could not be copied into the sealed package root");
+
+    auto pack = std::make_shared<bake::RuntimeAssetPack>();
+    Require(pack->Mount(packPath, bake::WindowsX64BakeTargetProfile()) ==
+            bake::RuntimeAssetPackStatus::Success,
+        "Windows runtime-module package did not mount");
+    Require(pack->Manifest().descriptor.plugins.size() == 2U &&
+            pack->Manifest().descriptor.plugins[0].binaryPath ==
+                "RuntimeModules/Binaries/custom.dll" &&
+            pack->Manifest().descriptor.plugins[1].binaryPath ==
+                "kb_physics_jolt_plugin.dll",
+        "Cooked manifest did not contain sealed custom and canonical built-in DLL paths");
+
+    std::ostringstream runtimeError;
+    kb::game::GameProjectRuntime runtime{};
+    Require(kb::game::ReadMountedGameProjectRuntime(
+                pack, sealedRoot, "", runtime, runtimeError),
+        "Mounted Windows runtime did not accept its sealed module DLLs");
+    Require(
+        std::filesystem::path{ runtime.descriptor.plugins[0].binaryPath } ==
+            std::filesystem::weakly_canonical(stagedModules / "Binaries" / "custom.dll") &&
+        std::filesystem::path{ runtime.descriptor.plugins[1].binaryPath } ==
+            std::filesystem::weakly_canonical(sealedRoot / "kb_physics_jolt_plugin.dll"),
+        "Mounted Windows runtime did not rebase module paths to the sealed package root");
+    {
+        kb::scene::Scene moduleScene{ runtime.descriptor };
+        Require(moduleScene.ModuleDiagnostics().empty() &&
+                moduleScene.IsModuleActive("Tests.PackagedWindowsRuntime") &&
+                moduleScene.IsModuleActive("Physics.Jolt"),
+            "Sealed Windows runtime DLLs did not pass LoadLibrary, ABI and module activation");
+    }
+
+    const std::filesystem::path emptyRoot = TestRoot() / "windows_missing_plugin_package";
+    directoryError.clear();
+    std::filesystem::create_directories(emptyRoot, directoryError);
+    Require(!directoryError, "Missing-module runtime root could not be created");
+    std::ostringstream missingError;
+    kb::game::GameProjectRuntime missingRuntime{};
+    Require(!kb::game::ReadMountedGameProjectRuntime(
+                pack, emptyRoot, "", missingRuntime, missingError) &&
+            Mentions(missingError.str(), "missing"),
+        "Mounted Windows runtime accepted a package root without its declared DLLs");
+    pack->Unmount();
+
+    const Fixture absoluteFixture =
+        BuildFixture(TestRoot() / "windows_absolute_plugin_project", "Project");
+    WriteSettings(absoluteFixture.root, settings);
+    const std::filesystem::path absoluteDll =
+        std::filesystem::absolute(absoluteFixture.root / "Binaries" / "absolute.dll");
+    WriteTextFile(absoluteDll, "MZabsolute runtime module");
+    kb::project::ProjectDescriptor absoluteDescriptor;
+    absoluteDescriptor.plugins.push_back(kb::project::ProjectPluginReference{
+        .name = "Company.AbsoluteRuntime",
+        .binaryPath = absoluteDll.string(),
+        .enabled = true,
+    });
+    Require(kb::project::ProjectManager::SaveProject(
+                absoluteFixture.root / "Project.21kbproject", absoluteDescriptor),
+        "Absolute runtime-module fixture descriptor could not be written");
+    const std::filesystem::path rejectedPack =
+        TestRoot() / "windows_absolute_plugin_package" / "Game.kbpack";
+    const std::filesystem::path rejectedModules =
+        TestRoot() / "windows_absolute_plugin_modules";
+    std::ostringstream rejectedDiagnostics;
+    const kb::game::ProjectCookResult rejected = kb::game::CookProject(
+        kb::game::ProjectCookRequest{
+            .projectPath = absoluteFixture.root,
+            .targetProfileId = "Windows.x64",
+            .outputPackPath = rejectedPack,
+            .runtimeModulesOutputDirectory = rejectedModules,
+        },
+        rejectedDiagnostics);
+    Require(!rejected.succeeded && Mentions(rejected.error, "safe project-relative DLL") &&
+            !std::filesystem::exists(rejectedPack) &&
+            !std::filesystem::exists(rejectedModules),
+        "Windows cooker accepted or staged an absolute custom module DLL path");
+
+    absoluteDescriptor.plugins[0].binaryPath = "../outside.dll";
+    WriteTextFile(absoluteFixture.root.parent_path() / "outside.dll", "outside project");
+    Require(kb::project::ProjectManager::SaveProject(
+                absoluteFixture.root / "Project.21kbproject", absoluteDescriptor),
+        "Traversal runtime-module fixture descriptor could not be written");
+    std::ostringstream traversalDiagnostics;
+    const kb::game::ProjectCookResult traversal = kb::game::CookProject(
+        kb::game::ProjectCookRequest{
+            .projectPath = absoluteFixture.root,
+            .targetProfileId = "Windows.x64",
+            .outputPackPath = TestRoot() / "windows_traversal_plugin_package" / "Game.kbpack",
+            .runtimeModulesOutputDirectory =
+                TestRoot() / "windows_traversal_plugin_modules",
+        },
+        traversalDiagnostics);
+    Require(!traversal.succeeded && Mentions(traversal.error, "safe project-relative DLL"),
+        "Windows cooker accepted a traversing custom module DLL path");
+
+    absoluteDescriptor.plugins[0].binaryPath = "Binaries/missing.dll";
+    Require(kb::project::ProjectManager::SaveProject(
+                absoluteFixture.root / "Project.21kbproject", absoluteDescriptor),
+        "Missing runtime-module fixture descriptor could not be written");
+    std::ostringstream missingCookDiagnostics;
+    const kb::game::ProjectCookResult missingCook = kb::game::CookProject(
+        kb::game::ProjectCookRequest{
+            .projectPath = absoluteFixture.root,
+            .targetProfileId = "Windows.x64",
+            .outputPackPath = TestRoot() / "windows_missing_plugin_cook" / "Game.kbpack",
+            .runtimeModulesOutputDirectory = TestRoot() / "windows_missing_plugin_modules",
+        },
+        missingCookDiagnostics);
+    Require(!missingCook.succeeded && Mentions(missingCook.error, "missing"),
+        "Windows cooker accepted a missing custom module DLL");
 }
 
 void RunSceneMetaCookValidationTests() {
@@ -427,6 +642,16 @@ void RunSceneMetaCookValidationTests() {
 
 void RunAuthoritativeMaterialGraphCookTest() {
     namespace bake = kb::assets::bake;
+
+    Require(kb::render::kRenderMaterialGraphShaderWrapperVersion == 9ULL,
+        "Material graph shader cache version was not advanced for WGSL artifacts");
+    Require(kb::render::RenderMaterialGraphShaderBackendName(
+                kb::render::RenderMaterialGraphShaderBackend::Wgsl) == "wgsl" &&
+            kb::render::RenderMaterialGraphShaderBackendProfile(
+                kb::render::RenderMaterialGraphShaderBackend::Wgsl) == "wgsl" &&
+            kb::render::ParseRenderMaterialGraphShaderBackend("wgsl") ==
+                kb::render::RenderMaterialGraphShaderBackend::Wgsl,
+        "Material graph WGSL backend identity or shaderc profile is incomplete");
 
     const auto makeColorOutputLink = [] {
         kb::render::RenderMaterialGraphLink link{
@@ -588,6 +813,42 @@ void RunAuthoritativeMaterialGraphCookTest() {
                 revision),
         "Cooked package unexpectedly contains stale inline graph A's shader");
     pack->Unmount();
+
+    const std::filesystem::path webGpuPackPath = fixture.root / "GameWebGPU.kbpack";
+    std::ostringstream webGpuDiagnostics;
+    const kb::game::ProjectCookResult webGpuCook = kb::game::CookProject(
+        kb::game::ProjectCookRequest{
+            .projectPath = fixture.root,
+            .targetProfileId = "WebGPU.wasm32",
+            .outputPackPath = webGpuPackPath,
+        },
+        webGpuDiagnostics);
+    Require(webGpuCook.succeeded, webGpuCook.error.c_str());
+    Require(webGpuCook.shaderArtifactCount != 0U &&
+            std::filesystem::is_regular_file(webGpuPackPath),
+        "CookProject failed to publish the WebGPU WGSL package");
+
+    const bake::BakeTargetProfile webGpuProfile = bake::WebGpuWasm32BakeTargetProfile();
+    auto webGpuPack = std::make_shared<bake::RuntimeAssetPack>();
+    Require(webGpuPack->Mount(webGpuPackPath, webGpuProfile) ==
+            bake::RuntimeAssetPackStatus::Success,
+        "WebGPU package did not mount under its exact target profile");
+    providerError.clear();
+    const std::shared_ptr<kb::render::RuntimeAssetShaderProvider> webGpuProvider =
+        kb::render::RuntimeAssetShaderProvider::Create(webGpuPack, providerError);
+    shaderBytes.clear();
+    revision = 0U;
+    Require(webGpuProvider != nullptr && webGpuProvider->ReadMaterialShader(
+                authoritativeCompile.shader.sourceHash,
+                authoritativeVariant,
+                "BaseOpaque",
+                bgfx::RendererType::WebGPU,
+                "fragment",
+                shaderBytes,
+                revision) &&
+            !shaderBytes.empty() && revision != 0U,
+        "Runtime shader provider could not read the cooked WGSL material shader");
+    webGpuPack->Unmount();
 
     const Fixture missing = BuildFixture(TestRoot() / "missing_authoritative_graph_cook", "Project");
     authorMaterial(missing, inlineGraph, "/Game/Materials/Missing.kbmaterialgraph", {});
@@ -1038,15 +1299,23 @@ void RunSceneLoadTests() {
 
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
     std::error_code error;
-    std::filesystem::remove_all(TestRoot(), error);
     std::filesystem::create_directories(TestRoot(), error);
     Require(!error, "kb_game_core test root could not be prepared");
+
+    if (argc == 2 && std::string_view{ argv[1] } == "--windows-runtime-modules") {
+        RunPackagedRuntimeModuleContractTests();
+        RunWindowsRuntimeModulePackagingTests();
+        std::fputs("kb_game_core Windows runtime-module tests passed\n", stdout);
+        return EXIT_SUCCESS;
+    }
+    Require(argc == 1, "kb_game_core tests received an unsupported argument");
 
     RunRuntimeDeltaTests();
     RunPackagedRuntimeModuleContractTests();
     RunCookOutputLockTest();
+    RunWindowsRuntimeModulePackagingTests();
     RunSceneMetaCookValidationTests();
     RunAuthoritativeMaterialGraphCookTest();
     RunNarrowingTests();

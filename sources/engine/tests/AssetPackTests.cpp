@@ -507,7 +507,7 @@ void EveryBlockSurvivesTheContainer() {
         "The pack header does not carry the profile it was baked for");
     Require(ranged.MatchesTargetProfile(profile),
         "The mounted pack did not match the exact profile that wrote it");
-    Require(!ranged.MatchesTargetProfile(bake::AndroidArm64BakeTargetProfile()),
+    Require(!ranged.MatchesTargetProfile(bake::AndroidAstcArm64BakeTargetProfile()),
         "A Windows package was accepted as an Android package");
     Require(ranged.Header().packageBlockAlignmentBytes == profile.packageBlockAlignmentBytes &&
             ranged.Header().mappedBlockAlignmentBytes == profile.mappedBlockAlignmentBytes,
@@ -1449,9 +1449,9 @@ void TheWriterRefusesProtocolViolations() {
     Require(writer.BeginAsset(invalidType) == bake::BakedAssetSinkStatus::InvalidAssetType,
         "The writer took an artifact whose type is not a portable name");
     bake::BakedAssetDescriptor wrongProfile = MakeDescriptor(51U);
-    wrongProfile.key.targetProfileId = "Android.arm64";
+    wrongProfile.key.targetProfileId = "Android.ASTC.arm64";
     wrongProfile.key.targetProfileHash =
-        bake::BakeTargetProfileFingerprint(bake::AndroidArm64BakeTargetProfile());
+        bake::BakeTargetProfileFingerprint(bake::AndroidAstcArm64BakeTargetProfile());
     Require(writer.BeginAsset(wrongProfile) == bake::BakedAssetSinkStatus::InvalidProfile,
         "A Windows pack accepted an artifact baked for Android");
 

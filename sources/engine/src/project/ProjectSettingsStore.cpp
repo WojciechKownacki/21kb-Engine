@@ -2,6 +2,7 @@
 
 #include "engine/config/IniDocument.hpp"
 
+#include <algorithm>
 #include <string_view>
 #include <system_error>
 
@@ -9,6 +10,8 @@ namespace kb::project {
 namespace {
 
 constexpr std::string_view kIdentity = "Project.Identity";
+constexpr std::string_view kProduct = "Project.Product";
+constexpr std::string_view kAndroid = "Project.Android";
 constexpr std::string_view kMaps = "Project.Maps";
 constexpr std::string_view kRendering = "Project.Rendering";
 constexpr std::string_view kInput = "Project.Input";
@@ -50,6 +53,8 @@ ProjectSettings ProjectSettingsStore::FromLegacy(
         if (!stem.empty()) {
             settings.name = stem;
             settings.gameName = stem;
+            settings.executableName = stem;
+            settings.androidLabel = stem;
         }
         return settings;
     }
@@ -57,6 +62,8 @@ ProjectSettings ProjectSettingsStore::FromLegacy(
     settings.gameName = legacy.name;
     settings.category = legacy.category;
     settings.description = legacy.description;
+    settings.executableName = legacy.name;
+    settings.androidLabel = legacy.name;
     settings.defaultMap = legacy.defaultScene;
     settings.lightingPath = legacy.lightingPath;
     settings.inputEnabled = legacy.inputEnabled;
@@ -84,6 +91,14 @@ ProjectSettingsLoadResult ProjectSettingsStore::Load(const std::filesystem::path
     result.settings.gameName = ReadString(document, kIdentity, "GameName", defaults.gameName);
     result.settings.category = ReadString(document, kIdentity, "Category", defaults.category);
     result.settings.description = ReadString(document, kIdentity, "Description", defaults.description);
+    result.settings.publisher = ReadString(document, kProduct, "Publisher", defaults.publisher);
+    result.settings.version = ReadString(document, kProduct, "Version", defaults.version);
+    result.settings.executableName = ReadString(document, kProduct, "ExecutableName", defaults.executableName);
+    result.settings.applicationIcon = ReadString(document, kProduct, "ApplicationIcon", defaults.applicationIcon);
+    result.settings.androidApplicationId = ReadString(document, kAndroid, "ApplicationId", defaults.androidApplicationId);
+    result.settings.androidVersionCode = static_cast<std::uint32_t>(std::clamp<std::int64_t>(
+        document.GetInt(kAndroid, "VersionCode").value_or(defaults.androidVersionCode), 1, 2'100'000'000));
+    result.settings.androidLabel = ReadString(document, kAndroid, "Label", defaults.androidLabel);
     result.settings.defaultMap = ReadString(document, kMaps, "DefaultMap", defaults.defaultMap);
     result.settings.lastOpenMap = ReadString(document, kMaps, "LastOpenMap", defaults.lastOpenMap);
     result.settings.lightingPath = ParseLightingPath(
@@ -116,6 +131,14 @@ bool ProjectSettingsStore::Save(
     document.SetString(kIdentity, "GameName", settings.gameName);
     document.SetString(kIdentity, "Category", settings.category);
     document.SetString(kIdentity, "Description", settings.description);
+    document.SetString(kProduct, "Publisher", settings.publisher);
+    document.SetString(kProduct, "Version", settings.version);
+    document.SetString(kProduct, "ExecutableName", settings.executableName);
+    document.SetString(kProduct, "ApplicationIcon", settings.applicationIcon);
+    document.SetString(kAndroid, "ApplicationId", settings.androidApplicationId);
+    document.SetInt(kAndroid, "VersionCode",
+        static_cast<std::int64_t>(std::clamp<std::uint32_t>(settings.androidVersionCode, 1U, 2'100'000'000U)));
+    document.SetString(kAndroid, "Label", settings.androidLabel);
     document.SetString(kMaps, "DefaultMap", settings.defaultMap);
     document.SetString(kMaps, "LastOpenMap", settings.lastOpenMap);
     document.SetString(kRendering, "LightingPath", std::string{LightingPathName(settings.lightingPath)});
