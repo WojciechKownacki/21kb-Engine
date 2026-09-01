@@ -1,6 +1,7 @@
 #include "app/pointer/EditorLeftButtonDownRouter.hpp"
 
 #include "rendering/BuildGamePanelRenderer.hpp"
+#include "rendering/BuildGamePanelModel.hpp"
 
 #if defined(_WIN32)
 #include "app/EditorAssetBrowserPointerHandler.hpp"
@@ -53,6 +54,8 @@
 #include "platform/win32/EditorSkeletonAssetPickerDialog.hpp"
 #include "platform/win32/EditorSkeletalMeshAssetPickerDialog.hpp"
 #include "platform/win32/EditorMaterialColorPickerDialog.hpp"
+#include "platform/win32/EditorBuildGameFileDialog.hpp"
+#include "packaging/EditorProjectPackageService.hpp"
 #include "platform/win32/EditorAudioMixerAssetPickerDialog.hpp"
 #include "platform/win32/EditorChoiceDialog.hpp"
 #include "kb/render/resources/RenderMaterialNumericParsing.hpp"
@@ -442,6 +445,10 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
     EditorPendingTextEditCommitter pendingTextEdits(sceneContext_);
     if (pendingTextEdits.CommitPendingEdits()) {
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+    }
+    if (sceneContext_.IsBuildGameTextEditing() && !sceneContext_.CommitBuildGameTextEdit()) {
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return;
     }
     if (EditorWindowToolbarPointerHandler::HandleLeftButtonDown(mainWindow_, messageWindow, x, y, dockModel_, floatingWindows_, sceneContext_, sceneViewport_, renderBackendSettings_, playMode_, shellInteraction_, metrics_)) {
         return;
@@ -1884,6 +1891,17 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
     if (const std::optional<RECT> buildGameContent = EditorPanelContentResolver::Resolve(
             DockPanelKind::BuildGame, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
         buildGameContent.has_value()) {
+        if (BuildGamePanelRenderer::HitTestBuildButton(*buildGameContent, x, y)) {
+            if (sceneContext_.BuildGamePackageSnapshot().state == EditorPackageJobState::Running) {
+                sceneContext_.CancelBuildGamePackage();
+            } else {
+                if (sceneContext_.StartBuildGamePackage()) {
+                    static_cast<void>(SetTimer(messageWindow, kEditorPackageStatusTimer, 100U, nullptr));
+                }
+            }
+            EditorWindowInvalidator::InvalidatePanel(messageWindow, *buildGameContent);
+            return;
+        }
         const BuildGamePanelRenderer::SidebarHit sidebar =
             BuildGamePanelRenderer::HitTestSidebar(*buildGameContent, x, y);
         if (sidebar.target >= 0) {
@@ -1903,6 +1921,76 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
         if (hit.section >= 0 && hit.row < 0) {
             sceneContext_.ToggleBuildGameSection(hit.section);
             EditorWindowInvalidator::InvalidatePanel(messageWindow, *buildGameContent);
+            return;
+        }
+        if (hit.section >= 0 && hit.row >= 0) {
+            const BuildGameField field = BuildGamePanelRenderer::FieldForHit(sceneContext_, hit);
+            bool changed = false;
+            switch (field) {
+            case BuildGameField::OutputDirectory: {
+                const std::filesystem::path initial = sceneContext_.BuildGameSettings().For(
+                    sceneContext_.BuildGameTarget()).outputDirectory;
+                if (const auto selected = EditorBuildGameFileDialog::SelectFolder(
+                        mainWindow_, initial, L"Select package output directory")) {
+                    changed = sceneContext_.SetBuildGameOutputDirectory(*selected);
+                }
+                break;
+            }
+            case BuildGameField::BuildRoot:
+                if (const auto selected = EditorBuildGameFileDialog::SelectFolder(
+                        mainWindow_, sceneContext_.BuildGameSettings().buildRoot, L"Select build directory")) {
+                    changed = sceneContext_.SetBuildGameBuildRoot(*selected);
+                }
+                break;
+            case BuildGameField::EmsdkRoot:
+                if (const auto selected = EditorBuildGameFileDialog::SelectFolder(
+                        mainWindow_, sceneContext_.BuildGameSettings().emsdkRoot, L"Select Emscripten SDK directory")) {
+                    changed = sceneContext_.SetBuildGameToolchainDirectory(field, *selected);
+                }
+                break;
+            case BuildGameField::ApplicationIcon:
+                if (const auto selected = EditorBuildGameFileDialog::SelectPng(mainWindow_)) {
+                    changed = sceneContext_.ImportBuildGameApplicationIcon(*selected);
+                }
+                break;
+            case BuildGameField::AndroidKeystore:
+                if (const auto selected = EditorBuildGameFileDialog::SelectKeystore(mainWindow_)) {
+                    changed = sceneContext_.SetBuildGameLocalFile(field, *selected);
+                }
+                break;
+            case BuildGameField::LinuxIdentity:
+                if (const auto selected = EditorBuildGameFileDialog::SelectIdentity(mainWindow_)) {
+                    changed = sceneContext_.SetBuildGameLocalFile(field, *selected);
+                }
+                break;
+            case BuildGameField::LaunchAfterBuild:
+                changed = sceneContext_.ToggleBuildGameLaunchAfterBuild();
+                break;
+            case BuildGameField::Publisher:
+            case BuildGameField::Version:
+            case BuildGameField::ProductName:
+            case BuildGameField::ExecutableName:
+            case BuildGameField::StartupMap:
+            case BuildGameField::AndroidApplicationId:
+            case BuildGameField::AndroidVersionCode:
+            case BuildGameField::AndroidLabel:
+            case BuildGameField::AndroidKeyAlias:
+            case BuildGameField::AndroidStorePassword:
+            case BuildGameField::AndroidKeyPassword:
+            case BuildGameField::BuilderExecutable:
+            case BuildGameField::LinuxHost:
+            case BuildGameField::LinuxUser:
+            case BuildGameField::LinuxHostKey:
+            case BuildGameField::LinuxPort:
+            case BuildGameField::LinuxEngineRoot:
+            case BuildGameField::LinuxDisplay:
+                changed = sceneContext_.BeginBuildGameTextEdit(field);
+                break;
+            case BuildGameField::None:
+            case BuildGameField::ProjectName:
+                break;
+            }
+            if (changed) EditorWindowInvalidator::InvalidatePanel(messageWindow, *buildGameContent);
             return;
         }
     }
