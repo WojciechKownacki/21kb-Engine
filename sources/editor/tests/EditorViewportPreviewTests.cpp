@@ -1482,6 +1482,72 @@ void RunViewportMeshWinsOverEntityOriginPickTest() {
         "A mesh must keep the click against a grouping entity that shares its origin");
 }
 
+void RunViewportBoxPickerUsesPublishedBoxNotOriginTest() {
+    // A character mesh is authored with its origin at the feet. A rectangle dragged over its
+    // body contains none of the origin, so origin-only matching never selects it.
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity tall = scene.Entities().CreateEntity(
+        kb::scene::SceneObjectDesc{ .name = "Tall Mesh" });
+    scene.Components().MeshRenderers().Set(
+        tall, kb::scene::MeshRendererComponent{ .meshAssetId = 911U });
+
+    const kb::editor::EditorViewportCameraState camera;
+    const kb::editor::EditorViewportCameraAxes axes = camera.Axes();
+    const kb::scene::Vec3 feet = axes.position + axes.forward * 8.0F;
+    scene.Transforms().Set(
+        tall, kb::scene::TransformComponent{ .localPosition = feet });
+
+    // Body centred well above the origin, exactly the shape origin matching cannot see.
+    const kb::scene::Vec3 body = feet + axes.up * 2.0F;
+    kb::scene::SceneRenderVisibilityFrame frame;
+    frame.frustumValid = true;
+    frame.entries.push_back(kb::scene::SceneRenderVisibilityEntry{
+        .entityId = tall.Id(),
+        .worldBounds = kb::scene::SceneRenderBounds{
+            .center = kb::math::Vec3{ body.x, body.y, body.z },
+            .radius = 2.2F,
+            .halfExtents = kb::math::Vec3{ 0.6F, 2.0F, 0.6F },
+        },
+        .visible = true,
+    });
+    kb::scene::SceneRenderFeedback::Publish(scene, frame);
+
+    const RECT renderArea{ 0, 0, 960, 540 };
+    float bodyX = 0.0F;
+    float bodyY = 0.0F;
+    kb::editor::tests::Require(
+        kb::editor::EditorSceneViewportMath::WorldToScreen(camera, renderArea, body, bodyX, bodyY),
+        "Box picker fixture must project the body on screen");
+    float feetX = 0.0F;
+    float feetY = 0.0F;
+    kb::editor::tests::Require(
+        kb::editor::EditorSceneViewportMath::WorldToScreen(camera, renderArea, feet, feetX, feetY),
+        "Box picker fixture must project the origin on screen");
+
+    // A tight rectangle around the body only - the origin is deliberately outside it.
+    const RECT bodyRect{
+        static_cast<LONG>(bodyX) - 10, static_cast<LONG>(bodyY) - 10,
+        static_cast<LONG>(bodyX) + 10, static_cast<LONG>(bodyY) + 10 };
+    kb::editor::tests::Require(
+        feetY < static_cast<float>(bodyRect.top) || feetY > static_cast<float>(bodyRect.bottom) ||
+            feetX < static_cast<float>(bodyRect.left) || feetX > static_cast<float>(bodyRect.right),
+        "Box picker fixture is not exercising the case: the origin must fall outside the rectangle");
+
+    const std::vector<kb::scene::SceneEntity> picked =
+        kb::editor::EditorSceneViewportMeshPicker::PickInsideRect(scene, camera, renderArea, bodyRect);
+    kb::editor::tests::Require(
+        std::ranges::find(picked, tall) != picked.end(),
+        "Rectangle selection must select a mesh through its published box, not only its origin");
+
+    // A rectangle in an empty corner must still select nothing.
+    const std::vector<kb::scene::SceneEntity> empty =
+        kb::editor::EditorSceneViewportMeshPicker::PickInsideRect(
+            scene, camera, renderArea, RECT{ 0, 0, 12, 12 });
+    kb::editor::tests::Require(
+        std::ranges::find(empty, tall) == empty.end(),
+        "Rectangle selection must not select a mesh whose projected box is outside the rectangle");
+}
+
 void RunViewportBoxPickerIncludesVisibleComponentOverlaysTest() {
     kb::scene::Scene scene;
     const kb::scene::SceneEntity light = scene.Entities().CreateEntity(
@@ -1809,6 +1875,7 @@ void RunEditorViewportPreviewTests() {
     RunViewportPickerSelectsEntityWithoutRenderableComponentTest();
     RunViewportMeshWinsOverEntityOriginPickTest();
     RunViewportBoxPickerIncludesVisibleComponentOverlaysTest();
+    RunViewportBoxPickerUsesPublishedBoxNotOriginTest();
     RunViewportMeshPickerWinsInsideLightWireframeVolumeTest();
     RunRenderBackendSettingsTest();
     RunEditorBackendSelectionTest();
