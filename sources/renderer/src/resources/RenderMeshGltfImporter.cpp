@@ -154,7 +154,9 @@ void AppendGltfIndex(RenderMeshAssetData& asset, std::uint32_t index) {
                   AccessorValue(*normalData, vertexIndex, 0U),
                   AccessorValue(*normalData, vertexIndex, 1U),
                   AccessorValue(*normalData, vertexIndex, 2U))
-            : std::array<float, 3>{ 0.0F, 1.0F, 0.0F };
+            // A zero normal means "the source authored none"; RenderMeshAssetFinalizer
+            // derives it from the geometry rather than shading the mesh with a constant.
+            : std::array<float, 3>{ 0.0F, 0.0F, 0.0F };
         const float u = texCoordData.has_value() ? AccessorValue(*texCoordData, vertexIndex, 0U) : 0.0F;
         const float v = texCoordData.has_value() ? AccessorValue(*texCoordData, vertexIndex, 1U) : 0.0F;
         // Second UV set when the source provides it, else fall back to uv0 (MAT-73).

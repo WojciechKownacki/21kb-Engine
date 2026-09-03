@@ -175,7 +175,9 @@ void FinishSection(RenderMeshAssetData& asset, ObjImportContext& context) {
 
     const Vec3& position = context.positions[static_cast<std::size_t>(key.position)];
     const Vec2 texCoord = key.texCoord >= 0 ? context.texCoords[static_cast<std::size_t>(key.texCoord)] : Vec2{};
-    const Vec3 normal = key.normal >= 0 ? context.normals[static_cast<std::size_t>(key.normal)] : Vec3{ 0.0F, 1.0F, 0.0F };
+    // A zero normal means "the source authored none"; RenderMeshAssetFinalizer derives it
+    // from the geometry. A made-up constant here would shade the mesh as one flat surface.
+    const Vec3 normal = key.normal >= 0 ? context.normals[static_cast<std::size_t>(key.normal)] : Vec3{};
     const std::uint32_t vertexIndex = static_cast<std::uint32_t>(asset.vertices.size());
     asset.vertices.push_back(RenderStaticMeshVertexP3N3UV2{
         .x = position.x,

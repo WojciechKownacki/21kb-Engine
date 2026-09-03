@@ -53,6 +53,61 @@ struct TangentAccum {
         : Vec3{};
 }
 
+// A source mesh may leave a vertex without an authored normal; importers signal that with a
+// zero normal instead of inventing a direction. Deriving it here keeps one owner for vertex
+// attributes computed from geometry, right beside the tangent synthesis that reads these
+// normals - a made-up constant would shade the whole mesh as one flat surface and would
+// also poison the tangent frame built from it. Accumulating the unnormalized triangle cross
+// products weights every face by its own area, the standard smooth-normal reconstruction.
+void GenerateMissingVertexNormals(RenderMeshAssetData& asset) {
+    const bool anyMissing = std::any_of(
+        asset.vertices.begin(), asset.vertices.end(),
+        [](const RenderStaticMeshVertexP3N3UV2& vertex) {
+            const Vec3 authored = Normalize(Vec3{ vertex.nx, vertex.ny, vertex.nz });
+            return authored.x == 0.0F && authored.y == 0.0F && authored.z == 0.0F;
+        });
+    if (!anyMissing) {
+        return;
+    }
+
+    std::vector<Vec3> accumulated(asset.vertices.size(), Vec3{});
+    for (std::size_t index = 0U; index + 2U < asset.indices32.size(); index += 3U) {
+        const std::uint32_t a = asset.indices32[index];
+        const std::uint32_t b = asset.indices32[index + 1U];
+        const std::uint32_t c = asset.indices32[index + 2U];
+        if (a >= accumulated.size() || b >= accumulated.size() || c >= accumulated.size()) {
+            continue;
+        }
+
+        const Vec3 v0{ asset.vertices[a].x, asset.vertices[a].y, asset.vertices[a].z };
+        const Vec3 v1{ asset.vertices[b].x, asset.vertices[b].y, asset.vertices[b].z };
+        const Vec3 v2{ asset.vertices[c].x, asset.vertices[c].y, asset.vertices[c].z };
+        // A degenerate triangle yields a zero cross product and contributes nothing.
+        const Vec3 faceNormal = Cross(Subtract(v1, v0), Subtract(v2, v0));
+        for (const std::uint32_t vertexIndex : { a, b, c }) {
+            accumulated[vertexIndex] = Add(accumulated[vertexIndex], faceNormal);
+        }
+    }
+
+    for (std::size_t index = 0U; index < asset.vertices.size(); ++index) {
+        RenderStaticMeshVertexP3N3UV2& vertex = asset.vertices[index];
+        const Vec3 authored = Normalize(Vec3{ vertex.nx, vertex.ny, vertex.nz });
+        if (authored.x != 0.0F || authored.y != 0.0F || authored.z != 0.0F) {
+            continue;
+        }
+
+        const Vec3 derived = Normalize(accumulated[index]);
+        if (derived.x == 0.0F && derived.y == 0.0F && derived.z == 0.0F) {
+            // Touched by no usable triangle; the tangent stage already handles a
+            // degenerate normal through its own fallback.
+            continue;
+        }
+        vertex.nx = derived.x;
+        vertex.ny = derived.y;
+        vertex.nz = derived.z;
+    }
+}
+
 [[nodiscard]] std::uint32_t MeshAssetVertexCount(const RenderMeshAssetData& asset) noexcept {
     return static_cast<std::uint32_t>(asset.tangentVertices.empty() ? asset.vertices.size() : asset.tangentVertices.size());
 }
@@ -463,6 +518,7 @@ bool RenderMeshAssetFinalizer::Finalize(
     if (options.optimizeVertexFetch && hasExplicitVertexRanges) {
         return false;
     }
+    GenerateMissingVertexNormals(asset);
     EnsureTangentVertexStorage(asset);
     OptimizeMeshAssetVertexCache(asset);
     if (options.optimizeVertexFetch) {

@@ -853,6 +853,55 @@ void RunObjImporterBuildsRenderMeshDescWithSectionsAndSlotsTest() {
     Require(asset->materialSlots[asset->sections[1].materialSlot].defaultMaterialAssetId == 102U, "OBJ importer did not bind second material slot");
 }
 
+void RunObjImporterGeneratesMissingNormalsTest() {
+    // An OBJ exported without `vn` carries no normals at all. Shading them with a single
+    // constant up vector makes every triangle of the model receive identical light, so the
+    // mesh renders as a flat silhouette no matter how it is lit.
+    std::istringstream withoutNormals{
+        "v 0 0 0\n"
+        "v 1 0 0\n"
+        "v 1 1 0\n"
+        "v 0 1 0\n"
+        "vt 0 0\n"
+        "vt 1 0\n"
+        "vt 1 1\n"
+        "vt 0 1\n"
+        "f 1/1 2/2 3/3 4/4\n"
+    };
+
+    const std::optional<RenderMeshAssetData> generated = RenderMeshAssetBuilder::LoadObj(
+        withoutNormals, RenderMeshObjImportDesc{});
+    Require(generated.has_value(), "OBJ importer failed to build a mesh asset without source normals");
+    Require(!generated->tangentVertices.empty(), "OBJ importer produced no vertices for the normal-less source");
+    for (const RenderStaticMeshVertexP3N3T4UV2& vertex : generated->tangentVertices) {
+        Require(
+            NearlyEqual(vertex.nx, 0.0F) && NearlyEqual(vertex.ny, 0.0F) && NearlyEqual(vertex.nz, 1.0F),
+            "OBJ importer must derive normals from the geometry when the source has none");
+    }
+
+    // A source that does author normals keeps them: generation is a fallback, not an override.
+    std::istringstream withNormals{
+        "v 0 0 0\n"
+        "v 1 0 0\n"
+        "v 1 1 0\n"
+        "vt 0 0\n"
+        "vt 1 0\n"
+        "vt 1 1\n"
+        "vn 0 1 0\n"
+        "f 1/1/1 2/2/1 3/3/1\n"
+    };
+
+    const std::optional<RenderMeshAssetData> authored = RenderMeshAssetBuilder::LoadObj(
+        withNormals, RenderMeshObjImportDesc{});
+    Require(authored.has_value(), "OBJ importer failed to build a mesh asset with source normals");
+    Require(!authored->tangentVertices.empty(), "OBJ importer produced no vertices for the authored-normal source");
+    for (const RenderStaticMeshVertexP3N3T4UV2& vertex : authored->tangentVertices) {
+        Require(
+            NearlyEqual(vertex.nx, 0.0F) && NearlyEqual(vertex.ny, 1.0F) && NearlyEqual(vertex.nz, 0.0F),
+            "OBJ importer must keep the normals a source authored");
+    }
+}
+
 void AppendFbxU32(std::vector<std::byte>& output, std::uint32_t value) {
     for (std::uint32_t shift = 0U; shift < 32U; shift += 8U) {
         output.push_back(static_cast<std::byte>((value >> shift) & 0xFFU));
@@ -3528,6 +3577,7 @@ void RunRenderResourceRegistryTests() {
     RunSkeletalMeshValidatedBuildMatchesCheckedBuildTest();
     RunSkinningPaletteAllocatorLifetimeTest();
     RunObjImporterBuildsRenderMeshDescWithSectionsAndSlotsTest();
+    RunObjImporterGeneratesMissingNormalsTest();
     RunFbxImporterBuildsSectionsForMaterialSlotsTest();
     RunFbxImporterStopsAtFooterAfterNullTerminatorTest();
     RunRenderMeshAssetLoaderDiscoversAndLoadsObjThroughAssetManagerTest();
