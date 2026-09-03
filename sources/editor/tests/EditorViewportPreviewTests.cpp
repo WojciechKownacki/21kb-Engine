@@ -17,6 +17,7 @@
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
+#include "engine/scene/SceneRenderFeedback.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SkeletalMeshAssetIO.hpp"
 #include "engine/scene/SkeletonAssetIO.hpp"
@@ -1015,6 +1016,59 @@ void RunViewportMeshPickerUsesSynchronizedWorldTransformsTest() {
         "Viewport picker should hit a nested mesh at its world position after its root moves");
 }
 
+void RunViewportMeshPickerUsesPublishedWorldBoundsTest() {
+    // A character mesh is authored with its origin at the feet, so its visible body sits
+    // entirely outside the picker's fallback unit box around the entity origin. The
+    // renderer already publishes the real world bounds it culls with, and a click on the
+    // drawn body must hit the entity.
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity beast = scene.Entities().CreateEntity(
+        kb::scene::SceneObjectDesc{ .name = "Tall Character" });
+    scene.Components().MeshRenderers().Set(
+        beast, kb::scene::MeshRendererComponent{ .meshAssetId = 909U });
+    scene.Transforms().Set(
+        beast,
+        kb::scene::TransformComponent{
+            .localPosition = kb::scene::Vec3{ 0.0F, 0.0F, 0.0F },
+        });
+
+    kb::scene::SceneRenderVisibilityFrame frame;
+    frame.frustumValid = true;
+    frame.entries.push_back(kb::scene::SceneRenderVisibilityEntry{
+        .entityId = beast.Id(),
+        .worldBounds = kb::scene::SceneRenderBounds{
+            .center = kb::math::Vec3{ 0.0F, 8.0F, 0.0F },
+            .radius = 3.0F,
+        },
+        .visible = true,
+    });
+    kb::scene::SceneRenderFeedback::Publish(scene, frame);
+
+    const kb::editor::EditorSceneViewportPickResult bodyPick =
+        kb::editor::EditorSceneViewportMeshPicker::PickNearest(
+            scene,
+            kb::editor::EditorSceneViewportRay{
+                .origin = kb::scene::Vec3{ 0.0F, 8.0F, -20.0F },
+                .direction = kb::scene::Vec3{ 0.0F, 0.0F, 1.0F },
+            });
+
+    kb::editor::tests::Require(
+        bodyPick.IsValid() && bodyPick.entity == beast,
+        "Viewport picker should hit a mesh through its published world bounds, not only the unit box at its origin");
+
+    const kb::editor::EditorSceneViewportPickResult emptyPick =
+        kb::editor::EditorSceneViewportMeshPicker::PickNearest(
+            scene,
+            kb::editor::EditorSceneViewportRay{
+                .origin = kb::scene::Vec3{ 0.0F, 40.0F, -20.0F },
+                .direction = kb::scene::Vec3{ 0.0F, 0.0F, 1.0F },
+            });
+
+    kb::editor::tests::Require(
+        !emptyPick.IsValid(),
+        "Viewport picker must not report a hit for a ray that misses the published world bounds");
+}
+
 void RunViewportMeshPickerSkipsHiddenMeshesTest() {
     kb::scene::Scene scene;
     const kb::scene::SceneEntity hidden = scene.Entities().CreateEntity(
@@ -1698,6 +1752,7 @@ void RunEditorViewportPreviewTests() {
     RunViewportMeshPickerNearestMeshRendererTest();
     RunViewportMeshPickerUsesSynchronizedWorldTransformsTest();
     RunViewportMeshPickerSkipsHiddenMeshesTest();
+    RunViewportMeshPickerUsesPublishedWorldBoundsTest();
     RunViewportLightWireframePickerChoosesNestedInnerWireframeTest();
     RunViewportLightIconPickerSelectsLightIconsTest();
     RunViewportParticleIconPickerSelectsParticleEffectTest();
