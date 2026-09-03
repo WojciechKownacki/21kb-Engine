@@ -634,6 +634,7 @@ add_executable(kb_editor WIN32
     src/private/scene/material/EditorMaterialAssetAuthoring.hpp
     src/private/scene/material/EditorMaterialAssetEditCommand.hpp
     src/private/scene/material/EditorMaterialAssetGateway.hpp
+    src/private/scene/material/EditorMaterialGraphDebugLog.hpp
     src/private/scene/material/EditorEmbeddedMaterialAssetWriter.hpp
     src/private/scene/material/EditorEmbeddedMaterialExtractionTypes.hpp
     src/private/scene/material/EditorEmbeddedMaterialExtractor.hpp
@@ -884,7 +885,9 @@ add_executable(kb_editor WIN32
     src/scene/material/EditorMaterialAssetAuthoring.cpp
     src/scene/material/EditorMaterialAssetEditCommand.cpp
     src/scene/material/EditorMaterialAssetGateway.cpp
+    src/scene/material/EditorMaterialGraphDebugLog.cpp
     src/scene/material/EditorMaterialReferenceFinder.cpp
+    src/scene/material/EditorSceneContextMaterialGraph.cpp
     src/scene/particle/EditorParticleEffectReferenceFinder.cpp
     src/scene/material/EditorEmbeddedMaterialAssetWriter.cpp
     src/scene/material/EditorEmbeddedMaterialExtractor.cpp
@@ -1091,6 +1094,7 @@ kb_apply_editor_graph_cook_defs(kb_editor)
 # are enabled; /bigobj changes only the object-file index width and has no runtime cost.
 if(MSVC)
     set_source_files_properties(src/scene/EditorSceneContext.cpp PROPERTIES COMPILE_OPTIONS "/bigobj")
+    set_source_files_properties(src/scene/material/EditorSceneContextMaterialGraph.cpp PROPERTIES COMPILE_OPTIONS "/bigobj")
 endif()
 
 if(TARGET kb_21kb_particle_plugin)
