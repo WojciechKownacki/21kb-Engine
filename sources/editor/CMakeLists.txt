@@ -616,6 +616,7 @@ add_executable(kb_editor WIN32
     src/private/scene/EditorSceneAssetBrowserCommands.hpp
     src/private/scene/EditorSceneAudioAssetActions.hpp
     src/private/scene/EditorSceneCommandController.hpp
+    src/private/scene/EditorAssetErrorMessage.hpp
     src/private/scene/EditorSceneContext.hpp
     src/private/scene/AnimationClipTimelineState.hpp
     src/private/scene/AnimationClipEditorDocumentState.hpp
@@ -863,6 +864,7 @@ add_executable(kb_editor WIN32
     src/scene/EditorSceneAudioAssetActions.cpp
     src/scene/EditorSceneCommandController.cpp
     src/scene/EditorSceneContext.cpp
+    src/scene/EditorSceneContextSkeletalMesh.cpp
     src/scene/EditorSceneBuildGame.cpp
     src/scene/EditorParticleEditorHost.cpp
     src/private/scene/ParticleEditorBakeHostCommand.hpp
