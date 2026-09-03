@@ -426,6 +426,9 @@ void WriteLittleEndian32(std::ofstream& output, std::uint32_t value) {
         KB_STANDALONE_GRAPH_SHADER_INCLUDE_DIR,
         KB_STANDALONE_GRAPH_BGFX_SHADER_INCLUDE_DIR};
     request.cacheRoot = options.graphCacheRoot.generic_string();
+    // The cook refuses a request without an explicit target platform. This self-test cooks the
+    // DXBC backend, which only exists on Windows, so the platform is not a choice here.
+    request.shaderPlatform = kb::assets::bake::ShaderBakePlatform::Windows;
     const kb::render::RenderMaterialGraphShaderBackend backend =
         kb::render::RenderMaterialGraphShaderBackend::Dxbc;
     constexpr std::array<std::string_view, 2> passes{
