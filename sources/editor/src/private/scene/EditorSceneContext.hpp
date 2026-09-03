@@ -44,6 +44,7 @@
 #include "scene/SkeletonEditorDocumentState.hpp"
 #include "scene/material/EditorMaterialAssetAuthoring.hpp"
 #include "scene/material/MaterialEditorState.hpp"
+#include "scene/material/MaterialGraphInteractionState.hpp"
 #include "scene/material_preview/EditorMaterialPreviewPrimitivePolicy.hpp"
 #include "scene/material_preview/EditorMaterialPreviewSettings.hpp"
 #include "scene/transform_edit/EditorSceneTransformEditSession.hpp"
@@ -179,12 +180,6 @@ class EditorSceneContext {
         kb::assets::AssetId assetId{};
         std::uint64_t contentHash = 0U;
         kb::assets::TerrainAsset terrain{};
-    };
-
-    struct MaterialGraphDragNodeStart {
-        std::uint32_t nodeId = 0U;
-        std::int32_t positionX = 0;
-        std::int32_t positionY = 0;
     };
 
 public:
@@ -1430,20 +1425,7 @@ private:
     int materialGraphCanvasHeight_ = 720;
     int materialGraphCanvasLeft_ = 0;
     int materialGraphCanvasTop_ = 0;
-    kb::assets::AssetId materialGraphDragAssetId_{};
-    std::uint32_t materialGraphDragNodeId_ = 0U;
-    int materialGraphDragStartX_ = 0;
-    int materialGraphDragStartY_ = 0;
-    int materialGraphDragStartOffsetX_ = 0;
-    int materialGraphDragStartOffsetY_ = 0;
-    int materialGraphDragStartNodeX_ = 0;
-    int materialGraphDragStartNodeY_ = 0;
-    std::optional<kb::render::RenderMaterialAssetData> materialGraphDragStartDocument_;
-    std::uint32_t materialGraphDragStartSelectedNodeId_ = 0U;
-    std::vector<std::uint32_t> materialGraphDragStartSelectedNodeIds_;
-    std::vector<MaterialGraphDragNodeStart> materialGraphDragStartNodes_;
-    bool materialGraphDragChanged_ = false;
-    bool materialGraphNodeDragging_ = false;
+    MaterialGraphNodeDragState materialGraphNodeDrag_;
     kb::assets::AssetId materialGraphCommentDragAssetId_{};
     std::uint32_t materialGraphCommentDragId_ = 0U;
     int materialGraphCommentDragStartX_ = 0;
