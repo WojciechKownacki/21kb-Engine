@@ -184,6 +184,7 @@ bool RenderResourceRegistry::UpdateMeshGeometryMetadata(
         return false;
     }
     resource->bounds = desc.bounds;
+    resource->boundsBox = desc.boundsBox;
     for (const std::uint32_t sectionIndex : sectionIndices) {
         if (sectionIndex >= resource->sections.size()) return false;
         resource->sections[sectionIndex].bounds = desc.sections[sectionIndex].bounds;

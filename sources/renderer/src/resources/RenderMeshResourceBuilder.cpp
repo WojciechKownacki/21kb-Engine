@@ -159,6 +159,7 @@ RenderMeshResource RenderMeshResourceBuilder::Build(
         .meshlets = CopyMeshlets(desc),
         .lods = CopyLods(desc),
         .bounds = meshBounds,
+        .boundsBox = desc.boundsBox,
         .rasterStateExtra = desc.rasterStateExtra,
         .doubleSided = desc.doubleSided,
         .gpuCullingEnabled = desc.gpuDriven.allowGpuCulling && desc.gpuDriven.meshletCount > 0U,

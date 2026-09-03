@@ -146,11 +146,14 @@ void CompactIndices(RenderMeshAssetData& asset) {
     return asset.indices16.empty() ? asset.indices32[index] : asset.indices16[index];
 }
 
+// Emits the box alongside the sphere from the same min/max sweep: one pass, one origin, so
+// the two can never disagree about where the geometry is.
 [[nodiscard]] RenderBoundsSphere ComputeBounds(
     const RenderMeshAssetData& asset,
     std::uint32_t indexStart,
     std::uint32_t indexCount,
-    std::uint32_t vertexStart = 0U) noexcept {
+    std::uint32_t vertexStart = 0U,
+    RenderBoundsBox* outBox = nullptr) noexcept {
     const std::uint32_t vertexCount = MeshAssetVertexCount(asset);
     const std::uint32_t totalIndexCount = static_cast<std::uint32_t>(asset.indices16.empty() ? asset.indices32.size() : asset.indices16.size());
     if (vertexCount == 0U || vertexStart >= vertexCount || indexCount == 0U ||
@@ -201,6 +204,16 @@ void CompactIndices(RenderMeshAssetData& asset) {
         (minY + maxY) * 0.5F,
         (minZ + maxZ) * 0.5F,
     };
+    if (outBox != nullptr) {
+        *outBox = RenderBoundsBox{
+            .center = center,
+            .halfExtents = {
+                (maxX - minX) * 0.5F,
+                (maxY - minY) * 0.5F,
+                (maxZ - minZ) * 0.5F,
+            },
+        };
+    }
     float radiusSquared = 0.0F;
     for (std::uint32_t index = indexStart; index < indexEnd; ++index) {
         const std::uint32_t localIndex = IndexAt(asset, index);
@@ -219,6 +232,19 @@ void CompactIndices(RenderMeshAssetData& asset) {
         .center = center,
         .radius = std::sqrt(radiusSquared),
     };
+}
+
+[[nodiscard]] RenderBoundsBox MergeBoxes(RenderBoundsBox lhs, RenderBoundsBox rhs) noexcept {
+    if (!lhs.IsValid()) return rhs;
+    if (!rhs.IsValid()) return lhs;
+    RenderBoundsBox merged{};
+    for (std::size_t axis = 0U; axis < 3U; ++axis) {
+        const float minimum = std::min(lhs.center[axis] - lhs.halfExtents[axis], rhs.center[axis] - rhs.halfExtents[axis]);
+        const float maximum = std::max(lhs.center[axis] + lhs.halfExtents[axis], rhs.center[axis] + rhs.halfExtents[axis]);
+        merged.center[axis] = (minimum + maximum) * 0.5F;
+        merged.halfExtents[axis] = (maximum - minimum) * 0.5F;
+    }
+    return merged;
 }
 
 [[nodiscard]] RenderBoundsSphere MergeBounds(RenderBoundsSphere lhs, RenderBoundsSphere rhs) noexcept {
@@ -246,11 +272,19 @@ void CompactIndices(RenderMeshAssetData& asset) {
 void ComputeAssetBounds(RenderMeshAssetData& asset) noexcept {
     const std::uint32_t indexCount = static_cast<std::uint32_t>(asset.indices16.empty() ? asset.indices32.size() : asset.indices16.size());
     RenderBoundsSphere meshBounds{};
+    RenderBoundsBox meshBox{};
     for (RenderMeshSectionDesc& section : asset.sections) {
-        section.bounds = ComputeBounds(asset, section.indexStart, section.indexCount, section.vertexStart);
+        RenderBoundsBox sectionBox{};
+        section.bounds = ComputeBounds(asset, section.indexStart, section.indexCount, section.vertexStart, &sectionBox);
         meshBounds = MergeBounds(meshBounds, section.bounds);
+        meshBox = MergeBoxes(meshBox, sectionBox);
     }
-    asset.bounds = asset.sections.empty() ? ComputeBounds(asset, 0U, indexCount) : meshBounds;
+    if (asset.sections.empty()) {
+        asset.bounds = ComputeBounds(asset, 0U, indexCount, 0U, &meshBox);
+    } else {
+        asset.bounds = meshBounds;
+    }
+    asset.boundsBox = meshBox;
 }
 
 void BuildGpuDrivenMetadata(RenderMeshAssetData& asset) {

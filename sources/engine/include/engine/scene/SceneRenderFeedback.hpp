@@ -15,15 +15,23 @@ namespace kb::scene {
 class Scene;
 
 // LIB-144: one entity's renderer-computed world-space bounding sphere. The renderer's ONLY
-// bounds representation is a sphere (kb::render::RenderBoundsSphere - center + radius,
-// computed from mesh vertices at asset-build time and transformed by the entity's model
-// matrix every frame); kb::scene deliberately mirrors that single source of truth as a plain
-// value type instead of inventing a second AABB representation the renderer never computes.
+// bounds representation is a sphere and a box sharing one origin
+// (kb::render::RenderBoundsSphere and RenderBoundsBox, both computed from mesh vertices in a
+// single pass at asset-build time and transformed by the entity's model matrix every frame);
+// kb::scene mirrors that single source of truth as a plain value type rather than inventing
+// its own. The sphere is the cheaper test and the right one for distance work; the box is far
+// tighter for anything long or flat, which is what click and rectangle selection need.
+// `halfExtents` is zero for a mesh whose box the renderer could not resolve - callers that
+// need the tighter shape must check HasBox() and fall back to the sphere.
 struct SceneRenderBounds {
     kb::math::Vec3 center{};
     float radius = 0.0F;
+    kb::math::Vec3 halfExtents{};
 
     [[nodiscard]] constexpr bool IsValid() const noexcept { return radius > 0.0F; }
+    [[nodiscard]] constexpr bool HasBox() const noexcept {
+        return halfExtents.x > 0.0F && halfExtents.y > 0.0F && halfExtents.z > 0.0F;
+    }
 };
 
 // LIB-144: one camera frustum plane in ax + by + cz + w >= 0 half-space form (a point is
