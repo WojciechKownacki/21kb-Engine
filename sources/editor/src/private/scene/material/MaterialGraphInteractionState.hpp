@@ -32,4 +32,20 @@ struct MaterialGraphNodeDragState final {
     bool dragging = false;
 };
 
+struct MaterialGraphCommentDragState final {
+    kb::assets::AssetId assetId{};
+    std::uint32_t commentId = 0U;
+    int startX = 0;
+    int startY = 0;
+    int startCommentX = 0;
+    int startCommentY = 0;
+    std::optional<kb::render::RenderMaterialAssetData> startDocument;
+    std::uint32_t startSelectedNodeId = 0U;
+    std::vector<std::uint32_t> startSelectedNodeIds;
+    std::vector<std::uint32_t> memberNodeIds;
+    std::uint32_t startSelectedCommentId = 0U;
+    bool changed = false;
+    bool dragging = false;
+};
+
 } // namespace kb::editor
