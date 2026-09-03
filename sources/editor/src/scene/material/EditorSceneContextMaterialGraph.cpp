@@ -2559,29 +2559,29 @@ bool EditorSceneContext::BeginMaterialGraphCommentDrag(kb::assets::AssetId asset
     if (!position.has_value()) {
         return false;
     }
-    materialGraphCommentDragAssetId_ = assetId;
-    materialGraphCommentDragId_ = commentId;
-    materialGraphCommentDragStartX_ = x;
-    materialGraphCommentDragStartY_ = y;
-    materialGraphCommentDragStartCommentX_ = position->first;
-    materialGraphCommentDragStartCommentY_ = position->second;
-    materialGraphCommentDragStartDocument_ = materialEditor_.WorkingCopy();
-    materialGraphCommentDragStartSelectedNodeId_ = materialEditor_.SelectedNodeId();
-    materialGraphCommentDragStartSelectedNodeIds_ = materialEditor_.SelectedNodeIds();
-    materialGraphCommentDragStartSelectedCommentId_ = materialEditor_.SelectedCommentId();
-    materialGraphCommentDragMemberNodeIds_ = materialEditor_.GraphNodeIdsInsideComment(commentId);
-    materialGraphCommentDragChanged_ = false;
-    materialGraphCommentDragging_ = true;
+    materialGraphCommentDrag_.assetId = assetId;
+    materialGraphCommentDrag_.commentId = commentId;
+    materialGraphCommentDrag_.startX = x;
+    materialGraphCommentDrag_.startY = y;
+    materialGraphCommentDrag_.startCommentX = position->first;
+    materialGraphCommentDrag_.startCommentY = position->second;
+    materialGraphCommentDrag_.startDocument = materialEditor_.WorkingCopy();
+    materialGraphCommentDrag_.startSelectedNodeId = materialEditor_.SelectedNodeId();
+    materialGraphCommentDrag_.startSelectedNodeIds = materialEditor_.SelectedNodeIds();
+    materialGraphCommentDrag_.startSelectedCommentId = materialEditor_.SelectedCommentId();
+    materialGraphCommentDrag_.memberNodeIds = materialEditor_.GraphNodeIdsInsideComment(commentId);
+    materialGraphCommentDrag_.changed = false;
+    materialGraphCommentDrag_.dragging = true;
     return true;
 }
 
 bool EditorSceneContext::DragMaterialGraphComment(int x, int y) {
-    if (!materialGraphCommentDragging_ || !materialGraphCommentDragAssetId_.IsValid() || materialGraphCommentDragId_ == 0U) {
+    if (!materialGraphCommentDrag_.dragging || !materialGraphCommentDrag_.assetId.IsValid() || materialGraphCommentDrag_.commentId == 0U) {
         return false;
     }
-    const int screenDeltaX = x - materialGraphCommentDragStartX_;
-    const int screenDeltaY = y - materialGraphCommentDragStartY_;
-    if (!materialGraphCommentDragChanged_ &&
+    const int screenDeltaX = x - materialGraphCommentDrag_.startX;
+    const int screenDeltaY = y - materialGraphCommentDrag_.startY;
+    if (!materialGraphCommentDrag_.changed &&
         !MaterialGraphInteractionPolicy::CrossedDragThreshold(screenDeltaX, screenDeltaY)) {
         return false;
     }
@@ -2589,42 +2589,42 @@ bool EditorSceneContext::DragMaterialGraphComment(int x, int y) {
     const int deltaY = static_cast<int>(std::lround(static_cast<float>(screenDeltaY) / std::max(0.1F, materialGraphZoom_)));
     // Smooth dragging (matches DragMaterialGraphNode): track the cursor with the
     // raw zoom-corrected delta rather than quantizing the target to the 32u grid.
-    const std::int32_t nextX = static_cast<std::int32_t>(materialGraphCommentDragStartCommentX_ + deltaX);
-    const std::int32_t nextY = static_cast<std::int32_t>(materialGraphCommentDragStartCommentY_ + deltaY);
+    const std::int32_t nextX = static_cast<std::int32_t>(materialGraphCommentDrag_.startCommentX + deltaX);
+    const std::int32_t nextY = static_cast<std::int32_t>(materialGraphCommentDrag_.startCommentY + deltaY);
     if (!materialEditor_.MoveGraphCommentGroup(
-            materialGraphCommentDragId_,
+            materialGraphCommentDrag_.commentId,
             nextX,
             nextY,
-            materialGraphCommentDragMemberNodeIds_)) {
+            materialGraphCommentDrag_.memberNodeIds)) {
         return false;
     }
-    materialGraphCommentDragChanged_ = true;
+    materialGraphCommentDrag_.changed = true;
     materialEditor_.ClearDiagnostics();
     return true;
 }
 
 bool EditorSceneContext::EndMaterialGraphCommentDrag() {
-    if (!materialGraphCommentDragging_) {
+    if (!materialGraphCommentDrag_.dragging) {
         return false;
     }
-    const bool shouldRecord = materialGraphCommentDragChanged_ && materialGraphCommentDragStartDocument_.has_value();
-    const kb::assets::AssetId assetId = materialGraphCommentDragAssetId_;
-    std::optional<kb::render::RenderMaterialAssetData> before = std::move(materialGraphCommentDragStartDocument_);
-    const std::uint32_t beforeSelectedNodeId = materialGraphCommentDragStartSelectedNodeId_;
-    std::vector<std::uint32_t> beforeSelectedNodeIds = std::move(materialGraphCommentDragStartSelectedNodeIds_);
-    const std::uint32_t beforeSelectedCommentId = materialGraphCommentDragStartSelectedCommentId_;
-    materialGraphCommentDragging_ = false;
-    materialGraphCommentDragAssetId_ = {};
-    materialGraphCommentDragId_ = 0U;
-    materialGraphCommentDragStartX_ = 0;
-    materialGraphCommentDragStartY_ = 0;
-    materialGraphCommentDragStartCommentX_ = 0;
-    materialGraphCommentDragStartCommentY_ = 0;
-    materialGraphCommentDragStartSelectedNodeId_ = 0U;
-    materialGraphCommentDragStartSelectedNodeIds_.clear();
-    materialGraphCommentDragMemberNodeIds_.clear();
-    materialGraphCommentDragStartSelectedCommentId_ = 0U;
-    materialGraphCommentDragChanged_ = false;
+    const bool shouldRecord = materialGraphCommentDrag_.changed && materialGraphCommentDrag_.startDocument.has_value();
+    const kb::assets::AssetId assetId = materialGraphCommentDrag_.assetId;
+    std::optional<kb::render::RenderMaterialAssetData> before = std::move(materialGraphCommentDrag_.startDocument);
+    const std::uint32_t beforeSelectedNodeId = materialGraphCommentDrag_.startSelectedNodeId;
+    std::vector<std::uint32_t> beforeSelectedNodeIds = std::move(materialGraphCommentDrag_.startSelectedNodeIds);
+    const std::uint32_t beforeSelectedCommentId = materialGraphCommentDrag_.startSelectedCommentId;
+    materialGraphCommentDrag_.dragging = false;
+    materialGraphCommentDrag_.assetId = {};
+    materialGraphCommentDrag_.commentId = 0U;
+    materialGraphCommentDrag_.startX = 0;
+    materialGraphCommentDrag_.startY = 0;
+    materialGraphCommentDrag_.startCommentX = 0;
+    materialGraphCommentDrag_.startCommentY = 0;
+    materialGraphCommentDrag_.startSelectedNodeId = 0U;
+    materialGraphCommentDrag_.startSelectedNodeIds.clear();
+    materialGraphCommentDrag_.memberNodeIds.clear();
+    materialGraphCommentDrag_.startSelectedCommentId = 0U;
+    materialGraphCommentDrag_.changed = false;
     if (shouldRecord) {
         return RecordMaterialGraphWorkingCopyEdit(
             assetId,
@@ -2638,38 +2638,38 @@ bool EditorSceneContext::EndMaterialGraphCommentDrag() {
 }
 
 bool EditorSceneContext::CancelMaterialGraphCommentDrag() {
-    if (!materialGraphCommentDragging_) {
+    if (!materialGraphCommentDrag_.dragging) {
         return false;
     }
-    if (materialGraphCommentDragStartDocument_.has_value() &&
-        materialEditor_.OpenAssetId() == materialGraphCommentDragAssetId_) {
-        materialEditor_.SetWorkingCopy(*materialGraphCommentDragStartDocument_);
+    if (materialGraphCommentDrag_.startDocument.has_value() &&
+        materialEditor_.OpenAssetId() == materialGraphCommentDrag_.assetId) {
+        materialEditor_.SetWorkingCopy(*materialGraphCommentDrag_.startDocument);
         static_cast<void>(materialEditor_.SetNodeSelection(
-            materialGraphCommentDragStartSelectedNodeIds_,
-            materialGraphCommentDragStartSelectedNodeId_));
-        if (materialGraphCommentDragStartSelectedCommentId_ != 0U) {
-            static_cast<void>(materialEditor_.SelectComment(materialGraphCommentDragStartSelectedCommentId_));
+            materialGraphCommentDrag_.startSelectedNodeIds,
+            materialGraphCommentDrag_.startSelectedNodeId));
+        if (materialGraphCommentDrag_.startSelectedCommentId != 0U) {
+            static_cast<void>(materialEditor_.SelectComment(materialGraphCommentDrag_.startSelectedCommentId));
         }
         materialEditor_.ClearDiagnostics();
     }
-    materialGraphCommentDragging_ = false;
-    materialGraphCommentDragAssetId_ = {};
-    materialGraphCommentDragId_ = 0U;
-    materialGraphCommentDragStartX_ = 0;
-    materialGraphCommentDragStartY_ = 0;
-    materialGraphCommentDragStartCommentX_ = 0;
-    materialGraphCommentDragStartCommentY_ = 0;
-    materialGraphCommentDragStartDocument_.reset();
-    materialGraphCommentDragStartSelectedNodeId_ = 0U;
-    materialGraphCommentDragStartSelectedNodeIds_.clear();
-    materialGraphCommentDragMemberNodeIds_.clear();
-    materialGraphCommentDragStartSelectedCommentId_ = 0U;
-    materialGraphCommentDragChanged_ = false;
+    materialGraphCommentDrag_.dragging = false;
+    materialGraphCommentDrag_.assetId = {};
+    materialGraphCommentDrag_.commentId = 0U;
+    materialGraphCommentDrag_.startX = 0;
+    materialGraphCommentDrag_.startY = 0;
+    materialGraphCommentDrag_.startCommentX = 0;
+    materialGraphCommentDrag_.startCommentY = 0;
+    materialGraphCommentDrag_.startDocument.reset();
+    materialGraphCommentDrag_.startSelectedNodeId = 0U;
+    materialGraphCommentDrag_.startSelectedNodeIds.clear();
+    materialGraphCommentDrag_.memberNodeIds.clear();
+    materialGraphCommentDrag_.startSelectedCommentId = 0U;
+    materialGraphCommentDrag_.changed = false;
     return true;
 }
 
 bool EditorSceneContext::IsMaterialGraphCommentDragging() const noexcept {
-    return materialGraphCommentDragging_;
+    return materialGraphCommentDrag_.dragging;
 }
 
 bool EditorSceneContext::BeginMaterialGraphBoxSelection(
@@ -3330,7 +3330,7 @@ bool EditorSceneContext::HasMaterialGraphWorkingCopyTransaction() const noexcept
 }
 
 bool EditorSceneContext::HasMaterialGraphGestureInFlight() const noexcept {
-    return materialGraphNodeDrag_.dragging || materialGraphCommentDragging_ || HasMaterialGraphPinConnection() ||
+    return materialGraphNodeDrag_.dragging || materialGraphCommentDrag_.dragging || HasMaterialGraphPinConnection() ||
         HasMaterialGraphWorkingCopyTransaction();
 }
 
