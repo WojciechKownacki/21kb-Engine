@@ -8,6 +8,7 @@
 #include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneComponentVisitors.hpp"
 #include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneRenderFeedback.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneVisibilityResolution.hpp"
@@ -223,6 +224,32 @@ void ConsiderOverlayIconPick(NearestPickContext& pick, kb::scene::SceneEntity en
     };
 }
 
+// The renderer publishes, at every scene submit, the same world bounds sphere it culls
+// with. It is the only real measurement of where a mesh actually is: the fallback box
+// below knows nothing about the asset, so a mesh whose geometry sits away from its own
+// origin - a character authored with the origin at its feet - draws entirely outside it.
+// Ray directions reaching the picker are normalized (EditorSceneViewportHitResolver), so
+// this distance is in the same world units as the slab test's.
+[[nodiscard]] bool HitBoundsSphere(
+    const EditorSceneViewportRay& ray,
+    const kb::scene::SceneRenderBounds& bounds,
+    float& distance) noexcept {
+    const kb::scene::Vec3 toCenter = EditorSceneViewportMath::Sub(bounds.center, ray.origin);
+    const float alongRay = EditorSceneViewportMath::Dot(toCenter, ray.direction);
+    const float radiusSquared = bounds.radius * bounds.radius;
+    const float perpendicularSquared =
+        EditorSceneViewportMath::Dot(toCenter, toCenter) - alongRay * alongRay;
+    if (perpendicularSquared > radiusSquared) {
+        return false;
+    }
+
+    const float halfChord = std::sqrt(std::max(0.0F, radiusSquared - perpendicularSquared));
+    const float nearDistance = alongRay - halfChord;
+    const float farDistance = alongRay + halfChord;
+    distance = nearDistance > 0.0F ? nearDistance : farDistance;
+    return distance > 0.0F;
+}
+
 [[nodiscard]] bool HitTransformBox(const EditorSceneViewportRay& ray, const kb::scene::TransformComponent& transform, float& distance) noexcept {
     const kb::scene::Quat worldRotation = ResolveWorldRotation(transform);
     const kb::scene::Vec3 localOrigin = InverseRotate(worldRotation, EditorSceneViewportMath::Sub(ray.origin, transform.worldPosition));
@@ -263,7 +290,14 @@ void PickNearestVisitor(kb::scene::SceneEntity entity, const kb::scene::Transfor
         return;
     }
     float distance = 0.0F;
-    if (!HitTransformBox(pick.ray, transform, distance)) {
+    const kb::scene::SceneRenderBounds bounds =
+        pick.scene != nullptr ? kb::scene::SceneRenderFeedback::WorldBounds(*pick.scene, entity)
+                              : kb::scene::SceneRenderBounds{};
+    // Before the first submit, for a mesh the renderer could not resolve, and in headless
+    // scenes there is no published frame; the transform box stays the honest fallback.
+    const bool hit = bounds.IsValid() ? HitBoundsSphere(pick.ray, bounds, distance)
+                                      : HitTransformBox(pick.ray, transform, distance);
+    if (!hit) {
         return;
     }
 
