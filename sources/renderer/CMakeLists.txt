@@ -729,6 +729,17 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
     add_test(NAME kb_renderer_tests COMMAND $<TARGET_FILE:kb_renderer_tests>)
     set_tests_properties(kb_renderer_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+    # The packaged WebGPU decode fallback is only observable in a process with no bgfx device:
+    # the capability query reads a process-global that any earlier GPU suite fills in. Running
+    # it as its own test gives it the fresh process the expectation needs, which the aggregate
+    # run cannot provide.
+    add_test(
+        NAME kb_renderer_webgpu_texture_fallback
+        COMMAND $<TARGET_FILE:kb_renderer_tests> webgpu-texture-fallback)
+    set_tests_properties(
+        kb_renderer_webgpu_texture_fallback
+        PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;packaging")
+
     set(KB_GRAPH_SHADERC_TOOL "" CACHE FILEPATH "Path to bgfx shaderc used by the graph shader cook tests")
     set(_kb_graph_shaderc_tool "")
     if(TARGET bgfx::shaderc)

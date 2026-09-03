@@ -1841,10 +1841,24 @@ void RunPackagedWebGpuTextureFallbackTest() {
             astc.status == TextureBakeStatus::Success &&
             etc2.status == TextureBakeStatus::Success,
         "WebGPU runtime fallback fixture could not bake every package texture family");
-    Require(!RenderDeviceSupportsTextureFormat(bc.format, RenderTextureColorSpace::Linear) &&
-            !RenderDeviceSupportsTextureFormat(astc.format, RenderTextureColorSpace::Linear) &&
-            !RenderDeviceSupportsTextureFormat(etc2.format, RenderTextureColorSpace::Linear),
-        "WebGPU runtime fallback fixture unexpectedly has a compressed-capable bgfx device");
+    // This fixture exercises the runtime's decode fallback, which is only reachable while the
+    // device reports none of these families. RenderDeviceSupportsTextureFormat reads
+    // bgfx::getCaps(), a process-global that is all-zero until a device comes up, so the
+    // expectation holds only in a process that has not initialised one. Any earlier GPU suite
+    // in the same binary brings a real device up, and a desktop adapter then reports block
+    // compression as supported - at which point the runtime is expected to UPLOAD rather than
+    // decode, and asserting the fallback would be asserting the wrong behaviour. Skip visibly
+    // instead of failing on process ordering; the dedicated `webgpu-texture-fallback` test
+    // runs this fixture in a fresh process, where the expectation is real.
+    if (RenderDeviceSupportsTextureFormat(bc.format, RenderTextureColorSpace::Linear) ||
+        RenderDeviceSupportsTextureFormat(astc.format, RenderTextureColorSpace::Linear) ||
+        RenderDeviceSupportsTextureFormat(etc2.format, RenderTextureColorSpace::Linear)) {
+        std::puts(
+            "WebGPU runtime fallback fixture skipped: this process already has a "
+            "compressed-capable bgfx device, so the decode fallback cannot be exercised here "
+            "(covered by the webgpu-texture-fallback test)");
+        return;
+    }
 
     const std::array<std::uint8_t, 5U> sceneSource{ 's', 'c', 'e', 'n', 'e' };
     std::vector<std::uint8_t> sceneBlob;
