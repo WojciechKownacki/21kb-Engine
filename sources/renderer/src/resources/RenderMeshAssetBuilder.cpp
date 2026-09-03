@@ -25,6 +25,7 @@ RenderMeshDesc& RenderMeshAssetData::RefreshDesc() noexcept {
         .materialSlots = materialSlots.empty() ? nullptr : materialSlots.data(),
         .materialSlotCount = static_cast<std::uint32_t>(materialSlots.size()),
         .bounds = bounds,
+        .boundsBox = boundsBox,
         .gpuDriven = RenderGpuDrivenMeshDesc{
             .meshlets = meshlets.empty() ? nullptr : meshlets.data(),
             .meshletCount = static_cast<std::uint32_t>(meshlets.size()),

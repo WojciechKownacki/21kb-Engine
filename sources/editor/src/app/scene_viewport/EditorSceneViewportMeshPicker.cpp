@@ -230,6 +230,27 @@ void ConsiderOverlayIconPick(NearestPickContext& pick, kb::scene::SceneEntity en
 // origin - a character authored with the origin at its feet - draws entirely outside it.
 // Ray directions reaching the picker are normalized (EditorSceneViewportHitResolver), so
 // this distance is in the same world units as the slab test's.
+// The renderer publishes a box beside the sphere for the same instance, sharing one origin.
+// The box is the shape selection wants: a character mesh is typically half as deep as it is
+// tall, so its sphere reaches far past the silhouette and steals clicks from empty space.
+// Reuses this file's own slab test rather than adding a second ray-box intersection.
+[[nodiscard]] bool HitBoundsBox(
+    const EditorSceneViewportRay& ray,
+    const kb::scene::SceneRenderBounds& bounds,
+    float& distance) noexcept {
+    const kb::scene::Vec3 localOrigin = EditorSceneViewportMath::Sub(ray.origin, bounds.center);
+    float nearDistance = 0.0F;
+    float farDistance = 1000000.0F;
+    if (!Slab(localOrigin.x, ray.direction.x, -bounds.halfExtents.x, bounds.halfExtents.x, nearDistance, farDistance) ||
+        !Slab(localOrigin.y, ray.direction.y, -bounds.halfExtents.y, bounds.halfExtents.y, nearDistance, farDistance) ||
+        !Slab(localOrigin.z, ray.direction.z, -bounds.halfExtents.z, bounds.halfExtents.z, nearDistance, farDistance)) {
+        return false;
+    }
+
+    distance = nearDistance > 0.0F ? nearDistance : farDistance;
+    return distance > 0.0F;
+}
+
 [[nodiscard]] bool HitBoundsSphere(
     const EditorSceneViewportRay& ray,
     const kb::scene::SceneRenderBounds& bounds,
@@ -293,10 +314,17 @@ void PickNearestVisitor(kb::scene::SceneEntity entity, const kb::scene::Transfor
     const kb::scene::SceneRenderBounds bounds =
         pick.scene != nullptr ? kb::scene::SceneRenderFeedback::WorldBounds(*pick.scene, entity)
                               : kb::scene::SceneRenderBounds{};
-    // Before the first submit, for a mesh the renderer could not resolve, and in headless
-    // scenes there is no published frame; the transform box stays the honest fallback.
-    const bool hit = bounds.IsValid() ? HitBoundsSphere(pick.ray, bounds, distance)
-                                      : HitTransformBox(pick.ray, transform, distance);
+    // Tightest available shape wins. The published box is preferred; the sphere covers a mesh
+    // whose box the renderer could not resolve; and before the first submit, or in a headless
+    // scene, there is no published frame at all, so the transform box stays the honest floor.
+    bool hit = false;
+    if (bounds.HasBox()) {
+        hit = HitBoundsBox(pick.ray, bounds, distance);
+    } else if (bounds.IsValid()) {
+        hit = HitBoundsSphere(pick.ray, bounds, distance);
+    } else {
+        hit = HitTransformBox(pick.ray, transform, distance);
+    }
     if (!hit) {
         return;
     }

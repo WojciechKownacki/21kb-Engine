@@ -139,6 +139,21 @@ struct RenderBoundsSphere {
     }
 };
 
+// The same volume as RenderBoundsSphere, expressed as a box. Both are produced in one pass
+// over the same positions and share `center` by construction, so they can never disagree
+// about where the geometry is - only about how tightly it is enclosed. A sphere is the
+// cheaper test and the right one for distance work; a box is far tighter for anything long
+// or flat (a character mesh is typically half as deep as it is tall, and its sphere reaches
+// well beyond the silhouette), which is what click and rectangle selection need.
+struct RenderBoundsBox {
+    std::array<float, 3> center{};
+    std::array<float, 3> halfExtents{};
+
+    [[nodiscard]] constexpr bool IsValid() const noexcept {
+        return halfExtents[0] > 0.0F && halfExtents[1] > 0.0F && halfExtents[2] > 0.0F;
+    }
+};
+
 struct RenderMeshSectionDesc {
     std::uint32_t indexStart = 0;
     std::uint32_t indexCount = 0;
@@ -233,6 +248,7 @@ struct RenderMeshDesc {
     const RenderMaterialSlotDesc* materialSlots = nullptr;
     std::uint32_t materialSlotCount = 0;
     RenderBoundsSphere bounds{};
+    RenderBoundsBox boundsBox{};
     RenderGpuDrivenMeshDesc gpuDriven{};
     RenderMeshSkinningDesc skinning{};
     std::uint64_t rasterStateExtra = 0;
@@ -258,6 +274,7 @@ struct RenderMeshResource {
     std::vector<RenderMeshletDesc> meshlets;
     std::vector<RenderMeshLodDesc> lods;
     RenderBoundsSphere bounds{};
+    RenderBoundsBox boundsBox{};
     std::uint64_t rasterStateExtra = 0;
     bool doubleSided = false;
     bool gpuCullingEnabled = false;
