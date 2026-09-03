@@ -1069,6 +1069,55 @@ void RunViewportMeshPickerUsesPublishedWorldBoundsTest() {
         "Viewport picker must not report a hit for a ray that misses the published world bounds");
 }
 
+void RunViewportMeshPickerPrefersPublishedBoxOverSphereTest() {
+    // The renderer publishes a box beside the sphere. For anything long or flat the sphere
+    // reaches well past the silhouette, so a click in empty space next to the mesh lands
+    // inside the sphere and steals the selection. The box must win that case.
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity slab = scene.Entities().CreateEntity(
+        kb::scene::SceneObjectDesc{ .name = "Flat Mesh" });
+    scene.Components().MeshRenderers().Set(
+        slab, kb::scene::MeshRendererComponent{ .meshAssetId = 910U });
+    scene.Transforms().Set(
+        slab, kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 0.0F, 0.0F, 0.0F } });
+
+    kb::scene::SceneRenderVisibilityFrame frame;
+    frame.frustumValid = true;
+    frame.entries.push_back(kb::scene::SceneRenderVisibilityEntry{
+        .entityId = slab.Id(),
+        .worldBounds = kb::scene::SceneRenderBounds{
+            .center = kb::math::Vec3{ 0.0F, 8.0F, 0.0F },
+            .radius = 3.0F,
+            .halfExtents = kb::math::Vec3{ 3.0F, 1.0F, 3.0F },
+        },
+        .visible = true,
+    });
+    kb::scene::SceneRenderFeedback::Publish(scene, frame);
+
+    const kb::editor::EditorSceneViewportPickResult throughBody =
+        kb::editor::EditorSceneViewportMeshPicker::PickNearest(
+            scene,
+            kb::editor::EditorSceneViewportRay{
+                .origin = kb::scene::Vec3{ 0.0F, 8.0F, -20.0F },
+                .direction = kb::scene::Vec3{ 0.0F, 0.0F, 1.0F },
+            });
+    kb::editor::tests::Require(
+        throughBody.IsValid() && throughBody.entity == slab,
+        "Viewport picker must still hit a mesh through its published bounding box");
+
+    // 2.5 units above the box top, but still inside the radius-3 sphere.
+    const kb::editor::EditorSceneViewportPickResult besideBody =
+        kb::editor::EditorSceneViewportMeshPicker::PickNearest(
+            scene,
+            kb::editor::EditorSceneViewportRay{
+                .origin = kb::scene::Vec3{ 0.0F, 10.5F, -20.0F },
+                .direction = kb::scene::Vec3{ 0.0F, 0.0F, 1.0F },
+            });
+    kb::editor::tests::Require(
+        !besideBody.IsValid(),
+        "Viewport picker must not select a mesh through sphere slack the published box excludes");
+}
+
 void RunViewportMeshPickerSkipsHiddenMeshesTest() {
     kb::scene::Scene scene;
     const kb::scene::SceneEntity hidden = scene.Entities().CreateEntity(
@@ -1753,6 +1802,7 @@ void RunEditorViewportPreviewTests() {
     RunViewportMeshPickerUsesSynchronizedWorldTransformsTest();
     RunViewportMeshPickerSkipsHiddenMeshesTest();
     RunViewportMeshPickerUsesPublishedWorldBoundsTest();
+    RunViewportMeshPickerPrefersPublishedBoxOverSphereTest();
     RunViewportLightWireframePickerChoosesNestedInnerWireframeTest();
     RunViewportLightIconPickerSelectsLightIconsTest();
     RunViewportParticleIconPickerSelectsParticleEffectTest();

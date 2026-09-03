@@ -79,6 +79,7 @@ struct RenderMeshAssetData {
     std::vector<RenderMeshEmbeddedMaterial> embeddedMaterials;
     std::vector<std::uint32_t> terrainSectionIndices;
     RenderBoundsSphere bounds{};
+    RenderBoundsBox boundsBox{};
     RenderMeshDesc desc{};
     std::uint64_t dynamicTopologyKey = 0U;
     std::vector<RenderMeshVertexUpdateRange> dynamicVertexUpdateRanges;
