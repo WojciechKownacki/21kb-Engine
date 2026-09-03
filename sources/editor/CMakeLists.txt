@@ -640,6 +640,7 @@ add_executable(kb_editor WIN32
     src/private/scene/material/EditorEmbeddedMaterialExtractionTypes.hpp
     src/private/scene/material/EditorEmbeddedMaterialExtractor.hpp
     src/private/scene/material/EditorEmbeddedMaterialTextureResolver.hpp
+    src/private/scene/material/MaterialGraphInteractionState.hpp
     src/private/scene/material_preview/EditorMaterialGraphCookService.hpp
     src/private/scene/material_preview/EditorMaterialNodePreviewBuilder.hpp
     src/private/scene/material_preview/EditorMaterialPreviewMeshFactory.hpp
