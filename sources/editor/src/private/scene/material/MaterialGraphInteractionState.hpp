@@ -48,4 +48,24 @@ struct MaterialGraphCommentDragState final {
     bool dragging = false;
 };
 
+enum class MaterialGraphSelectionOperation : std::uint8_t {
+    Replace,
+    Add,
+    Invert,
+    Remove,
+};
+
+struct MaterialGraphBoxSelectionState final {
+    kb::assets::AssetId assetId{};
+    int startX = 0;
+    int startY = 0;
+    int currentX = 0;
+    int currentY = 0;
+    MaterialGraphSelectionOperation operation = MaterialGraphSelectionOperation::Replace;
+    std::vector<std::uint32_t> baseNodeIds;
+    std::uint32_t basePrimaryNodeId = 0U;
+    bool moved = false;
+    bool selecting = false;
+};
+
 } // namespace kb::editor

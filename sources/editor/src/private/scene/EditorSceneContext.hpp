@@ -140,13 +140,6 @@ enum class EditorDirtySceneResolution {
     Discard,
 };
 
-enum class MaterialGraphSelectionOperation : std::uint8_t {
-    Replace,
-    Add,
-    Invert,
-    Remove,
-};
-
 [[nodiscard]] constexpr MaterialGraphSelectionOperation ResolveMaterialGraphSelectionOperation(
     bool altDown,
     bool controlDown,
@@ -1427,16 +1420,7 @@ private:
     int materialGraphCanvasTop_ = 0;
     MaterialGraphNodeDragState materialGraphNodeDrag_;
     MaterialGraphCommentDragState materialGraphCommentDrag_;
-    kb::assets::AssetId materialGraphBoxSelectionAssetId_{};
-    int materialGraphBoxSelectionStartX_ = 0;
-    int materialGraphBoxSelectionStartY_ = 0;
-    int materialGraphBoxSelectionCurrentX_ = 0;
-    int materialGraphBoxSelectionCurrentY_ = 0;
-    MaterialGraphSelectionOperation materialGraphBoxSelectionOperation_ = MaterialGraphSelectionOperation::Replace;
-    std::vector<std::uint32_t> materialGraphBoxSelectionBaseNodeIds_;
-    std::uint32_t materialGraphBoxSelectionBasePrimaryNodeId_ = 0U;
-    bool materialGraphBoxSelectionMoved_ = false;
-    bool materialGraphBoxSelecting_ = false;
+    MaterialGraphBoxSelectionState materialGraphBoxSelection_;
     bool materialGraphFocused_ = false;
     int materialEditorDetailsScrollOffset_ = 0;
     int materialGraphPanStartX_ = 0;
