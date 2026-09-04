@@ -2680,50 +2680,50 @@ bool EditorSceneContext::BeginMaterialGraphBoxSelection(
     if (!assetId.IsValid() || materialEditor_.OpenAssetId() != assetId || !materialEditor_.WorkingCopy().has_value()) {
         return false;
     }
-    materialGraphBoxSelectionAssetId_ = assetId;
-    materialGraphBoxSelectionStartX_ = x;
-    materialGraphBoxSelectionStartY_ = y;
-    materialGraphBoxSelectionCurrentX_ = x;
-    materialGraphBoxSelectionCurrentY_ = y;
-    materialGraphBoxSelectionOperation_ = operation;
-    materialGraphBoxSelectionBaseNodeIds_ = materialEditor_.SelectedNodeIds();
-    materialGraphBoxSelectionBasePrimaryNodeId_ = materialEditor_.SelectedNodeId();
-    materialGraphBoxSelectionMoved_ = false;
-    materialGraphBoxSelecting_ = true;
+    materialGraphBoxSelection_.assetId = assetId;
+    materialGraphBoxSelection_.startX = x;
+    materialGraphBoxSelection_.startY = y;
+    materialGraphBoxSelection_.currentX = x;
+    materialGraphBoxSelection_.currentY = y;
+    materialGraphBoxSelection_.operation = operation;
+    materialGraphBoxSelection_.baseNodeIds = materialEditor_.SelectedNodeIds();
+    materialGraphBoxSelection_.basePrimaryNodeId = materialEditor_.SelectedNodeId();
+    materialGraphBoxSelection_.moved = false;
+    materialGraphBoxSelection_.selecting = true;
     return true;
 }
 
 bool EditorSceneContext::DragMaterialGraphBoxSelection(int x, int y) noexcept {
-    if (!materialGraphBoxSelecting_) {
+    if (!materialGraphBoxSelection_.selecting) {
         return false;
     }
-    const int deltaX = x - materialGraphBoxSelectionStartX_;
-    const int deltaY = y - materialGraphBoxSelectionStartY_;
-    if (!materialGraphBoxSelectionMoved_ &&
+    const int deltaX = x - materialGraphBoxSelection_.startX;
+    const int deltaY = y - materialGraphBoxSelection_.startY;
+    if (!materialGraphBoxSelection_.moved &&
         !MaterialGraphInteractionPolicy::CrossedDragThreshold(deltaX, deltaY)) {
         return false;
     }
-    if (materialGraphBoxSelectionCurrentX_ == x && materialGraphBoxSelectionCurrentY_ == y) {
+    if (materialGraphBoxSelection_.currentX == x && materialGraphBoxSelection_.currentY == y) {
         return false;
     }
-    materialGraphBoxSelectionMoved_ = true;
-    materialGraphBoxSelectionCurrentX_ = x;
-    materialGraphBoxSelectionCurrentY_ = y;
+    materialGraphBoxSelection_.moved = true;
+    materialGraphBoxSelection_.currentX = x;
+    materialGraphBoxSelection_.currentY = y;
     return true;
 }
 
 bool EditorSceneContext::EndMaterialGraphBoxSelection(std::vector<std::uint32_t> nodeIds, std::uint32_t primaryNodeId) {
-    if (!materialGraphBoxSelecting_) {
+    if (!materialGraphBoxSelection_.selecting) {
         return false;
     }
-    const MaterialGraphSelectionOperation operation = materialGraphBoxSelectionOperation_;
-    std::vector<std::uint32_t> baseSelection = std::move(materialGraphBoxSelectionBaseNodeIds_);
-    const std::uint32_t basePrimaryNodeId = materialGraphBoxSelectionBasePrimaryNodeId_;
-    materialGraphBoxSelectionAssetId_ = {};
-    materialGraphBoxSelecting_ = false;
-    materialGraphBoxSelectionOperation_ = MaterialGraphSelectionOperation::Replace;
-    materialGraphBoxSelectionBasePrimaryNodeId_ = 0U;
-    materialGraphBoxSelectionMoved_ = false;
+    const MaterialGraphSelectionOperation operation = materialGraphBoxSelection_.operation;
+    std::vector<std::uint32_t> baseSelection = std::move(materialGraphBoxSelection_.baseNodeIds);
+    const std::uint32_t basePrimaryNodeId = materialGraphBoxSelection_.basePrimaryNodeId;
+    materialGraphBoxSelection_.assetId = {};
+    materialGraphBoxSelection_.selecting = false;
+    materialGraphBoxSelection_.operation = MaterialGraphSelectionOperation::Replace;
+    materialGraphBoxSelection_.basePrimaryNodeId = 0U;
+    materialGraphBoxSelection_.moved = false;
 
     nodeIds.erase(std::remove(nodeIds.begin(), nodeIds.end(), 0U), nodeIds.end());
     std::sort(nodeIds.begin(), nodeIds.end());
@@ -2774,31 +2774,31 @@ bool EditorSceneContext::EndMaterialGraphBoxSelection(std::vector<std::uint32_t>
 }
 
 bool EditorSceneContext::IsMaterialGraphBoxSelecting() const noexcept {
-    return materialGraphBoxSelecting_;
+    return materialGraphBoxSelection_.selecting;
 }
 
 bool EditorSceneContext::MaterialGraphBoxSelectionAdditive() const noexcept {
-    return materialGraphBoxSelectionOperation_ != MaterialGraphSelectionOperation::Replace;
+    return materialGraphBoxSelection_.operation != MaterialGraphSelectionOperation::Replace;
 }
 
 MaterialGraphSelectionOperation EditorSceneContext::MaterialGraphBoxSelectionOperation() const noexcept {
-    return materialGraphBoxSelectionOperation_;
+    return materialGraphBoxSelection_.operation;
 }
 
 int EditorSceneContext::MaterialGraphBoxSelectionStartX() const noexcept {
-    return materialGraphBoxSelectionStartX_;
+    return materialGraphBoxSelection_.startX;
 }
 
 int EditorSceneContext::MaterialGraphBoxSelectionStartY() const noexcept {
-    return materialGraphBoxSelectionStartY_;
+    return materialGraphBoxSelection_.startY;
 }
 
 int EditorSceneContext::MaterialGraphBoxSelectionCurrentX() const noexcept {
-    return materialGraphBoxSelectionCurrentX_;
+    return materialGraphBoxSelection_.currentX;
 }
 
 int EditorSceneContext::MaterialGraphBoxSelectionCurrentY() const noexcept {
-    return materialGraphBoxSelectionCurrentY_;
+    return materialGraphBoxSelection_.currentY;
 }
 
 bool EditorSceneContext::BeginMaterialGraphPan(int x, int y) noexcept {
@@ -4031,13 +4031,13 @@ bool EditorSceneContext::CancelMaterialGraphInteractions() {
         materialGraphNodeDrag_.changed = false;
         changed = true;
     }
-    if (materialGraphBoxSelecting_) {
-        materialGraphBoxSelectionAssetId_ = {};
-        materialGraphBoxSelecting_ = false;
-        materialGraphBoxSelectionOperation_ = MaterialGraphSelectionOperation::Replace;
-        materialGraphBoxSelectionBaseNodeIds_.clear();
-        materialGraphBoxSelectionBasePrimaryNodeId_ = 0U;
-        materialGraphBoxSelectionMoved_ = false;
+    if (materialGraphBoxSelection_.selecting) {
+        materialGraphBoxSelection_.assetId = {};
+        materialGraphBoxSelection_.selecting = false;
+        materialGraphBoxSelection_.operation = MaterialGraphSelectionOperation::Replace;
+        materialGraphBoxSelection_.baseNodeIds.clear();
+        materialGraphBoxSelection_.basePrimaryNodeId = 0U;
+        materialGraphBoxSelection_.moved = false;
         changed = true;
     }
     if (materialGraphPanning_) {
