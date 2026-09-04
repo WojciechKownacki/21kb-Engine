@@ -3,9 +3,12 @@
 #include "engine/assets/AssetId.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "rendering/material_graph/MaterialGraphInteractionPolicy.hpp"
+#include "scene/material/MaterialEditorGraphModels.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -92,6 +95,32 @@ struct MaterialGraphViewportState final {
     int panStartOffsetY = 0;
     bool panning = false;
     bool panMoved = false;
+};
+
+struct MaterialGraphContextMenuState final {
+    kb::assets::AssetId assetId{};
+    int x = 0;
+    int y = 0;
+    int graphX = 0;
+    int graphY = 0;
+    int scrollOffset = 0;
+    std::uint32_t expandedMask = 0U;
+    std::size_t hoveredCategory = static_cast<std::size_t>(-1);
+    MaterialEditorGraphMenuCommand hoveredCommand = MaterialEditorGraphMenuCommand::None;
+    std::string searchQuery;
+    std::vector<MaterialEditorGraphMenuCommand> paletteFavorites;
+    std::uint32_t pinFilterNodeId = 0U;
+    std::string pinFilterPin;
+    bool pinFilterOutput = true;
+    bool pinFilterActive = false;
+};
+
+struct MaterialGraphTexturePickerState final {
+    kb::assets::AssetId assetId{};
+    std::uint32_t nodeId = 0U;
+    kb::assets::AssetId selectedTextureId{};
+    std::string searchQuery;
+    int scrollOffset = 0;
 };
 
 } // namespace kb::editor
