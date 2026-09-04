@@ -1280,10 +1280,10 @@ bool EditorSceneContext::OpenMaterialEditorAsset(kb::assets::AssetId id) {
     }
     EditorCrashBreadcrumbs::Write("material_open", "materialEditor.Open begin");
     materialEditor_.Open(id, std::move(materialDocument), std::move(schema), std::move(instanceDocument));
-    if (const auto view = materialGraphViewStates_.find(id.value); view != materialGraphViewStates_.end()) {
-        materialGraphZoom_ = view->second.zoom;
-        materialGraphPanX_ = view->second.panX;
-        materialGraphPanY_ = view->second.panY;
+    if (const auto view = materialGraphViewport_.viewStates.find(id.value); view != materialGraphViewport_.viewStates.end()) {
+        materialGraphViewport_.zoom = view->second.zoom;
+        materialGraphViewport_.panX = view->second.panX;
+        materialGraphViewport_.panY = view->second.panY;
     }
     materialEditorDetailsScrollOffset_ = 0;
     EditorCrashBreadcrumbs::Write(
@@ -2009,23 +2009,23 @@ bool EditorSceneContext::SelectMaterialGraphContextTarget(std::uint32_t nodeId, 
 }
 
 void EditorSceneContext::FocusMaterialGraph(bool focused) noexcept {
-    materialGraphFocused_ = focused;
+    materialGraphViewport_.focused = focused;
 }
 
 bool EditorSceneContext::IsMaterialGraphFocused() const noexcept {
-    return materialGraphFocused_;
+    return materialGraphViewport_.focused;
 }
 
 float EditorSceneContext::MaterialGraphZoom() const noexcept {
-    return materialGraphZoom_;
+    return materialGraphViewport_.zoom;
 }
 
 int EditorSceneContext::MaterialGraphPanX() const noexcept {
-    return materialGraphPanX_;
+    return materialGraphViewport_.panX;
 }
 
 int EditorSceneContext::MaterialGraphPanY() const noexcept {
-    return materialGraphPanY_;
+    return materialGraphViewport_.panY;
 }
 
 bool EditorSceneContext::ZoomMaterialGraph(int wheelDelta) noexcept {
@@ -2034,7 +2034,7 @@ bool EditorSceneContext::ZoomMaterialGraph(int wheelDelta) noexcept {
 
 bool EditorSceneContext::ZoomMaterialGraph(int wheelDelta, int focusCanvasX, int focusCanvasY) noexcept {
     const float step = wheelDelta > 0 ? 1.10F : 0.90F;
-    const float previousZoom = materialGraphZoom_;
+    const float previousZoom = materialGraphViewport_.zoom;
     const float zoom = std::clamp(
         previousZoom * step,
         MaterialGraphInteractionPolicy::MinimumZoom,
@@ -2042,43 +2042,43 @@ bool EditorSceneContext::ZoomMaterialGraph(int wheelDelta, int focusCanvasX, int
     if (std::fabs(zoom - previousZoom) < 0.0001F) {
         return false;
     }
-    const float graphFocusX = (static_cast<float>(focusCanvasX - materialGraphPanX_) / std::max(0.1F, previousZoom));
-    const float graphFocusY = (static_cast<float>(focusCanvasY - materialGraphPanY_) / std::max(0.1F, previousZoom));
-    materialGraphZoom_ = zoom;
-    materialGraphPanX_ = focusCanvasX - static_cast<int>(std::lround(graphFocusX * zoom));
-    materialGraphPanY_ = focusCanvasY - static_cast<int>(std::lround(graphFocusY * zoom));
+    const float graphFocusX = (static_cast<float>(focusCanvasX - materialGraphViewport_.panX) / std::max(0.1F, previousZoom));
+    const float graphFocusY = (static_cast<float>(focusCanvasY - materialGraphViewport_.panY) / std::max(0.1F, previousZoom));
+    materialGraphViewport_.zoom = zoom;
+    materialGraphViewport_.panX = focusCanvasX - static_cast<int>(std::lround(graphFocusX * zoom));
+    materialGraphViewport_.panY = focusCanvasY - static_cast<int>(std::lround(graphFocusY * zoom));
     return true;
 }
 
 void EditorSceneContext::SetMaterialGraphCanvasViewport(int width, int height) noexcept {
     if (width > 0) {
-        materialGraphCanvasWidth_ = width;
+        materialGraphViewport_.canvasWidth = width;
     }
     if (height > 0) {
-        materialGraphCanvasHeight_ = height;
+        materialGraphViewport_.canvasHeight = height;
     }
 }
 
 void EditorSceneContext::SetMaterialGraphCanvasViewport(int left, int top, int width, int height) noexcept {
-    materialGraphCanvasLeft_ = left;
-    materialGraphCanvasTop_ = top;
+    materialGraphViewport_.canvasLeft = left;
+    materialGraphViewport_.canvasTop = top;
     SetMaterialGraphCanvasViewport(width, height);
 }
 
 int EditorSceneContext::MaterialGraphCanvasLeft() const noexcept {
-    return materialGraphCanvasLeft_;
+    return materialGraphViewport_.canvasLeft;
 }
 
 int EditorSceneContext::MaterialGraphCanvasTop() const noexcept {
-    return materialGraphCanvasTop_;
+    return materialGraphViewport_.canvasTop;
 }
 
 int EditorSceneContext::MaterialGraphCanvasWidth() const noexcept {
-    return materialGraphCanvasWidth_;
+    return materialGraphViewport_.canvasWidth;
 }
 
 int EditorSceneContext::MaterialGraphCanvasHeight() const noexcept {
-    return materialGraphCanvasHeight_;
+    return materialGraphViewport_.canvasHeight;
 }
 
 bool EditorSceneContext::IsMaterialEditorFindFocused() const noexcept {
@@ -2110,7 +2110,7 @@ void EditorSceneContext::ClearMaterialEditorFind() {
 }
 
 bool EditorSceneContext::FocusFirstMaterialEditorFindResult() {
-    return FocusMaterialEditorFindResult(0U, materialGraphCanvasWidth_, materialGraphCanvasHeight_);
+    return FocusMaterialEditorFindResult(0U, materialGraphViewport_.canvasWidth, materialGraphViewport_.canvasHeight);
 }
 
 bool EditorSceneContext::FocusMaterialEditorFindResult(std::size_t resultIndex, int canvasWidth, int canvasHeight) {
@@ -2121,9 +2121,9 @@ bool EditorSceneContext::FocusMaterialEditorFindResult(std::size_t resultIndex, 
     if (!materialEditor_.FocusFindResult(resultIndex)) {
         return false;
     }
-    materialGraphPanX_ = (canvasWidth / 2) - static_cast<int>(std::lround(static_cast<float>(target->graphX) * materialGraphZoom_));
-    materialGraphPanY_ = (canvasHeight / 2) - static_cast<int>(std::lround(static_cast<float>(target->graphY) * materialGraphZoom_));
-    materialGraphFocused_ = true;
+    materialGraphViewport_.panX = (canvasWidth / 2) - static_cast<int>(std::lround(static_cast<float>(target->graphX) * materialGraphViewport_.zoom));
+    materialGraphViewport_.panY = (canvasHeight / 2) - static_cast<int>(std::lround(static_cast<float>(target->graphY) * materialGraphViewport_.zoom));
+    materialGraphViewport_.focused = true;
     return true;
 }
 
@@ -2137,16 +2137,16 @@ bool EditorSceneContext::FocusMaterialGraphNode(std::uint32_t nodeId) {
         return false;
     }
     static_cast<void>(SelectMaterialGraphNode(nodeId));
-    materialGraphPanX_ = (materialGraphCanvasWidth_ / 2) -
-        static_cast<int>(std::lround(static_cast<float>(node->positionX) * materialGraphZoom_));
-    materialGraphPanY_ = (materialGraphCanvasHeight_ / 2) -
-        static_cast<int>(std::lround(static_cast<float>(node->positionY) * materialGraphZoom_));
-    materialGraphFocused_ = true;
+    materialGraphViewport_.panX = (materialGraphViewport_.canvasWidth / 2) -
+        static_cast<int>(std::lround(static_cast<float>(node->positionX) * materialGraphViewport_.zoom));
+    materialGraphViewport_.panY = (materialGraphViewport_.canvasHeight / 2) -
+        static_cast<int>(std::lround(static_cast<float>(node->positionY) * materialGraphViewport_.zoom));
+    materialGraphViewport_.focused = true;
     return true;
 }
 
 bool EditorSceneContext::FrameSelectedMaterialGraphNodes() {
-    return FrameSelectedMaterialGraphNodes(materialGraphCanvasWidth_, materialGraphCanvasHeight_);
+    return FrameSelectedMaterialGraphNodes(materialGraphViewport_.canvasWidth, materialGraphViewport_.canvasHeight);
 }
 
 bool EditorSceneContext::FrameSelectedMaterialGraphNodes(int canvasWidth, int canvasHeight) {
@@ -2204,8 +2204,8 @@ bool EditorSceneContext::FrameSelectedMaterialGraphNodes(int canvasWidth, int ca
 
     SetMaterialGraphCanvasViewport(canvasWidth, canvasHeight);
     constexpr int padding = 48;
-    const int fitWidth = std::max(1, materialGraphCanvasWidth_ - (padding * 2));
-    const int fitHeight = std::max(1, materialGraphCanvasHeight_ - (padding * 2));
+    const int fitWidth = std::max(1, materialGraphViewport_.canvasWidth - (padding * 2));
+    const int fitHeight = std::max(1, materialGraphViewport_.canvasHeight - (padding * 2));
     const auto screenBoundsAt = [&frameItems](float zoom) noexcept {
         float minX = std::numeric_limits<float>::max();
         float minY = std::numeric_limits<float>::max();
@@ -2246,17 +2246,17 @@ bool EditorSceneContext::FrameSelectedMaterialGraphNodes(int canvasWidth, int ca
     const std::array<float, 4> screenBounds = screenBoundsAt(nextZoom);
     const float centerX = (screenBounds[0] + screenBounds[2]) * 0.5F;
     const float centerY = (screenBounds[1] + screenBounds[3]) * 0.5F;
-    const int nextPanX = (materialGraphCanvasWidth_ / 2) - static_cast<int>(std::lround(centerX));
-    const int nextPanY = (materialGraphCanvasHeight_ / 2) - static_cast<int>(std::lround(centerY));
+    const int nextPanX = (materialGraphViewport_.canvasWidth / 2) - static_cast<int>(std::lround(centerX));
+    const int nextPanY = (materialGraphViewport_.canvasHeight / 2) - static_cast<int>(std::lround(centerY));
     const bool changed =
-        std::fabs(materialGraphZoom_ - nextZoom) >= 0.0001F ||
-        materialGraphPanX_ != nextPanX ||
-        materialGraphPanY_ != nextPanY ||
-        !materialGraphFocused_;
-    materialGraphZoom_ = nextZoom;
-    materialGraphPanX_ = nextPanX;
-    materialGraphPanY_ = nextPanY;
-    materialGraphFocused_ = true;
+        std::fabs(materialGraphViewport_.zoom - nextZoom) >= 0.0001F ||
+        materialGraphViewport_.panX != nextPanX ||
+        materialGraphViewport_.panY != nextPanY ||
+        !materialGraphViewport_.focused;
+    materialGraphViewport_.zoom = nextZoom;
+    materialGraphViewport_.panX = nextPanX;
+    materialGraphViewport_.panY = nextPanY;
+    materialGraphViewport_.focused = true;
     return changed;
 }
 
@@ -2340,9 +2340,9 @@ std::uint64_t EditorSceneContext::MaterialGraphViewSignature(kb::assets::AssetId
     hash = fold(hash, assetId.value);
     hash = fold(hash, materialEditor_.OpenAssetId().value);
     hash = fold(hash, materialEditor_.DocumentRevision());
-    hash = fold(hash, static_cast<std::uint64_t>(std::bit_cast<std::uint32_t>(materialGraphZoom_)));
-    hash = fold(hash, static_cast<std::uint64_t>(static_cast<std::uint32_t>(materialGraphPanX_)));
-    hash = fold(hash, static_cast<std::uint64_t>(static_cast<std::uint32_t>(materialGraphPanY_)));
+    hash = fold(hash, static_cast<std::uint64_t>(std::bit_cast<std::uint32_t>(materialGraphViewport_.zoom)));
+    hash = fold(hash, static_cast<std::uint64_t>(static_cast<std::uint32_t>(materialGraphViewport_.panX)));
+    hash = fold(hash, static_cast<std::uint64_t>(static_cast<std::uint32_t>(materialGraphViewport_.panY)));
     if (materialGraphNodeDrag_.dragging && materialGraphNodeDrag_.assetId == assetId) {
         hash = fold(hash, static_cast<std::uint64_t>(static_cast<std::uint32_t>(materialGraphNodeDrag_.startOffsetX)));
         hash = fold(hash, static_cast<std::uint64_t>(static_cast<std::uint32_t>(materialGraphNodeDrag_.startOffsetY)));
@@ -2462,8 +2462,8 @@ bool EditorSceneContext::DragMaterialGraphNode(int x, int y) {
         !MaterialGraphInteractionPolicy::CrossedDragThreshold(screenDeltaX, screenDeltaY)) {
         return false;
     }
-    const int rawDeltaX = static_cast<int>(std::lround(static_cast<float>(screenDeltaX) / std::max(0.1F, materialGraphZoom_)));
-    const int rawDeltaY = static_cast<int>(std::lround(static_cast<float>(screenDeltaY) / std::max(0.1F, materialGraphZoom_)));
+    const int rawDeltaX = static_cast<int>(std::lround(static_cast<float>(screenDeltaX) / std::max(0.1F, materialGraphViewport_.zoom)));
+    const int rawDeltaY = static_cast<int>(std::lround(static_cast<float>(screenDeltaY) / std::max(0.1F, materialGraphViewport_.zoom)));
     // Smooth dragging: apply the raw (zoom-corrected) delta directly so the
     // node tracks the cursor. The previous grid snap (SnapCoordinate, 32u)
     // quantized the target every move, making nodes jump between grid cells
@@ -2585,8 +2585,8 @@ bool EditorSceneContext::DragMaterialGraphComment(int x, int y) {
         !MaterialGraphInteractionPolicy::CrossedDragThreshold(screenDeltaX, screenDeltaY)) {
         return false;
     }
-    const int deltaX = static_cast<int>(std::lround(static_cast<float>(screenDeltaX) / std::max(0.1F, materialGraphZoom_)));
-    const int deltaY = static_cast<int>(std::lround(static_cast<float>(screenDeltaY) / std::max(0.1F, materialGraphZoom_)));
+    const int deltaX = static_cast<int>(std::lround(static_cast<float>(screenDeltaX) / std::max(0.1F, materialGraphViewport_.zoom)));
+    const int deltaY = static_cast<int>(std::lround(static_cast<float>(screenDeltaY) / std::max(0.1F, materialGraphViewport_.zoom)));
     // Smooth dragging (matches DragMaterialGraphNode): track the cursor with the
     // raw zoom-corrected delta rather than quantizing the target to the 32u grid.
     const std::int32_t nextX = static_cast<std::int32_t>(materialGraphCommentDrag_.startCommentX + deltaX);
@@ -2802,45 +2802,45 @@ int EditorSceneContext::MaterialGraphBoxSelectionCurrentY() const noexcept {
 }
 
 bool EditorSceneContext::BeginMaterialGraphPan(int x, int y) noexcept {
-    materialGraphPanStartX_ = x;
-    materialGraphPanStartY_ = y;
-    materialGraphPanStartOffsetX_ = materialGraphPanX_;
-    materialGraphPanStartOffsetY_ = materialGraphPanY_;
-    materialGraphPanning_ = true;
-    materialGraphPanMoved_ = false;
+    materialGraphViewport_.panStartX = x;
+    materialGraphViewport_.panStartY = y;
+    materialGraphViewport_.panStartOffsetX = materialGraphViewport_.panX;
+    materialGraphViewport_.panStartOffsetY = materialGraphViewport_.panY;
+    materialGraphViewport_.panning = true;
+    materialGraphViewport_.panMoved = false;
     return true;
 }
 
 bool EditorSceneContext::DragMaterialGraphPan(int x, int y) noexcept {
-    if (!materialGraphPanning_) {
+    if (!materialGraphViewport_.panning) {
         return false;
     }
-    const int deltaX = x - materialGraphPanStartX_;
-    const int deltaY = y - materialGraphPanStartY_;
-    if (!materialGraphPanMoved_ && !MaterialGraphInteractionPolicy::CrossedDragThreshold(deltaX, deltaY)) {
+    const int deltaX = x - materialGraphViewport_.panStartX;
+    const int deltaY = y - materialGraphViewport_.panStartY;
+    if (!materialGraphViewport_.panMoved && !MaterialGraphInteractionPolicy::CrossedDragThreshold(deltaX, deltaY)) {
         return false;
     }
-    const int newPanX = materialGraphPanStartOffsetX_ + deltaX;
-    const int newPanY = materialGraphPanStartOffsetY_ + deltaY;
-    if (newPanX == materialGraphPanX_ && newPanY == materialGraphPanY_) {
+    const int newPanX = materialGraphViewport_.panStartOffsetX + deltaX;
+    const int newPanY = materialGraphViewport_.panStartOffsetY + deltaY;
+    if (newPanX == materialGraphViewport_.panX && newPanY == materialGraphViewport_.panY) {
         return false;
     }
-    materialGraphPanMoved_ = true;
-    materialGraphPanX_ = newPanX;
-    materialGraphPanY_ = newPanY;
+    materialGraphViewport_.panMoved = true;
+    materialGraphViewport_.panX = newPanX;
+    materialGraphViewport_.panY = newPanY;
     return true;
 }
 
 bool EditorSceneContext::EndMaterialGraphPan() noexcept {
-    if (!materialGraphPanning_) {
+    if (!materialGraphViewport_.panning) {
         return false;
     }
-    materialGraphPanning_ = false;
+    materialGraphViewport_.panning = false;
     return true;
 }
 
 bool EditorSceneContext::IsMaterialGraphPanning() const noexcept {
-    return materialGraphPanning_;
+    return materialGraphViewport_.panning;
 }
 
 bool EditorSceneContext::BeginMaterialPreviewOrbit(int x, int y) noexcept {
@@ -2878,7 +2878,7 @@ bool EditorSceneContext::IsMaterialPreviewOrbiting() const noexcept {
 }
 
 bool EditorSceneContext::HasMaterialGraphPanMoved() const noexcept {
-    return materialGraphPanMoved_;
+    return materialGraphViewport_.panMoved;
 }
 
 bool EditorSceneContext::AddMaterialGraphNode(
@@ -4040,11 +4040,11 @@ bool EditorSceneContext::CancelMaterialGraphInteractions() {
         materialGraphBoxSelection_.moved = false;
         changed = true;
     }
-    if (materialGraphPanning_) {
-        materialGraphPanX_ = materialGraphPanStartOffsetX_;
-        materialGraphPanY_ = materialGraphPanStartOffsetY_;
-        materialGraphPanning_ = false;
-        materialGraphPanMoved_ = false;
+    if (materialGraphViewport_.panning) {
+        materialGraphViewport_.panX = materialGraphViewport_.panStartOffsetX;
+        materialGraphViewport_.panY = materialGraphViewport_.panStartOffsetY;
+        materialGraphViewport_.panning = false;
+        materialGraphViewport_.panMoved = false;
         changed = true;
     }
     if (HasMaterialGraphPinConnection()) {
@@ -4067,10 +4067,10 @@ bool EditorSceneContext::CancelMaterialGraphInteractions() {
 
 void EditorSceneContext::ResetMaterialGraphTransientState() {
     if (const kb::assets::AssetId openAsset = materialEditor_.OpenAssetId(); openAsset.IsValid()) {
-        materialGraphViewStates_.insert_or_assign(openAsset.value, MaterialGraphViewState{
-            .zoom = materialGraphZoom_,
-            .panX = materialGraphPanX_,
-            .panY = materialGraphPanY_,
+        materialGraphViewport_.viewStates.insert_or_assign(openAsset.value, MaterialGraphViewState{
+            .zoom = materialGraphViewport_.zoom,
+            .panX = materialGraphViewport_.panX,
+            .panY = materialGraphViewport_.panY,
         });
     }
     // Close the menu BEFORE cancelling interactions: CancelMaterialGraphInteractions now deliberately leaves
@@ -4081,11 +4081,11 @@ void EditorSceneContext::ResetMaterialGraphTransientState() {
     static_cast<void>(CloseMaterialGraphTexturePicker());
     materialEditor_.CloseGraphNodeEnumDropdown();
     materialEditor_.CancelGraphConstantInlineEdit();
-    materialGraphFocused_ = false;
-    materialGraphZoom_ = MaterialGraphInteractionPolicy::DefaultZoom;
-    materialGraphPanX_ = 0;
-    materialGraphPanY_ = 0;
-    materialGraphPanMoved_ = false;
+    materialGraphViewport_.focused = false;
+    materialGraphViewport_.zoom = MaterialGraphInteractionPolicy::DefaultZoom;
+    materialGraphViewport_.panX = 0;
+    materialGraphViewport_.panY = 0;
+    materialGraphViewport_.panMoved = false;
 }
 
 void EditorSceneContext::ClearMaterialGraphPinConnectionState() noexcept {
@@ -4150,10 +4150,10 @@ bool EditorSceneContext::OpenMaterialGraphContextMenu(kb::assets::AssetId id, in
     materialGraphContextMenuPinFilterOutput_ = true;
     // Anchor at the raw cursor Y; GraphContextMenuRect fits the height downward from here each frame so
     // the palette opens at the click point rather than being pulled up to the canvas top when it is tall.
-    const int menuLeftMax = materialGraphCanvasLeft_ + std::max(0, materialGraphCanvasWidth_ - kMaterialEditorGraphMenuWidth);
-    const int menuTopMax = materialGraphCanvasTop_ + std::max(0, materialGraphCanvasHeight_ - kMaterialEditorGraphMenuMinHeight);
-    materialGraphContextMenuX_ = std::clamp(x, materialGraphCanvasLeft_, menuLeftMax);
-    materialGraphContextMenuY_ = std::clamp(y, materialGraphCanvasTop_, menuTopMax);
+    const int menuLeftMax = materialGraphViewport_.canvasLeft + std::max(0, materialGraphViewport_.canvasWidth - kMaterialEditorGraphMenuWidth);
+    const int menuTopMax = materialGraphViewport_.canvasTop + std::max(0, materialGraphViewport_.canvasHeight - kMaterialEditorGraphMenuMinHeight);
+    materialGraphContextMenuX_ = std::clamp(x, materialGraphViewport_.canvasLeft, menuLeftMax);
+    materialGraphContextMenuY_ = std::clamp(y, materialGraphViewport_.canvasTop, menuTopMax);
     return true;
 }
 
@@ -4183,10 +4183,10 @@ bool EditorSceneContext::OpenMaterialGraphContextMenuForPinConnection(kb::assets
     // Keep the raw drop Y as the anchor (only shifted up enough to keep a minimal strip on screen).
     // GraphContextMenuRect fits the palette height downward from here each frame, so a tall filtered
     // wire-drop palette opens AT the drop point instead of snapping to the top of the canvas.
-    const int menuLeftMax = materialGraphCanvasLeft_ + std::max(0, materialGraphCanvasWidth_ - kMaterialEditorGraphMenuWidth);
-    const int menuTopMax = materialGraphCanvasTop_ + std::max(0, materialGraphCanvasHeight_ - kMaterialEditorGraphMenuMinHeight);
-    materialGraphContextMenuX_ = std::clamp(x, materialGraphCanvasLeft_, menuLeftMax);
-    materialGraphContextMenuY_ = std::clamp(y, materialGraphCanvasTop_, menuTopMax);
+    const int menuLeftMax = materialGraphViewport_.canvasLeft + std::max(0, materialGraphViewport_.canvasWidth - kMaterialEditorGraphMenuWidth);
+    const int menuTopMax = materialGraphViewport_.canvasTop + std::max(0, materialGraphViewport_.canvasHeight - kMaterialEditorGraphMenuMinHeight);
+    materialGraphContextMenuX_ = std::clamp(x, materialGraphViewport_.canvasLeft, menuLeftMax);
+    materialGraphContextMenuY_ = std::clamp(y, materialGraphViewport_.canvasTop, menuTopMax);
     return true;
 }
 
