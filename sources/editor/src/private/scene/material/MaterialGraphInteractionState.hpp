@@ -2,9 +2,11 @@
 
 #include "engine/assets/AssetId.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
+#include "rendering/material_graph/MaterialGraphInteractionPolicy.hpp"
 
 #include <cstdint>
 #include <optional>
+#include <unordered_map>
 #include <vector>
 
 namespace kb::editor {
@@ -66,6 +68,30 @@ struct MaterialGraphBoxSelectionState final {
     std::uint32_t basePrimaryNodeId = 0U;
     bool moved = false;
     bool selecting = false;
+};
+
+struct MaterialGraphViewState {
+    float zoom = MaterialGraphInteractionPolicy::DefaultZoom;
+    int panX = 0;
+    int panY = 0;
+};
+
+struct MaterialGraphViewportState final {
+    std::unordered_map<std::uint64_t, MaterialGraphViewState> viewStates;
+    float zoom = MaterialGraphInteractionPolicy::DefaultZoom;
+    int panX = 0;
+    int panY = 0;
+    int canvasWidth = 1280;
+    int canvasHeight = 720;
+    int canvasLeft = 0;
+    int canvasTop = 0;
+    bool focused = false;
+    int panStartX = 0;
+    int panStartY = 0;
+    int panStartOffsetX = 0;
+    int panStartOffsetY = 0;
+    bool panning = false;
+    bool panMoved = false;
 };
 
 } // namespace kb::editor
