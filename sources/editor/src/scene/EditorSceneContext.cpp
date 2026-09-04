@@ -986,14 +986,14 @@ bool EditorSceneContext::SaveOpenDocuments() {
 }
 
 bool EditorSceneContext::CanUndoSceneCommand() const noexcept {
-    if (materialGraphFocused_ && materialEditor_.OpenAssetId().IsValid()) {
+    if (materialGraphViewport_.focused && materialEditor_.OpenAssetId().IsValid()) {
         return commandStack_.CanUndo(EditorCommandHistoryKey::MaterialAsset(materialEditor_.OpenAssetId().value));
     }
     return commandStack_.CanUndo(EditorCommandHistoryKey::Scene());
 }
 
 bool EditorSceneContext::CanRedoSceneCommand() const noexcept {
-    if (materialGraphFocused_ && materialEditor_.OpenAssetId().IsValid()) {
+    if (materialGraphViewport_.focused && materialEditor_.OpenAssetId().IsValid()) {
         return commandStack_.CanRedo(EditorCommandHistoryKey::MaterialAsset(materialEditor_.OpenAssetId().value));
     }
     return commandStack_.CanRedo(EditorCommandHistoryKey::Scene());
@@ -1002,7 +1002,7 @@ bool EditorSceneContext::CanRedoSceneCommand() const noexcept {
 bool EditorSceneContext::UndoSceneCommand() {
     static_cast<void>(CommitHierarchyRename());
     inspector_.EndTextEdit();
-    const bool materialHistoryActive = materialGraphFocused_ && materialEditor_.OpenAssetId().IsValid();
+    const bool materialHistoryActive = materialGraphViewport_.focused && materialEditor_.OpenAssetId().IsValid();
     const bool undone = materialHistoryActive
         ? commandStack_.Undo(EditorCommandHistoryKey::MaterialAsset(materialEditor_.OpenAssetId().value))
         : SceneCommands().Undo();
@@ -1022,7 +1022,7 @@ bool EditorSceneContext::UndoSceneCommand() {
 bool EditorSceneContext::RedoSceneCommand() {
     static_cast<void>(CommitHierarchyRename());
     inspector_.EndTextEdit();
-    const bool materialHistoryActive = materialGraphFocused_ && materialEditor_.OpenAssetId().IsValid();
+    const bool materialHistoryActive = materialGraphViewport_.focused && materialEditor_.OpenAssetId().IsValid();
     const bool redone = materialHistoryActive
         ? commandStack_.Redo(EditorCommandHistoryKey::MaterialAsset(materialEditor_.OpenAssetId().value))
         : SceneCommands().Redo();
@@ -1468,7 +1468,7 @@ void EditorSceneContext::SelectEntity(kb::scene::SceneEntity entity) noexcept {
     if (hierarchyRenameEntity_.IsValid() && hierarchyRenameEntity_ != selected) {
         static_cast<void>(CommitHierarchyRename());
     }
-    materialGraphFocused_ = false;
+    materialGraphViewport_.focused = false;
     hierarchySelection_.SelectEntity(selected);
     assetBrowser_.ClearSelection();
     EditorTerrainToolState& terrainTool = EditorTerrainService::ToolState();
@@ -1504,14 +1504,14 @@ void EditorSceneContext::SelectHierarchyEntities(std::span<const kb::scene::Scen
     if (hierarchyRenameEntity_.IsValid() && !ContainsEntity(alive, hierarchyRenameEntity_)) {
         static_cast<void>(CommitHierarchyRename());
     }
-    materialGraphFocused_ = false;
+    materialGraphViewport_.focused = false;
     hierarchySelection_.SelectEntities(alive);
     assetBrowser_.ClearSelection();
 }
 
 void EditorSceneContext::ClearHierarchySelection() noexcept {
     static_cast<void>(CommitHierarchyRename());
-    materialGraphFocused_ = false;
+    materialGraphViewport_.focused = false;
     hierarchySelection_.Clear();
 }
 
