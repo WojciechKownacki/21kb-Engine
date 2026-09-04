@@ -4130,30 +4130,30 @@ bool EditorSceneContext::OpenMaterialGraphContextMenu(kb::assets::AssetId id, in
     if (materialEditor_.OpenAssetId() != id || !id.IsValid()) {
         return false;
     }
-    materialGraphContextMenuAssetId_ = id;
-    materialGraphContextMenuX_ = x;
-    materialGraphContextMenuY_ = y;
-    materialGraphContextMenuGraphX_ = graphX;
-    materialGraphContextMenuGraphY_ = graphY;
-    materialGraphContextMenuScrollOffset_ = 0;
+    materialGraphContextMenu_.assetId = id;
+    materialGraphContextMenu_.x = x;
+    materialGraphContextMenu_.y = y;
+    materialGraphContextMenu_.graphX = graphX;
+    materialGraphContextMenu_.graphY = graphY;
+    materialGraphContextMenu_.scrollOffset = 0;
     // Favorites lives at the top of the palette; open it expanded when it has entries so the user's picks
     // are visible immediately, otherwise start fully collapsed.
-    materialGraphContextMenuExpandedMask_ = materialGraphPaletteFavorites_.empty()
+    materialGraphContextMenu_.expandedMask = materialGraphContextMenu_.paletteFavorites.empty()
         ? 0U
         : (1U << MaterialEditorGraphContextMenuFavoritesCategoryIndex());
-    materialGraphContextMenuHoveredCategory_ = static_cast<std::size_t>(-1);
-    materialGraphContextMenuHoveredCommand_ = MaterialEditorGraphMenuCommand::None;
-    materialGraphContextMenuSearchQuery_.clear();
-    materialGraphContextMenuPinFilterActive_ = false;
-    materialGraphContextMenuPinFilterNodeId_ = 0U;
-    materialGraphContextMenuPinFilterPin_.clear();
-    materialGraphContextMenuPinFilterOutput_ = true;
+    materialGraphContextMenu_.hoveredCategory = static_cast<std::size_t>(-1);
+    materialGraphContextMenu_.hoveredCommand = MaterialEditorGraphMenuCommand::None;
+    materialGraphContextMenu_.searchQuery.clear();
+    materialGraphContextMenu_.pinFilterActive = false;
+    materialGraphContextMenu_.pinFilterNodeId = 0U;
+    materialGraphContextMenu_.pinFilterPin.clear();
+    materialGraphContextMenu_.pinFilterOutput = true;
     // Anchor at the raw cursor Y; GraphContextMenuRect fits the height downward from here each frame so
     // the palette opens at the click point rather than being pulled up to the canvas top when it is tall.
     const int menuLeftMax = materialGraphViewport_.canvasLeft + std::max(0, materialGraphViewport_.canvasWidth - kMaterialEditorGraphMenuWidth);
     const int menuTopMax = materialGraphViewport_.canvasTop + std::max(0, materialGraphViewport_.canvasHeight - kMaterialEditorGraphMenuMinHeight);
-    materialGraphContextMenuX_ = std::clamp(x, materialGraphViewport_.canvasLeft, menuLeftMax);
-    materialGraphContextMenuY_ = std::clamp(y, materialGraphViewport_.canvasTop, menuTopMax);
+    materialGraphContextMenu_.x = std::clamp(x, materialGraphViewport_.canvasLeft, menuLeftMax);
+    materialGraphContextMenu_.y = std::clamp(y, materialGraphViewport_.canvasTop, menuTopMax);
     return true;
 }
 
@@ -4162,80 +4162,80 @@ bool EditorSceneContext::OpenMaterialGraphContextMenuForPinConnection(kb::assets
         materialGraphPendingConnectionNodeId_ == 0U || materialGraphPendingConnectionPin_.empty()) {
         return false;
     }
-    materialGraphContextMenuAssetId_ = id;
-    materialGraphContextMenuX_ = x;
-    materialGraphContextMenuY_ = y;
-    materialGraphContextMenuGraphX_ = graphX;
-    materialGraphContextMenuGraphY_ = graphY;
-    materialGraphContextMenuScrollOffset_ = 0;
+    materialGraphContextMenu_.assetId = id;
+    materialGraphContextMenu_.x = x;
+    materialGraphContextMenu_.y = y;
+    materialGraphContextMenu_.graphX = graphX;
+    materialGraphContextMenu_.graphY = graphY;
+    materialGraphContextMenu_.scrollOffset = 0;
     // Favorites lives at the top of the palette; open it expanded when it has entries so the user's picks
     // are visible immediately, otherwise start fully collapsed.
-    materialGraphContextMenuExpandedMask_ = materialGraphPaletteFavorites_.empty()
+    materialGraphContextMenu_.expandedMask = materialGraphContextMenu_.paletteFavorites.empty()
         ? 0U
         : (1U << MaterialEditorGraphContextMenuFavoritesCategoryIndex());
-    materialGraphContextMenuHoveredCategory_ = static_cast<std::size_t>(-1);
-    materialGraphContextMenuHoveredCommand_ = MaterialEditorGraphMenuCommand::None;
-    materialGraphContextMenuSearchQuery_.clear();
-    materialGraphContextMenuPinFilterNodeId_ = materialGraphPendingConnectionNodeId_;
-    materialGraphContextMenuPinFilterPin_ = materialGraphPendingConnectionPin_;
-    materialGraphContextMenuPinFilterOutput_ = materialGraphPendingConnectionOutput_;
-    materialGraphContextMenuPinFilterActive_ = true;
+    materialGraphContextMenu_.hoveredCategory = static_cast<std::size_t>(-1);
+    materialGraphContextMenu_.hoveredCommand = MaterialEditorGraphMenuCommand::None;
+    materialGraphContextMenu_.searchQuery.clear();
+    materialGraphContextMenu_.pinFilterNodeId = materialGraphPendingConnectionNodeId_;
+    materialGraphContextMenu_.pinFilterPin = materialGraphPendingConnectionPin_;
+    materialGraphContextMenu_.pinFilterOutput = materialGraphPendingConnectionOutput_;
+    materialGraphContextMenu_.pinFilterActive = true;
     // Keep the raw drop Y as the anchor (only shifted up enough to keep a minimal strip on screen).
     // GraphContextMenuRect fits the palette height downward from here each frame, so a tall filtered
     // wire-drop palette opens AT the drop point instead of snapping to the top of the canvas.
     const int menuLeftMax = materialGraphViewport_.canvasLeft + std::max(0, materialGraphViewport_.canvasWidth - kMaterialEditorGraphMenuWidth);
     const int menuTopMax = materialGraphViewport_.canvasTop + std::max(0, materialGraphViewport_.canvasHeight - kMaterialEditorGraphMenuMinHeight);
-    materialGraphContextMenuX_ = std::clamp(x, materialGraphViewport_.canvasLeft, menuLeftMax);
-    materialGraphContextMenuY_ = std::clamp(y, materialGraphViewport_.canvasTop, menuTopMax);
+    materialGraphContextMenu_.x = std::clamp(x, materialGraphViewport_.canvasLeft, menuLeftMax);
+    materialGraphContextMenu_.y = std::clamp(y, materialGraphViewport_.canvasTop, menuTopMax);
     return true;
 }
 
 bool EditorSceneContext::CloseMaterialGraphContextMenu() noexcept {
-    if (!materialGraphContextMenuAssetId_.IsValid()) {
+    if (!materialGraphContextMenu_.assetId.IsValid()) {
         return false;
     }
-    materialGraphContextMenuAssetId_ = {};
-    materialGraphContextMenuScrollOffset_ = 0;
-    materialGraphContextMenuHoveredCategory_ = static_cast<std::size_t>(-1);
-    materialGraphContextMenuHoveredCommand_ = MaterialEditorGraphMenuCommand::None;
-    materialGraphContextMenuSearchQuery_.clear();
-    materialGraphContextMenuPinFilterActive_ = false;
-    materialGraphContextMenuPinFilterNodeId_ = 0U;
-    materialGraphContextMenuPinFilterPin_.clear();
-    materialGraphContextMenuPinFilterOutput_ = true;
+    materialGraphContextMenu_.assetId = {};
+    materialGraphContextMenu_.scrollOffset = 0;
+    materialGraphContextMenu_.hoveredCategory = static_cast<std::size_t>(-1);
+    materialGraphContextMenu_.hoveredCommand = MaterialEditorGraphMenuCommand::None;
+    materialGraphContextMenu_.searchQuery.clear();
+    materialGraphContextMenu_.pinFilterActive = false;
+    materialGraphContextMenu_.pinFilterNodeId = 0U;
+    materialGraphContextMenu_.pinFilterPin.clear();
+    materialGraphContextMenu_.pinFilterOutput = true;
     return true;
 }
 
 bool EditorSceneContext::IsMaterialGraphContextMenuOpen() const noexcept {
-    return materialGraphContextMenuAssetId_.IsValid();
+    return materialGraphContextMenu_.assetId.IsValid();
 }
 
 int EditorSceneContext::MaterialGraphContextMenuX() const noexcept {
-    return materialGraphContextMenuX_;
+    return materialGraphContextMenu_.x;
 }
 
 int EditorSceneContext::MaterialGraphContextMenuY() const noexcept {
-    return materialGraphContextMenuY_;
+    return materialGraphContextMenu_.y;
 }
 
 int EditorSceneContext::MaterialGraphContextMenuGraphX() const noexcept {
-    return materialGraphContextMenuGraphX_;
+    return materialGraphContextMenu_.graphX;
 }
 
 int EditorSceneContext::MaterialGraphContextMenuGraphY() const noexcept {
-    return materialGraphContextMenuGraphY_;
+    return materialGraphContextMenu_.graphY;
 }
 
 int EditorSceneContext::MaterialGraphContextMenuScrollOffset() const noexcept {
-    return materialGraphContextMenuScrollOffset_;
+    return materialGraphContextMenu_.scrollOffset;
 }
 
 bool EditorSceneContext::SetMaterialGraphContextMenuScrollOffset(int offset, int maxOffset) noexcept {
     const int clamped = std::clamp(offset, 0, std::max(0, maxOffset));
-    if (materialGraphContextMenuScrollOffset_ == clamped) {
+    if (materialGraphContextMenu_.scrollOffset == clamped) {
         return false;
     }
-    materialGraphContextMenuScrollOffset_ = clamped;
+    materialGraphContextMenu_.scrollOffset = clamped;
     return true;
 }
 
@@ -4245,7 +4245,7 @@ bool EditorSceneContext::ScrollMaterialGraphContextMenu(int wheelDelta, int maxO
     }
     const int direction = wheelDelta > 0 ? -1 : 1;
     return SetMaterialGraphContextMenuScrollOffset(
-        materialGraphContextMenuScrollOffset_ + direction * kMaterialEditorGraphMenuCommandHeight * 3,
+        materialGraphContextMenu_.scrollOffset + direction * kMaterialEditorGraphMenuCommandHeight * 3,
         maxOffset);
 }
 
@@ -4276,7 +4276,7 @@ bool EditorSceneContext::MoveMaterialGraphContextMenuKeyboardSelection(int direc
     const RECT viewport = MaterialEditorGraphContextMenuViewportRect(menu);
     const int viewportHeight = std::max(0L, viewport.bottom - viewport.top);
     const int maxScroll = MaterialEditorGraphContextMenuMaxScroll(*this);
-    int scrollOffset = materialGraphContextMenuScrollOffset_;
+    int scrollOffset = materialGraphContextMenu_.scrollOffset;
     if (selected.contentTop < scrollOffset) {
         scrollOffset = selected.contentTop;
     } else if (selected.contentTop + selected.height > scrollOffset + viewportHeight) {
@@ -4322,96 +4322,96 @@ bool EditorSceneContext::OpenMaterialGraphTexturePicker(
     static_cast<void>(CloseMaterialGraphContextMenu());
     static_cast<void>(CancelMaterialGraphPinConnection());
     materialEditor_.CloseGraphNodeEnumDropdown();
-    materialGraphTexturePickerAssetId_ = id;
-    materialGraphTexturePickerNodeId_ = nodeId;
-    materialGraphTexturePickerSelectedTextureId_ = currentTexture;
-    materialGraphTexturePickerSearchQuery_.clear();
-    materialGraphTexturePickerScrollOffset_ = 0;
+    materialGraphTexturePicker_.assetId = id;
+    materialGraphTexturePicker_.nodeId = nodeId;
+    materialGraphTexturePicker_.selectedTextureId = currentTexture;
+    materialGraphTexturePicker_.searchQuery.clear();
+    materialGraphTexturePicker_.scrollOffset = 0;
     return true;
 }
 
 bool EditorSceneContext::CloseMaterialGraphTexturePicker() noexcept {
-    if (!materialGraphTexturePickerAssetId_.IsValid()) {
+    if (!materialGraphTexturePicker_.assetId.IsValid()) {
         return false;
     }
-    materialGraphTexturePickerAssetId_ = {};
-    materialGraphTexturePickerNodeId_ = 0U;
-    materialGraphTexturePickerSelectedTextureId_ = {};
-    materialGraphTexturePickerSearchQuery_.clear();
-    materialGraphTexturePickerScrollOffset_ = 0;
+    materialGraphTexturePicker_.assetId = {};
+    materialGraphTexturePicker_.nodeId = 0U;
+    materialGraphTexturePicker_.selectedTextureId = {};
+    materialGraphTexturePicker_.searchQuery.clear();
+    materialGraphTexturePicker_.scrollOffset = 0;
     return true;
 }
 
 bool EditorSceneContext::IsMaterialGraphTexturePickerOpen() const noexcept {
-    return materialGraphTexturePickerAssetId_.IsValid();
+    return materialGraphTexturePicker_.assetId.IsValid();
 }
 
 kb::assets::AssetId EditorSceneContext::MaterialGraphTexturePickerAssetId() const noexcept {
-    return materialGraphTexturePickerAssetId_;
+    return materialGraphTexturePicker_.assetId;
 }
 
 std::uint32_t EditorSceneContext::MaterialGraphTexturePickerNodeId() const noexcept {
-    return materialGraphTexturePickerNodeId_;
+    return materialGraphTexturePicker_.nodeId;
 }
 
 kb::assets::AssetId EditorSceneContext::MaterialGraphTexturePickerSelectedAssetId() const noexcept {
-    return materialGraphTexturePickerSelectedTextureId_;
+    return materialGraphTexturePicker_.selectedTextureId;
 }
 
 bool EditorSceneContext::SetMaterialGraphTexturePickerSelected(kb::assets::AssetId textureId) noexcept {
     if (!IsMaterialGraphTexturePickerOpen()) {
         return false;
     }
-    if (materialGraphTexturePickerSelectedTextureId_ == textureId) {
+    if (materialGraphTexturePicker_.selectedTextureId == textureId) {
         return false;
     }
-    materialGraphTexturePickerSelectedTextureId_ = textureId;
+    materialGraphTexturePicker_.selectedTextureId = textureId;
     return true;
 }
 
 std::string_view EditorSceneContext::MaterialGraphTexturePickerSearchQuery() const noexcept {
-    return materialGraphTexturePickerSearchQuery_;
+    return materialGraphTexturePicker_.searchQuery;
 }
 
 void EditorSceneContext::SetMaterialGraphTexturePickerSearchQuery(std::string query) {
     if (query.size() > 96U) {
         query.resize(96U);
     }
-    materialGraphTexturePickerSearchQuery_ = std::move(query);
-    materialGraphTexturePickerScrollOffset_ = 0;
+    materialGraphTexturePicker_.searchQuery = std::move(query);
+    materialGraphTexturePicker_.scrollOffset = 0;
 }
 
 void EditorSceneContext::AppendMaterialGraphTexturePickerSearchText(wchar_t character) {
-    if (character < 32 || character == 127 || character > 126 || materialGraphTexturePickerSearchQuery_.size() >= 96U) {
+    if (character < 32 || character == 127 || character > 126 || materialGraphTexturePicker_.searchQuery.size() >= 96U) {
         return;
     }
-    materialGraphTexturePickerSearchQuery_.push_back(static_cast<char>(character));
-    materialGraphTexturePickerScrollOffset_ = 0;
+    materialGraphTexturePicker_.searchQuery.push_back(static_cast<char>(character));
+    materialGraphTexturePicker_.scrollOffset = 0;
 }
 
 void EditorSceneContext::BackspaceMaterialGraphTexturePickerSearch() {
-    if (materialGraphTexturePickerSearchQuery_.empty()) {
+    if (materialGraphTexturePicker_.searchQuery.empty()) {
         return;
     }
-    materialGraphTexturePickerSearchQuery_.pop_back();
-    materialGraphTexturePickerScrollOffset_ = 0;
+    materialGraphTexturePicker_.searchQuery.pop_back();
+    materialGraphTexturePicker_.scrollOffset = 0;
 }
 
 void EditorSceneContext::ClearMaterialGraphTexturePickerSearch() noexcept {
-    materialGraphTexturePickerSearchQuery_.clear();
-    materialGraphTexturePickerScrollOffset_ = 0;
+    materialGraphTexturePicker_.searchQuery.clear();
+    materialGraphTexturePicker_.scrollOffset = 0;
 }
 
 int EditorSceneContext::MaterialGraphTexturePickerScrollOffset() const noexcept {
-    return materialGraphTexturePickerScrollOffset_;
+    return materialGraphTexturePicker_.scrollOffset;
 }
 
 bool EditorSceneContext::SetMaterialGraphTexturePickerScrollOffset(int offset, int maxOffset) noexcept {
     const int clamped = std::clamp(offset, 0, std::max(0, maxOffset));
-    if (materialGraphTexturePickerScrollOffset_ == clamped) {
+    if (materialGraphTexturePicker_.scrollOffset == clamped) {
         return false;
     }
-    materialGraphTexturePickerScrollOffset_ = clamped;
+    materialGraphTexturePicker_.scrollOffset = clamped;
     return true;
 }
 
@@ -4421,104 +4421,104 @@ bool EditorSceneContext::ScrollMaterialGraphTexturePicker(int wheelDelta, int ma
     }
     const int direction = wheelDelta > 0 ? -1 : 1;
     return SetMaterialGraphTexturePickerScrollOffset(
-        materialGraphTexturePickerScrollOffset_ + direction * 72,
+        materialGraphTexturePicker_.scrollOffset + direction * 72,
         maxOffset);
 }
 
 std::string_view EditorSceneContext::MaterialGraphContextMenuSearchQuery() const noexcept {
-    return materialGraphContextMenuSearchQuery_;
+    return materialGraphContextMenu_.searchQuery;
 }
 
 void EditorSceneContext::SetMaterialGraphContextMenuSearchQuery(std::string query) {
     if (query.size() > 64U) {
         query.resize(64U);
     }
-    materialGraphContextMenuSearchQuery_ = std::move(query);
-    materialGraphContextMenuScrollOffset_ = 0;
+    materialGraphContextMenu_.searchQuery = std::move(query);
+    materialGraphContextMenu_.scrollOffset = 0;
 }
 
 void EditorSceneContext::AppendMaterialGraphContextMenuSearchText(wchar_t character) {
-    if (character < 32 || character > 126 || materialGraphContextMenuSearchQuery_.size() >= 64U) {
+    if (character < 32 || character > 126 || materialGraphContextMenu_.searchQuery.size() >= 64U) {
         return;
     }
-    materialGraphContextMenuSearchQuery_.push_back(static_cast<char>(character));
-    materialGraphContextMenuExpandedMask_ = 0U;
-    materialGraphContextMenuScrollOffset_ = 0;
+    materialGraphContextMenu_.searchQuery.push_back(static_cast<char>(character));
+    materialGraphContextMenu_.expandedMask = 0U;
+    materialGraphContextMenu_.scrollOffset = 0;
 }
 
 void EditorSceneContext::BackspaceMaterialGraphContextMenuSearch() {
-    if (!materialGraphContextMenuSearchQuery_.empty()) {
-        materialGraphContextMenuSearchQuery_.pop_back();
-        materialGraphContextMenuScrollOffset_ = 0;
+    if (!materialGraphContextMenu_.searchQuery.empty()) {
+        materialGraphContextMenu_.searchQuery.pop_back();
+        materialGraphContextMenu_.scrollOffset = 0;
     }
 }
 
 void EditorSceneContext::ClearMaterialGraphContextMenuSearch() noexcept {
-    materialGraphContextMenuSearchQuery_.clear();
-    materialGraphContextMenuScrollOffset_ = 0;
+    materialGraphContextMenu_.searchQuery.clear();
+    materialGraphContextMenu_.scrollOffset = 0;
 }
 
 const std::vector<MaterialEditorGraphMenuCommand>& EditorSceneContext::MaterialGraphPaletteFavoriteCommands() const noexcept {
-    return materialGraphPaletteFavorites_;
+    return materialGraphContextMenu_.paletteFavorites;
 }
 
 bool EditorSceneContext::IsMaterialGraphPaletteFavorite(MaterialEditorGraphMenuCommand command) const noexcept {
-    return std::find(materialGraphPaletteFavorites_.begin(), materialGraphPaletteFavorites_.end(), command) != materialGraphPaletteFavorites_.end();
+    return std::find(materialGraphContextMenu_.paletteFavorites.begin(), materialGraphContextMenu_.paletteFavorites.end(), command) != materialGraphContextMenu_.paletteFavorites.end();
 }
 
 bool EditorSceneContext::ToggleMaterialGraphPaletteFavorite(MaterialEditorGraphMenuCommand command) {
     if (command == MaterialEditorGraphMenuCommand::None || MaterialEditorGraphMenuCommandIsAction(command)) {
         return false;
     }
-    const auto found = std::find(materialGraphPaletteFavorites_.begin(), materialGraphPaletteFavorites_.end(), command);
-    if (found != materialGraphPaletteFavorites_.end()) {
-        materialGraphPaletteFavorites_.erase(found);
+    const auto found = std::find(materialGraphContextMenu_.paletteFavorites.begin(), materialGraphContextMenu_.paletteFavorites.end(), command);
+    if (found != materialGraphContextMenu_.paletteFavorites.end()) {
+        materialGraphContextMenu_.paletteFavorites.erase(found);
         return true;
     }
-    materialGraphPaletteFavorites_.push_back(command);
+    materialGraphContextMenu_.paletteFavorites.push_back(command);
     return true;
 }
 
 bool EditorSceneContext::IsMaterialGraphContextMenuPinFiltered() const noexcept {
-    return materialGraphContextMenuPinFilterActive_;
+    return materialGraphContextMenu_.pinFilterActive;
 }
 
 std::uint32_t EditorSceneContext::MaterialGraphContextMenuPinFilterNodeId() const noexcept {
-    return materialGraphContextMenuPinFilterNodeId_;
+    return materialGraphContextMenu_.pinFilterNodeId;
 }
 
 std::string_view EditorSceneContext::MaterialGraphContextMenuPinFilterPin() const noexcept {
-    return materialGraphContextMenuPinFilterPin_;
+    return materialGraphContextMenu_.pinFilterPin;
 }
 
 bool EditorSceneContext::MaterialGraphContextMenuPinFilterIsOutput() const noexcept {
-    return materialGraphContextMenuPinFilterOutput_;
+    return materialGraphContextMenu_.pinFilterOutput;
 }
 
 bool EditorSceneContext::IsMaterialGraphContextMenuCategoryExpanded(std::size_t categoryIndex) const noexcept {
     if (categoryIndex >= 32U) {
         return false;
     }
-    return (materialGraphContextMenuExpandedMask_ & (1U << categoryIndex)) != 0U;
+    return (materialGraphContextMenu_.expandedMask & (1U << categoryIndex)) != 0U;
 }
 
 bool EditorSceneContext::IsMaterialGraphContextMenuCategoryHovered(std::size_t categoryIndex) const noexcept {
-    return materialGraphContextMenuHoveredCategory_ == categoryIndex &&
-        materialGraphContextMenuHoveredCommand_ == MaterialEditorGraphMenuCommand::None;
+    return materialGraphContextMenu_.hoveredCategory == categoryIndex &&
+        materialGraphContextMenu_.hoveredCommand == MaterialEditorGraphMenuCommand::None;
 }
 
 bool EditorSceneContext::IsMaterialGraphContextMenuCommandHovered(std::size_t categoryIndex, MaterialEditorGraphMenuCommand command) const noexcept {
-    return materialGraphContextMenuHoveredCategory_ == categoryIndex &&
-        materialGraphContextMenuHoveredCommand_ == command &&
+    return materialGraphContextMenu_.hoveredCategory == categoryIndex &&
+        materialGraphContextMenu_.hoveredCommand == command &&
         command != MaterialEditorGraphMenuCommand::None;
 }
 
 bool EditorSceneContext::SetMaterialGraphContextMenuHover(std::size_t categoryIndex, MaterialEditorGraphMenuCommand command) noexcept {
-    if (materialGraphContextMenuHoveredCategory_ == categoryIndex && materialGraphContextMenuHoveredCommand_ == command) {
+    if (materialGraphContextMenu_.hoveredCategory == categoryIndex && materialGraphContextMenu_.hoveredCommand == command) {
         return false;
     }
-    materialGraphContextMenuHoveredCategory_ = categoryIndex;
-    materialGraphContextMenuHoveredCommand_ = command;
+    materialGraphContextMenu_.hoveredCategory = categoryIndex;
+    materialGraphContextMenu_.hoveredCommand = command;
     return true;
 }
 
@@ -4530,16 +4530,16 @@ bool EditorSceneContext::ToggleMaterialGraphContextMenuCategory(std::size_t cate
     if (categoryIndex >= 32U) {
         return false;
     }
-    materialGraphContextMenuExpandedMask_ ^= (1U << categoryIndex);
-    materialGraphContextMenuScrollOffset_ = 0;
+    materialGraphContextMenu_.expandedMask ^= (1U << categoryIndex);
+    materialGraphContextMenu_.scrollOffset = 0;
     return true;
 }
 
 bool EditorSceneContext::ExecuteMaterialGraphContextMenuCommand(MaterialEditorGraphMenuCommand command) {
-    const kb::assets::AssetId id = materialGraphContextMenuAssetId_;
-    const int graphX = materialGraphContextMenuGraphX_;
-    const int graphY = materialGraphContextMenuGraphY_;
-    const bool pinFiltered = materialGraphContextMenuPinFilterActive_;
+    const kb::assets::AssetId id = materialGraphContextMenu_.assetId;
+    const int graphX = materialGraphContextMenu_.graphX;
+    const int graphY = materialGraphContextMenu_.graphY;
+    const bool pinFiltered = materialGraphContextMenu_.pinFilterActive;
     if (pinFiltered && MaterialEditorGraphMenuCommandNodeKind(command).has_value()) {
         const bool created = AddMaterialGraphNodeForPendingConnection(id, command, graphX, graphY);
         static_cast<void>(CloseMaterialGraphContextMenu());
