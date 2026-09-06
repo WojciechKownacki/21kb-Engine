@@ -478,6 +478,7 @@ add_library(kb_engine STATIC
     include/engine/modules/EngineModuleHost.hpp
     src/modules/EngineModuleLoader.cpp
     src/modules/EngineModuleHost.cpp
+    src/core/ConsoleCommands.cpp
     src/core/JsonValue.cpp
     src/audio/AudioClipAssetLoader.cpp
     src/audio/AudioMixerAssetIO.cpp
