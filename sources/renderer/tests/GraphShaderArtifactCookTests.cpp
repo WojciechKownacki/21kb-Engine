@@ -1,5 +1,7 @@
 #include "RendererTestSupport.hpp"
 
+#include "engine/platform/FileSystemPath.hpp"
+
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
 #include "kb/render/resources/RenderMaterialGraphShaderArtifact.hpp"
 
@@ -676,6 +678,67 @@ void RunGraphShaderManifestRoundTripTest() {
 
 } // namespace
 
+// A project the user keeps deep in their own folders pushes the shader cache past Win32's
+// MAX_PATH of 260 characters. std::filesystem creates those directories through the
+// extended-length form on its own, so the cook used to get all the way to the raw Win32 calls
+// under them and refuse there: first the publication lock, then everything the external compiler
+// had to open. The cache is now addressed in extended-length form and shaderc works in a scratch
+// directory of its own, so a deep cache root cooks and re-hits exactly like a shallow one.
+void RunGraphShaderDeepCacheRootCookTest() {
+    const RenderMaterialGraphShaderSource shader = CompileConstantColorGraph("0.15 0.65 0.25 1");
+    const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Spirv };
+
+    std::filesystem::path cacheRoot = std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "deep_project_root";
+    while (cacheRoot.string().size() < 200U) {
+        cacheRoot /= "user_project_folder_nested_one_level";
+    }
+    std::error_code error;
+    std::filesystem::remove_all(kb::platform::ExtendedLengthPath(cacheRoot), error);
+
+    RenderMaterialGraphShaderArtifactRequest request = MakeCookRequest("BaseOpaque");
+    request.cacheRoot = cacheRoot.string();
+    const RenderMaterialGraphShaderArtifactResult cooked =
+        CookRenderMaterialGraphShaderArtifact(shader, backends, request);
+    std::string refusal;
+    for (const RenderMaterialGraphDiagnostic& diagnostic : cooked.diagnostics) {
+        if (diagnostic.severity == RenderMaterialGraphDiagnosticSeverity::Error) {
+            refusal += " [" + diagnostic.message + "]";
+        }
+    }
+    const RenderMaterialGraphShaderBinary* binary = cooked.artifact.has_value()
+        ? cooked.artifact->FindBinary(RenderMaterialGraphShaderBackend::Spirv)
+        : nullptr;
+    const std::string deepCookMessage =
+        "A graph cook must publish its binary into a cache root past MAX_PATH:" + refusal;
+    Require(cooked.Succeeded() && binary != nullptr && !binary->cacheHit, deepCookMessage.c_str());
+    Require(binary->binaryPath.size() > 260U,
+        "This test only proves anything while the cooked path is longer than MAX_PATH");
+    // A path past MAX_PATH reaches the operating system the way the engine's own readers send it.
+    const std::filesystem::path publishedBinary = kb::platform::ExtendedLengthPath(binary->binaryPath);
+    Require(std::filesystem::is_regular_file(publishedBinary, error) &&
+            std::filesystem::file_size(publishedBinary, error) == binary->byteSize,
+        "A binary published into a deep cache root must be on disk whole");
+
+    const RenderMaterialGraphShaderArtifactResult reused =
+        CookRenderMaterialGraphShaderArtifact(shader, backends, request);
+    const RenderMaterialGraphShaderBinary* reusedBinary = reused.artifact.has_value()
+        ? reused.artifact->FindBinary(RenderMaterialGraphShaderBackend::Spirv)
+        : nullptr;
+    Require(reused.Succeeded() && reusedBinary != nullptr && reusedBinary->cacheHit,
+        "A second cook must read the integrity marker back through the same deep path");
+
+    const bool leftCompilerFile = std::ranges::any_of(
+        std::filesystem::recursive_directory_iterator(kb::platform::ExtendedLengthPath(cacheRoot)),
+        [](const std::filesystem::directory_entry& entry) {
+            const std::string name = entry.path().filename().string();
+            return entry.is_regular_file() &&
+                (name.ends_with(".shaderc.tmp") || name.ends_with(".compile.tmp"));
+        });
+    Require(!leftCompilerFile,
+        "The shader compiler must not leave its working files in a project's cache");
+    std::filesystem::remove_all(kb::platform::ExtendedLengthPath(cacheRoot), error);
+}
+
 void RunGraphShaderArtifactCookTests() {
     RunGraphShaderWrapperSourceTest();
     RunGraphShaderBackendMetadataTest();
@@ -691,6 +754,7 @@ void RunGraphShaderArtifactCookTests() {
     RunGraphShaderArtifactDependencyInvalidationTest();
     RunGraphShaderAutomaticIncludeInvalidationTest();
     RunGraphShaderToolchainIdentityInvalidationTest();
+    RunGraphShaderDeepCacheRootCookTest();
 #endif
 }
 
