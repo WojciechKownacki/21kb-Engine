@@ -525,6 +525,7 @@ add_executable(kb_editor WIN32
     src/private/rendering/InspectorSceneAudioView.hpp
     src/private/rendering/InspectorAddComponentOverlayWindow.hpp
     src/private/rendering/MaterialEditorPanelRenderer.hpp
+    src/private/rendering/material_graph/EditorMaterialGraphPinPresentation.hpp
     src/private/rendering/material_graph/MaterialGraphCanvasDocumentAdapter.hpp
     src/private/rendering/material_graph/MaterialGraphCanvas.hpp
     src/private/rendering/PanelContentRenderer.hpp
@@ -759,6 +760,7 @@ add_executable(kb_editor WIN32
     src/rendering/MaterialPreviewAppearanceResolver.cpp
     src/rendering/MaterialPreviewTextureAverageColor.cpp
     src/rendering/MaterialEditorPanelLayout.cpp
+    src/rendering/material_graph/EditorMaterialGraphPinPresentation.cpp
     src/rendering/material_graph/MaterialGraphCanvasDocumentAdapter.cpp
     src/rendering/material_graph/MaterialGraphCanvas.cpp
     src/inspection/InspectorInputInteraction.cpp
@@ -1190,6 +1192,7 @@ if(BUILD_TESTING)
         tests/ScriptEditorTests.cpp
         tests/SvgPathTests.cpp
         src/rendering/MaterialEditorPanelLayout.cpp
+        src/rendering/material_graph/EditorMaterialGraphPinPresentation.cpp
         src/rendering/EditorTexturePreviewService.cpp
         src/rendering/InspectorAudioMixerAssetView.cpp
         src/rendering/InspectorSceneAudioView.cpp
@@ -1430,6 +1433,7 @@ if(BUILD_TESTING)
         tests/EditorMaterialGraphCanvasTests.cpp
         tests/EditorTestSuites.hpp
         tests/EditorTestSupport.hpp
+        src/rendering/material_graph/EditorMaterialGraphPinPresentation.cpp
         src/rendering/material_graph/MaterialGraphCanvasDocumentAdapter.cpp
         src/rendering/material_graph/MaterialGraphCanvas.cpp
         # The canvas tests check node rects against the panel layout, which owns ResolveLayout.
