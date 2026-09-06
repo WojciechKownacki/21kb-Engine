@@ -7,6 +7,7 @@
 #include "kb/render/resources/RenderMaterialTypeSchema.hpp"
 #include "inspection/MaterialAssetFormatter.hpp"
 #include "platform/win32/EditorDebugLogGate.hpp"
+#include "rendering/material_graph/EditorMaterialGraphPinPresentation.hpp"
 #include "rendering/material_graph/MaterialGraphCanvasDocumentAdapter.hpp"
 #include "rendering/material_graph/MaterialGraphInteractionPolicy.hpp"
 #include "scene/EditorSceneContext.hpp"
@@ -1460,182 +1461,14 @@ inline MaterialEditorGraphPinDragState MaterialEditorPanelRenderer::GraphPinDrag
         : MaterialEditorGraphPinDragState::Incompatible;
 }
 
-inline std::vector<std::string> MaterialEditorPanelInputPins(kb::render::RenderMaterialGraphNodeKind kind) {
-    switch (kind) {
-    case kb::render::RenderMaterialGraphNodeKind::MaterialOutput:
-        return {
-            "baseColor",
-            "normal",
-            "roughness",
-            "metallic",
-            "specular",
-            "emissive",
-            "occlusion",
-            "alpha",
-            "alphaClipThreshold",
-            "tangentOutput",
-            "attributes",
-            "worldPositionOffset",
-            "customizedUv0",
-            "displacement",
-        };
-    case kb::render::RenderMaterialGraphNodeKind::TextureSample:
-        return { "texture", "uv" };
-    case kb::render::RenderMaterialGraphNodeKind::Add:
-    case kb::render::RenderMaterialGraphNodeKind::Subtract:
-    case kb::render::RenderMaterialGraphNodeKind::Multiply:
-    case kb::render::RenderMaterialGraphNodeKind::Divide:
-    case kb::render::RenderMaterialGraphNodeKind::Minimum:
-    case kb::render::RenderMaterialGraphNodeKind::Maximum:
-    case kb::render::RenderMaterialGraphNodeKind::DotProduct:
-    case kb::render::RenderMaterialGraphNodeKind::CrossProduct:
-    case kb::render::RenderMaterialGraphNodeKind::Distance:
-        return { "a", "b" };
-    case kb::render::RenderMaterialGraphNodeKind::Power:
-        return { "base", "exponent" };
-    case kb::render::RenderMaterialGraphNodeKind::OneMinus:
-    case kb::render::RenderMaterialGraphNodeKind::Absolute:
-    case kb::render::RenderMaterialGraphNodeKind::Saturate:
-    case kb::render::RenderMaterialGraphNodeKind::Floor:
-    case kb::render::RenderMaterialGraphNodeKind::Ceil:
-    case kb::render::RenderMaterialGraphNodeKind::Fraction:
-    case kb::render::RenderMaterialGraphNodeKind::SquareRoot:
-    case kb::render::RenderMaterialGraphNodeKind::Sine:
-    case kb::render::RenderMaterialGraphNodeKind::Cosine:
-    case kb::render::RenderMaterialGraphNodeKind::Normalize:
-    case kb::render::RenderMaterialGraphNodeKind::Length:
-    case kb::render::RenderMaterialGraphNodeKind::BreakVector:
-        return { "value" };
-    case kb::render::RenderMaterialGraphNodeKind::MakeVector:
-        return { "x", "y", "z", "w" };
-    case kb::render::RenderMaterialGraphNodeKind::Step:
-        return { "edge", "value" };
-    case kb::render::RenderMaterialGraphNodeKind::SmoothStep:
-        return { "min", "max", "value" };
-    case kb::render::RenderMaterialGraphNodeKind::If:
-        return { "a", "b", "less", "equal", "greater" };
-    case kb::render::RenderMaterialGraphNodeKind::RuntimeSwitch:
-        return { "index", "default", "case0", "case1", "case2", "case3" };
-    case kb::render::RenderMaterialGraphNodeKind::Desaturate:
-        return { "color", "fraction" };
-    case kb::render::RenderMaterialGraphNodeKind::Fresnel:
-        return { "normal", "view", "exponent", "base" };
-    case kb::render::RenderMaterialGraphNodeKind::Negate:
-    case kb::render::RenderMaterialGraphNodeKind::Sign:
-    case kb::render::RenderMaterialGraphNodeKind::Round:
-    case kb::render::RenderMaterialGraphNodeKind::Truncate:
-    case kb::render::RenderMaterialGraphNodeKind::Tangent:
-    case kb::render::RenderMaterialGraphNodeKind::ArcSine:
-    case kb::render::RenderMaterialGraphNodeKind::ArcCosine:
-    case kb::render::RenderMaterialGraphNodeKind::ArcTangent:
-    case kb::render::RenderMaterialGraphNodeKind::ArcSineFast:
-    case kb::render::RenderMaterialGraphNodeKind::ArcCosineFast:
-    case kb::render::RenderMaterialGraphNodeKind::ArcTangentFast:
-        return { "value" };
-    case kb::render::RenderMaterialGraphNodeKind::ArcTangent2:
-    case kb::render::RenderMaterialGraphNodeKind::ArcTangent2Fast:
-        return { "y", "x" };
-    case kb::render::RenderMaterialGraphNodeKind::Clamp:
-        return { "value", "min", "max" };
-    case kb::render::RenderMaterialGraphNodeKind::Lerp:
-        return { "a", "b", "t" };
-    case kb::render::RenderMaterialGraphNodeKind::NormalUnpack:
-        return { "color" };
-    case kb::render::RenderMaterialGraphNodeKind::Uv:
-        return {};
-    case kb::render::RenderMaterialGraphNodeKind::ConstantScalar:
-    case kb::render::RenderMaterialGraphNodeKind::ConstantVector2:
-    case kb::render::RenderMaterialGraphNodeKind::ConstantVector:
-    case kb::render::RenderMaterialGraphNodeKind::ConstantColor:
-    case kb::render::RenderMaterialGraphNodeKind::ParameterScalar:
-    case kb::render::RenderMaterialGraphNodeKind::ParameterVector:
-    case kb::render::RenderMaterialGraphNodeKind::ParameterColor:
-    case kb::render::RenderMaterialGraphNodeKind::ParameterTexture:
-        return {};
-    default:
-        break;
-    }
-    // Hit-testing falls back to the renderer's authoritative pin schema for any node not listed above,
-    // so every node's pins are connectable (not just drawn).
-    return kb::render::RenderMaterialGraphNodeInputPinNames(kind);
+inline std::vector<std::string> MaterialEditorPanelInputPins(
+    kb::render::RenderMaterialGraphNodeKind kind) {
+    return EditorMaterialGraphPinPresentationCatalog::InputPinNames(kind);
 }
 
-inline std::vector<std::string> MaterialEditorPanelOutputPins(kb::render::RenderMaterialGraphNodeKind kind) {
-    switch (kind) {
-    case kb::render::RenderMaterialGraphNodeKind::ConstantScalar:
-    case kb::render::RenderMaterialGraphNodeKind::ParameterScalar:
-    case kb::render::RenderMaterialGraphNodeKind::Add:
-    case kb::render::RenderMaterialGraphNodeKind::Subtract:
-    case kb::render::RenderMaterialGraphNodeKind::Multiply:
-    case kb::render::RenderMaterialGraphNodeKind::Divide:
-    case kb::render::RenderMaterialGraphNodeKind::Power:
-    case kb::render::RenderMaterialGraphNodeKind::OneMinus:
-    case kb::render::RenderMaterialGraphNodeKind::Absolute:
-    case kb::render::RenderMaterialGraphNodeKind::Minimum:
-    case kb::render::RenderMaterialGraphNodeKind::Maximum:
-    case kb::render::RenderMaterialGraphNodeKind::Saturate:
-    case kb::render::RenderMaterialGraphNodeKind::Floor:
-    case kb::render::RenderMaterialGraphNodeKind::Ceil:
-    case kb::render::RenderMaterialGraphNodeKind::Fraction:
-    case kb::render::RenderMaterialGraphNodeKind::SquareRoot:
-    case kb::render::RenderMaterialGraphNodeKind::Sine:
-    case kb::render::RenderMaterialGraphNodeKind::Cosine:
-    case kb::render::RenderMaterialGraphNodeKind::DotProduct:
-    case kb::render::RenderMaterialGraphNodeKind::CrossProduct:
-    case kb::render::RenderMaterialGraphNodeKind::Normalize:
-    case kb::render::RenderMaterialGraphNodeKind::Length:
-    case kb::render::RenderMaterialGraphNodeKind::Distance:
-    case kb::render::RenderMaterialGraphNodeKind::MakeVector:
-    case kb::render::RenderMaterialGraphNodeKind::Step:
-    case kb::render::RenderMaterialGraphNodeKind::SmoothStep:
-    case kb::render::RenderMaterialGraphNodeKind::If:
-    case kb::render::RenderMaterialGraphNodeKind::RuntimeSwitch:
-    case kb::render::RenderMaterialGraphNodeKind::Fresnel:
-    case kb::render::RenderMaterialGraphNodeKind::Negate:
-    case kb::render::RenderMaterialGraphNodeKind::Sign:
-    case kb::render::RenderMaterialGraphNodeKind::Round:
-    case kb::render::RenderMaterialGraphNodeKind::Truncate:
-    case kb::render::RenderMaterialGraphNodeKind::Tangent:
-    case kb::render::RenderMaterialGraphNodeKind::ArcSine:
-    case kb::render::RenderMaterialGraphNodeKind::ArcCosine:
-    case kb::render::RenderMaterialGraphNodeKind::ArcTangent:
-    case kb::render::RenderMaterialGraphNodeKind::ArcTangent2:
-    case kb::render::RenderMaterialGraphNodeKind::ArcSineFast:
-    case kb::render::RenderMaterialGraphNodeKind::ArcCosineFast:
-    case kb::render::RenderMaterialGraphNodeKind::ArcTangentFast:
-    case kb::render::RenderMaterialGraphNodeKind::ArcTangent2Fast:
-    case kb::render::RenderMaterialGraphNodeKind::Clamp:
-    case kb::render::RenderMaterialGraphNodeKind::Lerp:
-        return { "value" };
-    case kb::render::RenderMaterialGraphNodeKind::Desaturate:
-        return { "color" };
-    case kb::render::RenderMaterialGraphNodeKind::BreakVector:
-        return { "x", "y", "z", "w" };
-    case kb::render::RenderMaterialGraphNodeKind::ConstantVector2:
-        return { "xy" };
-    case kb::render::RenderMaterialGraphNodeKind::ConstantVector:
-        return { "xyz", "r", "g", "b" };
-    case kb::render::RenderMaterialGraphNodeKind::ParameterVector:
-        return { "xyz" };
-    case kb::render::RenderMaterialGraphNodeKind::ConstantColor:
-    case kb::render::RenderMaterialGraphNodeKind::ParameterColor:
-        return { "rgba", "r", "g", "b", "a" };
-    case kb::render::RenderMaterialGraphNodeKind::CollectionParameter:
-        return { "value", "scalar", "xyz", "rgba", "r", "g", "b", "a" };
-    case kb::render::RenderMaterialGraphNodeKind::TextureSample:
-        return { "color", "r", "g", "b", "a" };
-    case kb::render::RenderMaterialGraphNodeKind::ParameterTexture:
-        return { "texture" };
-    case kb::render::RenderMaterialGraphNodeKind::NormalUnpack:
-        return { "normal" };
-    case kb::render::RenderMaterialGraphNodeKind::Uv:
-        return { "uv" };
-    case kb::render::RenderMaterialGraphNodeKind::MaterialOutput:
-        return {};
-    default:
-        break;
-    }
-    return kb::render::RenderMaterialGraphNodeOutputPinNames(kind);
+inline std::vector<std::string> MaterialEditorPanelOutputPins(
+    kb::render::RenderMaterialGraphNodeKind kind) {
+    return EditorMaterialGraphPinPresentationCatalog::OutputPinNames(kind);
 }
 
 inline std::vector<std::string> MaterialEditorPanelHitTestInputPins(const kb::render::RenderMaterialGraphNode& node) {

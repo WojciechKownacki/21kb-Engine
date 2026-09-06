@@ -2,11 +2,13 @@
 #include "EditorTestSuites.hpp"
 
 #include "rendering/MaterialEditorPanelRenderer.hpp"
+#include "rendering/material_graph/EditorMaterialGraphPinPresentation.hpp"
 #include "rendering/material_graph/MaterialGraphCanvasDocumentAdapter.hpp"
 #include "rendering/material_graph/MaterialGraphCanvas.hpp"
 
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <optional>
@@ -384,6 +386,43 @@ void RunMaterialGraphCanvasAdapterCoversAllNodeKindsTest() {
         "Material graph canvas adapter should cover every current render node kind.");
 }
 
+void RunEditorMaterialGraphPinPresentationMatchesSchemaTest() {
+    for (const kb::render::RenderMaterialGraphNodeKind kind : kb::render::AllRenderMaterialGraphNodeKinds()) {
+        const auto verifyDirection = [kind](bool outputPin) {
+            const std::vector<EditorMaterialGraphPinPresentation> presentation =
+                outputPin
+                ? EditorMaterialGraphPinPresentationCatalog::OutputPins(kind)
+                : EditorMaterialGraphPinPresentationCatalog::InputPins(kind);
+            const std::vector<std::string> hitTestNames =
+                outputPin
+                ? MaterialEditorPanelOutputPins(kind)
+                : MaterialEditorPanelInputPins(kind);
+            std::vector<std::string> presentationNames;
+            presentationNames.reserve(presentation.size());
+            for (const EditorMaterialGraphPinPresentation& pin : presentation) {
+                Require(!pin.label.empty(), "Every presented material graph pin must have a label.");
+                presentationNames.push_back(pin.name);
+            }
+            Require(
+                presentationNames == hitTestNames,
+                "Material graph drawing and hit testing must use the same pin order.");
+
+            std::vector<std::string> canonicalNames =
+                outputPin
+                ? kb::render::RenderMaterialGraphNodeOutputPinNames(kind)
+                : kb::render::RenderMaterialGraphNodeInputPinNames(kind);
+            std::ranges::sort(presentationNames);
+            std::ranges::sort(canonicalNames);
+            Require(
+                presentationNames == canonicalNames,
+                "Editor material graph presentation must contain exactly the renderer schema pins.");
+        };
+
+        verifyDirection(false);
+        verifyDirection(true);
+    }
+}
+
 void RunMaterialGraphCanvasAdapterBuildsDocumentLinksTest() {
     kb::render::RenderMaterialGraphDocument document = kb::render::MakeDefaultRenderMaterialGraphDocument();
     Require(!document.nodes.empty(), "Default material graph should contain an output node.");
@@ -423,6 +462,7 @@ void RunEditorMaterialGraphCanvasTests() {
     RunMaterialGraphCanvasLinkOcclusionTest();
     RunMaterialGraphCanvasZoomScalesNodeGeometryProportionallyTest();
     RunMaterialGraphCanvasAdapterCoversAllNodeKindsTest();
+    RunEditorMaterialGraphPinPresentationMatchesSchemaTest();
     RunMaterialGraphCanvasAdapterBuildsDocumentLinksTest();
     std::cout << "EditorMaterialGraphCanvasTests passed\n" << std::flush;
 }

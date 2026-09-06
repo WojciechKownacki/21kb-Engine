@@ -189,6 +189,7 @@ add_library(kb_renderer STATIC
     src/resources/RenderMaterialGraphAssetLoader.cpp
     src/resources/RenderMaterialGraphDocument.cpp
     src/resources/RenderMaterialGraphCompiler.cpp
+    src/private/resources/material_graph/RenderMaterialGraphPinSchema.hpp
     src/resources/RenderMaterialGraphFunctionInlining.cpp
     src/resources/RenderMaterialGraphPinLayout.cpp
     src/resources/RenderMaterialGraphNodeCatalog.cpp
