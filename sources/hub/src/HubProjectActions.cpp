@@ -12,6 +12,7 @@
 #include <shlobj.h>
 #endif
 
+#include <string>
 #include <system_error>
 
 namespace kb::hub {
@@ -203,6 +204,13 @@ HubCreateProjectResult HubProjectActions::CreateProjectFile(const std::filesyste
 
     const std::filesystem::path projectRoot = projectParent / projectName;
     const std::filesystem::path descriptorFile = projectRoot / (projectName + L".21kbproject");
+    // Refused before anything is created: a project the engine could not open afterwards must not
+    // be left on disk for the user to find out later.
+    if (std::string budget = kb::project::ProjectManager::PathBudgetError(descriptorFile); !budget.empty()) {
+        return HubCreateProjectResult{
+            .succeeded = false, .projectFile = descriptorFile, .error = HubText::Utf8ToWide(budget) };
+    }
+
     std::error_code error;
     if (std::filesystem::exists(descriptorFile, error) && !error) {
         return HubCreateProjectResult{ .succeeded = false, .projectFile = descriptorFile, .error = L"Project descriptor already exists in this folder." };

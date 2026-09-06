@@ -4,6 +4,7 @@
 #include "project/ProjectDescriptorIntegrity.hpp"
 #include "project/ProjectDescriptorMetaWriter.hpp"
 #include "engine/config/IniDocument.hpp"
+#include "engine/platform/FileSystemPath.hpp"
 #include "engine/project/ProjectManager.hpp"
 #include "engine/assets/AssetHandle.hpp"
 #include "engine/assets/AssetMetadata.hpp"
@@ -273,6 +274,52 @@ void RunLegacyProjectDescriptorCarriesItsSettingsTest() {
     Require(!carried.inputEnabled, "the input enabled flag was lost");
     Require(carried.inputMappingContext == "/Game/Input/Legacy.21kbinputcontext", "the input mapping context was lost");
     Require(carried.physicsLayersAsset == "/Game/Physics/Legacy.21kbphysicslayers", "the physics layers asset was lost");
+}
+
+// A project directory deep enough to leave no room for the files that go inside it is refused at
+// the door, with the three numbers the reader needs, instead of failing later inside whichever
+// asset write crosses MAX_PATH first with the operating system's own message.
+void RunProjectPathBudgetTest() {
+#if defined(_WIN32)
+    CleanTempRoot();
+    std::filesystem::path deepDirectory = TempRoot();
+    while (deepDirectory.native().size() <= kb::project::kMaxProjectDirectoryLength) {
+        deepDirectory /= "deep_user_project_folder";
+    }
+    const std::filesystem::path deepProjectFile = deepDirectory / "Deep.21kbproject";
+
+    const std::string budget = kb::project::ProjectManager::PathBudgetError(deepProjectFile);
+    Require(!budget.empty(), "A project directory past the path budget must be named as the refusal");
+    Require(budget.find(std::to_string(deepDirectory.native().size())) != std::string::npos &&
+            budget.find(std::to_string(kb::project::kMaxProjectDirectoryLength)) != std::string::npos,
+        "The refusal must carry the directory's length and the length it may have");
+    Require(kb::project::ProjectManager::PathBudgetError(
+                kb::platform::ExtendedLengthPath(deepProjectFile)) == budget,
+        "Portable and extended-length spellings must resolve to the same project path budget");
+
+    const kb::project::ProjectDescriptorReadResult loaded =
+        kb::project::ProjectManager::LoadProject(deepProjectFile);
+    Require(!loaded.succeeded && loaded.error == budget,
+        "Loading a project past the path budget must refuse with that same sentence");
+
+    kb::project::ProjectDescriptor descriptor;
+    descriptor.targetPlatforms = { "Windows" };
+    const std::filesystem::path deepSaveFile = deepDirectory / "Save.21kbproject";
+    Require(!kb::project::ProjectManager::SaveProject(deepSaveFile, descriptor),
+        "Saving a project past the path budget must be refused");
+    Require(!std::filesystem::exists(deepSaveFile),
+        "A refused project save must not leave a descriptor on disk");
+
+    const std::filesystem::path deepCreateFile = deepDirectory / "Create.21kbproject";
+    Require(!kb::project::ProjectManager::CreateProject(deepCreateFile, descriptor),
+        "Creating a project past the path budget must be refused");
+    Require(!std::filesystem::exists(deepCreateFile),
+        "A refused project creation must not leave a descriptor on disk");
+
+    const std::filesystem::path shallowProjectFile = TempRoot() / "Shallow.21kbproject";
+    Require(kb::project::ProjectManager::PathBudgetError(shallowProjectFile).empty(),
+        "An ordinary project directory must not be refused for its length");
+#endif
 }
 
 void RunProjectDescriptorRejectsChecksumMismatchTest() {
@@ -1420,6 +1467,7 @@ void RunProjectSceneTests() {
     RunProjectDescriptorRoundTripTest();
     RunLegacyProjectDescriptorCarriesItsSettingsTest();
     RunProjectDescriptorRejectsChecksumMismatchTest();
+    RunProjectPathBudgetTest();
     RunSceneDocumentRoundTripTest();
     RunSceneRadianceEmitterReflectionSerializationTest();
     RunSceneAmbientRadianceReflectionSerializationTest();
