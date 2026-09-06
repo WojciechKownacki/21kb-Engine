@@ -295,6 +295,7 @@ add_executable(kb_editor WIN32
     src/private/commands/EditorCommandStack.hpp
     src/private/commands/EditorSceneHistoryCommand.hpp
     src/private/commands/IEditorCommand.hpp
+    src/console/EditorConsoleState.cpp
     src/private/console/EditorConsoleLayout.hpp
     src/private/console/EditorConsoleState.hpp
     src/private/app/EditorApplicationLifecycle.hpp
@@ -1157,6 +1158,7 @@ if(BUILD_TESTING)
 
     add_executable(kb_editor_particle_bake_host_tests
         tests/EditorParticleBakeHostTests.cpp
+        src/console/EditorConsoleState.cpp
         src/scene/ParticleEditorBakeHostCommand.cpp
     )
     target_include_directories(kb_editor_particle_bake_host_tests PRIVATE src/private)
@@ -1355,6 +1357,7 @@ if(BUILD_TESTING)
     src/inspection/EditorValueFormatter.cpp
     src/inspection/MaterialAssetFormatter.cpp
         src/inspection/InspectorPanelState.cpp
+        src/console/EditorConsoleState.cpp
     )
 
     target_include_directories(kb_editor_tests
