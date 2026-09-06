@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <filesystem>
 #include <string>
+#include <string_view>
 #include <system_error>
 
 namespace kb::platform {
@@ -17,11 +18,19 @@ namespace kb::platform {
 // the path is returned unchanged.
 [[nodiscard]] inline std::filesystem::path ExtendedLengthPath(std::filesystem::path path) {
 #if defined(_WIN32)
-    if (path.empty() || path.native().starts_with(LR"(\\?\)") || path.native().starts_with(LR"(\\.\)")) {
+    if (path.empty()) {
         return path;
     }
+    // A path that has been through generic_string() carries its prefix as "//?/", which is still an
+    // extended-length path and must not be prefixed a second time. Separators are settled first so
+    // the check sees one spelling.
+    std::wstring separated = path.native();
+    std::ranges::replace(separated, L'/', L'\\');
+    if (separated.starts_with(LR"(\\?\)") || separated.starts_with(LR"(\\.\)")) {
+        return std::filesystem::path{ separated };
+    }
     std::error_code error;
-    const std::filesystem::path absolutePath = std::filesystem::absolute(path, error);
+    const std::filesystem::path absolutePath = std::filesystem::absolute(std::filesystem::path{ separated }, error);
     if (error) {
         return path;
     }
@@ -44,12 +53,20 @@ namespace kb::platform {
 #endif
 }
 
+// A working directory for an external tool, unique to this call. bx, and so the shaderc built on
+// it, opens files through the narrow CRT, which stops at MAX_PATH whatever prefix the path carries:
+// a tool cannot read or write under a project the user put deep in their own folders. Its inputs,
+// outputs and logs live here instead, and only the finished artifact is published where the project
+// wants it. The caller owns the directory and deletes it; `error` says why nothing came back.
+[[nodiscard]] std::filesystem::path ToolScratchPath(std::string_view prefix, std::error_code& error);
+
 // The portable form of the same path: what a manifest stores, what a comparison uses and what a
 // message shows. ExtendedLengthPath produces a path for handing to the operating system, not a
 // path to keep, so anything that outlives the call comes back through here.
 [[nodiscard]] inline std::filesystem::path PortablePath(std::filesystem::path path) {
 #if defined(_WIN32)
-    const std::wstring& native = path.native();
+    std::wstring native = path.native();
+    std::ranges::replace(native, L'/', L'\\');
     if (native.starts_with(LR"(\\?\UNC\)")) {
         return std::filesystem::path{ LR"(\\)" + native.substr(8U) };
     }

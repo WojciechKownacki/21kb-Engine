@@ -10,6 +10,8 @@
 #include "PackagedRuntimeModuleContract.hpp"
 #include "ProjectCooker.hpp"
 
+#include "engine/platform/FileSystemPath.hpp"
+
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/assets/AssetRegistry.hpp"
@@ -348,6 +350,46 @@ private:
     std::filesystem::path lockPath_;
     HANDLE handle_ = INVALID_HANDLE_VALUE;
 };
+
+// The output package goes wherever the user points the Build Game panel, and Win32 stops an
+// ordinary path at MAX_PATH. The publication lock is a raw CreateFileW, so a deep output turned
+// into "already being cooked" - a message that sends the reader looking for another cook that was
+// never running.
+void RunDeepOutputPathCookTest() {
+    const Fixture fixture = BuildFixture(TestRoot() / "deep_output_cook", "Project");
+    kb::project::ProjectSettings settings;
+    settings.defaultMap = fixture.sceneVirtualPath;
+    settings.physicsLayersAsset.clear();
+    settings.inputEnabled = false;
+    WriteSettings(fixture.root, settings);
+
+    std::filesystem::path outputDirectory = fixture.root / "published";
+    while (outputDirectory.string().size() < 260U) {
+        outputDirectory /= "player_build_output_folder";
+    }
+    std::error_code error;
+    std::filesystem::create_directories(kb::platform::ExtendedLengthPath(outputDirectory), error);
+    Require(!error, "Deep output fixture directory could not be created");
+    const std::filesystem::path outputPack = outputDirectory / "Game.kbpack";
+    Require(outputPack.string().size() > 260U,
+        "This test only proves anything while the output path is longer than MAX_PATH");
+
+    std::ostringstream diagnostics;
+    const kb::game::ProjectCookResult cook = kb::game::CookProject(
+        kb::game::ProjectCookRequest{
+            .projectPath = fixture.root,
+            .targetProfileId = "Windows.x64",
+            .outputPackPath = outputPack,
+        },
+        diagnostics);
+    const std::string deepFailure =
+        "CookProject must publish into an output path past MAX_PATH: " + cook.error;
+    Require(cook.succeeded, deepFailure.c_str());
+    const std::filesystem::path published = kb::platform::ExtendedLengthPath(outputPack);
+    Require(std::filesystem::is_regular_file(published, error) &&
+            std::filesystem::file_size(published, error) > 0U,
+        "A package published past MAX_PATH must be on disk whole");
+}
 
 void RunCookOutputLockTest() {
     const Fixture fixture = BuildFixture(TestRoot() / "cook_output_lock", "Project");
@@ -1315,6 +1357,7 @@ int main(int argc, char** argv) {
     RunRuntimeDeltaTests();
     RunPackagedRuntimeModuleContractTests();
     RunCookOutputLockTest();
+    RunDeepOutputPathCookTest();
     RunWindowsRuntimeModulePackagingTests();
     RunSceneMetaCookValidationTests();
     RunAuthoritativeMaterialGraphCookTest();
