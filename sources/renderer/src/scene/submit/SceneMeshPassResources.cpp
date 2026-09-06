@@ -1,5 +1,7 @@
 #include "scene/submit/SceneMeshPassResources.hpp"
 
+#include "engine/platform/FileSystemPath.hpp"
+
 #include "kb/render/SceneDepthPolicy.hpp"
 #include "kb/render/ShaderLoader.hpp"
 #include "kb/render/resources/RenderMaterialParameterCollection.hpp"
@@ -138,7 +140,9 @@ struct CurrentGraphShaderProgram {
     if (backendDirectory == nullptr) {
         return 0U;
     }
-    const std::filesystem::path root = std::filesystem::path{ cacheRoot } /
+    // The same extended-length addressing the cook publishes under: a project deep enough to push
+    // its cache past MAX_PATH must still be readable here, or the binaries cook and never load.
+    const std::filesystem::path root = kb::platform::ExtendedLengthPath(cacheRoot) /
         GraphPlatformDirectoryForRuntime() /
         ("graph_" + std::to_string(sourceHash)) /
         ("variant_" + std::to_string(variantKey)) /
@@ -665,7 +669,7 @@ bgfx::ProgramHandle SceneMeshPassResources::LoadProgramForKey(const MaterialProg
         if (graphShaderCacheRoot_.empty() || backendDirectory == nullptr) {
             return BGFX_INVALID_HANDLE;
         }
-        const std::filesystem::path artifactRoot = std::filesystem::path{ graphShaderCacheRoot_ } /
+        const std::filesystem::path artifactRoot = kb::platform::ExtendedLengthPath(graphShaderCacheRoot_) /
             GraphPlatformDirectoryForRuntime() /
             ("graph_" + std::to_string(key.graphSourceHash)) /
             ("variant_" + std::to_string(key.variantKey)) / key.pass / backendDirectory;
