@@ -9,6 +9,8 @@
 
 namespace kb::platform {
 
+inline constexpr std::size_t kWindowsLegacyMaxPathLength = 260U;
+
 // Win32 resolves an ordinary path against MAX_PATH (260 characters); only the extended-length
 // prefix lifts that ceiling to 32767. std::filesystem applies that prefix itself, so a deep path
 // that reaches the operating system only through it works, while the same path handed straight to
