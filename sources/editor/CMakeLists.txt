@@ -640,6 +640,7 @@ add_executable(kb_editor WIN32
     src/private/scene/material/EditorEmbeddedMaterialExtractionTypes.hpp
     src/private/scene/material/EditorEmbeddedMaterialExtractor.hpp
     src/private/scene/material/EditorEmbeddedMaterialTextureResolver.hpp
+    src/private/scene/material/MaterialEditorState.hpp
     src/private/scene/material/MaterialGraphInteractionState.hpp
     src/private/scene/material_preview/EditorMaterialGraphCookService.hpp
     src/private/scene/material_preview/EditorMaterialNodePreviewBuilder.hpp
@@ -890,6 +891,7 @@ add_executable(kb_editor WIN32
     src/scene/material/EditorMaterialAssetGateway.cpp
     src/scene/material/EditorMaterialGraphDebugLog.cpp
     src/scene/material/EditorMaterialReferenceFinder.cpp
+    src/scene/material/MaterialEditorState.cpp
     src/scene/material/EditorSceneContextMaterialGraph.cpp
     src/scene/particle/EditorParticleEffectReferenceFinder.cpp
     src/scene/material/EditorEmbeddedMaterialAssetWriter.cpp
@@ -1304,6 +1306,7 @@ if(BUILD_TESTING)
     src/scene/material/EditorMaterialAssetEditCommand.cpp
     src/scene/material/EditorMaterialAssetGateway.cpp
     src/scene/material/EditorMaterialReferenceFinder.cpp
+    src/scene/material/MaterialEditorState.cpp
     src/scene/particle/EditorParticleEffectReferenceFinder.cpp
     src/scene/material/EditorEmbeddedMaterialAssetWriter.cpp
     src/scene/material/EditorEmbeddedMaterialExtractor.cpp
