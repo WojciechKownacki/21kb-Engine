@@ -269,6 +269,7 @@ add_library(kb_renderer STATIC
     src/runtime/RuntimeTextureResourceEnsurer.cpp
     src/runtime/RuntimeTextureResourceEnsurer.hpp
     src/scene/EcsRenderSceneSynchronizer.cpp
+    src/scene/RenderBridgeTelemetry.cpp
     src/scene/AuxFrameRenderer.cpp
     src/scene/AuxFrameRenderer.hpp
     src/scene/SceneParticleRenderSynchronizer.cpp
