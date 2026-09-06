@@ -1837,6 +1837,54 @@ void RunMaterialGraphEveryShaderNodeKindHasCodegenTest() {
     }
 }
 
+void RunMaterialGraphPinSchemaConsistencyTest() {
+    for (const RenderMaterialGraphNodeKind kind : AllRenderMaterialGraphNodeKinds()) {
+        const auto verifyDirection = [kind](std::vector<std::string> names, bool outputPin) {
+            std::vector<std::string> sortedNames = names;
+            std::ranges::sort(sortedNames);
+            Require(
+                std::ranges::adjacent_find(sortedNames) == sortedNames.end(),
+                "Material graph pin schema must not contain duplicate names in one direction");
+
+            for (const std::string& name : names) {
+                const bool accepted = outputPin
+                    ? IsRenderMaterialGraphOutputPin(kind, name)
+                    : IsRenderMaterialGraphInputPin(kind, name);
+                Require(
+                    accepted && RenderMaterialGraphStablePinId(kind, name, outputPin) != 0U &&
+                        RenderMaterialGraphPinDataType(kind, name, outputPin) !=
+                            RenderMaterialGraphPinType::Unknown,
+                    "Material graph pin names, validation, stable ids and types must agree");
+            }
+        };
+
+        verifyDirection(RenderMaterialGraphNodeInputPinNames(kind), false);
+        verifyDirection(RenderMaterialGraphNodeOutputPinNames(kind), true);
+    }
+
+    struct CompatibilityAliasCase {
+        RenderMaterialGraphNodeKind kind;
+        std::string_view name;
+    };
+    constexpr std::array<CompatibilityAliasCase, 4U> compatibilityAliases{ {
+        { RenderMaterialGraphNodeKind::LocalPosition, "value" },
+        { RenderMaterialGraphNodeKind::ObjectPosition, "value" },
+        { RenderMaterialGraphNodeKind::WorldPosition, "value" },
+        { RenderMaterialGraphNodeKind::PreSkinnedPosition, "xyz" },
+    } };
+    for (const CompatibilityAliasCase& alias : compatibilityAliases) {
+        const std::vector<std::string> canonicalNames = RenderMaterialGraphNodeOutputPinNames(alias.kind);
+        Require(
+            IsRenderMaterialGraphOutputPin(alias.kind, alias.name) &&
+                RenderMaterialGraphStablePinId(alias.kind, alias.name, true) != 0U &&
+                RenderMaterialGraphPinDataType(alias.kind, alias.name, true) != RenderMaterialGraphPinType::Unknown,
+            "Material graph compatibility pin aliases must remain valid and typed");
+        Require(
+            std::ranges::find(canonicalNames, alias.name) == canonicalNames.end(),
+            "Material graph compatibility pin aliases must not create duplicate visible pins");
+    }
+}
+
 void RunMaterialGraphDefaultsLegacyMaterialToOutputNodeTest() {
     std::istringstream input{
         "version 1\n"
@@ -6613,6 +6661,7 @@ void RunRenderMaterialTypeSchemaTests() {
     RunMaterialGraphSchemaMigrationGoldenTest();
     RunMaterialGraphStableLinkIdMigrationTest();
     RunMaterialGraphMultiWordNodeKindSerializationRoundTripTest();
+    RunMaterialGraphPinSchemaConsistencyTest();
     RunMaterialGraphEveryShaderNodeKindHasCodegenTest();
     RunMaterialGraphDefaultsLegacyMaterialToOutputNodeTest();
     RunMaterialGraphLastGoodArtifactPolicyRoundTripAndDecisionTest();
