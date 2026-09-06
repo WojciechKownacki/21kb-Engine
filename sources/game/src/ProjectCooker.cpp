@@ -1,4 +1,6 @@
 #include "ProjectCooker.hpp"
+
+#include "engine/platform/FileSystemPath.hpp"
 #include "PackagedRuntimeModuleContract.hpp"
 
 #include "engine/assets/AssetCompatibility.hpp"
@@ -226,17 +228,21 @@ public:
             error = "output package path is empty or has no filename";
             return false;
         }
-        std::filesystem::path parent = outputPath.parent_path();
+        // The output package goes where the user pointed the build, so both the directory and the
+        // lock beside it are addressed in the form Win32 opens past MAX_PATH.
+        const std::filesystem::path openablePath = kb::platform::ExtendedLengthPath(outputPath);
+        std::filesystem::path parent = openablePath.parent_path();
         if (parent.empty()) {
             parent = ".";
         }
         std::error_code directoryError;
         std::filesystem::create_directories(parent, directoryError);
         if (directoryError) {
-            error = "output package directory could not be created: " + parent.generic_string();
+            error = "output package directory could not be created: " +
+                kb::platform::PortablePath(parent).generic_string();
             return false;
         }
-        lockPath_ = WithCookFileSuffix(outputPath, ".kbpacklock");
+        lockPath_ = WithCookFileSuffix(openablePath, ".kbpacklock");
 #if defined(_WIN32)
         handle_ = CreateFileW(
             lockPath_.c_str(),
@@ -247,8 +253,11 @@ public:
             FILE_ATTRIBUTE_NORMAL,
             nullptr);
         if (handle_ == INVALID_HANDLE_VALUE) {
+            // Two different refusals used to share this sentence. The error number tells them apart:
+            // ERROR_SHARING_VIOLATION is another cook holding the lock, anything else is not.
             error = "output package is already being cooked or its publication lock is unavailable: " +
-                outputPath.generic_string();
+                kb::platform::PortablePath(outputPath).generic_string() +
+                " (Windows error " + std::to_string(GetLastError()) + ")";
             return false;
         }
 #else
@@ -300,7 +309,7 @@ private:
 [[nodiscard]] std::filesystem::path CreateCookPackCandidatePath(
     const std::filesystem::path& outputPath,
     std::string& error) {
-    std::filesystem::path parent = outputPath.parent_path();
+    std::filesystem::path parent = kb::platform::ExtendedLengthPath(outputPath).parent_path();
     if (parent.empty()) {
         parent = ".";
     }
@@ -355,15 +364,35 @@ private:
 #endif
 }
 
+// What shaderc opens: the renderer shader sources, the pinned bgfx includes and the varying def.
+// They are captured into the tool scratch rather than the cook cache, because the compiler opens
+// files through the narrow CRT and cannot reach a directory under a deep output path at all.
+[[nodiscard]] std::filesystem::path CreateToolInputSnapshotDirectory(std::string& error) {
+    std::error_code directoryError;
+    const std::filesystem::path directory = kb::platform::ToolScratchPath("cook-tool-inputs", directoryError);
+    if (directoryError || directory.empty()) {
+        error = "cook snapshot directory could not be created: " + directoryError.message();
+        return {};
+    }
+    if (!std::filesystem::create_directory(directory, directoryError) || directoryError) {
+        error = "cook snapshot directory could not be created: " + directory.generic_string();
+        return {};
+    }
+    return directory;
+}
+
 [[nodiscard]] std::filesystem::path CreateCookSnapshotDirectory(
     const std::filesystem::path& cacheRoot,
     std::string_view category,
     std::string& error) {
-    const std::filesystem::path parent = cacheRoot / category;
+    // The cook cache sits next to the output package the user chose, so it is as deep as their
+    // folders are and Win32 needs it in extended-length form to create anything under it.
+    const std::filesystem::path parent = kb::platform::ExtendedLengthPath(cacheRoot) / category;
     std::error_code directoryError;
     std::filesystem::create_directories(parent, directoryError);
     if (directoryError) {
-        error = "cook snapshot directory could not be created: " + parent.generic_string();
+        error = "cook snapshot directory could not be created: " +
+            kb::platform::PortablePath(parent).generic_string();
         return {};
     }
 #if defined(_WIN32)
@@ -381,7 +410,8 @@ private:
             return candidate;
         }
         if (directoryError) {
-            error = "cook snapshot directory could not be created: " + candidate.generic_string();
+            error = "cook snapshot directory could not be created: " +
+                kb::platform::PortablePath(candidate).generic_string();
             return {};
         }
     }
@@ -1805,38 +1835,25 @@ struct WindowsRuntimeModuleSnapshot {
     return text;
 }
 
+// shaderc compiles the fixed shaders here, so this is a working directory for an external tool
+// and not part of the cook cache: the tool opens files through the narrow CRT and could not reach
+// a directory under an output path the user put deep in their folders. The compiled shaders are
+// read back from here and written into the package.
 [[nodiscard]] std::filesystem::path CreateFixedShaderWorkDirectory(
-    const std::filesystem::path& cacheRoot,
     std::string_view shaderPlatform,
     std::string& error) {
-    const std::filesystem::path parent = cacheRoot / "fixed-shader-work" / shaderPlatform;
     std::error_code directoryError;
-    std::filesystem::create_directories(parent, directoryError);
-    if (directoryError) {
-        error = "fixed shader work directory could not be created: " + parent.generic_string();
+    const std::filesystem::path directory =
+        kb::platform::ToolScratchPath(std::string{ "fixed-shaders-" } + std::string{ shaderPlatform }, directoryError);
+    if (directoryError || directory.empty()) {
+        error = "fixed shader work directory could not be created: " + directoryError.message();
         return {};
     }
-#if defined(_WIN32)
-    const std::uint64_t processId = static_cast<std::uint64_t>(GetCurrentProcessId());
-#else
-    const std::uint64_t processId = static_cast<std::uint64_t>(getpid());
-#endif
-    static std::atomic<std::uint64_t> nextDirectory{ 0U };
-    for (std::uint32_t attempt = 0U; attempt < 256U; ++attempt) {
-        const std::uint64_t sequence = nextDirectory.fetch_add(1U, std::memory_order_relaxed);
-        const std::filesystem::path candidate =
-            parent / (std::to_string(processId) + "-" + std::to_string(sequence));
-        directoryError.clear();
-        if (std::filesystem::create_directory(candidate, directoryError)) {
-            return candidate;
-        }
-        if (directoryError) {
-            error = "fixed shader work directory could not be created: " + candidate.generic_string();
-            return {};
-        }
+    if (!std::filesystem::create_directory(directory, directoryError) || directoryError) {
+        error = "fixed shader work directory could not be created: " + directory.generic_string();
+        return {};
     }
-    error = "a unique fixed shader work directory could not be allocated";
-    return {};
+    return directory;
 }
 
 [[nodiscard]] bool AddFixedShaders(
@@ -1861,8 +1878,7 @@ struct WindowsRuntimeModuleSnapshot {
     }
     const std::string shaderPlatform{ asset_bake::ShaderBakePlatformName(profile.shaderPlatform) };
     const std::string shadercPlatform{ asset_bake::ShaderBakePlatformShadercToken(profile.shaderPlatform) };
-    const std::filesystem::path targetRoot =
-        CreateFixedShaderWorkDirectory(request.cacheRoot, shaderPlatform, error);
+    const std::filesystem::path targetRoot = CreateFixedShaderWorkDirectory(shaderPlatform, error);
     if (targetRoot.empty()) {
         return false;
     }
@@ -2116,8 +2132,7 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
     if (request.cacheRoot.empty()) {
         request.cacheRoot = request.outputPackPath.parent_path() / ".kb-cook-cache" / request.targetProfileId;
     }
-    const std::filesystem::path toolSnapshotRoot =
-        CreateCookSnapshotDirectory(request.cacheRoot, "shader-input-snapshots", error);
+    const std::filesystem::path toolSnapshotRoot = CreateToolInputSnapshotDirectory(error);
     if (toolSnapshotRoot.empty()) {
         return Failure(std::move(error));
     }

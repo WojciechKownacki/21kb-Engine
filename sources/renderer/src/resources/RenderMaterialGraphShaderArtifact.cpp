@@ -773,11 +773,7 @@ std::optional<RenderMaterialGraphShaderBackend> ParseRenderMaterialGraphShaderBa
 // log - therefore lives under a scratch root the engine owns and keeps short. Only the finished
 // binary is published into the project's cache, which is as deep as the user's folders are.
 [[nodiscard]] std::filesystem::path ShaderCompilerScratchPath(std::string_view suffix, std::error_code& error) {
-    const std::filesystem::path root = std::filesystem::temp_directory_path(error) / "21kb-graph-shaders";
-    if (error) return {};
-    std::filesystem::create_directories(root, error);
-    if (error) return {};
-    return root / UniqueShaderTemporaryName(suffix);
+    return kb::platform::ToolScratchPath(suffix, error);
 }
 
 // `failure` carries the platform's own error number when the rename does not happen, so a cook
