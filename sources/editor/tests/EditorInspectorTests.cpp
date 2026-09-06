@@ -177,6 +177,76 @@ public:
     return link;
 }
 
+void RunEditorConsoleStateTest() {
+    using kb::editor::EditorConsoleButton;
+    using kb::editor::EditorConsoleLevel;
+
+    kb::editor::EditorConsoleState state;
+    kb::editor::tests::Require(
+        state.Accepts(EditorConsoleLevel::Info) && state.Accepts(EditorConsoleLevel::Warning) &&
+            state.Accepts(EditorConsoleLevel::Error),
+        "Editor Console must accept every level by default");
+
+    state.Info("Runtime", "ready");
+    state.Warning("Assets", "stale");
+    state.Error("Renderer", "failed");
+    kb::editor::tests::Require(
+        state.Entries().size() == 3U && state.Count(EditorConsoleLevel::Info) == 1U &&
+            state.Count(EditorConsoleLevel::Warning) == 1U && state.Count(EditorConsoleLevel::Error) == 1U,
+        "Editor Console counters must match its retained entries");
+    kb::editor::tests::Require(
+        state.Entries()[0].sequence < state.Entries()[1].sequence &&
+            state.Entries()[1].sequence < state.Entries()[2].sequence &&
+            state.Entries()[1].category == "Assets" && state.Entries()[1].message == "stale",
+        "Editor Console must retain ordered messages with their category");
+
+    state.Select(state.Entries()[1].sequence);
+    kb::editor::tests::Require(
+        state.SelectedEntry() != nullptr && state.SelectedEntry()->message == "stale",
+        "Editor Console selection must resolve to the retained entry");
+    state.SetDetailScrollLine(7, 10);
+    state.Select(state.Entries()[2].sequence);
+    kb::editor::tests::Require(state.DetailScrollLine() == 0, "Changing the Console selection must reset detail scroll");
+
+    state.SetDetailHeight(1);
+    kb::editor::tests::Require(state.DetailHeight() == 54, "Editor Console detail height must clamp to its minimum");
+    state.SetDetailHeight(999);
+    kb::editor::tests::Require(state.DetailHeight() == 220, "Editor Console detail height must clamp to its maximum");
+    state.SetDetailScrollLine(5, 20);
+    state.BeginDetailScrollbarDrag(10);
+    state.DragDetailScrollbar(15, 10, 20);
+    state.EndDetailScrollbarDrag();
+    kb::editor::tests::Require(state.DetailScrollLine() == 15, "Editor Console detail scrollbar drag must scale to its range");
+    state.SetListScrollRow(4, 20);
+    state.BeginListScrollbarDrag(10);
+    state.DragListScrollbar(15, 10, 20);
+    state.EndListScrollbarDrag();
+    kb::editor::tests::Require(state.ListScrollRow() == 14, "Editor Console list scrollbar drag must scale to its range");
+
+    kb::editor::tests::Require(
+        state.SetHoveredButton(EditorConsoleButton::Clear) &&
+            !state.SetHoveredButton(EditorConsoleButton::Clear),
+        "Editor Console hover changes must invalidate only on a new button");
+    state.PressButton(EditorConsoleButton::Clear);
+    state.ReleaseButton();
+    state.ToggleWarnings();
+    kb::editor::tests::Require(
+        state.PressedButton() == EditorConsoleButton::None && !state.Accepts(EditorConsoleLevel::Warning),
+        "Editor Console button and level-filter state must round-trip");
+
+    state.Clear();
+    for (std::size_t index = 0U; index <= kb::editor::EditorConsoleState::Capacity(); ++index) {
+        state.Info("Capacity", std::to_string(index));
+    }
+    state.Warning("Capacity", "newest");
+    kb::editor::tests::Require(
+        state.Entries().size() == kb::editor::EditorConsoleState::Capacity() &&
+            state.Count(EditorConsoleLevel::Info) == kb::editor::EditorConsoleState::Capacity() - 1U &&
+            state.Count(EditorConsoleLevel::Warning) == 1U && state.Entries().front().message == "2" &&
+            state.Entries().back().message == "newest",
+        "Editor Console capacity eviction must keep entries and per-level counters in step");
+}
+
 void RunInspectorTextEditDirtyStateTest() {
     kb::editor::InspectorPanelState state;
     state.BeginTextEdit(kb::editor::InspectorPropertyId::MaterialMetallicFactor, "0.25");
@@ -2940,6 +3010,7 @@ void RunAddComponentBrowserModelTest() {
 namespace kb::editor::tests {
 
 void RunEditorInspectorTests() {
+    RunEditorConsoleStateTest();
     RunInspectorPhysicsModelTest();
     RunInspectorSectionCollapseTest();
     RunInspectorDisclosureAnimationTest();
