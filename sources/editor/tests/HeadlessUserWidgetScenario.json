@@ -1,0 +1,2751 @@
+{
+  "schema": "21kb.editor-automation/v1",
+  "steps": [
+    {
+      "op": "copy_fixture",
+      "source": "fixtures/ui/Frontier.png",
+      "destination": "Source/Frontier.png"
+    },
+    {
+      "op": "copy_fixture",
+      "source": "fixtures/ui/MenuController.lua",
+      "destination": "Assets/UI/MenuController.lua"
+    },
+    {
+      "op": "import_asset",
+      "source": "Source/Frontier.png",
+      "destination": "/Game/UI"
+    },
+    {
+      "op": "discover_assets"
+    },
+    {
+      "op": "assert_asset",
+      "path": "/Game/UI/Frontier.21kb"
+    },
+    {
+      "op": "write_file",
+      "path": "Source/MenuScene.obj",
+      "content": "v -1 -1 0\nv 1 -1 0\nv 0 1 0\nf 1 2 3\n"
+    },
+    {
+      "op": "import_asset",
+      "source": "Source/MenuScene.obj",
+      "destination": "/Game/UI"
+    },
+    {
+      "op": "create_mesh_entity",
+      "id": "scene_mesh",
+      "asset": "/Game/UI/MenuScene.21kb"
+    },
+    {
+      "op": "play"
+    },
+    {
+      "op": "step",
+      "frames": 2,
+      "dt": 0.016666666666666666
+    },
+    {
+      "op": "capture_runtime",
+      "checkpoint": "scene-3d",
+      "require_non_uniform": true
+    },
+    {
+      "op": "stop"
+    },
+    {
+      "op": "create_entity",
+      "id": "overlay_root",
+      "name": "ImageOverlayProbe"
+    },
+    {
+      "op": "add_component",
+      "entity": "overlay_root",
+      "component": "kb21.ui.canvas"
+    },
+    {
+      "op": "create_entity",
+      "id": "overlay_image",
+      "name": "ImageOver3D"
+    },
+    {
+      "op": "reparent_entity",
+      "entity": "overlay_image",
+      "parent": "overlay_root"
+    },
+    {
+      "op": "add_component",
+      "entity": "overlay_image",
+      "component": "kb21.ui.image"
+    },
+    {
+      "op": "set_property",
+      "entity": "overlay_image",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.x",
+      "value": 20.0
+    },
+    {
+      "op": "set_property",
+      "entity": "overlay_image",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.y",
+      "value": 20.0
+    },
+    {
+      "op": "set_property",
+      "entity": "overlay_image",
+      "component": "kb21.ui.rect-transform",
+      "property": "sizeDelta.x",
+      "value": 360.0
+    },
+    {
+      "op": "set_property",
+      "entity": "overlay_image",
+      "component": "kb21.ui.rect-transform",
+      "property": "sizeDelta.y",
+      "value": 202.5
+    },
+    {
+      "op": "set_property",
+      "entity": "overlay_image",
+      "component": "kb21.ui.image",
+      "property": "imageAssetId",
+      "value": "/Game/UI/Frontier.21kb"
+    },
+    {
+      "op": "create_entity",
+      "id": "blur_probe",
+      "name": "SceneBlurProbe"
+    },
+    {
+      "op": "reparent_entity",
+      "entity": "blur_probe",
+      "parent": "overlay_root"
+    },
+    {
+      "op": "add_component",
+      "entity": "blur_probe",
+      "component": "kb21.ui.background-blur"
+    },
+    {
+      "op": "set_property",
+      "entity": "blur_probe",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.x",
+      "value": 500.0
+    },
+    {
+      "op": "set_property",
+      "entity": "blur_probe",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.y",
+      "value": 100.0
+    },
+    {
+      "op": "set_property",
+      "entity": "blur_probe",
+      "component": "kb21.ui.rect-transform",
+      "property": "sizeDelta.x",
+      "value": 1000.0
+    },
+    {
+      "op": "set_property",
+      "entity": "blur_probe",
+      "component": "kb21.ui.rect-transform",
+      "property": "sizeDelta.y",
+      "value": 850.0
+    },
+    {
+      "op": "set_property",
+      "entity": "blur_probe",
+      "component": "kb21.ui.background-blur",
+      "property": "radius",
+      "value": 0.0
+    },
+    {
+      "op": "play"
+    },
+    {
+      "op": "step",
+      "frames": 2,
+      "dt": 0.016666666666666666
+    },
+    {
+      "op": "capture_runtime",
+      "checkpoint": "image-over-3d",
+      "require_non_uniform": true
+    },
+    {
+      "op": "assert_capture_difference",
+      "before": "scene-3d",
+      "after": "image-over-3d"
+    },
+    {
+      "op": "set_property",
+      "entity": "blur_probe",
+      "component": "kb21.ui.background-blur",
+      "property": "radius",
+      "value": 24.0
+    },
+    {
+      "op": "capture_runtime",
+      "checkpoint": "scene-blur",
+      "require_non_uniform": true
+    },
+    {
+      "op": "assert_capture_difference",
+      "before": "image-over-3d",
+      "after": "scene-blur"
+    },
+    {
+      "op": "set_property",
+      "entity": "blur_probe",
+      "component": "kb21.ui.background-blur",
+      "property": "radius",
+      "value": 0.0
+    },
+    {
+      "op": "set_property",
+      "entity": "overlay_image",
+      "component": "kb21.ui.rect-transform",
+      "property": "sizeDelta.x",
+      "value": 720.0
+    },
+    {
+      "op": "capture_runtime",
+      "checkpoint": "image-resized",
+      "require_non_uniform": true
+    },
+    {
+      "op": "assert_capture_difference",
+      "before": "image-over-3d",
+      "after": "image-resized"
+    },
+    {
+      "op": "set_property",
+      "entity": "overlay_image",
+      "component": "kb21.ui.rect-transform",
+      "property": "scale.x",
+      "value": 1.25
+    },
+    {
+      "op": "capture_runtime",
+      "checkpoint": "image-scaled",
+      "require_non_uniform": true
+    },
+    {
+      "op": "assert_capture_difference",
+      "before": "image-resized",
+      "after": "image-scaled"
+    },
+    {
+      "op": "stop"
+    },
+    {
+      "op": "delete_entity",
+      "entity": "overlay_root"
+    },
+    {
+      "op": "create_entity",
+      "id": "canvas",
+      "name": "FrontierMenu"
+    },
+    {
+      "op": "add_component",
+      "entity": "canvas",
+      "component": "kb21.ui.canvas"
+    },
+    {
+      "op": "set_property",
+      "entity": "canvas",
+      "component": "kb21.ui.canvas-scaler",
+      "property": "referenceResolution.x",
+      "value": 1280.0
+    },
+    {
+      "op": "set_property",
+      "entity": "canvas",
+      "component": "kb21.ui.canvas-scaler",
+      "property": "referenceResolution.y",
+      "value": 720.0
+    },
+    {
+      "op": "create_entity",
+      "id": "background",
+      "name": "background"
+    },
+    {
+      "op": "reparent_entity",
+      "entity": "background",
+      "parent": "canvas"
+    },
+    {
+      "op": "add_component",
+      "entity": "background",
+      "component": "kb21.ui.border"
+    },
+    {
+      "op": "set_property",
+      "entity": "background",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.x",
+      "value": 1280.0
+    },
+    {
+      "op": "set_property",
+      "entity": "background",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.y",
+      "value": 720.0
+    },
+    {
+      "op": "set_property",
+      "entity": "background",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.x",
+      "value": 0.0
+    },
+    {
+      "op": "set_property",
+      "entity": "background",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.y",
+      "value": 0.0
+    },
+    {
+      "op": "set_property",
+      "entity": "background",
+      "component": "kb21.ui.border",
+      "property": "backgroundColor.r",
+      "value": 0.026
+    },
+    {
+      "op": "set_property",
+      "entity": "background",
+      "component": "kb21.ui.border",
+      "property": "backgroundColor.g",
+      "value": 0.045
+    },
+    {
+      "op": "set_property",
+      "entity": "background",
+      "component": "kb21.ui.border",
+      "property": "backgroundColor.b",
+      "value": 0.065
+    },
+    {
+      "op": "set_property",
+      "entity": "background",
+      "component": "kb21.ui.border",
+      "property": "backgroundColor.a",
+      "value": 1.0
+    },
+    {
+      "op": "set_property",
+      "entity": "background",
+      "component": "kb21.ui.border",
+      "property": "borderWidth.left",
+      "value": 0.0
+    },
+    {
+      "op": "set_property",
+      "entity": "background",
+      "component": "kb21.ui.border",
+      "property": "borderWidth.top",
+      "value": 0.0
+    },
+    {
+      "op": "set_property",
+      "entity": "background",
+      "component": "kb21.ui.border",
+      "property": "borderWidth.right",
+      "value": 0.0
+    },
+    {
+      "op": "set_property",
+      "entity": "background",
+      "component": "kb21.ui.border",
+      "property": "borderWidth.bottom",
+      "value": 0.0
+    },
+    {
+      "op": "create_entity",
+      "id": "eyebrow",
+      "name": "eyebrow"
+    },
+    {
+      "op": "reparent_entity",
+      "entity": "eyebrow",
+      "parent": "canvas"
+    },
+    {
+      "op": "add_component",
+      "entity": "eyebrow",
+      "component": "kb21.ui.text"
+    },
+    {
+      "op": "set_property",
+      "entity": "eyebrow",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.x",
+      "value": 470.0
+    },
+    {
+      "op": "set_property",
+      "entity": "eyebrow",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.y",
+      "value": 76.0
+    },
+    {
+      "op": "set_property",
+      "entity": "eyebrow",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.x",
+      "value": 70.0
+    },
+    {
+      "op": "set_property",
+      "entity": "eyebrow",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.y",
+      "value": 48.0
+    },
+    {
+      "op": "set_property",
+      "entity": "eyebrow",
+      "component": "kb21.ui.text",
+      "property": "content",
+      "value": "21KB  /  EXPEDITION SELECT"
+    },
+    {
+      "op": "set_property",
+      "entity": "eyebrow",
+      "component": "kb21.ui.text",
+      "property": "fontSize",
+      "value": 16.0
+    },
+    {
+      "op": "create_entity",
+      "id": "title",
+      "name": "title"
+    },
+    {
+      "op": "reparent_entity",
+      "entity": "title",
+      "parent": "canvas"
+    },
+    {
+      "op": "add_component",
+      "entity": "title",
+      "component": "kb21.ui.text"
+    },
+    {
+      "op": "set_property",
+      "entity": "title",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.x",
+      "value": 566.0
+    },
+    {
+      "op": "set_property",
+      "entity": "title",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.y",
+      "value": 176.0
+    },
+    {
+      "op": "set_property",
+      "entity": "title",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.x",
+      "value": 66.0
+    },
+    {
+      "op": "set_property",
+      "entity": "title",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.y",
+      "value": 88.0
+    },
+    {
+      "op": "set_property",
+      "entity": "title",
+      "component": "kb21.ui.text",
+      "property": "content",
+      "value": "FRONTIER"
+    },
+    {
+      "op": "set_property",
+      "entity": "title",
+      "component": "kb21.ui.text",
+      "property": "fontSize",
+      "value": 66.0
+    },
+    {
+      "op": "create_entity",
+      "id": "subtitle",
+      "name": "subtitle"
+    },
+    {
+      "op": "reparent_entity",
+      "entity": "subtitle",
+      "parent": "canvas"
+    },
+    {
+      "op": "add_component",
+      "entity": "subtitle",
+      "component": "kb21.ui.text"
+    },
+    {
+      "op": "set_property",
+      "entity": "subtitle",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.x",
+      "value": 450.0
+    },
+    {
+      "op": "set_property",
+      "entity": "subtitle",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.y",
+      "value": 211.0
+    },
+    {
+      "op": "set_property",
+      "entity": "subtitle",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.x",
+      "value": 70.0
+    },
+    {
+      "op": "set_property",
+      "entity": "subtitle",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.y",
+      "value": 173.0
+    },
+    {
+      "op": "set_property",
+      "entity": "subtitle",
+      "component": "kb21.ui.text",
+      "property": "content",
+      "value": "Your next story starts here."
+    },
+    {
+      "op": "set_property",
+      "entity": "subtitle",
+      "component": "kb21.ui.text",
+      "property": "fontSize",
+      "value": 20.0
+    },
+    {
+      "op": "create_entity",
+      "id": "play",
+      "name": "play"
+    },
+    {
+      "op": "reparent_entity",
+      "entity": "play",
+      "parent": "canvas"
+    },
+    {
+      "op": "add_component",
+      "entity": "play",
+      "component": "kb21.ui.button"
+    },
+    {
+      "op": "set_property",
+      "entity": "play",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.x",
+      "value": 400.0
+    },
+    {
+      "op": "set_property",
+      "entity": "play",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.y",
+      "value": 304.0
+    },
+    {
+      "op": "set_property",
+      "entity": "play",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.x",
+      "value": 70.0
+    },
+    {
+      "op": "set_property",
+      "entity": "play",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.y",
+      "value": 250.0
+    },
+    {
+      "op": "set_property",
+      "entity": "play",
+      "component": "kb21.ui.text",
+      "property": "content",
+      "value": "START EXPEDITION"
+    },
+    {
+      "op": "set_property",
+      "entity": "play",
+      "component": "kb21.ui.text",
+      "property": "fontSize",
+      "value": 22.0
+    },
+    {
+      "op": "set_property",
+      "entity": "play",
+      "component": "kb21.ui.border",
+      "property": "backgroundColor.r",
+      "value": 0.08
+    },
+    {
+      "op": "set_property",
+      "entity": "play",
+      "component": "kb21.ui.border",
+      "property": "backgroundColor.g",
+      "value": 0.24
+    },
+    {
+      "op": "set_property",
+      "entity": "play",
+      "component": "kb21.ui.border",
+      "property": "backgroundColor.b",
+      "value": 0.29
+    },
+    {
+      "op": "set_property",
+      "entity": "play",
+      "component": "kb21.ui.border",
+      "property": "backgroundColor.a",
+      "value": 1.0
+    },
+    {
+      "op": "set_property",
+      "entity": "play",
+      "component": "kb21.ui.border",
+      "property": "borderColor.r",
+      "value": 0.35
+    },
+    {
+      "op": "set_property",
+      "entity": "play",
+      "component": "kb21.ui.border",
+      "property": "borderColor.g",
+      "value": 0.83
+    },
+    {
+      "op": "set_property",
+      "entity": "play",
+      "component": "kb21.ui.border",
+      "property": "borderColor.b",
+      "value": 0.79
+    },
+    {
+      "op": "set_property",
+      "entity": "play",
+      "component": "kb21.ui.border",
+      "property": "borderColor.a",
+      "value": 1.0
+    },
+    {
+      "op": "set_property",
+      "entity": "play",
+      "component": "kb21.ui.selectable",
+      "property": "eventName",
+      "value": "Menu.Play"
+    },
+    {
+      "op": "add_component",
+      "entity": "play",
+      "component": "kb21.ui.canvas-group"
+    },
+    {
+      "op": "attach_script",
+      "entity": "play",
+      "asset": "/Game/UI/MenuController.lua"
+    },
+    {
+      "op": "create_entity",
+      "id": "home",
+      "name": "home"
+    },
+    {
+      "op": "reparent_entity",
+      "entity": "home",
+      "parent": "canvas"
+    },
+    {
+      "op": "add_component",
+      "entity": "home",
+      "component": "kb21.ui.button"
+    },
+    {
+      "op": "set_property",
+      "entity": "home",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.x",
+      "value": 400.0
+    },
+    {
+      "op": "set_property",
+      "entity": "home",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.y",
+      "value": 372.0
+    },
+    {
+      "op": "set_property",
+      "entity": "home",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.x",
+      "value": 70.0
+    },
+    {
+      "op": "set_property",
+      "entity": "home",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.y",
+      "value": 318.0
+    },
+    {
+      "op": "set_property",
+      "entity": "home",
+      "component": "kb21.ui.text",
+      "property": "content",
+      "value": "EXPLORE"
+    },
+    {
+      "op": "set_property",
+      "entity": "home",
+      "component": "kb21.ui.text",
+      "property": "fontSize",
+      "value": 22.0
+    },
+    {
+      "op": "set_property",
+      "entity": "home",
+      "component": "kb21.ui.border",
+      "property": "backgroundColor.r",
+      "value": 0.075
+    },
+    {
+      "op": "set_property",
+      "entity": "home",
+      "component": "kb21.ui.border",
+      "property": "backgroundColor.g",
+      "value": 0.105
+    },
+    {
+      "op": "set_property",
+      "entity": "home",
+      "component": "kb21.ui.border",
+      "property": "backgroundColor.b",
+      "value": 0.14
+    },
+    {
+      "op": "set_property",
+      "entity": "home",
+      "component": "kb21.ui.border",
+      "property": "backgroundColor.a",
+      "value": 1.0
+    },
+    {
+      "op": "set_property",
+      "entity": "home",
+      "component": "kb21.ui.border",
+      "property": "borderColor.r",
+      "value": 0.35
+    },
+    {
+      "op": "set_property",
+      "entity": "home",
+      "component": "kb21.ui.border",
+      "property": "borderColor.g",
+      "value": 0.83
+    },
+    {
+      "op": "set_property",
+      "entity": "home",
+      "component": "kb21.ui.border",
+      "property": "borderColor.b",
+      "value": 0.79
+    },
+    {
+      "op": "set_property",
+      "entity": "home",
+      "component": "kb21.ui.border",
+      "property": "borderColor.a",
+      "value": 1.0
+    },
+    {
+      "op": "set_property",
+      "entity": "home",
+      "component": "kb21.ui.selectable",
+      "property": "eventName",
+      "value": "Menu.Home"
+    },
+    {
+      "op": "add_component",
+      "entity": "home",
+      "component": "kb21.ui.canvas-group"
+    },
+    {
+      "op": "attach_script",
+      "entity": "home",
+      "asset": "/Game/UI/MenuController.lua"
+    },
+    {
+      "op": "create_entity",
+      "id": "settings",
+      "name": "settings"
+    },
+    {
+      "op": "reparent_entity",
+      "entity": "settings",
+      "parent": "canvas"
+    },
+    {
+      "op": "add_component",
+      "entity": "settings",
+      "component": "kb21.ui.button"
+    },
+    {
+      "op": "set_property",
+      "entity": "settings",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.x",
+      "value": 400.0
+    },
+    {
+      "op": "set_property",
+      "entity": "settings",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.y",
+      "value": 440.0
+    },
+    {
+      "op": "set_property",
+      "entity": "settings",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.x",
+      "value": 70.0
+    },
+    {
+      "op": "set_property",
+      "entity": "settings",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.y",
+      "value": 386.0
+    },
+    {
+      "op": "set_property",
+      "entity": "settings",
+      "component": "kb21.ui.text",
+      "property": "content",
+      "value": "SETTINGS"
+    },
+    {
+      "op": "set_property",
+      "entity": "settings",
+      "component": "kb21.ui.text",
+      "property": "fontSize",
+      "value": 22.0
+    },
+    {
+      "op": "set_property",
+      "entity": "settings",
+      "component": "kb21.ui.border",
+      "property": "backgroundColor.r",
+      "value": 0.075
+    },
+    {
+      "op": "set_property",
+      "entity": "settings",
+      "component": "kb21.ui.border",
+      "property": "backgroundColor.g",
+      "value": 0.105
+    },
+    {
+      "op": "set_property",
+      "entity": "settings",
+      "component": "kb21.ui.border",
+      "property": "backgroundColor.b",
+      "value": 0.14
+    },
+    {
+      "op": "set_property",
+      "entity": "settings",
+      "component": "kb21.ui.border",
+      "property": "backgroundColor.a",
+      "value": 1.0
+    },
+    {
+      "op": "set_property",
+      "entity": "settings",
+      "component": "kb21.ui.border",
+      "property": "borderColor.r",
+      "value": 0.35
+    },
+    {
+      "op": "set_property",
+      "entity": "settings",
+      "component": "kb21.ui.border",
+      "property": "borderColor.g",
+      "value": 0.83
+    },
+    {
+      "op": "set_property",
+      "entity": "settings",
+      "component": "kb21.ui.border",
+      "property": "borderColor.b",
+      "value": 0.79
+    },
+    {
+      "op": "set_property",
+      "entity": "settings",
+      "component": "kb21.ui.border",
+      "property": "borderColor.a",
+      "value": 1.0
+    },
+    {
+      "op": "set_property",
+      "entity": "settings",
+      "component": "kb21.ui.selectable",
+      "property": "eventName",
+      "value": "Menu.Settings"
+    },
+    {
+      "op": "add_component",
+      "entity": "settings",
+      "component": "kb21.ui.canvas-group"
+    },
+    {
+      "op": "attach_script",
+      "entity": "settings",
+      "asset": "/Game/UI/MenuController.lua"
+    },
+    {
+      "op": "create_entity",
+      "id": "pages",
+      "name": "MenuPages"
+    },
+    {
+      "op": "reparent_entity",
+      "entity": "pages",
+      "parent": "canvas"
+    },
+    {
+      "op": "add_component",
+      "entity": "pages",
+      "component": "kb21.ui.widget-switcher"
+    },
+    {
+      "op": "set_property",
+      "entity": "pages",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.x",
+      "value": 1210.0
+    },
+    {
+      "op": "set_property",
+      "entity": "pages",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.y",
+      "value": 480.0
+    },
+    {
+      "op": "set_property",
+      "entity": "pages",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.x",
+      "value": 480.0
+    },
+    {
+      "op": "set_property",
+      "entity": "pages",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.y",
+      "value": 80.0
+    },
+    {
+      "op": "create_entity",
+      "id": "expedition",
+      "name": "expedition"
+    },
+    {
+      "op": "reparent_entity",
+      "entity": "expedition",
+      "parent": "pages"
+    },
+    {
+      "op": "add_component",
+      "entity": "expedition",
+      "component": "kb21.ui.rect-transform"
+    },
+    {
+      "op": "set_property",
+      "entity": "expedition",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.x",
+      "value": 730.0
+    },
+    {
+      "op": "set_property",
+      "entity": "expedition",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.y",
+      "value": 400.0
+    },
+    {
+      "op": "set_property",
+      "entity": "expedition",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.x",
+      "value": 0.0
+    },
+    {
+      "op": "set_property",
+      "entity": "expedition",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.y",
+      "value": 0.0
+    },
+    {
+      "op": "create_entity",
+      "id": "hero",
+      "name": "hero"
+    },
+    {
+      "op": "reparent_entity",
+      "entity": "hero",
+      "parent": "expedition"
+    },
+    {
+      "op": "add_component",
+      "entity": "hero",
+      "component": "kb21.ui.image"
+    },
+    {
+      "op": "set_property",
+      "entity": "hero",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.x",
+      "value": 730.0
+    },
+    {
+      "op": "set_property",
+      "entity": "hero",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.y",
+      "value": 400.0
+    },
+    {
+      "op": "set_property",
+      "entity": "hero",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.x",
+      "value": 0.0
+    },
+    {
+      "op": "set_property",
+      "entity": "hero",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.y",
+      "value": 0.0
+    },
+    {
+      "op": "set_property",
+      "entity": "hero",
+      "component": "kb21.ui.image",
+      "property": "imageAssetId",
+      "value": "/Game/UI/Frontier.21kb"
+    },
+    {
+      "op": "set_property",
+      "entity": "hero",
+      "component": "kb21.ui.image",
+      "property": "scaleMode",
+      "value": 2
+    },
+    {
+      "op": "add_component",
+      "entity": "hero",
+      "component": "kb21.ui.shadow"
+    },
+    {
+      "op": "set_property",
+      "entity": "hero",
+      "component": "kb21.ui.shadow",
+      "property": "blur",
+      "value": 8.0
+    },
+    {
+      "op": "create_entity",
+      "id": "region",
+      "name": "region"
+    },
+    {
+      "op": "reparent_entity",
+      "entity": "region",
+      "parent": "expedition"
+    },
+    {
+      "op": "add_component",
+      "entity": "region",
+      "component": "kb21.ui.text"
+    },
+    {
+      "op": "set_property",
+      "entity": "region",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.x",
+      "value": 628.0
+    },
+    {
+      "op": "set_property",
+      "entity": "region",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.y",
+      "value": 348.0
+    },
+    {
+      "op": "set_property",
+      "entity": "region",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.x",
+      "value": 28.0
+    },
+    {
+      "op": "set_property",
+      "entity": "region",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.y",
+      "value": 298.0
+    },
+    {
+      "op": "set_property",
+      "entity": "region",
+      "component": "kb21.ui.text",
+      "property": "content",
+      "value": "THE NORTHERN REACH"
+    },
+    {
+      "op": "set_property",
+      "entity": "region",
+      "component": "kb21.ui.text",
+      "property": "fontSize",
+      "value": 32.0
+    },
+    {
+      "op": "create_entity",
+      "id": "region_detail",
+      "name": "region_detail"
+    },
+    {
+      "op": "reparent_entity",
+      "entity": "region_detail",
+      "parent": "expedition"
+    },
+    {
+      "op": "add_component",
+      "entity": "region_detail",
+      "component": "kb21.ui.text"
+    },
+    {
+      "op": "set_property",
+      "entity": "region_detail",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.x",
+      "value": 660.0
+    },
+    {
+      "op": "set_property",
+      "entity": "region_detail",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.y",
+      "value": 380.0
+    },
+    {
+      "op": "set_property",
+      "entity": "region_detail",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.x",
+      "value": 30.0
+    },
+    {
+      "op": "set_property",
+      "entity": "region_detail",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.y",
+      "value": 352.0
+    },
+    {
+      "op": "set_property",
+      "entity": "region_detail",
+      "component": "kb21.ui.text",
+      "property": "content",
+      "value": "CAMPAIGN 01    /    NEW HORIZONS"
+    },
+    {
+      "op": "set_property",
+      "entity": "region_detail",
+      "component": "kb21.ui.text",
+      "property": "fontSize",
+      "value": 16.0
+    },
+    {
+      "op": "create_entity",
+      "id": "settings_page",
+      "name": "settings_page"
+    },
+    {
+      "op": "reparent_entity",
+      "entity": "settings_page",
+      "parent": "pages"
+    },
+    {
+      "op": "add_component",
+      "entity": "settings_page",
+      "component": "kb21.ui.border"
+    },
+    {
+      "op": "set_property",
+      "entity": "settings_page",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.x",
+      "value": 730.0
+    },
+    {
+      "op": "set_property",
+      "entity": "settings_page",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.y",
+      "value": 400.0
+    },
+    {
+      "op": "set_property",
+      "entity": "settings_page",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.x",
+      "value": 0.0
+    },
+    {
+      "op": "set_property",
+      "entity": "settings_page",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.y",
+      "value": 0.0
+    },
+    {
+      "op": "set_property",
+      "entity": "settings_page",
+      "component": "kb21.ui.border",
+      "property": "backgroundColor.r",
+      "value": 0.045
+    },
+    {
+      "op": "set_property",
+      "entity": "settings_page",
+      "component": "kb21.ui.border",
+      "property": "backgroundColor.g",
+      "value": 0.075
+    },
+    {
+      "op": "set_property",
+      "entity": "settings_page",
+      "component": "kb21.ui.border",
+      "property": "backgroundColor.b",
+      "value": 0.1
+    },
+    {
+      "op": "set_property",
+      "entity": "settings_page",
+      "component": "kb21.ui.border",
+      "property": "backgroundColor.a",
+      "value": 1.0
+    },
+    {
+      "op": "set_property",
+      "entity": "settings_page",
+      "component": "kb21.ui.border",
+      "property": "borderWidth.left",
+      "value": 0.0
+    },
+    {
+      "op": "set_property",
+      "entity": "settings_page",
+      "component": "kb21.ui.border",
+      "property": "borderWidth.top",
+      "value": 0.0
+    },
+    {
+      "op": "set_property",
+      "entity": "settings_page",
+      "component": "kb21.ui.border",
+      "property": "borderWidth.right",
+      "value": 0.0
+    },
+    {
+      "op": "set_property",
+      "entity": "settings_page",
+      "component": "kb21.ui.border",
+      "property": "borderWidth.bottom",
+      "value": 0.0
+    },
+    {
+      "op": "create_entity",
+      "id": "settings_title",
+      "name": "settings_title"
+    },
+    {
+      "op": "reparent_entity",
+      "entity": "settings_title",
+      "parent": "settings_page"
+    },
+    {
+      "op": "add_component",
+      "entity": "settings_title",
+      "component": "kb21.ui.text"
+    },
+    {
+      "op": "set_property",
+      "entity": "settings_title",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.x",
+      "value": 680.0
+    },
+    {
+      "op": "set_property",
+      "entity": "settings_title",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.y",
+      "value": 88.0
+    },
+    {
+      "op": "set_property",
+      "entity": "settings_title",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.x",
+      "value": 30.0
+    },
+    {
+      "op": "set_property",
+      "entity": "settings_title",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.y",
+      "value": 28.0
+    },
+    {
+      "op": "set_property",
+      "entity": "settings_title",
+      "component": "kb21.ui.text",
+      "property": "content",
+      "value": "Make it yours"
+    },
+    {
+      "op": "set_property",
+      "entity": "settings_title",
+      "component": "kb21.ui.text",
+      "property": "fontSize",
+      "value": 38.0
+    },
+    {
+      "op": "create_entity",
+      "id": "name_label",
+      "name": "name_label"
+    },
+    {
+      "op": "reparent_entity",
+      "entity": "name_label",
+      "parent": "settings_page"
+    },
+    {
+      "op": "add_component",
+      "entity": "name_label",
+      "component": "kb21.ui.text"
+    },
+    {
+      "op": "set_property",
+      "entity": "name_label",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.x",
+      "value": 260.0
+    },
+    {
+      "op": "set_property",
+      "entity": "name_label",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.y",
+      "value": 144.0
+    },
+    {
+      "op": "set_property",
+      "entity": "name_label",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.x",
+      "value": 30.0
+    },
+    {
+      "op": "set_property",
+      "entity": "name_label",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.y",
+      "value": 114.0
+    },
+    {
+      "op": "set_property",
+      "entity": "name_label",
+      "component": "kb21.ui.text",
+      "property": "content",
+      "value": "EXPLORER NAME"
+    },
+    {
+      "op": "set_property",
+      "entity": "name_label",
+      "component": "kb21.ui.text",
+      "property": "fontSize",
+      "value": 16.0
+    },
+    {
+      "op": "create_entity",
+      "id": "name_input",
+      "name": "name_input"
+    },
+    {
+      "op": "reparent_entity",
+      "entity": "name_input",
+      "parent": "settings_page"
+    },
+    {
+      "op": "add_component",
+      "entity": "name_input",
+      "component": "kb21.ui.input-field"
+    },
+    {
+      "op": "set_property",
+      "entity": "name_input",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.x",
+      "value": 520.0
+    },
+    {
+      "op": "set_property",
+      "entity": "name_input",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.y",
+      "value": 201.0
+    },
+    {
+      "op": "set_property",
+      "entity": "name_input",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.x",
+      "value": 30.0
+    },
+    {
+      "op": "set_property",
+      "entity": "name_input",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.y",
+      "value": 151.0
+    },
+    {
+      "op": "set_property",
+      "entity": "name_input",
+      "component": "kb21.ui.text",
+      "property": "content",
+      "value": "Pathfinder"
+    },
+    {
+      "op": "set_property",
+      "entity": "name_input",
+      "component": "kb21.ui.text",
+      "property": "fontSize",
+      "value": 24.0
+    },
+    {
+      "op": "create_entity",
+      "id": "choice",
+      "name": "choice"
+    },
+    {
+      "op": "reparent_entity",
+      "entity": "choice",
+      "parent": "settings_page"
+    },
+    {
+      "op": "add_component",
+      "entity": "choice",
+      "component": "kb21.ui.dropdown"
+    },
+    {
+      "op": "set_property",
+      "entity": "choice",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.x",
+      "value": 520.0
+    },
+    {
+      "op": "set_property",
+      "entity": "choice",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.y",
+      "value": 285.0
+    },
+    {
+      "op": "set_property",
+      "entity": "choice",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.x",
+      "value": 30.0
+    },
+    {
+      "op": "set_property",
+      "entity": "choice",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.y",
+      "value": 235.0
+    },
+    {
+      "op": "create_entity",
+      "id": "choice0",
+      "name": "choice0"
+    },
+    {
+      "op": "reparent_entity",
+      "entity": "choice0",
+      "parent": "choice"
+    },
+    {
+      "op": "add_component",
+      "entity": "choice0",
+      "component": "kb21.ui.text"
+    },
+    {
+      "op": "set_property",
+      "entity": "choice0",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.x",
+      "value": 455.0
+    },
+    {
+      "op": "set_property",
+      "entity": "choice0",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.y",
+      "value": 44.0
+    },
+    {
+      "op": "set_property",
+      "entity": "choice0",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.x",
+      "value": 15.0
+    },
+    {
+      "op": "set_property",
+      "entity": "choice0",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.y",
+      "value": 9.0
+    },
+    {
+      "op": "set_property",
+      "entity": "choice0",
+      "component": "kb21.ui.text",
+      "property": "content",
+      "value": "Difficulty: Explorer"
+    },
+    {
+      "op": "set_property",
+      "entity": "choice0",
+      "component": "kb21.ui.text",
+      "property": "fontSize",
+      "value": 22.0
+    },
+    {
+      "op": "create_entity",
+      "id": "choice1",
+      "name": "choice1"
+    },
+    {
+      "op": "reparent_entity",
+      "entity": "choice1",
+      "parent": "choice"
+    },
+    {
+      "op": "add_component",
+      "entity": "choice1",
+      "component": "kb21.ui.text"
+    },
+    {
+      "op": "set_property",
+      "entity": "choice1",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.x",
+      "value": 455.0
+    },
+    {
+      "op": "set_property",
+      "entity": "choice1",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.y",
+      "value": 44.0
+    },
+    {
+      "op": "set_property",
+      "entity": "choice1",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.x",
+      "value": 15.0
+    },
+    {
+      "op": "set_property",
+      "entity": "choice1",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.y",
+      "value": 9.0
+    },
+    {
+      "op": "set_property",
+      "entity": "choice1",
+      "component": "kb21.ui.text",
+      "property": "content",
+      "value": "Difficulty: Veteran"
+    },
+    {
+      "op": "set_property",
+      "entity": "choice1",
+      "component": "kb21.ui.text",
+      "property": "fontSize",
+      "value": 22.0
+    },
+    {
+      "op": "create_entity",
+      "id": "choice_hint",
+      "name": "choice_hint"
+    },
+    {
+      "op": "reparent_entity",
+      "entity": "choice_hint",
+      "parent": "settings_page"
+    },
+    {
+      "op": "add_component",
+      "entity": "choice_hint",
+      "component": "kb21.ui.text"
+    },
+    {
+      "op": "set_property",
+      "entity": "choice_hint",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.x",
+      "value": 640.0
+    },
+    {
+      "op": "set_property",
+      "entity": "choice_hint",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.y",
+      "value": 347.0
+    },
+    {
+      "op": "set_property",
+      "entity": "choice_hint",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.x",
+      "value": 30.0
+    },
+    {
+      "op": "set_property",
+      "entity": "choice_hint",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.y",
+      "value": 307.0
+    },
+    {
+      "op": "set_property",
+      "entity": "choice_hint",
+      "component": "kb21.ui.text",
+      "property": "content",
+      "value": "Click to change difficulty. Tab to navigate."
+    },
+    {
+      "op": "set_property",
+      "entity": "choice_hint",
+      "component": "kb21.ui.text",
+      "property": "fontSize",
+      "value": 18.0
+    },
+    {
+      "op": "create_entity",
+      "id": "options",
+      "name": "options"
+    },
+    {
+      "op": "reparent_entity",
+      "entity": "options",
+      "parent": "canvas"
+    },
+    {
+      "op": "add_component",
+      "entity": "options",
+      "component": "kb21.ui.border"
+    },
+    {
+      "op": "set_property",
+      "entity": "options",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.x",
+      "value": 1210.0
+    },
+    {
+      "op": "set_property",
+      "entity": "options",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.y",
+      "value": 664.0
+    },
+    {
+      "op": "set_property",
+      "entity": "options",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.x",
+      "value": 480.0
+    },
+    {
+      "op": "set_property",
+      "entity": "options",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.y",
+      "value": 506.0
+    },
+    {
+      "op": "set_property",
+      "entity": "options",
+      "component": "kb21.ui.border",
+      "property": "backgroundColor.r",
+      "value": 0.06
+    },
+    {
+      "op": "set_property",
+      "entity": "options",
+      "component": "kb21.ui.border",
+      "property": "backgroundColor.g",
+      "value": 0.09
+    },
+    {
+      "op": "set_property",
+      "entity": "options",
+      "component": "kb21.ui.border",
+      "property": "backgroundColor.b",
+      "value": 0.12
+    },
+    {
+      "op": "set_property",
+      "entity": "options",
+      "component": "kb21.ui.border",
+      "property": "backgroundColor.a",
+      "value": 0.9
+    },
+    {
+      "op": "set_property",
+      "entity": "options",
+      "component": "kb21.ui.border",
+      "property": "borderWidth.left",
+      "value": 0.0
+    },
+    {
+      "op": "set_property",
+      "entity": "options",
+      "component": "kb21.ui.border",
+      "property": "borderWidth.top",
+      "value": 0.0
+    },
+    {
+      "op": "set_property",
+      "entity": "options",
+      "component": "kb21.ui.border",
+      "property": "borderWidth.right",
+      "value": 0.0
+    },
+    {
+      "op": "set_property",
+      "entity": "options",
+      "component": "kb21.ui.border",
+      "property": "borderWidth.bottom",
+      "value": 0.0
+    },
+    {
+      "op": "add_component",
+      "entity": "options",
+      "component": "kb21.ui.background-blur"
+    },
+    {
+      "op": "set_property",
+      "entity": "options",
+      "component": "kb21.ui.background-blur",
+      "property": "radius",
+      "value": 8.0
+    },
+    {
+      "op": "create_entity",
+      "id": "audio_label",
+      "name": "audio_label"
+    },
+    {
+      "op": "reparent_entity",
+      "entity": "audio_label",
+      "parent": "options"
+    },
+    {
+      "op": "add_component",
+      "entity": "audio_label",
+      "component": "kb21.ui.text"
+    },
+    {
+      "op": "set_property",
+      "entity": "audio_label",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.x",
+      "value": 318.0
+    },
+    {
+      "op": "set_property",
+      "entity": "audio_label",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.y",
+      "value": 48.0
+    },
+    {
+      "op": "set_property",
+      "entity": "audio_label",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.x",
+      "value": 28.0
+    },
+    {
+      "op": "set_property",
+      "entity": "audio_label",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.y",
+      "value": 18.0
+    },
+    {
+      "op": "set_property",
+      "entity": "audio_label",
+      "component": "kb21.ui.text",
+      "property": "content",
+      "value": "MASTER VOLUME"
+    },
+    {
+      "op": "set_property",
+      "entity": "audio_label",
+      "component": "kb21.ui.text",
+      "property": "fontSize",
+      "value": 16.0
+    },
+    {
+      "op": "create_entity",
+      "id": "volume",
+      "name": "volume"
+    },
+    {
+      "op": "reparent_entity",
+      "entity": "volume",
+      "parent": "options"
+    },
+    {
+      "op": "add_component",
+      "entity": "volume",
+      "component": "kb21.ui.slider"
+    },
+    {
+      "op": "set_property",
+      "entity": "volume",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.x",
+      "value": 418.0
+    },
+    {
+      "op": "set_property",
+      "entity": "volume",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.y",
+      "value": 93.0
+    },
+    {
+      "op": "set_property",
+      "entity": "volume",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.x",
+      "value": 28.0
+    },
+    {
+      "op": "set_property",
+      "entity": "volume",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.y",
+      "value": 63.0
+    },
+    {
+      "op": "set_property",
+      "entity": "volume",
+      "component": "kb21.ui.slider",
+      "property": "value",
+      "value": 0.65
+    },
+    {
+      "op": "set_property",
+      "entity": "volume",
+      "component": "kb21.ui.border",
+      "property": "borderColor.r",
+      "value": 0.35
+    },
+    {
+      "op": "set_property",
+      "entity": "volume",
+      "component": "kb21.ui.border",
+      "property": "borderColor.g",
+      "value": 0.83
+    },
+    {
+      "op": "set_property",
+      "entity": "volume",
+      "component": "kb21.ui.border",
+      "property": "borderColor.b",
+      "value": 0.79
+    },
+    {
+      "op": "set_property",
+      "entity": "volume",
+      "component": "kb21.ui.border",
+      "property": "borderColor.a",
+      "value": 1.0
+    },
+    {
+      "op": "create_entity",
+      "id": "toggle_label",
+      "name": "toggle_label"
+    },
+    {
+      "op": "reparent_entity",
+      "entity": "toggle_label",
+      "parent": "options"
+    },
+    {
+      "op": "add_component",
+      "entity": "toggle_label",
+      "component": "kb21.ui.text"
+    },
+    {
+      "op": "set_property",
+      "entity": "toggle_label",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.x",
+      "value": 694.0
+    },
+    {
+      "op": "set_property",
+      "entity": "toggle_label",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.y",
+      "value": 50.0
+    },
+    {
+      "op": "set_property",
+      "entity": "toggle_label",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.x",
+      "value": 484.0
+    },
+    {
+      "op": "set_property",
+      "entity": "toggle_label",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.y",
+      "value": 20.0
+    },
+    {
+      "op": "set_property",
+      "entity": "toggle_label",
+      "component": "kb21.ui.text",
+      "property": "content",
+      "value": "SUBTITLES"
+    },
+    {
+      "op": "set_property",
+      "entity": "toggle_label",
+      "component": "kb21.ui.text",
+      "property": "fontSize",
+      "value": 16.0
+    },
+    {
+      "op": "create_entity",
+      "id": "subtitles",
+      "name": "subtitles"
+    },
+    {
+      "op": "reparent_entity",
+      "entity": "subtitles",
+      "parent": "options"
+    },
+    {
+      "op": "add_component",
+      "entity": "subtitles",
+      "component": "kb21.ui.toggle"
+    },
+    {
+      "op": "set_property",
+      "entity": "subtitles",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.x",
+      "value": 514.0
+    },
+    {
+      "op": "set_property",
+      "entity": "subtitles",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.y",
+      "value": 93.0
+    },
+    {
+      "op": "set_property",
+      "entity": "subtitles",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.x",
+      "value": 484.0
+    },
+    {
+      "op": "set_property",
+      "entity": "subtitles",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.y",
+      "value": 63.0
+    },
+    {
+      "op": "set_property",
+      "entity": "subtitles",
+      "component": "kb21.ui.toggle",
+      "property": "toggled",
+      "value": true
+    },
+    {
+      "op": "set_property",
+      "entity": "subtitles",
+      "component": "kb21.ui.border",
+      "property": "borderColor.r",
+      "value": 0.35
+    },
+    {
+      "op": "set_property",
+      "entity": "subtitles",
+      "component": "kb21.ui.border",
+      "property": "borderColor.g",
+      "value": 0.83
+    },
+    {
+      "op": "set_property",
+      "entity": "subtitles",
+      "component": "kb21.ui.border",
+      "property": "borderColor.b",
+      "value": 0.79
+    },
+    {
+      "op": "set_property",
+      "entity": "subtitles",
+      "component": "kb21.ui.border",
+      "property": "borderColor.a",
+      "value": 1.0
+    },
+    {
+      "op": "create_entity",
+      "id": "toggle_value",
+      "name": "toggle_value"
+    },
+    {
+      "op": "reparent_entity",
+      "entity": "toggle_value",
+      "parent": "options"
+    },
+    {
+      "op": "add_component",
+      "entity": "toggle_value",
+      "component": "kb21.ui.text"
+    },
+    {
+      "op": "set_property",
+      "entity": "toggle_value",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.x",
+      "value": 700.0
+    },
+    {
+      "op": "set_property",
+      "entity": "toggle_value",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.y",
+      "value": 93.0
+    },
+    {
+      "op": "set_property",
+      "entity": "toggle_value",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.x",
+      "value": 530.0
+    },
+    {
+      "op": "set_property",
+      "entity": "toggle_value",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.y",
+      "value": 65.0
+    },
+    {
+      "op": "set_property",
+      "entity": "toggle_value",
+      "component": "kb21.ui.text",
+      "property": "content",
+      "value": "Show captions"
+    },
+    {
+      "op": "set_property",
+      "entity": "toggle_value",
+      "component": "kb21.ui.text",
+      "property": "fontSize",
+      "value": 18.0
+    },
+    {
+      "op": "create_entity",
+      "id": "footer",
+      "name": "footer"
+    },
+    {
+      "op": "reparent_entity",
+      "entity": "footer",
+      "parent": "canvas"
+    },
+    {
+      "op": "add_component",
+      "entity": "footer",
+      "component": "kb21.ui.text"
+    },
+    {
+      "op": "set_property",
+      "entity": "footer",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.x",
+      "value": 430.0
+    },
+    {
+      "op": "set_property",
+      "entity": "footer",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.y",
+      "value": 646.0
+    },
+    {
+      "op": "set_property",
+      "entity": "footer",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.x",
+      "value": 70.0
+    },
+    {
+      "op": "set_property",
+      "entity": "footer",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.y",
+      "value": 620.0
+    },
+    {
+      "op": "set_property",
+      "entity": "footer",
+      "component": "kb21.ui.text",
+      "property": "content",
+      "value": "READY FOR A NEW ADVENTURE"
+    },
+    {
+      "op": "set_property",
+      "entity": "footer",
+      "component": "kb21.ui.text",
+      "property": "fontSize",
+      "value": 14.0
+    },
+    {
+      "op": "create_entity",
+      "id": "progress",
+      "name": "LaunchProgress"
+    },
+    {
+      "op": "reparent_entity",
+      "entity": "progress",
+      "parent": "canvas"
+    },
+    {
+      "op": "add_component",
+      "entity": "progress",
+      "component": "kb21.ui.progress-bar"
+    },
+    {
+      "op": "set_property",
+      "entity": "progress",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.x",
+      "value": 400.0
+    },
+    {
+      "op": "set_property",
+      "entity": "progress",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.y",
+      "value": 664.0
+    },
+    {
+      "op": "set_property",
+      "entity": "progress",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.x",
+      "value": 70.0
+    },
+    {
+      "op": "set_property",
+      "entity": "progress",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.y",
+      "value": 657.0
+    },
+    {
+      "op": "set_property",
+      "entity": "progress",
+      "component": "kb21.ui.border",
+      "property": "borderColor.r",
+      "value": 0.35
+    },
+    {
+      "op": "set_property",
+      "entity": "progress",
+      "component": "kb21.ui.border",
+      "property": "borderColor.g",
+      "value": 0.83
+    },
+    {
+      "op": "set_property",
+      "entity": "progress",
+      "component": "kb21.ui.border",
+      "property": "borderColor.b",
+      "value": 0.79
+    },
+    {
+      "op": "set_property",
+      "entity": "progress",
+      "component": "kb21.ui.border",
+      "property": "borderColor.a",
+      "value": 1.0
+    },
+    {
+      "op": "set_property",
+      "entity": "progress",
+      "component": "kb21.ui.progress-bar",
+      "property": "value",
+      "value": 0.25
+    },
+    {
+      "op": "create_entity",
+      "id": "badge_group",
+      "name": "ImageGroup"
+    },
+    {
+      "op": "reparent_entity",
+      "entity": "badge_group",
+      "parent": "canvas"
+    },
+    {
+      "op": "create_entity",
+      "id": "raw_badge",
+      "name": "RawImageBadge"
+    },
+    {
+      "op": "reparent_entity",
+      "entity": "raw_badge",
+      "parent": "badge_group"
+    },
+    {
+      "op": "add_component",
+      "entity": "raw_badge",
+      "component": "kb21.ui.raw-image"
+    },
+    {
+      "op": "set_property",
+      "entity": "raw_badge",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.x",
+      "value": 1180.0
+    },
+    {
+      "op": "set_property",
+      "entity": "raw_badge",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.y",
+      "value": 60.0
+    },
+    {
+      "op": "set_property",
+      "entity": "raw_badge",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.x",
+      "value": 1140.0
+    },
+    {
+      "op": "set_property",
+      "entity": "raw_badge",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.y",
+      "value": 20.0
+    },
+    {
+      "op": "set_property",
+      "entity": "raw_badge",
+      "component": "kb21.ui.raw-image",
+      "property": "imageAssetId",
+      "value": "/Game/UI/Frontier.21kb"
+    },
+    {
+      "op": "assert_ui_frame",
+      "entity": "raw_badge"
+    },
+    {
+      "op": "assert_component",
+      "entity": "badge_group",
+      "component": "kb21.ui.rect-transform"
+    },
+    {
+      "op": "assert_ui_frame",
+      "entity": "canvas"
+    },
+    {
+      "op": "assert_ui_frame",
+      "entity": "play"
+    },
+    {
+      "op": "assert_ui_frame",
+      "entity": "hero"
+    },
+    {
+      "op": "assert_ui_frame",
+      "entity": "volume"
+    },
+    {
+      "op": "assert_ui_frame",
+      "entity": "subtitles"
+    },
+    {
+      "op": "assert_ui_frame",
+      "entity": "options"
+    },
+    {
+      "op": "assert_ui_frame",
+      "entity": "progress"
+    },
+    {
+      "op": "select_entity",
+      "entity": "hero"
+    },
+    {
+      "op": "set_inspector_scroll",
+      "position": "top"
+    },
+    {
+      "op": "capture",
+      "panel": "inspector",
+      "checkpoint": "image-anchors-properties"
+    },
+    {
+      "op": "save_scene",
+      "path": "Assets/Scenes/FrontierMenu.21kbscene"
+    },
+    {
+      "op": "open_scene",
+      "path": "Assets/Scenes/FrontierMenu.21kbscene"
+    },
+    {
+      "op": "assert_property",
+      "entity": "hero",
+      "component": "kb21.ui.image",
+      "property": "imageAssetId",
+      "value": "/Game/UI/Frontier.21kb"
+    },
+    {
+      "op": "play"
+    },
+    {
+      "op": "focus",
+      "focused": true
+    },
+    {
+      "op": "pointer",
+      "x": 10.0,
+      "y": 10.0,
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "op": "step",
+      "frames": 2,
+      "dt": 0.016666666666666666
+    },
+    {
+      "op": "capture_runtime",
+      "checkpoint": "menu-home",
+      "require_non_uniform": true
+    },
+    {
+      "op": "assert_capture_difference",
+      "before": "scene-3d",
+      "after": "menu-home"
+    },
+    {
+      "op": "set_visibility_mode",
+      "entity": "hero",
+      "mode": "hidden"
+    },
+    {
+      "op": "assert_ui_frame",
+      "entity": "hero",
+      "visible": false
+    },
+    {
+      "op": "capture_runtime",
+      "checkpoint": "menu-image-hidden",
+      "require_non_uniform": true
+    },
+    {
+      "op": "assert_capture_difference",
+      "before": "menu-home",
+      "after": "menu-image-hidden"
+    },
+    {
+      "op": "set_visibility_mode",
+      "entity": "hero",
+      "mode": "visible"
+    },
+    {
+      "op": "pointer",
+      "x": 115.0,
+      "y": 411.0,
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "op": "key",
+      "key": "MouseLeft",
+      "down": true
+    },
+    {
+      "op": "step",
+      "frames": 1,
+      "dt": 0.016666666666666666
+    },
+    {
+      "op": "key",
+      "key": "MouseLeft",
+      "down": false
+    },
+    {
+      "op": "step",
+      "frames": 1,
+      "dt": 0.016666666666666666
+    },
+    {
+      "op": "assert_console",
+      "contains": "Menu settings opened",
+      "category": "Script",
+      "level": "info"
+    },
+    {
+      "op": "assert_property",
+      "entity": "pages",
+      "component": "kb21.ui.widget-switcher",
+      "property": "visibleChildIndex",
+      "value": 1
+    },
+    {
+      "op": "capture_runtime",
+      "checkpoint": "menu-settings",
+      "require_non_uniform": true
+    },
+    {
+      "op": "assert_capture_difference",
+      "before": "menu-home",
+      "after": "menu-settings"
+    },
+    {
+      "op": "pointer",
+      "x": 600,
+      "y": 340,
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "op": "key",
+      "key": "MouseLeft",
+      "down": true
+    },
+    {
+      "op": "step",
+      "frames": 1,
+      "dt": 0.016666666666666666
+    },
+    {
+      "op": "key",
+      "key": "MouseLeft",
+      "down": false
+    },
+    {
+      "op": "step",
+      "frames": 1,
+      "dt": 0.016666666666666666
+    },
+    {
+      "op": "assert_property",
+      "entity": "choice",
+      "component": "kb21.ui.dropdown",
+      "property": "selectedIndex",
+      "value": 1
+    },
+    {
+      "op": "assert_ui_frame",
+      "entity": "choice0",
+      "visible": false
+    },
+    {
+      "op": "assert_ui_frame",
+      "entity": "choice1"
+    },
+    {
+      "op": "pointer",
+      "x": 600,
+      "y": 250,
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "op": "key",
+      "key": "MouseLeft",
+      "down": true
+    },
+    {
+      "op": "step",
+      "frames": 1,
+      "dt": 0.016666666666666666
+    },
+    {
+      "op": "key",
+      "key": "MouseLeft",
+      "down": false
+    },
+    {
+      "op": "step",
+      "frames": 1,
+      "dt": 0.016666666666666666
+    },
+    {
+      "op": "key",
+      "key": "Backspace",
+      "down": true
+    },
+    {
+      "op": "step",
+      "frames": 1,
+      "dt": 0.016666666666666666
+    },
+    {
+      "op": "key",
+      "key": "Backspace",
+      "down": false
+    },
+    {
+      "op": "step",
+      "frames": 1,
+      "dt": 0.016666666666666666
+    },
+    {
+      "op": "assert_property",
+      "entity": "name_input",
+      "component": "kb21.ui.text",
+      "property": "content",
+      "value": "Pathfinde"
+    },
+    {
+      "op": "capture_runtime",
+      "checkpoint": "menu-settings-edited",
+      "require_non_uniform": true
+    },
+    {
+      "op": "assert_capture_difference",
+      "before": "menu-settings",
+      "after": "menu-settings-edited"
+    },
+    {
+      "op": "pointer",
+      "x": 979.0,
+      "y": 584.0,
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "op": "key",
+      "key": "MouseLeft",
+      "down": true
+    },
+    {
+      "op": "step",
+      "frames": 1,
+      "dt": 0.016666666666666666
+    },
+    {
+      "op": "key",
+      "key": "MouseLeft",
+      "down": false
+    },
+    {
+      "op": "step",
+      "frames": 1,
+      "dt": 0.016666666666666666
+    },
+    {
+      "op": "assert_property",
+      "entity": "subtitles",
+      "component": "kb21.ui.toggle",
+      "property": "toggled",
+      "value": false
+    },
+    {
+      "op": "pointer",
+      "x": 703.0,
+      "y": 584.0,
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "op": "key",
+      "key": "MouseLeft",
+      "down": true
+    },
+    {
+      "op": "step",
+      "frames": 1,
+      "dt": 0.016666666666666666
+    },
+    {
+      "op": "key",
+      "key": "MouseLeft",
+      "down": false
+    },
+    {
+      "op": "step",
+      "frames": 1,
+      "dt": 0.016666666666666666
+    },
+    {
+      "op": "assert_property",
+      "entity": "volume",
+      "component": "kb21.ui.slider",
+      "property": "value",
+      "value": 0.5,
+      "tolerance": 0.01
+    },
+    {
+      "op": "pointer",
+      "x": 115.0,
+      "y": 343.0,
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "op": "key",
+      "key": "MouseLeft",
+      "down": true
+    },
+    {
+      "op": "step",
+      "frames": 1,
+      "dt": 0.016666666666666666
+    },
+    {
+      "op": "key",
+      "key": "MouseLeft",
+      "down": false
+    },
+    {
+      "op": "step",
+      "frames": 1,
+      "dt": 0.016666666666666666
+    },
+    {
+      "op": "pointer",
+      "x": 115.0,
+      "y": 276.0,
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "op": "key",
+      "key": "MouseLeft",
+      "down": true
+    },
+    {
+      "op": "step",
+      "frames": 1,
+      "dt": 0.016666666666666666
+    },
+    {
+      "op": "key",
+      "key": "MouseLeft",
+      "down": false
+    },
+    {
+      "op": "step",
+      "frames": 1,
+      "dt": 0.016666666666666666
+    },
+    {
+      "op": "assert_console",
+      "contains": "Menu launch confirmed",
+      "category": "Script",
+      "level": "info"
+    },
+    {
+      "op": "step",
+      "frames": 60,
+      "dt": 0.016666666666666666
+    },
+    {
+      "op": "capture_runtime",
+      "checkpoint": "menu-animated",
+      "require_non_uniform": true
+    },
+    {
+      "op": "assert_capture_difference",
+      "before": "menu-home",
+      "after": "menu-animated"
+    },
+    {
+      "op": "assert_no_errors"
+    },
+    {
+      "op": "stop"
+    },
+    {
+      "op": "open_scene",
+      "path": "Assets/Scenes/FrontierMenu.21kbscene"
+    }
+  ]
+}

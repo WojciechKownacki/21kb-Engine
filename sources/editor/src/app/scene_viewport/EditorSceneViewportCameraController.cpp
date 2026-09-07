@@ -158,6 +158,12 @@ bool EditorSceneViewportCameraController::HandleMouseWheel(HWND messageWindow, i
         return false;
     }
 
+    auto& preview = sceneContext_.ViewportPreview(panelHit.sceneContent->panelId);
+    if (preview.Is2D() && !sceneContext_.HasPlayModeSceneSession()) {
+        preview.ZoomUI(static_cast<float>(wheelDelta)/WHEEL_DELTA, {static_cast<float>(x-sceneRects.renderArea.left),static_cast<float>(y-sceneRects.renderArea.top)});
+        sceneViewport_.RequestPresent();
+        return true;
+    }
     const bool adjustSpeed = sceneContext_.HasActiveViewportCameraNavigation() &&
         sceneContext_.ActiveViewportCamera() != nullptr &&
         sceneContext_.ActiveViewportCamera()->AllowsKeyboardFlight();
@@ -232,8 +238,11 @@ bool EditorSceneViewportCameraController::BeginNavigation(HWND messageWindow, in
         return false;
     }
 
-    sceneContext_.BeginViewportCameraNavigation(panelHit.sceneContent->panelId, mode, x, y);
-    StartCapture(messageWindow, right);
+    auto& preview = sceneContext_.ViewportPreview(panelHit.sceneContent->panelId);
+    const bool twoD = preview.Is2D() && !sceneContext_.HasPlayModeSceneSession();
+    if (twoD) preview.BeginUIPan(static_cast<float>(x), static_cast<float>(y));
+    sceneContext_.BeginViewportCameraNavigation(panelHit.sceneContent->panelId, twoD ? EditorViewportCameraNavigationMode::Pan : mode, x, y);
+    StartCapture(messageWindow, right && !twoD);
     sceneViewport_.RequestPresent();
     EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
     InvalidateActiveToolbar(messageWindow);
@@ -247,7 +256,9 @@ bool EditorSceneViewportCameraController::QueueActivePointerMove(HWND messageWin
         return false;
     }
 
-    camera->QueuePointer(x, y);
+    auto& preview = sceneContext_.ViewportPreview(sceneContext_.ActiveViewportCameraKey());
+    if (preview.Is2D() && !sceneContext_.HasPlayModeSceneSession()) preview.UpdateUIPan(static_cast<float>(x),static_cast<float>(y));
+    else camera->QueuePointer(x, y);
     sceneViewport_.RequestPresent();
     return true;
 }

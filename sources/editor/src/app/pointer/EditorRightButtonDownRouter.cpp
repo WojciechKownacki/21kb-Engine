@@ -20,6 +20,7 @@
 namespace kb::editor {
 namespace {
 
+constexpr UINT_PTR kHierarchyMenuCreateUI = 2000;
 constexpr UINT_PTR kHierarchyMenuCreateEmpty = 1001;
 constexpr UINT_PTR kHierarchyMenuDelete = 1002;
 constexpr UINT_PTR kHierarchyMenuDuplicate = 1003;
@@ -39,28 +40,8 @@ void AppendSeparator(HMENU menu) {
     AppendMenuA(menu, MF_SEPARATOR, 0, nullptr);
 }
 
-[[nodiscard]] HMENU CreateHierarchySystemMenu() {
-    HMENU menu = CreatePopupMenu();
-    HMENU lightMenu = CreatePopupMenu();
-
-    AppendMenuA(menu, MF_STRING, kHierarchyMenuCreateEmpty, "Create Entity\tCtrl+Shift+N");
-    AppendMenuA(lightMenu, MF_STRING, kHierarchyMenuDirectionalLight, "Directional Light");
-    AppendMenuA(lightMenu, MF_STRING, kHierarchyMenuPointLight, "Point Light");
-    AppendMenuA(lightMenu, MF_STRING, kHierarchyMenuSpotLight, "Spot Light");
-    AppendMenuA(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(lightMenu), "Lighting");
-    AppendSeparator(menu);
-    AppendMenuA(menu, MF_STRING, kHierarchyMenuDelete, "Delete\tDel");
-    AppendMenuA(menu, MF_STRING, kHierarchyMenuDuplicate, "Duplicate\tCtrl+D");
-    AppendMenuA(menu, MF_STRING, kHierarchyMenuRename, "Rename\tF2");
-    AppendDisabled(menu, "Paste Special");
-    AppendDisabled(menu, "Paste\tCtrl+V");
-    AppendDisabled(menu, "Copy\tCtrl+C");
-    AppendDisabled(menu, "Cut\tCtrl+X");
-    return menu;
-}
-
 [[nodiscard]] UINT ShowHierarchySystemMenu(HWND window, int x, int y) {
-    HMENU menu = CreateHierarchySystemMenu();
+    HMENU menu = EditorRightButtonDownRouter::CreateHierarchyMenu();
     if (menu == nullptr) {
         return 0;
     }
@@ -78,27 +59,6 @@ void AppendSeparator(HMENU menu) {
         nullptr);
     DestroyMenu(menu);
     return command;
-}
-
-[[nodiscard]] bool ExecuteHierarchySystemMenuCommand(UINT command, EditorSceneContext& sceneContext) {
-    switch (command) {
-    case kHierarchyMenuCreateEmpty:
-        return sceneContext.CreateHierarchyObject().IsValid();
-    case kHierarchyMenuDelete:
-        return sceneContext.DeleteSelectedHierarchyEntity();
-    case kHierarchyMenuDuplicate:
-        return sceneContext.DuplicateSelectedHierarchyEntities();
-    case kHierarchyMenuRename:
-        return sceneContext.BeginHierarchyRename();
-    case kHierarchyMenuDirectionalLight:
-        return sceneContext.CreateLightObject(kb::scene::LightKind::Directional).IsValid();
-    case kHierarchyMenuPointLight:
-        return sceneContext.CreateLightObject(kb::scene::LightKind::Point).IsValid();
-    case kHierarchyMenuSpotLight:
-        return sceneContext.CreateLightObject(kb::scene::LightKind::Spot).IsValid();
-    default:
-        return false;
-    }
 }
 
 [[nodiscard]] HMENU CreateSkeletonTreeSystemMenu(bool canAddSocket) {
@@ -134,6 +94,79 @@ void AppendSeparator(HMENU menu) {
 }
 
 } // namespace
+
+HMENU EditorRightButtonDownRouter::CreateHierarchyMenu() {
+    HMENU menu = CreatePopupMenu();
+    HMENU create = CreatePopupMenu();
+    HMENU lights = CreatePopupMenu();
+    HMENU widgets = CreatePopupMenu();
+    HMENU layouts = CreatePopupMenu();
+    HMENU effects = CreatePopupMenu();
+    HMENU advanced = CreatePopupMenu();
+    if (!menu || !create || !lights || !widgets || !layouts || !effects || !advanced) {
+        for (const auto handle : {menu, create, lights, widgets, layouts, effects, advanced})
+            if (handle) DestroyMenu(handle);
+        return nullptr;
+    }
+    AppendMenuA(create, MF_STRING, kHierarchyMenuCreateEmpty, "Entity\tCtrl+Shift+N");
+    AppendMenuA(lights, MF_STRING, kHierarchyMenuDirectionalLight, "Directional Light");
+    AppendMenuA(lights, MF_STRING, kHierarchyMenuPointLight, "Point Light");
+    AppendMenuA(lights, MF_STRING, kHierarchyMenuSpotLight, "Spot Light");
+    AppendMenuA(create, MF_POPUP, reinterpret_cast<UINT_PTR>(lights), "Lighting");
+    for (const auto& descriptor : kb::scene::UIComponentCatalog()) {
+        using enum kb::scene::UIComponentType;
+        HMENU destination = widgets;
+        switch (descriptor.type) {
+        case HorizontalLayout: case VerticalLayout: case GridLayout: case WrapLayout: case OverlayLayout:
+        case LayoutElement: case ContentSizeFitter: case AspectRatioFitter: destination = layouts; break;
+        case Mask: case Shadow: case Outline: case BackgroundBlur: destination = effects; break;
+        case CanvasScaler: case CanvasGroup: case Selectable: destination = advanced; break;
+        default: break;
+        }
+        AppendMenuA(destination, MF_STRING, kHierarchyMenuCreateUI + static_cast<UINT>(descriptor.type),
+            std::string{descriptor.displayName}.c_str());
+    }
+    AppendSeparator(widgets);
+    AppendMenuA(widgets, MF_POPUP, reinterpret_cast<UINT_PTR>(layouts), "Layout");
+    AppendMenuA(widgets, MF_POPUP, reinterpret_cast<UINT_PTR>(effects), "Effects");
+    AppendMenuA(widgets, MF_POPUP, reinterpret_cast<UINT_PTR>(advanced), "Advanced");
+    AppendMenuA(create, MF_POPUP, reinterpret_cast<UINT_PTR>(widgets), "User Widget");
+    AppendMenuA(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(create), "Create");
+    AppendSeparator(menu);
+    AppendMenuA(menu, MF_STRING, kHierarchyMenuDelete, "Delete\tDel");
+    AppendMenuA(menu, MF_STRING, kHierarchyMenuDuplicate, "Duplicate\tCtrl+D");
+    AppendMenuA(menu, MF_STRING, kHierarchyMenuRename, "Rename\tF2");
+    AppendDisabled(menu, "Paste Special");
+    AppendDisabled(menu, "Paste\tCtrl+V");
+    AppendDisabled(menu, "Copy\tCtrl+C");
+    AppendDisabled(menu, "Cut\tCtrl+X");
+    return menu;
+}
+
+bool EditorRightButtonDownRouter::ExecuteHierarchyMenuCommand(UINT command, EditorSceneContext& sceneContext, kb::scene::SceneEntity parent) {
+    for (const auto& descriptor : kb::scene::UIComponentCatalog()) {
+        if (command == kHierarchyMenuCreateUI + static_cast<UINT>(descriptor.type))
+            return sceneContext.CreateUIObject(descriptor.type, parent).IsValid();
+    }
+    switch (command) {
+    case kHierarchyMenuCreateEmpty:
+        return sceneContext.CreateHierarchyObject().IsValid();
+    case kHierarchyMenuDelete:
+        return sceneContext.DeleteSelectedHierarchyEntity();
+    case kHierarchyMenuDuplicate:
+        return sceneContext.DuplicateSelectedHierarchyEntities();
+    case kHierarchyMenuRename:
+        return sceneContext.BeginHierarchyRename();
+    case kHierarchyMenuDirectionalLight:
+        return sceneContext.CreateLightObject(kb::scene::LightKind::Directional).IsValid();
+    case kHierarchyMenuPointLight:
+        return sceneContext.CreateLightObject(kb::scene::LightKind::Point).IsValid();
+    case kHierarchyMenuSpotLight:
+        return sceneContext.CreateLightObject(kb::scene::LightKind::Spot).IsValid();
+    default:
+        return false;
+    }
+}
 
 EditorRightButtonDownRouter::EditorRightButtonDownRouter(
     HWND mainWindow,
@@ -274,7 +307,7 @@ void EditorRightButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             sceneContext_.SelectEntity(entity);
         }
         const UINT command = ShowHierarchySystemMenu(messageWindow, x, y);
-        if (ExecuteHierarchySystemMenuCommand(command, sceneContext_)) {
+        if (ExecuteHierarchyMenuCommand(command, sceneContext_, entity)) {
             sceneViewport_.RequestPresent();
         }
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);

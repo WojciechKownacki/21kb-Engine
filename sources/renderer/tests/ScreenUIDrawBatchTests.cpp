@@ -56,6 +56,35 @@ void BatchBuilderPreservesFlattenedOrderCornersAndClip() {
             "Screen UI batcher reconstructed transform geometry instead of using frame corners");
 }
 
+void DefaultImagesAndControlsProduceVisibleGeometry() {
+    ScreenUIDrawBatchBuilder builder;
+    for (int kind = 0; kind < 3; ++kind) {
+        auto element = Element(90U, {10.0F, 20.0F, 160.0F, 40.0F});
+        if (kind == 0) element.image.emplace();
+        if (kind == 1) element.rawImage.emplace();
+        if (kind == 2) element.sprite.emplace();
+        kb::scene::SceneUIFrame frame{.viewportSize = {640.0F, 360.0F}, .elements = {element}};
+        const auto& draw = builder.Build(frame, {}, {});
+        Require(draw.vertices.size() == 4U && draw.batches.size() == 1U &&
+                draw.batches.front().style.fillColor[3] == 1.0F,
+            "New UI image without an assigned asset must render its color rectangle");
+    }
+    auto element = Element(91U, {10.0F, 20.0F, 160.0F, 40.0F});
+    element.border = kb::scene::UIBorder{.borderColor = {0.3F, 0.8F, 1.0F, 1.0F}};
+    element.slider = kb::scene::UISlider{.value = 0.25F};
+    kb::scene::SceneUIFrame frame{.viewportSize = {640.0F, 360.0F}, .elements = {element}};
+    const auto first = builder.Build(frame, {}, {}).vertices;
+    frame.elements.front().slider->value = 0.75F;
+    const auto second = builder.Build(frame, {}, {}).vertices;
+    Require(first.size() == 8U && second.size() == 8U && second[4].x > first[4].x,
+        "Changing slider value must move its visible thumb");
+    frame.elements.front().slider.reset();
+    frame.elements.front().toggle.emplace();
+    Require(builder.Build(frame, {}, {}).vertices.empty(), "Unchecked toggle must hide its mark");
+    frame.elements.front().toggle->toggled = true;
+    Require(builder.Build(frame, {}, {}).vertices.size() == 4U, "Checked toggle must show its mark");
+}
+
 void BatchBuilderEmitsNineSliceTintAndEffects() {
     kb::scene::SceneUIFrame frame{.viewportSize = {640.0F, 360.0F}};
     kb::scene::SceneUIFrameElement image = Element(20U, {20.0F, 30.0F, 120.0F, 80.0F});
@@ -210,6 +239,7 @@ void RichTextParserAppliesColorAndLineBreakWithoutChangingLiteralText() {
 } // namespace
 
 void RunScreenUIDrawBatchTests() {
+    DefaultImagesAndControlsProduceVisibleGeometry();
     BatchBuilderPreservesFlattenedOrderCornersAndClip();
     BatchBuilderEmitsNineSliceTintAndEffects();
     BatchBuilderUsesTextRunAndHonorsHiddenMask();

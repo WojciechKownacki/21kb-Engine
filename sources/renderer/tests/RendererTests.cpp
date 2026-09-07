@@ -18,6 +18,7 @@ void RunGraphShaderArtifactCookTests();
 void RunMaterialProgramRegistryTests();
 void RunSceneMeshPassProgramSelectionTests();
 void RunRendererRuntimeSubmitTests();
+void RunEditorUIViewTransformValidationTests();
 void RunRendererParticleMeshSnapshotSubmitTest();
 void RunRendererParticleStripSnapshotSubmitTest();
 void RunRendererParticleVolumetricSnapshotSubmitTest();
@@ -138,6 +139,15 @@ int main(int argc, char** argv) {
         } catch (const std::exception& error) {
             std::fputs(error.what(), stderr);
             std::fputc('\n', stderr);
+            return EXIT_FAILURE;
+        }
+    }
+    if (argc == 2 && std::string_view{argv[1]} == "editor-ui-view") {
+        try {
+            kb::render::tests::RunEditorUIViewTransformValidationTests();
+            return EXIT_SUCCESS;
+        } catch (const std::exception& error) {
+            std::fputs(error.what(),stderr);
             return EXIT_FAILURE;
         }
     }

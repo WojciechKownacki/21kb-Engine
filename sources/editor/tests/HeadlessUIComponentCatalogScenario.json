@@ -1,0 +1,9 @@
+{
+  "schema": "21kb.editor-automation/v1",
+  "steps": [
+    { "op": "assert_ui_creation_menu" },
+    {
+      "op": "assert_ui_catalog"
+    }
+  ]
+}

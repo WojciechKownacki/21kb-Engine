@@ -235,11 +235,34 @@ template <typename Component, std::string_view (*Read)(const Component&) noexcep
     NestedMemberBinding<Component, ParentType, &Component::ParentField, float, &ParentType::Field>(#ParentField        \
                                                                                                    "." #Field)
 
+template <float kb::math::Vec2::* Axis>
+[[nodiscard]] constexpr UIPropertyBinding SizeDeltaBinding(std::string_view name) noexcept {
+    return {
+        .descriptor = {name, UIComponentPropertyType::Float, true},
+        .read = [](const UIComponentSet& components, UIComponentPropertyValue& output) {
+            if (!components.rectTransform) return false;
+            const auto& rect = *components.rectTransform;
+            output = rect.offsetMax.*Axis - rect.offsetMin.*Axis;
+            return true;
+        },
+        .write = [](UIComponentSet& components, const UIComponentPropertyValue& value) {
+            if (!components.rectTransform) return UIComponentPropertyWriteResult::ComponentMissing;
+            float size = 0.0F;
+            if (!ConvertPropertyValue(value, size)) return UIComponentPropertyWriteResult::TypeMismatch;
+            auto rect = *components.rectTransform;
+            rect.offsetMax.*Axis = rect.offsetMin.*Axis + size;
+            return Commit(components, rect);
+        },
+    };
+}
+
 constexpr std::array kRectTransformProperties{
     KB_NESTED(UIRectTransform, kb::math::Vec2, anchorMin, x),
     KB_NESTED(UIRectTransform, kb::math::Vec2, anchorMin, y),
     KB_NESTED(UIRectTransform, kb::math::Vec2, anchorMax, x),
     KB_NESTED(UIRectTransform, kb::math::Vec2, anchorMax, y),
+    SizeDeltaBinding<&kb::math::Vec2::x>("sizeDelta.x"),
+    SizeDeltaBinding<&kb::math::Vec2::y>("sizeDelta.y"),
     KB_NESTED(UIRectTransform, kb::math::Vec2, offsetMin, x),
     KB_NESTED(UIRectTransform, kb::math::Vec2, offsetMin, y),
     KB_NESTED(UIRectTransform, kb::math::Vec2, offsetMax, x),

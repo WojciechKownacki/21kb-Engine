@@ -16,6 +16,7 @@
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/PhysicsLayersAssetIO.hpp"
 #include "engine/scene/SceneTransforms.hpp"
+#include "engine/scene/SceneUIComponents.hpp"
 
 #include <array>
 #include <cstdint>
@@ -187,7 +188,8 @@ end
     WriteTextFile(root / "Assets" / "Logic" / "Broken.lua", "function Broken(");
 
     kb::scene::Scene scene;
-    static_cast<void>(scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Player" }));
+    const auto player = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Player" });
+    scene.Components().UI().Set(player.Entity(), kb::scene::UIButton{});
     static_cast<void>(scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Camera" }));
     std::error_code error;
     std::filesystem::create_directories(root / "Assets" / "Scenes", error);
@@ -217,6 +219,7 @@ void RunSceneCommandTests() {
     const CommandRun list = Run(&kb::cli::RunSceneListCommand, { "--project", root, "--scene", "Assets/Scenes/Main.21kbscene" });
     Require(list.exitCode == 0, "scene-list failed");
     Require(Contains(list.output, "Player") && Contains(list.output, "Camera"), "scene-list did not print nodes");
+    Require(Contains(list.output, "Player components: Button"), "scene-list did not print the authored UI components");
 
     const CommandRun attach = Run(&kb::cli::RunSceneAttachCommand, {
         "--project", root,

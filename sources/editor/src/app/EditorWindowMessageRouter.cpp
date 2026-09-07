@@ -2,6 +2,7 @@
 
 #if defined(_WIN32)
 #include "app/EditorEditCommandInputHandler.hpp"
+#include "app/EditorWindowInvalidator.hpp"
 #include "app/EditorHierarchySearchInputHandler.hpp"
 #include "app/EditorSkeletalMeshTreeSearchInputHandler.hpp"
 #include "app/EditorTextInputShortcuts.hpp"
@@ -617,6 +618,13 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
             if (messageWindow != context_.mainWindow) {
                 InvalidateRect(context_.mainWindow, nullptr, FALSE);
             }
+            return 0;
+        }
+        if (wparam == VK_ESCAPE && context_.sceneContext.UIRectDrag()) {
+            static_cast<void>(EditorSceneViewportObjectInteraction::CancelGizmoDrag(context_.sceneContext));
+            ReleaseCapture();
+            context_.sceneViewport.RequestPresent();
+            EditorWindowInvalidator::InvalidateMainAndSource(context_.mainWindow, messageWindow);
             return 0;
         }
         if (InspectorPanelInteraction::HandleKeyDown(messageWindow, context_.sceneContext, wparam)) {

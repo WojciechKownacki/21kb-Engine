@@ -31,6 +31,7 @@ struct SceneViewportToolbarRects {
     RECT snapToggleButton{};
     RECT snapStepButton{};
     RECT rotationSnapButton{};
+    RECT twoDButton{};
     RECT dropdownPanel{};
     std::array<RECT, 6U> dropdownItems{};
     RECT renderArea{};

@@ -3305,7 +3305,7 @@ void RunComponentInspectorDescCatalogTest() {
     // Light remains a public compatibility alias for 3D Radiance Emitter and
     // intentionally reuses the canonical inspector metadata for its 16 fields.
     // Particle Effect contributes nine authoring and playback fields.
-    kb::tests::Require(fieldsChecked == 495U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (495, including the Light compatibility alias) across all components");
+    kb::tests::Require(fieldsChecked == 497U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (497, including the Light compatibility alias) across all components");
 
     for (const kb::library::LibraryComponentInspectorDesc& desc : catalog) {
         const bool foundInScriptNames = std::ranges::find(scriptComponentNames, desc.componentName) != scriptComponentNames.end();

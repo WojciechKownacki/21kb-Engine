@@ -22,6 +22,7 @@ public:
         std::string_view id);
     [[nodiscard]] static bool Remove(kb::scene::Scene& scene, kb::scene::SceneEntity entity,
         kb::scene::UIComponentType type) noexcept;
+    [[nodiscard]] static bool Complete(kb::scene::Scene& scene, kb::scene::SceneEntity entity);
 };
 
 [[nodiscard]] constexpr std::string_view EditorUIPresetPrefix() noexcept { return "preset:"; }

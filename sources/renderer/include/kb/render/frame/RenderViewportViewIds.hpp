@@ -119,7 +119,7 @@ private:
 class RenderViewportViewIdAllocator {
 public:
     static constexpr std::size_t kMaxViewportCount =
-        1U + (ViewId::Max - ViewId::DetachedViewportStart) / ViewId::DetachedViewportStride;
+        1U + (ViewId::ScreenCapture - ViewId::DetachedViewportStart) / ViewId::DetachedViewportStride;
 
     [[nodiscard]] static constexpr RenderViewportViewIds ForViewportIndex(std::uint32_t viewportIndex) noexcept {
         if (viewportIndex == 0U) {
@@ -152,7 +152,7 @@ public:
         }
 
         const std::uint32_t base = ViewId::DetachedViewportStart + (viewportIndex - 1U) * ViewId::DetachedViewportStride;
-        if (base + ViewId::DetachedViewportStride > ViewId::Max) {
+        if (base + ViewId::DetachedViewportStride > ViewId::ScreenCapture) {
             return {};
         }
 

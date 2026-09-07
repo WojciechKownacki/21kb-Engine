@@ -134,9 +134,7 @@ void ScreenUIDrawBatchBuilder::AppendElement(const kb::scene::SceneUIFrameElemen
     const ScreenUIRect elementRect = Rect(element.rect);
     const kb::scene::UIBorder border = element.border.value_or(kb::scene::UIBorder{});
     ScreenUIDrawStyle baseStyle = BorderStyle(element, border);
-    const bool hasImage = (element.sprite.has_value() && element.sprite->spriteAssetId != 0U) ||
-                          (element.image.has_value() && element.image->imageAssetId != 0U) ||
-                          (element.rawImage.has_value() && element.rawImage->imageAssetId != 0U);
+    const bool hasImage = element.sprite.has_value() || element.image.has_value() || element.rawImage.has_value();
     const bool hasSurface = Visible(baseStyle.fillColor) || HasBorder(baseStyle) || hasImage;
 
     if (hasSurface && element.shadow.has_value() && element.shadow->color.a > 0.0F) {
@@ -184,20 +182,102 @@ void ScreenUIDrawBatchBuilder::AppendElement(const kb::scene::SceneUIFrameElemen
     }
 
     const auto appendImageAsset = [&](std::uint64_t assetId, ImageKind kind) {
+        if (assetId == 0U) {
+            ScreenUIDrawStyle style = baseStyle;
+            const auto color = kind == ImageKind::Sprite ? element.sprite->color
+                : kind == ImageKind::Image ? element.image->color : element.rawImage->color;
+            style.fillColor = TintedColor(element, color);
+            style.borderColor = {};
+            style.borderWidths = {};
+            AppendShape(element, elementRect, style);
+            return;
+        }
         const ScreenUITextureSource source = kind == ImageKind::RawImage ? ScreenUITextureSource::ImageAssetLinear
                                                                          : ScreenUITextureSource::ImageAssetSrgb;
         if (const ScreenUIImageBinding* binding = FindImage(images, assetId, source); binding != nullptr) {
             AppendImage(element, *binding, assetId, kind);
         }
     };
-    if (element.sprite.has_value() && element.sprite->spriteAssetId != 0U) {
+    if (element.sprite.has_value()) {
         appendImageAsset(element.sprite->spriteAssetId, ImageKind::Sprite);
     }
-    if (element.image.has_value() && element.image->imageAssetId != 0U) {
+    if (element.image.has_value()) {
         appendImageAsset(element.image->imageAssetId, ImageKind::Image);
     }
-    if (element.rawImage.has_value() && element.rawImage->imageAssetId != 0U) {
+    if (element.rawImage.has_value()) {
         appendImageAsset(element.rawImage->imageAssetId, ImageKind::RawImage);
+    }
+
+    if (element.slider || element.scrollbar || element.progressBar || element.toggle) {
+        const float inset = std::min(4.0F * element.canvasScale,
+            std::min(Width(elementRect), Height(elementRect)) * 0.2F);
+        ScreenUIRect indicator{elementRect.left + inset, elementRect.top + inset,
+            elementRect.right - inset, elementRect.bottom - inset};
+        ScreenUIDrawStyle style = baseStyle;
+        style.fillColor = TintedColor(element, border.borderColor);
+        style.borderColor = {};
+        style.borderWidths = {};
+        const auto drawIndicator = [&](const ScreenUIRect& rect) {
+            auto partStyle = style;
+            partStyle.width = Width(rect);
+            partStyle.height = Height(rect);
+            AppendShape(element, rect, partStyle);
+        };
+        if (element.toggle) {
+            if (element.toggle->toggled) drawIndicator(indicator);
+        } else {
+            float fraction = 0.0F;
+            auto direction = kb::scene::UIAxisDirection::LeftToRight;
+            if (element.slider) {
+                const auto& slider = *element.slider;
+                fraction = slider.maximum > slider.minimum
+                    ? (slider.value - slider.minimum) / (slider.maximum - slider.minimum) : 0.0F;
+                direction = slider.direction;
+            } else if (element.progressBar) {
+                const auto& progress = *element.progressBar;
+                fraction = progress.maximum > progress.minimum
+                    ? (progress.value - progress.minimum) / (progress.maximum - progress.minimum) : 0.0F;
+            } else {
+                fraction = element.scrollbar->value;
+                direction = element.scrollbar->direction;
+            }
+            fraction = std::clamp(fraction, 0.0F, 1.0F);
+            const bool vertical = direction == kb::scene::UIAxisDirection::BottomToTop ||
+                direction == kb::scene::UIAxisDirection::TopToBottom;
+            const bool reverse = direction == kb::scene::UIAxisDirection::RightToLeft ||
+                direction == kb::scene::UIAxisDirection::BottomToTop;
+            float start = 0.0F;
+            float end = fraction;
+            if (element.scrollbar) {
+                start = fraction * (1.0F - element.scrollbar->size);
+                end = start + element.scrollbar->size;
+            }
+            if (reverse) { const float oldStart = start; start = 1.0F - end; end = 1.0F - oldStart; }
+            auto filled = indicator;
+            if (vertical) {
+                filled.top = std::lerp(indicator.top, indicator.bottom, start);
+                filled.bottom = std::lerp(indicator.top, indicator.bottom, end);
+            } else {
+                filled.left = std::lerp(indicator.left, indicator.right, start);
+                filled.right = std::lerp(indicator.left, indicator.right, end);
+            }
+            drawIndicator(filled);
+            if (element.slider) {
+                auto thumb = indicator;
+                const float position = reverse ? 1.0F - fraction : fraction;
+                if (vertical) {
+                    const float size = std::min(Width(indicator), Height(indicator));
+                    thumb.top = std::lerp(indicator.top, indicator.bottom - size, position);
+                    thumb.bottom = thumb.top + size;
+                } else {
+                    const float size = std::min(Width(indicator), Height(indicator));
+                    thumb.left = std::lerp(indicator.left, indicator.right - size, position);
+                    thumb.right = thumb.left + size;
+                }
+                style.fillColor = TintedColor(element, kb::math::Color{});
+                drawIndicator(thumb);
+            }
+        }
     }
 
     if (HasBorder(baseStyle)) {
