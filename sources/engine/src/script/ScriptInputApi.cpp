@@ -92,8 +92,7 @@ bool RegisterActionQuery(ScriptRuntimeHost& host, std::string name, std::string 
         if (context.scene == nullptr) {
             return NoScene();
         }
-        const kb::input::InputSubsystem& input = context.scene->Input(PlayerFromArgs(arguments));
-        const bool value = (input.*query)(ActionName(arguments));
+        const bool value = (context.scene->Input(PlayerFromArgs(arguments)).*query)(ActionName(arguments));
         return BoolResult(outputPin, value);
     };
     return host.RegisterFunction(std::move(desc));
@@ -108,8 +107,7 @@ bool RegisterValueQuery(ScriptRuntimeHost& host, std::string name) {
         if (context.scene == nullptr) {
             return NoScene();
         }
-        const kb::input::InputSubsystem& input = context.scene->Input(PlayerFromArgs(arguments));
-        const kb::input::InputValue value = input.GetActionValue(ActionName(arguments));
+        const kb::input::InputValue value = context.scene->Input(PlayerFromArgs(arguments)).GetActionValue(ActionName(arguments));
         return ScriptFunctionCallResult{
             .executed = true,
             .outputs = {ScriptFunctionArgument{"value", ScriptValue{value.AsAxis1D()}}},
@@ -132,8 +130,7 @@ bool RegisterActionBoolQuery(ScriptRuntimeHost& host, std::string name) {
         if (context.scene == nullptr) {
             return NoScene();
         }
-        const kb::input::InputSubsystem& input = context.scene->Input(PlayerFromArgs(arguments));
-        const kb::input::InputValue value = input.GetActionValue(ActionName(arguments));
+        const kb::input::InputValue value = context.scene->Input(PlayerFromArgs(arguments)).GetActionValue(ActionName(arguments));
         return BoolResult("value", value.AsBool());
     };
     return host.RegisterFunction(std::move(desc));
@@ -149,8 +146,7 @@ bool RegisterValueQueryXY(ScriptRuntimeHost& host, std::string name) {
         if (context.scene == nullptr) {
             return NoScene();
         }
-        const kb::input::InputSubsystem& input = context.scene->Input(PlayerFromArgs(arguments));
-        const kb::input::InputValue value = input.GetActionValue(ActionName(arguments));
+        const kb::input::InputValue value = context.scene->Input(PlayerFromArgs(arguments)).GetActionValue(ActionName(arguments));
         return ScriptFunctionCallResult{
             .executed = true,
             .outputs = {ScriptFunctionArgument{"x", ScriptValue{value.x}},
@@ -173,8 +169,7 @@ bool RegisterValueQueryXYZ(ScriptRuntimeHost& host, std::string name) {
         if (context.scene == nullptr) {
             return NoScene();
         }
-        const kb::input::InputSubsystem& input = context.scene->Input(PlayerFromArgs(arguments));
-        const kb::input::InputValue value = input.GetActionValue(ActionName(arguments));
+        const kb::input::InputValue value = context.scene->Input(PlayerFromArgs(arguments)).GetActionValue(ActionName(arguments));
         return ScriptFunctionCallResult{
             .executed = true,
             .outputs = {ScriptFunctionArgument{"x", ScriptValue{value.x}},

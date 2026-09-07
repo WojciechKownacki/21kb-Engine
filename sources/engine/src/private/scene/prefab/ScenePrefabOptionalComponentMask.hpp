@@ -21,7 +21,7 @@ struct ScenePrefabOptionalComponentExpectation {
     bool expectedPresent = false;
 };
 
-[[nodiscard]] inline std::array<ScenePrefabOptionalComponentExpectation, 37U>
+[[nodiscard]] inline std::array<ScenePrefabOptionalComponentExpectation, 36U>
 ScenePrefabOptionalComponentExpectations(
     const ScenePrefabNodeComponents& components,
     const SceneComponentRegistry& registry) noexcept {
@@ -60,7 +60,6 @@ ScenePrefabOptionalComponentExpectations(
         { registry.SkeletonBindingComponentId(), components.skeletonBinding.has_value() },
         { registry.MotionSkeletonRuleComponentId(), components.motionSkeletonRule.has_value() },
         { registry.DeformedGeometryComponentId(), components.deformedGeometry.has_value() },
-        { registry.UIDocumentComponentId(), components.uiDocument.has_value() },
         { registry.NavAgentComponentId(), components.navAgent.has_value() },
         { registry.NavObstacleComponentId(), components.navObstacle.has_value() },
     }};

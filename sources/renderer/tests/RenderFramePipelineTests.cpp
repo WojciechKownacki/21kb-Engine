@@ -36,7 +36,7 @@ void RenderPassGraphValidatesRequiredPasses() {
     RenderPassGraph graph = RenderFramePipeline{}.BuildViewportGraph(RenderViewportViewIdAllocator::ForViewportIndex(0U));
     const RenderPassGraphValidationResult result = graph.ValidateRequiredPasses();
     Require(result.Succeeded(), RenderPassGraphValidationStatusName(result.status));
-    Require(graph.Resources().size() == 19U, "RenderPassGraph did not declare the viewport graph resources");
+    Require(graph.Resources().size() == 17U, "RenderPassGraph did not declare the viewport graph resources");
     Require(graph.FindResource(RenderGraphResource::SceneColor) != nullptr, "RenderPassGraph did not declare SceneColor");
     Require(graph.FindResource(RenderGraphResource::GBufferAlbedo) != nullptr, "RenderPassGraph did not declare GBufferAlbedo");
     Require(graph.FindResource(RenderGraphResource::GBufferNormal) != nullptr, "RenderPassGraph did not declare GBufferNormal");
@@ -45,8 +45,6 @@ void RenderPassGraphValidatesRequiredPasses() {
     Require(graph.FindResource(RenderGraphResource::GBufferDepth) != nullptr, "RenderPassGraph did not declare GBufferDepth");
     Require(graph.FindResource(RenderGraphResource::ShadowMap) != nullptr, "RenderPassGraph did not declare ShadowMap");
     Require(graph.FindResource(RenderGraphResource::FinalOutput) != nullptr, "RenderPassGraph did not declare FinalOutput");
-    Require(graph.FindResource(RenderGraphResource::RuntimeUiBlurPing) != nullptr, "RenderPassGraph did not declare runtime UI blur ping");
-    Require(graph.FindResource(RenderGraphResource::RuntimeUiBlurred) != nullptr, "RenderPassGraph did not declare runtime UI blurred output");
     Require(RequiredRenderPassKinds().size() == RenderPassKindCount, "Required render pass list does not match pass kind count");
     for (const RenderPassKind kind : RequiredRenderPassKinds()) {
         Require(graph.HasPass(kind), "RenderPassGraph required pass was not present");
@@ -56,7 +54,7 @@ void RenderPassGraphValidatesRequiredPasses() {
     Require(compile.Succeeded(), RenderPassGraphValidationStatusName(compile.validation.status));
     Require(compile.resourceUsages.size() == graph.Resources().size(), "RenderPassGraph compile did not emit usage for every resource");
     Require(compile.externalResourceCount == 4U, "RenderPassGraph compile reported wrong external resource count");
-    Require(compile.transientResourceCount == 15U, "RenderPassGraph compile reported wrong transient resource count");
+    Require(compile.transientResourceCount == 13U, "RenderPassGraph compile reported wrong transient resource count");
     Require(compile.estimatedTransientBytes > 0U, "RenderPassGraph compile did not estimate transient memory");
     Require(compile.estimatedAliasedTransientBytes > 0U, "RenderPassGraph compile did not estimate aliased transient memory");
     Require(compile.estimatedAliasedTransientBytes <= compile.estimatedTransientBytes, "RenderPassGraph aliased memory estimate exceeded unaliased estimate");
@@ -166,8 +164,6 @@ void PrimaryViewportIdsUseCanonicalRuntimeViews() {
     Require(ids.postProcessHdrCombine == ViewId::PostProcessHdrCombine, "Primary HDR combine view id is not canonical");
     Require(ids.postProcessHdrFinalize == ViewId::PostProcessHdrFinalize, "Primary HDR finalize view id is not canonical");
     Require(ids.sceneOverlays == ViewId::Overlay, "Primary overlay view id is not canonical");
-    Require(ids.runtimeUiBlurH == ViewId::RuntimeUiBlurH, "Primary runtime UI horizontal blur view id is not canonical");
-    Require(ids.runtimeUiBlurV == ViewId::RuntimeUiBlurV, "Primary runtime UI vertical blur view id is not canonical");
     Require(ids.finalComposite == ViewId::FinalComposite, "Primary final composite view id is not canonical");
     Require(ids.editorUiComposite == ViewId::EditorUi, "Primary editor UI view id is not canonical");
     Require(ids.editorGizmoOverlay == ViewId::EditorGizmoOverlay, "Primary editor gizmo overlay view id is not canonical");
@@ -184,9 +180,7 @@ void DetachedViewportIdsAreContiguousAndBounded() {
     Require(first.deferredLighting == ViewId::DetachedViewportStart + 3U, "First detached viewport deferred lighting view id is wrong");
     Require(first.transparentScene == ViewId::DetachedViewportStart + 4U, "First detached viewport transparent scene view id is wrong");
     Require(first.editorUiComposite == ViewId::DetachedViewportStart + 16U, "First detached viewport editor UI view id is wrong");
-    Require(first.editorGizmoOverlay == ViewId::DetachedViewportStart + 32U, "First detached viewport gizmo overlay view id is wrong");
-    Require(first.runtimeUiBlurH == ViewId::DetachedViewportStart + 33U, "First detached viewport runtime UI horizontal blur view id is wrong");
-    Require(first.runtimeUiBlurV == ViewId::DetachedViewportStart + 34U, "First detached viewport runtime UI vertical blur view id is wrong");
+    Require(first.editorGizmoOverlay == ViewId::DetachedViewportStart + ViewId::DetachedViewportStride - 1U, "First detached viewport gizmo overlay view id is wrong");
     Require(second.shadowDepth == ViewId::DetachedViewportStart + ViewId::DetachedViewportStride, "Second detached viewport shadow view id is wrong");
     Require(second.opaqueScene == ViewId::DetachedViewportStart + ViewId::DetachedViewportStride + 1U, "Second detached viewport scene view id is wrong");
     Require(RenderViewportViewIdAllocator::ForViewportIndex(
@@ -227,10 +221,8 @@ void FramePipelineBuildsCanonicalPassOrder() {
         RenderPassKind::PostProcessBloomBlurV,
         RenderPassKind::PostProcessHdrCombine,
         RenderPassKind::PostProcessHdrFinalize,
-        RenderPassKind::RuntimeUiBlurH,
-        RenderPassKind::RuntimeUiBlurV,
         RenderPassKind::FinalComposite,
-        RenderPassKind::UiComposite,
+        RenderPassKind::EditorUiComposite,
         RenderPassKind::EditorGizmoOverlay,
     };
 
@@ -285,8 +277,6 @@ void FramePipelineBuildsCanonicalPassOrder() {
         ViewId::PostProcessBloomMipBlurVStart + 4U,
         ViewId::PostProcessHdrCombine,
         ViewId::PostProcessHdrFinalize,
-        ViewId::RuntimeUiBlurH,
-        ViewId::RuntimeUiBlurV,
         ViewId::FinalComposite,
         ViewId::EditorUi,
         ViewId::EditorGizmoOverlay,
@@ -335,7 +325,7 @@ void FrameStateAccumulatesMultipleViewportViewOrders() {
     Require(state.IsActive(), "RenderFrameState became inactive during viewport registration");
     Require(state.FrameIndex() == frame.frameIndex, "RenderFrameState has the wrong frame index");
 
-    constexpr std::array<std::uint16_t, 71U> expectedViewOrder{
+    constexpr std::array<std::uint16_t, 67U> expectedViewOrder{
         ViewId::ShadowDepth,
         ViewId::GpuCompute,
         ViewId::Scene3D,
@@ -367,8 +357,6 @@ void FrameStateAccumulatesMultipleViewportViewOrders() {
         ViewId::PostProcessBloomMipBlurVStart + 4U,
         ViewId::PostProcessHdrCombine,
         ViewId::PostProcessHdrFinalize,
-        ViewId::RuntimeUiBlurH,
-        ViewId::RuntimeUiBlurV,
         ViewId::FinalComposite,
         ViewId::EditorUi,
         ViewId::EditorGizmoOverlay,
@@ -402,8 +390,6 @@ void FrameStateAccumulatesMultipleViewportViewOrders() {
         ViewId::DetachedViewportStart + 31U,
         ViewId::DetachedViewportStart + 12U,
         ViewId::DetachedViewportStart + 13U,
-        ViewId::DetachedViewportStart + 33U,
-        ViewId::DetachedViewportStart + 34U,
         ViewId::DetachedViewportStart + 15U,
         ViewId::DetachedViewportStart + 16U,
         ViewId::DetachedViewportStart + 32U,

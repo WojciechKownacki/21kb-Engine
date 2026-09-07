@@ -142,9 +142,6 @@ ScenePrefabNodeComponents ScenePrefabComponentSnapshot::Capture(Scene& scene, Sc
     if (const DrawD3DeformedGeometryComponent* geometry = sceneComponents.DeformedGeometries().TryGet(entity)) {
         components.deformedGeometry = *geometry;
     }
-    if (const UIDocumentComponent* uiDocument = sceneComponents.UIDocuments().TryGet(entity)) {
-        components.uiDocument = *uiDocument;
-    }
     if (const NavAgent* navAgent = sceneComponents.NavAgents().TryGet(entity)) {
         components.navAgent = *navAgent;
     }

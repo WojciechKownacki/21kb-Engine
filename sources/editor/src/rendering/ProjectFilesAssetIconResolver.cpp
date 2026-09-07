@@ -4,7 +4,6 @@
 #include "engine/scene/SkeletonAssetIO.hpp"
 #include "engine/scene/SkeletalMeshAssetIO.hpp"
 #include "engine/scene/AnimationAssetIO.hpp"
-#include "engine/scene/UIAssetIO.hpp"
 
 #if defined(_WIN32)
 namespace kb::editor {
@@ -62,11 +61,6 @@ bool ProjectFilesAssetIconResolver::IsAudio(const kb::assets::AssetMetadata& met
     return kb::assets::AssetMatchesKind(metadata, kb::assets::AssetKind::Audio);
 }
 
-bool ProjectFilesAssetIconResolver::IsUserWidget(const kb::assets::AssetMetadata& metadata) noexcept {
-    return metadata.type == kb::scene::kUIDocumentAssetType ||
-        metadata.virtualPath.extension() == kb::scene::kUIDocumentAssetExtension;
-}
-
 bool ProjectFilesAssetIconResolver::IsMaterial(const kb::assets::AssetMetadata& metadata) noexcept {
     return metadata.type == "RenderMaterial" || metadata.type == "RenderMaterialInstance";
 }
@@ -80,9 +74,6 @@ bool ProjectFilesAssetIconResolver::IsMaterialType(const kb::assets::AssetMetada
 }
 
 ProjectFilesAssetIcon ProjectFilesAssetIconResolver::Resolve(const kb::assets::AssetMetadata& metadata, bool selected) noexcept {
-    if (IsUserWidget(metadata)) {
-        return ProjectFilesAssetIcon{ .kind = HeroIconKind::DocumentText, .color = selected ? RGB(145, 226, 255) : RGB(64, 180, 222), .strokeWidth = 2 };
-    }
     if (IsAudio(metadata)) {
         return ProjectFilesAssetIcon{ .kind = HeroIconKind::SpeakerWave, .color = selected ? RGB(116, 232, 205) : RGB(59, 190, 165), .strokeWidth = 2 };
     }

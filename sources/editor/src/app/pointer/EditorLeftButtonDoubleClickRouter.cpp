@@ -161,19 +161,6 @@ bool EditorLeftButtonDoubleClickRouter::Handle(HWND messageWindow, int x, int y)
     if (assetResult == EditorAssetBrowserDoubleClickResult::MaterialEditorOpened) {
         static_cast<void>(dockModel_.Commands().ActivatePanelKind(DockPanelKind::MaterialEditor, DockArea::Center));
     }
-    if (assetResult == EditorAssetBrowserDoubleClickResult::UserWidgetEditorOpened) {
-        if (const kb::assets::AssetMetadata* metadata =
-                sceneContext_.Scene().Assets().Manager().Registry().Find(
-                    sceneContext_.UserWidgetEditor().AssetId());
-            metadata != nullptr) {
-            const std::string filename = metadata->virtualPath.filename().string();
-            static_cast<void>(dockModel_.Commands().SetPanelTitle(
-                DockPanelKind::UserWidgetEditor,
-                filename.empty() ? metadata->name : filename));
-        }
-        static_cast<void>(dockModel_.Commands().ActivatePanelKind(
-            DockPanelKind::UserWidgetEditor, DockArea::Center));
-    }
 
     const std::optional<RECT> animatorEditorContent = EditorPanelContentResolver::Resolve(
         DockPanelKind::AnimatorEditor, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);

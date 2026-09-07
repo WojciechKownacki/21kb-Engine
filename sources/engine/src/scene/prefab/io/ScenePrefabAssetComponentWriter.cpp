@@ -390,11 +390,6 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         output << "deformedGeometry.layer=" << geometry.layer << '\n';
         output << "deformedGeometry.enabled=" << (geometry.enabled ? 1 : 0) << '\n';
     }
-    output << "uiDocument=" << (components.uiDocument.has_value() ? 1 : 0) << '\n';
-    if (components.uiDocument.has_value()) {
-        output << "uiDocument.documentAssetId=" << components.uiDocument->documentAssetId << '\n';
-        output << "uiDocument.enabled=" << (components.uiDocument->enabled ? 1 : 0) << '\n';
-    }
 }
 
 } // namespace kb::scene

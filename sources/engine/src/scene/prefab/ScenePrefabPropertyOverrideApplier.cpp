@@ -493,15 +493,6 @@ bool ScenePrefabPropertyOverrideApplier::Apply(ScenePrefabNodeDesc& node, const 
     if (property.propertyPath == "particleEffect.autoPlay") return ParseBool(property.value, Ensure(node.components.particleEffect).autoPlay);
     if (property.propertyPath == "particleEffect.followTransform") return ParseBool(property.value, Ensure(node.components.particleEffect).followTransform);
     if (property.propertyPath == "particleEffect.restartOnActivate") return ParseBool(property.value, Ensure(node.components.particleEffect).restartOnActivate);
-    if (property.propertyPath == "uiDocument") {
-        return ApplyComponentPresence(property.value, node.components.uiDocument);
-    }
-    if (property.propertyPath == "uiDocument.documentAssetId") {
-        return ParseNumber(property.value, Ensure(node.components.uiDocument).documentAssetId);
-    }
-    if (property.propertyPath == "uiDocument.enabled") {
-        return ParseBool(property.value, Ensure(node.components.uiDocument).enabled);
-    }
     return false;
 }
 

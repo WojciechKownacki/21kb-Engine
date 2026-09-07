@@ -41,7 +41,6 @@ SceneComponentStorage::SceneComponentStorage(kb::ecs::World& world, const SceneC
     , skeletonBindings_(world, components.SkeletonBindingComponentId())
     , motionSkeletonRules_(world, components.MotionSkeletonRuleComponentId())
     , deformedGeometries_(world, components.DeformedGeometryComponentId())
-    , uiDocuments_(world, components.UIDocumentComponentId())
     , navigation_(world) {}
 
 void SceneComponentStorage::SetDefaults(SceneEntity entity, const TransformComponent& transform, const VisibilityComponent& visibility) {
@@ -213,8 +212,6 @@ const SceneMotionSkeletonRuleComponentStore& SceneComponentStorage::MotionSkelet
 SceneMotionSkeletonRuleComponentStore& SceneComponentStorage::MotionSkeletonRules() noexcept { return motionSkeletonRules_; }
 const SceneDeformedGeometryComponentStore& SceneComponentStorage::DeformedGeometries() const noexcept { return deformedGeometries_; }
 SceneDeformedGeometryComponentStore& SceneComponentStorage::DeformedGeometries() noexcept { return deformedGeometries_; }
-const SceneUIDocumentComponentStore& SceneComponentStorage::UIDocuments() const noexcept { return uiDocuments_; }
-SceneUIDocumentComponentStore& SceneComponentStorage::UIDocuments() noexcept { return uiDocuments_; }
 const SceneNavigationComponentStore& SceneComponentStorage::Navigation() const noexcept { return navigation_; }
 SceneNavigationComponentStore& SceneComponentStorage::Navigation() noexcept { return navigation_; }
 

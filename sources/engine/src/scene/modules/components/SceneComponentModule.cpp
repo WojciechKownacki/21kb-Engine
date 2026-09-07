@@ -96,9 +96,6 @@ SceneMotionSkeletonRuleComponentQueries SceneComponentQueries::MotionSkeletonRul
 SceneDeformedGeometryComponentQueries SceneComponentQueries::DeformedGeometries() const noexcept {
     return SceneDeformedGeometryComponentQueries{ scene_ };
 }
-SceneUIDocumentComponentQueries SceneComponentQueries::UIDocuments() const noexcept {
-    return SceneUIDocumentComponentQueries{ scene_ };
-}
 SceneNavAgentComponentQueries SceneComponentQueries::NavAgents() const noexcept { return SceneNavAgentComponentQueries{ scene_ }; }
 SceneNavObstacleComponentQueries SceneComponentQueries::NavObstacles() const noexcept { return SceneNavObstacleComponentQueries{ scene_ }; }
 
@@ -192,9 +189,6 @@ SceneMotionSkeletonRuleComponents SceneComponents::MotionSkeletonRules() const n
 }
 SceneDeformedGeometryComponents SceneComponents::DeformedGeometries() const noexcept {
     return SceneDeformedGeometryComponents{ scene_ };
-}
-SceneUIDocumentComponents SceneComponents::UIDocuments() const noexcept {
-    return SceneUIDocumentComponents{ scene_ };
 }
 SceneNavAgentComponents SceneComponents::NavAgents() const noexcept { return SceneNavAgentComponents{ scene_ }; }
 SceneNavObstacleComponents SceneComponents::NavObstacles() const noexcept { return SceneNavObstacleComponents{ scene_ }; }

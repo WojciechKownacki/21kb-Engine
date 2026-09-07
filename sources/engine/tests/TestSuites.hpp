@@ -22,8 +22,6 @@ void RunAnimationRuntimeTests();
 void RunSkeletonAssetTests();
 void RunSkeletalMeshAssetTests();
 void RunTimelineRuntimeTests();
-void RunUIDocumentRuntimeTests();
-void RunUIPresentationRuntimeTests();
 void RunLocalizationTests();
 
 } // namespace kb::tests

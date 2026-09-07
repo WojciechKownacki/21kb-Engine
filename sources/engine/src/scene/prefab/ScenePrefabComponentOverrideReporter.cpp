@@ -432,20 +432,6 @@ void AppendDeformedGeometry(SceneComponents components, SceneEntity entity, cons
     if (!expected.has_value() || actual->enabled != expected->enabled) add("deformedGeometry.enabled", actual->enabled);
 }
 
-void AppendUIDocument(SceneComponents components, SceneEntity entity, const std::optional<UIDocumentComponent>& expected, ScenePrefabOverrideReport& report, std::uint32_t nodeIndex, SceneObject object) {
-    const UIDocumentComponent* actual = components.UIDocuments().TryGet(entity);
-    const bool equal = actual == nullptr ? !expected.has_value() : expected.has_value() &&
-        actual->documentAssetId == expected->documentAssetId && actual->enabled == expected->enabled;
-    if (equal) return;
-    if (HasPresenceOverride(actual, expected, report, nodeIndex, object, "uiDocument", ScenePrefabOverrideFlag::UIDocument)) return;
-    if (!expected.has_value() || actual->documentAssetId != expected->documentAssetId) {
-        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "uiDocument.documentAssetId", ScenePrefabOverrideValueFormatter::ToString(actual->documentAssetId), ScenePrefabOverrideFlag::UIDocument);
-    }
-    if (!expected.has_value() || actual->enabled != expected->enabled) {
-        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "uiDocument.enabled", ScenePrefabOverrideValueFormatter::ToString(actual->enabled), ScenePrefabOverrideFlag::UIDocument);
-    }
-}
-
 void AppendParticleEffect(SceneComponents components, SceneEntity entity, const std::optional<ParticleEffectComponent>& expected, ScenePrefabOverrideReport& report, std::uint32_t nodeIndex, SceneObject object) {
     const ParticleEffectComponent* actual = components.ParticleEffects().TryGet(entity);
     const bool equal = actual == nullptr ? !expected.has_value() : expected.has_value() &&
@@ -487,7 +473,6 @@ void ScenePrefabComponentOverrideReporter::Append(SceneComponents components, Sc
     AppendSkeletonBinding(components, entity, expected.skeletonBinding, report, nodeIndex, object);
     AppendDeformedGeometry(components, entity, expected.deformedGeometry, report, nodeIndex, object);
     AppendParticleEffect(components, entity, expected.particleEffect, report, nodeIndex, object);
-    AppendUIDocument(components, entity, expected.uiDocument, report, nodeIndex, object);
 }
 
 } // namespace kb::scene

@@ -47,7 +47,6 @@
 #include "scene/material/MaterialGraphInteractionState.hpp"
 #include "scene/material_preview/EditorMaterialPreviewPrimitivePolicy.hpp"
 #include "scene/material_preview/EditorMaterialPreviewSettings.hpp"
-#include "scene/user_widget/UserWidgetEditorDocument.hpp"
 #include "scene/transform_edit/EditorSceneTransformEditSession.hpp"
 #include "app/scene_viewport/EditorSceneViewportSelectionTypes.hpp"
 #include "inspection/InspectorPanelState.hpp"
@@ -484,7 +483,6 @@ public:
     [[nodiscard]] bool CreateInputMappingContextAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateAudioMixerAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateParticleEffectAsset(const std::filesystem::path& virtualFolder);
-    [[nodiscard]] bool CreateUserWidgetAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateMaterialAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateMaterialFunctionAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateMaterialGraphAsset(const std::filesystem::path& virtualFolder);
@@ -499,11 +497,6 @@ public:
     [[nodiscard]] bool ExtractEmbeddedMaterials(kb::assets::AssetId meshAssetId);
     [[nodiscard]] bool CreateLuaScriptAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool OpenLuaScript(kb::assets::AssetId id);
-    [[nodiscard]] bool OpenUserWidgetEditorAsset(kb::assets::AssetId id);
-    [[nodiscard]] bool SaveUserWidgetEditorAsset();
-    [[nodiscard]] bool ReopenUserWidgetEditorAsset();
-    [[nodiscard]] UserWidgetEditorDocument& UserWidgetEditor() noexcept;
-    [[nodiscard]] const UserWidgetEditorDocument& UserWidgetEditor() const noexcept;
     [[nodiscard]] bool OpenAnimationAsset(kb::assets::AssetId id);
     [[nodiscard]] bool OpenParticleEditorAsset(kb::assets::AssetId id);
     [[nodiscard]] bool HasParticleEditorAsset() const noexcept;
@@ -1218,13 +1211,10 @@ public:
     [[nodiscard]] bool ToggleDeformedGeometryEnabled(kb::scene::SceneEntity entity);
     [[nodiscard]] bool ToggleDeformedGeometryCastsShadow(kb::scene::SceneEntity entity);
     [[nodiscard]] bool ToggleDeformedGeometryReceivesShadow(kb::scene::SceneEntity entity);
-    [[nodiscard]] bool SetUIDocumentAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId);
     [[nodiscard]] bool SetAnimatorSpeed(kb::scene::SceneEntity entity, float speed);
     [[nodiscard]] bool ToggleAnimatorEnabled(kb::scene::SceneEntity entity);
     [[nodiscard]] bool CycleAnimatorRootMotionOwner(kb::scene::SceneEntity entity);
     [[nodiscard]] bool RemoveAnimatorFromEntity(kb::scene::SceneEntity entity);
-    [[nodiscard]] bool ToggleUIDocumentEnabled(kb::scene::SceneEntity entity);
-    [[nodiscard]] bool RemoveUIDocumentFromEntity(kb::scene::SceneEntity entity);
     [[nodiscard]] bool BeginSelectedTransformEdit(std::string label);
     [[nodiscard]] bool ApplyActiveTransformEditPrimaryPosition(kb::scene::Vec3 position);
     [[nodiscard]] bool ApplyActiveTransformEditPrimaryRotation(kb::scene::Vec3 rotation);
@@ -1331,7 +1321,6 @@ private:
     EditorSceneDocumentIdentity sceneDocumentIdentity_;
     EditorAssetBrowserState assetBrowser_;
     EditorConsoleState console_;
-    UserWidgetEditorDocument userWidgetEditor_;
     std::mutex assetImportMutex_;
     std::thread assetImportWorker_;
     std::optional<kb::assets::AssetImportResult> completedAssetImport_;

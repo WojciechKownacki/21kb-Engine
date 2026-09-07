@@ -14,7 +14,6 @@
 #include "engine/scene/ScenePostProcessAccess.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneRuntime.hpp"
-#include "engine/scene/SceneUIDocuments.hpp"
 #include "kb/render/resources/PostProcessProfileAssetLoader.hpp"
 #include "kb/render/scene/EcsRenderSceneSynchronizer.hpp"
 #include "kb/render/scene/SceneParticleRenderSynchronizer.hpp"
@@ -36,7 +35,6 @@
 #include "renderer/RendererShadowSubmitter.hpp"
 #include "renderer/RendererTemporalJitter.hpp"
 #include "renderer/RendererViewConfigurator.hpp"
-#include "private/ui/RuntimeUserWidgetRenderer.hpp"
 
 #include <bgfx/bgfx.h>
 
@@ -291,11 +289,6 @@ bool Renderer::Initialize(RenderSurface& surface, const DisplayConfig* config) {
         Shutdown();
         return false;
     }
-    runtimeUserWidgetRenderer_ = std::make_unique<RuntimeUserWidgetRenderer>();
-    if (!runtimeUserWidgetRenderer_->Initialize()) {
-        Shutdown();
-        return false;
-    }
     deferredLightingPass_ = std::make_unique<SceneDeferredLightingPass>();
     if (!deferredLightingPass_->Initialize()) {
         Shutdown();
@@ -369,10 +362,6 @@ void Renderer::Shutdown() {
     if (finalCompositePass_ != nullptr) {
         finalCompositePass_->Shutdown();
         finalCompositePass_.reset();
-    }
-    if (runtimeUserWidgetRenderer_ != nullptr && sceneRenderer_ != nullptr) {
-        runtimeUserWidgetRenderer_->Shutdown(sceneRenderer_->Resources());
-        runtimeUserWidgetRenderer_.reset();
     }
     if (deferredLightingPass_ != nullptr) {
         deferredLightingPass_->Shutdown();
@@ -764,8 +753,6 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
 
     const std::uint32_t width = desc.target.viewport.extent.width;
     const std::uint32_t height = desc.target.viewport.extent.height;
-    const kb::scene::UIPresentationSnapshot& uiPresentation =
-        const_cast<kb::scene::Scene&>(scene).UIDocuments().BuildPresentation(width, height);
     if (renderSceneSynchronizer_ == nullptr) {
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport missing renderSceneSynchronizer");
         return false;
@@ -880,9 +867,6 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport particle snapshot unavailable");
     }
     WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport particle sync end");
-    if (runtimeUserWidgetRenderer_ != nullptr) {
-        RuntimeUserWidgetRenderer::MarkTextureReferences(scene.Id(), uiPresentation, frameReferences_);
-    }
     SceneRenderLightingConfig effectiveLightingConfig = ApplyAmbientRadiance(
         RendererSceneLightingConfigResolver::Resolve(desc.lightingConfig, defaultSceneLightingConfig_), renderScene.AmbientRadiance());
     if (!desc.shadowPassEnabled) {
@@ -1594,35 +1578,6 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         }
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport final composite submit end");
 
-        SceneDisplayOutputTransform uiOutputTransform = postProcessOutput.outputTransform;
-        if (!postProcessOutput.tonemapEnabled) {
-            uiOutputTransform = SceneDisplayOutputTransform{
-                .exposureStops = 0.0F,
-                .gamma = 1.0F,
-                .tonemap = SceneDisplayTonemapOperator::None,
-                .colorGradingLutStrength = 0.0F,
-            };
-        }
-        if (runtimeUserWidgetRenderer_ == nullptr ||
-            !runtimeUserWidgetRenderer_->Submit(RuntimeUserWidgetSubmitDesc{
-                .sceneId = scene.Id(),
-                .viewportIndex = desc.target.viewport.viewportIndex,
-                .presentation = &uiPresentation,
-                .assets = &const_cast<kb::scene::Scene&>(scene).Assets().Manager(),
-                .resources = &sceneRenderer_->Resources(),
-                .resourceMap = &sceneRenderer_->ResourceMap(),
-                .viewportPlan = &viewportPlan,
-                .backgroundSource = scenePostProcessOutput,
-                .backgroundFormat = desc.target.colorFormat,
-                .outputFrameBuffer = desc.finalComposite.frameBuffer,
-                .outputExtent = desc.finalComposite.extent,
-                .outputRect = desc.finalComposite.outputRect,
-                .outputTransform = uiOutputTransform,
-            })) {
-            WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport runtime UI submit failed");
-            return false;
-        }
-
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport editor overlay submit begin");
         RendererEditorOverlaySubmitter::Submit(
             editorPassSubmitter_,
@@ -1635,29 +1590,6 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         return true;
     }
 
-    if (runtimeUserWidgetRenderer_ == nullptr ||
-        !runtimeUserWidgetRenderer_->Submit(RuntimeUserWidgetSubmitDesc{
-            .sceneId = scene.Id(),
-            .viewportIndex = desc.target.viewport.viewportIndex,
-            .presentation = &uiPresentation,
-            .assets = &const_cast<kb::scene::Scene&>(scene).Assets().Manager(),
-            .resources = &sceneRenderer_->Resources(),
-            .resourceMap = &sceneRenderer_->ResourceMap(),
-            .viewportPlan = &viewportPlan,
-            .backgroundSource = sampledSceneColor,
-            .backgroundFormat = desc.target.colorFormat,
-            .outputFrameBuffer = desc.target.frameBuffer,
-            .outputExtent = desc.target.viewport.extent,
-            .outputTransform = SceneDisplayOutputTransform{
-                .exposureStops = 0.0F,
-                .gamma = 1.0F,
-                .tonemap = SceneDisplayTonemapOperator::None,
-                .colorGradingLutStrength = 0.0F,
-            },
-        })) {
-        WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport runtime UI submit failed noFinalComposite");
-        return false;
-    }
     WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport editor overlay submit begin noFinalComposite");
     RendererEditorOverlaySubmitter::Submit(editorPassSubmitter_, viewportPlan, editorOverlayDesc, overlayCamera, true);
     WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport editor overlay submit end noFinalComposite");
@@ -1680,9 +1612,6 @@ void Renderer::OnResize(std::uint32_t width, std::uint32_t height) {
     }
 
     editorPassSubmitter_.InvalidateFrameBuffers();
-    if (runtimeUserWidgetRenderer_ != nullptr) {
-        runtimeUserWidgetRenderer_->OnResize();
-    }
     defaultPostProcessTargets_.Shutdown();
     for (SceneGBuffer& gbuffer : sceneGBuffers_) {
         gbuffer.Shutdown();
@@ -2014,9 +1943,6 @@ void Renderer::ReleaseScene(const kb::scene::Scene& scene) noexcept {
     screenCapture_->ReleaseScene(mutableScene);
     particleRenderSynchronizer_->ReleaseScene(scene);
     if (sceneRenderer_ != nullptr) sceneRenderer_->ReleaseParticleScene(scene.Id());
-    if (runtimeUserWidgetRenderer_ != nullptr && sceneRenderer_ != nullptr) {
-        runtimeUserWidgetRenderer_->ReleaseScene(scene.Id(), sceneRenderer_->Resources());
-    }
     kb::scene::SceneRenderFeedback::Clear(mutableScene);
     runtimeResourceCache_.ReleaseScene(mutableScene, sceneRenderer_.get());
     renderSceneStore_.Release(scene.Id());
@@ -2031,9 +1957,6 @@ void Renderer::ReleaseAllScenes() noexcept {
     screenCapture_->Shutdown();
     particleRenderSynchronizer_->Clear();
     if (sceneRenderer_ != nullptr) sceneRenderer_->ReleaseAllParticleScenes();
-    if (runtimeUserWidgetRenderer_ != nullptr && sceneRenderer_ != nullptr) {
-        runtimeUserWidgetRenderer_->ReleaseAllScenes(sceneRenderer_->Resources());
-    }
     renderSceneStore_.ReleaseAll();
     renderProxySynchronizedRevisions_.clear();
     runtimeResourceCache_.DestroyAll(sceneRenderer_.get());
