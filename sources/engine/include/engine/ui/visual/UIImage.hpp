@@ -4,6 +4,7 @@
 #include "engine/ui/layout/UIEdges.hpp"
 
 #include <cstdint>
+#include <string_view>
 
 namespace kb::scene {
 
@@ -14,11 +15,15 @@ enum class UIImageScaleMode : std::uint8_t {
 };
 
 struct UIImage {
+    static constexpr std::string_view StableId = "kb21.ui.image";
+    static constexpr std::uint32_t SchemaVersion = 1U;
+
     std::uint64_t imageAssetId = 0U;
     kb::math::Rect uvRect{0.0F, 0.0F, 1.0F, 1.0F};
     UIImageScaleMode scaleMode = UIImageScaleMode::Stretch;
     bool preserveAspect = false;
     UIEdges nineSlice{};
+    kb::math::Color color{1.0F, 1.0F, 1.0F, 1.0F};
 };
 
 } // namespace kb::scene

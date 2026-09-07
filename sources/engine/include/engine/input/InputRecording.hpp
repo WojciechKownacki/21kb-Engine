@@ -39,8 +39,11 @@ struct InputFrameSnapshot {
     std::vector<InputRecordedDigitalKey> digitalDown;
     std::vector<InputRecordedAnalogKey> analogValues;
     std::vector<InputTouchPoint> touchPoints;
+    std::vector<char32_t> textInput;
     float pointerX = 0.0F;
     float pointerY = 0.0F;
+    std::uint32_t pointerViewportWidth = 0U;
+    std::uint32_t pointerViewportHeight = 0U;
     bool hasFocus = false;
     std::array<bool, InputDeviceState::kMaxGamepads> gamepadConnected{};
 };

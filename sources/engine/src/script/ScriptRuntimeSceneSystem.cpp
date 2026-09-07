@@ -14,6 +14,7 @@
 #include "engine/scene/SceneAnimators.hpp"
 #include "engine/scene/SceneParticleSystems.hpp"
 #include "engine/scene/SceneTimelines.hpp"
+#include "engine/scene/SceneUI.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneSystemContext.hpp"
@@ -120,6 +121,7 @@ const ScriptRuntimeExecutionResult& ScriptRuntimeSceneSystem::ExecuteFrame(kb::s
     DispatchPendingPrefabInstantiatedEvents(scene, clampedDeltaSeconds);
     DispatchPendingAnimationEvents(scene, clampedDeltaSeconds);
     DispatchPendingTimelineMarkerEvents(scene, clampedDeltaSeconds);
+    DispatchPendingUIEvents(scene, clampedDeltaSeconds);
     DispatchDeferredEvents(scene);
     SyncBehaviourLifecycles(scene, clampedDeltaSeconds);
     // LIB-094: explicit FixedTick-during-pause rule — while the scene is
@@ -153,6 +155,7 @@ const ScriptRuntimeExecutionResult& ScriptRuntimeSceneSystem::ExecuteFrame(kb::s
     ExecuteTrackedBehaviourPhase(scene, ScriptLifecycleEvent::LateTick, clampedDeltaSeconds);
     ExecuteTrackedBehaviourPhase(scene, ScriptLifecycleEvent::BeforeRender, clampedDeltaSeconds);
     ExecuteTrackedBehaviourPhase(scene, ScriptLifecycleEvent::AfterRender, clampedDeltaSeconds);
+    DispatchPendingUIEvents(scene, clampedDeltaSeconds);
     // LIB-067: frame playback point — apply every World.Destroy(deferred=true)
     // queued during this frame's behaviour phases now that all iteration is
     // done, so no behaviour ran against storage a deferred destroy will pull.
@@ -172,6 +175,7 @@ void ScriptRuntimeSceneSystem::BeginFrame(kb::scene::Scene& scene, float deltaSe
     DispatchPendingPrefabInstantiatedEvents(scene, clampedDeltaSeconds);
     DispatchPendingAnimationEvents(scene, clampedDeltaSeconds);
     DispatchPendingTimelineMarkerEvents(scene, clampedDeltaSeconds);
+    DispatchPendingUIEvents(scene, clampedDeltaSeconds);
     DispatchDeferredEvents(scene);
     SyncBehaviourLifecycles(scene, clampedDeltaSeconds);
 }
@@ -193,10 +197,12 @@ void ScriptRuntimeSceneSystem::ExecuteVariableFrame(kb::scene::Scene& scene, flo
     DispatchPendingCollisionEvents(scene, clampedDeltaSeconds);
     DispatchPendingAnimationEvents(scene, clampedDeltaSeconds);
     DispatchPendingTimelineMarkerEvents(scene, clampedDeltaSeconds);
+    DispatchPendingUIEvents(scene, clampedDeltaSeconds);
     ExecuteTrackedBehaviourPhase(scene, ScriptLifecycleEvent::Tick, clampedDeltaSeconds);
     ExecuteTrackedBehaviourPhase(scene, ScriptLifecycleEvent::LateTick, clampedDeltaSeconds);
     ExecuteTrackedBehaviourPhase(scene, ScriptLifecycleEvent::BeforeRender, clampedDeltaSeconds);
     ExecuteTrackedBehaviourPhase(scene, ScriptLifecycleEvent::AfterRender, clampedDeltaSeconds);
+    DispatchPendingUIEvents(scene, clampedDeltaSeconds);
     static_cast<void>(scene.Entities().DrainDeferredDestroys());
 }
 
@@ -501,6 +507,55 @@ void ScriptRuntimeSceneSystem::DispatchPendingTimelineMarkerEvents(
                 ScriptDiagnostic{ .message = error });
         }
     }
+}
+
+void ScriptRuntimeSceneSystem::DispatchPendingUIEvents(kb::scene::Scene& scene, float deltaSeconds) {
+    const auto dispatch = [&](ScriptEvent event) {
+        const ScriptEventDeliveryResult delivery = runtime_.Events().Emit(
+            scene, event, event.target, {}, ScriptEventBusAudience::ExcludeBehaviourBridges);
+        for (const std::string& error : delivery.errors) {
+            lastResult_.diagnostics.push_back(ScriptDiagnostic{ .message = error });
+        }
+        event.observationAlreadyNotified = true;
+        MergeResult(lastResult_, runtime_.DispatchEventAndDrain(scene, event, deltaSeconds));
+    };
+
+    const std::size_t maximumRounds = ScriptRuntimeDispatchOptions{}.maxEventDepth;
+    for (std::size_t round = 0U; round < maximumRounds; ++round) {
+        const std::vector<kb::scene::SceneUIEvent> pendingEvents = scene.UI().DrainEvents();
+        if (pendingEvents.empty())
+            return;
+        for (const kb::scene::SceneUIEvent& pending : pendingEvents) {
+            const kb::scene::SceneUIEventDescriptor* descriptor =
+                kb::scene::FindSceneUIEventDescriptor(pending.type);
+            if (descriptor == nullptr) {
+                lastResult_.diagnostics.push_back(ScriptDiagnostic{ .message = "unknown scene UI event type" });
+                continue;
+            }
+            ScriptEvent event;
+            event.name = descriptor->callbackName;
+            event.sender = pending.entity;
+            event.target = pending.entity;
+            event.arguments.push_back({ "entity", ScriptValue{ pending.entity.Id(), ScriptValueType::Entity } });
+            event.arguments.push_back({ "pointerX", ScriptValue{ pending.pointerPosition.x } });
+            event.arguments.push_back({ "pointerY", ScriptValue{ pending.pointerPosition.y } });
+            event.arguments.push_back({ "pointerAvailable", ScriptValue{ pending.pointerAvailable } });
+            event.arguments.push_back({ "value", ScriptValue{ pending.value } });
+            event.arguments.push_back({ "value2", ScriptValue{ pending.value2 } });
+            event.arguments.push_back({ "text", ScriptValue{ std::string{ kb::scene::SceneUIEventText(pending) } } });
+            const std::string action{ kb::scene::SceneUIEventName(pending) };
+            event.arguments.push_back({ "action", ScriptValue{ action } });
+            dispatch(event);
+
+            if (pending.type == kb::scene::SceneUIEventType::Clicked && !action.empty() && action != event.name) {
+                event.name = action;
+                event.observationAlreadyNotified = false;
+                dispatch(std::move(event));
+            }
+        }
+    }
+    if (!scene.UI().Events().empty())
+        lastResult_.diagnostics.push_back(ScriptDiagnostic{ .message = "scene UI event dispatch depth limit reached" });
 }
 
 void ScriptRuntimeSceneSystem::DispatchDeferredEvents(kb::scene::Scene& scene) {

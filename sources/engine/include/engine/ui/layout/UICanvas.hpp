@@ -1,21 +1,16 @@
 #pragma once
 
-#include "engine/math/EngineMath.hpp"
-
 #include <cstdint>
+#include <string_view>
 
 namespace kb::scene {
 
-enum class UICanvasScaleMode : std::uint8_t {
-    ConstantPixelSize,
-    ScaleWithScreenSize,
-};
-
 struct UICanvas {
-    UICanvasScaleMode scaleMode = UICanvasScaleMode::ScaleWithScreenSize;
-    kb::math::Vec2 referenceResolution{1920.0F, 1080.0F};
-    float scaleFactor = 1.0F;
-    float matchWidthOrHeight = 0.5F;
+    static constexpr std::string_view StableId = "kb21.ui.canvas";
+    static constexpr std::uint32_t SchemaVersion = 1U;
+
+    std::int32_t sortingOrder = 0;
+    bool pixelPerfect = false;
 };
 
 } // namespace kb::scene

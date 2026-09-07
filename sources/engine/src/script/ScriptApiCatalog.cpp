@@ -27,7 +27,7 @@ constexpr std::array kLifecycleEvents{
 // PucLuaFunctionApi and PucLuaTaskApi install module tables directly from this
 // list.  The names and each wrapper's return shape therefore stay true to the
 // callable sandbox and generated stubs cannot drift from it.
-constexpr std::array<ScriptApiCatalogLuaBindingDefinition, 174> kLuaBindings{ {
+constexpr std::array<ScriptApiCatalogLuaBindingDefinition, 184> kLuaBindings{ {
     { "Audio", "Play", "Audio.Play", ScriptApiCatalogLuaReturnKind::SingleOutput, "voice" },
     { "Audio", "SetMixer", "Audio.SetMixer", ScriptApiCatalogLuaReturnKind::SingleOutput, "assigned" },
     { "Audio", "ActiveMixer", "Audio.ActiveMixer", ScriptApiCatalogLuaReturnKind::Default, "" },
@@ -116,6 +116,16 @@ constexpr std::array<ScriptApiCatalogLuaBindingDefinition, 174> kLuaBindings{ {
     { "Scene", "GetActive", "Scene.GetActive", ScriptApiCatalogLuaReturnKind::SingleOutput, "id" },
     { "Scene", "Find", "Scene.Find", ScriptApiCatalogLuaReturnKind::SingleOutput, "id" },
     { "Scene", "LoadProgress", "Scene.LoadProgress", ScriptApiCatalogLuaReturnKind::SingleOutput, "progress" },
+    { "UI", "Create", "UI.Create", ScriptApiCatalogLuaReturnKind::SingleOutput, "entity" },
+    { "UI", "AddComponent", "UI.AddComponent", ScriptApiCatalogLuaReturnKind::SingleOutput, "added" },
+    { "UI", "RemoveComponent", "UI.RemoveComponent", ScriptApiCatalogLuaReturnKind::SingleOutput, "removed" },
+    { "UI", "HasComponent", "UI.HasComponent", ScriptApiCatalogLuaReturnKind::SingleOutput, "present" },
+    { "UI", "Focus", "UI.Focus", ScriptApiCatalogLuaReturnKind::SingleOutput, "focused" },
+    { "UI", "ClearFocus", "UI.ClearFocus", ScriptApiCatalogLuaReturnKind::SingleOutput, "cleared" },
+    { "UI", "HitTest", "UI.HitTest", ScriptApiCatalogLuaReturnKind::SingleOutput, "entity" },
+    { "UI", "Hovered", "UI.Hovered", ScriptApiCatalogLuaReturnKind::SingleOutput, "entity" },
+    { "UI", "Pressed", "UI.Pressed", ScriptApiCatalogLuaReturnKind::SingleOutput, "entity" },
+    { "UI", "Focused", "UI.Focused", ScriptApiCatalogLuaReturnKind::SingleOutput, "entity" },
     { "Time", "delta", "Time.Delta", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Transform", "GetPosition", "Transform.GetPosition", ScriptApiCatalogLuaReturnKind::GuardedTable, "found" },
     { "Transform", "SetPosition", "Transform.SetPosition", ScriptApiCatalogLuaReturnKind::Default, "" },

@@ -35,6 +35,7 @@ void RunShaderPrewarmParseTests();
 void RunMeshBakeTests();
 void RunTextureBakeTests();
 void RunPackagedWebGpuTextureFallbackTestOnly();
+void RunScreenUIDrawBatchTests();
 }
 
 int main(int argc, char** argv) {
@@ -60,6 +61,10 @@ int main(int argc, char** argv) {
     }
     if (argc == 2 && std::string_view{ argv[1] } == "frame-pipeline") {
         kb::render::tests::RunRenderFramePipelineTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "screen-ui-batch") {
+        kb::render::tests::RunScreenUIDrawBatchTests();
         return EXIT_SUCCESS;
     }
     if (argc == 2 && std::string_view{ argv[1] } == "resource-registry") {
@@ -161,6 +166,7 @@ int main(int argc, char** argv) {
     kb::render::tests::RunSceneRenderExtractorTests();
     kb::render::tests::RunShaderManifestTests();
     kb::render::tests::RunShaderPrewarmParseTests();
+    kb::render::tests::RunScreenUIDrawBatchTests();
     kb::render::tests::RunMeshBakeTests();
     kb::render::tests::RunTextureBakeTests();
     return EXIT_SUCCESS;

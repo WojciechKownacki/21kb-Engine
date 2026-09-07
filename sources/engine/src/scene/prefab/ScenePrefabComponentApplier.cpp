@@ -2,12 +2,14 @@
 
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneUIComponentSet.hpp"
 
 namespace kb::scene {
 
 void ScenePrefabComponentApplier::Apply(Scene& scene, SceneObject object, const ScenePrefabNodeComponents& components) {
     SceneComponents sceneComponents = scene.Components();
     const SceneEntity entity = object.Entity();
+    ApplySceneUIComponents(sceneComponents.UI(), entity, components.ui);
 
     if (components.camera.has_value()) {
         sceneComponents.Cameras().Set(entity, *components.camera);

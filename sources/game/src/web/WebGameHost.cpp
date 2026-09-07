@@ -7,6 +7,9 @@
 #include "engine/input/InputKey.hpp"
 #include "engine/input/InputSubsystem.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneUI.hpp"
+#include "engine/ui/interaction/UIInputField.hpp"
 #include "kb/render/DisplayConfig.hpp"
 #include "kb/render/Renderer.hpp"
 #include "kb/render/RenderSurface.hpp"
@@ -26,6 +29,107 @@
 #include <span>
 #include <sstream>
 #include <string_view>
+
+extern "C" EMSCRIPTEN_KEEPALIVE int kb_web_append_committed_text(
+    void* host, std::uint32_t codePoint) noexcept;
+
+// clang-format off
+EM_JS(void, RegisterBrowserTextInput, (void* host), {
+    if (Module['kbTextInput']) return;
+    const control = document.createElement('textarea');
+    control.tabIndex = -1;
+    control.autocomplete = 'off';
+    control.autocapitalize = 'off';
+    control.spellcheck = false;
+    control.setAttribute('aria-label', 'Game text input');
+    Object.assign(control.style, {
+        position: 'fixed',
+        left: '0',
+        top: '0',
+        width: '1px',
+        height: '1px',
+        opacity: '0.01',
+        pointerEvents: 'none',
+        zIndex: '-1'
+    });
+
+    const state = { control, active: false, composing: false, suppressedComposition: null };
+    const append = (text) => {
+        if (!state.active || !text) return;
+        for (const character of text) {
+            if (!_kb_web_append_committed_text(host, character.codePointAt(0))) break;
+        }
+    };
+    control.addEventListener('compositionstart', () => {
+        state.composing = true;
+        state.suppressedComposition = null;
+    });
+    control.addEventListener('compositionend', (event) => {
+        state.composing = false;
+        state.suppressedComposition = event.data || '';
+        append(state.suppressedComposition);
+        control.value = '';
+    });
+    control.addEventListener('beforeinput', (event) => {
+        if (!state.active || state.composing || event.isComposing) return;
+        if (event.inputType.startsWith('deleteContentBackward') ||
+            event.inputType.startsWith('deleteWordBackward') ||
+            event.inputType.startsWith('deleteSoftLineBackward') ||
+            event.inputType.startsWith('deleteHardLineBackward')) {
+            _kb_web_append_committed_text(host, 8);
+            event.preventDefault();
+            control.value = '';
+        } else if (event.inputType.startsWith('deleteContentForward') ||
+                   event.inputType.startsWith('deleteWordForward') ||
+                   event.inputType.startsWith('deleteSoftLineForward') ||
+                   event.inputType.startsWith('deleteHardLineForward')) {
+            _kb_web_append_committed_text(host, 127);
+            event.preventDefault();
+            control.value = '';
+        } else if (event.inputType === 'insertLineBreak' ||
+                   event.inputType === 'insertParagraph') {
+            _kb_web_append_committed_text(host, 10);
+            event.preventDefault();
+            control.value = '';
+        }
+    });
+    control.addEventListener('input', (event) => {
+        if (!state.active || state.composing || event.isComposing ||
+            event.inputType.startsWith('delete')) return;
+        const text = typeof event.data === 'string' ? event.data : control.value;
+        if (state.suppressedComposition !== null && text === state.suppressedComposition) {
+            state.suppressedComposition = null;
+        } else {
+            state.suppressedComposition = null;
+            append(text);
+        }
+        control.value = '';
+    });
+    document.body.appendChild(control);
+    Module['kbTextInput'] = state;
+});
+
+EM_JS(void, SetBrowserTextInputActive, (int active), {
+    const state = Module['kbTextInput'];
+    if (!state) return;
+    state.active = !!active;
+    state.composing = false;
+    state.suppressedComposition = null;
+    state.control.value = '';
+    if (state.active) {
+        state.control.focus({ preventScroll: true });
+    } else if (document.activeElement === state.control) {
+        state.control.blur();
+    }
+});
+
+EM_JS(void, DestroyBrowserTextInput, (), {
+    const state = Module['kbTextInput'];
+    if (!state) return;
+    state.control.remove();
+    delete Module['kbTextInput'];
+});
+// clang-format on
 
 namespace {
 
@@ -237,6 +341,7 @@ private:
         if (kb::scene::Scene* scene = runtime_.Scene(); scene != nullptr) {
             scene->Input().MutableDeviceState().SetHasFocus(true);
         }
+        RegisterBrowserTextInput(this);
     }
 
     static void Frame(void* userData) {
@@ -249,6 +354,10 @@ private:
         const auto now = std::chrono::steady_clock::now();
         const float delta = kb::game::RuntimeDeltaSeconds(host->previousTick_, now);
         host->previousTick_ = now;
+        if (kb::scene::Scene* scene = host->runtime_.Scene(); scene != nullptr) {
+            scene->Input().MutableDeviceState().SetPointerViewportExtent(
+                host->surface_.Width(), host->surface_.Height());
+        }
         bool frameSubmitted = false;
         if (!host->runtime_.Tick(host->renderer_, delta, &frameSubmitted)) {
             host->frameInProgress_ = false;
@@ -261,10 +370,12 @@ private:
             SetBrowserFirstFrameReady();
         }
         if (kb::scene::Scene* scene = host->runtime_.Scene(); scene != nullptr) {
+            host->SetTextInputActive(scene->UI().HasFocusedTextInput());
             auto& state = scene->Input().MutableDeviceState();
             state.SetAnalog(kb::input::InputKey::MouseX, 0.0F);
             state.SetAnalog(kb::input::InputKey::MouseY, 0.0F);
             state.SetAnalog(kb::input::InputKey::MouseWheel, 0.0F);
+            state.ClearTextInput();
         }
         host->frameInProgress_ = false;
     }
@@ -276,7 +387,9 @@ private:
         const kb::input::InputKey key = WebKey(event->code);
         if (key == kb::input::InputKey::None) return EM_FALSE;
         scene->Input().MutableDeviceState().SetKeyDown(key, eventType == EMSCRIPTEN_EVENT_KEYDOWN);
-        return EM_TRUE;
+        return host->textInputActive_ && eventType == EMSCRIPTEN_EVENT_KEYDOWN
+            ? EM_FALSE
+            : EM_TRUE;
     }
 
     static EM_BOOL OnMouse(int eventType, const EmscriptenMouseEvent* event, void* userData) {
@@ -284,14 +397,31 @@ private:
         kb::scene::Scene* scene = host == nullptr ? nullptr : host->runtime_.Scene();
         if (scene == nullptr || event == nullptr) return EM_FALSE;
         auto& state = scene->Input().MutableDeviceState();
-        const float x = static_cast<float>(event->targetX);
-        const float y = static_cast<float>(event->targetY);
+        double cssWidth = 0.0;
+        double cssHeight = 0.0;
+        const bool hasCssExtent =
+            emscripten_get_element_css_size(kCanvas, &cssWidth, &cssHeight) ==
+                EMSCRIPTEN_RESULT_SUCCESS &&
+            cssWidth > 0.0 && cssHeight > 0.0;
+        const float x = static_cast<float>(event->targetX) *
+            (hasCssExtent ? static_cast<float>(host->surface_.Width() / cssWidth) : 1.0F);
+        const float y = static_cast<float>(event->targetY) *
+            (hasCssExtent ? static_cast<float>(host->surface_.Height() / cssHeight) : 1.0F);
         state.SetAnalog(kb::input::InputKey::MouseX, x - state.PointerX());
         state.SetAnalog(kb::input::InputKey::MouseY, y - state.PointerY());
         state.SetPointerPosition(x, y);
         if (eventType == EMSCRIPTEN_EVENT_MOUSEDOWN || eventType == EMSCRIPTEN_EVENT_MOUSEUP) {
             const bool down = eventType == EMSCRIPTEN_EVENT_MOUSEDOWN;
-            if (event->button == 0) state.SetKeyDown(kb::input::InputKey::MouseLeft, down);
+            if (event->button == 0) {
+                state.SetKeyDown(kb::input::InputKey::MouseLeft, down);
+                if (down) {
+                    const kb::scene::SceneEntity target = scene->UI().HitTest({x, y});
+                    if (target.IsValid() &&
+                        scene->Components().UI().Has<kb::scene::UIInputField>(target)) {
+                        host->SetTextInputActive(true);
+                    }
+                }
+            }
             if (event->button == 1) state.SetKeyDown(kb::input::InputKey::MouseMiddle, down);
             if (event->button == 2) state.SetKeyDown(kb::input::InputKey::MouseRight, down);
         }
@@ -313,9 +443,24 @@ private:
         if (scene == nullptr) return EM_FALSE;
         auto& state = scene->Input().MutableDeviceState();
         const bool focused = eventType == EMSCRIPTEN_EVENT_FOCUS;
-        if (!focused) state.Reset();
+        if (!focused) {
+            state.Reset();
+            host->SetTextInputActive(false);
+        }
         state.SetHasFocus(focused);
         return EM_FALSE;
+    }
+
+    void SetTextInputActive(bool active) noexcept {
+        if (textInputActive_ == active) return;
+        textInputActive_ = active;
+        SetBrowserTextInputActive(active ? 1 : 0);
+    }
+
+    [[nodiscard]] bool AppendCommittedText(char32_t codePoint) noexcept {
+        kb::scene::Scene* scene = runtime_.Scene();
+        return textInputActive_ && scene != nullptr &&
+            scene->Input().MutableDeviceState().AddTextInput(codePoint);
     }
 
     void Fail(const char* code, std::string_view message) {
@@ -325,6 +470,8 @@ private:
     }
 
     void Shutdown() noexcept {
+        SetTextInputActive(false);
+        DestroyBrowserTextInput();
         static_cast<void>(runtime_.Shutdown(renderer_, std::cerr));
         if (renderer_.IsInitialized()) renderer_.Shutdown();
         if (pack_ != nullptr) pack_->Unmount();
@@ -343,11 +490,22 @@ private:
     std::chrono::steady_clock::time_point previousTick_{};
     bool firstFrameReported_ = false;
     bool frameInProgress_ = false;
+    bool textInputActive_ = false;
+
+    friend int ::kb_web_append_committed_text(void* host, std::uint32_t codePoint) noexcept;
 };
 
 std::unique_ptr<WebGameHost> g_host;
 
 } // namespace
+
+extern "C" EMSCRIPTEN_KEEPALIVE int kb_web_append_committed_text(
+    void* host, std::uint32_t codePoint) noexcept {
+    auto* gameHost = static_cast<WebGameHost*>(host);
+    return gameHost != nullptr && gameHost->AppendCommittedText(static_cast<char32_t>(codePoint))
+        ? 1
+        : 0;
+}
 
 int main() {
     EM_ASM({ location.hash = 'kb-starting'; });

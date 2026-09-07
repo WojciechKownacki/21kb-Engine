@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/input/InputKey.hpp"
+#include "engine/input/InputText.hpp"
 #include "engine/input/InputTouchPoint.hpp"
 
 #include <algorithm>
@@ -35,6 +36,7 @@ public:
     // per WM_TOUCH message on typical hardware); enough for real multi-touch
     // gestures without an unbounded allocation.
     static constexpr std::size_t kMaxTouchPoints = 10U;
+    static constexpr std::size_t kMaxTextInputCodePoints = 64U;
 
     void Reset() noexcept {
         digital_.fill(false);
@@ -46,6 +48,7 @@ public:
             slot.fill(0.0F);
         }
         touchPointCount_ = 0U;
+        textInputCount_ = 0U;
     }
 
     // gamepadIndex is ignored for non-gamepad keys (keyboard/mouse/touch are
@@ -117,6 +120,35 @@ public:
         return std::span<const InputTouchPoint>{touchPoints_.data(), touchPointCount_};
     }
 
+    [[nodiscard]] bool AddTextInput(char32_t codePoint) noexcept {
+        if (!IsUnicodeScalar(codePoint) || textInputCount_ >= textInput_.size()) {
+            return false;
+        }
+        textInput_[textInputCount_++] = codePoint;
+        return true;
+    }
+
+    [[nodiscard]] std::size_t AddTextInput(
+        std::span<const char32_t> codePoints) noexcept {
+        const std::size_t before = textInputCount_;
+        for (const char32_t codePoint : codePoints) {
+            static_cast<void>(AddTextInput(codePoint));
+        }
+        return textInputCount_ - before;
+    }
+
+    [[nodiscard]] std::size_t SetTextInput(
+        std::span<const char32_t> codePoints) noexcept {
+        textInputCount_ = 0U;
+        return AddTextInput(codePoints);
+    }
+
+    void ClearTextInput() noexcept { textInputCount_ = 0U; }
+
+    [[nodiscard]] std::span<const char32_t> TextInput() const noexcept {
+        return {textInput_.data(), textInputCount_};
+    }
+
     // Absolute pointer position (LIB-117), in active render-viewport pixels
     // after the platform host's window/viewport mapping - NOT reset by Reset(),
     // so it keeps its last known value across the
@@ -134,6 +166,20 @@ public:
 
     [[nodiscard]] float PointerY() const noexcept {
         return pointerY_;
+    }
+
+    void SetPointerViewportExtent(
+        std::uint32_t width, std::uint32_t height) noexcept {
+        pointerViewportWidth_ = width;
+        pointerViewportHeight_ = height;
+    }
+
+    [[nodiscard]] std::uint32_t PointerViewportWidth() const noexcept {
+        return pointerViewportWidth_;
+    }
+
+    [[nodiscard]] std::uint32_t PointerViewportHeight() const noexcept {
+        return pointerViewportHeight_;
     }
 
     // LIB-120: whether the host window currently has input focus (foreground,
@@ -203,9 +249,13 @@ private:
 
     std::array<InputTouchPoint, kMaxTouchPoints> touchPoints_{};
     std::size_t touchPointCount_ = 0U;
+    std::array<char32_t, kMaxTextInputCodePoints> textInput_{};
+    std::size_t textInputCount_ = 0U;
 
     float pointerX_ = 0.0F;
     float pointerY_ = 0.0F;
+    std::uint32_t pointerViewportWidth_ = 0U;
+    std::uint32_t pointerViewportHeight_ = 0U;
 
     bool hasFocus_ = false;
     std::array<bool, kMaxGamepads> gamepadConnected_{};

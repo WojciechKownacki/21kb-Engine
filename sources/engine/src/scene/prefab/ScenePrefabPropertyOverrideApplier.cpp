@@ -1,4 +1,5 @@
 #include "scene/prefab/ScenePrefabPropertyOverrideApplier.hpp"
+#include "scene/ui/SceneUIComponentTextCodec.hpp"
 
 #include <cmath>
 
@@ -74,6 +75,7 @@ template <typename T>
 } // namespace
 
 bool ScenePrefabPropertyOverrideApplier::Apply(ScenePrefabNodeDesc& node, const ScenePrefabPropertyOverride& property) {
+    if (property.propertyPath == "ui") return SceneUIComponentTextCodec::Decode(property.value, node.components.ui);
     if (property.propertyPath == "name") {
         node.name = property.value;
         return true;

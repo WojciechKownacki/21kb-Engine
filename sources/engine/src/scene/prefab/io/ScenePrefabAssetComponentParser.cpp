@@ -5,11 +5,17 @@
 #include "scene/prefab/io/ScenePrefabAssetLightParser.hpp"
 #include "scene/prefab/io/ScenePrefabAssetMeshRendererParser.hpp"
 #include "scene/prefab/io/ScenePrefabAssetTagsParser.hpp"
+#include "scene/ui/SceneUIComponentTextCodec.hpp"
 
 #include <cmath>
 
 namespace kb::scene {
 namespace {
+
+[[nodiscard]] bool ParseUI(const ScenePrefabAssetFieldMap& fields, UIComponentSet& output) {
+    const auto found = fields.find("ui");
+    return found == fields.end() || SceneUIComponentTextCodec::Decode(found->second, output);
+}
 
 template <typename T>
 [[nodiscard]] bool ParseField(const ScenePrefabAssetFieldMap& fields, std::string_view key, T& output) {
@@ -654,6 +660,7 @@ template <typename T>
 } // namespace
 
 bool ScenePrefabAssetComponentParser::Parse(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    if (!ParseUI(fields, components.ui)) return false;
     return ScenePrefabAssetCameraParser::Parse(fields, components)
         && ScenePrefabAssetMeshRendererParser::Parse(fields, components)
         && ScenePrefabAssetLightParser::Parse(fields, components)

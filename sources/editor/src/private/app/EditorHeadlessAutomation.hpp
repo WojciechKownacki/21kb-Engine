@@ -3,6 +3,7 @@
 #include "engine/assets/AssetId.hpp"
 #include "engine/input/InputKey.hpp"
 #include "engine/input/InputTouchPoint.hpp"
+#include "engine/ui/UIComponentPropertyCatalog.hpp"
 #include "inspection/InspectorPhysicsModel.hpp"
 
 #include <cstddef>
@@ -110,6 +111,10 @@ public:
     [[nodiscard]] bool AddComponent(std::string_view componentId);
     [[nodiscard]] bool SetPhysicsFloat(
         PhysicsComponentKind component, int fieldIndex, float value);
+    [[nodiscard]] bool SetUIComponentProperty(
+        kb::scene::UIComponentType component,
+        std::string_view property,
+        const kb::scene::UIComponentPropertyValue& value);
     [[nodiscard]] bool SetGameplayKey(
         kb::input::InputKey key, bool down,
         std::uint8_t gamepadIndex = 0U);

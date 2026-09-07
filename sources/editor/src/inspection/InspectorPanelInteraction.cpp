@@ -37,6 +37,7 @@
 #include "inspection/InspectorAudioScrubController.hpp"
 #include "inspection/InspectorInputInteraction.hpp"
 #include "inspection/InspectorPhysicsModel.hpp"
+#include "inspection/ui/InspectorUIComponentModel.hpp"
 #include "rendering/InspectorAudioMixerAssetView.hpp"
 #include "kb/render/resources/RenderMaterialNumericParsing.hpp"
 #include "scene/transform_edit/EditorTransformProperty.hpp"
@@ -2990,7 +2991,11 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
     if (hit.kind == InspectorHitKind::ComponentMenuButton) {
         sceneContext.Inspector().EndTextEdit();
         if (hit.property == InspectorPropertyId::ComponentRemove && sceneContext.Scene().Entities().IsAlive(entity)) {
-            if (hit.section == InspectorSectionId::Script) {
+            if (const std::optional<kb::scene::UIComponentType> component =
+                    InspectorUIComponentModel::Component(hit.section);
+                component.has_value()) {
+                static_cast<void>(sceneContext.RemoveUIComponentFromEntity(entity, *component));
+            } else if (hit.section == InspectorSectionId::Script) {
                 static_cast<void>(sceneContext.RemoveScriptFromEntity(entity));
             } else if (hit.section == InspectorSectionId::Terrain) {
                 EditorTerrainToolState& tool = EditorTerrainService::ToolState();
@@ -3175,6 +3180,26 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
             sceneContext.SceneDocumentGeneration());
     }
     if (!sceneContext.Scene().Entities().IsAlive(entity)) {
+        return true;
+    }
+
+    if (const std::optional<kb::scene::UIComponentType> component =
+            InspectorUIComponentModel::Component(hit.section);
+        component.has_value()) {
+        const std::vector<InspectorUIPropertyRow> rows =
+            InspectorUIComponentModel::Properties(sceneContext.Scene(), entity, *component);
+        if (hit.index < 0 || static_cast<std::size_t>(hit.index) >= rows.size()) return true;
+        const InspectorUIPropertyRow& row = rows[static_cast<std::size_t>(hit.index)];
+        if (!row.writable) return true;
+        if (hit.kind == InspectorHitKind::BoolField) {
+            static_cast<void>(sceneContext.SetUIComponentProperty(
+                entity, *component, row.name,
+                kb::scene::UIComponentPropertyValue{ !row.boolValue }));
+        } else if (hit.kind == InspectorHitKind::TextField ||
+            hit.kind == InspectorHitKind::FloatField) {
+            sceneContext.Inspector().BeginTextEdit(hit.property, row.value);
+            sceneContext.Inspector().SetEditIndex(hit.index);
+        }
         return true;
     }
 
@@ -3562,6 +3587,27 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
                 const EditorSceneContext::EntityScriptVariable& variable = variables[static_cast<std::size_t>(index)];
                 if (const std::optional<kb::script::ScriptValue> parsed = ParseScriptVariableEditText(inspector.EditBuffer(), variable); parsed.has_value()) {
                     static_cast<void>(sceneContext.SetEntityScriptVariable(variableEntity, variable.name, *parsed));
+                }
+            }
+            inspector.EndTextEdit();
+            return true;
+        }
+        if (const std::optional<kb::scene::UIComponentType> component =
+                InspectorUIComponentModel::Component(inspector.EditedProperty());
+            component.has_value()) {
+            const kb::scene::SceneEntity entity = sceneContext.SelectedEntity();
+            const std::vector<InspectorUIPropertyRow> rows =
+                InspectorUIComponentModel::Properties(sceneContext.Scene(), entity, *component);
+            const int index = inspector.EditIndex();
+            if (sceneContext.Scene().Entities().IsAlive(entity) && index >= 0 &&
+                static_cast<std::size_t>(index) < rows.size()) {
+                const InspectorUIPropertyRow& row = rows[static_cast<std::size_t>(index)];
+                if (row.writable) {
+                    if (const auto value = InspectorUIComponentModel::Parse(
+                            row.type, inspector.EditBuffer())) {
+                        static_cast<void>(sceneContext.SetUIComponentProperty(
+                            entity, *component, row.name, *value));
+                    }
                 }
             }
             inspector.EndTextEdit();

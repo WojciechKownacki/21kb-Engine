@@ -60,6 +60,8 @@
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneVisibilityResolution.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
+#include "engine/scene/SceneUIComponentSet.hpp"
+#include "engine/ui/UIComponentPropertyCatalog.hpp"
 #include "engine/script/ScriptAgentProjectFiles.hpp"
 #include "engine/script/ScriptApiCatalog.hpp"
 #include "engine/script/PucLuaScriptRuntime.hpp"
@@ -422,6 +424,13 @@ void WriteLittleEndian32(std::ostream& output, std::uint32_t value) {
     if (component == "TerrainEditor") {
         return EditorTerrainService::IsTerrainEntity(scene, entity);
     }
+    if (const kb::scene::UIComponentDescriptor* descriptor =
+            kb::scene::FindUIComponentDescriptor(component);
+        descriptor != nullptr) {
+        return kb::scene::HasUIComponent(
+            kb::scene::CaptureSceneUIComponents(scene.Components().UI(), entity),
+            descriptor->type);
+    }
     return kb::script::ScriptSceneComponentApi::HasComponent(
         scene, entity, component);
 }
@@ -451,6 +460,76 @@ FindProperty(
         if (candidate.name == property) return &candidate;
     }
     return nullptr;
+}
+
+[[nodiscard]] std::optional<kb::scene::UIComponentPropertyValue>
+ReadUIPropertyValue(const JsonValue& value,
+    kb::scene::UIComponentPropertyType type, const ScenarioState& state,
+    std::string& error) {
+    switch (type) {
+    case kb::scene::UIComponentPropertyType::Bool:
+        if (value.GetKind() == JsonValue::Kind::Bool)
+            return kb::scene::UIComponentPropertyValue{ value.AsBool() };
+        break;
+    case kb::scene::UIComponentPropertyType::Int:
+        if (value.GetKind() == JsonValue::Kind::Number &&
+            std::isfinite(value.AsNumber()) && std::floor(value.AsNumber()) == value.AsNumber() &&
+            value.AsNumber() >= static_cast<double>(std::numeric_limits<std::int32_t>::min()) &&
+            value.AsNumber() <= static_cast<double>(std::numeric_limits<std::int32_t>::max())) {
+            return kb::scene::UIComponentPropertyValue{
+                static_cast<std::int32_t>(value.AsNumber()) };
+        }
+        break;
+    case kb::scene::UIComponentPropertyType::UInt32:
+        if (value.GetKind() == JsonValue::Kind::Number &&
+            std::isfinite(value.AsNumber()) && std::floor(value.AsNumber()) == value.AsNumber() &&
+            value.AsNumber() >= 0.0 &&
+            value.AsNumber() <= static_cast<double>(std::numeric_limits<std::uint32_t>::max())) {
+            return kb::scene::UIComponentPropertyValue{
+                static_cast<std::uint32_t>(value.AsNumber()) };
+        }
+        break;
+    case kb::scene::UIComponentPropertyType::Float:
+        if (value.GetKind() == JsonValue::Kind::Number &&
+            std::isfinite(value.AsNumber()) &&
+            value.AsNumber() >= -static_cast<double>(std::numeric_limits<float>::max()) &&
+            value.AsNumber() <= static_cast<double>(std::numeric_limits<float>::max())) {
+            return kb::scene::UIComponentPropertyValue{
+                static_cast<float>(value.AsNumber()) };
+        }
+        break;
+    case kb::scene::UIComponentPropertyType::String:
+        if (value.GetKind() == JsonValue::Kind::String)
+            return kb::scene::UIComponentPropertyValue{ value.AsString() };
+        break;
+    case kb::scene::UIComponentPropertyType::Entity:
+        if (value.GetKind() == JsonValue::Kind::String) {
+            const kb::scene::SceneEntity entity = ResolveEntity(state, value.AsString());
+            if (entity.IsValid()) return kb::scene::UIComponentPropertyValue{ entity.Id() };
+        }
+        break;
+    case kb::scene::UIComponentPropertyType::Asset:
+        if (value.GetKind() == JsonValue::Kind::String) {
+            const kb::assets::AssetId asset = ResolveAsset(state, value.AsString());
+            if (asset.IsValid()) return kb::scene::UIComponentPropertyValue{ asset.value };
+        }
+        if (value.GetKind() == JsonValue::Kind::Number && value.AsNumber() == 0.0)
+            return kb::scene::UIComponentPropertyValue{ std::uint64_t{ 0U } };
+        break;
+    }
+    error = "value does not match UI component property type";
+    return std::nullopt;
+}
+
+[[nodiscard]] bool UIPropertyValuesEqual(
+    const kb::scene::UIComponentPropertyValue& lhs,
+    const kb::scene::UIComponentPropertyValue& rhs, double tolerance) {
+    if (lhs.index() != rhs.index()) return false;
+    if (const float* left = std::get_if<float>(&lhs)) {
+        return std::abs(static_cast<double>(*left) -
+                   static_cast<double>(std::get<float>(rhs))) <= tolerance;
+    }
+    return lhs == rhs;
 }
 
 [[nodiscard]] std::optional<kb::script::ScriptValue>
@@ -2135,6 +2214,7 @@ ReadScriptValue(
     }
 
     if (*operation == "set_property" ||
+        *operation == "set_property_rejected" ||
         *operation == "assert_property") {
         const auto alias = StringMember(step, "entity", error);
         const auto component =
@@ -2151,6 +2231,39 @@ ReadScriptValue(
         if (!state.context.Scene().Entities().IsAlive(entity)) {
             return { false, "entity alias is not alive" };
         }
+        if (const kb::scene::UIComponentDescriptor* componentDescriptor =
+                kb::scene::FindUIComponentDescriptor(*component);
+            componentDescriptor != nullptr) {
+            const kb::scene::UIComponentPropertyDescriptor* propertyDescriptor =
+                kb::scene::FindUIComponentProperty(componentDescriptor->type, *property);
+            if (propertyDescriptor == nullptr) {
+                return { false, "UI component property is not registered" };
+            }
+            const auto expected = ReadUIPropertyValue(
+                *jsonValue, propertyDescriptor->type, state, error);
+            if (!expected.has_value()) return { false, error };
+            if (*operation == "set_property" || *operation == "set_property_rejected") {
+                state.context.SelectEntity(entity);
+                const bool applied = state.automation.SetUIComponentProperty(
+                    componentDescriptor->type, *property, *expected);
+                const bool expectedRejection = *operation == "set_property_rejected";
+                return {
+                    expectedRejection ? !applied : applied,
+                    expectedRejection ? *component + "." + *property + " rejected"
+                                      : *component + "." + *property };
+            }
+            const kb::scene::UIComponentSet values =
+                kb::scene::CaptureSceneUIComponents(
+                    state.context.Scene().Components().UI(), entity);
+            kb::scene::UIComponentPropertyValue actual;
+            const double tolerance = NumberMember(
+                step, "tolerance", error, false).value_or(0.0001);
+            const bool matched = kb::scene::ReadUIComponentProperty(
+                                     values, componentDescriptor->type,
+                                     *property, actual) &&
+                UIPropertyValuesEqual(actual, *expected, tolerance);
+            return { matched, matched ? "UI property matches" : "UI property mismatch" };
+        }
         const auto* descriptor =
             FindProperty(*component, *property);
         if (descriptor == nullptr) {
@@ -2159,7 +2272,7 @@ ReadScriptValue(
         const auto value = ReadScriptValue(
             *jsonValue, descriptor->type, state, error);
         if (!value.has_value()) return { false, error };
-        if (*operation == "set_property") {
+        if (*operation == "set_property" || *operation == "set_property_rejected") {
             const auto mutation =
                 kb::script::ScriptSceneComponentApi::SetProperty(
                     state.context.Scene(), entity, *component,
@@ -2168,10 +2281,10 @@ ReadScriptValue(
                 state.context.MarkSceneDocumentDirty();
                 state.context.MarkSceneRenderDirty();
             }
+            const bool expectedRejection = *operation == "set_property_rejected";
             return {
-                mutation.succeeded,
-                mutation.succeeded ? ScriptValueText(*value)
-                                   : mutation.error };
+                expectedRejection ? !mutation.succeeded : mutation.succeeded,
+                mutation.succeeded ? ScriptValueText(*value) : mutation.error };
         }
         const auto actual =
             kb::script::ScriptSceneComponentApi::GetProperty(

@@ -8,6 +8,7 @@ void RunAssetPackTests();
 void RunSaveGameTests();
 void RunEcsRuntimeTests();
 void RunSceneHierarchyTests();
+void RunSceneUITests();
 void RunSceneSystemTests();
 void RunScenePrefabTests();
 void RunProjectSceneTests();

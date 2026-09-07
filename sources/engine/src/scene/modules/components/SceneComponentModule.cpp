@@ -103,6 +103,10 @@ SceneComponentVisitors SceneComponentQueries::Visitors() const noexcept {
     return SceneComponentVisitors{ scene_ };
 }
 
+SceneUIComponentQueries SceneComponentQueries::UI() const noexcept {
+    return SceneUIComponentQueries{ scene_ };
+}
+
 SceneVisibilityComponents SceneComponents::Visibility() const noexcept {
     return SceneVisibilityComponents{ scene_ };
 }
@@ -195,6 +199,10 @@ SceneNavObstacleComponents SceneComponents::NavObstacles() const noexcept { retu
 
 SceneComponentVisitors SceneComponents::Visitors() const noexcept {
     return SceneComponentVisitors{ scene_ };
+}
+
+SceneUIComponents SceneComponents::UI() const noexcept {
+    return SceneUIComponents{ scene_ };
 }
 
 } // namespace kb::scene

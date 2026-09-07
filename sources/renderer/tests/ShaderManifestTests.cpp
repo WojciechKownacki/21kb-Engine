@@ -62,6 +62,7 @@ void ShaderManifestDeclaresRuntimePrograms() {
     bool foundEditorGrid = false;
     bool foundSkinned = false;
     bool foundSkinnedMotion = false;
+    bool foundScreenUI = false;
     for (const ShaderProgramManifestEntry& program : programs) {
         Require(std::string_view{program.name}.size() > 0U, "Shader program manifest contains an empty program name");
         foundSceneMesh = foundSceneMesh || std::string_view{program.name} == "scene_mesh_instanced";
@@ -70,6 +71,7 @@ void ShaderManifestDeclaresRuntimePrograms() {
         foundSkinned = foundSkinned || std::string_view{program.name} == "scene_mesh_skinned";
         foundSkinnedMotion = foundSkinnedMotion ||
             std::string_view{program.name} == "scene_mesh_skinned_motion_vectors";
+        foundScreenUI = foundScreenUI || std::string_view{program.name} == "screen_ui";
         Require(std::string_view{program.vertexShader}.starts_with("vs_"), "Shader program manifest has an invalid vertex shader name");
         Require(std::string_view{program.fragmentShader}.starts_with("fs_"), "Shader program manifest has an invalid fragment shader name");
     }
@@ -78,6 +80,7 @@ void ShaderManifestDeclaresRuntimePrograms() {
     Require(foundEditorGrid, "Shader program manifest is missing editor grid program");
     Require(foundSkinned && foundSkinnedMotion,
         "Shader program manifest is missing required skinned runtime programs");
+    Require(foundScreenUI, "Shader program manifest is missing screen UI program");
 }
 
 void PackagedShaderManifestRequiresEveryRequiredProgramStage() {
@@ -93,6 +96,8 @@ void PackagedShaderManifestRequiresEveryRequiredProgramStage() {
         "Packaged shader closure omitted a stage referenced by a required skinned/motion program");
     Require(!contains("fs_editor_grid.sc"),
         "Packaged game shader closure included an unselected editor-only program");
+    Require(contains("vs_screen_ui.sc") && contains("fs_screen_ui.sc"),
+        "Packaged shader closure omitted the screen UI program");
 
     const auto manifestEntry = [](std::string_view name) -> const ShaderManifestEntry* {
         const auto found = std::ranges::find_if(
