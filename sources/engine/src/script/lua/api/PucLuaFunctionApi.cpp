@@ -2928,7 +2928,7 @@ int LuaUIFind(lua_State* state) {
     return 1;
 }
 
-enum class LuaUIValueKind : std::uint8_t { String, Hash, Bool, Float };
+enum class LuaUIValueKind : std::uint8_t { String, Hash, Bool, Float, UInt32 };
 
 int LuaUISetValue(lua_State* state, const char* function, const char* field, LuaUIValueKind kind) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
@@ -2953,6 +2953,14 @@ int LuaUISetValue(lua_State* state, const char* function, const char* field, Lua
     case LuaUIValueKind::Float:
         arguments.push_back(Arg(field, ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }));
         break;
+    case LuaUIValueKind::UInt32: {
+        const lua_Integer value = luaL_checkinteger(state, 2);
+        if (value < 0 || static_cast<std::uint64_t>(value) > std::numeric_limits<std::uint32_t>::max()) {
+            return luaL_error(state, "UI value must be an unsigned 32-bit integer");
+        }
+        arguments.push_back(Arg(field, ScriptValue{ static_cast<std::uint32_t>(value) }));
+        break;
+    }
     }
     if (lua_gettop(state) >= 3 && lua_istable(state, 3) != 0) {
         std::vector<ScriptFunctionArgument> options = ArgumentsFromTable(state, 3);
@@ -2968,6 +2976,7 @@ int LuaUISetText(lua_State* state) { return LuaUISetValue(state, "UI.SetText", "
 int LuaUISetImage(lua_State* state) { return LuaUISetValue(state, "UI.SetImage", "image", LuaUIValueKind::Hash); }
 int LuaUISetToggle(lua_State* state) { return LuaUISetValue(state, "UI.SetToggle", "value", LuaUIValueKind::Bool); }
 int LuaUISetSlider(lua_State* state) { return LuaUISetValue(state, "UI.SetSlider", "value", LuaUIValueKind::Float); }
+int LuaUISetSelected(lua_State* state) { return LuaUISetValue(state, "UI.SetSelected", "index", LuaUIValueKind::UInt32); }
 int LuaUIListAppend(lua_State* state) { return LuaUISetValue(state, "UI.ListAppend", "item", LuaUIValueKind::String); }
 int LuaUIListClear(lua_State* state) { return LuaUIApplied(state, "UI.ListClear"); }
 int LuaUIConfigureList(lua_State* state) {
@@ -3015,6 +3024,14 @@ int LuaUIListScrollTo(lua_State* state) {
 }
 int LuaUISetScrollOffset(lua_State* state) { return LuaUISetValue(state, "UI.SetScrollOffset", "offset", LuaUIValueKind::Float); }
 int LuaUISetModalOpen(lua_State* state) { return LuaUISetValue(state, "UI.SetModalOpen", "open", LuaUIValueKind::Bool); }
+int LuaUISetRect(lua_State* state) { return LuaUIApplied(state, "UI.SetRect"); }
+int LuaUISetCanvas(lua_State* state) { return LuaUIApplied(state, "UI.SetCanvas"); }
+int LuaUISetLayout(lua_State* state) { return LuaUIApplied(state, "UI.SetLayout"); }
+int LuaUISetPaint(lua_State* state) { return LuaUIApplied(state, "UI.SetPaint"); }
+int LuaUISetImageStyle(lua_State* state) { return LuaUIApplied(state, "UI.SetImageStyle"); }
+int LuaUISetTextStyle(lua_State* state) { return LuaUIApplied(state, "UI.SetTextStyle"); }
+int LuaUISetInteraction(lua_State* state) { return LuaUIApplied(state, "UI.SetInteraction"); }
+int LuaUISetEffects(lua_State* state) { return LuaUIApplied(state, "UI.SetEffects"); }
 
 int LuaUIEmitPosition(lua_State* state, const char* function) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
@@ -3135,7 +3152,7 @@ void SetClosure(lua_State* state, const char* name, lua_CFunction function, Scri
 // marshalling.  Their position follows ScriptApiCatalog::LuaBindingDefinitions
 // excluding Task and global bindings; table and Lua field names deliberately
 // live only in that catalog.
-constexpr std::array<lua_CFunction, 188> kCatalogBindingAdapters{ {
+constexpr std::array<lua_CFunction, 197> kCatalogBindingAdapters{ {
     &LuaAudioPlay,
     &LuaAudioSetMixer,
     &LuaAudioActiveMixer,
@@ -3302,12 +3319,21 @@ constexpr std::array<lua_CFunction, 188> kCatalogBindingAdapters{ {
     &LuaUISetImage,
     &LuaUISetToggle,
     &LuaUISetSlider,
+    &LuaUISetSelected,
     &LuaUIListAppend,
     &LuaUIListClear,
     &LuaUIConfigureList,
     &LuaUIListScrollTo,
     &LuaUISetScrollOffset,
     &LuaUISetModalOpen,
+    &LuaUISetRect,
+    &LuaUISetCanvas,
+    &LuaUISetLayout,
+    &LuaUISetPaint,
+    &LuaUISetImageStyle,
+    &LuaUISetTextStyle,
+    &LuaUISetInteraction,
+    &LuaUISetEffects,
     &LuaUIEmitClick,
     &LuaUIEmitPointer,
     &LuaUIEmitSubmit,

@@ -3208,8 +3208,9 @@ void RunEngineLibraryEventSchemaRegistryTest() {
     kb::tests::Require(
         uiSubmit != nullptr && uiSubmit->arguments.size() == 3U && uiSubmit->arguments[2].name == "text" &&
             uiSubmit->arguments[2].type == kb::script::ScriptValueType::String &&
-            uiChanged != nullptr && uiChanged->arguments.size() == 3U && uiChanged->arguments[2].name == "value" &&
+            uiChanged != nullptr && uiChanged->arguments.size() == 4U && uiChanged->arguments[2].name == "value" &&
             uiChanged->arguments[2].type == kb::script::ScriptValueType::Float &&
+            uiChanged->arguments[3].name == "text" && uiChanged->arguments[3].type == kb::script::ScriptValueType::String &&
             uiFocus != nullptr && uiFocus->arguments.size() == 3U && uiFocus->arguments[2].name == "focused" &&
             uiFocus->arguments[2].type == kb::script::ScriptValueType::Bool &&
             uiNavigation != nullptr && uiNavigation->arguments.size() == 3U && uiNavigation->arguments[2].name == "direction" &&

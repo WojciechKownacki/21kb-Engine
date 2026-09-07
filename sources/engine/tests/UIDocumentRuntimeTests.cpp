@@ -1,5 +1,6 @@
 #include "TestSupport.hpp"
 
+#include "engine/assets/AssetRegistry.hpp"
 #include "engine/input/InputKey.hpp"
 #include "engine/input/InputSubsystem.hpp"
 #include "engine/scene/Scene.hpp"
@@ -11,6 +12,7 @@
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneUIDocuments.hpp"
 #include "engine/scene/UIAssetIO.hpp"
+#include "engine/scene/UIAssetLoaders.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 
 #include <array>
@@ -42,8 +44,10 @@ void RunUIDocumentRuntimeTests() {
     const kb::scene::UIDocument document{
         .styleAssetId = styleAssetId.value,
         .elements = {
-            { .id = 1U, .parentId = 0U, .name = "HUD", .styleClass = "hud", .visible = true },
+            { .id = 1U, .parentId = 0U, .name = "HUD", .styleClass = "hud", .visible = true,
+              .canvas = kb::scene::UICanvas{}, .control = { .kind = kb::scene::UIControlKind::Canvas } },
             { .id = 2U, .parentId = 1U, .name = "Score", .styleClass = "label", .visible = true,
+              .textStyle = kb::scene::UIText{},
               .control = { .kind = kb::scene::UIControlKind::Text, .text = "Score: 0" } },
         },
         .bindings = {
@@ -53,6 +57,162 @@ void RunUIDocumentRuntimeTests() {
         },
     };
     Require(kb::scene::UIAssetIO::SaveDocument(documentPath, document), "UIDocument production asset could not be saved");
+
+    const std::string v1Text =
+        "schema 1\n"
+        "style 0\n"
+        "element 1 0 \"LegacyRoot\" \"\" true\n"
+        "control 1 Container \"\" 0 false 0 0 1 0 false 0\n"
+        "element 2 1 \"LegacyLabel\" \"\" true\n"
+        "control 2 Text \"Legacy\" 0 false 0 0 1 0 false 0\n"
+        "element 3 1 \"LegacyImage\" \"\" true\n"
+        "control 3 Image \"\" 17 false 0 0 1 0 false 0\n";
+    const auto migrated = kb::scene::UIAssetIO::LoadDocument(std::span<const std::uint8_t>{
+        reinterpret_cast<const std::uint8_t*>(v1Text.data()), v1Text.size() });
+    Require(migrated.has_value() && migrated->schemaVersion == kb::scene::UIDocument::kSchemaVersion &&
+            migrated->elements.size() == 3U && migrated->elements[0U].control.kind == kb::scene::UIControlKind::Canvas &&
+            migrated->elements[0U].canvas.has_value() && migrated->elements[1U].siblingOrder == 0U &&
+            migrated->elements[2U].siblingOrder == 1U && migrated->elements[1U].textStyle.has_value() &&
+            migrated->elements[2U].image.has_value() && migrated->elements[2U].image->imageAssetId == 17U,
+        "Schema 1 UI document was not migrated into the canonical schema 2 component model");
+
+    const std::filesystem::path componentDocumentPath = root / "ComponentModel.kbui";
+    const std::filesystem::path componentRoundTripPath = root / "ComponentModelRoundTrip.kbui";
+    constexpr std::uint64_t imageAssetId = 7001U;
+    constexpr std::uint64_t fontAssetId = 7002U;
+    const kb::scene::UIDocument componentDocument{
+        .styleAssetId = styleAssetId.value,
+        .elements = {
+            { .id = 10U, .parentId = 0U, .siblingOrder = 0U, .name = "Canvas", .visible = true,
+              .rect = { .anchorMin = { 0.0F, 0.0F }, .anchorMax = { 1.0F, 1.0F }, .offsetMin = {}, .offsetMax = {},
+                  .pivot = { 0.5F, 0.5F }, .scale = { 1.0F, 1.0F }, .rotationDegrees = 0.0F, .zOrder = -2 },
+              .canvas = kb::scene::UICanvas{ .scaleMode = kb::scene::UICanvasScaleMode::ScaleWithScreenSize,
+                  .referenceResolution = { 2560.0F, 1440.0F }, .scaleFactor = 1.25F, .matchWidthOrHeight = 0.6F },
+              .layout = kb::scene::UIContainerLayout{ .mode = kb::scene::UIContainerLayoutMode::Vertical,
+                  .padding = { 8.0F, 9.0F, 10.0F, 11.0F }, .spacing = { 3.0F, 4.0F },
+                  .horizontalAlignment = kb::scene::UIAlignment::Stretch,
+                  .verticalAlignment = kb::scene::UIAlignment::Center, .cellSize = { 120.0F, 36.0F }, .columns = 2U },
+              .control = { .kind = kb::scene::UIControlKind::Canvas } },
+            { .id = 11U, .parentId = 10U, .siblingOrder = 0U, .name = "Portrait", .visible = true,
+              .rect = { .anchorMin = { 0.1F, 0.2F }, .anchorMax = { 0.3F, 0.5F }, .offsetMin = { 1.0F, 2.0F },
+                  .offsetMax = { 101.0F, 202.0F }, .pivot = { 0.25F, 0.75F }, .scale = { 1.5F, 0.75F },
+                  .rotationDegrees = 12.0F, .zOrder = 3 },
+              .paint = kb::scene::UIPaint{ .backgroundColor = { 0.1F, 0.2F, 0.3F, 0.4F },
+                  .borderColor = { 0.5F, 0.6F, 0.7F, 0.8F }, .borderWidth = { 1.0F, 2.0F, 3.0F, 4.0F },
+                  .cornerRadius = { 5.0F, 6.0F, 7.0F, 8.0F }, .opacity = 0.9F },
+              .image = kb::scene::UIImage{ .imageAssetId = imageAssetId, .uvRect = { 0.1F, 0.2F, 0.7F, 0.6F },
+                  .scaleMode = kb::scene::UIImageScaleMode::Contain, .preserveAspect = true,
+                  .nineSlice = { 2.0F, 3.0F, 4.0F, 5.0F } },
+              .effects = kb::scene::UIEffects{ .clipChildren = true, .mask = true, .shadowEnabled = true,
+                  .shadowOffset = { 4.0F, 5.0F }, .shadowColor = { 0.1F, 0.1F, 0.1F, 0.1F }, .shadowBlur = 6.0F,
+                  .outlineEnabled = true, .outlineColor = { 0.9F, 0.8F, 0.7F, 1.0F }, .outlineWidth = 2.0F,
+                  .backgroundBlur = 8.0F },
+              .control = { .kind = kb::scene::UIControlKind::Image } },
+            { .id = 12U, .parentId = 10U, .siblingOrder = 1U, .name = "Caption", .visible = true,
+              .textStyle = kb::scene::UIText{ .fontAssetId = fontAssetId, .fontSize = 28.0F,
+                  .color = { 0.8F, 0.7F, 0.6F, 1.0F },
+                  .horizontalAlignment = kb::scene::UITextHorizontalAlignment::Center,
+                  .verticalAlignment = kb::scene::UITextVerticalAlignment::Bottom,
+                  .wrapMode = kb::scene::UITextWrapMode::Character },
+              .interaction = kb::scene::UIInteraction{ .raycastTarget = true, .interactable = true,
+                  .navigationMode = kb::scene::UINavigationMode::Explicit, .navigationLeft = 11U,
+                  .eventName = "Caption.Activate" },
+              .control = { .kind = kb::scene::UIControlKind::Text, .text = "Ready" } },
+            { .id = 13U, .parentId = 10U, .siblingOrder = 2U, .name = "Actions", .visible = true,
+              .layout = kb::scene::UIContainerLayout{ .mode = kb::scene::UIContainerLayoutMode::Horizontal },
+              .control = { .kind = kb::scene::UIControlKind::HorizontalBox } },
+            { .id = 14U, .parentId = 13U, .siblingOrder = 0U, .name = "Continue", .visible = true,
+              .textStyle = kb::scene::UIText{ .fontAssetId = fontAssetId },
+              .interaction = kb::scene::UIInteraction{ .eventName = "Menu.Continue" },
+              .control = { .kind = kb::scene::UIControlKind::Button, .text = "Continue" } },
+            { .id = 15U, .parentId = 13U, .siblingOrder = 1U, .name = "Quality", .visible = true,
+              .textStyle = kb::scene::UIText{}, .interaction = kb::scene::UIInteraction{},
+              .control = { .kind = kb::scene::UIControlKind::Dropdown,
+                  .listItems = { "Low", "High" }, .selectedIndex = 1U } },
+            { .id = 16U, .parentId = 10U, .siblingOrder = 3U, .name = "Pages", .visible = true,
+              .control = { .kind = kb::scene::UIControlKind::WidgetSwitcher, .selectedIndex = 1U } },
+            { .id = 17U, .parentId = 16U, .siblingOrder = 0U, .name = "FirstPage", .visible = true },
+            { .id = 18U, .parentId = 16U, .siblingOrder = 1U, .name = "SecondPage", .visible = true },
+            { .id = 19U, .parentId = 16U, .siblingOrder = 2U, .name = "RepeatedPortrait", .visible = true,
+              .image = kb::scene::UIImage{ .imageAssetId = imageAssetId },
+              .control = { .kind = kb::scene::UIControlKind::Image } },
+        },
+    };
+    Require(kb::scene::UIAssetIO::SaveDocument(componentDocumentPath, componentDocument),
+        "Schema 2 UI component document could not be saved");
+    const auto componentRoundTrip = kb::scene::UIAssetIO::LoadDocument(componentDocumentPath);
+    Require(componentRoundTrip.has_value() && componentRoundTrip->elements.size() == componentDocument.elements.size() &&
+            componentRoundTrip->elements[0U].canvas->referenceResolution.x == 2560.0F &&
+            componentRoundTrip->elements[0U].layout->padding.bottom == 11.0F &&
+            componentRoundTrip->elements[1U].paint->cornerRadius.w == 8.0F &&
+            componentRoundTrip->elements[1U].image->preserveAspect &&
+            componentRoundTrip->elements[1U].effects->backgroundBlur == 8.0F &&
+            componentRoundTrip->elements[2U].textStyle->fontAssetId == fontAssetId &&
+            componentRoundTrip->elements[2U].interaction->eventName == "Caption.Activate" &&
+            componentRoundTrip->elements[3U].layout->mode == kb::scene::UIContainerLayoutMode::Horizontal &&
+            componentRoundTrip->elements[5U].control.selectedIndex == 1U &&
+            componentRoundTrip->elements[6U].control.selectedIndex == 1U,
+        "Schema 2 UI component document lost authored fields during load");
+    Require(kb::scene::UIAssetIO::SaveDocument(componentRoundTripPath, *componentRoundTrip) &&
+            kb::scene::UIAssetIO::LoadDocument(componentRoundTripPath).has_value(),
+        "Loaded schema 2 UI component document could not be saved and loaded again");
+
+    kb::scene::UIDocument invalidComponentDocument = componentDocument;
+    invalidComponentDocument.elements[1U].rect.anchorMin.x = 1.1F;
+    Require(!kb::scene::UIAssetIO::SaveDocument(root / "InvalidRect.kbui", invalidComponentDocument),
+        "UI document writer accepted an anchor outside the normalized range");
+    invalidComponentDocument = componentDocument;
+    invalidComponentDocument.elements[2U].siblingOrder = 0U;
+    Require(!kb::scene::UIAssetIO::SaveDocument(root / "InvalidOrder.kbui", invalidComponentDocument),
+        "UI document writer accepted duplicate sibling order");
+    invalidComponentDocument = componentDocument;
+    invalidComponentDocument.elements[3U].layout->mode = kb::scene::UIContainerLayoutMode::Grid;
+    Require(!kb::scene::UIAssetIO::SaveDocument(root / "InvalidComposition.kbui", invalidComponentDocument),
+        "UI document writer accepted a layout component that contradicts its widget kind");
+    invalidComponentDocument = componentDocument;
+    invalidComponentDocument.elements[2U].control.text.assign(kb::scene::kMaxUITextBytes + 1U, 'x');
+    Require(!kb::scene::UIAssetIO::SaveDocument(root / "InvalidTextSize.kbui", invalidComponentDocument),
+        "UI document writer accepted control text above the canonical UI text limit");
+    invalidComponentDocument = componentDocument;
+    invalidComponentDocument.elements[5U].control.listItems[0U].assign(kb::scene::kMaxUITextBytes + 1U, 'x');
+    Require(!kb::scene::UIAssetIO::SaveDocument(root / "InvalidItemSize.kbui", invalidComponentDocument),
+        "UI document writer accepted a list item above the canonical UI text limit");
+
+    kb::assets::AssetRegistry dependencyRegistry;
+    Require(dependencyRegistry.Upsert(kb::assets::AssetMetadata{ .id = styleAssetId, .type = kb::scene::kUIStyleAssetType,
+                .virtualPath = "/Game/UI/Default.kbuistyle" }) &&
+            dependencyRegistry.Upsert(kb::assets::AssetMetadata{ .id = kb::assets::AssetId{ imageAssetId },
+                .type = "ImportedAsset", .importCategory = "Texture", .virtualPath = "/Game/UI/Portrait.png" }) &&
+            dependencyRegistry.Upsert(kb::assets::AssetMetadata{ .id = kb::assets::AssetId{ fontAssetId },
+                .type = "ImportedAsset", .importCategory = "Font", .virtualPath = "/Game/UI/Body.ttf" }),
+        "UI dependency fixture assets could not be registered");
+    const kb::scene::UIDocumentAssetLoader documentLoader;
+    const std::vector<kb::assets::AssetId> componentDependencies = documentLoader.DiscoverDependencies(
+        kb::assets::AssetMetadata{ .id = kb::assets::AssetId{ 7999U }, .type = kb::scene::kUIDocumentAssetType,
+            .virtualPath = "/Game/UI/ComponentModel.kbui", .physicalPath = componentDocumentPath }, dependencyRegistry);
+    Require(componentDependencies == std::vector<kb::assets::AssetId>{ styleAssetId,
+                kb::assets::AssetId{ imageAssetId }, kb::assets::AssetId{ fontAssetId } },
+        "UI document dependency discovery did not retain unique style, image, and font assets");
+    kb::assets::AssetRegistry wrongTypeDependencyRegistry;
+    Require(wrongTypeDependencyRegistry.Upsert(kb::assets::AssetMetadata{
+                .id = kb::assets::AssetId{ imageAssetId }, .type = "AudioClip",
+                .importCategory = "Texture", .virtualPath = "/Game/UI/Portrait.wav" }),
+        "Wrong-type UI dependency fixture could not be registered");
+    Require(documentLoader.DiscoverDependencies(
+                kb::assets::AssetMetadata{ .id = kb::assets::AssetId{ 7999U },
+                    .type = kb::scene::kUIDocumentAssetType,
+                    .virtualPath = "/Game/UI/ComponentModel.kbui", .physicalPath = componentDocumentPath },
+                wrongTypeDependencyRegistry) == componentDependencies,
+        "UI dependency discovery dropped a wrong-type reference from the cook graph");
+    const std::optional<std::string> wrongTypeDiagnostic = documentLoader.ValidateDependencies(
+        kb::assets::AssetMetadata{ .id = kb::assets::AssetId{ 7999U },
+            .type = kb::scene::kUIDocumentAssetType,
+            .virtualPath = "/Game/UI/ComponentModel.kbui", .physicalPath = componentDocumentPath },
+        wrongTypeDependencyRegistry);
+    Require(wrongTypeDiagnostic.has_value() &&
+            wrongTypeDiagnostic->find("as an image") != std::string::npos &&
+            wrongTypeDiagnostic->find("AudioClip") != std::string::npos,
+        "UI dependency validation accepted an image reference with the wrong registered type");
     Require(scene.Assets().Discover() == 2U, "UIDocument discovery failed");
     const auto* documentMetadata = scene.Assets().Manager().Registry().FindByPath("/Game/UI/Hud.kbui");
     Require(documentMetadata != nullptr && documentMetadata->type == kb::scene::kUIDocumentAssetType &&
@@ -110,12 +270,97 @@ local phase = 0
 local element = 0
 local clickSubscription = 0
 local score = nil
+local list = 0
 
 function Tick(self, dt)
     if phase == 0 then
         score = UI.Find("Score")
         if score == nil then error("UI.Find setup lookup failed") end
-        element = UI.Create(1, "LuaPanel", { styleClass = "hud", visible = true, kind = "ModalDialog", text = "Pause", modal = true })
+        local kinds = {
+            "Container", "Text", "Image", "Button", "Toggle", "Slider", "List",
+            "InputField", "ScrollView", "ModalDialog", "Border", "Overlay",
+            "HorizontalBox", "VerticalBox", "Grid", "Wrap", "Spacer", "SizeBox",
+            "ScaleBox", "ProgressBar", "Dropdown", "Scrollbar", "WidgetSwitcher"
+        }
+        local button = 0
+        local image = 0
+        local layout = 0
+        local dropdown = 0
+        local switcher = 0
+        local toggle = 0
+        local slider = 0
+        local scroll = 0
+        local progress = 0
+        local scrollbar = 0
+        for _, kind in ipairs(kinds) do
+            local created = UI.Create(1, "LuaKind" .. kind, {
+                styleClass = "hud", visible = true, kind = kind,
+                text = kind == "ModalDialog" and "Pause" or "",
+                modal = kind == "ModalDialog"
+            })
+            if created == 0 then error("UI.Create rejected " .. kind) end
+            if kind == "Button" then button = created end
+            if kind == "Image" then image = created end
+            if kind == "VerticalBox" then layout = created end
+            if kind == "Dropdown" then dropdown = created end
+            if kind == "WidgetSwitcher" then switcher = created end
+            if kind == "Toggle" then toggle = created end
+            if kind == "Slider" then slider = created end
+            if kind == "List" then list = created end
+            if kind == "ScrollView" then scroll = created end
+            if kind == "ProgressBar" then progress = created end
+            if kind == "Scrollbar" then scrollbar = created end
+            if kind == "ModalDialog" then element = created end
+        end
+        UI.SetCanvas(1, { scaleMode = "ConstantPixelSize", referenceWidth = 1024,
+            referenceHeight = 768, scaleFactor = 1.5, match = 0.25 })
+        UI.SetRect(button, { anchorMinX = 0.1, anchorMinY = 0.2,
+            anchorMaxX = 0.7, anchorMaxY = 0.8, offsetMinX = 3, offsetMinY = 4,
+            offsetMaxX = 203, offsetMaxY = 84, pivotX = 0.25, pivotY = 0.75,
+            scaleX = 1.25, scaleY = 0.75, rotation = 12, zOrder = 9 })
+        UI.SetPaint(button, { red = 0.1, green = 0.2, blue = 0.3, alpha = 0.4,
+            borderRed = 0.5, borderGreen = 0.6, borderBlue = 0.7, borderAlpha = 0.8,
+            borderLeft = 1, borderTop = 2, borderRight = 3, borderBottom = 4,
+            radiusTopLeft = 5, radiusTopRight = 6, radiusBottomRight = 7,
+            radiusBottomLeft = 8, opacity = 0.9 })
+        UI.SetImageStyle(button, { image = 4294967311 })
+        UI.SetTextStyle(button, { font = 4294967312, fontSize = 24, red = 0.8, green = 0.7,
+            blue = 0.6, alpha = 1, horizontalAlignment = "Center",
+            verticalAlignment = "Bottom", wrap = "Character" })
+        UI.SetInteraction(button, { raycastTarget = true, interactable = true,
+            navigationMode = "Explicit", navigationUp = 2, navigationDown = 2,
+            navigationLeft = 2, navigationRight = 2, eventName = "Lua.Button" })
+        UI.SetEffects(button, { clipChildren = true, mask = true, shadowEnabled = true,
+            shadowX = 2, shadowY = 3, shadowRed = 0.1, shadowGreen = 0.2,
+            shadowBlue = 0.3, shadowAlpha = 0.4, shadowBlur = 5,
+            outlineEnabled = true, outlineRed = 0.6, outlineGreen = 0.7,
+            outlineBlue = 0.8, outlineAlpha = 0.9, outlineWidth = 2,
+            backgroundBlur = 6 })
+        UI.SetImage(image, 41)
+        UI.SetImageStyle(image, { image = 42, uvX = 0.1, uvY = 0.2,
+            uvWidth = 0.6, uvHeight = 0.7, scaleMode = "Contain",
+            preserveAspect = true, sliceLeft = 1, sliceTop = 2,
+            sliceRight = 3, sliceBottom = 4 })
+        UI.SetImage(image, 43)
+        UI.SetLayout(layout, { mode = "Vertical", paddingLeft = 1, paddingTop = 2,
+            paddingRight = 3, paddingBottom = 4, spacingX = 5, spacingY = 6,
+            horizontalAlignment = "Stretch", verticalAlignment = "Center",
+            cellWidth = 120, cellHeight = 40, columns = 3 })
+        UI.ListAppend(dropdown, "temporary")
+        UI.ListClear(dropdown)
+        UI.ListAppend(dropdown, "Low")
+        UI.ListAppend(dropdown, "High")
+        UI.SetSelected(dropdown, 1)
+        UI.ListAppend(list, "One")
+        UI.ListAppend(list, "Two")
+        UI.SetToggle(toggle, true)
+        UI.SetSlider(slider, 4, { minimum = 1, maximum = 5 })
+        UI.SetSlider(progress, 0.75, { minimum = 0, maximum = 1 })
+        UI.SetSlider(scrollbar, 0.5, { minimum = 0, maximum = 1 })
+        UI.SetScrollOffset(scroll, 32)
+        local pageA = UI.Create(switcher, "LuaPageA", { kind = "Container" })
+        local pageB = UI.Create(switcher, "LuaPageB", { kind = "Container" })
+        UI.SetSelected(switcher, 1)
         UI.Hide(2)
         phase = 1
     elseif phase == 1 then
@@ -147,20 +392,121 @@ end
         .enabled = true,
     });
     kb::script::ScriptRuntimeHost scriptHost{ scene };
-    Require(scriptHost.Succeeded() && scriptHost.InstallSceneSystem(), "UI script runtime host could not install the UI library module");
-    for (const char* const function : { "UI.Find", "UI.Focus", "UI.SetText", "UI.SetImage", "UI.SetToggle", "UI.SetSlider", "UI.ListAppend", "UI.ListClear", "UI.SetScrollOffset", "UI.SetModalOpen",
+    const std::string scriptHostDiagnostic = scriptHost.Diagnostics().empty()
+        ? "UI script runtime host could not install the UI library module"
+        : "UI script runtime host could not install the UI library module: " + scriptHost.Diagnostics().front();
+    Require(scriptHost.Succeeded() && scriptHost.InstallSceneSystem(), scriptHostDiagnostic.c_str());
+    for (const char* const function : { "UI.Find", "UI.Focus", "UI.SetText", "UI.SetImage", "UI.SetToggle", "UI.SetSlider", "UI.SetSelected", "UI.ListAppend", "UI.ListClear", "UI.SetScrollOffset", "UI.SetModalOpen",
+             "UI.SetRect", "UI.SetCanvas", "UI.SetLayout", "UI.SetPaint", "UI.SetImageStyle", "UI.SetTextStyle", "UI.SetInteraction", "UI.SetEffects",
              "UI.EmitClick", "UI.EmitPointer", "UI.EmitSubmit", "UI.EmitChanged", "UI.EmitFocus", "UI.EmitNavigation" }) {
         Require(scriptHost.Functions().FindSignature(function) != nullptr,
             "UI control script API was not registered in the production runtime host");
     }
     static_cast<void>(scene.Runtime().Update(0.0F));
     static_cast<void>(scene.Runtime().Update(0.0F));
-    Require(scene.UIDocuments().ElementCount(owner.Entity()) == 3U && !scene.UIDocuments().Visible(owner.Entity(), 2U) &&
-            scene.UIDocuments().Control(owner.Entity(), 4U)->kind == kb::scene::UIControlKind::ModalDialog &&
-            scene.UIDocuments().Control(owner.Entity(), 4U)->modalOpen,
+    Require(scene.UIDocuments().ElementCount(owner.Entity()) == 27U &&
+            !scene.UIDocuments().Visible(owner.Entity(), 2U),
         "Lua UI.Create/UI.Hide did not reach the queued scene runtime tree");
+    for (const auto& [kind, name] : kb::scene::kUIControlKindNames) {
+        if (kind == kb::scene::UIControlKind::Canvas) {
+            Require(scene.UIDocuments().Control(owner.Entity(), 1U)->kind == kind,
+                "The authored UI root did not retain the canonical Canvas kind");
+            continue;
+        }
+        const auto created = scene.UIDocuments().Find(owner.Entity(), "LuaKind" + std::string{ name });
+        Require(created.has_value() && scene.UIDocuments().Control(owner.Entity(), *created)->kind == kind,
+            "A canonical UI control kind could not be created through the real Lua wrapper");
+    }
+    const auto luaButton = scene.UIDocuments().Find(owner.Entity(), "LuaKindButton");
+    const auto luaImage = scene.UIDocuments().Find(owner.Entity(), "LuaKindImage");
+    const auto luaLayout = scene.UIDocuments().Find(owner.Entity(), "LuaKindVerticalBox");
+    const auto luaDropdown = scene.UIDocuments().Find(owner.Entity(), "LuaKindDropdown");
+    const auto luaSwitcher = scene.UIDocuments().Find(owner.Entity(), "LuaKindWidgetSwitcher");
+    const auto rootComponents = scene.UIDocuments().ElementComponents(owner.Entity(), 1U);
+    const auto buttonComponents = scene.UIDocuments().ElementComponents(owner.Entity(), *luaButton);
+    const auto imageComponents = scene.UIDocuments().ElementComponents(owner.Entity(), *luaImage);
+    const auto layoutComponents = scene.UIDocuments().ElementComponents(owner.Entity(), *luaLayout);
+    const kb::scene::UIRectTransform& luaRect = buttonComponents->rect;
+    const kb::scene::UIPaint& luaPaint = *buttonComponents->paint;
+    const kb::scene::UIText& luaText = *buttonComponents->textStyle;
+    const kb::scene::UIInteraction& luaInteraction = *buttonComponents->interaction;
+    const kb::scene::UIEffects& luaEffects = *buttonComponents->effects;
+    const kb::scene::UIImage& luaImageStyle = *imageComponents->image;
+    const kb::scene::UIContainerLayout& luaContainerLayout = *layoutComponents->layout;
+    Require(rootComponents->canvas->scaleMode == kb::scene::UICanvasScaleMode::ConstantPixelSize &&
+            rootComponents->canvas->referenceResolution.x == 1024.0F &&
+            rootComponents->canvas->referenceResolution.y == 768.0F &&
+            rootComponents->canvas->scaleFactor == 1.5F &&
+            rootComponents->canvas->matchWidthOrHeight == 0.25F,
+        "Real Lua Canvas setter did not mutate every canonical field");
+    Require(luaRect.anchorMin.x == 0.1F && luaRect.anchorMin.y == 0.2F &&
+            luaRect.anchorMax.x == 0.7F && luaRect.anchorMax.y == 0.8F &&
+            luaRect.offsetMin.x == 3.0F && luaRect.offsetMin.y == 4.0F &&
+            luaRect.offsetMax.x == 203.0F && luaRect.offsetMax.y == 84.0F &&
+            luaRect.pivot.x == 0.25F && luaRect.pivot.y == 0.75F &&
+            luaRect.scale.x == 1.25F && luaRect.scale.y == 0.75F &&
+            luaRect.rotationDegrees == 12.0F && luaRect.zOrder == 9,
+        "Real Lua RectTransform setter did not mutate every canonical field");
+    Require(luaPaint.backgroundColor.r == 0.1F && luaPaint.backgroundColor.g == 0.2F &&
+            luaPaint.backgroundColor.b == 0.3F && luaPaint.backgroundColor.a == 0.4F &&
+            luaPaint.borderColor.r == 0.5F && luaPaint.borderColor.g == 0.6F &&
+            luaPaint.borderColor.b == 0.7F && luaPaint.borderColor.a == 0.8F &&
+            luaPaint.borderWidth.left == 1.0F && luaPaint.borderWidth.top == 2.0F &&
+            luaPaint.borderWidth.right == 3.0F && luaPaint.borderWidth.bottom == 4.0F &&
+            luaPaint.cornerRadius.x == 5.0F && luaPaint.cornerRadius.y == 6.0F &&
+            luaPaint.cornerRadius.z == 7.0F && luaPaint.cornerRadius.w == 8.0F &&
+            luaPaint.opacity == 0.9F,
+        "Real Lua paint setter did not mutate every canonical field");
+    Require(buttonComponents->image.has_value() &&
+            buttonComponents->image->imageAssetId == 4294967311ULL,
+        "A Lua-authored Button could not compose its own optional image component");
+    Require(luaText.fontAssetId == 4294967312ULL && luaText.fontSize == 24.0F &&
+            luaText.color.r == 0.8F && luaText.color.g == 0.7F &&
+            luaText.color.b == 0.6F && luaText.color.a == 1.0F &&
+            luaText.horizontalAlignment == kb::scene::UITextHorizontalAlignment::Center &&
+            luaText.verticalAlignment == kb::scene::UITextVerticalAlignment::Bottom &&
+            luaText.wrapMode == kb::scene::UITextWrapMode::Character,
+        "Real Lua text-style setter did not mutate every canonical field");
+    Require(luaInteraction.raycastTarget && luaInteraction.interactable &&
+            luaInteraction.navigationMode == kb::scene::UINavigationMode::Explicit &&
+            luaInteraction.navigationUp == 2U && luaInteraction.navigationDown == 2U &&
+            luaInteraction.navigationLeft == 2U && luaInteraction.navigationRight == 2U &&
+            luaInteraction.eventName == "Lua.Button",
+        "Real Lua interaction setter did not mutate every canonical field");
+    Require(luaEffects.clipChildren && luaEffects.mask && luaEffects.shadowEnabled &&
+            luaEffects.shadowOffset.x == 2.0F && luaEffects.shadowOffset.y == 3.0F &&
+            luaEffects.shadowColor.r == 0.1F && luaEffects.shadowColor.g == 0.2F &&
+            luaEffects.shadowColor.b == 0.3F && luaEffects.shadowColor.a == 0.4F &&
+            luaEffects.shadowBlur == 5.0F && luaEffects.outlineEnabled &&
+            luaEffects.outlineColor.r == 0.6F && luaEffects.outlineColor.g == 0.7F &&
+            luaEffects.outlineColor.b == 0.8F && luaEffects.outlineColor.a == 0.9F &&
+            luaEffects.outlineWidth == 2.0F && luaEffects.backgroundBlur == 6.0F,
+        "Real Lua effects setter did not mutate every canonical field");
+    Require(luaImageStyle.imageAssetId == 43U && luaImageStyle.uvRect.x == 0.1F &&
+            luaImageStyle.uvRect.y == 0.2F && luaImageStyle.uvRect.width == 0.6F &&
+            luaImageStyle.uvRect.height == 0.7F &&
+            luaImageStyle.scaleMode == kb::scene::UIImageScaleMode::Contain &&
+            luaImageStyle.preserveAspect && luaImageStyle.nineSlice.left == 1.0F &&
+            luaImageStyle.nineSlice.top == 2.0F && luaImageStyle.nineSlice.right == 3.0F &&
+            luaImageStyle.nineSlice.bottom == 4.0F,
+        "Real Lua image setters did not mutate the canonical image component");
+    Require(luaContainerLayout.mode == kb::scene::UIContainerLayoutMode::Vertical &&
+            luaContainerLayout.padding.left == 1.0F && luaContainerLayout.padding.top == 2.0F &&
+            luaContainerLayout.padding.right == 3.0F && luaContainerLayout.padding.bottom == 4.0F &&
+            luaContainerLayout.spacing.x == 5.0F && luaContainerLayout.spacing.y == 6.0F &&
+            luaContainerLayout.horizontalAlignment == kb::scene::UIAlignment::Stretch &&
+            luaContainerLayout.verticalAlignment == kb::scene::UIAlignment::Center &&
+            luaContainerLayout.cellSize.x == 120.0F && luaContainerLayout.cellSize.y == 40.0F &&
+            luaContainerLayout.columns == 3U,
+        "Real Lua container-layout setter did not mutate every canonical field");
+    Require(
+            scene.UIDocuments().Control(owner.Entity(), *luaDropdown)->listItems ==
+                std::vector<std::string>{ "Low", "High" } &&
+            scene.UIDocuments().Control(owner.Entity(), *luaDropdown)->selectedIndex == 1U &&
+            scene.UIDocuments().Control(owner.Entity(), *luaSwitcher)->selectedIndex == 1U,
+        "Real Lua component setters did not mutate the canonical runtime UI tree end to end");
     static_cast<void>(scene.Runtime().Update(0.0F));
-    Require(scene.UIDocuments().ElementCount(owner.Entity()) == 2U && scene.UIDocuments().Visible(owner.Entity(), 2U),
+    Require(scene.UIDocuments().ElementCount(owner.Entity()) == 26U && scene.UIDocuments().Visible(owner.Entity(), 2U),
         "Lua UI.Destroy/UI.Show did not reach the queued scene runtime tree");
     static_cast<void>(scene.Runtime().Update(0.0F));
     Require(scene.UIDocuments().Control(owner.Entity(), 2U)->text == "Clicked",
@@ -176,7 +522,7 @@ end
 
     const std::array<kb::scene::UIControlState, 9U> controls{
         kb::scene::UIControlState{ .kind = kb::scene::UIControlKind::Text, .text = "Score: 42" },
-        kb::scene::UIControlState{ .kind = kb::scene::UIControlKind::Image, .imageAssetId = 17U },
+        kb::scene::UIControlState{ .kind = kb::scene::UIControlKind::Image },
         kb::scene::UIControlState{ .kind = kb::scene::UIControlKind::Button, .text = "Continue" },
         kb::scene::UIControlState{ .kind = kb::scene::UIControlKind::Toggle, .toggleValue = true },
         kb::scene::UIControlState{ .kind = kb::scene::UIControlKind::Slider, .sliderValue = 5.0F, .sliderMinimum = 1.0F, .sliderMaximum = 10.0F },
@@ -187,9 +533,14 @@ end
     };
     std::array<kb::scene::UIElementId, controls.size()> controlElements{};
     for (std::size_t index = 0U; index < controls.size(); ++index) {
+        kb::scene::UIElementComponents components{};
+        if (controls[index].kind == kb::scene::UIControlKind::Image) {
+            components.image = kb::scene::UIImage{ .imageAssetId = 17U };
+        }
         const auto created = scene.UIDocuments().QueueCreate(owner.Entity(), kb::scene::UIRuntimeElementDesc{
             .parentId = 1U,
             .name = "Control" + std::to_string(index),
+            .components = std::move(components),
             .control = controls[index],
         });
         Require(created.has_value(), "Runtime UI control creation was rejected");
@@ -202,7 +553,7 @@ end
             "Queued runtime UI control did not preserve its typed control state");
     }
     Require(scene.UIDocuments().Control(owner.Entity(), controlElements[0U])->text == "Score: 42" &&
-            scene.UIDocuments().Control(owner.Entity(), controlElements[1U])->imageAssetId == 17U &&
+            scene.UIDocuments().ElementComponents(owner.Entity(), controlElements[1U])->image->imageAssetId == 17U &&
             scene.UIDocuments().Control(owner.Entity(), controlElements[3U])->toggleValue &&
             scene.UIDocuments().Control(owner.Entity(), controlElements[4U])->sliderValue == 5.0F &&
             scene.UIDocuments().Control(owner.Entity(), controlElements[5U])->listItems.size() == 2U &&
@@ -316,7 +667,7 @@ end
         "A deactivated UI event subscription owner was not automatically released");
     scene.Entities().Destroy(deactivatedListener.Entity());
 
-    // LIB-180: physical device state is routed by UIDocumentSceneSystem into
+    // Physical device state is routed by UIDocumentSceneSystem into
     // the existing UI event queue. There is no geometry in UIDocument yet, so
     // pointer activation intentionally targets the canonical focused element.
     std::size_t routedFocus = 0U;
@@ -371,25 +722,28 @@ end
     static_cast<void>(scriptHost.Runtime().Events().Unsubscribe(clickRoute));
     static_cast<void>(scriptHost.Runtime().Events().Unsubscribe(submitRoute));
 
-    // LIB-178: a second retained document exercises the production bridge
+    // A second retained document exercises the production bridge
     // ScriptSharedState -> ScriptRuntimeSceneSystem -> SceneUIDocuments. The
     // source-to-control direction remains queued, while control-to-source
     // writes are observed after the next UI frame boundary.
     const std::filesystem::path bindingPath = root / "Assets" / "UI" / "Bindings.kbui";
     const kb::scene::UIDocument bindingDocument{
         .elements = {
-            { .id = 1U, .parentId = 0U, .name = "BindingRoot", .visible = true },
-            { .id = 2U, .parentId = 1U, .name = "BoundScore", .visible = true,
+            { .id = 1U, .parentId = 0U, .name = "BindingRoot", .visible = true,
+              .canvas = kb::scene::UICanvas{}, .control = { .kind = kb::scene::UIControlKind::Canvas } },
+            { .id = 2U, .parentId = 1U, .siblingOrder = 0U, .name = "BoundScore", .visible = true,
+              .textStyle = kb::scene::UIText{},
               .control = { .kind = kb::scene::UIControlKind::Text, .text = "0" } },
-            { .id = 3U, .parentId = 1U, .name = "BoundName", .visible = true,
+            { .id = 3U, .parentId = 1U, .siblingOrder = 1U, .name = "BoundName", .visible = true,
+              .textStyle = kb::scene::UIText{},
               .control = { .kind = kb::scene::UIControlKind::InputField, .text = "guest" } },
-            { .id = 4U, .parentId = 1U, .name = "BoundEnabled", .visible = true,
+            { .id = 4U, .parentId = 1U, .siblingOrder = 2U, .name = "BoundEnabled", .visible = true,
               .control = { .kind = kb::scene::UIControlKind::Toggle, .toggleValue = false } },
-            { .id = 5U, .parentId = 1U, .name = "BoundVolume", .visible = true,
+            { .id = 5U, .parentId = 1U, .siblingOrder = 3U, .name = "BoundVolume", .visible = true,
               .control = { .kind = kb::scene::UIControlKind::Slider, .sliderValue = 0.0F, .sliderMinimum = 0.0F, .sliderMaximum = 10.0F } },
-            { .id = 6U, .parentId = 1U, .name = "BoundScroll", .visible = true,
+            { .id = 6U, .parentId = 1U, .siblingOrder = 4U, .name = "BoundScroll", .visible = true,
               .control = { .kind = kb::scene::UIControlKind::ScrollView, .scrollOffset = 0.0F } },
-            { .id = 7U, .parentId = 1U, .name = "BoundModal", .visible = true,
+            { .id = 7U, .parentId = 1U, .siblingOrder = 5U, .name = "BoundModal", .visible = true,
               .control = { .kind = kb::scene::UIControlKind::ModalDialog, .modalOpen = false } },
         },
         .bindings = {
@@ -411,8 +765,10 @@ end
         "Typed one-way/two-way UI binding document was rejected by the production asset writer");
     const kb::scene::UIDocument invalidBindingDocument{
         .elements = {
-            { .id = 1U, .parentId = 0U, .name = "Root", .visible = true },
+            { .id = 1U, .parentId = 0U, .name = "Root", .visible = true,
+              .canvas = kb::scene::UICanvas{}, .control = { .kind = kb::scene::UIControlKind::Canvas } },
             { .id = 2U, .parentId = 1U, .name = "Text", .visible = true,
+              .textStyle = kb::scene::UIText{},
               .control = { .kind = kb::scene::UIControlKind::Text } },
         },
         .bindings = {

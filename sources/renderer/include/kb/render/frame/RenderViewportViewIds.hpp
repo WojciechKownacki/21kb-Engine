@@ -30,6 +30,8 @@ struct RenderViewportViewIds {
     std::uint16_t postProcessHdrCombine = ViewId::Invalid;
     std::uint16_t postProcessHdrFinalize = ViewId::Invalid;
     std::uint16_t sceneOverlays = ViewId::Invalid;
+    std::uint16_t runtimeUiBlurH = ViewId::Invalid;
+    std::uint16_t runtimeUiBlurV = ViewId::Invalid;
     std::uint16_t finalComposite = ViewId::Invalid;
     std::uint16_t editorUiComposite = ViewId::Invalid;
     std::uint16_t editorGizmoOverlay = ViewId::Invalid;
@@ -68,9 +70,13 @@ struct RenderViewportViewIds {
             return postProcessHdrFinalize;
         case RenderPassKind::EditorSceneOverlays:
             return sceneOverlays;
+        case RenderPassKind::RuntimeUiBlurH:
+            return runtimeUiBlurH;
+        case RenderPassKind::RuntimeUiBlurV:
+            return runtimeUiBlurV;
         case RenderPassKind::FinalComposite:
             return finalComposite;
-        case RenderPassKind::EditorUiComposite:
+        case RenderPassKind::UiComposite:
             return editorUiComposite;
         case RenderPassKind::EditorGizmoOverlay:
             return editorGizmoOverlay;
@@ -91,7 +97,8 @@ struct RenderViewportViewIds {
                ViewId::IsValid(postProcessBloomBlurV) && BloomMipViewsAreValid(postProcessBloomDownsampleViews) &&
                BloomMipViewsAreValid(postProcessBloomMipBlurHViews) && BloomMipViewsAreValid(postProcessBloomMipBlurVViews) &&
                ViewId::IsValid(postProcessHdrCombine) && ViewId::IsValid(postProcessHdrFinalize) &&
-               ViewId::IsValid(sceneOverlays) && ViewId::IsValid(finalComposite) && ViewId::IsValid(editorUiComposite) &&
+               ViewId::IsValid(sceneOverlays) && ViewId::IsValid(runtimeUiBlurH) && ViewId::IsValid(runtimeUiBlurV) &&
+               ViewId::IsValid(finalComposite) && ViewId::IsValid(editorUiComposite) &&
                ViewId::IsValid(editorGizmoOverlay);
     }
 
@@ -132,6 +139,8 @@ public:
                 .postProcessHdrCombine = ViewId::PostProcessHdrCombine,
                 .postProcessHdrFinalize = ViewId::PostProcessHdrFinalize,
                 .sceneOverlays = ViewId::Overlay,
+                .runtimeUiBlurH = ViewId::RuntimeUiBlurH,
+                .runtimeUiBlurV = ViewId::RuntimeUiBlurV,
                 .finalComposite = ViewId::FinalComposite,
                 .editorUiComposite = ViewId::EditorUi,
                 .editorGizmoOverlay = ViewId::EditorGizmoOverlay,
@@ -162,6 +171,8 @@ public:
             .postProcessHdrCombine = static_cast<std::uint16_t>(base + 12U),
             .postProcessHdrFinalize = static_cast<std::uint16_t>(base + 13U),
             .sceneOverlays = static_cast<std::uint16_t>(base + 14U),
+            .runtimeUiBlurH = static_cast<std::uint16_t>(base + 33U),
+            .runtimeUiBlurV = static_cast<std::uint16_t>(base + 34U),
             .finalComposite = static_cast<std::uint16_t>(base + 15U),
             .editorUiComposite = static_cast<std::uint16_t>(base + 16U),
             .editorGizmoOverlay = static_cast<std::uint16_t>(base + 32U),

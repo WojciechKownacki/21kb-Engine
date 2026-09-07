@@ -211,6 +211,7 @@ const std::vector<LibraryEventDesc>& EngineLibraryEventRegistry::Catalog() {
                 ScriptFunctionPin{ "owner", ScriptValueType::Entity, true },
                 ScriptFunctionPin{ "element", ScriptValueType::Hash, true },
                 ScriptFunctionPin{ "value", ScriptValueType::Float, true },
+                ScriptFunctionPin{ "text", ScriptValueType::String, true },
             },
         },
         LibraryEventDesc{

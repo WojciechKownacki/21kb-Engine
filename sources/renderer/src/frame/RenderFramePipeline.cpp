@@ -103,6 +103,16 @@ void AddViewportResources(RenderPassGraph& graph, RenderExtent extent) {
         .target = Target(RenderTargetRole::CompositeOutput, RenderTargetFormat::Backbuffer, extent, true, false),
         .lifetime = RenderGraphResourceLifetime::External,
     }));
+    static_cast<void>(graph.AddResource(RenderGraphResourceDesc{
+        .id = RenderGraphResource::RuntimeUiBlurPing,
+        .target = Target(RenderTargetRole::PostProcessColor, RenderTargetFormat::Rgba16F, extent, true, true),
+        .lifetime = RenderGraphResourceLifetime::Transient,
+    }));
+    static_cast<void>(graph.AddResource(RenderGraphResourceDesc{
+        .id = RenderGraphResource::RuntimeUiBlurred,
+        .target = Target(RenderTargetRole::PostProcessColor, RenderTargetFormat::Rgba16F, extent, true, true),
+        .lifetime = RenderGraphResourceLifetime::Transient,
+    }));
 }
 
 [[nodiscard]] RenderPassDesc BuildPass(RenderPassKind kind, const RenderViewportViewIds& viewIds) {
@@ -169,11 +179,20 @@ void AddViewportResources(RenderPassGraph& graph, RenderExtent extent) {
     case RenderPassKind::PostProcessHdrFinalize:
         pass.Reads(RenderGraphResource::BloomCombine).Writes(RenderGraphResource::PostProcessFinal);
         break;
+    case RenderPassKind::RuntimeUiBlurH:
+        pass.Reads(RenderGraphResource::PostProcessFinal).Writes(RenderGraphResource::RuntimeUiBlurPing);
+        break;
+    case RenderPassKind::RuntimeUiBlurV:
+        pass.Reads(RenderGraphResource::RuntimeUiBlurPing).Writes(RenderGraphResource::RuntimeUiBlurred);
+        break;
     case RenderPassKind::FinalComposite:
         pass.Reads(RenderGraphResource::PostProcessFinal).Writes(RenderGraphResource::FinalOutput);
         break;
-    case RenderPassKind::EditorUiComposite:
-        pass.Reads(RenderGraphResource::FinalOutput).Reads(RenderGraphResource::SelectionMask).Writes(RenderGraphResource::FinalOutput);
+    case RenderPassKind::UiComposite:
+        pass.Reads(RenderGraphResource::FinalOutput)
+            .Reads(RenderGraphResource::SelectionMask)
+            .Reads(RenderGraphResource::RuntimeUiBlurred)
+            .Writes(RenderGraphResource::FinalOutput);
         break;
     case RenderPassKind::EditorGizmoOverlay:
         pass.Reads(RenderGraphResource::SceneDepth).Reads(RenderGraphResource::FinalOutput).Writes(RenderGraphResource::FinalOutput);

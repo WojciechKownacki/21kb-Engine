@@ -27,7 +27,7 @@ constexpr std::array kLifecycleEvents{
 // PucLuaFunctionApi and PucLuaTaskApi install module tables directly from this
 // list.  The names and each wrapper's return shape therefore stay true to the
 // callable sandbox and generated stubs cannot drift from it.
-constexpr std::array<ScriptApiCatalogLuaBindingDefinition, 196> kLuaBindings{ {
+constexpr std::array<ScriptApiCatalogLuaBindingDefinition, 205> kLuaBindings{ {
     { "Audio", "Play", "Audio.Play", ScriptApiCatalogLuaReturnKind::SingleOutput, "voice" },
     { "Audio", "SetMixer", "Audio.SetMixer", ScriptApiCatalogLuaReturnKind::SingleOutput, "assigned" },
     { "Audio", "ActiveMixer", "Audio.ActiveMixer", ScriptApiCatalogLuaReturnKind::Default, "" },
@@ -194,12 +194,21 @@ constexpr std::array<ScriptApiCatalogLuaBindingDefinition, 196> kLuaBindings{ {
     { "UI", "SetImage", "UI.SetImage", ScriptApiCatalogLuaReturnKind::SingleOutput, "applied" },
     { "UI", "SetToggle", "UI.SetToggle", ScriptApiCatalogLuaReturnKind::SingleOutput, "applied" },
     { "UI", "SetSlider", "UI.SetSlider", ScriptApiCatalogLuaReturnKind::SingleOutput, "applied" },
+    { "UI", "SetSelected", "UI.SetSelected", ScriptApiCatalogLuaReturnKind::SingleOutput, "applied" },
     { "UI", "ListAppend", "UI.ListAppend", ScriptApiCatalogLuaReturnKind::SingleOutput, "applied" },
     { "UI", "ListClear", "UI.ListClear", ScriptApiCatalogLuaReturnKind::SingleOutput, "applied" },
     { "UI", "ConfigureList", "UI.ConfigureList", ScriptApiCatalogLuaReturnKind::SingleOutput, "applied" },
     { "UI", "ListScrollTo", "UI.ListScrollTo", ScriptApiCatalogLuaReturnKind::SingleOutput, "applied" },
     { "UI", "SetScrollOffset", "UI.SetScrollOffset", ScriptApiCatalogLuaReturnKind::SingleOutput, "applied" },
     { "UI", "SetModalOpen", "UI.SetModalOpen", ScriptApiCatalogLuaReturnKind::SingleOutput, "applied" },
+    { "UI", "SetRect", "UI.SetRect", ScriptApiCatalogLuaReturnKind::SingleOutput, "applied" },
+    { "UI", "SetCanvas", "UI.SetCanvas", ScriptApiCatalogLuaReturnKind::SingleOutput, "applied" },
+    { "UI", "SetLayout", "UI.SetLayout", ScriptApiCatalogLuaReturnKind::SingleOutput, "applied" },
+    { "UI", "SetPaint", "UI.SetPaint", ScriptApiCatalogLuaReturnKind::SingleOutput, "applied" },
+    { "UI", "SetImageStyle", "UI.SetImageStyle", ScriptApiCatalogLuaReturnKind::SingleOutput, "applied" },
+    { "UI", "SetTextStyle", "UI.SetTextStyle", ScriptApiCatalogLuaReturnKind::SingleOutput, "applied" },
+    { "UI", "SetInteraction", "UI.SetInteraction", ScriptApiCatalogLuaReturnKind::SingleOutput, "applied" },
+    { "UI", "SetEffects", "UI.SetEffects", ScriptApiCatalogLuaReturnKind::SingleOutput, "applied" },
     { "UI", "EmitClick", "UI.EmitClick", ScriptApiCatalogLuaReturnKind::SingleOutput, "applied" },
     { "UI", "EmitPointer", "UI.EmitPointer", ScriptApiCatalogLuaReturnKind::SingleOutput, "applied" },
     { "UI", "EmitSubmit", "UI.EmitSubmit", ScriptApiCatalogLuaReturnKind::SingleOutput, "applied" },

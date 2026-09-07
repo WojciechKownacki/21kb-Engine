@@ -32,6 +32,7 @@
 #include "engine/scene/SceneTimelines.hpp"
 #include "engine/scene/TimelineAsset.hpp"
 #include "engine/scene/UIAssets.hpp"
+#include "engine/scene/UIPresentation.hpp"
 #include "scene/components/SceneComponentRegistry.hpp"
 #include "scene/components/SceneComponentStorage.hpp"
 #include "scene/history/SceneHistoryStack.hpp"
@@ -259,6 +260,7 @@ enum class UIRuntimeCommandKind : std::uint8_t {
     Destroy,
     SetVisible,
     SetControl,
+    SetComponents,
     ConfigureVirtualList,
     ScrollVirtualList,
 };
@@ -270,6 +272,7 @@ struct UIRuntimeCommand {
     UIRuntimeElementDesc create{};
     bool visible = true;
     UIControlState control;
+    UIElementComponents elementComponents;
     std::uint32_t viewportItems = 0U;
     std::uint32_t overscan = 0U;
     std::uint32_t firstVisibleIndex = 0U;
@@ -334,6 +337,11 @@ public:
     std::size_t lastAnimatorUpdateRateSkippedPoseCount = 0U;
     std::map<std::uint64_t, TimelineRuntimeRecord> timelines;
     std::map<std::uint64_t, UIDocumentRuntimeRecord> uiDocuments;
+    // Disposable viewport-specific geometry derived from uiDocuments. Rendering
+    // and pointer routing consume this same snapshot so presentation never
+    // becomes a second authoring source.
+    UIPresentationSnapshot uiPresentation;
+    std::uint64_t uiPresentationRevision = 0U;
     std::map<std::uint64_t, ContentInstanceRuntimeRecord> contentInstances;
     // LIB-174: sole mutable UI write boundary. It is FIFO and drained by the
     // UI scene system, never by callers, so runtime tree iteration cannot be
@@ -347,10 +355,14 @@ public:
     // remains document-local so independent documents can expose their own
     // accessibility state without receiving each other's interactions.
     SceneEntity activeUIDocument{};
+    SceneEntity uiCapturedDocument{};
+    UIElementId uiCapturedElement = 0U;
+    std::uint32_t uiCapturedTouchId = std::numeric_limits<std::uint32_t>::max();
     bool uiPointerWasDown = false;
     bool uiSubmitWasDown = false;
     bool uiNextWasDown = false;
     bool uiPreviousWasDown = false;
+    bool uiBackspaceWasDown = false;
     std::vector<TimelineMarkerEvent> pendingTimelineMarkerEvents;
     std::uint64_t nextTimelineInstanceId = 1U;
     kb::input::InputSubsystem inputSubsystem;

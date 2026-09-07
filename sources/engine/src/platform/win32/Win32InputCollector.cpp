@@ -5,6 +5,7 @@
 #include "engine/input/InputDeviceState.hpp"
 #include "engine/input/InputKey.hpp"
 #include "engine/platform/win32/Win32InputKeyMap.hpp"
+#include "platform/win32/Win32PointerViewportTransform.hpp"
 
 #include <Xinput.h>
 
@@ -89,6 +90,24 @@ void CollectGamepads(InputDeviceState& state) noexcept {
 
 } // namespace
 
+bool Win32InputCollector::MapScreenPoint(
+    HWND ownerWindow, POINT screenPoint, float& x, float& y) const noexcept {
+    const Win32PointerViewportTransform transform{
+        pointerClientViewport_, pointerRenderWidth_, pointerRenderHeight_};
+    const bool mappedViewport = pointerCoordinateWindow_ != nullptr && transform.IsValid();
+    const HWND coordinateWindow = mappedViewport ? pointerCoordinateWindow_ : ownerWindow;
+    if (coordinateWindow == nullptr || ScreenToClient(coordinateWindow, &screenPoint) == 0) {
+        return false;
+    }
+    const std::pair<float, float> mapped = mappedViewport
+        ? transform.MapClientPoint(screenPoint)
+        : std::pair<float, float>{
+            static_cast<float>(screenPoint.x), static_cast<float>(screenPoint.y)};
+    x = mapped.first;
+    y = mapped.second;
+    return true;
+}
+
 void Win32InputCollector::UpdateTouchPoint(
     std::uint32_t id, float x, float y, InputTouchPhase phase) noexcept {
     for (std::size_t index = 0U; index < touchPointCount_; ++index) {
@@ -120,6 +139,20 @@ void Win32InputCollector::AdvanceTouchFrame() noexcept {
 
 bool Win32InputCollector::HandleWindowMessage(
     HWND ownerWindow, UINT message, WPARAM wparam, LPARAM lparam) noexcept {
+    if (message == WM_CHAR) {
+        const std::uint16_t repeatCount =
+            (std::max)(static_cast<std::uint16_t>(LOWORD(lparam)), std::uint16_t{1U});
+        for (std::uint16_t repeat = 0U; repeat < repeatCount; ++repeat) {
+            char32_t codePoint = 0U;
+            if (textDecoder_.Consume(
+                    static_cast<char16_t>(wparam & 0xFFFFU), codePoint) &&
+                pendingTextInputCount_ < pendingTextInput_.size()) {
+                pendingTextInput_[pendingTextInputCount_++] = codePoint;
+            }
+        }
+        return false;
+    }
+
     if (message == WM_MOUSEWHEEL) {
         pendingMouseWheel_ += static_cast<float>(
             static_cast<short>(HIWORD(wparam))) / static_cast<float>(WHEEL_DELTA);
@@ -132,15 +165,15 @@ bool Win32InputCollector::HandleWindowMessage(
         if (GetPointerTouchInfo(pointerId, &touchInfo) == 0) {
             return false;
         }
-        POINT client = touchInfo.pointerInfo.ptPixelLocation;
-        if (ownerWindow == nullptr || ScreenToClient(ownerWindow, &client) == 0) {
+        float x = 0.0F;
+        float y = 0.0F;
+        if (!MapScreenPoint(ownerWindow, touchInfo.pointerInfo.ptPixelLocation, x, y)) {
             return false;
         }
         const InputTouchPhase phase = message == WM_POINTERDOWN
             ? InputTouchPhase::Began
             : (message == WM_POINTERUP ? InputTouchPhase::Ended : InputTouchPhase::Moved);
-        UpdateTouchPoint(
-            pointerId, static_cast<float>(client.x), static_cast<float>(client.y), phase);
+        UpdateTouchPoint(pointerId, x, y, phase);
         return true;
     }
 
@@ -155,11 +188,13 @@ bool Win32InputCollector::HandleWindowMessage(
         GetTouchInputInfo(handle, count, touches.data(), sizeof(TOUCHINPUT)) != 0;
     if (read) {
         for (const TOUCHINPUT& touch : touches) {
-            POINT client{
+            const POINT screenPoint{
                 TOUCH_COORD_TO_PIXEL(touch.x),
                 TOUCH_COORD_TO_PIXEL(touch.y),
             };
-            if (ownerWindow == nullptr || ScreenToClient(ownerWindow, &client) == 0) {
+            float x = 0.0F;
+            float y = 0.0F;
+            if (!MapScreenPoint(ownerWindow, screenPoint, x, y)) {
                 continue;
             }
             const InputTouchPhase phase = (touch.dwFlags & TOUCHEVENTF_UP) != 0U
@@ -167,11 +202,7 @@ bool Win32InputCollector::HandleWindowMessage(
                 : ((touch.dwFlags & TOUCHEVENTF_DOWN) != 0U
                     ? InputTouchPhase::Began
                     : InputTouchPhase::Moved);
-            UpdateTouchPoint(
-                touch.dwID,
-                static_cast<float>(client.x),
-                static_cast<float>(client.y),
-                phase);
+            UpdateTouchPoint(touch.dwID, x, y, phase);
         }
     }
     static_cast<void>(CloseTouchInputHandle(handle));
@@ -198,33 +229,43 @@ void Win32InputCollector::ClearPointerViewport() noexcept {
 
 void Win32InputCollector::Collect(InputDeviceState& state, HWND ownerWindow) noexcept {
     state.Reset();
+    const Win32PointerViewportTransform pointerTransform{
+        pointerClientViewport_, pointerRenderWidth_, pointerRenderHeight_};
+    const bool mappedViewport = pointerCoordinateWindow_ != nullptr && pointerTransform.IsValid();
+    if (mappedViewport) {
+        state.SetPointerViewportExtent(pointerRenderWidth_, pointerRenderHeight_);
+    } else {
+        RECT client{};
+        if (ownerWindow != nullptr && GetClientRect(ownerWindow, &client) != 0 &&
+            client.right > client.left && client.bottom > client.top) {
+            state.SetPointerViewportExtent(
+                static_cast<std::uint32_t>(client.right - client.left),
+                static_cast<std::uint32_t>(client.bottom - client.top));
+        } else {
+            state.SetPointerViewportExtent(0U, 0U);
+        }
+    }
     const bool focused = OwnerProcessIsForeground(ownerWindow);
     state.SetHasFocus(focused);
     if (!focused) {
         hasPreviousMouse_ = false;
         touchPointCount_ = 0U;
+        pendingTextInputCount_ = 0U;
+        textDecoder_.Reset();
         pendingMouseWheel_ = 0.0F;
         return;
     }
+
+    static_cast<void>(state.SetTextInput(std::span<const char32_t>{
+        pendingTextInput_.data(), pendingTextInputCount_}));
+    pendingTextInputCount_ = 0U;
 
     for (const Win32KeyBinding& binding : Win32InputKeyMap::KeyboardAndMouse()) {
         state.SetKeyDown(binding.key, KeyDown(binding.virtualKey));
     }
 
-    const bool mappedViewport =
-        pointerCoordinateWindow_ != nullptr &&
-        pointerRenderWidth_ > 0U &&
-        pointerRenderHeight_ > 0U &&
-        pointerClientViewport_.right > pointerClientViewport_.left &&
-        pointerClientViewport_.bottom > pointerClientViewport_.top;
-    const float pointerDeltaScaleX = mappedViewport
-        ? static_cast<float>(pointerRenderWidth_) /
-            static_cast<float>(pointerClientViewport_.right - pointerClientViewport_.left)
-        : 1.0F;
-    const float pointerDeltaScaleY = mappedViewport
-        ? static_cast<float>(pointerRenderHeight_) /
-            static_cast<float>(pointerClientViewport_.bottom - pointerClientViewport_.top)
-        : 1.0F;
+    const float pointerDeltaScaleX = mappedViewport ? pointerTransform.ScaleX() : 1.0F;
+    const float pointerDeltaScaleY = mappedViewport ? pointerTransform.ScaleY() : 1.0F;
 
     POINT cursor{};
     if (GetCursorPos(&cursor) != 0) {
@@ -239,24 +280,10 @@ void Win32InputCollector::Collect(InputDeviceState& state, HWND ownerWindow) noe
         previousMouse_ = cursor;
         hasPreviousMouse_ = true;
 
-        const HWND coordinateWindow =
-            mappedViewport ? pointerCoordinateWindow_ : ownerWindow;
-        POINT client = cursor;
-        if (ScreenToClient(coordinateWindow, &client) != 0) {
-            if (mappedViewport) {
-                const float viewportWidth = static_cast<float>(
-                    pointerClientViewport_.right - pointerClientViewport_.left);
-                const float viewportHeight = static_cast<float>(
-                    pointerClientViewport_.bottom - pointerClientViewport_.top);
-                state.SetPointerPosition(
-                    static_cast<float>(client.x - pointerClientViewport_.left) *
-                        static_cast<float>(pointerRenderWidth_) / viewportWidth,
-                    static_cast<float>(client.y - pointerClientViewport_.top) *
-                        static_cast<float>(pointerRenderHeight_) / viewportHeight);
-            } else {
-                state.SetPointerPosition(
-                    static_cast<float>(client.x), static_cast<float>(client.y));
-            }
+        float x = 0.0F;
+        float y = 0.0F;
+        if (MapScreenPoint(ownerWindow, cursor, x, y)) {
+            state.SetPointerPosition(x, y);
         }
     }
 
