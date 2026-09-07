@@ -102,6 +102,8 @@ enum class InspectorHitKind : std::uint8_t {
     SectionHeader,
     TextField,
     BoolField,
+    ColorField,
+    ChoiceField,
     FloatField,
     MeshPreview,
     MeshPreviewToolbarButton,
@@ -118,6 +120,8 @@ enum class InspectorHitKind : std::uint8_t {
 enum class InspectorDisclosureId : std::uint8_t {
     MeshRendererAdvanced,
     TerrainAdvanced,
+    UIAnchorPresets,
+    UIRectAdvanced,
     Count,
 };
 
@@ -541,6 +545,11 @@ enum class InspectorPropertyId : std::uint16_t {
     UIDropdownField,
     UIProgressBarField,
     UIWidgetSwitcherField,
+    UIAssetPicker,
+    UIAnchorPresets,
+    UIAnchorPreset,
+    UIRectAdvanced,
+    UIRectLayoutField,
 };
 
 struct InspectorDynamicRowIdentity {

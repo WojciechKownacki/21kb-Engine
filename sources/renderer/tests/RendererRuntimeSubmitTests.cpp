@@ -44,6 +44,7 @@
 #include <bx/math.h>
 
 #include <algorithm>
+#include <limits>
 #include <array>
 #include <cmath>
 #include <filesystem>
@@ -5631,7 +5632,35 @@ void RunRendererDetachedViewportFinalCompositePixelsTest() {
 #endif
 }
 
+void RunEditorUIViewTransformValidationTests() {
+    kb::scene::Scene scene;
+    HeadlessSurface surface;
+    DisplayConfig config{};
+    config.allowHeadlessNoop = true;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+    Renderer renderer;
+    Require(renderer.Initialize(surface,&config), "Editor UI view renderer initialization failed");
+    RenderSceneSubmitDesc desc{};
+    desc.target.viewport = RenderViewportDesc{.id=RenderViewportId{1U},.extent={64U,64U},.viewportIndex=0U};
+    desc.cameraOverride = IdentityCamera();
+    desc.editorSceneOverlaysEnabled = true;
+    for (const float scale : {0.0F,-1.0F,std::numeric_limits<float>::quiet_NaN(),std::numeric_limits<float>::infinity()}) {
+        desc.editorUIScale = scale;
+        Require(renderer.BeginFrame(), "Invalid UI scale frame did not begin");
+        const bool accepted = renderer.SubmitScene(scene,desc);
+        renderer.EndFrame();
+        Require(!accepted, "Renderer accepted a nonpositive or nonfinite editor UI scale");
+    }
+    desc.editorUIScale = 2.0F;
+    desc.editorUIOffset = {20.0F,-10.0F};
+    Require(renderer.BeginFrame(), "Valid UI view frame did not begin");
+    Require(renderer.SubmitScene(scene,desc), "Renderer rejected a valid UI view after invalid scales");
+    renderer.EndFrame();
+    renderer.Shutdown();
+}
+
 void RunRendererRuntimeSubmitTests() {
+    RunEditorUIViewTransformValidationTests();
     RunEditorCameraWireframesSubmitInHeadlessNoopTest();
     RunMaterialFrameTimeAdvanceTest();
     RunRuntimeMaterialResolverReturnsTypedFallbacksAndDiagnosticsTest();

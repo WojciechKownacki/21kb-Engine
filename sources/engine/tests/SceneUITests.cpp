@@ -11,6 +11,7 @@
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneUI.hpp"
 #include "engine/scene/SceneUIComponentSet.hpp"
+#include "engine/scene/VisibilityComponent.hpp"
 #include "engine/ui/UIComponentCatalog.hpp"
 #include "engine/ui/UIComponentPropertyCatalog.hpp"
 #include "engine/ui/UIComponentValidation.hpp"
@@ -343,8 +344,8 @@ void TestInteractionAndEditing() {
     scrollContentComponents.rectTransform = Rect(0.0F, 0.0F, 100.0F, 100.0F);
     const kb::scene::SceneObject scrollContent = AddUI(scene, scrollView, scrollContentComponents);
     const kb::scene::SceneObject dropdown = addPreset(kb::scene::UIComponentPreset::Dropdown, Rect(0.0F, 130.0F, 100.0F, 20.0F));
-    static_cast<void>(AddUI(scene, dropdown, content));
-    static_cast<void>(AddUI(scene, dropdown, content));
+    const auto firstOption = AddUI(scene, dropdown, content);
+    const auto secondOption = AddUI(scene, dropdown, content);
     kb::scene::UIComponentSet switcherComponents = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::WidgetSwitcher);
     switcherComponents.rectTransform = Rect(0.0F, 160.0F, 100.0F, 20.0F);
     switcherComponents.selectable.emplace();
@@ -398,6 +399,9 @@ void TestInteractionAndEditing() {
         "Dropdown activation must advance the selected child index");
     kb::tests::Require(FindElement(scene.UI().Frame(), dropdown.Entity())->dropdown->selectedIndex == 1U,
         "The derived frame must expose the canonical dropdown selection to presentation consumers");
+    kb::tests::Require(FindElement(scene.UI().Frame(), firstOption.Entity()) == nullptr &&
+        FindElement(scene.UI().Frame(), secondOption.Entity()) != nullptr,
+        "A dropdown must show only its selected option instead of overlapping all option labels");
 
     pointer.pointerPosition = {10.0F, 165.0F};
     pointer.primaryDown = true;
@@ -583,11 +587,35 @@ void TestAutomaticRuntimeInput() {
     kb::tests::Require(!scene.UI().SetViewport(std::nanf(""), 100.0F), "Invalid viewport geometry must fail closed");
 }
 
+void TestAuthoredDimensionsAndVisibility() {
+    kb::scene::Scene scene;
+    const auto canvas = AddUI(scene, {}, CanvasComponents());
+    auto values = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Button);
+    values.rectTransform->offsetMin = {12.0F, 15.0F};
+    kb::tests::Require(kb::scene::WriteUIComponentProperty(values, kb::scene::UIComponentType::RectTransform,
+        "sizeDelta.x", kb::scene::UIComponentPropertyValue{240.0F}) == kb::scene::UIComponentPropertyWriteResult::Succeeded &&
+        values.rectTransform->offsetMax.x == 252.0F,
+        "Editing UI width must preserve position and update the existing rectangle");
+    const auto button = AddUI(scene, canvas, values);
+    scene.Components().Visibility().Set(button.Entity(), {.mode = kb::scene::VisibilityMode::Hidden});
+    kb::scene::SceneUIFrame frame;
+    kb::tests::Require(kb::scene::SceneUIQueries{scene}.BuildFrame(640.0F, 360.0F, frame), "Hidden UI frame must build");
+    const auto* hidden = FindElement(frame, button.Entity());
+    kb::tests::Require(hidden != nullptr && hidden->effectiveOpacity == 0.0F && !hidden->hitTestable,
+        "Hidden UI must neither render nor intercept input");
+    scene.Components().Visibility().Set(button.Entity(), {.mode = kb::scene::VisibilityMode::Visible});
+    kb::tests::Require(kb::scene::SceneUIQueries{scene}.BuildFrame(640.0F, 360.0F, frame), "Visible UI frame must build");
+    const auto* visible = FindElement(frame, button.Entity());
+    kb::tests::Require(visible != nullptr && visible->effectiveOpacity == 1.0F && visible->hitTestable &&
+        kb::tests::NearlyEqual(visible->rect.width, 240.0F), "Restored UI must render at its authored width and accept input");
+}
+
 } // namespace
 
 namespace kb::tests {
 
 void RunSceneUITests() {
+    TestAuthoredDimensionsAndVisibility();
     TestCatalogAndPresets();
     TestLayoutsAndFitters();
     TestHierarchicalTransformsAndMaskHitTesting();

@@ -56,6 +56,12 @@
 #include "inspection/InspectorPhysicsModel.hpp"
 #include "scene/audio/EditorSceneAudioSettingsService.hpp"
 #include "scene/ui/EditorUIComponentAuthoring.hpp"
+#include "scene/EditorHierarchyObjectFactory.hpp"
+#include "inspection/ui/InspectorUIComponentModel.hpp"
+#include "engine/scene/SceneUI.hpp"
+#include "engine/ui/UIComponentValidation.hpp"
+#include "platform/win32/EditorBundledFontPath.hpp"
+#include "engine/assets/AssetImportService.hpp"
 #include "engine/scene/SceneUIComponentSet.hpp"
 #include "engine/ui/UIComponentPropertyCatalog.hpp"
 #include "engine/script/ScriptBehaviourAsset.hpp"
@@ -400,6 +406,7 @@ EditorSceneContext::EditorSceneContext()
         }
     }
     console_.Info("Editor", "Editor scene initialized.");
+    CompleteLoadedUIComponents();
 }
 
 EditorSceneContext::~EditorSceneContext() {
@@ -2275,6 +2282,28 @@ kb::scene::SceneEntity EditorSceneContext::CreateHierarchyObject() {
     return created;
 }
 
+kb::scene::SceneEntity EditorSceneContext::CreateUIObject(kb::scene::UIComponentType type, kb::scene::SceneEntity parent) {
+    const auto* descriptor = kb::scene::FindUIComponentDescriptor(type);
+    if (descriptor == nullptr || (parent.IsValid() && !scene_->Entities().IsAlive(parent))) return {};
+    kb::scene::SceneEntity created{};
+    const bool succeeded = ExecuteSceneCommand("Create " + std::string{descriptor->displayName}, [this, descriptor, parent, &created]() {
+        created = EditorHierarchyObjectFactory::CreateObject(*scene_, descriptor->displayName);
+        if (!created.IsValid() || (parent.IsValid() && !scene_->Hierarchy().SetParent(created, parent)) ||
+            !EditorUIComponentAuthoring::Add(*scene_, created, descriptor->stableId) ||
+            !CompleteUIComponentDependencies(created)) return false;
+        if (descriptor->type != kb::scene::UIComponentType::Canvas) {
+            auto rect = *scene_->Components().UI().TryGet<kb::scene::UIRectTransform>(created);
+            if (!InspectorUIComponentModel::ApplyAnchorPreset(rect, 5, {}, true, true)) return false;
+            scene_->Components().UI().Set(created, rect);
+        }
+        for (auto ancestor = scene_->Hierarchy().Parent(created); ancestor.IsValid(); ancestor = scene_->Hierarchy().Parent(ancestor))
+            hierarchyExpansion_.SetExpanded(ancestor, true);
+        SelectEntity(created);
+        return true;
+    });
+    return succeeded ? created : kb::scene::SceneEntity{};
+}
+
 kb::scene::SceneEntity EditorSceneContext::CreateLightObject(kb::scene::LightKind kind) {
     const char* name = "Point Light";
     const char* label = "Create Point Light";
@@ -3612,6 +3641,110 @@ bool EditorSceneContext::FitColliderToMesh(kb::scene::SceneEntity entity) {
     return ok;
 }
 
+bool EditorSceneContext::CompleteUIComponentDependencies(kb::scene::SceneEntity entity) {
+    auto ui = scene_->Components().UI();
+    if (const auto* text = ui.TryGet<kb::scene::UIText>(entity); text != nullptr && text->fontAssetId == 0U) {
+        const std::array fontFiles{EditorBundledFontPath()};
+        const auto imported = kb::assets::AssetImportService::ImportFiles(
+            scene_->Assets().Manager(), fontFiles, "/Game/UI/Fonts");
+        if (imported.items.empty() || !imported.items.front().Succeeded()) {
+            console_.Error("UI", "Cannot provision the bundled UI font: " +
+                (imported.items.empty() ? std::string{"import returned no result"} : imported.items.front().error));
+            return false;
+        }
+        auto authoredText = *text;
+        authoredText.fontAssetId = imported.items.front().id.value;
+        ui.Set(entity, authoredText);
+    }
+    kb::scene::SceneEntity root = entity;
+    for (auto ancestor = entity; ancestor.IsValid(); ancestor = scene_->Hierarchy().Parent(ancestor)) {
+        if (ui.Has<kb::scene::UICanvas>(ancestor)) {
+            for (auto bridge = entity;; bridge = scene_->Hierarchy().Parent(bridge)) {
+                if (!ui.Has<kb::scene::UIRectTransform>(bridge)) {
+                    kb::scene::UIRectTransform rect;
+                    rect.anchorMax = {1.0F, 1.0F};
+                    rect.offsetMax = {};
+                    ui.Set(bridge, rect);
+                }
+                if (bridge == ancestor) break;
+            }
+            return true;
+        }
+        if (ui.Has<kb::scene::UIRectTransform>(ancestor)) root = ancestor;
+    }
+    const auto parent = scene_->Hierarchy().Parent(root);
+    if (!parent.IsValid()) {
+        for (const auto existing : scene_->Hierarchy().RootEntities()) {
+            if (existing != root && ui.Has<kb::scene::UICanvas>(existing) && ui.Has<kb::scene::UIRectTransform>(existing))
+                return scene_->Hierarchy().SetParent(root, existing);
+        }
+    }
+    const auto canvas = scene_->Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Canvas" });
+    if (!canvas.IsValid()) return false;
+    kb::scene::ApplySceneUIComponents(ui, canvas,
+        kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Canvas));
+    if (parent.IsValid() && !scene_->Hierarchy().SetParent(canvas, parent)) return false;
+    return scene_->Hierarchy().SetParent(root, canvas);
+}
+
+void EditorSceneContext::CompleteLoadedUIComponents() {
+    std::vector<kb::scene::SceneEntity> incomplete;
+    for (const auto& row : HierarchyRows()) {
+        const auto values = kb::scene::CaptureSceneUIComponents(scene_->Components().UI(), row.entity);
+        if (!values.Empty() && !values.rectTransform) incomplete.push_back(row.entity);
+    }
+    if (incomplete.empty()) return;
+    const bool completed = ExecuteSceneCommand("Complete UI components", [this, &incomplete]() {
+        for (const auto entity : incomplete) {
+            if (!EditorUIComponentAuthoring::Complete(*scene_, entity) || !CompleteUIComponentDependencies(entity)) return false;
+        }
+        return true;
+    });
+    if (completed) console_.Info("UI", "Completed layout and visual dependencies for " +
+        std::to_string(incomplete.size()) + " saved UI object(s).");
+    else console_.Error("UI", "Could not complete saved UI components; scene changes were rolled back.");
+}
+
+bool EditorSceneContext::SetUIRectLayoutField(kb::scene::SceneEntity entity, int field, float value) {
+    const auto* current = scene_->Components().UI().TryGet<kb::scene::UIRectTransform>(entity);
+    if (current == nullptr) return false;
+    auto rect = *current;
+    if (!InspectorUIComponentModel::EditRectLayout(rect, field, value)) {
+        console_.Warning("UI", "Layout value must be finite; fixed dimensions cannot be negative.");
+        return false;
+    }
+    return ExecuteSceneCommand("Edit UI layout", [this, entity, rect]() {
+        scene_->Components().UI().Set(entity, rect);
+        return true;
+    });
+}
+
+bool EditorSceneContext::SetUIAnchorPreset(kb::scene::SceneEntity entity, int preset,
+    bool alignPosition, bool alignPivot) {
+    const auto* current = scene_->Components().UI().TryGet<kb::scene::UIRectTransform>(entity);
+    if (current == nullptr) return false;
+    auto rect = *current;
+    kb::scene::SceneUIFrame frame;
+    if (!kb::scene::SceneUIQueries{*scene_}.BuildFrame(uiAuthoringViewportSize_.x, uiAuthoringViewportSize_.y, frame)) {
+        console_.Error("UI", "Anchor preset could not resolve the current UI layout.");
+        return false;
+    }
+    const auto parent = scene_->Hierarchy().Parent(entity);
+    const auto owner = parent.IsValid() ? parent : entity;
+    const auto found = std::find_if(frame.elements.begin(), frame.elements.end(),
+        [owner](const auto& element) { return element.entity == owner; });
+    if (found == frame.elements.end() || found->canvasScale <= 0.0F) {
+        console_.Warning("UI", "Anchor preset needs an active parent Canvas layout.");
+        return false;
+    }
+    const kb::math::Vec2 parentSize{found->rect.width / found->canvasScale, found->rect.height / found->canvasScale};
+    if (!InspectorUIComponentModel::ApplyAnchorPreset(rect, preset, parentSize, alignPosition, alignPivot)) return false;
+    return ExecuteSceneCommand("Change UI anchors", [this, entity, rect]() {
+        scene_->Components().UI().Set(entity, rect);
+        return true;
+    });
+}
+
 bool EditorSceneContext::AddComponentToEntity(kb::scene::SceneEntity entity, std::string_view componentId) {
     if (!entity.IsValid() || !scene_->Entities().IsAlive(entity)) {
         console_.Warning("Inspector", "Component add ignored for invalid entity.");
@@ -3626,7 +3759,8 @@ bool EditorSceneContext::AddComponentToEntity(kb::scene::SceneEntity entity, std
         }
         const std::string label = "Add " + std::string{ definition != nullptr ? definition->displayName : componentId };
         return ExecuteSceneCommand(label, [this, entity, componentId = std::string{ componentId }]() {
-            return EditorUIComponentAuthoring::Add(*scene_, entity, componentId);
+            if (!EditorUIComponentAuthoring::Add(*scene_, entity, componentId)) return false;
+            return CompleteUIComponentDependencies(entity);
         });
     }
 
@@ -4022,6 +4156,31 @@ bool EditorSceneContext::RemoveUIComponentFromEntity(
         descriptor != nullptr ? descriptor->displayName : std::string_view{ "UI Component" }};
     return ExecuteSceneCommand(label, [this, entity, component]() {
         return EditorUIComponentAuthoring::Remove(*scene_, entity, component);
+    });
+}
+
+bool EditorSceneContext::SetUIColor(kb::scene::SceneEntity entity, kb::scene::UIComponentType component,
+    std::string_view property, const std::array<float, 4>& color) {
+    if (!scene_->Entities().IsAlive(entity)) return false;
+    const auto rows = InspectorUIComponentModel::Properties(*scene_, entity, component);
+    const auto found = std::ranges::find_if(rows, [property](const auto& row) {
+        return row.name == property && row.color && row.writable;
+    });
+    if (found == rows.end()) return false;
+    auto candidate = kb::scene::CaptureSceneUIComponents(scene_->Components().UI(), entity);
+    const auto current = candidate;
+    for (int lane = 0; lane < 4; ++lane) {
+        if (kb::scene::WriteUIComponentProperty(candidate, component,
+                rows[static_cast<std::size_t>(found->groupStart + lane)].name, color[lane]) !=
+            kb::scene::UIComponentPropertyWriteResult::Succeeded) {
+            console_.Warning("Inspector", "UI color is invalid; no channels were changed.");
+            return false;
+        }
+    }
+    if (kb::scene::AreUIComponentSetsEqual(current, candidate)) return false;
+    return ExecuteSceneCommand("Edit UI Color", [this, entity, candidate = std::move(candidate)]() {
+        kb::scene::SynchronizeSceneUIComponents(scene_->Components().UI(), entity, candidate);
+        return true;
     });
 }
 

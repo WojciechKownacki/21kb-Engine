@@ -4,6 +4,7 @@
 #include "engine/input/InputKey.hpp"
 #include "engine/input/InputText.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneVisibilityResolution.hpp"
 #include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
@@ -482,7 +483,7 @@ class FrameBuilder {
         element.canvasSortingOrder = sortingOrder;
         element.zOrder = transform->zOrder;
         element.traversalOrder = traversal_++;
-        element.effectiveOpacity = group.opacity;
+        element.effectiveOpacity = ResolveVisibility(scene_, entity).visible ? group.opacity : 0.0F;
         element.rect = {rect.x * scale, rect.y * scale, rect.width * scale, rect.height * scale};
         element.clipRect = inheritedClip;
         element.clipQuads = inheritedClipQuads;
@@ -535,7 +536,7 @@ class FrameBuilder {
         }
         element.interactionEnabled = selectable != nullptr && selectable->interactable && group.interactable;
         element.hitTestable =
-            element.interactionEnabled && selectable->raycastTarget && group.blocksRaycasts && group.opacity > 0.0F;
+            element.interactionEnabled && selectable->raycastTarget && group.blocksRaycasts && element.effectiveOpacity > 0.0F;
         if (selectable != nullptr)
             element.interactionTint = selectable->normalColor;
         frame_.elements.push_back(std::move(element));
@@ -558,8 +559,11 @@ class FrameBuilder {
         std::vector<SceneEntity> managed;
         managed.reserve(count);
         const UIWidgetSwitcher* switcher = ui_.TryGet<UIWidgetSwitcher>(parent);
+        const UIDropdown* dropdown = ui_.TryGet<UIDropdown>(parent);
         for (std::size_t i = 0U; i < count; ++i) {
             if (switcher != nullptr && i != switcher->visibleChildIndex)
+                continue;
+            if (dropdown != nullptr && i != dropdown->selectedIndex)
                 continue;
             const SceneEntity child = scene_.Hierarchy().ChildAt(parent, i);
             const UILayoutElement* layout = ui_.TryGet<UILayoutElement>(child);

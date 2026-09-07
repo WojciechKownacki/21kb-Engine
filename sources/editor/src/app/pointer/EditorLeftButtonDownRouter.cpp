@@ -39,6 +39,7 @@
 #include "rendering/InspectorPanelRenderer.hpp"
 #include "inspection/TerrainMaterialLayerMenuState.hpp"
 #include "inspection/InspectorSceneAudioInteraction.hpp"
+#include "inspection/ui/InspectorUIComponentModel.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "rendering/ParticleEditorPanelLayout.hpp"
 #include "rendering/AnimationClipEditorPanelRenderer.hpp"
@@ -1519,7 +1520,7 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
         }
 
         if (EditorSceneViewportObjectInteraction::BeginGizmoDrag(messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_)) {
-            SetCapture(messageWindow);
+            if (sceneContext_.Gizmo().IsDragging() || sceneContext_.UIRectDrag()) SetCapture(messageWindow);
             sceneContext_.AssetBrowser().FocusSelection(false);
             EditorProjectFilesTransientUiController(sceneContext_).CloseTransientUi();
             sceneViewport_.RequestPresent();
@@ -1607,6 +1608,71 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
     }
     if (panelHit.inInspectorPanel) {
         const InspectorPanelRenderer::Hit hit = InspectorPanelRenderer::HitTest(*panelHit.inspectorContent, sceneContext_, x, y);
+        if (hit.kind == InspectorHitKind::ChoiceField) {
+            const auto component = InspectorUIComponentModel::Component(hit.section);
+            if (component) {
+                const auto entity = sceneContext_.SelectedEntity();
+                const auto rows = InspectorUIComponentModel::Properties(sceneContext_.Scene(), entity, *component);
+                if (hit.index >= 0 && static_cast<std::size_t>(hit.index) < rows.size()) {
+                    const auto& row = rows[hit.index];
+                    HMENU menu = CreatePopupMenu();
+                    if (menu == nullptr) return;
+                    for (std::size_t index = 0; index < row.choices.size(); ++index) {
+                        AppendMenuA(menu, MF_STRING | (std::stoul(row.value) == index ? MF_CHECKED : 0),
+                            index + 1, std::string{row.choices[index]}.c_str());
+                    }
+                    POINT anchor{x, y};
+                    ClientToScreen(messageWindow, &anchor);
+                    const UINT choice = TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RETURNCMD | TPM_NONOTIFY,
+                        anchor.x, anchor.y, 0, messageWindow, nullptr);
+                    DestroyMenu(menu);
+                    if (choice > 0 && choice <= row.choices.size() &&
+                        sceneContext_.SetUIComponentProperty(entity, *component, row.name, static_cast<std::int32_t>(choice - 1)))
+                        sceneViewport_.RequestPresent();
+                    EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                    return;
+                }
+            }
+        }
+        if (hit.kind == InspectorHitKind::ColorField) {
+            const auto component = InspectorUIComponentModel::Component(hit.section);
+            if (component) {
+                const auto entity = sceneContext_.SelectedEntity();
+                const auto rows = InspectorUIComponentModel::Properties(sceneContext_.Scene(), entity, *component);
+                if (hit.index >= 0 && static_cast<std::size_t>(hit.index) < rows.size() && rows[hit.index].color) {
+                    const auto& row = rows[hit.index];
+                    POINT anchor{x, y};
+                    ClientToScreen(messageWindow, &anchor);
+                    const auto color = EditorMaterialColorPickerDialog::Show(mainWindow_, row.label, row.rgba, &anchor);
+                    if (color && sceneContext_.SetUIColor(entity, *component, row.name, *color))
+                        sceneViewport_.RequestPresent();
+                    EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                    return;
+                }
+            }
+        }
+        if (hit.kind == InspectorHitKind::TextField) {
+            const auto component = InspectorUIComponentModel::Component(hit.section);
+            if (component) {
+                const auto entity = sceneContext_.SelectedEntity();
+                const auto rows = InspectorUIComponentModel::Properties(sceneContext_.Scene(), entity, *component);
+                if (hit.index >= 0 && static_cast<std::size_t>(hit.index) < rows.size()) {
+                    const auto& row = rows[static_cast<std::size_t>(hit.index)];
+                    const auto* descriptor = kb::scene::FindUIComponentProperty(*component, row.name);
+                    if (descriptor != nullptr && descriptor->assetKind) {
+                        const auto result = EditorUIAssetPickerDialog::Show(mainWindow_, MakeEditorDarkTheme(),
+                            sceneContext_, kb::assets::AssetId{std::stoull(row.value)}, *descriptor->assetKind);
+                        if (result.accepted) {
+                            static_cast<void>(sceneContext_.SetUIComponentProperty(entity, *component,
+                                row.name, kb::scene::UIComponentPropertyValue{result.assetId.value}));
+                            sceneViewport_.RequestPresent();
+                        }
+                        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                        return;
+                    }
+                }
+            }
+        }
         if (hit.section == InspectorSectionId::SceneAudioRouting
             && hit.property == InspectorPropertyId::SceneAudioMixerPicker) {
             const EditorAudioMixerAssetPickerDialog::Result result =
@@ -1839,7 +1905,7 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             return;
         }
         EditorInspectorPointerController inspectorPointer(sceneContext_);
-        static_cast<void>(inspectorPointer.HandlePointerDown(*panelHit.inspectorContent, x, y));
+        static_cast<void>(inspectorPointer.HandlePointerDown(*panelHit.inspectorContent, x, y, sceneViewport_));
         if (inspectorPointer.ShouldCaptureMouse()) {
             SetCapture(messageWindow);
         }

@@ -2,6 +2,7 @@
 
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/assets/AssetId.hpp"
+#include "engine/assets/AssetKind.hpp"
 #include "kb/editor/theme/EditorTheme.hpp"
 #include "scene/material/EditorTextureAssetMetadataResolver.hpp"
 
@@ -88,6 +89,15 @@ public:
         EditorTextureAssetPickerFilter filter) {
         return EditorTextureAssetMatchesFilter(metadata, filter);
     }
+#endif
+};
+
+class EditorUIAssetPickerDialog {
+public:
+#if defined(_WIN32)
+    [[nodiscard]] static EditorTextureAssetPickerDialog::Result Show(
+        HWND owner, const EditorTheme& theme, const EditorSceneContext& sceneContext,
+        kb::assets::AssetId currentAsset, kb::assets::AssetKind kind);
 #endif
 };
 

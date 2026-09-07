@@ -2,6 +2,7 @@
 
 #if defined(_WIN32)
 #include "app/EditorWorkspaceSession.hpp"
+#include "app/pointer/EditorRightButtonDownRouter.hpp"
 #include "docking/EditorWorkspaceArrangement.hpp"
 #include "windowing/EditorFloatingWindowFrame.hpp"
 #include "windowing/FloatingWindowFactory.hpp"
@@ -14,6 +15,7 @@
 #include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorPanelInteraction.hpp"
 #include "inspection/ui/InspectorUIComponentModel.hpp"
+#include "engine/scene/SceneUI.hpp"
 #include "platform/win32/EditorParticleEffectAssetPickerDialog.hpp"
 #include "rendering/DockWorkspaceRenderer.hpp"
 #include "rendering/FloatingWindowBackBufferPainter.hpp"
@@ -24,6 +26,12 @@
 #include "rendering/EditorParticleThumbnailService.hpp"
 #include "rendering/ParticleThumbnailTimeline.hpp"
 #include "rendering/EditorSceneBgfxViewport.hpp"
+#include "app/inspector/EditorInspectorPointerController.hpp"
+#include "app/scene_viewport/EditorUIRectInteraction.hpp"
+#include "app/scene_viewport/EditorSceneViewportToolbarPointerController.hpp"
+#include "app/panels/EditorPanelPointerHitContext.hpp"
+#include "rendering/ScenePanelContentRenderer.hpp"
+#include "rendering/SceneViewportToolbarRenderer.hpp"
 #include "rendering/FloatingEditorWindowRenderer.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
 #include "rendering/MainWindowBackBufferPainter.hpp"
@@ -66,6 +74,7 @@
 #include <cmath>
 #include <fstream>
 #include <iomanip>
+#include <limits>
 #include <iterator>
 #include <optional>
 #include <ranges>
@@ -159,8 +168,32 @@ FindInspectorHit(
     InspectorSectionId section,
     InspectorPropertyId property,
     int index = -1,
-    InspectorHitKind kind = InspectorHitKind::None) {
-    for (int scroll = 0;;) {
+    InspectorHitKind kind = InspectorHitKind::None, POINT* matchedPoint = nullptr) {
+    const bool uiField = InspectorUIComponentModel::Component(section).has_value();
+    const bool addButton = section == InspectorSectionId::AddComponent &&
+        property == InspectorPropertyId::AddComponentButton;
+    int compactX = -1;
+    if (const auto component = InspectorUIComponentModel::Component(section); component && index >= 0) {
+        const auto rows = InspectorUIComponentModel::Properties(context.Scene(), context.SelectedEntity(), *component);
+        if (static_cast<std::size_t>(index) < rows.size()) {
+            const auto& group = rows[static_cast<std::size_t>(rows[index].groupStart)];
+            if (group.fieldCount > 1 && !group.color) {
+                const int left = kInspectorContent.left + (kInspectorContent.right - kInspectorContent.left) * 36 / 100;
+                const int width = kInspectorContent.right - left - 24;
+                compactX = left + width * (2 * (index - group.groupStart) + 1) / (2 * group.fieldCount);
+            }
+        }
+    }
+    const int firstX = compactX >= 0 ? compactX
+        : property == InspectorPropertyId::UIAnchorPresets ? 40
+        : property == InspectorPropertyId::UIAnchorPreset ? 40 + 64 * (std::max(0, index) % 4)
+        : property == InspectorPropertyId::UIRectLayoutField ? (index % 2 == 0 ? 225 : 585)
+        : uiField
+        ? kInspectorContent.left + (kInspectorContent.right - kInspectorContent.left) * 36 / 100 + 8
+        : addButton ? (kInspectorContent.left + kInspectorContent.right) / 2
+        : kInspectorContent.left;
+    const int lastX = uiField || addButton ? firstX + 1 : kInspectorContent.right;
+    for (int scroll = addButton ? InspectorPanelRenderer::MaxScrollOffset(kInspectorContent, context) : 0;;) {
         const int maxScroll = InspectorPanelRenderer::MaxScrollOffset(
             kInspectorContent, context);
         static_cast<void>(
@@ -169,8 +202,7 @@ FindInspectorHit(
                     std::min(scroll, maxScroll), maxScroll));
         for (int y = kInspectorContent.top;
              y < kInspectorContent.bottom; ++y) {
-            for (int x = kInspectorContent.left;
-                 x < kInspectorContent.right; x += 4) {
+            for (int x = firstX; x < lastX; x += 4) {
                 const InspectorPanelRenderer::Hit hit =
                     InspectorPanelRenderer::HitTest(
                         kInspectorContent, context, x, y);
@@ -178,6 +210,7 @@ FindInspectorHit(
                     hit.property == property &&
                     (index < 0 || hit.index == index) &&
                     (kind == InspectorHitKind::None || hit.kind == kind)) {
+                    if (matchedPoint != nullptr) *matchedPoint = POINT{x, y};
                     return hit;
                 }
             }
@@ -541,11 +574,26 @@ struct EditorHeadlessAutomation::Impl {
         std::uint64_t viewportKey,
         bool editorOverlaysEnabled) {
         if (window == nullptr) return false;
+        if (editorOverlaysEnabled && context.ViewportPreview(viewportKey).Is2D()) {
+            viewport.BeginPaintLayout(window);
+            const DockPanel panel{.id=static_cast<std::uint32_t>(viewportKey),.kind=DockPanelKind::Scene};
+            auto settings = ScenePanelContentRenderer::BuildSettings(RECT{0,-34,640,360},panel,context,backendSettings);
+            // Readbacks consume the offscreen scene target; composite UI into that target.
+            settings.presentToHost = false;
+            settings.postProcessEnabled = false;
+            viewport.Present(window, RECT{0,0,640,360},context.Scene(),settings);
+            viewport.EndPaintLayout();
+            return std::string_view{viewport.ActiveBackendLabel()} != "Not initialized";
+        }
         constexpr RECT bounds{ 0, 0, 640, 360 };
         EditorSceneBgfxViewport::PresentSettings settings{};
         settings.renderWidth = 640U;
         settings.renderHeight = 360U;
+        context.SetUIAuthoringViewportSize(640.0F, 360.0F);
         settings.viewportKey = viewportKey;
+        // Runtime captures read the offscreen scene target, including its UI composite.
+        settings.presentToHost = editorOverlaysEnabled;
+        settings.postProcessEnabled = editorOverlaysEnabled;
         kb::render::SceneRenderCamera camera{};
         const bx::Vec3 eye = editorOverlaysEnabled
             ? bx::Vec3{ 4.0F, 3.0F, 4.0F }
@@ -835,6 +883,9 @@ bool EditorHeadlessAutomation::SetUIComponentProperty(
         return false;
     }
     const int rowIndex = static_cast<int>(std::distance(rows.begin(), row));
+    const bool openedAdvanced = component == kb::scene::UIComponentType::RectTransform &&
+        !context_.Inspector().IsDisclosureExpanded(InspectorDisclosureId::UIRectAdvanced);
+    if (openedAdvanced) context_.Inspector().ToggleDisclosure(InspectorDisclosureId::UIRectAdvanced);
 
     kb::scene::UIComponentSet current = kb::scene::CaptureSceneUIComponents(
         context_.Scene().Components().UI(), entity);
@@ -844,25 +895,62 @@ bool EditorHeadlessAutomation::SetUIComponentProperty(
         Trace("set_ui_component_property", false, "property-not-readable");
         return false;
     }
-    if (currentValue == value) {
-        Trace("set_ui_component_property", true, "already-set");
-        return true;
+
+    const auto& group = rows[static_cast<std::size_t>(row->groupStart)];
+    if (group.color || !row->choices.empty()) {
+        const auto kind = group.color ? InspectorHitKind::ColorField : InspectorHitKind::ChoiceField;
+        const int index = group.color ? row->groupStart : rowIndex;
+        if (!FindInspectorHit(context_, InspectorUIComponentModel::Section(component),
+                InspectorUIComponentModel::Property(component), index, kind)) {
+            Trace("set_ui_component_property", false, "compact-control-not-found");
+            return false;
+        }
+        if (currentValue != value) {
+            const auto revision = context_.SceneRenderRevision();
+            bool changed = false;
+            if (group.color) {
+                auto color = group.rgba;
+                color[static_cast<std::size_t>(rowIndex - row->groupStart)] = std::get<float>(value);
+                changed = context_.SetUIColor(entity, component, group.name, color);
+            } else {
+                changed = context_.SetUIComponentProperty(entity, component, property, value);
+            }
+            if (!changed || context_.SceneRenderRevision() == revision) {
+                Trace("set_ui_component_property", false, "compact-edit-not-applied-or-not-dirty");
+                return false;
+            }
+        }
+        current = kb::scene::CaptureSceneUIComponents(context_.Scene().Components().UI(), entity);
+        kb::scene::UIComponentPropertyValue applied;
+        const bool succeeded = kb::scene::ReadUIComponentProperty(current, component, property, applied) && applied == value;
+        Trace("set_ui_component_property", succeeded, property);
+        return succeeded;
     }
 
+    POINT point{};
     const auto hit = FindInspectorHit(
         context_, InspectorUIComponentModel::Section(component),
         InspectorUIComponentModel::Property(component), rowIndex,
         descriptor->type == kb::scene::UIComponentPropertyType::Bool
             ? InspectorHitKind::BoolField
-            : InspectorHitKind::TextField);
+            : InspectorHitKind::TextField, &point);
     if (!hit.has_value()) {
         Trace("set_ui_component_property", false, "field-not-found");
         return false;
     }
-    const POINT point = Center(hit->rect);
-    if (!InspectorPanelInteraction::HandlePointerDown(
-            context_, *hit, point.x, point.y)) {
+    if (currentValue == value) {
+        if (openedAdvanced) context_.Inspector().ToggleDisclosure(InspectorDisclosureId::UIRectAdvanced);
+        Trace("set_ui_component_property", true, "already-set");
+        return true;
+    }
+    impl_->viewport.ClearPresentRequest();
+    if (!EditorInspectorPointerController{context_}.HandlePointerDown(
+            kInspectorContent, point.x, point.y, impl_->viewport)) {
         Trace("set_ui_component_property", false, "pointer-down-not-routed");
+        return false;
+    }
+    if (descriptor->type == kb::scene::UIComponentPropertyType::Bool && !impl_->viewport.PresentRequested()) {
+        Trace("ui_property_refresh", false, "checkbox-edit-did-not-request-render");
         return false;
     }
 
@@ -919,8 +1007,534 @@ bool EditorHeadlessAutomation::SetUIComponentProperty(
     const bool succeeded = kb::scene::ReadUIComponentProperty(
             current, component, property, applied) &&
         applied == value;
+    if (openedAdvanced) context_.Inspector().ToggleDisclosure(InspectorDisclosureId::UIRectAdvanced);
     Trace("set_ui_component_property", succeeded, property);
     return succeeded;
+}
+
+bool EditorHeadlessAutomation::VerifyUI2DEditing() {
+    constexpr float width = 640, height = 360;
+    auto entity = context_.SelectedEntity();
+    const auto entityName = context_.Scene().Entities().Name(entity);
+    const auto cameraBefore = context_.ViewportCamera(1U).Position();
+    const auto frameElement = [&]() -> std::optional<kb::scene::SceneUIFrameElement> {
+        if (!context_.Scene().Entities().IsAlive(entity)) {
+            for (const auto& row : context_.HierarchyRows())
+                if (row.name == entityName) {
+                    entity = row.entity;
+                    context_.SelectEntity(entity);
+                    break;
+                }
+        }
+        kb::scene::SceneUIFrame frame;
+        if (!kb::scene::SceneUIQueries{context_.Scene()}.BuildFrame(width, height, frame))
+            return std::nullopt;
+        const auto found = std::ranges::find(frame.elements, entity, &kb::scene::SceneUIFrameElement::entity);
+        return found == frame.elements.end() ? std::nullopt : std::optional{*found};
+    };
+    const auto original = frameElement();
+    if (!original)
+        return false;
+    const EditorResolvedPanelContent panel{.content = {0, 0, 900, 394}, .panelId = 1U};
+    const auto toolbar = SceneViewportToolbarRenderer::Resolve(panel.content, context_.ViewportPreview(1U));
+    const auto button = Center(toolbar.twoDButton);
+    impl_->viewport.ClearPresentRequest();
+    EditorSceneViewportToolbarPointerController pointer{context_, impl_->viewport};
+    if (!pointer.HandlePointerDown(panel, button.x, button.y) || !context_.ViewportPreview(1U).Is2D() ||
+        !impl_->viewport.PresentRequested() || toolbar.twoDButton.left <= toolbar.rotationSnapButton.right) {
+        Trace("ui_2d", false, "toolbar-toggle-or-refresh-failed");
+        return false;
+    }
+    if (!CaptureBitmap(artifactRoot_ / "screenshots" / "ui-2d-toolbar.bmp", ScreenshotDimensions{700, 40, 96},
+                       [&](HDC dc) {
+                           SceneViewportToolbarRenderer::Paint(dc, RECT{0, 0, 700, 40}, MakeEditorDarkTheme(),
+                                                               context_.ViewportPreview(1U));
+                       }))
+        return false;
+    const auto overlays = EditorUIRectInteraction::Overlays(context_, width, height);
+    if (overlays.size() < 10U) {
+        Trace("ui_2d", false, "canvas-outline-or-eight-handles-missing");
+        return false;
+    }
+    constexpr std::array<kb::math::Vec2, 8> positions{
+        {{0, 0}, {0.5F, 0}, {1, 0}, {1, 0.5F}, {1, 1}, {0.5F, 1}, {0, 1}, {0, 0.5F}}};
+    const auto point = [](const kb::scene::SceneUIFrameElement& e, kb::math::Vec2 uv) {
+        return kb::math::Vec2{
+            e.corners[0].x + (e.corners[1].x - e.corners[0].x) * uv.x + (e.corners[3].x - e.corners[0].x) * uv.y,
+            e.corners[0].y + (e.corners[1].y - e.corners[0].y) * uv.x + (e.corners[3].y - e.corners[0].y) * uv.y};
+    };
+    const auto close = [](kb::math::Vec2 a, kb::math::Vec2 b) {
+        return std::abs(a.x - b.x) < 0.1F && std::abs(a.y - b.y) < 0.1F;
+    };
+    for (std::size_t i = 0; i < positions.size(); ++i) {
+        const auto p = point(*original, positions[i]);
+        if (!EditorUIRectInteraction::Begin(context_, width, height, p.x, p.y) || !context_.UIRectDrag() ||
+            context_.UIRectDrag()->handle != static_cast<int>(i) ||
+            !EditorUIRectInteraction::Update(context_, p.x + 12, p.y + 8) || !EditorUIRectInteraction::End(context_)) {
+            Trace("ui_2d", false, "resize-routing-failed:" + std::to_string(i));
+            return false;
+        }
+        const auto after = frameElement();
+        const kb::math::Vec2 opposite{1 - positions[i].x, 1 - positions[i].y};
+        if (!after || !close(point(*original, opposite), point(*after, opposite)) ||
+            (std::abs(after->rect.width - original->rect.width) < 0.1F &&
+             std::abs(after->rect.height - original->rect.height) < 0.1F)) {
+            Trace("ui_2d", false, "resize-geometry-failed:" + std::to_string(i));
+            return false;
+        }
+        if (!context_.UndoSceneCommand())
+            return false;
+        const auto restored = frameElement();
+        if (!restored || !close(restored->corners[0], original->corners[0]) ||
+            !close(restored->corners[2], original->corners[2])) {
+            Trace("ui_2d", false, "resize-undo-failed");
+            return false;
+        }
+        Trace("ui_2d_handle", true, std::to_string(i));
+    }
+    const auto parent = frameElement()->canvas;
+    if (!context_.SetUIComponentProperty(parent, kb::scene::UIComponentType::RectTransform, "rotationDegrees", 15.0F) ||
+        !context_.SetUIComponentProperty(parent, kb::scene::UIComponentType::RectTransform, "scale.x", 1.2F))
+        return false;
+    if (!context_.SetUIComponentProperty(entity, kb::scene::UIComponentType::RectTransform, "rotationDegrees", 45.0F) ||
+        !context_.SetUIComponentProperty(entity, kb::scene::UIComponentType::RectTransform, "scale.x", 1.5F))
+        return false;
+    const auto rotated = frameElement();
+    if (!rotated)
+        return false;
+    const auto corner = rotated->corners[2];
+    if (!EditorUIRectInteraction::Begin(context_, width, height, corner.x, corner.y) ||
+        !EditorUIRectInteraction::Update(context_, corner.x + 12, corner.y + 8) ||
+        !EditorUIRectInteraction::End(context_))
+        return false;
+    const auto rotatedAfter = frameElement();
+    if (!rotatedAfter || !close(rotated->corners[0], rotatedAfter->corners[0])) {
+        Trace("ui_2d", false, "rotated-resize-moved-opposite-corner");
+        return false;
+    }
+    for (int undo = 0; undo < 5; ++undo)
+        if (!context_.UndoSceneCommand())
+            return false;
+    if (!frameElement())
+        return false;
+    const auto resizeStart = original->corners[2];
+    if (!EditorUIRectInteraction::Begin(context_, width, height, resizeStart.x, resizeStart.y) ||
+        !EditorUIRectInteraction::Update(context_, resizeStart.x + 10, resizeStart.y + 4, true, true))
+        return false;
+    const auto proportional = frameElement();
+    if (!proportional || !close(point(*original, {0.5F, 0.5F}), point(*proportional, {0.5F, 0.5F})) ||
+        std::abs(proportional->rect.width / proportional->rect.height - original->rect.width / original->rect.height) >
+            0.01F) {
+        std::ostringstream detail;
+        detail << "centered-proportional-resize-failed expected=" << original->rect.width << ','
+               << original->rect.height;
+        if (proportional)
+            detail << " actual=" << proportional->rect.width << ',' << proportional->rect.height
+                   << " center=" << point(*proportional, {0.5F, 0.5F}).x << ',' << point(*proportional, {0.5F, 0.5F}).y;
+        Trace("ui_2d", false, detail.str());
+        return false;
+    }
+    if (!EditorUIRectInteraction::End(context_, true) || !frameElement())
+        return false;
+    context_.ClearHierarchySelection();
+    const auto center = point(*original, {0.5F, 0.5F});
+    if (!EditorUIRectInteraction::Begin(context_, width, height, center.x, center.y) ||
+        context_.SelectedEntity() != entity || !EditorUIRectInteraction::Update(context_, center.x + 20, center.y + 15))
+        return false;
+    const auto moved = frameElement();
+    if (!moved || !close(moved->corners[0], {original->corners[0].x + 20, original->corners[0].y + 15})) {
+        Trace("ui_2d", false, "move-geometry-failed");
+        return false;
+    }
+    if (!EditorUIRectInteraction::End(context_, true))
+        return false;
+    const auto restored = frameElement();
+    if (!restored || !close(restored->corners[0], original->corners[0]))
+        return false;
+    if (!VerifySceneRenderTargetAfterSecondary("ui-2d-handles"))
+        return false;
+    auto& preview = context_.ViewportPreview(1U);
+    preview.ZoomUI(2, {320, 180});
+    const float zoom = preview.UIZoom();
+    const auto pan = preview.UIPan();
+    if (zoom <= 1 || !close({320 * zoom + pan.x, 180 * zoom + pan.y}, {320, 180}))
+        return false;
+    if (!VerifySceneRenderTargetAfterSecondary("ui-2d-zoom"))
+        return false;
+    preview.BeginUIPan(0, 0);
+    preview.UpdateUIPan(40, 20);
+    if (!close(preview.UIPan(), {pan.x + 40, pan.y + 20}))
+        return false;
+    preview.UpdateUIPan(0, 0);
+    preview.ZoomUI(-2, {320, 180});
+    preview.ZoomUI(std::log(0.5F) / std::log(1.15F), {320,180});
+    const std::array<kb::math::Vec2, 12> outside{{
+        {-20,180}, {-60,180}, {660,180}, {700,180}, {320,-20}, {320,-60}, {320,380}, {320,420},
+        {-300,180}, {940,180}, {320,-160}, {320,520}}};
+    for (std::size_t index = 0; index < outside.size(); ++index) {
+        const auto current = frameElement();
+        if (!current) return false;
+        const auto probeCenter = point(*current, {0.5F,0.5F});
+        context_.SelectEntity({});
+        if (!EditorUIRectInteraction::Begin(context_, width, height, probeCenter.x, probeCenter.y, preview.UIZoom()) ||
+            !EditorUIRectInteraction::Update(context_, outside[index].x, outside[index].y) ||
+            !EditorUIRectInteraction::End(context_)) return false;
+        const std::string checkpoint = "ui-outside-canvas-" + std::to_string(index);
+        if (!VerifySceneRenderTargetAfterSecondary(checkpoint)) return false;
+        Gdiplus::Bitmap capture((artifactRoot_/"screenshots"/(checkpoint+".png")).wstring().c_str());
+        const auto offset = preview.UIPan();
+        const int x = static_cast<int>(std::lround(outside[index].x * preview.UIZoom() + offset.x));
+        const int y = static_cast<int>(std::lround(outside[index].y * preview.UIZoom() + offset.y));
+        Gdiplus::Color pixel;
+        if (capture.GetPixel(x, y, &pixel) != Gdiplus::Ok || pixel.GetBlue() < 15) {
+            Trace("ui_view_clip", false, checkpoint + ": visible object was clipped");
+            return false;
+        }
+        if (index == 1) {
+            const auto canvas = frameElement()->canvas;
+            if (!context_.AddComponentToEntity(canvas, "kb21.ui.mask") ||
+                !VerifySceneRenderTargetAfterSecondary("ui-outside-canvas-masked")) return false;
+            Gdiplus::Bitmap masked((artifactRoot_/"screenshots"/"ui-outside-canvas-masked.png").wstring().c_str());
+            Gdiplus::Color maskedPixel;
+            if (masked.GetPixel(x, y, &maskedPixel) != Gdiplus::Ok || maskedPixel.GetBlue() >= 15) {
+                Trace("ui_view_clip", false, "authored mask stopped clipping");
+                return false;
+            }
+            if (!context_.UndoSceneCommand() || !frameElement()) return false;
+            Trace("ui_view_clip", true, "authored mask preserved");
+        }
+        context_.SelectEntity({});
+        if (!EditorUIRectInteraction::Begin(context_, width, height, outside[index].x, outside[index].y, preview.UIZoom()) ||
+            context_.SelectedEntity() != entity) {
+            Trace("ui_view_clip", false, checkpoint + ": object could not be selected");
+            return false;
+        }
+        static_cast<void>(EditorUIRectInteraction::End(context_, true));
+        if (!context_.UndoSceneCommand() || !frameElement()) return false;
+        Trace("ui_view_clip", true, checkpoint + ": visible and selectable");
+    }
+    preview.ZoomUI(std::log(2.0F) / std::log(1.15F), {320,180});
+    for (const int steps : {-1,-2,-4,-10,-20}) {
+        preview.ZoomUI(static_cast<float>(steps),{320,180});
+        preview.BeginUIPan(0,0);
+        preview.UpdateUIPan(0.37F,0.61F);
+        const auto offset=preview.UIPan();
+        const float scale=preview.UIZoom();
+        const std::string checkpoint="canvas-zoom-out-"+std::to_string(-steps);
+        if (!VerifySceneRenderTargetAfterSecondary(checkpoint)) return false;
+        Gdiplus::Bitmap image((artifactRoot_/"screenshots"/(checkpoint+".png")).wstring().c_str());
+        const std::array<float,4> edges{offset.x,offset.y,offset.x+width*scale,offset.y+height*scale};
+        for (int edge=0;edge<4;++edge) {
+            const bool vertical=edge%2==0;
+            const int start=static_cast<int>(std::ceil(vertical ? edges[1] : edges[0]))+3;
+            const int stop=static_cast<int>(std::floor(vertical ? edges[3] : edges[2]))-3;
+            int missing=0;
+            for (int along=start;along<stop;++along) {
+                bool visible=false;
+                for (int across=static_cast<int>(std::floor(edges[edge]))-2;across<=static_cast<int>(std::ceil(edges[edge]))+1;++across) {
+                    const int x=vertical ? across : along, y=vertical ? along : across;
+                    if (x<0 || y<0 || x>=static_cast<int>(image.GetWidth()) || y>=static_cast<int>(image.GetHeight())) continue;
+                    Gdiplus::Color color{};
+                    if (image.GetPixel(static_cast<UINT>(x),static_cast<UINT>(y),&color)==Gdiplus::Ok && color.GetBlue()>12) visible=true;
+                }
+                if (!visible) ++missing;
+            }
+            if (missing!=0) {
+                Trace("ui_canvas_edges",false,checkpoint+" edge="+std::to_string(edge)+" missing-pixels="+std::to_string(missing));
+                return false;
+            }
+        }
+        Trace("ui_canvas_edges",true,checkpoint+": four complete edges");
+        preview.UpdateUIPan(0,0);
+        preview.ZoomUI(std::log(1.0F/scale)/std::log(1.15F),{320,180});
+    }
+    if (!pointer.HandlePointerDown(panel, button.x, button.y) || preview.Is2D())
+        return false;
+    const auto cameraAfter = context_.ViewportCamera(1U).Position();
+    const bool sameCamera =
+        cameraBefore.x == cameraAfter.x && cameraBefore.y == cameraAfter.y && cameraBefore.z == cameraAfter.z;
+    Trace("ui_2d", sameCamera, "eight-handles-move-cancel-undo-zoom-camera-restored");
+    return sameCamera;
+}
+
+bool EditorHeadlessAutomation::SelectUIAnchorPreset(int preset) {
+    if (preset < 0 || preset >= 16) return false;
+    EditorInspectorPointerController pointer{context_};
+    impl_->viewport.ClearPresentRequest();
+    if (!context_.Inspector().IsDisclosureExpanded(InspectorDisclosureId::UIAnchorPresets)) {
+        const auto hit = FindInspectorHit(context_, InspectorSectionId::UIRectTransform, InspectorPropertyId::UIAnchorPresets);
+        if (!hit) return false;
+        const auto point = Center(hit->rect);
+        if (!pointer.HandlePointerDown(kInspectorContent, point.x, point.y, impl_->viewport)) return false;
+        if (impl_->viewport.PresentRequested()) {
+            Trace("ui_anchor_refresh", false, "opening-selector-requested-render");
+            return false;
+        }
+    }
+    const auto hit = FindInspectorHit(context_, InspectorSectionId::UIRectTransform, InspectorPropertyId::UIAnchorPreset, preset);
+    if (!hit) return false;
+    const auto point = Center(hit->rect);
+    if (!pointer.HandlePointerDown(kInspectorContent, point.x, point.y, impl_->viewport)) return false;
+    if (!impl_->viewport.PresentRequested()) {
+        Trace("ui_anchor_refresh", false, "anchor-edit-did-not-request-render");
+        return false;
+    }
+    if (!impl_->RenderScene(context_, 1U, true)) return false;
+    impl_->viewport.ClearPresentRequest();
+    Trace("ui_anchor_refresh", true, "edit-mode-frame-presented-without-play");
+    const auto* rect = context_.Scene().Components().UI().TryGet<kb::scene::UIRectTransform>(context_.SelectedEntity());
+    const bool matched = rect != nullptr && InspectorUIComponentModel::AnchorPreset(*rect) == preset;
+    Trace("ui_anchor_preset", matched, std::to_string(preset));
+    return matched;
+}
+
+bool EditorHeadlessAutomation::SetUIRectLayoutField(int field, float value) {
+    if (field < 0 || field >= 4 || !std::isfinite(value)) return false;
+    const auto hit = FindInspectorHit(context_, InspectorSectionId::UIRectTransform, InspectorPropertyId::UIRectLayoutField, field);
+    if (!hit) return false;
+    const auto point = Center(hit->rect);
+    if (!InspectorPanelInteraction::HandlePointerDown(context_, *hit, point.x, point.y) || !context_.Inspector().IsTextEditing()) return false;
+    while (!context_.Inspector().EditBuffer().empty()) {
+        static_cast<void>(InspectorPanelInteraction::HandleKeyDown(nullptr, context_, VK_BACK));
+    }
+    std::ostringstream text;
+    text << std::setprecision(9) << value;
+    for (const char character : text.str()) {
+        static_cast<void>(InspectorPanelInteraction::HandleChar(context_, static_cast<wchar_t>(character)));
+    }
+    static_cast<void>(InspectorPanelInteraction::HandleKeyDown(nullptr, context_, VK_RETURN));
+    const auto* rect = context_.Scene().Components().UI().TryGet<kb::scene::UIRectTransform>(context_.SelectedEntity());
+    if (rect == nullptr || context_.Inspector().IsTextEditing()) return false;
+    const auto fields = InspectorUIComponentModel::RectLayoutFields(*rect);
+    const auto parsed = InspectorUIComponentModel::Parse(kb::scene::UIComponentPropertyType::Float, fields[static_cast<std::size_t>(field)].value);
+    const bool matched = parsed && std::abs(std::get<float>(*parsed) - value) <= 0.001F;
+    Trace("ui_rect_layout", matched, text.str());
+    return matched;
+}
+
+bool EditorHeadlessAutomation::VerifyUICreationMenu() {
+    const auto fail = [&](std::string_view reason) {
+        Trace("ui_creation_menu", false, reason);
+        return false;
+    };
+    const auto findSubmenu = [](HMENU menu, std::string_view label) -> HMENU {
+        for (int index = 0; index < GetMenuItemCount(menu); ++index) {
+            char text[128]{};
+            GetMenuStringA(menu, static_cast<UINT>(index), text, sizeof(text), MF_BYPOSITION);
+            if (label == text) return GetSubMenu(menu, index);
+        }
+        return nullptr;
+    };
+    HMENU menu = EditorRightButtonDownRouter::CreateHierarchyMenu();
+    if (!menu) return fail("menu-allocation-failed");
+    const auto create = findSubmenu(menu, "Create");
+    const auto widgets = create ? findSubmenu(create, "User Widget") : nullptr;
+    std::vector<std::pair<std::string, UINT>> commands;
+    const auto collect = [&](auto&& self, HMENU current) -> void {
+        for (int index = 0; index < GetMenuItemCount(current); ++index) {
+            if (const auto child = GetSubMenu(current, index)) self(self, child);
+            else {
+                char text[128]{};
+                GetMenuStringA(current, static_cast<UINT>(index), text, sizeof(text), MF_BYPOSITION);
+                if (text[0] != '\0') commands.emplace_back(text, GetMenuItemID(current, index));
+            }
+        }
+    };
+    if (widgets) collect(collect, widgets);
+    DestroyMenu(menu);
+    if (!widgets || commands.size() != kb::scene::UIComponentCatalog().size())
+        return fail("missing-user-widget-menu-entry");
+    const auto baseline = context_.HierarchyRows().size();
+    for (const auto& descriptor : kb::scene::UIComponentCatalog()) {
+        const auto command = std::ranges::find_if(commands, [&](const auto& item) { return item.first == descriptor.displayName; });
+        if (command == commands.end()) return fail("missing-component-command");
+        const auto revision = context_.SceneRenderRevision();
+        if (!EditorRightButtonDownRouter::ExecuteHierarchyMenuCommand(command->second, context_))
+            return fail(std::string{descriptor.displayName} + ": creation failed");
+        auto entity = context_.SelectedEntity();
+        const auto components = InspectorUIComponentModel::Components(context_.Scene(), entity);
+        if (std::ranges::find(components, descriptor.type) == components.end() ||
+            context_.Scene().Entities().Name(entity) != descriptor.displayName ||
+            context_.SceneRenderRevision() == revision) return fail("component-name-or-refresh-missing");
+        for (const auto& preset : kb::scene::UIComponentPresetCatalog()) {
+            if (preset.name != descriptor.displayName) continue;
+            for (const auto dependency : preset.components)
+                if (std::ranges::find(components, dependency) == components.end()) return fail("missing-preset-dependency");
+        }
+        auto root = entity;
+        while (context_.Scene().Hierarchy().Parent(root).IsValid()) root = context_.Scene().Hierarchy().Parent(root);
+        if (!context_.Scene().Components().UI().Has<kb::scene::UICanvas>(root)) return fail("missing-canvas");
+        kb::scene::SceneUIFrame frame;
+        if (!kb::scene::SceneUIQueries{context_.Scene()}.BuildFrame(1280.0F, 720.0F, frame) ||
+            std::ranges::none_of(frame.elements, [entity](const auto& element) {
+                return element.entity == entity && element.rect.width > 0.0F && element.rect.height > 0.0F;
+            })) return fail("created-widget-absent-from-frame");
+        if (const auto* text = context_.Scene().Components().UI().TryGet<kb::scene::UIText>(entity);
+            text && text->fontAssetId == 0) return fail("missing-font-dependency");
+        const auto createdCount = context_.HierarchyRows().size();
+        if (!context_.UndoSceneCommand() || context_.HierarchyRows().size() != baseline ||
+            !context_.RedoSceneCommand() || context_.HierarchyRows().size() != createdCount ||
+            !context_.UndoSceneCommand() || context_.HierarchyRows().size() != baseline)
+            return fail("creation-not-one-undo-command");
+        Trace("ui_creation_menu", true, descriptor.displayName);
+    }
+    const auto createFromMenu = [&](std::string_view label, kb::scene::SceneEntity parent = {}) {
+        const auto command = std::ranges::find_if(commands, [&](const auto& item) { return item.first == label; });
+        if (command == commands.end() || !EditorRightButtonDownRouter::ExecuteHierarchyMenuCommand(command->second, context_, parent))
+            return kb::scene::SceneEntity{};
+        return context_.SelectedEntity();
+    };
+    const auto canvas = createFromMenu("Canvas");
+    const auto button = createFromMenu("Button", canvas);
+    const auto rows = context_.HierarchyRows();
+    for (std::size_t index = 0; index < rows.size(); ++index)
+        if (rows[index].entity == canvas && !context_.ToggleHierarchyRowExpanded(index)) return fail("collapse-parent-failed");
+    const auto image = createFromMenu("Image", button);
+    const auto sibling = createFromMenu("Button");
+    if (!canvas.IsValid() || !button.IsValid() || !image.IsValid() || !sibling.IsValid() ||
+        context_.Scene().Hierarchy().Parent(button) != canvas ||
+        context_.Scene().Hierarchy().Parent(image) != button ||
+        context_.Scene().Hierarchy().Parent(sibling) != canvas ||
+        context_.Scene().Entities().Name(sibling) != "Button 1" ||
+        context_.HierarchyRows().size() != baseline + 4) return fail("parenting-canvas-reuse-or-unique-name-failed");
+    if (EditorRightButtonDownRouter::ExecuteHierarchyMenuCommand(0, context_)) return fail("unknown-command-accepted");
+    for (int index = 0; index < 4; ++index) if (!context_.UndoSceneCommand()) return fail("parented-creation-undo-failed");
+    if (context_.HierarchyRows().size() != baseline) return fail("creation-left-extra-entities");
+    Trace("ui_creation_menu", true, "parenting-canvas-reuse-unique-names-undo");
+    return true;
+}
+
+bool EditorHeadlessAutomation::VerifyUIComponentCatalog() {
+    for (const auto& descriptor : kb::scene::UIComponentCatalog()) {
+        auto entity = context_.CreateHierarchyObject();
+        context_.SelectEntity(entity);
+        if (!AddComponent(descriptor.stableId)) return false;
+        if (descriptor.type == kb::scene::UIComponentType::Text) {
+            const auto section = InspectorUIComponentModel::Section(descriptor.type);
+            const auto property = InspectorUIComponentModel::Property(descriptor.type);
+            const auto font = FindInspectorHit(context_, section, property, 1, InspectorHitKind::TextField);
+            const auto text = FindInspectorHit(context_, section, property, 0, InspectorHitKind::TextField);
+            if (!font || !text) return false;
+            std::array<std::uint64_t, 2> before{}, after{};
+            const auto capture = [&](std::string_view name, std::array<std::uint64_t, 2>& hashes) {
+                return CaptureBitmap(artifactRoot_ / "screenshots" / (std::string{name} + ".bmp"),
+                    kDefaultScreenshotDimensions, [&](HDC dc) {
+                        InspectorPanelRenderer{}.Paint(dc, kInspectorContent, MakeEditorDarkTheme(), context_);
+                        const std::array boxes{font->rect, text->rect};
+                        for (std::size_t lane = 0; lane < boxes.size(); ++lane) {
+                            auto& hash = hashes[lane];
+                            hash = 14695981039346656037ULL;
+                            for (int y = boxes[lane].top; y < boxes[lane].bottom; ++y)
+                                for (int x = boxes[lane].left; x < boxes[lane].right; ++x)
+                                    hash = (hash ^ GetPixel(dc, x, y)) * 1099511628211ULL;
+                        }
+                    });
+            };
+            static_cast<void>(context_.Inspector().SetHover(InspectorHitKind::None, InspectorSectionId::None, InspectorPropertyId::None));
+            if (!capture("text-focus-before", before)) return false;
+            static_cast<void>(context_.Inspector().SetHover(InspectorHitKind::TextField, section, property, 0));
+            context_.Inspector().BeginTextEdit(property, "Editing text");
+            context_.Inspector().SetEditIndex(0);
+            const bool captured = capture("text-focus-active", after);
+            context_.Inspector().EndTextEdit();
+            static_cast<void>(context_.Inspector().SetHover(InspectorHitKind::None, InspectorSectionId::None, InspectorPropertyId::None));
+            const bool isolated = captured && before[0] == after[0] && before[1] != after[1];
+            Trace("ui_field_focus", isolated, isolated ? "text-only-highlight" : "text-focus-changed-font-field");
+            if (!isolated) return false;
+        }
+        const auto components = InspectorUIComponentModel::Components(context_.Scene(), entity);
+        if (components.empty() || components.front() != kb::scene::UIComponentType::RectTransform) {
+            Trace("ui_catalog", false, "anchors-not-first");
+            return false;
+        }
+        const auto entityName = context_.Scene().Entities().Name(entity);
+        const auto reacquire = [&]() {
+            for (const auto& candidate : context_.HierarchyRows()) {
+                if (candidate.name == entityName && context_.Scene().Components().UI().Has<kb::scene::UIRectTransform>(candidate.entity)) {
+                    entity = candidate.entity;
+                    context_.SelectEntity(entity);
+                    return true;
+                }
+            }
+            return false;
+        };
+        const auto colorRows = InspectorUIComponentModel::Properties(context_.Scene(), entity, descriptor.type);
+        for (const auto& row : colorRows) {
+            if (!row.color) continue;
+            if (!FindInspectorHit(context_, InspectorUIComponentModel::Section(descriptor.type),
+                    InspectorUIComponentModel::Property(descriptor.type), row.groupStart, InspectorHitKind::ColorField)) {
+                Trace("ui_palette", false, "color-swatch-not-found");
+                return false;
+            }
+            const auto before = kb::scene::CaptureSceneUIComponents(context_.Scene().Components().UI(), entity);
+            const std::array<float, 4> tint{0.21F, 0.43F, 0.67F, 0.59F};
+            auto invalid = tint;
+            invalid[3] = std::numeric_limits<float>::quiet_NaN();
+            if (context_.SetUIColor(entity, descriptor.type, row.name, invalid) ||
+                !kb::scene::AreUIComponentSetsEqual(before,
+                    kb::scene::CaptureSceneUIComponents(context_.Scene().Components().UI(), entity))) {
+                Trace("ui_palette", false, "invalid-color-partially-applied");
+                return false;
+            }
+            const auto revision = context_.SceneRenderRevision();
+            if (!context_.SetUIColor(entity, descriptor.type, row.name, tint) || context_.SceneRenderRevision() == revision) {
+                Trace("ui_palette", false, "color-edit-not-applied-or-not-dirty");
+                return false;
+            }
+            const auto edited = kb::scene::CaptureSceneUIComponents(context_.Scene().Components().UI(), entity);
+            for (int lane = 0; lane < 4; ++lane) {
+                kb::scene::UIComponentPropertyValue actual;
+                if (!kb::scene::ReadUIComponentProperty(edited, descriptor.type,
+                        colorRows[static_cast<std::size_t>(row.groupStart + lane)].name, actual) ||
+                    std::get<float>(actual) != tint[lane]) {
+                    Trace("ui_palette", false, "color-channel-not-applied");
+                    return false;
+                }
+            }
+            if (!context_.UndoSceneCommand() || !reacquire() ||
+                !kb::scene::AreUIComponentSetsEqual(before,
+                    kb::scene::CaptureSceneUIComponents(context_.Scene().Components().UI(), entity)) ||
+                !context_.RedoSceneCommand() || !reacquire() ||
+                !kb::scene::AreUIComponentSetsEqual(edited,
+                    kb::scene::CaptureSceneUIComponents(context_.Scene().Components().UI(), entity))) {
+                Trace("ui_palette", false, "color-not-one-undo-redo");
+                return false;
+            }
+            Trace("ui_palette", true, std::string{descriptor.displayName} + "." + row.label);
+        }
+        static_cast<void>(context_.Inspector().SetScrollOffset(0, 0));
+        if (!CaptureInspector(std::string{"compact-"} + std::string{descriptor.displayName})) return false;
+        if (!CaptureBitmap(artifactRoot_ / "screenshots" /
+                ("compact-" + SafeCheckpoint(descriptor.displayName) + "-narrow.bmp"), ScreenshotDimensions{440, 900, 96},
+                [&](HDC dc) {
+                    InspectorPanelRenderer{}.Paint(dc, RECT{0, 0, 440, 900}, MakeEditorDarkTheme(), context_);
+                })) return false;
+        const auto values = kb::scene::CaptureSceneUIComponents(context_.Scene().Components().UI(), entity);
+        for (const auto& property : kb::scene::UIComponentPropertyCatalog(descriptor.type)) {
+            kb::scene::UIComponentPropertyValue value;
+            if (!kb::scene::ReadUIComponentProperty(values, descriptor.type, property.name, value) ||
+                (property.writable && !SetUIComponentProperty(descriptor.type, property.name, value))) {
+                Trace("ui_catalog", false, std::string{descriptor.displayName} + "." + std::string{property.name});
+                return false;
+            }
+        }
+        if (!SetUIComponentProperty(kb::scene::UIComponentType::RectTransform, "scale.x",
+                kb::scene::UIComponentPropertyValue{1.25F})) return false;
+        kb::scene::SceneUIFrame frame;
+        if (!kb::scene::SceneUIQueries{context_.Scene()}.BuildFrame(1280.0F, 720.0F, frame) ||
+            std::ranges::none_of(frame.elements, [entity](const auto& element) {
+                return element.entity == entity && element.rect.width > 0.0F && element.rect.height > 0.0F;
+            })) {
+            Trace("ui_catalog", false, std::string{descriptor.displayName} + " absent from scene frame");
+            return false;
+        }
+        Trace("ui_catalog", true, descriptor.displayName);
+        auto root = entity;
+        while (context_.Scene().Hierarchy().Parent(root).IsValid()) root = context_.Scene().Hierarchy().Parent(root);
+        context_.SelectEntity(root);
+        if (!context_.DeleteSelectedHierarchyEntity()) return false;
+    }
+    return true;
 }
 
 bool EditorHeadlessAutomation::SetGameplayKey(
@@ -2176,7 +2790,9 @@ bool EditorHeadlessAutomation::CaptureInspector(
 }
 
 bool EditorHeadlessAutomation::CapturePanel(
-    std::string_view panel, std::string_view checkpoint) {
+    std::string_view panel, std::string_view checkpoint, int width, int height) {
+    if (width < 240 || width > 3840 || height < 200 || height > 2160) return false;
+    const RECT bounds{0, 0, width, height};
     const auto kind = ParsePanelKind(panel);
     if (!kind.has_value()) {
         Trace("capture_panel", false, panel);
@@ -2187,8 +2803,8 @@ bool EditorHeadlessAutomation::CapturePanel(
         (SafeCheckpoint(checkpoint) + ".bmp");
     bool panelContentCaptured = true;
     const bool saved = CaptureBitmap(
-        path, kDefaultScreenshotDimensions,
-        [this, kind, &panelContentCaptured](HDC memory) {
+        path, ScreenshotDimensions{width, height, 96},
+        [this, kind, bounds, &panelContentCaptured](HDC memory) {
             const DockPanel dockPanel{
                 .id = 1U,
                 .kind = *kind,
@@ -2199,8 +2815,8 @@ bool EditorHeadlessAutomation::CapturePanel(
             const EditorMetrics metrics{};
             const EditorRenderBackendSettings settings{};
             PanelContentRenderer{}.Paint(
-                memory, kInspectorContent, kInspectorContent,
-                kInspectorContent, kInspectorContent, dockPanel,
+                memory, bounds, bounds,
+                bounds, bounds, dockPanel,
                 theme, metrics, context_, settings, false);
             if (*kind == DockPanelKind::ScriptEditor &&
                 context_.ScriptEditor().IsOpen()) {
@@ -2213,7 +2829,7 @@ bool EditorHeadlessAutomation::CapturePanel(
                 if (impl_->scriptEditorWindow != nullptr) {
                     const RECT body =
                         ScriptEditorPanelRenderer::BodyRect(
-                            kInspectorContent);
+                            bounds);
                     ScriptEditorWindow::Sync(
                         impl_->scriptEditorWindow,
                         body,

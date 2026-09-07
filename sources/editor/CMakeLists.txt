@@ -104,6 +104,9 @@ add_executable(kb_editor WIN32
     src/app/scene_viewport/EditorSceneViewportMath.cpp
     src/app/scene_viewport/EditorSceneViewportAssetDragPreview.cpp
     src/app/scene_viewport/EditorSceneViewportMeshPicker.cpp
+    src/app/scene_viewport/EditorUIRectInteraction.cpp
+    src/private/app/scene_viewport/EditorUIRectInteraction.hpp
+    src/private/scene/EditorUIRectDragState.hpp
     src/app/scene_viewport/EditorSceneViewportObjectInteraction.cpp
     src/app/scene_viewport/EditorSceneViewportSelectionController.cpp
     src/app/scene_viewport/EditorSceneViewportSelectionInteraction.cpp
@@ -871,6 +874,7 @@ add_executable(kb_editor WIN32
     src/scene/EditorSceneCommandController.cpp
     src/scene/EditorSceneContext.cpp
     src/scene/ui/EditorUIComponentAuthoring.cpp
+    src/private/platform/win32/EditorBundledFontPath.hpp
     src/scene/EditorSceneContextSkeletalMesh.cpp
     src/scene/EditorSceneBuildGame.cpp
     src/scene/EditorParticleEditorHost.cpp
@@ -1394,6 +1398,28 @@ if(BUILD_TESTING)
 
     add_test(NAME kb_editor_tests COMMAND $<TARGET_FILE:kb_editor_tests>)
     set_tests_properties(kb_editor_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+    add_test(NAME kb_editor_user_widget_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessUserWidgetScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-UI-UserWidget")
+    set_tests_properties(kb_editor_user_widget_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;ui")
+    add_test(NAME kb_editor_ui_component_catalog_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessUIComponentCatalogScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-UI-Catalog")
+    set_tests_properties(kb_editor_ui_component_catalog_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;ui")
+    add_test(NAME kb_editor_ui_anchors_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessUIAnchorsScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-UI-Anchors")
+    set_tests_properties(kb_editor_ui_anchors_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;ui")
 
     add_test(
         NAME kb_editor_headless_automation_scenario

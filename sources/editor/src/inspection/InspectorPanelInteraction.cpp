@@ -2936,6 +2936,10 @@ void ApplyEntityFloatField(EditorSceneContext& sceneContext, kb::scene::SceneEnt
         return InspectorDisclosureId::MeshRendererAdvanced;
     case InspectorPropertyId::TerrainAdvanced:
         return InspectorDisclosureId::TerrainAdvanced;
+    case InspectorPropertyId::UIAnchorPresets:
+        return InspectorDisclosureId::UIAnchorPresets;
+    case InspectorPropertyId::UIRectAdvanced:
+        return InspectorDisclosureId::UIRectAdvanced;
     default:
         return std::nullopt;
     }
@@ -3183,6 +3187,23 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
         return true;
     }
 
+    if (hit.property == InspectorPropertyId::UIAnchorPreset) {
+        sceneContext.Inspector().EndTextEdit();
+        if (sceneContext.SetUIAnchorPreset(entity, hit.index,
+                (GetKeyState(VK_MENU) & 0x8000) != 0, (GetKeyState(VK_SHIFT) & 0x8000) != 0)) {
+            sceneContext.Inspector().ToggleDisclosure(InspectorDisclosureId::UIAnchorPresets);
+        }
+        return true;
+    }
+    if (hit.property == InspectorPropertyId::UIRectLayoutField) {
+        const auto* rect = sceneContext.Scene().Components().UI().TryGet<kb::scene::UIRectTransform>(entity);
+        if (rect != nullptr && hit.index >= 0 && hit.index < 4) {
+            const auto fields = InspectorUIComponentModel::RectLayoutFields(*rect);
+            sceneContext.Inspector().BeginTextEdit(hit.property, fields[static_cast<std::size_t>(hit.index)].value);
+            sceneContext.Inspector().SetEditIndex(hit.index);
+        }
+        return true;
+    }
     if (const std::optional<kb::scene::UIComponentType> component =
             InspectorUIComponentModel::Component(hit.section);
         component.has_value()) {
@@ -3590,6 +3611,12 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
                 }
             }
             inspector.EndTextEdit();
+            return true;
+        }
+        if (inspector.EditedProperty() == InspectorPropertyId::UIRectLayoutField) {
+            const auto parsed = InspectorUIComponentModel::Parse(kb::scene::UIComponentPropertyType::Float, inspector.EditBuffer());
+            if (parsed && sceneContext.SetUIRectLayoutField(sceneContext.SelectedEntity(), inspector.EditIndex(), std::get<float>(*parsed)))
+                inspector.EndTextEdit();
             return true;
         }
         if (const std::optional<kb::scene::UIComponentType> component =

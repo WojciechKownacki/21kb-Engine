@@ -59,6 +59,15 @@ struct EditorViewportProfile {
 
 class EditorViewportPreviewState {
 public:
+    [[nodiscard]] bool Is2D() const noexcept { return twoD_; }
+    void Toggle2D() noexcept { twoD_ = !twoD_; }
+    [[nodiscard]] float UIZoom() const noexcept { return uiZoom_; }
+    [[nodiscard]] kb::math::Vec2 UIPan() const noexcept { return uiPan_; }
+    void ZoomUI(float steps, kb::math::Vec2 pointer) noexcept;
+    void BeginUIPan(float x, float y) noexcept { uiPanPointer_ = {x,y}; }
+    void UpdateUIPan(float x, float y) noexcept {
+        uiPan_.x += x-uiPanPointer_.x; uiPan_.y += y-uiPanPointer_.y; uiPanPointer_ = {x,y};
+    }
     [[nodiscard]] EditorViewportProfile Profile() const noexcept;
     [[nodiscard]] EditorViewportProfileKind ProfileKind() const noexcept;
     [[nodiscard]] EditorViewportFitMode FitMode() const noexcept;
@@ -106,6 +115,9 @@ public:
     [[nodiscard]] std::uint32_t RenderHeightForPanel(std::uint32_t panelHeight) const noexcept;
 
 private:
+    bool twoD_ = false;
+    float uiZoom_ = 1.0F;
+    kb::math::Vec2 uiPan_{}, uiPanPointer_{};
     EditorViewportProfileKind profile_ = EditorViewportProfileKind::Free;
     EditorViewportFitMode fitMode_ = EditorViewportFitMode::Fit;
     EditorViewportCameraMode cameraMode_ = EditorViewportCameraMode::GameCamera;

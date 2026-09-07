@@ -10,6 +10,7 @@
 #include "engine/core/JsonValue.hpp"
 #include "engine/input/InputActionAsset.hpp"
 #include "engine/input/InputDeviceState.hpp"
+#include "engine/input/InputSubsystem.hpp"
 #include "engine/input/InputHaptics.hpp"
 #include "engine/input/InputKey.hpp"
 #include "engine/gameplay/GameInstance.hpp"
@@ -61,6 +62,7 @@
 #include "engine/scene/SceneVisibilityResolution.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 #include "engine/scene/SceneUIComponentSet.hpp"
+#include "engine/scene/SceneUI.hpp"
 #include "engine/ui/UIComponentPropertyCatalog.hpp"
 #include "engine/script/ScriptAgentProjectFiles.hpp"
 #include "engine/script/ScriptApiCatalog.hpp"
@@ -85,6 +87,9 @@
 #include "scene/material_preview/EditorMaterialGraphCookService.hpp"
 
 #include <Windows.h>
+#include <objidl.h>
+#include <gdiplus.h>
+#include "rendering/HeroIconGdiplusRuntime.hpp"
 
 #ifdef DrawText
 #undef DrawText
@@ -697,6 +702,60 @@ ReadScriptValue(
     }
     const auto operation = StringMember(step, "op", error);
     if (!operation.has_value()) return { false, error };
+
+    if (*operation == "verify_ui_2d") {
+        return {state.automation.VerifyUI2DEditing(), "2D toolbar, UI selection, eight resize handles, move, undo and cancel"};
+    }
+    if (*operation == "assert_ui_creation_menu") {
+        return {state.automation.VerifyUICreationMenu(), "Hierarchy UI creation, dependencies, parenting and Undo"};
+    }
+    if (*operation == "assert_ui_catalog") {
+        return {state.automation.VerifyUIComponentCatalog(), "UI catalog: anchors, editable fields, scene frame"};
+    }
+    if (*operation == "ui_anchor_preset" || *operation == "ui_rect_layout") {
+        const auto alias = StringMember(step, "entity", error);
+        if (!alias) return {false, error};
+        const auto entity = ResolveEntity(state, *alias);
+        if (!entity.IsValid()) return {false, "UI entity could not be resolved"};
+        state.context.SelectEntity(entity);
+        if (*operation == "ui_anchor_preset") {
+            const auto preset = NumberMember(step, "preset", error);
+            if (!preset || *preset < 0.0 || *preset > 15.0 || std::floor(*preset) != *preset) return {false, "preset must be 0..15"};
+            return {state.automation.SelectUIAnchorPreset(static_cast<int>(*preset)), "anchor preset through Inspector"};
+        }
+        const auto field = NumberMember(step, "field", error);
+        const auto value = NumberMember(step, "value", error);
+        if (!field || !value || *field < 0.0 || *field > 3.0 || std::floor(*field) != *field) return {false, "layout field must be 0..3 and value is required"};
+        return {state.automation.SetUIRectLayoutField(static_cast<int>(*field), static_cast<float>(*value)), "layout field through Inspector"};
+    }
+    if (*operation == "assert_ui_frame") {
+        const auto alias = StringMember(step, "entity", error);
+        if (!alias) return {false, error};
+        const auto entity = ResolveEntity(state, *alias);
+        const float width = static_cast<float>(NumberMember(step, "width", error, false).value_or(1280.0));
+        const float height = static_cast<float>(NumberMember(step, "height", error, false).value_or(720.0));
+        const bool expected = BoolMember(step, "visible", error, false).value_or(true);
+        if (!error.empty()) return {false, error};
+        if (!entity.IsValid()) return {false, "UI entity could not be resolved"};
+        kb::scene::SceneUIFrame frame;
+        if (!kb::scene::SceneUIQueries{state.context.Scene()}.BuildFrame(width, height, frame)) {
+            return {false, "UI frame construction failed"};
+        }
+        const auto found = std::ranges::find(frame.elements, entity, &kb::scene::SceneUIFrameElement::entity);
+        const bool visible = found != frame.elements.end() && found->rect.width > 0.0F &&
+            found->rect.height > 0.0F && found->effectiveOpacity > 0.0F;
+        if (found != frame.elements.end()) {
+            const std::array<std::pair<std::string_view, float>, 4> dimensions{{
+                {"rect_x", found->rect.x}, {"rect_y", found->rect.y},
+                {"rect_width", found->rect.width}, {"rect_height", found->rect.height}}};
+            for (const auto& [key, actual] : dimensions) {
+                const auto expectedValue = NumberMember(step, key, error, false);
+                if (expectedValue && std::abs(static_cast<double>(actual) - *expectedValue) > 0.01)
+                    return {false, std::string{key} + " expected=" + std::to_string(*expectedValue) + " actual=" + std::to_string(actual)};
+            }
+        }
+        return {visible == expected, *alias + (visible ? " present in UI frame" : " absent or empty in UI frame")};
+    }
 
     if (*operation == "init_agent_project") {
         kb::script::ScriptRuntimeHost host{ state.context.Scene() };
@@ -3647,6 +3706,12 @@ ReadScriptValue(
         const auto x = NumberMember(step, "x", error);
         const auto y = NumberMember(step, "y", error);
         if (!x || !y) return { false, error };
+        if (step.Find("width") != nullptr || step.Find("height") != nullptr) {
+            const auto width = UInt32Member(step, "width", error);
+            const auto height = UInt32Member(step, "height", error);
+            if (!width || !height || *width == 0U || *height == 0U) return {false, "invalid pointer viewport"};
+            state.context.Scene().Input().MutableDeviceState().SetPointerViewportExtent(*width, *height);
+        }
         return {
             state.automation.SetGameplayPointer(
                 static_cast<float>(*x), static_cast<float>(*y)),
@@ -3915,8 +3980,12 @@ ReadScriptValue(
         const auto checkpoint =
             StringMember(step, "checkpoint", error);
         if (!panel || !checkpoint) return { false, error };
+        const double width = NumberMember(step, "width", error, false).value_or(900.0);
+        const double height = NumberMember(step, "height", error, false).value_or(700.0);
+        if (!error.empty() || width < 240.0 || width > 3840.0 || height < 200.0 || height > 2160.0)
+            return {false, "capture dimensions outside supported bounds"};
         return {
-            state.automation.CapturePanel(*panel, *checkpoint),
+            state.automation.CapturePanel(*panel, *checkpoint, static_cast<int>(width), static_cast<int>(height)),
             *panel + ':' + *checkpoint };
     }
 
@@ -3929,6 +3998,30 @@ ReadScriptValue(
             state.automation.CapturePanelScreenshotMatrix(
                 *panel, *checkpoint),
             *panel + ':' + *checkpoint };
+    }
+
+    if (*operation == "assert_capture_difference") {
+        const auto before = StringMember(step, "before", error);
+        const auto after = StringMember(step, "after", error);
+        if (!before || !after) return {false, error};
+        const auto root = state.automation.ArtifactRoot() / "screenshots";
+        HeroIconGdiplusRuntime::EnsureStarted();
+        Gdiplus::Bitmap first((root / (*before + ".png")).wstring().c_str());
+        Gdiplus::Bitmap second((root / (*after + ".png")).wstring().c_str());
+        if (first.GetLastStatus() != Gdiplus::Ok || second.GetLastStatus() != Gdiplus::Ok ||
+            first.GetWidth() != second.GetWidth() || first.GetHeight() != second.GetHeight()) {
+            return {false, "capture images must be readable and have equal dimensions"};
+        }
+        std::size_t changed = 0U;
+        for (UINT y = 0U; y < first.GetHeight(); ++y) {
+            for (UINT x = 0U; x < first.GetWidth(); ++x) {
+                Gdiplus::Color lhs{}, rhs{};
+                if (first.GetPixel(x, y, &lhs) != Gdiplus::Ok || second.GetPixel(x, y, &rhs) != Gdiplus::Ok)
+                    return {false, "capture pixel read failed"};
+                if (lhs.GetValue() != rhs.GetValue()) ++changed;
+            }
+        }
+        return {changed >= 100U, "changed pixels: " + std::to_string(changed) + " (minimum 100)"};
     }
 
     if (*operation == "capture_runtime") {

@@ -84,6 +84,8 @@ SceneViewportToolbarRects SceneViewportToolbarLayout::Resolve(
     rects.snapStepButton = ButtonRect(rects.row, cursor, SceneViewportToolbarMetrics::ValueButtonWidth);
     rects.rotationSnapButton = ButtonRect(rects.row, cursor, SceneViewportToolbarMetrics::ValueButtonWidth);
 
+    rects.twoDButton = ButtonRect(rects.row, cursor, 64);
+
     const EditorViewportToolbarDropdown dropdown = state.ToolbarDropdown();
     const int optionCount = DropdownOptionCount(dropdown);
     if (optionCount > 0) {

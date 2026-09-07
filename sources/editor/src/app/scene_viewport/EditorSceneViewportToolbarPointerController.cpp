@@ -212,6 +212,12 @@ bool EditorSceneViewportToolbarPointerController::HandlePointerDown(const Editor
         sceneViewport_.RequestPresent();
         return true;
     }
+    if (PointInRect(toolbar.twoDButton, x, y)) {
+        preview.CloseToolbarDropdown();
+        preview.Toggle2D();
+        sceneViewport_.RequestPresent();
+        return true;
+    }
     if (PointInRect(toolbar.rotationSnapButton, x, y)) {
         preview.ToggleToolbarDropdown(EditorViewportToolbarDropdown::RotationSnap);
         sceneViewport_.RequestPresent();

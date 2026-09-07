@@ -17,6 +17,9 @@ namespace kb::editor {
 class ScenePanelContentRenderer {
 public:
 #if defined(_WIN32)
+    [[nodiscard]] static EditorSceneBgfxViewport::PresentSettings BuildSettings(
+        const RECT& content, const DockPanel& panel, const EditorSceneContext& sceneContext,
+        const EditorRenderBackendSettings& renderBackendSettings);
     static void PresentViewport(
         EditorSceneBgfxViewport& sceneViewport,
         HWND sceneViewportHost,

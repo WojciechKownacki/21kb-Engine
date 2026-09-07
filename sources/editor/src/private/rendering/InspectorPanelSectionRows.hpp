@@ -393,8 +393,8 @@ inline void DrawActionRow(
 }
 
 inline void DrawTagFieldRow(HDC dc, RECT row, const EditorTheme& theme, const InspectorPanelState& state,
-    InspectorSectionId section, InspectorPropertyId property, std::string_view label, std::string_view value) {
-    if (RowHovered(state, property)) {
+    InspectorSectionId section, InspectorPropertyId property, std::string_view label, std::string_view value, int editIndex = -1) {
+    if (RowHovered(state, property, editIndex)) {
         GdiDrawing::FillRectColor(dc, row, HoverFill(theme));
     }
     const RECT labelRect = Rect(row.left + kRowPadX, row.top, row.left + ((row.right - row.left) * 36 / 100), row.bottom);
@@ -405,9 +405,10 @@ inline void DrawTagFieldRow(HDC dc, RECT row, const EditorTheme& theme, const In
         Text(dc, labelRect, label, Color(theme.textSecondary));
     }
 
-    const bool hovered = FieldValueHovered(state, section, property);
+    const bool hovered = FieldValueHovered(state, section, property, editIndex) ||
+        state.IsHovered(InspectorHitKind::ChoiceField, section, property, editIndex);
     const bool classified = !value.empty();
-    const bool open = state.IsTagsDropdownOpen();
+    const bool open = property == InspectorPropertyId::TagsText && state.IsTagsDropdownOpen();
     DrawInputFrame(dc, valueRect, hovered || open ? HoverFill(theme) : Color(theme.chrome),
         open ? Color(theme.textDisabled) : Color(theme.borderPanel));
     {
@@ -430,15 +431,15 @@ inline void DrawTagFieldRow(HDC dc, RECT row, const EditorTheme& theme, const In
     return valueRect;
 }
 
-inline void DrawAssetFieldRow(HDC dc, RECT row, const EditorTheme& theme, const InspectorPanelState& state, InspectorSectionId section, InspectorPropertyId property, InspectorPropertyId buttonProperty, std::string_view label, std::string_view value) {
-    if (RowHovered(state, property) || RowHovered(state, buttonProperty)) {
+inline void DrawAssetFieldRow(HDC dc, RECT row, const EditorTheme& theme, const InspectorPanelState& state, InspectorSectionId section, InspectorPropertyId property, InspectorPropertyId buttonProperty, std::string_view label, std::string_view value, int editIndex = -1) {
+    if (RowHovered(state, property, editIndex) || state.IsHovered(InspectorHitKind::TextField, section, buttonProperty, editIndex)) {
         GdiDrawing::FillRectColor(dc, row, HoverFill(theme));
     }
     const RECT labelRect = Rect(row.left + kRowPadX, row.top, row.left + ((row.right - row.left) * 36 / 100), row.bottom);
     const RECT valueRect = Rect(labelRect.right, CenteredY(row, kValueHeight), row.right - kValueRightInset, CenteredY(row, kValueHeight) + kValueHeight);
     const RECT textRect = AssetPickerTextRect(valueRect);
-    const bool valueHovered = state.IsHovered(InspectorHitKind::TextField, section, property);
-    const bool buttonHovered = state.IsHovered(InspectorHitKind::TextField, section, buttonProperty);
+    const bool valueHovered = state.IsHovered(InspectorHitKind::TextField, section, property, editIndex);
+    const bool buttonHovered = state.IsHovered(InspectorHitKind::TextField, section, buttonProperty, editIndex);
     ScopedFont labelFont(12, FW_SEMIBOLD);
     {
         const ScopedGdiObject selectedFont(dc, labelFont.handle);
@@ -531,8 +532,8 @@ public:
     }
 
     void Field(std::string_view label, std::string_view value, InspectorPropertyId property = InspectorPropertyId::None, int editIndex = -1) { if (!collapsed_) { DrawFieldRow(dc_, Row(), theme_, state_, section_, property, label, value, editIndex); Advance(); } }
-    void Tag(std::string_view label, std::string_view value, InspectorPropertyId property) { if (!collapsed_) { DrawTagFieldRow(dc_, Row(), theme_, state_, section_, property, label, value); Advance(); } }
-    void AssetField(std::string_view label, std::string_view value, InspectorPropertyId property, InspectorPropertyId buttonProperty) { if (!collapsed_) { DrawAssetFieldRow(dc_, Row(), theme_, state_, section_, property, buttonProperty, label, value); Advance(); } }
+    void Tag(std::string_view label, std::string_view value, InspectorPropertyId property, int editIndex = -1) { if (!collapsed_) { DrawTagFieldRow(dc_, Row(), theme_, state_, section_, property, label, value, editIndex); Advance(); } }
+    void AssetField(std::string_view label, std::string_view value, InspectorPropertyId property, InspectorPropertyId buttonProperty, int editIndex = -1) { if (!collapsed_) { DrawAssetFieldRow(dc_, Row(), theme_, state_, section_, property, buttonProperty, label, value, editIndex); Advance(); } }
     void Float(std::string_view label, std::string_view value, InspectorPropertyId property) { Field(label, value, property); }
     void Bool(std::string_view label, bool value, InspectorPropertyId property = InspectorPropertyId::None, int editIndex = -1) { if (!collapsed_) { DrawBoolRow(dc_, Row(), theme_, state_, section_, property, label, value, editIndex); Advance(); } }
     void Vec3(std::string_view label, const kb::scene::Vec3& value, InspectorPropertyId x, InspectorPropertyId y, InspectorPropertyId z) { if (!collapsed_) { DrawVec3Row(dc_, Row(), theme_, state_, section_, label, value, x, y, z); Advance(); } }

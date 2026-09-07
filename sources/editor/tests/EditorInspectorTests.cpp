@@ -3015,6 +3015,41 @@ void RunUIComponentAuthoringTest() {
     using kb::editor::InspectorUIComponentModel;
     using kb::scene::UIComponentPropertyValue;
     using kb::scene::UIComponentType;
+    {
+        kb::scene::UIRectTransform original;
+        original.offsetMin = {20.0F, 30.0F};
+        original.offsetMax = {220.0F, 90.0F};
+        for (int preset = 0; preset < 16; ++preset) {
+            auto rect = original;
+            kb::editor::tests::Require(InspectorUIComponentModel::ApplyAnchorPreset(rect, preset, {800.0F, 600.0F}, false, false) &&
+                    InspectorUIComponentModel::AnchorPreset(rect) == preset &&
+                    rect.anchorMin.x * 800.0F + rect.offsetMin.x == 20.0F &&
+                    rect.anchorMax.x * 800.0F + rect.offsetMax.x == 220.0F &&
+                    rect.anchorMin.y * 600.0F + rect.offsetMin.y == 30.0F &&
+                    rect.anchorMax.y * 600.0F + rect.offsetMax.y == 90.0F,
+                "Anchor presets must preserve all four layout edges by default");
+        }
+        auto rect = original;
+        kb::editor::tests::Require(InspectorUIComponentModel::EditRectLayout(rect, 0, 50.0F) &&
+                rect.offsetMin.x == -50.0F && rect.offsetMax.x == 150.0F &&
+                InspectorUIComponentModel::EditRectLayout(rect, 2, 300.0F) &&
+                rect.offsetMin.x == -100.0F && rect.offsetMax.x == 200.0F,
+            "Position edits preserve size and dimension edits preserve the pivot position");
+        kb::editor::tests::Require(!InspectorUIComponentModel::EditRectLayout(rect, 2, -1.0F) &&
+                !InspectorUIComponentModel::ApplyAnchorPreset(rect, 16, {800.0F, 600.0F}, false, false),
+            "Invalid dimensions and anchor presets must be rejected");
+        kb::editor::tests::Require(InspectorUIComponentModel::ApplyAnchorPreset(rect, 15, {800.0F, 600.0F}, true, true) &&
+                rect.offsetMin.x == 0.0F && rect.offsetMax.x == 0.0F &&
+                rect.offsetMin.y == 0.0F && rect.offsetMax.y == 0.0F &&
+                rect.pivot.x == 0.5F && rect.pivot.y == 0.5F,
+            "Aligning a stretch preset should fill its parent and center the pivot");
+        kb::editor::tests::Require(InspectorUIComponentModel::EditRectLayout(rect, 2, 20.0F) &&
+                InspectorUIComponentModel::EditRectLayout(rect, 3, 30.0F) &&
+                rect.offsetMax.x == -20.0F && rect.offsetMax.y == -30.0F &&
+                InspectorUIComponentModel::RectLayoutFields(rect)[2].label == "Right" &&
+                InspectorUIComponentModel::RectLayoutFields(rect)[3].label == "Bottom",
+            "Stretched layout exposes positive right and bottom insets");
+    }
 
     const std::span<const kb::scene::UIComponentDescriptor> componentCatalog =
         kb::scene::UIComponentCatalog();
@@ -3045,6 +3080,25 @@ void RunUIComponentAuthoringTest() {
         "UI asset fields should expose their kind and dependency role through the canonical property catalog");
 
     AudioScrubTransactionFixture fixture;
+    {
+        kb::scene::Scene savedScene;
+        const auto bare = savedScene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Existing Button" });
+        kb::scene::UIButton button;
+        button.submitOnRelease = false;
+        savedScene.Components().UI().Set(bare, button);
+        const auto document = kb::scene::SceneDocumentService::Capture(savedScene, "Existing UI");
+        kb::scene::Scene restored;
+        kb::editor::tests::Require(kb::scene::SceneDocumentService::LoadIntoScene(restored, document),
+            "A previously saved bare UI component should remain loadable");
+        const auto loaded = restored.Hierarchy().RootEntities().front();
+        kb::editor::tests::Require(EditorUIComponentAuthoring::Complete(restored, loaded) &&
+                restored.Components().UI().Has<kb::scene::UIRectTransform>(loaded) &&
+                restored.Components().UI().Has<kb::scene::UIText>(loaded) &&
+                restored.Components().UI().Has<kb::scene::UIBorder>(loaded) &&
+                restored.Components().UI().Has<kb::scene::UISelectable>(loaded) &&
+                !restored.Components().UI().TryGet<kb::scene::UIButton>(loaded)->submitOnRelease,
+            "Completing a saved Button must supply anchors and visuals while preserving its authored options");
+    }
     const kb::scene::SceneEntity entity = fixture.scene.Entities().CreateEntity(
         kb::scene::SceneObjectDesc{ .name = "WidgetEntity" });
     fixture.hierarchySelection.SelectEntity(entity);
@@ -3155,8 +3209,34 @@ void RunUIComponentAuthoringTest() {
             "Each canonical UI component should be independently addable");
         const std::vector<UIComponentType> authored =
             InspectorUIComponentModel::Components(fixture.scene, catalogEntity);
-        kb::editor::tests::Require(authored.size() == 1U && authored.front() == descriptor.type,
-            "Inspector should expose each independently attached UI component");
+        kb::editor::tests::Require(!authored.empty() && authored.front() == UIComponentType::RectTransform &&
+                std::ranges::find(authored, descriptor.type) != authored.end(),
+            "Every authored UI component must expose anchors first and retain its own properties");
+        const auto rows = InspectorUIComponentModel::Properties(fixture.scene, catalogEntity, descriptor.type);
+        for (std::size_t index = 0; index < rows.size(); ++index) {
+            const auto& row = rows[index];
+            if (row.name.ends_with(".r")) {
+                kb::editor::tests::Require(row.color && row.fieldCount == 4 &&
+                        rows[index + 1].fieldCount == 0 && rows[index + 2].fieldCount == 0 && rows[index + 3].fieldCount == 0,
+                    "Every UI color must occupy one palette row, never four channel rows");
+            }
+            if (!row.choices.empty()) {
+                auto candidate = kb::scene::CaptureSceneUIComponents(fixture.scene.Components().UI(), catalogEntity);
+                for (std::size_t choice = 0; choice < row.choices.size(); ++choice) {
+                    kb::editor::tests::Require(kb::scene::WriteUIComponentProperty(candidate, descriptor.type,
+                            row.name, static_cast<std::int32_t>(choice)) == kb::scene::UIComponentPropertyWriteResult::Succeeded,
+                        "UI dropdown options must correspond to accepted component values");
+                }
+                kb::editor::tests::Require(kb::scene::WriteUIComponentProperty(candidate, descriptor.type,
+                        row.name, static_cast<std::int32_t>(row.choices.size())) != kb::scene::UIComponentPropertyWriteResult::Succeeded,
+                    "UI dropdown must expose every enum value");
+            }
+        }
+        if (descriptor.type != UIComponentType::RectTransform) {
+            kb::editor::tests::Require(!EditorUIComponentAuthoring::Remove(
+                    fixture.scene, catalogEntity, UIComponentType::RectTransform),
+                "Removing anchors must be rejected while another UI component depends on them");
+        }
     }
 
     const std::filesystem::path sceneFile =

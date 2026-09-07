@@ -115,6 +115,11 @@ public:
         kb::scene::UIComponentType component,
         std::string_view property,
         const kb::scene::UIComponentPropertyValue& value);
+    [[nodiscard]] bool VerifyUICreationMenu();
+    [[nodiscard]] bool VerifyUIComponentCatalog();
+    [[nodiscard]] bool VerifyUI2DEditing();
+    [[nodiscard]] bool SelectUIAnchorPreset(int preset);
+    [[nodiscard]] bool SetUIRectLayoutField(int field, float value);
     [[nodiscard]] bool SetGameplayKey(
         kb::input::InputKey key, bool down,
         std::uint8_t gamepadIndex = 0U);
@@ -153,7 +158,7 @@ public:
     [[nodiscard]] bool CaptureInspector(
         std::string_view checkpoint);
     [[nodiscard]] bool CapturePanel(
-        std::string_view panel, std::string_view checkpoint);
+        std::string_view panel, std::string_view checkpoint, int width = 900, int height = 700);
     [[nodiscard]] bool CapturePanelScreenshotMatrix(
         std::string_view panel, std::string_view checkpoint);
     [[nodiscard]] bool VerifyViewportHostLifecycle();

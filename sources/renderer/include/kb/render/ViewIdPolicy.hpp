@@ -35,6 +35,8 @@ constexpr std::uint16_t PostProcessBloomMipBlurVStart = 28;
 constexpr std::uint16_t DetachedViewportStart = 37;
 constexpr std::uint16_t DetachedViewportStride = 36;
 constexpr std::uint16_t Max = 256;
+// Global asynchronous capture runs after every remapped viewport draw.
+constexpr std::uint16_t ScreenCapture = Max - 1U;
 
 [[nodiscard]] constexpr bool IsValid(std::uint16_t viewId) noexcept {
     return viewId < Max;

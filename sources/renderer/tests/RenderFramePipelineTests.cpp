@@ -473,6 +473,8 @@ void FrameStateBuildsCompleteBgfxRemapWhenSwitchingToDetachedViewport() {
     const std::span<const std::uint16_t> remap = state.BgfxViewRemap();
     Require(remap.size() == ViewId::Max,
         "RenderFrameState did not produce a complete bgfx view remap");
+    Require(remap[ViewId::ScreenCapture] == ViewId::ScreenCapture,
+        "Viewport remapping must leave the terminal screen capture view untouched");
     for (std::uint16_t viewId = 0U; viewId < ViewId::DetachedViewportStart; ++viewId) {
         Require(remap[viewId] == viewId,
             "Detached-only frame retained a stale primary viewport remap");

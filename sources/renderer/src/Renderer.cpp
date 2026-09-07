@@ -769,6 +769,48 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport screen UI frame build failed");
         return false;
     }
+    if (desc.editorSceneOverlaysEnabled) {
+        screenUIFrame.elements.insert(screenUIFrame.elements.end(), desc.editorUIOverlays.begin(), desc.editorUIOverlays.end());
+        if (desc.editorUIScale != 1.0F || desc.editorUIOffset.x != 0.0F || desc.editorUIOffset.y != 0.0F) {
+            if (!std::isfinite(desc.editorUIScale) || desc.editorUIScale <= 0.0F ||
+                !std::isfinite(desc.editorUIOffset.x) || !std::isfinite(desc.editorUIOffset.y)) {
+                WriteRendererBreadcrumb("renderer", "Invalid editor UI view transform");
+                return false;
+            }
+            const auto point = [&desc](kb::math::Vec2& p) {
+                p.x = p.x * desc.editorUIScale + desc.editorUIOffset.x;
+                p.y = p.y * desc.editorUIScale + desc.editorUIOffset.y;
+            };
+            const auto rect = [&desc](kb::math::Rect& r) {
+                r.x = r.x * desc.editorUIScale + desc.editorUIOffset.x;
+                r.y = r.y * desc.editorUIScale + desc.editorUIOffset.y;
+                r.width *= desc.editorUIScale; r.height *= desc.editorUIScale;
+            };
+            for (auto& element : screenUIFrame.elements) {
+                rect(element.rect); rect(element.clipRect);
+                for (auto& p : element.corners) point(p);
+                for (auto& quad : element.clipQuads) for (auto& p : quad) point(p);
+                element.canvasScale *= desc.editorUIScale;
+            }
+        }
+        // The editor viewport clips the view, not the transformed game canvas.
+        // Rebuild authored mask bounds independently of the original screen clip.
+        for (auto& element : screenUIFrame.elements) {
+            float left = 0.0F, top = 0.0F;
+            float right = static_cast<float>(width), bottom = static_cast<float>(height);
+            for (const auto& quad : element.clipQuads) {
+                float maskLeft = quad[0].x, maskRight = quad[0].x;
+                float maskTop = quad[0].y, maskBottom = quad[0].y;
+                for (const auto& p : quad) {
+                    maskLeft = std::min(maskLeft, p.x); maskRight = std::max(maskRight, p.x);
+                    maskTop = std::min(maskTop, p.y); maskBottom = std::max(maskBottom, p.y);
+                }
+                left = std::max(left, maskLeft); right = std::min(right, maskRight);
+                top = std::max(top, maskTop); bottom = std::min(bottom, maskBottom);
+            }
+            element.clipRect = {left, top, std::max(0.0F, right - left), std::max(0.0F, bottom - top)};
+        }
+    }
     if (renderSceneSynchronizer_ == nullptr) {
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport missing renderSceneSynchronizer");
         return false;
