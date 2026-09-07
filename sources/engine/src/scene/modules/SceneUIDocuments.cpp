@@ -25,11 +25,14 @@ UIElementId SceneUIDocumentQueries::Root(SceneEntity entity) const noexcept { re
 bool SceneUIDocumentQueries::HasElement(SceneEntity entity, UIElementId element) const noexcept { return SceneUIDocumentService::HasElement(scene_, entity, element); }
 bool SceneUIDocumentQueries::Visible(SceneEntity entity, UIElementId element) const noexcept { return SceneUIDocumentService::Visible(scene_, entity, element); }
 std::optional<UIControlState> SceneUIDocumentQueries::Control(SceneEntity entity, UIElementId element) const { return SceneUIDocumentService::Control(scene_, entity, element); }
+std::optional<UIElementComponents> SceneUIDocumentQueries::ElementComponents(SceneEntity entity, UIElementId element) const { return SceneUIDocumentService::ElementComponents(scene_, entity, element); }
 UIElementId SceneUIDocumentQueries::Focused(SceneEntity entity) const noexcept { return SceneUIDocumentService::Focused(scene_, entity); }
+bool SceneUIDocumentQueries::HasFocusedTextInput() const noexcept { return SceneUIDocumentService::HasFocusedTextInput(scene_); }
 std::optional<UIVirtualListView> SceneUIDocumentQueries::VirtualList(SceneEntity entity, UIElementId element) const noexcept { return SceneUIDocumentService::VirtualList(scene_, entity, element); }
 std::optional<UIElementId> SceneUIDocumentQueries::Find(SceneEntity entity, std::string_view name) const noexcept { return SceneUIDocumentService::Find(scene_, entity, name); }
 bool SceneUIDocumentQueries::StyleIsResolved(SceneEntity entity) const noexcept { return SceneUIDocumentService::StyleIsResolved(scene_, entity); }
 std::size_t SceneUIDocumentQueries::ElementCount(SceneEntity entity) const noexcept { return SceneUIDocumentService::ElementCount(scene_, entity); }
+const UIPresentationSnapshot& SceneUIDocumentQueries::Presentation() const noexcept { return SceneUIDocumentService::Presentation(scene_); }
 
 SceneUIDocuments::SceneUIDocuments(Scene& scene) noexcept : scene_(scene) {}
 bool SceneUIDocuments::Exists(SceneEntity entity) const noexcept { return SceneUIDocumentService::Exists(scene_, entity); }
@@ -38,16 +41,20 @@ UIElementId SceneUIDocuments::Root(SceneEntity entity) const noexcept { return S
 bool SceneUIDocuments::HasElement(SceneEntity entity, UIElementId element) const noexcept { return SceneUIDocumentService::HasElement(scene_, entity, element); }
 bool SceneUIDocuments::Visible(SceneEntity entity, UIElementId element) const noexcept { return SceneUIDocumentService::Visible(scene_, entity, element); }
 std::optional<UIControlState> SceneUIDocuments::Control(SceneEntity entity, UIElementId element) const { return SceneUIDocumentService::Control(scene_, entity, element); }
+std::optional<UIElementComponents> SceneUIDocuments::ElementComponents(SceneEntity entity, UIElementId element) const { return SceneUIDocumentService::ElementComponents(scene_, entity, element); }
 UIElementId SceneUIDocuments::Focused(SceneEntity entity) const noexcept { return SceneUIDocumentService::Focused(scene_, entity); }
+bool SceneUIDocuments::HasFocusedTextInput() const noexcept { return SceneUIDocumentService::HasFocusedTextInput(scene_); }
 std::optional<UIVirtualListView> SceneUIDocuments::VirtualList(SceneEntity entity, UIElementId element) const noexcept { return SceneUIDocumentService::VirtualList(scene_, entity, element); }
 std::optional<UIElementId> SceneUIDocuments::Find(SceneEntity entity, std::string_view name) const noexcept { return SceneUIDocumentService::Find(scene_, entity, name); }
 bool SceneUIDocuments::StyleIsResolved(SceneEntity entity) const noexcept { return SceneUIDocumentService::StyleIsResolved(scene_, entity); }
 std::size_t SceneUIDocuments::ElementCount(SceneEntity entity) const noexcept { return SceneUIDocumentService::ElementCount(scene_, entity); }
+const UIPresentationSnapshot& SceneUIDocuments::BuildPresentation(std::uint32_t viewportWidth, std::uint32_t viewportHeight) { return SceneUIDocumentService::BuildPresentation(scene_, viewportWidth, viewportHeight); }
 std::optional<UIElementId> SceneUIDocuments::QueueCreate(SceneEntity entity, const UIRuntimeElementDesc& desc) { return SceneUIDocumentService::QueueCreate(scene_, entity, desc); }
 bool SceneUIDocuments::QueueDestroy(SceneEntity entity, UIElementId element) noexcept { return SceneUIDocumentService::QueueDestroy(scene_, entity, element); }
 bool SceneUIDocuments::QueueShow(SceneEntity entity, UIElementId element) noexcept { return SceneUIDocumentService::QueueVisibility(scene_, entity, element, true); }
 bool SceneUIDocuments::QueueHide(SceneEntity entity, UIElementId element) noexcept { return SceneUIDocumentService::QueueVisibility(scene_, entity, element, false); }
 bool SceneUIDocuments::QueueSetControl(SceneEntity entity, UIElementId element, const UIControlState& control) { return SceneUIDocumentService::QueueSetControl(scene_, entity, element, control); }
+bool SceneUIDocuments::QueueSetComponents(SceneEntity entity, UIElementId element, const UIElementComponents& components) { return SceneUIDocumentService::QueueSetComponents(scene_, entity, element, components); }
 bool SceneUIDocuments::QueueFocus(SceneEntity entity, UIElementId element) noexcept { return SceneUIDocumentService::QueueFocus(scene_, entity, element); }
 bool SceneUIDocuments::QueueConfigureVirtualList(SceneEntity entity, UIElementId element, std::uint32_t viewportItems, std::uint32_t overscan) noexcept { return SceneUIDocumentService::QueueConfigureVirtualList(scene_, entity, element, viewportItems, overscan); }
 bool SceneUIDocuments::QueueScrollVirtualListTo(SceneEntity entity, UIElementId element, std::uint32_t firstVisibleIndex) noexcept { return SceneUIDocumentService::QueueScrollVirtualListTo(scene_, entity, element, firstVisibleIndex); }

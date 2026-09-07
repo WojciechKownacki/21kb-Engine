@@ -603,12 +603,9 @@ void ScriptRuntimeSceneSystem::DispatchDeferredEvents(kb::scene::Scene& scene) {
 }
 
 void ScriptRuntimeSceneSystem::DispatchPendingUIEvents(kb::scene::Scene& scene) {
-    // LIB-176: concrete input hit-testing/routing is intentionally owned by
-    // LIB-180. This is the finished, shared delivery boundary: every producer
-    // appends a typed UI event to SceneUIDocuments, and this system alone
-    // dispatches it through ScriptEventBus with the UIDocument entity as both
-    // sender and target. Subscription owner lifetime and explicit unsubscribe
-    // stay canonical in Events.Subscribe/Events.Unsubscribe.
+    // Physical input and scripted producers append typed events to
+    // SceneUIDocuments; this is their single ScriptEventBus delivery boundary.
+    // Subscription lifetime remains canonical in Events.Subscribe/Unsubscribe.
     for (kb::scene::UIRuntimeEventRecord& pending : scene.UIDocuments().DrainEvents()) {
         ScriptEvent event;
         event.name = UIEventName(pending.event.kind);
@@ -623,10 +620,11 @@ void ScriptRuntimeSceneSystem::DispatchPendingUIEvents(kb::scene::Scene& scene) 
             event.arguments.push_back({ "y", ScriptValue{ pending.event.pointerY } });
             break;
         case kb::scene::UIRuntimeEventKind::Submit:
-            event.arguments.push_back({ "text", ScriptValue{ std::move(pending.event.text) } });
+            event.arguments.push_back({ "text", ScriptValue{ pending.event.text } });
             break;
         case kb::scene::UIRuntimeEventKind::Changed:
             event.arguments.push_back({ "value", ScriptValue{ pending.event.value } });
+            event.arguments.push_back({ "text", ScriptValue{ pending.event.text } });
             break;
         case kb::scene::UIRuntimeEventKind::Focus:
             event.arguments.push_back({ "focused", ScriptValue{ pending.event.focused } });
@@ -638,6 +636,14 @@ void ScriptRuntimeSceneSystem::DispatchPendingUIEvents(kb::scene::Scene& scene) 
         const ScriptEventDeliveryResult delivery = runtime_.Events().Emit(scene, event, pending.owner);
         for (const std::string& error : delivery.errors) {
             lastResult_.diagnostics.push_back(ScriptDiagnostic{ .message = error });
+        }
+        if (!pending.event.eventName.empty() && pending.event.eventName != event.name) {
+            event.name = pending.event.eventName;
+            const ScriptEventDeliveryResult actionDelivery = runtime_.Events().Emit(
+                scene, event, pending.owner);
+            for (const std::string& error : actionDelivery.errors) {
+                lastResult_.diagnostics.push_back(ScriptDiagnostic{ .message = error });
+            }
         }
     }
 }

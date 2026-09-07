@@ -23,6 +23,7 @@ std::vector<DockPanel> DefaultDockWorkspace::CreatePanels() const {
         DockPanel{ .id = 14, .kind = DockPanelKind::ParticleEditor, .title = "21kb Particle System", .area = DockArea::Center, .floatingRect = DockRect{ 148, 140, 900, 640 } },
         DockPanel{ .id = 15, .kind = DockPanelKind::EditorSettings, .title = "Editor Settings", .area = DockArea::Right, .floatingRect = DockRect{ 168, 128, 720, 600 } },
         DockPanel{ .id = 16, .kind = DockPanelKind::BuildGame, .title = "Build Game", .area = DockArea::Center, .floatingRect = DockRect{ 152, 144, 1180, 720 } },
+        DockPanel{ .id = 17, .kind = DockPanelKind::UserWidgetEditor, .title = "User Widget", .area = DockArea::Center, .visible = false, .floatingRect = DockRect{ 156, 148, 980, 680 } },
     };
 }
 

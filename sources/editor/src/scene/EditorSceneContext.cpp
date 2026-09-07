@@ -122,6 +122,7 @@
 #include "scene/material/EditorEmbeddedMaterialExtractor.hpp"
 #include "scene/material_preview/EditorMaterialGraphCookService.hpp"
 #include "scene/material_preview/EditorMaterialNodePreviewBuilder.hpp"
+#include "scene/user_widget/UserWidgetEditorDocument.hpp"
 #include "engine/scene/SceneRenderFeedback.hpp"
 #include "scene/material_preview/EditorMaterialPreviewScene.hpp"
 #include "scene/EditorAnimationPreviewScene.hpp"
@@ -2513,6 +2514,53 @@ bool EditorSceneContext::CreateParticleEffectAsset(const std::filesystem::path& 
     return false;
 }
 
+bool EditorSceneContext::CreateUserWidgetAsset(
+    const std::filesystem::path& virtualFolder) {
+    kb::assets::AssetManager& manager = scene_->Assets().Manager();
+    if (virtualFolder.empty()) {
+        console_.Error("User Widget", "Could not resolve a destination folder for the new widget.");
+        return false;
+    }
+    const std::optional<std::filesystem::path> probe =
+        manager.Mounts().Resolve(virtualFolder / "probe");
+    if (!probe) {
+        console_.Error("User Widget", "Could not resolve a physical folder for the new widget.");
+        return false;
+    }
+    const std::filesystem::path folder = probe->parent_path();
+    std::filesystem::path path = folder /
+        (std::string{"NewUserWidget"} + kb::scene::kUIDocumentAssetExtension);
+    std::uint32_t suffix = 1U;
+    while (std::filesystem::exists(path)) {
+        path = folder / (std::string{"NewUserWidget"} +
+            std::to_string(suffix++) + kb::scene::kUIDocumentAssetExtension);
+    }
+
+    const kb::scene::UIDocument document =
+        UserWidgetEditorDocument::CreateCanvasDocument();
+    if (!kb::scene::UIAssetIO::SaveDocument(path, document)) {
+        console_.Error("User Widget", "The canonical .kbui document could not be created.");
+        return false;
+    }
+    static_cast<void>(scene_->Assets().Discover());
+    const std::optional<std::filesystem::path> virtualPath =
+        manager.Mounts().ToVirtual(path);
+    const kb::assets::AssetMetadata* metadata = virtualPath
+        ? manager.Registry().FindByPath(*virtualPath) : nullptr;
+    if (metadata != nullptr && metadata->type == kb::scene::kUIDocumentAssetType &&
+        assetBrowser_.SelectAsset(metadata->id, manager) &&
+        OpenUserWidgetEditorAsset(metadata->id)) {
+        console_.Info("User Widget", "User Widget created: " + path.generic_string());
+        return true;
+    }
+
+    std::error_code removeError;
+    static_cast<void>(std::filesystem::remove(path, removeError));
+    static_cast<void>(scene_->Assets().Discover());
+    console_.Error("User Widget", "Widget creation was rolled back because the canonical asset could not be opened.");
+    return false;
+}
+
 bool EditorSceneContext::DuplicateAsset(kb::assets::AssetId assetId) {
     const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(assetId);
     if (metadata == nullptr) {
@@ -2546,6 +2594,49 @@ bool EditorSceneContext::OpenLuaScript(kb::assets::AssetId id) {
     scriptEditor_.Open(path, id, metadata->virtualPath.filename().string());
     console_.Info("Scripts", "Opened script: " + metadata->virtualPath.generic_string());
     return true;
+}
+
+bool EditorSceneContext::OpenUserWidgetEditorAsset(kb::assets::AssetId id) {
+    const kb::assets::AssetMetadata* metadata =
+        scene_->Assets().Manager().Registry().Find(id);
+    if (metadata == nullptr || metadata->type != kb::scene::kUIDocumentAssetType) {
+        console_.Error("User Widget", "The selected asset is not a UIDocument.");
+        return false;
+    }
+    std::filesystem::path path = metadata->physicalPath;
+    if (const std::optional<std::filesystem::path> mounted =
+            scene_->Assets().Manager().Mounts().Resolve(metadata->virtualPath)) {
+        path = *mounted;
+    }
+    if (!userWidgetEditor_.Open(id, path)) {
+        console_.Error("User Widget", "The selected .kbui document is invalid or unreadable.");
+        return false;
+    }
+    console_.Info("User Widget", "Opened User Widget: " + metadata->virtualPath.generic_string());
+    return true;
+}
+
+bool EditorSceneContext::SaveUserWidgetEditorAsset() {
+    if (!userWidgetEditor_.Save()) {
+        console_.Error("User Widget", "The open User Widget could not be saved.");
+        return false;
+    }
+    static_cast<void>(scene_->Assets().Discover());
+    console_.Info("User Widget", "User Widget saved.");
+    return true;
+}
+
+bool EditorSceneContext::ReopenUserWidgetEditorAsset() {
+    const kb::assets::AssetId id = userWidgetEditor_.AssetId();
+    return id.IsValid() && OpenUserWidgetEditorAsset(id);
+}
+
+UserWidgetEditorDocument& EditorSceneContext::UserWidgetEditor() noexcept {
+    return userWidgetEditor_;
+}
+
+const UserWidgetEditorDocument& EditorSceneContext::UserWidgetEditor() const noexcept {
+    return userWidgetEditor_;
 }
 
 std::optional<kb::input::InputActionAsset> EditorSceneContext::ReadInputActionAsset(kb::assets::AssetId id) const {

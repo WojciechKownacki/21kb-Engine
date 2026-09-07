@@ -254,6 +254,19 @@ add_library(kb_engine STATIC
     include/engine/scene/UIAssets.hpp
     include/engine/scene/UIAssetIO.hpp
     include/engine/scene/UIAssetLoaders.hpp
+    include/engine/ui/UIAssetValidation.hpp
+    include/engine/scene/UIPresentation.hpp
+    include/engine/ui/effects/UIEffects.hpp
+    include/engine/ui/interaction/UIControlKind.hpp
+    include/engine/ui/interaction/UIInteraction.hpp
+    include/engine/ui/layout/UICanvas.hpp
+    include/engine/ui/layout/UIContainerLayout.hpp
+    include/engine/ui/layout/UIEdges.hpp
+    include/engine/ui/layout/UIPresentationLayout.hpp
+    include/engine/ui/layout/UIRectTransform.hpp
+    include/engine/ui/visual/UIImage.hpp
+    include/engine/ui/visual/UIPaint.hpp
+    include/engine/ui/visual/UIText.hpp
     include/engine/scene/SceneLocalization.hpp
     include/engine/localization/LocalizationCatalog.hpp
     include/engine/localization/LocalizationCatalogIO.hpp
@@ -662,8 +675,11 @@ add_library(kb_engine STATIC
     src/scene/SceneAnimatorService.cpp
     src/scene/modules/SceneUIDocuments.cpp
     src/scene/SceneUIDocumentService.cpp
+    src/scene/ui/UIHitTester.cpp
+    src/scene/ui/UIPresentationBuilder.cpp
     src/scene/UIAssetIO.cpp
     src/scene/UIAssetLoaders.cpp
+    src/ui/UIAssetValidation.cpp
     src/scene/SceneLocalizationService.cpp
     src/scene/modules/SceneLocalization.cpp
     src/localization/LocalizationCatalogIO.cpp
@@ -1179,6 +1195,8 @@ add_library(kb_engine STATIC
     src/private/scene/SceneMaterialInstanceService.hpp
     src/private/scene/SceneAnimatorService.hpp
     src/private/scene/SceneUIDocumentService.hpp
+    src/private/scene/ui/UIHitTester.hpp
+    src/private/scene/ui/UIPresentationBuilder.hpp
     src/private/scene/SceneRuntimeService.hpp
     src/private/save/SaveGameBinaryIO.hpp
     src/private/save/SaveGameCodec.hpp
@@ -1454,12 +1472,14 @@ add_library(kb_engine STATIC
     include/engine/input/InputPollingSystem.hpp
     include/engine/input/InputModule.hpp
     include/engine/input/InputRecording.hpp
+    include/engine/input/InputText.hpp
     src/input/InputModule.cpp
     src/input/InputKey.cpp
     src/input/InputAssetIO.cpp
     src/input/InputAssetLoaders.cpp
     src/input/InputRebinding.cpp
     src/input/InputRecording.cpp
+    src/input/InputText.cpp
     src/input/InputModifiers.cpp
     src/input/InputTriggers.cpp
     src/input/InputHaptics.cpp
@@ -1474,6 +1494,7 @@ if(WIN32)
         include/engine/platform/win32/Win32InputCollector.hpp
         include/engine/platform/win32/Win32InputKeyMap.hpp
         include/engine/platform/win32/Win32XInputHapticsBackend.hpp
+        src/private/platform/win32/Win32PointerViewportTransform.hpp
         src/platform/win32/Win32InputCollector.cpp
         src/platform/win32/Win32InputKeyMap.cpp
         src/platform/win32/Win32XInputHapticsBackend.cpp
@@ -1615,6 +1636,7 @@ if(BUILD_TESTING)
         tests/SkeletalMeshAssetTests.cpp
         tests/TimelineRuntimeTests.cpp
         tests/UIDocumentRuntimeTests.cpp
+        tests/UIPresentationRuntimeTests.cpp
         tests/LocalizationTests.cpp
         tests/SceneHierarchyTests.cpp
         tests/ScenePrefabCaptureTests.cpp

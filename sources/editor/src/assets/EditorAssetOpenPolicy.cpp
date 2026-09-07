@@ -3,6 +3,7 @@
 #include "engine/scene/AnimationAssetIO.hpp"
 #include "engine/scene/ParticleEffectAssetIO.hpp"
 #include "engine/scene/TimelineAssetIO.hpp"
+#include "engine/scene/UIAssetIO.hpp"
 #include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
 #include "rendering/ProjectFilesAssetIconResolver.hpp"
 
@@ -30,7 +31,9 @@ bool EditorAssetOpenPolicy::CanOpen(const kb::assets::AssetMetadata& metadata) {
     return metadata.type == "LuaScript" || ProjectFilesAssetIconResolver::IsSkeletalMesh(metadata) ||
         ProjectFilesAssetIconResolver::IsSkeleton(metadata) || metadata.type == kb::scene::kAnimationClipAssetType ||
         metadata.type == kb::scene::kAnimatorControllerAssetType ||
-        metadata.type == kb::scene::kParticleEffectAssetType || metadata.type == kb::scene::kTimelineAssetType ||
+        metadata.type == kb::scene::kParticleEffectAssetType ||
+        metadata.type == kb::scene::kUIDocumentAssetType ||
+        metadata.type == kb::scene::kTimelineAssetType ||
         metadata.type == "RenderMaterial" || metadata.type == "RenderMaterialInstance" ||
         metadata.type == kb::render::kRenderMaterialGraphAssetType || IsSceneDocument(metadata);
 }

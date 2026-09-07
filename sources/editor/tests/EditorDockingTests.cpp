@@ -443,6 +443,35 @@ void RunBuildGameMenuAndWorkspaceActivationTest() {
         "Build Game should open in the central workspace, beside the Scene View");
 }
 
+void RunUserWidgetEditorWorkspaceActivationTest() {
+    kb::editor::EditorDockModel model;
+    const kb::editor::DockPanel* panel = RequirePanel(model, 17U);
+    kb::editor::tests::Require(
+        panel->kind == kb::editor::DockPanelKind::UserWidgetEditor &&
+            panel->title == "User Widget" && !panel->visible,
+        "Default workspace should register the User Widget panel");
+    const kb::editor::DockLayout layout = BuildDefaultLayout(model);
+    const kb::editor::DockLeafLayout* widgetLeaf = FindLeafForPanel(layout, 17U);
+    kb::editor::tests::Require(
+        widgetLeaf == nullptr,
+        "User Widget should remain closed until a document is opened");
+    kb::editor::tests::Require(model.Commands().ActivatePanelKind(
+        kb::editor::DockPanelKind::UserWidgetEditor,
+        kb::editor::DockArea::Center),
+        "User Widget panel should reopen through the shared dock model");
+    const kb::editor::DockLayout reopenedLayout = BuildDefaultLayout(model);
+    const kb::editor::DockPanelLayout* reopened =
+        FindPanelLayout(reopenedLayout, 17U);
+    const kb::editor::DockLeafLayout* sceneLeaf =
+        FindLeafForPanel(reopenedLayout, 2U);
+    const kb::editor::DockLeafLayout* widgetDock =
+        FindLeafForPanel(reopenedLayout, 17U);
+    kb::editor::tests::Require(reopened != nullptr && reopened->active &&
+            sceneLeaf != nullptr && widgetDock != nullptr &&
+            sceneLeaf->leafId == widgetDock->leafId,
+        "Opened User Widget should become active in the central document dock");
+}
+
 void RunSkeletalMeshEditorWorkspaceActivationTest() {
     kb::editor::EditorDockModel model;
     const kb::editor::DockPanel* panel = RequirePanel(model, 11U);
@@ -1395,6 +1424,7 @@ void RunEditorDockingTests() {
     RunClosedMaterialEditorReopensInCenterDockTest();
     RunClosedUtilityPanelsReopenInRightDockTest();
     RunBuildGameMenuAndWorkspaceActivationTest();
+    RunUserWidgetEditorWorkspaceActivationTest();
     RunSkeletalMeshEditorWorkspaceActivationTest();
     RunAnimationClipEditorWorkspaceActivationTest();
     RunAnimatorEditorWorkspaceActivationTest();

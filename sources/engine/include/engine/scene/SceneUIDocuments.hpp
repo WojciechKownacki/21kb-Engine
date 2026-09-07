@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/scene/UIAssets.hpp"
+#include "engine/scene/UIPresentation.hpp"
 #include "engine/scene/SceneEntity.hpp"
 
 #include <cstddef>
@@ -49,11 +50,14 @@ public:
     [[nodiscard]] bool HasElement(SceneEntity entity, UIElementId element) const noexcept;
     [[nodiscard]] bool Visible(SceneEntity entity, UIElementId element) const noexcept;
     [[nodiscard]] std::optional<UIControlState> Control(SceneEntity entity, UIElementId element) const;
+    [[nodiscard]] std::optional<UIElementComponents> ElementComponents(SceneEntity entity, UIElementId element) const;
     [[nodiscard]] UIElementId Focused(SceneEntity entity) const noexcept;
+    [[nodiscard]] bool HasFocusedTextInput() const noexcept;
     [[nodiscard]] std::optional<UIVirtualListView> VirtualList(SceneEntity entity, UIElementId element) const noexcept;
     [[nodiscard]] std::optional<UIElementId> Find(SceneEntity entity, std::string_view name) const noexcept;
     [[nodiscard]] bool StyleIsResolved(SceneEntity entity) const noexcept;
     [[nodiscard]] std::size_t ElementCount(SceneEntity entity) const noexcept;
+    [[nodiscard]] const UIPresentationSnapshot& Presentation() const noexcept;
 private:
     const Scene& scene_;
 };
@@ -67,11 +71,17 @@ public:
     [[nodiscard]] bool HasElement(SceneEntity entity, UIElementId element) const noexcept;
     [[nodiscard]] bool Visible(SceneEntity entity, UIElementId element) const noexcept;
     [[nodiscard]] std::optional<UIControlState> Control(SceneEntity entity, UIElementId element) const;
+    [[nodiscard]] std::optional<UIElementComponents> ElementComponents(SceneEntity entity, UIElementId element) const;
     // Setup-only linear lookup. Cache the returned typed UIElementId and use
     // it directly in Tick or another hot path; no name index is maintained.
     [[nodiscard]] std::optional<UIElementId> Find(SceneEntity entity, std::string_view name) const noexcept;
     [[nodiscard]] bool StyleIsResolved(SceneEntity entity) const noexcept;
     [[nodiscard]] std::size_t ElementCount(SceneEntity entity) const noexcept;
+    // Rebuilds the sole derived geometry snapshot for this viewport. The
+    // returned view stays valid until the next build or UI command boundary.
+    [[nodiscard]] const UIPresentationSnapshot& BuildPresentation(
+        std::uint32_t viewportWidth,
+        std::uint32_t viewportHeight);
     // Commands are appended in call order and are applied once by
     // UIDocumentSceneSystem at the next frame boundary. A returned ID is
     // reserved immediately and remains unique for this runtime attachment;
@@ -81,6 +91,7 @@ public:
     [[nodiscard]] bool QueueShow(SceneEntity entity, UIElementId element) noexcept;
     [[nodiscard]] bool QueueHide(SceneEntity entity, UIElementId element) noexcept;
     [[nodiscard]] bool QueueSetControl(SceneEntity entity, UIElementId element, const UIControlState& control);
+    [[nodiscard]] bool QueueSetComponents(SceneEntity entity, UIElementId element, const UIElementComponents& components);
     [[nodiscard]] bool QueueFocus(SceneEntity entity, UIElementId element) noexcept;
     // Configures a fixed-capacity visible-item pool for a List. Item text
     // stays in the retained List control; scrolling only rebinds pool slots.
@@ -88,6 +99,9 @@ public:
     [[nodiscard]] bool QueueScrollVirtualListTo(SceneEntity entity, UIElementId element, std::uint32_t firstVisibleIndex) noexcept;
     [[nodiscard]] std::optional<UIVirtualListView> VirtualList(SceneEntity entity, UIElementId element) const noexcept;
     [[nodiscard]] UIElementId Focused(SceneEntity entity) const noexcept;
+    // True only while the active, visible and interactable control accepts
+    // committed platform text. Mobile hosts use this to own IME visibility.
+    [[nodiscard]] bool HasFocusedTextInput() const noexcept;
     // Applies retained document bindings against an explicit typed data source.
     // Source-to-UI writes remain queued and become visible at the normal UI
     // frame boundary; two-way writes are loop-suppressed by runtime state.

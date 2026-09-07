@@ -71,6 +71,14 @@ void EditorLeftButtonUpRouter::Handle(HWND messageWindow, int x, int y) {
     shellInteraction_.ClearPressedSave();
     shellInteraction_.ClearPressedTransport();
 
+    if (sceneContext_.UserWidgetEditor().PreviewDragActive()) {
+        static_cast<void>(sceneContext_.UserWidgetEditor().EndPreviewDrag());
+        ReleaseCapture();
+        EditorWindowInvalidator::InvalidateMainAndSource(
+            mainWindow_, messageWindow);
+        return;
+    }
+
     if (sceneContext_.ParticleEditorWorkspace().EmitterDragActive() ||
         sceneContext_.ParticleEditorWorkspace().ModuleDragActive() ||
         sceneContext_.ParticleEditorWorkspace().PropertySliderActive()) {
