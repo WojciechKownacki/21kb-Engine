@@ -28,7 +28,7 @@ constexpr std::array kCanvas{UIComponentType::RectTransform, UIComponentType::Ca
 constexpr std::array kText{UIComponentType::RectTransform, UIComponentType::Text};
 constexpr std::array kImage{UIComponentType::RectTransform, UIComponentType::Image};
 constexpr std::array kRawImage{UIComponentType::RectTransform, UIComponentType::RawImage};
-constexpr std::array kButton{UIComponentType::RectTransform, UIComponentType::Border, UIComponentType::Selectable, UIComponentType::Button};
+constexpr std::array kButton{UIComponentType::RectTransform, UIComponentType::Border, UIComponentType::Text, UIComponentType::Selectable, UIComponentType::Button};
 constexpr std::array kToggle{UIComponentType::RectTransform, UIComponentType::Border, UIComponentType::Selectable, UIComponentType::Toggle};
 constexpr std::array kSlider{UIComponentType::RectTransform, UIComponentType::Border, UIComponentType::Selectable, UIComponentType::Slider};
 constexpr std::array kScrollbar{UIComponentType::RectTransform, UIComponentType::Border, UIComponentType::Selectable, UIComponentType::Scrollbar};
@@ -106,10 +106,16 @@ UIComponentSet BuildUIComponentPreset(UIComponentPreset preset) {
     case UIComponentPreset::Canvas:
         output.rectTransform->anchorMax = {1.0F, 1.0F}; output.rectTransform->offsetMax = {};
         output.canvas.emplace(); output.canvasScaler.emplace(); break;
-    case UIComponentPreset::Text: output.text.emplace(); break;
+    case UIComponentPreset::Text:
+        static_cast<void>(SetUITextContent(output.text.emplace(), "Text")); break;
     case UIComponentPreset::Image: output.image.emplace(); break;
     case UIComponentPreset::RawImage: output.rawImage.emplace(); break;
-    case UIComponentPreset::Button: AddPresetSurface(output); output.selectable.emplace(); output.button.emplace(); break;
+    case UIComponentPreset::Button:
+        AddPresetSurface(output); output.selectable.emplace(); output.button.emplace();
+        static_cast<void>(SetUITextContent(output.text.emplace(), "Button"));
+        output.text->horizontalAlignment = UITextHorizontalAlignment::Center;
+        output.text->verticalAlignment = UITextVerticalAlignment::Center;
+        break;
     case UIComponentPreset::Toggle: AddPresetSurface(output); output.selectable.emplace(); output.toggle.emplace(); break;
     case UIComponentPreset::Slider: AddPresetSurface(output); output.selectable.emplace(); output.slider.emplace(); break;
     case UIComponentPreset::Scrollbar: AddPresetSurface(output); output.selectable.emplace(); output.scrollbar.emplace(); break;
@@ -122,7 +128,7 @@ UIComponentSet BuildUIComponentPreset(UIComponentPreset preset) {
     case UIComponentPreset::Grid: output.gridLayout.emplace(); break;
     case UIComponentPreset::Wrap: output.wrapLayout.emplace(); break;
     case UIComponentPreset::Overlay: output.overlayLayout.emplace(); break;
-    case UIComponentPreset::Border: output.border.emplace(); break;
+    case UIComponentPreset::Border: AddPresetSurface(output); break;
     case UIComponentPreset::Blur: output.backgroundBlur.emplace(); break;
     case UIComponentPreset::WidgetSwitcher: output.widgetSwitcher.emplace(); break;
     }

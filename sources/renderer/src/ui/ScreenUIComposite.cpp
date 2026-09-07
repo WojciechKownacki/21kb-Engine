@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <cmath>
 #include <limits>
 #include <ranges>
 
@@ -180,8 +181,13 @@ bool ScreenUIComposite::Submit(const ScreenUICompositeDesc& desc) const {
         const float clipTop = std::clamp(outputTop + batch.clipRect.top * outputScaleY, outputTop, outputBottom);
         const float clipRight = std::clamp(outputLeft + batch.clipRect.right * outputScaleX, clipLeft, outputRight);
         const float clipBottom = std::clamp(outputTop + batch.clipRect.bottom * outputScaleY, clipTop, outputBottom);
-        bgfx::setScissor(ToU16(clipLeft), ToU16(clipTop), ToU16(std::max(clipRight - clipLeft, 0.0F)),
-                         ToU16(std::max(clipBottom - clipTop, 0.0F)));
+        // The integer scissor must enclose the fractional clip rectangle. The shader
+        // applies the exact clip; truncating origin and extent separately loses edge pixels.
+        const float scissorLeft = std::floor(clipLeft);
+        const float scissorTop = std::floor(clipTop);
+        bgfx::setScissor(ToU16(scissorLeft), ToU16(scissorTop),
+                         ToU16(std::ceil(clipRight) - scissorLeft),
+                         ToU16(std::ceil(clipBottom) - scissorTop));
         bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
                        BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_SRC_ALPHA, BGFX_STATE_BLEND_INV_SRC_ALPHA));
         bgfx::setVertexBuffer(0U, &vertices, 0U, vertexCount);

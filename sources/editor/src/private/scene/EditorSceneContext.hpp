@@ -33,6 +33,7 @@
 #include "scene/EditorAutosaveState.hpp"
 #include "scene/EditorPlayModeSelectionSnapshot.hpp"
 #include "scene/EditorSceneViewportStateStore.hpp"
+#include "scene/EditorUIRectDragState.hpp"
 #include "scene/AnimationPreviewContext.hpp"
 #include "scene/AnimationClipTimelineState.hpp"
 #include "scene/AnimationClipEditorDocumentState.hpp"
@@ -475,6 +476,7 @@ public:
         kb::scene::SceneEntity sourceCell,
         kb::scene::SceneEntity targetCell);
     [[nodiscard]] kb::scene::SceneEntity CreateHierarchyObject();
+    [[nodiscard]] kb::scene::SceneEntity CreateUIObject(kb::scene::UIComponentType type, kb::scene::SceneEntity parent = {});
     [[nodiscard]] kb::scene::SceneEntity CreateLightObject(kb::scene::LightKind kind);
     [[nodiscard]] bool ReparentEntity(kb::scene::SceneEntity child, kb::scene::SceneEntity parent);
     [[nodiscard]] bool ReparentEntities(std::span<const kb::scene::SceneEntity> children, kb::scene::SceneEntity parent);
@@ -1206,6 +1208,15 @@ public:
     [[nodiscard]] bool SetUIComponentProperty(
         kb::scene::SceneEntity entity, kb::scene::UIComponentType component,
         std::string_view property, const kb::scene::UIComponentPropertyValue& value);
+    [[nodiscard]] bool SetUIColor(kb::scene::SceneEntity entity, kb::scene::UIComponentType component,
+        std::string_view property, const std::array<float, 4>& color);
+    [[nodiscard]] bool SetUIRectLayoutField(kb::scene::SceneEntity entity, int field, float value);
+    [[nodiscard]] bool SetUIAnchorPreset(kb::scene::SceneEntity entity, int preset,
+        bool alignPosition = false, bool alignPivot = false);
+    std::optional<EditorUIRectDragState>& UIRectDrag() noexcept { return uiRectDrag_; }
+    void SetUIAuthoringViewportSize(float width, float height) const noexcept {
+        if (width > 0.0F && height > 0.0F) uiAuthoringViewportSize_ = {width, height};
+    }
     [[nodiscard]] std::vector<std::string> EntityTags(kb::scene::SceneEntity entity) const;
     [[nodiscard]] std::vector<std::string> KnownSceneTags() const;
     [[nodiscard]] bool SetEntityTagSelected(kb::scene::SceneEntity entity, std::string_view tag, bool selected);
@@ -1233,6 +1244,10 @@ public:
     [[nodiscard]] bool HasActiveTransformEdit() const noexcept;
 
 private:
+    [[nodiscard]] bool CompleteUIComponentDependencies(kb::scene::SceneEntity entity);
+    void CompleteLoadedUIComponents();
+    std::optional<EditorUIRectDragState> uiRectDrag_;
+    mutable kb::math::Vec2 uiAuthoringViewportSize_{1920.0F, 1080.0F};
     [[nodiscard]] bool SpawnEditRequiresPreviewRestart(const kb::scene::ParticleSpawnAsset& spawn) const;
     [[nodiscard]] bool FinalizeParticleEditorCommand(kb::particle_editor::ParticleEditorResult result,
                                                      bool restartPreview = false);

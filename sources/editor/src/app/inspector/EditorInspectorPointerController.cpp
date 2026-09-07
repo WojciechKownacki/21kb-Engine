@@ -3,6 +3,7 @@
 #if defined(_WIN32)
 #include "inspection/InspectorPanelInteraction.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
+#include "rendering/EditorSceneBgfxViewport.hpp"
 #include "scene/EditorSceneContext.hpp"
 
 #include <algorithm>
@@ -19,7 +20,7 @@ namespace {
 EditorInspectorPointerController::EditorInspectorPointerController(EditorSceneContext& sceneContext) noexcept
     : sceneContext_(sceneContext) {}
 
-bool EditorInspectorPointerController::HandlePointerDown(const RECT& content, int x, int y) {
+bool EditorInspectorPointerController::HandlePointerDown(const RECT& content, int x, int y, EditorSceneBgfxViewport& viewport) {
     const InspectorPanelRenderer::Hit hit = InspectorPanelRenderer::HitTest(content, sceneContext_, x, y);
     if (hit.kind == InspectorHitKind::ScrollbarThumb) {
         sceneContext_.Inspector().BeginScrollbarDrag(y);
@@ -35,7 +36,9 @@ bool EditorInspectorPointerController::HandlePointerDown(const RECT& content, in
         shouldCaptureMouse_ = false;
         return true;
     }
+    const auto revisionBefore = sceneContext_.SceneRenderRevision();
     static_cast<void>(InspectorPanelInteraction::HandlePointerDown(sceneContext_, hit, x, y));
+    if (sceneContext_.SceneRenderRevision() != revisionBefore) viewport.RequestPresent();
     shouldCaptureMouse_ = hit.kind == InspectorHitKind::FloatField || hit.kind == InspectorHitKind::MeshPreview;
     return true;
 }

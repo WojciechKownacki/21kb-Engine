@@ -11,8 +11,6 @@
 namespace kb::editor {
 namespace {
 
-constexpr const char* kBaseObjectName = "Entity";
-
 [[nodiscard]] bool NameExists(const kb::scene::Scene& scene, const std::string& name) {
     for (const EditorHierarchyRow& row : EditorHierarchyRowBuilder::Build(scene, EditorHierarchyRowBuilder::CollapsedEntitySet{}, {})) {
         if (row.name == name) {
@@ -24,19 +22,19 @@ constexpr const char* kBaseObjectName = "Entity";
 
 } // namespace
 
-kb::scene::SceneEntity EditorHierarchyObjectFactory::CreateObject(kb::scene::Scene& scene) {
+kb::scene::SceneEntity EditorHierarchyObjectFactory::CreateObject(kb::scene::Scene& scene, std::string_view baseName) {
     kb::scene::SceneObjectDesc desc{};
-    desc.name = MakeUniqueName(scene);
+    desc.name = MakeUniqueName(scene, baseName);
     return scene.Entities().CreateEntity(std::move(desc));
 }
 
-std::string EditorHierarchyObjectFactory::MakeUniqueName(const kb::scene::Scene& scene) {
-    std::string candidate = kBaseObjectName;
+std::string EditorHierarchyObjectFactory::MakeUniqueName(const kb::scene::Scene& scene, std::string_view baseName) {
+    std::string candidate{baseName};
     for (int suffix = 1; suffix < 10000; ++suffix) {
         if (!NameExists(scene, candidate)) {
             return candidate;
         }
-        candidate = std::string{ kBaseObjectName } + " " + std::to_string(suffix);
+        candidate = std::string{ baseName } + " " + std::to_string(suffix);
     }
     return candidate;
 }

@@ -353,6 +353,7 @@ bool EditorSceneContext::ReloadSceneFromProject() {
     ResetSceneEditState();
     ClearSceneDocumentDirty();
     console_.Info("Project", "Reloaded scene with current project plugin settings.");
+    CompleteLoadedUIComponents();
     return true;
 }
 
@@ -394,8 +395,13 @@ bool EditorSceneContext::OpenScene(const std::filesystem::path& path, EditorDirt
 
     const std::filesystem::path scenePath = EnsureSceneDocumentExtension(path);
 
-    if (!kb::scene::SceneDocumentService::LoadFileIntoScene(*scene_, scenePath)) {
-        console_.Error("Project", "Scene could not be opened: " + scenePath.generic_string());
+    const auto loaded = kb::scene::SceneDocumentService::Load(scenePath);
+    if (!loaded.succeeded) {
+        console_.Error("Project", "Scene could not be opened: " + scenePath.generic_string() + ": " + loaded.error);
+        return false;
+    }
+    if (!kb::scene::SceneDocumentService::LoadIntoScene(*scene_, loaded.document)) {
+        console_.Error("Project", "Scene could not be instantiated: " + scenePath.generic_string());
         return false;
     }
     EditorSceneAudioSettingsService::PrepareDocument(*scene_);
@@ -408,6 +414,7 @@ bool EditorSceneContext::OpenScene(const std::filesystem::path& path, EditorDirt
     ResetSceneEditState();
     ClearSceneDocumentDirty();
     console_.Info("Project", "Opened scene: " + currentScenePath_.generic_string());
+    CompleteLoadedUIComponents();
     return true;
 }
 

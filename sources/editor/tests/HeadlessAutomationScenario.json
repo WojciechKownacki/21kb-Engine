@@ -1,6 +1,7 @@
 {
   "schema": "21kb.editor-automation/v1",
   "steps": [
+    { "op": "assert_ui_creation_menu" },
     { "op": "copy_fixture", "source": "HeadlessAutomationScenario.json", "destination": "Fixtures/ScenarioCopy.json" },
     { "op": "assert_file", "path": "Fixtures/ScenarioCopy.json", "min_size": 1024, "contains": "21kb.editor-automation/v1" },
     { "op": "create_entity", "id": "player", "name": "Player" },
@@ -177,7 +178,7 @@
     { "op": "create_asset", "id": "runtime_material", "type": "material", "folder": "/Game/Materials" },
     { "op": "set_property_rejected", "entity": "widget_label", "component": "kb21.ui.text", "property": "fontAssetId", "value": "runtime_material" },
     { "op": "assert_console", "contains": "wrong kind", "category": "Inspector", "level": "warning" },
-    { "op": "assert_property", "entity": "widget_label", "component": "kb21.ui.text", "property": "fontAssetId", "value": 0 },
+    { "op": "assert_property", "entity": "widget_label", "component": "kb21.ui.text", "property": "fontAssetId", "value": "/Game/UI/Fonts/DejaVuSans.21kb" },
     { "op": "open_asset", "asset": "runtime_material" },
     { "op": "set_material", "asset": "runtime_material", "property": "roughness", "value": 0.35 },
     { "op": "assert_material", "asset": "runtime_material", "property": "roughness", "value": 0.35 },

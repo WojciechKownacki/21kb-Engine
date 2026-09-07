@@ -261,6 +261,10 @@ void SceneViewportToolbarRenderer::Paint(HDC dc, const RECT& content, const Edit
         EditorViewportRotationSnapLabel(state.RotationSnapDegrees()),
         theme,
         state.RotationSnapDegrees() > 0.0F);
+    SceneViewportToolbarDrawing::FillRound(dc, rects.twoDButton,
+        GdiDrawing::ToColorRef(state.Is2D() ? theme.accent : theme.toolbarButton),
+        GdiDrawing::ToColorRef(theme.borderPanel), 4);
+    GdiDrawing::DrawTabText(dc, rects.twoDButton, "2D", GdiDrawing::ToColorRef(theme.textPrimary));
 
 }
 

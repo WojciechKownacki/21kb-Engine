@@ -1,0 +1,563 @@
+{
+  "schema": "21kb.editor-automation/v1",
+  "steps": [
+    {
+      "op": "create_entity",
+      "id": "button",
+      "name": "Entity"
+    },
+    {
+      "op": "create_entity",
+      "id": "canvas",
+      "name": "Canvas"
+    },
+    {
+      "op": "copy_fixture",
+      "source": "fixtures/ui/IncompleteButton.21kbscene",
+      "destination": "Assets/Scenes/Legacy.21kbscene"
+    },
+    {
+      "op": "copy_fixture",
+      "source": "fixtures/ui/IncompleteButton.meta",
+      "destination": "Assets/Scenes/Legacy.meta"
+    },
+    {
+      "op": "open_scene",
+      "path": "Assets/Scenes/Legacy.21kbscene"
+    },
+    {
+      "op": "assert_component",
+      "entity": "button",
+      "component": "kb21.ui.button"
+    },
+    {
+      "op": "assert_component",
+      "entity": "button",
+      "component": "kb21.ui.rect-transform"
+    },
+    {
+      "op": "assert_component",
+      "entity": "button",
+      "component": "kb21.ui.border"
+    },
+    {
+      "op": "assert_component",
+      "entity": "button",
+      "component": "kb21.ui.text"
+    },
+    {
+      "op": "assert_component",
+      "entity": "button",
+      "component": "kb21.ui.selectable"
+    },
+    {
+      "op": "assert_parent",
+      "entity": "button",
+      "parent": "canvas"
+    },
+    {
+      "op": "undo"
+    },
+    {
+      "op": "assert_component",
+      "entity": "button",
+      "component": "kb21.ui.rect-transform",
+      "exists": false
+    },
+    {
+      "op": "redo"
+    },
+    {
+      "op": "assert_component",
+      "entity": "button",
+      "component": "kb21.ui.rect-transform"
+    },
+    {
+      "op": "create_entity",
+      "id": "new_image",
+      "name": "New image"
+    },
+    {
+      "op": "add_component",
+      "entity": "new_image",
+      "component": "kb21.ui.image"
+    },
+    {
+      "op": "assert_parent",
+      "entity": "new_image",
+      "parent": "canvas"
+    },
+    {
+      "op": "delete_entity",
+      "entity": "new_image"
+    },
+    {
+      "op": "set_property",
+      "entity": "button",
+      "component": "kb21.ui.selectable",
+      "property": "interactable",
+      "value": false
+    },
+    {
+      "op": "set_property",
+      "entity": "button",
+      "component": "kb21.ui.selectable",
+      "property": "interactable",
+      "value": true
+    },
+    {
+      "op": "assert_ui_frame",
+      "entity": "button",
+      "width": 1920,
+      "height": 1080,
+      "rect_x": 0,
+      "rect_y": 0,
+      "rect_width": 100,
+      "rect_height": 100
+    },
+    {
+      "op": "ui_rect_layout",
+      "entity": "button",
+      "field": 0,
+      "value": 960
+    },
+    {
+      "op": "ui_rect_layout",
+      "entity": "button",
+      "field": 1,
+      "value": 540
+    },
+    {
+      "op": "ui_rect_layout",
+      "entity": "button",
+      "field": 2,
+      "value": 240
+    },
+    {
+      "op": "ui_rect_layout",
+      "entity": "button",
+      "field": 3,
+      "value": 64
+    },
+    {
+      "op": "assert_ui_frame",
+      "entity": "button",
+      "width": 1920,
+      "height": 1080,
+      "rect_x": 840,
+      "rect_y": 508,
+      "rect_width": 240,
+      "rect_height": 64
+    },
+    {
+      "op": "ui_anchor_preset",
+      "entity": "button",
+      "preset": 5
+    },
+    {
+      "op": "assert_property",
+      "entity": "button",
+      "component": "kb21.ui.rect-transform",
+      "property": "anchorMin.x",
+      "value": 0.5
+    },
+    {
+      "op": "assert_ui_frame",
+      "entity": "button",
+      "width": 1920,
+      "height": 1080,
+      "rect_x": 840,
+      "rect_y": 508,
+      "rect_width": 240,
+      "rect_height": 64
+    },
+    {
+      "op": "undo"
+    },
+    {
+      "op": "assert_property",
+      "entity": "button",
+      "component": "kb21.ui.rect-transform",
+      "property": "anchorMin.x",
+      "value": 0
+    },
+    {
+      "op": "redo"
+    },
+    {
+      "op": "select_entity",
+      "entity": "button"
+    },
+    {
+      "op": "set_inspector_scroll",
+      "position": "top"
+    },
+    {
+      "op": "verify_ui_2d"
+    },
+    {
+      "op": "capture",
+      "panel": "inspector",
+      "checkpoint": "anchors-fixed",
+      "width": 400,
+      "height": 720
+    },
+    {
+      "op": "inspector_pointer",
+      "action": "down",
+      "x": 40,
+      "y": 154
+    },
+    {
+      "op": "capture",
+      "panel": "inspector",
+      "checkpoint": "anchor-presets",
+      "width": 400,
+      "height": 720
+    },
+    {
+      "op": "inspector_pointer",
+      "action": "down",
+      "x": 40,
+      "y": 154
+    },
+    {
+      "op": "ui_anchor_preset",
+      "entity": "button",
+      "preset": 0
+    },
+    {
+      "op": "assert_ui_frame",
+      "entity": "button",
+      "width": 1920,
+      "height": 1080,
+      "rect_x": 840,
+      "rect_y": 508,
+      "rect_width": 240,
+      "rect_height": 64
+    },
+    {
+      "op": "ui_anchor_preset",
+      "entity": "button",
+      "preset": 1
+    },
+    {
+      "op": "assert_ui_frame",
+      "entity": "button",
+      "width": 1920,
+      "height": 1080,
+      "rect_x": 840,
+      "rect_y": 508,
+      "rect_width": 240,
+      "rect_height": 64
+    },
+    {
+      "op": "ui_anchor_preset",
+      "entity": "button",
+      "preset": 2
+    },
+    {
+      "op": "assert_ui_frame",
+      "entity": "button",
+      "width": 1920,
+      "height": 1080,
+      "rect_x": 840,
+      "rect_y": 508,
+      "rect_width": 240,
+      "rect_height": 64
+    },
+    {
+      "op": "ui_anchor_preset",
+      "entity": "button",
+      "preset": 3
+    },
+    {
+      "op": "assert_ui_frame",
+      "entity": "button",
+      "width": 1920,
+      "height": 1080,
+      "rect_x": 840,
+      "rect_y": 508,
+      "rect_width": 240,
+      "rect_height": 64
+    },
+    {
+      "op": "ui_anchor_preset",
+      "entity": "button",
+      "preset": 4
+    },
+    {
+      "op": "assert_ui_frame",
+      "entity": "button",
+      "width": 1920,
+      "height": 1080,
+      "rect_x": 840,
+      "rect_y": 508,
+      "rect_width": 240,
+      "rect_height": 64
+    },
+    {
+      "op": "ui_anchor_preset",
+      "entity": "button",
+      "preset": 5
+    },
+    {
+      "op": "assert_ui_frame",
+      "entity": "button",
+      "width": 1920,
+      "height": 1080,
+      "rect_x": 840,
+      "rect_y": 508,
+      "rect_width": 240,
+      "rect_height": 64
+    },
+    {
+      "op": "ui_anchor_preset",
+      "entity": "button",
+      "preset": 6
+    },
+    {
+      "op": "assert_ui_frame",
+      "entity": "button",
+      "width": 1920,
+      "height": 1080,
+      "rect_x": 840,
+      "rect_y": 508,
+      "rect_width": 240,
+      "rect_height": 64
+    },
+    {
+      "op": "ui_anchor_preset",
+      "entity": "button",
+      "preset": 7
+    },
+    {
+      "op": "assert_ui_frame",
+      "entity": "button",
+      "width": 1920,
+      "height": 1080,
+      "rect_x": 840,
+      "rect_y": 508,
+      "rect_width": 240,
+      "rect_height": 64
+    },
+    {
+      "op": "ui_anchor_preset",
+      "entity": "button",
+      "preset": 8
+    },
+    {
+      "op": "assert_ui_frame",
+      "entity": "button",
+      "width": 1920,
+      "height": 1080,
+      "rect_x": 840,
+      "rect_y": 508,
+      "rect_width": 240,
+      "rect_height": 64
+    },
+    {
+      "op": "ui_anchor_preset",
+      "entity": "button",
+      "preset": 9
+    },
+    {
+      "op": "assert_ui_frame",
+      "entity": "button",
+      "width": 1920,
+      "height": 1080,
+      "rect_x": 840,
+      "rect_y": 508,
+      "rect_width": 240,
+      "rect_height": 64
+    },
+    {
+      "op": "ui_anchor_preset",
+      "entity": "button",
+      "preset": 10
+    },
+    {
+      "op": "assert_ui_frame",
+      "entity": "button",
+      "width": 1920,
+      "height": 1080,
+      "rect_x": 840,
+      "rect_y": 508,
+      "rect_width": 240,
+      "rect_height": 64
+    },
+    {
+      "op": "ui_anchor_preset",
+      "entity": "button",
+      "preset": 11
+    },
+    {
+      "op": "assert_ui_frame",
+      "entity": "button",
+      "width": 1920,
+      "height": 1080,
+      "rect_x": 840,
+      "rect_y": 508,
+      "rect_width": 240,
+      "rect_height": 64
+    },
+    {
+      "op": "ui_anchor_preset",
+      "entity": "button",
+      "preset": 12
+    },
+    {
+      "op": "assert_ui_frame",
+      "entity": "button",
+      "width": 1920,
+      "height": 1080,
+      "rect_x": 840,
+      "rect_y": 508,
+      "rect_width": 240,
+      "rect_height": 64
+    },
+    {
+      "op": "ui_anchor_preset",
+      "entity": "button",
+      "preset": 13
+    },
+    {
+      "op": "assert_ui_frame",
+      "entity": "button",
+      "width": 1920,
+      "height": 1080,
+      "rect_x": 840,
+      "rect_y": 508,
+      "rect_width": 240,
+      "rect_height": 64
+    },
+    {
+      "op": "ui_anchor_preset",
+      "entity": "button",
+      "preset": 14
+    },
+    {
+      "op": "assert_ui_frame",
+      "entity": "button",
+      "width": 1920,
+      "height": 1080,
+      "rect_x": 840,
+      "rect_y": 508,
+      "rect_width": 240,
+      "rect_height": 64
+    },
+    {
+      "op": "ui_anchor_preset",
+      "entity": "button",
+      "preset": 15
+    },
+    {
+      "op": "assert_ui_frame",
+      "entity": "button",
+      "width": 1920,
+      "height": 1080,
+      "rect_x": 840,
+      "rect_y": 508,
+      "rect_width": 240,
+      "rect_height": 64
+    },
+    {
+      "op": "ui_rect_layout",
+      "entity": "button",
+      "field": 0,
+      "value": 24
+    },
+    {
+      "op": "ui_rect_layout",
+      "entity": "button",
+      "field": 1,
+      "value": 24
+    },
+    {
+      "op": "ui_rect_layout",
+      "entity": "button",
+      "field": 2,
+      "value": 24
+    },
+    {
+      "op": "ui_rect_layout",
+      "entity": "button",
+      "field": 3,
+      "value": 24
+    },
+    {
+      "op": "assert_ui_frame",
+      "entity": "button",
+      "width": 1920,
+      "height": 1080,
+      "rect_x": 24,
+      "rect_y": 24,
+      "rect_width": 1872,
+      "rect_height": 1032
+    },
+    {
+      "op": "set_property",
+      "entity": "canvas",
+      "component": "kb21.ui.canvas-scaler",
+      "property": "scaleMode",
+      "value": 0
+    },
+    {
+      "op": "assert_ui_frame",
+      "entity": "button",
+      "width": 1280,
+      "height": 720,
+      "rect_x": 24,
+      "rect_y": 24,
+      "rect_width": 1232,
+      "rect_height": 672
+    },
+    {
+      "op": "select_entity",
+      "entity": "button"
+    },
+    {
+      "op": "set_inspector_scroll",
+      "position": "top"
+    },
+    {
+      "op": "capture",
+      "panel": "inspector",
+      "checkpoint": "anchors-stretch",
+      "width": 400,
+      "height": 720
+    },
+    {
+      "op": "save_scene",
+      "path": "Assets/Scenes/Anchors.21kbscene"
+    },
+    {
+      "op": "open_scene",
+      "path": "Assets/Scenes/Anchors.21kbscene"
+    },
+    {
+      "op": "assert_ui_frame",
+      "entity": "button",
+      "width": 1280,
+      "height": 720,
+      "rect_x": 24,
+      "rect_y": 24,
+      "rect_width": 1232,
+      "rect_height": 672
+    },
+    {
+      "op": "play"
+    },
+    {
+      "op": "capture_runtime",
+      "checkpoint": "visible-button",
+      "require_non_uniform": true
+    },
+    {
+      "op": "assert_no_errors"
+    },
+    {
+      "op": "stop"
+    }
+  ]
+}

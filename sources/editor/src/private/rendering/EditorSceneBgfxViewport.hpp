@@ -56,6 +56,9 @@ public:
         std::vector<render::EditorLightWireframeDesc> editorLightWireframes;
         std::vector<render::EditorParticleIconDesc> editorParticleIcons;
         std::vector<render::PhysicsDebugLine> physicsDebugLines;
+        std::vector<kb::scene::SceneUIFrameElement> editorUIOverlays;
+        float editorUIScale = 1.0F;
+        kb::math::Vec2 editorUIOffset{};
         std::vector<EditorSceneViewportTextLabel> viewportTextLabels;
         render::RenderSceneSubmitDesc::EditorSelectionBoxDesc editorSelectionBox{};
         render::SceneRenderMeshPassMode meshPassMode = render::SceneRenderMeshPassMode::OpaqueAndTransparent;
@@ -65,6 +68,7 @@ public:
         std::uint8_t msaaSamples = 0U;
         bool shadowPassEnabled = true;
         bool postProcessEnabled = true;
+        bool presentToHost = true;
         bool selectionMaskEnabled = true;
         bool selectionOutlineEnabled = true;
         bool gpuDrivenRuntimeDispatchEnabled = true;

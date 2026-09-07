@@ -1847,6 +1847,27 @@ EditorTextureAssetPickerDialog::Result EditorTextureAssetPickerDialog::Show(
     return EditorTextureAssetPickerDialog::Result{ .accepted = result.accepted, .assetId = result.assetId };
 }
 
+EditorTextureAssetPickerDialog::Result EditorUIAssetPickerDialog::Show(
+    HWND owner, const EditorTheme& theme, const EditorSceneContext& sceneContext,
+    kb::assets::AssetId currentAsset, kb::assets::AssetKind kind) {
+    if (kind == kb::assets::AssetKind::Texture) {
+        return EditorTextureAssetPickerDialog::Show(owner, theme, sceneContext, currentAsset);
+    }
+    std::vector<AssetPickerRow> rows;
+    for (const auto& metadata : sceneContext.Scene().Assets().Manager().Registry().All()) {
+        if (kb::assets::AssetMatchesKind(metadata, kind)) {
+            rows.push_back({metadata.id, DisplayName(metadata, "Font"), DisplayPath(metadata)});
+        }
+    }
+    std::ranges::sort(rows, [](const auto& lhs, const auto& rhs) {
+        return lhs.name != rhs.name ? lhs.name < rhs.name : lhs.assetId.value < rhs.assetId.value;
+    });
+    AssetPickerWindow window{theme, std::move(rows), currentAsset, "Select UI Font",
+        "Choose a font asset from this project.", "Clear font selection", HeroIconKind::RectangleGroup};
+    const auto result = window.Show(owner);
+    return {.accepted = result.accepted, .assetId = result.assetId};
+}
+
 } // namespace kb::editor
 
 #endif

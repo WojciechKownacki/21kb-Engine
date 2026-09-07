@@ -1,6 +1,7 @@
 #pragma once
 
 #include "kb/render/SceneDepthPolicy.hpp"
+#include "engine/scene/SceneUI.hpp"
 #include "kb/render/frame/RenderViewportDesc.hpp"
 #include "kb/render/overlay/EditorCameraWireframe.hpp"
 #include "kb/render/overlay/EditorLightWireframe.hpp"
@@ -192,6 +193,9 @@ struct RenderSceneSubmitDesc {
     std::span<const EditorLightWireframeDesc> editorLightWireframes{};
     std::span<const EditorParticleIconDesc> editorParticleIcons{};
     std::span<const PhysicsDebugLine> physicsDebugLines{};
+    std::span<const kb::scene::SceneUIFrameElement> editorUIOverlays{};
+    float editorUIScale = 1.0F;
+    kb::math::Vec2 editorUIOffset{};
     bgfx::TextureHandle editorOverlayDepthTexture = BGFX_INVALID_HANDLE;
     std::uint32_t clearRgba = 0x000000FFU;
     float clearDepth = SceneDepthPolicy::ClearDepth();

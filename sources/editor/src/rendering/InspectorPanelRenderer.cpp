@@ -18,6 +18,7 @@
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneUIComponents.hpp"
 #include "engine/scene/SceneTagCatalog.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SkeletonBindingComponent.hpp"
@@ -2250,6 +2251,197 @@ void PaintMultiSelection(HDC dc, RECT content, const EditorTheme& theme, const E
 [[nodiscard]] int MeshRendererSectionHeight(const EditorSceneContext& sceneContext, const kb::scene::MeshRendererComponent& renderer);
 [[nodiscard]] int TerrainSectionHeight(const InspectorPanelState& inspector, std::size_t layerCount) noexcept;
 
+constexpr int kUIRectGeometryHeight = 88;
+constexpr int kUIAnchorGridHeight = 198;
+
+[[nodiscard]] int UIComponentSectionHeight(const InspectorPanelState& state,
+    kb::scene::UIComponentType component, const std::vector<InspectorUIPropertyRow>& rows) noexcept {
+    const int propertyCount = static_cast<int>(std::count_if(rows.begin(), rows.end(),
+        [](const auto& row) { return row.fieldCount != 0; }));
+    const auto section = InspectorUIComponentModel::Section(component);
+    if (component != kb::scene::UIComponentType::RectTransform || state.IsCollapsed(section))
+        return SectionHeight(state, section, propertyCount);
+    return kSectionHeaderHeight + kDividerHeight + kUIRectGeometryHeight +
+        (state.IsDisclosureExpanded(InspectorDisclosureId::UIAnchorPresets) ? kUIAnchorGridHeight : 0) +
+        3 * (kFieldRowHeight + kDividerHeight) + kDisclosureRowHeight + kDividerHeight +
+        (state.IsDisclosureExpanded(InspectorDisclosureId::UIRectAdvanced)
+                ? propertyCount * (kFieldRowHeight + kDividerHeight) : 0);
+}
+
+[[nodiscard]] RECT UIAnchorButtonRect(RECT body) noexcept {
+    return Rect(body.left + 10, body.top + 12, body.left + 70, body.top + 72);
+}
+
+[[nodiscard]] RECT UIAnchorCellRect(RECT body, int index) noexcept {
+    const int cellWidth = std::min(64, static_cast<int>((body.right - body.left - 20) / 4));
+    const int left = body.left + 10 + (index % 4) * cellWidth;
+    const int top = body.top + (index / 4) * 40;
+    return Rect(left + 2, top + 2, left + cellWidth - 2, top + 38);
+}
+
+[[nodiscard]] RECT UIRectFieldRect(RECT body, int index) noexcept {
+    const int left = body.left + 82;
+    const int half = (body.right - left - 14) / 2;
+    const int x = left + (index % 2) * (half + 6);
+    const int y = body.top + 22 + (index / 2) * 40;
+    return Rect(x, y, x + half, y + 22);
+}
+
+[[nodiscard]] RECT UIRectPairFieldRect(RECT row, int lane, int pair) noexcept {
+    const int left = row.left + 88;
+    const int half = (row.right - left - 14) / 2;
+    const int x = left + lane * (half + 6);
+    return Rect(x + (pair == 1 && lane == 1 ? 43 : 15), row.top + 2, x + half, row.top + kFieldRowHeight - 2);
+}
+
+[[nodiscard]] int UIPropertyIndex(const std::vector<InspectorUIPropertyRow>& rows, std::string_view name) {
+    const auto found = std::find_if(rows.begin(), rows.end(),
+        [name](const auto& row) { return row.name == name; });
+    return found == rows.end() ? -1 : static_cast<int>(std::distance(rows.begin(), found));
+}
+
+constexpr std::array<std::array<std::string_view, 2>, 3> kUIRectPairs{{
+    {"pivot.x", "pivot.y"}, {"rotationDegrees", "zOrder"}, {"scale.x", "scale.y"},
+}};
+
+void PaintUIAnchorDiagram(HDC dc, RECT bounds, const EditorTheme& theme,
+    const kb::scene::UIRectTransform& rect, bool highlighted) {
+    DrawValueBox(dc, bounds, theme, {}, highlighted);
+    RECT parent = bounds;
+    InflateRect(&parent, -8, -8);
+    const auto line = [&](int x1, int y1, int x2, int y2, COLORREF color) {
+        ScopedPen pen(1, color);
+        const ScopedGdiObject selected(dc, pen.handle);
+        MoveToEx(dc, x1, y1, nullptr);
+        LineTo(dc, x2, y2);
+    };
+    const auto muted = Color(theme.textSecondary);
+    line(parent.left, parent.top, parent.right, parent.top, muted);
+    line(parent.right, parent.top, parent.right, parent.bottom, muted);
+    line(parent.right, parent.bottom, parent.left, parent.bottom, muted);
+    line(parent.left, parent.bottom, parent.left, parent.top, muted);
+    const auto point = [&](float x, float y) {
+        return POINT{parent.left + static_cast<LONG>(std::lround(x * static_cast<float>(parent.right - parent.left))),
+            parent.top + static_cast<LONG>(std::lround(y * static_cast<float>(parent.bottom - parent.top)))};
+    };
+    const POINT low = point(rect.anchorMin.x, rect.anchorMin.y);
+    const POINT high = point(rect.anchorMax.x, rect.anchorMax.y);
+    const COLORREF accent = Color(theme.accent);
+    line(low.x, low.y, high.x, low.y, accent);
+    line(high.x, low.y, high.x, high.y, accent);
+    line(high.x, high.y, low.x, high.y, accent);
+    line(low.x, high.y, low.x, low.y, accent);
+    for (const POINT anchor : std::array<POINT, 4>{{low, {high.x, low.y}, high, {low.x, high.y}}}) {
+        GdiDrawing::FillRectColor(dc, Rect(anchor.x - 2, anchor.y - 2, anchor.x + 3, anchor.y + 3), accent);
+    }
+}
+
+void PaintUIRectBody(HDC dc, RECT body, const EditorTheme& theme, const InspectorPanelState& state,
+    const kb::scene::UIRectTransform& rect, const std::vector<InspectorUIPropertyRow>& rows) {
+    constexpr auto section = InspectorSectionId::UIRectTransform;
+    const bool presets = state.IsDisclosureExpanded(InspectorDisclosureId::UIAnchorPresets);
+    PaintUIAnchorDiagram(dc, UIAnchorButtonRect(body), theme, rect, presets);
+    Text(dc, Rect(body.left + 10, body.top + 72, body.left + 76, body.top + 88), "Anchors", Color(theme.textSecondary));
+    const auto fields = InspectorUIComponentModel::RectLayoutFields(rect);
+    for (int index = 0; index < 4; ++index) {
+        const RECT box = UIRectFieldRect(body, index);
+        const bool editing = state.EditedProperty() == InspectorPropertyId::UIRectLayoutField && state.EditIndex() == index;
+        Text(dc, Rect(box.left, box.top - 18, box.right, box.top), fields[index].label, Color(theme.textSecondary));
+        DrawValueBox(dc, box, theme, editing ? std::string_view{state.EditBuffer()} : fields[index].value, editing);
+    }
+    int y = body.top + kUIRectGeometryHeight;
+    if (presets) {
+        const RECT grid = Rect(body.left, y, body.right, y + kUIAnchorGridHeight);
+        for (int index = 0; index < 16; ++index) {
+            kb::scene::UIRectTransform preset;
+            static_cast<void>(InspectorUIComponentModel::ApplyAnchorPreset(preset, index, {100.0F, 100.0F}, true, true));
+            PaintUIAnchorDiagram(dc, UIAnchorCellRect(grid, index), theme, preset,
+                InspectorUIComponentModel::AnchorPreset(rect) == index ||
+                state.IsHovered(InspectorHitKind::Row, section, InspectorPropertyId::UIAnchorPreset, index));
+        }
+        Text(dc, Rect(body.left + 10, y + 162, body.right - 8, y + 179),
+            "Click: keep position", Color(theme.textSecondary));
+        Text(dc, Rect(body.left + 10, y + 179, body.right - 8, y + 196),
+            "Alt: align position   Shift: align pivot", Color(theme.textSecondary));
+        y += kUIAnchorGridHeight;
+    }
+    constexpr std::array labels{"Pivot", "Rotation", "Scale"};
+    for (int pair = 0; pair < 3; ++pair) {
+        const RECT rowRect = Rect(body.left, y, body.right, y + kFieldRowHeight);
+        Text(dc, Rect(body.left + 10, y, body.left + 86, y + kFieldRowHeight), labels[pair], Color(theme.textSecondary));
+        for (int lane = 0; lane < 2; ++lane) {
+            const int index = UIPropertyIndex(rows, kUIRectPairs[pair][lane]);
+            if (index < 0) continue;
+            const auto& row = rows[static_cast<std::size_t>(index)];
+            const RECT box = UIRectPairFieldRect(rowRect, lane, pair);
+            const bool editing = state.EditedProperty() == InspectorPropertyId::UIRectTransformField && state.EditIndex() == index;
+            Text(dc, Rect(box.left - (pair == 1 && lane == 1 ? 43 : 15), box.top, box.left, box.bottom),
+                pair == 1 ? (lane == 0 ? "Z" : "Order") : (lane == 0 ? "X" : "Y"), Color(theme.textSecondary));
+            DrawValueBox(dc, box, theme, editing ? std::string_view{state.EditBuffer()} : row.value, editing);
+        }
+        y += kFieldRowHeight + kDividerHeight;
+    }
+    inspector_panel_rows::DrawDisclosureRow(dc, Rect(body.left, y, body.right, y + kDisclosureRowHeight),
+        theme, state, section, InspectorPropertyId::UIRectAdvanced, "Custom anchors and offsets",
+        state.IsDisclosureExpanded(InspectorDisclosureId::UIRectAdvanced));
+    y += kDisclosureRowHeight + kDividerHeight;
+    if (state.IsDisclosureExpanded(InspectorDisclosureId::UIRectAdvanced)) {
+        for (int index = 0; index < static_cast<int>(rows.size()); ++index) {
+            const auto& row = rows[static_cast<std::size_t>(index)];
+            DrawFieldRow(dc, Rect(body.left, y, body.right, y + kFieldRowHeight), theme, state,
+                section, InspectorPropertyId::UIRectTransformField, row.label, row.value, index);
+            y += kFieldRowHeight + kDividerHeight;
+        }
+    }
+}
+
+[[nodiscard]] RECT ValueRectForRow(RECT row) noexcept;
+
+[[nodiscard]] RECT UICompactFieldRect(RECT row, int lane, int count) noexcept {
+    const RECT value = ValueRectForRow(row);
+    const int width = (value.right - value.left) / count;
+    return Rect(value.left + lane * width + (count == 4 ? 21 : 14), value.top,
+        value.left + (lane + 1) * width - 3, value.bottom);
+}
+
+void PaintUICompactRow(HDC dc, RECT bounds, const EditorTheme& theme,
+    const InspectorPanelState& state, InspectorSectionId section, InspectorPropertyId property,
+    const std::vector<InspectorUIPropertyRow>& rows, int index) {
+    const auto& row = rows[static_cast<std::size_t>(index)];
+    const RECT value = ValueRectForRow(bounds);
+    Text(dc, Rect(bounds.left + kRowPadX, bounds.top, value.left, bounds.bottom), row.label, Color(theme.textSecondary));
+    if (row.color) {
+        DrawValueBox(dc, value, theme, {}, state.IsHovered(InspectorHitKind::ColorField, section, property, index));
+        RECT fill = value;
+        InflateRect(&fill, -2, -2);
+        const float alpha = std::clamp(row.rgba[3], 0.0F, 1.0F);
+        for (int y = fill.top; y < fill.bottom; y += 6) {
+            for (int x = fill.left; x < fill.right; x += 6) {
+                const float background = ((x - fill.left) / 6 + (y - fill.top) / 6) % 2 == 0 ? 0.65F : 0.4F;
+                const auto channel = [&](int lane) {
+                    return static_cast<BYTE>(std::lround(255.0F *
+                        (std::clamp(row.rgba[lane], 0.0F, 1.0F) * alpha + background * (1.0F - alpha))));
+                };
+                GdiDrawing::FillRectColor(dc, Rect(x, y, std::min(x + 6, static_cast<int>(fill.right)),
+                    std::min(y + 6, static_cast<int>(fill.bottom))), RGB(channel(0), channel(1), channel(2)));
+            }
+        }
+    } else {
+        const auto labels = row.name == "cornerRadius.x" ? std::array{"TL", "TR", "BR", "BL"}
+            : row.name.ends_with(".left") ? std::array{"L", "T", "R", "B"}
+            : std::array{"X", "Y", "W", "H"};
+        for (int lane = 0; lane < row.fieldCount; ++lane) {
+            const auto& field = rows[static_cast<std::size_t>(index + lane)];
+            const RECT box = UICompactFieldRect(bounds, lane, row.fieldCount);
+            Text(dc, Rect(box.left - (row.fieldCount == 4 ? 21 : 14), box.top, box.left, box.bottom),
+                row.fieldCount == 2 ? (lane == 0 ? "X" : "Y") : labels[lane], Color(theme.textSecondary));
+            const bool editing = state.EditedProperty() == property && state.EditIndex() == index + lane;
+            DrawValueBox(dc, box, theme, editing ? std::string_view{state.EditBuffer()} : field.value, editing);
+        }
+    }
+    inspector_panel_rows::DrawDivider(dc, theme, bounds.left, bounds.right, bounds.bottom);
+}
+
 void PaintUIComponentSections(HDC dc, RECT content, const RECT& band,
     const EditorTheme& theme, const EditorSceneContext& sceneContext,
     kb::scene::SceneEntity entity, int& y) {
@@ -2260,19 +2452,38 @@ void PaintUIComponentSections(HDC dc, RECT content, const RECT& band,
         const InspectorPropertyId propertyId = InspectorUIComponentModel::Property(component);
         const std::vector<InspectorUIPropertyRow> rows =
             InspectorUIComponentModel::Properties(sceneContext.Scene(), entity, component);
-        const int height = SectionHeight(inspector, sectionId, static_cast<int>(rows.size()));
+        const int height = UIComponentSectionHeight(inspector, component, rows);
         if (y < band.bottom && y + height > band.top) {
             const kb::scene::UIComponentDescriptor* descriptor =
                 kb::scene::FindUIComponentDescriptor(component);
             SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom),
                 theme, inspector, sectionId, HeroIconKind::RectangleGroup,
-                descriptor != nullptr ? descriptor->displayName : std::string_view{ "UI Component" }, true);
-            for (int index = 0; index < static_cast<int>(rows.size()); ++index) {
+                component == kb::scene::UIComponentType::RectTransform ? std::string_view{"Transform (UI)"}
+                    : descriptor != nullptr ? descriptor->displayName : std::string_view{ "UI Component" }, true);
+            if (component == kb::scene::UIComponentType::RectTransform) {
+                if (!inspector.IsCollapsed(sectionId)) {
+                    const auto* rect = sceneContext.Scene().Components().UI().TryGet<kb::scene::UIRectTransform>(entity);
+                    if (rect != nullptr) PaintUIRectBody(dc, section.Reserve(height - kSectionHeaderHeight - kDividerHeight), theme, inspector, *rect, rows);
+                }
+            } else for (int index = 0; index < static_cast<int>(rows.size()); ++index) {
                 const InspectorUIPropertyRow& row = rows[static_cast<std::size_t>(index)];
+                if (row.fieldCount == 0) continue;
                 const InspectorPropertyId editableProperty =
                     row.writable ? propertyId : InspectorPropertyId::None;
-                if (row.type == kb::scene::UIComponentPropertyType::Bool) {
+                if (row.fieldCount > 1) {
+                    if (!inspector.IsCollapsed(sectionId)) {
+                        RECT bounds = section.Reserve(kFieldRowHeight + kDividerHeight);
+                        bounds.bottom -= kDividerHeight;
+                        PaintUICompactRow(dc, bounds, theme, inspector, sectionId, editableProperty, rows, index);
+                    }
+                } else if (!row.choices.empty()) {
+                    const auto choice = static_cast<std::size_t>(std::stoul(row.value));
+                    section.Tag(row.label, choice < row.choices.size() ? row.choices[choice] : "Invalid", editableProperty, index);
+                } else if (row.type == kb::scene::UIComponentPropertyType::Bool) {
                     section.Bool(row.label, row.boolValue, editableProperty, index);
+                } else if (row.type == kb::scene::UIComponentPropertyType::Asset) {
+                    section.AssetField(row.label, AssetDisplayName(sceneContext, std::stoull(row.value)),
+                        editableProperty, InspectorPropertyId::UIAssetPicker, index);
                 } else {
                     section.Field(row.label, row.value, editableProperty, index);
                 }
@@ -2671,8 +2882,13 @@ void DrawTerrainMaterialLayers(
     }
 }
 
-[[nodiscard]] RECT TagsDropdownAnchorRect(const RECT& content) noexcept {
-    const int tagsRowTop = InspectorBodyTop(content) + kSectionHeaderHeight + kDividerHeight
+[[nodiscard]] RECT TagsDropdownAnchorRect(const RECT& content, const EditorSceneContext& sceneContext, kb::scene::SceneEntity entity) {
+    int uiHeight = 0;
+    for (const auto component : InspectorUIComponentModel::Components(sceneContext.Scene(), entity)) {
+        uiHeight += UIComponentSectionHeight(sceneContext.Inspector(), component,
+            InspectorUIComponentModel::Properties(sceneContext.Scene(), entity, component)) + kSectionGap;
+    }
+    const int tagsRowTop = InspectorBodyTop(content) + uiHeight + kSectionHeaderHeight + kDividerHeight
         + 2 * (kFieldRowHeight + kDividerHeight);
     const int labelRight = content.left + ((content.right - content.left) * 36 / 100);
     const int top = tagsRowTop + (kFieldRowHeight - kValueHeight) / 2;
@@ -2799,7 +3015,7 @@ void PaintTagsDropdown(HDC dc, const RECT& content, const EditorTheme& theme, co
 
     const std::vector<std::string> known = sceneContext.KnownSceneTags();
     const std::vector<std::string> selected = sceneContext.EntityTags(entity);
-    const RECT anchor = TagsDropdownAnchorRect(content);
+    const RECT anchor = TagsDropdownAnchorRect(content, sceneContext, entity);
     const int noTagIndex = static_cast<int>(known.size());
     const int newTagIndex = noTagIndex + 1;
     const int optionCount = newTagIndex + 1;
@@ -2906,6 +3122,8 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         return top < band.bottom && top + height > band.top;
     };
 
+    PaintUIComponentSections(dc, content, band, theme, sceneContext, selected, y);
+
     const kb::scene::VisibilityComponent visibility = scene.Components().Visibility().Get(selected);
     {
         const int h = SectionHeight(inspector, InspectorSectionId::General, 3);
@@ -2920,7 +3138,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     }
 
     const kb::scene::TransformComponent transform = scene.Transforms().Get(selected);
-    {
+    if (!scene.Components().UI().Has<kb::scene::UIRectTransform>(selected)) {
         const int h = SectionHeight(inspector, InspectorSectionId::Transform, 3);
         if (sectionVisible(y, h)) {
             SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Transform, HeroIconKind::Gamepad2, "Transform");
@@ -2930,8 +3148,6 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         }
         y += h + kSectionGap;
     }
-
-    PaintUIComponentSections(dc, content, band, theme, sceneContext, selected, y);
 
     if (const kb::scene::RegionShapeComponent* regionShape = scene.Components().RegionShapes().TryGet(selected); regionShape != nullptr) {
         const int h = SectionHeight(inspector, InspectorSectionId::RegionShape, 6);
@@ -3275,12 +3491,13 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     const kb::scene::Scene& scene = sceneContext.Scene();
     int height = InspectorHeaderRegionHeight();
     height += SectionHeight(inspector, InspectorSectionId::General, 3) + kSectionGap;
-    height += SectionHeight(inspector, InspectorSectionId::Transform, 3) + kSectionGap;
+    if (!scene.Components().UI().Has<kb::scene::UIRectTransform>(selected))
+        height += SectionHeight(inspector, InspectorSectionId::Transform, 3) + kSectionGap;
     for (const kb::scene::UIComponentType component :
         InspectorUIComponentModel::Components(scene, selected)) {
-        height += SectionHeight(inspector, InspectorUIComponentModel::Section(component),
-                      static_cast<int>(InspectorUIComponentModel::Properties(
-                          scene, selected, component).size())) +
+        height += UIComponentSectionHeight(inspector, component,
+                      InspectorUIComponentModel::Properties(
+                          scene, selected, component)) +
             kSectionGap;
     }
     if (scene.Components().RegionShapes().Has(selected)) {
@@ -3423,6 +3640,10 @@ void AdvanceRow(int& y) noexcept;
     return Contains(row, x, y) ? MakeHit(InspectorHitKind::Row, section, property, row) : InspectorPanelRenderer::Hit{};
 }
 
+[[nodiscard]] InspectorPanelRenderer::Hit HitAssetFieldRow(
+    RECT row, InspectorSectionId section, InspectorPropertyId property,
+    InspectorPropertyId buttonProperty, int x, int y) noexcept;
+
 [[nodiscard]] InspectorPanelRenderer::Hit HitTestUIComponentSections(
     const RECT& content, const InspectorPanelState& state,
     const EditorSceneContext& sceneContext, kb::scene::SceneEntity entity,
@@ -3439,11 +3660,72 @@ void AdvanceRow(int& y) noexcept;
         if (!state.IsCollapsed(section)) {
             const std::vector<InspectorUIPropertyRow> rows =
                 InspectorUIComponentModel::Properties(sceneContext.Scene(), entity, component);
+            if (component == kb::scene::UIComponentType::RectTransform) {
+                const RECT body = Rect(content.left, y, content.right, content.bottom);
+                const auto fieldHit = [&](RECT rect, InspectorPropertyId id, int index = -1) {
+                    const bool action = id == InspectorPropertyId::UIAnchorPresets ||
+                        id == InspectorPropertyId::UIAnchorPreset || id == InspectorPropertyId::UIRectAdvanced;
+                    auto hit = MakeHit(action ? InspectorHitKind::Row : InspectorHitKind::TextField, section, id, rect);
+                    hit.index = index;
+                    return hit;
+                };
+                if (Contains(UIAnchorButtonRect(body), x, yPoint))
+                    return fieldHit(UIAnchorButtonRect(body), InspectorPropertyId::UIAnchorPresets);
+                for (int index = 0; index < 4; ++index) {
+                    const RECT box = UIRectFieldRect(body, index);
+                    if (Contains(box, x, yPoint)) return fieldHit(box, InspectorPropertyId::UIRectLayoutField, index);
+                }
+                y += kUIRectGeometryHeight;
+                if (state.IsDisclosureExpanded(InspectorDisclosureId::UIAnchorPresets)) {
+                    const RECT grid = Rect(content.left, y, content.right, y + kUIAnchorGridHeight);
+                    for (int index = 0; index < 16; ++index) {
+                        const RECT cell = UIAnchorCellRect(grid, index);
+                        if (Contains(cell, x, yPoint)) return fieldHit(cell, InspectorPropertyId::UIAnchorPreset, index);
+                    }
+                    y += kUIAnchorGridHeight;
+                }
+                for (int pair = 0; pair < 3; ++pair) {
+                    for (int lane = 0; lane < 2; ++lane) {
+                        const RECT box = UIRectPairFieldRect(RowRect(content, y), lane, pair);
+                        const int index = UIPropertyIndex(rows, kUIRectPairs[pair][lane]);
+                        if (index >= 0 && Contains(box, x, yPoint)) return fieldHit(box, property, index);
+                    }
+                    AdvanceRow(y);
+                }
+                const RECT disclosure = Rect(content.left, y, content.right, y + kDisclosureRowHeight);
+                if (Contains(disclosure, x, yPoint)) return fieldHit(disclosure, InspectorPropertyId::UIRectAdvanced);
+                y += kDisclosureRowHeight + kDividerHeight;
+                if (!state.IsDisclosureExpanded(InspectorDisclosureId::UIRectAdvanced)) {
+                    y += kSectionGap;
+                    continue;
+                }
+            }
             for (int index = 0; index < static_cast<int>(rows.size()); ++index) {
                 const InspectorUIPropertyRow& row = rows[static_cast<std::size_t>(index)];
+                if (row.fieldCount == 0) continue;
+                if (row.fieldCount > 1) {
+                    const RECT bounds = RowRect(content, y);
+                    for (int lane = 0; lane < (row.color ? 1 : row.fieldCount); ++lane) {
+                        const RECT box = row.color ? ValueRectForRow(bounds) : UICompactFieldRect(bounds, lane, row.fieldCount);
+                        if (row.writable && Contains(box, x, yPoint)) {
+                            auto hit = MakeHit(row.color ? InspectorHitKind::ColorField : InspectorHitKind::TextField,
+                                section, property, box);
+                            hit.index = index + lane;
+                            return hit;
+                        }
+                    }
+                    AdvanceRow(y);
+                    continue;
+                }
                 InspectorPanelRenderer::Hit hit;
                 if (row.writable) {
-                    hit = row.type == kb::scene::UIComponentPropertyType::Bool
+                    if (!row.choices.empty()) {
+                        const RECT box = ValueRectForRow(RowRect(content, y));
+                        if (Contains(box, x, yPoint)) hit = MakeHit(InspectorHitKind::ChoiceField, section, property, box);
+                    } else hit = row.type == kb::scene::UIComponentPropertyType::Asset
+                        ? HitAssetFieldRow(RowRect(content, y), section, property,
+                            InspectorPropertyId::UIAssetPicker, x, yPoint)
+                        : row.type == kb::scene::UIComponentPropertyType::Bool
                         ? HitBool(RowRect(content, y), section, property, x, yPoint)
                         : HitTextRow(RowRect(content, y), section, property, x, yPoint);
                 } else if (Contains(RowRect(content, y), x, yPoint)) {
@@ -4528,12 +4810,18 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
         return {};
     }
 
+    if (InspectorPanelRenderer::Hit hit = HitTestUIComponentSections(
+            viewport, state, sceneContext, selected, x, scrolledY, y);
+        hit.kind != InspectorHitKind::None) {
+        return hit;
+    }
+
     if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::General, x, scrolledY); hit.kind != InspectorHitKind::None) {
         return hit;
     }
     if (!state.IsCollapsed(InspectorSectionId::General)) {
         if (state.IsTagsDropdownOpen()) {
-            const RECT anchor = TagsDropdownAnchorRect(viewport);
+            const RECT anchor = TagsDropdownAnchorRect(viewport, sceneContext, selected);
             const std::vector<std::string> knownTags = sceneContext.KnownSceneTags();
             const int optionCount = static_cast<int>(knownTags.size()) + 2;
             const int noTagIndex = static_cast<int>(knownTags.size());
@@ -4576,29 +4864,26 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
     }
     y += kSectionGap;
 
-    if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::Transform, x, scrolledY); hit.kind != InspectorHitKind::None) {
-        return hit;
-    }
-    if (!state.IsCollapsed(InspectorSectionId::Transform)) {
-        if (InspectorPanelRenderer::Hit hit = HitVec3(RowRect(viewport, y), InspectorSectionId::Transform, InspectorPropertyId::PositionX, InspectorPropertyId::PositionY, InspectorPropertyId::PositionZ, x, scrolledY); hit.kind != InspectorHitKind::None) {
+    if (!sceneContext.Scene().Components().UI().Has<kb::scene::UIRectTransform>(selected)) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::Transform, x, scrolledY); hit.kind != InspectorHitKind::None) {
             return hit;
         }
-        AdvanceRow(y);
-        if (InspectorPanelRenderer::Hit hit = HitRotation(RowRect(viewport, y), x, scrolledY); hit.kind != InspectorHitKind::None) {
-            return hit;
+        if (!state.IsCollapsed(InspectorSectionId::Transform)) {
+            if (InspectorPanelRenderer::Hit hit = HitVec3(RowRect(viewport, y), InspectorSectionId::Transform, InspectorPropertyId::PositionX, InspectorPropertyId::PositionY, InspectorPropertyId::PositionZ, x, scrolledY); hit.kind != InspectorHitKind::None) {
+                return hit;
+            }
+            AdvanceRow(y);
+            if (InspectorPanelRenderer::Hit hit = HitRotation(RowRect(viewport, y), x, scrolledY); hit.kind != InspectorHitKind::None) {
+                return hit;
+            }
+            AdvanceRow(y);
+            if (InspectorPanelRenderer::Hit hit = HitVec3(RowRect(viewport, y), InspectorSectionId::Transform, InspectorPropertyId::ScaleX, InspectorPropertyId::ScaleY, InspectorPropertyId::ScaleZ, x, scrolledY); hit.kind != InspectorHitKind::None) {
+                return hit;
+            }
+            AdvanceRow(y);
         }
-        AdvanceRow(y);
-        if (InspectorPanelRenderer::Hit hit = HitVec3(RowRect(viewport, y), InspectorSectionId::Transform, InspectorPropertyId::ScaleX, InspectorPropertyId::ScaleY, InspectorPropertyId::ScaleZ, x, scrolledY); hit.kind != InspectorHitKind::None) {
-            return hit;
-        }
-        AdvanceRow(y);
-    }
-    y += kSectionGap;
+        y += kSectionGap;
 
-    if (InspectorPanelRenderer::Hit hit = HitTestUIComponentSections(
-            viewport, state, sceneContext, selected, x, scrolledY, y);
-        hit.kind != InspectorHitKind::None) {
-        return hit;
     }
 
     if (sceneContext.Scene().Components().RegionShapes().Has(selected)) {

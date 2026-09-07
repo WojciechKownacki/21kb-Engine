@@ -5,6 +5,8 @@
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/script/ScriptBehaviourAsset.hpp"
+#include "engine/ui/UIComponentCatalog.hpp"
+#include "engine/ui/UIComponentPropertyCatalog.hpp"
 
 #include <optional>
 #include <string>
@@ -67,7 +69,7 @@ namespace {
 
 [[nodiscard]] std::string ComponentSummary(const kb::scene::ScenePrefabNodeDesc& node) {
     std::string summary;
-    const auto append = [&summary](const char* name) {
+    const auto append = [&summary](std::string_view name) {
         if (!summary.empty()) {
             summary += ", ";
         }
@@ -99,6 +101,11 @@ namespace {
     }
     if (node.components.audioListener.has_value()) {
         append("AudioListener");
+    }
+    for (const auto& descriptor : kb::scene::UIComponentCatalog()) {
+        if (kb::scene::HasUIComponent(node.components.ui, descriptor.type)) {
+            append(descriptor.displayName);
+        }
     }
     return summary;
 }
