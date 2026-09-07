@@ -56,10 +56,6 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunSkeletalMeshAssetTests();
     } else if (suite == "timeline-runtime") {
         kb::tests::RunTimelineRuntimeTests();
-    } else if (suite == "ui-document-runtime") {
-        kb::tests::RunUIDocumentRuntimeTests();
-    } else if (suite == "ui-presentation-runtime") {
-        kb::tests::RunUIPresentationRuntimeTests();
     } else if (suite == "localization") {
         kb::tests::RunLocalizationTests();
     } else {
@@ -89,8 +85,6 @@ void RunAllSuites() {
     kb::tests::RunSkeletonAssetTests();
     kb::tests::RunSkeletalMeshAssetTests();
     kb::tests::RunTimelineRuntimeTests();
-    kb::tests::RunUIDocumentRuntimeTests();
-    kb::tests::RunUIPresentationRuntimeTests();
     kb::tests::RunLocalizationTests();
 }
 

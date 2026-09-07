@@ -71,10 +71,6 @@ private:
     void ConfigureSceneFixedStep(kb::scene::Scene& scene) noexcept;
     void PrepareScene(kb::scene::Scene& scene);
     void RestartReloadedBehaviours(kb::scene::Scene& scene);
-    // Binds retained UIDocument declarations to the ScriptSharedState after
-    // script phases. The UI service owns the loop-suppression state; this
-    // system is only the typed script-data adapter and scheduling boundary.
-    void SynchronizeUIBindings(kb::scene::Scene& scene);
     void ExecuteTrackedBehaviourPhase(kb::scene::Scene& scene, ScriptLifecycleEvent event, float deltaSeconds);
     // LIB-073: drains kb::scene::SceneLoadedContent's pending
     // SceneLoading/SceneLoaded/SceneActivated/SceneUnloading/SceneUnloaded
@@ -131,9 +127,6 @@ private:
     void DispatchPendingAnimationEvents(kb::scene::Scene& scene, float deltaSeconds);
     void DispatchPendingTimelineMarkerEvents(
         kb::scene::Scene& scene, float deltaSeconds);
-    // Drains typed runtime UI interactions and emits UI.* through the existing
-    // ScriptEventBus; listeners use Events.Subscribe/Unsubscribe.
-    void DispatchPendingUIEvents(kb::scene::Scene& scene);
     void SyncBehaviourLifecycles(kb::scene::Scene& scene, float deltaSeconds);
     void ShutdownTrackedBehaviours(kb::scene::Scene& scene, float deltaSeconds);
     void DispatchDeactivateAndDestroyInOrder(kb::scene::Scene& scene, std::vector<BehaviourLifecycleRecord>& records, float deltaSeconds);

@@ -10,8 +10,6 @@
 #endif
 #include <Windows.h>
 
-#include "engine/input/InputDeviceState.hpp"
-#include "engine/input/InputText.hpp"
 #include "engine/input/InputTouchPoint.hpp"
 
 #include <array>
@@ -20,16 +18,18 @@
 
 namespace kb::input {
 
+class InputDeviceState;
+
 // Fills an engine InputDeviceState from the Win32 keyboard/mouse and XInput
 // devices owned by the foreground process. The collector is shared by every
 // Win32 host (editor and standalone player), so platform polling has one
 // production implementation.
 class Win32InputCollector {
 public:
-    // Observes message-driven device input that cannot be polled: committed
-    // UTF-16 text, touch contacts and mouse-wheel deltas. Touch messages are
-    // consumed. Text and wheel return false so an editor host can route the
-    // same event while runtime receives it on the next Collect.
+    // Observes message-driven device input that cannot be polled: touch
+    // contacts and mouse-wheel deltas. Touch messages are consumed (true);
+    // wheel messages return false so the host UI can route the same wheel
+    // event while the normalized runtime snapshot receives it next Collect.
     [[nodiscard]] bool HandleWindowMessage(
         HWND ownerWindow, UINT message, WPARAM wparam, LPARAM lparam) noexcept;
     // Maps the OS cursor from `coordinateWindow` client pixels through the
@@ -44,8 +44,6 @@ public:
     void Collect(InputDeviceState& state, HWND ownerWindow) noexcept;
 
 private:
-    [[nodiscard]] bool MapScreenPoint(
-        HWND ownerWindow, POINT screenPoint, float& x, float& y) const noexcept;
     void UpdateTouchPoint(
         std::uint32_t id, float x, float y, InputTouchPhase phase) noexcept;
     void AdvanceTouchFrame() noexcept;
@@ -55,9 +53,6 @@ private:
     POINT previousMouse_{};
     std::array<InputTouchPoint, kMaxTouchPoints> touchPoints_{};
     std::size_t touchPointCount_ = 0U;
-    std::array<char32_t, InputDeviceState::kMaxTextInputCodePoints> pendingTextInput_{};
-    std::size_t pendingTextInputCount_ = 0U;
-    Utf16InputDecoder textDecoder_{};
     float pendingMouseWheel_ = 0.0F;
     HWND pointerCoordinateWindow_ = nullptr;
     RECT pointerClientViewport_{};

@@ -22,7 +22,6 @@ enum class ScenePrefabBakedComponentMask : std::uint64_t {
     CharacterController = 1ULL << 10U,
     Joint = 1ULL << 11U,
     Animator = 1ULL << 12U,
-    UIDocument = 1ULL << 13U,
     NavAgent = 1ULL << 14U,
     NavObstacle = 1ULL << 15U,
     RegionShape = 1ULL << 16U,
@@ -93,7 +92,6 @@ struct ScenePrefabBakedArchetype {
     std::vector<SkeletonBindingComponent> skeletonBindings;
     std::vector<MotionSkeletonRuleComponent> motionSkeletonRules;
     std::vector<DrawD3DeformedGeometryComponent> deformedGeometries;
-    std::vector<UIDocumentComponent> uiDocuments;
     std::vector<NavAgent> navAgents;
     std::vector<NavObstacle> navObstacles;
 };

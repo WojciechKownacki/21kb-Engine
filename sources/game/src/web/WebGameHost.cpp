@@ -6,7 +6,6 @@
 #include "engine/input/InputDeviceState.hpp"
 #include "engine/input/InputKey.hpp"
 #include "engine/input/InputSubsystem.hpp"
-#include "engine/input/InputText.hpp"
 #include "engine/scene/Scene.hpp"
 #include "kb/render/DisplayConfig.hpp"
 #include "kb/render/Renderer.hpp"
@@ -18,7 +17,6 @@
 #include <emscripten/html5.h>
 
 #include <algorithm>
-#include <array>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -228,8 +226,6 @@ private:
             EMSCRIPTEN_EVENT_TARGET_DOCUMENT, this, true, &WebGameHost::OnKey));
         static_cast<void>(emscripten_set_keyup_callback(
             EMSCRIPTEN_EVENT_TARGET_DOCUMENT, this, true, &WebGameHost::OnKey));
-        static_cast<void>(emscripten_set_keypress_callback(
-            EMSCRIPTEN_EVENT_TARGET_DOCUMENT, this, true, &WebGameHost::OnKey));
         static_cast<void>(emscripten_set_mousedown_callback(kCanvas, this, true, &WebGameHost::OnMouse));
         static_cast<void>(emscripten_set_mouseup_callback(kCanvas, this, true, &WebGameHost::OnMouse));
         static_cast<void>(emscripten_set_mousemove_callback(kCanvas, this, true, &WebGameHost::OnMouse));
@@ -253,10 +249,6 @@ private:
         const auto now = std::chrono::steady_clock::now();
         const float delta = kb::game::RuntimeDeltaSeconds(host->previousTick_, now);
         host->previousTick_ = now;
-        if (kb::scene::Scene* scene = host->runtime_.Scene(); scene != nullptr) {
-            scene->Input().MutableDeviceState().SetPointerViewportExtent(
-                host->surface_.Width(), host->surface_.Height());
-        }
         bool frameSubmitted = false;
         if (!host->runtime_.Tick(host->renderer_, delta, &frameSubmitted)) {
             host->frameInProgress_ = false;
@@ -273,7 +265,6 @@ private:
             state.SetAnalog(kb::input::InputKey::MouseX, 0.0F);
             state.SetAnalog(kb::input::InputKey::MouseY, 0.0F);
             state.SetAnalog(kb::input::InputKey::MouseWheel, 0.0F);
-            state.ClearTextInput();
         }
         host->frameInProgress_ = false;
     }
@@ -282,18 +273,6 @@ private:
         auto* host = static_cast<WebGameHost*>(userData);
         kb::scene::Scene* scene = host == nullptr ? nullptr : host->runtime_.Scene();
         if (scene == nullptr || event == nullptr) return EM_FALSE;
-        if (eventType == EMSCRIPTEN_EVENT_KEYPRESS) {
-            std::array<char32_t, 1U> decoded{};
-            const kb::input::Utf8DecodeResult result =
-                kb::input::DecodeUtf8(event->key, decoded);
-            if (!result.wellFormed || result.truncated ||
-                result.codePointCount != 1U) {
-                return EM_FALSE;
-            }
-            return scene->Input().MutableDeviceState().AddTextInput(decoded[0])
-                ? EM_TRUE
-                : EM_FALSE;
-        }
         const kb::input::InputKey key = WebKey(event->code);
         if (key == kb::input::InputKey::None) return EM_FALSE;
         scene->Input().MutableDeviceState().SetKeyDown(key, eventType == EMSCRIPTEN_EVENT_KEYDOWN);

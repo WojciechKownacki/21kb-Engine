@@ -19,11 +19,8 @@
 #include "engine/scene/SceneSystemContext.hpp"
 #include "engine/scene/SceneTasks.hpp"
 #include "engine/scene/SceneTimers.hpp"
-#include "engine/scene/SceneUIDocuments.hpp"
 
 #include <algorithm>
-#include <cmath>
-#include <limits>
 #include <unordered_set>
 #include <utility>
 
@@ -52,88 +49,12 @@ struct BehaviourCollectContext {
     std::vector<RawBehaviourRecord>* records = nullptr;
 };
 
-class ScriptSharedUIBindingDataSource final : public kb::scene::UIBindingDataSource {
-public:
-    explicit ScriptSharedUIBindingDataSource(ScriptSharedState& state) noexcept
-        : state_(state) {}
-
-    [[nodiscard]] std::optional<kb::scene::UIBindingValue> Read(
-        std::string_view sourcePath, kb::scene::UIDataValueType type) const override {
-        const std::optional<ScriptValue> source = state_.Get(sourcePath);
-        if (!source.has_value()) return std::nullopt;
-        kb::scene::UIBindingValue value{ .type = type };
-        switch (type) {
-        case kb::scene::UIDataValueType::Boolean:
-            if (source->Type() != ScriptValueType::Bool) return std::nullopt;
-            value.boolean = source->AsBool();
-            return value;
-        case kb::scene::UIDataValueType::String:
-            if (source->Type() != ScriptValueType::String) return std::nullopt;
-            value.string = source->AsString();
-            return value;
-        case kb::scene::UIDataValueType::Number:
-            switch (source->Type()) {
-            case ScriptValueType::Int: value.number = source->AsInt(); break;
-            case ScriptValueType::Int64: value.number = static_cast<double>(source->AsInt64()); break;
-            case ScriptValueType::UInt32: value.number = source->AsUInt32(); break;
-            case ScriptValueType::Float: value.number = source->AsFloat(); break;
-            case ScriptValueType::Double: value.number = source->AsDouble(); break;
-            default: return std::nullopt;
-            }
-            return std::isfinite(value.number) ? std::optional<kb::scene::UIBindingValue>{ std::move(value) } : std::nullopt;
-        }
-        return std::nullopt;
-    }
-
-    [[nodiscard]] bool Write(std::string_view sourcePath, const kb::scene::UIBindingValue& value) override {
-        switch (value.type) {
-        case kb::scene::UIDataValueType::Boolean:
-            return state_.Set(std::string{ sourcePath }, ScriptValue{ value.boolean });
-        case kb::scene::UIDataValueType::String:
-            return state_.Set(std::string{ sourcePath }, ScriptValue{ value.string });
-        case kb::scene::UIDataValueType::Number:
-            if (!std::isfinite(value.number) || value.number < -std::numeric_limits<float>::max() ||
-                value.number > std::numeric_limits<float>::max()) return false;
-            return state_.Set(std::string{ sourcePath }, ScriptValue{ static_cast<float>(value.number) });
-        }
-        return false;
-    }
-
-private:
-    ScriptSharedState& state_;
-};
-
 void CollectBehaviour(kb::scene::SceneEntity entity, const kb::scene::BehaviourComponent& behaviour, void* rawContext) {
     auto& context = *static_cast<BehaviourCollectContext*>(rawContext);
     context.records->push_back(RawBehaviourRecord{
         .entity = entity,
         .behaviour = behaviour,
     });
-}
-
-[[nodiscard]] const char* UIEventName(kb::scene::UIRuntimeEventKind kind) noexcept {
-    switch (kind) {
-    case kb::scene::UIRuntimeEventKind::Click: return "UI.Click";
-    case kb::scene::UIRuntimeEventKind::Pointer: return "UI.Pointer";
-    case kb::scene::UIRuntimeEventKind::Submit: return "UI.Submit";
-    case kb::scene::UIRuntimeEventKind::Changed: return "UI.Changed";
-    case kb::scene::UIRuntimeEventKind::Focus: return "UI.Focus";
-    case kb::scene::UIRuntimeEventKind::Navigation: return "UI.Navigation";
-    }
-    return "";
-}
-
-[[nodiscard]] const char* UINavigationDirectionName(kb::scene::UINavigationDirection direction) noexcept {
-    switch (direction) {
-    case kb::scene::UINavigationDirection::Next: return "Next";
-    case kb::scene::UINavigationDirection::Previous: return "Previous";
-    case kb::scene::UINavigationDirection::Up: return "Up";
-    case kb::scene::UINavigationDirection::Down: return "Down";
-    case kb::scene::UINavigationDirection::Left: return "Left";
-    case kb::scene::UINavigationDirection::Right: return "Right";
-    case kb::scene::UINavigationDirection::None: return "";
-    }
-    return "";
 }
 
 } // namespace
@@ -199,7 +120,6 @@ const ScriptRuntimeExecutionResult& ScriptRuntimeSceneSystem::ExecuteFrame(kb::s
     DispatchPendingPrefabInstantiatedEvents(scene, clampedDeltaSeconds);
     DispatchPendingAnimationEvents(scene, clampedDeltaSeconds);
     DispatchPendingTimelineMarkerEvents(scene, clampedDeltaSeconds);
-    DispatchPendingUIEvents(scene);
     DispatchDeferredEvents(scene);
     SyncBehaviourLifecycles(scene, clampedDeltaSeconds);
     // LIB-094: explicit FixedTick-during-pause rule — while the scene is
@@ -233,7 +153,6 @@ const ScriptRuntimeExecutionResult& ScriptRuntimeSceneSystem::ExecuteFrame(kb::s
     ExecuteTrackedBehaviourPhase(scene, ScriptLifecycleEvent::LateTick, clampedDeltaSeconds);
     ExecuteTrackedBehaviourPhase(scene, ScriptLifecycleEvent::BeforeRender, clampedDeltaSeconds);
     ExecuteTrackedBehaviourPhase(scene, ScriptLifecycleEvent::AfterRender, clampedDeltaSeconds);
-    SynchronizeUIBindings(scene);
     // LIB-067: frame playback point — apply every World.Destroy(deferred=true)
     // queued during this frame's behaviour phases now that all iteration is
     // done, so no behaviour ran against storage a deferred destroy will pull.
@@ -253,7 +172,6 @@ void ScriptRuntimeSceneSystem::BeginFrame(kb::scene::Scene& scene, float deltaSe
     DispatchPendingPrefabInstantiatedEvents(scene, clampedDeltaSeconds);
     DispatchPendingAnimationEvents(scene, clampedDeltaSeconds);
     DispatchPendingTimelineMarkerEvents(scene, clampedDeltaSeconds);
-    DispatchPendingUIEvents(scene);
     DispatchDeferredEvents(scene);
     SyncBehaviourLifecycles(scene, clampedDeltaSeconds);
 }
@@ -265,7 +183,6 @@ void ScriptRuntimeSceneSystem::ExecuteFixedStep(kb::scene::Scene& scene, float f
     scene.Runtime().SetScriptFixedDeltaSeconds(fixedDeltaSeconds);
     ExecuteTrackedBehaviourPhase(scene, ScriptLifecycleEvent::FixedTick, fixedDeltaSeconds);
     DispatchCompletedFixedStepTasks(scene, 1U, fixedDeltaSeconds);
-    SynchronizeUIBindings(scene);
 }
 
 void ScriptRuntimeSceneSystem::ExecuteVariableFrame(kb::scene::Scene& scene, float deltaSeconds) {
@@ -280,7 +197,6 @@ void ScriptRuntimeSceneSystem::ExecuteVariableFrame(kb::scene::Scene& scene, flo
     ExecuteTrackedBehaviourPhase(scene, ScriptLifecycleEvent::LateTick, clampedDeltaSeconds);
     ExecuteTrackedBehaviourPhase(scene, ScriptLifecycleEvent::BeforeRender, clampedDeltaSeconds);
     ExecuteTrackedBehaviourPhase(scene, ScriptLifecycleEvent::AfterRender, clampedDeltaSeconds);
-    SynchronizeUIBindings(scene);
     static_cast<void>(scene.Entities().DrainDeferredDestroys());
 }
 
@@ -293,7 +209,6 @@ const ScriptRuntimeExecutionResult& ScriptRuntimeSceneSystem::ExecuteShutdown(kb
 const ScriptRuntimeExecutionResult& ScriptRuntimeSceneSystem::ExecutePhase(kb::scene::Scene& scene, ScriptLifecycleEvent event, float deltaSeconds) {
     PrepareScene(scene);
     lastResult_ = runtime_.ExecuteLifecycleAndDispatchEvents(scene, event, deltaSeconds);
-    SynchronizeUIBindings(scene);
     return lastResult_;
 }
 
@@ -370,11 +285,6 @@ void ScriptRuntimeSceneSystem::RestartReloadedBehaviours(kb::scene::Scene& scene
     std::erase_if(lifecycleRecords_, [&reloadedAssetIds](const auto& entry) {
         return reloadedAssetIds.contains(entry.second.behaviour.behaviourAssetId);
     });
-}
-
-void ScriptRuntimeSceneSystem::SynchronizeUIBindings(kb::scene::Scene& scene) {
-    ScriptSharedUIBindingDataSource source{ runtime_.SharedState() };
-    scene.UIDocuments().SynchronizeBindings(source);
 }
 
 void ScriptRuntimeSceneSystem::ExecuteTrackedBehaviourPhase(
@@ -599,52 +509,6 @@ void ScriptRuntimeSceneSystem::DispatchDeferredEvents(kb::scene::Scene& scene) {
         lastResult_.diagnostics.push_back(ScriptDiagnostic{
             .message = error,
         });
-    }
-}
-
-void ScriptRuntimeSceneSystem::DispatchPendingUIEvents(kb::scene::Scene& scene) {
-    // Physical input and scripted producers append typed events to
-    // SceneUIDocuments; this is their single ScriptEventBus delivery boundary.
-    // Subscription lifetime remains canonical in Events.Subscribe/Unsubscribe.
-    for (kb::scene::UIRuntimeEventRecord& pending : scene.UIDocuments().DrainEvents()) {
-        ScriptEvent event;
-        event.name = UIEventName(pending.event.kind);
-        event.sender = pending.owner;
-        event.target = pending.owner;
-        event.arguments.push_back({ "owner", ScriptValue{ pending.owner.Id(), ScriptValueType::Entity } });
-        event.arguments.push_back({ "element", ScriptValue{ pending.event.elementId, ScriptValueType::Hash } });
-        switch (pending.event.kind) {
-        case kb::scene::UIRuntimeEventKind::Click:
-        case kb::scene::UIRuntimeEventKind::Pointer:
-            event.arguments.push_back({ "x", ScriptValue{ pending.event.pointerX } });
-            event.arguments.push_back({ "y", ScriptValue{ pending.event.pointerY } });
-            break;
-        case kb::scene::UIRuntimeEventKind::Submit:
-            event.arguments.push_back({ "text", ScriptValue{ pending.event.text } });
-            break;
-        case kb::scene::UIRuntimeEventKind::Changed:
-            event.arguments.push_back({ "value", ScriptValue{ pending.event.value } });
-            event.arguments.push_back({ "text", ScriptValue{ pending.event.text } });
-            break;
-        case kb::scene::UIRuntimeEventKind::Focus:
-            event.arguments.push_back({ "focused", ScriptValue{ pending.event.focused } });
-            break;
-        case kb::scene::UIRuntimeEventKind::Navigation:
-            event.arguments.push_back({ "direction", ScriptValue{ std::string{ UINavigationDirectionName(pending.event.navigation) } } });
-            break;
-        }
-        const ScriptEventDeliveryResult delivery = runtime_.Events().Emit(scene, event, pending.owner);
-        for (const std::string& error : delivery.errors) {
-            lastResult_.diagnostics.push_back(ScriptDiagnostic{ .message = error });
-        }
-        if (!pending.event.eventName.empty() && pending.event.eventName != event.name) {
-            event.name = pending.event.eventName;
-            const ScriptEventDeliveryResult actionDelivery = runtime_.Events().Emit(
-                scene, event, pending.owner);
-            for (const std::string& error : actionDelivery.errors) {
-                lastResult_.diagnostics.push_back(ScriptDiagnostic{ .message = error });
-            }
-        }
     }
 }
 

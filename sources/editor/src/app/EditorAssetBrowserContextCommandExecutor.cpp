@@ -108,10 +108,6 @@ bool EditorAssetBrowserContextCommandExecutor::Execute(EditorAssetContextCommand
         const std::filesystem::path destinationFolder = targetKind == EditorAssetContextTargetKind::Folder ? targetFolder : state.SelectedFolder();
         return sceneContext.CreateParticleEffectAsset(destinationFolder);
     }
-    case EditorAssetContextCommand::NewUserWidget: {
-        const std::filesystem::path destinationFolder = targetKind == EditorAssetContextTargetKind::Folder ? targetFolder : state.SelectedFolder();
-        return sceneContext.CreateUserWidgetAsset(destinationFolder);
-    }
     case EditorAssetContextCommand::ExtractMaterials:
         if (targetKind == EditorAssetContextTargetKind::Asset) {
             return sceneContext.ExtractEmbeddedMaterials(targetAsset);

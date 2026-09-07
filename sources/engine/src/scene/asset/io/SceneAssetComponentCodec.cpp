@@ -30,7 +30,6 @@ enum SceneNodeComponentBits : std::uint64_t {
     CharacterControllerBit = 1U << 10U,
     JointBit = 1U << 11U,
     AnimatorBit = 1U << 12U,
-    UIDocumentBit = 1U << 13U,
     NavAgentBit = 1U << 14U,
     NavObstacleBit = 1U << 15U,
     RegionShapeBit = 1U << 16U,
@@ -69,7 +68,6 @@ constexpr std::uint64_t KnownComponentBits = CameraBit |
     CharacterControllerBit |
     JointBit |
     AnimatorBit |
-    UIDocumentBit |
     NavAgentBit |
     NavObstacleBit |
     RegionShapeBit |
@@ -94,7 +92,6 @@ constexpr std::uint64_t KnownComponentBits = CameraBit |
     include(components.characterController.has_value(), CharacterControllerBit);
     include(components.joint.has_value(), JointBit);
     include(components.animator.has_value(), AnimatorBit);
-    include(components.uiDocument.has_value(), UIDocumentBit);
     include(components.navAgent.has_value(), NavAgentBit);
     include(components.navObstacle.has_value(), NavObstacleBit);
     include(components.regionShape.has_value(), RegionShapeBit);
@@ -282,12 +279,6 @@ bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::
             !input.ReadBool(geometry.receivesShadow) || !input.ReadUInt32(geometry.layer) || !input.ReadBool(geometry.enabled) ||
             !IsDrawD3DeformedGeometryComponentPersistable(geometry)) return false;
         output.deformedGeometry = geometry;
-    }
-    if ((componentBits & UIDocumentBit) != 0U) {
-        if (fileVersion < 7U) return false;
-        UIDocumentComponent uiDocument{};
-        if (!input.ReadUInt64(uiDocument.documentAssetId) || !input.ReadBool(uiDocument.enabled)) return false;
-        output.uiDocument = uiDocument;
     }
     if ((componentBits & NavAgentBit) != 0U) {
         if (fileVersion < 8U) return false;
@@ -615,10 +606,6 @@ void SceneAssetComponentCodec::Write(std::vector<std::uint8_t>& output, const Sc
         SceneAssetBinaryIO::WriteBool(output, geometry.receivesShadow);
         SceneAssetBinaryIO::WriteUInt32(output, geometry.layer);
         SceneAssetBinaryIO::WriteBool(output, geometry.enabled);
-    }
-    if (components.uiDocument.has_value()) {
-        SceneAssetBinaryIO::WriteUInt64(output, components.uiDocument->documentAssetId);
-        SceneAssetBinaryIO::WriteBool(output, components.uiDocument->enabled);
     }
     if (components.navAgent.has_value()) {
         const NavAgent& agent = *components.navAgent;

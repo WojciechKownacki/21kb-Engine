@@ -36,6 +36,5 @@ int main(int argumentCount, char** arguments) {
     kb::editor::tests::RunEditorMaterialAssetAuthoringTests();
     kb::editor::tests::RunScriptEditorTests();
     kb::editor::tests::RunSvgPathTests();
-    kb::editor::tests::RunEditorUserWidgetAuthoringTests();
     return 0;
 }

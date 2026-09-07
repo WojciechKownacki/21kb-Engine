@@ -307,9 +307,6 @@ FindInspectorHit(
     if (panel == "particle_editor") {
         return DockPanelKind::ParticleEditor;
     }
-    if (panel == "user_widget") {
-        return DockPanelKind::UserWidgetEditor;
-    }
     return std::nullopt;
 }
 

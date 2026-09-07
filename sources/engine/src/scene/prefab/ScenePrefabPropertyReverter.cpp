@@ -104,12 +104,6 @@ void RevertComponentProperty(Scene& scene, SceneObject object, const ScenePrefab
         } else {
             components.ParticleEffects().Remove(entity);
         }
-    } else if (ScenePrefabPropertyPath::StartsWith(propertyPath, "uiDocument")) {
-        if (node.components.uiDocument.has_value()) {
-            components.UIDocuments().Set(entity, *node.components.uiDocument);
-        } else {
-            components.UIDocuments().Remove(entity);
-        }
     }
 }
 

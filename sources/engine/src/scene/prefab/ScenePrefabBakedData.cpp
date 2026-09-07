@@ -82,9 +82,6 @@ namespace {
     if (components.skeletonBinding.has_value()) mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::SkeletonBinding);
     if (components.motionSkeletonRule.has_value()) mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::MotionSkeletonRule);
     if (components.deformedGeometry.has_value()) mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::DeformedGeometry);
-    if (components.uiDocument.has_value()) {
-        mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::UIDocument);
-    }
     if (components.navAgent.has_value()) mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::NavAgent);
     if (components.navObstacle.has_value()) mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::NavObstacle);
     return mask;
@@ -212,9 +209,6 @@ ScenePrefabBakedData ScenePrefabBakedData::Bake(std::span<const ScenePrefabNodeD
         if (node.components.skeletonBinding.has_value()) archetype.skeletonBindings.push_back(*node.components.skeletonBinding);
         if (node.components.motionSkeletonRule.has_value()) archetype.motionSkeletonRules.push_back(*node.components.motionSkeletonRule);
         if (node.components.deformedGeometry.has_value()) archetype.deformedGeometries.push_back(*node.components.deformedGeometry);
-        if (node.components.uiDocument.has_value()) {
-            archetype.uiDocuments.push_back(*node.components.uiDocument);
-        }
         if (node.components.navAgent.has_value()) archetype.navAgents.push_back(*node.components.navAgent);
         if (node.components.navObstacle.has_value()) archetype.navObstacles.push_back(*node.components.navObstacle);
     }

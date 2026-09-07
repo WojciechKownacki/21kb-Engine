@@ -118,7 +118,6 @@ scenario-local aliases.
 | `assert_component` | `entity`, `component`; optional `exists` |
 | `assert_skeleton_binding` | `entity`, Skeleton `asset`; optional `enabled`; verifies the component stores the selected asset and its canonical compatibility signature |
 | `assert_deformed_geometry` | `entity`, Skeletal Mesh `mesh`; optional `material` with `material_slot`, `pose_source`, and `enabled`; verifies the production component configuration |
-| `assert_ui_element` | `entity` and exactly one of numeric `element` or authored `widget_element` alias; optional `exists`, `visible`, `kind`, `text`; queries the live runtime UI tree in Play Mode |
 | `assert_parent` | `entity`, `parent` |
 | `assert_asset` | virtual `path`; optional `type`, `exists` |
 | `assert_asset_compatibility` | `asset` alias or virtual path and expected boolean `compatible`; evaluates production AssetManager dependency compatibility |
@@ -129,14 +128,10 @@ scenario-local aliases.
 | `assert_skeletal_gltf_import_publish` | project-relative glTF `path`, destination virtual `folder`, expected boolean `created_skeleton`; verifies the atomic production publication path |
 | `assert_skeletal_animation_clip` | `asset` alias or virtual path, `skeleton_id`, `skeleton_signature`, `bone_count`, `morph_count`, `curve_count`, `root_motion_bone`; force-loads the production skeletal AnimationClip and verifies stable bindings and root-motion contract |
 | `select_asset` | `asset` alias or virtual path; selects the real asset in the production Asset Browser |
-| `create_asset` | `id`, `type`, `folder`; types include `lua_script`, `input_action`, `input_axis`, `input_context`, `material`, `material_function`, `material_graph`, `material_type`, `particle_effect`, `user_widget` |
-| `add_user_widget_element` | `id`, canonical `kind`; optional `parent` element alias. Adds directly to the open `.kbui` `UIDocument`. |
-| `edit_user_widget_element` | `element`; optional `name`, `text`, `event`, `offset_min_x`, `offset_min_y`, `offset_max_x`, `offset_max_y`; uses the User Widget document undo stack. |
-| `assert_user_widget_element` | `element`; optional `kind`, `name`, `text`, `event`. |
-| `save_user_widget`, `reopen_user_widget`, `user_widget_undo`, `user_widget_redo` | none; operate on the canonical open `.kbui` document. |
+| `create_asset` | `id`, `type`, `folder`; types: `lua_script`, `input_action`, `input_axis`, `input_context`, `material`, `material_function`, `material_graph`, `material_type` |
 | `copy_asset`, `move_asset` | `asset`, destination virtual folder |
 | `delete_asset` | `asset` |
-| `assign_asset` | `entity`, `asset`, `role`; roles: `mesh`, `material`, `audio_clip`, `animator_controller`, `skeleton_binding`, `deformed_geometry_mesh`, `deformed_geometry_material` (requires `slot`), `ui_document`, `script` |
+| `assign_asset` | `entity`, `asset`, `role`; roles: `mesh`, `material`, `audio_clip`, `animator_controller`, `skeleton_binding`, `deformed_geometry_mesh`, `deformed_geometry_material` (requires `slot`), `script` |
 | `assign_material_slot`, `assert_material_slot` | Mesh Renderer `entity`, material `asset`, integer `slot`; assigns or verifies the production per-slot material override |
 | `set_material`, `assert_material` | `asset`, `property`, `value`; numeric factors plus `double_sided` and `alpha_mode` |
 | `save_material` | `asset` |
@@ -167,7 +162,7 @@ scenario-local aliases.
 | `inspector_pointer` | `action` (`down`, `drag`, `up`); `x`,`y` for down/drag |
 | `inspector_text` | `text` |
 | `inspector_key` | `key` (`enter`, `escape`, `backspace`, `delete`, `left`, `right`, `home`, `end`) |
-| `capture` | `panel`, `checkpoint`; panels: `hierarchy`, `scene`, `inspector`, `assets`, `console`, `project_settings`, `script_editor`, `plugins`, `material_editor`, `skeletal_mesh_editor`, `animation_clip_editor`, `animator_editor`, `particle_editor`, `user_widget`. `script_editor` captures the real child editor renderer and loaded document, not only panel chrome. |
+| `capture` | `panel`, `checkpoint`; panels: `hierarchy`, `scene`, `inspector`, `assets`, `console`, `project_settings`, `script_editor`, `plugins`, `material_editor`, `skeletal_mesh_editor`, `animation_clip_editor`, `animator_editor`. `script_editor` captures the real child editor renderer and loaded document, not only panel chrome. |
 | `capture_screenshot_matrix` | `panel`, `checkpoint`; captures `material_editor`, `skeletal_mesh_editor`, `animation_clip_editor`, or `animator_editor` through production docked and floating renderers. Every invocation writes six checked BMPs: 1920x1080, 1366x768, and a 1280x720 logical client at 150% DPI (a 1920x1080 bitmap), each in both layouts. |
 | `verify_viewport_host_lifecycle` | none; renders the real native viewport child plus, when an Animator Controller asset is open, the Animator Editor preview surface (the shared host-surface mechanism keyed by `panel.id` used by all three animation editors). Verifies over every host surface registered for the window that minimize, application deactivation, DPI transition, resize/move, and removing the panel leave no viewport overlay visible over its host, and that an owned overlay popup (scene viewport toolbar dropdown) shown through the production paint path is hidden by the `WM_ACTIVATEAPP` deactivation path and restored by the repaint after reactivation. |
 | `capture_runtime` | `checkpoint`; optional `require_non_uniform`; requires Play Mode and writes a PNG from the production GPU readback path |

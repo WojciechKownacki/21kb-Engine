@@ -21,7 +21,6 @@
 #include "engine/scene/SceneTimelines.hpp"
 #include "engine/scene/SceneTimers.hpp"
 #include "engine/scene/SceneTransforms.hpp"
-#include "engine/scene/SceneUIDocuments.hpp"
 
 namespace kb::scene {
 
@@ -139,14 +138,6 @@ SceneTimelines Scene::Timelines() noexcept {
 
 SceneTimelineQueries Scene::Timelines() const noexcept {
     return SceneTimelineQueries{ *this };
-}
-
-SceneUIDocuments Scene::UIDocuments() noexcept {
-    return SceneUIDocuments{ *this };
-}
-
-SceneUIDocumentQueries Scene::UIDocuments() const noexcept {
-    return SceneUIDocumentQueries{ *this };
 }
 
 kb::save::SaveGame& Scene::AmbientSave() noexcept {

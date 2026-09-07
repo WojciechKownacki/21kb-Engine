@@ -54,7 +54,6 @@ struct LivePrefabComponentReaders {
     SceneAudioListenerComponents audioListeners;
     SceneAnimatorComponents animators;
     SceneParticleEffectComponents particleEffects;
-    SceneUIDocumentComponents uiDocuments;
 };
 
 [[nodiscard]] bool SameObjects(std::span<const SceneObject> lhs, std::span<const SceneObject> rhs) noexcept {
@@ -103,7 +102,6 @@ struct LivePrefabComponentReaders {
         .audioListeners = components.AudioListeners(),
         .animators = components.Animators(),
         .particleEffects = components.ParticleEffects(),
-        .uiDocuments = components.UIDocuments(),
     };
 }
 
@@ -221,10 +219,6 @@ struct LivePrefabComponentReaders {
         lhs.enabled == rhs.enabled && lhs.rootMotionOwner == rhs.rootMotionOwner;
 }
 
-[[nodiscard]] bool Equals(const UIDocumentComponent& lhs, const UIDocumentComponent& rhs) noexcept {
-    return lhs.documentAssetId == rhs.documentAssetId && lhs.enabled == rhs.enabled;
-}
-
 [[nodiscard]] bool Equals(const ParticleEffectComponent& lhs, const ParticleEffectComponent& rhs) noexcept {
     return lhs.effectAssetId == rhs.effectAssetId && lhs.deterministicSeed == rhs.deterministicSeed &&
         lhs.rateMultiplier == rhs.rateMultiplier && lhs.maxParticlesOverride == rhs.maxParticlesOverride &&
@@ -258,8 +252,7 @@ template <typename T, typename Components>
             (!expected.audioSource.has_value() || OptionalComponentMatches(readers.audioSources, entity, expected.audioSource)) &&
             (!expected.audioListener.has_value() || OptionalComponentMatches(readers.audioListeners, entity, expected.audioListener)) &&
             (!expected.animator.has_value() || OptionalComponentMatches(readers.animators, entity, expected.animator)) &&
-            (!expected.particleEffect.has_value() || OptionalComponentMatches(readers.particleEffects, entity, expected.particleEffect)) &&
-            (!expected.uiDocument.has_value() || OptionalComponentMatches(readers.uiDocuments, entity, expected.uiDocument));
+            (!expected.particleEffect.has_value() || OptionalComponentMatches(readers.particleEffects, entity, expected.particleEffect));
     }
 
     return OptionalComponentMatches(readers.cameras, entity, expected.camera) &&
@@ -273,8 +266,7 @@ template <typename T, typename Components>
         OptionalComponentMatches(readers.audioSources, entity, expected.audioSource) &&
         OptionalComponentMatches(readers.audioListeners, entity, expected.audioListener) &&
         OptionalComponentMatches(readers.animators, entity, expected.animator) &&
-        OptionalComponentMatches(readers.particleEffects, entity, expected.particleEffect) &&
-        OptionalComponentMatches(readers.uiDocuments, entity, expected.uiDocument);
+        OptionalComponentMatches(readers.particleEffects, entity, expected.particleEffect);
 }
 
 [[nodiscard]] bool LiveNodeMatchesTemplate(
@@ -457,12 +449,6 @@ void MixLiveSceneComponents(std::uint64_t& hash, SceneComponents components, Sce
         ScenePrefabHashBuilder::MixFloat(hash, animator->speed);
         ScenePrefabHashBuilder::Mix(hash, animator->enabled ? 1U : 0U);
         ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint64_t>(animator->rootMotionOwner));
-    }
-    const UIDocumentComponent* document = components.UIDocuments().TryGet(entity);
-    ScenePrefabHashBuilder::Mix(hash, document != nullptr ? 1U : 0U);
-    if (document != nullptr) {
-        ScenePrefabHashBuilder::Mix(hash, document->documentAssetId);
-        ScenePrefabHashBuilder::Mix(hash, document->enabled ? 1U : 0U);
     }
 }
 

@@ -84,9 +84,6 @@ void ScenePrefabComponentApplier::Apply(Scene& scene, SceneObject object, const 
     if (components.deformedGeometry.has_value()) {
         static_cast<void>(sceneComponents.DeformedGeometries().Set(entity, *components.deformedGeometry));
     }
-    if (components.uiDocument.has_value()) {
-        sceneComponents.UIDocuments().Set(entity, *components.uiDocument);
-    }
     if (components.navAgent.has_value()) {
         sceneComponents.NavAgents().Set(entity, *components.navAgent);
     }
