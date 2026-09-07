@@ -835,6 +835,7 @@ add_executable(kb_editor WIN32
     src/inspection/InspectorComponentCatalog.cpp
     src/inspection/InspectorComponentLabelFormatter.cpp
     src/inspection/InspectorPhysicsModel.cpp
+    src/inspection/ui/InspectorUIComponentModel.cpp
     src/inspection/InspectorAddComponentBrowserModel.cpp
     src/inspection/InspectorEntitySummaryTextBuilder.cpp
     src/inspection/InspectorLightTextBuilder.cpp
@@ -869,6 +870,7 @@ add_executable(kb_editor WIN32
     src/scene/EditorSceneAudioAssetActions.cpp
     src/scene/EditorSceneCommandController.cpp
     src/scene/EditorSceneContext.cpp
+    src/scene/ui/EditorUIComponentAuthoring.cpp
     src/scene/EditorSceneContextSkeletalMesh.cpp
     src/scene/EditorSceneBuildGame.cpp
     src/scene/EditorParticleEditorHost.cpp
@@ -1354,12 +1356,14 @@ if(BUILD_TESTING)
         src/inspection/InspectorComponentCatalog.cpp
         src/inspection/InspectorComponentLabelFormatter.cpp
         src/inspection/InspectorPhysicsModel.cpp
+        src/inspection/ui/InspectorUIComponentModel.cpp
         src/inspection/InspectorAddComponentBrowserModel.cpp
         src/inspection/InspectorMeshRendererMaterialSlotModel.cpp
         src/inspection/InspectorMaterialTextureSlotFormatter.cpp
     src/inspection/EditorValueFormatter.cpp
     src/inspection/MaterialAssetFormatter.cpp
         src/inspection/InspectorPanelState.cpp
+        src/scene/ui/EditorUIComponentAuthoring.cpp
         src/console/EditorConsoleState.cpp
     )
 

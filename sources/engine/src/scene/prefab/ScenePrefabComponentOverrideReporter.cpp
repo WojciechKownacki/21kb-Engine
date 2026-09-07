@@ -1,4 +1,6 @@
 #include "scene/prefab/ScenePrefabComponentOverrideReporter.hpp"
+#include "engine/scene/SceneUIComponentSet.hpp"
+#include "scene/ui/SceneUIComponentTextCodec.hpp"
 
 #include "scene/prefab/ScenePrefabCameraOverrideReporter.hpp"
 #include "scene/prefab/ScenePrefabLightOverrideReporter.hpp"
@@ -456,9 +458,17 @@ void AppendParticleEffect(SceneComponents components, SceneEntity entity, const 
     if (!expected.has_value() || actual->restartOnActivate != expected->restartOnActivate) add("particleEffect.restartOnActivate", actual->restartOnActivate);
 }
 
+void AppendUI(SceneComponents components, SceneEntity entity, const UIComponentSet& expected, ScenePrefabOverrideReport& report, std::uint32_t nodeIndex, SceneObject object) {
+    const UIComponentSet actual = CaptureSceneUIComponents(components.UI(), entity);
+    if (AreUIComponentSetsEqual(actual, expected)) return;
+    ScenePrefabOverridePropertyReporter::Add(
+        report, nodeIndex, object, "ui", SceneUIComponentTextCodec::Encode(actual), ScenePrefabOverrideFlag::UI);
+}
+
 } // namespace
 
 void ScenePrefabComponentOverrideReporter::Append(SceneComponents components, SceneEntity entity, const ScenePrefabNodeComponents& expected, ScenePrefabOverrideReport& report, std::uint32_t nodeIndex, SceneObject object) {
+    AppendUI(components, entity, expected.ui, report, nodeIndex, object);
     ScenePrefabCameraOverrideReporter::Append(components, entity, expected.camera, report, nodeIndex, object);
     ScenePrefabMeshRendererOverrideReporter::Append(components, entity, expected.meshRenderer, report, nodeIndex, object);
     ScenePrefabLightOverrideReporter::Append(components, entity, expected.light, report, nodeIndex, object);

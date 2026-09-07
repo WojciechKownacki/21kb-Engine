@@ -7,10 +7,12 @@
 #include "engine/input/InputDeviceState.hpp"
 #include "engine/input/InputKey.hpp"
 #include "engine/input/InputSubsystem.hpp"
+#include "engine/input/InputText.hpp"
 #include "engine/input/InputTouchPoint.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneUI.hpp"
 #include "engine/script/ScriptModule.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 #include "kb/render/DisplayConfig.hpp"
@@ -30,6 +32,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cerrno>
 #include <cstddef>
@@ -69,6 +72,51 @@ void LogInfo(std::string_view message) noexcept {
         "%.*s",
         static_cast<int>(length),
         message.empty() ? "" : message.data());
+}
+
+struct AndroidCommittedTextContext {
+    kb::input::InputDeviceState* input = nullptr;
+    bool resetState = false;
+};
+
+void AppendAndroidCommittedText(
+    void* rawContext,
+    const GameTextInputState* textState) noexcept {
+    auto* context = static_cast<AndroidCommittedTextContext*>(rawContext);
+    if (context == nullptr || context->input == nullptr || textState == nullptr ||
+        textState->text_length < 0 || textState->text_length > 65'536 ||
+        (textState->text_length > 0 && textState->text_UTF8 == nullptr)) {
+        return;
+    }
+    if (textState->composingRegion.start != SPAN_UNDEFINED ||
+        textState->composingRegion.end != SPAN_UNDEFINED) {
+        return;
+    }
+
+    std::array<char32_t, kb::input::InputDeviceState::kMaxTextInputCodePoints> decoded{};
+    const kb::input::Utf8DecodeResult result = kb::input::DecodeModifiedUtf8(
+        std::string_view{textState->text_UTF8 == nullptr ? "" : textState->text_UTF8,
+            static_cast<std::size_t>(textState->text_length)},
+        decoded);
+    if (!result.wellFormed) return;
+    static_cast<void>(context->input->AddTextInput(
+        std::span<const char32_t>{decoded.data(), result.codePointCount}));
+    context->resetState = true;
+}
+
+void ResetAndroidTextInputState(GameActivity* activity) noexcept {
+    if (activity == nullptr) return;
+    constexpr char emptyText[] = "";
+    const GameTextInputState empty{
+        .text_UTF8 = emptyText,
+        .text_length = 0,
+        .selection = {.start = 0, .end = 0},
+        .composingRegion = {
+            .start = SPAN_UNDEFINED,
+            .end = SPAN_UNDEFINED,
+        },
+    };
+    GameActivity_setTextInputState(activity, &empty);
 }
 
 class AndroidAssetMapping {
@@ -408,6 +456,7 @@ private:
         case APP_CMD_LOST_FOCUS:
             focused_ = false;
             tickClockReady_ = false;
+            SetImeVisible(false);
             break;
         case APP_CMD_RESUME:
             resumed_ = true;
@@ -416,6 +465,7 @@ private:
         case APP_CMD_STOP:
             resumed_ = false;
             tickClockReady_ = false;
+            SetImeVisible(false);
             break;
         case APP_CMD_START:
         case APP_CMD_SAVE_STATE:
@@ -468,12 +518,22 @@ private:
         kb::input::InputDeviceState* state = nullptr;
         if (scene_ != nullptr) {
             state = &scene_->Input().MutableDeviceState();
+            state->ClearTextInput();
+            state->SetPointerViewportExtent(surface_.Width(), surface_.Height());
             state->SetHasFocus(focused_);
             if (!focused_) {
                 state->Reset();
                 state->SetHasFocus(false);
                 touchPoints_.clear();
             }
+        }
+        if (app_.textInputState != 0) {
+            AndroidCommittedTextContext context{
+                .input = state != nullptr && focused_ ? state : nullptr};
+            GameActivity_getTextInputState(
+                app_.activity, &AppendAndroidCommittedText, &context);
+            app_.textInputState = 0;
+            if (context.resetState) ResetAndroidTextInputState(app_.activity);
         }
         android_input_buffer* const input = android_app_swap_input_buffers(&app_);
         if (input == nullptr) {
@@ -558,6 +618,20 @@ private:
             renderer_.IsInitialized() && surface_.Width() > 0U && surface_.Height() > 0U;
     }
 
+    void SetImeVisible(bool visible) noexcept {
+        if (imeVisibleRequested_ == visible || app_.activity == nullptr) return;
+        imeVisibleRequested_ = visible;
+        ResetAndroidTextInputState(app_.activity);
+        app_.textInputState = 0;
+        if (visible) {
+            GameActivity_showSoftInput(
+                app_.activity, GAMEACTIVITY_SHOW_SOFT_INPUT_IMPLICIT);
+        } else {
+            GameActivity_hideSoftInput(
+                app_.activity, GAMEACTIVITY_HIDE_SOFT_INPUT_NOT_ALWAYS);
+        }
+    }
+
     void RenderFrame() {
         if (scene_ == nullptr) {
             failed_ = true;
@@ -569,7 +643,11 @@ private:
             : 0.0F;
         previousTick_ = now;
         tickClockReady_ = true;
+        static_cast<void>(scene_->UI().SetViewport(
+            static_cast<float>(surface_.Width()),
+            static_cast<float>(surface_.Height())));
         static_cast<void>(scene_->Runtime().Update(deltaSeconds));
+        SetImeVisible(focused_ && scene_->UI().HasFocusedTextInput());
         FinalizeInputFrame();
         if (renderer_.BeginFrame()) {
             renderer_.SubmitScene(*scene_);
@@ -610,6 +688,7 @@ private:
     }
 
     void Shutdown() noexcept {
+        SetImeVisible(false);
         if (!scriptShutdownDispatched_ && scene_ != nullptr &&
             scene_->IsModuleActive("Script") && scriptModule_ != nullptr &&
             scriptModule_->Host() != nullptr) {
@@ -653,6 +732,7 @@ private:
     bool tickClockReady_ = false;
     bool scriptShutdownDispatched_ = false;
     bool firstFrameReported_ = false;
+    bool imeVisibleRequested_ = false;
     std::chrono::steady_clock::time_point previousTick_{};
     std::vector<kb::input::InputTouchPoint> touchPoints_;
 };

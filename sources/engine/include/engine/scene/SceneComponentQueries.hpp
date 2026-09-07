@@ -37,6 +37,7 @@
 #include "engine/scene/SceneLensEchoComponents.hpp"
 #include "engine/scene/SceneTagsComponents.hpp"
 #include "engine/scene/SceneVisibilityComponents.hpp"
+#include "engine/scene/SceneUIComponents.hpp"
 
 namespace kb::scene {
 
@@ -84,6 +85,7 @@ public:
     [[nodiscard]] SceneNavAgentComponentQueries NavAgents() const noexcept;
     [[nodiscard]] SceneNavObstacleComponentQueries NavObstacles() const noexcept;
     [[nodiscard]] SceneComponentVisitors Visitors() const noexcept;
+    [[nodiscard]] SceneUIComponentQueries UI() const noexcept;
 
 private:
     const Scene& scene_;

@@ -647,12 +647,72 @@ ScriptFunctionCallResult SetEntityProperty(const ScriptFunctionCallContext& cont
     return BoolResult("set", result.succeeded);
 }
 
+ScriptFunctionCallResult GetEntityProperty(const ScriptFunctionCallContext& context,
+                                           std::span<const ScriptFunctionArgument> arguments,
+                                           ScriptValueType expectedType, std::string_view outputPin) {
+    if (context.scene == nullptr) {
+        return NoScene();
+    }
+    const kb::scene::SceneEntity entity = EntityArg(arguments, "entity");
+    if (!entity.IsValid() || !context.scene->Entities().IsAlive(entity)) {
+        return Error("component property requires a live entity");
+    }
+    const ScriptSceneComponentPropertyResult result = ScriptSceneComponentApi::GetProperty(
+        *context.scene, entity, ComponentArg(arguments), PropertyArg(arguments));
+    if (!result.succeeded) {
+        return Error(result.error);
+    }
+    if (result.value.Type() != expectedType) {
+        return Error("component property type does not match the requested getter");
+    }
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = { ScriptFunctionArgument{ std::string{ outputPin }, result.value } },
+        .errors = {},
+    };
+}
+
+ScriptFunctionCallResult GetPropertyBool(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    return GetEntityProperty(context, arguments, ScriptValueType::Bool, "value");
+}
+
+ScriptFunctionCallResult GetPropertyInt(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    return GetEntityProperty(context, arguments, ScriptValueType::Int, "value");
+}
+
+ScriptFunctionCallResult GetPropertyUInt32(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    return GetEntityProperty(context, arguments, ScriptValueType::UInt32, "value");
+}
+
+ScriptFunctionCallResult GetPropertyFloat(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    return GetEntityProperty(context, arguments, ScriptValueType::Float, "value");
+}
+
+ScriptFunctionCallResult GetPropertyString(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    return GetEntityProperty(context, arguments, ScriptValueType::String, "value");
+}
+
+ScriptFunctionCallResult GetPropertyEntity(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    return GetEntityProperty(context, arguments, ScriptValueType::Entity, "value");
+}
+
+ScriptFunctionCallResult GetPropertyHash(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    return GetEntityProperty(context, arguments, ScriptValueType::Hash, "value");
+}
+
 ScriptFunctionCallResult SetPropertyBool(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
     return SetEntityProperty(context, arguments, [&] { return ScriptValue{ FindArg(arguments, "value") != nullptr && FindArg(arguments, "value")->AsBool(false) }; });
 }
 
 ScriptFunctionCallResult SetPropertyInt(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
     return SetEntityProperty(context, arguments, [&] { return ScriptValue{ IntArg(arguments, "value", 0) }; });
+}
+
+ScriptFunctionCallResult SetPropertyUInt32(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    return SetEntityProperty(context, arguments, [&] {
+        const ScriptValue* value = FindArg(arguments, "value");
+        return ScriptValue{ value == nullptr ? std::uint32_t{ 0U } : value->AsUInt32() };
+    });
 }
 
 ScriptFunctionCallResult SetPropertyFloat(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
@@ -665,6 +725,13 @@ ScriptFunctionCallResult SetPropertyString(const ScriptFunctionCallContext& cont
 
 ScriptFunctionCallResult SetPropertyEntity(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
     return SetEntityProperty(context, arguments, [&] { return ScriptValue{ EntityArg(arguments, "value").Id(), ScriptValueType::Entity }; });
+}
+
+ScriptFunctionCallResult SetPropertyHash(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    return SetEntityProperty(context, arguments, [&] {
+        const ScriptValue* value = FindArg(arguments, "value");
+        return ScriptValue{ value == nullptr ? 0U : value->AsUInt64(), ScriptValueType::Hash };
+    });
 }
 
 [[nodiscard]] std::uint64_t ContextOwner(const ScriptFunctionCallContext& context) noexcept {
@@ -1026,6 +1093,33 @@ bool ScriptWorldApi::Register(ScriptRuntimeHost& host) {
             ScriptFunctionPin{ "property", ScriptValueType::String, true }, ScriptFunctionPin{ "value", ScriptValueType::Entity, true } },
         { ScriptFunctionPin{ "set", ScriptValueType::Bool, true } },
         &SetPropertyEntity) && ok;
+    const std::vector<ScriptFunctionPin> propertyInputs{
+        ScriptFunctionPin{ "entity", ScriptValueType::Entity, true },
+        ScriptFunctionPin{ "component", ScriptValueType::String, true },
+        ScriptFunctionPin{ "property", ScriptValueType::String, true },
+    };
+    ok = RegisterFunction(host, "World.GetPropertyBool", propertyInputs,
+        { ScriptFunctionPin{ "value", ScriptValueType::Bool, true } }, &GetPropertyBool) && ok;
+    ok = RegisterFunction(host, "World.GetPropertyInt", propertyInputs,
+        { ScriptFunctionPin{ "value", ScriptValueType::Int, true } }, &GetPropertyInt) && ok;
+    ok = RegisterFunction(host, "World.GetPropertyUInt32", propertyInputs,
+        { ScriptFunctionPin{ "value", ScriptValueType::UInt32, true } }, &GetPropertyUInt32) && ok;
+    ok = RegisterFunction(host, "World.GetPropertyFloat", propertyInputs,
+        { ScriptFunctionPin{ "value", ScriptValueType::Float, true } }, &GetPropertyFloat) && ok;
+    ok = RegisterFunction(host, "World.GetPropertyString", propertyInputs,
+        { ScriptFunctionPin{ "value", ScriptValueType::String, true } }, &GetPropertyString) && ok;
+    ok = RegisterFunction(host, "World.GetPropertyEntity", propertyInputs,
+        { ScriptFunctionPin{ "value", ScriptValueType::Entity, true } }, &GetPropertyEntity) && ok;
+    ok = RegisterFunction(host, "World.GetPropertyHash", propertyInputs,
+        { ScriptFunctionPin{ "value", ScriptValueType::Hash, true } }, &GetPropertyHash) && ok;
+    ok = RegisterFunction(host, "World.SetPropertyUInt32",
+        { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true }, ScriptFunctionPin{ "component", ScriptValueType::String, true },
+            ScriptFunctionPin{ "property", ScriptValueType::String, true }, ScriptFunctionPin{ "value", ScriptValueType::UInt32, true } },
+        { ScriptFunctionPin{ "set", ScriptValueType::Bool, true } }, &SetPropertyUInt32) && ok;
+    ok = RegisterFunction(host, "World.SetPropertyHash",
+        { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true }, ScriptFunctionPin{ "component", ScriptValueType::String, true },
+            ScriptFunctionPin{ "property", ScriptValueType::String, true }, ScriptFunctionPin{ "value", ScriptValueType::Hash, true } },
+        { ScriptFunctionPin{ "set", ScriptValueType::Bool, true } }, &SetPropertyHash) && ok;
     return ok;
 }
 

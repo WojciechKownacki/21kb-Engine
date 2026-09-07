@@ -26,11 +26,15 @@
 #include "engine/scene/ScenePrefab.hpp"
 #include "engine/scene/ScenePrefabNode.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
+#include "engine/ui/UIComponentSet.hpp"
 #include "engine/script/ScriptAsset.hpp"
 #include "engine/script/ScriptBehaviourAsset.hpp"
 #include "engine/script/ScriptBehaviourBindingService.hpp"
 #include "engine/visual/VisualGraphTypes.hpp"
 #include "scene/assets/SceneAssetLoader.hpp"
+#include "scene/assets/ScenePrefabAssetLoader.hpp"
+#include "scene/prefab/io/ScenePrefabAssetWriter.hpp"
+#include "scene/ui/SceneUIComponentTextCodec.hpp"
 
 #include <algorithm>
 #include <array>
@@ -47,6 +51,7 @@
 #include <string_view>
 #include <typeindex>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -651,7 +656,7 @@ void RunAssetKindClassificationTest() {
         kb::assets::AssetKind::Mesh, kb::assets::AssetKind::Material, kb::assets::AssetKind::Texture,
         kb::assets::AssetKind::Audio, kb::assets::AssetKind::Prefab, kb::assets::AssetKind::Scene,
         kb::assets::AssetKind::Animation, kb::assets::AssetKind::Graph, kb::assets::AssetKind::InputAction,
-        kb::assets::AssetKind::InputMap,
+        kb::assets::AssetKind::InputMap, kb::assets::AssetKind::Font,
     };
     static_assert(std::size(kinds) == kb::assets::kAssetKindCount, "AssetKind test must cover every kind");
     for (const kb::assets::AssetKind kind : kinds) {
@@ -673,7 +678,13 @@ void RunAssetKindClassificationTest() {
         "AssetMatchesKind must accept both RenderMaterial and RenderMaterialInstance as Material");
     kb::tests::Require(!matches("RenderMaterialType", kb::assets::AssetKind::Material) && !matches("RenderMaterialGraph", kb::assets::AssetKind::Material),
         "AssetMatchesKind must NOT treat authoring-only material sub-types as the runtime Material kind");
-    kb::tests::Require(matches("RenderTexture", kb::assets::AssetKind::Texture), "AssetMatchesKind must accept RenderTexture as Texture");
+    kb::tests::Require(matches("RenderTexture", kb::assets::AssetKind::Texture) &&
+            matches("ImportedAsset", kb::assets::AssetKind::Texture, "Texture"),
+        "AssetMatchesKind must accept native and imported textures as Texture");
+    kb::tests::Require(matches("ImportedAsset", kb::assets::AssetKind::Font, "Font"),
+        "AssetMatchesKind must accept an imported font as Font");
+    kb::tests::Require(!matches("ImportedAsset", kb::assets::AssetKind::Font, "Texture"),
+        "AssetMatchesKind must reject a non-font ImportedAsset as Font");
     kb::tests::Require(matches("AudioClip", kb::assets::AssetKind::Audio), "AssetMatchesKind must accept AudioClip as Audio");
     kb::tests::Require(matches("ImportedAsset", kb::assets::AssetKind::Audio, "Audio"), "AssetMatchesKind must accept an imported-media asset with importCategory Audio as Audio");
     kb::tests::Require(!matches("ImportedAsset", kb::assets::AssetKind::Audio, "Texture"), "AssetMatchesKind must NOT accept a non-audio ImportedAsset as Audio");
@@ -702,9 +713,13 @@ void RunAssetKindClassificationTest() {
     kb::tests::Require(classify("ImportedAsset", classified, "Audio") && classified == kb::assets::AssetKind::Audio, "TryClassifyAssetKind must classify an audio ImportedAsset as Audio");
     kb::tests::Require(classify("ImportedAsset", classified, "Animation") && classified == kb::assets::AssetKind::Animation,
         "TryClassifyAssetKind must classify an animation ImportedAsset as Animation");
+    kb::tests::Require(classify("ImportedAsset", classified, "Texture") && classified == kb::assets::AssetKind::Texture,
+        "TryClassifyAssetKind must classify an imported texture as Texture");
+    kb::tests::Require(classify("ImportedAsset", classified, "Font") && classified == kb::assets::AssetKind::Font,
+        "TryClassifyAssetKind must classify an imported font as Font");
     kb::tests::Require(!classify("LuaScript", classified), "TryClassifyAssetKind must return false for a type that is none of the typed-reference kinds (LuaScript)");
     kb::tests::Require(!classify("NativeBehaviour", classified), "TryClassifyAssetKind must return false for a NativeBehaviour asset");
-    kb::tests::Require(!classify("ImportedAsset", classified, "Texture"), "TryClassifyAssetKind must return false for an ImportedAsset outside the typed categories");
+    kb::tests::Require(!classify("ImportedAsset", classified, "Data"), "TryClassifyAssetKind must return false for an ImportedAsset outside the typed categories");
 }
 
 void RunAssetDiscoveryPreservesEditorLiveOverrideTest() {
@@ -1488,6 +1503,201 @@ void RunScenePrefabAssetDependencyDiscoveryTest() {
         "A prefab asset does not report the mesh it renders - the dependency graph stops at the prefab");
 }
 
+void RunSceneUIAssetDependencyValidationTest() {
+    ResetTestRoot();
+    const std::filesystem::path root = TestRoot() / "UIAssetDependencyProject";
+    const std::filesystem::path prefabRoot = root / "Prefabs";
+    const std::filesystem::path scenePath = root / "Scenes" / "Override.21kbscene";
+    constexpr kb::assets::AssetId kTextureId{0x7101U};
+    constexpr kb::assets::AssetId kFontId{0x7102U};
+    constexpr kb::assets::AssetId kMissingId{0x7103U};
+
+    kb::assets::AssetRegistry registry;
+    kb::tests::Require(registry.Upsert(kb::assets::AssetMetadata{
+            .id = kTextureId,
+            .type = "ImportedAsset",
+            .importCategory = "Texture",
+            .name = "UI Texture",
+            .virtualPath = "/Game/UI/Texture.21kb",
+        }),
+        "UI dependency fixture texture metadata was rejected");
+    kb::tests::Require(registry.Upsert(kb::assets::AssetMetadata{
+            .id = kFontId,
+            .type = "ImportedAsset",
+            .importCategory = "Font",
+            .name = "UI Font",
+            .virtualPath = "/Game/UI/Font.21kb",
+        }),
+        "UI dependency fixture font metadata was rejected");
+
+    const auto encodedImage = [](std::uint64_t id) {
+        kb::scene::UIComponentSet components;
+        components.image = kb::scene::UIImage{.imageAssetId = id};
+        return kb::scene::SceneUIComponentTextCodec::Encode(components);
+    };
+    const auto encodedFont = [](std::uint64_t id) {
+        kb::scene::UIComponentSet components;
+        components.text = kb::scene::UIText{.fontAssetId = id};
+        return kb::scene::SceneUIComponentTextCodec::Encode(components);
+    };
+    const auto uiOverride = [](std::string value) {
+        return kb::scene::ScenePrefabPropertyOverride{
+            .propertyPath = "ui",
+            .value = std::move(value),
+            .flag = kb::scene::ScenePrefabOverrideFlag::UI,
+        };
+    };
+    const auto writePrefab = [&prefabRoot](
+                                 std::string_view name,
+                                 kb::scene::UIComponentSet base,
+                                 std::vector<kb::scene::ScenePrefabPropertyOverride> overrides) {
+        kb::scene::ScenePrefab prefab;
+        static_cast<void>(prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+            .stableId = 1U,
+            .name = std::string{name},
+            .nestedPrefabOverrides = std::move(overrides),
+            .components = kb::scene::ScenePrefabNodeComponents{.ui = std::move(base)},
+        }));
+        const std::filesystem::path path = prefabRoot / (std::string{name} + ".kbprefab");
+        kb::tests::Require(kb::scene::ScenePrefabAssetWriter::Write(path, name, prefab),
+            "UI dependency prefab fixture could not be written");
+        return path;
+    };
+
+    kb::scene::Scene scene;
+    kb::scene::ScenePrefabAssetLoader prefabLoader{scene};
+    const auto inspectPrefab = [&prefabLoader, &registry](const std::filesystem::path& path) {
+        kb::assets::AssetMetadata metadata{
+            .id = kb::assets::MakeAssetId(path.generic_string()),
+            .type = "ScenePrefab",
+            .name = path.stem().string(),
+            .virtualPath = std::filesystem::path{"/Game/Prefabs"} / path.filename(),
+            .physicalPath = path,
+        };
+        metadata.dependencies = prefabLoader.DiscoverDependencies(metadata, registry);
+        return std::pair{metadata.dependencies, prefabLoader.ValidateDependencies(metadata, registry)};
+    };
+
+    kb::scene::UIComponentSet validBase;
+    validBase.image = kb::scene::UIImage{.imageAssetId = kTextureId.value};
+    const auto [validDependencies, validDiagnostic] = inspectPrefab(writePrefab(
+        "Valid", std::move(validBase), {uiOverride(encodedFont(kFontId.value))}));
+    kb::tests::Require(ContainsAssetId(validDependencies, kTextureId) &&
+            ContainsAssetId(validDependencies, kFontId) && !validDiagnostic.has_value(),
+        "Base and override-only UI assets did not produce one validated prefab dependency closure");
+
+    kb::scene::UIComponentSet missingBase;
+    missingBase.image = kb::scene::UIImage{.imageAssetId = kMissingId.value};
+    const auto [missingBaseDependencies, missingBaseDiagnostic] =
+        inspectPrefab(writePrefab("MissingBase", std::move(missingBase), {}));
+    kb::tests::Require(ContainsAssetId(missingBaseDependencies, kMissingId) &&
+            missingBaseDiagnostic.has_value() && missingBaseDiagnostic->find("missing ui.image") != std::string::npos,
+        "A missing base UI asset did not fail prefab dependency validation");
+
+    kb::scene::UIComponentSet wrongBase;
+    wrongBase.text = kb::scene::UIText{.fontAssetId = kTextureId.value};
+    const auto [wrongBaseDependencies, wrongBaseDiagnostic] =
+        inspectPrefab(writePrefab("WrongBase", std::move(wrongBase), {}));
+    kb::tests::Require(ContainsAssetId(wrongBaseDependencies, kTextureId) &&
+            wrongBaseDiagnostic.has_value() && wrongBaseDiagnostic->find("not a Font") != std::string::npos,
+        "A base UI font property accepted an asset of the wrong kind");
+
+    const auto [missingOverrideDependencies, missingOverrideDiagnostic] = inspectPrefab(writePrefab(
+        "MissingOverride", {}, {uiOverride(encodedImage(kMissingId.value))}));
+    kb::tests::Require(ContainsAssetId(missingOverrideDependencies, kMissingId) &&
+            missingOverrideDiagnostic.has_value() && missingOverrideDiagnostic->find("missing ui.image") != std::string::npos,
+        "A missing override-only UI asset did not enter the graph and fail validation");
+
+    const auto [wrongOverrideDependencies, wrongOverrideDiagnostic] = inspectPrefab(writePrefab(
+        "WrongOverride", {}, {uiOverride(encodedImage(kFontId.value))}));
+    kb::tests::Require(ContainsAssetId(wrongOverrideDependencies, kFontId) &&
+            wrongOverrideDiagnostic.has_value() && wrongOverrideDiagnostic->find("not a Texture") != std::string::npos,
+        "An override-only UI image property accepted an asset of the wrong kind");
+
+    kb::scene::SceneDocument document;
+    document.name = "UIOverrideScene";
+    document.guid = "scene:UIOverrideScene";
+    static_cast<void>(document.worldPrefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .stableId = 1U,
+        .name = "Override Host",
+        .nestedPrefabOverrides = {uiOverride(encodedImage(kTextureId.value))},
+    }));
+    kb::tests::Require(kb::scene::SceneDocumentService::Save(document, scenePath),
+        "UI override dependency scene could not be saved");
+    kb::scene::SceneAssetLoader sceneLoader;
+    kb::assets::AssetMetadata sceneMetadata{
+        .id = kb::assets::MakeAssetId("ui-override-scene"),
+        .type = "Scene",
+        .name = "UIOverrideScene",
+        .virtualPath = "/Game/Scenes/Override.21kbscene",
+        .physicalPath = scenePath,
+    };
+    sceneMetadata.dependencies = sceneLoader.DiscoverDependencies(sceneMetadata, registry);
+    kb::tests::Require(ContainsAssetId(sceneMetadata.dependencies, kTextureId) &&
+            !sceneLoader.ValidateDependencies(sceneMetadata, registry).has_value(),
+        "A UI asset used only by a scene prefab override did not reach the cook dependency closure");
+
+    kb::scene::SceneDocument wrongScene;
+    wrongScene.name = "WrongUIScene";
+    wrongScene.guid = "scene:WrongUIScene";
+    kb::scene::UIComponentSet wrongSceneComponents;
+    wrongSceneComponents.image = kb::scene::UIImage{.imageAssetId = kFontId.value};
+    static_cast<void>(wrongScene.worldPrefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .stableId = 1U,
+        .name = "Wrong UI",
+        .components = kb::scene::ScenePrefabNodeComponents{
+            .ui = std::move(wrongSceneComponents)},
+    }));
+    const std::filesystem::path wrongScenePath = root / "Scenes" / "Wrong.21kbscene";
+    kb::tests::Require(kb::scene::SceneDocumentService::Save(wrongScene, wrongScenePath),
+        "Wrong-kind UI scene fixture could not be saved");
+    kb::assets::AssetMetadata wrongSceneMetadata{
+        .id = kb::assets::MakeAssetId("wrong-ui-scene"),
+        .type = "Scene",
+        .name = "WrongUIScene",
+        .virtualPath = "/Game/Scenes/Wrong.21kbscene",
+        .physicalPath = wrongScenePath,
+    };
+    wrongSceneMetadata.dependencies =
+        sceneLoader.DiscoverDependencies(wrongSceneMetadata, registry);
+    const std::optional<std::string> wrongSceneDiagnostic =
+        sceneLoader.ValidateDependencies(wrongSceneMetadata, registry);
+    kb::tests::Require(ContainsAssetId(wrongSceneMetadata.dependencies, kFontId) &&
+            wrongSceneDiagnostic.has_value() &&
+            wrongSceneDiagnostic->find("not a Texture") != std::string::npos,
+        "A scene UI image property accepted an asset of the wrong kind");
+
+    kb::scene::SceneDocument missingOverrideScene;
+    missingOverrideScene.name = "MissingOverrideUIScene";
+    missingOverrideScene.guid = "scene:MissingOverrideUIScene";
+    static_cast<void>(missingOverrideScene.worldPrefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .stableId = 1U,
+        .name = "Missing Override UI",
+        .nestedPrefabOverrides = {uiOverride(encodedFont(kMissingId.value))},
+    }));
+    const std::filesystem::path missingOverrideScenePath =
+        root / "Scenes" / "MissingOverride.21kbscene";
+    kb::tests::Require(kb::scene::SceneDocumentService::Save(
+            missingOverrideScene, missingOverrideScenePath),
+        "Missing override UI scene fixture could not be saved");
+    kb::assets::AssetMetadata missingOverrideSceneMetadata{
+        .id = kb::assets::MakeAssetId("missing-override-ui-scene"),
+        .type = "Scene",
+        .name = "MissingOverrideUIScene",
+        .virtualPath = "/Game/Scenes/MissingOverride.21kbscene",
+        .physicalPath = missingOverrideScenePath,
+    };
+    missingOverrideSceneMetadata.dependencies =
+        sceneLoader.DiscoverDependencies(missingOverrideSceneMetadata, registry);
+    const std::optional<std::string> missingOverrideSceneDiagnostic =
+        sceneLoader.ValidateDependencies(missingOverrideSceneMetadata, registry);
+    kb::tests::Require(
+        ContainsAssetId(missingOverrideSceneMetadata.dependencies, kMissingId) &&
+            missingOverrideSceneDiagnostic.has_value() &&
+            missingOverrideSceneDiagnostic->find("missing ui.font") != std::string::npos,
+        "A missing scene override UI font did not enter the graph and fail validation");
+}
+
 void RunMissingNestedPrefabDependencyValidationTest() {
     ResetTestRoot();
     const std::filesystem::path projectRoot = TestRoot() / "MissingNestedPrefabProject";
@@ -2008,6 +2218,7 @@ void RunAssetRuntimeTests() {
     RunSceneAssetNestedPrefabGuidCollisionTest();
     RunSceneAssetDependencyCoversEveryComponentTest();
     RunScenePrefabAssetDependencyDiscoveryTest();
+    RunSceneUIAssetDependencyValidationTest();
     RunMissingNestedPrefabDependencyValidationTest();
     RunSceneAssetNestedPrefabGuidRuleTest();
     RunSceneAssetDiscoveryStaysLinearInNestedPrefabsTest();

@@ -336,6 +336,21 @@ add_library(kb_renderer STATIC
     src/shadow/ShadowCasterBoundsCollector.cpp
     src/shadow/ShadowCasterBoundsCollector.hpp
     src/shadow/ShadowMapResource.cpp
+    src/private/ui/ScreenUIBackgroundBlur.hpp
+    src/private/ui/ScreenUIComposite.hpp
+    src/private/ui/ScreenUIRenderer.hpp
+    src/private/ui/ScreenUIDrawData.hpp
+    src/private/ui/ScreenUIDrawBatchBuilder.hpp
+    src/private/ui/ScreenUIFontPayloadValidator.hpp
+    src/private/ui/ScreenUIFontAtlasCache.hpp
+    src/private/ui/ScreenUITextMarkupParser.hpp
+    src/ui/ScreenUIBackgroundBlur.cpp
+    src/ui/ScreenUIComposite.cpp
+    src/ui/ScreenUIDrawBatchBuilder.cpp
+    src/ui/ScreenUIRenderer.cpp
+    src/ui/ScreenUIFontPayloadValidator.cpp
+    src/ui/ScreenUIFontAtlasCache.cpp
+    src/ui/ScreenUITextMarkupParser.cpp
     ${CMAKE_SOURCE_DIR}/third_party/bgfx.cmake/bgfx/3rdparty/meshoptimizer/src/allocator.cpp
     ${CMAKE_SOURCE_DIR}/third_party/bgfx.cmake/bgfx/3rdparty/meshoptimizer/src/indexgenerator.cpp
     ${CMAKE_SOURCE_DIR}/third_party/bgfx.cmake/bgfx/3rdparty/meshoptimizer/src/overdrawoptimizer.cpp
@@ -435,6 +450,7 @@ set(KB_RENDERER_SHADER_MANIFEST
     fs_post_taa_resolve.sc
     fs_particle_instanced.sc
     fs_present_tex.sc
+    fs_screen_ui.sc
     vs_editor_gizmo.sc
     vs_editor_grid.sc
     vs_editor_selection_outline.sc
@@ -448,6 +464,7 @@ set(KB_RENDERER_SHADER_MANIFEST
     vs_mesh_shadow_instanced.sc
     vs_present.sc
     vs_particle_instanced.sc
+    vs_screen_ui.sc
 )
 
 file(GLOB_RECURSE KB_RENDERER_PREBUILT_SHADER_FILES CONFIGURE_DEPENDS
@@ -490,6 +507,7 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_particle_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_editor_grid.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_editor_gizmo.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_screen_ui.sc
         VARYING_DEF ${KB_RENDERER_SHADER_VARYING_DEF}
         OUTPUT_DIR ${KB_RENDERER_GENERATED_SHADER_DIR}
         INCLUDE_DIRS
@@ -520,6 +538,7 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_editor_gizmo.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_editor_grid.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_editor_selection_outline.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_screen_ui.sc
         VARYING_DEF ${KB_RENDERER_SHADER_VARYING_DEF}
         OUTPUT_DIR ${KB_RENDERER_GENERATED_SHADER_DIR}
         INCLUDE_DIRS
@@ -705,6 +724,7 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
         tests/SceneRenderTargetFormatTests.cpp
         tests/SceneRenderExtractorTests.cpp
         tests/ShaderManifestTests.cpp
+        tests/ScreenUIDrawBatchTests.cpp
         tests/ShaderPrewarmParseTests.cpp
         tests/MeshBakeTests.cpp
         tests/TextureBakeTests.cpp

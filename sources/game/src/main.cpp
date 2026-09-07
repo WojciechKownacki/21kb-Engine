@@ -9,6 +9,7 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneUI.hpp"
 #include "engine/script/ScriptModule.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 #include "kb/render/DisplayConfig.hpp"
@@ -215,6 +216,9 @@ int RunGame(const GameOptions& options) {
         previousTick = now;
 
         inputCollector.Collect(scene.Input().MutableDeviceState(), window.Handle());
+        static_cast<void>(scene.UI().SetViewport(
+            static_cast<float>(window.Width()),
+            static_cast<float>(window.Height())));
         static_cast<void>(scene.Runtime().Update(deltaSeconds));
 
         if (renderer.BeginFrame()) {

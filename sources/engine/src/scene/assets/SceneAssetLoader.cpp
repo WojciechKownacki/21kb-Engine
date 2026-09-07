@@ -4,6 +4,7 @@
 #include "engine/assets/AssetRegistry.hpp"
 #include "engine/scene/SceneAssetMeta.hpp"
 #include "engine/scene/SceneDocument.hpp"
+#include "scene/asset/SceneComponentAssetReferences.hpp"
 #include "scene/asset/io/SceneAssetFormat.hpp"
 #include "scene/asset/io/SceneAssetMetaReader.hpp"
 #include "scene/asset/io/SceneAssetReader.hpp"
@@ -43,6 +44,49 @@ struct SceneDependencyResolution {
     std::vector<kb::assets::AssetId> dependencies;
     std::optional<std::string> diagnostic;
 };
+
+void ValidateUIReference(
+    std::optional<std::string>& diagnostic,
+    const kb::assets::AssetRegistry& registry,
+    std::uint64_t rawId,
+    std::string_view role,
+    const UIComponentPropertyDescriptor* property) {
+    if (property == nullptr || diagnostic.has_value()) {
+        return;
+    }
+    const UIComponentAssetReferenceValidationResult validation =
+        ValidateUIComponentAssetReference(registry, *property, rawId);
+    if (validation == UIComponentAssetReferenceValidationResult::MissingAsset) {
+        diagnostic = "references missing " + std::string{role} + " asset " + std::to_string(rawId);
+    } else if (validation == UIComponentAssetReferenceValidationResult::WrongAssetKind) {
+        diagnostic = "references " + std::string{role} + " asset " + std::to_string(rawId) +
+            " which is not a " + std::string{kb::assets::ToString(*property->assetKind)} + " asset";
+    }
+}
+
+[[nodiscard]] std::optional<std::string> ValidateSceneUIReferences(
+    const SceneDocument& scene,
+    const kb::assets::AssetRegistry& registry) {
+    std::optional<std::string> diagnostic;
+    for (const ScenePrefabNodeDesc& node : scene.worldPrefab.Nodes()) {
+        SceneComponentAssetReferences::ForEachReference(
+            node.components,
+            [&diagnostic, &registry](std::uint64_t rawId, std::string_view role,
+                                     const UIComponentPropertyDescriptor* property) {
+                ValidateUIReference(diagnostic, registry, rawId, role, property);
+            });
+        const bool decoded = SceneComponentAssetReferences::ForEachUIOverrideReference(
+            node.nestedPrefabOverrides,
+            [&diagnostic, &registry](std::uint64_t rawId, std::string_view role,
+                                     const UIComponentPropertyDescriptor* property) {
+                ValidateUIReference(diagnostic, registry, rawId, role, property);
+            });
+        if (!decoded && !diagnostic.has_value()) {
+            diagnostic = "contains an unreadable UI component override";
+        }
+    }
+    return diagnostic;
+}
 
 [[nodiscard]] SceneDependencyResolution ResolveSceneDependencies(
     const SceneAssetMeta& meta,
@@ -159,6 +203,9 @@ std::optional<std::string> SceneAssetLoader::ValidateDependencies(
     }
     if (metadata.contentHash != 0U && meta.meta.contentHashFnv1a64 != metadata.contentHash) {
         return "changed after asset discovery; retry before cooking";
+    }
+    if (std::optional<std::string> uiDiagnostic = ValidateSceneUIReferences(scene.document, registry)) {
+        return uiDiagnostic;
     }
 
     // Deliberately a local index rather than the discovery-pass cache: this runs on

@@ -9,6 +9,7 @@
 #include "engine/scene/SceneRenderFeedback.hpp"
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/LightComponent.hpp"
+#include "engine/ui/UIComponentPropertyCatalog.hpp"
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/assets/AssetKind.hpp"
 #include "engine/script/ScriptValue.hpp"
@@ -1200,6 +1201,11 @@ public:
     // (i.e. any Inspector showing it should repaint). Not undoable (pure cache).
     [[nodiscard]] bool ReloadOpenScriptAsset();
     [[nodiscard]] bool AddComponentToEntity(kb::scene::SceneEntity entity, std::string_view componentId);
+    [[nodiscard]] bool RemoveUIComponentFromEntity(
+        kb::scene::SceneEntity entity, kb::scene::UIComponentType component);
+    [[nodiscard]] bool SetUIComponentProperty(
+        kb::scene::SceneEntity entity, kb::scene::UIComponentType component,
+        std::string_view property, const kb::scene::UIComponentPropertyValue& value);
     [[nodiscard]] std::vector<std::string> EntityTags(kb::scene::SceneEntity entity) const;
     [[nodiscard]] std::vector<std::string> KnownSceneTags() const;
     [[nodiscard]] bool SetEntityTagSelected(kb::scene::SceneEntity entity, std::string_view tag, bool selected);

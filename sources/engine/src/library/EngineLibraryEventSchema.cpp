@@ -1,5 +1,6 @@
 #include "engine/library/EngineLibraryEventSchema.hpp"
 #include "engine/scene/SceneTimelines.hpp"
+#include "engine/scene/SceneUI.hpp"
 
 #include <algorithm>
 
@@ -33,6 +34,19 @@ using kb::script::ScriptValueType;
     };
 }
 
+[[nodiscard]] std::vector<LibraryEventArgumentDesc> UIArguments() {
+    return {
+        ScriptFunctionPin{ "entity", ScriptValueType::Entity, true },
+        ScriptFunctionPin{ "pointerX", ScriptValueType::Float, true },
+        ScriptFunctionPin{ "pointerY", ScriptValueType::Float, true },
+        ScriptFunctionPin{ "pointerAvailable", ScriptValueType::Bool, true },
+        ScriptFunctionPin{ "value", ScriptValueType::Float, true },
+        ScriptFunctionPin{ "value2", ScriptValueType::Float, true },
+        ScriptFunctionPin{ "text", ScriptValueType::String, true },
+        ScriptFunctionPin{ "action", ScriptValueType::String, true },
+    };
+}
+
 } // namespace
 
 const std::vector<LibraryEventDesc>& EngineLibraryEventRegistry::Catalog() {
@@ -42,7 +56,8 @@ const std::vector<LibraryEventDesc>& EngineLibraryEventRegistry::Catalog() {
     // DispatchCompletedFixedStepTasks) — RunEngineLibraryEventSchemaRegistryTest
     // cross-checks this list against a REAL dispatch through
     // ScriptRuntimeSceneSystem::ExecuteFrame so it cannot silently drift.
-    static const std::vector<LibraryEventDesc> kCatalog{
+    static const std::vector<LibraryEventDesc> kCatalog = [] {
+        std::vector<LibraryEventDesc> catalog{
         LibraryEventDesc{
             .name = "SceneLoading",
             .id = kb::script::ComputeEventId("SceneLoading"),
@@ -167,7 +182,16 @@ const std::vector<LibraryEventDesc>& EngineLibraryEventRegistry::Catalog() {
                 ScriptFunctionPin{ "time", ScriptValueType::Float, true },
             },
         },
-    };
+        };
+        for (const kb::scene::SceneUIEventDescriptor& event : kb::scene::SceneUIEventCatalog()) {
+            catalog.push_back(LibraryEventDesc{
+                .name = std::string{ event.callbackName },
+                .id = kb::script::ComputeEventId(event.callbackName),
+                .arguments = UIArguments(),
+            });
+        }
+        return catalog;
+    }();
     return kCatalog;
 }
 

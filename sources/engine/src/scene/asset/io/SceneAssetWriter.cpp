@@ -90,9 +90,18 @@ void AddDependency(std::vector<SceneAssetDependency>& dependencies, std::set<std
         // cover different subsets of the components.
         SceneComponentAssetReferences::ForEachReference(
             node.components,
-            [&dependencies, &seen](std::uint64_t rawId, std::string_view role) {
+            [&dependencies, &seen](std::uint64_t rawId, std::string_view role,
+                                   const UIComponentPropertyDescriptor* uiProperty) {
+                static_cast<void>(uiProperty);
                 AddDependency(dependencies, seen, rawId, std::string{ role });
             });
+        static_cast<void>(SceneComponentAssetReferences::ForEachUIOverrideReference(
+            node.nestedPrefabOverrides,
+            [&dependencies, &seen](std::uint64_t rawId, std::string_view role,
+                                   const UIComponentPropertyDescriptor* uiProperty) {
+                static_cast<void>(uiProperty);
+                AddDependency(dependencies, seen, rawId, std::string{role});
+            }));
         if (!node.nestedPrefabGuid.empty()) {
             // Every other role records an id the asset registry already owns. A
             // nested prefab is the one reference a scene node holds by guid alone,

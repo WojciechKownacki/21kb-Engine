@@ -1,6 +1,7 @@
 #include "scene/prefab/io/ScenePrefabAssetComponentWriter.hpp"
 
 #include "engine/scene/SceneTransforms.hpp"
+#include "scene/ui/SceneUIComponentTextCodec.hpp"
 
 #include <cstdint>
 #include <ostream>
@@ -14,9 +15,14 @@ void WriteVec3(std::ostream& output, const char* key, Vec3 value) {
     output << key << '=' << value.x << ' ' << value.y << ' ' << value.z << '\n';
 }
 
+void WriteUI(std::ostream& output, const UIComponentSet& components) {
+    output << "ui=" << SceneUIComponentTextCodec::Encode(components) << '\n';
+}
+
 } // namespace
 
 void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePrefabNodeComponents& components) {
+    WriteUI(output, components.ui);
     output << "camera=" << (components.camera.has_value() ? 1 : 0) << '\n';
     if (components.camera.has_value()) {
         output << "camera.projection=" << static_cast<int>(components.camera->projection) << '\n';

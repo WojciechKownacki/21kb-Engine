@@ -138,12 +138,12 @@ ScriptFunctionCallResult Find(const ScriptFunctionCallContext& context, std::spa
 // LIB-157: a TYPED reference resolve — succeeds only when the reference
 // resolves AND the resolved asset is of the requested kind. `kind` is a
 // friendly AssetKind name ("Mesh", "Material", "Texture", "Audio",
-// "Prefab", "Scene", "Graph", "InputAction", "InputMap"). An unknown kind
+// "Prefab", "Scene", "Graph", "InputAction", "InputMap", "Font"). An unknown kind
 // string is a malformed request (a caller typo), so it is an honest error,
 // NOT a silent found=false — otherwise a misspelled kind would masquerade
 // as "asset not of that kind." A resolvable reference of the wrong kind, by
-// contrast, is a legitimate answer: found=false. Kind resolution is a pure
-// AssetMetadata::type tag check (AssetKind), so this works uniformly for
+// contrast, is a legitimate answer: found=false. Kind resolution uses the
+// canonical AssetMetadata classifier (AssetKind), so this works uniformly for
 // every kind including the kb_render-owned mesh/material/texture, with zero
 // kb_render dependency.
 ScriptFunctionCallResult FindTyped(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {

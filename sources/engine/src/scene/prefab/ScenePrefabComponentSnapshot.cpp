@@ -3,6 +3,7 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneObject.hpp"
+#include "engine/scene/SceneUIComponentSet.hpp"
 
 namespace kb::scene {
 
@@ -10,6 +11,7 @@ ScenePrefabNodeComponents ScenePrefabComponentSnapshot::Capture(Scene& scene, Sc
     ScenePrefabNodeComponents components;
     const SceneEntity entity = object.Entity();
     SceneComponents sceneComponents = scene.Components();
+    components.ui = CaptureSceneUIComponents(sceneComponents.UI(), entity);
 
     if (const CameraComponent* camera = sceneComponents.Cameras().TryGet(entity)) {
         components.camera = *camera;

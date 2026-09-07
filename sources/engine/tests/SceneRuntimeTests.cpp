@@ -20,6 +20,8 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunEcsRuntimeTests();
     } else if (suite == "scene-hierarchy") {
         kb::tests::RunSceneHierarchyTests();
+    } else if (suite == "scene-ui") {
+        kb::tests::RunSceneUITests();
     } else if (suite == "scene-system") {
         kb::tests::RunSceneSystemTests();
     } else if (suite == "audio") {
@@ -71,6 +73,7 @@ void RunAllSuites() {
     kb::tests::RunSaveGameTests();
     kb::tests::RunEcsRuntimeTests();
     kb::tests::RunSceneHierarchyTests();
+    kb::tests::RunSceneUITests();
     kb::tests::RunSceneSystemTests();
     kb::tests::RunScenePrefabTests();
     kb::tests::RunProjectSceneTests();

@@ -112,7 +112,7 @@ scenario-local aliases.
   | `assert_terrain_height` | Terrain `entity`, local `x`, `z`, expected `value`; optional `tolerance` |
   | `configure_terrain`, `assert_terrain_configuration` | Terrain `entity`, `width`, `height`, `chunk_quads`, `lod_count`, `world_size_x`, `world_size_z`; configuration resamples through the production Undo/Redo path |
   | `set_animator_root_motion_owner`, `assert_animator_root_motion_owner` | Animator `entity`, owner: `none`, `animator`, `character_controller`, or `rigidbody`; setter uses the production Inspector command and rejects incompatible ownership |
-  | `set_property`, `assert_property` | `entity`, `component`, `property`, `value`; assertion optionally `tolerance` |
+  | `set_property`, `set_property_rejected`, `assert_property` | `entity`, `component`, `property`, `value`; the rejection form succeeds only when the production setter refuses the value; assertion optionally `tolerance` |
 | `assert_entity` | `entity`; optional `exists` |
 | `assert_name` | `entity`, expected string `value`; verifies the live entity name |
 | `assert_component` | `entity`, `component`; optional `exists` |

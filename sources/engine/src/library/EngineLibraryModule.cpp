@@ -26,6 +26,7 @@
 #include "engine/script/ScriptTimeApi.hpp"
 #include "engine/script/ScriptTimerApi.hpp"
 #include "engine/script/ScriptTransformApi.hpp"
+#include "engine/script/ScriptUIApi.hpp"
 #include "engine/script/ScriptWorldApi.hpp"
 
 namespace kb::library {
@@ -151,6 +152,11 @@ const std::vector<LibraryModuleDesc>& EngineLibraryModule::Catalog() {
             .name = "Scene",
             .ownerRuntime = "kb::scene::SceneLoadedContentService",
             .Register = &kb::script::ScriptSceneApi::Register,
+        },
+        LibraryModuleDesc{
+            .name = "UI",
+            .ownerRuntime = "kb::scene::SceneUIAccess",
+            .Register = &kb::script::ScriptUIApi::Register,
         },
         // LIB-137: MeshRenderer.SetMesh/SetMaterial - meshAssetId/materialAssetId are raw
         // uint64 asset ids, deliberately excluded from the generic ScriptSceneComponentApi

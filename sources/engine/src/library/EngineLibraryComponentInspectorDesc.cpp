@@ -1,6 +1,9 @@
 #include "engine/library/EngineLibraryComponentInspectorDesc.hpp"
+#include "engine/ui/UIComponentCatalog.hpp"
+#include "engine/ui/UIComponentPropertyCatalog.hpp"
 
 #include <algorithm>
+#include <utility>
 
 namespace kb::library {
 
@@ -10,7 +13,8 @@ const std::vector<LibraryComponentInspectorDesc>& EngineLibraryComponentInspecto
     // ComponentProperties() by RunComponentInspectorDescCatalogTest — zero
     // drift in either direction (missing entry or stale extra entry both
     // fail that test).
-    static const std::vector<LibraryComponentInspectorDesc> kCatalog{
+    static const std::vector<LibraryComponentInspectorDesc> kCatalog = [] {
+        std::vector<LibraryComponentInspectorDesc> catalog{
         LibraryComponentInspectorDesc{
             .componentName = "Transform",
             .displayName = "Transform",
@@ -497,7 +501,25 @@ const std::vector<LibraryComponentInspectorDesc>& EngineLibraryComponentInspecto
                 LibraryComponentInspectorFieldDesc{ "enabled", "Enabled", "Whether the renderer emits this optical echo." },
             },
         },
-    };
+        };
+        for (const kb::scene::UIComponentDescriptor& component : kb::scene::UIComponentCatalog()) {
+            LibraryComponentInspectorDesc descriptor{
+                .componentName = component.displayName,
+                .displayName = component.displayName,
+                .category = "User Widget",
+            };
+            for (const kb::scene::UIComponentPropertyDescriptor& property :
+                 kb::scene::UIComponentPropertyCatalog(component.type)) {
+                descriptor.fields.push_back(LibraryComponentInspectorFieldDesc{
+                    .fieldName = property.name,
+                    .displayName = property.name,
+                    .tooltip = "Authored UI component property.",
+                });
+            }
+            catalog.push_back(std::move(descriptor));
+        }
+        return catalog;
+    }();
     return kCatalog;
 }
 

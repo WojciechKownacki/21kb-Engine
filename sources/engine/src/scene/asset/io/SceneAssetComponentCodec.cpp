@@ -9,6 +9,7 @@
 #include "scene/asset/io/components/SceneAssetPhysicsComponentCodec.hpp"
 #include "scene/asset/io/components/SceneAssetRenderComponentCodec.hpp"
 #include "scene/asset/io/components/SceneAssetTagsComponentCodec.hpp"
+#include "scene/asset/io/components/SceneAssetUIComponentCodec.hpp"
 
 #include <cmath>
 #include <stdexcept>
@@ -53,6 +54,7 @@ enum SceneNodeComponentBits : std::uint64_t {
       DeformedGeometryBit = 1ULL << 34U,
       MotionSkeletonRuleBit = 1ULL << 35U,
       ParticleEffectBit = 1ULL << 36U,
+      UIBit = 1ULL << 37U,
 };
 
 constexpr std::uint64_t KnownComponentBits = CameraBit |
@@ -72,7 +74,7 @@ constexpr std::uint64_t KnownComponentBits = CameraBit |
     NavObstacleBit |
     RegionShapeBit |
     GuideCurveBit |
-      ContentInstanceBit | StreamFocusBit | WorldBackdropBit | AmbientRadianceBit | DetailSwitchBit | VisibilityBlockerBit | VisibilityCellBit | RegionPortalBit | AuxFrameBit | GeometrySwarmBit | SurfaceCastBit | FacingPanelBit | SpaceStrokeBit | HistoryRibbonBit | LensEchoBit | SkeletonBindingBit | DeformedGeometryBit | MotionSkeletonRuleBit | ParticleEffectBit;
+      ContentInstanceBit | StreamFocusBit | WorldBackdropBit | AmbientRadianceBit | DetailSwitchBit | VisibilityBlockerBit | VisibilityCellBit | RegionPortalBit | AuxFrameBit | GeometrySwarmBit | SurfaceCastBit | FacingPanelBit | SpaceStrokeBit | HistoryRibbonBit | LensEchoBit | SkeletonBindingBit | DeformedGeometryBit | MotionSkeletonRuleBit | ParticleEffectBit | UIBit;
 
 [[nodiscard]] std::uint64_t ComponentBits(const ScenePrefabNodeComponents& components) noexcept {
     std::uint64_t componentBits = 0;
@@ -115,6 +117,7 @@ constexpr std::uint64_t KnownComponentBits = CameraBit |
     include(components.skeletonBinding.has_value(), SkeletonBindingBit);
     include(components.motionSkeletonRule.has_value(), MotionSkeletonRuleBit);
     include(components.deformedGeometry.has_value(), DeformedGeometryBit);
+    include(!components.ui.Empty(), UIBit);
     return componentBits;
 }
 
@@ -519,6 +522,9 @@ bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::
         if (!IsLensEchoComponentPersistable(validation)) return false;
         output.lensEcho = echo;
     }
+    if ((componentBits & UIBit) != 0U) {
+        if (fileVersion < 34U || !SceneAssetUIComponentCodec::Read(input, output.ui) || output.ui.Empty()) return false;
+    }
     return true;
 }
 
@@ -806,6 +812,9 @@ void SceneAssetComponentCodec::Write(std::vector<std::uint8_t>& output, const Sc
         SceneAssetBinaryIO::WriteUInt32(output, echo.layer);
         SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(echo.occlusionRule));
         SceneAssetBinaryIO::WriteBool(output, echo.enabled);
+    }
+    if (!components.ui.Empty()) {
+        SceneAssetUIComponentCodec::Write(output, components.ui);
     }
 }
 
