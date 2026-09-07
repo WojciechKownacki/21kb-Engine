@@ -22,12 +22,13 @@ struct InputAssetFormat {
     // BinaryVersion below (one version number governs every input binary format).
     static constexpr std::array<std::uint8_t, 8U> RebindProfileMagic{ '2', '1', 'K', 'B', 'I', 'R', 'B', 0 };
     // LIB-121: a recorded input session - a sequence of per-frame device
-    // snapshots, for deterministic-replay tests. Own magic/container shape,
-    // shares BinaryVersion.
+    // snapshots, for deterministic-replay tests. Own magic/container shape
+    // and a separately evolved version because its frame payload differs.
     static constexpr std::array<std::uint8_t, 8U> RecordingMagic{ '2', '1', 'K', 'B', 'I', 'R', 'C', 0 };
     // v2 added InputKeyMapping::bindingId and InputMappingContextAsset::composites.
     // v3 added InputKeyMapping/InputCompositeSlot::gamepadIndex (LIB-116).
     static constexpr std::uint32_t BinaryVersion = 3U;
+    static constexpr std::uint32_t RecordingBinaryVersion = 4U;
     static constexpr std::uint32_t MaxMappingCount = 100'000U;
     static constexpr std::uint32_t MaxCompositeCount = 100'000U;
     static constexpr std::uint32_t MaxCompositeSlotCount = 16U; // keys per composite binding

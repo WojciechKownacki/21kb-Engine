@@ -4,6 +4,7 @@
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
+#include "engine/scene/SceneUIComponentSet.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneState.hpp"
@@ -168,6 +169,7 @@ void DestroyRemovedObjects(Scene& scene, std::span<const SceneObject> oldObjects
         if (!owner.IsValid() || !scene.Entities().IsAlive(owner)) {
             return false;
         }
+        SynchronizeSceneUIComponents(components.UI(), owner.Entity(), nodes[nodeIndex].components.ui);
         if (nodes[nodeIndex].components.auxFrame.has_value()) {
             components.AuxFrames().Set(owner.Entity(), *nodes[nodeIndex].components.auxFrame);
         } else {

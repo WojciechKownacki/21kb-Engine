@@ -2,6 +2,7 @@
 
 #include "engine/ecs/CommandBuffer.hpp"
 #include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneUIComponentSet.hpp"
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/entities/SceneEntityNaming.hpp"
@@ -176,9 +177,9 @@ struct ScenePrefabArchetypeSpawnPayload {
         RepeatComponents(visibility, std::span<const VisibilityComponent>{ archetype.visibility }, instanceCount);
 
         views.clear();
-        views.reserve(24U);
+        views.reserve(40U);
         worldViews.clear();
-        worldViews.reserve(24U);
+        worldViews.reserve(40U);
         AddComponentViews(views, worldViews, std::span<const TransformComponent>{ transforms });
         AddComponentViews(views, worldViews, std::span<const VisibilityComponent>{ visibility });
 
@@ -327,9 +328,9 @@ struct ScenePrefabArchetypeSpawnPayload {
 
     void BuildPattern(const ScenePrefabBakedArchetype& archetype, std::size_t instanceCount) {
         views.clear();
-        views.reserve(24U);
+        views.reserve(40U);
         worldViews.clear();
-        worldViews.reserve(24U);
+        worldViews.reserve(40U);
         AddCommandComponentPatternView(views, std::span<const TransformComponent>{ archetype.transforms }, instanceCount);
         AddWorldComponentPatternView(worldViews, std::span<const TransformComponent>{ archetype.transforms }, instanceCount);
         AddCommandComponentPatternView(views, std::span<const VisibilityComponent>{ archetype.visibility }, instanceCount);
@@ -997,6 +998,21 @@ void ResolvePrefabLensEchoReferences(
     }
 }
 
+void ApplyPrefabUIComponents(
+    Scene& scene,
+    std::span<const ScenePrefabNodeDesc> nodes,
+    std::span<const SceneEntity> entities,
+    std::size_t instanceCount) {
+    SceneUIComponents ui = scene.Components().UI();
+    for (std::size_t instanceIndex = 0U; instanceIndex < instanceCount; ++instanceIndex) {
+        for (std::size_t nodeIndex = 0U; nodeIndex < nodes.size(); ++nodeIndex) {
+            if (!nodes[nodeIndex].components.ui.Empty()) {
+                ApplySceneUIComponents(ui, entities[EntityIndex(instanceIndex, nodeIndex, nodes.size())], nodes[nodeIndex].components.ui);
+            }
+        }
+    }
+}
+
 [[nodiscard]] std::vector<ScenePrefabInstance> BuildInstances(
     Scene& scene,
     std::span<const ScenePrefabNodeDesc> nodes,
@@ -1103,6 +1119,7 @@ void ResolvePrefabLensEchoReferences(
         ResolvePrefabJointReferences(scene, nodes, std::span<const SceneEntity>{ entities }, count);
         ResolvePrefabRegionPortalReferences(scene, nodes, std::span<const SceneEntity>{ entities }, count);
         ResolvePrefabLensEchoReferences(scene, nodes, std::span<const SceneEntity>{ entities }, count);
+        ApplyPrefabUIComponents(scene, nodes, std::span<const SceneEntity>{ entities }, count);
         const kb::ecs::NativeEcsStorageStats afterStorage = state.world.NativeStorageStats();
         std::uint64_t instanceObjectSlabNanoseconds = 0;
         std::uint64_t hierarchyRecordNanoseconds = 0;
@@ -1168,6 +1185,7 @@ void ResolvePrefabLensEchoReferences(
     ResolvePrefabJointReferences(scene, nodes, std::span<const SceneEntity>{ resolvedEntities }, count);
     ResolvePrefabRegionPortalReferences(scene, nodes, std::span<const SceneEntity>{ resolvedEntities }, count);
     ResolvePrefabLensEchoReferences(scene, nodes, std::span<const SceneEntity>{ resolvedEntities }, count);
+    ApplyPrefabUIComponents(scene, nodes, std::span<const SceneEntity>{ resolvedEntities }, count);
     std::uint64_t instanceObjectSlabNanoseconds = 0;
     std::uint64_t hierarchyRecordNanoseconds = 0;
     std::uint64_t nameAssignmentNanoseconds = 0;

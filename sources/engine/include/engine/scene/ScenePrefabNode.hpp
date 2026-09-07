@@ -38,6 +38,7 @@
 #include "engine/scene/TagsComponent.hpp"
 #include "engine/scene/TransformComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
+#include "engine/ui/UIComponentSet.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -90,6 +91,7 @@ struct ScenePrefabLensEchoComponent {
 };
 
 struct ScenePrefabNodeComponents {
+    UIComponentSet ui;
     std::optional<CameraComponent> camera;
     std::optional<MeshRendererComponent> meshRenderer;
     std::optional<LightComponent> light;

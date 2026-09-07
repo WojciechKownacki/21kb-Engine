@@ -18,7 +18,9 @@
 #include "engine/scene/SceneHistory.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneUIComponentSet.hpp"
 #include "engine/scene/SkeletalMeshAssetIO.hpp"
+#include "engine/ui/UIComponentPropertyCatalog.hpp"
 #include "inspection/InspectorAudioTextBuilder.hpp"
 #include "inspection/InspectorAudioComponentModel.hpp"
 #include "inspection/InspectorAudioScrubController.hpp"
@@ -31,6 +33,7 @@
 #include "inspection/InspectorAddComponentBrowserModel.hpp"
 #include "inspection/InspectorPanelState.hpp"
 #include "inspection/InspectorPhysicsModel.hpp"
+#include "inspection/ui/InspectorUIComponentModel.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialAssetWriter.hpp"
 #include "kb/render/resources/RenderMaterialFunctionAssetLoader.hpp"
@@ -49,6 +52,7 @@
 #include "scene/EditorHierarchySelectionState.hpp"
 #include "scene/EditorSceneMaterialAssetActions.hpp"
 #include "scene/EditorSceneMeshAssetActions.hpp"
+#include "scene/ui/EditorUIComponentAuthoring.hpp"
 #include "scene/material/EditorMaterialReferenceFinder.hpp"
 #include "scene/particle/EditorParticleEffectReferenceFinder.hpp"
 #include "engine/scene/ParticleEffectComponent.hpp"
@@ -79,6 +83,7 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <span>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -3005,6 +3010,179 @@ void RunAddComponentBrowserModelTest() {
     kb::editor::tests::Require(window.count >= 4, "The visible window covers the list height plus partial rows");
 }
 
+void RunUIComponentAuthoringTest() {
+    using kb::editor::EditorUIComponentAuthoring;
+    using kb::editor::InspectorUIComponentModel;
+    using kb::scene::UIComponentPropertyValue;
+    using kb::scene::UIComponentType;
+
+    const std::span<const kb::scene::UIComponentDescriptor> componentCatalog =
+        kb::scene::UIComponentCatalog();
+    const std::span<const kb::scene::UIComponentPresetDescriptor> presetCatalog =
+        kb::scene::UIComponentPresetCatalog();
+    const std::vector<const kb::editor::InspectorComponentTile*> widgetTiles =
+        kb::editor::InspectorComponentCatalog::InCategory("User Widget");
+    kb::editor::tests::Require(componentCatalog.size() == 31U,
+        "User Widget component catalog should expose every individual component");
+    kb::editor::tests::Require(
+        widgetTiles.size() == componentCatalog.size() + presetCatalog.size(),
+        "User Widget category should be derived from component and preset catalogs");
+    for (const kb::scene::UIComponentDescriptor& descriptor : componentCatalog) {
+        const kb::editor::InspectorComponentTile* tile =
+            kb::editor::InspectorComponentCatalog::Find(descriptor.stableId);
+        kb::editor::tests::Require(tile != nullptr && tile->label == descriptor.displayName,
+            "Every canonical UI component should have one matching Inspector tile");
+    }
+    const kb::scene::UIComponentPropertyDescriptor* imageAsset =
+        kb::scene::FindUIComponentProperty(UIComponentType::Image, "imageAssetId");
+    const kb::scene::UIComponentPropertyDescriptor* fontAsset =
+        kb::scene::FindUIComponentProperty(UIComponentType::Text, "fontAssetId");
+    kb::editor::tests::Require(imageAsset != nullptr &&
+            imageAsset->assetKind == kb::assets::AssetKind::Texture &&
+            imageAsset->assetDependencyRole == "ui.image" &&
+            fontAsset != nullptr && fontAsset->assetKind == kb::assets::AssetKind::Font &&
+            fontAsset->assetDependencyRole == "ui.font",
+        "UI asset fields should expose their kind and dependency role through the canonical property catalog");
+
+    AudioScrubTransactionFixture fixture;
+    const kb::scene::SceneEntity entity = fixture.scene.Entities().CreateEntity(
+        kb::scene::SceneObjectDesc{ .name = "WidgetEntity" });
+    fixture.hierarchySelection.SelectEntity(entity);
+    kb::editor::tests::Require(fixture.commandController.Execute(
+            "Add Rect Transform", [&]() {
+                return EditorUIComponentAuthoring::Add(
+                    fixture.scene, entity, "kb21.ui.rect-transform");
+            }),
+        "An individual UI component should be added through scene history");
+    kb::scene::UIRectTransform rect =
+        *fixture.scene.Components().UI().TryGet<kb::scene::UIRectTransform>(entity);
+    rect.offsetMin.x = 7.0F;
+    fixture.scene.Components().UI().Set(entity, rect);
+    kb::editor::tests::Require(fixture.commandController.Execute(
+            "Add Button Set", [&]() {
+                return EditorUIComponentAuthoring::Add(
+                    fixture.scene, entity, "preset:Button");
+            }),
+        "A UI preset should add its canonical component set through scene history");
+    kb::editor::tests::Require(
+        fixture.scene.Components().UI().Has<kb::scene::UIButton>(entity) &&
+            fixture.scene.Components().UI().Has<kb::scene::UISelectable>(entity) &&
+            fixture.scene.Components().UI().Has<kb::scene::UIBorder>(entity) &&
+            fixture.scene.Components().UI().TryGet<kb::scene::UIRectTransform>(entity)->offsetMin.x == 7.0F,
+        "Button preset should fill missing components without overwriting an authored Rect Transform");
+    kb::editor::tests::Require(fixture.commandController.Undo() &&
+            !fixture.scene.Components().UI().Has<kb::scene::UIButton>(fixture.RootEntity()) &&
+            fixture.commandController.Redo() &&
+            fixture.scene.Components().UI().Has<kb::scene::UIButton>(fixture.RootEntity()),
+        "UI preset addition should undo and redo as one scene command");
+
+    const auto editProperty = [&](UIComponentType component, std::string_view property,
+                                  const UIComponentPropertyValue& value) {
+        kb::scene::UIComponentSet candidate = kb::scene::CaptureSceneUIComponents(
+            fixture.scene.Components().UI(), fixture.RootEntity());
+        if (kb::scene::WriteUIComponentProperty(candidate, component, property, value) !=
+            kb::scene::UIComponentPropertyWriteResult::Succeeded) {
+            return false;
+        }
+        return fixture.commandController.Execute("Edit UI Property", [&]() {
+            kb::scene::SynchronizeSceneUIComponents(
+                fixture.scene.Components().UI(), fixture.RootEntity(), candidate);
+            return true;
+        });
+    };
+    kb::editor::tests::Require(editProperty(
+            UIComponentType::RectTransform, "offsetMin.x", UIComponentPropertyValue{ 48.0F }),
+        "A canonical UI property should edit through scene history");
+    kb::editor::tests::Require(
+        fixture.scene.Components().UI().TryGet<kb::scene::UIRectTransform>(fixture.RootEntity())->offsetMin.x == 48.0F &&
+            fixture.commandController.Undo() &&
+            fixture.scene.Components().UI().TryGet<kb::scene::UIRectTransform>(fixture.RootEntity())->offsetMin.x == 7.0F &&
+            fixture.commandController.Redo() &&
+            fixture.scene.Components().UI().TryGet<kb::scene::UIRectTransform>(fixture.RootEntity())->offsetMin.x == 48.0F,
+        "UI property editing should round-trip through undo and redo");
+
+    const std::vector<kb::editor::InspectorUIPropertyRow> rectRows =
+        InspectorUIComponentModel::Properties(
+            fixture.scene, fixture.RootEntity(), UIComponentType::RectTransform);
+    kb::editor::tests::Require(rectRows.size() ==
+            kb::scene::UIComponentPropertyCatalog(UIComponentType::RectTransform).size() &&
+            std::ranges::any_of(rectRows, [](const kb::editor::InspectorUIPropertyRow& row) {
+                return row.name == "offsetMin.x" && row.value == "48";
+            }),
+        "Inspector rows should be generated from the canonical property catalog and live values");
+    kb::editor::tests::Require(
+        !InspectorUIComponentModel::Parse(
+             kb::scene::UIComponentPropertyType::Float, "nan").has_value() &&
+            !InspectorUIComponentModel::Parse(
+                 kb::scene::UIComponentPropertyType::UInt32, "4294967296").has_value(),
+        "Inspector parsing should reject non-finite and overflowing authored values");
+    kb::scene::UIComponentSet invalidCandidate = kb::scene::CaptureSceneUIComponents(
+        fixture.scene.Components().UI(), fixture.RootEntity());
+    const kb::scene::UIComponentSet beforeInvalid = invalidCandidate;
+    kb::editor::tests::Require(
+        kb::scene::WriteUIComponentProperty(invalidCandidate,
+            UIComponentType::RectTransform, "anchorMin.x", UIComponentPropertyValue{ 2.0F }) ==
+                kb::scene::UIComponentPropertyWriteResult::InvalidValue &&
+            kb::scene::AreUIComponentSetsEqual(invalidCandidate, beforeInvalid),
+        "Invalid UI property edits should leave the component set unchanged");
+
+    kb::editor::tests::Require(fixture.commandController.Execute(
+            "Remove Button", [&]() {
+                return EditorUIComponentAuthoring::Remove(
+                    fixture.scene, fixture.RootEntity(), UIComponentType::Button);
+            }) &&
+            !fixture.scene.Components().UI().Has<kb::scene::UIButton>(fixture.RootEntity()) &&
+            fixture.commandController.Undo() &&
+            fixture.scene.Components().UI().Has<kb::scene::UIButton>(fixture.RootEntity()),
+        "Removing an individual UI component should be undoable");
+
+    const kb::scene::SceneEntity layoutEntity = fixture.scene.Entities().CreateEntity(
+        kb::scene::SceneObjectDesc{ .name = "WidgetLayout" });
+    kb::editor::tests::Require(
+        EditorUIComponentAuthoring::Add(
+            fixture.scene, layoutEntity, "kb21.ui.horizontal-layout") &&
+            !EditorUIComponentAuthoring::Add(
+                fixture.scene, layoutEntity, "kb21.ui.vertical-layout") &&
+            fixture.scene.Components().UI().Has<kb::scene::UIHorizontalLayout>(layoutEntity) &&
+            !fixture.scene.Components().UI().Has<kb::scene::UIVerticalLayout>(layoutEntity),
+        "Authoring should reject an invalid combination without partially mutating the entity");
+
+    for (const kb::scene::UIComponentDescriptor& descriptor : componentCatalog) {
+        const kb::scene::SceneEntity catalogEntity = fixture.scene.Entities().CreateEntity(
+            kb::scene::SceneObjectDesc{ .name = std::string{ descriptor.displayName } });
+        kb::editor::tests::Require(EditorUIComponentAuthoring::Add(
+                fixture.scene, catalogEntity, descriptor.stableId),
+            "Each canonical UI component should be independently addable");
+        const std::vector<UIComponentType> authored =
+            InspectorUIComponentModel::Components(fixture.scene, catalogEntity);
+        kb::editor::tests::Require(authored.size() == 1U && authored.front() == descriptor.type,
+            "Inspector should expose each independently attached UI component");
+    }
+
+    const std::filesystem::path sceneFile =
+        std::filesystem::temp_directory_path() / "21kb_editor_ui_component_authoring.21kbscene";
+    std::error_code cleanupError;
+    std::filesystem::remove(sceneFile, cleanupError);
+    std::filesystem::remove(sceneFile.string() + ".meta", cleanupError);
+    kb::editor::tests::Require(kb::scene::SceneDocumentService::Save(
+            fixture.scene, sceneFile, "UIComponentAuthoring"),
+        "Authored UI entity scene should save");
+    kb::scene::Scene reloaded;
+    kb::editor::tests::Require(
+        kb::scene::SceneDocumentService::LoadFileIntoScene(reloaded, sceneFile),
+        "Authored UI entity scene should reopen");
+    const std::vector<kb::scene::SceneEntity> roots = reloaded.Hierarchy().RootEntities();
+    const auto restored = std::ranges::find_if(roots, [&reloaded](kb::scene::SceneEntity candidate) {
+        return reloaded.Entities().Name(candidate) == "WidgetEntity";
+    });
+    kb::editor::tests::Require(restored != roots.end() &&
+            reloaded.Components().UI().Has<kb::scene::UIButton>(*restored) &&
+            reloaded.Components().UI().TryGet<kb::scene::UIRectTransform>(*restored)->offsetMin.x == 48.0F,
+        "Save and reopen should preserve UI components and edited properties on the entity");
+    std::filesystem::remove(sceneFile, cleanupError);
+    std::filesystem::remove(sceneFile.string() + ".meta", cleanupError);
+}
+
 } // namespace
 
 namespace kb::editor::tests {
@@ -3016,6 +3194,7 @@ void RunEditorInspectorTests() {
     RunInspectorDisclosureAnimationTest();
     RunInspectorHoverIndexTest();
     RunAddComponentBrowserModelTest();
+    RunUIComponentAuthoringTest();
     RunInspectorTextEditDirtyStateTest();
     RunAudioComponentCatalogTest();
     RunObjectClassificationCatalogTest();

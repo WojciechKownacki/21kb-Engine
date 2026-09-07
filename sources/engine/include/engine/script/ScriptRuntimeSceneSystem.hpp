@@ -127,6 +127,7 @@ private:
     void DispatchPendingAnimationEvents(kb::scene::Scene& scene, float deltaSeconds);
     void DispatchPendingTimelineMarkerEvents(
         kb::scene::Scene& scene, float deltaSeconds);
+    void DispatchPendingUIEvents(kb::scene::Scene& scene, float deltaSeconds);
     void SyncBehaviourLifecycles(kb::scene::Scene& scene, float deltaSeconds);
     void ShutdownTrackedBehaviours(kb::scene::Scene& scene, float deltaSeconds);
     void DispatchDeactivateAndDestroyInOrder(kb::scene::Scene& scene, std::vector<BehaviourLifecycleRecord>& records, float deltaSeconds);

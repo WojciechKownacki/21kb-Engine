@@ -55,6 +55,9 @@
 #include "rendering/EditorMeshPreviewTypes.hpp"
 #include "inspection/InspectorPhysicsModel.hpp"
 #include "scene/audio/EditorSceneAudioSettingsService.hpp"
+#include "scene/ui/EditorUIComponentAuthoring.hpp"
+#include "engine/scene/SceneUIComponentSet.hpp"
+#include "engine/ui/UIComponentPropertyCatalog.hpp"
 #include "engine/script/ScriptBehaviourAsset.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
@@ -3615,6 +3618,18 @@ bool EditorSceneContext::AddComponentToEntity(kb::scene::SceneEntity entity, std
         return false;
     }
 
+    if (EditorUIComponentAuthoring::Supports(componentId)) {
+        const kb::scene::UIComponentDescriptor* definition = kb::scene::FindUIComponentDescriptor(componentId);
+        if (definition != nullptr && EditorUIComponentAuthoring::Has(*scene_, entity, definition->type)) {
+            console_.Warning("Inspector", "Entity already has a " + std::string{ definition->displayName } + " component.");
+            return false;
+        }
+        const std::string label = "Add " + std::string{ definition != nullptr ? definition->displayName : componentId };
+        return ExecuteSceneCommand(label, [this, entity, componentId = std::string{ componentId }]() {
+            return EditorUIComponentAuthoring::Add(*scene_, entity, componentId);
+        });
+    }
+
     if (componentId == "Camera") {
         if (scene_->Components().Cameras().Has(entity)) {
             console_.Warning("Inspector", "Entity already has a Camera component.");
@@ -3993,6 +4008,74 @@ bool EditorSceneContext::AddComponentToEntity(kb::scene::SceneEntity entity, std
 
     console_.Warning("Inspector", "Unknown component: " + std::string{ componentId });
     return false;
+}
+
+bool EditorSceneContext::RemoveUIComponentFromEntity(
+    kb::scene::SceneEntity entity, kb::scene::UIComponentType component) {
+    if (!scene_->Entities().IsAlive(entity) ||
+        !EditorUIComponentAuthoring::Has(*scene_, entity, component)) {
+        return false;
+    }
+    const kb::scene::UIComponentDescriptor* descriptor =
+        kb::scene::FindUIComponentDescriptor(component);
+    const std::string label = "Remove " + std::string{
+        descriptor != nullptr ? descriptor->displayName : std::string_view{ "UI Component" }};
+    return ExecuteSceneCommand(label, [this, entity, component]() {
+        return EditorUIComponentAuthoring::Remove(*scene_, entity, component);
+    });
+}
+
+bool EditorSceneContext::SetUIComponentProperty(
+    kb::scene::SceneEntity entity, kb::scene::UIComponentType component,
+    std::string_view property, const kb::scene::UIComponentPropertyValue& value) {
+    if (!scene_->Entities().IsAlive(entity)) return false;
+    const kb::scene::UIComponentPropertyDescriptor* propertyDescriptor =
+        kb::scene::FindUIComponentProperty(component, property);
+    if (propertyDescriptor == nullptr || !propertyDescriptor->writable) return false;
+
+    if (propertyDescriptor->type == kb::scene::UIComponentPropertyType::Asset) {
+        const std::uint64_t* authoredId = std::get_if<std::uint64_t>(&value);
+        if (authoredId == nullptr) return false;
+        const kb::scene::UIComponentAssetReferenceValidationResult validation =
+            kb::scene::ValidateUIComponentAssetReference(
+                scene_->Assets().Manager().Registry(), *propertyDescriptor, *authoredId);
+        if (validation == kb::scene::UIComponentAssetReferenceValidationResult::MissingAsset) {
+            console_.Warning("Inspector", "UI asset property references an unknown asset.");
+            return false;
+        }
+        if (validation != kb::scene::UIComponentAssetReferenceValidationResult::Succeeded) {
+            console_.Warning("Inspector", "UI asset property references an asset of the wrong kind.");
+            return false;
+        }
+    } else if (propertyDescriptor->type == kb::scene::UIComponentPropertyType::Entity) {
+        const std::uint64_t* authoredId = std::get_if<std::uint64_t>(&value);
+        if (authoredId == nullptr) return false;
+        const std::uint64_t id = *authoredId;
+        if (id != 0U && !scene_->Entities().IsAlive(kb::scene::SceneEntity{ id })) {
+            console_.Warning("Inspector", "UI entity property references an unknown entity.");
+            return false;
+        }
+    }
+
+    kb::scene::UIComponentSet candidate =
+        kb::scene::CaptureSceneUIComponents(scene_->Components().UI(), entity);
+    if (kb::scene::WriteUIComponentProperty(candidate, component, property, value) !=
+        kb::scene::UIComponentPropertyWriteResult::Succeeded) {
+        console_.Warning("Inspector", "UI property value is invalid.");
+        return false;
+    }
+    const kb::scene::UIComponentSet current =
+        kb::scene::CaptureSceneUIComponents(scene_->Components().UI(), entity);
+    if (kb::scene::AreUIComponentSetsEqual(current, candidate)) return false;
+
+    const kb::scene::UIComponentDescriptor* descriptor =
+        kb::scene::FindUIComponentDescriptor(component);
+    const std::string label = "Edit " + std::string{
+        descriptor != nullptr ? descriptor->displayName : std::string_view{ "UI Component" }};
+    return ExecuteSceneCommand(label, [this, entity, candidate = std::move(candidate)]() {
+        kb::scene::SynchronizeSceneUIComponents(scene_->Components().UI(), entity, candidate);
+        return true;
+    });
 }
 
 std::vector<std::string> EditorSceneContext::EntityTags(kb::scene::SceneEntity entity) const {

@@ -30,6 +30,7 @@
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTasks.hpp"
 #include "engine/scene/SceneTimelines.hpp"
+#include "engine/scene/SceneUI.hpp"
 #include "engine/scene/TimelineAsset.hpp"
 #include "scene/components/SceneComponentRegistry.hpp"
 #include "scene/components/SceneComponentStorage.hpp"
@@ -710,6 +711,16 @@ public:
 #endif
     std::vector<kb::particles::PendingParticleRuntimeEvent> pendingParticleRuntimeEvents;
     mutable std::vector<kb::particles::ParticleRuntimeState> particleRuntimeStateScratch;
+    SceneUIFrame uiFrame;
+    std::vector<SceneUIEvent> uiEvents;
+    SceneEntity uiHovered{};
+    SceneEntity uiPressed{};
+    SceneEntity uiFocused{};
+    SceneUIInput previousUIInput{};
+    SceneEntity uiInertialScrollView{};
+    kb::math::Vec2 uiScrollVelocity{};
+    kb::math::Vec2 uiViewportSize{};
+    std::size_t uiTextCursorByteOffset = 0U;
     // LIB-144: the renderer-published per-entity visibility/bounds feedback frame
     // (Renderer.IsVisible/GetBounds/TestFrustum's backing state) - written by
     // kb::render::Renderer at every SubmitScene through SceneRenderFeedback::Publish

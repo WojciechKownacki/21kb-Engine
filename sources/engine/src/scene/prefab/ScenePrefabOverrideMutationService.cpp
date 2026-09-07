@@ -5,6 +5,7 @@
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneTransforms.hpp"
+#include "engine/scene/SceneUIComponentSet.hpp"
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/prefab/ScenePrefabHasher.hpp"
@@ -54,6 +55,7 @@ struct LivePrefabComponentReaders {
     SceneAudioListenerComponents audioListeners;
     SceneAnimatorComponents animators;
     SceneParticleEffectComponents particleEffects;
+    SceneUIComponents ui;
 };
 
 [[nodiscard]] bool SameObjects(std::span<const SceneObject> lhs, std::span<const SceneObject> rhs) noexcept {
@@ -102,6 +104,7 @@ struct LivePrefabComponentReaders {
         .audioListeners = components.AudioListeners(),
         .animators = components.Animators(),
         .particleEffects = components.ParticleEffects(),
+        .ui = components.UI(),
     };
 }
 
@@ -241,7 +244,8 @@ template <typename T, typename Components>
     const ScenePrefabNodeComponents& expected,
     bool exactMaskValidated) {
     if (exactMaskValidated) {
-        return (!expected.camera.has_value() || OptionalComponentMatches(readers.cameras, entity, expected.camera)) &&
+        return AreUIComponentSetsEqual(CaptureSceneUIComponents(readers.ui, entity), expected.ui) &&
+            (!expected.camera.has_value() || OptionalComponentMatches(readers.cameras, entity, expected.camera)) &&
             (!expected.meshRenderer.has_value() || OptionalComponentMatches(readers.meshRenderers, entity, expected.meshRenderer)) &&
             (!expected.light.has_value() || OptionalComponentMatches(readers.lights, entity, expected.light)) &&
             (!expected.input.has_value() || OptionalComponentMatches(readers.inputs, entity, expected.input)) &&
@@ -255,7 +259,8 @@ template <typename T, typename Components>
             (!expected.particleEffect.has_value() || OptionalComponentMatches(readers.particleEffects, entity, expected.particleEffect));
     }
 
-    return OptionalComponentMatches(readers.cameras, entity, expected.camera) &&
+    return AreUIComponentSetsEqual(CaptureSceneUIComponents(readers.ui, entity), expected.ui) &&
+        OptionalComponentMatches(readers.cameras, entity, expected.camera) &&
         OptionalComponentMatches(readers.meshRenderers, entity, expected.meshRenderer) &&
         OptionalComponentMatches(readers.lights, entity, expected.light) &&
         OptionalComponentMatches(readers.inputs, entity, expected.input) &&

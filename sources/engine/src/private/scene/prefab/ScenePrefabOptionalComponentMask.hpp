@@ -21,10 +21,11 @@ struct ScenePrefabOptionalComponentExpectation {
     bool expectedPresent = false;
 };
 
-[[nodiscard]] inline std::array<ScenePrefabOptionalComponentExpectation, 36U>
+[[nodiscard]] inline std::array<ScenePrefabOptionalComponentExpectation, 49U>
 ScenePrefabOptionalComponentExpectations(
     const ScenePrefabNodeComponents& components,
-    const SceneComponentRegistry& registry) noexcept {
+    const SceneState& state) noexcept {
+    const SceneComponentRegistry& registry = state.components;
     return {{
         { registry.CameraComponentId(), components.camera.has_value() },
         { registry.MeshRendererComponentId(), components.meshRenderer.has_value() },
@@ -72,7 +73,7 @@ ScenePrefabOptionalComponentExpectations(
     const kb::ecs::NativeArchetypeStorage& storage = state.world.NativeStorage();
     if (!storage.IsAlive(entity)) return {};
 
-    const auto expectations = ScenePrefabOptionalComponentExpectations(expected, state.components);
+    const auto expectations = ScenePrefabOptionalComponentExpectations(expected, state);
     for (const ScenePrefabOptionalComponentExpectation& expectation : expectations) {
         if (expectation.componentId == 0U) return {};
         if (storage.HasComponent(entity, expectation.componentId) != expectation.expectedPresent) {

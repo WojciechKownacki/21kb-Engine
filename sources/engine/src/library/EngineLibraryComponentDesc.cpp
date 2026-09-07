@@ -1,4 +1,5 @@
 #include "engine/library/EngineLibraryComponentDesc.hpp"
+#include "engine/ui/UIComponentCatalog.hpp"
 
 #include <algorithm>
 
@@ -39,7 +40,8 @@ const std::vector<LibraryComponentDesc>& EngineLibraryComponentRegistry::Catalog
     // Visibility false, reasoning from SceneAssetComponentCodec — a
     // DIFFERENT, unrelated serialization path that does not cover Transform
     // or Visibility either; the round-trip test below caught the mistake.)
-    static const std::vector<LibraryComponentDesc> kCatalog{
+    static const std::vector<LibraryComponentDesc> kCatalog = [] {
+        std::vector<LibraryComponentDesc> catalog{
         LibraryComponentDesc{
             .name = "Transform",
             .id = ComputeLibraryComponentId("Transform"),
@@ -211,7 +213,16 @@ const std::vector<LibraryComponentDesc>& EngineLibraryComponentRegistry::Catalog
             .id = ComputeLibraryComponentId("Echo soczewki"),
             .serializable = true,
         },
-    };
+        };
+        for (const kb::scene::UIComponentDescriptor& component : kb::scene::UIComponentCatalog()) {
+            catalog.push_back(LibraryComponentDesc{
+                .name = std::string{ component.displayName },
+                .id = ComputeLibraryComponentId(component.displayName),
+                .serializable = true,
+            });
+        }
+        return catalog;
+    }();
     return kCatalog;
 }
 

@@ -121,6 +121,41 @@ void AppendOverrideReferences(
     }
 }
 
+void AppendUIReference(
+    ScenePrefabDependencyResolution& result,
+    const kb::assets::AssetRegistry& registry,
+    std::uint64_t rawId,
+    std::string_view role,
+    const UIComponentPropertyDescriptor* property) {
+    AppendUnique(result.dependencies, kb::assets::AssetId{rawId});
+    if (property == nullptr || result.diagnostic.has_value()) {
+        return;
+    }
+    const UIComponentAssetReferenceValidationResult validation =
+        ValidateUIComponentAssetReference(registry, *property, rawId);
+    if (validation == UIComponentAssetReferenceValidationResult::MissingAsset) {
+        result.diagnostic = "references missing " + std::string{role} + " asset " + std::to_string(rawId);
+    } else if (validation == UIComponentAssetReferenceValidationResult::WrongAssetKind) {
+        result.diagnostic = "references " + std::string{role} + " asset " + std::to_string(rawId) +
+            " which is not a " + std::string{kb::assets::ToString(*property->assetKind)} + " asset";
+    }
+}
+
+void AppendUIOverrideReferences(
+    ScenePrefabDependencyResolution& result,
+    const kb::assets::AssetRegistry& registry,
+    const std::vector<ScenePrefabPropertyOverride>& overrides) {
+    const bool decoded = SceneComponentAssetReferences::ForEachUIOverrideReference(
+        overrides,
+        [&result, &registry](std::uint64_t rawId, std::string_view role,
+                            const UIComponentPropertyDescriptor* property) {
+            AppendUIReference(result, registry, rawId, role, property);
+        });
+    if (!decoded && !result.diagnostic.has_value()) {
+        result.diagnostic = "contains an unreadable UI component override";
+    }
+}
+
 void AppendNodeReferences(
     ScenePrefabDependencyResolution& result,
     ScenePrefabGuidAssetIndex& guidIndex,
@@ -129,12 +164,13 @@ void AppendNodeReferences(
     for (const ScenePrefabNodeDesc& node : prefab.Nodes()) {
         SceneComponentAssetReferences::ForEachReference(
             node.components,
-            [&result](std::uint64_t rawId, std::string_view role) {
-                static_cast<void>(role);
-                AppendUnique(result.dependencies, kb::assets::AssetId{ rawId });
+            [&result, &registry](std::uint64_t rawId, std::string_view role,
+                                const UIComponentPropertyDescriptor* property) {
+                AppendUIReference(result, registry, rawId, role, property);
             });
         AppendNestedPrefab(result, guidIndex, registry, node.nestedPrefabGuid);
         AppendOverrideReferences(result.dependencies, registry, node.nestedPrefabOverrides);
+        AppendUIOverrideReferences(result, registry, node.nestedPrefabOverrides);
     }
 }
 
@@ -147,6 +183,7 @@ void AppendNodeReferences(
     if (asset.kind == ScenePrefabAssetKind::Variant) {
         AppendNestedPrefab(result, guidIndex, registry, asset.baseGuid);
         AppendOverrideReferences(result.dependencies, registry, asset.overrides);
+        AppendUIOverrideReferences(result, registry, asset.overrides);
         for (const ScenePrefabVariantAddedSubtree& added : asset.addedChildren) {
             AppendNodeReferences(result, guidIndex, registry, added.subtree);
         }

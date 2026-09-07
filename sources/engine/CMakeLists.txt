@@ -250,15 +250,43 @@ add_library(kb_engine STATIC
     include/engine/scene/SkeletalMeshFbxImportPublisher.hpp
     include/engine/scene/SkeletalMeshAssetIO.hpp
     include/engine/scene/SkeletalMeshAssetLoader.hpp
-    include/engine/ui/effects/UIEffects.hpp
-    include/engine/ui/interaction/UIControlKind.hpp
-    include/engine/ui/interaction/UIInteraction.hpp
+    include/engine/ui/effects/UIBackgroundBlur.hpp
+    include/engine/ui/effects/UIMask.hpp
+    include/engine/ui/effects/UIOutline.hpp
+    include/engine/ui/effects/UIShadow.hpp
+    include/engine/ui/interaction/UIButton.hpp
+    include/engine/ui/interaction/UIDropdown.hpp
+    include/engine/ui/interaction/UIInputField.hpp
+    include/engine/ui/interaction/UIProgressBar.hpp
+    include/engine/ui/interaction/UIRange.hpp
+    include/engine/ui/interaction/UIScrollbar.hpp
+    include/engine/ui/interaction/UIScrollView.hpp
+    include/engine/ui/interaction/UISelectable.hpp
+    include/engine/ui/interaction/UISlider.hpp
+    include/engine/ui/interaction/UIToggle.hpp
+    include/engine/ui/interaction/UIWidgetSwitcher.hpp
+    include/engine/ui/layout/UIAspectRatioFitter.hpp
     include/engine/ui/layout/UICanvas.hpp
-    include/engine/ui/layout/UIContainerLayout.hpp
+    include/engine/ui/layout/UICanvasGroup.hpp
+    include/engine/ui/layout/UICanvasScaler.hpp
+    include/engine/ui/layout/UIContentSizeFitter.hpp
     include/engine/ui/layout/UIEdges.hpp
+    include/engine/ui/layout/UIGridLayout.hpp
+    include/engine/ui/layout/UIHorizontalLayout.hpp
+    include/engine/ui/layout/UILayoutAlignment.hpp
+    include/engine/ui/layout/UILayoutElement.hpp
+    include/engine/ui/layout/UIOverlayLayout.hpp
     include/engine/ui/layout/UIRectTransform.hpp
+    include/engine/ui/layout/UIVerticalLayout.hpp
+    include/engine/ui/layout/UIWrapLayout.hpp
+    include/engine/ui/UIComponentSet.hpp
+    include/engine/ui/UIComponentCatalog.hpp
+    include/engine/ui/UIComponentPropertyCatalog.hpp
+    include/engine/ui/UIComponentValidation.hpp
+    include/engine/ui/visual/UIBorder.hpp
     include/engine/ui/visual/UIImage.hpp
-    include/engine/ui/visual/UIPaint.hpp
+    include/engine/ui/visual/UIRawImage.hpp
+    include/engine/ui/visual/UISprite.hpp
     include/engine/ui/visual/UIText.hpp
     include/engine/scene/SceneLocalization.hpp
     include/engine/localization/LocalizationCatalog.hpp
@@ -345,6 +373,9 @@ add_library(kb_engine STATIC
         include/engine/scene/SceneParticleEffectComponents.hpp
         include/engine/scene/LensEchoComponent.hpp
         include/engine/scene/SceneLensEchoComponents.hpp
+    include/engine/scene/SceneUIComponents.hpp
+    include/engine/scene/SceneUIComponentSet.hpp
+    include/engine/scene/SceneUI.hpp
     include/engine/scene/SceneVisibilityComponents.hpp
     include/engine/scene/VisibilityComponent.hpp
     include/engine/render/postfx/PostProcessPipeline.hpp
@@ -399,6 +430,7 @@ add_library(kb_engine STATIC
     include/engine/script/ScriptSaveApi.hpp
     include/engine/script/ScriptSceneApi.hpp
     include/engine/script/ScriptSceneComponentApi.hpp
+    include/engine/script/ScriptUIApi.hpp
     include/engine/script/ScriptSceneVisualGraphBindings.hpp
     include/engine/script/ScriptSharedState.hpp
     include/engine/script/ScriptSharedVisualGraphBindings.hpp
@@ -724,6 +756,18 @@ add_library(kb_engine STATIC
     src/scene/components/SceneComponentAccess.cpp
     src/scene/components/SceneComponentRegistry.cpp
     src/scene/components/SceneComponentStorage.cpp
+    src/scene/components/SceneUIComponents.cpp
+    src/scene/components/SceneUIComponentSet.cpp
+    src/scene/SceneUI.cpp
+    src/ui/UIComponentValidation.cpp
+    src/ui/UIComponentCatalog.cpp
+    src/ui/UIComponentPropertyCatalog.cpp
+    src/scene/asset/io/components/SceneAssetUIComponentCodec.cpp
+    src/private/scene/asset/io/components/SceneAssetUIComponentCodec.hpp
+    src/scene/ui/SceneUIComponentTextCodec.cpp
+    src/scene/ui/SceneUISystem.cpp
+    src/private/scene/ui/SceneUIComponentTextCodec.hpp
+    src/private/scene/ui/SceneUISystem.hpp
     src/scene/components/SceneAudioListenerApi.cpp
     src/scene/components/SceneAudioListenerStorage.cpp
     src/scene/components/SceneAudioSourceApi.cpp
@@ -1047,6 +1091,9 @@ add_library(kb_engine STATIC
     src/script/ScriptSaveApi.cpp
     src/script/ScriptSceneApi.cpp
     src/script/ScriptSceneComponentApi.cpp
+    src/script/ScriptUIApi.cpp
+    src/script/ScriptUIComponentApi.cpp
+    src/private/script/ScriptUIComponentApi.hpp
     src/script/ScriptSceneVisualGraphBindings.cpp
     src/script/ScriptSharedState.cpp
     src/script/ScriptSharedVisualGraphBindings.cpp
@@ -1432,6 +1479,7 @@ add_library(kb_engine STATIC
     include/engine/input/InputKey.hpp
     include/engine/input/InputLocalUser.hpp
     include/engine/input/InputTouchPoint.hpp
+    include/engine/input/InputText.hpp
     include/engine/input/InputValue.hpp
     include/engine/input/InputDeviceState.hpp
     include/engine/input/InputModifierDesc.hpp
@@ -1455,6 +1503,7 @@ add_library(kb_engine STATIC
     src/input/InputAssetLoaders.cpp
     src/input/InputRebinding.cpp
     src/input/InputRecording.cpp
+    src/input/InputText.cpp
     src/input/InputModifiers.cpp
     src/input/InputTriggers.cpp
     src/input/InputHaptics.cpp
@@ -1611,6 +1660,7 @@ if(BUILD_TESTING)
         tests/TimelineRuntimeTests.cpp
         tests/LocalizationTests.cpp
         tests/SceneHierarchyTests.cpp
+        tests/SceneUITests.cpp
         tests/ScenePrefabCaptureTests.cpp
         tests/ScenePrefabInstantiationTests.cpp
         tests/ScenePrefabTestSuites.hpp

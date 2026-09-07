@@ -304,7 +304,8 @@ ScenePrefabNodeStateWriterContext::ScenePrefabNodeStateWriterContext(Scene& scen
     , motionSkeletonRules(scene.Components().MotionSkeletonRules())
     , deformedGeometries(scene.Components().DeformedGeometries())
     , navAgents(scene.Components().NavAgents())
-    , navObstacles(scene.Components().NavObstacles()) {
+    , navObstacles(scene.Components().NavObstacles())
+    , ui(scene.Components().UI()) {
     state.suppressPrefabDirtyTracking = true;
 }
 
@@ -381,6 +382,7 @@ void ScenePrefabNodeStateWriter::Write(ScenePrefabNodeStateWriterContext& contex
     WriteOptionalComponent(context.spaceStrokes, entity, node.components.spaceStroke);
     WriteOptionalComponent(context.historyRibbons, entity, node.components.historyRibbon);
     WriteOptionalComponent(context.particleEffects, entity, node.components.particleEffect);
+    SynchronizeSceneUIComponents(context.ui, entity, node.components.ui);
     // Echo source references are resolved after every prefab node exists.
     if (!node.components.lensEcho.has_value()) context.lensEchoes.Remove(entity);
     if (!componentMask.available || !componentMask.matches || node.components.behaviour.has_value()) {

@@ -93,6 +93,8 @@
 #include "engine/scene/ParticleEffectComponent.hpp"
 #include "engine/scene/SceneLoadedContent.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
+#include "engine/scene/SceneUI.hpp"
+#include "engine/scene/SceneUIComponentSet.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneSystem.hpp"
 #include "engine/scene/SceneSystemContext.hpp"
@@ -119,6 +121,8 @@
 #include "engine/script/ScriptRuntime.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 #include "engine/script/ScriptRuntimeSceneSystem.hpp"
+#include "engine/ui/UIComponentCatalog.hpp"
+#include "engine/ui/UIComponentPropertyCatalog.hpp"
 
 #include <algorithm>
 #include <array>
@@ -260,7 +264,7 @@ void RunModuleInstallReportsDuplicateDiagnosticsTest() {
 
     const kb::library::EngineLibraryModuleResult second = kb::library::EngineLibraryModule::Install(host);
     kb::tests::Require(!second.succeeded, "Engine21kbLibrary module install must fail when every function name already exists");
-    kb::tests::Require(second.diagnostics.size() == 23U, "Engine21kbLibrary module install must report one diagnostic per failed domain module");
+    kb::tests::Require(second.diagnostics.size() == 24U, "Engine21kbLibrary module install must report one diagnostic per failed domain module");
 }
 
 // LIB-016: the module catalog EngineLibraryModule::Install() walks must
@@ -272,7 +276,7 @@ void RunModuleInstallReportsDuplicateDiagnosticsTest() {
 // into this build).
 void RunModuleCatalogTest() {
     const std::vector<kb::library::LibraryModuleDesc>& catalog = kb::library::EngineLibraryModule::Catalog();
-    const std::vector<std::string> expectedNames{ "Input", "Audio", "World", "Time", "Timer", "Task", "Events", "Physics", "Transform", "Math", "Scene", "MeshRenderer", "MaterialInstance", "PostProcess", "Particles", "Animator", "Timeline", "Localization", "Renderer", "Assets", "Save", "Collections", "Text" };
+    const std::vector<std::string> expectedNames{ "Input", "Audio", "World", "Time", "Timer", "Task", "Events", "Physics", "Transform", "Math", "Scene", "UI", "MeshRenderer", "MaterialInstance", "PostProcess", "Particles", "Animator", "Timeline", "Localization", "Renderer", "Assets", "Save", "Collections", "Text" };
     kb::tests::Require(catalog.size() == expectedNames.size(), "Engine21kbLibrary module catalog must have exactly twenty-three domain modules");
     for (std::size_t index = 0; index < catalog.size(); ++index) {
         kb::tests::Require(catalog[index].name == expectedNames[index], "Engine21kbLibrary module catalog order/name drifted from the historical registration order");
@@ -2814,6 +2818,15 @@ void RunEngineLibraryComponentRegistryTest() {
         .maxParticlesOverride = 512U, .ownerDeathPolicy = kb::scene::ParticleOwnerDeathPolicy::Clear,
         .enabled = true, .autoPlay = false, .followTransform = false, .restartOnActivate = false,
     });
+    for (const kb::scene::UIComponentDescriptor& component : kb::scene::UIComponentCatalog()) {
+        const kb::scene::SceneObject uiObject = source.Entities().CreateObject(kb::scene::SceneObjectDesc{
+            .name = "Registry UI " + std::string{ component.displayName }, .parent = object,
+        });
+        kb::scene::UIComponentSet authoredUI;
+        kb::tests::Require(kb::scene::AddUIComponent(authoredUI, component.type),
+            "Engine21kbLibrary component registry fixture could not attach a cataloged UI component");
+        kb::scene::ApplySceneUIComponents(source.Components().UI(), uiObject.Entity(), authoredUI);
+    }
 
     const std::filesystem::path testRoot = std::filesystem::temp_directory_path() / "21kb_engine_library_component_registry_tests";
     std::error_code removeError;
@@ -2963,6 +2976,18 @@ void RunEngineLibraryComponentRegistryTest() {
                             !restoredParticleEffect->followTransform && !restoredParticleEffect->restartOnActivate,
         "Engine21kbLibrary component registry: Particle Effect must survive real save/load with its playback policy");
 
+    const std::vector<kb::scene::SceneEntity> restoredUIEntities = target.Hierarchy().ChildEntities(restored);
+    for (const kb::scene::UIComponentDescriptor& component : kb::scene::UIComponentCatalog()) {
+        const std::string expectedName = "Registry UI " + std::string{ component.displayName };
+        const auto restoredUIEntity = std::ranges::find_if(restoredUIEntities, [&](kb::scene::SceneEntity entity) {
+            return target.Entities().Name(entity) == expectedName;
+        });
+        kb::tests::Require(restoredUIEntity != restoredUIEntities.end() &&
+                kb::scene::HasUIComponent(
+                    kb::scene::CaptureSceneUIComponents(target.Components().UI(), *restoredUIEntity), component.type),
+            "A cataloged UI component marked serializable must survive a real scene save/load round trip");
+    }
+
     for (const kb::library::LibraryComponentDesc& desc : catalog) {
         kb::tests::Require(desc.serializable,
             "Engine21kbLibrary component registry: every cataloged component is serializable=true after the real save/load round trip above");
@@ -3104,7 +3129,8 @@ void RunStreamFocusRuntimeTest() {
 
 void RunEngineLibraryEventSchemaRegistryTest() {
     const std::vector<kb::library::LibraryEventDesc>& catalog = kb::library::EngineLibraryEventRegistry::Catalog();
-    kb::tests::Require(catalog.size() == 18U, "Engine21kbLibrary event schema registry must catalog exactly the 18 built-in events this engine emits today");
+    kb::tests::Require(catalog.size() == 18U + kb::scene::SceneUIEventCatalog().size(),
+        "Engine21kbLibrary event schema registry must catalog every built-in event emitted by the engine");
 
     for (const kb::library::LibraryEventDesc& desc : catalog) {
         kb::tests::Require(!desc.name.empty(), "Engine21kbLibrary event schema registry entry must have a non-empty name");
@@ -3120,6 +3146,19 @@ void RunEngineLibraryEventSchemaRegistryTest() {
         "OnCollisionEnter", "OnCollisionStay", "OnCollisionExit", "OnTriggerEnter", "OnTriggerStay", "OnTriggerExit", "OnAudioMarker", "OnPrefabInstantiated", "OnAnimationEvent", "OnTimelineMarker" };
     for (const std::string& name : expectedNames) {
         kb::tests::Require(kb::library::EngineLibraryEventRegistry::Find(name) != nullptr, "Engine21kbLibrary event schema registry is missing an entry for a real engine-emitted event");
+    }
+    for (const kb::scene::SceneUIEventDescriptor& event : kb::scene::SceneUIEventCatalog()) {
+        const kb::library::LibraryEventDesc* uiEvent = kb::library::EngineLibraryEventRegistry::Find(event.callbackName);
+        kb::tests::Require(uiEvent != nullptr && uiEvent->arguments.size() == 8U &&
+                uiEvent->arguments[0].name == "entity" && uiEvent->arguments[0].type == kb::script::ScriptValueType::Entity &&
+                uiEvent->arguments[1].name == "pointerX" && uiEvent->arguments[1].type == kb::script::ScriptValueType::Float &&
+                uiEvent->arguments[2].name == "pointerY" && uiEvent->arguments[2].type == kb::script::ScriptValueType::Float &&
+                uiEvent->arguments[3].name == "pointerAvailable" && uiEvent->arguments[3].type == kb::script::ScriptValueType::Bool &&
+                uiEvent->arguments[4].name == "value" && uiEvent->arguments[4].type == kb::script::ScriptValueType::Float &&
+                uiEvent->arguments[5].name == "value2" && uiEvent->arguments[5].type == kb::script::ScriptValueType::Float &&
+                uiEvent->arguments[6].name == "text" && uiEvent->arguments[6].type == kb::script::ScriptValueType::String &&
+                uiEvent->arguments[7].name == "action" && uiEvent->arguments[7].type == kb::script::ScriptValueType::String,
+            "A scene UI event schema must match the payload delivered to scripts");
     }
     kb::tests::Require(kb::library::EngineLibraryEventRegistry::Find("NoSuchEvent") == nullptr, "Engine21kbLibrary event schema registry Find() must return nullptr for an unregistered name");
 
@@ -3266,7 +3305,7 @@ void RunComponentInspectorDescCatalogTest() {
     // Light remains a public compatibility alias for 3D Radiance Emitter and
     // intentionally reuses the canonical inspector metadata for its 16 fields.
     // Particle Effect contributes nine authoring and playback fields.
-    kb::tests::Require(fieldsChecked == 285U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (285, including the Light compatibility alias) across all components");
+    kb::tests::Require(fieldsChecked == 495U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (495, including the Light compatibility alias) across all components");
 
     for (const kb::library::LibraryComponentInspectorDesc& desc : catalog) {
         const bool foundInScriptNames = std::ranges::find(scriptComponentNames, desc.componentName) != scriptComponentNames.end();

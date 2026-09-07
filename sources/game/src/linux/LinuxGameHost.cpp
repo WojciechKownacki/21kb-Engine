@@ -6,6 +6,7 @@
 #include "engine/input/InputDeviceState.hpp"
 #include "engine/input/InputKey.hpp"
 #include "engine/input/InputSubsystem.hpp"
+#include "engine/input/InputText.hpp"
 #include "engine/scene/Scene.hpp"
 #include "kb/render/DisplayConfig.hpp"
 #include "kb/render/Renderer.hpp"
@@ -17,15 +18,20 @@
 #undef None
 #undef Success
 
+#include <algorithm>
+#include <array>
 #include <chrono>
+#include <clocale>
 #include <cstdint>
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
 #include <iostream>
 #include <memory>
+#include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include <unistd.h>
 
@@ -179,6 +185,24 @@ public:
         XMapWindow(display_, window_);
         XFlush(display_);
 
+        if (std::setlocale(LC_CTYPE, "") == nullptr || XSupportsLocale() == 0) {
+            std::cerr << "kb_game_linux: UTF-8 text input unavailable: current locale is not supported by X11\n";
+        } else {
+            static_cast<void>(XSetLocaleModifiers(""));
+            inputMethod_ = XOpenIM(display_, nullptr, nullptr, nullptr);
+            if (inputMethod_ != nullptr) {
+                inputContext_ = XCreateIC(
+                    inputMethod_,
+                    XNInputStyle, XIMPreeditNothing | XIMStatusNothing,
+                    XNClientWindow, window_,
+                    XNFocusWindow, window_,
+                    nullptr);
+            }
+            if (inputContext_ == nullptr) {
+                std::cerr << "kb_game_linux: UTF-8 text input unavailable: XIM context could not be created\n";
+            }
+        }
+
         kb::assets::bake::BakeTargetProfile profile{};
         if (!kb::game::RuntimeHostBakeTargetProfile(profile)) {
             std::cerr << "kb_game_linux: host has no valid package target identity\n";
@@ -218,6 +242,7 @@ public:
             while (XPending(display_) > 0) {
                 XEvent event{};
                 XNextEvent(display_, &event);
+                if (XFilterEvent(&event, window_) != 0) continue;
                 running = HandleEvent(event) && running;
             }
             if (!running) {
@@ -226,7 +251,7 @@ public:
             if (surface_->Width() == 0U || surface_->Height() == 0U) {
                 XEvent event{};
                 XNextEvent(display_, &event);
-                running = HandleEvent(event);
+                if (XFilterEvent(&event, window_) == 0) running = HandleEvent(event);
                 kb::game::ResetRuntimeDeltaOrigin(
                     previousTick_, std::chrono::steady_clock::now());
                 continue;
@@ -234,6 +259,10 @@ public:
             const auto now = std::chrono::steady_clock::now();
             const float delta = kb::game::RuntimeDeltaSeconds(previousTick_, now);
             previousTick_ = now;
+            if (kb::scene::Scene* scene = runtime_.Scene(); scene != nullptr) {
+                scene->Input().MutableDeviceState().SetPointerViewportExtent(
+                    surface_->Width(), surface_->Height());
+            }
             bool frameSubmitted = false;
             running = runtime_.Tick(renderer_, delta, &frameSubmitted);
             if (frameSubmitted) {
@@ -243,6 +272,7 @@ public:
                 scene->Input().MutableDeviceState().SetAnalog(kb::input::InputKey::MouseX, 0.0F);
                 scene->Input().MutableDeviceState().SetAnalog(kb::input::InputKey::MouseY, 0.0F);
                 scene->Input().MutableDeviceState().SetAnalog(kb::input::InputKey::MouseWheel, 0.0F);
+                scene->Input().MutableDeviceState().ClearTextInput();
             }
             if (frameLimit != 0U && frames >= frameLimit) running = false;
         }
@@ -275,9 +305,11 @@ private:
             break;
         }
         case FocusIn:
+            if (inputContext_ != nullptr) XSetICFocus(inputContext_);
             if (input != nullptr) input->SetHasFocus(true);
             break;
         case FocusOut:
+            if (inputContext_ != nullptr) XUnsetICFocus(inputContext_);
             if (input != nullptr) {
                 input->Reset();
                 input->SetHasFocus(false);
@@ -286,7 +318,34 @@ private:
         case KeyPress:
         case KeyRelease:
             if (input != nullptr) {
-                const KeySym symbol = XLookupKeysym(const_cast<XKeyEvent*>(&event.xkey), 0);
+                KeySym symbol = NoSymbol;
+                if (event.type == KeyPress && inputContext_ != nullptr) {
+                    std::array<char, 256U> utf8{};
+                    Status status = XLookupNone;
+                    int byteCount = Xutf8LookupString(
+                        inputContext_, const_cast<XKeyEvent*>(&event.xkey),
+                        utf8.data(), static_cast<int>(utf8.size()), &symbol, &status);
+                    std::vector<char> overflow;
+                    if (status == XBufferOverflow && byteCount > 0) {
+                        overflow.resize(static_cast<std::size_t>(byteCount));
+                        byteCount = Xutf8LookupString(
+                            inputContext_, const_cast<XKeyEvent*>(&event.xkey),
+                            overflow.data(), byteCount, &symbol, &status);
+                    }
+                    if (byteCount > 0 &&
+                        (status == XLookupChars || status == XLookupBoth)) {
+                        const char* bytes = overflow.empty() ? utf8.data() : overflow.data();
+                        std::array<char32_t, kb::input::InputDeviceState::kMaxTextInputCodePoints> decoded{};
+                        const kb::input::Utf8DecodeResult result = kb::input::DecodeUtf8(
+                            std::string_view{bytes, static_cast<std::size_t>(byteCount)}, decoded);
+                        if (result.wellFormed) {
+                            static_cast<void>(input->AddTextInput(std::span<const char32_t>{
+                                decoded.data(), result.codePointCount}));
+                        }
+                    }
+                } else {
+                    symbol = XLookupKeysym(const_cast<XKeyEvent*>(&event.xkey), 0);
+                }
                 const kb::input::InputKey key = LinuxKey(symbol);
                 if (key != kb::input::InputKey::None) {
                     input->SetKeyDown(key, event.type == KeyPress);
@@ -328,6 +387,10 @@ private:
         if (pack_ != nullptr) pack_->Unmount();
         pack_.reset();
         surface_.reset();
+        if (inputContext_ != nullptr) XDestroyIC(inputContext_);
+        inputContext_ = nullptr;
+        if (inputMethod_ != nullptr) XCloseIM(inputMethod_);
+        inputMethod_ = nullptr;
         if (display_ != nullptr && window_ != 0U) XDestroyWindow(display_, window_);
         window_ = 0U;
         if (display_ != nullptr) XCloseDisplay(display_);
@@ -338,6 +401,8 @@ private:
     Display* display_ = nullptr;
     Window window_{};
     Atom closeMessage_{};
+    XIM inputMethod_ = nullptr;
+    XIC inputContext_ = nullptr;
     std::unique_ptr<LinuxRenderSurface> surface_;
     std::shared_ptr<kb::assets::bake::RuntimeAssetPack> pack_;
     kb::render::Renderer renderer_;

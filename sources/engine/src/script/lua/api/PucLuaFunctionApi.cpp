@@ -1568,6 +1568,135 @@ int LuaSceneLoadProgress(lua_State* state) {
     return 1;
 }
 
+int LuaUICreate(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+    const char* preset = luaL_checkstring(state, 1);
+    std::vector<ScriptFunctionArgument> arguments{
+        Arg("preset", ScriptValue{ std::string{ preset != nullptr ? preset : "" } }),
+    };
+    if (lua_gettop(state) >= 2 && lua_isnil(state, 2) == 0) {
+        const char* name = luaL_checkstring(state, 2);
+        arguments.push_back(Arg("name", ScriptValue{ std::string{ name != nullptr ? name : "" } }));
+    }
+    if (lua_gettop(state) >= 3 && lua_isnil(state, 3) == 0) {
+        arguments.push_back(Arg(
+            "parent",
+            ScriptValue{ static_cast<std::uint64_t>(luaL_checkinteger(state, 3)), ScriptValueType::Entity }));
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("UI.Create", arguments);
+    if (!result.Succeeded()) {
+        return PushCallError(state, result, "ui entity creation failed");
+    }
+    PucLuaValueBridge::Push(
+        state,
+        result.Output("entity").value_or(ScriptValue{ 0U, ScriptValueType::Entity }));
+    return 1;
+}
+
+int LuaUIComponentCall(lua_State* state, const char* function, const char* output) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+    const char* component = luaL_checkstring(state, 2);
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("entity", ScriptValue{ static_cast<std::uint64_t>(luaL_checkinteger(state, 1)), ScriptValueType::Entity }),
+        Arg("component", ScriptValue{ std::string{ component != nullptr ? component : "" } }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction(function, arguments);
+    if (!result.Succeeded()) {
+        return PushCallError(state, result, "ui component operation failed");
+    }
+    lua_pushboolean(state, result.Output(output).value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaUIAddComponent(lua_State* state) {
+    return LuaUIComponentCall(state, "UI.AddComponent", "added");
+}
+
+int LuaUIRemoveComponent(lua_State* state) {
+    return LuaUIComponentCall(state, "UI.RemoveComponent", "removed");
+}
+
+int LuaUIHasComponent(lua_State* state) {
+    return LuaUIComponentCall(state, "UI.HasComponent", "present");
+}
+
+int LuaUIFocus(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("entity", ScriptValue{ static_cast<std::uint64_t>(luaL_checkinteger(state, 1)), ScriptValueType::Entity }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("UI.Focus", arguments);
+    lua_pushboolean(state, result.Output("focused").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaUIClearFocus(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("UI.ClearFocus", {});
+    lua_pushboolean(state, result.Output("cleared").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaUIHitTest(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushinteger(state, 0);
+        return 1;
+    }
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("x", ScriptValue{ static_cast<float>(luaL_checknumber(state, 1)) }),
+        Arg("y", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("UI.HitTest", arguments);
+    PucLuaValueBridge::Push(
+        state,
+        result.Output("entity").value_or(ScriptValue{ 0U, ScriptValueType::Entity }));
+    return 1;
+}
+
+int LuaUIEntityQuery(lua_State* state, const char* function) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushinteger(state, 0);
+        return 1;
+    }
+    const ScriptFunctionCallResult result = context->CallFunction(function, {});
+    PucLuaValueBridge::Push(
+        state,
+        result.Output("entity").value_or(ScriptValue{ 0U, ScriptValueType::Entity }));
+    return 1;
+}
+
+int LuaUIHovered(lua_State* state) {
+    return LuaUIEntityQuery(state, "UI.Hovered");
+}
+
+int LuaUIPressed(lua_State* state) {
+    return LuaUIEntityQuery(state, "UI.Pressed");
+}
+
+int LuaUIFocused(lua_State* state) {
+    return LuaUIEntityQuery(state, "UI.Focused");
+}
+
 int LuaTransformGetPosition(lua_State* state) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
     if (context == nullptr) {
@@ -2943,7 +3072,7 @@ void SetClosure(lua_State* state, const char* name, lua_CFunction function, Scri
 // marshalling.  Their position follows ScriptApiCatalog::LuaBindingDefinitions
 // excluding Task and global bindings; table and Lua field names deliberately
 // live only in that catalog.
-constexpr std::array<lua_CFunction, 166> kCatalogBindingAdapters{ {
+constexpr std::array<lua_CFunction, 176> kCatalogBindingAdapters{ {
     &LuaAudioPlay,
     &LuaAudioSetMixer,
     &LuaAudioActiveMixer,
@@ -3032,6 +3161,16 @@ constexpr std::array<lua_CFunction, 166> kCatalogBindingAdapters{ {
     &LuaSceneGetActive,
     &LuaSceneFind,
     &LuaSceneLoadProgress,
+    &LuaUICreate,
+    &LuaUIAddComponent,
+    &LuaUIRemoveComponent,
+    &LuaUIHasComponent,
+    &LuaUIFocus,
+    &LuaUIClearFocus,
+    &LuaUIHitTest,
+    &LuaUIHovered,
+    &LuaUIPressed,
+    &LuaUIFocused,
     &LuaTimeDelta,
     &LuaTransformGetPosition,
     &LuaTransformSetPosition,

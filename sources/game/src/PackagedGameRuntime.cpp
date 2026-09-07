@@ -7,6 +7,7 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneUI.hpp"
 #include "engine/script/ScriptModule.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 #include "kb/render/Renderer.hpp"
@@ -112,6 +113,9 @@ bool PackagedGameRuntime::Tick(
     if (scene_ == nullptr || scene_->Runtime().ShouldQuit()) {
         return false;
     }
+    static_cast<void>(scene_->UI().SetViewport(
+        static_cast<float>(renderer.BackbufferWidth()),
+        static_cast<float>(renderer.BackbufferHeight())));
     static_cast<void>(scene_->Runtime().Update(deltaSeconds));
     if (renderer.BeginFrame()) {
         renderer.SubmitScene(*scene_);

@@ -46,6 +46,7 @@
 #include "inspection/InspectorComponentLabelFormatter.hpp"
 #include "inspection/InspectorMeshRendererMaterialSlotModel.hpp"
 #include "inspection/InspectorPhysicsModel.hpp"
+#include "inspection/ui/InspectorUIComponentModel.hpp"
 #include "inspection/InspectorMaterialTextureSlotFormatter.hpp"
 #include "inspection/EditorValueFormatter.hpp"
 #include "inspection/MaterialAssetFormatter.hpp"
@@ -2249,6 +2250,38 @@ void PaintMultiSelection(HDC dc, RECT content, const EditorTheme& theme, const E
 [[nodiscard]] int MeshRendererSectionHeight(const EditorSceneContext& sceneContext, const kb::scene::MeshRendererComponent& renderer);
 [[nodiscard]] int TerrainSectionHeight(const InspectorPanelState& inspector, std::size_t layerCount) noexcept;
 
+void PaintUIComponentSections(HDC dc, RECT content, const RECT& band,
+    const EditorTheme& theme, const EditorSceneContext& sceneContext,
+    kb::scene::SceneEntity entity, int& y) {
+    const InspectorPanelState& inspector = sceneContext.Inspector();
+    for (const kb::scene::UIComponentType component :
+        InspectorUIComponentModel::Components(sceneContext.Scene(), entity)) {
+        const InspectorSectionId sectionId = InspectorUIComponentModel::Section(component);
+        const InspectorPropertyId propertyId = InspectorUIComponentModel::Property(component);
+        const std::vector<InspectorUIPropertyRow> rows =
+            InspectorUIComponentModel::Properties(sceneContext.Scene(), entity, component);
+        const int height = SectionHeight(inspector, sectionId, static_cast<int>(rows.size()));
+        if (y < band.bottom && y + height > band.top) {
+            const kb::scene::UIComponentDescriptor* descriptor =
+                kb::scene::FindUIComponentDescriptor(component);
+            SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom),
+                theme, inspector, sectionId, HeroIconKind::RectangleGroup,
+                descriptor != nullptr ? descriptor->displayName : std::string_view{ "UI Component" }, true);
+            for (int index = 0; index < static_cast<int>(rows.size()); ++index) {
+                const InspectorUIPropertyRow& row = rows[static_cast<std::size_t>(index)];
+                const InspectorPropertyId editableProperty =
+                    row.writable ? propertyId : InspectorPropertyId::None;
+                if (row.type == kb::scene::UIComponentPropertyType::Bool) {
+                    section.Bool(row.label, row.boolValue, editableProperty, index);
+                } else {
+                    section.Field(row.label, row.value, editableProperty, index);
+                }
+            }
+        }
+        y += height + kSectionGap;
+    }
+}
+
 [[nodiscard]] InspectorPropertyId TerrainLayerProperty(std::size_t index) noexcept {
     constexpr std::array values{
         InspectorPropertyId::TerrainMaterialLayer0,
@@ -2898,6 +2931,8 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         y += h + kSectionGap;
     }
 
+    PaintUIComponentSections(dc, content, band, theme, sceneContext, selected, y);
+
     if (const kb::scene::RegionShapeComponent* regionShape = scene.Components().RegionShapes().TryGet(selected); regionShape != nullptr) {
         const int h = SectionHeight(inspector, InspectorSectionId::RegionShape, 6);
         if (sectionVisible(y, h)) {
@@ -3241,6 +3276,13 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     int height = InspectorHeaderRegionHeight();
     height += SectionHeight(inspector, InspectorSectionId::General, 3) + kSectionGap;
     height += SectionHeight(inspector, InspectorSectionId::Transform, 3) + kSectionGap;
+    for (const kb::scene::UIComponentType component :
+        InspectorUIComponentModel::Components(scene, selected)) {
+        height += SectionHeight(inspector, InspectorUIComponentModel::Section(component),
+                      static_cast<int>(InspectorUIComponentModel::Properties(
+                          scene, selected, component).size())) +
+            kSectionGap;
+    }
     if (scene.Components().RegionShapes().Has(selected)) {
         height += SectionHeight(inspector, InspectorSectionId::RegionShape, 6) + kSectionGap;
     }
@@ -3352,6 +3394,10 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
 }
 
 void AdvanceRow(int& y) noexcept;
+[[nodiscard]] InspectorPanelRenderer::Hit HitSectionHeader(
+    RECT bounds, int& y, const InspectorPanelState& state,
+    InspectorSectionId section, int x, int yPoint,
+    bool removeButton) noexcept;
 
 [[nodiscard]] InspectorPanelRenderer::Hit HitBool(RECT row, InspectorSectionId section, InspectorPropertyId property, int x, int y) noexcept {
     RECT box = CheckboxRectForRow(row);
@@ -3375,6 +3421,45 @@ void AdvanceRow(int& y) noexcept;
         return MakeHit(InspectorHitKind::TextField, section, property, value);
     }
     return Contains(row, x, y) ? MakeHit(InspectorHitKind::Row, section, property, row) : InspectorPanelRenderer::Hit{};
+}
+
+[[nodiscard]] InspectorPanelRenderer::Hit HitTestUIComponentSections(
+    const RECT& content, const InspectorPanelState& state,
+    const EditorSceneContext& sceneContext, kb::scene::SceneEntity entity,
+    int x, int yPoint, int& y) {
+    for (const kb::scene::UIComponentType component :
+        InspectorUIComponentModel::Components(sceneContext.Scene(), entity)) {
+        const InspectorSectionId section = InspectorUIComponentModel::Section(component);
+        const InspectorPropertyId property = InspectorUIComponentModel::Property(component);
+        if (InspectorPanelRenderer::Hit hit =
+                HitSectionHeader(content, y, state, section, x, yPoint, true);
+            hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+        if (!state.IsCollapsed(section)) {
+            const std::vector<InspectorUIPropertyRow> rows =
+                InspectorUIComponentModel::Properties(sceneContext.Scene(), entity, component);
+            for (int index = 0; index < static_cast<int>(rows.size()); ++index) {
+                const InspectorUIPropertyRow& row = rows[static_cast<std::size_t>(index)];
+                InspectorPanelRenderer::Hit hit;
+                if (row.writable) {
+                    hit = row.type == kb::scene::UIComponentPropertyType::Bool
+                        ? HitBool(RowRect(content, y), section, property, x, yPoint)
+                        : HitTextRow(RowRect(content, y), section, property, x, yPoint);
+                } else if (Contains(RowRect(content, y), x, yPoint)) {
+                    hit = MakeHit(InspectorHitKind::Row, section,
+                        InspectorPropertyId::None, RowRect(content, y));
+                }
+                if (hit.kind != InspectorHitKind::None) {
+                    hit.index = index;
+                    return hit;
+                }
+                AdvanceRow(y);
+            }
+        }
+        y += kSectionGap;
+    }
+    return {};
 }
 
 [[nodiscard]] InspectorPanelRenderer::Hit HitAssetFieldRow(
@@ -4509,6 +4594,12 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
         AdvanceRow(y);
     }
     y += kSectionGap;
+
+    if (InspectorPanelRenderer::Hit hit = HitTestUIComponentSections(
+            viewport, state, sceneContext, selected, x, scrolledY, y);
+        hit.kind != InspectorHitKind::None) {
+        return hit;
+    }
 
     if (sceneContext.Scene().Components().RegionShapes().Has(selected)) {
         if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::RegionShape, x, scrolledY, true); hit.kind != InspectorHitKind::None) {

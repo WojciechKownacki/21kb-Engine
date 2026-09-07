@@ -44,6 +44,7 @@ class EcsRenderSceneSynchronizer;
 class RenderScene;
 class RenderSurface;
 class RendererScreenCapture;
+class ScreenUIRenderer;
 class SceneParticleRenderSynchronizer;
 class AuxFrameRenderer;
 class SceneRenderer;
@@ -293,6 +294,7 @@ private:
     // LIB-145: the async screen-capture controller (frame-gated blit+readTexture+PNG, see
     // RendererScreenCapture.hpp).
     std::unique_ptr<RendererScreenCapture> screenCapture_;
+    std::unique_ptr<ScreenUIRenderer> screenUIRenderer_;
     RuntimeRenderResourceCache runtimeResourceCache_;
     RuntimeFrameResourceReferences frameReferences_;
     RuntimeRenderAssetDiscovery runtimeAssetDiscovery_;

@@ -13,6 +13,7 @@
 #include "docking/EditorDockModel.hpp"
 #include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorPanelInteraction.hpp"
+#include "inspection/ui/InspectorUIComponentModel.hpp"
 #include "platform/win32/EditorParticleEffectAssetPickerDialog.hpp"
 #include "rendering/DockWorkspaceRenderer.hpp"
 #include "rendering/FloatingWindowBackBufferPainter.hpp"
@@ -44,7 +45,9 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/ParticleEffectAssetIO.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneUIComponentSet.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneRenderFeedback.hpp"
 #include "kb/editor/theme/EditorTheme.hpp"
@@ -63,6 +66,7 @@
 #include <cmath>
 #include <fstream>
 #include <iomanip>
+#include <iterator>
 #include <optional>
 #include <ranges>
 #include <set>
@@ -70,6 +74,7 @@
 #include <string>
 #include <system_error>
 #include <tuple>
+#include <type_traits>
 #include <vector>
 
 namespace kb::editor {
@@ -153,7 +158,8 @@ FindInspectorHit(
     const EditorSceneContext& context,
     InspectorSectionId section,
     InspectorPropertyId property,
-    int index = -1) {
+    int index = -1,
+    InspectorHitKind kind = InspectorHitKind::None) {
     for (int scroll = 0;;) {
         const int maxScroll = InspectorPanelRenderer::MaxScrollOffset(
             kInspectorContent, context);
@@ -170,7 +176,8 @@ FindInspectorHit(
                         kInspectorContent, context, x, y);
                 if (hit.section == section &&
                     hit.property == property &&
-                    (index < 0 || hit.index == index)) {
+                    (index < 0 || hit.index == index) &&
+                    (kind == InspectorHitKind::None || hit.kind == kind)) {
                     return hit;
                 }
             }
@@ -707,16 +714,17 @@ bool EditorHeadlessAutomation::AddComponent(
     static_cast<void>(
         InspectorPanelInteraction::HandlePointerDown(
             context_, search, searchPoint.x, searchPoint.y));
+    const std::string_view searchText = tile->id;
     const int wideLength = MultiByteToWideChar(
-        CP_UTF8, MB_ERR_INVALID_CHARS, tile->label.data(),
-        static_cast<int>(tile->label.size()), nullptr, 0);
+        CP_UTF8, MB_ERR_INVALID_CHARS, searchText.data(),
+        static_cast<int>(searchText.size()), nullptr, 0);
     if (wideLength <= 0) {
         Trace("add_component", false, "invalid-utf8-label");
         return false;
     }
     std::wstring wideLabel(static_cast<std::size_t>(wideLength), L'\0');
-    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, tile->label.data(),
-            static_cast<int>(tile->label.size()), wideLabel.data(), wideLength) != wideLength) {
+    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, searchText.data(),
+            static_cast<int>(searchText.size()), wideLabel.data(), wideLength) != wideLength) {
         Trace("add_component", false, "utf8-conversion-failed");
         return false;
     }
@@ -801,6 +809,118 @@ bool EditorHeadlessAutomation::SetPhysicsFloat(
     const bool applied = !context_.Inspector().IsTextEditing();
     Trace("set_physics_float", applied, text.str());
     return applied;
+}
+
+bool EditorHeadlessAutomation::SetUIComponentProperty(
+    kb::scene::UIComponentType component,
+    std::string_view property,
+    const kb::scene::UIComponentPropertyValue& value) {
+    const kb::scene::SceneEntity entity = context_.SelectedEntity();
+    const kb::scene::UIComponentPropertyDescriptor* descriptor =
+        kb::scene::FindUIComponentProperty(component, property);
+    if (!context_.Scene().Entities().IsAlive(entity) ||
+        descriptor == nullptr || !descriptor->writable) {
+        Trace("set_ui_component_property", false, "property-not-editable");
+        return false;
+    }
+
+    const std::vector<InspectorUIPropertyRow> rows =
+        InspectorUIComponentModel::Properties(context_.Scene(), entity, component);
+    const auto row = std::ranges::find_if(rows,
+        [property](const InspectorUIPropertyRow& candidate) {
+            return candidate.name == property;
+        });
+    if (row == rows.end()) {
+        Trace("set_ui_component_property", false, "property-not-visible");
+        return false;
+    }
+    const int rowIndex = static_cast<int>(std::distance(rows.begin(), row));
+
+    kb::scene::UIComponentSet current = kb::scene::CaptureSceneUIComponents(
+        context_.Scene().Components().UI(), entity);
+    kb::scene::UIComponentPropertyValue currentValue;
+    if (!kb::scene::ReadUIComponentProperty(
+            current, component, property, currentValue)) {
+        Trace("set_ui_component_property", false, "property-not-readable");
+        return false;
+    }
+    if (currentValue == value) {
+        Trace("set_ui_component_property", true, "already-set");
+        return true;
+    }
+
+    const auto hit = FindInspectorHit(
+        context_, InspectorUIComponentModel::Section(component),
+        InspectorUIComponentModel::Property(component), rowIndex,
+        descriptor->type == kb::scene::UIComponentPropertyType::Bool
+            ? InspectorHitKind::BoolField
+            : InspectorHitKind::TextField);
+    if (!hit.has_value()) {
+        Trace("set_ui_component_property", false, "field-not-found");
+        return false;
+    }
+    const POINT point = Center(hit->rect);
+    if (!InspectorPanelInteraction::HandlePointerDown(
+            context_, *hit, point.x, point.y)) {
+        Trace("set_ui_component_property", false, "pointer-down-not-routed");
+        return false;
+    }
+
+    if (descriptor->type != kb::scene::UIComponentPropertyType::Bool) {
+        if (!context_.Inspector().IsTextEditing()) {
+            Trace("set_ui_component_property", false, "field-not-editing");
+            return false;
+        }
+        while (!context_.Inspector().EditBuffer().empty()) {
+            static_cast<void>(InspectorPanelInteraction::HandleKeyDown(
+                nullptr, context_, VK_BACK));
+        }
+        const std::string text = std::visit([](const auto& typed) {
+            using T = std::decay_t<decltype(typed)>;
+            if constexpr (std::is_same_v<T, bool>) {
+                return std::string{ typed ? "true" : "false" };
+            } else if constexpr (std::is_same_v<T, float>) {
+                std::ostringstream output;
+                output << std::setprecision(9) << typed;
+                return output.str();
+            } else if constexpr (std::is_same_v<T, std::string>) {
+                return typed;
+            } else {
+                return std::to_string(typed);
+            }
+        }, value);
+        const int wideLength = MultiByteToWideChar(
+            CP_UTF8, MB_ERR_INVALID_CHARS, text.data(),
+            static_cast<int>(text.size()), nullptr, 0);
+        if (wideLength < 0 || (wideLength == 0 && !text.empty())) {
+            context_.Inspector().EndTextEdit();
+            Trace("set_ui_component_property", false, "invalid-utf8-value");
+            return false;
+        }
+        std::wstring wideText(static_cast<std::size_t>(wideLength), L'\0');
+        if (wideLength > 0 && MultiByteToWideChar(
+                CP_UTF8, MB_ERR_INVALID_CHARS, text.data(),
+                static_cast<int>(text.size()), wideText.data(), wideLength) != wideLength) {
+            context_.Inspector().EndTextEdit();
+            Trace("set_ui_component_property", false, "utf8-conversion-failed");
+            return false;
+        }
+        for (const wchar_t character : wideText) {
+            static_cast<void>(InspectorPanelInteraction::HandleChar(
+                context_, character));
+        }
+        static_cast<void>(InspectorPanelInteraction::HandleKeyDown(
+            nullptr, context_, VK_RETURN));
+    }
+
+    current = kb::scene::CaptureSceneUIComponents(
+        context_.Scene().Components().UI(), entity);
+    kb::scene::UIComponentPropertyValue applied;
+    const bool succeeded = kb::scene::ReadUIComponentProperty(
+            current, component, property, applied) &&
+        applied == value;
+    Trace("set_ui_component_property", succeeded, property);
+    return succeeded;
 }
 
 bool EditorHeadlessAutomation::SetGameplayKey(

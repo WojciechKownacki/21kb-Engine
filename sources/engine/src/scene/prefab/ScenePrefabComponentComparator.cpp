@@ -1,6 +1,7 @@
 #include "scene/prefab/ScenePrefabComponentComparator.hpp"
 
 #include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneUIComponentSet.hpp"
 
 namespace kb::scene {
 namespace {
@@ -182,6 +183,9 @@ template <typename T>
 
 ScenePrefabOverrideFlag ScenePrefabComponentComparator::Compare(SceneComponents components, SceneEntity entity, const ScenePrefabNodeComponents& expected) noexcept {
     ScenePrefabOverrideFlag flags = ScenePrefabOverrideFlag::None;
+    if (!AreUIComponentSetsEqual(CaptureSceneUIComponents(components.UI(), entity), expected.ui)) {
+        flags |= ScenePrefabOverrideFlag::UI;
+    }
     if (!EqualOptionalComponent(components.Cameras().TryGet(entity), expected.camera)) {
         flags |= ScenePrefabOverrideFlag::Camera;
     }

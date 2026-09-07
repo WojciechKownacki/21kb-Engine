@@ -1,4 +1,5 @@
 #include "inspection/InspectorComponentCatalog.hpp"
+#include "scene/ui/EditorUIComponentAuthoring.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -42,6 +43,25 @@ namespace {
         InspectorComponentTile{ .id = "NavAgent", .category = "Navigation", .label = "Nav Agent", .icon = HeroIconKind::Gamepad2 },
         InspectorComponentTile{ .id = "NavObstacle", .category = "Navigation", .label = "Nav Obstacle", .icon = HeroIconKind::Cube },
     };
+    for (const kb::scene::UIComponentDescriptor& definition : kb::scene::UIComponentCatalog()) {
+        tiles.push_back(InspectorComponentTile{
+            .id = std::string{ definition.stableId },
+            .category = "User Widget",
+            .label = std::string{ definition.displayName },
+            .icon = definition.type == kb::scene::UIComponentType::Text ||
+                    definition.type == kb::scene::UIComponentType::InputField
+                ? HeroIconKind::DocumentText
+                : HeroIconKind::RectangleGroup,
+        });
+    }
+    for (const kb::scene::UIComponentPresetDescriptor& preset : kb::scene::UIComponentPresetCatalog()) {
+        tiles.push_back(InspectorComponentTile{
+            .id = std::string{ EditorUIPresetPrefix() } + std::string{ preset.name },
+            .category = "User Widget",
+            .label = std::string{ preset.name } + " Set",
+            .icon = HeroIconKind::RectangleGroup,
+        });
+    }
     std::ranges::sort(tiles, [](const InspectorComponentTile& lhs, const InspectorComponentTile& rhs) {
         if (lhs.category != rhs.category) {
             return lhs.category < rhs.category;
@@ -85,6 +105,7 @@ std::vector<InspectorComponentCategory> InspectorComponentCatalog::Categories() 
         if (name == "Physics") return HeroIconKind::Cube;
         if (name == "Audio") return HeroIconKind::SpeakerWave;
         if (name == "Animation") return HeroIconKind::Play;
+        if (name == "User Widget") return HeroIconKind::RectangleGroup;
         return fallback;
     };
     std::vector<InspectorComponentCategory> categories;
