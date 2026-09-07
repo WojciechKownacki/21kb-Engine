@@ -771,12 +771,18 @@ void RunMaterialContextMenuCommandTest() {
         return item.command == kb::editor::EditorAssetContextCommand::NewParticleEffect
             && std::string_view{item.label} == "New Particle Effect";
     });
+    const bool backgroundHasUserWidget = std::ranges::any_of(backgroundItems, [](const kb::editor::EditorAssetContextMenuItem& item) {
+        return item.command == kb::editor::EditorAssetContextCommand::NewUserWidget &&
+            std::string_view{item.label} == "New User Widget";
+    });
     // New Material is the single graph-backed material entry (double-click opens the graph editor);
     // the standalone "New Material Graph" creation entry was removed to avoid a dead double-click.
     kb::editor::tests::Require(!backgroundHasMaterialGraph, "Asset browser background context menu must not expose the standalone New Material Graph creation entry");
     kb::editor::tests::Require(backgroundHasMaterialType, "Asset browser background context menu should expose Material Type creation");
     kb::editor::tests::Require(backgroundHasParticleEffect,
         "Asset browser background context menu should expose direct New Particle Effect creation");
+    kb::editor::tests::Require(backgroundHasUserWidget,
+        "Asset browser background context menu should expose direct User Widget creation");
 
     kb::editor::tests::Require(state.OpenContextMenuForFolder(220, 70, "/Game/Environment", manager), "Asset browser should open a folder context menu for registered virtual folders");
     const std::vector<kb::editor::EditorAssetContextMenuItem> folderItems = state.ContextMenuItems(manager);
@@ -796,12 +802,22 @@ void RunMaterialContextMenuCommandTest() {
             return item.command == kb::editor::EditorAssetContextCommand::NewParticleEffect;
         }),
         "Asset browser folder context menu should expose New Particle Effect");
+    kb::editor::tests::Require(std::ranges::any_of(folderItems, [](const kb::editor::EditorAssetContextMenuItem& item) {
+            return item.command == kb::editor::EditorAssetContextCommand::NewUserWidget;
+        }),
+        "Asset browser folder context menu should expose New User Widget");
     const std::uint32_t particleCommandId = kb::editor::EditorAssetBrowserNativeCommandMap::Id(
         kb::editor::EditorAssetContextCommand::NewParticleEffect);
     kb::editor::tests::Require(particleCommandId != 0U
             && kb::editor::EditorAssetBrowserNativeCommandMap::Command(particleCommandId)
                 == kb::editor::EditorAssetContextCommand::NewParticleEffect,
         "New Particle Effect must round-trip through the native Project Files command map");
+    const std::uint32_t userWidgetCommandId = kb::editor::EditorAssetBrowserNativeCommandMap::Id(
+        kb::editor::EditorAssetContextCommand::NewUserWidget);
+    kb::editor::tests::Require(userWidgetCommandId != 0U &&
+            kb::editor::EditorAssetBrowserNativeCommandMap::Command(userWidgetCommandId) ==
+                kb::editor::EditorAssetContextCommand::NewUserWidget,
+        "New User Widget must round-trip through the native Project Files command map");
 
     static_cast<void>(manager.RegisterAsset(Metadata("Paint", "RenderMaterial", "/Game/Environment/Paint.kbmat")));
     const kb::assets::AssetMetadata* material = manager.Registry().FindByPath("/Game/Environment/Paint.kbmat");
@@ -857,6 +873,7 @@ void RunAssetContextMenuExposesOpenAndDuplicateTest() {
     kb::assets::AssetManager manager;
     static_cast<void>(manager.RegisterAsset(Metadata("Sparks", "ParticleEffect", "/Game/Vfx/Sparks.kbvfx")));
     static_cast<void>(manager.RegisterAsset(Metadata("Character", "RenderMesh", "/Game/Environment/Character.gltf")));
+    static_cast<void>(manager.RegisterAsset(Metadata("MainMenu", "UIDocument", "/Game/UI/MainMenu.kbui")));
     kb::editor::EditorAssetBrowserState state;
 
     const auto commandsFor = [&](const char* virtualPath) {
@@ -877,6 +894,14 @@ void RunAssetContextMenuExposesOpenAndDuplicateTest() {
     kb::editor::tests::Require(has(effectItems, kb::editor::EditorAssetContextCommand::Duplicate),
         "Every asset context menu should offer Duplicate");
 
+    const std::vector<kb::editor::EditorAssetContextMenuItem> widgetItems =
+        commandsFor("/Game/UI/MainMenu.kbui");
+    kb::editor::tests::Require(
+        !widgetItems.empty() &&
+            widgetItems.front().command ==
+                kb::editor::EditorAssetContextCommand::Open,
+        "A User Widget asset should offer its production editor Open route");
+
     // A mesh has no editor behind the open route, so the entry must stay away rather
     // than sit there declining every click.
     const std::vector<kb::editor::EditorAssetContextMenuItem> meshItems = commandsFor("/Game/Environment/Character.gltf");
@@ -895,8 +920,13 @@ void RunAssetContextMenuExposesOpenAndDuplicateTest() {
 
     const kb::assets::AssetMetadata* effect = manager.Registry().FindByPath("/Game/Vfx/Sparks.kbvfx");
     const kb::assets::AssetMetadata* mesh = manager.Registry().FindByPath("/Game/Environment/Character.gltf");
-    kb::editor::tests::Require(effect != nullptr && mesh != nullptr, "Open policy test lost its fixtures");
-    kb::editor::tests::Require(kb::editor::EditorAssetOpenPolicy::CanOpen(*effect) && !kb::editor::EditorAssetOpenPolicy::CanOpen(*mesh),
+    const kb::assets::AssetMetadata* widget = manager.Registry().FindByPath("/Game/UI/MainMenu.kbui");
+    kb::editor::tests::Require(effect != nullptr && mesh != nullptr && widget != nullptr, "Open policy test lost its fixtures");
+    kb::editor::tests::Require(kb::editor::EditorAssetOpenPolicy::CanOpen(*effect) &&
+            kb::editor::EditorAssetOpenPolicy::CanOpen(*widget) &&
+            kb::editor::ProjectFilesAssetIconResolver::IsUserWidget(*widget) &&
+            kb::editor::ProjectFilesAssetIconResolver::Resolve(*widget, false).kind == kb::editor::HeroIconKind::DocumentText &&
+            !kb::editor::EditorAssetOpenPolicy::CanOpen(*mesh),
         "The open policy must agree with the menu about what can be opened");
 }
 

@@ -794,6 +794,10 @@ add_executable(kb_editor WIN32
     src/rendering/BuildGamePanelLayout.cpp
     src/rendering/BuildGamePanelModel.cpp
     src/rendering/BuildGamePanelRenderer.cpp
+    src/private/rendering/UserWidgetEditorPanelRenderer.hpp
+    src/rendering/UserWidgetEditorPanelRenderer.cpp
+    src/private/scene/user_widget/UserWidgetEditorProperty.hpp
+    src/scene/user_widget/UserWidgetEditorProperty.cpp
     src/rendering/PluginsPanelRenderer.cpp
     src/rendering/ProjectSettingsPanelLayout.cpp
     src/rendering/ProjectSettingsPanelRenderer.cpp
@@ -869,6 +873,8 @@ add_executable(kb_editor WIN32
     src/scene/EditorSceneAudioAssetActions.cpp
     src/scene/EditorSceneCommandController.cpp
     src/scene/EditorSceneContext.cpp
+    src/private/scene/user_widget/UserWidgetEditorDocument.hpp
+    src/scene/user_widget/UserWidgetEditorDocument.cpp
     src/scene/EditorSceneContextSkeletalMesh.cpp
     src/scene/EditorSceneBuildGame.cpp
     src/scene/EditorParticleEditorHost.cpp
@@ -1187,6 +1193,7 @@ if(BUILD_TESTING)
         tests/EditorRuntimeTests.cpp
         tests/EditorPlayModeSceneSessionTests.cpp
         tests/EditorCommandStackTests.cpp
+        tests/EditorUserWidgetAuthoringTests.cpp
         tests/EditorTestSuites.hpp
         tests/EditorTestSupport.hpp
         tests/ScriptEditorTests.cpp
@@ -1299,6 +1306,8 @@ if(BUILD_TESTING)
         src/scene/EditorSceneAudioAssetActions.cpp
         src/scene/EditorSceneCommandController.cpp
         src/scene/EditorSceneViewportStateStore.cpp
+        src/scene/user_widget/UserWidgetEditorDocument.cpp
+        src/scene/user_widget/UserWidgetEditorProperty.cpp
           src/scene/EditorSceneMaterialAssetActions.cpp
           src/scene/EditorSceneMeshAssetActions.cpp
           src/scene/EditorScenePrefabActions.cpp

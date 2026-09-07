@@ -23,12 +23,15 @@ enum class RenderPassKind : std::uint8_t {
     PostProcessHdrCombine,
     PostProcessHdrFinalize,
     EditorSceneOverlays,
+    RuntimeUiBlurH,
+    RuntimeUiBlurV,
     FinalComposite,
-    EditorUiComposite,
+    UiComposite,
+    EditorUiComposite = UiComposite,
     EditorGizmoOverlay,
 };
 
-constexpr std::size_t RenderPassKindCount = 19U;
+constexpr std::size_t RenderPassKindCount = 21U;
 
 [[nodiscard]] const char* RenderPassKindName(RenderPassKind kind) noexcept;
 [[nodiscard]] std::span<const RenderPassKind> RequiredRenderPassKinds() noexcept;

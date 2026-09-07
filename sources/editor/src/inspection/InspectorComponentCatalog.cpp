@@ -35,7 +35,7 @@ namespace {
         InspectorComponentTile{ .id = "Animator", .category = "Animation", .label = "Animator", .icon = HeroIconKind::Play },
         InspectorComponentTile{ .id = "SkeletonBinding", .category = "Animation", .label = "Skeleton Binding", .icon = HeroIconKind::AdjustmentsHorizontal },
         InspectorComponentTile{ .id = "DeformedGeometry", .category = "Rendering", .label = "Deformed Geometry", .icon = HeroIconKind::Cube },
-        InspectorComponentTile{ .id = "UIDocument", .category = "UI", .label = "UI Document", .icon = HeroIconKind::DocumentText },
+        InspectorComponentTile{ .id = "UIDocument", .category = "User Widget", .label = "Canvas", .icon = HeroIconKind::DocumentText },
         InspectorComponentTile{ .id = "Rigidbody", .category = "Physics", .label = "Rigidbody", .icon = HeroIconKind::Cube },
         InspectorComponentTile{ .id = "Collider", .category = "Physics", .label = "Collider", .icon = HeroIconKind::Cube },
         InspectorComponentTile{ .id = "CharacterController", .category = "Physics", .label = "Character Controller", .icon = HeroIconKind::Gamepad2 },

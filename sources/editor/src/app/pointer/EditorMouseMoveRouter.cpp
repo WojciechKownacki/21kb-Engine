@@ -128,6 +128,19 @@ void InvalidateMaterialGraphPanel(
 } // namespace
 
 void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftButtonDown, bool rightButtonDown) {
+    if (sceneContext_.UserWidgetEditor().PreviewDragActive()) {
+        if (!leftButtonDown) {
+            static_cast<void>(sceneContext_.UserWidgetEditor().EndPreviewDrag());
+            ReleaseCapture();
+        } else {
+            static_cast<void>(sceneContext_.UserWidgetEditor().UpdatePreviewDrag(
+                static_cast<float>(x), static_cast<float>(y)));
+        }
+        EditorWindowInvalidator::InvalidateMainAndSource(
+            mainWindow_, messageWindow);
+        return;
+    }
+
     if (sceneContext_.ParticleEditorWorkspace().EmitterDragActive() ||
         sceneContext_.ParticleEditorWorkspace().ModuleDragActive() ||
         sceneContext_.ParticleEditorWorkspace().PropertySliderActive()) {

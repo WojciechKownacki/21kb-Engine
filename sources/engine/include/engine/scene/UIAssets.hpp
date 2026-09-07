@@ -1,5 +1,15 @@
 #pragma once
 
+#include "engine/ui/effects/UIEffects.hpp"
+#include "engine/ui/interaction/UIControlKind.hpp"
+#include "engine/ui/interaction/UIInteraction.hpp"
+#include "engine/ui/layout/UICanvas.hpp"
+#include "engine/ui/layout/UIContainerLayout.hpp"
+#include "engine/ui/layout/UIRectTransform.hpp"
+#include "engine/ui/visual/UIImage.hpp"
+#include "engine/ui/visual/UIPaint.hpp"
+#include "engine/ui/visual/UIText.hpp"
+
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -14,7 +24,9 @@ using UIElementId = std::uint64_t;
 inline constexpr std::size_t kMaxUIListItems = 4096U;
 inline constexpr std::uint32_t kMaxUIVirtualListViewportItems = 512U;
 inline constexpr std::uint32_t kMaxUIVirtualListOverscanItems = 128U;
-inline constexpr std::size_t kMaxUIEventTextBytes = 4096U;
+inline constexpr std::size_t kMaxUITextBytes = 4096U;
+inline constexpr std::size_t kMaxUIEventTextBytes = kMaxUITextBytes;
+inline constexpr std::size_t kMaxUIActionNameBytes = 256U;
 
 // UI documents are retained assets.  The scene component only names a document;
 // the derived runtime tree is owned by SceneState and is never serialized beside it.
@@ -34,8 +46,8 @@ enum class UIBindingDirection : std::uint8_t {
     TwoWay,
 };
 
-// This is only the authored boundary.  LIB-178 supplies the runtime data-source
-// implementation and feedback-loop policy; a document never owns game data.
+// This is only the authored boundary. The runtime supplies the data source and
+// feedback-loop policy; a document never owns game data.
 struct UIBindingDeclaration {
     UIElementId elementId = 0U;
     std::string property;
@@ -69,30 +81,17 @@ public:
 };
 
 // The control category and its value state are deliberately data-only. Input,
-// event dispatch and data binding remain separate runtime responsibilities
-// (LIB-176 and LIB-178), so controls do not own callbacks or game data.
-enum class UIControlKind : std::uint8_t {
-    Container,
-    Text,
-    Image,
-    Button,
-    Toggle,
-    Slider,
-    List,
-    InputField,
-    ScrollView,
-    ModalDialog,
-};
-
+// event dispatch and data binding remain separate runtime responsibilities, so
+// controls do not own callbacks or game data.
 struct UIControlState {
     UIControlKind kind = UIControlKind::Container;
     std::string text;
-    std::uint64_t imageAssetId = 0U;
     bool toggleValue = false;
     float sliderValue = 0.0F;
     float sliderMinimum = 0.0F;
     float sliderMaximum = 1.0F;
     std::vector<std::string> listItems;
+    std::uint32_t selectedIndex = 0U;
     float scrollOffset = 0.0F;
     bool modalOpen = false;
 };
@@ -111,10 +110,9 @@ struct UIVirtualListView {
     std::span<const UIVirtualListItem> pooledItems;
 };
 
-// LIB-176: input routing (LIB-180) produces these data-only records.  The
-// scene owns their FIFO queue; ScriptRuntimeSceneSystem is the sole consumer
-// that translates them into ScriptEventBus events, so controls never retain
-// callbacks or script state.
+// Input routing produces these data-only records. The scene owns their FIFO
+// queue; ScriptRuntimeSceneSystem is the sole consumer that translates them
+// into ScriptEventBus events, so controls never retain callbacks or script state.
 enum class UIRuntimeEventKind : std::uint8_t {
     Click,
     Pointer,
@@ -143,15 +141,41 @@ struct UIRuntimeEvent {
     std::string text;
     bool focused = false;
     UINavigationDirection navigation = UINavigationDirection::None;
+    // Optional authored action name. The standard typed UI event is always
+    // emitted; this additionally targets a project-defined script event.
+    std::string eventName;
 };
 
 struct UIDocumentElement {
     UIElementId id = 0U;
     UIElementId parentId = 0U;
+    std::uint32_t siblingOrder = 0U;
     std::string name;
     std::string styleClass;
     bool visible = true;
+    UIRectTransform rect;
+    std::optional<UICanvas> canvas;
+    std::optional<UIContainerLayout> layout;
+    std::optional<UIPaint> paint;
+    std::optional<UIImage> image;
+    std::optional<UIText> textStyle;
+    std::optional<UIInteraction> interaction;
+    std::optional<UIEffects> effects;
     UIControlState control;
+};
+
+// Copyable command/query view of the authorable component set on one runtime
+// element. It has no identity or hierarchy fields and is never stored beside
+// UIDocumentElement, so the retained runtime tree remains the sole owner.
+struct UIElementComponents {
+    UIRectTransform rect;
+    std::optional<UICanvas> canvas;
+    std::optional<UIContainerLayout> layout;
+    std::optional<UIPaint> paint;
+    std::optional<UIImage> image;
+    std::optional<UIText> textStyle;
+    std::optional<UIInteraction> interaction;
+    std::optional<UIEffects> effects;
 };
 
 // Mutable runtime-only element description.  It is copied into the sole
@@ -161,11 +185,12 @@ struct UIRuntimeElementDesc {
     std::string name;
     std::string styleClass;
     bool visible = true;
+    UIElementComponents components;
     UIControlState control;
 };
 
 struct UIDocument {
-    static constexpr std::uint32_t kSchemaVersion = 1U;
+    static constexpr std::uint32_t kSchemaVersion = 2U;
 
     std::uint32_t schemaVersion = kSchemaVersion;
     std::uint64_t styleAssetId = 0U;

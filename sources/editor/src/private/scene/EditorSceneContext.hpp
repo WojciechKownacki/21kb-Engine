@@ -47,6 +47,7 @@
 #include "scene/material/MaterialGraphInteractionState.hpp"
 #include "scene/material_preview/EditorMaterialPreviewPrimitivePolicy.hpp"
 #include "scene/material_preview/EditorMaterialPreviewSettings.hpp"
+#include "scene/user_widget/UserWidgetEditorDocument.hpp"
 #include "scene/transform_edit/EditorSceneTransformEditSession.hpp"
 #include "app/scene_viewport/EditorSceneViewportSelectionTypes.hpp"
 #include "inspection/InspectorPanelState.hpp"
@@ -483,6 +484,7 @@ public:
     [[nodiscard]] bool CreateInputMappingContextAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateAudioMixerAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateParticleEffectAsset(const std::filesystem::path& virtualFolder);
+    [[nodiscard]] bool CreateUserWidgetAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateMaterialAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateMaterialFunctionAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateMaterialGraphAsset(const std::filesystem::path& virtualFolder);
@@ -497,6 +499,11 @@ public:
     [[nodiscard]] bool ExtractEmbeddedMaterials(kb::assets::AssetId meshAssetId);
     [[nodiscard]] bool CreateLuaScriptAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool OpenLuaScript(kb::assets::AssetId id);
+    [[nodiscard]] bool OpenUserWidgetEditorAsset(kb::assets::AssetId id);
+    [[nodiscard]] bool SaveUserWidgetEditorAsset();
+    [[nodiscard]] bool ReopenUserWidgetEditorAsset();
+    [[nodiscard]] UserWidgetEditorDocument& UserWidgetEditor() noexcept;
+    [[nodiscard]] const UserWidgetEditorDocument& UserWidgetEditor() const noexcept;
     [[nodiscard]] bool OpenAnimationAsset(kb::assets::AssetId id);
     [[nodiscard]] bool OpenParticleEditorAsset(kb::assets::AssetId id);
     [[nodiscard]] bool HasParticleEditorAsset() const noexcept;
@@ -1324,6 +1331,7 @@ private:
     EditorSceneDocumentIdentity sceneDocumentIdentity_;
     EditorAssetBrowserState assetBrowser_;
     EditorConsoleState console_;
+    UserWidgetEditorDocument userWidgetEditor_;
     std::mutex assetImportMutex_;
     std::thread assetImportWorker_;
     std::optional<kb::assets::AssetImportResult> completedAssetImport_;

@@ -9,13 +9,20 @@
 #include "engine/input/InputRebinding.hpp"
 #include "engine/input/InputRecording.hpp"
 #include "engine/input/InputSubsystem.hpp"
+#include "engine/input/InputText.hpp"
 #include "engine/input/InputTriggers.hpp"
+#if defined(_WIN32)
+#include "engine/platform/win32/Win32InputCollector.hpp"
+#include "platform/win32/Win32PointerViewportTransform.hpp"
+#endif
 
+#include <algorithm>
 #include <array>
 #include <filesystem>
 #include <memory>
 #include <system_error>
 #include <unordered_map>
+#include <vector>
 
 namespace kb::tests {
 namespace {
@@ -462,6 +469,119 @@ void TestTouchPoints() {
     Require(device.TouchPoints().empty(), "Clearing touch points should empty the list");
 }
 
+void TestTextInputDeviceStateAndEncoding() {
+    InputDeviceState device;
+    Require(device.TextInput().empty(), "Text input should start empty");
+
+    const std::array<char32_t, 3U> initial{U'A', U'\u0142', U'\U0001F642'};
+    Require(device.SetTextInput(initial) == initial.size(),
+            "SetTextInput should retain every valid Unicode scalar");
+    Require(device.TextInput().size() == initial.size() &&
+            device.TextInput()[1] == U'\u0142' &&
+            device.TextInput()[2] == U'\U0001F642',
+            "Text input should expose the original UTF-32 sequence");
+    Require(!device.AddTextInput(static_cast<char32_t>(0xD800U)),
+            "Text input must reject UTF-16 surrogate halves");
+    Require(!device.AddTextInput(static_cast<char32_t>(0x110000U)),
+            "Text input must reject values beyond the Unicode range");
+
+    std::array<char32_t, InputDeviceState::kMaxTextInputCodePoints + 1U> overflow{};
+    overflow.fill(U'x');
+    Require(device.SetTextInput(overflow) ==
+                InputDeviceState::kMaxTextInputCodePoints,
+            "Text input should stop at its explicit per-frame limit");
+    Require(!device.AddTextInput(U'y'),
+            "Text input should report a full per-frame buffer");
+    device.Reset();
+    Require(device.TextInput().empty(),
+            "Reset should clear transient text at the frame boundary");
+
+    constexpr std::string_view utf8{"A\xC5\x82\xF0\x9F\x99\x82", 7U};
+    std::array<char32_t, 3U> decoded{};
+    const Utf8DecodeResult decodeResult = DecodeUtf8(utf8, decoded);
+    Require(decodeResult.wellFormed && !decodeResult.truncated &&
+            decodeResult.codePointCount == decoded.size(),
+            "UTF-8 decoder should accept ASCII, BMP and supplementary text");
+    Require(decoded[0] == U'A' && decoded[1] == U'\u0142' &&
+            decoded[2] == U'\U0001F642',
+            "UTF-8 decoder should preserve Unicode scalar values");
+    constexpr std::string_view malformed{"\xF0\x28\x8C\x28", 4U};
+    Require(!DecodeUtf8(malformed, decoded).wellFormed,
+            "UTF-8 decoder must reject malformed input");
+
+    constexpr std::string_view modified{
+        "A\xC0\x80\xED\xA0\xBD\xED\xB9\x82", 9U};
+    const Utf8DecodeResult modifiedResult =
+        DecodeModifiedUtf8(modified, decoded);
+    Require(modifiedResult.wellFormed && !modifiedResult.truncated &&
+            modifiedResult.codePointCount == decoded.size() &&
+            decoded[0] == U'A' && decoded[1] == U'\0' &&
+            decoded[2] == U'\U0001F642',
+        "Modified UTF-8 should normalize Java null and surrogate pairs");
+    constexpr std::string_view isolatedModifiedSurrogate{
+        "\xED\xA0\xBD", 3U};
+    Require(!DecodeModifiedUtf8(isolatedModifiedSurrogate, decoded).wellFormed,
+        "Modified UTF-8 must reject an isolated UTF-16 surrogate");
+
+    Utf16InputDecoder utf16;
+    char32_t codePoint = 0U;
+    Require(!utf16.Consume(static_cast<char16_t>(0xD83DU), codePoint),
+            "A high surrogate alone should not emit text");
+    Require(utf16.Consume(static_cast<char16_t>(0xDE42U), codePoint) &&
+            codePoint == U'\U0001F642',
+            "A UTF-16 surrogate pair should emit one supplementary scalar");
+    Require(!utf16.Consume(static_cast<char16_t>(0xDE42U), codePoint),
+            "An isolated low surrogate should be rejected");
+}
+
+#if defined(_WIN32)
+void TestWin32InputCollectorContracts() {
+    const Win32PointerViewportTransform pointerTransform{
+        RECT{.left = 100, .top = 50, .right = 500, .bottom = 250}, 800U, 600U};
+    const auto [mappedX, mappedY] = pointerTransform.MapClientPoint(POINT{300, 150});
+    Require(pointerTransform.IsValid() && NearlyEqual(pointerTransform.ScaleX(), 2.0F) &&
+            NearlyEqual(pointerTransform.ScaleY(), 3.0F) && NearlyEqual(mappedX, 400.0F) &&
+            NearlyEqual(mappedY, 300.0F),
+        "Win32 pointer viewport transform should map mouse and touch coordinates identically");
+
+    Win32InputCollector collector;
+    Require(!collector.HandleWindowMessage(
+                nullptr, WM_CHAR, static_cast<WPARAM>(0xD83DU), 0),
+            "Win32 collector should observe a WM_CHAR high surrogate without blocking the host router");
+    Require(!collector.HandleWindowMessage(
+                nullptr, WM_CHAR, static_cast<WPARAM>(0xDE42U), 0),
+            "Win32 collector should retain a WM_CHAR low surrogate without blocking the host router");
+    Require(!collector.HandleWindowMessage(nullptr, WM_NULL, 0, 0),
+            "Win32 collector should leave unrelated messages to the host");
+}
+#endif
+
+void TestLegacyInputRecordingWithoutTextLoads() {
+    InputRecording recording{InputFrameSnapshot{}};
+    std::vector<std::uint8_t> bytes = EncodeInputRecording(recording);
+    Require(bytes.size() >= 12U,
+            "Current recording should contain text and pointer viewport fields");
+
+    // Recording v3 ended immediately after gamepad connectivity. Convert the
+    // one-frame v4 fixture to that exact old shape and version. Version 4
+    // appends text count and the pointer coordinate-space extent.
+    bytes.resize(bytes.size() - 12U);
+    constexpr std::size_t kVersionOffset = InputAssetFormat::RecordingMagic.size();
+    bytes[kVersionOffset] =
+        static_cast<std::uint8_t>(InputAssetFormat::BinaryVersion & 0xFFU);
+    bytes[kVersionOffset + 1U] = static_cast<std::uint8_t>(
+        (InputAssetFormat::BinaryVersion >> 8U) & 0xFFU);
+    bytes[kVersionOffset + 2U] = static_cast<std::uint8_t>(
+        (InputAssetFormat::BinaryVersion >> 16U) & 0xFFU);
+    bytes[kVersionOffset + 3U] = static_cast<std::uint8_t>(
+        (InputAssetFormat::BinaryVersion >> 24U) & 0xFFU);
+
+    const InputAssetLoadResult<InputRecording> loaded = DecodeInputRecording(bytes);
+    Require(loaded.succeeded && loaded.asset.size() == 1U &&
+            loaded.asset[0].textInput.empty(),
+            "Recording v3 should migrate with an empty text frame");
+}
+
 // LIB-118: proves the named priority bands (Gameplay < UI < Console <
 // DebugOverlay) hold under the REAL InputMappingContextStack consumption
 // mechanism, not just as declared constants - four contexts, each binding the
@@ -828,11 +948,17 @@ void TestInputRecordingDeterministicReplay() {
 
     InputRecording recording;
     std::vector<FrameTrace> originalTrace;
+    std::size_t frameIndex = 0U;
     for (const FrameInput& input : script) {
         live.MutableDeviceState().Reset();
         live.MutableDeviceState().SetKeyDown(InputKey::W, input.w);
         live.MutableDeviceState().SetKeyDown(InputKey::S, input.s);
         live.MutableDeviceState().SetKeyDown(InputKey::Space, input.space);
+        const std::array<char32_t, 2U> text{
+            static_cast<char32_t>(U'a' + frameIndex), U'\U0001F642'};
+        static_cast<void>(live.MutableDeviceState().SetTextInput(text));
+        live.MutableDeviceState().SetPointerViewportExtent(
+            static_cast<std::uint32_t>(1280U + frameIndex), 720U);
 
         recording.push_back(CaptureInputFrame(live.DeviceState(), input.dt));
         live.Evaluate(input.dt);
@@ -843,6 +969,7 @@ void TestInputRecordingDeterministicReplay() {
             .jumpTriggeredThisFrame = live.WasActionTriggered("Jump"),
             .jumpReleasedThisFrame = live.WasActionReleased("Jump"),
         });
+        ++frameIndex;
     }
     // Sanity check the script actually exercised what it claims to (a trace
     // that never triggers Jump would make the replay comparison meaningless).
@@ -863,6 +990,14 @@ void TestInputRecordingDeterministicReplay() {
     const InputAssetLoadResult<InputRecording> loaded = ReadInputRecording(recordingPath);
     Require(loaded.succeeded, "Reading the input recording should succeed");
     Require(loaded.asset.size() == script.size(), "Recording frame count should round-trip");
+    Require(loaded.asset.front().textInput ==
+                std::vector<char32_t>{U'a', U'\U0001F642'} &&
+            loaded.asset.back().textInput ==
+                std::vector<char32_t>{U'f', U'\U0001F642'} &&
+            loaded.asset.front().pointerViewportWidth == 1280U &&
+            loaded.asset.back().pointerViewportWidth == 1285U &&
+            loaded.asset.back().pointerViewportHeight == 720U,
+            "Unicode text and pointer viewport should round-trip frame-by-frame");
 
     // --- Replay against a completely independent, freshly-constructed subsystem. ---
     InputSubsystem replay;
@@ -873,6 +1008,13 @@ void TestInputRecordingDeterministicReplay() {
     std::vector<FrameTrace> replayTrace;
     for (const InputFrameSnapshot& frame : loaded.asset) {
         ApplyInputFrame(scratch, frame);
+        Require(scratch.TextInput().size() == frame.textInput.size() &&
+                std::equal(
+                    scratch.TextInput().begin(), scratch.TextInput().end(),
+                    frame.textInput.begin(), frame.textInput.end()) &&
+                scratch.PointerViewportWidth() == frame.pointerViewportWidth &&
+                scratch.PointerViewportHeight() == frame.pointerViewportHeight,
+                "Applying a recorded frame should restore text and its pointer viewport");
         replay.EvaluateWithDeviceState(scratch, frame.deltaSeconds);
         replayTrace.push_back(FrameTrace{
             .moveValue = replay.GetActionValue("Move").AsAxis1D(),
@@ -978,6 +1120,10 @@ void RunInputTests() {
     TestBindingIdStableAcrossRebind();
     TestMultiGamepadDeviceState();
     TestTouchPoints();
+    TestTextInputDeviceStateAndEncoding();
+#if defined(_WIN32)
+    TestWin32InputCollectorContracts();
+#endif
     TestMultiGamepadMapping();
     TestPointerPosition();
     TestNamedContextPriorityBands();
@@ -987,6 +1133,7 @@ void RunInputTests() {
     TestFocusAndGamepadConnectivity();
     TestPressedStateResetsWhenDeviceGoesQuiet();
     TestInputRecordingDeterministicReplay();
+    TestLegacyInputRecordingWithoutTextLoads();
 }
 
 } // namespace kb::tests

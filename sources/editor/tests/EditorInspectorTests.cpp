@@ -293,6 +293,11 @@ void RunAudioComponentCatalogTest() {
     const kb::editor::InspectorComponentTile* particleEffect = kb::editor::InspectorComponentCatalog::Find("Particle Effect");
     kb::editor::tests::Require(particleEffect != nullptr && particleEffect->category == "Rendering", "Particle Effect component should be available in the Rendering catalog");
     kb::editor::tests::Require(kb::editor::InspectorComponentCatalog::RequiredPluginId("Particle Effect") == "Rendering.21kbParticle", "Particle Effect component should require the particle provider");
+    const kb::editor::InspectorComponentTile* canvas =
+        kb::editor::InspectorComponentCatalog::Find("UIDocument");
+    kb::editor::tests::Require(canvas != nullptr && canvas->label == "Canvas" &&
+            canvas->category == "User Widget",
+        "UIDocument should retain its internal id and appear as Canvas in User Widget");
 }
 
 void RunObjectClassificationCatalogTest() {

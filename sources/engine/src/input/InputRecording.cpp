@@ -64,9 +64,19 @@ void WriteFrame(std::vector<std::uint8_t>& output, const InputFrameSnapshot& fra
     for (const bool connected : frame.gamepadConnected) {
         io::WriteBool(output, connected);
     }
+
+    io::WriteUInt32(output, static_cast<std::uint32_t>(frame.textInput.size()));
+    for (const char32_t codePoint : frame.textInput) {
+        io::WriteUInt32(output, static_cast<std::uint32_t>(codePoint));
+    }
+    io::WriteUInt32(output, frame.pointerViewportWidth);
+    io::WriteUInt32(output, frame.pointerViewportHeight);
 }
 
-[[nodiscard]] bool ReadFrame(io::ByteReader& reader, InputFrameSnapshot& frame) {
+[[nodiscard]] bool ReadFrame(
+    io::ByteReader& reader,
+    InputFrameSnapshot& frame,
+    bool hasTextInput) {
     if (!reader.ReadFloat(frame.deltaSeconds)) {
         return false;
     }
@@ -116,7 +126,26 @@ void WriteFrame(std::vector<std::uint8_t>& output, const InputFrameSnapshot& fra
             return false;
         }
     }
-    return true;
+    if (!hasTextInput) {
+        return true;
+    }
+
+    std::uint32_t textCount = 0U;
+    if (!reader.ReadUInt32(textCount) ||
+        textCount > InputDeviceState::kMaxTextInputCodePoints) {
+        return false;
+    }
+    frame.textInput.resize(textCount);
+    for (char32_t& codePoint : frame.textInput) {
+        std::uint32_t raw = 0U;
+        if (!reader.ReadUInt32(raw) ||
+            !IsUnicodeScalar(static_cast<char32_t>(raw))) {
+            return false;
+        }
+        codePoint = static_cast<char32_t>(raw);
+    }
+    return reader.ReadUInt32(frame.pointerViewportWidth) &&
+        reader.ReadUInt32(frame.pointerViewportHeight);
 }
 
 } // namespace
@@ -146,8 +175,12 @@ InputFrameSnapshot CaptureInputFrame(const InputDeviceState& device, float delta
 
     const std::span<const InputTouchPoint> touchSpan = device.TouchPoints();
     frame.touchPoints.assign(touchSpan.begin(), touchSpan.end());
+    const std::span<const char32_t> textSpan = device.TextInput();
+    frame.textInput.assign(textSpan.begin(), textSpan.end());
     frame.pointerX = device.PointerX();
     frame.pointerY = device.PointerY();
+    frame.pointerViewportWidth = device.PointerViewportWidth();
+    frame.pointerViewportHeight = device.PointerViewportHeight();
     frame.hasFocus = device.HasFocus();
     for (std::uint8_t index = 0U; index < InputDeviceState::kMaxGamepads; ++index) {
         frame.gamepadConnected[index] = device.IsGamepadConnected(index);
@@ -164,7 +197,10 @@ void ApplyInputFrame(InputDeviceState& device, const InputFrameSnapshot& frame) 
         device.SetAnalog(entry.key, entry.value, entry.gamepadIndex);
     }
     device.SetTouchPoints(frame.touchPoints);
+    static_cast<void>(device.SetTextInput(frame.textInput));
     device.SetPointerPosition(frame.pointerX, frame.pointerY);
+    device.SetPointerViewportExtent(
+        frame.pointerViewportWidth, frame.pointerViewportHeight);
     device.SetHasFocus(frame.hasFocus);
     for (std::uint8_t index = 0U; index < InputDeviceState::kMaxGamepads; ++index) {
         device.SetGamepadConnected(index, frame.gamepadConnected[index]);
@@ -182,7 +218,7 @@ void ReplayInputRecording(InputSubsystem& subsystem, std::span<const InputFrameS
 std::vector<std::uint8_t> EncodeInputRecording(const InputRecording& recording) {
     std::vector<std::uint8_t> output;
     io::WriteRaw(output, InputAssetFormat::RecordingMagic.data(), InputAssetFormat::RecordingMagic.size());
-    io::WriteUInt32(output, InputAssetFormat::BinaryVersion);
+    io::WriteUInt32(output, InputAssetFormat::RecordingBinaryVersion);
     io::WriteUInt32(output, static_cast<std::uint32_t>(recording.size()));
     for (const InputFrameSnapshot& frame : recording) {
         WriteFrame(output, frame);
@@ -196,7 +232,9 @@ InputAssetLoadResult<InputRecording> DecodeInputRecording(std::span<const std::u
         return InputAssetLoadResult<InputRecording>{.succeeded = false, .asset = {}, .error = "Invalid input recording magic"};
     }
     std::uint32_t version = 0U;
-    if (!reader.ReadUInt32(version) || version != InputAssetFormat::BinaryVersion) {
+    if (!reader.ReadUInt32(version) ||
+        (version != InputAssetFormat::BinaryVersion &&
+         version != InputAssetFormat::RecordingBinaryVersion)) {
         return InputAssetLoadResult<InputRecording>{.succeeded = false, .asset = {}, .error = "Unsupported input recording version"};
     }
 
@@ -208,7 +246,10 @@ InputAssetLoadResult<InputRecording> DecodeInputRecording(std::span<const std::u
     InputRecording recording;
     recording.resize(frameCount);
     for (InputFrameSnapshot& frame : recording) {
-        if (!ReadFrame(reader, frame)) {
+        if (!ReadFrame(
+                reader,
+                frame,
+                version >= InputAssetFormat::RecordingBinaryVersion)) {
             return InputAssetLoadResult<InputRecording>{.succeeded = false, .asset = {}, .error = "Corrupt input recording frame"};
         }
     }

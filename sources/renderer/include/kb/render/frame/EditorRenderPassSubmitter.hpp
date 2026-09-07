@@ -15,6 +15,8 @@ public:
     void Shutdown() noexcept;
     void InvalidateFrameBuffers() noexcept;
     [[nodiscard]] bool IsInitialized() const noexcept;
+    [[nodiscard]] static RenderViewportRect ResolveUiCompositeViewRect(
+        const RenderSceneSubmitDesc& desc) noexcept;
 
     void SubmitSelectionMask(const RenderViewportPlan& viewportPlan, const RenderSceneSubmitDesc& desc) const;
     void SubmitSceneOverlays(const RenderViewportPlan& viewportPlan, const RenderSceneSubmitDesc& desc, const SceneRenderCamera* camera) const;

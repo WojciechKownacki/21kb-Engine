@@ -14,6 +14,7 @@
 #include "engine/scene/SkeletalMeshAssetIO.hpp"
 #include "engine/scene/SkeletonAssetIO.hpp"
 #include "engine/scene/TimelineAssetIO.hpp"
+#include "engine/scene/UIAssetIO.hpp"
 #include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
 #include "rendering/ProjectFilesAssetIconResolver.hpp"
 #include "scene/EditorSceneContext.hpp"
@@ -110,6 +111,11 @@ EditorAssetBrowserDoubleClickResult EditorAssetBrowserDoubleClickHandler::OpenAs
                 ? EditorAssetBrowserDoubleClickResult::ParticleEditorOpened
                 : EditorAssetBrowserDoubleClickResult::None;
         }
+    if (metadata->type == kb::scene::kUIDocumentAssetType) {
+        return sceneContext.OpenUserWidgetEditorAsset(metadata->id)
+            ? EditorAssetBrowserDoubleClickResult::UserWidgetEditorOpened
+            : EditorAssetBrowserDoubleClickResult::None;
+    }
         if (metadata->type == kb::scene::kTimelineAssetType) {
         return sceneContext.OpenAnimationAsset(metadata->id)
             ? EditorAssetBrowserDoubleClickResult::ScriptEditorOpened
