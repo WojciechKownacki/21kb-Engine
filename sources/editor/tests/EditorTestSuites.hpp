@@ -19,6 +19,5 @@ void RunEditorMaterialAssetAuthoringTests();
 void RunEditorMaterialGraphCanvasTests();
 void RunScriptEditorTests();
 void RunSvgPathTests();
-void RunEditorUserWidgetAuthoringTests();
 
 } // namespace kb::editor::tests

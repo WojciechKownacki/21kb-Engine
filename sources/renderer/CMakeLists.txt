@@ -133,19 +133,6 @@ add_library(kb_renderer STATIC
     src/renderer/RendererTemporalJitter.hpp
     src/renderer/RendererViewConfigurator.cpp
     src/renderer/RendererViewConfigurator.hpp
-    src/private/ui/RuntimeUserWidgetRenderer.hpp
-    src/private/ui/UserWidgetBackgroundBlur.hpp
-    src/private/ui/UserWidgetComposite.hpp
-    src/private/ui/UserWidgetDrawBatchBuilder.hpp
-    src/private/ui/UserWidgetDrawData.hpp
-    src/private/ui/UserWidgetFontAtlasCache.hpp
-    src/private/ui/UserWidgetFontPayloadValidator.hpp
-    src/ui/RuntimeUserWidgetRenderer.cpp
-    src/ui/UserWidgetBackgroundBlur.cpp
-    src/ui/UserWidgetComposite.cpp
-    src/ui/UserWidgetDrawBatchBuilder.cpp
-    src/ui/UserWidgetFontAtlasCache.cpp
-    src/ui/UserWidgetFontPayloadValidator.cpp
     src/renderer/RendererViewportPassResolver.cpp
     src/renderer/RendererViewportPassResolver.hpp
     src/SceneDeferredLightingPass.cpp
@@ -448,7 +435,6 @@ set(KB_RENDERER_SHADER_MANIFEST
     fs_post_taa_resolve.sc
     fs_particle_instanced.sc
     fs_present_tex.sc
-    fs_user_widget.sc
     vs_editor_gizmo.sc
     vs_editor_grid.sc
     vs_editor_selection_outline.sc
@@ -461,7 +447,6 @@ set(KB_RENDERER_SHADER_MANIFEST
     vs_mesh_instanced.sc
     vs_mesh_shadow_instanced.sc
     vs_present.sc
-    vs_user_widget.sc
     vs_particle_instanced.sc
 )
 
@@ -502,7 +487,6 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_mesh_shadow_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_mesh_shadow_skinned_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_present.sc
-            ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_user_widget.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_particle_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_editor_grid.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_editor_gizmo.sc
@@ -524,7 +508,6 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_mesh_selection_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_mesh_shadow_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_present_tex.sc
-            ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_user_widget.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_particle_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_post_bloom_prefilter.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_post_bloom_blur.sc
@@ -725,7 +708,6 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
         tests/ShaderPrewarmParseTests.cpp
         tests/MeshBakeTests.cpp
         tests/TextureBakeTests.cpp
-        tests/UserWidgetDrawBatchTests.cpp
     )
 
     target_link_libraries(kb_renderer_tests

@@ -37,7 +37,6 @@
 #include "engine/scene/AuxFrameComponent.hpp"
 #include "engine/scene/GeometrySwarmComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
-#include "engine/scene/UIAssets.hpp"
 
 namespace kb::scene {
 
@@ -131,8 +130,6 @@ public:
     [[nodiscard]] static const MotionSkeletonRuleComponent* TryGetMotionSkeletonRule(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static bool HasDeformedGeometry(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static const DrawD3DeformedGeometryComponent* TryGetDeformedGeometry(const Scene& scene, SceneEntity entity) noexcept;
-    [[nodiscard]] static bool HasUIDocument(const Scene& scene, SceneEntity entity) noexcept;
-    [[nodiscard]] static const UIDocumentComponent* TryGetUIDocument(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static bool HasNavAgent(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static const NavAgent* TryGetNavAgent(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static bool HasNavObstacle(const Scene& scene, SceneEntity entity) noexcept;

@@ -44,8 +44,7 @@ void SubmitEmptyEditorView(
     bgfx::ViewId viewId,
     bgfx::FrameBufferHandle frameBuffer,
     RenderExtent extent,
-    const char* viewName,
-    RenderViewportRect outputRect = {}) {
+    const char* viewName) {
     if (!extent.IsValid()) {
         return;
     }
@@ -55,14 +54,7 @@ void SubmitEmptyEditorView(
     bgfx::setViewFrameBuffer(viewId, frameBuffer);
     bgfx::setViewTransform(viewId, identity.data(), identity.data());
     bgfx::setViewClear(viewId, BGFX_CLEAR_NONE);
-    const RenderViewportRect resolvedRect = outputRect.extent.IsValid()
-        ? outputRect
-        : RenderViewportRect{ .extent = extent };
-    bgfx::setViewRect(viewId,
-        ClampToViewExtent(resolvedRect.x),
-        ClampToViewExtent(resolvedRect.y),
-        ClampToViewExtent(resolvedRect.extent.width),
-        ClampToViewExtent(resolvedRect.extent.height));
+    bgfx::setViewRect(viewId, 0, 0, ClampToViewExtent(extent.width), ClampToViewExtent(extent.height));
     bgfx::touch(viewId);
 }
 
@@ -92,18 +84,6 @@ void EditorRenderPassSubmitter::InvalidateFrameBuffers() noexcept {
 
 bool EditorRenderPassSubmitter::IsInitialized() const noexcept {
     return gridPass_.IsInitialized() && gizmoPass_.IsInitialized() && selectionBoxPass_.IsInitialized() && selectionOutlinePass_.IsInitialized();
-}
-
-RenderViewportRect EditorRenderPassSubmitter::ResolveUiCompositeViewRect(
-    const RenderSceneSubmitDesc& desc) noexcept {
-    if (desc.finalComposite.enabled && desc.finalComposite.outputRect.extent.IsValid()) {
-        return desc.finalComposite.outputRect;
-    }
-    return RenderViewportRect{
-        .extent = desc.finalComposite.enabled
-            ? desc.finalComposite.extent
-            : desc.target.viewport.extent,
-    };
 }
 
 void EditorRenderPassSubmitter::SubmitSelectionMask(const RenderViewportPlan& viewportPlan, const RenderSceneSubmitDesc& desc) const {
@@ -181,7 +161,7 @@ void EditorRenderPassSubmitter::SubmitSceneOverlays(const RenderViewportPlan& vi
 void EditorRenderPassSubmitter::SubmitUiComposite(const RenderViewportPlan& viewportPlan, const RenderSceneSubmitDesc& desc, bool selectionOutlineEnabled) const {
     const RenderExtent extent = desc.finalComposite.enabled ? desc.finalComposite.extent : desc.target.viewport.extent;
     const bgfx::FrameBufferHandle frameBuffer = desc.finalComposite.enabled ? desc.finalComposite.frameBuffer : desc.target.frameBuffer;
-    const RenderViewportRect outputRect = ResolveUiCompositeViewRect(desc);
+    const RenderViewportRect outputRect = desc.finalComposite.enabled ? desc.finalComposite.outputRect : RenderViewportRect{};
     if (IsInitialized()) {
         static_cast<void>(selectionBoxPass_.Submit(SelectionBoxOverlayPassDesc{
             .viewId = viewportPlan.viewIds.editorUiComposite,
@@ -208,8 +188,7 @@ void EditorRenderPassSubmitter::SubmitUiComposite(const RenderViewportPlan& view
         viewportPlan.viewIds.editorUiComposite,
         frameBuffer,
         extent,
-        "KB Editor UI Composite",
-        outputRect);
+        "KB Editor UI Composite");
 }
 
 void EditorRenderPassSubmitter::SubmitGizmoOverlay(const RenderViewportPlan& viewportPlan, const RenderSceneSubmitDesc& desc, const SceneRenderCamera* camera) const {

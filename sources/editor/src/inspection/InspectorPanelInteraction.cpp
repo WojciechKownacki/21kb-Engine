@@ -1437,23 +1437,6 @@ template <typename Integer>
     return true;
 }
 
-[[nodiscard]] bool HandleUIDocumentClick(
-    EditorSceneContext& sceneContext,
-    kb::scene::SceneEntity entity,
-    const InspectorPanelRenderer::Hit& hit) {
-    const kb::scene::UIDocumentComponent* document = sceneContext.Scene().Components().UIDocuments().TryGet(entity);
-    if (document == nullptr) return false;
-    if (hit.property == InspectorPropertyId::UIDocumentEnabled) {
-        sceneContext.Inspector().EndTextEdit();
-        return sceneContext.ToggleUIDocumentEnabled(entity);
-    }
-    if (hit.property == InspectorPropertyId::UIDocumentAsset) {
-        sceneContext.Inspector().BeginTextEdit(hit.property, std::to_string(document->documentAssetId));
-        return true;
-    }
-    return true;
-}
-
 [[nodiscard]] bool HandleSkeletonBindingClick(
     EditorSceneContext& sceneContext,
     kb::scene::SceneEntity entity,
@@ -3036,8 +3019,6 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
                 static_cast<void>(sceneContext.RemoveSkeletonBindingFromEntity(entity));
             } else if (hit.section == InspectorSectionId::DeformedGeometry) {
                 static_cast<void>(sceneContext.RemoveDeformedGeometryFromEntity(entity));
-            } else if (hit.section == InspectorSectionId::UIDocument) {
-                static_cast<void>(sceneContext.RemoveUIDocumentFromEntity(entity));
             } else if (hit.section == InspectorSectionId::Tags) {
                 static_cast<void>(sceneContext.RemoveTagsFromEntity(entity));
             } else if (hit.section == InspectorSectionId::NavAgent && sceneContext.Scene().Components().NavAgents().Has(entity)) {
@@ -3258,9 +3239,6 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
     }
     if (hit.section == InspectorSectionId::DeformedGeometry) {
         return HandleDeformedGeometryClick(sceneContext, entity, hit);
-    }
-    if (hit.section == InspectorSectionId::UIDocument) {
-        return HandleUIDocumentClick(sceneContext, entity, hit);
     }
     if (hit.section == InspectorSectionId::NavAgent) {
         return HandleNavAgentClick(sceneContext, entity, hit);
@@ -3750,17 +3728,6 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
             float value = 0.0F;
             if (ParseFloat(inspector.EditBuffer(), value)) {
                 static_cast<void>(sceneContext.SetAnimatorSpeed(entity, value));
-            }
-            inspector.EndTextEdit();
-            return true;
-        }
-        if (sceneContext.Scene().Entities().IsAlive(entity) &&
-            inspector.EditedProperty() == InspectorPropertyId::UIDocumentAsset) {
-            std::uint64_t value = 0U;
-            const std::string_view text = inspector.EditBuffer();
-            const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
-            if (parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size()) {
-                static_cast<void>(sceneContext.SetUIDocumentAsset(entity, kb::assets::AssetId{ value }));
             }
             inspector.EndTextEdit();
             return true;

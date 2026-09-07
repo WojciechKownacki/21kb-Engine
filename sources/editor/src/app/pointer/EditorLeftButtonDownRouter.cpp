@@ -45,7 +45,6 @@
 #include "rendering/AnimatorEditorPanelRenderer.hpp"
 #include "rendering/SkeletalMeshEditorPanelRenderer.hpp"
 #include "rendering/SkeletalMeshEditorPanelLayout.hpp"
-#include "rendering/UserWidgetEditorPanelRenderer.hpp"
 #include "rendering/DockTabControlGeometry.hpp"
 #include "platform/win32/EditorMaterialAssetPickerDialog.hpp"
 #include "platform/win32/EditorMeshAssetPickerDialog.hpp"
@@ -55,7 +54,6 @@
 #include "platform/win32/EditorSkeletonAssetPickerDialog.hpp"
 #include "platform/win32/EditorSkeletalMeshAssetPickerDialog.hpp"
 #include "platform/win32/EditorMaterialColorPickerDialog.hpp"
-#include "platform/win32/EditorTextEntryDialog.hpp"
 #include "platform/win32/EditorBuildGameFileDialog.hpp"
 #include "packaging/EditorProjectPackageService.hpp"
 #include "platform/win32/EditorAudioMixerAssetPickerDialog.hpp"
@@ -67,13 +65,11 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <charconv>
 #include <commdlg.h>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <string>
-#include <system_error>
 
 namespace kb::editor {
 namespace {
@@ -81,31 +77,6 @@ namespace {
 constexpr int kHierarchyScrollbarWidth = 12;
 constexpr int kHierarchyScrollbarInset = 3;
 constexpr int kHierarchyScrollbarMinThumb = 24;
-
-[[nodiscard]] bool ValidUserWidgetAssetReference(
-    const EditorSceneContext& context,
-    UserWidgetEditorProperty property,
-    const kb::scene::UIDocumentElement& element) {
-    std::uint64_t rawId = 0U;
-    bool image = false;
-    if (property == UserWidgetEditorProperty::Image && element.image) {
-        rawId = element.image->imageAssetId;
-        image = true;
-    } else if (property == UserWidgetEditorProperty::TextStyle &&
-        element.textStyle) {
-        rawId = element.textStyle->fontAssetId;
-    } else {
-        return true;
-    }
-    if (rawId == 0U) return true;
-    const kb::assets::AssetMetadata* metadata = context.Scene().Assets()
-        .Manager().Registry().Find(kb::assets::AssetId{rawId});
-    if (metadata == nullptr) return false;
-    return image
-        ? metadata->type == "RenderTexture" || metadata->type == "Texture" ||
-            metadata->importCategory == "Texture"
-        : metadata->type == "Font" || metadata->importCategory == "Font";
-}
 
 [[nodiscard]] std::optional<std::uint32_t> DeformedGeometryMaterialSlotForProperty(InspectorPropertyId property) noexcept {
     constexpr std::array<InspectorPropertyId, kb::scene::kMaxDeformedGeometryMaterialSlotOverrides> fields{ {
@@ -526,162 +497,6 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
 
     const EditorPanelPointerHitContext panelHit =
         EditorPanelPointerHitContextResolver::Resolve(messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_, x, y);
-
-    if (const std::optional<RECT> userWidgetContent =
-            EditorPanelContentResolver::Resolve(
-                DockPanelKind::UserWidgetEditor, messageWindow, mainWindow_,
-                dockModel_, floatingWindows_, metrics_);
-        userWidgetContent && PointInRect(*userWidgetContent, x, y)) {
-        const UserWidgetEditorPanelHit hit =
-            UserWidgetEditorPanelRenderer::HitTest(
-                *userWidgetContent, sceneContext_, x, y);
-        bool changed = false;
-        switch (hit.action) {
-        case UserWidgetEditorPanelAction::Save:
-            changed = sceneContext_.SaveUserWidgetEditorAsset();
-            break;
-        case UserWidgetEditorPanelAction::Undo:
-            changed = sceneContext_.UserWidgetEditor().Undo();
-            break;
-        case UserWidgetEditorPanelAction::Redo:
-            changed = sceneContext_.UserWidgetEditor().Redo();
-            break;
-        case UserWidgetEditorPanelAction::Add: {
-            HMENU menu = CreatePopupMenu();
-            if (menu == nullptr) return;
-            UINT command = 500U;
-            for (const auto& [kind, name] : kb::scene::kUIControlKindNames) {
-                if (kind == kb::scene::UIControlKind::Canvas) continue;
-                AppendMenuA(menu, MF_STRING, command++, std::string{name}.c_str());
-            }
-            POINT point{x, y};
-            ClientToScreen(messageWindow, &point);
-            const UINT selected = TrackPopupMenu(
-                menu, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RETURNCMD |
-                    TPM_NONOTIFY | TPM_RIGHTBUTTON,
-                point.x, point.y, 0, messageWindow, nullptr);
-            DestroyMenu(menu);
-            if (selected >= 500U && selected < command) {
-                UINT index = selected - 500U;
-                for (const auto& [kind, name] : kb::scene::kUIControlKindNames) {
-                    static_cast<void>(name);
-                    if (kind == kb::scene::UIControlKind::Canvas) continue;
-                    if (index-- == 0U) {
-                        changed = sceneContext_.UserWidgetEditor()
-                            .AddElement(kind).has_value();
-                        break;
-                    }
-                }
-            }
-            break;
-        }
-        case UserWidgetEditorPanelAction::Remove:
-            changed = sceneContext_.UserWidgetEditor().RemoveElement(
-                sceneContext_.UserWidgetEditor().SelectedElementId());
-            break;
-        case UserWidgetEditorPanelAction::Reparent: {
-            const kb::scene::UIDocumentElement* selectedElement =
-                sceneContext_.UserWidgetEditor().SelectedElement();
-            if (selectedElement == nullptr || selectedElement->parentId == 0U) break;
-            const std::optional<std::string> value = EditorTextEntryDialog::Show(
-                messageWindow, EditorTextEntryDialogDescriptor{
-                    .title = "Reparent User Widget element",
-                    .label = "New parent element ID",
-                    .value = std::to_string(selectedElement->parentId),
-                    .hint = "Use the #ID shown in the hierarchy",
-                    .acceptLabel = "Reparent",
-                });
-            if (!value) break;
-            kb::scene::UIElementId parentId = 0U;
-            const char* begin = value->data();
-            const char* end = begin + value->size();
-            const auto parsed = std::from_chars(begin, end, parentId);
-            if (parsed.ec != std::errc{} || parsed.ptr != end ||
-                !sceneContext_.UserWidgetEditor().ReparentElement(
-                    selectedElement->id, parentId)) {
-                sceneContext_.Console().Warning(
-                    "User Widget", "The selected parent ID is invalid.");
-            } else {
-                changed = true;
-            }
-            break;
-        }
-        case UserWidgetEditorPanelAction::Select: {
-            changed = sceneContext_.UserWidgetEditor().SelectElement(hit.elementId);
-            if (hit.fromPreview &&
-                sceneContext_.UserWidgetEditor().BeginPreviewDrag(
-                    hit.elementId, static_cast<float>(x),
-                    static_cast<float>(y), hit.canvasScale)) {
-                SetCapture(messageWindow);
-                changed = true;
-            }
-            break;
-        }
-        case UserWidgetEditorPanelAction::EditProperty: {
-            const kb::scene::UIDocumentElement* selectedElement =
-                sceneContext_.UserWidgetEditor().SelectedElement();
-            if (selectedElement == nullptr || !hit.property) break;
-            const std::vector<UserWidgetEditorPropertyRow> rows =
-                UserWidgetEditorPropertyAdapter::Rows(*selectedElement);
-            const auto row = std::ranges::find(
-                rows, *hit.property, &UserWidgetEditorPropertyRow::property);
-            if (row == rows.end()) break;
-            kb::scene::UIDocumentElement edited = *selectedElement;
-            bool parsed = false;
-            if (const std::optional<std::array<float, 4U>> currentColor =
-                    UserWidgetEditorPropertyAdapter::Color(
-                        row->property, edited)) {
-                POINT screen{x, y};
-                ClientToScreen(messageWindow, &screen);
-                const std::optional<std::array<float, 4U>> picked =
-                    EditorMaterialColorPickerDialog::Show(
-                        messageWindow, row->label, *currentColor, &screen);
-                if (!picked) break;
-                parsed = UserWidgetEditorPropertyAdapter::ApplyColor(
-                    row->property, *picked, edited);
-            } else {
-                const std::optional<std::string> value =
-                    EditorTextEntryDialog::Show(
-                        messageWindow, EditorTextEntryDialogDescriptor{
-                            .title = "Edit User Widget property",
-                            .label = row->label,
-                            .value = row->value,
-                            .hint = row->hint,
-                        });
-                if (!value) break;
-                parsed = UserWidgetEditorPropertyAdapter::Apply(
-                    row->property, *value, edited);
-            }
-            if (!parsed) {
-                sceneContext_.Console().Warning(
-                    "User Widget", "The property value has an invalid format.");
-                break;
-            }
-            if (!ValidUserWidgetAssetReference(
-                    sceneContext_, row->property, edited)) {
-                sceneContext_.Console().Warning(
-                    "User Widget",
-                    "The asset ID is missing or has an incompatible type.");
-                break;
-            }
-            if (!sceneContext_.UserWidgetEditor().EditElement(
-                    selectedElement->id, edited)) {
-                sceneContext_.Console().Warning(
-                    "User Widget", "The property value violates the UI asset contract.");
-                break;
-            }
-            changed = true;
-            break;
-        }
-        case UserWidgetEditorPanelAction::None:
-            break;
-        }
-        if (changed) {
-            EditorWindowInvalidator::InvalidateMainAndSource(
-                mainWindow_, messageWindow);
-        }
-        return;
-    }
 
     if (const std::optional<RECT> particleEditorContent = EditorPanelContentResolver::Resolve(
             DockPanelKind::ParticleEditor, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);

@@ -62,7 +62,6 @@ void ShaderManifestDeclaresRuntimePrograms() {
     bool foundEditorGrid = false;
     bool foundSkinned = false;
     bool foundSkinnedMotion = false;
-    bool foundUserWidget = false;
     for (const ShaderProgramManifestEntry& program : programs) {
         Require(std::string_view{program.name}.size() > 0U, "Shader program manifest contains an empty program name");
         foundSceneMesh = foundSceneMesh || std::string_view{program.name} == "scene_mesh_instanced";
@@ -71,7 +70,6 @@ void ShaderManifestDeclaresRuntimePrograms() {
         foundSkinned = foundSkinned || std::string_view{program.name} == "scene_mesh_skinned";
         foundSkinnedMotion = foundSkinnedMotion ||
             std::string_view{program.name} == "scene_mesh_skinned_motion_vectors";
-        foundUserWidget = foundUserWidget || std::string_view{program.name} == "user_widget";
         Require(std::string_view{program.vertexShader}.starts_with("vs_"), "Shader program manifest has an invalid vertex shader name");
         Require(std::string_view{program.fragmentShader}.starts_with("fs_"), "Shader program manifest has an invalid fragment shader name");
     }
@@ -80,7 +78,6 @@ void ShaderManifestDeclaresRuntimePrograms() {
     Require(foundEditorGrid, "Shader program manifest is missing editor grid program");
     Require(foundSkinned && foundSkinnedMotion,
         "Shader program manifest is missing required skinned runtime programs");
-    Require(foundUserWidget, "Shader program manifest is missing the runtime user widget program");
 }
 
 void PackagedShaderManifestRequiresEveryRequiredProgramStage() {
@@ -92,9 +89,7 @@ void PackagedShaderManifestRequiresEveryRequiredProgramStage() {
             contains("vs_mesh_shadow_skinned_instanced.sc") &&
             contains("vs_mesh_skinned_motion_vectors_instanced.sc") &&
             contains("vs_mesh_motion_vectors_instanced.sc") &&
-            contains("fs_mesh_motion_vectors.sc") &&
-            contains("vs_user_widget.sc") &&
-            contains("fs_user_widget.sc"),
+            contains("fs_mesh_motion_vectors.sc"),
         "Packaged shader closure omitted a stage referenced by a required skinned/motion program");
     Require(!contains("fs_editor_grid.sc"),
         "Packaged game shader closure included an unselected editor-only program");
@@ -145,7 +140,6 @@ void PackagedShaderManifestRequiresEveryRequiredProgramStage() {
     };
     requireRejectedWhenRemoved("vs_mesh_skinned_instanced.sc");
     requireRejectedWhenRemoved("fs_mesh_motion_vectors.sc");
-    requireRejectedWhenRemoved("fs_user_widget.sc");
 
     std::filesystem::remove_all(root, error);
 }

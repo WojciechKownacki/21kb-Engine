@@ -213,10 +213,6 @@ std::optional<std::string> InspectorPanelTextBuilder::Build(const EditorSceneCon
             "\nReceives Shadow: " + std::string{ geometry->receivesShadow ? "true" : "false" } +
             "\nEnabled: " + std::string{ geometry->enabled ? "true" : "false" };
     }
-    if (const kb::scene::UIDocumentComponent* document = sceneContext.Scene().Components().UIDocuments().TryGet(selected); document != nullptr) {
-        text += "\n\nUI Document\nDocument: " + std::to_string(document->documentAssetId) +
-            "\nEnabled: " + std::string{ document->enabled ? "true" : "false" };
-    }
     if (const kb::scene::NavAgent* agent = sceneContext.Scene().Components().NavAgents().TryGet(selected); agent != nullptr) {
         text += "\n\nNav Agent\nRadius: " + std::to_string(agent->radius) +
             "\nMax Speed: " + std::to_string(agent->maxSpeed) +

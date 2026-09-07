@@ -61,7 +61,6 @@
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneInputActivation.hpp"
 #include "engine/scene/SceneRuntime.hpp"
-#include "engine/scene/UIAssetIO.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/AssetKind.hpp"
 #include "engine/assets/AssetMetadata.hpp"

@@ -86,9 +86,6 @@ void ForEachReference(const ScenePrefabNodeComponents& components, Sink&& sink) 
             sink(components.deformedGeometry->materialSlotAssetIds[slot], std::string_view{ "skeletalMaterialSlot" });
         }
     }
-    if (components.uiDocument.has_value()) {
-        sink(components.uiDocument->documentAssetId, std::string_view{ "uiDocument" });
-    }
 }
 
 } // namespace kb::scene::SceneComponentAssetReferences

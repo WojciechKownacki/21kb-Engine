@@ -38,7 +38,6 @@
 #include "engine/scene/TagsComponent.hpp"
 #include "engine/scene/TransformComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
-#include "engine/scene/UIAssets.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -125,7 +124,6 @@ struct ScenePrefabNodeComponents {
     std::optional<SkeletonBindingComponent> skeletonBinding;
     std::optional<MotionSkeletonRuleComponent> motionSkeletonRule;
     std::optional<DrawD3DeformedGeometryComponent> deformedGeometry;
-    std::optional<UIDocumentComponent> uiDocument;
     std::optional<NavAgent> navAgent;
     std::optional<NavObstacle> navObstacle;
 };

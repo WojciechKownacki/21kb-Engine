@@ -40,7 +40,6 @@
 #include "scene/components/SceneTagsComponentStore.hpp"
 #include "scene/components/SceneTransformComponentStore.hpp"
 #include "scene/components/SceneVisibilityComponentStore.hpp"
-#include "scene/components/SceneUIDocumentComponentStore.hpp"
 
 namespace kb::ecs {
 
@@ -130,8 +129,6 @@ public:
     [[nodiscard]] SceneMotionSkeletonRuleComponentStore& MotionSkeletonRules() noexcept;
     [[nodiscard]] const SceneDeformedGeometryComponentStore& DeformedGeometries() const noexcept;
     [[nodiscard]] SceneDeformedGeometryComponentStore& DeformedGeometries() noexcept;
-    [[nodiscard]] const SceneUIDocumentComponentStore& UIDocuments() const noexcept;
-    [[nodiscard]] SceneUIDocumentComponentStore& UIDocuments() noexcept;
     [[nodiscard]] const SceneNavigationComponentStore& Navigation() const noexcept;
     [[nodiscard]] SceneNavigationComponentStore& Navigation() noexcept;
 
@@ -172,7 +169,6 @@ private:
     SceneSkeletonBindingComponentStore skeletonBindings_;
     SceneMotionSkeletonRuleComponentStore motionSkeletonRules_;
     SceneDeformedGeometryComponentStore deformedGeometries_;
-    SceneUIDocumentComponentStore uiDocuments_;
     SceneNavigationComponentStore navigation_;
 };
 

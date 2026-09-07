@@ -58,8 +58,6 @@
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneLightingAccess.hpp"
 #include "engine/scene/SceneRuntime.hpp"
-#include "engine/scene/SceneUIDocuments.hpp"
-#include "engine/scene/UIAssetIO.hpp"
 #include "engine/scene/SceneVisibilityResolution.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 #include "engine/script/ScriptAgentProjectFiles.hpp"
@@ -145,7 +143,6 @@ struct ScenarioState {
     std::unordered_map<std::string, EntityAlias> entities;
     std::unordered_map<std::string, kb::assets::AssetId> assets;
     std::unordered_map<std::string, std::uint32_t> materialNodes;
-    std::unordered_map<std::string, kb::scene::UIElementId> widgetElements;
 };
 
 class ScopedProjectFile final {
@@ -421,9 +418,6 @@ void WriteLittleEndian32(std::ostream& output, std::uint32_t value) {
     }
     if (component == "DeformedGeometry") {
         return scene.Components().DeformedGeometries().Has(entity);
-    }
-    if (component == "UIDocument") {
-        return scene.Components().UIDocuments().Has(entity);
     }
     if (component == "TerrainEditor") {
         return EditorTerrainService::IsTerrainEntity(scene, entity);
@@ -2293,86 +2287,6 @@ ReadScriptValue(
             matched ? "canonical Deformed Geometry" : "Deformed Geometry does not match authored configuration" };
     }
 
-    if (*operation == "assert_ui_element") {
-        const auto alias = StringMember(step, "entity", error);
-        const auto elementAlias = StringMember(
-            step, "widget_element", error, false);
-        const auto elementValue = NumberMember(step, "element", error, false);
-        if (!alias || !error.empty() ||
-            (elementAlias.has_value() == elementValue.has_value())) {
-            return { false, error.empty()
-                ? "provide exactly one of 'element' or 'widget_element'"
-                : error };
-        }
-        kb::scene::UIElementId element = 0U;
-        if (elementAlias) {
-            const auto found = state.widgetElements.find(*elementAlias);
-            if (found == state.widgetElements.end()) {
-                return { false, "widget element alias was not found" };
-            }
-            element = found->second;
-        } else if (*elementValue < 1.0 ||
-            *elementValue > static_cast<double>(
-                std::numeric_limits<kb::scene::UIElementId>::max()) ||
-            std::floor(*elementValue) != *elementValue) {
-            return { false, "'element' must be a positive integral UI element id" };
-        } else {
-            element = static_cast<kb::scene::UIElementId>(*elementValue);
-        }
-        const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
-        const bool present = state.context.Scene().UIDocuments().HasElement(entity, element);
-        const bool expectedPresent = BoolMember(step, "exists", error, false).value_or(true);
-        if (present != expectedPresent) {
-            return { false, std::string{ present ? "present" : "absent" } };
-        }
-        const auto expectedVisible = BoolMember(step, "visible", error, false);
-        const auto expectedKind = StringMember(step, "kind", error, false);
-        const auto expectedText = StringMember(step, "text", error, false);
-        if (!present && (expectedVisible.has_value() || expectedKind.has_value() || expectedText.has_value())) {
-            return { false, "cannot assert a property of an absent UI element" };
-        }
-        if (expectedKind.has_value()) {
-            const auto control = state.context.Scene().UIDocuments().Control(entity, element);
-            kb::scene::UIControlKind parsedKind{};
-            if (!control.has_value() ||
-                !kb::scene::TryParseUIControlKind(*expectedKind, parsedKind) ||
-                control->kind != parsedKind) {
-                return { false, "control kind mismatch" };
-            }
-        }
-        if (expectedText.has_value()) {
-            const auto control = state.context.Scene().UIDocuments().Control(entity, element);
-            if (!control.has_value() || control->text != *expectedText) {
-                return { false, "control text mismatch" };
-            }
-        }
-        const auto presentationDetail = [&]() {
-            std::string detail = present ? "present" : "absent";
-            if (!present) return detail;
-            const kb::scene::Scene& scene = state.context.Scene();
-            const kb::scene::UIPresentationSnapshot& presentation = scene.UIDocuments().Presentation();
-            const auto item = std::ranges::find_if(
-                presentation.items,
-                [entity, element](const kb::scene::UIPresentationItem& candidate) {
-                    return candidate.owner == entity && candidate.elementId == element;
-                });
-            detail += " viewport=" + std::to_string(presentation.viewportWidth) + "x" +
-                std::to_string(presentation.viewportHeight);
-            if (item != presentation.items.end()) {
-                detail += " rect=" + std::to_string(item->rect.left) + "," +
-                    std::to_string(item->rect.top) + "," + std::to_string(item->rect.right) + "," +
-                    std::to_string(item->rect.bottom);
-            } else {
-                detail += " not-presented";
-            }
-            return detail;
-        };
-        if (!expectedVisible.has_value()) return { true, presentationDetail() };
-        const bool visible = state.context.Scene().UIDocuments().Visible(entity, element);
-        return { visible == *expectedVisible,
-            std::string{visible ? "visible " : "hidden "} + presentationDetail() };
-    }
-
     if (*operation == "assert_parent") {
         const auto childAlias =
             StringMember(step, "entity", error);
@@ -2636,8 +2550,6 @@ ReadScriptValue(
                 state.context.CreateMaterialTypeAsset(virtualFolder);
         } else if (*type == "particle_effect") {
             created = state.context.CreateParticleEffectAsset(virtualFolder);
-        } else if (*type == "user_widget") {
-            created = state.context.CreateUserWidgetAsset(virtualFolder);
         } else {
             return { false, "unsupported asset type" };
         }
@@ -2650,11 +2562,7 @@ ReadScriptValue(
                 before, [&metadata](const auto& candidate) {
                     return candidate.id == metadata.id;
                 });
-            if (!existed &&
-                (*type != "particle_effect" ||
-                    metadata.type == kb::scene::kParticleEffectAssetType) &&
-                (*type != "user_widget" ||
-                    metadata.type == kb::scene::kUIDocumentAssetType)) {
+            if (!existed && (*type != "particle_effect" || metadata.type == kb::scene::kParticleEffectAssetType)) {
                 createdId = metadata.id;
                 break;
             }
@@ -2664,131 +2572,6 @@ ReadScriptValue(
         }
         state.assets.emplace(*alias, createdId);
         return { true, *alias + '=' + std::to_string(createdId.value) };
-    }
-
-    if (*operation == "add_user_widget_element") {
-        const auto alias = StringMember(step, "id", error);
-        const auto kindName = StringMember(step, "kind", error);
-        const auto parentAlias = StringMember(step, "parent", error, false);
-        if (!alias || !kindName) return { false, error };
-        if (state.widgetElements.contains(*alias)) {
-            return { false, "widget element alias already exists" };
-        }
-        kb::scene::UIControlKind kind{};
-        if (!kb::scene::TryParseUIControlKind(*kindName, kind)) {
-            return { false, "unknown User Widget control kind" };
-        }
-        kb::scene::UIElementId parentId = 0U;
-        if (parentAlias) {
-            const auto parent = state.widgetElements.find(*parentAlias);
-            if (parent == state.widgetElements.end()) {
-                return { false, "widget parent alias was not found" };
-            }
-            parentId = parent->second;
-        }
-        const std::optional<kb::scene::UIElementId> created =
-            state.context.UserWidgetEditor().AddElement(kind, parentId);
-        if (!created) {
-            return { false, "User Widget element could not be added" };
-        }
-        state.widgetElements.emplace(*alias, *created);
-        return { true, *alias + '=' + std::to_string(*created) };
-    }
-
-    if (*operation == "edit_user_widget_element") {
-        const auto alias = StringMember(step, "element", error);
-        const auto name = StringMember(step, "name", error, false);
-        const auto textValue = StringMember(step, "text", error, false);
-        const auto eventName = StringMember(step, "event", error, false);
-        const auto offsetMinX = NumberMember(step, "offset_min_x", error, false);
-        const auto offsetMinY = NumberMember(step, "offset_min_y", error, false);
-        const auto offsetMaxX = NumberMember(step, "offset_max_x", error, false);
-        const auto offsetMaxY = NumberMember(step, "offset_max_y", error, false);
-        if (!alias || !error.empty()) return { false, error };
-        const auto found = state.widgetElements.find(*alias);
-        const kb::scene::UIDocument* document =
-            state.context.UserWidgetEditor().Document();
-        if (found == state.widgetElements.end() || document == nullptr) {
-            return { false, "widget element alias or document was not found" };
-        }
-        const auto current = std::ranges::find(
-            document->elements, found->second,
-            &kb::scene::UIDocumentElement::id);
-        if (current == document->elements.end()) {
-            return { false, "widget element no longer exists" };
-        }
-        kb::scene::UIDocumentElement edited = *current;
-        if (name) edited.name = *name;
-        if (textValue) edited.control.text = *textValue;
-        if (eventName) {
-            if (!edited.interaction) {
-                edited.interaction = kb::scene::UIInteraction{};
-            }
-            edited.interaction->eventName = *eventName;
-        }
-        if (offsetMinX) edited.rect.offsetMin.x = static_cast<float>(*offsetMinX);
-        if (offsetMinY) edited.rect.offsetMin.y = static_cast<float>(*offsetMinY);
-        if (offsetMaxX) edited.rect.offsetMax.x = static_cast<float>(*offsetMaxX);
-        if (offsetMaxY) edited.rect.offsetMax.y = static_cast<float>(*offsetMaxY);
-        const bool succeeded = state.context.UserWidgetEditor().EditElement(
-            found->second, edited);
-        return { succeeded,
-            succeeded ? *alias : "User Widget edit was rejected" };
-    }
-
-    if (*operation == "save_user_widget") {
-        const bool saved = state.context.SaveUserWidgetEditorAsset();
-        return { saved,
-            saved ? "canonical .kbui saved" : "User Widget save failed" };
-    }
-
-    if (*operation == "reopen_user_widget") {
-        const bool opened = state.context.ReopenUserWidgetEditorAsset();
-        return { opened,
-            opened ? "canonical .kbui reopened" : "User Widget reopen failed" };
-    }
-
-    if (*operation == "user_widget_undo" ||
-        *operation == "user_widget_redo") {
-        const bool succeeded = *operation == "user_widget_undo"
-            ? state.context.UserWidgetEditor().Undo()
-            : state.context.UserWidgetEditor().Redo();
-        return { succeeded, *operation };
-    }
-
-    if (*operation == "assert_user_widget_element") {
-        const auto alias = StringMember(step, "element", error);
-        const auto expectedKind = StringMember(step, "kind", error, false);
-        const auto expectedName = StringMember(step, "name", error, false);
-        const auto expectedText = StringMember(step, "text", error, false);
-        const auto expectedEvent = StringMember(step, "event", error, false);
-        if (!alias || !error.empty()) return { false, error };
-        const auto found = state.widgetElements.find(*alias);
-        const kb::scene::UIDocument* document =
-            state.context.UserWidgetEditor().Document();
-        if (found == state.widgetElements.end() || document == nullptr) {
-            return { false, "widget element alias or document was not found" };
-        }
-        const auto element = std::ranges::find(
-            document->elements, found->second,
-            &kb::scene::UIDocumentElement::id);
-        if (element == document->elements.end()) {
-            return { false, "widget element does not exist" };
-        }
-        bool matches = !expectedName || element->name == *expectedName;
-        matches = matches &&
-            (!expectedText || element->control.text == *expectedText);
-        matches = matches && (!expectedEvent ||
-            (element->interaction &&
-                element->interaction->eventName == *expectedEvent));
-        if (expectedKind) {
-            kb::scene::UIControlKind kind{};
-            matches = matches &&
-                kb::scene::TryParseUIControlKind(*expectedKind, kind) &&
-                element->control.kind == kind;
-        }
-        return { matches,
-            matches ? *alias : "User Widget element mismatch" };
     }
 
     if (*operation == "copy_asset" ||
@@ -2858,8 +2641,6 @@ ReadScriptValue(
             }
             assigned = state.context.SetDeformedGeometryMaterialSlotAsset(
                 entity, static_cast<std::uint32_t>(*slot), id);
-        } else if (*role == "ui_document") {
-            assigned = state.context.SetUIDocumentAsset(entity, id);
         } else if (*role == "script") {
             assigned =
                 state.context.AttachScriptToEntity(entity, id);
@@ -3512,8 +3293,6 @@ ReadScriptValue(
             opened = state.context.OpenMaterialEditorAsset(id);
         } else if (metadata->type == kb::scene::kParticleEffectAssetType) {
             opened = state.context.OpenParticleEditorAsset(id);
-        } else if (metadata->type == kb::scene::kUIDocumentAssetType) {
-            opened = state.context.OpenUserWidgetEditorAsset(id);
         }
         if (opened && state.context.HasPendingSkeletalMeshEditorOpen()) {
             const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{ 10 };

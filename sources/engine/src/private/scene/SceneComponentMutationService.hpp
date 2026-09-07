@@ -37,7 +37,6 @@
 #include "engine/scene/AuxFrameComponent.hpp"
 #include "engine/scene/GeometrySwarmComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
-#include "engine/scene/UIAssets.hpp"
 
 namespace kb::scene {
 
@@ -199,10 +198,6 @@ public:
     [[nodiscard]] static bool SetDeformedGeometry(Scene& scene, SceneEntity entity, const DrawD3DeformedGeometryComponent& geometry);
     static void RemoveDeformedGeometry(Scene& scene, SceneEntity entity) noexcept;
     static void MarkDeformedGeometryModified(Scene& scene, SceneEntity entity) noexcept;
-    [[nodiscard]] static UIDocumentComponent* TryGetUIDocument(Scene& scene, SceneEntity entity) noexcept;
-    static void SetUIDocument(Scene& scene, SceneEntity entity, const UIDocumentComponent& document);
-    static void RemoveUIDocument(Scene& scene, SceneEntity entity) noexcept;
-    static void MarkUIDocumentModified(Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static NavAgent* TryGetNavAgent(Scene& scene, SceneEntity entity) noexcept;
     static void SetNavAgent(Scene& scene, SceneEntity entity, const NavAgent& component);
     static void RemoveNavAgent(Scene& scene, SceneEntity entity) noexcept;

@@ -35,7 +35,6 @@ void RunShaderPrewarmParseTests();
 void RunMeshBakeTests();
 void RunTextureBakeTests();
 void RunPackagedWebGpuTextureFallbackTestOnly();
-void RunUserWidgetDrawBatchTests();
 }
 
 int main(int argc, char** argv) {
@@ -65,10 +64,6 @@ int main(int argc, char** argv) {
     }
     if (argc == 2 && std::string_view{ argv[1] } == "resource-registry") {
         kb::render::tests::RunRenderResourceRegistryTests();
-        return EXIT_SUCCESS;
-    }
-    if (argc == 2 && std::string_view{ argv[1] } == "user-widget-batch") {
-        kb::render::tests::RunUserWidgetDrawBatchTests();
         return EXIT_SUCCESS;
     }
     if (argc == 2 && std::string_view{ argv[1] } == "runtime-shader-provider") {
@@ -166,7 +161,6 @@ int main(int argc, char** argv) {
     kb::render::tests::RunSceneRenderExtractorTests();
     kb::render::tests::RunShaderManifestTests();
     kb::render::tests::RunShaderPrewarmParseTests();
-    kb::render::tests::RunUserWidgetDrawBatchTests();
     kb::render::tests::RunMeshBakeTests();
     kb::render::tests::RunTextureBakeTests();
     return EXIT_SUCCESS;

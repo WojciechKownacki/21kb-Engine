@@ -165,7 +165,6 @@ struct ScenePrefabArchetypeSpawnPayload {
     std::vector<SkeletonBindingComponent> skeletonBindings;
     std::vector<MotionSkeletonRuleComponent> motionSkeletonRules;
     std::vector<DrawD3DeformedGeometryComponent> deformedGeometries;
-    std::vector<UIDocumentComponent> uiDocuments;
     std::vector<NavAgent> navAgents;
     std::vector<NavObstacle> navObstacles;
     std::vector<kb::ecs::CommandBuffer::BulkComponentView> views;
@@ -315,10 +314,6 @@ struct ScenePrefabArchetypeSpawnPayload {
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::DeformedGeometry)) {
             RepeatComponents(deformedGeometries, std::span<const DrawD3DeformedGeometryComponent>{ archetype.deformedGeometries }, instanceCount);
             AddComponentViews(views, worldViews, std::span<const DrawD3DeformedGeometryComponent>{ deformedGeometries });
-        }
-        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::UIDocument)) {
-            RepeatComponents(uiDocuments, std::span<const UIDocumentComponent>{ archetype.uiDocuments }, instanceCount);
-            AddComponentViews(views, worldViews, std::span<const UIDocumentComponent>{ uiDocuments });
         }
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::NavAgent)) {
             RepeatComponents(navAgents, std::span<const NavAgent>{ archetype.navAgents }, instanceCount);
@@ -472,10 +467,6 @@ struct ScenePrefabArchetypeSpawnPayload {
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::DeformedGeometry)) {
             AddCommandComponentPatternView(views, std::span<const DrawD3DeformedGeometryComponent>{ archetype.deformedGeometries }, instanceCount);
             AddWorldComponentPatternView(worldViews, std::span<const DrawD3DeformedGeometryComponent>{ archetype.deformedGeometries }, instanceCount);
-        }
-        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::UIDocument)) {
-            AddCommandComponentPatternView(views, std::span<const UIDocumentComponent>{ archetype.uiDocuments }, instanceCount);
-            AddWorldComponentPatternView(worldViews, std::span<const UIDocumentComponent>{ archetype.uiDocuments }, instanceCount);
         }
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::NavAgent)) {
             AddCommandComponentPatternView(views, std::span<const NavAgent>{ archetype.navAgents }, instanceCount);

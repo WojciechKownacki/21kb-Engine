@@ -241,7 +241,6 @@ void RunModuleInstallCoversAllDomainsTest() {
         "Assets.Load",
         "Save.SetInt",
         "Timeline.Create",
-        "UI.Create",
     };
     for (const char* const name : kExpectedFunctions) {
         kb::tests::Require(
@@ -261,7 +260,7 @@ void RunModuleInstallReportsDuplicateDiagnosticsTest() {
 
     const kb::library::EngineLibraryModuleResult second = kb::library::EngineLibraryModule::Install(host);
     kb::tests::Require(!second.succeeded, "Engine21kbLibrary module install must fail when every function name already exists");
-    kb::tests::Require(second.diagnostics.size() == 24U, "Engine21kbLibrary module install must report one diagnostic per failed domain module");
+    kb::tests::Require(second.diagnostics.size() == 23U, "Engine21kbLibrary module install must report one diagnostic per failed domain module");
 }
 
 // LIB-016: the module catalog EngineLibraryModule::Install() walks must
@@ -273,8 +272,8 @@ void RunModuleInstallReportsDuplicateDiagnosticsTest() {
 // into this build).
 void RunModuleCatalogTest() {
     const std::vector<kb::library::LibraryModuleDesc>& catalog = kb::library::EngineLibraryModule::Catalog();
-    const std::vector<std::string> expectedNames{ "Input", "Audio", "World", "Time", "Timer", "Task", "Events", "Physics", "Transform", "Math", "Scene", "MeshRenderer", "MaterialInstance", "PostProcess", "Particles", "Animator", "Timeline", "UI", "Localization", "Renderer", "Assets", "Save", "Collections", "Text" };
-    kb::tests::Require(catalog.size() == expectedNames.size(), "Engine21kbLibrary module catalog must have exactly twenty-four domain modules");
+    const std::vector<std::string> expectedNames{ "Input", "Audio", "World", "Time", "Timer", "Task", "Events", "Physics", "Transform", "Math", "Scene", "MeshRenderer", "MaterialInstance", "PostProcess", "Particles", "Animator", "Timeline", "Localization", "Renderer", "Assets", "Save", "Collections", "Text" };
+    kb::tests::Require(catalog.size() == expectedNames.size(), "Engine21kbLibrary module catalog must have exactly twenty-three domain modules");
     for (std::size_t index = 0; index < catalog.size(); ++index) {
         kb::tests::Require(catalog[index].name == expectedNames[index], "Engine21kbLibrary module catalog order/name drifted from the historical registration order");
         kb::tests::Require(catalog[index].Register != nullptr, "Engine21kbLibrary module catalog entry is missing its Register function");
@@ -3105,7 +3104,7 @@ void RunStreamFocusRuntimeTest() {
 
 void RunEngineLibraryEventSchemaRegistryTest() {
     const std::vector<kb::library::LibraryEventDesc>& catalog = kb::library::EngineLibraryEventRegistry::Catalog();
-    kb::tests::Require(catalog.size() == 24U, "Engine21kbLibrary event schema registry must catalog exactly the 24 built-in events this engine emits today");
+    kb::tests::Require(catalog.size() == 18U, "Engine21kbLibrary event schema registry must catalog exactly the 18 built-in events this engine emits today");
 
     for (const kb::library::LibraryEventDesc& desc : catalog) {
         kb::tests::Require(!desc.name.empty(), "Engine21kbLibrary event schema registry entry must have a non-empty name");
@@ -3118,8 +3117,7 @@ void RunEngineLibraryEventSchemaRegistryTest() {
     }
 
     const std::vector<std::string> expectedNames{ "SceneLoading", "SceneLoaded", "SceneActivated", "SceneUnloading", "SceneUnloaded", "TimerFired", "TaskCompleted", "TaskFailed",
-        "OnCollisionEnter", "OnCollisionStay", "OnCollisionExit", "OnTriggerEnter", "OnTriggerStay", "OnTriggerExit", "OnAudioMarker", "OnPrefabInstantiated", "OnAnimationEvent", "OnTimelineMarker",
-        "UI.Click", "UI.Pointer", "UI.Submit", "UI.Changed", "UI.Focus", "UI.Navigation" };
+        "OnCollisionEnter", "OnCollisionStay", "OnCollisionExit", "OnTriggerEnter", "OnTriggerStay", "OnTriggerExit", "OnAudioMarker", "OnPrefabInstantiated", "OnAnimationEvent", "OnTimelineMarker" };
     for (const std::string& name : expectedNames) {
         kb::tests::Require(kb::library::EngineLibraryEventRegistry::Find(name) != nullptr, "Engine21kbLibrary event schema registry is missing an entry for a real engine-emitted event");
     }
@@ -3194,28 +3192,6 @@ void RunEngineLibraryEventSchemaRegistryTest() {
             onTimelineMarker->arguments[5].type ==
                 kb::script::ScriptValueType::Float,
         "OnTimelineMarker's versioned catalog schema must match its fixed typed dispatch payload");
-    const kb::library::LibraryEventDesc* uiClick = kb::library::EngineLibraryEventRegistry::Find("UI.Click");
-    const kb::library::LibraryEventDesc* uiSubmit = kb::library::EngineLibraryEventRegistry::Find("UI.Submit");
-    const kb::library::LibraryEventDesc* uiChanged = kb::library::EngineLibraryEventRegistry::Find("UI.Changed");
-    const kb::library::LibraryEventDesc* uiFocus = kb::library::EngineLibraryEventRegistry::Find("UI.Focus");
-    const kb::library::LibraryEventDesc* uiNavigation = kb::library::EngineLibraryEventRegistry::Find("UI.Navigation");
-    kb::tests::Require(
-        uiClick != nullptr && uiClick->arguments.size() == 4U &&
-            uiClick->arguments[0].name == "owner" && uiClick->arguments[0].type == kb::script::ScriptValueType::Entity &&
-            uiClick->arguments[1].name == "element" && uiClick->arguments[1].type == kb::script::ScriptValueType::Hash &&
-            uiClick->arguments[2].name == "x" && uiClick->arguments[3].name == "y",
-        "UI.Click's cataloged schema must match ScriptRuntimeSceneSystem's document owner, element, and pointer payload");
-    kb::tests::Require(
-        uiSubmit != nullptr && uiSubmit->arguments.size() == 3U && uiSubmit->arguments[2].name == "text" &&
-            uiSubmit->arguments[2].type == kb::script::ScriptValueType::String &&
-            uiChanged != nullptr && uiChanged->arguments.size() == 4U && uiChanged->arguments[2].name == "value" &&
-            uiChanged->arguments[2].type == kb::script::ScriptValueType::Float &&
-            uiChanged->arguments[3].name == "text" && uiChanged->arguments[3].type == kb::script::ScriptValueType::String &&
-            uiFocus != nullptr && uiFocus->arguments.size() == 3U && uiFocus->arguments[2].name == "focused" &&
-            uiFocus->arguments[2].type == kb::script::ScriptValueType::Bool &&
-            uiNavigation != nullptr && uiNavigation->arguments.size() == 3U && uiNavigation->arguments[2].name == "direction" &&
-            uiNavigation->arguments[2].type == kb::script::ScriptValueType::String,
-        "UI Submit, Changed, Focus, and Navigation schemas must match their fixed runtime payloads");
 }
 
 void RunCanonicalModuleNamesTest() {
