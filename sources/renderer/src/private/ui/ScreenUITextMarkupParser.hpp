@@ -10,6 +10,10 @@ namespace kb::render {
 struct ScreenUITextMarkupGlyph {
     std::uint32_t codepoint = 0U;
     std::array<float, 4U> color{1.0F, 1.0F, 1.0F, 1.0F};
+    // Byte offset of this glyph in the authored string. Markup tags are consumed, so glyph
+    // index and byte offset drift apart; a text caret is addressed in bytes and needs this to
+    // find its column.
+    std::uint32_t sourceOffset = 0U;
 };
 
 struct ScreenUITextMarkup {

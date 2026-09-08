@@ -348,7 +348,7 @@ int RunInitAgentCommand(const ArgumentList& arguments, CommandIo io) {
 // (kb::library::CompareApiCatalogs) was already complete and tested; what
 // was blocked was the baseline-storage decision. Decision made here: the
 // baseline is a committed reference JSON in the repo
-// (others/api_baseline/script_api.json), produced by the exact same
+// (tests/api_baseline/script_api.json), produced by the exact same
 // project-agnostic path (kb_cli api, no --project) whose live equivalent
 // this command rebuilds — so the two are directly comparable. An
 // intentional API change is recorded by re-running with --update-baseline,

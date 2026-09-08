@@ -12,6 +12,9 @@ namespace {
 using kb::math::Vec2;
 using kb::scene::SceneUIFrameElement;
 constexpr std::array<Vec2, 8> kHandles{{{0, 0}, {0.5F, 0}, {1, 0}, {1, 0.5F}, {1, 1}, {0.5F, 1}, {0, 1}, {0, 0.5F}}};
+// Editor picking is not bounded by the game screen; it is bounded only by authored masks.
+// Far wider than any usable layout coordinate, and small enough that x + width stays finite.
+constexpr kb::math::Rect kUnclippedPickArea{-1.0e9F, -1.0e9F, 2.0e9F, 2.0e9F};
 Vec2 Point(const SceneUIFrameElement& e, Vec2 uv) {
     return {e.corners[0].x + (e.corners[1].x - e.corners[0].x) * uv.x + (e.corners[3].x - e.corners[0].x) * uv.y,
             e.corners[0].y + (e.corners[1].y - e.corners[0].y) * uv.x + (e.corners[3].y - e.corners[0].y) * uv.y};
@@ -87,19 +90,22 @@ bool EditorUIRectInteraction::Begin(EditorSceneContext& context, float width, fl
         }
     }
     if (!entity.IsValid()) {
-        const auto pan = context.ViewportPreview(1U).UIPan();
         for (auto& e : frame.elements) {
-            // HitTest still checks every authored mask quad. Only the game-screen
-            // clip is replaced by the visible editor area in layout coordinates.
-            e.clipRect = {-pan.x / zoom, -pan.y / zoom, width / zoom, height / zoom};
+            // HitTest still checks every authored mask quad, so a Mask clips picking exactly
+            // as it clips pixels. Only the game-screen clip is lifted: authoring routinely
+            // parks a widget outside the canvas, and the editor must still let you grab it.
+            e.clipRect = kUnclippedPickArea;
             e.hitTestable =
                 e.effectiveOpacity > 0 && !context.Scene().Components().UI().TryGet<kb::scene::UICanvas>(e.entity);
         }
         entity = frame.HitTest({x, y});
+        // A pointer that missed every widget is not a UI interaction. Reporting that back
+        // lets the caller keep routing the click to the gizmo, rectangle selection and 3D
+        // picking instead of having it swallowed by any scene that contains a canvas.
+        if (!entity.IsValid())
+            return false;
         context.SelectEntity(entity);
     }
-    if (!entity.IsValid())
-        return true;
     const auto found = std::ranges::find(frame.elements, entity, &SceneUIFrameElement::entity);
     const auto* rect = context.Scene().Components().UI().TryGet<kb::scene::UIRectTransform>(entity);
     if (found == frame.elements.end() || rect == nullptr || found->rect.width <= 0 || found->rect.height <= 0)

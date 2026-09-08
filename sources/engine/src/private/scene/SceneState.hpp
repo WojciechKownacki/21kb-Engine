@@ -721,6 +721,9 @@ public:
     kb::math::Vec2 uiScrollVelocity{};
     kb::math::Vec2 uiViewportSize{};
     std::size_t uiTextCursorByteOffset = 0U;
+    // Caret blink phase in seconds for the focused input field, reset on every edit so typing
+    // never hides the caret mid-stroke.
+    float uiTextCaretPhase = 0.0F;
     // LIB-144: the renderer-published per-entity visibility/bounds feedback frame
     // (Renderer.IsVisible/GetBounds/TestFrustum's backing state) - written by
     // kb::render::Renderer at every SubmitScene through SceneRenderFeedback::Publish

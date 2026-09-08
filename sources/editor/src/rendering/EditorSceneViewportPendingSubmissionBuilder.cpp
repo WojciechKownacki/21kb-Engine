@@ -131,6 +131,7 @@ render::RenderSceneSubmitDesc EditorSceneBgfxViewport::PendingSubmissionBuilder:
         .editorUIOffset = present.settings.editorUIOffset,
         .clearRgba = kSceneSubmitClearRgba,
         .editorSceneOverlaysEnabled = present.settings.editorSceneOverlaysEnabled,
+        .screenUIEnabled = present.settings.screenUIEnabled,
         .shadowPassEnabled = present.settings.shadowPassEnabled,
         .postProcessEnabled = present.settings.postProcessEnabled,
         .selectionMaskEnabled = present.settings.selectionMaskEnabled,

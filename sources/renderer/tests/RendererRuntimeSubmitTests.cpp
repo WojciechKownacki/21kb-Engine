@@ -19,6 +19,9 @@
 #include "engine/scene/ScenePostProcessAccess.hpp"
 #include "engine/scene/SceneRenderFeedback.hpp"
 #include "engine/scene/SceneTransforms.hpp"
+#include "engine/scene/SceneUI.hpp"
+#include "engine/scene/SceneUIComponents.hpp"
+#include "engine/ui/visual/UIText.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 #include "engine/scene/TransformComponent.hpp"
 #include "kb/render/Renderer.hpp"
@@ -2319,6 +2322,166 @@ void RunRendererSceneRendersMultipleCookedGraphMaterialsTest() {
     std::filesystem::remove_all(root, error);
 }
 #endif
+
+// An authored UI mistake - two layout components on one widget, reachable from the Inspector
+// and from a single Lua property write - used to abort SubmitSceneToViewport before any 3D
+// pass ran, so the shipped game rendered a black screen with no attribution. The UI is one
+// layer of the frame: its refusal must cost the UI and nothing else, and must arrive as a
+// diagnostic that names the widget. Real headless Noop submit, real scene, no GPU readback.
+void RunRendererKeepsSceneWhenUIFrameRefusesTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_ui_refusal";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    Require(!error, "UI refusal test could not create temp root");
+    const std::filesystem::path meshPath = root / "triangle.obj";
+    WriteTriangleObj(meshPath);
+
+    kb::scene::Scene scene;
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    Require(manager.RegisterLoader(std::make_unique<RenderMeshAssetLoader>()), "UI refusal test could not register mesh loader");
+    Require(manager.Mounts().Mount("Game", root), "UI refusal test could not mount asset root");
+    Require(manager.DiscoverMountedAssets() >= 1U, "UI refusal test did not discover the mesh asset");
+    const kb::assets::AssetMetadata* meshMetadata = manager.Registry().FindByPath("/Game/triangle.obj");
+    Require(meshMetadata != nullptr, "UI refusal test discovered no mesh metadata");
+
+    const kb::scene::SceneEntity meshEntity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "Gameplay Mesh",
+        .transform = TransformAt(0.0F, 0.0F, 0.0F),
+    });
+    scene.Components().MeshRenderers().Set(meshEntity, kb::scene::MeshRendererComponent{ .meshAssetId = meshMetadata->id.value });
+
+    // A canvas that lays out cleanly, plus one child broken the way an author breaks it.
+    kb::scene::SceneUIComponents ui = scene.Components().UI();
+    const kb::scene::SceneEntity canvas = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Canvas" });
+    ui.Set(canvas, kb::scene::UIRectTransform{ .anchorMax = { 1.0F, 1.0F }, .offsetMax = {} });
+    ui.Set(canvas, kb::scene::UICanvas{});
+    const kb::scene::SceneEntity widget = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Broken Panel" });
+    Require(scene.Hierarchy().SetParent(widget, canvas), "UI refusal test could not parent the widget under the canvas");
+    ui.Set(widget, kb::scene::UIRectTransform{});
+
+    HeadlessSurface surface;
+    DisplayConfig config{};
+    config.allowHeadlessNoop = true;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "UI refusal test renderer did not initialize");
+    const RenderSceneSubmitDesc desc{
+        .target = RenderSceneTargetBinding{
+            .frameBuffer = BGFX_INVALID_HANDLE,
+            .colorTexture = BGFX_INVALID_HANDLE,
+            .viewport = RenderViewportDesc{
+                .id = RenderViewportId{ 1U },
+                .extent = RenderExtent{ 64U, 64U },
+                .viewportIndex = 0U,
+            },
+        },
+        .cameraOverride = IdentityCamera(),
+    };
+
+    // Baseline: the sound scene submits and reports no UI refusal.
+    Require(renderer.BeginFrame(), "UI refusal test renderer did not begin the baseline frame");
+    Require(renderer.SubmitScene(scene, desc), "A scene with a sound canvas must submit");
+    renderer.EndFrame();
+    for (const SceneRenderDiagnosticEvent& event : renderer.LastSceneDiagnostics().events) {
+        Require(event.kind != SceneRenderDiagnosticKind::UIFrameRefused, "A sound canvas must not report a UI refusal");
+    }
+
+    // Break it: one widget now carries two layout components.
+    ui.Set(widget, kb::scene::UIHorizontalLayout{});
+    ui.Set(widget, kb::scene::UIVerticalLayout{});
+    kb::scene::SceneUIFrame refusedFrame;
+    Require(!kb::scene::SceneUIQueries{ scene }.BuildFrame(64.0F, 64.0F, refusedFrame),
+        "UI refusal test fixture must actually make the frame builder refuse");
+
+    Require(renderer.BeginFrame(), "UI refusal test renderer did not begin the refused frame");
+    Require(renderer.SubmitScene(scene, desc),
+        "A refused UI frame must not abort the scene submit - losing the HUD may not cost the whole image");
+    renderer.EndFrame();
+
+    // The 3D half of the frame still ran: visibility feedback is published after the UI step.
+    Require(kb::scene::SceneRenderFeedback::HasFrame(scene),
+        "The scene must still be submitted past the UI step when the UI frame is refused");
+    Require(kb::scene::SceneRenderFeedback::IsVisible(scene, meshEntity),
+        "The gameplay mesh must still be rendered when the UI frame is refused");
+
+    const SceneRenderDiagnosticEvent* refusal = nullptr;
+    for (const SceneRenderDiagnosticEvent& event : renderer.LastSceneDiagnostics().events) {
+        if (event.kind == SceneRenderDiagnosticKind::UIFrameRefused) {
+            refusal = &event;
+        }
+    }
+    Require(refusal != nullptr, "A refused UI frame must publish a UIFrameRefused diagnostic");
+    Require(refusal->severity == SceneRenderDiagnosticSeverity::Error, "A refused UI frame must be reported as an error");
+    Require(refusal->entityId == widget.Id(), "A UI refusal diagnostic must name the widget that caused it");
+    Require(refusedFrame.refusal.reason != nullptr &&
+            std::string_view{refusedFrame.refusal.reason}.find("layout") != std::string_view::npos,
+        "A UI refusal must carry the reason the widget could not be laid out");
+
+    std::filesystem::remove_all(root, error);
+}
+
+// A label whose font has not loaded - the normal state for the first frames after a level
+// load - used to make ScreenUIRenderer::Submit return false, which took every rectangle,
+// image and border in the UI with it and then failed the whole scene submit. The label must
+// lose its text and nothing else, and the drop must be published by entity.
+void RunRendererKeepsUIWhenTextCannotBePreparedTest() {
+    kb::scene::Scene scene;
+    kb::scene::SceneUIComponents ui = scene.Components().UI();
+    const kb::scene::SceneEntity canvas = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Canvas" });
+    ui.Set(canvas, kb::scene::UIRectTransform{ .anchorMax = { 1.0F, 1.0F }, .offsetMax = {} });
+    ui.Set(canvas, kb::scene::UICanvas{});
+
+    const kb::scene::SceneEntity panel = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Panel" });
+    Require(scene.Hierarchy().SetParent(panel, canvas), "UI text drop test could not parent the panel");
+    ui.Set(panel, kb::scene::UIRectTransform{ .offsetMax = { 200.0F, 80.0F } });
+    ui.Set(panel, kb::scene::UIBorder{ .backgroundColor = { 0.0F, 1.0F, 0.0F, 1.0F } });
+
+    const kb::scene::SceneEntity label = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Label" });
+    Require(scene.Hierarchy().SetParent(label, panel), "UI text drop test could not parent the label");
+    ui.Set(label, kb::scene::UIRectTransform{ .offsetMax = { 180.0F, 40.0F } });
+    kb::scene::UIText text{ .fontAssetId = 424242U };
+    Require(kb::scene::SetUITextContent(text, "Play"), "UI text drop test could not author the label content");
+    ui.Set(label, text);
+
+    HeadlessSurface surface;
+    DisplayConfig config{};
+    config.allowHeadlessNoop = true;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "UI text drop test renderer did not initialize");
+    const RenderSceneSubmitDesc desc{
+        .target = RenderSceneTargetBinding{
+            .frameBuffer = BGFX_INVALID_HANDLE,
+            .colorTexture = BGFX_INVALID_HANDLE,
+            .viewport = RenderViewportDesc{
+                .id = RenderViewportId{ 1U },
+                .extent = RenderExtent{ 64U, 64U },
+                .viewportIndex = 0U,
+            },
+        },
+        .cameraOverride = IdentityCamera(),
+    };
+
+    kb::scene::SceneUIFrame frame;
+    Require(kb::scene::SceneUIQueries{ scene }.BuildFrame(64.0F, 64.0F, frame),
+        "UI text drop test fixture must lay out - the label is authored, only its font is missing");
+    Require(frame.elements.size() >= 3U, "UI text drop test fixture must produce a canvas, a panel and a label");
+
+    Require(renderer.BeginFrame(), "UI text drop test renderer did not begin the frame");
+    Require(renderer.SubmitScene(scene, desc),
+        "A label whose font is unavailable must not fail the scene submit - it may only lose its own text");
+    renderer.EndFrame();
+
+    const SceneRenderDiagnosticEvent* dropped = nullptr;
+    for (const SceneRenderDiagnosticEvent& event : renderer.LastSceneDiagnostics().events) {
+        if (event.kind == SceneRenderDiagnosticKind::UITextUnavailable) {
+            dropped = &event;
+        }
+    }
+    Require(dropped != nullptr, "Text the UI renderer had to drop must publish a UITextUnavailable diagnostic");
+    Require(dropped->entityId == label.Id(), "A dropped-text diagnostic must name the label that lost its text");
+}
 
 // LIB-144: the end-to-end proof that a real Renderer::SubmitScene publishes the CPU-side
 // per-entity visibility/bounds feedback frame into the scene (SceneRenderFeedback) - real
@@ -5671,6 +5834,8 @@ void RunRendererRuntimeSubmitTests() {
     RunRuntimeMaterialResolverEvaluatesMaterialOutputTextureGraphTest();
     RunRuntimeMaterialResolverEvaluatesConstantAndMathGraphTest();
     RunRendererPublishesSceneVisibilityFeedbackTest();
+    RunRendererKeepsSceneWhenUIFrameRefusesTest();
+    RunRendererKeepsUIWhenTextCannotBePreparedTest();
     RunRendererParticleMeshSnapshotSubmitTest();
     RunRendererParticleStripSnapshotSubmitTest();
     RunRendererParticleVolumetricSnapshotSubmitTest();

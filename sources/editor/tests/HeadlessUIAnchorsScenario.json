@@ -112,8 +112,8 @@
       "height": 1080,
       "rect_x": 0,
       "rect_y": 0,
-      "rect_width": 100,
-      "rect_height": 100
+      "rect_width": 160,
+      "rect_height": 40
     },
     {
       "op": "ui_rect_layout",

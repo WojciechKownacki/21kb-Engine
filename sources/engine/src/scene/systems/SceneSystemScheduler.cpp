@@ -57,6 +57,12 @@ void SceneSystemScheduler::RecordSystemError(std::string phase, const char* what
     }
 }
 
+void SceneSystemScheduler::ReportSystemError(std::string message) {
+    if (reportedSystemErrors_.insert(message).second) {
+        systemErrors_.push_back(std::move(message));
+    }
+}
+
 std::vector<std::string> SceneSystemScheduler::DrainSystemErrors() {
     std::vector<std::string> drained;
     drained.swap(systemErrors_);

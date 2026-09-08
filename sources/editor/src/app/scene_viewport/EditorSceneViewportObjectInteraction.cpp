@@ -2,6 +2,7 @@
 
 #if defined(_WIN32)
 #include "app/scene_viewport/EditorSceneViewportGizmoInteraction.hpp"
+#include "rendering/SceneViewportPresentationPolicy.hpp"
 #include "app/scene_viewport/EditorUIRectInteraction.hpp"
 #include "app/scene_viewport/EditorSceneViewportHitResolver.hpp"
 #include "app/scene_viewport/EditorSceneViewportAssetDragPreview.hpp"
@@ -49,17 +50,31 @@ bool EditorSceneViewportObjectInteraction::BeginGizmoDrag(
     const EditorMetrics& metrics,
     EditorSceneContext& sceneContext) {
     const auto hit = EditorSceneViewportHitResolver::ResolveRay(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext);
-    if (hit && sceneContext.ViewportPreview(hit->panelId).Is2D() && !sceneContext.HasPlayModeSceneSession()) {
+    // A click belongs to the UI exactly when the UI is on screen, and the same predicate decides
+    // whether the viewport draws it - so the two can never disagree. A canvas that were hidden
+    // yet still pickable would swallow clicks meant for the map, which is worse than the
+    // visible-but-unclickable canvas this replaced.
+    const bool playing = sceneContext.HasPlayModeSceneSession();
+    if (hit && !playing &&
+        SceneViewportPresentationPolicy::ScreenUIVisible(playing, sceneContext.ViewportPreview(hit->panelId).Is2D())) {
         const auto& preview = sceneContext.ViewportPreview(hit->panelId);
-        const float zoom = preview.UIZoom();
-        const auto pan = preview.UIPan();
-        const bool handled = EditorUIRectInteraction::Begin(sceneContext,
-            static_cast<float>(hit->renderArea.right-hit->renderArea.left), static_cast<float>(hit->renderArea.bottom-hit->renderArea.top), (hit->localX-pan.x)/zoom, (hit->localY-pan.y)/zoom, zoom);
-        if (sceneContext.UIRectDrag()) {
-            sceneContext.UIRectDrag()->viewportOrigin = {static_cast<float>(hit->renderArea.left)+pan.x,static_cast<float>(hit->renderArea.top)+pan.y};
-            sceneContext.UIRectDrag()->pointerScale = 1.0F / zoom;
+        const bool twoD = preview.Is2D();
+        const float zoom = twoD ? preview.UIZoom() : 1.0F;
+        const kb::math::Vec2 pan = twoD ? preview.UIPan() : kb::math::Vec2{};
+        if (EditorUIRectInteraction::Begin(sceneContext,
+                static_cast<float>(hit->renderArea.right - hit->renderArea.left),
+                static_cast<float>(hit->renderArea.bottom - hit->renderArea.top),
+                (hit->localX - pan.x) / zoom, (hit->localY - pan.y) / zoom, zoom)) {
+            if (sceneContext.UIRectDrag()) {
+                sceneContext.UIRectDrag()->viewportOrigin = {static_cast<float>(hit->renderArea.left) + pan.x,
+                                                             static_cast<float>(hit->renderArea.top) + pan.y};
+                sceneContext.UIRectDrag()->pointerScale = 1.0F / zoom;
+            }
+            return true;
         }
-        return handled;
+        // A click that missed every widget is not a UI click. Falling through instead of
+        // swallowing it is what lets the gizmo, rectangle selection and 3D picking work in a
+        // scene that happens to contain a canvas.
     }
     return EditorSceneViewportGizmoInteraction::BeginDrag(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext);
 }

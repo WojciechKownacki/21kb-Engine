@@ -21,12 +21,15 @@ struct ScenePrefabOptionalComponentExpectation {
     bool expectedPresent = false;
 };
 
-[[nodiscard]] inline std::array<ScenePrefabOptionalComponentExpectation, 49U>
-ScenePrefabOptionalComponentExpectations(
+// The size is deduced from the list rather than written out. A hand-written extent silently
+// zero-filled the tail when rows were removed, and the loop below treats a zero component id as
+// "registry not ready" and bails out - so every mask comparison answered "no match" regardless
+// of what the entity actually held.
+[[nodiscard]] inline auto ScenePrefabOptionalComponentExpectations(
     const ScenePrefabNodeComponents& components,
     const SceneState& state) noexcept {
     const SceneComponentRegistry& registry = state.components;
-    return {{
+    return std::to_array<ScenePrefabOptionalComponentExpectation>({
         { registry.CameraComponentId(), components.camera.has_value() },
         { registry.MeshRendererComponentId(), components.meshRenderer.has_value() },
         { registry.LightComponentId(), components.light.has_value() },
@@ -63,7 +66,7 @@ ScenePrefabOptionalComponentExpectations(
         { registry.DeformedGeometryComponentId(), components.deformedGeometry.has_value() },
         { registry.NavAgentComponentId(), components.navAgent.has_value() },
         { registry.NavObstacleComponentId(), components.navObstacle.has_value() },
-    }};
+    });
 }
 
 [[nodiscard]] inline ScenePrefabOptionalComponentMaskMatch ScenePrefabOptionalComponentMaskMatches(

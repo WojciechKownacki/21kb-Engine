@@ -3263,6 +3263,59 @@ void RunUIComponentAuthoringTest() {
     std::filesystem::remove(sceneFile.string() + ".meta", cleanupError);
 }
 
+void RunInspectorTextCaretTest() {
+    kb::editor::InspectorPanelState state;
+
+    // Backspacing a multi-byte character used to drop one byte, leaving a truncated UTF-8
+    // sequence. The painter converts with MB_ERR_INVALID_CHARS and bails on failure, so the
+    // whole field rendered blank: the text was still there and simply could not be shown.
+    state.BeginTextEdit(kb::editor::InspectorPropertyId::PositionX, "");
+    state.AppendText(L'1');
+    state.AppendText(static_cast<wchar_t>(0x00F3)); // U+00F3, two UTF-8 bytes
+    state.AppendText(L'2');
+    kb::editor::tests::Require(state.EditBuffer() == std::string{"1\xC3\xB3" "2"},
+        "Inspector edit buffer should hold the typed text as UTF-8");
+    state.BackspaceText();
+    state.BackspaceText();
+    kb::editor::tests::Require(state.EditBuffer() == std::string{"1"},
+        "Backspace must erase a whole UTF-8 code point, not a single byte");
+
+    // A field with no caret and no focus ring gives no sign of where typing goes.
+    kb::editor::tests::Require(state.IsTextCaretVisible(),
+        "A field being edited must show its caret right after a keystroke");
+    bool blinkedOff = false;
+    bool blinkedBackOn = false;
+    for (int step = 0; step < 600; ++step) {
+        kb::editor::tests::Require(state.TickTextCaret(0.01F),
+            "Ticking the caret of an edited field must keep requesting repaints");
+        if (!state.IsTextCaretVisible()) {
+            blinkedOff = true;
+        } else if (blinkedOff) {
+            blinkedBackOn = true;
+            break;
+        }
+    }
+    kb::editor::tests::Require(blinkedOff && blinkedBackOn, "The caret must blink off and back on while editing");
+
+    // Typing while the caret is in its hidden half must bring it straight back, otherwise the
+    // character appears with no insertion point beside it.
+    while (state.IsTextCaretVisible()) {
+        kb::editor::tests::Require(state.TickTextCaret(0.01F), "Caret tick should stay live while editing");
+    }
+    state.BackspaceText();
+    kb::editor::tests::Require(state.IsTextCaretVisible(), "A keystroke must reset the caret to visible");
+
+    // Select-all shows the selection instead; a caret on top of it reads as two insertion points.
+    state.BeginTextEdit(kb::editor::InspectorPropertyId::PositionX, "48");
+    state.SelectAllText();
+    kb::editor::tests::Require(!state.IsTextCaretVisible(), "A select-all field must not also show a caret");
+
+    // Nothing focused means nothing to blink, so the frame loop is free to park on idle.
+    state.EndTextEdit();
+    kb::editor::tests::Require(!state.TickTextCaret(0.01F) && !state.IsTextCaretVisible(),
+        "With no field being edited the caret must neither blink nor request repaints");
+}
+
 } // namespace
 
 namespace kb::editor::tests {
@@ -3275,6 +3328,7 @@ void RunEditorInspectorTests() {
     RunInspectorHoverIndexTest();
     RunAddComponentBrowserModelTest();
     RunUIComponentAuthoringTest();
+    RunInspectorTextCaretTest();
     RunInspectorTextEditDirtyStateTest();
     RunAudioComponentCatalogTest();
     RunObjectClassificationCatalogTest();

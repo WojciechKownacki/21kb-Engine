@@ -67,6 +67,16 @@ ScreenUIFontPreparation ScreenUIFontAtlasCache::Prepare(std::uint64_t sceneId, k
                                                         const kb::scene::SceneUIFrame& frame) {
     textRuns_.clear();
     textRuns_.reserve(frame.elements.size());
+    std::uint64_t failedEntity = 0U;
+    const char* failureReason = nullptr;
+    // Keeps the first failure only: later ones are usually the same authoring mistake
+    // repeated across a menu, and naming them all buries the one worth fixing.
+    const auto fail = [&failedEntity, &failureReason](std::uint64_t entity, const char* reason) noexcept {
+        if (failureReason == nullptr) {
+            failedEntity = entity;
+            failureReason = reason;
+        }
+    };
     for (const kb::scene::SceneUIFrameElement& element : frame.elements) {
         if (!element.text.has_value() || kb::scene::UITextContent(*element.text).empty() ||
             element.text->fontAssetId == 0U || (element.mask.has_value() && !element.mask->showGraphic)) {
@@ -82,8 +92,8 @@ ScreenUIFontPreparation ScreenUIFontAtlasCache::Prepare(std::uint64_t sceneId, k
         const ScreenUITextMarkup parsed =
             ScreenUITextMarkupParser{}.Parse(kb::scene::UITextContent(*element.text), element.text->richText);
         if (!parsed.succeeded) {
-            textRuns_.clear();
-            return ScreenUIFontPreparation{.succeeded = false};
+            fail(element.entity.Id(), "Text markup is malformed");
+            continue;
         }
         if (parsed.glyphs.empty())
             continue;
@@ -98,13 +108,13 @@ ScreenUIFontPreparation ScreenUIFontAtlasCache::Prepare(std::uint64_t sceneId, k
         const float requiredPadding =
             std::ceil(std::max(outline, shadow)) * 2.0F + static_cast<float>(kMinimumGlyphPadding);
         if (requiredPadding > static_cast<float>(std::numeric_limits<std::uint16_t>::max())) {
-            textRuns_.clear();
-            return ScreenUIFontPreparation{.succeeded = false};
+            fail(element.entity.Id(), "Text outline or shadow is too large to pad a glyph atlas");
+            continue;
         }
         FontEntry* entry = Ensure(key, codepoints, static_cast<std::uint16_t>(requiredPadding), assets, resources);
         if (entry == nullptr) {
-            textRuns_.clear();
-            return ScreenUIFontPreparation{.succeeded = false};
+            fail(element.entity.Id(), "Font asset is unavailable or its glyphs do not fit an atlas");
+            continue;
         }
         ScreenUITextRun run{.entity = element.entity.Id(),
                             .fontAssetId = key.assetId,
@@ -114,7 +124,8 @@ ScreenUIFontPreparation ScreenUIFontAtlasCache::Prepare(std::uint64_t sceneId, k
         Layout(element, *entry, parsed.glyphs, run);
         textRuns_.push_back(std::move(run));
     }
-    return ScreenUIFontPreparation{.runs = textRuns_};
+    return ScreenUIFontPreparation{
+        .runs = textRuns_, .failedEntity = failedEntity, .failureReason = failureReason};
 }
 
 bgfx::TextureHandle ScreenUIFontAtlasCache::Resolve(std::uint64_t sceneId, std::uint64_t fontAssetId,
@@ -379,7 +390,11 @@ void ScreenUIFontAtlasCache::Layout(const kb::scene::SceneUIFrameElement& elemen
                                                    .v0 = glyph->v0,
                                                    .u1 = glyph->u1,
                                                    .v1 = glyph->v1,
-                                                   .color = styledGlyph.color});
+                                                   .color = styledGlyph.color,
+                                                   .sourceOffset = styledGlyph.sourceOffset,
+                                                   .lineTop = baseline - entry.ascent,
+                                                   .lineBottom = baseline - entry.descent,
+                                                   .advanceRight = x + glyph->advance});
             x += glyph->advance;
         }
     }

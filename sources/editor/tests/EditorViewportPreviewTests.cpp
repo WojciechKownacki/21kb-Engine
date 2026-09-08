@@ -84,6 +84,20 @@ void RunSceneViewportPresentationPolicyTest() {
     kb::editor::tests::Require(
         !SceneViewportPresentationPolicy::EditorOverlaysEnabled(true, true),
         "Play mode Scene View must not draw editor overlays over the game camera");
+    // A screen-space canvas is not part of the world. Drawn over the 3D view it buries the map
+    // behind a menu, so it shows only where it means something: while playing, and in the 2D
+    // mode that exists to author it.
+    kb::editor::tests::Require(
+        !SceneViewportPresentationPolicy::ScreenUIVisible(false, false),
+        "Editing the world must not draw the scene's screen-space UI over it");
+    kb::editor::tests::Require(
+        SceneViewportPresentationPolicy::ScreenUIVisible(false, true),
+        "2D authoring mode must show the UI it exists to edit");
+    kb::editor::tests::Require(
+        SceneViewportPresentationPolicy::ScreenUIVisible(true, false) &&
+            SceneViewportPresentationPolicy::ScreenUIVisible(true, true),
+        "Play mode must always show the UI the player is meant to use");
+
     kb::editor::tests::Require(
         SceneViewportPresentationPolicy::RequiresPresent(false, true),
         "Entering Play mode must request a Scene View present");

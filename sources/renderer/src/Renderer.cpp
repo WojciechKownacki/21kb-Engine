@@ -765,9 +765,24 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
     const std::uint32_t width = desc.target.viewport.extent.width;
     const std::uint32_t height = desc.target.viewport.extent.height;
     kb::scene::SceneUIFrame screenUIFrame;
-    if (!scene.UI().BuildFrame(static_cast<float>(width), static_cast<float>(height), screenUIFrame)) {
-        WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport screen UI frame build failed");
-        return false;
+    // An editor viewport laying out the world asks for no UI layer. Skipping the build, rather
+    // than discarding its result, also skips the layout pass the frame would have cost.
+    if (desc.screenUIEnabled &&
+        !scene.UI().BuildFrame(static_cast<float>(width), static_cast<float>(height), screenUIFrame)) {
+        // A widget the author can fix must not cost the whole frame. The UI layer is dropped,
+        // the 3D scene still renders, and the refusal is published by name with the offending
+        // entity so it is diagnosable instead of appearing as a dead renderer.
+        std::ostringstream message;
+        message << "SubmitSceneToViewport screen UI frame refused entity="
+                << screenUIFrame.refusal.entity.Id() << " reason="
+                << (screenUIFrame.refusal.reason != nullptr ? screenUIFrame.refusal.reason : "unknown");
+        WriteRendererBreadcrumb("renderer", message.str());
+        lastSceneDiagnostics_.events.push_back(SceneRenderDiagnosticEvent{
+            .severity = SceneRenderDiagnosticSeverity::Error,
+            .kind = SceneRenderDiagnosticKind::UIFrameRefused,
+            .entityId = screenUIFrame.refusal.entity.Id(),
+        });
+        screenUIFrame.elements.clear();
     }
     if (desc.editorSceneOverlaysEnabled) {
         screenUIFrame.elements.insert(screenUIFrame.elements.end(), desc.editorUIOverlays.begin(), desc.editorUIOverlays.end());
@@ -1667,6 +1682,15 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
                 WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport screen UI submit failed");
                 return false;
             }
+            // Text the UI renderer had to drop leaves the rest of the widget drawn, so the
+            // only trace is a label that silently never appears. Publish it by entity.
+            if (screenUIRenderer_ != nullptr && screenUIRenderer_->LastTextFailure().reason != nullptr) {
+                lastSceneDiagnostics_.events.push_back(SceneRenderDiagnosticEvent{
+                    .severity = SceneRenderDiagnosticSeverity::Error,
+                    .kind = SceneRenderDiagnosticKind::UITextUnavailable,
+                    .entityId = screenUIRenderer_->LastTextFailure().entityId,
+                });
+            }
         }
 
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport editor overlay submit begin");
@@ -1703,6 +1727,13 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
          }))) {
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport screen UI submit failed noFinalComposite");
         return false;
+    }
+    if (screenUIRenderer_ != nullptr && screenUIRenderer_->LastTextFailure().reason != nullptr) {
+        lastSceneDiagnostics_.events.push_back(SceneRenderDiagnosticEvent{
+            .severity = SceneRenderDiagnosticSeverity::Error,
+            .kind = SceneRenderDiagnosticKind::UITextUnavailable,
+            .entityId = screenUIRenderer_->LastTextFailure().entityId,
+        });
     }
 
     WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport editor overlay submit begin noFinalComposite");

@@ -50,6 +50,9 @@ public:
         std::vector<std::uint64_t> selectedEntityIds;
         std::uint64_t viewportKey = 0;
         bool editorSceneOverlaysEnabled = true;
+        // Whether this viewport composites the scene's authored screen-space UI. Off while
+        // editing the world, where a canvas would cover the map being laid out.
+        bool screenUIEnabled = true;
         render::RenderSceneSubmitDesc::EditorGridDesc editorGrid{};
         render::RenderSceneSubmitDesc::EditorGizmoDesc editorGizmo{};
         std::vector<render::EditorCameraWireframeDesc> editorCameraWireframes;
