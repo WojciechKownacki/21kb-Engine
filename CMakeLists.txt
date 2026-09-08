@@ -127,6 +127,27 @@ if(WIN32 AND NOT KB_DXCOMPILER_RUNTIME AND DEFINED ENV{VULKAN_SDK})
     endif()
 endif()
 
+# The Windows SDK ships the same compiler, and it is present on machines that build this at all -
+# including CI, which has no Vulkan SDK. Without it the DXIL profile silently gets no compiler and
+# the failure only surfaces much later, as "Unable to load DXC compiler" from a cook.
+if(WIN32 AND NOT KB_DXCOMPILER_RUNTIME)
+    file(GLOB _kb_windows_sdk_dxcompilers
+        "$ENV{ProgramFiles\(x86\)}/Windows Kits/10/bin/*/x64/dxcompiler.dll"
+        "$ENV{ProgramFiles}/Windows Kits/10/bin/*/x64/dxcompiler.dll")
+    if(_kb_windows_sdk_dxcompilers)
+        list(SORT _kb_windows_sdk_dxcompilers)
+        list(GET _kb_windows_sdk_dxcompilers -1 _kb_windows_sdk_dxcompiler)
+        set(KB_DXCOMPILER_RUNTIME "${_kb_windows_sdk_dxcompiler}" CACHE FILEPATH "Path to dxcompiler.dll copied next to shaderc for DXIL graph cooking" FORCE)
+    endif()
+endif()
+
+# Say so at configure time rather than letting a cook fail with a compiler that was never copied.
+if(WIN32 AND NOT KB_DXCOMPILER_RUNTIME
+        AND NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/bgfx.cmake/bgfx/tools/bin/windows/dxcompiler.dll")
+    message(WARNING "No dxcompiler.dll found (Vulkan SDK or Windows SDK). DXIL shader cooking will fail; "
+                    "set -DKB_DXCOMPILER_RUNTIME=<path to dxcompiler.dll> to enable it.")
+endif()
+
 function(kb_add_bgfx_subdirectory)
     if(MSVC)
         set(_kb_saved_cxx_flags "${CMAKE_CXX_FLAGS}")
