@@ -662,6 +662,7 @@ void AppendTerrainBrushRing(
         lightingConfig.maxForwardLights = kb::render::kMaxSceneForwardLights;
     }
     const bool twoD = viewportState.Is2D() && !continuousRuntimeFrames;
+    const bool screenUIVisible = SceneViewportPresentationPolicy::ScreenUIVisible(continuousRuntimeFrames, twoD);
     const std::uint32_t renderWidth = twoD ? RectWidth(sceneRects.renderArea) : viewportState.RenderWidthForPanel(RectWidth(sceneRects.renderArea));
     const std::uint32_t renderHeight = twoD ? RectHeight(sceneRects.renderArea) : viewportState.RenderHeightForPanel(RectHeight(sceneRects.renderArea));
     sceneContext.SetUIAuthoringViewportSize(static_cast<float>(renderWidth), static_cast<float>(renderHeight));
@@ -723,6 +724,7 @@ void AppendTerrainBrushRing(
         .selectedEntityIds = editorOverlaysEnabled ? SelectedEntityIds(sceneContext) : std::vector<std::uint64_t>{},
         .viewportKey = panelId,
         .editorSceneOverlaysEnabled = editorOverlaysEnabled,
+        .screenUIEnabled = screenUIVisible,
         .editorGrid = kb::render::RenderSceneSubmitDesc::EditorGridDesc{
             .minorSpacingMeters = viewportState.GridSpacing(),
             .majorEvery = viewportState.GridMajorEvery(),
@@ -733,7 +735,8 @@ void AppendTerrainBrushRing(
         .editorLightWireframes = editorOverlaysEnabled ? BuildLightWireframes(sceneContext, viewportCamera, axes, renderHeight) : std::vector<kb::render::EditorLightWireframeDesc>{},
         .editorParticleIcons = editorOverlaysEnabled ? BuildParticleIcons(sceneContext, viewportCamera, axes, renderHeight) : std::vector<kb::render::EditorParticleIconDesc>{},
         .physicsDebugLines = editorOverlaysEnabled ? BuildPhysicsDebugLines(sceneContext) : std::vector<kb::render::PhysicsDebugLine>{},
-        .editorUIOverlays = twoD ? EditorUIRectInteraction::Overlays(sceneContext, static_cast<float>(renderWidth), static_cast<float>(renderHeight), viewportState.UIZoom()) : std::vector<kb::scene::SceneUIFrameElement>{},
+        // Outline and handles belong exactly where the UI itself is shown, never on their own.
+        .editorUIOverlays = editorOverlaysEnabled && screenUIVisible ? EditorUIRectInteraction::Overlays(sceneContext, static_cast<float>(renderWidth), static_cast<float>(renderHeight), twoD ? viewportState.UIZoom() : 1.0F) : std::vector<kb::scene::SceneUIFrameElement>{},
         .editorUIScale = twoD ? viewportState.UIZoom() : 1.0F,
         .editorUIOffset = twoD ? viewportState.UIPan() : kb::math::Vec2{},
         .editorSelectionBox = editorOverlaysEnabled ? SelectionBoxDesc(sceneContext, panelId) : kb::render::RenderSceneSubmitDesc::EditorSelectionBoxDesc{},

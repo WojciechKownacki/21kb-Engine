@@ -2347,7 +2347,8 @@ void PaintUIRectBody(HDC dc, RECT body, const EditorTheme& theme, const Inspecto
         const RECT box = UIRectFieldRect(body, index);
         const bool editing = state.EditedProperty() == InspectorPropertyId::UIRectLayoutField && state.EditIndex() == index;
         Text(dc, Rect(box.left, box.top - 18, box.right, box.top), fields[index].label, Color(theme.textSecondary));
-        DrawValueBox(dc, box, theme, editing ? std::string_view{state.EditBuffer()} : fields[index].value, editing);
+        DrawValueBox(dc, box, theme, editing ? std::string_view{state.EditBuffer()} : fields[index].value, false,
+            editing, state.IsTextCaretVisible());
     }
     int y = body.top + kUIRectGeometryHeight;
     if (presets) {
@@ -2377,7 +2378,8 @@ void PaintUIRectBody(HDC dc, RECT body, const EditorTheme& theme, const Inspecto
             const bool editing = state.EditedProperty() == InspectorPropertyId::UIRectTransformField && state.EditIndex() == index;
             Text(dc, Rect(box.left - (pair == 1 && lane == 1 ? 43 : 15), box.top, box.left, box.bottom),
                 pair == 1 ? (lane == 0 ? "Z" : "Order") : (lane == 0 ? "X" : "Y"), Color(theme.textSecondary));
-            DrawValueBox(dc, box, theme, editing ? std::string_view{state.EditBuffer()} : row.value, editing);
+            DrawValueBox(dc, box, theme, editing ? std::string_view{state.EditBuffer()} : row.value, false, editing,
+                state.IsTextCaretVisible());
         }
         y += kFieldRowHeight + kDividerHeight;
     }
@@ -2436,7 +2438,8 @@ void PaintUICompactRow(HDC dc, RECT bounds, const EditorTheme& theme,
             Text(dc, Rect(box.left - (row.fieldCount == 4 ? 21 : 14), box.top, box.left, box.bottom),
                 row.fieldCount == 2 ? (lane == 0 ? "X" : "Y") : labels[lane], Color(theme.textSecondary));
             const bool editing = state.EditedProperty() == property && state.EditIndex() == index + lane;
-            DrawValueBox(dc, box, theme, editing ? std::string_view{state.EditBuffer()} : field.value, editing);
+            DrawValueBox(dc, box, theme, editing ? std::string_view{state.EditBuffer()} : field.value, false, editing,
+                state.IsTextCaretVisible());
         }
     }
     inspector_panel_rows::DrawDivider(dc, theme, bounds.left, bounds.right, bounds.bottom);

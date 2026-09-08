@@ -28,6 +28,7 @@ public:
     [[nodiscard]] static bool HasSceneSystem(const Scene& scene, SceneSystemHandle handle) noexcept;
     [[nodiscard]] static std::size_t SceneSystemCount(const Scene& scene) noexcept;
     [[nodiscard]] static std::vector<std::string> DrainSceneSystemErrors(Scene& scene);
+    static void ReportSceneSystemError(Scene& scene, std::string message);
     static void SynchronizeTransforms(Scene& scene);
     static void SetFixedStepSettings(Scene& scene, SceneRuntimeFixedStepSettings settings) noexcept;
     // LIB-093: the script FixedTick delta (see SceneState::scriptFixedDeltaSeconds).

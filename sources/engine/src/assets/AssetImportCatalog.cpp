@@ -92,12 +92,11 @@ constexpr std::array KnownExtensionsAfterAudio{
     ExtensionCategory{ ".cginc", AssetImportCategory::Shader },
     ExtensionCategory{ ".ush", AssetImportCategory::Shader },
     ExtensionCategory{ ".usf", AssetImportCategory::Shader },
+    // Only the containers the screen-UI font path can actually rasterize. A format accepted
+    // here but rejected at runtime imports cleanly, passes the Inspector, gets packaged, and
+    // then ships a game with no UI - the worst of the three possible answers.
     ExtensionCategory{ ".ttf", AssetImportCategory::Font },
     ExtensionCategory{ ".otf", AssetImportCategory::Font },
-    ExtensionCategory{ ".woff", AssetImportCategory::Font },
-    ExtensionCategory{ ".woff2", AssetImportCategory::Font },
-    ExtensionCategory{ ".fnt", AssetImportCategory::Font },
-    ExtensionCategory{ ".font", AssetImportCategory::Font },
     ExtensionCategory{ ".lua", AssetImportCategory::Script },
     ExtensionCategory{ ".py", AssetImportCategory::Script },
     ExtensionCategory{ ".cs", AssetImportCategory::Script },

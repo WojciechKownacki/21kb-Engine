@@ -108,6 +108,16 @@ struct ScreenUIGlyphQuad {
     float u1 = 0.0F;
     float v1 = 0.0F;
     std::array<float, 4U> color{1.0F, 1.0F, 1.0F, 1.0F};
+    // Byte offset of this glyph in the authored string, carried from the markup parser so a
+    // text caret can be placed at its left edge.
+    std::uint32_t sourceOffset = 0U;
+    // Baseline extent of the line this glyph sits on, so a caret spans the line rather than
+    // the glyph's own ink box.
+    float lineTop = 0.0F;
+    float lineBottom = 0.0F;
+    // Pen position after this glyph. A caret sitting past the last character belongs here, not
+    // at the glyph's ink edge, which excludes the advance's right side bearing.
+    float advanceRight = 0.0F;
 };
 
 struct ScreenUITextRun {

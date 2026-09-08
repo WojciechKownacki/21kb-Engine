@@ -869,7 +869,10 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
     // instead of parking in WaitMessage, and repaint every interpolated step.
     const bool addComponentSliding = state.sceneContext.Inspector().TickAddComponentSlide(deltaSeconds);
     const bool disclosureSliding = state.sceneContext.Inspector().TickDisclosures(deltaSeconds);
-    if (addComponentSliding || disclosureSliding) {
+    // A caret that does not blink is not a caret. This has to feed the return value below as
+    // well, or the loop parks on the idle interval and the caret toggles once per second.
+    const bool caretBlinking = state.sceneContext.Inspector().TickTextCaret(deltaSeconds);
+    if (addComponentSliding || disclosureSliding || caretBlinking) {
         InvalidateInspectorPanels(state);
     }
 
@@ -877,7 +880,7 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
     return viewportsPresented || navigationChanged || gizmoChanged || focusChanged ||
         animationPreviewCameraChanged || animationPreviewPlaybackChanged || particlePreviewChanged ||
         sceneParticlesChanged || scriptSaved ||
-        audioPreviewChanged || addComponentSliding || disclosureSliding || skeletalMeshEditorOpenChanged ||
+        audioPreviewChanged || addComponentSliding || disclosureSliding || caretBlinking || skeletalMeshEditorOpenChanged ||
         EditorTerrainService::ToolState().strokeActive;
 }
 

@@ -223,17 +223,21 @@ void TestSceneAndPrefabRoundTrips() {
     std::error_code error;
     std::filesystem::remove(scenePath, error);
     std::filesystem::remove(scenePath.string() + ".meta", error);
-    Require(kb::scene::SceneDocumentService::Save(source, scenePath, "Particle Stage 2"), "v33 scene save failed");
+    Require(kb::scene::SceneDocumentService::Save(source, scenePath, "Particle Stage 2"), "current-version scene save failed");
     const kb::scene::SceneDocumentLoadResult loaded = kb::scene::SceneDocumentService::Load(scenePath);
-    Require(loaded.succeeded && loaded.document.fileVersion == 33U, "v33 scene load failed");
-    Require(loaded.document.worldPrefab.NodeCount() == 1U, "v33 scene node count changed");
+    // Compared against the document's own current version, not a written-out number: the format
+    // was bumped to 34 for UI components and this expectation was left behind, which failed the
+    // round trip for a reason that had nothing to do with particles.
+    Require(loaded.succeeded && loaded.document.fileVersion == kb::scene::SceneDocument::CurrentFileVersion,
+        "current-version scene load failed");
+    Require(loaded.document.worldPrefab.NodeCount() == 1U, "current-version scene node count changed");
     const auto& loadedComponent = loaded.document.worldPrefab.Nodes()[0].components.particleEffect;
     Require(loadedComponent.has_value() && loadedComponent->effectAssetId == authored.effectAssetId &&
         loadedComponent->deterministicSeed == authored.deterministicSeed && loadedComponent->rateMultiplier == authored.rateMultiplier &&
         loadedComponent->maxParticlesOverride == authored.maxParticlesOverride && loadedComponent->ownerDeathPolicy == authored.ownerDeathPolicy &&
         loadedComponent->enabled == authored.enabled && loadedComponent->autoPlay == authored.autoPlay &&
         loadedComponent->followTransform == authored.followTransform && loadedComponent->restartOnActivate == authored.restartOnActivate,
-        "v33 scene component fields did not roundtrip");
+        "current-version scene component fields did not roundtrip");
 
     const kb::scene::ScenePrefab captured = source.Prefabs().Capture(root);
     kb::scene::Scene target;

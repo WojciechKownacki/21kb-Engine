@@ -201,6 +201,10 @@ struct RenderSceneSubmitDesc {
     float clearDepth = SceneDepthPolicy::ClearDepth();
     std::uint8_t clearStencil = 0U;
     bool editorSceneOverlaysEnabled = true;
+    // Whether the scene's authored screen-space UI is composited into this viewport. Always on
+    // for a shipped game; the editor turns it off while editing the world, where a canvas would
+    // otherwise cover the map it is trying to lay out.
+    bool screenUIEnabled = true;
     bool shadowPassEnabled = true;
     bool postProcessEnabled = true;
     bool selectionMaskEnabled = true;

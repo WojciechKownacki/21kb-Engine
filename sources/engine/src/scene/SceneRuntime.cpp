@@ -167,6 +167,10 @@ std::vector<std::string> SceneRuntimeService::DrainSceneSystemErrors(Scene& scen
     return SceneAccess::State(scene).sceneSystemScheduler.DrainSystemErrors();
 }
 
+void SceneRuntimeService::ReportSceneSystemError(Scene& scene, std::string message) {
+    SceneAccess::State(scene).sceneSystemScheduler.ReportSystemError(std::move(message));
+}
+
 void SceneRuntimeService::SynchronizeTransforms(Scene& scene) {
     SceneState& state = SceneAccess::State(scene);
     SynchronizeTransformHierarchy(state);

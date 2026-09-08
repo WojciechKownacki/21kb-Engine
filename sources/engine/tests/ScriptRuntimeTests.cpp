@@ -11858,6 +11858,13 @@ void RunScriptUIEventDispatchTest() {
         scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Event Button", .parent = canvas });
     kb::scene::ApplySceneUIComponents(scene.Components().UI(), button.Entity(),
         kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Button));
+    // This test is about event dispatch, not about how large a Button preset happens to be.
+    // Author the rect it clicks so the fixture stays valid when the preset's proportions
+    // change: 200x200 logical units cover the pointer below at this canvas scale.
+    kb::scene::UIRectTransform* buttonRect = scene.Components().UI().TryGet<kb::scene::UIRectTransform>(button.Entity());
+    kb::tests::Require(buttonRect != nullptr, "Script UI event fixture did not author a button rect");
+    buttonRect->offsetMax = { 200.0F, 200.0F };
+    scene.Components().UI().MarkModified<kb::scene::UIRectTransform>(button.Entity());
     kb::scene::UISelectable* selectable = scene.Components().UI().TryGet<kb::scene::UISelectable>(button.Entity());
     kb::tests::Require(selectable != nullptr && kb::scene::SetUIEventName(*selectable, "OpenMenu"),
         "Script UI event fixture did not configure its action name");

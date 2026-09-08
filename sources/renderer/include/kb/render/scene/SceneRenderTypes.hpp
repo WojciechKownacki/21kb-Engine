@@ -456,6 +456,14 @@ enum class SceneRenderDiagnosticKind : std::uint8_t {
     TextureDimensionMismatch,
     UnsupportedParticleOutput,
     ParticleSubmissionFailed,
+    // The scene's authored UI could not be laid out. The submit continues without any UI
+    // rather than dropping the frame: losing the HUD is a bug, losing the whole image is a
+    // black screen. `entityId` names the widget to fix.
+    UIFrameRefused,
+    // One text element could not be prepared - font still streaming, malformed markup, or
+    // glyphs that do not fit an atlas. That element draws without its text; the rest of the
+    // UI is unaffected. `entityId` names it.
+    UITextUnavailable,
 };
 
 enum class SceneRenderMaterialProgramStatus : std::uint8_t {

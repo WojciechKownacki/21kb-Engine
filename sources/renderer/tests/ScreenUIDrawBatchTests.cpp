@@ -1,18 +1,27 @@
 #include "RendererTestSupport.hpp"
 
 #include "private/ui/ScreenUIDrawBatchBuilder.hpp"
+#include "private/ui/ScreenUIFontAtlasCache.hpp"
 #include "private/ui/ScreenUIFontPayloadValidator.hpp"
 #include "private/ui/ScreenUITextMarkupParser.hpp"
 
+#include "kb/render/resources/RenderResourceRegistry.hpp"
+
+#include "engine/assets/AssetImportCatalog.hpp"
+#include "engine/assets/AssetManager.hpp"
 #include "engine/assets/ImportedAsset.hpp"
 #include "engine/scene/SceneUI.hpp"
+#include "engine/ui/visual/UIText.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstdio>
 #include <cstdint>
+#include <filesystem>
 #include <ranges>
 #include <span>
+#include <string>
 
 namespace kb::render::tests {
 namespace {
@@ -203,6 +212,109 @@ void BatchBuilderAppliesInteractionTintToEveryVisualLayer() {
             "Screen UI interaction tint did not cover every visual layer");
 }
 
+void FocusedInputFieldDrawsItsCaretAtTheEditedOffset() {
+    // The engine tracked a caret byte offset and moved it with the arrow keys, but nothing ever
+    // drew it. A shipped text field therefore looked inert no matter what the player typed.
+    const auto frameWithCaret = [](bool caretVisible, std::uint32_t caretOffset) {
+        kb::scene::SceneUIFrame frame{.viewportSize = {640.0F, 360.0F}};
+        kb::scene::SceneUIFrameElement field = Element(30U, {0.0F, 0.0F, 200.0F, 40.0F});
+        kb::scene::UIText text{.fontAssetId = 5U};
+        Require(kb::scene::SetUITextContent(text, "ab"), "Caret fixture could not author its text");
+        field.text = text;
+        field.inputField = kb::scene::UIInputField{};
+        field.textCaretVisible = caretVisible;
+        field.textCaretByteOffset = caretOffset;
+        frame.elements = {field};
+        return frame;
+    };
+
+    // Two glyphs at known columns, as the font layout would produce them.
+    ScreenUITextRun run{.entity = 30U, .fontAssetId = 5U, .pixelSize = 16U, .atlasWidth = 64U, .atlasHeight = 64U};
+    run.glyphs.push_back(ScreenUIGlyphQuad{.left = 10.0F, .top = 12.0F, .right = 18.0F, .bottom = 26.0F,
+                                           .sourceOffset = 0U, .lineTop = 8.0F, .lineBottom = 30.0F,
+                                           .advanceRight = 20.0F});
+    run.glyphs.push_back(ScreenUIGlyphQuad{.left = 20.0F, .top = 12.0F, .right = 28.0F, .bottom = 26.0F,
+                                           .sourceOffset = 1U, .lineTop = 8.0F, .lineBottom = 30.0F,
+                                           .advanceRight = 30.0F});
+    const std::array<ScreenUITextRun, 1> runs{run};
+
+    ScreenUIDrawBatchBuilder builder;
+    const std::size_t withoutCaret = builder.Build(frameWithCaret(false, 1U), {}, runs).batches.size();
+    const ScreenUIDrawList& withCaret = builder.Build(frameWithCaret(true, 1U), {}, runs);
+    Require(withCaret.batches.size() == withoutCaret + 1U,
+            "A focused input field must draw exactly one caret batch on top of its text");
+
+    // The caret belongs in front of the character at its byte offset, not at the end of the run.
+    bool foundAtSecondGlyph = false;
+    for (const ScreenUIVertex& vertex : withCaret.vertices) {
+        // The corner-basis transform reintroduces float error, so compare with tolerance.
+        if (NearlyEqual(vertex.x, 20.0F) && NearlyEqual(vertex.y, 8.0F)) {
+            foundAtSecondGlyph = true;
+        }
+    }
+    Require(foundAtSecondGlyph, "The caret must sit at the left edge of the glyph its byte offset points at");
+
+    // Past the last character the caret follows the pen, not the final glyph's ink edge.
+    const ScreenUIDrawList& atEnd = builder.Build(frameWithCaret(true, 2U), {}, runs);
+    bool foundAtPen = false;
+    for (const ScreenUIVertex& vertex : atEnd.vertices) {
+        if (NearlyEqual(vertex.x, 30.0F) && NearlyEqual(vertex.y, 8.0F)) {
+            foundAtPen = true;
+        }
+    }
+    Require(foundAtPen, "A caret past the last character must sit at the pen position, not the glyph edge");
+}
+
+void FontPreparationDropsOnlyTheTextItCannotPrepare() {
+    // One unpreparable text element used to clear every run and make ScreenUIRenderer::Submit
+    // return false, which erased the whole UI - panels, images and borders included - for a
+    // font that was still streaming in or a single malformed markup string. The failure has to
+    // cost that one label and name it.
+    kb::scene::SceneUIFrame frame{.viewportSize = {640.0F, 360.0F}};
+    kb::scene::SceneUIFrameElement panel = Element(20U, {0.0F, 0.0F, 200.0F, 80.0F});
+    panel.border = kb::scene::UIBorder{.backgroundColor = {0.0F, 1.0F, 0.0F, 1.0F}};
+
+    kb::scene::SceneUIFrameElement label = Element(21U, {10.0F, 10.0F, 180.0F, 40.0F});
+    kb::scene::UIText text{.fontAssetId = 7U, .richText = true};
+    Require(kb::scene::SetUITextContent(text, "<color=not-a-color>broken"),
+            "Font preparation test could not author its label content");
+    label.text = text;
+    frame.elements = {panel, label};
+
+    kb::assets::AssetManager assets;
+    RenderResourceRegistry resources;
+    ScreenUIFontAtlasCache fonts;
+    const ScreenUIFontPreparation prepared = fonts.Prepare(1U, assets, resources, frame);
+
+    Require(prepared.failureReason != nullptr, "Unpreparable text must report why it could not be prepared");
+    Require(prepared.failedEntity == 21U, "An unpreparable text failure must name the element that caused it");
+    Require(prepared.runs.empty(), "The unpreparable text must not produce a draw run");
+
+    ScreenUIDrawBatchBuilder builder;
+    const ScreenUIDrawList& draw = builder.Build(frame, {}, prepared.runs);
+    Require(!draw.batches.empty(),
+            "A text element that cannot be prepared must not erase the rest of the UI");
+    Require(draw.batches[0].style.fillColor[1] == 1.0F,
+            "The panel behind an unpreparable label must still be drawn");
+}
+
+void ImportCatalogOffersOnlyRasterizableFontFormats() {
+    // Every font extension the editor offers to import must be one the UI can rasterize.
+    // Without this, adding a format to the import catalog is a silent promise the renderer
+    // cannot keep, and the failure only shows up as a shipped game with no text.
+    for (const std::string& extension : kb::assets::AssetImportCatalog::SupportedSourceExtensions()) {
+        if (kb::assets::AssetImportCatalog::ClassifyExtension(std::filesystem::path{extension}) !=
+            kb::assets::AssetImportCategory::Font) {
+            continue;
+        }
+        Require(ScreenUIFontPayloadValidator::SupportsExtension(extension),
+                "The import catalog offers a font format the screen UI cannot rasterize");
+    }
+    Require(kb::assets::AssetImportCatalog::ClassifyExtension(std::filesystem::path{".ttf"}) ==
+                kb::assets::AssetImportCategory::Font,
+            "TrueType must stay importable as a font");
+}
+
 void FontPayloadValidatorRejectsUnsupportedAndTruncatedData() {
     Require(!ScreenUIFontPayloadValidator::SupportsExtension(".woff"),
             "Screen UI font contract accepted an unsupported extension");
@@ -244,6 +356,9 @@ void RunScreenUIDrawBatchTests() {
     BatchBuilderEmitsNineSliceTintAndEffects();
     BatchBuilderUsesTextRunAndHonorsHiddenMask();
     BatchBuilderAppliesInteractionTintToEveryVisualLayer();
+    FocusedInputFieldDrawsItsCaretAtTheEditedOffset();
+    FontPreparationDropsOnlyTheTextItCannotPrepare();
+    ImportCatalogOffersOnlyRasterizableFontFormats();
     FontPayloadValidatorRejectsUnsupportedAndTruncatedData();
     RichTextParserAppliesColorAndLineBreakWithoutChangingLiteralText();
 }

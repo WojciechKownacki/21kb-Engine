@@ -1042,6 +1042,36 @@ bool EditorHeadlessAutomation::VerifyUI2DEditing() {
     const auto original = frameElement();
     if (!original)
         return false;
+
+    // Wherever the UI layer is on screen, a click on a widget must reach that widget and a
+    // click on nothing must travel on. The router decides when to offer a click here; this
+    // proves what happens once it does, in both directions.
+    {
+        const kb::math::Vec2 center{original->rect.x + original->rect.width * 0.5F,
+                                    original->rect.y + original->rect.height * 0.5F};
+        context_.SelectEntity({});
+        if (!EditorUIRectInteraction::Begin(context_, width, height, center.x, center.y)) {
+            Trace("ui_pick", false, "widget-under-pointer-was-not-picked");
+            return false;
+        }
+        static_cast<void>(EditorUIRectInteraction::End(context_, true));
+        if (context_.SelectedEntity() != entity) {
+            Trace("ui_pick", false, "widget-pick-selected-the-wrong-entity");
+            return false;
+        }
+        // A pointer that hits no widget is not a UI interaction. Swallowing it here is what
+        // used to make rectangle selection and 3D picking unreachable in any scene holding a
+        // canvas, so the miss has to be reported back to the router.
+        if (EditorUIRectInteraction::Begin(context_, width, height, -5000.0F, -5000.0F)) {
+            Trace("ui_pick", false, "empty-space-click-was-swallowed-by-ui");
+            return false;
+        }
+        if (EditorUIRectInteraction::Overlays(context_, width, height).size() < 10U) {
+            Trace("ui_pick", false, "outline-or-handles-missing-for-the-selected-widget");
+            return false;
+        }
+    }
+
     const EditorResolvedPanelContent panel{.content = {0, 0, 900, 394}, .panelId = 1U};
     const auto toolbar = SceneViewportToolbarRenderer::Resolve(panel.content, context_.ViewportPreview(1U));
     const auto button = Center(toolbar.twoDButton);
