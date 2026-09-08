@@ -64,9 +64,19 @@ class ScreenUIRenderer {
     void OnResize() noexcept;
     [[nodiscard]] bool IsInitialized() const noexcept;
 
+    // The first text element the last Submit could not draw, or a null reason when all of
+    // them drew. The caller publishes this: a widget silently losing its label is the kind
+    // of fault that otherwise only shows up in a screenshot.
+    struct TextFailure {
+        std::uint64_t entityId = 0U;
+        const char* reason = nullptr;
+    };
+    [[nodiscard]] const TextFailure& LastTextFailure() const noexcept;
+
   private:
     void ResolveImages(const ScreenUISubmitDesc& desc);
-    [[nodiscard]] bool ResolveFonts(const ScreenUISubmitDesc& desc, std::span<const ScreenUITextRun> textRuns);
+    // Keeps the runs whose atlas texture resolved, dropping the rest into `lastTextFailure_`.
+    void ResolveFonts(const ScreenUISubmitDesc& desc, std::span<const ScreenUITextRun> textRuns);
     void AppendResolvedTexture(ScreenUIResolvedTexture texture);
 
     ScreenUIDrawBatchBuilder batchBuilder_;
@@ -75,6 +85,8 @@ class ScreenUIRenderer {
     ScreenUIBackgroundBlur backgroundBlur_;
     std::vector<ScreenUIImageBinding> imageBindings_;
     std::vector<ScreenUIResolvedTexture> resolvedTextures_;
+    std::vector<ScreenUITextRun> drawableRuns_;
+    TextFailure lastTextFailure_{};
 };
 
 } // namespace kb::render

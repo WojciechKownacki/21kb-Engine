@@ -86,13 +86,20 @@ bool ScreenUIRenderer::Submit(const ScreenUISubmitDesc& desc) {
     }
     resolvedTextures_.clear();
     imageBindings_.clear();
+    lastTextFailure_ = {};
     ResolveImages(desc);
     const ScreenUIFontPreparation fonts = fontAtlas_.Prepare(desc.sceneId, *desc.assets, *desc.resources, *desc.frame);
-    if (!fonts.succeeded || !ResolveFonts(desc, fonts.runs)) {
-        WriteRendererDebugLog("screen_ui", "Submit failed to prepare an authored font asset");
-        return false;
+    if (fonts.failureReason != nullptr) {
+        lastTextFailure_ = TextFailure{.entityId = fonts.failedEntity, .reason = fonts.failureReason};
     }
-    const ScreenUIDrawList& drawList = batchBuilder_.Build(*desc.frame, imageBindings_, fonts.runs);
+    // Text that cannot be prepared is dropped element by element, not frame by frame: a font
+    // still streaming in, or one bad markup string, used to erase every rectangle, image and
+    // border in the scene's UI.
+    ResolveFonts(desc, fonts.runs);
+    if (lastTextFailure_.reason != nullptr) {
+        WriteRendererDebugLog("screen_ui", "Submit dropped unpreparable text and kept the rest of the UI");
+    }
+    const ScreenUIDrawList& drawList = batchBuilder_.Build(*desc.frame, imageBindings_, drawableRuns_);
     if (drawList.requiresBackgroundBlur) {
         if (!bgfx::isValid(desc.backgroundSource) ||
             !backgroundBlur_.Submit(desc.viewportIndex, desc.viewportPlan->viewport.extent, desc.backgroundFormat,
@@ -170,25 +177,35 @@ void ScreenUIRenderer::ResolveImages(const ScreenUISubmitDesc& desc) {
     }
 }
 
-bool ScreenUIRenderer::ResolveFonts(const ScreenUISubmitDesc& desc, std::span<const ScreenUITextRun> textRuns) {
+void ScreenUIRenderer::ResolveFonts(const ScreenUISubmitDesc& desc, std::span<const ScreenUITextRun> textRuns) {
+    drawableRuns_.clear();
+    drawableRuns_.reserve(textRuns.size());
     for (const ScreenUITextRun& run : textRuns) {
         const ScreenUITextureKey key{.source = ScreenUITextureSource::FontAtlas,
                                      .assetId = run.fontAssetId,
                                      .pixelSize = run.pixelSize};
         if (std::ranges::find(resolvedTextures_, key, &ScreenUIResolvedTexture::key) != resolvedTextures_.end()) {
+            drawableRuns_.push_back(run);
             continue;
         }
         const bgfx::TextureHandle texture =
             fontAtlas_.Resolve(desc.sceneId, run.fontAssetId, run.pixelSize, *desc.resources);
         if (!bgfx::isValid(texture)) {
-            return false;
+            if (lastTextFailure_.reason == nullptr) {
+                lastTextFailure_ = TextFailure{.entityId = run.entity, .reason = "Font atlas texture is unavailable"};
+            }
+            continue;
         }
         AppendResolvedTexture(ScreenUIResolvedTexture{.key = key,
                                                        .texture = texture,
                                                        .width = run.atlasWidth,
                                                        .height = run.atlasHeight});
+        drawableRuns_.push_back(run);
     }
-    return true;
+}
+
+const ScreenUIRenderer::TextFailure& ScreenUIRenderer::LastTextFailure() const noexcept {
+    return lastTextFailure_;
 }
 
 void ScreenUIRenderer::AppendResolvedTexture(ScreenUIResolvedTexture texture) {

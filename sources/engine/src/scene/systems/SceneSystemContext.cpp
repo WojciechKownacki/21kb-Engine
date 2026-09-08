@@ -2,6 +2,8 @@
 
 #include "scene/SceneRuntimeService.hpp"
 
+#include <utility>
+
 namespace kb::scene {
 
 SceneSystemContext::SceneSystemContext(Scene& scene, float deltaSeconds) noexcept
@@ -44,6 +46,10 @@ SceneSystemQueryAccess& SceneSystemContext::Queries() noexcept {
 
 const SceneSystemQueryAccess& SceneSystemContext::Queries() const noexcept {
     return queries_;
+}
+
+void SceneSystemContext::ReportError(std::string message) {
+    SceneRuntimeService::ReportSceneSystemError(scene_, std::move(message));
 }
 
 } // namespace kb::scene

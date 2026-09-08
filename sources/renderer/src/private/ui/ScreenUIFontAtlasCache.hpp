@@ -28,9 +28,14 @@ namespace kb::render {
 
 class RenderResourceRegistry;
 
+// The runs that are drawable this frame, plus the first text element that could not be
+// prepared. A text element the atlas cannot serve loses its text; it must not take the rest
+// of the UI - rectangles, images and borders - down with it. `failureReason` is null exactly
+// when every authored text run prepared.
 struct ScreenUIFontPreparation {
     std::span<const ScreenUITextRun> runs;
-    bool succeeded = true;
+    std::uint64_t failedEntity = 0U;
+    const char* failureReason = nullptr;
 };
 
 class ScreenUIFontAtlasCache {

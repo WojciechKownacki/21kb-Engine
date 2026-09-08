@@ -45,7 +45,8 @@ namespace {
     return true;
 }
 
-[[nodiscard]] bool AppendText(std::string_view text, const std::array<float, 4U>& color, ScreenUITextMarkup& output) {
+[[nodiscard]] bool AppendText(std::string_view text, std::size_t baseOffset, const std::array<float, 4U>& color,
+                              ScreenUITextMarkup& output) {
     if (text.empty())
         return true;
     std::vector<char32_t> decoded(text.size());
@@ -53,11 +54,18 @@ namespace {
     if (!result.wellFormed || result.truncated)
         return false;
     output.glyphs.reserve(output.glyphs.size() + result.codePointCount);
+    // The decode above already proved the sequence is well formed, so walking continuation
+    // bytes here cannot run past the end.
+    std::size_t byteOffset = 0U;
     for (std::size_t index = 0U; index < result.codePointCount; ++index) {
         output.glyphs.push_back(ScreenUITextMarkupGlyph{
             .codepoint = static_cast<std::uint32_t>(decoded[index]),
             .color = color,
+            .sourceOffset = static_cast<std::uint32_t>(baseOffset + byteOffset),
         });
+        do {
+            ++byteOffset;
+        } while (byteOffset < text.size() && (static_cast<unsigned char>(text[byteOffset]) & 0xC0U) == 0x80U);
     }
     return true;
 }
@@ -68,7 +76,7 @@ ScreenUITextMarkup ScreenUITextMarkupParser::Parse(std::string_view text, bool e
     ScreenUITextMarkup output;
     const std::array<float, 4U> white{1.0F, 1.0F, 1.0F, 1.0F};
     if (!enabled) {
-        output.succeeded = AppendText(text, white, output);
+        output.succeeded = AppendText(text, 0U, white, output);
         return output;
     }
 
@@ -96,7 +104,7 @@ ScreenUITextMarkup ScreenUITextMarkupParser::Parse(std::string_view text, bool e
             ++cursor;
             continue;
         }
-        if (!AppendText(text.substr(segmentStart, cursor - segmentStart), colors.back(), output)) {
+        if (!AppendText(text.substr(segmentStart, cursor - segmentStart), segmentStart, colors.back(), output)) {
             output.glyphs.clear();
             output.succeeded = false;
             return output;
@@ -109,12 +117,13 @@ ScreenUITextMarkup ScreenUITextMarkupParser::Parse(std::string_view text, bool e
             output.glyphs.push_back(ScreenUITextMarkupGlyph{
                 .codepoint = static_cast<std::uint32_t>('\n'),
                 .color = colors.back(),
+                .sourceOffset = static_cast<std::uint32_t>(cursor),
             });
         }
         cursor += tagLength;
         segmentStart = cursor;
     }
-    output.succeeded = AppendText(text.substr(segmentStart), colors.back(), output);
+    output.succeeded = AppendText(text.substr(segmentStart), segmentStart, colors.back(), output);
     if (!output.succeeded)
         output.glyphs.clear();
     return output;

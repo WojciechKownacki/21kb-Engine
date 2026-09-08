@@ -31,6 +31,7 @@ class ScreenUIDrawBatchBuilder {
     void AppendImage(const kb::scene::SceneUIFrameElement& element, const ScreenUIImageBinding& image,
                      std::uint64_t assetId, ImageKind kind);
     void AppendText(const kb::scene::SceneUIFrameElement& element, const ScreenUITextRun& run);
+    void AppendTextCaret(const kb::scene::SceneUIFrameElement& element, const ScreenUITextRun& run);
     void AppendTextLayer(const kb::scene::SceneUIFrameElement& element, const ScreenUITextRun& run,
                          const std::array<float, 4>& color, const std::array<float, 4>& outlineColor, float offsetX,
                          float offsetY, float outlineWidth, bool applyMarkupColor);

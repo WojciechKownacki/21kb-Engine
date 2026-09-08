@@ -625,6 +625,10 @@ struct InspectorPanelState {
     void BeginKeyCapture(int mappingIndex) noexcept;
     void EndKeyCapture() noexcept;
     [[nodiscard]] bool IsTextEditing() const noexcept;
+    // Advances the caret blink and reports whether the field still needs repainting, so the
+    // frame loop keeps ticking while a field is focused instead of parking on idle.
+    [[nodiscard]] bool TickTextCaret(float deltaSeconds) noexcept;
+    [[nodiscard]] bool IsTextCaretVisible() const noexcept;
     [[nodiscard]] bool IsTextEditDirty() const noexcept;
     [[nodiscard]] InspectorPropertyId EditedProperty() const noexcept;
     [[nodiscard]] const std::string& EditOriginalBuffer() const noexcept;
@@ -738,6 +742,9 @@ private:
     bool tagsDropdownOpen_ = false;
     int tagsDropdownHover_ = -1;
     bool editSelectingAll_ = false;
+    // Blink phase in seconds, reset to fully visible on every keystroke so typing never hides
+    // the caret mid-stroke. The period comes from the system caret blink time.
+    float editCaretPhase_ = 0.0F;
     bool listeningForKey_ = false;
     int keyCaptureMappingIndex_ = -1;
     InspectorPropertyId draggedProperty_ = InspectorPropertyId::None;

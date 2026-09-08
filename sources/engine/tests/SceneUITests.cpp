@@ -112,7 +112,29 @@ void TestCatalogAndPresets() {
             kb::tests::Require(built.border.has_value() && built.border->backgroundColor.a > 0.0F,
                 "Interactive and progress presets must have a visible authored surface");
         }
+
+        // A widget must arrive at a size that suits it. Leaving UIRectTransform's default
+        // 100x100 square made every authored menu start as a stack of identical squares on
+        // one point, so the author's first act was always to retype width and height.
+        kb::tests::Require(built.rectTransform.has_value(), "Every UI preset must author a Rect Transform");
+        if (descriptor.preset != kb::scene::UIComponentPreset::Canvas) {
+            const kb::math::Vec2 size = built.rectTransform->offsetMax;
+            kb::tests::Require(size.x > 0.0F && size.y > 0.0F, "Every non-canvas UI preset must author a positive size");
+            kb::tests::Require(size.x != 100.0F || size.y != 100.0F,
+                "A UI preset must not ship the placeholder 100x100 square as its authored size");
+        }
     }
+
+    // The proportions are the point, not just "not 100x100": a button reads as a button
+    // because it is wide and short, and a toggle because it is small and square.
+    const kb::scene::UIComponentSet button = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Button);
+    kb::tests::Require(button.rectTransform->offsetMax.x > button.rectTransform->offsetMax.y * 2.0F,
+        "A Button preset must arrive wider than it is tall");
+    const kb::scene::UIComponentSet toggle = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Toggle);
+    kb::tests::Require(toggle.rectTransform->offsetMax.x == toggle.rectTransform->offsetMax.y,
+        "A Toggle preset must arrive square");
+    kb::tests::Require(toggle.rectTransform->offsetMax.x < button.rectTransform->offsetMax.x,
+        "A Toggle preset must arrive smaller than a Button");
 }
 
 void TestLayoutsAndFitters() {
@@ -243,6 +265,18 @@ void TestLayoutsAndFitters() {
     const std::size_t previousCount = scene.UI().Frame().elements.size();
     kb::tests::Require(!scene.UI().Update(100.0F, 100.0F, {}, 0.016F), "Conflicting layout components must fail closed");
     kb::tests::Require(scene.UI().Frame().elements.size() == previousCount, "A rejected frame must not replace the last valid frame");
+
+    // Failing closed is only half the contract: a refusal nobody can attribute reads as a
+    // dead renderer. It has to name the widget to fix and why.
+    const kb::scene::SceneUIFrameRefusal& refusal = scene.UI().Frame().refusal;
+    kb::tests::Require(refusal.HasValue(), "A rejected frame must publish a refusal reason");
+    kb::tests::Require(refusal.entity == canvas.Entity(), "A refusal must name the entity that caused it");
+    kb::tests::Require(std::string_view{refusal.reason}.find("layout") != std::string_view::npos,
+        "A refusal reason must describe the conflict it found");
+
+    ui.Remove<kb::scene::UIVerticalLayout>(canvas.Entity());
+    kb::tests::Require(scene.UI().Update(100.0F, 100.0F, {}, 0.016F), "Removing the conflict must let the frame build again");
+    kb::tests::Require(!scene.UI().Frame().refusal.HasValue(), "A frame that builds must clear the previous refusal");
 }
 
 void TestHierarchicalTransformsAndMaskHitTesting() {

@@ -58,6 +58,14 @@ struct Affine2D {
     float ty = 0.0F;
 };
 
+// Full on/off cycle for the text caret. The engine has no system caret setting to read, so this
+// is the one place the rate is defined.
+constexpr float kUITextCaretBlinkPeriodSeconds = 1.0F;
+
+[[nodiscard]] bool IsUITextCaretVisible(float phase) noexcept {
+    return phase < kUITextCaretBlinkPeriodSeconds * 0.5F;
+}
+
 [[nodiscard]] Vec2 TransformPoint(const Affine2D& transform, Vec2 point) noexcept {
     return {transform.m00 * point.x + transform.m01 * point.y + transform.tx,
             transform.m10 * point.x + transform.m11 * point.y + transform.ty};
@@ -218,8 +226,11 @@ class FrameBuilder {
     [[nodiscard]] bool Build(SceneUIFrame& output) {
         for (const SceneEntity root : scene_.Hierarchy().RootEntities())
             SearchForCanvas(root);
-        if (!valid_)
+        if (!valid_) {
+            output.elements.clear();
+            output.refusal = refusal_;
             return false;
+        }
         std::ranges::stable_sort(frame_.elements, [](const SceneUIFrameElement& a, const SceneUIFrameElement& b) {
             if (a.canvasSortingOrder != b.canvasSortingOrder)
                 return a.canvasSortingOrder < b.canvasSortingOrder;
@@ -232,11 +243,14 @@ class FrameBuilder {
     }
 
   private:
-    [[nodiscard]] bool ValidateComponents(SceneEntity entity) const noexcept {
+    // Returns the reason the entity cannot be laid out, or nullptr when it is sound. A bare
+    // bool would force the caller to re-derive what went wrong, which is what made an invalid
+    // widget indistinguishable from a renderer fault.
+    [[nodiscard]] const char* ValidateComponents(SceneEntity entity) const noexcept {
         std::size_t layoutCount = 0U;
 #define KB_VALIDATE(Type)                                                                                              \
     if (const Type* value = ui_.TryGet<Type>(entity); value != nullptr && !IsUIComponentValid(*value))                 \
-    return false
+    return #Type " holds an invalid value"
         KB_VALIDATE(UIRectTransform);
         KB_VALIDATE(UICanvas);
         KB_VALIDATE(UICanvasScaler);
@@ -279,12 +293,16 @@ class FrameBuilder {
         KB_VALIDATE(UIProgressBar);
         KB_VALIDATE(UIWidgetSwitcher);
 #undef KB_VALIDATE
+        if (layoutCount > 1U)
+            return "UI object carries more than one layout component";
         const std::size_t directChildCount = scene_.Hierarchy().ChildCount(entity);
         const UIDropdown* dropdown = ui_.TryGet<UIDropdown>(entity);
+        if (dropdown != nullptr && directChildCount != 0U && dropdown->selectedIndex >= directChildCount)
+            return "Dropdown selectedIndex is past its last child";
         const UIWidgetSwitcher* switcher = ui_.TryGet<UIWidgetSwitcher>(entity);
-        return layoutCount <= 1U &&
-               (dropdown == nullptr || directChildCount == 0U || dropdown->selectedIndex < directChildCount) &&
-               (switcher == nullptr || directChildCount == 0U || switcher->visibleChildIndex < directChildCount);
+        if (switcher != nullptr && directChildCount != 0U && switcher->visibleChildIndex >= directChildCount)
+            return "Widget Switcher visibleChildIndex is past its last child";
+        return nullptr;
     }
 
     [[nodiscard]] DesiredSize Measure(SceneEntity entity, bool minimumOnly = false) {
@@ -378,18 +396,22 @@ class FrameBuilder {
         const UICanvas* canvas = ui_.TryGet<UICanvas>(entity);
         const UIRectTransform* rect = ui_.TryGet<UIRectTransform>(entity);
         if (canvas != nullptr) {
-            if (rect == nullptr || !IsUIComponentValid(*canvas) || !IsUIComponentValid(*rect)) {
-                valid_ = false;
+            if (rect == nullptr) {
+                Refuse(entity, "Canvas has no Rect Transform");
+                return;
+            }
+            if (!IsUIComponentValid(*canvas) || !IsUIComponentValid(*rect)) {
+                Refuse(entity, "Canvas or its Rect Transform holds an invalid value");
                 return;
             }
             const UICanvasScaler* scaler = ui_.TryGet<UICanvasScaler>(entity);
             if (scaler != nullptr && !IsUIComponentValid(*scaler)) {
-                valid_ = false;
+                Refuse(entity, "Canvas Scaler holds an invalid value");
                 return;
             }
             const float scale = CanvasScale(viewport_, scaler);
             if (!std::isfinite(scale) || scale <= 0.0F) {
-                valid_ = false;
+                Refuse(entity, "Canvas Scaler resolved to a non-positive scale");
                 return;
             }
             const Rect logicalViewport{0.0F, 0.0F, viewport_.x / scale, viewport_.y / scale};
@@ -407,8 +429,8 @@ class FrameBuilder {
                  Affine2D inheritedTransform, const std::vector<std::array<Vec2, 4U>>& inheritedClipQuads) {
         if (!valid_ || !scene_.Entities().IsActive(entity))
             return;
-        if (!ValidateComponents(entity)) {
-            valid_ = false;
+        if (const char* invalid = ValidateComponents(entity); invalid != nullptr) {
+            Refuse(entity, invalid);
             return;
         }
         if (entity != canvas) {
@@ -416,7 +438,7 @@ class FrameBuilder {
                 const UICanvasScaler* nestedScaler = ui_.TryGet<UICanvasScaler>(entity);
                 const float nestedScale = CanvasScale(viewport_, nestedScaler);
                 if (!std::isfinite(nestedScale) || nestedScale <= 0.0F) {
-                    valid_ = false;
+                    Refuse(entity, "Nested Canvas Scaler resolved to a non-positive scale");
                     return;
                 }
                 const float scaleRatio = scale / nestedScale;
@@ -430,8 +452,12 @@ class FrameBuilder {
             }
         }
         const UIRectTransform* transform = ui_.TryGet<UIRectTransform>(entity);
-        if (transform == nullptr || !IsUIComponentValid(*transform)) {
-            valid_ = false;
+        if (transform == nullptr) {
+            Refuse(entity, "UI object has no Rect Transform");
+            return;
+        }
+        if (!IsUIComponentValid(*transform)) {
+            Refuse(entity, "Rect Transform holds an invalid value");
             return;
         }
         const DesiredSize desired = Measure(entity);
@@ -439,7 +465,7 @@ class FrameBuilder {
         Rect rect = allocated;
         if (const UIContentSizeFitter* fitter = ui_.TryGet<UIContentSizeFitter>(entity)) {
             if (!IsUIComponentValid(*fitter)) {
-                valid_ = false;
+                Refuse(entity, "Content Size Fitter holds an invalid value");
                 return;
             }
             const float width = fitter->horizontalFit == UIFitMode::Unconstrained
@@ -453,20 +479,20 @@ class FrameBuilder {
         }
         const UIAspectRatioFitter* aspect = ui_.TryGet<UIAspectRatioFitter>(entity);
         if (aspect != nullptr && !IsUIComponentValid(*aspect)) {
-            valid_ = false;
+            Refuse(entity, "Aspect Ratio Fitter holds an invalid value");
             return;
         }
         rect = ApplyAspect(rect, aspect, transform->pivot);
         if (!std::isfinite(rect.x) || !std::isfinite(rect.y) || !std::isfinite(rect.width) ||
             !std::isfinite(rect.height)) {
-            valid_ = false;
+            Refuse(entity, "Layout produced a non-finite rectangle");
             return;
         }
 
         GroupState group = inheritedGroup;
         if (const UICanvasGroup* authored = ui_.TryGet<UICanvasGroup>(entity)) {
             if (!IsUIComponentValid(*authored)) {
-                valid_ = false;
+                Refuse(entity, "Canvas Group holds an invalid value");
                 return;
             }
             if (authored->ignoreParentGroups)
@@ -508,7 +534,7 @@ class FrameBuilder {
 #define KB_COPY(Type, Field)                                                                                           \
     if (const Type* value = ui_.TryGet<Type>(entity)) {                                                                \
         if (!IsUIComponentValid(*value)) {                                                                             \
-            valid_ = false;                                                                                            \
+            Refuse(entity, #Type " holds an invalid value");                                                           \
             return;                                                                                                    \
         }                                                                                                              \
         element.Field = *value;                                                                                        \
@@ -528,10 +554,18 @@ class FrameBuilder {
         KB_COPY(UIScrollView, scrollView)
         KB_COPY(UIDropdown, dropdown)
         KB_COPY(UIProgressBar, progressBar)
+        KB_COPY(UIInputField, inputField)
 #undef KB_COPY
+        if (element.inputField.has_value()) {
+            const SceneState& sceneState = SceneAccess::State(scene_);
+            if (sceneState.uiFocused == entity) {
+                element.textCaretByteOffset = static_cast<std::uint32_t>(sceneState.uiTextCursorByteOffset);
+                element.textCaretVisible = IsUITextCaretVisible(sceneState.uiTextCaretPhase);
+            }
+        }
         const UISelectable* selectable = ui_.TryGet<UISelectable>(entity);
         if (selectable != nullptr && !IsUIComponentValid(*selectable)) {
-            valid_ = false;
+            Refuse(entity, "Selectable holds an invalid value");
             return;
         }
         element.interactionEnabled = selectable != nullptr && selectable->interactable && group.interactable;
@@ -759,10 +793,20 @@ class FrameBuilder {
         arrangeIgnored();
     }
 
+    // Records the first refusal and stops the build. Only the first is kept: later entities
+    // are unreachable consequences of this one, so naming them would bury the cause.
+    void Refuse(SceneEntity entity, const char* reason) noexcept {
+        if (valid_) {
+            refusal_ = SceneUIFrameRefusal{.entity = entity, .reason = reason};
+            valid_ = false;
+        }
+    }
+
     const Scene& scene_;
     SceneUIComponentQueries ui_;
     Vec2 viewport_{};
     SceneUIFrame frame_;
+    SceneUIFrameRefusal refusal_{};
     std::uint32_t traversal_ = 0U;
     bool valid_ = true;
 };
@@ -1306,8 +1350,13 @@ bool SceneUIQueries::BuildFrame(float viewportWidth, float viewportHeight, Scene
         viewportHeight <= 0.0F)
         return false;
     SceneUIFrame frame;
-    if (!FrameBuilder{scene_, {viewportWidth, viewportHeight}}.Build(frame))
+    if (!FrameBuilder{scene_, {viewportWidth, viewportHeight}}.Build(frame)) {
+        // The refusal is the only thing the caller can act on, so it has to survive the
+        // discarded frame - the renderer reports it instead of dropping the whole submit.
+        output.elements.clear();
+        output.refusal = frame.refusal;
         return false;
+    }
     const SceneState& state = SceneAccess::State(scene_);
     ResolveInteractionPresentation(scene_, state, state.previousUIInput.primaryDown, 0.0F, state.uiFrame, frame, false);
     output = std::move(frame);
@@ -1447,16 +1496,23 @@ bool SceneUIAccess::Update(float viewportWidth, float viewportHeight, const Scen
         if (!kb::input::IsUnicodeScalar(codePoint))
             return false;
     SceneUIFrame frame;
-    if (!FrameBuilder{scene_, {viewportWidth, viewportHeight}}.Build(frame))
+    if (!FrameBuilder{scene_, {viewportWidth, viewportHeight}}.Build(frame)) {
+        // Keep the last good frame so hit testing still answers, but carry the refusal on it
+        // so the host can name what to fix. A later successful build replaces the whole frame
+        // and clears this by construction.
+        SceneAccess::State(scene_).uiFrame.refusal = frame.refusal;
         return false;
+    }
     SceneState& state = SceneAccess::State(scene_);
     SceneUIFrame previousFrame = std::move(state.uiFrame);
     state.uiFrame = std::move(frame);
     bool presentationDirty = ClampAllScrollOffsets(scene_, state, input);
     if (presentationDirty) {
         SceneUIFrame clampedFrame;
-        if (!FrameBuilder{scene_, {viewportWidth, viewportHeight}}.Build(clampedFrame))
+        if (!FrameBuilder{scene_, {viewportWidth, viewportHeight}}.Build(clampedFrame)) {
+            state.uiFrame.refusal = clampedFrame.refusal;
             return false;
+        }
         state.uiFrame = std::move(clampedFrame);
         presentationDirty = false;
     }
@@ -1506,11 +1562,25 @@ bool SceneUIAccess::Update(float viewportWidth, float viewportHeight, const Scen
     const bool moveLeft = rising(input.navigateLeft, state.previousUIInput.navigateLeft);
     const bool moveRight = rising(input.navigateRight, state.previousUIInput.navigateRight);
     const bool editingText = state.uiFocused.IsValid() && scene_.Components().UI().Has<UIInputField>(state.uiFocused);
-    presentationDirty =
+    const bool textEdited =
         EditFocusedText(scene_, state, input, rising(input.backspaceDown, state.previousUIInput.backspaceDown),
                         rising(input.deleteDown, state.previousUIInput.deleteDown), editingText && moveLeft,
-                        editingText && moveRight) ||
-        presentationDirty;
+                        editingText && moveRight);
+    presentationDirty = textEdited || presentationDirty;
+    // Blink the caret of the focused field, restarting the cycle on every edit so a keystroke
+    // never lands while the caret happens to be in its hidden half. Only a flip in visibility
+    // rebuilds the frame - marking every frame dirty would run the whole layout at frame rate
+    // for the sake of a caret that changes twice a second.
+    const bool caretWasVisible = editingText && IsUITextCaretVisible(state.uiTextCaretPhase);
+    if (!editingText || textEdited) {
+        state.uiTextCaretPhase = 0.0F;
+    } else {
+        state.uiTextCaretPhase = std::fmod(state.uiTextCaretPhase + std::max(0.0F, deltaSeconds),
+                                           kUITextCaretBlinkPeriodSeconds);
+    }
+    if (editingText && IsUITextCaretVisible(state.uiTextCaretPhase) != caretWasVisible) {
+        presentationDirty = true;
+    }
     Vec2 direction{};
     if (rising(input.navigateUp, state.previousUIInput.navigateUp))
         direction = {0.0F, -1.0F};

@@ -102,35 +102,46 @@ const UIComponentPresetDescriptor* FindUIComponentPreset(std::string_view name) 
 UIComponentSet BuildUIComponentPreset(UIComponentPreset preset) {
     UIComponentSet output;
     output.rectTransform.emplace();
+    // Every widget used to arrive as UIRectTransform's default 100x100 square, so a menu of
+    // six buttons was six identical squares stacked on one point and the author's first job
+    // was always to retype sizes. The proportions that make a widget recognisable belong with
+    // the composition that defines it - this is the one place both creation paths (the
+    // hierarchy Create menu and the Add Component preset tiles) go through.
+    // Units are logical UI units against the 1920x1080 reference resolution.
+    const auto size = [&output](float width, float height) noexcept {
+        output.rectTransform->offsetMax = {width, height};
+    };
     switch (preset) {
     case UIComponentPreset::Canvas:
         output.rectTransform->anchorMax = {1.0F, 1.0F}; output.rectTransform->offsetMax = {};
         output.canvas.emplace(); output.canvasScaler.emplace(); break;
     case UIComponentPreset::Text:
+        size(160.0F, 32.0F);
         static_cast<void>(SetUITextContent(output.text.emplace(), "Text")); break;
-    case UIComponentPreset::Image: output.image.emplace(); break;
-    case UIComponentPreset::RawImage: output.rawImage.emplace(); break;
+    case UIComponentPreset::Image: size(120.0F, 120.0F); output.image.emplace(); break;
+    case UIComponentPreset::RawImage: size(120.0F, 120.0F); output.rawImage.emplace(); break;
     case UIComponentPreset::Button:
+        size(160.0F, 40.0F);
         AddPresetSurface(output); output.selectable.emplace(); output.button.emplace();
         static_cast<void>(SetUITextContent(output.text.emplace(), "Button"));
         output.text->horizontalAlignment = UITextHorizontalAlignment::Center;
         output.text->verticalAlignment = UITextVerticalAlignment::Center;
         break;
-    case UIComponentPreset::Toggle: AddPresetSurface(output); output.selectable.emplace(); output.toggle.emplace(); break;
-    case UIComponentPreset::Slider: AddPresetSurface(output); output.selectable.emplace(); output.slider.emplace(); break;
-    case UIComponentPreset::Scrollbar: AddPresetSurface(output); output.selectable.emplace(); output.scrollbar.emplace(); break;
-    case UIComponentPreset::ScrollView: AddPresetSurface(output); output.mask.emplace(); output.selectable.emplace(); output.scrollView.emplace(); break;
-    case UIComponentPreset::InputField: AddPresetSurface(output); output.text.emplace(); output.selectable.emplace(); output.inputField.emplace(); break;
-    case UIComponentPreset::Dropdown: AddPresetSurface(output); output.selectable.emplace(); output.dropdown.emplace(); break;
-    case UIComponentPreset::ProgressBar: AddPresetSurface(output); output.progressBar.emplace(); break;
-    case UIComponentPreset::HorizontalBox: output.horizontalLayout.emplace(); break;
-    case UIComponentPreset::VerticalBox: output.verticalLayout.emplace(); break;
-    case UIComponentPreset::Grid: output.gridLayout.emplace(); break;
-    case UIComponentPreset::Wrap: output.wrapLayout.emplace(); break;
-    case UIComponentPreset::Overlay: output.overlayLayout.emplace(); break;
-    case UIComponentPreset::Border: AddPresetSurface(output); break;
-    case UIComponentPreset::Blur: output.backgroundBlur.emplace(); break;
-    case UIComponentPreset::WidgetSwitcher: output.widgetSwitcher.emplace(); break;
+    case UIComponentPreset::Toggle: size(28.0F, 28.0F); AddPresetSurface(output); output.selectable.emplace(); output.toggle.emplace(); break;
+    case UIComponentPreset::Slider: size(220.0F, 20.0F); AddPresetSurface(output); output.selectable.emplace(); output.slider.emplace(); break;
+    case UIComponentPreset::Scrollbar: size(200.0F, 16.0F); AddPresetSurface(output); output.selectable.emplace(); output.scrollbar.emplace(); break;
+    case UIComponentPreset::ScrollView: size(320.0F, 240.0F); AddPresetSurface(output); output.mask.emplace(); output.selectable.emplace(); output.scrollView.emplace(); break;
+    case UIComponentPreset::InputField: size(240.0F, 36.0F); AddPresetSurface(output); output.text.emplace(); output.selectable.emplace(); output.inputField.emplace(); break;
+    case UIComponentPreset::Dropdown: size(200.0F, 36.0F); AddPresetSurface(output); output.selectable.emplace(); output.dropdown.emplace(); break;
+    case UIComponentPreset::ProgressBar: size(240.0F, 16.0F); AddPresetSurface(output); output.progressBar.emplace(); break;
+    case UIComponentPreset::HorizontalBox: size(360.0F, 80.0F); output.horizontalLayout.emplace(); break;
+    case UIComponentPreset::VerticalBox: size(200.0F, 320.0F); output.verticalLayout.emplace(); break;
+    case UIComponentPreset::Grid: size(320.0F, 320.0F); output.gridLayout.emplace(); break;
+    case UIComponentPreset::Wrap: size(320.0F, 200.0F); output.wrapLayout.emplace(); break;
+    case UIComponentPreset::Overlay: size(320.0F, 200.0F); output.overlayLayout.emplace(); break;
+    case UIComponentPreset::Border: size(240.0F, 140.0F); AddPresetSurface(output); break;
+    case UIComponentPreset::Blur: size(240.0F, 140.0F); output.backgroundBlur.emplace(); break;
+    case UIComponentPreset::WidgetSwitcher: size(320.0F, 200.0F); output.widgetSwitcher.emplace(); break;
     }
     return output;
 }

@@ -40,6 +40,11 @@ public:
     // instead of vanishing. Empty when everything ran cleanly.
     [[nodiscard]] std::vector<std::string> DrainSystemErrors();
 
+    // A system that fails on authored data rather than by throwing reports here, so a
+    // refusal it handled itself still reaches the host instead of being swallowed. Same
+    // de-duplicated list the throw path uses - there is one error channel, not two.
+    void ReportSystemError(std::string message);
+
 private:
     struct Entry final {
         SceneSystemHandle handle{};

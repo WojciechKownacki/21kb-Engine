@@ -3,6 +3,8 @@
 #include "engine/scene/SceneSystemQueryAccess.hpp"
 #include "engine/scene/SceneSystemTransformAccess.hpp"
 
+#include <string>
+
 namespace kb::ecs {
 
 class World;
@@ -27,6 +29,11 @@ public:
     [[nodiscard]] const SceneSystemTransformAccess& Transforms() const noexcept;
     [[nodiscard]] SceneSystemQueryAccess& Queries() noexcept;
     [[nodiscard]] const SceneSystemQueryAccess& Queries() const noexcept;
+
+    // Reports a failure the system detected and handled itself, into the same de-duplicated
+    // list a thrown exception lands in. Use it instead of discarding a false return: a
+    // refusal nobody can see is indistinguishable from working code.
+    void ReportError(std::string message);
 
 private:
     Scene& scene_;

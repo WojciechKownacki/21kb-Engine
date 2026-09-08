@@ -105,11 +105,32 @@ struct SceneUIFrameElement {
     std::optional<UIScrollView> scrollView;
     std::optional<UIDropdown> dropdown;
     std::optional<UIProgressBar> progressBar;
+    std::optional<UIInputField> inputField;
+    // Where the text caret sits, and whether the blink is currently showing it. Only set on the
+    // focused input field; editing worked before this but drew no insertion point at all, so a
+    // shipped text field looked inert.
+    std::uint32_t textCaretByteOffset = 0U;
+    bool textCaretVisible = false;
+};
+
+// Why a frame build refused, and which entity caused it. The frame builder is fail-closed:
+// one unbuildable widget refuses the whole frame, because a half-laid-out canvas is a worse
+// answer than no canvas. That refusal is only useful if it says what to fix, so every
+// refusal site records the entity and a static reason string here.
+// `reason` is null exactly when the frame is complete.
+struct SceneUIFrameRefusal {
+    SceneEntity entity{};
+    const char* reason = nullptr;
+
+    [[nodiscard]] bool HasValue() const noexcept {
+        return reason != nullptr;
+    }
 };
 
 struct SceneUIFrame {
     kb::math::Vec2 viewportSize{};
     std::vector<SceneUIFrameElement> elements;
+    SceneUIFrameRefusal refusal{};
 
     [[nodiscard]] SceneEntity HitTest(kb::math::Vec2 point) const noexcept;
 };

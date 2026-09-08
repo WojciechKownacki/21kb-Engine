@@ -295,6 +295,7 @@ void ScreenUIDrawBatchBuilder::AppendElement(const kb::scene::SceneUIFrameElemen
                                 element.shadow->offset.y * scale, std::max(element.shadow->blur * scale, 0.0F), false);
             }
             AppendText(element, *run);
+            AppendTextCaret(element, *run);
         }
     }
 
@@ -455,6 +456,40 @@ void ScreenUIDrawBatchBuilder::AppendTextLayer(const kb::scene::SceneUIFrameElem
                        glyph.v1 + outlineWidth / atlasHeight, texture, glyphStyle);
         }
     }
+}
+
+// The insertion point of the focused input field. Editing already tracked a byte offset and
+// moved it with the arrow keys, but nothing ever drew it, so a shipped text field looked inert
+// no matter what the player typed.
+void ScreenUIDrawBatchBuilder::AppendTextCaret(const kb::scene::SceneUIFrameElement& element,
+                                               const ScreenUITextRun& run) {
+    if (!element.inputField.has_value() || !element.textCaretVisible) {
+        return;
+    }
+    // Glyphs are laid out in source order, so the first one at or past the caret offset owns
+    // the column the caret sits in front of. Past the last glyph the caret follows the pen.
+    const ScreenUIGlyphQuad* atCaret = nullptr;
+    const ScreenUIGlyphQuad* last = nullptr;
+    for (const ScreenUIGlyphQuad& glyph : run.glyphs) {
+        if (atCaret == nullptr && glyph.sourceOffset >= element.textCaretByteOffset) {
+            atCaret = &glyph;
+        }
+        last = &glyph;
+    }
+    if (last == nullptr) {
+        return;
+    }
+    const float caretX = atCaret != nullptr ? atCaret->left : last->advanceRight;
+    const float width = std::max(1.0F, std::round(element.canvasScale));
+    const ScreenUIRect caret{caretX, atCaret != nullptr ? atCaret->lineTop : last->lineTop, caretX + width,
+                             atCaret != nullptr ? atCaret->lineBottom : last->lineBottom};
+    if (!caret.IsValid()) {
+        return;
+    }
+    ScreenUIDrawStyle style{};
+    style.fillColor = TintedColor(element, element.text.has_value() ? element.text->color : kb::math::Color{});
+    style.opacity = std::clamp(element.effectiveOpacity, 0.0F, 1.0F);
+    AppendShape(element, caret, style);
 }
 
 void ScreenUIDrawBatchBuilder::AppendQuad(const kb::scene::SceneUIFrameElement& element, const ScreenUIRect& fullRect,
