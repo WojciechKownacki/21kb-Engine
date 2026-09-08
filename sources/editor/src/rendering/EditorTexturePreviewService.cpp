@@ -280,6 +280,26 @@ private:
 // identity (Cache above); this second-level cache keys off that same stable pointer plus the
 // target size and holds the already-scaled result in an offscreen DIB, so the slow resample runs
 // once per (texture, preview size) instead of once per paint.
+[[nodiscard]] bool DrawDirectScaledPreview(HDC dc, RECT target, const EditorTexturePreviewImage& image) {
+    HeroIconGdiplusRuntime::EnsureStarted();
+    Gdiplus::Graphics graphics(dc);
+    for (int y = target.top; y < target.bottom; y += 8) {
+        for (int x = target.left; x < target.right; x += 8) {
+            const BYTE shade = ((x - target.left) / 8 + (y - target.top) / 8) % 2 == 0 ? 42 : 58;
+            Gdiplus::SolidBrush brush(Gdiplus::Color(255, shade, shade, shade));
+            graphics.FillRectangle(&brush, x, y, std::min(8, static_cast<int>(target.right) - x),
+                std::min(8, static_cast<int>(target.bottom) - y));
+        }
+    }
+    Gdiplus::Bitmap bitmap(image.width, image.height, image.width * 4, PixelFormat32bppARGB,
+        reinterpret_cast<BYTE*>(const_cast<std::uint32_t*>(image.bgra.data())));
+    graphics.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
+    Gdiplus::ImageAttributes attributes;
+    attributes.SetWrapMode(Gdiplus::WrapModeTileFlipXY);
+    return graphics.DrawImage(&bitmap, Gdiplus::Rect(target.left, target.top, target.right - target.left, target.bottom - target.top),
+        0, 0, image.width, image.height, Gdiplus::UnitPixel, &attributes) == Gdiplus::Ok;
+}
+
 struct ScaledPreviewEntry {
     HDC dc = nullptr;
     HBITMAP bitmap = nullptr;
@@ -393,23 +413,7 @@ public:
         entry.byteSize = static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * sizeof(std::uint32_t);
         entry.lastUsed = ++useClock_;
 
-        BITMAPINFO sourceInfo{};
-        sourceInfo.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-        sourceInfo.bmiHeader.biWidth = image.width;
-        sourceInfo.bmiHeader.biHeight = -image.height;
-        sourceInfo.bmiHeader.biPlanes = 1;
-        sourceInfo.bmiHeader.biBitCount = 32;
-        sourceInfo.bmiHeader.biCompression = BI_RGB;
-        const int oldMode = SetStretchBltMode(entry.dc, HALFTONE);
-        SetBrushOrgEx(entry.dc, 0, 0, nullptr);
-        const int stretchedLines = StretchDIBits(
-            entry.dc, 0, 0, width, height,
-            0, 0, image.width, image.height,
-            image.bgra.data(), &sourceInfo, DIB_RGB_COLORS, SRCCOPY);
-        SetStretchBltMode(entry.dc, oldMode);
-        if (stretchedLines <= 0) {
-            return nullptr;
-        }
+        if (!DrawDirectScaledPreview(entry.dc, RECT{0, 0, width, height}, image)) return nullptr;
 
         const HDC result = entry.dc;
         byteCount_ += entry.byteSize;
@@ -480,45 +484,27 @@ const EditorTexturePreviewImage* EditorTexturePreviewService::PreviewFor(const k
     return TextureCache().PreviewFor(metadata);
 }
 
-void DrawDirectScaledPreview(HDC dc, RECT target, const EditorTexturePreviewImage& image) {
-    BITMAPINFO info{};
-    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    info.bmiHeader.biWidth = image.width;
-    info.bmiHeader.biHeight = -image.height;
-    info.bmiHeader.biPlanes = 1;
-    info.bmiHeader.biBitCount = 32;
-    info.bmiHeader.biCompression = BI_RGB;
-
-    const int oldMode = SetStretchBltMode(dc, HALFTONE);
-    SetBrushOrgEx(dc, 0, 0, nullptr);
-    static_cast<void>(StretchDIBits(
-        dc,
-        target.left,
-        target.top,
-        target.right - target.left,
-        target.bottom - target.top,
-        0,
-        0,
-        image.width,
-        image.height,
-        image.bgra.data(),
-        &info,
-        DIB_RGB_COLORS,
-        SRCCOPY));
-    SetStretchBltMode(dc, oldMode);
-}
 
 void EditorTexturePreviewService::DrawContain(HDC dc, RECT target, const EditorTexturePreviewImage& image, bool border) {
-    const int width = target.right - target.left;
-    const int height = target.bottom - target.top;
+    int width = target.right - target.left;
+    int height = target.bottom - target.top;
     if (image.width <= 0 || image.height <= 0 || image.bgra.empty() || width <= 0 || height <= 0) {
         return;
     }
 
+    const double scale = std::min(static_cast<double>(width) / image.width, static_cast<double>(height) / image.height);
+    const int fittedWidth = std::max(1, static_cast<int>(image.width * scale));
+    const int fittedHeight = std::max(1, static_cast<int>(image.height * scale));
+    target.left += (width - fittedWidth) / 2;
+    target.top += (height - fittedHeight) / 2;
+    target.right = target.left + fittedWidth;
+    target.bottom = target.top + fittedHeight;
+    width = fittedWidth;
+    height = fittedHeight;
     if (const HDC scaledDc = TextureScaledPreviewCache().DcFor(image, width, height); scaledDc != nullptr) {
         BitBlt(dc, target.left, target.top, width, height, scaledDc, 0, 0, SRCCOPY);
     } else {
-        DrawDirectScaledPreview(dc, target, image);
+        static_cast<void>(DrawDirectScaledPreview(dc, target, image));
     }
 
     if (border) {

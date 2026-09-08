@@ -116,7 +116,8 @@ public:
         std::string_view property,
         const kb::scene::UIComponentPropertyValue& value);
     [[nodiscard]] bool VerifyUICreationMenu();
-    [[nodiscard]] bool VerifyUIComponentCatalog();
+    [[nodiscard]] bool VerifyUIComponentCatalog(std::optional<kb::scene::UIComponentType> only = {});
+    [[nodiscard]] bool VerifyUIGraphics();
     [[nodiscard]] bool VerifyUI2DEditing();
     [[nodiscard]] bool SelectUIAnchorPreset(int preset);
     [[nodiscard]] bool SetUIRectLayoutField(int field, float value);
@@ -162,6 +163,7 @@ public:
     [[nodiscard]] bool CapturePanelScreenshotMatrix(
         std::string_view panel, std::string_view checkpoint);
     [[nodiscard]] bool VerifyViewportHostLifecycle();
+    [[nodiscard]] bool CaptureEditorScene(std::string_view checkpoint, bool editorOverlaysEnabled = true);
     [[nodiscard]] bool VerifySceneRenderTargetAfterSecondary(
         std::string_view checkpoint);
     [[nodiscard]] bool CaptureRuntime(

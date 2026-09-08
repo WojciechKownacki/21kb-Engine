@@ -3,6 +3,7 @@
 #if defined(_WIN32)
 #include "app/EditorWorkspaceSession.hpp"
 #include "app/pointer/EditorRightButtonDownRouter.hpp"
+#include "platform/win32/EditorMaterialAssetPickerDialog.hpp"
 #include "docking/EditorWorkspaceArrangement.hpp"
 #include "windowing/EditorFloatingWindowFrame.hpp"
 #include "windowing/FloatingWindowFactory.hpp"
@@ -185,6 +186,7 @@ FindInspectorHit(
         }
     }
     const int firstX = compactX >= 0 ? compactX
+        : property == InspectorPropertyId::UIAssetPicker ? kInspectorContent.right - 28
         : property == InspectorPropertyId::UIAnchorPresets ? 40
         : property == InspectorPropertyId::UIAnchorPreset ? 40 + 64 * (std::max(0, index) % 4)
         : property == InspectorPropertyId::UIRectLayoutField ? (index % 2 == 0 ? 225 : 585)
@@ -555,10 +557,15 @@ struct EditorHeadlessAutomation::Impl {
                 sceneContext.Console().Error(
                     "Renderer", std::string{ message });
             });
+        sceneContext.SetRenderSceneReleaseHandler([this](const kb::scene::Scene& scene) { viewport.ReleaseScene(scene); });
+        sceneContext.SetParticlePreviewReleaseHandler([this](const kb::scene::Scene& scene) { viewport.ReleaseScene(scene); });
     }
 
     ~Impl() {
         if (sceneContext != nullptr) {
+            if (sceneContext->HasParticleEditorAsset()) sceneContext->CloseParticleEditorAsset();
+            sceneContext->SetRenderSceneReleaseHandler({});
+            sceneContext->SetParticlePreviewReleaseHandler({});
             kb::input::InputHaptics::UnregisterBackend(
                 sceneContext->Scene(), hapticsBackend);
         }
@@ -1404,8 +1411,113 @@ bool EditorHeadlessAutomation::VerifyUICreationMenu() {
     return true;
 }
 
-bool EditorHeadlessAutomation::VerifyUIComponentCatalog() {
+bool EditorHeadlessAutomation::VerifyUIGraphics() {
+    const auto fail = [&](std::string_view reason) { Trace("ui_graphics", false, reason); return false; };
+    auto& preview = context_.ViewportPreview(1U);
+    const bool was2D = preview.Is2D();
+    if (!was2D) preview.Toggle2D();
+    for (const auto type : {kb::scene::UIComponentType::Image, kb::scene::UIComponentType::RawImage, kb::scene::UIComponentType::Sprite}) {
+        for (const auto name : {"AuditPNG", "AuditJPEG", "AuditBMP", "AuditGIF"}) {
+            const auto* metadata = context_.Scene().Assets().Manager().Registry().FindByPath(std::string{"/Game/UI/"} + name + ".21kb");
+            if (!metadata) return fail(std::string{name} + ": fixture not imported");
+            const auto assetId = metadata->id;
+            const auto entity = context_.CreateUIObject(type);
+            if (!entity.IsValid()) return fail("create-image-failed");
+            const auto section = InspectorUIComponentModel::Section(type);
+            if (!FindInspectorHit(context_, section, InspectorPropertyId::UIAssetPicker, 0, InspectorHitKind::TextField))
+                return fail("image-picker-button-not-found");
+            bool hidden = false, captured = false, thumbnailCorrect = false;
+            const std::string checkpoint = std::string{kb::scene::FindUIComponentDescriptor(type)->displayName} + "-" + name;
+            const EditorAssetPickerWindowOptions options{.visible = false, .onOpened = [&](HWND picker) {
+                hidden = IsWindowVisible(picker) == 0;
+                for (const char ch : std::string_view{name}) SendMessageW(picker, WM_CHAR, static_cast<WPARAM>(ch), 0);
+                captured = CaptureBitmap(artifactRoot_ / "screenshots" / (checkpoint + "-picker.bmp"),
+                    ScreenshotDimensions{720, 560, 96}, [&](HDC dc) {
+                        SendMessageW(picker, WM_PRINTCLIENT, reinterpret_cast<WPARAM>(dc), PRF_CLIENT);
+                        int minX = 720, minY = 560, maxX = -1, maxY = -1;
+                        for (int y = 110; y < 214; ++y) for (int x = 30; x < 180; ++x) {
+                            const auto pixel = GetPixel(dc, x, y);
+                            if ((GetRValue(pixel) > 180 && GetGValue(pixel) < 70) ||
+                                (GetGValue(pixel) > 180 && GetRValue(pixel) < 70)) {
+                                minX = std::min(minX, x); maxX = std::max(maxX, x);
+                                minY = std::min(minY, y); maxY = std::max(maxY, y);
+                            }
+                        }
+                        thumbnailCorrect = maxX > minX && maxY > minY &&
+                            std::abs((maxX - minX + 1) - 2 * (maxY - minY + 1)) <= 3;
+                        if (std::string_view{name} == "AuditPNG") {
+                            const auto alpha = GetPixel(dc, 40, 134);
+                            thumbnailCorrect = thumbnailCorrect && GetRValue(alpha) >= 30 && GetRValue(alpha) <= 65 &&
+                                GetRValue(alpha) == GetGValue(alpha) && GetGValue(alpha) == GetBValue(alpha);
+                        }
+                    });
+                // Search leaves one tile. Select it with the production mouse handlers, then accept with Enter.
+                SendMessageW(picker, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(90, 180));
+                SendMessageW(picker, WM_LBUTTONUP, 0, MAKELPARAM(90, 180));
+                PostMessageW(picker, WM_KEYDOWN, VK_RETURN, 0);
+                PostMessageW(picker, WM_CLOSE, 0, 0);
+            }};
+            const auto result = EditorUIAssetPickerDialog::Show(impl_->window, MakeEditorDarkTheme(), context_, {}, kb::assets::AssetKind::Texture, options);
+            if (!hidden || !captured || !result.accepted || result.assetId != assetId)
+                return fail(checkpoint + ": picker did not select requested texture");
+            if (!thumbnailCorrect) return fail(checkpoint + ": thumbnail aspect ratio or alpha incorrect");
+            const auto property = type == kb::scene::UIComponentType::Sprite ? "spriteAssetId" : "imageAssetId";
+            if (!context_.SetUIComponentProperty(entity, type, property, result.assetId.value)) return fail("asset-assignment-failed");
+            kb::scene::SceneUIFrame frame;
+            if (!kb::scene::SceneUIQueries{context_.Scene()}.BuildFrame(640, 360, frame)) return fail("layout-failed");
+            const auto element = std::ranges::find_if(frame.elements, [entity](const auto& item) { return item.entity == entity; });
+            if (element == frame.elements.end()) return fail("image-missing-from-frame");
+            const auto rect = element->rect;
+            if (!CaptureEditorScene(checkpoint)) return false;
+            Gdiplus::Bitmap bitmap((artifactRoot_ / "screenshots" / (SafeCheckpoint(checkpoint) + ".png")).wstring().c_str());
+            Gdiplus::Color left, right;
+            bitmap.GetPixel(static_cast<INT>(rect.x + rect.width * 0.25F), static_cast<INT>(rect.y + rect.height * 0.5F), &left);
+            bitmap.GetPixel(static_cast<INT>(rect.x + rect.width * 0.75F), static_cast<INT>(rect.y + rect.height * 0.5F), &right);
+            if (bitmap.GetLastStatus() != Gdiplus::Ok || left.GetR() < 180 || left.GetG() > 70 || right.GetG() < 180 || right.GetR() > 70)
+                return fail(checkpoint + ": texture pixels incorrect (red/green halves expected)");
+            if (std::string_view{name} == "AuditPNG") {
+                Gdiplus::Color alpha;
+                bitmap.GetPixel(static_cast<INT>(rect.x + rect.width * 0.125F), static_cast<INT>(rect.y + rect.height * 0.125F), &alpha);
+                if (alpha.GetR() > 35 || alpha.GetG() > 35 || alpha.GetB() > 35) return fail(checkpoint + ": transparent pixels are opaque");
+            }
+            const auto sceneCheckpoint = checkpoint + "-3d";
+            if (!CaptureEditorScene(sceneCheckpoint, false)) return false;
+            Gdiplus::Bitmap sceneImage((artifactRoot_ / "screenshots" / (SafeCheckpoint(sceneCheckpoint) + ".png")).wstring().c_str());
+            Gdiplus::Color sceneLeft, sceneRight;
+            sceneImage.GetPixel(static_cast<INT>(rect.x + rect.width * 0.25F), static_cast<INT>(rect.y + rect.height * 0.5F), &sceneLeft);
+            sceneImage.GetPixel(static_cast<INT>(rect.x + rect.width * 0.75F), static_cast<INT>(rect.y + rect.height * 0.5F), &sceneRight);
+            if (sceneImage.GetLastStatus() != Gdiplus::Ok || sceneLeft.GetR() < 180 || sceneRight.GetG() < 180)
+                return fail(checkpoint + ": image missing over 3D scene");
+            const auto reopen = [&](int action) {
+                return EditorUIAssetPickerDialog::Show(impl_->window, MakeEditorDarkTheme(), context_, assetId,
+                    kb::assets::AssetKind::Texture, {.visible = false, .onOpened = [action](HWND picker) {
+                        if (action == 2) {
+                            SendMessageW(picker, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(475, 84));
+                            SendMessageW(picker, WM_LBUTTONUP, 0, MAKELPARAM(475, 84));
+                        } else PostMessageW(picker, WM_KEYDOWN, action == 0 ? VK_RETURN : VK_ESCAPE, 0);
+                        PostMessageW(picker, WM_CLOSE, 0, 0);
+                    }});
+            };
+            const auto retained = reopen(0);
+            const auto cancelled = reopen(1);
+            const auto cleared = reopen(2);
+            if (!retained.accepted || retained.assetId != assetId || cancelled.accepted || !cleared.accepted || cleared.assetId.IsValid())
+                return fail(checkpoint + ": retain-cancel-clear failed");
+            if (!context_.SetUIComponentProperty(entity, type, property, cleared.assetId.value) || !context_.UndoSceneCommand())
+                return fail("clear-image-undo-failed");
+            if (!context_.UndoSceneCommand()) return fail("asset-undo-failed");
+            // Undo rebuilds entity handles; creation is still the previous atomic command.
+            if (!context_.UndoSceneCommand()) return fail("creation-undo-failed");
+            Trace("ui_graphics", true, checkpoint);
+        }
+    }
+    if (!was2D) preview.Toggle2D();
+    return true;
+}
+
+bool EditorHeadlessAutomation::VerifyUIComponentCatalog(std::optional<kb::scene::UIComponentType> only) {
     for (const auto& descriptor : kb::scene::UIComponentCatalog()) {
+        if (only && descriptor.type != *only) continue;
         auto entity = context_.CreateHierarchyObject();
         context_.SelectEntity(entity);
         if (!AddComponent(descriptor.stableId)) return false;
@@ -1510,6 +1622,7 @@ bool EditorHeadlessAutomation::VerifyUIComponentCatalog() {
                     InspectorPanelRenderer{}.Paint(dc, RECT{0, 0, 440, 900}, MakeEditorDarkTheme(), context_);
                 })) return false;
         const auto values = kb::scene::CaptureSceneUIComponents(context_.Scene().Components().UI(), entity);
+        std::size_t editedFields = 0;
         for (const auto& property : kb::scene::UIComponentPropertyCatalog(descriptor.type)) {
             kb::scene::UIComponentPropertyValue value;
             if (!kb::scene::ReadUIComponentProperty(values, descriptor.type, property.name, value) ||
@@ -1517,7 +1630,27 @@ bool EditorHeadlessAutomation::VerifyUIComponentCatalog() {
                 Trace("ui_catalog", false, std::string{descriptor.displayName} + "." + std::string{property.name});
                 return false;
             }
+            if (property.writable && property.type != kb::scene::UIComponentPropertyType::Asset &&
+                property.type != kb::scene::UIComponentPropertyType::Entity) {
+                auto changed = value;
+                std::visit([](auto& lane) {
+                    using T = std::decay_t<decltype(lane)>;
+                    if constexpr (std::is_same_v<T, bool>) lane = !lane;
+                    else if constexpr (std::is_same_v<T, std::string>) lane += " test";
+                    else if constexpr (std::is_same_v<T, float>) lane = lane == 0.0F ? 0.5F : lane * 0.5F;
+                    else lane = lane == 0 ? 1 : 0;
+                }, changed);
+                auto candidate = values;
+                if (kb::scene::WriteUIComponentProperty(candidate, descriptor.type, property.name, changed) ==
+                    kb::scene::UIComponentPropertyWriteResult::Succeeded && changed != value) {
+                    if (!SetUIComponentProperty(descriptor.type, property.name, changed) ||
+                        !SetUIComponentProperty(descriptor.type, property.name, value)) return false;
+                    ++editedFields;
+                }
+            }
         }
+        if (editedFields == 0) { Trace("ui_catalog", false, "no-field-was-edited"); return false; }
+        Trace("ui_catalog_edits", true, std::string{descriptor.displayName} + ": " + std::to_string(editedFields));
         if (!SetUIComponentProperty(kb::scene::UIComponentType::RectTransform, "scale.x",
                 kb::scene::UIComponentPropertyValue{1.25F})) return false;
         kb::scene::SceneUIFrame frame;
@@ -1528,6 +1661,12 @@ bool EditorHeadlessAutomation::VerifyUIComponentCatalog() {
             Trace("ui_catalog", false, std::string{descriptor.displayName} + " absent from scene frame");
             return false;
         }
+        auto& preview = context_.ViewportPreview(1U);
+        const bool was2D = preview.Is2D();
+        if (!was2D) preview.Toggle2D();
+        const bool captured = CaptureEditorScene("component-" + std::string{descriptor.displayName});
+        if (!was2D) preview.Toggle2D();
+        if (!captured) return false;
         Trace("ui_catalog", true, descriptor.displayName);
         auto root = entity;
         while (context_.Scene().Hierarchy().Parent(root).IsValid()) root = context_.Scene().Hierarchy().Parent(root);
@@ -2668,7 +2807,6 @@ bool EditorHeadlessAutomation::CaptureRuntime(
 bool EditorHeadlessAutomation::VerifySceneRenderTargetAfterSecondary(
     std::string_view checkpoint) {
     constexpr std::uint64_t secondaryViewportKey = 14U;
-    constexpr std::uint64_t sceneViewportKey = 1U;
     if (!impl_->RenderScene(
             context_, secondaryViewportKey, true)) {
         Trace(
@@ -2676,6 +2814,11 @@ bool EditorHeadlessAutomation::VerifySceneRenderTargetAfterSecondary(
             "secondary-present-failed");
         return false;
     }
+    return CaptureEditorScene(checkpoint);
+}
+
+bool EditorHeadlessAutomation::CaptureEditorScene(std::string_view checkpoint, bool editorOverlaysEnabled) {
+    constexpr std::uint64_t sceneViewportKey = 1U;
 
     const std::filesystem::path output =
         artifactRoot_ / "screenshots" /
@@ -2685,21 +2828,21 @@ bool EditorHeadlessAutomation::VerifySceneRenderTargetAfterSecondary(
             context_.Scene(), output.string());
     if (capture == 0U) {
         Trace(
-            "verify_scene_render_target_after_secondary", false,
+            "capture_editor_scene", false,
             "request-rejected");
         return false;
     }
 
-    if (!impl_->RenderScene(context_, sceneViewportKey, true)) {
+    if (!impl_->RenderScene(context_, sceneViewportKey, editorOverlaysEnabled)) {
         Trace(
-            "verify_scene_render_target_after_secondary", false,
+            "capture_editor_scene", false,
             "scene-present-failed");
         return false;
     }
     for (std::size_t poll = 0U; poll < 240U; ++poll) {
         if (!impl_->viewport.AdvanceAsyncReadbacks()) {
             Trace(
-                "verify_scene_render_target_after_secondary", false,
+                "capture_editor_scene", false,
                 "scene-present-failed");
             return false;
         }
@@ -2709,20 +2852,20 @@ bool EditorHeadlessAutomation::VerifySceneRenderTargetAfterSecondary(
         if (status == kb::scene::SceneScreenCaptureStatus::Completed) {
             const bool valid = ValidateCapturedImage(output, true);
             Trace(
-                "verify_scene_render_target_after_secondary", valid,
+                "capture_editor_scene", valid,
                 output.filename().string());
             return valid;
         }
         if (status == kb::scene::SceneScreenCaptureStatus::Failed) {
             Trace(
-                "verify_scene_render_target_after_secondary", false,
+                "capture_editor_scene", false,
                 "capture-failed");
             return false;
         }
         Sleep(5U);
     }
     Trace(
-        "verify_scene_render_target_after_secondary", false,
+        "capture_editor_scene", false,
         "capture-timeout");
     return false;
 }
