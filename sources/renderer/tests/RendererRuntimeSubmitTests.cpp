@@ -5639,6 +5639,8 @@ void RunEditorUIViewTransformValidationTests() {
     config.allowHeadlessNoop = true;
     config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
     Renderer renderer;
+    renderer.ReleaseScene(scene);
+    renderer.ReleaseAllScenes();
     Require(renderer.Initialize(surface,&config), "Editor UI view renderer initialization failed");
     RenderSceneSubmitDesc desc{};
     desc.target.viewport = RenderViewportDesc{.id=RenderViewportId{1U},.extent={64U,64U},.viewportIndex=0U};
@@ -5657,6 +5659,8 @@ void RunEditorUIViewTransformValidationTests() {
     Require(renderer.SubmitScene(scene,desc), "Renderer rejected a valid UI view after invalid scales");
     renderer.EndFrame();
     renderer.Shutdown();
+    renderer.ReleaseScene(scene);
+    renderer.ReleaseAllScenes();
 }
 
 void RunRendererRuntimeSubmitTests() {

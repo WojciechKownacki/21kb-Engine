@@ -709,8 +709,15 @@ ReadScriptValue(
     if (*operation == "assert_ui_creation_menu") {
         return {state.automation.VerifyUICreationMenu(), "Hierarchy UI creation, dependencies, parenting and Undo"};
     }
+    if (*operation == "assert_ui_graphics") {
+        return {state.automation.VerifyUIGraphics(), "Native image picker and GPU pixels for Image, Raw Image and Sprite"};
+    }
     if (*operation == "assert_ui_catalog") {
-        return {state.automation.VerifyUIComponentCatalog(), "UI catalog: anchors, editable fields, scene frame"};
+        const auto component = StringMember(step, "component", error, false);
+        const auto* descriptor = component ? kb::scene::FindUIComponentDescriptor(*component) : nullptr;
+        if (component && !descriptor) return {false, "Unknown UI component"};
+        return {state.automation.VerifyUIComponentCatalog(descriptor ? std::optional{descriptor->type} : std::nullopt),
+            component ? *component : "UI catalog: anchors, edited fields, GPU frame"};
     }
     if (*operation == "ui_anchor_preset" || *operation == "ui_rect_layout") {
         const auto alias = StringMember(step, "entity", error);

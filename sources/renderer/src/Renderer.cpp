@@ -2058,8 +2058,8 @@ void Renderer::ReleaseScene(const kb::scene::Scene& scene) noexcept {
     if (auxFrameRenderer_ != nullptr) {
         auxFrameRenderer_->ReleaseScene(scene.Id(), sceneRenderer_.get());
     }
-    screenCapture_->ReleaseScene(mutableScene);
-    particleRenderSynchronizer_->ReleaseScene(scene);
+    if (screenCapture_ != nullptr) screenCapture_->ReleaseScene(mutableScene);
+    if (particleRenderSynchronizer_ != nullptr) particleRenderSynchronizer_->ReleaseScene(scene);
     if (sceneRenderer_ != nullptr) sceneRenderer_->ReleaseParticleScene(scene.Id());
     if (screenUIRenderer_ != nullptr && sceneRenderer_ != nullptr) {
         screenUIRenderer_->ReleaseScene(scene.Id(), sceneRenderer_->Resources());
@@ -2075,8 +2075,8 @@ void Renderer::ReleaseAllScenes() noexcept {
     if (auxFrameRenderer_ != nullptr) {
         auxFrameRenderer_->Shutdown(sceneRenderer_.get());
     }
-    screenCapture_->Shutdown();
-    particleRenderSynchronizer_->Clear();
+    if (screenCapture_ != nullptr) screenCapture_->Shutdown();
+    if (particleRenderSynchronizer_ != nullptr) particleRenderSynchronizer_->Clear();
     if (sceneRenderer_ != nullptr) sceneRenderer_->ReleaseAllParticleScenes();
     if (screenUIRenderer_ != nullptr && sceneRenderer_ != nullptr) {
         screenUIRenderer_->ReleaseAllScenes(sceneRenderer_->Resources());

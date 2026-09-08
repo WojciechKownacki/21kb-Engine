@@ -40,7 +40,8 @@ scenario-local aliases.
 | Operation | Required fields |
 | --- | --- |
 | `assert_ui_creation_menu` | Inspects the native Create > User Widget menu without displaying it; creates every registered UI type, verifies dependencies, scene frame, parenting, unique names and atomic Undo/Redo. |
-| `assert_ui_catalog` | Creates each registered UI component through the Inspector, checks anchors first, locates every editable field, changes scale and verifies the production scene frame; cleans up each probe. |
+| `assert_ui_catalog` | Optional `component` name or stable ID; creates the component through the Inspector, changes and restores valid editable properties using editor controls, captures the Inspector and GPU scene frame; cleans up each probe. |
+| `assert_ui_graphics` | Requires AuditPNG, AuditJPEG, AuditBMP and AuditGIF texture fixtures under `/Game/UI`; searches and clicks the hidden native picker for Image, Raw Image and Sprite, assigns the result, verifies red/green GPU pixels and Undo. GIF coverage checks the decoded still image, not animation playback. |
 | `verify_ui_2d` | Selected UI object; verifies the 2D toolbar, eight resize handles, selection, moving, Undo, cancellation, zoom and GPU capture. |
 | `ui_anchor_preset` | `entity`, integer `preset` (0..15, columns: left/center/right/stretch; rows: top/center/bottom/stretch); opens the Inspector selector and clicks the preset. |
 | `ui_rect_layout` | `entity`, integer `field` (0: position X/left, 1: position Y/top, 2: width/right, 3: height/bottom), numeric `value`; edits the compact layout field. |
