@@ -25,13 +25,18 @@ constexpr std::uint16_t PostProcessExposureReadback = 15;
 constexpr std::uint16_t PostProcessMotionVectors = 16;
 constexpr std::uint16_t PostProcessTaaResolve = 17;
 constexpr std::uint16_t EditorGizmoOverlay = 33;
+constexpr std::uint16_t ScreenUIBlurH = 34;
+constexpr std::uint16_t ScreenUIBlurV = 35;
+constexpr std::uint16_t ScreenUIComposite = 36;
 constexpr std::uint16_t ReservedStart = 18;
 constexpr std::uint16_t PostProcessBloomDownsampleStart = 18;
 constexpr std::uint16_t PostProcessBloomMipBlurHStart = 23;
 constexpr std::uint16_t PostProcessBloomMipBlurVStart = 28;
-constexpr std::uint16_t DetachedViewportStart = 34;
-constexpr std::uint16_t DetachedViewportStride = 33;
+constexpr std::uint16_t DetachedViewportStart = 37;
+constexpr std::uint16_t DetachedViewportStride = 36;
 constexpr std::uint16_t Max = 256;
+// Global asynchronous capture runs after every remapped viewport draw.
+constexpr std::uint16_t ScreenCapture = Max - 1U;
 
 [[nodiscard]] constexpr bool IsValid(std::uint16_t viewId) noexcept {
     return viewId < Max;

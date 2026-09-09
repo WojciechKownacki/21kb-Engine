@@ -8,7 +8,8 @@ namespace kb::editor {
 namespace {
 
 [[nodiscard]] bool TextInputActive(const EditorSceneContext& sceneContext) noexcept {
-    return sceneContext.Inspector().IsTextEditing() || sceneContext.AssetBrowser().IsTextEditing() || sceneContext.IsHierarchyRenaming() ||
+    return sceneContext.IsBuildGameTextEditing() || sceneContext.Inspector().IsTextEditing() ||
+        sceneContext.AssetBrowser().IsTextEditing() || sceneContext.IsHierarchyRenaming() ||
         sceneContext.IsHierarchySearchFocused() || sceneContext.IsMaterialGraphConstantInlineEditing() ||
         sceneContext.IsMaterialGraphNodeRenameEditing() || sceneContext.IsMaterialEditorFindFocused() ||
         sceneContext.ParticleEditorWorkspace().RenameActive();

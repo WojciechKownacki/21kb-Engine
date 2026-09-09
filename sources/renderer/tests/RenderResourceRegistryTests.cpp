@@ -853,6 +853,97 @@ void RunObjImporterBuildsRenderMeshDescWithSectionsAndSlotsTest() {
     Require(asset->materialSlots[asset->sections[1].materialSlot].defaultMaterialAssetId == 102U, "OBJ importer did not bind second material slot");
 }
 
+void RunMeshBoundsBoxIsTighterThanSphereTest() {
+    // A flat, off-origin shape: 4 wide, 2 tall, and only 0.5 deep. The sphere that encloses
+    // it necessarily reaches far beyond the geometry along the thin axis, which is what makes
+    // it the wrong shape for click and rectangle selection.
+    std::istringstream obj{
+        "v -2 0 -0.25\n"
+        "v  2 0 -0.25\n"
+        "v  2 2 -0.25\n"
+        "v -2 2 -0.25\n"
+        "v -2 0  0.25\n"
+        "v  2 0  0.25\n"
+        "v  2 2  0.25\n"
+        "v -2 2  0.25\n"
+        "vt 0 0\n"
+        "f 1/1 2/1 3/1 4/1\n"
+        "f 5/1 6/1 7/1 8/1\n"
+    };
+
+    const std::optional<RenderMeshAssetData> asset = RenderMeshAssetBuilder::LoadObj(obj, RenderMeshObjImportDesc{});
+    Require(asset.has_value(), "Bounds fixture failed to import");
+    Require(asset->bounds.IsValid(), "Mesh asset lost its bounding sphere");
+    Require(asset->boundsBox.IsValid(), "Mesh asset must carry a bounding box beside its sphere");
+
+    Require(
+        NearlyEqual(asset->boundsBox.center[0], asset->bounds.center[0]) &&
+            NearlyEqual(asset->boundsBox.center[1], asset->bounds.center[1]) &&
+            NearlyEqual(asset->boundsBox.center[2], asset->bounds.center[2]),
+        "Bounding box and sphere must share the origin they were computed from");
+    Require(
+        NearlyEqual(asset->boundsBox.halfExtents[0], 2.0F) &&
+            NearlyEqual(asset->boundsBox.halfExtents[1], 1.0F) &&
+            NearlyEqual(asset->boundsBox.halfExtents[2], 0.25F),
+        "Bounding box must be the tight half-extents of the geometry");
+    Require(
+        asset->bounds.radius > asset->boundsBox.halfExtents[2] * 4.0F,
+        "Fixture is not exercising the case the box exists for: the sphere must overreach the thin axis");
+    Require(
+        asset->desc.boundsBox.IsValid() &&
+            NearlyEqual(asset->desc.boundsBox.halfExtents[2], asset->boundsBox.halfExtents[2]),
+        "Mesh desc must expose the same bounding box the asset computed");
+}
+
+void RunObjImporterGeneratesMissingNormalsTest() {
+    // An OBJ exported without `vn` carries no normals at all. Shading them with a single
+    // constant up vector makes every triangle of the model receive identical light, so the
+    // mesh renders as a flat silhouette no matter how it is lit.
+    std::istringstream withoutNormals{
+        "v 0 0 0\n"
+        "v 1 0 0\n"
+        "v 1 1 0\n"
+        "v 0 1 0\n"
+        "vt 0 0\n"
+        "vt 1 0\n"
+        "vt 1 1\n"
+        "vt 0 1\n"
+        "f 1/1 2/2 3/3 4/4\n"
+    };
+
+    const std::optional<RenderMeshAssetData> generated = RenderMeshAssetBuilder::LoadObj(
+        withoutNormals, RenderMeshObjImportDesc{});
+    Require(generated.has_value(), "OBJ importer failed to build a mesh asset without source normals");
+    Require(!generated->tangentVertices.empty(), "OBJ importer produced no vertices for the normal-less source");
+    for (const RenderStaticMeshVertexP3N3T4UV2& vertex : generated->tangentVertices) {
+        Require(
+            NearlyEqual(vertex.nx, 0.0F) && NearlyEqual(vertex.ny, 0.0F) && NearlyEqual(vertex.nz, 1.0F),
+            "OBJ importer must derive normals from the geometry when the source has none");
+    }
+
+    // A source that does author normals keeps them: generation is a fallback, not an override.
+    std::istringstream withNormals{
+        "v 0 0 0\n"
+        "v 1 0 0\n"
+        "v 1 1 0\n"
+        "vt 0 0\n"
+        "vt 1 0\n"
+        "vt 1 1\n"
+        "vn 0 1 0\n"
+        "f 1/1/1 2/2/1 3/3/1\n"
+    };
+
+    const std::optional<RenderMeshAssetData> authored = RenderMeshAssetBuilder::LoadObj(
+        withNormals, RenderMeshObjImportDesc{});
+    Require(authored.has_value(), "OBJ importer failed to build a mesh asset with source normals");
+    Require(!authored->tangentVertices.empty(), "OBJ importer produced no vertices for the authored-normal source");
+    for (const RenderStaticMeshVertexP3N3T4UV2& vertex : authored->tangentVertices) {
+        Require(
+            NearlyEqual(vertex.nx, 0.0F) && NearlyEqual(vertex.ny, 1.0F) && NearlyEqual(vertex.nz, 0.0F),
+            "OBJ importer must keep the normals a source authored");
+    }
+}
+
 void AppendFbxU32(std::vector<std::byte>& output, std::uint32_t value) {
     for (std::uint32_t shift = 0U; shift < 32U; shift += 8U) {
         output.push_back(static_cast<std::byte>((value >> shift) & 0xFFU));
@@ -3528,6 +3619,8 @@ void RunRenderResourceRegistryTests() {
     RunSkeletalMeshValidatedBuildMatchesCheckedBuildTest();
     RunSkinningPaletteAllocatorLifetimeTest();
     RunObjImporterBuildsRenderMeshDescWithSectionsAndSlotsTest();
+    RunObjImporterGeneratesMissingNormalsTest();
+    RunMeshBoundsBoxIsTighterThanSphereTest();
     RunFbxImporterBuildsSectionsForMaterialSlotsTest();
     RunFbxImporterStopsAtFooterAfterNullTerminatorTest();
     RunRenderMeshAssetLoaderDiscoversAndLoadsObjThroughAssetManagerTest();

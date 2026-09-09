@@ -1,4 +1,5 @@
 #include "scene/prefab/ScenePrefabPropertyReverter.hpp"
+#include "engine/scene/SceneUIComponentSet.hpp"
 
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -104,12 +105,8 @@ void RevertComponentProperty(Scene& scene, SceneObject object, const ScenePrefab
         } else {
             components.ParticleEffects().Remove(entity);
         }
-    } else if (ScenePrefabPropertyPath::StartsWith(propertyPath, "uiDocument")) {
-        if (node.components.uiDocument.has_value()) {
-            components.UIDocuments().Set(entity, *node.components.uiDocument);
-        } else {
-            components.UIDocuments().Remove(entity);
-        }
+    } else if (propertyPath == "ui") {
+        SynchronizeSceneUIComponents(components.UI(), entity, node.components.ui);
     }
 }
 

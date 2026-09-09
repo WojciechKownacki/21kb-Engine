@@ -1,6 +1,8 @@
 #include "kb/render/resources/RenderMaterialGraphShaderArtifact.hpp"
 #include "kb/render/SceneGBufferContract.hpp"
 
+#include "engine/platform/FileSystemPath.hpp"
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -78,7 +80,7 @@ void AddArtifactDiagnostic(
     std::string backend = {});
 
 [[nodiscard]] bool ReadTextFileStrict(const std::filesystem::path& path, std::string& text) {
-    std::ifstream input{ path, std::ios::binary };
+    std::ifstream input{ kb::platform::ExtendedLengthPath(path), std::ios::binary };
     if (!input) {
         return false;
     }
@@ -318,24 +320,49 @@ public:
 
     [[nodiscard]] bool Acquire(const std::filesystem::path& path) {
 #if defined(_WIN32)
+        // The cache root is the user's project directory, so this path is as deep as the user's
+        // folders are: past MAX_PATH the directories still create through std::filesystem and only
+        // this open would fail, which is why it goes to Win32 in extended-length form.
         handle_ = CreateFileW(
-            path.c_str(),
+            kb::platform::ExtendedLengthPath(path).c_str(),
             GENERIC_READ | GENERIC_WRITE,
             FILE_SHARE_READ | FILE_SHARE_WRITE,
             nullptr,
             OPEN_ALWAYS,
             FILE_ATTRIBUTE_NORMAL,
             nullptr);
-        if (handle_ == INVALID_HANDLE_VALUE) return false;
+        if (handle_ == INVALID_HANDLE_VALUE) {
+            failure_ = GetLastError();
+            return false;
+        }
         OVERLAPPED overlapped{};
-        return LockFileEx(handle_, LOCKFILE_EXCLUSIVE_LOCK, 0U, 1U, 0U, &overlapped) != FALSE;
+        if (LockFileEx(handle_, LOCKFILE_EXCLUSIVE_LOCK, 0U, 1U, 0U, &overlapped) == FALSE) {
+            failure_ = GetLastError();
+            return false;
+        }
+        return true;
 #else
         descriptor_ = open(path.c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0666);
-        return descriptor_ >= 0 && flock(descriptor_, LOCK_EX) == 0;
+        if (descriptor_ < 0 || flock(descriptor_, LOCK_EX) != 0) {
+            failure_ = static_cast<unsigned long>(errno);
+            return false;
+        }
+        return true;
+#endif
+    }
+
+    // Why the last Acquire refused, in the platform's own numbering. A lock that cannot be taken
+    // stops a cook, so the diagnostic has to name the cause rather than the symptom.
+    [[nodiscard]] std::string FailureDetail() const {
+#if defined(_WIN32)
+        return "Windows error " + std::to_string(failure_);
+#else
+        return "errno " + std::to_string(failure_);
 #endif
     }
 
 private:
+    unsigned long failure_ = 0UL;
 #if defined(_WIN32)
     HANDLE handle_ = INVALID_HANDLE_VALUE;
 #else
@@ -357,7 +384,7 @@ private:
     std::error_code error;
     std::filesystem::create_directories(path.parent_path(), error);
     if (error) return false;
-    std::ofstream output{ path, std::ios::binary | std::ios::trunc };
+    std::ofstream output{ kb::platform::ExtendedLengthPath(path), std::ios::binary | std::ios::trunc };
     if (!output) return false;
     output.write(content.data(), static_cast<std::streamsize>(content.size()));
     return output.good();
@@ -414,7 +441,7 @@ private:
 [[nodiscard]] bool ReadShaderCacheFileIdentity(
     const std::filesystem::path& path,
     ShaderCacheFileIdentity& identity) {
-    std::ifstream input{ path, std::ios::binary };
+    std::ifstream input{ kb::platform::ExtendedLengthPath(path), std::ios::binary };
     if (!input) return false;
     std::array<std::uint8_t, 64U * 1024U> buffer{};
     std::uint64_t hash = 1469598103934665603ULL;
@@ -539,7 +566,7 @@ private:
         .bInheritHandle = TRUE,
     };
     const HANDLE diagnostic = CreateFileW(
-        diagnosticPath.c_str(),
+        kb::platform::ExtendedLengthPath(diagnosticPath).c_str(),
         GENERIC_WRITE,
         FILE_SHARE_READ | FILE_SHARE_WRITE,
         &security,
@@ -689,6 +716,7 @@ std::string_view RenderMaterialGraphShaderBackendName(RenderMaterialGraphShaderB
     case RenderMaterialGraphShaderBackend::Metal: return "metal";
     case RenderMaterialGraphShaderBackend::Essl: return "essl";
     case RenderMaterialGraphShaderBackend::Glsl: return "glsl";
+    case RenderMaterialGraphShaderBackend::Wgsl: return "wgsl";
     }
     return "spirv";
 }
@@ -701,6 +729,7 @@ std::string_view RenderMaterialGraphShaderBackendProfile(RenderMaterialGraphShad
     case RenderMaterialGraphShaderBackend::Metal: return "metal";
     case RenderMaterialGraphShaderBackend::Essl: return "300_es";
     case RenderMaterialGraphShaderBackend::Glsl: return "440";
+    case RenderMaterialGraphShaderBackend::Wgsl: return "wgsl";
     }
     return "spirv";
 }
@@ -716,33 +745,89 @@ std::optional<RenderMaterialGraphShaderBackend> ParseRenderMaterialGraphShaderBa
     if (text == "metal") return RenderMaterialGraphShaderBackend::Metal;
     if (text == "essl") return RenderMaterialGraphShaderBackend::Essl;
     if (text == "glsl") return RenderMaterialGraphShaderBackend::Glsl;
+    if (text == "wgsl") return RenderMaterialGraphShaderBackend::Wgsl;
     return std::nullopt;
 }
 
-[[nodiscard]] std::filesystem::path UniqueShaderTemporaryPath(
-    const std::filesystem::path& destination,
-    std::string_view suffix) {
+[[nodiscard]] std::string UniqueShaderTemporaryName(std::string_view suffix) {
     static std::atomic<std::uint64_t> serial{ 0U };
 #if defined(_WIN32)
     const std::uint64_t processId = static_cast<std::uint64_t>(GetCurrentProcessId());
 #else
     const std::uint64_t processId = static_cast<std::uint64_t>(getpid());
 #endif
-    std::filesystem::path temporary = destination;
-    temporary += "." + std::string{ suffix } + "." + std::to_string(processId) + "." +
+    return ".kb-" + std::string{ suffix } + "." + std::to_string(processId) + "." +
         std::to_string(serial.fetch_add(1U, std::memory_order_relaxed));
-    return temporary;
 }
 
+[[nodiscard]] std::filesystem::path UniqueShaderTemporaryPath(
+    const std::filesystem::path& destination,
+    std::string_view suffix) {
+    return destination.parent_path() / UniqueShaderTemporaryName(suffix);
+}
+
+// bx, and so the shaderc built on it, opens every file through the narrow CRT, which resolves a
+// path against MAX_PATH whatever prefix it carries: the compiler cannot read or write anything
+// under a project directory deeper than that, and no amount of care on this side changes it.
+// Everything the compiler itself touches - its captured input mirror, the binary it writes, its
+// log - therefore lives under a scratch root the engine owns and keeps short. Only the finished
+// binary is published into the project's cache, which is as deep as the user's folders are.
+[[nodiscard]] std::filesystem::path ShaderCompilerScratchPath(std::string_view suffix, std::error_code& error) {
+    return kb::platform::ToolScratchPath(suffix, error);
+}
+
+// `failure` carries the platform's own error number when the rename does not happen, so a cook
+// that cannot publish says which call refused rather than only which file it wanted.
 [[nodiscard]] bool PublishShaderFileAtomically(
     const std::filesystem::path& staging,
-    const std::filesystem::path& destination) noexcept {
+    const std::filesystem::path& destination,
+    unsigned long& failure) noexcept {
 #if defined(_WIN32)
-    return MoveFileExW(
-        staging.c_str(), destination.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != FALSE;
+    const std::filesystem::path from = kb::platform::ExtendedLengthPath(staging);
+    const std::filesystem::path to = kb::platform::ExtendedLengthPath(destination);
+    if (MoveFileExW(from.c_str(), to.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != FALSE) {
+        return true;
+    }
+    failure = GetLastError();
+    return false;
 #else
-    return ::rename(staging.c_str(), destination.c_str()) == 0;
+    if (::rename(staging.c_str(), destination.c_str()) == 0) {
+        return true;
+    }
+    failure = static_cast<unsigned long>(errno);
+    return false;
 #endif
+}
+
+[[nodiscard]] std::string PlatformFailureDetail(unsigned long failure) {
+#if defined(_WIN32)
+    return "Windows error " + std::to_string(failure);
+#else
+    return "errno " + std::to_string(failure);
+#endif
+}
+
+// The compiler writes on the scratch volume, so making its result visible is a copy next to the
+// destination followed by a rename within that directory: a reader sees either the binary that was
+// there before or the whole new one, never a half-copied file.
+[[nodiscard]] bool PublishCompiledShaderBinary(
+    const std::filesystem::path& staging,
+    const std::filesystem::path& destination,
+    std::string& failure) {
+    const std::filesystem::path local = UniqueShaderTemporaryPath(destination, "publish.tmp");
+    std::error_code error;
+    std::filesystem::copy_file(staging, local, std::filesystem::copy_options::overwrite_existing, error);
+    if (error) {
+        failure = "copying the compiled binary into the cache directory failed: " + error.message();
+        return false;
+    }
+    unsigned long renameFailure = 0UL;
+    if (PublishShaderFileAtomically(local, destination, renameFailure)) {
+        return true;
+    }
+    failure = "renaming it onto the cache entry failed: " + PlatformFailureDetail(renameFailure);
+    std::filesystem::remove(local, error);
+    return false;
 }
 
 [[nodiscard]] bool WriteShaderTextAtomically(
@@ -750,7 +835,7 @@ std::optional<RenderMaterialGraphShaderBackend> ParseRenderMaterialGraphShaderBa
     std::string_view text) {
     const std::filesystem::path staging = UniqueShaderTemporaryPath(destination, "write.tmp");
     {
-        std::ofstream output{ staging, std::ios::binary | std::ios::trunc };
+        std::ofstream output{ kb::platform::ExtendedLengthPath(staging), std::ios::binary | std::ios::trunc };
         if (!output) return false;
         output.write(text.data(), static_cast<std::streamsize>(text.size()));
         if (!output) {
@@ -760,7 +845,8 @@ std::optional<RenderMaterialGraphShaderBackend> ParseRenderMaterialGraphShaderBa
             return false;
         }
     }
-    if (PublishShaderFileAtomically(staging, destination)) return true;
+    unsigned long failure = 0UL;
+    if (PublishShaderFileAtomically(staging, destination, failure)) return true;
     std::error_code error;
     std::filesystem::remove(staging, error);
     return false;
@@ -778,6 +864,7 @@ namespace {
     case RenderMaterialGraphShaderBackend::Metal: return ShaderBakeBackend::Metal;
     case RenderMaterialGraphShaderBackend::Essl: return ShaderBakeBackend::Essl;
     case RenderMaterialGraphShaderBackend::Glsl: return ShaderBakeBackend::Glsl;
+    case RenderMaterialGraphShaderBackend::Wgsl: return ShaderBakeBackend::Wgsl;
     }
     return std::nullopt;
 }
@@ -1256,7 +1343,11 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
     HashU64(cookKey, request.debug ? 1U : 0U);
 
     std::error_code error;
-    const std::filesystem::path passRoot = std::filesystem::path{ request.cacheRoot } /
+    // The cache root is the user's project directory and everything below it is built from hashes,
+    // so the entries reach past MAX_PATH on a deep project. Addressing the root in extended-length
+    // form once makes every path derived from it - directories, binaries, markers, locks - one the
+    // operating system will open, and only the paths that outlive the cook are turned back.
+    const std::filesystem::path passRoot = kb::platform::ExtendedLengthPath(request.cacheRoot) /
         std::string{ kb::assets::bake::ShaderBakePlatformName(artifact.shaderPlatform) } /
         ("graph_" + std::to_string(shader.sourceHash)) /
         ("variant_" + std::to_string(artifact.variantKey)) /
@@ -1264,7 +1355,7 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
     std::filesystem::create_directories(passRoot, error);
     if (error) {
         AddArtifactDiagnostic(result.diagnostics, RenderMaterialGraphDiagnosticSeverity::Error,
-            "Material graph shader cache directory could not be created: " + passRoot.generic_string() + ".");
+            "Material graph shader cache directory could not be created: " + kb::platform::PortablePath(passRoot).generic_string() + ".");
         return result;
     }
     std::filesystem::path inputMirrorRoot;
@@ -1273,8 +1364,9 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
     std::filesystem::path capturedVaryingDefPath;
     const auto ensureInputMirror = [&]() {
         if (inputMirrorCleanup != nullptr) return true;
-        inputMirrorRoot = UniqueShaderTemporaryPath(passRoot / "inputs", "work");
         error.clear();
+        inputMirrorRoot = ShaderCompilerScratchPath("work", error);
+        if (error) return false;
         if (!std::filesystem::create_directory(inputMirrorRoot, error) || error ||
             !BuildCapturedShaderInputMirror(
                 request,
@@ -1297,7 +1389,7 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
         std::filesystem::create_directories(backendDir, error);
         if (error) {
             AddArtifactDiagnostic(result.diagnostics, RenderMaterialGraphDiagnosticSeverity::Error,
-                "Material graph shader backend cache directory could not be created: " + backendDir.generic_string() + ".");
+                "Material graph shader backend cache directory could not be created: " + kb::platform::PortablePath(backendDir).generic_string() + ".");
             continue;
         }
         const std::filesystem::path binaryPath =
@@ -1306,7 +1398,8 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
         ShaderCacheFileLock cacheLock;
         if (!cacheLock.Acquire(binaryPath.string() + ".lock")) {
             AddArtifactDiagnostic(result.diagnostics, RenderMaterialGraphDiagnosticSeverity::Error,
-                "Material graph shader cache entry could not be locked for publication.",
+                "Material graph shader cache entry could not be locked for publication: " +
+                    kb::platform::PortablePath(binaryPath).generic_string() + ".lock (" + cacheLock.FailureDetail() + ").",
                 request.pass,
                 std::string{ RenderMaterialGraphShaderBackendName(backend) });
             continue;
@@ -1317,7 +1410,7 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
             ShaderCompilerInputsUnchanged(dependencies, shadercPath, shadercBytes)) {
             artifact.binaries.push_back(RenderMaterialGraphShaderBinary{
                 .backend = backend,
-                .binaryPath = binaryPath.generic_string(),
+                .binaryPath = kb::platform::PortablePath(binaryPath).generic_string(),
                 .byteSize = cachedIdentity.bytes,
                 .cacheHit = true,
             });
@@ -1338,13 +1431,19 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
             fragmentWrapperCaptured = true;
         }
 
-        const std::filesystem::path stagingBinary =
-            UniqueShaderTemporaryPath(binaryPath, "compile.tmp");
-        const std::filesystem::path errorPath =
-            UniqueShaderTemporaryPath(binaryPath, "shaderc.tmp");
+        error.clear();
+        const std::filesystem::path stagingBinary = ShaderCompilerScratchPath("compile.tmp", error);
+        const std::filesystem::path errorPath = ShaderCompilerScratchPath("shaderc.tmp", error);
+        if (error) {
+            AddArtifactDiagnostic(result.diagnostics, RenderMaterialGraphDiagnosticSeverity::Error,
+                "Material graph shader compiler scratch directory could not be created: " + error.message() + ".",
+                request.pass,
+                std::string{ RenderMaterialGraphShaderBackendName(backend) });
+            continue;
+        }
         std::vector<std::string> arguments{
             "--type", "fragment",
-            "--platform", std::string{ kb::assets::bake::ShaderBakePlatformName(artifact.shaderPlatform) },
+            "--platform", std::string{ kb::assets::bake::ShaderBakePlatformShadercToken(artifact.shaderPlatform) },
             "--profile", std::string{ RenderMaterialGraphShaderBackendProfile(backend) },
             "-f", wrapperPath.generic_string(),
             "-o", stagingBinary.generic_string(),
@@ -1400,10 +1499,12 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
                 std::string{ RenderMaterialGraphShaderBackendName(backend) });
             continue;
         }
-        if (!PublishShaderFileAtomically(stagingBinary, binaryPath)) {
+        std::string publishFailure;
+        if (!PublishCompiledShaderBinary(stagingBinary, binaryPath, publishFailure)) {
             std::filesystem::remove(stagingBinary, error);
             AddArtifactDiagnostic(result.diagnostics, RenderMaterialGraphDiagnosticSeverity::Error,
-                "Material graph shader binary could not be published atomically: " + binaryPath.generic_string() + ".",
+                "Material graph shader binary could not be published atomically into " +
+                    kb::platform::PortablePath(binaryPath).generic_string() + ": " + publishFailure + ".",
                 request.pass,
                 std::string{ RenderMaterialGraphShaderBackendName(backend) });
             continue;
@@ -1418,7 +1519,7 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
         }
         artifact.binaries.push_back(RenderMaterialGraphShaderBinary{
             .backend = backend,
-            .binaryPath = binaryPath.generic_string(),
+            .binaryPath = kb::platform::PortablePath(binaryPath).generic_string(),
             .byteSize = compiledIdentity.bytes,
             .cacheHit = false,
         });
@@ -1458,7 +1559,7 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
             if (error) {
                 AddArtifactDiagnostic(result.diagnostics, RenderMaterialGraphDiagnosticSeverity::Error,
                     "Material graph vertex shader backend cache directory could not be created: " +
-                        backendDir.generic_string() + ".");
+                        kb::platform::PortablePath(backendDir).generic_string() + ".");
                 continue;
             }
             const std::filesystem::path vsBinaryPath =
@@ -1467,7 +1568,8 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
             ShaderCacheFileLock vsCacheLock;
             if (!vsCacheLock.Acquire(vsBinaryPath.string() + ".lock")) {
                 AddArtifactDiagnostic(result.diagnostics, RenderMaterialGraphDiagnosticSeverity::Error,
-                    "Material graph vertex shader cache entry could not be locked for publication.",
+                    "Material graph vertex shader cache entry could not be locked for publication: " +
+                        kb::platform::PortablePath(vsBinaryPath).generic_string() + ".lock (" + vsCacheLock.FailureDetail() + ").",
                     request.pass,
                     std::string{ RenderMaterialGraphShaderBackendName(backend) });
                 continue;
@@ -1479,7 +1581,7 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
                 ShaderCompilerInputsUnchanged(dependencies, shadercPath, shadercBytes)) {
                 artifact.vertexBinaries.push_back(RenderMaterialGraphShaderBinary{
                     .backend = backend,
-                    .binaryPath = vsBinaryPath.generic_string(),
+                    .binaryPath = kb::platform::PortablePath(vsBinaryPath).generic_string(),
                     .byteSize = cachedVsIdentity.bytes,
                     .cacheHit = true,
                 });
@@ -1500,13 +1602,19 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
                 vertexWrapperCaptured = true;
             }
 
-            const std::filesystem::path stagingVsBinary =
-                UniqueShaderTemporaryPath(vsBinaryPath, "compile.tmp");
-            const std::filesystem::path vsErrorPath =
-                UniqueShaderTemporaryPath(vsBinaryPath, "shaderc.tmp");
+            error.clear();
+            const std::filesystem::path stagingVsBinary = ShaderCompilerScratchPath("compile.tmp", error);
+            const std::filesystem::path vsErrorPath = ShaderCompilerScratchPath("shaderc.tmp", error);
+            if (error) {
+                AddArtifactDiagnostic(result.diagnostics, RenderMaterialGraphDiagnosticSeverity::Error,
+                    "Material graph shader compiler scratch directory could not be created: " + error.message() + ".",
+                    request.pass,
+                    std::string{ RenderMaterialGraphShaderBackendName(backend) });
+                continue;
+            }
             std::vector<std::string> arguments{
                 "--type", "vertex",
-                "--platform", std::string{ kb::assets::bake::ShaderBakePlatformName(artifact.shaderPlatform) },
+                "--platform", std::string{ kb::assets::bake::ShaderBakePlatformShadercToken(artifact.shaderPlatform) },
                 "--profile", std::string{ RenderMaterialGraphShaderBackendProfile(backend) },
                 "-f", vsWrapperPath.generic_string(),
                 "-o", stagingVsBinary.generic_string(),
@@ -1562,11 +1670,12 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
                     std::string{ RenderMaterialGraphShaderBackendName(backend) });
                 continue;
             }
-            if (!PublishShaderFileAtomically(stagingVsBinary, vsBinaryPath)) {
+            std::string vsPublishFailure;
+            if (!PublishCompiledShaderBinary(stagingVsBinary, vsBinaryPath, vsPublishFailure)) {
                 std::filesystem::remove(stagingVsBinary, error);
                 AddArtifactDiagnostic(result.diagnostics, RenderMaterialGraphDiagnosticSeverity::Error,
-                    "Material graph vertex shader binary could not be published atomically: " +
-                        vsBinaryPath.generic_string() + ".",
+                    "Material graph vertex shader binary could not be published atomically into " +
+                        kb::platform::PortablePath(vsBinaryPath).generic_string() + ": " + vsPublishFailure + ".",
                     request.pass,
                     std::string{ RenderMaterialGraphShaderBackendName(backend) });
                 continue;
@@ -1583,7 +1692,7 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
             }
             artifact.vertexBinaries.push_back(RenderMaterialGraphShaderBinary{
                 .backend = backend,
-                .binaryPath = vsBinaryPath.generic_string(),
+                .binaryPath = kb::platform::PortablePath(vsBinaryPath).generic_string(),
                 .byteSize = compiledVsIdentity.bytes,
                 .cacheHit = false,
             });
@@ -1602,7 +1711,7 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
             [&fragmentBinary](const RenderMaterialGraphShaderBinary& candidate) {
                 return candidate.backend == fragmentBinary.backend;
             });
-        const std::filesystem::path fragmentPath{ fragmentBinary.binaryPath };
+        const std::filesystem::path fragmentPath = kb::platform::ExtendedLengthPath(fragmentBinary.binaryPath);
         const std::string vertexFilename = vertex == artifact.vertexBinaries.end()
             ? "-"
             : std::filesystem::path{ vertex->binaryPath }.filename().generic_string();
@@ -1690,7 +1799,7 @@ std::vector<RenderMaterialGraphDiagnostic> ValidateRenderMaterialGraphShaderMani
                 entry.pass, backendName);
             continue;
         }
-        const std::filesystem::path binaryPath{ entry.binaryPath };
+        const std::filesystem::path binaryPath = kb::platform::ExtendedLengthPath(entry.binaryPath);
         if (!std::filesystem::exists(binaryPath, error) || std::filesystem::file_size(binaryPath, error) == 0U) {
             AddArtifactDiagnostic(diagnostics, RenderMaterialGraphDiagnosticSeverity::Error,
                 "Graph shader manifest references a missing or empty binary at " + entry.binaryPath + ".",

@@ -50,12 +50,18 @@ public:
         std::vector<std::uint64_t> selectedEntityIds;
         std::uint64_t viewportKey = 0;
         bool editorSceneOverlaysEnabled = true;
+        // Whether this viewport composites the scene's authored screen-space UI. Off while
+        // editing the world, where a canvas would cover the map being laid out.
+        bool screenUIEnabled = true;
         render::RenderSceneSubmitDesc::EditorGridDesc editorGrid{};
         render::RenderSceneSubmitDesc::EditorGizmoDesc editorGizmo{};
         std::vector<render::EditorCameraWireframeDesc> editorCameraWireframes;
         std::vector<render::EditorLightWireframeDesc> editorLightWireframes;
         std::vector<render::EditorParticleIconDesc> editorParticleIcons;
         std::vector<render::PhysicsDebugLine> physicsDebugLines;
+        std::vector<kb::scene::SceneUIFrameElement> editorUIOverlays;
+        float editorUIScale = 1.0F;
+        kb::math::Vec2 editorUIOffset{};
         std::vector<EditorSceneViewportTextLabel> viewportTextLabels;
         render::RenderSceneSubmitDesc::EditorSelectionBoxDesc editorSelectionBox{};
         render::SceneRenderMeshPassMode meshPassMode = render::SceneRenderMeshPassMode::OpaqueAndTransparent;
@@ -65,6 +71,7 @@ public:
         std::uint8_t msaaSamples = 0U;
         bool shadowPassEnabled = true;
         bool postProcessEnabled = true;
+        bool presentToHost = true;
         bool selectionMaskEnabled = true;
         bool selectionOutlineEnabled = true;
         bool gpuDrivenRuntimeDispatchEnabled = true;

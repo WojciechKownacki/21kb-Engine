@@ -14,6 +14,9 @@ struct ProjectCookRequest {
     std::filesystem::path shadercPath;
     std::filesystem::path engineRoot;
     std::filesystem::path cacheRoot;
+    // Windows-only destination for custom project DLL snapshots. The package orchestrator
+    // places this directory below the sealed runtime root after a successful cook.
+    std::filesystem::path runtimeModulesOutputDirectory;
 };
 
 struct ProjectCookResult {

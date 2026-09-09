@@ -14,6 +14,7 @@
 #include "engine/scene/ScenePostProcessAccess.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneUI.hpp"
 #include "kb/render/resources/PostProcessProfileAssetLoader.hpp"
 #include "kb/render/scene/EcsRenderSceneSynchronizer.hpp"
 #include "kb/render/scene/SceneParticleRenderSynchronizer.hpp"
@@ -21,6 +22,7 @@
 #include "kb/render/scene/RenderScene.hpp"
 #include "kb/render/scene/SceneRenderer.hpp"
 #include "kb/render/post/SceneExposureMeter.hpp"
+#include "private/ui/ScreenUIRenderer.hpp"
 #include "scene/SceneRenderVisibilityPublisher.hpp"
 #include "renderer/RendererScreenCapture.hpp"
 #include "renderer/RendererEditorOverlaySubmitter.hpp"
@@ -289,6 +291,11 @@ bool Renderer::Initialize(RenderSurface& surface, const DisplayConfig* config) {
         Shutdown();
         return false;
     }
+    screenUIRenderer_ = std::make_unique<ScreenUIRenderer>();
+    if (!screenUIRenderer_->Initialize()) {
+        Shutdown();
+        return false;
+    }
     deferredLightingPass_ = std::make_unique<SceneDeferredLightingPass>();
     if (!deferredLightingPass_->Initialize()) {
         Shutdown();
@@ -335,6 +342,10 @@ void Renderer::Shutdown() {
     if (auxFrameRenderer_ != nullptr) {
         auxFrameRenderer_->Shutdown(sceneRenderer_.get());
         auxFrameRenderer_.reset();
+    }
+    if (screenUIRenderer_ != nullptr && sceneRenderer_ != nullptr) {
+        screenUIRenderer_->Shutdown(sceneRenderer_->Resources());
+        screenUIRenderer_.reset();
     }
     runtimeResourceCache_.DestroyAll(sceneRenderer_.get());
     frameReferences_.Clear();
@@ -753,6 +764,68 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
 
     const std::uint32_t width = desc.target.viewport.extent.width;
     const std::uint32_t height = desc.target.viewport.extent.height;
+    kb::scene::SceneUIFrame screenUIFrame;
+    // An editor viewport laying out the world asks for no UI layer. Skipping the build, rather
+    // than discarding its result, also skips the layout pass the frame would have cost.
+    if (desc.screenUIEnabled &&
+        !scene.UI().BuildFrame(static_cast<float>(width), static_cast<float>(height), screenUIFrame)) {
+        // A widget the author can fix must not cost the whole frame. The UI layer is dropped,
+        // the 3D scene still renders, and the refusal is published by name with the offending
+        // entity so it is diagnosable instead of appearing as a dead renderer.
+        std::ostringstream message;
+        message << "SubmitSceneToViewport screen UI frame refused entity="
+                << screenUIFrame.refusal.entity.Id() << " reason="
+                << (screenUIFrame.refusal.reason != nullptr ? screenUIFrame.refusal.reason : "unknown");
+        WriteRendererBreadcrumb("renderer", message.str());
+        lastSceneDiagnostics_.events.push_back(SceneRenderDiagnosticEvent{
+            .severity = SceneRenderDiagnosticSeverity::Error,
+            .kind = SceneRenderDiagnosticKind::UIFrameRefused,
+            .entityId = screenUIFrame.refusal.entity.Id(),
+        });
+        screenUIFrame.elements.clear();
+    }
+    if (desc.editorSceneOverlaysEnabled) {
+        screenUIFrame.elements.insert(screenUIFrame.elements.end(), desc.editorUIOverlays.begin(), desc.editorUIOverlays.end());
+        if (desc.editorUIScale != 1.0F || desc.editorUIOffset.x != 0.0F || desc.editorUIOffset.y != 0.0F) {
+            if (!std::isfinite(desc.editorUIScale) || desc.editorUIScale <= 0.0F ||
+                !std::isfinite(desc.editorUIOffset.x) || !std::isfinite(desc.editorUIOffset.y)) {
+                WriteRendererBreadcrumb("renderer", "Invalid editor UI view transform");
+                return false;
+            }
+            const auto point = [&desc](kb::math::Vec2& p) {
+                p.x = p.x * desc.editorUIScale + desc.editorUIOffset.x;
+                p.y = p.y * desc.editorUIScale + desc.editorUIOffset.y;
+            };
+            const auto rect = [&desc](kb::math::Rect& r) {
+                r.x = r.x * desc.editorUIScale + desc.editorUIOffset.x;
+                r.y = r.y * desc.editorUIScale + desc.editorUIOffset.y;
+                r.width *= desc.editorUIScale; r.height *= desc.editorUIScale;
+            };
+            for (auto& element : screenUIFrame.elements) {
+                rect(element.rect); rect(element.clipRect);
+                for (auto& p : element.corners) point(p);
+                for (auto& quad : element.clipQuads) for (auto& p : quad) point(p);
+                element.canvasScale *= desc.editorUIScale;
+            }
+        }
+        // The editor viewport clips the view, not the transformed game canvas.
+        // Rebuild authored mask bounds independently of the original screen clip.
+        for (auto& element : screenUIFrame.elements) {
+            float left = 0.0F, top = 0.0F;
+            float right = static_cast<float>(width), bottom = static_cast<float>(height);
+            for (const auto& quad : element.clipQuads) {
+                float maskLeft = quad[0].x, maskRight = quad[0].x;
+                float maskTop = quad[0].y, maskBottom = quad[0].y;
+                for (const auto& p : quad) {
+                    maskLeft = std::min(maskLeft, p.x); maskRight = std::max(maskRight, p.x);
+                    maskTop = std::min(maskTop, p.y); maskBottom = std::max(maskBottom, p.y);
+                }
+                left = std::max(left, maskLeft); right = std::min(right, maskRight);
+                top = std::max(top, maskTop); bottom = std::min(bottom, maskBottom);
+            }
+            element.clipRect = {left, top, std::max(0.0F, right - left), std::max(0.0F, bottom - top)};
+        }
+    }
     if (renderSceneSynchronizer_ == nullptr) {
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport missing renderSceneSynchronizer");
         return false;
@@ -867,6 +940,9 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport particle snapshot unavailable");
     }
     WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport particle sync end");
+    if (screenUIRenderer_ != nullptr) {
+        ScreenUIRenderer::MarkTextureReferences(scene.Id(), screenUIFrame, frameReferences_);
+    }
     SceneRenderLightingConfig effectiveLightingConfig = ApplyAmbientRadiance(
         RendererSceneLightingConfigResolver::Resolve(desc.lightingConfig, defaultSceneLightingConfig_), renderScene.AmbientRadiance());
     if (!desc.shadowPassEnabled) {
@@ -1578,6 +1654,45 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         }
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport final composite submit end");
 
+        if (!screenUIFrame.elements.empty()) {
+            SceneDisplayOutputTransform uiOutputTransform = postProcessOutput.outputTransform;
+            if (!postProcessOutput.tonemapEnabled) {
+                uiOutputTransform = SceneDisplayOutputTransform{
+                    .exposureStops = 0.0F,
+                    .gamma = 1.0F,
+                    .tonemap = SceneDisplayTonemapOperator::None,
+                    .colorGradingLutStrength = 0.0F,
+                };
+            }
+            if (screenUIRenderer_ == nullptr || !screenUIRenderer_->Submit(ScreenUISubmitDesc{
+                    .sceneId = scene.Id(),
+                    .viewportIndex = desc.target.viewport.viewportIndex,
+                    .frame = &screenUIFrame,
+                    .assets = &const_cast<kb::scene::Scene&>(scene).Assets().Manager(),
+                    .resources = &sceneRenderer_->Resources(),
+                    .resourceMap = &sceneRenderer_->ResourceMap(),
+                    .viewportPlan = &viewportPlan,
+                    .backgroundSource = scenePostProcessOutput,
+                    .backgroundFormat = desc.target.colorFormat,
+                    .outputFrameBuffer = desc.finalComposite.frameBuffer,
+                    .outputExtent = desc.finalComposite.extent,
+                    .outputRect = desc.finalComposite.outputRect,
+                    .outputTransform = uiOutputTransform,
+                })) {
+                WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport screen UI submit failed");
+                return false;
+            }
+            // Text the UI renderer had to drop leaves the rest of the widget drawn, so the
+            // only trace is a label that silently never appears. Publish it by entity.
+            if (screenUIRenderer_ != nullptr && screenUIRenderer_->LastTextFailure().reason != nullptr) {
+                lastSceneDiagnostics_.events.push_back(SceneRenderDiagnosticEvent{
+                    .severity = SceneRenderDiagnosticSeverity::Error,
+                    .kind = SceneRenderDiagnosticKind::UITextUnavailable,
+                    .entityId = screenUIRenderer_->LastTextFailure().entityId,
+                });
+            }
+        }
+
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport editor overlay submit begin");
         RendererEditorOverlaySubmitter::Submit(
             editorPassSubmitter_,
@@ -1588,6 +1703,37 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport editor overlay submit end");
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport end ok finalComposite");
         return true;
+    }
+
+    if (!screenUIFrame.elements.empty() &&
+        (screenUIRenderer_ == nullptr || !screenUIRenderer_->Submit(ScreenUISubmitDesc{
+             .sceneId = scene.Id(),
+             .viewportIndex = desc.target.viewport.viewportIndex,
+             .frame = &screenUIFrame,
+             .assets = &const_cast<kb::scene::Scene&>(scene).Assets().Manager(),
+             .resources = &sceneRenderer_->Resources(),
+             .resourceMap = &sceneRenderer_->ResourceMap(),
+             .viewportPlan = &viewportPlan,
+             .backgroundSource = sampledSceneColor,
+             .backgroundFormat = desc.target.colorFormat,
+             .outputFrameBuffer = desc.target.frameBuffer,
+             .outputExtent = desc.target.viewport.extent,
+             .outputTransform = SceneDisplayOutputTransform{
+                 .exposureStops = 0.0F,
+                 .gamma = 1.0F,
+                 .tonemap = SceneDisplayTonemapOperator::None,
+                 .colorGradingLutStrength = 0.0F,
+             },
+         }))) {
+        WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport screen UI submit failed noFinalComposite");
+        return false;
+    }
+    if (screenUIRenderer_ != nullptr && screenUIRenderer_->LastTextFailure().reason != nullptr) {
+        lastSceneDiagnostics_.events.push_back(SceneRenderDiagnosticEvent{
+            .severity = SceneRenderDiagnosticSeverity::Error,
+            .kind = SceneRenderDiagnosticKind::UITextUnavailable,
+            .entityId = screenUIRenderer_->LastTextFailure().entityId,
+        });
     }
 
     WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport editor overlay submit begin noFinalComposite");
@@ -1612,6 +1758,9 @@ void Renderer::OnResize(std::uint32_t width, std::uint32_t height) {
     }
 
     editorPassSubmitter_.InvalidateFrameBuffers();
+    if (screenUIRenderer_ != nullptr) {
+        screenUIRenderer_->OnResize();
+    }
     defaultPostProcessTargets_.Shutdown();
     for (SceneGBuffer& gbuffer : sceneGBuffers_) {
         gbuffer.Shutdown();
@@ -1940,9 +2089,12 @@ void Renderer::ReleaseScene(const kb::scene::Scene& scene) noexcept {
     if (auxFrameRenderer_ != nullptr) {
         auxFrameRenderer_->ReleaseScene(scene.Id(), sceneRenderer_.get());
     }
-    screenCapture_->ReleaseScene(mutableScene);
-    particleRenderSynchronizer_->ReleaseScene(scene);
+    if (screenCapture_ != nullptr) screenCapture_->ReleaseScene(mutableScene);
+    if (particleRenderSynchronizer_ != nullptr) particleRenderSynchronizer_->ReleaseScene(scene);
     if (sceneRenderer_ != nullptr) sceneRenderer_->ReleaseParticleScene(scene.Id());
+    if (screenUIRenderer_ != nullptr && sceneRenderer_ != nullptr) {
+        screenUIRenderer_->ReleaseScene(scene.Id(), sceneRenderer_->Resources());
+    }
     kb::scene::SceneRenderFeedback::Clear(mutableScene);
     runtimeResourceCache_.ReleaseScene(mutableScene, sceneRenderer_.get());
     renderSceneStore_.Release(scene.Id());
@@ -1954,9 +2106,12 @@ void Renderer::ReleaseAllScenes() noexcept {
     if (auxFrameRenderer_ != nullptr) {
         auxFrameRenderer_->Shutdown(sceneRenderer_.get());
     }
-    screenCapture_->Shutdown();
-    particleRenderSynchronizer_->Clear();
+    if (screenCapture_ != nullptr) screenCapture_->Shutdown();
+    if (particleRenderSynchronizer_ != nullptr) particleRenderSynchronizer_->Clear();
     if (sceneRenderer_ != nullptr) sceneRenderer_->ReleaseAllParticleScenes();
+    if (screenUIRenderer_ != nullptr && sceneRenderer_ != nullptr) {
+        screenUIRenderer_->ReleaseAllScenes(sceneRenderer_->Resources());
+    }
     renderSceneStore_.ReleaseAll();
     renderProxySynchronizedRevisions_.clear();
     runtimeResourceCache_.DestroyAll(sceneRenderer_.get());

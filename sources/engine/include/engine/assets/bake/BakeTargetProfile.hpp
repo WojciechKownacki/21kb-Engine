@@ -62,15 +62,6 @@ enum class ShaderBakeBackend : std::uint8_t {
     // WGSL, for bgfx's WebGPU backend. APPENDED, never inserted: the enumerator
     // order is the bit order of ShaderBakeBackendMask and that mask reaches a
     // bake key, so renumbering would silently invalidate every cached asset.
-    //
-    // No shipped profile bakes it. bgfx's WebGPU backend is Dawn-native only and
-    // is switched off for Emscripten -- BGFX_CONFIG_RENDERER_WEBGPU lists Linux,
-    // OSX and Windows and keeps BX_PLATFORM_EMSCRIPTEN commented out
-    // (third_party/bgfx.cmake/bgfx/src/config.h) -- so a browser package holding
-    // WGSL binaries would be bytes nobody can execute. The enumerator exists
-    // because the stride classification below has to answer for WebGPU: it is
-    // the renderer the vertex layout would be sized by the moment bgfx enables
-    // that backend, and getting that answer wrong is what bakes broken geometry.
     Wgsl,
 };
 
@@ -103,13 +94,22 @@ enum class ShaderBakePlatform : std::uint8_t {
     Android,
     MacOS,
     WebGl,
+    // APPENDED: the ordinal is part of the bake-profile fingerprint and graph
+    // shader cache key. WebGL and WebGPU share shaderc's Emscripten token but
+    // remain distinct package and manifest identities.
+    WebGpu,
 };
 
-inline constexpr std::uint32_t kShaderBakePlatformCount = 5U;
+inline constexpr std::uint32_t kShaderBakePlatformCount = 6U;
 
-// Canonical shaderc --platform spellings.
+// Stable manifest/cache qualifier for a shader platform.
 [[nodiscard]] std::string_view ShaderBakePlatformName(ShaderBakePlatform platform) noexcept;
 [[nodiscard]] bool TryParseShaderBakePlatform(std::string_view name, ShaderBakePlatform& out) noexcept;
+
+// Canonical shaderc --platform spelling. This is deliberately separate from
+// ShaderBakePlatformName because both browser backends compile under the
+// Emscripten platform defines while retaining independent artifact identities.
+[[nodiscard]] std::string_view ShaderBakePlatformShadercToken(ShaderBakePlatform platform) noexcept;
 
 [[nodiscard]] constexpr bool ShaderBakePlatformSupportsBackend(
     ShaderBakePlatform platform,
@@ -126,6 +126,8 @@ inline constexpr std::uint32_t kShaderBakePlatformCount = 5U;
         return backend == ShaderBakeBackend::Metal;
     case ShaderBakePlatform::WebGl:
         return backend == ShaderBakeBackend::Essl;
+    case ShaderBakePlatform::WebGpu:
+        return backend == ShaderBakeBackend::Wgsl;
     }
     return false;
 }
@@ -333,9 +335,9 @@ struct BakeTargetProfile {
     };
 }
 
-// Android arm64: Vulkan (D3D-style) and OpenGL ES (GL-style) in one package, so
-// 3x16-bit attributes are unsafe here too. 16-bit indices keep the mobile
-// vertex budget honest.
+// Android arm64 profiles share their shader and geometry contract but carry a
+// single texture family each. This makes the selected device capability an
+// explicit packaging choice rather than paying for an unused fallback.
 //
 // The mapping granularity is 16 KiB and must not be trimmed back to the 4 KiB
 // that arm64 Linux used to imply: Android 15 ships devices whose page size is
@@ -343,11 +345,10 @@ struct BakeTargetProfile {
 // whole number of pages on a 4 KiB device as well, so one baked package serves
 // both page sizes; the runtime still reads the live value from getpagesize()
 // rather than trusting this number to be the device's page size.
-[[nodiscard]] constexpr BakeTargetProfile AndroidArm64BakeTargetProfile() noexcept {
+[[nodiscard]] constexpr BakeTargetProfile AndroidAstcArm64BakeTargetProfile() noexcept {
     return BakeTargetProfile{
-        .identifier = "Android.arm64",
-        .textureCompressions = TextureCompressionFamilyBit(TextureCompressionFamily::AdaptiveScalable) |
-            TextureCompressionFamilyBit(TextureCompressionFamily::Ericsson2),
+        .identifier = "Android.ASTC.arm64",
+        .textureCompressions = TextureCompressionFamilyBit(TextureCompressionFamily::AdaptiveScalable),
         .shaderBackends =
             ShaderBakeBackendBit(ShaderBakeBackend::Spirv) | ShaderBakeBackendBit(ShaderBakeBackend::Essl),
         .shaderPlatform = ShaderBakePlatform::Android,
@@ -359,25 +360,20 @@ struct BakeTargetProfile {
     };
 }
 
-// Web (wasm32): the browser build, which today means WebGL2 and nothing else.
-//
-// Shaders: ESSL only. bgfx's WebGPU backend is Dawn-native and switched off for
-// Emscripten (config.h, see ShaderBakeBackend::Wgsl above), and bgfx has no
-// "WebGL" renderer type -- WebGL2 arrives as RendererType::OpenGLES. Adding WGSL
-// here would ship binaries the browser build cannot reach.
-//
-// 3x16-bit attributes stay forbidden even though ESSL alone is a uniform
-// GL-style set. WebGPU is the renderer this profile gains next, it is a D3D-style
-// row in bgfx's table, and its spec has no 3-component 16-bit vertex format at
-// all; a buffer baked with one would have to be re-baked -- i.e. all shipped
-// content re-cooked -- the day that backend lands, which is exactly the cost
-// this field exists to avoid.
+[[nodiscard]] constexpr BakeTargetProfile AndroidEtc2Arm64BakeTargetProfile() noexcept {
+    BakeTargetProfile profile = AndroidAstcArm64BakeTargetProfile();
+    profile.identifier = "Android.ETC2.arm64";
+    profile.textureCompressions = TextureCompressionFamilyBit(TextureCompressionFamily::Ericsson2);
+    return profile;
+}
+
+// WebGL2 (wasm32): ESSL shaders and the two portable compressed-texture
+// families selected by browser extensions at runtime.
 //
 // Textures: BC1/BC3 and ETC2, both. A WebGL2 context guarantees
 // WEBGL_compressed_texture_etc OR the s3tc trio, so neither family alone covers
 // every browser. ASTC is deliberately absent: it is not the WebGL2 portability
-// fallback and WebGPU is a separate, currently unsupported target. The BC half
-// stops at BC3 because bgfx on Emscripten answers for
+// fallback. The BC half stops at BC3 because bgfx on Emscripten answers for
 // compressed formats from a fixed list that has no BC4/BC5/BC6H/BC7 case.
 //
 // Mapping: none exists. Emscripten's mmap implements MAP_PRIVATE by copying the
@@ -385,11 +381,9 @@ struct BakeTargetProfile {
 // hint degrades to a plain read and any extra alignment would be pure padding in
 // a payload the client pays to download. Hence mapped == package alignment.
 //
-// Chunk budget: 8 MiB, a quarter of desktop's. wasm32 caps the heap at 4 GiB and
-// Emscripten's MAXIMUM_MEMORY defaults to 2 GB; a chunk arrives as one HTTP range
-// response that is buffered before it reaches the GPU, and growing the heap to
-// hold it copies the entire heap, so the chunk is resident twice at the worst
-// moment. A smaller chunk also makes a failed or unsatisfied range cheap to retry.
+// Chunk budget: 8 MiB, a quarter of desktop's. The host fetches the complete
+// package into the wasm heap before mounting it; the budget bounds the additional
+// per-chunk working set while data is decoded and uploaded to the GPU.
 [[nodiscard]] constexpr BakeTargetProfile WebGlWasm32BakeTargetProfile() noexcept {
     return BakeTargetProfile{
         .identifier = "WebGL.wasm32",
@@ -407,11 +401,33 @@ struct BakeTargetProfile {
     };
 }
 
+// WebGPU (wasm32): one WGSL shader set and all three compressed texture
+// families accepted by the browser backend. ASTC and ETC2 cover mobile-class
+// adapters while BC1/BC3 covers desktop-class adapters; the runtime selects the
+// supported representation. The browser host mounts the complete fetched package,
+// so its mapping alignment and working-set chunk budget match WebGL.
+[[nodiscard]] constexpr BakeTargetProfile WebGpuWasm32BakeTargetProfile() noexcept {
+    return BakeTargetProfile{
+        .identifier = "WebGPU.wasm32",
+        .textureCompressions = TextureCompressionFamilyBit(TextureCompressionFamily::BlockCompressedBaseline) |
+            TextureCompressionFamilyBit(TextureCompressionFamily::AdaptiveScalable) |
+            TextureCompressionFamilyBit(TextureCompressionFamily::Ericsson2),
+        .shaderBackends = ShaderBakeBackendBit(ShaderBakeBackend::Wgsl),
+        .shaderPlatform = ShaderBakePlatform::WebGpu,
+        .indexWidth = BakeIndexWidth::Bits32,
+        // WebGPU exposes two- and four-component 16-bit vertex formats, not a
+        // three-component form.
+        .allowsThreeComponent16BitAttributes = false,
+        .packageBlockAlignmentBytes = 256U,
+        .mappedBlockAlignmentBytes = 256U,
+        .maxGeometryChunkBytes = 8ULL * 1024ULL * 1024ULL,
+    };
+}
+
 // Every profile we ship. macOS is deliberately absent: the target is frozen, so
 // no profile bakes ShaderBakeBackend::Metal. The enumerator stays because the
 // renderer still knows the flavour and the stride-family classification above
-// has to cover it. ShaderBakeBackend::Wgsl is absent from every profile for the
-// separate reason given at the enumerator itself.
+// has to cover it.
 [[nodiscard]] std::span<const BakeTargetProfile> BakeTargetProfiles() noexcept;
 
 // Resolves a profile from its stable identifier (a command-line or config

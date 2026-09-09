@@ -3,6 +3,7 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneObject.hpp"
+#include "engine/scene/SceneUIComponentSet.hpp"
 
 namespace kb::scene {
 
@@ -10,6 +11,7 @@ ScenePrefabNodeComponents ScenePrefabComponentSnapshot::Capture(Scene& scene, Sc
     ScenePrefabNodeComponents components;
     const SceneEntity entity = object.Entity();
     SceneComponents sceneComponents = scene.Components();
+    components.ui = CaptureSceneUIComponents(sceneComponents.UI(), entity);
 
     if (const CameraComponent* camera = sceneComponents.Cameras().TryGet(entity)) {
         components.camera = *camera;
@@ -141,9 +143,6 @@ ScenePrefabNodeComponents ScenePrefabComponentSnapshot::Capture(Scene& scene, Sc
     }
     if (const DrawD3DeformedGeometryComponent* geometry = sceneComponents.DeformedGeometries().TryGet(entity)) {
         components.deformedGeometry = *geometry;
-    }
-    if (const UIDocumentComponent* uiDocument = sceneComponents.UIDocuments().TryGet(entity)) {
-        components.uiDocument = *uiDocument;
     }
     if (const NavAgent* navAgent = sceneComponents.NavAgents().TryGet(entity)) {
         components.navAgent = *navAgent;

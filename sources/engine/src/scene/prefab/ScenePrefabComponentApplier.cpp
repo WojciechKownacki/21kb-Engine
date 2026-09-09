@@ -2,12 +2,14 @@
 
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneUIComponentSet.hpp"
 
 namespace kb::scene {
 
 void ScenePrefabComponentApplier::Apply(Scene& scene, SceneObject object, const ScenePrefabNodeComponents& components) {
     SceneComponents sceneComponents = scene.Components();
     const SceneEntity entity = object.Entity();
+    ApplySceneUIComponents(sceneComponents.UI(), entity, components.ui);
 
     if (components.camera.has_value()) {
         sceneComponents.Cameras().Set(entity, *components.camera);
@@ -83,9 +85,6 @@ void ScenePrefabComponentApplier::Apply(Scene& scene, SceneObject object, const 
     }
     if (components.deformedGeometry.has_value()) {
         static_cast<void>(sceneComponents.DeformedGeometries().Set(entity, *components.deformedGeometry));
-    }
-    if (components.uiDocument.has_value()) {
-        sceneComponents.UIDocuments().Set(entity, *components.uiDocument);
     }
     if (components.navAgent.has_value()) {
         sceneComponents.NavAgents().Set(entity, *components.navAgent);

@@ -25,9 +25,9 @@ namespace kb::render::bake {
 // Identity of this baker inside a bake key. `bakerId` scopes `bakerVersion`, so bumping the
 // version below re-bakes every texture and leaves every other baker's cache untouched.
 inline constexpr std::string_view kTextureBakerId = "Texture";
-// 3 adds the pinned, scalar etcpak 2.0 ETC2 RGB/RGBA encoder. Version 2 flattened alpha that a
-// format did not retain; version 3 keeps that rule and changes the set of supported families.
-inline constexpr std::string_view kTextureBakerVersion = "3";
+// 4 routes ETC2 RGB/RGBA through bimg's single encoder backend. Version 3 added the ETC2
+// family; version 4 preserves that contract while invalidating bytes produced by its old path.
+inline constexpr std::string_view kTextureBakerVersion = "4";
 
 // Runtime type of the artifact this baker publishes; a path component of the bake store.
 inline constexpr std::string_view kTextureBakedAssetTypeId = "Texture2D";

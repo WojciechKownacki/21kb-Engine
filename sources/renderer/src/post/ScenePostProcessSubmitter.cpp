@@ -248,7 +248,7 @@ private:
 
             ConfigureFullscreenView(
                 desc.viewIds.postProcessBloomDownsampleViews[viewIndex],
-                desc.target.bloomMipFrameBuffers[mip],
+                desc.target.bloomScratchMipFrameBuffers[mip],
                 mipExtent,
                 "KB Post Bloom Downsample Mip");
             const float downsampleParams[4] = {(1.0F / previousMipWidth) * settings.bloomRadius, (1.0F / previousMipHeight) * settings.bloomRadius, sourceLod, 0.0F};
@@ -263,7 +263,7 @@ private:
                 "KB Post Bloom Blur H Mip");
             const float mipBlurHParams[4] = {(1.0F / mipWidth) * settings.bloomRadius, 0.0F, targetLod, 0.0F};
             bgfx::setUniform(renderer_.postParams_, mipBlurHParams);
-            bgfx::setTexture(0, renderer_.sourceSampler_, desc.target.bloomTexture);
+            bgfx::setTexture(0, renderer_.sourceSampler_, desc.target.bloomScratchTexture);
             SubmitFullscreen(desc.viewIds.postProcessBloomMipBlurHViews[viewIndex], renderer_.blurProgram_, renderer_.fullscreenVertexBuffer_);
 
             ConfigureFullscreenView(

@@ -9,6 +9,7 @@
 #include "engine/scene/SceneRenderFeedback.hpp"
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/LightComponent.hpp"
+#include "engine/ui/UIComponentPropertyCatalog.hpp"
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/assets/AssetKind.hpp"
 #include "engine/script/ScriptValue.hpp"
@@ -25,12 +26,14 @@
 #include "scene/EditorPluginsState.hpp"
 #include "scene/EditorProjectSettingsState.hpp"
 #include "settings/EditorConfigurationStore.hpp"
+#include "settings/EditorBuildGameSettingsStore.hpp"
 #include "scene/EditorScriptEditorState.hpp"
 #include "scene/EditorSceneObjectEditTypes.hpp"
 #include "scene/EditorSceneDocumentIdentity.hpp"
 #include "scene/EditorAutosaveState.hpp"
 #include "scene/EditorPlayModeSelectionSnapshot.hpp"
 #include "scene/EditorSceneViewportStateStore.hpp"
+#include "scene/EditorUIRectDragState.hpp"
 #include "scene/AnimationPreviewContext.hpp"
 #include "scene/AnimationClipTimelineState.hpp"
 #include "scene/AnimationClipEditorDocumentState.hpp"
@@ -43,6 +46,7 @@
 #include "scene/SkeletonEditorDocumentState.hpp"
 #include "scene/material/EditorMaterialAssetAuthoring.hpp"
 #include "scene/material/MaterialEditorState.hpp"
+#include "scene/material/MaterialGraphInteractionState.hpp"
 #include "scene/material_preview/EditorMaterialPreviewPrimitivePolicy.hpp"
 #include "scene/material_preview/EditorMaterialPreviewSettings.hpp"
 #include "scene/transform_edit/EditorSceneTransformEditSession.hpp"
@@ -124,6 +128,9 @@ struct EditorMaterialPreviewTelemetry;
 class EditorMaterialGraphCookService;
 struct EditorMaterialGraphCookResult;
 struct EditorTerrainConfiguration;
+class EditorProjectPackageService;
+struct EditorPackageSnapshot;
+enum class BuildGameField : std::uint8_t;
 
 enum class EditorMaterialPreviewSurface : std::uint8_t {
     Inspector,
@@ -133,13 +140,6 @@ enum class EditorMaterialPreviewSurface : std::uint8_t {
 enum class EditorDirtySceneResolution {
     Save,
     Discard,
-};
-
-enum class MaterialGraphSelectionOperation : std::uint8_t {
-    Replace,
-    Add,
-    Invert,
-    Remove,
 };
 
 [[nodiscard]] constexpr MaterialGraphSelectionOperation ResolveMaterialGraphSelectionOperation(
@@ -175,12 +175,6 @@ class EditorSceneContext {
         kb::assets::AssetId assetId{};
         std::uint64_t contentHash = 0U;
         kb::assets::TerrainAsset terrain{};
-    };
-
-    struct MaterialGraphDragNodeStart {
-        std::uint32_t nodeId = 0U;
-        std::int32_t positionX = 0;
-        std::int32_t positionY = 0;
     };
 
 public:
@@ -389,6 +383,31 @@ public:
     [[nodiscard]] int BuildGameHoveredRow() const noexcept;
     [[nodiscard]] bool SetBuildGameHover(int section, int row) noexcept;
     [[nodiscard]] bool SetBuildGameScrollOffset(int offset, int maxOffset) noexcept;
+    [[nodiscard]] kb::packaging::PackagingTarget BuildGameTarget() const noexcept;
+    [[nodiscard]] const EditorBuildGameSettings& BuildGameSettings() const noexcept;
+    [[nodiscard]] EditorPackageSnapshot BuildGamePackageSnapshot() const;
+    [[nodiscard]] bool IsBuildGameTextEditing() const noexcept;
+    [[nodiscard]] BuildGameField BuildGameEditingField() const noexcept;
+    [[nodiscard]] std::string_view BuildGameEditBuffer() const noexcept;
+    [[nodiscard]] bool HasBuildGameStorePassword() const noexcept;
+    [[nodiscard]] bool HasBuildGameKeyPassword() const noexcept;
+    void ClearBuildGameSigningPasswords() noexcept;
+    [[nodiscard]] bool BeginBuildGameTextEdit(BuildGameField field);
+    [[nodiscard]] bool AppendBuildGameText(wchar_t character);
+    [[nodiscard]] bool InsertBuildGameText(std::string_view text);
+    [[nodiscard]] bool BackspaceBuildGameText();
+    [[nodiscard]] bool SelectAllBuildGameText() noexcept;
+    [[nodiscard]] bool CommitBuildGameTextEdit();
+    void CancelBuildGameTextEdit() noexcept;
+    [[nodiscard]] bool FocusAdjacentBuildGameTextField(bool backwards);
+    [[nodiscard]] bool SetBuildGameOutputDirectory(const std::filesystem::path& path);
+    [[nodiscard]] bool SetBuildGameBuildRoot(const std::filesystem::path& path);
+    [[nodiscard]] bool SetBuildGameToolchainDirectory(BuildGameField field, const std::filesystem::path& path);
+    [[nodiscard]] bool SetBuildGameLocalFile(BuildGameField field, const std::filesystem::path& path);
+    [[nodiscard]] bool ImportBuildGameApplicationIcon(const std::filesystem::path& path);
+    [[nodiscard]] bool ToggleBuildGameLaunchAfterBuild();
+    [[nodiscard]] bool StartBuildGamePackage();
+    void CancelBuildGamePackage() noexcept;
     [[nodiscard]] bool IsHierarchyScrollbarDragging() const noexcept;
     [[nodiscard]] bool SetHierarchyScrollOffset(int offset, int maxOffset) noexcept;
     void BeginHierarchyScrollbarDrag(int y) noexcept;
@@ -457,6 +476,7 @@ public:
         kb::scene::SceneEntity sourceCell,
         kb::scene::SceneEntity targetCell);
     [[nodiscard]] kb::scene::SceneEntity CreateHierarchyObject();
+    [[nodiscard]] kb::scene::SceneEntity CreateUIObject(kb::scene::UIComponentType type, kb::scene::SceneEntity parent = {});
     [[nodiscard]] kb::scene::SceneEntity CreateLightObject(kb::scene::LightKind kind);
     [[nodiscard]] bool ReparentEntity(kb::scene::SceneEntity child, kb::scene::SceneEntity parent);
     [[nodiscard]] bool ReparentEntities(std::span<const kb::scene::SceneEntity> children, kb::scene::SceneEntity parent);
@@ -1183,6 +1203,20 @@ public:
     // (i.e. any Inspector showing it should repaint). Not undoable (pure cache).
     [[nodiscard]] bool ReloadOpenScriptAsset();
     [[nodiscard]] bool AddComponentToEntity(kb::scene::SceneEntity entity, std::string_view componentId);
+    [[nodiscard]] bool RemoveUIComponentFromEntity(
+        kb::scene::SceneEntity entity, kb::scene::UIComponentType component);
+    [[nodiscard]] bool SetUIComponentProperty(
+        kb::scene::SceneEntity entity, kb::scene::UIComponentType component,
+        std::string_view property, const kb::scene::UIComponentPropertyValue& value);
+    [[nodiscard]] bool SetUIColor(kb::scene::SceneEntity entity, kb::scene::UIComponentType component,
+        std::string_view property, const std::array<float, 4>& color);
+    [[nodiscard]] bool SetUIRectLayoutField(kb::scene::SceneEntity entity, int field, float value);
+    [[nodiscard]] bool SetUIAnchorPreset(kb::scene::SceneEntity entity, int preset,
+        bool alignPosition = false, bool alignPivot = false);
+    std::optional<EditorUIRectDragState>& UIRectDrag() noexcept { return uiRectDrag_; }
+    void SetUIAuthoringViewportSize(float width, float height) const noexcept {
+        if (width > 0.0F && height > 0.0F) uiAuthoringViewportSize_ = {width, height};
+    }
     [[nodiscard]] std::vector<std::string> EntityTags(kb::scene::SceneEntity entity) const;
     [[nodiscard]] std::vector<std::string> KnownSceneTags() const;
     [[nodiscard]] bool SetEntityTagSelected(kb::scene::SceneEntity entity, std::string_view tag, bool selected);
@@ -1194,13 +1228,10 @@ public:
     [[nodiscard]] bool ToggleDeformedGeometryEnabled(kb::scene::SceneEntity entity);
     [[nodiscard]] bool ToggleDeformedGeometryCastsShadow(kb::scene::SceneEntity entity);
     [[nodiscard]] bool ToggleDeformedGeometryReceivesShadow(kb::scene::SceneEntity entity);
-    [[nodiscard]] bool SetUIDocumentAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId);
     [[nodiscard]] bool SetAnimatorSpeed(kb::scene::SceneEntity entity, float speed);
     [[nodiscard]] bool ToggleAnimatorEnabled(kb::scene::SceneEntity entity);
     [[nodiscard]] bool CycleAnimatorRootMotionOwner(kb::scene::SceneEntity entity);
     [[nodiscard]] bool RemoveAnimatorFromEntity(kb::scene::SceneEntity entity);
-    [[nodiscard]] bool ToggleUIDocumentEnabled(kb::scene::SceneEntity entity);
-    [[nodiscard]] bool RemoveUIDocumentFromEntity(kb::scene::SceneEntity entity);
     [[nodiscard]] bool BeginSelectedTransformEdit(std::string label);
     [[nodiscard]] bool ApplyActiveTransformEditPrimaryPosition(kb::scene::Vec3 position);
     [[nodiscard]] bool ApplyActiveTransformEditPrimaryRotation(kb::scene::Vec3 rotation);
@@ -1213,6 +1244,10 @@ public:
     [[nodiscard]] bool HasActiveTransformEdit() const noexcept;
 
 private:
+    [[nodiscard]] bool CompleteUIComponentDependencies(kb::scene::SceneEntity entity);
+    void CompleteLoadedUIComponents();
+    std::optional<EditorUIRectDragState> uiRectDrag_;
+    mutable kb::math::Vec2 uiAuthoringViewportSize_{1920.0F, 1080.0F};
     [[nodiscard]] bool SpawnEditRequiresPreviewRestart(const kb::scene::ParticleSpawnAsset& spawn) const;
     [[nodiscard]] bool FinalizeParticleEditorCommand(kb::particle_editor::ParticleEditorResult result,
                                                      bool restartPreview = false);
@@ -1388,64 +1423,11 @@ private:
         int offsetX = 0;
         int offsetY = 0;
     };
-    struct MaterialGraphViewState {
-        float zoom = MaterialGraphInteractionPolicy::DefaultZoom;
-        int panX = 0;
-        int panY = 0;
-    };
-    std::unordered_map<std::uint64_t, MaterialGraphViewState> materialGraphViewStates_;
-    float materialGraphZoom_ = MaterialGraphInteractionPolicy::DefaultZoom;
-    int materialGraphPanX_ = 0;
-    int materialGraphPanY_ = 0;
-    int materialGraphCanvasWidth_ = 1280;
-    int materialGraphCanvasHeight_ = 720;
-    int materialGraphCanvasLeft_ = 0;
-    int materialGraphCanvasTop_ = 0;
-    kb::assets::AssetId materialGraphDragAssetId_{};
-    std::uint32_t materialGraphDragNodeId_ = 0U;
-    int materialGraphDragStartX_ = 0;
-    int materialGraphDragStartY_ = 0;
-    int materialGraphDragStartOffsetX_ = 0;
-    int materialGraphDragStartOffsetY_ = 0;
-    int materialGraphDragStartNodeX_ = 0;
-    int materialGraphDragStartNodeY_ = 0;
-    std::optional<kb::render::RenderMaterialAssetData> materialGraphDragStartDocument_;
-    std::uint32_t materialGraphDragStartSelectedNodeId_ = 0U;
-    std::vector<std::uint32_t> materialGraphDragStartSelectedNodeIds_;
-    std::vector<MaterialGraphDragNodeStart> materialGraphDragStartNodes_;
-    bool materialGraphDragChanged_ = false;
-    bool materialGraphNodeDragging_ = false;
-    kb::assets::AssetId materialGraphCommentDragAssetId_{};
-    std::uint32_t materialGraphCommentDragId_ = 0U;
-    int materialGraphCommentDragStartX_ = 0;
-    int materialGraphCommentDragStartY_ = 0;
-    int materialGraphCommentDragStartCommentX_ = 0;
-    int materialGraphCommentDragStartCommentY_ = 0;
-    std::optional<kb::render::RenderMaterialAssetData> materialGraphCommentDragStartDocument_;
-    std::uint32_t materialGraphCommentDragStartSelectedNodeId_ = 0U;
-    std::vector<std::uint32_t> materialGraphCommentDragStartSelectedNodeIds_;
-    std::vector<std::uint32_t> materialGraphCommentDragMemberNodeIds_;
-    std::uint32_t materialGraphCommentDragStartSelectedCommentId_ = 0U;
-    bool materialGraphCommentDragChanged_ = false;
-    bool materialGraphCommentDragging_ = false;
-    kb::assets::AssetId materialGraphBoxSelectionAssetId_{};
-    int materialGraphBoxSelectionStartX_ = 0;
-    int materialGraphBoxSelectionStartY_ = 0;
-    int materialGraphBoxSelectionCurrentX_ = 0;
-    int materialGraphBoxSelectionCurrentY_ = 0;
-    MaterialGraphSelectionOperation materialGraphBoxSelectionOperation_ = MaterialGraphSelectionOperation::Replace;
-    std::vector<std::uint32_t> materialGraphBoxSelectionBaseNodeIds_;
-    std::uint32_t materialGraphBoxSelectionBasePrimaryNodeId_ = 0U;
-    bool materialGraphBoxSelectionMoved_ = false;
-    bool materialGraphBoxSelecting_ = false;
-    bool materialGraphFocused_ = false;
+    MaterialGraphViewportState materialGraphViewport_;
+    MaterialGraphNodeDragState materialGraphNodeDrag_;
+    MaterialGraphCommentDragState materialGraphCommentDrag_;
+    MaterialGraphBoxSelectionState materialGraphBoxSelection_;
     int materialEditorDetailsScrollOffset_ = 0;
-    int materialGraphPanStartX_ = 0;
-    int materialGraphPanStartY_ = 0;
-    int materialGraphPanStartOffsetX_ = 0;
-    int materialGraphPanStartOffsetY_ = 0;
-    bool materialGraphPanning_ = false;
-    bool materialGraphPanMoved_ = false;
     bool materialPreviewOrbitDragging_ = false;
     int materialPreviewOrbitLastX_ = 0;
     int materialPreviewOrbitLastY_ = 0;
@@ -1456,26 +1438,8 @@ private:
     int materialGraphPendingConnectionX_ = 0;
     int materialGraphPendingConnectionY_ = 0;
     bool materialGraphPendingConnectionOwnsTransaction_ = false;
-    kb::assets::AssetId materialGraphContextMenuAssetId_{};
-    int materialGraphContextMenuX_ = 0;
-    int materialGraphContextMenuY_ = 0;
-    int materialGraphContextMenuGraphX_ = 0;
-    int materialGraphContextMenuGraphY_ = 0;
-    int materialGraphContextMenuScrollOffset_ = 0;
-    std::uint32_t materialGraphContextMenuExpandedMask_ = 0U;
-    std::size_t materialGraphContextMenuHoveredCategory_ = static_cast<std::size_t>(-1);
-    MaterialEditorGraphMenuCommand materialGraphContextMenuHoveredCommand_ = MaterialEditorGraphMenuCommand::None;
-    std::string materialGraphContextMenuSearchQuery_;
-    std::vector<MaterialEditorGraphMenuCommand> materialGraphPaletteFavorites_;
-    std::uint32_t materialGraphContextMenuPinFilterNodeId_ = 0U;
-    std::string materialGraphContextMenuPinFilterPin_;
-    bool materialGraphContextMenuPinFilterOutput_ = true;
-    bool materialGraphContextMenuPinFilterActive_ = false;
-    kb::assets::AssetId materialGraphTexturePickerAssetId_{};
-    std::uint32_t materialGraphTexturePickerNodeId_ = 0U;
-    kb::assets::AssetId materialGraphTexturePickerSelectedTextureId_{};
-    std::string materialGraphTexturePickerSearchQuery_;
-    int materialGraphTexturePickerScrollOffset_ = 0;
+    MaterialGraphContextMenuState materialGraphContextMenu_;
+    MaterialGraphTexturePickerState materialGraphTexturePicker_;
     kb::assets::AssetId materialGraphWorkingCopyTransactionAssetId_{};
     std::string materialGraphWorkingCopyTransactionLabel_;
     std::optional<kb::render::RenderMaterialAssetData> materialGraphWorkingCopyTransactionBefore_;
@@ -1503,6 +1467,14 @@ private:
     int buildGameHoveredProfile_ = -1;
     int buildGameHoveredSection_ = -1;
     int buildGameHoveredRow_ = -1;
+    EditorBuildGameSettings buildGameSettings_{};
+    std::unique_ptr<EditorProjectPackageService> buildGamePackageService_;
+    BuildGameField buildGameEditingField_{};
+    std::string buildGameEditBuffer_;
+    std::string buildGameEditOriginal_;
+    bool buildGameEditSelectAll_ = false;
+    std::string buildGameStorePassword_;
+    std::string buildGameKeyPassword_;
     int hierarchyScrollbarDragY_ = 0;
     int hierarchyScrollbarDragStartOffset_ = 0;
     bool hierarchyScrollbarDragging_ = false;

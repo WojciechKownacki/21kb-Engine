@@ -2,6 +2,7 @@
 
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/assets/AssetId.hpp"
+#include "engine/assets/AssetKind.hpp"
 #include "kb/editor/theme/EditorTheme.hpp"
 #include "scene/material/EditorTextureAssetMetadataResolver.hpp"
 
@@ -12,6 +13,7 @@
 #endif
 
 #include <cstdint>
+#include <functional>
 
 namespace kb::editor {
 
@@ -66,6 +68,13 @@ public:
 #endif
 };
 
+#if defined(_WIN32)
+struct EditorAssetPickerWindowOptions {
+    bool visible = true;
+    std::function<void(HWND)> onOpened;
+};
+#endif
+
 class EditorTextureAssetPickerDialog {
 public:
     EditorTextureAssetPickerDialog() = delete;
@@ -81,13 +90,24 @@ public:
         const EditorTheme& theme,
         const EditorSceneContext& sceneContext,
         kb::assets::AssetId currentTexture,
-        EditorTextureAssetPickerFilter filter = EditorTextureAssetPickerFilter::Texture2D);
+        EditorTextureAssetPickerFilter filter = EditorTextureAssetPickerFilter::Texture2D,
+        const EditorAssetPickerWindowOptions& options = {});
 
     [[nodiscard]] static bool MatchesFilter(
         const kb::assets::AssetMetadata& metadata,
         EditorTextureAssetPickerFilter filter) {
         return EditorTextureAssetMatchesFilter(metadata, filter);
     }
+#endif
+};
+
+class EditorUIAssetPickerDialog {
+public:
+#if defined(_WIN32)
+    [[nodiscard]] static EditorTextureAssetPickerDialog::Result Show(
+        HWND owner, const EditorTheme& theme, const EditorSceneContext& sceneContext,
+        kb::assets::AssetId currentAsset, kb::assets::AssetKind kind,
+        const EditorAssetPickerWindowOptions& options = {});
 #endif
 };
 

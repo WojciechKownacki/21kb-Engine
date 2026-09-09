@@ -30,8 +30,8 @@
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTasks.hpp"
 #include "engine/scene/SceneTimelines.hpp"
+#include "engine/scene/SceneUI.hpp"
 #include "engine/scene/TimelineAsset.hpp"
-#include "engine/scene/UIAssets.hpp"
 #include "scene/components/SceneComponentRegistry.hpp"
 #include "scene/components/SceneComponentStorage.hpp"
 #include "scene/history/SceneHistoryStack.hpp"
@@ -213,33 +213,6 @@ struct TimelineRuntimeRecord {
     bool playing = false;
 };
 
-struct UIDocumentRuntimeRecord {
-    SceneEntity entity{};
-    kb::assets::AssetHandle<UIDocument> document;
-    kb::assets::AssetHandle<UIStyleAsset> style;
-    std::uint64_t documentLoadGeneration = 0U;
-    std::uint64_t styleLoadGeneration = 0U;
-    UIElementId root = 0U;
-    std::map<UIElementId, UIDocumentElement> elements;
-    UIElementId nextRuntimeElementId = 1U;
-    struct BindingState {
-        UIBindingDeclaration declaration;
-        std::optional<UIBindingValue> lastSourceValue;
-        std::optional<UIBindingValue> lastControlValue;
-        bool initialized = false;
-    };
-    std::vector<BindingState> bindings;
-    UIElementId focusedElement = 0U;
-    struct VirtualListState {
-        std::uint32_t viewportItems = 0U;
-        std::uint32_t overscan = 0U;
-        std::uint32_t firstVisibleIndex = 0U;
-        std::uint32_t activeItemCount = 0U;
-        std::vector<UIVirtualListItem> pool;
-    };
-    std::map<UIElementId, VirtualListState> virtualLists;
-};
-
 // Derived execution state for ContentInstanceComponent. It deliberately keeps
 // no authorable fields beyond a cache key used to recognize a component edit.
 // The ECS component remains the sole source of placement, source and lifetime
@@ -252,32 +225,6 @@ struct ContentInstanceRuntimeRecord {
     SceneEntity root{};
     std::uint64_t loadedSceneId = 0U;
     kb::assets::AssetHandle<ScenePrefab> prefab;
-};
-
-enum class UIRuntimeCommandKind : std::uint8_t {
-    Create,
-    Destroy,
-    SetVisible,
-    SetControl,
-    ConfigureVirtualList,
-    ScrollVirtualList,
-};
-
-struct UIRuntimeCommand {
-    UIRuntimeCommandKind kind = UIRuntimeCommandKind::Create;
-    SceneEntity entity{};
-    UIElementId elementId = 0U;
-    UIRuntimeElementDesc create{};
-    bool visible = true;
-    UIControlState control;
-    std::uint32_t viewportItems = 0U;
-    std::uint32_t overscan = 0U;
-    std::uint32_t firstVisibleIndex = 0U;
-};
-
-struct PendingUIRuntimeEvent {
-    SceneEntity entity{};
-    UIRuntimeEvent event{};
 };
 
 struct SceneTransformValueCacheEntry {
@@ -333,24 +280,7 @@ public:
     std::size_t lastAnimatorParallelWorkerCount = 1U;
     std::size_t lastAnimatorUpdateRateSkippedPoseCount = 0U;
     std::map<std::uint64_t, TimelineRuntimeRecord> timelines;
-    std::map<std::uint64_t, UIDocumentRuntimeRecord> uiDocuments;
     std::map<std::uint64_t, ContentInstanceRuntimeRecord> contentInstances;
-    // LIB-174: sole mutable UI write boundary. It is FIFO and drained by the
-    // UI scene system, never by callers, so runtime tree iteration cannot be
-    // invalidated by script/API mutations mid-frame.
-    std::vector<UIRuntimeCommand> pendingUICommands;
-    // LIB-176: input producers never invoke scripts directly. They append
-    // here; ScriptRuntimeSceneSystem drains this FIFO after UI commands have
-    // reached their frame boundary and emits through ScriptEventBus.
-    std::vector<PendingUIRuntimeEvent> pendingUIEvents;
-    // Exactly one retained document receives physical UI input. Its focus
-    // remains document-local so independent documents can expose their own
-    // accessibility state without receiving each other's interactions.
-    SceneEntity activeUIDocument{};
-    bool uiPointerWasDown = false;
-    bool uiSubmitWasDown = false;
-    bool uiNextWasDown = false;
-    bool uiPreviousWasDown = false;
     std::vector<TimelineMarkerEvent> pendingTimelineMarkerEvents;
     std::uint64_t nextTimelineInstanceId = 1U;
     kb::input::InputSubsystem inputSubsystem;
@@ -781,6 +711,19 @@ public:
 #endif
     std::vector<kb::particles::PendingParticleRuntimeEvent> pendingParticleRuntimeEvents;
     mutable std::vector<kb::particles::ParticleRuntimeState> particleRuntimeStateScratch;
+    SceneUIFrame uiFrame;
+    std::vector<SceneUIEvent> uiEvents;
+    SceneEntity uiHovered{};
+    SceneEntity uiPressed{};
+    SceneEntity uiFocused{};
+    SceneUIInput previousUIInput{};
+    SceneEntity uiInertialScrollView{};
+    kb::math::Vec2 uiScrollVelocity{};
+    kb::math::Vec2 uiViewportSize{};
+    std::size_t uiTextCursorByteOffset = 0U;
+    // Caret blink phase in seconds for the focused input field, reset on every edit so typing
+    // never hides the caret mid-stroke.
+    float uiTextCaretPhase = 0.0F;
     // LIB-144: the renderer-published per-entity visibility/bounds feedback frame
     // (Renderer.IsVisible/GetBounds/TestFrustum's backing state) - written by
     // kb::render::Renderer at every SubmitScene through SceneRenderFeedback::Publish

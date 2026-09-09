@@ -4,6 +4,8 @@
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneTransforms.hpp"
+#include "engine/scene/SceneUIComponentSet.hpp"
+#include "scene/ui/SceneUIComponentTextCodec.hpp"
 
 #include <sstream>
 #include <string>
@@ -85,8 +87,8 @@ namespace {
     if (StartsWith(propertyPath, "particleEffect")) {
         return ScenePrefabOverrideFlag::ParticleEffect;
     }
-    if (StartsWith(propertyPath, "uiDocument")) {
-        return ScenePrefabOverrideFlag::UIDocument;
+    if (propertyPath == "ui") {
+        return ScenePrefabOverrideFlag::UI;
     }
     if (propertyPath == "children") {
         return ScenePrefabOverrideFlag::AddedChild;
@@ -112,6 +114,10 @@ bool ScenePrefabAppliedPropertyBuilder::Build(Scene& scene, std::uint32_t nodeIn
     };
     if (propertyPath == "name") {
         property.value = scene.Entities().Name(object);
+        return true;
+    }
+    if (propertyPath == "ui") {
+        property.value = SceneUIComponentTextCodec::Encode(CaptureSceneUIComponents(scene.Components().UI(), object.Entity()));
         return true;
     }
     if (StartsWith(propertyPath, "transform.")) {
@@ -587,22 +593,6 @@ bool ScenePrefabAppliedPropertyBuilder::Build(Scene& scene, std::uint32_t nodeIn
         }
         if (propertyPath == "animator.rootMotionOwner") {
             property.value = std::to_string(static_cast<std::uint32_t>(animator->rootMotionOwner));
-            return true;
-        }
-    }
-    if (StartsWith(propertyPath, "uiDocument")) {
-        const UIDocumentComponent* document = components.UIDocuments().TryGet(entity);
-        if (propertyPath == "uiDocument") {
-            property.value = document == nullptr ? "null" : "present";
-            return true;
-        }
-        if (document == nullptr) return false;
-        if (propertyPath == "uiDocument.documentAssetId") {
-            property.value = std::to_string(document->documentAssetId);
-            return true;
-        }
-        if (propertyPath == "uiDocument.enabled") {
-            property.value = ToString(document->enabled);
             return true;
         }
     }

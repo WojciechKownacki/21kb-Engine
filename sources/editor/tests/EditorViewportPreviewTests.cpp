@@ -17,6 +17,7 @@
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
+#include "engine/scene/SceneRenderFeedback.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SkeletalMeshAssetIO.hpp"
 #include "engine/scene/SkeletonAssetIO.hpp"
@@ -83,6 +84,20 @@ void RunSceneViewportPresentationPolicyTest() {
     kb::editor::tests::Require(
         !SceneViewportPresentationPolicy::EditorOverlaysEnabled(true, true),
         "Play mode Scene View must not draw editor overlays over the game camera");
+    // A screen-space canvas is not part of the world. Drawn over the 3D view it buries the map
+    // behind a menu, so it shows only where it means something: while playing, and in the 2D
+    // mode that exists to author it.
+    kb::editor::tests::Require(
+        !SceneViewportPresentationPolicy::ScreenUIVisible(false, false),
+        "Editing the world must not draw the scene's screen-space UI over it");
+    kb::editor::tests::Require(
+        SceneViewportPresentationPolicy::ScreenUIVisible(false, true),
+        "2D authoring mode must show the UI it exists to edit");
+    kb::editor::tests::Require(
+        SceneViewportPresentationPolicy::ScreenUIVisible(true, false) &&
+            SceneViewportPresentationPolicy::ScreenUIVisible(true, true),
+        "Play mode must always show the UI the player is meant to use");
+
     kb::editor::tests::Require(
         SceneViewportPresentationPolicy::RequiresPresent(false, true),
         "Entering Play mode must request a Scene View present");
@@ -1015,6 +1030,108 @@ void RunViewportMeshPickerUsesSynchronizedWorldTransformsTest() {
         "Viewport picker should hit a nested mesh at its world position after its root moves");
 }
 
+void RunViewportMeshPickerUsesPublishedWorldBoundsTest() {
+    // A character mesh is authored with its origin at the feet, so its visible body sits
+    // entirely outside the picker's fallback unit box around the entity origin. The
+    // renderer already publishes the real world bounds it culls with, and a click on the
+    // drawn body must hit the entity.
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity beast = scene.Entities().CreateEntity(
+        kb::scene::SceneObjectDesc{ .name = "Tall Character" });
+    scene.Components().MeshRenderers().Set(
+        beast, kb::scene::MeshRendererComponent{ .meshAssetId = 909U });
+    scene.Transforms().Set(
+        beast,
+        kb::scene::TransformComponent{
+            .localPosition = kb::scene::Vec3{ 0.0F, 0.0F, 0.0F },
+        });
+
+    kb::scene::SceneRenderVisibilityFrame frame;
+    frame.frustumValid = true;
+    frame.entries.push_back(kb::scene::SceneRenderVisibilityEntry{
+        .entityId = beast.Id(),
+        .worldBounds = kb::scene::SceneRenderBounds{
+            .center = kb::math::Vec3{ 0.0F, 8.0F, 0.0F },
+            .radius = 3.0F,
+        },
+        .visible = true,
+    });
+    kb::scene::SceneRenderFeedback::Publish(scene, frame);
+
+    const kb::editor::EditorSceneViewportPickResult bodyPick =
+        kb::editor::EditorSceneViewportMeshPicker::PickNearest(
+            scene,
+            kb::editor::EditorSceneViewportRay{
+                .origin = kb::scene::Vec3{ 0.0F, 8.0F, -20.0F },
+                .direction = kb::scene::Vec3{ 0.0F, 0.0F, 1.0F },
+            });
+
+    kb::editor::tests::Require(
+        bodyPick.IsValid() && bodyPick.entity == beast,
+        "Viewport picker should hit a mesh through its published world bounds, not only the unit box at its origin");
+
+    const kb::editor::EditorSceneViewportPickResult emptyPick =
+        kb::editor::EditorSceneViewportMeshPicker::PickNearest(
+            scene,
+            kb::editor::EditorSceneViewportRay{
+                .origin = kb::scene::Vec3{ 0.0F, 40.0F, -20.0F },
+                .direction = kb::scene::Vec3{ 0.0F, 0.0F, 1.0F },
+            });
+
+    kb::editor::tests::Require(
+        !emptyPick.IsValid(),
+        "Viewport picker must not report a hit for a ray that misses the published world bounds");
+}
+
+void RunViewportMeshPickerPrefersPublishedBoxOverSphereTest() {
+    // The renderer publishes a box beside the sphere. For anything long or flat the sphere
+    // reaches well past the silhouette, so a click in empty space next to the mesh lands
+    // inside the sphere and steals the selection. The box must win that case.
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity slab = scene.Entities().CreateEntity(
+        kb::scene::SceneObjectDesc{ .name = "Flat Mesh" });
+    scene.Components().MeshRenderers().Set(
+        slab, kb::scene::MeshRendererComponent{ .meshAssetId = 910U });
+    scene.Transforms().Set(
+        slab, kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 0.0F, 0.0F, 0.0F } });
+
+    kb::scene::SceneRenderVisibilityFrame frame;
+    frame.frustumValid = true;
+    frame.entries.push_back(kb::scene::SceneRenderVisibilityEntry{
+        .entityId = slab.Id(),
+        .worldBounds = kb::scene::SceneRenderBounds{
+            .center = kb::math::Vec3{ 0.0F, 8.0F, 0.0F },
+            .radius = 3.0F,
+            .halfExtents = kb::math::Vec3{ 3.0F, 1.0F, 3.0F },
+        },
+        .visible = true,
+    });
+    kb::scene::SceneRenderFeedback::Publish(scene, frame);
+
+    const kb::editor::EditorSceneViewportPickResult throughBody =
+        kb::editor::EditorSceneViewportMeshPicker::PickNearest(
+            scene,
+            kb::editor::EditorSceneViewportRay{
+                .origin = kb::scene::Vec3{ 0.0F, 8.0F, -20.0F },
+                .direction = kb::scene::Vec3{ 0.0F, 0.0F, 1.0F },
+            });
+    kb::editor::tests::Require(
+        throughBody.IsValid() && throughBody.entity == slab,
+        "Viewport picker must still hit a mesh through its published bounding box");
+
+    // 2.5 units above the box top, but still inside the radius-3 sphere.
+    const kb::editor::EditorSceneViewportPickResult besideBody =
+        kb::editor::EditorSceneViewportMeshPicker::PickNearest(
+            scene,
+            kb::editor::EditorSceneViewportRay{
+                .origin = kb::scene::Vec3{ 0.0F, 10.5F, -20.0F },
+                .direction = kb::scene::Vec3{ 0.0F, 0.0F, 1.0F },
+            });
+    kb::editor::tests::Require(
+        !besideBody.IsValid(),
+        "Viewport picker must not select a mesh through sphere slack the published box excludes");
+}
+
 void RunViewportMeshPickerSkipsHiddenMeshesTest() {
     kb::scene::Scene scene;
     const kb::scene::SceneEntity hidden = scene.Entities().CreateEntity(
@@ -1379,6 +1496,72 @@ void RunViewportMeshWinsOverEntityOriginPickTest() {
         "A mesh must keep the click against a grouping entity that shares its origin");
 }
 
+void RunViewportBoxPickerUsesPublishedBoxNotOriginTest() {
+    // A character mesh is authored with its origin at the feet. A rectangle dragged over its
+    // body contains none of the origin, so origin-only matching never selects it.
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity tall = scene.Entities().CreateEntity(
+        kb::scene::SceneObjectDesc{ .name = "Tall Mesh" });
+    scene.Components().MeshRenderers().Set(
+        tall, kb::scene::MeshRendererComponent{ .meshAssetId = 911U });
+
+    const kb::editor::EditorViewportCameraState camera;
+    const kb::editor::EditorViewportCameraAxes axes = camera.Axes();
+    const kb::scene::Vec3 feet = axes.position + axes.forward * 8.0F;
+    scene.Transforms().Set(
+        tall, kb::scene::TransformComponent{ .localPosition = feet });
+
+    // Body centred well above the origin, exactly the shape origin matching cannot see.
+    const kb::scene::Vec3 body = feet + axes.up * 2.0F;
+    kb::scene::SceneRenderVisibilityFrame frame;
+    frame.frustumValid = true;
+    frame.entries.push_back(kb::scene::SceneRenderVisibilityEntry{
+        .entityId = tall.Id(),
+        .worldBounds = kb::scene::SceneRenderBounds{
+            .center = kb::math::Vec3{ body.x, body.y, body.z },
+            .radius = 2.2F,
+            .halfExtents = kb::math::Vec3{ 0.6F, 2.0F, 0.6F },
+        },
+        .visible = true,
+    });
+    kb::scene::SceneRenderFeedback::Publish(scene, frame);
+
+    const RECT renderArea{ 0, 0, 960, 540 };
+    float bodyX = 0.0F;
+    float bodyY = 0.0F;
+    kb::editor::tests::Require(
+        kb::editor::EditorSceneViewportMath::WorldToScreen(camera, renderArea, body, bodyX, bodyY),
+        "Box picker fixture must project the body on screen");
+    float feetX = 0.0F;
+    float feetY = 0.0F;
+    kb::editor::tests::Require(
+        kb::editor::EditorSceneViewportMath::WorldToScreen(camera, renderArea, feet, feetX, feetY),
+        "Box picker fixture must project the origin on screen");
+
+    // A tight rectangle around the body only - the origin is deliberately outside it.
+    const RECT bodyRect{
+        static_cast<LONG>(bodyX) - 10, static_cast<LONG>(bodyY) - 10,
+        static_cast<LONG>(bodyX) + 10, static_cast<LONG>(bodyY) + 10 };
+    kb::editor::tests::Require(
+        feetY < static_cast<float>(bodyRect.top) || feetY > static_cast<float>(bodyRect.bottom) ||
+            feetX < static_cast<float>(bodyRect.left) || feetX > static_cast<float>(bodyRect.right),
+        "Box picker fixture is not exercising the case: the origin must fall outside the rectangle");
+
+    const std::vector<kb::scene::SceneEntity> picked =
+        kb::editor::EditorSceneViewportMeshPicker::PickInsideRect(scene, camera, renderArea, bodyRect);
+    kb::editor::tests::Require(
+        std::ranges::find(picked, tall) != picked.end(),
+        "Rectangle selection must select a mesh through its published box, not only its origin");
+
+    // A rectangle in an empty corner must still select nothing.
+    const std::vector<kb::scene::SceneEntity> empty =
+        kb::editor::EditorSceneViewportMeshPicker::PickInsideRect(
+            scene, camera, renderArea, RECT{ 0, 0, 12, 12 });
+    kb::editor::tests::Require(
+        std::ranges::find(empty, tall) == empty.end(),
+        "Rectangle selection must not select a mesh whose projected box is outside the rectangle");
+}
+
 void RunViewportBoxPickerIncludesVisibleComponentOverlaysTest() {
     kb::scene::Scene scene;
     const kb::scene::SceneEntity light = scene.Entities().CreateEntity(
@@ -1698,12 +1881,15 @@ void RunEditorViewportPreviewTests() {
     RunViewportMeshPickerNearestMeshRendererTest();
     RunViewportMeshPickerUsesSynchronizedWorldTransformsTest();
     RunViewportMeshPickerSkipsHiddenMeshesTest();
+    RunViewportMeshPickerUsesPublishedWorldBoundsTest();
+    RunViewportMeshPickerPrefersPublishedBoxOverSphereTest();
     RunViewportLightWireframePickerChoosesNestedInnerWireframeTest();
     RunViewportLightIconPickerSelectsLightIconsTest();
     RunViewportParticleIconPickerSelectsParticleEffectTest();
     RunViewportPickerSelectsEntityWithoutRenderableComponentTest();
     RunViewportMeshWinsOverEntityOriginPickTest();
     RunViewportBoxPickerIncludesVisibleComponentOverlaysTest();
+    RunViewportBoxPickerUsesPublishedBoxNotOriginTest();
     RunViewportMeshPickerWinsInsideLightWireframeVolumeTest();
     RunRenderBackendSettingsTest();
     RunEditorBackendSelectionTest();

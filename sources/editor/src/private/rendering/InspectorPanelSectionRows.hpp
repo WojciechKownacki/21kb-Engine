@@ -71,6 +71,7 @@ using panel_style::AddTopRoundedRectPath;
 using panel_style::ConfigureSectionGraphics;
 using panel_style::DrawRoundedFrame;
 using panel_style::DrawInputFrame;
+using panel_style::DrawTextCaret;
 using panel_style::DrawSectionButtonFrame;
 using panel_style::DrawSectionAccentFrame;
 using panel_style::FillSectionHeaderBackground;
@@ -154,15 +155,25 @@ inline void DrawSectionHeader(HDC dc, RECT rect, const EditorTheme& theme, const
     }
 }
 
-inline void DrawValueBox(HDC dc, RECT rect, const EditorTheme& theme, std::string_view value, bool hovered = false) {
+// `hovered` and `editing` are deliberately separate. They used to be one flag, so a field being
+// typed into looked exactly like one the pointer happened to be over, and there was no way to
+// tell which field would receive the next keystroke.
+inline void DrawValueBox(HDC dc, RECT rect, const EditorTheme& theme, std::string_view value, bool hovered = false,
+                         bool editing = false, bool caretVisible = false) {
     DrawInputFrame(
         dc,
         rect,
-        hovered ? HoverFill(theme) : Color(theme.chrome),
-        hovered ? Color(theme.accent) : Color(theme.borderPanel));
+        hovered || editing ? HoverFill(theme) : Color(theme.chrome),
+        hovered || editing ? Color(theme.accent) : Color(theme.borderPanel),
+        editing ? Color(theme.accent) : CLR_INVALID,
+        editing ? 2.0F : 0.0F);
     ScopedFont font(12, FW_NORMAL);
     const ScopedGdiObject selectedFont(dc, font.handle);
-    Text(dc, Shrink(rect, 9, 0, 4, 0), value, Color(theme.textPrimary));
+    const RECT textRect = Shrink(rect, 9, 0, 4, 0);
+    Text(dc, textRect, value, Color(theme.textPrimary));
+    if (editing && caretVisible) {
+        DrawTextCaret(dc, textRect, value, Color(theme.textPrimary));
+    }
 }
 
 inline void DrawAxisLane(HDC dc, RECT rect, const EditorTheme& theme, const InspectorPanelState& state, InspectorSectionId section, InspectorPropertyId property, char axis, std::string_view value) {
@@ -177,7 +188,8 @@ inline void DrawAxisLane(HDC dc, RECT rect, const EditorTheme& theme, const Insp
     const bool editing = property != InspectorPropertyId::None && state.EditedProperty() == property;
     const std::string_view shown = editing ? std::string_view{ state.EditBuffer() } : value;
     const RECT box = Rect(letter.right + kAxisGap, CenteredY(rect, kValueHeight), rect.right, CenteredY(rect, kValueHeight) + kValueHeight);
-    DrawValueBox(dc, box, theme, shown, state.IsHovered(InspectorHitKind::FloatField, section, property) || editing);
+    DrawValueBox(dc, box, theme, shown, state.IsHovered(InspectorHitKind::FloatField, section, property), editing,
+        state.IsTextCaretVisible());
 }
 
 inline void DrawVec3Row(HDC dc, RECT row, const EditorTheme& theme, const InspectorPanelState& state, InspectorSectionId section, std::string_view label, const kb::scene::Vec3& value, InspectorPropertyId xProperty, InspectorPropertyId yProperty, InspectorPropertyId zProperty) {
@@ -248,7 +260,7 @@ inline void DrawFieldRow(HDC dc, RECT row, const EditorTheme& theme, const Inspe
         const ScopedGdiObject selectedFont(dc, labelFont.handle);
         Text(dc, labelRect, label, Color(theme.textSecondary));
     }
-    DrawValueBox(dc, valueRect, theme, shown, valueHovered || editing);
+    DrawValueBox(dc, valueRect, theme, shown, valueHovered, editing, state.IsTextCaretVisible());
 }
 
 inline void DrawPairLane(
@@ -277,8 +289,8 @@ inline void DrawPairLane(
         CenteredY(lane, kValueHeight),
         lane.right,
         CenteredY(lane, kValueHeight) + kValueHeight);
-    DrawValueBox(dc, box, theme, shown,
-        state.IsHovered(InspectorHitKind::FloatField, section, property) || editing);
+    DrawValueBox(dc, box, theme, shown, state.IsHovered(InspectorHitKind::FloatField, section, property), editing,
+        state.IsTextCaretVisible());
 }
 
 inline void DrawPairRow(
@@ -393,8 +405,8 @@ inline void DrawActionRow(
 }
 
 inline void DrawTagFieldRow(HDC dc, RECT row, const EditorTheme& theme, const InspectorPanelState& state,
-    InspectorSectionId section, InspectorPropertyId property, std::string_view label, std::string_view value) {
-    if (RowHovered(state, property)) {
+    InspectorSectionId section, InspectorPropertyId property, std::string_view label, std::string_view value, int editIndex = -1) {
+    if (RowHovered(state, property, editIndex)) {
         GdiDrawing::FillRectColor(dc, row, HoverFill(theme));
     }
     const RECT labelRect = Rect(row.left + kRowPadX, row.top, row.left + ((row.right - row.left) * 36 / 100), row.bottom);
@@ -405,9 +417,10 @@ inline void DrawTagFieldRow(HDC dc, RECT row, const EditorTheme& theme, const In
         Text(dc, labelRect, label, Color(theme.textSecondary));
     }
 
-    const bool hovered = FieldValueHovered(state, section, property);
+    const bool hovered = FieldValueHovered(state, section, property, editIndex) ||
+        state.IsHovered(InspectorHitKind::ChoiceField, section, property, editIndex);
     const bool classified = !value.empty();
-    const bool open = state.IsTagsDropdownOpen();
+    const bool open = property == InspectorPropertyId::TagsText && state.IsTagsDropdownOpen();
     DrawInputFrame(dc, valueRect, hovered || open ? HoverFill(theme) : Color(theme.chrome),
         open ? Color(theme.textDisabled) : Color(theme.borderPanel));
     {
@@ -430,15 +443,15 @@ inline void DrawTagFieldRow(HDC dc, RECT row, const EditorTheme& theme, const In
     return valueRect;
 }
 
-inline void DrawAssetFieldRow(HDC dc, RECT row, const EditorTheme& theme, const InspectorPanelState& state, InspectorSectionId section, InspectorPropertyId property, InspectorPropertyId buttonProperty, std::string_view label, std::string_view value) {
-    if (RowHovered(state, property) || RowHovered(state, buttonProperty)) {
+inline void DrawAssetFieldRow(HDC dc, RECT row, const EditorTheme& theme, const InspectorPanelState& state, InspectorSectionId section, InspectorPropertyId property, InspectorPropertyId buttonProperty, std::string_view label, std::string_view value, int editIndex = -1) {
+    if (RowHovered(state, property, editIndex) || state.IsHovered(InspectorHitKind::TextField, section, buttonProperty, editIndex)) {
         GdiDrawing::FillRectColor(dc, row, HoverFill(theme));
     }
     const RECT labelRect = Rect(row.left + kRowPadX, row.top, row.left + ((row.right - row.left) * 36 / 100), row.bottom);
     const RECT valueRect = Rect(labelRect.right, CenteredY(row, kValueHeight), row.right - kValueRightInset, CenteredY(row, kValueHeight) + kValueHeight);
     const RECT textRect = AssetPickerTextRect(valueRect);
-    const bool valueHovered = state.IsHovered(InspectorHitKind::TextField, section, property);
-    const bool buttonHovered = state.IsHovered(InspectorHitKind::TextField, section, buttonProperty);
+    const bool valueHovered = state.IsHovered(InspectorHitKind::TextField, section, property, editIndex);
+    const bool buttonHovered = state.IsHovered(InspectorHitKind::TextField, section, buttonProperty, editIndex);
     ScopedFont labelFont(12, FW_SEMIBOLD);
     {
         const ScopedGdiObject selectedFont(dc, labelFont.handle);
@@ -531,8 +544,8 @@ public:
     }
 
     void Field(std::string_view label, std::string_view value, InspectorPropertyId property = InspectorPropertyId::None, int editIndex = -1) { if (!collapsed_) { DrawFieldRow(dc_, Row(), theme_, state_, section_, property, label, value, editIndex); Advance(); } }
-    void Tag(std::string_view label, std::string_view value, InspectorPropertyId property) { if (!collapsed_) { DrawTagFieldRow(dc_, Row(), theme_, state_, section_, property, label, value); Advance(); } }
-    void AssetField(std::string_view label, std::string_view value, InspectorPropertyId property, InspectorPropertyId buttonProperty) { if (!collapsed_) { DrawAssetFieldRow(dc_, Row(), theme_, state_, section_, property, buttonProperty, label, value); Advance(); } }
+    void Tag(std::string_view label, std::string_view value, InspectorPropertyId property, int editIndex = -1) { if (!collapsed_) { DrawTagFieldRow(dc_, Row(), theme_, state_, section_, property, label, value, editIndex); Advance(); } }
+    void AssetField(std::string_view label, std::string_view value, InspectorPropertyId property, InspectorPropertyId buttonProperty, int editIndex = -1) { if (!collapsed_) { DrawAssetFieldRow(dc_, Row(), theme_, state_, section_, property, buttonProperty, label, value, editIndex); Advance(); } }
     void Float(std::string_view label, std::string_view value, InspectorPropertyId property) { Field(label, value, property); }
     void Bool(std::string_view label, bool value, InspectorPropertyId property = InspectorPropertyId::None, int editIndex = -1) { if (!collapsed_) { DrawBoolRow(dc_, Row(), theme_, state_, section_, property, label, value, editIndex); Advance(); } }
     void Vec3(std::string_view label, const kb::scene::Vec3& value, InspectorPropertyId x, InspectorPropertyId y, InspectorPropertyId z) { if (!collapsed_) { DrawVec3Row(dc_, Row(), theme_, state_, section_, label, value, x, y, z); Advance(); } }

@@ -21,7 +21,6 @@
 #include "engine/scene/SkeletalMeshAssetLoader.hpp"
 #include "engine/scene/TimelineAssetLoader.hpp"
 #include "engine/scene/AnimationAssetLoaders.hpp"
-#include "engine/scene/UIAssetLoaders.hpp"
 #include "engine/scene/PhysicsLayersAssetLoader.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneAudioListenerAccess.hpp"
@@ -38,8 +37,8 @@
 
 #include "scene/systems/AnimatorSceneSystem.hpp"
 #include "scene/systems/TimelineSceneSystem.hpp"
-#include "scene/systems/UIDocumentSceneSystem.hpp"
 #include "scene/systems/ContentInstanceSceneSystem.hpp"
+#include "scene/ui/SceneUISystem.hpp"
 
 #include <array>
 #include <atomic>
@@ -102,8 +101,6 @@ Scene::Scene(
     const bool registeredAnimationClipLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::AnimationClipAssetLoader>());
     const bool registeredAnimatorControllerLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::AnimatorControllerAssetLoader>());
     const bool registeredTimelineLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::TimelineAssetLoader>());
-    const bool registeredUIDocumentLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::UIDocumentAssetLoader>());
-    const bool registeredUIStyleLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::UIStyleAssetLoader>());
     const bool registeredLocalizationLoader = state_->assets.RegisterLoader(std::make_unique<kb::localization::LocalizationCatalogAssetLoader>());
     static_cast<void>(registeredPrefabLoader);
     static_cast<void>(registeredSceneLoader);
@@ -123,8 +120,6 @@ Scene::Scene(
     static_cast<void>(registeredAnimationClipLoader);
     static_cast<void>(registeredAnimatorControllerLoader);
     static_cast<void>(registeredTimelineLoader);
-    static_cast<void>(registeredUIDocumentLoader);
-    static_cast<void>(registeredUIStyleLoader);
     static_cast<void>(registeredLocalizationLoader);
 
     if (mode == SceneMode::PrefabPrivate) {
@@ -157,9 +152,9 @@ Scene::Scene(
     }
     moduleHost_->Load(state_->world);
     moduleHost_->AttachScene(*this);
+    state_->sceneSystemScheduler.Add(std::make_unique<SceneUISystem>(), *this);
     state_->sceneSystemScheduler.Add(std::make_unique<AnimatorSceneSystem>(), *this);
     state_->sceneSystemScheduler.Add(std::make_unique<TimelineSceneSystem>(), *this);
-    state_->sceneSystemScheduler.Add(std::make_unique<UIDocumentSceneSystem>(), *this);
     state_->sceneSystemScheduler.Add(std::make_unique<ContentInstanceSceneSystem>(), *this);
 }
 

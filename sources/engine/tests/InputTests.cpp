@@ -9,13 +9,16 @@
 #include "engine/input/InputRebinding.hpp"
 #include "engine/input/InputRecording.hpp"
 #include "engine/input/InputSubsystem.hpp"
+#include "engine/input/InputText.hpp"
 #include "engine/input/InputTriggers.hpp"
 
+#include <algorithm>
 #include <array>
 #include <filesystem>
 #include <memory>
 #include <system_error>
 #include <unordered_map>
+#include <vector>
 
 namespace kb::tests {
 namespace {
@@ -462,6 +465,75 @@ void TestTouchPoints() {
     Require(device.TouchPoints().empty(), "Clearing touch points should empty the list");
 }
 
+void TestTextInputDeviceStateAndEncoding() {
+    InputDeviceState device;
+    const std::array<char32_t, 3U> initial{U'A', U'\u0142', U'\U0001F642'};
+    Require(device.SetTextInput(initial) == initial.size(),
+        "Text input should retain every valid Unicode scalar");
+    Require(device.TextInput().size() == initial.size() &&
+            device.TextInput()[1] == U'\u0142' &&
+            device.TextInput()[2] == U'\U0001F642',
+        "Text input should preserve the original scalar sequence");
+    Require(!device.AddTextInput(static_cast<char32_t>(0xD800U)) &&
+            !device.AddTextInput(static_cast<char32_t>(0x110000U)),
+        "Text input must reject invalid Unicode values");
+
+    std::array<char32_t, InputDeviceState::kMaxTextInputCodePoints + 1U> overflow{};
+    overflow.fill(U'x');
+    Require(device.SetTextInput(overflow) == InputDeviceState::kMaxTextInputCodePoints &&
+            !device.AddTextInput(U'y'),
+        "Text input should enforce its fixed per-frame capacity");
+    device.Reset();
+    Require(device.TextInput().empty(), "Reset should clear transient text input");
+
+    constexpr std::string_view utf8{"A\xC5\x82\xF0\x9F\x99\x82", 7U};
+    std::array<char32_t, 3U> decoded{};
+    const Utf8DecodeResult decodedUtf8 = DecodeUtf8(utf8, decoded);
+    Require(decodedUtf8.wellFormed && !decodedUtf8.truncated &&
+            decodedUtf8.codePointCount == decoded.size() &&
+            decoded[0] == U'A' && decoded[1] == U'\u0142' &&
+            decoded[2] == U'\U0001F642',
+        "UTF-8 should decode ASCII, BMP and supplementary text");
+    constexpr std::string_view malformed{"\xF0\x28\x8C\x28", 4U};
+    Require(!DecodeUtf8(malformed, decoded).wellFormed,
+        "Malformed UTF-8 must be rejected");
+
+    constexpr std::string_view modified{
+        "A\xC0\x80\xED\xA0\xBD\xED\xB9\x82", 9U};
+    const Utf8DecodeResult decodedModified = DecodeModifiedUtf8(modified, decoded);
+    Require(decodedModified.wellFormed && !decodedModified.truncated &&
+            decodedModified.codePointCount == decoded.size() &&
+            decoded[0] == U'A' && decoded[1] == U'\0' &&
+            decoded[2] == U'\U0001F642',
+        "Modified UTF-8 should normalize null and surrogate pairs");
+
+    Utf16InputDecoder utf16;
+    char32_t codePoint = 0U;
+    Require(!utf16.Consume(static_cast<char16_t>(0xD83DU), codePoint) &&
+            utf16.Consume(static_cast<char16_t>(0xDE42U), codePoint) &&
+            codePoint == U'\U0001F642' &&
+            !utf16.Consume(static_cast<char16_t>(0xDE42U), codePoint),
+        "UTF-16 should emit only complete valid scalar values");
+}
+
+void TestLegacyInputRecordingWithoutTextLoads() {
+    InputRecording recording{InputFrameSnapshot{}};
+    std::vector<std::uint8_t> bytes = EncodeInputRecording(recording);
+    Require(bytes.size() >= 12U,
+        "Current recording should contain text and viewport fields");
+    bytes.resize(bytes.size() - 12U);
+    constexpr std::size_t versionOffset = InputAssetFormat::RecordingMagic.size();
+    bytes[versionOffset] = static_cast<std::uint8_t>(InputAssetFormat::BinaryVersion & 0xFFU);
+    bytes[versionOffset + 1U] = static_cast<std::uint8_t>((InputAssetFormat::BinaryVersion >> 8U) & 0xFFU);
+    bytes[versionOffset + 2U] = static_cast<std::uint8_t>((InputAssetFormat::BinaryVersion >> 16U) & 0xFFU);
+    bytes[versionOffset + 3U] = static_cast<std::uint8_t>((InputAssetFormat::BinaryVersion >> 24U) & 0xFFU);
+
+    const InputAssetLoadResult<InputRecording> loaded = DecodeInputRecording(bytes);
+    Require(loaded.succeeded && loaded.asset.size() == 1U &&
+            loaded.asset[0].textInput.empty(),
+        "Legacy recordings should migrate with empty text input");
+}
+
 // LIB-118: proves the named priority bands (Gameplay < UI < Console <
 // DebugOverlay) hold under the REAL InputMappingContextStack consumption
 // mechanism, not just as declared constants - four contexts, each binding the
@@ -828,11 +900,17 @@ void TestInputRecordingDeterministicReplay() {
 
     InputRecording recording;
     std::vector<FrameTrace> originalTrace;
+    std::size_t frameIndex = 0U;
     for (const FrameInput& input : script) {
         live.MutableDeviceState().Reset();
         live.MutableDeviceState().SetKeyDown(InputKey::W, input.w);
         live.MutableDeviceState().SetKeyDown(InputKey::S, input.s);
         live.MutableDeviceState().SetKeyDown(InputKey::Space, input.space);
+        const std::array<char32_t, 2U> text{
+            static_cast<char32_t>(U'a' + frameIndex), U'\U0001F642'};
+        static_cast<void>(live.MutableDeviceState().SetTextInput(text));
+        live.MutableDeviceState().SetPointerViewportExtent(
+            static_cast<std::uint32_t>(1280U + frameIndex), 720U);
 
         recording.push_back(CaptureInputFrame(live.DeviceState(), input.dt));
         live.Evaluate(input.dt);
@@ -843,6 +921,7 @@ void TestInputRecordingDeterministicReplay() {
             .jumpTriggeredThisFrame = live.WasActionTriggered("Jump"),
             .jumpReleasedThisFrame = live.WasActionReleased("Jump"),
         });
+        ++frameIndex;
     }
     // Sanity check the script actually exercised what it claims to (a trace
     // that never triggers Jump would make the replay comparison meaningless).
@@ -863,6 +942,14 @@ void TestInputRecordingDeterministicReplay() {
     const InputAssetLoadResult<InputRecording> loaded = ReadInputRecording(recordingPath);
     Require(loaded.succeeded, "Reading the input recording should succeed");
     Require(loaded.asset.size() == script.size(), "Recording frame count should round-trip");
+    Require(loaded.asset.front().textInput ==
+                std::vector<char32_t>{U'a', U'\U0001F642'} &&
+            loaded.asset.back().textInput ==
+                std::vector<char32_t>{U'f', U'\U0001F642'} &&
+            loaded.asset.front().pointerViewportWidth == 1280U &&
+            loaded.asset.back().pointerViewportWidth == 1285U &&
+            loaded.asset.back().pointerViewportHeight == 720U,
+        "Text and pointer viewport should round-trip frame-by-frame");
 
     // --- Replay against a completely independent, freshly-constructed subsystem. ---
     InputSubsystem replay;
@@ -873,6 +960,12 @@ void TestInputRecordingDeterministicReplay() {
     std::vector<FrameTrace> replayTrace;
     for (const InputFrameSnapshot& frame : loaded.asset) {
         ApplyInputFrame(scratch, frame);
+        Require(scratch.TextInput().size() == frame.textInput.size() &&
+                std::equal(scratch.TextInput().begin(), scratch.TextInput().end(),
+                    frame.textInput.begin(), frame.textInput.end()) &&
+                scratch.PointerViewportWidth() == frame.pointerViewportWidth &&
+                scratch.PointerViewportHeight() == frame.pointerViewportHeight,
+            "Applying a recording should restore text and pointer viewport");
         replay.EvaluateWithDeviceState(scratch, frame.deltaSeconds);
         replayTrace.push_back(FrameTrace{
             .moveValue = replay.GetActionValue("Move").AsAxis1D(),
@@ -978,6 +1071,7 @@ void RunInputTests() {
     TestBindingIdStableAcrossRebind();
     TestMultiGamepadDeviceState();
     TestTouchPoints();
+    TestTextInputDeviceStateAndEncoding();
     TestMultiGamepadMapping();
     TestPointerPosition();
     TestNamedContextPriorityBands();
@@ -987,6 +1081,7 @@ void RunInputTests() {
     TestFocusAndGamepadConnectivity();
     TestPressedStateResetsWhenDeviceGoesQuiet();
     TestInputRecordingDeterministicReplay();
+    TestLegacyInputRecordingWithoutTextLoads();
 }
 
 } // namespace kb::tests

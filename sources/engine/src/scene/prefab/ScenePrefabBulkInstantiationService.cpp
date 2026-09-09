@@ -2,6 +2,7 @@
 
 #include "engine/ecs/CommandBuffer.hpp"
 #include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneUIComponentSet.hpp"
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/entities/SceneEntityNaming.hpp"
@@ -165,7 +166,6 @@ struct ScenePrefabArchetypeSpawnPayload {
     std::vector<SkeletonBindingComponent> skeletonBindings;
     std::vector<MotionSkeletonRuleComponent> motionSkeletonRules;
     std::vector<DrawD3DeformedGeometryComponent> deformedGeometries;
-    std::vector<UIDocumentComponent> uiDocuments;
     std::vector<NavAgent> navAgents;
     std::vector<NavObstacle> navObstacles;
     std::vector<kb::ecs::CommandBuffer::BulkComponentView> views;
@@ -177,9 +177,9 @@ struct ScenePrefabArchetypeSpawnPayload {
         RepeatComponents(visibility, std::span<const VisibilityComponent>{ archetype.visibility }, instanceCount);
 
         views.clear();
-        views.reserve(24U);
+        views.reserve(40U);
         worldViews.clear();
-        worldViews.reserve(24U);
+        worldViews.reserve(40U);
         AddComponentViews(views, worldViews, std::span<const TransformComponent>{ transforms });
         AddComponentViews(views, worldViews, std::span<const VisibilityComponent>{ visibility });
 
@@ -316,10 +316,6 @@ struct ScenePrefabArchetypeSpawnPayload {
             RepeatComponents(deformedGeometries, std::span<const DrawD3DeformedGeometryComponent>{ archetype.deformedGeometries }, instanceCount);
             AddComponentViews(views, worldViews, std::span<const DrawD3DeformedGeometryComponent>{ deformedGeometries });
         }
-        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::UIDocument)) {
-            RepeatComponents(uiDocuments, std::span<const UIDocumentComponent>{ archetype.uiDocuments }, instanceCount);
-            AddComponentViews(views, worldViews, std::span<const UIDocumentComponent>{ uiDocuments });
-        }
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::NavAgent)) {
             RepeatComponents(navAgents, std::span<const NavAgent>{ archetype.navAgents }, instanceCount);
             AddComponentViews(views, worldViews, std::span<const NavAgent>{ navAgents });
@@ -332,9 +328,9 @@ struct ScenePrefabArchetypeSpawnPayload {
 
     void BuildPattern(const ScenePrefabBakedArchetype& archetype, std::size_t instanceCount) {
         views.clear();
-        views.reserve(24U);
+        views.reserve(40U);
         worldViews.clear();
-        worldViews.reserve(24U);
+        worldViews.reserve(40U);
         AddCommandComponentPatternView(views, std::span<const TransformComponent>{ archetype.transforms }, instanceCount);
         AddWorldComponentPatternView(worldViews, std::span<const TransformComponent>{ archetype.transforms }, instanceCount);
         AddCommandComponentPatternView(views, std::span<const VisibilityComponent>{ archetype.visibility }, instanceCount);
@@ -472,10 +468,6 @@ struct ScenePrefabArchetypeSpawnPayload {
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::DeformedGeometry)) {
             AddCommandComponentPatternView(views, std::span<const DrawD3DeformedGeometryComponent>{ archetype.deformedGeometries }, instanceCount);
             AddWorldComponentPatternView(worldViews, std::span<const DrawD3DeformedGeometryComponent>{ archetype.deformedGeometries }, instanceCount);
-        }
-        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::UIDocument)) {
-            AddCommandComponentPatternView(views, std::span<const UIDocumentComponent>{ archetype.uiDocuments }, instanceCount);
-            AddWorldComponentPatternView(worldViews, std::span<const UIDocumentComponent>{ archetype.uiDocuments }, instanceCount);
         }
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::NavAgent)) {
             AddCommandComponentPatternView(views, std::span<const NavAgent>{ archetype.navAgents }, instanceCount);
@@ -1006,6 +998,21 @@ void ResolvePrefabLensEchoReferences(
     }
 }
 
+void ApplyPrefabUIComponents(
+    Scene& scene,
+    std::span<const ScenePrefabNodeDesc> nodes,
+    std::span<const SceneEntity> entities,
+    std::size_t instanceCount) {
+    SceneUIComponents ui = scene.Components().UI();
+    for (std::size_t instanceIndex = 0U; instanceIndex < instanceCount; ++instanceIndex) {
+        for (std::size_t nodeIndex = 0U; nodeIndex < nodes.size(); ++nodeIndex) {
+            if (!nodes[nodeIndex].components.ui.Empty()) {
+                ApplySceneUIComponents(ui, entities[EntityIndex(instanceIndex, nodeIndex, nodes.size())], nodes[nodeIndex].components.ui);
+            }
+        }
+    }
+}
+
 [[nodiscard]] std::vector<ScenePrefabInstance> BuildInstances(
     Scene& scene,
     std::span<const ScenePrefabNodeDesc> nodes,
@@ -1112,6 +1119,7 @@ void ResolvePrefabLensEchoReferences(
         ResolvePrefabJointReferences(scene, nodes, std::span<const SceneEntity>{ entities }, count);
         ResolvePrefabRegionPortalReferences(scene, nodes, std::span<const SceneEntity>{ entities }, count);
         ResolvePrefabLensEchoReferences(scene, nodes, std::span<const SceneEntity>{ entities }, count);
+        ApplyPrefabUIComponents(scene, nodes, std::span<const SceneEntity>{ entities }, count);
         const kb::ecs::NativeEcsStorageStats afterStorage = state.world.NativeStorageStats();
         std::uint64_t instanceObjectSlabNanoseconds = 0;
         std::uint64_t hierarchyRecordNanoseconds = 0;
@@ -1177,6 +1185,7 @@ void ResolvePrefabLensEchoReferences(
     ResolvePrefabJointReferences(scene, nodes, std::span<const SceneEntity>{ resolvedEntities }, count);
     ResolvePrefabRegionPortalReferences(scene, nodes, std::span<const SceneEntity>{ resolvedEntities }, count);
     ResolvePrefabLensEchoReferences(scene, nodes, std::span<const SceneEntity>{ resolvedEntities }, count);
+    ApplyPrefabUIComponents(scene, nodes, std::span<const SceneEntity>{ resolvedEntities }, count);
     std::uint64_t instanceObjectSlabNanoseconds = 0;
     std::uint64_t hierarchyRecordNanoseconds = 0;
     std::uint64_t nameAssignmentNanoseconds = 0;

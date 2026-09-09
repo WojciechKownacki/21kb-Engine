@@ -99,6 +99,37 @@ inline void Text(HDC dc, RECT rect, std::string_view text, COLORREF color, UINT 
     DrawTextW(dc, wideText.data(), wideLength, &rect, format | DT_NOPREFIX);
 }
 
+// Width of UTF-8 text in the font currently selected into `dc`. Callers must already be
+// inside the ScopedFont scope they paint with, otherwise this measures the wrong face.
+[[nodiscard]] inline int TextWidth(HDC dc, std::string_view text) {
+    if (dc == nullptr || text.empty()) {
+        return 0;
+    }
+    const int wideLength =
+        MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), static_cast<int>(text.size()), nullptr, 0);
+    if (wideLength <= 0) {
+        return 0;
+    }
+    std::wstring wideText(static_cast<std::size_t>(wideLength), L'\0');
+    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), static_cast<int>(text.size()),
+                            wideText.data(), wideLength) != wideLength) {
+        return 0;
+    }
+    SIZE measured{};
+    return GetTextExtentPoint32W(dc, wideText.data(), wideLength, &measured) != 0 ? static_cast<int>(measured.cx) : 0;
+}
+
+// Draws the insertion point after `textBefore` inside the same rectangle the text was painted
+// into. Without this a focused field is indistinguishable from a hovered one, so there is no
+// way to tell what is being typed or where.
+inline void DrawTextCaret(HDC dc, const RECT& textRect, std::string_view textBefore, COLORREF color) {
+    const int caretX = std::min<int>(static_cast<int>(textRect.left) + TextWidth(dc, textBefore),
+                                     static_cast<int>(textRect.right) - 1);
+    const int inset = std::max<int>(2, static_cast<int>(textRect.bottom - textRect.top) / 6);
+    GdiDrawing::FillRectColor(
+        dc, Rect(caretX, textRect.top + inset, caretX + 1, textRect.bottom - inset), color);
+}
+
 inline void TextW(HDC dc, RECT rect, std::wstring_view text, COLORREF color, UINT format = DT_CENTER | DT_VCENTER | DT_SINGLELINE) {
     rect.top += kTextBaselineOffsetY;
     rect.bottom += kTextBaselineOffsetY;
@@ -203,8 +234,11 @@ inline void DrawRoundedFrame(
     graphics.DrawPath(&pen, &path);
 }
 
-inline void DrawInputFrame(HDC dc, const RECT& rect, COLORREF fill, COLORREF border) {
-    DrawRoundedFrame(dc, rect, fill, border, kInputCornerRadius, kInputOutlineWidth);
+// `accent` paints a bar down the left edge. Focused fields use it so a field being typed
+// into is distinguishable at a glance from one the pointer merely rests on.
+inline void DrawInputFrame(HDC dc, const RECT& rect, COLORREF fill, COLORREF border,
+                           COLORREF accent = CLR_INVALID, float accentWidth = 0.0F) {
+    DrawRoundedFrame(dc, rect, fill, border, kInputCornerRadius, kInputOutlineWidth, accent, accentWidth);
 }
 
 inline void DrawSectionButtonFrame(HDC dc, const RECT& rect, COLORREF fill, COLORREF border) {

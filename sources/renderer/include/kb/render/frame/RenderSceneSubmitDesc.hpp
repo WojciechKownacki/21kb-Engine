@@ -1,6 +1,7 @@
 #pragma once
 
 #include "kb/render/SceneDepthPolicy.hpp"
+#include "engine/scene/SceneUI.hpp"
 #include "kb/render/frame/RenderViewportDesc.hpp"
 #include "kb/render/overlay/EditorCameraWireframe.hpp"
 #include "kb/render/overlay/EditorLightWireframe.hpp"
@@ -64,6 +65,7 @@ struct RenderPostProcessTargetBinding {
     bgfx::TextureHandle bloomTexture = BGFX_INVALID_HANDLE;
     bgfx::FrameBufferHandle pingFrameBuffer = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle pingTexture = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle bloomScratchTexture = BGFX_INVALID_HANDLE;
     bgfx::FrameBufferHandle motionVectorFrameBuffer = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle motionVectorTexture = BGFX_INVALID_HANDLE;
     bgfx::FrameBufferHandle temporalHistoryFrameBuffer = BGFX_INVALID_HANDLE;
@@ -98,6 +100,14 @@ struct RenderPostProcessTargetBinding {
         BGFX_INVALID_HANDLE,
         BGFX_INVALID_HANDLE,
     }};
+    std::array<bgfx::FrameBufferHandle, kMaxBloomPyramidMips> bloomScratchMipFrameBuffers{{
+        BGFX_INVALID_HANDLE,
+        BGFX_INVALID_HANDLE,
+        BGFX_INVALID_HANDLE,
+        BGFX_INVALID_HANDLE,
+        BGFX_INVALID_HANDLE,
+        BGFX_INVALID_HANDLE,
+    }};
     std::array<RenderExtent, kMaxBloomPyramidMips> bloomMipExtents{};
     std::uint8_t bloomMipCount = 0;
     RenderExtent extent{};
@@ -111,6 +121,10 @@ struct RenderPostProcessTargetBinding {
             bgfx::isValid(selectionMaskFrameBuffer) && bgfx::isValid(selectionMaskTexture) &&
             bgfx::isValid(bloomFrameBuffer) && bgfx::isValid(bloomTexture) &&
             bgfx::isValid(pingFrameBuffer) && bgfx::isValid(pingTexture) &&
+            bgfx::isValid(bloomScratchTexture) &&
+            bloomTexture.idx != pingTexture.idx &&
+            bloomTexture.idx != bloomScratchTexture.idx &&
+            pingTexture.idx != bloomScratchTexture.idx &&
             bgfx::isValid(motionVectorFrameBuffer) && bgfx::isValid(motionVectorTexture) &&
             bgfx::isValid(temporalHistoryFrameBuffers[0]) && bgfx::isValid(temporalHistoryFrameBuffers[1]) &&
             bgfx::isValid(temporalHistoryTextures[0]) && bgfx::isValid(temporalHistoryTextures[1]) &&
@@ -123,6 +137,7 @@ struct RenderPostProcessTargetBinding {
         }
         for (std::uint8_t mip = 0; mip < bloomMipCount; ++mip) {
             if (!bgfx::isValid(bloomMipFrameBuffers[mip]) || !bgfx::isValid(pingMipFrameBuffers[mip]) ||
+                !bgfx::isValid(bloomScratchMipFrameBuffers[mip]) ||
                 !bloomMipExtents[mip].IsValid()) {
                 return false;
             }
@@ -178,11 +193,18 @@ struct RenderSceneSubmitDesc {
     std::span<const EditorLightWireframeDesc> editorLightWireframes{};
     std::span<const EditorParticleIconDesc> editorParticleIcons{};
     std::span<const PhysicsDebugLine> physicsDebugLines{};
+    std::span<const kb::scene::SceneUIFrameElement> editorUIOverlays{};
+    float editorUIScale = 1.0F;
+    kb::math::Vec2 editorUIOffset{};
     bgfx::TextureHandle editorOverlayDepthTexture = BGFX_INVALID_HANDLE;
     std::uint32_t clearRgba = 0x000000FFU;
     float clearDepth = SceneDepthPolicy::ClearDepth();
     std::uint8_t clearStencil = 0U;
     bool editorSceneOverlaysEnabled = true;
+    // Whether the scene's authored screen-space UI is composited into this viewport. Always on
+    // for a shipped game; the editor turns it off while editing the world, where a canvas would
+    // otherwise cover the map it is trying to lay out.
+    bool screenUIEnabled = true;
     bool shadowPassEnabled = true;
     bool postProcessEnabled = true;
     bool selectionMaskEnabled = true;

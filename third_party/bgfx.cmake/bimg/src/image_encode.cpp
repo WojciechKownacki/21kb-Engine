@@ -5,6 +5,7 @@
 
 #include <bimg/encode.h>
 #include "bimg_p.h"
+#include "etc2_alpha.h"
 
 #include <libsquish/squish.h>
 #include <etc1/etc1.h>
@@ -54,6 +55,93 @@ namespace bimg
 	};
 	static_assert(Quality::Count == BX_COUNTOF(s_astcQuality) );
 
+	static uint8_t clampEtc2Alpha(int32_t _value)
+	{
+		return uint8_t(bx::clamp(_value, 0, 255) );
+	}
+
+	static void encodeBlockEtc2Alpha(uint8_t _dst[8], const uint8_t _bgra[4*4*4])
+	{
+		uint8_t min = _bgra[3];
+		uint8_t max = min;
+		for (uint32_t ii = 1; ii < 16; ++ii)
+		{
+			const uint8_t alpha = _bgra[ii*4+3];
+			min = bx::min(min, alpha);
+			max = bx::max(max, alpha);
+		}
+
+		if (min == max)
+		{
+			_dst[0] = min;
+			bx::memSet(&_dst[1], 0, 7);
+			return;
+		}
+
+		const uint32_t range = uint32_t(max-min);
+		const uint8_t base = uint8_t(min + range/2);
+		uint32_t bestError = UINT32_MAX;
+		uint8_t bestTable = 0;
+		uint8_t bestMultiplier = 1;
+		uint8_t bestSelectors[16] = {};
+
+		for (uint8_t table = 0; table < 16; ++table)
+		{
+			const int32_t modifierRange = 1 + s_etc2aMod[table][7] - s_etc2aMod[table][3];
+			const uint32_t rangeScale = UINT32_C(0x100ff) / uint32_t(modifierRange);
+			const uint8_t multiplier = uint8_t(bx::min(15u, ((range*rangeScale) >> 16) + 1) );
+			uint8_t reconstructed[8];
+			for (uint8_t jj = 0; jj < 8; ++jj)
+			{
+				reconstructed[jj] = clampEtc2Alpha(int32_t(base) + s_etc2aMod[table][jj]*multiplier);
+			}
+			uint8_t selectors[16];
+			uint32_t error = 0;
+
+			for (uint32_t ii = 0; ii < 16; ++ii)
+			{
+				const uint8_t alpha = _bgra[ii*4+3];
+				uint8_t selector = 0;
+				int32_t delta = int32_t(alpha) - int32_t(reconstructed[0]);
+				uint32_t localError = uint32_t(delta*delta);
+
+				for (uint8_t jj = 1; jj < 8; ++jj)
+				{
+					delta = int32_t(alpha) - int32_t(reconstructed[jj]);
+					const uint32_t candidateError = uint32_t(delta*delta);
+					if (candidateError < localError)
+					{
+						localError = candidateError;
+						selector = jj;
+					}
+				}
+
+				selectors[ii] = selector;
+				error += localError;
+			}
+
+			if (error < bestError)
+			{
+				bestError = error;
+				bestTable = table;
+				bestMultiplier = multiplier;
+				bx::memCopy(bestSelectors, selectors, sizeof(bestSelectors) );
+			}
+		}
+
+		_dst[0] = base;
+		_dst[1] = uint8_t((bestMultiplier << 4) | bestTable);
+		uint64_t indices = 0;
+		for (uint32_t ii = 0; ii < 16; ++ii)
+		{
+			indices |= uint64_t(bestSelectors[ii]) << (45-ii*3);
+		}
+		for (uint32_t ii = 0; ii < 6; ++ii)
+		{
+			_dst[ii+2] = uint8_t(indices >> (40-ii*8) );
+		}
+	}
+
 	void imageEncodeFromRgba8(bx::AllocatorI* _allocator, void* _dst, const void* _src, uint32_t _width, uint32_t _height, uint32_t _depth, TextureFormat::Enum _format, Quality::Enum _quality, bx::Error* _err)
 	{
 		const uint8_t* src = (const uint8_t*)_src;
@@ -94,10 +182,11 @@ namespace bimg
 				break;
 
 			case TextureFormat::ETC2:
+			case TextureFormat::ETC2A:
 				{
 					const uint32_t blockWidth  = (_width +3)/4;
 					const uint32_t blockHeight = (_height+3)/4;
-					uint64_t* dstBlock = (uint64_t*)dst;
+					uint8_t* dstBlock = dst;
 					for (uint32_t yy = 0; yy < blockHeight; ++yy)
 					{
 						for (uint32_t xx = 0; xx < blockWidth; ++xx)
@@ -111,7 +200,14 @@ namespace bimg
 								bx::swap(block[ii*4+0], block[ii*4+2]);
 							}
 
-							*dstBlock++ = ProcessRGB_ETC2(block);
+							if (_format == TextureFormat::ETC2A)
+							{
+								encodeBlockEtc2Alpha(dstBlock, block);
+								dstBlock += 8;
+							}
+							const uint64_t color = ProcessRGB_ETC2(block);
+							bx::memCopy(dstBlock, &color, sizeof(color) );
+							dstBlock += sizeof(color);
 						}
 					}
 				}
@@ -327,6 +423,7 @@ namespace bimg
 			case TextureFormat::BC5:
 			case TextureFormat::ETC1:
 			case TextureFormat::ETC2:
+			case TextureFormat::ETC2A:
 			case TextureFormat::PTC14:
 			case TextureFormat::PTC14A:
 			case TextureFormat::ASTC4x4:

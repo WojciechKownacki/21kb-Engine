@@ -25,7 +25,7 @@ namespace {
 constexpr wchar_t kSceneViewportClassName[] = L"KBEditorSceneBgfxViewport";
 constexpr std::uint32_t kSceneClearRgba = 0x000000FFU;
 constexpr std::uint32_t kMaxEditorViewportIndex =
-    (render::ViewId::Max - render::ViewId::DetachedViewportStart) / render::ViewId::DetachedViewportStride;
+    (render::ViewId::ScreenCapture - render::ViewId::DetachedViewportStart) / render::ViewId::DetachedViewportStride;
 
 [[nodiscard]] std::uint32_t RectWidth(const RECT& rect) noexcept {
     return EditorSceneViewportGeometry::RectWidth(rect);
@@ -141,6 +141,10 @@ void EnsureParentChildClipping(HWND parent) noexcept {
         return "graph material program unavailable";
     case render::SceneRenderDiagnosticKind::DeferredRendererUnavailable:
         return "deferred renderer unavailable";
+    case render::SceneRenderDiagnosticKind::UIFrameRefused:
+        return "UI frame refused";
+    case render::SceneRenderDiagnosticKind::UITextUnavailable:
+        return "UI text unavailable";
     }
     return "unknown render diagnostic";
 }

@@ -8,6 +8,7 @@ void RunAssetPackTests();
 void RunSaveGameTests();
 void RunEcsRuntimeTests();
 void RunSceneHierarchyTests();
+void RunSceneUITests();
 void RunSceneSystemTests();
 void RunScenePrefabTests();
 void RunProjectSceneTests();
@@ -22,7 +23,6 @@ void RunAnimationRuntimeTests();
 void RunSkeletonAssetTests();
 void RunSkeletalMeshAssetTests();
 void RunTimelineRuntimeTests();
-void RunUIDocumentRuntimeTests();
 void RunLocalizationTests();
 
 } // namespace kb::tests

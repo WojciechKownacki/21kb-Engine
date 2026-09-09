@@ -10,6 +10,7 @@
 #include "engine/core/JsonValue.hpp"
 #include "engine/input/InputActionAsset.hpp"
 #include "engine/input/InputDeviceState.hpp"
+#include "engine/input/InputSubsystem.hpp"
 #include "engine/input/InputHaptics.hpp"
 #include "engine/input/InputKey.hpp"
 #include "engine/gameplay/GameInstance.hpp"
@@ -58,9 +59,11 @@
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneLightingAccess.hpp"
 #include "engine/scene/SceneRuntime.hpp"
-#include "engine/scene/SceneUIDocuments.hpp"
 #include "engine/scene/SceneVisibilityResolution.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
+#include "engine/scene/SceneUIComponentSet.hpp"
+#include "engine/scene/SceneUI.hpp"
+#include "engine/ui/UIComponentPropertyCatalog.hpp"
 #include "engine/script/ScriptAgentProjectFiles.hpp"
 #include "engine/script/ScriptApiCatalog.hpp"
 #include "engine/script/PucLuaScriptRuntime.hpp"
@@ -84,6 +87,9 @@
 #include "scene/material_preview/EditorMaterialGraphCookService.hpp"
 
 #include <Windows.h>
+#include <objidl.h>
+#include <gdiplus.h>
+#include "rendering/HeroIconGdiplusRuntime.hpp"
 
 #ifdef DrawText
 #undef DrawText
@@ -420,11 +426,15 @@ void WriteLittleEndian32(std::ostream& output, std::uint32_t value) {
     if (component == "DeformedGeometry") {
         return scene.Components().DeformedGeometries().Has(entity);
     }
-    if (component == "UIDocument") {
-        return scene.Components().UIDocuments().Has(entity);
-    }
     if (component == "TerrainEditor") {
         return EditorTerrainService::IsTerrainEntity(scene, entity);
+    }
+    if (const kb::scene::UIComponentDescriptor* descriptor =
+            kb::scene::FindUIComponentDescriptor(component);
+        descriptor != nullptr) {
+        return kb::scene::HasUIComponent(
+            kb::scene::CaptureSceneUIComponents(scene.Components().UI(), entity),
+            descriptor->type);
     }
     return kb::script::ScriptSceneComponentApi::HasComponent(
         scene, entity, component);
@@ -455,6 +465,76 @@ FindProperty(
         if (candidate.name == property) return &candidate;
     }
     return nullptr;
+}
+
+[[nodiscard]] std::optional<kb::scene::UIComponentPropertyValue>
+ReadUIPropertyValue(const JsonValue& value,
+    kb::scene::UIComponentPropertyType type, const ScenarioState& state,
+    std::string& error) {
+    switch (type) {
+    case kb::scene::UIComponentPropertyType::Bool:
+        if (value.GetKind() == JsonValue::Kind::Bool)
+            return kb::scene::UIComponentPropertyValue{ value.AsBool() };
+        break;
+    case kb::scene::UIComponentPropertyType::Int:
+        if (value.GetKind() == JsonValue::Kind::Number &&
+            std::isfinite(value.AsNumber()) && std::floor(value.AsNumber()) == value.AsNumber() &&
+            value.AsNumber() >= static_cast<double>(std::numeric_limits<std::int32_t>::min()) &&
+            value.AsNumber() <= static_cast<double>(std::numeric_limits<std::int32_t>::max())) {
+            return kb::scene::UIComponentPropertyValue{
+                static_cast<std::int32_t>(value.AsNumber()) };
+        }
+        break;
+    case kb::scene::UIComponentPropertyType::UInt32:
+        if (value.GetKind() == JsonValue::Kind::Number &&
+            std::isfinite(value.AsNumber()) && std::floor(value.AsNumber()) == value.AsNumber() &&
+            value.AsNumber() >= 0.0 &&
+            value.AsNumber() <= static_cast<double>(std::numeric_limits<std::uint32_t>::max())) {
+            return kb::scene::UIComponentPropertyValue{
+                static_cast<std::uint32_t>(value.AsNumber()) };
+        }
+        break;
+    case kb::scene::UIComponentPropertyType::Float:
+        if (value.GetKind() == JsonValue::Kind::Number &&
+            std::isfinite(value.AsNumber()) &&
+            value.AsNumber() >= -static_cast<double>(std::numeric_limits<float>::max()) &&
+            value.AsNumber() <= static_cast<double>(std::numeric_limits<float>::max())) {
+            return kb::scene::UIComponentPropertyValue{
+                static_cast<float>(value.AsNumber()) };
+        }
+        break;
+    case kb::scene::UIComponentPropertyType::String:
+        if (value.GetKind() == JsonValue::Kind::String)
+            return kb::scene::UIComponentPropertyValue{ value.AsString() };
+        break;
+    case kb::scene::UIComponentPropertyType::Entity:
+        if (value.GetKind() == JsonValue::Kind::String) {
+            const kb::scene::SceneEntity entity = ResolveEntity(state, value.AsString());
+            if (entity.IsValid()) return kb::scene::UIComponentPropertyValue{ entity.Id() };
+        }
+        break;
+    case kb::scene::UIComponentPropertyType::Asset:
+        if (value.GetKind() == JsonValue::Kind::String) {
+            const kb::assets::AssetId asset = ResolveAsset(state, value.AsString());
+            if (asset.IsValid()) return kb::scene::UIComponentPropertyValue{ asset.value };
+        }
+        if (value.GetKind() == JsonValue::Kind::Number && value.AsNumber() == 0.0)
+            return kb::scene::UIComponentPropertyValue{ std::uint64_t{ 0U } };
+        break;
+    }
+    error = "value does not match UI component property type";
+    return std::nullopt;
+}
+
+[[nodiscard]] bool UIPropertyValuesEqual(
+    const kb::scene::UIComponentPropertyValue& lhs,
+    const kb::scene::UIComponentPropertyValue& rhs, double tolerance) {
+    if (lhs.index() != rhs.index()) return false;
+    if (const float* left = std::get_if<float>(&lhs)) {
+        return std::abs(static_cast<double>(*left) -
+                   static_cast<double>(std::get<float>(rhs))) <= tolerance;
+    }
+    return lhs == rhs;
 }
 
 [[nodiscard]] std::optional<kb::script::ScriptValue>
@@ -622,6 +702,67 @@ ReadScriptValue(
     }
     const auto operation = StringMember(step, "op", error);
     if (!operation.has_value()) return { false, error };
+
+    if (*operation == "verify_ui_2d") {
+        return {state.automation.VerifyUI2DEditing(), "2D toolbar, UI selection, eight resize handles, move, undo and cancel"};
+    }
+    if (*operation == "assert_ui_creation_menu") {
+        return {state.automation.VerifyUICreationMenu(), "Hierarchy UI creation, dependencies, parenting and Undo"};
+    }
+    if (*operation == "assert_ui_graphics") {
+        return {state.automation.VerifyUIGraphics(), "Native image picker and GPU pixels for Image, Raw Image and Sprite"};
+    }
+    if (*operation == "assert_ui_catalog") {
+        const auto component = StringMember(step, "component", error, false);
+        const auto* descriptor = component ? kb::scene::FindUIComponentDescriptor(*component) : nullptr;
+        if (component && !descriptor) return {false, "Unknown UI component"};
+        return {state.automation.VerifyUIComponentCatalog(descriptor ? std::optional{descriptor->type} : std::nullopt),
+            component ? *component : "UI catalog: anchors, edited fields, GPU frame"};
+    }
+    if (*operation == "ui_anchor_preset" || *operation == "ui_rect_layout") {
+        const auto alias = StringMember(step, "entity", error);
+        if (!alias) return {false, error};
+        const auto entity = ResolveEntity(state, *alias);
+        if (!entity.IsValid()) return {false, "UI entity could not be resolved"};
+        state.context.SelectEntity(entity);
+        if (*operation == "ui_anchor_preset") {
+            const auto preset = NumberMember(step, "preset", error);
+            if (!preset || *preset < 0.0 || *preset > 15.0 || std::floor(*preset) != *preset) return {false, "preset must be 0..15"};
+            return {state.automation.SelectUIAnchorPreset(static_cast<int>(*preset)), "anchor preset through Inspector"};
+        }
+        const auto field = NumberMember(step, "field", error);
+        const auto value = NumberMember(step, "value", error);
+        if (!field || !value || *field < 0.0 || *field > 3.0 || std::floor(*field) != *field) return {false, "layout field must be 0..3 and value is required"};
+        return {state.automation.SetUIRectLayoutField(static_cast<int>(*field), static_cast<float>(*value)), "layout field through Inspector"};
+    }
+    if (*operation == "assert_ui_frame") {
+        const auto alias = StringMember(step, "entity", error);
+        if (!alias) return {false, error};
+        const auto entity = ResolveEntity(state, *alias);
+        const float width = static_cast<float>(NumberMember(step, "width", error, false).value_or(1280.0));
+        const float height = static_cast<float>(NumberMember(step, "height", error, false).value_or(720.0));
+        const bool expected = BoolMember(step, "visible", error, false).value_or(true);
+        if (!error.empty()) return {false, error};
+        if (!entity.IsValid()) return {false, "UI entity could not be resolved"};
+        kb::scene::SceneUIFrame frame;
+        if (!kb::scene::SceneUIQueries{state.context.Scene()}.BuildFrame(width, height, frame)) {
+            return {false, "UI frame construction failed"};
+        }
+        const auto found = std::ranges::find(frame.elements, entity, &kb::scene::SceneUIFrameElement::entity);
+        const bool visible = found != frame.elements.end() && found->rect.width > 0.0F &&
+            found->rect.height > 0.0F && found->effectiveOpacity > 0.0F;
+        if (found != frame.elements.end()) {
+            const std::array<std::pair<std::string_view, float>, 4> dimensions{{
+                {"rect_x", found->rect.x}, {"rect_y", found->rect.y},
+                {"rect_width", found->rect.width}, {"rect_height", found->rect.height}}};
+            for (const auto& [key, actual] : dimensions) {
+                const auto expectedValue = NumberMember(step, key, error, false);
+                if (expectedValue && std::abs(static_cast<double>(actual) - *expectedValue) > 0.01)
+                    return {false, std::string{key} + " expected=" + std::to_string(*expectedValue) + " actual=" + std::to_string(actual)};
+            }
+        }
+        return {visible == expected, *alias + (visible ? " present in UI frame" : " absent or empty in UI frame")};
+    }
 
     if (*operation == "init_agent_project") {
         kb::script::ScriptRuntimeHost host{ state.context.Scene() };
@@ -2139,6 +2280,7 @@ ReadScriptValue(
     }
 
     if (*operation == "set_property" ||
+        *operation == "set_property_rejected" ||
         *operation == "assert_property") {
         const auto alias = StringMember(step, "entity", error);
         const auto component =
@@ -2155,6 +2297,39 @@ ReadScriptValue(
         if (!state.context.Scene().Entities().IsAlive(entity)) {
             return { false, "entity alias is not alive" };
         }
+        if (const kb::scene::UIComponentDescriptor* componentDescriptor =
+                kb::scene::FindUIComponentDescriptor(*component);
+            componentDescriptor != nullptr) {
+            const kb::scene::UIComponentPropertyDescriptor* propertyDescriptor =
+                kb::scene::FindUIComponentProperty(componentDescriptor->type, *property);
+            if (propertyDescriptor == nullptr) {
+                return { false, "UI component property is not registered" };
+            }
+            const auto expected = ReadUIPropertyValue(
+                *jsonValue, propertyDescriptor->type, state, error);
+            if (!expected.has_value()) return { false, error };
+            if (*operation == "set_property" || *operation == "set_property_rejected") {
+                state.context.SelectEntity(entity);
+                const bool applied = state.automation.SetUIComponentProperty(
+                    componentDescriptor->type, *property, *expected);
+                const bool expectedRejection = *operation == "set_property_rejected";
+                return {
+                    expectedRejection ? !applied : applied,
+                    expectedRejection ? *component + "." + *property + " rejected"
+                                      : *component + "." + *property };
+            }
+            const kb::scene::UIComponentSet values =
+                kb::scene::CaptureSceneUIComponents(
+                    state.context.Scene().Components().UI(), entity);
+            kb::scene::UIComponentPropertyValue actual;
+            const double tolerance = NumberMember(
+                step, "tolerance", error, false).value_or(0.0001);
+            const bool matched = kb::scene::ReadUIComponentProperty(
+                                     values, componentDescriptor->type,
+                                     *property, actual) &&
+                UIPropertyValuesEqual(actual, *expected, tolerance);
+            return { matched, matched ? "UI property matches" : "UI property mismatch" };
+        }
         const auto* descriptor =
             FindProperty(*component, *property);
         if (descriptor == nullptr) {
@@ -2163,7 +2338,7 @@ ReadScriptValue(
         const auto value = ReadScriptValue(
             *jsonValue, descriptor->type, state, error);
         if (!value.has_value()) return { false, error };
-        if (*operation == "set_property") {
+        if (*operation == "set_property" || *operation == "set_property_rejected") {
             const auto mutation =
                 kb::script::ScriptSceneComponentApi::SetProperty(
                     state.context.Scene(), entity, *component,
@@ -2172,10 +2347,10 @@ ReadScriptValue(
                 state.context.MarkSceneDocumentDirty();
                 state.context.MarkSceneRenderDirty();
             }
+            const bool expectedRejection = *operation == "set_property_rejected";
             return {
-                mutation.succeeded,
-                mutation.succeeded ? ScriptValueText(*value)
-                                   : mutation.error };
+                expectedRejection ? !mutation.succeeded : mutation.succeeded,
+                mutation.succeeded ? ScriptValueText(*value) : mutation.error };
         }
         const auto actual =
             kb::script::ScriptSceneComponentApi::GetProperty(
@@ -2289,56 +2464,6 @@ ReadScriptValue(
         return {
             matched,
             matched ? "canonical Deformed Geometry" : "Deformed Geometry does not match authored configuration" };
-    }
-
-    if (*operation == "assert_ui_element") {
-        const auto alias = StringMember(step, "entity", error);
-        const auto elementValue = NumberMember(step, "element", error);
-        if (!alias || !elementValue) return { false, error };
-        if (*elementValue < 1.0 || *elementValue > static_cast<double>(std::numeric_limits<kb::scene::UIElementId>::max()) ||
-            std::floor(*elementValue) != *elementValue) {
-            return { false, "'element' must be a positive integral UI element id" };
-        }
-        const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
-        const kb::scene::UIElementId element = static_cast<kb::scene::UIElementId>(*elementValue);
-        const bool present = state.context.Scene().UIDocuments().HasElement(entity, element);
-        const bool expectedPresent = BoolMember(step, "exists", error, false).value_or(true);
-        if (present != expectedPresent) {
-            return { false, std::string{ present ? "present" : "absent" } };
-        }
-        const auto expectedVisible = BoolMember(step, "visible", error, false);
-        const auto expectedKind = StringMember(step, "kind", error, false);
-        const auto expectedText = StringMember(step, "text", error, false);
-        if (!present && (expectedVisible.has_value() || expectedKind.has_value() || expectedText.has_value())) {
-            return { false, "cannot assert a property of an absent UI element" };
-        }
-        if (expectedKind.has_value()) {
-            const auto control = state.context.Scene().UIDocuments().Control(entity, element);
-            const auto matchesKind = [kind = *expectedKind, &control]() {
-                if (!control.has_value()) return false;
-                if (kind == "Container") return control->kind == kb::scene::UIControlKind::Container;
-                if (kind == "Text") return control->kind == kb::scene::UIControlKind::Text;
-                if (kind == "Image") return control->kind == kb::scene::UIControlKind::Image;
-                if (kind == "Button") return control->kind == kb::scene::UIControlKind::Button;
-                if (kind == "Toggle") return control->kind == kb::scene::UIControlKind::Toggle;
-                if (kind == "Slider") return control->kind == kb::scene::UIControlKind::Slider;
-                if (kind == "List") return control->kind == kb::scene::UIControlKind::List;
-                if (kind == "InputField") return control->kind == kb::scene::UIControlKind::InputField;
-                if (kind == "ScrollView") return control->kind == kb::scene::UIControlKind::ScrollView;
-                if (kind == "ModalDialog") return control->kind == kb::scene::UIControlKind::ModalDialog;
-                return false;
-            }();
-            if (!matchesKind) return { false, "control kind mismatch" };
-        }
-        if (expectedText.has_value()) {
-            const auto control = state.context.Scene().UIDocuments().Control(entity, element);
-            if (!control.has_value() || control->text != *expectedText) {
-                return { false, "control text mismatch" };
-            }
-        }
-        if (!expectedVisible.has_value()) return { true, present ? "present" : "absent" };
-        const bool visible = state.context.Scene().UIDocuments().Visible(entity, element);
-        return { visible == *expectedVisible, visible ? "visible" : "hidden" };
     }
 
     if (*operation == "assert_parent") {
@@ -2695,8 +2820,6 @@ ReadScriptValue(
             }
             assigned = state.context.SetDeformedGeometryMaterialSlotAsset(
                 entity, static_cast<std::uint32_t>(*slot), id);
-        } else if (*role == "ui_document") {
-            assigned = state.context.SetUIDocumentAsset(entity, id);
         } else if (*role == "script") {
             assigned =
                 state.context.AttachScriptToEntity(entity, id);
@@ -3590,6 +3713,12 @@ ReadScriptValue(
         const auto x = NumberMember(step, "x", error);
         const auto y = NumberMember(step, "y", error);
         if (!x || !y) return { false, error };
+        if (step.Find("width") != nullptr || step.Find("height") != nullptr) {
+            const auto width = UInt32Member(step, "width", error);
+            const auto height = UInt32Member(step, "height", error);
+            if (!width || !height || *width == 0U || *height == 0U) return {false, "invalid pointer viewport"};
+            state.context.Scene().Input().MutableDeviceState().SetPointerViewportExtent(*width, *height);
+        }
         return {
             state.automation.SetGameplayPointer(
                 static_cast<float>(*x), static_cast<float>(*y)),
@@ -3858,8 +3987,12 @@ ReadScriptValue(
         const auto checkpoint =
             StringMember(step, "checkpoint", error);
         if (!panel || !checkpoint) return { false, error };
+        const double width = NumberMember(step, "width", error, false).value_or(900.0);
+        const double height = NumberMember(step, "height", error, false).value_or(700.0);
+        if (!error.empty() || width < 240.0 || width > 3840.0 || height < 200.0 || height > 2160.0)
+            return {false, "capture dimensions outside supported bounds"};
         return {
-            state.automation.CapturePanel(*panel, *checkpoint),
+            state.automation.CapturePanel(*panel, *checkpoint, static_cast<int>(width), static_cast<int>(height)),
             *panel + ':' + *checkpoint };
     }
 
@@ -3872,6 +4005,30 @@ ReadScriptValue(
             state.automation.CapturePanelScreenshotMatrix(
                 *panel, *checkpoint),
             *panel + ':' + *checkpoint };
+    }
+
+    if (*operation == "assert_capture_difference") {
+        const auto before = StringMember(step, "before", error);
+        const auto after = StringMember(step, "after", error);
+        if (!before || !after) return {false, error};
+        const auto root = state.automation.ArtifactRoot() / "screenshots";
+        HeroIconGdiplusRuntime::EnsureStarted();
+        Gdiplus::Bitmap first((root / (*before + ".png")).wstring().c_str());
+        Gdiplus::Bitmap second((root / (*after + ".png")).wstring().c_str());
+        if (first.GetLastStatus() != Gdiplus::Ok || second.GetLastStatus() != Gdiplus::Ok ||
+            first.GetWidth() != second.GetWidth() || first.GetHeight() != second.GetHeight()) {
+            return {false, "capture images must be readable and have equal dimensions"};
+        }
+        std::size_t changed = 0U;
+        for (UINT y = 0U; y < first.GetHeight(); ++y) {
+            for (UINT x = 0U; x < first.GetWidth(); ++x) {
+                Gdiplus::Color lhs{}, rhs{};
+                if (first.GetPixel(x, y, &lhs) != Gdiplus::Ok || second.GetPixel(x, y, &rhs) != Gdiplus::Ok)
+                    return {false, "capture pixel read failed"};
+                if (lhs.GetValue() != rhs.GetValue()) ++changed;
+            }
+        }
+        return {changed >= 100U, "changed pixels: " + std::to_string(changed) + " (minimum 100)"};
     }
 
     if (*operation == "capture_runtime") {

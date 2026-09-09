@@ -85,15 +85,12 @@ BuildGamePanelLayoutRects BuildGamePanelLayout::Resolve(const RECT& content) noe
 }
 
 RECT BuildGamePanelLayout::TargetRow(const RECT& list, int index) noexcept {
-    // Player rows come first under one caption, then the server rows under a second.
-    const int captionsAbove = index < 3 ? 1 : 2;
-    const int top = static_cast<int>(list.top) + (captionsAbove * kGroupCaptionHeight) + (index * kTargetRowHeight);
+    const int top = static_cast<int>(list.top) + kGroupCaptionHeight + (index * kTargetRowHeight);
     return RECT{ list.left, top, list.right, top + kTargetRowHeight };
 }
 
 RECT BuildGamePanelLayout::TargetGroupCaption(const RECT& list, int index) noexcept {
-    const int rowsAbove = index == 0 ? 0 : 3;
-    const int top = static_cast<int>(list.top) + (index * kGroupCaptionHeight) + (rowsAbove * kTargetRowHeight);
+    const int top = static_cast<int>(list.top) + (index * kGroupCaptionHeight);
     return RECT{ list.left, top, list.right, top + kGroupCaptionHeight };
 }
 

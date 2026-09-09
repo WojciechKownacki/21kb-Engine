@@ -5,7 +5,6 @@
 #include "engine/library/EngineLibraryModuleValidation.hpp"
 #include "engine/script/ScriptAssetsApi.hpp"
 #include "engine/script/ScriptAnimatorApi.hpp"
-#include "engine/script/ScriptUIApi.hpp"
 #include "engine/script/ScriptTimelineApi.hpp"
 #include "engine/script/ScriptCollectionsApi.hpp"
 #include "engine/script/ScriptEventsApi.hpp"
@@ -27,6 +26,7 @@
 #include "engine/script/ScriptTimeApi.hpp"
 #include "engine/script/ScriptTimerApi.hpp"
 #include "engine/script/ScriptTransformApi.hpp"
+#include "engine/script/ScriptUIApi.hpp"
 #include "engine/script/ScriptWorldApi.hpp"
 
 namespace kb::library {
@@ -153,6 +153,11 @@ const std::vector<LibraryModuleDesc>& EngineLibraryModule::Catalog() {
             .ownerRuntime = "kb::scene::SceneLoadedContentService",
             .Register = &kb::script::ScriptSceneApi::Register,
         },
+        LibraryModuleDesc{
+            .name = "UI",
+            .ownerRuntime = "kb::scene::SceneUIAccess",
+            .Register = &kb::script::ScriptUIApi::Register,
+        },
         // LIB-137: MeshRenderer.SetMesh/SetMaterial - meshAssetId/materialAssetId are raw
         // uint64 asset ids, deliberately excluded from the generic ScriptSceneComponentApi
         // reflection table (LIB-082's raw-pointer audit keeps that path to {Bool,Int,Float}
@@ -206,11 +211,6 @@ const std::vector<LibraryModuleDesc>& EngineLibraryModule::Catalog() {
             .name = "Timeline",
             .ownerRuntime = "kb::scene::SceneTimelines",
             .Register = &kb::script::ScriptTimelineApi::Register,
-        },
-        LibraryModuleDesc{
-            .name = "UI",
-            .ownerRuntime = "kb::scene::SceneUIDocuments",
-            .Register = &kb::script::ScriptUIApi::Register,
         },
         LibraryModuleDesc{
             .name = "Localization",

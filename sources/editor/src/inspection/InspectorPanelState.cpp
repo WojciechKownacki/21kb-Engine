@@ -1,6 +1,12 @@
 #include "inspection/InspectorPanelState.hpp"
 
+// GetCaretBlinkTime: the caret follows the system blink rate rather than inventing one.
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <Windows.h>
+
 #include <algorithm>
+#include <cmath>
 #include <utility>
 
 namespace kb::editor {
@@ -290,6 +296,20 @@ void InspectorPanelState::BeginTextEdit(
     EndFloatDrag();
 }
 
+namespace {
+
+// The system caret blink interval, doubled for a full on/off cycle. Zero means the user turned
+// blinking off, which the caller honours with a steady caret rather than a stuck one.
+[[nodiscard]] float CaretBlinkPeriodSeconds() noexcept {
+    const UINT blinkMilliseconds = GetCaretBlinkTime();
+    if (blinkMilliseconds == 0U || blinkMilliseconds == INFINITE) {
+        return 0.0F;
+    }
+    return static_cast<float>(blinkMilliseconds) * 2.0F / 1000.0F;
+}
+
+} // namespace
+
 void InspectorPanelState::AppendText(wchar_t character) {
     if (character < 32 || character == 127 || (character >= 0xD800 && character <= 0xDFFF)) {
         return;
@@ -329,9 +349,37 @@ void InspectorPanelState::BackspaceText() {
         ClearText();
         return;
     }
-    if (!editBuffer_.empty()) {
+    // Erase a whole UTF-8 code point. Dropping a single byte used to leave a truncated
+    // sequence that MultiByteToWideChar rejects with MB_ERR_INVALID_CHARS, and the field then
+    // painted completely blank - the text was still there, it just could not be shown.
+    while (!editBuffer_.empty()) {
+        const auto byte = static_cast<unsigned char>(editBuffer_.back());
         editBuffer_.pop_back();
+        if ((byte & 0xC0U) != 0x80U) {
+            break;
+        }
     }
+    editCaretPhase_ = 0.0F;
+}
+
+bool InspectorPanelState::TickTextCaret(float deltaSeconds) noexcept {
+    const float period = CaretBlinkPeriodSeconds();
+    if (!IsTextEditing() || period <= 0.0F) {
+        editCaretPhase_ = 0.0F;
+        return false;
+    }
+    editCaretPhase_ = std::fmod(editCaretPhase_ + std::max(0.0F, deltaSeconds), period);
+    return true;
+}
+
+bool InspectorPanelState::IsTextCaretVisible() const noexcept {
+    // A select-all field shows its selection instead; a caret on top of that reads as two
+    // competing insertion points.
+    if (!IsTextEditing() || editSelectingAll_) {
+        return false;
+    }
+    const float period = CaretBlinkPeriodSeconds();
+    return period <= 0.0F || editCaretPhase_ < period * 0.5F;
 }
 
 void InspectorPanelState::ClearText() noexcept {

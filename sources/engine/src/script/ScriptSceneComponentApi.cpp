@@ -1,5 +1,7 @@
 #include "engine/script/ScriptSceneComponentApi.hpp"
 
+#include "script/ScriptUIComponentApi.hpp"
+
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/CharacterControllerComponent.hpp"
@@ -70,6 +72,7 @@
 #include <cmath>
 #include <string>
 #include <type_traits>
+#include <vector>
 
 namespace kb::script {
 namespace {
@@ -1255,10 +1258,19 @@ void MarkLensEchoModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity
 } // namespace
 
 std::span<const std::string_view> ScriptSceneComponentApi::ComponentNames() noexcept {
-    return kComponentNames;
+    static const std::vector<std::string_view> names = [] {
+        std::vector<std::string_view> output{kComponentNames.begin(), kComponentNames.end()};
+        const std::span<const std::string_view> uiNames = ScriptUIComponentApi::ComponentNames();
+        output.insert(output.end(), uiNames.begin(), uiNames.end());
+        return output;
+    }();
+    return names;
 }
 
 std::span<const ScriptSceneComponentPropertyDesc> ScriptSceneComponentApi::ComponentProperties(std::string_view componentName) noexcept {
+    if (ScriptUIComponentApi::IsComponent(componentName)) {
+        return ScriptUIComponentApi::ComponentProperties(componentName);
+    }
     if (componentName == "Transform") {
         return kTransformPropertyDescs;
     }
@@ -1316,6 +1328,9 @@ std::span<const ScriptSceneComponentPropertyDesc> ScriptSceneComponentApi::Compo
 }
 
 bool ScriptSceneComponentApi::HasComponent(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::string_view componentName) noexcept {
+    if (ScriptUIComponentApi::IsComponent(componentName)) {
+        return ScriptUIComponentApi::HasComponent(scene, entity, componentName);
+    }
     return AccessComponent(scene, entity, componentName).immutable != nullptr;
 }
 
@@ -1324,6 +1339,9 @@ ScriptSceneComponentPropertyResult ScriptSceneComponentApi::GetProperty(
     kb::scene::SceneEntity entity,
     std::string_view componentName,
     std::string_view propertyName) {
+    if (ScriptUIComponentApi::IsComponent(componentName)) {
+        return ScriptUIComponentApi::GetProperty(scene, entity, componentName, propertyName);
+    }
     const ComponentAccess component = AccessComponent(scene, entity, componentName);
     if (component.immutable == nullptr) {
         return ScriptSceneComponentPropertyResult{ .error = "component is not present on entity" };
@@ -1347,6 +1365,9 @@ ScriptSceneComponentMutationResult ScriptSceneComponentApi::SetProperty(
     std::string_view componentName,
     std::string_view propertyName,
     const ScriptValue& value) {
+    if (ScriptUIComponentApi::IsComponent(componentName)) {
+        return ScriptUIComponentApi::SetProperty(scene, entity, componentName, propertyName, value);
+    }
     const ComponentAccess component = AccessComponent(scene, entity, componentName);
     if (component.mutableComponent == nullptr) {
         return ScriptSceneComponentMutationResult{ .error = "component is not present on entity" };

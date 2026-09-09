@@ -1,343 +1,301 @@
 #include "engine/script/ScriptUIApi.hpp"
 
 #include "engine/scene/Scene.hpp"
-#include "engine/scene/SceneUIDocuments.hpp"
+#include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneObjectDesc.hpp"
+#include "engine/scene/SceneUI.hpp"
+#include "engine/scene/SceneUIComponentSet.hpp"
 #include "engine/script/ScriptFunctionRegistry.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
+#include "engine/script/ScriptSceneComponentApi.hpp"
+#include "engine/ui/UIComponentCatalog.hpp"
+#include "engine/ui/UIComponentPropertyCatalog.hpp"
 
+#include <cstdint>
 #include <span>
-#include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 namespace kb::script {
 namespace {
 
-const ScriptValue* Arg(std::span<const ScriptFunctionArgument> arguments, std::string_view name) {
-    for (const ScriptFunctionArgument& argument : arguments) if (argument.name == name) return &argument.value;
+[[nodiscard]] const ScriptValue* FindArg(std::span<const ScriptFunctionArgument> arguments,
+                                         std::string_view name) noexcept {
+    for (const ScriptFunctionArgument& argument : arguments) {
+        if (argument.name == name) {
+            return &argument.value;
+        }
+    }
     return nullptr;
 }
 
-ScriptFunctionCallResult Error(std::string message) {
-    return ScriptFunctionCallResult{ .executed = false, .outputs = {}, .errors = { std::move(message) } };
+[[nodiscard]] std::string StringArg(std::span<const ScriptFunctionArgument> arguments,
+                                    std::string_view name, std::string fallback = {}) {
+    const ScriptValue* value = FindArg(arguments, name);
+    return value == nullptr ? std::move(fallback) : value->AsString();
 }
 
-kb::scene::SceneEntity Target(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
-    const ScriptValue* explicitEntity = Arg(arguments, "entity");
-    return explicitEntity == nullptr ? context.caller : kb::scene::SceneEntity{ explicitEntity->AsUInt64() };
+[[nodiscard]] kb::scene::SceneEntity EntityArg(
+    std::span<const ScriptFunctionArgument> arguments, std::string_view name) noexcept {
+    const ScriptValue* value = FindArg(arguments, name);
+    return value == nullptr ? kb::scene::SceneEntity{}
+                            : kb::scene::SceneEntity{value->AsUInt64()};
 }
 
-ScriptFunctionCallResult Applied(bool applied, std::string failure) {
-    return applied ? ScriptFunctionCallResult{ .executed = true, .outputs = { { "applied", ScriptValue{ true } } } }
-                   : Error(std::move(failure));
+[[nodiscard]] float FloatArg(std::span<const ScriptFunctionArgument> arguments,
+                             std::string_view name) noexcept {
+    const ScriptValue* value = FindArg(arguments, name);
+    return value == nullptr ? 0.0F : value->AsFloat();
 }
 
-std::optional<kb::scene::UIControlKind> ControlKind(std::string_view value) {
-    if (value == "Container") return kb::scene::UIControlKind::Container;
-    if (value == "Text") return kb::scene::UIControlKind::Text;
-    if (value == "Image") return kb::scene::UIControlKind::Image;
-    if (value == "Button") return kb::scene::UIControlKind::Button;
-    if (value == "Toggle") return kb::scene::UIControlKind::Toggle;
-    if (value == "Slider") return kb::scene::UIControlKind::Slider;
-    if (value == "List") return kb::scene::UIControlKind::List;
-    if (value == "InputField") return kb::scene::UIControlKind::InputField;
-    if (value == "ScrollView") return kb::scene::UIControlKind::ScrollView;
-    if (value == "ModalDialog") return kb::scene::UIControlKind::ModalDialog;
-    return std::nullopt;
-}
-
-std::optional<kb::scene::UINavigationDirection> NavigationDirection(std::string_view value) {
-    if (value == "Next") return kb::scene::UINavigationDirection::Next;
-    if (value == "Previous") return kb::scene::UINavigationDirection::Previous;
-    if (value == "Up") return kb::scene::UINavigationDirection::Up;
-    if (value == "Down") return kb::scene::UINavigationDirection::Down;
-    if (value == "Left") return kb::scene::UINavigationDirection::Left;
-    if (value == "Right") return kb::scene::UINavigationDirection::Right;
-    return std::nullopt;
-}
-
-std::optional<kb::scene::UIControlState> ExistingControl(const ScriptFunctionCallContext& context,
-    std::span<const ScriptFunctionArgument> arguments, std::string& error) {
-    if (context.scene == nullptr) {
-        error = "UI control API requires an active scene";
-        return std::nullopt;
-    }
-    const auto control = context.scene->UIDocuments().Control(Target(context, arguments), Arg(arguments, "element")->AsUInt64());
-    if (!control.has_value()) error = "UI control API requires a live UI element";
-    return control;
-}
-
-bool IsOneOf(kb::scene::UIControlKind kind, std::initializer_list<kb::scene::UIControlKind> allowed) {
-    for (const auto candidate : allowed) if (kind == candidate) return true;
-    return false;
-}
-
-ScriptFunctionCallResult QueueControl(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments,
-    kb::scene::UIControlState control, std::initializer_list<kb::scene::UIControlKind> allowed, std::string failure) {
-    if (!IsOneOf(control.kind, allowed)) return Error(std::move(failure));
-    return Applied(context.scene->UIDocuments().QueueSetControl(Target(context, arguments), Arg(arguments, "element")->AsUInt64(), control),
-        "UI control update was rejected by the runtime queue");
-}
-
-ScriptFunctionCallResult Create(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
-    if (context.scene == nullptr) return Error("UI.Create requires an active scene");
-    const ScriptValue* styleClass = Arg(arguments, "styleClass");
-    const ScriptValue* visible = Arg(arguments, "visible");
-    kb::scene::UIControlState control{};
-    if (const ScriptValue* kind = Arg(arguments, "kind"); kind != nullptr) {
-        const auto parsed = ControlKind(kind->AsString());
-        if (!parsed.has_value()) return Error("UI.Create kind must name a supported UI control");
-        control.kind = *parsed;
-    }
-    if (const ScriptValue* text = Arg(arguments, "text"); text != nullptr) control.text = text->AsString();
-    if (const ScriptValue* image = Arg(arguments, "image"); image != nullptr) control.imageAssetId = image->AsUInt64();
-    if (const ScriptValue* toggle = Arg(arguments, "toggle"); toggle != nullptr) control.toggleValue = toggle->AsBool();
-    if (const ScriptValue* value = Arg(arguments, "value"); value != nullptr) control.sliderValue = value->AsFloat();
-    if (const ScriptValue* minimum = Arg(arguments, "minimum"); minimum != nullptr) control.sliderMinimum = minimum->AsFloat();
-    if (const ScriptValue* maximum = Arg(arguments, "maximum"); maximum != nullptr) control.sliderMaximum = maximum->AsFloat();
-    if (const ScriptValue* scroll = Arg(arguments, "scroll"); scroll != nullptr) control.scrollOffset = scroll->AsFloat();
-    if (const ScriptValue* modal = Arg(arguments, "modal"); modal != nullptr) control.modalOpen = modal->AsBool();
-    const auto element = context.scene->UIDocuments().QueueCreate(Target(context, arguments), kb::scene::UIRuntimeElementDesc{
-        .parentId = Arg(arguments, "parent")->AsUInt64(),
-        .name = Arg(arguments, "name")->AsString(),
-        .styleClass = styleClass == nullptr ? std::string{} : styleClass->AsString(),
-        .visible = visible == nullptr || visible->AsBool(),
-        .control = std::move(control),
-    });
-    if (!element.has_value()) return Error("UI.Create requires a live UI document, a live parent, a non-empty name, and queue capacity");
-    return ScriptFunctionCallResult{ .executed = true, .outputs = { { "element", ScriptValue{ *element, ScriptValueType::Hash } } } };
-}
-
-ScriptFunctionCallResult Destroy(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
-    if (context.scene == nullptr) return Error("UI.Destroy requires an active scene");
-    return Applied(context.scene->UIDocuments().QueueDestroy(Target(context, arguments), Arg(arguments, "element")->AsUInt64()),
-        "UI.Destroy requires a live non-root runtime element that is not already queued for destruction");
-}
-
-ScriptFunctionCallResult SetVisible(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments, bool visible) {
-    if (context.scene == nullptr) return Error("UI visibility API requires an active scene");
-    const bool queued = visible
-        ? context.scene->UIDocuments().QueueShow(Target(context, arguments), Arg(arguments, "element")->AsUInt64())
-        : context.scene->UIDocuments().QueueHide(Target(context, arguments), Arg(arguments, "element")->AsUInt64());
-    return Applied(queued, "UI visibility command requires a live element that is not queued for destruction");
-}
-
-ScriptFunctionCallResult Show(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) { return SetVisible(context, arguments, true); }
-ScriptFunctionCallResult Hide(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) { return SetVisible(context, arguments, false); }
-
-ScriptFunctionCallResult Focus(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
-    if (context.scene == nullptr) return Error("UI.Focus requires an active scene");
-    return Applied(context.scene->UIDocuments().QueueFocus(Target(context, arguments), Arg(arguments, "element")->AsUInt64()),
-        "UI.Focus requires a visible, focusable UI element and event queue capacity");
-}
-
-// LIB-177: a deliberately setup-only O(n) name scan. The result is a typed
-// UIElementId handle (ScriptValueType::Hash) that callers retain and pass to
-// the mutation/event APIs; no per-frame lookup cache is hidden in the API.
-ScriptFunctionCallResult Find(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
-    if (context.scene == nullptr) return Error("UI.Find requires an active scene");
-    const auto element = context.scene->UIDocuments().Find(Target(context, arguments), Arg(arguments, "name")->AsString());
+[[nodiscard]] ScriptFunctionCallResult Error(std::string message) {
     return ScriptFunctionCallResult{
-        .executed = true,
-        .outputs = {
-            { "element", ScriptValue{ element.value_or(0U), ScriptValueType::Hash } },
-            { "found", ScriptValue{ element.has_value() } },
-        },
+        .executed = false,
+        .outputs = {},
+        .errors = {std::move(message)},
     };
 }
 
-ScriptFunctionCallResult SetText(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
-    std::string error;
-    auto control = ExistingControl(context, arguments, error);
-    if (!control) return Error(std::move(error));
-    control->text = Arg(arguments, "text")->AsString();
-    return QueueControl(context, arguments, std::move(*control), { kb::scene::UIControlKind::Text, kb::scene::UIControlKind::Button, kb::scene::UIControlKind::InputField },
-        "UI.SetText requires a Text, Button, or InputField element");
+[[nodiscard]] ScriptFunctionCallResult NoScene() {
+    return Error("ui api requires an active scene");
 }
 
-ScriptFunctionCallResult SetImage(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
-    std::string error;
-    auto control = ExistingControl(context, arguments, error);
-    if (!control) return Error(std::move(error));
-    control->imageAssetId = Arg(arguments, "image")->AsUInt64();
-    return QueueControl(context, arguments, std::move(*control), { kb::scene::UIControlKind::Image }, "UI.SetImage requires an Image element");
+[[nodiscard]] ScriptFunctionCallResult BoolResult(std::string_view pin, bool value) {
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = {ScriptFunctionArgument{std::string{pin}, ScriptValue{value}}},
+        .errors = {},
+    };
 }
 
-ScriptFunctionCallResult SetToggle(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
-    std::string error;
-    auto control = ExistingControl(context, arguments, error);
-    if (!control) return Error(std::move(error));
-    control->toggleValue = Arg(arguments, "value")->AsBool();
-    return QueueControl(context, arguments, std::move(*control), { kb::scene::UIControlKind::Toggle }, "UI.SetToggle requires a Toggle element");
+[[nodiscard]] ScriptFunctionCallResult EntityResult(std::string_view pin,
+                                                     kb::scene::SceneEntity entity) {
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = {ScriptFunctionArgument{
+            std::string{pin}, ScriptValue{entity.Id(), ScriptValueType::Entity}}},
+        .errors = {},
+    };
 }
 
-ScriptFunctionCallResult SetSlider(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
-    std::string error;
-    auto control = ExistingControl(context, arguments, error);
-    if (!control) return Error(std::move(error));
-    control->sliderValue = Arg(arguments, "value")->AsFloat();
-    if (const ScriptValue* minimum = Arg(arguments, "minimum"); minimum != nullptr) control->sliderMinimum = minimum->AsFloat();
-    if (const ScriptValue* maximum = Arg(arguments, "maximum"); maximum != nullptr) control->sliderMaximum = maximum->AsFloat();
-    return QueueControl(context, arguments, std::move(*control), { kb::scene::UIControlKind::Slider }, "UI.SetSlider requires a Slider element with a valid range");
+[[nodiscard]] bool Alive(const ScriptFunctionCallContext& context,
+                         kb::scene::SceneEntity entity) noexcept {
+    return context.scene != nullptr && entity.IsValid() && context.scene->Entities().IsAlive(entity);
 }
 
-ScriptFunctionCallResult ListAppend(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
-    std::string error;
-    auto control = ExistingControl(context, arguments, error);
-    if (!control) return Error(std::move(error));
-    control->listItems.push_back(Arg(arguments, "item")->AsString());
-    return QueueControl(context, arguments, std::move(*control), { kb::scene::UIControlKind::List }, "UI.ListAppend requires a List element and at most 4096 non-empty items");
+ScriptFunctionCallResult Create(const ScriptFunctionCallContext& context,
+                                std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return NoScene();
+    }
+    const std::string presetName = StringArg(arguments, "preset");
+    const kb::scene::UIComponentPresetDescriptor* preset =
+        kb::scene::FindUIComponentPreset(presetName);
+    if (preset == nullptr) {
+        return Error("ui preset is not registered: " + presetName);
+    }
+
+    kb::scene::SceneObjectDesc desc;
+    desc.name = StringArg(arguments, "name", std::string{preset->name});
+    const kb::scene::SceneEntity parent = EntityArg(arguments, "parent");
+    if (parent.IsValid()) {
+        if (!context.scene->Entities().IsAlive(parent)) {
+            return Error("ui parent entity is not live");
+        }
+        desc.parent = context.scene->Entities().Object(parent);
+    }
+
+    const kb::scene::SceneEntity entity = context.scene->Entities().CreateEntity(std::move(desc));
+    kb::scene::ApplySceneUIComponents(
+        context.scene->Components().UI(), entity, kb::scene::BuildUIComponentPreset(preset->preset));
+    return EntityResult("entity", entity);
 }
 
-ScriptFunctionCallResult ListClear(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
-    std::string error;
-    auto control = ExistingControl(context, arguments, error);
-    if (!control) return Error(std::move(error));
-    control->listItems.clear();
-    return QueueControl(context, arguments, std::move(*control), { kb::scene::UIControlKind::List }, "UI.ListClear requires a List element");
+[[nodiscard]] const kb::scene::UIComponentDescriptor* ComponentArg(
+    std::span<const ScriptFunctionArgument> arguments) noexcept {
+    const ScriptValue* value = FindArg(arguments, "component");
+    return value == nullptr ? nullptr
+                            : kb::scene::FindUIComponentDescriptor(value->AsString());
 }
 
-ScriptFunctionCallResult ConfigureList(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
-    if (context.scene == nullptr) return Error("UI.ConfigureList requires an active scene");
-    return Applied(context.scene->UIDocuments().QueueConfigureVirtualList(Target(context, arguments), Arg(arguments, "element")->AsUInt64(),
-        Arg(arguments, "viewportItems")->AsUInt32(), Arg(arguments, "overscan")->AsUInt32()),
-        "UI.ConfigureList requires a live List, viewportItems in 1..512, and overscan in 0..128");
+ScriptFunctionCallResult AddComponent(const ScriptFunctionCallContext& context,
+                                      std::span<const ScriptFunctionArgument> arguments) {
+    const kb::scene::SceneEntity entity = EntityArg(arguments, "entity");
+    if (!Alive(context, entity)) {
+        return Error("ui component requires a live entity");
+    }
+    const kb::scene::UIComponentDescriptor* component = ComponentArg(arguments);
+    if (component == nullptr) {
+        return Error("ui component is not registered");
+    }
+    kb::scene::UIComponentSet components =
+        kb::scene::CaptureSceneUIComponents(context.scene->Components().UI(), entity);
+    if (kb::scene::HasUIComponent(components, component->type)) {
+        return BoolResult("added", false);
+    }
+    if (!kb::scene::AddUIComponent(components, component->type)) {
+        return Error("ui component conflicts with the entity component set");
+    }
+    kb::scene::SynchronizeSceneUIComponents(context.scene->Components().UI(), entity, components);
+    return BoolResult("added", true);
 }
 
-ScriptFunctionCallResult ScrollListTo(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
-    if (context.scene == nullptr) return Error("UI.ListScrollTo requires an active scene");
-    return Applied(context.scene->UIDocuments().QueueScrollVirtualListTo(Target(context, arguments), Arg(arguments, "element")->AsUInt64(),
-        Arg(arguments, "firstVisibleIndex")->AsUInt32()),
-        "UI.ListScrollTo requires a configured live virtual List");
+ScriptFunctionCallResult RemoveComponent(const ScriptFunctionCallContext& context,
+                                         std::span<const ScriptFunctionArgument> arguments) {
+    const kb::scene::SceneEntity entity = EntityArg(arguments, "entity");
+    if (!Alive(context, entity)) {
+        return Error("ui component requires a live entity");
+    }
+    const kb::scene::UIComponentDescriptor* component = ComponentArg(arguments);
+    if (component == nullptr) {
+        return Error("ui component is not registered");
+    }
+    kb::scene::UIComponentSet components =
+        kb::scene::CaptureSceneUIComponents(context.scene->Components().UI(), entity);
+    if (!kb::scene::RemoveUIComponent(components, component->type)) {
+        return BoolResult("removed", false);
+    }
+    kb::scene::SynchronizeSceneUIComponents(context.scene->Components().UI(), entity, components);
+    return BoolResult("removed", true);
 }
 
-ScriptFunctionCallResult SetScrollOffset(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
-    std::string error;
-    auto control = ExistingControl(context, arguments, error);
-    if (!control) return Error(std::move(error));
-    control->scrollOffset = Arg(arguments, "offset")->AsFloat();
-    return QueueControl(context, arguments, std::move(*control), { kb::scene::UIControlKind::ScrollView }, "UI.SetScrollOffset requires a ScrollView element and a non-negative offset");
+ScriptFunctionCallResult HasComponent(const ScriptFunctionCallContext& context,
+                                      std::span<const ScriptFunctionArgument> arguments) {
+    const kb::scene::SceneEntity entity = EntityArg(arguments, "entity");
+    const kb::scene::UIComponentDescriptor* component = ComponentArg(arguments);
+    return BoolResult(
+        "present",
+        component != nullptr && Alive(context, entity) &&
+            kb::scene::HasUIComponent(
+                kb::scene::CaptureSceneUIComponents(context.scene->Components().UI(), entity),
+                component->type));
 }
 
-ScriptFunctionCallResult SetModalOpen(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
-    std::string error;
-    auto control = ExistingControl(context, arguments, error);
-    if (!control) return Error(std::move(error));
-    control->modalOpen = Arg(arguments, "open")->AsBool();
-    return QueueControl(context, arguments, std::move(*control), { kb::scene::UIControlKind::ModalDialog }, "UI.SetModalOpen requires a ModalDialog element");
+ScriptFunctionCallResult Focus(const ScriptFunctionCallContext& context,
+                               std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return NoScene();
+    }
+    return BoolResult("focused", context.scene->UI().SetFocus(EntityArg(arguments, "entity")));
 }
 
-ScriptFunctionCallResult QueueEvent(const ScriptFunctionCallContext& context,
-    std::span<const ScriptFunctionArgument> arguments, kb::scene::UIRuntimeEvent event) {
-    if (context.scene == nullptr) return Error("UI event API requires an active scene");
-    event.elementId = Arg(arguments, "element")->AsUInt64();
-    return Applied(context.scene->UIDocuments().QueueEvent(Target(context, arguments), event),
-        "UI event requires a visible live UI element and valid event data");
+ScriptFunctionCallResult ClearFocus(const ScriptFunctionCallContext& context,
+                                    std::span<const ScriptFunctionArgument>) {
+    if (context.scene == nullptr) {
+        return NoScene();
+    }
+    context.scene->UI().ClearFocus();
+    return BoolResult("cleared", true);
 }
 
-ScriptFunctionCallResult EmitClick(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
-    return QueueEvent(context, arguments, kb::scene::UIRuntimeEvent{
-        .kind = kb::scene::UIRuntimeEventKind::Click,
-        .pointerX = Arg(arguments, "x")->AsFloat(),
-        .pointerY = Arg(arguments, "y")->AsFloat(),
-    });
+ScriptFunctionCallResult HitTest(const ScriptFunctionCallContext& context,
+                                 std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return NoScene();
+    }
+    return EntityResult(
+        "entity", context.scene->UI().HitTest({FloatArg(arguments, "x"), FloatArg(arguments, "y")}));
 }
 
-ScriptFunctionCallResult EmitPointer(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
-    return QueueEvent(context, arguments, kb::scene::UIRuntimeEvent{
-        .kind = kb::scene::UIRuntimeEventKind::Pointer,
-        .pointerX = Arg(arguments, "x")->AsFloat(),
-        .pointerY = Arg(arguments, "y")->AsFloat(),
-    });
+ScriptFunctionCallResult Hovered(const ScriptFunctionCallContext& context,
+                                 std::span<const ScriptFunctionArgument>) {
+    return context.scene == nullptr ? NoScene()
+                                    : EntityResult("entity", context.scene->UI().Hovered());
 }
 
-ScriptFunctionCallResult EmitSubmit(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
-    return QueueEvent(context, arguments, kb::scene::UIRuntimeEvent{
-        .kind = kb::scene::UIRuntimeEventKind::Submit,
-        .text = Arg(arguments, "text")->AsString(),
-    });
+ScriptFunctionCallResult Pressed(const ScriptFunctionCallContext& context,
+                                 std::span<const ScriptFunctionArgument>) {
+    return context.scene == nullptr ? NoScene()
+                                    : EntityResult("entity", context.scene->UI().Pressed());
 }
 
-ScriptFunctionCallResult EmitChanged(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
-    return QueueEvent(context, arguments, kb::scene::UIRuntimeEvent{
-        .kind = kb::scene::UIRuntimeEventKind::Changed,
-        .value = Arg(arguments, "value")->AsFloat(),
-    });
+ScriptFunctionCallResult Focused(const ScriptFunctionCallContext& context,
+                                 std::span<const ScriptFunctionArgument>) {
+    return context.scene == nullptr ? NoScene()
+                                    : EntityResult("entity", context.scene->UI().Focused());
 }
 
-ScriptFunctionCallResult EmitFocus(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
-    return QueueEvent(context, arguments, kb::scene::UIRuntimeEvent{
-        .kind = kb::scene::UIRuntimeEventKind::Focus,
-        .focused = Arg(arguments, "focused")->AsBool(),
-    });
-}
-
-ScriptFunctionCallResult EmitNavigation(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
-    const auto direction = NavigationDirection(Arg(arguments, "direction")->AsString());
-    if (!direction.has_value()) return Error("UI.EmitNavigation direction must be Next, Previous, Up, Down, Left, or Right");
-    return QueueEvent(context, arguments, kb::scene::UIRuntimeEvent{
-        .kind = kb::scene::UIRuntimeEventKind::Navigation,
-        .navigation = *direction,
-    });
-}
-
-bool RegisterFunction(ScriptRuntimeHost& host, std::string name, std::vector<ScriptFunctionPin> inputs,
-    std::vector<ScriptFunctionPin> outputs, ScriptFunctionCallback callback) {
-    ScriptFunctionDesc function{};
-    function.signature.name = std::move(name);
-    function.signature.inputs = std::move(inputs);
-    function.signature.outputs = std::move(outputs);
-    function.callback = std::move(callback);
-    return host.RegisterFunction(std::move(function));
-}
-
-std::vector<ScriptFunctionPin> Targeted(std::vector<ScriptFunctionPin> inputs) {
-    inputs.push_back({ "entity", ScriptValueType::Entity, false });
-    return inputs;
+bool RegisterFunction(ScriptRuntimeHost& host, std::string name,
+                      std::vector<ScriptFunctionPin> inputs,
+                      std::vector<ScriptFunctionPin> outputs,
+                      ScriptFunctionCallback callback) {
+    ScriptFunctionDesc desc;
+    desc.signature.name = std::move(name);
+    desc.signature.inputs = std::move(inputs);
+    desc.signature.outputs = std::move(outputs);
+    desc.callback = std::move(callback);
+    return host.RegisterFunction(std::move(desc));
 }
 
 } // namespace
 
 bool ScriptUIApi::Register(ScriptRuntimeHost& host) {
-    const auto applied = std::vector<ScriptFunctionPin>{ { "applied", ScriptValueType::Bool, true } };
-    return RegisterFunction(host, "UI.Create", Targeted({
-            { "parent", ScriptValueType::Hash, true },
-            { "name", ScriptValueType::String, true },
-            { "styleClass", ScriptValueType::String, false },
-            { "visible", ScriptValueType::Bool, false },
-            { "kind", ScriptValueType::String, false },
-            { "text", ScriptValueType::String, false },
-            { "image", ScriptValueType::Hash, false },
-            { "toggle", ScriptValueType::Bool, false },
-            { "value", ScriptValueType::Float, false },
-            { "minimum", ScriptValueType::Float, false },
-            { "maximum", ScriptValueType::Float, false },
-            { "scroll", ScriptValueType::Float, false },
-            { "modal", ScriptValueType::Bool, false },
-        }), { { "element", ScriptValueType::Hash, true } }, &Create) &&
-        RegisterFunction(host, "UI.Destroy", Targeted({ { "element", ScriptValueType::Hash, true } }), applied, &Destroy) &&
-        RegisterFunction(host, "UI.Show", Targeted({ { "element", ScriptValueType::Hash, true } }), applied, &Show) &&
-        RegisterFunction(host, "UI.Hide", Targeted({ { "element", ScriptValueType::Hash, true } }), applied, &Hide) &&
-        RegisterFunction(host, "UI.Focus", Targeted({ { "element", ScriptValueType::Hash, true } }), applied, &Focus) &&
-        RegisterFunction(host, "UI.Find", Targeted({ { "name", ScriptValueType::String, true } }),
-            { { "element", ScriptValueType::Hash, true }, { "found", ScriptValueType::Bool, true } }, &Find) &&
-        RegisterFunction(host, "UI.SetText", Targeted({ { "element", ScriptValueType::Hash, true }, { "text", ScriptValueType::String, true } }), applied, &SetText) &&
-        RegisterFunction(host, "UI.SetImage", Targeted({ { "element", ScriptValueType::Hash, true }, { "image", ScriptValueType::Hash, true } }), applied, &SetImage) &&
-        RegisterFunction(host, "UI.SetToggle", Targeted({ { "element", ScriptValueType::Hash, true }, { "value", ScriptValueType::Bool, true } }), applied, &SetToggle) &&
-        RegisterFunction(host, "UI.SetSlider", Targeted({ { "element", ScriptValueType::Hash, true }, { "value", ScriptValueType::Float, true }, { "minimum", ScriptValueType::Float, false }, { "maximum", ScriptValueType::Float, false } }), applied, &SetSlider) &&
-        RegisterFunction(host, "UI.ListAppend", Targeted({ { "element", ScriptValueType::Hash, true }, { "item", ScriptValueType::String, true } }), applied, &ListAppend) &&
-        RegisterFunction(host, "UI.ListClear", Targeted({ { "element", ScriptValueType::Hash, true } }), applied, &ListClear) &&
-        RegisterFunction(host, "UI.ConfigureList", Targeted({ { "element", ScriptValueType::Hash, true }, { "viewportItems", ScriptValueType::UInt32, true }, { "overscan", ScriptValueType::UInt32, true } }), applied, &ConfigureList) &&
-        RegisterFunction(host, "UI.ListScrollTo", Targeted({ { "element", ScriptValueType::Hash, true }, { "firstVisibleIndex", ScriptValueType::UInt32, true } }), applied, &ScrollListTo) &&
-        RegisterFunction(host, "UI.SetScrollOffset", Targeted({ { "element", ScriptValueType::Hash, true }, { "offset", ScriptValueType::Float, true } }), applied, &SetScrollOffset) &&
-        RegisterFunction(host, "UI.SetModalOpen", Targeted({ { "element", ScriptValueType::Hash, true }, { "open", ScriptValueType::Bool, true } }), applied, &SetModalOpen) &&
-        RegisterFunction(host, "UI.EmitClick", Targeted({ { "element", ScriptValueType::Hash, true }, { "x", ScriptValueType::Float, true }, { "y", ScriptValueType::Float, true } }), applied, &EmitClick) &&
-        RegisterFunction(host, "UI.EmitPointer", Targeted({ { "element", ScriptValueType::Hash, true }, { "x", ScriptValueType::Float, true }, { "y", ScriptValueType::Float, true } }), applied, &EmitPointer) &&
-        RegisterFunction(host, "UI.EmitSubmit", Targeted({ { "element", ScriptValueType::Hash, true }, { "text", ScriptValueType::String, true } }), applied, &EmitSubmit) &&
-        RegisterFunction(host, "UI.EmitChanged", Targeted({ { "element", ScriptValueType::Hash, true }, { "value", ScriptValueType::Float, true } }), applied, &EmitChanged) &&
-        RegisterFunction(host, "UI.EmitFocus", Targeted({ { "element", ScriptValueType::Hash, true }, { "focused", ScriptValueType::Bool, true } }), applied, &EmitFocus) &&
-        RegisterFunction(host, "UI.EmitNavigation", Targeted({ { "element", ScriptValueType::Hash, true }, { "direction", ScriptValueType::String, true } }), applied, &EmitNavigation);
+    bool ok = true;
+    ok = RegisterFunction(
+             host, "UI.Create",
+             {
+                 ScriptFunctionPin{"preset", ScriptValueType::String, true},
+                 ScriptFunctionPin{"name", ScriptValueType::String, false},
+                 ScriptFunctionPin{"parent", ScriptValueType::Entity, false},
+             },
+             {ScriptFunctionPin{"entity", ScriptValueType::Entity, true}}, &Create) &&
+         ok;
+    ok = RegisterFunction(
+             host, "UI.AddComponent",
+             {
+                 ScriptFunctionPin{"entity", ScriptValueType::Entity, true},
+                 ScriptFunctionPin{"component", ScriptValueType::String, true},
+             },
+             {ScriptFunctionPin{"added", ScriptValueType::Bool, true}}, &AddComponent) &&
+         ok;
+    ok = RegisterFunction(
+             host, "UI.RemoveComponent",
+             {
+                 ScriptFunctionPin{"entity", ScriptValueType::Entity, true},
+                 ScriptFunctionPin{"component", ScriptValueType::String, true},
+             },
+             {ScriptFunctionPin{"removed", ScriptValueType::Bool, true}}, &RemoveComponent) &&
+         ok;
+    ok = RegisterFunction(
+             host, "UI.HasComponent",
+             {
+                 ScriptFunctionPin{"entity", ScriptValueType::Entity, true},
+                 ScriptFunctionPin{"component", ScriptValueType::String, true},
+             },
+             {ScriptFunctionPin{"present", ScriptValueType::Bool, true}}, &HasComponent) &&
+         ok;
+    ok = RegisterFunction(
+             host, "UI.Focus", {ScriptFunctionPin{"entity", ScriptValueType::Entity, true}},
+             {ScriptFunctionPin{"focused", ScriptValueType::Bool, true}}, &Focus) &&
+         ok;
+    ok = RegisterFunction(host, "UI.ClearFocus", {},
+                          {ScriptFunctionPin{"cleared", ScriptValueType::Bool, true}},
+                          &ClearFocus) &&
+         ok;
+    ok = RegisterFunction(
+             host, "UI.HitTest",
+             {
+                 ScriptFunctionPin{"x", ScriptValueType::Float, true},
+                 ScriptFunctionPin{"y", ScriptValueType::Float, true},
+             },
+             {ScriptFunctionPin{"entity", ScriptValueType::Entity, true}}, &HitTest) &&
+         ok;
+    ok = RegisterFunction(host, "UI.Hovered", {},
+                          {ScriptFunctionPin{"entity", ScriptValueType::Entity, true}},
+                          &Hovered) &&
+         ok;
+    ok = RegisterFunction(host, "UI.Pressed", {},
+                          {ScriptFunctionPin{"entity", ScriptValueType::Entity, true}},
+                          &Pressed) &&
+         ok;
+    ok = RegisterFunction(host, "UI.Focused", {},
+                          {ScriptFunctionPin{"entity", ScriptValueType::Entity, true}},
+                          &Focused) &&
+         ok;
+    return ok;
 }
 
 } // namespace kb::script

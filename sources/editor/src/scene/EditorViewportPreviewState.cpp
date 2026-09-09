@@ -429,4 +429,12 @@ float EditorViewportRotationSnapOption(std::size_t index) noexcept {
     return index < kRotationSnapDegrees.size() ? kRotationSnapDegrees[index] : kRotationSnapDegrees.front();
 }
 
+void EditorViewportPreviewState::ZoomUI(float steps, kb::math::Vec2 pointer) noexcept {
+    if (!std::isfinite(steps)) return;
+    const float next = std::clamp(uiZoom_ * std::pow(1.15F, steps), 0.1F, 8.0F);
+    const float ratio = next / uiZoom_;
+    uiPan_ = {pointer.x-(pointer.x-uiPan_.x)*ratio, pointer.y-(pointer.y-uiPan_.y)*ratio};
+    uiZoom_ = next;
+}
+
 } // namespace kb::editor

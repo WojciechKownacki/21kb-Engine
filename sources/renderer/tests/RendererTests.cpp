@@ -18,6 +18,7 @@ void RunGraphShaderArtifactCookTests();
 void RunMaterialProgramRegistryTests();
 void RunSceneMeshPassProgramSelectionTests();
 void RunRendererRuntimeSubmitTests();
+void RunEditorUIViewTransformValidationTests();
 void RunRendererParticleMeshSnapshotSubmitTest();
 void RunRendererParticleStripSnapshotSubmitTest();
 void RunRendererParticleVolumetricSnapshotSubmitTest();
@@ -34,6 +35,8 @@ void RunShaderManifestTests();
 void RunShaderPrewarmParseTests();
 void RunMeshBakeTests();
 void RunTextureBakeTests();
+void RunPackagedWebGpuTextureFallbackTestOnly();
+void RunScreenUIDrawBatchTests();
 }
 
 int main(int argc, char** argv) {
@@ -43,6 +46,10 @@ int main(int argc, char** argv) {
     }
     if (argc == 2 && std::string_view{ argv[1] } == "texture-bake") {
         kb::render::tests::RunTextureBakeTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "webgpu-texture-fallback") {
+        kb::render::tests::RunPackagedWebGpuTextureFallbackTestOnly();
         return EXIT_SUCCESS;
     }
     if (argc == 2 && std::string_view{ argv[1] } == "graph-shader-artifact") {
@@ -55,6 +62,10 @@ int main(int argc, char** argv) {
     }
     if (argc == 2 && std::string_view{ argv[1] } == "frame-pipeline") {
         kb::render::tests::RunRenderFramePipelineTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "screen-ui-batch") {
+        kb::render::tests::RunScreenUIDrawBatchTests();
         return EXIT_SUCCESS;
     }
     if (argc == 2 && std::string_view{ argv[1] } == "resource-registry") {
@@ -93,6 +104,10 @@ int main(int argc, char** argv) {
         kb::render::tests::RunRenderSceneSyncTests();
         return EXIT_SUCCESS;
     }
+    if (argc == 2 && std::string_view{ argv[1] } == "scene-render-target-format") {
+        kb::render::tests::RunSceneRenderTargetFormatTests();
+        return EXIT_SUCCESS;
+    }
     if (argc == 2 && std::string_view{ argv[1] } == "particle-mesh-submit") {
         kb::render::tests::RunRendererParticleMeshSnapshotSubmitTest();
         return EXIT_SUCCESS;
@@ -127,6 +142,15 @@ int main(int argc, char** argv) {
             return EXIT_FAILURE;
         }
     }
+    if (argc == 2 && std::string_view{argv[1]} == "editor-ui-view") {
+        try {
+            kb::render::tests::RunEditorUIViewTransformValidationTests();
+            return EXIT_SUCCESS;
+        } catch (const std::exception& error) {
+            std::fputs(error.what(),stderr);
+            return EXIT_FAILURE;
+        }
+    }
     if (argc != 1) {
         return EXIT_FAILURE;
     }
@@ -152,6 +176,7 @@ int main(int argc, char** argv) {
     kb::render::tests::RunSceneRenderExtractorTests();
     kb::render::tests::RunShaderManifestTests();
     kb::render::tests::RunShaderPrewarmParseTests();
+    kb::render::tests::RunScreenUIDrawBatchTests();
     kb::render::tests::RunMeshBakeTests();
     kb::render::tests::RunTextureBakeTests();
     return EXIT_SUCCESS;

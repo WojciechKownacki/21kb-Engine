@@ -28,6 +28,11 @@ include(FetchContent)
 option(KB_BUILD_EDITOR "Build the Win32 editor application and editor tests" ${WIN32})
 option(KB_BUILD_RENDERER "Build the bgfx renderer module and smoke executable" ${WIN32})
 option(KB_BUILD_ANDROID_HOST "Build the GameActivity shared-library host" OFF)
+option(KB_BUILD_PACKAGED_GAME_HOST "Build the monolithic platform game host" OFF)
+set(KB_ANDROID_TEXTURE_PROFILE "" CACHE STRING "Android package texture profile: ASTC or ETC2")
+set_property(CACHE KB_ANDROID_TEXTURE_PROFILE PROPERTY STRINGS ASTC ETC2)
+set(KB_WEB_RENDERER "WEBGL" CACHE STRING "Browser package renderer: WEBGL or WEBGPU")
+set_property(CACHE KB_WEB_RENDERER PROPERTY STRINGS WEBGL WEBGPU)
 option(KB_ENABLE_SANITIZERS "Build project targets with AddressSanitizer and UndefinedBehaviorSanitizer where supported" OFF)
 option(KB_ENGINE_ENABLE_NATIVE_AVX2 "Opt in to AVX2 code generation for engine targets and consumers; produced binaries require AVX2-capable CPUs" OFF)
 option(KB_GENERATE_RENDERER_SHADERS "Generate renderer shaders with bgfx shaderc instead of staging prebuilt shaders" OFF)
@@ -35,6 +40,24 @@ option(KB_BUILD_GRAPH_SHADERC "Build bgfx shaderc for the Material Editor graph 
 option(KB_STRICT_OWN_WARNINGS "Treat warnings from first-party targets as build errors" ON)
 set(KB_DXCOMPILER_RUNTIME "" CACHE FILEPATH "Path to dxcompiler.dll copied next to shaderc for DXIL graph cooking")
 option(KB_BUILD_PROVIDER_MODULES_AS_DLL "Build provider engine modules as hot-reloadable DLL/shared libraries instead of static libraries" ON)
+
+if((ANDROID AND KB_BUILD_ANDROID_HOST) OR
+   ((EMSCRIPTEN OR CMAKE_SYSTEM_NAME STREQUAL "Linux") AND KB_BUILD_PACKAGED_GAME_HOST))
+    # Packaged hosts construct their four supported providers directly. A DLL
+    # provider would make the package depend on an untracked side module.
+    set(KB_BUILD_PROVIDER_MODULES_AS_DLL OFF CACHE BOOL "" FORCE)
+endif()
+
+if(ANDROID AND KB_BUILD_ANDROID_HOST AND
+   NOT KB_ANDROID_TEXTURE_PROFILE MATCHES "^(ASTC|ETC2)$")
+    message(FATAL_ERROR "KB_ANDROID_TEXTURE_PROFILE must be ASTC or ETC2")
+endif()
+if(ANDROID AND KB_BUILD_ANDROID_HOST AND NOT ANDROID_ABI STREQUAL "arm64-v8a")
+    message(FATAL_ERROR "The packaged Android game host requires ANDROID_ABI=arm64-v8a")
+endif()
+if(EMSCRIPTEN AND NOT KB_WEB_RENDERER MATCHES "^(WEBGL|WEBGPU)$")
+    message(FATAL_ERROR "KB_WEB_RENDERER must be WEBGL or WEBGPU")
+endif()
 
 set(KB_MSVC_ASAN_RUNTIME_DIR "" CACHE PATH "Directory containing the MSVC-compatible LLVM AddressSanitizer runtime")
 set(KB_MSVC_STL_ASAN_RUNTIME_DIR "" CACHE PATH "Directory containing the MSVC AddressSanitizer STL runtime")
@@ -102,6 +125,27 @@ if(WIN32 AND NOT KB_DXCOMPILER_RUNTIME AND DEFINED ENV{VULKAN_SDK})
     if(EXISTS "${_kb_vulkan_sdk_dxcompiler}")
         set(KB_DXCOMPILER_RUNTIME "${_kb_vulkan_sdk_dxcompiler}" CACHE FILEPATH "Path to dxcompiler.dll copied next to shaderc for DXIL graph cooking" FORCE)
     endif()
+endif()
+
+# The Windows SDK ships the same compiler, and it is present on machines that build this at all -
+# including CI, which has no Vulkan SDK. Without it the DXIL profile silently gets no compiler and
+# the failure only surfaces much later, as "Unable to load DXC compiler" from a cook.
+if(WIN32 AND NOT KB_DXCOMPILER_RUNTIME)
+    file(GLOB _kb_windows_sdk_dxcompilers
+        "$ENV{ProgramFiles\(x86\)}/Windows Kits/10/bin/*/x64/dxcompiler.dll"
+        "$ENV{ProgramFiles}/Windows Kits/10/bin/*/x64/dxcompiler.dll")
+    if(_kb_windows_sdk_dxcompilers)
+        list(SORT _kb_windows_sdk_dxcompilers)
+        list(GET _kb_windows_sdk_dxcompilers -1 _kb_windows_sdk_dxcompiler)
+        set(KB_DXCOMPILER_RUNTIME "${_kb_windows_sdk_dxcompiler}" CACHE FILEPATH "Path to dxcompiler.dll copied next to shaderc for DXIL graph cooking" FORCE)
+    endif()
+endif()
+
+# Say so at configure time rather than letting a cook fail with a compiler that was never copied.
+if(WIN32 AND NOT KB_DXCOMPILER_RUNTIME
+        AND NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/bgfx.cmake/bgfx/tools/bin/windows/dxcompiler.dll")
+    message(WARNING "No dxcompiler.dll found (Vulkan SDK or Windows SDK). DXIL shader cooking will fail; "
+                    "set -DKB_DXCOMPILER_RUNTIME=<path to dxcompiler.dll> to enable it.")
 endif()
 
 function(kb_add_bgfx_subdirectory)
@@ -196,6 +240,19 @@ set(FLECS_STATIC ON CACHE BOOL "Build Flecs as a static library" FORCE)
 set(FLECS_SHARED OFF CACHE BOOL "Do not build Flecs as a shared library" FORCE)
 set(FLECS_TESTS OFF CACHE BOOL "Do not build Flecs tests with the engine" FORCE)
 add_subdirectory(third_party/flecs third_party/flecs EXCLUDE_FROM_ALL)
+if(EMSCRIPTEN)
+    # The browser player uses Flecs storage, systems and its pipeline. Exclude
+    # editor-facing addons (HTTP, REST, JSON, script, metrics and units) so
+    # world startup does not bootstrap unused modules on the browser main loop.
+    target_compile_definitions(flecs_static PUBLIC
+        FLECS_CUSTOM_BUILD
+        FLECS_LOG
+        FLECS_MODULE
+        FLECS_NO_OS_API_IMPL
+        FLECS_PIPELINE
+        FLECS_SYSTEM
+    )
+endif()
 
 set(ENABLE_ALL_WARNINGS OFF CACHE BOOL "Do not enable Jolt warnings for the vendored build" FORCE)
 set(INTERPROCEDURAL_OPTIMIZATION OFF CACHE BOOL "Do not enable Jolt LTO from the vendored build" FORCE)
@@ -336,7 +393,7 @@ endif()
 if(KB_BUILD_RENDERER)
     if(NOT WIN32 AND NOT ANDROID AND NOT EMSCRIPTEN AND
        NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
-        message(FATAL_ERROR "KB_BUILD_RENDERER currently supports Win32, Linux, Android, and Emscripten/WebGL bgfx integrations. Configure with -DKB_BUILD_RENDERER=OFF on other hosts.")
+        message(FATAL_ERROR "KB_BUILD_RENDERER currently supports Win32, Linux, Android, and Emscripten browser integrations. Configure with -DKB_BUILD_RENDERER=OFF on other hosts.")
     endif()
 
     set(BGFX_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
@@ -355,7 +412,20 @@ if(KB_BUILD_RENDERER)
     set(BGFX_BUILD_TOOLS_TEXTURE OFF CACHE BOOL "" FORCE)
     set(BGFX_INSTALL OFF CACHE BOOL "" FORCE)
     set(BGFX_CUSTOM_TARGETS OFF CACHE BOOL "" FORCE)
+    if(EMSCRIPTEN)
+        if(KB_WEB_RENDERER STREQUAL "WEBGPU")
+            set(BGFX_CONFIG_RENDERER_WEBGPU ON CACHE BOOL "" FORCE)
+        else()
+            set(BGFX_CONFIG_RENDERER_WEBGPU OFF CACHE BOOL "" FORCE)
+        endif()
+    endif()
     kb_add_bgfx_subdirectory()
+    if(ANDROID AND KB_BUILD_PACKAGED_GAME_HOST)
+        target_compile_definitions(bgfx PRIVATE BGFX_CONFIG_DEBUG_OBJECT_NAME=0)
+    endif()
+    if(EMSCRIPTEN AND KB_WEB_RENDERER STREQUAL "WEBGL")
+        target_compile_definitions(bgfx PRIVATE BGFX_GL_CONFIG_BLIT_EMULATION=1)
+    endif()
 
     include(CMake/KbBgfxRuntimeShaders.cmake)
     add_subdirectory(sources/renderer renderer)

@@ -1,6 +1,7 @@
 #include "scene/prefab/ScenePrefabComponentHasher.hpp"
 
 #include "scene/prefab/ScenePrefabHashBuilder.hpp"
+#include "engine/scene/SceneUIComponentSet.hpp"
 
 #include <cstdint>
 #include <string_view>
@@ -8,6 +9,7 @@
 namespace kb::scene {
 
 void ScenePrefabComponentHasher::Mix(std::uint64_t& hash, const ScenePrefabNodeComponents& components) noexcept {
+    ScenePrefabHashBuilder::Mix(hash, HashUIComponentSet(components.ui));
     ScenePrefabHashBuilder::Mix(hash, components.camera.has_value() ? 1U : 0U);
     if (components.camera.has_value()) {
         ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint64_t>(components.camera->projection));
@@ -247,11 +249,6 @@ void ScenePrefabComponentHasher::Mix(std::uint64_t& hash, const ScenePrefabNodeC
         ScenePrefabHashBuilder::MixFloat(hash, components.animator->speed);
         ScenePrefabHashBuilder::Mix(hash, components.animator->enabled ? 1U : 0U);
         ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint64_t>(components.animator->rootMotionOwner));
-    }
-    ScenePrefabHashBuilder::Mix(hash, components.uiDocument.has_value() ? 1U : 0U);
-    if (components.uiDocument.has_value()) {
-        ScenePrefabHashBuilder::Mix(hash, components.uiDocument->documentAssetId);
-        ScenePrefabHashBuilder::Mix(hash, components.uiDocument->enabled ? 1U : 0U);
     }
 }
 

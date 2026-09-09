@@ -39,6 +39,13 @@ scenario-local aliases.
 
 | Operation | Required fields |
 | --- | --- |
+| `assert_ui_creation_menu` | Inspects the native Create > User Widget menu without displaying it; creates every registered UI type, verifies dependencies, scene frame, parenting, unique names and atomic Undo/Redo. |
+| `assert_ui_catalog` | Optional `component` name or stable ID; creates the component through the Inspector, changes and restores valid editable properties using editor controls, captures the Inspector and GPU scene frame; cleans up each probe. |
+| `assert_ui_graphics` | Requires AuditPNG, AuditJPEG, AuditBMP and AuditGIF texture fixtures under `/Game/UI`; searches and clicks the hidden native picker for Image, Raw Image and Sprite, assigns the result, verifies red/green GPU pixels and Undo. GIF coverage checks the decoded still image, not animation playback. |
+| `verify_ui_2d` | Selected UI object; verifies the 2D toolbar, eight resize handles, selection, moving, Undo, cancellation, zoom and GPU capture. |
+| `ui_anchor_preset` | `entity`, integer `preset` (0..15, columns: left/center/right/stretch; rows: top/center/bottom/stretch); opens the Inspector selector and clicks the preset. |
+| `ui_rect_layout` | `entity`, integer `field` (0: position X/left, 1: position Y/top, 2: width/right, 3: height/bottom), numeric `value`; edits the compact layout field. |
+| `assert_ui_frame` | `entity`; optional viewport `width`, `height`, `visible`, and pixel `rect_x`, `rect_y`, `rect_width`, `rect_height`; checks the production layout frame and effective visibility. |
 | `write_file` | `path`, `content` |
 | `write_pcm_wave` | project-relative `path`; optional `duration_ms` (1..10000), `sample_rate` (8000..48000), `frequency_hz`, `amplitude` (0..1); authors a valid mono 16-bit PCM fixture |
 | `configure_physics_layers` | project-relative `path`, two distinct indices/names (`first_layer`, `first_name`, `second_layer`, `second_name`) and `interact`; writes the binary asset and sets the project-wide physics-layers reference; use `reload_scene` before Play Mode |
@@ -112,13 +119,12 @@ scenario-local aliases.
   | `assert_terrain_height` | Terrain `entity`, local `x`, `z`, expected `value`; optional `tolerance` |
   | `configure_terrain`, `assert_terrain_configuration` | Terrain `entity`, `width`, `height`, `chunk_quads`, `lod_count`, `world_size_x`, `world_size_z`; configuration resamples through the production Undo/Redo path |
   | `set_animator_root_motion_owner`, `assert_animator_root_motion_owner` | Animator `entity`, owner: `none`, `animator`, `character_controller`, or `rigidbody`; setter uses the production Inspector command and rejects incompatible ownership |
-  | `set_property`, `assert_property` | `entity`, `component`, `property`, `value`; assertion optionally `tolerance` |
+  | `set_property`, `set_property_rejected`, `assert_property` | `entity`, `component`, `property`, `value`; the rejection form succeeds only when the production setter refuses the value; assertion optionally `tolerance` |
 | `assert_entity` | `entity`; optional `exists` |
 | `assert_name` | `entity`, expected string `value`; verifies the live entity name |
 | `assert_component` | `entity`, `component`; optional `exists` |
 | `assert_skeleton_binding` | `entity`, Skeleton `asset`; optional `enabled`; verifies the component stores the selected asset and its canonical compatibility signature |
 | `assert_deformed_geometry` | `entity`, Skeletal Mesh `mesh`; optional `material` with `material_slot`, `pose_source`, and `enabled`; verifies the production component configuration |
-| `assert_ui_element` | `entity`, numeric `element`; optional `exists`, `visible`, `kind`; queries the live runtime UI tree in Play Mode |
 | `assert_parent` | `entity`, `parent` |
 | `assert_asset` | virtual `path`; optional `type`, `exists` |
 | `assert_asset_compatibility` | `asset` alias or virtual path and expected boolean `compatible`; evaluates production AssetManager dependency compatibility |
@@ -155,7 +161,7 @@ scenario-local aliases.
 | `play`, `pause`, `stop` | none; `pause` toggles pause/resume for an active Play session |
 | `key` | `key`, `down`; optional `gamepad` |
 | `analog` | `key`, `value`; optional `gamepad` |
-| `pointer` | `x`, `y` |
+| `pointer` | `x`, `y`; optional positive `width`, `height` sets the input viewport extent |
 | `touch` | `points` array of `{id,x,y,phase}` where phase is `began`, `moved`, or `ended` |
 | `focus` | `focused` |
 | `gamepad_connected` | `index`, `connected` |
@@ -167,6 +173,7 @@ scenario-local aliases.
 | `capture_screenshot_matrix` | `panel`, `checkpoint`; captures `material_editor`, `skeletal_mesh_editor`, `animation_clip_editor`, or `animator_editor` through production docked and floating renderers. Every invocation writes six checked BMPs: 1920x1080, 1366x768, and a 1280x720 logical client at 150% DPI (a 1920x1080 bitmap), each in both layouts. |
 | `verify_viewport_host_lifecycle` | none; renders the real native viewport child plus, when an Animator Controller asset is open, the Animator Editor preview surface (the shared host-surface mechanism keyed by `panel.id` used by all three animation editors). Verifies over every host surface registered for the window that minimize, application deactivation, DPI transition, resize/move, and removing the panel leave no viewport overlay visible over its host, and that an owned overlay popup (scene viewport toolbar dropdown) shown through the production paint path is hidden by the `WM_ACTIVATEAPP` deactivation path and restored by the repaint after reactivation. |
 | `capture_runtime` | `checkpoint`; optional `require_non_uniform`; requires Play Mode and writes a PNG from the production GPU readback path |
+| `assert_capture_difference` | `before`, `after` capture checkpoints; requires equal dimensions and at least 100 changed pixels |
 | `set_animator_debug_target` | `target`: `preview` or a live entity alias using the open Animator Controller |
 | `assert_animator_debug_snapshot` | `target`: `preview` or entity alias; optional `minimum_layers`, `minimum_bones` |
 | `snapshot` | `kind`, `checkpoint`; kinds: `console`, `inspector_tree` |

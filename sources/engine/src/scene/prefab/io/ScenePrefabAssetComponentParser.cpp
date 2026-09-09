@@ -5,11 +5,17 @@
 #include "scene/prefab/io/ScenePrefabAssetLightParser.hpp"
 #include "scene/prefab/io/ScenePrefabAssetMeshRendererParser.hpp"
 #include "scene/prefab/io/ScenePrefabAssetTagsParser.hpp"
+#include "scene/ui/SceneUIComponentTextCodec.hpp"
 
 #include <cmath>
 
 namespace kb::scene {
 namespace {
+
+[[nodiscard]] bool ParseUI(const ScenePrefabAssetFieldMap& fields, UIComponentSet& output) {
+    const auto found = fields.find("ui");
+    return found == fields.end() || SceneUIComponentTextCodec::Decode(found->second, output);
+}
 
 template <typename T>
 [[nodiscard]] bool ParseField(const ScenePrefabAssetFieldMap& fields, std::string_view key, T& output) {
@@ -651,20 +657,10 @@ template <typename T>
     return true;
 }
 
-[[nodiscard]] bool ParseUIDocument(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
-    bool hasDocument = false;
-    if (!ParseOptionalComponentFlag(fields, "uiDocument", hasDocument)) return false;
-    if (!hasDocument) return true;
-    UIDocumentComponent document{};
-    if (!ParseField(fields, "uiDocument.documentAssetId", document.documentAssetId) ||
-        !ParseOptionalBool(fields, "uiDocument.enabled", document.enabled)) return false;
-    components.uiDocument = document;
-    return true;
-}
-
 } // namespace
 
 bool ScenePrefabAssetComponentParser::Parse(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    if (!ParseUI(fields, components.ui)) return false;
     return ScenePrefabAssetCameraParser::Parse(fields, components)
         && ScenePrefabAssetMeshRendererParser::Parse(fields, components)
         && ScenePrefabAssetLightParser::Parse(fields, components)
@@ -697,8 +693,7 @@ bool ScenePrefabAssetComponentParser::Parse(const ScenePrefabAssetFieldMap& fiel
         && ParseAudioListener(fields, components)
         && ParseAnimator(fields, components)
         && ParseSkeletonBinding(fields, components)
-        && ParseDeformedGeometry(fields, components)
-        && ParseUIDocument(fields, components);
+        && ParseDeformedGeometry(fields, components);
 }
 
 } // namespace kb::scene

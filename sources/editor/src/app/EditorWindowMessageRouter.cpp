@@ -2,9 +2,12 @@
 
 #if defined(_WIN32)
 #include "app/EditorEditCommandInputHandler.hpp"
+#include "app/EditorWindowInvalidator.hpp"
 #include "app/EditorHierarchySearchInputHandler.hpp"
 #include "app/EditorSkeletalMeshTreeSearchInputHandler.hpp"
 #include "app/EditorTextInputShortcuts.hpp"
+#include "app/EditorBuildGameInputHandler.hpp"
+#include "packaging/EditorProjectPackageService.hpp"
 #include "app/EditorAssetBrowserInputHandler.hpp"
 #include "app/EditorWindowHitTestHandler.hpp"
 #include "app/EditorWindowLifecycleHandler.hpp"
@@ -556,7 +559,18 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         context_.sceneViewport.RequestPresent();
         return 0;
     }
+    case WM_KILLFOCUS:
+        if (context_.sceneContext.IsBuildGameTextEditing()) {
+            static_cast<void>(context_.sceneContext.CommitBuildGameTextEdit());
+            InvalidateRect(messageWindow, nullptr, FALSE);
+        }
+        break;
     case WM_CHAR:
+        if (EditorBuildGameInputHandler{ context_.sceneContext }.HandleCharacter(static_cast<wchar_t>(wparam))) {
+            InvalidateRect(messageWindow, nullptr, FALSE);
+            if (messageWindow != context_.mainWindow) InvalidateRect(context_.mainWindow, nullptr, FALSE);
+            return 0;
+        }
         if (ParticleEditorPanelInteraction::HandleCharacter(
                 context_.sceneContext, static_cast<wchar_t>(wparam))) {
             InvalidateRect(messageWindow, nullptr, FALSE);
@@ -586,6 +600,11 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         }
         break;
     case WM_KEYDOWN:
+        if (EditorBuildGameInputHandler{ context_.sceneContext }.HandleKeyDown(messageWindow, wparam)) {
+            InvalidateRect(messageWindow, nullptr, FALSE);
+            if (messageWindow != context_.mainWindow) InvalidateRect(context_.mainWindow, nullptr, FALSE);
+            return 0;
+        }
         if (ParticleEditorPanelInteraction::HandleKeyDown(context_.sceneContext, wparam)) {
             InvalidateRect(messageWindow, nullptr, FALSE);
             if (messageWindow != context_.mainWindow) {
@@ -599,6 +618,13 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
             if (messageWindow != context_.mainWindow) {
                 InvalidateRect(context_.mainWindow, nullptr, FALSE);
             }
+            return 0;
+        }
+        if (wparam == VK_ESCAPE && context_.sceneContext.UIRectDrag()) {
+            static_cast<void>(EditorSceneViewportObjectInteraction::CancelGizmoDrag(context_.sceneContext));
+            ReleaseCapture();
+            context_.sceneViewport.RequestPresent();
+            EditorWindowInvalidator::InvalidateMainAndSource(context_.mainWindow, messageWindow);
             return 0;
         }
         if (InspectorPanelInteraction::HandleKeyDown(messageWindow, context_.sceneContext, wparam)) {
@@ -650,6 +676,14 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         }
         break;
     case WM_TIMER:
+        if (wparam == kEditorPackageStatusTimer) {
+            InvalidateRect(messageWindow, nullptr, FALSE);
+            if (messageWindow != context_.mainWindow) InvalidateRect(context_.mainWindow, nullptr, FALSE);
+            if (context_.sceneContext.BuildGamePackageSnapshot().state != EditorPackageJobState::Running) {
+                KillTimer(messageWindow, kEditorPackageStatusTimer);
+            }
+            return 0;
+        }
         if (EditorWindowResizeHandler::HandleTimer(messageWindow, wparam, context_.sceneViewport)) {
             return 0;
         }

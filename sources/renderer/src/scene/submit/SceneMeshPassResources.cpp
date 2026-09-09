@@ -1,5 +1,7 @@
 #include "scene/submit/SceneMeshPassResources.hpp"
 
+#include "engine/platform/FileSystemPath.hpp"
+
 #include "kb/render/SceneDepthPolicy.hpp"
 #include "kb/render/ShaderLoader.hpp"
 #include "kb/render/resources/RenderMaterialParameterCollection.hpp"
@@ -138,7 +140,9 @@ struct CurrentGraphShaderProgram {
     if (backendDirectory == nullptr) {
         return 0U;
     }
-    const std::filesystem::path root = std::filesystem::path{ cacheRoot } /
+    // The same extended-length addressing the cook publishes under: a project deep enough to push
+    // its cache past MAX_PATH must still be readable here, or the binaries cook and never load.
+    const std::filesystem::path root = kb::platform::ExtendedLengthPath(cacheRoot) /
         GraphPlatformDirectoryForRuntime() /
         ("graph_" + std::to_string(sourceHash)) /
         ("variant_" + std::to_string(variantKey)) /
@@ -665,7 +669,7 @@ bgfx::ProgramHandle SceneMeshPassResources::LoadProgramForKey(const MaterialProg
         if (graphShaderCacheRoot_.empty() || backendDirectory == nullptr) {
             return BGFX_INVALID_HANDLE;
         }
-        const std::filesystem::path artifactRoot = std::filesystem::path{ graphShaderCacheRoot_ } /
+        const std::filesystem::path artifactRoot = kb::platform::ExtendedLengthPath(graphShaderCacheRoot_) /
             GraphPlatformDirectoryForRuntime() /
             ("graph_" + std::to_string(key.graphSourceHash)) /
             ("variant_" + std::to_string(key.variantKey)) / key.pass / backendDirectory;
@@ -836,18 +840,19 @@ SceneMeshPassProgramResolution SceneMeshPassResources::ResolveMeshPassProgram(
                 (pass == MeshPassType::ShadowDepth ? "ShadowDepth" :
                     (pass == MeshPassType::MotionVectors ? "MotionVectors" : GraphMeshPassName(pass))),
             skinned);
-        resolution.program = skinned
+        const bool registryProgram = skinned || pass == MeshPassType::MotionVectors;
+        resolution.program = registryProgram
             ? programRegistry_.Find(resolution.key)
             : ((pass == MeshPassType::ShadowDepth || pass == MeshPassType::Depth)
                 ? shadowProgram_
                 : (pass == MeshPassType::GBuffer ? gbufferProgram_ : meshProgram_));
-        if (skinned && !bgfx::isValid(resolution.program)) {
+        if (registryProgram && !bgfx::isValid(resolution.program)) {
             resolution.program = programRegistry_.Acquire(resolution.key);
             if (bgfx::isValid(resolution.program)) {
                 AppendUniqueValue(residentProgramKeys_, resolution.key);
             }
         }
-        if (skinned && bgfx::isValid(resolution.program)) {
+        if (registryProgram && bgfx::isValid(resolution.program)) {
             AppendUniqueValue(usedProgramKeys_, resolution.key);
         }
         resolution.materialProgramIdentity = MaterialProgramKeyIdentityHash(resolution.key);

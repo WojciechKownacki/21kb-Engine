@@ -11,6 +11,7 @@
 #include <Windows.h>
 
 #include "engine/input/InputTouchPoint.hpp"
+#include "engine/input/InputText.hpp"
 
 #include <array>
 #include <cstddef>
@@ -53,6 +54,9 @@ private:
     POINT previousMouse_{};
     std::array<InputTouchPoint, kMaxTouchPoints> touchPoints_{};
     std::size_t touchPointCount_ = 0U;
+    std::array<char32_t, 64U> pendingTextInput_{};
+    std::size_t pendingTextInputCount_ = 0U;
+    Utf16InputDecoder textDecoder_{};
     float pendingMouseWheel_ = 0.0F;
     HWND pointerCoordinateWindow_ = nullptr;
     RECT pointerClientViewport_{};

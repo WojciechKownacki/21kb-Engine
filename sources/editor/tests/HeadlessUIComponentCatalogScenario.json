@@ -1,0 +1,197 @@
+{
+  "schema": "21kb.editor-automation/v1",
+  "steps": [
+    {
+      "op": "copy_fixture",
+      "source": "fixtures/ui/AuditPNG.png",
+      "destination": "Source/AuditPNG.png"
+    },
+    {
+      "op": "import_asset",
+      "source": "Source/AuditPNG.png",
+      "destination": "/Game/UI"
+    },
+    {
+      "op": "copy_fixture",
+      "source": "fixtures/ui/AuditJPEG.jpg",
+      "destination": "Source/AuditJPEG.jpg"
+    },
+    {
+      "op": "import_asset",
+      "source": "Source/AuditJPEG.jpg",
+      "destination": "/Game/UI"
+    },
+    {
+      "op": "copy_fixture",
+      "source": "fixtures/ui/AuditBMP.bmp",
+      "destination": "Source/AuditBMP.bmp"
+    },
+    {
+      "op": "import_asset",
+      "source": "Source/AuditBMP.bmp",
+      "destination": "/Game/UI"
+    },
+    {
+      "op": "copy_fixture",
+      "source": "fixtures/ui/AuditGIF.gif",
+      "destination": "Source/AuditGIF.gif"
+    },
+    {
+      "op": "import_asset",
+      "source": "Source/AuditGIF.gif",
+      "destination": "/Game/UI"
+    },
+    {
+      "op": "discover_assets"
+    },
+    {
+      "op": "write_file",
+      "path": "Source/UIGraphicsScene.obj",
+      "content": "v -1 -1 0\nv 1 -1 0\nv 0 1 0\nf 1 2 3\n"
+    },
+    {
+      "op": "import_asset",
+      "source": "Source/UIGraphicsScene.obj",
+      "destination": "/Game/UI"
+    },
+    {
+      "op": "create_mesh_entity",
+      "id": "ui_graphics_mesh",
+      "asset": "/Game/UI/UIGraphicsScene.21kb"
+    },
+    {
+      "op": "assert_ui_graphics"
+    },
+    {
+      "op": "delete_entity",
+      "entity": "ui_graphics_mesh"
+    },
+    {
+      "op": "assert_ui_creation_menu"
+    },
+    {
+      "op": "assert_ui_catalog",
+      "component": "Rect Transform"
+    },
+    {
+      "op": "assert_ui_catalog",
+      "component": "Canvas"
+    },
+    {
+      "op": "assert_ui_catalog",
+      "component": "Canvas Scaler"
+    },
+    {
+      "op": "assert_ui_catalog",
+      "component": "Canvas Group"
+    },
+    {
+      "op": "assert_ui_catalog",
+      "component": "Horizontal Layout"
+    },
+    {
+      "op": "assert_ui_catalog",
+      "component": "Vertical Layout"
+    },
+    {
+      "op": "assert_ui_catalog",
+      "component": "Grid Layout"
+    },
+    {
+      "op": "assert_ui_catalog",
+      "component": "Wrap Layout"
+    },
+    {
+      "op": "assert_ui_catalog",
+      "component": "Overlay Layout"
+    },
+    {
+      "op": "assert_ui_catalog",
+      "component": "Layout Element"
+    },
+    {
+      "op": "assert_ui_catalog",
+      "component": "Content Size Fitter"
+    },
+    {
+      "op": "assert_ui_catalog",
+      "component": "Aspect Ratio Fitter"
+    },
+    {
+      "op": "assert_ui_catalog",
+      "component": "Sprite"
+    },
+    {
+      "op": "assert_ui_catalog",
+      "component": "Image"
+    },
+    {
+      "op": "assert_ui_catalog",
+      "component": "Raw Image"
+    },
+    {
+      "op": "assert_ui_catalog",
+      "component": "Text"
+    },
+    {
+      "op": "assert_ui_catalog",
+      "component": "Border"
+    },
+    {
+      "op": "assert_ui_catalog",
+      "component": "Mask"
+    },
+    {
+      "op": "assert_ui_catalog",
+      "component": "Shadow"
+    },
+    {
+      "op": "assert_ui_catalog",
+      "component": "Outline"
+    },
+    {
+      "op": "assert_ui_catalog",
+      "component": "Background Blur"
+    },
+    {
+      "op": "assert_ui_catalog",
+      "component": "Selectable"
+    },
+    {
+      "op": "assert_ui_catalog",
+      "component": "Button"
+    },
+    {
+      "op": "assert_ui_catalog",
+      "component": "Toggle"
+    },
+    {
+      "op": "assert_ui_catalog",
+      "component": "Slider"
+    },
+    {
+      "op": "assert_ui_catalog",
+      "component": "Scrollbar"
+    },
+    {
+      "op": "assert_ui_catalog",
+      "component": "Scroll View"
+    },
+    {
+      "op": "assert_ui_catalog",
+      "component": "Input Field"
+    },
+    {
+      "op": "assert_ui_catalog",
+      "component": "Dropdown"
+    },
+    {
+      "op": "assert_ui_catalog",
+      "component": "Progress Bar"
+    },
+    {
+      "op": "assert_ui_catalog",
+      "component": "Widget Switcher"
+    }
+  ]
+}

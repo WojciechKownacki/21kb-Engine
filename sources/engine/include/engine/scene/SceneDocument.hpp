@@ -12,7 +12,6 @@ namespace kb::scene {
 struct SceneDocument {
     // v9: VisibilityComponent persists explicit gate mode and render mask.
     // v8 (LIB-183): NavAgent and NavObstacle persist their authored policy.
-    // v7 (LIB-173): UIDocumentComponent persists its document asset reference.
     // v6 (LIB-169): Animator persists its explicit root-motion owner.
     // v5 (LIB-167): Animator is a persisted scene/prefab component.
     // v4 (LIB-123): JointComponent is persisted with a stable prefab-node reference.
@@ -35,7 +34,8 @@ struct SceneDocument {
     // v31: AudioListener priority and local-user binding persist.
     // v32: authored scene-global audio mixer, snapshot, and occlusion settings persist.
     // v33: ParticleEffectComponent persists particle-effect authoring policy.
-    static constexpr std::uint32_t CurrentFileVersion = 33U;
+    // v34: hierarchy-authored UI components persist with scene and prefab nodes.
+    static constexpr std::uint32_t CurrentFileVersion = 34U;
 
     std::uint32_t fileVersion = CurrentFileVersion;
     std::string guid;

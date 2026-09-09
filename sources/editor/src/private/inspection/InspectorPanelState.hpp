@@ -24,7 +24,6 @@ enum class InspectorSectionId : std::uint8_t {
     AudioSource,
     AudioListener,
     Animator,
-    UIDocument,
     NavAgent,
     NavObstacle,
     Tags,
@@ -64,6 +63,37 @@ enum class InspectorSectionId : std::uint8_t {
     Terrain,
     SkeletonBinding,
     DeformedGeometry,
+    UIRectTransform,
+    UICanvas,
+    UICanvasScaler,
+    UICanvasGroup,
+    UIHorizontalLayout,
+    UIVerticalLayout,
+    UIGridLayout,
+    UIWrapLayout,
+    UIOverlayLayout,
+    UILayoutElement,
+    UIContentSizeFitter,
+    UIAspectRatioFitter,
+    UISprite,
+    UIImage,
+    UIRawImage,
+    UIText,
+    UIBorder,
+    UIMask,
+    UIShadow,
+    UIOutline,
+    UIBackgroundBlur,
+    UISelectable,
+    UIButton,
+    UIToggle,
+    UISlider,
+    UIScrollbar,
+    UIScrollView,
+    UIInputField,
+    UIDropdown,
+    UIProgressBar,
+    UIWidgetSwitcher,
 };
 
 enum class InspectorHitKind : std::uint8_t {
@@ -72,6 +102,8 @@ enum class InspectorHitKind : std::uint8_t {
     SectionHeader,
     TextField,
     BoolField,
+    ColorField,
+    ChoiceField,
     FloatField,
     MeshPreview,
     MeshPreviewToolbarButton,
@@ -88,6 +120,8 @@ enum class InspectorHitKind : std::uint8_t {
 enum class InspectorDisclosureId : std::uint8_t {
     MeshRendererAdvanced,
     TerrainAdvanced,
+    UIAnchorPresets,
+    UIRectAdvanced,
     Count,
 };
 
@@ -263,8 +297,6 @@ enum class InspectorPropertyId : std::uint16_t {
     ParticleEffectAssetPicker,
     ParticleEffectEnabled,
     ParticleEffectAutoPlay,
-    UIDocumentAsset,
-    UIDocumentEnabled,
     NavAgentRadius,
     NavAgentHeight,
     NavAgentMaxSpeed,
@@ -482,6 +514,42 @@ enum class InspectorPropertyId : std::uint16_t {
     DeformedGeometryMaterialSlotPicker6,
     DeformedGeometryMaterialSlot7,
     DeformedGeometryMaterialSlotPicker7,
+    UIRectTransformField,
+    UICanvasField,
+    UICanvasScalerField,
+    UICanvasGroupField,
+    UIHorizontalLayoutField,
+    UIVerticalLayoutField,
+    UIGridLayoutField,
+    UIWrapLayoutField,
+    UIOverlayLayoutField,
+    UILayoutElementField,
+    UIContentSizeFitterField,
+    UIAspectRatioFitterField,
+    UISpriteField,
+    UIImageField,
+    UIRawImageField,
+    UITextField,
+    UIBorderField,
+    UIMaskField,
+    UIShadowField,
+    UIOutlineField,
+    UIBackgroundBlurField,
+    UISelectableField,
+    UIButtonField,
+    UIToggleField,
+    UISliderField,
+    UIScrollbarField,
+    UIScrollViewField,
+    UIInputFieldField,
+    UIDropdownField,
+    UIProgressBarField,
+    UIWidgetSwitcherField,
+    UIAssetPicker,
+    UIAnchorPresets,
+    UIAnchorPreset,
+    UIRectAdvanced,
+    UIRectLayoutField,
 };
 
 struct InspectorDynamicRowIdentity {
@@ -557,6 +625,10 @@ struct InspectorPanelState {
     void BeginKeyCapture(int mappingIndex) noexcept;
     void EndKeyCapture() noexcept;
     [[nodiscard]] bool IsTextEditing() const noexcept;
+    // Advances the caret blink and reports whether the field still needs repainting, so the
+    // frame loop keeps ticking while a field is focused instead of parking on idle.
+    [[nodiscard]] bool TickTextCaret(float deltaSeconds) noexcept;
+    [[nodiscard]] bool IsTextCaretVisible() const noexcept;
     [[nodiscard]] bool IsTextEditDirty() const noexcept;
     [[nodiscard]] InspectorPropertyId EditedProperty() const noexcept;
     [[nodiscard]] const std::string& EditOriginalBuffer() const noexcept;
@@ -670,6 +742,9 @@ private:
     bool tagsDropdownOpen_ = false;
     int tagsDropdownHover_ = -1;
     bool editSelectingAll_ = false;
+    // Blink phase in seconds, reset to fully visible on every keystroke so typing never hides
+    // the caret mid-stroke. The period comes from the system caret blink time.
+    float editCaretPhase_ = 0.0F;
     bool listeningForKey_ = false;
     int keyCaptureMappingIndex_ = -1;
     InspectorPropertyId draggedProperty_ = InspectorPropertyId::None;

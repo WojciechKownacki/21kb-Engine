@@ -1568,6 +1568,135 @@ int LuaSceneLoadProgress(lua_State* state) {
     return 1;
 }
 
+int LuaUICreate(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+    const char* preset = luaL_checkstring(state, 1);
+    std::vector<ScriptFunctionArgument> arguments{
+        Arg("preset", ScriptValue{ std::string{ preset != nullptr ? preset : "" } }),
+    };
+    if (lua_gettop(state) >= 2 && lua_isnil(state, 2) == 0) {
+        const char* name = luaL_checkstring(state, 2);
+        arguments.push_back(Arg("name", ScriptValue{ std::string{ name != nullptr ? name : "" } }));
+    }
+    if (lua_gettop(state) >= 3 && lua_isnil(state, 3) == 0) {
+        arguments.push_back(Arg(
+            "parent",
+            ScriptValue{ static_cast<std::uint64_t>(luaL_checkinteger(state, 3)), ScriptValueType::Entity }));
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("UI.Create", arguments);
+    if (!result.Succeeded()) {
+        return PushCallError(state, result, "ui entity creation failed");
+    }
+    PucLuaValueBridge::Push(
+        state,
+        result.Output("entity").value_or(ScriptValue{ 0U, ScriptValueType::Entity }));
+    return 1;
+}
+
+int LuaUIComponentCall(lua_State* state, const char* function, const char* output) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+    const char* component = luaL_checkstring(state, 2);
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("entity", ScriptValue{ static_cast<std::uint64_t>(luaL_checkinteger(state, 1)), ScriptValueType::Entity }),
+        Arg("component", ScriptValue{ std::string{ component != nullptr ? component : "" } }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction(function, arguments);
+    if (!result.Succeeded()) {
+        return PushCallError(state, result, "ui component operation failed");
+    }
+    lua_pushboolean(state, result.Output(output).value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaUIAddComponent(lua_State* state) {
+    return LuaUIComponentCall(state, "UI.AddComponent", "added");
+}
+
+int LuaUIRemoveComponent(lua_State* state) {
+    return LuaUIComponentCall(state, "UI.RemoveComponent", "removed");
+}
+
+int LuaUIHasComponent(lua_State* state) {
+    return LuaUIComponentCall(state, "UI.HasComponent", "present");
+}
+
+int LuaUIFocus(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("entity", ScriptValue{ static_cast<std::uint64_t>(luaL_checkinteger(state, 1)), ScriptValueType::Entity }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("UI.Focus", arguments);
+    lua_pushboolean(state, result.Output("focused").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaUIClearFocus(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("UI.ClearFocus", {});
+    lua_pushboolean(state, result.Output("cleared").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaUIHitTest(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushinteger(state, 0);
+        return 1;
+    }
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("x", ScriptValue{ static_cast<float>(luaL_checknumber(state, 1)) }),
+        Arg("y", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("UI.HitTest", arguments);
+    PucLuaValueBridge::Push(
+        state,
+        result.Output("entity").value_or(ScriptValue{ 0U, ScriptValueType::Entity }));
+    return 1;
+}
+
+int LuaUIEntityQuery(lua_State* state, const char* function) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushinteger(state, 0);
+        return 1;
+    }
+    const ScriptFunctionCallResult result = context->CallFunction(function, {});
+    PucLuaValueBridge::Push(
+        state,
+        result.Output("entity").value_or(ScriptValue{ 0U, ScriptValueType::Entity }));
+    return 1;
+}
+
+int LuaUIHovered(lua_State* state) {
+    return LuaUIEntityQuery(state, "UI.Hovered");
+}
+
+int LuaUIPressed(lua_State* state) {
+    return LuaUIEntityQuery(state, "UI.Pressed");
+}
+
+int LuaUIFocused(lua_State* state) {
+    return LuaUIEntityQuery(state, "UI.Focused");
+}
+
 int LuaTransformGetPosition(lua_State* state) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
     if (context == nullptr) {
@@ -2853,198 +2982,6 @@ int LuaTimelineTime(lua_State* state) {
     return 1;
 }
 
-int LuaUICreate(lua_State* state) {
-    ScriptExecutionContext* context = ContextFromUpvalue(state);
-    if (context == nullptr) {
-        lua_pushnil(state);
-        lua_pushliteral(state, "lua script execution context is not available");
-        return 2;
-    }
-    std::vector<ScriptFunctionArgument> arguments{
-        Arg("parent", ScriptValue{ static_cast<std::uint64_t>(luaL_checkinteger(state, 1)), ScriptValueType::Hash }),
-        Arg("name", ScriptValue{ std::string{ luaL_checkstring(state, 2) } }),
-    };
-    if (lua_gettop(state) >= 3 && lua_istable(state, 3) != 0) {
-        std::vector<ScriptFunctionArgument> options = ArgumentsFromTable(state, 3);
-        arguments.insert(arguments.end(), options.begin(), options.end());
-    }
-    const ScriptFunctionCallResult result = context->CallFunction("UI.Create", arguments);
-    if (!result.Succeeded()) return PushCallError(state, result, "UI element creation failed");
-    const std::optional<ScriptValue> element = result.Output("element");
-    lua_pushinteger(state, static_cast<lua_Integer>(element.has_value() ? element->AsUInt64() : 0U));
-    return 1;
-}
-
-int LuaUIApplied(lua_State* state, const char* function) {
-    ScriptExecutionContext* context = ContextFromUpvalue(state);
-    if (context == nullptr) {
-        lua_pushnil(state);
-        lua_pushliteral(state, "lua script execution context is not available");
-        return 2;
-    }
-    std::vector<ScriptFunctionArgument> arguments{
-        Arg("element", ScriptValue{ static_cast<std::uint64_t>(luaL_checkinteger(state, 1)), ScriptValueType::Hash }),
-    };
-    if (lua_gettop(state) >= 2 && lua_istable(state, 2) != 0) {
-        std::vector<ScriptFunctionArgument> options = ArgumentsFromTable(state, 2);
-        arguments.insert(arguments.end(), options.begin(), options.end());
-    }
-    const ScriptFunctionCallResult result = context->CallFunction(function, arguments);
-    if (!result.Succeeded()) return PushCallError(state, result, "UI command was rejected");
-    lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
-    return 1;
-}
-
-int LuaUIDestroy(lua_State* state) { return LuaUIApplied(state, "UI.Destroy"); }
-int LuaUIShow(lua_State* state) { return LuaUIApplied(state, "UI.Show"); }
-int LuaUIHide(lua_State* state) { return LuaUIApplied(state, "UI.Hide"); }
-int LuaUIFocus(lua_State* state) { return LuaUIApplied(state, "UI.Focus"); }
-
-int LuaUIFind(lua_State* state) {
-    ScriptExecutionContext* context = ContextFromUpvalue(state);
-    if (context == nullptr) {
-        lua_pushnil(state);
-        lua_pushliteral(state, "lua script execution context is not available");
-        return 2;
-    }
-    std::vector<ScriptFunctionArgument> arguments{
-        Arg("name", ScriptValue{ std::string{ luaL_checkstring(state, 1) } }),
-    };
-    if (lua_gettop(state) >= 2 && lua_isnoneornil(state, 2) == 0) {
-        const lua_Integer entity = luaL_checkinteger(state, 2);
-        if (entity < 0) {
-            lua_pushnil(state);
-            return 1;
-        }
-        arguments.push_back(Arg("entity", ScriptValue{ static_cast<std::uint64_t>(entity), ScriptValueType::Entity }));
-    }
-    const ScriptFunctionCallResult result = context->CallFunction("UI.Find", arguments);
-    if (!result.Succeeded()) return PushCallError(state, result, "UI setup lookup failed");
-    if (!result.Output("found").value_or(ScriptValue{ false }).AsBool()) {
-        lua_pushnil(state);
-        return 1;
-    }
-    PucLuaValueBridge::Push(state, result.Output("element").value_or(ScriptValue{ 0U, ScriptValueType::Hash }));
-    return 1;
-}
-
-enum class LuaUIValueKind : std::uint8_t { String, Hash, Bool, Float };
-
-int LuaUISetValue(lua_State* state, const char* function, const char* field, LuaUIValueKind kind) {
-    ScriptExecutionContext* context = ContextFromUpvalue(state);
-    if (context == nullptr) {
-        lua_pushnil(state);
-        lua_pushliteral(state, "lua script execution context is not available");
-        return 2;
-    }
-    std::vector<ScriptFunctionArgument> arguments{
-        Arg("element", ScriptValue{ static_cast<std::uint64_t>(luaL_checkinteger(state, 1)), ScriptValueType::Hash }),
-    };
-    switch (kind) {
-    case LuaUIValueKind::String:
-        arguments.push_back(Arg(field, ScriptValue{ std::string{ luaL_checkstring(state, 2) } }));
-        break;
-    case LuaUIValueKind::Hash:
-        arguments.push_back(Arg(field, ScriptValue{ static_cast<std::uint64_t>(luaL_checkinteger(state, 2)), ScriptValueType::Hash }));
-        break;
-    case LuaUIValueKind::Bool:
-        arguments.push_back(Arg(field, ScriptValue{ lua_toboolean(state, 2) != 0 }));
-        break;
-    case LuaUIValueKind::Float:
-        arguments.push_back(Arg(field, ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }));
-        break;
-    }
-    if (lua_gettop(state) >= 3 && lua_istable(state, 3) != 0) {
-        std::vector<ScriptFunctionArgument> options = ArgumentsFromTable(state, 3);
-        arguments.insert(arguments.end(), options.begin(), options.end());
-    }
-    const ScriptFunctionCallResult result = context->CallFunction(function, arguments);
-    if (!result.Succeeded()) return PushCallError(state, result, "UI control command was rejected");
-    lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
-    return 1;
-}
-
-int LuaUISetText(lua_State* state) { return LuaUISetValue(state, "UI.SetText", "text", LuaUIValueKind::String); }
-int LuaUISetImage(lua_State* state) { return LuaUISetValue(state, "UI.SetImage", "image", LuaUIValueKind::Hash); }
-int LuaUISetToggle(lua_State* state) { return LuaUISetValue(state, "UI.SetToggle", "value", LuaUIValueKind::Bool); }
-int LuaUISetSlider(lua_State* state) { return LuaUISetValue(state, "UI.SetSlider", "value", LuaUIValueKind::Float); }
-int LuaUIListAppend(lua_State* state) { return LuaUISetValue(state, "UI.ListAppend", "item", LuaUIValueKind::String); }
-int LuaUIListClear(lua_State* state) { return LuaUIApplied(state, "UI.ListClear"); }
-int LuaUIConfigureList(lua_State* state) {
-    ScriptExecutionContext* context = ContextFromUpvalue(state);
-    if (context == nullptr) {
-        lua_pushnil(state);
-        lua_pushliteral(state, "lua script execution context is not available");
-        return 2;
-    }
-    const lua_Integer viewport = luaL_checkinteger(state, 2);
-    const lua_Integer overscan = luaL_checkinteger(state, 3);
-    if (viewport < 0 || overscan < 0 || viewport > static_cast<lua_Integer>(std::numeric_limits<std::uint32_t>::max()) ||
-        overscan > static_cast<lua_Integer>(std::numeric_limits<std::uint32_t>::max())) {
-        return luaL_error(state, "UI.ConfigureList viewport and overscan must be unsigned integers");
-    }
-    const std::vector<ScriptFunctionArgument> arguments{
-        Arg("element", ScriptValue{ static_cast<std::uint64_t>(luaL_checkinteger(state, 1)), ScriptValueType::Hash }),
-        Arg("viewportItems", ScriptValue{ static_cast<std::uint32_t>(viewport) }),
-        Arg("overscan", ScriptValue{ static_cast<std::uint32_t>(overscan) }),
-    };
-    const ScriptFunctionCallResult result = context->CallFunction("UI.ConfigureList", arguments);
-    if (!result.Succeeded()) return PushCallError(state, result, "UI virtual list configuration was rejected");
-    lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
-    return 1;
-}
-int LuaUIListScrollTo(lua_State* state) {
-    ScriptExecutionContext* context = ContextFromUpvalue(state);
-    if (context == nullptr) {
-        lua_pushnil(state);
-        lua_pushliteral(state, "lua script execution context is not available");
-        return 2;
-    }
-    const lua_Integer index = luaL_checkinteger(state, 2);
-    if (index < 0 || index > static_cast<lua_Integer>(std::numeric_limits<std::uint32_t>::max())) {
-        return luaL_error(state, "UI.ListScrollTo index must be an unsigned integer");
-    }
-    const std::vector<ScriptFunctionArgument> arguments{
-        Arg("element", ScriptValue{ static_cast<std::uint64_t>(luaL_checkinteger(state, 1)), ScriptValueType::Hash }),
-        Arg("firstVisibleIndex", ScriptValue{ static_cast<std::uint32_t>(index) }),
-    };
-    const ScriptFunctionCallResult result = context->CallFunction("UI.ListScrollTo", arguments);
-    if (!result.Succeeded()) return PushCallError(state, result, "UI virtual list scroll was rejected");
-    lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
-    return 1;
-}
-int LuaUISetScrollOffset(lua_State* state) { return LuaUISetValue(state, "UI.SetScrollOffset", "offset", LuaUIValueKind::Float); }
-int LuaUISetModalOpen(lua_State* state) { return LuaUISetValue(state, "UI.SetModalOpen", "open", LuaUIValueKind::Bool); }
-
-int LuaUIEmitPosition(lua_State* state, const char* function) {
-    ScriptExecutionContext* context = ContextFromUpvalue(state);
-    if (context == nullptr) {
-        lua_pushnil(state);
-        lua_pushliteral(state, "lua script execution context is not available");
-        return 2;
-    }
-    std::vector<ScriptFunctionArgument> arguments{
-        Arg("element", ScriptValue{ static_cast<std::uint64_t>(luaL_checkinteger(state, 1)), ScriptValueType::Hash }),
-        Arg("x", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
-        Arg("y", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }),
-    };
-    if (lua_gettop(state) >= 4 && lua_istable(state, 4) != 0) {
-        std::vector<ScriptFunctionArgument> options = ArgumentsFromTable(state, 4);
-        arguments.insert(arguments.end(), options.begin(), options.end());
-    }
-    const ScriptFunctionCallResult result = context->CallFunction(function, arguments);
-    if (!result.Succeeded()) return PushCallError(state, result, "UI event was rejected");
-    lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
-    return 1;
-}
-
-int LuaUIEmitClick(lua_State* state) { return LuaUIEmitPosition(state, "UI.EmitClick"); }
-int LuaUIEmitPointer(lua_State* state) { return LuaUIEmitPosition(state, "UI.EmitPointer"); }
-int LuaUIEmitSubmit(lua_State* state) { return LuaUISetValue(state, "UI.EmitSubmit", "text", LuaUIValueKind::String); }
-int LuaUIEmitChanged(lua_State* state) { return LuaUISetValue(state, "UI.EmitChanged", "value", LuaUIValueKind::Float); }
-int LuaUIEmitFocus(lua_State* state) { return LuaUISetValue(state, "UI.EmitFocus", "focused", LuaUIValueKind::Bool); }
-int LuaUIEmitNavigation(lua_State* state) { return LuaUISetValue(state, "UI.EmitNavigation", "direction", LuaUIValueKind::String); }
-
 ScriptFunctionCallResult CallLocalization(ScriptExecutionContext& context, const char* function,
     std::vector<ScriptFunctionArgument> arguments) {
     return context.CallFunction(function, arguments);
@@ -3135,7 +3072,7 @@ void SetClosure(lua_State* state, const char* name, lua_CFunction function, Scri
 // marshalling.  Their position follows ScriptApiCatalog::LuaBindingDefinitions
 // excluding Task and global bindings; table and Lua field names deliberately
 // live only in that catalog.
-constexpr std::array<lua_CFunction, 188> kCatalogBindingAdapters{ {
+constexpr std::array<lua_CFunction, 176> kCatalogBindingAdapters{ {
     &LuaAudioPlay,
     &LuaAudioSetMixer,
     &LuaAudioActiveMixer,
@@ -3224,6 +3161,16 @@ constexpr std::array<lua_CFunction, 188> kCatalogBindingAdapters{ {
     &LuaSceneGetActive,
     &LuaSceneFind,
     &LuaSceneLoadProgress,
+    &LuaUICreate,
+    &LuaUIAddComponent,
+    &LuaUIRemoveComponent,
+    &LuaUIHasComponent,
+    &LuaUIFocus,
+    &LuaUIClearFocus,
+    &LuaUIHitTest,
+    &LuaUIHovered,
+    &LuaUIPressed,
+    &LuaUIFocused,
     &LuaTimeDelta,
     &LuaTransformGetPosition,
     &LuaTransformSetPosition,
@@ -3292,28 +3239,6 @@ constexpr std::array<lua_CFunction, 188> kCatalogBindingAdapters{ {
     &LuaTimelineBind,
     &LuaTimelineIsPlaying,
     &LuaTimelineTime,
-    &LuaUICreate,
-    &LuaUIDestroy,
-    &LuaUIShow,
-    &LuaUIHide,
-    &LuaUIFocus,
-    &LuaUIFind,
-    &LuaUISetText,
-    &LuaUISetImage,
-    &LuaUISetToggle,
-    &LuaUISetSlider,
-    &LuaUIListAppend,
-    &LuaUIListClear,
-    &LuaUIConfigureList,
-    &LuaUIListScrollTo,
-    &LuaUISetScrollOffset,
-    &LuaUISetModalOpen,
-    &LuaUIEmitClick,
-    &LuaUIEmitPointer,
-    &LuaUIEmitSubmit,
-    &LuaUIEmitChanged,
-    &LuaUIEmitFocus,
-    &LuaUIEmitNavigation,
     &LuaLocalizationSetCatalog,
     &LuaLocalizationSetLanguage,
     &LuaLocalizationLanguage,

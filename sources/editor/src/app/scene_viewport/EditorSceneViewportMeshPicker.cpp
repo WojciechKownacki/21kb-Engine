@@ -8,6 +8,7 @@
 #include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneComponentVisitors.hpp"
 #include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneRenderFeedback.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneVisibilityResolution.hpp"
@@ -223,6 +224,53 @@ void ConsiderOverlayIconPick(NearestPickContext& pick, kb::scene::SceneEntity en
     };
 }
 
+// The renderer publishes, at every scene submit, the same world bounds sphere it culls
+// with. It is the only real measurement of where a mesh actually is: the fallback box
+// below knows nothing about the asset, so a mesh whose geometry sits away from its own
+// origin - a character authored with the origin at its feet - draws entirely outside it.
+// Ray directions reaching the picker are normalized (EditorSceneViewportHitResolver), so
+// this distance is in the same world units as the slab test's.
+// The renderer publishes a box beside the sphere for the same instance, sharing one origin.
+// The box is the shape selection wants: a character mesh is typically half as deep as it is
+// tall, so its sphere reaches far past the silhouette and steals clicks from empty space.
+// Reuses this file's own slab test rather than adding a second ray-box intersection.
+[[nodiscard]] bool HitBoundsBox(
+    const EditorSceneViewportRay& ray,
+    const kb::scene::SceneRenderBounds& bounds,
+    float& distance) noexcept {
+    const kb::scene::Vec3 localOrigin = EditorSceneViewportMath::Sub(ray.origin, bounds.center);
+    float nearDistance = 0.0F;
+    float farDistance = 1000000.0F;
+    if (!Slab(localOrigin.x, ray.direction.x, -bounds.halfExtents.x, bounds.halfExtents.x, nearDistance, farDistance) ||
+        !Slab(localOrigin.y, ray.direction.y, -bounds.halfExtents.y, bounds.halfExtents.y, nearDistance, farDistance) ||
+        !Slab(localOrigin.z, ray.direction.z, -bounds.halfExtents.z, bounds.halfExtents.z, nearDistance, farDistance)) {
+        return false;
+    }
+
+    distance = nearDistance > 0.0F ? nearDistance : farDistance;
+    return distance > 0.0F;
+}
+
+[[nodiscard]] bool HitBoundsSphere(
+    const EditorSceneViewportRay& ray,
+    const kb::scene::SceneRenderBounds& bounds,
+    float& distance) noexcept {
+    const kb::scene::Vec3 toCenter = EditorSceneViewportMath::Sub(bounds.center, ray.origin);
+    const float alongRay = EditorSceneViewportMath::Dot(toCenter, ray.direction);
+    const float radiusSquared = bounds.radius * bounds.radius;
+    const float perpendicularSquared =
+        EditorSceneViewportMath::Dot(toCenter, toCenter) - alongRay * alongRay;
+    if (perpendicularSquared > radiusSquared) {
+        return false;
+    }
+
+    const float halfChord = std::sqrt(std::max(0.0F, radiusSquared - perpendicularSquared));
+    const float nearDistance = alongRay - halfChord;
+    const float farDistance = alongRay + halfChord;
+    distance = nearDistance > 0.0F ? nearDistance : farDistance;
+    return distance > 0.0F;
+}
+
 [[nodiscard]] bool HitTransformBox(const EditorSceneViewportRay& ray, const kb::scene::TransformComponent& transform, float& distance) noexcept {
     const kb::scene::Quat worldRotation = ResolveWorldRotation(transform);
     const kb::scene::Vec3 localOrigin = InverseRotate(worldRotation, EditorSceneViewportMath::Sub(ray.origin, transform.worldPosition));
@@ -263,7 +311,21 @@ void PickNearestVisitor(kb::scene::SceneEntity entity, const kb::scene::Transfor
         return;
     }
     float distance = 0.0F;
-    if (!HitTransformBox(pick.ray, transform, distance)) {
+    const kb::scene::SceneRenderBounds bounds =
+        pick.scene != nullptr ? kb::scene::SceneRenderFeedback::WorldBounds(*pick.scene, entity)
+                              : kb::scene::SceneRenderBounds{};
+    // Tightest available shape wins. The published box is preferred; the sphere covers a mesh
+    // whose box the renderer could not resolve; and before the first submit, or in a headless
+    // scene, there is no published frame at all, so the transform box stays the honest floor.
+    bool hit = false;
+    if (bounds.HasBox()) {
+        hit = HitBoundsBox(pick.ray, bounds, distance);
+    } else if (bounds.IsValid()) {
+        hit = HitBoundsSphere(pick.ray, bounds, distance);
+    } else {
+        hit = HitTransformBox(pick.ray, transform, distance);
+    }
+    if (!hit) {
         return;
     }
 
@@ -420,6 +482,52 @@ void PickNearestEntityVisitor(kb::scene::SceneEntity entity, const kb::scene::Tr
     ConsiderEntityOriginPick(pick, entity, center, cameraDistance);
 }
 
+// Rectangle selection on the entity origin alone misses any mesh whose origin sits outside
+// the drag - a character authored with its origin at the feet is not selectable by a rectangle
+// drawn over its body. Projecting the eight corners of the published world box and testing the
+// screen rectangle they span keeps click and rectangle selection on the same representation.
+// Corners behind the camera do not project; the rectangle they would have widened is simply
+// not counted, which can only make the test stricter, never looser.
+[[nodiscard]] bool RectOverlapsProjectedBox(
+    const RectPickContext& pick,
+    const kb::scene::SceneRenderBounds& bounds) noexcept {
+    float minX = 0.0F;
+    float minY = 0.0F;
+    float maxX = 0.0F;
+    float maxY = 0.0F;
+    bool projectedAny = false;
+    for (std::uint32_t corner = 0U; corner < 8U; ++corner) {
+        const kb::scene::Vec3 position{
+            bounds.center.x + ((corner & 1U) != 0U ? bounds.halfExtents.x : -bounds.halfExtents.x),
+            bounds.center.y + ((corner & 2U) != 0U ? bounds.halfExtents.y : -bounds.halfExtents.y),
+            bounds.center.z + ((corner & 4U) != 0U ? bounds.halfExtents.z : -bounds.halfExtents.z),
+        };
+        ScreenPoint screen{};
+        if (!Project(*pick.camera, pick.renderArea, position, screen)) {
+            continue;
+        }
+        if (!projectedAny) {
+            minX = screen.x;
+            maxX = screen.x;
+            minY = screen.y;
+            maxY = screen.y;
+            projectedAny = true;
+            continue;
+        }
+        minX = std::min(minX, screen.x);
+        maxX = std::max(maxX, screen.x);
+        minY = std::min(minY, screen.y);
+        maxY = std::max(maxY, screen.y);
+    }
+    if (!projectedAny) {
+        return false;
+    }
+
+    const RECT& rect = pick.selectionRect;
+    return maxX >= static_cast<float>(rect.left) && minX <= static_cast<float>(rect.right) &&
+        maxY >= static_cast<float>(rect.top) && minY <= static_cast<float>(rect.bottom);
+}
+
 void ConsiderRectTransform(
     kb::scene::SceneEntity entity,
     const kb::scene::TransformComponent& transform,
@@ -439,7 +547,21 @@ void ConsiderRectTransform(
 }
 
 void PickRectVisitor(kb::scene::SceneEntity entity, const kb::scene::TransformComponent& transform, const kb::scene::MeshRendererComponent&, void* context) {
-    ConsiderRectTransform(entity, transform, *static_cast<RectPickContext*>(context));
+    auto& pick = *static_cast<RectPickContext*>(context);
+    if (pick.scene != nullptr && pick.camera != nullptr &&
+        kb::scene::ResolveVisibility(*pick.scene, entity).visible) {
+        const kb::scene::SceneRenderBounds bounds =
+            kb::scene::SceneRenderFeedback::WorldBounds(*pick.scene, entity);
+        if (bounds.HasBox()) {
+            // The box already contains the origin, so a rectangle that misses the box cannot
+            // contain the origin either - there is nothing for the origin test to add here.
+            if (RectOverlapsProjectedBox(pick, bounds)) {
+                pick.entities.push_back(entity);
+            }
+            return;
+        }
+    }
+    ConsiderRectTransform(entity, transform, pick);
 }
 
 void PickRectLightVisitor(

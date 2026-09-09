@@ -2638,20 +2638,21 @@ void RunRenderBridgeTelemetryAggregatesBridgeStatsTest() {
     sceneStats.cameraProxyCount = 1U;
     sceneStats.lightProxyCount = 2U;
 
-    const RenderBridgeTelemetry telemetry = BuildRenderBridgeTelemetry(syncStats, sceneStats);
+    const RenderBridgeTelemetry telemetry = RenderBridgeTelemetryBuilder::Build(syncStats, sceneStats);
     Require(telemetry.worldTransformPrecomputedReads == 90U, "Bridge telemetry lost precomputed read count");
     Require(telemetry.transformInPlaceUpdates == 75U, "Bridge telemetry lost in-place update count");
     Require(telemetry.meshProxies == 4U, "Bridge telemetry lost mesh proxy count");
     Require(NearlyEqual(static_cast<float>(telemetry.PrecomputedReadRatio()), 0.9F), "Bridge telemetry computed the wrong precomputed read ratio");
     Require(NearlyEqual(static_cast<float>(telemetry.InPlaceUpdateRatio()), 0.75F), "Bridge telemetry computed the wrong in-place update ratio");
 
-    const std::string json = RenderBridgeTelemetryToJsonString(telemetry);
+    const std::string json = RenderBridgeTelemetryJsonWriter::ToString(telemetry);
     Require(json.find("\"schema\": \"kb.render.bridge_telemetry.v1\"") != std::string::npos, "Bridge telemetry JSON omitted schema");
     Require(json.find("\"world_transform_precomputed_reads\": 90") != std::string::npos, "Bridge telemetry JSON omitted precomputed reads");
     Require(json.find("\"transform_in_place_updates\": 75") != std::string::npos, "Bridge telemetry JSON omitted in-place updates");
 
     // Empty bridge reports a 1.0 (fully optimal / nothing to fall back on) ratio.
-    const RenderBridgeTelemetry empty = BuildRenderBridgeTelemetry(EcsRenderSceneSynchronizerStats{}, RenderSceneStats{});
+    const RenderBridgeTelemetry empty =
+        RenderBridgeTelemetryBuilder::Build(EcsRenderSceneSynchronizerStats{}, RenderSceneStats{});
     Require(NearlyEqual(static_cast<float>(empty.PrecomputedReadRatio()), 1.0F), "Empty bridge telemetry should report a neutral ratio");
 }
 

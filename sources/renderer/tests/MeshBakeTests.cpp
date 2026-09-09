@@ -949,7 +949,7 @@ void RunBakedMeshFormatSelfCheckTest() {
         "A baked mesh did not retain the index width and chunk budget of its target profile");
     Require(!kb::render::bake::BakedMeshMatchesTargetProfile(
                 output.primaryBlock, output.chunks,
-                kb::assets::bake::AndroidArm64BakeTargetProfile()),
+                kb::assets::bake::AndroidAstcArm64BakeTargetProfile()),
         "The target gate accepted a 32-bit desktop mesh as an Android 16-bit-index artifact");
     kb::assets::bake::BakeTargetProfile undersizedChunkProfile =
         kb::assets::bake::WindowsX64BakeTargetProfile();
@@ -1635,7 +1635,7 @@ void RunBakedMeshDeterminismTest() {
         "Two separately built copies of one mesh did not bake to the same bytes");
     Require(a.key.Digest() == c.key.Digest(), "Two separately built copies of one mesh did not get the same key");
 
-    const MeshBakeOutput android = BakeInto(first, kb::assets::bake::AndroidArm64BakeTargetProfile());
+    const MeshBakeOutput android = BakeInto(first, kb::assets::bake::AndroidAstcArm64BakeTargetProfile());
     Require(android.status == MeshBakeStatus::Success, "A sphere did not bake for the mobile profile");
     Require(!(android.key.Digest() == a.key.Digest()), "Two target profiles produced one bake key");
     Require(android.primaryBlock != a.primaryBlock, "Two target profiles produced identical bytes");

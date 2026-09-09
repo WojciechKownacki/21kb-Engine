@@ -18,7 +18,9 @@
 #include "engine/scene/SceneHistory.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneUIComponentSet.hpp"
 #include "engine/scene/SkeletalMeshAssetIO.hpp"
+#include "engine/ui/UIComponentPropertyCatalog.hpp"
 #include "inspection/InspectorAudioTextBuilder.hpp"
 #include "inspection/InspectorAudioComponentModel.hpp"
 #include "inspection/InspectorAudioScrubController.hpp"
@@ -31,6 +33,7 @@
 #include "inspection/InspectorAddComponentBrowserModel.hpp"
 #include "inspection/InspectorPanelState.hpp"
 #include "inspection/InspectorPhysicsModel.hpp"
+#include "inspection/ui/InspectorUIComponentModel.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialAssetWriter.hpp"
 #include "kb/render/resources/RenderMaterialFunctionAssetLoader.hpp"
@@ -49,6 +52,7 @@
 #include "scene/EditorHierarchySelectionState.hpp"
 #include "scene/EditorSceneMaterialAssetActions.hpp"
 #include "scene/EditorSceneMeshAssetActions.hpp"
+#include "scene/ui/EditorUIComponentAuthoring.hpp"
 #include "scene/material/EditorMaterialReferenceFinder.hpp"
 #include "scene/particle/EditorParticleEffectReferenceFinder.hpp"
 #include "engine/scene/ParticleEffectComponent.hpp"
@@ -79,6 +83,7 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <span>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -175,6 +180,76 @@ public:
     };
     link.id = kb::render::MakeRenderMaterialGraphLinkId(link);
     return link;
+}
+
+void RunEditorConsoleStateTest() {
+    using kb::editor::EditorConsoleButton;
+    using kb::editor::EditorConsoleLevel;
+
+    kb::editor::EditorConsoleState state;
+    kb::editor::tests::Require(
+        state.Accepts(EditorConsoleLevel::Info) && state.Accepts(EditorConsoleLevel::Warning) &&
+            state.Accepts(EditorConsoleLevel::Error),
+        "Editor Console must accept every level by default");
+
+    state.Info("Runtime", "ready");
+    state.Warning("Assets", "stale");
+    state.Error("Renderer", "failed");
+    kb::editor::tests::Require(
+        state.Entries().size() == 3U && state.Count(EditorConsoleLevel::Info) == 1U &&
+            state.Count(EditorConsoleLevel::Warning) == 1U && state.Count(EditorConsoleLevel::Error) == 1U,
+        "Editor Console counters must match its retained entries");
+    kb::editor::tests::Require(
+        state.Entries()[0].sequence < state.Entries()[1].sequence &&
+            state.Entries()[1].sequence < state.Entries()[2].sequence &&
+            state.Entries()[1].category == "Assets" && state.Entries()[1].message == "stale",
+        "Editor Console must retain ordered messages with their category");
+
+    state.Select(state.Entries()[1].sequence);
+    kb::editor::tests::Require(
+        state.SelectedEntry() != nullptr && state.SelectedEntry()->message == "stale",
+        "Editor Console selection must resolve to the retained entry");
+    state.SetDetailScrollLine(7, 10);
+    state.Select(state.Entries()[2].sequence);
+    kb::editor::tests::Require(state.DetailScrollLine() == 0, "Changing the Console selection must reset detail scroll");
+
+    state.SetDetailHeight(1);
+    kb::editor::tests::Require(state.DetailHeight() == 54, "Editor Console detail height must clamp to its minimum");
+    state.SetDetailHeight(999);
+    kb::editor::tests::Require(state.DetailHeight() == 220, "Editor Console detail height must clamp to its maximum");
+    state.SetDetailScrollLine(5, 20);
+    state.BeginDetailScrollbarDrag(10);
+    state.DragDetailScrollbar(15, 10, 20);
+    state.EndDetailScrollbarDrag();
+    kb::editor::tests::Require(state.DetailScrollLine() == 15, "Editor Console detail scrollbar drag must scale to its range");
+    state.SetListScrollRow(4, 20);
+    state.BeginListScrollbarDrag(10);
+    state.DragListScrollbar(15, 10, 20);
+    state.EndListScrollbarDrag();
+    kb::editor::tests::Require(state.ListScrollRow() == 14, "Editor Console list scrollbar drag must scale to its range");
+
+    kb::editor::tests::Require(
+        state.SetHoveredButton(EditorConsoleButton::Clear) &&
+            !state.SetHoveredButton(EditorConsoleButton::Clear),
+        "Editor Console hover changes must invalidate only on a new button");
+    state.PressButton(EditorConsoleButton::Clear);
+    state.ReleaseButton();
+    state.ToggleWarnings();
+    kb::editor::tests::Require(
+        state.PressedButton() == EditorConsoleButton::None && !state.Accepts(EditorConsoleLevel::Warning),
+        "Editor Console button and level-filter state must round-trip");
+
+    state.Clear();
+    for (std::size_t index = 0U; index <= kb::editor::EditorConsoleState::Capacity(); ++index) {
+        state.Info("Capacity", std::to_string(index));
+    }
+    state.Warning("Capacity", "newest");
+    kb::editor::tests::Require(
+        state.Entries().size() == kb::editor::EditorConsoleState::Capacity() &&
+            state.Count(EditorConsoleLevel::Info) == kb::editor::EditorConsoleState::Capacity() - 1U &&
+            state.Count(EditorConsoleLevel::Warning) == 1U && state.Entries().front().message == "2" &&
+            state.Entries().back().message == "newest",
+        "Editor Console capacity eviction must keep entries and per-level counters in step");
 }
 
 void RunInspectorTextEditDirtyStateTest() {
@@ -2935,16 +3010,325 @@ void RunAddComponentBrowserModelTest() {
     kb::editor::tests::Require(window.count >= 4, "The visible window covers the list height plus partial rows");
 }
 
+void RunUIComponentAuthoringTest() {
+    using kb::editor::EditorUIComponentAuthoring;
+    using kb::editor::InspectorUIComponentModel;
+    using kb::scene::UIComponentPropertyValue;
+    using kb::scene::UIComponentType;
+    {
+        kb::scene::UIRectTransform original;
+        original.offsetMin = {20.0F, 30.0F};
+        original.offsetMax = {220.0F, 90.0F};
+        for (int preset = 0; preset < 16; ++preset) {
+            auto rect = original;
+            kb::editor::tests::Require(InspectorUIComponentModel::ApplyAnchorPreset(rect, preset, {800.0F, 600.0F}, false, false) &&
+                    InspectorUIComponentModel::AnchorPreset(rect) == preset &&
+                    rect.anchorMin.x * 800.0F + rect.offsetMin.x == 20.0F &&
+                    rect.anchorMax.x * 800.0F + rect.offsetMax.x == 220.0F &&
+                    rect.anchorMin.y * 600.0F + rect.offsetMin.y == 30.0F &&
+                    rect.anchorMax.y * 600.0F + rect.offsetMax.y == 90.0F,
+                "Anchor presets must preserve all four layout edges by default");
+        }
+        auto rect = original;
+        kb::editor::tests::Require(InspectorUIComponentModel::EditRectLayout(rect, 0, 50.0F) &&
+                rect.offsetMin.x == -50.0F && rect.offsetMax.x == 150.0F &&
+                InspectorUIComponentModel::EditRectLayout(rect, 2, 300.0F) &&
+                rect.offsetMin.x == -100.0F && rect.offsetMax.x == 200.0F,
+            "Position edits preserve size and dimension edits preserve the pivot position");
+        kb::editor::tests::Require(!InspectorUIComponentModel::EditRectLayout(rect, 2, -1.0F) &&
+                !InspectorUIComponentModel::ApplyAnchorPreset(rect, 16, {800.0F, 600.0F}, false, false),
+            "Invalid dimensions and anchor presets must be rejected");
+        kb::editor::tests::Require(InspectorUIComponentModel::ApplyAnchorPreset(rect, 15, {800.0F, 600.0F}, true, true) &&
+                rect.offsetMin.x == 0.0F && rect.offsetMax.x == 0.0F &&
+                rect.offsetMin.y == 0.0F && rect.offsetMax.y == 0.0F &&
+                rect.pivot.x == 0.5F && rect.pivot.y == 0.5F,
+            "Aligning a stretch preset should fill its parent and center the pivot");
+        kb::editor::tests::Require(InspectorUIComponentModel::EditRectLayout(rect, 2, 20.0F) &&
+                InspectorUIComponentModel::EditRectLayout(rect, 3, 30.0F) &&
+                rect.offsetMax.x == -20.0F && rect.offsetMax.y == -30.0F &&
+                InspectorUIComponentModel::RectLayoutFields(rect)[2].label == "Right" &&
+                InspectorUIComponentModel::RectLayoutFields(rect)[3].label == "Bottom",
+            "Stretched layout exposes positive right and bottom insets");
+    }
+
+    const std::span<const kb::scene::UIComponentDescriptor> componentCatalog =
+        kb::scene::UIComponentCatalog();
+    const std::span<const kb::scene::UIComponentPresetDescriptor> presetCatalog =
+        kb::scene::UIComponentPresetCatalog();
+    const std::vector<const kb::editor::InspectorComponentTile*> widgetTiles =
+        kb::editor::InspectorComponentCatalog::InCategory("User Widget");
+    kb::editor::tests::Require(componentCatalog.size() == 31U,
+        "User Widget component catalog should expose every individual component");
+    kb::editor::tests::Require(
+        widgetTiles.size() == componentCatalog.size() + presetCatalog.size(),
+        "User Widget category should be derived from component and preset catalogs");
+    for (const kb::scene::UIComponentDescriptor& descriptor : componentCatalog) {
+        const kb::editor::InspectorComponentTile* tile =
+            kb::editor::InspectorComponentCatalog::Find(descriptor.stableId);
+        kb::editor::tests::Require(tile != nullptr && tile->label == descriptor.displayName,
+            "Every canonical UI component should have one matching Inspector tile");
+    }
+    const kb::scene::UIComponentPropertyDescriptor* imageAsset =
+        kb::scene::FindUIComponentProperty(UIComponentType::Image, "imageAssetId");
+    const kb::scene::UIComponentPropertyDescriptor* fontAsset =
+        kb::scene::FindUIComponentProperty(UIComponentType::Text, "fontAssetId");
+    kb::editor::tests::Require(imageAsset != nullptr &&
+            imageAsset->assetKind == kb::assets::AssetKind::Texture &&
+            imageAsset->assetDependencyRole == "ui.image" &&
+            fontAsset != nullptr && fontAsset->assetKind == kb::assets::AssetKind::Font &&
+            fontAsset->assetDependencyRole == "ui.font",
+        "UI asset fields should expose their kind and dependency role through the canonical property catalog");
+
+    AudioScrubTransactionFixture fixture;
+    {
+        kb::scene::Scene savedScene;
+        const auto bare = savedScene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Existing Button" });
+        kb::scene::UIButton button;
+        button.submitOnRelease = false;
+        savedScene.Components().UI().Set(bare, button);
+        const auto document = kb::scene::SceneDocumentService::Capture(savedScene, "Existing UI");
+        kb::scene::Scene restored;
+        kb::editor::tests::Require(kb::scene::SceneDocumentService::LoadIntoScene(restored, document),
+            "A previously saved bare UI component should remain loadable");
+        const auto loaded = restored.Hierarchy().RootEntities().front();
+        kb::editor::tests::Require(EditorUIComponentAuthoring::Complete(restored, loaded) &&
+                restored.Components().UI().Has<kb::scene::UIRectTransform>(loaded) &&
+                restored.Components().UI().Has<kb::scene::UIText>(loaded) &&
+                restored.Components().UI().Has<kb::scene::UIBorder>(loaded) &&
+                restored.Components().UI().Has<kb::scene::UISelectable>(loaded) &&
+                !restored.Components().UI().TryGet<kb::scene::UIButton>(loaded)->submitOnRelease,
+            "Completing a saved Button must supply anchors and visuals while preserving its authored options");
+    }
+    const kb::scene::SceneEntity entity = fixture.scene.Entities().CreateEntity(
+        kb::scene::SceneObjectDesc{ .name = "WidgetEntity" });
+    fixture.hierarchySelection.SelectEntity(entity);
+    kb::editor::tests::Require(fixture.commandController.Execute(
+            "Add Rect Transform", [&]() {
+                return EditorUIComponentAuthoring::Add(
+                    fixture.scene, entity, "kb21.ui.rect-transform");
+            }),
+        "An individual UI component should be added through scene history");
+    kb::scene::UIRectTransform rect =
+        *fixture.scene.Components().UI().TryGet<kb::scene::UIRectTransform>(entity);
+    rect.offsetMin.x = 7.0F;
+    fixture.scene.Components().UI().Set(entity, rect);
+    kb::editor::tests::Require(fixture.commandController.Execute(
+            "Add Button Set", [&]() {
+                return EditorUIComponentAuthoring::Add(
+                    fixture.scene, entity, "preset:Button");
+            }),
+        "A UI preset should add its canonical component set through scene history");
+    kb::editor::tests::Require(
+        fixture.scene.Components().UI().Has<kb::scene::UIButton>(entity) &&
+            fixture.scene.Components().UI().Has<kb::scene::UISelectable>(entity) &&
+            fixture.scene.Components().UI().Has<kb::scene::UIBorder>(entity) &&
+            fixture.scene.Components().UI().TryGet<kb::scene::UIRectTransform>(entity)->offsetMin.x == 7.0F,
+        "Button preset should fill missing components without overwriting an authored Rect Transform");
+    kb::editor::tests::Require(fixture.commandController.Undo() &&
+            !fixture.scene.Components().UI().Has<kb::scene::UIButton>(fixture.RootEntity()) &&
+            fixture.commandController.Redo() &&
+            fixture.scene.Components().UI().Has<kb::scene::UIButton>(fixture.RootEntity()),
+        "UI preset addition should undo and redo as one scene command");
+
+    const auto editProperty = [&](UIComponentType component, std::string_view property,
+                                  const UIComponentPropertyValue& value) {
+        kb::scene::UIComponentSet candidate = kb::scene::CaptureSceneUIComponents(
+            fixture.scene.Components().UI(), fixture.RootEntity());
+        if (kb::scene::WriteUIComponentProperty(candidate, component, property, value) !=
+            kb::scene::UIComponentPropertyWriteResult::Succeeded) {
+            return false;
+        }
+        return fixture.commandController.Execute("Edit UI Property", [&]() {
+            kb::scene::SynchronizeSceneUIComponents(
+                fixture.scene.Components().UI(), fixture.RootEntity(), candidate);
+            return true;
+        });
+    };
+    kb::editor::tests::Require(editProperty(
+            UIComponentType::RectTransform, "offsetMin.x", UIComponentPropertyValue{ 48.0F }),
+        "A canonical UI property should edit through scene history");
+    kb::editor::tests::Require(
+        fixture.scene.Components().UI().TryGet<kb::scene::UIRectTransform>(fixture.RootEntity())->offsetMin.x == 48.0F &&
+            fixture.commandController.Undo() &&
+            fixture.scene.Components().UI().TryGet<kb::scene::UIRectTransform>(fixture.RootEntity())->offsetMin.x == 7.0F &&
+            fixture.commandController.Redo() &&
+            fixture.scene.Components().UI().TryGet<kb::scene::UIRectTransform>(fixture.RootEntity())->offsetMin.x == 48.0F,
+        "UI property editing should round-trip through undo and redo");
+
+    const std::vector<kb::editor::InspectorUIPropertyRow> rectRows =
+        InspectorUIComponentModel::Properties(
+            fixture.scene, fixture.RootEntity(), UIComponentType::RectTransform);
+    kb::editor::tests::Require(rectRows.size() ==
+            kb::scene::UIComponentPropertyCatalog(UIComponentType::RectTransform).size() &&
+            std::ranges::any_of(rectRows, [](const kb::editor::InspectorUIPropertyRow& row) {
+                return row.name == "offsetMin.x" && row.value == "48";
+            }),
+        "Inspector rows should be generated from the canonical property catalog and live values");
+    kb::editor::tests::Require(
+        !InspectorUIComponentModel::Parse(
+             kb::scene::UIComponentPropertyType::Float, "nan").has_value() &&
+            !InspectorUIComponentModel::Parse(
+                 kb::scene::UIComponentPropertyType::UInt32, "4294967296").has_value(),
+        "Inspector parsing should reject non-finite and overflowing authored values");
+    kb::scene::UIComponentSet invalidCandidate = kb::scene::CaptureSceneUIComponents(
+        fixture.scene.Components().UI(), fixture.RootEntity());
+    const kb::scene::UIComponentSet beforeInvalid = invalidCandidate;
+    kb::editor::tests::Require(
+        kb::scene::WriteUIComponentProperty(invalidCandidate,
+            UIComponentType::RectTransform, "anchorMin.x", UIComponentPropertyValue{ 2.0F }) ==
+                kb::scene::UIComponentPropertyWriteResult::InvalidValue &&
+            kb::scene::AreUIComponentSetsEqual(invalidCandidate, beforeInvalid),
+        "Invalid UI property edits should leave the component set unchanged");
+
+    kb::editor::tests::Require(fixture.commandController.Execute(
+            "Remove Button", [&]() {
+                return EditorUIComponentAuthoring::Remove(
+                    fixture.scene, fixture.RootEntity(), UIComponentType::Button);
+            }) &&
+            !fixture.scene.Components().UI().Has<kb::scene::UIButton>(fixture.RootEntity()) &&
+            fixture.commandController.Undo() &&
+            fixture.scene.Components().UI().Has<kb::scene::UIButton>(fixture.RootEntity()),
+        "Removing an individual UI component should be undoable");
+
+    const kb::scene::SceneEntity layoutEntity = fixture.scene.Entities().CreateEntity(
+        kb::scene::SceneObjectDesc{ .name = "WidgetLayout" });
+    kb::editor::tests::Require(
+        EditorUIComponentAuthoring::Add(
+            fixture.scene, layoutEntity, "kb21.ui.horizontal-layout") &&
+            !EditorUIComponentAuthoring::Add(
+                fixture.scene, layoutEntity, "kb21.ui.vertical-layout") &&
+            fixture.scene.Components().UI().Has<kb::scene::UIHorizontalLayout>(layoutEntity) &&
+            !fixture.scene.Components().UI().Has<kb::scene::UIVerticalLayout>(layoutEntity),
+        "Authoring should reject an invalid combination without partially mutating the entity");
+
+    for (const kb::scene::UIComponentDescriptor& descriptor : componentCatalog) {
+        const kb::scene::SceneEntity catalogEntity = fixture.scene.Entities().CreateEntity(
+            kb::scene::SceneObjectDesc{ .name = std::string{ descriptor.displayName } });
+        kb::editor::tests::Require(EditorUIComponentAuthoring::Add(
+                fixture.scene, catalogEntity, descriptor.stableId),
+            "Each canonical UI component should be independently addable");
+        const std::vector<UIComponentType> authored =
+            InspectorUIComponentModel::Components(fixture.scene, catalogEntity);
+        kb::editor::tests::Require(!authored.empty() && authored.front() == UIComponentType::RectTransform &&
+                std::ranges::find(authored, descriptor.type) != authored.end(),
+            "Every authored UI component must expose anchors first and retain its own properties");
+        const auto rows = InspectorUIComponentModel::Properties(fixture.scene, catalogEntity, descriptor.type);
+        for (std::size_t index = 0; index < rows.size(); ++index) {
+            const auto& row = rows[index];
+            if (row.name.ends_with(".r")) {
+                kb::editor::tests::Require(row.color && row.fieldCount == 4 &&
+                        rows[index + 1].fieldCount == 0 && rows[index + 2].fieldCount == 0 && rows[index + 3].fieldCount == 0,
+                    "Every UI color must occupy one palette row, never four channel rows");
+            }
+            if (!row.choices.empty()) {
+                auto candidate = kb::scene::CaptureSceneUIComponents(fixture.scene.Components().UI(), catalogEntity);
+                for (std::size_t choice = 0; choice < row.choices.size(); ++choice) {
+                    kb::editor::tests::Require(kb::scene::WriteUIComponentProperty(candidate, descriptor.type,
+                            row.name, static_cast<std::int32_t>(choice)) == kb::scene::UIComponentPropertyWriteResult::Succeeded,
+                        "UI dropdown options must correspond to accepted component values");
+                }
+                kb::editor::tests::Require(kb::scene::WriteUIComponentProperty(candidate, descriptor.type,
+                        row.name, static_cast<std::int32_t>(row.choices.size())) != kb::scene::UIComponentPropertyWriteResult::Succeeded,
+                    "UI dropdown must expose every enum value");
+            }
+        }
+        if (descriptor.type != UIComponentType::RectTransform) {
+            kb::editor::tests::Require(!EditorUIComponentAuthoring::Remove(
+                    fixture.scene, catalogEntity, UIComponentType::RectTransform),
+                "Removing anchors must be rejected while another UI component depends on them");
+        }
+    }
+
+    const std::filesystem::path sceneFile =
+        std::filesystem::temp_directory_path() / "21kb_editor_ui_component_authoring.21kbscene";
+    std::error_code cleanupError;
+    std::filesystem::remove(sceneFile, cleanupError);
+    std::filesystem::remove(sceneFile.string() + ".meta", cleanupError);
+    kb::editor::tests::Require(kb::scene::SceneDocumentService::Save(
+            fixture.scene, sceneFile, "UIComponentAuthoring"),
+        "Authored UI entity scene should save");
+    kb::scene::Scene reloaded;
+    kb::editor::tests::Require(
+        kb::scene::SceneDocumentService::LoadFileIntoScene(reloaded, sceneFile),
+        "Authored UI entity scene should reopen");
+    const std::vector<kb::scene::SceneEntity> roots = reloaded.Hierarchy().RootEntities();
+    const auto restored = std::ranges::find_if(roots, [&reloaded](kb::scene::SceneEntity candidate) {
+        return reloaded.Entities().Name(candidate) == "WidgetEntity";
+    });
+    kb::editor::tests::Require(restored != roots.end() &&
+            reloaded.Components().UI().Has<kb::scene::UIButton>(*restored) &&
+            reloaded.Components().UI().TryGet<kb::scene::UIRectTransform>(*restored)->offsetMin.x == 48.0F,
+        "Save and reopen should preserve UI components and edited properties on the entity");
+    std::filesystem::remove(sceneFile, cleanupError);
+    std::filesystem::remove(sceneFile.string() + ".meta", cleanupError);
+}
+
+void RunInspectorTextCaretTest() {
+    kb::editor::InspectorPanelState state;
+
+    // Backspacing a multi-byte character used to drop one byte, leaving a truncated UTF-8
+    // sequence. The painter converts with MB_ERR_INVALID_CHARS and bails on failure, so the
+    // whole field rendered blank: the text was still there and simply could not be shown.
+    state.BeginTextEdit(kb::editor::InspectorPropertyId::PositionX, "");
+    state.AppendText(L'1');
+    state.AppendText(static_cast<wchar_t>(0x00F3)); // U+00F3, two UTF-8 bytes
+    state.AppendText(L'2');
+    kb::editor::tests::Require(state.EditBuffer() == std::string{"1\xC3\xB3" "2"},
+        "Inspector edit buffer should hold the typed text as UTF-8");
+    state.BackspaceText();
+    state.BackspaceText();
+    kb::editor::tests::Require(state.EditBuffer() == std::string{"1"},
+        "Backspace must erase a whole UTF-8 code point, not a single byte");
+
+    // A field with no caret and no focus ring gives no sign of where typing goes.
+    kb::editor::tests::Require(state.IsTextCaretVisible(),
+        "A field being edited must show its caret right after a keystroke");
+    bool blinkedOff = false;
+    bool blinkedBackOn = false;
+    for (int step = 0; step < 600; ++step) {
+        kb::editor::tests::Require(state.TickTextCaret(0.01F),
+            "Ticking the caret of an edited field must keep requesting repaints");
+        if (!state.IsTextCaretVisible()) {
+            blinkedOff = true;
+        } else if (blinkedOff) {
+            blinkedBackOn = true;
+            break;
+        }
+    }
+    kb::editor::tests::Require(blinkedOff && blinkedBackOn, "The caret must blink off and back on while editing");
+
+    // Typing while the caret is in its hidden half must bring it straight back, otherwise the
+    // character appears with no insertion point beside it.
+    while (state.IsTextCaretVisible()) {
+        kb::editor::tests::Require(state.TickTextCaret(0.01F), "Caret tick should stay live while editing");
+    }
+    state.BackspaceText();
+    kb::editor::tests::Require(state.IsTextCaretVisible(), "A keystroke must reset the caret to visible");
+
+    // Select-all shows the selection instead; a caret on top of it reads as two insertion points.
+    state.BeginTextEdit(kb::editor::InspectorPropertyId::PositionX, "48");
+    state.SelectAllText();
+    kb::editor::tests::Require(!state.IsTextCaretVisible(), "A select-all field must not also show a caret");
+
+    // Nothing focused means nothing to blink, so the frame loop is free to park on idle.
+    state.EndTextEdit();
+    kb::editor::tests::Require(!state.TickTextCaret(0.01F) && !state.IsTextCaretVisible(),
+        "With no field being edited the caret must neither blink nor request repaints");
+}
+
 } // namespace
 
 namespace kb::editor::tests {
 
 void RunEditorInspectorTests() {
+    RunEditorConsoleStateTest();
     RunInspectorPhysicsModelTest();
     RunInspectorSectionCollapseTest();
     RunInspectorDisclosureAnimationTest();
     RunInspectorHoverIndexTest();
     RunAddComponentBrowserModelTest();
+    RunUIComponentAuthoringTest();
+    RunInspectorTextCaretTest();
     RunInspectorTextEditDirtyStateTest();
     RunAudioComponentCatalogTest();
     RunObjectClassificationCatalogTest();

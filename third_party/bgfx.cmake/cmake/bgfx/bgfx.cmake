@@ -51,10 +51,15 @@ else()
 endif()
 
 if(BGFX_CONFIG_RENDERER_WEBGPU)
-	include(${CMAKE_CURRENT_LIST_DIR}/3rdparty/webgpu.cmake)
 	if(EMSCRIPTEN)
-		target_link_options(bgfx PRIVATE "-s USE_WEBGPU=1")
+		# Emdawnwebgpu provides the current webgpu.h ABI and the JavaScript bridge.
+		# The port flag is required while compiling the backend and again at the
+		# final executable link; the obsolete USE_WEBGPU setting no longer exists.
+		target_compile_options(bgfx PRIVATE "--use-port=emdawnwebgpu")
+		target_link_options(bgfx PUBLIC "--use-port=emdawnwebgpu")
+		target_compile_definitions(bgfx PRIVATE BGFX_CONFIG_RENDERER_WEBGPU=1)
 	else()
+		include(${CMAKE_CURRENT_LIST_DIR}/3rdparty/webgpu.cmake)
 		target_link_libraries(bgfx PRIVATE webgpu)
 	endif()
 endif()

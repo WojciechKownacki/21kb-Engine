@@ -27,6 +27,7 @@
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "inspection/InspectorPanelState.hpp"
+#include "inspection/ui/InspectorUIComponentModel.hpp"
 #include "platform/win32/EditorMaterialAssetPickerDialog.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
@@ -330,6 +331,25 @@ bool EditorPointerDropHandler::Drop(
     const EditorMetrics& metrics,
     EditorSceneContext& sceneContext,
     const EditorPointerDragState& drag) {
+    if (drag.assetId.IsValid()) {
+        const auto inspector = EditorDropPanelResolver::Resolve(DockPanelKind::Inspector,
+            sourceWindow, mainWindow, dockModel, floatingWindows, metrics);
+        if (inspector && Contains(*inspector, x, y)) {
+            const auto hit = InspectorPanelRenderer::HitTest(*inspector, sceneContext, x, y);
+            if (const auto component = InspectorUIComponentModel::Component(hit.section)) {
+                const auto rows = InspectorUIComponentModel::Properties(
+                    sceneContext.Scene(), sceneContext.SelectedEntity(), *component);
+                if (hit.index >= 0 && static_cast<std::size_t>(hit.index) < rows.size()) {
+                    const auto& row = rows[static_cast<std::size_t>(hit.index)];
+                    if (row.type == kb::scene::UIComponentPropertyType::Asset) {
+                        static_cast<void>(sceneContext.SetUIComponentProperty(sceneContext.SelectedEntity(),
+                            *component, row.name, kb::scene::UIComponentPropertyValue{drag.assetId.value}));
+                        return true;
+                    }
+                }
+            }
+        }
+    }
     if (drag.kind == EditorPointerDragKind::PrefabAsset && drag.assetId.IsValid()) {
         const kb::assets::AssetMetadata* metadata = sceneContext.Scene().Assets().Manager().Registry().Find(drag.assetId);
         const std::optional<RECT> animator = EditorDropPanelResolver::Resolve(

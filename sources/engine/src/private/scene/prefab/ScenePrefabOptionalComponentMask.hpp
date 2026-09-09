@@ -21,11 +21,15 @@ struct ScenePrefabOptionalComponentExpectation {
     bool expectedPresent = false;
 };
 
-[[nodiscard]] inline std::array<ScenePrefabOptionalComponentExpectation, 37U>
-ScenePrefabOptionalComponentExpectations(
+// The size is deduced from the list rather than written out. A hand-written extent silently
+// zero-filled the tail when rows were removed, and the loop below treats a zero component id as
+// "registry not ready" and bails out - so every mask comparison answered "no match" regardless
+// of what the entity actually held.
+[[nodiscard]] inline auto ScenePrefabOptionalComponentExpectations(
     const ScenePrefabNodeComponents& components,
-    const SceneComponentRegistry& registry) noexcept {
-    return {{
+    const SceneState& state) noexcept {
+    const SceneComponentRegistry& registry = state.components;
+    return std::to_array<ScenePrefabOptionalComponentExpectation>({
         { registry.CameraComponentId(), components.camera.has_value() },
         { registry.MeshRendererComponentId(), components.meshRenderer.has_value() },
         { registry.LightComponentId(), components.light.has_value() },
@@ -60,10 +64,9 @@ ScenePrefabOptionalComponentExpectations(
         { registry.SkeletonBindingComponentId(), components.skeletonBinding.has_value() },
         { registry.MotionSkeletonRuleComponentId(), components.motionSkeletonRule.has_value() },
         { registry.DeformedGeometryComponentId(), components.deformedGeometry.has_value() },
-        { registry.UIDocumentComponentId(), components.uiDocument.has_value() },
         { registry.NavAgentComponentId(), components.navAgent.has_value() },
         { registry.NavObstacleComponentId(), components.navObstacle.has_value() },
-    }};
+    });
 }
 
 [[nodiscard]] inline ScenePrefabOptionalComponentMaskMatch ScenePrefabOptionalComponentMaskMatches(
@@ -73,7 +76,7 @@ ScenePrefabOptionalComponentExpectations(
     const kb::ecs::NativeArchetypeStorage& storage = state.world.NativeStorage();
     if (!storage.IsAlive(entity)) return {};
 
-    const auto expectations = ScenePrefabOptionalComponentExpectations(expected, state.components);
+    const auto expectations = ScenePrefabOptionalComponentExpectations(expected, state);
     for (const ScenePrefabOptionalComponentExpectation& expectation : expectations) {
         if (expectation.componentId == 0U) return {};
         if (storage.HasComponent(entity, expectation.componentId) != expectation.expectedPresent) {

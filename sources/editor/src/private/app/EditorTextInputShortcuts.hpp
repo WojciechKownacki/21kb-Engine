@@ -7,6 +7,7 @@
 #endif
 
 #include <optional>
+#include <limits>
 #include <string>
 #include <string_view>
 
@@ -27,7 +28,8 @@ public:
 #if defined(_WIN32)
     [[nodiscard]] static EditorTextInputShortcut Resolve(WPARAM key) noexcept;
     [[nodiscard]] static bool CopyToClipboard(HWND owner, std::string_view text) noexcept;
-    [[nodiscard]] static std::optional<std::string> PasteFromClipboard(HWND owner);
+    [[nodiscard]] static std::optional<std::string> PasteFromClipboard(
+        HWND owner, std::size_t maximumLength = std::numeric_limits<std::size_t>::max());
 #endif
 };
 

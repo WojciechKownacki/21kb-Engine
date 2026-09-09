@@ -1,6 +1,7 @@
 #include "scene/prefab/ScenePrefabComponentComparator.hpp"
 
 #include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneUIComponentSet.hpp"
 
 namespace kb::scene {
 namespace {
@@ -112,10 +113,6 @@ namespace {
         lhs.rootMotionOwner == rhs.rootMotionOwner;
 }
 
-[[nodiscard]] bool Equal(const UIDocumentComponent& lhs, const UIDocumentComponent& rhs) noexcept {
-    return lhs.documentAssetId == rhs.documentAssetId && lhs.enabled == rhs.enabled;
-}
-
 [[nodiscard]] bool Equal(const AuxFrameComponent& lhs, const AuxFrameComponent& rhs) noexcept {
     return lhs.mode == rhs.mode && lhs.imageTargetId == rhs.imageTargetId && lhs.width == rhs.width && lhs.height == rhs.height &&
         Equal(lhs.mirrorPlaneNormal, rhs.mirrorPlaneNormal) && lhs.mirrorPlaneOffset == rhs.mirrorPlaneOffset && lhs.enabled == rhs.enabled;
@@ -186,6 +183,9 @@ template <typename T>
 
 ScenePrefabOverrideFlag ScenePrefabComponentComparator::Compare(SceneComponents components, SceneEntity entity, const ScenePrefabNodeComponents& expected) noexcept {
     ScenePrefabOverrideFlag flags = ScenePrefabOverrideFlag::None;
+    if (!AreUIComponentSetsEqual(CaptureSceneUIComponents(components.UI(), entity), expected.ui)) {
+        flags |= ScenePrefabOverrideFlag::UI;
+    }
     if (!EqualOptionalComponent(components.Cameras().TryGet(entity), expected.camera)) {
         flags |= ScenePrefabOverrideFlag::Camera;
     }
@@ -227,9 +227,6 @@ ScenePrefabOverrideFlag ScenePrefabComponentComparator::Compare(SceneComponents 
     }
     if (!EqualOptionalComponent(components.DeformedGeometries().TryGet(entity), expected.deformedGeometry)) {
         flags |= ScenePrefabOverrideFlag::DeformedGeometry;
-    }
-    if (!EqualOptionalComponent(components.UIDocuments().TryGet(entity), expected.uiDocument)) {
-        flags |= ScenePrefabOverrideFlag::UIDocument;
     }
     if (!EqualOptionalComponent(components.AuxFrames().TryGet(entity), expected.auxFrame)) {
         flags |= ScenePrefabOverrideFlag::AuxFrame;

@@ -189,6 +189,7 @@ add_library(kb_renderer STATIC
     src/resources/RenderMaterialGraphAssetLoader.cpp
     src/resources/RenderMaterialGraphDocument.cpp
     src/resources/RenderMaterialGraphCompiler.cpp
+    src/private/resources/material_graph/RenderMaterialGraphPinSchema.hpp
     src/resources/RenderMaterialGraphFunctionInlining.cpp
     src/resources/RenderMaterialGraphPinLayout.cpp
     src/resources/RenderMaterialGraphNodeCatalog.cpp
@@ -268,6 +269,7 @@ add_library(kb_renderer STATIC
     src/runtime/RuntimeTextureResourceEnsurer.cpp
     src/runtime/RuntimeTextureResourceEnsurer.hpp
     src/scene/EcsRenderSceneSynchronizer.cpp
+    src/scene/RenderBridgeTelemetry.cpp
     src/scene/AuxFrameRenderer.cpp
     src/scene/AuxFrameRenderer.hpp
     src/scene/SceneParticleRenderSynchronizer.cpp
@@ -334,6 +336,21 @@ add_library(kb_renderer STATIC
     src/shadow/ShadowCasterBoundsCollector.cpp
     src/shadow/ShadowCasterBoundsCollector.hpp
     src/shadow/ShadowMapResource.cpp
+    src/private/ui/ScreenUIBackgroundBlur.hpp
+    src/private/ui/ScreenUIComposite.hpp
+    src/private/ui/ScreenUIRenderer.hpp
+    src/private/ui/ScreenUIDrawData.hpp
+    src/private/ui/ScreenUIDrawBatchBuilder.hpp
+    src/private/ui/ScreenUIFontPayloadValidator.hpp
+    src/private/ui/ScreenUIFontAtlasCache.hpp
+    src/private/ui/ScreenUITextMarkupParser.hpp
+    src/ui/ScreenUIBackgroundBlur.cpp
+    src/ui/ScreenUIComposite.cpp
+    src/ui/ScreenUIDrawBatchBuilder.cpp
+    src/ui/ScreenUIRenderer.cpp
+    src/ui/ScreenUIFontPayloadValidator.cpp
+    src/ui/ScreenUIFontAtlasCache.cpp
+    src/ui/ScreenUITextMarkupParser.cpp
     ${CMAKE_SOURCE_DIR}/third_party/bgfx.cmake/bgfx/3rdparty/meshoptimizer/src/allocator.cpp
     ${CMAKE_SOURCE_DIR}/third_party/bgfx.cmake/bgfx/3rdparty/meshoptimizer/src/indexgenerator.cpp
     ${CMAKE_SOURCE_DIR}/third_party/bgfx.cmake/bgfx/3rdparty/meshoptimizer/src/overdrawoptimizer.cpp
@@ -393,6 +410,12 @@ set(KB_RENDERER_SHADER_PROFILES
     essl
     metal
 )
+if(BGFX_CONFIG_RENDERER_WEBGPU AND KB_GENERATE_RENDERER_SHADERS AND
+   TARGET bgfx::shaderc AND COMMAND bgfx_compile_shaders)
+    # bgfx_compile_shaders emits the WGSL directory in this configuration;
+    # include it in the same staged-manifest validation as every other backend.
+    list(APPEND KB_RENDERER_SHADER_PROFILES wgsl)
+endif()
 
 set(KB_RENDERER_SHADER_MANIFEST
     cs_hzb_downsample.sc
@@ -427,6 +450,7 @@ set(KB_RENDERER_SHADER_MANIFEST
     fs_post_taa_resolve.sc
     fs_particle_instanced.sc
     fs_present_tex.sc
+    fs_screen_ui.sc
     vs_editor_gizmo.sc
     vs_editor_grid.sc
     vs_editor_selection_outline.sc
@@ -440,6 +464,7 @@ set(KB_RENDERER_SHADER_MANIFEST
     vs_mesh_shadow_instanced.sc
     vs_present.sc
     vs_particle_instanced.sc
+    vs_screen_ui.sc
 )
 
 file(GLOB_RECURSE KB_RENDERER_PREBUILT_SHADER_FILES CONFIGURE_DEPENDS
@@ -482,6 +507,7 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_particle_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_editor_grid.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_editor_gizmo.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_screen_ui.sc
         VARYING_DEF ${KB_RENDERER_SHADER_VARYING_DEF}
         OUTPUT_DIR ${KB_RENDERER_GENERATED_SHADER_DIR}
         INCLUDE_DIRS
@@ -512,6 +538,7 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_editor_gizmo.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_editor_grid.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_editor_selection_outline.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_screen_ui.sc
         VARYING_DEF ${KB_RENDERER_SHADER_VARYING_DEF}
         OUTPUT_DIR ${KB_RENDERER_GENERATED_SHADER_DIR}
         INCLUDE_DIRS
@@ -648,38 +675,9 @@ target_compile_definitions(kb_renderer
 kb_apply_quality_gates(kb_renderer)
 
 # Compression belongs to the host cooker. Mobile/browser runtimes consume only
-# immutable GPU blocks and do not link encoder code. etcpak's upstream project
-# builds a CLI and pulls unrelated packages, so the engine owns this minimal,
-# pinned static target instead of adding the upstream build.
+# immutable GPU blocks and do not link encoder code. bimg_encode is the single
+# compression backend used by the renderer and its host-side baker.
 if(NOT ANDROID AND NOT EMSCRIPTEN)
-    FetchContent_Declare(
-        kb_etcpak_source
-        URL https://github.com/wolfpld/etcpak/archive/refs/tags/2.0.tar.gz
-        URL_HASH SHA256=dc7a1b23a039594b3d0e9d00581a7d3d2ef4b6656ad532f7ed2b844bd9b4ba39
-        DOWNLOAD_EXTRACT_TIMESTAMP FALSE
-        SOURCE_SUBDIR kb_no_upstream_build
-    )
-    FetchContent_MakeAvailable(kb_etcpak_source)
-
-    add_library(kb_etcpak STATIC
-        ${kb_etcpak_source_SOURCE_DIR}/Dither.cpp
-        ${kb_etcpak_source_SOURCE_DIR}/ProcessRGB.cpp
-        ${kb_etcpak_source_SOURCE_DIR}/Tables.cpp
-    )
-    target_include_directories(kb_etcpak SYSTEM PUBLIC ${kb_etcpak_source_SOURCE_DIR})
-    target_compile_definitions(kb_etcpak PRIVATE
-        REFERENCE_IMPLEMENTATION
-        $<$<BOOL:${WIN32}>:NOMINMAX>
-        $<$<BOOL:${WIN32}>:WIN32_LEAN_AND_MEAN>
-    )
-    if(MSVC)
-        target_compile_options(kb_etcpak PRIVATE /W0 /EHsc /fp:strict)
-    else()
-        target_compile_options(kb_etcpak PRIVATE
-            -w -mno-avx -mno-avx2 -mno-sse4.1 -ffp-contract=off)
-        set_target_properties(kb_etcpak PROPERTIES POSITION_INDEPENDENT_CODE ON)
-    endif()
-
     add_library(kb_renderer_bake STATIC
         include/kb/render/bake/TextureBaker.hpp
         src/bake/TextureBaker.cpp
@@ -690,7 +688,7 @@ if(NOT ANDROID AND NOT EMSCRIPTEN)
     )
     target_link_libraries(kb_renderer_bake
         PUBLIC kb_renderer
-        PRIVATE kb_etcpak bimg_encode
+        PRIVATE bimg_encode
     )
     kb_apply_quality_gates(kb_renderer_bake)
 endif()
@@ -726,6 +724,7 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
         tests/SceneRenderTargetFormatTests.cpp
         tests/SceneRenderExtractorTests.cpp
         tests/ShaderManifestTests.cpp
+        tests/ScreenUIDrawBatchTests.cpp
         tests/ShaderPrewarmParseTests.cpp
         tests/MeshBakeTests.cpp
         tests/TextureBakeTests.cpp
@@ -750,7 +749,20 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
     )
 
     add_test(NAME kb_renderer_tests COMMAND $<TARGET_FILE:kb_renderer_tests>)
+    add_test(NAME kb_renderer_editor_ui_view COMMAND $<TARGET_FILE:kb_renderer_tests> editor-ui-view)
+    set_tests_properties(kb_renderer_editor_ui_view PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;headless;ui")
     set_tests_properties(kb_renderer_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+    # The packaged WebGPU decode fallback is only observable in a process with no bgfx device:
+    # the capability query reads a process-global that any earlier GPU suite fills in. Running
+    # it as its own test gives it the fresh process the expectation needs, which the aggregate
+    # run cannot provide.
+    add_test(
+        NAME kb_renderer_webgpu_texture_fallback
+        COMMAND $<TARGET_FILE:kb_renderer_tests> webgpu-texture-fallback)
+    set_tests_properties(
+        kb_renderer_webgpu_texture_fallback
+        PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;packaging")
 
     set(KB_GRAPH_SHADERC_TOOL "" CACHE FILEPATH "Path to bgfx shaderc used by the graph shader cook tests")
     set(_kb_graph_shaderc_tool "")

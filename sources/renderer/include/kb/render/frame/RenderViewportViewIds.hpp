@@ -30,7 +30,10 @@ struct RenderViewportViewIds {
     std::uint16_t postProcessHdrCombine = ViewId::Invalid;
     std::uint16_t postProcessHdrFinalize = ViewId::Invalid;
     std::uint16_t sceneOverlays = ViewId::Invalid;
+    std::uint16_t screenUIBlurH = ViewId::Invalid;
+    std::uint16_t screenUIBlurV = ViewId::Invalid;
     std::uint16_t finalComposite = ViewId::Invalid;
+    std::uint16_t screenUIComposite = ViewId::Invalid;
     std::uint16_t editorUiComposite = ViewId::Invalid;
     std::uint16_t editorGizmoOverlay = ViewId::Invalid;
 
@@ -68,8 +71,14 @@ struct RenderViewportViewIds {
             return postProcessHdrFinalize;
         case RenderPassKind::EditorSceneOverlays:
             return sceneOverlays;
+        case RenderPassKind::ScreenUIBlurH:
+            return screenUIBlurH;
+        case RenderPassKind::ScreenUIBlurV:
+            return screenUIBlurV;
         case RenderPassKind::FinalComposite:
             return finalComposite;
+        case RenderPassKind::ScreenUIComposite:
+            return screenUIComposite;
         case RenderPassKind::EditorUiComposite:
             return editorUiComposite;
         case RenderPassKind::EditorGizmoOverlay:
@@ -91,7 +100,8 @@ struct RenderViewportViewIds {
                ViewId::IsValid(postProcessBloomBlurV) && BloomMipViewsAreValid(postProcessBloomDownsampleViews) &&
                BloomMipViewsAreValid(postProcessBloomMipBlurHViews) && BloomMipViewsAreValid(postProcessBloomMipBlurVViews) &&
                ViewId::IsValid(postProcessHdrCombine) && ViewId::IsValid(postProcessHdrFinalize) &&
-               ViewId::IsValid(sceneOverlays) && ViewId::IsValid(finalComposite) && ViewId::IsValid(editorUiComposite) &&
+               ViewId::IsValid(sceneOverlays) && ViewId::IsValid(screenUIBlurH) && ViewId::IsValid(screenUIBlurV) &&
+               ViewId::IsValid(finalComposite) && ViewId::IsValid(screenUIComposite) && ViewId::IsValid(editorUiComposite) &&
                ViewId::IsValid(editorGizmoOverlay);
     }
 
@@ -109,7 +119,7 @@ private:
 class RenderViewportViewIdAllocator {
 public:
     static constexpr std::size_t kMaxViewportCount =
-        1U + (ViewId::Max - ViewId::DetachedViewportStart) / ViewId::DetachedViewportStride;
+        1U + (ViewId::ScreenCapture - ViewId::DetachedViewportStart) / ViewId::DetachedViewportStride;
 
     [[nodiscard]] static constexpr RenderViewportViewIds ForViewportIndex(std::uint32_t viewportIndex) noexcept {
         if (viewportIndex == 0U) {
@@ -132,14 +142,17 @@ public:
                 .postProcessHdrCombine = ViewId::PostProcessHdrCombine,
                 .postProcessHdrFinalize = ViewId::PostProcessHdrFinalize,
                 .sceneOverlays = ViewId::Overlay,
+                .screenUIBlurH = ViewId::ScreenUIBlurH,
+                .screenUIBlurV = ViewId::ScreenUIBlurV,
                 .finalComposite = ViewId::FinalComposite,
+                .screenUIComposite = ViewId::ScreenUIComposite,
                 .editorUiComposite = ViewId::EditorUi,
                 .editorGizmoOverlay = ViewId::EditorGizmoOverlay,
             };
         }
 
         const std::uint32_t base = ViewId::DetachedViewportStart + (viewportIndex - 1U) * ViewId::DetachedViewportStride;
-        if (base + ViewId::DetachedViewportStride > ViewId::Max) {
+        if (base + ViewId::DetachedViewportStride > ViewId::ScreenCapture) {
             return {};
         }
 
@@ -162,7 +175,10 @@ public:
             .postProcessHdrCombine = static_cast<std::uint16_t>(base + 12U),
             .postProcessHdrFinalize = static_cast<std::uint16_t>(base + 13U),
             .sceneOverlays = static_cast<std::uint16_t>(base + 14U),
+            .screenUIBlurH = static_cast<std::uint16_t>(base + 33U),
+            .screenUIBlurV = static_cast<std::uint16_t>(base + 34U),
             .finalComposite = static_cast<std::uint16_t>(base + 15U),
+            .screenUIComposite = static_cast<std::uint16_t>(base + 35U),
             .editorUiComposite = static_cast<std::uint16_t>(base + 16U),
             .editorGizmoOverlay = static_cast<std::uint16_t>(base + 32U),
         };

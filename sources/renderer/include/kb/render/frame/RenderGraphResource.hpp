@@ -35,6 +35,8 @@ constexpr RenderGraphResourceId GBufferNormal{ 14U };
 constexpr RenderGraphResourceId GBufferMaterial{ 15U };
 constexpr RenderGraphResourceId GBufferDepth{ 16U };
 constexpr RenderGraphResourceId GBufferSurface{ 17U };
+constexpr RenderGraphResourceId ScreenUIBlurPing{ 18U };
+constexpr RenderGraphResourceId ScreenUIBlurred{ 19U };
 constexpr std::uint16_t Max = 64U;
 
 } // namespace RenderGraphResource

@@ -155,10 +155,6 @@ namespace {
         lhs.rootMotionOwner == rhs.rootMotionOwner;
 }
 
-[[nodiscard]] bool Equals(const UIDocumentComponent& lhs, const UIDocumentComponent& rhs) noexcept {
-    return lhs.documentAssetId == rhs.documentAssetId && lhs.enabled == rhs.enabled;
-}
-
 [[nodiscard]] bool Equals(const NavAgent& lhs, const NavAgent& rhs) noexcept {
     return lhs.radius == rhs.radius && lhs.height == rhs.height && lhs.maxSpeed == rhs.maxSpeed && lhs.acceleration == rhs.acceleration &&
         lhs.angularSpeedDegrees == rhs.angularSpeedDegrees && lhs.stoppingDistance == rhs.stoppingDistance && lhs.areaMask == rhs.areaMask &&
@@ -307,9 +303,9 @@ ScenePrefabNodeStateWriterContext::ScenePrefabNodeStateWriterContext(Scene& scen
     , skeletonBindings(scene.Components().SkeletonBindings())
     , motionSkeletonRules(scene.Components().MotionSkeletonRules())
     , deformedGeometries(scene.Components().DeformedGeometries())
-    , uiDocuments(scene.Components().UIDocuments())
     , navAgents(scene.Components().NavAgents())
-    , navObstacles(scene.Components().NavObstacles()) {
+    , navObstacles(scene.Components().NavObstacles())
+    , ui(scene.Components().UI()) {
     state.suppressPrefabDirtyTracking = true;
 }
 
@@ -386,6 +382,7 @@ void ScenePrefabNodeStateWriter::Write(ScenePrefabNodeStateWriterContext& contex
     WriteOptionalComponent(context.spaceStrokes, entity, node.components.spaceStroke);
     WriteOptionalComponent(context.historyRibbons, entity, node.components.historyRibbon);
     WriteOptionalComponent(context.particleEffects, entity, node.components.particleEffect);
+    SynchronizeSceneUIComponents(context.ui, entity, node.components.ui);
     // Echo source references are resolved after every prefab node exists.
     if (!node.components.lensEcho.has_value()) context.lensEchoes.Remove(entity);
     if (!componentMask.available || !componentMask.matches || node.components.behaviour.has_value()) {
@@ -408,9 +405,6 @@ void ScenePrefabNodeStateWriter::Write(ScenePrefabNodeStateWriterContext& contex
     }
     if (!componentMask.available || !componentMask.matches || node.components.deformedGeometry.has_value()) {
         WriteOptionalComponent(context.deformedGeometries, entity, node.components.deformedGeometry);
-    }
-    if (!componentMask.available || !componentMask.matches || node.components.uiDocument.has_value()) {
-        WriteOptionalComponent(context.uiDocuments, entity, node.components.uiDocument);
     }
     WriteOptionalComponent(context.navAgents, entity, node.components.navAgent);
     WriteOptionalComponent(context.navObstacles, entity, node.components.navObstacle);

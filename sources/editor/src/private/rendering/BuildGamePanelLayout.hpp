@@ -47,8 +47,7 @@ public:
 
     [[nodiscard]] static BuildGamePanelLayoutRects Resolve(const RECT& content) noexcept;
 
-    // A target row. `index` counts rows only; the two group captions are placed by
-    // TargetGroupCaption so the list reads Player / rows / Dedicated server / rows.
+    // A target row. `index` counts player package rows below the platform caption.
     [[nodiscard]] static RECT TargetRow(const RECT& list, int index) noexcept;
     [[nodiscard]] static RECT TargetGroupCaption(const RECT& list, int index) noexcept;
     [[nodiscard]] static RECT ProfileRow(const RECT& list, int index) noexcept;

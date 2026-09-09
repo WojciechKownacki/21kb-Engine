@@ -34,7 +34,7 @@
 #include "engine/scene/SceneTagsComponents.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneVisibilityComponents.hpp"
-#include "engine/scene/SceneUIDocuments.hpp"
+#include "engine/scene/SceneUIComponentSet.hpp"
 
 namespace kb::scene {
 
@@ -88,9 +88,9 @@ struct ScenePrefabNodeStateWriterContext {
     SceneSkeletonBindingComponents skeletonBindings;
     SceneMotionSkeletonRuleComponents motionSkeletonRules;
     SceneDeformedGeometryComponents deformedGeometries;
-    SceneUIDocumentComponents uiDocuments;
     SceneNavAgentComponents navAgents;
     SceneNavObstacleComponents navObstacles;
+    SceneUIComponents ui;
 };
 
 class ScenePrefabNodeStateWriter {

@@ -470,7 +470,7 @@ public:
         : theme_(theme)
         , rows_(std::move(rows))
         , currentAsset_(currentAsset)
-        , selectedTextureAsset_()
+        , selectedTextureAsset_(currentAsset)
         , title_(std::move(title))
         , description_(std::move(description))
         , clearDescription_(std::move(clearDescription))
@@ -482,7 +482,7 @@ public:
         , sceneContext_(sceneContext)
         , sceneViewport_(sceneViewport) {}
 
-    [[nodiscard]] AssetPickerResult Show(HWND owner) {
+    [[nodiscard]] AssetPickerResult Show(HWND owner, const EditorAssetPickerWindowOptions& options = {}) {
         owner_ = owner;
         if (!EnsureWindow()) {
             return {};
@@ -498,8 +498,11 @@ public:
         EditorModalLoopExit exit = EditorModalLoopExit::Completed;
         {
             const EditorModalWindowScope modal{ window_ };
-            SetWindowPos(window_, textureThumbnails_ ? HWND_TOP : HWND_TOPMOST, bounds.left, bounds.top, RectWidth(bounds), RectHeight(bounds), SWP_SHOWWINDOW);
-            SetForegroundWindow(window_);
+            if (options.visible) {
+                SetWindowPos(window_, textureThumbnails_ ? HWND_TOP : HWND_TOPMOST, bounds.left, bounds.top, RectWidth(bounds), RectHeight(bounds), SWP_SHOWWINDOW);
+                SetForegroundWindow(window_);
+            }
+            if (options.onOpened) options.onOpened(window_);
 
             // No dialog navigation: the picker handles its own keys, and IsDialogMessageW would eat them.
             exit = RunEditorModalMessageLoop(window_, false, [this]() noexcept { return !running_; });
@@ -510,7 +513,7 @@ public:
             DestroyWindow(window_);
             window_ = nullptr;
         }
-        RestoreOwnerFocus();
+        if (options.visible) RestoreOwnerFocus();
         // An app quit or a window destroyed under the pump is not a pick.
         return exit == EditorModalLoopExit::Completed ? result_ : AssetPickerResult{};
     }
@@ -659,7 +662,7 @@ private:
 
     [[nodiscard]] RECT TextureSearchRect() const noexcept {
         const RECT client = Client();
-        const int right = client.right - kTextureTileGap - (kTextureButtonWidth * 2) - kTextureTileGap;
+        const int right = client.right - kTextureTileGap - (kTextureButtonWidth * 3) - (kTextureTileGap * 3);
         const int top = kListHeaderHeight + 8;
         return Rect(kTextureTileGap, top, right, top + kTextureSearchHeight);
     }
@@ -669,6 +672,11 @@ private:
         const int left = client.right - kTextureTileGap - (kTextureButtonWidth * 2) - kTextureTileGap;
         const RECT search = TextureSearchRect();
         return Rect(left, search.top, left + kTextureButtonWidth, search.bottom);
+    }
+
+    [[nodiscard]] RECT TextureClearRect() const noexcept {
+        const RECT accept = TextureAcceptRect();
+        return Rect(accept.left - kTextureTileGap - kTextureButtonWidth, accept.top, accept.left - kTextureTileGap, accept.bottom);
     }
 
     [[nodiscard]] RECT TextureCancelRect() const noexcept {
@@ -838,6 +846,7 @@ private:
             textureSearchFocused_,
             textureQuery_.empty() && !textureSearchFocused_);
 
+        PaintTextureButton(dc, TextureClearRect(), "Clear", allowClear_, hoveredRow_ == -5);
         PaintTextureButton(dc, TextureAcceptRect(), "Accept", ValidAsset(selectedTextureAsset_), hoveredRow_ == -3);
         PaintTextureButton(dc, TextureCancelRect(), "Cancel", true, hoveredRow_ == -4);
 
@@ -1227,7 +1236,9 @@ private:
     void UpdateHover(int x, int y) {
         int next = -1;
         if (textureThumbnails_) {
-            if (Contains(TextureAcceptRect(), x, y)) {
+            if (Contains(TextureClearRect(), x, y)) {
+                next = -5;
+            } else if (Contains(TextureAcceptRect(), x, y)) {
                 next = -3;
             } else if (Contains(TextureCancelRect(), x, y)) {
                 next = -4;
@@ -1274,22 +1285,28 @@ private:
             InvalidateRect(window_, nullptr, FALSE);
             return;
         }
+        if (Contains(TextureClearRect(), x, y) && allowClear_) {
+            pressedTextureTarget_ = -5;
+            if (IsWindowVisible(window_)) SetCapture(window_);
+            InvalidateRect(window_, nullptr, FALSE);
+            return;
+        }
         if (Contains(TextureCancelRect(), x, y)) {
             pressedTextureTarget_ = -4;
-            SetCapture(window_);
+            if (IsWindowVisible(window_)) SetCapture(window_);
             InvalidateRect(window_, nullptr, FALSE);
             return;
         }
         if (Contains(TextureAcceptRect(), x, y)) {
             pressedTextureTarget_ = -3;
-            SetCapture(window_);
+            if (IsWindowVisible(window_)) SetCapture(window_);
             InvalidateRect(window_, nullptr, FALSE);
             return;
         }
         const int tile = TextureTileAt(x, y);
         if (tile >= 0) {
             pressedTextureTarget_ = tile;
-            SetCapture(window_);
+            if (IsWindowVisible(window_)) SetCapture(window_);
             textureSearchFocused_ = false;
             InvalidateRect(window_, nullptr, FALSE);
             return;
@@ -1308,7 +1325,7 @@ private:
 
         const int pressed = pressedTextureTarget_;
         pressedTextureTarget_ = -1;
-        const int released = Contains(TextureAcceptRect(), x, y)
+        const int released = Contains(TextureClearRect(), x, y) && allowClear_ ? -5 : Contains(TextureAcceptRect(), x, y)
             ? -3
             : Contains(TextureCancelRect(), x, y)
                 ? -4
@@ -1318,6 +1335,12 @@ private:
             return;
         }
 
+        if (released == -5) {
+            result_ = {.accepted = true, .assetId = {}};
+            running_ = false;
+            DestroyWindow(window_);
+            return;
+        }
         if (released == -4) {
             running_ = false;
             DestroyWindow(window_);
@@ -1505,6 +1528,9 @@ private:
                 return 0;
             }
             break;
+        case WM_PRINTCLIENT:
+            if (picker != nullptr) picker->Paint(reinterpret_cast<HDC>(wparam), picker->Client());
+            return 0;
         case WM_PAINT: {
             GdiBackBufferRenderer::Paint(
                 window,
@@ -1830,7 +1856,7 @@ EditorTextureAssetPickerDialog::Result EditorTextureAssetPickerDialog::Show(
     const EditorTheme& theme,
     const EditorSceneContext& sceneContext,
     kb::assets::AssetId currentTexture,
-    EditorTextureAssetPickerFilter filter) {
+    EditorTextureAssetPickerFilter filter, const EditorAssetPickerWindowOptions& options) {
     kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
     AssetPickerWindow window{
         theme,
@@ -1843,8 +1869,29 @@ EditorTextureAssetPickerDialog::Result EditorTextureAssetPickerDialog::Show(
         &manager,
         true,
     };
-    const AssetPickerResult result = window.Show(owner);
+    const AssetPickerResult result = window.Show(owner, options);
     return EditorTextureAssetPickerDialog::Result{ .accepted = result.accepted, .assetId = result.assetId };
+}
+
+EditorTextureAssetPickerDialog::Result EditorUIAssetPickerDialog::Show(
+    HWND owner, const EditorTheme& theme, const EditorSceneContext& sceneContext,
+    kb::assets::AssetId currentAsset, kb::assets::AssetKind kind, const EditorAssetPickerWindowOptions& options) {
+    if (kind == kb::assets::AssetKind::Texture) {
+        return EditorTextureAssetPickerDialog::Show(owner, theme, sceneContext, currentAsset, EditorTextureAssetPickerFilter::Texture2D, options);
+    }
+    std::vector<AssetPickerRow> rows;
+    for (const auto& metadata : sceneContext.Scene().Assets().Manager().Registry().All()) {
+        if (kb::assets::AssetMatchesKind(metadata, kind)) {
+            rows.push_back({metadata.id, DisplayName(metadata, "Font"), DisplayPath(metadata)});
+        }
+    }
+    std::ranges::sort(rows, [](const auto& lhs, const auto& rhs) {
+        return lhs.name != rhs.name ? lhs.name < rhs.name : lhs.assetId.value < rhs.assetId.value;
+    });
+    AssetPickerWindow window{theme, std::move(rows), currentAsset, "Select UI Font",
+        "Choose a font asset from this project.", "Clear font selection", HeroIconKind::RectangleGroup};
+    const auto result = window.Show(owner, options);
+    return {.accepted = result.accepted, .assetId = result.assetId};
 }
 
 } // namespace kb::editor

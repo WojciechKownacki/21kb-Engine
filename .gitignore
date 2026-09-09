@@ -65,6 +65,8 @@ platform/android/app/build/
 *.profdata
 *.tmp
 *.temp
+__pycache__/
+*.py[cod]
 
 # =========================
 # IDE / editor

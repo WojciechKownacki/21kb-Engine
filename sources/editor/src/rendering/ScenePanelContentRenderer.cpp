@@ -2,6 +2,7 @@
 
 #if defined(_WIN32)
 #include "rendering/GdiDrawing.hpp"
+#include "app/scene_viewport/EditorUIRectInteraction.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
 #include "rendering/SceneViewportPresentationPolicy.hpp"
 
@@ -660,8 +661,11 @@ void AppendTerrainBrushRing(
         lightingConfig.lightingPath = kb::render::SceneRenderLightingPath::Forward;
         lightingConfig.maxForwardLights = kb::render::kMaxSceneForwardLights;
     }
-    const std::uint32_t renderWidth = viewportState.RenderWidthForPanel(RectWidth(sceneRects.renderArea));
-    const std::uint32_t renderHeight = viewportState.RenderHeightForPanel(RectHeight(sceneRects.renderArea));
+    const bool twoD = viewportState.Is2D() && !continuousRuntimeFrames;
+    const bool screenUIVisible = SceneViewportPresentationPolicy::ScreenUIVisible(continuousRuntimeFrames, twoD);
+    const std::uint32_t renderWidth = twoD ? RectWidth(sceneRects.renderArea) : viewportState.RenderWidthForPanel(RectWidth(sceneRects.renderArea));
+    const std::uint32_t renderHeight = twoD ? RectHeight(sceneRects.renderArea) : viewportState.RenderHeightForPanel(RectHeight(sceneRects.renderArea));
+    sceneContext.SetUIAuthoringViewportSize(static_cast<float>(renderWidth), static_cast<float>(renderHeight));
     const EditorViewportCameraState& viewportCamera = sceneContext.ViewportCamera(panelId);
     const EditorViewportCameraAxes axes = viewportCamera.Axes();
     kb::render::RenderSceneSubmitDesc::EditorGizmoDesc gizmo{};
@@ -682,6 +686,14 @@ void AppendTerrainBrushRing(
         }
     }
 
+    kb::scene::CameraComponent flatCamera{};
+    flatCamera.projection = kb::scene::CameraProjection::Orthographic;
+    flatCamera.orthographicHeight = 20.0F / viewportState.UIZoom();
+    const auto pan = viewportState.UIPan();
+    const float zoom = viewportState.UIZoom();
+    const float unitsPerPixel = 20.0F / static_cast<float>(std::max(1U,renderHeight));
+    const float centerX = static_cast<float>(renderWidth)*0.5F, centerY = static_cast<float>(renderHeight)*0.5F;
+    const EditorViewportCameraAxes flatAxes{.position={((centerX-pan.x)/zoom-centerX)*unitsPerPixel,-((centerY-pan.y)/zoom-centerY)*unitsPerPixel,-100},.forward={0,0,1},.right={1,0,0},.up={0,1,0}};
     return EditorSceneBgfxViewport::PresentSettings{
         .renderWidth = renderWidth,
         .renderHeight = renderHeight,
@@ -708,20 +720,25 @@ void AppendTerrainBrushRing(
                       playCameraEntity),
                   renderWidth,
                   renderHeight) }
-            : std::optional<kb::render::SceneRenderCamera>{ BuildEditorCamera(viewportCamera, renderWidth, renderHeight) },
+            : std::optional<kb::render::SceneRenderCamera>{ twoD ? BuildCamera(flatAxes, flatCamera, renderWidth, renderHeight) : BuildEditorCamera(viewportCamera, renderWidth, renderHeight) },
         .selectedEntityIds = editorOverlaysEnabled ? SelectedEntityIds(sceneContext) : std::vector<std::uint64_t>{},
         .viewportKey = panelId,
         .editorSceneOverlaysEnabled = editorOverlaysEnabled,
+        .screenUIEnabled = screenUIVisible,
         .editorGrid = kb::render::RenderSceneSubmitDesc::EditorGridDesc{
             .minorSpacingMeters = viewportState.GridSpacing(),
             .majorEvery = viewportState.GridMajorEvery(),
-            .visible = editorOverlaysEnabled && viewportState.GridVisible(),
+            .visible = editorOverlaysEnabled && !twoD && viewportState.GridVisible(),
         },
-        .editorGizmo = editorOverlaysEnabled ? gizmo : kb::render::RenderSceneSubmitDesc::EditorGizmoDesc{},
+        .editorGizmo = editorOverlaysEnabled && !twoD ? gizmo : kb::render::RenderSceneSubmitDesc::EditorGizmoDesc{},
         .editorCameraWireframes = editorOverlaysEnabled ? BuildCameraWireframes(sceneContext) : std::vector<kb::render::EditorCameraWireframeDesc>{},
         .editorLightWireframes = editorOverlaysEnabled ? BuildLightWireframes(sceneContext, viewportCamera, axes, renderHeight) : std::vector<kb::render::EditorLightWireframeDesc>{},
         .editorParticleIcons = editorOverlaysEnabled ? BuildParticleIcons(sceneContext, viewportCamera, axes, renderHeight) : std::vector<kb::render::EditorParticleIconDesc>{},
         .physicsDebugLines = editorOverlaysEnabled ? BuildPhysicsDebugLines(sceneContext) : std::vector<kb::render::PhysicsDebugLine>{},
+        // Outline and handles belong exactly where the UI itself is shown, never on their own.
+        .editorUIOverlays = editorOverlaysEnabled && screenUIVisible ? EditorUIRectInteraction::Overlays(sceneContext, static_cast<float>(renderWidth), static_cast<float>(renderHeight), twoD ? viewportState.UIZoom() : 1.0F) : std::vector<kb::scene::SceneUIFrameElement>{},
+        .editorUIScale = twoD ? viewportState.UIZoom() : 1.0F,
+        .editorUIOffset = twoD ? viewportState.UIPan() : kb::math::Vec2{},
         .editorSelectionBox = editorOverlaysEnabled ? SelectionBoxDesc(sceneContext, panelId) : kb::render::RenderSceneSubmitDesc::EditorSelectionBoxDesc{},
         .meshPassMode = renderProfile.meshPassMode,
         .lightingConfig = lightingConfig,
@@ -743,6 +760,14 @@ void AppendTerrainBrushRing(
 
 } // namespace
 
+EditorSceneBgfxViewport::PresentSettings ScenePanelContentRenderer::BuildSettings(
+    const RECT& content, const DockPanel& panel, const EditorSceneContext& sceneContext,
+    const EditorRenderBackendSettings& renderBackendSettings) {
+    const auto& state = sceneContext.ViewportPreview(panel.id);
+    return BuildViewportPresentSettings(sceneContext, panel.id, panel.kind, state, renderBackendSettings,
+        SceneViewportToolbarRenderer::Resolve(content,state,sceneContext));
+}
+
 void ScenePanelContentRenderer::PresentViewport(
     EditorSceneBgfxViewport& sceneViewport,
     HWND sceneViewportHost,
@@ -756,7 +781,7 @@ void ScenePanelContentRenderer::PresentViewport(
 
     const EditorViewportPreviewState& viewportState = sceneContext.ViewportPreview(panel.id);
     const SceneViewportToolbarRects sceneRects = SceneViewportToolbarRenderer::Resolve(content, viewportState, sceneContext);
-    const EditorSceneBgfxViewport::PresentSettings settings = BuildViewportPresentSettings(sceneContext, panel.id, panel.kind, viewportState, renderBackendSettings, sceneRects);
+    const EditorSceneBgfxViewport::PresentSettings settings = BuildSettings(content,panel,sceneContext,renderBackendSettings);
 
     sceneViewport.Present(sceneViewportHost, sceneRects.renderArea, sceneContext.Scene(), settings);
 }

@@ -20,6 +20,8 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunEcsRuntimeTests();
     } else if (suite == "scene-hierarchy") {
         kb::tests::RunSceneHierarchyTests();
+    } else if (suite == "scene-ui") {
+        kb::tests::RunSceneUITests();
     } else if (suite == "scene-system") {
         kb::tests::RunSceneSystemTests();
     } else if (suite == "audio") {
@@ -56,8 +58,6 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunSkeletalMeshAssetTests();
     } else if (suite == "timeline-runtime") {
         kb::tests::RunTimelineRuntimeTests();
-    } else if (suite == "ui-document-runtime") {
-        kb::tests::RunUIDocumentRuntimeTests();
     } else if (suite == "localization") {
         kb::tests::RunLocalizationTests();
     } else {
@@ -73,6 +73,7 @@ void RunAllSuites() {
     kb::tests::RunSaveGameTests();
     kb::tests::RunEcsRuntimeTests();
     kb::tests::RunSceneHierarchyTests();
+    kb::tests::RunSceneUITests();
     kb::tests::RunSceneSystemTests();
     kb::tests::RunScenePrefabTests();
     kb::tests::RunProjectSceneTests();
@@ -87,7 +88,6 @@ void RunAllSuites() {
     kb::tests::RunSkeletonAssetTests();
     kb::tests::RunSkeletalMeshAssetTests();
     kb::tests::RunTimelineRuntimeTests();
-    kb::tests::RunUIDocumentRuntimeTests();
     kb::tests::RunLocalizationTests();
 }
 

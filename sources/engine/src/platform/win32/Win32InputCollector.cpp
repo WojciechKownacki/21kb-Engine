@@ -120,6 +120,18 @@ void Win32InputCollector::AdvanceTouchFrame() noexcept {
 
 bool Win32InputCollector::HandleWindowMessage(
     HWND ownerWindow, UINT message, WPARAM wparam, LPARAM lparam) noexcept {
+    if (message == WM_CHAR) {
+        const std::uint16_t repeatCount =
+            (std::max)(static_cast<std::uint16_t>(LOWORD(lparam)), std::uint16_t{1U});
+        for (std::uint16_t repeat = 0U; repeat < repeatCount; ++repeat) {
+            char32_t codePoint = 0U;
+            if (textDecoder_.Consume(static_cast<char16_t>(wparam), codePoint) &&
+                pendingTextInputCount_ < pendingTextInput_.size()) {
+                pendingTextInput_[pendingTextInputCount_++] = codePoint;
+            }
+        }
+        return false;
+    }
     if (message == WM_MOUSEWHEEL) {
         pendingMouseWheel_ += static_cast<float>(
             static_cast<short>(HIWORD(wparam))) / static_cast<float>(WHEEL_DELTA);
@@ -204,6 +216,8 @@ void Win32InputCollector::Collect(InputDeviceState& state, HWND ownerWindow) noe
         hasPreviousMouse_ = false;
         touchPointCount_ = 0U;
         pendingMouseWheel_ = 0.0F;
+        pendingTextInputCount_ = 0U;
+        textDecoder_.Reset();
         return;
     }
 
@@ -262,6 +276,22 @@ void Win32InputCollector::Collect(InputDeviceState& state, HWND ownerWindow) noe
 
     state.SetTouchPoints(std::span<const InputTouchPoint>{
         touchPoints_.data(), touchPointCount_});
+    static_cast<void>(state.AddTextInput(std::span<const char32_t>{
+        pendingTextInput_.data(), pendingTextInputCount_}));
+    pendingTextInputCount_ = 0U;
+    if (mappedViewport) {
+        state.SetPointerViewportExtent(pointerRenderWidth_, pointerRenderHeight_);
+    } else {
+        RECT clientRect{};
+        if (ownerWindow != nullptr && GetClientRect(ownerWindow, &clientRect) != 0 &&
+            clientRect.right > clientRect.left && clientRect.bottom > clientRect.top) {
+            state.SetPointerViewportExtent(
+                static_cast<std::uint32_t>(clientRect.right - clientRect.left),
+                static_cast<std::uint32_t>(clientRect.bottom - clientRect.top));
+        } else {
+            state.SetPointerViewportExtent(0U, 0U);
+        }
+    }
     AdvanceTouchFrame();
     state.SetAnalog(InputKey::MouseWheel, pendingMouseWheel_);
     pendingMouseWheel_ = 0.0F;

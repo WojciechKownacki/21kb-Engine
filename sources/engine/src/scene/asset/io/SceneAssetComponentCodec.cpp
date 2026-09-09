@@ -9,6 +9,7 @@
 #include "scene/asset/io/components/SceneAssetPhysicsComponentCodec.hpp"
 #include "scene/asset/io/components/SceneAssetRenderComponentCodec.hpp"
 #include "scene/asset/io/components/SceneAssetTagsComponentCodec.hpp"
+#include "scene/asset/io/components/SceneAssetUIComponentCodec.hpp"
 
 #include <cmath>
 #include <stdexcept>
@@ -30,7 +31,6 @@ enum SceneNodeComponentBits : std::uint64_t {
     CharacterControllerBit = 1U << 10U,
     JointBit = 1U << 11U,
     AnimatorBit = 1U << 12U,
-    UIDocumentBit = 1U << 13U,
     NavAgentBit = 1U << 14U,
     NavObstacleBit = 1U << 15U,
     RegionShapeBit = 1U << 16U,
@@ -54,6 +54,7 @@ enum SceneNodeComponentBits : std::uint64_t {
       DeformedGeometryBit = 1ULL << 34U,
       MotionSkeletonRuleBit = 1ULL << 35U,
       ParticleEffectBit = 1ULL << 36U,
+      UIBit = 1ULL << 37U,
 };
 
 constexpr std::uint64_t KnownComponentBits = CameraBit |
@@ -69,12 +70,11 @@ constexpr std::uint64_t KnownComponentBits = CameraBit |
     CharacterControllerBit |
     JointBit |
     AnimatorBit |
-    UIDocumentBit |
     NavAgentBit |
     NavObstacleBit |
     RegionShapeBit |
     GuideCurveBit |
-      ContentInstanceBit | StreamFocusBit | WorldBackdropBit | AmbientRadianceBit | DetailSwitchBit | VisibilityBlockerBit | VisibilityCellBit | RegionPortalBit | AuxFrameBit | GeometrySwarmBit | SurfaceCastBit | FacingPanelBit | SpaceStrokeBit | HistoryRibbonBit | LensEchoBit | SkeletonBindingBit | DeformedGeometryBit | MotionSkeletonRuleBit | ParticleEffectBit;
+      ContentInstanceBit | StreamFocusBit | WorldBackdropBit | AmbientRadianceBit | DetailSwitchBit | VisibilityBlockerBit | VisibilityCellBit | RegionPortalBit | AuxFrameBit | GeometrySwarmBit | SurfaceCastBit | FacingPanelBit | SpaceStrokeBit | HistoryRibbonBit | LensEchoBit | SkeletonBindingBit | DeformedGeometryBit | MotionSkeletonRuleBit | ParticleEffectBit | UIBit;
 
 [[nodiscard]] std::uint64_t ComponentBits(const ScenePrefabNodeComponents& components) noexcept {
     std::uint64_t componentBits = 0;
@@ -94,7 +94,6 @@ constexpr std::uint64_t KnownComponentBits = CameraBit |
     include(components.characterController.has_value(), CharacterControllerBit);
     include(components.joint.has_value(), JointBit);
     include(components.animator.has_value(), AnimatorBit);
-    include(components.uiDocument.has_value(), UIDocumentBit);
     include(components.navAgent.has_value(), NavAgentBit);
     include(components.navObstacle.has_value(), NavObstacleBit);
     include(components.regionShape.has_value(), RegionShapeBit);
@@ -118,6 +117,7 @@ constexpr std::uint64_t KnownComponentBits = CameraBit |
     include(components.skeletonBinding.has_value(), SkeletonBindingBit);
     include(components.motionSkeletonRule.has_value(), MotionSkeletonRuleBit);
     include(components.deformedGeometry.has_value(), DeformedGeometryBit);
+    include(!components.ui.Empty(), UIBit);
     return componentBits;
 }
 
@@ -282,12 +282,6 @@ bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::
             !input.ReadBool(geometry.receivesShadow) || !input.ReadUInt32(geometry.layer) || !input.ReadBool(geometry.enabled) ||
             !IsDrawD3DeformedGeometryComponentPersistable(geometry)) return false;
         output.deformedGeometry = geometry;
-    }
-    if ((componentBits & UIDocumentBit) != 0U) {
-        if (fileVersion < 7U) return false;
-        UIDocumentComponent uiDocument{};
-        if (!input.ReadUInt64(uiDocument.documentAssetId) || !input.ReadBool(uiDocument.enabled)) return false;
-        output.uiDocument = uiDocument;
     }
     if ((componentBits & NavAgentBit) != 0U) {
         if (fileVersion < 8U) return false;
@@ -528,6 +522,9 @@ bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::
         if (!IsLensEchoComponentPersistable(validation)) return false;
         output.lensEcho = echo;
     }
+    if ((componentBits & UIBit) != 0U) {
+        if (fileVersion < 34U || !SceneAssetUIComponentCodec::Read(input, output.ui) || output.ui.Empty()) return false;
+    }
     return true;
 }
 
@@ -615,10 +612,6 @@ void SceneAssetComponentCodec::Write(std::vector<std::uint8_t>& output, const Sc
         SceneAssetBinaryIO::WriteBool(output, geometry.receivesShadow);
         SceneAssetBinaryIO::WriteUInt32(output, geometry.layer);
         SceneAssetBinaryIO::WriteBool(output, geometry.enabled);
-    }
-    if (components.uiDocument.has_value()) {
-        SceneAssetBinaryIO::WriteUInt64(output, components.uiDocument->documentAssetId);
-        SceneAssetBinaryIO::WriteBool(output, components.uiDocument->enabled);
     }
     if (components.navAgent.has_value()) {
         const NavAgent& agent = *components.navAgent;
@@ -819,6 +812,9 @@ void SceneAssetComponentCodec::Write(std::vector<std::uint8_t>& output, const Sc
         SceneAssetBinaryIO::WriteUInt32(output, echo.layer);
         SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(echo.occlusionRule));
         SceneAssetBinaryIO::WriteBool(output, echo.enabled);
+    }
+    if (!components.ui.Empty()) {
+        SceneAssetUIComponentCodec::Write(output, components.ui);
     }
 }
 

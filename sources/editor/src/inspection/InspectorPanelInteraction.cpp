@@ -37,6 +37,7 @@
 #include "inspection/InspectorAudioScrubController.hpp"
 #include "inspection/InspectorInputInteraction.hpp"
 #include "inspection/InspectorPhysicsModel.hpp"
+#include "inspection/ui/InspectorUIComponentModel.hpp"
 #include "rendering/InspectorAudioMixerAssetView.hpp"
 #include "kb/render/resources/RenderMaterialNumericParsing.hpp"
 #include "scene/transform_edit/EditorTransformProperty.hpp"
@@ -1433,23 +1434,6 @@ template <typename Integer>
     if (hit.property == InspectorPropertyId::AnimatorRootMotionOwner) {
         sceneContext.Inspector().EndTextEdit();
         return sceneContext.CycleAnimatorRootMotionOwner(entity);
-    }
-    return true;
-}
-
-[[nodiscard]] bool HandleUIDocumentClick(
-    EditorSceneContext& sceneContext,
-    kb::scene::SceneEntity entity,
-    const InspectorPanelRenderer::Hit& hit) {
-    const kb::scene::UIDocumentComponent* document = sceneContext.Scene().Components().UIDocuments().TryGet(entity);
-    if (document == nullptr) return false;
-    if (hit.property == InspectorPropertyId::UIDocumentEnabled) {
-        sceneContext.Inspector().EndTextEdit();
-        return sceneContext.ToggleUIDocumentEnabled(entity);
-    }
-    if (hit.property == InspectorPropertyId::UIDocumentAsset) {
-        sceneContext.Inspector().BeginTextEdit(hit.property, std::to_string(document->documentAssetId));
-        return true;
     }
     return true;
 }
@@ -2952,6 +2936,10 @@ void ApplyEntityFloatField(EditorSceneContext& sceneContext, kb::scene::SceneEnt
         return InspectorDisclosureId::MeshRendererAdvanced;
     case InspectorPropertyId::TerrainAdvanced:
         return InspectorDisclosureId::TerrainAdvanced;
+    case InspectorPropertyId::UIAnchorPresets:
+        return InspectorDisclosureId::UIAnchorPresets;
+    case InspectorPropertyId::UIRectAdvanced:
+        return InspectorDisclosureId::UIRectAdvanced;
     default:
         return std::nullopt;
     }
@@ -3007,7 +2995,11 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
     if (hit.kind == InspectorHitKind::ComponentMenuButton) {
         sceneContext.Inspector().EndTextEdit();
         if (hit.property == InspectorPropertyId::ComponentRemove && sceneContext.Scene().Entities().IsAlive(entity)) {
-            if (hit.section == InspectorSectionId::Script) {
+            if (const std::optional<kb::scene::UIComponentType> component =
+                    InspectorUIComponentModel::Component(hit.section);
+                component.has_value()) {
+                static_cast<void>(sceneContext.RemoveUIComponentFromEntity(entity, *component));
+            } else if (hit.section == InspectorSectionId::Script) {
                 static_cast<void>(sceneContext.RemoveScriptFromEntity(entity));
             } else if (hit.section == InspectorSectionId::Terrain) {
                 EditorTerrainToolState& tool = EditorTerrainService::ToolState();
@@ -3036,8 +3028,6 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
                 static_cast<void>(sceneContext.RemoveSkeletonBindingFromEntity(entity));
             } else if (hit.section == InspectorSectionId::DeformedGeometry) {
                 static_cast<void>(sceneContext.RemoveDeformedGeometryFromEntity(entity));
-            } else if (hit.section == InspectorSectionId::UIDocument) {
-                static_cast<void>(sceneContext.RemoveUIDocumentFromEntity(entity));
             } else if (hit.section == InspectorSectionId::Tags) {
                 static_cast<void>(sceneContext.RemoveTagsFromEntity(entity));
             } else if (hit.section == InspectorSectionId::NavAgent && sceneContext.Scene().Components().NavAgents().Has(entity)) {
@@ -3197,6 +3187,43 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
         return true;
     }
 
+    if (hit.property == InspectorPropertyId::UIAnchorPreset) {
+        sceneContext.Inspector().EndTextEdit();
+        if (sceneContext.SetUIAnchorPreset(entity, hit.index,
+                (GetKeyState(VK_MENU) & 0x8000) != 0, (GetKeyState(VK_SHIFT) & 0x8000) != 0)) {
+            sceneContext.Inspector().ToggleDisclosure(InspectorDisclosureId::UIAnchorPresets);
+        }
+        return true;
+    }
+    if (hit.property == InspectorPropertyId::UIRectLayoutField) {
+        const auto* rect = sceneContext.Scene().Components().UI().TryGet<kb::scene::UIRectTransform>(entity);
+        if (rect != nullptr && hit.index >= 0 && hit.index < 4) {
+            const auto fields = InspectorUIComponentModel::RectLayoutFields(*rect);
+            sceneContext.Inspector().BeginTextEdit(hit.property, fields[static_cast<std::size_t>(hit.index)].value);
+            sceneContext.Inspector().SetEditIndex(hit.index);
+        }
+        return true;
+    }
+    if (const std::optional<kb::scene::UIComponentType> component =
+            InspectorUIComponentModel::Component(hit.section);
+        component.has_value()) {
+        const std::vector<InspectorUIPropertyRow> rows =
+            InspectorUIComponentModel::Properties(sceneContext.Scene(), entity, *component);
+        if (hit.index < 0 || static_cast<std::size_t>(hit.index) >= rows.size()) return true;
+        const InspectorUIPropertyRow& row = rows[static_cast<std::size_t>(hit.index)];
+        if (!row.writable) return true;
+        if (hit.kind == InspectorHitKind::BoolField) {
+            static_cast<void>(sceneContext.SetUIComponentProperty(
+                entity, *component, row.name,
+                kb::scene::UIComponentPropertyValue{ !row.boolValue }));
+        } else if (hit.kind == InspectorHitKind::TextField ||
+            hit.kind == InspectorHitKind::FloatField) {
+            sceneContext.Inspector().BeginTextEdit(hit.property, row.value);
+            sceneContext.Inspector().SetEditIndex(hit.index);
+        }
+        return true;
+    }
+
     if (hit.kind == InspectorHitKind::TagOption) {
         sceneContext.Inspector().EndTextEdit();
         const std::vector<std::string> known = sceneContext.KnownSceneTags();
@@ -3258,9 +3285,6 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
     }
     if (hit.section == InspectorSectionId::DeformedGeometry) {
         return HandleDeformedGeometryClick(sceneContext, entity, hit);
-    }
-    if (hit.section == InspectorSectionId::UIDocument) {
-        return HandleUIDocumentClick(sceneContext, entity, hit);
     }
     if (hit.section == InspectorSectionId::NavAgent) {
         return HandleNavAgentClick(sceneContext, entity, hit);
@@ -3589,6 +3613,33 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
             inspector.EndTextEdit();
             return true;
         }
+        if (inspector.EditedProperty() == InspectorPropertyId::UIRectLayoutField) {
+            const auto parsed = InspectorUIComponentModel::Parse(kb::scene::UIComponentPropertyType::Float, inspector.EditBuffer());
+            if (parsed && sceneContext.SetUIRectLayoutField(sceneContext.SelectedEntity(), inspector.EditIndex(), std::get<float>(*parsed)))
+                inspector.EndTextEdit();
+            return true;
+        }
+        if (const std::optional<kb::scene::UIComponentType> component =
+                InspectorUIComponentModel::Component(inspector.EditedProperty());
+            component.has_value()) {
+            const kb::scene::SceneEntity entity = sceneContext.SelectedEntity();
+            const std::vector<InspectorUIPropertyRow> rows =
+                InspectorUIComponentModel::Properties(sceneContext.Scene(), entity, *component);
+            const int index = inspector.EditIndex();
+            if (sceneContext.Scene().Entities().IsAlive(entity) && index >= 0 &&
+                static_cast<std::size_t>(index) < rows.size()) {
+                const InspectorUIPropertyRow& row = rows[static_cast<std::size_t>(index)];
+                if (row.writable) {
+                    if (const auto value = InspectorUIComponentModel::Parse(
+                            row.type, inspector.EditBuffer())) {
+                        static_cast<void>(sceneContext.SetUIComponentProperty(
+                            entity, *component, row.name, *value));
+                    }
+                }
+            }
+            inspector.EndTextEdit();
+            return true;
+        }
         if (IsMaterialFloatProperty(inspector.EditedProperty())) {
             const kb::assets::AssetId asset = sceneContext.AssetBrowser().InspectorAsset();
             const std::optional<kb::render::RenderMaterialAssetData> material = sceneContext.ReadMaterialAsset(asset);
@@ -3750,17 +3801,6 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
             float value = 0.0F;
             if (ParseFloat(inspector.EditBuffer(), value)) {
                 static_cast<void>(sceneContext.SetAnimatorSpeed(entity, value));
-            }
-            inspector.EndTextEdit();
-            return true;
-        }
-        if (sceneContext.Scene().Entities().IsAlive(entity) &&
-            inspector.EditedProperty() == InspectorPropertyId::UIDocumentAsset) {
-            std::uint64_t value = 0U;
-            const std::string_view text = inspector.EditBuffer();
-            const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
-            if (parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size()) {
-                static_cast<void>(sceneContext.SetUIDocumentAsset(entity, kb::assets::AssetId{ value }));
             }
             inspector.EndTextEdit();
             return true;

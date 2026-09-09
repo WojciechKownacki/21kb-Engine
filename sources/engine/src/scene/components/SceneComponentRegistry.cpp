@@ -39,7 +39,7 @@
 #include "engine/scene/LensEchoComponent.hpp"
 #include "engine/scene/TransformComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
-#include "engine/scene/UIAssets.hpp"
+#include "engine/scene/SceneUIComponents.hpp"
 
 #include <string_view>
 
@@ -76,6 +76,191 @@ void RegisterPhysicsReflection(kb::ecs::World& world) {
             KB_ECS_FIELD(ColliderComponent, restitution, kb::ecs::ComponentFieldType::Float32),
             KB_ECS_FIELD(ColliderComponent, layer, kb::ecs::ComponentFieldType::UInt32),
         }));
+}
+
+void RegisterUIReflection(kb::ecs::World& world) {
+    static_cast<void>(world.RegisterComponentReflection<UIRectTransform>(UIRectTransform::StableId, {
+        KB_ECS_FIELD(UIRectTransform, anchorMin, kb::ecs::ComponentFieldType::Vec2Float32),
+        KB_ECS_FIELD(UIRectTransform, anchorMax, kb::ecs::ComponentFieldType::Vec2Float32),
+        KB_ECS_FIELD(UIRectTransform, offsetMin, kb::ecs::ComponentFieldType::Vec2Float32),
+        KB_ECS_FIELD(UIRectTransform, offsetMax, kb::ecs::ComponentFieldType::Vec2Float32),
+        KB_ECS_FIELD(UIRectTransform, pivot, kb::ecs::ComponentFieldType::Vec2Float32),
+        KB_ECS_FIELD(UIRectTransform, scale, kb::ecs::ComponentFieldType::Vec2Float32),
+        KB_ECS_FIELD(UIRectTransform, rotationDegrees, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(UIRectTransform, zOrder, kb::ecs::ComponentFieldType::Int32),
+    }));
+    static_cast<void>(world.RegisterComponentReflection<UICanvas>(UICanvas::StableId, {
+        KB_ECS_FIELD(UICanvas, sortingOrder, kb::ecs::ComponentFieldType::Int32),
+        KB_ECS_FIELD(UICanvas, pixelPerfect, kb::ecs::ComponentFieldType::Bool),
+    }));
+    static_cast<void>(world.RegisterComponentReflection<UICanvasScaler>(UICanvasScaler::StableId, {
+        KB_ECS_FIELD(UICanvasScaler, scaleMode, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(UICanvasScaler, referenceResolution, kb::ecs::ComponentFieldType::Vec2Float32),
+        KB_ECS_FIELD(UICanvasScaler, scaleFactor, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(UICanvasScaler, matchWidthOrHeight, kb::ecs::ComponentFieldType::Float32),
+    }));
+    static_cast<void>(world.RegisterComponentReflection<UICanvasGroup>(UICanvasGroup::StableId, {
+        KB_ECS_FIELD(UICanvasGroup, opacity, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(UICanvasGroup, interactable, kb::ecs::ComponentFieldType::Bool),
+        KB_ECS_FIELD(UICanvasGroup, blocksRaycasts, kb::ecs::ComponentFieldType::Bool),
+        KB_ECS_FIELD(UICanvasGroup, ignoreParentGroups, kb::ecs::ComponentFieldType::Bool),
+    }));
+    static_cast<void>(world.RegisterComponentReflection<UIHorizontalLayout>(UIHorizontalLayout::StableId, {
+        KB_ECS_FIELD(UIHorizontalLayout, padding, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(UIHorizontalLayout, spacing, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(UIHorizontalLayout, horizontalAlignment, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(UIHorizontalLayout, verticalAlignment, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(UIHorizontalLayout, controlChildWidth, kb::ecs::ComponentFieldType::Bool),
+        KB_ECS_FIELD(UIHorizontalLayout, controlChildHeight, kb::ecs::ComponentFieldType::Bool),
+        KB_ECS_FIELD(UIHorizontalLayout, expandChildWidth, kb::ecs::ComponentFieldType::Bool),
+        KB_ECS_FIELD(UIHorizontalLayout, expandChildHeight, kb::ecs::ComponentFieldType::Bool),
+    }));
+    static_cast<void>(world.RegisterComponentReflection<UIVerticalLayout>(UIVerticalLayout::StableId, {
+        KB_ECS_FIELD(UIVerticalLayout, padding, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(UIVerticalLayout, spacing, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(UIVerticalLayout, horizontalAlignment, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(UIVerticalLayout, verticalAlignment, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(UIVerticalLayout, controlChildWidth, kb::ecs::ComponentFieldType::Bool),
+        KB_ECS_FIELD(UIVerticalLayout, controlChildHeight, kb::ecs::ComponentFieldType::Bool),
+        KB_ECS_FIELD(UIVerticalLayout, expandChildWidth, kb::ecs::ComponentFieldType::Bool),
+        KB_ECS_FIELD(UIVerticalLayout, expandChildHeight, kb::ecs::ComponentFieldType::Bool),
+    }));
+    static_cast<void>(world.RegisterComponentReflection<UIGridLayout>(UIGridLayout::StableId, {
+        KB_ECS_FIELD(UIGridLayout, padding, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(UIGridLayout, spacing, kb::ecs::ComponentFieldType::Vec2Float32),
+        KB_ECS_FIELD(UIGridLayout, cellSize, kb::ecs::ComponentFieldType::Vec2Float32),
+        KB_ECS_FIELD(UIGridLayout, columns, kb::ecs::ComponentFieldType::UInt32),
+        KB_ECS_FIELD(UIGridLayout, horizontalAlignment, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(UIGridLayout, verticalAlignment, kb::ecs::ComponentFieldType::Bytes),
+    }));
+    static_cast<void>(world.RegisterComponentReflection<UIWrapLayout>(UIWrapLayout::StableId, {
+        KB_ECS_FIELD(UIWrapLayout, padding, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(UIWrapLayout, spacing, kb::ecs::ComponentFieldType::Vec2Float32),
+        KB_ECS_FIELD(UIWrapLayout, horizontalAlignment, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(UIWrapLayout, verticalAlignment, kb::ecs::ComponentFieldType::Bytes),
+    }));
+    static_cast<void>(world.RegisterComponentReflection<UIOverlayLayout>(UIOverlayLayout::StableId, {
+        KB_ECS_FIELD(UIOverlayLayout, padding, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(UIOverlayLayout, horizontalAlignment, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(UIOverlayLayout, verticalAlignment, kb::ecs::ComponentFieldType::Bytes),
+    }));
+    static_cast<void>(world.RegisterComponentReflection<UILayoutElement>(UILayoutElement::StableId, {
+        KB_ECS_FIELD(UILayoutElement, minimumWidth, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(UILayoutElement, minimumHeight, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(UILayoutElement, preferredWidth, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(UILayoutElement, preferredHeight, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(UILayoutElement, flexibleWidth, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(UILayoutElement, flexibleHeight, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(UILayoutElement, layoutPriority, kb::ecs::ComponentFieldType::Int32),
+        KB_ECS_FIELD(UILayoutElement, ignoreLayout, kb::ecs::ComponentFieldType::Bool),
+    }));
+    static_cast<void>(world.RegisterComponentReflection<UIContentSizeFitter>(UIContentSizeFitter::StableId, {
+        KB_ECS_FIELD(UIContentSizeFitter, horizontalFit, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(UIContentSizeFitter, verticalFit, kb::ecs::ComponentFieldType::Bytes),
+    }));
+    static_cast<void>(world.RegisterComponentReflection<UIAspectRatioFitter>(UIAspectRatioFitter::StableId, {
+        KB_ECS_FIELD(UIAspectRatioFitter, mode, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(UIAspectRatioFitter, aspectRatio, kb::ecs::ComponentFieldType::Float32),
+    }));
+    static_cast<void>(world.RegisterComponentReflection<UISprite>(UISprite::StableId, {
+        KB_ECS_FIELD(UISprite, spriteAssetId, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(UISprite, color, kb::ecs::ComponentFieldType::Vec4Float32),
+        KB_ECS_FIELD(UISprite, preserveAspect, kb::ecs::ComponentFieldType::Bool),
+    }));
+    static_cast<void>(world.RegisterComponentReflection<UIRawImage>(UIRawImage::StableId, {
+        KB_ECS_FIELD(UIRawImage, imageAssetId, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(UIRawImage, uvRect, kb::ecs::ComponentFieldType::Vec4Float32),
+        KB_ECS_FIELD(UIRawImage, color, kb::ecs::ComponentFieldType::Vec4Float32),
+    }));
+    static_cast<void>(world.RegisterComponentReflection<UIImage>(UIImage::StableId, {
+        KB_ECS_FIELD(UIImage, imageAssetId, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(UIImage, uvRect, kb::ecs::ComponentFieldType::Vec4Float32),
+        KB_ECS_FIELD(UIImage, scaleMode, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(UIImage, preserveAspect, kb::ecs::ComponentFieldType::Bool),
+        KB_ECS_FIELD(UIImage, nineSlice, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(UIImage, color, kb::ecs::ComponentFieldType::Vec4Float32),
+    }));
+    static_cast<void>(world.RegisterComponentReflection<UIText>(UIText::StableId, {
+        KB_ECS_FIELD(UIText, content, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(UIText, fontAssetId, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(UIText, fontSize, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(UIText, color, kb::ecs::ComponentFieldType::Vec4Float32),
+        KB_ECS_FIELD(UIText, horizontalAlignment, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(UIText, verticalAlignment, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(UIText, wrapMode, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(UIText, lineSpacing, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(UIText, richText, kb::ecs::ComponentFieldType::Bool),
+    }));
+    static_cast<void>(world.RegisterComponentReflection<UIBorder>(UIBorder::StableId, {
+        KB_ECS_FIELD(UIBorder, backgroundColor, kb::ecs::ComponentFieldType::Vec4Float32),
+        KB_ECS_FIELD(UIBorder, borderColor, kb::ecs::ComponentFieldType::Vec4Float32),
+        KB_ECS_FIELD(UIBorder, borderWidth, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(UIBorder, cornerRadius, kb::ecs::ComponentFieldType::Vec4Float32),
+        KB_ECS_FIELD(UIBorder, opacity, kb::ecs::ComponentFieldType::Float32),
+    }));
+    static_cast<void>(world.RegisterComponentReflection<UIMask>(UIMask::StableId, {
+        KB_ECS_FIELD(UIMask, showGraphic, kb::ecs::ComponentFieldType::Bool),
+    }));
+    static_cast<void>(world.RegisterComponentReflection<UIShadow>(UIShadow::StableId, {
+        KB_ECS_FIELD(UIShadow, offset, kb::ecs::ComponentFieldType::Vec2Float32),
+        KB_ECS_FIELD(UIShadow, color, kb::ecs::ComponentFieldType::Vec4Float32),
+        KB_ECS_FIELD(UIShadow, blur, kb::ecs::ComponentFieldType::Float32),
+    }));
+    static_cast<void>(world.RegisterComponentReflection<UIOutline>(UIOutline::StableId, {
+        KB_ECS_FIELD(UIOutline, color, kb::ecs::ComponentFieldType::Vec4Float32),
+        KB_ECS_FIELD(UIOutline, width, kb::ecs::ComponentFieldType::Float32),
+    }));
+    static_cast<void>(world.RegisterComponentReflection<UIBackgroundBlur>(UIBackgroundBlur::StableId, {
+        KB_ECS_FIELD(UIBackgroundBlur, radius, kb::ecs::ComponentFieldType::Float32),
+    }));
+    static_cast<void>(world.RegisterComponentReflection<UISelectable>(UISelectable::StableId, {
+        KB_ECS_FIELD(UISelectable, raycastTarget, kb::ecs::ComponentFieldType::Bool),
+        KB_ECS_FIELD(UISelectable, interactable, kb::ecs::ComponentFieldType::Bool),
+        KB_ECS_FIELD(UISelectable, navigationMode, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(UISelectable, navigationUp, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(UISelectable, navigationDown, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(UISelectable, navigationLeft, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(UISelectable, navigationRight, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(UISelectable, eventName, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(UISelectable, normalColor, kb::ecs::ComponentFieldType::Vec4Float32),
+        KB_ECS_FIELD(UISelectable, highlightedColor, kb::ecs::ComponentFieldType::Vec4Float32),
+        KB_ECS_FIELD(UISelectable, pressedColor, kb::ecs::ComponentFieldType::Vec4Float32),
+        KB_ECS_FIELD(UISelectable, selectedColor, kb::ecs::ComponentFieldType::Vec4Float32),
+        KB_ECS_FIELD(UISelectable, disabledColor, kb::ecs::ComponentFieldType::Vec4Float32),
+        KB_ECS_FIELD(UISelectable, colorFadeSeconds, kb::ecs::ComponentFieldType::Float32),
+    }));
+#define KB_UI_TAG(Component, Field) static_cast<void>(world.RegisterComponentReflection<Component>(Component::StableId, { KB_ECS_FIELD(Component, Field, kb::ecs::ComponentFieldType::Bool) }))
+    KB_UI_TAG(UIButton, submitOnRelease);
+    KB_UI_TAG(UIToggle, toggled);
+#undef KB_UI_TAG
+    static_cast<void>(world.RegisterComponentReflection<UISlider>(UISlider::StableId, {
+        KB_ECS_FIELD(UISlider, minimum, kb::ecs::ComponentFieldType::Float32), KB_ECS_FIELD(UISlider, maximum, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(UISlider, value, kb::ecs::ComponentFieldType::Float32), KB_ECS_FIELD(UISlider, direction, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(UISlider, wholeNumbers, kb::ecs::ComponentFieldType::Bool),
+    }));
+    static_cast<void>(world.RegisterComponentReflection<UIScrollbar>(UIScrollbar::StableId, {
+        KB_ECS_FIELD(UIScrollbar, value, kb::ecs::ComponentFieldType::Float32), KB_ECS_FIELD(UIScrollbar, size, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(UIScrollbar, direction, kb::ecs::ComponentFieldType::Bytes),
+    }));
+    static_cast<void>(world.RegisterComponentReflection<UIScrollView>(UIScrollView::StableId, {
+        KB_ECS_FIELD(UIScrollView, scrollX, kb::ecs::ComponentFieldType::Float32), KB_ECS_FIELD(UIScrollView, scrollY, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(UIScrollView, scrollSensitivity, kb::ecs::ComponentFieldType::Float32), KB_ECS_FIELD(UIScrollView, horizontal, kb::ecs::ComponentFieldType::Bool),
+        KB_ECS_FIELD(UIScrollView, vertical, kb::ecs::ComponentFieldType::Bool), KB_ECS_FIELD(UIScrollView, inertia, kb::ecs::ComponentFieldType::Bool),
+    }));
+    static_cast<void>(world.RegisterComponentReflection<UIInputField>(UIInputField::StableId, {
+        KB_ECS_FIELD(UIInputField, characterLimit, kb::ecs::ComponentFieldType::UInt32), KB_ECS_FIELD(UIInputField, multiline, kb::ecs::ComponentFieldType::Bool),
+        KB_ECS_FIELD(UIInputField, readOnly, kb::ecs::ComponentFieldType::Bool),
+    }));
+    static_cast<void>(world.RegisterComponentReflection<UIDropdown>(UIDropdown::StableId, {
+        KB_ECS_FIELD(UIDropdown, selectedIndex, kb::ecs::ComponentFieldType::UInt32),
+    }));
+    static_cast<void>(world.RegisterComponentReflection<UIProgressBar>(UIProgressBar::StableId, {
+        KB_ECS_FIELD(UIProgressBar, minimum, kb::ecs::ComponentFieldType::Float32), KB_ECS_FIELD(UIProgressBar, maximum, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(UIProgressBar, value, kb::ecs::ComponentFieldType::Float32),
+    }));
+    static_cast<void>(world.RegisterComponentReflection<UIWidgetSwitcher>(UIWidgetSwitcher::StableId, {
+        KB_ECS_FIELD(UIWidgetSwitcher, visibleChildIndex, kb::ecs::ComponentFieldType::UInt32),
+    }));
 }
 
 void RegisterAudioReflection(kb::ecs::World& world) {
@@ -383,7 +568,6 @@ SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
     , skeletonBindingComponentId_(RegisterSceneComponent<SkeletonBindingComponent>(world, SkeletonBindingComponent::StableId))
     , motionSkeletonRuleComponentId_(RegisterSceneComponent<MotionSkeletonRuleComponent>(world, MotionSkeletonRuleComponent::StableId))
     , deformedGeometryComponentId_(RegisterSceneComponent<DrawD3DeformedGeometryComponent>(world, DrawD3DeformedGeometryComponent::StableId))
-    , uiDocumentComponentId_(RegisterSceneComponent<UIDocumentComponent>(world, "kb.scene.UIDocumentComponent"))
     , navAgentComponentId_(RegisterSceneComponent<NavAgent>(world, "kb.scene.NavAgent"))
     , navObstacleComponentId_(RegisterSceneComponent<NavObstacle>(world, "kb.scene.NavObstacle")) {
     RegisterPhysicsReflection(world);
@@ -407,6 +591,7 @@ SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
     RegisterHistoryRibbonReflection(world);
     RegisterParticleEffectReflection(world);
     RegisterLensEchoReflection(world);
+    RegisterUIReflection(world);
 }
 
 std::uint64_t SceneComponentRegistry::TransformComponentId() const noexcept {
@@ -490,7 +675,6 @@ std::uint64_t SceneComponentRegistry::AnimatorComponentId() const noexcept { ret
 std::uint64_t SceneComponentRegistry::SkeletonBindingComponentId() const noexcept { return skeletonBindingComponentId_; }
 std::uint64_t SceneComponentRegistry::MotionSkeletonRuleComponentId() const noexcept { return motionSkeletonRuleComponentId_; }
 std::uint64_t SceneComponentRegistry::DeformedGeometryComponentId() const noexcept { return deformedGeometryComponentId_; }
-std::uint64_t SceneComponentRegistry::UIDocumentComponentId() const noexcept { return uiDocumentComponentId_; }
 std::uint64_t SceneComponentRegistry::NavAgentComponentId() const noexcept { return navAgentComponentId_; }
 std::uint64_t SceneComponentRegistry::NavObstacleComponentId() const noexcept { return navObstacleComponentId_; }
 

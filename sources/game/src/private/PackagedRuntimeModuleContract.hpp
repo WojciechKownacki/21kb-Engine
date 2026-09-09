@@ -2,9 +2,13 @@
 
 #include "engine/project/ProjectDescriptor.hpp"
 
+#include <algorithm>
 #include <array>
+#include <cctype>
 #include <cstdint>
+#include <filesystem>
 #include <optional>
+#include <string>
 #include <string_view>
 
 namespace kb::game {
@@ -22,31 +26,87 @@ enum class PackagedRuntimeModuleKind : std::uint8_t {
 struct PackagedRuntimeModuleDesc {
     PackagedRuntimeModuleKind kind{};
     std::string_view name;
+    std::string_view windowsBinaryName;
 };
 
 inline constexpr std::array<PackagedRuntimeModuleDesc, 4U> kPackagedRuntimeModules{
-    PackagedRuntimeModuleDesc{ PackagedRuntimeModuleKind::PhysicsJolt, "Physics.Jolt" },
-    PackagedRuntimeModuleDesc{ PackagedRuntimeModuleKind::AudioMiniaudio, "Audio.Miniaudio" },
-    PackagedRuntimeModuleDesc{ PackagedRuntimeModuleKind::BasicLighting, "Rendering.BasicLighting" },
-    PackagedRuntimeModuleDesc{ PackagedRuntimeModuleKind::Particle21kb, "Rendering.21kbParticle" },
+    PackagedRuntimeModuleDesc{
+        PackagedRuntimeModuleKind::PhysicsJolt, "Physics.Jolt", "kb_physics_jolt_plugin.dll" },
+    PackagedRuntimeModuleDesc{
+        PackagedRuntimeModuleKind::AudioMiniaudio, "Audio.Miniaudio", "kb_audio_miniaudio_plugin.dll" },
+    PackagedRuntimeModuleDesc{
+        PackagedRuntimeModuleKind::BasicLighting, "Rendering.BasicLighting", "kb_basic_lighting_plugin.dll" },
+    PackagedRuntimeModuleDesc{
+        PackagedRuntimeModuleKind::Particle21kb, "Rendering.21kbParticle", "kb_21kb_particle_plugin.dll" },
 };
+
+inline constexpr std::string_view kWindowsCustomRuntimeModuleDirectory = "RuntimeModules";
+
+[[nodiscard]] constexpr const PackagedRuntimeModuleDesc*
+FindPackagedRuntimeModule(std::string_view name) noexcept {
+    for (const PackagedRuntimeModuleDesc& module : kPackagedRuntimeModules) {
+        if (module.name == name) {
+            return &module;
+        }
+    }
+    return nullptr;
+}
 
 [[nodiscard]] constexpr std::optional<PackagedRuntimeModuleKind>
 TryPackagedRuntimeModuleKind(std::string_view name) noexcept {
-    for (const PackagedRuntimeModuleDesc& module : kPackagedRuntimeModules) {
-        if (module.name == name) {
-            return module.kind;
-        }
+    if (const PackagedRuntimeModuleDesc* const module = FindPackagedRuntimeModule(name);
+        module != nullptr) {
+        return module->kind;
     }
     return std::nullopt;
 }
 
-// Android packages are monolithic: their descriptor cannot name an arbitrary desktop DLL.
-// Windows remains dynamically extensible. Linux/WebGL may opt into the same policy when their
-// packaged hosts are introduced, without changing the module identities above.
+// Both the cooker and the Windows package host use this exact lexical contract. Filesystem
+// containment and existence are checked separately against their respective sealed roots.
+[[nodiscard]] inline bool IsSafeWindowsRuntimeModuleRelativePath(
+    const std::filesystem::path& path) {
+    if (path.empty() || path.is_absolute() || path.has_root_name() || path.has_root_directory() ||
+        path.filename().empty()) {
+        return false;
+    }
+    for (const std::filesystem::path& component : path) {
+        if (component == "." || component == "..") {
+            return false;
+        }
+        const std::string text = component.string();
+        if (text.empty() || text.back() == '.' || text.back() == ' ' ||
+            std::ranges::any_of(text, [](unsigned char value) {
+                return value < 32U || value == ':' || value == '<' || value == '>' ||
+                    value == '"' || value == '|' || value == '?' || value == '*';
+            })) {
+            return false;
+        }
+        std::string deviceName = text.substr(0U, text.find('.'));
+        std::ranges::transform(deviceName, deviceName.begin(), [](unsigned char value) {
+            return static_cast<char>(std::toupper(value));
+        });
+        const bool numberedDevice = deviceName.size() == 4U &&
+            (deviceName.starts_with("COM") || deviceName.starts_with("LPT")) &&
+            deviceName.back() >= '1' && deviceName.back() <= '9';
+        if (deviceName == "CON" || deviceName == "PRN" || deviceName == "AUX" ||
+            deviceName == "NUL" || deviceName == "CONIN$" || deviceName == "CONOUT$" ||
+            numberedDevice) {
+            return false;
+        }
+    }
+    std::string extension = path.extension().string();
+    std::ranges::transform(extension, extension.begin(), [](unsigned char value) {
+        return static_cast<char>(std::tolower(value));
+    });
+    return extension == ".dll";
+}
+
+// Packaged mobile, Linux and browser players are monolithic: their descriptor
+// cannot name an arbitrary desktop DLL. Windows remains dynamically extensible.
 [[nodiscard]] constexpr bool TargetRequiresPackagedRuntimeModules(
     std::string_view targetProfileId) noexcept {
-    return targetProfileId == "Android.arm64";
+    return targetProfileId.starts_with("Android.") || targetProfileId == "Linux.x64" ||
+        targetProfileId.starts_with("WebGL.") || targetProfileId.starts_with("WebGPU.");
 }
 
 [[nodiscard]] constexpr bool TargetSupportsPackagedRuntimeModule(
