@@ -17,6 +17,10 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-2EA44F" alt="MIT License"></a>
 </p>
 
+<p align="center">
+  <img src="docs/readme/hero.png" alt="21kb Engine scene view, scripting, game UI, particles and build targets, captured by the engine itself" width="100%">
+</p>
+
 21kb Engine is a game engine written from scratch: its own editor, renderer, ECS,
 scripting runtime, asset pipeline and packaging. The editor is a single native
 executable. No web views, no generic UI toolkit, no layers between you and the frame.
@@ -38,12 +42,31 @@ executable. No web views, no generic UI toolkit, no layers between you and the f
 ## The editor
 
 <p align="center">
-  <img src="docs/readme/editor-material.png" alt="Material editor docked in the 21kb editor" width="100%">
+  <img src="docs/readme/editor-main.png" alt="Main 21kb editor window with Hierarchy, Scene View, Inspector and Project Files" width="100%">
 </p>
 
-A dockable workspace with detachable native windows, Undo and Redo for every scene change,
-Play Mode in place, and dedicated editors for materials, particles, skeletal meshes,
-animation clips, animator state machines, scripts and game builds.
+<table>
+  <tr>
+    <td width="30%"><img src="docs/readme/inspector-components.png" alt="Inspector with the categorized Add Component menu"></td>
+    <td width="70%">
+
+**One native workspace.** Hierarchy, Scene View, Inspector, Project Files and Console dock
+side by side or detach into their own windows, with Undo and Redo for every scene change
+and Play Mode in place.
+
+**Components by category.** Add Component groups what the engine offers into Animation,
+Audio, Navigation, Physics, Rendering, Scene, User Widget and World, with search.
+
+**Dedicated editors** for materials, particles, skeletal meshes, animation clips, animator
+state machines, scripts and game builds.
+
+</td>
+  </tr>
+</table>
+
+<p align="center">
+  <img src="docs/readme/editor-material.png" alt="Material editor docked in the 21kb editor" width="100%">
+</p>
 
 <table>
   <tr>
@@ -104,6 +127,10 @@ live runtime frames read back from the GPU.
 
 ## Particles and animation
 
+<p align="center">
+  <img src="docs/readme/skeletal-mesh-editor.png" alt="Skeletal mesh editor with bone overlay, skeleton tree and asset details" width="100%">
+</p>
+
 <table>
   <tr>
     <td width="30%"><img src="docs/readme/particle-editor.png" alt="Particle editor emitter settings and recipes"></td>
@@ -112,7 +139,8 @@ live runtime frames read back from the GPU.
 **Particles.** A deterministic particle system with its own editor, emitter stacks,
 ready made recipes, billboards, strips, mesh particles and GPU visual integration.
 
-**Animation.** Skeletal meshes from FBX and glTF, animation clips with events,
+**Animation.** Skeletal meshes from FBX and glTF with a skeleton tree, bone overlay and
+reference pose preview, animation clips with events,
 blend states, animator state machines, root motion ownership and live debugging of a
 running entity from the Animator editor.
 
