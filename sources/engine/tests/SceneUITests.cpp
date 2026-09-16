@@ -5,6 +5,8 @@
 #include "engine/input/InputKey.hpp"
 #include "engine/input/InputSubsystem.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneComponentQueries.hpp"
+#include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneObject.hpp"
@@ -13,6 +15,7 @@
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneUI.hpp"
 #include "engine/scene/SceneUIComponentSet.hpp"
+#include "engine/scene/SceneUIHierarchyPresets.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 #include "engine/ui/UIComponentCatalog.hpp"
 #include "engine/ui/UIComponentPropertyCatalog.hpp"
@@ -58,13 +61,6 @@ using kb::scene::SceneEntity;
     const kb::scene::SceneUIFrame& frame, SceneEntity entity) {
     const auto found = std::ranges::find(frame.elements, entity, &kb::scene::SceneUIFrameElement::entity);
     return found != frame.elements.end() ? &*found : nullptr;
-}
-
-[[nodiscard]] std::string_view DropdownPartText(const kb::scene::SceneUIFrame& frame, SceneEntity entity, std::int32_t part) {
-    const auto found = std::ranges::find_if(frame.elements, [=](const kb::scene::SceneUIFrameElement& element) {
-        return element.entity == entity && element.dropdownOptionIndex == part && element.text.has_value();
-    });
-    return found != frame.elements.end() ? kb::scene::UITextContent(*found->text) : std::string_view{};
 }
 
 [[nodiscard]] bool HasEvent(std::span<const kb::scene::SceneUIEvent> events,
@@ -391,17 +387,6 @@ void TestInteractionAndEditing() {
     kb::scene::UIComponentSet scrollContentComponents = content;
     scrollContentComponents.rectTransform = Rect(0.0F, 0.0F, 100.0F, 100.0F);
     const kb::scene::SceneObject scrollContent = AddUI(scene, scrollView, scrollContentComponents);
-    const kb::scene::SceneObject dropdown = addPreset(kb::scene::UIComponentPreset::Dropdown, Rect(0.0F, 130.0F, 100.0F, 20.0F));
-    const auto optionRows = [&scene, &dropdown]() {
-        return std::ranges::count_if(scene.UI().Frame().elements, [&dropdown](const kb::scene::SceneUIFrameElement& element) {
-            return element.entity == dropdown.Entity() && element.dropdownOptionIndex >= 0 && element.border.has_value();
-        });
-    };
-    {
-        kb::scene::UIDropdown* authored = scene.Components().UI().TryGet<kb::scene::UIDropdown>(dropdown.Entity());
-        kb::tests::Require(authored != nullptr && authored->optionCount == 2U,
-            "A new dropdown must come with starter options an author can rename");
-    }
     kb::scene::UIComponentSet switcherComponents = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::WidgetSwitcher);
     switcherComponents.rectTransform = Rect(0.0F, 160.0F, 100.0F, 20.0F);
     switcherComponents.selectable.emplace();
@@ -445,28 +430,6 @@ void TestInteractionAndEditing() {
         "The derived frame must expose the canonical scrollbar value and thumb size to presentation consumers");
     pointer.primaryDown = false;
     static_cast<void>(scene.UI().Update(200.0F, 220.0F, pointer, 0.016F));
-
-    pointer.pointerPosition = {10.0F, 135.0F};
-    pointer.primaryDown = true;
-    static_cast<void>(scene.UI().Update(200.0F, 220.0F, pointer, 0.016F));
-    pointer.primaryDown = false;
-    static_cast<void>(scene.UI().Update(200.0F, 220.0F, pointer, 0.016F));
-    kb::tests::Require(scene.Components().UI().TryGet<kb::scene::UIDropdown>(dropdown.Entity())->selectedIndex == 0U,
-        "Opening a dropdown must not change its selection on its own");
-    kb::tests::Require(optionRows() == 2,
-        "An open dropdown must lay out every option so the player can see the list");
-
-    // Anywhere that is neither the control nor one of its rows dismisses the list.
-    pointer.pointerPosition = {180.0F, 210.0F};
-    pointer.primaryDown = true;
-    static_cast<void>(scene.UI().Update(200.0F, 220.0F, pointer, 0.016F));
-    pointer.primaryDown = false;
-    static_cast<void>(scene.UI().Update(200.0F, 220.0F, pointer, 0.016F));
-    kb::tests::Require(FindElement(scene.UI().Frame(), dropdown.Entity())->dropdown->selectedIndex == 0U,
-        "The derived frame must expose the canonical dropdown selection to presentation consumers");
-    kb::tests::Require(optionRows() == 0 &&
-        DropdownPartText(scene.UI().Frame(), dropdown.Entity(), -2) == "Option 1",
-        "A closed dropdown must draw only its selected label");
 
     pointer.pointerPosition = {10.0F, 165.0F};
     pointer.primaryDown = true;
@@ -675,210 +638,6 @@ void TestAuthoredDimensionsAndVisibility() {
         kb::tests::NearlyEqual(visible->rect.width, 240.0F), "Restored UI must render at its authored width and accept input");
 }
 
-// The dropdown contract every menu depends on: the options are data of the control, the closed
-// control draws the selected label, the open list draws every option as a row, clipped to the rows
-// allowed at once, above what it covers. Every option can be reached and chosen with a pointer and with
-// navigation alone, cancelling keeps the previous selection, and a change is announced once against the
-// control with the chosen index and label.
-void TestDropdownList() {
-    kb::scene::Scene scene{kb::scene::SceneMode::PrefabPrivate};
-    const kb::scene::SceneObject canvas = AddUI(scene, {}, CanvasComponents());
-    kb::scene::UIComponentSet dropdownComponents = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Dropdown);
-    dropdownComponents.rectTransform = Rect(0.0F, 0.0F, 100.0F, 20.0F);
-    kb::scene::UIDropdown& authored = *dropdownComponents.dropdown;
-    authored.maxVisibleOptions = 2U;
-    constexpr std::array<std::string_view, 5U> kLabels{"Low", "Medium", "High", "Ultra", "Custom"};
-    authored.optionCount = static_cast<std::uint32_t>(kLabels.size());
-    for (std::size_t index = 0U; index < kLabels.size(); ++index)
-        kb::tests::Require(kb::scene::SetUIDropdownOptionText(authored.options[index], kLabels[index]), "Label must fit");
-    // A sibling authored after the dropdown with a higher zOrder sits where the open list will draw.
-    kb::scene::UIComponentSet coverComponents = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Button);
-    coverComponents.rectTransform = Rect(0.0F, 20.0F, 100.0F, 40.0F, 50);
-    const kb::scene::SceneObject cover = AddUI(scene, canvas, coverComponents);
-    const kb::scene::SceneObject dropdown = AddUI(scene, canvas, dropdownComponents);
-
-    const auto rowAt = [&](std::int32_t option) -> const kb::scene::SceneUIFrameElement* {
-        const auto found = std::ranges::find_if(scene.UI().Frame().elements, [&](const kb::scene::SceneUIFrameElement& element) {
-            return element.entity == dropdown.Entity() && element.dropdownOptionIndex == option && element.border.has_value();
-        });
-        return found != scene.UI().Frame().elements.end() ? &*found : nullptr;
-    };
-    const auto labelAt = [&](std::int32_t option) -> std::string_view {
-        const auto found = std::ranges::find_if(scene.UI().Frame().elements, [&](const kb::scene::SceneUIFrameElement& element) {
-            return element.entity == dropdown.Entity() && element.dropdownOptionIndex == option && element.text.has_value();
-        });
-        return found != scene.UI().Frame().elements.end() ? kb::scene::UITextContent(*found->text) : std::string_view{};
-    };
-    const auto caption = [&]() {
-        return DropdownPartText(scene.UI().Frame(), dropdown.Entity(), -2);
-    };
-
-    kb::scene::SceneUIInput input;
-    input.pointerAvailable = true;
-    input.pointerPosition = {50.0F, 10.0F};
-    kb::tests::Require(scene.UI().Update(400.0F, 400.0F, input, 0.016F), "Dropdown frame must build");
-    kb::tests::Require(rowAt(0) == nullptr && caption() == "Low", "A closed dropdown must draw only its selected label");
-
-    const auto click = [&](kb::math::Vec2 position) {
-        input.pointerPosition = position;
-        input.primaryDown = true;
-        kb::tests::Require(scene.UI().Update(400.0F, 400.0F, input, 0.016F), "Dropdown press must update");
-        input.primaryDown = false;
-        kb::tests::Require(scene.UI().Update(400.0F, 400.0F, input, 0.016F), "Dropdown release must update");
-    };
-
-    click({50.0F, 10.0F});
-    kb::tests::Require(scene.UI().Focused() == dropdown.Entity(), "Pressing a dropdown must focus it");
-    for (std::int32_t option = 0; option < static_cast<std::int32_t>(kLabels.size()); ++option) {
-        kb::tests::Require(rowAt(option) != nullptr && labelAt(option) == kLabels[static_cast<std::size_t>(option)],
-            "Every option of an open dropdown must be drawn as a row with its label");
-    }
-    kb::tests::Require(rowAt(0)->zOrder > FindElement(scene.UI().Frame(), cover.Entity())->zOrder &&
-        scene.UI().HitTest({50.0F, 30.0F}) == dropdown.Entity(),
-        "An open list must draw and take input above a sibling authored with a higher zOrder");
-    // Two visible rows sit under the control; the third is clipped away so the list cannot be drawn or
-    // picked outside the height the author allowed.
-    kb::tests::Require(scene.UI().Frame().HitTestElement({50.0F, 50.0F})->dropdownOptionIndex == 1,
-        "A visible option row must take the pointer");
-    const kb::scene::SceneUIFrameElement* belowWindow = scene.UI().Frame().HitTestElement({50.0F, 70.0F});
-    kb::tests::Require(belowWindow == nullptr || belowWindow->dropdownOptionIndex != 2,
-        "A row past the visible count must be clipped out of the open list");
-    kb::tests::Require(rowAt(2)->clipRect.y + rowAt(2)->clipRect.height <= 60.0F,
-        "The open list must clip its rows to the visible window rather than to the whole canvas");
-
-    // Hovering highlights; pressing on one row and releasing on another selects nothing.
-    input.pointerPosition = {50.0F, 30.0F};
-    input.primaryDown = true;
-    static_cast<void>(scene.UI().Update(400.0F, 400.0F, input, 0.016F));
-    input.pointerPosition = {50.0F, 50.0F};
-    input.primaryDown = false;
-    static_cast<void>(scene.UI().Update(400.0F, 400.0F, input, 0.016F));
-    kb::tests::Require(rowAt(0) != nullptr && scene.Components().UI().TryGet<kb::scene::UIDropdown>(dropdown.Entity())->selectedIndex == 0U,
-        "Releasing on a different row than the press began on must not choose it");
-
-    click({50.0F, 50.0F});
-    kb::tests::Require(scene.Components().UI().TryGet<kb::scene::UIDropdown>(dropdown.Entity())->selectedIndex == 1U,
-        "Clicking an option row must select that option");
-    const kb::scene::SceneUIEvent* changed =
-        FindEvent(scene.UI().Events(), kb::scene::SceneUIEventType::Changed, dropdown.Entity());
-    kb::tests::Require(changed != nullptr && kb::tests::NearlyEqual(changed->value, 1.0F) &&
-        kb::scene::SceneUIEventText(*changed) == "Medium",
-        "A dropdown selection must report the chosen index and label against the control");
-    kb::tests::Require(rowAt(0) == nullptr && caption() == "Medium", "Choosing an option must close the list and show it");
-    kb::tests::Require(scene.UI().Focused() == dropdown.Entity(), "Focus must stay on the control");
-
-    // Navigation alone - the fields the D-pad, the left stick and the arrow keys feed.
-    const auto pulse = [&](bool kb::scene::SceneUIInput::*field) {
-        input.*field = true;
-        kb::tests::Require(scene.UI().Update(400.0F, 400.0F, input, 0.016F), "Navigation press must update");
-        input.*field = false;
-        kb::tests::Require(scene.UI().Update(400.0F, 400.0F, input, 0.016F), "Navigation release must update");
-    };
-    input.pointerAvailable = false;
-    pulse(&kb::scene::SceneUIInput::submitDown);
-    kb::tests::Require(rowAt(4) != nullptr, "Submitting on a focused dropdown must open its list");
-    pulse(&kb::scene::SceneUIInput::navigateDown);
-    pulse(&kb::scene::SceneUIInput::navigateDown);
-    kb::tests::Require(scene.UI().Focused() == dropdown.Entity(), "Navigating an open list must not move focus away");
-    kb::tests::Require(rowAt(3)->rect.y < 60.0F,
-        "Moving the highlight past the visible window must scroll the list");
-    pulse(&kb::scene::SceneUIInput::navigateDown);
-    pulse(&kb::scene::SceneUIInput::navigateDown);
-    pulse(&kb::scene::SceneUIInput::submitDown);
-    kb::tests::Require(scene.Components().UI().TryGet<kb::scene::UIDropdown>(dropdown.Entity())->selectedIndex == 4U &&
-        rowAt(0) == nullptr && caption() == "Custom",
-        "Navigation must stop at the last row and submit must select it and close the list");
-
-    pulse(&kb::scene::SceneUIInput::submitDown);
-    pulse(&kb::scene::SceneUIInput::navigateUp);
-    pulse(&kb::scene::SceneUIInput::cancelDown);
-    kb::tests::Require(scene.Components().UI().TryGet<kb::scene::UIDropdown>(dropdown.Entity())->selectedIndex == 4U &&
-        rowAt(0) == nullptr && scene.UI().Focused() == dropdown.Entity(),
-        "Cancelling must close the list, keep the previous selection and keep focus on the control");
-
-    input.pointerAvailable = true;
-    click({50.0F, 10.0F});
-    kb::tests::Require(rowAt(0) != nullptr, "The list must reopen");
-    click({350.0F, 350.0F});
-    kb::tests::Require(rowAt(0) == nullptr &&
-        scene.Components().UI().TryGet<kb::scene::UIDropdown>(dropdown.Entity())->selectedIndex == 4U,
-        "A press outside the control and its list must close the list without choosing");
-}
-
-// A dropdown round-trips its options, icon references and row style. Scenes older than v36 kept the
-// options as child objects: loading turns their labels into the option list in child order, keeps the
-// selection on the same choice and takes the children out of the UI so they no longer draw.
-void TestDropdownPersistenceCompatibility() {
-    kb::scene::UIComponentSet authored;
-    authored.rectTransform.emplace();
-    authored.dropdown.emplace();
-    authored.dropdown->optionCount = 3U;
-    authored.dropdown->selectedIndex = 2U;
-    authored.dropdown->maxVisibleOptions = 4U;
-    authored.dropdown->fontSize = 22.0F;
-    static_cast<void>(kb::scene::SetUIDropdownOptionText(authored.dropdown->options[0], "1280 x 720"));
-    static_cast<void>(kb::scene::SetUIDropdownOptionText(authored.dropdown->options[1], "1920 x 1080"));
-    static_cast<void>(kb::scene::SetUIDropdownOptionText(authored.dropdown->options[2], "Zażółć"));
-    authored.dropdown->options[1].iconAssetId = 77U;
-    std::vector<std::uint8_t> current;
-    kb::scene::SceneAssetUIComponentCodec::Write(current, authored);
-    kb::scene::UIComponentSet decoded;
-    kb::scene::SceneAssetBinaryIO::ByteReader currentReader{current};
-    kb::tests::Require(kb::scene::SceneAssetUIComponentCodec::Read(currentReader, 37U, decoded) &&
-        currentReader.Exhausted() && decoded.dropdown->optionCount == 3U && decoded.dropdown->selectedIndex == 2U &&
-        decoded.dropdown->maxVisibleOptions == 4U && decoded.dropdown->options[1].iconAssetId == 77U &&
-        kb::scene::UIDropdownOptionText(decoded.dropdown->options[2]) == "Zażółć" &&
-        kb::tests::NearlyEqual(decoded.dropdown->fontSize, 22.0F),
-        "A current dropdown must round-trip its options, icons, selection and style");
-
-    // Prefab assets carry UI as versioned text; text written before the version prefix is v34 layout.
-    kb::scene::UIComponentSet fromText;
-    kb::tests::Require(kb::scene::SceneUIComponentTextCodec::Decode(kb::scene::SceneUIComponentTextCodec::Encode(authored), fromText) &&
-        fromText.dropdown->optionCount == 3U, "Versioned UI text must round-trip a dropdown");
-    kb::scene::UIComponentSet legacySet;
-    legacySet.rectTransform.emplace();
-    legacySet.selectable.emplace();
-    std::vector<std::uint8_t> legacyBytes;
-    kb::scene::SceneAssetUIComponentCodec::Write(legacyBytes, legacySet);
-    std::string legacyText;
-    for (const std::uint8_t byte : legacyBytes) {
-        constexpr char digits[] = "0123456789ABCDEF";
-        legacyText.push_back(digits[byte >> 4U]);
-        legacyText.push_back(digits[byte & 0xFU]);
-    }
-    kb::tests::Require(kb::scene::SceneUIComponentTextCodec::Decode(legacyText, fromText) && fromText.selectable.has_value(),
-        "UI text written before versions were recorded must still decode");
-    kb::tests::Require(kb::scene::SceneUIComponentTextCodec::EncodedVersion(legacyText) == 34U &&
-        kb::scene::SceneUIComponentTextCodec::EncodedVersion(kb::scene::SceneUIComponentTextCodec::Encode(authored)) == 37U &&
-        kb::scene::SceneUIComponentTextCodec::EncodedVersion("v99:00") == 0U,
-        "Prefab loading must be able to tell which layout a UI payload uses, to convert child-object options");
-
-    kb::scene::ScenePrefab legacyScene;
-    kb::scene::ScenePrefabNodeDesc control;
-    control.name = "Quality";
-    control.components.ui.rectTransform.emplace();
-    control.components.ui.dropdown.emplace();
-    control.components.ui.dropdown->selectedIndex = 1U;
-    const std::uint32_t controlIndex = legacyScene.AddNode(std::move(control));
-    for (const std::string_view label : {"Low", "High"}) {
-        kb::scene::ScenePrefabNodeDesc option;
-        option.name = std::string{label};
-        option.parentNode = controlIndex;
-        option.components.ui.rectTransform.emplace();
-        static_cast<void>(kb::scene::SetUITextContent(option.components.ui.text.emplace(), label));
-        option.components.ui.text->fontSize = 19.0F;
-        static_cast<void>(legacyScene.AddNode(std::move(option)));
-    }
-    kb::scene::SceneAssetReader::ConvertChildDropdownOptions(legacyScene);
-    const kb::scene::UIDropdown& converted = *legacyScene.Nodes()[controlIndex].components.ui.dropdown;
-    kb::tests::Require(converted.optionCount == 2U && converted.selectedIndex == 1U &&
-        kb::scene::UIDropdownOptionText(converted.options[0]) == "Low" &&
-        kb::scene::UIDropdownOptionText(converted.options[1]) == "High" && kb::tests::NearlyEqual(converted.fontSize, 19.0F),
-        "Child-object options of an older scene must become the dropdown's option list");
-    kb::tests::Require(legacyScene.Nodes()[1].components.ui.Empty() && legacyScene.Nodes()[1].name == "Low",
-        "Converted option children must stop drawing but stay in the hierarchy by name");
-}
-
 // A pad player has no pointer: the left stick and the D-pad have to walk focus, a focused slider has
 // to take left/right as its value, and holding a direction on a long list has to keep stepping and
 // keep the focused row scrolled into view. Driven through the device state the platform collector
@@ -1031,112 +790,260 @@ void TestNavigationLinksSurviveHierarchyCopies() {
         "A v34 navigation link written as a live entity id must load as no link");
 }
 
-// A dropdown near the bottom of the screen opens its list upwards instead of running off-screen, and
-// every dropdown draws its arrow. Option edits keep the selection on the same choice.
-void TestDropdownPlacementAndOptionEdits() {
-    kb::scene::Scene scene{kb::scene::SceneMode::PrefabPrivate};
-    const kb::scene::SceneObject canvas = AddUI(scene, {}, CanvasComponents());
-    kb::scene::UIComponentSet components = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Dropdown);
-    components.rectTransform = Rect(0.0F, 360.0F, 100.0F, 20.0F);
-    components.dropdown->optionCount = 3U;
-    static_cast<void>(kb::scene::SetUIDropdownOptionText(components.dropdown->options[2], "Option 3"));
-    const kb::scene::SceneObject dropdown = AddUI(scene, canvas, components);
-    kb::scene::SceneUIInput input;
-    input.pointerAvailable = true;
-    input.pointerPosition = {50.0F, 370.0F};
-    static_cast<void>(scene.UI().Update(400.0F, 400.0F, input, 0.016F));
-    kb::tests::Require(DropdownPartText(scene.UI().Frame(), dropdown.Entity(), -3) == "\xE2\x96\xBC",
-        "A closed dropdown must draw a down arrow");
-    const auto caption = std::ranges::find_if(scene.UI().Frame().elements, [&](const kb::scene::SceneUIFrameElement& element) {
-        return element.entity == dropdown.Entity() && element.dropdownOptionIndex == -2;
-    });
-    kb::tests::Require(caption != scene.UI().Frame().elements.end() && caption->rect.x > 0.0F && !caption->hitTestable,
-        "The caption must be padded from the control's left edge and never take input");
-    input.primaryDown = true;
-    static_cast<void>(scene.UI().Update(400.0F, 400.0F, input, 0.016F));
-    input.primaryDown = false;
-    static_cast<void>(scene.UI().Update(400.0F, 400.0F, input, 0.016F));
-    const auto row = std::ranges::find_if(scene.UI().Frame().elements, [&](const kb::scene::SceneUIFrameElement& element) {
-        return element.entity == dropdown.Entity() && element.dropdownOptionIndex == 2 && element.border.has_value();
-    });
-    kb::tests::Require(DropdownPartText(scene.UI().Frame(), dropdown.Entity(), -3) == "\xE2\x96\xB2",
-        "An open dropdown must point its arrow up");
-    kb::tests::Require(row != scene.UI().Frame().elements.end() && row->rect.y + row->rect.height <= 360.01F &&
-        row->rect.y >= 0.0F, "A list with no room below the control must open upwards and stay on screen");
-    kb::tests::Require(scene.UI().Frame().HitTestElement({50.0F, 350.0F})->dropdownOptionIndex == 2,
-        "The last option of an upward list must sit directly above the control");
-
-    kb::scene::UIDropdown edited = *components.dropdown;
-    edited.selectedIndex = 2U;
-    kb::tests::Require(kb::scene::MoveUIDropdownOption(edited, 2U, 0U) && edited.selectedIndex == 0U &&
-        kb::scene::UIDropdownOptionText(edited.options[0]) == "Option 3", "Moving the selected option must keep it selected");
-    kb::tests::Require(kb::scene::RemoveUIDropdownOption(edited, 1U) && edited.optionCount == 2U && edited.selectedIndex == 0U &&
-        kb::scene::UIDropdownOptionText(edited.options[1]) == "Option 2", "Removing another option must keep the selection");
-    kb::tests::Require(kb::scene::RemoveUIDropdownOption(edited, 0U) && edited.optionCount == 1U && edited.selectedIndex == 0U,
-        "Removing the selected option must select a remaining one");
+[[nodiscard]] SceneEntity FindNamed(const kb::scene::Scene& scene, SceneEntity root, std::string_view name) {
+    std::vector<SceneEntity> pending{root};
+    while (!pending.empty()) {
+        const SceneEntity entity = pending.back();
+        pending.pop_back();
+        if (scene.Entities().Name(entity) == name) return entity;
+        for (std::size_t index = 0U; index < scene.Hierarchy().ChildCount(entity); ++index)
+            pending.push_back(scene.Hierarchy().ChildAt(entity, index));
+    }
+    return {};
 }
 
-// An option can show any widget: a Button child linked as option content draws inside its row and, when
-// selected, inside the closed control. Clicking that row - on top of the button - chooses the option, and
-// the content survives a prefab copy with its link pointing at the copied child.
-void TestDropdownOptionContent() {
+[[nodiscard]] std::string_view ShownText(const kb::scene::SceneUIFrame& frame, SceneEntity entity) {
+    const auto* element = FindElement(frame, entity);
+    return element != nullptr && element->text.has_value() ? kb::scene::UITextContent(*element->text) : std::string_view{};
+}
+
+[[nodiscard]] kb::math::Vec2 Center(const kb::scene::SceneUIFrame& frame, SceneEntity entity) {
+    const auto* element = FindElement(frame, entity);
+    return element != nullptr ? kb::math::Vec2{element->rect.x + element->rect.width * 0.5F, element->rect.y + element->rect.height * 0.5F}
+                              : kb::math::Vec2{-1.0F, -1.0F};
+}
+
+struct DropdownFixture {
     kb::scene::Scene scene{kb::scene::SceneMode::PrefabPrivate};
-    const kb::scene::SceneObject canvas = AddUI(scene, {}, CanvasComponents());
-    kb::scene::UIComponentSet dropdownComponents = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Dropdown);
-    dropdownComponents.rectTransform = Rect(0.0F, 0.0F, 100.0F, 20.0F);
-    const kb::scene::SceneObject dropdown = AddUI(scene, canvas, dropdownComponents);
-    kb::scene::UIComponentSet buttonComponents = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Button);
-    buttonComponents.rectTransform = Rect(0.0F, 0.0F, 10.0F, 10.0F);
-    const kb::scene::SceneObject button = AddUI(scene, dropdown, buttonComponents);
-    {
-        kb::scene::UIDropdown* authored = scene.Components().UI().TryGet<kb::scene::UIDropdown>(dropdown.Entity());
-        authored->options[1].content = button.Entity().Id();
-        scene.Components().UI().MarkModified<kb::scene::UIDropdown>(dropdown.Entity());
-    }
-    const auto buttonElement = [&]() { return FindElement(scene.UI().Frame(), button.Entity()); };
-
+    kb::scene::SceneObject canvas;
+    SceneEntity dropdown;
     kb::scene::SceneUIInput input;
-    input.pointerAvailable = true;
-    input.pointerPosition = {50.0F, 10.0F};
-    kb::tests::Require(scene.UI().Update(400.0F, 400.0F, input, 0.016F), "Dropdown with content must build");
-    kb::tests::Require(buttonElement() == nullptr, "Content of an unselected option must not draw while the list is closed");
 
-    const auto click = [&](kb::math::Vec2 position) {
+    explicit DropdownFixture(std::span<const std::string_view> labels, float top = 0.0F) {
+        canvas = AddUI(scene, {}, CanvasComponents());
+        dropdown = kb::scene::CreateUIDropdownHierarchy(scene, canvas, "Quality");
+        kb::scene::SceneUIComponents ui = scene.Components().UI();
+        ui.Set(dropdown, Rect(0.0F, top, 160.0F, 30.0F));
+        kb::scene::UIDropdown value = *ui.TryGet<kb::scene::UIDropdown>(dropdown);
+        value.optionCount = static_cast<std::uint32_t>(labels.size());
+        for (std::size_t index = 0U; index < labels.size(); ++index)
+            kb::tests::Require(kb::scene::SetUIDropdownOptionText(value.options[index], labels[index]), "Label must fit");
+        ui.Set(dropdown, value);
+        input.pointerAvailable = true;
+        input.pointerPosition = {390.0F, 390.0F};
+        Step();
+    }
+    void Step(float deltaSeconds = 0.016F) {
+        kb::tests::Require(scene.UI().Update(400.0F, 400.0F, input, deltaSeconds), "Dropdown frame must build");
+    }
+    void Click(kb::math::Vec2 position) {
+        input.pointerAvailable = true;
         input.pointerPosition = position;
         input.primaryDown = true;
-        static_cast<void>(scene.UI().Update(400.0F, 400.0F, input, 0.016F));
+        Step();
         input.primaryDown = false;
-        static_cast<void>(scene.UI().Update(400.0F, 400.0F, input, 0.016F));
-    };
-    click({50.0F, 10.0F});
-    const kb::scene::SceneUIFrameElement* inRow = buttonElement();
-    kb::tests::Require(inRow != nullptr && inRow->rect.y >= 40.0F - 0.01F && inRow->rect.y + inRow->rect.height <= 60.01F &&
-        !inRow->hitTestable && inRow->zOrder > FindElement(scene.UI().Frame(), dropdown.Entity())->zOrder,
-        "An open list must draw the option's content widget inside its row, above the list, without taking input");
+        Step();
+    }
+    void Pulse(bool kb::scene::SceneUIInput::*field) {
+        input.*field = true;
+        Step();
+        input.*field = false;
+        Step();
+    }
+    [[nodiscard]] SceneEntity List() const { return FindNamed(scene, dropdown, "Dropdown List"); }
+    [[nodiscard]] SceneEntity Item(std::size_t index, std::string_view label) const {
+        return FindNamed(scene, dropdown, "Item " + std::to_string(index) + ": " + std::string{label});
+    }
+    [[nodiscard]] std::uint32_t Value() const { return scene.Components().UI().TryGet<kb::scene::UIDropdown>(dropdown)->value; }
+    void FinishFade() { for (int step = 0; step < 20; ++step) Step(0.05F); }
+};
 
-    click({50.0F, 50.0F});
-    kb::tests::Require(scene.Components().UI().TryGet<kb::scene::UIDropdown>(dropdown.Entity())->selectedIndex == 1U,
-        "Clicking a row that shows a content widget must choose that option");
-    const kb::scene::SceneUIFrameElement* inCaption = buttonElement();
-    kb::tests::Require(inCaption != nullptr && inCaption->rect.y < 20.0F && DropdownPartText(scene.UI().Frame(), dropdown.Entity(), -2).empty(),
-        "The closed control must show the selected option's content instead of its text");
+// The dropdown opens a list cloned from its template: one item per option cloned from the template's
+// item, with the option's label, the chosen one switched on and focused; a blocker under the list closes
+// it. Choosing an item sets the value, reports it with the label, fades the list out and destroys it.
+void TestDropdownListFromTemplate() {
+    constexpr std::array<std::string_view, 5U> kLabels{"Low", "Medium", "High", "Ultra", "Custom"};
+    DropdownFixture fixture{kLabels};
+    auto& scene = fixture.scene;
+    const SceneEntity label = FindNamed(scene, fixture.dropdown, "Label");
+    const SceneEntity templateEntity = FindNamed(scene, fixture.dropdown, "Template");
+    kb::tests::Require(ShownText(scene.UI().Frame(), label) == "Low", "The caption must show the chosen option");
+    const auto* templateElement = FindElement(scene.UI().Frame(), templateEntity);
+    kb::tests::Require(templateElement != nullptr && templateElement->effectiveOpacity == 0.0F && !templateElement->hitTestable,
+        "The template must stay hidden and untouchable");
+    kb::tests::Require(!fixture.List().IsValid(), "No list exists before the dropdown is opened");
 
-    const kb::scene::ScenePrefab captured = scene.Prefabs().Capture(canvas);
+    fixture.Click(Center(scene.UI().Frame(), fixture.dropdown));
+    const SceneEntity list = fixture.List();
+    kb::tests::Require(list.IsValid() && scene.Components().UI().Has<kb::scene::UICanvas>(list),
+        "Opening must clone the template as a list in its own canvas");
+    for (std::size_t index = 0U; index < kLabels.size(); ++index) {
+        const SceneEntity item = fixture.Item(index, kLabels[index]);
+        kb::tests::Require(item.IsValid() && ShownText(scene.UI().Frame(), FindNamed(scene, item, "Item Label")) == kLabels[index],
+            "Every option must become an item cloned from the template with its label");
+        kb::tests::Require(scene.Components().UI().TryGet<kb::scene::UIToggle>(item)->toggled == (index == 0U),
+            "Only the chosen option's item may be switched on");
+        const auto* checkmark = FindElement(scene.UI().Frame(), FindNamed(scene, item, "Item Checkmark"));
+        kb::tests::Require(checkmark != nullptr, "Item checkmark must be laid out");
+    }
+    kb::tests::Require(scene.UI().Focused() == fixture.Item(0U, "Low"), "Opening must focus the chosen item");
+    kb::tests::Require(FindNamed(scene, fixture.canvas.Entity(), "Blocker").IsValid(), "Opening must place a blocker under the list");
+    const auto* listElement = FindElement(scene.UI().Frame(), list);
+    const auto* controlElement = FindElement(scene.UI().Frame(), fixture.dropdown);
+    kb::tests::Require(listElement->rect.y >= controlElement->rect.y + controlElement->rect.height - 0.01F,
+        "A list with room below opens below the dropdown");
+    kb::tests::Require(listElement->rect.height < 150.0F - 0.01F, "A list taller than its items shrinks to fit them");
+    fixture.FinishFade();
+    kb::tests::Require(FindElement(scene.UI().Frame(), list)->effectiveOpacity > 0.99F, "The list must fade in");
+
+    // Hovering an item tints its background, the item's target graphic.
+    const SceneEntity medium = fixture.Item(1U, "Medium");
+    fixture.input.pointerPosition = Center(scene.UI().Frame(), medium);
+    fixture.Step();
+    fixture.Step(0.2F);
+    const auto* background = FindElement(scene.UI().Frame(), FindNamed(scene, medium, "Item Background"));
+    kb::tests::Require(background != nullptr && background->interactionTint.b > background->interactionTint.r,
+        "A hovered item must tint its background with the highlight colour");
+    const auto* offCheck = FindElement(scene.UI().Frame(), FindNamed(scene, medium, "Item Checkmark"));
+    kb::tests::Require(offCheck->effectiveOpacity == 0.0F, "An item that is off must hide its checkmark");
+
+    fixture.Click(Center(scene.UI().Frame(), medium));
+    kb::tests::Require(fixture.Value() == 1U, "Clicking an item must choose its option");
+    const kb::scene::SceneUIEvent* changed = FindEvent(scene.UI().Events(), kb::scene::SceneUIEventType::Changed, fixture.dropdown);
+    kb::tests::Require(changed != nullptr && kb::tests::NearlyEqual(changed->value, 1.0F) &&
+        kb::scene::SceneUIEventText(*changed) == "Medium", "Choosing must report the value and the label on the dropdown");
+    kb::tests::Require(!FindNamed(scene, fixture.canvas.Entity(), "Blocker").IsValid(), "Choosing must remove the blocker at once");
+    fixture.FinishFade();
+    kb::tests::Require(!fixture.List().IsValid(), "The list must be destroyed once it has faded out");
+    kb::tests::Require(ShownText(scene.UI().Frame(), label) == "Medium" && scene.UI().Focused() == fixture.dropdown,
+        "The caption must show the new choice and focus must return to the dropdown");
+
+    // Keyboard and pad: submit opens, down walks the items in order, submit chooses, cancel closes.
+    fixture.input.pointerAvailable = false;
+    fixture.Pulse(&kb::scene::SceneUIInput::submitDown);
+    kb::tests::Require(scene.UI().Focused() == fixture.Item(1U, "Medium"), "Submit must open the list onto the chosen item");
+    fixture.Pulse(&kb::scene::SceneUIInput::navigateDown);
+    fixture.Pulse(&kb::scene::SceneUIInput::navigateDown);
+    kb::tests::Require(scene.UI().Focused() == fixture.Item(3U, "Ultra"), "Navigation must walk the items in option order");
+    fixture.Pulse(&kb::scene::SceneUIInput::submitDown);
+    fixture.FinishFade();
+    kb::tests::Require(fixture.Value() == 3U && !fixture.List().IsValid(), "Submit on an item must choose it and close the list");
+    fixture.Pulse(&kb::scene::SceneUIInput::submitDown);
+    fixture.Pulse(&kb::scene::SceneUIInput::navigateUp);
+    fixture.Pulse(&kb::scene::SceneUIInput::cancelDown);
+    fixture.FinishFade();
+    kb::tests::Require(fixture.Value() == 3U && !fixture.List().IsValid() && scene.UI().Focused() == fixture.dropdown,
+        "Cancel must close the list without changing the value");
+
+    // A press outside the list lands on the blocker and closes it without choosing.
+    fixture.Click(Center(scene.UI().Frame(), fixture.dropdown));
+    fixture.Click({390.0F, 390.0F});
+    fixture.FinishFade();
+    kb::tests::Require(fixture.Value() == 3U && !fixture.List().IsValid(), "A press outside must close the list without choosing");
+}
+
+// A long list scrolls inside the template's viewport: the linked scrollbar appears, and walking to the last
+// item scrolls it into view. A dropdown near the bottom opens its list upwards.
+void TestDropdownScrollingAndPlacement() {
+    constexpr std::array<std::string_view, 12U> kLabels{"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"};
+    DropdownFixture fixture{kLabels};
+    auto& scene = fixture.scene;
+    fixture.input.pointerAvailable = false;
+    const SceneEntity focusStart = fixture.dropdown;
+    kb::tests::Require(scene.UI().SetFocus(focusStart), "Dropdown must take focus");
+    fixture.Pulse(&kb::scene::SceneUIInput::submitDown);
+    for (int step = 0; step < 11; ++step) fixture.Pulse(&kb::scene::SceneUIInput::navigateDown);
+    const SceneEntity last = fixture.Item(11U, "12");
+    kb::tests::Require(scene.UI().Focused() == last, "Navigation must reach the last item of a long list");
+    const SceneEntity list = fixture.List();
+    const SceneEntity viewport = FindNamed(scene, list, "Viewport");
+    const SceneEntity scrollbar = FindNamed(scene, list, "Scrollbar");
+    kb::tests::Require(scene.Components().UI().TryGet<kb::scene::UIScrollView>(viewport)->scrollY > 0.0F,
+        "Reaching an item below the viewport must scroll the list");
+    const auto* lastElement = FindElement(scene.UI().Frame(), last);
+    const auto* viewportElement = FindElement(scene.UI().Frame(), viewport);
+    kb::tests::Require(lastElement->rect.y + lastElement->rect.height <= viewportElement->rect.y + viewportElement->rect.height + 0.01F,
+        "The focused item must end up inside the viewport");
+    const auto* bar = FindElement(scene.UI().Frame(), scrollbar);
+    kb::tests::Require(bar != nullptr && bar->effectiveOpacity > 0.0F && bar->scrollbar->value > 0.9F && bar->scrollbar->size < 1.0F,
+        "A list that does not fit must show its scrollbar at the scrolled position");
+
+    constexpr std::array<std::string_view, 3U> kShort{"A", "B", "C"};
+    DropdownFixture bottom{kShort, 360.0F};
+    bottom.Click(Center(bottom.scene.UI().Frame(), bottom.dropdown));
+    const auto* upward = FindElement(bottom.scene.UI().Frame(), bottom.List());
+    const auto* control = FindElement(bottom.scene.UI().Frame(), bottom.dropdown);
+    kb::tests::Require(upward != nullptr && upward->rect.y + upward->rect.height <= control->rect.y + 0.01F && upward->rect.y >= 0.0F,
+        "A list with no room below must open upwards and stay on screen");
+    const auto* shortScrollbar = FindElement(bottom.scene.UI().Frame(), FindNamed(bottom.scene, bottom.List(), "Scrollbar"));
+    kb::tests::Require(shortScrollbar != nullptr && shortScrollbar->effectiveOpacity == 0.0F,
+        "A list whose items fit must hide its scrollbar");
+}
+
+// A dropdown keeps its widgets and options across a save and a prefab copy: its references follow into
+// the copy. Payloads written by v35-v37 still load, keeping labels, images and the chosen index.
+void TestDropdownPersistenceAndOptionEdits() {
+    constexpr std::array<std::string_view, 2U> kLabels{"Windowed", "Fullscreen"};
+    DropdownFixture fixture{kLabels};
+    auto& scene = fixture.scene;
+    const kb::scene::ScenePrefab captured = scene.Prefabs().Capture(scene.Entities().Object(fixture.dropdown));
     kb::scene::ScenePrefabInstance copy = scene.Prefabs().Instantiate(captured);
-    const kb::scene::UIDropdown* copied = scene.Components().UI().TryGet<kb::scene::UIDropdown>(copy.ObjectAt(1U).Entity());
-    kb::tests::Require(copied != nullptr && copied->options[1].content == copy.ObjectAt(2U).Entity().Id(),
-        "A copied dropdown's option content must point at the copied child");
+    const SceneEntity copied = copy.RootObject().Entity();
+    const kb::scene::UIDropdown* copiedDropdown = scene.Components().UI().TryGet<kb::scene::UIDropdown>(copied);
+    kb::tests::Require(copiedDropdown != nullptr && copiedDropdown->templateEntity == FindNamed(scene, copied, "Template").Id() &&
+        copiedDropdown->captionText == FindNamed(scene, copied, "Label").Id() &&
+        copiedDropdown->itemText == FindNamed(scene, copied, "Item Label").Id(),
+        "A copied dropdown must point at its own template, caption and item label");
+    const kb::scene::UIToggle* copiedToggle = scene.Components().UI().TryGet<kb::scene::UIToggle>(FindNamed(scene, copied, "Item"));
+    kb::tests::Require(copiedToggle->graphic == FindNamed(scene, copied, "Item Checkmark").Id(),
+        "A copied item must point at its own checkmark");
 
+    kb::scene::UIComponentSet authored;
+    authored.rectTransform.emplace();
+    authored.dropdown = *copiedDropdown;
+    authored.dropdown->options[1].imageAssetId = 77U;
+    authored.dropdown->value = 1U;
     std::vector<std::uint8_t> bytes;
-    kb::scene::UIComponentSet set;
-    set.rectTransform.emplace();
-    set.dropdown = *copied;
-    kb::scene::SceneAssetUIComponentCodec::Write(bytes, set);
+    kb::scene::SceneAssetUIComponentCodec::Write(bytes, authored);
     kb::scene::SceneAssetBinaryIO::ByteReader reader{bytes};
     kb::scene::UIComponentSet decoded;
-    kb::tests::Require(kb::scene::SceneAssetUIComponentCodec::Read(reader, 37U, decoded) && reader.Exhausted() &&
-        decoded.dropdown->options[1].content == copied->options[1].content,
-        "A v37 dropdown must round-trip option content links");
+    kb::tests::Require(kb::scene::SceneAssetUIComponentCodec::Read(reader, 38U, decoded) && reader.Exhausted() &&
+        decoded.dropdown->templateEntity == copiedDropdown->templateEntity && decoded.dropdown->value == 1U &&
+        decoded.dropdown->options[1].imageAssetId == 77U &&
+        kb::scene::UIDropdownOptionText(decoded.dropdown->options[1]) == "Fullscreen",
+        "A v38 dropdown must round-trip its widgets, value and options");
+
+    // v37 layout: index, visible rows, options with image and content, then a font and four colours.
+    std::vector<std::uint8_t> legacy;
+    kb::scene::SceneAssetBinaryIO::WriteUInt64(legacy, 1ULL << static_cast<unsigned>(kb::scene::UIComponentType::Dropdown));
+    kb::scene::SceneAssetBinaryIO::WriteUInt32(legacy, 1U);
+    kb::scene::SceneAssetBinaryIO::WriteUInt32(legacy, 0U);
+    kb::scene::SceneAssetBinaryIO::WriteUInt32(legacy, 2U);
+    for (const std::string_view text : kLabels) {
+        kb::scene::SceneAssetBinaryIO::WriteString(legacy, text);
+        kb::scene::SceneAssetBinaryIO::WriteUInt64(legacy, 5U);
+        kb::scene::SceneAssetBinaryIO::WriteUInt64(legacy, 0U);
+    }
+    kb::scene::SceneAssetBinaryIO::WriteUInt64(legacy, 0U);
+    kb::scene::SceneAssetBinaryIO::WriteFloat(legacy, 16.0F);
+    for (int color = 0; color < 16; ++color) kb::scene::SceneAssetBinaryIO::WriteFloat(legacy, 1.0F);
+    kb::scene::SceneAssetBinaryIO::ByteReader legacyReader{legacy};
+    kb::scene::UIComponentSet legacyDecoded;
+    kb::tests::Require(kb::scene::SceneAssetUIComponentCodec::Read(legacyReader, 37U, legacyDecoded) && legacyReader.Exhausted() &&
+        legacyDecoded.dropdown->value == 1U && legacyDecoded.dropdown->optionCount == 2U &&
+        legacyDecoded.dropdown->options[0].imageAssetId == 5U && legacyDecoded.dropdown->templateEntity == 0U,
+        "A v37 dropdown must load its options and chosen index, without widgets to drive");
+
+    kb::scene::UIDropdown edited = *copiedDropdown;
+    edited.optionCount = 3U;
+    static_cast<void>(kb::scene::SetUIDropdownOptionText(edited.options[2], "Borderless"));
+    edited.value = 2U;
+    kb::tests::Require(kb::scene::MoveUIDropdownOption(edited, 2U, 0U) && edited.value == 0U &&
+        kb::scene::UIDropdownOptionText(edited.options[0]) == "Borderless", "Moving the chosen option must keep it chosen");
+    kb::tests::Require(kb::scene::RemoveUIDropdownOption(edited, 1U) && edited.optionCount == 2U && edited.value == 0U,
+        "Removing another option must keep the value");
+    kb::tests::Require(kb::scene::RemoveUIDropdownOption(edited, 0U) && edited.optionCount == 1U && edited.value == 0U,
+        "Removing the chosen option must choose a remaining one");
 }
 
 } // namespace
@@ -1150,10 +1057,9 @@ void RunSceneUITests() {
     TestHierarchicalTransformsAndMaskHitTesting();
     TestClippingGroupsSortingAndScaling();
     TestInteractionAndEditing();
-    TestDropdownList();
-    TestDropdownPlacementAndOptionEdits();
-    TestDropdownOptionContent();
-    TestDropdownPersistenceCompatibility();
+    TestDropdownListFromTemplate();
+    TestDropdownScrollingAndPlacement();
+    TestDropdownPersistenceAndOptionEdits();
     TestNavigationLinksSurviveHierarchyCopies();
     TestProgressAndEventQueue();
     TestAutomaticRuntimeInput();

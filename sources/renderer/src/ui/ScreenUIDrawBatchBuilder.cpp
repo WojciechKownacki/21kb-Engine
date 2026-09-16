@@ -59,9 +59,7 @@ namespace {
 
 [[nodiscard]] const ScreenUITextRun* FindTextRun(std::span<const ScreenUITextRun> runs,
                                                  const kb::scene::SceneUIFrameElement& element) noexcept {
-    const auto found = std::ranges::find_if(runs, [&element](const ScreenUITextRun& run) {
-        return run.entity == element.entity.Id() && run.dropdownOptionIndex == element.dropdownOptionIndex;
-    });
+    const auto found = std::ranges::find(runs, element.entity.Id(), &ScreenUITextRun::entity);
     return found == runs.end() ? nullptr : &*found;
 }
 
@@ -226,7 +224,8 @@ void ScreenUIDrawBatchBuilder::AppendElement(const kb::scene::SceneUIFrameElemen
             AppendShape(element, rect, partStyle);
         };
         if (element.toggle) {
-            if (element.toggle->toggled) drawIndicator(indicator);
+            // A toggle with an on-state graphic shows that widget instead of drawing its own indicator.
+            if (element.toggle->toggled && element.toggle->graphic == 0U) drawIndicator(indicator);
         } else {
             float fraction = 0.0F;
             auto direction = kb::scene::UIAxisDirection::LeftToRight;

@@ -7,6 +7,7 @@
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneUIComponentSet.hpp"
+#include "engine/ui/UIEntityReferences.hpp"
 #include "scene/EditorSceneContext.hpp"
 #include "scene/transform_edit/EditorSceneTransformEquality.hpp"
 
@@ -33,8 +34,8 @@ namespace {
     return scene.Entities().Object(parent);
 }
 
-// Objects outside a restored subtree may link to it by entity id. Those ids died with the deleted
-// objects; point every such UI navigation link at the object that now stands in its place.
+// Objects outside a restored subtree may refer to it by entity id. Those ids died with the deleted
+// objects; point every such UI reference at the object that now stands in its place.
 void RelinkNavigation(kb::scene::Scene& scene, const std::unordered_map<std::uint64_t, std::uint64_t>& restoredIds) {
     if (restoredIds.empty()) {
         return;
@@ -47,34 +48,17 @@ void RelinkNavigation(kb::scene::Scene& scene, const std::unordered_map<std::uin
         for (std::size_t index = 0U; index < scene.Hierarchy().ChildCount(entity); ++index) {
             pending.push_back(scene.Hierarchy().ChildAt(entity, index));
         }
-        if (kb::scene::UIDropdown* dropdown = ui.TryGet<kb::scene::UIDropdown>(entity)) {
-            bool relinked = false;
-            for (std::uint32_t option = 0U; option < dropdown->optionCount; ++option) {
-                const auto restored = restoredIds.find(dropdown->options[option].content);
-                if (dropdown->options[option].content != 0U && restored != restoredIds.end()) {
-                    dropdown->options[option].content = restored->second;
-                    relinked = true;
-                }
-            }
-            if (relinked) {
-                ui.MarkModified<kb::scene::UIDropdown>(entity);
-            }
-        }
-        kb::scene::UISelectable* selectable = ui.TryGet<kb::scene::UISelectable>(entity);
-        if (selectable == nullptr) {
-            continue;
-        }
+        kb::scene::UIComponentSet components = kb::scene::CaptureSceneUIComponents(ui, entity);
         bool changed = false;
-        for (std::uint64_t* link : { &selectable->navigationUp, &selectable->navigationDown,
-                 &selectable->navigationLeft, &selectable->navigationRight }) {
-            const auto restored = restoredIds.find(*link);
-            if (*link != 0U && restored != restoredIds.end()) {
-                *link = restored->second;
+        kb::scene::ForEachUIEntityReference(components, [&](std::uint64_t& reference) {
+            const auto restored = restoredIds.find(reference);
+            if (reference != 0U && restored != restoredIds.end()) {
+                reference = restored->second;
                 changed = true;
             }
-        }
+        });
         if (changed) {
-            ui.MarkModified<kb::scene::UISelectable>(entity);
+            kb::scene::SynchronizeSceneUIComponents(ui, entity, components);
         }
     }
 }

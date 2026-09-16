@@ -9,6 +9,7 @@
 #include "engine/script/ScriptFunctionRegistry.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 #include "engine/script/ScriptSceneComponentApi.hpp"
+#include "engine/scene/SceneUIHierarchyPresets.hpp"
 #include "engine/ui/UIComponentCatalog.hpp"
 #include "engine/ui/UIComponentPropertyCatalog.hpp"
 
@@ -108,6 +109,10 @@ ScriptFunctionCallResult Create(const ScriptFunctionCallContext& context,
         desc.parent = context.scene->Entities().Object(parent);
     }
 
+    if (preset->preset == kb::scene::UIComponentPreset::Dropdown) {
+        // A dropdown is a hierarchy - caption, template, item - not a single object.
+        return EntityResult("entity", kb::scene::CreateUIDropdownHierarchy(*context.scene, desc.parent, desc.name));
+    }
     const kb::scene::SceneEntity entity = context.scene->Entities().CreateEntity(std::move(desc));
     kb::scene::ApplySceneUIComponents(
         context.scene->Components().UI(), entity, kb::scene::BuildUIComponentPreset(preset->preset));

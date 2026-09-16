@@ -404,9 +404,10 @@ constexpr std::array kSelectableProperties{
     KB_COLOR(UISelectable, normalColor),      KB_COLOR(UISelectable, highlightedColor),
     KB_COLOR(UISelectable, pressedColor),     KB_COLOR(UISelectable, selectedColor),
     KB_COLOR(UISelectable, disabledColor),    KB_FLOAT(UISelectable, colorFadeSeconds),
+    KB_ENTITY(UISelectable, targetGraphic),
 };
 constexpr std::array kButtonProperties{KB_BOOL(UIButton, submitOnRelease)};
-constexpr std::array kToggleProperties{KB_BOOL(UIToggle, toggled)};
+constexpr std::array kToggleProperties{KB_BOOL(UIToggle, toggled), KB_ENTITY(UIToggle, graphic)};
 constexpr std::array kSliderProperties{
     KB_FLOAT(UISlider, minimum),  KB_FLOAT(UISlider, maximum),     KB_FLOAT(UISlider, value),
     KB_ENUM(UISlider, direction), KB_BOOL(UISlider, wholeNumbers),
@@ -419,46 +420,26 @@ constexpr std::array kScrollbarProperties{
 constexpr std::array kScrollViewProperties{
     KB_FLOAT(UIScrollView, scrollX),   KB_FLOAT(UIScrollView, scrollY), KB_FLOAT(UIScrollView, scrollSensitivity),
     KB_BOOL(UIScrollView, horizontal), KB_BOOL(UIScrollView, vertical), KB_BOOL(UIScrollView, inertia),
+    KB_ENTITY(UIScrollView, verticalScrollbar),
 };
 constexpr std::array kInputFieldProperties{
     KB_UINT(UIInputField, characterLimit),
     KB_BOOL(UIInputField, multiline),
     KB_BOOL(UIInputField, readOnly),
 };
-// Options are addressed by index - "options.3.text", "options.3.icon" - so the Inspector, the
-// generic property path and scripts all edit the same list. Writing optionCount grows the list with
-// "Option N" labels or shrinks it, keeping the selection inside it.
-template <std::size_t Index>
-[[nodiscard]] constexpr UIPropertyBinding DropdownOptionContentBinding(std::string_view name) noexcept {
-    return {
-        .descriptor = {name, UIComponentPropertyType::Entity, true},
-        .read = [](const UIComponentSet& components, UIComponentPropertyValue& output) {
-            if (!components.dropdown || Index >= components.dropdown->optionCount) return false;
-            output = components.dropdown->options[Index].content;
-            return true;
-        },
-        .write = [](UIComponentSet& components, const UIComponentPropertyValue& value) {
-            if (!components.dropdown) return UIComponentPropertyWriteResult::ComponentMissing;
-            if (Index >= components.dropdown->optionCount) return UIComponentPropertyWriteResult::InvalidValue;
-            const std::uint64_t* content = std::get_if<std::uint64_t>(&value);
-            if (content == nullptr) return UIComponentPropertyWriteResult::TypeMismatch;
-            auto dropdown = *components.dropdown;
-            dropdown.options[Index].content = *content;
-            return Commit(components, dropdown);
-        },
-    };
-}
-
-template <std::size_t Index, bool Icon>
+// Options are addressed by index - "options.3.text", "options.3.image" - so the Inspector, the generic
+// property path and scripts all edit the same list. Writing optionCount grows the list with "Option N"
+// labels or shrinks it, keeping the value inside it.
+template <std::size_t Index, bool Image>
 [[nodiscard]] constexpr UIPropertyBinding DropdownOptionBinding(std::string_view name) noexcept {
     return {
-        .descriptor = Icon ? UIComponentPropertyDescriptor{name, UIComponentPropertyType::Asset, true,
-                                                           kb::assets::AssetKind::Texture, "ui.dropdownIcon"}
-                           : UIComponentPropertyDescriptor{name, UIComponentPropertyType::String, true},
+        .descriptor = Image ? UIComponentPropertyDescriptor{name, UIComponentPropertyType::Asset, true,
+                                                           kb::assets::AssetKind::Texture, "ui.dropdownOptionImage"}
+                            : UIComponentPropertyDescriptor{name, UIComponentPropertyType::String, true},
         .read = [](const UIComponentSet& components, UIComponentPropertyValue& output) {
             if (!components.dropdown || Index >= components.dropdown->optionCount) return false;
             const UIDropdownOption& option = components.dropdown->options[Index];
-            if (Icon) output = option.iconAssetId;
+            if (Image) output = option.imageAssetId;
             else output = std::string{UIDropdownOptionText(option)};
             return true;
         },
@@ -466,8 +447,8 @@ template <std::size_t Index, bool Icon>
             if (!components.dropdown) return UIComponentPropertyWriteResult::ComponentMissing;
             if (Index >= components.dropdown->optionCount) return UIComponentPropertyWriteResult::InvalidValue;
             auto dropdown = *components.dropdown;
-            if (Icon) {
-                if (!ConvertPropertyValue(value, dropdown.options[Index].iconAssetId))
+            if (Image) {
+                if (!ConvertPropertyValue(value, dropdown.options[Index].imageAssetId))
                     return UIComponentPropertyWriteResult::TypeMismatch;
             } else {
                 const std::string* text = std::get_if<std::string>(&value);
@@ -500,7 +481,7 @@ template <std::size_t Index, bool Icon>
             }
             for (std::uint32_t index = count; index < dropdown.optionCount; ++index) dropdown.options[index] = {};
             dropdown.optionCount = count;
-            dropdown.selectedIndex = count == 0U ? 0U : std::min(dropdown.selectedIndex, count - 1U);
+            dropdown.value = count == 0U ? 0U : std::min(dropdown.value, count - 1U);
             return Commit(components, dropdown);
         },
     };
@@ -508,10 +489,11 @@ template <std::size_t Index, bool Icon>
 
 #define KB_DROPDOWN_OPTION(Index)                                                                                      \
     DropdownOptionBinding<Index, false>("options." #Index ".text"),                                                    \
-        DropdownOptionBinding<Index, true>("options." #Index ".icon"),                                                  \
-        DropdownOptionContentBinding<Index>("options." #Index ".content")
+        DropdownOptionBinding<Index, true>("options." #Index ".image")
 constexpr std::array kDropdownProperties{
-    KB_UINT(UIDropdown, selectedIndex), KB_UINT(UIDropdown, maxVisibleOptions), DropdownOptionCountBinding(),
+    KB_ENTITY(UIDropdown, templateEntity), KB_ENTITY(UIDropdown, captionText), KB_ENTITY(UIDropdown, captionImage),
+    KB_ENTITY(UIDropdown, itemText),       KB_ENTITY(UIDropdown, itemImage),   KB_UINT(UIDropdown, value),
+    KB_FLOAT(UIDropdown, alphaFadeSpeed),  DropdownOptionCountBinding(),
     KB_DROPDOWN_OPTION(0),  KB_DROPDOWN_OPTION(1),  KB_DROPDOWN_OPTION(2),  KB_DROPDOWN_OPTION(3),
     KB_DROPDOWN_OPTION(4),  KB_DROPDOWN_OPTION(5),  KB_DROPDOWN_OPTION(6),  KB_DROPDOWN_OPTION(7),
     KB_DROPDOWN_OPTION(8),  KB_DROPDOWN_OPTION(9),  KB_DROPDOWN_OPTION(10), KB_DROPDOWN_OPTION(11),
@@ -520,9 +502,6 @@ constexpr std::array kDropdownProperties{
     KB_DROPDOWN_OPTION(20), KB_DROPDOWN_OPTION(21), KB_DROPDOWN_OPTION(22), KB_DROPDOWN_OPTION(23),
     KB_DROPDOWN_OPTION(24), KB_DROPDOWN_OPTION(25), KB_DROPDOWN_OPTION(26), KB_DROPDOWN_OPTION(27),
     KB_DROPDOWN_OPTION(28), KB_DROPDOWN_OPTION(29), KB_DROPDOWN_OPTION(30), KB_DROPDOWN_OPTION(31),
-    KB_TYPED_ASSET(UIDropdown, fontAssetId, Font, "ui.font"), KB_FLOAT(UIDropdown, fontSize),
-    KB_COLOR(UIDropdown, textColor), KB_COLOR(UIDropdown, itemColor),
-    KB_COLOR(UIDropdown, itemHighlightedColor), KB_COLOR(UIDropdown, itemSelectedColor),
 };
 #undef KB_DROPDOWN_OPTION
 constexpr std::array kProgressBarProperties{

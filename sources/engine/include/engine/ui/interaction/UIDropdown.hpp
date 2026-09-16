@@ -1,7 +1,5 @@
 #pragma once
 
-#include "engine/math/EngineMath.hpp"
-
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -10,39 +8,37 @@
 
 namespace kb::scene {
 
-// One choice of a dropdown. `text` names the choice - it is what selection events and scripts report.
-// A plain option draws that text (and `iconAssetId` in front of it). An option can instead show any
-// widget: `content` is a child object of the dropdown - a button, an image, a toggle, a composition -
-// laid out in the option's row and, while it is the selection, in the closed control.
+// One choice of a dropdown: its label and an optional image.
 struct UIDropdownOption {
     static constexpr std::size_t MaxUtf8Bytes = 64U;
 
     std::array<char, MaxUtf8Bytes> text{};
-    std::uint64_t iconAssetId = 0U;
-    std::uint64_t content = 0U;
+    std::uint64_t imageAssetId = 0U;
 };
 
-// A dropdown owns its options as data. The closed control draws the selected label; the open list
-// draws one row per option in the dropdown's own row style, so an author edits a list of labels
-// instead of building and styling a widget per choice.
+// A dropdown shows its current choice through widgets it points at and opens a list built from a
+// template it points at. Nothing about the look lives here: the caption, the arrow, the list frame,
+// the scroll area and the item are ordinary widgets under the dropdown.
+//
+//  - `templateEntity` is a hidden subtree cloned each time the list opens. It holds an item - the
+//    Toggle that is the nearest ancestor of `itemText` - which is cloned once per option.
+//  - `captionText` / `captionImage` show the selected option's label and image.
+//  - `itemText` / `itemImage` are the parts of the item that receive each option's label and image.
 struct UIDropdown {
     static constexpr std::string_view StableId = "kb21.ui.dropdown";
-    static constexpr std::uint32_t SchemaVersion = 3U;
+    static constexpr std::uint32_t SchemaVersion = 4U;
     static constexpr std::size_t MaxOptions = 32U;
 
-    std::uint32_t selectedIndex = 0U;
-    // How many option rows the open list shows at once. 0 shows every option. A positive value
-    // bounds the popup and clips the rest, so a settings list of twenty resolutions cannot
-    // cover the screen it belongs to; navigation scrolls the clipped rows into view.
-    std::uint32_t maxVisibleOptions = 0U;
+    std::uint64_t templateEntity = 0U;
+    std::uint64_t captionText = 0U;
+    std::uint64_t captionImage = 0U;
+    std::uint64_t itemText = 0U;
+    std::uint64_t itemImage = 0U;
+    std::uint32_t value = 0U;
+    // Seconds the open list takes to fade in or out. 0 shows and hides it at once.
+    float alphaFadeSpeed = 0.15F;
     std::uint32_t optionCount = 0U;
     std::array<UIDropdownOption, MaxOptions> options{};
-    std::uint64_t fontAssetId = 0U;
-    float fontSize = 16.0F;
-    kb::math::Color textColor{0.92F, 0.93F, 0.96F, 1.0F};
-    kb::math::Color itemColor{0.16F, 0.18F, 0.22F, 1.0F};
-    kb::math::Color itemHighlightedColor{0.24F, 0.28F, 0.36F, 1.0F};
-    kb::math::Color itemSelectedColor{0.30F, 0.40F, 0.66F, 1.0F};
 };
 
 [[nodiscard]] inline std::string_view UIDropdownOptionText(const UIDropdownOption& option) noexcept {
@@ -59,15 +55,8 @@ struct UIDropdown {
     return true;
 }
 
-// The label of the selected option, or empty when the dropdown has no options.
-[[nodiscard]] inline std::string_view UIDropdownSelectedText(const UIDropdown& dropdown) noexcept {
-    return dropdown.selectedIndex < dropdown.optionCount && dropdown.optionCount <= UIDropdown::MaxOptions
-               ? UIDropdownOptionText(dropdown.options[dropdown.selectedIndex])
-               : std::string_view{};
-}
-
-// Moves option `from` to position `to`, shifting the options between. The selection keeps pointing
-// at the same choice, not at the same index.
+// Moves option `from` to position `to`, shifting the options between. The value keeps pointing at
+// the same choice, not at the same index.
 [[nodiscard]] inline bool MoveUIDropdownOption(UIDropdown& dropdown, std::uint32_t from, std::uint32_t to) noexcept {
     if (from >= dropdown.optionCount || to >= dropdown.optionCount) {
         return false;
@@ -78,19 +67,19 @@ struct UIDropdown {
     } else {
         std::rotate(begin + to, begin + from, begin + from + 1U);
     }
-    std::uint32_t& selected = dropdown.selectedIndex;
-    if (selected == from) {
-        selected = to;
-    } else if (from < to && selected > from && selected <= to) {
-        --selected;
-    } else if (to < from && selected >= to && selected < from) {
-        ++selected;
+    std::uint32_t& value = dropdown.value;
+    if (value == from) {
+        value = to;
+    } else if (from < to && value > from && value <= to) {
+        --value;
+    } else if (to < from && value >= to && value < from) {
+        ++value;
     }
     return true;
 }
 
-// Removes one option. The selection stays on the same choice; removing the selected option selects the
-// one that took its place, or the new last option.
+// Removes one option. The value stays on the same choice; removing the chosen option chooses the one
+// that took its place, or the new last option.
 [[nodiscard]] inline bool RemoveUIDropdownOption(UIDropdown& dropdown, std::uint32_t index) noexcept {
     if (index >= dropdown.optionCount) {
         return false;
@@ -99,10 +88,10 @@ struct UIDropdown {
     std::rotate(begin + index, begin + index + 1U, begin + dropdown.optionCount);
     --dropdown.optionCount;
     dropdown.options[dropdown.optionCount] = {};
-    if (dropdown.selectedIndex > index) {
-        --dropdown.selectedIndex;
+    if (dropdown.value > index) {
+        --dropdown.value;
     }
-    dropdown.selectedIndex = dropdown.optionCount == 0U ? 0U : std::min(dropdown.selectedIndex, dropdown.optionCount - 1U);
+    dropdown.value = dropdown.optionCount == 0U ? 0U : std::min(dropdown.value, dropdown.optionCount - 1U);
     return true;
 }
 

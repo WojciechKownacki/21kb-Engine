@@ -134,11 +134,12 @@ UIComponentSet BuildUIComponentPreset(UIComponentPreset preset) {
     case UIComponentPreset::InputField: size(240.0F, 36.0F); AddPresetSurface(output); output.text.emplace(); output.selectable.emplace(); output.inputField.emplace(); break;
     case UIComponentPreset::Dropdown: {
         size(200.0F, 36.0F); AddPresetSurface(output); output.selectable.emplace();
-        // Two starter options, so a freshly placed dropdown opens onto something to rename.
+        // Three starter options, so a freshly placed dropdown opens onto something to rename.
         UIDropdown& dropdown = output.dropdown.emplace();
-        dropdown.optionCount = 2U;
-        static_cast<void>(SetUIDropdownOptionText(dropdown.options[0], "Option 1"));
-        static_cast<void>(SetUIDropdownOptionText(dropdown.options[1], "Option 2"));
+        dropdown.optionCount = 3U;
+        static_cast<void>(SetUIDropdownOptionText(dropdown.options[0], "Option A"));
+        static_cast<void>(SetUIDropdownOptionText(dropdown.options[1], "Option B"));
+        static_cast<void>(SetUIDropdownOptionText(dropdown.options[2], "Option C"));
         break;
     }
     case UIComponentPreset::ProgressBar: size(240.0F, 16.0F); AddPresetSurface(output); output.progressBar.emplace(); break;

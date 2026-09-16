@@ -148,13 +148,10 @@ void SceneAssetReader::ConvertChildDropdownOptions(ScenePrefab& prefab) {
                     label = label.substr(0U, cut);
                 }
                 static_cast<void>(SetUIDropdownOptionText(dropdown.options[option], label));
-                dropdown.fontSize = child->components.ui.text->fontSize;
-                dropdown.textColor = child->components.ui.text->color;
-                dropdown.fontAssetId = child->components.ui.text->fontAssetId;
             }
             child->components.ui = {};
         }
-        dropdown.selectedIndex = dropdown.optionCount == 0U ? 0U : std::min(dropdown.selectedIndex, dropdown.optionCount - 1U);
+        dropdown.value = dropdown.optionCount == 0U ? 0U : std::min(dropdown.value, dropdown.optionCount - 1U);
     }
 }
 

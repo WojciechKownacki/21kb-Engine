@@ -56,6 +56,7 @@
 #include "inspection/InspectorPhysicsModel.hpp"
 #include "scene/audio/EditorSceneAudioSettingsService.hpp"
 #include "scene/ui/EditorUIComponentAuthoring.hpp"
+#include "engine/scene/SceneUIHierarchyPresets.hpp"
 #include "scene/EditorHierarchyObjectFactory.hpp"
 #include "inspection/ui/InspectorUIComponentModel.hpp"
 #include "engine/scene/SceneUI.hpp"
@@ -2287,6 +2288,23 @@ kb::scene::SceneEntity EditorSceneContext::CreateUIObject(kb::scene::UIComponent
     if (descriptor == nullptr || (parent.IsValid() && !scene_->Entities().IsAlive(parent))) return {};
     kb::scene::SceneEntity created{};
     const bool succeeded = ExecuteSceneCommand("Create " + std::string{descriptor->displayName}, [this, descriptor, parent, &created]() {
+        if (descriptor->type == kb::scene::UIComponentType::Dropdown) {
+            // A dropdown is created as its whole hierarchy: caption, arrow, and the template its list is
+            // cloned from. Every part gets its dependencies (a font for text) in the same command.
+            std::vector<kb::scene::SceneEntity> parts;
+            created = kb::scene::CreateUIDropdownHierarchy(*scene_,
+                parent.IsValid() ? scene_->Entities().Object(parent) : kb::scene::SceneObject{}, descriptor->displayName, &parts);
+            if (!created.IsValid()) return false;
+            for (const kb::scene::SceneEntity part : parts)
+                if (!CompleteUIComponentDependencies(part)) return false;
+            auto rect = *scene_->Components().UI().TryGet<kb::scene::UIRectTransform>(created);
+            if (!InspectorUIComponentModel::ApplyAnchorPreset(rect, 5, {}, true, true)) return false;
+            scene_->Components().UI().Set(created, rect);
+            for (auto ancestor = scene_->Hierarchy().Parent(created); ancestor.IsValid(); ancestor = scene_->Hierarchy().Parent(ancestor))
+                hierarchyExpansion_.SetExpanded(ancestor, true);
+            SelectEntity(created);
+            return true;
+        }
         created = EditorHierarchyObjectFactory::CreateObject(*scene_, descriptor->displayName);
         if (!created.IsValid() || (parent.IsValid() && !scene_->Hierarchy().SetParent(created, parent)) ||
             !EditorUIComponentAuthoring::Add(*scene_, created, descriptor->stableId) ||
@@ -3643,11 +3661,7 @@ bool EditorSceneContext::FitColliderToMesh(kb::scene::SceneEntity entity) {
 
 bool EditorSceneContext::CompleteUIComponentDependencies(kb::scene::SceneEntity entity) {
     auto ui = scene_->Components().UI();
-    // Text draws only with a font asset, so a component that draws text gets the bundled font when it
-    // arrives without one: Text for its content, Dropdown for its caption and list rows.
-    const auto* text = ui.TryGet<kb::scene::UIText>(entity);
-    const auto* dropdown = ui.TryGet<kb::scene::UIDropdown>(entity);
-    if ((text != nullptr && text->fontAssetId == 0U) || (dropdown != nullptr && dropdown->fontAssetId == 0U)) {
+    if (const auto* text = ui.TryGet<kb::scene::UIText>(entity); text != nullptr && text->fontAssetId == 0U) {
         const std::array fontFiles{EditorBundledFontPath()};
         const auto imported = kb::assets::AssetImportService::ImportFiles(
             scene_->Assets().Manager(), fontFiles, "/Game/UI/Fonts");
@@ -3656,17 +3670,9 @@ bool EditorSceneContext::CompleteUIComponentDependencies(kb::scene::SceneEntity 
                 (imported.items.empty() ? std::string{"import returned no result"} : imported.items.front().error));
             return false;
         }
-        const std::uint64_t font = imported.items.front().id.value;
-        if (text != nullptr && text->fontAssetId == 0U) {
-            auto authoredText = *text;
-            authoredText.fontAssetId = font;
-            ui.Set(entity, authoredText);
-        }
-        if (dropdown != nullptr && dropdown->fontAssetId == 0U) {
-            auto authoredDropdown = *dropdown;
-            authoredDropdown.fontAssetId = font;
-            ui.Set(entity, authoredDropdown);
-        }
+        auto authoredText = *text;
+        authoredText.fontAssetId = imported.items.front().id.value;
+        ui.Set(entity, authoredText);
     }
     kb::scene::SceneEntity root = entity;
     for (auto ancestor = entity; ancestor.IsValid(); ancestor = scene_->Hierarchy().Parent(ancestor)) {
@@ -4196,89 +4202,39 @@ bool EditorSceneContext::SetUIColor(kb::scene::SceneEntity entity, kb::scene::UI
     });
 }
 
-bool EditorSceneContext::AddUIDropdownOption(kb::scene::SceneEntity entity, std::optional<kb::scene::UIComponentType> content) {
-    if (!scene_->Entities().IsAlive(entity)) return false;
-    const auto* current = scene_->Components().UI().TryGet<kb::scene::UIDropdown>(entity);
-    if (current == nullptr) return false;
-    if (current->optionCount >= kb::scene::UIDropdown::MaxOptions) {
-        console_.Warning("Inspector", "A dropdown holds at most 32 options.");
-        return false;
-    }
-    const kb::scene::UIComponentDescriptor* descriptor =
-        content.has_value() ? kb::scene::FindUIComponentDescriptor(*content) : nullptr;
-    if (content.has_value() && descriptor == nullptr) return false;
-    const bool added = ExecuteSceneCommand("Add Dropdown Option", [this, entity, descriptor]() {
-        kb::scene::UIComponentSet candidate = kb::scene::CaptureSceneUIComponents(scene_->Components().UI(), entity);
-        kb::scene::UIDropdown& dropdown = *candidate.dropdown;
-        const std::uint32_t index = dropdown.optionCount;
-        dropdown.options[index] = {};
-        const std::string label = "Option " + std::to_string(index + 1U);
-        if (!kb::scene::SetUIDropdownOptionText(dropdown.options[index], label)) return false;
-        if (descriptor != nullptr) {
-            // The content widget fills the option's row; its own style is authored like any widget.
-            const kb::scene::SceneEntity created =
-                EditorHierarchyObjectFactory::CreateObject(*scene_, label + " " + std::string{descriptor->displayName});
-            if (!created.IsValid() || !scene_->Hierarchy().SetParent(created, entity) ||
-                !EditorUIComponentAuthoring::Add(*scene_, created, descriptor->stableId) ||
-                !CompleteUIComponentDependencies(created)) return false;
-            auto rect = *scene_->Components().UI().TryGet<kb::scene::UIRectTransform>(created);
-            rect.anchorMin = {0.0F, 0.0F};
-            rect.anchorMax = {1.0F, 1.0F};
-            rect.offsetMin = {};
-            rect.offsetMax = {};
-            scene_->Components().UI().Set(created, rect);
-            dropdown.options[index].content = created.Id();
-        }
-        ++dropdown.optionCount;
-        kb::scene::SynchronizeSceneUIComponents(scene_->Components().UI(), entity, candidate);
-        return true;
-    });
-    // Creating the content widget selects it; the author is still editing the dropdown's list.
-    if (added) SelectEntity(entity);
-    return added;
-}
-
-bool EditorSceneContext::EditUIDropdownOption(kb::scene::SceneEntity entity, UIDropdownOptionEdit edit, std::uint32_t index) {
+bool EditorSceneContext::EditUIDropdownOption(kb::scene::SceneEntity entity, UIDropdownOptionEdit edit, std::uint32_t index,
+    std::uint32_t target) {
     if (!scene_->Entities().IsAlive(entity)) return false;
     kb::scene::UIComponentSet candidate = kb::scene::CaptureSceneUIComponents(scene_->Components().UI(), entity);
     if (!candidate.dropdown.has_value()) return false;
     kb::scene::UIDropdown& dropdown = *candidate.dropdown;
     bool edited = false;
     std::string label;
-    std::uint64_t removedContent = 0U;
     switch (edit) {
     case UIDropdownOptionEdit::Add:
         if (dropdown.optionCount >= kb::scene::UIDropdown::MaxOptions) {
             console_.Warning("Inspector", "A dropdown holds at most 32 options.");
             return false;
         }
-        dropdown.options[dropdown.optionCount] = {};
-        edited = kb::scene::SetUIDropdownOptionText(dropdown.options[dropdown.optionCount],
-            "Option " + std::to_string(dropdown.optionCount + 1U));
+        // A new element repeats the last one, ready to be edited into the next choice.
+        dropdown.options[dropdown.optionCount] =
+            dropdown.optionCount > 0U ? dropdown.options[dropdown.optionCount - 1U] : kb::scene::UIDropdownOption{};
         ++dropdown.optionCount;
+        edited = true;
         label = "Add Dropdown Option";
         break;
     case UIDropdownOptionEdit::Remove:
-        removedContent = index < dropdown.optionCount ? dropdown.options[index].content : 0U;
         edited = kb::scene::RemoveUIDropdownOption(dropdown, index);
         label = "Remove Dropdown Option";
         break;
-    case UIDropdownOptionEdit::MoveUp:
-        edited = index > 0U && kb::scene::MoveUIDropdownOption(dropdown, index, index - 1U);
-        label = "Move Dropdown Option";
-        break;
-    case UIDropdownOptionEdit::MoveDown:
-        edited = index + 1U < dropdown.optionCount && kb::scene::MoveUIDropdownOption(dropdown, index, index + 1U);
-        label = "Move Dropdown Option";
+    case UIDropdownOptionEdit::Move:
+        edited = index != target && kb::scene::MoveUIDropdownOption(dropdown, index, target);
+        label = "Reorder Dropdown Options";
         break;
     }
     if (!edited) return false;
-    return ExecuteSceneCommand(label, [this, entity, removedContent, candidate = std::move(candidate)]() {
+    return ExecuteSceneCommand(label, [this, entity, candidate = std::move(candidate)]() {
         kb::scene::SynchronizeSceneUIComponents(scene_->Components().UI(), entity, candidate);
-        // A removed option takes its content widget with it; the widget existed only to be that option.
-        const kb::scene::SceneEntity content{ removedContent };
-        if (removedContent != 0U && scene_->Entities().IsAlive(content) && scene_->Hierarchy().Parent(content) == entity)
-            scene_->Entities().Destroy(content);
         return true;
     });
 }
@@ -4313,13 +4269,14 @@ bool EditorSceneContext::SetUIComponentProperty(
             console_.Warning("Inspector", "UI entity property references an unknown entity.");
             return false;
         }
-        // Every entity-valued UI property is a navigation link, and a link can only land on a widget
-        // that takes focus - anything else would be accepted here and then silently never followed.
-        if (id != 0U && id == entity.Id()) {
+        // A navigation link can only land on a widget that takes focus - anything else would be accepted
+        // here and then silently never followed.
+        if (property.starts_with("navigation") && id != 0U && id == entity.Id()) {
             console_.Warning("Inspector", "A navigation link cannot point at the widget it starts from.");
             return false;
         }
-        if (id != 0U && !scene_->Components().UI().Has<kb::scene::UISelectable>(kb::scene::SceneEntity{ id })) {
+        if (property.starts_with("navigation") && id != 0U &&
+            !scene_->Components().UI().Has<kb::scene::UISelectable>(kb::scene::SceneEntity{ id })) {
             console_.Warning("Inspector", "A navigation link must point at a widget with a Selectable component.");
             return false;
         }

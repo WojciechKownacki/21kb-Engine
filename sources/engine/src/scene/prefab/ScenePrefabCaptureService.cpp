@@ -1,5 +1,6 @@
 #include "scene/prefab/ScenePrefabCaptureService.hpp"
 
+#include "engine/ui/UIEntityReferences.hpp"
 #include "scene/prefab/ScenePrefabCaptureValidator.hpp"
 #include "scene/prefab/ScenePrefabCaptureTraversal.hpp"
 #include "scene/prefab/ScenePrefabHierarchyCounter.hpp"
@@ -51,29 +52,15 @@ void ResolveEntityReferences(ScenePrefab& prefab, std::span<const SceneEntity> c
                 echo.sourceNodeStableId = source == stableNodeIds.end() ? ScenePrefabLensEchoComponent::UnresolvedSourceNodeStableId : source->second;
             }
         }
-        // UI navigation links hold live entity ids, which a reload, an undo snapshot or a packaged
-        // scene all hand out afresh. Persist them as the target's stable node id instead. A target
-        // outside what is being captured cannot be expressed by this prefab, so that link is dropped
-        // rather than kept as an id that would later name an unrelated object.
-        // An option's content widget is a child of the dropdown, so it is always inside the capture.
-        if (node->components.ui.dropdown.has_value()) {
-            UIDropdown& dropdown = *node->components.ui.dropdown;
-            for (std::uint32_t option = 0U; option < dropdown.optionCount; ++option) {
-                std::uint64_t& content = dropdown.options[option].content;
-                if (content == 0U) continue;
-                const auto target = stableNodeIds.find(content);
-                content = target == stableNodeIds.end() ? 0U : target->second;
-            }
-        }
-        if (node->components.ui.selectable.has_value()) {
-            UISelectable& selectable = *node->components.ui.selectable;
-            for (std::uint64_t* link : { &selectable.navigationUp, &selectable.navigationDown,
-                     &selectable.navigationLeft, &selectable.navigationRight }) {
-                if (*link == 0U) continue;
-                const auto target = stableNodeIds.find(*link);
-                *link = target == stableNodeIds.end() ? 0U : target->second;
-            }
-        }
+        // UI references - navigation links, graphics, scrollbars, a dropdown's widgets - hold live entity
+        // ids, which a reload, an undo snapshot or a packaged scene all hand out afresh. Persist them as
+        // the target's stable node id. A target outside what is being captured cannot be expressed by
+        // this prefab, so that reference is dropped rather than kept as an id naming an unrelated object.
+        ForEachUIEntityReference(node->components.ui, [&stableNodeIds](std::uint64_t& reference) {
+            if (reference == 0U) return;
+            const auto target = stableNodeIds.find(reference);
+            reference = target == stableNodeIds.end() ? 0U : target->second;
+        });
     }
 }
 

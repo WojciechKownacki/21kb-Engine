@@ -96,8 +96,11 @@ using inspector_panel_rows::CheckboxRectForRow;
 using inspector_panel_rows::ComponentRemoveButtonRect;
 using inspector_panel_rows::DrawAssetFieldRow;
 using inspector_panel_rows::DrawBoolRow;
-using inspector_panel_rows::DrawDropdownOptionRow;
-using inspector_panel_rows::DropdownOptionRowLayout;
+using inspector_panel_rows::DrawDropdownOptionFooter;
+using inspector_panel_rows::DrawDropdownOptionTextRow;
+using inspector_panel_rows::DropdownOptionFooterButtonRect;
+using inspector_panel_rows::DropdownOptionHandleRect;
+using inspector_panel_rows::DropdownOptionTextRect;
 using inspector_panel_rows::DrawFieldRow;
 using inspector_panel_rows::DrawRotationRow;
 using inspector_panel_rows::DrawSectionAccentFrame;
@@ -2264,11 +2267,10 @@ void PaintUICompactRow(HDC dc, RECT bounds, const EditorTheme& theme,
     const std::vector<InspectorUIPropertyRow>& rows, int index);
 
 struct DropdownInspectorItem {
-    enum class Kind : std::uint8_t { Group, Field, Font, Color, DefaultOption, Option, AddOption };
+    enum class Kind : std::uint8_t { Object, Field, Warning, Header, OptionText, OptionImage, Footer };
     Kind kind = Kind::Field;
     RECT rect{};
     int row = -1;
-    int iconRow = -1;
     int option = -1;
     std::string label;
 };
@@ -2276,8 +2278,12 @@ struct DropdownInspectorItem {
 struct DropdownInspectorLayoutResult {
     std::vector<DropdownInspectorItem> items;
     int height = 0;
+    int optionsTop = 0;
+    int optionPitch = 0;
 };
 
+// The Dropdown section in authoring order: the widgets it drives, its value and fade, then the Options
+// list - each element a label line and an image line under a drag handle, with + and - under the list.
 [[nodiscard]] DropdownInspectorLayoutResult DropdownInspectorLayout(
     RECT content, int top, const std::vector<InspectorUIPropertyRow>& rows) {
     const auto find = [&rows](std::string_view name) {
@@ -2286,90 +2292,83 @@ struct DropdownInspectorLayoutResult {
     };
     DropdownInspectorLayoutResult layout;
     int y = top;
-    const auto add = [&](DropdownInspectorItem::Kind kind, int height, int row, std::string label, int iconRow = -1, int option = -1) {
-        layout.items.push_back({kind, Rect(content.left, y, content.right, y + height), row, iconRow, option, std::move(label)});
+    const auto add = [&](DropdownInspectorItem::Kind kind, int height, int row, std::string label, int option = -1) {
+        layout.items.push_back({kind, Rect(content.left, y, content.right, y + height), row, option, std::move(label)});
         y += height + kDividerHeight;
     };
-    const auto group = [&](std::string label) { add(DropdownInspectorItem::Kind::Group, kGroupRowHeight, -1, std::move(label)); };
-    const auto field = [&](DropdownInspectorItem::Kind kind, std::string_view name) {
-        if (const int row = find(name); row >= 0) add(kind, kFieldRowHeight, row, rows[static_cast<std::size_t>(row)].label);
-    };
+    for (const std::string_view name : {"templateEntity", "captionText", "captionImage", "itemText", "itemImage"})
+        if (const int row = find(name); row >= 0) add(DropdownInspectorItem::Kind::Object, kFieldRowHeight, row, rows[static_cast<std::size_t>(row)].label);
+    for (const std::string_view name : {"value", "alphaFadeSpeed"})
+        if (const int row = find(name); row >= 0) add(DropdownInspectorItem::Kind::Field, kFieldRowHeight, row, rows[static_cast<std::size_t>(row)].label);
+    if (const int row = find("templateEntity"); row >= 0 && rows[static_cast<std::size_t>(row)].value == "0")
+        add(DropdownInspectorItem::Kind::Warning, kGroupRowHeight, -1, "Template is not assigned - the list cannot open.");
+    add(DropdownInspectorItem::Kind::Header, kGroupRowHeight, -1, "Options");
     const int countRow = find("optionCount");
     const std::uint32_t options = countRow >= 0 ? static_cast<std::uint32_t>(std::stoul(rows[static_cast<std::size_t>(countRow)].value)) : 0U;
-    group("List");
-    field(DropdownInspectorItem::Kind::Field, "maxVisibleOptions");
-    if (options > 0U) add(DropdownInspectorItem::Kind::DefaultOption, kFieldRowHeight, find("selectedIndex"), "Default Option");
-    group("Options  " + std::to_string(options) + " / " + std::to_string(kb::scene::UIDropdown::MaxOptions));
+    layout.optionsTop = y;
+    layout.optionPitch = 2 * (kFieldRowHeight + kDividerHeight);
     for (std::uint32_t option = 0U; option < options; ++option) {
         const std::string prefix = "options." + std::to_string(option);
-        const int textRow = find(prefix + ".text");
-        if (textRow >= 0)
-            add(DropdownInspectorItem::Kind::Option, kFieldRowHeight, textRow, {}, find(prefix + ".content"), static_cast<int>(option));
+        add(DropdownInspectorItem::Kind::OptionText, kFieldRowHeight, find(prefix + ".text"), {}, static_cast<int>(option));
+        add(DropdownInspectorItem::Kind::OptionImage, kFieldRowHeight, find(prefix + ".image"), "Image", static_cast<int>(option));
     }
-    add(DropdownInspectorItem::Kind::AddOption, kFieldRowHeight, -1, "+  Add Option  (Text, Button, Image...)");
-    group("Text");
-    field(DropdownInspectorItem::Kind::Font, "fontAssetId");
-    field(DropdownInspectorItem::Kind::Field, "fontSize");
-    group("Colors");
-    for (const std::string_view name : {"textColor.r", "itemColor.r", "itemHighlightedColor.r", "itemSelectedColor.r"})
-        field(DropdownInspectorItem::Kind::Color, name);
+    add(DropdownInspectorItem::Kind::Footer, kFieldRowHeight, countRow, {});
     layout.height = y - top;
     return layout;
 }
 
 void PaintUIDropdownBody(HDC dc, RECT body, const EditorTheme& theme, const EditorSceneContext& sceneContext,
-    kb::scene::SceneEntity entity, const std::vector<InspectorUIPropertyRow>& rows) {
+    const std::vector<InspectorUIPropertyRow>& rows) {
     const InspectorPanelState& state = sceneContext.Inspector();
     const InspectorSectionId section = InspectorUIComponentModel::Section(kb::scene::UIComponentType::Dropdown);
     const InspectorPropertyId property = InspectorUIComponentModel::Property(kb::scene::UIComponentType::Dropdown);
     const DropdownInspectorLayoutResult layout = DropdownInspectorLayout(body, body.top, rows);
-    std::uint32_t selected = 0U;
     std::uint32_t options = 0U;
-    for (const InspectorUIPropertyRow& row : rows) {
-        if (row.name == "selectedIndex") selected = static_cast<std::uint32_t>(std::stoul(row.value));
+    for (const InspectorUIPropertyRow& row : rows)
         if (row.name == "optionCount") options = static_cast<std::uint32_t>(std::stoul(row.value));
-    }
     for (const DropdownInspectorItem& item : layout.items) {
         const InspectorUIPropertyRow* row = item.row >= 0 ? &rows[static_cast<std::size_t>(item.row)] : nullptr;
+        const bool selectedOption = item.option >= 0 && item.option == state.DropdownSelectedOption();
         switch (item.kind) {
-        case DropdownInspectorItem::Kind::Group:
+        case DropdownInspectorItem::Kind::Object:
+            DrawAssetFieldRow(dc, item.rect, theme, state, section, property, InspectorPropertyId::UIAssetPicker, row->label,
+                InspectorUIComponentModel::EntityReferenceLabel(sceneContext.Scene(), std::stoull(row->value)), item.row);
+            break;
+        case DropdownInspectorItem::Kind::Field:
+            DrawFieldRow(dc, item.rect, theme, state, section, property, row->label, row->value, item.row);
+            break;
+        case DropdownInspectorItem::Kind::Warning:
+            GdiDrawing::FillRectColor(dc, item.rect, Color(theme.panel));
+            Text(dc, Rect(item.rect.left + kRowPadX, item.rect.top, item.rect.right - kRowPadX, item.rect.bottom), item.label,
+                Rgb(232, 176, 72));
+            break;
+        case DropdownInspectorItem::Kind::Header:
             inspector_panel_rows::DrawGroupRow(dc, item.rect, theme, item.label);
             break;
-        case DropdownInspectorItem::Kind::Field: {
-            const bool allRows = row->name == "maxVisibleOptions" && row->value == "0";
-            DrawFieldRow(dc, item.rect, theme, state, section, property, row->label, allRows ? std::string_view{"All"} : std::string_view{row->value}, item.row);
+        case DropdownInspectorItem::Kind::OptionText:
+            DrawDropdownOptionTextRow(dc, item.rect, theme, state, section, property, item.row, item.option, row->value, selectedOption);
             break;
-        }
-        case DropdownInspectorItem::Kind::Font:
-            DrawAssetFieldRow(dc, item.rect, theme, state, section, property, InspectorPropertyId::UIAssetPicker, row->label,
+        case DropdownInspectorItem::Kind::OptionImage:
+            DrawAssetFieldRow(dc, item.rect, theme, state, section, property, InspectorPropertyId::UIAssetPicker, "      Image",
                 AssetDisplayName(sceneContext, std::stoull(row->value)), item.row);
+            if (selectedOption) {
+                GdiDrawing::FillRectColor(dc, Rect(item.rect.left, item.rect.top, item.rect.left + 3, item.rect.bottom), Color(theme.accent));
+            }
             break;
-        case DropdownInspectorItem::Kind::Color:
-            PaintUICompactRow(dc, item.rect, theme, state, section, property, rows, item.row);
-            break;
-        case DropdownInspectorItem::Kind::DefaultOption: {
-            std::string_view shown = "(none)";
-            for (const InspectorUIPropertyRow& candidate : rows)
-                if (candidate.name == "options." + std::to_string(selected) + ".text") shown = candidate.value;
-            inspector_panel_rows::DrawTagFieldRow(dc, item.rect, theme, state, section,
-                InspectorPropertyId::UIDropdownSelectOption, item.label, shown);
+        case DropdownInspectorItem::Kind::Footer:
+            DrawDropdownOptionFooter(dc, item.rect, theme, state, section, options < kb::scene::UIDropdown::MaxOptions, options > 0U);
             break;
         }
-        case DropdownInspectorItem::Kind::Option: {
-            const std::uint64_t content = item.iconRow >= 0 ? std::stoull(rows[static_cast<std::size_t>(item.iconRow)].value) : 0U;
-            DrawDropdownOptionRow(dc, item.rect, theme, state, section, property, item.row, item.option,
-                InspectorUIComponentModel::DropdownOptionKind(sceneContext.Scene(), entity, content), row->value,
-                static_cast<std::uint32_t>(item.option) == selected, content != 0U);
-            break;
-        }
-        case DropdownInspectorItem::Kind::AddOption:
-            inspector_panel_rows::DrawActionRow(dc, item.rect, theme, state, section, InspectorPropertyId::UIDropdownAddOption,
-                options >= kb::scene::UIDropdown::MaxOptions ? std::string_view{"List is full (32 options)"} : std::string_view{item.label},
-                options < kb::scene::UIDropdown::MaxOptions);
-            break;
-        }
-        if (item.kind != DropdownInspectorItem::Kind::Group)
+        if (item.kind != DropdownInspectorItem::Kind::Header && item.kind != DropdownInspectorItem::Kind::Warning)
             inspector_panel_rows::DrawDivider(dc, theme, item.rect.left, item.rect.right, item.rect.bottom);
+    }
+    // While an element is dragged by its handle, a line marks where it will land.
+    if (state.IsDraggingDropdownOption() && options > 0U) {
+        const int target = std::clamp(state.DraggedDropdownOption() +
+            (state.DropdownOptionDragOffset() + (state.DropdownOptionDragOffset() >= 0 ? layout.optionPitch / 2 : -layout.optionPitch / 2)) /
+            layout.optionPitch, 0, static_cast<int>(options) - 1);
+        const int lineY = layout.optionsTop + (target > state.DraggedDropdownOption() ? target + 1 : target) * layout.optionPitch;
+        GdiDrawing::FillRectColor(dc, Rect(body.left + 4, lineY - 1, body.right - 4, lineY + 1), Color(theme.accent));
     }
 }
 
@@ -2591,7 +2590,7 @@ void PaintUIComponentSections(HDC dc, RECT content, const RECT& band,
                 }
             } else if (component == kb::scene::UIComponentType::Dropdown) {
                 if (!inspector.IsCollapsed(sectionId))
-                    PaintUIDropdownBody(dc, section.Reserve(height - kSectionHeaderHeight - kDividerHeight), theme, sceneContext, entity, rows);
+                    PaintUIDropdownBody(dc, section.Reserve(height - kSectionHeaderHeight - kDividerHeight), theme, sceneContext, rows);
             } else for (int index = 0; index < static_cast<int>(rows.size()); ++index) {
                 const InspectorUIPropertyRow& row = rows[static_cast<std::size_t>(index)];
                 if (row.fieldCount == 0) continue;
@@ -2613,7 +2612,8 @@ void PaintUIComponentSections(HDC dc, RECT content, const RECT& band,
                         editableProperty, InspectorPropertyId::UIAssetPicker, index);
                 } else if (row.type == kb::scene::UIComponentPropertyType::Entity) {
                     section.AssetField(row.label,
-                        InspectorUIComponentModel::EntityReferenceLabel(sceneContext.Scene(), std::stoull(row.value)),
+                        InspectorUIComponentModel::EntityReferenceLabel(sceneContext.Scene(), std::stoull(row.value),
+                            row.name.starts_with("navigation")),
                         editableProperty, InspectorPropertyId::UIAssetPicker, index);
                 } else {
                     section.Field(row.label, row.value, editableProperty, index);
@@ -3837,31 +3837,33 @@ void AdvanceRow(int& y) noexcept;
                     if (!Contains(item.rect, x, yPoint)) continue;
                     const auto indexed = [&](InspectorPanelRenderer::Hit found, int index) { found.index = index; return found; };
                     switch (item.kind) {
-                    case DropdownInspectorItem::Kind::Group:
+                    case DropdownInspectorItem::Kind::Warning:
+                    case DropdownInspectorItem::Kind::Header:
                         return {};
+                    case DropdownInspectorItem::Kind::Object:
+                        return indexed(HitAssetFieldRow(item.rect, section, property, InspectorPropertyId::UIAssetPicker, x, yPoint), item.row);
                     case DropdownInspectorItem::Kind::Field:
                         return indexed(HitTextRow(item.rect, section, property, x, yPoint), item.row);
-                    case DropdownInspectorItem::Kind::Font:
-                        return indexed(HitAssetFieldRow(item.rect, section, property, InspectorPropertyId::UIAssetPicker, x, yPoint), item.row);
-                    case DropdownInspectorItem::Kind::Color: {
-                        const RECT box = ValueRectForRow(item.rect);
-                        if (!Contains(box, x, yPoint)) return indexed(MakeHit(InspectorHitKind::Row, section, property, item.rect), item.row);
-                        return indexed(MakeHit(InspectorHitKind::ColorField, section, property, box), item.row);
+                    case DropdownInspectorItem::Kind::OptionText:
+                        if (Contains(DropdownOptionHandleRect(item.rect), x, yPoint))
+                            return indexed(MakeHit(InspectorHitKind::Row, section, InspectorPropertyId::UIDropdownOptionHandle,
+                                DropdownOptionHandleRect(item.rect)), item.option);
+                        if (Contains(DropdownOptionTextRect(item.rect), x, yPoint))
+                            return indexed(MakeHit(InspectorHitKind::TextField, section, property, DropdownOptionTextRect(item.rect)), item.row);
+                        return indexed(MakeHit(InspectorHitKind::Row, section, InspectorPropertyId::UIDropdownOptionSelect, item.rect), item.option);
+                    case DropdownInspectorItem::Kind::OptionImage: {
+                        InspectorPanelRenderer::Hit found = HitAssetFieldRow(item.rect, section, property, InspectorPropertyId::UIAssetPicker, x, yPoint);
+                        if (found.kind == InspectorHitKind::Row)
+                            return indexed(MakeHit(InspectorHitKind::Row, section, InspectorPropertyId::UIDropdownOptionSelect, item.rect), item.option);
+                        return indexed(found, item.row);
                     }
-                    case DropdownInspectorItem::Kind::DefaultOption:
-                        return MakeHit(InspectorHitKind::Row, section, InspectorPropertyId::UIDropdownSelectOption, item.rect);
-                    case DropdownInspectorItem::Kind::Option: {
-                        const auto geometry = DropdownOptionRowLayout(item.rect);
-                        if (Contains(geometry.text, x, yPoint))
-                            return indexed(MakeHit(InspectorHitKind::TextField, section, property, geometry.text), item.row);
-                        if (Contains(geometry.edit, x, yPoint))
-                            return indexed(MakeHit(InspectorHitKind::Row, section, InspectorPropertyId::UIDropdownEditContent, geometry.edit), item.option);
-                        if (Contains(geometry.menu, x, yPoint))
-                            return indexed(MakeHit(InspectorHitKind::Row, section, InspectorPropertyId::UIDropdownOptionMenu, geometry.menu), item.option);
-                        return indexed(MakeHit(InspectorHitKind::Row, section, InspectorPropertyId::None, item.rect), item.row);
-                    }
-                    case DropdownInspectorItem::Kind::AddOption:
-                        return MakeHit(InspectorHitKind::Row, section, InspectorPropertyId::UIDropdownAddOption, item.rect);
+                    case DropdownInspectorItem::Kind::Footer:
+                        for (const bool remove : { false, true })
+                            if (Contains(DropdownOptionFooterButtonRect(item.rect, remove), x, yPoint))
+                                return MakeHit(InspectorHitKind::Row, section,
+                                    remove ? InspectorPropertyId::UIDropdownOptionRemove : InspectorPropertyId::UIDropdownOptionAdd,
+                                    DropdownOptionFooterButtonRect(item.rect, remove));
+                        return {};
                     }
                 }
                 y += layout.height + kSectionGap;

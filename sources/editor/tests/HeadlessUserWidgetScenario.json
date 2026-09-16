@@ -1471,19 +1471,38 @@
       "value": 24.0
     },
     {
-      "op": "create_entity",
+      "op": "create_ui_object",
       "id": "choice",
-      "name": "choice"
-    },
-    {
-      "op": "reparent_entity",
-      "entity": "choice",
+      "type": "Dropdown",
       "parent": "settings_page"
     },
     {
-      "op": "add_component",
+      "op": "set_property",
       "entity": "choice",
-      "component": "kb21.ui.dropdown"
+      "component": "kb21.ui.rect-transform",
+      "property": "anchorMin.x",
+      "value": 0.0
+    },
+    {
+      "op": "set_property",
+      "entity": "choice",
+      "component": "kb21.ui.rect-transform",
+      "property": "anchorMin.y",
+      "value": 0.0
+    },
+    {
+      "op": "set_property",
+      "entity": "choice",
+      "component": "kb21.ui.rect-transform",
+      "property": "anchorMax.x",
+      "value": 0.0
+    },
+    {
+      "op": "set_property",
+      "entity": "choice",
+      "component": "kb21.ui.rect-transform",
+      "property": "anchorMax.y",
+      "value": 0.0
     },
     {
       "op": "set_property",
@@ -1533,13 +1552,6 @@
       "component": "kb21.ui.dropdown",
       "property": "options.1.text",
       "value": "Difficulty: Veteran"
-    },
-    {
-      "op": "set_property",
-      "entity": "choice",
-      "component": "kb21.ui.dropdown",
-      "property": "fontSize",
-      "value": 22.0
     },
     {
       "op": "create_entity",
@@ -2459,26 +2471,6 @@
     },
     {
       "op": "key",
-      "key": "ArrowDown",
-      "down": true
-    },
-    {
-      "op": "step",
-      "frames": 1,
-      "dt": 0.016666666666666666
-    },
-    {
-      "op": "key",
-      "key": "ArrowDown",
-      "down": false
-    },
-    {
-      "op": "step",
-      "frames": 1,
-      "dt": 0.016666666666666666
-    },
-    {
-      "op": "key",
       "key": "Enter",
       "down": true
     },
@@ -2501,7 +2493,7 @@
       "op": "assert_property",
       "entity": "choice",
       "component": "kb21.ui.dropdown",
-      "property": "selectedIndex",
+      "property": "value",
       "value": 1
     },
     {

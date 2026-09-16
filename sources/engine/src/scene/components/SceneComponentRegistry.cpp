@@ -252,7 +252,8 @@ void RegisterUIReflection(kb::ecs::World& world) {
         KB_ECS_FIELD(UIInputField, readOnly, kb::ecs::ComponentFieldType::Bool),
     }));
     static_cast<void>(world.RegisterComponentReflection<UIDropdown>(UIDropdown::StableId, {
-        KB_ECS_FIELD(UIDropdown, selectedIndex, kb::ecs::ComponentFieldType::UInt32),
+        KB_ECS_FIELD(UIDropdown, value, kb::ecs::ComponentFieldType::UInt32),
+        KB_ECS_FIELD(UIDropdown, alphaFadeSpeed, kb::ecs::ComponentFieldType::Float32),
     }));
     static_cast<void>(world.RegisterComponentReflection<UIProgressBar>(UIProgressBar::StableId, {
         KB_ECS_FIELD(UIProgressBar, minimum, kb::ecs::ComponentFieldType::Float32), KB_ECS_FIELD(UIProgressBar, maximum, kb::ecs::ComponentFieldType::Float32),

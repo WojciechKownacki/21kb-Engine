@@ -1,4 +1,5 @@
 #include "scene/prefab/ScenePrefabBulkInstantiationService.hpp"
+#include "engine/ui/UIEntityReferences.hpp"
 
 #include "engine/ecs/CommandBuffer.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -1011,28 +1012,14 @@ void ApplyPrefabUIComponents(
         for (std::size_t nodeIndex = 0U; nodeIndex < nodes.size(); ++nodeIndex) {
             if (nodes[nodeIndex].components.ui.Empty()) continue;
             UIComponentSet components = nodes[nodeIndex].components.ui;
-            // Navigation links are stored as stable node ids; each instance links to its own copy of
-            // the target, the same way lens echoes resolve their source.
-            if (components.selectable.has_value()) {
-                for (std::uint64_t* link : { &components.selectable->navigationUp, &components.selectable->navigationDown,
-                         &components.selectable->navigationLeft, &components.selectable->navigationRight }) {
-                    if (*link == 0U) continue;
-                    const auto target = nodeIndexByStableId.find(*link);
-                    if (target == nodeIndexByStableId.end())
-                        throw std::invalid_argument("Scene prefab UI navigation link references a missing stable node id");
-                    *link = entities[EntityIndex(instanceIndex, target->second, nodes.size())].Id();
-                }
-            }
-            if (components.dropdown.has_value()) {
-                for (std::uint32_t option = 0U; option < components.dropdown->optionCount; ++option) {
-                    std::uint64_t& content = components.dropdown->options[option].content;
-                    if (content == 0U) continue;
-                    const auto target = nodeIndexByStableId.find(content);
-                    if (target == nodeIndexByStableId.end())
-                        throw std::invalid_argument("Scene prefab dropdown option references a missing stable node id");
-                    content = entities[EntityIndex(instanceIndex, target->second, nodes.size())].Id();
-                }
-            }
+            // UI references are stored as stable node ids; each instance points at its own copy of the target.
+            ForEachUIEntityReference(components, [&](std::uint64_t& reference) {
+                if (reference == 0U) return;
+                const auto target = nodeIndexByStableId.find(reference);
+                if (target == nodeIndexByStableId.end())
+                    throw std::invalid_argument("Scene prefab UI component references a missing stable node id");
+                reference = entities[EntityIndex(instanceIndex, target->second, nodes.size())].Id();
+            });
             ApplySceneUIComponents(ui, entities[EntityIndex(instanceIndex, nodeIndex, nodes.size())], components);
         }
     }

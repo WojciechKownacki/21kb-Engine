@@ -52,22 +52,23 @@ public:
     // What an entity-reference field shows: "(none)" for an empty link, the target's hierarchy name,
     // or an explicit marker when the stored id no longer names something the link can use - the
     // target was deleted, or it cannot take focus - so a broken link is visible, not a bare number.
-    [[nodiscard]] static std::string EntityReferenceLabel(const kb::scene::Scene& scene, std::uint64_t id);
+    [[nodiscard]] static std::string EntityReferenceLabel(const kb::scene::Scene& scene, std::uint64_t id,
+        bool requireSelectable = false);
     // Every live object a UI navigation link may point at from `source`: interactable UI widgets,
     // in hierarchy order, excluding the source itself.
     [[nodiscard]] static std::vector<kb::scene::SceneEntity> NavigationTargets(
         const kb::scene::Scene& scene, kb::scene::SceneEntity source);
-    // The widget types an option can show, in the order the Add Option menu offers them. Text is a plain
-    // option; every other entry creates that widget as the option's content.
-    struct DropdownOptionType {
-        std::string_view label;
-        std::optional<kb::scene::UIComponentType> content;
+    // The objects an entity-valued UI property may point at, with the picker's title and description.
+    // Navigation links take focusable widgets; a dropdown's template takes its children, its text parts
+    // take Text widgets and its image parts Image widgets under it; a toggle's graphic and a selectable's
+    // target graphic take any widget that draws; a scroll view takes scrollbars.
+    struct ReferenceChoice {
+        std::vector<kb::scene::SceneEntity> targets;
+        std::string title;
+        std::string description;
     };
-    [[nodiscard]] static std::span<const DropdownOptionType> DropdownOptionTypes() noexcept;
-    // What an option shows, for its badge: "Text", the content widget's kind, or "Missing" when the
-    // linked child is gone.
-    [[nodiscard]] static std::string_view DropdownOptionKind(
-        const kb::scene::Scene& scene, kb::scene::SceneEntity dropdown, std::uint64_t content);
+    [[nodiscard]] static ReferenceChoice ReferenceTargets(const kb::scene::Scene& scene, kb::scene::SceneEntity source,
+        kb::scene::UIComponentType component, std::string_view property);
     // "Canvas / Menu / Play" - the name path that tells two objects with the same name apart.
     [[nodiscard]] static std::string HierarchyPath(const kb::scene::Scene& scene, kb::scene::SceneEntity entity);
 
