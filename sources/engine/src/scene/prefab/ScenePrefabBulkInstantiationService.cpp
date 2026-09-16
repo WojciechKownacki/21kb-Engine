@@ -1004,11 +1004,26 @@ void ApplyPrefabUIComponents(
     std::span<const SceneEntity> entities,
     std::size_t instanceCount) {
     SceneUIComponents ui = scene.Components().UI();
+    std::unordered_map<std::uint64_t, std::size_t> nodeIndexByStableId;
+    nodeIndexByStableId.reserve(nodes.size());
+    for (std::size_t index = 0U; index < nodes.size(); ++index) nodeIndexByStableId.emplace(nodes[index].stableId, index);
     for (std::size_t instanceIndex = 0U; instanceIndex < instanceCount; ++instanceIndex) {
         for (std::size_t nodeIndex = 0U; nodeIndex < nodes.size(); ++nodeIndex) {
-            if (!nodes[nodeIndex].components.ui.Empty()) {
-                ApplySceneUIComponents(ui, entities[EntityIndex(instanceIndex, nodeIndex, nodes.size())], nodes[nodeIndex].components.ui);
+            if (nodes[nodeIndex].components.ui.Empty()) continue;
+            UIComponentSet components = nodes[nodeIndex].components.ui;
+            // Navigation links are stored as stable node ids; each instance links to its own copy of
+            // the target, the same way lens echoes resolve their source.
+            if (components.selectable.has_value()) {
+                for (std::uint64_t* link : { &components.selectable->navigationUp, &components.selectable->navigationDown,
+                         &components.selectable->navigationLeft, &components.selectable->navigationRight }) {
+                    if (*link == 0U) continue;
+                    const auto target = nodeIndexByStableId.find(*link);
+                    if (target == nodeIndexByStableId.end())
+                        throw std::invalid_argument("Scene prefab UI navigation link references a missing stable node id");
+                    *link = entities[EntityIndex(instanceIndex, target->second, nodes.size())].Id();
+                }
             }
+            ApplySceneUIComponents(ui, entities[EntityIndex(instanceIndex, nodeIndex, nodes.size())], components);
         }
     }
 }

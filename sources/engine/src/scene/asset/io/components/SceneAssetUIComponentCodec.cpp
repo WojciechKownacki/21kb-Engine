@@ -62,6 +62,15 @@ bool ReadValue(Reader& in, UISlider& v) { return in.ReadFloat(v.minimum)&&in.Rea
 bool ReadValue(Reader& in, UIScrollbar& v) { return in.ReadFloat(v.value)&&in.ReadFloat(v.size)&&Read(in,v.direction); }
 bool ReadValue(Reader& in, UIScrollView& v) { return in.ReadFloat(v.scrollX)&&in.ReadFloat(v.scrollY)&&in.ReadFloat(v.scrollSensitivity)&&in.ReadBool(v.horizontal)&&in.ReadBool(v.vertical)&&in.ReadBool(v.inertia); }
 bool ReadValue(Reader& in, UIInputField& v) { return in.ReadUInt32(v.characterLimit)&&in.ReadBool(v.multiline)&&in.ReadBool(v.readOnly); }
+// Before v35 navigation links were written as live entity ids, which name nothing once the scene is
+// loaded again. From v35 they are stable node ids resolved on instantiation, so an older id is not
+// reinterpreted as one - it is dropped, which is what those links already amounted to on reload.
+bool ReadValue(Reader& in, UISelectable& v, std::uint32_t fileVersion) {
+    if (!ReadValue(in, v)) return false;
+    if (fileVersion < 35U) v.navigationUp = v.navigationDown = v.navigationLeft = v.navigationRight = 0U;
+    return true;
+}
+
 // v35 added maxVisibleOptions after selectedIndex; a v34 payload ends at selectedIndex and
 // keeps the default "show every option".
 bool ReadValue(Reader& in, UIDropdown& v, std::uint32_t fileVersion) {

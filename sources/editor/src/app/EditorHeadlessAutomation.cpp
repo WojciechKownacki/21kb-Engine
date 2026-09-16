@@ -4,6 +4,7 @@
 #include "app/EditorWorkspaceSession.hpp"
 #include "app/pointer/EditorRightButtonDownRouter.hpp"
 #include "platform/win32/EditorMaterialAssetPickerDialog.hpp"
+#include "rendering/components/EditorDialogStyle.hpp"
 #include "docking/EditorWorkspaceArrangement.hpp"
 #include "windowing/EditorFloatingWindowFrame.hpp"
 #include "windowing/FloatingWindowFactory.hpp"
@@ -186,7 +187,7 @@ FindInspectorHit(
         }
     }
     const int firstX = compactX >= 0 ? compactX
-        : property == InspectorPropertyId::UIAssetPicker ? kInspectorContent.right - 28
+        : property == InspectorPropertyId::UIAssetPicker ? kInspectorContent.right - 48
         : property == InspectorPropertyId::UIAnchorPresets ? 40
         : property == InspectorPropertyId::UIAnchorPreset ? 40 + 64 * (std::max(0, index) % 4)
         : property == InspectorPropertyId::UIRectLayoutField ? (index % 2 == 0 ? 225 : 585)
@@ -194,7 +195,10 @@ FindInspectorHit(
         ? kInspectorContent.left + (kInspectorContent.right - kInspectorContent.left) * 36 / 100 + 8
         : addButton ? (kInspectorContent.left + kInspectorContent.right) / 2
         : kInspectorContent.left;
-    const int lastX = uiField || addButton ? firstX + 1 : kInspectorContent.right;
+    // The picker button sits at the value column's right edge, which moves left once the Inspector
+    // is long enough to show its scrollbar, so it is searched across that edge rather than at one x.
+    const int lastX = property == InspectorPropertyId::UIAssetPicker ? kInspectorContent.right - 4
+        : uiField || addButton ? firstX + 1 : kInspectorContent.right;
     for (int scroll = addButton ? InspectorPanelRenderer::MaxScrollOffset(kInspectorContent, context) : 0;;) {
         const int maxScroll = InspectorPanelRenderer::MaxScrollOffset(
             kInspectorContent, context);
@@ -1542,6 +1546,98 @@ bool EditorHeadlessAutomation::VerifyUIGraphics() {
         }
     }
     if (!was2D) preview.Toggle2D();
+    return true;
+}
+
+bool EditorHeadlessAutomation::VerifyUINavigationLinks() {
+    const auto fail = [&](std::string_view reason) { Trace("ui_navigation_links", false, reason); return false; };
+    const auto selectable = kb::scene::UIComponentType::Selectable;
+    const auto canvas = context_.CreateUIObject(kb::scene::UIComponentType::Canvas);
+    const auto createNamed = [&](kb::scene::UIComponentType type, std::string_view name) {
+        const auto entity = context_.CreateUIObject(type, canvas);
+        if (entity.IsValid()) context_.Scene().Entities().SetName(entity, name);
+        return entity;
+    };
+    if (!canvas.IsValid() || !createNamed(kb::scene::UIComponentType::Button, "NavAuditPlay").IsValid() ||
+        !createNamed(kb::scene::UIComponentType::Button, "NavAuditQuit").IsValid() ||
+        !createNamed(kb::scene::UIComponentType::Text, "NavAuditLabel").IsValid())
+        return fail("create-failed");
+    // Undo restores the scene from a snapshot with new entity handles, so objects are looked up by
+    // name at every step - exactly the situation a navigation link itself has to survive.
+    const auto byName = [&](std::string_view name) {
+        const auto& scene = context_.Scene();
+        std::vector<kb::scene::SceneEntity> pending = scene.Hierarchy().RootEntities();
+        while (!pending.empty()) {
+            const auto entity = pending.back();
+            pending.pop_back();
+            if (scene.Entities().Name(entity) == name) return entity;
+            for (std::size_t index = 0U; index < scene.Hierarchy().ChildCount(entity); ++index)
+                pending.push_back(scene.Hierarchy().ChildAt(entity, index));
+        }
+        return kb::scene::SceneEntity{};
+    };
+    const auto link = [&]() -> std::optional<std::uint64_t> {
+        for (const auto& row : InspectorUIComponentModel::Properties(context_.Scene(), byName("NavAuditPlay"), selectable))
+            if (row.name == "navigationDown") return std::stoull(row.value);
+        return std::nullopt;
+    };
+    const auto shown = [&]() {
+        const auto value = link();
+        return value ? InspectorUIComponentModel::EntityReferenceLabel(context_.Scene(), *value) : std::string{"(no row)"};
+    };
+
+    context_.SelectEntity(byName("NavAuditPlay"));
+    const auto rows = InspectorUIComponentModel::Properties(context_.Scene(), byName("NavAuditPlay"), selectable);
+    const auto found = std::ranges::find(rows, std::string_view{"navigationDown"}, &InspectorUIPropertyRow::name);
+    if (found == rows.end()) return fail("navigation-row-missing");
+    if (!FindInspectorHit(context_, InspectorUIComponentModel::Section(selectable), InspectorPropertyId::UIAssetPicker,
+            static_cast<int>(found - rows.begin()), InspectorHitKind::TextField))
+        return fail("navigation-picker-button-not-found");
+    if (shown() != "(none)") return fail("empty-link-label: " + shown());
+
+    // The list picker accepts the row that is clicked. Row 0 is Clear; candidates follow in hierarchy
+    // order, and only widgets that can take focus - never the source itself - are candidates.
+    const auto pick = [&](int row) {
+        const auto source = byName("NavAuditPlay");
+        return EditorUIEntityPickerDialog::Show(impl_->window, MakeEditorDarkTheme(), context_, source,
+            kb::scene::SceneEntity{link().value_or(0U)},
+            {.visible = false, .onOpened = [row](HWND picker) {
+                const int y = EditorDialogStyle::HeaderHeight + 8 + row * EditorDialogStyle::ListRowHeight +
+                    EditorDialogStyle::ListRowHeight / 2;
+                SendMessageW(picker, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(EditorDialogStyle::Padding + 40, y));
+                PostMessageW(picker, WM_CLOSE, 0, 0);
+            }});
+    };
+    const auto candidates = InspectorUIComponentModel::NavigationTargets(context_.Scene(), byName("NavAuditPlay"));
+    if (candidates.size() != 1U || candidates.front() != byName("NavAuditQuit"))
+        return fail("picker-candidates-include-unfocusable-or-self");
+    const auto picked = pick(1);
+    if (!picked.accepted || picked.entity != byName("NavAuditQuit")) return fail("picker-did-not-return-target");
+    const auto assign = [&](std::uint64_t id) {
+        return context_.SetUIComponentProperty(byName("NavAuditPlay"), selectable, "navigationDown", id);
+    };
+    if (!assign(picked.entity.Id())) return fail("assign-link-failed");
+    if (shown() != "NavAuditQuit") return fail("link-label-is-not-target-name: " + shown());
+
+    if (assign(byName("NavAuditLabel").Id())) return fail("unfocusable-target-accepted");
+    if (assign(byName("NavAuditPlay").Id())) return fail("self-link-accepted");
+    if (shown() != "NavAuditQuit") return fail("rejected-link-changed-value");
+
+    if (!context_.UndoSceneCommand() || shown() != "(none)") return fail("undo-link-failed: " + shown());
+    if (!context_.RedoSceneCommand() || shown() != "NavAuditQuit") return fail("redo-link-failed: " + shown());
+
+    const auto cleared = pick(0);
+    if (!cleared.accepted || cleared.entity.IsValid()) return fail("picker-clear-failed");
+    if (!assign(0U) || shown() != "(none)") return fail("clear-link-failed");
+    if (!context_.UndoSceneCommand() || shown() != "NavAuditQuit") return fail("undo-clear-failed: " + shown());
+
+    // A deleted target leaves a link that is shown as broken rather than as a stale name or number.
+    context_.SelectEntity(byName("NavAuditQuit"));
+    if (!context_.DeleteSelectedHierarchyEntity()) return fail("delete-target-failed");
+    if (shown().rfind("(missing object #", 0) != 0) return fail("deleted-target-not-reported: " + shown());
+    if (!context_.UndoSceneCommand() || shown() != "NavAuditQuit") return fail("undo-delete-failed: " + shown());
+    context_.SelectEntity(byName("NavAuditPlay"));
+    Trace("ui_navigation_links", true, "picker-name-clear-invalid-deleted-undo-redo");
     return true;
 }
 

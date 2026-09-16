@@ -118,6 +118,7 @@ public:
     [[nodiscard]] bool VerifyUICreationMenu();
     [[nodiscard]] bool VerifyUIComponentCatalog(std::optional<kb::scene::UIComponentType> only = {});
     [[nodiscard]] bool VerifyUIGraphics();
+    [[nodiscard]] bool VerifyUINavigationLinks();
     [[nodiscard]] bool VerifyUI2DEditing();
     [[nodiscard]] bool SelectUIAnchorPreset(int preset);
     [[nodiscard]] bool SetUIRectLayoutField(int field, float value);

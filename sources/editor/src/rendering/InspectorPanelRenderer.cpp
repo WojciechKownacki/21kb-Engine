@@ -2487,6 +2487,10 @@ void PaintUIComponentSections(HDC dc, RECT content, const RECT& band,
                 } else if (row.type == kb::scene::UIComponentPropertyType::Asset) {
                     section.AssetField(row.label, AssetDisplayName(sceneContext, std::stoull(row.value)),
                         editableProperty, InspectorPropertyId::UIAssetPicker, index);
+                } else if (row.type == kb::scene::UIComponentPropertyType::Entity) {
+                    section.AssetField(row.label,
+                        InspectorUIComponentModel::EntityReferenceLabel(sceneContext.Scene(), std::stoull(row.value)),
+                        editableProperty, InspectorPropertyId::UIAssetPicker, index);
                 } else {
                     section.Field(row.label, row.value, editableProperty, index);
                 }
@@ -3725,7 +3729,8 @@ void AdvanceRow(int& y) noexcept;
                     if (!row.choices.empty()) {
                         const RECT box = ValueRectForRow(RowRect(content, y));
                         if (Contains(box, x, yPoint)) hit = MakeHit(InspectorHitKind::ChoiceField, section, property, box);
-                    } else hit = row.type == kb::scene::UIComponentPropertyType::Asset
+                    } else hit = row.type == kb::scene::UIComponentPropertyType::Asset ||
+                            row.type == kb::scene::UIComponentPropertyType::Entity
                         ? HitAssetFieldRow(RowRect(content, y), section, property,
                             InspectorPropertyId::UIAssetPicker, x, yPoint)
                         : row.type == kb::scene::UIComponentPropertyType::Bool

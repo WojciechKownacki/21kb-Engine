@@ -712,6 +712,10 @@ ReadScriptValue(
     if (*operation == "assert_ui_graphics") {
         return {state.automation.VerifyUIGraphics(), "Native image picker and GPU pixels for Image, Raw Image and Sprite"};
     }
+    if (*operation == "assert_ui_navigation_links") {
+        return {state.automation.VerifyUINavigationLinks(),
+            "Selectable navigation links: hierarchy picker, names, clear, invalid and deleted targets, undo"};
+    }
     if (*operation == "assert_ui_catalog") {
         const auto component = StringMember(step, "component", error, false);
         const auto* descriptor = component ? kb::scene::FindUIComponentDescriptor(*component) : nullptr;

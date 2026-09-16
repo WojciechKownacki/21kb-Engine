@@ -3,6 +3,7 @@
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/assets/AssetId.hpp"
 #include "engine/assets/AssetKind.hpp"
+#include "engine/scene/SceneEntity.hpp"
 #include "kb/editor/theme/EditorTheme.hpp"
 #include "scene/material/EditorTextureAssetMetadataResolver.hpp"
 
@@ -107,6 +108,23 @@ public:
     [[nodiscard]] static EditorTextureAssetPickerDialog::Result Show(
         HWND owner, const EditorTheme& theme, const EditorSceneContext& sceneContext,
         kb::assets::AssetId currentAsset, kb::assets::AssetKind kind,
+        const EditorAssetPickerWindowOptions& options = {});
+#endif
+};
+
+// Picks the hierarchy object a UI navigation link points at. The candidates are the widgets that can
+// take focus, listed by name with their hierarchy path; Clear empties the link.
+class EditorUIEntityPickerDialog {
+public:
+#if defined(_WIN32)
+    struct Result {
+        bool accepted = false;
+        kb::scene::SceneEntity entity{};
+    };
+
+    [[nodiscard]] static Result Show(
+        HWND owner, const EditorTheme& theme, const EditorSceneContext& sceneContext,
+        kb::scene::SceneEntity source, kb::scene::SceneEntity current,
         const EditorAssetPickerWindowOptions& options = {});
 #endif
 };

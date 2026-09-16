@@ -1670,6 +1670,17 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
                         return;
                     }
+                    if (descriptor != nullptr && descriptor->type == kb::scene::UIComponentPropertyType::Entity) {
+                        const auto result = EditorUIEntityPickerDialog::Show(mainWindow_, MakeEditorDarkTheme(),
+                            sceneContext_, entity, kb::scene::SceneEntity{std::stoull(row.value)});
+                        if (result.accepted) {
+                            static_cast<void>(sceneContext_.SetUIComponentProperty(entity, *component,
+                                row.name, kb::scene::UIComponentPropertyValue{result.entity.Id()}));
+                            sceneViewport_.RequestPresent();
+                        }
+                        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                        return;
+                    }
                 }
             }
         }
