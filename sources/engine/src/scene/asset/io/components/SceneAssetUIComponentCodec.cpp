@@ -85,6 +85,8 @@ bool ReadValue(Reader& in, UIDropdown& v, std::uint32_t fileVersion) {
         if (!in.ReadString(text, static_cast<std::uint32_t>(UIDropdownOption::MaxUtf8Bytes - 1U)) ||
             !SetUIDropdownOptionText(v.options[index], text) || !in.ReadUInt64(v.options[index].iconAssetId))
             return false;
+        // v37 lets an option show a child widget instead of its text.
+        if (fileVersion >= 37U && !in.ReadUInt64(v.options[index].content)) return false;
     }
     return in.ReadUInt64(v.fontAssetId) && in.ReadFloat(v.fontSize) && Read(in, v.textColor) && Read(in, v.itemColor) &&
         Read(in, v.itemHighlightedColor) && Read(in, v.itemSelectedColor);
@@ -133,6 +135,7 @@ void WriteValue(std::vector<std::uint8_t>& out, const UIDropdown& v) {
     for (std::uint32_t index = 0U; index < v.optionCount; ++index) {
         SceneAssetBinaryIO::WriteString(out, UIDropdownOptionText(v.options[index]));
         SceneAssetBinaryIO::WriteUInt64(out, v.options[index].iconAssetId);
+        SceneAssetBinaryIO::WriteUInt64(out, v.options[index].content);
     }
     SceneAssetBinaryIO::WriteUInt64(out, v.fontAssetId);
     SceneAssetBinaryIO::WriteFloat(out, v.fontSize);

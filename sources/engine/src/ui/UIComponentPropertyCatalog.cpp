@@ -428,6 +428,27 @@ constexpr std::array kInputFieldProperties{
 // Options are addressed by index - "options.3.text", "options.3.icon" - so the Inspector, the
 // generic property path and scripts all edit the same list. Writing optionCount grows the list with
 // "Option N" labels or shrinks it, keeping the selection inside it.
+template <std::size_t Index>
+[[nodiscard]] constexpr UIPropertyBinding DropdownOptionContentBinding(std::string_view name) noexcept {
+    return {
+        .descriptor = {name, UIComponentPropertyType::Entity, true},
+        .read = [](const UIComponentSet& components, UIComponentPropertyValue& output) {
+            if (!components.dropdown || Index >= components.dropdown->optionCount) return false;
+            output = components.dropdown->options[Index].content;
+            return true;
+        },
+        .write = [](UIComponentSet& components, const UIComponentPropertyValue& value) {
+            if (!components.dropdown) return UIComponentPropertyWriteResult::ComponentMissing;
+            if (Index >= components.dropdown->optionCount) return UIComponentPropertyWriteResult::InvalidValue;
+            const std::uint64_t* content = std::get_if<std::uint64_t>(&value);
+            if (content == nullptr) return UIComponentPropertyWriteResult::TypeMismatch;
+            auto dropdown = *components.dropdown;
+            dropdown.options[Index].content = *content;
+            return Commit(components, dropdown);
+        },
+    };
+}
+
 template <std::size_t Index, bool Icon>
 [[nodiscard]] constexpr UIPropertyBinding DropdownOptionBinding(std::string_view name) noexcept {
     return {
@@ -487,7 +508,8 @@ template <std::size_t Index, bool Icon>
 
 #define KB_DROPDOWN_OPTION(Index)                                                                                      \
     DropdownOptionBinding<Index, false>("options." #Index ".text"),                                                    \
-        DropdownOptionBinding<Index, true>("options." #Index ".icon")
+        DropdownOptionBinding<Index, true>("options." #Index ".icon"),                                                  \
+        DropdownOptionContentBinding<Index>("options." #Index ".content")
 constexpr std::array kDropdownProperties{
     KB_UINT(UIDropdown, selectedIndex), KB_UINT(UIDropdown, maxVisibleOptions), DropdownOptionCountBinding(),
     KB_DROPDOWN_OPTION(0),  KB_DROPDOWN_OPTION(1),  KB_DROPDOWN_OPTION(2),  KB_DROPDOWN_OPTION(3),

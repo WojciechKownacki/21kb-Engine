@@ -4196,6 +4196,48 @@ bool EditorSceneContext::SetUIColor(kb::scene::SceneEntity entity, kb::scene::UI
     });
 }
 
+bool EditorSceneContext::AddUIDropdownOption(kb::scene::SceneEntity entity, std::optional<kb::scene::UIComponentType> content) {
+    if (!scene_->Entities().IsAlive(entity)) return false;
+    const auto* current = scene_->Components().UI().TryGet<kb::scene::UIDropdown>(entity);
+    if (current == nullptr) return false;
+    if (current->optionCount >= kb::scene::UIDropdown::MaxOptions) {
+        console_.Warning("Inspector", "A dropdown holds at most 32 options.");
+        return false;
+    }
+    const kb::scene::UIComponentDescriptor* descriptor =
+        content.has_value() ? kb::scene::FindUIComponentDescriptor(*content) : nullptr;
+    if (content.has_value() && descriptor == nullptr) return false;
+    const bool added = ExecuteSceneCommand("Add Dropdown Option", [this, entity, descriptor]() {
+        kb::scene::UIComponentSet candidate = kb::scene::CaptureSceneUIComponents(scene_->Components().UI(), entity);
+        kb::scene::UIDropdown& dropdown = *candidate.dropdown;
+        const std::uint32_t index = dropdown.optionCount;
+        dropdown.options[index] = {};
+        const std::string label = "Option " + std::to_string(index + 1U);
+        if (!kb::scene::SetUIDropdownOptionText(dropdown.options[index], label)) return false;
+        if (descriptor != nullptr) {
+            // The content widget fills the option's row; its own style is authored like any widget.
+            const kb::scene::SceneEntity created =
+                EditorHierarchyObjectFactory::CreateObject(*scene_, label + " " + std::string{descriptor->displayName});
+            if (!created.IsValid() || !scene_->Hierarchy().SetParent(created, entity) ||
+                !EditorUIComponentAuthoring::Add(*scene_, created, descriptor->stableId) ||
+                !CompleteUIComponentDependencies(created)) return false;
+            auto rect = *scene_->Components().UI().TryGet<kb::scene::UIRectTransform>(created);
+            rect.anchorMin = {0.0F, 0.0F};
+            rect.anchorMax = {1.0F, 1.0F};
+            rect.offsetMin = {};
+            rect.offsetMax = {};
+            scene_->Components().UI().Set(created, rect);
+            dropdown.options[index].content = created.Id();
+        }
+        ++dropdown.optionCount;
+        kb::scene::SynchronizeSceneUIComponents(scene_->Components().UI(), entity, candidate);
+        return true;
+    });
+    // Creating the content widget selects it; the author is still editing the dropdown's list.
+    if (added) SelectEntity(entity);
+    return added;
+}
+
 bool EditorSceneContext::EditUIDropdownOption(kb::scene::SceneEntity entity, UIDropdownOptionEdit edit, std::uint32_t index) {
     if (!scene_->Entities().IsAlive(entity)) return false;
     kb::scene::UIComponentSet candidate = kb::scene::CaptureSceneUIComponents(scene_->Components().UI(), entity);
@@ -4203,6 +4245,7 @@ bool EditorSceneContext::EditUIDropdownOption(kb::scene::SceneEntity entity, UID
     kb::scene::UIDropdown& dropdown = *candidate.dropdown;
     bool edited = false;
     std::string label;
+    std::uint64_t removedContent = 0U;
     switch (edit) {
     case UIDropdownOptionEdit::Add:
         if (dropdown.optionCount >= kb::scene::UIDropdown::MaxOptions) {
@@ -4216,6 +4259,7 @@ bool EditorSceneContext::EditUIDropdownOption(kb::scene::SceneEntity entity, UID
         label = "Add Dropdown Option";
         break;
     case UIDropdownOptionEdit::Remove:
+        removedContent = index < dropdown.optionCount ? dropdown.options[index].content : 0U;
         edited = kb::scene::RemoveUIDropdownOption(dropdown, index);
         label = "Remove Dropdown Option";
         break;
@@ -4229,8 +4273,12 @@ bool EditorSceneContext::EditUIDropdownOption(kb::scene::SceneEntity entity, UID
         break;
     }
     if (!edited) return false;
-    return ExecuteSceneCommand(label, [this, entity, candidate = std::move(candidate)]() {
+    return ExecuteSceneCommand(label, [this, entity, removedContent, candidate = std::move(candidate)]() {
         kb::scene::SynchronizeSceneUIComponents(scene_->Components().UI(), entity, candidate);
+        // A removed option takes its content widget with it; the widget existed only to be that option.
+        const kb::scene::SceneEntity content{ removedContent };
+        if (removedContent != 0U && scene_->Entities().IsAlive(content) && scene_->Hierarchy().Parent(content) == entity)
+            scene_->Entities().Destroy(content);
         return true;
     });
 }

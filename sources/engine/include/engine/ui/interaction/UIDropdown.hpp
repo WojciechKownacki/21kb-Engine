@@ -10,12 +10,16 @@
 
 namespace kb::scene {
 
-// One choice of a dropdown: the label the list shows and an optional icon drawn in front of it.
+// One choice of a dropdown. `text` names the choice - it is what selection events and scripts report.
+// A plain option draws that text (and `iconAssetId` in front of it). An option can instead show any
+// widget: `content` is a child object of the dropdown - a button, an image, a toggle, a composition -
+// laid out in the option's row and, while it is the selection, in the closed control.
 struct UIDropdownOption {
     static constexpr std::size_t MaxUtf8Bytes = 64U;
 
     std::array<char, MaxUtf8Bytes> text{};
     std::uint64_t iconAssetId = 0U;
+    std::uint64_t content = 0U;
 };
 
 // A dropdown owns its options as data. The closed control draws the selected label; the open list

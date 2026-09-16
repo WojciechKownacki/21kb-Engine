@@ -354,6 +354,28 @@ std::vector<kb::scene::SceneEntity> InspectorUIComponentModel::NavigationTargets
     return output;
 }
 
+std::span<const InspectorUIComponentModel::DropdownOptionType> InspectorUIComponentModel::DropdownOptionTypes() noexcept {
+    using enum kb::scene::UIComponentType;
+    static constexpr std::array<DropdownOptionType, 8> kTypes{{
+        {"Text", std::nullopt}, {"Button", Button}, {"Image", Image}, {"Toggle", Toggle},
+        {"Slider", Slider}, {"Input Field", InputField}, {"Progress Bar", ProgressBar}, {"Border", Border},
+    }};
+    return kTypes;
+}
+
+std::string_view InspectorUIComponentModel::DropdownOptionKind(
+    const kb::scene::Scene& scene, kb::scene::SceneEntity dropdown, std::uint64_t content) {
+    if (content == 0U) return "Text";
+    const kb::scene::SceneEntity entity{ content };
+    if (!scene.Entities().IsAlive(entity) || scene.Hierarchy().Parent(entity) != dropdown) return "Missing";
+    const kb::scene::UIComponentSet values = kb::scene::CaptureSceneUIComponents(scene.Components().UI(), entity);
+    using enum kb::scene::UIComponentType;
+    for (const auto type : { Button, Toggle, Slider, InputField, ProgressBar, Image, RawImage, Sprite, Text, Border }) {
+        if (kb::scene::HasUIComponent(values, type)) return kb::scene::FindUIComponentDescriptor(type)->displayName;
+    }
+    return "Widget";
+}
+
 std::string InspectorUIComponentModel::HierarchyPath(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) {
     std::string path = scene.Entities().Name(entity);
     for (auto parent = scene.Hierarchy().Parent(entity); parent.IsValid(); parent = scene.Hierarchy().Parent(parent))

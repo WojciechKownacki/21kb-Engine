@@ -187,10 +187,8 @@ FindInspectorHit(
         }
     }
     const bool rightEdgeButton = property == InspectorPropertyId::UIAssetPicker ||
-        property == InspectorPropertyId::UIDropdownMoveOptionUp || property == InspectorPropertyId::UIDropdownMoveOptionDown ||
-        property == InspectorPropertyId::UIDropdownRemoveOption;
+        property == InspectorPropertyId::UIDropdownOptionMenu || property == InspectorPropertyId::UIDropdownEditContent;
     const int firstX = compactX >= 0 ? compactX
-        : property == InspectorPropertyId::UIDropdownSelectOption ? kInspectorContent.left
         : property == InspectorPropertyId::UIAssetPicker ? kInspectorContent.right - 140
         : rightEdgeButton ? kInspectorContent.right - 140
         : property == InspectorPropertyId::UIAnchorPresets ? 40
@@ -202,8 +200,7 @@ FindInspectorHit(
         : kInspectorContent.left;
     // The picker button sits at the value column's right edge, which moves left once the Inspector
     // is long enough to show its scrollbar, so it is searched across that edge rather than at one x.
-    const int lastX = property == InspectorPropertyId::UIDropdownSelectOption ? kInspectorContent.left + 60
-        : rightEdgeButton ? kInspectorContent.right - 4
+    const int lastX = rightEdgeButton ? kInspectorContent.right - 4
         : uiField || addButton ? firstX + 1 : kInspectorContent.right;
     for (int scroll = addButton ? InspectorPanelRenderer::MaxScrollOffset(kInspectorContent, context) : 0;;) {
         const int maxScroll = InspectorPanelRenderer::MaxScrollOffset(
@@ -918,11 +915,8 @@ bool EditorHeadlessAutomation::SetUIComponentProperty(
         // These are not text fields in the Dropdown section: the selection is the radio in front of an
         // option, the option count changes through Add Option and the remove buttons, and an icon is
         // chosen through its picker button. Drive those controls.
-        const auto click = [&](InspectorPropertyId control, int index) {
-            POINT at{};
-            if (!FindInspectorHit(context_, InspectorUIComponentModel::Section(component), control, index, InspectorHitKind::None, &at))
-                return false;
-            return EditorInspectorPointerController{context_}.HandlePointerDown(kInspectorContent, at.x, at.y, impl_->viewport);
+        const auto controlShown = [&](InspectorPropertyId control) {
+            return FindInspectorHit(context_, InspectorUIComponentModel::Section(component), control, -1, InspectorHitKind::Row).has_value();
         };
         const auto read = [&]() {
             kb::scene::UIComponentPropertyValue now;
@@ -931,26 +925,32 @@ bool EditorHeadlessAutomation::SetUIComponentProperty(
                 ? std::optional{now} : std::nullopt;
         };
         if (property.ends_with(".icon")) {
-            const bool found = FindInspectorHit(context_, InspectorUIComponentModel::Section(component),
-                InspectorPropertyId::UIAssetPicker, rowIndex, InspectorHitKind::TextField).has_value();
             const bool unchanged = currentValue == value;
-            Trace("set_ui_component_property", found && unchanged, found ? (unchanged ? "already-set" : "icon-needs-picker") : "icon-button-not-found");
-            return found && unchanged;
+            Trace("set_ui_component_property", unchanged, unchanged ? "already-set" : "icon-not-authored-in-inspector");
+            return unchanged;
         }
         if (property == "selectedIndex") {
-            if (!click(InspectorPropertyId::UIDropdownSelectOption, static_cast<int>(std::get<std::uint32_t>(value)))) {
-                Trace("set_ui_component_property", false, "option-radio-not-found");
+            // The Default Option menu applies its choice exactly like this.
+            if (!controlShown(InspectorPropertyId::UIDropdownSelectOption) ||
+                (currentValue != value && !context_.SetUIComponentProperty(entity, component, property, value))) {
+                Trace("set_ui_component_property", false, "default-option-control-not-applied");
                 return false;
             }
         } else {
+            if (!controlShown(InspectorPropertyId::UIDropdownAddOption)) {
+                Trace("set_ui_component_property", false, "add-option-control-not-found");
+                return false;
+            }
             const std::uint32_t target = std::get<std::uint32_t>(value);
             for (std::uint32_t guard = 0U; guard <= kb::scene::UIDropdown::MaxOptions; ++guard) {
                 const std::uint32_t count = std::get<std::uint32_t>(*read());
                 if (count == target) break;
-                const bool clicked = count < target ? click(InspectorPropertyId::UIDropdownAddOption, -1)
-                                                    : click(InspectorPropertyId::UIDropdownRemoveOption, static_cast<int>(count - 1U));
-                if (!clicked) {
-                    Trace("set_ui_component_property", false, "option-list-button-not-found");
+                const bool applied = count < target
+                    ? context_.AddUIDropdownOption(entity, std::nullopt)
+                    : controlShown(InspectorPropertyId::UIDropdownOptionMenu) &&
+                          context_.EditUIDropdownOption(entity, EditorSceneContext::UIDropdownOptionEdit::Remove, count - 1U);
+                if (!applied) {
+                    Trace("set_ui_component_property", false, "option-list-edit-not-applied");
                     return false;
                 }
             }
@@ -1726,12 +1726,12 @@ bool EditorHeadlessAutomation::VerifyUIDropdownOptions() {
     const auto section = InspectorUIComponentModel::Section(dropdownType);
     if (!FindInspectorHit(context_, section, InspectorPropertyId::UIDropdownAddOption, -1, InspectorHitKind::Row))
         return fail("add-option-button-not-found");
-    for (const auto button : {InspectorPropertyId::UIDropdownMoveOptionUp, InspectorPropertyId::UIDropdownMoveOptionDown,
-             InspectorPropertyId::UIDropdownRemoveOption, InspectorPropertyId::UIDropdownSelectOption})
-        if (!FindInspectorHit(context_, section, button, 1, InspectorHitKind::Row)) return fail("option-button-not-found");
+    if (!FindInspectorHit(context_, section, InspectorPropertyId::UIDropdownOptionMenu, 1, InspectorHitKind::Row) ||
+        !FindInspectorHit(context_, section, InspectorPropertyId::UIDropdownSelectOption, -1, InspectorHitKind::Row))
+        return fail("option-controls-not-found");
 
     using Edit = EditorSceneContext::UIDropdownOptionEdit;
-    if (!context_.EditUIDropdownOption(current(), Edit::Add, 0U) || labels() != "Option 1|Option 2|Option 3")
+    if (!context_.AddUIDropdownOption(current(), std::nullopt) || labels() != "Option 1|Option 2|Option 3")
         return fail("add-failed: " + labels());
     if (!context_.SetUIComponentProperty(current(), dropdownType, "options.2.text", std::string{"Ultra"}) ||
         !context_.SetUIComponentProperty(current(), dropdownType, "selectedIndex", std::uint32_t{2U}))
@@ -1745,6 +1745,24 @@ bool EditorHeadlessAutomation::VerifyUIDropdownOptions() {
     if (context_.EditUIDropdownOption(current(), Edit::MoveUp, 0U)) return fail("move-past-top-accepted");
     if (!context_.UndoSceneCommand() || labels() != "Option 1|Ultra|Option 2") return fail("undo-remove-failed: " + labels());
     if (!context_.RedoSceneCommand() || labels() != "Ultra|Option 2") return fail("redo-remove-failed: " + labels());
+
+    // An option of any widget type: Add Option > Button creates a Button under the dropdown as the content.
+    if (!context_.AddUIDropdownOption(current(), kb::scene::UIComponentType::Button) || dropdown()->optionCount != 3U)
+        return fail("add-button-option-failed");
+    const auto buttonOption = [&]() { return kb::scene::SceneEntity{dropdown()->options[2].content}; };
+    if (!context_.Scene().Entities().IsAlive(buttonOption()) || context_.Scene().Hierarchy().Parent(buttonOption()) != current() ||
+        !context_.Scene().Components().UI().Has<kb::scene::UIButton>(buttonOption()) ||
+        InspectorUIComponentModel::DropdownOptionKind(context_.Scene(), current(), buttonOption().Id()) != "Button")
+        return fail("button-option-content-missing");
+    if (context_.SelectedEntity() != current()) return fail("adding-an-option-changed-the-selection");
+    if (!FindInspectorHit(context_, section, InspectorPropertyId::UIDropdownEditContent, 2, InspectorHitKind::Row))
+        return fail("edit-content-button-not-found");
+    if (!context_.EditUIDropdownOption(current(), Edit::Remove, 2U) || dropdown()->optionCount != 2U ||
+        context_.Scene().Hierarchy().ChildCount(current()) != 0U)
+        return fail("remove-button-option-did-not-remove-content");
+    if (!context_.UndoSceneCommand() || dropdown()->optionCount != 3U || !context_.Scene().Entities().IsAlive(buttonOption()) ||
+        context_.Scene().Hierarchy().Parent(buttonOption()) != current())
+        return fail("undo-remove-button-option-did-not-restore-content");
 
     kb::scene::SceneUIFrame frame;
     if (!kb::scene::SceneUIQueries{context_.Scene()}.BuildFrame(1280.0F, 720.0F, frame)) return fail("layout-failed");
