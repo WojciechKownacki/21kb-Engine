@@ -34,6 +34,8 @@ std::vector<SceneUIFrameElement> EditorUIRectInteraction::Overlays(const EditorS
     const float stroke = 1.0F / zoom;
     std::vector<SceneUIFrameElement> result;
     for (const auto& e : frame.elements) {
+        if (!e.IsWidgetElement())
+            continue;
         const bool canvas = context.Scene().Components().UI().TryGet<kb::scene::UICanvas>(e.entity) != nullptr;
         const bool selected = e.entity == context.SelectedEntity();
         if (!canvas && !selected)
@@ -77,7 +79,7 @@ bool EditorUIRectInteraction::Begin(EditorSceneContext& context, float width, fl
     int handle = -1;
     kb::scene::SceneEntity entity{};
     for (const auto& e : frame.elements) {
-        if (e.entity != context.SelectedEntity() ||
+        if (!e.IsWidgetElement() || e.entity != context.SelectedEntity() ||
             context.Scene().Components().UI().TryGet<kb::scene::UICanvas>(e.entity))
             continue;
         for (std::size_t i = 0; i < kHandles.size(); ++i) {
@@ -106,7 +108,9 @@ bool EditorUIRectInteraction::Begin(EditorSceneContext& context, float width, fl
             return false;
         context.SelectEntity(entity);
     }
-    const auto found = std::ranges::find(frame.elements, entity, &SceneUIFrameElement::entity);
+    const auto found = std::ranges::find_if(frame.elements, [entity](const SceneUIFrameElement& element) {
+        return element.entity == entity && element.IsWidgetElement();
+    });
     const auto* rect = context.Scene().Components().UI().TryGet<kb::scene::UIRectTransform>(entity);
     if (found == frame.elements.end() || rect == nullptr || found->rect.width <= 0 || found->rect.height <= 0)
         return true;

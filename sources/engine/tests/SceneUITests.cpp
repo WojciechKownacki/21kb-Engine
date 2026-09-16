@@ -60,6 +60,13 @@ using kb::scene::SceneEntity;
     return found != frame.elements.end() ? &*found : nullptr;
 }
 
+[[nodiscard]] std::string_view DropdownPartText(const kb::scene::SceneUIFrame& frame, SceneEntity entity, std::int32_t part) {
+    const auto found = std::ranges::find_if(frame.elements, [=](const kb::scene::SceneUIFrameElement& element) {
+        return element.entity == entity && element.dropdownOptionIndex == part && element.text.has_value();
+    });
+    return found != frame.elements.end() ? kb::scene::UITextContent(*found->text) : std::string_view{};
+}
+
 [[nodiscard]] bool HasEvent(std::span<const kb::scene::SceneUIEvent> events,
     kb::scene::SceneUIEventType type, SceneEntity entity) {
     return std::ranges::any_of(events, [=](const kb::scene::SceneUIEvent& event) {
@@ -458,7 +465,7 @@ void TestInteractionAndEditing() {
     kb::tests::Require(FindElement(scene.UI().Frame(), dropdown.Entity())->dropdown->selectedIndex == 0U,
         "The derived frame must expose the canonical dropdown selection to presentation consumers");
     kb::tests::Require(optionRows() == 0 &&
-        kb::scene::UITextContent(*FindElement(scene.UI().Frame(), dropdown.Entity())->text) == "Option 1",
+        DropdownPartText(scene.UI().Frame(), dropdown.Entity(), -2) == "Option 1",
         "A closed dropdown must draw only its selected label");
 
     pointer.pointerPosition = {10.0F, 165.0F};
@@ -703,7 +710,7 @@ void TestDropdownList() {
         return found != scene.UI().Frame().elements.end() ? kb::scene::UITextContent(*found->text) : std::string_view{};
     };
     const auto caption = [&]() {
-        return kb::scene::UITextContent(*FindElement(scene.UI().Frame(), dropdown.Entity())->text);
+        return DropdownPartText(scene.UI().Frame(), dropdown.Entity(), -2);
     };
 
     kb::scene::SceneUIInput input;
@@ -1038,13 +1045,13 @@ void TestDropdownPlacementAndOptionEdits() {
     input.pointerAvailable = true;
     input.pointerPosition = {50.0F, 370.0F};
     static_cast<void>(scene.UI().Update(400.0F, 400.0F, input, 0.016F));
-    const auto arrowBars = [&]() {
-        return std::ranges::count_if(scene.UI().Frame().elements, [&](const kb::scene::SceneUIFrameElement& element) {
-            return element.entity == dropdown.Entity() && element.dropdownOptionIndex < 0 && element.border.has_value() &&
-                !element.dropdown.has_value();
-        });
-    };
-    kb::tests::Require(arrowBars() == 2, "A dropdown must draw its arrow");
+    kb::tests::Require(DropdownPartText(scene.UI().Frame(), dropdown.Entity(), -3) == "\xE2\x96\xBC",
+        "A closed dropdown must draw a down arrow");
+    const auto caption = std::ranges::find_if(scene.UI().Frame().elements, [&](const kb::scene::SceneUIFrameElement& element) {
+        return element.entity == dropdown.Entity() && element.dropdownOptionIndex == -2;
+    });
+    kb::tests::Require(caption != scene.UI().Frame().elements.end() && caption->rect.x > 0.0F && !caption->hitTestable,
+        "The caption must be padded from the control's left edge and never take input");
     input.primaryDown = true;
     static_cast<void>(scene.UI().Update(400.0F, 400.0F, input, 0.016F));
     input.primaryDown = false;
@@ -1052,6 +1059,8 @@ void TestDropdownPlacementAndOptionEdits() {
     const auto row = std::ranges::find_if(scene.UI().Frame().elements, [&](const kb::scene::SceneUIFrameElement& element) {
         return element.entity == dropdown.Entity() && element.dropdownOptionIndex == 2 && element.border.has_value();
     });
+    kb::tests::Require(DropdownPartText(scene.UI().Frame(), dropdown.Entity(), -3) == "\xE2\x96\xB2",
+        "An open dropdown must point its arrow up");
     kb::tests::Require(row != scene.UI().Frame().elements.end() && row->rect.y + row->rect.height <= 360.01F &&
         row->rect.y >= 0.0F, "A list with no room below the control must open upwards and stay on screen");
     kb::tests::Require(scene.UI().Frame().HitTestElement({50.0F, 350.0F})->dropdownOptionIndex == 2,

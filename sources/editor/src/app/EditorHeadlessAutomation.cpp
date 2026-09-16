@@ -1749,12 +1749,18 @@ bool EditorHeadlessAutomation::VerifyUIDropdownOptions() {
     kb::scene::SceneUIFrame frame;
     if (!kb::scene::SceneUIQueries{context_.Scene()}.BuildFrame(1280.0F, 720.0F, frame)) return fail("layout-failed");
     const auto control = std::ranges::find_if(frame.elements, [&](const auto& element) {
-        return element.entity == current() && element.dropdown.has_value();
+        return element.entity == current() && element.dropdownOptionIndex == -2 && element.text.has_value();
     });
-    if (control == frame.elements.end() || !control->text || kb::scene::UITextContent(*control->text) != "Ultra")
+    if (control == frame.elements.end() || kb::scene::UITextContent(*control->text) != "Ultra")
         return fail("caption-is-not-selected-label");
     context_.SelectEntity(current());
     if (!CaptureInspector("dropdown-options")) return false;
+    auto& preview = context_.ViewportPreview(1U);
+    const bool was2D = preview.Is2D();
+    if (!was2D) preview.Toggle2D();
+    const bool captured = CaptureEditorScene("dropdown-options-scene");
+    if (!was2D) preview.Toggle2D();
+    if (!captured) return false;
     Trace("ui_dropdown_options", true, "add-rename-move-remove-undo-redo-caption-font");
     return true;
 }
