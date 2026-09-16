@@ -425,7 +425,7 @@ constexpr std::array kInputFieldProperties{
     KB_BOOL(UIInputField, multiline),
     KB_BOOL(UIInputField, readOnly),
 };
-constexpr std::array kDropdownProperties{KB_UINT(UIDropdown, selectedIndex)};
+constexpr std::array kDropdownProperties{KB_UINT(UIDropdown, selectedIndex), KB_UINT(UIDropdown, maxVisibleOptions)};
 constexpr std::array kProgressBarProperties{
     KB_FLOAT(UIProgressBar, minimum),
     KB_FLOAT(UIProgressBar, maximum),

@@ -721,6 +721,11 @@ public:
     kb::math::Vec2 uiScrollVelocity{};
     kb::math::Vec2 uiViewportSize{};
     std::size_t uiTextCursorByteOffset = 0U;
+    // The dropdown whose option list is open, and the first option row that list draws. Both are
+    // runtime state, not authored state: a scene saved while a popup happened to be open must not
+    // reopen it on load, so neither belongs in UIDropdown.
+    SceneEntity uiExpandedDropdown{};
+    std::uint32_t uiDropdownScrollIndex = 0U;
     // Caret blink phase in seconds for the focused input field, reset on every edit so typing
     // never hides the caret mid-stroke.
     float uiTextCaretPhase = 0.0F;
