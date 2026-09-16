@@ -3196,19 +3196,17 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
         return true;
     }
     if (hit.property == InspectorPropertyId::UIDropdownAddOption ||
-        hit.property == InspectorPropertyId::UIDropdownRemoveOption) {
-        // Growing or shrinking the list goes through the optionCount property, so it is one undoable
-        // edit and new options arrive with a numbered label.
+        hit.property == InspectorPropertyId::UIDropdownRemoveOption ||
+        hit.property == InspectorPropertyId::UIDropdownMoveOptionUp ||
+        hit.property == InspectorPropertyId::UIDropdownMoveOptionDown) {
+        // Each button is one undoable edit of the option list; the option buttons carry the option index.
         sceneContext.Inspector().EndTextEdit();
-        const auto* dropdown = sceneContext.Scene().Components().UI().TryGet<kb::scene::UIDropdown>(entity);
-        if (dropdown == nullptr) return true;
-        const bool adding = hit.property == InspectorPropertyId::UIDropdownAddOption;
-        if ((adding && dropdown->optionCount >= kb::scene::UIDropdown::MaxOptions) || (!adding && dropdown->optionCount == 0U)) {
-            sceneContext.Console().Warning("Inspector", adding ? "A dropdown holds at most 32 options." : "The dropdown has no option to remove.");
-            return true;
-        }
-        static_cast<void>(sceneContext.SetUIComponentProperty(entity, kb::scene::UIComponentType::Dropdown, "optionCount",
-            kb::scene::UIComponentPropertyValue{ adding ? dropdown->optionCount + 1U : dropdown->optionCount - 1U }));
+        using Edit = EditorSceneContext::UIDropdownOptionEdit;
+        const Edit edit = hit.property == InspectorPropertyId::UIDropdownAddOption      ? Edit::Add
+                        : hit.property == InspectorPropertyId::UIDropdownRemoveOption   ? Edit::Remove
+                        : hit.property == InspectorPropertyId::UIDropdownMoveOptionUp   ? Edit::MoveUp
+                                                                                       : Edit::MoveDown;
+        static_cast<void>(sceneContext.EditUIDropdownOption(entity, edit, static_cast<std::uint32_t>(std::max(hit.index, 0))));
         return true;
     }
     if (hit.property == InspectorPropertyId::UIRectLayoutField) {

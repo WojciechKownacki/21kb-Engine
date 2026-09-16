@@ -1205,6 +1205,9 @@ public:
     [[nodiscard]] bool AddComponentToEntity(kb::scene::SceneEntity entity, std::string_view componentId);
     [[nodiscard]] bool RemoveUIComponentFromEntity(
         kb::scene::SceneEntity entity, kb::scene::UIComponentType component);
+    enum class UIDropdownOptionEdit : std::uint8_t { Add, Remove, MoveUp, MoveDown };
+    // One undoable edit of a dropdown's option list. `index` names the option for Remove and the moves.
+    [[nodiscard]] bool EditUIDropdownOption(kb::scene::SceneEntity entity, UIDropdownOptionEdit edit, std::uint32_t index);
     [[nodiscard]] bool SetUIComponentProperty(
         kb::scene::SceneEntity entity, kb::scene::UIComponentType component,
         std::string_view property, const kb::scene::UIComponentPropertyValue& value);

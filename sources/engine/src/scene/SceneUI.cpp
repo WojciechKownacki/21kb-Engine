@@ -62,6 +62,8 @@ struct Affine2D {
 // the popup needs a bias no hand-authored zOrder would plausibly reach rather than a +1 that the
 // next widget in the hierarchy would immediately cover.
 constexpr std::int32_t kUIDropdownPopupZOrder = 1000000;
+// Logical units between a dropdown row's edge and its label.
+constexpr float kUIDropdownLabelPadding = 8.0F;
 
 // Held navigation: the first repeat waits long enough that a single press never double-steps,
 // then steps at a rate a player can still stop on the row they want.
@@ -592,16 +594,20 @@ class FrameBuilder {
             element.interactionTint = selectable->normalColor;
         if (element.dropdown.has_value())
             ApplyDropdownCaption(element);
-        const bool dropdownOpen = element.dropdown.has_value() && expandedDropdown_ == entity;
+        const bool isDropdown = element.dropdown.has_value();
+        const bool dropdownOpen = isDropdown && expandedDropdown_ == entity;
         frame_.elements.push_back(std::move(element));
+        const std::size_t elementIndex = frame_.elements.size() - 1U;
+        if (isDropdown)
+            AppendDropdownArrow(elementIndex, rect, resolvedTransform);
         if (dropdownOpen)
-            AppendDropdownRows(frame_.elements.size() - 1U, rect, resolvedTransform);
+            AppendDropdownRows(elementIndex, rect, resolvedTransform);
 
         Rect childClip = inheritedClip;
         std::vector<std::array<Vec2, 4U>> childClipQuads = inheritedClipQuads;
         if (ui_.Has<UIMask>(entity)) {
-            childClip = Intersect(childClip, Bounds(frame_.elements.back().corners));
-            childClipQuads.push_back(frame_.elements.back().corners);
+            childClip = Intersect(childClip, Bounds(frame_.elements[elementIndex].corners));
+            childClipQuads.push_back(frame_.elements[elementIndex].corners);
         }
         ArrangeChildren(entity, rect, childClip, canvas, scale, sortingOrder, pixelPerfect, group, resolvedTransform,
                         childClipQuads);
@@ -828,6 +834,47 @@ class FrameBuilder {
         static_cast<void>(SetUITextContent(*element.text, UIDropdownSelectedText(dropdown)));
     }
 
+    // The arrow that marks the control as a dropdown: a chevron of two bars at the right end, pointing
+    // down while closed and up while the list is open. The bars are rotated quads of the control's
+    // entity; they draw in the text colour and never take input.
+    void AppendDropdownArrow(std::size_t controlIndex, Rect rect, const Affine2D& transform) {
+        const SceneUIFrameElement control = frame_.elements[controlIndex];
+        const UIDropdown& dropdown = *control.dropdown;
+        const float half = std::min(rect.height * 0.14F, rect.width * 0.1F);
+        if (half <= 0.0F)
+            return;
+        const float thickness = std::max(1.0F, rect.height * 0.06F);
+        const Vec2 center{rect.x + rect.width - rect.height * 0.5F, rect.y + rect.height * 0.5F};
+        const float tip = expandedDropdown_ == control.entity ? -half * 0.5F : half * 0.5F;
+        const Vec2 apex{center.x, center.y + tip};
+        for (const float side : {-1.0F, 1.0F}) {
+            const Vec2 end{center.x + side * half, center.y - tip};
+            const Vec2 along{apex.x - end.x, apex.y - end.y};
+            const float length = std::hypot(along.x, along.y);
+            const Vec2 normal{-along.y / length * thickness * 0.5F, along.x / length * thickness * 0.5F};
+            SceneUIFrameElement bar;
+            bar.entity = control.entity;
+            bar.canvas = control.canvas;
+            bar.canvasScale = control.canvasScale;
+            bar.canvasSortingOrder = control.canvasSortingOrder;
+            bar.zOrder = control.zOrder;
+            bar.traversalOrder = traversal_++;
+            bar.effectiveOpacity = control.effectiveOpacity;
+            bar.clipRect = control.clipRect;
+            bar.clipQuads = control.clipQuads;
+            bar.corners = {{TransformPoint(transform, {end.x + normal.x, end.y + normal.y}),
+                            TransformPoint(transform, {apex.x + normal.x, apex.y + normal.y}),
+                            TransformPoint(transform, {apex.x - normal.x, apex.y - normal.y}),
+                            TransformPoint(transform, {end.x - normal.x, end.y - normal.y})}};
+            // The renderer maps the element rectangle onto the corners, so any rectangle with the bar's
+            // proportions draws the rotated bar.
+            bar.rect = {0.0F, 0.0F, length * control.canvasScale, thickness * control.canvasScale};
+            UIBorder& fill = bar.border.emplace();
+            fill.backgroundColor = dropdown.textColor;
+            frame_.elements.push_back(std::move(bar));
+        }
+    }
+
     // Appends the open list as rows directly under the control: a row background, the option icon
     // when it has one and the label. Rows are clipped to the visible window the author allowed and
     // sort above every sibling they cover. Only the background takes the pointer; it carries the
@@ -844,7 +891,14 @@ class FrameBuilder {
         const std::size_t first = std::min(static_cast<std::size_t>(dropdownScrollIndex_), options - visibleRows);
         const float rowHeight = rect.height;
         const float scale = control.canvasScale;
-        const Rect popup{rect.x, rect.y + rect.height, rect.width, rowHeight * static_cast<float>(visibleRows)};
+        const float popupHeight = rowHeight * static_cast<float>(visibleRows);
+        // Open below the control, unless the list would run past the bottom of the screen and there is
+        // more room above - then it opens upwards, still in option order from top to bottom.
+        const float scaleToScreen = std::max(scale, 0.0001F);
+        const float spaceBelow = viewport_.y / scaleToScreen - (rect.y + rect.height);
+        const float spaceAbove = rect.y;
+        const bool upwards = popupHeight > spaceBelow && spaceAbove > spaceBelow;
+        const Rect popup{rect.x, upwards ? rect.y - popupHeight : rect.y + rect.height, rect.width, popupHeight};
         const auto quadOf = [&transform](Rect area) {
             return std::array<Vec2, 4U>{{TransformPoint(transform, {area.x, area.y}),
                                          TransformPoint(transform, {area.x + area.width, area.y}),
@@ -885,7 +939,8 @@ class FrameBuilder {
             background.hitTestable = control.interactionEnabled && background.effectiveOpacity > 0.0F;
             frame_.elements.push_back(std::move(background));
 
-            Rect labelArea = area;
+            Rect labelArea{area.x + kUIDropdownLabelPadding, area.y,
+                           std::max(0.0F, area.width - kUIDropdownLabelPadding * 2.0F), area.height};
             if (option.iconAssetId != 0U) {
                 SceneUIFrameElement icon = base({area.x, area.y, rowHeight, rowHeight}, static_cast<std::int32_t>(index));
                 UIImage& image = icon.image.emplace();
@@ -893,8 +948,8 @@ class FrameBuilder {
                 image.preserveAspect = true;
                 image.color = {1.0F, 1.0F, 1.0F, 1.0F};
                 frame_.elements.push_back(std::move(icon));
-                labelArea.x += rowHeight;
-                labelArea.width = std::max(0.0F, labelArea.width - rowHeight);
+                labelArea.x = area.x + rowHeight;
+                labelArea.width = std::max(0.0F, area.width - rowHeight - kUIDropdownLabelPadding);
             }
             SceneUIFrameElement label = base(labelArea, static_cast<std::int32_t>(index));
             UIText& text = label.text.emplace();

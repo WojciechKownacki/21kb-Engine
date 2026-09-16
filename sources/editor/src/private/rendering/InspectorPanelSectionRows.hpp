@@ -463,6 +463,53 @@ inline void DrawAssetFieldRow(HDC dc, RECT row, const EditorTheme& theme, const 
     HeroIconPainter::Draw(dc, Shrink(button, 3, 3, 3, 3), HeroIconKind::MagnifyingGlass, buttonHovered ? Color(theme.textPrimary) : Color(theme.textSecondary), 1);
 }
 
+// A dropdown option: its label field followed by move up, move down and remove buttons.
+[[nodiscard]] inline RECT DropdownOptionButtonRect(RECT row, int button) noexcept {
+    const RECT labelRect = Rect(row.left + kRowPadX, row.top, row.left + ((row.right - row.left) * 36 / 100), row.bottom);
+    const RECT valueRect = Rect(labelRect.right, CenteredY(row, kValueHeight), row.right - kValueRightInset, CenteredY(row, kValueHeight) + kValueHeight);
+    const int top = CenteredY(valueRect, kAssetPickerButtonSize);
+    const int right = valueRect.right - 1 - (2 - button) * (kAssetPickerButtonSize + kAssetPickerButtonGap);
+    return Rect(right - kAssetPickerButtonSize, top, right, top + kAssetPickerButtonSize);
+}
+
+[[nodiscard]] inline RECT DropdownOptionTextRect(RECT row) noexcept {
+    const RECT first = DropdownOptionButtonRect(row, 0);
+    const RECT labelRect = Rect(row.left + kRowPadX, row.top, row.left + ((row.right - row.left) * 36 / 100), row.bottom);
+    return Rect(labelRect.right, first.top - (kValueHeight - kAssetPickerButtonSize) / 2, first.left - kAssetPickerButtonGap,
+        first.top - (kValueHeight - kAssetPickerButtonSize) / 2 + kValueHeight);
+}
+
+inline void DrawDropdownOptionRow(HDC dc, RECT row, const EditorTheme& theme, const InspectorPanelState& state,
+    InspectorSectionId section, InspectorPropertyId property, std::string_view label, std::string_view value,
+    int editIndex, int optionIndex, bool editing, std::string_view editBuffer, bool caretVisible) {
+    if (RowHovered(state, property, editIndex)) {
+        GdiDrawing::FillRectColor(dc, row, HoverFill(theme));
+    }
+    const RECT labelRect = Rect(row.left + kRowPadX, row.top, row.left + ((row.right - row.left) * 36 / 100), row.bottom);
+    ScopedFont labelFont(12, FW_SEMIBOLD);
+    {
+        const ScopedGdiObject selectedFont(dc, labelFont.handle);
+        Text(dc, labelRect, label, Color(theme.textSecondary));
+    }
+    DrawValueBox(dc, DropdownOptionTextRect(row), theme, editing ? editBuffer : value,
+        state.IsHovered(InspectorHitKind::TextField, section, property, editIndex), editing, caretVisible);
+    constexpr std::array buttons{ InspectorPropertyId::UIDropdownMoveOptionUp, InspectorPropertyId::UIDropdownMoveOptionDown,
+        InspectorPropertyId::UIDropdownRemoveOption };
+    constexpr std::array<std::string_view, 3> glyphs{ "\xE2\x86\x91", "\xE2\x86\x93", "" };
+    for (int button = 0; button < 3; ++button) {
+        const RECT box = DropdownOptionButtonRect(row, button);
+        const bool hovered = state.IsHovered(InspectorHitKind::Row, section, buttons[static_cast<std::size_t>(button)], optionIndex);
+        DrawInputFrame(dc, box, hovered ? HoverFill(theme) : Color(theme.chrome), hovered ? Color(theme.accent) : Color(theme.borderPanel));
+        const COLORREF glyphColor = hovered ? Color(theme.textPrimary) : Color(theme.textSecondary);
+        if (button == 2) {
+            HeroIconPainter::Draw(dc, Shrink(box, 4, 4, 4, 4), HeroIconKind::XMark, glyphColor, 1);
+        } else {
+            const ScopedGdiObject selectedFont(dc, labelFont.handle);
+            Text(dc, box, glyphs[static_cast<std::size_t>(button)], glyphColor, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        }
+    }
+}
+
 [[nodiscard]] inline RECT CheckboxRectForRow(RECT row) noexcept {
     const RECT labelRect = Rect(row.left + kRowPadX, row.top, row.left + ((row.right - row.left) * 36 / 100), row.bottom);
     return CenteredRect(row, labelRect.right, kCheckboxSize, kCheckboxSize);
