@@ -824,12 +824,12 @@ void TestDropdownPersistenceCompatibility() {
     kb::scene::SceneAssetUIComponentCodec::Write(current, authored);
     kb::scene::UIComponentSet decoded;
     kb::scene::SceneAssetBinaryIO::ByteReader currentReader{current};
-    kb::tests::Require(kb::scene::SceneAssetUIComponentCodec::Read(currentReader, 36U, decoded) &&
+    kb::tests::Require(kb::scene::SceneAssetUIComponentCodec::Read(currentReader, 37U, decoded) &&
         currentReader.Exhausted() && decoded.dropdown->optionCount == 3U && decoded.dropdown->selectedIndex == 2U &&
         decoded.dropdown->maxVisibleOptions == 4U && decoded.dropdown->options[1].iconAssetId == 77U &&
         kb::scene::UIDropdownOptionText(decoded.dropdown->options[2]) == "Zażółć" &&
         kb::tests::NearlyEqual(decoded.dropdown->fontSize, 22.0F),
-        "A v36 dropdown must round-trip its options, icons, selection and style");
+        "A current dropdown must round-trip its options, icons, selection and style");
 
     // Prefab assets carry UI as versioned text; text written before the version prefix is v34 layout.
     kb::scene::UIComponentSet fromText;
@@ -849,7 +849,7 @@ void TestDropdownPersistenceCompatibility() {
     kb::tests::Require(kb::scene::SceneUIComponentTextCodec::Decode(legacyText, fromText) && fromText.selectable.has_value(),
         "UI text written before versions were recorded must still decode");
     kb::tests::Require(kb::scene::SceneUIComponentTextCodec::EncodedVersion(legacyText) == 34U &&
-        kb::scene::SceneUIComponentTextCodec::EncodedVersion(kb::scene::SceneUIComponentTextCodec::Encode(authored)) == 36U &&
+        kb::scene::SceneUIComponentTextCodec::EncodedVersion(kb::scene::SceneUIComponentTextCodec::Encode(authored)) == 37U &&
         kb::scene::SceneUIComponentTextCodec::EncodedVersion("v99:00") == 0U,
         "Prefab loading must be able to tell which layout a UI payload uses, to convert child-object options");
 
@@ -1076,6 +1076,69 @@ void TestDropdownPlacementAndOptionEdits() {
         "Removing the selected option must select a remaining one");
 }
 
+// An option can show any widget: a Button child linked as option content draws inside its row and, when
+// selected, inside the closed control. Clicking that row - on top of the button - chooses the option, and
+// the content survives a prefab copy with its link pointing at the copied child.
+void TestDropdownOptionContent() {
+    kb::scene::Scene scene{kb::scene::SceneMode::PrefabPrivate};
+    const kb::scene::SceneObject canvas = AddUI(scene, {}, CanvasComponents());
+    kb::scene::UIComponentSet dropdownComponents = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Dropdown);
+    dropdownComponents.rectTransform = Rect(0.0F, 0.0F, 100.0F, 20.0F);
+    const kb::scene::SceneObject dropdown = AddUI(scene, canvas, dropdownComponents);
+    kb::scene::UIComponentSet buttonComponents = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Button);
+    buttonComponents.rectTransform = Rect(0.0F, 0.0F, 10.0F, 10.0F);
+    const kb::scene::SceneObject button = AddUI(scene, dropdown, buttonComponents);
+    {
+        kb::scene::UIDropdown* authored = scene.Components().UI().TryGet<kb::scene::UIDropdown>(dropdown.Entity());
+        authored->options[1].content = button.Entity().Id();
+        scene.Components().UI().MarkModified<kb::scene::UIDropdown>(dropdown.Entity());
+    }
+    const auto buttonElement = [&]() { return FindElement(scene.UI().Frame(), button.Entity()); };
+
+    kb::scene::SceneUIInput input;
+    input.pointerAvailable = true;
+    input.pointerPosition = {50.0F, 10.0F};
+    kb::tests::Require(scene.UI().Update(400.0F, 400.0F, input, 0.016F), "Dropdown with content must build");
+    kb::tests::Require(buttonElement() == nullptr, "Content of an unselected option must not draw while the list is closed");
+
+    const auto click = [&](kb::math::Vec2 position) {
+        input.pointerPosition = position;
+        input.primaryDown = true;
+        static_cast<void>(scene.UI().Update(400.0F, 400.0F, input, 0.016F));
+        input.primaryDown = false;
+        static_cast<void>(scene.UI().Update(400.0F, 400.0F, input, 0.016F));
+    };
+    click({50.0F, 10.0F});
+    const kb::scene::SceneUIFrameElement* inRow = buttonElement();
+    kb::tests::Require(inRow != nullptr && inRow->rect.y >= 40.0F - 0.01F && inRow->rect.y + inRow->rect.height <= 60.01F &&
+        !inRow->hitTestable && inRow->zOrder > FindElement(scene.UI().Frame(), dropdown.Entity())->zOrder,
+        "An open list must draw the option's content widget inside its row, above the list, without taking input");
+
+    click({50.0F, 50.0F});
+    kb::tests::Require(scene.Components().UI().TryGet<kb::scene::UIDropdown>(dropdown.Entity())->selectedIndex == 1U,
+        "Clicking a row that shows a content widget must choose that option");
+    const kb::scene::SceneUIFrameElement* inCaption = buttonElement();
+    kb::tests::Require(inCaption != nullptr && inCaption->rect.y < 20.0F && DropdownPartText(scene.UI().Frame(), dropdown.Entity(), -2).empty(),
+        "The closed control must show the selected option's content instead of its text");
+
+    const kb::scene::ScenePrefab captured = scene.Prefabs().Capture(canvas);
+    kb::scene::ScenePrefabInstance copy = scene.Prefabs().Instantiate(captured);
+    const kb::scene::UIDropdown* copied = scene.Components().UI().TryGet<kb::scene::UIDropdown>(copy.ObjectAt(1U).Entity());
+    kb::tests::Require(copied != nullptr && copied->options[1].content == copy.ObjectAt(2U).Entity().Id(),
+        "A copied dropdown's option content must point at the copied child");
+
+    std::vector<std::uint8_t> bytes;
+    kb::scene::UIComponentSet set;
+    set.rectTransform.emplace();
+    set.dropdown = *copied;
+    kb::scene::SceneAssetUIComponentCodec::Write(bytes, set);
+    kb::scene::SceneAssetBinaryIO::ByteReader reader{bytes};
+    kb::scene::UIComponentSet decoded;
+    kb::tests::Require(kb::scene::SceneAssetUIComponentCodec::Read(reader, 37U, decoded) && reader.Exhausted() &&
+        decoded.dropdown->options[1].content == copied->options[1].content,
+        "A v37 dropdown must round-trip option content links");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -1089,6 +1152,7 @@ void RunSceneUITests() {
     TestInteractionAndEditing();
     TestDropdownList();
     TestDropdownPlacementAndOptionEdits();
+    TestDropdownOptionContent();
     TestDropdownPersistenceCompatibility();
     TestNavigationLinksSurviveHierarchyCopies();
     TestProgressAndEventQueue();

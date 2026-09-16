@@ -55,6 +55,16 @@ void ResolveEntityReferences(ScenePrefab& prefab, std::span<const SceneEntity> c
         // scene all hand out afresh. Persist them as the target's stable node id instead. A target
         // outside what is being captured cannot be expressed by this prefab, so that link is dropped
         // rather than kept as an id that would later name an unrelated object.
+        // An option's content widget is a child of the dropdown, so it is always inside the capture.
+        if (node->components.ui.dropdown.has_value()) {
+            UIDropdown& dropdown = *node->components.ui.dropdown;
+            for (std::uint32_t option = 0U; option < dropdown.optionCount; ++option) {
+                std::uint64_t& content = dropdown.options[option].content;
+                if (content == 0U) continue;
+                const auto target = stableNodeIds.find(content);
+                content = target == stableNodeIds.end() ? 0U : target->second;
+            }
+        }
         if (node->components.ui.selectable.has_value()) {
             UISelectable& selectable = *node->components.ui.selectable;
             for (std::uint64_t* link : { &selectable.navigationUp, &selectable.navigationDown,

@@ -463,71 +463,53 @@ inline void DrawAssetFieldRow(HDC dc, RECT row, const EditorTheme& theme, const 
     HeroIconPainter::Draw(dc, Shrink(button, 3, 3, 3, 3), HeroIconKind::MagnifyingGlass, buttonHovered ? Color(theme.textPrimary) : Color(theme.textSecondary), 1);
 }
 
-// One option of a dropdown's list, left to right: the radio that makes it the selection, its label,
-// then icon, move up, move down and remove buttons.
+// One option of a dropdown's list, left to right: what it shows (Text, Button, Image...), its name, an
+// Edit button that selects its content widget, and a menu with move and remove.
 struct DropdownOptionRowGeometry {
-    RECT radio{};
+    RECT kind{};
     RECT text{};
-    RECT icon{};
-    RECT up{};
-    RECT down{};
-    RECT remove{};
+    RECT edit{};
+    RECT menu{};
 };
 
 [[nodiscard]] inline DropdownOptionRowGeometry DropdownOptionRowLayout(RECT row) noexcept {
-    constexpr int kRadioSize = 14;
-    const int buttonTop = CenteredY(row, kAssetPickerButtonSize);
-    const auto button = [&](int fromRight) {
-        const int right = row.right - kValueRightInset - 1 - fromRight * (kAssetPickerButtonSize + kAssetPickerButtonGap);
-        return Rect(right - kAssetPickerButtonSize, buttonTop, right, buttonTop + kAssetPickerButtonSize);
-    };
+    constexpr int kKindWidth = 78;
+    constexpr int kEditWidth = 42;
+    const int top = CenteredY(row, kValueHeight);
     DropdownOptionRowGeometry geometry;
-    geometry.remove = button(0);
-    geometry.down = button(1);
-    geometry.up = button(2);
-    geometry.icon = button(3);
-    geometry.radio = Rect(row.left + kRowPadX, CenteredY(row, kRadioSize), row.left + kRowPadX + kRadioSize,
-        CenteredY(row, kRadioSize) + kRadioSize);
-    geometry.text = Rect(geometry.radio.right + 10, CenteredY(row, kValueHeight),
-        geometry.icon.left - kAssetPickerButtonGap * 3, CenteredY(row, kValueHeight) + kValueHeight);
+    geometry.menu = Rect(row.right - kValueRightInset - kValueHeight, top, row.right - kValueRightInset, top + kValueHeight);
+    geometry.edit = Rect(geometry.menu.left - kAssetPickerButtonGap - kEditWidth, top, geometry.menu.left - kAssetPickerButtonGap,
+        top + kValueHeight);
+    geometry.kind = Rect(row.left + kRowPadX, top, row.left + kRowPadX + kKindWidth, top + kValueHeight);
+    geometry.text = Rect(geometry.kind.right + 6, top, geometry.edit.left - 6, top + kValueHeight);
     return geometry;
 }
 
 inline void DrawDropdownOptionRow(HDC dc, RECT row, const EditorTheme& theme, const InspectorPanelState& state,
-    InspectorSectionId section, InspectorPropertyId textProperty, int textRow, int iconRow, int option,
-    std::string_view value, bool selected, bool hasIcon, bool canMoveUp, bool canMoveDown) {
+    InspectorSectionId section, InspectorPropertyId textProperty, int textRow, int option, std::string_view kind,
+    std::string_view value, bool isDefault, bool hasContent) {
     const DropdownOptionRowGeometry geometry = DropdownOptionRowLayout(row);
-    GdiDrawing::FillRectColor(dc, row, selected ? HoverFill(theme) : Color(theme.panel));
-    const bool radioHovered = state.IsHovered(InspectorHitKind::Row, section, InspectorPropertyId::UIDropdownSelectOption, option);
-    DrawInputFrame(dc, geometry.radio, selected ? Color(theme.accent) : (radioHovered ? HoverFill(theme) : Color(theme.chrome)),
-        selected || radioHovered ? Color(theme.accent) : Color(theme.borderPanel));
-    if (selected) {
-        GdiDrawing::FillRectColor(dc, Shrink(geometry.radio, 4, 4, 4, 4), Color(theme.textPrimary));
+    GdiDrawing::FillRectColor(dc, row, Color(theme.panel));
+    ScopedFont smallFont(11, FW_SEMIBOLD);
+    {
+        const ScopedGdiObject selectedFont(dc, smallFont.handle);
+        DrawInputFrame(dc, geometry.kind, Color(theme.chrome), isDefault ? Color(theme.accent) : Color(theme.borderPanel));
+        Text(dc, geometry.kind, kind, isDefault ? Color(theme.textPrimary) : Color(theme.textSecondary),
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     }
     const bool editing = state.EditedProperty() == textProperty && state.EditIndex() == textRow;
     DrawValueBox(dc, geometry.text, theme, editing ? std::string_view{state.EditBuffer()} : value,
         state.IsHovered(InspectorHitKind::TextField, section, textProperty, textRow), editing, state.IsTextCaretVisible());
-
-    const auto drawButton = [&](RECT box, bool hovered, bool enabled, bool accent) {
-        DrawInputFrame(dc, box, hovered && enabled ? HoverFill(theme) : Color(theme.chrome),
-            (hovered && enabled) || accent ? Color(theme.accent) : Color(theme.borderPanel));
-        return !enabled ? Color(theme.textDisabled) : hovered || accent ? Color(theme.textPrimary) : Color(theme.textSecondary);
+    const auto button = [&](RECT box, InspectorPropertyId property, bool enabled) {
+        const bool hovered = enabled && state.IsHovered(InspectorHitKind::Row, section, property, option);
+        DrawInputFrame(dc, box, hovered ? HoverFill(theme) : Color(theme.chrome), hovered ? Color(theme.accent) : Color(theme.borderPanel));
+        return !enabled ? Color(theme.textDisabled) : hovered ? Color(theme.textPrimary) : Color(theme.textSecondary);
     };
-    const COLORREF iconColor = drawButton(geometry.icon,
-        state.IsHovered(InspectorHitKind::TextField, section, InspectorPropertyId::UIAssetPicker, iconRow), true, hasIcon);
-    HeroIconPainter::Draw(dc, Shrink(geometry.icon, 3, 3, 3, 3), HeroIconKind::RectangleGroup, iconColor, 1);
-    ScopedFont arrowFont(13, FW_SEMIBOLD);
-    {
-        const ScopedGdiObject selectedFont(dc, arrowFont.handle);
-        Text(dc, geometry.up, "\xE2\x86\x91", drawButton(geometry.up,
-            state.IsHovered(InspectorHitKind::Row, section, InspectorPropertyId::UIDropdownMoveOptionUp, option), canMoveUp, false),
-            DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-        Text(dc, geometry.down, "\xE2\x86\x93", drawButton(geometry.down,
-            state.IsHovered(InspectorHitKind::Row, section, InspectorPropertyId::UIDropdownMoveOptionDown, option), canMoveDown, false),
-            DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-    }
-    HeroIconPainter::Draw(dc, Shrink(geometry.remove, 4, 4, 4, 4), HeroIconKind::XMark, drawButton(geometry.remove,
-        state.IsHovered(InspectorHitKind::Row, section, InspectorPropertyId::UIDropdownRemoveOption, option), true, false), 1);
+    const ScopedGdiObject selectedFont(dc, smallFont.handle);
+    Text(dc, geometry.edit, "Edit", button(geometry.edit, InspectorPropertyId::UIDropdownEditContent, hasContent),
+        DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    HeroIconPainter::Draw(dc, Shrink(geometry.menu, 4, 4, 4, 4), HeroIconKind::EllipsisHorizontal,
+        button(geometry.menu, InspectorPropertyId::UIDropdownOptionMenu, true), 1);
 }
 
 [[nodiscard]] inline RECT CheckboxRectForRow(RECT row) noexcept {

@@ -551,10 +551,9 @@ enum class InspectorPropertyId : std::uint16_t {
     UIRectAdvanced,
     UIRectLayoutField,
     UIDropdownAddOption,
-    UIDropdownRemoveOption,
-    UIDropdownMoveOptionUp,
-    UIDropdownMoveOptionDown,
     UIDropdownSelectOption,
+    UIDropdownOptionMenu,
+    UIDropdownEditContent,
 };
 
 struct InspectorDynamicRowIdentity {

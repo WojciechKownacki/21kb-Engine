@@ -3195,25 +3195,16 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
         }
         return true;
     }
-    if (hit.property == InspectorPropertyId::UIDropdownSelectOption) {
-        // The radio in front of an option makes it the dropdown's selection.
-        sceneContext.Inspector().EndTextEdit();
-        static_cast<void>(sceneContext.SetUIComponentProperty(entity, kb::scene::UIComponentType::Dropdown, "selectedIndex",
-            kb::scene::UIComponentPropertyValue{ static_cast<std::uint32_t>(std::max(hit.index, 0)) }));
-        return true;
-    }
-    if (hit.property == InspectorPropertyId::UIDropdownAddOption ||
-        hit.property == InspectorPropertyId::UIDropdownRemoveOption ||
-        hit.property == InspectorPropertyId::UIDropdownMoveOptionUp ||
-        hit.property == InspectorPropertyId::UIDropdownMoveOptionDown) {
-        // Each button is one undoable edit of the option list; the option buttons carry the option index.
-        sceneContext.Inspector().EndTextEdit();
-        using Edit = EditorSceneContext::UIDropdownOptionEdit;
-        const Edit edit = hit.property == InspectorPropertyId::UIDropdownAddOption      ? Edit::Add
-                        : hit.property == InspectorPropertyId::UIDropdownRemoveOption   ? Edit::Remove
-                        : hit.property == InspectorPropertyId::UIDropdownMoveOptionUp   ? Edit::MoveUp
-                                                                                       : Edit::MoveDown;
-        static_cast<void>(sceneContext.EditUIDropdownOption(entity, edit, static_cast<std::uint32_t>(std::max(hit.index, 0))));
+    if (hit.property == InspectorPropertyId::UIDropdownEditContent) {
+        // Edit selects the option's content widget, so it is styled like any other widget.
+        const auto* dropdown = sceneContext.Scene().Components().UI().TryGet<kb::scene::UIDropdown>(entity);
+        if (dropdown != nullptr && hit.index >= 0 && static_cast<std::uint32_t>(hit.index) < dropdown->optionCount) {
+            const kb::scene::SceneEntity content{ dropdown->options[hit.index].content };
+            if (dropdown->options[hit.index].content != 0U && sceneContext.Scene().Entities().IsAlive(content)) {
+                sceneContext.Inspector().EndTextEdit();
+                sceneContext.SelectEntity(content);
+            }
+        }
         return true;
     }
     if (hit.property == InspectorPropertyId::UIRectLayoutField) {

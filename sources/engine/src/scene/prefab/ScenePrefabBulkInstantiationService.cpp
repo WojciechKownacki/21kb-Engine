@@ -1023,6 +1023,16 @@ void ApplyPrefabUIComponents(
                     *link = entities[EntityIndex(instanceIndex, target->second, nodes.size())].Id();
                 }
             }
+            if (components.dropdown.has_value()) {
+                for (std::uint32_t option = 0U; option < components.dropdown->optionCount; ++option) {
+                    std::uint64_t& content = components.dropdown->options[option].content;
+                    if (content == 0U) continue;
+                    const auto target = nodeIndexByStableId.find(content);
+                    if (target == nodeIndexByStableId.end())
+                        throw std::invalid_argument("Scene prefab dropdown option references a missing stable node id");
+                    content = entities[EntityIndex(instanceIndex, target->second, nodes.size())].Id();
+                }
+            }
             ApplySceneUIComponents(ui, entities[EntityIndex(instanceIndex, nodeIndex, nodes.size())], components);
         }
     }

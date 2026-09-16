@@ -38,7 +38,8 @@ struct SceneDocument {
     // v35: UIDropdown persists how many option rows its open list shows; UI navigation links persist
     //      as stable node ids.
     // v36: UIDropdown owns its options and row style; older child-object options are converted on load.
-    static constexpr std::uint32_t CurrentFileVersion = 36U;
+    // v37: a dropdown option can show a child widget; the link persists as a stable node id.
+    static constexpr std::uint32_t CurrentFileVersion = 37U;
 
     std::uint32_t fileVersion = CurrentFileVersion;
     std::string guid;

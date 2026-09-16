@@ -5,6 +5,7 @@
 #include "inspection/InspectorPanelState.hpp"
 
 #include <optional>
+#include <span>
 #include <array>
 #include <cstdint>
 #include <string>
@@ -56,6 +57,17 @@ public:
     // in hierarchy order, excluding the source itself.
     [[nodiscard]] static std::vector<kb::scene::SceneEntity> NavigationTargets(
         const kb::scene::Scene& scene, kb::scene::SceneEntity source);
+    // The widget types an option can show, in the order the Add Option menu offers them. Text is a plain
+    // option; every other entry creates that widget as the option's content.
+    struct DropdownOptionType {
+        std::string_view label;
+        std::optional<kb::scene::UIComponentType> content;
+    };
+    [[nodiscard]] static std::span<const DropdownOptionType> DropdownOptionTypes() noexcept;
+    // What an option shows, for its badge: "Text", the content widget's kind, or "Missing" when the
+    // linked child is gone.
+    [[nodiscard]] static std::string_view DropdownOptionKind(
+        const kb::scene::Scene& scene, kb::scene::SceneEntity dropdown, std::uint64_t content);
     // "Canvas / Menu / Play" - the name path that tells two objects with the same name apart.
     [[nodiscard]] static std::string HierarchyPath(const kb::scene::Scene& scene, kb::scene::SceneEntity entity);
 

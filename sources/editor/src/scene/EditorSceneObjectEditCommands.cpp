@@ -47,6 +47,19 @@ void RelinkNavigation(kb::scene::Scene& scene, const std::unordered_map<std::uin
         for (std::size_t index = 0U; index < scene.Hierarchy().ChildCount(entity); ++index) {
             pending.push_back(scene.Hierarchy().ChildAt(entity, index));
         }
+        if (kb::scene::UIDropdown* dropdown = ui.TryGet<kb::scene::UIDropdown>(entity)) {
+            bool relinked = false;
+            for (std::uint32_t option = 0U; option < dropdown->optionCount; ++option) {
+                const auto restored = restoredIds.find(dropdown->options[option].content);
+                if (dropdown->options[option].content != 0U && restored != restoredIds.end()) {
+                    dropdown->options[option].content = restored->second;
+                    relinked = true;
+                }
+            }
+            if (relinked) {
+                ui.MarkModified<kb::scene::UIDropdown>(entity);
+            }
+        }
         kb::scene::UISelectable* selectable = ui.TryGet<kb::scene::UISelectable>(entity);
         if (selectable == nullptr) {
             continue;

@@ -268,6 +268,14 @@ class FrameBuilder {
     }
 
   private:
+    struct DropdownArrangement {
+        SceneEntity canvas{};
+        float scale = 1.0F;
+        std::int32_t sortingOrder = 0;
+        bool pixelPerfect = false;
+        GroupState group{};
+    };
+
     // Returns the reason the entity cannot be laid out, or nullptr when it is sound. A bare
     // bool would force the caller to re-derive what went wrong, which is what made an invalid
     // widget indistinguishable from a renderer fault.
@@ -529,7 +537,7 @@ class FrameBuilder {
         element.canvas = canvas;
         element.canvasScale = scale;
         element.canvasSortingOrder = sortingOrder;
-        element.zOrder = transform->zOrder;
+        element.zOrder = transform->zOrder + zOrderBias_;
         element.traversalOrder = traversal_++;
         element.effectiveOpacity = ResolveVisibility(scene_, entity).visible ? group.opacity : 0.0F;
         element.rect = {rect.x * scale, rect.y * scale, rect.width * scale, rect.height * scale};
@@ -599,10 +607,11 @@ class FrameBuilder {
         const bool dropdownOpen = isDropdown && expandedDropdown_ == entity;
         frame_.elements.push_back(std::move(element));
         const std::size_t elementIndex = frame_.elements.size() - 1U;
+        const DropdownArrangement arrangement{canvas, scale, sortingOrder, pixelPerfect, group};
         if (isDropdown)
-            AppendDropdownCaptionAndArrow(elementIndex, rect, resolvedTransform);
+            AppendDropdownCaptionAndArrow(elementIndex, rect, resolvedTransform, arrangement);
         if (dropdownOpen)
-            AppendDropdownRows(elementIndex, rect, resolvedTransform);
+            AppendDropdownRows(elementIndex, rect, resolvedTransform, arrangement);
 
         Rect childClip = inheritedClip;
         std::vector<std::array<Vec2, 4U>> childClipQuads = inheritedClipQuads;
@@ -622,10 +631,13 @@ class FrameBuilder {
         std::vector<SceneEntity> managed;
         managed.reserve(count);
         const UIWidgetSwitcher* switcher = ui_.TryGet<UIWidgetSwitcher>(parent);
+        const UIDropdown* dropdown = ui_.TryGet<UIDropdown>(parent);
         for (std::size_t i = 0U; i < count; ++i) {
             if (switcher != nullptr && i != switcher->visibleChildIndex)
                 continue;
             const SceneEntity child = scene_.Hierarchy().ChildAt(parent, i);
+            if (dropdown != nullptr && IsDropdownOptionContent(*dropdown, child))
+                continue;
             const UILayoutElement* layout = ui_.TryGet<UILayoutElement>(child);
             if (scene_.Entities().IsActive(child) && ui_.Has<UIRectTransform>(child) &&
                 (layout == nullptr || !layout->ignoreLayout))
@@ -643,6 +655,8 @@ class FrameBuilder {
                 if (switcher != nullptr && i != switcher->visibleChildIndex)
                     continue;
                 const SceneEntity child = scene_.Hierarchy().ChildAt(parent, i);
+                if (dropdown != nullptr && IsDropdownOptionContent(*dropdown, child))
+                    continue;
                 const UILayoutElement* layout = ui_.TryGet<UILayoutElement>(child);
                 if (scene_.Entities().IsActive(child) && ui_.Has<UIRectTransform>(child) && layout != nullptr &&
                     layout->ignoreLayout)
@@ -819,6 +833,43 @@ class FrameBuilder {
         arrangeIgnored();
     }
 
+
+    // The option's content widget when it names a live, active child of the dropdown; anything else
+    // shows the option's text.
+    [[nodiscard]] SceneEntity OptionContent(SceneEntity dropdownEntity, const UIDropdownOption& option) const noexcept {
+        if (option.content == 0U)
+            return {};
+        const SceneEntity content{option.content};
+        return scene_.Entities().IsAlive(content) && scene_.Entities().IsActive(content) &&
+                       scene_.Hierarchy().Parent(content) == dropdownEntity && ui_.Has<UIRectTransform>(content)
+                   ? content
+                   : SceneEntity{};
+    }
+
+    [[nodiscard]] static bool IsDropdownOptionContent(const UIDropdown& dropdown, SceneEntity child) noexcept {
+        for (std::uint32_t option = 0U; option < dropdown.optionCount; ++option)
+            if (dropdown.options[option].content == child.Id())
+                return true;
+        return false;
+    }
+
+    [[nodiscard]] std::int32_t ZOrderOf(SceneEntity entity) const noexcept {
+        const UIRectTransform* transform = ui_.TryGet<UIRectTransform>(entity);
+        return transform != nullptr ? transform->zOrder : 0;
+    }
+
+    // Lays an option's content widget into `area`. It presents the option; the row or the control under
+    // it takes the input, so a button used as an option chooses the option instead of clicking itself.
+    void ArrangeOptionContent(SceneEntity content, Rect area, Rect clip,
+                              const std::vector<std::array<Vec2, 4U>>& clipQuads, const Affine2D& transform,
+                              const DropdownArrangement& arrangement) {
+        GroupState presented = arrangement.group;
+        presented.interactable = false;
+        presented.blocksRaycasts = false;
+        Arrange(content, area, clip, arrangement.canvas, arrangement.scale, arrangement.sortingOrder,
+                arrangement.pixelPerfect, presented, transform, clipQuads);
+    }
+
     // A part the dropdown draws for itself - caption, arrow - laid over `area` of the control. Parts are
     // extra elements of the control's entity with a negative part index; they draw but never take input.
     [[nodiscard]] static SceneUIFrameElement DropdownPart(const SceneUIFrameElement& control, Rect area,
@@ -846,7 +897,8 @@ class FrameBuilder {
     // the arrow, and the arrow itself: a triangle glyph from the dropdown's font, pointing down while
     // closed and up while the list is open. An author-added Text on the control lends its style to the
     // caption instead of drawing a second label.
-    void AppendDropdownCaptionAndArrow(std::size_t controlIndex, Rect rect, const Affine2D& transform) {
+    void AppendDropdownCaptionAndArrow(std::size_t controlIndex, Rect rect, const Affine2D& transform,
+                                       const DropdownArrangement& arrangement) {
         SceneUIFrameElement& owner = frame_.elements[controlIndex];
         const std::optional<UIText> authoredText = owner.text;
         owner.text.reset();
@@ -854,6 +906,14 @@ class FrameBuilder {
         const UIDropdown& dropdown = *control.dropdown;
         const float arrowWidth = std::min(rect.height, rect.width * 0.25F);
 
+        const Rect captionArea{rect.x + kUIDropdownLabelPadding, rect.y,
+                               std::max(0.0F, rect.width - kUIDropdownLabelPadding - arrowWidth), rect.height};
+        const SceneEntity selectedContent =
+            dropdown.selectedIndex < dropdown.optionCount
+                ? OptionContent(control.entity, dropdown.options[dropdown.selectedIndex])
+                : SceneEntity{};
+        if (selectedContent.IsValid())
+            ArrangeOptionContent(selectedContent, captionArea, control.clipRect, control.clipQuads, transform, arrangement);
         SceneUIFrameElement caption = DropdownPart(
             control,
             {rect.x + kUIDropdownLabelPadding, rect.y,
@@ -873,7 +933,8 @@ class FrameBuilder {
         }
         static_cast<void>(SetUITextContent(label, UIDropdownSelectedText(dropdown)));
         const UIText style = label;
-        frame_.elements.push_back(std::move(caption));
+        if (!selectedContent.IsValid())
+            frame_.elements.push_back(std::move(caption));
 
         if (arrowWidth <= 0.0F)
             return;
@@ -897,7 +958,8 @@ class FrameBuilder {
     // when it has one and the label. Rows are clipped to the visible window the author allowed and
     // sort above every sibling they cover. Only the background takes the pointer; it carries the
     // option index so input can tell which choice was hit.
-    void AppendDropdownRows(std::size_t controlIndex, Rect rect, const Affine2D& transform) {
+    void AppendDropdownRows(std::size_t controlIndex, Rect rect, const Affine2D& transform,
+                            const DropdownArrangement& arrangement) {
         const SceneUIFrameElement control = frame_.elements[controlIndex];
         const UIDropdown& dropdown = *control.dropdown;
         const std::size_t options = dropdown.optionCount;
@@ -959,6 +1021,13 @@ class FrameBuilder {
 
             Rect labelArea{area.x + kUIDropdownLabelPadding, area.y,
                            std::max(0.0F, area.width - kUIDropdownLabelPadding * 2.0F), area.height};
+            if (const SceneEntity content = OptionContent(control.entity, option); content.IsValid()) {
+                const std::int32_t previousBias = zOrderBias_;
+                zOrderBias_ = control.zOrder + kUIDropdownPopupZOrder + 1 - ZOrderOf(content);
+                ArrangeOptionContent(content, labelArea, popupClip, popupClipQuads, transform, arrangement);
+                zOrderBias_ = previousBias;
+                continue;
+            }
             if (option.iconAssetId != 0U) {
                 SceneUIFrameElement icon = base({area.x, area.y, rowHeight, rowHeight}, static_cast<std::int32_t>(index));
                 UIImage& image = icon.image.emplace();
@@ -997,6 +1066,9 @@ class FrameBuilder {
     SceneEntity expandedDropdown_{};
     std::uint32_t dropdownScrollIndex_ = 0U;
     std::uint32_t dropdownHighlightIndex_ = 0U;
+    // Added to every element laid out inside an open dropdown list, so an option's content widget sorts
+    // above the siblings the list covers. Restored when the row is done.
+    std::int32_t zOrderBias_ = 0;
     SceneUIFrame frame_;
     SceneUIFrameRefusal refusal_{};
     std::uint32_t traversal_ = 0U;
