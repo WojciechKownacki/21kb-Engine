@@ -123,7 +123,7 @@ private:
             theme,
             EditorDialogHeaderDescriptor{
                 .bounds = Rect(1, 3, client.right - 1, kHeaderHeight),
-                .closeButton = Rect(client.right - 36, 6, client.right - 14, 28),
+                .closeButton = CloseRect(),
                 .title = "Import Mesh",
                 .description = description,
                 .icon = HeroIconKind::DocumentText,
@@ -195,7 +195,7 @@ private:
 
     void OnClick(int x, int y) {
         const RECT client = Client();
-        if (Contains(Rect(client.right - 52, 6, client.right - 6, 52), x, y)) { Close(false); return; }
+        if (Contains(CloseRect(), x, y)) { Close(false); return; }
         if (materialSlotsAvailable_ && !importSkeletalMesh_ && Contains(MaterialSlotsRow(), x, y)) { importMaterialSlots_ = !importMaterialSlots_; InvalidateRect(window_, nullptr, FALSE); return; }
         if (skeletalImportAvailable_ && Contains(TexturesRow(), x, y)) {
             importTextures_ = !importTextures_;
@@ -217,6 +217,10 @@ private:
         if (skeletalImportAvailable_ && Contains(SkeletonRow(), x, y)) { importSkeletalMesh_ = !importSkeletalMesh_; InvalidateRect(window_, nullptr, FALSE); return; }
         if (Contains(Rect(client.right - 198, client.bottom - 27, client.right - 106, client.bottom - 3), x, y)) { Close(false); return; }
         if (Contains(Rect(client.right - 96, client.bottom - 27, client.right - 16, client.bottom - 3), x, y)) Close(true);
+    }
+    [[nodiscard]] RECT CloseRect() const noexcept {
+        const RECT client = Client();
+        return Rect(client.right - 36, 6, client.right - 14, 28);
     }
     void Close(bool accepted) noexcept { accepted_ = accepted; running_ = false; DestroyWindow(window_); }
     static LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {

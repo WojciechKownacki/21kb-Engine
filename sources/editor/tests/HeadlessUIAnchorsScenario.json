@@ -558,6 +558,9 @@
     },
     {
       "op": "stop"
+    },
+    {
+      "op": "assert_picker_close_buttons"
     }
   ]
 }

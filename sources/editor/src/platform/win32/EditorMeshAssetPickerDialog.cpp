@@ -1246,7 +1246,8 @@ private:
             } else if (Contains(CloseButton(), x, y)) {
                 next = -2;
             } else if (Contains(TextureSearchRect(), x, y)) {
-                next = -5;
+                // The search field is not a button; hovering it must not light up Clear (-5).
+                next = -6;
             } else {
                 next = TextureTileAt(x, y);
             }
@@ -1554,13 +1555,14 @@ private:
             if (picker != nullptr) {
                 const int x = GET_X_LPARAM(lparam);
                 const int y = GET_Y_LPARAM(lparam);
-                if (picker->textureThumbnails_) {
-                    picker->HandleTextureLeftButtonDown(x, y);
-                    return 0;
-                }
+                // The title-bar X closes every picker layout; the texture grid used to take the click first.
                 if (Contains(picker->CloseButton(), x, y)) {
                     picker->running_ = false;
                     DestroyWindow(window);
+                    return 0;
+                }
+                if (picker->textureThumbnails_) {
+                    picker->HandleTextureLeftButtonDown(x, y);
                     return 0;
                 }
                 if (picker->tileKind_ != AssetPickerTileKind::None) {

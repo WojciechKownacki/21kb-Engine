@@ -712,6 +712,9 @@ ReadScriptValue(
     if (*operation == "assert_ui_graphics") {
         return {state.automation.VerifyUIGraphics(), "Native image picker and GPU pixels for Image, Raw Image and Sprite"};
     }
+    if (*operation == "assert_picker_close_buttons") {
+        return {state.automation.VerifyPickerCloseButtons(), "Asset picker title-bar X closes texture and list pickers"};
+    }
     if (*operation == "assert_ui_dropdown_options") {
         return {state.automation.VerifyUIDropdownOptions(),
             "Dropdown option list: Inspector buttons, add, rename, move, remove, undo/redo, caption, font"};

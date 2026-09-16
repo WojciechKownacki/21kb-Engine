@@ -3065,6 +3065,26 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
                     sceneContext.Scene().Components().VisibilityCells().Remove(entity);
                     static_cast<void>(sceneContext.CommitSceneEditTransaction());
                 }
+            } else if (hit.section == InspectorSectionId::RegionShape && sceneContext.Scene().Components().RegionShapes().Has(entity)) {
+                if (sceneContext.BeginSceneEditTransaction("Remove Region Shape")) {
+                    sceneContext.Scene().Components().RegionShapes().Remove(entity);
+                    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+                }
+            } else if (hit.section == InspectorSectionId::GuideCurve && sceneContext.Scene().Components().GuideCurves().Has(entity)) {
+                if (sceneContext.BeginSceneEditTransaction("Remove Guide Curve")) {
+                    sceneContext.Scene().Components().GuideCurves().Remove(entity);
+                    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+                }
+            } else if (hit.section == InspectorSectionId::ContentInstance && sceneContext.Scene().Components().ContentInstances().Has(entity)) {
+                if (sceneContext.BeginSceneEditTransaction("Remove Content Instance")) {
+                    sceneContext.Scene().Components().ContentInstances().Remove(entity);
+                    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+                }
+            } else if (hit.section == InspectorSectionId::StreamFocus && sceneContext.Scene().Components().StreamFocuses().Has(entity)) {
+                if (sceneContext.BeginSceneEditTransaction("Remove Stream Focus")) {
+                    sceneContext.Scene().Components().StreamFocuses().Remove(entity);
+                    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+                }
             } else if (hit.section == InspectorSectionId::RegionPortal && sceneContext.Scene().Components().RegionPortals().Has(entity)) {
                 if (sceneContext.BeginSceneEditTransaction("Remove Region Portal")) {
                     sceneContext.Scene().Components().RegionPortals().Remove(entity);
