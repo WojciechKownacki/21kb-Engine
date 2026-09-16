@@ -9,6 +9,8 @@
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneObject.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/ScenePrefabInstance.hpp"
+#include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneUI.hpp"
 #include "engine/scene/SceneUIComponentSet.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
@@ -872,6 +874,70 @@ void TestControllerNavigation() {
         "The scrolled-to row must be targetable where it is drawn");
 }
 
+// Explicit navigation links name other widgets. Every path that recreates a hierarchy - saving and
+// loading a scene, an editor undo snapshot, a packaged game, a prefab placed twice - hands out new
+// entity ids, so a link has to follow its target into the new copy rather than keep the old number.
+void TestNavigationLinksSurviveHierarchyCopies() {
+    kb::scene::Scene scene{kb::scene::SceneMode::PrefabPrivate};
+    const kb::scene::SceneObject canvas = AddUI(scene, {}, CanvasComponents());
+    kb::scene::UIComponentSet play = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Button);
+    play.rectTransform = Rect(0.0F, 0.0F, 100.0F, 20.0F);
+    const kb::scene::SceneObject playButton = AddUI(scene, canvas, play);
+    play.rectTransform = Rect(0.0F, 100.0F, 100.0F, 20.0F);
+    const kb::scene::SceneObject quitButton = AddUI(scene, canvas, play);
+    kb::scene::UISelectable* playSelectable = scene.Components().UI().TryGet<kb::scene::UISelectable>(playButton.Entity());
+    playSelectable->navigationMode = kb::scene::UINavigationMode::Explicit;
+    playSelectable->navigationDown = quitButton.Entity().Id();
+    scene.Components().UI().MarkModified<kb::scene::UISelectable>(playButton.Entity());
+
+    const kb::scene::ScenePrefab captured = scene.Prefabs().Capture(canvas);
+    kb::scene::ScenePrefabInstance first = scene.Prefabs().Instantiate(captured);
+    kb::scene::ScenePrefabInstance second = scene.Prefabs().Instantiate(captured);
+    kb::tests::Require(first.ObjectCount() == 3U && second.ObjectCount() == 3U, "The menu prefab must instantiate twice");
+    for (const kb::scene::ScenePrefabInstance* instance : {&first, &second}) {
+        const kb::scene::SceneEntity copiedPlay = instance->ObjectAt(1U).Entity();
+        const kb::scene::SceneEntity copiedQuit = instance->ObjectAt(2U).Entity();
+        const kb::scene::UISelectable* copied = scene.Components().UI().TryGet<kb::scene::UISelectable>(copiedPlay);
+        kb::tests::Require(copied != nullptr && copied->navigationDown == copiedQuit.Id(),
+            "A copied navigation link must point at the copy of its target in the same instance");
+    }
+
+    // Driven through the runtime: the explicit link, not geometry, decides where focus goes.
+    kb::scene::Scene runtime{kb::scene::SceneMode::PrefabPrivate};
+    kb::scene::ScenePrefabInstance menu = runtime.Prefabs().Instantiate(captured);
+    kb::scene::SceneUIInput input;
+    kb::tests::Require(runtime.UI().Update(400.0F, 400.0F, input, 0.016F), "Copied menu must build");
+    kb::tests::Require(runtime.UI().SetFocus(menu.ObjectAt(1U).Entity()), "Copied play button must take focus");
+    input.navigateDown = true;
+    static_cast<void>(runtime.UI().Update(400.0F, 400.0F, input, 0.016F));
+    kb::tests::Require(runtime.UI().Focused() == menu.ObjectAt(2U).Entity(),
+        "Navigating from a copied widget must follow its explicit link to the copied target");
+
+    // A link whose target was deleted is kept as data but never followed: explicit means explicit, so
+    // focus stays put instead of guessing a neighbour.
+    input.navigateDown = false;
+    static_cast<void>(runtime.UI().Update(400.0F, 400.0F, input, 0.016F));
+    kb::tests::Require(runtime.UI().SetFocus(menu.ObjectAt(1U).Entity()), "Play button must take focus again");
+    runtime.Entities().Destroy(menu.ObjectAt(2U));
+    input.navigateDown = true;
+    static_cast<void>(runtime.UI().Update(400.0F, 400.0F, input, 0.016F));
+    kb::tests::Require(runtime.UI().Focused() == menu.ObjectAt(1U).Entity(),
+        "An explicit link to a deleted widget must leave focus where it is");
+
+    // v34 files wrote live ids; they are not reinterpreted as stable node ids.
+    std::vector<std::uint8_t> bytes;
+    kb::scene::UIComponentSet legacy;
+    legacy.rectTransform.emplace();
+    legacy.selectable.emplace();
+    legacy.selectable->navigationDown = 12345U;
+    kb::scene::SceneAssetUIComponentCodec::Write(bytes, legacy);
+    kb::scene::SceneAssetBinaryIO::ByteReader reader{bytes};
+    kb::scene::UIComponentSet decoded;
+    kb::tests::Require(kb::scene::SceneAssetUIComponentCodec::Read(reader, 34U, decoded) &&
+        decoded.selectable->navigationDown == 0U,
+        "A v34 navigation link written as a live entity id must load as no link");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -885,6 +951,7 @@ void RunSceneUITests() {
     TestInteractionAndEditing();
     TestDropdownList();
     TestDropdownPersistenceCompatibility();
+    TestNavigationLinksSurviveHierarchyCopies();
     TestProgressAndEventQueue();
     TestAutomaticRuntimeInput();
     TestControllerNavigation();

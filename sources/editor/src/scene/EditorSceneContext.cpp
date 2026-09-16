@@ -4214,6 +4214,16 @@ bool EditorSceneContext::SetUIComponentProperty(
             console_.Warning("Inspector", "UI entity property references an unknown entity.");
             return false;
         }
+        // Every entity-valued UI property is a navigation link, and a link can only land on a widget
+        // that takes focus - anything else would be accepted here and then silently never followed.
+        if (id != 0U && id == entity.Id()) {
+            console_.Warning("Inspector", "A navigation link cannot point at the widget it starts from.");
+            return false;
+        }
+        if (id != 0U && !scene_->Components().UI().Has<kb::scene::UISelectable>(kb::scene::SceneEntity{ id })) {
+            console_.Warning("Inspector", "A navigation link must point at a widget with a Selectable component.");
+            return false;
+        }
     }
 
     kb::scene::UIComponentSet candidate =

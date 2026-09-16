@@ -192,6 +192,9 @@
     {
       "op": "assert_ui_catalog",
       "component": "Widget Switcher"
+    },
+    {
+      "op": "assert_ui_navigation_links"
     }
   ]
 }

@@ -3,6 +3,8 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneUIComponentSet.hpp"
 #include "engine/ui/UIComponentValidation.hpp"
 
@@ -308,6 +310,38 @@ std::optional<kb::scene::UIComponentType> InspectorUIComponentModel::Component(
         ? std::optional<kb::scene::UIComponentType>{
               static_cast<kb::scene::UIComponentType>(value - first) }
         : std::nullopt;
+}
+
+std::string InspectorUIComponentModel::EntityReferenceLabel(const kb::scene::Scene& scene, std::uint64_t id) {
+    if (id == 0U) return "(none)";
+    const kb::scene::SceneEntity entity{ id };
+    if (!scene.Entities().IsAlive(entity)) return "(missing object #" + std::to_string(id) + ")";
+    std::string name = scene.Entities().Name(entity);
+    if (!scene.Components().UI().Has<kb::scene::UISelectable>(entity)) return name + " (not selectable)";
+    return name;
+}
+
+std::vector<kb::scene::SceneEntity> InspectorUIComponentModel::NavigationTargets(
+    const kb::scene::Scene& scene, kb::scene::SceneEntity source) {
+    std::vector<kb::scene::SceneEntity> output;
+    const std::vector<kb::scene::SceneEntity> roots = scene.Hierarchy().RootEntities();
+    std::vector<kb::scene::SceneEntity> pending(roots.rbegin(), roots.rend());
+    while (!pending.empty()) {
+        const kb::scene::SceneEntity entity = pending.back();
+        pending.pop_back();
+        if (entity != source && scene.Components().UI().Has<kb::scene::UISelectable>(entity))
+            output.push_back(entity);
+        for (std::size_t index = scene.Hierarchy().ChildCount(entity); index > 0U; --index)
+            pending.push_back(scene.Hierarchy().ChildAt(entity, index - 1U));
+    }
+    return output;
+}
+
+std::string InspectorUIComponentModel::HierarchyPath(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) {
+    std::string path = scene.Entities().Name(entity);
+    for (auto parent = scene.Hierarchy().Parent(entity); parent.IsValid(); parent = scene.Hierarchy().Parent(parent))
+        path = scene.Entities().Name(parent) + " / " + path;
+    return path;
 }
 
 std::optional<kb::scene::UIComponentPropertyValue> InspectorUIComponentModel::Parse(

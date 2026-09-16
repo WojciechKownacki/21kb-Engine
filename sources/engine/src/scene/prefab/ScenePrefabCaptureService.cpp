@@ -51,6 +51,19 @@ void ResolveEntityReferences(ScenePrefab& prefab, std::span<const SceneEntity> c
                 echo.sourceNodeStableId = source == stableNodeIds.end() ? ScenePrefabLensEchoComponent::UnresolvedSourceNodeStableId : source->second;
             }
         }
+        // UI navigation links hold live entity ids, which a reload, an undo snapshot or a packaged
+        // scene all hand out afresh. Persist them as the target's stable node id instead. A target
+        // outside what is being captured cannot be expressed by this prefab, so that link is dropped
+        // rather than kept as an id that would later name an unrelated object.
+        if (node->components.ui.selectable.has_value()) {
+            UISelectable& selectable = *node->components.ui.selectable;
+            for (std::uint64_t* link : { &selectable.navigationUp, &selectable.navigationDown,
+                     &selectable.navigationLeft, &selectable.navigationRight }) {
+                if (*link == 0U) continue;
+                const auto target = stableNodeIds.find(*link);
+                *link = target == stableNodeIds.end() ? 0U : target->second;
+            }
+        }
     }
 }
 

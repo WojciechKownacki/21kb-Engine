@@ -1,13 +1,16 @@
 #include "scene/EditorSceneObjectEditCommands.hpp"
 
+#include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
+#include "engine/scene/SceneUIComponentSet.hpp"
 #include "scene/EditorSceneContext.hpp"
 #include "scene/transform_edit/EditorSceneTransformEquality.hpp"
 
+#include <unordered_map>
 #include <algorithm>
 #include <utility>
 
@@ -30,6 +33,39 @@ namespace {
     return scene.Entities().Object(parent);
 }
 
+// Objects outside a restored subtree may link to it by entity id. Those ids died with the deleted
+// objects; point every such UI navigation link at the object that now stands in its place.
+void RelinkNavigation(kb::scene::Scene& scene, const std::unordered_map<std::uint64_t, std::uint64_t>& restoredIds) {
+    if (restoredIds.empty()) {
+        return;
+    }
+    kb::scene::SceneUIComponents ui = scene.Components().UI();
+    std::vector<kb::scene::SceneEntity> pending = scene.Hierarchy().RootEntities();
+    while (!pending.empty()) {
+        const kb::scene::SceneEntity entity = pending.back();
+        pending.pop_back();
+        for (std::size_t index = 0U; index < scene.Hierarchy().ChildCount(entity); ++index) {
+            pending.push_back(scene.Hierarchy().ChildAt(entity, index));
+        }
+        kb::scene::UISelectable* selectable = ui.TryGet<kb::scene::UISelectable>(entity);
+        if (selectable == nullptr) {
+            continue;
+        }
+        bool changed = false;
+        for (std::uint64_t* link : { &selectable->navigationUp, &selectable->navigationDown,
+                 &selectable->navigationLeft, &selectable->navigationRight }) {
+            const auto restored = restoredIds.find(*link);
+            if (*link != 0U && restored != restoredIds.end()) {
+                *link = restored->second;
+                changed = true;
+            }
+        }
+        if (changed) {
+            ui.MarkModified<kb::scene::UISelectable>(entity);
+        }
+    }
+}
+
 } // namespace
 
 std::vector<EditorSceneObjectPrefabPayload> EditorSceneObjectPayloadBuilder::Capture(
@@ -49,10 +85,24 @@ std::vector<EditorSceneObjectPrefabPayload> EditorSceneObjectPayloadBuilder::Cap
             continue;
         }
 
-        payloads.push_back(EditorSceneObjectPrefabPayload{
+        EditorSceneObjectPrefabPayload payload{
             .prefab = scene.Prefabs().Capture(object),
             .parent = scene.Hierarchy().Parent(entity),
-        });
+        };
+        // Capture walks the subtree depth-first in child order; the same walk gives node order.
+        std::vector<kb::scene::SceneEntity> pending{ entity };
+        while (!pending.empty()) {
+            const kb::scene::SceneEntity current = pending.back();
+            pending.pop_back();
+            payload.capturedEntities.push_back(current);
+            for (std::size_t index = scene.Hierarchy().ChildCount(current); index > 0U; --index) {
+                pending.push_back(scene.Hierarchy().ChildAt(current, index - 1U));
+            }
+        }
+        if (payload.capturedEntities.size() != payload.prefab.NodeCount()) {
+            payload.capturedEntities.clear();
+        }
+        payloads.push_back(std::move(payload));
     }
     return payloads;
 }
@@ -267,7 +317,8 @@ bool EditorScenePrefabRemoveCommand::RestorePayloads() {
     kb::scene::Scene& scene = context_.Scene();
     currentEntities_.clear();
     currentEntities_.reserve(payloads_.size());
-    for (const EditorSceneObjectPrefabPayload& payload : payloads_) {
+    std::unordered_map<std::uint64_t, std::uint64_t> restoredIds;
+    for (EditorSceneObjectPrefabPayload& payload : payloads_) {
         kb::scene::SceneObject parent = AliveParentObject(scene, payload.parent);
         const kb::scene::ScenePrefabInstance instance = scene.Prefabs().Instantiate(
             payload.prefab,
@@ -275,7 +326,15 @@ bool EditorScenePrefabRemoveCommand::RestorePayloads() {
         if (!instance.Empty() && instance.RootObject().IsValid()) {
             currentEntities_.push_back(instance.RootObject().Entity());
         }
+        if (instance.ObjectCount() == payload.capturedEntities.size()) {
+            for (std::size_t index = 0U; index < payload.capturedEntities.size(); ++index) {
+                const kb::scene::SceneEntity restored = instance.ObjectAt(static_cast<std::uint32_t>(index)).Entity();
+                restoredIds.emplace(payload.capturedEntities[index].Id(), restored.Id());
+                payload.capturedEntities[index] = restored;
+            }
+        }
     }
+    RelinkNavigation(scene, restoredIds);
 
     if (currentEntities_.empty()) {
         return false;

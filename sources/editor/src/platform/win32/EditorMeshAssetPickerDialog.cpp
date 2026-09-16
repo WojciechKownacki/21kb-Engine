@@ -34,6 +34,7 @@
 #include "scene/EditorSceneContext.hpp"
 #include "scene/EditorSceneMaterialAssetActions.hpp"
 #include "scene/EditorSceneMeshAssetActions.hpp"
+#include "inspection/ui/InspectorUIComponentModel.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -1892,6 +1893,23 @@ EditorTextureAssetPickerDialog::Result EditorUIAssetPickerDialog::Show(
         "Choose a font asset from this project.", "Clear font selection", HeroIconKind::RectangleGroup};
     const auto result = window.Show(owner, options);
     return {.accepted = result.accepted, .assetId = result.assetId};
+}
+
+EditorUIEntityPickerDialog::Result EditorUIEntityPickerDialog::Show(
+    HWND owner, const EditorTheme& theme, const EditorSceneContext& sceneContext,
+    kb::scene::SceneEntity source, kb::scene::SceneEntity current, const EditorAssetPickerWindowOptions& options) {
+    const kb::scene::Scene& scene = sceneContext.Scene();
+    // The picker rows are keyed by a 64-bit id; a scene entity id fits that slot exactly and 0 stays
+    // the "nothing selected" value Clear returns.
+    std::vector<AssetPickerRow> rows;
+    for (const kb::scene::SceneEntity target : InspectorUIComponentModel::NavigationTargets(scene, source)) {
+        rows.push_back({kb::assets::AssetId{target.Id()}, scene.Entities().Name(target),
+            InspectorUIComponentModel::HierarchyPath(scene, target)});
+    }
+    AssetPickerWindow window{theme, std::move(rows), kb::assets::AssetId{current.Id()}, "Select Navigation Target",
+        "Choose the widget focus moves to in this direction.", "Clear navigation link", HeroIconKind::RectangleGroup};
+    const AssetPickerResult result = window.Show(owner, options);
+    return {.accepted = result.accepted, .entity = kb::scene::SceneEntity{result.assetId.value}};
 }
 
 } // namespace kb::editor
