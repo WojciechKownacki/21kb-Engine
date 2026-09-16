@@ -35,11 +35,7 @@ static_assert(static_cast<std::uint16_t>(InspectorPropertyId::UIWidgetSwitcherFi
     if (name == "spriteAssetId") return "Sprite";
     if (name == "content") return "Text";
     if (name == "optionCount") return "Option Count";
-    if (name == "maxVisibleOptions") return "Visible Rows";
-    if (name == "textColor") return "Text";
-    if (name == "itemColor") return "Row";
-    if (name == "itemHighlightedColor") return "Row Hovered";
-    if (name == "itemSelectedColor") return "Row Selected";
+    if (name == "templateEntity") return "Template";
     // "options.3.text" -> "Option 4", "options.3.icon" -> "Option 4 Icon": the list reads as numbered
     // choices rather than as indexed fields.
     if (name.starts_with("options.")) {
@@ -329,12 +325,13 @@ std::optional<kb::scene::UIComponentType> InspectorUIComponentModel::Component(
         : std::nullopt;
 }
 
-std::string InspectorUIComponentModel::EntityReferenceLabel(const kb::scene::Scene& scene, std::uint64_t id) {
+std::string InspectorUIComponentModel::EntityReferenceLabel(const kb::scene::Scene& scene, std::uint64_t id,
+    bool requireSelectable) {
     if (id == 0U) return "(none)";
     const kb::scene::SceneEntity entity{ id };
     if (!scene.Entities().IsAlive(entity)) return "(missing object #" + std::to_string(id) + ")";
     std::string name = scene.Entities().Name(entity);
-    if (!scene.Components().UI().Has<kb::scene::UISelectable>(entity)) return name + " (not selectable)";
+    if (requireSelectable && !scene.Components().UI().Has<kb::scene::UISelectable>(entity)) return name + " (not selectable)";
     return name;
 }
 
@@ -354,26 +351,60 @@ std::vector<kb::scene::SceneEntity> InspectorUIComponentModel::NavigationTargets
     return output;
 }
 
-std::span<const InspectorUIComponentModel::DropdownOptionType> InspectorUIComponentModel::DropdownOptionTypes() noexcept {
-    using enum kb::scene::UIComponentType;
-    static constexpr std::array<DropdownOptionType, 8> kTypes{{
-        {"Text", std::nullopt}, {"Button", Button}, {"Image", Image}, {"Toggle", Toggle},
-        {"Slider", Slider}, {"Input Field", InputField}, {"Progress Bar", ProgressBar}, {"Border", Border},
-    }};
-    return kTypes;
-}
-
-std::string_view InspectorUIComponentModel::DropdownOptionKind(
-    const kb::scene::Scene& scene, kb::scene::SceneEntity dropdown, std::uint64_t content) {
-    if (content == 0U) return "Text";
-    const kb::scene::SceneEntity entity{ content };
-    if (!scene.Entities().IsAlive(entity) || scene.Hierarchy().Parent(entity) != dropdown) return "Missing";
-    const kb::scene::UIComponentSet values = kb::scene::CaptureSceneUIComponents(scene.Components().UI(), entity);
-    using enum kb::scene::UIComponentType;
-    for (const auto type : { Button, Toggle, Slider, InputField, ProgressBar, Image, RawImage, Sprite, Text, Border }) {
-        if (kb::scene::HasUIComponent(values, type)) return kb::scene::FindUIComponentDescriptor(type)->displayName;
+InspectorUIComponentModel::ReferenceChoice InspectorUIComponentModel::ReferenceTargets(
+    const kb::scene::Scene& scene, kb::scene::SceneEntity source, kb::scene::UIComponentType component, std::string_view property) {
+    ReferenceChoice choice;
+    const auto ui = scene.Components().UI();
+    const auto collect = [&](kb::scene::SceneEntity root, bool includeRoot, auto&& accept) {
+        std::vector<kb::scene::SceneEntity> pending;
+        if (root.IsValid()) pending.push_back(root);
+        else {
+            const std::vector<kb::scene::SceneEntity> roots = scene.Hierarchy().RootEntities();
+            pending.assign(roots.rbegin(), roots.rend());
+        }
+        while (!pending.empty()) {
+            const kb::scene::SceneEntity entity = pending.back();
+            pending.pop_back();
+            if ((includeRoot || entity != root) && entity != source && accept(entity)) choice.targets.push_back(entity);
+            for (std::size_t index = scene.Hierarchy().ChildCount(entity); index > 0U; --index)
+                pending.push_back(scene.Hierarchy().ChildAt(entity, index - 1U));
+        }
+    };
+    const auto draws = [&ui](kb::scene::SceneEntity entity) {
+        return ui.Has<kb::scene::UIImage>(entity) || ui.Has<kb::scene::UIRawImage>(entity) || ui.Has<kb::scene::UISprite>(entity) ||
+            ui.Has<kb::scene::UIText>(entity) || ui.Has<kb::scene::UIBorder>(entity);
+    };
+    if (property.starts_with("navigation")) {
+        choice.targets = NavigationTargets(scene, source);
+        choice.title = "Select Navigation Target";
+        choice.description = "Choose the widget focus moves to in this direction.";
+    } else if (component == kb::scene::UIComponentType::Dropdown && property == "templateEntity") {
+        for (std::size_t index = 0U; index < scene.Hierarchy().ChildCount(source); ++index) {
+            const kb::scene::SceneEntity child = scene.Hierarchy().ChildAt(source, index);
+            if (ui.Has<kb::scene::UIRectTransform>(child)) choice.targets.push_back(child);
+        }
+        choice.title = "Select Template";
+        choice.description = "Choose the child object cloned as the open list.";
+    } else if (component == kb::scene::UIComponentType::Dropdown && (property == "captionText" || property == "itemText")) {
+        collect(source, false, [&ui](kb::scene::SceneEntity entity) { return ui.Has<kb::scene::UIText>(entity); });
+        choice.title = property == "captionText" ? "Select Caption Text" : "Select Item Text";
+        choice.description = property == "captionText" ? "Choose the Text that shows the chosen option."
+                                                       : "Choose the Text inside the template's item that shows each option.";
+    } else if (component == kb::scene::UIComponentType::Dropdown && (property == "captionImage" || property == "itemImage")) {
+        collect(source, false, [&ui](kb::scene::SceneEntity entity) { return ui.Has<kb::scene::UIImage>(entity); });
+        choice.title = property == "captionImage" ? "Select Caption Image" : "Select Item Image";
+        choice.description = property == "captionImage" ? "Choose the Image that shows the chosen option's image."
+                                                        : "Choose the Image inside the template's item that shows each option's image.";
+    } else if (component == kb::scene::UIComponentType::ScrollView) {
+        collect({}, true, [&ui](kb::scene::SceneEntity entity) { return ui.Has<kb::scene::UIScrollbar>(entity); });
+        choice.title = "Select Scrollbar";
+        choice.description = "Choose the scrollbar that follows this scroll view.";
+    } else {
+        collect({}, true, draws);
+        choice.title = "Select Graphic";
+        choice.description = "Choose the widget that shows this state.";
     }
-    return "Widget";
+    return choice;
 }
 
 std::string InspectorUIComponentModel::HierarchyPath(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) {

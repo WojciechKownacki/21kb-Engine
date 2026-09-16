@@ -550,10 +550,10 @@ enum class InspectorPropertyId : std::uint16_t {
     UIAnchorPreset,
     UIRectAdvanced,
     UIRectLayoutField,
-    UIDropdownAddOption,
-    UIDropdownSelectOption,
-    UIDropdownOptionMenu,
-    UIDropdownEditContent,
+    UIDropdownOptionAdd,
+    UIDropdownOptionRemove,
+    UIDropdownOptionSelect,
+    UIDropdownOptionHandle,
 };
 
 struct InspectorDynamicRowIdentity {
@@ -712,7 +712,26 @@ struct InspectorPanelState {
     void DragScrollbar(int y, int trackPixels, int maxOffset) noexcept;
     void EndScrollbarDrag() noexcept;
 
+    // The Options list of the Dropdown section: the element picked for removal, and an element being dragged
+    // to a new position by its handle.
+    [[nodiscard]] int DropdownSelectedOption() const noexcept { return dropdownSelectedOption_; }
+    void SetDropdownSelectedOption(int option) noexcept { dropdownSelectedOption_ = option; }
+    [[nodiscard]] bool IsDraggingDropdownOption() const noexcept { return dropdownDraggedOption_ >= 0; }
+    [[nodiscard]] int DraggedDropdownOption() const noexcept { return dropdownDraggedOption_; }
+    [[nodiscard]] int DropdownOptionDragOffset() const noexcept { return dropdownDragY_ - dropdownDragStartY_; }
+    void BeginDropdownOptionDrag(int option, int y) noexcept {
+        dropdownDraggedOption_ = option;
+        dropdownDragStartY_ = y;
+        dropdownDragY_ = y;
+    }
+    void UpdateDropdownOptionDrag(int y) noexcept { dropdownDragY_ = y; }
+    void EndDropdownOptionDrag() noexcept { dropdownDraggedOption_ = -1; }
+
 private:
+    int dropdownSelectedOption_ = -1;
+    int dropdownDraggedOption_ = -1;
+    int dropdownDragStartY_ = 0;
+    int dropdownDragY_ = 0;
     // Every section that is currently collapsed. A set (rather than one bool per
     // section) so any InspectorSectionId — including the physics component
     // sections — collapses without extending a hand-maintained switch.

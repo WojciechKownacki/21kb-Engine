@@ -39,7 +39,9 @@ struct SceneDocument {
     //      as stable node ids.
     // v36: UIDropdown owns its options and row style; older child-object options are converted on load.
     // v37: a dropdown option can show a child widget; the link persists as a stable node id.
-    static constexpr std::uint32_t CurrentFileVersion = 37U;
+    // v38: UIDropdown points at its template, caption and item widgets; UIToggle persists its on-state
+    //      graphic, UISelectable its target graphic and UIScrollView its vertical scrollbar.
+    static constexpr std::uint32_t CurrentFileVersion = 38U;
 
     std::uint32_t fileVersion = CurrentFileVersion;
     std::string guid;

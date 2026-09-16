@@ -1899,17 +1899,20 @@ EditorTextureAssetPickerDialog::Result EditorUIAssetPickerDialog::Show(
 
 EditorUIEntityPickerDialog::Result EditorUIEntityPickerDialog::Show(
     HWND owner, const EditorTheme& theme, const EditorSceneContext& sceneContext,
-    kb::scene::SceneEntity source, kb::scene::SceneEntity current, const EditorAssetPickerWindowOptions& options) {
+    kb::scene::SceneEntity source, kb::scene::UIComponentType component, std::string_view property,
+    kb::scene::SceneEntity current, const EditorAssetPickerWindowOptions& options) {
     const kb::scene::Scene& scene = sceneContext.Scene();
+    const InspectorUIComponentModel::ReferenceChoice choice =
+        InspectorUIComponentModel::ReferenceTargets(scene, source, component, property);
     // The picker rows are keyed by a 64-bit id; a scene entity id fits that slot exactly and 0 stays
     // the "nothing selected" value Clear returns.
     std::vector<AssetPickerRow> rows;
-    for (const kb::scene::SceneEntity target : InspectorUIComponentModel::NavigationTargets(scene, source)) {
+    for (const kb::scene::SceneEntity target : choice.targets) {
         rows.push_back({kb::assets::AssetId{target.Id()}, scene.Entities().Name(target),
             InspectorUIComponentModel::HierarchyPath(scene, target)});
     }
-    AssetPickerWindow window{theme, std::move(rows), kb::assets::AssetId{current.Id()}, "Select Navigation Target",
-        "Choose the widget focus moves to in this direction.", "Clear navigation link", HeroIconKind::RectangleGroup};
+    AssetPickerWindow window{theme, std::move(rows), kb::assets::AssetId{current.Id()}, choice.title,
+        choice.description, "Clear reference", HeroIconKind::RectangleGroup};
     const AssetPickerResult result = window.Show(owner, options);
     return {.accepted = result.accepted, .entity = kb::scene::SceneEntity{result.assetId.value}};
 }

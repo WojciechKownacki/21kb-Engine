@@ -1775,6 +1775,29 @@ ReadScriptValue(
         return { true, *alias + '=' + std::to_string(entity.Id()) };
     }
 
+    if (*operation == "create_ui_object") {
+        // Creates a UI widget the way the Create menu does, including the hierarchy a widget such as a
+        // Dropdown is built from.
+        const auto alias = StringMember(step, "id", error);
+        const auto type = StringMember(step, "type", error);
+        const auto parentAlias = StringMember(step, "parent", error, false);
+        if (!alias || !type) return { false, error };
+        if (state.entities.contains(*alias)) return { false, "entity alias already exists" };
+        const kb::scene::UIComponentDescriptor* descriptor = kb::scene::FindUIComponentDescriptor(*type);
+        if (descriptor == nullptr) return { false, "unknown UI component type" };
+        kb::scene::SceneEntity parent{};
+        if (parentAlias.has_value()) {
+            parent = ResolveEntity(state, *parentAlias);
+            if (!parent.IsValid()) return { false, "parent alias could not be resolved" };
+        }
+        const kb::scene::SceneEntity entity = state.context.CreateUIObject(descriptor->type, parent);
+        if (!entity.IsValid()) return { false, "UI object creation failed" };
+        const std::string name = *alias;
+        state.context.Scene().Entities().SetName(entity, name);
+        state.entities.emplace(*alias, EntityAlias{ .entity = entity, .name = name });
+        return { true, *alias + '=' + std::to_string(entity.Id()) };
+    }
+
     if (*operation == "create_mesh_entity") {
         const auto alias = StringMember(step, "id", error);
         const auto asset = StringMember(step, "asset", error);

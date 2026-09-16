@@ -721,15 +721,19 @@ public:
     kb::math::Vec2 uiScrollVelocity{};
     kb::math::Vec2 uiViewportSize{};
     std::size_t uiTextCursorByteOffset = 0U;
-    // The dropdown whose option list is open, and the first option row that list draws. Both are
-    // runtime state, not authored state: a scene saved while a popup happened to be open must not
-    // reopen it on load, so neither belongs in UIDropdown.
-    SceneEntity uiExpandedDropdown{};
-    std::uint32_t uiDropdownScrollIndex = 0U;
-    // The row of the open list that navigation and the pointer point at, and the row a press began on
-    // (-1 when it began anywhere else), so a release only selects the row it was pressed on.
-    std::uint32_t uiDropdownHighlightIndex = 0U;
-    std::int32_t uiPressedDropdownOption = -1;
+    // The dropdown list that is open or fading out: the dropdown it belongs to, the cloned list, the
+    // full-screen blocker under it, one cloned item per option in option order, and its fade.
+    struct UIDropdownList {
+        SceneEntity dropdown{};
+        SceneEntity list{};
+        SceneEntity blocker{};
+        std::vector<SceneEntity> items;
+        float alpha = 0.0F;
+        bool closing = false;
+    };
+    std::optional<UIDropdownList> uiDropdownList;
+    // A widget to focus once the next frame has laid it out.
+    SceneEntity uiPendingFocus{};
     // The navigation direction being held and the time left until it repeats. A pad or arrow key
     // held on a long list keeps stepping instead of moving exactly once per press.
     kb::math::Vec2 uiNavigationHeldDirection{};

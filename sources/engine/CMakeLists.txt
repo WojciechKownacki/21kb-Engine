@@ -759,6 +759,7 @@ add_library(kb_engine STATIC
     src/scene/components/SceneUIComponents.cpp
     src/scene/components/SceneUIComponentSet.cpp
     src/scene/SceneUI.cpp
+    src/scene/ui/SceneUIHierarchyPresets.cpp
     src/ui/UIComponentValidation.cpp
     src/ui/UIComponentCatalog.cpp
     src/ui/UIComponentPropertyCatalog.cpp

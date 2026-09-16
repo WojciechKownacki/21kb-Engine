@@ -17,7 +17,7 @@ enum class UINavigationMode : std::uint8_t {
 
 struct UISelectable {
     static constexpr std::string_view StableId = "kb21.ui.selectable";
-    static constexpr std::uint32_t SchemaVersion = 1U;
+    static constexpr std::uint32_t SchemaVersion = 2U;
     static constexpr std::size_t MaxEventNameBytes = 64U;
 
     bool raycastTarget = true;
@@ -34,6 +34,9 @@ struct UISelectable {
     kb::math::Color selectedColor{0.82F, 0.86F, 1.0F, 1.0F};
     kb::math::Color disabledColor{0.52F, 0.52F, 0.52F, 0.5F};
     float colorFadeSeconds = 0.1F;
+    // The widget that shows this selectable's state colours. With none, the selectable's own graphics are
+    // tinted.
+    std::uint64_t targetGraphic = 0U;
 };
 
 [[nodiscard]] inline std::string_view UIEventName(const UISelectable& value) noexcept {

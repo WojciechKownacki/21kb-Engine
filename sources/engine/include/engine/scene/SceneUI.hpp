@@ -111,14 +111,6 @@ struct SceneUIFrameElement {
     // shipped text field looked inert.
     std::uint32_t textCaretByteOffset = 0U;
     bool textCaretVisible = false;
-    // -1 for the widget's own element. A dropdown also lays out parts of its entity: its caption (-2)
-    // and arrow (-3), and while open one row per option carrying that option's index (>= 0), so input
-    // knows which choice a hit landed on. Tools that outline or resize a widget use only its own element.
-    std::int32_t dropdownOptionIndex = -1;
-
-    [[nodiscard]] bool IsWidgetElement() const noexcept {
-        return dropdownOptionIndex == -1;
-    }
 };
 
 // Why a frame build refused, and which entity caused it. The frame builder is fail-closed:
@@ -141,8 +133,6 @@ struct SceneUIFrame {
     SceneUIFrameRefusal refusal{};
 
     [[nodiscard]] SceneEntity HitTest(kb::math::Vec2 point) const noexcept;
-    // The topmost element that takes the pointer at `point`, including dropdown list rows.
-    [[nodiscard]] const SceneUIFrameElement* HitTestElement(kb::math::Vec2 point) const noexcept;
 };
 
 class SceneUIQueries {

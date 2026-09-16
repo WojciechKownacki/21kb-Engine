@@ -1611,59 +1611,6 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
     }
     if (panelHit.inInspectorPanel) {
         const InspectorPanelRenderer::Hit hit = InspectorPanelRenderer::HitTest(*panelHit.inspectorContent, sceneContext_, x, y);
-        if (hit.section == InspectorUIComponentModel::Section(kb::scene::UIComponentType::Dropdown) &&
-            (hit.property == InspectorPropertyId::UIDropdownAddOption || hit.property == InspectorPropertyId::UIDropdownSelectOption ||
-             hit.property == InspectorPropertyId::UIDropdownOptionMenu)) {
-            // A menu takes over the click, so an option name still being typed is committed first - left open it
-            // would keep every text-input guarded shortcut, Ctrl+S included, silently refused.
-            if (sceneContext_.Inspector().IsTextEditing())
-                static_cast<void>(InspectorPanelInteraction::HandleKeyDown(messageWindow, sceneContext_, VK_RETURN));
-            const auto entity = sceneContext_.SelectedEntity();
-            const auto* dropdown = sceneContext_.Scene().Components().UI().TryGet<kb::scene::UIDropdown>(entity);
-            if (dropdown == nullptr) return;
-            HMENU menu = CreatePopupMenu();
-            if (menu == nullptr) return;
-            const auto types = InspectorUIComponentModel::DropdownOptionTypes();
-            if (hit.property == InspectorPropertyId::UIDropdownAddOption) {
-                for (std::size_t index = 0; index < types.size(); ++index) {
-                    AppendMenuA(menu, MF_STRING, index + 1, std::string{types[index].label}.c_str());
-                    if (index == 0) AppendMenuA(menu, MF_SEPARATOR, 0, nullptr);
-                }
-            } else if (hit.property == InspectorPropertyId::UIDropdownSelectOption) {
-                for (std::uint32_t option = 0U; option < dropdown->optionCount; ++option) {
-                    const std::string label{kb::scene::UIDropdownOptionText(dropdown->options[option])};
-                    AppendMenuA(menu, MF_STRING | (dropdown->selectedIndex == option ? MF_CHECKED : 0), option + 1U,
-                        label.empty() ? "(empty)" : label.c_str());
-                }
-            } else {
-                const std::uint32_t option = static_cast<std::uint32_t>(std::max(hit.index, 0));
-                AppendMenuA(menu, MF_STRING | (option == 0U ? MF_GRAYED : 0), 1, "Move Up");
-                AppendMenuA(menu, MF_STRING | (option + 1U >= dropdown->optionCount ? MF_GRAYED : 0), 2, "Move Down");
-                AppendMenuA(menu, MF_SEPARATOR, 0, nullptr);
-                AppendMenuA(menu, MF_STRING, 3, "Remove");
-            }
-            POINT anchor{x, y};
-            ClientToScreen(messageWindow, &anchor);
-            const UINT choice = TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RETURNCMD | TPM_NONOTIFY,
-                anchor.x, anchor.y, 0, messageWindow, nullptr);
-            DestroyMenu(menu);
-            bool changed = false;
-            if (choice > 0U) {
-                if (hit.property == InspectorPropertyId::UIDropdownAddOption && choice <= types.size()) {
-                    changed = sceneContext_.AddUIDropdownOption(entity, types[choice - 1U].content);
-                } else if (hit.property == InspectorPropertyId::UIDropdownSelectOption) {
-                    changed = sceneContext_.SetUIComponentProperty(entity, kb::scene::UIComponentType::Dropdown, "selectedIndex",
-                        kb::scene::UIComponentPropertyValue{static_cast<std::uint32_t>(choice - 1U)});
-                } else if (hit.property == InspectorPropertyId::UIDropdownOptionMenu) {
-                    using Edit = EditorSceneContext::UIDropdownOptionEdit;
-                    const Edit edit = choice == 1U ? Edit::MoveUp : choice == 2U ? Edit::MoveDown : Edit::Remove;
-                    changed = sceneContext_.EditUIDropdownOption(entity, edit, static_cast<std::uint32_t>(std::max(hit.index, 0)));
-                }
-            }
-            if (changed) sceneViewport_.RequestPresent();
-            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-            return;
-        }
         if (hit.kind == InspectorHitKind::ChoiceField) {
             const auto component = InspectorUIComponentModel::Component(hit.section);
             if (component) {
@@ -1728,7 +1675,7 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                     }
                     if (descriptor != nullptr && descriptor->type == kb::scene::UIComponentPropertyType::Entity) {
                         const auto result = EditorUIEntityPickerDialog::Show(mainWindow_, MakeEditorDarkTheme(),
-                            sceneContext_, entity, kb::scene::SceneEntity{std::stoull(row.value)});
+                            sceneContext_, entity, *component, row.name, kb::scene::SceneEntity{std::stoull(row.value)});
                         if (result.accepted) {
                             static_cast<void>(sceneContext_.SetUIComponentProperty(entity, *component,
                                 row.name, kb::scene::UIComponentPropertyValue{result.entity.Id()}));

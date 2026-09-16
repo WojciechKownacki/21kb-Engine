@@ -58,9 +58,17 @@ bool ReadValue(Reader& in, UIBackgroundBlur& v) { return in.ReadFloat(v.radius);
 bool ReadValue(Reader& in, UISelectable& v) { std::string name; return in.ReadBool(v.raycastTarget)&&in.ReadBool(v.interactable)&&Read(in,v.navigationMode)&&in.ReadUInt64(v.navigationUp)&&in.ReadUInt64(v.navigationDown)&&in.ReadUInt64(v.navigationLeft)&&in.ReadUInt64(v.navigationRight)&&in.ReadString(name,static_cast<std::uint32_t>(UISelectable::MaxEventNameBytes-1U))&&SetUIEventName(v,name)&&Read(in,v.normalColor)&&Read(in,v.highlightedColor)&&Read(in,v.pressedColor)&&Read(in,v.selectedColor)&&Read(in,v.disabledColor)&&in.ReadFloat(v.colorFadeSeconds); }
 bool ReadValue(Reader& in, UIButton& v) { return in.ReadBool(v.submitOnRelease); }
 bool ReadValue(Reader& in, UIToggle& v) { return in.ReadBool(v.toggled); }
+// v38 added the toggle's on-state graphic.
+bool ReadValue(Reader& in, UIToggle& v, std::uint32_t fileVersion) {
+    return ReadValue(in, v) && (fileVersion < 38U || in.ReadUInt64(v.graphic));
+}
 bool ReadValue(Reader& in, UISlider& v) { return in.ReadFloat(v.minimum)&&in.ReadFloat(v.maximum)&&in.ReadFloat(v.value)&&Read(in,v.direction)&&in.ReadBool(v.wholeNumbers); }
 bool ReadValue(Reader& in, UIScrollbar& v) { return in.ReadFloat(v.value)&&in.ReadFloat(v.size)&&Read(in,v.direction); }
 bool ReadValue(Reader& in, UIScrollView& v) { return in.ReadFloat(v.scrollX)&&in.ReadFloat(v.scrollY)&&in.ReadFloat(v.scrollSensitivity)&&in.ReadBool(v.horizontal)&&in.ReadBool(v.vertical)&&in.ReadBool(v.inertia); }
+// v38 added the linked vertical scrollbar.
+bool ReadValue(Reader& in, UIScrollView& v, std::uint32_t fileVersion) {
+    return ReadValue(in, v) && (fileVersion < 38U || in.ReadUInt64(v.verticalScrollbar));
+}
 bool ReadValue(Reader& in, UIInputField& v) { return in.ReadUInt32(v.characterLimit)&&in.ReadBool(v.multiline)&&in.ReadBool(v.readOnly); }
 // Before v35 navigation links were written as live entity ids, which name nothing once the scene is
 // loaded again. From v35 they are stable node ids resolved on instantiation, so an older id is not
@@ -68,29 +76,48 @@ bool ReadValue(Reader& in, UIInputField& v) { return in.ReadUInt32(v.characterLi
 bool ReadValue(Reader& in, UISelectable& v, std::uint32_t fileVersion) {
     if (!ReadValue(in, v)) return false;
     if (fileVersion < 35U) v.navigationUp = v.navigationDown = v.navigationLeft = v.navigationRight = 0U;
-    return true;
+    // v38 added the target graphic.
+    return fileVersion < 38U || in.ReadUInt64(v.targetGraphic);
 }
 
-// v35 added maxVisibleOptions; v36 made options data of the dropdown with a row style. Older files
-// kept their options as child objects - the scene reader turns those into options, and until it does
-// the dropdown has none.
+// The v38 dropdown points at the widgets it drives and keeps only labels and images for its options.
+// Older payloads carried a list style and, from v37, option content widgets; those are read past and
+// dropped. v35-v37 wrote the chosen index where v38 writes the value.
 bool ReadValue(Reader& in, UIDropdown& v, std::uint32_t fileVersion) {
-    if (!in.ReadUInt32(v.selectedIndex)) return false;
+    if (fileVersion >= 38U) {
+        if (!in.ReadUInt64(v.templateEntity) || !in.ReadUInt64(v.captionText) || !in.ReadUInt64(v.captionImage) ||
+            !in.ReadUInt64(v.itemText) || !in.ReadUInt64(v.itemImage) || !in.ReadUInt32(v.value) ||
+            !in.ReadFloat(v.alphaFadeSpeed) || !in.ReadUInt32(v.optionCount) || v.optionCount > UIDropdown::MaxOptions)
+            return false;
+        for (std::uint32_t index = 0U; index < v.optionCount; ++index) {
+            std::string text;
+            if (!in.ReadString(text, static_cast<std::uint32_t>(UIDropdownOption::MaxUtf8Bytes - 1U)) ||
+                !SetUIDropdownOptionText(v.options[index], text) || !in.ReadUInt64(v.options[index].imageAssetId))
+                return false;
+        }
+        return true;
+    }
+    if (!in.ReadUInt32(v.value)) return false;
     if (fileVersion < 35U) return true;
-    if (!in.ReadUInt32(v.maxVisibleOptions)) return false;
+    std::uint32_t maxVisibleOptions = 0U;
+    if (!in.ReadUInt32(maxVisibleOptions)) return false;
     if (fileVersion < 36U) return true;
     if (!in.ReadUInt32(v.optionCount) || v.optionCount > UIDropdown::MaxOptions) return false;
     for (std::uint32_t index = 0U; index < v.optionCount; ++index) {
         std::string text;
+        std::uint64_t content = 0U;
         if (!in.ReadString(text, static_cast<std::uint32_t>(UIDropdownOption::MaxUtf8Bytes - 1U)) ||
-            !SetUIDropdownOptionText(v.options[index], text) || !in.ReadUInt64(v.options[index].iconAssetId))
+            !SetUIDropdownOptionText(v.options[index], text) || !in.ReadUInt64(v.options[index].imageAssetId) ||
+            (fileVersion >= 37U && !in.ReadUInt64(content)))
             return false;
-        // v37 lets an option show a child widget instead of its text.
-        if (fileVersion >= 37U && !in.ReadUInt64(v.options[index].content)) return false;
     }
-    return in.ReadUInt64(v.fontAssetId) && in.ReadFloat(v.fontSize) && Read(in, v.textColor) && Read(in, v.itemColor) &&
-        Read(in, v.itemHighlightedColor) && Read(in, v.itemSelectedColor);
+    std::uint64_t fontAssetId = 0U;
+    float fontSize = 0.0F;
+    Color textColor{}, itemColor{}, itemHighlightedColor{}, itemSelectedColor{};
+    return in.ReadUInt64(fontAssetId) && in.ReadFloat(fontSize) && Read(in, textColor) && Read(in, itemColor) &&
+        Read(in, itemHighlightedColor) && Read(in, itemSelectedColor);
 }
+
 bool ReadValue(Reader& in, UIProgressBar& v) { return in.ReadFloat(v.minimum)&&in.ReadFloat(v.maximum)&&in.ReadFloat(v.value); }
 bool ReadValue(Reader& in, UIWidgetSwitcher& v) { return in.ReadUInt32(v.visibleChildIndex); }
 
@@ -121,25 +148,26 @@ void WriteValue(std::vector<std::uint8_t>& out, const UIMask& v) { SceneAssetBin
 void WriteValue(std::vector<std::uint8_t>& out, const UIShadow& v) { KB_WRITE_FIELD(offset);KB_WRITE_FIELD(color);SceneAssetBinaryIO::WriteFloat(out,v.blur); }
 void WriteValue(std::vector<std::uint8_t>& out, const UIOutline& v) { KB_WRITE_FIELD(color);SceneAssetBinaryIO::WriteFloat(out,v.width); }
 void WriteValue(std::vector<std::uint8_t>& out, const UIBackgroundBlur& v) { SceneAssetBinaryIO::WriteFloat(out,v.radius); }
-void WriteValue(std::vector<std::uint8_t>& out, const UISelectable& v) { SceneAssetBinaryIO::WriteBool(out,v.raycastTarget);SceneAssetBinaryIO::WriteBool(out,v.interactable);KB_WRITE_FIELD(navigationMode);SceneAssetBinaryIO::WriteUInt64(out,v.navigationUp);SceneAssetBinaryIO::WriteUInt64(out,v.navigationDown);SceneAssetBinaryIO::WriteUInt64(out,v.navigationLeft);SceneAssetBinaryIO::WriteUInt64(out,v.navigationRight);SceneAssetBinaryIO::WriteString(out,UIEventName(v));KB_WRITE_FIELD(normalColor);KB_WRITE_FIELD(highlightedColor);KB_WRITE_FIELD(pressedColor);KB_WRITE_FIELD(selectedColor);KB_WRITE_FIELD(disabledColor);SceneAssetBinaryIO::WriteFloat(out,v.colorFadeSeconds); }
+void WriteValue(std::vector<std::uint8_t>& out, const UISelectable& v) { SceneAssetBinaryIO::WriteBool(out,v.raycastTarget);SceneAssetBinaryIO::WriteBool(out,v.interactable);KB_WRITE_FIELD(navigationMode);SceneAssetBinaryIO::WriteUInt64(out,v.navigationUp);SceneAssetBinaryIO::WriteUInt64(out,v.navigationDown);SceneAssetBinaryIO::WriteUInt64(out,v.navigationLeft);SceneAssetBinaryIO::WriteUInt64(out,v.navigationRight);SceneAssetBinaryIO::WriteString(out,UIEventName(v));KB_WRITE_FIELD(normalColor);KB_WRITE_FIELD(highlightedColor);KB_WRITE_FIELD(pressedColor);KB_WRITE_FIELD(selectedColor);KB_WRITE_FIELD(disabledColor);SceneAssetBinaryIO::WriteFloat(out,v.colorFadeSeconds);SceneAssetBinaryIO::WriteUInt64(out,v.targetGraphic); }
 void WriteValue(std::vector<std::uint8_t>& out, const UIButton& v) { SceneAssetBinaryIO::WriteBool(out,v.submitOnRelease); }
-void WriteValue(std::vector<std::uint8_t>& out, const UIToggle& v) { SceneAssetBinaryIO::WriteBool(out,v.toggled); }
+void WriteValue(std::vector<std::uint8_t>& out, const UIToggle& v) { SceneAssetBinaryIO::WriteBool(out,v.toggled);SceneAssetBinaryIO::WriteUInt64(out,v.graphic); }
 void WriteValue(std::vector<std::uint8_t>& out, const UISlider& v) { SceneAssetBinaryIO::WriteFloat(out,v.minimum);SceneAssetBinaryIO::WriteFloat(out,v.maximum);SceneAssetBinaryIO::WriteFloat(out,v.value);KB_WRITE_FIELD(direction);SceneAssetBinaryIO::WriteBool(out,v.wholeNumbers); }
 void WriteValue(std::vector<std::uint8_t>& out, const UIScrollbar& v) { SceneAssetBinaryIO::WriteFloat(out,v.value);SceneAssetBinaryIO::WriteFloat(out,v.size);KB_WRITE_FIELD(direction); }
-void WriteValue(std::vector<std::uint8_t>& out, const UIScrollView& v) { SceneAssetBinaryIO::WriteFloat(out,v.scrollX);SceneAssetBinaryIO::WriteFloat(out,v.scrollY);SceneAssetBinaryIO::WriteFloat(out,v.scrollSensitivity);SceneAssetBinaryIO::WriteBool(out,v.horizontal);SceneAssetBinaryIO::WriteBool(out,v.vertical);SceneAssetBinaryIO::WriteBool(out,v.inertia); }
+void WriteValue(std::vector<std::uint8_t>& out, const UIScrollView& v) { SceneAssetBinaryIO::WriteFloat(out,v.scrollX);SceneAssetBinaryIO::WriteFloat(out,v.scrollY);SceneAssetBinaryIO::WriteFloat(out,v.scrollSensitivity);SceneAssetBinaryIO::WriteBool(out,v.horizontal);SceneAssetBinaryIO::WriteBool(out,v.vertical);SceneAssetBinaryIO::WriteBool(out,v.inertia);SceneAssetBinaryIO::WriteUInt64(out,v.verticalScrollbar); }
 void WriteValue(std::vector<std::uint8_t>& out, const UIInputField& v) { SceneAssetBinaryIO::WriteUInt32(out,v.characterLimit);SceneAssetBinaryIO::WriteBool(out,v.multiline);SceneAssetBinaryIO::WriteBool(out,v.readOnly); }
 void WriteValue(std::vector<std::uint8_t>& out, const UIDropdown& v) {
-    SceneAssetBinaryIO::WriteUInt32(out, v.selectedIndex);
-    SceneAssetBinaryIO::WriteUInt32(out, v.maxVisibleOptions);
+    SceneAssetBinaryIO::WriteUInt64(out, v.templateEntity);
+    SceneAssetBinaryIO::WriteUInt64(out, v.captionText);
+    SceneAssetBinaryIO::WriteUInt64(out, v.captionImage);
+    SceneAssetBinaryIO::WriteUInt64(out, v.itemText);
+    SceneAssetBinaryIO::WriteUInt64(out, v.itemImage);
+    SceneAssetBinaryIO::WriteUInt32(out, v.value);
+    SceneAssetBinaryIO::WriteFloat(out, v.alphaFadeSpeed);
     SceneAssetBinaryIO::WriteUInt32(out, v.optionCount);
     for (std::uint32_t index = 0U; index < v.optionCount; ++index) {
         SceneAssetBinaryIO::WriteString(out, UIDropdownOptionText(v.options[index]));
-        SceneAssetBinaryIO::WriteUInt64(out, v.options[index].iconAssetId);
-        SceneAssetBinaryIO::WriteUInt64(out, v.options[index].content);
+        SceneAssetBinaryIO::WriteUInt64(out, v.options[index].imageAssetId);
     }
-    SceneAssetBinaryIO::WriteUInt64(out, v.fontAssetId);
-    SceneAssetBinaryIO::WriteFloat(out, v.fontSize);
-    Write(out, v.textColor); Write(out, v.itemColor); Write(out, v.itemHighlightedColor); Write(out, v.itemSelectedColor);
 }
 void WriteValue(std::vector<std::uint8_t>& out, const UIProgressBar& v) { SceneAssetBinaryIO::WriteFloat(out,v.minimum);SceneAssetBinaryIO::WriteFloat(out,v.maximum);SceneAssetBinaryIO::WriteFloat(out,v.value); }
 void WriteValue(std::vector<std::uint8_t>& out, const UIWidgetSwitcher& v) { SceneAssetBinaryIO::WriteUInt32(out,v.visibleChildIndex); }
