@@ -64,6 +64,9 @@ struct Affine2D {
 constexpr std::int32_t kUIDropdownPopupZOrder = 1000000;
 // Logical units between a dropdown row's edge and its label.
 constexpr float kUIDropdownLabelPadding = 8.0F;
+// Part indices of the elements a closed dropdown draws for itself; option rows use indices >= 0.
+constexpr std::int32_t kUIDropdownCaptionPart = -2;
+constexpr std::int32_t kUIDropdownArrowPart = -3;
 
 // Held navigation: the first repeat waits long enough that a single press never double-steps,
 // then steps at a rate a player can still stop on the row they want.
@@ -592,14 +595,12 @@ class FrameBuilder {
             element.interactionEnabled && selectable->raycastTarget && group.blocksRaycasts && element.effectiveOpacity > 0.0F;
         if (selectable != nullptr)
             element.interactionTint = selectable->normalColor;
-        if (element.dropdown.has_value())
-            ApplyDropdownCaption(element);
         const bool isDropdown = element.dropdown.has_value();
         const bool dropdownOpen = isDropdown && expandedDropdown_ == entity;
         frame_.elements.push_back(std::move(element));
         const std::size_t elementIndex = frame_.elements.size() - 1U;
         if (isDropdown)
-            AppendDropdownArrow(elementIndex, rect, resolvedTransform);
+            AppendDropdownCaptionAndArrow(elementIndex, rect, resolvedTransform);
         if (dropdownOpen)
             AppendDropdownRows(elementIndex, rect, resolvedTransform);
 
@@ -818,61 +819,78 @@ class FrameBuilder {
         arrangeIgnored();
     }
 
-    // The closed control shows the selected option's label. An author-added Text keeps its own style
-    // and only has its content replaced; otherwise the dropdown's text style draws the label.
-    static void ApplyDropdownCaption(SceneUIFrameElement& element) {
-        const UIDropdown& dropdown = *element.dropdown;
-        if (!element.text.has_value()) {
-            UIText& caption = element.text.emplace();
-            caption.fontAssetId = dropdown.fontAssetId;
-            caption.fontSize = dropdown.fontSize;
-            caption.color = dropdown.textColor;
-            caption.verticalAlignment = UITextVerticalAlignment::Center;
-            caption.wrapMode = UITextWrapMode::NoWrap;
-            caption.richText = false;
-        }
-        static_cast<void>(SetUITextContent(*element.text, UIDropdownSelectedText(dropdown)));
+    // A part the dropdown draws for itself - caption, arrow - laid over `area` of the control. Parts are
+    // extra elements of the control's entity with a negative part index; they draw but never take input.
+    [[nodiscard]] static SceneUIFrameElement DropdownPart(const SceneUIFrameElement& control, Rect area,
+                                                          const Affine2D& transform, std::int32_t part) {
+        SceneUIFrameElement element;
+        element.entity = control.entity;
+        element.canvas = control.canvas;
+        element.canvasScale = control.canvasScale;
+        element.canvasSortingOrder = control.canvasSortingOrder;
+        element.zOrder = control.zOrder;
+        element.effectiveOpacity = control.effectiveOpacity;
+        element.rect = {area.x * control.canvasScale, area.y * control.canvasScale, area.width * control.canvasScale,
+                        area.height * control.canvasScale};
+        element.corners = {{TransformPoint(transform, {area.x, area.y}),
+                            TransformPoint(transform, {area.x + area.width, area.y}),
+                            TransformPoint(transform, {area.x + area.width, area.y + area.height}),
+                            TransformPoint(transform, {area.x, area.y + area.height})}};
+        element.clipRect = control.clipRect;
+        element.clipQuads = control.clipQuads;
+        element.dropdownOptionIndex = part;
+        return element;
     }
 
-    // The arrow that marks the control as a dropdown: a chevron of two bars at the right end, pointing
-    // down while closed and up while the list is open. The bars are rotated quads of the control's
-    // entity; they draw in the text colour and never take input.
-    void AppendDropdownArrow(std::size_t controlIndex, Rect rect, const Affine2D& transform) {
-        const SceneUIFrameElement control = frame_.elements[controlIndex];
+    // The closed control shows the selected option's label, padded from the left edge and kept clear of
+    // the arrow, and the arrow itself: a triangle glyph from the dropdown's font, pointing down while
+    // closed and up while the list is open. An author-added Text on the control lends its style to the
+    // caption instead of drawing a second label.
+    void AppendDropdownCaptionAndArrow(std::size_t controlIndex, Rect rect, const Affine2D& transform) {
+        SceneUIFrameElement& owner = frame_.elements[controlIndex];
+        const std::optional<UIText> authoredText = owner.text;
+        owner.text.reset();
+        const SceneUIFrameElement control = owner;
         const UIDropdown& dropdown = *control.dropdown;
-        const float half = std::min(rect.height * 0.14F, rect.width * 0.1F);
-        if (half <= 0.0F)
-            return;
-        const float thickness = std::max(1.0F, rect.height * 0.06F);
-        const Vec2 center{rect.x + rect.width - rect.height * 0.5F, rect.y + rect.height * 0.5F};
-        const float tip = expandedDropdown_ == control.entity ? -half * 0.5F : half * 0.5F;
-        const Vec2 apex{center.x, center.y + tip};
-        for (const float side : {-1.0F, 1.0F}) {
-            const Vec2 end{center.x + side * half, center.y - tip};
-            const Vec2 along{apex.x - end.x, apex.y - end.y};
-            const float length = std::hypot(along.x, along.y);
-            const Vec2 normal{-along.y / length * thickness * 0.5F, along.x / length * thickness * 0.5F};
-            SceneUIFrameElement bar;
-            bar.entity = control.entity;
-            bar.canvas = control.canvas;
-            bar.canvasScale = control.canvasScale;
-            bar.canvasSortingOrder = control.canvasSortingOrder;
-            bar.zOrder = control.zOrder;
-            bar.traversalOrder = traversal_++;
-            bar.effectiveOpacity = control.effectiveOpacity;
-            bar.clipRect = control.clipRect;
-            bar.clipQuads = control.clipQuads;
-            bar.corners = {{TransformPoint(transform, {end.x + normal.x, end.y + normal.y}),
-                            TransformPoint(transform, {apex.x + normal.x, apex.y + normal.y}),
-                            TransformPoint(transform, {apex.x - normal.x, apex.y - normal.y}),
-                            TransformPoint(transform, {end.x - normal.x, end.y - normal.y})}};
-            // The renderer maps the element rectangle onto the corners, so any rectangle with the bar's
-            // proportions draws the rotated bar.
-            bar.rect = {0.0F, 0.0F, length * control.canvasScale, thickness * control.canvasScale};
-            UIBorder& fill = bar.border.emplace();
-            fill.backgroundColor = dropdown.textColor;
-            frame_.elements.push_back(std::move(bar));
+        const float arrowWidth = std::min(rect.height, rect.width * 0.25F);
+
+        SceneUIFrameElement caption = DropdownPart(
+            control,
+            {rect.x + kUIDropdownLabelPadding, rect.y,
+             std::max(0.0F, rect.width - kUIDropdownLabelPadding - arrowWidth), rect.height},
+            transform, kUIDropdownCaptionPart);
+        caption.traversalOrder = traversal_++;
+        UIText& label = caption.text.emplace();
+        if (authoredText.has_value()) {
+            label = *authoredText;
+        } else {
+            label.fontAssetId = dropdown.fontAssetId;
+            label.fontSize = dropdown.fontSize;
+            label.color = dropdown.textColor;
+            label.verticalAlignment = UITextVerticalAlignment::Center;
+            label.wrapMode = UITextWrapMode::NoWrap;
+            label.richText = false;
         }
+        static_cast<void>(SetUITextContent(label, UIDropdownSelectedText(dropdown)));
+        const UIText style = label;
+        frame_.elements.push_back(std::move(caption));
+
+        if (arrowWidth <= 0.0F)
+            return;
+        SceneUIFrameElement arrow = DropdownPart(control, {rect.x + rect.width - arrowWidth, rect.y, arrowWidth, rect.height},
+                                                 transform, kUIDropdownArrowPart);
+        arrow.traversalOrder = traversal_++;
+        UIText& glyph = arrow.text.emplace();
+        glyph.fontAssetId = style.fontAssetId;
+        glyph.fontSize = std::max(1.0F, style.fontSize * 0.7F);
+        glyph.color = style.color;
+        glyph.horizontalAlignment = UITextHorizontalAlignment::Center;
+        glyph.verticalAlignment = UITextVerticalAlignment::Center;
+        glyph.wrapMode = UITextWrapMode::NoWrap;
+        glyph.richText = false;
+        // U+25B2 / U+25BC BLACK UP / DOWN-POINTING TRIANGLE.
+        static_cast<void>(SetUITextContent(glyph, expandedDropdown_ == control.entity ? "\xE2\x96\xB2" : "\xE2\x96\xBC"));
+        frame_.elements.push_back(std::move(arrow));
     }
 
     // Appends the open list as rows directly under the control: a row background, the option icon
