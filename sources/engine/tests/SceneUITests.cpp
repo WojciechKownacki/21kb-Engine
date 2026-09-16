@@ -784,6 +784,94 @@ void TestDropdownPersistenceCompatibility() {
         "A v34 dropdown must load with every option visible");
 }
 
+// A pad player has no pointer: the left stick and the D-pad have to walk focus, a focused slider has
+// to take left/right as its value, and holding a direction on a long list has to keep stepping and
+// keep the focused row scrolled into view. Driven through the device state the platform collector
+// fills, so the stick threshold and the axis sign are part of what is checked.
+void TestControllerNavigation() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject canvas = AddUI(scene, {}, CanvasComponents());
+    kb::scene::UIComponentSet buttonComponents = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Button);
+    buttonComponents.rectTransform = Rect(0.0F, 0.0F, 100.0F, 20.0F);
+    const kb::scene::SceneObject button = AddUI(scene, canvas, buttonComponents);
+    kb::scene::UIComponentSet sliderComponents = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Slider);
+    sliderComponents.rectTransform = Rect(0.0F, 40.0F, 100.0F, 20.0F);
+    const kb::scene::SceneObject slider = AddUI(scene, canvas, sliderComponents);
+
+    // The list itself is not focusable; its rows are, which is how a settings list is authored.
+    kb::scene::UIComponentSet listComponents;
+    listComponents.rectTransform = Rect(0.0F, 80.0F, 100.0F, 60.0F);
+    listComponents.mask.emplace();
+    listComponents.scrollView.emplace();
+    listComponents.scrollView->horizontal = false;
+    listComponents.scrollView->inertia = false;
+    const kb::scene::SceneObject list = AddUI(scene, canvas, listComponents);
+    constexpr std::size_t kRowCount = 10U;
+    std::array<kb::scene::SceneObject, kRowCount> rows{};
+    for (std::size_t index = 0U; index < kRowCount; ++index) {
+        kb::scene::UIComponentSet row;
+        row.rectTransform = Rect(0.0F, 20.0F * static_cast<float>(index), 100.0F, 20.0F);
+        row.selectable.emplace();
+        rows[index] = AddUI(scene, list, row);
+    }
+
+    kb::input::InputDeviceState& device = scene.Input().MutableDeviceState();
+    device.SetHasFocus(true);
+    device.SetPointerViewportExtent(400U, 400U);
+    device.SetPointerPosition(390.0F, 390.0F);
+    const auto frame = [&](float deltaSeconds = 0.016F) {
+        static_cast<void>(scene.Runtime().Update(deltaSeconds));
+    };
+    frame();
+    kb::tests::Require(scene.UI().SetFocus(button.Entity()), "The button must accept focus");
+
+    device.SetAnalog(kb::input::InputKey::GamepadLeftStickY, -0.3F);
+    frame();
+    kb::tests::Require(scene.UI().Focused() == button.Entity(),
+        "A stick resting below the navigation threshold must not move focus");
+    device.SetAnalog(kb::input::InputKey::GamepadLeftStickY, -0.9F);
+    frame();
+    device.SetAnalog(kb::input::InputKey::GamepadLeftStickY, 0.0F);
+    frame();
+    kb::tests::Require(scene.UI().Focused() == slider.Entity(),
+        "Pulling the left stick down must move focus to the widget below");
+
+    device.SetKeyDown(kb::input::InputKey::GamepadDPadRight, true);
+    frame();
+    device.SetKeyDown(kb::input::InputKey::GamepadDPadRight, false);
+    frame();
+    kb::tests::Require(scene.UI().Focused() == slider.Entity() &&
+        kb::tests::NearlyEqual(scene.Components().UI().TryGet<kb::scene::UISlider>(slider.Entity())->value, 0.05F),
+        "D-pad right on a focused slider must raise its value instead of moving focus");
+    device.SetAnalog(kb::input::InputKey::GamepadLeftStickX, 1.0F);
+    frame();
+    device.SetAnalog(kb::input::InputKey::GamepadLeftStickX, 0.0F);
+    frame();
+    kb::tests::Require(kb::tests::NearlyEqual(scene.Components().UI().TryGet<kb::scene::UISlider>(slider.Entity())->value, 0.1F),
+        "Leaning the stick right on a focused slider must raise its value too");
+    kb::tests::Require(HasEvent(scene.UI().Events(), kb::scene::SceneUIEventType::Changed, slider.Entity()),
+        "Adjusting a slider from the pad must report the change to game logic");
+
+    // Hold D-pad down for 1.5 s: one step on the press, then the repeat schedule carries focus from
+    // the slider through every row of the list.
+    device.SetKeyDown(kb::input::InputKey::GamepadDPadDown, true);
+    for (int step = 0; step < 30; ++step)
+        frame(0.05F);
+    device.SetKeyDown(kb::input::InputKey::GamepadDPadDown, false);
+    frame();
+    kb::tests::Require(scene.UI().Focused() == rows[kRowCount - 1U].Entity(),
+        "Holding a navigation direction must keep stepping through a long list");
+    kb::tests::Require(scene.Components().UI().TryGet<kb::scene::UIScrollView>(list.Entity())->scrollY > 0.0F,
+        "Walking past the visible rows must scroll the list");
+    const kb::scene::SceneUIFrameElement* lastRow = FindElement(scene.UI().Frame(), rows[kRowCount - 1U].Entity());
+    const kb::scene::SceneUIFrameElement* viewport = FindElement(scene.UI().Frame(), list.Entity());
+    kb::tests::Require(lastRow != nullptr && viewport != nullptr && lastRow->rect.y >= viewport->rect.y - 0.01F &&
+        lastRow->rect.y + lastRow->rect.height <= viewport->rect.y + viewport->rect.height + 0.01F,
+        "The focused row must end up inside the list's visible area");
+    kb::tests::Require(scene.UI().HitTest({50.0F, lastRow->rect.y + 10.0F}) == rows[kRowCount - 1U].Entity(),
+        "The scrolled-to row must be targetable where it is drawn");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -799,6 +887,7 @@ void RunSceneUITests() {
     TestDropdownPersistenceCompatibility();
     TestProgressAndEventQueue();
     TestAutomaticRuntimeInput();
+    TestControllerNavigation();
 }
 
 } // namespace kb::tests

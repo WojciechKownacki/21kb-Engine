@@ -726,6 +726,10 @@ public:
     // reopen it on load, so neither belongs in UIDropdown.
     SceneEntity uiExpandedDropdown{};
     std::uint32_t uiDropdownScrollIndex = 0U;
+    // The navigation direction being held and the time left until it repeats. A pad or arrow key
+    // held on a long list keeps stepping instead of moving exactly once per press.
+    kb::math::Vec2 uiNavigationHeldDirection{};
+    float uiNavigationRepeatSeconds = 0.0F;
     // Caret blink phase in seconds for the focused input field, reset on every edit so typing
     // never hides the caret mid-stroke.
     float uiTextCaretPhase = 0.0F;

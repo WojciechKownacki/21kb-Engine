@@ -63,6 +63,17 @@ struct Affine2D {
 // next widget in the hierarchy would immediately cover.
 constexpr std::int32_t kUIDropdownPopupZOrder = 1000000;
 
+// Held navigation: the first repeat waits long enough that a single press never double-steps,
+// then steps at a rate a player can still stop on the row they want.
+constexpr float kUINavigationRepeatDelaySeconds = 0.4F;
+constexpr float kUINavigationRepeatIntervalSeconds = 0.1F;
+// How far the left stick has to lean before it counts as a navigation press. Below this a resting
+// or drifting stick must not walk focus around a menu.
+constexpr float kUIStickNavigationThreshold = 0.5F;
+// A focused slider moves by this fraction of its range per step unless it snaps to whole numbers.
+constexpr float kUISliderNavigationStepFraction = 0.05F;
+constexpr float kUIScrollbarNavigationStep = 0.1F;
+
 // Full on/off cycle for the text caret. The engine has no system caret setting to read, so this
 // is the one place the rate is defined.
 constexpr float kUITextCaretBlinkPeriodSeconds = 1.0F;
@@ -1444,6 +1455,123 @@ void CollapseDropdown(SceneState& state) noexcept {
     return true;
 }
 
+// A focused range control takes navigation along its own axis as a value change, which is how a pad
+// or keyboard player adjusts a volume slider at all. Returns true when the step was consumed, so the
+// same press does not also move focus away from the control being adjusted.
+[[nodiscard]] bool StepFocusedRange(Scene& scene, SceneState& state, Vec2 direction, bool& changed) {
+    if (!state.uiFocused.IsValid())
+        return false;
+    SceneUIComponents ui = scene.Components().UI();
+    const auto signedStep = [direction](UIAxisDirection axis) noexcept {
+        switch (axis) {
+        case UIAxisDirection::LeftToRight:
+            return direction.x;
+        case UIAxisDirection::RightToLeft:
+            return -direction.x;
+        case UIAxisDirection::TopToBottom:
+            return direction.y;
+        case UIAxisDirection::BottomToTop:
+            return -direction.y;
+        }
+        return 0.0F;
+    };
+    if (UISlider* slider = ui.TryGet<UISlider>(state.uiFocused)) {
+        const float sign = signedStep(slider->direction);
+        if (sign == 0.0F)
+            return false;
+        const float step = slider->wholeNumbers ? 1.0F
+                                                : (slider->maximum - slider->minimum) * kUISliderNavigationStepFraction;
+        float value = std::clamp(slider->value + sign * step, slider->minimum, slider->maximum);
+        if (slider->wholeNumbers)
+            value = std::clamp(std::round(value), slider->minimum, slider->maximum);
+        if (value != slider->value) {
+            slider->value = value;
+            ui.MarkModified<UISlider>(state.uiFocused);
+            Queue(state, scene, SceneUIEventType::Changed, state.uiFocused, nullptr, value);
+            changed = true;
+        }
+        return true;
+    }
+    if (UIScrollbar* scrollbar = ui.TryGet<UIScrollbar>(state.uiFocused)) {
+        const float sign = signedStep(scrollbar->direction);
+        if (sign == 0.0F)
+            return false;
+        const float value = std::clamp(scrollbar->value + sign * kUIScrollbarNavigationStep, 0.0F, 1.0F);
+        if (value != scrollbar->value) {
+            scrollbar->value = value;
+            ui.MarkModified<UIScrollbar>(state.uiFocused);
+            Queue(state, scene, SceneUIEventType::Changed, state.uiFocused, nullptr, value);
+            changed = true;
+        }
+        return true;
+    }
+    return false;
+}
+
+// A focused scroll view scrolls under navigation. It gives the step back once it reaches the end in
+// that direction, so focus is never trapped inside it.
+[[nodiscard]] bool StepFocusedScrollView(Scene& scene, SceneState& state, Vec2 direction, const SceneUIInput& input) {
+    if (!state.uiFocused.IsValid())
+        return false;
+    SceneUIComponents ui = scene.Components().UI();
+    UIScrollView* scrollView = ui.TryGet<UIScrollView>(state.uiFocused);
+    if (scrollView == nullptr)
+        return false;
+    const float beforeX = scrollView->scrollX;
+    const float beforeY = scrollView->scrollY;
+    if (scrollView->horizontal)
+        scrollView->scrollX = std::max(0.0F, scrollView->scrollX + direction.x * scrollView->scrollSensitivity);
+    if (scrollView->vertical)
+        scrollView->scrollY = std::max(0.0F, scrollView->scrollY + direction.y * scrollView->scrollSensitivity);
+    static_cast<void>(ClampScrollOffsets(scene, state.uiFrame, state.uiFocused, *scrollView));
+    if (beforeX == scrollView->scrollX && beforeY == scrollView->scrollY)
+        return false;
+    ui.MarkModified<UIScrollView>(state.uiFocused);
+    Queue(state, scene, SceneUIEventType::Changed, state.uiFocused, &input, scrollView->scrollX, scrollView->scrollY);
+    return true;
+}
+
+// Scrolls every scroll view around the focused widget until the widget is inside its viewport.
+// Navigation walks a long list row by row; without this the focus would leave the visible part of
+// the list and the player would be choosing rows they cannot see.
+[[nodiscard]] bool ScrollFocusedIntoView(Scene& scene, SceneState& state, const SceneUIInput& input) {
+    const SceneUIFrameElement* focused = Find(state.uiFrame, state.uiFocused);
+    if (focused == nullptr)
+        return false;
+    SceneUIComponents ui = scene.Components().UI();
+    bool scrolled = false;
+    for (SceneEntity ancestor = scene.Hierarchy().Parent(state.uiFocused); ancestor.IsValid();
+         ancestor = scene.Hierarchy().Parent(ancestor)) {
+        UIScrollView* scrollView = ui.TryGet<UIScrollView>(ancestor);
+        const SceneUIFrameElement* viewport = Find(state.uiFrame, ancestor);
+        if (scrollView == nullptr || viewport == nullptr)
+            continue;
+        const float scale = std::max(viewport->canvasScale, 0.0001F);
+        const float beforeX = scrollView->scrollX;
+        const float beforeY = scrollView->scrollY;
+        // Screen-space overshoot converted back to the scroll view's logical units. An item larger
+        // than the viewport aligns its leading edge rather than oscillating between both edges.
+        const auto reveal = [scale](float& scroll, float itemStart, float itemSize, float viewStart, float viewSize) {
+            if (itemStart < viewStart)
+                scroll -= (viewStart - itemStart) / scale;
+            else if (itemStart + itemSize > viewStart + viewSize)
+                scroll += std::min(itemStart + itemSize - viewStart - viewSize, itemStart - viewStart) / scale;
+            scroll = std::max(0.0F, scroll);
+        };
+        if (scrollView->horizontal)
+            reveal(scrollView->scrollX, focused->rect.x, focused->rect.width, viewport->rect.x, viewport->rect.width);
+        if (scrollView->vertical)
+            reveal(scrollView->scrollY, focused->rect.y, focused->rect.height, viewport->rect.y, viewport->rect.height);
+        static_cast<void>(ClampScrollOffsets(scene, state.uiFrame, ancestor, *scrollView));
+        if (beforeX == scrollView->scrollX && beforeY == scrollView->scrollY)
+            continue;
+        ui.MarkModified<UIScrollView>(ancestor);
+        Queue(state, scene, SceneUIEventType::Changed, ancestor, &input, scrollView->scrollX, scrollView->scrollY);
+        scrolled = true;
+    }
+    return scrolled;
+}
+
 [[nodiscard]] bool Activate(Scene& scene, SceneState& state, SceneEntity entity, const SceneUIInput& input) {
     SceneUIComponents ui = scene.Components().UI();
     if (UIToggle* toggle = ui.TryGet<UIToggle>(entity)) {
@@ -1590,15 +1718,25 @@ bool SceneUIAccess::UpdateFromInput(float deltaSeconds) {
     const bool reverseTab =
         device.IsKeyDown(kb::input::InputKey::Tab) &&
         (device.IsKeyDown(kb::input::InputKey::LeftShift) || device.IsKeyDown(kb::input::InputKey::RightShift));
+    // The left stick navigates like the D-pad once it leans past the threshold. Its Y axis points up
+    // while UI rows grow downwards, hence the sign flip. Only the dominant axis counts, so a diagonal
+    // lean does not fire two directions at once.
+    const float stickX = device.GetValue(kb::input::InputKey::GamepadLeftStickX);
+    const float stickY = device.GetValue(kb::input::InputKey::GamepadLeftStickY);
+    const bool stickVertical = std::abs(stickY) >= std::abs(stickX);
+    const bool stickUp = stickVertical && stickY >= kUIStickNavigationThreshold;
+    const bool stickDown = stickVertical && stickY <= -kUIStickNavigationThreshold;
+    const bool stickLeft = !stickVertical && stickX <= -kUIStickNavigationThreshold;
+    const bool stickRight = !stickVertical && stickX >= kUIStickNavigationThreshold;
     input.navigateUp = device.IsKeyDown(kb::input::InputKey::ArrowUp) ||
-                       device.IsKeyDown(kb::input::InputKey::GamepadDPadUp) || reverseTab;
+                       device.IsKeyDown(kb::input::InputKey::GamepadDPadUp) || stickUp || reverseTab;
     input.navigateDown = device.IsKeyDown(kb::input::InputKey::ArrowDown) ||
-                         device.IsKeyDown(kb::input::InputKey::GamepadDPadDown) ||
+                         device.IsKeyDown(kb::input::InputKey::GamepadDPadDown) || stickDown ||
                          (device.IsKeyDown(kb::input::InputKey::Tab) && !reverseTab);
-    input.navigateLeft =
-        device.IsKeyDown(kb::input::InputKey::ArrowLeft) || device.IsKeyDown(kb::input::InputKey::GamepadDPadLeft);
-    input.navigateRight =
-        device.IsKeyDown(kb::input::InputKey::ArrowRight) || device.IsKeyDown(kb::input::InputKey::GamepadDPadRight);
+    input.navigateLeft = device.IsKeyDown(kb::input::InputKey::ArrowLeft) ||
+                         device.IsKeyDown(kb::input::InputKey::GamepadDPadLeft) || stickLeft;
+    input.navigateRight = device.IsKeyDown(kb::input::InputKey::ArrowRight) ||
+                          device.IsKeyDown(kb::input::InputKey::GamepadDPadRight) || stickRight;
     input.submitDown =
         device.IsKeyDown(kb::input::InputKey::Enter) || device.IsKeyDown(kb::input::InputKey::GamepadFaceBottom);
     input.cancelDown =
@@ -1750,15 +1888,40 @@ bool SceneUIAccess::Update(float viewportWidth, float viewportHeight, const Scen
     if (editingText && IsUITextCaretVisible(state.uiTextCaretPhase) != caretWasVisible) {
         presentationDirty = true;
     }
+    // Resolve the held direction into this frame's navigation step: once on the press, then again on
+    // the repeat schedule for as long as the same direction stays held. Horizontal input belongs to
+    // the caret while text is being edited.
+    Vec2 held{};
+    if (input.navigateUp)
+        held = {0.0F, -1.0F};
+    else if (input.navigateDown)
+        held = {0.0F, 1.0F};
+    else if (input.navigateLeft && !editingText)
+        held = {-1.0F, 0.0F};
+    else if (input.navigateRight && !editingText)
+        held = {1.0F, 0.0F};
     Vec2 direction{};
-    if (rising(input.navigateUp, state.previousUIInput.navigateUp))
-        direction = {0.0F, -1.0F};
-    else if (rising(input.navigateDown, state.previousUIInput.navigateDown))
-        direction = {0.0F, 1.0F};
-    else if (moveLeft && !editingText)
-        direction = {-1.0F, 0.0F};
-    else if (moveRight && !editingText)
-        direction = {1.0F, 0.0F};
+    if (held.x != state.uiNavigationHeldDirection.x || held.y != state.uiNavigationHeldDirection.y) {
+        state.uiNavigationHeldDirection = held;
+        state.uiNavigationRepeatSeconds = kUINavigationRepeatDelaySeconds;
+        direction = held;
+    } else if (held.x != 0.0F || held.y != 0.0F) {
+        state.uiNavigationRepeatSeconds -= deltaSeconds;
+        if (state.uiNavigationRepeatSeconds <= 0.0F) {
+            state.uiNavigationRepeatSeconds += kUINavigationRepeatIntervalSeconds;
+            direction = held;
+        }
+    }
+    if (direction.x != 0.0F || direction.y != 0.0F) {
+        bool rangeChanged = false;
+        if (StepFocusedRange(scene_, state, direction, rangeChanged)) {
+            presentationDirty = rangeChanged || presentationDirty;
+            direction = {};
+        } else if (StepFocusedScrollView(scene_, state, direction, input)) {
+            presentationDirty = true;
+            direction = {};
+        }
+    }
     if (direction.x != 0.0F || direction.y != 0.0F) {
         SceneEntity target{};
         const UISelectable* current = Selectable(scene_, state.uiFocused);
@@ -1770,8 +1933,8 @@ bool SceneUIAccess::Update(float viewportWidth, float viewportHeight, const Scen
             target = SceneEntity{id};
         } else if (current == nullptr || current->navigationMode == UINavigationMode::Automatic)
             target = AutomaticNeighbor(state.uiFrame, state.uiFocused, direction);
-        if (target.IsValid())
-            static_cast<void>(SetFocus(target));
+        if (target.IsValid() && SetFocus(target))
+            presentationDirty = ScrollFocusedIntoView(scene_, state, input) || presentationDirty;
     }
     presentationDirty = ScrollFocusedDropdownOptionIntoView(scene_, state) || presentationDirty;
     if (rising(input.submitDown, state.previousUIInput.submitDown) && state.uiFocused.IsValid()) {
