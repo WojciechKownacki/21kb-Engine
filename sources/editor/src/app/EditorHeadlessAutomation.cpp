@@ -3,6 +3,7 @@
 #if defined(_WIN32)
 #include "app/EditorWorkspaceSession.hpp"
 #include "app/pointer/EditorRightButtonDownRouter.hpp"
+#include "app/EditorEditCommandInputHandler.hpp"
 #include "platform/win32/EditorMaterialAssetPickerDialog.hpp"
 #include "rendering/components/EditorDialogStyle.hpp"
 #include "docking/EditorWorkspaceArrangement.hpp"
@@ -1763,6 +1764,29 @@ bool EditorHeadlessAutomation::VerifyUIDropdownOptions() {
     if (!context_.UndoSceneCommand() || dropdown()->optionCount != 3U || !context_.Scene().Entities().IsAlive(buttonOption()) ||
         context_.Scene().Hierarchy().Parent(buttonOption()) != current())
         return fail("undo-remove-button-option-did-not-restore-content");
+    // Ctrl+S while an option name is still being typed commits the name and saves, instead of doing nothing.
+    {
+        context_.SelectEntity(current());
+        const auto rows = InspectorUIComponentModel::Properties(context_.Scene(), current(), dropdownType);
+        const auto nameRow = std::ranges::find(rows, std::string_view{"options.1.text"}, &InspectorUIPropertyRow::name);
+        POINT at{};
+        if (nameRow == rows.end() ||
+            !FindInspectorHit(context_, section, InspectorUIComponentModel::Property(dropdownType),
+                static_cast<int>(nameRow - rows.begin()), InspectorHitKind::TextField, &at) ||
+            !EditorInspectorPointerController{context_}.HandlePointerDown(kInspectorContent, at.x, at.y, impl_->viewport) ||
+            !context_.Inspector().IsTextEditing())
+            return fail("option-name-edit-not-started");
+        static_cast<void>(InspectorPanelInteraction::HandleChar(context_, L'!'));
+        if (!EditorEditCommandInputHandler{context_}.ExecuteShortcut(EditorEditCommand::Save) ||
+            context_.Inspector().IsTextEditing() || labels().find("!") == std::string::npos || context_.SceneDocumentDirty())
+            return fail("ctrl-s-during-text-edit-did-not-commit-and-save: " + labels());
+    }
+    // Option content has to survive a save and a reload - the scene writer remaps the link to a stable node id.
+    if (!context_.SaveCurrentScene()) return fail("save-with-option-content-failed");
+    if (!context_.ReloadSceneFromProject() || dropdown() == nullptr || dropdown()->optionCount != 3U ||
+        !context_.Scene().Entities().IsAlive(buttonOption()) || context_.Scene().Hierarchy().Parent(buttonOption()) != current())
+        return fail("reload-lost-option-content");
+    context_.SelectEntity(current());
 
     kb::scene::SceneUIFrame frame;
     if (!kb::scene::SceneUIQueries{context_.Scene()}.BuildFrame(1280.0F, 720.0F, frame)) return fail("layout-failed");
@@ -1780,6 +1804,38 @@ bool EditorHeadlessAutomation::VerifyUIDropdownOptions() {
     if (!was2D) preview.Toggle2D();
     if (!captured) return false;
     Trace("ui_dropdown_options", true, "add-rename-move-remove-undo-redo-caption-font");
+    return true;
+}
+
+bool EditorHeadlessAutomation::VerifyPickerCloseButtons() {
+    const auto fail = [&](std::string_view reason) { Trace("picker_close_buttons", false, reason); return false; };
+    // Click the title-bar X the way a user does: a button press at its centre. The picker must return
+    // without a selection instead of staying open or treating the press as a pick.
+    const auto clickClose = [](HWND picker) {
+        RECT client{};
+        GetClientRect(picker, &client);
+        const int x = client.right - EditorDialogStyle::Padding - EditorDialogStyle::CloseButtonSize / 2;
+        const int y = 4 + EditorDialogStyle::CloseButtonSize / 2;
+        SendMessageW(picker, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(x, y));
+        SendMessageW(picker, WM_LBUTTONUP, 0, MAKELPARAM(x, y));
+    };
+    bool closed = false;
+    const auto texture = EditorTextureAssetPickerDialog::Show(impl_->window, MakeEditorDarkTheme(), context_, {},
+        EditorTextureAssetPickerFilter::Texture2D, {.visible = false, .onOpened = [&](HWND picker) {
+            clickClose(picker);
+            closed = IsWindow(picker) == 0;
+            if (!closed) PostMessageW(picker, WM_CLOSE, 0, 0);
+        }});
+    if (!closed || texture.accepted) return fail("texture-picker-x-did-not-close");
+    closed = false;
+    const auto list = EditorUIAssetPickerDialog::Show(impl_->window, MakeEditorDarkTheme(), context_, {},
+        kb::assets::AssetKind::Font, {.visible = false, .onOpened = [&](HWND picker) {
+            clickClose(picker);
+            closed = IsWindow(picker) == 0;
+            if (!closed) PostMessageW(picker, WM_CLOSE, 0, 0);
+        }});
+    if (!closed || list.accepted) return fail("list-picker-x-did-not-close");
+    Trace("picker_close_buttons", true, "texture-and-list-picker-x");
     return true;
 }
 

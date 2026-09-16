@@ -6,6 +6,8 @@
 #include <Windows.h>
 #endif
 
+#include "app/EditorEditCommandPolicy.hpp"
+
 namespace kb::editor {
 
 class EditorSceneContext;
@@ -17,6 +19,9 @@ public:
 #if defined(_WIN32)
     [[nodiscard]] bool HandleKeyDown(WPARAM key) const;
 #endif
+    // Runs an edit command the way its keyboard shortcut does, including committing an open text edit
+    // before Save.
+    [[nodiscard]] bool ExecuteShortcut(EditorEditCommand command) const;
 
 private:
     EditorSceneContext& sceneContext_;

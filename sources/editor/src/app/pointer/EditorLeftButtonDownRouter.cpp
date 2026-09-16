@@ -7,6 +7,7 @@
 #include "app/EditorAssetBrowserPointerHandler.hpp"
 #include "app/EditorCrashBreadcrumbs.hpp"
 #include "app/EditorPendingTextEditCommitter.hpp"
+#include "inspection/InspectorPanelInteraction.hpp"
 #include "app/EditorParticleDocumentLifecycle.hpp"
 #include "app/ParticleEditorPanelInteraction.hpp"
 #include "app/EditorPointerDragInteraction.hpp"
@@ -532,6 +533,8 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                 if (!selected.accepted) return;
                 selectedMaterial = selected.assetId;
             } else if (hit.action == ParticleEditorPanelAction::AddModule) {
+                // The button is drawn disabled once the emitter holds the maximum number of modules.
+                if (inspector.modules.size() >= kb::scene::kParticleEffectMaxModulesPerEmitter) return;
                 HMENU menu = CreatePopupMenu();
                 if (menu == nullptr) return;
                 constexpr const char* labels[] = {"Initial Velocity", "Gravity", "Wind", "Drag", "Color Over Life",
@@ -1611,6 +1614,10 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
         if (hit.section == InspectorUIComponentModel::Section(kb::scene::UIComponentType::Dropdown) &&
             (hit.property == InspectorPropertyId::UIDropdownAddOption || hit.property == InspectorPropertyId::UIDropdownSelectOption ||
              hit.property == InspectorPropertyId::UIDropdownOptionMenu)) {
+            // A menu takes over the click, so an option name still being typed is committed first - left open it
+            // would keep every text-input guarded shortcut, Ctrl+S included, silently refused.
+            if (sceneContext_.Inspector().IsTextEditing())
+                static_cast<void>(InspectorPanelInteraction::HandleKeyDown(messageWindow, sceneContext_, VK_RETURN));
             const auto entity = sceneContext_.SelectedEntity();
             const auto* dropdown = sceneContext_.Scene().Components().UI().TryGet<kb::scene::UIDropdown>(entity);
             if (dropdown == nullptr) return;
