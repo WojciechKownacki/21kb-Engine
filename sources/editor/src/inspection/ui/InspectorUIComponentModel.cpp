@@ -35,6 +35,11 @@ static_assert(static_cast<std::uint16_t>(InspectorPropertyId::UIWidgetSwitcherFi
     if (name == "spriteAssetId") return "Sprite";
     if (name == "content") return "Text";
     if (name == "optionCount") return "Option Count";
+    if (name == "maxVisibleOptions") return "Visible Rows";
+    if (name == "textColor") return "Text";
+    if (name == "itemColor") return "Row";
+    if (name == "itemHighlightedColor") return "Row Hovered";
+    if (name == "itemSelectedColor") return "Row Selected";
     // "options.3.text" -> "Option 4", "options.3.icon" -> "Option 4 Icon": the list reads as numbered
     // choices rather than as indexed fields.
     if (name.starts_with("options.")) {

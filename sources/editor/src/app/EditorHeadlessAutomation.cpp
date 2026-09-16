@@ -190,7 +190,8 @@ FindInspectorHit(
         property == InspectorPropertyId::UIDropdownMoveOptionUp || property == InspectorPropertyId::UIDropdownMoveOptionDown ||
         property == InspectorPropertyId::UIDropdownRemoveOption;
     const int firstX = compactX >= 0 ? compactX
-        : property == InspectorPropertyId::UIAssetPicker ? kInspectorContent.right - 48
+        : property == InspectorPropertyId::UIDropdownSelectOption ? kInspectorContent.left
+        : property == InspectorPropertyId::UIAssetPicker ? kInspectorContent.right - 140
         : rightEdgeButton ? kInspectorContent.right - 140
         : property == InspectorPropertyId::UIAnchorPresets ? 40
         : property == InspectorPropertyId::UIAnchorPreset ? 40 + 64 * (std::max(0, index) % 4)
@@ -201,7 +202,8 @@ FindInspectorHit(
         : kInspectorContent.left;
     // The picker button sits at the value column's right edge, which moves left once the Inspector
     // is long enough to show its scrollbar, so it is searched across that edge rather than at one x.
-    const int lastX = rightEdgeButton ? kInspectorContent.right - 4
+    const int lastX = property == InspectorPropertyId::UIDropdownSelectOption ? kInspectorContent.left + 60
+        : rightEdgeButton ? kInspectorContent.right - 4
         : uiField || addButton ? firstX + 1 : kInspectorContent.right;
     for (int scroll = addButton ? InspectorPanelRenderer::MaxScrollOffset(kInspectorContent, context) : 0;;) {
         const int maxScroll = InspectorPanelRenderer::MaxScrollOffset(
@@ -909,6 +911,53 @@ bool EditorHeadlessAutomation::SetUIComponentProperty(
             current, component, property, currentValue)) {
         Trace("set_ui_component_property", false, "property-not-readable");
         return false;
+    }
+
+    if (component == kb::scene::UIComponentType::Dropdown &&
+        (property == "selectedIndex" || property == "optionCount" || property.ends_with(".icon"))) {
+        // These are not text fields in the Dropdown section: the selection is the radio in front of an
+        // option, the option count changes through Add Option and the remove buttons, and an icon is
+        // chosen through its picker button. Drive those controls.
+        const auto click = [&](InspectorPropertyId control, int index) {
+            POINT at{};
+            if (!FindInspectorHit(context_, InspectorUIComponentModel::Section(component), control, index, InspectorHitKind::None, &at))
+                return false;
+            return EditorInspectorPointerController{context_}.HandlePointerDown(kInspectorContent, at.x, at.y, impl_->viewport);
+        };
+        const auto read = [&]() {
+            kb::scene::UIComponentPropertyValue now;
+            return kb::scene::ReadUIComponentProperty(
+                       kb::scene::CaptureSceneUIComponents(context_.Scene().Components().UI(), entity), component, property, now)
+                ? std::optional{now} : std::nullopt;
+        };
+        if (property.ends_with(".icon")) {
+            const bool found = FindInspectorHit(context_, InspectorUIComponentModel::Section(component),
+                InspectorPropertyId::UIAssetPicker, rowIndex, InspectorHitKind::TextField).has_value();
+            const bool unchanged = currentValue == value;
+            Trace("set_ui_component_property", found && unchanged, found ? (unchanged ? "already-set" : "icon-needs-picker") : "icon-button-not-found");
+            return found && unchanged;
+        }
+        if (property == "selectedIndex") {
+            if (!click(InspectorPropertyId::UIDropdownSelectOption, static_cast<int>(std::get<std::uint32_t>(value)))) {
+                Trace("set_ui_component_property", false, "option-radio-not-found");
+                return false;
+            }
+        } else {
+            const std::uint32_t target = std::get<std::uint32_t>(value);
+            for (std::uint32_t guard = 0U; guard <= kb::scene::UIDropdown::MaxOptions; ++guard) {
+                const std::uint32_t count = std::get<std::uint32_t>(*read());
+                if (count == target) break;
+                const bool clicked = count < target ? click(InspectorPropertyId::UIDropdownAddOption, -1)
+                                                    : click(InspectorPropertyId::UIDropdownRemoveOption, static_cast<int>(count - 1U));
+                if (!clicked) {
+                    Trace("set_ui_component_property", false, "option-list-button-not-found");
+                    return false;
+                }
+            }
+        }
+        const bool applied = read() == std::optional{value};
+        Trace("set_ui_component_property", applied, applied ? "dropdown-control" : "dropdown-control-not-applied");
+        return applied;
     }
 
     const auto& group = rows[static_cast<std::size_t>(row->groupStart)];
@@ -1678,7 +1727,7 @@ bool EditorHeadlessAutomation::VerifyUIDropdownOptions() {
     if (!FindInspectorHit(context_, section, InspectorPropertyId::UIDropdownAddOption, -1, InspectorHitKind::Row))
         return fail("add-option-button-not-found");
     for (const auto button : {InspectorPropertyId::UIDropdownMoveOptionUp, InspectorPropertyId::UIDropdownMoveOptionDown,
-             InspectorPropertyId::UIDropdownRemoveOption})
+             InspectorPropertyId::UIDropdownRemoveOption, InspectorPropertyId::UIDropdownSelectOption})
         if (!FindInspectorHit(context_, section, button, 1, InspectorHitKind::Row)) return fail("option-button-not-found");
 
     using Edit = EditorSceneContext::UIDropdownOptionEdit;

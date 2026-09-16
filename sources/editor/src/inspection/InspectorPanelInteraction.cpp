@@ -3195,6 +3195,13 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
         }
         return true;
     }
+    if (hit.property == InspectorPropertyId::UIDropdownSelectOption) {
+        // The radio in front of an option makes it the dropdown's selection.
+        sceneContext.Inspector().EndTextEdit();
+        static_cast<void>(sceneContext.SetUIComponentProperty(entity, kb::scene::UIComponentType::Dropdown, "selectedIndex",
+            kb::scene::UIComponentPropertyValue{ static_cast<std::uint32_t>(std::max(hit.index, 0)) }));
+        return true;
+    }
     if (hit.property == InspectorPropertyId::UIDropdownAddOption ||
         hit.property == InspectorPropertyId::UIDropdownRemoveOption ||
         hit.property == InspectorPropertyId::UIDropdownMoveOptionUp ||
