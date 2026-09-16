@@ -12112,7 +12112,7 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
     // task components and the complete Lens Echo schema.
     // Light is a public compatibility alias for 3D Radiance Emitter and
     // deliberately exercises the same 16 generated accessors.
-    kb::tests::Require(fieldsChecked == 497U, "Script component API generated accessor coverage test did not exercise the expected total field count (497, including all UI components and the Light compatibility alias)");
+    kb::tests::Require(fieldsChecked == 498U, "Script component API generated accessor coverage test did not exercise the expected total field count (498, including all UI components and the Light compatibility alias)");
 }
 
 // LIB-082: defensive regression guard — the KB_ASSERT_NOT_POINTER
@@ -12193,7 +12193,7 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
     // LIB-136: Camera grew three more fields (cullingMask/clearMode/clearColor, the latter
     // decomposed into x/y/z), and MeshRenderer grew one (layer), so the total climbs from
     // 86 to 92.
-    kb::tests::Require(propertiesChecked == 497U, "LIB-082 raw-pointer audit did not exercise the expected total field count (497, including all UI components and the Light compatibility alias)");
+    kb::tests::Require(propertiesChecked == 498U, "LIB-082 raw-pointer audit did not exercise the expected total field count (498, including all UI components and the Light compatibility alias)");
 }
 
 void RunVisualGraphSceneComponentBindingTest() {

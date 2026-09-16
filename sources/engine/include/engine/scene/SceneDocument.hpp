@@ -35,7 +35,8 @@ struct SceneDocument {
     // v32: authored scene-global audio mixer, snapshot, and occlusion settings persist.
     // v33: ParticleEffectComponent persists particle-effect authoring policy.
     // v34: hierarchy-authored UI components persist with scene and prefab nodes.
-    static constexpr std::uint32_t CurrentFileVersion = 34U;
+    // v35: UIDropdown persists how many option rows its open list shows.
+    static constexpr std::uint32_t CurrentFileVersion = 35U;
 
     std::uint32_t fileVersion = CurrentFileVersion;
     std::string guid;

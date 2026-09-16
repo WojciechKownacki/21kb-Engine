@@ -1529,6 +1529,11 @@
       "component": "kb21.ui.text"
     },
     {
+      "op": "add_component",
+      "entity": "choice0",
+      "component": "kb21.ui.selectable"
+    },
+    {
       "op": "set_property",
       "entity": "choice0",
       "component": "kb21.ui.rect-transform",
@@ -1584,6 +1589,11 @@
       "op": "add_component",
       "entity": "choice1",
       "component": "kb21.ui.text"
+    },
+    {
+      "op": "add_component",
+      "entity": "choice1",
+      "component": "kb21.ui.selectable"
     },
     {
       "op": "set_property",
@@ -2506,6 +2516,70 @@
     {
       "op": "key",
       "key": "MouseLeft",
+      "down": false
+    },
+    {
+      "op": "step",
+      "frames": 1,
+      "dt": 0.016666666666666666
+    },
+    {
+      "op": "assert_ui_frame",
+      "entity": "choice1"
+    },
+    {
+      "op": "key",
+      "key": "ArrowDown",
+      "down": true
+    },
+    {
+      "op": "step",
+      "frames": 1,
+      "dt": 0.016666666666666666
+    },
+    {
+      "op": "key",
+      "key": "ArrowDown",
+      "down": false
+    },
+    {
+      "op": "step",
+      "frames": 1,
+      "dt": 0.016666666666666666
+    },
+    {
+      "op": "key",
+      "key": "ArrowDown",
+      "down": true
+    },
+    {
+      "op": "step",
+      "frames": 1,
+      "dt": 0.016666666666666666
+    },
+    {
+      "op": "key",
+      "key": "ArrowDown",
+      "down": false
+    },
+    {
+      "op": "step",
+      "frames": 1,
+      "dt": 0.016666666666666666
+    },
+    {
+      "op": "key",
+      "key": "Enter",
+      "down": true
+    },
+    {
+      "op": "step",
+      "frames": 1,
+      "dt": 0.016666666666666666
+    },
+    {
+      "op": "key",
+      "key": "Enter",
       "down": false
     },
     {

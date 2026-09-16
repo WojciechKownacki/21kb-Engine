@@ -58,6 +58,11 @@ struct Affine2D {
     float ty = 0.0F;
 };
 
+// An open dropdown list draws above every sibling in its canvas. Widget z-order is authored, so
+// the popup needs a bias no hand-authored zOrder would plausibly reach rather than a +1 that the
+// next widget in the hierarchy would immediately cover.
+constexpr std::int32_t kUIDropdownPopupZOrder = 1000000;
+
 // Full on/off cycle for the text caret. The engine has no system caret setting to read, so this
 // is the one place the rate is defined.
 constexpr float kUITextCaretBlinkPeriodSeconds = 1.0F;
@@ -219,7 +224,10 @@ constexpr float kUITextCaretBlinkPeriodSeconds = 1.0F;
 
 class FrameBuilder {
   public:
-    FrameBuilder(const Scene& scene, Vec2 viewport) : scene_(scene), ui_(scene.Components().UI()), viewport_(viewport) {
+    FrameBuilder(const Scene& scene, Vec2 viewport)
+        : scene_(scene), ui_(scene.Components().UI()), viewport_(viewport),
+          expandedDropdown_(SceneAccess::State(scene).uiExpandedDropdown),
+          dropdownScrollIndex_(SceneAccess::State(scene).uiDropdownScrollIndex) {
         frame_.viewportSize = viewport;
     }
 
@@ -507,7 +515,7 @@ class FrameBuilder {
         element.canvas = canvas;
         element.canvasScale = scale;
         element.canvasSortingOrder = sortingOrder;
-        element.zOrder = transform->zOrder;
+        element.zOrder = transform->zOrder + zOrderBias_;
         element.traversalOrder = traversal_++;
         element.effectiveOpacity = ResolveVisibility(scene_, entity).visible ? group.opacity : 0.0F;
         element.rect = {rect.x * scale, rect.y * scale, rect.width * scale, rect.height * scale};
@@ -594,10 +602,13 @@ class FrameBuilder {
         managed.reserve(count);
         const UIWidgetSwitcher* switcher = ui_.TryGet<UIWidgetSwitcher>(parent);
         const UIDropdown* dropdown = ui_.TryGet<UIDropdown>(parent);
+        // A closed dropdown shows only the selected option; an open one shows every option as a
+        // row of the popup, so the filter that hides the rest has to stand down while it is open.
+        const bool dropdownExpanded = dropdown != nullptr && expandedDropdown_ == parent;
         for (std::size_t i = 0U; i < count; ++i) {
             if (switcher != nullptr && i != switcher->visibleChildIndex)
                 continue;
-            if (dropdown != nullptr && i != dropdown->selectedIndex)
+            if (dropdown != nullptr && !dropdownExpanded && i != dropdown->selectedIndex)
                 continue;
             const SceneEntity child = scene_.Hierarchy().ChildAt(parent, i);
             const UILayoutElement* layout = ui_.TryGet<UILayoutElement>(child);
@@ -624,6 +635,20 @@ class FrameBuilder {
                             sortingOrder, pixelPerfect, group, inheritedTransform, inheritedClipQuads);
             }
         };
+        if (dropdownExpanded && !managed.empty()) {
+            ArrangeDropdownOptions(*dropdown, managed, rect, clip, canvas, scale, sortingOrder, pixelPerfect, group,
+                                   inheritedTransform, inheritedClipQuads);
+            arrangeIgnored();
+            return;
+        }
+        if (dropdown != nullptr) {
+            // A closed dropdown shows its selection as a label. An option authored as a real widget
+            // carries a Selectable, and that option covers the control exactly - so left interactive
+            // it takes the press and the focus that are supposed to open the list, and the dropdown
+            // becomes unusable. Closed rows are presented, never targeted.
+            group.interactable = false;
+            group.blocksRaycasts = false;
+        }
         if (const UIHorizontalLayout* layout = ui_.TryGet<UIHorizontalLayout>(parent)) {
             const Rect inner = Inner(contentRect, layout->padding);
             std::vector<DesiredSize> sizes;
@@ -793,6 +818,40 @@ class FrameBuilder {
         arrangeIgnored();
     }
 
+    // Lays the open option list out as equal rows directly under the control, clipped to the
+    // rows the author allowed to be visible at once. Rows scrolled out of that window are still
+    // laid out - clipped away rather than dropped - so navigation can reach them and scroll them
+    // into view instead of jumping over options it cannot see.
+    void ArrangeDropdownOptions(const UIDropdown& dropdown, const std::vector<SceneEntity>& options, Rect rect,
+                                Rect clip, SceneEntity canvas, float scale, std::int32_t sortingOrder,
+                                bool pixelPerfect, GroupState group, const Affine2D& inheritedTransform,
+                                const std::vector<std::array<Vec2, 4U>>& inheritedClipQuads) {
+        const float rowHeight = rect.height;
+        const std::size_t visibleRows =
+            dropdown.maxVisibleOptions == 0U
+                ? options.size()
+                : std::min(static_cast<std::size_t>(dropdown.maxVisibleOptions), options.size());
+        const std::size_t first = std::min(static_cast<std::size_t>(dropdownScrollIndex_),
+                                           options.size() - std::min(visibleRows, options.size()));
+        const Rect popup{rect.x, rect.y + rect.height, rect.width, rowHeight * static_cast<float>(visibleRows)};
+        const std::array<Vec2, 4U> popupQuad{{TransformPoint(inheritedTransform, {popup.x, popup.y}),
+                                              TransformPoint(inheritedTransform, {popup.x + popup.width, popup.y}),
+                                              TransformPoint(inheritedTransform,
+                                                             {popup.x + popup.width, popup.y + popup.height}),
+                                              TransformPoint(inheritedTransform, {popup.x, popup.y + popup.height})}};
+        const Rect popupClip = Intersect(clip, Bounds(popupQuad));
+        std::vector<std::array<Vec2, 4U>> popupClipQuads = inheritedClipQuads;
+        popupClipQuads.push_back(popupQuad);
+        const std::int32_t previousBias = zOrderBias_;
+        zOrderBias_ = previousBias + kUIDropdownPopupZOrder;
+        for (std::size_t index = 0U; index < options.size(); ++index) {
+            const float offset = (static_cast<float>(index) - static_cast<float>(first)) * rowHeight;
+            Arrange(options[index], {popup.x, popup.y + offset, popup.width, rowHeight}, popupClip, canvas, scale,
+                    sortingOrder, pixelPerfect, group, inheritedTransform, popupClipQuads);
+        }
+        zOrderBias_ = previousBias;
+    }
+
     // Records the first refusal and stops the build. Only the first is kept: later entities
     // are unreachable consequences of this one, so naming them would bury the cause.
     void Refuse(SceneEntity entity, const char* reason) noexcept {
@@ -805,9 +864,14 @@ class FrameBuilder {
     const Scene& scene_;
     SceneUIComponentQueries ui_;
     Vec2 viewport_{};
+    SceneEntity expandedDropdown_{};
+    std::uint32_t dropdownScrollIndex_ = 0U;
     SceneUIFrame frame_;
     SceneUIFrameRefusal refusal_{};
     std::uint32_t traversal_ = 0U;
+    // Added to every widget laid out inside an open dropdown list, so the popup and everything
+    // under it sorts above the siblings it overlaps. Restored when the popup subtree is done.
+    std::int32_t zOrderBias_ = 0;
     bool valid_ = true;
 };
 
@@ -1281,6 +1345,105 @@ template <typename T> [[nodiscard]] SceneEntity ClosestAncestorWith(const Scene&
     return true;
 }
 
+// Focus is moved from the interaction helpers as well as from the public accessor, so the whole
+// rule - refuse an entity the current frame cannot interact with, and announce the change once -
+// lives here rather than in SceneUIAccess.
+[[nodiscard]] bool SetUIFocus(Scene& scene, SceneState& state, SceneEntity entity) {
+    if (entity == state.uiFocused)
+        return true;
+    const SceneUIFrameElement* target = Find(state.uiFrame, entity);
+    if (target == nullptr || !target->interactionEnabled)
+        return false;
+    if (state.uiFocused.IsValid())
+        Queue(state, scene, SceneUIEventType::Blurred, state.uiFocused);
+    state.uiFocused = entity;
+    if (const UIText* text = scene.Components().UI().TryGet<UIText>(entity);
+        text != nullptr && scene.Components().UI().Has<UIInputField>(entity)) {
+        state.uiTextCursorByteOffset = UITextContent(*text).size();
+    } else {
+        state.uiTextCursorByteOffset = 0U;
+    }
+    Queue(state, scene, SceneUIEventType::Focused, entity);
+    return true;
+}
+
+void ClearUIFocus(Scene& scene, SceneState& state) noexcept {
+    if (state.uiFocused.IsValid())
+        Queue(state, scene, SceneUIEventType::Blurred, state.uiFocused);
+    state.uiFocused = {};
+    state.uiTextCursorByteOffset = 0U;
+}
+
+// The index of `entity` among `parent`'s direct children, or the child count when it is not one.
+[[nodiscard]] std::size_t ChildIndex(const Scene& scene, SceneEntity parent, SceneEntity entity) noexcept {
+    const std::size_t count = scene.Hierarchy().ChildCount(parent);
+    for (std::size_t index = 0U; index < count; ++index)
+        if (scene.Hierarchy().ChildAt(parent, index) == entity)
+            return index;
+    return count;
+}
+
+void CollapseDropdown(SceneState& state) noexcept {
+    state.uiExpandedDropdown = {};
+    state.uiDropdownScrollIndex = 0U;
+}
+
+// How many option rows the open list shows at once, which is also how far one scroll step moves.
+[[nodiscard]] std::size_t DropdownVisibleRows(const Scene& scene, SceneEntity dropdownEntity,
+                                              const UIDropdown& dropdown) noexcept {
+    const std::size_t options = scene.Hierarchy().ChildCount(dropdownEntity);
+    if (dropdown.maxVisibleOptions == 0U)
+        return options;
+    return std::min(static_cast<std::size_t>(dropdown.maxVisibleOptions), options);
+}
+
+// Scrolls the open list so the focused option is inside the visible window. Navigation can land on
+// a row the popup currently clips away; without this the author's list would appear to stop at the
+// last visible row.
+[[nodiscard]] bool ScrollFocusedDropdownOptionIntoView(Scene& scene, SceneState& state) {
+    if (!state.uiExpandedDropdown.IsValid() || !state.uiFocused.IsValid())
+        return false;
+    if (scene.Hierarchy().Parent(state.uiFocused) != state.uiExpandedDropdown)
+        return false;
+    const UIDropdown* dropdown = scene.Components().UI().TryGet<UIDropdown>(state.uiExpandedDropdown);
+    if (dropdown == nullptr)
+        return false;
+    const std::size_t options = scene.Hierarchy().ChildCount(state.uiExpandedDropdown);
+    const std::size_t focusedIndex = ChildIndex(scene, state.uiExpandedDropdown, state.uiFocused);
+    const std::size_t visibleRows = DropdownVisibleRows(scene, state.uiExpandedDropdown, *dropdown);
+    if (focusedIndex >= options || visibleRows == 0U)
+        return false;
+    std::size_t first = state.uiDropdownScrollIndex;
+    if (focusedIndex < first)
+        first = focusedIndex;
+    else if (focusedIndex >= first + visibleRows)
+        first = focusedIndex - visibleRows + 1U;
+    first = std::min(first, options - visibleRows);
+    if (first == state.uiDropdownScrollIndex)
+        return false;
+    state.uiDropdownScrollIndex = static_cast<std::uint32_t>(first);
+    return true;
+}
+
+// Selects the option the player committed to, closes the list and hands focus back to the control
+// so the next navigation step continues from the dropdown rather than from a row that is gone.
+[[nodiscard]] bool SelectDropdownOption(Scene& scene, SceneState& state, SceneEntity dropdownEntity,
+                                        SceneEntity option, const SceneUIInput& input) {
+    SceneUIComponents ui = scene.Components().UI();
+    UIDropdown* dropdown = ui.TryGet<UIDropdown>(dropdownEntity);
+    const std::size_t index = ChildIndex(scene, dropdownEntity, option);
+    if (dropdown == nullptr || index >= scene.Hierarchy().ChildCount(dropdownEntity))
+        return false;
+    const bool changed = dropdown->selectedIndex != static_cast<std::uint32_t>(index);
+    dropdown->selectedIndex = static_cast<std::uint32_t>(index);
+    ui.MarkModified<UIDropdown>(dropdownEntity);
+    CollapseDropdown(state);
+    static_cast<void>(SetUIFocus(scene, state, dropdownEntity));
+    if (changed)
+        Queue(state, scene, SceneUIEventType::Changed, dropdownEntity, &input, static_cast<float>(index));
+    return true;
+}
+
 [[nodiscard]] bool Activate(Scene& scene, SceneState& state, SceneEntity entity, const SceneUIInput& input) {
     SceneUIComponents ui = scene.Components().UI();
     if (UIToggle* toggle = ui.TryGet<UIToggle>(entity)) {
@@ -1289,13 +1452,28 @@ template <typename T> [[nodiscard]] SceneEntity ClosestAncestorWith(const Scene&
         Queue(state, scene, SceneUIEventType::Changed, entity, &input, toggle->toggled ? 1.0F : 0.0F);
         return true;
     }
-    if (UIDropdown* dropdown = ui.TryGet<UIDropdown>(entity)) {
+    // Committing on a row of the open list picks that option. The row itself carries no dropdown
+    // component, so the control is its parent - which is also what keeps an option from being
+    // mistaken for one while some other list is open.
+    if (state.uiExpandedDropdown.IsValid() && scene.Hierarchy().Parent(entity) == state.uiExpandedDropdown)
+        return SelectDropdownOption(scene, state, state.uiExpandedDropdown, entity, input);
+    if (const UIDropdown* dropdown = ui.TryGet<UIDropdown>(entity)) {
         const std::size_t count = scene.Hierarchy().ChildCount(entity);
         if (count == 0U)
             return false;
-        dropdown->selectedIndex = static_cast<std::uint32_t>((dropdown->selectedIndex + 1U) % count);
-        ui.MarkModified<UIDropdown>(entity);
-        Queue(state, scene, SceneUIEventType::Changed, entity, &input, static_cast<float>(dropdown->selectedIndex));
+        if (state.uiExpandedDropdown == entity) {
+            CollapseDropdown(state);
+            return true;
+        }
+        // One list at a time: opening a second dropdown closes the first, because two popups
+        // overlapping each other cannot both be the thing the player is choosing from.
+        state.uiExpandedDropdown = entity;
+        // Open onto the selection rather than the top of the list, so a value chosen earlier is
+        // the row the player is already looking at.
+        const std::size_t visibleRows = DropdownVisibleRows(scene, entity, *dropdown);
+        const std::size_t selected = std::min(static_cast<std::size_t>(dropdown->selectedIndex), count - 1U);
+        const std::size_t first = selected + 1U > visibleRows ? selected + 1U - visibleRows : 0U;
+        state.uiDropdownScrollIndex = static_cast<std::uint32_t>(std::min(first, count - visibleRows));
         return true;
     }
     if (UIWidgetSwitcher* switcher = ui.TryGet<UIWidgetSwitcher>(entity)) {
@@ -1459,30 +1637,10 @@ std::vector<SceneUIEvent> SceneUIAccess::DrainEvents() {
 }
 
 bool SceneUIAccess::SetFocus(SceneEntity entity) {
-    SceneState& state = SceneAccess::State(scene_);
-    if (entity == state.uiFocused)
-        return true;
-    const SceneUIFrameElement* target = Find(state.uiFrame, entity);
-    if (target == nullptr || !target->interactionEnabled)
-        return false;
-    if (state.uiFocused.IsValid())
-        Queue(state, scene_, SceneUIEventType::Blurred, state.uiFocused);
-    state.uiFocused = entity;
-    if (const UIText* text = scene_.Components().UI().TryGet<UIText>(entity);
-        text != nullptr && scene_.Components().UI().Has<UIInputField>(entity)) {
-        state.uiTextCursorByteOffset = UITextContent(*text).size();
-    } else {
-        state.uiTextCursorByteOffset = 0U;
-    }
-    Queue(state, scene_, SceneUIEventType::Focused, entity);
-    return true;
+    return SetUIFocus(scene_, SceneAccess::State(scene_), entity);
 }
 void SceneUIAccess::ClearFocus() noexcept {
-    SceneState& state = SceneAccess::State(scene_);
-    if (state.uiFocused.IsValid())
-        Queue(state, scene_, SceneUIEventType::Blurred, state.uiFocused);
-    state.uiFocused = {};
-    state.uiTextCursorByteOffset = 0U;
+    ClearUIFocus(scene_, SceneAccess::State(scene_));
 }
 
 bool SceneUIAccess::Update(float viewportWidth, float viewportHeight, const SceneUIInput& input, float deltaSeconds) {
@@ -1516,6 +1674,8 @@ bool SceneUIAccess::Update(float viewportWidth, float viewportHeight, const Scen
         state.uiFrame = std::move(clampedFrame);
         presentationDirty = false;
     }
+    if (state.uiExpandedDropdown.IsValid() && Find(state.uiFrame, state.uiExpandedDropdown) == nullptr)
+        CollapseDropdown(state);
     if (state.uiFocused.IsValid()) {
         const SceneUIFrameElement* focused = Find(state.uiFrame, state.uiFocused);
         if (focused == nullptr || !focused->interactionEnabled)
@@ -1533,6 +1693,14 @@ bool SceneUIAccess::Update(float viewportWidth, float viewportHeight, const Scen
     }
     const bool pressStarted = input.primaryDown && !state.previousUIInput.primaryDown;
     const bool pressReleased = !input.primaryDown && state.previousUIInput.primaryDown;
+    bool presentationDirtyFromDropdown = false;
+    if (pressStarted && state.uiExpandedDropdown.IsValid() && hovered != state.uiExpandedDropdown &&
+        scene_.Hierarchy().Parent(hovered) != state.uiExpandedDropdown) {
+        // A press that lands on neither the control nor one of its rows dismisses the list without
+        // changing the selection, including a press that lands on nothing at all.
+        CollapseDropdown(state);
+        presentationDirtyFromDropdown = true;
+    }
     if (pressStarted) {
         state.uiInertialScrollView = {};
         state.uiScrollVelocity = {};
@@ -1545,6 +1713,7 @@ bool SceneUIAccess::Update(float viewportWidth, float viewportHeight, const Scen
                 Queue(state, scene_, SceneUIEventType::Clicked, state.uiPressed, &input);
         }
     }
+    presentationDirty = presentationDirtyFromDropdown || presentationDirty;
     presentationDirty = UpdateDraggedRange(scene_, state, input) || presentationDirty;
     presentationDirty = UpdateScrollView(scene_, state, hovered, input, pressStarted, deltaSeconds) || presentationDirty;
     if (pressReleased && state.uiPressed.IsValid()) {
@@ -1604,6 +1773,7 @@ bool SceneUIAccess::Update(float viewportWidth, float viewportHeight, const Scen
         if (target.IsValid())
             static_cast<void>(SetFocus(target));
     }
+    presentationDirty = ScrollFocusedDropdownOptionIntoView(scene_, state) || presentationDirty;
     if (rising(input.submitDown, state.previousUIInput.submitDown) && state.uiFocused.IsValid()) {
         if (!scene_.Components().UI().Has<UIInputField>(state.uiFocused)) {
             presentationDirty = Activate(scene_, state, state.uiFocused, input) || presentationDirty;
@@ -1611,8 +1781,16 @@ bool SceneUIAccess::Update(float viewportWidth, float viewportHeight, const Scen
         }
         Queue(state, scene_, SceneUIEventType::Submitted, state.uiFocused);
     }
-    if (rising(input.cancelDown, state.previousUIInput.cancelDown) && state.uiFocused.IsValid())
-        Queue(state, scene_, SceneUIEventType::Canceled, state.uiFocused);
+    if (rising(input.cancelDown, state.previousUIInput.cancelDown)) {
+        if (state.uiExpandedDropdown.IsValid()) {
+            const SceneEntity dropdownEntity = state.uiExpandedDropdown;
+            CollapseDropdown(state);
+            static_cast<void>(SetUIFocus(scene_, state, dropdownEntity));
+            presentationDirty = true;
+        }
+        if (state.uiFocused.IsValid())
+            Queue(state, scene_, SceneUIEventType::Canceled, state.uiFocused);
+    }
     state.previousUIInput = input;
     state.previousUIInput.textInput = {};
     state.previousUIInput.scrollDelta = 0.0F;

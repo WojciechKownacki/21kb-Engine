@@ -62,9 +62,19 @@ bool ReadValue(Reader& in, UISlider& v) { return in.ReadFloat(v.minimum)&&in.Rea
 bool ReadValue(Reader& in, UIScrollbar& v) { return in.ReadFloat(v.value)&&in.ReadFloat(v.size)&&Read(in,v.direction); }
 bool ReadValue(Reader& in, UIScrollView& v) { return in.ReadFloat(v.scrollX)&&in.ReadFloat(v.scrollY)&&in.ReadFloat(v.scrollSensitivity)&&in.ReadBool(v.horizontal)&&in.ReadBool(v.vertical)&&in.ReadBool(v.inertia); }
 bool ReadValue(Reader& in, UIInputField& v) { return in.ReadUInt32(v.characterLimit)&&in.ReadBool(v.multiline)&&in.ReadBool(v.readOnly); }
-bool ReadValue(Reader& in, UIDropdown& v) { return in.ReadUInt32(v.selectedIndex); }
+// v35 added maxVisibleOptions after selectedIndex; a v34 payload ends at selectedIndex and
+// keeps the default "show every option".
+bool ReadValue(Reader& in, UIDropdown& v, std::uint32_t fileVersion) {
+    if (!in.ReadUInt32(v.selectedIndex)) return false;
+    return fileVersion < 35U || in.ReadUInt32(v.maxVisibleOptions);
+}
 bool ReadValue(Reader& in, UIProgressBar& v) { return in.ReadFloat(v.minimum)&&in.ReadFloat(v.maximum)&&in.ReadFloat(v.value); }
 bool ReadValue(Reader& in, UIWidgetSwitcher& v) { return in.ReadUInt32(v.visibleChildIndex); }
+
+// Every component whose payload never changed shape reads the same way at any version; the
+// one that did takes the version explicitly through the overload below.
+template <typename T> bool ReadValue(Reader& in, T& v, std::uint32_t) requires requires(Reader& r, T& t) { ReadValue(r, t); }
+{ return ReadValue(in, v); }
 
 #define KB_WRITE_FIELD(Field) Write(out, v.Field)
 void WriteValue(std::vector<std::uint8_t>& out, const UIRectTransform& v) { KB_WRITE_FIELD(anchorMin);KB_WRITE_FIELD(anchorMax);KB_WRITE_FIELD(offsetMin);KB_WRITE_FIELD(offsetMax);KB_WRITE_FIELD(pivot);KB_WRITE_FIELD(scale);SceneAssetBinaryIO::WriteFloat(out,v.rotationDegrees);SceneAssetBinaryIO::WriteInt32(out,v.zOrder); }
@@ -95,7 +105,7 @@ void WriteValue(std::vector<std::uint8_t>& out, const UISlider& v) { SceneAssetB
 void WriteValue(std::vector<std::uint8_t>& out, const UIScrollbar& v) { SceneAssetBinaryIO::WriteFloat(out,v.value);SceneAssetBinaryIO::WriteFloat(out,v.size);KB_WRITE_FIELD(direction); }
 void WriteValue(std::vector<std::uint8_t>& out, const UIScrollView& v) { SceneAssetBinaryIO::WriteFloat(out,v.scrollX);SceneAssetBinaryIO::WriteFloat(out,v.scrollY);SceneAssetBinaryIO::WriteFloat(out,v.scrollSensitivity);SceneAssetBinaryIO::WriteBool(out,v.horizontal);SceneAssetBinaryIO::WriteBool(out,v.vertical);SceneAssetBinaryIO::WriteBool(out,v.inertia); }
 void WriteValue(std::vector<std::uint8_t>& out, const UIInputField& v) { SceneAssetBinaryIO::WriteUInt32(out,v.characterLimit);SceneAssetBinaryIO::WriteBool(out,v.multiline);SceneAssetBinaryIO::WriteBool(out,v.readOnly); }
-void WriteValue(std::vector<std::uint8_t>& out, const UIDropdown& v) { SceneAssetBinaryIO::WriteUInt32(out,v.selectedIndex); }
+void WriteValue(std::vector<std::uint8_t>& out, const UIDropdown& v) { SceneAssetBinaryIO::WriteUInt32(out,v.selectedIndex);SceneAssetBinaryIO::WriteUInt32(out,v.maxVisibleOptions); }
 void WriteValue(std::vector<std::uint8_t>& out, const UIProgressBar& v) { SceneAssetBinaryIO::WriteFloat(out,v.minimum);SceneAssetBinaryIO::WriteFloat(out,v.maximum);SceneAssetBinaryIO::WriteFloat(out,v.value); }
 void WriteValue(std::vector<std::uint8_t>& out, const UIWidgetSwitcher& v) { SceneAssetBinaryIO::WriteUInt32(out,v.visibleChildIndex); }
 #undef KB_WRITE_FIELD
@@ -109,11 +119,11 @@ void WriteValue(std::vector<std::uint8_t>& out, const UIWidgetSwitcher& v) { Sce
 
 } // namespace
 
-bool SceneAssetUIComponentCodec::Read(Reader& input, UIComponentSet& output) {
+bool SceneAssetUIComponentCodec::Read(Reader& input, std::uint32_t fileVersion, UIComponentSet& output) {
     std::uint64_t bits = 0U;
     if (!input.ReadUInt64(bits) || (bits & ~KnownBits) != 0U) return false;
     UIComponentSet decoded;
-#define KB_READ(Type, Component, Field) if ((bits & Bit(UIComponentType::Type)) != 0U) { Component value{}; if (!ReadValue(input,value)) return false; decoded.Field=value; }
+#define KB_READ(Type, Component, Field) if ((bits & Bit(UIComponentType::Type)) != 0U) { Component value{}; if (!ReadValue(input,value,fileVersion)) return false; decoded.Field=value; }
     KB_COMPONENTS(KB_READ)
 #undef KB_READ
     if (!IsUIComponentSetValid(decoded)) return false;

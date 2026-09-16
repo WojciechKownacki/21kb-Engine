@@ -523,7 +523,7 @@ bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::
         output.lensEcho = echo;
     }
     if ((componentBits & UIBit) != 0U) {
-        if (fileVersion < 34U || !SceneAssetUIComponentCodec::Read(input, output.ui) || output.ui.Empty()) return false;
+        if (fileVersion < 34U || !SceneAssetUIComponentCodec::Read(input, fileVersion, output.ui) || output.ui.Empty()) return false;
     }
     return true;
 }

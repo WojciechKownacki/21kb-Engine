@@ -15,12 +15,14 @@
 #include "engine/ui/UIComponentCatalog.hpp"
 #include "engine/ui/UIComponentPropertyCatalog.hpp"
 #include "engine/ui/UIComponentValidation.hpp"
+#include "scene/asset/io/components/SceneAssetUIComponentCodec.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <span>
 #include <string_view>
+#include <vector>
 
 namespace {
 
@@ -429,13 +431,23 @@ void TestInteractionAndEditing() {
     static_cast<void>(scene.UI().Update(200.0F, 220.0F, pointer, 0.016F));
     pointer.primaryDown = false;
     static_cast<void>(scene.UI().Update(200.0F, 220.0F, pointer, 0.016F));
-    kb::tests::Require(scene.Components().UI().TryGet<kb::scene::UIDropdown>(dropdown.Entity())->selectedIndex == 1U,
-        "Dropdown activation must advance the selected child index");
-    kb::tests::Require(FindElement(scene.UI().Frame(), dropdown.Entity())->dropdown->selectedIndex == 1U,
-        "The derived frame must expose the canonical dropdown selection to presentation consumers");
-    kb::tests::Require(FindElement(scene.UI().Frame(), firstOption.Entity()) == nullptr &&
+    kb::tests::Require(scene.Components().UI().TryGet<kb::scene::UIDropdown>(dropdown.Entity())->selectedIndex == 0U,
+        "Opening a dropdown must not change its selection on its own");
+    kb::tests::Require(FindElement(scene.UI().Frame(), firstOption.Entity()) != nullptr &&
         FindElement(scene.UI().Frame(), secondOption.Entity()) != nullptr,
-        "A dropdown must show only its selected option instead of overlapping all option labels");
+        "An open dropdown must lay out every option so the player can see the list");
+
+    // Anywhere that is neither the control nor one of its rows dismisses the list.
+    pointer.pointerPosition = {180.0F, 210.0F};
+    pointer.primaryDown = true;
+    static_cast<void>(scene.UI().Update(200.0F, 220.0F, pointer, 0.016F));
+    pointer.primaryDown = false;
+    static_cast<void>(scene.UI().Update(200.0F, 220.0F, pointer, 0.016F));
+    kb::tests::Require(FindElement(scene.UI().Frame(), dropdown.Entity())->dropdown->selectedIndex == 0U,
+        "The derived frame must expose the canonical dropdown selection to presentation consumers");
+    kb::tests::Require(FindElement(scene.UI().Frame(), firstOption.Entity()) != nullptr &&
+        FindElement(scene.UI().Frame(), secondOption.Entity()) == nullptr,
+        "A closed dropdown must show only its selected option instead of overlapping all option labels");
 
     pointer.pointerPosition = {10.0F, 165.0F};
     pointer.primaryDown = true;
@@ -644,6 +656,134 @@ void TestAuthoredDimensionsAndVisibility() {
         kb::tests::NearlyEqual(visible->rect.width, 240.0F), "Restored UI must render at its authored width and accept input");
 }
 
+// The dropdown contract every menu depends on: the list opens, every option can be reached and
+// chosen with a pointer and with navigation alone, rows past the allowed height are clipped
+// instead of covering the screen, cancelling keeps the previous selection, and a selection change
+// is announced once against the control rather than against the row that was clicked.
+void TestDropdownList() {
+    kb::scene::Scene scene{kb::scene::SceneMode::PrefabPrivate};
+    const kb::scene::SceneObject canvas = AddUI(scene, {}, CanvasComponents());
+    kb::scene::UIComponentSet dropdownComponents = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Dropdown);
+    dropdownComponents.rectTransform = Rect(0.0F, 0.0F, 100.0F, 20.0F);
+    dropdownComponents.dropdown->maxVisibleOptions = 2U;
+    const kb::scene::SceneObject dropdown = AddUI(scene, canvas, dropdownComponents);
+
+    constexpr std::size_t kOptionCount = 5U;
+    std::array<kb::scene::SceneObject, kOptionCount> options{};
+    for (std::size_t index = 0U; index < kOptionCount; ++index) {
+        kb::scene::UIComponentSet option;
+        option.rectTransform = Rect(0.0F, 0.0F, 100.0F, 20.0F);
+        option.selectable.emplace();
+        options[index] = AddUI(scene, dropdown, option);
+    }
+
+    kb::scene::SceneUIInput input;
+    input.pointerAvailable = true;
+    input.pointerPosition = {50.0F, 10.0F};
+    kb::tests::Require(scene.UI().Update(400.0F, 400.0F, input, 0.016F), "Dropdown frame must build");
+    kb::tests::Require(FindElement(scene.UI().Frame(), options[1].Entity()) == nullptr,
+        "A closed dropdown must not lay out unselected options");
+
+    const auto click = [&](kb::math::Vec2 position) {
+        input.pointerPosition = position;
+        input.primaryDown = true;
+        kb::tests::Require(scene.UI().Update(400.0F, 400.0F, input, 0.016F), "Dropdown press must update");
+        input.primaryDown = false;
+        kb::tests::Require(scene.UI().Update(400.0F, 400.0F, input, 0.016F), "Dropdown release must update");
+    };
+
+    click({50.0F, 10.0F});
+    kb::tests::Require(scene.UI().Focused() == dropdown.Entity(),
+        "Pressing a dropdown must focus the control, not the label showing its current selection");
+    for (const kb::scene::SceneObject& option : options) {
+        kb::tests::Require(FindElement(scene.UI().Frame(), option.Entity()) != nullptr,
+            "Every option of an open dropdown must be laid out so navigation can reach it");
+    }
+    // Two visible rows sit under the control; the third is laid out but clipped away, so the list
+    // cannot be picked from - or drawn - outside the height the author allowed.
+    kb::tests::Require(scene.UI().HitTest({50.0F, 50.0F}) == options[1].Entity(),
+        "A visible option row must accept the pointer");
+    kb::tests::Require(scene.UI().HitTest({50.0F, 70.0F}) != options[2].Entity(),
+        "An option row past the visible count must be clipped out of the open list");
+    const kb::scene::SceneUIFrameElement* clippedRow = FindElement(scene.UI().Frame(), options[2].Entity());
+    kb::tests::Require(clippedRow != nullptr && clippedRow->clipRect.y + clippedRow->clipRect.height <= 60.0F,
+        "The open list must clip its rows to the visible window rather than to the whole canvas");
+    kb::tests::Require(FindElement(scene.UI().Frame(), options[0].Entity())->zOrder >
+        FindElement(scene.UI().Frame(), dropdown.Entity())->zOrder,
+        "An open list must sort above the widgets it covers");
+
+    click({50.0F, 50.0F});
+    kb::tests::Require(scene.Components().UI().TryGet<kb::scene::UIDropdown>(dropdown.Entity())->selectedIndex == 1U,
+        "Clicking an option row must select that option");
+    const kb::scene::SceneUIEvent* changed =
+        FindEvent(scene.UI().Events(), kb::scene::SceneUIEventType::Changed, dropdown.Entity());
+    kb::tests::Require(changed != nullptr && kb::tests::NearlyEqual(changed->value, 1.0F),
+        "A dropdown selection must report the chosen index against the control");
+    kb::tests::Require(FindElement(scene.UI().Frame(), options[0].Entity()) == nullptr,
+        "Choosing an option must close the list");
+    kb::tests::Require(scene.UI().Focused() == dropdown.Entity(),
+        "Choosing an option must hand focus back to the control");
+
+    // Navigation alone - the same fields the D-pad, the left stick and the arrow keys feed - has to
+    // open the list, walk past the visible window and commit.
+    const auto pulse = [&](bool kb::scene::SceneUIInput::*field) {
+        input.*field = true;
+        kb::tests::Require(scene.UI().Update(400.0F, 400.0F, input, 0.016F), "Navigation press must update");
+        input.*field = false;
+        kb::tests::Require(scene.UI().Update(400.0F, 400.0F, input, 0.016F), "Navigation release must update");
+    };
+    input.pointerAvailable = false;
+    pulse(&kb::scene::SceneUIInput::submitDown);
+    kb::tests::Require(FindElement(scene.UI().Frame(), options[4].Entity()) != nullptr,
+        "Submitting on a focused dropdown must open its list");
+    // Control -> row 0 -> row 1 -> row 2 -> row 3: two steps past the two visible rows.
+    for (std::size_t step = 0U; step < 4U; ++step)
+        pulse(&kb::scene::SceneUIInput::navigateDown);
+    kb::tests::Require(scene.UI().Focused() == options[3].Entity(),
+        "Navigating down inside an open list must walk its rows");
+    kb::tests::Require(FindElement(scene.UI().Frame(), options[0].Entity())->rect.y <
+        FindElement(scene.UI().Frame(), dropdown.Entity())->rect.y + 20.0F,
+        "Reaching a clipped row must scroll the list instead of leaving the row unreachable");
+    pulse(&kb::scene::SceneUIInput::submitDown);
+    kb::tests::Require(scene.Components().UI().TryGet<kb::scene::UIDropdown>(dropdown.Entity())->selectedIndex == 3U &&
+        FindElement(scene.UI().Frame(), options[0].Entity()) == nullptr,
+        "Submitting on a focused option must select it and close the list");
+
+    pulse(&kb::scene::SceneUIInput::submitDown);
+    kb::tests::Require(FindElement(scene.UI().Frame(), options[0].Entity()) != nullptr, "The list must reopen");
+    pulse(&kb::scene::SceneUIInput::cancelDown);
+    kb::tests::Require(scene.Components().UI().TryGet<kb::scene::UIDropdown>(dropdown.Entity())->selectedIndex == 3U &&
+        FindElement(scene.UI().Frame(), options[0].Entity()) == nullptr &&
+        scene.UI().Focused() == dropdown.Entity(),
+        "Cancelling must close the list, keep the previous selection and restore focus to the control");
+}
+
+// A v34 scene stored a dropdown as its selected index alone. It has to keep loading, with the
+// option-count bound left at "show every option", and the current format has to round-trip it.
+void TestDropdownPersistenceCompatibility() {
+    kb::scene::UIComponentSet authored;
+    authored.rectTransform.emplace();
+    authored.dropdown.emplace();
+    authored.dropdown->selectedIndex = 2U;
+    authored.dropdown->maxVisibleOptions = 4U;
+    std::vector<std::uint8_t> current;
+    kb::scene::SceneAssetUIComponentCodec::Write(current, authored);
+    kb::scene::UIComponentSet decoded;
+    kb::scene::SceneAssetBinaryIO::ByteReader currentReader{current};
+    kb::tests::Require(kb::scene::SceneAssetUIComponentCodec::Read(currentReader, 35U, decoded) &&
+        currentReader.Exhausted() && decoded.dropdown->selectedIndex == 2U && decoded.dropdown->maxVisibleOptions == 4U,
+        "A v35 dropdown must round-trip its selection and visible option count");
+
+    // The v34 layout is the current one without the trailing maxVisibleOptions field.
+    std::vector<std::uint8_t> legacy(current.begin(), current.end() - 4);
+    kb::scene::SceneAssetBinaryIO::ByteReader legacyReader{legacy};
+    kb::scene::UIComponentSet legacyDecoded;
+    kb::tests::Require(kb::scene::SceneAssetUIComponentCodec::Read(legacyReader, 34U, legacyDecoded) &&
+        legacyReader.Exhausted() && legacyDecoded.dropdown->selectedIndex == 2U &&
+        legacyDecoded.dropdown->maxVisibleOptions == 0U,
+        "A v34 dropdown must load with every option visible");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -655,6 +795,8 @@ void RunSceneUITests() {
     TestHierarchicalTransformsAndMaskHitTesting();
     TestClippingGroupsSortingAndScaling();
     TestInteractionAndEditing();
+    TestDropdownList();
+    TestDropdownPersistenceCompatibility();
     TestProgressAndEventQueue();
     TestAutomaticRuntimeInput();
 }

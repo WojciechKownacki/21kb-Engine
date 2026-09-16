@@ -1,5 +1,7 @@
 #include "scene/ui/SceneUIComponentTextCodec.hpp"
 
+#include "engine/scene/SceneDocument.hpp"
+
 #include "scene/asset/io/components/SceneAssetUIComponentCodec.hpp"
 
 #include <utility>
@@ -45,7 +47,7 @@ bool SceneUIComponentTextCodec::Decode(std::string_view encoded, UIComponentSet&
     }
     UIComponentSet decoded;
     SceneAssetBinaryIO::ByteReader reader{std::move(bytes)};
-    if (!SceneAssetUIComponentCodec::Read(reader, decoded) || decoded.Empty() || !reader.Exhausted()) return false;
+    if (!SceneAssetUIComponentCodec::Read(reader, SceneDocument::CurrentFileVersion, decoded) || decoded.Empty() || !reader.Exhausted()) return false;
     output = std::move(decoded);
     return true;
 }
