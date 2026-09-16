@@ -2259,8 +2259,10 @@ constexpr int kUIAnchorGridHeight = 198;
     const int propertyCount = static_cast<int>(std::count_if(rows.begin(), rows.end(),
         [](const auto& row) { return row.fieldCount != 0; }));
     const auto section = InspectorUIComponentModel::Section(component);
+    // A dropdown lists its options and adds the Add / Remove option actions under them.
+    const int actionRows = component == kb::scene::UIComponentType::Dropdown ? 2 : 0;
     if (component != kb::scene::UIComponentType::RectTransform || state.IsCollapsed(section))
-        return SectionHeight(state, section, propertyCount);
+        return SectionHeight(state, section, propertyCount + actionRows);
     return kSectionHeaderHeight + kDividerHeight + kUIRectGeometryHeight +
         (state.IsDisclosureExpanded(InspectorDisclosureId::UIAnchorPresets) ? kUIAnchorGridHeight : 0) +
         3 * (kFieldRowHeight + kDividerHeight) + kDisclosureRowHeight + kDividerHeight +
@@ -2494,6 +2496,10 @@ void PaintUIComponentSections(HDC dc, RECT content, const RECT& band,
                 } else {
                     section.Field(row.label, row.value, editableProperty, index);
                 }
+            }
+            if (component == kb::scene::UIComponentType::Dropdown) {
+                section.Action("Add Option", InspectorPropertyId::UIDropdownAddOption, true);
+                section.Action("Remove Last Option", InspectorPropertyId::UIDropdownRemoveOption);
             }
         }
         y += height + kSectionGap;
@@ -3745,6 +3751,14 @@ void AdvanceRow(int& y) noexcept;
                     return hit;
                 }
                 AdvanceRow(y);
+            }
+            if (component == kb::scene::UIComponentType::Dropdown) {
+                for (const InspectorPropertyId action :
+                     { InspectorPropertyId::UIDropdownAddOption, InspectorPropertyId::UIDropdownRemoveOption }) {
+                    const RECT row = RowRect(content, y);
+                    if (Contains(row, x, yPoint)) return MakeHit(InspectorHitKind::Row, section, action, row);
+                    AdvanceRow(y);
+                }
             }
         }
         y += kSectionGap;

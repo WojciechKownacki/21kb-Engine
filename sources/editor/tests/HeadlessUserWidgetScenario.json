@@ -1514,126 +1514,30 @@
       "value": 235.0
     },
     {
-      "op": "create_entity",
-      "id": "choice0",
-      "name": "choice0"
-    },
-    {
-      "op": "reparent_entity",
-      "entity": "choice0",
-      "parent": "choice"
-    },
-    {
-      "op": "add_component",
-      "entity": "choice0",
-      "component": "kb21.ui.text"
-    },
-    {
-      "op": "add_component",
-      "entity": "choice0",
-      "component": "kb21.ui.selectable"
+      "op": "set_property",
+      "entity": "choice",
+      "component": "kb21.ui.dropdown",
+      "property": "optionCount",
+      "value": 2
     },
     {
       "op": "set_property",
-      "entity": "choice0",
-      "component": "kb21.ui.rect-transform",
-      "property": "offsetMax.x",
-      "value": 455.0
-    },
-    {
-      "op": "set_property",
-      "entity": "choice0",
-      "component": "kb21.ui.rect-transform",
-      "property": "offsetMax.y",
-      "value": 44.0
-    },
-    {
-      "op": "set_property",
-      "entity": "choice0",
-      "component": "kb21.ui.rect-transform",
-      "property": "offsetMin.x",
-      "value": 15.0
-    },
-    {
-      "op": "set_property",
-      "entity": "choice0",
-      "component": "kb21.ui.rect-transform",
-      "property": "offsetMin.y",
-      "value": 9.0
-    },
-    {
-      "op": "set_property",
-      "entity": "choice0",
-      "component": "kb21.ui.text",
-      "property": "content",
+      "entity": "choice",
+      "component": "kb21.ui.dropdown",
+      "property": "options.0.text",
       "value": "Difficulty: Explorer"
     },
     {
       "op": "set_property",
-      "entity": "choice0",
-      "component": "kb21.ui.text",
-      "property": "fontSize",
-      "value": 22.0
-    },
-    {
-      "op": "create_entity",
-      "id": "choice1",
-      "name": "choice1"
-    },
-    {
-      "op": "reparent_entity",
-      "entity": "choice1",
-      "parent": "choice"
-    },
-    {
-      "op": "add_component",
-      "entity": "choice1",
-      "component": "kb21.ui.text"
-    },
-    {
-      "op": "add_component",
-      "entity": "choice1",
-      "component": "kb21.ui.selectable"
-    },
-    {
-      "op": "set_property",
-      "entity": "choice1",
-      "component": "kb21.ui.rect-transform",
-      "property": "offsetMax.x",
-      "value": 455.0
-    },
-    {
-      "op": "set_property",
-      "entity": "choice1",
-      "component": "kb21.ui.rect-transform",
-      "property": "offsetMax.y",
-      "value": 44.0
-    },
-    {
-      "op": "set_property",
-      "entity": "choice1",
-      "component": "kb21.ui.rect-transform",
-      "property": "offsetMin.x",
-      "value": 15.0
-    },
-    {
-      "op": "set_property",
-      "entity": "choice1",
-      "component": "kb21.ui.rect-transform",
-      "property": "offsetMin.y",
-      "value": 9.0
-    },
-    {
-      "op": "set_property",
-      "entity": "choice1",
-      "component": "kb21.ui.text",
-      "property": "content",
+      "entity": "choice",
+      "component": "kb21.ui.dropdown",
+      "property": "options.1.text",
       "value": "Difficulty: Veteran"
     },
     {
       "op": "set_property",
-      "entity": "choice1",
-      "component": "kb21.ui.text",
+      "entity": "choice",
+      "component": "kb21.ui.dropdown",
       "property": "fontSize",
       "value": 22.0
     },
@@ -2524,8 +2428,14 @@
       "dt": 0.016666666666666666
     },
     {
-      "op": "assert_ui_frame",
-      "entity": "choice1"
+      "op": "capture_runtime",
+      "checkpoint": "menu-dropdown-open",
+      "require_non_uniform": true
+    },
+    {
+      "op": "assert_capture_difference",
+      "before": "menu-settings",
+      "after": "menu-dropdown-open"
     },
     {
       "op": "key",
@@ -2593,15 +2503,6 @@
       "component": "kb21.ui.dropdown",
       "property": "selectedIndex",
       "value": 1
-    },
-    {
-      "op": "assert_ui_frame",
-      "entity": "choice0",
-      "visible": false
-    },
-    {
-      "op": "assert_ui_frame",
-      "entity": "choice1"
     },
     {
       "op": "pointer",

@@ -117,6 +117,7 @@ ScreenUIFontPreparation ScreenUIFontAtlasCache::Prepare(std::uint64_t sceneId, k
             continue;
         }
         ScreenUITextRun run{.entity = element.entity.Id(),
+                            .dropdownOptionIndex = element.dropdownOptionIndex,
                             .fontAssetId = key.assetId,
                             .pixelSize = key.pixelSize,
                             .atlasWidth = entry->atlasWidth,

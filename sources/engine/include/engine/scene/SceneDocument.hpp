@@ -37,7 +37,8 @@ struct SceneDocument {
     // v34: hierarchy-authored UI components persist with scene and prefab nodes.
     // v35: UIDropdown persists how many option rows its open list shows; UI navigation links persist
     //      as stable node ids.
-    static constexpr std::uint32_t CurrentFileVersion = 35U;
+    // v36: UIDropdown owns its options and row style; older child-object options are converted on load.
+    static constexpr std::uint32_t CurrentFileVersion = 36U;
 
     std::uint32_t fileVersion = CurrentFileVersion;
     std::string guid;

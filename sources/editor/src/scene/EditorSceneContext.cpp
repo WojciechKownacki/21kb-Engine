@@ -3643,7 +3643,11 @@ bool EditorSceneContext::FitColliderToMesh(kb::scene::SceneEntity entity) {
 
 bool EditorSceneContext::CompleteUIComponentDependencies(kb::scene::SceneEntity entity) {
     auto ui = scene_->Components().UI();
-    if (const auto* text = ui.TryGet<kb::scene::UIText>(entity); text != nullptr && text->fontAssetId == 0U) {
+    // Text draws only with a font asset, so a component that draws text gets the bundled font when it
+    // arrives without one: Text for its content, Dropdown for its caption and list rows.
+    const auto* text = ui.TryGet<kb::scene::UIText>(entity);
+    const auto* dropdown = ui.TryGet<kb::scene::UIDropdown>(entity);
+    if ((text != nullptr && text->fontAssetId == 0U) || (dropdown != nullptr && dropdown->fontAssetId == 0U)) {
         const std::array fontFiles{EditorBundledFontPath()};
         const auto imported = kb::assets::AssetImportService::ImportFiles(
             scene_->Assets().Manager(), fontFiles, "/Game/UI/Fonts");
@@ -3652,9 +3656,17 @@ bool EditorSceneContext::CompleteUIComponentDependencies(kb::scene::SceneEntity 
                 (imported.items.empty() ? std::string{"import returned no result"} : imported.items.front().error));
             return false;
         }
-        auto authoredText = *text;
-        authoredText.fontAssetId = imported.items.front().id.value;
-        ui.Set(entity, authoredText);
+        const std::uint64_t font = imported.items.front().id.value;
+        if (text != nullptr && text->fontAssetId == 0U) {
+            auto authoredText = *text;
+            authoredText.fontAssetId = font;
+            ui.Set(entity, authoredText);
+        }
+        if (dropdown != nullptr && dropdown->fontAssetId == 0U) {
+            auto authoredDropdown = *dropdown;
+            authoredDropdown.fontAssetId = font;
+            ui.Set(entity, authoredDropdown);
+        }
     }
     kb::scene::SceneEntity root = entity;
     for (auto ancestor = entity; ancestor.IsValid(); ancestor = scene_->Hierarchy().Parent(ancestor)) {

@@ -141,7 +141,20 @@ bool IsUIComponentValid(const UIScrollView& value) noexcept {
     return Finite(value.scrollX) && Finite(value.scrollY) && Finite(value.scrollSensitivity) && value.scrollSensitivity >= 0.0F;
 }
 bool IsUIComponentValid(const UIInputField&) noexcept { return true; }
-bool IsUIComponentValid(const UIDropdown&) noexcept { return true; }
+bool IsUIComponentValid(const UIDropdown& value) noexcept {
+    if (value.optionCount > UIDropdown::MaxOptions) return false;
+    // With no options the selection means nothing yet; a script may set it before filling the list.
+    if (value.optionCount != 0U && value.selectedIndex >= value.optionCount) return false;
+    std::array<char32_t, UIDropdownOption::MaxUtf8Bytes> decoded{};
+    for (std::size_t index = 0U; index < value.optionCount; ++index) {
+        const UIDropdownOption& option = value.options[index];
+        if (std::find(option.text.begin(), option.text.end(), '\0') == option.text.end() ||
+            !kb::input::DecodeUtf8(UIDropdownOptionText(option), decoded).wellFormed)
+            return false;
+    }
+    return Finite(value.fontSize) && value.fontSize > 0.0F && Normalized(value.textColor) &&
+        Normalized(value.itemColor) && Normalized(value.itemHighlightedColor) && Normalized(value.itemSelectedColor);
+}
 bool IsUIComponentValid(const UIProgressBar& value) noexcept { return Range(value.minimum, value.maximum, value.value); }
 bool IsUIComponentValid(const UIWidgetSwitcher&) noexcept { return true; }
 
