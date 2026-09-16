@@ -841,6 +841,10 @@ void TestDropdownPersistenceCompatibility() {
     }
     kb::tests::Require(kb::scene::SceneUIComponentTextCodec::Decode(legacyText, fromText) && fromText.selectable.has_value(),
         "UI text written before versions were recorded must still decode");
+    kb::tests::Require(kb::scene::SceneUIComponentTextCodec::EncodedVersion(legacyText) == 34U &&
+        kb::scene::SceneUIComponentTextCodec::EncodedVersion(kb::scene::SceneUIComponentTextCodec::Encode(authored)) == 36U &&
+        kb::scene::SceneUIComponentTextCodec::EncodedVersion("v99:00") == 0U,
+        "Prefab loading must be able to tell which layout a UI payload uses, to convert child-object options");
 
     kb::scene::ScenePrefab legacyScene;
     kb::scene::ScenePrefabNodeDesc control;
@@ -1020,6 +1024,49 @@ void TestNavigationLinksSurviveHierarchyCopies() {
         "A v34 navigation link written as a live entity id must load as no link");
 }
 
+// A dropdown near the bottom of the screen opens its list upwards instead of running off-screen, and
+// every dropdown draws its arrow. Option edits keep the selection on the same choice.
+void TestDropdownPlacementAndOptionEdits() {
+    kb::scene::Scene scene{kb::scene::SceneMode::PrefabPrivate};
+    const kb::scene::SceneObject canvas = AddUI(scene, {}, CanvasComponents());
+    kb::scene::UIComponentSet components = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Dropdown);
+    components.rectTransform = Rect(0.0F, 360.0F, 100.0F, 20.0F);
+    components.dropdown->optionCount = 3U;
+    static_cast<void>(kb::scene::SetUIDropdownOptionText(components.dropdown->options[2], "Option 3"));
+    const kb::scene::SceneObject dropdown = AddUI(scene, canvas, components);
+    kb::scene::SceneUIInput input;
+    input.pointerAvailable = true;
+    input.pointerPosition = {50.0F, 370.0F};
+    static_cast<void>(scene.UI().Update(400.0F, 400.0F, input, 0.016F));
+    const auto arrowBars = [&]() {
+        return std::ranges::count_if(scene.UI().Frame().elements, [&](const kb::scene::SceneUIFrameElement& element) {
+            return element.entity == dropdown.Entity() && element.dropdownOptionIndex < 0 && element.border.has_value() &&
+                !element.dropdown.has_value();
+        });
+    };
+    kb::tests::Require(arrowBars() == 2, "A dropdown must draw its arrow");
+    input.primaryDown = true;
+    static_cast<void>(scene.UI().Update(400.0F, 400.0F, input, 0.016F));
+    input.primaryDown = false;
+    static_cast<void>(scene.UI().Update(400.0F, 400.0F, input, 0.016F));
+    const auto row = std::ranges::find_if(scene.UI().Frame().elements, [&](const kb::scene::SceneUIFrameElement& element) {
+        return element.entity == dropdown.Entity() && element.dropdownOptionIndex == 2 && element.border.has_value();
+    });
+    kb::tests::Require(row != scene.UI().Frame().elements.end() && row->rect.y + row->rect.height <= 360.01F &&
+        row->rect.y >= 0.0F, "A list with no room below the control must open upwards and stay on screen");
+    kb::tests::Require(scene.UI().Frame().HitTestElement({50.0F, 350.0F})->dropdownOptionIndex == 2,
+        "The last option of an upward list must sit directly above the control");
+
+    kb::scene::UIDropdown edited = *components.dropdown;
+    edited.selectedIndex = 2U;
+    kb::tests::Require(kb::scene::MoveUIDropdownOption(edited, 2U, 0U) && edited.selectedIndex == 0U &&
+        kb::scene::UIDropdownOptionText(edited.options[0]) == "Option 3", "Moving the selected option must keep it selected");
+    kb::tests::Require(kb::scene::RemoveUIDropdownOption(edited, 1U) && edited.optionCount == 2U && edited.selectedIndex == 0U &&
+        kb::scene::UIDropdownOptionText(edited.options[1]) == "Option 2", "Removing another option must keep the selection");
+    kb::tests::Require(kb::scene::RemoveUIDropdownOption(edited, 0U) && edited.optionCount == 1U && edited.selectedIndex == 0U,
+        "Removing the selected option must select a remaining one");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -1032,6 +1079,7 @@ void RunSceneUITests() {
     TestClippingGroupsSortingAndScaling();
     TestInteractionAndEditing();
     TestDropdownList();
+    TestDropdownPlacementAndOptionEdits();
     TestDropdownPersistenceCompatibility();
     TestNavigationLinksSurviveHierarchyCopies();
     TestProgressAndEventQueue();

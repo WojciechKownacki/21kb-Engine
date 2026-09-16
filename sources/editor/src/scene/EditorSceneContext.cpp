@@ -4196,6 +4196,45 @@ bool EditorSceneContext::SetUIColor(kb::scene::SceneEntity entity, kb::scene::UI
     });
 }
 
+bool EditorSceneContext::EditUIDropdownOption(kb::scene::SceneEntity entity, UIDropdownOptionEdit edit, std::uint32_t index) {
+    if (!scene_->Entities().IsAlive(entity)) return false;
+    kb::scene::UIComponentSet candidate = kb::scene::CaptureSceneUIComponents(scene_->Components().UI(), entity);
+    if (!candidate.dropdown.has_value()) return false;
+    kb::scene::UIDropdown& dropdown = *candidate.dropdown;
+    bool edited = false;
+    std::string label;
+    switch (edit) {
+    case UIDropdownOptionEdit::Add:
+        if (dropdown.optionCount >= kb::scene::UIDropdown::MaxOptions) {
+            console_.Warning("Inspector", "A dropdown holds at most 32 options.");
+            return false;
+        }
+        dropdown.options[dropdown.optionCount] = {};
+        edited = kb::scene::SetUIDropdownOptionText(dropdown.options[dropdown.optionCount],
+            "Option " + std::to_string(dropdown.optionCount + 1U));
+        ++dropdown.optionCount;
+        label = "Add Dropdown Option";
+        break;
+    case UIDropdownOptionEdit::Remove:
+        edited = kb::scene::RemoveUIDropdownOption(dropdown, index);
+        label = "Remove Dropdown Option";
+        break;
+    case UIDropdownOptionEdit::MoveUp:
+        edited = index > 0U && kb::scene::MoveUIDropdownOption(dropdown, index, index - 1U);
+        label = "Move Dropdown Option";
+        break;
+    case UIDropdownOptionEdit::MoveDown:
+        edited = index + 1U < dropdown.optionCount && kb::scene::MoveUIDropdownOption(dropdown, index, index + 1U);
+        label = "Move Dropdown Option";
+        break;
+    }
+    if (!edited) return false;
+    return ExecuteSceneCommand(label, [this, entity, candidate = std::move(candidate)]() {
+        kb::scene::SynchronizeSceneUIComponents(scene_->Components().UI(), entity, candidate);
+        return true;
+    });
+}
+
 bool EditorSceneContext::SetUIComponentProperty(
     kb::scene::SceneEntity entity, kb::scene::UIComponentType component,
     std::string_view property, const kb::scene::UIComponentPropertyValue& value) {

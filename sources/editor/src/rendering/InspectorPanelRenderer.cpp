@@ -96,6 +96,9 @@ using inspector_panel_rows::CheckboxRectForRow;
 using inspector_panel_rows::ComponentRemoveButtonRect;
 using inspector_panel_rows::DrawAssetFieldRow;
 using inspector_panel_rows::DrawBoolRow;
+using inspector_panel_rows::DrawDropdownOptionRow;
+using inspector_panel_rows::DropdownOptionButtonRect;
+using inspector_panel_rows::DropdownOptionTextRect;
 using inspector_panel_rows::DrawFieldRow;
 using inspector_panel_rows::DrawRotationRow;
 using inspector_panel_rows::DrawSectionAccentFrame;
@@ -2260,7 +2263,7 @@ constexpr int kUIAnchorGridHeight = 198;
         [](const auto& row) { return row.fieldCount != 0; }));
     const auto section = InspectorUIComponentModel::Section(component);
     // A dropdown lists its options and adds the Add / Remove option actions under them.
-    const int actionRows = component == kb::scene::UIComponentType::Dropdown ? 2 : 0;
+    const int actionRows = component == kb::scene::UIComponentType::Dropdown ? 1 : 0;
     if (component != kb::scene::UIComponentType::RectTransform || state.IsCollapsed(section))
         return SectionHeight(state, section, propertyCount + actionRows);
     return kSectionHeaderHeight + kDividerHeight + kUIRectGeometryHeight +
@@ -2489,6 +2492,17 @@ void PaintUIComponentSections(HDC dc, RECT content, const RECT& band,
                 } else if (row.type == kb::scene::UIComponentPropertyType::Asset) {
                     section.AssetField(row.label, AssetDisplayName(sceneContext, std::stoull(row.value)),
                         editableProperty, InspectorPropertyId::UIAssetPicker, index);
+                } else if (component == kb::scene::UIComponentType::Dropdown && row.name.starts_with("options.") &&
+                           row.name.ends_with(".text")) {
+                    if (!inspector.IsCollapsed(sectionId)) {
+                        RECT bounds = section.Reserve(kFieldRowHeight + kDividerHeight);
+                        bounds.bottom -= kDividerHeight;
+                        const bool editing = inspector.EditedProperty() == editableProperty && inspector.EditIndex() == index;
+                        DrawDropdownOptionRow(dc, bounds, theme, inspector, sectionId, editableProperty, row.label, row.value,
+                            index, std::stoi(std::string{row.name.substr(8U)}), editing, inspector.EditBuffer(),
+                            inspector.IsTextCaretVisible());
+                        inspector_panel_rows::DrawDivider(dc, theme, bounds.left, bounds.right, bounds.bottom);
+                    }
                 } else if (row.type == kb::scene::UIComponentPropertyType::Entity) {
                     section.AssetField(row.label,
                         InspectorUIComponentModel::EntityReferenceLabel(sceneContext.Scene(), std::stoull(row.value)),
@@ -2499,7 +2513,6 @@ void PaintUIComponentSections(HDC dc, RECT content, const RECT& band,
             }
             if (component == kb::scene::UIComponentType::Dropdown) {
                 section.Action("Add Option", InspectorPropertyId::UIDropdownAddOption, true);
-                section.Action("Remove Last Option", InspectorPropertyId::UIDropdownRemoveOption);
             }
         }
         y += height + kSectionGap;
@@ -3735,6 +3748,24 @@ void AdvanceRow(int& y) noexcept;
                     if (!row.choices.empty()) {
                         const RECT box = ValueRectForRow(RowRect(content, y));
                         if (Contains(box, x, yPoint)) hit = MakeHit(InspectorHitKind::ChoiceField, section, property, box);
+                    } else if (component == kb::scene::UIComponentType::Dropdown && row.name.starts_with("options.") &&
+                               row.name.ends_with(".text")) {
+                        const RECT bounds = RowRect(content, y);
+                        const int option = std::stoi(std::string{row.name.substr(8U)});
+                        constexpr std::array buttons{ InspectorPropertyId::UIDropdownMoveOptionUp,
+                            InspectorPropertyId::UIDropdownMoveOptionDown, InspectorPropertyId::UIDropdownRemoveOption };
+                        for (int button = 0; button < 3 && hit.kind == InspectorHitKind::None; ++button) {
+                            const RECT box = DropdownOptionButtonRect(bounds, button);
+                            if (Contains(box, x, yPoint)) {
+                                hit = MakeHit(InspectorHitKind::Row, section, buttons[static_cast<std::size_t>(button)], box);
+                                hit.index = option;
+                                return hit;
+                            }
+                        }
+                        if (Contains(DropdownOptionTextRect(bounds), x, yPoint))
+                            hit = MakeHit(InspectorHitKind::TextField, section, property, DropdownOptionTextRect(bounds));
+                        else if (Contains(bounds, x, yPoint))
+                            hit = MakeHit(InspectorHitKind::Row, section, property, bounds);
                     } else hit = row.type == kb::scene::UIComponentPropertyType::Asset ||
                             row.type == kb::scene::UIComponentPropertyType::Entity
                         ? HitAssetFieldRow(RowRect(content, y), section, property,
@@ -3753,12 +3784,10 @@ void AdvanceRow(int& y) noexcept;
                 AdvanceRow(y);
             }
             if (component == kb::scene::UIComponentType::Dropdown) {
-                for (const InspectorPropertyId action :
-                     { InspectorPropertyId::UIDropdownAddOption, InspectorPropertyId::UIDropdownRemoveOption }) {
-                    const RECT row = RowRect(content, y);
-                    if (Contains(row, x, yPoint)) return MakeHit(InspectorHitKind::Row, section, action, row);
-                    AdvanceRow(y);
-                }
+                const RECT row = RowRect(content, y);
+                if (Contains(row, x, yPoint))
+                    return MakeHit(InspectorHitKind::Row, section, InspectorPropertyId::UIDropdownAddOption, row);
+                AdvanceRow(y);
             }
         }
         y += kSectionGap;

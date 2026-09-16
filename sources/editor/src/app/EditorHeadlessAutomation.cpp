@@ -186,8 +186,12 @@ FindInspectorHit(
             }
         }
     }
+    const bool rightEdgeButton = property == InspectorPropertyId::UIAssetPicker ||
+        property == InspectorPropertyId::UIDropdownMoveOptionUp || property == InspectorPropertyId::UIDropdownMoveOptionDown ||
+        property == InspectorPropertyId::UIDropdownRemoveOption;
     const int firstX = compactX >= 0 ? compactX
         : property == InspectorPropertyId::UIAssetPicker ? kInspectorContent.right - 48
+        : rightEdgeButton ? kInspectorContent.right - 140
         : property == InspectorPropertyId::UIAnchorPresets ? 40
         : property == InspectorPropertyId::UIAnchorPreset ? 40 + 64 * (std::max(0, index) % 4)
         : property == InspectorPropertyId::UIRectLayoutField ? (index % 2 == 0 ? 225 : 585)
@@ -197,7 +201,7 @@ FindInspectorHit(
         : kInspectorContent.left;
     // The picker button sits at the value column's right edge, which moves left once the Inspector
     // is long enough to show its scrollbar, so it is searched across that edge rather than at one x.
-    const int lastX = property == InspectorPropertyId::UIAssetPicker ? kInspectorContent.right - 4
+    const int lastX = rightEdgeButton ? kInspectorContent.right - 4
         : uiField || addButton ? firstX + 1 : kInspectorContent.right;
     for (int scroll = addButton ? InspectorPanelRenderer::MaxScrollOffset(kInspectorContent, context) : 0;;) {
         const int maxScroll = InspectorPanelRenderer::MaxScrollOffset(
@@ -1638,6 +1642,71 @@ bool EditorHeadlessAutomation::VerifyUINavigationLinks() {
     if (!context_.UndoSceneCommand() || shown() != "NavAuditQuit") return fail("undo-delete-failed: " + shown());
     context_.SelectEntity(byName("NavAuditPlay"));
     Trace("ui_navigation_links", true, "picker-name-clear-invalid-deleted-undo-redo");
+    return true;
+}
+
+bool EditorHeadlessAutomation::VerifyUIDropdownOptions() {
+    const auto fail = [&](std::string_view reason) { Trace("ui_dropdown_options", false, reason); return false; };
+    const auto dropdownType = kb::scene::UIComponentType::Dropdown;
+    const auto canvas = context_.CreateUIObject(kb::scene::UIComponentType::Canvas);
+    const auto created = context_.CreateUIObject(dropdownType, canvas);
+    if (!canvas.IsValid() || !created.IsValid()) return fail("create-failed");
+    context_.Scene().Entities().SetName(created, "OptionsAudit");
+    // Undo restores from snapshots with new handles, so the dropdown is looked up by name each step.
+    const auto current = [&]() {
+        std::vector<kb::scene::SceneEntity> pending = context_.Scene().Hierarchy().RootEntities();
+        while (!pending.empty()) {
+            const auto entity = pending.back();
+            pending.pop_back();
+            if (context_.Scene().Entities().Name(entity) == "OptionsAudit") return entity;
+            for (std::size_t index = 0U; index < context_.Scene().Hierarchy().ChildCount(entity); ++index)
+                pending.push_back(context_.Scene().Hierarchy().ChildAt(entity, index));
+        }
+        return kb::scene::SceneEntity{};
+    };
+    const auto dropdown = [&]() { return context_.Scene().Components().UI().TryGet<kb::scene::UIDropdown>(current()); };
+    const auto labels = [&]() {
+        std::string joined;
+        if (const auto* value = dropdown())
+            for (std::uint32_t index = 0U; index < value->optionCount; ++index)
+                joined += std::string{index == 0U ? "" : "|"} + std::string{kb::scene::UIDropdownOptionText(value->options[index])};
+        return joined;
+    };
+    context_.SelectEntity(current());
+    if (dropdown() == nullptr || dropdown()->fontAssetId == 0U) return fail("dropdown-has-no-font");
+    const auto section = InspectorUIComponentModel::Section(dropdownType);
+    if (!FindInspectorHit(context_, section, InspectorPropertyId::UIDropdownAddOption, -1, InspectorHitKind::Row))
+        return fail("add-option-button-not-found");
+    for (const auto button : {InspectorPropertyId::UIDropdownMoveOptionUp, InspectorPropertyId::UIDropdownMoveOptionDown,
+             InspectorPropertyId::UIDropdownRemoveOption})
+        if (!FindInspectorHit(context_, section, button, 1, InspectorHitKind::Row)) return fail("option-button-not-found");
+
+    using Edit = EditorSceneContext::UIDropdownOptionEdit;
+    if (!context_.EditUIDropdownOption(current(), Edit::Add, 0U) || labels() != "Option 1|Option 2|Option 3")
+        return fail("add-failed: " + labels());
+    if (!context_.SetUIComponentProperty(current(), dropdownType, "options.2.text", std::string{"Ultra"}) ||
+        !context_.SetUIComponentProperty(current(), dropdownType, "selectedIndex", std::uint32_t{2U}))
+        return fail("rename-or-select-failed");
+    if (!context_.EditUIDropdownOption(current(), Edit::MoveUp, 2U) || labels() != "Option 1|Ultra|Option 2" ||
+        dropdown()->selectedIndex != 1U)
+        return fail("move-up-failed: " + labels());
+    if (!context_.EditUIDropdownOption(current(), Edit::Remove, 0U) || labels() != "Ultra|Option 2" ||
+        dropdown()->selectedIndex != 0U)
+        return fail("remove-failed: " + labels());
+    if (context_.EditUIDropdownOption(current(), Edit::MoveUp, 0U)) return fail("move-past-top-accepted");
+    if (!context_.UndoSceneCommand() || labels() != "Option 1|Ultra|Option 2") return fail("undo-remove-failed: " + labels());
+    if (!context_.RedoSceneCommand() || labels() != "Ultra|Option 2") return fail("redo-remove-failed: " + labels());
+
+    kb::scene::SceneUIFrame frame;
+    if (!kb::scene::SceneUIQueries{context_.Scene()}.BuildFrame(1280.0F, 720.0F, frame)) return fail("layout-failed");
+    const auto control = std::ranges::find_if(frame.elements, [&](const auto& element) {
+        return element.entity == current() && element.dropdown.has_value();
+    });
+    if (control == frame.elements.end() || !control->text || kb::scene::UITextContent(*control->text) != "Ultra")
+        return fail("caption-is-not-selected-label");
+    context_.SelectEntity(current());
+    if (!CaptureInspector("dropdown-options")) return false;
+    Trace("ui_dropdown_options", true, "add-rename-move-remove-undo-redo-caption-font");
     return true;
 }
 

@@ -25,6 +25,18 @@ namespace {
 constexpr std::string_view kVersionPrefix = "v";
 constexpr std::uint32_t kUnversionedTextLayout = 34U;
 
+std::uint32_t SceneUIComponentTextCodec::EncodedVersion(std::string_view encoded) noexcept {
+    if (!encoded.starts_with(kVersionPrefix)) return kUnversionedTextLayout;
+    const std::size_t colon = encoded.find(':');
+    if (colon == std::string_view::npos || colon == kVersionPrefix.size()) return 0U;
+    std::uint32_t parsed = 0U;
+    for (const char digit : encoded.substr(kVersionPrefix.size(), colon - kVersionPrefix.size())) {
+        if (digit < '0' || digit > '9' || parsed > SceneDocument::CurrentFileVersion) return 0U;
+        parsed = parsed * 10U + static_cast<std::uint32_t>(digit - '0');
+    }
+    return parsed < kUnversionedTextLayout || parsed > SceneDocument::CurrentFileVersion ? 0U : parsed;
+}
+
 std::string SceneUIComponentTextCodec::Encode(const UIComponentSet& components) {
     if (components.Empty()) return {};
     std::vector<std::uint8_t> bytes;
@@ -45,19 +57,9 @@ bool SceneUIComponentTextCodec::Decode(std::string_view encoded, UIComponentSet&
         output = {};
         return true;
     }
-    std::uint32_t version = kUnversionedTextLayout;
-    if (encoded.starts_with(kVersionPrefix)) {
-        const std::size_t colon = encoded.find(':');
-        if (colon == std::string_view::npos || colon == kVersionPrefix.size()) return false;
-        std::uint32_t parsed = 0U;
-        for (const char digit : encoded.substr(kVersionPrefix.size(), colon - kVersionPrefix.size())) {
-            if (digit < '0' || digit > '9' || parsed > SceneDocument::CurrentFileVersion) return false;
-            parsed = parsed * 10U + static_cast<std::uint32_t>(digit - '0');
-        }
-        if (parsed < kUnversionedTextLayout || parsed > SceneDocument::CurrentFileVersion) return false;
-        version = parsed;
-        encoded.remove_prefix(colon + 1U);
-    }
+    const std::uint32_t version = EncodedVersion(encoded);
+    if (version == 0U) return false;
+    if (encoded.starts_with(kVersionPrefix)) encoded.remove_prefix(encoded.find(':') + 1U);
     if ((encoded.size() & 1U) != 0U || encoded.size() > 65536U) return false;
     std::vector<std::uint8_t> bytes(encoded.size() / 2U);
     for (std::size_t index = 0U; index < bytes.size(); ++index) {

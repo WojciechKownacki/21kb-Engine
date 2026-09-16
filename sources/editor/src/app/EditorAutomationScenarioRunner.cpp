@@ -712,6 +712,10 @@ ReadScriptValue(
     if (*operation == "assert_ui_graphics") {
         return {state.automation.VerifyUIGraphics(), "Native image picker and GPU pixels for Image, Raw Image and Sprite"};
     }
+    if (*operation == "assert_ui_dropdown_options") {
+        return {state.automation.VerifyUIDropdownOptions(),
+            "Dropdown option list: Inspector buttons, add, rename, move, remove, undo/redo, caption, font"};
+    }
     if (*operation == "assert_ui_navigation_links") {
         return {state.automation.VerifyUINavigationLinks(),
             "Selectable navigation links: hierarchy picker, names, clear, invalid and deleted targets, undo"};

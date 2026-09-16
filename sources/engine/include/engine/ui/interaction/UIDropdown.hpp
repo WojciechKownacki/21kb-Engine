@@ -62,4 +62,44 @@ struct UIDropdown {
                : std::string_view{};
 }
 
+// Moves option `from` to position `to`, shifting the options between. The selection keeps pointing
+// at the same choice, not at the same index.
+[[nodiscard]] inline bool MoveUIDropdownOption(UIDropdown& dropdown, std::uint32_t from, std::uint32_t to) noexcept {
+    if (from >= dropdown.optionCount || to >= dropdown.optionCount) {
+        return false;
+    }
+    const auto begin = dropdown.options.begin();
+    if (from < to) {
+        std::rotate(begin + from, begin + from + 1U, begin + to + 1U);
+    } else {
+        std::rotate(begin + to, begin + from, begin + from + 1U);
+    }
+    std::uint32_t& selected = dropdown.selectedIndex;
+    if (selected == from) {
+        selected = to;
+    } else if (from < to && selected > from && selected <= to) {
+        --selected;
+    } else if (to < from && selected >= to && selected < from) {
+        ++selected;
+    }
+    return true;
+}
+
+// Removes one option. The selection stays on the same choice; removing the selected option selects the
+// one that took its place, or the new last option.
+[[nodiscard]] inline bool RemoveUIDropdownOption(UIDropdown& dropdown, std::uint32_t index) noexcept {
+    if (index >= dropdown.optionCount) {
+        return false;
+    }
+    const auto begin = dropdown.options.begin();
+    std::rotate(begin + index, begin + index + 1U, begin + dropdown.optionCount);
+    --dropdown.optionCount;
+    dropdown.options[dropdown.optionCount] = {};
+    if (dropdown.selectedIndex > index) {
+        --dropdown.selectedIndex;
+    }
+    dropdown.selectedIndex = dropdown.optionCount == 0U ? 0U : std::min(dropdown.selectedIndex, dropdown.optionCount - 1U);
+    return true;
+}
+
 } // namespace kb::scene

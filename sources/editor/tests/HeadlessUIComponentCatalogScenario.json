@@ -195,6 +195,9 @@
     },
     {
       "op": "assert_ui_navigation_links"
+    },
+    {
+      "op": "assert_ui_dropdown_options"
     }
   ]
 }
