@@ -34,6 +34,18 @@ static_assert(static_cast<std::uint16_t>(InspectorPropertyId::UIWidgetSwitcherFi
     if (name == "fontAssetId") return "Font";
     if (name == "spriteAssetId") return "Sprite";
     if (name == "content") return "Text";
+    if (name == "optionCount") return "Option Count";
+    // "options.3.text" -> "Option 4", "options.3.icon" -> "Option 4 Icon": the list reads as numbered
+    // choices rather than as indexed fields.
+    if (name.starts_with("options.")) {
+        const std::string_view rest = name.substr(8U);
+        const std::size_t dot = rest.find('.');
+        std::uint32_t index = 0U;
+        if (dot != std::string_view::npos &&
+            std::from_chars(rest.data(), rest.data() + dot, index).ec == std::errc{}) {
+            return "Option " + std::to_string(index + 1U) + (rest.substr(dot) == ".icon" ? " Icon" : "");
+        }
+    }
     if (name == "sizeDelta.x") return "Width / Size Delta X";
     if (name == "sizeDelta.y") return "Height / Size Delta Y";
     std::string output;

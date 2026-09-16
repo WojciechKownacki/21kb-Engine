@@ -3195,6 +3195,22 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
         }
         return true;
     }
+    if (hit.property == InspectorPropertyId::UIDropdownAddOption ||
+        hit.property == InspectorPropertyId::UIDropdownRemoveOption) {
+        // Growing or shrinking the list goes through the optionCount property, so it is one undoable
+        // edit and new options arrive with a numbered label.
+        sceneContext.Inspector().EndTextEdit();
+        const auto* dropdown = sceneContext.Scene().Components().UI().TryGet<kb::scene::UIDropdown>(entity);
+        if (dropdown == nullptr) return true;
+        const bool adding = hit.property == InspectorPropertyId::UIDropdownAddOption;
+        if ((adding && dropdown->optionCount >= kb::scene::UIDropdown::MaxOptions) || (!adding && dropdown->optionCount == 0U)) {
+            sceneContext.Console().Warning("Inspector", adding ? "A dropdown holds at most 32 options." : "The dropdown has no option to remove.");
+            return true;
+        }
+        static_cast<void>(sceneContext.SetUIComponentProperty(entity, kb::scene::UIComponentType::Dropdown, "optionCount",
+            kb::scene::UIComponentPropertyValue{ adding ? dropdown->optionCount + 1U : dropdown->optionCount - 1U }));
+        return true;
+    }
     if (hit.property == InspectorPropertyId::UIRectLayoutField) {
         const auto* rect = sceneContext.Scene().Components().UI().TryGet<kb::scene::UIRectTransform>(entity);
         if (rect != nullptr && hit.index >= 0 && hit.index < 4) {

@@ -59,7 +59,9 @@ namespace {
 
 [[nodiscard]] const ScreenUITextRun* FindTextRun(std::span<const ScreenUITextRun> runs,
                                                  const kb::scene::SceneUIFrameElement& element) noexcept {
-    const auto found = std::ranges::find(runs, element.entity.Id(), &ScreenUITextRun::entity);
+    const auto found = std::ranges::find_if(runs, [&element](const ScreenUITextRun& run) {
+        return run.entity == element.entity.Id() && run.dropdownOptionIndex == element.dropdownOptionIndex;
+    });
     return found == runs.end() ? nullptr : &*found;
 }
 

@@ -1751,6 +1751,10 @@ bool EditorHeadlessAutomation::VerifyUIComponentCatalog(std::optional<kb::scene:
         std::size_t editedFields = 0;
         for (const auto& property : kb::scene::UIComponentPropertyCatalog(descriptor.type)) {
             kb::scene::UIComponentPropertyValue value;
+            // Option properties exist only for the options a dropdown has; the rest are not shown or editable.
+            if (descriptor.type == kb::scene::UIComponentType::Dropdown && property.name.starts_with("options.") &&
+                !kb::scene::ReadUIComponentProperty(values, descriptor.type, property.name, value))
+                continue;
             if (!kb::scene::ReadUIComponentProperty(values, descriptor.type, property.name, value) ||
                 (property.writable && !SetUIComponentProperty(descriptor.type, property.name, value))) {
                 Trace("ui_catalog", false, std::string{descriptor.displayName} + "." + std::string{property.name});

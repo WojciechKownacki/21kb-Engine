@@ -11702,6 +11702,8 @@ void AttachAllUIComponents(kb::scene::Scene& scene, kb::scene::SceneEntity entit
     components.scrollView.emplace();
     components.inputField.emplace();
     components.dropdown.emplace();
+    // Option properties exist only for options the dropdown has; a full list exposes all of them.
+    components.dropdown->optionCount = static_cast<std::uint32_t>(kb::scene::UIDropdown::MaxOptions);
     components.progressBar.emplace();
     components.widgetSwitcher.emplace();
     kb::scene::ApplySceneUIComponents(scene.Components().UI(), entity, components);
@@ -12112,7 +12114,7 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
     // task components and the complete Lens Echo schema.
     // Light is a public compatibility alias for 3D Radiance Emitter and
     // deliberately exercises the same 16 generated accessors.
-    kb::tests::Require(fieldsChecked == 498U, "Script component API generated accessor coverage test did not exercise the expected total field count (498, including all UI components and the Light compatibility alias)");
+    kb::tests::Require(fieldsChecked == 581U, "Script component API generated accessor coverage test did not exercise the expected total field count (581, including all UI components and the Light compatibility alias)");
 }
 
 // LIB-082: defensive regression guard — the KB_ASSERT_NOT_POINTER
@@ -12193,7 +12195,7 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
     // LIB-136: Camera grew three more fields (cullingMask/clearMode/clearColor, the latter
     // decomposed into x/y/z), and MeshRenderer grew one (layer), so the total climbs from
     // 86 to 92.
-    kb::tests::Require(propertiesChecked == 498U, "LIB-082 raw-pointer audit did not exercise the expected total field count (498, including all UI components and the Light compatibility alias)");
+    kb::tests::Require(propertiesChecked == 581U, "LIB-082 raw-pointer audit did not exercise the expected total field count (581, including all UI components and the Light compatibility alias)");
 }
 
 void RunVisualGraphSceneComponentBindingTest() {

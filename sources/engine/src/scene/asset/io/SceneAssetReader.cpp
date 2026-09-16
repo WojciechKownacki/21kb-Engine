@@ -10,7 +10,9 @@
 #include "scene/document/SceneDocumentAudioValidation.hpp"
 #include "scene/prefab/ScenePrefabValidator.hpp"
 
+#include <algorithm>
 #include <array>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -124,6 +126,38 @@ SceneDocumentLoadResult SceneAssetReader::Read(const std::filesystem::path& path
     return loaded;
 }
 
+void SceneAssetReader::ConvertChildDropdownOptions(ScenePrefab& prefab) {
+    const std::span<const ScenePrefabNodeDesc> nodes = prefab.Nodes();
+    for (std::uint32_t owner = 0U; owner < static_cast<std::uint32_t>(nodes.size()); ++owner) {
+        if (!nodes[owner].components.ui.dropdown.has_value()) continue;
+        std::vector<std::uint32_t> children;
+        for (std::uint32_t index = 0U; index < static_cast<std::uint32_t>(nodes.size()); ++index) {
+            if (nodes[index].parentNode == owner) children.push_back(index);
+        }
+        ScenePrefabNodeDesc* dropdownNode = prefab.TryGetMutableNode(owner);
+        UIDropdown& dropdown = *dropdownNode->components.ui.dropdown;
+        dropdown.optionCount = static_cast<std::uint32_t>(std::min(children.size(), UIDropdown::MaxOptions));
+        for (std::uint32_t option = 0U; option < dropdown.optionCount; ++option) {
+            ScenePrefabNodeDesc* child = prefab.TryGetMutableNode(children[option]);
+            if (child->components.ui.text.has_value()) {
+                std::string_view label = UITextContent(*child->components.ui.text);
+                if (label.size() >= UIDropdownOption::MaxUtf8Bytes) {
+                    // Cut on a code point boundary so the shortened label stays valid UTF-8.
+                    std::size_t cut = UIDropdownOption::MaxUtf8Bytes - 1U;
+                    while (cut > 0U && (static_cast<unsigned char>(label[cut]) & 0xC0U) == 0x80U) --cut;
+                    label = label.substr(0U, cut);
+                }
+                static_cast<void>(SetUIDropdownOptionText(dropdown.options[option], label));
+                dropdown.fontSize = child->components.ui.text->fontSize;
+                dropdown.textColor = child->components.ui.text->color;
+                dropdown.fontAssetId = child->components.ui.text->fontAssetId;
+            }
+            child->components.ui = {};
+        }
+        dropdown.selectedIndex = dropdown.optionCount == 0U ? 0U : std::min(dropdown.selectedIndex, dropdown.optionCount - 1U);
+    }
+}
+
 SceneDocumentLoadResult SceneAssetReader::Read(std::vector<std::uint8_t> bytes) {
     if (bytes.empty()) {
         return SceneDocumentLoadResult{ .succeeded = false, .document = {}, .error = "Scene asset is empty." };
@@ -175,6 +209,10 @@ SceneDocumentLoadResult SceneAssetReader::Read(std::vector<std::uint8_t> bytes) 
             return SceneDocumentLoadResult{ .succeeded = false, .document = {}, .error = "Scene asset node list is invalid." };
         }
         static_cast<void>(scene.worldPrefab.AddNode(std::move(node)));
+    }
+
+    if (fileVersion < 36U) {
+        ConvertChildDropdownOptions(scene.worldPrefab);
     }
 
     if (fileVersion >= 32U) {

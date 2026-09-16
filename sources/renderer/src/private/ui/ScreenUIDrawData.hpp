@@ -122,6 +122,9 @@ struct ScreenUIGlyphQuad {
 
 struct ScreenUITextRun {
     std::uint64_t entity = 0U;
+    // A dropdown lays its caption and every list row out as elements of one entity; the option index
+    // (-1 for the caption and ordinary widgets) tells their text runs apart.
+    std::int32_t dropdownOptionIndex = -1;
     std::uint64_t fontAssetId = 0U;
     std::uint32_t pixelSize = 0U;
     std::uint16_t atlasWidth = 0U;

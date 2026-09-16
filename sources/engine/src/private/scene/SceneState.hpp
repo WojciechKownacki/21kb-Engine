@@ -726,6 +726,10 @@ public:
     // reopen it on load, so neither belongs in UIDropdown.
     SceneEntity uiExpandedDropdown{};
     std::uint32_t uiDropdownScrollIndex = 0U;
+    // The row of the open list that navigation and the pointer point at, and the row a press began on
+    // (-1 when it began anywhere else), so a release only selects the row it was pressed on.
+    std::uint32_t uiDropdownHighlightIndex = 0U;
+    std::int32_t uiPressedDropdownOption = -1;
     // The navigation direction being held and the time left until it repeats. A pad or arrow key
     // held on a long list keeps stepping instead of moving exactly once per press.
     kb::math::Vec2 uiNavigationHeldDirection{};

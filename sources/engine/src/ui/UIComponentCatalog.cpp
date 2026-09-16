@@ -132,7 +132,15 @@ UIComponentSet BuildUIComponentPreset(UIComponentPreset preset) {
     case UIComponentPreset::Scrollbar: size(200.0F, 16.0F); AddPresetSurface(output); output.selectable.emplace(); output.scrollbar.emplace(); break;
     case UIComponentPreset::ScrollView: size(320.0F, 240.0F); AddPresetSurface(output); output.mask.emplace(); output.selectable.emplace(); output.scrollView.emplace(); break;
     case UIComponentPreset::InputField: size(240.0F, 36.0F); AddPresetSurface(output); output.text.emplace(); output.selectable.emplace(); output.inputField.emplace(); break;
-    case UIComponentPreset::Dropdown: size(200.0F, 36.0F); AddPresetSurface(output); output.selectable.emplace(); output.dropdown.emplace(); break;
+    case UIComponentPreset::Dropdown: {
+        size(200.0F, 36.0F); AddPresetSurface(output); output.selectable.emplace();
+        // Two starter options, so a freshly placed dropdown opens onto something to rename.
+        UIDropdown& dropdown = output.dropdown.emplace();
+        dropdown.optionCount = 2U;
+        static_cast<void>(SetUIDropdownOptionText(dropdown.options[0], "Option 1"));
+        static_cast<void>(SetUIDropdownOptionText(dropdown.options[1], "Option 2"));
+        break;
+    }
     case UIComponentPreset::ProgressBar: size(240.0F, 16.0F); AddPresetSurface(output); output.progressBar.emplace(); break;
     case UIComponentPreset::HorizontalBox: size(360.0F, 80.0F); output.horizontalLayout.emplace(); break;
     case UIComponentPreset::VerticalBox: size(200.0F, 320.0F); output.verticalLayout.emplace(); break;
