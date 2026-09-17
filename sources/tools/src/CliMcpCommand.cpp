@@ -61,6 +61,13 @@ struct ToolProperty {
             ToolProperty{ "format", "string", "Output format: 'markdown' (default) or 'json'.", false },
         }));
     tools.Append(MakeToolDescriptor(
+        "import_asset",
+        "Imports an external source asset into a project's runtime asset format and registers it.",
+        {
+            ToolProperty{ "source", "string", "Physical source file path, or a path relative to the project root.", true },
+            ToolProperty{ "destination", "string", "Destination virtual folder, for example /Game/Fonts.", true },
+        }));
+    tools.Append(MakeToolDescriptor(
         "validate_script",
         "Validates a Lua behaviour script (syntax and sandbox load) and reports errors with line numbers.",
         {
@@ -155,6 +162,10 @@ struct ToolCallOutcome {
         }
         pushOption("--print", std::move(format));
         command = &RunApiCommand;
+    } else if (toolName == "import_asset") {
+        pushOption("--destination", GetStringArgument(toolArguments, "destination"));
+        commandArguments.push_back(GetStringArgument(toolArguments, "source"));
+        command = &RunImportCommand;
     } else if (toolName == "validate_script") {
         commandArguments.push_back(GetStringArgument(toolArguments, "path"));
         command = &RunValidateCommand;
