@@ -1476,6 +1476,28 @@ int LuaWorldInstantiatePrefab(lua_State* state) {
     return 1;
 }
 
+int LuaWorldSpawnGeometrySwarm(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+    std::vector<ScriptFunctionArgument> arguments;
+    if (lua_istable(state, 1) != 0) {
+        arguments = ArgumentsFromTable(state, 1);
+    } else {
+        const char* prefab = luaL_checkstring(state, 1);
+        arguments.push_back(Arg("prefab", ScriptValue{ std::string{ prefab != nullptr ? prefab : "" } }));
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("World.SpawnGeometrySwarm", arguments);
+    if (!result.Succeeded()) {
+        return PushCallError(state, result, "geometry swarm spawn failed");
+    }
+    PucLuaValueBridge::Push(state, result.Output("entity").value_or(ScriptValue{ 0U, ScriptValueType::Entity }));
+    return 1;
+}
+
 int LuaSceneLoad(lua_State* state) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
     if (context == nullptr) {
@@ -3072,7 +3094,7 @@ void SetClosure(lua_State* state, const char* name, lua_CFunction function, Scri
 // marshalling.  Their position follows ScriptApiCatalog::LuaBindingDefinitions
 // excluding Task and global bindings; table and Lua field names deliberately
 // live only in that catalog.
-constexpr std::array<lua_CFunction, 176> kCatalogBindingAdapters{ {
+constexpr std::array<lua_CFunction, 177> kCatalogBindingAdapters{ {
     &LuaAudioPlay,
     &LuaAudioSetMixer,
     &LuaAudioActiveMixer,
@@ -3155,6 +3177,7 @@ constexpr std::array<lua_CFunction, 176> kCatalogBindingAdapters{ {
     &LuaWorldTagAt,
     &LuaWorldSetParent,
     &LuaWorldInstantiatePrefab,
+    &LuaWorldSpawnGeometrySwarm,
     &LuaSceneLoad,
     &LuaSceneUnload,
     &LuaSceneSetActive,

@@ -5718,6 +5718,13 @@ void RunScriptWorldTimePhysicsApiTest() {
         kb::scene::TagsComponent prefabTags;
         kb::scene::SetTagsText(prefabTags, "Prefab");
         prefabSource.Components().Tags().Set(prefabRoot.Entity(), prefabTags);
+        prefabSource.Components().MeshRenderers().Set(prefabRoot.Entity(), kb::scene::MeshRendererComponent{
+            .meshAssetId = 501U,
+            .materialAssetId = 502U,
+            .castsShadow = false,
+            .receivesShadow = false,
+            .layer = 7U,
+        });
         const kb::scene::ScenePrefabHandle prefab = prefabSource.Prefabs().CaptureRegistered(prefabRoot, "RuntimePrefab");
         kb::tests::Require(prefabSource.Prefabs().Save(prefab, prefabPath), "Script world API prefab fixture was not saved");
     }
@@ -5751,6 +5758,28 @@ void RunScriptWorldTimePhysicsApiTest() {
             && kb::tests::NearlyEqual(scene.Transforms().Get(enemy).localPosition.y, 3.0F)
             && kb::tests::NearlyEqual(scene.Transforms().Get(enemy).localPosition.z, 4.0F),
         "World.Spawn did not apply direct spawn position");
+
+    const std::vector<kb::script::ScriptFunctionArgument> swarmArgs{
+        kb::script::ScriptFunctionArgument{ .name = "prefab", .value = kb::script::ScriptValue{ std::string{ "/Game/Prefabs/RuntimePrefab.kbprefab" } } },
+        kb::script::ScriptFunctionArgument{ .name = "name", .value = kb::script::ScriptValue{ std::string{ "Runtime Swarm" } } },
+        kb::script::ScriptFunctionArgument{ .name = "instanceCount", .value = kb::script::ScriptValue{ std::uint32_t{ 5000U } } },
+        kb::script::ScriptFunctionArgument{ .name = "columns", .value = kb::script::ScriptValue{ std::uint32_t{ 100U } } },
+        kb::script::ScriptFunctionArgument{ .name = "rows", .value = kb::script::ScriptValue{ std::uint32_t{ 10U } } },
+        kb::script::ScriptFunctionArgument{ .name = "layers", .value = kb::script::ScriptValue{ std::uint32_t{ 5U } } },
+        kb::script::ScriptFunctionArgument{ .name = "spacingX", .value = kb::script::ScriptValue{ 1.5F } },
+        kb::script::ScriptFunctionArgument{ .name = "spacingY", .value = kb::script::ScriptValue{ 2.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "spacingZ", .value = kb::script::ScriptValue{ 2.5F } },
+        kb::script::ScriptFunctionArgument{ .name = "instanceScale", .value = kb::script::ScriptValue{ 0.35F } },
+    };
+    const kb::script::ScriptFunctionCallResult spawnedSwarm = host.Functions().Call("World.SpawnGeometrySwarm", swarmArgs, context);
+    const kb::scene::SceneEntity swarmEntity{ spawnedSwarm.Output("entity").value_or(kb::script::ScriptValue{ 0U, kb::script::ScriptValueType::Entity }).AsUInt64() };
+    const kb::scene::GeometrySwarmComponent* swarm = scene.Components().GeometrySwarms().TryGet(swarmEntity);
+    kb::tests::Require(spawnedSwarm.Succeeded() && swarmEntity.IsValid() && swarm != nullptr &&
+            swarm->meshAssetId == 501U && swarm->materialAssetId == 502U && swarm->instanceCount == 5000U &&
+            swarm->columns == 100U && swarm->rows == 10U && swarm->layers == 5U &&
+            kb::tests::NearlyEqual(swarm->spacing.x, 1.5F) && kb::tests::NearlyEqual(swarm->instanceScale, 0.35F) &&
+            !swarm->castsShadow && !swarm->receivesShadow && swarm->layer == 7U,
+        "World.SpawnGeometrySwarm did not create the canonical geometry swarm from its prefab source");
 
     // LIB-065: World.Current/IsPlaying/FrameIndex/FixedStepIndex, called
     // the same way any other World.* function is (through the registry,

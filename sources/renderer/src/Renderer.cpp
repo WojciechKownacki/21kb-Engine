@@ -906,9 +906,9 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         if (desc.transformAffineSync) {
             const std::span<const kb::scene::SceneEntity> affineEntities = scene.Runtime().TransformRenderProxyUpdateEntities();
             const std::span<const kb::scene::WorldTransformAffine3x4> affines = scene.Runtime().TransformRenderProxyWorldAffine3x4();
-            // Above a threshold the columnar affine sync is worth dispatching across
-            // the shared render-sync worker pool (H6); below it the serial path wins.
-            constexpr std::size_t kParallelAffineSyncThreshold = 8U * 1024U;
+            // The columnar worker path is amortized at the benchmark's
+            // 5k-instance scale; below it the serial path still wins.
+            constexpr std::size_t kParallelAffineSyncThreshold = 4U * 1024U;
             if (affineEntities.size() >= kParallelAffineSyncThreshold) {
                 std::ostringstream message;
                 message << "SubmitSceneToViewport SyncMeshWorldAffinesParallel begin count=" << affineEntities.size();
