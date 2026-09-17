@@ -1618,16 +1618,27 @@ void RunRenderSceneExpandsGeometrySwarmIntoExistingDrawGroupTest() {
     static_cast<void>(renderScene.UpsertGeometrySwarm(GeometrySwarmRenderProxyDesc{
         .entityId = 77U, .meshAssetId = 42U, .materialAssetId = 9U,
         .model = { 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F },
-        .instanceCount = 4U, .columns = 2U, .rows = 2U, .layers = 1U,
+        .instanceCount = 4U, .columns = 2U, .rows = 2U, .layers = 2U,
         .spacing = { 2.0F, 4.0F, 1.0F }, .instanceScale = 1.5F,
     }));
     const std::vector<SceneRenderDrawGroup>& groups = renderScene.DrawGroups();
     Require(groups.size() == 1U && groups[0].instances.size() == 4U, "Geometry Swarm did not expand into the canonical mesh draw group");
     Require(groups[0].instances[0].entityId != groups[0].instances[1].entityId, "Geometry Swarm did not generate deterministic unique per-instance identifiers");
     Require(NearlyEqual(groups[0].instances[0].model[0], 1.5F), "Geometry Swarm did not apply per-instance scale to the generated model");
+    const uint64_t firstInstanceId = groups[0].instances[0].entityId;
+    static_cast<void>(renderScene.UpsertGeometrySwarm(GeometrySwarmRenderProxyDesc{
+        .entityId = 77U, .meshAssetId = 42U, .materialAssetId = 9U,
+        .model = { 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F },
+        .instanceCount = 6U, .columns = 2U, .rows = 2U, .layers = 2U,
+        .spacing = { 2.0F, 4.0F, 1.0F }, .instanceScale = 1.5F,
+    }));
+    Require(renderScene.DrawGroups().size() == 1U && renderScene.DrawGroups()[0].instances.size() == 6U,
+        "Growing a Geometry Swarm did not append the new instances to its existing draw group");
+    Require(renderScene.DrawGroups()[0].instances[0].entityId == firstInstanceId,
+        "Growing a Geometry Swarm changed an existing instance identifier");
     SceneRenderSnapshot snapshot;
     renderScene.BuildSnapshotInto(1280U, 720U, snapshot);
-    Require(snapshot.meshes.size() == 4U, "Geometry Swarm did not reach the snapshot consumer used by the runtime renderer");
+    Require(snapshot.meshes.size() == 6U, "Geometry Swarm did not reach the snapshot consumer used by the runtime renderer");
     const float originalFirstInstanceX = groups[0].instances[0].model[12];
     const std::array<float, 16> movedModel{ 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 6.0F, 0.0F, 0.0F, 1.0F };
     Require(renderScene.UpdateGeometrySwarmTransform(77U, movedModel), "Geometry Swarm transform update did not update the renderer-derived proxy");

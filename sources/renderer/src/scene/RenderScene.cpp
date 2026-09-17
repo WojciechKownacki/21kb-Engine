@@ -240,6 +240,37 @@ RenderProxyId RenderScene::UpsertGeometrySwarm(const GeometrySwarmRenderProxyDes
     GeometrySwarmRenderProxy& proxy = it->second;
     if (inserted) { proxy.id = AllocateProxyId(); proxy.desc = desc; proxy.dirty = RenderProxyDirtyFlag::All; InvalidateDrawGroups(); return proxy.id; }
     const GeometrySwarmRenderProxyDesc& previous = proxy.desc;
+    const bool onlyGrew = previous.meshAssetId == desc.meshAssetId && previous.materialAssetId == desc.materialAssetId &&
+        previous.model == desc.model && previous.instanceCount < desc.instanceCount && previous.columns == desc.columns &&
+        previous.rows == desc.rows && previous.layers == desc.layers && previous.spacing == desc.spacing &&
+        previous.instanceScale == desc.instanceScale && previous.visible == desc.visible &&
+        previous.castsShadow == desc.castsShadow && previous.receivesShadow == desc.receivesShadow && previous.layer == desc.layer;
+    if (onlyGrew && !drawGroupsDirty_) {
+        const DrawGroupKey key{ .meshAssetId = desc.meshAssetId, .materialAssetId = desc.materialAssetId };
+        const auto groupIt = drawGroupLookupScratch_.find(key);
+        if (groupIt != drawGroupLookupScratch_.end() && groupIt->second < drawGroups_.size()) {
+            SceneRenderDrawGroup& group = drawGroups_[groupIt->second];
+            if (group.meshAssetId == desc.meshAssetId && group.materialAssetId == desc.materialAssetId) {
+                const std::uint32_t firstNewInstance = previous.instanceCount;
+                proxy.desc = desc;
+                group.instances.reserve(group.instances.size() + (desc.instanceCount - firstNewInstance));
+                for (std::uint32_t index = firstNewInstance; index < desc.instanceCount; ++index) {
+                    SceneRenderMeshInstance instance{
+                        .entityId = GeometrySwarmInstanceId(desc.entityId, index),
+                        .meshAssetId = desc.meshAssetId,
+                        .materialAssetId = desc.materialAssetId,
+                        .model = GeometrySwarmModel(desc, index),
+                        .castsShadow = desc.castsShadow,
+                        .receivesShadow = desc.receivesShadow,
+                        .layer = desc.layer,
+                    };
+                    ApplySurfaceCasts(instance);
+                    group.instances.push_back(instance);
+                }
+                return proxy.id;
+            }
+        }
+    }
     if (previous.meshAssetId != desc.meshAssetId || previous.materialAssetId != desc.materialAssetId || previous.model != desc.model ||
         previous.instanceCount != desc.instanceCount || previous.columns != desc.columns || previous.rows != desc.rows || previous.layers != desc.layers ||
         previous.spacing != desc.spacing || previous.instanceScale != desc.instanceScale || previous.visible != desc.visible ||
