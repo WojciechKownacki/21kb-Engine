@@ -24,6 +24,7 @@ void SceneMeshBatchBuilder::BuildInto(std::span<const SceneRenderDrawGroup> draw
             .meshAssetId = group.meshAssetId,
             .materialAssetId = group.materialAssetId,
             .sourceDrawGroupIndex = static_cast<std::uint32_t>(index),
+            .hasMaterialSlotOverrides = group.hasMaterialSlotOverrides,
             .instances = std::span<const SceneRenderMeshInstance>(group.instances.data(), group.instances.size()),
         });
     }
