@@ -40,6 +40,23 @@ void BuildVisibilityBlockerInputs(const RenderScene& scene, std::vector<SceneRen
     return 9U;
 }
 
+[[nodiscard]] bool IsOpaqueNonTerrainBatch(
+    const SceneMeshBatch& batch,
+    const RenderResourceRegistry& resources,
+    const SceneRenderResourceMap& resourceMap) noexcept {
+    if (batch.hasMaterialSlotOverrides || batch.materialAssetId == 0U) {
+        return false;
+    }
+    const RenderMaterialHandle materialHandle = resourceMap.ResolveMaterial(batch.materialAssetId);
+    const RenderMaterialResource* material = materialHandle.IsValid() ? resources.FindMaterial(materialHandle) : nullptr;
+    if (material == nullptr || material->alphaMode == RenderMaterialAlphaMode::Blend) {
+        return false;
+    }
+    const RenderMeshHandle meshHandle = resourceMap.ResolveMesh(batch.meshAssetId);
+    const RenderMeshResource* mesh = meshHandle.IsValid() ? resources.FindMesh(meshHandle) : nullptr;
+    return mesh != nullptr && mesh->terrainLayerCount <= 1U;
+}
+
 } // namespace
 
 bool SceneMeshSubmitter::Initialize() {
@@ -173,6 +190,11 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
         const auto& particleMeshBatches = particleMeshBatchBuilder_.Batches();
         meshBatchSubmissionScratch_.insert(
             meshBatchSubmissionScratch_.end(), particleMeshBatches.begin(), particleMeshBatches.end());
+    }
+    if (pass == MeshPassType::BaseTransparent) {
+        std::erase_if(meshBatchSubmissionScratch_, [&resources, &resourceMap](const SceneMeshBatch& batch) {
+            return IsOpaqueNonTerrainBatch(batch, resources, resourceMap);
+        });
     }
     SceneRenderSubmitStats lightingStats{};
     const PackedSceneLighting lighting = SceneLightingPacker::Build(renderScene, lightingStats, lightingConfig, camera);

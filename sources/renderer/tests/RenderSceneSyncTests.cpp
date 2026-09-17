@@ -872,6 +872,8 @@ void RunRenderSceneBuildsMeshMaterialDrawGroupsTest() {
         .entityId = 2U,
         .meshAssetId = 42U,
         .materialAssetId = 7U,
+        .materialSlotAssetIds = { 9U },
+        .materialSlotOverrideCount = 1U,
         .visible = true,
     }));
     static_cast<void>(renderScene.UpsertMesh(MeshRenderProxyDesc{
@@ -897,7 +899,11 @@ void RunRenderSceneBuildsMeshMaterialDrawGroupsTest() {
         return group.meshAssetId == 42U && group.materialAssetId == 8U;
     });
     Require(materialSeven != groups.end() && materialSeven->instances.size() == 2U, "RenderScene did not coalesce matching mesh/material instances");
+    Require(materialSeven != groups.end() && materialSeven->hasMaterialSlotOverrides,
+        "RenderScene did not preserve material-slot override metadata for its draw group");
     Require(materialEight != groups.end() && materialEight->instances.size() == 1U, "RenderScene draw group included the wrong instance count");
+    Require(materialEight != groups.end() && !materialEight->hasMaterialSlotOverrides,
+        "RenderScene marked a draw group without material-slot overrides as dynamic");
 }
 
 void RunRenderSceneBuildsLargeMeshMaterialDrawGroupsTest() {

@@ -703,6 +703,7 @@ void RenderScene::RebuildDrawGroupsIfNeeded() const {
             SceneRenderDrawGroup& group = drawGroups_[writeGroupCount];
             group.meshAssetId = instance.meshAssetId;
             group.materialAssetId = instance.materialAssetId;
+            group.hasMaterialSlotOverrides = false;
             lookupIt = drawGroupLookupScratch_.emplace(key, writeGroupCount).first;
             ++writeGroupCount;
         }
@@ -714,6 +715,7 @@ void RenderScene::RebuildDrawGroupsIfNeeded() const {
         proxy.instanceGroupIndex = static_cast<std::uint32_t>(groupIndex);
         proxy.instanceIndexInGroup = static_cast<std::uint32_t>(group.instances.size());
         proxy.instanceLocationVersion = drawGroupBuildVersion_;
+        group.hasMaterialSlotOverrides = group.hasMaterialSlotOverrides || instance.materialSlotOverrideCount != 0U;
         group.instances.push_back(instance);
     }
 
@@ -741,7 +743,7 @@ void RenderScene::RebuildDrawGroupsIfNeeded() const {
             if (lookupIt == drawGroupLookupScratch_.end()) {
                 if (writeGroupCount == drawGroups_.size()) drawGroups_.push_back(SceneRenderDrawGroup{});
                 SceneRenderDrawGroup& group = drawGroups_[writeGroupCount];
-                group.meshAssetId = instance.meshAssetId; group.materialAssetId = instance.materialAssetId;
+                group.meshAssetId = instance.meshAssetId; group.materialAssetId = instance.materialAssetId; group.hasMaterialSlotOverrides = false;
                 lookupIt = drawGroupLookupScratch_.emplace(key, writeGroupCount).first; ++writeGroupCount;
             }
             drawGroups_[lookupIt->second].instances.push_back(instance);
@@ -761,7 +763,7 @@ void RenderScene::RebuildDrawGroupsIfNeeded() const {
             if (lookupIt == drawGroupLookupScratch_.end()) {
                 if (writeGroupCount == drawGroups_.size()) drawGroups_.push_back(SceneRenderDrawGroup{});
                 SceneRenderDrawGroup& group = drawGroups_[writeGroupCount];
-                group.meshAssetId = instance.meshAssetId; group.materialAssetId = instance.materialAssetId;
+                group.meshAssetId = instance.meshAssetId; group.materialAssetId = instance.materialAssetId; group.hasMaterialSlotOverrides = false;
                 lookupIt = drawGroupLookupScratch_.emplace(key, writeGroupCount).first; ++writeGroupCount;
             }
             drawGroups_[lookupIt->second].instances.push_back(instance);
