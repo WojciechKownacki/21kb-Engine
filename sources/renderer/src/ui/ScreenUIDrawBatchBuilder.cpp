@@ -6,7 +6,9 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <limits>
 #include <ranges>
+#include <vector>
 
 namespace kb::render {
 namespace {
@@ -208,7 +210,10 @@ void ScreenUIDrawBatchBuilder::AppendElement(const kb::scene::SceneUIFrameElemen
         appendImageAsset(element.rawImage->imageAssetId, ImageKind::RawImage);
     }
 
-    if (element.slider || element.scrollbar || element.progressBar || element.toggle) {
+    // A slider or progress bar driving its own fill and handle widgets shows those instead of its built-in bar.
+    const bool drivesWidgets = (element.slider && (element.slider->fillRect != 0U || element.slider->handleRect != 0U)) ||
+                               (element.progressBar && element.progressBar->fillRect != 0U);
+    if ((element.slider || element.scrollbar || element.progressBar || element.toggle) && !drivesWidgets) {
         const float inset = std::min(4.0F * element.canvasScale,
             std::min(Width(elementRect), Height(elementRect)) * 0.2F);
         ScreenUIRect indicator{elementRect.left + inset, elementRect.top + inset,
@@ -238,6 +243,7 @@ void ScreenUIDrawBatchBuilder::AppendElement(const kb::scene::SceneUIFrameElemen
                 const auto& progress = *element.progressBar;
                 fraction = progress.maximum > progress.minimum
                     ? (progress.value - progress.minimum) / (progress.maximum - progress.minimum) : 0.0F;
+                direction = progress.direction;
             } else {
                 fraction = element.scrollbar->value;
                 direction = element.scrollbar->direction;
@@ -391,6 +397,96 @@ void ScreenUIDrawBatchBuilder::AppendImage(const kb::scene::SceneUIFrameElement&
     const ScreenUIDrawStyle style = ImageStyle(element, tint, destination);
     const ScreenUITextureKey texture{.source = binding.source, .assetId = assetId};
     const float scale = std::max(element.canvasScale, 0.0F);
+
+    if (kind == ImageKind::Image && element.image->fillMethod != kb::scene::UIImageFillMethod::None) {
+        const kb::scene::UIImage& image = *element.image;
+        const float amount = std::clamp(image.fillAmount, 0.0F, 1.0F);
+        if (amount <= 0.0F) {
+            return;
+        }
+        const bool fromEnd = image.fillOrigin == kb::scene::UIImageFillOrigin::End;
+        if (image.fillMethod == kb::scene::UIImageFillMethod::Horizontal) {
+            // Start fills from the left edge, End from the right.
+            if (fromEnd) {
+                destination.left = std::lerp(destination.right, destination.left, amount);
+                u0 = std::lerp(u1, u0, amount);
+            } else {
+                destination.right = std::lerp(destination.left, destination.right, amount);
+                u1 = std::lerp(u0, u1, amount);
+            }
+            AppendQuad(element, Rect(element.rect), destination, u0, v0, u1, v1, texture, style);
+            return;
+        }
+        if (image.fillMethod == kb::scene::UIImageFillMethod::Vertical) {
+            // Start fills from the bottom edge, End from the top.
+            if (fromEnd) {
+                destination.bottom = std::lerp(destination.top, destination.bottom, amount);
+                v1 = std::lerp(v0, v1, amount);
+            } else {
+                destination.top = std::lerp(destination.bottom, destination.top, amount);
+                v0 = std::lerp(v1, v0, amount);
+            }
+            AppendQuad(element, Rect(element.rect), destination, u0, v0, u1, v1, texture, style);
+            return;
+        }
+        if (amount < 1.0F) {
+            // Radial: a sweep from twelve (Start) or six (End) o'clock, clockwise or not, cut from the image
+            // as a fan through the centre and every rectangle corner the sweep passes.
+            constexpr float kTwoPi = 6.28318530717958647692F;
+            const float halfWidth = Width(destination) * 0.5F;
+            const float halfHeight = Height(destination) * 0.5F;
+            const float centerX = destination.left + halfWidth;
+            const float centerY = destination.top + halfHeight;
+            const float sign = image.fillClockwise ? 1.0F : -1.0F;
+            const float startAngle = fromEnd ? kTwoPi * 0.25F : -kTwoPi * 0.25F;
+            const auto pointAt = [&](float angle) {
+                const float dx = std::cos(angle);
+                const float dy = std::sin(angle);
+                const float reach = std::min(std::abs(dx) > 1e-6F ? halfWidth / std::abs(dx) : std::numeric_limits<float>::max(),
+                                             std::abs(dy) > 1e-6F ? halfHeight / std::abs(dy) : std::numeric_limits<float>::max());
+                const float x = centerX + dx * reach;
+                const float y = centerY + dy * reach;
+                return PolygonPoint{x, y, std::lerp(u0, u1, (x - destination.left) / Width(destination)),
+                                    std::lerp(v0, v1, (y - destination.top) / Height(destination))};
+            };
+            std::vector<PolygonPoint> points;
+            points.push_back(PolygonPoint{centerX, centerY, std::lerp(u0, u1, 0.5F), std::lerp(v0, v1, 0.5F)});
+            const float sweep = amount * kTwoPi;
+            points.push_back(pointAt(startAngle));
+            // Corners sit at these angles from the centre; each one the sweep passes becomes a fan point.
+            const float cornerAngle = std::atan2(halfHeight, halfWidth);
+            std::array<float, 4U> corners{cornerAngle, kTwoPi * 0.5F - cornerAngle, kTwoPi * 0.5F + cornerAngle, kTwoPi - cornerAngle};
+            std::vector<float> passed;
+            for (const float corner : corners) {
+                float travel = std::fmod((corner - startAngle) * sign + kTwoPi * 2.0F, kTwoPi);
+                if (travel > 0.0F && travel < sweep)
+                    passed.push_back(travel);
+            }
+            std::ranges::sort(passed);
+            for (const float travel : passed)
+                points.push_back(pointAt(startAngle + travel * sign));
+            points.push_back(pointAt(startAngle + sweep * sign));
+            AppendPolygon(element, Rect(element.rect), points, texture, style);
+            return;
+        }
+    }
+    if (kind == ImageKind::Image && element.image->scaleMode == kb::scene::UIImageScaleMode::Tiled) {
+        // Tiles at the image's own pixel size on the canvas, cutting the last row and column short. A very
+        // small image is tiled at a larger size so one widget never turns into thousands of quads.
+        constexpr float kMaximumTilesPerAxis = 64.0F;
+        const float tileWidth = std::max(sourceWidth * scale, Width(destination) / kMaximumTilesPerAxis);
+        const float tileHeight = std::max(sourceHeight * scale, Height(destination) / kMaximumTilesPerAxis);
+        for (float top = destination.top; top < destination.bottom; top += tileHeight) {
+            const float bottom = std::min(destination.bottom, top + tileHeight);
+            for (float left = destination.left; left < destination.right; left += tileWidth) {
+                const float right = std::min(destination.right, left + tileWidth);
+                AppendQuad(element, destination, ScreenUIRect{left, top, right, bottom}, u0, v0,
+                           std::lerp(u0, u1, (right - left) / tileWidth), std::lerp(v0, v1, (bottom - top) / tileHeight),
+                           texture, style);
+            }
+        }
+        return;
+    }
     const float left = std::clamp(nineSlice.left * scale, 0.0F, Width(destination) * 0.5F);
     const float top = std::clamp(nineSlice.top * scale, 0.0F, Height(destination) * 0.5F);
     const float right = std::clamp(nineSlice.right * scale, 0.0F, Width(destination) * 0.5F);
@@ -496,9 +592,23 @@ void ScreenUIDrawBatchBuilder::AppendTextCaret(const kb::scene::SceneUIFrameElem
 void ScreenUIDrawBatchBuilder::AppendQuad(const kb::scene::SceneUIFrameElement& element, const ScreenUIRect& fullRect,
                                           const ScreenUIRect& quadRect, float u0, float v0, float u1, float v1,
                                           const ScreenUITextureKey& texture, const ScreenUIDrawStyle& style) {
-    if (!fullRect.IsValid() || !quadRect.IsValid() || element.rect.width <= 0.0F || element.rect.height <= 0.0F) {
+    if (!quadRect.IsValid()) {
         return;
     }
+    const std::array<PolygonPoint, 4U> points{{{quadRect.left, quadRect.top, u0, v0},
+                                               {quadRect.right, quadRect.top, u1, v0},
+                                               {quadRect.right, quadRect.bottom, u1, v1},
+                                               {quadRect.left, quadRect.bottom, u0, v1}}};
+    AppendPolygon(element, fullRect, points, texture, style);
+}
+
+void ScreenUIDrawBatchBuilder::AppendPolygon(const kb::scene::SceneUIFrameElement& element, const ScreenUIRect& fullRect,
+                                             std::span<const PolygonPoint> points, const ScreenUITextureKey& texture,
+                                             const ScreenUIDrawStyle& style) {
+    if (!fullRect.IsValid() || points.size() < 3U || element.rect.width <= 0.0F || element.rect.height <= 0.0F) {
+        return;
+    }
+    // Element space maps onto the element's corners, so rotation, scale and projection carry into every point.
     const auto transform = [&](float x, float y) noexcept {
         const float horizontal = (x - element.rect.x) / element.rect.width;
         const float vertical = (y - element.rect.y) / element.rect.height;
@@ -512,36 +622,35 @@ void ScreenUIDrawBatchBuilder::AppendQuad(const kb::scene::SceneUIFrameElement& 
         };
         return std::array<float, 2>{top.x + (bottom.x - top.x) * vertical, top.y + (bottom.y - top.y) * vertical};
     };
-
-    const std::array<float, 2> topLeft = transform(quadRect.left, quadRect.top);
-    const std::array<float, 2> topRight = transform(quadRect.right, quadRect.top);
-    const std::array<float, 2> bottomRight = transform(quadRect.right, quadRect.bottom);
-    const std::array<float, 2> bottomLeft = transform(quadRect.left, quadRect.bottom);
-    const float localLeft = (quadRect.left - fullRect.left) / Width(fullRect);
-    const float localTop = (quadRect.top - fullRect.top) / Height(fullRect);
-    const float localRight = (quadRect.right - fullRect.left) / Width(fullRect);
-    const float localBottom = (quadRect.bottom - fullRect.top) / Height(fullRect);
     const std::uint32_t firstVertex = static_cast<std::uint32_t>(drawList_.vertices.size());
-    drawList_.vertices.insert(drawList_.vertices.end(),
-                              {
-                                  ScreenUIVertex{topLeft[0], topLeft[1], u0, v0, localLeft, localTop},
-                                  ScreenUIVertex{topRight[0], topRight[1], u1, v0, localRight, localTop},
-                                  ScreenUIVertex{bottomRight[0], bottomRight[1], u1, v1, localRight, localBottom},
-                                  ScreenUIVertex{bottomLeft[0], bottomLeft[1], u0, v1, localLeft, localBottom},
-                              });
+    for (const PolygonPoint& point : points) {
+        const std::array<float, 2> screen = transform(point.x, point.y);
+        drawList_.vertices.push_back(ScreenUIVertex{screen[0], screen[1], point.u, point.v,
+                                                    (point.x - fullRect.left) / Width(fullRect),
+                                                    (point.y - fullRect.top) / Height(fullRect)});
+    }
     const std::uint32_t firstIndex = static_cast<std::uint32_t>(drawList_.indices.size());
-    drawList_.indices.insert(drawList_.indices.end(), {firstVertex, firstVertex + 1U, firstVertex + 2U, firstVertex,
-                                                       firstVertex + 2U, firstVertex + 3U});
+    for (std::uint32_t index = 1U; index + 1U < points.size(); ++index) {
+        drawList_.indices.insert(drawList_.indices.end(), {firstVertex, firstVertex + index, firstVertex + index + 1U});
+    }
+    AppendIndices(element, firstIndex, static_cast<std::uint32_t>(drawList_.indices.size()) - firstIndex, texture, style);
+}
+
+void ScreenUIDrawBatchBuilder::AppendIndices(const kb::scene::SceneUIFrameElement& element, std::uint32_t firstIndex,
+                                             std::uint32_t count, const ScreenUITextureKey& texture,
+                                             const ScreenUIDrawStyle& style) {
+    ScreenUIDrawStyle clipped = style;
+    clipped.clipSoftness = std::max(element.clipSoftness, 0.0F);
     const ScreenUIRect clipRect = Rect(element.clipRect);
     const bool canMerge = !drawList_.batches.empty() && drawList_.batches.back().texture == texture &&
                           SameRect(drawList_.batches.back().clipRect, clipRect) &&
-                          drawList_.batches.back().style == style &&
+                          drawList_.batches.back().style == clipped &&
                           drawList_.batches.back().firstIndex + drawList_.batches.back().indexCount == firstIndex;
     if (canMerge) {
-        drawList_.batches.back().indexCount += 6U;
+        drawList_.batches.back().indexCount += count;
     } else {
         drawList_.batches.push_back(ScreenUIDrawBatch{
-            .texture = texture, .clipRect = clipRect, .style = style, .firstIndex = firstIndex, .indexCount = 6U});
+            .texture = texture, .clipRect = clipRect, .style = clipped, .firstIndex = firstIndex, .indexCount = count});
     }
 }
 

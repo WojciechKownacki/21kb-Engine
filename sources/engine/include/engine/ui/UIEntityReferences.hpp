@@ -16,12 +16,22 @@ template <typename Visit> void ForEachUIEntityReference(UIComponentSet& componen
         visit(components.selectable->navigationLeft);
         visit(components.selectable->navigationRight);
         visit(components.selectable->targetGraphic);
+        visit(components.selectable->eventTarget);
     }
     if (components.toggle.has_value()) {
         visit(components.toggle->graphic);
+        visit(components.toggle->group);
+    }
+    if (components.slider.has_value()) {
+        visit(components.slider->fillRect);
+        visit(components.slider->handleRect);
+    }
+    if (components.progressBar.has_value()) {
+        visit(components.progressBar->fillRect);
     }
     if (components.scrollView.has_value()) {
         visit(components.scrollView->verticalScrollbar);
+        visit(components.scrollView->horizontalScrollbar);
     }
     if (components.dropdown.has_value()) {
         visit(components.dropdown->templateEntity);

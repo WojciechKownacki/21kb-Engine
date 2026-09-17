@@ -3149,7 +3149,7 @@ void RunEngineLibraryEventSchemaRegistryTest() {
     }
     for (const kb::scene::SceneUIEventDescriptor& event : kb::scene::SceneUIEventCatalog()) {
         const kb::library::LibraryEventDesc* uiEvent = kb::library::EngineLibraryEventRegistry::Find(event.callbackName);
-        kb::tests::Require(uiEvent != nullptr && uiEvent->arguments.size() == 8U &&
+        kb::tests::Require(uiEvent != nullptr && uiEvent->arguments.size() == 9U &&
                 uiEvent->arguments[0].name == "entity" && uiEvent->arguments[0].type == kb::script::ScriptValueType::Entity &&
                 uiEvent->arguments[1].name == "pointerX" && uiEvent->arguments[1].type == kb::script::ScriptValueType::Float &&
                 uiEvent->arguments[2].name == "pointerY" && uiEvent->arguments[2].type == kb::script::ScriptValueType::Float &&
@@ -3157,7 +3157,8 @@ void RunEngineLibraryEventSchemaRegistryTest() {
                 uiEvent->arguments[4].name == "value" && uiEvent->arguments[4].type == kb::script::ScriptValueType::Float &&
                 uiEvent->arguments[5].name == "value2" && uiEvent->arguments[5].type == kb::script::ScriptValueType::Float &&
                 uiEvent->arguments[6].name == "text" && uiEvent->arguments[6].type == kb::script::ScriptValueType::String &&
-                uiEvent->arguments[7].name == "action" && uiEvent->arguments[7].type == kb::script::ScriptValueType::String,
+                uiEvent->arguments[7].name == "action" && uiEvent->arguments[7].type == kb::script::ScriptValueType::String &&
+                uiEvent->arguments[8].name == "other" && uiEvent->arguments[8].type == kb::script::ScriptValueType::Entity,
             "A scene UI event schema must match the payload delivered to scripts");
     }
     kb::tests::Require(kb::library::EngineLibraryEventRegistry::Find("NoSuchEvent") == nullptr, "Engine21kbLibrary event schema registry Find() must return nullptr for an unregistered name");
@@ -3305,7 +3306,7 @@ void RunComponentInspectorDescCatalogTest() {
     // Light remains a public compatibility alias for 3D Radiance Emitter and
     // intentionally reuses the canonical inspector metadata for its 16 fields.
     // Particle Effect contributes nine authoring and playback fields.
-    kb::tests::Require(fieldsChecked == 571U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (571, including the Light compatibility alias) across all components");
+    kb::tests::Require(fieldsChecked == 616U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (616, including the Light compatibility alias) across all components");
 
     for (const kb::library::LibraryComponentInspectorDesc& desc : catalog) {
         const bool foundInScriptNames = std::ranges::find(scriptComponentNames, desc.componentName) != scriptComponentNames.end();

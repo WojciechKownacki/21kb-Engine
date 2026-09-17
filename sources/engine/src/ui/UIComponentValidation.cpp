@@ -38,6 +38,13 @@ template <typename T>
 [[nodiscard]] bool LayoutBase(UIEdges padding, UIAlignment horizontal, UIAlignment vertical) noexcept {
     return NonNegative(padding) && EnumAtMost(horizontal, UIAlignment::Stretch) && EnumAtMost(vertical, UIAlignment::Stretch);
 }
+template <std::size_t Size>
+[[nodiscard]] bool Utf8Terminated(const std::array<char, Size>& text) noexcept {
+    const auto end = std::find(text.begin(), text.end(), '\0');
+    std::array<char32_t, Size> decoded{};
+    return end != text.end() &&
+        kb::input::DecodeUtf8(std::string_view{text.data(), static_cast<std::size_t>(end - text.begin())}, decoded).wellFormed;
+}
 [[nodiscard]] bool Range(float minimum, float maximum, float value) noexcept {
     return Finite(minimum) && Finite(maximum) && Finite(value) && minimum <= maximum && value >= minimum && value <= maximum;
 }
@@ -51,7 +58,10 @@ bool IsUIComponentValid(const UIRectTransform& value) noexcept {
         value.anchorMin.x <= value.anchorMax.x && value.anchorMin.y <= value.anchorMax.y &&
         value.pivot.x >= 0.0F && value.pivot.x <= 1.0F && value.pivot.y >= 0.0F && value.pivot.y <= 1.0F;
 }
-bool IsUIComponentValid(const UICanvas&) noexcept { return true; }
+bool IsUIComponentValid(const UICanvas& value) noexcept {
+    return EnumAtMost(value.renderMode, UICanvasRenderMode::WorldSpace) && Finite(value.pixelsPerUnit) &&
+        value.pixelsPerUnit > 0.0F && value.player >= -1 && value.player <= 3;
+}
 bool IsUIComponentValid(const UICanvasScaler& value) noexcept {
     return EnumAtMost(value.scaleMode, UICanvasScaleMode::ScaleWithScreenSize) && Finite(value.referenceResolution) &&
         value.referenceResolution.x > 0.0F && value.referenceResolution.y > 0.0F && Finite(value.scaleFactor) &&
@@ -59,7 +69,8 @@ bool IsUIComponentValid(const UICanvasScaler& value) noexcept {
         value.matchWidthOrHeight <= 1.0F;
 }
 bool IsUIComponentValid(const UICanvasGroup& value) noexcept {
-    return Finite(value.opacity) && value.opacity >= 0.0F && value.opacity <= 1.0F;
+    return Finite(value.opacity) && value.opacity >= 0.0F && value.opacity <= 1.0F && Finite(value.transitionSeconds) &&
+        value.transitionSeconds >= 0.0F && Finite(value.hiddenOffset) && Finite(value.hiddenScale) && value.hiddenScale >= 0.0F;
 }
 bool IsUIComponentValid(const UIHorizontalLayout& value) noexcept {
     return LayoutBase(value.padding, value.horizontalAlignment, value.verticalAlignment) && Finite(value.spacing) && value.spacing >= 0.0F;
@@ -93,7 +104,10 @@ bool IsUIComponentValid(const UIAspectRatioFitter& value) noexcept {
 bool IsUIComponentValid(const UISprite& value) noexcept { return Normalized(value.color); }
 bool IsUIComponentValid(const UIImage& value) noexcept {
     return Finite(value.uvRect) && value.uvRect.width >= 0.0F && value.uvRect.height >= 0.0F &&
-        EnumAtMost(value.scaleMode, UIImageScaleMode::Cover) && NonNegative(value.nineSlice) && Normalized(value.color);
+        EnumAtMost(value.scaleMode, UIImageScaleMode::Tiled) && NonNegative(value.nineSlice) && Normalized(value.color) &&
+        EnumAtMost(value.fillMethod, UIImageFillMethod::Radial360) && EnumAtMost(value.fillOrigin, UIImageFillOrigin::End) &&
+        Finite(value.fillAmount) && value.fillAmount >= 0.0F && value.fillAmount <= 1.0F && Finite(value.alphaHitThreshold) &&
+        value.alphaHitThreshold >= 0.0F && value.alphaHitThreshold <= 1.0F;
 }
 bool IsUIComponentValid(const UIRawImage& value) noexcept {
     return Finite(value.uvRect) && value.uvRect.width >= 0.0F && value.uvRect.height >= 0.0F && Normalized(value.color);
@@ -105,7 +119,9 @@ bool IsUIComponentValid(const UIText& value) noexcept {
         kb::input::DecodeUtf8(content, decoded).wellFormed && Finite(value.fontSize) &&
         value.fontSize > 0.0F && Normalized(value.color) && EnumAtMost(value.horizontalAlignment, UITextHorizontalAlignment::Right) &&
         EnumAtMost(value.verticalAlignment, UITextVerticalAlignment::Bottom) && EnumAtMost(value.wrapMode, UITextWrapMode::Character) &&
-        Finite(value.lineSpacing) && value.lineSpacing > 0.0F;
+        Finite(value.lineSpacing) && value.lineSpacing > 0.0F && Utf8Terminated(value.localizationKey) &&
+        EnumAtMost(value.overflow, UITextOverflow::Ellipsis) && Finite(value.minFontSize) && value.minFontSize > 0.0F &&
+        Finite(value.characterSpacing);
 }
 bool IsUIComponentValid(const UIBorder& value) noexcept {
     return Normalized(value.backgroundColor) && Normalized(value.borderColor) && NonNegative(value.borderWidth) &&
@@ -113,7 +129,7 @@ bool IsUIComponentValid(const UIBorder& value) noexcept {
         value.cornerRadius.z >= 0.0F && value.cornerRadius.w >= 0.0F && Finite(value.opacity) &&
         value.opacity >= 0.0F && value.opacity <= 1.0F;
 }
-bool IsUIComponentValid(const UIMask&) noexcept { return true; }
+bool IsUIComponentValid(const UIMask& value) noexcept { return Finite(value.softness) && value.softness >= 0.0F; }
 bool IsUIComponentValid(const UIShadow& value) noexcept {
     return Finite(value.offset) && Normalized(value.color) && Finite(value.blur) && value.blur >= 0.0F;
 }
@@ -126,7 +142,8 @@ bool IsUIComponentValid(const UISelectable& value) noexcept {
         std::find(value.eventName.begin(), value.eventName.end(), '\0') != value.eventName.end() &&
         Normalized(value.normalColor) && Normalized(value.highlightedColor) && Normalized(value.pressedColor) &&
         Normalized(value.selectedColor) && Normalized(value.disabledColor) && Finite(value.colorFadeSeconds) &&
-        value.colorFadeSeconds >= 0.0F;
+        value.colorFadeSeconds >= 0.0F && EnumAtMost(value.transition, UISelectableTransition::SpriteSwap) &&
+        Finite(value.raycastPadding) && Utf8Terminated(value.tooltip);
 }
 bool IsUIComponentValid(const UIButton&) noexcept { return true; }
 bool IsUIComponentValid(const UIToggle&) noexcept { return true; }
@@ -138,9 +155,12 @@ bool IsUIComponentValid(const UIScrollbar& value) noexcept {
         value.size <= 1.0F && EnumAtMost(value.direction, UIAxisDirection::TopToBottom);
 }
 bool IsUIComponentValid(const UIScrollView& value) noexcept {
-    return Finite(value.scrollX) && Finite(value.scrollY) && Finite(value.scrollSensitivity) && value.scrollSensitivity >= 0.0F;
+    return Finite(value.scrollX) && Finite(value.scrollY) && Finite(value.scrollSensitivity) && value.scrollSensitivity >= 0.0F &&
+        EnumAtMost(value.movementType, UIScrollMovement::Unrestricted) && Finite(value.elasticity) && value.elasticity >= 0.0F;
 }
-bool IsUIComponentValid(const UIInputField&) noexcept { return true; }
+bool IsUIComponentValid(const UIInputField& value) noexcept {
+    return EnumAtMost(value.contentType, UIInputContentType::Pin) && Utf8Terminated(value.placeholder);
+}
 bool IsUIComponentValid(const UIDropdown& value) noexcept {
     if (value.optionCount > UIDropdown::MaxOptions) return false;
     // With no options the value means nothing yet; a script may set it before filling the list.
@@ -154,7 +174,9 @@ bool IsUIComponentValid(const UIDropdown& value) noexcept {
     }
     return Finite(value.alphaFadeSpeed) && value.alphaFadeSpeed >= 0.0F;
 }
-bool IsUIComponentValid(const UIProgressBar& value) noexcept { return Range(value.minimum, value.maximum, value.value); }
+bool IsUIComponentValid(const UIProgressBar& value) noexcept {
+    return Range(value.minimum, value.maximum, value.value) && EnumAtMost(value.direction, UIAxisDirection::TopToBottom);
+}
 bool IsUIComponentValid(const UIWidgetSwitcher&) noexcept { return true; }
 
 bool IsUIComponentSetValid(const UIComponentSet& value) noexcept {

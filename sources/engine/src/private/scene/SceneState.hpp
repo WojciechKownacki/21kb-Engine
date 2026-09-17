@@ -741,6 +741,29 @@ public:
     // Caret blink phase in seconds for the focused input field, reset on every edit so typing
     // never hides the caret mid-stroke.
     float uiTextCaretPhase = 0.0F;
+    UIEdges uiSafeAreaInsets{};
+    // Focus, held direction and repeat timer of players 1-3, each confined to their own canvases.
+    struct UIPlayerFocus {
+        SceneEntity focused{};
+        SceneUIPlayerNavigation previous{};
+        kb::math::Vec2 heldDirection{};
+        float repeatSeconds = 0.0F;
+    };
+    std::array<UIPlayerFocus, 3U> uiPlayers{};
+    // How far each Canvas Group with a show/hide animation is shown, 0-1, by entity id. A group without an
+    // entry sits where its `visible` flag puts it.
+    std::unordered_map<std::uint64_t, float> uiGroupShown;
+    // The hovered widget's rest time, and the tooltip it shows once that passes the delay.
+    float uiHoverSeconds = 0.0F;
+    kb::math::Vec2 uiTooltipPointer{};
+    // A press on a draggable widget, and whether it has moved far enough to be a drag.
+    SceneEntity uiDragged{};
+    kb::math::Vec2 uiDragOrigin{};
+    bool uiDragging = false;
+    // The scroll view being eased onto a child after a drag or flick settled.
+    SceneEntity uiSnappingScrollView{};
+    // Published image opacity by image asset id, for alpha hit tests.
+    std::unordered_map<std::uint64_t, std::shared_ptr<const SceneUIImageAlpha>> uiImageAlpha;
     // LIB-144: the renderer-published per-entity visibility/bounds feedback frame
     // (Renderer.IsVisible/GetBounds/TestFrustum's backing state) - written by
     // kb::render::Renderer at every SubmitScene through SceneRenderFeedback::Publish

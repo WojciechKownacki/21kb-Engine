@@ -666,6 +666,13 @@ void AppendTerrainBrushRing(
     const std::uint32_t renderWidth = twoD ? RectWidth(sceneRects.renderArea) : viewportState.RenderWidthForPanel(RectWidth(sceneRects.renderArea));
     const std::uint32_t renderHeight = twoD ? RectHeight(sceneRects.renderArea) : viewportState.RenderHeightForPanel(RectHeight(sceneRects.renderArea));
     sceneContext.SetUIAuthoringViewportSize(static_cast<float>(renderWidth), static_cast<float>(renderHeight));
+    // A device profile's safe area is what the game's canvases lay out inside, so the preview shows the
+    // margins a notch or rounded corners will force.
+    const float safeScaleX = profile.width > 0U ? static_cast<float>(renderWidth) / static_cast<float>(profile.width) : 1.0F;
+    const float safeScaleY = profile.height > 0U ? static_cast<float>(renderHeight) / static_cast<float>(profile.height) : 1.0F;
+    sceneContext.SetUIPreviewSafeArea(kb::scene::UIEdges{
+        static_cast<float>(profile.safeArea.left) * safeScaleX, static_cast<float>(profile.safeArea.top) * safeScaleY,
+        static_cast<float>(profile.safeArea.right) * safeScaleX, static_cast<float>(profile.safeArea.bottom) * safeScaleY});
     const EditorViewportCameraState& viewportCamera = sceneContext.ViewportCamera(panelId);
     const EditorViewportCameraAxes axes = viewportCamera.Axes();
     kb::render::RenderSceneSubmitDesc::EditorGizmoDesc gizmo{};

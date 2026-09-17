@@ -120,6 +120,7 @@ public:
     [[nodiscard]] bool VerifyUIGraphics();
     [[nodiscard]] bool VerifyUINavigationLinks();
     [[nodiscard]] bool VerifyUIDropdownOptions();
+    [[nodiscard]] bool VerifyUIWidgetFeatures();
     [[nodiscard]] bool VerifyPickerCloseButtons();
     [[nodiscard]] bool VerifyUI2DEditing();
     [[nodiscard]] bool SelectUIAnchorPreset(int preset);

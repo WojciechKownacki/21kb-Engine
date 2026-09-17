@@ -4,7 +4,13 @@
 #include "engine/input/InputDeviceState.hpp"
 #include "engine/input/InputKey.hpp"
 #include "engine/input/InputSubsystem.hpp"
+#include "engine/localization/LocalizationCatalog.hpp"
+#include "engine/localization/LocalizationCatalogIO.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SceneLocalization.hpp"
+#include "engine/scene/SceneRenderFeedback.hpp"
+#include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -27,6 +33,9 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <filesystem>
+#include <limits>
+#include <memory>
 #include <span>
 #include <string>
 #include <string_view>
@@ -1046,6 +1055,475 @@ void TestDropdownPersistenceAndOptionEdits() {
         "Removing the chosen option must choose a remaining one");
 }
 
+// Drives the UI a frame at a time with the pointer at a place, pressed or not.
+struct PointerDriver {
+    kb::scene::Scene& scene;
+    float width = 400.0F;
+    float height = 400.0F;
+    kb::scene::SceneUIInput input{.pointerAvailable = true};
+
+    void At(float x, float y, bool down, float deltaSeconds = 0.016F) {
+        input.pointerPosition = {x, y};
+        input.primaryDown = down;
+        kb::tests::Require(scene.UI().Update(width, height, input, deltaSeconds), "A driven UI frame must build");
+    }
+    void Click(float x, float y) {
+        At(x, y, false);
+        At(x, y, true);
+        At(x, y, false);
+    }
+};
+
+// Radio buttons: toggles naming one group switch each other off and the chosen one stays chosen. A slider or
+// progress bar positions the fill and handle widgets it names along its direction.
+void TestRadioGroupsAndDrivenWidgets() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject canvas = AddUI(scene, {}, CanvasComponents());
+    kb::scene::UIComponentSet groupComponents;
+    groupComponents.rectTransform = Rect(0.0F, 0.0F, 300.0F, 40.0F);
+    const kb::scene::SceneObject group = AddUI(scene, canvas, groupComponents);
+    std::array<kb::scene::SceneObject, 3U> options{};
+    for (std::size_t index = 0U; index < options.size(); ++index) {
+        kb::scene::UIComponentSet toggle = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Toggle);
+        toggle.rectTransform = Rect(100.0F * static_cast<float>(index), 0.0F, 90.0F, 40.0F);
+        toggle.toggle->toggled = index == 0U;
+        toggle.toggle->group = group.Entity().Id();
+        options[index] = AddUI(scene, group, toggle);
+    }
+    PointerDriver pointer{scene};
+    const auto on = [&](std::size_t index) {
+        return scene.Components().UI().TryGet<kb::scene::UIToggle>(options[index].Entity())->toggled;
+    };
+    pointer.Click(150.0F, 20.0F);
+    kb::tests::Require(!on(0U) && on(1U) && !on(2U), "Choosing a radio option must switch the rest of its group off");
+    pointer.Click(150.0F, 20.0F);
+    kb::tests::Require(on(1U), "Clicking the chosen radio option again must keep it chosen");
+    scene.Components().UI().TryGet<kb::scene::UIToggle>(options[1U].Entity())->allowSwitchOff = true;
+    pointer.Click(150.0F, 20.0F);
+    kb::tests::Require(!on(1U), "A group that allows switching off must let the chosen option be cleared");
+
+    kb::scene::UIComponentSet sliderComponents = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Slider);
+    sliderComponents.rectTransform = Rect(0.0F, 100.0F, 200.0F, 20.0F);
+    sliderComponents.slider->value = 0.25F;
+    const kb::scene::SceneObject slider = AddUI(scene, canvas, sliderComponents);
+    kb::scene::UIComponentSet part;
+    part.rectTransform.emplace();
+    part.rectTransform->anchorMax = {1.0F, 1.0F};
+    part.rectTransform->offsetMin = {};
+    part.rectTransform->offsetMax = {};
+    part.border.emplace();
+    const kb::scene::SceneObject fill = AddUI(scene, slider, part);
+    part.rectTransform->offsetMin = {-5.0F, 0.0F};
+    part.rectTransform->offsetMax = {5.0F, 0.0F};
+    const kb::scene::SceneObject handle = AddUI(scene, slider, part);
+    scene.Components().UI().TryGet<kb::scene::UISlider>(slider.Entity())->fillRect = fill.Entity().Id();
+    scene.Components().UI().TryGet<kb::scene::UISlider>(slider.Entity())->handleRect = handle.Entity().Id();
+
+    kb::scene::UIComponentSet progressComponents = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::ProgressBar);
+    progressComponents.rectTransform = Rect(300.0F, 100.0F, 20.0F, 100.0F);
+    progressComponents.progressBar->value = 0.75F;
+    progressComponents.progressBar->direction = kb::scene::UIAxisDirection::BottomToTop;
+    const kb::scene::SceneObject progress = AddUI(scene, canvas, progressComponents);
+    part.rectTransform->offsetMin = {};
+    part.rectTransform->offsetMax = {};
+    const kb::scene::SceneObject progressFill = AddUI(scene, progress, part);
+    scene.Components().UI().TryGet<kb::scene::UIProgressBar>(progress.Entity())->fillRect = progressFill.Entity().Id();
+    pointer.At(390.0F, 390.0F, false);
+    const kb::scene::SceneUIFrameElement* fillFrame = FindElement(scene.UI().Frame(), fill.Entity());
+    const kb::scene::SceneUIFrameElement* handleFrame = FindElement(scene.UI().Frame(), handle.Entity());
+    kb::tests::Require(fillFrame != nullptr && kb::tests::NearlyEqual(fillFrame->rect.x, 0.0F) &&
+        kb::tests::NearlyEqual(fillFrame->rect.width, 50.0F), "A slider's fill must span from its start to the value");
+    kb::tests::Require(handleFrame != nullptr && kb::tests::NearlyEqual(handleFrame->rect.x + handleFrame->rect.width * 0.5F, 50.0F),
+        "A slider's handle must sit at the value");
+    const kb::scene::SceneUIFrameElement* progressFrame = FindElement(scene.UI().Frame(), progressFill.Entity());
+    kb::tests::Require(progressFrame != nullptr && kb::tests::NearlyEqual(progressFrame->rect.y, 125.0F) &&
+        kb::tests::NearlyEqual(progressFrame->rect.height, 75.0F), "A bottom-to-top progress bar must fill up from its bottom edge");
+
+    for (const kb::scene::UIComponentPreset preset :
+         {kb::scene::UIComponentPreset::Slider, kb::scene::UIComponentPreset::ProgressBar, kb::scene::UIComponentPreset::ScrollView}) {
+        std::vector<SceneEntity> parts;
+        const SceneEntity root = kb::scene::CreateUIHierarchy(scene, preset, canvas,
+            preset == kb::scene::UIComponentPreset::Slider ? "Created Slider" : "Created", &parts);
+        kb::tests::Require(root.IsValid() && kb::scene::IsUIHierarchyPreset(preset) && parts.size() >= 2U && parts.front() == root,
+            "A hierarchy preset must build its parts under a root");
+    }
+    const SceneEntity createdSlider = FindNamed(scene, canvas.Entity(), "Created Slider");
+    const kb::scene::UISlider* wired = scene.Components().UI().TryGet<kb::scene::UISlider>(createdSlider);
+    kb::tests::Require(wired != nullptr && wired->fillRect == FindNamed(scene, createdSlider, "Fill").Id() &&
+        wired->handleRect == FindNamed(scene, createdSlider, "Handle").Id(), "A created slider must drive its own fill and handle");
+    kb::tests::Require(!kb::scene::CreateUIHierarchy(scene, kb::scene::UIComponentPreset::Button, canvas, "Single").IsValid(),
+        "A single-object preset must not build a hierarchy");
+}
+
+// How a selectable shows and takes presses: raycast padding, sprite swap, no transition, a tooltip after the
+// pointer rests, the event target of its action, and presses on transparent image pixels.
+void TestSelectablePresentationAndHits() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject canvas = AddUI(scene, {}, CanvasComponents());
+    kb::scene::UIComponentSet buttonComponents = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Button);
+    buttonComponents.rectTransform = Rect(0.0F, 0.0F, 100.0F, 40.0F);
+    buttonComponents.image.emplace();
+    buttonComponents.image->imageAssetId = 11U;
+    buttonComponents.selectable->transition = kb::scene::UISelectableTransition::SpriteSwap;
+    buttonComponents.selectable->highlightedImage = 12U;
+    buttonComponents.selectable->raycastPadding = {0.0F, 0.0F, 20.0F, 0.0F};
+    static_cast<void>(kb::scene::SetUITooltipText(*buttonComponents.selectable, "Save the game"));
+    static_cast<void>(kb::scene::SetUIEventName(*buttonComponents.selectable, "SaveGame"));
+    const kb::scene::SceneObject target = AddUI(scene, canvas, {});
+    buttonComponents.selectable->eventTarget = target.Entity().Id();
+    const kb::scene::SceneObject button = AddUI(scene, canvas, buttonComponents);
+    kb::scene::UIComponentSet label;
+    label.rectTransform = Rect(0.0F, 0.0F, 100.0F, 40.0F);
+    label.text.emplace();
+    label.text->fontAssetId = 9U;
+    static_cast<void>(AddUI(scene, button, label));
+
+    PointerDriver pointer{scene};
+    pointer.At(110.0F, 20.0F, false);
+    kb::tests::Require(scene.UI().Hovered() == button.Entity(), "Raycast padding must grow where a press lands");
+    const kb::scene::SceneUIFrameElement* hovered = FindElement(scene.UI().Frame(), button.Entity());
+    kb::tests::Require(hovered->image->imageAssetId == 12U && hovered->interactionTint.r == 1.0F && hovered->interactionTint.g == 1.0F,
+        "Sprite swap must show the highlighted image untinted");
+    for (int step = 0; step < 4; ++step)
+        pointer.At(110.0F, 20.0F, false, 0.2F);
+    const auto bubble = std::ranges::find_if(scene.UI().Frame().elements, [](const kb::scene::SceneUIFrameElement& element) {
+        return element.tooltip && element.text.has_value();
+    });
+    kb::tests::Require(bubble != scene.UI().Frame().elements.end() &&
+        kb::scene::UITextContent(*bubble->text) == "Save the game" && bubble->text->fontAssetId == 9U &&
+        bubble->canvasSortingOrder == std::numeric_limits<std::int32_t>::max(),
+        "A widget the pointer rests on must show its tooltip over everything, in the menu's font");
+    static_cast<void>(scene.UI().DrainEvents());
+    pointer.At(50.0F, 20.0F, true);
+    kb::tests::Require(std::ranges::none_of(scene.UI().Frame().elements, &kb::scene::SceneUIFrameElement::tooltip),
+        "Pressing must hide the tooltip");
+    pointer.At(50.0F, 20.0F, false);
+    const kb::scene::SceneUIEvent* clicked = FindEvent(scene.UI().Events(), kb::scene::SceneUIEventType::Clicked, button.Entity());
+    kb::tests::Require(clicked != nullptr && clicked->actionTarget == target.Entity(),
+        "A click must address its action to the selectable's event target");
+
+    scene.Components().UI().TryGet<kb::scene::UISelectable>(button.Entity())->transition = kb::scene::UISelectableTransition::None;
+    scene.Components().UI().TryGet<kb::scene::UIImage>(button.Entity())->alphaHitThreshold = 0.5F;
+    scene.UI().PublishImageAlpha(11U, kb::scene::SceneUIImageAlpha{.width = 2U, .height = 1U, .alpha = {0U, 255U}});
+    pointer.At(25.0F, 20.0F, true);
+    kb::tests::Require(FindElement(scene.UI().Frame(), button.Entity())->interactionTint.r == 1.0F,
+        "Without a transition a widget must not be tinted by its state");
+    pointer.At(25.0F, 20.0F, false);
+    kb::tests::Require(scene.UI().HitTest({25.0F, 20.0F}) != button.Entity() && scene.UI().HitTest({75.0F, 20.0F}) == button.Entity(),
+        "A press must only land where the image is opaque enough");
+}
+
+// A draggable widget reports its drag and the widget it lands on, and a finished drag does not click.
+void TestDragAndDrop() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject canvas = AddUI(scene, {}, CanvasComponents());
+    kb::scene::UIComponentSet card = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Button);
+    card.rectTransform = Rect(0.0F, 0.0F, 50.0F, 50.0F);
+    card.selectable->draggable = true;
+    const kb::scene::SceneObject item = AddUI(scene, canvas, card);
+    card.rectTransform = Rect(200.0F, 0.0F, 50.0F, 50.0F);
+    card.selectable->draggable = false;
+    const kb::scene::SceneObject slot = AddUI(scene, canvas, card);
+    PointerDriver pointer{scene};
+    pointer.At(25.0F, 25.0F, false);
+    pointer.At(25.0F, 25.0F, true);
+    pointer.At(120.0F, 25.0F, true);
+    kb::tests::Require(kb::scene::SceneUIQueries{scene}.Dragged() == item.Entity(), "Moving a pressed draggable widget must start a drag");
+    pointer.At(225.0F, 25.0F, true);
+    pointer.At(225.0F, 25.0F, false);
+    const auto events = scene.UI().Events();
+    const kb::scene::SceneUIEvent* ended = FindEvent(events, kb::scene::SceneUIEventType::DragEnded, item.Entity());
+    const kb::scene::SceneUIEvent* dropped = FindEvent(events, kb::scene::SceneUIEventType::Dropped, slot.Entity());
+    kb::tests::Require(HasEvent(events, kb::scene::SceneUIEventType::DragBegan, item.Entity()) &&
+        HasEvent(events, kb::scene::SceneUIEventType::Dragged, item.Entity()) && ended != nullptr && ended->other == slot.Entity() &&
+        dropped != nullptr && dropped->other == item.Entity(), "A drag must report its start, moves, end and drop target");
+    kb::tests::Require(!HasEvent(events, kb::scene::SceneUIEventType::Clicked, item.Entity()) && !kb::scene::SceneUIQueries{scene}.Dragged().IsValid(),
+        "A finished drag must not click the dragged widget");
+}
+
+// Content types filter typing, a password shows dots, and an empty field shows its placeholder.
+void TestInputFieldContentTypes() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject canvas = AddUI(scene, {}, CanvasComponents());
+    kb::scene::UIComponentSet fieldComponents = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::InputField);
+    fieldComponents.rectTransform = Rect(0.0F, 0.0F, 200.0F, 30.0F);
+    fieldComponents.inputField->contentType = kb::scene::UIInputContentType::IntegerNumber;
+    static_cast<void>(kb::scene::SetUIInputPlaceholder(*fieldComponents.inputField, "Enter a number"));
+    static_cast<void>(kb::scene::SetUITextContent(*fieldComponents.text, ""));
+    const kb::scene::SceneObject field = AddUI(scene, canvas, fieldComponents);
+    kb::scene::SceneUIInput input{};
+    kb::tests::Require(scene.UI().Update(400.0F, 400.0F, input, 0.016F), "Input field frame must build");
+    const kb::scene::SceneUIFrameElement* empty = FindElement(scene.UI().Frame(), field.Entity());
+    kb::tests::Require(kb::scene::UITextContent(*empty->text) == "Enter a number" &&
+        empty->text->color.a < fieldComponents.text->color.a, "An empty field must show its placeholder dimmed");
+    kb::tests::Require(scene.UI().SetFocus(field.Entity()), "The field must take focus");
+    const std::u32string typed = U"-1a2.3";
+    input.textInput = typed;
+    kb::tests::Require(scene.UI().Update(400.0F, 400.0F, input, 0.016F), "Typing frame must build");
+    kb::tests::Require(kb::scene::UITextContent(*scene.Components().UI().TryGet<kb::scene::UIText>(field.Entity())) == "-123",
+        "An integer field must keep only a leading sign and digits");
+    scene.Components().UI().TryGet<kb::scene::UIInputField>(field.Entity())->contentType = kb::scene::UIInputContentType::Password;
+    input.textInput = {};
+    kb::tests::Require(scene.UI().Update(400.0F, 400.0F, input, 0.016F), "Password frame must build");
+    const kb::scene::SceneUIFrameElement* password = FindElement(scene.UI().Frame(), field.Entity());
+    kb::tests::Require(kb::scene::UITextContent(*password->text) == "****" && password->textCaretByteOffset == 4U,
+        "A password must show one dot per character with the caret after them");
+}
+
+// Show/Hide animation on a Canvas Group, safe-area layout, a world-space canvas seen through the camera,
+// and a second player's focus kept on their own canvas.
+void TestCanvasPlacementAnimationAndPlayers() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject canvas = AddUI(scene, {}, CanvasComponents());
+    kb::scene::UIComponentSet panelComponents = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Button);
+    panelComponents.rectTransform = Rect(0.0F, 0.0F, 100.0F, 50.0F);
+    panelComponents.canvasGroup.emplace();
+    panelComponents.canvasGroup->transitionSeconds = 1.0F;
+    panelComponents.canvasGroup->hiddenOffset = {0.0F, 100.0F};
+    const kb::scene::SceneObject panel = AddUI(scene, canvas, panelComponents);
+    kb::scene::SceneUIInput idle{};
+    kb::tests::Require(scene.UI().Update(400.0F, 400.0F, idle, 0.016F), "Animated panel frame must build");
+    scene.Components().UI().TryGet<kb::scene::UICanvasGroup>(panel.Entity())->visible = false;
+    kb::tests::Require(scene.UI().Update(400.0F, 400.0F, idle, 0.5F), "Half-hidden frame must build");
+    const kb::scene::SceneUIFrameElement* half = FindElement(scene.UI().Frame(), panel.Entity());
+    kb::tests::Require(half != nullptr && kb::tests::NearlyEqual(half->effectiveOpacity, 0.5F) &&
+        kb::tests::NearlyEqual(half->corners[0].y, 50.0F) && !half->hitTestable,
+        "Hiding a group must fade and slide it over its transition and stop taking input at once");
+    kb::tests::Require(scene.UI().Update(400.0F, 400.0F, idle, 0.6F), "Hidden frame must build");
+    kb::tests::Require(FindElement(scene.UI().Frame(), panel.Entity())->effectiveOpacity == 0.0F, "A hidden group must end invisible");
+
+    kb::tests::Require(scene.UI().SetSafeAreaInsets({40.0F, 10.0F, 0.0F, 0.0F}) && !scene.UI().SetSafeAreaInsets({-1.0F, 0.0F, 0.0F, 0.0F}),
+        "Safe-area insets must be accepted when finite and non-negative only");
+    kb::tests::Require(scene.UI().Update(400.0F, 400.0F, idle, 0.016F), "Safe-area frame must build");
+    kb::tests::Require(kb::tests::NearlyEqual(FindElement(scene.UI().Frame(), panel.Entity())->rect.x, 40.0F),
+        "A canvas fitting the safe area must lay out clear of the insets");
+    scene.Components().UI().TryGet<kb::scene::UICanvas>(canvas.Entity())->respectSafeArea = false;
+    kb::tests::Require(scene.UI().Update(400.0F, 400.0F, idle, 0.016F), "Full-screen frame must build");
+    kb::tests::Require(kb::tests::NearlyEqual(FindElement(scene.UI().Frame(), panel.Entity())->rect.x, 0.0F),
+        "A canvas not fitting the safe area must use the whole screen");
+
+    kb::scene::UIComponentSet worldComponents = CanvasComponents();
+    worldComponents.rectTransform = Rect(0.0F, 0.0F, 200.0F, 100.0F);
+    worldComponents.canvas->renderMode = kb::scene::UICanvasRenderMode::WorldSpace;
+    const kb::scene::SceneObject world = AddUI(scene, {}, worldComponents);
+    scene.Transforms().TryGet(world.Entity())->localPosition = {0.0F, 0.0F, 1.0F};
+    scene.Transforms().TryGet(world.Entity())->worldPosition = {0.0F, 0.0F, 1.0F};
+    kb::scene::UIComponentSet sign = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Button);
+    sign.rectTransform = Rect(0.0F, 0.0F, 100.0F, 50.0F);
+    const kb::scene::SceneObject signButton = AddUI(scene, world, sign);
+    kb::tests::Require(scene.UI().Update(400.0F, 400.0F, idle, 0.016F), "World canvas frame without a camera must build");
+    kb::tests::Require(!FindElement(scene.UI().Frame(), signButton.Entity())->hitTestable,
+        "A world-space canvas must not take input before a camera has been seen");
+    kb::scene::SceneRenderVisibilityFrame camera{.frustumValid = true, .cameraValid = true, .viewportWidth = 400U, .viewportHeight = 400U};
+    camera.view = {1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F};
+    camera.projection = camera.view;
+    kb::scene::SceneRenderFeedback::Publish(scene, camera);
+    kb::tests::Require(scene.UI().Update(400.0F, 400.0F, idle, 0.016F), "World canvas frame must build");
+    const kb::scene::SceneUIFrameElement* projected = FindElement(scene.UI().Frame(), signButton.Entity());
+    kb::tests::Require(projected != nullptr && kb::tests::NearlyEqual(projected->corners[0].x, 0.0F) &&
+        kb::tests::NearlyEqual(projected->corners[0].y, 100.0F) && kb::tests::NearlyEqual(projected->corners[2].x, 200.0F) &&
+        kb::tests::NearlyEqual(projected->canvasScale, 2.0F) && scene.UI().HitTest({100.0F, 150.0F}) == signButton.Entity(),
+        "A world-space canvas must be placed on screen through the camera and take presses where it is drawn");
+
+    kb::scene::UIComponentSet playerCanvas = CanvasComponents();
+    playerCanvas.canvas->player = 1;
+    playerCanvas.canvas->sortingOrder = 5;
+    const kb::scene::SceneObject second = AddUI(scene, {}, playerCanvas);
+    std::array<kb::scene::SceneObject, 2U> choices{};
+    for (std::size_t index = 0U; index < choices.size(); ++index) {
+        kb::scene::UIComponentSet choice = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Button);
+        choice.rectTransform = Rect(300.0F, 200.0F + 40.0F * static_cast<float>(index), 80.0F, 30.0F);
+        choices[index] = AddUI(scene, second, choice);
+    }
+    kb::scene::SceneUIInput pad{};
+    const auto step = [&](bool down) {
+        pad.otherPlayers[0].navigateDown = down;
+        kb::tests::Require(scene.UI().Update(400.0F, 400.0F, pad, 0.016F), "Player navigation frame must build");
+    };
+    const SceneEntity sharedFocus = scene.UI().Focused();
+    step(true);
+    step(false);
+    kb::tests::Require(kb::scene::SceneUIQueries{scene}.PlayerFocused(1U) == choices[0].Entity(),
+        "A second player's first step must focus the first widget on their own canvas");
+    step(true);
+    step(false);
+    kb::tests::Require(kb::scene::SceneUIQueries{scene}.PlayerFocused(1U) == choices[1].Entity() && scene.UI().Focused() == sharedFocus,
+        "A second player's navigation must stay on their canvas and leave the shared focus alone");
+}
+
+// Elastic and snapping scroll views, a horizontal scrollbar, and a text showing its localization key.
+void TestScrollMovementAndLocalizedText() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject canvas = AddUI(scene, {}, CanvasComponents());
+    kb::scene::UIComponentSet viewComponents;
+    viewComponents.rectTransform = Rect(0.0F, 0.0F, 100.0F, 50.0F);
+    viewComponents.mask.emplace();
+    viewComponents.scrollView.emplace();
+    viewComponents.scrollView->horizontal = false;
+    viewComponents.scrollView->inertia = false;
+    viewComponents.scrollView->movementType = kb::scene::UIScrollMovement::Elastic;
+    viewComponents.scrollView->snapToChildren = true;
+    const kb::scene::SceneObject view = AddUI(scene, canvas, viewComponents);
+    for (int row = 0; row < 5; ++row) {
+        kb::scene::UIComponentSet rowComponents;
+        rowComponents.rectTransform = Rect(0.0F, 20.0F * static_cast<float>(row), 100.0F, 20.0F);
+        rowComponents.selectable.emplace();
+        static_cast<void>(AddUI(scene, view, rowComponents));
+    }
+    const auto scrollY = [&] { return scene.Components().UI().TryGet<kb::scene::UIScrollView>(view.Entity())->scrollY; };
+    PointerDriver pointer{scene};
+    pointer.At(50.0F, 10.0F, false);
+    pointer.At(50.0F, 10.0F, true);
+    pointer.At(50.0F, 30.0F, true);
+    kb::tests::Require(scrollY() < 0.0F, "An elastic view must follow a pull past its start");
+    pointer.At(50.0F, 30.0F, false);
+    for (int frame = 0; frame < 60; ++frame)
+        pointer.At(50.0F, 30.0F, false, 0.05F);
+    kb::tests::Require(scrollY() == 0.0F, "A released elastic view must spring back to its content");
+    scene.Components().UI().TryGet<kb::scene::UIScrollView>(view.Entity())->scrollY = 10.0F;
+    pointer.At(50.0F, 30.0F, false);
+    pointer.At(50.0F, 30.0F, true);
+    pointer.At(50.0F, 27.0F, true);
+    pointer.At(50.0F, 27.0F, false);
+    for (int frame = 0; frame < 60; ++frame)
+        pointer.At(50.0F, 27.0F, false, 0.05F);
+    kb::tests::Require(scrollY() == 20.0F, "A snapping view must settle with the nearest row at its top");
+
+    kb::scene::UIComponentSet wideComponents;
+    wideComponents.rectTransform = Rect(200.0F, 0.0F, 100.0F, 50.0F);
+    wideComponents.scrollView.emplace();
+    wideComponents.scrollView->vertical = false;
+    wideComponents.scrollView->scrollX = 50.0F;
+    const kb::scene::SceneObject wide = AddUI(scene, canvas, wideComponents);
+    kb::scene::UIComponentSet contentComponents;
+    contentComponents.rectTransform = Rect(0.0F, 0.0F, 200.0F, 50.0F);
+    static_cast<void>(AddUI(scene, wide, contentComponents));
+    kb::scene::UIComponentSet barComponents = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Scrollbar);
+    barComponents.rectTransform = Rect(200.0F, 60.0F, 100.0F, 10.0F);
+    const kb::scene::SceneObject bar = AddUI(scene, canvas, barComponents);
+    scene.Components().UI().TryGet<kb::scene::UIScrollView>(wide.Entity())->horizontalScrollbar = bar.Entity().Id();
+    pointer.At(390.0F, 390.0F, false);
+    const kb::scene::UIScrollbar* synced = scene.Components().UI().TryGet<kb::scene::UIScrollbar>(bar.Entity());
+    kb::tests::Require(kb::tests::NearlyEqual(synced->value, 0.5F) && kb::tests::NearlyEqual(synced->size, 0.5F),
+        "A horizontal scrollbar must show the visible share and position of its view");
+
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb-ui-localized-text";
+    std::filesystem::remove_all(root);
+    std::filesystem::create_directories(root / "Assets" / "Localization");
+    const kb::localization::LocalizationCatalog catalog{
+        .fallbackLanguage = "en",
+        .languages = {{"en", {{"menu.play", {.text = "Play"}}}}, {"pl", {{"menu.play", {.text = "Graj"}}}}},
+    };
+    kb::tests::Require(kb::localization::LocalizationCatalogIO::Save(root / "Assets" / "Localization" / "Menu.kbloc", catalog) &&
+        scene.Assets().MountProject(root) && scene.Assets().Discover() == 1U, "The menu catalog must be discovered");
+    const auto* metadata = scene.Assets().Manager().Registry().FindByPath("/Game/Localization/Menu.kbloc");
+    kb::tests::Require(metadata != nullptr && scene.Localization().SetCatalog(metadata->id.value), "The menu catalog must load");
+    kb::scene::UIComponentSet textComponents;
+    textComponents.rectTransform = Rect(0.0F, 100.0F, 100.0F, 20.0F);
+    textComponents.text.emplace();
+    static_cast<void>(kb::scene::SetUITextContent(*textComponents.text, "PLAY"));
+    static_cast<void>(kb::scene::SetUITextLocalizationKey(*textComponents.text, "menu.play"));
+    const kb::scene::SceneObject text = AddUI(scene, canvas, textComponents);
+    pointer.At(390.0F, 390.0F, false);
+    kb::tests::Require(ShownText(scene.UI().Frame(), text.Entity()) == "Play", "A localized text must show its key's translation");
+    kb::tests::Require(scene.Localization().SetLanguage("pl"), "The menu language must switch");
+    pointer.At(390.0F, 390.0F, false);
+    kb::tests::Require(ShownText(scene.UI().Frame(), text.Entity()) == "Graj", "A localized text must follow a language change");
+    std::filesystem::remove_all(root);
+}
+
+// Every v39 widget setting survives a save, and an older canvas keeps filling the whole screen.
+void TestWidgetSettingsPersistence() {
+    kb::scene::UIComponentSet authored;
+    authored.rectTransform.emplace();
+    authored.canvas.emplace();
+    authored.canvas->renderMode = kb::scene::UICanvasRenderMode::WorldSpace;
+    authored.canvas->pixelsPerUnit = 50.0F;
+    authored.canvas->respectSafeArea = false;
+    authored.canvas->player = 2;
+    authored.canvasGroup.emplace();
+    authored.canvasGroup->visible = false;
+    authored.canvasGroup->transitionSeconds = 0.3F;
+    authored.canvasGroup->hiddenOffset = {4.0F, 5.0F};
+    authored.canvasGroup->hiddenScale = 0.8F;
+    authored.image.emplace();
+    authored.image->fillMethod = kb::scene::UIImageFillMethod::Radial360;
+    authored.image->fillOrigin = kb::scene::UIImageFillOrigin::End;
+    authored.image->fillAmount = 0.4F;
+    authored.image->fillClockwise = false;
+    authored.image->alphaHitThreshold = 0.2F;
+    authored.text.emplace();
+    static_cast<void>(kb::scene::SetUITextLocalizationKey(*authored.text, "hud.title"));
+    authored.text->overflow = kb::scene::UITextOverflow::Ellipsis;
+    authored.text->autoSize = true;
+    authored.text->minFontSize = 9.0F;
+    authored.text->maxLines = 2U;
+    authored.text->characterSpacing = 1.5F;
+    authored.mask.emplace();
+    authored.mask->softness = 6.0F;
+    authored.selectable.emplace();
+    authored.selectable->transition = kb::scene::UISelectableTransition::SpriteSwap;
+    authored.selectable->pressedImage = 21U;
+    authored.selectable->raycastPadding = {1.0F, 2.0F, 3.0F, 4.0F};
+    static_cast<void>(kb::scene::SetUITooltipText(*authored.selectable, "Hint"));
+    authored.selectable->draggable = true;
+    authored.selectable->eventTarget = 31U;
+    authored.toggle.emplace();
+    authored.toggle->group = 41U;
+    authored.toggle->allowSwitchOff = true;
+    authored.slider.emplace();
+    authored.slider->fillRect = 51U;
+    authored.slider->handleRect = 52U;
+    authored.scrollView.emplace();
+    authored.scrollView->horizontalScrollbar = 61U;
+    authored.scrollView->movementType = kb::scene::UIScrollMovement::Elastic;
+    authored.scrollView->elasticity = 0.25F;
+    authored.scrollView->snapToChildren = true;
+    authored.inputField.emplace();
+    authored.inputField->contentType = kb::scene::UIInputContentType::Pin;
+    static_cast<void>(kb::scene::SetUIInputPlaceholder(*authored.inputField, "PIN"));
+    authored.progressBar.emplace();
+    authored.progressBar->direction = kb::scene::UIAxisDirection::TopToBottom;
+    authored.progressBar->fillRect = 71U;
+    std::vector<std::uint8_t> bytes;
+    kb::scene::SceneAssetUIComponentCodec::Write(bytes, authored);
+    kb::scene::SceneAssetBinaryIO::ByteReader reader{bytes};
+    kb::scene::UIComponentSet decoded;
+    kb::tests::Require(kb::scene::SceneAssetUIComponentCodec::Read(reader, 39U, decoded) && reader.Exhausted(), "A v39 widget set must load");
+    kb::tests::Require(decoded.canvas->renderMode == kb::scene::UICanvasRenderMode::WorldSpace && decoded.canvas->pixelsPerUnit == 50.0F &&
+        !decoded.canvas->respectSafeArea && decoded.canvas->player == 2 && !decoded.canvasGroup->visible &&
+        decoded.canvasGroup->transitionSeconds == 0.3F && decoded.canvasGroup->hiddenOffset.y == 5.0F && decoded.canvasGroup->hiddenScale == 0.8F &&
+        decoded.image->fillMethod == kb::scene::UIImageFillMethod::Radial360 && decoded.image->fillOrigin == kb::scene::UIImageFillOrigin::End &&
+        decoded.image->fillAmount == 0.4F && !decoded.image->fillClockwise && decoded.image->alphaHitThreshold == 0.2F &&
+        kb::scene::UITextLocalizationKey(*decoded.text) == "hud.title" && decoded.text->overflow == kb::scene::UITextOverflow::Ellipsis &&
+        decoded.text->autoSize && decoded.text->minFontSize == 9.0F && decoded.text->maxLines == 2U && decoded.text->characterSpacing == 1.5F &&
+        decoded.mask->softness == 6.0F && decoded.selectable->transition == kb::scene::UISelectableTransition::SpriteSwap &&
+        decoded.selectable->pressedImage == 21U && decoded.selectable->raycastPadding.bottom == 4.0F &&
+        kb::scene::UITooltipText(*decoded.selectable) == "Hint" && decoded.selectable->draggable && decoded.selectable->eventTarget == 31U &&
+        decoded.toggle->group == 41U && decoded.toggle->allowSwitchOff && decoded.slider->fillRect == 51U && decoded.slider->handleRect == 52U &&
+        decoded.scrollView->horizontalScrollbar == 61U && decoded.scrollView->movementType == kb::scene::UIScrollMovement::Elastic &&
+        decoded.scrollView->elasticity == 0.25F && decoded.scrollView->snapToChildren &&
+        decoded.inputField->contentType == kb::scene::UIInputContentType::Pin && kb::scene::UIInputPlaceholder(*decoded.inputField) == "PIN" &&
+        decoded.progressBar->direction == kb::scene::UIAxisDirection::TopToBottom && decoded.progressBar->fillRect == 71U,
+        "Every v39 widget setting must round-trip");
+
+    std::vector<std::uint8_t> legacy;
+    kb::scene::SceneAssetBinaryIO::WriteUInt64(legacy, 1ULL << static_cast<unsigned>(kb::scene::UIComponentType::Canvas));
+    kb::scene::SceneAssetBinaryIO::WriteInt32(legacy, 3);
+    kb::scene::SceneAssetBinaryIO::WriteBool(legacy, false);
+    kb::scene::SceneAssetBinaryIO::ByteReader legacyReader{legacy};
+    kb::scene::UIComponentSet legacyDecoded;
+    kb::tests::Require(kb::scene::SceneAssetUIComponentCodec::Read(legacyReader, 38U, legacyDecoded) && legacyReader.Exhausted() &&
+        legacyDecoded.canvas->sortingOrder == 3 && !legacyDecoded.canvas->respectSafeArea &&
+        legacyDecoded.canvas->renderMode == kb::scene::UICanvasRenderMode::ScreenSpace && legacyDecoded.canvas->player == -1,
+        "A v38 canvas must keep filling the whole screen as a shared screen-space canvas");
+
+    kb::tests::Require(!kb::scene::IsUIComponentValid(kb::scene::UIImage{.fillAmount = 1.5F}) &&
+        !kb::scene::IsUIComponentValid(kb::scene::UICanvas{.player = 4}) &&
+        !kb::scene::IsUIComponentValid(kb::scene::UIMask{.softness = -1.0F}),
+        "Out-of-range widget settings must be rejected");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -1064,6 +1542,13 @@ void RunSceneUITests() {
     TestProgressAndEventQueue();
     TestAutomaticRuntimeInput();
     TestControllerNavigation();
+    TestRadioGroupsAndDrivenWidgets();
+    TestSelectablePresentationAndHits();
+    TestDragAndDrop();
+    TestInputFieldContentTypes();
+    TestCanvasPlacementAnimationAndPlayers();
+    TestScrollMovementAndLocalizedText();
+    TestWidgetSettingsPersistence();
 }
 
 } // namespace kb::tests

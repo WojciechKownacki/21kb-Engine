@@ -2288,11 +2288,12 @@ kb::scene::SceneEntity EditorSceneContext::CreateUIObject(kb::scene::UIComponent
     if (descriptor == nullptr || (parent.IsValid() && !scene_->Entities().IsAlive(parent))) return {};
     kb::scene::SceneEntity created{};
     const bool succeeded = ExecuteSceneCommand("Create " + std::string{descriptor->displayName}, [this, descriptor, parent, &created]() {
-        if (descriptor->type == kb::scene::UIComponentType::Dropdown) {
-            // A dropdown is created as its whole hierarchy: caption, arrow, and the template its list is
-            // cloned from. Every part gets its dependencies (a font for text) in the same command.
+        const auto preset = kb::scene::FindUIComponentPreset(descriptor->displayName);
+        if (preset != nullptr && kb::scene::IsUIHierarchyPreset(preset->preset)) {
+            // A dropdown, slider, progress bar or scroll view is created as its whole hierarchy, wired to the
+            // parts it drives. Every part gets its dependencies (a font for text) in the same command.
             std::vector<kb::scene::SceneEntity> parts;
-            created = kb::scene::CreateUIDropdownHierarchy(*scene_,
+            created = kb::scene::CreateUIHierarchy(*scene_, preset->preset,
                 parent.IsValid() ? scene_->Entities().Object(parent) : kb::scene::SceneObject{}, descriptor->displayName, &parts);
             if (!created.IsValid()) return false;
             for (const kb::scene::SceneEntity part : parts)

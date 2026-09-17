@@ -1222,6 +1222,11 @@ public:
     void SetUIAuthoringViewportSize(float width, float height) const noexcept {
         if (width > 0.0F && height > 0.0F) uiAuthoringViewportSize_ = {width, height};
     }
+    // The previewed device's safe area, applied to the scene's UI layout while the view is presented -
+    // a presentation setting like the authoring viewport size, not an edit.
+    void SetUIPreviewSafeArea(kb::scene::UIEdges insets) const noexcept {
+        static_cast<void>(scene_->UI().SetSafeAreaInsets(insets));
+    }
     [[nodiscard]] std::vector<std::string> EntityTags(kb::scene::SceneEntity entity) const;
     [[nodiscard]] std::vector<std::string> KnownSceneTags() const;
     [[nodiscard]] bool SetEntityTagSelected(kb::scene::SceneEntity entity, std::string_view tag, bool selected);
