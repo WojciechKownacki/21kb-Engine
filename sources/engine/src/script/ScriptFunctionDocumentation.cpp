@@ -111,6 +111,7 @@ constexpr auto kFunctionDocumentation = std::to_array<FunctionDocumentation>({
     { "World.FindAllByTag", "Returns the next stable entity carrying a gameplay tag after a skip offset." },
     { "World.SetParent", "Changes an entity parent while preserving the scene hierarchy contract." },
     { "World.InstantiatePrefab", "Instantiates a registered prefab hierarchy with optional pose and parent overrides." },
+    { "World.SpawnGeometrySwarm", "Creates one ECS-owned geometry swarm from the mesh and material of a prefab source." },
     { "World.CreatePrefabParameters", "Creates a caller-owned, single-use atomic prefab parameter set." },
     { "World.SetPrefabParameterBool", "Adds a boolean component-property override to a prefab parameter set." },
     { "World.SetPrefabParameterInt", "Adds an integer component-property override to a prefab parameter set." },

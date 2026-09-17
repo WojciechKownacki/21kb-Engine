@@ -4,6 +4,7 @@
 #include "engine/assets/AssetId.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/GeometrySwarmComponent.hpp"
 #include "engine/scene/SceneLoadedContent.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
@@ -67,6 +68,14 @@ ScriptFunctionCallResult NoScene() {
 [[nodiscard]] int IntArg(std::span<const ScriptFunctionArgument> arguments, std::string_view name, int fallback = 0) noexcept {
     const ScriptValue* value = FindArg(arguments, name);
     return value == nullptr ? fallback : value->AsInt(fallback);
+}
+
+[[nodiscard]] std::uint32_t UInt32Arg(
+    std::span<const ScriptFunctionArgument> arguments,
+    std::string_view name,
+    std::uint32_t fallback = 0U) noexcept {
+    const ScriptValue* value = FindArg(arguments, name);
+    return value == nullptr ? fallback : value->AsUInt32(fallback);
 }
 
 [[nodiscard]] bool HasArg(std::span<const ScriptFunctionArgument> arguments, std::string_view name) noexcept {
@@ -888,6 +897,70 @@ ScriptFunctionCallResult InstantiatePrefab(const ScriptFunctionCallContext& cont
     };
 }
 
+ScriptFunctionCallResult SpawnGeometrySwarm(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return NoScene();
+    }
+
+    const std::string prefabPath = StringArg(arguments, "prefab");
+    if (prefabPath.empty()) {
+        return Error("geometry swarm prefab path is empty");
+    }
+    const kb::library::PrefabRef prefab = context.scene->Assets().LoadPrefab(std::filesystem::path{ prefabPath });
+    if (!prefab.IsLoaded()) {
+        return Error("geometry swarm prefab asset could not be loaded");
+    }
+
+    const kb::scene::MeshRendererComponent* sourceRenderer = nullptr;
+    for (const kb::scene::ScenePrefabNodeDesc& node : prefab->Nodes()) {
+        if (node.components.meshRenderer.has_value() && node.components.meshRenderer->meshAssetId != 0U) {
+            sourceRenderer = &*node.components.meshRenderer;
+            break;
+        }
+    }
+    if (sourceRenderer == nullptr) {
+        return Error("geometry swarm prefab does not contain a mesh renderer");
+    }
+
+    const std::uint32_t columns = UInt32Arg(arguments, "columns", 1U);
+    const std::uint32_t rows = UInt32Arg(arguments, "rows", 1U);
+    const std::uint32_t layers = UInt32Arg(arguments, "layers", 1U);
+    if (columns > UINT16_MAX || rows > UINT16_MAX || layers > UINT16_MAX) {
+        return Error("geometry swarm dimensions exceed uint16 range");
+    }
+    kb::scene::GeometrySwarmComponent swarm{
+        .meshAssetId = sourceRenderer->meshAssetId,
+        .materialAssetId = sourceRenderer->materialAssetId,
+        .instanceCount = UInt32Arg(arguments, "instanceCount", 1U),
+        .columns = static_cast<std::uint16_t>(columns),
+        .rows = static_cast<std::uint16_t>(rows),
+        .layers = static_cast<std::uint16_t>(layers),
+        .spacing = kb::scene::Vec3{
+            FloatArg(arguments, "spacingX", 1.0F),
+            FloatArg(arguments, "spacingY", 1.0F),
+            FloatArg(arguments, "spacingZ", 1.0F),
+        },
+        .instanceScale = FloatArg(arguments, "instanceScale", 1.0F),
+        .layer = sourceRenderer->layer,
+        .castsShadow = sourceRenderer->castsShadow,
+        .receivesShadow = sourceRenderer->receivesShadow,
+        .enabled = true,
+    };
+    if (!kb::scene::IsGeometrySwarmComponentValid(swarm)) {
+        return Error("geometry swarm parameters are invalid");
+    }
+
+    kb::scene::SceneObjectDesc desc{};
+    desc.name = StringArg(arguments, "name", "Geometry Swarm");
+    const kb::scene::SceneEntity entity = context.scene->Entities().CreateEntity(std::move(desc));
+    context.scene->Components().GeometrySwarms().Set(entity, swarm);
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = { ScriptFunctionArgument{ "entity", ScriptValue{ entity.Id(), ScriptValueType::Entity } } },
+        .errors = {},
+    };
+}
+
 bool RegisterFunction(
     ScriptRuntimeHost& host,
     std::string name,
@@ -1062,6 +1135,21 @@ bool ScriptWorldApi::Register(ScriptRuntimeHost& host) {
         },
         { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true }, ScriptFunctionPin{ "count", ScriptValueType::Int, true } },
         &InstantiatePrefab) && ok;
+    ok = RegisterFunction(host, "World.SpawnGeometrySwarm",
+        {
+            ScriptFunctionPin{ "prefab", ScriptValueType::String, true },
+            ScriptFunctionPin{ "name", ScriptValueType::String, false },
+            ScriptFunctionPin{ "instanceCount", ScriptValueType::UInt32, false },
+            ScriptFunctionPin{ "columns", ScriptValueType::UInt32, false },
+            ScriptFunctionPin{ "rows", ScriptValueType::UInt32, false },
+            ScriptFunctionPin{ "layers", ScriptValueType::UInt32, false },
+            ScriptFunctionPin{ "spacingX", ScriptValueType::Float, false },
+            ScriptFunctionPin{ "spacingY", ScriptValueType::Float, false },
+            ScriptFunctionPin{ "spacingZ", ScriptValueType::Float, false },
+            ScriptFunctionPin{ "instanceScale", ScriptValueType::Float, false },
+        },
+        { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true } },
+        &SpawnGeometrySwarm) && ok;
     // LIB-070: data-override family — set a property on ANY entity (unlike
     // the pre-existing Self.SetProperty Lua sugar, hardcoded to the
     // calling behaviour's own entity), reachable from Native/Lua/Visual

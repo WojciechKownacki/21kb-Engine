@@ -27,7 +27,7 @@ constexpr std::array kLifecycleEvents{
 // PucLuaFunctionApi and PucLuaTaskApi install module tables directly from this
 // list.  The names and each wrapper's return shape therefore stay true to the
 // callable sandbox and generated stubs cannot drift from it.
-constexpr std::array<ScriptApiCatalogLuaBindingDefinition, 184> kLuaBindings{ {
+constexpr std::array<ScriptApiCatalogLuaBindingDefinition, 185> kLuaBindings{ {
     { "Audio", "Play", "Audio.Play", ScriptApiCatalogLuaReturnKind::SingleOutput, "voice" },
     { "Audio", "SetMixer", "Audio.SetMixer", ScriptApiCatalogLuaReturnKind::SingleOutput, "assigned" },
     { "Audio", "ActiveMixer", "Audio.ActiveMixer", ScriptApiCatalogLuaReturnKind::Default, "" },
@@ -110,6 +110,7 @@ constexpr std::array<ScriptApiCatalogLuaBindingDefinition, 184> kLuaBindings{ {
     { "World", "TagAt", "World.TagAt", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "World", "SetParent", "World.SetParent", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "World", "InstantiatePrefab", "World.InstantiatePrefab", ScriptApiCatalogLuaReturnKind::SingleOutput, "entity" },
+    { "World", "SpawnGeometrySwarm", "World.SpawnGeometrySwarm", ScriptApiCatalogLuaReturnKind::SingleOutput, "entity" },
     { "Scene", "Load", "Scene.Load", ScriptApiCatalogLuaReturnKind::SingleOutput, "id" },
     { "Scene", "Unload", "Scene.Unload", ScriptApiCatalogLuaReturnKind::SingleOutput, "unloaded" },
     { "Scene", "SetActive", "Scene.SetActive", ScriptApiCatalogLuaReturnKind::SingleOutput, "set" },
