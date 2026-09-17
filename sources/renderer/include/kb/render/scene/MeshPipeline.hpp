@@ -89,6 +89,11 @@ struct MeshCommandLookupKeyHash {
     [[nodiscard]] std::size_t operator()(MeshCommandLookupKey key) const noexcept;
 };
 
+struct MeshPipelineMaterialResolution {
+    RenderMaterialHandle handle{};
+    const RenderMaterialResource* resource = nullptr;
+};
+
 struct MeshPipelineBuildResult {
     std::vector<MeshDrawCommand> commands;
     // Transient adapter storage for draw-group input. Cleared before BuildInto returns because batches contain spans.
@@ -97,6 +102,9 @@ struct MeshPipelineBuildResult {
     std::vector<SceneGpuDrivenInputRecord> gpuDrivenInputRecords;
     std::vector<SceneGpuDrivenInstanceValidationRecord> gpuDrivenCpuValidationRecords;
     std::unordered_map<MeshCommandLookupKey, std::size_t, MeshCommandLookupKeyHash> commandLookupScratch;
+    // Per-build cache for resource resolution shared by every instance using one material.
+    // It is renderer-owned scratch and cleared at the next BuildInto call.
+    std::unordered_map<std::uint64_t, MeshPipelineMaterialResolution> materialResolutionScratch;
     // Renderer-owned frame cache. It holds only the resolved level, never authored
     // component data; caller reuse preserves hysteresis across submissions.
     std::unordered_map<std::uint64_t, std::uint8_t> detailSwitchLevels;

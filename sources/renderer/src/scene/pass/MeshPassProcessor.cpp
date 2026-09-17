@@ -75,6 +75,23 @@ void EmitInstanceDiagnostic(
     return true;
 }
 
+[[nodiscard]] bool PassNeedsPerInstanceCandidateFilter(MeshPassType pass) noexcept {
+    switch (pass) {
+    case MeshPassType::ShadowDepth:
+    case MeshPassType::SelectionId:
+    case MeshPassType::EditorSelection:
+        return true;
+    case MeshPassType::Depth:
+    case MeshPassType::BaseOpaque:
+    case MeshPassType::GBuffer:
+    case MeshPassType::BaseTransparent:
+    case MeshPassType::MotionVectors:
+    case MeshPassType::Gizmo:
+        return false;
+    }
+    return true;
+}
+
 [[nodiscard]] std::uint64_t DetailSwitchKey(const SceneRenderMeshInstance& instance) noexcept {
     return instance.detailSwitchGroupId != 0U ? instance.detailSwitchGroupId : (instance.entityId ^ 0x9e3779b97f4a7c15ULL);
 }
@@ -164,7 +181,10 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
     std::size_t writeCommandCount = 0U;
     std::uint32_t acceptedInstanceCount = 0U;
     for (const SceneMeshBatch& batch : desc.meshBatches) {
-        const std::uint32_t instanceCount = MeshPipelinePassPolicy::CountCandidateInstances(desc.pass, batch, desc.selectedEntityIds, cullingMask);
+        const bool wholeBatchIsCandidate = cullingMask == 0xFFFFFFFFU && !PassNeedsPerInstanceCandidateFilter(desc.pass);
+        const std::uint32_t instanceCount = wholeBatchIsCandidate
+            ? static_cast<std::uint32_t>(batch.instances.size())
+            : MeshPipelinePassPolicy::CountCandidateInstances(desc.pass, batch, desc.selectedEntityIds, cullingMask);
         if (instanceCount == 0U) {
             continue;
         }
@@ -241,8 +261,20 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                 RenderMaterialHandle materialHandle{};
                 const RenderMaterialResource* materialResource = validateResources ? nullptr : desc.resolvedMaterialResource;
                 if (validateResources) {
-                    materialResource = MeshPipelineResourceResolver::ResolveMaterialOrFallback(instance, materialAssetId, *desc.resources, *desc.resourceMap, materialHandle, result.stats, desc.diagnostics);
-                    MeshPipelineResourceResolver::ValidateMaterialTextureOrFallback(instance, materialAssetId, materialResource, *desc.resources, *desc.resourceMap, result.stats, desc.diagnostics);
+                    const auto cached = result.materialResolutionScratch.find(materialAssetId);
+                    if (cached != result.materialResolutionScratch.end()) {
+                        materialHandle = cached->second.handle;
+                        materialResource = cached->second.resource;
+                    } else {
+                        materialResource = MeshPipelineResourceResolver::ResolveMaterialOrFallback(instance, materialAssetId, *desc.resources, *desc.resourceMap, materialHandle, result.stats, desc.diagnostics);
+                        MeshPipelineResourceResolver::ValidateMaterialTextureOrFallback(instance, materialAssetId, materialResource, *desc.resources, *desc.resourceMap, result.stats, desc.diagnostics);
+                        if (materialHandle.IsValid() && materialResource != nullptr) {
+                            result.materialResolutionScratch.emplace(materialAssetId, MeshPipelineMaterialResolution{
+                                .handle = materialHandle,
+                                .resource = materialResource,
+                            });
+                        }
+                    }
                 }
                 if (PassDisablesAlphaBlend(desc.pass) && MeshPipelinePassPolicy::UsesDisabledAlphaBlend(materialResource)) {
                     // Blended materials are skipped from opaque/depth/shadow and render in the transparent
