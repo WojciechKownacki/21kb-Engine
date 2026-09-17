@@ -2029,6 +2029,7 @@ void RunApiCommandTests() {
 
     const std::filesystem::path audioDemoRoot = TestRoot() / "Assets" / "Samples" / "AudioShooter";
     const std::filesystem::path audioDemoScenePath = TestRoot() / "Assets" / "Scenes" / "AudioShooterDemo.21kbscene";
+    const std::filesystem::path benchmarkScenePath = TestRoot() / "Assets" / "Scenes" / "MeshSpawnBenchmark.21kbscene";
     for (const std::filesystem::path& demoAsset : {
              audioDemoRoot / "AudioShooterController.lua",
              audioDemoRoot / "AudioProjectile.lua",
@@ -2103,6 +2104,26 @@ void RunApiCommandTests() {
             beaconNode->components.audioSource->attenuationModel == kb::audio::AudioAttenuationModel::Linear &&
             beaconNode->components.audioSource->maxDistance > beaconNode->components.audioSource->minDistance,
         "Audio Shooter spatial beacon does not demonstrate distance attenuation");
+
+    const kb::scene::SceneDocumentLoadResult benchmarkScene = kb::scene::SceneDocumentService::Load(benchmarkScenePath);
+    Require(benchmarkScene.succeeded, "init-agent Mesh Spawn Benchmark scene could not be loaded");
+    const std::span<const kb::scene::ScenePrefabNodeDesc> benchmarkNodes = benchmarkScene.document.worldPrefab.Nodes();
+    const auto findBenchmarkNode = [&benchmarkNodes](std::string_view name) -> const kb::scene::ScenePrefabNodeDesc* {
+        for (const kb::scene::ScenePrefabNodeDesc& node : benchmarkNodes) {
+            if (node.name == name) return &node;
+        }
+        return nullptr;
+    };
+    const kb::scene::ScenePrefabNodeDesc* benchmarkEnvironment = findBenchmarkNode("Environment");
+    const kb::scene::ScenePrefabNodeDesc* benchmarkCamera = findBenchmarkNode("Benchmark Camera");
+    const kb::scene::ScenePrefabNodeDesc* benchmarkLight = findBenchmarkNode("Key Light");
+    Require(benchmarkNodes.size() == 3U && benchmarkEnvironment != nullptr &&
+            benchmarkEnvironment->components.worldBackdrop.has_value() &&
+            benchmarkEnvironment->components.ambientRadiance.has_value() &&
+            benchmarkCamera != nullptr && benchmarkCamera->components.camera.has_value() &&
+            benchmarkCamera->components.camera->primary && benchmarkLight != nullptr &&
+            benchmarkLight->components.light.has_value(),
+        "init-agent Mesh Spawn Benchmark scene is not the minimal camera, light, and environment setup");
 
     // LIB-013 regression: init-agent internally rebuilds its catalog and
     // calls ScriptAgentProjectFiles::Write() a second time whenever the
