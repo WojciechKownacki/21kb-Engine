@@ -2,6 +2,7 @@
 
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/SceneObject.hpp"
+#include "engine/ui/UIComponentCatalog.hpp"
 
 #include <string_view>
 #include <vector>
@@ -28,5 +29,21 @@ class Scene;
 // order, root first, so an editor can finish each one (fonts, selection) in the same command.
 [[nodiscard]] SceneEntity CreateUIDropdownHierarchy(Scene& scene, SceneObject parent, std::string_view name,
                                                     std::vector<SceneEntity>* created = nullptr);
+
+// The other widgets built as a hierarchy, each wired to the parts it drives:
+//
+//   Slider               Border (track), Selectable, Slider (fill Fill, handle Handle)
+//     Fill               Border - stretched from the start to the value
+//     Handle             Border - placed at the value
+//   Progress Bar         Border (track), Progress Bar (fill Fill)
+//     Fill               Border
+//   Scroll View          Border
+//     Viewport           Mask, Selectable, Scroll View (vertical, elastic, linked to Scrollbar)
+//       Content          where the scrolled widgets go
+//     Scrollbar          Border, Selectable, Scrollbar
+[[nodiscard]] bool IsUIHierarchyPreset(UIComponentPreset preset) noexcept;
+// Builds the preset's hierarchy; an invalid entity for a preset that is a single object.
+[[nodiscard]] SceneEntity CreateUIHierarchy(Scene& scene, UIComponentPreset preset, SceneObject parent, std::string_view name,
+                                            std::vector<SceneEntity>* created = nullptr);
 
 } // namespace kb::scene

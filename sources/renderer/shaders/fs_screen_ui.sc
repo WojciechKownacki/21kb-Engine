@@ -61,11 +61,11 @@ void main()
     vec2 size = max(u_screenUIStyleParams.xy, vec2_splat(1.0));
     vec2 localPosition = v_screenUILocal * size;
     vec2 clipSize = max(u_screenUIClipRect.zw - u_screenUIClipRect.xy, vec2_splat(1.0));
-    float clipCoverage = rounded_coverage(
-        v_screenUIPosition - u_screenUIClipRect.xy,
-        clipSize,
-        vec4_splat(0.0),
-        0.0);
+    // A soft mask fades content out over u_screenUITonemapParams.w pixels inside its edge.
+    float clipSoftness = u_screenUITonemapParams.w;
+    float clipCoverage = clipSoftness > 0.0
+        ? 1.0 - smoothstep(-clipSoftness, 0.0, rounded_distance(v_screenUIPosition - u_screenUIClipRect.xy, clipSize, vec4_splat(0.0)))
+        : rounded_coverage(v_screenUIPosition - u_screenUIClipRect.xy, clipSize, vec4_splat(0.0), 0.0);
     float coverage = rounded_coverage(localPosition, size, u_screenUICornerRadii, u_screenUIStyleParams.w) * clipCoverage;
     vec4 color = u_screenUIFillColor;
 

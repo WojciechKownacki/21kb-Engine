@@ -8,6 +8,8 @@
 #include "kb/render/ViewIdPolicy.hpp"
 #include "engine/ecs/WorkerPool.hpp"
 #include "engine/assets/AssetManager.hpp"
+#include "engine/assets/AssetMetadata.hpp"
+#include "kb/render/resources/RenderTextureAssetLoader.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAuxFrameComponents.hpp"
 #include "engine/scene/SceneComponentQueries.hpp"
@@ -55,6 +57,54 @@
 namespace kb::render {
 
 namespace {
+
+// Decodes the images the UI hit-tests by opacity and hands their alpha channel to the scene, once per image.
+// Only the renderer decodes images, so this is where the scene learns what an image's transparent parts are.
+void PublishUIImageAlpha(kb::scene::Scene& scene) {
+    const std::vector<std::uint64_t> pending = std::as_const(scene).UI().PendingImageAlpha();
+    if (pending.empty()) {
+        return;
+    }
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    for (const std::uint64_t assetId : pending) {
+        const kb::assets::AssetMetadata* metadata = manager.Registry().Find(kb::assets::AssetId{assetId});
+        if (metadata == nullptr) {
+            continue;
+        }
+        std::optional<kb::render::RenderTextureAssetData> texture;
+        if (const std::shared_ptr<kb::assets::bake::RuntimeAssetPack> pack = manager.RuntimePack(); pack != nullptr) {
+            kb::render::RenderTextureAssetLoader loader{bgfx::getRendererType()};
+            kb::assets::AssetLoadResult loaded =
+                loader.Load(kb::assets::AssetLoadRequest{.metadata = *metadata, .resolvedPath = {}, .runtimePack = pack});
+            if (loaded.Succeeded()) {
+                texture = *std::static_pointer_cast<const kb::render::RenderTextureAssetData>(loaded.asset);
+            }
+        } else {
+            const std::filesystem::path path = !metadata->physicalPath.empty()
+                ? metadata->physicalPath
+                : manager.Mounts().Resolve(metadata->virtualPath).value_or(std::filesystem::path{});
+            if (!path.empty()) {
+                texture = kb::render::RenderTextureAssetLoader::LoadTexture(path);
+            }
+        }
+        if (texture.has_value() && texture->gpuBlocks.has_value()) {
+            texture = kb::render::DecodeRenderTextureToRgba8(*texture);
+        }
+        kb::scene::SceneUIImageAlpha alpha;
+        if (texture.has_value() && texture->width > 0U && texture->height > 0U &&
+            texture->rgba8.size() >= static_cast<std::size_t>(texture->width) * texture->height * 4U) {
+            alpha.width = texture->width;
+            alpha.height = texture->height;
+            alpha.alpha.resize(static_cast<std::size_t>(texture->width) * texture->height);
+            for (std::size_t pixel = 0U; pixel < alpha.alpha.size(); ++pixel) {
+                alpha.alpha[pixel] = texture->rgba8[pixel * 4U + 3U];
+            }
+        }
+        // An image that cannot be decoded publishes no pixels, which keeps its whole rectangle clickable.
+        scene.UI().PublishImageAlpha(assetId, std::move(alpha));
+    }
+}
+
 
 void WriteRendererBreadcrumb(std::string_view category, std::string_view message) {
     WriteRendererDebugLog(category, message);
@@ -764,6 +814,9 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
 
     const std::uint32_t width = desc.target.viewport.extent.width;
     const std::uint32_t height = desc.target.viewport.extent.height;
+    if (desc.screenUIEnabled) {
+        PublishUIImageAlpha(const_cast<kb::scene::Scene&>(scene));
+    }
     kb::scene::SceneUIFrame screenUIFrame;
     // An editor viewport laying out the world asks for no UI layer. Skipping the build, rather
     // than discarding its result, also skips the layout pass the frame would have cost.

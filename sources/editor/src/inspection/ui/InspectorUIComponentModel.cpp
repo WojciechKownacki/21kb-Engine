@@ -8,7 +8,9 @@
 #include "engine/scene/SceneUIComponentSet.hpp"
 #include "engine/ui/UIComponentValidation.hpp"
 
+#include <algorithm>
 #include <charconv>
+#include <initializer_list>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
@@ -36,6 +38,14 @@ static_assert(static_cast<std::uint16_t>(InspectorPropertyId::UIWidgetSwitcherFi
     if (name == "content") return "Text";
     if (name == "optionCount") return "Option Count";
     if (name == "templateEntity") return "Template";
+    if (name == "player") return "Player (-1 = Everyone)";
+    if (name == "respectSafeArea") return "Fit Safe Area";
+    if (name == "maxLines") return "Max Lines (0 = All)";
+    if (name == "group") return "Radio Group";
+    if (name == "fillRect") return "Fill";
+    if (name == "handleRect") return "Handle";
+    if (name == "snapToChildren") return "Snap to Children";
+    if (name == "transitionSeconds") return "Show/Hide Seconds";
     // "options.3.text" -> "Option 4", "options.3.icon" -> "Option 4 Icon": the list reads as numbered
     // choices rather than as indexed fields.
     if (name.starts_with("options.")) {
@@ -76,14 +86,22 @@ static_assert(static_cast<std::uint16_t>(InspectorPropertyId::UIWidgetSwitcherFi
         return component == Text ? std::vector<std::string_view>{"Top", "Center", "Bottom"}
                                  : std::vector<std::string_view>{"Top", "Center", "Bottom", "Stretch"};
     if (component == Text && name == "wrapMode") return {"No Wrap", "Word", "Character"};
-    if (component == Image && name == "scaleMode") return {"Stretch", "Fit Inside", "Fill and Crop"};
+    if (component == Image && name == "scaleMode") return {"Stretch", "Fit Inside", "Fill and Crop", "Tiled"};
+    if (component == Image && name == "fillMethod") return {"None", "Horizontal", "Vertical", "Radial 360"};
+    if (component == Image && name == "fillOrigin") return {"Start", "End"};
+    if (component == Canvas && name == "renderMode") return {"Screen Space", "World Space"};
+    if (component == Text && name == "overflow") return {"Overflow", "Truncate", "Ellipsis"};
+    if (component == Selectable && name == "transition") return {"None", "Color Tint", "Sprite Swap"};
+    if (component == ScrollView && name == "movementType") return {"Clamped", "Elastic", "Unrestricted"};
+    if (component == InputField && name == "contentType")
+        return {"Standard", "Integer Number", "Decimal Number", "Alphanumeric", "Email Address", "Password", "Pin"};
     if (component == CanvasScaler && name == "scaleMode") return {"Constant Pixel Size", "Scale with Screen Size"};
     if (component == ContentSizeFitter && (name == "horizontalFit" || name == "verticalFit"))
         return {"Unconstrained", "Minimum Size", "Preferred Size"};
     if (component == AspectRatioFitter && name == "mode")
         return {"None", "Width Controls Height", "Height Controls Width", "Fit Inside Parent", "Fill Parent"};
     if (component == Selectable && name == "navigationMode") return {"None", "Automatic", "Explicit"};
-    if ((component == Slider || component == Scrollbar) && name == "direction")
+    if ((component == Slider || component == Scrollbar || component == ProgressBar) && name == "direction")
         return {"Left to Right", "Right to Left", "Bottom to Top", "Top to Bottom"};
     return {};
 }
@@ -290,6 +308,53 @@ std::vector<InspectorUIPropertyRow> InspectorUIComponentModel::Properties(
         }
         index += count - 1;
     }
+    // Settings that do nothing in the current mode stay out of the way: a row with no fields is neither
+    // drawn nor hit, and its index keeps addressing the same property.
+    const auto value = [&output](std::string_view name) {
+        const auto found = std::ranges::find(output, name, &InspectorUIPropertyRow::name);
+        return found == output.end() ? std::string{} : found->value;
+    };
+    const auto hide = [&output](std::initializer_list<std::string_view> names) {
+        for (InspectorUIPropertyRow& row : output)
+            if (std::ranges::find(names, row.name) != names.end()) row.fieldCount = 0;
+    };
+    using enum kb::scene::UIComponentType;
+    switch (component) {
+    case Canvas:
+        hide(value("renderMode") == "1" ? std::initializer_list<std::string_view>{"respectSafeArea"}
+                                         : std::initializer_list<std::string_view>{"pixelsPerUnit"});
+        break;
+    case CanvasGroup:
+        if (value("transitionSeconds") == "0") hide({"hiddenOffset.x", "hiddenScale"});
+        break;
+    case Image: {
+        const std::string method = value("fillMethod");
+        if (method == "0") hide({"fillOrigin", "fillAmount", "fillClockwise"});
+        else if (method != "3") hide({"fillClockwise"});
+        // The two ends of a fill read as the sides of the image it grows from.
+        const auto origin = std::ranges::find(output, std::string_view{"fillOrigin"}, &InspectorUIPropertyRow::name);
+        if (origin != output.end())
+            origin->choices = method == "1" ? std::vector<std::string_view>{"Left", "Right"}
+                : method == "2"             ? std::vector<std::string_view>{"Bottom", "Top"}
+                                            : std::vector<std::string_view>{"Top", "Bottom"};
+        break;
+    }
+    case Text:
+        if (value("autoSize") != "true") hide({"minFontSize"});
+        break;
+    case Selectable: {
+        const std::string transition = value("transition");
+        if (transition != "1")
+            hide({"normalColor.r", "highlightedColor.r", "pressedColor.r", "selectedColor.r", "disabledColor.r", "colorFadeSeconds"});
+        if (transition != "2") hide({"highlightedImage", "pressedImage", "selectedImage", "disabledImage"});
+        break;
+    }
+    case ScrollView:
+        if (value("movementType") != "1") hide({"elasticity"});
+        break;
+    default:
+        break;
+    }
     return output;
 }
 
@@ -395,6 +460,19 @@ InspectorUIComponentModel::ReferenceChoice InspectorUIComponentModel::ReferenceT
         choice.title = property == "captionImage" ? "Select Caption Image" : "Select Item Image";
         choice.description = property == "captionImage" ? "Choose the Image that shows the chosen option's image."
                                                         : "Choose the Image inside the template's item that shows each option's image.";
+    } else if (component == kb::scene::UIComponentType::Toggle && property == "group") {
+        collect({}, true, [&ui](kb::scene::SceneEntity entity) { return ui.Has<kb::scene::UIRectTransform>(entity); });
+        choice.title = "Select Radio Group";
+        choice.description = "Toggles that name the same object switch each other off - usually the parent they share.";
+    } else if (property == "fillRect" || property == "handleRect") {
+        collect(source, false, [&ui](kb::scene::SceneEntity entity) { return ui.Has<kb::scene::UIRectTransform>(entity); });
+        choice.title = property == "fillRect" ? "Select Fill" : "Select Handle";
+        choice.description = property == "fillRect" ? "Choose the child stretched from the start up to the value."
+                                                    : "Choose the child placed at the value.";
+    } else if (property == "eventTarget") {
+        collect({}, true, [](kb::scene::SceneEntity) { return true; });
+        choice.title = "Select Event Target";
+        choice.description = "Choose the object whose scripts receive the click's action event.";
     } else if (component == kb::scene::UIComponentType::ScrollView) {
         collect({}, true, [&ui](kb::scene::SceneEntity entity) { return ui.Has<kb::scene::UIScrollbar>(entity); });
         choice.title = "Select Scrollbar";

@@ -109,9 +109,9 @@ ScriptFunctionCallResult Create(const ScriptFunctionCallContext& context,
         desc.parent = context.scene->Entities().Object(parent);
     }
 
-    if (preset->preset == kb::scene::UIComponentPreset::Dropdown) {
-        // A dropdown is a hierarchy - caption, template, item - not a single object.
-        return EntityResult("entity", kb::scene::CreateUIDropdownHierarchy(*context.scene, desc.parent, desc.name));
+    if (kb::scene::IsUIHierarchyPreset(preset->preset)) {
+        // A dropdown, slider, progress bar or scroll view is a hierarchy wired to its parts, not one object.
+        return EntityResult("entity", kb::scene::CreateUIHierarchy(*context.scene, preset->preset, desc.parent, desc.name));
     }
     const kb::scene::SceneEntity entity = context.scene->Entities().CreateEntity(std::move(desc));
     kb::scene::ApplySceneUIComponents(

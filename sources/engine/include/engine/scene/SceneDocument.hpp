@@ -41,7 +41,11 @@ struct SceneDocument {
     // v37: a dropdown option can show a child widget; the link persists as a stable node id.
     // v38: UIDropdown points at its template, caption and item widgets; UIToggle persists its on-state
     //      graphic, UISelectable its target graphic and UIScrollView its vertical scrollbar.
-    static constexpr std::uint32_t CurrentFileVersion = 38U;
+    // v39: UI widgets persist world-space and per-player canvases, safe-area layout, show/hide
+    //      animation, image fill, localized and fitted text, soft masks, radio groups, sprite-swap
+    //      states, tooltips, drag and drop, event targets, slider and progress widgets, elastic and
+    //      snapping scroll views, and input content types with placeholders.
+    static constexpr std::uint32_t CurrentFileVersion = 39U;
 
     std::uint32_t fileVersion = CurrentFileVersion;
     std::string guid;

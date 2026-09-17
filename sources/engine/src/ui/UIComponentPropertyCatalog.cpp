@@ -274,7 +274,10 @@ constexpr std::array kRectTransformProperties{
     KB_FLOAT(UIRectTransform, rotationDegrees),
     KB_INT(UIRectTransform, zOrder),
 };
-constexpr std::array kCanvasProperties{KB_INT(UICanvas, sortingOrder), KB_BOOL(UICanvas, pixelPerfect)};
+constexpr std::array kCanvasProperties{
+    KB_ENUM(UICanvas, renderMode),       KB_INT(UICanvas, sortingOrder),  KB_BOOL(UICanvas, pixelPerfect),
+    KB_BOOL(UICanvas, respectSafeArea), KB_FLOAT(UICanvas, pixelsPerUnit), KB_INT(UICanvas, player),
+};
 constexpr std::array kCanvasScalerProperties{
     KB_ENUM(UICanvasScaler, scaleMode),
     KB_NESTED(UICanvasScaler, kb::math::Vec2, referenceResolution, x),
@@ -287,6 +290,11 @@ constexpr std::array kCanvasGroupProperties{
     KB_BOOL(UICanvasGroup, interactable),
     KB_BOOL(UICanvasGroup, blocksRaycasts),
     KB_BOOL(UICanvasGroup, ignoreParentGroups),
+    KB_BOOL(UICanvasGroup, visible),
+    KB_FLOAT(UICanvasGroup, transitionSeconds),
+    KB_NESTED(UICanvasGroup, kb::math::Vec2, hiddenOffset, x),
+    KB_NESTED(UICanvasGroup, kb::math::Vec2, hiddenOffset, y),
+    KB_FLOAT(UICanvasGroup, hiddenScale),
 };
 
 #define KB_EDGES(Component, Field)                                                                                     \
@@ -366,6 +374,8 @@ constexpr std::array kSpriteProperties{
 constexpr std::array kImageProperties{
     KB_TYPED_ASSET(UIImage, imageAssetId, Texture, "ui.image"), KB_RECT(UIImage, uvRect), KB_ENUM(UIImage, scaleMode),
     KB_BOOL(UIImage, preserveAspect), KB_EDGES(UIImage, nineSlice), KB_COLOR(UIImage, color),
+    KB_ENUM(UIImage, fillMethod),     KB_ENUM(UIImage, fillOrigin),  KB_FLOAT(UIImage, fillAmount),
+    KB_BOOL(UIImage, fillClockwise),  KB_FLOAT(UIImage, alphaHitThreshold),
 };
 constexpr std::array kRawImageProperties{
     KB_TYPED_ASSET(UIRawImage, imageAssetId, Texture, "ui.rawImage"),
@@ -374,6 +384,7 @@ constexpr std::array kRawImageProperties{
 };
 constexpr std::array kTextProperties{
     StringBinding<UIText, &UITextContent, &SetUITextContent>("content"),
+    StringBinding<UIText, &UITextLocalizationKey, &SetUITextLocalizationKey>("localizationKey"),
     KB_TYPED_ASSET(UIText, fontAssetId, Font, "ui.font"),
     KB_FLOAT(UIText, fontSize),
     KB_COLOR(UIText, color),
@@ -382,12 +393,17 @@ constexpr std::array kTextProperties{
     KB_ENUM(UIText, wrapMode),
     KB_FLOAT(UIText, lineSpacing),
     KB_BOOL(UIText, richText),
+    KB_ENUM(UIText, overflow),
+    KB_UINT(UIText, maxLines),
+    KB_BOOL(UIText, autoSize),
+    KB_FLOAT(UIText, minFontSize),
+    KB_FLOAT(UIText, characterSpacing),
 };
 constexpr std::array kBorderProperties{
     KB_COLOR(UIBorder, backgroundColor), KB_COLOR(UIBorder, borderColor), KB_EDGES(UIBorder, borderWidth),
     KB_VEC4(UIBorder, cornerRadius),     KB_FLOAT(UIBorder, opacity),
 };
-constexpr std::array kMaskProperties{KB_BOOL(UIMask, showGraphic)};
+constexpr std::array kMaskProperties{KB_BOOL(UIMask, showGraphic), KB_FLOAT(UIMask, softness)};
 constexpr std::array kShadowProperties{
     KB_NESTED(UIShadow, kb::math::Vec2, offset, x),
     KB_NESTED(UIShadow, kb::math::Vec2, offset, y),
@@ -404,13 +420,22 @@ constexpr std::array kSelectableProperties{
     KB_COLOR(UISelectable, normalColor),      KB_COLOR(UISelectable, highlightedColor),
     KB_COLOR(UISelectable, pressedColor),     KB_COLOR(UISelectable, selectedColor),
     KB_COLOR(UISelectable, disabledColor),    KB_FLOAT(UISelectable, colorFadeSeconds),
-    KB_ENTITY(UISelectable, targetGraphic),
+    KB_ENTITY(UISelectable, targetGraphic),   KB_ENUM(UISelectable, transition),
+    KB_TYPED_ASSET(UISelectable, highlightedImage, Texture, "ui.selectableImage"),
+    KB_TYPED_ASSET(UISelectable, pressedImage, Texture, "ui.selectableImage"),
+    KB_TYPED_ASSET(UISelectable, selectedImage, Texture, "ui.selectableImage"),
+    KB_TYPED_ASSET(UISelectable, disabledImage, Texture, "ui.selectableImage"),
+    KB_EDGES(UISelectable, raycastPadding),
+    StringBinding<UISelectable, &UITooltipText, &SetUITooltipText>("tooltip"),
+    KB_BOOL(UISelectable, draggable),         KB_ENTITY(UISelectable, eventTarget),
 };
 constexpr std::array kButtonProperties{KB_BOOL(UIButton, submitOnRelease)};
-constexpr std::array kToggleProperties{KB_BOOL(UIToggle, toggled), KB_ENTITY(UIToggle, graphic)};
+constexpr std::array kToggleProperties{KB_BOOL(UIToggle, toggled), KB_ENTITY(UIToggle, graphic), KB_ENTITY(UIToggle, group),
+                                       KB_BOOL(UIToggle, allowSwitchOff)};
 constexpr std::array kSliderProperties{
     KB_FLOAT(UISlider, minimum),  KB_FLOAT(UISlider, maximum),     KB_FLOAT(UISlider, value),
-    KB_ENUM(UISlider, direction), KB_BOOL(UISlider, wholeNumbers),
+    KB_ENUM(UISlider, direction), KB_BOOL(UISlider, wholeNumbers), KB_ENTITY(UISlider, fillRect),
+    KB_ENTITY(UISlider, handleRect),
 };
 constexpr std::array kScrollbarProperties{
     KB_FLOAT(UIScrollbar, value),
@@ -420,12 +445,15 @@ constexpr std::array kScrollbarProperties{
 constexpr std::array kScrollViewProperties{
     KB_FLOAT(UIScrollView, scrollX),   KB_FLOAT(UIScrollView, scrollY), KB_FLOAT(UIScrollView, scrollSensitivity),
     KB_BOOL(UIScrollView, horizontal), KB_BOOL(UIScrollView, vertical), KB_BOOL(UIScrollView, inertia),
-    KB_ENTITY(UIScrollView, verticalScrollbar),
+    KB_ENTITY(UIScrollView, verticalScrollbar), KB_ENTITY(UIScrollView, horizontalScrollbar),
+    KB_ENUM(UIScrollView, movementType), KB_FLOAT(UIScrollView, elasticity), KB_BOOL(UIScrollView, snapToChildren),
 };
 constexpr std::array kInputFieldProperties{
     KB_UINT(UIInputField, characterLimit),
     KB_BOOL(UIInputField, multiline),
     KB_BOOL(UIInputField, readOnly),
+    KB_ENUM(UIInputField, contentType),
+    StringBinding<UIInputField, &UIInputPlaceholder, &SetUIInputPlaceholder>("placeholder"),
 };
 // Options are addressed by index - "options.3.text", "options.3.image" - so the Inspector, the generic
 // property path and scripts all edit the same list. Writing optionCount grows the list with "Option N"
@@ -508,6 +536,8 @@ constexpr std::array kProgressBarProperties{
     KB_FLOAT(UIProgressBar, minimum),
     KB_FLOAT(UIProgressBar, maximum),
     KB_FLOAT(UIProgressBar, value),
+    KB_ENUM(UIProgressBar, direction),
+    KB_ENTITY(UIProgressBar, fillRect),
 };
 constexpr std::array kWidgetSwitcherProperties{KB_UINT(UIWidgetSwitcher, visibleChildIndex)};
 

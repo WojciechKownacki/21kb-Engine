@@ -160,4 +160,80 @@ SceneEntity CreateUIDropdownHierarchy(Scene& scene, SceneObject parent, std::str
     return dropdown;
 }
 
+bool IsUIHierarchyPreset(UIComponentPreset preset) noexcept {
+    return preset == UIComponentPreset::Dropdown || preset == UIComponentPreset::Slider ||
+           preset == UIComponentPreset::ProgressBar || preset == UIComponentPreset::ScrollView;
+}
+
+SceneEntity CreateUIHierarchy(Scene& scene, UIComponentPreset preset, SceneObject parent, std::string_view name,
+                              std::vector<SceneEntity>* created) {
+    if (preset == UIComponentPreset::Dropdown)
+        return CreateUIDropdownHierarchy(scene, parent, name, created);
+    Builder build{scene, created};
+    SceneUIComponents ui = scene.Components().UI();
+    const Color accent{0.29F, 0.53F, 0.96F, 1.0F};
+    const auto part = [](UIRectTransform rect, Color color, float radius) {
+        UIComponentSet components;
+        components.rectTransform = rect;
+        UIBorder border{};
+        border.backgroundColor = color;
+        border.borderColor = {0.0F, 0.0F, 0.0F, 0.0F};
+        border.cornerRadius = {radius, radius, radius, radius};
+        components.border = border;
+        return components;
+    };
+    if (preset == UIComponentPreset::Slider) {
+        const SceneEntity slider = build.Add(parent, name, BuildUIComponentPreset(UIComponentPreset::Slider));
+        const SceneEntity fill = build.Add(build.Object(slider), "Fill",
+            part(Anchored({0.0F, 0.0F}, {0.0F, 1.0F}, {0.0F, 0.0F}, {0.0F, 0.0F}), accent, 3.0F));
+        const SceneEntity handle = build.Add(build.Object(slider), "Handle",
+            part(Anchored({0.0F, 0.0F}, {0.0F, 1.0F}, {-8.0F, -3.0F}, {8.0F, 3.0F}), {0.93F, 0.94F, 0.97F, 1.0F}, 8.0F));
+        UISlider component = *ui.TryGet<UISlider>(slider);
+        component.fillRect = fill.Id();
+        component.handleRect = handle.Id();
+        ui.Set(slider, component);
+        return slider;
+    }
+    if (preset == UIComponentPreset::ProgressBar) {
+        const SceneEntity bar = build.Add(parent, name, BuildUIComponentPreset(UIComponentPreset::ProgressBar));
+        const SceneEntity fill = build.Add(build.Object(bar), "Fill",
+            part(Anchored({0.0F, 0.0F}, {0.0F, 1.0F}, {0.0F, 0.0F}, {0.0F, 0.0F}), accent, 3.0F));
+        UIProgressBar component = *ui.TryGet<UIProgressBar>(bar);
+        component.fillRect = fill.Id();
+        ui.Set(bar, component);
+        return bar;
+    }
+    if (preset == UIComponentPreset::ScrollView) {
+        UIComponentSet root = BuildUIComponentPreset(UIComponentPreset::ScrollView);
+        root.mask.reset();
+        root.selectable.reset();
+        root.scrollView.reset();
+        const SceneEntity view = build.Add(parent, name, root);
+        UIComponentSet viewport;
+        viewport.rectTransform = Anchored({0.0F, 0.0F}, {1.0F, 1.0F}, {0.0F, 0.0F}, {-14.0F, 0.0F});
+        viewport.mask = UIMask{.showGraphic = false};
+        viewport.selectable.emplace();
+        viewport.selectable->navigationMode = UINavigationMode::None;
+        UIScrollView scroll{};
+        scroll.horizontal = false;
+        scroll.movementType = UIScrollMovement::Elastic;
+        viewport.scrollView = scroll;
+        const SceneEntity viewportEntity = build.Add(build.Object(view), "Viewport", viewport);
+        UIComponentSet content;
+        content.rectTransform = Anchored({0.0F, 0.0F}, {1.0F, 0.0F}, {0.0F, 0.0F}, {0.0F, 480.0F}, {0.5F, 0.0F});
+        static_cast<void>(build.Add(build.Object(viewportEntity), "Content", content));
+        UIComponentSet scrollbarSet;
+        scrollbarSet.rectTransform = Anchored({1.0F, 0.0F}, {1.0F, 1.0F}, {-12.0F, 0.0F}, {0.0F, 0.0F});
+        scrollbarSet.border = Surface({0.12F, 0.13F, 0.16F, 1.0F});
+        scrollbarSet.selectable.emplace();
+        scrollbarSet.scrollbar = UIScrollbar{.value = 0.0F, .size = 0.5F, .direction = UIAxisDirection::TopToBottom};
+        const SceneEntity scrollbar = build.Add(build.Object(view), "Scrollbar", scrollbarSet);
+        UIScrollView linked = *ui.TryGet<UIScrollView>(viewportEntity);
+        linked.verticalScrollbar = scrollbar.Id();
+        ui.Set(viewportEntity, linked);
+        return view;
+    }
+    return {};
+}
+
 } // namespace kb::scene

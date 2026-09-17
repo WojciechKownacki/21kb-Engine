@@ -165,6 +165,9 @@ bool ScreenUIComposite::Submit(const ScreenUICompositeDesc& desc) const {
         const float effectParams[4]{static_cast<float>(batch.style.fragmentKind), batch.style.fontOutlineWidth,
                                     static_cast<float>(textureWidth), static_cast<float>(textureHeight)};
         const float clipRect[4]{batch.clipRect.left, batch.clipRect.top, batch.clipRect.right, batch.clipRect.bottom};
+        // The fourth tonemap lane carries the batch's soft clip edge; the other three are per view.
+        const float batchTonemap[4]{tonemap[0], tonemap[1], tonemap[2], batch.style.clipSoftness};
+        bgfx::setUniform(tonemapParamsUniform_, batchTonemap);
         bgfx::setUniform(fillColorUniform_, batch.style.fillColor.data());
         bgfx::setUniform(borderColorUniform_, batch.style.borderColor.data());
         bgfx::setUniform(borderWidthsUniform_, batch.style.borderWidths.data());

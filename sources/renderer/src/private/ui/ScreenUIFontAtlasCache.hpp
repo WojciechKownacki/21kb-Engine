@@ -102,6 +102,10 @@ class ScreenUIFontAtlasCache {
                                std::uint16_t glyphPadding, RenderResourceRegistry& resources);
     static void Layout(const kb::scene::SceneUIFrameElement& element, const FontEntry& entry,
                        std::span<const ScreenUITextMarkupGlyph> text, ScreenUITextRun& run);
+    // Whether the text, laid out with `entry`'s metrics scaled by `factor`, fits the element's box and line
+    // limit - the test auto size shrinks the font against.
+    [[nodiscard]] static bool Fits(const kb::scene::SceneUIFrameElement& element, const FontEntry& entry,
+                                   std::span<const ScreenUITextMarkupGlyph> text, float factor);
 
     std::unordered_map<FontKey, FontEntry, FontKeyHash> fonts_;
     std::vector<ScreenUITextRun> textRuns_;

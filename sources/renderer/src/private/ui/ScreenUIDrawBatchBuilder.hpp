@@ -38,6 +38,18 @@ class ScreenUIDrawBatchBuilder {
     void AppendQuad(const kb::scene::SceneUIFrameElement& element, const ScreenUIRect& fullRect,
                     const ScreenUIRect& quadRect, float u0, float v0, float u1, float v1,
                     const ScreenUITextureKey& texture, const ScreenUIDrawStyle& style);
+    // A convex polygon in element space, drawn as a fan from its first point; each point carries its uv.
+    struct PolygonPoint {
+        float x = 0.0F;
+        float y = 0.0F;
+        float u = 0.0F;
+        float v = 0.0F;
+    };
+    void AppendPolygon(const kb::scene::SceneUIFrameElement& element, const ScreenUIRect& fullRect,
+                       std::span<const PolygonPoint> points, const ScreenUITextureKey& texture,
+                       const ScreenUIDrawStyle& style);
+    void AppendIndices(const kb::scene::SceneUIFrameElement& element, std::uint32_t firstIndex, std::uint32_t count,
+                       const ScreenUITextureKey& texture, const ScreenUIDrawStyle& style);
 
     ScreenUIDrawList drawList_;
     std::uint32_t viewportWidth_ = 0U;

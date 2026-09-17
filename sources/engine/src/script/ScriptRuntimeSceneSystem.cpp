@@ -545,10 +545,13 @@ void ScriptRuntimeSceneSystem::DispatchPendingUIEvents(kb::scene::Scene& scene, 
             event.arguments.push_back({ "text", ScriptValue{ std::string{ kb::scene::SceneUIEventText(pending) } } });
             const std::string action{ kb::scene::SceneUIEventName(pending) };
             event.arguments.push_back({ "action", ScriptValue{ action } });
+            event.arguments.push_back({ "other", ScriptValue{ pending.other.Id(), ScriptValueType::Entity } });
             dispatch(event);
 
             if (pending.type == kb::scene::SceneUIEventType::Clicked && !action.empty() && action != event.name) {
+                // The action goes to the selectable's event target when it names one.
                 event.name = action;
+                event.target = pending.actionTarget.IsValid() ? pending.actionTarget : pending.entity;
                 event.observationAlreadyNotified = false;
                 dispatch(std::move(event));
             }

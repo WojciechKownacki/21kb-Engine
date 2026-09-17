@@ -1686,6 +1686,82 @@ bool EditorHeadlessAutomation::VerifyUINavigationLinks() {
     return true;
 }
 
+bool EditorHeadlessAutomation::VerifyUIWidgetFeatures() {
+    const auto fail = [&](std::string_view reason) { Trace("ui_widget_features", false, reason); return false; };
+    using kb::scene::UIComponentType;
+    const auto row = [&](kb::scene::SceneEntity entity, UIComponentType component, std::string_view name) {
+        const auto rows = InspectorUIComponentModel::Properties(context_.Scene(), entity, component);
+        const auto found = std::ranges::find(rows, name, &InspectorUIPropertyRow::name);
+        return found == rows.end() ? std::optional<InspectorUIPropertyRow>{} : std::optional<InspectorUIPropertyRow>{*found};
+    };
+    const auto shown = [&](kb::scene::SceneEntity entity, UIComponentType component, std::string_view name) {
+        const auto value = row(entity, component, name);
+        return value.has_value() && value->fieldCount != 0;
+    };
+    const auto set = [&](kb::scene::SceneEntity entity, UIComponentType component, std::string_view name,
+                         kb::scene::UIComponentPropertyValue value) {
+        return context_.SetUIComponentProperty(entity, component, name, std::move(value));
+    };
+    const auto canvas = context_.CreateUIObject(UIComponentType::Canvas);
+    const auto image = context_.CreateUIObject(UIComponentType::Image, canvas);
+    if (!canvas.IsValid() || !image.IsValid()) return fail("create-failed");
+
+    // A fill's settings appear once the image fills, and its ends read as the sides it grows from.
+    if (shown(image, UIComponentType::Image, "fillAmount") || shown(image, UIComponentType::Image, "fillOrigin"))
+        return fail("fill-settings-shown-without-fill");
+    if (!set(image, UIComponentType::Image, "fillMethod", std::int32_t{3}) || !shown(image, UIComponentType::Image, "fillAmount") ||
+        !shown(image, UIComponentType::Image, "fillClockwise") || row(image, UIComponentType::Image, "fillOrigin")->choices.front() != "Top")
+        return fail("radial-fill-settings-missing");
+    if (!set(image, UIComponentType::Image, "fillMethod", std::int32_t{1}) || shown(image, UIComponentType::Image, "fillClockwise") ||
+        row(image, UIComponentType::Image, "fillOrigin")->choices.front() != "Left")
+        return fail("horizontal-fill-settings-wrong");
+    context_.SelectEntity(image);
+    if (!CaptureInspector("ui-image-fill")) return false;
+
+    // Sprite Swap trades the state colours for state images.
+    const auto button = context_.CreateUIObject(UIComponentType::Button, canvas);
+    if (!button.IsValid() || !shown(button, UIComponentType::Selectable, "normalColor.r") ||
+        shown(button, UIComponentType::Selectable, "pressedImage"))
+        return fail("colour-tint-rows-wrong");
+    if (!set(button, UIComponentType::Selectable, "transition", std::int32_t{2}) ||
+        shown(button, UIComponentType::Selectable, "normalColor.r") || !shown(button, UIComponentType::Selectable, "pressedImage") ||
+        !set(button, UIComponentType::Selectable, "tooltip", std::string{"Start a new game"}))
+        return fail("sprite-swap-rows-wrong");
+    context_.SelectEntity(button);
+    if (!CaptureInspector("ui-selectable-sprite-swap")) return false;
+
+    // Part pickers offer what the setting can use.
+    const auto toggle = context_.CreateUIObject(UIComponentType::Toggle, canvas);
+    const auto groupChoice = InspectorUIComponentModel::ReferenceTargets(context_.Scene(), toggle, UIComponentType::Toggle, "group");
+    if (groupChoice.title != "Select Radio Group" || std::ranges::find(groupChoice.targets, canvas) == groupChoice.targets.end())
+        return fail("radio-group-picker-wrong");
+    const auto slider = context_.CreateUIObject(UIComponentType::Slider, canvas);
+    const auto* sliderComponent = slider.IsValid() ? context_.Scene().Components().UI().TryGet<kb::scene::UISlider>(slider) : nullptr;
+    if (sliderComponent == nullptr || sliderComponent->fillRect == 0U || sliderComponent->handleRect == 0U ||
+        InspectorUIComponentModel::EntityReferenceLabel(context_.Scene(), sliderComponent->fillRect) != "Fill")
+        return fail("created-slider-not-wired");
+    const auto fillChoice = InspectorUIComponentModel::ReferenceTargets(context_.Scene(), slider, UIComponentType::Slider, "fillRect");
+    if (fillChoice.targets.size() != 2U) return fail("fill-picker-offers-objects-outside-slider");
+    if (!shown(canvas, UIComponentType::Canvas, "respectSafeArea") || shown(canvas, UIComponentType::Canvas, "pixelsPerUnit"))
+        return fail("screen-canvas-rows-wrong");
+    // Undo restores a snapshot with new handles, so what follows looks the canvas up again.
+    if (!context_.UndoSceneCommand() || !context_.RedoSceneCommand()) return fail("undo-redo-created-slider-failed");
+
+    // The phone profile's safe area reaches the canvases laid out in the preview.
+    auto& preview = context_.ViewportPreview(1U);
+    const bool was2D = preview.Is2D();
+    if (!was2D) preview.Toggle2D();
+    preview.SetProfile(EditorViewportProfileKind::PhoneLandscape);
+    const bool captured = CaptureEditorScene("ui-safe-area-phone", true);
+    const kb::scene::UIEdges insets = context_.Scene().UI().SafeAreaInsets();
+    preview.SetProfile(EditorViewportProfileKind::Free);
+    if (!was2D) preview.Toggle2D();
+    if (!captured) return false;
+    if (insets.left <= 0.0F || insets.bottom <= 0.0F) return fail("phone-safe-area-not-applied");
+    Trace("ui_widget_features", true, "fill-rows-sprite-swap-rows-group-picker-slider-hierarchy-safe-area");
+    return true;
+}
+
 bool EditorHeadlessAutomation::VerifyUIDropdownOptions() {
     const auto fail = [&](std::string_view reason) { Trace("ui_dropdown_options", false, reason); return false; };
     const auto dropdownType = kb::scene::UIComponentType::Dropdown;
