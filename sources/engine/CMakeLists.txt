@@ -1855,4 +1855,8 @@ if(BUILD_TESTING)
     )
 
     kb_apply_quality_gates(kb_ecs_snapshot_scale_tests)
+
+    add_executable(kb_ecs_workload_benchmark tests/EcsWorkloadBenchmark.cpp)
+    target_link_libraries(kb_ecs_workload_benchmark PRIVATE kb_engine)
+    kb_apply_quality_gates(kb_ecs_workload_benchmark)
 endif()

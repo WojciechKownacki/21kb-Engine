@@ -8,6 +8,7 @@
 #include <cassert>
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <iterator>
 #include <limits>
 #include <memory>
@@ -353,13 +354,45 @@ struct EdgeKey {
     }
 };
 
+struct EdgeKeyView {
+    EdgeKind kind = EdgeKind::Add;
+    std::span<const ComponentId> componentIds;
+};
+
 struct EdgeKeyHash {
-    [[nodiscard]] std::size_t operator()(const EdgeKey& key) const noexcept {
+    using is_transparent = void;
+
+    [[nodiscard]] std::size_t operator()(EdgeKeyView key) const noexcept {
         std::size_t hash = static_cast<std::size_t>(key.kind) + 0x9E3779B97F4A7C15ULL;
         for (ComponentId id : key.componentIds) {
             hash ^= std::hash<ComponentId>{}(id) + 0x9E3779B97F4A7C15ULL + (hash << 6U) + (hash >> 2U);
         }
         return hash;
+    }
+
+    [[nodiscard]] std::size_t operator()(const EdgeKey& key) const noexcept {
+        return (*this)(EdgeKeyView{ key.kind, key.componentIds });
+    }
+};
+
+struct EdgeKeyEqual {
+    using is_transparent = void;
+
+    [[nodiscard]] bool operator()(EdgeKeyView left, EdgeKeyView right) const noexcept {
+        return left.kind == right.kind && std::equal(
+            left.componentIds.begin(), left.componentIds.end(), right.componentIds.begin(), right.componentIds.end());
+    }
+
+    [[nodiscard]] bool operator()(const EdgeKey& left, const EdgeKey& right) const noexcept {
+        return (*this)(EdgeKeyView{ left.kind, left.componentIds }, EdgeKeyView{ right.kind, right.componentIds });
+    }
+
+    [[nodiscard]] bool operator()(const EdgeKey& left, EdgeKeyView right) const noexcept {
+        return (*this)(EdgeKeyView{ left.kind, left.componentIds }, right);
+    }
+
+    [[nodiscard]] bool operator()(EdgeKeyView left, const EdgeKey& right) const noexcept {
+        return (*this)(left, EdgeKeyView{ right.kind, right.componentIds });
     }
 };
 
@@ -539,11 +572,11 @@ public:
         return index < componentVersions_.size() ? componentVersions_[index] : 0;
     }
 
-    [[nodiscard]] const std::unordered_map<EdgeKey, std::size_t, EdgeKeyHash>& Edges() const noexcept {
+    [[nodiscard]] const std::unordered_map<EdgeKey, std::size_t, EdgeKeyHash, EdgeKeyEqual>& Edges() const noexcept {
         return edges_;
     }
 
-    [[nodiscard]] std::unordered_map<EdgeKey, std::size_t, EdgeKeyHash>& Edges() noexcept {
+    [[nodiscard]] std::unordered_map<EdgeKey, std::size_t, EdgeKeyHash, EdgeKeyEqual>& Edges() noexcept {
         return edges_;
     }
 
@@ -1496,13 +1529,13 @@ private:
     ArchetypeLayout layout_;
     std::vector<NativeChunk> chunks_;
     std::vector<std::uint64_t> componentVersions_;
-    std::unordered_map<EdgeKey, std::size_t, EdgeKeyHash> edges_;
+    std::unordered_map<EdgeKey, std::size_t, EdgeKeyHash, EdgeKeyEqual> edges_;
     std::size_t liveEntities_ = 0;
     std::uint64_t version_ = 1;
 };
 
-[[nodiscard]] std::vector<NativeComponentType> NormalizeTypes(std::span<const NativeComponentValue> components) {
-    std::vector<NativeComponentType> types;
+void NormalizeTypesInto(std::span<const NativeComponentValue> components, std::vector<NativeComponentType>& types) {
+    types.clear();
     types.reserve(components.size());
     for (const NativeComponentValue& component : components) {
         ValidateNativeComponentType(component.type);
@@ -1517,6 +1550,11 @@ private:
     if (duplicate != types.end()) {
         throw std::invalid_argument("Native ECS archetype contains duplicate component types");
     }
+}
+
+[[nodiscard]] std::vector<NativeComponentType> NormalizeTypes(std::span<const NativeComponentValue> components) {
+    std::vector<NativeComponentType> types;
+    NormalizeTypesInto(components, types);
     return types;
 }
 
@@ -1568,8 +1606,8 @@ void ValidateRowMappedBulkColumnSourceCounts(std::span<const NativeBulkComponent
     return sourceCount == 1U ? 0U : (component.stride == 0U ? component.type.size : component.stride);
 }
 
-[[nodiscard]] std::vector<ComponentId> NormalizeComponentIds(std::span<const ComponentId> componentIds) {
-    std::vector<ComponentId> ids(componentIds.begin(), componentIds.end());
+void NormalizeComponentIdsInto(std::span<const ComponentId> componentIds, std::vector<ComponentId>& ids) {
+    ids.assign(componentIds.begin(), componentIds.end());
     std::sort(ids.begin(), ids.end());
     if (std::binary_search(ids.begin(), ids.end(), ComponentId{})) {
         throw std::invalid_argument("Native ECS component id must be non-zero");
@@ -1577,6 +1615,11 @@ void ValidateRowMappedBulkColumnSourceCounts(std::span<const NativeBulkComponent
     if (std::adjacent_find(ids.begin(), ids.end()) != ids.end()) {
         throw std::invalid_argument("Native ECS component id list contains duplicate ids");
     }
+}
+
+[[nodiscard]] std::vector<ComponentId> NormalizeComponentIds(std::span<const ComponentId> componentIds) {
+    std::vector<ComponentId> ids;
+    NormalizeComponentIdsInto(componentIds, ids);
     return ids;
 }
 
@@ -1700,11 +1743,26 @@ private:
         return false;
     }
     for (std::size_t index = 0; index < lhs.size(); ++index) {
-        if (lhs[index].id != rhs[index].id || lhs[index].size != rhs[index].size || lhs[index].alignment != rhs[index].alignment) {
+        if (lhs[index].id != rhs[index].id || lhs[index].size != rhs[index].size ||
+            lhs[index].alignment != rhs[index].alignment || lhs[index].storageClass != rhs[index].storageClass) {
             return false;
         }
     }
     return true;
+}
+
+[[nodiscard]] std::size_t HashTypes(std::span<const NativeComponentType> types) noexcept {
+    std::size_t hash = types.size();
+    auto combine = [&hash](std::size_t value) noexcept {
+        hash ^= value + 0x9E3779B97F4A7C15ULL + (hash << 6U) + (hash >> 2U);
+    };
+    for (const NativeComponentType& type : types) {
+        combine(std::hash<ComponentId>{}(type.id));
+        combine(type.size);
+        combine(type.alignment);
+        combine(static_cast<std::size_t>(type.storageClass));
+    }
+    return hash;
 }
 
 } // namespace
@@ -1752,6 +1810,7 @@ public:
         records_.reserve(config.reserveEntities);
         freeEntityIndices_.reserve(config.reserveEntities);
         tables_.reserve(config.reserveArchetypes);
+        tableIndicesByHash_.reserve(config.reserveArchetypes);
     }
 
     [[nodiscard]] Entity CreateEntity(std::span<const NativeComponentValue> components) {
@@ -2184,7 +2243,8 @@ public:
         if (components.empty()) {
             return;
         }
-        const std::vector<NativeComponentType> addedTypes = NormalizeTypes(components);
+        NormalizeTypesInto(components, singleAddedTypesScratch_);
+        const std::vector<NativeComponentType>& addedTypes = singleAddedTypesScratch_;
         EntityRecord& record = LiveRecord(entity);
         const std::size_t sourceIndex = record.location.table;
         const ArchetypeTable& source = tables_[sourceIndex];
@@ -2198,7 +2258,12 @@ public:
             }
             targetTypes.insert(existing, addedType);
         }
-        Migrate(entity, record, sourceIndex, EdgeKind::Add, ComponentIds(addedTypes), targetTypes, components);
+        singleEdgeIdsScratch_.clear();
+        singleEdgeIdsScratch_.reserve(addedTypes.size());
+        for (const NativeComponentType& addedType : addedTypes) {
+            singleEdgeIdsScratch_.push_back(addedType.id);
+        }
+        Migrate(entity, record, sourceIndex, EdgeKind::Add, singleEdgeIdsScratch_, targetTypes, components);
         BumpStructuralVersion();
     }
 
@@ -2263,7 +2328,8 @@ public:
         if (componentIds.empty()) {
             return;
         }
-        const std::vector<ComponentId> removedIds = NormalizeComponentIds(componentIds);
+        NormalizeComponentIdsInto(componentIds, singleRemovedIdsScratch_);
+        const std::vector<ComponentId>& removedIds = singleRemovedIdsScratch_;
         EntityRecord& record = LiveRecord(entity);
         const std::size_t sourceIndex = record.location.table;
         const ArchetypeTable& source = tables_[sourceIndex];
@@ -3350,13 +3416,24 @@ private:
     }
 
     [[nodiscard]] std::size_t FindOrCreateTable(std::span<const NativeComponentType> types) {
-        const ComponentSignature signature = signatureRegistry_.Build(types);
-        for (std::size_t index = 0; index < tables_.size(); ++index) {
-            if (tables_[index].Signature() == signature && SameTypes(tables_[index].Types(), types)) {
-                return index;
+        const std::size_t hash = HashTypes(types);
+        const auto found = tableIndicesByHash_.find(hash);
+        if (found != tableIndicesByHash_.end()) {
+            for (std::size_t index : found->second) {
+                if (SameTypes(tables_[index].Types(), types)) {
+                    return index;
+                }
             }
         }
+
+        const ComponentSignature signature = signatureRegistry_.Build(types);
         tables_.emplace_back(pool_, std::vector<NativeComponentType>(types.begin(), types.end()), signature);
+        try {
+            tableIndicesByHash_[hash].push_back(tables_.size() - 1U);
+        } catch (...) {
+            tables_.pop_back();
+            throw;
+        }
         return tables_.size() - 1U;
     }
 
@@ -3385,15 +3462,17 @@ private:
     [[nodiscard]] std::size_t ResolveMigrationTarget(
         std::size_t sourceIndex,
         EdgeKind edgeKind,
-        std::vector<ComponentId> edgeComponents,
+        std::span<const ComponentId> edgeComponents,
         std::span<const NativeComponentType> targetTypes) {
-        EdgeKey key{ .kind = edgeKind, .componentIds = std::move(edgeComponents) };
+        const EdgeKeyView key{ .kind = edgeKind, .componentIds = edgeComponents };
         auto found = tables_[sourceIndex].Edges().find(key);
         if (found != tables_[sourceIndex].Edges().end()) {
             return found->second;
         }
         const std::size_t targetIndex = FindOrCreateTable(targetTypes);
-        tables_[sourceIndex].Edges().emplace(std::move(key), targetIndex);
+        tables_[sourceIndex].Edges().emplace(
+            EdgeKey{ .kind = edgeKind, .componentIds = std::vector<ComponentId>(edgeComponents.begin(), edgeComponents.end()) },
+            targetIndex);
         return targetIndex;
     }
 
@@ -3402,11 +3481,11 @@ private:
         EntityRecord& record,
         std::size_t sourceIndex,
         EdgeKind edgeKind,
-        std::vector<ComponentId> edgeComponents,
+        std::span<const ComponentId> edgeComponents,
         std::span<const NativeComponentType> targetTypes,
         std::span<const NativeComponentValue> addedComponents) {
         const EntityLocation sourceLocation = record.location;
-        const std::size_t targetIndex = ResolveMigrationTarget(sourceIndex, edgeKind, std::move(edgeComponents), targetTypes);
+        const std::size_t targetIndex = ResolveMigrationTarget(sourceIndex, edgeKind, edgeComponents, targetTypes);
         ArchetypeTable& source = tables_[sourceIndex];
         ArchetypeTable& target = tables_[targetIndex];
         EnsureChunkCommitBudget(target.NewChunkAcquiresForAppend(1U));
@@ -3437,6 +3516,7 @@ private:
     std::vector<ExternalRecordRange> externalRecordRanges_;
     ComponentSignatureRegistry signatureRegistry_;
     std::vector<ArchetypeTable> tables_;
+    std::unordered_map<std::size_t, std::vector<std::size_t>> tableIndicesByHash_;
     std::size_t liveEntities_ = 0;
     std::unordered_set<Entity::IdType> uniqueIdsScratch_;
     std::vector<Entity::IdType> entityIdsScratch_;
@@ -3450,6 +3530,9 @@ private:
     std::vector<std::pair<Entity, EntityLocation>> movedEntitiesScratch_;
     std::vector<std::size_t> removedRowsScratch_;
     std::vector<NativeComponentType> targetTypesScratch_;
+    std::vector<NativeComponentType> singleAddedTypesScratch_;
+    std::vector<ComponentId> singleRemovedIdsScratch_;
+    std::vector<ComponentId> singleEdgeIdsScratch_;
     std::uint64_t structuralVersion_ = 1;
 };
 

@@ -2290,6 +2290,10 @@ void RunHotArchetypeLayoutAdvisorTest() {
 
 namespace kb::tests {
 
+void RunManyArchetypeLookupTest();
+void RunStorageClassDistinguishesArchetypesTest();
+void RunBulkDestroyManyBackendArchetypesTest();
+
 void RunEcsNativeArchetypeStorageTests() {
     RunChunkProfileAndStatsTest();
     RunArchetypeCapacityReportTest();
@@ -2306,6 +2310,8 @@ void RunEcsNativeArchetypeStorageTests() {
     RunMoveLastCompactionAcrossChunksTest();
     RunStructuralChurnOccupancyTest();
     RunArchetypeSignatureMatchingTest();
+    RunManyArchetypeLookupTest();
+    RunStorageClassDistinguishesArchetypesTest();
     RunNativeBulkCreateAdoptColumnAppendTest();
     RunWorldNativeStorageMirrorTest();
     RunWorldDirectBulkCreateTest();
@@ -2323,10 +2329,111 @@ void RunEcsNativeArchetypeStorageTests() {
     RunBulkAdoptExternalResolveFastPathTest();
     RunBulkAdoptContiguousExternalRangeFastPathTest();
     RunBulkDestroyDuplicateValidationTest();
+    RunBulkDestroyManyBackendArchetypesTest();
     RunBulkDestroyAllFastPathTest();
     RunClearRetainingCapacityTest();
     RunNativeStorageStructuralVersionTest();
     RunHotArchetypeLayoutAdvisorTest();
+}
+
+void RunManyArchetypeLookupTest() {
+    kb::ecs::WorldConfig config;
+    config.chunkSizeProfile = kb::ecs::ChunkSizeProfile::Chunk4KB;
+    config.reserveArchetypes = 128U;
+    kb::ecs::NativeArchetypeStorage storage{ config };
+    const std::uint32_t value = 17U;
+    std::vector<kb::ecs::NativeComponentValue> components;
+    std::vector<kb::ecs::Entity> entities;
+    entities.reserve(128U);
+
+    for (std::size_t mask = 0; mask < 128U; ++mask) {
+        components.clear();
+        for (std::size_t bit = 0; bit < 7U; ++bit) {
+            if ((mask & (std::size_t{ 1 } << bit)) != 0U) {
+                components.push_back({
+                    .type = ComponentType<std::uint32_t>(static_cast<kb::ecs::ComponentId>(6000U + bit)),
+                    .data = &value,
+                });
+            }
+        }
+        entities.push_back(storage.CreateEntity(components));
+    }
+
+    kb::tests::Require(storage.Stats().archetypeCount == 128U, "native ECS many-archetype lookup merged distinct signatures");
+    for (std::size_t mask = 0; mask < entities.size(); ++mask) {
+        for (std::size_t bit = 0; bit < 7U; ++bit) {
+            const auto componentId = static_cast<kb::ecs::ComponentId>(6000U + bit);
+            const bool expected = (mask & (std::size_t{ 1 } << bit)) != 0U;
+            kb::tests::Require(storage.HasComponent(entities[mask], componentId) == expected,
+                "native ECS many-archetype lookup returned an incorrect component set");
+        }
+    }
+
+    const kb::ecs::Entity repeated = storage.CreateEntity(components);
+    kb::tests::Require(storage.Stats().archetypeCount == 128U && storage.HasComponent(repeated, 6006U),
+        "native ECS many-archetype lookup did not reuse an existing table");
+    storage.ClearRetainingCapacity();
+    const kb::ecs::Entity afterClear = storage.CreateEntity(components);
+    kb::tests::Require(storage.Stats().archetypeCount == 128U && storage.IsAlive(afterClear),
+        "native ECS many-archetype lookup lost table indexes after clear");
+}
+
+void RunStorageClassDistinguishesArchetypesTest() {
+    kb::ecs::NativeArchetypeStorage storage;
+    const Position hotValue{ .x = 1.0F, .y = 2.0F };
+    const Position coldValue{ .x = 3.0F, .y = 4.0F };
+    const std::array hotComponents{
+        kb::ecs::NativeComponentValue{ .type = ComponentType<Position>(kPositionId), .data = &hotValue },
+    };
+    const std::array coldComponents{
+        kb::ecs::NativeComponentValue{
+            .type = kb::ecs::NativeComponentType{
+                .id = kPositionId,
+                .size = sizeof(Position),
+                .alignment = alignof(Position),
+                .storageClass = kb::ecs::ComponentStorageClass::ColdTable,
+            },
+            .data = &coldValue,
+        },
+    };
+
+    const kb::ecs::Entity hot = storage.CreateEntity(hotComponents);
+    const kb::ecs::Entity cold = storage.CreateEntity(coldComponents);
+    const kb::ecs::Entity hotAgain = storage.CreateEntity(hotComponents);
+    const kb::ecs::NativeEcsStorageStats stats = storage.Stats();
+    kb::tests::Require(stats.archetypeCount == 2U, "native ECS table lookup merged different storage classes");
+    kb::tests::Require(stats.archetypeCounters[0].hotTableComponents == 1U && stats.archetypeCounters[1].coldTableComponents == 1U,
+        "native ECS table lookup lost the component storage class");
+    kb::tests::Require(Component<Position>(storage, hot, kPositionId).x == hotValue.x &&
+                           Component<Position>(storage, cold, kPositionId).x == coldValue.x &&
+                           Component<Position>(storage, hotAgain, kPositionId).x == hotValue.x,
+        "native ECS table lookup returned data from the wrong storage class");
+}
+
+void RunBulkDestroyManyBackendArchetypesTest() {
+    kb::ecs::WorldConfig config;
+    config.trackEntityCatalog = false;
+    kb::ecs::World world{ config };
+    const std::vector<kb::ecs::Entity> entities = world.CreateEntities(64U, {});
+    std::array<ecs_entity_t, 6U> tags{};
+    for (ecs_entity_t& tag : tags) {
+        tag = ecs_new(world.NativeHandle());
+    }
+    for (std::size_t mask = 0; mask < entities.size(); ++mask) {
+        for (std::size_t bit = 0; bit < tags.size(); ++bit) {
+            if ((mask & (std::size_t{ 1 } << bit)) != 0U) {
+                ecs_add_id(world.NativeHandle(), entities[mask].Id(), tags[bit]);
+            }
+        }
+    }
+
+    world.DestroyEntities(std::span<const kb::ecs::Entity>{ entities.data(), 32U });
+    for (std::size_t index = 0; index < entities.size(); ++index) {
+        kb::tests::Require(world.IsAlive(entities[index]) == (index >= 32U),
+            "ECS bulk destroy with many backend archetypes changed the wrong entity");
+    }
+    kb::tests::Require(world.NativeStorageStats().liveEntities == 32U,
+        "ECS bulk destroy with many backend archetypes reported an invalid live count");
 }
 
 } // namespace kb::tests

@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <limits>
+#include <queue>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -76,13 +78,11 @@ void SystemScheduler::Update(World& world, float deltaSeconds) {
         RebuildExecutionOrder();
     }
 
-    std::vector<std::vector<std::size_t>> reverseGraph;
     std::vector<std::uint64_t> systemEndTimes;
     std::chrono::steady_clock::time_point frameStart;
     const bool instrumentationEnabled = InstrumentationEnabled();
     if (instrumentationEnabled) {
         BeginProfilerTrace();
-        reverseGraph = BuildReverseDependencyGraph();
         systemEndTimes.assign(systems_.size(), 0);
         frameStart = std::chrono::steady_clock::now();
     }
@@ -148,7 +148,7 @@ void SystemScheduler::Update(World& world, float deltaSeconds) {
                         sample.endTimeNanoseconds,
                         sample.profilerCounters,
                         systemEndTimes,
-                        reverseGraph);
+                        reverseDependencyGraph_);
                 }
             }
         } else {
@@ -171,7 +171,7 @@ void SystemScheduler::Update(World& world, float deltaSeconds) {
                     const std::uint64_t startTimeNanoseconds = ToNanoseconds(systemStart - frameStart);
                     const std::uint64_t endTimeNanoseconds = ToNanoseconds(systemEnd - frameStart);
                     systemEndTimes[systemIndex] = endTimeNanoseconds;
-                    TraceSystemExecution(systemIndex, stageIndex, 0, 1, startTimeNanoseconds, endTimeNanoseconds, systems_[systemIndex].system->ProfilerCounters(), systemEndTimes, reverseGraph);
+                    TraceSystemExecution(systemIndex, stageIndex, 0, 1, startTimeNanoseconds, endTimeNanoseconds, systems_[systemIndex].system->ProfilerCounters(), systemEndTimes, reverseDependencyGraph_);
                 }
             }
         }
@@ -189,6 +189,8 @@ void SystemScheduler::Shutdown(World& world) {
     systems_.clear();
     executionOrder_.clear();
     executionStages_.clear();
+    reverseDependencyGraph_.clear();
+    traceCounterIndexBySystem_.clear();
     workerPool_.reset();
     accessValidator_.Clear();
     graphDirty_ = false;
@@ -209,7 +211,7 @@ SystemSchedulingMode SystemScheduler::SchedulingMode() const noexcept {
 }
 
 std::vector<std::string> SystemScheduler::ExecutionOrderSnapshot() const {
-    const std::vector<std::size_t> order = BuildExecutionOrder();
+    const std::vector<std::size_t> order = graphDirty_ ? BuildExecutionOrder(BuildDependencyGraph()) : executionOrder_;
     std::vector<std::string> names;
     names.reserve(order.size());
     for (std::size_t systemIndex : order) {
@@ -244,22 +246,75 @@ const SystemSchedulerTrace& SystemScheduler::LastProfilerTrace() const noexcept 
 
 std::vector<std::vector<std::size_t>> SystemScheduler::BuildDependencyGraph() const {
     std::vector<std::vector<std::size_t>> graph(systems_.size());
+    struct ComponentAccessHistory {
+        std::vector<std::size_t> readers;
+        std::vector<std::size_t> writers;
+    };
+    std::unordered_map<ComponentId, ComponentAccessHistory> accessHistory;
+    std::vector<std::size_t> seen(systems_.size(), systems_.size());
+    std::vector<std::size_t> conflicts;
+    std::vector<std::size_t> syncPointPrefix(systems_.size() + 1U, 0U);
+    for (std::size_t index = 0; index < systems_.size(); ++index) {
+        syncPointPrefix[index + 1U] = syncPointPrefix[index] + (systems_[index].access.HasSyncPoint() ? 1U : 0U);
+    }
 
-    for (std::size_t first = 0; first < systems_.size(); ++first) {
-        for (std::size_t second = first + 1; second < systems_.size(); ++second) {
-            if (AccessConflicts(systems_[first].access, systems_[second].access)) {
-                if (schedulingMode_ == SystemSchedulingMode::Deterministic && !IsSeparatedBySyncPoint(first, second) && IsBeforeInSchedulingOrder(second, first)) {
-                    AddEdge(graph, second, first);
-                } else {
-                    AddEdge(graph, first, second);
+    for (std::size_t second = 0; second < systems_.size(); ++second) {
+        conflicts.clear();
+        const SystemAccess& access = systems_[second].access;
+        const auto appendConflicts = [&conflicts, &seen, second](const std::vector<std::size_t>& systems) {
+            for (std::size_t first : systems) {
+                if (seen[first] != second) {
+                    seen[first] = second;
+                    conflicts.push_back(first);
                 }
             }
+        };
+        for (ComponentId componentId : access.WriteComponents()) {
+            const auto found = accessHistory.find(componentId);
+            if (found != accessHistory.end()) {
+                appendConflicts(found->second.readers);
+                appendConflicts(found->second.writers);
+            }
+        }
+        for (ComponentId componentId : access.ReadComponents()) {
+            const auto found = accessHistory.find(componentId);
+            if (found != accessHistory.end()) {
+                appendConflicts(found->second.writers);
+            }
+        }
+        for (std::size_t first : conflicts) {
+            if (schedulingMode_ == SystemSchedulingMode::Deterministic &&
+                syncPointPrefix[second + 1U] == syncPointPrefix[first] &&
+                IsBeforeInSchedulingOrder(second, first)) {
+                graph[second].push_back(first);
+            } else {
+                graph[first].push_back(second);
+            }
+        }
+        for (ComponentId componentId : access.WriteComponents()) {
+            accessHistory[componentId].writers.push_back(second);
+        }
+        for (ComponentId componentId : access.ReadComponents()) {
+            accessHistory[componentId].readers.push_back(second);
         }
     }
 
+    // A barrier only needs edges to the adjacent registration segment. Earlier
+    // and later segments remain ordered transitively through preceding barriers.
+    std::size_t precedingSyncPoint = systems_.size();
+    std::size_t segmentStart = 0U;
     for (std::size_t index = 0; index < systems_.size(); ++index) {
         if (systems_[index].access.HasSyncPoint()) {
-            AddSyncPointEdges(graph, index);
+            for (std::size_t before = segmentStart; before < index; ++before) {
+                AddEdge(graph, before, index);
+            }
+            if (precedingSyncPoint != systems_.size()) {
+                AddEdge(graph, precedingSyncPoint, index);
+            }
+            precedingSyncPoint = index;
+            segmentStart = index + 1U;
+        } else if (precedingSyncPoint != systems_.size()) {
+            AddEdge(graph, precedingSyncPoint, index);
         }
     }
 
@@ -295,11 +350,17 @@ std::vector<std::vector<std::size_t>> SystemScheduler::BuildDependencyGraph() co
         }
     }
 
+    for (std::vector<std::size_t>& edges : graph) {
+        if (!std::is_sorted(edges.begin(), edges.end())) {
+            std::sort(edges.begin(), edges.end());
+        }
+        edges.erase(std::unique(edges.begin(), edges.end()), edges.end());
+    }
+
     return graph;
 }
 
-std::vector<std::vector<std::size_t>> SystemScheduler::BuildReverseDependencyGraph() const {
-    const std::vector<std::vector<std::size_t>> graph = BuildDependencyGraph();
+std::vector<std::vector<std::size_t>> SystemScheduler::BuildReverseDependencyGraph(const std::vector<std::vector<std::size_t>>& graph) {
     std::vector<std::vector<std::size_t>> reverseGraph(graph.size());
     for (std::size_t source = 0; source < graph.size(); ++source) {
         for (std::size_t target : graph[source]) {
@@ -309,8 +370,7 @@ std::vector<std::vector<std::size_t>> SystemScheduler::BuildReverseDependencyGra
     return reverseGraph;
 }
 
-std::vector<std::size_t> SystemScheduler::BuildExecutionOrder() const {
-    const std::vector<std::vector<std::size_t>> graph = BuildDependencyGraph();
+std::vector<std::size_t> SystemScheduler::BuildExecutionOrder(const std::vector<std::vector<std::size_t>>& graph) const {
     std::vector<std::size_t> indegree(graph.size(), 0);
     for (const auto& edges : graph) {
         for (std::size_t target : edges) {
@@ -320,36 +380,39 @@ std::vector<std::size_t> SystemScheduler::BuildExecutionOrder() const {
 
     std::vector<std::size_t> order;
     order.reserve(graph.size());
-    std::vector<bool> emitted(graph.size(), false);
-
-    while (order.size() < graph.size()) {
-        std::size_t next = graph.size();
-        for (std::size_t index = 0; index < graph.size(); ++index) {
-            if (!emitted[index] && indegree[index] == 0) {
-                if (next == graph.size() || IsBeforeInSchedulingOrder(index, next)) {
-                    next = index;
-                }
-            }
+    const auto lowerPriority = [this](std::size_t left, std::size_t right) {
+        return IsBeforeInSchedulingOrder(right, left);
+    };
+    std::priority_queue<std::size_t, std::vector<std::size_t>, decltype(lowerPriority)> ready(lowerPriority);
+    for (std::size_t index = 0; index < graph.size(); ++index) {
+        if (indegree[index] == 0U) {
+            ready.push(index);
         }
+    }
 
-        if (next == graph.size()) {
-            throw std::runtime_error("ECS system dependency graph contains a cycle");
-        }
-
-        emitted[next] = true;
+    while (!ready.empty()) {
+        const std::size_t next = ready.top();
+        ready.pop();
         order.push_back(next);
         for (std::size_t target : graph[next]) {
-            --indegree[target];
+            if (--indegree[target] == 0U) {
+                ready.push(target);
+            }
         }
+    }
+
+    if (order.size() != graph.size()) {
+        throw std::runtime_error("ECS system dependency graph contains a cycle");
     }
 
     return order;
 }
 
-std::vector<SystemScheduler::ExecutionStage> SystemScheduler::BuildExecutionStages(const std::vector<std::size_t>& order) const {
+std::vector<SystemScheduler::ExecutionStage> SystemScheduler::BuildExecutionStages(
+    const std::vector<std::size_t>& order,
+    const std::vector<std::vector<std::size_t>>& graph) const {
     std::vector<ExecutionStage> stages;
 
-    const std::vector<std::vector<std::size_t>> graph = BuildDependencyGraph();
     std::vector<std::size_t> indegree(graph.size(), 0);
     for (const auto& edges : graph) {
         for (std::size_t target : edges) {
@@ -357,16 +420,30 @@ std::vector<SystemScheduler::ExecutionStage> SystemScheduler::BuildExecutionStag
         }
     }
 
-    std::vector<bool> emitted(graph.size(), false);
+    std::vector<std::size_t> orderRank(graph.size());
+    for (std::size_t rank = 0; rank < order.size(); ++rank) {
+        orderRank[order[rank]] = rank;
+    }
+    const auto lowerPriority = [&orderRank](std::size_t left, std::size_t right) {
+        return orderRank[left] > orderRank[right];
+    };
+    std::priority_queue<std::size_t, std::vector<std::size_t>, decltype(lowerPriority)> ready(lowerPriority);
+    for (std::size_t index = 0; index < graph.size(); ++index) {
+        if (indegree[index] == 0U) {
+            ready.push(index);
+        }
+    }
+
     std::size_t emittedCount = 0;
     while (emittedCount < graph.size()) {
         ExecutionStage stage;
-        for (std::size_t systemIndex : order) {
-            if (!emitted[systemIndex] && indegree[systemIndex] == 0) {
-                stage.systems.push_back(systemIndex);
-                if (systems_[systemIndex].access.HasSyncPoint()) {
-                    break;
-                }
+        std::size_t available = ready.size();
+        while (available-- > 0U) {
+            const std::size_t systemIndex = ready.top();
+            ready.pop();
+            stage.systems.push_back(systemIndex);
+            if (systems_[systemIndex].access.HasSyncPoint()) {
+                break;
             }
         }
 
@@ -375,10 +452,11 @@ std::vector<SystemScheduler::ExecutionStage> SystemScheduler::BuildExecutionStag
         }
 
         for (std::size_t systemIndex : stage.systems) {
-            emitted[systemIndex] = true;
             ++emittedCount;
             for (std::size_t target : graph[systemIndex]) {
-                --indegree[target];
+                if (--indegree[target] == 0U) {
+                    ready.push(target);
+                }
             }
         }
         stages.push_back(std::move(stage));
@@ -388,8 +466,13 @@ std::vector<SystemScheduler::ExecutionStage> SystemScheduler::BuildExecutionStag
 }
 
 void SystemScheduler::RebuildExecutionOrder() {
-    executionOrder_ = BuildExecutionOrder();
-    executionStages_ = BuildExecutionStages(executionOrder_);
+    const std::vector<std::vector<std::size_t>> graph = BuildDependencyGraph();
+    std::vector<std::size_t> order = BuildExecutionOrder(graph);
+    std::vector<ExecutionStage> stages = BuildExecutionStages(order, graph);
+    std::vector<std::vector<std::size_t>> reverseGraph = BuildReverseDependencyGraph(graph);
+    executionOrder_ = std::move(order);
+    executionStages_ = std::move(stages);
+    reverseDependencyGraph_ = std::move(reverseGraph);
     graphDirty_ = false;
 }
 
@@ -419,6 +502,7 @@ void SystemScheduler::BeginProfilerTrace() {
         });
     }
     lastTrace_.systemCounters.reserve(systems_.size());
+    traceCounterIndexBySystem_.assign(systems_.size(), std::numeric_limits<std::size_t>::max());
     lastTrace_.workers.push_back(SystemSchedulerWorkerTrace{
         .workerIndex = 0,
     });
@@ -518,27 +602,22 @@ void SystemScheduler::TraceSystemExecution(
 }
 
 void SystemScheduler::AddSystemCounters(const SystemSchedulerTraceEvent& event) {
-    SystemSchedulerSystemCounters* counters = nullptr;
-    for (SystemSchedulerSystemCounters& existing : lastTrace_.systemCounters) {
-        if (existing.systemIndex == event.systemIndex) {
-            counters = &existing;
-            break;
-        }
-    }
-
-    if (counters == nullptr) {
-        counters = &lastTrace_.systemCounters.emplace_back(SystemSchedulerSystemCounters{
+    std::size_t& counterIndex = traceCounterIndexBySystem_[event.systemIndex];
+    if (counterIndex == std::numeric_limits<std::size_t>::max()) {
+        counterIndex = lastTrace_.systemCounters.size();
+        lastTrace_.systemCounters.emplace_back(SystemSchedulerSystemCounters{
             .systemName = event.systemName,
             .executionPath = event.executionPath,
             .systemIndex = event.systemIndex,
         });
     }
+    SystemSchedulerSystemCounters& counters = lastTrace_.systemCounters[counterIndex];
 
-    counters->cpuTimeNanoseconds += event.durationNanoseconds;
-    counters->jobsCount += event.jobsCount;
-    counters->chunkJobsCount += event.chunkJobsCount;
-    counters->entitiesProcessed += event.entitiesProcessed;
-    counters->bytesTouched += event.bytesTouched;
+    counters.cpuTimeNanoseconds += event.durationNanoseconds;
+    counters.jobsCount += event.jobsCount;
+    counters.chunkJobsCount += event.chunkJobsCount;
+    counters.entitiesProcessed += event.entitiesProcessed;
+    counters.bytesTouched += event.bytesTouched;
 
     lastTrace_.frameCounters.cpuTimeNanoseconds += event.durationNanoseconds;
     lastTrace_.frameCounters.jobsCount += event.jobsCount;
@@ -548,25 +627,12 @@ void SystemScheduler::AddSystemCounters(const SystemSchedulerTraceEvent& event) 
 }
 
 void SystemScheduler::AddStageCounters(const SystemSchedulerTraceEvent& event) {
-    SystemSchedulerStageCounters* counters = nullptr;
-    for (SystemSchedulerStageCounters& existing : lastTrace_.stageCounters) {
-        if (existing.stageIndex == event.stageIndex) {
-            counters = &existing;
-            break;
-        }
-    }
-
-    if (counters == nullptr) {
-        counters = &lastTrace_.stageCounters.emplace_back(SystemSchedulerStageCounters{
-            .stageIndex = event.stageIndex,
-        });
-    }
-
-    counters->cpuTimeNanoseconds += event.durationNanoseconds;
-    counters->jobsCount += event.jobsCount;
-    counters->chunkJobsCount += event.chunkJobsCount;
-    counters->waitTimeNanoseconds += event.waitTimeNanoseconds;
-    counters->workerBusyTimeNanoseconds += event.durationNanoseconds;
+    SystemSchedulerStageCounters& counters = lastTrace_.stageCounters[event.stageIndex];
+    counters.cpuTimeNanoseconds += event.durationNanoseconds;
+    counters.jobsCount += event.jobsCount;
+    counters.chunkJobsCount += event.chunkJobsCount;
+    counters.waitTimeNanoseconds += event.waitTimeNanoseconds;
+    counters.workerBusyTimeNanoseconds += event.durationNanoseconds;
 }
 
 bool SystemScheduler::ShouldRunStageInParallel(const ExecutionStage& stage) const noexcept {
@@ -601,55 +667,12 @@ bool SystemScheduler::IsBeforeInSchedulingOrder(std::size_t left, std::size_t ri
     return leftName < rightName;
 }
 
-bool SystemScheduler::IsSeparatedBySyncPoint(std::size_t left, std::size_t right) const noexcept {
-    if (left > right || right >= systems_.size()) {
-        return false;
-    }
-
-    for (std::size_t index = left; index <= right; ++index) {
-        if (systems_[index].access.HasSyncPoint()) {
-            return true;
-        }
-    }
-    return false;
-}
-
-bool SystemScheduler::HasComponent(const std::vector<ComponentId>& components, ComponentId componentId) noexcept {
-    return std::binary_search(components.begin(), components.end(), componentId);
-}
-
-bool SystemScheduler::AccessConflicts(const SystemAccess& first, const SystemAccess& second) noexcept {
-    for (ComponentId componentId : first.WriteComponents()) {
-        if (HasComponent(second.ReadComponents(), componentId) || HasComponent(second.WriteComponents(), componentId)) {
-            return true;
-        }
-    }
-    for (ComponentId componentId : first.ReadComponents()) {
-        if (HasComponent(second.WriteComponents(), componentId)) {
-            return true;
-        }
-    }
-    return false;
-}
-
-void SystemScheduler::AddSyncPointEdges(std::vector<std::vector<std::size_t>>& graph, std::size_t syncPointIndex) {
-    for (std::size_t index = 0; index < syncPointIndex; ++index) {
-        AddEdge(graph, index, syncPointIndex);
-    }
-    for (std::size_t index = syncPointIndex + 1; index < graph.size(); ++index) {
-        AddEdge(graph, syncPointIndex, index);
-    }
-}
-
 void SystemScheduler::AddEdge(std::vector<std::vector<std::size_t>>& graph, std::size_t from, std::size_t to) {
     if (from == to) {
         throw std::invalid_argument("ECS system dependency graph cannot contain a self edge");
     }
 
-    std::vector<std::size_t>& edges = graph[from];
-    if (std::find(edges.begin(), edges.end(), to) == edges.end()) {
-        edges.push_back(to);
-    }
+    graph[from].push_back(to);
 }
 
 } // namespace kb::ecs

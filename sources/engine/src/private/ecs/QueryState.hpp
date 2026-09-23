@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <span>
 #include <unordered_map>
 #include <vector>
@@ -30,7 +31,8 @@ public:
         std::size_t defaultPrefetchDistance,
         MutableComponentBorrowLocks* mutableBorrowLocks,
         StructuralChangeValidator* structuralChangeValidator,
-        WorldTelemetryCounters* telemetryCounters);
+        WorldTelemetryCounters* telemetryCounters,
+        std::mutex* telemetryMutex);
     ~QueryState() = default;
 
     QueryState(const QueryState&) = delete;
@@ -82,6 +84,7 @@ private:
     [[maybe_unused]] MutableComponentBorrowLocks* mutableBorrowLocks_ = nullptr;
     StructuralChangeValidator* structuralChangeValidator_ = nullptr;
     WorldTelemetryCounters* telemetryCounters_ = nullptr;
+    std::mutex* telemetryMutex_ = nullptr;
     std::size_t defaultExecutionGrainSize_ = kDefaultQueryExecutionGrainSize;
     std::size_t defaultPrefetchDistance_ = 0;
     mutable std::unordered_map<ChangeVersionKey, std::uint64_t, ChangeVersionKeyHash> observedVersions_;

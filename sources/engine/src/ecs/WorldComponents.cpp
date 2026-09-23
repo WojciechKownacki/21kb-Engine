@@ -400,14 +400,18 @@ void World::AddComponents(std::span<const Entity> entities, std::span<const Bulk
     for (Entity entity : entities) {
         ValidateEntityHandle(entity, "AddComponents");
         for (ComponentId componentId : validatedComponentIds) {
-            hasMissingComponent = hasMissingComponent || !HasComponent(entity, componentId);
+            hasMissingComponent = hasMissingComponent || !nativeStorage_->HasComponent(entity, componentId);
         }
     }
     if (hasMissingComponent) {
         ValidateStructuralChangeAllowed("AddComponents");
     }
 
-    AddNativeComponents(entities, components);
+    if (hasMissingComponent) {
+        AddNativeComponents(entities, components);
+    } else {
+        nativeStorage_->SetComponents(entities, MakeNativeBulkComponentColumns(components));
+    }
     for (std::size_t entityIndex = 0; entityIndex < entities.size(); ++entityIndex) {
         const Entity entity = entities[entityIndex];
         if (!config_.mirrorNativeComponentChangesToBackend || !BackendEntityAlive(entity)) {
@@ -675,7 +679,7 @@ void World::ForEachMutableComponent(ComponentId componentId, std::size_t compone
     if (visitor == nullptr) {
         return;
     }
-    ++telemetryCounters_.compatMutableIterations;
+    ++telemetryState_->counters.compatMutableIterations;
     [[maybe_unused]] StructuralChangeValidator::Guard iterationGuard = EnterIteration();
     if (nativeStorage_ == nullptr) {
         WorldComponentIterator::ForEachMutable(world_, componentId, componentSize, visitor, context);
@@ -687,7 +691,7 @@ void World::ForEachMutableComponent(ComponentId componentId, std::size_t compone
     const std::array componentIds{ componentId };
     nativeStorage_->CollectMutableQueryRecords(componentIds, {}, {}, records);
     for (const MutableQueryTableDispatchRecord& record : records) {
-        telemetryCounters_.compatMutableEntitiesVisited += record.entityCount;
+        telemetryState_->counters.compatMutableEntitiesVisited += record.entityCount;
         auto* componentBytes = static_cast<std::uint8_t*>(record.fieldComponents[0]);
 #if !defined(NDEBUG)
         const MutableComponentBorrowRange borrowRange{
@@ -703,7 +707,12 @@ void World::ForEachMutableComponent(ComponentId componentId, std::size_t compone
         for (std::size_t index = 0; index < record.entityCount; ++index) {
             visitor(Entity{ record.entityIds[index] }, componentBytes + index * componentSize, context);
         }
-        nativeStorage_->MarkArchetypeComponentsModified(record.nativeArchetypeIndex, componentIds);
+        nativeStorage_->MarkArchetypeChunkComponentsModified(
+            record.nativeArchetypeIndex,
+            record.nativeChunkIndex,
+            0U,
+            record.entityCount,
+            componentIds);
     }
 }
 

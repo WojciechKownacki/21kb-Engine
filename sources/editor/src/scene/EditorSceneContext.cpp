@@ -3422,9 +3422,11 @@ bool EditorSceneContext::ReloadOpenScriptAsset() {
     if (!assetId.IsValid()) {
         return false;
     }
-    // Erase the cache entry so EntityScriptExposedVariables' next Load re-reads
-    // the file the Script Editor just wrote and re-parses the Inspector schema.
-    return scene_->Assets().Manager().Unload(assetId);
+    if (!scene_->Assets().Manager().RefreshAsset(assetId)) {
+        console_.Error("Scripts", "Script asset refresh failed: " + scene_->Assets().Manager().LastError());
+        return false;
+    }
+    return true;
 }
 
 std::vector<std::pair<kb::assets::AssetId, std::string>> EditorSceneContext::AvailableScriptAssets() const {
