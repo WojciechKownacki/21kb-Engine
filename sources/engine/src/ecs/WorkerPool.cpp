@@ -404,7 +404,7 @@ public:
             batchCallback_ = callback;
             batchCallbackContext_ = context;
             activeWorkerLimit_ = ResolveBatchWorkerLimit(batches);
-            const bool useStaticStridedBatches = CanRunBatchesStaticStrided(batches);
+            const bool useStaticStridedBatches = CanRunBatchesStaticStrided(batches, activeWorkerLimit_);
             if (useStaticStridedBatches) {
                 PrepareStaticStridedWorkLocked(batches.size());
             } else {
@@ -475,7 +475,7 @@ public:
             chunkCallback_ = callback;
             chunkCallbackContext_ = context;
             activeWorkerLimit_ = ResolveChunkWorkerLimit(chunks);
-            const bool useStaticStridedChunks = CanRunChunksStaticStrided(chunks);
+            const bool useStaticStridedChunks = CanRunChunksStaticStrided(chunks, activeWorkerLimit_);
             if (useStaticStridedChunks) {
                 PrepareStaticStridedWorkLocked(chunks.size());
             } else {
@@ -587,7 +587,7 @@ public:
             batchCallback_ = callback;
             batchCallbackContext_ = context;
             activeWorkerLimit_ = ResolveBatchWorkerLimit(ownedBatches_);
-            const bool useStaticStridedBatches = CanRunBatchesStaticStrided(ownedBatches_);
+            const bool useStaticStridedBatches = CanRunBatchesStaticStrided(ownedBatches_, activeWorkerLimit_);
             if (useStaticStridedBatches) {
                 PrepareStaticStridedWorkLocked(ownedBatches_.size());
             } else {
@@ -643,7 +643,7 @@ public:
             chunkCallback_ = callback;
             chunkCallbackContext_ = context;
             activeWorkerLimit_ = ResolveChunkWorkerLimit(ownedChunks_);
-            const bool useStaticStridedChunks = CanRunChunksStaticStrided(ownedChunks_);
+            const bool useStaticStridedChunks = CanRunChunksStaticStrided(ownedChunks_, activeWorkerLimit_);
             if (useStaticStridedChunks) {
                 PrepareStaticStridedWorkLocked(ownedChunks_.size());
             } else {
@@ -848,10 +848,11 @@ private:
         return ResolveWorkerLimit(workerLimit);
     }
 
-    static bool CanRunBatchesStaticStrided(std::span<const WorkerPoolBatch> batches) noexcept {
+    static bool CanRunBatchesStaticStrided(std::span<const WorkerPoolBatch> batches, std::size_t workerCount) noexcept {
         for (std::size_t batchIndex = 0; batchIndex < batches.size(); ++batchIndex) {
             const std::size_t preferredWorkerIndex = batches[batchIndex].preferredWorkerIndex;
-            if (preferredWorkerIndex != kAnyWorkerPoolWorker && preferredWorkerIndex != batchIndex) {
+            if (preferredWorkerIndex != kAnyWorkerPoolWorker &&
+                preferredWorkerIndex % workerCount != batchIndex % workerCount) {
                 return false;
             }
         }
@@ -868,10 +869,11 @@ private:
         return ResolveWorkerLimit(workerLimit);
     }
 
-    static bool CanRunChunksStaticStrided(std::span<const WorkerPoolChunk> chunks) noexcept {
+    static bool CanRunChunksStaticStrided(std::span<const WorkerPoolChunk> chunks, std::size_t workerCount) noexcept {
         for (std::size_t chunkIndex = 0; chunkIndex < chunks.size(); ++chunkIndex) {
             const std::size_t preferredWorkerIndex = chunks[chunkIndex].preferredWorkerIndex;
-            if (preferredWorkerIndex != kAnyWorkerPoolWorker && preferredWorkerIndex != chunkIndex) {
+            if (preferredWorkerIndex != kAnyWorkerPoolWorker &&
+                preferredWorkerIndex % workerCount != chunkIndex % workerCount) {
                 return false;
             }
         }

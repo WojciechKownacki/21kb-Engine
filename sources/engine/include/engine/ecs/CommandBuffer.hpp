@@ -77,6 +77,7 @@ public:
 private:
     std::vector<std::vector<Entity>> createdEntities_;
     std::vector<Entity> destroyedEntities_;
+    bool destroyedEntitiesSorted_ = false;
     Stats stats_;
 
     friend class CommandBuffer;
@@ -111,6 +112,7 @@ private:
 
     CommandBufferPlaybackResult result_;
     std::unordered_set<Entity::IdType> playbackCreatedIds_;
+    bool trackPlaybackCreatedIds_ = false;
     std::unordered_set<Entity::IdType> destroyedIds_;
     bool destroyedIdsActive_ = false;
     std::vector<Entity> scratchEntities_;

@@ -3,6 +3,10 @@
 #include <string_view>
 
 int main(int argumentCount, char** arguments) {
+    if (argumentCount == 2 && std::string_view{ arguments[1] } == "script-editor") {
+        kb::editor::tests::RunScriptEditorTests();
+        return 0;
+    }
     if (argumentCount == 2 && std::string_view{ arguments[1] } == "audio-mixer") {
         kb::editor::tests::RunEditorAudioMixerAuthoringTests();
         return 0;

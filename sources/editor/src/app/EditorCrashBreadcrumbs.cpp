@@ -152,6 +152,15 @@ LONG WINAPI BreadcrumbUnhandledExceptionFilter(EXCEPTION_POINTERS* exceptionPoin
             }
         }
     }
+    void* frames[32]{};
+    const USHORT frameCount = CaptureStackBackTrace(0, 32, frames, nullptr);
+    line << " stack=";
+    for (USHORT index = 0; index < frameCount; ++index) {
+        if (index != 0) {
+            line << ',';
+        }
+        line << "0x" << std::hex << reinterpret_cast<std::uintptr_t>(frames[index]);
+    }
     AppendLine(line.str());
     EditorCrashBreadcrumbs::WriteCrashReport(SehErrorKind(exceptionPointers));
     return EXCEPTION_CONTINUE_SEARCH;
@@ -159,7 +168,22 @@ LONG WINAPI BreadcrumbUnhandledExceptionFilter(EXCEPTION_POINTERS* exceptionPoin
 #endif
 
 [[noreturn]] void BreadcrumbTerminateHandler() noexcept {
-    EditorCrashBreadcrumbs::WriteCrashReport("std_terminate");
+    std::string reason = "std_terminate";
+    try {
+        if (const std::exception_ptr exception = std::current_exception(); exception != nullptr) {
+            try {
+                std::rethrow_exception(exception);
+            } catch (const std::exception& error) {
+                reason += ": ";
+                reason += error.what();
+            } catch (...) {
+                reason += ": unknown exception";
+            }
+        }
+        EditorCrashBreadcrumbs::Write("crash", reason);
+        EditorCrashBreadcrumbs::WriteCrashReport(reason);
+    } catch (...) {
+    }
     std::abort();
 }
 

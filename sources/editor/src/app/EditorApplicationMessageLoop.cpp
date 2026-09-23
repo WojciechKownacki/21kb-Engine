@@ -29,6 +29,7 @@
 #include "rendering/EditorMeshPreviewService.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
 #include "rendering/script_editor/ScriptEditorWindow.hpp"
+#include "app/EditorScriptFileWatcher.hpp"
 #include "app/scene_viewport/EditorSceneViewportCameraController.hpp"
 #include "app/scene_viewport/EditorViewportCameraNavigationInput.hpp"
 #include "app/scene_viewport/EditorSceneViewportObjectInteraction.hpp"
@@ -852,14 +853,30 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
             state.window, state.dockModel, state.floatingWindows, state.metrics, DockPanelKind::Assets);
     }
 
-    // Saving a script in the Script Editor (Ctrl+S) writes the file but leaves the
-    // cached asset stale; detect the save here and reload it so the Inspector's
-    // exposed-variable schema reflects the edit immediately (no editor/scene save
-    // required). SaveSerial is monotonic, so a single equality check suffices.
+    // Refresh the cached asset after a save in either the built-in panel or the
+    // external editor so the Inspector sees the current script schema.
+    static EditorScriptFileWatcher scriptFileWatcher;
+    static std::chrono::steady_clock::time_point lastExternalScriptCheck{};
+    const EditorScriptEditorState& openScript = state.sceneContext.ScriptEditor();
+    if (openScript.IsOpen() && openScript.FilePath().extension() == ".lua") {
+        scriptFileWatcher.Track(openScript.FilePath());
+    } else {
+        scriptFileWatcher.Track({});
+    }
     bool scriptSaved = false;
     if (const std::uint64_t saveSerial = ScriptEditorWindow::SaveSerial(); saveSerial != state.lastScriptSaveSerial) {
         state.lastScriptSaveSerial = saveSerial;
         if (state.sceneContext.ReloadOpenScriptAsset()) {
+            scriptFileWatcher.Acknowledge();
+            InvalidateInspectorPanels(state);
+            scriptSaved = true;
+        }
+    }
+    const auto scriptCheckTime = std::chrono::steady_clock::now();
+    if (scriptCheckTime - lastExternalScriptCheck >= std::chrono::milliseconds{ 250 }) {
+        lastExternalScriptCheck = scriptCheckTime;
+        if (scriptFileWatcher.HasChangedOnDisk() && state.sceneContext.ReloadOpenScriptAsset()) {
+            scriptFileWatcher.Acknowledge();
             InvalidateInspectorPanels(state);
             scriptSaved = true;
         }

@@ -1,6 +1,7 @@
 #include "EcsTestSuites.hpp"
 #include "EcsTestTypes.hpp"
 #include "TestSupport.hpp"
+#include "../src/private/ecs/world/WorldEntityCatalog.hpp"
 
 #include "engine/ecs/ComponentReflectionMacros.hpp"
 #include "engine/ecs/Kernel.hpp"
@@ -8,6 +9,9 @@
 #include "engine/ecs/World.hpp"
 #include "engine/ecs/WorldTelemetryExport.hpp"
 
+#include <flecs.h>
+
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -147,12 +151,19 @@ void RegisterPositionReflection(kb::ecs::World& world) {
 void RunEditorWorldInspectionTest() {
     kb::ecs::World world;
     RegisterPositionReflection(world);
+    [[maybe_unused]] const kb::ecs::ComponentReflection* velocityReflection = world.RegisterComponentReflection<EcsVelocity>(
+        "test.EcsVelocity",
+        {
+            KB_ECS_FIELD(EcsVelocity, x, kb::ecs::ComponentFieldType::Float32),
+            KB_ECS_FIELD(EcsVelocity, y, kb::ecs::ComponentFieldType::Float32),
+        });
 
     const kb::ecs::Entity empty = world.CreateEntity("Empty");
     const kb::ecs::Entity parent = world.CreateEntity("Parent");
     const kb::ecs::Entity child = world.CreateEntity("Child");
     world.SetParent(child, parent);
     world.Set(child, EcsPosition{ .x = 8.0F, .y = 13.0F });
+    world.Set(child, EcsVelocity{ .x = 21.0F, .y = 34.0F });
 
     kb::ecs::EditorWorldInspection inspection;
     kb::tests::Require(world.CaptureEditorWorld(inspection), "ECS editor inspection failed");
@@ -164,13 +175,31 @@ void RunEditorWorldInspectionTest() {
 
     const kb::ecs::EditorEntityInspection* childInspection = FindEditorEntity(inspection, "Child");
     kb::tests::Require(childInspection != nullptr && childInspection->parent == parent, "ECS editor inspection returned invalid child hierarchy");
-    kb::tests::Require(childInspection->components.size() == 1, "ECS editor inspection returned invalid component count");
+    kb::tests::Require(childInspection->components.size() == 2, "ECS editor inspection returned invalid component count");
     kb::tests::Require(childInspection->components[0].fields.size() == 2, "ECS editor inspection did not serialize reflected fields");
 
     const float* x = std::get_if<float>(&childInspection->components[0].fields[0].value);
     const float* y = std::get_if<float>(&childInspection->components[0].fields[1].value);
     kb::tests::Require(x != nullptr && y != nullptr, "ECS editor inspection stored invalid field value type");
     kb::tests::Require(kb::tests::NearlyEqual(*x, 8.0F) && kb::tests::NearlyEqual(*y, 13.0F), "ECS editor inspection stored invalid field values");
+
+    const kb::ecs::EntityInspection entityInspection = world.InspectEntity(child);
+    kb::tests::Require(entityInspection.components.size() == childInspection->components.size(), "ECS editor inspection changed component selection");
+    for (std::size_t index = 0; index < entityInspection.components.size(); ++index) {
+        const kb::ecs::SerializedComponent& captured = childInspection->components[index];
+        kb::tests::Require(captured.componentId == entityInspection.components[index].id, "ECS editor inspection changed component order");
+        kb::ecs::SerializedComponent direct;
+        kb::tests::Require(world.SerializeComponent(child, captured.componentId, direct), "ECS editor inspection direct serialization failed");
+        kb::tests::Require(captured.componentName == direct.componentName && captured.fields.size() == direct.fields.size(),
+            "ECS editor inspection changed component serialization");
+        for (std::size_t field = 0; field < direct.fields.size(); ++field) {
+            kb::tests::Require(captured.fields[field].name == direct.fields[field].name &&
+                    captured.fields[field].type == direct.fields[field].type &&
+                    captured.fields[field].value == direct.fields[field].value,
+                "ECS editor inspection changed serialized field values");
+        }
+    }
+
 }
 
 void RunEditorComponentApplyTest() {
@@ -227,6 +256,67 @@ void RunEditorBulkCreateCatalogTest() {
     for (kb::ecs::Entity entity : entities) {
         kb::tests::Require(FindEditorEntity(inspection, entity) != nullptr, "ECS editor inspection missed a bulk-created entity");
     }
+}
+
+void RunEditorCatalogChurnTest() {
+    kb::ecs::World world;
+    const kb::ecs::Entity first = world.CreateEntity("First");
+    const kb::ecs::Entity removed = world.CreateEntity("Removed");
+    const kb::ecs::Entity survivor = world.CreateEntity("Survivor");
+    const kb::ecs::Entity removedLast = world.CreateEntity("RemovedLast");
+
+    world.DestroyEntity(removed);
+    world.DestroyEntity(removedLast);
+    const kb::ecs::Entity replacement = world.CreateEntity("Replacement");
+
+    kb::ecs::EditorWorldInspection inspection;
+    kb::tests::Require(world.CaptureEditorWorld(inspection), "ECS editor inspection after entity churn failed");
+    kb::tests::Require(inspection.entities.size() == 3U, "ECS editor catalog lost or duplicated an entity after churn");
+    kb::tests::Require(FindEditorEntity(inspection, removed) == nullptr, "ECS editor catalog retained a removed entity");
+    kb::tests::Require(FindEditorEntity(inspection, removedLast) == nullptr, "ECS editor catalog retained the removed tail entity");
+    kb::tests::Require(FindEditorEntity(inspection, first) != nullptr &&
+                           FindEditorEntity(inspection, survivor) != nullptr &&
+                           FindEditorEntity(inspection, replacement) != nullptr,
+        "ECS editor catalog missed a live entity after churn");
+    for (std::size_t index = 1; index < inspection.entities.size(); ++index) {
+        kb::tests::Require(inspection.entities[index - 1U].entity.Id() < inspection.entities[index].entity.Id(),
+            "ECS editor catalog changed inspected entity order");
+    }
+
+    const std::array bulkRemoved{ first, replacement };
+    world.DestroyEntities(bulkRemoved);
+    kb::tests::Require(world.CaptureEditorWorld(inspection), "ECS editor inspection after bulk entity removal failed");
+    kb::tests::Require(inspection.entities.size() == 1U && inspection.entities.front().entity == survivor,
+        "ECS editor catalog retained bulk-removed entities");
+}
+
+void RunEditorCatalogMixedIdsTest() {
+    kb::ecs::World backend;
+    kb::ecs::WorldEntityCatalog catalog;
+    const kb::ecs::Entity dense{ kb::ecs::kGeneratedEntityIndexBase };
+    const kb::ecs::Entity collision{ (1ULL << 32U) | dense.Id() };
+    const kb::ecs::Entity gap{ dense.Id() + 2U };
+    const kb::ecs::Entity external{ 500'000U };
+    const kb::ecs::Entity nextDense{ dense.Id() + 1U };
+
+    const std::array mixedEntities{ dense, collision, gap, external, nextDense };
+    catalog.AddMany(mixedEntities);
+    catalog.Add(dense);
+    catalog.Remove(collision);
+    catalog.Remove(external);
+
+    for (kb::ecs::Entity entity : { dense, gap, nextDense }) {
+        ecs_make_alive(backend.NativeHandle(), entity.Id());
+    }
+    std::vector<kb::ecs::Entity> alive = catalog.AliveEntities(backend.NativeHandle());
+    kb::tests::Require(alive.size() == 3U && alive[0] == dense && alive[1] == nextDense && alive[2] == gap,
+        "ECS catalog confused dense, gap, or colliding entity ids");
+
+    catalog.Remove(dense);
+    catalog.Remove(gap);
+    alive = catalog.AliveEntities(backend.NativeHandle());
+    kb::tests::Require(alive.size() == 1U && alive.front() == nextDense,
+        "ECS catalog lost the moved dense entity after mixed-id removals");
 }
 
 void RunWorldTelemetrySnapshotTest() {
@@ -610,6 +700,8 @@ void RunEcsInspectionTests() {
     RunEditorComponentApplyTest();
     RunEditorEntityNamingAndChildrenTest();
     RunEditorBulkCreateCatalogTest();
+    RunEditorCatalogChurnTest();
+    RunEditorCatalogMixedIdsTest();
     RunWorldTelemetrySnapshotTest();
     RunWorldQueryPrefetchTelemetryTest();
 }

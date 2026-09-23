@@ -12,12 +12,14 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <span>
 #include <string>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 #if defined(_WIN32)
@@ -40,12 +42,14 @@ constexpr double kCreateSecondsLimit = 30.0;
 constexpr double kSaveSecondsLimit = 20.0;
 constexpr double kLoadSecondsLimit = 30.0;
 constexpr double kVerifySecondsLimit = 10.0;
+constexpr double kCatalogDestroySecondsLimit = 30.0;
 constexpr std::uint64_t kPeakResidentBytesLimit = 1024ULL * 1024ULL * 1024ULL;
 #else
 constexpr double kCreateSecondsLimit = 180.0;
 constexpr double kSaveSecondsLimit = 120.0;
 constexpr double kLoadSecondsLimit = 180.0;
 constexpr double kVerifySecondsLimit = 60.0;
+constexpr double kCatalogDestroySecondsLimit = 120.0;
 constexpr std::uint64_t kPeakResidentBytesLimit = 2ULL * 1024ULL * 1024ULL * 1024ULL;
 #endif
 
@@ -189,11 +193,69 @@ void VerifyRestoredWorld(kb::ecs::World& world) {
     kb::tests::Require(std::fabs(counters.velocityY + sum) <= 0.5, "ECS scale snapshot restored invalid velocity y checksum");
 }
 
+void CountSnapshotScalePosition(kb::ecs::Entity, const EcsPosition& position, void* context) {
+    auto* counters = static_cast<SnapshotScaleCounters*>(context);
+    ++counters->count;
+    counters->positionX += static_cast<double>(position.x);
+}
+
+void CountSnapshotScaleVelocity(kb::ecs::Entity, const EcsVelocity&, void* context) {
+    ++*static_cast<std::size_t*>(context);
+}
+
+[[nodiscard]] kb::ecs::ChunkedWorldDeltaSnapshot BuildMillionPositionDelta(kb::ecs::World& world, bool fullArchetype) {
+    const kb::ecs::ChunkedWorldSnapshot baseline = world.CaptureChunkedSnapshot();
+    kb::ecs::ChunkedWorldDeltaSnapshot delta;
+    delta.componentTypes = baseline.componentTypes;
+    delta.entityCount = baseline.entityCount;
+    delta.chunks.reserve(baseline.chunks.size());
+    const kb::ecs::ComponentId positionId = world.Component<EcsPosition>();
+
+    for (const kb::ecs::ChunkedWorldSnapshotChunk& chunk : baseline.chunks) {
+        const auto component = std::find_if(chunk.components.begin(), chunk.components.end(),
+            [positionId](const kb::ecs::ChunkedComponentSnapshot& value) { return value.componentId == positionId; });
+        kb::tests::Require(component != chunk.components.end(), "ECS scale delta source chunk missed position");
+        const std::size_t positionColumn = static_cast<std::size_t>(component - chunk.components.begin());
+
+        kb::ecs::ChunkedWorldDeltaSnapshotChunk changed{
+            .archetypeIndex = chunk.archetypeIndex,
+            .chunkIndex = chunk.chunkIndex,
+            .fullArchetype = fullArchetype,
+            .entityIds = chunk.entityIds,
+            .components = fullArchetype ? chunk.components : std::vector<kb::ecs::ChunkedComponentSnapshot>{ *component },
+        };
+        kb::ecs::ChunkedComponentSnapshot& column = changed.components[fullArchetype ? positionColumn : 0U];
+        kb::tests::Require(column.componentSize == sizeof(EcsPosition), "ECS scale delta position size mismatch");
+        for (std::size_t row = 0; row < changed.entityIds.size(); ++row) {
+            EcsPosition position;
+            std::memcpy(&position, column.data.data() + row * sizeof(position), sizeof(position));
+            position.x += 1.0F;
+            std::memcpy(column.data.data() + row * sizeof(position), &position, sizeof(position));
+        }
+        delta.chunks.push_back(std::move(changed));
+    }
+    return delta;
+}
+
+void VerifyAppliedMillionPositionDelta(kb::ecs::World& world, double positionOffset) {
+    SnapshotScaleCounters counters;
+    world.ForEach<EcsPosition, EcsVelocity>(&AccumulateSnapshotScaleComponents, &counters);
+    const double n = static_cast<double>(kEntityCount);
+    const double sum = n * (n - 1.0) * 0.5;
+    kb::tests::Require(counters.count == kEntityCount, "ECS scale delta changed entity count");
+    kb::tests::Require(std::fabs(counters.positionX - (sum + n * positionOffset)) <= 0.5, "ECS scale delta did not update every position");
+    kb::tests::Require(std::fabs(counters.positionY - (sum + n)) <= 0.5, "ECS scale delta changed position y");
+    kb::tests::Require(std::fabs(counters.velocityX - (sum * 2.0)) <= 1.0, "ECS scale delta changed velocity x");
+    kb::tests::Require(std::fabs(counters.velocityY + sum) <= 0.5, "ECS scale delta changed velocity y");
+}
+
 void RunSaveLoadMillionEntitiesTest() {
     const std::uint64_t baselinePeakBytes = PeakResidentBytes();
     const std::filesystem::path snapshotPath = ScaleSnapshotPath();
     std::error_code removeError;
     std::filesystem::remove(snapshotPath, removeError);
+    double createSeconds = 0.0;
+    double saveSeconds = 0.0;
 
     {
         kb::ecs::WorldConfig config = kb::ecs::WorldConfigPresets::BenchmarkDefault();
@@ -203,7 +265,7 @@ void RunSaveLoadMillionEntitiesTest() {
 
         TimedStep createTimer;
         BuildMillionEntityWorld(source);
-        const double createSeconds = createTimer.ElapsedSeconds();
+        createSeconds = createTimer.ElapsedSeconds();
         kb::tests::Require(createSeconds <= kCreateSecondsLimit, "ECS scale snapshot source creation exceeded time limit");
 
         TimedStep saveTimer;
@@ -211,7 +273,7 @@ void RunSaveLoadMillionEntitiesTest() {
         kb::tests::Require(source.SerializeChunkedSnapshotBinary(bytes), "ECS scale snapshot binary save failed");
         kb::tests::Require(!bytes.empty(), "ECS scale snapshot binary save produced no data");
         WriteBinaryFile(snapshotPath, bytes);
-        const double saveSeconds = saveTimer.ElapsedSeconds();
+        saveSeconds = saveTimer.ElapsedSeconds();
         kb::tests::Require(saveSeconds <= kSaveSecondsLimit, "ECS scale snapshot save exceeded time limit");
     }
 
@@ -232,17 +294,130 @@ void RunSaveLoadMillionEntitiesTest() {
     const double verifySeconds = verifyTimer.ElapsedSeconds();
     kb::tests::Require(verifySeconds <= kVerifySecondsLimit, "ECS scale snapshot verification exceeded time limit");
 
+    double partialDeltaSeconds = 0.0;
+    double fullDeltaSeconds = 0.0;
+    double fullDeltaAdoptSeconds = 0.0;
+    double mixedDeltaSeconds = 0.0;
+    double removalDeltaSeconds = 0.0;
+    {
+        const kb::ecs::ChunkedWorldDeltaSnapshot delta = BuildMillionPositionDelta(restored, false);
+        TimedStep deltaTimer;
+        kb::tests::Require(restored.ApplyChunkedDeltaSnapshot(delta), "ECS scale partial delta apply failed");
+        partialDeltaSeconds = deltaTimer.ElapsedSeconds();
+        VerifyAppliedMillionPositionDelta(restored, 1.0);
+    }
+    {
+        const kb::ecs::ChunkedWorldDeltaSnapshot delta = BuildMillionPositionDelta(restored, true);
+        TimedStep deltaTimer;
+        kb::tests::Require(restored.ApplyChunkedDeltaSnapshot(delta), "ECS scale full delta apply failed");
+        fullDeltaSeconds = deltaTimer.ElapsedSeconds();
+        VerifyAppliedMillionPositionDelta(restored, 2.0);
+
+        kb::ecs::World adopted{ restoreConfig };
+        RegisterScaleReflection(adopted);
+        TimedStep adoptTimer;
+        kb::tests::Require(adopted.ApplyChunkedDeltaSnapshot(delta), "ECS scale full delta adoption failed");
+        fullDeltaAdoptSeconds = adoptTimer.ElapsedSeconds();
+        VerifyAppliedMillionPositionDelta(adopted, 2.0);
+
+        std::vector<kb::ecs::Entity> removed;
+        removed.reserve(kEntityCount / 10U);
+        std::size_t entityIndex = 0U;
+        for (const kb::ecs::ChunkedWorldDeltaSnapshotChunk& chunk : delta.chunks) {
+            for (kb::ecs::Entity::IdType entityId : chunk.entityIds) {
+                if (entityIndex % 10U == 0U) {
+                    removed.emplace_back(entityId);
+                }
+                ++entityIndex;
+            }
+        }
+        kb::tests::Require(removed.size() == kEntityCount / 10U, "ECS mixed delta setup selected an invalid removal count");
+        adopted.DestroyEntities(removed);
+        kb::tests::Require(adopted.NativeStorageStats().liveEntities == kEntityCount - removed.size(),
+            "ECS mixed delta setup did not remove the selected entities");
+
+        TimedStep mixedTimer;
+        kb::tests::Require(adopted.ApplyChunkedDeltaSnapshot(delta), "ECS scale mixed delta apply failed");
+        mixedDeltaSeconds = mixedTimer.ElapsedSeconds();
+        VerifyAppliedMillionPositionDelta(adopted, 2.0);
+
+        kb::ecs::ChunkedWorldDeltaSnapshot removalDelta = delta;
+        const kb::ecs::ComponentId velocityId = adopted.Component<EcsVelocity>();
+        for (kb::ecs::ChunkedWorldDeltaSnapshotChunk& chunk : removalDelta.chunks) {
+            std::erase_if(chunk.components, [velocityId](const kb::ecs::ChunkedComponentSnapshot& component) {
+                return component.componentId == velocityId;
+            });
+        }
+        TimedStep removalTimer;
+        kb::tests::Require(adopted.ApplyChunkedDeltaSnapshot(removalDelta), "ECS scale removal delta apply failed");
+        removalDeltaSeconds = removalTimer.ElapsedSeconds();
+        SnapshotScaleCounters positionCounters;
+        adopted.ForEach<EcsPosition>(&CountSnapshotScalePosition, &positionCounters);
+        const double n = static_cast<double>(kEntityCount);
+        const double sum = n * (n - 1.0) * 0.5;
+        kb::tests::Require(positionCounters.count == kEntityCount && std::fabs(positionCounters.positionX - (sum + 2.0 * n)) <= 0.5,
+            "ECS scale removal delta changed positions or entity count");
+        std::size_t velocityCount = 0U;
+        adopted.ForEach<EcsVelocity>(&CountSnapshotScaleVelocity, &velocityCount);
+        kb::tests::Require(velocityCount == 0U, "ECS scale removal delta retained velocity components");
+    }
+
     const std::uint64_t peakBytes = PeakResidentBytes();
     if (peakBytes != 0U && peakBytes > baselinePeakBytes) {
         kb::tests::Require(peakBytes - baselinePeakBytes <= kPeakResidentBytesLimit, "ECS scale snapshot exceeded peak resident memory limit");
     }
 
+    std::cout << "ECS snapshot scale 1m: create=" << createSeconds
+              << "s save=" << saveSeconds
+              << "s load=" << loadSeconds
+              << "s verify=" << verifySeconds
+              << "s partial_delta_apply=" << partialDeltaSeconds
+              << "s full_delta_apply=" << fullDeltaSeconds
+              << "s full_delta_adopt=" << fullDeltaAdoptSeconds
+              << "s mixed_delta_apply=" << mixedDeltaSeconds
+              << "s removal_delta_apply=" << removalDeltaSeconds
+              << "s peak_delta=" << (peakBytes > baselinePeakBytes ? peakBytes - baselinePeakBytes : 0U)
+              << " bytes\n";
+
     std::filesystem::remove(snapshotPath, removeError);
+}
+
+void RunMillionEntityCatalogChurnTest() {
+    kb::ecs::WorldConfig config = kb::ecs::WorldConfigPresets::BenchmarkNativeOnly();
+    config.trackEntityCatalog = true;
+    config.reserveEntities = kEntityCount;
+    kb::ecs::World world{ config };
+    std::vector<kb::ecs::Entity> entities;
+    entities.reserve(kEntityCount);
+
+    TimedStep createTimer;
+    for (std::size_t index = 0; index < kEntityCount; ++index) {
+        entities.push_back(world.CreateEntity());
+    }
+    const double createSeconds = createTimer.ElapsedSeconds();
+    kb::tests::Require(world.NativeStorageStats().liveEntities == kEntityCount,
+        "ECS catalog scale create returned an invalid entity count");
+    kb::tests::Require(createSeconds <= kCreateSecondsLimit,
+        "ECS catalog scale create exceeded time limit");
+
+    TimedStep destroyTimer;
+    for (kb::ecs::Entity entity : entities) {
+        world.DestroyEntity(entity);
+    }
+    const double destroySeconds = destroyTimer.ElapsedSeconds();
+    kb::tests::Require(world.NativeStorageStats().liveEntities == 0U,
+        "ECS catalog scale destroy left live entities");
+    kb::tests::Require(destroySeconds <= kCatalogDestroySecondsLimit,
+        "ECS catalog scale destroy exceeded time limit");
+
+    std::cout << "ECS catalog scale 1m: create=" << createSeconds
+              << "s destroy=" << destroySeconds << "s\n";
 }
 
 } // namespace
 
 int main() {
     RunSaveLoadMillionEntitiesTest();
+    RunMillionEntityCatalogChurnTest();
     return EXIT_SUCCESS;
 }

@@ -1,6 +1,7 @@
 #include "ecs/inspection/EditorWorldInspector.hpp"
 
 #include "ecs/inspection/EditorEntityInspectionBuilder.hpp"
+#include "ecs/ComponentRegistry.hpp"
 #include "ecs/world/WorldInternalAccess.hpp"
 #include "ecs/world/WorldEntityCatalog.hpp"
 #include "ecs/world/WorldRegistrySet.hpp"
@@ -17,13 +18,20 @@ bool EditorWorldInspector::Inspect(const World& world, EditorWorldInspection& ou
     }
 
     const std::vector<Entity> entities = registries->Entities().AliveEntities(WorldInternalAccess::Native(world));
+    const std::span<const ComponentTypeInfo> componentTypes = registries->Components().Types();
     output.entities.reserve(entities.size());
     for (Entity entity : entities) {
-        EditorEntityInspection entityInspection;
-        if (!EditorEntityInspectionBuilder::Build(world, entity, entityInspection)) {
-            return false;
+        EditorEntityInspection& entityInspection = output.entities.emplace_back();
+        try {
+            if (EditorEntityInspectionBuilder::Build(world, entity, componentTypes, entityInspection)) {
+                continue;
+            }
+        } catch (...) {
+            output.entities.pop_back();
+            throw;
         }
-        output.entities.push_back(std::move(entityInspection));
+        output.entities.pop_back();
+        return false;
     }
 
     return true;

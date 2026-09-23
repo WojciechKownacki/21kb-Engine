@@ -278,6 +278,61 @@ void RunSyncPointRequiresRuntimeBoundaryReasonTest() {
     kb::tests::Require(rejected, "ECS system access accepted a sync point without a runtime boundary reason");
 }
 
+void RunMultipleSyncPointsPreserveRegistrationBoundariesTest() {
+    kb::ecs::World world;
+    std::vector<std::string> executionOrder;
+    kb::ecs::SystemScheduler scheduler{ kb::ecs::SystemSchedulerConfig{ .mode = kb::ecs::SystemSchedulingMode::Deterministic } };
+    const auto add = [&scheduler, &world, &executionOrder](std::string name, bool barrier) {
+        kb::ecs::SystemAccess access;
+        if (barrier) {
+            access.RequireSyncPoint(kb::ecs::SystemSyncPoint::StructuralChanges);
+        }
+        scheduler.Add(std::make_unique<RecordingSystem>(std::move(name), std::move(access), executionOrder), world);
+    };
+
+    add("BeforeZ", false);
+    add("BeforeA", false);
+    add("BarrierZ", true);
+    add("MiddleZ", false);
+    add("MiddleA", false);
+    add("BarrierA", true);
+    add("AfterZ", false);
+    add("AfterA", false);
+
+    const std::vector<std::string> expected{
+        "BeforeA", "BeforeZ", "BarrierZ", "MiddleA", "MiddleZ", "BarrierA", "AfterA", "AfterZ",
+    };
+    kb::tests::Require(scheduler.ExecutionOrderSnapshot() == expected,
+        "ECS scheduler changed deterministic ordering across multiple sync points");
+    scheduler.Update(world, 0.0F);
+    kb::tests::Require(executionOrder == expected,
+        "ECS scheduler crossed a registration boundary at runtime");
+    scheduler.Shutdown(world);
+}
+
+void RunSyncPointRejectsBackwardExplicitDependencyTest() {
+    kb::ecs::World world;
+    std::vector<std::string> executionOrder;
+    kb::ecs::SystemScheduler scheduler;
+    kb::ecs::SystemAccess beforeAccess;
+    beforeAccess.After("After");
+    kb::ecs::SystemAccess barrierAccess;
+    barrierAccess.RequireSyncPoint(kb::ecs::SystemSyncPoint::StructuralChanges);
+    scheduler.Add(std::make_unique<RecordingSystem>("Before", std::move(beforeAccess), executionOrder), world);
+    scheduler.Add(std::make_unique<RecordingSystem>("Barrier", std::move(barrierAccess), executionOrder), world);
+    scheduler.Add(std::make_unique<RecordingSystem>("After", kb::ecs::SystemAccess{}, executionOrder), world);
+
+    bool detectedCycle = false;
+    try {
+        scheduler.Update(world, 0.0F);
+    } catch (const std::runtime_error&) {
+        detectedCycle = true;
+    }
+    kb::tests::Require(detectedCycle, "ECS scheduler accepted an explicit edge crossing a sync point backward");
+    kb::tests::Require(executionOrder.empty(), "ECS scheduler executed systems after detecting a sync point cycle");
+    scheduler.Shutdown(world);
+}
+
 void RunSchedulerRejectsNullSystemTest() {
     kb::ecs::World world;
     kb::ecs::SystemScheduler scheduler;
@@ -521,6 +576,45 @@ void RunProfilerCountersCaptureFrameAndSystemWorkTest() {
     scheduler.Shutdown(world);
 }
 
+void RunSchedulerLargeSparseGraphCacheInvalidationTest() {
+    kb::ecs::World world;
+    kb::ecs::SystemScheduler scheduler{ kb::ecs::SystemSchedulerConfig{
+        .profilerEnabled = true,
+        .parallelExecutionEnabled = false,
+    } };
+    std::vector<std::string> executionOrder;
+    constexpr std::size_t readerCount = 128U;
+    for (std::size_t index = 0; index < readerCount; ++index) {
+        kb::ecs::SystemAccess access;
+        access.Read(1);
+        scheduler.Add(std::make_unique<RecordingSystem>("Read" + std::to_string(index), std::move(access), executionOrder), world);
+    }
+
+    scheduler.Update(world, 0.016F);
+    kb::tests::Require(scheduler.LastProfilerTrace().events.size() == readerCount,
+        "ECS sparse scheduler trace lost systems on the first frame");
+    scheduler.Update(world, 0.016F);
+    kb::tests::Require(scheduler.LastProfilerTrace().events.size() == readerCount &&
+        scheduler.LastProfilerTrace().systemCounters.size() == readerCount,
+        "ECS sparse scheduler trace changed after reusing the dependency graph");
+
+    kb::ecs::SystemAccess writerAccess;
+    writerAccess.Write(1);
+    scheduler.Add(std::make_unique<RecordingSystem>("Writer", std::move(writerAccess), executionOrder), world);
+    scheduler.Update(world, 0.016F);
+    const kb::ecs::SystemSchedulerTrace& trace = scheduler.LastProfilerTrace();
+    kb::tests::Require(trace.events.size() == readerCount + 1U && trace.systemCounters.size() == readerCount + 1U,
+        "ECS scheduler did not rebuild trace counters after adding a system");
+    kb::tests::Require(trace.events.back().systemName == "Writer" &&
+        trace.events.back().blockedDependencies.size() == readerCount,
+        "ECS scheduler reused stale dependencies after adding a writer");
+
+    scheduler.Shutdown(world);
+    scheduler.Update(world, 0.016F);
+    kb::tests::Require(scheduler.LastProfilerTrace().events.empty(),
+        "ECS scheduler retained stale trace events after shutdown");
+}
+
 void RunProfilerTraceExportWritesExternalJsonFileTest() {
     kb::ecs::World world;
     kb::ecs::SystemScheduler scheduler{ kb::ecs::SystemSchedulerConfig{ .profilerEnabled = true } };
@@ -664,6 +758,8 @@ void RunEcsSystemSchedulerTests() {
     RunSyncPointCreatesRegistrationOrderBarrierTest();
     RunAssetBoundarySyncPointCreatesRegistrationOrderBarrierTest();
     RunSyncPointRequiresRuntimeBoundaryReasonTest();
+    RunMultipleSyncPointsPreserveRegistrationBoundariesTest();
+    RunSyncPointRejectsBackwardExplicitDependencyTest();
     RunSchedulerRejectsNullSystemTest();
     RunReadOnlySystemsShareExecutionStageTest();
     RunReadOnlySystemsExecuteInParallelTest();
@@ -674,6 +770,7 @@ void RunEcsSystemSchedulerTests() {
     RunRuntimeAccessValidatorDetectsReadWriteConflictTest();
     RunRuntimeAccessValidatorDetectsWriteWriteConflictTest();
     RunProfilerCountersCaptureFrameAndSystemWorkTest();
+    RunSchedulerLargeSparseGraphCacheInvalidationTest();
     RunProfilerTraceExportWritesExternalJsonFileTest();
     RunDebugTraceCapturesSystemExecutionTest();
 }

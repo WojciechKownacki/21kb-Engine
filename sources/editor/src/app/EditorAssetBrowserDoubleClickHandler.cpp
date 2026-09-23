@@ -2,6 +2,7 @@
 
 #if defined(_WIN32)
 #include "app/EditorSceneLifecycleGuard.hpp"
+#include "app/EditorExternalCodeLauncher.hpp"
 #include "app/EditorParticleDocumentLifecycle.hpp"
 #include "assets/EditorAssetBrowserHitPayloadResolver.hpp"
 #include "assets/EditorAssetBrowserHitTester.hpp"
@@ -17,9 +18,11 @@
 #include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
 #include "rendering/ProjectFilesAssetIconResolver.hpp"
 #include "scene/EditorSceneContext.hpp"
+#include "project/EditorProjectPaths.hpp"
 
 #include <filesystem>
 #include <optional>
+#include <string>
 
 namespace kb::editor {
 namespace {
@@ -73,8 +76,14 @@ EditorAssetBrowserDoubleClickResult EditorAssetBrowserDoubleClickHandler::OpenAs
     kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
     const kb::assets::AssetMetadata* const metadata = &metadataValue;
     if (metadata->type == "LuaScript") {
+        std::string error;
+        if (!EditorExternalCodeLauncher::OpenProjectFile(
+                EditorProjectPaths::ProjectRoot(), ResolveAssetPath(*metadata, manager), error)) {
+            sceneContext.Console().Error("Scripts", error);
+            return EditorAssetBrowserDoubleClickResult::None;
+        }
         return sceneContext.OpenLuaScript(metadata->id)
-            ? EditorAssetBrowserDoubleClickResult::ScriptEditorOpened
+            ? EditorAssetBrowserDoubleClickResult::ExternalScriptOpened
             : EditorAssetBrowserDoubleClickResult::None;
     }
         // The Project Files glyph and its activation must classify the two

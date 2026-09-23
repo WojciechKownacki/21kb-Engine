@@ -14,6 +14,8 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <mutex>
+#include <stdexcept>
 #include <utility>
 
 namespace kb::ecs {
@@ -130,6 +132,7 @@ private:
 
 void RecordQueryExecutionTelemetry(
     WorldTelemetryCounters* counters,
+    std::mutex* telemetryMutex,
     QueryExecutionSettings settings,
     std::size_t entityCount,
     std::uint64_t bytesTouched,
@@ -137,11 +140,12 @@ void RecordQueryExecutionTelemetry(
     std::uint64_t kernelElapsedNanoseconds,
     std::size_t effectiveBatchSize,
     std::size_t batchCount,
-    std::size_t parallelWorkItems) noexcept {
+    std::size_t parallelWorkItems) {
     if (!ShouldRecordQueryTelemetry(counters, settings)) {
         return;
     }
 
+    const std::lock_guard lock(*telemetryMutex);
     ++counters->queryExecutions;
     counters->queryBatches += batchCount;
     counters->queryEntitiesVisited += entityCount;
@@ -189,14 +193,16 @@ void RecordQueryExecutionTelemetry(
 
 void RecordQueryPrepareTelemetry(
     WorldTelemetryCounters* counters,
+    std::mutex* telemetryMutex,
     QueryExecutionSettings settings,
     std::size_t recordCount,
     std::size_t archetypeCount,
-    std::uint64_t elapsedNanoseconds) noexcept {
+    std::uint64_t elapsedNanoseconds) {
     if (!ShouldRecordQueryTelemetry(counters, settings)) {
         return;
     }
 
+    const std::lock_guard lock(*telemetryMutex);
     ++counters->queryPrepareCalls;
     counters->queryPrepareRecords += recordCount;
     counters->queryMatchedChunks += recordCount;
@@ -206,16 +212,14 @@ void RecordQueryPrepareTelemetry(
 
 template <typename Record>
 [[nodiscard]] std::size_t CountUniqueNativeArchetypes(std::span<const Record> records) noexcept {
-    std::size_t archetypeCount = 0;
-    for (std::size_t index = 0; index < records.size(); ++index) {
-        bool seen = false;
-        for (std::size_t previous = 0; previous < index; ++previous) {
-            if (records[previous].nativeArchetypeIndex == records[index].nativeArchetypeIndex) {
-                seen = true;
-                break;
-            }
-        }
-        archetypeCount += seen ? 0U : 1U;
+    if (records.empty()) {
+        return 0;
+    }
+
+    // Native storage emits chunks grouped by archetype; deterministic sorting keeps that grouping.
+    std::size_t archetypeCount = 1;
+    for (std::size_t index = 1; index < records.size(); ++index) {
+        archetypeCount += records[index - 1].nativeArchetypeIndex != records[index].nativeArchetypeIndex ? 1U : 0U;
     }
     return archetypeCount;
 }
@@ -402,14 +406,20 @@ QueryState::QueryState(
     std::size_t defaultPrefetchDistance,
     MutableComponentBorrowLocks* mutableBorrowLocks,
     StructuralChangeValidator* structuralChangeValidator,
-    WorldTelemetryCounters* telemetryCounters)
+    WorldTelemetryCounters* telemetryCounters,
+    std::mutex* telemetryMutex)
     : nativeStorage_(nativeStorage)
     , plan_(std::move(plan))
     , mutableBorrowLocks_(mutableBorrowLocks)
     , structuralChangeValidator_(structuralChangeValidator)
     , telemetryCounters_(telemetryCounters)
+    , telemetryMutex_(telemetryMutex)
     , defaultExecutionGrainSize_(defaultExecutionGrainSize == 0 ? kDefaultQueryExecutionGrainSize : defaultExecutionGrainSize)
-    , defaultPrefetchDistance_(defaultPrefetchDistance) {}
+    , defaultPrefetchDistance_(defaultPrefetchDistance) {
+    if ((telemetryCounters_ == nullptr) != (telemetryMutex_ == nullptr)) {
+        throw std::invalid_argument("ECS query telemetry counters and mutex must have the same lifetime");
+    }
+}
 
 bool QueryState::IsValid() const noexcept {
     return nativeStorage_ != nullptr && plan_ && plan_->IsValid();
@@ -446,6 +456,7 @@ void QueryState::PrepareBatchExecution(QueryExecutionSettings settings, QueryBat
     scratch.chunks_.clear();
     RecordQueryPrepareTelemetry(
         telemetryCounters_,
+        telemetryMutex_,
         settings,
         scratch.records_.size(),
         ShouldRecordQueryTelemetry(telemetryCounters_, settings)
@@ -467,6 +478,7 @@ void QueryState::PrepareMutableBatchExecution(QueryExecutionSettings settings, Q
     scratch.chunks_.clear();
     RecordQueryPrepareTelemetry(
         telemetryCounters_,
+        telemetryMutex_,
         settings,
         scratch.mutableRecords_.size(),
         ShouldRecordQueryTelemetry(telemetryCounters_, settings)
@@ -483,22 +495,31 @@ void QueryState::ForEach(QueryRawVisitor visitor, void* context) const {
     [[maybe_unused]] StructuralChangeValidator::Guard iterationGuard =
         structuralChangeValidator_ != nullptr ? structuralChangeValidator_->EnterIteration() : StructuralChangeValidator::Guard{};
 
-    QueryBatchExecutionScratch scratch;
-    PrepareReadRecords(QueryExecutionSettings{}, scratch, false);
+    auto visit = [this, visitor, context](QueryBatchExecutionScratch& scratch) {
+        PrepareReadRecords(QueryExecutionSettings{}, scratch, false);
 
-    QueryComponentPointerBlock rowComponents{};
-    for (const QueryTableDispatchRecord& record : scratch.records_) {
-        if (plan_->HasChangeFilters() && !RecordChanged(record)) {
-            continue;
-        }
-        for (std::size_t row = 0; row < record.entityCount; ++row) {
-            for (std::size_t field = 0; field < plan_->ComponentSizes().size(); ++field) {
-                const auto* bytes = static_cast<const std::uint8_t*>(record.fieldComponents[field]);
-                rowComponents[field] = bytes + row * plan_->ComponentSizes()[field];
+        QueryComponentPointerBlock rowComponents{};
+        for (const QueryTableDispatchRecord& record : scratch.records_) {
+            if (plan_->HasChangeFilters() && !RecordChanged(record)) {
+                continue;
             }
-            visitor(Entity{ record.entityIds[row] }, rowComponents.data(), context);
+            for (std::size_t row = 0; row < record.entityCount; ++row) {
+                for (std::size_t field = 0; field < plan_->ComponentSizes().size(); ++field) {
+                    const auto* bytes = static_cast<const std::uint8_t*>(record.fieldComponents[field]);
+                    rowComponents[field] = bytes + row * plan_->ComponentSizes()[field];
+                }
+                visitor(Entity{ record.entityIds[row] }, rowComponents.data(), context);
+            }
+            CommitRecordVersions(record);
         }
-        CommitRecordVersions(record);
+    };
+
+    if (!tBatchExecutionScratchInUse) {
+        ScopedThreadLocalBatchScratch scratchUse{ tBatchExecutionScratchInUse };
+        visit(tBatchExecutionScratch);
+    } else {
+        QueryBatchExecutionScratch scratch;
+        visit(scratch);
     }
 }
 
@@ -542,6 +563,7 @@ void QueryState::ForEachBatch(QueryExecutionSettings settings, QueryRawBatchVisi
     }
     RecordQueryPrepareTelemetry(
         telemetryCounters_,
+        telemetryMutex_,
         settings,
         scratch.records_.size(),
         ShouldRecordQueryTelemetry(telemetryCounters_, settings)
@@ -605,6 +627,7 @@ void QueryState::ForEachBatch(QueryExecutionSettings settings, QueryRawBatchVisi
         const std::uint64_t kernelElapsedNanoseconds = EndQueryTelemetryTiming(telemetryCounters_, settings, kernelStartedAt);
         RecordQueryExecutionTelemetry(
             telemetryCounters_,
+            telemetryMutex_,
             settings,
             telemetryEntityCount,
             static_cast<std::uint64_t>(telemetryEntityCount) * telemetryBytesPerEntity,
@@ -640,6 +663,7 @@ void QueryState::ForEachBatch(QueryExecutionSettings settings, QueryRawBatchVisi
     const std::uint64_t kernelElapsedNanoseconds = EndQueryTelemetryTiming(telemetryCounters_, settings, kernelStartedAt);
     RecordQueryExecutionTelemetry(
         telemetryCounters_,
+        telemetryMutex_,
         settings,
         telemetryEntityCount,
         static_cast<std::uint64_t>(telemetryEntityCount) * telemetryBytesPerEntity,
@@ -690,6 +714,7 @@ void QueryState::ForEachMutableBatch(QueryExecutionSettings settings, QueryRawMu
     }
     RecordQueryPrepareTelemetry(
         telemetryCounters_,
+        telemetryMutex_,
         settings,
         scratch.mutableRecords_.size(),
         ShouldRecordQueryTelemetry(telemetryCounters_, settings)
@@ -781,6 +806,7 @@ void QueryState::ForEachMutableBatch(QueryExecutionSettings settings, QueryRawMu
         }
         RecordQueryExecutionTelemetry(
             telemetryCounters_,
+            telemetryMutex_,
             settings,
             telemetryEntityCount,
             static_cast<std::uint64_t>(telemetryEntityCount) * telemetryBytesPerEntity,
@@ -811,12 +837,18 @@ void QueryState::ForEachMutableBatch(QueryExecutionSettings settings, QueryRawMu
             settings.prefetchDistance,
             dispatchVisitor,
             dispatchContext);
-        nativeStorage_->MarkArchetypeComponentsModified(record.nativeArchetypeIndex, plan_->ComponentIds());
+        nativeStorage_->MarkArchetypeChunkComponentsModified(
+            record.nativeArchetypeIndex,
+            record.nativeChunkIndex,
+            0U,
+            record.entityCount,
+            plan_->ComponentIds());
         CommitRecordVersions(record);
     }
     const std::uint64_t kernelElapsedNanoseconds = EndQueryTelemetryTiming(telemetryCounters_, settings, kernelStartedAt);
     RecordQueryExecutionTelemetry(
         telemetryCounters_,
+        telemetryMutex_,
         settings,
         telemetryEntityCount,
         static_cast<std::uint64_t>(telemetryEntityCount) * telemetryBytesPerEntity,
@@ -837,6 +869,7 @@ void QueryState::PrepareReadRecords(QueryExecutionSettings settings, QueryBatchE
     const bool recordCacheTelemetry = ShouldRecordQueryTelemetry(telemetryCounters_, settings);
     if (cachedReadStructuralVersion_ != structuralVersion) {
         if (recordCacheTelemetry) {
+            const std::lock_guard lock(*telemetryMutex_);
             ++telemetryCounters_->queryRecordCacheMisses;
         }
         nativeStorage_->CollectQueryRecords(
@@ -846,6 +879,7 @@ void QueryState::PrepareReadRecords(QueryExecutionSettings settings, QueryBatchE
             cachedReadRecords_);
         cachedReadStructuralVersion_ = structuralVersion;
     } else if (recordCacheTelemetry) {
+        const std::lock_guard lock(*telemetryMutex_);
         ++telemetryCounters_->queryRecordCacheHits;
     }
 
@@ -865,6 +899,7 @@ void QueryState::PrepareMutableRecords(QueryExecutionSettings settings, QueryBat
     const bool recordCacheTelemetry = ShouldRecordQueryTelemetry(telemetryCounters_, settings);
     if (cachedMutableStructuralVersion_ != structuralVersion) {
         if (recordCacheTelemetry) {
+            const std::lock_guard lock(*telemetryMutex_);
             ++telemetryCounters_->queryRecordCacheMisses;
         }
         nativeStorage_->CollectMutableQueryRecords(
@@ -874,6 +909,7 @@ void QueryState::PrepareMutableRecords(QueryExecutionSettings settings, QueryBat
             cachedMutableRecords_);
         cachedMutableStructuralVersion_ = structuralVersion;
     } else if (recordCacheTelemetry) {
+        const std::lock_guard lock(*telemetryMutex_);
         ++telemetryCounters_->queryRecordCacheHits;
     }
 

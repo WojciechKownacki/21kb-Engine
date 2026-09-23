@@ -5,6 +5,7 @@
 #include "engine/ecs/CommandBuffer.hpp"
 #include "engine/ecs/World.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstring>
 #include <vector>
@@ -555,21 +556,40 @@ void RunChunkedWorldDeltaSnapshotApplyTest() {
     const kb::ecs::Entity created = source.CreateEntity();
     source.Set(created, EcsPosition{ .x = 700.0F, .y = 701.0F });
     source.Set(created, EcsVelocity{ .x = 702.0F, .y = 703.0F });
+    const kb::ecs::Entity createdPositionOnly = source.CreateEntity();
+    source.Set(createdPositionOnly, EcsPosition{ .x = 710.0F, .y = 711.0F });
 
     const kb::ecs::ChunkedWorldDeltaSnapshot structuralDelta = source.CaptureChunkedDeltaSnapshot(structuralBaseline);
     kb::tests::Require(DeltaContainsDestroyedEntity(structuralDelta, entities[7]), "ECS structural delta missed destroyed entity");
     kb::tests::Require(DeltaContainsFullChunk(structuralDelta), "ECS structural delta did not emit full archetype chunks");
+    bool foundMixedRemovalChunk = false;
+    for (const kb::ecs::ChunkedWorldDeltaSnapshotChunk& chunk : structuralDelta.chunks) {
+        const auto hasEntity = [&chunk](kb::ecs::Entity entity) {
+            return std::find(chunk.entityIds.begin(), chunk.entityIds.end(), entity.Id()) != chunk.entityIds.end();
+        };
+        foundMixedRemovalChunk = foundMixedRemovalChunk ||
+            (chunk.fullArchetype && hasEntity(entities[5]) && hasEntity(createdPositionOnly));
+    }
+    kb::tests::Require(foundMixedRemovalChunk, "ECS structural delta did not exercise mixed creation and component removal");
     kb::tests::Require(target.ApplyChunkedDeltaSnapshot(structuralDelta), "ECS structural delta apply failed");
 
     kb::tests::Require(!target.IsAlive(entities[7]), "ECS structural delta did not destroy removed entity");
     kb::tests::Require(target.IsAlive(created), "ECS structural delta did not create new entity");
+    kb::tests::Require(target.IsAlive(createdPositionOnly), "ECS structural delta did not create the position-only entity");
     kb::tests::Require(target.TryGet<EcsVelocity>(entities[5]) == nullptr, "ECS structural delta did not remove absent component");
+    kb::tests::Require(target.TryGet<EcsVelocity>(createdPositionOnly) == nullptr,
+        "ECS structural delta added an absent component to the new entity");
 
     const EcsPosition* removedVelocityPosition = target.TryGet<EcsPosition>(entities[5]);
     const EcsPosition* createdPosition = target.TryGet<EcsPosition>(created);
     const EcsVelocity* createdVelocity = target.TryGet<EcsVelocity>(created);
+    const EcsPosition* createdPositionOnlyValue = target.TryGet<EcsPosition>(createdPositionOnly);
     kb::tests::Require(removedVelocityPosition != nullptr, "ECS structural delta removed retained component");
     kb::tests::Require(createdPosition != nullptr && createdVelocity != nullptr, "ECS structural delta missed created entity components");
+    kb::tests::Require(createdPositionOnlyValue != nullptr &&
+            kb::tests::NearlyEqual(createdPositionOnlyValue->x, 710.0F) &&
+            kb::tests::NearlyEqual(createdPositionOnlyValue->y, 711.0F),
+        "ECS structural delta restored invalid position-only entity");
     kb::tests::Require(
         kb::tests::NearlyEqual(createdPosition->x, 700.0F) && kb::tests::NearlyEqual(createdPosition->y, 701.0F),
         "ECS structural delta restored invalid created position");
