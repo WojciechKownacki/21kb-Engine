@@ -18,6 +18,7 @@ inline constexpr std::uint32_t kCreateMaterialFromMaterialType = 2012U;
 inline constexpr std::uint32_t kNewMaterialFunction = 2013U;
 inline constexpr std::uint32_t kNewAudioMixer = 2014U;
 inline constexpr std::uint32_t kNewParticleEffect = 2015U;
+inline constexpr std::uint32_t kNewNativeScript = 2016U;
 inline constexpr std::uint32_t kDirectionalLight = 2101U;
 inline constexpr std::uint32_t kPointLight = 2102U;
 inline constexpr std::uint32_t kSpotLight = 2103U;
@@ -36,6 +37,7 @@ std::uint32_t EditorAssetBrowserNativeCommandMap::Id(EditorAssetContextCommand c
     case EditorAssetContextCommand::Import: return kImport;
     case EditorAssetContextCommand::NewFolder: return kNewFolder;
     case EditorAssetContextCommand::NewLuaScript: return kNewLuaScript;
+    case EditorAssetContextCommand::NewNativeScript: return kNewNativeScript;
     case EditorAssetContextCommand::NewMaterial: return kNewMaterial;
     case EditorAssetContextCommand::NewMaterialFunction: return kNewMaterialFunction;
     case EditorAssetContextCommand::NewMaterialGraph: return kNewMaterialGraph;
@@ -69,6 +71,7 @@ EditorAssetContextCommand EditorAssetBrowserNativeCommandMap::Command(std::uint3
     case kImport: return EditorAssetContextCommand::Import;
     case kNewFolder: return EditorAssetContextCommand::NewFolder;
     case kNewLuaScript: return EditorAssetContextCommand::NewLuaScript;
+    case kNewNativeScript: return EditorAssetContextCommand::NewNativeScript;
     case kNewMaterial: return EditorAssetContextCommand::NewMaterial;
     case kNewMaterialFunction: return EditorAssetContextCommand::NewMaterialFunction;
     case kNewMaterialGraph: return EditorAssetContextCommand::NewMaterialGraph;

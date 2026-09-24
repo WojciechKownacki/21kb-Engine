@@ -499,6 +499,7 @@ public:
     [[nodiscard]] bool FindParticleEffectReferences(kb::assets::AssetId effectAssetId);
     [[nodiscard]] bool ExtractEmbeddedMaterials(kb::assets::AssetId meshAssetId);
     [[nodiscard]] bool CreateLuaScriptAsset(const std::filesystem::path& virtualFolder);
+    [[nodiscard]] bool CreateNativeScriptAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool OpenLuaScript(kb::assets::AssetId id);
     [[nodiscard]] bool OpenAnimationAsset(kb::assets::AssetId id);
     [[nodiscard]] bool OpenParticleEditorAsset(kb::assets::AssetId id);

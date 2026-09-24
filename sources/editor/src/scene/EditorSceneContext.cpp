@@ -2640,6 +2640,18 @@ bool EditorSceneContext::CreateLuaScriptAsset(const std::filesystem::path& virtu
     return true;
 }
 
+bool EditorSceneContext::CreateNativeScriptAsset(const std::filesystem::path& virtualFolder) {
+    EditorScriptAssetGateway gateway{ *scene_, assetBrowser_ };
+    std::string error;
+    const std::optional<std::filesystem::path> path = gateway.CreateNativeScript(virtualFolder, error);
+    if (!path.has_value()) {
+        console_.Error("Scripts", error.empty() ? "C++ script could not be created." : error);
+        return false;
+    }
+    console_.Info("Scripts", "C++ script created: " + path->generic_string());
+    return true;
+}
+
 bool EditorSceneContext::OpenLuaScript(kb::assets::AssetId id) {
     const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(id);
     if (metadata == nullptr) {

@@ -2741,7 +2741,9 @@ ReadScriptValue(
         const std::vector<kb::assets::AssetMetadata> before{
             beforeSpan.begin(), beforeSpan.end() };
         bool created = false;
-        if (*type == "lua_script") {
+        if (*type == "script" || *type == "native_script") {
+            created = state.context.CreateNativeScriptAsset(virtualFolder);
+        } else if (*type == "lua_script") {
             created =
                 state.context.CreateLuaScriptAsset(virtualFolder);
         } else if (*type == "input_action") {

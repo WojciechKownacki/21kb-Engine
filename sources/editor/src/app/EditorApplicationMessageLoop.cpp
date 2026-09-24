@@ -23,6 +23,7 @@
 #include "kb/render/resources/RenderMeshAssetBuilder.hpp"
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
 #include "scene/material_preview/EditorMaterialPreviewMeshFactory.hpp"
+#include "project/EditorProjectPaths.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
 #include "rendering/MaterialPreviewViewportKeys.hpp"
@@ -158,6 +159,11 @@ constexpr int kMaxMessagesPerPump = 128;
 }
 
 [[nodiscard]] std::chrono::steady_clock::duration EditorFrameInterval() noexcept {
+    char uncapped[2]{};
+    if (GetEnvironmentVariableA("KB_EDITOR_BENCHMARK_UNCAPPED", uncapped, 2U) == 1U &&
+        uncapped[0] == '1') {
+        return std::chrono::steady_clock::duration::zero();
+    }
     return std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<double>(1.0 / kEditorTargetFrameRate));
 }
 
@@ -1102,6 +1108,102 @@ VisualStressRun& StressRun() {
     return run;
 }
 
+[[nodiscard]] bool BenchmarkCaptureEnabled() noexcept {
+    static const bool enabled = [] {
+        char value[2]{};
+        return GetEnvironmentVariableA("KB_EDITOR_BENCHMARK_CAPTURE", value, 2U) == 1U && value[0] == '1';
+    }();
+    return enabled;
+}
+
+struct EditorBenchmarkCapture {
+    static constexpr double WarmupSeconds = 10.0;
+    static constexpr double MeasureSeconds = 15.0;
+
+    bool active = false;
+    bool complete = false;
+    std::chrono::steady_clock::time_point started{};
+    std::vector<double> frameTimesMs;
+    double tickTimeMs = 0.0;
+    double runtimeTimeMs = 0.0;
+    double gpuTimeMs = 0.0;
+    std::size_t gpuSamples = 0U;
+
+    void Record(EditorApplicationState& state, double frameMs, double tickMs) {
+        if (!state.playMode.IsPlaying()) {
+            active = false;
+            complete = false;
+            return;
+        }
+        if (complete) return;
+        const auto now = std::chrono::steady_clock::now();
+        if (!active) {
+            active = true;
+            started = now;
+            frameTimesMs.clear();
+            tickTimeMs = runtimeTimeMs = gpuTimeMs = 0.0;
+            gpuSamples = 0U;
+        }
+        const double elapsed = std::chrono::duration<double>(now - started).count();
+        if (elapsed < WarmupSeconds) return;
+        if (elapsed < WarmupSeconds + MeasureSeconds) {
+            frameTimesMs.push_back(frameMs);
+            tickTimeMs += tickMs;
+            const kb::scene::SceneRuntimeHotPathReport hotPath =
+                state.sceneContext.Scene().Runtime().HotPathReport();
+            runtimeTimeMs += static_cast<double>(hotPath.runtimeUpdateNanoseconds) / 1'000'000.0;
+            if (const bgfx::Stats* stats = bgfx::getStats(); stats != nullptr &&
+                stats->gpuTimerFreq > 0 && stats->gpuTimeEnd > stats->gpuTimeBegin) {
+                gpuTimeMs += static_cast<double>(stats->gpuTimeEnd - stats->gpuTimeBegin) *
+                    1000.0 / static_cast<double>(stats->gpuTimerFreq);
+                ++gpuSamples;
+            }
+            return;
+        }
+        complete = true;
+        if (frameTimesMs.empty()) {
+            state.sceneContext.Console().Error("Benchmark", "No Play frames were captured.");
+            return;
+        }
+        std::sort(frameTimesMs.begin(), frameTimesMs.end());
+        const auto percentile = [this](double fraction) {
+            return frameTimesMs[static_cast<std::size_t>(fraction * static_cast<double>(frameTimesMs.size() - 1U))];
+        };
+        char variantSetting[8]{};
+        const bool cppVariant = GetEnvironmentVariableA("KB_EDITOR_BENCHMARK_VARIANT", variantSetting,
+            static_cast<DWORD>(std::size(variantSetting))) == 3U &&
+            std::string_view{ variantSetting } == "Cpp";
+        const std::filesystem::path path = EditorProjectPaths::ProjectRoot() /
+            "BenchmarkResults" / (cppVariant ? "21kb-cpp.csv" : "21kb.csv");
+        std::error_code error;
+        std::filesystem::create_directories(path.parent_path(), error);
+        std::ofstream output{ path, std::ios::out | std::ios::trunc };
+        if (error || !output.is_open()) {
+            state.sceneContext.Console().Error("Benchmark", "Could not write benchmark results.");
+            return;
+        }
+        const double samples = static_cast<double>(frameTimesMs.size());
+        output << "engine,variant,cpu_count,gpu_count,samples,frame_p50_ms,frame_p95_ms,cpu_main_mean_ms,gpu_mean_ms,work_mean_ms,viewport_width,viewport_height\n";
+        output << "21kb," << (cppVariant ? "Cpp" : "Lua") << ",2048,8192," << frameTimesMs.size() << ','
+            << percentile(0.50) << ',' << percentile(0.95) << ','
+            << tickTimeMs / samples << ',';
+        if (gpuSamples != 0U) output << gpuTimeMs / static_cast<double>(gpuSamples);
+        else output << "NA";
+        output << ',' << runtimeTimeMs / samples << ",NA,NA\n";
+        output.flush();
+        if (!output.good()) {
+            state.sceneContext.Console().Error("Benchmark", "Benchmark results write failed.");
+            return;
+        }
+        state.sceneContext.Console().Info("Benchmark", "Results: " + path.string());
+    }
+};
+
+EditorBenchmarkCapture& BenchmarkCapture() {
+    static EditorBenchmarkCapture capture;
+    return capture;
+}
+
 void TickVisualStress(EditorApplicationState& state) {
     if (!VisualStressEnabled()) {
         return;
@@ -1479,6 +1581,9 @@ void EditorApplicationMessageLoop::Run(EditorApplicationState& state) {
         static_cast<void>(TickPointerDragFrame(state));
         const bool sceneFramePresented = TickEditorFrame(state, deltaSeconds);
         const double tickMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tickStart).count();
+        if (BenchmarkCaptureEnabled()) {
+            BenchmarkCapture().Record(state, wallDeltaSeconds * 1000.0, tickMs);
+        }
         if (stressEnabled && state.playMode.IsPlaying()) {
             const VisualStressFrameStages stages = StressFrameStages();
             const double editorOverheadMs = pumpSinceLastSceneFrameMs + std::max(0.0,

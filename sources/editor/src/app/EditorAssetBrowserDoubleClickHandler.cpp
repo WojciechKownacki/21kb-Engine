@@ -15,6 +15,7 @@
 #include "engine/scene/SkeletalMeshAssetIO.hpp"
 #include "engine/scene/SkeletonAssetIO.hpp"
 #include "engine/scene/TimelineAssetIO.hpp"
+#include "engine/script/ScriptAsset.hpp"
 #include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
 #include "rendering/ProjectFilesAssetIconResolver.hpp"
 #include "scene/EditorSceneContext.hpp"
@@ -85,6 +86,23 @@ EditorAssetBrowserDoubleClickResult EditorAssetBrowserDoubleClickHandler::OpenAs
         return sceneContext.OpenLuaScript(metadata->id)
             ? EditorAssetBrowserDoubleClickResult::ExternalScriptOpened
             : EditorAssetBrowserDoubleClickResult::None;
+    }
+    if (metadata->type == kb::script::ScriptAssetTypes::NativeBehaviour) {
+        const std::filesystem::path descriptorPath = ResolveAssetPath(*metadata, manager);
+        const auto descriptor = manager.Load<kb::script::NativeBehaviourDescriptor>(metadata->id);
+        if (!descriptor.IsLoaded()) {
+            sceneContext.Console().Error("Scripts", manager.LastError());
+            return EditorAssetBrowserDoubleClickResult::None;
+        }
+        const std::filesystem::path sourcePath = descriptor->sourcePath.empty()
+            ? descriptorPath
+            : descriptor->sourcePath.is_absolute() ? descriptor->sourcePath : descriptorPath.parent_path() / descriptor->sourcePath;
+        std::string error;
+        if (!EditorExternalCodeLauncher::OpenProjectFile(EditorProjectPaths::ProjectRoot(), sourcePath.lexically_normal(), error)) {
+            sceneContext.Console().Error("Scripts", error);
+            return EditorAssetBrowserDoubleClickResult::None;
+        }
+        return EditorAssetBrowserDoubleClickResult::ExternalScriptOpened;
     }
         // The Project Files glyph and its activation must classify the two
         // skeletal document kinds identically.
