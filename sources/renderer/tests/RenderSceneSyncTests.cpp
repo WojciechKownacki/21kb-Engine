@@ -24,6 +24,7 @@
 #include "engine/scene/WorldBackdropComponent.hpp"
 #include "engine/scene/AmbientRadianceComponent.hpp"
 #include "engine/scene/DetailSwitchComponent.hpp"
+#include "engine/scene/DrawD3DeformedGeometryComponent.hpp"
 #include "engine/scene/FacingPanelComponent.hpp"
 #include "engine/scene/SpaceStrokeComponent.hpp"
 #include "engine/scene/HistoryRibbonComponent.hpp"
@@ -49,10 +50,14 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <span>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 namespace kb::render::tests {
@@ -2537,15 +2542,30 @@ void RunUpdateMeshTransformRefreshesInstanceInPlaceTest() {
     Require(renderScene.Stats().transformFallbackUpdateCount == 0U, "UpdateMeshTransform fell back unexpectedly");
     Require(!renderScene.UpdateMeshTransform(999U, model), "UpdateMeshTransform should return false for a missing entity");
 
-    // After a structural change (new proxy) the cache is dirty, so the next
-    // transform update falls back to invalidation.
+    // Adding a visible proxy to a clean draw group keeps existing locations valid.
     MeshRenderProxyDesc second{};
     second.entityId = 6U;
     second.meshAssetId = 42U;
     second.materialAssetId = 7U;
     static_cast<void>(renderScene.UpsertMesh(second));
     Require(renderScene.UpdateMeshTransform(5U, model), "UpdateMeshTransform did not find the mesh proxy after structural change");
-    Require(renderScene.Stats().transformFallbackUpdateCount == 1U, "UpdateMeshTransform did not fall back when the cache was dirty");
+    Require(renderScene.Stats().transformInPlaceUpdateCount == 2U, "UpdateMeshTransform rebuilt draw groups after a compatible mesh insertion");
+    Require(renderScene.Stats().transformFallbackUpdateCount == 0U, "UpdateMeshTransform fell back after a compatible mesh insertion");
+    Require(renderScene.DrawGroups()[0].instances.size() == 2U, "Mesh insertion did not append the second instance");
+
+    MeshRenderProxyDesc third = second;
+    third.entityId = 7U;
+    third.materialAssetId = 8U;
+    static_cast<void>(renderScene.UpsertMesh(third));
+    Require(renderScene.DrawGroups().size() == 2U && renderScene.DrawGroups()[1].instances.size() == 1U,
+        "Mesh insertion did not create a new material draw group");
+    MeshRenderProxyDesc hidden = third;
+    hidden.entityId = 8U;
+    hidden.visible = false;
+    static_cast<void>(renderScene.UpsertMesh(hidden));
+    Require(renderScene.DrawGroups()[1].instances.size() == 1U, "Hidden mesh insertion changed visible instances");
+    Require(renderScene.RemoveMesh(6U), "Mesh removal did not find appended proxy");
+    Require(renderScene.DrawGroups()[0].instances.size() == 1U, "Draw group rebuild kept removed instance");
 }
 
 void RunSyncMeshWorldAffinesPushesColumnarTransformTest() {
@@ -2817,12 +2837,231 @@ void RunSceneRenderVisibilityPublisherBuildsFrameTest() {
     Require(frame.entries.size() == 4U, "LIB-144 publisher must keep one entry per real mesh proxy under a camera");
     Require(!frame.entries[1].visible, "LIB-144 publisher must mask-reject a proxy whose layer is outside the camera's cullingMask");
     Require(frame.entries[2].visible, "LIB-144 publisher must keep a mask-passing, visible proxy visible (invalid bounds are never frustum-culled)");
+
+    const auto requireOrderedEntries = [&](std::span<const std::uint64_t> expected) {
+        SceneRenderVisibilityPublisher::BuildFrame(renderScene, nullptr, 5U, 0U, 64U, 64U, nullptr, nullptr, frame);
+        Require(frame.entries.size() == expected.size(), "Visibility feedback changed its live mesh count");
+        for (std::size_t index = 0U; index < expected.size(); ++index) {
+            Require(frame.entries[index].entityId == expected[index],
+                "Visibility feedback lost deterministic entity order after a proxy mutation");
+        }
+    };
+    static_cast<void>(renderScene.UpsertMesh(MeshRenderProxyDesc{
+        .entityId = 45U, .meshAssetId = 1U, .model = identity, .visible = true, .layer = 1U }));
+    requireOrderedEntries(std::array<std::uint64_t, 5U>{3U, 6U, 9U, 42U, 45U});
+    Require(renderScene.RemoveMesh(9U), "Visibility feedback could not remove an existing mesh proxy");
+    requireOrderedEntries(std::array<std::uint64_t, 4U>{3U, 6U, 42U, 45U});
+    static_cast<void>(renderScene.UpsertMesh(MeshRenderProxyDesc{
+        .entityId = 4U, .meshAssetId = 1U, .model = identity, .visible = true, .layer = 1U }));
+    requireOrderedEntries(std::array<std::uint64_t, 5U>{3U, 4U, 6U, 42U, 45U});
+    const std::array<std::uint64_t, 3U> keep{3U, 4U, 6U};
+    Require(renderScene.RemoveMeshesNotInSorted(keep) == 2U,
+        "Visibility feedback bulk removal did not remove stale mesh proxies");
+    requireOrderedEntries(keep);
+
+    RenderScene copied = renderScene;
+    RenderScene moved = std::move(copied);
+    kb::scene::SceneRenderVisibilityFrame movedFrame;
+    SceneRenderVisibilityPublisher::BuildFrame(moved, nullptr, 5U, 0U, 64U, 64U, nullptr, nullptr, movedFrame);
+    Require(movedFrame.entries.size() == frame.entries.size(),
+        "Visibility feedback copy/move changed the mesh proxy count");
+    for (std::size_t index = 0U; index < frame.entries.size(); ++index) {
+        Require(movedFrame.entries[index].entityId == frame.entries[index].entityId &&
+                movedFrame.entries[index].visible == frame.entries[index].visible,
+            "Visibility feedback copy/move changed ordered mesh visibility");
+    }
+}
+
+[[nodiscard]] bool RunRenderSceneSpawnBenchmark() {
+#if defined(_WIN32)
+    char* benchmarkFlag = nullptr;
+    std::size_t benchmarkFlagLength = 0U;
+    static_cast<void>(_dupenv_s(&benchmarkFlag, &benchmarkFlagLength, "KB_RENDER_SCENE_SPAWN_BENCH"));
+    const bool enabled = benchmarkFlag != nullptr;
+    std::free(benchmarkFlag);
+#else
+    const bool enabled = std::getenv("KB_RENDER_SCENE_SPAWN_BENCH") != nullptr;
+#endif
+    if (!enabled) return false;
+    constexpr std::size_t initialCount = 10'000U;
+    constexpr std::size_t frameCount = 60U;
+    constexpr std::size_t additionsPerFrame = 17U;
+    RenderScene renderScene;
+    MeshRenderProxyDesc desc{};
+    desc.meshAssetId = 42U;
+    desc.materialAssetId = 7U;
+    desc.visible = true;
+    for (std::size_t index = 0U; index < initialCount; ++index) {
+        desc.entityId = index + 1U;
+        desc.model[12] = static_cast<float>(index);
+        static_cast<void>(renderScene.UpsertMesh(desc));
+    }
+    static_cast<void>(renderScene.DrawGroups());
+    std::array<double, frameCount> groupTimesMs{};
+    for (std::size_t frame = 0U; frame < frameCount; ++frame) {
+        for (std::size_t index = 0U; index < additionsPerFrame; ++index) {
+            desc.entityId = initialCount + frame * additionsPerFrame + index + 1U;
+            desc.model[12] = static_cast<float>(desc.entityId - 1U);
+            static_cast<void>(renderScene.UpsertMesh(desc));
+        }
+        const auto begin = std::chrono::steady_clock::now();
+        const auto& groups = renderScene.DrawGroups();
+        groupTimesMs[frame] = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count();
+        Require(groups.size() == 1U && groups[0].instances.size() == initialCount + (frame + 1U) * additionsPerFrame,
+            "RenderScene spawn benchmark lost mesh instances");
+    }
+    std::sort(groupTimesMs.begin(), groupTimesMs.end());
+    std::fprintf(stderr, "render_scene_spawn_bench initial=%zu frames=%zu add_per_frame=%zu median_draw_groups_ms=%.3f p95_draw_groups_ms=%.3f\n",
+        initialCount, frameCount, additionsPerFrame, groupTimesMs[frameCount / 2U], groupTimesMs[frameCount * 95U / 100U]);
+
+    constexpr std::size_t syncInitialCount = 5'000U;
+    constexpr std::size_t syncFrameCount = 20U;
+    kb::scene::Scene scene;
+    for (std::size_t index = 0U; index < syncInitialCount; ++index) {
+        const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Bench Mesh" });
+        scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{ .meshAssetId = 42U, .materialAssetId = 7U });
+    }
+    EcsRenderSceneSynchronizer synchronizer;
+    RenderScene fullSyncScene;
+    RenderScene deltaSyncScene;
+    synchronizer.Sync(scene, fullSyncScene);
+    synchronizer.Sync(scene, deltaSyncScene);
+    static_cast<void>(fullSyncScene.DrawGroups());
+    static_cast<void>(deltaSyncScene.DrawGroups());
+    std::array<double, syncFrameCount> fullSyncTimesMs{};
+    std::array<double, syncFrameCount> deltaSyncTimesMs{};
+    for (std::size_t frame = 0U; frame < syncFrameCount; ++frame) {
+        std::array<std::uint64_t, additionsPerFrame> addedIds{};
+        for (std::size_t index = 0U; index < additionsPerFrame; ++index) {
+            const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Bench Mesh" });
+            scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{ .meshAssetId = 42U, .materialAssetId = 7U });
+            addedIds[index] = entity.Id();
+        }
+        auto begin = std::chrono::steady_clock::now();
+        synchronizer.Sync(scene, fullSyncScene);
+        fullSyncTimesMs[frame] = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count();
+        begin = std::chrono::steady_clock::now();
+        synchronizer.SyncEntities(scene, deltaSyncScene, addedIds);
+        deltaSyncTimesMs[frame] = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count();
+        Require(fullSyncScene.Stats().meshProxyCount == syncInitialCount + (frame + 1U) * additionsPerFrame &&
+                deltaSyncScene.Stats().meshProxyCount == fullSyncScene.Stats().meshProxyCount,
+            "Render proxy sync benchmark lost live mesh proxies");
+    }
+    std::sort(fullSyncTimesMs.begin(), fullSyncTimesMs.end());
+    std::sort(deltaSyncTimesMs.begin(), deltaSyncTimesMs.end());
+    std::fprintf(stderr, "render_proxy_spawn_bench initial=%zu frames=%zu add_per_frame=%zu full_median_ms=%.3f full_p95_ms=%.3f delta_median_ms=%.3f delta_p95_ms=%.3f\n",
+        syncInitialCount, syncFrameCount, additionsPerFrame,
+        fullSyncTimesMs[syncFrameCount / 2U], fullSyncTimesMs[syncFrameCount * 95U / 100U],
+        deltaSyncTimesMs[syncFrameCount / 2U], deltaSyncTimesMs[syncFrameCount * 95U / 100U]);
+    return true;
+}
+
+void RunRenderSceneResourceGroupCoverageTest() {
+    RenderScene renderScene;
+    static_cast<void>(renderScene.UpsertMesh(MeshRenderProxyDesc{
+        .entityId = 1U, .meshAssetId = 42U, .materialAssetId = 7U, .visible = true,
+    }));
+    static_cast<void>(renderScene.UpsertMesh(MeshRenderProxyDesc{
+        .entityId = 2U, .meshAssetId = 42U, .materialAssetId = 7U, .visible = true,
+    }));
+    auto coverage = renderScene.ResourceGroupsCoverMeshProxies();
+    Require(coverage.meshes && coverage.materials && renderScene.DrawGroups().size() == 1U,
+        "Identical visible proxies must be covered by one resource draw group");
+
+    static_cast<void>(renderScene.UpsertMesh(MeshRenderProxyDesc{
+        .entityId = 3U, .meshAssetId = 43U, .materialAssetId = 8U, .visible = false,
+    }));
+    coverage = renderScene.ResourceGroupsCoverMeshProxies();
+    Require(!coverage.meshes && !coverage.materials,
+        "An invisible proxy must retain the full resource ensure path");
+    Require(renderScene.RemoveMesh(3U), "Resource coverage test could not remove the hidden proxy");
+
+    static_cast<void>(renderScene.UpsertMesh(MeshRenderProxyDesc{
+        .entityId = 4U, .meshAssetId = 44U, .skeletalMeshAssetId = 45U,
+        .materialAssetId = 7U, .visible = true, .morphDeformationEnabled = true,
+    }));
+    coverage = renderScene.ResourceGroupsCoverMeshProxies();
+    Require(!coverage.meshes && coverage.materials,
+        "A morph proxy must retain per-proxy mesh updates without disabling material grouping");
+    static_cast<void>(renderScene.UpsertMesh(MeshRenderProxyDesc{
+        .entityId = 4U, .meshAssetId = 44U, .materialAssetId = 7U, .visible = true,
+    }));
+    coverage = renderScene.ResourceGroupsCoverMeshProxies();
+    Require(coverage.meshes && coverage.materials,
+        "Removing morph state must restore resource grouping after a draw-group rebuild");
+
+    static_cast<void>(renderScene.UpsertMesh(MeshRenderProxyDesc{
+        .entityId = 5U, .meshAssetId = 42U, .materialAssetId = 7U,
+        .materialSlotAssetIds = {9U}, .materialSlotOverrideCount = 1U, .visible = true,
+    }));
+    coverage = renderScene.ResourceGroupsCoverMeshProxies();
+    Require(coverage.meshes && !coverage.materials,
+        "A material slot override must retain per-proxy material ensures");
+    Require(renderScene.RemoveMesh(5U), "Resource coverage test could not remove the override proxy");
+    coverage = renderScene.ResourceGroupsCoverMeshProxies();
+    Require(coverage.meshes && coverage.materials,
+        "Removing a material override must restore resource grouping");
+
+    const std::array<float, 16> identity{
+        1.0F, 0.0F, 0.0F, 0.0F,
+        0.0F, 1.0F, 0.0F, 0.0F,
+        0.0F, 0.0F, 1.0F, 0.0F,
+        0.0F, 0.0F, 0.0F, 1.0F,
+    };
+    static_cast<void>(renderScene.UpsertSurfaceCast(SurfaceCastRenderProxyDesc{
+        .entityId = 6U, .materialAssetId = 10U, .model = identity,
+    }));
+    coverage = renderScene.ResourceGroupsCoverMeshProxies();
+    Require(coverage.meshes && !coverage.materials,
+        "Surface cast material replacement must retain the original material ensure path");
+    Require(renderScene.RemoveSurfaceCast(6U), "Resource coverage test could not remove the surface cast");
+    coverage = renderScene.ResourceGroupsCoverMeshProxies();
+    Require(coverage.meshes && coverage.materials,
+        "Removing a surface cast must restore resource grouping");
+}
+
+void RunDeformedPaletteSyncTracksComponentChangesTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "Deformed mesh transition",
+    });
+    scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{
+        .meshAssetId = 42U,
+        .materialAssetId = 7U,
+    });
+    RenderScene renderScene;
+    EcsRenderSceneSynchronizer synchronizer;
+    synchronizer.Sync(scene, renderScene);
+    synchronizer.SyncDeformedMeshPalettes(scene, renderScene);
+    const MeshRenderProxy* proxy = renderScene.FindMeshByEntity(entity.Id());
+    Require(proxy != nullptr && proxy->desc.meshAssetId == 42U && proxy->desc.visible,
+        "Empty deformed palette sync changed an ordinary mesh proxy");
+
+    Require(scene.Components().DeformedGeometries().Set(entity, kb::scene::DrawD3DeformedGeometryComponent{
+        .skeletalMeshAssetId = 77U,
+        .enabled = true,
+    }), "Could not add deformed geometry during palette sync test");
+    synchronizer.SyncDeformedMeshPalettes(scene, renderScene);
+    proxy = renderScene.FindMeshByEntity(entity.Id());
+    Require(proxy != nullptr && proxy->desc.meshAssetId == 77U && !proxy->desc.visible &&
+            !proxy->desc.currentSkinningPalette.IsValid(),
+        "Deformed palette sync did not consume a newly added component or reject its missing palette");
+
+    scene.Components().DeformedGeometries().Remove(entity);
+    const std::array dirtyEntities{ entity.Id() };
+    synchronizer.SyncEntities(scene, renderScene, dirtyEntities);
+    synchronizer.SyncDeformedMeshPalettes(scene, renderScene);
+    proxy = renderScene.FindMeshByEntity(entity.Id());
+    Require(proxy != nullptr && proxy->desc.meshAssetId == 42U && proxy->desc.visible,
+        "Deformed palette sync retained a removed component instead of the ordinary mesh proxy");
 }
 
 } // namespace
 
 void RunRenderSceneSyncTests() {
+    if (RunRenderSceneSpawnBenchmark()) return;
     RunCreatesStableRenderProxiesTest();
+    RunDeformedPaletteSyncTracksComponentChangesTest();
     RunEcsSyncPropagatesDetailSwitchPolicyTest();
     RunRenderScenePrimaryCameraSelectionRespectsViewportAndPriorityTest();
     RunEcsSyncPropagatesCullingMaskAndClearSettingsTest();
@@ -2845,6 +3084,7 @@ void RunRenderSceneSyncTests() {
     RunDeletesRemovedComponentsAndEntitiesTest();
     RunRenderResourceMapRequiresExplicitBindingsTest();
     RunRenderSceneBuildsMeshMaterialDrawGroupsTest();
+    RunRenderSceneResourceGroupCoverageTest();
     RunRenderSceneBuildsLargeMeshMaterialDrawGroupsTest();
     RunRenderSceneExpandsGeometrySwarmIntoExistingDrawGroupTest();
     RunRenderSceneExpandsSpaceStrokeIntoExistingDrawGroupTest();

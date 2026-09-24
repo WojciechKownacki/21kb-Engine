@@ -1,5 +1,6 @@
 #include "RendererTestSupport.hpp"
 
+#include "engine/assets/AssetId.hpp"
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/particles/ParticlePlayback.hpp"
 #include "engine/scene/CameraComponent.hpp"
@@ -18,6 +19,7 @@
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/ScenePostProcessAccess.hpp"
 #include "engine/scene/SceneRenderFeedback.hpp"
+#include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneUI.hpp"
 #include "engine/scene/SceneUIComponents.hpp"
@@ -26,6 +28,7 @@
 #include "engine/scene/TransformComponent.hpp"
 #include "kb/render/Renderer.hpp"
 #include "kb/render/RenderSurface.hpp"
+#include "kb/render/SceneDepthPolicy.hpp"
 #include "kb/render/SceneRenderTarget.hpp"
 #include "kb/render/overlay/SceneGizmoPass.hpp"
 #include "kb/render/post/ScenePostProcessTargets.hpp"
@@ -33,6 +36,7 @@
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialAssetWriter.hpp"
 #include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialGraphDocument.hpp"
 #include "kb/render/resources/RenderMaterialGraphShaderArtifact.hpp"
 #include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialInstanceAssetWriter.hpp"
@@ -47,6 +51,8 @@
 #include <bx/math.h>
 
 #include <algorithm>
+#include <chrono>
+#include <cstdio>
 #include <limits>
 #include <array>
 #include <cmath>
@@ -55,7 +61,10 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <sstream>
+#include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #if defined(_WIN32)
@@ -90,7 +99,8 @@ public:
 #if defined(_WIN32)
 class NativeTestSurface final : public RenderSurface {
 public:
-    NativeTestSurface() {
+    explicit NativeTestSurface(std::uint16_t width = kExtent, std::uint16_t height = kExtent)
+        : width_(width), height_(height) {
         window_ = CreateWindowExW(
             0U,
             L"STATIC",
@@ -98,8 +108,8 @@ public:
             WS_OVERLAPPEDWINDOW,
             0,
             0,
-            static_cast<int>(kExtent),
-            static_cast<int>(kExtent),
+            static_cast<int>(width_),
+            static_cast<int>(height_),
             nullptr,
             nullptr,
             GetModuleHandleW(nullptr),
@@ -120,11 +130,11 @@ public:
     }
 
     [[nodiscard]] std::uint32_t Width() const noexcept override {
-        return kExtent;
+        return width_;
     }
 
     [[nodiscard]] std::uint32_t Height() const noexcept override {
-        return kExtent;
+        return height_;
     }
 
     [[nodiscard]] void* NativeWindowHandle() const noexcept override {
@@ -139,6 +149,8 @@ public:
 
 private:
     HWND window_ = nullptr;
+    std::uint16_t width_ = kExtent;
+    std::uint16_t height_ = kExtent;
 };
 
 class ParticleMeshReadbackTarget final {
@@ -152,24 +164,28 @@ public:
     ParticleMeshReadbackTarget(const ParticleMeshReadbackTarget&) = delete;
     ParticleMeshReadbackTarget& operator=(const ParticleMeshReadbackTarget&) = delete;
 
-    [[nodiscard]] bool Initialize() {
+    [[nodiscard]] bool Initialize(
+        std::uint16_t width = NativeTestSurface::kExtent,
+        std::uint16_t height = NativeTestSurface::kExtent) {
+        width_ = width;
+        height_ = height;
         color_ = bgfx::createTexture2D(
-            NativeTestSurface::kExtent,
-            NativeTestSurface::kExtent,
+            width_,
+            height_,
             false,
             1U,
             bgfx::TextureFormat::RGBA8,
             BGFX_TEXTURE_RT | BGFX_TEXTURE_BLIT_DST);
         depth_ = bgfx::createTexture2D(
-            NativeTestSurface::kExtent,
-            NativeTestSurface::kExtent,
+            width_,
+            height_,
             false,
             1U,
             bgfx::TextureFormat::D24S8,
             BGFX_TEXTURE_RT);
         readback_ = bgfx::createTexture2D(
-            NativeTestSurface::kExtent,
-            NativeTestSurface::kExtent,
+            width_,
+            height_,
             false,
             1U,
             bgfx::TextureFormat::RGBA8,
@@ -194,7 +210,7 @@ public:
             .depthTexture = depth_,
             .viewport = RenderViewportDesc{
                 .id = RenderViewportId{1U},
-                .extent = RenderExtent{NativeTestSurface::kExtent, NativeTestSurface::kExtent},
+                .extent = RenderExtent{width_, height_},
                 .viewportIndex = 0U,
             },
             .colorFormat = bgfx::TextureFormat::RGBA8,
@@ -202,8 +218,8 @@ public:
     }
 
     [[nodiscard]] std::vector<std::uint8_t> ReadPixels() const {
-        bgfx::blit(kReadbackView, readback_, 0U, 0U, color_, 0U, 0U, NativeTestSurface::kExtent, NativeTestSurface::kExtent);
-        std::vector<std::uint8_t> pixels(static_cast<std::size_t>(NativeTestSurface::kExtent) * NativeTestSurface::kExtent * 4U);
+        bgfx::blit(kReadbackView, readback_, 0U, 0U, color_, 0U, 0U, width_, height_);
+        std::vector<std::uint8_t> pixels(static_cast<std::size_t>(width_) * height_ * 4U);
         const std::uint32_t readyFrame = bgfx::readTexture(readback_, pixels.data());
         std::uint32_t frame = bgfx::frame();
         for (std::uint32_t guard = 0U; frame < readyFrame && guard < 8U; ++guard) {
@@ -239,6 +255,8 @@ private:
     bgfx::TextureHandle color_ = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle depth_ = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle readback_ = BGFX_INVALID_HANDLE;
+    std::uint16_t width_ = NativeTestSurface::kExtent;
+    std::uint16_t height_ = NativeTestSurface::kExtent;
 };
 
 class FinalCompositeReadbackTarget final {
@@ -413,6 +431,16 @@ void WriteTriangleObj(const std::filesystem::path& path) {
         << "vt 0.5 1\n"
         << "vn 0 0 1\n"
         << "f 1/1/1 2/2/1 3/3/1\n";
+}
+
+void WriteBoundsTriangleObj(const std::filesystem::path& path) {
+    std::ofstream output{path, std::ios::trunc};
+    output << "v -0.1 -0.1 -0.1\n"
+           << "v 0.1 -0.1 0.1\n"
+           << "v 0.0 0.1 0.0\n"
+           << "vt 0 0\nvt 1 0\nvt 0.5 1\n"
+           << "vn 0 0 1\n"
+           << "f 1/1/1 2/2/1 3/3/1\n";
 }
 
 void WriteTexture(const std::filesystem::path& path, std::uint8_t r, std::uint8_t g, std::uint8_t b) {
@@ -2490,33 +2518,64 @@ void RunRendererKeepsUIWhenTextCannotBePreparedTest() {
 // readback anywhere. IdentityCamera()'s identity view*projection extracts the NDC unit cube
 // as the frustum, so |x|,|y|,|z| <= 1 is inside.
 void RunRendererPublishesSceneVisibilityFeedbackTest() {
-    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_visibility_feedback";
+    const std::filesystem::path root = std::filesystem::temp_directory_path() /
+        ("21kb_renderer_visibility_feedback_" +
+            std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     std::error_code error;
-    std::filesystem::remove_all(root, error);
     std::filesystem::create_directories(root, error);
     Require(!error, "Visibility feedback test could not create temp root");
     const std::filesystem::path meshPath = root / "triangle.obj";
-    WriteTriangleObj(meshPath);
+    const std::filesystem::path wideMeshPath = root / "wide.obj";
+    WriteBoundsTriangleObj(meshPath);
+    {
+        std::ofstream wide{wideMeshPath, std::ios::trunc};
+        Require(wide.is_open(), "Visibility feedback test could not write its second mesh");
+        wide << "v -0.5 -0.1 -0.1\n"
+             << "v 0.5 -0.1 0.1\n"
+             << "v 0.0 0.1 0.0\n"
+             << "vt 0 0\nvt 1 0\nvt 0.5 1\n"
+             << "vn 0 0 1\n"
+             << "f 1/1/1 2/2/1 3/3/1\n";
+    }
 
     kb::scene::Scene scene;
     kb::assets::AssetManager& manager = scene.Assets().Manager();
     Require(manager.RegisterLoader(std::make_unique<RenderMeshAssetLoader>()), "Visibility feedback test could not register mesh loader");
     Require(manager.Mounts().Mount("Game", root), "Visibility feedback test could not mount asset root");
-    Require(manager.DiscoverMountedAssets() >= 1U, "Visibility feedback test did not discover the mesh asset");
+    Require(manager.DiscoverMountedAssets() >= 2U, "Visibility feedback test did not discover both mesh assets");
     const kb::assets::AssetMetadata* meshMetadata = manager.Registry().FindByPath("/Game/triangle.obj");
-    Require(meshMetadata != nullptr && meshMetadata->type == "RenderMesh", "Visibility feedback test discovered wrong mesh metadata");
+    const kb::assets::AssetMetadata* wideMeshMetadata = manager.Registry().FindByPath("/Game/wide.obj");
+    Require(meshMetadata != nullptr && meshMetadata->type == "RenderMesh" &&
+            wideMeshMetadata != nullptr && wideMeshMetadata->type == "RenderMesh",
+        "Visibility feedback test discovered wrong mesh metadata");
     const std::uint64_t meshAssetId = meshMetadata->id.value;
+    const std::uint64_t wideMeshAssetId = wideMeshMetadata->id.value;
 
     const kb::scene::SceneEntity onScreenEntity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
         .name = "On Screen Mesh",
         .transform = TransformAt(0.0F, 0.0F, 0.0F),
     });
     scene.Components().MeshRenderers().Set(onScreenEntity, kb::scene::MeshRendererComponent{ .meshAssetId = meshAssetId });
+    const kb::scene::SceneEntity wideEntity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "Wide Mesh",
+        .transform = TransformAt(0.0F, 0.0F, 0.0F),
+    });
+    scene.Components().MeshRenderers().Set(wideEntity, kb::scene::MeshRendererComponent{ .meshAssetId = wideMeshAssetId });
     const kb::scene::SceneEntity offScreenEntity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
         .name = "Off Screen Mesh",
         .transform = TransformAt(100.0F, 0.0F, 0.0F),
     });
     scene.Components().MeshRenderers().Set(offScreenEntity, kb::scene::MeshRendererComponent{ .meshAssetId = meshAssetId });
+    kb::scene::TransformComponent rotatedTransform = TransformAt(0.0F, 0.0F, 0.0F);
+    rotatedTransform.localRotation = {0.0F, 0.0F, 0.258819045F, 0.965925826F};
+    rotatedTransform.worldRotation = rotatedTransform.localRotation;
+    rotatedTransform.localScale = {2.0F, 1.0F, 1.0F};
+    rotatedTransform.worldScale = rotatedTransform.localScale;
+    const kb::scene::SceneEntity rotatedEntity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "Rotated Mesh",
+        .transform = rotatedTransform,
+    });
+    scene.Components().MeshRenderers().Set(rotatedEntity, kb::scene::MeshRendererComponent{ .meshAssetId = meshAssetId });
     const kb::scene::SceneEntity hiddenEntity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
         .name = "Hidden Mesh",
         .transform = TransformAt(0.0F, 0.0F, 0.0F),
@@ -2560,18 +2619,28 @@ void RunRendererPublishesSceneVisibilityFeedbackTest() {
     Require(!kb::scene::SceneRenderFeedback::IsVisible(scene, hiddenEntity), "A VisibilityComponent-disabled mesh entity must be reported not visible");
     Require(!kb::scene::SceneRenderFeedback::IsVisible(scene, meshlessEntity), "An entity with no MeshRenderer must have no visibility entry");
 
-    // Bounds come from the real mesh resource (triangle.obj, ~0.14 world radius),
+    // Bounds come from the real mesh resource (triangle.obj),
     // transformed by each entity's own model matrix - tracked even for culled/hidden
     // entities (bounds answer "where is it", not "was it drawn").
     const kb::scene::SceneRenderBounds onScreenBounds = kb::scene::SceneRenderFeedback::WorldBounds(scene, onScreenEntity);
     Require(onScreenBounds.IsValid() && onScreenBounds.radius > 0.05F && onScreenBounds.radius < 1.0F,
         "The on-screen entity's world bounds must carry the real mesh-resource bounding sphere");
     Require(std::abs(onScreenBounds.center.x) < 0.2F, "The on-screen entity's world bounds must be centered near its origin transform");
+    const kb::scene::SceneRenderBounds wideBounds = kb::scene::SceneRenderFeedback::WorldBounds(scene, wideEntity);
+    Require(wideBounds.IsValid() && wideBounds.halfExtents.x > onScreenBounds.halfExtents.x * 4.0F,
+        "Visibility feedback reused the first mesh bounds across a different mesh asset");
     const kb::scene::SceneRenderBounds offScreenBounds = kb::scene::SceneRenderFeedback::WorldBounds(scene, offScreenEntity);
     Require(offScreenBounds.IsValid() && std::abs(offScreenBounds.center.x - 100.0F) < 0.2F,
         "The off-screen entity's world bounds must be transformed by its own model matrix");
+    Require(std::abs(offScreenBounds.halfExtents.x - onScreenBounds.halfExtents.x) < 0.001F,
+        "Visibility feedback did not restore the original mesh bounds after another mesh asset");
     Require(kb::scene::SceneRenderFeedback::WorldBounds(scene, hiddenEntity).IsValid(),
         "A hidden entity keeps valid bounds - bounds report placement, not draw status");
+    const kb::scene::SceneRenderBounds rotatedBounds = kb::scene::SceneRenderFeedback::WorldBounds(scene, rotatedEntity);
+    Require(std::abs(rotatedBounds.halfExtents.x - 0.223205F) < 0.005F &&
+            std::abs(rotatedBounds.halfExtents.y - 0.186603F) < 0.005F &&
+            std::abs(rotatedBounds.halfExtents.z - 0.1F) < 0.005F,
+        "A rotated, nonuniformly scaled mesh must publish its world-space box extents");
     Require(!kb::scene::SceneRenderFeedback::WorldBounds(scene, meshlessEntity).IsValid(),
         "An entity with no MeshRenderer must report invalid bounds");
 
@@ -2617,7 +2686,9 @@ void RunRendererPublishesSceneVisibilityFeedbackTest() {
         "A terminal capture result must free the single pending slot for the next request");
 
     renderer.Shutdown();
-    std::filesystem::remove_all(root, error);
+    std::filesystem::remove(meshPath, error);
+    std::filesystem::remove(wideMeshPath, error);
+    std::filesystem::remove(root, error);
 }
 
 // LIB-146: shared harness bits for the render-resource lifecycle tests below - a scene
@@ -5768,10 +5839,1159 @@ void RunMaterialFrameTimeAdvanceTest() {
     Require(nearly(renderer.FrameDeltaSeconds(), 1.0F / 30.0F), "MAT-72: Renderer must retain the per-frame delta seconds");
 }
 
+#if defined(_WIN32)
+void PublishCheckerTexture(kb::assets::AssetManager& manager, kb::assets::AssetId textureId,
+                           const std::filesystem::path& root) {
+    Require(manager.RegisterAsset(kb::assets::AssetMetadata{
+                .id = textureId,
+                .type = "RenderTexture",
+                .name = "Checker",
+                .virtualPath = "/Game/Checker",
+                .physicalPath = root / "runtime_checker_only",
+                .contentHash = 1U,
+                .runtimeLoadable = true,
+            }),
+        "Could not register the in-memory checker texture");
+    auto texture = std::make_shared<RenderTextureAssetData>();
+    texture->width = 64U;
+    texture->height = 64U;
+    texture->colorSpace = RenderTextureAssetColorSpace::Srgb;
+    texture->semantic = RenderTextureAssetSemantic::BaseColor;
+    texture->rgba8.resize(64U * 64U * 4U);
+    for (std::size_t y = 0U; y < 64U; ++y) {
+        for (std::size_t x = 0U; x < 64U; ++x) {
+            const std::size_t offset = (y * 64U + x) * 4U;
+            const bool warm = ((x / 8U) + (y / 8U)) % 2U != 0U;
+            texture->rgba8[offset] = warm ? 255U : 30U;
+            texture->rgba8[offset + 1U] = warm ? 128U : 205U;
+            texture->rgba8[offset + 2U] = warm ? 45U : 245U;
+            texture->rgba8[offset + 3U] = 255U;
+        }
+    }
+    Require(manager.PublishRuntimeAsset(textureId, std::move(texture)),
+        "Could not publish the in-memory checker texture");
+}
+
+void PublishCheckerMaterial(kb::assets::AssetManager& manager, kb::assets::AssetId materialId,
+                            kb::assets::AssetId textureId, const std::filesystem::path& root) {
+    Require(manager.RegisterAsset(kb::assets::AssetMetadata{
+                .id = materialId,
+                .type = "RenderMaterial",
+                .name = "Checker Material",
+                .virtualPath = "/Game/CheckerMaterial",
+                .physicalPath = root / "runtime_checker_material_only",
+                .contentHash = 1U,
+                .runtimeLoadable = true,
+            }),
+        "Could not register the in-memory checker material");
+    auto material = std::make_shared<RenderMaterialAssetData>();
+    material->desc.albedoTextureAssetId = textureId.value;
+    material->desc.roughnessFactor = 0.75F;
+    material->desc.doubleSided = true;
+    material->graph = MakeDefaultRenderMaterialGraphDocument();
+    Require(manager.PublishRuntimeAsset(materialId, std::move(material)),
+        "Could not publish the in-memory checker material");
+}
+
+void WriteStressCubeObj(const std::filesystem::path& path) {
+    std::ofstream cube{path, std::ios::trunc};
+    Require(cube.is_open(), "Could not write the stress cube mesh");
+    cube << "v -0.5 -0.5 -0.5\n"
+         << "v 0.5 -0.5 -0.5\n"
+         << "v 0.5 0.5 -0.5\n"
+         << "v -0.5 0.5 -0.5\n"
+         << "v -0.5 -0.5 0.5\n"
+         << "v 0.5 -0.5 0.5\n"
+         << "v 0.5 0.5 0.5\n"
+         << "v -0.5 0.5 0.5\n"
+         << "vt 0 0\nvt 1 0\nvt 1 1\nvt 0 1\n"
+         << "vn 0 0 1\nvn 0 0 -1\nvn -1 0 0\n"
+         << "vn 1 0 0\nvn 0 1 0\nvn 0 -1 0\n";
+    constexpr std::array<std::array<int, 4>, 6> faces{{
+        {{5, 6, 7, 8}}, {{2, 1, 4, 3}}, {{1, 5, 8, 4}},
+        {{6, 2, 3, 7}}, {{4, 8, 7, 3}}, {{1, 2, 6, 5}},
+    }};
+    for (std::size_t face = 0U; face < faces.size(); ++face) {
+        const auto& v = faces[face];
+        const int n = static_cast<int>(face + 1U);
+        cube << "f " << v[0] << "/1/" << n << ' ' << v[1] << "/2/" << n
+             << ' ' << v[2] << "/3/" << n << '\n';
+        cube << "f " << v[0] << "/1/" << n << ' ' << v[2] << "/3/" << n
+             << ' ' << v[3] << "/4/" << n << '\n';
+    }
+    Require(cube.good(), "Could not finish writing the stress cube mesh");
+}
+
+void RunRendererDrawsPublishedRuntimeTexturePixelsTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() /
+        ("21kb_published_texture_pixels_" + std::to_string(GetCurrentProcessId()) + "_" +
+            std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::error_code error;
+    std::filesystem::create_directories(root, error);
+    Require(!error, "Published texture pixel test could not create its asset directory");
+    {
+        std::ofstream mesh{ root / "triangle.obj", std::ios::trunc };
+        mesh << "v -0.9 -0.9 0\n"
+             << "v 0.9 -0.9 0\n"
+             << "v 0 0.9 0\n"
+             << "vt 0 0\n"
+             << "vt 1 0\n"
+             << "vt 0.5 1\n"
+             << "vn 0 0 1\n"
+             << "f 1/1/1 2/2/1 3/3/1\n";
+    }
+    const kb::assets::AssetId textureId = kb::assets::MakeAssetId("PublishedTexturePixelProof");
+    const kb::assets::AssetId materialId = kb::assets::MakeAssetId("PublishedMaterialPixelProof");
+
+    kb::scene::Scene scene;
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    Require(manager.RegisterLoader(std::make_unique<RenderMeshAssetLoader>()) &&
+            manager.RegisterLoader(std::make_unique<RenderMaterialAssetLoader>()) &&
+            manager.RegisterLoader(std::make_unique<RenderTextureAssetLoader>()),
+        "Published texture pixel test could not register render asset loaders");
+    Require(manager.Mounts().Mount("Game", root) && manager.DiscoverMountedAssets() >= 1U,
+        "Published texture pixel test could not discover its mesh");
+    PublishCheckerTexture(manager, textureId, root);
+    PublishCheckerMaterial(manager, materialId, textureId, root);
+    const ResolvedRuntimeMaterialAsset resolvedMaterial = RuntimeMaterialResolver{}.ResolveAsset(manager, materialId);
+    Require(resolvedMaterial.status == RuntimeMaterialResolveStatus::Resolved &&
+            resolvedMaterial.material.desc.albedoTextureAssetId == textureId.value,
+        "Published checker material did not resolve its texture asset");
+    const kb::assets::AssetMetadata* mesh = manager.Registry().FindByPath("/Game/triangle.obj");
+    const kb::assets::AssetMetadata* material = manager.Registry().Find(materialId);
+    Require(mesh != nullptr && material != nullptr,
+        "Published texture pixel test lost mesh or material metadata");
+    const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "Textured Mesh", .transform = TransformAt(0.0F, 0.0F, 0.0F),
+    });
+    scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{
+        .meshAssetId = mesh->id.value, .materialAssetId = material->id.value, .castsShadow = false,
+    });
+
+    NativeTestSurface surface;
+    Require(surface.IsValid(), "Published texture pixel test could not create a hidden D3D11 surface");
+    DisplayConfig config{};
+    config.syncMode = DisplaySyncMode::Uncapped;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "Published texture pixel test could not initialize renderer");
+    renderer.SetRuntimeAssetDiscoveryEnabled(false);
+    {
+        ParticleMeshReadbackTarget target;
+        Require(target.Initialize(), "Published texture pixel test could not create readback target");
+        const RenderSceneSubmitDesc desc{
+            .target = target.Binding(),
+            .cameraOverride = IdentityCamera(),
+            .meshPassMode = SceneRenderMeshPassMode::OpaqueOnly,
+            .clearRgba = 0x101820FFU,
+            .editorSceneOverlaysEnabled = false,
+            .shadowPassEnabled = false,
+            .postProcessEnabled = false,
+            .selectionMaskEnabled = false,
+            .selectionOutlineEnabled = false,
+        };
+        SubmitLifecycleFrame(renderer, scene, desc, "Published texture pixel test did not submit its mesh");
+        const SceneRenderSubmitStats stats = renderer.LastSceneSubmitStats();
+        std::fprintf(stderr,
+            "published_texture_pixels visible=%u submitted=%u draws=%u dropped=%u missing_binding=%u missing_resource=%u dimension_mismatch=%u\n",
+            stats.visibleMeshCount, stats.submittedMeshCount, stats.submittedDrawCallCount,
+            stats.droppedInstanceCount, stats.missingTextureBindingCount,
+            stats.missingTextureResourceCount, stats.textureDimensionMismatchCount);
+        Require(stats.visibleMeshCount == 1U && stats.submittedMeshCount == 1U &&
+                stats.submittedDrawCallCount == 1U && stats.droppedInstanceCount == 0U &&
+                stats.missingTextureBindingCount == 0U &&
+                stats.missingTextureResourceCount == 0U && stats.textureDimensionMismatchCount == 0U,
+            "Published texture pixel test did not bind one textured mesh draw");
+        const SceneRenderResourceMap* resourceMap = renderer.SceneResourceMap();
+        const RenderResourceRegistry* resources = renderer.SceneResources();
+        const Renderer::RuntimeSceneResourceStats resourceStats = renderer.RuntimeResourceStats();
+        const RenderMaterialResource* boundMaterial = resourceMap != nullptr && resources != nullptr
+            ? resources->FindMaterial(resourceMap->ResolveMaterial(materialId.value)) : nullptr;
+        std::fprintf(stderr,
+            "published_material_state loaded=%u fallback=%u errors=%u diagnostics=%u textures=%u albedo_asset=%llu\n",
+            resourceStats.materialLoadedCount, resourceStats.materialFallbackCount,
+            resourceStats.materialErrorCount, resourceStats.materialResolverDiagnosticCount,
+            resourceStats.cachedTextureCount,
+            static_cast<unsigned long long>(boundMaterial != nullptr ? boundMaterial->albedoTextureAssetId : 0U));
+        Require(resourceStats.materialFallbackCount == 0U && resourceStats.materialErrorCount == 0U &&
+                boundMaterial != nullptr && boundMaterial->albedoTextureAssetId == textureId.value,
+            "Published checker material fell back or lost its texture asset");
+        Require(resourceMap != nullptr && resources != nullptr &&
+                resources->FindTexture(resourceMap->ResolveTexture(textureId.value, RenderTextureColorSpace::Srgb)) != nullptr,
+            "Published texture pixel test did not create the runtime GPU texture");
+        const std::vector<std::uint8_t> pixels = target.ReadPixels();
+        std::size_t warmPixels = 0U;
+        std::size_t coolPixels = 0U;
+        std::size_t changedPixels = 0U;
+        const std::array<std::uint8_t, 3U> background{pixels[0], pixels[1], pixels[2]};
+        int maxRed = 0;
+        int maxBlue = 0;
+        for (std::size_t offset = 0U; offset < pixels.size(); offset += 4U) {
+            const int red = pixels[offset];
+            const int blue = pixels[offset + 2U];
+            warmPixels += red > blue * 2 && red > 24;
+            coolPixels += blue > red * 2 && blue > 24;
+            changedPixels += pixels[offset] != background[0] || pixels[offset + 1U] != background[1] ||
+                pixels[offset + 2U] != background[2];
+            maxRed = std::max(maxRed, red);
+            maxBlue = std::max(maxBlue, blue);
+        }
+        std::fprintf(stderr, "published_texture_pixels warm=%zu cool=%zu changed=%zu max_red=%d max_blue=%d background=%u,%u,%u center=%u,%u,%u\n",
+            warmPixels, coolPixels, changedPixels, maxRed, maxBlue,
+            background[0], background[1], background[2],
+            pixels[(32U * 64U + 32U) * 4U], pixels[(32U * 64U + 32U) * 4U + 1U],
+            pixels[(32U * 64U + 32U) * 4U + 2U]);
+        Require(warmPixels >= 8U && coolPixels >= 8U,
+            "Published texture pixel test did not show both checker colors on the rendered mesh");
+    }
+    renderer.Shutdown();
+    std::filesystem::remove(root / "triangle.obj", error);
+    std::filesystem::remove(root, error);
+}
+#endif
+
 void RunRendererParticleMeshSnapshotSubmitTest() {
     RunRendererSubmitsParticleMeshSnapshotAsOneDrawTest();
 #if defined(_WIN32)
     RunRendererDrawsParticleMeshSnapshotPixelsTest();
+    RunRendererDrawsPublishedRuntimeTexturePixelsTest();
+#endif
+}
+
+void RunRendererResourceGroupEnsureFallbacksTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() /
+        ("21kb_resource_group_ensure_" +
+            std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::error_code error;
+    std::filesystem::create_directories(root, error);
+    Require(!error, "Resource group test could not create its asset directory");
+    WriteTriangleObj(root / "visible.obj");
+    WriteTriangleObj(root / "hidden.obj");
+    WriteMaterial(root / "base.kbmat", 0U, 0U, 0U, 0U, 0U);
+    WriteMaterial(root / "hidden.kbmat", 0U, 0U, 0U, 0U, 0U);
+    WriteMaterial(root / "slot.kbmat", 0U, 0U, 0U, 0U, 0U);
+
+    kb::scene::Scene scene;
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    Require(manager.RegisterLoader(std::make_unique<RenderMeshAssetLoader>()) &&
+            manager.RegisterLoader(std::make_unique<RenderMaterialAssetLoader>()),
+        "Resource group test could not register render asset loaders");
+    Require(manager.Mounts().Mount("Game", root) && manager.DiscoverMountedAssets() >= 5U,
+        "Resource group test could not discover its assets");
+    const auto assetId = [&](const char* path) {
+        const kb::assets::AssetMetadata* metadata = manager.Registry().FindByPath(path);
+        Require(metadata != nullptr, "Resource group test lost a discovered asset");
+        return metadata->id.value;
+    };
+    const std::uint64_t visibleMeshId = assetId("/Game/visible.obj");
+    const std::uint64_t hiddenMeshId = assetId("/Game/hidden.obj");
+    const std::uint64_t baseMaterialId = assetId("/Game/base.kbmat");
+    const std::uint64_t hiddenMaterialId = assetId("/Game/hidden.kbmat");
+    const std::uint64_t slotMaterialId = assetId("/Game/slot.kbmat");
+    const kb::scene::SceneEntity visible = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "Visible Mesh", .transform = TransformAt(0.0F, 0.0F, 0.0F),
+    });
+    scene.Components().MeshRenderers().Set(visible, kb::scene::MeshRendererComponent{
+        .meshAssetId = visibleMeshId, .materialAssetId = baseMaterialId,
+    });
+    const kb::scene::SceneEntity hidden = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "Hidden Mesh", .transform = TransformAt(0.0F, 0.0F, 0.0F),
+    });
+    scene.Components().MeshRenderers().Set(hidden, kb::scene::MeshRendererComponent{
+        .meshAssetId = hiddenMeshId, .materialAssetId = hiddenMaterialId,
+    });
+    scene.Components().Visibility().Set(hidden, kb::scene::VisibilityComponent{.visible = false});
+
+    HeadlessSurface surface;
+    DisplayConfig config{};
+    config.allowHeadlessNoop = true;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "Resource group test renderer did not initialize");
+    const RenderSceneSubmitDesc desc = LifecycleSubmitDesc(1U);
+    SubmitLifecycleFrame(renderer, scene, desc, "Resource group test failed to submit a hidden mesh");
+    auto resources = renderer.RuntimeResourceStats();
+    Require(renderer.LastSceneSubmitStats().visibleMeshCount == 1U &&
+            resources.cachedMeshCount == 2U && resources.cachedMaterialCount == 2U,
+        "Hidden mesh and material resources must remain ensured despite draw group filtering");
+
+    scene.Components().Visibility().Set(hidden, kb::scene::VisibilityComponent{.visible = true});
+    SubmitLifecycleFrame(renderer, scene, desc, "Resource group test failed to submit both visible meshes");
+    resources = renderer.RuntimeResourceStats();
+    Require(renderer.LastSceneSubmitStats().visibleMeshCount == 2U &&
+            resources.cachedMeshCount == 2U && resources.cachedMaterialCount == 2U,
+        "Visible draw groups did not preserve both mesh and material resources");
+
+    scene.Components().MeshRenderers().Set(visible, kb::scene::MeshRendererComponent{
+        .meshAssetId = visibleMeshId,
+        .materialAssetId = baseMaterialId,
+        .materialSlotAssetIds = {slotMaterialId},
+        .materialSlotOverrideCount = 1U,
+    });
+    SubmitLifecycleFrame(renderer, scene, desc, "Resource group test failed to submit a material slot override");
+    resources = renderer.RuntimeResourceStats();
+    Require(resources.cachedMaterialCount == 3U && renderer.SceneResourceMap() != nullptr &&
+            renderer.SceneResourceMap()->ResolveMaterial(slotMaterialId).IsValid(),
+        "Per-proxy material slot override did not load its material outside the group fast path");
+    renderer.Shutdown();
+    for (const char* name : {"visible.obj", "hidden.obj", "base.kbmat", "hidden.kbmat", "slot.kbmat"}) {
+        std::filesystem::remove(root / name, error);
+    }
+    std::filesystem::remove(root, error);
+}
+
+void RunRendererResourceGroupEnsureTests() {
+    RunRendererResourceGroupEnsureFallbacksTest();
+    RunRendererReloadsChangedRuntimeMeshAssetTest();
+    RunRendererReloadsChangedRuntimeMaterialAssetTest();
+}
+
+void RunRendererSceneSubmitScaleBenchmark(bool spiralLayout) {
+#if defined(_WIN32)
+    const auto runId = std::chrono::steady_clock::now().time_since_epoch().count();
+    const std::filesystem::path root = std::filesystem::temp_directory_path() /
+        ("21kb_scene_submit_scale_" + std::to_string(GetCurrentProcessId()) + "_" + std::to_string(runId));
+    const std::filesystem::path logPath = std::filesystem::current_path() / "Saved" / "Logs" /
+        ("renderer-submit-scale-" + std::string{spiralLayout ? "spiral-" : "dense-"} +
+            std::to_string(runId) + ".log");
+    std::error_code error;
+    std::filesystem::create_directories(root, error);
+    Require(!error, "Scene submit scale benchmark could not create its asset directory");
+    std::filesystem::create_directories(logPath.parent_path(), error);
+    Require(!error, "Scene submit scale benchmark could not create its log directory");
+    {
+        std::ofstream log{logPath, std::ios::trunc};
+        Require(log.is_open(), "Scene submit scale benchmark could not open its log");
+    }
+    const auto report = [&](const std::string& row) {
+        {
+            std::ofstream log{logPath, std::ios::app};
+            Require(log.is_open(), "Scene submit scale benchmark could not append to its log");
+            log << row << '\n';
+            log.flush();
+            Require(log.good(), "Scene submit scale benchmark could not flush its log");
+        }
+        std::fprintf(stderr, "%s\n", row.c_str());
+        std::fflush(stderr);
+    };
+    report("scene_submit_scale_log=" + logPath.string());
+
+    WriteTriangleObj(root / "triangle.obj");
+    WriteTexture(root / "albedo.kbtex", 200U, 100U, 50U);
+    kb::scene::Scene scene;
+    kb::scene::SceneLightingAccess::SetBasicLightingEnabled(scene, true);
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    Require(manager.RegisterLoader(std::make_unique<RenderMeshAssetLoader>()) &&
+            manager.RegisterLoader(std::make_unique<RenderMaterialAssetLoader>()) &&
+            manager.RegisterLoader(std::make_unique<RenderTextureAssetLoader>()),
+        "Scene submit scale benchmark could not register asset loaders");
+    Require(manager.Mounts().Mount("Game", root) && manager.DiscoverMountedAssets() >= 2U,
+        "Scene submit scale benchmark could not discover mesh and texture");
+    const kb::assets::AssetMetadata* texture = manager.Registry().FindByPath("/Game/albedo.kbtex");
+    Require(texture != nullptr, "Scene submit scale benchmark lost its texture metadata");
+    WriteMaterial(root / "paint.kbmat", texture->id.value, 0U, 0U, 0U, 0U);
+    {
+        std::ofstream materialFile{root / "paint.kbmat", std::ios::app};
+        Require(materialFile.is_open(), "Scene submit scale benchmark could not set a double-sided material");
+        materialFile << "doubleSided true\n";
+    }
+    Require(manager.DiscoverMountedAssets() >= 3U,
+        "Scene submit scale benchmark could not discover its material");
+    const kb::assets::AssetMetadata* mesh = manager.Registry().FindByPath("/Game/triangle.obj");
+    const kb::assets::AssetMetadata* material = manager.Registry().FindByPath("/Game/paint.kbmat");
+    Require(mesh != nullptr && material != nullptr,
+        "Scene submit scale benchmark lost mesh or material metadata");
+    const std::uint64_t meshId = mesh->id.value;
+    const std::uint64_t materialId = material->id.value;
+
+    NativeTestSurface surface;
+    Require(surface.IsValid(), "Scene submit scale benchmark could not create its hidden D3D11 surface");
+    DisplayConfig config{};
+    config.syncMode = DisplaySyncMode::Uncapped;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "Scene submit scale benchmark could not initialize D3D11");
+    if (const bgfx::Caps* caps = bgfx::getCaps(); caps != nullptr) {
+        std::ostringstream adapter;
+        adapter << "renderer=" << bgfx::getRendererName(bgfx::getRendererType())
+            << " vendor_id=" << caps->vendorId << " device_id=" << caps->deviceId;
+        report(adapter.str());
+    }
+    {
+        ParticleMeshReadbackTarget target;
+        Require(target.Initialize(), "Scene submit scale benchmark could not create a render target");
+        SceneRenderCamera camera = IdentityCamera();
+        if (spiralLayout) {
+            // Match the default 3D Scene viewport camera when Play has no primary scene camera.
+            constexpr float toRadians = 3.14159265358979323846F / 180.0F;
+            const float yaw = -45.0F * toRadians;
+            const float pitch = -30.0F * toRadians;
+            const bx::Vec3 eye{8.0F, 6.0F, -8.0F};
+            const bx::Vec3 forward{
+                std::sin(yaw) * std::cos(pitch), std::sin(pitch), std::cos(yaw) * std::cos(pitch)};
+            const bx::Vec3 at{eye.x + forward.x, eye.y + forward.y, eye.z + forward.z};
+            const bx::Vec3 up{
+                -std::sin(yaw) * std::sin(pitch), std::cos(pitch),
+                -std::cos(yaw) * std::sin(pitch)};
+            bx::mtxLookAt(camera.view.data(), eye, at, up);
+            SceneDepthPolicy::MakePerspective(camera.projection.data(), 60.0F, 1.0F, 0.01F, 1'000.0F,
+                SceneDepthPolicy::HomogeneousDepth());
+        }
+        RenderSceneSubmitDesc desc{
+            .target = target.Binding(),
+            .cameraOverride = camera,
+            .meshPassMode = SceneRenderMeshPassMode::OpaqueOnly,
+            .editorSceneOverlaysEnabled = false,
+            .shadowPassEnabled = false,
+            .postProcessEnabled = false,
+            .selectionMaskEnabled = false,
+            .selectionOutlineEnabled = false,
+        };
+        report(std::string{"backend=D3D11 target=64x64 geometry=triangle texture=albedo.kbtex lights=1_per_1000 layout="} +
+            (spiralLayout ? "visual_stress_spiral camera=editor_fallback_8_6_minus8_fov60" :
+                "dense_visible camera=identity") + " frames_per_stage=12 warmup_frames=2");
+        std::size_t created = 0U;
+        for (const std::size_t targetCount : {10'000U, 30'000U, 100'000U}) {
+            report("stage_begin=" + std::to_string(targetCount) + " live=" + std::to_string(scene.Entities().Count()));
+            const auto creationBegin = std::chrono::steady_clock::now();
+            bool creationTimedOut = false;
+            while (created < targetCount) {
+                const std::size_t index = created;
+                kb::scene::SceneObjectDesc object{ .name = "Scale Mesh" };
+                if (spiralLayout) {
+                    const float radius = 0.65F * std::sqrt(static_cast<float>(index));
+                    const float angle = static_cast<float>(index) * 2.39996323F;
+                    object.transform.localPosition = kb::scene::Vec3{
+                        std::cos(angle) * radius, 0.0F, std::sin(angle) * radius};
+                    object.transform.localScale = kb::scene::Vec3{0.45F, 0.45F, 0.45F};
+                } else {
+                    object.transform.localPosition = kb::scene::Vec3{
+                        static_cast<float>((index * 73U) % 1009U) / 560.0F - 0.9F,
+                        static_cast<float>((index * 173U) % 1013U) / 562.0F - 0.9F,
+                        0.0F };
+                    object.transform.localScale = kb::scene::Vec3{0.01F, 0.01F, 0.01F};
+                }
+                const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(std::move(object));
+                Require(entity.IsValid(), "Scene submit scale benchmark failed to create a real entity");
+                scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{
+                    .meshAssetId = meshId, .materialAssetId = materialId, .castsShadow = false });
+                Require(scene.Components().MeshRenderers().Has(entity),
+                    "Scene submit scale benchmark failed to attach a mesh renderer");
+                if (index % 1'000U == 0U) {
+                    kb::scene::LightComponent light{};
+                    light.kind = kb::scene::LightKind::Point;
+                    light.intensity = 6.0F;
+                    light.range = 12.0F;
+                    light.castsShadow = false;
+                    scene.Components().Lights().Set(entity, light);
+                    Require(scene.Components().Lights().Has(entity),
+                        "Scene submit scale benchmark failed to attach a point light");
+                }
+                ++created;
+                if (created % 1'000U == 0U && std::chrono::duration<double>(
+                        std::chrono::steady_clock::now() - creationBegin).count() > 60.0) {
+                    creationTimedOut = true;
+                    break;
+                }
+            }
+            const double createMs = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - creationBegin).count();
+            if (creationTimedOut) {
+                report("scale_create_timeout target=" + std::to_string(targetCount) +
+                    " live=" + std::to_string(scene.Entities().Count()) +
+                    " create_ms=" + std::to_string(createMs));
+                break;
+            }
+            Require(scene.Entities().Count() == targetCount,
+                "Scene submit scale benchmark live count does not match created entities");
+            const auto updateBegin = std::chrono::steady_clock::now();
+            static_cast<void>(scene.Runtime().Update(0.0F));
+            const double runtimeUpdateMs = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - updateBegin).count();
+            desc.synchronizeScene = true;
+            const auto firstBegin = std::chrono::steady_clock::now();
+            SubmitLifecycleFrame(renderer, scene, desc, "Scene submit scale benchmark failed its initial full sync");
+            const double firstFrameMs = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - firstBegin).count();
+            desc.synchronizeScene = false;
+
+            std::vector<double> submitMs;
+            std::vector<double> endMs;
+            std::vector<double> frameMs;
+            std::vector<double> visibilityBuildMs;
+            std::vector<double> visibilitySortMs;
+            std::vector<double> gpuMs;
+            std::vector<double> renderThreadMs;
+            bool timedOut = firstFrameMs > 10'000.0;
+            for (std::size_t frame = 0U; frame < 12U && !timedOut; ++frame) {
+                const auto begin = std::chrono::steady_clock::now();
+                Require(renderer.BeginFrame(), "Scene submit scale benchmark could not begin a frame");
+                Require(renderer.SubmitScene(scene, desc), "Scene submit scale benchmark could not submit the scene");
+                const auto submitted = std::chrono::steady_clock::now();
+                renderer.EndFrame();
+                const auto ended = std::chrono::steady_clock::now();
+                const double submit = std::chrono::duration<double, std::milli>(submitted - begin).count();
+                const double present = std::chrono::duration<double, std::milli>(ended - submitted).count();
+                timedOut = submit + present > 10'000.0;
+                if (frame < 2U) continue;
+                submitMs.push_back(submit);
+                endMs.push_back(present);
+                frameMs.push_back(submit + present);
+                visibilityBuildMs.push_back(renderer.LastSceneVisibilityBuildMilliseconds());
+                visibilitySortMs.push_back(renderer.LastSceneVisibilitySortMilliseconds());
+                if (const bgfx::Stats* stats = bgfx::getStats(); stats != nullptr) {
+                    if (stats->gpuTimerFreq > 0 && stats->gpuTimeEnd > stats->gpuTimeBegin) {
+                        gpuMs.push_back(static_cast<double>(stats->gpuTimeEnd - stats->gpuTimeBegin) *
+                            1000.0 / static_cast<double>(stats->gpuTimerFreq));
+                    }
+                    if (stats->cpuTimerFreq > 0 && stats->cpuTimeEnd > stats->cpuTimeBegin) {
+                        renderThreadMs.push_back(static_cast<double>(stats->cpuTimeEnd - stats->cpuTimeBegin) *
+                            1000.0 / static_cast<double>(stats->cpuTimerFreq));
+                    }
+                }
+            }
+            const auto medianP95 = [](std::vector<double>& values) {
+                if (values.empty()) return std::pair{0.0, 0.0};
+                std::sort(values.begin(), values.end());
+                return std::pair{values[values.size() / 2U],
+                    values[std::min(values.size() - 1U, (values.size() * 95U + 99U) / 100U - 1U)]};
+            };
+            const auto [submitMedian, submitP95] = medianP95(submitMs);
+            const auto [endMedian, endP95] = medianP95(endMs);
+            const auto [frameMedian, frameP95] = medianP95(frameMs);
+            const auto [visibilityBuildMedian, visibilityBuildP95] = medianP95(visibilityBuildMs);
+            const auto [visibilitySortMedian, visibilitySortP95] = medianP95(visibilitySortMs);
+            const auto [gpuMedian, gpuP95] = medianP95(gpuMs);
+            const auto [threadMedian, threadP95] = medianP95(renderThreadMs);
+            const SceneRenderSubmitStats stats = renderer.LastSceneSubmitStats();
+            std::ostringstream row;
+            row << "entities=" << targetCount << " live=" << scene.Entities().Count()
+                << " create_ms=" << createMs << " runtime_update_ms=" << runtimeUpdateMs
+                << " first_frame_ms=" << firstFrameMs
+                << " frame_p50_ms=" << frameMedian << " frame_p95_ms=" << frameP95
+                << " visibility_build_p50_ms=" << visibilityBuildMedian
+                << " visibility_build_p95_ms=" << visibilityBuildP95
+                << " visibility_sort_p50_ms=" << visibilitySortMedian
+                << " visibility_sort_p95_ms=" << visibilitySortP95
+                << " submit_p50_ms=" << submitMedian << " submit_p95_ms=" << submitP95
+                << " end_p50_ms=" << endMedian << " end_p95_ms=" << endP95
+                << " gpu_p50_ms=" << gpuMedian << " gpu_p95_ms=" << gpuP95
+                << " gpu_samples=" << gpuMs.size()
+                << " render_thread_p50_ms=" << threadMedian << " render_thread_p95_ms=" << threadP95
+                << " draw_calls=" << stats.submittedDrawCallCount
+                << " visible=" << stats.visibleMeshCount << " submitted=" << stats.submittedMeshCount
+                << " culled=" << stats.culledInstanceCount << " dropped=" << stats.droppedInstanceCount
+                << " gpu_driven_state=" << static_cast<int>(stats.gpuDrivenFeatureState)
+                << " gpu_driven_fallbacks=" << stats.gpuDrivenFallbackCount
+                << " gpu_driven_upload_bytes=" << stats.gpuDrivenUploadBytes
+                << " lights=" << stats.sceneLightCount << " forward_lights=" << stats.submittedForwardLightCount
+                << " upload_bytes=" << stats.instanceUploadBytes
+                << " missing_texture_bindings=" << stats.missingTextureBindingCount
+                << " missing_texture_resources=" << stats.missingTextureResourceCount
+                << " texture_dimension_mismatches=" << stats.textureDimensionMismatchCount
+                << " timeout=" << (timedOut ? 1 : 0);
+            report(row.str());
+            Require(stats.visibleMeshCount > 0U && stats.submittedMeshCount > 0U &&
+                    stats.submittedDrawCallCount > 0U && stats.missingTextureBindingCount == 0U &&
+                    stats.missingTextureResourceCount == 0U && stats.textureDimensionMismatchCount == 0U,
+                "Scene submit scale benchmark did not render a textured mesh batch");
+            if (!timedOut) {
+                SceneRenderCamera farCamera = camera;
+                farCamera.view[12] += 1'000.0F;
+                desc.cameraOverride = farCamera;
+                std::vector<double> farFrameMs;
+                std::vector<double> farVisibilitySortMs;
+                for (std::size_t frame = 0U; frame < 5U; ++frame) {
+                    const auto begin = std::chrono::steady_clock::now();
+                    SubmitLifecycleFrame(renderer, scene, desc,
+                        "Scene submit scale benchmark failed its far-camera control frame");
+                    const double elapsed = std::chrono::duration<double, std::milli>(
+                        std::chrono::steady_clock::now() - begin).count();
+                    if (frame >= 2U) farFrameMs.push_back(elapsed);
+                    if (frame >= 2U) farVisibilitySortMs.push_back(renderer.LastSceneVisibilitySortMilliseconds());
+                    if (elapsed > 10'000.0) {
+                        timedOut = true;
+                        break;
+                    }
+                }
+                const auto [farMedian, farP95] = medianP95(farFrameMs);
+                const auto [farSortMedian, farSortP95] = medianP95(farVisibilitySortMs);
+                const SceneRenderSubmitStats farStats = renderer.LastSceneSubmitStats();
+                std::ostringstream farRow;
+                farRow << "far_camera_entities=" << targetCount
+                    << " frame_p50_ms=" << farMedian << " frame_p95_ms=" << farP95
+                    << " visibility_sort_p50_ms=" << farSortMedian
+                    << " visibility_sort_p95_ms=" << farSortP95
+                    << " visible=" << farStats.visibleMeshCount
+                    << " submitted=" << farStats.submittedMeshCount
+                    << " culled=" << farStats.culledInstanceCount
+                    << " draws=" << farStats.submittedDrawCallCount;
+                report(farRow.str());
+                Require(farStats.visibleMeshCount == 0U && farStats.submittedMeshCount == 0U,
+                    "Scene submit scale benchmark far camera did not cull the mesh batch");
+                desc.cameraOverride = camera;
+            }
+            if (timedOut || frameP95 > 1'000.0 || stats.droppedInstanceCount != 0U) {
+                report("scale_stopped_after=" + std::to_string(targetCount));
+                break;
+            }
+        }
+    }
+    renderer.Shutdown();
+    std::filesystem::remove(root / "triangle.obj", error);
+    std::filesystem::remove(root / "albedo.kbtex", error);
+    std::filesystem::remove(root / "paint.kbmat", error);
+    std::filesystem::remove(root, error);
+#else
+    static_cast<void>(spiralLayout);
+#endif
+}
+
+void RunRendererPacedSceneSubmitStressBenchmark(bool staticMillionSnapshot,
+    bool gpuDrivenDispatchEnabled, unsigned maxForwardLights) {
+#if defined(_WIN32)
+    using Clock = std::chrono::steady_clock;
+    constexpr std::size_t targetEntities = 1'000'000U;
+    constexpr std::size_t entitiesPerSecond = 1'000U;
+    constexpr std::uint16_t width = 1'280U;
+    constexpr std::uint16_t height = 720U;
+    const auto runId = Clock::now().time_since_epoch().count();
+    const std::filesystem::path root = std::filesystem::temp_directory_path() /
+        ("21kb_paced_render_stress_" + std::to_string(GetCurrentProcessId()) + "_" + std::to_string(runId));
+    const std::filesystem::path logPath = std::filesystem::current_path() / "Saved" / "Logs" /
+        ((staticMillionSnapshot ? "renderer-million-scene-snapshot-" : "renderer-paced-scene-stress-") +
+            std::to_string(runId) + ".log");
+    std::error_code error;
+    std::filesystem::create_directories(root, error);
+    Require(!error, "Paced scene stress could not create its asset directory");
+    std::filesystem::create_directories(logPath.parent_path(), error);
+    Require(!error, "Paced scene stress could not create its log directory");
+    {
+        std::ofstream log{logPath, std::ios::trunc};
+        Require(log.is_open(), "Paced scene stress could not open its log");
+    }
+    const auto report = [&](const std::string& row) {
+        {
+            std::ofstream log{logPath, std::ios::app};
+            Require(log.is_open(), "Paced scene stress could not append to its log");
+            log << row << '\n';
+            log.flush();
+            Require(log.good(), "Paced scene stress could not flush its log");
+        }
+        std::fprintf(stderr, "%s\n", row.c_str());
+        std::fflush(stderr);
+    };
+    report("paced_scene_stress_log=" + logPath.string());
+
+    WriteStressCubeObj(root / "cube.obj");
+    kb::scene::Scene scene;
+    kb::scene::SceneLightingAccess::SetBasicLightingEnabled(scene, true);
+    kb::scene::SceneRuntime runtime = scene.Runtime();
+    runtime.SetPlaying(true);
+    runtime.SetEcsProfilerEnabled(true);
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    Require(manager.RegisterLoader(std::make_unique<RenderMeshAssetLoader>()) &&
+            manager.RegisterLoader(std::make_unique<RenderMaterialAssetLoader>()) &&
+            manager.RegisterLoader(std::make_unique<RenderTextureAssetLoader>()),
+        "Paced scene stress could not register asset loaders");
+    Require(manager.Mounts().Mount("Game", root) && manager.DiscoverMountedAssets() >= 1U,
+        "Paced scene stress could not discover its cube mesh");
+    const kb::assets::AssetMetadata* meshMetadata = manager.Registry().FindByPath("/Game/cube.obj");
+    Require(meshMetadata != nullptr, "Paced scene stress lost its cube mesh metadata");
+    const std::uint64_t meshId = meshMetadata->id.value;
+    const kb::assets::AssetId textureId = kb::assets::MakeAssetId("PacedSceneStress:Checker");
+    const kb::assets::AssetId materialId = kb::assets::MakeAssetId("PacedSceneStress:Material");
+    PublishCheckerTexture(manager, textureId, root);
+    PublishCheckerMaterial(manager, materialId, textureId, root);
+
+    NativeTestSurface surface{width, height};
+    Require(surface.IsValid(), "Paced scene stress could not create a hidden D3D11 surface");
+    DisplayConfig config{};
+    config.syncMode = DisplaySyncMode::Uncapped;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "Paced scene stress could not initialize D3D11");
+    renderer.SetRuntimeAssetDiscoveryEnabled(false);
+    if (const bgfx::Caps* caps = bgfx::getCaps(); caps != nullptr) {
+        std::ostringstream adapter;
+        adapter << "adapter=" << bgfx::getRendererName(bgfx::getRendererType())
+                << " vendor_id=" << caps->vendorId << " device_id=" << caps->deviceId;
+        report(adapter.str());
+    }
+    ParticleMeshReadbackTarget target;
+    Require(target.Initialize(width, height), "Paced scene stress could not create a render target");
+    SceneRenderCamera camera = IdentityCamera();
+    constexpr float toRadians = 3.14159265358979323846F / 180.0F;
+    const float yaw = -45.0F * toRadians;
+    const float pitch = -30.0F * toRadians;
+    const bx::Vec3 eye{8.0F, 6.0F, -8.0F};
+    const bx::Vec3 forward{
+        std::sin(yaw) * std::cos(pitch), std::sin(pitch), std::cos(yaw) * std::cos(pitch)};
+    const bx::Vec3 at{eye.x + forward.x, eye.y + forward.y, eye.z + forward.z};
+    const bx::Vec3 up{-std::sin(yaw) * std::sin(pitch), std::cos(pitch), -std::cos(yaw) * std::sin(pitch)};
+    bx::mtxLookAt(camera.view.data(), eye, at, up);
+    SceneDepthPolicy::MakePerspective(camera.projection.data(), 60.0F,
+        static_cast<float>(width) / static_cast<float>(height), 0.01F, 1'000.0F,
+        SceneDepthPolicy::HomogeneousDepth());
+    RenderSceneSubmitDesc desc{
+        .target = target.Binding(),
+        .cameraOverride = camera,
+        .meshPassMode = SceneRenderMeshPassMode::OpaqueOnly,
+        .editorSceneOverlaysEnabled = false,
+        .screenUIEnabled = true,
+        .shadowPassEnabled = false,
+        .postProcessEnabled = false,
+        .selectionMaskEnabled = false,
+        .selectionOutlineEnabled = false,
+        .synchronizeScene = true,
+        .transformAffineSync = true,
+    };
+    desc.gpuDrivenRuntimeDispatchEnabled = gpuDrivenDispatchEnabled;
+    desc.lightingConfig.maxForwardLights = maxForwardLights;
+    report(std::string{"config target=1000000 mode="} +
+        (staticMillionSnapshot ? "static_snapshot" : "paced_1000_per_second") +
+        " mesh=cube texture=published_checker material=published lights=1_per_1000 "
+        "lighting=basic viewport=1280x720 vsync=off camera=editor_fallback "
+        "play=true ecs_profiler=true sync=initial_full_then_delta "
+        "frame_watchdog_ms=10000 memory=external_supervisor compute=" +
+        std::to_string(gpuDrivenDispatchEnabled) + " forward_light_budget=" +
+        std::to_string(maxForwardLights) +
+        (staticMillionSnapshot ? " frames=1_full_plus_8_steady_plus_5_far" : " hold_seconds=30"));
+
+    const auto createEntity = [&](std::size_t index) {
+        const float radius = 0.65F * std::sqrt(static_cast<float>(index));
+        const float angle = static_cast<float>(index) * 2.39996323F;
+        kb::scene::SceneObjectDesc object{.name = "Stress Cube"};
+        object.transform.localPosition = kb::scene::Vec3{
+            std::cos(angle) * radius, 0.0F, std::sin(angle) * radius};
+        object.transform.localScale = kb::scene::Vec3{0.45F, 0.45F, 0.45F};
+        const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(std::move(object));
+        Require(entity.IsValid(), "Paced scene stress could not create a real entity");
+        scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{
+            .meshAssetId = meshId, .materialAssetId = materialId.value, .castsShadow = false});
+        Require(scene.Components().MeshRenderers().Has(entity),
+            "Paced scene stress could not attach a mesh renderer");
+        if (index % 1'000U == 0U) {
+            kb::scene::LightComponent light{};
+            light.kind = kb::scene::LightKind::Point;
+            light.color = kb::scene::Vec3{0.65F, 0.8F, 1.0F};
+            light.intensity = 6.0F;
+            light.range = 12.0F;
+            light.castsShadow = false;
+            scene.Components().Lights().Set(entity, light);
+            Require(scene.Components().Lights().Has(entity),
+                "Paced scene stress could not attach a point light");
+        }
+        return entity;
+    };
+
+    static_cast<void>(createEntity(0U));
+    static_cast<void>(runtime.Update(0.0F));
+    const auto fullSyncBegin = Clock::now();
+    Require(renderer.BeginFrame() && renderer.SubmitScene(scene, desc),
+        "Paced scene stress failed its first full scene submit");
+    const double firstFullSyncMs = renderer.LastSceneSynchronizationMilliseconds();
+    renderer.EndFrame();
+    const double firstFrameMs = std::chrono::duration<double, std::milli>(Clock::now() - fullSyncBegin).count();
+    const SceneRenderSubmitStats firstStats = renderer.LastSceneSubmitStats();
+    Require(firstStats.visibleMeshCount == 1U && firstStats.submittedMeshCount == 1U &&
+            firstStats.submittedDrawCallCount > 0U && firstStats.droppedInstanceCount == 0U &&
+            firstStats.missingTextureBindingCount == 0U && firstStats.missingTextureResourceCount == 0U &&
+            firstStats.textureDimensionMismatchCount == 0U,
+        "Paced scene stress first frame did not draw one correctly textured mesh");
+    const std::vector<std::uint8_t> pixels = target.ReadPixels();
+    std::size_t warmPixels = 0U;
+    std::size_t coolPixels = 0U;
+    for (std::size_t offset = 0U; offset < pixels.size(); offset += 4U) {
+        const int red = pixels[offset];
+        const int blue = pixels[offset + 2U];
+        warmPixels += red >= 10 && red > blue * 3 / 2;
+        coolPixels += blue >= 10 && blue > red * 3 / 2;
+    }
+    {
+        std::ostringstream preflight;
+        preflight << "preflight live=1 visible=" << firstStats.visibleMeshCount
+                  << " draws=" << firstStats.submittedDrawCallCount
+                  << " warm_pixels=" << warmPixels << " cool_pixels=" << coolPixels
+                  << " first_frame_ms=" << firstFrameMs << " full_sync_ms=" << firstFullSyncMs;
+        report(preflight.str());
+    }
+    Require(warmPixels >= 8U && coolPixels >= 8U,
+        "Paced scene stress did not read back both colors of the published checker");
+
+    if (staticMillionSnapshot) {
+        const Clock::time_point creationBegin = Clock::now();
+        std::size_t created = 1U;
+        bool creationTimedOut = false;
+        for (; created < targetEntities; ++created) {
+            static_cast<void>(createEntity(created));
+            if ((created + 1U) % 10'000U == 0U) {
+                const double elapsed = std::chrono::duration<double>(Clock::now() - creationBegin).count();
+                report("create_progress live=" + std::to_string(scene.Entities().Count()) +
+                    " created=" + std::to_string(created + 1U) +
+                    " elapsed_s=" + std::to_string(elapsed));
+                if (elapsed > 300.0) {
+                    creationTimedOut = true;
+                    ++created;
+                    break;
+                }
+            }
+        }
+        if (creationTimedOut || scene.Entities().Count() != targetEntities) {
+            report("snapshot_stopped reason=" +
+                std::string{creationTimedOut ? "creation_over_300s" : "live_count_mismatch"} +
+                " live=" + std::to_string(scene.Entities().Count()) +
+                " created=" + std::to_string(created));
+            renderer.Shutdown();
+            std::filesystem::remove(root / "cube.obj", error);
+            std::filesystem::remove(root, error);
+            return;
+        }
+        const Clock::time_point updateBegin = Clock::now();
+        static_cast<void>(runtime.Update(0.0F));
+        const Clock::time_point updateEnd = Clock::now();
+        report("snapshot_ready live=" + std::to_string(scene.Entities().Count()) +
+            " created=" + std::to_string(created) +
+            " creation_ms=" + std::to_string(
+                std::chrono::duration<double, std::milli>(updateBegin - creationBegin).count()) +
+            " runtime_update_ms=" + std::to_string(
+                std::chrono::duration<double, std::milli>(updateEnd - updateBegin).count()));
+        bool snapshotValid = true;
+        int completedFrames = 0;
+        std::vector<double> steadyFrameMs;
+        std::vector<double> steadyGpuMs;
+        for (int frame = 0; frame < 9; ++frame) {
+            const std::size_t affineBeforeUpdate = runtime.TransformRenderProxyUpdateEntities().size();
+            double runtimeUpdateMs = 0.0;
+            if (frame != 0) {
+                const Clock::time_point frameUpdateBegin = Clock::now();
+                static_cast<void>(runtime.Update(0.0F));
+                runtimeUpdateMs = std::chrono::duration<double, std::milli>(
+                    Clock::now() - frameUpdateBegin).count();
+            }
+            const std::size_t affineAfterUpdate = runtime.TransformRenderProxyUpdateEntities().size();
+            desc.synchronizeScene = frame == 0;
+            const Clock::time_point frameBegin = Clock::now();
+            Require(renderer.BeginFrame() && renderer.SubmitScene(scene, desc),
+                "Million scene snapshot failed to submit its real scene");
+            const Clock::time_point submitted = Clock::now();
+            const double syncMs = renderer.LastSceneSynchronizationMilliseconds();
+            const double visibilityMs = renderer.LastSceneVisibilityBuildMilliseconds();
+            const double sortMs = renderer.LastSceneVisibilitySortMilliseconds();
+            const SceneRenderSubmitStats stats = renderer.LastSceneSubmitStats();
+            renderer.EndFrame();
+            const Clock::time_point frameEnd = Clock::now();
+            double gpuMs = 0.0;
+            bool gpuSampleValid = false;
+            if (const bgfx::Stats* gpu = bgfx::getStats(); gpu != nullptr &&
+                gpu->gpuTimerFreq > 0 && gpu->gpuTimeEnd > gpu->gpuTimeBegin) {
+                gpuMs = static_cast<double>(gpu->gpuTimeEnd - gpu->gpuTimeBegin) *
+                    1'000.0 / static_cast<double>(gpu->gpuTimerFreq);
+                gpuSampleValid = true;
+            }
+            const double frameMs = std::chrono::duration<double, std::milli>(frameEnd - frameBegin).count();
+            std::ostringstream row;
+            row << "snapshot_frame=" << frame
+                << " live=" << scene.Entities().Count()
+                << " sync_mode=" << (frame == 0 ? "full" : "steady")
+                << " runtime_update_ms=" << runtimeUpdateMs
+                << " affine_before_update=" << affineBeforeUpdate
+                << " affine_after_update=" << affineAfterUpdate
+                << " frame_ms=" << frameMs
+                << " sync_ms=" << syncMs
+                << " visibility_build_ms=" << visibilityMs
+                << " visibility_sort_ms=" << sortMs
+                << " submit_ms=" << std::chrono::duration<double, std::milli>(submitted - frameBegin).count()
+                << " end_ms=" << std::chrono::duration<double, std::milli>(frameEnd - submitted).count()
+                << " gpu_ms=" << gpuMs << " gpu_sample_valid=" << gpuSampleValid
+                << " draw_calls=" << stats.submittedDrawCallCount
+                << " visible=" << stats.visibleMeshCount
+                << " submitted=" << stats.submittedMeshCount
+                << " culled=" << stats.culledInstanceCount
+                << " dropped=" << stats.droppedInstanceCount
+                << " lights=" << stats.sceneLightCount
+                << " forward_lights=" << stats.submittedForwardLightCount
+                << " upload_bytes=" << stats.instanceUploadBytes
+                << " gpu_driven_feature_state=" << static_cast<int>(stats.gpuDrivenFeatureState)
+                << " gpu_culling_dispatches=" << stats.gpuCullingDispatchCount
+                << " gpu_driven_upload_bytes=" << stats.gpuDrivenUploadBytes
+                << " missing_texture_bindings=" << stats.missingTextureBindingCount
+                << " missing_texture_resources=" << stats.missingTextureResourceCount
+                << " texture_dimension_mismatches=" << stats.textureDimensionMismatchCount;
+            report(row.str());
+            ++completedFrames;
+            if (frame != 0) {
+                steadyFrameMs.push_back(frameMs);
+                if (gpuSampleValid) steadyGpuMs.push_back(gpuMs);
+            }
+            if (frameMs > 10'000.0 || stats.visibleMeshCount == 0U ||
+                stats.submittedMeshCount == 0U || stats.submittedDrawCallCount == 0U ||
+                stats.sceneLightCount == 0U ||
+                stats.submittedForwardLightCount != maxForwardLights ||
+                (!gpuDrivenDispatchEnabled && (stats.gpuCullingDispatchCount != 0U ||
+                    stats.gpuDrivenUploadBytes != 0U)) ||
+                stats.droppedInstanceCount != 0U ||
+                stats.missingTextureBindingCount != 0U || stats.missingTextureResourceCount != 0U ||
+                stats.textureDimensionMismatchCount != 0U) {
+                report("snapshot_stopped reason=" + std::string{frameMs > 10'000.0 ?
+                    "frame_over_10s" : "render_correctness_failure"});
+                snapshotValid = false;
+                break;
+            }
+        }
+        const auto percentile = [](std::vector<double>& samples, std::size_t numerator) {
+            if (samples.empty()) return 0.0;
+            std::sort(samples.begin(), samples.end());
+            return samples[std::min(samples.size() - 1U,
+                (samples.size() * numerator + 99U) / 100U - 1U)];
+        };
+        report("snapshot_steady_summary frame_samples=" + std::to_string(steadyFrameMs.size()) +
+            " frame_p50_ms=" + std::to_string(percentile(steadyFrameMs, 50U)) +
+            " frame_p95_ms=" + std::to_string(percentile(steadyFrameMs, 95U)) +
+            " gpu_samples=" + std::to_string(steadyGpuMs.size()) +
+            " gpu_p50_ms=" + std::to_string(percentile(steadyGpuMs, 50U)) +
+            " gpu_p95_ms=" + std::to_string(percentile(steadyGpuMs, 95U)));
+        if (snapshotValid && completedFrames == 9) {
+            const std::vector<std::uint8_t> referencePixels = target.ReadPixels();
+            std::size_t snapshotWarmPixels = 0U;
+            std::size_t snapshotCoolPixels = 0U;
+            std::uint64_t pixelHash = 14'695'981'039'346'656'037ULL;
+            for (const std::uint8_t channel : referencePixels) {
+                pixelHash = (pixelHash ^ channel) * 1'099'511'628'211ULL;
+            }
+            for (std::size_t offset = 0U; offset < referencePixels.size(); offset += 4U) {
+                const int red = referencePixels[offset];
+                const int blue = referencePixels[offset + 2U];
+                snapshotWarmPixels += red >= 10 && red > blue * 3 / 2;
+                snapshotCoolPixels += blue >= 10 && blue > red * 3 / 2;
+            }
+            report("snapshot_checker warm_pixels=" + std::to_string(snapshotWarmPixels) +
+                " cool_pixels=" + std::to_string(snapshotCoolPixels) +
+                " pixel_hash=" + std::to_string(pixelHash));
+            snapshotValid = snapshotWarmPixels >= 8U && snapshotCoolPixels >= 8U;
+        }
+        if (snapshotValid && completedFrames == 9) {
+            SceneRenderCamera farCamera = camera;
+            farCamera.view[12] += 1'000.0F;
+            desc.cameraOverride = farCamera;
+            std::vector<double> farFrameMs;
+            std::vector<double> farGpuMs;
+            for (int frame = 0; frame < 5; ++frame) {
+                const Clock::time_point updateStart = Clock::now();
+                static_cast<void>(runtime.Update(0.0F));
+                const Clock::time_point frameStart = Clock::now();
+                Require(renderer.BeginFrame() && renderer.SubmitScene(scene, desc),
+                    "Million scene far-camera control failed to submit");
+                const Clock::time_point submitted = Clock::now();
+                const double visibilityMs = renderer.LastSceneVisibilityBuildMilliseconds();
+                const double sortMs = renderer.LastSceneVisibilitySortMilliseconds();
+                const SceneRenderSubmitStats stats = renderer.LastSceneSubmitStats();
+                renderer.EndFrame();
+                const Clock::time_point frameEnd = Clock::now();
+                const double frameMs = std::chrono::duration<double, std::milli>(frameEnd - frameStart).count();
+                double gpuMs = 0.0;
+                bool gpuSampleValid = false;
+                if (const bgfx::Stats* gpu = bgfx::getStats(); gpu != nullptr &&
+                    gpu->gpuTimerFreq > 0 && gpu->gpuTimeEnd > gpu->gpuTimeBegin) {
+                    gpuMs = static_cast<double>(gpu->gpuTimeEnd - gpu->gpuTimeBegin) *
+                        1'000.0 / static_cast<double>(gpu->gpuTimerFreq);
+                    gpuSampleValid = true;
+                }
+                std::ostringstream row;
+                row << "far_control_frame=" << frame
+                    << " live=" << scene.Entities().Count()
+                    << " runtime_update_ms=" << std::chrono::duration<double, std::milli>(frameStart - updateStart).count()
+                    << " frame_ms=" << frameMs
+                    << " submit_ms=" << std::chrono::duration<double, std::milli>(submitted - frameStart).count()
+                    << " visibility_build_ms=" << visibilityMs
+                    << " visibility_sort_ms=" << sortMs
+                    << " gpu_ms=" << gpuMs << " gpu_sample_valid=" << gpuSampleValid
+                    << " visible=" << stats.visibleMeshCount
+                    << " submitted=" << stats.submittedMeshCount
+                    << " dropped=" << stats.droppedInstanceCount
+                    << " draws=" << stats.submittedDrawCallCount;
+                report(row.str());
+                if (frame >= 2) {
+                    farFrameMs.push_back(frameMs);
+                    if (gpuSampleValid) farGpuMs.push_back(gpuMs);
+                }
+                if (frameMs > 10'000.0 || stats.visibleMeshCount != 0U ||
+                    stats.submittedMeshCount != 0U || stats.droppedInstanceCount != 0U) {
+                    snapshotValid = false;
+                    report("far_control_stopped reason=timeout_or_visibility_mismatch");
+                    break;
+                }
+            }
+            report("far_control_summary frame_samples=" + std::to_string(farFrameMs.size()) +
+                " frame_p50_ms=" + std::to_string(percentile(farFrameMs, 50U)) +
+                " frame_p95_ms=" + std::to_string(percentile(farFrameMs, 95U)) +
+                " gpu_samples=" + std::to_string(farGpuMs.size()) +
+                " gpu_p50_ms=" + std::to_string(percentile(farGpuMs, 50U)));
+        }
+        report("snapshot_finished live=" + std::to_string(scene.Entities().Count()) +
+            " frames=" + std::to_string(completedFrames) +
+            " valid=" + std::to_string(snapshotValid && completedFrames == 9));
+        renderer.Shutdown();
+        std::filesystem::remove(root / "cube.obj", error);
+        std::filesystem::remove(root, error);
+        return;
+    }
+
+    desc.synchronizeScene = false;
+    std::size_t created = 1U;
+    std::size_t lastReportedCount = created;
+    double slowDurationSeconds = 0.0;
+    bool spawning = true;
+    Clock::time_point holdBegin{};
+    const Clock::time_point started = Clock::now();
+    Clock::time_point lastReported = started;
+    Clock::time_point previousFrame = started;
+    struct Bucket {
+        std::vector<double> frameTimesMs;
+        double spawnMs = 0.0;
+        double runtimeMs = 0.0;
+        double renderSyncMs = 0.0;
+        double visibilityBuildMs = 0.0;
+        double visibilitySortMs = 0.0;
+        double visibilityPublishMs = 0.0;
+        double submitMs = 0.0;
+        double endMs = 0.0;
+        double gpuMs = 0.0;
+        std::size_t gpuSamples = 0U;
+    } bucket;
+    bool timedOut = false;
+    while (true) {
+        const Clock::time_point frameBegin = Clock::now();
+        if (!spawning && frameBegin - holdBegin >= std::chrono::seconds{30}) {
+            break;
+        }
+        const float deltaSeconds = std::clamp(
+            std::chrono::duration<float>(frameBegin - previousFrame).count(), 0.0F, 1.0F / 15.0F);
+        previousFrame = frameBegin;
+        std::vector<std::uint64_t> dirtyEntityIds;
+        for (const kb::scene::SceneEntity entity : runtime.RenderProxyUpdateEntities()) {
+            dirtyEntityIds.push_back(entity.Id());
+        }
+        if (spawning) {
+            const double elapsed = std::chrono::duration<double>(frameBegin - started).count();
+            const std::size_t scheduled = std::min(targetEntities,
+                1U + static_cast<std::size_t>(elapsed * static_cast<double>(entitiesPerSecond)));
+            const std::size_t toCreate = std::min(scheduled - created, std::size_t{5'000U});
+            for (std::size_t index = 0U; index < toCreate; ++index) {
+                dirtyEntityIds.push_back(createEntity(created).Id());
+                ++created;
+            }
+        }
+        const Clock::time_point spawned = Clock::now();
+        static_cast<void>(runtime.Update(deltaSeconds));
+        const Clock::time_point updated = Clock::now();
+        for (const kb::scene::SceneEntity entity : runtime.RenderProxyUpdateEntities()) {
+            dirtyEntityIds.push_back(entity.Id());
+        }
+        std::sort(dirtyEntityIds.begin(), dirtyEntityIds.end());
+        dirtyEntityIds.erase(std::unique(dirtyEntityIds.begin(), dirtyEntityIds.end()), dirtyEntityIds.end());
+        desc.dirtySceneEntityIds = std::span<const std::uint64_t>{dirtyEntityIds};
+        Require(renderer.BeginFrame() && renderer.SubmitScene(scene, desc),
+            "Paced scene stress failed a delta scene submit");
+        const Clock::time_point submitted = Clock::now();
+        const double renderSyncMs = renderer.LastSceneSynchronizationMilliseconds();
+        const double visibilityBuildMs = renderer.LastSceneVisibilityBuildMilliseconds();
+        const double visibilitySortMs = renderer.LastSceneVisibilitySortMilliseconds();
+        const double visibilityPublishMs = renderer.LastSceneVisibilityPublishMilliseconds();
+        const SceneRenderSubmitStats stats = renderer.LastSceneSubmitStats();
+        renderer.EndFrame();
+        const Clock::time_point frameEnd = Clock::now();
+        const double frameMs = std::chrono::duration<double, std::milli>(frameEnd - frameBegin).count();
+        bucket.frameTimesMs.push_back(frameMs);
+        bucket.spawnMs += std::chrono::duration<double, std::milli>(spawned - frameBegin).count();
+        bucket.runtimeMs += std::chrono::duration<double, std::milli>(updated - spawned).count();
+        bucket.renderSyncMs += renderSyncMs;
+        bucket.visibilityBuildMs += visibilityBuildMs;
+        bucket.visibilitySortMs += visibilitySortMs;
+        bucket.visibilityPublishMs += visibilityPublishMs;
+        bucket.submitMs += std::chrono::duration<double, std::milli>(submitted - updated).count();
+        bucket.endMs += std::chrono::duration<double, std::milli>(frameEnd - submitted).count();
+        if (const bgfx::Stats* gpu = bgfx::getStats(); gpu != nullptr &&
+            gpu->gpuTimerFreq > 0 && gpu->gpuTimeEnd > gpu->gpuTimeBegin) {
+            bucket.gpuMs += static_cast<double>(gpu->gpuTimeEnd - gpu->gpuTimeBegin) *
+                1'000.0 / static_cast<double>(gpu->gpuTimerFreq);
+            ++bucket.gpuSamples;
+        }
+        if (frameEnd - lastReported >= std::chrono::seconds{1} || frameMs > 10'000.0) {
+            std::sort(bucket.frameTimesMs.begin(), bucket.frameTimesMs.end());
+            const std::size_t count = bucket.frameTimesMs.size();
+            const double p50 = bucket.frameTimesMs[count / 2U];
+            const double p95 = bucket.frameTimesMs[std::min(count - 1U, (count * 95U + 99U) / 100U - 1U)];
+            const double interval = std::chrono::duration<double>(frameEnd - lastReported).count();
+            const double perFrame = 1.0 / static_cast<double>(count);
+            std::ostringstream row;
+            row << "second=" << std::chrono::duration<double>(frameEnd - started).count()
+                << " live=" << scene.Entities().Count() << " created=" << created
+                << " spawn_rate=" << static_cast<double>(created - lastReportedCount) / interval
+                << " fps=" << static_cast<double>(count) / interval
+                << " frame_p50_ms=" << p50 << " frame_p95_ms=" << p95
+                << " spawn_ms=" << bucket.spawnMs * perFrame
+                << " runtime_update_ms=" << bucket.runtimeMs * perFrame
+                << " render_sync_mode=delta render_sync_ms=" << bucket.renderSyncMs * perFrame
+                << " visibility_build_ms=" << bucket.visibilityBuildMs * perFrame
+                << " visibility_sort_ms=" << bucket.visibilitySortMs * perFrame
+                << " visibility_publish_ms=" << bucket.visibilityPublishMs * perFrame
+                << " submit_ms=" << bucket.submitMs * perFrame
+                << " end_ms=" << bucket.endMs * perFrame
+                << " gpu_ms=" << (bucket.gpuSamples != 0U ? bucket.gpuMs / bucket.gpuSamples : 0.0)
+                << " gpu_samples=" << bucket.gpuSamples
+                << " draw_calls=" << stats.submittedDrawCallCount
+                << " visible=" << stats.visibleMeshCount
+                << " submitted=" << stats.submittedMeshCount
+                << " culled=" << stats.culledInstanceCount
+                << " dropped=" << stats.droppedInstanceCount
+                << " lights=" << stats.sceneLightCount
+                << " forward_lights=" << stats.submittedForwardLightCount
+                << " upload_bytes=" << stats.instanceUploadBytes
+                << " gpu_driven_upload_bytes=" << stats.gpuDrivenUploadBytes
+                << " missing_texture_bindings=" << stats.missingTextureBindingCount
+                << " missing_texture_resources=" << stats.missingTextureResourceCount
+                << " texture_dimension_mismatches=" << stats.textureDimensionMismatchCount
+                << " spawning=" << (spawning ? 1 : 0);
+            report(row.str());
+            if (spawning && (scene.Entities().Count() != created || stats.droppedInstanceCount != 0U ||
+                stats.missingTextureBindingCount != 0U || stats.missingTextureResourceCount != 0U ||
+                stats.textureDimensionMismatchCount != 0U)) {
+                report("correctness_failure_live_or_render_resources");
+                spawning = false;
+                holdBegin = frameEnd;
+            } else if (spawning && p95 > 16.67) {
+                slowDurationSeconds += interval;
+                if (slowDurationSeconds >= 5.0) {
+                    spawning = false;
+                    holdBegin = frameEnd;
+                    report("spawn_paused_reason=p95_over_16_67ms_for_5_seconds at_live=" +
+                        std::to_string(scene.Entities().Count()));
+                }
+            } else if (spawning) {
+                slowDurationSeconds = 0.0;
+            }
+            if (spawning && created == targetEntities) {
+                spawning = false;
+                holdBegin = frameEnd;
+                report("target_reached_live=" + std::to_string(scene.Entities().Count()));
+            }
+            lastReported = frameEnd;
+            lastReportedCount = created;
+            bucket = {};
+        }
+        if (frameMs > 10'000.0) {
+            report("frame_watchdog_stop_ms=" + std::to_string(frameMs) +
+                " live=" + std::to_string(scene.Entities().Count()));
+            timedOut = true;
+            break;
+        }
+    }
+    report(std::string{"finished_live="} + std::to_string(scene.Entities().Count()) +
+        " created=" + std::to_string(created) + " timeout=" + (timedOut ? "1" : "0"));
+    renderer.Shutdown();
+    std::filesystem::remove(root / "cube.obj", error);
+    std::filesystem::remove(root, error);
 #endif
 }
 
@@ -5826,7 +7046,12 @@ void RunEditorUIViewTransformValidationTests() {
     renderer.ReleaseAllScenes();
 }
 
+void RunRendererVisibilityFeedbackTest() {
+    RunRendererPublishesSceneVisibilityFeedbackTest();
+}
+
 void RunRendererRuntimeSubmitTests() {
+    RunRendererResourceGroupEnsureFallbacksTest();
     RunEditorUIViewTransformValidationTests();
     RunEditorCameraWireframesSubmitInHeadlessNoopTest();
     RunMaterialFrameTimeAdvanceTest();

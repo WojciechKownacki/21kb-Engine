@@ -22,6 +22,8 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunSceneHierarchyTests();
     } else if (suite == "scene-ui") {
         kb::tests::RunSceneUITests();
+    } else if (suite == "scene-ui-bench") {
+        kb::tests::RunSceneUIBuildFrameBenchmark();
     } else if (suite == "scene-system") {
         kb::tests::RunSceneSystemTests();
     } else if (suite == "audio") {

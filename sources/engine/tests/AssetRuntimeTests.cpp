@@ -239,6 +239,10 @@ void RunAssetManagerRuntimePublicationTest() {
     kb::tests::Require(metadata != nullptr, "Runtime publication asset metadata is missing");
     const kb::assets::AssetId id = metadata->id;
     const std::uint64_t generation = manager.LoadGeneration(id);
+    const kb::assets::AssetHandle<std::string> diskAsset = manager.Load<std::string>(id);
+    kb::tests::Require(diskAsset.IsLoaded() && *diskAsset == "canonical" &&
+            !manager.AcquirePublishedRuntimeAsset<std::string>(id).IsLoaded(),
+        "A disk-loaded payload was classified as a published runtime asset");
 
     kb::tests::Require(
         manager.PublishRuntimeAsset<std::string>(
@@ -248,6 +252,10 @@ void RunAssetManagerRuntimePublicationTest() {
     kb::tests::Require(
         preview.IsLoaded() && *preview.Get() == "working copy",
         "A canonical load did not observe the published runtime payload");
+    const kb::assets::AssetHandle<std::string> published =
+        manager.AcquirePublishedRuntimeAsset<std::string>(id);
+    kb::tests::Require(published.IsLoaded() && *published == "working copy",
+        "The published runtime payload was not available to render consumers");
     kb::tests::Require(
         manager.LoadGeneration(id) > generation,
         "Runtime publication did not invalidate an older async generation");
@@ -256,10 +264,14 @@ void RunAssetManagerRuntimePublicationTest() {
         "Runtime publication accepted a payload type that does not match the loader");
 
     kb::tests::Require(manager.Unload(id), "Published runtime payload could not be unloaded");
+    kb::tests::Require(!manager.AcquirePublishedRuntimeAsset<std::string>(id).IsLoaded(),
+        "An unloaded runtime publication remained marked as published");
     const kb::assets::AssetHandle<std::string> canonical = manager.Load<std::string>(id);
     kb::tests::Require(
         canonical.IsLoaded() && *canonical.Get() == "canonical",
         "Unloading a runtime publication did not restore canonical disk loading");
+    kb::tests::Require(!manager.AcquirePublishedRuntimeAsset<std::string>(id).IsLoaded(),
+        "A restored disk payload was classified as a runtime publication");
 }
 
 // LIB-155: AssetManager::LoadOpaque — the type-erased force-load the

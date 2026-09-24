@@ -23,7 +23,14 @@ public:
     }
 
     static void AddRoot(SceneState& state, SceneEntity entity) {
-        Add(state, entity, {});
+        // Entity creation calls this once for a fresh entity. Moving an existing
+        // entity into the root list still goes through Move/AppendUnique.
+        if (!state.hierarchyParents.emplace(entity.Id(), SceneEntity{}).second) {
+            throw std::logic_error("Scene hierarchy root already registered");
+        }
+        SetDenseParent(state, entity, {});
+        state.hierarchyRoots.push_back(entity);
+        MarkTopologyDirty(state, true);
     }
 
     static void AssignOrder(SceneState& state, SceneEntity entity) {
@@ -187,6 +194,25 @@ public:
         return state.hierarchyRoots;
     }
 
+    [[nodiscard]] static std::size_t RootCount(const SceneState& state) noexcept {
+        return state.hierarchyRoots.size();
+    }
+
+    [[nodiscard]] static SceneEntity RootAt(const SceneState& state, std::size_t index) noexcept {
+        return index < state.hierarchyRoots.size() ? state.hierarchyRoots[index] : SceneEntity{};
+    }
+
+    [[nodiscard]] static std::uint64_t RootAppendEpoch(const SceneState& state) noexcept {
+        return state.hierarchyRootAppendEpoch;
+    }
+
+    static void MarkRowContentDirty(SceneState& state) noexcept {
+        ++state.hierarchyRootAppendEpoch;
+        if (state.hierarchyRootAppendEpoch == 0U) {
+            state.hierarchyRootAppendEpoch = 1U;
+        }
+    }
+
     [[nodiscard]] static std::vector<SceneEntity> Children(const SceneState& state, SceneEntity entity) {
         if (const std::vector<SceneEntity>* children = DenseChildren(state, entity); children != nullptr) {
             return *children;
@@ -220,10 +246,13 @@ public:
     }
 
 private:
-    static void MarkTopologyDirty(SceneState& state) noexcept {
+    static void MarkTopologyDirty(SceneState& state, bool rootAppendOnly = false) noexcept {
         ++state.hierarchyTopologyVersion;
         if (state.hierarchyTopologyVersion == 0U) {
             state.hierarchyTopologyVersion = 1U;
+        }
+        if (!rootAppendOnly) {
+            MarkRowContentDirty(state);
         }
         ++state.renderTopologyVersion;
         if (state.renderTopologyVersion == 0U) {

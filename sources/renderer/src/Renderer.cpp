@@ -44,6 +44,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -786,6 +787,10 @@ bool Renderer::SubmitScenes(std::span<const SceneFrameSubmission> submissions) {
 }
 
 bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const RenderSceneSubmitDesc& desc, const RenderViewportPlan& viewportPlan) {
+    lastSceneSynchronizationMilliseconds_ = 0.0;
+    lastSceneVisibilityBuildMilliseconds_ = 0.0;
+    lastSceneVisibilitySortMilliseconds_ = 0.0;
+    lastSceneVisibilityPublishMilliseconds_ = 0.0;
     {
         std::ostringstream message;
         message << "SubmitSceneToViewport begin viewportId=" << desc.target.viewport.id.value
@@ -894,6 +899,7 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         skinningSynchronizedSceneIds_, scene.Id()) != skinningSynchronizedSceneIds_.end();
     const std::uint64_t renderProxyUpdateRevision = scene.Runtime().RenderProxyUpdateRevision();
     bool renderProxyUpdatesSynchronized = false;
+    const auto synchronizationBegin = std::chrono::steady_clock::now();
     if (desc.synchronizeScene) {
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport Sync full begin");
         renderSceneSynchronizer_->Sync(scene, renderScene);
@@ -957,15 +963,23 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         // transforms are unchanged, a new renderer frame needs fresh palette uploads; retaining
         // the previous handle made a Skeletal Mesh visible for two frames and then disappear.
         if (!skinningAlreadySynchronized) {
+            WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport SyncDeformedMeshPalettes begin");
             renderSceneSynchronizer_->SyncDeformedMeshPalettes(scene, renderScene);
+            WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport SyncDeformedMeshPalettes end");
             skinningSynchronizedSceneIds_.push_back(scene.Id());
         }
     }
     // History ribbons own transient samples in the render synchronizer. Full
     // sync already advances them; this idempotent call also covers the normal
     // transform/dirty-entity incremental path.
+    WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport AdvanceHistoryRibbons begin");
     renderSceneSynchronizer_->AdvanceHistoryRibbons(scene, renderScene);
+    WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport AdvanceHistoryRibbons end");
+    WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport SyncLensEchoes begin");
     renderSceneSynchronizer_->SyncLensEchoes(scene, renderScene, desc.target.viewport.id.value);
+    WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport SyncLensEchoes end");
+    lastSceneSynchronizationMilliseconds_ = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - synchronizationBegin).count();
     // Retain one view-independent, immutable simulation snapshot in renderer state.
     // GPU batching and alignment remain per-view work in the transparent pass.
     WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport particle sync begin");
@@ -1239,6 +1253,7 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
     // during its own submit. Mesh resources were ensured above, so bounds resolve this same
     // frame; when the same scene is submitted to several viewports, the last submit in the
     // frame's deterministic plan order wins (see SceneRenderFeedback.hpp's contract).
+    const auto visibilityBuildBegin = std::chrono::steady_clock::now();
     SceneRenderVisibilityPublisher::BuildFrame(
         renderScene,
         overlayCamera,
@@ -1248,8 +1263,14 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         height,
         &sceneRenderer_->Resources(),
         &sceneRenderer_->ResourceMap(),
-        sceneRenderVisibilityScratch_);
+        sceneRenderVisibilityScratch_,
+        &lastSceneVisibilitySortMilliseconds_);
+    const auto visibilityPublishBegin = std::chrono::steady_clock::now();
+    lastSceneVisibilityBuildMilliseconds_ = std::chrono::duration<double, std::milli>(
+        visibilityPublishBegin - visibilityBuildBegin).count();
     kb::scene::SceneRenderFeedback::Publish(const_cast<kb::scene::Scene&>(scene), sceneRenderVisibilityScratch_);
+    lastSceneVisibilityPublishMilliseconds_ = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - visibilityPublishBegin).count();
     // LIB-145: drive the scene's async screen-capture channel (finish a ready readback,
     // start a newly requested one) - same scene-mutable-during-its-own-submit convention
     // as the feedback publish above.
@@ -1882,6 +1903,22 @@ void Renderer::PrimeExposureAdaptation(float luminance) noexcept {
 
 SceneRenderSubmitStats Renderer::LastSceneSubmitStats() const noexcept {
     return lastSceneSubmitStats_;
+}
+
+double Renderer::LastSceneSynchronizationMilliseconds() const noexcept {
+    return lastSceneSynchronizationMilliseconds_;
+}
+
+double Renderer::LastSceneVisibilityBuildMilliseconds() const noexcept {
+    return lastSceneVisibilityBuildMilliseconds_;
+}
+
+double Renderer::LastSceneVisibilitySortMilliseconds() const noexcept {
+    return lastSceneVisibilitySortMilliseconds_;
+}
+
+double Renderer::LastSceneVisibilityPublishMilliseconds() const noexcept {
+    return lastSceneVisibilityPublishMilliseconds_;
 }
 
 std::span<const SceneRenderPassSubmitStats> Renderer::LastScenePassSubmitStats() const noexcept {

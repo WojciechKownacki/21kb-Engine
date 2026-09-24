@@ -4,41 +4,27 @@
 #include "kb/render/scene/SceneRenderResourceMap.hpp"
 #include "scene/pipeline/MeshPipelineVisibility.hpp"
 
-#include <bx/bounds.h>
-#include <bx/math.h>
-
-#include <algorithm>
+#include <chrono>
+#include <cmath>
 #include <cstdint>
+#include <span>
 
 namespace kb::render {
 namespace {
 
-// The world-space box of a local box under the instance transform. bx already owns this:
-// an Obb is just the matrix that maps the unit cube, and toAabb reduces it to the axis-aligned
-// box - so there is no hand-rolled corner or abs-matrix math here to drift from the library
-// the renderer already links.
-// The centre is deliberately not returned: the box and the sphere share one local origin, so
-// under the same model matrix they land on the same world point. Only the extent differs.
+// An affine transform maps each local box axis to a column of its linear part.
+// The axis-aligned world half-extent is the sum of their absolute contributions;
+// translation and the local box centre do not change it.
 [[nodiscard]] kb::math::Vec3 TransformBoxHalfExtents(
     const RenderBoundsBox& localBox,
     const std::array<float, 16>& model) noexcept {
-    const bx::Vec3 halfExtents{ localBox.halfExtents[0], localBox.halfExtents[1], localBox.halfExtents[2] };
-    float boxToLocal[16];
-    bx::mtxSRT(
-        boxToLocal,
-        halfExtents.x, halfExtents.y, halfExtents.z,
-        0.0F, 0.0F, 0.0F,
-        localBox.center[0], localBox.center[1], localBox.center[2]);
-
-    bx::Obb obb{};
-    bx::mtxMul(obb.mtx, boxToLocal, model.data());
-
-    bx::Aabb aabb{};
-    bx::toAabb(aabb, obb);
+    const float x = localBox.halfExtents[0];
+    const float y = localBox.halfExtents[1];
+    const float z = localBox.halfExtents[2];
     return kb::math::Vec3{
-        (aabb.max.x - aabb.min.x) * 0.5F,
-        (aabb.max.y - aabb.min.y) * 0.5F,
-        (aabb.max.z - aabb.min.z) * 0.5F,
+        std::abs(model[0]) * x + std::abs(model[4]) * y + std::abs(model[8]) * z,
+        std::abs(model[1]) * x + std::abs(model[5]) * y + std::abs(model[9]) * z,
+        std::abs(model[2]) * x + std::abs(model[6]) * y + std::abs(model[10]) * z,
     };
 }
 
@@ -53,7 +39,8 @@ void SceneRenderVisibilityPublisher::BuildFrame(
     std::uint32_t viewportHeight,
     const RenderResourceRegistry* resources,
     const SceneRenderResourceMap* resourceMap,
-    kb::scene::SceneRenderVisibilityFrame& outFrame) {
+    kb::scene::SceneRenderVisibilityFrame& outFrame,
+    double* outSortMilliseconds) {
     const MeshPipelineFrustum frustum = MeshPipelineVisibility::BuildFrustum(camera);
     outFrame.frustumValid = frustum.valid;
     outFrame.viewportId = viewportId;
@@ -74,46 +61,54 @@ void SceneRenderVisibilityPublisher::BuildFrame(
 
     outFrame.entries.clear();
     outFrame.entries.reserve(renderScene.MeshProxyCount());
-    for (const auto& [entityId, proxy] : renderScene.MeshProxies()) {
-        RenderBoundsSphere localBounds{};
-        RenderBoundsBox localBox{};
-        if (resources != nullptr && resourceMap != nullptr) {
-            const RenderMeshHandle meshHandle = resourceMap->ResolveMesh(proxy.desc.meshAssetId);
-            const RenderMeshResource* meshResource = meshHandle.IsValid() ? resources->FindMesh(meshHandle) : nullptr;
-            if (meshResource != nullptr) {
-                localBounds = meshResource->bounds;
-                localBox = meshResource->boundsBox;
+    const auto sortBegin = std::chrono::steady_clock::now();
+    const std::span<const MeshRenderProxy* const> sortedProxies = renderScene.SortedMeshProxies();
+    if (outSortMilliseconds != nullptr) {
+        *outSortMilliseconds = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - sortBegin).count();
+    }
+    std::uint64_t cachedMeshAssetId = 0U;
+    bool cachedMeshBounds = false;
+    RenderBoundsSphere localBounds{};
+    RenderBoundsBox localBox{};
+    for (const MeshRenderProxy* proxy : sortedProxies) {
+        if (!cachedMeshBounds || cachedMeshAssetId != proxy->desc.meshAssetId) {
+            cachedMeshAssetId = proxy->desc.meshAssetId;
+            cachedMeshBounds = true;
+            localBounds = {};
+            localBox = {};
+            if (resources != nullptr && resourceMap != nullptr) {
+                const RenderMeshHandle meshHandle = resourceMap->ResolveMesh(cachedMeshAssetId);
+                const RenderMeshResource* meshResource = meshHandle.IsValid() ? resources->FindMesh(meshHandle) : nullptr;
+                if (meshResource != nullptr) {
+                    localBounds = meshResource->bounds;
+                    localBox = meshResource->boundsBox;
+                }
             }
         }
         const RenderBoundsSphere worldBounds = MeshPipelineVisibility::TransformBounds(
-            proxy.desc.boundsOverride.IsValid() ? proxy.desc.boundsOverride : localBounds,
-            proxy.desc.model);
+            proxy->desc.boundsOverride.IsValid() ? proxy->desc.boundsOverride : localBounds,
+            proxy->desc.model);
 
-        const bool passesMask = (proxy.desc.layer & cullingMask) != 0U;
+        const bool passesMask = (proxy->desc.layer & cullingMask) != 0U;
         const bool insideFrustum = MeshPipelineVisibility::IsInsideFrustum(frustum, worldBounds);
         // The box is an addition, not a replacement: a mesh whose box the renderer could not
         // resolve keeps a valid sphere and zero half-extents, and consumers fall back to it.
         kb::math::Vec3 worldBoxHalfExtents{};
         if (localBox.IsValid()) {
-            worldBoxHalfExtents = TransformBoxHalfExtents(localBox, proxy.desc.model);
+            worldBoxHalfExtents = TransformBoxHalfExtents(localBox, proxy->desc.model);
         }
         outFrame.entries.push_back(kb::scene::SceneRenderVisibilityEntry{
-            .entityId = entityId,
+            .entityId = proxy->desc.entityId,
             .worldBounds = kb::scene::SceneRenderBounds{
                 .center = kb::math::Vec3{ worldBounds.center[0], worldBounds.center[1], worldBounds.center[2] },
                 .radius = worldBounds.radius,
                 .halfExtents = worldBoxHalfExtents,
             },
-            .visible = proxy.desc.visible && passesMask && insideFrustum,
+            .visible = proxy->desc.visible && passesMask && insideFrustum,
         });
     }
 
-    std::sort(
-        outFrame.entries.begin(),
-        outFrame.entries.end(),
-        [](const kb::scene::SceneRenderVisibilityEntry& lhs, const kb::scene::SceneRenderVisibilityEntry& rhs) noexcept {
-            return lhs.entityId < rhs.entityId;
-        });
 }
 
 } // namespace kb::render

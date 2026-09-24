@@ -9,6 +9,7 @@ void RunSaveGameTests();
 void RunEcsRuntimeTests();
 void RunSceneHierarchyTests();
 void RunSceneUITests();
+void RunSceneUIBuildFrameBenchmark();
 void RunSceneSystemTests();
 void RunScenePrefabTests();
 void RunProjectSceneTests();

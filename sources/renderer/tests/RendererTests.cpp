@@ -18,6 +18,11 @@ void RunGraphShaderArtifactCookTests();
 void RunMaterialProgramRegistryTests();
 void RunSceneMeshPassProgramSelectionTests();
 void RunRendererRuntimeSubmitTests();
+void RunRendererResourceGroupEnsureTests();
+void RunRendererSceneSubmitScaleBenchmark(bool spiralLayout);
+void RunRendererPacedSceneSubmitStressBenchmark(bool staticMillionSnapshot,
+    bool gpuDrivenDispatchEnabled, unsigned maxForwardLights);
+void RunRendererVisibilityFeedbackTest();
 void RunEditorUIViewTransformValidationTests();
 void RunRendererParticleMeshSnapshotSubmitTest();
 void RunRendererParticleStripSnapshotSubmitTest();
@@ -104,12 +109,48 @@ int main(int argc, char** argv) {
         kb::render::tests::RunRenderSceneSyncTests();
         return EXIT_SUCCESS;
     }
+    if (argc == 2 && std::string_view{ argv[1] } == "resource-group-ensure") {
+        kb::render::tests::RunRendererResourceGroupEnsureTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "visibility-feedback") {
+        kb::render::tests::RunRendererVisibilityFeedbackTest();
+        return EXIT_SUCCESS;
+    }
     if (argc == 2 && std::string_view{ argv[1] } == "scene-render-target-format") {
         kb::render::tests::RunSceneRenderTargetFormatTests();
         return EXIT_SUCCESS;
     }
     if (argc == 2 && std::string_view{ argv[1] } == "particle-mesh-submit") {
         kb::render::tests::RunRendererParticleMeshSnapshotSubmitTest();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "scene-submit-scale") {
+        kb::render::tests::RunRendererSceneSubmitScaleBenchmark(false);
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "scene-submit-scale-spiral") {
+        kb::render::tests::RunRendererSceneSubmitScaleBenchmark(true);
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "paced-scene-submit-stress") {
+        kb::render::tests::RunRendererPacedSceneSubmitStressBenchmark(false, true, 4U);
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "million-scene-snapshot") {
+        kb::render::tests::RunRendererPacedSceneSubmitStressBenchmark(true, true, 4U);
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "million-scene-snapshot-off4") {
+        kb::render::tests::RunRendererPacedSceneSubmitStressBenchmark(true, false, 4U);
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "million-scene-snapshot-on0") {
+        kb::render::tests::RunRendererPacedSceneSubmitStressBenchmark(true, true, 0U);
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "million-scene-snapshot-off0") {
+        kb::render::tests::RunRendererPacedSceneSubmitStressBenchmark(true, false, 0U);
         return EXIT_SUCCESS;
     }
     if (argc == 2 && std::string_view{ argv[1] } == "particle-strip-submit") {

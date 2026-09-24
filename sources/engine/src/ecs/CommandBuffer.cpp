@@ -623,6 +623,7 @@ CommandBufferPlaybackResult CommandBuffer::Playback(World& world) {
 
     std::vector<PlaybackComponentSnapshot> componentRollback;
     std::unordered_set<PlaybackComponentSnapshotKey, PlaybackComponentSnapshotKeyHash> componentRollbackKeys;
+    bool componentRollbackKeysDeferred = false;
     std::vector<PlaybackParentSnapshot> parentRollback;
     std::unordered_set<Entity::IdType> parentRollbackIds;
     std::vector<Entity> playbackScratchEntities;
@@ -635,13 +636,28 @@ CommandBufferPlaybackResult CommandBuffer::Playback(World& world) {
         return entity.IsValid() && playbackCreatedIds.find(entity.Id()) != playbackCreatedIds.end();
     };
 
-    auto snapshotComponent = [&world, &componentRollback, &componentRollbackKeys, &isPlaybackCreated](Entity entity, ComponentId componentId) {
+    auto ensureComponentRollbackKeys = [&componentRollback, &componentRollbackKeys, &componentRollbackKeysDeferred]() {
+        if (!componentRollbackKeysDeferred) {
+            return;
+        }
+        componentRollbackKeys.reserve(componentRollback.size());
+        for (const PlaybackComponentSnapshot& snapshot : componentRollback) {
+            componentRollbackKeys.insert(PlaybackComponentSnapshotKey{ .entity = snapshot.entity, .componentId = snapshot.componentId });
+        }
+        componentRollbackKeysDeferred = false;
+    };
+
+    auto snapshotComponent = [&world, &componentRollback, &componentRollbackKeys, &isPlaybackCreated,
+                              &ensureComponentRollbackKeys](Entity entity, ComponentId componentId, bool deferIndex = false) {
         if (componentId == 0 || !world.IsAlive(entity) || isPlaybackCreated(entity)) {
             return;
         }
-        const PlaybackComponentSnapshotKey key{ .entity = entity, .componentId = componentId };
-        if (!componentRollbackKeys.insert(key).second) {
-            return;
+        if (!deferIndex) {
+            ensureComponentRollbackKeys();
+            const PlaybackComponentSnapshotKey key{ .entity = entity, .componentId = componentId };
+            if (!componentRollbackKeys.insert(key).second) {
+                return;
+            }
         }
 
         PlaybackComponentSnapshot snapshot;
@@ -661,10 +677,11 @@ CommandBufferPlaybackResult CommandBuffer::Playback(World& world) {
         componentRollback.push_back(std::move(snapshot));
     };
 
-    auto reserveComponentSnapshots = [&componentRollback, &componentRollbackKeys](std::size_t count) {
+    auto reserveComponentSnapshots = [&componentRollback, &componentRollbackKeys, &ensureComponentRollbackKeys](std::size_t count) {
         if (count == 0U) {
             return;
         }
+        ensureComponentRollbackKeys();
         const std::size_t targetSize = componentRollback.size() + count;
         if (componentRollback.capacity() < targetSize) {
             componentRollback.reserve(targetSize);
@@ -939,11 +956,31 @@ CommandBufferPlaybackResult CommandBuffer::Playback(World& world) {
 
                     playbackScratchEntities.clear();
                     ResolveCommandEntitiesForPlayback(command, result, playbackScratchEntities);
-                    reserveComponentSnapshots(playbackScratchEntities.size() * playbackScratchComponentIds.size());
+                    const bool strictlyIncreasingEntities = std::adjacent_find(
+                        playbackScratchEntities.begin(), playbackScratchEntities.end(),
+                        [](Entity left, Entity right) { return left.Id() >= right.Id(); }) == playbackScratchEntities.end();
+                    bool uniqueComponentIds = true;
+                    for (std::size_t index = 0; index < playbackScratchComponentIds.size(); ++index) {
+                        if (std::find(playbackScratchComponentIds.begin(), playbackScratchComponentIds.begin() + index,
+                                      playbackScratchComponentIds[index]) != playbackScratchComponentIds.begin() + index) {
+                            uniqueComponentIds = false;
+                            break;
+                        }
+                    }
+                    const bool deferSnapshotIndex = componentRollback.empty() && componentRollbackKeys.empty()
+                        && strictlyIncreasingEntities && uniqueComponentIds;
+                    if (deferSnapshotIndex) {
+                        componentRollback.reserve(playbackScratchEntities.size() * playbackScratchComponentIds.size());
+                    } else {
+                        reserveComponentSnapshots(playbackScratchEntities.size() * playbackScratchComponentIds.size());
+                    }
                     for (Entity entity : playbackScratchEntities) {
                         for (ComponentId componentId : playbackScratchComponentIds) {
-                            snapshotComponent(entity, componentId);
+                            snapshotComponent(entity, componentId, deferSnapshotIndex);
                         }
+                    }
+                    if (deferSnapshotIndex && !componentRollback.empty()) {
+                        componentRollbackKeysDeferred = true;
                     }
 
                     playbackScratchComponents.clear();

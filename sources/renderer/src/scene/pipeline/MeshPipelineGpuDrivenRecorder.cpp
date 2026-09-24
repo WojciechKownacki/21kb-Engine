@@ -84,16 +84,18 @@ void MeshPipelineGpuDrivenRecorder::Finalize(
         return;
     }
 
-    const SceneGpuDrivenParityValidationResult parity = SceneGpuDrivenParityValidator::Validate(SceneGpuDrivenParityValidationDesc{
-        .cpuRecords = result.gpuDrivenCpuValidationRecords,
-        .gpuRecords = result.gpuDrivenCpuValidationRecords,
-        .droppedInstanceBudget = droppedInstanceBudget,
-    });
-    result.stats.gpuDrivenParityValidationStatus = parity.status;
-    result.stats.gpuDrivenParityMismatchEntityId = parity.entityId;
+    // CPU fallback has one record source. Comparing it with itself cannot find a GPU mismatch.
+    const std::uint32_t droppedCount = static_cast<std::uint32_t>(std::count_if(
+        result.gpuDrivenCpuValidationRecords.begin(), result.gpuDrivenCpuValidationRecords.end(),
+        [](const SceneGpuDrivenInstanceValidationRecord& record) { return record.dropped; }));
+    result.stats.gpuDrivenParityValidationStatus = droppedInstanceBudget != 0U &&
+        droppedCount > droppedInstanceBudget ?
+        SceneGpuDrivenParityValidationStatus::DroppedInstanceBudgetExceeded :
+        SceneGpuDrivenParityValidationStatus::Valid;
+    result.stats.gpuDrivenParityMismatchEntityId = 0U;
     result.stats.gpuDrivenParityValidationCount = static_cast<std::uint32_t>(result.gpuDrivenCpuValidationRecords.size());
-    result.stats.gpuDrivenParityCpuDroppedInstanceCount = parity.cpuDroppedInstanceCount;
-    result.stats.gpuDrivenParityGpuDroppedInstanceCount = parity.gpuDroppedInstanceCount;
+    result.stats.gpuDrivenParityCpuDroppedInstanceCount = droppedCount;
+    result.stats.gpuDrivenParityGpuDroppedInstanceCount = droppedCount;
 }
 
 } // namespace kb::render

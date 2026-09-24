@@ -24,6 +24,12 @@ std::vector<EditorHierarchyRow> EditorHierarchyRowBuilder::Build(const kb::scene
     return rows;
 }
 
+void EditorHierarchyRowBuilder::AppendRoot(const kb::scene::Scene& scene,
+    const CollapsedEntitySet& collapsedEntities, kb::scene::SceneEntity root,
+    std::vector<EditorHierarchyRow>& rows) {
+    Append(scene, collapsedEntities, root, 0U, rows);
+}
+
 void EditorHierarchyRowBuilder::Append(const kb::scene::Scene& scene, const CollapsedEntitySet& collapsedEntities, kb::scene::SceneEntity entity, std::uint32_t depth, std::vector<EditorHierarchyRow>& rows) {
     const EditorHierarchyRow row = EditorHierarchyRowFactory::Make(scene, collapsedEntities, entity, depth);
     rows.push_back(row);

@@ -19,6 +19,7 @@
 #include "kb/render/scene/SceneRenderer.hpp"
 
 #include <algorithm>
+#include <unordered_set>
 #include <vector>
 
 namespace kb::render {
@@ -517,13 +518,32 @@ void RuntimeMeshResourceEnsurer::Ensure(
         context.sceneRenderer.ResourceMap().BindMesh(meshAssetId, handle);
     };
 
-    for (const auto& [entityId, proxy] : context.renderScene.MeshProxies()) {
-        static_cast<void>(entityId);
-        if (!ensureMorphMesh(proxy.desc)) ensureMesh(proxy.desc.meshAssetId);
+    std::unordered_set<std::uint64_t> ensuredMeshAssetIds;
+    const auto ensureMeshOnce = [&](std::uint64_t meshAssetId) {
+        if (meshAssetId != 0U && ensuredMeshAssetIds.insert(meshAssetId).second) {
+            ensureMesh(meshAssetId);
+        }
+    };
+
+    if (context.renderScene.ResourceGroupsCoverMeshProxies().meshes) {
+        for (const SceneRenderDrawGroup& group : context.renderScene.DrawGroups()) {
+            ensureMeshOnce(group.meshAssetId);
+        }
+    } else {
+        for (const auto& [entityId, proxy] : context.renderScene.MeshProxies()) {
+            static_cast<void>(entityId);
+            if (ensureMorphMesh(proxy.desc)) {
+                // Morph handling must not suppress a later ordinary ensure for this id.
+                // The resource map itself cannot represent a morph/ordinary id collision.
+                ensuredMeshAssetIds.erase(proxy.desc.meshAssetId);
+            } else {
+                ensureMeshOnce(proxy.desc.meshAssetId);
+            }
+        }
     }
     for (const auto& [entityId, proxy] : context.renderScene.GeometrySwarmProxies()) {
         static_cast<void>(entityId);
-        ensureMesh(proxy.desc.meshAssetId);
+        ensureMeshOnce(proxy.desc.meshAssetId);
     }
     if (const auto& snapshot = context.renderScene.ParticleRenderSnapshot(); snapshot != nullptr) {
         bool requiresQuad = false;
@@ -532,9 +552,9 @@ void RuntimeMeshResourceEnsurer::Ensure(
                 emitter.output == kb::particles::ParticleRenderOutput::StretchedBillboard ||
                 emitter.output == kb::particles::ParticleRenderOutput::PointSprite ||
                 emitter.output == kb::particles::ParticleRenderOutput::Volumetric;
-            if (emitter.output == kb::particles::ParticleRenderOutput::Mesh) ensureMesh(emitter.meshAssetId);
+            if (emitter.output == kb::particles::ParticleRenderOutput::Mesh) ensureMeshOnce(emitter.meshAssetId);
         }
-        if (requiresQuad) ensureMesh(BuiltInParticleQuadMeshAssetId().value);
+        if (requiresQuad) ensureMeshOnce(BuiltInParticleQuadMeshAssetId().value);
     }
 }
 

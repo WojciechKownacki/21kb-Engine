@@ -4,6 +4,7 @@
 #include "engine/scene/SceneObject.hpp"
 
 #include <cstddef>
+#include <cstdint>
 #include <vector>
 
 namespace kb::scene {
@@ -23,6 +24,11 @@ public:
     [[nodiscard]] std::size_t ChildCount(SceneEntity entity) const noexcept;
     [[nodiscard]] SceneEntity ChildAt(SceneEntity entity, std::size_t index) const noexcept;
     [[nodiscard]] std::vector<SceneEntity> RootEntities() const;
+    // The epoch changes when a topology or name edit can alter existing rows.
+    // Fresh root appends preserve it, allowing an editor to append only those rows.
+    [[nodiscard]] std::size_t RootCount() const noexcept;
+    [[nodiscard]] SceneEntity RootAt(std::size_t index) const noexcept;
+    [[nodiscard]] std::uint64_t RootAppendEpoch() const noexcept;
 
 private:
     const Scene& scene_;
@@ -40,6 +46,9 @@ public:
     [[nodiscard]] SceneEntity ChildAt(SceneEntity entity, std::size_t index) const noexcept;
     [[nodiscard]] std::vector<SceneObject> RootObjects();
     [[nodiscard]] std::vector<SceneEntity> RootEntities() const;
+    [[nodiscard]] std::size_t RootCount() const noexcept;
+    [[nodiscard]] SceneEntity RootAt(std::size_t index) const noexcept;
+    [[nodiscard]] std::uint64_t RootAppendEpoch() const noexcept;
     [[nodiscard]] bool SetParent(SceneObject child, SceneObject parent) noexcept;
     [[nodiscard]] bool SetParent(SceneEntity child, SceneEntity parent) noexcept;
 

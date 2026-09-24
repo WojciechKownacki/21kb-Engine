@@ -80,6 +80,7 @@ bool SceneMeshSubmitter::Initialize() {
 }
 
 void SceneMeshSubmitter::Shutdown() {
+    instanceBuffers_.Shutdown();
     gpuDrivenFrameResources_.Shutdown();
     gpuDrivenCullingPass_.Shutdown();
     passResources_.Shutdown();
@@ -274,6 +275,7 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
         .motionVectorPreviousViewProjection = motionVectorPreviousViewProjection,
         .skinningPaletteAllocator = skinningPaletteAllocator_,
         .passResources = passResources_,
+        .instanceBufferPool = &instanceBuffers_,
         .diagnostics = diagnostics,
         .stats = stats,
         });

@@ -1,4 +1,5 @@
 #include "scene/SceneState.hpp"
+#include "scene/transform/SceneTransformRootQueryCache.hpp"
 
 #include <flecs.h>
 

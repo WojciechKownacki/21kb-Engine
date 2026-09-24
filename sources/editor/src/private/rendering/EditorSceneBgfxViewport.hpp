@@ -118,6 +118,7 @@ public:
     void NotifyHostDpiChanged(HWND host) noexcept;
     void ReleaseScene(const kb::scene::Scene& scene) noexcept;
     [[nodiscard]] std::uint32_t RendererCompletedFrame() const noexcept;
+    [[nodiscard]] render::SceneRenderSubmitStats LastSceneSubmitStats() const noexcept;
     // Advances renderer-owned asynchronous readbacks without rebuilding or
     // submitting a scene. Used only when no visible viewport advanced the
     // renderer since the previous poll.

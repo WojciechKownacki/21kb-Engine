@@ -14,6 +14,7 @@
 #include "engine/scene/SceneTransforms.hpp"
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneState.hpp"
+#include "scene/entities/SceneEntityCounter.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -2555,12 +2556,17 @@ std::vector<AnimationEventRecord> SceneAnimatorService::DrainEvents(Scene& scene
 void SceneAnimatorService::SyncComponents(Scene& scene) {
     // Structural mutations below invalidate the pointers an in-flight debug
     // snapshot build may still be reading.
-    JoinAnimatorDebugSnapshotJob(SceneAccess::State(scene));
+    SceneState& sceneState = SceneAccess::State(scene);
+    JoinAnimatorDebugSnapshotJob(sceneState);
+    if (sceneState.animators.empty() && sceneState.skeletonBindingPoses.empty() && sceneState.pendingAnimationEvents.empty() &&
+        SceneEntityCounter::CountWithComponent(sceneState.world, sceneState.components.AnimatorComponentId()) == 0U &&
+        SceneEntityCounter::CountWithComponent(sceneState.world, sceneState.components.SkeletonBindingComponentId()) == 0U) {
+        return;
+    }
     if (scene.Entities().Count() == 0U) {
-        SceneState& state = SceneAccess::State(scene);
-        state.animators.clear();
-        state.skeletonBindingPoses.clear();
-        state.pendingAnimationEvents.clear();
+        sceneState.animators.clear();
+        sceneState.skeletonBindingPoses.clear();
+        sceneState.pendingAnimationEvents.clear();
         return;
     }
     struct AuthoredAnimator {

@@ -4,6 +4,7 @@
 #include "engine/scene/SceneObject.hpp"
 
 #include <cstddef>
+#include <cstdint>
 #include <vector>
 
 namespace kb::scene {
@@ -22,6 +23,9 @@ public:
     [[nodiscard]] static SceneEntity ChildAt(const Scene& scene, SceneEntity entity, std::size_t index) noexcept;
     [[nodiscard]] static std::vector<SceneObject> RootObjects(Scene& scene);
     [[nodiscard]] static std::vector<SceneEntity> RootEntities(const Scene& scene);
+    [[nodiscard]] static std::size_t RootCount(const Scene& scene) noexcept;
+    [[nodiscard]] static SceneEntity RootAt(const Scene& scene, std::size_t index) noexcept;
+    [[nodiscard]] static std::uint64_t RootAppendEpoch(const Scene& scene) noexcept;
     [[nodiscard]] static bool SetParent(Scene& scene, SceneObject child, SceneObject parent) noexcept;
     [[nodiscard]] static bool SetParent(Scene& scene, SceneEntity child, SceneEntity parent) noexcept;
 };

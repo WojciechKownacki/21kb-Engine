@@ -1419,6 +1419,8 @@ private:
     EditorHierarchySearchState hierarchySearch_;
     mutable std::vector<EditorHierarchyRow> hierarchyRowsCache_;
     mutable bool hierarchyRowsDirty_ = true;
+    mutable std::size_t hierarchyRowsRootCount_ = 0U;
+    mutable std::uint64_t hierarchyRowsRootAppendEpoch_ = 0U;
     kb::scene::SceneEntity hierarchyRenameEntity_{};
     std::string hierarchyRenameBuffer_;
     bool hierarchyRenameSelectingAll_ = false;
@@ -1465,6 +1467,8 @@ private:
     EditorAutosaveState autosave_;
     EditorPlayModeSceneSession playModeSceneSession_;
     std::uint64_t playModeRenderTopologyVersion_ = 0U;
+    std::size_t playModeRootCount_ = 0U;
+    std::uint64_t playModeRootAppendEpoch_ = 0U;
     bool playModeRenderTopologyVersionInitialized_ = false;
     EditorPlayModeSelectionSnapshot playModeSelectionSnapshot_;
     kb::scene::SceneEntity playCameraEntity_{};

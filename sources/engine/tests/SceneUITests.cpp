@@ -32,8 +32,10 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <iostream>
 #include <limits>
 #include <memory>
 #include <span>
@@ -154,6 +156,31 @@ void TestCatalogAndPresets() {
         "A Toggle preset must arrive square");
     kb::tests::Require(toggle.rectTransform->offsetMax.x < button.rectTransform->offsetMax.x,
         "A Toggle preset must arrive smaller than a Button");
+}
+
+void TestFrameWithoutCanvasTracksDynamicComponents() {
+    kb::scene::Scene scene;
+    const SceneEntity canvasEntity = scene.Entities().CreateEntity();
+    const SceneEntity orphan = scene.Entities().CreateEntity();
+    scene.Components().UI().Set(orphan, Rect(0.0F, 0.0F, 80.0F, 20.0F));
+
+    kb::scene::SceneUIFrame frame;
+    kb::tests::Require(kb::scene::SceneUIQueries{scene}.BuildFrame(640.0F, 360.0F, frame),
+        "UI frame without a canvas must build");
+    kb::tests::Require(frame.elements.empty() && frame.viewportSize.x == 640.0F &&
+        frame.viewportSize.y == 360.0F && !frame.refusal.HasValue(),
+        "Orphan UI components must not create frame elements");
+
+    scene.Components().UI().Set(canvasEntity, Rect(0.0F, 0.0F, 640.0F, 360.0F));
+    scene.Components().UI().Set(canvasEntity, kb::scene::UICanvas{});
+    kb::tests::Require(kb::scene::SceneUIQueries{scene}.BuildFrame(640.0F, 360.0F, frame) &&
+        FindElement(frame, canvasEntity) != nullptr,
+        "Adding a canvas after an empty frame must create visible UI");
+
+    scene.Components().UI().Remove<kb::scene::UICanvas>(canvasEntity);
+    kb::tests::Require(kb::scene::SceneUIQueries{scene}.BuildFrame(640.0F, 360.0F, frame) &&
+        frame.elements.empty() && !frame.refusal.HasValue(),
+        "Removing the last canvas must clear a previously populated frame");
 }
 
 void TestLayoutsAndFitters() {
@@ -1531,6 +1558,7 @@ namespace kb::tests {
 void RunSceneUITests() {
     TestAuthoredDimensionsAndVisibility();
     TestCatalogAndPresets();
+    TestFrameWithoutCanvasTracksDynamicComponents();
     TestLayoutsAndFitters();
     TestHierarchicalTransformsAndMaskHitTesting();
     TestClippingGroupsSortingAndScaling();
@@ -1549,6 +1577,35 @@ void RunSceneUITests() {
     TestCanvasPlacementAnimationAndPlayers();
     TestScrollMovementAndLocalizedText();
     TestWidgetSettingsPersistence();
+}
+
+void RunSceneUIBuildFrameBenchmark() {
+    constexpr std::size_t rootCount = 100'000U;
+    kb::scene::Scene scene;
+    for (std::size_t index = 0U; index < rootCount; ++index) {
+        kb::tests::Require(scene.Entities().CreateEntity().IsValid(),
+            "UI frame benchmark could not create a real scene root");
+    }
+    kb::tests::Require(scene.Entities().Count() == rootCount,
+        "UI frame benchmark must count live scene entities");
+
+    const kb::scene::SceneUIQueries ui{scene};
+    kb::scene::SceneUIFrame frame;
+    for (int warmup = 0; warmup < 2; ++warmup) {
+        kb::tests::Require(ui.BuildFrame(640.0F, 360.0F, frame) && frame.elements.empty(),
+            "UI frame benchmark expected an empty frame");
+    }
+    std::array<double, 5U> samples{};
+    for (double& sample : samples) {
+        const auto start = std::chrono::steady_clock::now();
+        const bool built = ui.BuildFrame(640.0F, 360.0F, frame);
+        sample = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - start).count();
+        kb::tests::Require(built && frame.elements.empty(),
+            "UI frame benchmark expected an empty frame");
+    }
+    std::ranges::sort(samples);
+    std::cout << "ui_buildframe_roots=" << rootCount << " median_ms=" << samples[2] << '\n';
 }
 
 } // namespace kb::tests

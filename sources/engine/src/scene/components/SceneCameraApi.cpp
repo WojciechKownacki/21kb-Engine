@@ -4,6 +4,7 @@
 #include "scene/SceneEntityService.hpp"
 #include "scene/SceneRenderProxyComponentMask.hpp"
 #include "scene/SceneState.hpp"
+#include "scene/hierarchy/SceneHierarchyCache.hpp"
 #include "scene/prefab/ScenePrefabDirtyTracker.hpp"
 
 namespace kb::scene {
@@ -23,7 +24,11 @@ CameraComponent* SceneComponentMutationService::TryGetCamera(Scene& scene, Scene
 void SceneComponentMutationService::SetCamera(Scene& scene, SceneEntity entity, const CameraComponent& camera) {
     if (SceneEntityService::IsAlive(scene, entity)) {
         SceneState& state = SceneAccess::State(scene);
+        const bool hadCamera = state.componentStorage.Cameras().Has(entity);
         state.componentStorage.Cameras().Set(entity, camera);
+        if (!hadCamera) {
+            SceneHierarchyCache::MarkRowContentDirty(state);
+        }
         SetSceneRenderProxyComponentMask(state, entity, SceneRenderProxyComponentMask::Camera);
         MarkSceneRenderProxyDirty(state, entity);
         MarkScenePrefabNodeDirty(state, entity);
@@ -33,7 +38,11 @@ void SceneComponentMutationService::SetCamera(Scene& scene, SceneEntity entity, 
 void SceneComponentMutationService::RemoveCamera(Scene& scene, SceneEntity entity) noexcept {
     if (SceneEntityService::IsAlive(scene, entity)) {
         SceneState& state = SceneAccess::State(scene);
+        const bool hadCamera = state.componentStorage.Cameras().Has(entity);
         state.componentStorage.Cameras().Remove(entity);
+        if (hadCamera) {
+            SceneHierarchyCache::MarkRowContentDirty(state);
+        }
         ClearSceneRenderProxyComponentMask(state, entity, SceneRenderProxyComponentMask::Camera);
         MarkSceneRenderProxyDirty(state, entity);
         MarkScenePrefabNodeDirty(state, entity);

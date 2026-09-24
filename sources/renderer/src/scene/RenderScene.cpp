@@ -134,6 +134,7 @@ std::size_t RenderScene::DrawGroupKeyHash::operator()(DrawGroupKey key) const no
 void RenderScene::Reserve(const RenderSceneReserveDesc& desc) {
     if (desc.meshProxies > 0U) {
         meshes_.reserve(desc.meshProxies);
+        sortedMeshProxies_.proxies.reserve(desc.meshProxies);
     }
     if (desc.cameraProxies > 0U) {
         cameras_.reserve(desc.cameraProxies);
@@ -172,10 +173,36 @@ RenderProxyId RenderScene::UpsertMesh(const MeshRenderProxyDesc& desc) {
     auto [it, inserted] = meshes_.try_emplace(desc.entityId);
     MeshRenderProxy& proxy = it->second;
     if (inserted) {
+        if (!sortedMeshProxies_.dirty) {
+            if (sortedMeshProxies_.proxies.empty() ||
+                desc.entityId > sortedMeshProxies_.proxies.back()->desc.entityId) {
+                sortedMeshProxies_.proxies.push_back(&proxy);
+            } else {
+                sortedMeshProxies_.dirty = true;
+            }
+        }
         proxy.id = AllocateProxyId();
         proxy.desc = desc;
         proxy.dirty = RenderProxyDirtyFlag::All;
-        InvalidateDrawGroups();
+        if (!drawGroupsDirty_ && desc.visible) {
+            SceneRenderMeshInstance instance = RenderSceneMeshInstanceBuilder::Build(desc);
+            ApplySurfaceCasts(instance);
+            const DrawGroupKey key{ .meshAssetId = instance.meshAssetId, .materialAssetId = instance.materialAssetId };
+            auto [groupIt, newGroup] = drawGroupLookupScratch_.try_emplace(key, drawGroups_.size());
+            if (newGroup) {
+                drawGroups_.push_back(SceneRenderDrawGroup{
+                    .meshAssetId = instance.meshAssetId,
+                    .materialAssetId = instance.materialAssetId,
+                });
+            }
+            SceneRenderDrawGroup& group = drawGroups_[groupIt->second];
+            proxy.instanceGroupIndex = static_cast<std::uint32_t>(groupIt->second);
+            proxy.instanceIndexInGroup = static_cast<std::uint32_t>(group.instances.size());
+            proxy.instanceLocationVersion = drawGroupBuildVersion_;
+            group.hasMaterialSlotOverrides = group.hasMaterialSlotOverrides || instance.materialSlotOverrideCount != 0U;
+            group.hasMorphDeformation = group.hasMorphDeformation || desc.morphDeformationEnabled;
+            group.instances.push_back(instance);
+        }
         return proxy.id;
     }
 
@@ -321,6 +348,7 @@ const std::optional<SceneRenderAmbientRadiance>& RenderScene::AmbientRadiance() 
 bool RenderScene::RemoveMesh(std::uint64_t entityId) noexcept {
     const bool removed = meshes_.erase(entityId) != 0U;
     if (removed) {
+        sortedMeshProxies_.dirty = true;
         InvalidateDrawGroups();
     }
     return removed;
@@ -419,6 +447,7 @@ std::uint32_t RenderScene::RemoveMeshesNotInSorted(std::span<const std::uint64_t
         ++removed;
     }
     if (removed != 0U) {
+        sortedMeshProxies_.dirty = true;
         InvalidateDrawGroups();
     }
     return removed;
@@ -505,6 +534,23 @@ const RenderScene::MeshProxyMap& RenderScene::MeshProxies() const noexcept {
     return meshes_;
 }
 
+std::span<const MeshRenderProxy* const> RenderScene::SortedMeshProxies() const {
+    if (sortedMeshProxies_.dirty) {
+        sortedMeshProxies_.proxies.clear();
+        sortedMeshProxies_.proxies.reserve(meshes_.size());
+        for (const auto& [entityId, proxy] : meshes_) {
+            sortedMeshProxies_.proxies.push_back(&proxy);
+            static_cast<void>(entityId);
+        }
+        std::sort(sortedMeshProxies_.proxies.begin(), sortedMeshProxies_.proxies.end(),
+            [](const MeshRenderProxy* lhs, const MeshRenderProxy* rhs) noexcept {
+                return lhs->desc.entityId < rhs->desc.entityId;
+            });
+        sortedMeshProxies_.dirty = false;
+    }
+    return sortedMeshProxies_.proxies;
+}
+
 const RenderScene::CameraProxyMap& RenderScene::CameraProxies() const noexcept {
     return cameras_;
 }
@@ -575,6 +621,29 @@ std::optional<SceneRenderCamera> RenderScene::BuildPrimaryCamera(std::uint32_t v
 const std::vector<SceneRenderDrawGroup>& RenderScene::DrawGroups() const {
     RebuildDrawGroupsIfNeeded();
     return drawGroups_;
+}
+
+RenderScene::ResourceGroupCoverage RenderScene::ResourceGroupsCoverMeshProxies() const {
+    // Geometry swarms and space strokes add generated instances that do not correspond
+    // one-to-one with mesh proxies, so their presence makes the coverage count ambiguous.
+    if (!geometrySwarms_.empty() || !spaceStrokes_.empty()) {
+        return {};
+    }
+    std::size_t represented = 0U;
+    bool hasMorphDeformation = false;
+    bool hasMaterialSlotOverrides = false;
+    for (const SceneRenderDrawGroup& group : DrawGroups()) {
+        represented += group.instances.size();
+        hasMorphDeformation = hasMorphDeformation || group.hasMorphDeformation;
+        hasMaterialSlotOverrides = hasMaterialSlotOverrides || group.hasMaterialSlotOverrides;
+    }
+    if (represented != meshes_.size()) {
+        return {};
+    }
+    return ResourceGroupCoverage{
+        .meshes = !hasMorphDeformation,
+        .materials = !hasMaterialSlotOverrides && surfaceCasts_.empty(),
+    };
 }
 
 void RenderScene::BuildDrawGroups(std::vector<SceneRenderDrawGroup>& outDrawGroups) const {
@@ -704,6 +773,7 @@ void RenderScene::RebuildDrawGroupsIfNeeded() const {
             group.meshAssetId = instance.meshAssetId;
             group.materialAssetId = instance.materialAssetId;
             group.hasMaterialSlotOverrides = false;
+            group.hasMorphDeformation = false;
             lookupIt = drawGroupLookupScratch_.emplace(key, writeGroupCount).first;
             ++writeGroupCount;
         }
@@ -716,6 +786,7 @@ void RenderScene::RebuildDrawGroupsIfNeeded() const {
         proxy.instanceIndexInGroup = static_cast<std::uint32_t>(group.instances.size());
         proxy.instanceLocationVersion = drawGroupBuildVersion_;
         group.hasMaterialSlotOverrides = group.hasMaterialSlotOverrides || instance.materialSlotOverrideCount != 0U;
+        group.hasMorphDeformation = group.hasMorphDeformation || mesh.morphDeformationEnabled;
         group.instances.push_back(instance);
     }
 
@@ -743,7 +814,7 @@ void RenderScene::RebuildDrawGroupsIfNeeded() const {
             if (lookupIt == drawGroupLookupScratch_.end()) {
                 if (writeGroupCount == drawGroups_.size()) drawGroups_.push_back(SceneRenderDrawGroup{});
                 SceneRenderDrawGroup& group = drawGroups_[writeGroupCount];
-                group.meshAssetId = instance.meshAssetId; group.materialAssetId = instance.materialAssetId; group.hasMaterialSlotOverrides = false;
+                group.meshAssetId = instance.meshAssetId; group.materialAssetId = instance.materialAssetId; group.hasMaterialSlotOverrides = false; group.hasMorphDeformation = false;
                 lookupIt = drawGroupLookupScratch_.emplace(key, writeGroupCount).first; ++writeGroupCount;
             }
             drawGroups_[lookupIt->second].instances.push_back(instance);
@@ -763,7 +834,7 @@ void RenderScene::RebuildDrawGroupsIfNeeded() const {
             if (lookupIt == drawGroupLookupScratch_.end()) {
                 if (writeGroupCount == drawGroups_.size()) drawGroups_.push_back(SceneRenderDrawGroup{});
                 SceneRenderDrawGroup& group = drawGroups_[writeGroupCount];
-                group.meshAssetId = instance.meshAssetId; group.materialAssetId = instance.materialAssetId; group.hasMaterialSlotOverrides = false;
+                group.meshAssetId = instance.meshAssetId; group.materialAssetId = instance.materialAssetId; group.hasMaterialSlotOverrides = false; group.hasMorphDeformation = false;
                 lookupIt = drawGroupLookupScratch_.emplace(key, writeGroupCount).first; ++writeGroupCount;
             }
             drawGroups_[lookupIt->second].instances.push_back(instance);

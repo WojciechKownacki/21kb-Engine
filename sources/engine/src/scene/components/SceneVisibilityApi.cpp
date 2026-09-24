@@ -4,6 +4,7 @@
 #include "scene/SceneEntityService.hpp"
 #include "scene/SceneRenderProxyComponentMask.hpp"
 #include "scene/SceneState.hpp"
+#include "scene/hierarchy/SceneHierarchyCache.hpp"
 #include "scene/prefab/ScenePrefabDirtyTracker.hpp"
 
 namespace kb::scene {
@@ -24,6 +25,8 @@ VisibilityComponent* SceneComponentMutationService::TryGetVisibility(Scene& scen
 void SceneComponentMutationService::SetVisibility(Scene& scene, SceneEntity entity, const VisibilityComponent& visibility) {
     if (SceneEntityService::IsAlive(scene, entity)) {
         SceneState& state = SceneAccess::State(scene);
+        const bool wasHidden = SceneRenderProxyMaskHas(
+            SceneRenderProxyComponentMaskOf(state, entity), SceneRenderProxyComponentMask::Hidden);
         VisibilityComponent normalized = visibility;
         if (!IsVisibilityModeValid(normalized.mode)) {
             normalized.mode = normalized.visible ? VisibilityMode::Visible : VisibilityMode::Hidden;
@@ -33,6 +36,9 @@ void SceneComponentMutationService::SetVisibility(Scene& scene, SceneEntity enti
         }
         normalized.visible = normalized.mode != VisibilityMode::Hidden;
         state.componentStorage.Visibility().Set(entity, normalized);
+        if (wasHidden != (normalized.mode == VisibilityMode::Hidden)) {
+            SceneHierarchyCache::MarkRowContentDirty(state);
+        }
         if (normalized.mode != VisibilityMode::Hidden) {
             ClearSceneRenderProxyComponentMask(state, entity, SceneRenderProxyComponentMask::Hidden);
         } else {
@@ -46,6 +52,8 @@ void SceneComponentMutationService::SetVisibility(Scene& scene, SceneEntity enti
 void SceneComponentMutationService::MarkVisibilityModified(Scene& scene, SceneEntity entity) noexcept {
     if (SceneEntityService::IsAlive(scene, entity)) {
         SceneState& state = SceneAccess::State(scene);
+        const bool wasHidden = SceneRenderProxyMaskHas(
+            SceneRenderProxyComponentMaskOf(state, entity), SceneRenderProxyComponentMask::Hidden);
         VisibilityComponent* visibility = state.componentStorage.Visibility().TryGet(entity);
         if (visibility == nullptr) {
             return;
@@ -57,12 +65,16 @@ void SceneComponentMutationService::MarkVisibilityModified(Scene& scene, SceneEn
             visibility->mode = VisibilityMode::Hidden;
         }
         visibility->visible = visibility->mode != VisibilityMode::Hidden;
-        if (visibility->mode != VisibilityMode::Hidden) {
+        const bool isHidden = visibility->mode == VisibilityMode::Hidden;
+        if (!isHidden) {
             ClearSceneRenderProxyComponentMask(state, entity, SceneRenderProxyComponentMask::Hidden);
         } else {
             SetSceneRenderProxyComponentMask(state, entity, SceneRenderProxyComponentMask::Hidden);
         }
         state.componentStorage.Visibility().MarkModified(entity);
+        if (wasHidden != isHidden) {
+            SceneHierarchyCache::MarkRowContentDirty(state);
+        }
         MarkSceneRenderProxySubtreeDirty(state, entity);
         MarkScenePrefabNodeDirty(state, entity);
     }

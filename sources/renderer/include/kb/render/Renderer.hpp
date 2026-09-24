@@ -200,6 +200,10 @@ public:
     [[nodiscard]] bool HasExposureHistory() const noexcept;
     void PrimeExposureAdaptation(float luminance) noexcept;
     [[nodiscard]] SceneRenderSubmitStats LastSceneSubmitStats() const noexcept;
+    [[nodiscard]] double LastSceneSynchronizationMilliseconds() const noexcept;
+    [[nodiscard]] double LastSceneVisibilityBuildMilliseconds() const noexcept;
+    [[nodiscard]] double LastSceneVisibilitySortMilliseconds() const noexcept;
+    [[nodiscard]] double LastSceneVisibilityPublishMilliseconds() const noexcept;
     [[nodiscard]] std::span<const SceneRenderPassSubmitStats> LastScenePassSubmitStats() const noexcept;
     [[nodiscard]] std::span<const SceneRenderExposureSubmitStats> LastSceneExposureStats() const noexcept;
     [[nodiscard]] std::span<const std::string> LastAaPipelineTraceLines() const noexcept;
@@ -282,6 +286,10 @@ private:
     EditorRenderPassSubmitter editorPassSubmitter_;
     PostProcessChain postProcessChain_;
     SceneRenderSubmitStats lastSceneSubmitStats_{};
+    double lastSceneSynchronizationMilliseconds_ = 0.0;
+    double lastSceneVisibilityBuildMilliseconds_ = 0.0;
+    double lastSceneVisibilitySortMilliseconds_ = 0.0;
+    double lastSceneVisibilityPublishMilliseconds_ = 0.0;
     std::vector<SceneRenderPassSubmitStats> lastScenePassSubmitStats_;
     std::vector<SceneRenderExposureSubmitStats> lastSceneExposureStats_;
     std::vector<std::string> lastAaPipelineTraceLines_;

@@ -27,6 +27,18 @@ std::vector<SceneEntity> SceneHierarchyQueries::RootEntities() const {
     return SceneHierarchyService::RootEntities(scene_);
 }
 
+std::size_t SceneHierarchyQueries::RootCount() const noexcept {
+    return SceneHierarchyService::RootCount(scene_);
+}
+
+SceneEntity SceneHierarchyQueries::RootAt(std::size_t index) const noexcept {
+    return SceneHierarchyService::RootAt(scene_, index);
+}
+
+std::uint64_t SceneHierarchyQueries::RootAppendEpoch() const noexcept {
+    return SceneHierarchyService::RootAppendEpoch(scene_);
+}
+
 SceneHierarchyAccess::SceneHierarchyAccess(Scene& scene) noexcept
     : scene_(scene) {}
 
@@ -60,6 +72,18 @@ std::vector<SceneObject> SceneHierarchyAccess::RootObjects() {
 
 std::vector<SceneEntity> SceneHierarchyAccess::RootEntities() const {
     return SceneHierarchyService::RootEntities(scene_);
+}
+
+std::size_t SceneHierarchyAccess::RootCount() const noexcept {
+    return SceneHierarchyService::RootCount(scene_);
+}
+
+SceneEntity SceneHierarchyAccess::RootAt(std::size_t index) const noexcept {
+    return SceneHierarchyService::RootAt(scene_, index);
+}
+
+std::uint64_t SceneHierarchyAccess::RootAppendEpoch() const noexcept {
+    return SceneHierarchyService::RootAppendEpoch(scene_);
 }
 
 bool SceneHierarchyAccess::SetParent(SceneObject child, SceneObject parent) noexcept {
