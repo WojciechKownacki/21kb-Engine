@@ -4,9 +4,11 @@
 #include "engine/assets/AssetId.hpp"
 #include "engine/ecs/World.hpp"
 #include "engine/library/EngineLibraryCommandBatch.hpp"
+#include "engine/scene/AnimationAssets.hpp"
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
+#include "engine/scene/SceneLightingAccess.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/Scene.hpp"
@@ -20,10 +22,22 @@
 #include "engine/script/ScriptRuntimeHost.hpp"
 
 #include <array>
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cmath>
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
+#include <iostream>
 #include <span>
 #include <memory>
 #include <optional>
+#include <stop_token>
 #include <stdexcept>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -35,6 +49,432 @@ struct SceneSystemCounters {
     int fixedUpdated = 0;
     int destroyed = 0;
 };
+
+class RuntimeScaleFixedSystem final : public kb::scene::SceneSystem {
+public:
+    explicit RuntimeScaleFixedSystem(std::size_t& ticks) noexcept : ticks_(ticks) {}
+
+    [[nodiscard]] bool RequiresFixedStep() const override { return true; }
+    void OnFixedUpdate(kb::scene::SceneSystemContext&) override { ++ticks_; }
+
+private:
+    std::size_t& ticks_;
+};
+
+[[nodiscard]] bool EnvironmentFlagEnabled(const char* name) {
+#if defined(_WIN32)
+    char* value = nullptr;
+    std::size_t size = 0U;
+    if (_dupenv_s(&value, &size, name) != 0) {
+        return false;
+    }
+    const bool enabled = value != nullptr && value[0] == '1' && value[1] == '\0';
+    std::free(value);
+    return enabled;
+#else
+    const char* value = std::getenv(name);
+    return value != nullptr && value[0] == '1' && value[1] == '\0';
+#endif
+}
+
+void RunSceneRuntimeScaleBenchmark() {
+    const bool forceAnimatorScan = EnvironmentFlagEnabled("KB_SCENE_RUNTIME_SCALE_FORCE_ANIMATOR_SCAN");
+    const bool forceTopologyRebuild = EnvironmentFlagEnabled("KB_SCENE_RUNTIME_SCALE_FORCE_TOPO_REBUILD");
+    const bool largeScale = EnvironmentFlagEnabled("KB_SCENE_RUNTIME_SCALE_LARGE");
+    std::size_t fixedTicks = 0U;
+    kb::scene::Scene scene;
+    if (largeScale) {
+        scene.Runtime().SetPlaying(true);
+        scene.Runtime().SetEcsProfilerEnabled(true);
+        kb::scene::SceneLightingAccess::SetBasicLightingEnabled(scene, true);
+    } else {
+        scene.Runtime().AddSceneSystem(std::make_unique<RuntimeScaleFixedSystem>(fixedTicks));
+        scene.Runtime().SetFixedStepSettings(kb::scene::SceneRuntimeFixedStepSettings{
+            .fixedDeltaSeconds = 1.0F / 60.0F,
+            .maxFrameDeltaSeconds = 0.25F,
+            .maxFixedStepsPerFrame = 1U,
+        });
+    }
+    constexpr std::array<std::size_t, 4U> normalTargets{ 1'000U, 3'000U, 10'000U, 30'000U };
+    constexpr std::array<std::size_t, 3U> largeTargets{ 100'000U, 300'000U, 500'000U };
+    const std::span<const std::size_t> targets = largeScale
+        ? std::span<const std::size_t>{ largeTargets }
+        : std::span<const std::size_t>{ normalTargets };
+    std::size_t created = 0U;
+    kb::scene::SceneEntity firstEntity;
+    const auto milliseconds = [](std::uint64_t nanoseconds) {
+        return static_cast<double>(nanoseconds) / 1'000'000.0;
+    };
+    std::cout << std::fixed << std::setprecision(3);
+    for (const std::size_t target : targets) {
+        const auto spawnStart = std::chrono::steady_clock::now();
+        while (created < target) {
+            kb::scene::SceneObjectDesc object{ .name = "Runtime Scale Cube" };
+            if (largeScale) {
+                const float radius = 0.65F * std::sqrt(static_cast<float>(created));
+                const float angle = static_cast<float>(created) * 2.39996323F;
+                object.transform.localPosition = kb::scene::Vec3{ std::cos(angle) * radius, 0.0F, std::sin(angle) * radius };
+                object.transform.localScale = kb::scene::Vec3{ 0.45F, 0.45F, 0.45F };
+            } else {
+                object.transform.localPosition.x = static_cast<float>(created % 1000U);
+            }
+            const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(std::move(object));
+            kb::tests::Require(entity.IsValid(), "Scale benchmark failed to create a scene entity");
+            if (created == 0U) {
+                firstEntity = entity;
+            }
+            scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{
+                .meshAssetId = 1U,
+                .materialAssetId = 2U,
+                .castsShadow = !largeScale,
+            });
+            kb::tests::Require(scene.Components().MeshRenderers().Has(entity), "Scale benchmark lost a mesh renderer");
+            if (created == 0U && forceAnimatorScan) {
+                scene.Components().Animators().Set(entity, kb::scene::Animator{ .enabled = false });
+                kb::tests::Require(scene.Components().Animators().Has(entity), "Scale benchmark lost its disabled animator");
+            }
+            if (created % 1'000U == 0U) {
+                kb::scene::LightComponent light{};
+                light.castsShadow = !largeScale;
+                scene.Components().Lights().Set(entity, light);
+            }
+            ++created;
+        }
+        const double spawnMs = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - spawnStart).count();
+        kb::tests::Require(scene.Entities().Count() == target, "Scale benchmark live count differs from created count");
+        const std::uint64_t topologyBuildsBefore = scene.Runtime().HotPathReport().transformTopologicalBatchBuildCount;
+        if (forceTopologyRebuild) {
+            scene.Entities().SetName(firstEntity, "Runtime Scale Renamed Root");
+        }
+        static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+        const kb::scene::SceneRuntimeHotPathReport growing = scene.Runtime().HotPathReport();
+        std::array<double, 5U> staticUpdateMs{};
+        std::array<double, 5U> staticCaptureMs{};
+        std::array<double, 5U> staticSyncMs{};
+        for (std::size_t sample = 0U; sample < staticUpdateMs.size(); ++sample) {
+            static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+            const kb::scene::SceneRuntimeHotPathReport report = scene.Runtime().HotPathReport();
+            staticUpdateMs[sample] = milliseconds(report.runtimeUpdateNanoseconds);
+            staticCaptureMs[sample] = milliseconds(report.runtimeFixedCaptureStartNanoseconds + report.runtimeFixedCaptureEndNanoseconds);
+            staticSyncMs[sample] = milliseconds(report.runtimeTransformSyncNanoseconds);
+        }
+        std::ranges::sort(staticUpdateMs);
+        std::ranges::sort(staticCaptureMs);
+        std::ranges::sort(staticSyncMs);
+        std::array<double, 5U> noFixedUpdateMs{};
+        std::array<double, 5U> worldProgressMs{};
+        for (std::size_t sample = 0U; sample < noFixedUpdateMs.size(); ++sample) {
+            static_cast<void>(scene.Runtime().Update(0.0F));
+            noFixedUpdateMs[sample] = milliseconds(scene.Runtime().HotPathReport().runtimeUpdateNanoseconds);
+            const auto progressStart = std::chrono::steady_clock::now();
+            static_cast<void>(scene.Runtime().EcsWorld().Progress(0.0F));
+            worldProgressMs[sample] = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - progressStart).count();
+        }
+        std::ranges::sort(noFixedUpdateMs);
+        std::ranges::sort(worldProgressMs);
+        std::cout << "scene_runtime_scale,entities=" << target
+                  << ",large_scale=" << (largeScale ? 1 : 0)
+                  << ",forced_animator_scan=" << (forceAnimatorScan ? 1 : 0)
+                  << ",forced_topology_rebuild=" << (forceTopologyRebuild ? 1 : 0)
+                  << ",topology_full_builds_before=" << topologyBuildsBefore
+                  << ",topology_full_builds=" << growing.transformTopologicalBatchBuildCount
+                  << ",fixed_ticks=" << fixedTicks
+                  << ",spawn_ms=" << spawnMs
+                  << ",growing_update_ms=" << milliseconds(growing.runtimeUpdateNanoseconds)
+                  << ",growing_capture_ms=" << milliseconds(growing.runtimeFixedCaptureStartNanoseconds + growing.runtimeFixedCaptureEndNanoseconds)
+                  << ",growing_sync_ms=" << milliseconds(growing.runtimeTransformSyncNanoseconds)
+                  << ",static_update_median_ms=" << staticUpdateMs[staticUpdateMs.size() / 2U]
+                  << ",static_capture_median_ms=" << staticCaptureMs[staticCaptureMs.size() / 2U]
+                  << ",static_sync_median_ms=" << staticSyncMs[staticSyncMs.size() / 2U]
+                  << ",no_fixed_update_median_ms=" << noFixedUpdateMs[noFixedUpdateMs.size() / 2U]
+                  << ",world_progress_median_ms=" << worldProgressMs[worldProgressMs.size() / 2U] << '\n';
+    }
+    if (!largeScale || !EnvironmentFlagEnabled("KB_SCENE_RUNTIME_SCALE_PACED_TAIL")) {
+        return;
+    }
+
+    using Clock = std::chrono::steady_clock;
+    constexpr double entitiesPerSecond = 1'000.0;
+    constexpr double frameBudgetMs = 1'000.0 / 60.0;
+    constexpr auto tailDuration = std::chrono::seconds{ 10 };
+    constexpr auto diagnosticHold = std::chrono::seconds{ 2 };
+    const std::size_t firstTailEntity = created;
+    const auto started = Clock::now();
+    auto previousFrame = started;
+    auto nextFrame = started;
+    auto lastReport = started;
+    auto stopTime = Clock::time_point{};
+    const auto framePeriod = std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>{ 1.0 / 120.0 });
+    std::vector<double> frameMs;
+    frameMs.reserve(256U);
+    std::size_t lastReportedCount = created;
+    std::size_t frameCount = 0U;
+    double spawnSumMs = 0.0;
+    double updateSumMs = 0.0;
+    double syncSumMs = 0.0;
+    double slowSeconds = 0.0;
+    bool spawnStopped = false;
+    while (true) {
+        const auto frameStart = Clock::now();
+        const double elapsedSeconds = std::chrono::duration<double>(frameStart - started).count();
+        if (spawnStopped && frameStart - stopTime >= diagnosticHold) {
+            break;
+        }
+        const double deltaSeconds = std::chrono::duration<double>(frameStart - previousFrame).count();
+        if (frameStart != started) {
+            frameMs.push_back(deltaSeconds * 1'000.0);
+        }
+        previousFrame = frameStart;
+        const std::size_t scheduled = firstTailEntity + std::min<std::size_t>(
+            10'000U, static_cast<std::size_t>(elapsedSeconds * entitiesPerSecond));
+        const std::size_t toCreate = spawnStopped ? 0U : std::min<std::size_t>(scheduled - created, 5'000U);
+        const auto spawnStart = Clock::now();
+        for (std::size_t count = 0U; count < toCreate; ++count) {
+            kb::scene::SceneObjectDesc object{ .name = "Runtime Scale Tail Cube" };
+            const float radius = 0.65F * std::sqrt(static_cast<float>(created));
+            const float angle = static_cast<float>(created) * 2.39996323F;
+            object.transform.localPosition = kb::scene::Vec3{ std::cos(angle) * radius, 0.0F, std::sin(angle) * radius };
+            object.transform.localScale = kb::scene::Vec3{ 0.45F, 0.45F, 0.45F };
+            const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(std::move(object));
+            kb::tests::Require(entity.IsValid(), "Paced scale failed to create a scene entity");
+            scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{
+                .meshAssetId = 1U,
+                .materialAssetId = 2U,
+                .castsShadow = false,
+            });
+            kb::tests::Require(scene.Components().MeshRenderers().Has(entity), "Paced scale lost a mesh renderer");
+            if (created % 1'000U == 0U) {
+                kb::scene::LightComponent light{};
+                light.castsShadow = false;
+                scene.Components().Lights().Set(entity, light);
+                kb::tests::Require(scene.Components().Lights().Has(entity), "Paced scale lost a light");
+            }
+            ++created;
+        }
+        if (!spawnStopped && frameStart - started >= tailDuration && created == firstTailEntity + 10'000U) {
+            spawnStopped = true;
+            stopTime = Clock::now();
+            const double stopSeconds = std::chrono::duration<double>(stopTime - started).count();
+            std::cout << "scene_runtime_paced_tail_stop,reason=target,seconds=" << stopSeconds
+                      << ",created=" << created - firstTailEntity
+                      << ",actual_per_second=" << static_cast<double>(created - firstTailEntity) / stopSeconds
+                      << ",live=" << scene.Entities().Count() << '\n';
+        }
+        spawnSumMs += std::chrono::duration<double, std::milli>(Clock::now() - spawnStart).count();
+        static_cast<void>(scene.Runtime().Update(static_cast<float>(std::min(deltaSeconds, 1.0 / 15.0))));
+        const kb::scene::SceneRuntimeHotPathReport report = scene.Runtime().HotPathReport();
+        updateSumMs += milliseconds(report.runtimeUpdateNanoseconds);
+        syncSumMs += milliseconds(report.runtimeTransformSyncNanoseconds);
+        ++frameCount;
+        const auto now = Clock::now();
+        const double reportSeconds = std::chrono::duration<double>(now - lastReport).count();
+        if (reportSeconds >= 1.0) {
+            kb::tests::Require(!frameMs.empty(), "Paced scale produced no frame samples");
+            std::ranges::sort(frameMs);
+            const double p50 = frameMs[frameMs.size() / 2U];
+            const double p95 = frameMs[(frameMs.size() * 95U + 99U) / 100U - 1U];
+            const std::size_t live = scene.Entities().Count();
+            kb::tests::Require(live == created, "Paced scale live count differs from created count");
+            if (!spawnStopped) {
+                slowSeconds = p95 > frameBudgetMs ? slowSeconds + reportSeconds : 0.0;
+                if (slowSeconds >= 5.0) {
+                    spawnStopped = true;
+                    stopTime = now;
+                    const double stopSeconds = std::chrono::duration<double>(stopTime - started).count();
+                    std::cout << "scene_runtime_paced_tail_stop,reason=p95,seconds=" << stopSeconds
+                              << ",created=" << created - firstTailEntity
+                              << ",actual_per_second=" << static_cast<double>(created - firstTailEntity) / stopSeconds
+                              << ",live=" << live << '\n';
+                }
+            }
+            std::cout << "scene_runtime_paced_tail,seconds=" << elapsedSeconds
+                      << ",live=" << live
+                      << ",rate=" << static_cast<double>(live - lastReportedCount) / reportSeconds
+                      << ",fps=" << static_cast<double>(frameMs.size()) / reportSeconds
+                      << ",frame_p50_ms=" << p50
+                      << ",frame_p95_ms=" << p95
+                      << ",spawn_avg_ms=" << spawnSumMs / static_cast<double>(frameCount)
+                      << ",update_avg_ms=" << updateSumMs / static_cast<double>(frameCount)
+                      << ",sync_avg_ms=" << syncSumMs / static_cast<double>(frameCount)
+                      << ",slow_seconds=" << slowSeconds
+                      << ",spawn_stopped=" << (spawnStopped ? 1 : 0) << '\n';
+            lastReportedCount = live;
+            lastReport = now;
+            frameMs.clear();
+            frameCount = 0U;
+            spawnSumMs = updateSumMs = syncSumMs = 0.0;
+        }
+        nextFrame += framePeriod;
+        if (nextFrame < now) {
+            nextFrame = now;
+        }
+        std::this_thread::sleep_until(nextFrame);
+    }
+}
+
+void RunSceneRuntimeHeadlessStress() {
+    using Clock = std::chrono::steady_clock;
+    constexpr std::size_t targetEntities = 1'000'000U;
+    constexpr std::size_t maximumCatchUpPerFrame = 5'000U;
+    constexpr double entitiesPerSecond = 1'000.0;
+    constexpr double frameBudgetMs = 1000.0 / 60.0;
+    constexpr auto diagnosticHold = std::chrono::seconds{ 30 };
+    std::size_t fixedTicks = 0U;
+    kb::scene::Scene scene;
+    scene.Runtime().SetPlaying(true);
+    scene.Runtime().SetEcsProfilerEnabled(true);
+    kb::scene::SceneLightingAccess::SetBasicLightingEnabled(scene, true);
+    kb::tests::Require(scene.Runtime().IsPlaying() && scene.Runtime().EcsProfilerEnabled() &&
+            kb::scene::SceneLightingAccess::BasicLightingEnabled(scene),
+        "Headless stress did not initialize the Play runtime and lighting settings");
+    const bool fixedStepEnabled = EnvironmentFlagEnabled("KB_SCENE_RUNTIME_STRESS_FIXED");
+    if (fixedStepEnabled) {
+        scene.Runtime().AddSceneSystem(std::make_unique<RuntimeScaleFixedSystem>(fixedTicks));
+        scene.Runtime().SetFixedStepSettings(kb::scene::SceneRuntimeFixedStepSettings{
+            .fixedDeltaSeconds = 1.0F / 60.0F,
+            .maxFrameDeltaSeconds = 1.0F / 15.0F,
+            .maxFixedStepsPerFrame = kb::scene::kSceneRuntimeDefaultMaxFixedStepsPerFrame,
+        });
+    }
+    std::error_code error;
+    const auto runId = std::chrono::system_clock::now().time_since_epoch().count();
+    const std::filesystem::path path = std::filesystem::current_path() / "Saved" / "Logs"
+        / ("scene-runtime-headless-stress-" + std::to_string(runId) + ".csv");
+    std::filesystem::create_directories(path.parent_path(), error);
+    kb::tests::Require(!error, "Could not create the headless stress log directory");
+    std::ofstream log{ path, std::ios::out | std::ios::trunc };
+    kb::tests::Require(log.is_open(), "Could not open the headless stress log");
+    std::cout << "headless_stress_log=" << path.string() << std::endl;
+    log << "seconds,live_entities,scheduled,actual_per_second,fps,frame_p50_ms,frame_p95_ms,"
+           "spawn_avg_ms,runtime_update_avg_ms,transform_sync_avg_ms,fixed_capture_avg_ms,fixed_ticks,"
+           "fixed_step_enabled,slow_seconds,spawn_stopped\n";
+    log.flush();
+    const auto clockSeconds = [] {
+        return std::chrono::duration_cast<std::chrono::seconds>(Clock::now().time_since_epoch()).count();
+    };
+    std::atomic<std::int64_t> heartbeat{ clockSeconds() };
+    std::jthread watchdog{ [&heartbeat, &path, &clockSeconds](std::stop_token stop) {
+        while (!stop.stop_requested()) {
+            std::this_thread::sleep_for(std::chrono::seconds{ 1 });
+            if (clockSeconds() - heartbeat.load(std::memory_order_relaxed) > 20) {
+                std::ofstream timedOut{ path, std::ios::app };
+                timedOut << "# watchdog_timeout_seconds=20\n";
+                timedOut.flush();
+                std::_Exit(EXIT_FAILURE);
+            }
+        }
+    } };
+    std::vector<double> frameMs;
+    frameMs.reserve(256U);
+    double spawnSumMs = 0.0;
+    double updateSumMs = 0.0;
+    double syncSumMs = 0.0;
+    double captureSumMs = 0.0;
+    std::size_t updateSampleCount = 0U;
+    std::size_t created = 0U;
+    std::size_t lastReportedCount = 0U;
+    double slowSeconds = 0.0;
+    bool spawnStopped = false;
+    const auto started = Clock::now();
+    auto lastReport = started;
+    auto previousFrame = started;
+    auto stopTime = Clock::time_point{};
+    const auto framePeriod = std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>{ 1.0 / 120.0 });
+    auto nextFrame = started;
+    while (true) {
+        const auto frameStart = Clock::now();
+        heartbeat.store(clockSeconds(), std::memory_order_relaxed);
+        const double deltaSeconds = std::chrono::duration<double>(frameStart - previousFrame).count();
+        if (frameStart != started) {
+            frameMs.push_back(deltaSeconds * 1000.0);
+        }
+        previousFrame = frameStart;
+        const double seconds = std::chrono::duration<double>(frameStart - started).count();
+        const std::size_t scheduled = std::min(targetEntities, static_cast<std::size_t>(seconds * entitiesPerSecond));
+        const std::size_t toCreate = spawnStopped ? 0U : std::min(scheduled - created, maximumCatchUpPerFrame);
+        const auto spawnStart = Clock::now();
+        for (std::size_t count = 0U; count < toCreate; ++count) {
+            const float radius = 0.65F * std::sqrt(static_cast<float>(created));
+            const float angle = static_cast<float>(created) * 2.39996323F;
+            kb::scene::SceneObjectDesc object{ .name = "Runtime Stress Cube" };
+            object.transform.localPosition = kb::scene::Vec3{ std::cos(angle) * radius, 0.0F, std::sin(angle) * radius };
+            object.transform.localScale = kb::scene::Vec3{ 0.45F, 0.45F, 0.45F };
+            const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(std::move(object));
+            kb::tests::Require(entity.IsValid(), "Headless stress failed to create a live scene entity");
+            scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{
+                .meshAssetId = 1U,
+                .materialAssetId = 2U,
+                .castsShadow = false,
+            });
+            kb::tests::Require(scene.Components().MeshRenderers().Has(entity), "Headless stress failed to set a mesh renderer");
+            if (created % 1'000U == 0U) {
+                kb::scene::LightComponent light{};
+                light.kind = kb::scene::LightKind::Point;
+                light.castsShadow = false;
+                scene.Components().Lights().Set(entity, light);
+                kb::tests::Require(scene.Components().Lights().Has(entity), "Headless stress failed to set a point light");
+            }
+            ++created;
+        }
+        spawnSumMs += std::chrono::duration<double, std::milli>(Clock::now() - spawnStart).count();
+        static_cast<void>(scene.Runtime().Update(static_cast<float>(std::min(deltaSeconds, 1.0 / 15.0))));
+        heartbeat.store(clockSeconds(), std::memory_order_relaxed);
+        const kb::scene::SceneRuntimeHotPathReport report = scene.Runtime().HotPathReport();
+        updateSumMs += static_cast<double>(report.runtimeUpdateNanoseconds) / 1'000'000.0;
+        syncSumMs += static_cast<double>(report.runtimeTransformSyncNanoseconds) / 1'000'000.0;
+        captureSumMs += static_cast<double>(report.runtimeFixedCaptureStartNanoseconds + report.runtimeFixedCaptureEndNanoseconds) / 1'000'000.0;
+        ++updateSampleCount;
+        const auto now = Clock::now();
+        const double reportSeconds = std::chrono::duration<double>(now - lastReport).count();
+        if (reportSeconds >= 1.0) {
+            kb::tests::Require(!frameMs.empty(), "Headless stress produced no frame samples");
+            std::ranges::sort(frameMs);
+            const double p50 = frameMs[frameMs.size() / 2U];
+            const double p95 = frameMs[(frameMs.size() * 95U + 99U) / 100U - 1U];
+            const std::size_t live = scene.Entities().Count();
+            kb::tests::Require(live == created, "Headless stress live count differs from created count");
+            const double fps = static_cast<double>(frameMs.size()) / reportSeconds;
+            if (!spawnStopped) {
+                slowSeconds = p95 > frameBudgetMs ? slowSeconds + reportSeconds : 0.0;
+                if (slowSeconds >= 5.0 || created == targetEntities) {
+                    spawnStopped = true;
+                    stopTime = now;
+                }
+            }
+            log << std::fixed << std::setprecision(3)
+                << seconds << ',' << live << ',' << scheduled << ','
+                << static_cast<double>(live - lastReportedCount) / reportSeconds << ','
+                << fps << ',' << p50 << ',' << p95 << ','
+                << spawnSumMs / static_cast<double>(updateSampleCount) << ','
+                << updateSumMs / static_cast<double>(updateSampleCount) << ','
+                << syncSumMs / static_cast<double>(updateSampleCount) << ','
+                << captureSumMs / static_cast<double>(updateSampleCount) << ','
+                << fixedTicks << ',' << (fixedStepEnabled ? 1 : 0) << ',' << slowSeconds << ','
+                << (spawnStopped ? 1 : 0) << '\n';
+            log.flush();
+            std::cout << "headless_stress,seconds=" << seconds << ",live=" << live
+                      << ",rate=" << static_cast<double>(live - lastReportedCount) / reportSeconds
+                      << ",fps=" << fps << ",p95_ms=" << p95
+                      << ",stopped=" << spawnStopped << '\n';
+            lastReportedCount = live;
+            lastReport = now;
+            frameMs.clear();
+            spawnSumMs = 0.0;
+            updateSumMs = syncSumMs = captureSumMs = 0.0;
+            updateSampleCount = 0U;
+        }
+        if (spawnStopped && now - stopTime >= diagnosticHold) {
+            break;
+        }
+        nextFrame += framePeriod;
+        if (nextFrame < now) {
+            nextFrame = now;
+        }
+        std::this_thread::sleep_until(nextFrame);
+    }
+}
 
 struct MeshRendererProxyStats {
     std::size_t visited = 0U;
@@ -912,6 +1352,55 @@ void RunSceneRuntimeRootOnlyNativeDirtyRangePathTest() {
     kb::tests::Require(cleanReport.transformHierarchyInspectedCount == 0U, "Scene root-only native clean path inspected clean roots");
     kb::tests::Require(cleanReport.transformHierarchyUpdatedCount == 0U, "Scene root-only native clean path updated clean roots");
     kb::tests::Require(cleanReport.transformHierarchyCacheBuildNanoseconds == 0U, "Scene root-only native clean path built the transform cache");
+
+    kb::scene::TransformComponent movedAgain = scene.Transforms().Get(first);
+    movedAgain.localPosition.x = 12.0F;
+    scene.Transforms().Set(first, movedAgain);
+    scene.Runtime().SynchronizeTransforms();
+    kb::tests::Require(scene.Runtime().HotPathReport().transformHierarchyUpdatedCount == 1U,
+        "Cached root query did not observe a transform write without a structural change");
+    kb::tests::Require(kb::tests::NearlyEqual(scene.Transforms().Get(first).worldPosition.x, 12.0F),
+        "Cached root query did not update a modified root world transform");
+
+    const kb::scene::SceneObject appended = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "Root Query Added",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 14.0F, 0.0F, 0.0F } },
+    });
+    scene.Runtime().SynchronizeTransforms();
+    kb::tests::Require(scene.Entities().Count() == 4U &&
+            kb::tests::NearlyEqual(scene.Transforms().Get(appended).worldPosition.x, 14.0F),
+        "Cached root query did not rebuild after adding a root");
+
+    const kb::scene::SceneEntity removedEntity = second.Entity();
+    scene.Entities().Destroy(second);
+    scene.Runtime().SynchronizeTransforms();
+    kb::tests::Require(scene.Entities().Count() == 3U && !scene.Entities().IsAlive(removedEntity),
+        "Cached root query retained a destroyed root");
+    const kb::scene::SceneObject replacement = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "Root Query Reused Slot",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 20.0F, 0.0F, 0.0F } },
+    });
+    scene.Runtime().SynchronizeTransforms();
+    kb::tests::Require(replacement.Entity() != removedEntity && scene.Entities().Count() == 4U &&
+            kb::tests::NearlyEqual(scene.Transforms().Get(replacement).worldPosition.x, 20.0F),
+        "Cached root query kept a stale entity after destroying and recreating a root");
+
+    {
+        kb::scene::Scene independent;
+        const kb::scene::SceneObject independentRoot = independent.Entities().CreateObject(kb::scene::SceneObjectDesc{
+            .name = "Independent Root Query",
+            .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 31.0F, 0.0F, 0.0F } },
+        });
+        independent.Runtime().SynchronizeTransforms();
+        kb::tests::Require(kb::tests::NearlyEqual(independent.Transforms().Get(independentRoot).worldPosition.x, 31.0F),
+            "Root query cache shared data with another scene");
+    }
+    movedAgain = scene.Transforms().Get(first);
+    movedAgain.localPosition.x = 18.0F;
+    scene.Transforms().Set(first, movedAgain);
+    scene.Runtime().SynchronizeTransforms();
+    kb::tests::Require(kb::tests::NearlyEqual(scene.Transforms().Get(first).worldPosition.x, 18.0F),
+        "Root query cache became invalid after another scene was destroyed");
 }
 
 void RunSceneRuntimeRootOnlyNativeDirtyRangeParallelPathTest() {
@@ -1142,6 +1631,14 @@ void RunSceneBulkCreateObjectsTest() {
 }
 
 void RunSceneSystemTransformSyncTests() {
+    if (EnvironmentFlagEnabled("KB_SCENE_RUNTIME_STRESS")) {
+        RunSceneRuntimeHeadlessStress();
+        return;
+    }
+    if (EnvironmentFlagEnabled("KB_SCENE_RUNTIME_SCALE")) {
+        RunSceneRuntimeScaleBenchmark();
+        return;
+    }
     RunSceneSystemHandleRemovalTest();
     RunSceneSystemTransformSyncTest();
     RunTransformSyncContractScriptsRequireExplicitSyncAcrossSystemsTest();

@@ -11,7 +11,9 @@
 #include "scene/transform/SceneTransformHierarchySystem.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <cmath>
 #include <optional>
 #include <stdexcept>
@@ -282,6 +284,10 @@ SceneRuntimeHotPathReport SceneRuntimeService::HotPathReport(const Scene& scene)
         .transformHierarchyUsesBatchPath = true,
         .transformHierarchyUsesKernelContract = true,
         .transformHierarchyUsesVirtualSceneSystem = false,
+        .runtimeUpdateNanoseconds = state.lastRuntimeUpdateNanoseconds,
+        .runtimeTransformSyncNanoseconds = state.lastRuntimeTransformSyncNanoseconds,
+        .runtimeFixedCaptureStartNanoseconds = state.lastRuntimeFixedCaptureStartNanoseconds,
+        .runtimeFixedCaptureEndNanoseconds = state.lastRuntimeFixedCaptureEndNanoseconds,
         .transformTopologicalBatchCount = state.transformTopologicalBatches.size(),
         .transformTopologicalBatchBuildCount = state.transformTopologicalBatchBuildCount,
         .transformRenderProxyUpdateCount = state.transformRenderProxyUpdateEntities.size(),
@@ -365,6 +371,19 @@ std::uint64_t SceneRuntimeService::RenderTopologyVersion(const Scene& scene) noe
 
 bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
     SceneState& state = SceneAccess::State(scene);
+    using Clock = std::chrono::steady_clock;
+    const auto updateStart = Clock::now();
+    const auto nanosecondsSince = [](Clock::time_point start) {
+        return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - start).count());
+    };
+    state.lastRuntimeTransformSyncNanoseconds = 0U;
+    state.lastRuntimeFixedCaptureStartNanoseconds = 0U;
+    state.lastRuntimeFixedCaptureEndNanoseconds = 0U;
+    const auto synchronizeTransforms = [&state, &nanosecondsSince] {
+        const auto start = Clock::now();
+        SynchronizeTransformHierarchy(state);
+        state.lastRuntimeTransformSyncNanoseconds += nanosecondsSince(start);
+    };
     ApplyRuntimeCommands(state);
     // LIB-065: counts every Update() call, unconditionally (including
     // PrefabPrivate scenes below) — "how many times has this scene been
@@ -385,8 +404,9 @@ bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
         state.renderProxyUpdateEntities.clear();
         state.renderProxyUpdateEntityIds.clear();
         state.lastTransformRenderProxyIdentityAffineFastPathCount = 0U;
-        SynchronizeTransformHierarchy(state);
+        synchronizeTransforms();
         PublishRuntimeSnapshot(state);
+        state.lastRuntimeUpdateNanoseconds = nanosecondsSince(updateStart);
         return false;
     }
 
@@ -411,7 +431,7 @@ bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
     state.renderProxyUpdateEntityIds.reserve(HierarchyTrackedSlotCount(state));
     state.renderProxyDirtyTraversalScratch.reserve(HierarchyTrackedSlotCount(state));
 
-    SynchronizeTransformHierarchy(state);
+    synchronizeTransforms();
     state.sceneSystemScheduler.BeginFrame(scene, deltaSeconds);
     state.sceneSystemScheduler.Update(scene, deltaSeconds, SceneUpdatePhase::PreFixed);
 
@@ -420,18 +440,22 @@ bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
         state.fixedStepAccumulatorSeconds += clampedDelta;
         while (state.fixedStepAccumulatorSeconds >= fixed.fixedDeltaSeconds &&
             state.lastFixedStepCount < fixed.maxFixedStepsPerFrame) {
-            SynchronizeTransformHierarchy(state);
+            synchronizeTransforms();
+            const auto captureStart = Clock::now();
             CaptureFixedStepStart(scene, state);
+            state.lastRuntimeFixedCaptureStartNanoseconds += nanosecondsSince(captureStart);
             state.sceneSystemScheduler.FixedUpdate(scene, fixed.fixedDeltaSeconds, SceneFixedUpdatePhase::PreSimulation);
             // FixedTick may flush structural/component commands, including
             // local transform changes. Publish hierarchy-derived world poses
             // before the physics plugin synchronizes its bodies.
-            SynchronizeTransformHierarchy(state);
+            synchronizeTransforms();
             state.sceneSystemScheduler.FixedUpdate(scene, fixed.fixedDeltaSeconds, SceneFixedUpdatePhase::Simulation);
-            SynchronizeTransformHierarchy(state);
+            synchronizeTransforms();
             state.sceneSystemScheduler.FixedUpdate(scene, fixed.fixedDeltaSeconds, SceneFixedUpdatePhase::PostSimulation);
-            SynchronizeTransformHierarchy(state);
+            synchronizeTransforms();
+            const auto captureEnd = Clock::now();
             CaptureFixedStepEnd(scene, state);
+            state.lastRuntimeFixedCaptureEndNanoseconds += nanosecondsSince(captureEnd);
             state.fixedStepAccumulatorSeconds -= fixed.fixedDeltaSeconds;
             ++state.lastFixedStepCount;
             ++state.fixedStepIndex;
@@ -454,8 +478,9 @@ bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
     state.sceneSystemScheduler.Update(scene, deltaSeconds, SceneUpdatePhase::PostFixed);
     state.systemScheduler.Update(state.world, deltaSeconds);
     const bool progressed = state.world.Progress(deltaSeconds);
-    SynchronizeTransformHierarchy(state);
+    synchronizeTransforms();
     PublishRuntimeSnapshot(state);
+    state.lastRuntimeUpdateNanoseconds = nanosecondsSince(updateStart);
     return progressed;
 }
 

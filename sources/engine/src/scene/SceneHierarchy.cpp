@@ -38,6 +38,18 @@ std::vector<SceneEntity> SceneHierarchyService::RootEntities(const Scene& scene)
     return SceneHierarchyRootsService::RootEntities(scene);
 }
 
+std::size_t SceneHierarchyService::RootCount(const Scene& scene) noexcept {
+    return SceneHierarchyRootsService::RootCount(scene);
+}
+
+SceneEntity SceneHierarchyService::RootAt(const Scene& scene, std::size_t index) noexcept {
+    return SceneHierarchyRootsService::RootAt(scene, index);
+}
+
+std::uint64_t SceneHierarchyService::RootAppendEpoch(const Scene& scene) noexcept {
+    return SceneHierarchyRootsService::RootAppendEpoch(scene);
+}
+
 bool SceneHierarchyService::SetParent(Scene& scene, SceneObject child, SceneObject parent) noexcept {
     return SceneHierarchyParentAssignmentService::SetParent(scene, child, parent);
 }

@@ -49,7 +49,8 @@ public:
         std::uint32_t viewportHeight,
         const RenderResourceRegistry* resources,
         const SceneRenderResourceMap* resourceMap,
-        kb::scene::SceneRenderVisibilityFrame& outFrame);
+        kb::scene::SceneRenderVisibilityFrame& outFrame,
+        double* outSortMilliseconds = nullptr);
 };
 
 } // namespace kb::render

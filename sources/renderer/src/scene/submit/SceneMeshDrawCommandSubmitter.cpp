@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <span>
 #include <sstream>
 
@@ -151,6 +152,66 @@ void EmitProgramUnavailableDiagnostic(
 
 } // namespace
 
+SceneMeshInstanceBufferPool::~SceneMeshInstanceBufferPool() {
+    Shutdown();
+}
+
+bgfx::DynamicVertexBufferHandle SceneMeshInstanceBufferPool::Upload(
+    std::span<const SceneRenderMeshInstance> instances,
+    const RenderMaterialResource* material,
+    bool encodeShadowReceiver) {
+    constexpr std::uint32_t stride = RenderInstanceBuffer::Stride();
+    if (instances.empty() || instances.size() > std::numeric_limits<std::uint32_t>::max() / stride) {
+        return BGFX_INVALID_HANDLE;
+    }
+    const std::uint32_t count = static_cast<std::uint32_t>(instances.size());
+    if (usedSlots_ == slots_.size()) {
+        slots_.emplace_back();
+    }
+    Slot& slot = slots_[usedSlots_];
+    if (!bgfx::isValid(slot.buffer) || count > slot.capacity) {
+        const std::uint32_t maxCapacity = std::numeric_limits<std::uint32_t>::max() / stride;
+        const std::uint32_t capacity = std::max(count,
+            slot.capacity <= maxCapacity / 2U ? slot.capacity * 2U : count);
+        bgfx::VertexLayout layout;
+        layout.begin()
+            .add(bgfx::Attrib::TexCoord0, 4, bgfx::AttribType::Float)
+            .add(bgfx::Attrib::TexCoord1, 4, bgfx::AttribType::Float)
+            .add(bgfx::Attrib::TexCoord2, 4, bgfx::AttribType::Float)
+            .add(bgfx::Attrib::TexCoord3, 4, bgfx::AttribType::Float)
+            .add(bgfx::Attrib::TexCoord4, 4, bgfx::AttribType::Float)
+            .end();
+        const bgfx::DynamicVertexBufferHandle replacement = bgfx::createDynamicVertexBuffer(capacity, layout);
+        if (!bgfx::isValid(replacement)) {
+            return BGFX_INVALID_HANDLE;
+        }
+        if (bgfx::isValid(slot.buffer)) {
+            bgfx::destroy(slot.buffer);
+        }
+        slot.buffer = replacement;
+        slot.capacity = capacity;
+    }
+
+    const bgfx::Memory* memory = bgfx::alloc(count * stride);
+    RenderInstanceBuffer::Copy(
+        std::span<RenderInstanceData>{reinterpret_cast<RenderInstanceData*>(memory->data), count},
+        instances, material, encodeShadowReceiver);
+    bgfx::update(slot.buffer, 0U, memory);
+    ++usedSlots_;
+    return slot.buffer;
+}
+
+void SceneMeshInstanceBufferPool::Shutdown() noexcept {
+    for (Slot& slot : slots_) {
+        if (bgfx::isValid(slot.buffer)) {
+            bgfx::destroy(slot.buffer);
+            slot.buffer = BGFX_INVALID_HANDLE;
+        }
+    }
+    slots_.clear();
+    usedSlots_ = 0U;
+}
+
 void SceneMeshDrawCommandSubmitter::Submit(const SceneMeshDrawCommandSubmitDesc& desc) {
     const bool meshDrawDebugLogEnabled = RendererDebugLogEnabled("mesh_draw");
     if (meshDrawDebugLogEnabled) {
@@ -189,7 +250,17 @@ void SceneMeshDrawCommandSubmitter::Submit(const SceneMeshDrawCommandSubmitDesc&
         }
         const std::uint32_t instanceCount = static_cast<std::uint32_t>(command.instances.size());
         const std::uint32_t availableInstances = bgfx::getAvailInstanceDataBuffer(instanceCount, RenderInstanceBuffer::Stride());
-        if (availableInstances == 0U) {
+        const bool selectionPass = IsSelectionPass(desc.pass);
+        bgfx::DynamicVertexBufferHandle overflowBuffer = BGFX_INVALID_HANDLE;
+        if (availableInstances < instanceCount && desc.instanceBufferPool != nullptr) {
+            overflowBuffer = desc.instanceBufferPool->Upload(
+                command.instances,
+                selectionPass ? nullptr : command.materialResource,
+                desc.pass != MeshPassType::ShadowDepth && !selectionPass);
+        }
+        const bool usesOverflowBuffer = bgfx::isValid(overflowBuffer);
+        const std::uint32_t submittedInstances = usesOverflowBuffer ? instanceCount : availableInstances;
+        if (submittedInstances == 0U) {
             if (meshDrawDebugLogEnabled) {
                 std::ostringstream message;
                 message << "Drop all instances pass=" << MeshPassName(desc.pass)
@@ -203,37 +274,39 @@ void SceneMeshDrawCommandSubmitter::Submit(const SceneMeshDrawCommandSubmitDesc&
             EmitGroupDiagnostics(desc.diagnostics, SceneRenderDiagnosticKind::DroppedInstances, SceneRenderDiagnosticSeverity::Warning, command, 0U, instanceCount);
             continue;
         }
-        if (availableInstances < instanceCount) {
+        if (submittedInstances < instanceCount) {
             if (meshDrawDebugLogEnabled) {
                 std::ostringstream message;
                 message << "Drop partial instances pass=" << MeshPassName(desc.pass)
                         << " meshAsset=" << command.meshAssetId
                         << " materialAsset=" << command.materialAssetId
                         << " requested=" << instanceCount
-                        << " available=" << availableInstances;
+                        << " available=" << submittedInstances;
                 WriteRendererDebugLog("mesh_draw", message.str());
             }
-            desc.stats.droppedInstanceCount += instanceCount - availableInstances;
+            desc.stats.droppedInstanceCount += instanceCount - submittedInstances;
             EmitGroupDiagnostics(
                 desc.diagnostics,
                 SceneRenderDiagnosticKind::DroppedInstances,
                 SceneRenderDiagnosticSeverity::Warning,
                 command,
-                availableInstances,
-                instanceCount - availableInstances);
+                submittedInstances,
+                instanceCount - submittedInstances);
         }
 
-        bgfx::InstanceDataBuffer instanceBuffer{};
-        bgfx::allocInstanceDataBuffer(&instanceBuffer, availableInstances, RenderInstanceBuffer::Stride());
-        auto* instanceData = reinterpret_cast<RenderInstanceData*>(instanceBuffer.data);
-        const bool selectionPass = IsSelectionPass(desc.pass);
-        RenderInstanceBuffer::Copy(
-            std::span<RenderInstanceData>(instanceData, availableInstances),
-            std::span<const SceneRenderMeshInstance>(command.instances.data(), availableInstances),
-            selectionPass ? nullptr : command.materialResource,
-            desc.pass != MeshPassType::ShadowDepth && !selectionPass);
-
-        bgfx::setInstanceDataBuffer(&instanceBuffer, 0U, static_cast<std::uint32_t>(availableInstances));
+        if (usesOverflowBuffer) {
+            bgfx::setInstanceDataBuffer(overflowBuffer, 0U, submittedInstances);
+        } else {
+            bgfx::InstanceDataBuffer instanceBuffer{};
+            bgfx::allocInstanceDataBuffer(&instanceBuffer, submittedInstances, RenderInstanceBuffer::Stride());
+            auto* instanceData = reinterpret_cast<RenderInstanceData*>(instanceBuffer.data);
+            RenderInstanceBuffer::Copy(
+                std::span<RenderInstanceData>(instanceData, submittedInstances),
+                std::span<const SceneRenderMeshInstance>(command.instances.data(), submittedInstances),
+                selectionPass ? nullptr : command.materialResource,
+                desc.pass != MeshPassType::ShadowDepth && !selectionPass);
+            bgfx::setInstanceDataBuffer(&instanceBuffer, 0U, submittedInstances);
+        }
         if (bgfx::isValid(command.meshResource->dynamicVertexBuffer)) {
             bgfx::setVertexBuffer(0, command.meshResource->dynamicVertexBuffer, command.vertexStart, command.vertexCount);
         } else {
@@ -262,7 +335,7 @@ void SceneMeshDrawCommandSubmitter::Submit(const SceneMeshDrawCommandSubmitDesc&
                 << " viewId=" << desc.viewId
                 << " meshAsset=" << command.meshAssetId
                 << " materialAsset=" << command.materialAssetId
-                << " instances=" << availableInstances << '/' << instanceCount
+                << " instances=" << submittedInstances << '/' << instanceCount
                 << " meshVertexFormat=" << VertexFormatName(command.meshResource->vertexFormat)
                 << " meshHasTangent=" << (VertexFormatHasTangent(command.meshResource->vertexFormat) ? "true" : "false")
                 << " meshStride=" << RenderStaticMeshVertexStride(command.meshResource->vertexFormat)
@@ -288,7 +361,7 @@ void SceneMeshDrawCommandSubmitter::Submit(const SceneMeshDrawCommandSubmitDesc&
                 message << "Skip invalid program pass=" << MeshPassName(desc.pass)
                         << " meshAsset=" << command.meshAssetId
                         << " materialAsset=" << command.materialAssetId
-                        << " instances=" << availableInstances
+                        << " instances=" << submittedInstances
                         << " graphProgram=" << (resolution.graphProgram ? "true" : "false")
                         << " fallback=" << (resolution.fellBackToBuiltin ? "true" : "false")
                         << " status=" << static_cast<int>(resolution.status)
@@ -300,7 +373,7 @@ void SceneMeshDrawCommandSubmitter::Submit(const SceneMeshDrawCommandSubmitDesc&
                 WriteRendererDebugLog("mesh_draw", message.str());
             }
             EmitProgramUnavailableDiagnostic(desc.diagnostics, command, resolution);
-            desc.stats.missingMaterialResourceCount += availableInstances;
+            desc.stats.missingMaterialResourceCount += submittedInstances;
             continue;
         }
         if (meshDrawDebugLogEnabled) {
@@ -309,7 +382,7 @@ void SceneMeshDrawCommandSubmitter::Submit(const SceneMeshDrawCommandSubmitDesc&
                     << " viewId=" << desc.viewId
                     << " meshAsset=" << command.meshAssetId
                     << " materialAsset=" << command.materialAssetId
-                    << " instances=" << availableInstances << '/' << instanceCount
+                    << " instances=" << submittedInstances << '/' << instanceCount
                     << " indexStart=" << command.indexStart
                     << " indexCount=" << command.indexCount
                     << " vertexStart=" << command.vertexStart
@@ -334,14 +407,14 @@ void SceneMeshDrawCommandSubmitter::Submit(const SceneMeshDrawCommandSubmitDesc&
         bgfx::setState(command.state);
         bgfx::submit(desc.viewId, program);
 
-        desc.stats.submittedMeshCount += availableInstances;
+        desc.stats.submittedMeshCount += submittedInstances;
         ++desc.stats.submittedDrawCallCount;
         ++desc.stats.submittedDrawGroupCount;
         if (desc.pass == MeshPassType::ShadowDepth) {
-            desc.stats.submittedShadowCasterCount += availableInstances;
+            desc.stats.submittedShadowCasterCount += submittedInstances;
             ++desc.stats.submittedShadowDrawCallCount;
         }
-        desc.stats.instanceUploadBytes += static_cast<std::uint64_t>(availableInstances) * RenderInstanceBuffer::Stride();
+        desc.stats.instanceUploadBytes += static_cast<std::uint64_t>(submittedInstances) * RenderInstanceBuffer::Stride();
     }
     if (meshDrawDebugLogEnabled) {
         std::ostringstream message;

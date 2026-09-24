@@ -21,6 +21,7 @@
 #include "engine/scene/WorldBackdropComponent.hpp"
 #include "engine/scene/AmbientRadianceComponent.hpp"
 #include "engine/scene/DetailSwitchComponent.hpp"
+#include "engine/scene/DrawD3DeformedGeometryComponent.hpp"
 #include "engine/scene/SkeletalMeshAsset.hpp"
 #include "engine/scene/VisibilityBlockerComponent.hpp"
 #include "engine/scene/GeometrySwarmComponent.hpp"
@@ -49,6 +50,7 @@
 #include <cmath>
 #include <cstdint>
 #include <span>
+#include <stdexcept>
 
 namespace kb::render {
 namespace {
@@ -493,16 +495,6 @@ void SyncMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent
         .morphDeformationEnabled = morphDeformationEnabled,
     }));
     static_cast<void>(transform);
-}
-
-void SyncDeformedMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent& transform,
-    const kb::scene::MeshRendererComponent& renderer, void* context) {
-    auto* sync = static_cast<SyncContext*>(context);
-    const kb::scene::DrawD3DeformedGeometryComponent* geometry =
-        sync->scene->Components().DeformedGeometries().TryGet(entity);
-    if (geometry != nullptr && geometry->enabled) {
-        SyncMesh(entity, transform, renderer, context);
-    }
 }
 
 void SyncLight(kb::scene::SceneEntity entity, const kb::scene::TransformComponent& transform, const kb::scene::LightComponent& light, void* context) {
@@ -1131,7 +1123,22 @@ void EcsRenderSceneSynchronizer::SyncDeformedMeshPalettes(
         .skinningPoseScratch = &skinningPoseScratch_,
         .basicLightingEnabled = kb::scene::SceneLightingAccess::BasicLightingEnabled(scene),
     };
-    scene.Components().Visitors().ForEachMeshRenderer(&SyncDeformedMesh, &context);
+    auto query = const_cast<kb::scene::Scene&>(scene).Runtime().EcsWorld().CreateQuery<
+        kb::scene::DrawD3DeformedGeometryComponent,
+        kb::scene::TransformComponent,
+        kb::scene::MeshRendererComponent>();
+    if (!query.IsValid()) {
+        throw std::logic_error{"Could not query deformed mesh renderers"};
+    }
+    query.ForEach([](kb::scene::SceneEntity entity,
+                      const kb::scene::DrawD3DeformedGeometryComponent& geometry,
+                      const kb::scene::TransformComponent& transform,
+                      const kb::scene::MeshRendererComponent& renderer,
+                      void* raw) {
+        if (geometry.enabled) {
+            SyncMesh(entity, transform, renderer, raw);
+        }
+    }, &context);
     transformPrecomputedReadCount_ = worldReader.PrecomputedReadCount();
     transformResolvedFallbackCount_ = worldReader.ResolvedFallbackCount();
 }

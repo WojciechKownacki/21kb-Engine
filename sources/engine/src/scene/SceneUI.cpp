@@ -19,6 +19,7 @@
 #include "engine/ui/UIComponentValidation.hpp"
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneState.hpp"
+#include "scene/entities/SceneEntityCounter.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -2428,15 +2429,17 @@ bool SceneUIQueries::BuildFrame(float viewportWidth, float viewportHeight, Scene
     if (!std::isfinite(viewportWidth) || !std::isfinite(viewportHeight) || viewportWidth <= 0.0F ||
         viewportHeight <= 0.0F)
         return false;
+    const SceneState& state = SceneAccess::State(scene_);
     SceneUIFrame frame;
-    if (!FrameBuilder{scene_, {viewportWidth, viewportHeight}}.Build(frame)) {
+    if (SceneEntityCounter::CountWithComponent(state.world, state.world.Component<UICanvas>()) == 0U) {
+        frame.viewportSize = {viewportWidth, viewportHeight};
+    } else if (!FrameBuilder{scene_, {viewportWidth, viewportHeight}}.Build(frame)) {
         // The refusal is the only thing the caller can act on, so it has to survive the
         // discarded frame - the renderer reports it instead of dropping the whole submit.
         output.elements.clear();
         output.refusal = frame.refusal;
         return false;
     }
-    const SceneState& state = SceneAccess::State(scene_);
     ResolveInteractionPresentation(scene_, state, state.previousUIInput.primaryDown, 0.0F, state.uiFrame, frame, false);
     output = std::move(frame);
     return true;

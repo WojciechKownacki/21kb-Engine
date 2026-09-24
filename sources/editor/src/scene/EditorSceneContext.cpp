@@ -605,23 +605,80 @@ bool EditorSceneContext::TickPlayModeSceneSession(float deltaSeconds) {
     }
     if (!playModeRenderTopologyVersionInitialized_) {
         playModeRenderTopologyVersion_ = runtime.RenderTopologyVersion();
+        const kb::scene::SceneHierarchyQueries hierarchy =
+            static_cast<const kb::scene::Scene&>(*scene_).Hierarchy();
+        playModeRootCount_ = hierarchy.RootCount();
+        playModeRootAppendEpoch_ = hierarchy.RootAppendEpoch();
         playModeRenderTopologyVersionInitialized_ = true;
     }
+    const std::span<const kb::scene::SceneEntity> pendingRenderUpdates = runtime.RenderProxyUpdateEntities();
+    const std::vector<kb::scene::SceneEntity> preUpdateRenderUpdates{
+        pendingRenderUpdates.begin(), pendingRenderUpdates.end() };
     static_cast<void>(runtime.Update(deltaSeconds));
     for (const std::string& systemError :
          runtime.DrainSceneSystemErrors()) {
         console_.Error("Scripts", systemError);
     }
     SurfaceScriptDiagnostics();
-    // Transforms and render-proxy value edits are published by SceneRuntime as
-    // compact render-proxy update lists and are consumed directly by the
-    // renderer. Only a render hierarchy/topology change requires rebuilding
-    // the full proxy set (spawn, destroy, reparent, or a global render toggle).
+    // Preserve updates made before Runtime::Update clears its dirty list.
+    // Fresh appended roots can use the same compact proxy update path;
+    // reparenting, removal and global render changes require a full sync.
     const std::uint64_t topologyVersion = runtime.RenderTopologyVersion();
+    const kb::scene::SceneHierarchyQueries hierarchy =
+        static_cast<const kb::scene::Scene&>(*scene_).Hierarchy();
+    const std::uint64_t rootAppendEpoch = hierarchy.RootAppendEpoch();
+    const std::size_t rootCount = hierarchy.RootCount();
     if (topologyVersion != playModeRenderTopologyVersion_) {
-        MarkSceneRenderDirty();
+        const std::size_t appendedRootCount = rootCount > playModeRootCount_
+            ? rootCount - playModeRootCount_ : 0U;
+        const bool appendOnly = rootAppendEpoch == playModeRootAppendEpoch_ &&
+            appendedRootCount != 0U &&
+            topologyVersion > playModeRenderTopologyVersion_ &&
+            topologyVersion - playModeRenderTopologyVersion_ == appendedRootCount;
+        std::vector<kb::scene::SceneEntity> appendedRoots;
+        if (appendOnly) {
+            appendedRoots.reserve(appendedRootCount);
+            for (std::size_t index = playModeRootCount_; index < rootCount; ++index) {
+                const kb::scene::SceneEntity root = hierarchy.RootAt(index);
+                appendedRoots.push_back(root);
+            }
+        }
+        if (appendOnly) {
+            std::vector<kb::scene::SceneEntity> dirtyEntities = preUpdateRenderUpdates;
+            dirtyEntities.insert(dirtyEntities.end(), appendedRoots.begin(), appendedRoots.end());
+            const std::span<const kb::scene::SceneEntity> postUpdateRenderUpdates = runtime.RenderProxyUpdateEntities();
+            dirtyEntities.insert(dirtyEntities.end(), postUpdateRenderUpdates.begin(), postUpdateRenderUpdates.end());
+            MarkSceneEntitiesRenderDirty(std::span<const kb::scene::SceneEntity>{ dirtyEntities });
+            if (!hierarchyRowsDirty_ && hierarchySearch_.Query().empty() &&
+                hierarchyRowsRootAppendEpoch_ == rootAppendEpoch &&
+                hierarchyRowsRootCount_ == playModeRootCount_) {
+                for (const kb::scene::SceneEntity root : appendedRoots) {
+                    EditorHierarchyRowBuilder::AppendRoot(*scene_, hierarchyExpansion_.CollapsedEntities(),
+                        root, hierarchyRowsCache_);
+                }
+                hierarchyRowsRootCount_ = rootCount;
+            } else {
+                InvalidateHierarchyRows();
+            }
+        } else {
+            MarkSceneRenderDirty();
+        }
+    } else if (!preUpdateRenderUpdates.empty() || rootAppendEpoch != playModeRootAppendEpoch_) {
+        std::vector<kb::scene::SceneEntity> dirtyEntities = preUpdateRenderUpdates;
+        if (rootAppendEpoch != playModeRootAppendEpoch_) {
+            const std::span<const kb::scene::SceneEntity> postUpdateRenderUpdates = runtime.RenderProxyUpdateEntities();
+            dirtyEntities.insert(dirtyEntities.end(), postUpdateRenderUpdates.begin(), postUpdateRenderUpdates.end());
+            InvalidateHierarchyRows();
+        }
+        if (!dirtyEntities.empty()) {
+            MarkSceneEntitiesRenderDirty(std::span<const kb::scene::SceneEntity>{ dirtyEntities });
+        } else {
+            MarkSceneRenderDirty();
+        }
     }
     playModeRenderTopologyVersion_ = topologyVersion;
+    playModeRootCount_ = rootCount;
+    playModeRootAppendEpoch_ = rootAppendEpoch;
     return !runtime.ShouldQuit();
 }
 
@@ -5463,12 +5520,25 @@ void EditorSceneContext::InvalidateHierarchyRows() noexcept {
 }
 
 void EditorSceneContext::RebuildHierarchyRowsIfNeeded() const {
-    if (!hierarchyRowsDirty_) {
+    if (!hierarchyRowsDirty_ &&
+        scene_->Hierarchy().RootAppendEpoch() == hierarchyRowsRootAppendEpoch_) {
         return;
     }
 
+    const auto rebuildStart = std::chrono::steady_clock::now();
     hierarchyRowsCache_ = EditorHierarchyRowBuilder::Build(*scene_, hierarchyExpansion_.CollapsedEntities(), hierarchySearch_.Query());
     hierarchyRowsDirty_ = false;
+    const kb::scene::SceneHierarchyQueries hierarchy =
+        static_cast<const kb::scene::Scene&>(*scene_).Hierarchy();
+    hierarchyRowsRootCount_ = hierarchy.RootCount();
+    hierarchyRowsRootAppendEpoch_ = hierarchy.RootAppendEpoch();
+    const double rebuildMs = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - rebuildStart).count();
+    if (rebuildMs >= 4.0) {
+        diagnostics::EditorLagTrace::Slow(
+            "hierarchy-rebuild", diagnostics::EditorLagTrace::NextEventId(), rebuildMs,
+            "rows=" + std::to_string(hierarchyRowsCache_.size()), 4.0);
+    }
 }
 
 void EditorSceneContext::ResetSceneEditState() {

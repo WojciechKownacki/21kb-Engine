@@ -1390,6 +1390,42 @@ void RunCommandBufferRollbackOnPlaybackErrorTest() {
     kb::tests::Require(!buffer.Empty(), "ECS command buffer cleared commands after a failed playback");
 }
 
+void RunCommandBufferBulkSnapshotRollbackAfterRepeatedWriteTest() {
+    kb::ecs::World world;
+    std::array<kb::ecs::Entity, 4U> entities{};
+    std::array<EcsPosition, 4U> positions{};
+    std::array<EcsQueryMarker, 4U> markers{};
+    for (std::size_t index = 0; index < entities.size(); ++index) {
+        entities[index] = world.CreateEntity();
+        world.Set(entities[index], EcsPosition{ .x = static_cast<float>(index + 1U) });
+        positions[index].x = static_cast<float>(index + 11U);
+        markers[index].value = static_cast<std::uint32_t>(index + 21U);
+    }
+
+    kb::ecs::CommandBuffer buffer{ 1 };
+    buffer.Worker(0).SetBorrowed(
+        std::span<const kb::ecs::Entity>{ entities },
+        std::span<const EcsPosition>{ positions },
+        std::span<const EcsQueryMarker>{ markers });
+    buffer.Worker(0).Set(entities[1], EcsPosition{ .x = 99.0F });
+    buffer.Worker(0).Set(kb::ecs::CommandEntity::Deferred(8, 0), EcsVelocity{ .x = 1.0F });
+
+    bool threw = false;
+    try {
+        static_cast<void>(buffer.Playback(world));
+    } catch (const std::exception&) {
+        threw = true;
+    }
+    kb::tests::Require(threw, "ECS bulk snapshot rollback did not propagate playback failure");
+    for (std::size_t index = 0; index < entities.size(); ++index) {
+        const EcsPosition* restored = world.TryGet<EcsPosition>(entities[index]);
+        kb::tests::Require(restored != nullptr && kb::tests::NearlyEqual(restored->x, static_cast<float>(index + 1U)),
+            "ECS bulk snapshot rollback lost the original component value");
+        kb::tests::Require(!world.Has<EcsQueryMarker>(entities[index]),
+            "ECS bulk snapshot rollback retained an added component");
+    }
+}
+
 void RunCommandBufferRollbackBulkCreateRestoresWorldTest() {
     kb::ecs::World world;
     const kb::ecs::Entity originalParent = world.CreateEntity("BulkRollbackParent");
@@ -1466,6 +1502,7 @@ void RunEcsCommandBufferTests() {
     RunCommandBufferBulkDestroyBudgetTest();
     RunCommandBufferNestedCreateDestroyFromJobsTest();
     RunCommandBufferRollbackOnPlaybackErrorTest();
+    RunCommandBufferBulkSnapshotRollbackAfterRepeatedWriteTest();
     RunCommandBufferRollbackBulkCreateRestoresWorldTest();
 }
 

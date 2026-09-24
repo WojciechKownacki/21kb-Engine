@@ -503,11 +503,29 @@ void RunTransformTopologicalBatchCacheInvalidationTest() {
         secondReport.transformTopologicalBatchBuildCount == firstReport.transformTopologicalBatchBuildCount,
         "Transform topological cache rebuilt without a hierarchy change");
 
+    const kb::scene::SceneObject appendedRoot = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "Appended Cache Root",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 9.0F, 0.0F, 0.0F } },
+    });
+    scene.Runtime().SetTransformPropagationBudget(kb::scene::SceneTransformPropagationBudget{ .maxInspectedEntitiesPerSync = 2U });
+    scene.Runtime().SynchronizeTransforms();
+    const kb::scene::SceneRuntimeHotPathReport appendedReport = scene.Runtime().HotPathReport();
+    kb::tests::Require(
+        appendedReport.transformTopologicalBatchBuildCount == secondReport.transformTopologicalBatchBuildCount,
+        "Transform topological cache fully rebuilt after appending an independent root");
+    kb::tests::Require(appendedReport.transformTopologicalBatchCount == 2U,
+        "Transform topological cache lost the existing child level after root append");
+    kb::tests::Require(appendedReport.transformHierarchyBudgetExhausted,
+        "Budgeted transform propagation did not leave the existing child level after two cached roots");
+    kb::tests::Require(kb::tests::NearlyEqual(scene.Transforms().Get(appendedRoot).worldPosition.x, 9.0F),
+        "Transform topological cache did not propagate the appended root");
+    scene.Runtime().SetTransformPropagationBudget(kb::scene::SceneTransformPropagationBudget{});
+
     kb::tests::Require(scene.Hierarchy().SetParent(child, {}), "Transform topological cache test could not detach child");
     static_cast<void>(scene.Runtime().Update(0.016F));
     const kb::scene::SceneRuntimeHotPathReport detachedReport = scene.Runtime().HotPathReport();
     kb::tests::Require(
-        detachedReport.transformTopologicalBatchBuildCount == secondReport.transformTopologicalBatchBuildCount + 1U,
+        detachedReport.transformTopologicalBatchBuildCount == appendedReport.transformTopologicalBatchBuildCount + 1U,
         "Transform topological cache did not rebuild after hierarchy change");
     kb::tests::Require(detachedReport.transformTopologicalBatchCount == 1U, "Transform topological cache kept stale child level after detach");
 

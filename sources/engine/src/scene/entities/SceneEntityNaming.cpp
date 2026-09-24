@@ -2,6 +2,7 @@
 
 #include "ecs/FlecsEntityIds.hpp"
 #include "scene/SceneState.hpp"
+#include "scene/hierarchy/SceneHierarchyCache.hpp"
 
 #include <flecs.h>
 
@@ -41,10 +42,13 @@ void SetBackendName(kb::ecs::World& world, SceneEntity entity, std::string_view 
     ecs_set_name(world.NativeHandle(), kb::ecs::FlecsEntityId(entity), ownedName.empty() ? nullptr : ownedName.c_str());
 }
 
-void MarkNameTopologyDirty(SceneState& state) noexcept {
+void MarkNameTopologyDirty(SceneState& state, bool existingHierarchyRow = true) noexcept {
     ++state.hierarchyTopologyVersion;
     if (state.hierarchyTopologyVersion == 0U) {
         state.hierarchyTopologyVersion = 1U;
+    }
+    if (existingHierarchyRow) {
+        SceneHierarchyCache::MarkRowContentDirty(state);
     }
 }
 
@@ -67,9 +71,13 @@ std::string SceneEntityNaming::Name(const SceneState& state, SceneEntity entity)
 }
 
 void SceneEntityNaming::SetName(SceneState& state, SceneEntity entity, std::string_view name) {
+    const std::uint32_t denseIndex = DenseIndex(entity);
+    const bool existingHierarchyRow = denseIndex != kb::ecs::kInvalidGeneratedEntityIndex
+        ? denseIndex < state.denseHierarchyParents.size()
+        : state.hierarchyParents.contains(entity.Id());
     StoreCachedName(state, entity, name);
     SetBackendName(state.world, entity, name);
-    MarkNameTopologyDirty(state);
+    MarkNameTopologyDirty(state, existingHierarchyRow);
 }
 
 void SceneEntityNaming::SetNames(SceneState& state, std::span<const SceneEntity> entities, std::span<const std::string> names) {

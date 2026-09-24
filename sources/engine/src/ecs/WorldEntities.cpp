@@ -107,9 +107,9 @@ Entity World::CreateEntity() {
 }
 
 Entity World::CreateEntity(std::string_view name) {
+    const std::string ownedName{ name };
     Entity entity = CreateEntity();
-    if (!name.empty()) {
-        const std::string ownedName{ name };
+    if (!ownedName.empty()) {
         ecs_set_name(world_, FlecsEntityId(entity), ownedName.c_str());
     }
     return entity;

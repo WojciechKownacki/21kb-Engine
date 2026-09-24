@@ -9,6 +9,7 @@
 #include "scene/transform/SceneTransformBranchUpdater.hpp"
 #include "scene/transform/SceneTransformDirtyFrontier.hpp"
 #include "scene/transform/SceneTransformRootHotKernel.hpp"
+#include "scene/transform/SceneTransformRootQueryCache.hpp"
 #include "scene/transform/TransformMath.hpp"
 
 #include <algorithm>
@@ -16,6 +17,8 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
+#include <iostream>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -30,9 +33,55 @@ inline constexpr std::size_t kTransformBatchGrainSize = 128U;
 inline constexpr std::size_t kSparseTransformFlushLookupFactor = 8U;
 inline constexpr std::size_t kDirtyListTransformFlushFactor = 2U;
 
+struct RootSyncProfileTimings {
+    std::uint64_t topologyNanoseconds = 0U;
+    std::uint64_t denseScratchNanoseconds = 0U;
+    std::uint64_t queryCreateNanoseconds = 0U;
+    std::uint64_t queryRebuildNanoseconds = 0U;
+    std::uint64_t dirtyScanNanoseconds = 0U;
+};
+
+[[nodiscard]] bool RootSyncProfileEnabled() noexcept {
+    static const bool enabled = [] {
+#if defined(_WIN32)
+        char* value = nullptr;
+        std::size_t size = 0U;
+        if (_dupenv_s(&value, &size, "KB_SCENE_ROOT_SYNC_PROFILE") != 0) {
+            return false;
+        }
+        const bool result = value != nullptr && value[0] == '1' && value[1] == '\0';
+        std::free(value);
+        return result;
+#else
+        const char* value = std::getenv("KB_SCENE_ROOT_SYNC_PROFILE");
+        return value != nullptr && value[0] == '1' && value[1] == '\0';
+#endif
+    }();
+    return enabled;
+}
+
 template <typename Duration>
 [[nodiscard]] std::uint64_t Nanoseconds(Duration duration) noexcept {
     return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(duration).count());
+}
+
+void PrintRootSyncProfile(
+    const SceneState& state,
+    const RootSyncProfileTimings* timings,
+    std::size_t dirtyRows,
+    std::chrono::steady_clock::time_point updateStart) {
+    if (timings == nullptr) {
+        return;
+    }
+    std::cout << "root_sync_profile,roots=" << state.hierarchyRoots.size()
+              << ",full_builds=" << state.transformTopologicalBatchBuildCount
+              << ",dirty_rows=" << dirtyRows
+              << ",topology_ns=" << timings->topologyNanoseconds
+              << ",dense_scratch_ns=" << timings->denseScratchNanoseconds
+              << ",query_create_ns=" << timings->queryCreateNanoseconds
+              << ",query_rebuild_ns=" << timings->queryRebuildNanoseconds
+              << ",dirty_scan_ns=" << timings->dirtyScanNanoseconds
+              << ",total_ns=" << Nanoseconds(std::chrono::steady_clock::now() - updateStart) << '\n';
 }
 
 [[nodiscard]] std::size_t HierarchyTrackedSlotCount(const SceneState& state) noexcept {
@@ -431,8 +480,23 @@ void BuildTopologicalBatches(SceneState& state) {
         return;
     }
 
+    const std::size_t rootCount = state.hierarchyRoots.size();
+    if (state.transformTopologicalBatchesRootAppendEpoch == state.hierarchyRootAppendEpoch
+        && rootCount >= state.transformTopologicalBatchesRootCount
+        && !state.transformTopologicalBatches.empty()) {
+        auto& rootBatch = state.transformTopologicalBatches.front();
+        rootBatch.insert(rootBatch.end(),
+            state.hierarchyRoots.begin() + static_cast<std::ptrdiff_t>(state.transformTopologicalBatchesRootCount),
+            state.hierarchyRoots.end());
+        state.transformTopologicalBatchesRootCount = rootCount;
+        state.transformTopologicalBatchesVersion = state.hierarchyTopologyVersion;
+        return;
+    }
+
     state.transformTopologicalBatches.clear();
     if (state.hierarchyRoots.empty()) {
+        state.transformTopologicalBatchesRootCount = 0U;
+        state.transformTopologicalBatchesRootAppendEpoch = state.hierarchyRootAppendEpoch;
         state.transformTopologicalBatchesVersion = state.hierarchyTopologyVersion;
         ++state.transformTopologicalBatchBuildCount;
         return;
@@ -465,6 +529,8 @@ void BuildTopologicalBatches(SceneState& state) {
             nextLevel->insert(nextLevel->end(), childEntities.begin(), childEntities.end());
         }
     }
+    state.transformTopologicalBatchesRootCount = rootCount;
+    state.transformTopologicalBatchesRootAppendEpoch = state.hierarchyRootAppendEpoch;
     state.transformTopologicalBatchesVersion = state.hierarchyTopologyVersion;
     ++state.transformTopologicalBatchBuildCount;
 }
@@ -1124,26 +1190,52 @@ void RunHierarchyDirtyFrontier(
         && !state.transformTopologicalBatches.front().empty();
 }
 
-[[nodiscard]] bool RunNativeRootOnlyDirtyRanges(SceneState& state, std::chrono::steady_clock::time_point updateStart) {
+[[nodiscard]] bool RunNativeRootOnlyDirtyRanges(
+    SceneState& state,
+    std::chrono::steady_clock::time_point updateStart,
+    RootSyncProfileTimings* profileTimings) {
     using Clock = std::chrono::steady_clock;
     if (!CanUseNativeRootOnlyDirtyRanges(state)) {
         return false;
     }
 
-    kb::ecs::Query<TransformComponent> query = state.world.CreateQuery<TransformComponent>();
-    if (!query.IsValid()) {
+    const auto queryCreateStart = profileTimings != nullptr ? Clock::now() : Clock::time_point{};
+    if (state.transformRootQueryCache == nullptr) {
+        state.transformRootQueryCache = std::make_unique<SceneTransformRootQueryCache>();
+    }
+    SceneTransformRootQueryCache& queryCache = *state.transformRootQueryCache;
+    if (!queryCache.query.IsValid()) {
+        queryCache.query = state.world.CreateQuery<TransformComponent>();
+    }
+    if (profileTimings != nullptr) {
+        profileTimings->queryCreateNanoseconds = Nanoseconds(Clock::now() - queryCreateStart);
+    }
+    if (!queryCache.query.IsValid()) {
         return false;
     }
 
-    kb::ecs::UnsafeHotQuery<TransformComponent> hotQuery;
-    if (!hotQuery.Rebuild(query, kb::ecs::QueryExecutionSettings{ .maxBatchSize = kTransformBatchGrainSize })) {
-        return false;
+    kb::ecs::UnsafeHotQuery<TransformComponent>& hotQuery = queryCache.hotQuery;
+    if (queryCache.hierarchyTopologyVersion != state.hierarchyTopologyVersion || hotQuery.IsStale(queryCache.query)) {
+        const auto queryRebuildStart = profileTimings != nullptr ? Clock::now() : Clock::time_point{};
+        if (!hotQuery.Rebuild(queryCache.query, kb::ecs::QueryExecutionSettings{ .maxBatchSize = kTransformBatchGrainSize })) {
+            return false;
+        }
+        queryCache.hierarchyTopologyVersion = state.hierarchyTopologyVersion;
+        if (profileTimings != nullptr) {
+            profileTimings->queryRebuildNanoseconds = Nanoseconds(Clock::now() - queryRebuildStart);
+        }
     }
 
+    const auto dirtyScanStart = profileTimings != nullptr ? Clock::now() : Clock::time_point{};
     std::size_t dirtyRows = 0U;
-    hotQuery.ForEachMutableChunk([&dirtyRows](const kb::ecs::UnsafeHotMutableChunk<TransformComponent>& chunk) {
-        dirtyRows += chunk.DirtyCount<0>();
-    });
+    // Component writes can change dirty counts without changing archetype structure.
+    hotQuery.ForEachMutableChunkWithCurrentDirtyCounts(state.world.NativeStorage(),
+        [&dirtyRows](const kb::ecs::UnsafeHotMutableChunk<TransformComponent>& chunk) {
+            dirtyRows += chunk.DirtyCount<0>();
+        });
+    if (profileTimings != nullptr) {
+        profileTimings->dirtyScanNanoseconds = Nanoseconds(Clock::now() - dirtyScanStart);
+    }
 
     ResetPropagationCursor(state);
     state.transformHierarchyUpdatedEntitiesScratch.clear();
@@ -1152,6 +1244,7 @@ void RunHierarchyDirtyFrontier(
         const auto finishedAt = Clock::now();
         state.lastTransformHierarchyUpdateNanoseconds = Nanoseconds(finishedAt - updateStart);
         state.lastTransformHierarchyPropagateNanoseconds = state.lastTransformHierarchyUpdateNanoseconds;
+        PrintRootSyncProfile(state, profileTimings, dirtyRows, updateStart);
         return true;
     }
 
@@ -1272,6 +1365,7 @@ void RunHierarchyDirtyFrontier(
         state.transformHierarchyUpdatedEntitiesScratch,
         state.transformHierarchyUpdatedTransformsScratch);
     ClearSceneTransformDirtyFrontier(state);
+    PrintRootSyncProfile(state, profileTimings, dirtyRows, updateStart);
     return true;
 }
 
@@ -1282,7 +1376,13 @@ void SceneTransformHierarchySystem::Update(SceneState& state) const {
 
     const auto updateStart = Clock::now();
     const TransformComponent identity = TransformMath::Identity();
+    RootSyncProfileTimings rootSyncProfile;
+    RootSyncProfileTimings* const profileTimings = RootSyncProfileEnabled() ? &rootSyncProfile : nullptr;
+    const auto topologyStart = profileTimings != nullptr ? Clock::now() : Clock::time_point{};
     BuildTopologicalBatches(state);
+    if (profileTimings != nullptr) {
+        profileTimings->topologyNanoseconds = Nanoseconds(Clock::now() - topologyStart);
+    }
     if (state.transformPropagationCursorVersion != state.hierarchyTopologyVersion ||
         state.transformPropagationCursorLevel >= state.transformTopologicalBatches.size()) {
         ResetPropagationCursor(state);
@@ -1290,7 +1390,11 @@ void SceneTransformHierarchySystem::Update(SceneState& state) const {
 
     state.transformDirtyScratch.clear();
     state.transformWorldScratch.clear();
+    const auto denseScratchStart = profileTimings != nullptr ? Clock::now() : Clock::time_point{};
     PrepareDenseTransformScratch(state);
+    if (profileTimings != nullptr) {
+        profileTimings->denseScratchNanoseconds = Nanoseconds(Clock::now() - denseScratchStart);
+    }
     const std::size_t trackedSlotCount = HierarchyTrackedSlotCount(state);
     state.transformDirtyScratch.reserve(state.hierarchyOrder.size());
     state.transformWorldScratch.reserve(state.hierarchyOrder.size());
@@ -1326,7 +1430,7 @@ void SceneTransformHierarchySystem::Update(SceneState& state) const {
     state.lastTransformHierarchyUpdateNanoseconds = 0U;
     state.lastTransformHierarchyFlushNanoseconds = 0U;
     state.lastTransformHierarchyBudgetExhausted = false;
-    if (RunNativeRootOnlyDirtyRanges(state, updateStart)) {
+    if (RunNativeRootOnlyDirtyRanges(state, updateStart, profileTimings)) {
         return;
     }
 

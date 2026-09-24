@@ -424,6 +424,10 @@ std::uint32_t EditorSceneBgfxViewport::RendererCompletedFrame() const noexcept {
     return renderer_.LastCompletedFrame();
 }
 
+render::SceneRenderSubmitStats EditorSceneBgfxViewport::LastSceneSubmitStats() const noexcept {
+    return renderer_.LastSceneSubmitStats();
+}
+
 bool EditorSceneBgfxViewport::AdvanceAsyncReadbacks() {
     if (renderFailed_ || !renderer_.IsInitialized() ||
         !renderer_.BeginFrame()) {

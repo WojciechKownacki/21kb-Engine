@@ -3,6 +3,14 @@
 #include <string_view>
 
 int main(int argumentCount, char** arguments) {
+    if (argumentCount == 2 && std::string_view{ arguments[1] } == "hierarchy") {
+        kb::editor::tests::RunEditorHierarchyTests();
+        return 0;
+    }
+    if (argumentCount == 2 && std::string_view{ arguments[1] } == "play-session") {
+        kb::editor::tests::RunEditorPlayModeSceneSessionTests();
+        return 0;
+    }
     if (argumentCount == 2 && std::string_view{ arguments[1] } == "script-editor") {
         kb::editor::tests::RunScriptEditorTests();
         return 0;

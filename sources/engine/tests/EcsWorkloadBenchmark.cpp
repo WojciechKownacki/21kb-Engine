@@ -83,13 +83,24 @@ void PrintSamples(std::string_view phase, std::vector<double> samples, std::size
 
 int main(int argc, char** argv) {
     try {
-        if (argc > 4 || (argc == 4 && std::string_view{ argv[3] } != "native-only")) {
-            std::cerr << "usage: kb_ecs_workload_benchmark [entity_count] [measured_frames] [native-only]\n";
+        if (argc > 5) {
+            std::cerr << "usage: kb_ecs_workload_benchmark [entity_count] [measured_frames] [native-only] [direct-add]\n";
             return EXIT_FAILURE;
         }
         const std::size_t entityCount = argc > 1 ? ParsePositive(argv[1]) : 1'000'000U;
         const std::size_t measuredFrames = argc > 2 ? ParsePositive(argv[2]) : 120U;
-        const bool nativeOnly = argc == 4;
+        bool nativeOnly = false;
+        bool directAdd = false;
+        for (int index = 3; index < argc; ++index) {
+            const std::string_view option{ argv[index] };
+            if (option == "native-only" && !nativeOnly) {
+                nativeOnly = true;
+            } else if (option == "direct-add" && !directAdd) {
+                directAdd = true;
+            } else {
+                throw std::invalid_argument("unknown or duplicate workload benchmark option");
+            }
+        }
         constexpr std::size_t warmupFrames = 10U;
         if (measuredFrames > std::numeric_limits<std::size_t>::max() - warmupFrames) {
             throw std::out_of_range("frame count is too large");
@@ -152,21 +163,27 @@ int main(int argc, char** argv) {
         std::vector<Active> active(entityCount, Active{ 1U });
         kb::ecs::CommandBuffer buffer{ 1 };
         const auto addStart = Clock::now();
-        buffer.Worker(0).AddMissingBorrowed(std::span<const kb::ecs::Entity>{ entities }, std::span<const Active>{ active });
-        const auto addResult = buffer.Playback(world);
+        std::size_t createdDuringAdd = 0U;
+        if (directAdd) {
+            world.SetMany<Active>(entities, active);
+        } else {
+            buffer.Worker(0).AddMissingBorrowed(std::span<const kb::ecs::Entity>{ entities }, std::span<const Active>{ active });
+            createdDuringAdd = buffer.Playback(world).CreatedCount();
+        }
         const double addMs = Milliseconds(addStart);
         std::size_t activeCount = 0;
         world.CreateQuery<Active>().ForEachBatchKernel([&activeCount](const kb::ecs::QueryBatch<Active>& batch) {
             activeCount += batch.Count();
         });
-        if (addResult.CreatedCount() != 0U || activeCount != entityCount) {
+        if (createdDuringAdd != 0U || activeCount != entityCount) {
             throw std::runtime_error("component addition verification failed");
         }
 
         std::cout << std::fixed << std::setprecision(3);
         std::cout << "mode=" << (nativeOnly ? "native-only" : "full")
                   << ",entities=" << entityCount << ",warmup_frames=" << warmupFrames
-                  << ",measured_frames=" << measuredFrames << ",step_seconds=0.016666667\n";
+                  << ",measured_frames=" << measuredFrames << ",step_seconds=0.016666667"
+                  << ",add_mode=" << (directAdd ? "direct-set-many" : "command-buffer-transactional") << '\n';
         std::cout << "bulk_create,ms=" << createMs << ",entities_per_second="
                   << static_cast<double>(entityCount) * 1000.0 / createMs << '\n';
         PrintSamples("position_update", std::move(frameSamples), entityCount);

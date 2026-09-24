@@ -183,6 +183,7 @@ struct SceneRenderDrawGroup {
     std::uint64_t meshAssetId = 0;
     std::uint64_t materialAssetId = 0;
     bool hasMaterialSlotOverrides = false;
+    bool hasMorphDeformation = false;
     std::vector<SceneRenderMeshInstance> instances;
 };
 

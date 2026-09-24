@@ -19,6 +19,8 @@ public:
     using CollapsedEntitySet = std::unordered_set<kb::scene::SceneEntity::IdType>;
 
     [[nodiscard]] static std::vector<EditorHierarchyRow> Build(const kb::scene::Scene& scene, const CollapsedEntitySet& collapsedEntities, std::string_view searchQuery);
+    static void AppendRoot(const kb::scene::Scene& scene, const CollapsedEntitySet& collapsedEntities,
+        kb::scene::SceneEntity root, std::vector<EditorHierarchyRow>& rows);
 
 private:
     static void Append(const kb::scene::Scene& scene, const CollapsedEntitySet& collapsedEntities, kb::scene::SceneEntity entity, std::uint32_t depth, std::vector<EditorHierarchyRow>& rows);

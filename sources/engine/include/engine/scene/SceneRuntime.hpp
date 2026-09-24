@@ -43,6 +43,10 @@ struct SceneRuntimeHotPathReport {
     bool transformHierarchyUsesBatchPath = false;
     bool transformHierarchyUsesKernelContract = false;
     bool transformHierarchyUsesVirtualSceneSystem = true;
+    std::uint64_t runtimeUpdateNanoseconds = 0U;
+    std::uint64_t runtimeTransformSyncNanoseconds = 0U;
+    std::uint64_t runtimeFixedCaptureStartNanoseconds = 0U;
+    std::uint64_t runtimeFixedCaptureEndNanoseconds = 0U;
     std::size_t transformTopologicalBatchCount = 0U;
     std::uint64_t transformTopologicalBatchBuildCount = 0U;
     std::size_t transformRenderProxyUpdateCount = 0U;

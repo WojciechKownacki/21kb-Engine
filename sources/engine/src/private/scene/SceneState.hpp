@@ -78,6 +78,7 @@ class IParticleSimulationBackend;
 namespace kb::scene {
 
 class IPhysicsBackend;
+struct SceneTransformRootQueryCache;
 
 struct AnimatorRuntimeState {
     struct Motion {
@@ -309,6 +310,10 @@ public:
     float fixedStepAccumulatorSeconds = 0.0F;
     float fixedInterpolationAlpha = 0.0F;
     std::size_t lastFixedStepCount = 0U;
+    std::uint64_t lastRuntimeUpdateNanoseconds = 0U;
+    std::uint64_t lastRuntimeTransformSyncNanoseconds = 0U;
+    std::uint64_t lastRuntimeFixedCaptureStartNanoseconds = 0U;
+    std::uint64_t lastRuntimeFixedCaptureEndNanoseconds = 0U;
     // LIB-065: monotonic counters, never reset (unlike lastFixedStepCount,
     // which is a per-frame count reset at the top of every Update()).
     // frameIndex counts Update() calls; fixedStepIndex counts individual
@@ -516,9 +521,13 @@ public:
     std::vector<std::size_t> prefabHierarchyChildrenPerNodeScratch;
     std::vector<std::vector<SceneEntity>> transformTopologicalBatches;
     std::uint64_t hierarchyTopologyVersion = 1;
+    std::uint64_t hierarchyRootAppendEpoch = 1U;
     std::uint64_t nextAnimatorRuntimeBindingGeneration = 1U;
     std::uint64_t transformTopologicalBatchesVersion = 0;
+    std::uint64_t transformTopologicalBatchesRootAppendEpoch = 0U;
+    std::size_t transformTopologicalBatchesRootCount = 0U;
     std::uint64_t transformTopologicalBatchBuildCount = 0;
+    std::unique_ptr<SceneTransformRootQueryCache> transformRootQueryCache;
     std::uint64_t transformPropagationCursorVersion = 0;
     std::size_t transformPropagationCursorLevel = 0U;
     std::size_t transformPropagationCursorOffset = 0U;

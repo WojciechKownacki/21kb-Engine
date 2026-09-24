@@ -581,6 +581,9 @@ public:
     }
 
     [[nodiscard]] EntityLocation Add(Entity entity) {
+        if (componentVersions_.empty()) {
+            componentVersions_.resize(layout_.columns.size(), 1U);
+        }
         if (chunks_.empty() || chunks_.back().rowCount == layout_.capacity) {
             chunks_.emplace_back(*pool_, layout_.capacity, layout_.columns.size(), DirtyWordCount(), layout_.sidePayloadBytes);
         }
@@ -590,9 +593,6 @@ public:
         ++chunks_.back().rowCount;
         ++liveEntities_;
         ++version_;
-        if (componentVersions_.empty()) {
-            componentVersions_.resize(layout_.columns.size(), 1U);
-        }
         MarkAllComponentRowsDirty(location.chunk, location.row, 1U);
         return location;
     }
@@ -701,6 +701,24 @@ public:
         version_ += entities.size();
     }
 
+    void RollbackAppendedRows(std::size_t originalLiveEntities) {
+        if (originalLiveEntities > liveEntities_) {
+            throw std::logic_error("Native ECS bulk append rollback exceeds live rows");
+        }
+        const std::size_t appendedRows = liveEntities_ - originalLiveEntities;
+        if (appendedRows != 0U) {
+            ClearDirtyRowsFromFlatRange(originalLiveEntities, appendedRows);
+        }
+        ResizeRows(originalLiveEntities);
+        if (appendedRows != 0U) {
+            liveEntities_ = originalLiveEntities;
+            ++version_;
+            for (std::uint64_t& componentVersion : componentVersions_) {
+                ++componentVersion;
+            }
+        }
+    }
+
     [[nodiscard]] Entity RemoveAt(EntityLocation location) {
         if (location.chunk >= chunks_.size() || location.row >= chunks_[location.chunk].rowCount) {
             throw std::out_of_range("Invalid native ECS row location");
@@ -741,6 +759,7 @@ public:
         }
 
         removedRows.reserve(locations.size());
+        movedEntities.reserve(locations.size());
         bool strictlyIncreasingRows = true;
         std::size_t previousFlatRow = 0;
         bool hasPreviousFlatRow = false;
@@ -1818,15 +1837,35 @@ public:
         const std::size_t tableIndex = FindOrCreateTable(types);
         ArchetypeTable& table = tables_[tableIndex];
         EnsureChunkCommitBudget(table.NewChunkAcquiresForAppend(1U));
+        if (freeEntityIndices_.empty()) {
+            freeEntityIndices_.reserve(1U);
+        }
         const Entity entity = AllocateEntity();
-        EntityLocation location = table.Add(entity);
-        location.table = tableIndex;
-        records_[RecordIndex(entity)].location = location;
+        bool rowAdded = false;
+        EntityLocation location{};
+        try {
+            location = table.Add(entity);
+            rowAdded = true;
+            location.table = tableIndex;
+            records_[RecordIndex(entity)].location = location;
 
-        for (const NativeComponentValue& component : components) {
-            if (component.data != nullptr) {
-                table.WriteComponent(location, component.type.id, component.data, component.type.size);
+            for (const NativeComponentValue& component : components) {
+                if (component.data != nullptr) {
+                    table.WriteComponent(location, component.type.id, component.data, component.type.size);
+                }
             }
+        } catch (...) {
+            if (rowAdded) {
+                static_cast<void>(table.RemoveAt(location));
+                BumpStructuralVersion();
+            }
+            const std::uint32_t recordIndex = EntityIndex(entity);
+            EntityRecord& record = records_[recordIndex];
+            record.alive = false;
+            ++record.generation;
+            freeEntityIndices_.push_back(recordIndex);
+            --liveEntities_;
+            throw;
         }
         BumpStructuralVersion();
         return entity;
@@ -1842,9 +1881,25 @@ public:
         ValidateAppendBulkColumnSourceCounts(components, count);
         const std::size_t tableIndex = FindOrCreateTable(types);
         EnsureChunkCommitBudget(tables_[tableIndex].NewChunkAcquiresForAppend(count));
-        entities.reserve(count);
+        const std::size_t originalTableLiveEntities = tables_[tableIndex].LiveEntities();
+        const std::size_t originalRecordCount = records_.size();
+        const std::size_t reusedCount = std::min(count, freeEntityIndices_.size());
         AllocateEntities(entities, count);
-        AppendEntitiesToTable(tableIndex, entities, components, true);
+        try {
+            AppendEntitiesToTable(tableIndex, entities, components, true);
+        } catch (...) {
+            tables_[tableIndex].RollbackAppendedRows(originalTableLiveEntities);
+            for (std::size_t index = 0; index < reusedCount; ++index) {
+                const std::uint32_t recordIndex = EntityIndex(entities[index]);
+                records_[recordIndex].alive = false;
+                freeEntityIndices_.push_back(recordIndex);
+            }
+            records_.resize(originalRecordCount);
+            liveEntities_ -= count;
+            entities.clear();
+            BumpStructuralVersion();
+            throw;
+        }
         BumpStructuralVersion();
     }
 
@@ -1865,6 +1920,9 @@ public:
             throw std::invalid_argument("Native ECS cannot adopt an already live entity");
         }
 
+        const std::size_t tableIndex = FindOrCreateTable(types);
+        ArchetypeTable& table = tables_[tableIndex];
+        EnsureChunkCommitBudget(table.NewChunkAcquiresForAppend(1U));
         const std::uint32_t index = AllocateExternalRecord(entity);
         EntityRecord& record = records_[index];
         const std::uint32_t generation = EntityGeneration(entity);
@@ -1872,21 +1930,30 @@ public:
         record.alive = true;
         record.ownsGeneratedId = false;
         record.entity = entity;
-        RegisterExternalSlot(entity, index);
-        ++liveEntities_;
+        bool rowAdded = false;
+        EntityLocation location{};
+        try {
+            RegisterExternalSlot(entity, index);
+            location = table.Add(entity);
+            rowAdded = true;
+            location.table = tableIndex;
+            record.location = location;
 
-        const std::size_t tableIndex = FindOrCreateTable(types);
-        ArchetypeTable& table = tables_[tableIndex];
-        EnsureChunkCommitBudget(table.NewChunkAcquiresForAppend(1U));
-        EntityLocation location = table.Add(entity);
-        location.table = tableIndex;
-        record.location = location;
-
-        for (const NativeComponentValue& component : components) {
-            if (component.data != nullptr) {
-                table.WriteComponent(location, component.type.id, component.data, component.type.size);
+            for (const NativeComponentValue& component : components) {
+                if (component.data != nullptr) {
+                    table.WriteComponent(location, component.type.id, component.data, component.type.size);
+                }
             }
+        } catch (...) {
+            if (rowAdded) {
+                static_cast<void>(table.RemoveAt(location));
+                BumpStructuralVersion();
+            }
+            UnregisterExternalSlot(entity);
+            records_.pop_back();
+            throw;
         }
+        ++liveEntities_;
         BumpStructuralVersion();
     }
 
@@ -1929,6 +1996,8 @@ public:
         ValidateAppendBulkColumnSourceCounts(components, entities.size());
         const std::size_t tableIndex = FindOrCreateTable(types);
         EnsureChunkCommitBudget(tables_[tableIndex].NewChunkAcquiresForAppend(entities.size()));
+        const std::size_t originalTableLiveEntities = tables_[tableIndex].LiveEntities();
+        const std::size_t originalRecordCount = records_.size();
 
         records_.reserve(records_.size() + entities.size());
         const Entity::IdType rangeFirstId = entities.front().Id();
@@ -2013,10 +2082,15 @@ public:
                     externalRecordRanges_.insert(insertAt, range);
                 }
             } catch (...) {
+                tables_[tableIndex].RollbackAppendedRows(originalTableLiveEntities);
                 for (std::uint32_t recordIndex : adoptedRecordIndices) {
                     records_[recordIndex].alive = false;
                 }
+                if (!reusableExternalRangeIndex.has_value()) {
+                    records_.resize(originalRecordCount);
+                }
                 liveEntities_ -= entities.size();
+                BumpStructuralVersion();
                 throw;
             }
             BumpStructuralVersion();
@@ -2032,24 +2106,22 @@ public:
                 record.alive = true;
                 record.ownsGeneratedId = false;
                 record.entity = entity;
-                if (!registerExternalRange) {
-                    RegisterExternalSlot(entity, index);
-                }
                 ++liveEntities_;
                 adopted.push_back(entity);
                 adoptedRecordIndices.push_back(index);
+                RegisterExternalSlot(entity, index);
             }
             AppendEntitiesToTable(tableIndex, adopted, components, false, adoptedRecordIndices, false);
             BumpStructuralVersion();
         } catch (...) {
-            for (Entity entity : adopted) {
-                const std::optional<std::uint32_t> slot = LookupExternalSlot(entity.Id());
-                if (slot.has_value() && *slot < records_.size()) {
-                    records_[*slot].alive = false;
-                    UnregisterExternalSlot(entity);
-                    --liveEntities_;
-                }
+            tables_[tableIndex].RollbackAppendedRows(originalTableLiveEntities);
+            for (std::size_t index = 0; index < adopted.size(); ++index) {
+                records_[adoptedRecordIndices[index]].alive = false;
+                UnregisterExternalSlot(adopted[index]);
             }
+            records_.resize(originalRecordCount);
+            liveEntities_ -= adopted.size();
+            BumpStructuralVersion();
             throw;
         }
     }
@@ -2057,6 +2129,9 @@ public:
     void DestroyEntity(Entity entity) {
         const std::uint32_t recordIndex = RecordIndex(entity);
         EntityRecord& record = LiveRecord(entity);
+        if (record.ownsGeneratedId) {
+            freeEntityIndices_.reserve(freeEntityIndices_.size() + 1U);
+        }
         ArchetypeTable& table = tables_[record.location.table];
         const Entity movedEntity = table.RemoveAt(record.location);
         if (movedEntity.IsValid()) {
@@ -2129,6 +2204,10 @@ public:
             }
             singleTableLocations.push_back(record.location);
         }
+
+        movedEntitiesScratch_.reserve(entities.size());
+        removedRowsScratch_.reserve(entities.size());
+        freeEntityIndices_.reserve(freeEntityIndices_.size() + entities.size());
 
         if (singleTable) {
             tables_[firstTableIndex].RemoveMany(singleTableLocations, movedEntitiesScratch_, removedRowsScratch_);
@@ -2274,13 +2353,16 @@ public:
 
         const std::vector<NativeComponentType> addedTypes = NormalizeTypes(components);
         ValidateRowMappedBulkColumnSourceCounts(components, entities.size());
-        auto& uniqueIds = ResetUniqueIds(entities.size());
         auto& groups = ResetMigrationGroups();
+        bool strictlyIncreasingIds = true;
+        Entity::IdType previousId = 0;
         for (std::size_t entityIndex = 0; entityIndex < entities.size(); ++entityIndex) {
             const Entity entity = entities[entityIndex];
-            if (!entity.IsValid() || !uniqueIds.insert(entity.Id()).second) {
+            if (!entity.IsValid()) {
                 throw std::invalid_argument("Native ECS bulk add received an invalid or duplicate entity");
             }
+            strictlyIncreasingIds = strictlyIncreasingIds && (entityIndex == 0U || entity.Id() > previousId);
+            previousId = entity.Id();
 
             const std::uint32_t recordIndex = RecordIndex(entity);
             const EntityRecord& record = records_[recordIndex];
@@ -2298,6 +2380,14 @@ public:
             group.sourceRows.push_back(entityIndex);
             group.recordIndices.push_back(recordIndex);
             group.inputRowCount = entities.size();
+        }
+        if (!strictlyIncreasingIds) {
+            auto& uniqueIds = ResetUniqueIds(entities.size());
+            for (Entity entity : entities) {
+                if (!uniqueIds.insert(entity.Id()).second) {
+                    throw std::invalid_argument("Native ECS bulk add received an invalid or duplicate entity");
+                }
+            }
         }
 
         for (auto& [sourceIndex, group] : groups) {
@@ -2561,6 +2651,19 @@ public:
             }
         }
         return matches;
+    }
+
+    [[nodiscard]] std::size_t CountWithComponent(ComponentId componentId) const noexcept {
+        if (componentId == 0U) {
+            return 0U;
+        }
+        std::size_t count = 0U;
+        for (const ArchetypeTable& table : tables_) {
+            if (table.HasComponent(componentId)) {
+                count += table.LiveEntities();
+            }
+        }
+        return count;
     }
 
     void CollectQueryRecords(
@@ -3159,7 +3262,6 @@ private:
     }
 
     [[nodiscard]] Entity AllocateEntity() {
-        ++liveEntities_;
         if (!freeEntityIndices_.empty()) {
             const std::uint32_t index = freeEntityIndices_.back();
             freeEntityIndices_.pop_back();
@@ -3167,6 +3269,7 @@ private:
             record.alive = true;
             record.ownsGeneratedId = true;
             record.entity = PackEntity(index, record.generation);
+            ++liveEntities_;
             return record.entity;
         }
 
@@ -3181,6 +3284,7 @@ private:
             .ownsGeneratedId = true,
             .entity = entity,
         });
+        ++liveEntities_;
         return entity;
     }
 
@@ -3190,34 +3294,25 @@ private:
         }
 
         entities.clear();
+        const std::size_t reusedCount = std::min(count, freeEntityIndices_.size());
+        const std::size_t remainingCount = count - reusedCount;
+        if (remainingCount > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max()) - records_.size()) {
+            throw std::runtime_error("Native ECS entity capacity exceeded");
+        }
         entities.reserve(count);
-        if (!freeEntityIndices_.empty()) {
-            const std::size_t reusedCount = std::min(count, freeEntityIndices_.size());
-            entities.resize(reusedCount);
-            for (std::size_t offset = 0; offset < reusedCount; ++offset) {
-                const std::uint32_t recordIndex = freeEntityIndices_.back();
-                freeEntityIndices_.pop_back();
-                EntityRecord& record = records_[recordIndex];
-                record.alive = true;
+        records_.reserve(records_.size() + remainingCount);
+        entities.resize(count);
+        const std::uint32_t firstIndex = static_cast<std::uint32_t>(records_.size());
+        records_.resize(records_.size() + remainingCount);
+        for (std::size_t offset = 0; offset < reusedCount; ++offset) {
+            const std::uint32_t recordIndex = freeEntityIndices_.back();
+            freeEntityIndices_.pop_back();
+            EntityRecord& record = records_[recordIndex];
+            record.alive = true;
             record.ownsGeneratedId = true;
             record.entity = PackEntity(recordIndex, record.generation);
             entities[reusedCount - 1U - offset] = record.entity;
         }
-            liveEntities_ += reusedCount;
-            if (reusedCount == count) {
-                return;
-            }
-        }
-
-        const std::size_t remainingCount = count - entities.size();
-        if (records_.size() > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max()) - remainingCount) {
-            throw std::runtime_error("Native ECS entity capacity exceeded");
-        }
-
-        const std::uint32_t firstIndex = static_cast<std::uint32_t>(records_.size());
-        records_.resize(records_.size() + remainingCount);
-        const std::size_t firstEntityOffset = entities.size();
-        entities.resize(count);
         for (std::size_t offset = 0; offset < remainingCount; ++offset) {
             const std::uint32_t recordIndex = firstIndex + static_cast<std::uint32_t>(offset);
             const Entity entity = PackEntity(recordIndex, 0U);
@@ -3227,9 +3322,9 @@ private:
                 .ownsGeneratedId = true,
                 .entity = entity,
             };
-            entities[firstEntityOffset + offset] = entity;
+            entities[reusedCount + offset] = entity;
         }
-        liveEntities_ += remainingCount;
+        liveEntities_ += count;
     }
 
     [[nodiscard]] std::uint32_t AllocateExternalRecord(Entity entity) {
@@ -3291,6 +3386,7 @@ private:
             return;
         }
         const std::size_t removedCount = liveEntities_;
+        freeEntityIndices_.reserve(freeEntityIndices_.size() + removedCount);
         for (ArchetypeTable& table : tables_) {
             if (retainCapacity) {
                 table.RemoveAllRetainingCapacity();
@@ -3299,7 +3395,6 @@ private:
             }
         }
 
-        freeEntityIndices_.reserve(freeEntityIndices_.size() + removedCount);
         for (std::uint32_t recordIndex = 0; recordIndex < records_.size(); ++recordIndex) {
             EntityRecord& record = records_[recordIndex];
             if (!record.alive) {
@@ -3683,6 +3778,10 @@ bool NativeArchetypeStorage::EntityArchetypeMatches(Entity entity, std::span<con
 
 std::vector<NativeArchetypeMatch> NativeArchetypeStorage::MatchingArchetypes(std::span<const ComponentId> requiredComponentIds) const {
     return impl_->MatchingArchetypes(requiredComponentIds);
+}
+
+std::size_t NativeArchetypeStorage::CountWithComponent(ComponentId componentId) const noexcept {
+    return impl_ != nullptr ? impl_->CountWithComponent(componentId) : 0U;
 }
 
 void NativeArchetypeStorage::CollectQueryRecords(
