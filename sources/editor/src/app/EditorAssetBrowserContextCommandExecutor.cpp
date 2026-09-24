@@ -45,6 +45,10 @@ bool EditorAssetBrowserContextCommandExecutor::Execute(EditorAssetContextCommand
         const std::filesystem::path destinationFolder = targetKind == EditorAssetContextTargetKind::Folder ? targetFolder : state.SelectedFolder();
         return sceneContext.CreateLuaScriptAsset(destinationFolder);
     }
+    case EditorAssetContextCommand::NewNativeScript: {
+        const std::filesystem::path destinationFolder = targetKind == EditorAssetContextTargetKind::Folder ? targetFolder : state.SelectedFolder();
+        return sceneContext.CreateNativeScriptAsset(destinationFolder);
+    }
     case EditorAssetContextCommand::NewMaterial: {
         const std::filesystem::path destinationFolder = targetKind == EditorAssetContextTargetKind::Folder ? targetFolder : state.SelectedFolder();
         return sceneContext.CreateMaterialAsset(destinationFolder);

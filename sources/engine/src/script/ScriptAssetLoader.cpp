@@ -468,6 +468,8 @@ struct NativeBehaviourDescriptorParseResult {
             result.descriptor.symbol.assign(value);
         } else if (key == "module" || key == "dll" || key == "library") {
             result.descriptor.modulePath = std::filesystem::path{ std::string{ value } };
+        } else if (key == "source") {
+            result.descriptor.sourcePath = std::filesystem::path{ std::string{ value } };
         } else if (key == "entry" || key == "entry_point") {
             result.descriptor.entryPoint.assign(value);
         } else if (key == "build") {

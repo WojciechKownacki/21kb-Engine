@@ -24,6 +24,7 @@ struct NativeBehaviourDescriptor {
     std::string name;
     std::string symbol;
     std::filesystem::path modulePath;
+    std::filesystem::path sourcePath;
     std::string entryPoint;
     NativeScriptBuildDesc build;
     bool shadowCopy = true;

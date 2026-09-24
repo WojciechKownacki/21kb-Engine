@@ -13,10 +13,12 @@
 #include "engine/visual/VisualGraphRuntimeRegistry.hpp"
 
 #include <cstddef>
+#include <chrono>
 #include <filesystem>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace kb::script {
@@ -102,6 +104,13 @@ private:
     ScriptRuntimeVisualGraphPrepareSettings visualGraphSettings_{};
     ScriptRuntimeNativePrepareSettings nativeSettings_{};
     std::unordered_map<std::uint64_t, std::uint64_t> preparedNativeAssetHashes_;
+    struct NativeSourceObservation {
+        std::uint64_t descriptorHash = 0;
+        std::uint64_t signature = 0;
+        std::chrono::steady_clock::time_point nextCheck{};
+    };
+    std::unordered_map<std::uint64_t, NativeSourceObservation> nativeSourceObservations_;
+    std::unordered_map<std::uint64_t, std::pair<std::uint64_t, std::string>> failedNativeAssetBuilds_;
     std::unordered_map<std::uint64_t, std::uint64_t> preparedVisualGraphAssetHashes_;
 };
 

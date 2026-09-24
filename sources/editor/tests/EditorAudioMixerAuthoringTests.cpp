@@ -262,6 +262,7 @@ void RunAudioMixerProjectFilesCommandModelTest() {
         kb::editor::EditorAssetContextCommand::Import,
         kb::editor::EditorAssetContextCommand::NewFolder,
         kb::editor::EditorAssetContextCommand::NewLuaScript,
+        kb::editor::EditorAssetContextCommand::NewNativeScript,
         kb::editor::EditorAssetContextCommand::NewMaterial,
         kb::editor::EditorAssetContextCommand::NewMaterialFunction,
         kb::editor::EditorAssetContextCommand::NewMaterialGraph,

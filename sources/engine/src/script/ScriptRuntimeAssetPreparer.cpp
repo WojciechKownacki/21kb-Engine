@@ -276,20 +276,77 @@ ScriptRuntimeAssetPrepareResult ScriptRuntimeAssetPreparer::PrepareLuaImportsRec
 ScriptRuntimeAssetPrepareResult ScriptRuntimeAssetPreparer::PrepareNativeBehaviourAsset(const kb::assets::AssetMetadata& metadata) {
     ScriptRuntimeAssetPrepareResult result{};
     ++result.visitedAssets;
-    const auto preparedNative = preparedNativeAssetHashes_.find(metadata.id.value);
-    if (preparedNative != preparedNativeAssetHashes_.end() && preparedNative->second == metadata.contentHash) {
-        ++result.preparedAssets;
-        return result;
+    const auto now = std::chrono::steady_clock::now();
+    const auto observation = nativeSourceObservations_.find(metadata.id.value);
+    if (observation != nativeSourceObservations_.end() && observation->second.descriptorHash == metadata.contentHash &&
+        now < observation->second.nextCheck) {
+        const auto prepared = preparedNativeAssetHashes_.find(metadata.id.value);
+        if (prepared != preparedNativeAssetHashes_.end() && prepared->second == observation->second.signature) {
+            ++result.preparedAssets;
+            return result;
+        }
+        const auto failed = failedNativeAssetBuilds_.find(metadata.id.value);
+        if (failed != failedNativeAssetBuilds_.end() && failed->second.first == observation->second.signature) {
+            AddDiagnostic(result, metadata.id, kb::scene::BehaviourBackend::Native, failed->second.second);
+            return result;
+        }
+    }
+    if (observation == nativeSourceObservations_.end()) {
+        const auto prepared = preparedNativeAssetHashes_.find(metadata.id.value);
+        if (prepared != preparedNativeAssetHashes_.end() && prepared->second == metadata.contentHash) {
+            ++result.preparedAssets;
+            return result;
+        }
     }
     const kb::assets::AssetHandle<NativeBehaviourDescriptor> descriptor = assets_.Load<NativeBehaviourDescriptor>(metadata.id);
     if (!descriptor.IsLoaded()) {
         AddDiagnostic(result, metadata.id, kb::scene::BehaviourBackend::Native, assets_.LastError().empty() ? "native behaviour descriptor could not be loaded" : assets_.LastError());
         return result;
     }
+    std::uint64_t signature = metadata.contentHash;
+    if (!descriptor->sourcePath.empty()) {
+        const std::filesystem::path sourcePath = descriptor->sourcePath.is_absolute()
+            ? descriptor->sourcePath : metadata.physicalPath.parent_path() / descriptor->sourcePath;
+        std::error_code fileError;
+        const auto modified = std::filesystem::last_write_time(sourcePath, fileError);
+        if (fileError) {
+            AddDiagnostic(result, metadata.id, kb::scene::BehaviourBackend::Native, "native script source is unavailable: " + sourcePath.string());
+            return result;
+        }
+        signature ^= static_cast<std::uint64_t>(modified.time_since_epoch().count()) + 0x9e3779b97f4a7c15ULL + (signature << 6U) + (signature >> 2U);
+        const std::uintmax_t size = std::filesystem::file_size(sourcePath, fileError);
+        if (fileError) {
+            AddDiagnostic(result, metadata.id, kb::scene::BehaviourBackend::Native, "native script source size could not be read: " + sourcePath.string());
+            return result;
+        }
+        signature ^= static_cast<std::uint64_t>(size) + 0x9e3779b97f4a7c15ULL + (signature << 6U) + (signature >> 2U);
+        nativeSourceObservations_[metadata.id.value] = NativeSourceObservation{
+            .descriptorHash = metadata.contentHash,
+            .signature = signature,
+            .nextCheck = now + std::chrono::milliseconds{ 250 },
+        };
+    } else {
+        nativeSourceObservations_.erase(metadata.id.value);
+    }
+    const auto preparedNative = preparedNativeAssetHashes_.find(metadata.id.value);
+    if (preparedNative != preparedNativeAssetHashes_.end() && preparedNative->second == signature) {
+        ++result.preparedAssets;
+        return result;
+    }
+    const auto failedBuild = failedNativeAssetBuilds_.find(metadata.id.value);
+    if (failedBuild != failedNativeAssetBuilds_.end() && failedBuild->second.first == signature) {
+        AddDiagnostic(result, metadata.id, kb::scene::BehaviourBackend::Native, failedBuild->second.second);
+        return result;
+    }
     if (nativeSettings_.buildPlugins && descriptor->build.enabled) {
-        NativeScriptBuildResult built = NativeScriptBuildPipeline::Build(descriptor->build);
+        NativeScriptBuildDesc build = descriptor->build;
+        if (!build.workingDirectory.empty() && build.workingDirectory.is_relative()) {
+            build.workingDirectory = (metadata.physicalPath.parent_path() / build.workingDirectory).lexically_normal();
+        }
+        NativeScriptBuildResult built = NativeScriptBuildPipeline::Build(build);
         if (!built.Succeeded()) {
             const std::string message = built.errors.empty() ? "native script plugin build failed" : built.errors.front();
+            failedNativeAssetBuilds_[metadata.id.value] = { signature, message };
             AddDiagnostic(result, metadata.id, kb::scene::BehaviourBackend::Native, message);
             return result;
         }
@@ -313,7 +370,8 @@ ScriptRuntimeAssetPrepareResult ScriptRuntimeAssetPreparer::PrepareNativeBehavio
         AddDiagnostic(result, metadata.id, kb::scene::BehaviourBackend::Native, "native behaviour descriptor symbol could not be bound");
         return result;
     }
-    preparedNativeAssetHashes_[metadata.id.value] = metadata.contentHash;
+    failedNativeAssetBuilds_.erase(metadata.id.value);
+    preparedNativeAssetHashes_[metadata.id.value] = signature;
     ++result.preparedAssets;
     return result;
 }

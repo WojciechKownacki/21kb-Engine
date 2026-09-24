@@ -57,6 +57,7 @@
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
+#include "engine/script/ScriptAsset.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialAssetWriter.hpp"
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
@@ -766,6 +767,24 @@ void RunHeadlessAutomationWorkflowSuite(Report& report) {
 // it, and round-trip an edit on disk (what the editable control persists).
 void RunScriptEditorSuite(Report& report) {
     EditorSceneContext context;
+
+    report.Check(context.CreateNativeScriptAsset("/Game"), "Create C++ script asset");
+    const kb::assets::AssetId nativeScript = FindAssetId(context, [](const kb::assets::AssetMetadata& m) { return m.type == "NativeBehaviour"; });
+    report.Check(nativeScript.IsValid(), "C++ script registered as native behaviour");
+    if (nativeScript.IsValid()) {
+        const auto descriptor = context.Scene().Assets().Manager().Load<kb::script::NativeBehaviourDescriptor>(nativeScript);
+        report.Check(descriptor.IsLoaded(), "C++ script descriptor loads");
+        if (descriptor.IsLoaded()) {
+            const kb::assets::AssetMetadata* metadata = context.Scene().Assets().Manager().Registry().Find(nativeScript);
+            const std::filesystem::path source = (metadata->physicalPath.parent_path() / descriptor->sourcePath).lexically_normal();
+            report.Check(std::filesystem::exists(source), "C++ script source exists");
+            report.Check(std::filesystem::exists(source.parent_path() / "CMakeLists.txt"), "C++ script build file exists");
+            report.Check(EditorScriptAssetGateway::ReadSource(source).find("class NewScript") != std::string::npos,
+                "C++ script defines a class");
+            const kb::scene::SceneEntity actor = context.CreateHierarchyObject();
+            report.Check(actor.IsValid() && context.AttachScriptToEntity(actor, nativeScript), "C++ script attaches to actor");
+        }
+    }
 
     report.Check(context.CreateLuaScriptAsset("/Game"), "Create Lua script asset");
     const kb::assets::AssetId script = FindAssetId(context, [](const kb::assets::AssetMetadata& m) { return m.type == "LuaScript"; });

@@ -15,6 +15,7 @@ namespace {
 
 [[nodiscard]] bool IsScript(const kb::assets::AssetMetadata& metadata) noexcept {
     return metadata.type == "LuaScript"
+        || metadata.type == "NativeBehaviour"
         || metadata.type == "Script"
         || metadata.importCategory == "Script"
         || metadata.virtualPath.extension() == ".lua";
