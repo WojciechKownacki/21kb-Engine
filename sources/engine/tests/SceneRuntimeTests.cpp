@@ -8,6 +8,7 @@
 
 namespace kb::tests {
 void RunScriptNativeHeaderReloadTest();
+void RunPhysicsReplayOnlyTest();
 }
 
 namespace {
@@ -33,6 +34,8 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunSceneUIBuildFrameBenchmark();
     } else if (suite == "scene-system") {
         kb::tests::RunSceneSystemTests();
+    } else if (suite == "physics-replay") {
+        kb::tests::RunPhysicsReplayOnlyTest();
     } else if (suite == "audio") {
         kb::tests::RunAudioSceneSystemTests();
     } else if (suite == "scene-runtime") {

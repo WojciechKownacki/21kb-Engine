@@ -37,6 +37,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
@@ -1571,13 +1572,14 @@ void RunPhysicsSceneSystemFallingBodyTest() {
     // (a) single-body positive control: destroy -> recreate ONE sphere at the SAME position
     //     (bit-identical input, and a set of size 1 can never be reordered by anything,
     //     ECS-level or Jolt-BodyID-level) -> replay -> compare. Expect bit-exact equality.
-    // (b) multi-body chaotic control: two structurally identical 6-sphere rigs built
+    // (b) translated-rig control: two structurally identical 6-sphere rigs built
     //     ADJACENTLY in a single pass (no destroy/recreate at all, so neither confound above
     //     can apply), at a CLOSE world-space X (15 units - not touching, but close enough that
     //     float32 ULP spacing is effectively identical), using a non-overlapping cluster.
     //     Expect a small, honestly-bounded residual from #1's real remaining cause (floats are
     //     not translation-invariant), decisively tighter than every confounded attempt's
-    //     actual divergence (0.3-0.6).
+    //     actual divergence (0.3-0.6). The separate fresh-scene replay above covers
+    //     bit-exact multi-body reproduction from identical initial conditions.
     struct DeterminismSample {
         kb::scene::Vec3 position{};
         kb::scene::Quat rotation{};
@@ -1713,7 +1715,7 @@ void RunPhysicsSceneSystemFallingBodyTest() {
     // ~15-30x tighter than every confounded attempt's actual measured divergence - decisive
     // against genuine non-determinism, not a loosened pass.
     kb::tests::Require(determinismMaxAbsDifference <= 0.02F,
-        "LIB-134 two structurally identical rigid body rigs, built adjacently (no destroy/recreate involved), at a close world-space magnitude, must settle into the same real Jolt physics result after chaotic multi-body collision - the one determinism guarantee this engine actually relies on (same binary/platform, same call order)");
+        "LIB-134 translated rigid body rigs must stay within the measured tolerance; this is approximate translation agreement, not bit-exact replay");
 
     // --- Dynamic parent + dynamic child: both Jolt bodies advance during the same fixed
     // step. The child's local pose must be derived from the parent's NEW world pose, never
@@ -1938,6 +1940,88 @@ void RunPhysicsSceneSystemFallingBodyTest() {
     kb::tests::Require(std::ranges::any_of(numericErrors, [](const std::string& error) {
         return error.find("non-finite") != std::string::npos;
     }), "A non-finite collider must report a scene error before reaching Jolt");
+}
+
+void RunPhysicsIdenticalReplayTest() {
+    if (std::filesystem::path{KB_PHYSICS_JOLT_PLUGIN_PATH}.empty()) {
+        return;
+    }
+    const auto replay = [] {
+        kb::project::ProjectDescriptor descriptor;
+        descriptor.disableEnginePluginsByDefault = true;
+        descriptor.plugins.push_back(kb::project::ProjectPluginReference{
+            .name = "Physics.Jolt",
+            .binaryPath = KB_PHYSICS_JOLT_PLUGIN_PATH,
+            .enabled = true,
+        });
+        kb::scene::Scene scene{std::move(descriptor)};
+        const auto floor = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+            .name = "Replay floor",
+            .transform = kb::scene::TransformComponent{.localPosition = {0.0F, -0.5F, 0.0F}},
+        });
+        scene.Components().Rigidbodies().Set(floor.Entity(), kb::scene::RigidbodyComponent{
+            .bodyType = kb::scene::RigidbodyBodyType::Static,
+        });
+        scene.Components().Colliders().Set(floor.Entity(), kb::scene::ColliderComponent{
+            .shape = kb::scene::ColliderShape::Box,
+            .boxSize = {12.0F, 1.0F, 12.0F},
+        });
+        constexpr std::array<kb::scene::Vec3, 6U> positions{{
+            {0.0F, 5.0F, 0.0F}, {1.0F, 5.0F, 0.0F}, {0.5F, 5.0F, 1.0F},
+            {-1.0F, 5.0F, 0.0F}, {0.0F, 5.0F, -1.0F}, {0.5F, 6.5F, 0.3F},
+        }};
+        std::array<kb::scene::SceneObject, positions.size()> spheres{};
+        for (std::size_t index = 0U; index < positions.size(); ++index) {
+            spheres[index] = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+                .name = "Replay sphere",
+                .transform = kb::scene::TransformComponent{.localPosition = positions[index]},
+            });
+            scene.Components().Rigidbodies().Set(spheres[index].Entity(), kb::scene::RigidbodyComponent{
+                .bodyType = kb::scene::RigidbodyBodyType::Dynamic,
+                .mass = 1.0F,
+            });
+            scene.Components().Colliders().Set(spheres[index].Entity(), kb::scene::ColliderComponent{
+                .shape = kb::scene::ColliderShape::Sphere,
+                .radius = 0.4F,
+            });
+        }
+
+        std::vector<std::uint32_t> bits;
+        bits.reserve(3U * spheres.size() * 13U);
+        const auto record = [&] {
+            for (const auto& sphere : spheres) {
+                const auto transform = scene.Transforms().Get(sphere);
+                const auto* body = scene.Components().Rigidbodies().TryGet(sphere.Entity());
+                kb::tests::Require(body != nullptr, "Physics replay lost a Rigidbody");
+                for (const float value : {transform.localPosition.x, transform.localPosition.y,
+                         transform.localPosition.z, transform.localRotation.x, transform.localRotation.y,
+                         transform.localRotation.z, transform.localRotation.w, body->linearVelocity.x,
+                         body->linearVelocity.y, body->linearVelocity.z, body->angularVelocity.x,
+                         body->angularVelocity.y, body->angularVelocity.z}) {
+                    bits.push_back(std::bit_cast<std::uint32_t>(value));
+                }
+            }
+        };
+        for (unsigned frame = 1U; frame <= 180U; ++frame) {
+            static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+            if (frame == 45U) {
+                kb::tests::Require(kb::scene::PhysicsBackend::AddImpulse(
+                        scene, spheres[0].Entity(), {1.0F, 2.0F, 0.3F}),
+                    "Physics replay could not apply the scheduled impulse");
+            }
+            if (frame == 60U || frame == 120U || frame == 180U) {
+                record();
+            }
+        }
+        kb::tests::Require(scene.Transforms().Get(spheres[0]).localPosition.y < positions[0].y,
+            "Physics replay rig did not simulate a falling body");
+        return bits;
+    };
+
+    const std::vector<std::uint32_t> first = replay();
+    const std::vector<std::uint32_t> second = replay();
+    kb::tests::Require(first == second,
+        "Identical multi-body replay from fresh scenes, with the same input and call order, differed in transform or velocity bits");
 }
 
 // LIB-129: pure asset IO/loader coverage - unlike the real-Jolt test above,
@@ -2172,7 +2256,12 @@ namespace kb::tests {
 void RunPhysicsSceneSystemTests() {
     RunPhysicsLayersAssetIOTest();
     RunPhysicsDebugDrawTest();
+    RunPhysicsIdenticalReplayTest();
     RunPhysicsSceneSystemFallingBodyTest();
+}
+
+void RunPhysicsReplayOnlyTest() {
+    RunPhysicsIdenticalReplayTest();
 }
 
 } // namespace kb::tests
