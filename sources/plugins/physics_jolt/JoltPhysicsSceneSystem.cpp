@@ -1603,7 +1603,8 @@ public:
         const TransformComponent& transform,
         const RigidbodyComponent& rigidbody,
         const ColliderComponent& collider,
-        SceneSystemContext& context) {
+        SceneSystemContext& context,
+        bool wakeSurvivingDynamicBodies) {
         if (!IsFinite(transform.worldPosition) || !IsFinite(transform.worldScale) ||
             !IsNormalized(transform.worldRotation) || !IsFinite(collider.center) ||
             !IsFinite(collider.boxSize) || !std::isfinite(collider.radius) ||
@@ -1634,12 +1635,12 @@ public:
                 existing->pendingKinematicMove = false;
                 return *existing;
             }
-            SynchronizeKinematicOrStaticBody(*existing, rigidbody, collider, transform, context.DeltaSeconds());
+            SynchronizeKinematicOrStaticBody(*existing, rigidbody, collider, transform, context.DeltaSeconds(), wakeSurvivingDynamicBodies);
             return *existing;
         }
 
         if (existing != nullptr) {
-            RemoveBody(existing->bodyId);
+            RemoveBody(existing->bodyId, wakeSurvivingDynamicBodies);
             bodies_.erase(entity.Id());
         }
         const JPH::BodyID bodyId = CreateBody(rigidbody, collider, transform);
@@ -1647,7 +1648,7 @@ public:
             .synchronizedPosition = transform.worldPosition, .synchronizedRotation = transform.worldRotation, .seenEpoch = bodySyncEpoch_ });
         bodySyncCache_[cacheIndex].body = &inserted.first->second;
         entityByBodyId_.emplace(bodyId, entity);
-        if (rigidbody.bodyType == RigidbodyBodyType::Static) {
+        if (rigidbody.bodyType == RigidbodyBodyType::Static && wakeSurvivingDynamicBodies) {
             const JPH::AABox bounds = BodyNeighborhood(bodyId);
             if (bounds.IsValid()) physicsSystem_.GetBodyInterface().ActivateBodiesInAABox(bounds, {}, {});
         }
@@ -1711,6 +1712,17 @@ private:
 
     void SynchronizeBodies(SceneSystemContext& context) {
         // Body synchronization changes backend state only, keeping ECS chunk references valid.
+        // A static collider change can affect dynamic bodies that survive this
+        // synchronization. During a full scene replacement, the old dynamic
+        // bodies are gone and newly created ones start active; broad-phase wake
+        // queries for every new and retired static body have no effect.
+        const bool wakeSurvivingDynamicBodies = std::ranges::any_of(nonStaticBodies_, [this, &context](const BodySyncCacheEntry& entry) {
+            if (!context.GetScene().Entities().IsAlive(entry.entity)) {
+                return false;
+            }
+            const auto body = bodies_.find(entry.entity.Id());
+            return body != bodies_.end() && body->second.signature.bodyType == RigidbodyBodyType::Dynamic;
+        });
         bodySyncCursor_ = 0U;
         nonStaticBodies_.clear();
         if (++bodySyncEpoch_ == 0U) {
@@ -1725,13 +1737,13 @@ private:
         };
         {
             PhysicsBodyQuery physicsBodyQuery = context.EcsWorld().CreateQuery<TransformComponent, RigidbodyComponent, ColliderComponent>();
-            physicsBodyQuery.ForEachBatchKernel(settings, [this, &context](const PhysicsBodyQuery::Batch& batch) {
+            physicsBodyQuery.ForEachBatchKernel(settings, [this, &context, wakeSurvivingDynamicBodies](const PhysicsBodyQuery::Batch& batch) {
                 const TransformComponent* transforms = batch.Components<0>();
                 const RigidbodyComponent* rigidbodies = batch.Components<1>();
                 const ColliderComponent* colliders = batch.Components<2>();
                 for (std::size_t index = 0; index < batch.Count(); ++index) {
                     const SceneEntity entity{ batch.EntityAt(index).Id() };
-                    BodyRecord& body = SynchronizeBody(entity, transforms[index], rigidbodies[index], colliders[index], context);
+                    BodyRecord& body = SynchronizeBody(entity, transforms[index], rigidbodies[index], colliders[index], context, wakeSurvivingDynamicBodies);
                     if (rigidbodies[index].bodyType != RigidbodyBodyType::Static) {
                         nonStaticBodies_.push_back({entity, &body});
                     }
@@ -1743,13 +1755,13 @@ private:
             kb::ecs::QueryFilter filter;
             filter.Exclude(context.EcsWorld().Component<RigidbodyComponent>());
             ColliderOnlyBodyQuery colliderQuery = context.EcsWorld().CreateQuery<TransformComponent, ColliderComponent>(filter);
-            colliderQuery.ForEachBatchKernel(settings, [this, &context](const ColliderOnlyBodyQuery::Batch& batch) {
+            colliderQuery.ForEachBatchKernel(settings, [this, &context, wakeSurvivingDynamicBodies](const ColliderOnlyBodyQuery::Batch& batch) {
                 const TransformComponent* transforms = batch.Components<0>();
                 const ColliderComponent* colliders = batch.Components<1>();
                 for (std::size_t index = 0; index < batch.Count(); ++index) {
                     const SceneEntity entity{ batch.EntityAt(index).Id() };
                     SynchronizeBody(entity, transforms[index],
-                        RigidbodyComponent{ .bodyType = RigidbodyBodyType::Static }, colliders[index], context);
+                        RigidbodyComponent{ .bodyType = RigidbodyBodyType::Static }, colliders[index], context, wakeSurvivingDynamicBodies);
                 }
             });
         }
@@ -1759,7 +1771,7 @@ private:
         if (bodies_.size() != bodySyncCursor_) {
             for (auto it = bodies_.begin(); it != bodies_.end();) {
                 if (it->second.seenEpoch != bodySyncEpoch_) {
-                    RemoveBody(it->second.bodyId);
+                    RemoveBody(it->second.bodyId, wakeSurvivingDynamicBodies);
                     it = bodies_.erase(it);
                 } else {
                     ++it;
@@ -2289,7 +2301,7 @@ private:
         return bounds;
     }
 
-    void SynchronizeKinematicOrStaticBody(BodyRecord& record, const RigidbodyComponent& rigidbody, const ColliderComponent& collider, const TransformComponent& transform, float fixedDeltaSeconds) {
+    void SynchronizeKinematicOrStaticBody(BodyRecord& record, const RigidbodyComponent& rigidbody, const ColliderComponent& collider, const TransformComponent& transform, float fixedDeltaSeconds, bool wakeSurvivingDynamicBodies) {
         if (rigidbody.bodyType == RigidbodyBodyType::Dynamic) {
             return;
         }
@@ -2310,14 +2322,16 @@ private:
             bodyInterface.MoveKinematic(record.bodyId, ToJoltPosition(bodyPosition), ToJolt(transform.worldRotation), fixedDeltaSeconds);
             return;
         }
-        const JPH::AABox previousBounds = isStatic ? BodyNeighborhood(record.bodyId) : JPH::AABox{};
+        const JPH::AABox previousBounds = isStatic && wakeSurvivingDynamicBodies ? BodyNeighborhood(record.bodyId) : JPH::AABox{};
         bodyInterface.SetPositionAndRotationWhenChanged(record.bodyId, ToJoltPosition(bodyPosition), ToJolt(transform.worldRotation), JPH::EActivation::DontActivate);
         if (isStatic) {
             record.synchronizedPosition = transform.worldPosition;
             record.synchronizedRotation = transform.worldRotation;
-            if (previousBounds.IsValid()) bodyInterface.ActivateBodiesInAABox(previousBounds, {}, {});
-            const JPH::AABox currentBounds = BodyNeighborhood(record.bodyId);
-            if (currentBounds.IsValid()) bodyInterface.ActivateBodiesInAABox(currentBounds, {}, {});
+            if (wakeSurvivingDynamicBodies) {
+                if (previousBounds.IsValid()) bodyInterface.ActivateBodiesInAABox(previousBounds, {}, {});
+                const JPH::AABox currentBounds = BodyNeighborhood(record.bodyId);
+                if (currentBounds.IsValid()) bodyInterface.ActivateBodiesInAABox(currentBounds, {}, {});
+            }
         }
     }
 
