@@ -13,6 +13,7 @@ void RunSceneUIBuildFrameBenchmark();
 void RunSceneSystemTests();
 void RunScenePrefabTests();
 void RunProjectSceneTests();
+void RunLargeNonAdditiveSceneTransitionBenchmark();
 void RunScriptRuntimeTests();
 void RunScriptApiCatalogTests();
 void RunVisualGraphTests();

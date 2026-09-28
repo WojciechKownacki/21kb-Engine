@@ -115,7 +115,8 @@ std::uint64_t SceneLoadedContentService::Load(Scene& scene, const std::filesyste
         // no longer addressable via Scene.Find/Unload under its old id.
         // Documented scope limit, not a crash risk — the entity itself is
         // never destroyed by this.
-        const std::vector<SceneEntity> rootsBefore = scene.Hierarchy().RootEntities();
+        std::vector<SceneEntity> rootsBefore = scene.Hierarchy().RootEntities();
+        std::ranges::sort(rootsBefore);
         if (!SceneDocumentService::LoadIntoScene(scene, loaded.document)) {
             return 0U;
         }
@@ -123,19 +124,18 @@ std::uint64_t SceneLoadedContentService::Load(Scene& scene, const std::filesyste
         state.activeLoadedSceneId = 0U;
         // Persistent survivors belong to the existing world, not the loaded document.
         const std::vector<SceneEntity> rootsAfter = scene.Hierarchy().RootEntities();
-        SceneEntity newRoot{};
-        std::size_t newRootCount = 0U;
+        std::vector<SceneEntity> newRoots;
+        newRoots.reserve(rootsAfter.size());
         for (const SceneEntity candidate : rootsAfter) {
-            if (std::ranges::find(rootsBefore, candidate) == rootsBefore.end()) {
-                newRoot = candidate;
-                ++newRootCount;
+            if (!std::ranges::binary_search(rootsBefore, candidate)) {
+                newRoots.push_back(candidate);
             }
         }
-        if (newRootCount > 1U) {
+        SceneEntity newRoot = newRoots.size() == 1U ? newRoots.front() : SceneEntity{};
+        if (newRoots.size() > 1U) {
             newRoot = scene.Entities().CreateEntity(SceneObjectDesc{ .name = loaded.document.name });
-            for (const SceneEntity candidate : rootsAfter) {
-                if (std::ranges::find(rootsBefore, candidate) == rootsBefore.end() &&
-                    !scene.Hierarchy().SetParent(candidate, newRoot)) {
+            for (const SceneEntity candidate : newRoots) {
+                if (!scene.Hierarchy().SetParent(candidate, newRoot)) {
                     throw std::runtime_error("Loaded scene root could not be assigned to its owner");
                 }
             }

@@ -41,6 +41,8 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunScenePrefabCaptureTests();
     } else if (suite == "project-scene") {
         kb::tests::RunProjectSceneTests();
+    } else if (suite == "project-scene-transition-bench") {
+        kb::tests::RunLargeNonAdditiveSceneTransitionBenchmark();
     } else if (suite == "script") {
         kb::tests::RunScriptRuntimeTests();
     } else if (suite == "script-api") {

@@ -48,8 +48,10 @@
 #include "scene/asset/io/components/SceneAssetAudioComponentCodec.hpp"
 
 #include <array>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <iterator>
 #include <limits>
 #include <memory>
@@ -95,6 +97,75 @@ void RunMultiRootSceneUnloadOwnershipTest() {
         }
     }
     std::filesystem::remove(path);
+}
+
+void RunLargeNonAdditiveSceneRootOwnershipTest(bool reportTiming = false) {
+    using namespace kb::scene;
+    constexpr std::size_t kSceneRoots = 2'048U;
+    constexpr std::size_t kPersistentRoots = 2'048U;
+    const std::filesystem::path firstPath = std::filesystem::temp_directory_path() / "21kb_large_scene_first.21kbscene";
+    const std::filesystem::path secondPath = std::filesystem::temp_directory_path() / "21kb_large_scene_second.21kbscene";
+    const auto saveScene = [&](const std::filesystem::path& path, const char* name) {
+        Scene source;
+        for (std::size_t index = 0U; index < kSceneRoots; ++index) {
+            static_cast<void>(source.Entities().CreateObject(SceneObjectDesc{
+                .name = std::string{name} + " root " + std::to_string(index),
+            }));
+        }
+        kb::tests::Require(SceneDocumentService::Save(SceneDocumentService::Capture(source, name), path),
+            "Large non-additive scene fixture could not be saved");
+    };
+    saveScene(firstPath, "First");
+    saveScene(secondPath, "Second");
+
+    Scene target;
+    const SceneObject player = target.Entities().CreateObject(SceneObjectDesc{ .name = "Persistent player" });
+    const SceneObject camera = target.Entities().CreateObject(SceneObjectDesc{ .name = "Persistent camera" });
+    target.Entities().SetPersistent(player, true);
+    target.Entities().SetPersistent(camera, true);
+    for (std::size_t index = 0U; index < kPersistentRoots; ++index) {
+        const SceneObject persistent = target.Entities().CreateObject(SceneObjectDesc{
+            .name = "Persistent world object " + std::to_string(index),
+        });
+        target.Entities().SetPersistent(persistent, true);
+    }
+    std::uint64_t previousId = 0U;
+    for (std::size_t transition = 0U; transition < 4U; ++transition) {
+        const bool first = transition % 2U == 0U;
+        const auto transitionBegin = std::chrono::steady_clock::now();
+        const std::uint64_t id = target.LoadedContent().Load(first ? firstPath : secondPath, false);
+        if (reportTiming) {
+            const auto transitionEnd = std::chrono::steady_clock::now();
+            std::cout << "large_nonadditive_transition=" << transition
+                << " load_ms=" << std::chrono::duration<double, std::milli>(
+                    transitionEnd - transitionBegin).count() << '\n';
+        }
+        kb::tests::Require(id != 0U && id != previousId &&
+                target.LoadedContent().ActiveScene() == id &&
+                (previousId == 0U || !target.LoadedContent().Exists(previousId)),
+            "Large non-additive scene transition retained an obsolete loaded-scene record");
+        const std::vector<SceneEntity> roots = target.Hierarchy().RootEntities();
+        kb::tests::Require(roots.size() == kPersistentRoots + 3U &&
+                target.Entities().Count() == kSceneRoots + kPersistentRoots + 3U &&
+                target.Entities().IsAlive(player.Entity()) && target.Entities().IsAlive(camera.Entity()),
+            "Large non-additive scene transition lost persistent roots or leaked old roots");
+        const SceneEntity owner = target.LoadedContent().ActiveSceneRoot();
+        const std::vector<SceneEntity> children = target.Hierarchy().ChildEntities(owner);
+        kb::tests::Require(owner.IsValid() && children.size() == kSceneRoots &&
+                target.Entities().Name(children.front()) ==
+                    std::string{first ? "First" : "Second"} + " root 0" &&
+                target.Entities().Name(children.back()) ==
+                    std::string{first ? "First" : "Second"} + " root 2047",
+            "Large non-additive load changed document root order or owner membership");
+        previousId = id;
+    }
+    kb::tests::Require(target.LoadedContent().Unload(previousId) &&
+            target.Entities().Count() == kPersistentRoots + 2U &&
+            target.Entities().IsAlive(player.Entity()) && target.Entities().IsAlive(camera.Entity()),
+        "Large non-additive scene unload destroyed persistent player or camera");
+    std::error_code error;
+    std::filesystem::remove(firstPath, error);
+    std::filesystem::remove(secondPath, error);
 }
 
 constexpr std::array<std::uint8_t, 8U> kSceneMagic{ '2', '1', 'K', 'B', 'S', 'C', 'N', 0 };
@@ -1510,8 +1581,13 @@ void RunSceneAssetRejectsChecksumMismatchTest() {
 
 } // namespace
 
+void RunLargeNonAdditiveSceneTransitionBenchmark() {
+    RunLargeNonAdditiveSceneRootOwnershipTest(true);
+}
+
 void RunProjectSceneTests() {
     RunMultiRootSceneUnloadOwnershipTest();
+    RunLargeNonAdditiveSceneRootOwnershipTest();
     RunIniDocumentRoundTripTest();
     RunIniDocumentToleratesAuthoredTextTest();
     RunProjectDescriptorRoundTripTest();
