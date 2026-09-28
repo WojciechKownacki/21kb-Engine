@@ -99,6 +99,31 @@ void RunMultiRootSceneUnloadOwnershipTest() {
     std::filesystem::remove(path);
 }
 
+void RunSingleRootNonAdditiveSceneOwnershipTest() {
+    using namespace kb::scene;
+    Scene source;
+    const SceneObject root = source.Entities().CreateObject(SceneObjectDesc{ .name = "Loaded root" });
+    static_cast<void>(source.Entities().CreateObject(SceneObjectDesc{ .name = "Loaded child", .parent = root }));
+    const std::filesystem::path path = std::filesystem::temp_directory_path() / "21kb_single_root_ownership_test.21kbscene";
+    kb::tests::Require(SceneDocumentService::Save(SceneDocumentService::Capture(source, "Single-root world"), path),
+        "Single-root world fixture could not be saved");
+
+    Scene target;
+    const SceneObject persistent = target.Entities().CreateObject(SceneObjectDesc{ .name = "Persistent player" });
+    target.Entities().SetPersistent(persistent, true);
+    const std::uint64_t id = target.LoadedContent().Load(path, false);
+    const SceneEntity loadedRoot = target.LoadedContent().ActiveSceneRoot();
+    kb::tests::Require(id != 0U && loadedRoot.IsValid() && target.Entities().Name(loadedRoot) == "Loaded root" &&
+            target.Hierarchy().RootEntities().size() == 2U &&
+            target.Hierarchy().ChildEntities(loadedRoot).size() == 1U &&
+            target.Entities().IsAlive(persistent),
+        "Single-root non-additive load did not keep persistent content separate from its owner");
+    kb::tests::Require(target.LoadedContent().Unload(id) && target.Entities().Count() == 1U &&
+            target.Entities().IsAlive(persistent),
+        "Single-root non-additive unload removed persistent content or leaked a child");
+    std::filesystem::remove(path);
+}
+
 void RunLargeNonAdditiveSceneRootOwnershipTest(bool reportTiming = false) {
     using namespace kb::scene;
     constexpr std::size_t kSceneRoots = 2'048U;
@@ -1586,6 +1611,7 @@ void RunLargeNonAdditiveSceneTransitionBenchmark() {
 }
 
 void RunProjectSceneTests() {
+    RunSingleRootNonAdditiveSceneOwnershipTest();
     RunMultiRootSceneUnloadOwnershipTest();
     RunLargeNonAdditiveSceneRootOwnershipTest();
     RunIniDocumentRoundTripTest();
