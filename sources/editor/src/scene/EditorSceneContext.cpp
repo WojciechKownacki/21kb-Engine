@@ -669,7 +669,11 @@ bool EditorSceneContext::TickPlayModeSceneSession(float deltaSeconds) {
                 InvalidateHierarchyRows();
             }
         } else {
-            MarkSceneRenderDirty();
+            std::vector<kb::scene::SceneEntity> dirtyEntities = preUpdateRenderUpdates;
+            const std::span<const kb::scene::SceneEntity> postUpdateRenderUpdates = runtime.RenderProxyUpdateEntities();
+            dirtyEntities.insert(dirtyEntities.end(), postUpdateRenderUpdates.begin(), postUpdateRenderUpdates.end());
+            MarkSceneStructuralRenderDirty(std::span<const kb::scene::SceneEntity>{ dirtyEntities });
+            InvalidateHierarchyRows();
         }
     } else if (!preUpdateRenderUpdates.empty() || rootAppendEpoch != playModeRootAppendEpoch_) {
         std::vector<kb::scene::SceneEntity> dirtyEntities = preUpdateRenderUpdates;
@@ -921,6 +925,10 @@ bool EditorSceneContext::SceneRenderFullDirty() const noexcept {
     return sceneRenderFullDirty_;
 }
 
+bool EditorSceneContext::SceneRenderStructuralDirty() const noexcept {
+    return sceneRenderStructuralDirty_;
+}
+
 const std::vector<std::uint64_t>& EditorSceneContext::SceneRenderDirtyEntityIds() const noexcept {
     return sceneRenderDirtyEntityIds_;
 }
@@ -998,6 +1006,7 @@ void EditorSceneContext::MarkSceneRenderDirty() noexcept {
     }
     InvalidateHierarchyRows();
     sceneRenderFullDirty_ = true;
+    sceneRenderStructuralDirty_ = false;
     sceneRenderDirtyBaseRevision_ = sceneRenderRevision_;
     sceneRenderDirtyEntityIds_.clear();
 }
@@ -1023,8 +1032,24 @@ void EditorSceneContext::MarkSceneEntitiesRenderDirty(std::span<const kb::scene:
     }
 }
 
+void EditorSceneContext::MarkSceneStructuralRenderDirty(std::span<const kb::scene::SceneEntity> entities) {
+    if (sceneRenderFullDirty_) {
+        MarkSceneRenderDirty();
+        return;
+    }
+    if (entities.empty()) {
+        if (sceneRenderDirtyEntityIds_.empty()) sceneRenderDirtyBaseRevision_ = sceneRenderRevision_;
+        ++sceneRenderRevision_;
+        if (sceneRenderRevision_ == 0U) sceneRenderRevision_ = 1U;
+    } else {
+        MarkSceneEntitiesRenderDirty(entities);
+    }
+    sceneRenderStructuralDirty_ = true;
+}
+
 void EditorSceneContext::AcknowledgeSceneRenderSubmitted() noexcept {
     sceneRenderFullDirty_ = false;
+    sceneRenderStructuralDirty_ = false;
     sceneRenderDirtyEntityIds_.clear();
     sceneRenderDirtyBaseRevision_ = sceneRenderRevision_;
 }

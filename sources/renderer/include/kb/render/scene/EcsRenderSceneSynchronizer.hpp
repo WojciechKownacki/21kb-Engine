@@ -74,6 +74,7 @@ public:
     void Reserve(const EcsRenderSceneSynchronizerReserveDesc& desc);
     void SetSkinningPaletteAllocator(RenderSkinningPaletteAllocator* allocator) noexcept;
     void Sync(const kb::scene::Scene& scene, RenderScene& renderScene) const;
+    void SyncStructural(const kb::scene::Scene& scene, RenderScene& renderScene) const;
     void SyncEntities(const kb::scene::Scene& scene, RenderScene& renderScene, std::span<const std::uint64_t> entityIds) const;
     void SyncTransformUpdates(const kb::scene::Scene& scene, RenderScene& renderScene) const;
     void SyncRenderProxyUpdates(const kb::scene::Scene& scene, RenderScene& renderScene) const;
@@ -118,6 +119,7 @@ public:
     [[nodiscard]] EcsRenderSceneSynchronizerStats Stats() const noexcept;
 
 private:
+    void SyncImpl(const kb::scene::Scene& scene, RenderScene& renderScene, bool preserveExistingMeshes) const;
     mutable std::vector<std::uint64_t> seenMeshes_;
     mutable std::vector<std::uint64_t> seenCameras_;
     mutable std::vector<std::uint64_t> seenLights_;

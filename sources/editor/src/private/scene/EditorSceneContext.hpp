@@ -253,6 +253,7 @@ public:
     [[nodiscard]] std::uint64_t SceneRenderRevision() const noexcept;
     [[nodiscard]] std::uint64_t SceneRenderDirtyBaseRevision() const noexcept;
     [[nodiscard]] bool SceneRenderFullDirty() const noexcept;
+    [[nodiscard]] bool SceneRenderStructuralDirty() const noexcept;
     [[nodiscard]] const std::vector<std::uint64_t>& SceneRenderDirtyEntityIds() const noexcept;
     [[nodiscard]] bool SceneDocumentDirty() const noexcept;
     [[nodiscard]] bool TickAutosave(double elapsedSeconds, bool saveEligible);
@@ -262,6 +263,7 @@ public:
     [[nodiscard]] bool CommitEditorSettings(const EditorSavingPreferences& preferences);
     void MarkSceneRenderDirty() noexcept;
     void MarkSceneEntitiesRenderDirty(std::span<const kb::scene::SceneEntity> entities);
+    void MarkSceneStructuralRenderDirty(std::span<const kb::scene::SceneEntity> entities);
     void AcknowledgeSceneRenderSubmitted() noexcept;
     void MarkSceneDocumentDirty() noexcept;
     [[nodiscard]] bool SaveOpenDocuments();
@@ -1464,6 +1466,7 @@ private:
     std::uint64_t sceneRenderDirtyBaseRevision_ = 1U;
     std::vector<std::uint64_t> sceneRenderDirtyEntityIds_;
     bool sceneRenderFullDirty_ = true;
+    bool sceneRenderStructuralDirty_ = false;
     bool sceneDocumentDirty_ = false;
     EditorAutosaveState autosave_;
     EditorPlayModeSceneSession playModeSceneSession_;

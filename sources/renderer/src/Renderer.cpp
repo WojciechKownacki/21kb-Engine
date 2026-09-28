@@ -919,6 +919,10 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         }
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport Sync full end");
     } else {
+        if (desc.structuralSync) {
+            renderSceneSynchronizer_->SyncStructural(scene, renderScene);
+            renderProxyUpdatesSynchronized = true;
+        }
         if (desc.transformAffineSync) {
             const std::span<const kb::scene::SceneEntity> affineEntities = scene.Runtime().TransformRenderProxyUpdateEntities();
             const std::span<const kb::scene::WorldTransformAffine3x4> affines = scene.Runtime().TransformRenderProxyWorldAffine3x4();
@@ -951,6 +955,9 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
             WriteRendererBreadcrumb("renderer", message.str());
             renderSceneSynchronizer_->SyncEntities(scene, renderScene, desc.dirtySceneEntityIds);
             WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport SyncEntities end");
+        }
+        if (desc.structuralSync) {
+            renderProxySynchronizedRevisions_[scene.Id()] = renderProxyUpdateRevision;
         }
         const auto synchronizedRevision = renderProxySynchronizedRevisions_.find(scene.Id());
         if (!scene.Runtime().RenderProxyUpdateEntities().empty() &&
