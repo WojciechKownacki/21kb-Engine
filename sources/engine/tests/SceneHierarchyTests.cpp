@@ -656,10 +656,28 @@ void RunTransformSparseFlushReportTest() {
     kb::tests::Require(report.transformHierarchySparseFlushCount == 1U, "Transform runtime did not report sparse dirty flush");
     kb::tests::Require(report.transformHierarchyBatchFlushCount == 0U, "Transform runtime used a batch flush for sparse dirty roots");
     kb::tests::Require(report.transformHierarchyFlushedEntityCount == 1U, "Transform runtime reported an unexpected sparse flush entity count");
-    kb::tests::Require(report.transformHierarchyDirtyFrontierCount == 1U, "Transform runtime did not use the dirty frontier queue");
+    kb::tests::Require(report.transformHierarchyDirtyFrontierCount == 0U &&
+            report.transformHierarchyDirtyListFlushCount == 1U,
+        "Transform runtime did not use the safe dirty-list flush while its query cache was cold");
     kb::tests::Require(report.transformHierarchyUpdatedCount == 1U, "Transform runtime updated more than the moved sparse root");
     kb::tests::Require(report.transformHierarchyInspectedCount == 1U, "Transform runtime inspected clean roots during sparse flush");
     kb::tests::Require(kb::tests::NearlyEqual(scene.Transforms().Get(roots.front()).worldPosition.x, 42.0F), "Sparse flush did not write the moved root");
+
+    moved = scene.Transforms().Get(roots.front());
+    moved.localPosition.x = 43.0F;
+    scene.Transforms().Set(roots.front(), moved);
+    scene.Runtime().SynchronizeTransforms();
+    const kb::scene::SceneRuntimeHotPathReport warmReport = scene.Runtime().HotPathReport();
+    kb::tests::Require(warmReport.transformHierarchyDirtyFrontierCount == 1U &&
+            warmReport.transformHierarchyUpdatedCount == 1U &&
+            warmReport.transformHierarchyInspectedCount == 1U &&
+            kb::tests::NearlyEqual(scene.Transforms().Get(roots.front()).worldPosition.x, 43.0F),
+        "Transform runtime did not use the dirty frontier after its query cache warmed up");
+}
+
+void WarmTransformQueryCache(kb::scene::Scene& scene, kb::scene::SceneObject root) {
+    scene.Transforms().Set(root, scene.Transforms().Get(root));
+    scene.Runtime().SynchronizeTransforms();
 }
 
 void RunTransformHierarchyDirtyFrontierReportTest() {
@@ -685,6 +703,7 @@ void RunTransformHierarchyDirtyFrontierReportTest() {
     }
 
     scene.Runtime().SynchronizeTransforms();
+    WarmTransformQueryCache(scene, roots.front());
     kb::scene::TransformComponent moved = scene.Transforms().Get(roots.front());
     moved.localPosition.x = 24.0F;
     scene.Transforms().Set(roots.front(), moved);
@@ -726,6 +745,7 @@ void RunTransformHierarchyDeepDirtyFrontierReportTest() {
     }
 
     scene.Runtime().SynchronizeTransforms();
+    WarmTransformQueryCache(scene, roots.front());
     kb::scene::TransformComponent moved = scene.Transforms().Get(roots.front());
     moved.localPosition.x = 10.0F;
     scene.Transforms().Set(roots.front(), moved);
@@ -769,6 +789,7 @@ void RunTransformHierarchyNestedDirtyFrontierReportTest() {
     }
 
     scene.Runtime().SynchronizeTransforms();
+    WarmTransformQueryCache(scene, dirtyChain.front());
     kb::scene::TransformComponent moved = scene.Transforms().Get(dirtyChain[3]);
     moved.localPosition.x = 20.0F;
     scene.Transforms().Set(dirtyChain[3], moved);
@@ -796,6 +817,7 @@ void RunTransformHierarchyDirtyFrontierDuplicateSetTest() {
     });
 
     scene.Runtime().SynchronizeTransforms();
+    WarmTransformQueryCache(scene, root);
     kb::scene::TransformComponent moved = scene.Transforms().Get(root);
     moved.localPosition.x = 11.0F;
     scene.Transforms().Set(root, moved);
@@ -836,6 +858,7 @@ void RunTransformHierarchyMultiRootDirtyFrontierReportTest() {
     }
 
     scene.Runtime().SynchronizeTransforms();
+    WarmTransformQueryCache(scene, roots.front());
     for (std::size_t index = 0; index < 4U; ++index) {
         kb::scene::TransformComponent moved = scene.Transforms().Get(roots[index]);
         moved.localPosition.x = 30.0F + static_cast<float>(index);
@@ -879,6 +902,7 @@ void RunTransformHierarchyWideFanoutDirtyFrontierReportTest() {
     }
 
     scene.Runtime().SynchronizeTransforms();
+    WarmTransformQueryCache(scene, roots.front());
     kb::scene::TransformComponent moved = scene.Transforms().Get(roots.front());
     moved.localPosition.x = 50.0F;
     scene.Transforms().Set(roots.front(), moved);
@@ -930,6 +954,7 @@ void RunTransformHierarchyParallelFanoutDirtyFrontierReportTest() {
     }
 
     scene.Runtime().SynchronizeTransforms();
+    WarmTransformQueryCache(scene, roots.front());
     kb::scene::TransformComponent moved = scene.Transforms().Get(roots.front());
     moved.localPosition.x = 70.0F;
     scene.Transforms().Set(roots.front(), moved);
