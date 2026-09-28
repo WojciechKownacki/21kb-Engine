@@ -18,6 +18,7 @@ void RunGraphShaderArtifactCookTests();
 void RunMaterialProgramRegistryTests();
 void RunSceneMeshPassProgramSelectionTests();
 void RunRendererRuntimeSubmitTests();
+void RunRendererDefaultSubmissionResultTest();
 void RunRendererResourceGroupEnsureTests();
 void RunRendererSceneSubmitScaleBenchmark(bool spiralLayout);
 void RunRendererPacedSceneSubmitStressBenchmark(bool staticMillionSnapshot,
@@ -32,6 +33,7 @@ void RunRendererCapabilityReportTests();
 void RunMeshPipelineTests();
 void RunSceneDisplayCompositeTests();
 void RunSceneExposureMeterTests();
+void RunExposureReadbackResetTest();
 void RunSceneDepthPolicyTests();
 void RunRenderSceneSyncTests();
 void RunSceneRenderTargetFormatTests();
@@ -45,6 +47,14 @@ void RunScreenUIDrawBatchTests();
 }
 
 int main(int argc, char** argv) {
+    if (argc == 2 && std::string_view{ argv[1] } == "exposure-readback") {
+        kb::render::tests::RunExposureReadbackResetTest();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "default-submit") {
+        kb::render::tests::RunRendererDefaultSubmissionResultTest();
+        return EXIT_SUCCESS;
+    }
     if (argc == 2 && std::string_view{ argv[1] } == "mesh-bake") {
         kb::render::tests::RunMeshBakeTests();
         return EXIT_SUCCESS;
@@ -103,6 +113,14 @@ int main(int argc, char** argv) {
     }
     if (argc == 2 && std::string_view{ argv[1] } == "skinned-gpu-readback") {
         kb::render::tests::RunSkinnedMeshGpuReadbackTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "capabilities") {
+        kb::render::tests::RunRendererCapabilityReportTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "exposure-meter") {
+        kb::render::tests::RunSceneExposureMeterTests();
         return EXIT_SUCCESS;
     }
     if (argc == 2 && std::string_view{ argv[1] } == "scene-sync") {
@@ -208,6 +226,7 @@ int main(int argc, char** argv) {
     kb::render::tests::RunSceneMeshPassProgramSelectionTests();
     kb::render::tests::RunRendererCapabilityReportTests();
     kb::render::tests::RunRendererRuntimeSubmitTests();
+    kb::render::tests::RunRendererDefaultSubmissionResultTest();
     kb::render::tests::RunMeshPipelineTests();
     kb::render::tests::RunSceneDisplayCompositeTests();
     kb::render::tests::RunSceneExposureMeterTests();

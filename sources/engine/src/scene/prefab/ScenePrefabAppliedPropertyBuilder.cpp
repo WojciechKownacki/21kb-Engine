@@ -390,6 +390,10 @@ bool ScenePrefabAppliedPropertyBuilder::Build(Scene& scene, std::uint32_t nodeIn
             property.value = std::to_string(static_cast<int>(collider->shape));
             return true;
         }
+        if (propertyPath == "collider.meshAssetId") {
+            property.value = std::to_string(collider->meshAssetId);
+            return true;
+        }
         if (propertyPath == "collider.center") {
             property.value = ToString(collider->center);
             return true;

@@ -56,6 +56,7 @@ template <typename T>
 
 [[nodiscard]] bool Equal(const ColliderComponent& lhs, const ColliderComponent& rhs) noexcept {
     return lhs.shape == rhs.shape
+        && lhs.meshAssetId == rhs.meshAssetId
         && ScenePrefabOverrideValueFormatter::Equal(lhs.center, rhs.center)
         && ScenePrefabOverrideValueFormatter::Equal(lhs.boxSize, rhs.boxSize)
         && lhs.radius == rhs.radius
@@ -181,6 +182,7 @@ void AppendCollider(SceneComponents components, SceneEntity entity, const std::o
     }
     if (!expected.has_value()) {
         ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "collider.shape", std::to_string(static_cast<int>(actual->shape)), ScenePrefabOverrideFlag::Collider);
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "collider.meshAssetId", std::to_string(actual->meshAssetId), ScenePrefabOverrideFlag::Collider);
         ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "collider.center", ScenePrefabOverrideValueFormatter::ToString(actual->center), ScenePrefabOverrideFlag::Collider);
         ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "collider.boxSize", ScenePrefabOverrideValueFormatter::ToString(actual->boxSize), ScenePrefabOverrideFlag::Collider);
         ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "collider.radius", ScenePrefabOverrideValueFormatter::ToString(actual->radius), ScenePrefabOverrideFlag::Collider);
@@ -190,6 +192,9 @@ void AppendCollider(SceneComponents components, SceneEntity entity, const std::o
     }
     if (actual->shape != expected->shape) {
         ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "collider.shape", std::to_string(static_cast<int>(actual->shape)), ScenePrefabOverrideFlag::Collider);
+    }
+    if (actual->meshAssetId != expected->meshAssetId) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "collider.meshAssetId", std::to_string(actual->meshAssetId), ScenePrefabOverrideFlag::Collider);
     }
     if (!ScenePrefabOverrideValueFormatter::Equal(actual->center, expected->center)) {
         ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "collider.center", ScenePrefabOverrideValueFormatter::ToString(actual->center), ScenePrefabOverrideFlag::Collider);

@@ -1,5 +1,6 @@
 #include "assets/AssetFileSystem.hpp"
 
+#include <array>
 #include <fstream>
 #include <string>
 #include <system_error>
@@ -102,10 +103,17 @@ std::uint64_t AssetFileSystem::HashFile(const std::filesystem::path& path) noexc
     }
 
     std::uint64_t hash = FnvOffset;
-    char value = 0;
-    while (input.get(value)) {
-        hash ^= static_cast<unsigned char>(value);
-        hash *= FnvPrime;
+    std::array<char, 64U * 1024U> buffer;
+    while (input) {
+        input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+        const std::streamsize count = input.gcount();
+        for (std::streamsize index = 0; index < count; ++index) {
+            hash ^= static_cast<unsigned char>(buffer[static_cast<std::size_t>(index)]);
+            hash *= FnvPrime;
+        }
+    }
+    if (input.bad() || !input.eof()) {
+        return 0;
     }
     return hash == 0 ? FnvPrime : hash;
 }

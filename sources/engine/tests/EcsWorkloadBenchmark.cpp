@@ -74,8 +74,13 @@ void Integrate(kb::ecs::MutableQueryBatch<Position, Velocity>& batch) {
 void PrintSamples(std::string_view phase, std::vector<double> samples, std::size_t entityCount) {
     std::sort(samples.begin(), samples.end());
     const double median = samples[samples.size() / 2U];
-    const std::size_t p95Index = (samples.size() * 95U + 99U) / 100U - 1U;
+    const auto percentileIndex = [count = samples.size()](std::size_t percentile) {
+        return (count / 100U) * percentile + ((count % 100U) * percentile + 99U) / 100U - 1U;
+    };
+    const std::size_t p95Index = percentileIndex(95U);
+    const std::size_t p99Index = percentileIndex(99U);
     std::cout << phase << ",median_ms=" << median << ",p95_ms=" << samples[p95Index]
+              << ",p99_ms=" << samples[p99Index] << ",max_ms=" << samples.back()
               << ",entities_per_second=" << static_cast<double>(entityCount) * 1000.0 / median << '\n';
 }
 

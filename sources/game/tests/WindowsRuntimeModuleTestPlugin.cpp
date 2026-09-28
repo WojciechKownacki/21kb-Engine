@@ -1,9 +1,16 @@
 #include "engine/modules/EngineModuleExports.hpp"
 #include "engine/modules/IEngineModule.hpp"
+#include "engine/script/NativeScriptPlugin.hpp"
 
 #include <cstdint>
 
 namespace {
+
+std::uint32_t nativeReadyCount = 0U;
+
+void NativeReady(kb::script::ScriptExecutionContext*) {
+    ++nativeReadyCount;
+}
 
 class WindowsRuntimeModuleTestPlugin final : public kb::modules::IEngineModule {
 public:
@@ -15,6 +22,16 @@ public:
 };
 
 } // namespace
+
+KB_NATIVE_SCRIPT_PLUGIN_EXPORT bool kb_register_native_scripts(kb::script::NativeScriptPluginApi* api) {
+    return api != nullptr && api->version == kb::script::kNativeScriptPluginApiVersion &&
+        api->registerLifecycle != nullptr && api->registerLifecycle(api->user, "Tests.PackagedNative",
+            kb::script::ScriptLifecycleEvent::Ready, &NativeReady);
+}
+
+extern "C" KB_ENGINE_MODULE_EXPORT std::uint32_t kb_native_ready_count() {
+    return nativeReadyCount;
+}
 
 extern "C" KB_ENGINE_MODULE_EXPORT std::uint32_t kb_engine_module_abi_version() {
     return kb::modules::kEngineModuleAbiVersion;

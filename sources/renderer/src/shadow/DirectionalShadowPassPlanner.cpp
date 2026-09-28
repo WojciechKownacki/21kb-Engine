@@ -37,25 +37,18 @@ struct Basis {
 }
 
 [[nodiscard]] std::array<float, 16> ShadowTextureMatrix(bool homogeneousDepth) noexcept {
+    const bgfx::Caps* caps = bgfx::getCaps();
+    const float textureYScale = caps != nullptr && caps->originBottomLeft ? 0.5F : -0.5F;
     return std::array<float, 16>{
         0.5F, 0.0F, 0.0F, 0.0F,
-        0.0F, 0.5F, 0.0F, 0.0F,
+        0.0F, textureYScale, 0.0F, 0.0F,
         0.0F, 0.0F, homogeneousDepth ? 0.5F : 1.0F, 0.0F,
         0.5F, 0.5F, homogeneousDepth ? 0.5F : 0.0F, 1.0F,
     };
 }
 
-[[nodiscard]] std::array<float, 3> TransformPointColumnMajor(const std::array<float, 16>& matrix, const std::array<float, 3>& point) noexcept {
-    return {
-        matrix[0] * point[0] + matrix[4] * point[1] + matrix[8] * point[2] + matrix[12],
-        matrix[1] * point[0] + matrix[5] * point[1] + matrix[9] * point[2] + matrix[13],
-        matrix[2] * point[0] + matrix[6] * point[1] + matrix[10] * point[2] + matrix[14],
-    };
-}
-
 void SnapShadowViewToTexel(
     std::array<float, 16>& view,
-    const std::array<float, 3>& worldCenter,
     float orthoHeight,
     std::uint32_t shadowMapSize) noexcept {
     if (shadowMapSize == 0U || orthoHeight <= 0.0F) {
@@ -67,11 +60,14 @@ void SnapShadowViewToTexel(
         return;
     }
 
-    const std::array<float, 3> lightCenter = TransformPointColumnMajor(view, worldCenter);
-    const float snappedX = std::round(lightCenter[0] / texelWorldSize) * texelWorldSize;
-    const float snappedY = std::round(lightCenter[1] / texelWorldSize) * texelWorldSize;
-    view[12] += snappedX - lightCenter[0];
-    view[13] += snappedY - lightCenter[1];
+    view[12] = std::round(view[12] / texelWorldSize) * texelWorldSize;
+    view[13] = std::round(view[13] / texelWorldSize) * texelWorldSize;
+}
+
+void SetShadowViewOrigin(std::array<float, 16>& view, const bx::Vec3& origin) noexcept {
+    view[12] = -(view[0] * origin.x + view[4] * origin.y + view[8] * origin.z);
+    view[13] = -(view[1] * origin.x + view[5] * origin.y + view[9] * origin.z);
+    view[14] = -(view[2] * origin.x + view[6] * origin.y + view[10] * origin.z);
 }
 
 [[nodiscard]] float ShadowFilterModeValue(SceneRenderShadowFilter filter) noexcept {
@@ -133,7 +129,8 @@ DirectionalShadowSetup DirectionalShadowPassPlanner::Build(
     const SceneRenderResourceMap& resourceMap,
     SceneRenderLightingConfig lightingConfig,
     bgfx::TextureHandle shadowDepthTexture,
-    std::uint32_t cameraCullingMask) const noexcept {
+    std::uint32_t cameraCullingMask,
+    const std::array<float, 3>* cameraPosition) const noexcept {
     DirectionalShadowSetup setup{};
     if (!lightingConfig.shadowsEnabled) {
         return setup;
@@ -147,36 +144,60 @@ DirectionalShadowSetup DirectionalShadowPassPlanner::Build(
     setup.lightEntityId = selectedLight.entityId;
     const LightRenderProxyDesc& light = *selectedLight.light;
 
-    const ShadowCasterBounds casterBounds = ShadowCasterBoundsCollector::Collect(renderScene, resources, resourceMap);
+    if (!std::isfinite(lightingConfig.shadowDistance) || lightingConfig.shadowDistance <= 0.0F) {
+        return setup;
+    }
+    Basis basis = LightBasisFromQuat(light.rotation);
+    Normalize3(basis.zx, basis.zy, basis.zz);
+    const float upX = std::abs(basis.zy) > 0.95F ? 1.0F : 0.0F;
+    const float upY = std::abs(basis.zy) > 0.95F ? 0.0F : 1.0F;
+    const bx::Vec3 up{ upX, upY, 0.0F };
+    std::array<float, 16> focusView{};
+    bx::mtxLookAt(focusView.data(), bx::Vec3{0.0F, 0.0F, 0.0F},
+        bx::Vec3{basis.zx, basis.zy, basis.zz}, up);
+    if (cameraPosition != nullptr) {
+        const bx::Vec3 origin{(*cameraPosition)[0], (*cameraPosition)[1], (*cameraPosition)[2]};
+        SetShadowViewOrigin(focusView, origin);
+        if (lightingConfig.stableShadowCascades) {
+            SnapShadowViewToTexel(focusView, 2.0F * lightingConfig.shadowDistance, lightingConfig.shadowMapSize);
+        }
+    }
+    const ShadowCasterBounds casterBounds = ShadowCasterBoundsCollector::Collect(
+        renderScene, resources, resourceMap, cameraCullingMask,
+        cameraPosition != nullptr ? &focusView : nullptr, lightingConfig.shadowDistance);
     setup.casterCount = casterBounds.casterCount;
     if (setup.casterCount == 0U || !casterBounds.bounds.IsValid()) {
         return setup;
     }
 
-    Basis basis = LightBasisFromQuat(light.rotation);
-    Normalize3(basis.zx, basis.zy, basis.zz);
     const float radius = std::max(casterBounds.bounds.radius, 1.0F);
-    const float shadowDistance = std::max(lightingConfig.shadowDistance, radius * 2.0F);
-    const bx::Vec3 center{ casterBounds.bounds.center[0], casterBounds.bounds.center[1], casterBounds.bounds.center[2] };
+    const bool focusCamera = cameraPosition != nullptr && radius > lightingConfig.shadowDistance;
+    const auto& focus = focusCamera ? *cameraPosition : casterBounds.bounds.center;
+    if (focusCamera && casterBounds.focusedCasterCount == 0U) {
+        return setup;
+    }
+    const float minimumDepth = focusCamera ? casterBounds.focusedDepthMinimum : -radius;
+    const float maximumDepth = focusCamera ? casterBounds.focusedDepthMaximum : radius;
     const bx::Vec3 eye{
-        casterBounds.bounds.center[0] - basis.zx * shadowDistance,
-        casterBounds.bounds.center[1] - basis.zy * shadowDistance,
-        casterBounds.bounds.center[2] - basis.zz * shadowDistance,
+        focus[0] + basis.zx * (minimumDepth - 1.0F),
+        focus[1] + basis.zy * (minimumDepth - 1.0F),
+        focus[2] + basis.zz * (minimumDepth - 1.0F),
     };
-    const float upX = std::abs(basis.zy) > 0.95F ? 1.0F : 0.0F;
-    const float upY = std::abs(basis.zy) > 0.95F ? 0.0F : 1.0F;
-    const bx::Vec3 up{ upX, upY, 0.0F };
-
-    bx::mtxLookAt(setup.camera.view.data(), eye, center, up);
+    setup.camera.view = focusView;
+    SetShadowViewOrigin(setup.camera.view, eye);
+    setup.casterCount = focusCamera ? casterBounds.focusedCasterCount : casterBounds.casterCount;
     const bool homogeneousDepth = SceneDepthPolicy::HomogeneousDepth();
-    const float orthoHeight = std::max(radius * 2.0F, 1.0F);
-    SnapShadowViewToTexel(setup.camera.view, casterBounds.bounds.center, orthoHeight, lightingConfig.shadowMapSize);
+    const float orthoHeight = 2.0F * (focusCamera ? lightingConfig.shadowDistance : radius);
+    if (lightingConfig.stableShadowCascades) {
+        SnapShadowViewToTexel(setup.camera.view, orthoHeight, lightingConfig.shadowMapSize);
+    }
+    setup.camera.cullingMask = cameraCullingMask;
     SceneDepthPolicy::MakeOrthographic(
         setup.camera.projection.data(),
         orthoHeight,
         1.0F,
         0.1F,
-        shadowDistance + radius * 2.0F,
+        maximumDepth - minimumDepth + 2.0F,
         homogeneousDepth);
 
     const std::array<float, 16> viewProjection = MultiplyColumnMajor(setup.camera.projection, setup.camera.view);

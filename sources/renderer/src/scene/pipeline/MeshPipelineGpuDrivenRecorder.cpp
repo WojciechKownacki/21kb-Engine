@@ -30,33 +30,26 @@ void MeshPipelineGpuDrivenRecorder::AccumulateCandidateStats(
 
 void MeshPipelineGpuDrivenRecorder::Record(
     MeshPipelineBuildResult& result,
-    const SceneRenderMeshInstance& instance,
+    std::uint64_t entityId,
+    const RenderBoundsSphere& worldBounds,
     std::uint32_t drawCommandIndex,
     std::uint8_t lodLevel,
     std::pair<std::uint32_t, std::uint32_t> meshletRange,
-    bool visible,
     bool dropped) {
     result.gpuDrivenInputRecords.push_back(SceneGpuDrivenInputRecord{
-        .entityId = instance.entityId,
+        .entityId = entityId,
         .worldBounds = {
-            instance.worldBounds.center[0],
-            instance.worldBounds.center[1],
-            instance.worldBounds.center[2],
-            instance.worldBounds.radius,
+            worldBounds.center[0],
+            worldBounds.center[1],
+            worldBounds.center[2],
+            worldBounds.radius,
         },
         .drawCommandIndex = drawCommandIndex,
         .lodLevel = lodLevel,
         .firstMeshlet = meshletRange.first,
         .meshletCount = meshletRange.second,
     });
-    result.gpuDrivenCpuValidationRecords.push_back(SceneGpuDrivenInstanceValidationRecord{
-        .entityId = instance.entityId,
-        .lodLevel = lodLevel,
-        .firstMeshlet = meshletRange.first,
-        .meshletCount = meshletRange.second,
-        .visible = visible,
-        .dropped = dropped,
-    });
+    result.stats.gpuDrivenParityCpuDroppedInstanceCount += dropped ? 1U : 0U;
 }
 
 void MeshPipelineGpuDrivenRecorder::Finalize(
@@ -64,6 +57,8 @@ void MeshPipelineGpuDrivenRecorder::Finalize(
     SceneGpuDrivenFeatureSupport support,
     std::uint32_t droppedInstanceBudget) noexcept {
     result.stats.gpuDrivenInputInstanceCount = static_cast<std::uint32_t>(result.gpuDrivenInputRecords.size());
+    const std::uint32_t droppedCount = result.stats.gpuDrivenParityCpuDroppedInstanceCount;
+    result.stats.gpuDrivenParityCpuDroppedInstanceCount = 0U;
     const SceneGpuDrivenFeatureRequest gpuDrivenRequest{
         .gpuCullingRequested = result.stats.gpuDrivenDrawCandidateCount != 0U,
         .indirectDrawRequested = result.stats.indirectDrawCandidateCount != 0U,
@@ -85,15 +80,12 @@ void MeshPipelineGpuDrivenRecorder::Finalize(
     }
 
     // CPU fallback has one record source. Comparing it with itself cannot find a GPU mismatch.
-    const std::uint32_t droppedCount = static_cast<std::uint32_t>(std::count_if(
-        result.gpuDrivenCpuValidationRecords.begin(), result.gpuDrivenCpuValidationRecords.end(),
-        [](const SceneGpuDrivenInstanceValidationRecord& record) { return record.dropped; }));
     result.stats.gpuDrivenParityValidationStatus = droppedInstanceBudget != 0U &&
         droppedCount > droppedInstanceBudget ?
         SceneGpuDrivenParityValidationStatus::DroppedInstanceBudgetExceeded :
         SceneGpuDrivenParityValidationStatus::Valid;
     result.stats.gpuDrivenParityMismatchEntityId = 0U;
-    result.stats.gpuDrivenParityValidationCount = static_cast<std::uint32_t>(result.gpuDrivenCpuValidationRecords.size());
+    result.stats.gpuDrivenParityValidationCount = result.stats.gpuDrivenInputInstanceCount;
     result.stats.gpuDrivenParityCpuDroppedInstanceCount = droppedCount;
     result.stats.gpuDrivenParityGpuDroppedInstanceCount = droppedCount;
 }

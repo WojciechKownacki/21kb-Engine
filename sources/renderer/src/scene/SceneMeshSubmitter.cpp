@@ -84,6 +84,7 @@ void SceneMeshSubmitter::Shutdown() {
     gpuDrivenFrameResources_.Shutdown();
     gpuDrivenCullingPass_.Shutdown();
     passResources_.Shutdown();
+    for (auto& commands : passCommandScratch_) commands.clear();
     pipelineScratch_.detailSwitchLevels.clear();
     pipelineScratch_.detailSwitchPreviousLevels.clear();
     detailSwitchScene_ = nullptr;
@@ -181,6 +182,14 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
     if (!IsInitialized()) {
         return stats;
     }
+
+    auto& passCommands = passCommandScratch_.at(static_cast<std::size_t>(pass));
+    pipelineScratch_.commands.swap(passCommands);
+    struct RestorePassCommands {
+        std::vector<MeshDrawCommand>& active;
+        std::vector<MeshDrawCommand>& stored;
+        ~RestorePassCommands() { active.swap(stored); }
+    } restoreCommands{pipelineScratch_.commands, passCommands};
 
     const std::vector<SceneRenderDrawGroup>& drawGroups = renderScene.DrawGroups();
     std::vector<SceneRenderVisibilityBlocker> visibilityBlockers;

@@ -34,6 +34,7 @@ private:
     std::uint32_t hdrReadbackReadyFrame_ = 0;
     float latestHdrAverageLuminance_ = 0.18F;
     bool hdrReadbackPending_ = false;
+    bool hdrReadbackCancelled_ = false;
     bool latestHdrSampleValid_ = false;
 };
 

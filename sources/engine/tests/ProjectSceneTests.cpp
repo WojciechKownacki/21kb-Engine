@@ -32,6 +32,7 @@
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
+#include "engine/scene/SceneLoadedContent.hpp"
 #include "engine/scene/SceneDocument.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
@@ -58,6 +59,43 @@
 
 namespace kb::tests {
 namespace {
+
+void RunMultiRootSceneUnloadOwnershipTest() {
+    using namespace kb::scene;
+    Scene source;
+    const auto first = source.Entities().CreateObject(SceneObjectDesc{ .name = "First sector root" });
+    static_cast<void>(source.Entities().CreateObject(SceneObjectDesc{ .name = "Second sector root" }));
+    static_cast<void>(source.Entities().CreateObject(SceneObjectDesc{ .name = "Nested object", .parent = first }));
+    const auto document = SceneDocumentService::Capture(source, "Multi-root sector");
+    Scene target;
+    const auto survivor = target.Entities().CreateObject(SceneObjectDesc{ .name = "Existing world" });
+    for (int reload = 0; reload < 4; ++reload) {
+        const auto loaded = SceneDocumentService::LoadIntoSceneAdditive(target, document);
+        kb::tests::Require(loaded.succeeded && target.Entities().Count() == 5U,
+            "Multi-root sector must have one owner and preserve existing world content");
+        kb::tests::Require(target.Hierarchy().ChildEntities(loaded.root).size() == 2U,
+            "Loaded owner must contain every document root");
+        target.Entities().Destroy(loaded.root);
+        kb::tests::Require(target.Entities().Count() == 1U && target.Entities().IsAlive(survivor),
+            "Unloading multi-root sector must remove every loaded object and preserve existing world");
+    }
+    const auto path = std::filesystem::temp_directory_path() / "21kb_multi_root_ownership_test.21kbscene";
+    kb::tests::Require(SceneDocumentService::Save(document, path), "Could not save multi-root scene fixture");
+    for (bool additive : { false, true }) {
+        Scene loadedScene;
+        const auto persistent = loadedScene.Entities().CreateObject(SceneObjectDesc{ .name = "Persistent world" });
+        loadedScene.Entities().SetPersistent(persistent, true);
+        for (int reload = 0; reload < 3; ++reload) {
+            const auto id = loadedScene.LoadedContent().Load(path, additive);
+            kb::tests::Require(id != 0U && loadedScene.Entities().Count() == 5U,
+                "Managed scene load must own every root without capturing persistent content");
+            kb::tests::Require(loadedScene.LoadedContent().Unload(id) && loadedScene.Entities().Count() == 1U &&
+                    loadedScene.Entities().IsAlive(persistent),
+                "Managed scene unload leaked roots or destroyed persistent content");
+        }
+    }
+    std::filesystem::remove(path);
+}
 
 constexpr std::array<std::uint8_t, 8U> kSceneMagic{ '2', '1', 'K', 'B', 'S', 'C', 'N', 0 };
 constexpr std::array<std::uint8_t, 8U> kSceneMetaMagic{ '2', '1', 'K', 'B', 'S', 'M', 'T', 0 };
@@ -380,6 +418,11 @@ void RunSceneDocumentRoundTripTest() {
         .radius = 0.75F,
         .height = 2.5F,
         .trigger = true,
+        .meshAssetId = 1234,
+    });
+    source.Components().Colliders().Set(child, kb::scene::ColliderComponent{
+        .shape = kb::scene::ColliderShape::Mesh,
+        .meshAssetId = 987654321,
     });
     kb::scene::AudioSourceComponent roundTripAudioSource{
         .clipAssetId = 90,
@@ -434,6 +477,8 @@ void RunSceneDocumentRoundTripTest() {
     });
 
     Require(kb::scene::SceneDocumentService::Save(source, sceneFile, "RoundTrip"), "Scene document was not saved");
+    Require(MetaContainsDependency(sceneFile.parent_path() / "RoundTrip.meta", 987654321, "collisionMesh"),
+        "Scene metadata omitted the collision mesh dependency");
     Require(MetaContainsDependency(sceneFile.parent_path() / "RoundTrip.meta", 0xA17D10U, "audioMixer"),
         "Scene metadata omitted the authored audio mixer dependency");
 
@@ -490,6 +535,10 @@ void RunSceneDocumentRoundTripTest() {
         "Scene document camera did not roundtrip");
     Require(rigidbody != nullptr && rigidbody->bodyType == kb::scene::RigidbodyBodyType::Dynamic && NearlyEqual(rigidbody->mass, 8.0F) && NearlyEqual(rigidbody->linearVelocity.z, 3.0F) && NearlyEqual(rigidbody->angularVelocity.y, 4.0F) && NearlyEqual(rigidbody->gravityScale, 0.5F), "Scene document rigidbody did not roundtrip");
     Require(collider != nullptr && collider->shape == kb::scene::ColliderShape::Capsule && NearlyEqual(collider->center.y, 1.0F) && NearlyEqual(collider->radius, 0.75F) && NearlyEqual(collider->height, 2.5F) && collider->trigger, "Scene document collider did not roundtrip");
+    Require(collider->meshAssetId == 1234, "Changing collider shape lost its authored collision asset");
+    const auto* meshCollider = target.Components().Colliders().TryGet(restoredChildren[0]);
+    Require(meshCollider && meshCollider->shape == kb::scene::ColliderShape::Mesh && meshCollider->meshAssetId == 987654321,
+        "Scene document triangle collider did not roundtrip");
     Require(audioSource != nullptr && audioSource->clipAssetId == 90 && NearlyEqual(audioSource->volume, 0.25F) && NearlyEqual(audioSource->pitch, 1.5F) && audioSource->loop && !audioSource->spatial && audioSource->autoplay && !audioSource->enabled && audioSource->mute && NearlyEqual(audioSource->pan, -0.4F) && NearlyEqual(audioSource->spatialBlend, 0.35F) && audioSource->attenuationModel == kb::audio::AudioAttenuationModel::Linear && NearlyEqual(audioSource->minDistance, 2.0F) && NearlyEqual(audioSource->maxDistance, 80.0F) && NearlyEqual(audioSource->rolloff, 0.5F) && NearlyEqual(audioSource->dopplerFactor, 0.25F) && kb::scene::AudioSourceOutputBus(*audioSource) == "Music", "Scene document audio source did not roundtrip");
     Require(audioListener != nullptr && audioListener->primary && !audioListener->enabled, "Scene document audio listener did not roundtrip");
     Require(behaviour != nullptr && behaviour->behaviourAssetId == 91 && behaviour->backend == kb::scene::BehaviourBackend::Lua && behaviour->tickGroup == kb::scene::BehaviourTickGroup::Gameplay && behaviour->executionOrder == -3, "Scene document behaviour did not roundtrip");
@@ -1462,6 +1511,7 @@ void RunSceneAssetRejectsChecksumMismatchTest() {
 } // namespace
 
 void RunProjectSceneTests() {
+    RunMultiRootSceneUnloadOwnershipTest();
     RunIniDocumentRoundTripTest();
     RunIniDocumentToleratesAuthoredTextTest();
     RunProjectDescriptorRoundTripTest();

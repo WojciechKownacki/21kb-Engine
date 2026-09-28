@@ -88,6 +88,12 @@ bool PackagedGameRuntime::Initialize(
 
     std::filesystem::path scenePath;
     std::size_t discoveredAssets = 0U;
+    if (scriptActive_) {
+        script_->Host()->AssetPreparer().SetNativeSettings({
+            .buildPlugins = false,
+            .runtimeModuleRoot = project.projectRoot,
+        });
+    }
     if (!LoadGameProjectScene(project, *scene, scenePath, discoveredAssets, diagnostics)) {
         script_ = nullptr;
         scriptActive_ = false;
@@ -118,8 +124,11 @@ bool PackagedGameRuntime::Tick(
         static_cast<float>(renderer.BackbufferHeight())));
     static_cast<void>(scene_->Runtime().Update(deltaSeconds));
     if (renderer.BeginFrame()) {
-        renderer.SubmitScene(*scene_);
+        const bool submitted = renderer.SubmitScene(*scene_);
         renderer.EndFrame();
+        if (!submitted) {
+            return false;
+        }
         if (frameSubmitted != nullptr) {
             *frameSubmitted = true;
         }

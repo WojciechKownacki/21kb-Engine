@@ -99,7 +99,7 @@ template <typename T>
     ColliderComponent collider;
     if (!ParseField(fields, "collider.shape", shape)
         || shape < static_cast<int>(ColliderShape::Box)
-        || shape > static_cast<int>(ColliderShape::Capsule)
+        || shape > static_cast<int>(ColliderShape::Mesh)
         || !ScenePrefabAssetFieldParser::ParseVec3(fields, "collider.center", collider.center)
         || !ScenePrefabAssetFieldParser::ParseVec3(fields, "collider.boxSize", collider.boxSize)
         || !ParseField(fields, "collider.radius", collider.radius)
@@ -111,7 +111,8 @@ template <typename T>
         // always persist them below.
         || !ParseOptionalField(fields, "collider.friction", collider.friction)
         || !ParseOptionalField(fields, "collider.restitution", collider.restitution)
-        || !ParseOptionalField(fields, "collider.layer", collider.layer)) {
+        || !ParseOptionalField(fields, "collider.layer", collider.layer)
+        || !ParseOptionalField(fields, "collider.meshAssetId", collider.meshAssetId)) {
         return false;
     }
 

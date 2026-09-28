@@ -19,6 +19,7 @@
 #include "scene/asset/io/SceneAssetWriter.hpp"
 
 #include <utility>
+#include <algorithm>
 
 namespace kb::scene {
 namespace {
@@ -122,12 +123,29 @@ SceneDocumentAdditiveLoadResult SceneDocumentService::LoadIntoSceneAdditive(Scen
     if (document.worldPrefab.Empty()) {
         return SceneDocumentAdditiveLoadResult{ .succeeded = false, .root = {} };
     }
-    const ScenePrefabInstance instance = scene.Prefabs().Instantiate(document.worldPrefab);
-    if (instance.Empty()) {
-        return SceneDocumentAdditiveLoadResult{ .succeeded = false, .root = {} };
+    const auto nodes = document.worldPrefab.Nodes();
+    const bool multipleRoots = std::count_if(nodes.begin(), nodes.end(), [](const ScenePrefabNodeDesc& node) {
+        return node.parentNode == ScenePrefabNodeDesc::NoParent;
+    }) > 1;
+    const SceneObject owner = multipleRoots
+        ? scene.Entities().CreateObject(SceneObjectDesc{ .name = document.name })
+        : SceneObject{};
+    try {
+        const ScenePrefabInstance instance = scene.Prefabs().Instantiate(document.worldPrefab, ScenePrefabInstantiationSettings{ .parent = owner });
+        if (instance.Empty()) {
+            if (owner.IsValid()) {
+                scene.Entities().Destroy(owner);
+            }
+            return SceneDocumentAdditiveLoadResult{ .succeeded = false, .root = {} };
+        }
+        scene.Runtime().SynchronizeTransforms();
+        return SceneDocumentAdditiveLoadResult{ .succeeded = true, .root = owner.IsValid() ? owner.Entity() : instance.ObjectAt(0).Entity() };
+    } catch (...) {
+        if (owner.IsValid()) {
+            scene.Entities().Destroy(owner);
+        }
+        throw;
     }
-    scene.Runtime().SynchronizeTransforms();
-    return SceneDocumentAdditiveLoadResult{ .succeeded = true, .root = instance.ObjectAt(0).Entity() };
 }
 
 } // namespace kb::scene

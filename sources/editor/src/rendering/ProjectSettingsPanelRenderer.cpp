@@ -305,7 +305,7 @@ void DrawGraphicsPage(
     DrawCheckbox(dc, rects.shadowsCheckbox, theme, renderBackendSettings.ShadowsEnabled());
     DrawText(dc, rects.selectionOutlineLabel, "Selection Outline", Color(theme.textSecondary), 12);
     DrawCheckbox(dc, rects.selectionOutlineCheckbox, theme, renderBackendSettings.SelectionOutlineEnabled());
-    DrawText(dc, rects.gpuDrivenLabel, "GPU Driven", Color(theme.textSecondary), 12);
+    DrawText(dc, rects.gpuDrivenLabel, "GPU Visibility Diagnostics", Color(theme.textSecondary), 12);
     DrawCheckbox(dc, rects.gpuDrivenCheckbox, theme, renderBackendSettings.GpuDrivenEnabled());
 }
 

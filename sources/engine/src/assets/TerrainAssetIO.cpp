@@ -1,4 +1,5 @@
 #include "engine/assets/TerrainAssetIO.hpp"
+#include "scene/asset/io/SceneAssetBinaryIO.hpp"
 
 #include <algorithm>
 #include <array>
@@ -180,37 +181,7 @@ bool TerrainAssetIO::Save(const std::filesystem::path& path, const TerrainAsset&
     }
     bytes.insert(bytes.end(), terrain.layerWeights.begin(), terrain.layerWeights.end());
 
-    std::error_code directoryError;
-    if (!path.parent_path().empty()) std::filesystem::create_directories(path.parent_path(), directoryError);
-    if (directoryError) {
-        SetError(error, "Terrain asset directory could not be created");
-        return false;
-    }
-    const std::filesystem::path temporary = path.string() + ".tmp";
-    {
-        std::ofstream output{ temporary, std::ios::binary | std::ios::trunc };
-        if (!output.is_open()) {
-            SetError(error, "Terrain asset temporary file could not be opened");
-            return false;
-        }
-        output.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
-        output.flush();
-        if (!output.good()) {
-            SetError(error, "Terrain asset could not be written completely");
-            return false;
-        }
-    }
-    std::error_code renameError;
-    std::filesystem::rename(temporary, path, renameError);
-    if (renameError) {
-        std::error_code removeError;
-        std::filesystem::remove(path, removeError);
-        renameError.clear();
-        std::filesystem::rename(temporary, path, renameError);
-    }
-    if (renameError) {
-        std::error_code cleanupError;
-        std::filesystem::remove(temporary, cleanupError);
+    if (!scene::SceneAssetBinaryIO::WriteBytesAtomically(path, bytes)) {
         SetError(error, "Terrain asset could not replace its previous version");
         return false;
     }

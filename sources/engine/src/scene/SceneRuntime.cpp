@@ -100,29 +100,67 @@ void CaptureFixedStepStart(Scene& scene, SceneState& state) {
     state.fixedTransformStepStart.clear();
     state.fixedTransformStepStart.reserve(state.fixedTransformSamples.size());
     SceneIterationService::ForEachTransform(scene, [](SceneEntity entity, const TransformComponent& transform, void* context) {
-        auto* samples = static_cast<std::unordered_map<SceneEntity::IdType, TransformComponent>*>(context);
-        samples->emplace(entity.Id(), transform);
+        auto& samples = *static_cast<std::vector<SceneState::FixedTransformStart>*>(context);
+        samples.push_back({entity, transform});
     }, &state.fixedTransformStepStart);
 }
 
 void CaptureFixedStepEnd(Scene& scene, SceneState& state) {
-    std::unordered_map<SceneEntity::IdType, SceneState::FixedTransformSample> samples;
+    auto& samples = state.fixedTransformSamples;
+    if (samples.size() == state.fixedTransformStepStart.size() &&
+        state.fixedTransformValues.size() == samples.size() &&
+        std::ranges::all_of(samples, [&state](const auto& sample) {
+            return sample.valueIndex < state.fixedTransformStepStart.size() &&
+                state.fixedTransformStepStart[sample.valueIndex].entity == sample.entity;
+        })) {
+        struct RefreshContext {
+            SceneState& state;
+            std::size_t index = 0U;
+            bool sameOrder = true;
+        } refresh{state};
+        SceneIterationService::ForEachTransform(scene, [](SceneEntity entity, const TransformComponent& current, void* context) {
+            auto& refresh = *static_cast<RefreshContext*>(context);
+            auto& state = refresh.state;
+            const std::size_t index = refresh.index++;
+            if (index >= state.fixedTransformStepStart.size() ||
+                state.fixedTransformStepStart[index].entity != entity) {
+                refresh.sameOrder = false;
+                return;
+            }
+            state.fixedTransformValues[index] = {state.fixedTransformStepStart[index].transform, current};
+        }, &refresh);
+        if (refresh.sameOrder && refresh.index == samples.size()) {
+            return;
+        }
+    }
+    samples.clear();
     samples.reserve(state.fixedTransformStepStart.size());
-    std::pair<
-        const std::unordered_map<SceneEntity::IdType, TransformComponent>*,
-        std::unordered_map<SceneEntity::IdType, SceneState::FixedTransformSample>*>
-        context{ &state.fixedTransformStepStart, &samples };
+    state.fixedTransformValues.clear();
+    state.fixedTransformValues.reserve(state.fixedTransformStepStart.size());
+    struct CaptureContext {
+        SceneState& state;
+        bool sameOrder = true;
+    } capture{state};
     SceneIterationService::ForEachTransform(scene, [](SceneEntity entity, const TransformComponent& current, void* context) {
-        auto* data = static_cast<std::pair<
-            const std::unordered_map<SceneEntity::IdType, TransformComponent>*,
-            std::unordered_map<SceneEntity::IdType, SceneState::FixedTransformSample>*>*>(context);
-        const auto previous = data->first->find(entity.Id());
-        data->second->emplace(entity.Id(), SceneState::FixedTransformSample{
-            .previous = previous == data->first->end() ? current : previous->second,
-            .current = current,
-        });
-    }, &context);
-    state.fixedTransformSamples = std::move(samples);
+        auto& capture = *static_cast<CaptureContext*>(context);
+        auto& state = capture.state;
+        const std::size_t index = state.fixedTransformValues.size();
+        const bool matchesStart = index < state.fixedTransformStepStart.size() &&
+            state.fixedTransformStepStart[index].entity == entity;
+        capture.sameOrder &= matchesStart;
+        state.fixedTransformSamples.push_back({entity, index});
+        state.fixedTransformValues.push_back({matchesStart ? state.fixedTransformStepStart[index].transform : current, current});
+    }, &capture);
+    std::ranges::sort(samples, {}, &SceneState::FixedTransformSample::entity);
+    if (capture.sameOrder && samples.size() == state.fixedTransformStepStart.size()) {
+        return;
+    }
+    for (const auto& previous : state.fixedTransformStepStart) {
+        const auto sample = std::ranges::lower_bound(samples, previous.entity, {}, &SceneState::FixedTransformSample::entity);
+        if (sample != samples.end() && sample->entity == previous.entity) {
+            state.fixedTransformValues[sample->valueIndex].previous = previous.transform;
+        }
+    }
 }
 
 } // namespace
@@ -185,6 +223,7 @@ void SceneRuntimeService::SetFixedStepSettings(Scene& scene, SceneRuntimeFixedSt
     state.fixedInterpolationAlpha = 0.0F;
     state.lastFixedStepCount = 0U;
     state.fixedTransformSamples.clear();
+    state.fixedTransformValues.clear();
     state.fixedTransformStepStart.clear();
 }
 
@@ -339,9 +378,11 @@ SceneRuntimeHotPathReport SceneRuntimeService::HotPathReport(const Scene& scene)
 
 std::optional<TransformComponent> SceneRuntimeService::InterpolatedTransform(const Scene& scene, SceneEntity entity) noexcept {
     const SceneState& state = SceneAccess::State(scene);
-    const auto sample = state.fixedTransformSamples.find(entity.Id());
-    if (sample != state.fixedTransformSamples.end()) {
-        return LerpTransform(sample->second.previous, sample->second.current, state.fixedInterpolationAlpha);
+    if (!state.world.IsAlive(entity)) return std::nullopt;
+    const auto sample = std::ranges::lower_bound(state.fixedTransformSamples, entity, {}, &SceneState::FixedTransformSample::entity);
+    if (sample != state.fixedTransformSamples.end() && sample->entity == entity) {
+        const auto& values = state.fixedTransformValues[sample->valueIndex];
+        return LerpTransform(values.previous, values.current, state.fixedInterpolationAlpha);
     }
     if (const TransformComponent* current = SceneTransformService::TryGet(scene, entity); current != nullptr) {
         return *current;
@@ -469,6 +510,7 @@ bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
         state.fixedStepAccumulatorSeconds = 0.0F;
         state.fixedInterpolationAlpha = 0.0F;
         state.fixedTransformSamples.clear();
+        state.fixedTransformValues.clear();
         state.fixedTransformStepStart.clear();
     }
 

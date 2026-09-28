@@ -3,6 +3,7 @@
 #include "engine/input/InputDeviceState.hpp"
 #include "engine/input/InputKey.hpp"
 #include "engine/input/InputText.hpp"
+#include "engine/ecs/Query.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneLocalization.hpp"
 #include "engine/scene/SceneRenderFeedback.hpp"
@@ -27,6 +28,7 @@
 #include <limits>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace kb::scene {
@@ -284,11 +286,22 @@ class FrameBuilder {
     }
 
     [[nodiscard]] bool Build(SceneUIFrame& output) {
+        if (SceneEntityCounter::CountWithComponent(state_.world, state_.world.Component<UICanvas>()) == 0U) {
+            output = std::move(frame_);
+            return true;
+        }
+        IncludeHierarchy<UICanvas>();
+        IncludeHierarchy<UIDropdown>();
+        IncludeHierarchy<UIToggle>();
+        IncludeHierarchy<UISlider>();
+        IncludeHierarchy<UIProgressBar>();
         const std::vector<SceneEntity> roots = scene_.Hierarchy().RootEntities();
         std::vector<SceneEntity> pending(roots.begin(), roots.end());
         while (!pending.empty()) {
             const SceneEntity entity = pending.back();
             pending.pop_back();
+            if (!uiHierarchy_.contains(entity.Id()))
+                continue;
             if (const UIDropdown* dropdown = ui_.TryGet<UIDropdown>(entity)) {
                 if (dropdown->captionText != 0U)
                     captionTexts_.emplace(dropdown->captionText, dropdown);
@@ -331,6 +344,16 @@ class FrameBuilder {
     }
 
   private:
+    template <typename Component>
+    void IncludeHierarchy() {
+        const_cast<kb::ecs::World&>(state_.world).CreateQuery<Component>().ForEach(
+            [](SceneEntity entity, const Component&, void* context) {
+                auto& builder = *static_cast<FrameBuilder*>(context);
+                while (entity.IsValid() && builder.uiHierarchy_.insert(entity.Id()).second)
+                    entity = builder.scene_.Hierarchy().Parent(entity);
+            }, this);
+    }
+
     // Returns the reason the entity cannot be laid out, or nullptr when it is sound. A bare
     // bool would force the caller to re-derive what went wrong, which is what made an invalid
     // widget indistinguishable from a renderer fault.
@@ -476,7 +499,7 @@ class FrameBuilder {
     }
 
     void SearchForCanvas(SceneEntity entity) {
-        if (!scene_.Entities().IsActive(entity))
+        if (!uiHierarchy_.contains(entity.Id()) || !scene_.Entities().IsActive(entity))
             return;
         const UICanvas* canvas = ui_.TryGet<UICanvas>(entity);
         const UIRectTransform* rect = ui_.TryGet<UIRectTransform>(entity);
@@ -1148,6 +1171,7 @@ class FrameBuilder {
 
     const Scene& scene_;
     const SceneState& state_;
+    std::unordered_set<std::uint64_t> uiHierarchy_;
     SceneUIComponentQueries ui_;
     Vec2 viewport_{};
     // The player owning the canvas being laid out, and the soft edge of the mask around it.

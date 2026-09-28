@@ -2102,6 +2102,78 @@ void RunClearRetainingCapacityTest() {
     kb::tests::Require(afterReleaseClear.chunkPoolInUse == 0U, "native ECS release clear after retaining clear kept chunks in use");
 }
 
+void RunGeneratedAndAdoptedIdentityTest() {
+    using kb::ecs::Entity;
+    using kb::ecs::NativeArchetypeStorage;
+    constexpr auto base = kb::ecs::kGeneratedEntityIndexBase;
+    for (bool bulk : { false, true }) {
+        NativeArchetypeStorage storage;
+        const Entity generated = storage.CreateEntity();
+        bool rejected = false;
+        try {
+            if (bulk) {
+                const std::array batch{ Entity{ base + 50U }, generated };
+                storage.AdoptEntities(batch);
+            } else {
+                storage.AdoptEntity(generated);
+            }
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        kb::tests::Require(rejected && storage.Stats().liveEntities == 1U && storage.IsAlive(generated),
+            "adoption must reject a generated identity without mutating live entities");
+
+        storage.DestroyEntity(generated);
+        storage.AdoptEntity(generated);
+        kb::tests::Require(storage.IsAlive(generated), "restored identity must resolve past a dead generated record");
+        const auto spawned = bulk ? storage.CreateEntities(3U) : std::vector<Entity>{ storage.CreateEntity() };
+        for (Entity entity : spawned) {
+            kb::tests::Require((entity.Id() & 0xFFFFFFFFULL) != base && storage.IsAlive(entity),
+                "generated allocation must not alias a restored entity index");
+        }
+        storage.DestroyEntity(generated);
+        for (Entity entity : spawned) {
+            kb::tests::Require(storage.IsAlive(entity), "destroying restored entity removed another entity");
+        }
+    }
+    for (bool bulk : { false, true }) {
+        NativeArchetypeStorage storage;
+        const Entity imported{ base + 1U };
+        storage.AdoptEntity(imported);
+        const auto spawned = bulk ? storage.CreateEntities(4U) : std::vector<Entity>{ storage.CreateEntity() };
+        for (Entity entity : spawned) {
+            kb::tests::Require(entity != imported && storage.IsAlive(entity),
+                "generated allocation collided with an imported future index");
+        }
+        kb::tests::Require(storage.IsAlive(imported) && storage.Stats().liveEntities == spawned.size() + 1U,
+            "generated allocation lost imported entity");
+        storage.DestroyEntities(spawned);
+        kb::tests::Require(storage.IsAlive(imported), "bulk destruction removed imported entity");
+        storage.DestroyEntity(imported);
+        kb::tests::Require(storage.Stats().liveEntities == 0U, "identity collision handling leaked a live entity");
+    }
+    {
+        NativeArchetypeStorage storage;
+        const std::array sameIndex{ Entity{ base + 5U }, Entity{ (7ULL << 32U) | (base + 5U) } };
+        bool rejected = false;
+        try {
+            storage.AdoptEntities(sameIndex);
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        kb::tests::Require(rejected && storage.Stats().liveEntities == 0U,
+            "bulk adoption must reject simultaneous generations of one entity index");
+        storage.AdoptEntity(sameIndex[1]);
+        const auto spawned = storage.CreateEntities(8U);
+        for (Entity entity : spawned) {
+            kb::tests::Require((entity.Id() & 0xFFFFFFFFULL) != base + 5U,
+                "allocation must reserve the index of a generation-bearing imported entity");
+        }
+        kb::tests::Require(storage.ResolveAliveEntity(base + 5U) == sameIndex[1],
+            "imported generation must remain unambiguous after bulk allocation");
+    }
+}
+
 void RunBulkAdoptDuplicateValidationTest() {
     kb::ecs::NativeArchetypeStorage storage;
     std::array<Position, 4U> positions{
@@ -2413,6 +2485,7 @@ void RunEcsNativeArchetypeStorageTests() {
     RunNativeComponentAlignmentTest();
     RunNativeComponentAlignmentValidationTest();
     RunBulkAdoptDuplicateValidationTest();
+    RunGeneratedAndAdoptedIdentityTest();
     RunBulkAdoptExternalResolveFastPathTest();
     RunBulkAdoptContiguousExternalRangeFastPathTest();
     RunBulkDestroyDuplicateValidationTest();

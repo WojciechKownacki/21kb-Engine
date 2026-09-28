@@ -16,9 +16,50 @@
 
 #include <array>
 #include <span>
+#include <stdexcept>
 #include <vector>
 
 namespace {
+
+void RunEntityCreationBudgetRollbackTest() {
+    kb::ecs::WorldConfig config;
+    config.maxNativeStorageCommittedPayloadBytes = kb::ecs::ChunkPayloadBytes(config.chunkSizeProfile);
+    kb::scene::Scene scene{ config };
+    const auto originalCount = scene.Entities().Count();
+    const auto originalRoots = scene.Hierarchy().RootEntities();
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        bool rejected = false;
+        try {
+            static_cast<void>(scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Rejected spawn" }));
+        } catch (const std::length_error&) {
+            rejected = true;
+        }
+        kb::tests::Require(rejected, "Scene spawn must report its component allocation budget failure");
+        kb::tests::Require(scene.Entities().Count() == originalCount && scene.Hierarchy().RootEntities() == originalRoots,
+            "Failed scene spawn must not leave a live entity or hierarchy root");
+    }
+}
+
+void RunDeepHierarchyDestructionTest() {
+    kb::scene::Scene scene;
+    const auto survivor = scene.Entities().CreateObject({ .name = "Survivor" });
+    const auto root = scene.Entities().CreateObject({ .name = "Sector", .parent = survivor });
+    auto parent = root;
+    for (std::size_t depth = 0U; depth < 4096U; ++depth) {
+        parent = scene.Entities().CreateObject({ .parent = parent });
+    }
+    const auto leaf = parent;
+    const auto sibling = scene.Entities().CreateObject({ .parent = root });
+    const auto retainedSibling = scene.Entities().CreateObject({ .parent = survivor });
+    scene.Entities().Destroy(root);
+    kb::tests::Require(scene.Entities().Count() == 2U && scene.Entities().IsAlive(survivor.Entity()) &&
+        scene.Entities().IsAlive(retainedSibling.Entity()), "Hierarchy destruction must retain objects outside the subtree");
+    kb::tests::Require(!scene.Entities().IsAlive(leaf.Entity()) && !scene.Entities().IsAlive(sibling.Entity()),
+        "Hierarchy destruction must remove both deep descendants and sibling branches");
+    kb::tests::Require(scene.Hierarchy().ChildCount(survivor.Entity()) == 1U &&
+        scene.Hierarchy().ChildAt(survivor.Entity(), 0U) == retainedSibling.Entity(),
+        "Hierarchy destruction must preserve the surviving parent's child list");
+}
 
 struct SceneCameraLightVisitorStats {
     std::size_t cameraCount = 0;
@@ -1226,6 +1267,8 @@ void RunSceneBehaviourIterationUsesUnsafeHotQueryTest() {
 namespace kb::tests {
 
 void RunSceneHierarchyTests() {
+    RunEntityCreationBudgetRollbackTest();
+    RunDeepHierarchyDestructionTest();
     RunTransformHierarchyTest();
     RunTransformHierarchyReplayDeterminismTest();
     RunTransformRootFastPathReportTest();

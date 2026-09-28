@@ -84,6 +84,7 @@ private:
     mutable SceneMeshInstanceBufferPool instanceBuffers_;
     mutable SceneGpuDrivenFrameResources gpuDrivenFrameResources_;
     mutable MeshPipelineBuildResult pipelineScratch_;
+    mutable std::array<std::vector<MeshDrawCommand>, static_cast<std::size_t>(MeshPassType::Gizmo) + 1U> passCommandScratch_;
     mutable std::vector<SceneRenderVisibilityBlocker> visibilityBlockerScratch_;
     mutable std::vector<TransparentDrawOrderEntry> transparentSubmissionScratch_;
     mutable std::vector<SceneMeshBatch> meshBatchSubmissionScratch_;

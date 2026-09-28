@@ -346,6 +346,9 @@ public:
     kb::core::ReadSnapshotPublisher<SceneRuntimeReadSnapshot> runtimeSnapshots;
     std::uint64_t animatorDebugSnapshotRevision = 0U;
     kb::core::ReadSnapshotPublisher<AnimatorDebugSnapshot> animatorDebugSnapshots;
+    std::unordered_map<std::uint64_t, kb::assets::AssetCompatibilityReport> animatorCompatibilityReports;
+    std::uint64_t animatorCompatibilityRegistryGeneration = 0U;
+    std::uint64_t animatorCompatibilityManagerRevision = 0U;
     // At most one asynchronous debug snapshot build is in flight per scene.
     // The job owns a capture of scalar animator state and reads only frozen
     // pose buffers; every animator-state mutation entry point (Attach,
@@ -438,11 +441,20 @@ public:
     std::uint64_t nextMaterialInstanceId = 1U;
     std::shared_ptr<const MaterialParameterSchemaValidator> materialParameterSchemaValidator;
     struct FixedTransformSample {
+        SceneEntity entity;
+        std::size_t valueIndex = 0U;
+    };
+    struct FixedTransformValues {
         TransformComponent previous;
         TransformComponent current;
     };
-    std::unordered_map<SceneEntity::IdType, FixedTransformSample> fixedTransformSamples;
-    std::unordered_map<SceneEntity::IdType, TransformComponent> fixedTransformStepStart;
+    struct FixedTransformStart {
+        SceneEntity entity;
+        TransformComponent transform;
+    };
+    std::vector<FixedTransformSample> fixedTransformSamples;
+    std::vector<FixedTransformValues> fixedTransformValues;
+    std::vector<FixedTransformStart> fixedTransformStepStart;
     std::vector<std::string> denseEntityNames;
     std::unordered_map<SceneEntity::IdType, std::string> entityNames;
     // Per-instance overrides of behaviours' exposed ("@expose") script variables,

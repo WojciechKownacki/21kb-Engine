@@ -1,6 +1,7 @@
 #include "RendererTestSupport.hpp"
 
 #include "kb/render/post/SceneExposureMeter.hpp"
+#include "renderer/RendererExposureSubmitter.hpp"
 
 #include <algorithm>
 #include <array>
@@ -114,6 +115,30 @@ void TemporalExposureAdaptationUsesRatesAndHistory() {
     Require(NearlyEqual(meter.CurrentLuminance(), 0.18F), "Exposure meter Reset did not restore middle-gray luminance");
 }
 
+void ExposureSubmissionUsesElapsedFrameTime() {
+    RenderScene scene;
+    static_cast<void>(scene.UpsertLight({ .entityId = 1U, .kind = RenderLightKind::Directional,
+        .intensity = 12.0F }));
+    const auto afterOneSecond = [&scene](std::uint32_t frameCount) {
+        SceneExposureMeter meter;
+        meter.Prime(0.01F);
+        PostProcessOutput output;
+        output.postProcessSettings.autoExposureMetering = ScenePostProcessSettings::AutoExposureMeteringMode::SceneLighting;
+        output.outputTransform.autoExposure.enabled = true;
+        output.outputTransform.autoExposure.temporalAdaptationEnabled = true;
+        output.outputTransform.autoExposure.brightAdaptationRate = 1.0F;
+        for (std::uint32_t frame = 0U; frame < frameCount; ++frame) {
+            static_cast<void>(RendererExposureSubmitter::Submit(
+                meter, output, {}, {}, scene, {}, frame, 1.0F / static_cast<float>(frameCount)));
+        }
+        return meter.CurrentLuminance();
+    };
+    const float atThirty = afterOneSecond(30U);
+    const float atSixty = afterOneSecond(60U);
+    Require(atThirty > 0.01F && NearlyEqualTolerance(atThirty, atSixty, 0.0001F),
+        "Exposure adaptation over one second must agree at 30 and 60 rendered frames");
+}
+
 } // namespace
 
 void RunSceneExposureMeterTests() {
@@ -123,6 +148,7 @@ void RunSceneExposureMeterTests() {
     GpuHistogramReadbackMetersBinCenters();
     ExposureMeteringRejectsOutlierPercentiles();
     TemporalExposureAdaptationUsesRatesAndHistory();
+    ExposureSubmissionUsesElapsedFrameTime();
 }
 
 } // namespace kb::render::tests

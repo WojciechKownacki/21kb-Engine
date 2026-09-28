@@ -315,10 +315,10 @@ void AddTransformCacheEntryFromHotBatch(
     }
 
     kb::ecs::QueryExecutionSettings settings;
-    settings.maxBatchSize = kTransformBatchGrainSize;
+    settings.maxBatchSize = kTransformBatchGrainSize * 8U;
     settings.policy = kb::ecs::QueryExecutionPolicy::SingleThread;
     TransformCacheBuildContext context{ .cache = &cache };
-    if (state.hierarchyOrder.size() > kTransformBatchGrainSize * 32U) {
+    if (HierarchyTrackedSlotCount(state) > settings.maxBatchSize * 32U) {
         EnsureWorkerPool(state);
         settings.policy = kb::ecs::QueryExecutionPolicy::ParallelChunks;
         settings.workerPool = state.transformWorkerPool.get();
@@ -1190,12 +1190,15 @@ void RunHierarchyDirtyFrontier(
         && !state.transformTopologicalBatches.front().empty();
 }
 
-[[nodiscard]] bool RunNativeRootOnlyDirtyRanges(
+[[nodiscard]] bool RunNativeDirtyRanges(
     SceneState& state,
     std::chrono::steady_clock::time_point updateStart,
-    RootSyncProfileTimings* profileTimings) {
+    RootSyncProfileTimings* profileTimings,
+    bool topologyChanged) {
     using Clock = std::chrono::steady_clock;
-    if (!CanUseNativeRootOnlyDirtyRanges(state)) {
+    const bool rootsOnly = CanUseNativeRootOnlyDirtyRanges(state);
+    if (!rootsOnly && (topologyChanged || state.transformPropagationBudget.maxInspectedEntitiesPerSync != 0U ||
+        state.transformPropagationCursorLevel != 0U || state.transformPropagationCursorOffset != 0U)) {
         return false;
     }
 
@@ -1216,11 +1219,18 @@ void RunHierarchyDirtyFrontier(
 
     kb::ecs::UnsafeHotQuery<TransformComponent>& hotQuery = queryCache.hotQuery;
     if (queryCache.hierarchyTopologyVersion != state.hierarchyTopologyVersion || hotQuery.IsStale(queryCache.query)) {
+        if (!rootsOnly) {
+            // Structural changes can invalidate parents without leaving a live dirty row.
+            ClearSceneTransformDirtyFrontier(state);
+        }
         const auto queryRebuildStart = profileTimings != nullptr ? Clock::now() : Clock::time_point{};
         if (!hotQuery.Rebuild(queryCache.query, kb::ecs::QueryExecutionSettings{ .maxBatchSize = kTransformBatchGrainSize })) {
             return false;
         }
         queryCache.hierarchyTopologyVersion = state.hierarchyTopologyVersion;
+        if (!rootsOnly) {
+            return false;
+        }
         if (profileTimings != nullptr) {
             profileTimings->queryRebuildNanoseconds = Nanoseconds(Clock::now() - queryRebuildStart);
         }
@@ -1235,6 +1245,24 @@ void RunHierarchyDirtyFrontier(
         });
     if (profileTimings != nullptr) {
         profileTimings->dirtyScanNanoseconds = Nanoseconds(Clock::now() - dirtyScanStart);
+    }
+
+    if (!rootsOnly) {
+        auto& nativeStorage = const_cast<kb::ecs::NativeArchetypeStorage&>(state.world.NativeStorage());
+        static_cast<void>(hotQuery.ForEachDirtyMutableRange<0>(
+            nativeStorage, kTransformBatchGrainSize, state.transformNativeDirtyRangesScratch, true,
+            [&state](const kb::ecs::UnsafeHotMutableChunk<TransformComponent>& chunk, std::size_t) {
+                const TransformComponent* transforms = chunk.Components<0>();
+                for (std::size_t row = 0U; row < chunk.Count(); ++row) {
+                    if (transforms[row].worldDirty) {
+                        EnqueueSceneTransformDirtyFrontierUnchecked(state, chunk.EntityAt(row));
+                    }
+                }
+            }));
+        if (!state.transformDirtyFrontierEntities.empty()) {
+            return false;
+        }
+        dirtyRows = 0U;
     }
 
     ResetPropagationCursor(state);
@@ -1379,6 +1407,12 @@ void SceneTransformHierarchySystem::Update(SceneState& state) const {
     RootSyncProfileTimings rootSyncProfile;
     RootSyncProfileTimings* const profileTimings = RootSyncProfileEnabled() ? &rootSyncProfile : nullptr;
     const auto topologyStart = profileTimings != nullptr ? Clock::now() : Clock::time_point{};
+    // Structural changes can remove queued handles and introduce transforms
+    // outside the dirty frontier. Rebuild from the live hierarchy in that case.
+    const bool topologyChanged = state.transformTopologicalBatchesVersion != state.hierarchyTopologyVersion;
+    if (topologyChanged) {
+        ClearSceneTransformDirtyFrontier(state);
+    }
     BuildTopologicalBatches(state);
     if (profileTimings != nullptr) {
         profileTimings->topologyNanoseconds = Nanoseconds(Clock::now() - topologyStart);
@@ -1430,7 +1464,7 @@ void SceneTransformHierarchySystem::Update(SceneState& state) const {
     state.lastTransformHierarchyUpdateNanoseconds = 0U;
     state.lastTransformHierarchyFlushNanoseconds = 0U;
     state.lastTransformHierarchyBudgetExhausted = false;
-    if (RunNativeRootOnlyDirtyRanges(state, updateStart, profileTimings)) {
+    if (RunNativeDirtyRanges(state, updateStart, profileTimings, topologyChanged)) {
         return;
     }
 

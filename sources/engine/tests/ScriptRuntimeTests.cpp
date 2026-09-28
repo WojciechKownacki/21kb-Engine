@@ -350,6 +350,11 @@ public:
         }
     }
 
+    void RaycastAll(kb::scene::Vec3 origin, kb::scene::Vec3 direction, float maxDistance, std::uint32_t layerMask,
+        kb::library::ArrayNonAlloc<kb::scene::PhysicsCastResult>& results) const noexcept override {
+        CastShapeAll({}, origin, direction, maxDistance, layerMask, results);
+    }
+
     void OverlapShapeAll(const kb::scene::PhysicsShapeDesc& shape, kb::scene::Vec3 center, std::uint32_t layerMask, kb::library::ArrayNonAlloc<kb::scene::PhysicsOverlapResult>& results) const noexcept override {
         lastOverlapShape = shape;
         lastOverlapCenter = center;
@@ -11419,10 +11424,12 @@ void RunScriptRuntimeHostNativeDescriptorBindingTest() {
     const std::filesystem::path assetsRoot = projectRoot / "Assets";
     const std::filesystem::path pluginPath = KB_NATIVE_SCRIPT_TEST_PLUGIN_PATH;
     const std::filesystem::path buildMarker = projectRoot / "native_descriptor_build.marker";
+    const std::filesystem::path sourcePath = projectRoot / "Source" / "HostNative.cpp";
     kb::tests::Require(!pluginPath.empty() && std::filesystem::is_regular_file(pluginPath), "Script runtime host native test plugin DLL is missing");
+    WriteTextFile(sourcePath, "initial source");
     WriteTextFile(assetsRoot / "Logic" / "HostNative.native",
         std::string{ "name Host Native\nsymbol tests.NativePlugin\nmodule = " } + pluginPath.string() +
-            "\nentry = kb_register_native_scripts\nbuild = cmake -E touch \"" + buildMarker.string() + "\"\n");
+            "\nentry = kb_register_native_scripts\nsource = ../../Source/HostNative.cpp\nbuild = cmake -E touch \"" + buildMarker.string() + "\"\n");
 
     kb::scene::Scene scene;
     kb::tests::Require(scene.Assets().MountProject(projectRoot), "Script runtime host native project mount failed");
@@ -11455,10 +11462,17 @@ void RunScriptRuntimeHostNativeDescriptorBindingTest() {
     kb::tests::Require(tickValue.has_value() && tickValue->AsInt() == 1, "Script runtime host did not load native descriptor plugin symbol");
     kb::tests::Require(std::filesystem::is_regular_file(buildMarker), "Script runtime host did not execute native descriptor build command");
 
+    kb::tests::Require(std::filesystem::remove(buildMarker), "Script runtime host native build marker could not be cleared");
+    WriteTextFile(sourcePath, "edited source with different size");
+    host.AssetPreparer().InvalidateNativeSourceObservations();
+    const kb::script::ScriptRuntimeAssetPrepareResult sourceReprepared = host.AssetPreparer().PrepareSceneBehaviours(scene);
+    kb::tests::Require(sourceReprepared.Succeeded() && std::filesystem::is_regular_file(buildMarker),
+        "Script runtime host did not rebuild after a source edit at the next play boundary");
+
     const std::filesystem::path rebuildMarker = projectRoot / "native_descriptor_rebuild.marker";
     WriteTextFile(assetsRoot / "Logic" / "HostNative.native",
         std::string{ "name Host Native\nsymbol tests.NativePlugin\nmodule = " } + pluginPath.string() +
-            "\nentry = kb_register_native_scripts\nbuild = cmake -E touch \"" + rebuildMarker.string() + "\"\n");
+            "\nentry = kb_register_native_scripts\nsource = ../../Source/HostNative.cpp\nbuild = cmake -E touch \"" + rebuildMarker.string() + "\"\n");
     kb::tests::Require(scene.Assets().Discover() == 1U, "Script runtime host native asset rediscovery failed");
     const kb::script::ScriptRuntimeAssetPrepareResult nativeReprepared = host.AssetPreparer().PrepareSceneBehaviours(scene);
     kb::tests::Require(nativeReprepared.Succeeded(), "Script runtime host native descriptor did not reprepare after file changes");
@@ -12143,7 +12157,7 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
     // task components and the complete Lens Echo schema.
     // Light is a public compatibility alias for 3D Radiance Emitter and
     // deliberately exercises the same 16 generated accessors.
-    kb::tests::Require(fieldsChecked == 616U, "Script component API generated accessor coverage test did not exercise the expected total field count (616, including all UI components and the Light compatibility alias)");
+    kb::tests::Require(fieldsChecked == 617U, "Script component API generated accessor coverage test did not exercise the expected total field count (617, including collision mesh assets and the Light compatibility alias)");
 }
 
 // LIB-082: defensive regression guard — the KB_ASSERT_NOT_POINTER
@@ -12224,7 +12238,7 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
     // LIB-136: Camera grew three more fields (cullingMask/clearMode/clearColor, the latter
     // decomposed into x/y/z), and MeshRenderer grew one (layer), so the total climbs from
     // 86 to 92.
-    kb::tests::Require(propertiesChecked == 616U, "LIB-082 raw-pointer audit did not exercise the expected total field count (616, including all UI components and the Light compatibility alias)");
+    kb::tests::Require(propertiesChecked == 617U, "LIB-082 raw-pointer audit did not exercise the expected total field count (617, including collision mesh assets and the Light compatibility alias)");
 }
 
 void RunVisualGraphSceneComponentBindingTest() {

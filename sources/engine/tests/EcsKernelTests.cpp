@@ -2814,7 +2814,7 @@ void RunEcsPreferredKernelBackendReportTest() {
 }
 
 void RunEcsReleaseNativeVectorBuildContractTest() {
-#if defined(NDEBUG) && (defined(_M_X64) || defined(_M_IX86) || defined(__x86_64__) || defined(__i386__))
+#if defined(KB_ENGINE_NATIVE_AVX2) && defined(NDEBUG) && (defined(_M_X64) || defined(_M_IX86) || defined(__x86_64__) || defined(__i386__))
     if (kb::ecs::IsKernelBackendSupported(kb::ecs::KernelBackend::Avx2)) {
         kb::tests::Require(
             kb::ecs::IsKernelBackendCompiled(kb::ecs::KernelBackend::Avx2),

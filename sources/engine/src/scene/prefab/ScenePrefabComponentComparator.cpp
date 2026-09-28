@@ -61,6 +61,7 @@ namespace {
 
 [[nodiscard]] bool Equal(const ColliderComponent& lhs, const ColliderComponent& rhs) noexcept {
     return lhs.shape == rhs.shape
+        && lhs.meshAssetId == rhs.meshAssetId
         && Equal(lhs.center, rhs.center)
         && Equal(lhs.boxSize, rhs.boxSize)
         && lhs.radius == rhs.radius

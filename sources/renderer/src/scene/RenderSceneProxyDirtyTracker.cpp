@@ -22,10 +22,16 @@ RenderProxyDirtyFlag RenderSceneProxyDirtyTracker::DirtyForMeshChange(const Mesh
         current.previousSkinningPalette != next.previousSkinningPalette ||
         current.skeletalMeshAssetId != next.skeletalMeshAssetId ||
         current.morphDeformationEnabled != next.morphDeformationEnabled ||
-        current.lodBias != next.lodBias || current.lodEnabled != next.lodEnabled) {
+        current.lodBias != next.lodBias || current.lodEnabled != next.lodEnabled ||
+        current.detailSwitchGroupId != next.detailSwitchGroupId ||
+        current.detailSwitchMinimumLod != next.detailSwitchMinimumLod ||
+        current.detailSwitchMaximumLod != next.detailSwitchMaximumLod ||
+        current.detailSwitchPromoteCoverage != next.detailSwitchPromoteCoverage ||
+        current.detailSwitchDemoteCoverage != next.detailSwitchDemoteCoverage ||
+        current.detailSwitchEnabled != next.detailSwitchEnabled) {
         dirty |= RenderProxyDirtyFlag::Material;
     }
-    if (current.visible != next.visible) {
+    if (current.visible != next.visible || current.layer != next.layer) {
         dirty |= RenderProxyDirtyFlag::Visibility;
     }
     return dirty;
@@ -41,7 +47,10 @@ RenderProxyDirtyFlag RenderSceneProxyDirtyTracker::DirtyForCameraChange(const Ca
         current.orthographicHeight != next.orthographicHeight ||
         current.nearClip != next.nearClip ||
         current.farClip != next.farClip ||
-        current.primary != next.primary) {
+        current.primary != next.primary ||
+        current.viewportId != next.viewportId || current.priority != next.priority ||
+        current.cullingMask != next.cullingMask || current.clearMode != next.clearMode ||
+        current.clearColor != next.clearColor) {
         dirty |= RenderProxyDirtyFlag::Camera;
     }
     if (current.visible != next.visible) {
@@ -65,7 +74,7 @@ RenderProxyDirtyFlag RenderSceneProxyDirtyTracker::DirtyForLightChange(const Lig
         current.areaHeight != next.areaHeight ||
         current.contactShadowLength != next.contactShadowLength ||
         current.volumetricScattering != next.volumetricScattering ||
-        current.castsShadow != next.castsShadow) {
+        current.castsShadow != next.castsShadow || current.layer != next.layer) {
         dirty |= RenderProxyDirtyFlag::Light;
     }
     if (current.visible != next.visible) {

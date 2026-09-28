@@ -278,6 +278,17 @@ BOOL CALLBACK FindProcessWindow(HWND window, LPARAM context) {
     }
     Require(search.window != nullptr, "kb_game did not open a window");
 
+    bool projectLoaded = false;
+    for (int attempt = 0; attempt < 600 && !projectLoaded; ++attempt) {
+        Require(WaitForSingleObject(launched.process, 0U) != WAIT_OBJECT_0,
+            "kb_game exited before loading its project");
+        std::ifstream captured{logPath, std::ios::binary};
+        const std::string output{std::istreambuf_iterator<char>{captured}, std::istreambuf_iterator<char>{}};
+        projectLoaded = Contains(output, " gpu_device=");
+        if (!projectLoaded) Sleep(50U);
+    }
+    Require(projectLoaded, "kb_game did not finish loading its project before the close test");
+
     // Long enough that a loop which only ran a single frame is distinguishable
     // from one that keeps running until the player closes it.
     Sleep(1000U);

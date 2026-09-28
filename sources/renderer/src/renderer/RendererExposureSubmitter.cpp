@@ -9,7 +9,8 @@ SceneRenderExposureSubmitStats RendererExposureSubmitter::Submit(
     const RenderViewportPlan& viewportPlan,
     const RenderScene& renderScene,
     const SceneRenderLightingConfig& lightingConfig,
-    std::uint32_t lastCompletedFrame) {
+    std::uint32_t lastCompletedFrame,
+    float frameDeltaSeconds) {
     SceneRenderExposureSubmitStats exposureStats{
         .viewportId = desc.target.viewport.id.value,
         .viewportIndex = desc.target.viewport.viewportIndex,
@@ -54,7 +55,7 @@ SceneRenderExposureSubmitStats RendererExposureSubmitter::Submit(
     exposureStats.adaptedAverageLuminance = shouldApplyTemporalAdaptation
         ? exposureMeter.Update(meteredAverageLuminance, SceneExposureAdaptationDesc{
               .enabled = autoExposure.temporalAdaptationEnabled,
-              .deltaSeconds = 1.0F / 60.0F,
+              .deltaSeconds = frameDeltaSeconds,
               .brightAdaptationRate = autoExposure.brightAdaptationRate,
               .darkAdaptationRate = autoExposure.darkAdaptationRate,
           })

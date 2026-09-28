@@ -54,7 +54,7 @@ private:
     EditorAntiAliasingMode antiAliasingMode_ = EditorAntiAliasingMode::Taa;
     bool bloomEnabled_ = true;
     bool selectionOutlineEnabled_ = true;
-    bool gpuDrivenEnabled_ = true;
+    bool gpuDrivenEnabled_ = false;
     std::uint8_t msaaSamples_ = 0;
     std::uint64_t backendGeneration_ = 0;
     std::uint64_t generation_ = 0;

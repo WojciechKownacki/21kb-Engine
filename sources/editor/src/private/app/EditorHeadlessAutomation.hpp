@@ -138,7 +138,8 @@ public:
     [[nodiscard]] bool SetGamepadConnected(
         std::uint8_t gamepadIndex, bool connected);
     [[nodiscard]] bool StepRuntime(
-        std::size_t frames, float deltaSeconds);
+        std::size_t frames, float deltaSeconds, bool profile = false, bool requireShadows = false, bool gpuProfile = false);
+    [[nodiscard]] bool ConfigureRuntimeRendering(std::uint32_t width, std::uint32_t height, bool gpuVisibilityDiagnostics = false);
     [[nodiscard]] bool StepEditorParticles(
         std::size_t frames, float deltaSeconds);
     [[nodiscard]] bool VerifyParticlePickerInteraction();

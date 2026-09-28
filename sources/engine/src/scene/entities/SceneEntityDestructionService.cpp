@@ -24,24 +24,35 @@ void SceneEntityDestructionService::DestroyEntity(Scene& scene, SceneEntity enti
     }
 
     SceneState& state = SceneAccess::State(scene);
-    const SceneObject object = SceneAccess::MakeObject(scene, entity);
-    const ScenePrefabInstanceHandle rootInstance = state.prefabInstances.FindRootInstance(object);
-    if (rootInstance.IsValid()) {
-        static_cast<void>(state.prefabInstances.Remove(rootInstance));
+    const SceneEntity root = entity;
+    for (;;) {
+        const SceneObject object = SceneAccess::MakeObject(scene, entity);
+        const ScenePrefabInstanceHandle rootInstance = state.prefabInstances.FindRootInstance(object);
+        if (rootInstance.IsValid()) {
+            static_cast<void>(state.prefabInstances.Remove(rootInstance));
+        }
+        MarkScenePrefabTopologyDirty(state, entity);
+        MarkScenePrefabTopologyDirty(state, SceneHierarchyService::Parent(scene, entity));
+
+        if (SceneHierarchyCache::ChildCount(state, entity) != 0U) {
+            entity = SceneHierarchyCache::ChildAt(state, entity, 0U);
+            continue;
+        }
+
+        // Parent links retain the traversal path while leaves are removed.
+        do {
+            const SceneEntity parent = SceneHierarchyService::Parent(scene, entity);
+            SceneHierarchyCache::Remove(state, entity, parent);
+            SceneEntityNaming::ClearName(state, entity);
+            ClearSceneRenderProxyComponentMask(state, entity);
+            state.world.DestroyEntity(entity);
+            if (entity == root) {
+                return;
+            }
+            entity = parent;
+        } while (SceneHierarchyCache::ChildCount(state, entity) == 0U);
+        entity = SceneHierarchyCache::ChildAt(state, entity, 0U);
     }
-
-    const SceneEntity parent = SceneHierarchyService::Parent(scene, entity);
-    MarkScenePrefabTopologyDirty(state, entity);
-    MarkScenePrefabTopologyDirty(state, parent);
-
-    for (const SceneEntity child : SceneHierarchyService::ChildEntities(scene, entity)) {
-        DestroyEntity(scene, child);
-    }
-
-    SceneHierarchyCache::Remove(state, entity, parent);
-    SceneEntityNaming::ClearName(state, entity);
-    ClearSceneRenderProxyComponentMask(state, entity);
-    state.world.DestroyEntity(entity);
 }
 
 } // namespace kb::scene

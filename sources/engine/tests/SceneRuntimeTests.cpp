@@ -1,4 +1,5 @@
 #include "ScenePrefabTestSuites.hpp"
+#include "EcsTestSuites.hpp"
 #include "SceneSystemTestSuites.hpp"
 #include "TestSuites.hpp"
 
@@ -18,6 +19,8 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunSaveGameTests();
     } else if (suite == "ecs") {
         kb::tests::RunEcsRuntimeTests();
+    } else if (suite == "ecs-native") {
+        kb::tests::RunEcsNativeArchetypeStorageTests();
     } else if (suite == "scene-hierarchy") {
         kb::tests::RunSceneHierarchyTests();
     } else if (suite == "scene-ui") {

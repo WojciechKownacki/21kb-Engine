@@ -92,6 +92,11 @@ void ScriptRuntimeAssetPreparer::SetNativeSettings(ScriptRuntimeNativePrepareSet
     nativeSettings_ = std::move(settings);
 }
 
+void ScriptRuntimeAssetPreparer::InvalidateNativeSourceObservations() noexcept {
+    nativeSourceObservations_.clear();
+    failedNativeAssetBuilds_.clear();
+}
+
 ScriptRuntimeAssetPrepareResult ScriptRuntimeAssetPreparer::PrepareAsset(kb::assets::AssetId assetId) {
     ScriptRuntimeAssetPrepareResult result{};
     ++result.visitedAssets;
@@ -304,6 +309,12 @@ ScriptRuntimeAssetPrepareResult ScriptRuntimeAssetPreparer::PrepareNativeBehavio
         return result;
     }
     std::uint64_t signature = metadata.contentHash;
+    const bool packaged = metadata.physicalPath.empty() && !nativeSettings_.runtimeModuleRoot.empty();
+    if (packaged && (!descriptor->sourcePath.empty() || descriptor->build.enabled)) {
+        AddDiagnostic(result, metadata.id, kb::scene::BehaviourBackend::Native,
+            "packaged native behaviour contains authoring source or build instructions");
+        return result;
+    }
     if (!descriptor->sourcePath.empty()) {
         const std::filesystem::path sourcePath = descriptor->sourcePath.is_absolute()
             ? descriptor->sourcePath : metadata.physicalPath.parent_path() / descriptor->sourcePath;
@@ -352,7 +363,21 @@ ScriptRuntimeAssetPrepareResult ScriptRuntimeAssetPreparer::PrepareNativeBehavio
         }
     }
     if (nativeSettings_.loadPlugins && nativePlugins_ != nullptr && !descriptor->modulePath.empty()) {
-        const std::filesystem::path modulePath = descriptor->modulePath.is_absolute() ? descriptor->modulePath : metadata.physicalPath.parent_path() / descriptor->modulePath;
+        std::filesystem::path modulePath = descriptor->modulePath.is_absolute() ? descriptor->modulePath : metadata.physicalPath.parent_path() / descriptor->modulePath;
+        if (packaged) {
+            std::error_code pathError;
+            const auto root = std::filesystem::canonical(nativeSettings_.runtimeModuleRoot, pathError);
+            if (pathError || descriptor->modulePath.is_absolute()) {
+                AddDiagnostic(result, metadata.id, kb::scene::BehaviourBackend::Native, "packaged native module root or relative path is invalid");
+                return result;
+            }
+            modulePath = std::filesystem::canonical(root / descriptor->modulePath, pathError);
+            const auto relative = modulePath.lexically_relative(root);
+            if (pathError || relative.empty() || relative.is_absolute() || *relative.begin() == "..") {
+                AddDiagnostic(result, metadata.id, kb::scene::BehaviourBackend::Native, "packaged native module is missing or escapes its runtime root");
+                return result;
+            }
+        }
         NativeScriptPluginLoadResult loaded = nativePlugins_->LoadOrReload(NativeScriptPluginLoadDesc{
             .key = "asset:" + std::to_string(metadata.id.value),
             .modulePath = modulePath,

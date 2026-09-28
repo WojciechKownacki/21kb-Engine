@@ -32,6 +32,7 @@
 #include "kb/render/SceneRenderTarget.hpp"
 #include "kb/render/overlay/SceneGizmoPass.hpp"
 #include "kb/render/post/ScenePostProcessTargets.hpp"
+#include "kb/render/post/SceneExposureMeter.hpp"
 #include "kb/render/scene/SceneRenderer.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialAssetWriter.hpp"
@@ -5817,6 +5818,24 @@ void RunEditorCameraWireframesSubmitInHeadlessNoopTest() {
 
 } // namespace
 
+void RunRendererDefaultSubmissionResultTest() {
+    kb::scene::Scene scene;
+    Renderer renderer;
+    Require(!renderer.SubmitScene(scene), "Default submission must reject an uninitialized renderer");
+    HeadlessSurface surface;
+    DisplayConfig config{};
+    config.allowHeadlessNoop = true;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+    Require(renderer.Initialize(surface, &config), "Default submission test could not initialize renderer");
+    Require(!renderer.SubmitScene(scene), "Default submission must reject a frame that has not begun");
+    Require(renderer.BeginFrame(), "Default submission test could not begin frame");
+    Require(renderer.SubmitScene(scene), "Default submission must report an accepted frame");
+    renderer.EndFrame();
+    Require(!renderer.SubmitScene(scene), "Default submission must reject a completed frame");
+    renderer.ReleaseScene(scene);
+    renderer.Shutdown();
+}
+
 // MAT-72: material frame time accumulates and is exposed as the u_time vec4 (time, delta, frameIndex).
 void RunMaterialFrameTimeAdvanceTest() {
     const auto nearly = [](float a, float b) noexcept { return std::fabs(a - b) <= 0.0005F; };
@@ -6511,6 +6530,7 @@ void RunRendererPacedSceneSubmitStressBenchmark(bool staticMillionSnapshot,
     config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
     Renderer renderer;
     Require(renderer.Initialize(surface, &config), "Paced scene stress could not initialize D3D11");
+    renderer.SetGpuDrivenRuntimeDispatchEnabled(gpuDrivenDispatchEnabled);
     renderer.SetRuntimeAssetDiscoveryEnabled(false);
     if (const bgfx::Caps* caps = bgfx::getCaps(); caps != nullptr) {
         std::ostringstream adapter;
@@ -6642,6 +6662,7 @@ void RunRendererPacedSceneSubmitStressBenchmark(bool staticMillionSnapshot,
                 std::string{creationTimedOut ? "creation_over_300s" : "live_count_mismatch"} +
                 " live=" + std::to_string(scene.Entities().Count()) +
                 " created=" + std::to_string(created));
+            target.Shutdown();
             renderer.Shutdown();
             std::filesystem::remove(root / "cube.obj", error);
             std::filesystem::remove(root, error);
@@ -6730,6 +6751,7 @@ void RunRendererPacedSceneSubmitStressBenchmark(bool staticMillionSnapshot,
                 stats.submittedForwardLightCount != maxForwardLights ||
                 (!gpuDrivenDispatchEnabled && (stats.gpuCullingDispatchCount != 0U ||
                     stats.gpuDrivenUploadBytes != 0U)) ||
+                (gpuDrivenDispatchEnabled && stats.gpuDrivenInputInstanceCount != stats.visibleMeshCount) ||
                 stats.droppedInstanceCount != 0U ||
                 stats.missingTextureBindingCount != 0U || stats.missingTextureResourceCount != 0U ||
                 stats.textureDimensionMismatchCount != 0U) {
@@ -6831,6 +6853,7 @@ void RunRendererPacedSceneSubmitStressBenchmark(bool staticMillionSnapshot,
         report("snapshot_finished live=" + std::to_string(scene.Entities().Count()) +
             " frames=" + std::to_string(completedFrames) +
             " valid=" + std::to_string(snapshotValid && completedFrames == 9));
+        target.Shutdown();
         renderer.Shutdown();
         std::filesystem::remove(root / "cube.obj", error);
         std::filesystem::remove(root, error);
@@ -6989,6 +7012,7 @@ void RunRendererPacedSceneSubmitStressBenchmark(bool staticMillionSnapshot,
     }
     report(std::string{"finished_live="} + std::to_string(scene.Entities().Count()) +
         " created=" + std::to_string(created) + " timeout=" + (timedOut ? "1" : "0"));
+    target.Shutdown();
     renderer.Shutdown();
     std::filesystem::remove(root / "cube.obj", error);
     std::filesystem::remove(root, error);
@@ -7098,6 +7122,53 @@ void RunRendererRuntimeSubmitTests() {
     RunRendererSubmitsDeferredGBufferAndLightingPassesInHeadlessNoopTest();
     RunRendererSubmitsDockedAndDetachedViewportsInSameFrameTest();
     RunSecondaryFrameModesProduceRuntimeTargetsTest();
+}
+
+void RunExposureReadbackResetTest() {
+#if defined(_WIN32)
+    NativeTestSurface surface;
+    Require(surface.IsValid(), "Exposure reset test could not create a hidden surface");
+    Renderer renderer;
+    DisplayConfig config{};
+    config.syncMode = DisplaySyncMode::Uncapped;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
+    Require(renderer.Initialize(surface, &config), "Exposure reset test could not initialize bgfx");
+    SceneExposureMeter meter;
+    Require(meter.InitializeGpuResources(), "Exposure reset test could not initialize readback");
+    constexpr std::array<std::uint8_t, 4> pixel{128, 128, 128, 255};
+    const bgfx::TextureHandle source = bgfx::createTexture2D(
+        1, 1, false, 1, bgfx::TextureFormat::RGBA8, BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP,
+        bgfx::copy(pixel.data(), static_cast<std::uint32_t>(pixel.size())));
+    Require(bgfx::isValid(source), "Exposure reset test could not create its HDR source");
+    SceneHdrExposureReadbackDesc desc{
+        .viewId = 240, .hdrColor = source, .extent = {1, 1}, .completedFrame = bgfx::frame(),
+    };
+    Require(meter.SubmitHdrReadback(desc).submitted, "Exposure reset test did not start a readback");
+    meter.Reset();
+    meter.Reset();
+    const auto pending = meter.SubmitHdrReadback(desc);
+    Require(!pending.submitted && !pending.hasValidSample && !pending.sampleAvailable,
+        "Exposure reset reused a destination while bgfx still owned it");
+    bool restarted = false;
+    bool sampled = false;
+    for (unsigned frame = 0; frame < 32 && !sampled; ++frame) {
+        desc.completedFrame = bgfx::frame();
+        const auto result = meter.SubmitHdrReadback(desc);
+        if (!restarted && result.submitted) {
+            Require(!result.hasValidSample && !result.sampleAvailable,
+                "Exposure reset published the cancelled sample");
+            restarted = true;
+        } else if (result.sampleAvailable) {
+            Require(restarted && result.hasValidSample && result.meteredAverageLuminance > 0.1F,
+                "Exposure reset did not recover a valid new sample");
+            sampled = true;
+        }
+    }
+    Require(restarted && sampled, "Exposure reset did not resume GPU metering");
+    meter.ShutdownGpuResources();
+    bgfx::destroy(source);
+    renderer.Shutdown();
+#endif
 }
 
 } // namespace kb::render::tests

@@ -15,6 +15,7 @@
 #include "engine/scene/SceneComponentVisitors.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/ScenePostProcessAccess.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneVisibilityResolution.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
@@ -749,7 +750,9 @@ void AppendTerrainBrushRing(
         .editorSelectionBox = editorOverlaysEnabled ? SelectionBoxDesc(sceneContext, panelId) : kb::render::RenderSceneSubmitDesc::EditorSelectionBoxDesc{},
         .meshPassMode = renderProfile.meshPassMode,
         .lightingConfig = lightingConfig,
-        .postProcessSettings = postProcessSettings,
+        .postProcessSettings = continuousRuntimeFrames &&
+                kb::scene::ScenePostProcessAccess::ActiveProfile(sceneContext.Scene()) != 0U
+            ? std::nullopt : std::optional{postProcessSettings},
         .msaaSamples = renderBackendSettings.MsaaSamples(),
         .shadowPassEnabled = renderProfile.shadowPassEnabled && renderBackendSettings.ShadowsEnabled(),
         .postProcessEnabled = postProcessEnabled,

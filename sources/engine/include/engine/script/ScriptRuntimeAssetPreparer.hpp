@@ -56,6 +56,7 @@ struct ScriptRuntimeNativePrepareSettings {
     std::filesystem::path shadowCopyDirectory;
     bool buildPlugins = true;
     bool loadPlugins = true;
+    std::filesystem::path runtimeModuleRoot;
 };
 
 class ScriptRuntimeAssetPreparer final {
@@ -69,6 +70,7 @@ public:
     void SetNativeBackend(NativeScriptBackend& nativeBackend) noexcept;
     void SetNativePluginManager(NativeScriptPluginManager& pluginManager) noexcept;
     void SetNativeSettings(ScriptRuntimeNativePrepareSettings settings);
+    void InvalidateNativeSourceObservations() noexcept;
 
     [[nodiscard]] ScriptRuntimeAssetPrepareResult PrepareAsset(kb::assets::AssetId assetId);
     [[nodiscard]] ScriptRuntimeAssetPrepareResult PrepareBehaviour(const kb::scene::BehaviourComponent& behaviour);

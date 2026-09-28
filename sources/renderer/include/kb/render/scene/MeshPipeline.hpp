@@ -81,6 +81,7 @@ struct MeshCommandLookupKey {
     std::uint64_t materialHandleValue = 0;
     RenderSkinningPaletteHandle currentSkinningPalette{};
     RenderSkinningPaletteHandle previousSkinningPalette{};
+    bool reversedWinding = false;
 
     [[nodiscard]] friend constexpr bool operator==(MeshCommandLookupKey lhs, MeshCommandLookupKey rhs) noexcept = default;
 };
@@ -100,7 +101,6 @@ struct MeshPipelineBuildResult {
     std::vector<SceneMeshBatch> meshBatchScratch;
     SceneCachedDrawCommandStore drawCommandCache;
     std::vector<SceneGpuDrivenInputRecord> gpuDrivenInputRecords;
-    std::vector<SceneGpuDrivenInstanceValidationRecord> gpuDrivenCpuValidationRecords;
     std::unordered_map<MeshCommandLookupKey, std::size_t, MeshCommandLookupKeyHash> commandLookupScratch;
     // Per-build cache for resource resolution shared by every instance using one material.
     // It is renderer-owned scratch and cleared at the next BuildInto call.

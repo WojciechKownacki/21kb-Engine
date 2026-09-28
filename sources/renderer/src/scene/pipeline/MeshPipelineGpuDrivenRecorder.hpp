@@ -18,11 +18,11 @@ public:
         std::pair<std::uint32_t, std::uint32_t> meshletRange) noexcept;
     static void Record(
         MeshPipelineBuildResult& result,
-        const SceneRenderMeshInstance& instance,
+        std::uint64_t entityId,
+        const RenderBoundsSphere& worldBounds,
         std::uint32_t drawCommandIndex,
         std::uint8_t lodLevel,
         std::pair<std::uint32_t, std::uint32_t> meshletRange,
-        bool visible,
         bool dropped);
     static void Finalize(
         MeshPipelineBuildResult& result,
