@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <unordered_map>
 #include <unordered_set>
@@ -400,6 +401,8 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                     ++writeCommandCount;
                 }
                 MeshPipelineGpuDrivenRecorder::AccumulateCandidateStats(result.stats, meshResource, meshletRange);
+                const std::uint32_t gpuDrivenRecordIndex = gpuDrivenCandidate
+                    ? static_cast<std::uint32_t>(result.gpuDrivenInputRecords.size()) : UINT32_MAX;
                 if (gpuDrivenCandidate) {
                     MeshPipelineGpuDrivenRecorder::Record(result, instance.entityId, worldBounds, drawCommandIndex, selectedLod, meshletRange, false);
                 }
@@ -407,6 +410,15 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                 SceneRenderMeshInstance& accepted = command->instances.emplace_back(instance);
                 accepted.worldBounds = worldBounds;
                 accepted.depthBucket = depthBucket;
+                if (desc.pass == MeshPassType::BaseTransparent) {
+                    const float viewDepth = std::abs(MeshPipelineVisibility::ViewDepth(desc.camera, worldBounds));
+                    result.transparentInstanceScratch.push_back(MeshPipelineTransparentInstanceRef{
+                        .commandIndex = drawCommandIndex,
+                        .instanceIndex = static_cast<std::uint32_t>(command->instances.size() - 1U),
+                        .gpuDrivenRecordIndex = gpuDrivenRecordIndex,
+                        .viewDepth = std::isfinite(viewDepth) ? viewDepth : 0.0F,
+                    });
+                }
                 ++acceptedInstanceCount;
             }
 
@@ -414,7 +426,8 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
         }
     }
 
-    MeshPipelineCommandBuilder::FinalizeCommands(result, desc.pass, writeCommandCount);
+    MeshPipelineCommandBuilder::FinalizeCommands(result, desc.pass, writeCommandCount,
+        desc.maxDrawCommands, desc.diagnostics);
 }
 
 } // namespace kb::render

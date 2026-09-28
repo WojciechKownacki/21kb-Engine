@@ -301,7 +301,7 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
                 .source = TransparentDrawSource::Mesh,
                 .depthBucket = command.depthBucket,
                 .sourceIndex = index,
-                .stableTie = command.sortKey,
+                .stableTie = index,
             });
         }
         for (std::uint32_t index = 0U; index < particleBuild.batches.size(); ++index) {

@@ -91,6 +91,7 @@ void MeshPipelineProcessor::BuildInto(const MeshPipelineBuildDesc& desc, MeshPip
         command.instances.clear();
     }
     result.gpuDrivenInputRecords.clear();
+    result.transparentInstanceScratch.clear();
     result.commandLookupScratch.clear();
     result.materialResolutionScratch.clear();
     result.stats = SceneRenderSubmitStats{};

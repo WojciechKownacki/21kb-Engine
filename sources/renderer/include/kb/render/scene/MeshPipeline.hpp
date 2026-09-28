@@ -95,8 +95,17 @@ struct MeshPipelineMaterialResolution {
     const RenderMaterialResource* resource = nullptr;
 };
 
+struct MeshPipelineTransparentInstanceRef {
+    std::uint32_t commandIndex = 0;
+    std::uint32_t instanceIndex = 0;
+    std::uint32_t gpuDrivenRecordIndex = UINT32_MAX;
+    float viewDepth = 0.0F;
+};
+
 struct MeshPipelineBuildResult {
     std::vector<MeshDrawCommand> commands;
+    std::vector<MeshDrawCommand> transparentSourceCommands;
+    std::vector<MeshPipelineTransparentInstanceRef> transparentInstanceScratch;
     // Transient adapter storage for draw-group input. Cleared before BuildInto returns because batches contain spans.
     std::vector<SceneMeshBatch> meshBatchScratch;
     SceneCachedDrawCommandStore drawCommandCache;
