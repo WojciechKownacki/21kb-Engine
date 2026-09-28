@@ -496,6 +496,15 @@ void SyncMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent
     static_cast<void>(transform);
 }
 
+void SyncNewMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent& transform, const kb::scene::MeshRendererComponent& renderer, void* context) {
+    auto* sync = static_cast<SyncContext*>(context);
+    if (sync->renderScene->FindMeshByEntity(entity.Id()) != nullptr) {
+        sync->meshes->push_back(entity.Id());
+        return;
+    }
+    SyncMesh(entity, transform, renderer, context);
+}
+
 void SyncLight(kb::scene::SceneEntity entity, const kb::scene::TransformComponent& transform, const kb::scene::LightComponent& light, void* context) {
     auto* sync = static_cast<SyncContext*>(context);
     const kb::scene::TransformComponent renderTransform = sync->worldReader->Read(entity, transform);
@@ -739,6 +748,14 @@ void EcsRenderSceneSynchronizer::SetSkinningPaletteAllocator(
 }
 
 void EcsRenderSceneSynchronizer::Sync(const kb::scene::Scene& scene, RenderScene& renderScene) const {
+    SyncImpl(scene, renderScene, false);
+}
+
+void EcsRenderSceneSynchronizer::SyncStructural(const kb::scene::Scene& scene, RenderScene& renderScene) const {
+    SyncImpl(scene, renderScene, true);
+}
+
+void EcsRenderSceneSynchronizer::SyncImpl(const kb::scene::Scene& scene, RenderScene& renderScene, bool preserveExistingMeshes) const {
     seenMeshes_.clear();
     seenCameras_.clear();
     seenLights_.clear();
@@ -772,7 +789,7 @@ void EcsRenderSceneSynchronizer::Sync(const kb::scene::Scene& scene, RenderScene
 
     const kb::scene::SceneComponentVisitors visitors = scene.Components().Visitors();
     visitors.ForEachCamera(&SyncCamera, &context);
-    visitors.ForEachMeshRenderer(&SyncMesh, &context);
+    visitors.ForEachMeshRenderer(preserveExistingMeshes ? &SyncNewMesh : &SyncMesh, &context);
     scene.Components().GeometrySwarms().ForEach(&SyncGeometrySwarm, &context);
     scene.Components().SurfaceCasts().ForEach(&SyncSurfaceCast, &context);
     scene.Components().FacingPanels().ForEach(&SyncFacingPanel, &context);

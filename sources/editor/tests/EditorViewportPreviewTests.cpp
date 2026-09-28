@@ -113,25 +113,35 @@ void RunSceneViewportPresentationPolicyTest() {
 void RunSceneViewportSceneSyncPolicyTest() {
     using kb::editor::SceneViewportSceneSyncPolicy;
 
-    const auto initial = SceneViewportSceneSyncPolicy::Resolve(0U, 1U, 1U, false, false, true);
+    const auto initial = SceneViewportSceneSyncPolicy::Resolve(0U, 1U, 1U, false, false, false, true);
     kb::editor::tests::Require(
         initial.fullSync && !initial.incrementalEntitySync && !initial.runtimeTransformSync,
         "The first viewport submission must establish one complete render scene");
 
-    const auto cameraFrame = SceneViewportSceneSyncPolicy::Resolve(7U, 7U, 7U, false, false, true);
+    const auto cameraFrame = SceneViewportSceneSyncPolicy::Resolve(7U, 7U, 7U, false, false, false, true);
     kb::editor::tests::Require(
         !cameraFrame.fullSync && !cameraFrame.incrementalEntitySync && cameraFrame.runtimeTransformSync,
         "A Play camera frame must consume runtime transforms without rebuilding the scene");
 
-    const auto editedEntity = SceneViewportSceneSyncPolicy::Resolve(7U, 8U, 7U, false, true, false);
+    const auto editedEntity = SceneViewportSceneSyncPolicy::Resolve(7U, 8U, 7U, false, false, true, false);
     kb::editor::tests::Require(
         !editedEntity.fullSync && editedEntity.incrementalEntitySync && !editedEntity.runtimeTransformSync,
         "An authored entity edit must retain the incremental entity sync path");
 
-    const auto structuralRuntimeChange = SceneViewportSceneSyncPolicy::Resolve(7U, 8U, 8U, true, false, true);
+    const auto structuralRuntimeChange = SceneViewportSceneSyncPolicy::Resolve(7U, 8U, 8U, true, true, false, true);
     kb::editor::tests::Require(
         structuralRuntimeChange.fullSync && !structuralRuntimeChange.runtimeTransformSync,
         "A runtime topology change must take precedence over affine-only synchronization");
+
+    const auto structuralDelta = SceneViewportSceneSyncPolicy::Resolve(7U, 8U, 7U, false, true, false, true);
+    kb::editor::tests::Require(
+        !structuralDelta.fullSync && structuralDelta.structuralSync && structuralDelta.runtimeTransformSync,
+        "A covered structural change with no dirty survivors must still prune removed proxies");
+
+    const auto missedDelta = SceneViewportSceneSyncPolicy::Resolve(7U, 9U, 8U, false, true, true, true);
+    kb::editor::tests::Require(
+        missedDelta.fullSync && !missedDelta.structuralSync,
+        "A viewport that missed a structural revision must rebuild its render scene");
 }
 
 void RunParticleThumbnailTimelineTest() {

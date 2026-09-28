@@ -751,6 +751,38 @@ void RunSyncEntitiesRemovesDestroyedProxyTest() {
     Require(renderScene.FindMeshByEntity(mesh.Id()) == nullptr, "Incremental sync kept a destroyed mesh proxy");
 }
 
+void RunStructuralSyncKeepsUnchangedMeshesAndPrunesReusedEntitiesTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity retained = scene.Entities().CreateEntity();
+    const kb::scene::SceneEntity departed = scene.Entities().CreateEntity();
+    scene.Components().MeshRenderers().Set(retained, kb::scene::MeshRendererComponent{ .meshAssetId = 42U, .materialAssetId = 7U });
+    scene.Components().MeshRenderers().Set(departed, kb::scene::MeshRendererComponent{ .meshAssetId = 43U, .materialAssetId = 7U });
+
+    RenderScene renderScene;
+    EcsRenderSceneSynchronizer synchronizer;
+    synchronizer.Sync(scene, renderScene);
+    const RenderProxyId retainedProxyId = renderScene.FindMeshByEntity(retained.Id())->id;
+    renderScene.ClearDirty();
+
+    scene.Entities().Destroy(departed);
+    const kb::scene::SceneEntity arrived = scene.Entities().CreateEntity();
+    scene.Components().MeshRenderers().Set(arrived, kb::scene::MeshRendererComponent{ .meshAssetId = 44U, .materialAssetId = 9U });
+    scene.Components().MeshRenderers().Set(retained, kb::scene::MeshRendererComponent{ .meshAssetId = 42U, .materialAssetId = 8U });
+
+    synchronizer.SyncStructural(scene, renderScene);
+    const std::array<std::uint64_t, 1U> dirty{ retained.Id() };
+    synchronizer.SyncEntities(scene, renderScene, dirty);
+
+    const MeshRenderProxy* retainedProxy = renderScene.FindMeshByEntity(retained.Id());
+    const MeshRenderProxy* arrivedProxy = renderScene.FindMeshByEntity(arrived.Id());
+    Require(retainedProxy != nullptr && retainedProxy->id == retainedProxyId && retainedProxy->desc.materialAssetId == 8U,
+        "Structural sync did not update the explicitly dirty retained mesh");
+    Require(arrivedProxy != nullptr && arrivedProxy->desc.meshAssetId == 44U,
+        "Structural sync did not create the new mesh proxy");
+    Require(renderScene.FindMeshByEntity(departed.Id()) == nullptr && renderScene.MeshProxyCount() == 2U,
+        "Structural sync retained a destroyed full entity ID");
+}
+
 void RunVisibilityKeepsProxyButRemovesSnapshotInstanceTest() {
     kb::scene::Scene scene;
     const kb::scene::SceneEntity mesh = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
@@ -3351,6 +3383,7 @@ void RunRenderSceneSyncTests() {
     RunRuntimeRenderProxyQueueRemovesDisabledProxyTest();
     RunSyncTransformUpdatesUsesRuntimeCacheTest();
     RunSyncEntitiesRemovesDestroyedProxyTest();
+    RunStructuralSyncKeepsUnchangedMeshesAndPrunesReusedEntitiesTest();
     RunVisibilityKeepsProxyButRemovesSnapshotInstanceTest();
     RunDeletesRemovedComponentsAndEntitiesTest();
     RunRenderResourceMapRequiresExplicitBindingsTest();

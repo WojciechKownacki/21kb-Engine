@@ -79,6 +79,7 @@ public:
         std::uint64_t sceneRevision = 1U;
         std::uint64_t sceneDirtyBaseRevision = 1U;
         bool sceneFullSyncRequired = true;
+        bool sceneStructuralSyncRequired = false;
         // Runtime transform propagation already publishes compact entity/affine
         // columns. Consume those columns during Play instead of rebuilding every
         // render proxy when the scene structure is unchanged.

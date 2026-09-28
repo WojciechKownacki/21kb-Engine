@@ -84,6 +84,7 @@ render::RenderSceneSubmitDesc EditorSceneBgfxViewport::PendingSubmissionBuilder:
         present.settings.sceneRevision,
         present.settings.sceneDirtyBaseRevision,
         present.settings.sceneFullSyncRequired,
+        present.settings.sceneStructuralSyncRequired,
         !present.settings.dirtySceneEntityIds.empty(),
         present.settings.runtimeTransformSync);
     const std::span<const std::uint64_t> dirtySceneEntityIds = sync.incrementalEntitySync
@@ -138,6 +139,7 @@ render::RenderSceneSubmitDesc EditorSceneBgfxViewport::PendingSubmissionBuilder:
         .selectionOutlineEnabled = present.settings.selectionOutlineEnabled,
         .gpuDrivenRuntimeDispatchEnabled = present.settings.gpuDrivenRuntimeDispatchEnabled,
         .synchronizeScene = sync.fullSync,
+        .structuralSync = sync.structuralSync,
         .transformAffineSync = sync.runtimeTransformSync,
         .editorGrid = present.settings.editorGrid,
         .editorGizmo = present.settings.editorGizmo,
