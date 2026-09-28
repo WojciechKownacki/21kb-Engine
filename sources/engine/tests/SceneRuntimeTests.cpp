@@ -6,6 +6,10 @@
 #include <cstdlib>
 #include <string_view>
 
+namespace kb::tests {
+void RunScriptNativeHeaderReloadTest();
+}
+
 namespace {
 
 bool RunSuite(std::string_view suite) {
@@ -45,6 +49,8 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunLargeNonAdditiveSceneTransitionBenchmark();
     } else if (suite == "script") {
         kb::tests::RunScriptRuntimeTests();
+    } else if (suite == "script-native-header") {
+        kb::tests::RunScriptNativeHeaderReloadTest();
     } else if (suite == "script-api") {
         kb::tests::RunScriptApiCatalogTests();
     } else if (suite == "visual-graph") {

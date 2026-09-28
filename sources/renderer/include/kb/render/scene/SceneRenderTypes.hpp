@@ -466,6 +466,7 @@ enum class SceneRenderDiagnosticKind : std::uint8_t {
     // glyphs that do not fit an atlas. That element draws without its text; the rest of the
     // UI is unaffected. `entityId` names it.
     UITextUnavailable,
+    PostProcessProfileUnavailable,
 };
 
 enum class SceneRenderMaterialProgramStatus : std::uint8_t {
@@ -497,6 +498,7 @@ struct SceneRenderDiagnosticEvent {
     std::uint32_t materialProgramBackend = 0U;
     std::uint16_t materialProgramHandle = bgfx::kInvalidHandle;
     SceneRenderMaterialProgramStatus materialProgramStatus = SceneRenderMaterialProgramStatus::None;
+    std::uint64_t postProcessProfileAssetId = 0U;
 };
 
 struct SceneRenderDiagnostics {

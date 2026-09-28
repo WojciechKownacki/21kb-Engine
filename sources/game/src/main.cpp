@@ -1,5 +1,6 @@
 #include "GameProjectRuntime.hpp"
 #include "GameWindow.hpp"
+#include "RuntimeSceneFrameSync.hpp"
 
 #include "engine/input/InputHaptics.hpp"
 #include "engine/input/InputSubsystem.hpp"
@@ -207,10 +208,7 @@ int RunGame(const GameOptions& options) {
     std::uint32_t renderedFrames = 0U;
     std::uint32_t submittedFrames = 0U;
     bool runtimeClean = true;
-    bool renderSceneInitialized = false;
-    std::uint64_t synchronizedTopology = 0U;
-    std::uint64_t synchronizedProxyRevision = 0U;
-    std::vector<std::uint64_t> preUpdateRenderChanges;
+    kb::game::RuntimeSceneFrameSync renderSceneSync;
     auto previousTick = std::chrono::steady_clock::now();
     while (window.PumpMessages() && !scene.Runtime().ShouldQuit()) {
         if (window.Width() == 0U || window.Height() == 0U) {
@@ -234,12 +232,7 @@ int RunGame(const GameOptions& options) {
         static_cast<void>(scene.UI().SetViewport(
             static_cast<float>(window.Width()),
             static_cast<float>(window.Height())));
-        preUpdateRenderChanges.clear();
-        if (renderSceneInitialized && scene.Runtime().RenderProxyUpdateRevision() != synchronizedProxyRevision) {
-            for (const auto entity : scene.Runtime().RenderProxyUpdateEntities()) {
-                preUpdateRenderChanges.push_back(entity.Id());
-            }
-        }
+        renderSceneSync.BeforeUpdate(scene);
         static_cast<void>(scene.Runtime().Update(deltaSeconds));
         for (const std::string& error : scene.Runtime().DrainSceneSystemErrors()) {
             std::cerr << "kb_game: scene runtime failed: " << error << '\n';
@@ -261,12 +254,7 @@ int RunGame(const GameOptions& options) {
             runtimeClean = false;
             break;
         }
-        const auto topology = scene.Runtime().RenderTopologyVersion();
-        const auto proxyRevision = scene.Runtime().RenderProxyUpdateRevision();
-        const bool submitted = renderer.SubmitRuntimeScene(scene, {
-            .fullSync = !renderSceneInitialized || topology != synchronizedTopology,
-            .dirtySceneEntityIds = preUpdateRenderChanges,
-        });
+        const bool submitted = renderSceneSync.Submit(scene, renderer);
         const auto& renderStats = renderer.LastSceneSubmitStats();
         const bool renderErrors = renderer.LastSceneDiagnostics().HasErrors() ||
             renderStats.HasMissingResources() || renderStats.droppedInstanceCount != 0U;
@@ -279,16 +267,14 @@ int RunGame(const GameOptions& options) {
                 if (event.severity == kb::render::SceneRenderDiagnosticSeverity::Error) {
                     std::cerr << "kb_game: render error kind=" << static_cast<unsigned>(event.kind)
                               << " entity=" << event.entityId << " mesh=" << event.meshAssetId
-                              << " material=" << event.materialAssetId << " texture=" << event.textureAssetId << '\n';
+                              << " material=" << event.materialAssetId << " texture=" << event.textureAssetId
+                              << " profile=" << event.postProcessProfileAssetId << '\n';
                 }
             }
             runtimeClean = false;
             break;
         }
         ++submittedFrames;
-        renderSceneInitialized = true;
-        synchronizedTopology = topology;
-        synchronizedProxyRevision = proxyRevision;
         ++renderedFrames;
         if (options.frameLimit != 0U && renderedFrames >= options.frameLimit) {
             break;

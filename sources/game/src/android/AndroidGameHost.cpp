@@ -1,6 +1,7 @@
 #include "GameProjectRuntime.hpp"
 #include "PackagedGameRuntime.hpp"
 #include "PackagedRuntimeModules.hpp"
+#include "RuntimeSceneFrameSync.hpp"
 
 #include "engine/assets/bake/BakeTargetProfile.hpp"
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
@@ -646,22 +647,37 @@ private:
         static_cast<void>(scene_->UI().SetViewport(
             static_cast<float>(surface_.Width()),
             static_cast<float>(surface_.Height())));
+        renderSceneSync_.BeforeUpdate(*scene_);
         static_cast<void>(scene_->Runtime().Update(deltaSeconds));
         SetImeVisible(focused_ && scene_->UI().HasFocusedTextInput());
         FinalizeInputFrame();
-        if (renderer_.BeginFrame()) {
-            const bool submitted = renderer_.SubmitScene(*scene_);
-            renderer_.EndFrame();
-            if (!submitted) {
-                LogError("renderer could not submit the scene");
-                return;
+        renderer_.SetFrameDeltaSeconds(deltaSeconds);
+        if (!renderer_.BeginFrame()) {
+            LogError("renderer could not begin a frame");
+            failed_ = true;
+            return;
+        }
+        const bool submitted = renderSceneSync_.Submit(*scene_, renderer_);
+        renderer_.EndFrame();
+        if (!submitted) {
+            LogError("renderer could not submit the scene");
+            for (const auto& event : renderer_.LastSceneDiagnostics().events) {
+                if (event.severity == kb::render::SceneRenderDiagnosticSeverity::Error) {
+                    std::ostringstream diagnostic;
+                    diagnostic << "render error kind=" << static_cast<unsigned>(event.kind)
+                               << " entity=" << event.entityId
+                               << " profile=" << event.postProcessProfileAssetId;
+                    LogError(diagnostic.str());
+                }
             }
-            if (!firstFrameReported_) {
-                std::ostringstream message;
-                message << "profile=" << targetProfileId_ << " first-frame=rendered";
-                LogInfo(message.str());
-                firstFrameReported_ = true;
-            }
+            failed_ = true;
+            return;
+        }
+        if (!firstFrameReported_) {
+            std::ostringstream message;
+            message << "profile=" << targetProfileId_ << " first-frame=rendered";
+            LogInfo(message.str());
+            firstFrameReported_ = true;
         }
     }
 
@@ -689,6 +705,7 @@ private:
             renderer_.Shutdown();
         }
         tickClockReady_ = false;
+        renderSceneSync_.Reset();
     }
 
     void Shutdown() noexcept {
@@ -726,6 +743,7 @@ private:
     kb::script::ScriptModule* scriptModule_ = nullptr;
     AndroidRenderSurface surface_;
     kb::render::Renderer renderer_;
+    kb::game::RuntimeSceneFrameSync renderSceneSync_;
     std::string storageRoot_;
     std::string targetProfileId_;
     bool resumed_ = false;
