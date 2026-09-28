@@ -1195,6 +1195,103 @@ void RunMeshPipelineCpuCullsByFrustumBoundsTest() {
         "MeshPipeline uploaded an instance already culled by the CPU");
 }
 
+void RunMeshPipelineSortsInterleavedTransparentInstancesTest() {
+    RenderMeshResource mesh{};
+    mesh.indexCount = 3U;
+    mesh.bounds = RenderBoundsSphere{ .center = { 0.0F, 0.0F, 0.0F }, .radius = 0.02F };
+    mesh.sections = { RenderMeshSection{ .indexStart = 0U, .indexCount = 3U, .bounds = mesh.bounds } };
+    RenderMaterialResource material{};
+    material.alphaMode = RenderMaterialAlphaMode::Blend;
+    const std::vector<SceneRenderDrawGroup> groups{
+        SceneRenderDrawGroup{
+            .meshAssetId = 42U,
+            .materialAssetId = 7U,
+            .instances = {
+                SceneRenderMeshInstance{ .entityId = 1U, .meshAssetId = 42U, .materialAssetId = 7U, .model = TranslationMatrix(0.0F, 0.0F, 0.8F) },
+                SceneRenderMeshInstance{ .entityId = 3U, .meshAssetId = 42U, .materialAssetId = 7U, .model = TranslationMatrix(0.0F, 0.0F, 0.2F) },
+            },
+        },
+        SceneRenderDrawGroup{
+            .meshAssetId = 42U,
+            .materialAssetId = 8U,
+            .instances = {
+                SceneRenderMeshInstance{ .entityId = 2U, .meshAssetId = 42U, .materialAssetId = 8U, .model = TranslationMatrix(0.0F, 0.0F, 0.5F) },
+            },
+        },
+    };
+    auto verify = [&](const SceneRenderCamera& camera, std::array<std::uint64_t, 3U> expected) {
+        const MeshPipelineBuildResult result = MeshPipelineProcessor::Build(MeshPipelineBuildDesc{
+            .pass = MeshPassType::BaseTransparent,
+            .drawGroups = &groups,
+            .resolvedMeshResource = &mesh,
+            .resolvedMaterialResource = &material,
+            .camera = &camera,
+            .resourceValidation = MeshPipelineResourceValidation::Skip,
+        });
+        Require(result.commands.size() == 3U && result.stats.visibleMeshCount == 3U,
+            "Transparent interleaved instances must remain individually ordered across materials");
+        for (std::size_t index = 0U; index < expected.size(); ++index) {
+            Require(result.commands[index].instances.size() == 1U &&
+                result.commands[index].instances.front().entityId == expected[index],
+                "Transparent commands are not globally back-to-front");
+        }
+    };
+    SceneRenderCamera camera{ .view = IdentityMatrix(), .projection = IdentityMatrix() };
+    verify(camera, { 1U, 2U, 3U });
+    camera.view[10] = -1.0F;
+    camera.view[14] = 1.0F;
+    verify(camera, { 3U, 2U, 1U });
+    camera.view = IdentityMatrix();
+    SceneRenderDiagnostics diagnostics;
+    const MeshPipelineBuildResult limited = MeshPipelineProcessor::Build(MeshPipelineBuildDesc{
+        .pass = MeshPassType::BaseTransparent,
+        .drawGroups = &groups,
+        .resolvedMeshResource = &mesh,
+        .resolvedMaterialResource = &material,
+        .camera = &camera,
+        .diagnostics = &diagnostics,
+        .maxDrawCommands = 2U,
+        .resourceValidation = MeshPipelineResourceValidation::Skip,
+    });
+    Require(limited.commands.size() == 2U && limited.stats.droppedInstanceCount == 1U &&
+        limited.stats.visibleMeshCount == 2U && !diagnostics.events.empty(),
+        "Transparent ordering must enforce the final draw budget and report dropped instances");
+}
+
+void RunMeshPipelineKeepsTerrainOverlayLayerOrderTest() {
+    RenderMeshResource mesh{};
+    mesh.indexCount = 3U;
+    mesh.terrainLayerCount = 3U;
+    mesh.bounds = RenderBoundsSphere{ .center = { 0.0F, 0.0F, 0.0F }, .radius = 0.02F };
+    mesh.sections = {
+        RenderMeshSection{ .indexStart = 0U, .indexCount = 3U, .bounds = mesh.bounds, .terrainLayerIndex = 2U },
+        RenderMeshSection{ .indexStart = 0U, .indexCount = 3U, .bounds = mesh.bounds, .terrainLayerIndex = 1U },
+        RenderMeshSection{ .indexStart = 0U, .indexCount = 3U, .bounds = mesh.bounds },
+    };
+    RenderMaterialResource material{};
+    material.alphaMode = RenderMaterialAlphaMode::Blend;
+    const std::vector<SceneRenderDrawGroup> groups{
+        SceneRenderDrawGroup{
+            .meshAssetId = 42U,
+            .materialAssetId = 7U,
+            .instances = { SceneRenderMeshInstance{ .entityId = 1U, .meshAssetId = 42U,
+                .materialAssetId = 7U, .model = TranslationMatrix(0.0F, 0.0F, 0.5F) } },
+        },
+    };
+    const SceneRenderCamera camera{ .view = IdentityMatrix(), .projection = IdentityMatrix() };
+    const MeshPipelineBuildResult result = MeshPipelineProcessor::Build(MeshPipelineBuildDesc{
+        .pass = MeshPassType::BaseTransparent,
+        .drawGroups = &groups,
+        .resolvedMeshResource = &mesh,
+        .resolvedMaterialResource = &material,
+        .camera = &camera,
+        .resourceValidation = MeshPipelineResourceValidation::Skip,
+    });
+    Require(result.commands.size() == 3U && result.commands[0].terrainLayerIndex == 1U &&
+        result.commands[1].terrainLayerIndex == 2U && result.commands[2].terrainLayerIndex == UINT8_MAX,
+        "Transparent terrain overlays must preserve authored layer order at equal depth");
+}
+
 void RunMeshPipelineAnimatedBoundsOverrideControlsCullingTest() {
     RenderMeshResource mesh{};
     mesh.indexCount = 3U;
@@ -1860,6 +1957,8 @@ void RunMeshPipelineTests() {
     RunMeshPipelineCullsBackFacesForSingleSidedMeshesTest();
     RunMeshPipelineSeparatesMirroredInstancesTest();
     RunMeshPipelineKeepsBlendDisabledUntilTransparentPassIsReadyTest();
+    RunMeshPipelineSortsInterleavedTransparentInstancesTest();
+    RunMeshPipelineKeepsTerrainOverlayLayerOrderTest();
     RunMeshPipelineCpuCullsByFrustumBoundsTest();
     RunMeshPipelineAnimatedBoundsOverrideControlsCullingTest();
     RunMeshPipelineCullsWithVisibilityBlockerTest();

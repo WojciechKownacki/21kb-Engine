@@ -3038,6 +3038,104 @@ void RunRendererDrawsDetachedViewportFinalCompositePixelsTest() {
     renderer.Shutdown();
 }
 
+void RunRendererTransparentInterleaveGpuReadbackTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_transparent_interleave_pixels";
+    std::error_code error;
+    std::filesystem::create_directories(root, error);
+    Require(!error, "Transparent pixel test could not create its asset root");
+    WriteTriangleObj(root / "triangle.obj");
+    const auto writeBlendMaterial = [&](const char* name, float red, float green, float blue) {
+        std::ofstream output{root / name, std::ios::trunc};
+        Require(output.is_open(), "Transparent pixel test could not write a material");
+        output << "baseColor " << red << ' ' << green << ' ' << blue << " 0.5\n"
+               << "emissiveColor " << red << ' ' << green << ' ' << blue << "\n"
+               << "emissiveStrength 1\nalphaMode BLEND\ndoubleSided true\n";
+    };
+    writeBlendMaterial("red.kbmat", 1.0F, 0.0F, 0.0F);
+    writeBlendMaterial("green.kbmat", 0.0F, 1.0F, 0.0F);
+    writeBlendMaterial("blue.kbmat", 0.0F, 0.0F, 1.0F);
+    kb::scene::Scene scene;
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    Require(manager.RegisterLoader(std::make_unique<RenderMeshAssetLoader>()) &&
+        manager.RegisterLoader(std::make_unique<RenderMaterialAssetLoader>()) &&
+        manager.Mounts().Mount("Game", root) && manager.DiscoverMountedAssets() >= 4U,
+        "Transparent pixel test could not load its assets");
+    const auto* mesh = manager.Registry().FindByPath("/Game/triangle.obj");
+    const auto* red = manager.Registry().FindByPath("/Game/red.kbmat");
+    const auto* green = manager.Registry().FindByPath("/Game/green.kbmat");
+    const auto* blue = manager.Registry().FindByPath("/Game/blue.kbmat");
+    Require(mesh != nullptr && red != nullptr && green != nullptr && blue != nullptr,
+        "Transparent pixel test could not resolve its assets");
+    const auto add = [&](const char* name, float depth, std::uint64_t materialId) {
+        const auto entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+            .name = name, .transform = TransformAt(0.0F, 0.0F, depth),
+        });
+        scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{
+            .meshAssetId = mesh->id.value, .materialAssetId = materialId,
+        });
+        return entity;
+    };
+    const std::array entities{
+        add("Red Far", 0.8F, red->id.value),
+        add("Green Middle", 0.5F, green->id.value),
+        add("Blue Near", 0.2F, blue->id.value),
+    };
+    NativeTestSurface surface;
+    Require(surface.IsValid(), "Transparent pixel test could not create a native surface");
+    DisplayConfig config{};
+    config.syncMode = DisplaySyncMode::Uncapped;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "Transparent pixel test renderer did not initialize");
+    {
+        ParticleMeshReadbackTarget target;
+        Require(target.Initialize(), "Transparent pixel test could not create its readback target");
+        auto capture = [&](const SceneRenderCamera& camera, std::array<bool, 3U> visible) {
+            for (std::size_t index = 0U; index < entities.size(); ++index) {
+                scene.Components().Visibility().Set(entities[index], kb::scene::VisibilityComponent{ .visible = visible[index] });
+            }
+            const RenderSceneSubmitDesc desc{
+                .target = target.Binding(), .cameraOverride = camera, .clearRgba = 0x000000FFU,
+                .editorSceneOverlaysEnabled = false, .postProcessEnabled = false,
+                .selectionMaskEnabled = false, .selectionOutlineEnabled = false,
+            };
+            SubmitLifecycleFrame(renderer, scene, desc, "Transparent pixel test could not submit its scene");
+            const auto pixels = target.ReadPixels();
+            constexpr std::size_t kCenter = (32U * NativeTestSurface::kExtent + 32U) * 4U;
+            return std::array<int, 3U>{pixels[kCenter], pixels[kCenter + 1U], pixels[kCenter + 2U]};
+        };
+        auto verify = [&](const SceneRenderCamera& camera, bool reverse) {
+            const auto background = capture(camera, {false, false, false});
+            const auto redOnly = capture(camera, {true, false, false});
+            const auto greenOnly = capture(camera, {false, true, false});
+            const auto blueOnly = capture(camera, {false, false, true});
+            const auto composed = capture(camera, {true, true, true});
+            Require(redOnly[0] > background[0] + 20 && greenOnly[1] > background[1] + 20 &&
+                blueOnly[2] > background[2] + 20,
+                "Transparent pixel reference did not draw all distinct materials");
+            for (std::size_t channel = 0U; channel < 3U; ++channel) {
+                const float clear = static_cast<float>(background[channel]);
+                const float a = 2.0F * redOnly[channel] - clear;
+                const float b = 2.0F * greenOnly[channel] - clear;
+                const float c = 2.0F * blueOnly[channel] - clear;
+                const float first = reverse ? c : a;
+                const float second = b;
+                const float third = reverse ? a : c;
+                const float expected = 0.5F * third + 0.5F * (0.5F * second + 0.5F * (0.5F * first + 0.5F * clear));
+                Require(std::abs(static_cast<float>(composed[channel]) - expected) <= 12.0F,
+                    "Transparent pixel does not match back-to-front alpha composition");
+            }
+        };
+        SceneRenderCamera camera = IdentityCamera();
+        verify(camera, false);
+        camera.view[10] = -1.0F;
+        camera.view[14] = 1.0F;
+        verify(camera, true);
+    }
+    renderer.Shutdown();
+    std::filesystem::remove_all(root, error);
+}
+
 void RunRendererDrawsParticleMeshSnapshotPixelsTest() {
     const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_particle_mesh_pixels";
     std::error_code error;
@@ -6077,6 +6175,10 @@ void RunRendererParticleMeshSnapshotSubmitTest() {
 #endif
 }
 
+void RunRendererTransparentGpuReadbackTests() {
+    RunRendererTransparentInterleaveGpuReadbackTest();
+}
+
 void RunRendererResourceGroupEnsureFallbacksTest() {
     const std::filesystem::path root = std::filesystem::temp_directory_path() /
         ("21kb_resource_group_ensure_" +
@@ -7086,6 +7188,9 @@ void RunRendererRuntimeSubmitTests() {
     RunRendererKeepsSceneWhenUIFrameRefusesTest();
     RunRendererKeepsUIWhenTextCannotBePreparedTest();
     RunRendererParticleMeshSnapshotSubmitTest();
+#if defined(_WIN32)
+    RunRendererTransparentInterleaveGpuReadbackTest();
+#endif
     RunRendererParticleStripSnapshotSubmitTest();
     RunRendererParticleVolumetricSnapshotSubmitTest();
     RunRendererDetachedViewportFinalCompositePixelsTest();
