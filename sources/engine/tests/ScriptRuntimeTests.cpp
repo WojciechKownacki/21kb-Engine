@@ -11425,8 +11425,12 @@ void RunScriptRuntimeHostNativeDescriptorBindingTest() {
     const std::filesystem::path pluginPath = KB_NATIVE_SCRIPT_TEST_PLUGIN_PATH;
     const std::filesystem::path buildMarker = projectRoot / "native_descriptor_build.marker";
     const std::filesystem::path sourcePath = projectRoot / "Source" / "HostNative.cpp";
+    const std::filesystem::path headerPath = projectRoot / "Source" / "HostNative.hpp";
+    const std::filesystem::path nestedHeaderPath = projectRoot / "Source" / "HostNativeSettings.hpp";
     kb::tests::Require(!pluginPath.empty() && std::filesystem::is_regular_file(pluginPath), "Script runtime host native test plugin DLL is missing");
-    WriteTextFile(sourcePath, "initial source");
+    WriteTextFile(nestedHeaderPath, "#define KB_NATIVE_VALUE 1\n");
+    WriteTextFile(headerPath, "#include \"HostNativeSettings.hpp\"\n");
+    WriteTextFile(sourcePath, "#include \"HostNative.hpp\"\ninitial source");
     WriteTextFile(assetsRoot / "Logic" / "HostNative.native",
         std::string{ "name Host Native\nsymbol tests.NativePlugin\nmodule = " } + pluginPath.string() +
             "\nentry = kb_register_native_scripts\nsource = ../../Source/HostNative.cpp\nbuild = cmake -E touch \"" + buildMarker.string() + "\"\n");
@@ -11463,11 +11467,23 @@ void RunScriptRuntimeHostNativeDescriptorBindingTest() {
     kb::tests::Require(std::filesystem::is_regular_file(buildMarker), "Script runtime host did not execute native descriptor build command");
 
     kb::tests::Require(std::filesystem::remove(buildMarker), "Script runtime host native build marker could not be cleared");
-    WriteTextFile(sourcePath, "edited source with different size");
+    WriteTextFile(sourcePath, "#include \"HostNative.hpp\"\nedited source with different size");
     host.AssetPreparer().InvalidateNativeSourceObservations();
     const kb::script::ScriptRuntimeAssetPrepareResult sourceReprepared = host.AssetPreparer().PrepareSceneBehaviours(scene);
     kb::tests::Require(sourceReprepared.Succeeded() && std::filesystem::is_regular_file(buildMarker),
         "Script runtime host did not rebuild after a source edit at the next play boundary");
+
+    kb::tests::Require(std::filesystem::remove(buildMarker), "Script runtime host header build marker could not be cleared");
+    WriteTextFile(nestedHeaderPath, "#define KB_NATIVE_VALUE 2\n");
+    host.AssetPreparer().InvalidateNativeSourceObservations();
+    const kb::script::ScriptRuntimeAssetPrepareResult headerReprepared = host.AssetPreparer().PrepareSceneBehaviours(scene);
+    kb::tests::Require(headerReprepared.Succeeded() && std::filesystem::is_regular_file(buildMarker),
+        "Script runtime host did not rebuild after a transitive included header changed");
+    kb::tests::Require(std::filesystem::remove(buildMarker), "Script runtime host unchanged header build marker could not be cleared");
+    host.AssetPreparer().InvalidateNativeSourceObservations();
+    const kb::script::ScriptRuntimeAssetPrepareResult unchangedHeader = host.AssetPreparer().PrepareSceneBehaviours(scene);
+    kb::tests::Require(unchangedHeader.Succeeded() && !std::filesystem::exists(buildMarker),
+        "Unchanged native source dependencies must not rebuild the script");
 
     const std::filesystem::path rebuildMarker = projectRoot / "native_descriptor_rebuild.marker";
     WriteTextFile(assetsRoot / "Logic" / "HostNative.native",
@@ -15962,6 +15978,10 @@ end
 } // namespace
 
 namespace kb::tests {
+
+void RunScriptNativeHeaderReloadTest() {
+    RunScriptRuntimeHostNativeDescriptorBindingTest();
+}
 
 void RunScriptRuntimeTests() {
     RunNativeScriptRuntimeDispatchTest();

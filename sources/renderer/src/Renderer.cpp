@@ -201,11 +201,9 @@ void WriteRendererBreadcrumb(std::string_view category, std::string_view message
 // directly (see this ticket's own research). Called only when the caller's own desc did NOT
 // already supply an explicit override, so an editor/player caller's explicit per-submit
 // override still always wins - this is purely an ADDITIVE fallback, not a new precedence
-// rule. An unset (0) or unresolvable profile asset id honestly resolves to std::nullopt (no
-// override at all, falling through to defaultPostProcessSettings_ exactly as before this
-// ticket), never a crash - the same "unresolvable reference silently falls back" shape every
-// other renderer-consumed asset reference already follows.
-[[nodiscard]] std::optional<ScenePostProcessSettings> ResolveScenePostProcessProfile(const kb::scene::Scene& scene) {
+// rule. Zero means no profile; a nonzero id that cannot load is a configuration error.
+[[nodiscard]] std::optional<ScenePostProcessSettings> ResolveScenePostProcessProfile(
+    const kb::scene::Scene& scene, std::uint64_t& unavailableAssetId) {
     const std::uint64_t profileAssetId = kb::scene::ScenePostProcessAccess::ActiveProfile(scene);
     if (profileAssetId == 0U) {
         return std::nullopt;
@@ -214,6 +212,7 @@ void WriteRendererBreadcrumb(std::string_view category, std::string_view message
     const kb::assets::AssetHandle<ScenePostProcessSettings> handle =
         manager.Load<ScenePostProcessSettings>(kb::assets::AssetId{ profileAssetId });
     if (!handle.IsLoaded()) {
+        unavailableAssetId = profileAssetId;
         return std::nullopt;
     }
     return *handle;
@@ -827,6 +826,21 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         return false;
     }
 
+    // Resolve authored configuration before submitting any draw for this viewport.
+    std::uint64_t unavailableProfileAssetId = 0U;
+    const std::optional<ScenePostProcessSettings> resolvedPostProcessSettings =
+        desc.postProcessSettings.has_value() ? desc.postProcessSettings :
+            ResolveScenePostProcessProfile(scene, unavailableProfileAssetId);
+    if (unavailableProfileAssetId != 0U) {
+        lastSceneDiagnostics_.events.push_back(SceneRenderDiagnosticEvent{
+            .severity = SceneRenderDiagnosticSeverity::Error,
+            .kind = SceneRenderDiagnosticKind::PostProcessProfileUnavailable,
+            .postProcessProfileAssetId = unavailableProfileAssetId,
+        });
+        return false;
+    }
+    lastResolvedPostProcessSettings_ = resolvedPostProcessSettings;
+
     const std::uint32_t width = desc.target.viewport.extent.width;
     const std::uint32_t height = desc.target.viewport.extent.height;
     if (desc.screenUIEnabled) {
@@ -1303,13 +1317,6 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
     screenCapture_->Process(scene, desc, viewportPlan.viewIds, static_cast<std::uint32_t>(lastCompletedFrame_));
     std::optional<SceneRenderCamera> jitteredCamera{};
     const std::uint64_t frameIndex = static_cast<std::uint64_t>(lastCompletedFrame_) + 1ULL;
-    // LIB-142: an explicit per-submit override (desc.postProcessSettings) always wins, exactly
-    // as before this ticket; only when the caller supplied none do we fall back to the
-    // scene's own asset-based active PostProcessProfile, and only when that resolves to
-    // nothing does defaultPostProcessSettings_ apply (unchanged pre-LIB-142 behavior).
-    const std::optional<ScenePostProcessSettings> resolvedPostProcessSettings =
-        desc.postProcessSettings.has_value() ? desc.postProcessSettings : ResolveScenePostProcessProfile(scene);
-    lastResolvedPostProcessSettings_ = resolvedPostProcessSettings;
     const bool temporalAntiAliasingEnabled = desc.postProcessEnabled &&
         (resolvedPostProcessSettings.has_value()
                 ? resolvedPostProcessSettings->temporalAntiAliasingEnabled

@@ -1940,6 +1940,36 @@ void RunRendererAppliesScenePostProcessProfileTest() {
         "With neither an explicit submit override nor an active scene profile, the renderer must honestly resolve to no override, not stale state from a previous frame");
     renderer.EndFrame();
 
+    const auto expectUnavailable = [&](std::uint64_t assetId) {
+        kb::scene::ScenePostProcessAccess::SetActiveProfile(scene, assetId);
+        Require(renderer.BeginFrame(), "Unavailable post process profile frame did not begin");
+        const bool submitted = renderer.SubmitScene(scene, desc);
+        const auto& diagnostics = renderer.LastSceneDiagnostics();
+        Require(!submitted && diagnostics.HasErrors() &&
+                std::ranges::any_of(diagnostics.events, [assetId](const SceneRenderDiagnosticEvent& event) {
+                    return event.severity == SceneRenderDiagnosticSeverity::Error &&
+                        event.kind == SceneRenderDiagnosticKind::PostProcessProfileUnavailable &&
+                        event.postProcessProfileAssetId == assetId;
+                }),
+            "Unavailable active post process profile must fail with its own asset diagnostic");
+        renderer.EndFrame();
+    };
+    expectUnavailable(0x123456789ULL);
+    {
+        std::ofstream broken{root / "Broken.kbppfx", std::ios::trunc};
+        Require(broken.is_open(), "Post process profile renderer test could not write a broken profile");
+        broken << "bloomEnabled invalid\n";
+    }
+    Require(manager.DiscoverMountedAssets() >= 1U,
+        "Post process profile renderer test did not discover the broken profile");
+    const kb::assets::AssetMetadata* brokenMetadata = manager.Registry().FindByPath("/Game/Broken.kbppfx");
+    Require(brokenMetadata != nullptr, "Post process profile renderer test lost broken profile metadata");
+    expectUnavailable(brokenMetadata->id.value);
+    Require(renderer.BeginFrame(), "Explicit override after unavailable profile did not begin");
+    Require(renderer.SubmitScene(scene, overriddenDesc) && !renderer.LastSceneDiagnostics().HasErrors(),
+        "Explicit post process settings must remain usable when the active asset is unavailable");
+    renderer.EndFrame();
+
     renderer.Shutdown();
     std::filesystem::remove_all(root, error);
 }
@@ -5915,6 +5945,10 @@ void RunEditorCameraWireframesSubmitInHeadlessNoopTest() {
 }
 
 } // namespace
+
+void RunRendererPostProcessProfileDiagnosticTest() {
+    RunRendererAppliesScenePostProcessProfileTest();
+}
 
 void RunRendererDefaultSubmissionResultTest() {
     kb::scene::Scene scene;
