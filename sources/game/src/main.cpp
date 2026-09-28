@@ -55,6 +55,8 @@ struct GameOptions {
     bool fullscreen = false;
     bool uncapped = false;
     std::filesystem::path profilePath;
+    std::filesystem::path screenshotPath;
+    std::uint32_t screenshotFrame = 0U;
     // 0 runs until the player closes the window; a positive value bounds the
     // run so an automated check can drive the real executable to completion.
     std::uint32_t frameLimit = 0U;
@@ -152,6 +154,17 @@ struct GameFrameProfile {
             options.fullscreen = true;
         } else if (argument == L"--uncapped") {
             options.uncapped = true;
+        } else if (HasPrefix(argument, L"--screenshot-file=")) {
+            if (argument.size() == 18U) {
+                std::cerr << "kb_game: --screenshot-file requires a path\n";
+                return false;
+            }
+            options.screenshotPath = std::filesystem::path{std::wstring{argument.substr(18U)}};
+        } else if (HasPrefix(argument, L"--screenshot-frame=")) {
+            if (!ParseFrameLimit(argument.substr(19U), options.screenshotFrame)) {
+                std::cerr << "kb_game: --screenshot-frame expects a positive frame count\n";
+                return false;
+            }
         } else if (HasPrefix(argument, L"--profile-file=")) {
             if (argument.size() == 15U) {
                 std::cerr << "kb_game: --profile-file requires a path\n";
@@ -171,6 +184,18 @@ struct GameFrameProfile {
     if (!options.profilePath.empty() &&
         (options.frameLimit == 0U || options.frameLimit > 120'000U)) {
         std::cerr << "kb_game: --profile-file requires --frames=1..120000\n";
+        return false;
+    }
+    if (options.screenshotPath.empty() != (options.screenshotFrame == 0U) ||
+        (options.screenshotFrame != 0U &&
+            (options.frameLimit == 0U || options.screenshotFrame > options.frameLimit))) {
+        std::cerr << "kb_game: screenshot requires --screenshot-file, --screenshot-frame and --frames covering that frame\n";
+        return false;
+    }
+    if (!options.screenshotPath.empty() &&
+        (std::filesystem::exists(options.screenshotPath) ||
+            std::filesystem::exists(options.screenshotPath.string() + ".pending"))) {
+        std::cerr << "kb_game: screenshot destination must not already exist\n";
         return false;
     }
     return true;
@@ -358,6 +383,10 @@ int RunGame(const GameOptions& options) {
             renderStats.HasMissingResources() || renderStats.droppedInstanceCount != 0U;
         const auto profileAfterSubmit = !options.profilePath.empty()
             ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+        if (submitted && !renderErrors && renderedFrames + 1U == options.screenshotFrame) {
+            // Capture the final backbuffer, including display output and screen UI.
+            bgfx::requestScreenShot(BGFX_INVALID_HANDLE, options.screenshotPath.string().c_str());
+        }
         renderer.EndFrame();
         if (!options.profilePath.empty()) {
             const auto profileEnd = std::chrono::steady_clock::now();
@@ -437,6 +466,14 @@ int RunGame(const GameOptions& options) {
     kb::input::InputHaptics::UnregisterBackend(scene, hapticsBackend);
     renderer.ReleaseScene(scene);
     renderer.Shutdown();
+    if (!options.screenshotPath.empty()) {
+        std::error_code error;
+        const auto size = std::filesystem::file_size(options.screenshotPath, error);
+        if (renderedFrames < options.screenshotFrame || error || size == 0U) {
+            std::cerr << "kb_game: final screenshot was not written\n";
+            runtimeClean = false;
+        }
+    }
     if (!options.profilePath.empty()) {
         for (std::size_t index = 0U; index < profileRows.size(); ++index) {
             const GameFrameProfile& row = profileRows[index];
