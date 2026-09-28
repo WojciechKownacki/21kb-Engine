@@ -7240,38 +7240,64 @@ void RunExposureReadbackResetTest() {
     Require(renderer.Initialize(surface, &config), "Exposure reset test could not initialize bgfx");
     SceneExposureMeter meter;
     Require(meter.InitializeGpuResources(), "Exposure reset test could not initialize readback");
-    constexpr std::array<std::uint8_t, 4> pixel{128, 128, 128, 255};
+    constexpr std::array<std::uint8_t, 4> pixel{32, 32, 32, 255};
+    constexpr std::array<std::uint8_t, 4> brightPixel{224, 224, 224, 255};
     const bgfx::TextureHandle source = bgfx::createTexture2D(
         1, 1, false, 1, bgfx::TextureFormat::RGBA8, BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP,
         bgfx::copy(pixel.data(), static_cast<std::uint32_t>(pixel.size())));
-    Require(bgfx::isValid(source), "Exposure reset test could not create its HDR source");
+    const bgfx::TextureHandle brightSource = bgfx::createTexture2D(
+        1, 1, false, 1, bgfx::TextureFormat::RGBA8, BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP,
+        bgfx::copy(brightPixel.data(), static_cast<std::uint32_t>(brightPixel.size())));
+    Require(bgfx::isValid(source) && bgfx::isValid(brightSource),
+        "Exposure reset test could not create its HDR sources");
     SceneHdrExposureReadbackDesc desc{
         .viewId = 240, .hdrColor = source, .extent = {1, 1}, .completedFrame = bgfx::frame(),
     };
-    Require(meter.SubmitHdrReadback(desc).submitted, "Exposure reset test did not start a readback");
-    meter.Reset();
-    meter.Reset();
-    const auto pending = meter.SubmitHdrReadback(desc);
-    Require(!pending.submitted && !pending.hasValidSample && !pending.sampleAvailable,
-        "Exposure reset reused a destination while bgfx still owned it");
-    bool restarted = false;
-    bool sampled = false;
-    for (unsigned frame = 0; frame < 32 && !sampled; ++frame) {
+    Require(meter.SubmitHdrReadback(desc).submitted, "Exposure readback did not submit its first histogram");
+    bool firstSampled = false;
+    float darkLuminance = 0.0F;
+    for (unsigned frame = 1U; frame <= 32U && !firstSampled; ++frame) {
         desc.completedFrame = bgfx::frame();
         const auto result = meter.SubmitHdrReadback(desc);
-        if (!restarted && result.submitted) {
-            Require(!result.hasValidSample && !result.sampleAvailable,
-                "Exposure reset published the cancelled sample");
-            restarted = true;
-        } else if (result.sampleAvailable) {
-            Require(restarted && result.hasValidSample && result.meteredAverageLuminance > 0.1F,
-                "Exposure reset did not recover a valid new sample");
-            sampled = true;
+        if (result.sampleAvailable) {
+            Require(frame >= 3U && result.hasValidSample,
+                "Exposure readback returned a sample before deferred copy and read completed");
+            darkLuminance = result.meteredAverageLuminance;
+            firstSampled = true;
         }
     }
-    Require(restarted && sampled, "Exposure reset did not resume GPU metering");
+    Require(firstSampled && darkLuminance > 0.0F, "Exposure readback lost its first GPU sample");
+    for (unsigned restart = 0U; restart < 4U; ++restart) {
+        desc.hdrColor = restart % 2U == 0U ? brightSource : source;
+        meter.Reset();
+        meter.Reset();
+        const auto pending = meter.SubmitHdrReadback(desc);
+        Require(!pending.submitted && !pending.hasValidSample && !pending.sampleAvailable,
+            "Exposure reset reused a destination while bgfx still owned it");
+        bool restarted = false;
+        bool sampled = false;
+        for (unsigned frame = 0U; frame < 32U && !sampled; ++frame) {
+            desc.completedFrame = bgfx::frame();
+            const auto result = meter.SubmitHdrReadback(desc);
+            if (!restarted && result.submitted) {
+                Require(!result.hasValidSample && !result.sampleAvailable,
+                    "Exposure reset published a cancelled sample");
+                restarted = true;
+            } else if (result.sampleAvailable) {
+                Require(restarted && result.hasValidSample,
+                    "Exposure reset did not recover a valid new sample");
+                if (restart % 2U == 0U) {
+                    Require(result.meteredAverageLuminance > darkLuminance * 2.0F,
+                        "Exposure readback did not respond to the brighter HDR source");
+                }
+                sampled = true;
+            }
+        }
+        Require(restarted && sampled, "Exposure reset did not resume GPU metering");
+    }
     meter.ShutdownGpuResources();
     bgfx::destroy(source);
+    bgfx::destroy(brightSource);
     renderer.Shutdown();
 #endif
 }
