@@ -206,7 +206,7 @@ void SceneRenderer::SubmitMeshPass(
     const std::uint16_t width = static_cast<std::uint16_t>(viewportWidth > UINT16_MAX ? UINT16_MAX : viewportWidth);
     const std::uint16_t height = static_cast<std::uint16_t>(viewportHeight > UINT16_MAX ? UINT16_MAX : viewportHeight);
 
-    bgfx::setViewName(viewId, "KB Scene ECS");
+    bgfx::setViewName(viewId, MeshPassName(pass));
     bgfx::setViewMode(viewId, bgfx::ViewMode::Sequential);
     bgfx::setViewTransform(viewId, camera->view.data(), camera->projection.data());
     bgfx::setViewRect(viewId, 0, 0, width, height);

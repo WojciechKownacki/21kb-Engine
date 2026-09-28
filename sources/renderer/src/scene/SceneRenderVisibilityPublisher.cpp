@@ -1,11 +1,13 @@
 #include "scene/SceneRenderVisibilityPublisher.hpp"
 
+#include "engine/ecs/WorkerPool.hpp"
 #include "kb/render/resources/RenderResourceRegistry.hpp"
 #include "kb/render/scene/SceneRenderResourceMap.hpp"
 #include "scene/pipeline/MeshPipelineVisibility.hpp"
 
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <span>
 
@@ -40,7 +42,8 @@ void SceneRenderVisibilityPublisher::BuildFrame(
     const RenderResourceRegistry* resources,
     const SceneRenderResourceMap* resourceMap,
     kb::scene::SceneRenderVisibilityFrame& outFrame,
-    double* outSortMilliseconds) {
+    double* outSortMilliseconds,
+    kb::ecs::WorkerPool* workerPool) {
     const MeshPipelineFrustum frustum = MeshPipelineVisibility::BuildFrustum(camera);
     outFrame.frustumValid = frustum.valid;
     outFrame.viewportId = viewportId;
@@ -59,54 +62,64 @@ void SceneRenderVisibilityPublisher::BuildFrame(
     // camera: an all-bits cullingMask, so no instance is ever mask-rejected.
     const std::uint32_t cullingMask = camera != nullptr ? camera->cullingMask : 0xFFFFFFFFU;
 
-    outFrame.entries.clear();
-    outFrame.entries.reserve(renderScene.MeshProxyCount());
     const auto sortBegin = std::chrono::steady_clock::now();
     const std::span<const MeshRenderProxy* const> sortedProxies = renderScene.SortedMeshProxies();
     if (outSortMilliseconds != nullptr) {
         *outSortMilliseconds = std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - sortBegin).count();
     }
-    std::uint64_t cachedMeshAssetId = 0U;
-    bool cachedMeshBounds = false;
-    RenderBoundsSphere localBounds{};
-    RenderBoundsBox localBox{};
-    for (const MeshRenderProxy* proxy : sortedProxies) {
-        if (!cachedMeshBounds || cachedMeshAssetId != proxy->desc.meshAssetId) {
-            cachedMeshAssetId = proxy->desc.meshAssetId;
-            cachedMeshBounds = true;
-            localBounds = {};
-            localBox = {};
-            if (resources != nullptr && resourceMap != nullptr) {
-                const RenderMeshHandle meshHandle = resourceMap->ResolveMesh(cachedMeshAssetId);
-                const RenderMeshResource* meshResource = meshHandle.IsValid() ? resources->FindMesh(meshHandle) : nullptr;
-                if (meshResource != nullptr) {
-                    localBounds = meshResource->bounds;
-                    localBox = meshResource->boundsBox;
+    outFrame.entries.resize(sortedProxies.size());
+    const auto writeEntries = [&](std::size_t begin, std::size_t end) {
+        std::uint64_t cachedMeshAssetId = 0U;
+        bool cachedMeshBounds = false;
+        RenderBoundsSphere localBounds{};
+        RenderBoundsBox localBox{};
+        for (std::size_t index = begin; index < end; ++index) {
+            const MeshRenderProxy* proxy = sortedProxies[index];
+            if (!cachedMeshBounds || cachedMeshAssetId != proxy->desc.meshAssetId) {
+                cachedMeshAssetId = proxy->desc.meshAssetId;
+                cachedMeshBounds = true;
+                localBounds = {};
+                localBox = {};
+                if (resources != nullptr && resourceMap != nullptr) {
+                    const RenderMeshHandle meshHandle = resourceMap->ResolveMesh(cachedMeshAssetId);
+                    const RenderMeshResource* meshResource = meshHandle.IsValid() ? resources->FindMesh(meshHandle) : nullptr;
+                    if (meshResource != nullptr) {
+                        localBounds = meshResource->bounds;
+                        localBox = meshResource->boundsBox;
+                    }
                 }
             }
-        }
-        const RenderBoundsSphere worldBounds = MeshPipelineVisibility::TransformBounds(
-            proxy->desc.boundsOverride.IsValid() ? proxy->desc.boundsOverride : localBounds,
-            proxy->desc.model);
+            const RenderBoundsSphere worldBounds = MeshPipelineVisibility::TransformBounds(
+                proxy->desc.boundsOverride.IsValid() ? proxy->desc.boundsOverride : localBounds,
+                proxy->desc.model);
 
-        const bool passesMask = (proxy->desc.layer & cullingMask) != 0U;
-        const bool insideFrustum = MeshPipelineVisibility::IsInsideFrustum(frustum, worldBounds);
-        // The box is an addition, not a replacement: a mesh whose box the renderer could not
-        // resolve keeps a valid sphere and zero half-extents, and consumers fall back to it.
-        kb::math::Vec3 worldBoxHalfExtents{};
-        if (localBox.IsValid()) {
-            worldBoxHalfExtents = TransformBoxHalfExtents(localBox, proxy->desc.model);
+            const bool passesMask = (proxy->desc.layer & cullingMask) != 0U;
+            const bool insideFrustum = MeshPipelineVisibility::IsInsideFrustum(frustum, worldBounds);
+            // The box is an addition, not a replacement: a mesh whose box the renderer could not
+            // resolve keeps a valid sphere and zero half-extents, and consumers fall back to it.
+            kb::math::Vec3 worldBoxHalfExtents{};
+            if (localBox.IsValid()) {
+                worldBoxHalfExtents = TransformBoxHalfExtents(localBox, proxy->desc.model);
+            }
+            outFrame.entries[index] = kb::scene::SceneRenderVisibilityEntry{
+                .entityId = proxy->desc.entityId,
+                .worldBounds = kb::scene::SceneRenderBounds{
+                    .center = kb::math::Vec3{ worldBounds.center[0], worldBounds.center[1], worldBounds.center[2] },
+                    .radius = worldBounds.radius,
+                    .halfExtents = worldBoxHalfExtents,
+                },
+                .visible = proxy->desc.visible && passesMask && insideFrustum,
+            };
         }
-        outFrame.entries.push_back(kb::scene::SceneRenderVisibilityEntry{
-            .entityId = proxy->desc.entityId,
-            .worldBounds = kb::scene::SceneRenderBounds{
-                .center = kb::math::Vec3{ worldBounds.center[0], worldBounds.center[1], worldBounds.center[2] },
-                .radius = worldBounds.radius,
-                .halfExtents = worldBoxHalfExtents,
-            },
-            .visible = proxy->desc.visible && passesMask && insideFrustum,
-        });
+    };
+    if (workerPool != nullptr && workerPool->Running() && sortedProxies.size() >= ParallelThreshold) {
+        workerPool->ParallelForChunks(sortedProxies.size(), 4U * 1024U,
+            [&writeEntries](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk& chunk) {
+                writeEntries(chunk.begin, chunk.begin + chunk.count);
+            });
+    } else {
+        writeEntries(0U, sortedProxies.size());
     }
 
 }

@@ -208,8 +208,25 @@ RenderProxyId RenderScene::UpsertMesh(const MeshRenderProxyDesc& desc) {
 
     const RenderProxyDirtyFlag dirty = RenderSceneProxyDirtyTracker::DirtyForMeshChange(proxy.desc, desc);
     if (dirty != RenderProxyDirtyFlag::None) {
+        const bool sameGroupFlags = proxy.desc.visible && desc.visible &&
+            proxy.desc.morphDeformationEnabled == desc.morphDeformationEnabled &&
+            (proxy.desc.materialSlotOverrideCount != 0U) == (desc.materialSlotOverrideCount != 0U);
         proxy.desc = desc;
         proxy.dirty |= dirty;
+        if (!drawGroupsDirty_ && sameGroupFlags &&
+            proxy.instanceLocationVersion == drawGroupBuildVersion_ &&
+            proxy.instanceGroupIndex < drawGroups_.size()) {
+            SceneRenderDrawGroup& group = drawGroups_[proxy.instanceGroupIndex];
+            if (proxy.instanceIndexInGroup < group.instances.size() &&
+                group.instances[proxy.instanceIndexInGroup].entityId == desc.entityId) {
+                SceneRenderMeshInstance instance = RenderSceneMeshInstanceBuilder::Build(desc);
+                ApplySurfaceCasts(instance);
+                if (instance.meshAssetId == group.meshAssetId && instance.materialAssetId == group.materialAssetId) {
+                    group.instances[proxy.instanceIndexInGroup] = instance;
+                    return proxy.id;
+                }
+            }
+        }
         InvalidateDrawGroups();
     }
     return proxy.id;

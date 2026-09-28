@@ -5,11 +5,13 @@
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
+#include "engine/scene/SceneRuntime.hpp"
 #include "assets/AssetPathUtilities.hpp"
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneState.hpp"
 
 #include <algorithm>
+#include <stdexcept>
 
 namespace kb::scene {
 namespace {
@@ -119,18 +121,25 @@ std::uint64_t SceneLoadedContentService::Load(Scene& scene, const std::filesyste
         }
         state.loadedScenes.clear();
         state.activeLoadedSceneId = 0U;
-        // Persistent roots survive ClearSceneRoots, so RootEntities() after
-        // the load can contain BOTH the freshly instantiated document root
-        // and any persistent survivors from before — the survivors were
-        // already present in rootsBefore, so the one genuinely NEW root is
-        // whichever entity in the after-set was not in the before-set.
+        // Persistent survivors belong to the existing world, not the loaded document.
         const std::vector<SceneEntity> rootsAfter = scene.Hierarchy().RootEntities();
         SceneEntity newRoot{};
+        std::size_t newRootCount = 0U;
         for (const SceneEntity candidate : rootsAfter) {
             if (std::ranges::find(rootsBefore, candidate) == rootsBefore.end()) {
                 newRoot = candidate;
-                break;
+                ++newRootCount;
             }
+        }
+        if (newRootCount > 1U) {
+            newRoot = scene.Entities().CreateEntity(SceneObjectDesc{ .name = loaded.document.name });
+            for (const SceneEntity candidate : rootsAfter) {
+                if (std::ranges::find(rootsBefore, candidate) == rootsBefore.end() &&
+                    !scene.Hierarchy().SetParent(candidate, newRoot)) {
+                    throw std::runtime_error("Loaded scene root could not be assigned to its owner");
+                }
+            }
+            scene.Runtime().SynchronizeTransforms();
         }
         const std::uint64_t id = state.nextLoadedSceneId++;
         state.loadedScenes.push_back(SceneState::LoadedSceneRecord{

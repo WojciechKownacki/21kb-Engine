@@ -99,6 +99,7 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         output << "collider.friction=" << components.collider->friction << '\n';
         output << "collider.restitution=" << components.collider->restitution << '\n';
         output << "collider.layer=" << components.collider->layer << '\n';
+        output << "collider.meshAssetId=" << components.collider->meshAssetId << '\n';
     }
 
     output << "characterController=" << (components.characterController.has_value() ? 1 : 0) << '\n';

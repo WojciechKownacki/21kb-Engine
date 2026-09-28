@@ -170,17 +170,24 @@ void TestFrameWithoutCanvasTracksDynamicComponents() {
     kb::tests::Require(frame.elements.empty() && frame.viewportSize.x == 640.0F &&
         frame.viewportSize.y == 360.0F && !frame.refusal.HasValue(),
         "Orphan UI components must not create frame elements");
+    kb::tests::Require(scene.UI().Update(640.0F, 360.0F, {}, 0.016F) && scene.UI().Frame().elements.empty(),
+        "UI update without a canvas must publish an empty frame");
 
     scene.Components().UI().Set(canvasEntity, Rect(0.0F, 0.0F, 640.0F, 360.0F));
     scene.Components().UI().Set(canvasEntity, kb::scene::UICanvas{});
     kb::tests::Require(kb::scene::SceneUIQueries{scene}.BuildFrame(640.0F, 360.0F, frame) &&
         FindElement(frame, canvasEntity) != nullptr,
         "Adding a canvas after an empty frame must create visible UI");
+    kb::tests::Require(scene.UI().Update(640.0F, 360.0F, {}, 0.016F) &&
+        FindElement(scene.UI().Frame(), canvasEntity) != nullptr,
+        "UI update must observe a canvas added after an empty frame");
 
     scene.Components().UI().Remove<kb::scene::UICanvas>(canvasEntity);
     kb::tests::Require(kb::scene::SceneUIQueries{scene}.BuildFrame(640.0F, 360.0F, frame) &&
         frame.elements.empty() && !frame.refusal.HasValue(),
         "Removing the last canvas must clear a previously populated frame");
+    kb::tests::Require(scene.UI().Update(640.0F, 360.0F, {}, 0.016F) && scene.UI().Frame().elements.empty(),
+        "UI update must discard elements after removal of the last canvas");
 }
 
 void TestLayoutsAndFitters() {

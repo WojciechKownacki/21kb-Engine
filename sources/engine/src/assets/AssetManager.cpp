@@ -84,6 +84,7 @@ bool AssetManager::RegisterLoader(std::unique_ptr<IAssetLoader> loader) {
     }
     const bool registered = AssetLoaderRegistry::Register(loaders_, std::move(loader));
     if (registered) {
+        ++revision_;
         RestartAsyncLoads();
     }
     return registered;

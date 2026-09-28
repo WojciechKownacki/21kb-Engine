@@ -2,6 +2,8 @@
 
 #include "engine/assets/AssetImportService.hpp"
 #include "engine/assets/AssetId.hpp"
+#include "engine/assets/AssetRegistry.hpp"
+#include "engine/assets/TerrainAssetIO.hpp"
 #include "engine/assets/bake/AssetPackWriter.hpp"
 #include "engine/assets/bake/BakeTargetProfile.hpp"
 #include "engine/assets/bake/RuntimeAssetManifest.hpp"
@@ -15,8 +17,11 @@
 #include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
 #include "kb/render/resources/RenderMaterialGraphShaderArtifact.hpp"
+#include "kb/render/resources/RenderMeshAssetLoader.hpp"
+#include "kb/render/resources/RenderTerrainMeshBuilder.hpp"
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -391,6 +396,75 @@ void RuntimeAudioSourceMustBeDecodeReady() {
     }
 }
 
+void PackagedTerrainPreservesGeometryAndLayers() {
+    const auto profile = asset_bake::WindowsX64BakeTargetProfile();
+    const auto root = std::filesystem::temp_directory_path() /
+        ("21kb_runtime_terrain_roundtrip_" + std::to_string(
+            std::chrono::steady_clock::now().time_since_epoch().count()));
+    Require(std::filesystem::create_directory(root), "Could not create isolated terrain fixture directory");
+    const auto terrainPath = root / "terrain.kbterrain";
+    auto terrain = kb::assets::MakeFlatTerrainAsset(17, 16.0F);
+    terrain.heights[1] = 0.75F;
+    terrain.holes[80] = 1;
+    terrain.materialLayers = { {7U}, {8U} };
+    terrain.layerWeightWidth = terrain.layerWeightHeight = 17;
+    terrain.layerWeights.resize(17 * 17 * 4);
+    for (std::size_t i = 0; i < terrain.layerWeights.size(); i += 4) {
+        terrain.layerWeights[i] = 128;
+        terrain.layerWeights[i + 1] = 127;
+    }
+    std::string error;
+    Require(kb::assets::TerrainAssetIO::Save(terrainPath, terrain, &error), "Could not save terrain fixture");
+    const auto expected = RenderTerrainMeshBuilder::Build(terrain);
+    Require(expected.has_value(), "Terrain fixture could not build its render geometry");
+    const auto packPath = root / "terrain.kbpack";
+    asset_bake::AssetPackWriter writer{packPath, profile};
+    auto manifest = BaseManifest(profile, "/Game/Main.21kbscene", "TerrainRoundTrip");
+    AppendSourceAsset(manifest, writer, profile, kb::assets::MakeAssetId("/Game/Main.21kbscene:Scene"),
+        "Scene", "/Game/Main.21kbscene", ".21kbscene", SceneBytes(root, "Main"));
+    const auto id = kb::assets::MakeAssetId("/Game/Terrain.kbterrain:RenderMesh");
+    const auto badId = kb::assets::MakeAssetId("/Game/Broken.kbterrain:RenderMesh");
+    AppendSourceAsset(manifest, writer, profile, id, "RenderMesh", "/Game/Terrain.kbterrain", ".kbterrain", FileBytes(terrainPath));
+    AppendSourceAsset(manifest, writer, profile, badId, "RenderMesh", "/Game/Broken.kbterrain", ".kbterrain", {'x'});
+    const auto pack = FinishAndMount(std::move(manifest), writer, profile, packPath);
+    kb::assets::AssetMetadata metadata{ .id = id, .type = "RenderMesh", .sourceExtension = ".kbterrain" };
+    RenderMeshAssetLoader loader;
+    const kb::assets::AssetRegistry registry;
+    const kb::assets::AssetMetadata sourceMetadata{
+        .id = id, .type = "RenderMesh", .physicalPath = terrainPath, .sourceExtension = ".kbterrain" };
+    Require(loader.DiscoverDependencies(sourceMetadata, registry) ==
+            std::vector<kb::assets::AssetId>{{7U}, {8U}},
+        "Terrain material layers must enter the runtime dependency closure even when not yet registered");
+    const auto loaded = loader.Load({ .metadata = metadata, .runtimePack = pack });
+    Require(loaded.Succeeded(), "Terrain must load from its package without a source path");
+    const auto mesh = std::static_pointer_cast<RenderMeshAssetData>(loaded.asset);
+    Require(mesh->indices32 == expected->indices32 && mesh->indices16 == expected->indices16 &&
+            mesh->tangentVertices.size() == expected->tangentVertices.size() &&
+            mesh->sections.size() == expected->sections.size() && mesh->lods.size() == expected->lods.size() &&
+            mesh->terrainLayerWeights == expected->terrainLayerWeights && mesh->terrainLayerCount == expected->terrainLayerCount,
+        "Packaged terrain changed holes, geometry counts, sections or authored LODs");
+    for (std::size_t i = 0; i < mesh->tangentVertices.size(); ++i) {
+        const auto& a = mesh->tangentVertices[i];
+        const auto& b = expected->tangentVertices[i];
+        Require(a.x == b.x && a.y == b.y && a.z == b.z && a.nx == b.nx && a.ny == b.ny && a.nz == b.nz,
+            "Packaged terrain changed its heights or normals");
+    }
+    for (std::size_t i = 0; i < mesh->sections.size(); ++i) {
+        Require(mesh->sections[i].terrainLayerIndex == expected->sections[i].terrainLayerIndex &&
+                mesh->sections[i].materialSlot == expected->sections[i].materialSlot,
+            "Packaged terrain lost its layer mapping");
+    }
+    metadata.id = badId;
+    Require(!loader.Load({ .metadata = metadata, .resolvedPath = terrainPath, .runtimePack = pack }).Succeeded(),
+        "Malformed packaged terrain must fail even when valid loose source exists");
+    pack->Unmount();
+    std::filesystem::remove(packPath);
+    std::filesystem::remove(terrainPath);
+    std::filesystem::remove(root / "Main.21kbscene");
+    std::filesystem::remove(root / "Main.meta");
+    std::filesystem::remove(root);
+}
+
 void RuntimeLoadableSourceMustDecodeSemantically() {
     const asset_bake::BakeTargetProfile profile = asset_bake::WindowsX64BakeTargetProfile();
     const std::filesystem::path root =
@@ -577,6 +651,7 @@ void VertexDomainGraphMustContainCompleteVertexShaderMatrix() {
 } // namespace
 
 void RunRuntimeAssetPackValidationTests() {
+    PackagedTerrainPreservesGeometryAndLayers();
     RuntimeLoadableSourceMustDecodeSemantically();
     RuntimeAudioSourceMustBeDecodeReady();
     VertexDomainGraphMustContainCompleteVertexShaderMatrix();

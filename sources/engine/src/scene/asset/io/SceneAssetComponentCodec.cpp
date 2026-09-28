@@ -171,7 +171,7 @@ bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::
     }
     if ((componentBits & ColliderBit) != 0U) {
         ColliderComponent collider;
-        if (!SceneAssetPhysicsComponentCodec::ReadCollider(input, collider)) {
+        if (!SceneAssetPhysicsComponentCodec::ReadCollider(input, fileVersion, collider)) {
             return false;
         }
         output.collider = collider;

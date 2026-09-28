@@ -45,7 +45,7 @@ struct SceneDocument {
     //      animation, image fill, localized and fitted text, soft masks, radio groups, sprite-swap
     //      states, tooltips, drag and drop, event targets, slider and progress widgets, elastic and
     //      snapping scroll views, and input content types with placeholders.
-    static constexpr std::uint32_t CurrentFileVersion = 39U;
+    static constexpr std::uint32_t CurrentFileVersion = 40U;
 
     std::uint32_t fileVersion = CurrentFileVersion;
     std::string guid;

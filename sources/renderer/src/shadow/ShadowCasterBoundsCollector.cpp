@@ -66,22 +66,41 @@ namespace {
 ShadowCasterBounds ShadowCasterBoundsCollector::Collect(
     const RenderScene& renderScene,
     const RenderResourceRegistry& resources,
-    const SceneRenderResourceMap& resourceMap) noexcept {
+    const SceneRenderResourceMap& resourceMap,
+    std::uint32_t cameraCullingMask,
+    const std::array<float, 16>* focusView,
+    float focusHalfExtent) noexcept {
     ShadowCasterBounds result{};
     for (const auto& [entityId, proxy] : renderScene.MeshProxies()) {
         static_cast<void>(entityId);
         const MeshRenderProxyDesc& mesh = proxy.desc;
-        if (!mesh.visible || !mesh.castsShadow) {
+        if (!mesh.visible || (!mesh.castsShadow && !mesh.receivesShadow) || (mesh.layer & cameraCullingMask) == 0U) {
             continue;
         }
 
-        RenderBoundsSphere localBounds{};
-        const RenderMeshHandle meshHandle = resourceMap.ResolveMesh(mesh.meshAssetId);
-        if (const RenderMeshResource* meshResource = resources.FindMesh(meshHandle); meshResource != nullptr) {
-            localBounds = meshResource->bounds;
+        RenderBoundsSphere localBounds = mesh.boundsOverride;
+        if (!localBounds.IsValid()) {
+            const RenderMeshHandle meshHandle = resourceMap.ResolveMesh(mesh.meshAssetId);
+            if (const RenderMeshResource* meshResource = resources.FindMesh(meshHandle); meshResource != nullptr) {
+                localBounds = meshResource->bounds;
+            }
         }
-        result.bounds = MergeBounds(result.bounds, TransformBoundsForShadow(localBounds, mesh.model));
-        ++result.casterCount;
+        const auto worldBounds = TransformBoundsForShadow(localBounds, mesh.model);
+        result.bounds = MergeBounds(result.bounds, worldBounds);
+        result.casterCount += mesh.castsShadow ? 1U : 0U;
+        if (focusView != nullptr) {
+            const auto& view = *focusView;
+            const auto& center = worldBounds.center;
+            const float x = view[0] * center[0] + view[4] * center[1] + view[8] * center[2] + view[12];
+            const float y = view[1] * center[0] + view[5] * center[1] + view[9] * center[2] + view[13];
+            if (std::abs(x) <= focusHalfExtent + worldBounds.radius &&
+                std::abs(y) <= focusHalfExtent + worldBounds.radius) {
+                const float z = view[2] * center[0] + view[6] * center[1] + view[10] * center[2] + view[14];
+                result.focusedDepthMinimum = std::min(result.focusedDepthMinimum, z - worldBounds.radius);
+                result.focusedDepthMaximum = std::max(result.focusedDepthMaximum, z + worldBounds.radius);
+                result.focusedCasterCount += mesh.castsShadow ? 1U : 0U;
+            }
+        }
     }
     return result;
 }

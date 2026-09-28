@@ -375,13 +375,37 @@ std::vector<std::string> RenderMeshAssetLoader::BakedAssetTypes() const {
     return { std::string{ kb::render::bake::kMeshBakedAssetTypeId } };
 }
 
+std::vector<kb::assets::AssetId> RenderMeshAssetLoader::DiscoverDependencies(
+    const kb::assets::AssetMetadata& metadata,
+    const kb::assets::AssetRegistry&) const {
+    const auto extension = metadata.sourceExtension.empty()
+        ? metadata.physicalPath.extension().string() : metadata.sourceExtension;
+    if (LowerExtensionText(extension) != kb::assets::kTerrainAssetExtension) return {};
+    const auto terrain = kb::assets::TerrainAssetIO::Load(metadata.physicalPath);
+    if (!terrain) return {};
+    std::vector<kb::assets::AssetId> dependencies;
+    dependencies.reserve(terrain->materialLayers.size());
+    for (const auto& layer : terrain->materialLayers) {
+        const kb::assets::AssetId id{layer.materialAssetId};
+        if (id.IsValid() && std::ranges::find(dependencies, id) == dependencies.end()) {
+            dependencies.push_back(id);
+        }
+    }
+    return dependencies;
+}
+
 namespace {
 
 [[nodiscard]] kb::assets::AssetLoadResult LoadRenderMeshAsset(const kb::assets::AssetLoadRequest& request) {
     std::optional<RenderMeshAssetData> mesh;
     std::string packagedError;
     const std::string extension = LowerExtensionText(request.SourceExtension());
-    if (request.IsPackaged()) {
+    if (extension == kb::assets::kTerrainAssetExtension) {
+        std::vector<std::uint8_t> bytes;
+        if (!request.ReadSourceBytes(bytes, packagedError)) return { {}, std::move(packagedError) };
+        const auto terrain = kb::assets::TerrainAssetIO::Load(bytes, &packagedError);
+        if (terrain) mesh = RenderTerrainMeshBuilder::Build(*terrain);
+    } else if (request.IsPackaged()) {
         mesh = LoadBakedMeshPayload(request, packagedError);
     } else if (extension == kb::assets::bake::kAssetPackFileExtension) {
         mesh = LoadBakedMeshPack(request.resolvedPath);
@@ -389,11 +413,7 @@ namespace {
         mesh = LoadImportedMesh(request);
     } else if (request.HasSourceBytes()) {
         const std::span<const std::uint8_t> source = *request.sourceBytes;
-        if (extension == ".kbterrain") {
-            const std::optional<kb::assets::TerrainAsset> terrain =
-                kb::assets::TerrainAssetIO::Load(source);
-            if (terrain.has_value()) mesh = RenderTerrainMeshBuilder::Build(*terrain);
-        } else if (extension == ".gltf" || extension == ".glb") {
+        if (extension == ".gltf" || extension == ".glb") {
             mesh = RenderMeshAssetBuilder::LoadGltf(source, request.resolvedPath);
         } else if (extension == ".fbx") {
             const auto bytes = std::span<const std::byte>{
@@ -404,10 +424,7 @@ namespace {
             mesh = RenderMeshAssetBuilder::LoadObj(input);
         }
     } else {
-        if (extension == ".kbterrain") {
-            const std::optional<kb::assets::TerrainAsset> terrain = kb::assets::TerrainAssetIO::Load(request.resolvedPath);
-            if (terrain.has_value()) mesh = RenderTerrainMeshBuilder::Build(*terrain);
-        } else if (extension == ".gltf" || extension == ".glb") {
+        if (extension == ".gltf" || extension == ".glb") {
             mesh = RenderMeshAssetBuilder::LoadGltf(request.resolvedPath);
         } else if (extension == ".fbx") {
             mesh = RenderMeshAssetBuilder::LoadFbx(request.resolvedPath);

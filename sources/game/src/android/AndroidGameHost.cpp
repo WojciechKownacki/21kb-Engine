@@ -650,8 +650,12 @@ private:
         SetImeVisible(focused_ && scene_->UI().HasFocusedTextInput());
         FinalizeInputFrame();
         if (renderer_.BeginFrame()) {
-            renderer_.SubmitScene(*scene_);
+            const bool submitted = renderer_.SubmitScene(*scene_);
             renderer_.EndFrame();
+            if (!submitted) {
+                LogError("renderer could not submit the scene");
+                return;
+            }
             if (!firstFrameReported_) {
                 std::ostringstream message;
                 message << "profile=" << targetProfileId_ << " first-frame=rendered";

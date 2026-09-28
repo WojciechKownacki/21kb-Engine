@@ -1837,9 +1837,7 @@ public:
         const std::size_t tableIndex = FindOrCreateTable(types);
         ArchetypeTable& table = tables_[tableIndex];
         EnsureChunkCommitBudget(table.NewChunkAcquiresForAppend(1U));
-        if (freeEntityIndices_.empty()) {
-            freeEntityIndices_.reserve(1U);
-        }
+        freeEntityIndices_.reserve(freeEntityIndices_.size() + 1U);
         const Entity entity = AllocateEntity();
         bool rowAdded = false;
         EntityLocation location{};
@@ -1883,16 +1881,17 @@ public:
         EnsureChunkCommitBudget(tables_[tableIndex].NewChunkAcquiresForAppend(count));
         const std::size_t originalTableLiveEntities = tables_[tableIndex].LiveEntities();
         const std::size_t originalRecordCount = records_.size();
-        const std::size_t reusedCount = std::min(count, freeEntityIndices_.size());
         AllocateEntities(entities, count);
         try {
             AppendEntitiesToTable(tableIndex, entities, components, true);
         } catch (...) {
             tables_[tableIndex].RollbackAppendedRows(originalTableLiveEntities);
-            for (std::size_t index = 0; index < reusedCount; ++index) {
-                const std::uint32_t recordIndex = EntityIndex(entities[index]);
-                records_[recordIndex].alive = false;
-                freeEntityIndices_.push_back(recordIndex);
+            for (Entity entity : entities) {
+                const std::uint32_t recordIndex = EntityIndex(entity);
+                if (recordIndex < originalRecordCount) {
+                    records_[recordIndex].alive = false;
+                    freeEntityIndices_.push_back(recordIndex);
+                }
             }
             records_.resize(originalRecordCount);
             liveEntities_ -= count;
@@ -1915,8 +1914,7 @@ public:
         }
 
         const std::vector<NativeComponentType> types = NormalizeTypes(components);
-        const std::optional<std::uint32_t> existingExternalRecord = LookupExternalSlot(entity.Id());
-        if (existingExternalRecord.has_value() && *existingExternalRecord < records_.size() && records_[*existingExternalRecord].alive) {
+        if (ResolveAliveEntity(StripEntityGeneration(entity)).IsValid()) {
             throw std::invalid_argument("Native ECS cannot adopt an already live entity");
         }
 
@@ -1972,6 +1970,9 @@ public:
             if (!entity.IsValid() || EntityIndex(entity) == kInvalidEntityIndex) {
                 throw std::invalid_argument("Native ECS cannot bulk adopt invalid, duplicate, or already live entities");
             }
+            if (ResolveAliveEntity(StripEntityGeneration(entity)).IsValid()) {
+                throw std::invalid_argument("Native ECS cannot bulk adopt an already live entity index");
+            }
             needsStrippedExternalSlots = needsStrippedExternalSlots || StripEntityGeneration(entity) != entity.Id();
             contiguousIds = contiguousIds && entity.Id() == expectedEntityId;
             ++expectedEntityId;
@@ -1981,10 +1982,10 @@ public:
             previousEntityId = entity.Id();
             hasPreviousEntityId = true;
         }
-        if (!strictlyIncreasingIds) {
+        if (!strictlyIncreasingIds || needsStrippedExternalSlots) {
             auto& entityIds = ResetEntityIds(entities.size());
             for (Entity entity : entities) {
-                entityIds.push_back(entity.Id());
+                entityIds.push_back(StripEntityGeneration(entity));
             }
             std::sort(entityIds.begin(), entityIds.end());
             if (std::adjacent_find(entityIds.begin(), entityIds.end()) != entityIds.end()) {
@@ -2006,19 +2007,6 @@ public:
         const bool registerExternalRange = strictlyIncreasingIds && contiguousIds && !needsStrippedExternalSlots &&
             (reusableExternalRangeIndex.has_value() || !ExternalRangeOverlaps(rangeFirstId, rangeLastIdExclusive));
 
-        const bool skipExistingExternalLookup = entitySlots_.empty() && externalRecordRanges_.empty();
-        const bool adoptingDeadReusableRange = reusableExternalRangeIndex.has_value() && strictlyIncreasingIds && contiguousIds &&
-            !needsStrippedExternalSlots && entitySlots_.empty() && strippedEntitySlots_.empty();
-        if (!skipExistingExternalLookup && !adoptingDeadReusableRange) {
-            for (Entity entity : entities) {
-                const std::optional<std::uint32_t> existingExternalRecord = LookupExternalSlot(entity.Id());
-                const bool existingExternalAlive =
-                    existingExternalRecord.has_value() && *existingExternalRecord < records_.size() && records_[*existingExternalRecord].alive;
-                if (existingExternalAlive) {
-                    throw std::invalid_argument("Native ECS cannot bulk adopt invalid, duplicate, or already live entities");
-                }
-            }
-        }
         if (registerExternalRange) {
             externalRecordRanges_.reserve(externalRecordRanges_.size() + 1U);
         } else {
@@ -2278,8 +2266,8 @@ public:
         const std::uint32_t generatedIndex = EntityIndex(entity);
         if (generatedIndex != kInvalidEntityIndex && generatedIndex < records_.size()) {
             const EntityRecord& record = records_[generatedIndex];
-            if (record.ownsGeneratedId) {
-                return record.alive && record.entity == entity && record.generation == EntityGeneration(entity);
+            if (record.ownsGeneratedId && record.alive && record.entity == entity && record.generation == EntityGeneration(entity)) {
+                return true;
             }
         }
 
@@ -3262,9 +3250,12 @@ private:
     }
 
     [[nodiscard]] Entity AllocateEntity() {
-        if (!freeEntityIndices_.empty()) {
-            const std::uint32_t index = freeEntityIndices_.back();
-            freeEntityIndices_.pop_back();
+        for (std::size_t offset = freeEntityIndices_.size(); offset > 0U; --offset) {
+            const std::uint32_t index = freeEntityIndices_[offset - 1U];
+            if (ResolveAliveEntity(PackEntity(index, 0U).Id()).IsValid()) {
+                continue;
+            }
+            freeEntityIndices_.erase(freeEntityIndices_.begin() + static_cast<std::ptrdiff_t>(offset - 1U));
             EntityRecord& record = records_[index];
             record.alive = true;
             record.ownsGeneratedId = true;
@@ -3273,8 +3264,14 @@ private:
             return record.entity;
         }
 
-        if (records_.size() >= static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
-            throw std::runtime_error("Native ECS entity capacity exceeded");
+        for (;;) {
+            if (records_.size() > std::numeric_limits<std::uint32_t>::max() - kGeneratedEntityIndexBase) {
+                throw std::runtime_error("Native ECS entity capacity exceeded");
+            }
+            if (!ResolveAliveEntity(PackEntity(static_cast<std::uint32_t>(records_.size()), 0U).Id()).IsValid()) {
+                break;
+            }
+            records_.push_back(EntityRecord{});
         }
         const std::uint32_t index = static_cast<std::uint32_t>(records_.size());
         Entity entity = PackEntity(index, 0U);
@@ -3294,9 +3291,35 @@ private:
         }
 
         entities.clear();
+        if (!entitySlots_.empty() || !externalRecordRanges_.empty() || !strippedEntitySlots_.empty()) {
+            const std::size_t originalRecordCount = records_.size();
+            const std::size_t originalLiveCount = liveEntities_;
+            auto originalFreeIndices = freeEntityIndices_;
+            entities.reserve(count);
+            try {
+                for (std::size_t index = 0; index < count; ++index) {
+                    entities.push_back(AllocateEntity());
+                }
+            } catch (...) {
+                for (Entity entity : entities) {
+                    records_[EntityIndex(entity)].alive = false;
+                }
+                records_.resize(originalRecordCount);
+                freeEntityIndices_ = std::move(originalFreeIndices);
+                liveEntities_ = originalLiveCount;
+                entities.clear();
+                throw;
+            }
+            const auto firstNew = std::find_if(entities.begin(), entities.end(), [originalRecordCount](Entity entity) {
+                return EntityIndex(entity) >= originalRecordCount;
+            });
+            std::reverse(entities.begin(), firstNew);
+            return;
+        }
         const std::size_t reusedCount = std::min(count, freeEntityIndices_.size());
         const std::size_t remainingCount = count - reusedCount;
-        if (remainingCount > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max()) - records_.size()) {
+        constexpr std::size_t maxGeneratedRecords = std::numeric_limits<std::uint32_t>::max() - kGeneratedEntityIndexBase + 1U;
+        if (records_.size() > maxGeneratedRecords || remainingCount > maxGeneratedRecords - records_.size()) {
             throw std::runtime_error("Native ECS entity capacity exceeded");
         }
         entities.reserve(count);
@@ -3483,7 +3506,8 @@ private:
 
     [[nodiscard]] std::uint32_t RecordIndexUnchecked(Entity entity) const {
         const std::uint32_t generatedIndex = EntityIndex(entity);
-        if (generatedIndex != kInvalidEntityIndex && generatedIndex < records_.size() && records_[generatedIndex].ownsGeneratedId) {
+        if (generatedIndex != kInvalidEntityIndex && generatedIndex < records_.size() && records_[generatedIndex].ownsGeneratedId &&
+            records_[generatedIndex].alive && records_[generatedIndex].entity == entity) {
             return generatedIndex;
         }
 

@@ -419,7 +419,6 @@ void Renderer::Shutdown() {
     particleRenderSynchronizer_.reset();
     if (screenCapture_ != nullptr) {
         screenCapture_->Shutdown();
-        screenCapture_.reset();
     }
     if (finalCompositePass_ != nullptr) {
         finalCompositePass_->Shutdown();
@@ -442,6 +441,7 @@ void Renderer::Shutdown() {
         context_->Shutdown();
         context_.reset();
     }
+    screenCapture_.reset();
     ShaderLoader::ClearBinaryProvider(shaderBinaryProvider_);
 }
 
@@ -500,22 +500,29 @@ void Renderer::SubmitClear(std::uint32_t rgba, float depth, std::uint8_t stencil
     bgfx::touch(ViewId::Scene3D);
 }
 
-void Renderer::SubmitScene(const kb::scene::Scene& scene) {
+bool Renderer::SubmitScene(const kb::scene::Scene& scene) {
+    return SubmitRuntimeScene(scene, {});
+}
+
+bool Renderer::SubmitRuntimeScene(const kb::scene::Scene& scene, const RuntimeSceneSynchronization& synchronization) {
+    if (!frameActive_) {
+        return false;
+    }
     const RenderExtent extent{ BackbufferWidth(), BackbufferHeight() };
     if (!extent.IsValid()) {
-        return;
+        return false;
     }
     if (!defaultSceneTarget_.Ensure(SceneRenderTargetDesc{
             .extent = extent,
             .colorPolicy = SceneColorFormatPolicy::Auto,
         })) {
-        return;
+        return false;
     }
     if (!defaultPostProcessTargets_.Ensure(ScenePostProcessTargetsDesc{
             .extent = extent,
             .colorPolicy = SceneColorFormatPolicy::Auto,
         })) {
-        return;
+        return false;
     }
 
     const RenderSceneSubmitDesc desc{
@@ -539,8 +546,11 @@ void Renderer::SubmitScene(const kb::scene::Scene& scene) {
         },
         .drawBudget = defaultSceneDrawBudget_,
         .lightingConfig = defaultSceneLightingConfig_,
+        .dirtySceneEntityIds = synchronization.dirtySceneEntityIds,
+        .synchronizeScene = synchronization.fullSync,
+        .transformAffineSync = !synchronization.fullSync,
     };
-    (void)SubmitScene(scene, desc);
+    return SubmitScene(scene, desc);
 }
 
 bool Renderer::SubmitScene(const kb::scene::Scene& scene, const RenderSceneSubmitDesc& desc) {
@@ -1253,6 +1263,14 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
     // during its own submit. Mesh resources were ensured above, so bounds resolve this same
     // frame; when the same scene is submitted to several viewports, the last submit in the
     // frame's deterministic plan order wins (see SceneRenderFeedback.hpp's contract).
+    if (renderScene.MeshProxyCount() >= SceneRenderVisibilityPublisher::ParallelThreshold) {
+        if (renderSyncWorkerPool_ == nullptr) {
+            renderSyncWorkerPool_ = std::make_unique<kb::ecs::WorkerPool>(kb::ecs::WorkerPoolConfig{});
+        }
+        if (!renderSyncWorkerPool_->Running()) {
+            renderSyncWorkerPool_->Start(kb::ecs::WorkerPoolConfig{});
+        }
+    }
     const auto visibilityBuildBegin = std::chrono::steady_clock::now();
     SceneRenderVisibilityPublisher::BuildFrame(
         renderScene,
@@ -1264,7 +1282,8 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         &sceneRenderer_->Resources(),
         &sceneRenderer_->ResourceMap(),
         sceneRenderVisibilityScratch_,
-        &lastSceneVisibilitySortMilliseconds_);
+        &lastSceneVisibilitySortMilliseconds_,
+        renderSyncWorkerPool_.get());
     const auto visibilityPublishBegin = std::chrono::steady_clock::now();
     lastSceneVisibilityBuildMilliseconds_ = std::chrono::duration<double, std::milli>(
         visibilityPublishBegin - visibilityBuildBegin).count();
@@ -1597,7 +1616,8 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
                 viewportPlan,
                 renderScene,
                 effectiveLightingConfig,
-                lastCompletedFrame_));
+                lastCompletedFrame_,
+                frameDeltaSeconds_));
             WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport exposure submit end");
 
             TemporalViewportState& temporalState = TemporalStateFor(desc.target.viewport.id, desc.target.viewport.viewportIndex);
@@ -2020,7 +2040,7 @@ void Renderer::SetGpuDrivenRuntimeDispatchEnabled(bool enabled) noexcept {
     const RendererCapabilityReport& capabilityReport = context_->CapabilityReport();
     sceneRenderer_->SetGpuDrivenRuntimeSupport(SceneGpuDrivenFeatureSupport{
         .computeCullingSupported = capabilityReport.gpuDrivenComputeCullingSupported,
-        .indirectDrawSupported = enabled ? false : capabilityReport.gpuDrivenIndirectSubmitSupported,
+        .indirectDrawSupported = capabilityReport.gpuDrivenIndirectSubmitSupported,
         .meshletSubmitSupported = capabilityReport.gpuDrivenMeshletSubmitSupported,
         .runtimeGpuDispatchSupported = enabled && capabilityReport.gpuDrivenComputeCullingSupported,
     });

@@ -62,6 +62,8 @@ const char* InspectorComponentLabelFormatter::ColliderShapeName(kb::scene::Colli
         return "Sphere";
     case kb::scene::ColliderShape::Capsule:
         return "Capsule";
+    case kb::scene::ColliderShape::Mesh:
+        return "Mesh";
     }
     return "Unknown";
 }

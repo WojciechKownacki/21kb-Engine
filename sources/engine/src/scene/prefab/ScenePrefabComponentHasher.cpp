@@ -77,6 +77,7 @@ void ScenePrefabComponentHasher::Mix(std::uint64_t& hash, const ScenePrefabNodeC
         ScenePrefabHashBuilder::MixFloat(hash, components.collider->friction);
         ScenePrefabHashBuilder::MixFloat(hash, components.collider->restitution);
         ScenePrefabHashBuilder::Mix(hash, components.collider->layer);
+        if (components.collider->meshAssetId != 0) ScenePrefabHashBuilder::Mix(hash, components.collider->meshAssetId);
     }
 
     ScenePrefabHashBuilder::Mix(hash, components.characterController.has_value() ? 1U : 0U);

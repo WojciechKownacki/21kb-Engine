@@ -96,6 +96,7 @@ MeshDrawCommand& MeshPipelineCommandBuilder::WritableCommand(MeshPipelineBuildRe
 void MeshPipelineCommandBuilder::FinalizeCommands(MeshPipelineBuildResult& result, MeshPassType pass, std::size_t commandCount) noexcept {
     result.commands.resize(commandCount);
     for (MeshDrawCommand& command : result.commands) {
+        result.stats.meshPipelineScratchInstanceCapacity += static_cast<std::uint32_t>(command.instances.capacity());
         command.pass = pass;
         command.depthBucket = command.instances.empty()
             ? 0U

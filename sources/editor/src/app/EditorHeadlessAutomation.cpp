@@ -265,18 +265,21 @@ FindInspectorHit(
 
 [[nodiscard]] bool ValidateCapturedImage(
     const std::filesystem::path& path,
-    bool requireNonUniform) {
+    bool requireNonUniform, std::uint32_t expectedWidth = 0U, std::uint32_t expectedHeight = 0U) {
     if (!std::filesystem::is_regular_file(path)) {
         return false;
     }
-    if (!requireNonUniform) {
+    if (!requireNonUniform && expectedWidth == 0U && expectedHeight == 0U) {
         return true;
     }
 
     HeroIconGdiplusRuntime::EnsureStarted();
     Gdiplus::Bitmap image(path.wstring().c_str());
     bool valid = image.GetLastStatus() == Gdiplus::Ok &&
-        image.GetWidth() > 0U && image.GetHeight() > 0U;
+        image.GetWidth() > 0U && image.GetHeight() > 0U &&
+        (expectedWidth == 0U || image.GetWidth() == expectedWidth) &&
+        (expectedHeight == 0U || image.GetHeight() == expectedHeight);
+    if (!requireNonUniform) return valid;
     Gdiplus::Color first{};
     bool firstSet = false;
     bool varied = false;
@@ -566,10 +569,17 @@ struct EditorHeadlessAutomation::Impl {
         viewport.Configure(
             GetModuleHandleW(nullptr), window, &backendSettings);
         viewport.SetErrorReporter(
-            [&sceneContext](std::string_view message) {
+            [this, &sceneContext](std::string_view message) {
+                renderFailed = true;
                 sceneContext.Console().Error(
                     "Renderer", std::string{ message });
             });
+        viewport.SetAaTraceReporter([this](std::string_view message) {
+            if (message.starts_with("AA state")) {
+                runtimeCompositeActive = message.find("finalComposite=1") != std::string_view::npos &&
+                    message.find("postProcess=1") != std::string_view::npos;
+            }
+        });
         sceneContext.SetRenderSceneReleaseHandler([this](const kb::scene::Scene& scene) { viewport.ReleaseScene(scene); });
         sceneContext.SetParticlePreviewReleaseHandler([this](const kb::scene::Scene& scene) { viewport.ReleaseScene(scene); });
     }
@@ -594,6 +604,31 @@ struct EditorHeadlessAutomation::Impl {
         std::uint64_t viewportKey,
         bool editorOverlaysEnabled) {
         if (window == nullptr) return false;
+        if (!editorOverlaysEnabled && runtimeWidth != 0U) {
+            if (!context.PlayCameraEntity().IsValid()) return false;
+            const RECT bounds{0, 0, static_cast<LONG>(runtimeWidth), static_cast<LONG>(runtimeHeight)};
+            const DockPanel panel{.id = static_cast<std::uint32_t>(viewportKey), .kind = DockPanelKind::Scene};
+            auto settings = ScenePanelContentRenderer::BuildSettings(
+                RECT{0, -34, bounds.right, bounds.bottom}, panel, context, backendSettings);
+            settings.renderWidth = runtimeWidth;
+            settings.renderHeight = runtimeHeight;
+            settings.presentToHost = true;
+            context.SetUIAuthoringViewportSize(static_cast<float>(runtimeWidth), static_cast<float>(runtimeHeight));
+            renderFailed = false;
+            viewport.BeginPaintLayout(window);
+            viewport.Present(window, bounds, context.Scene(), settings);
+            viewport.EndPaintLayout();
+            const auto stats = viewport.LastSceneSubmitStats();
+            if (stats.HasMissingResources() || stats.droppedInstanceCount != 0U) {
+                context.Console().Error("Renderer", "Runtime frame has missing resources or dropped instances.");
+                return false;
+            }
+            const bool rendered = !renderFailed && runtimeCompositeActive &&
+                std::string_view{viewport.ActiveBackendLabel()} != "Not initialized" &&
+                bgfx::getRendererType() != bgfx::RendererType::Noop;
+            if (rendered) context.AcknowledgeSceneRenderSubmitted();
+            return rendered;
+        }
         if (editorOverlaysEnabled && context.ViewportPreview(viewportKey).Is2D()) {
             viewport.BeginPaintLayout(window);
             const DockPanel panel{.id=static_cast<std::uint32_t>(viewportKey),.kind=DockPanelKind::Scene};
@@ -707,6 +742,10 @@ struct EditorHeadlessAutomation::Impl {
     kb::input::Win32XInputHapticsBackend hapticsBackend;
     EditorRenderBackendSettings backendSettings;
     EditorSceneBgfxViewport viewport;
+    std::uint32_t runtimeWidth = 0U;
+    std::uint32_t runtimeHeight = 0U;
+    bool renderFailed = false;
+    bool runtimeCompositeActive = false;
 };
 
 EditorHeadlessAutomation::EditorHeadlessAutomation(
@@ -2164,11 +2203,25 @@ bool EditorHeadlessAutomation::SetGamepadConnected(
     return true;
 }
 
+bool EditorHeadlessAutomation::ConfigureRuntimeRendering(std::uint32_t width, std::uint32_t height, bool gpuVisibilityDiagnostics) {
+    if (width == 0U || height == 0U || width > 8192U || height > 8192U) return false;
+    if (impl_->window == nullptr || SetWindowPos(impl_->window, nullptr, 0, 0,
+            static_cast<int>(width), static_cast<int>(height),
+            SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE) == 0) return false;
+    impl_->runtimeWidth = width;
+    impl_->runtimeHeight = height;
+    impl_->backendSettings.SetGpuDrivenEnabled(gpuVisibilityDiagnostics);
+    context_.ViewportPreview(1U).SetCustomResolution(width, height);
+    context_.ViewportPreview(1U).SetProfile(EditorViewportProfileKind::Custom);
+    context_.ViewportPreview(1U).SetRenderProfile(EditorViewportRenderProfile::GamePreview);
+    return true;
+}
+
 bool EditorHeadlessAutomation::StepRuntime(
-    std::size_t frames, float deltaSeconds) {
+    std::size_t frames, float deltaSeconds, bool profile, bool requireShadows, bool gpuProfile) {
     if (frames == 0U || !std::isfinite(deltaSeconds) ||
         deltaSeconds < 0.0F ||
-        !context_.HasPlayModeSceneSession()) {
+        !context_.HasPlayModeSceneSession() || (gpuProfile && !profile)) {
         Trace("step_runtime", false, "invalid-step");
         return false;
     }
@@ -2176,13 +2229,118 @@ bool EditorHeadlessAutomation::StepRuntime(
         kb::input::InputHaptics::RegisterBackend(
             context_.Scene(), impl_->hapticsBackend);
     }
+    std::vector<std::array<double, 24>> samples;
+    if (profile) samples.reserve(frames);
+    struct GpuViewSample {
+        std::size_t sampleFrame;
+        bgfx::ViewStats view;
+        double milliseconds;
+    };
+    std::vector<GpuViewSample> gpuViews;
+    struct ViewProfilerScope {
+        bool enabled = false;
+        ~ViewProfilerScope() {
+            // The Windows headless renderer starts with debug text enabled.
+            if (enabled) bgfx::setDebug(BGFX_DEBUG_TEXT);
+        }
+    } viewProfiler;
     for (std::size_t frame = 0U; frame < frames; ++frame) {
+        const auto begin = profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
         if (!context_.TickPlayModeSceneSession(deltaSeconds)) {
             Trace("step_runtime", false, "runtime-requested-stop");
             return false;
         }
+        const auto simulated = profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
         if (!impl_->Render(context_)) {
             Trace("step_runtime", false, "render-backend-failed");
+            return false;
+        }
+        if (gpuProfile && !viewProfiler.enabled) {
+            bgfx::setDebug(BGFX_DEBUG_TEXT | BGFX_DEBUG_PROFILER);
+            viewProfiler.enabled = true;
+        }
+        if (requireShadows && impl_->viewport.LastSceneSubmitStats().submittedShadowDrawCallCount == 0U) {
+            Trace("step_runtime", false, "required-shadow-draws-missing");
+            return false;
+        }
+        if (profile) {
+            const auto end = std::chrono::steady_clock::now();
+            const auto stats = impl_->viewport.LastSceneSubmitStats();
+            const auto runtime = context_.Scene().Runtime().HotPathReport();
+            const bgfx::Stats* gpu = bgfx::getStats();
+            if (gpuProfile && gpu != nullptr && gpu->gpuTimerFreq > 0 && gpu->viewStats != nullptr) {
+                for (std::uint16_t index = 0U; index < gpu->numViews; ++index) {
+                    const auto& view = gpu->viewStats[index];
+                    if (view.gpuTimeEnd > view.gpuTimeBegin) {
+                        gpuViews.push_back({frame, view,
+                            static_cast<double>(view.gpuTimeEnd - view.gpuTimeBegin) * 1000.0 /
+                                static_cast<double>(gpu->gpuTimerFreq)});
+                    }
+                }
+            }
+            const double gpuMs = gpu != nullptr && gpu->gpuTimerFreq > 0 && gpu->gpuTimeEnd > gpu->gpuTimeBegin
+                ? static_cast<double>(gpu->gpuTimeEnd - gpu->gpuTimeBegin) * 1000.0 / static_cast<double>(gpu->gpuTimerFreq)
+                : -1.0;
+            const double cpuTickMilliseconds = gpu != nullptr && gpu->cpuTimerFreq > 0
+                ? 1000.0 / static_cast<double>(gpu->cpuTimerFreq) : 0.0;
+            samples.push_back({
+                std::chrono::duration<double, std::milli>(end - begin).count(),
+                std::chrono::duration<double, std::milli>(simulated - begin).count(),
+                std::chrono::duration<double, std::milli>(end - simulated).count(), gpuMs,
+                static_cast<double>(stats.submittedDrawCallCount), static_cast<double>(stats.shadowCasterCount),
+                static_cast<double>(stats.submittedMeshCount), static_cast<double>(stats.droppedInstanceCount),
+                static_cast<double>(stats.submittedShadowDrawCallCount), stats.HasMissingResources() ? 1.0 : 0.0,
+                static_cast<double>(context_.Scene().Runtime().LastFixedStepCount()),
+                static_cast<double>(stats.gpuCullingDispatchCount),
+                static_cast<double>(stats.gpuDrivenUploadBytes),
+                static_cast<double>(runtime.runtimeUpdateNanoseconds) / 1.0e6,
+                static_cast<double>(runtime.runtimeTransformSyncNanoseconds) / 1.0e6,
+                static_cast<double>(runtime.runtimeFixedCaptureStartNanoseconds) / 1.0e6,
+                static_cast<double>(runtime.runtimeFixedCaptureEndNanoseconds) / 1.0e6,
+                static_cast<double>(runtime.transformHierarchyUpdateNanoseconds) / 1.0e6,
+                static_cast<double>(stats.meshCommandLookupCapacity),
+                static_cast<double>(stats.meshPipelineScratchInstanceCapacity),
+                cpuTickMilliseconds > 0.0 ? static_cast<double>(gpu->waitRender) * cpuTickMilliseconds : -1.0,
+                cpuTickMilliseconds > 0.0 ? static_cast<double>(gpu->waitSubmit) * cpuTickMilliseconds : -1.0,
+                cpuTickMilliseconds > 0.0 && gpu->cpuTimeEnd >= gpu->cpuTimeBegin
+                    ? static_cast<double>(gpu->cpuTimeEnd - gpu->cpuTimeBegin) * cpuTickMilliseconds : -1.0,
+                gpu != nullptr ? static_cast<double>(gpu->gpuFrameNum) : -1.0});
+        }
+    }
+    if (profile) {
+        std::ofstream output{artifactRoot_ / "runtime-frames.csv"};
+        output.imbue(std::locale::classic());
+        output << "frame,cpu_ms,simulation_ms,render_ms,gpu_delayed_ms,draws,shadow_casters,submitted_meshes,dropped,shadow_draws,missing_resources,fixed_steps,gpu_culling_dispatches,gpu_culling_upload_bytes,runtime_ms,transform_sync_ms,fixed_capture_start_ms,fixed_capture_end_ms,transform_hierarchy_ms,command_lookup_buckets,command_instance_capacity,bgfx_wait_render_ms,bgfx_wait_submit_ms,bgfx_render_cpu_ms,bgfx_gpu_frame\n";
+        for (std::size_t index = 0; index < samples.size(); ++index) {
+            output << index;
+            for (const double value : samples[index]) output << ',' << value;
+            output << '\n';
+        }
+        output.flush();
+        if (!output) {
+            Trace("step_runtime", false, "profile-write-failed");
+            return false;
+        }
+    }
+    if (gpuProfile) {
+        if (gpuViews.empty()) {
+            Trace("step_runtime", false, "gpu-profile-no-valid-view-timings");
+            return false;
+        }
+        std::ofstream output{artifactRoot_ / "runtime-gpu-views.tsv"};
+        output.imbue(std::locale::classic());
+        output << "sample_frame\tgpu_frame\tview_id\tview_name\tgpu_ms\n";
+        for (const auto& sample : gpuViews) {
+            std::string name{sample.view.name};
+            for (char& character : name) {
+                if (character == '\t' || character == '\r' || character == '\n') character = ' ';
+            }
+            output << sample.sampleFrame << '\t' << sample.view.gpuFrameNum << '\t'
+                   << sample.view.view << '\t' << name << '\t' << sample.milliseconds << '\n';
+        }
+        output.flush();
+        if (!output) {
+            Trace("step_runtime", false, "gpu-profile-write-failed");
             return false;
         }
     }
@@ -3163,6 +3321,26 @@ bool EditorHeadlessAutomation::CaptureRuntime(
     const std::filesystem::path output =
         artifactRoot_ / "screenshots" /
         (SafeCheckpoint(checkpoint) + ".png");
+    if (impl_->runtimeWidth != 0U) {
+        std::error_code error;
+        std::filesystem::remove(output, error);
+        if (error || !impl_->viewport.RequestPresentedCapture(impl_->window, 1U, output.string()) ||
+            !impl_->Render(context_)) {
+            Trace("capture_runtime", false, "presented-capture-rejected");
+            return false;
+        }
+        for (std::size_t poll = 0U; poll < 240U; ++poll) {
+            if (!impl_->viewport.AdvanceAsyncReadbacks()) break;
+            if (std::filesystem::exists(output, error) && !error) {
+                const bool valid = ValidateCapturedImage(output, requireNonUniform, impl_->runtimeWidth, impl_->runtimeHeight);
+                Trace("capture_runtime", valid, output.filename().string());
+                return valid;
+            }
+            Sleep(5U);
+        }
+        Trace("capture_runtime", false, "presented-capture-timeout");
+        return false;
+    }
     const std::uint64_t capture =
         kb::scene::SceneRenderFeedback::RequestScreenCapture(
             context_.Scene(), output.string());

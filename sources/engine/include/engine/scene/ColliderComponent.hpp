@@ -10,6 +10,7 @@ enum class ColliderShape {
     Box,
     Sphere,
     Capsule,
+    Mesh,
 };
 
 struct ColliderComponent {
@@ -35,6 +36,8 @@ struct ColliderComponent {
     // interaction matrix - this field is intentionally just the raw bitmask
     // LIB-125 needs to make "z warstwa maski" real today.
     std::uint32_t layer = 0x7FFFFFFFU;
+    // Static triangle geometry in a CollisionMesh asset; zero for primitive shapes.
+    std::uint64_t meshAssetId = 0;
 };
 
 } // namespace kb::scene

@@ -162,6 +162,10 @@ void RendererScreenCapture::Poll(std::uint32_t completedFrame) {
     if (!inFlight_ || completedFrame < readyFrame_) return;
     ReleaseStaging();
     inFlight_ = false;
+    if (activeScene_ == nullptr) {
+        ClearActiveCapture();
+        return;
+    }
     if (returnPixels_) {
         kb::scene::SceneScreenCapturePixels pixels{
             .width = width_,
@@ -183,7 +187,7 @@ void RendererScreenCapture::Shutdown() noexcept {
     ReleaseStaging();
     inFlight_ = false;
     activeScene_ = nullptr;
-    bytes_.clear();
+    // bgfx may still write the pending readback until its context shuts down.
     path_.clear();
 }
 
@@ -197,13 +201,10 @@ void RendererScreenCapture::ReleaseScene(kb::scene::Scene& scene) noexcept {
     if ((!inFlight_ && !encoding_) || sceneId_ != scene.Id()) {
         return;
     }
-    if (inFlight_) {
-        ReleaseStaging();
-        inFlight_ = false;
-    }
     kb::scene::SceneRenderFeedback::CompleteScreenCapture(scene, requestId_, false);
     activeScene_ = nullptr;
-    if (!encoding_) ClearActiveCapture();
+    // Cancellation does not cancel bgfx's write into bytes_. Poll retires it.
+    if (!inFlight_ && !encoding_) ClearActiveCapture();
 }
 
 bool RendererScreenCapture::EncodeAndWritePng(const EncodeJob& job) {

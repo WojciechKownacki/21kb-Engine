@@ -181,14 +181,24 @@ int RunGame(const GameOptions& options) {
 
     std::filesystem::path scenePath;
     std::size_t discoveredAssets = 0U;
+    if (scriptActive && projectRuntime.IsPackaged()) {
+        scriptModule->Host()->AssetPreparer().SetNativeSettings({
+            .buildPlugins = false,
+            .runtimeModuleRoot = projectRuntime.projectRoot,
+        });
+    }
     if (!LoadGameProjectScene(projectRuntime, scene, scenePath, discoveredAssets, std::cerr)) {
         return EXIT_FAILURE;
     }
+    renderer.SetRuntimeAssetDiscoveryEnabled(false);
     std::cout << "kb_game: project=" << kb::game::NarrowForDiagnostics(projectRuntime.projectRoot)
               << " scene=" << kb::game::NarrowForDiagnostics(scenePath)
               << " entities=" << scene.Entities().Count()
               << " assets=" << discoveredAssets
-              << " modules=" << scene.ActiveModuleCount() << '\n';
+              << " modules=" << scene.ActiveModuleCount()
+              << " backend=" << renderer.CapabilityReport().selectedBackendName
+              << " gpu_vendor=" << renderer.CapabilityReport().vendorId
+              << " gpu_device=" << renderer.CapabilityReport().deviceId << '\n';
     std::cout.flush();
 
     kb::input::Win32XInputHapticsBackend hapticsBackend;
@@ -196,6 +206,11 @@ int RunGame(const GameOptions& options) {
 
     std::uint32_t renderedFrames = 0U;
     std::uint32_t submittedFrames = 0U;
+    bool runtimeClean = true;
+    bool renderSceneInitialized = false;
+    std::uint64_t synchronizedTopology = 0U;
+    std::uint64_t synchronizedProxyRevision = 0U;
+    std::vector<std::uint64_t> preUpdateRenderChanges;
     auto previousTick = std::chrono::steady_clock::now();
     while (window.PumpMessages() && !scene.Runtime().ShouldQuit()) {
         if (window.Width() == 0U || window.Height() == 0U) {
@@ -219,13 +234,61 @@ int RunGame(const GameOptions& options) {
         static_cast<void>(scene.UI().SetViewport(
             static_cast<float>(window.Width()),
             static_cast<float>(window.Height())));
-        static_cast<void>(scene.Runtime().Update(deltaSeconds));
-
-        if (renderer.BeginFrame()) {
-            renderer.SubmitScene(scene);
-            renderer.EndFrame();
-            ++submittedFrames;
+        preUpdateRenderChanges.clear();
+        if (renderSceneInitialized && scene.Runtime().RenderProxyUpdateRevision() != synchronizedProxyRevision) {
+            for (const auto entity : scene.Runtime().RenderProxyUpdateEntities()) {
+                preUpdateRenderChanges.push_back(entity.Id());
+            }
         }
+        static_cast<void>(scene.Runtime().Update(deltaSeconds));
+        for (const std::string& error : scene.Runtime().DrainSceneSystemErrors()) {
+            std::cerr << "kb_game: scene runtime failed: " << error << '\n';
+            runtimeClean = false;
+        }
+        if (scriptActive) {
+            for (const std::string& error : scriptModule->Host()->DrainSceneSystemDiagnostics()) {
+                std::cerr << "kb_game: script runtime failed: " << error << '\n';
+                runtimeClean = false;
+            }
+        }
+        if (!runtimeClean) {
+            break;
+        }
+
+        renderer.SetFrameDeltaSeconds(deltaSeconds);
+        if (!renderer.BeginFrame()) {
+            std::cerr << "kb_game: renderer could not begin a frame\n";
+            runtimeClean = false;
+            break;
+        }
+        const auto topology = scene.Runtime().RenderTopologyVersion();
+        const auto proxyRevision = scene.Runtime().RenderProxyUpdateRevision();
+        const bool submitted = renderer.SubmitRuntimeScene(scene, {
+            .fullSync = !renderSceneInitialized || topology != synchronizedTopology,
+            .dirtySceneEntityIds = preUpdateRenderChanges,
+        });
+        const auto& renderStats = renderer.LastSceneSubmitStats();
+        const bool renderErrors = renderer.LastSceneDiagnostics().HasErrors() ||
+            renderStats.HasMissingResources() || renderStats.droppedInstanceCount != 0U;
+        renderer.EndFrame();
+        if (!submitted || renderErrors) {
+            std::cerr << "kb_game: renderer could not submit the scene cleanly; accepted=" << submitted
+                      << " missing-resources=" << renderStats.HasMissingResources()
+                      << " dropped-instances=" << renderStats.droppedInstanceCount << '\n';
+            for (const auto& event : renderer.LastSceneDiagnostics().events) {
+                if (event.severity == kb::render::SceneRenderDiagnosticSeverity::Error) {
+                    std::cerr << "kb_game: render error kind=" << static_cast<unsigned>(event.kind)
+                              << " entity=" << event.entityId << " mesh=" << event.meshAssetId
+                              << " material=" << event.materialAssetId << " texture=" << event.textureAssetId << '\n';
+                }
+            }
+            runtimeClean = false;
+            break;
+        }
+        ++submittedFrames;
+        renderSceneInitialized = true;
+        synchronizedTopology = topology;
+        synchronizedProxyRevision = proxyRevision;
         ++renderedFrames;
         if (options.frameLimit != 0U && renderedFrames >= options.frameLimit) {
             break;
@@ -257,7 +320,7 @@ int RunGame(const GameOptions& options) {
               << " ticks=" << scene.Runtime().FrameIndex()
               << " simulated=" << scene.Runtime().ElapsedSeconds() << '\n';
     std::cout.flush();
-    return shutdownClean ? EXIT_SUCCESS : EXIT_FAILURE;
+    return shutdownClean && runtimeClean ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
 } // namespace

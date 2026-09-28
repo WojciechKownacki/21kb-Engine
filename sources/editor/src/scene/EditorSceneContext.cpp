@@ -1,7 +1,9 @@
 #include "scene/EditorSceneContext.hpp"
+#include "scene/EditorPlayCameraResolver.hpp"
 
 #include "app/EditorCrashBreadcrumbs.hpp"
 #include "engine/audio/AudioPlayback.hpp"
+#include "engine/assets/CollisionMeshAsset.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneAnimators.hpp"
 #include "engine/scene/SceneAssets.hpp"
@@ -580,6 +582,7 @@ void EditorSceneContext::ResetScriptRuntimeStateForPlayMode() {
         return;
     }
     kb::script::ScriptRuntimeHost& host = *scriptModule_->Host();
+    host.AssetPreparer().InvalidateNativeSourceObservations();
     host.LuaRuntime().Clear();
     host.VisualGraphInstances().Clear();
     host.SharedState().Clear();
@@ -615,6 +618,11 @@ bool EditorSceneContext::TickPlayModeSceneSession(float deltaSeconds) {
     const std::vector<kb::scene::SceneEntity> preUpdateRenderUpdates{
         pendingRenderUpdates.begin(), pendingRenderUpdates.end() };
     static_cast<void>(runtime.Update(deltaSeconds));
+    // Ready may create the camera on the first tick of an already attached
+    // script module. A destroyed or disabled camera also needs a new selection.
+    if (!PlayCameraEntity().IsValid()) {
+        playCameraEntity_ = EditorPlayCameraResolver::Resolve(*scene_);
+    }
     for (const std::string& systemError :
          runtime.DrainSceneSystemErrors()) {
         console_.Error("Scripts", systemError);
@@ -3657,6 +3665,7 @@ struct EntityMeshBounds {
 // keeps a flat axis from collapsing to a degenerate zero-thickness shape the
 // physics backend would reject.
 void ApplyMeshBoundsToCollider(kb::scene::ColliderComponent& collider, const EntityMeshBounds& bounds) {
+    if (collider.shape == kb::scene::ColliderShape::Mesh) return;
     constexpr float kMinHalfExtent = 0.005F;
     collider.center = bounds.center;
     switch (collider.shape) {
@@ -3697,6 +3706,87 @@ bool EditorSceneContext::ApplyColliderFitToMesh(kb::scene::SceneEntity entity, s
     if (collider == nullptr) {
         reason = "the entity has no Collider";
         return false;
+    }
+    if (collider->shape == kb::scene::ColliderShape::Mesh) {
+        const auto* body = scene_->Components().Rigidbodies().TryGet(entity);
+        if (body != nullptr && body->bodyType != kb::scene::RigidbodyBodyType::Static) {
+            reason = "triangle collision geometry requires a static body";
+            return false;
+        }
+        const auto* renderer = scene_->Components().MeshRenderers().TryGet(entity);
+        auto& manager = scene_->Assets().Manager();
+        const auto mesh = renderer == nullptr ? kb::assets::AssetHandle<kb::render::RenderMeshAssetData>{}
+            : manager.Load<kb::render::RenderMeshAssetData>({renderer->meshAssetId});
+        if (!mesh.IsLoaded()) { reason = "the static mesh could not be loaded"; return false; }
+        kb::assets::CollisionMeshAsset geometry;
+        const auto copyPositions = [&geometry](const auto& vertices) {
+            geometry.positions.reserve(vertices.size());
+            for (const auto& p : vertices) geometry.positions.push_back({p.x, p.y, p.z});
+        };
+        if (!mesh->tangentVertices.empty()) copyPositions(mesh->tangentVertices);
+        else copyPositions(mesh->vertices);
+        const std::size_t indexCount = !mesh->indices16.empty() ? mesh->indices16.size() : mesh->indices32.size();
+        const auto appendSection = [&](std::uint32_t start, std::uint32_t count, std::uint32_t vertexStart) {
+            if (start > indexCount || count > indexCount - start || count % 3 != 0) return false;
+            for (std::size_t i = start; i < std::size_t{start} + count; ++i) {
+                const std::uint64_t index = std::uint64_t{vertexStart} +
+                    (!mesh->indices16.empty() ? mesh->indices16[i] : mesh->indices32[i]);
+                if (index >= geometry.positions.size()) return false;
+                geometry.indices.push_back(static_cast<std::uint32_t>(index));
+            }
+            return true;
+        };
+        if (mesh->sections.empty()) {
+            if (indexCount > UINT32_MAX || !appendSection(0, static_cast<std::uint32_t>(indexCount), 0)) {
+                reason = "mesh triangle indices are invalid"; return false;
+            }
+        } else {
+            for (const auto& section : mesh->sections) {
+                if (section.lodLevel != 0 || (section.terrainLayerIndex != UINT8_MAX && section.terrainLayerIndex != 0)) continue;
+                if (!appendSection(section.indexStart, section.indexCount, section.vertexStart)) {
+                    reason = "mesh section indices are invalid"; return false;
+                }
+            }
+        }
+        if (!kb::assets::ValidateCollisionMesh(geometry, reason)) return false;
+        std::uint64_t hash = 14695981039346656037ULL;
+        const auto hashWord = [&hash](std::uint32_t word) {
+            for (unsigned shift = 0; shift < 32; shift += 8) {
+                hash = (hash ^ static_cast<std::uint8_t>(word >> shift)) * 1099511628211ULL;
+            }
+        };
+        hashWord(static_cast<std::uint32_t>(geometry.positions.size()));
+        for (const auto& p : geometry.positions) {
+            hashWord(std::bit_cast<std::uint32_t>(p.x)); hashWord(std::bit_cast<std::uint32_t>(p.y)); hashWord(std::bit_cast<std::uint32_t>(p.z));
+        }
+        for (const auto index : geometry.indices) hashWord(index);
+        const std::filesystem::path virtualPath = "/Game/Generated/Collision/" + std::to_string(hash) + ".kbcollision";
+        const auto path = manager.Mounts().Resolve(virtualPath);
+        if (!path) { reason = "the project asset directory is unavailable"; return false; }
+        std::error_code error;
+        const bool exists = std::filesystem::exists(*path, error);
+        if (error) { reason = error.message(); return false; }
+        if (!exists) {
+            std::filesystem::create_directories(path->parent_path(), error);
+            if (error) { reason = error.message(); return false; }
+            if (!kb::assets::WriteCollisionMesh(*path, geometry, reason)) return false;
+        }
+        static_cast<void>(manager.DiscoverMountedAssets());
+        const auto saved = manager.Load<kb::assets::CollisionMeshAsset>(virtualPath);
+        if (!saved.IsLoaded() || saved->indices != geometry.indices ||
+            !std::ranges::equal(saved->positions, geometry.positions, [](const auto& a, const auto& b) {
+                return a.x == b.x && a.y == b.y && a.z == b.z;
+            })) {
+            reason = "generated collision geometry could not be verified"; return false;
+        }
+        // Content-addressed assets keep an earlier fit available to scene undo.
+        collider = scene_->Components().Colliders().TryGet(entity);
+        if (collider == nullptr) { reason = "the collider was removed"; return false; }
+        collider->meshAssetId = saved.Id().value;
+        collider->center = {};
+        scene_->Components().Colliders().MarkModified(entity);
+        reason = std::to_string(geometry.indices.size() / 3) + " collision triangles";
+        return true;
     }
     EntityMeshBounds bounds;
     if (!TryLoadEntityMeshBounds(*scene_, entity, bounds, reason)) {

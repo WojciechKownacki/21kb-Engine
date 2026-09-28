@@ -19,6 +19,7 @@
 #include "engine/scene/AiBehaviourAssetLoader.hpp"
 #include "engine/scene/SkeletonAssetLoader.hpp"
 #include "engine/scene/SkeletalMeshAssetLoader.hpp"
+#include "engine/assets/CollisionMeshAsset.hpp"
 #include "engine/scene/TimelineAssetLoader.hpp"
 #include "engine/scene/AnimationAssetLoaders.hpp"
 #include "engine/scene/PhysicsLayersAssetLoader.hpp"
@@ -98,6 +99,7 @@ Scene::Scene(
     const bool registeredAiBehaviourLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::AiBehaviourAssetLoader>());
     const bool registeredSkeletonLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::SkeletonAssetLoader>());
     const bool registeredSkeletalMeshLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::SkeletalMeshAssetLoader>());
+    const bool registeredCollisionMeshLoader = state_->assets.RegisterLoader(std::make_unique<kb::assets::CollisionMeshAssetLoader>());
     const bool registeredAnimationClipLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::AnimationClipAssetLoader>());
     const bool registeredAnimatorControllerLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::AnimatorControllerAssetLoader>());
     const bool registeredTimelineLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::TimelineAssetLoader>());
@@ -117,6 +119,7 @@ Scene::Scene(
     static_cast<void>(registeredAiBehaviourLoader);
     static_cast<void>(registeredSkeletonLoader);
     static_cast<void>(registeredSkeletalMeshLoader);
+    static_cast<void>(registeredCollisionMeshLoader);
     static_cast<void>(registeredAnimationClipLoader);
     static_cast<void>(registeredAnimatorControllerLoader);
     static_cast<void>(registeredTimelineLoader);

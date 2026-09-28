@@ -371,10 +371,9 @@ void RunPhysicsSceneSystemFallingBodyTest() {
     kb::tests::Require(!kb::scene::PhysicsBackend::ClosestPoint(scene, floor.Entity(), kb::scene::Vec3{ infinity, 0.0F, 0.0F }).found,
         "PhysicsBackend::ClosestPoint must reject a non-finite query point before it reaches Jolt");
 
-    // Raycast stays intentionally pure ColliderComponent/TransformComponent
-    // geometry, so these regressions exercise the shared Raycast/RaycastAll
-    // solver directly. They prove its geometry agrees with rotated/scaled
-    // collider placement rather than only testing Jolt's narrow phase.
+    // Runtime ray queries use the synchronized simulation.
+    // These regressions verify rotated and signed-scale collider
+    // placement through the public ray query.
     const kb::scene::SceneObject rotatedRayBox = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
         .name = "LIB-125 rotated ray box",
         .transform = kb::scene::TransformComponent{
@@ -395,6 +394,9 @@ void RunPhysicsSceneSystemFallingBodyTest() {
     scene.Components().Colliders().Set(mirroredOffsetRayTarget.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Sphere, .center = kb::scene::Vec3{ 1.0F, 0.0F, 0.0F }, .radius = 0.5F, .layer = 0x80U });
     std::array<kb::scene::PhysicsCastResult, 1> pureRayStorage{};
     kb::library::ArrayNonAlloc<kb::scene::PhysicsCastResult> pureRayResults(pureRayStorage);
+    kb::scene::RaycastAllNonAlloc(scene, kb::scene::Vec3{ -11000.0F, 0.0F, 3.0F }, kb::scene::Vec3{ 0.0F, 0.0F, -1.0F }, 10.0F, 0x20U, pureRayResults);
+    kb::tests::Require(pureRayResults.Empty(), "Runtime ray queries must wait for new colliders to enter the synchronized physics state");
+    static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
     kb::scene::RaycastAllNonAlloc(scene, kb::scene::Vec3{ -11000.0F, 0.0F, 3.0F }, kb::scene::Vec3{ 0.0F, 0.0F, -1.0F }, 10.0F, 0x20U, pureRayResults);
     kb::tests::Require(pureRayResults.Count() == 1U && pureRayResults.GetAt(0)->entity == rotatedRayBox.Entity() && pureRayResults.GetAt(0)->distance < 1.2F,
         "Physics.Raycast geometry must use an oriented box, not its unrotated AABB");
@@ -427,6 +429,8 @@ void RunPhysicsSceneSystemFallingBodyTest() {
     static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
     scene.Components().Colliders().Remove(staleQueryTarget.Entity());
     const kb::scene::Vec3 staleOrigin{ -11300.0F, 5.0F, 0.0F };
+    kb::scene::RaycastAllNonAlloc(scene, staleOrigin, castDown, 10.0F, 0x10U, pureRayResults);
+    kb::tests::Require(pureRayResults.Empty(), "Runtime ray queries must skip removed colliders before fixed synchronization");
     kb::tests::Require(!kb::scene::PhysicsBackend::CastShape(scene, sphereQueryShape, staleOrigin, castDown, 10.0F, 0x10U).hit,
         "PhysicsBackend::CastShape must skip a body whose Collider was removed before fixed synchronization");
     kb::tests::Require(!kb::scene::PhysicsBackend::OverlapShape(scene, overlapQueryShape, kb::scene::Vec3{ -11300.0F, 0.0F, 0.0F }, 0x10U).overlapping,
@@ -741,8 +745,10 @@ void RunPhysicsSceneSystemFallingBodyTest() {
     kb::tests::Require(std::filesystem::exists(sampleProjectRoot / "Assets" / "Prefabs" / "Projectile.kbprefab"), "LIB-014 shipped Projectile.kbprefab missing on disk");
 
     kb::tests::Require(scene.Assets().MountProject(sampleProjectRoot), "LIB-014/015 sample project mount failed");
-    kb::tests::Require(scene.Assets().Discover() == 15U,
+    kb::tests::Require(scene.Assets().Discover() == 16U,
         "LIB-014/015 sample project did not discover the shipped gameplay and Audio Shooter assets supported by the core runtime");
+    kb::tests::Require(scene.Assets().Manager().Registry().FindByPath("/Game/Scenes/MeshSpawnBenchmark.21kbscene") != nullptr,
+        "Sample project did not discover the mesh spawn benchmark scene");
 
     kb::assets::AssetHandle<kb::scene::ScenePrefab> projectilePrefabAsset = scene.Assets().LoadPrefab("/Game/Prefabs/Projectile.kbprefab");
     kb::tests::Require(projectilePrefabAsset.IsLoaded(), "LIB-014 shipped Projectile.kbprefab could not be loaded as a real project asset");
@@ -1751,6 +1757,78 @@ void RunPhysicsSceneSystemFallingBodyTest() {
     kb::tests::Require(std::fabs(dynamicRigChildFinal.localPosition.x - 3.0F) < 0.01F,
         "LIB-133 a dynamic rigidbody child's local pose must be derived from the dynamic parent's current same-step world pose, independent of body-map iteration order");
 
+    const auto removableSupport = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "Removable support",
+        .transform = kb::scene::TransformComponent{ .localPosition = { 1100.0F, 9.5F, 0.0F } },
+    });
+    scene.Components().Colliders().Set(removableSupport.Entity(), kb::scene::ColliderComponent{ .boxSize = { 4.0F, 1.0F, 4.0F } });
+    const auto sleepingProbe = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "Sleeping support probe",
+        .transform = kb::scene::TransformComponent{ .localPosition = { 1100.0F, 10.5F, 0.0F } },
+    });
+    scene.Components().Colliders().Set(sleepingProbe.Entity(), kb::scene::ColliderComponent{});
+    scene.Components().Rigidbodies().Set(sleepingProbe.Entity(), kb::scene::RigidbodyComponent{});
+    for (int i = 0; i < 120; ++i) static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+    kb::tests::Require(kb::scene::PhysicsBackend::IsSleeping(scene, sleepingProbe.Entity()),
+        "Supported body must actually sleep before testing support removal");
+    const auto sleepingWorldVersion = scene.Transforms().Get(sleepingProbe).worldVersion;
+    for (int i = 0; i < 10; ++i) static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+    kb::tests::Require(scene.Transforms().Get(sleepingProbe).worldVersion == sleepingWorldVersion,
+        "Unchanged sleeping body must not invalidate its world transform every fixed step");
+    scene.Entities().Destroy(removableSupport.Entity());
+    const auto replacementSupport = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "Replacement support away from probe",
+        .transform = kb::scene::TransformComponent{ .localPosition = { 1110.0F, 9.5F, 0.0F } },
+    });
+    scene.Components().Colliders().Set(replacementSupport.Entity(),
+        kb::scene::ColliderComponent{ .boxSize = { 4.0F, 1.0F, 4.0F } });
+    static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+    kb::tests::Require(!kb::scene::PhysicsBackend::IsSleeping(scene, sleepingProbe.Entity()),
+        "Removing support must wake neighboring sleeping bodies");
+    for (int i = 0; i < 60; ++i) static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+    kb::tests::Require(scene.Transforms().Get(sleepingProbe).worldPosition.y < 8.0F,
+        "A sleeping body must fall after support replacement even when the live body count is unchanged");
+    scene.Entities().Destroy(sleepingProbe.Entity());
+    scene.Entities().Destroy(replacementSupport.Entity());
+
+    const auto movingSupport = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "Moving static support",
+        .transform = kb::scene::TransformComponent{ .localPosition = { 1200.0F, 9.5F, 0.0F } },
+    });
+    scene.Components().Colliders().Set(movingSupport.Entity(), kb::scene::ColliderComponent{ .boxSize = { 4.0F, 1.0F, 4.0F } });
+    const auto movingSupportProbe = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "Sleeping moving-support probe",
+        .transform = kb::scene::TransformComponent{ .localPosition = { 1200.0F, 10.5F, 0.0F } },
+    });
+    scene.Components().Colliders().Set(movingSupportProbe.Entity(), kb::scene::ColliderComponent{});
+    scene.Components().Rigidbodies().Set(movingSupportProbe.Entity(), kb::scene::RigidbodyComponent{});
+    for (int i = 0; i < 120; ++i) static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+    kb::tests::Require(kb::scene::PhysicsBackend::IsSleeping(scene, movingSupportProbe.Entity()),
+        "Supported body must actually sleep before testing static support movement");
+    const auto newObstacle = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "New obstacle touching sleeping body",
+        .transform = kb::scene::TransformComponent{ .localPosition = { 1200.75F, 10.5F, 0.0F } },
+    });
+    scene.Components().Colliders().Set(newObstacle.Entity(), kb::scene::ColliderComponent{});
+    static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+    kb::tests::Require(!kb::scene::PhysicsBackend::IsSleeping(scene, movingSupportProbe.Entity()),
+        "Creating a static obstacle must wake overlapping sleeping bodies");
+    scene.Entities().Destroy(newObstacle.Entity());
+    for (int i = 0; i < 120; ++i) static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+    kb::tests::Require(kb::scene::PhysicsBackend::IsSleeping(scene, movingSupportProbe.Entity()),
+        "Probe must settle again before its static support moves");
+    auto movedSupportPose = scene.Transforms().Get(movingSupport);
+    movedSupportPose.localPosition.x += 10.0F;
+    scene.Transforms().Set(movingSupport, movedSupportPose);
+    static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+    kb::tests::Require(!kb::scene::PhysicsBackend::IsSleeping(scene, movingSupportProbe.Entity()),
+        "Moving static support must wake neighboring sleeping bodies");
+    for (int i = 0; i < 60; ++i) static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+    kb::tests::Require(scene.Transforms().Get(movingSupportProbe).worldPosition.y < 8.0F,
+        "A sleeping body must fall after its static support moves away");
+    scene.Entities().Destroy(movingSupportProbe.Entity());
+    scene.Entities().Destroy(movingSupport.Entity());
+
     // LIB-128 full production path: project descriptor -> Jolt plugin ->
     // installed script scene system -> native FixedTick -> function registry
     // -> Physics.SetVelocity -> same Jolt step -> Transform write-back.
@@ -1848,6 +1926,18 @@ void RunPhysicsSceneSystemFallingBodyTest() {
                   << " x=" << probeXBeforeFixedStep << " -> " << probeXAfterFirstFixedStep
                   << " -> " << probeXAfterSecondFixedStep << '\n';
     }
+    const auto invalidBody = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{.name = "InvalidPhysicsNumber"});
+    scene.Components().Colliders().Set(invalidBody.Entity(), kb::scene::ColliderComponent{});
+    static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+    static_cast<void>(scene.Runtime().DrainSceneSystemErrors());
+    auto invalidCollider = *scene.Components().Colliders().TryGet(invalidBody.Entity());
+    invalidCollider.boxSize.x = std::numeric_limits<float>::quiet_NaN();
+    scene.Components().Colliders().Set(invalidBody.Entity(), invalidCollider);
+    static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+    const auto numericErrors = scene.Runtime().DrainSceneSystemErrors();
+    kb::tests::Require(std::ranges::any_of(numericErrors, [](const std::string& error) {
+        return error.find("non-finite") != std::string::npos;
+    }), "A non-finite collider must report a scene error before reaching Jolt");
 }
 
 // LIB-129: pure asset IO/loader coverage - unlike the real-Jolt test above,

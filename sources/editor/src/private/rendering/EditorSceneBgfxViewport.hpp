@@ -123,6 +123,7 @@ public:
     // submitting a scene. Used only when no visible viewport advanced the
     // renderer since the previous poll.
     [[nodiscard]] bool AdvanceAsyncReadbacks();
+    [[nodiscard]] bool RequestPresentedCapture(HWND host, std::uint64_t key, std::string_view path);
     void Shutdown();
     void BeginPaintLayout() noexcept;
     void BeginPaintLayout(HWND parent) noexcept;

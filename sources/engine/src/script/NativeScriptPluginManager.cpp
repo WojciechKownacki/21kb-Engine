@@ -131,7 +131,8 @@ bool NativeScriptPluginManager::RegisterPluginSymbols(
     NativeScriptPluginRegistrar registrar{ backend_ };
     NativeScriptPluginApi api = registrar.CreateApi();
     if (!registerPlugin(&api)) {
-        errors.push_back("native script plugin registration function returned false");
+        errors.push_back("native script plugin registration function returned false (SDK API " +
+            std::to_string(kNativeScriptPluginApiVersion) + "); rebuild the plugin against the current SDK");
     }
     if (!registrar.Errors().empty()) {
         errors.insert(errors.end(), registrar.Errors().begin(), registrar.Errors().end());

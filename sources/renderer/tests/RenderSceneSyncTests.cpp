@@ -25,6 +25,9 @@
 #include "engine/scene/AmbientRadianceComponent.hpp"
 #include "engine/scene/DetailSwitchComponent.hpp"
 #include "engine/scene/DrawD3DeformedGeometryComponent.hpp"
+#include "engine/scene/SceneAnimators.hpp"
+#include "engine/scene/SkeletonAssetIO.hpp"
+#include "engine/scene/SkeletalMeshAssetIO.hpp"
 #include "engine/scene/FacingPanelComponent.hpp"
 #include "engine/scene/SpaceStrokeComponent.hpp"
 #include "engine/scene/HistoryRibbonComponent.hpp"
@@ -55,6 +58,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <memory>
 #include <span>
 #include <system_error>
 #include <utility>
@@ -2417,6 +2421,80 @@ void RunDirectionalShadowPlannerSkipsNonShadowCastingLightsTest() {
     Require(setup.lightEntityId == 11U, "Directional shadow planner selected a directional light with castsShadow disabled");
 }
 
+void RunDirectionalShadowCameraCoverageTest() {
+    RenderScene scene;
+    MeshRenderProxyDesc mesh{ .entityId = 1U, .meshAssetId = 42U };
+    mesh.model[0] = mesh.model[5] = mesh.model[10] = mesh.model[15] = 1.0F;
+    static_cast<void>(scene.UpsertMesh(mesh));
+    mesh.entityId = 2U;
+    mesh.model[12] = 1000.0F;
+    static_cast<void>(scene.UpsertMesh(mesh));
+    static_cast<void>(scene.UpsertLight(LightRenderProxyDesc{ .entityId = 3U, .kind = RenderLightKind::Directional, .castsShadow = true }));
+    RenderResourceRegistry resources;
+    SceneRenderResourceMap resourceMap;
+    SceneRenderLightingConfig config;
+    config.shadowDistance = 50.0F;
+    const std::array<float, 3> eye{ 10.0F, 5.0F, 0.0F };
+    const auto setup = DirectionalShadowPassPlanner{}.Build(scene, resources, resourceMap, config, BGFX_INVALID_HANDLE, 1U, &eye);
+    Require(setup.valid && NearlyEqual(std::abs(setup.camera.projection[0]), 1.0F / 50.0F),
+        "Distant world geometry must not expand camera shadow coverage");
+    Require(setup.camera.cullingMask == 1U, "Shadow submission must retain camera layer filtering");
+    const bgfx::Caps* caps = bgfx::getCaps();
+    const float textureYScale = caps != nullptr && caps->originBottomLeft ? 0.5F : -0.5F;
+    Require(NearlyEqual(setup.binding.lightViewProjection[5], textureYScale * setup.camera.projection[5] * setup.camera.view[5]),
+        "Shadow texture coordinates must use the backend render-target Y convention");
+    auto movedEye = eye;
+    movedEye[0] += 0.001F;
+    const auto stable = DirectionalShadowPassPlanner{}.Build(scene, resources, resourceMap, config, BGFX_INVALID_HANDLE, 1U, &movedEye);
+    Require(stable.camera.view[12] == setup.camera.view[12] && stable.camera.view[13] == setup.camera.view[13],
+        "Sub-texel camera motion must not move the stable shadow grid");
+    mesh.entityId = 6U;
+    mesh.model[12] = 10000.0F;
+    mesh.model[14] = -10000.0F;
+    static_cast<void>(scene.UpsertMesh(mesh));
+    const auto distant = DirectionalShadowPassPlanner{}.Build(scene, resources, resourceMap, config, BGFX_INVALID_HANDLE, 1U, &eye);
+    Require(distant.camera.projection == setup.camera.projection && distant.camera.view == setup.camera.view,
+        "Geometry outside the shadow footprint must not change depth precision or detach nearby shadows");
+    mesh.entityId = 7U;
+    mesh.model[12] = eye[0];
+    mesh.model[13] = eye[1];
+    mesh.model[14] = -1000.0F;
+    static_cast<void>(scene.UpsertMesh(mesh));
+    const auto upstream = DirectionalShadowPassPlanner{}.Build(scene, resources, resourceMap, config, BGFX_INVALID_HANDLE, 1U, &eye);
+    Require(upstream.valid && std::abs(upstream.camera.projection[10]) < std::abs(setup.camera.projection[10]),
+        "Upstream casters inside the footprint must remain in the shadow depth range");
+    static_cast<void>(scene.RemoveMesh(7U));
+    mesh.entityId = 8U;
+    mesh.model[14] = 20.0F;
+    mesh.castsShadow = false;
+    static_cast<void>(scene.UpsertMesh(mesh));
+    const auto receiver = DirectionalShadowPassPlanner{}.Build(scene, resources, resourceMap, config, BGFX_INVALID_HANDLE, 1U, &eye);
+    Require(receiver.casterCount == setup.casterCount &&
+        std::abs(receiver.camera.projection[10]) < std::abs(setup.camera.projection[10]),
+        "Non-casting receivers must remain inside the depth range without being counted as casters");
+    static_cast<void>(scene.RemoveMesh(8U));
+    mesh.castsShadow = true;
+    mesh.model[13] = 0.0F;
+    mesh.model[14] = 0.0F;
+    mesh.entityId = 4U;
+    mesh.layer = 2U;
+    mesh.model[12] = 100000.0F;
+    static_cast<void>(scene.UpsertMesh(mesh));
+    const auto filtered = DirectionalShadowPassPlanner{}.Build(scene, resources, resourceMap, config, BGFX_INVALID_HANDLE, 1U, &eye);
+    Require(filtered.casterCount == setup.casterCount && filtered.camera.projection == setup.camera.projection,
+        "Excluded layers must not degrade shadow depth precision or consume caster coverage");
+    RenderScene animatedScene;
+    static_cast<void>(animatedScene.UpsertLight(LightRenderProxyDesc{ .entityId = 3U, .kind = RenderLightKind::Directional, .castsShadow = true }));
+    mesh.entityId = 5U;
+    mesh.layer = 1U;
+    mesh.model[12] = 0.0F;
+    mesh.boundsOverride.radius = 100.0F;
+    static_cast<void>(animatedScene.UpsertMesh(mesh));
+    const auto animated = DirectionalShadowPassPlanner{}.Build(animatedScene, resources, resourceMap, config, BGFX_INVALID_HANDLE, 1U, &eye);
+    Require(animated.valid && NearlyEqual(std::abs(animated.camera.projection[0]), 1.0F / 50.0F),
+        "Shadow coverage must include the animated bounds override");
+}
+
 void RunRendererStoresRuntimeAssetDiscoveryIntervalTest() {
     Renderer renderer;
     Require(renderer.RuntimeAssetDiscoveryIntervalFrames() == Renderer::kRuntimeAssetDiscoveryIntervalFrames, "Renderer did not expose the default asset discovery interval");
@@ -2428,19 +2506,23 @@ void RunRendererStoresRuntimeAssetDiscoveryIntervalTest() {
 void RunDisabledRuntimeAssetDiscoverySkipsFirstRefreshTest() {
     kb::scene::Scene scene;
     kb::assets::AssetManager& manager = scene.Assets().Manager();
-    const std::uint64_t revisionBefore = manager.Revision();
+    const std::uint64_t generationBefore = manager.Registry().Generation();
 
     RuntimeRenderAssetDiscovery discovery;
     discovery.SetDiscoveryEnabled(false);
     discovery.Ensure(scene, 1U);
 
     const RuntimeRenderAssetDiscoveryStats stats = discovery.Stats();
-    Require(manager.Revision() == revisionBefore,
-        "Disabled runtime asset discovery performed a mounted-asset scan on its first frame");
+    Require(manager.Registry().Generation() == generationBefore,
+        "Disabled runtime asset discovery changed the asset registry on its first frame");
     Require(stats.registeredSceneCount == 1U,
         "Disabled runtime asset discovery did not register the scene loaders");
     Require(stats.discoverySceneCount == 0U,
         "Disabled runtime asset discovery retained first-frame refresh state");
+    const std::uint64_t registeredRevision = manager.Revision();
+    discovery.Ensure(scene, 2U);
+    Require(manager.Revision() == registeredRevision,
+        "Disabled runtime asset discovery must not scan or re-register loaders on later frames");
 }
 
 void RunSceneRenderDiagnosticsAggregateFrameSubmissionsTest() {
@@ -2872,6 +2954,49 @@ void RunSceneRenderVisibilityPublisherBuildsFrameTest() {
     }
 }
 
+void RunSceneRenderVisibilityPublisherParallelParityTest() {
+    constexpr std::uint32_t count = 70'000U;
+    RenderScene renderScene;
+    renderScene.Reserve(RenderSceneReserveDesc{ .meshProxies = count });
+    std::array<float, 16> identity{};
+    identity[0] = identity[5] = identity[10] = identity[15] = 1.0F;
+    for (std::uint64_t entityId = count; entityId != 0U; --entityId) {
+        std::array<float, 16> model = identity;
+        model[12] = static_cast<float>(entityId % 13U) - 6.0F;
+        static_cast<void>(renderScene.UpsertMesh(MeshRenderProxyDesc{
+            .entityId = entityId,
+            .meshAssetId = 1U,
+            .model = model,
+            .boundsOverride = RenderBoundsSphere{ .radius = 0.25F },
+            .visible = entityId % 7U != 0U,
+            .layer = entityId % 5U == 0U ? 2U : 1U,
+        }));
+    }
+    SceneRenderCamera camera{};
+    camera.view = identity;
+    camera.projection = identity;
+    camera.cullingMask = 1U;
+    kb::scene::SceneRenderVisibilityFrame serial;
+    kb::scene::SceneRenderVisibilityFrame parallel;
+    SceneRenderVisibilityPublisher::BuildFrame(renderScene, &camera, 5U, 0U, 64U, 64U,
+        nullptr, nullptr, serial);
+    kb::ecs::WorkerPool workers{ kb::ecs::WorkerPoolConfig{ .workerCount = 3U } };
+    SceneRenderVisibilityPublisher::BuildFrame(renderScene, &camera, 5U, 0U, 64U, 64U,
+        nullptr, nullptr, parallel, nullptr, &workers);
+    Require(serial.entries.size() == count && parallel.entries.size() == count,
+        "Parallel visibility feedback changed the mesh count");
+    for (std::size_t index = 0U; index < serial.entries.size(); ++index) {
+        const auto& expected = serial.entries[index];
+        const auto& actual = parallel.entries[index];
+        Require(actual.entityId == expected.entityId && actual.visible == expected.visible &&
+                actual.worldBounds.center.x == expected.worldBounds.center.x &&
+                actual.worldBounds.center.y == expected.worldBounds.center.y &&
+                actual.worldBounds.center.z == expected.worldBounds.center.z &&
+                actual.worldBounds.radius == expected.worldBounds.radius,
+            "Parallel visibility feedback changed ordered bounds or visibility");
+    }
+}
+
 [[nodiscard]] bool RunRenderSceneSpawnBenchmark() {
 #if defined(_WIN32)
     char* benchmarkFlag = nullptr;
@@ -3001,6 +3126,17 @@ void RunRenderSceneResourceGroupCoverageTest() {
     coverage = renderScene.ResourceGroupsCoverMeshProxies();
     Require(coverage.meshes && coverage.materials,
         "Removing a material override must restore resource grouping");
+    static_cast<void>(renderScene.UpsertMesh(MeshRenderProxyDesc{
+        .entityId = 1U, .meshAssetId = 42U, .materialAssetId = 7U,
+        .materialSlotAssetIds = {9U}, .materialSlotOverrideCount = 1U,
+    }));
+    Require(!renderScene.ResourceGroupsCoverMeshProxies().materials,
+        "Adding an override to an existing instance must update group coverage");
+    static_cast<void>(renderScene.UpsertMesh(MeshRenderProxyDesc{
+        .entityId = 1U, .meshAssetId = 42U, .materialAssetId = 7U,
+    }));
+    Require(renderScene.ResourceGroupsCoverMeshProxies().materials,
+        "Clearing an existing instance override must restore group coverage");
 
     const std::array<float, 16> identity{
         1.0F, 0.0F, 0.0F, 0.0F,
@@ -3018,6 +3154,79 @@ void RunRenderSceneResourceGroupCoverageTest() {
     coverage = renderScene.ResourceGroupsCoverMeshProxies();
     Require(coverage.meshes && coverage.materials,
         "Removing a surface cast must restore resource grouping");
+}
+
+void RunLiveRenderProxyUpdatesTest() {
+    RenderScene scene;
+    MeshRenderProxyDesc mesh{ .entityId = 1U, .meshAssetId = 42U, .materialAssetId = 7U };
+    static_cast<void>(scene.UpsertMesh(mesh));
+    static_cast<void>(scene.DrawGroups());
+    const auto groupVersion = scene.FindMeshByEntity(mesh.entityId)->instanceLocationVersion;
+    mesh.currentSkinningPalette = { .frame = 2U, .matrixCount = 7U };
+    mesh.previousSkinningPalette = { .frame = 1U, .matrixCount = 7U };
+    mesh.boundsOverride.radius = 3.0F;
+    mesh.model[12] = 12.0F;
+    static_cast<void>(scene.UpsertMesh(mesh));
+    const auto& animated = scene.DrawGroups().front().instances.front();
+    Require(scene.FindMeshByEntity(mesh.entityId)->instanceLocationVersion == groupVersion,
+        "Animated palette and bounds updates must not rebuild unchanged draw groups");
+    Require(animated.currentSkinningPalette == mesh.currentSkinningPalette &&
+            animated.previousSkinningPalette == mesh.previousSkinningPalette &&
+            animated.boundsOverride.radius == 3.0F && animated.model[12] == 12.0F,
+        "Animated instance updates must refresh palettes, bounds and transforms");
+    mesh.layer = 4U;
+    static_cast<void>(scene.UpsertMesh(mesh));
+    Require(scene.DrawGroups().front().instances.front().layer == 4U,
+        "Changing only a mesh layer must update the cached draw instance");
+    mesh.detailSwitchEnabled = true;
+    mesh.detailSwitchGroupId = 23U;
+    mesh.detailSwitchMinimumLod = 2U;
+    static_cast<void>(scene.UpsertMesh(mesh));
+    Require(scene.DrawGroups().front().instances.front().detailSwitchEnabled &&
+            scene.DrawGroups().front().instances.front().detailSwitchGroupId == 23U &&
+            scene.DrawGroups().front().instances.front().detailSwitchMinimumLod == 2U,
+        "Changing only detail policy must update an existing draw instance");
+    mesh.materialAssetId = 8U;
+    static_cast<void>(scene.UpsertMesh(mesh));
+    Require(scene.DrawGroups().front().materialAssetId == 8U,
+        "Changing a group key must move the mesh into the new material group");
+    mesh.visible = false;
+    static_cast<void>(scene.UpsertMesh(mesh));
+    Require(scene.DrawGroups().empty(), "Hiding an updated mesh must remove its draw instance");
+    mesh.visible = true;
+    static_cast<void>(scene.UpsertMesh(mesh));
+    Require(scene.DrawGroups().size() == 1U, "Showing a mesh must restore its draw instance");
+
+    CameraRenderProxyDesc camera{ .entityId = 2U, .primary = true };
+    static_cast<void>(scene.UpsertCamera(camera));
+    camera.viewportId = 5U;
+    static_cast<void>(scene.UpsertCamera(camera));
+    Require(!scene.BuildPrimaryCamera(1280U, 720U, 0U).has_value() &&
+            scene.BuildPrimaryCamera(1280U, 720U, 5U).has_value(),
+        "Changing only a camera viewport must change camera selection");
+    camera.priority = 12;
+    static_cast<void>(scene.UpsertCamera(camera));
+    Require(scene.FindCameraByEntity(2U)->desc.priority == 12,
+        "Changing only camera priority must update its proxy");
+    camera.cullingMask = 4U;
+    static_cast<void>(scene.UpsertCamera(camera));
+    Require(scene.BuildPrimaryCamera(1280U, 720U, 5U)->cullingMask == 4U,
+        "Changing only camera culling mask must reach the resolved camera");
+    camera.clearColor = { 0.1F, 0.2F, 0.3F };
+    static_cast<void>(scene.UpsertCamera(camera));
+    Require(scene.FindCameraByEntity(2U)->desc.clearColor == camera.clearColor,
+        "Changing only camera clear color must update its proxy");
+    camera.clearMode = RenderCameraClearMode::DepthOnly;
+    static_cast<void>(scene.UpsertCamera(camera));
+    Require(scene.BuildPrimaryCamera(1280U, 720U, 5U)->clearMode == SceneRenderCameraClearMode::DepthOnly,
+        "Changing only camera clear mode must reach the resolved camera");
+
+    LightRenderProxyDesc light{ .entityId = 3U };
+    static_cast<void>(scene.UpsertLight(light));
+    light.layer = 8U;
+    static_cast<void>(scene.UpsertLight(light));
+    Require(scene.FindLightByEntity(3U)->desc.layer == 8U,
+        "Changing only a light layer must update its visibility mask");
 }
 
 void RunDeformedPaletteSyncTracksComponentChangesTest() {
@@ -3056,12 +3265,74 @@ void RunDeformedPaletteSyncTracksComponentChangesTest() {
         "Deformed palette sync retained a removed component instead of the ordinary mesh proxy");
 }
 
+void RunSharedPoseMeshBoundsTest() {
+    kb::scene::Scene scene{ kb::scene::SceneMode::Runtime };
+    constexpr kb::assets::AssetId skeletonId{ 501U }, meshId{ 502U };
+    auto skeleton = std::make_shared<kb::scene::SkeletonAsset>();
+    skeleton->bones.push_back({ .id = 1U, .name = "Root" });
+    const std::uint64_t signature = kb::scene::SkeletonCompatibilitySignature(*skeleton);
+    Require(signature != 0U, "Shared pose bounds fixture has an invalid skeleton");
+    auto mesh = std::make_shared<kb::scene::SkeletalMeshAsset>();
+    mesh->skeletonAssetId = skeletonId.value;
+    mesh->skeletonCompatibilitySignature = signature;
+    mesh->conservativeBounds = { .center = { 1.0F, 1.0F, 0.0F }, .extents = { 1.0F, 1.0F, 0.0F } };
+    mesh->fixedBounds = { .center = { 2.0F, 3.0F, 4.0F }, .extents = { 5.0F, 6.0F, 7.0F } };
+    kb::scene::SkeletalMeshLod lod;
+    lod.vertices = { { .position = { 0.0F, 0.0F, 0.0F } },
+        { .position = { 2.0F, 0.0F, 0.0F } }, { .position = { 0.0F, 2.0F, 0.0F } } };
+    lod.indices = { 0U, 1U, 2U };
+    lod.sections.push_back({ .indexCount = 3U, .boneMap = { 1U } });
+    lod.requiredBones = { 1U };
+    kb::scene::BuildSkeletalMeshLodBoneBounds(lod);
+    mesh->lods.push_back(std::move(lod));
+    Require(kb::scene::ValidateSkeletalMeshAsset(*mesh).valid,
+        "Shared pose bounds fixture has an invalid skeletal mesh");
+    auto& assets = scene.Assets().Manager();
+    Require(assets.RegisterAsset({ .id = skeletonId, .type = kb::scene::kSkeletonAssetType,
+                .name = "Shared pose skeleton", .virtualPath = "/Bounds/Shared.kbskeleton", .runtimeLoadable = true }) &&
+            assets.RegisterAsset({ .id = meshId, .type = kb::scene::kSkeletalMeshAssetType,
+                .name = "Shared pose mesh", .virtualPath = "/Bounds/Shared.kbskeletalmesh", .runtimeLoadable = true }) &&
+            assets.PublishRuntimeAsset(skeletonId, skeleton) && assets.PublishRuntimeAsset(meshId, mesh),
+        "Could not publish shared pose bounds assets");
+    const auto poseOwner = scene.Entities().CreateEntity({ .name = "Pose owner" });
+    const auto meshOwner = scene.Entities().CreateEntity({ .name = "Mesh owner" });
+    scene.Components().MeshRenderers().Set(meshOwner, { .meshAssetId = meshId.value });
+    Require(scene.Components().SkeletonBindings().Set(poseOwner, {
+        .skeletonAssetId = skeletonId.value, .skeletonCompatibilitySignature = signature, .enabled = true }),
+        "Could not bind the shared skeleton");
+    Require(scene.Components().DeformedGeometries().Set(meshOwner, {
+        .skeletalMeshAssetId = meshId.value, .poseSource = poseOwner, .fixedBounds = true, .enabled = true }),
+        "Could not bind the shared pose mesh");
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    Require(scene.Animators().InstanceSkeleton(poseOwner).has_value() &&
+            !scene.Animators().InstanceSkeleton(meshOwner).has_value(),
+        "Shared pose fixture must have a separate skeleton owner");
+    RenderScene renderScene;
+    EcsRenderSceneSynchronizer synchronizer;
+    synchronizer.Sync(scene, renderScene);
+    const auto* proxy = renderScene.FindMeshByEntity(meshOwner.Id());
+    Require(proxy != nullptr, "Shared pose mesh did not produce a render proxy");
+    Require(proxy != nullptr && proxy->desc.boundsOverride.center == std::array<float, 3U>{ 2.0F, 3.0F, 4.0F } &&
+            NearlyEqual(proxy->desc.boundsOverride.radius, std::sqrt(110.0F)),
+        "A shared pose mesh must retain its authored fixed culling bounds");
+    auto geometry = *scene.Components().DeformedGeometries().TryGet(meshOwner);
+    geometry.fixedBounds = false;
+    Require(scene.Components().DeformedGeometries().Set(meshOwner, geometry), "Could not enable animated bounds");
+    const std::array dirtyEntities{ meshOwner.Id() };
+    synchronizer.SyncEntities(scene, renderScene, dirtyEntities);
+    proxy = renderScene.FindMeshByEntity(meshOwner.Id());
+    Require(proxy != nullptr && NearlyEqual(proxy->desc.boundsOverride.radius, std::sqrt(2.0F)),
+        "A shared pose mesh must derive animated bounds from its pose source");
+}
+
 } // namespace
 
 void RunRenderSceneSyncTests() {
     if (RunRenderSceneSpawnBenchmark()) return;
     RunCreatesStableRenderProxiesTest();
+    RunLiveRenderProxyUpdatesTest();
     RunDeformedPaletteSyncTracksComponentChangesTest();
+    RunSharedPoseMeshBoundsTest();
     RunEcsSyncPropagatesDetailSwitchPolicyTest();
     RunRenderScenePrimaryCameraSelectionRespectsViewportAndPriorityTest();
     RunEcsSyncPropagatesCullingMaskAndClearSettingsTest();
@@ -3126,6 +3397,7 @@ void RunRenderSceneSyncTests() {
     RunSceneRendererReportsClusteredIblAndAdvancedLightStatsTest();
     RunSceneRendererReportsInvalidLightsSeparatelyFromBudgetSkipsTest();
     RunDirectionalShadowPlannerSkipsNonShadowCastingLightsTest();
+    RunDirectionalShadowCameraCoverageTest();
     RunRendererStoresRuntimeAssetDiscoveryIntervalTest();
     RunDisabledRuntimeAssetDiscoverySkipsFirstRefreshTest();
     RunSceneRenderDiagnosticsAggregateFrameSubmissionsTest();
@@ -3140,6 +3412,7 @@ void RunRenderSceneSyncTests() {
     RunScenesHaveStableUniqueIdsTest();
     RunParticleReleaseBeforeSyncIsOwnershipNeutralTest();
     RunSceneRenderVisibilityPublisherBuildsFrameTest();
+    RunSceneRenderVisibilityPublisherParallelParityTest();
 }
 
 } // namespace kb::render::tests

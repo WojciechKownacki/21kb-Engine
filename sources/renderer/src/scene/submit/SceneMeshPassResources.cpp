@@ -1169,18 +1169,6 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
         desc.resources,
         desc.resourceMap,
         fallbacks);
-    if (material != nullptr) {
-        std::ostringstream row;
-        row << "fallback-bind pass=" << GraphMeshPassName(desc.pass)
-            << " materialGraphActive=" << (material->graphProgram.active ? "true" : "false")
-            << " albedoAssetId=" << material->albedoTextureAssetId
-            << " normalAssetId=" << material->normalTextureAssetId
-            << " normalScale=" << material->normalScale
-            << " albedoTex=" << (bgfx::isValid(materialBinding.albedoTexture) ? std::to_string(materialBinding.albedoTexture.idx) : std::string{ "invalid" })
-            << " normalTex=" << (bgfx::isValid(materialBinding.normalTexture) ? std::to_string(materialBinding.normalTexture.idx) : std::string{ "invalid" })
-            << " params=(" << materialBinding.params[0] << ',' << materialBinding.params[1] << ',' << materialBinding.params[2] << ',' << materialBinding.params[3] << ')';
-        WriteRendererMaterialGraphDebugLog("gpu", row.str());
-    }
     bgfx::setTexture(0U, albedoSampler_, materialBinding.albedoTexture);
     bgfx::setUniform(materialParamsUniform_, materialBinding.params.data());
     bgfx::setUniform(materialFlagsUniform_, materialBinding.flags.data());

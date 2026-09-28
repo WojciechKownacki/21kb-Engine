@@ -327,10 +327,9 @@ struct SyncContext {
 [[nodiscard]] RenderBoundsSphere AnimatedBoundsForMesh(
     const kb::scene::Scene& scene,
     kb::scene::SceneEntity entity,
+    const kb::scene::DrawD3DeformedGeometryComponent* geometry,
     const std::optional<kb::scene::AnimatorInstanceSkeletonView>& skeleton) {
-    const kb::scene::DrawD3DeformedGeometryComponent* geometry =
-        scene.Components().DeformedGeometries().TryGet(entity);
-    if (geometry == nullptr || !geometry->enabled || skeleton == std::nullopt) return {};
+    if (geometry == nullptr || !geometry->enabled) return {};
     const kb::scene::SceneEntity poseSource = geometry->poseSource.IsValid() ? geometry->poseSource : entity;
     const std::optional<kb::scene::AnimatorInstanceSkeletonView> pose = poseSource == entity
         ? skeleton
@@ -476,7 +475,7 @@ void SyncMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent
         .materialSlotAssetIds = materialSlotAssetIds,
         .materialSlotOverrideCount = effectiveMaterialSlotOverrideCount,
         .model = SceneTransformMatrices::Model(renderTransform),
-        .boundsOverride = AnimatedBoundsForMesh(*sync->scene, entity, skeleton),
+        .boundsOverride = AnimatedBoundsForMesh(*sync->scene, entity, geometry, skeleton),
         .color = NeutralInstanceColor(),
         .currentSkinningPalette = currentSkinningPalette,
         .previousSkinningPalette = previousSkinningPalette,

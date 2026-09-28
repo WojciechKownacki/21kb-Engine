@@ -3,7 +3,10 @@
 #include "engine/scene/SceneRenderFeedback.hpp"
 #include "kb/render/scene/RenderScene.hpp"
 
+#include <cstddef>
 #include <cstdint>
+
+namespace kb::ecs { class WorkerPool; }
 
 namespace kb::render {
 
@@ -26,6 +29,7 @@ struct SceneRenderCamera;
 class SceneRenderVisibilityPublisher {
 public:
     SceneRenderVisibilityPublisher() = delete;
+    static constexpr std::size_t ParallelThreshold = 16U * 1024U;
 
     // Fills `outFrame` from the render scene's current mesh proxies (entries sorted by
     // entityId; reuses the vector's existing capacity - no steady-state allocation).
@@ -50,7 +54,8 @@ public:
         const RenderResourceRegistry* resources,
         const SceneRenderResourceMap* resourceMap,
         kb::scene::SceneRenderVisibilityFrame& outFrame,
-        double* outSortMilliseconds = nullptr);
+        double* outSortMilliseconds = nullptr,
+        kb::ecs::WorkerPool* workerPool = nullptr);
 };
 
 } // namespace kb::render

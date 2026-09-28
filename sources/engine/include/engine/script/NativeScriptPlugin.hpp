@@ -8,7 +8,7 @@
 
 namespace kb::script {
 
-inline constexpr std::uint32_t kNativeScriptPluginApiVersion = 1U;
+inline constexpr std::uint32_t kNativeScriptPluginApiVersion = 3U;
 inline constexpr const char* kNativeScriptPluginDefaultEntryPoint = "kb_register_native_scripts";
 
 using NativeScriptPluginLifecycleProc = void (*)(ScriptExecutionContext* context);

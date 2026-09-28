@@ -1143,7 +1143,17 @@ void RunSceneRuntimeFixedInterpolationTest() {
             .localPosition = kb::scene::Vec3{ 0.0F, 0.0F, 0.0F },
         },
     });
-    scene.Runtime().AddSceneSystem(std::make_unique<FixedMoveSceneSystem>(object.Entity(), kb::scene::Vec3{ 10.0F, 0.0F, 0.0F }));
+    const auto moveSystem = scene.Runtime().AddSceneSystem(std::make_unique<FixedMoveSceneSystem>(object.Entity(), kb::scene::Vec3{ 10.0F, 0.0F, 0.0F }));
+
+    std::array<kb::scene::SceneEntity, 3U> otherArchetypes;
+    for (std::size_t index = 0U; index < otherArchetypes.size(); ++index) {
+        otherArchetypes[index] = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+            .name = "Interpolation neighbour",
+            .transform = kb::scene::TransformComponent{ .localPosition = {100.0F + static_cast<float>(index), 0.0F, 0.0F} },
+        });
+    }
+    scene.Components().Cameras().Set(otherArchetypes[0], kb::scene::CameraComponent{});
+    scene.Components().MeshRenderers().Set(otherArchetypes[1], kb::scene::MeshRendererComponent{});
 
     static_cast<void>(scene.Runtime().Update(0.02F));
     kb::tests::Require(kb::tests::NearlyEqual(scene.Transforms().Get(object).localPosition.x, 10.0F), "Fixed system should write the current transform");
@@ -1156,6 +1166,136 @@ void RunSceneRuntimeFixedInterpolationTest() {
     kb::tests::Require(interpolated.has_value(), "Runtime should keep interpolation samples across frames without a fixed step");
     kb::tests::Require(kb::tests::NearlyEqual(scene.Runtime().FixedInterpolationAlpha(), 0.5F), "Runtime should expose half-step interpolation alpha");
     kb::tests::Require(kb::tests::NearlyEqual(interpolated->localPosition.x, 5.0F), "Interpolated transform should blend previous and current fixed samples");
+    for (std::size_t index = 0U; index < otherArchetypes.size(); ++index) {
+        const auto neighbour = scene.Runtime().InterpolatedTransform(otherArchetypes[index]);
+        kb::tests::Require(neighbour.has_value() &&
+            kb::tests::NearlyEqual(neighbour->localPosition.x, 100.0F + static_cast<float>(index)),
+            "Sorting interpolation samples must preserve poses across different archetypes");
+    }
+
+    for (std::size_t step = 0U; step < 4U; ++step) {
+        if (step == 2U) {
+            scene.Components().MeshRenderers().Set(otherArchetypes[2], kb::scene::MeshRendererComponent{});
+        }
+        auto edited = scene.Transforms().Get(object);
+        edited.localPosition.x = 20.0F + 2.0F * static_cast<float>(step);
+        scene.Transforms().Set(object.Entity(), edited);
+        static_cast<void>(scene.Runtime().Update(0.02F));
+        interpolated = scene.Runtime().InterpolatedTransform(object.Entity());
+        kb::tests::Require(interpolated.has_value() &&
+            kb::tests::NearlyEqual(interpolated->localPosition.x, 15.0F + static_cast<float>(step)),
+            "Reused interpolation storage must capture each step's current starting pose");
+        for (std::size_t index = 0U; index < otherArchetypes.size(); ++index) {
+            const auto neighbour = scene.Runtime().InterpolatedTransform(otherArchetypes[index]);
+            kb::tests::Require(neighbour.has_value() &&
+                kb::tests::NearlyEqual(neighbour->localPosition.x, 100.0F + static_cast<float>(index)),
+                "Reusing interpolation indices must preserve poses when archetype row order changes");
+        }
+    }
+
+    scene.Entities().Destroy(object.Entity());
+    kb::tests::Require(!scene.Runtime().InterpolatedTransform(object.Entity()).has_value(),
+        "Destroyed entities must not expose retained interpolation samples");
+    kb::tests::Require(scene.Runtime().RemoveSceneSystem(moveSystem), "Fixed move system must detach");
+
+    class ReplaceOnFixed final : public kb::scene::SceneSystem {
+    public:
+        kb::scene::SceneEntity entity;
+        explicit ReplaceOnFixed(kb::scene::SceneEntity initial) : entity(initial) {}
+        bool RequiresFixedStep() const override { return true; }
+        void OnFixedUpdate(kb::scene::SceneSystemContext& context) override {
+            auto& scene = context.GetScene();
+            scene.Entities().Destroy(entity);
+            entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+                .name = "Created during fixed simulation",
+                .transform = kb::scene::TransformComponent{.localPosition = {42.0F, 0.0F, 0.0F}},
+            });
+        }
+    };
+    const auto initial = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "Removed during fixed simulation",
+        .transform = kb::scene::TransformComponent{.localPosition = {-17.0F, 0.0F, 0.0F}},
+    });
+    auto replacement = std::make_unique<ReplaceOnFixed>(initial);
+    auto* replacementSystem = replacement.get();
+    scene.Runtime().AddSceneSystem(std::move(replacement));
+    static_cast<void>(scene.Runtime().Update(0.03F));
+    kb::tests::Require(!scene.Runtime().InterpolatedTransform(initial).has_value(),
+        "Entities removed inside fixed simulation must not remain in its final samples");
+    interpolated = scene.Runtime().InterpolatedTransform(replacementSystem->entity);
+    kb::tests::Require(interpolated.has_value() && kb::tests::NearlyEqual(interpolated->localPosition.x, 42.0F),
+        "New generations created inside a fixed step must interpolate from their own initial pose");
+    const auto previousGeneration = replacementSystem->entity;
+    static_cast<void>(scene.Runtime().Update(0.02F));
+    interpolated = scene.Runtime().InterpolatedTransform(replacementSystem->entity);
+    kb::tests::Require(!scene.Runtime().InterpolatedTransform(previousGeneration).has_value() &&
+            interpolated.has_value() && kb::tests::NearlyEqual(interpolated->localPosition.x, 42.0F),
+        "Reused interpolation indices must rebuild when a fixed step replaces an entity generation");
+}
+
+void RunSceneRuntimeDestroyedDirtyTransformTest() {
+    kb::scene::Scene scene;
+    const auto parent = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "Dirty hierarchy parent",
+        .transform = kb::scene::TransformComponent{.localPosition = {10.0F, 0.0F, 0.0F}},
+    });
+    const auto child = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "Dirty hierarchy child", .parent = parent,
+    });
+    const auto doomed = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{.name = "Removed dirty root"});
+    scene.Runtime().SynchronizeTransforms();
+    auto pose = scene.Transforms().Get(doomed);
+    pose.localPosition.x = 100.0F;
+    scene.Transforms().Set(doomed, pose);
+    scene.Entities().Destroy(doomed);
+    const auto replacement = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "Replacement root",
+        .transform = kb::scene::TransformComponent{.localPosition = {42.0F, 0.0F, 0.0F}},
+    });
+    auto parentPose = scene.Transforms().Get(parent);
+    parentPose.localPosition.x = 20.0F;
+    scene.Transforms().Set(parent, parentPose);
+    scene.Runtime().SynchronizeTransforms();
+    kb::tests::Require(!scene.Entities().IsAlive(doomed) &&
+        kb::tests::NearlyEqual(scene.Transforms().Get(replacement).worldPosition.x, 42.0F) &&
+        kb::tests::NearlyEqual(scene.Transforms().Get(child).worldPosition.x, 20.0F),
+        ("Removing a dirty root must preserve propagation for live generations and descendants: replacement=" +
+            std::to_string(scene.Transforms().Get(replacement).worldPosition.x) + " child=" +
+            std::to_string(scene.Transforms().Get(child).worldPosition.x)).c_str());
+}
+
+void RunSceneRuntimeMixedTransformWritesTest() {
+    kb::scene::Scene scene;
+    const auto apiParent = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{.name = "API parent"});
+    const auto nativeParent = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{.name = "Native parent"});
+    const auto apiChild = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "API child", .parent = apiParent,
+        .transform = kb::scene::TransformComponent{.localPosition = {2.0F, 0.0F, 0.0F}},
+    });
+    const auto nativeChild = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "Native child", .parent = nativeParent,
+        .transform = kb::scene::TransformComponent{.localPosition = {3.0F, 0.0F, 0.0F}},
+    });
+    scene.Runtime().SynchronizeTransforms();
+    for (const float offset : {0.0F, 10.0F}) {
+        auto apiPose = scene.Transforms().Get(apiParent);
+        apiPose.localPosition.x = 15.0F + offset;
+        scene.Transforms().Set(apiParent, apiPose);
+        auto nativePose = scene.Transforms().Get(nativeParent);
+        nativePose.localPosition.x = 25.0F + offset;
+        nativePose.worldDirty = true;
+        ++nativePose.localVersion;
+        scene.Runtime().EcsWorld().Set(nativeParent.Entity(), nativePose);
+        scene.Runtime().SynchronizeTransforms();
+        kb::tests::Require(kb::tests::NearlyEqual(scene.Transforms().Get(apiChild).worldPosition.x, 17.0F + offset) &&
+            kb::tests::NearlyEqual(scene.Transforms().Get(nativeChild).worldPosition.x, 28.0F + offset),
+            "Scene API writes must not hide native ECS transform writes in another hierarchy");
+        const auto childVersion = scene.Transforms().Get(nativeChild).worldVersion;
+        scene.Runtime().SynchronizeTransforms();
+        kb::tests::Require(scene.Transforms().Get(nativeChild).worldVersion == childVersion &&
+            scene.Runtime().HotPathReport().transformHierarchyInspectedCount == 0U,
+            "Clean hierarchies must retain world versions without inspecting unchanged transforms");
+    }
 }
 
 void RunSceneRuntimeTransformHotPathReportTest() {
@@ -1649,6 +1789,8 @@ void RunSceneSystemTransformSyncTests() {
     RunSceneRuntimeFrameAndPlayStateTest();
     RunSceneRuntimeReadSnapshotAndCommandQueueTest();
     RunSceneRuntimeFixedInterpolationTest();
+    RunSceneRuntimeDestroyedDirtyTransformTest();
+    RunSceneRuntimeMixedTransformWritesTest();
     RunSceneRuntimeTransformHotPathReportTest();
     RunSceneRuntimeRootTransformFastPathCorrectnessTest();
     RunSceneRuntimeRootOnlyNativeDirtyRangePathTest();
