@@ -76,9 +76,11 @@ SceneDocumentLoadResult SceneDocumentService::Load(const std::filesystem::path& 
     return SceneAssetReader::Read(path);
 }
 
-bool SceneDocumentService::LoadIntoScene(Scene& scene, const SceneDocument& document) {
+namespace {
+
+SceneDocumentOwnedLoadResult LoadIntoSceneInternal(Scene& scene, const SceneDocument& document, bool ownRoots) {
     if (!IsSceneDocumentAudioConfigurationValid(document)) {
-        return false;
+        return {};
     }
     // A non-additive load replaces the gameplay world while reusing the Scene
     // container and its module backends. Stop scene-owned voices before their
@@ -90,28 +92,71 @@ bool SceneDocumentService::LoadIntoScene(Scene& scene, const SceneDocument& docu
     SceneAudioListenerAccess::SetLocalUser(scene, kb::input::kPrimaryLocalUser);
     SceneAudioMixerAccess::SetActiveMixer(scene, document.audioMixerAssetId);
     if (!SceneAudioMixerAccess::SetActiveSnapshot(scene, document.audioMixerSnapshot)) {
-        return false;
+        return {};
     }
     SceneAudioMixerAccess::ResetRuntimeMixerState(scene);
     if (!SceneAudioOcclusionAccess::Configure(scene, document.audioOcclusionSettings)) {
-        return false;
+        return {};
     }
     SceneAudioOcclusionAccess::PublishRuntimeStats(scene, {});
     ClearSceneRoots(scene);
     if (!scene.Tags().ReplaceDefinitions(document.tagDefinitions)) {
-        return false;
+        return {};
     }
+    SceneEntity root{};
     if (!document.worldPrefab.Empty()) {
-        const ScenePrefabInstance instance = scene.Prefabs().Instantiate(document.worldPrefab);
+        const auto nodes = document.worldPrefab.Nodes();
+        const auto firstRoot = std::find_if(nodes.begin(), nodes.end(), [](const ScenePrefabNodeDesc& node) {
+            return node.parentNode == ScenePrefabNodeDesc::NoParent;
+        });
+        const bool multipleRoots = ownRoots && std::count_if(nodes.begin(), nodes.end(), [](const ScenePrefabNodeDesc& node) {
+            return node.parentNode == ScenePrefabNodeDesc::NoParent;
+        }) > 1;
+        const SceneObject owner = multipleRoots
+            ? scene.Entities().CreateObject(SceneObjectDesc{ .name = document.name })
+            : SceneObject{};
+        if (multipleRoots && !owner.IsValid()) {
+            return {};
+        }
+        if (ownRoots && firstRoot == nodes.end()) {
+            return {};
+        }
+        ScenePrefabInstance instance;
+        try {
+            instance = scene.Prefabs().Instantiate(
+                document.worldPrefab, ScenePrefabInstantiationSettings{ .parent = owner });
+        } catch (...) {
+            if (owner.IsValid()) {
+                scene.Entities().Destroy(owner);
+            }
+            throw;
+        }
         if (instance.Empty()) {
-            return false;
+            if (owner.IsValid()) {
+                scene.Entities().Destroy(owner);
+            }
+            return {};
+        }
+        if (ownRoots) {
+            root = owner.IsValid() ? owner.Entity() :
+                instance.ObjectAt(static_cast<std::uint32_t>(firstRoot - nodes.begin())).Entity();
         }
     }
     // Old scene files carried only assignment text. Import it once at the load
     // boundary so the runtime catalogue remains the sole author-facing list.
     scene.Transforms().ForEach(&RegisterAssignedTagVisitor, &scene);
     scene.Runtime().SynchronizeTransforms();
-    return true;
+    return SceneDocumentOwnedLoadResult{ .succeeded = true, .root = root };
+}
+
+} // namespace
+
+bool SceneDocumentService::LoadIntoScene(Scene& scene, const SceneDocument& document) {
+    return LoadIntoSceneInternal(scene, document, false).succeeded;
+}
+
+SceneDocumentOwnedLoadResult SceneDocumentService::LoadIntoSceneOwned(Scene& scene, const SceneDocument& document) {
+    return LoadIntoSceneInternal(scene, document, true);
 }
 
 bool SceneDocumentService::LoadFileIntoScene(Scene& scene, const std::filesystem::path& path) {

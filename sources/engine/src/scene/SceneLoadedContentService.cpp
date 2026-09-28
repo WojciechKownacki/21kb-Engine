@@ -5,13 +5,11 @@
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
-#include "engine/scene/SceneRuntime.hpp"
 #include "assets/AssetPathUtilities.hpp"
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneState.hpp"
 
 #include <algorithm>
-#include <stdexcept>
 
 namespace kb::scene {
 namespace {
@@ -107,46 +105,21 @@ std::uint64_t SceneLoadedContentService::Load(Scene& scene, const std::filesyste
     // signal, not a fabricated success.
     QueueLifecycleEvent(state, "SceneLoading", state.nextLoadedSceneId, loaded.document.name);
     if (!additive) {
-        // LoadIntoScene's ClearSceneRoots destroys every root entity EXCEPT
-        // ones marked persistent (LIB-072) — so every existing record is
-        // now stale and must be dropped, EXCEPT that a persistent entity
-        // that happened to be a previous record's root survives the wipe
-        // while its record does not: it stays alive in the hierarchy, just
-        // no longer addressable via Scene.Find/Unload under its old id.
-        // Documented scope limit, not a crash risk — the entity itself is
-        // never destroyed by this.
-        std::vector<SceneEntity> rootsBefore = scene.Hierarchy().RootEntities();
-        std::ranges::sort(rootsBefore);
-        if (!SceneDocumentService::LoadIntoScene(scene, loaded.document)) {
+        // ClearSceneRoots preserves persistent roots. The document load
+        // attaches its new roots to one owner during prefab creation, so
+        // persistent survivors cannot become part of the new scene record.
+        const SceneDocumentOwnedLoadResult owned = SceneDocumentService::LoadIntoSceneOwned(scene, loaded.document);
+        if (!owned.succeeded) {
             return 0U;
         }
         state.loadedScenes.clear();
         state.activeLoadedSceneId = 0U;
-        // Persistent survivors belong to the existing world, not the loaded document.
-        const std::vector<SceneEntity> rootsAfter = scene.Hierarchy().RootEntities();
-        std::vector<SceneEntity> newRoots;
-        newRoots.reserve(rootsAfter.size());
-        for (const SceneEntity candidate : rootsAfter) {
-            if (!std::ranges::binary_search(rootsBefore, candidate)) {
-                newRoots.push_back(candidate);
-            }
-        }
-        SceneEntity newRoot = newRoots.size() == 1U ? newRoots.front() : SceneEntity{};
-        if (newRoots.size() > 1U) {
-            newRoot = scene.Entities().CreateEntity(SceneObjectDesc{ .name = loaded.document.name });
-            for (const SceneEntity candidate : newRoots) {
-                if (!scene.Hierarchy().SetParent(candidate, newRoot)) {
-                    throw std::runtime_error("Loaded scene root could not be assigned to its owner");
-                }
-            }
-            scene.Runtime().SynchronizeTransforms();
-        }
         const std::uint64_t id = state.nextLoadedSceneId++;
         state.loadedScenes.push_back(SceneState::LoadedSceneRecord{
             .id = id,
             .name = loaded.document.name,
             .path = path.string(),
-            .root = newRoot,
+            .root = owned.root,
         });
         QueueLifecycleEvent(state, "SceneLoaded", id, loaded.document.name);
         state.activeLoadedSceneId = id;
