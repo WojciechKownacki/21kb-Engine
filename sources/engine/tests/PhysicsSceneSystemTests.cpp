@@ -24,8 +24,10 @@
 #include "engine/scene/ScenePrefab.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
+#include "engine/scene/SceneLoadedContent.hpp"
 #include "engine/scene/SceneObject.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
@@ -1942,6 +1944,59 @@ void RunPhysicsSceneSystemFallingBodyTest() {
     }), "A non-finite collider must report a scene error before reaching Jolt");
 }
 
+void RunPhysicsPersistentSleeperTransitionTest() {
+    if (std::filesystem::path{KB_PHYSICS_JOLT_PLUGIN_PATH}.empty()) {
+        return;
+    }
+    kb::project::ProjectDescriptor descriptor;
+    descriptor.disableEnginePluginsByDefault = true;
+    descriptor.plugins.push_back(kb::project::ProjectPluginReference{
+        .name = "Physics.Jolt",
+        .binaryPath = KB_PHYSICS_JOLT_PLUGIN_PATH,
+        .enabled = true,
+    });
+    kb::scene::Scene scene{std::move(descriptor)};
+    const auto support = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "Transition support",
+        .transform = kb::scene::TransformComponent{.localPosition = {1500.0F, -0.5F, 0.0F}},
+    });
+    scene.Components().Colliders().Set(support.Entity(), kb::scene::ColliderComponent{
+        .boxSize = {4.0F, 1.0F, 4.0F},
+    });
+    const auto sleeper = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "Persistent sleeper",
+        .transform = kb::scene::TransformComponent{.localPosition = {1500.0F, 0.5F, 0.0F}},
+    });
+    scene.Components().Rigidbodies().Set(sleeper.Entity(), kb::scene::RigidbodyComponent{});
+    scene.Components().Colliders().Set(sleeper.Entity(), kb::scene::ColliderComponent{});
+    scene.Entities().SetPersistent(sleeper, true);
+    static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+    kb::tests::Require(kb::scene::PhysicsBackend::Sleep(scene, sleeper.Entity()) &&
+            kb::scene::PhysicsBackend::IsSleeping(scene, sleeper.Entity()),
+        "Persistent transition body must be asleep before replacing its support");
+
+    kb::scene::Scene replacement;
+    static_cast<void>(replacement.Entities().CreateObject(kb::scene::SceneObjectDesc{.name = "New scene root"}));
+    const auto path = std::filesystem::temp_directory_path() / "21kb_physics_persistent_sleeper_transition.21kbscene";
+    kb::tests::Require(kb::scene::SceneDocumentService::Save(
+            kb::scene::SceneDocumentService::Capture(replacement, "Replacement"), path),
+        "Persistent sleeper transition fixture could not be saved");
+    kb::tests::Require(scene.LoadedContent().Load(path, false) != 0U &&
+            scene.Entities().IsAlive(sleeper.Entity()),
+        "Non-additive load destroyed the persistent dynamic body");
+    static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+    kb::tests::Require(!kb::scene::PhysicsBackend::IsSleeping(scene, sleeper.Entity()),
+        "Removing support during a scene transition must wake the surviving dynamic body");
+    const float yBeforeFall = scene.Transforms().Get(sleeper).worldPosition.y;
+    for (int frame = 0; frame < 30; ++frame) {
+        static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+    }
+    kb::tests::Require(scene.Transforms().Get(sleeper).worldPosition.y < yBeforeFall - 0.5F,
+        "Persistent dynamic body did not fall after its support was replaced");
+    std::error_code error;
+    std::filesystem::remove(path, error);
+}
+
 void RunPhysicsIdenticalReplayTest() {
     if (std::filesystem::path{KB_PHYSICS_JOLT_PLUGIN_PATH}.empty()) {
         return;
@@ -2258,6 +2313,7 @@ void RunPhysicsSceneSystemTests() {
     RunPhysicsDebugDrawTest();
     RunPhysicsIdenticalReplayTest();
     RunPhysicsSceneSystemFallingBodyTest();
+    RunPhysicsPersistentSleeperTransitionTest();
 }
 
 void RunPhysicsReplayOnlyTest() {
