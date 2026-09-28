@@ -37,6 +37,7 @@ public:
         const std::wstring& title,
         std::uint32_t width,
         std::uint32_t height,
+        bool fullscreen,
         kb::input::Win32InputCollector& inputCollector);
 
     [[nodiscard]] std::uint32_t Width() const noexcept override;
@@ -65,6 +66,7 @@ private:
     std::uint32_t height_ = 0U;
     bool resizePending_ = false;
     bool closeRequested_ = false;
+    bool fullscreen_ = false;
 };
 
 } // namespace kb::game
