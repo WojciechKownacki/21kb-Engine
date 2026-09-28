@@ -398,6 +398,11 @@ private:
     }
 
     static void Erase(std::vector<SceneEntity>& entities, SceneEntity entity) {
+        // Hierarchy lists contain unique entities; the common subtree teardown case is the last child.
+        if (!entities.empty() && entities.back() == entity) {
+            entities.pop_back();
+            return;
+        }
         std::erase(entities, entity);
     }
 };
