@@ -35,7 +35,8 @@ void SceneEntityDestructionService::DestroyEntity(Scene& scene, SceneEntity enti
         MarkScenePrefabTopologyDirty(state, SceneHierarchyService::Parent(scene, entity));
 
         if (SceneHierarchyCache::ChildCount(state, entity) != 0U) {
-            entity = SceneHierarchyCache::ChildAt(state, entity, 0U);
+            // Destroy siblings from the end so child lists can shrink without shifting survivors.
+            entity = SceneHierarchyCache::ChildAt(state, entity, SceneHierarchyCache::ChildCount(state, entity) - 1U);
             continue;
         }
 
@@ -51,7 +52,7 @@ void SceneEntityDestructionService::DestroyEntity(Scene& scene, SceneEntity enti
             }
             entity = parent;
         } while (SceneHierarchyCache::ChildCount(state, entity) == 0U);
-        entity = SceneHierarchyCache::ChildAt(state, entity, 0U);
+        entity = SceneHierarchyCache::ChildAt(state, entity, SceneHierarchyCache::ChildCount(state, entity) - 1U);
     }
 }
 
