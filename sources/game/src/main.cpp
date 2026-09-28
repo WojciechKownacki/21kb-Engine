@@ -48,6 +48,8 @@ constexpr std::uint32_t kDefaultWindowHeight = 720U;
 struct GameOptions {
     std::filesystem::path projectPath;
     std::string sceneOverride;
+    std::uint32_t width = kDefaultWindowWidth;
+    std::uint32_t height = kDefaultWindowHeight;
     // 0 runs until the player closes the window; a positive value bounds the
     // run so an automated check can drive the real executable to completion.
     std::uint32_t frameLimit = 0U;
@@ -81,6 +83,13 @@ struct GameOptions {
     return true;
 }
 
+[[nodiscard]] bool ParseWindowExtent(std::wstring_view text, std::uint32_t& extent) noexcept {
+    if (!ParseFrameLimit(text, extent) || extent < 64U || extent > 8192U) {
+        return false;
+    }
+    return true;
+}
+
 [[nodiscard]] bool ParseArguments(int argc, wchar_t** argv, GameOptions& options) {
     for (int index = 1; index < argc; ++index) {
         const std::wstring_view argument{ argv[index] };
@@ -99,6 +108,16 @@ struct GameOptions {
                 return false;
             }
             options.frameLimit = frames;
+        } else if (HasPrefix(argument, L"--width=")) {
+            if (!ParseWindowExtent(argument.substr(8U), options.width)) {
+                std::cerr << "kb_game: --width expects 64..8192 pixels\n";
+                return false;
+            }
+        } else if (HasPrefix(argument, L"--height=")) {
+            if (!ParseWindowExtent(argument.substr(9U), options.height)) {
+                std::cerr << "kb_game: --height expects 64..8192 pixels\n";
+                return false;
+            }
         } else {
             std::cerr << "kb_game: unknown option '"
                       << kb::game::NarrowForDiagnostics(argument) << "'\n";
@@ -126,8 +145,8 @@ int RunGame(const GameOptions& options) {
     kb::game::GameWindow window;
     if (!window.Open(
             WindowTitle(projectRuntime),
-            kDefaultWindowWidth,
-            kDefaultWindowHeight,
+            options.width,
+            options.height,
             inputCollector)) {
         std::cerr << "kb_game: game window could not be created\n";
         return EXIT_FAILURE;
@@ -198,6 +217,7 @@ int RunGame(const GameOptions& options) {
               << " assets=" << discoveredAssets
               << " modules=" << scene.ActiveModuleCount()
               << " backend=" << renderer.CapabilityReport().selectedBackendName
+              << " resolution=" << window.Width() << 'x' << window.Height()
               << " gpu_vendor=" << renderer.CapabilityReport().vendorId
               << " gpu_device=" << renderer.CapabilityReport().deviceId << '\n';
     std::cout.flush();
