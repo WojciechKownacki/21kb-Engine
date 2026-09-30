@@ -38,7 +38,8 @@ public:
         std::uint32_t width,
         std::uint32_t height,
         bool fullscreen,
-        kb::input::Win32InputCollector& inputCollector);
+        kb::input::Win32InputCollector& inputCollector,
+        bool visible = true);
 
     [[nodiscard]] std::uint32_t Width() const noexcept override;
     [[nodiscard]] std::uint32_t Height() const noexcept override;

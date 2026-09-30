@@ -13,6 +13,7 @@ struct SceneMeshBatch {
     std::uint32_t sourceDrawGroupIndex = 0;
     bool hasMaterialSlotOverrides = false;
     std::span<const SceneRenderMeshInstance> instances{};
+    std::span<const SceneMeshVisibilityCluster> visibilityClusters{};
 
     [[nodiscard]] bool Empty() const noexcept {
         return instances.empty();

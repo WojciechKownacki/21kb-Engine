@@ -3094,6 +3094,18 @@ void RunStreamFocusRuntimeTest() {
         .active = true,
     });
     static_cast<void>(scene.Runtime().Update(0.0F));
+    const auto awaitLoaded = [&] {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+        while (scene.LoadedContent().Find("StreamFocusFixture") == 0U && std::chrono::steady_clock::now() < deadline) {
+            static_cast<void>(scene.Runtime().Update(0.0F));
+            std::this_thread::yield();
+        }
+    };
+    const auto awaitUnloaded = [&](std::uint64_t id) {
+        for (std::size_t attempt = 0U; attempt < 1000U && scene.LoadedContent().Exists(id); ++attempt)
+            static_cast<void>(scene.Runtime().Update(0.0F));
+    };
+    awaitLoaded();
     std::uint64_t loadId = scene.LoadedContent().Find("StreamFocusFixture");
     kb::tests::Require(loadId != 0U && scene.LoadedContent().Exists(loadId),
         "Stream Focus must load eligible shared content inside its inner radius");
@@ -3107,12 +3119,14 @@ void RunStreamFocusRuntimeTest() {
     ownerTransform.localPosition = { 25.0F, 0.0F, 0.0F };
     scene.Transforms().Set(owner.Entity(), ownerTransform);
     static_cast<void>(scene.Runtime().Update(0.0F));
+    awaitUnloaded(loadId);
     kb::tests::Require(!scene.LoadedContent().Exists(loadId),
         "Stream Focus must release content outside its outer radius through the shared content service");
 
     ownerTransform.localPosition = { 5.0F, 0.0F, 0.0F };
     scene.Transforms().Set(owner.Entity(), ownerTransform);
     static_cast<void>(scene.Runtime().Update(0.0F));
+    awaitLoaded();
     loadId = scene.LoadedContent().Find("StreamFocusFixture");
     kb::tests::Require(loadId != 0U && scene.LoadedContent().Exists(loadId),
         "Stream Focus must activate released content again after it returns inside the inner radius");
@@ -3122,6 +3136,7 @@ void RunStreamFocusRuntimeTest() {
     focus->loadMask = kb::scene::StreamLoadMask::Prefab;
     scene.Components().StreamFocuses().MarkModified(focusObject.Entity());
     static_cast<void>(scene.Runtime().Update(0.0F));
+    awaitUnloaded(loadId);
     kb::tests::Require(!scene.LoadedContent().Exists(loadId),
         "Stream Focus load mask must prevent unsupported content kinds from entering the shared runtime flow");
     std::filesystem::remove_all(testRoot, error);
@@ -3282,7 +3297,8 @@ void RunComponentInspectorDescCatalogTest() {
 
         const std::span<const kb::script::ScriptSceneComponentPropertyDesc> scriptProperties = kb::script::ScriptSceneComponentApi::ComponentProperties(scriptName);
         kb::tests::Require(componentDesc->fields.size() == scriptProperties.size(),
-            "Engine21kbLibrary component inspector entry must catalog exactly the same field count ScriptSceneComponentApi::ComponentProperties() reports for that component");
+            ("Inspector field count mismatch for " + std::string{scriptName} + ": " +
+                std::to_string(componentDesc->fields.size()) + " vs " + std::to_string(scriptProperties.size())).c_str());
         for (const kb::script::ScriptSceneComponentPropertyDesc& property : scriptProperties) {
             ++fieldsChecked;
             const kb::library::LibraryComponentInspectorFieldDesc* fieldDesc = kb::library::EngineLibraryComponentInspectorRegistry::FindField(scriptName, property.name);
@@ -3306,7 +3322,7 @@ void RunComponentInspectorDescCatalogTest() {
     // Light remains a public compatibility alias for 3D Radiance Emitter and
     // intentionally reuses the canonical inspector metadata for its 16 fields.
     // Particle Effect contributes nine authoring and playback fields.
-    kb::tests::Require(fieldsChecked == 616U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (616, including the Light compatibility alias) across all components");
+    kb::tests::Require(fieldsChecked == 617U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (617, including the collision mesh and Light compatibility alias) across all components");
 
     for (const kb::library::LibraryComponentInspectorDesc& desc : catalog) {
         const bool foundInScriptNames = std::ranges::find(scriptComponentNames, desc.componentName) != scriptComponentNames.end();
@@ -5217,8 +5233,18 @@ void RunGameInstanceLifetimeTest() {
             !kb::core::CanExecute(floatCommand, kb::core::ConsolePermission::User, { "1,5" }) &&
             !kb::core::CanExecute(floatCommand, kb::core::ConsolePermission::User, { "1.0x" }),
         "Console float argument validation must use the invariant cross-platform numeric grammar");
-    kb::core::ProfilerCounters profiler;profiler.Scope("tick");profiler.Timeline("step");profiler.Allocation();kb::tests::Require(profiler.scopes==1U&&profiler.timelineEvents==1U&&profiler.allocations==1U,"Profiler counters did not record scope, timeline, allocation");
+    kb::core::ProfilerCounters profiler;
+    profiler.Scope("tick"); profiler.Timeline("step"); profiler.Allocation();
+    const std::uint64_t expectedProfilerSamples = kb::core::ProfilerCounters::Enabled() ? 1U : 0U;
+    kb::tests::Require(profiler.scopes == expectedProfilerSamples &&
+        profiler.timelineEvents == expectedProfilerSamples && profiler.allocations == expectedProfilerSamples,
+        "Profiler counters must respect the build's enabled state");
+    if constexpr (kb::core::DebugDrawBuffer::Enabled()) {
     kb::core::DebugDrawBuffer draw{5U}; kb::tests::Require(draw.DrawLine({},{1.0F,0.0F,0.0F},1.0F,3U)&&draw.DrawRay({},{0.0F,1.0F,0.0F},1.0F,3U)&&draw.DrawBox({},{1.0F,1.0F,1.0F},1.0F,3U)&&draw.DrawSphere({},1.0F,1.0F,3U)&&draw.DrawText({},"probe",1.0F,3U)&&draw.Commands().size()==5U&&draw.Commands().back().text=="probe"&&!draw.DrawLine({},{},1.0F,3U),"Debug draw buffer did not retain bounded commands"); draw.Advance(1.0F); kb::tests::Require(draw.Commands().empty(),"Debug draw duration did not expire commands");
+    } else {
+        kb::core::DebugDrawBuffer draw{5U};
+        kb::tests::Require(!draw.DrawLine({}, {}, 1.0F) && draw.Commands().empty(), "Release debug drawing must remain disabled");
+    }
     kb::tests::Require(kb::core::Assert(false,kb::core::AssertionPolicy::Development,"x",{"lua:1"}).fatal&&!kb::core::Assert(false,kb::core::AssertionPolicy::Release,"x").fatal&&kb::core::Require(false,kb::core::AssertionPolicy::Release,"x").fatal&&!kb::core::SoftFail(false,kb::core::AssertionPolicy::Development,"x").fatal&&kb::core::Assert(false,kb::core::AssertionPolicy::Development,"x",{"lua:1"}).scriptStackTrace==std::vector<std::string>{"lua:1"}, "Assertion policy did not distinguish assert, require, soft-fail, or script stack traces");
     kb::core::EngineLog engineLog{ 5U }; const kb::core::LogRecord logRecord{ .category="AI", .message="event", .entity=1U, .world=2U, .fields={{"state",std::string{"alert"}},{"attempt",std::int64_t{3}},{"visible",true}} }; kb::tests::Require(engineLog.Trace(logRecord, 1U, 1U) && engineLog.Debug(logRecord, 2U, 1U) && engineLog.Info(logRecord, 3U, 1U) && engineLog.Warn(logRecord, 4U, 1U) && engineLog.Error(logRecord, 5U, 1U) && !engineLog.Warn(logRecord, 4U, 1U) && engineLog.Records().size()==5U && engineLog.Records().front().level==kb::core::LogLevel::Trace && engineLog.Records().back().level==kb::core::LogLevel::Error && engineLog.Records().front().entity==1U && engineLog.Records().front().world==2U && engineLog.Records().front().fields.front().key=="state" && std::get<std::int64_t>(engineLog.Records().front().fields[1U].value)==3 && std::get<bool>(engineLog.Records().front().fields[2U].value) && !kb::core::EngineLog{0U}.Info(logRecord,1U,1U), "Engine log did not retain levels, typed structured context or rate limit duplicate keys");
     constexpr kb::platform::SafeDateTime date{ .unixSeconds = 1000 }; const kb::platform::PlatformLocale locale{ .language="pl", .region="PL", .utcOffsetMinutes=120 }; const kb::platform::PlatformLocale invalidLocale{ .language="p1", .region="P1", .utcOffsetMinutes=900 }; constexpr kb::platform::SafeDateTime maximumDate{ .unixSeconds=std::numeric_limits<std::int64_t>::max() }; kb::tests::Require(locale.IsValid()&&date.ToLocalSeconds(locale)==std::optional<std::int64_t>{8200}&&!invalidLocale.IsValid()&&!date.ToLocalSeconds(invalidLocale).has_value()&&!maximumDate.ToLocalSeconds(locale).has_value(), "Platform locale and safe date-time contract is invalid");

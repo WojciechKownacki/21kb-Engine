@@ -29,6 +29,9 @@ public:
 
 private:
     std::vector<ScenePrefabNodeDesc> nodes_;
+    std::uint64_t nextStableId_ = 1U;
+    // Retained mutable pointers can change ids between subsequent appends.
+    bool mutableNodesExposed_ = false;
 };
 
 } // namespace kb::scene

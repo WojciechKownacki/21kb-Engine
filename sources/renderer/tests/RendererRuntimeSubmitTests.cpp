@@ -5534,6 +5534,7 @@ void RunRendererSubmitsGltfEmbeddedMaterialInHeadlessNoopTest() {
     std::filesystem::remove_all(root, error);
 }
 
+#if defined(KB_TEST_GRAPH_SHADERC_PATH)
 void RunGraphMaterialReportsGpuMaterialGraphModeTest() {
     const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_graph_material_cpu_fallback_counter";
     std::error_code error;
@@ -5679,6 +5680,8 @@ void RunGraphMaterialReportsGpuMaterialGraphModeTest() {
     renderer.Shutdown();
     std::filesystem::remove_all(root, error);
 }
+
+#endif
 
 void RunRendererSubmitsDeferredGBufferAndLightingPassesInHeadlessNoopTest() {
     kb::scene::Scene scene;
@@ -7257,7 +7260,9 @@ void RunRendererRuntimeSubmitTests() {
     RunRendererReloadsMaterialInstanceWhenParentMaterialChangesTest();
     RunRendererSubmitsWorkspaceSceneCubeMaterialAfterReopenTest();
     RunRendererSubmitsGltfEmbeddedMaterialInHeadlessNoopTest();
+#if defined(KB_TEST_GRAPH_SHADERC_PATH)
     RunGraphMaterialReportsGpuMaterialGraphModeTest();
+#endif
     RunRendererSubmitsDeferredGBufferAndLightingPassesInHeadlessNoopTest();
     RunRendererSubmitsDockedAndDetachedViewportsInSameFrameTest();
     RunSecondaryFrameModesProduceRuntimeTargetsTest();

@@ -263,10 +263,6 @@ void SetTextClipped(UIText& text, std::string_view value) noexcept {
     static_cast<void>(SetUITextContent(text, value));
 }
 
-[[nodiscard]] UIEdges ScaledEdges(UIEdges edges, float scale) noexcept {
-    return {edges.left * scale, edges.top * scale, edges.right * scale, edges.bottom * scale};
-}
-
 [[nodiscard]] SceneUIEvent MakeEvent(SceneUIEventType type, SceneEntity entity, const UISelectable* selectable) {
     SceneUIEvent event{.type = type, .entity = entity, .actionTarget = entity};
     if (selectable != nullptr) {

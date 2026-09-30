@@ -1,5 +1,5 @@
 #include "scene/prefab/ScenePrefabBulkInstantiationService.hpp"
-#include "engine/ui/UIEntityReferences.hpp"
+#include "scene/prefab/ScenePrefabReferenceResolver.hpp"
 
 #include "engine/ecs/CommandBuffer.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -881,149 +881,20 @@ void QueueHierarchy(
     return entities;
 }
 
-void ResolvePrefabJointReferences(
-    Scene& scene,
-    std::span<const ScenePrefabNodeDesc> nodes,
-    std::span<const SceneEntity> entities,
-    std::size_t instanceCount) {
-    if (nodes.empty()) {
-        return;
-    }
-
-    std::vector<std::size_t> jointNodeIndices;
-    jointNodeIndices.reserve(nodes.size());
-    for (std::size_t nodeIndex = 0U; nodeIndex < nodes.size(); ++nodeIndex) {
-        if (nodes[nodeIndex].components.joint.has_value()) {
-            jointNodeIndices.push_back(nodeIndex);
-        }
-    }
-    if (jointNodeIndices.empty()) {
-        return;
-    }
-
-    std::unordered_map<std::uint64_t, std::size_t> nodeIndexByStableId;
-    nodeIndexByStableId.reserve(nodes.size());
-    for (std::size_t nodeIndex = 0U; nodeIndex < nodes.size(); ++nodeIndex) {
-        nodeIndexByStableId.emplace(nodes[nodeIndex].stableId, nodeIndex);
-    }
-
-    std::vector<std::size_t> connectedNodeIndices;
-    connectedNodeIndices.reserve(jointNodeIndices.size());
-    for (const std::size_t jointNodeIndex : jointNodeIndices) {
-        const ScenePrefabJointComponent& prefabJoint = *nodes[jointNodeIndex].components.joint;
-        if (prefabJoint.connectedNodeStableId == ScenePrefabJointComponent::InvalidConnectedNodeStableId) {
-            connectedNodeIndices.push_back(nodes.size());
-            continue;
-        }
-        const auto connectedNode = nodeIndexByStableId.find(prefabJoint.connectedNodeStableId);
-        if (connectedNode == nodeIndexByStableId.end()) {
-            throw std::invalid_argument("Scene prefab joint references a missing stable node id");
-        }
-        connectedNodeIndices.push_back(connectedNode->second);
-    }
-
-    for (std::size_t instanceIndex = 0U; instanceIndex < instanceCount; ++instanceIndex) {
-        for (std::size_t jointIndex = 0U; jointIndex < jointNodeIndices.size(); ++jointIndex) {
-            const std::size_t connectedNodeIndex = connectedNodeIndices[jointIndex];
-            if (connectedNodeIndex == nodes.size()) {
-                continue;
-            }
-
-            const SceneEntity owner = entities[EntityIndex(instanceIndex, jointNodeIndices[jointIndex], nodes.size())];
-            JointComponent* joint = scene.Components().Joints().TryGet(owner);
-            if (joint == nullptr) {
-                throw std::runtime_error("Scene prefab joint component was not created");
-            }
-            joint->connectedEntity = entities[EntityIndex(instanceIndex, connectedNodeIndex, nodes.size())];
-        }
-    }
-}
-
-void ResolvePrefabRegionPortalReferences(
-    Scene& scene,
-    std::span<const ScenePrefabNodeDesc> nodes,
-    std::span<const SceneEntity> entities,
-    std::size_t instanceCount) {
-    std::unordered_map<std::uint64_t, std::size_t> nodeIndexByStableId;
-    nodeIndexByStableId.reserve(nodes.size());
-    for (std::size_t index = 0U; index < nodes.size(); ++index) nodeIndexByStableId.emplace(nodes[index].stableId, index);
-    for (std::size_t instanceIndex = 0U; instanceIndex < instanceCount; ++instanceIndex) {
-        for (std::size_t nodeIndex = 0U; nodeIndex < nodes.size(); ++nodeIndex) {
-            const std::optional<ScenePrefabRegionPortalComponent>& prefabPortal = nodes[nodeIndex].components.regionPortal;
-            if (!prefabPortal.has_value()) continue;
-            if (!prefabPortal->enabled &&
-                prefabPortal->sourceCellNodeStableId == ScenePrefabRegionPortalComponent::InvalidCellNodeStableId &&
-                prefabPortal->targetCellNodeStableId == ScenePrefabRegionPortalComponent::InvalidCellNodeStableId) {
-                continue;
-            }
-            const auto source = nodeIndexByStableId.find(prefabPortal->sourceCellNodeStableId);
-            const auto target = nodeIndexByStableId.find(prefabPortal->targetCellNodeStableId);
-            if (source == nodeIndexByStableId.end() || target == nodeIndexByStableId.end()) throw std::invalid_argument("Scene prefab region portal references a missing stable node id");
-            const SceneEntity owner = entities[EntityIndex(instanceIndex, nodeIndex, nodes.size())];
-            scene.Components().RegionPortals().Set(owner, SceneRegionPortalComponent{
-                .sourceCell = entities[EntityIndex(instanceIndex, source->second, nodes.size())],
-                .targetCell = entities[EntityIndex(instanceIndex, target->second, nodes.size())],
-                .purposes = prefabPortal->purposes,
-                .enabled = prefabPortal->enabled,
-            });
-        }
-    }
-}
-
-void ResolvePrefabLensEchoReferences(
-    Scene& scene,
-    std::span<const ScenePrefabNodeDesc> nodes,
-    std::span<const SceneEntity> entities,
-    std::size_t instanceCount) {
-    std::unordered_map<std::uint64_t, std::size_t> nodeIndexByStableId;
-    nodeIndexByStableId.reserve(nodes.size());
-    for (std::size_t index = 0U; index < nodes.size(); ++index) nodeIndexByStableId.emplace(nodes[index].stableId, index);
-    for (std::size_t instanceIndex = 0U; instanceIndex < instanceCount; ++instanceIndex) {
-        for (std::size_t nodeIndex = 0U; nodeIndex < nodes.size(); ++nodeIndex) {
-            const std::optional<ScenePrefabLensEchoComponent>& prefabEcho = nodes[nodeIndex].components.lensEcho;
-            if (!prefabEcho.has_value()) continue;
-            const SceneEntity owner = entities[EntityIndex(instanceIndex, nodeIndex, nodes.size())];
-            if (!prefabEcho->enabled && prefabEcho->sourceNodeStableId == ScenePrefabLensEchoComponent::InvalidSourceNodeStableId) {
-                scene.Components().LensEchoes().Set(owner, LensEchoComponent{
-                    .profileMaterialAssetId = prefabEcho->profileMaterialAssetId, .intensity = prefabEcho->intensity,
-                    .size = prefabEcho->size, .layer = prefabEcho->layer, .occlusionRule = prefabEcho->occlusionRule, .enabled = false,
-                });
-                continue;
-            }
-            const auto source = nodeIndexByStableId.find(prefabEcho->sourceNodeStableId);
-            if (source == nodeIndexByStableId.end()) throw std::invalid_argument("Scene prefab lens echo references a missing stable node id");
-            scene.Components().LensEchoes().Set(owner, LensEchoComponent{
-                .sourceEntityId = entities[EntityIndex(instanceIndex, source->second, nodes.size())].Id(),
-                .profileMaterialAssetId = prefabEcho->profileMaterialAssetId, .intensity = prefabEcho->intensity,
-                .size = prefabEcho->size, .layer = prefabEcho->layer, .occlusionRule = prefabEcho->occlusionRule, .enabled = prefabEcho->enabled,
-            });
-        }
-    }
-}
-
-void ApplyPrefabUIComponents(
-    Scene& scene,
-    std::span<const ScenePrefabNodeDesc> nodes,
-    std::span<const SceneEntity> entities,
-    std::size_t instanceCount) {
-    SceneUIComponents ui = scene.Components().UI();
-    std::unordered_map<std::uint64_t, std::size_t> nodeIndexByStableId;
-    nodeIndexByStableId.reserve(nodes.size());
-    for (std::size_t index = 0U; index < nodes.size(); ++index) nodeIndexByStableId.emplace(nodes[index].stableId, index);
-    for (std::size_t instanceIndex = 0U; instanceIndex < instanceCount; ++instanceIndex) {
-        for (std::size_t nodeIndex = 0U; nodeIndex < nodes.size(); ++nodeIndex) {
-            if (nodes[nodeIndex].components.ui.Empty()) continue;
-            UIComponentSet components = nodes[nodeIndex].components.ui;
-            // UI references are stored as stable node ids; each instance points at its own copy of the target.
-            ForEachUIEntityReference(components, [&](std::uint64_t& reference) {
-                if (reference == 0U) return;
-                const auto target = nodeIndexByStableId.find(reference);
-                if (target == nodeIndexByStableId.end())
-                    throw std::invalid_argument("Scene prefab UI component references a missing stable node id");
-                reference = entities[EntityIndex(instanceIndex, target->second, nodes.size())].Id();
-            });
-            ApplySceneUIComponents(ui, entities[EntityIndex(instanceIndex, nodeIndex, nodes.size())], components);
-        }
+void ResolvePrefabReferences(Scene& scene, std::span<const ScenePrefabNodeDesc> nodes,
+    std::span<const SceneEntity> entities, std::size_t instanceCount) {
+    if (std::ranges::none_of(nodes, [](const auto& node) {
+        const auto& components = node.components;
+        return components.joint || components.regionPortal || components.lensEcho || !components.ui.Empty();
+    })) return;
+    ScenePrefabReferenceResolver::EntityMap map;
+    map.reserve(nodes.size());
+    for (std::size_t instance = 0U; instance < instanceCount; ++instance) {
+        map.clear();
+        for (std::size_t index = 0U; index < nodes.size(); ++index)
+            map.emplace(nodes[index].stableId, entities[EntityIndex(instance, index, nodes.size())]);
+        for (std::size_t index = 0U; index < nodes.size(); ++index)
+            ScenePrefabReferenceResolver::Apply(scene, nodes[index], entities[EntityIndex(instance, index, nodes.size())], map);
     }
 }
 
@@ -1130,10 +1001,8 @@ void ApplyPrefabUIComponents(
         const auto createStart = PrefabStatsClock::now();
         const std::vector<SceneEntity> entities = CreateBakedEntitiesDirect(state.world, *baked, count, spawnPayloads, nativeOnlyBatch, createBreakdown);
         const std::uint64_t entityCreateNanoseconds = ElapsedNanoseconds(createStart, PrefabStatsClock::now());
-        ResolvePrefabJointReferences(scene, nodes, std::span<const SceneEntity>{ entities }, count);
-        ResolvePrefabRegionPortalReferences(scene, nodes, std::span<const SceneEntity>{ entities }, count);
-        ResolvePrefabLensEchoReferences(scene, nodes, std::span<const SceneEntity>{ entities }, count);
-        ApplyPrefabUIComponents(scene, nodes, std::span<const SceneEntity>{ entities }, count);
+        ResolvePrefabReferences(scene, nodes, std::span<const SceneEntity>{ entities }, count);
+
         const kb::ecs::NativeEcsStorageStats afterStorage = state.world.NativeStorageStats();
         std::uint64_t instanceObjectSlabNanoseconds = 0;
         std::uint64_t hierarchyRecordNanoseconds = 0;
@@ -1196,10 +1065,8 @@ void ApplyPrefabUIComponents(
     for (std::size_t index = 0U; index < entities.size(); ++index) {
         resolvedEntities[index] = playback.Resolve(entities[index]);
     }
-    ResolvePrefabJointReferences(scene, nodes, std::span<const SceneEntity>{ resolvedEntities }, count);
-    ResolvePrefabRegionPortalReferences(scene, nodes, std::span<const SceneEntity>{ resolvedEntities }, count);
-    ResolvePrefabLensEchoReferences(scene, nodes, std::span<const SceneEntity>{ resolvedEntities }, count);
-    ApplyPrefabUIComponents(scene, nodes, std::span<const SceneEntity>{ resolvedEntities }, count);
+    ResolvePrefabReferences(scene, nodes, std::span<const SceneEntity>{ resolvedEntities }, count);
+
     std::uint64_t instanceObjectSlabNanoseconds = 0;
     std::uint64_t hierarchyRecordNanoseconds = 0;
     std::uint64_t nameAssignmentNanoseconds = 0;

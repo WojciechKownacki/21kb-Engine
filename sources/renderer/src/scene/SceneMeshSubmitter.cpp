@@ -44,17 +44,22 @@ void BuildVisibilityBlockerInputs(const RenderScene& scene, std::vector<SceneRen
     const SceneMeshBatch& batch,
     const RenderResourceRegistry& resources,
     const SceneRenderResourceMap& resourceMap) noexcept {
-    if (batch.hasMaterialSlotOverrides || batch.materialAssetId == 0U) {
-        return false;
-    }
-    const RenderMaterialHandle materialHandle = resourceMap.ResolveMaterial(batch.materialAssetId);
-    const RenderMaterialResource* material = materialHandle.IsValid() ? resources.FindMaterial(materialHandle) : nullptr;
-    if (material == nullptr || material->alphaMode == RenderMaterialAlphaMode::Blend) {
+    if (batch.hasMaterialSlotOverrides) {
         return false;
     }
     const RenderMeshHandle meshHandle = resourceMap.ResolveMesh(batch.meshAssetId);
     const RenderMeshResource* mesh = meshHandle.IsValid() ? resources.FindMesh(meshHandle) : nullptr;
-    return mesh != nullptr && mesh->terrainLayerCount <= 1U;
+    if (mesh == nullptr || mesh->terrainLayerCount != 0U) return false;
+    const auto opaque = [&resources, &resourceMap](std::uint64_t id) {
+        // Zero resolves to the built-in opaque fallback in the mesh pipeline.
+        if (id == 0U) return true;
+        const auto* material = resources.FindMaterial(resourceMap.ResolveMaterial(id));
+        return material != nullptr && material->alphaMode != RenderMaterialAlphaMode::Blend;
+    };
+    if (batch.materialAssetId != 0U) return opaque(batch.materialAssetId);
+    return std::ranges::all_of(mesh->materialSlots, [&opaque](const auto& slot) {
+        return opaque(slot.defaultMaterialAssetId);
+    });
 }
 
 } // namespace

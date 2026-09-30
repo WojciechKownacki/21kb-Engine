@@ -179,12 +179,22 @@ struct SceneRenderMeshInstance {
     bool lodEnabled = true;
 };
 
+// A homogeneous generated range; origin bounds are padded by the resolved
+// section bound at submission. Ordinary mesh proxies keep per-instance culling.
+struct SceneMeshVisibilityCluster {
+    std::uint32_t firstInstance = 0U;
+    std::uint32_t instanceCount = 0U;
+    RenderBoundsSphere origins{};
+    float maximumScale = 0.0F;
+};
+
 struct SceneRenderDrawGroup {
     std::uint64_t meshAssetId = 0;
     std::uint64_t materialAssetId = 0;
     bool hasMaterialSlotOverrides = false;
     bool hasMorphDeformation = false;
     std::vector<SceneRenderMeshInstance> instances;
+    std::vector<SceneMeshVisibilityCluster> visibilityClusters;
 };
 
 struct SceneRenderLight {

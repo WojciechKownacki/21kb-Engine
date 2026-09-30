@@ -21,7 +21,8 @@ bool GameWindow::Open(
     std::uint32_t width,
     std::uint32_t height,
     bool fullscreen,
-    kb::input::Win32InputCollector& inputCollector) {
+    kb::input::Win32InputCollector& inputCollector,
+    bool visible) {
     if (width == 0U || height == 0U) {
         return false;
     }
@@ -46,7 +47,7 @@ bool GameWindow::Open(
         .bottom = static_cast<LONG>(height),
     };
     DWORD style = WS_OVERLAPPEDWINDOW;
-    DWORD extendedStyle = 0U;
+    DWORD extendedStyle = visible ? 0U : WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
     int x = CW_USEDEFAULT;
     int y = CW_USEDEFAULT;
     if (fullscreen_) {
@@ -88,13 +89,13 @@ bool GameWindow::Open(
     // launcher that starts the game minimized - lands here with a zero client
     // area, which no renderer can be initialized against. The game asks for its
     // window back rather than refusing to start.
-    ShowWindow(window_, SW_SHOWNORMAL);
+    if (visible) ShowWindow(window_, SW_SHOWNORMAL);
     RECT client{};
     if (GetClientRect(window_, &client) == 0) {
         return false;
     }
     if (client.right <= client.left || client.bottom <= client.top) {
-        ShowWindow(window_, SW_RESTORE);
+        if (visible) ShowWindow(window_, SW_RESTORE);
         if (GetClientRect(window_, &client) == 0) {
             return false;
         }
@@ -106,7 +107,7 @@ bool GameWindow::Open(
     height_ = static_cast<std::uint32_t>(client.bottom - client.top);
     resizePending_ = true;
 
-    UpdateWindow(window_);
+    if (visible) UpdateWindow(window_);
     return true;
 }
 

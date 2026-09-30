@@ -251,7 +251,9 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
             std::uint32_t culledForSection = 0U;
             std::uint64_t lastMaterialAssetId = 0U;
             MeshPipelineMaterialResolution lastMaterialResolution{};
-            for (const SceneRenderMeshInstance& instance : batch.instances) {
+            std::size_t clusterIndex = 0U;
+            for (std::size_t instanceIndex = 0U; instanceIndex < batch.instances.size(); ++instanceIndex) {
+                const SceneRenderMeshInstance& instance = batch.instances[instanceIndex];
                 if (!MeshPipelinePassPolicy::CanEverContain(desc.pass, instance, desc.selectedEntityIds, cullingMask)) {
                     continue;
                 }
@@ -307,6 +309,24 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                 const RenderBoundsSphere localBounds = instance.boundsOverride.IsValid()
                     ? instance.boundsOverride
                     : (section.bounds.IsValid() ? section.bounds : (meshResource == nullptr ? RenderBoundsSphere{} : meshResource->bounds));
+                while (clusterIndex < batch.visibilityClusters.size() &&
+                    batch.visibilityClusters[clusterIndex].firstInstance < instanceIndex) ++clusterIndex;
+                if (clusterIndex < batch.visibilityClusters.size() &&
+                    batch.visibilityClusters[clusterIndex].firstInstance == instanceIndex &&
+                    localBounds.IsValid() && meshResource != nullptr && meshResource->lods.size() <= 1U &&
+                    !instance.detailSwitchEnabled && !batch.hasMaterialSlotOverrides) {
+                    const auto& cluster = batch.visibilityClusters[clusterIndex];
+                    auto bounds = cluster.origins;
+                    const auto& center = localBounds.center;
+                    bounds.radius += cluster.maximumScale * (localBounds.radius +
+                        std::sqrt(center[0]*center[0] + center[1]*center[1] + center[2]*center[2]));
+                    if (cluster.instanceCount != 0U && cluster.instanceCount <= batch.instances.size()-instanceIndex &&
+                        !MeshPipelineVisibility::IsInsideFrustum(frustum, bounds)) {
+                        culledForSection += cluster.instanceCount;
+                        instanceIndex += cluster.instanceCount - 1U;
+                        continue;
+                    }
+                }
                 const RenderBoundsSphere worldBounds = MeshPipelineVisibility::TransformBounds(localBounds, instance.model);
                 const bool gpuDrivenCandidate = MeshPipelineGpuDrivenRecorder::IsCandidate(meshResource);
                 if (!MeshPipelineVisibility::IsInsideFrustum(frustum, worldBounds)) {

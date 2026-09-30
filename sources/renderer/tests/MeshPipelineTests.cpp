@@ -1,4 +1,5 @@
 #include "RendererTestSupport.hpp"
+#include "kb/render/SceneDepthPolicy.hpp"
 
 #include "kb/render/resources/RenderResourceRegistry.hpp"
 #include "kb/render/frame/RenderPassKind.hpp"
@@ -1442,6 +1443,7 @@ void RunMeshPipelineCullsWithVisibilityBlockerTest() {
     for (const float viewDirection : {1.0F, -1.0F}) {
         auto oppositeCamera = camera;
         oppositeCamera.view[10] = viewDirection;
+        oppositeCamera.projection[10] *= viewDirection;
         const auto unobstructed = MeshPipelineProcessor::Build(MeshPipelineBuildDesc{
             .pass = MeshPassType::BaseOpaque, .drawGroups = &drawGroups, .resolvedMeshResource = &mesh,
             .camera = &oppositeCamera, .visibilityBlockers = blockers, .resourceValidation = MeshPipelineResourceValidation::Skip,
@@ -1930,6 +1932,69 @@ void RunRenderScenePropagatesMeshPassFlagsTest() {
 } // namespace
 
 void RunMeshPipelineTests() {
+    // Compare accelerated generated ranges with the original per-instance path.
+    // Camera motion, shear, off-centre bounds, growth and mixed owners must not
+    // alter accepted ids or pass counters.
+    {
+        RenderScene scene;
+        auto model = IdentityMatrix();
+        model[4] = 1.5F; model[5] = 0.4F; model[10] = -2.0F; model[14] = 180.0F;
+        GeometrySwarmRenderProxyDesc swarm{.entityId = 42U, .meshAssetId = 7U,
+            .model = model, .instanceCount = 513U, .columns = 16U, .rows = 2U, .layers = 32U,
+            .spacing = {20.0F, -2.0F, 20.0F}, .instanceScale = 1.3F};
+        static_cast<void>(scene.UpsertGeometrySwarm(swarm));
+        static_cast<void>(scene.DrawGroups());
+        swarm.instanceCount = 900U;
+        static_cast<void>(scene.UpsertGeometrySwarm(swarm));
+        swarm.entityId = 77U; swarm.model[12] = 600.0F; swarm.castsShadow = false;
+        static_cast<void>(scene.UpsertGeometrySwarm(swarm));
+        static_cast<void>(scene.UpsertMesh(MeshRenderProxyDesc{.entityId = 2U, .meshAssetId = 7U, .model = TranslationMatrix(0.0F, 0.0F, 10.0F)}));
+        auto groups = scene.DrawGroups();
+        Require(!groups[0].visibilityClusters.empty(), "Swarm ranges must retain visibility acceleration");
+        auto reference = groups;
+        for (auto& group : reference) group.visibilityClusters.clear();
+        RenderMeshResource mesh{};
+        mesh.indexCount = 3U;
+        mesh.bounds = {.center = {3.0F, 1.0F, 2.0F}, .radius = 2.0F};
+        RenderMaterialResource material{};
+        for (const auto pass : {MeshPassType::BaseOpaque, MeshPassType::MotionVectors, MeshPassType::ShadowDepth}) {
+          for (const float offset : {-200.0F, 0.0F, 150.0F}) {
+            auto camera = PerspectiveCamera();
+            camera.view[12] = offset;
+            SceneDepthPolicy::MakePerspective(camera.projection.data(), 90.0F, 1.0F, 0.01F, 400.0F, SceneDepthPolicy::HomogeneousDepth());
+            const auto build = [&](const auto& source) {
+                return MeshPipelineProcessor::Build(MeshPipelineBuildDesc{.pass = pass, .drawGroups = &source,
+                    .resolvedMeshResource = &mesh, .resolvedMaterialResource = &material, .camera = &camera,
+                    .resourceValidation = MeshPipelineResourceValidation::Skip});
+            };
+            const auto accelerated = build(groups), original = build(reference);
+            const auto ids = [](const auto& result) {
+                std::vector<std::uint64_t> values;
+                for (const auto& command : result.commands)
+                    for (const auto& instance : command.instances) values.push_back(instance.entityId);
+                std::ranges::sort(values);
+                return values;
+            };
+            Require(ids(accelerated) == ids(original) && accelerated.stats.visibleMeshCount == original.stats.visibleMeshCount &&
+                accelerated.stats.culledInstanceCount == original.stats.culledInstanceCount,
+                "Cluster culling must match per-instance visibility and counters under camera motion and shear");
+          }
+        }
+    }
+    for (const bool homogeneous : {false, true}) {
+        for (const bool orthographic : {false, true}) {
+          for (const float nearClip : {0.1F, 0.01F, 0.001F}) {
+            SceneRenderCamera camera{};
+            camera.view = IdentityMatrix();
+            if (orthographic) SceneDepthPolicy::MakeOrthographic(camera.projection.data(), 10.0F, 1.0F, nearClip, 1200.0F, homogeneous);
+            else SceneDepthPolicy::MakePerspective(camera.projection.data(), 90.0F, 1.0F, nearClip, 1200.0F, homogeneous);
+            const auto frustum = MeshPipelineVisibility::BuildFrustum(&camera, homogeneous);
+            Require(MeshPipelineVisibility::IsInsideFrustum(frustum, RenderBoundsSphere{.center = {0.0F, 0.0F, 10.0F}, .radius = 0.01F}), "Frustum rejected visible reverse-Z geometry");
+            Require(!MeshPipelineVisibility::IsInsideFrustum(frustum, RenderBoundsSphere{.center = {0.0F, 0.0F, 2500.0F}, .radius = 1.0F}), "Frustum failed to reject geometry beyond the far clip");
+            Require(!MeshPipelineVisibility::IsInsideFrustum(frustum, RenderBoundsSphere{.center = {0.0F, 0.0F, nearClip * 0.1F}, .radius = nearClip * 0.01F}), "Frustum failed to reject geometry before the near clip");
+          }
+        }
+    }
     RunMeshLodRespectsCameraProjectionTest();
     RunMeshPassTypeNamesResolveTest();
     RunStaticMeshVertexLayoutIsDefinedTest();

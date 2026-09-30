@@ -2,6 +2,7 @@
 
 #include "RenderSceneProxyConverters.hpp"
 #include "RenderSceneProxyDirtyTracker.hpp"
+#include "scene/GeometrySwarmVisibilityClusters.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -296,6 +297,7 @@ RenderProxyId RenderScene::UpsertGeometrySwarm(const GeometrySwarmRenderProxyDes
             SceneRenderDrawGroup& group = drawGroups_[groupIt->second];
             if (group.meshAssetId == desc.meshAssetId && group.materialAssetId == desc.materialAssetId) {
                 const std::uint32_t firstNewInstance = previous.instanceCount;
+                const auto firstGenerated = group.instances.size();
                 proxy.desc = desc;
                 group.instances.reserve(group.instances.size() + (desc.instanceCount - firstNewInstance));
                 for (std::uint32_t index = firstNewInstance; index < desc.instanceCount; ++index) {
@@ -311,6 +313,7 @@ RenderProxyId RenderScene::UpsertGeometrySwarm(const GeometrySwarmRenderProxyDes
                     ApplySurfaceCasts(instance);
                     group.instances.push_back(instance);
                 }
+                if (surfaceCasts_.empty()) GeometrySwarmVisibilityClusters::Append(group, firstGenerated);
                 return proxy.id;
             }
         }
@@ -764,6 +767,7 @@ void RenderScene::RebuildDrawGroupsIfNeeded() const {
 
     for (SceneRenderDrawGroup& group : drawGroups_) {
         group.instances.clear();
+        group.visibilityClusters.clear();
     }
 
     drawGroupLookupScratch_.clear();
@@ -815,6 +819,7 @@ void RenderScene::RebuildDrawGroupsIfNeeded() const {
         if (!swarm.visible || swarm.meshAssetId == 0U || swarm.instanceCount == 0U || swarm.columns == 0U || swarm.rows == 0U || swarm.layers == 0U) {
             continue;
         }
+        std::size_t firstGenerated = 0U, generatedGroup = 0U;
         for (std::uint32_t index = 0U; index < swarm.instanceCount; ++index) {
             SceneRenderMeshInstance instance{
                 .entityId = GeometrySwarmInstanceId(entityId, index),
@@ -834,8 +839,10 @@ void RenderScene::RebuildDrawGroupsIfNeeded() const {
                 group.meshAssetId = instance.meshAssetId; group.materialAssetId = instance.materialAssetId; group.hasMaterialSlotOverrides = false; group.hasMorphDeformation = false;
                 lookupIt = drawGroupLookupScratch_.emplace(key, writeGroupCount).first; ++writeGroupCount;
             }
+            if (index == 0U) { generatedGroup = lookupIt->second; firstGenerated = drawGroups_[generatedGroup].instances.size(); }
             drawGroups_[lookupIt->second].instances.push_back(instance);
         }
+        if (surfaceCasts_.empty()) GeometrySwarmVisibilityClusters::Append(drawGroups_[generatedGroup], firstGenerated);
     }
     for (const auto& [entityId, proxy] : spaceStrokes_) {
         const SpaceStrokeRenderProxyDesc& stroke = proxy.desc;

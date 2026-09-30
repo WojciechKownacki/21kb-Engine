@@ -1,0 +1,37 @@
+ZADANIE: chirurgiczne przygotowanie istniejącego 21kb do dużych światów.
+Repozytorium: gałąź 1.0. Praca headless; komputer użytkownika pozostaje dostępny.
+Inspiracja wyłącznie przez odczyt D:\Projekty\verthengineprod i D:\UE5.
+Nie kopiuj ich kodu. Nie używaj nazw verth, ue5 ani unity w nowych identyfikatorach.
+Maksymalnie jeden subagent. Minimalny modularny kod, zasady SOLID, bez drugiego ECS.
+
+1. MeshPipelineVisibility: popraw granice clip-space przy reverse-Z. Sprawdź near/far
+   dla obu konwencji głębokości oraz kamer perspektywicznych i ortograficznych.
+   Obiekty za farClip mają być odrzucane przed przygotowaniem drawów.
+2. ScenePrefab: usuń kwadratowy koszt AddNode przy automatycznych stableId.
+   Zachowaj obsługę jawnych ID, kopiowania, Clear i zatrzymanych mutable pointers.
+3. SceneRuntime / SceneState: próbkowanie interpolacji ma korzystać ze zmian
+   transformacji, zachować ruch rodzica, FixedTick, zmiany archetypów, tworzenie,
+   niszczenie oraz wiele substepów. Statyczne 100 tys. obiektów z aktywną fizyką
+   nie powinno wymagać dwóch pełnych kopii transformacji co krok.
+4. SceneLoadedContentService / SceneStreamingService: asynchroniczne przygotowanie
+   scen i prefabów, właściciel i kompletne komponenty, tworzenie przez istniejący
+   bulk ECS, porcjowane aktywowanie/usuwanie, anulowanie bez blokowania I/O,
+   diagnostyka błędów, poprawne referencje między porcjami i sprzątanie po właścicielu.
+   Budżet startowy: 256 operacji i miękkie 2 ms na Update; raportuj przekroczenia
+   pojedynczych porcji oraz pełny czas Update, nie tylko koszt własnego streamera.
+5. SceneContentInstanceService: podłącz istniejący StreamFocus do powyższej ścieżki,
+   zachowaj inner/outer hysteresis i priorytety; usuń kwadratowe szukanie właścicieli.
+6. Roślinność: wykorzystaj GeometrySwarmComponent; wiele instancji pod jednym
+   właścicielem ECS. Zweryfikuj 100 tys. i milion instancji oraz koszt renderowania.
+   Oddziel liczbę rezydentnych instancji od rzeczywiście widocznych i narysowanych.
+   GeometrySwarmVisibilityClusters / RenderScene / MeshPassProcessor: odrzucaj
+   konserwatywne grupy niewidocznych instancji; porównaj accepted IDs i liczniki
+   z oryginalnym cullingiem przy ruchu kamery, shear, zmianie skali i wzroście.
+   SceneMeshSubmitter: pomijaj transparent pass dla potwierdzonych opaque slots.
+7. Buduj Release, testuj bez widocznych okien. Powtórz po trzy razy porównywalne
+   sceny dużego miasta, świata 100 tys., fizykę i culling. Sprawdź co najmniej trzy
+   cykle wczytania i usunięcia 100 tys. obiektów bez wycieków liczby encji.
+8. Zapisz scenariusze i pomiary do odtworzenia, ograniczenia oraz dalsze wąskie gardła.
+   Nie ogłaszaj gotowości do produkcji gry AAA na podstawie syntetycznych kostek.
+   Cel: zmierzona zdolność obsługi dużego świata, bez utraty poprawności.
+9. Zakończ implementację, testy, commit i push wszystkich zmian do origin/1.0.

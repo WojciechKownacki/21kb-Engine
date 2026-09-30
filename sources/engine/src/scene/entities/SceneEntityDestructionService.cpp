@@ -46,6 +46,9 @@ void SceneEntityDestructionService::DestroyEntity(Scene& scene, SceneEntity enti
             SceneHierarchyCache::Remove(state, entity, parent);
             SceneEntityNaming::ClearName(state, entity);
             ClearSceneRenderProxyComponentMask(state, entity);
+            state.inactiveEntities.erase(entity.Id());
+            state.persistentEntities.erase(entity.Id());
+            state.behaviourVariableOverrides.erase(entity.Id());
             state.world.DestroyEntity(entity);
             if (entity == root) {
                 return;
