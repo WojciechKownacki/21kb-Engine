@@ -3,6 +3,9 @@
 #include "kb/render/RenderSurface.hpp"
 
 #include <bgfx/platform.h>
+#include <bimg/bimg.h>
+#include <bx/error.h>
+#include <bx/file.h>
 #include <array>
 #include <chrono>
 #include <cstdio>
@@ -301,7 +304,40 @@ public:
             std::filesystem::remove(temporary, cleanupError);
         }
     }
-    void screenShot(const char*, std::uint32_t, std::uint32_t, std::uint32_t, bgfx::TextureFormat::Enum, const void*, std::uint32_t, bool) override {}
+    void screenShot(const char* filePath, std::uint32_t width, std::uint32_t height,
+        std::uint32_t pitch, bgfx::TextureFormat::Enum format, const void* data,
+        std::uint32_t size, bool yflip) override {
+        const auto write = [&]() {
+            if (filePath == nullptr || *filePath == '\0' || data == nullptr || width == 0U || height == 0U ||
+                static_cast<std::uint64_t>(width) * 4U > pitch ||
+                static_cast<std::uint64_t>(pitch) * height > size ||
+                (format != bgfx::TextureFormat::BGRA8 && format != bgfx::TextureFormat::RGBA8)) {
+                return false;
+            }
+            const std::filesystem::path destination{filePath};
+            const std::string temporary = destination.string() + ".pending";
+            bx::FileWriter writer;
+            bx::Error writeError;
+            if (!bx::open(&writer, temporary.c_str(), false, &writeError)) return false;
+            bimg::imageWritePng(&writer, width, height, pitch, data,
+                format == bgfx::TextureFormat::BGRA8 ? bimg::TextureFormat::BGRA8 : bimg::TextureFormat::RGBA8,
+                yflip, &writeError);
+            bx::close(&writer);
+            std::error_code error;
+            if (writeError.isOk()) {
+                std::filesystem::remove(destination, error);
+                if (!error) std::filesystem::rename(temporary, destination, error);
+                if (!error) return true;
+            }
+            std::filesystem::remove(temporary, error);
+            return false;
+        };
+        try {
+            if (write()) return;
+        } catch (...) {
+        }
+        std::fprintf(stderr, "Renderer screenshot failed: %s\n", filePath != nullptr ? filePath : "<null>");
+    }
     void captureBegin(std::uint32_t, std::uint32_t, std::uint32_t, bgfx::TextureFormat::Enum, bool) override {}
     void captureEnd() override {}
     void captureFrame(const void*, std::uint32_t) override {}

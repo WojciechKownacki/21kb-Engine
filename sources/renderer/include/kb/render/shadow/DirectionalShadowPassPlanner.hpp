@@ -28,7 +28,8 @@ public:
         const SceneRenderResourceMap& resourceMap,
         SceneRenderLightingConfig lightingConfig,
         bgfx::TextureHandle shadowDepthTexture,
-        std::uint32_t cameraCullingMask = 0xFFFFFFFFU) const noexcept;
+        std::uint32_t cameraCullingMask = 0xFFFFFFFFU,
+        const std::array<float, 3>* cameraPosition = nullptr) const noexcept;
 };
 
 } // namespace kb::render

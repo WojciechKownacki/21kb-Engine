@@ -1,6 +1,7 @@
 #include "post/SceneExposureGpuReadback.hpp"
 
 #include "kb/render/ShaderLoader.hpp"
+#include "kb/render/ViewIdPolicy.hpp"
 #include "post/SceneExposureHistogramBuilder.hpp"
 
 #include <algorithm>
@@ -86,10 +87,11 @@ bool SceneExposureGpuReadback::Initialize() {
 
 void SceneExposureGpuReadback::Shutdown() noexcept {
     DestroyResources();
-    hdrReadbackBytes_.clear();
+    // Keep the readback destination alive until bgfx shuts down.
     hdrReadbackReadyFrame_ = 0;
     latestHdrAverageLuminance_ = 0.18F;
     hdrReadbackPending_ = false;
+    hdrReadbackCancelled_ = false;
     latestHdrSampleValid_ = false;
 }
 
@@ -130,7 +132,8 @@ SceneHdrExposureReadbackResult SceneExposureGpuReadback::Submit(const SceneHdrEx
     bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
     bgfx::setVertexBuffer(0, fullscreenVertexBuffer_);
     bgfx::submit(desc.viewId, hdrLuminanceProgram_);
-    bgfx::blit(desc.viewId, hdrReadbackTexture_, 0U, 0U, hdrReadbackRenderTexture_);
+    // Blits precede draws within a view. Copy after the histogram draw has finished.
+    bgfx::blit(ViewId::ScreenCapture, hdrReadbackTexture_, 0U, 0U, hdrReadbackRenderTexture_);
     std::ranges::fill(hdrReadbackBytes_, 0U);
     hdrReadbackReadyFrame_ = bgfx::readTexture(hdrReadbackTexture_, hdrReadbackBytes_.data());
     hdrReadbackPending_ = true;
@@ -141,9 +144,8 @@ SceneHdrExposureReadbackResult SceneExposureGpuReadback::Submit(const SceneHdrEx
 void SceneExposureGpuReadback::Reset() noexcept {
     latestHdrAverageLuminance_ = 0.18F;
     latestHdrSampleValid_ = false;
-    hdrReadbackReadyFrame_ = 0;
-    hdrReadbackPending_ = false;
-    std::ranges::fill(hdrReadbackBytes_, 0U);
+    // Keep the destination and fence intact until bgfx completes the pending copy.
+    hdrReadbackCancelled_ = hdrReadbackPending_;
 }
 
 void SceneExposureGpuReadback::DestroyResources() noexcept {
@@ -183,6 +185,10 @@ bool SceneExposureGpuReadback::Consume(std::uint32_t completedFrame) noexcept {
     }
 
     hdrReadbackPending_ = false;
+    if (hdrReadbackCancelled_) {
+        hdrReadbackCancelled_ = false;
+        return false;
+    }
     latestHdrAverageLuminance_ = SceneExposureHistogramBuilder::MeterAverageLuminance(
         SceneExposureHistogramBuilder::BuildGpuHistogramReadbackHistogram(hdrReadbackBytes_));
     latestHdrSampleValid_ = true;

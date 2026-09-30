@@ -26,11 +26,13 @@ public:
     MeshPipelineVisibility() = delete;
 
     [[nodiscard]] static MeshPipelineFrustum BuildFrustum(const SceneRenderCamera* camera) noexcept;
+    [[nodiscard]] static MeshPipelineFrustum BuildFrustum(const SceneRenderCamera* camera, bool homogeneousDepth) noexcept;
     [[nodiscard]] static bool IsInsideFrustum(const MeshPipelineFrustum& frustum, const RenderBoundsSphere& bounds) noexcept;
     [[nodiscard]] static RenderBoundsSphere TransformBounds(
         const RenderBoundsSphere& localBounds,
         const std::array<float, 16>& model) noexcept;
     [[nodiscard]] static float ViewDepth(const SceneRenderCamera* camera, const RenderBoundsSphere& bounds) noexcept;
+    [[nodiscard]] static float ScreenCoverage(const SceneRenderCamera* camera, const RenderBoundsSphere& bounds) noexcept;
     [[nodiscard]] static bool IsOccludedByVisibilityBlockers(
         const SceneRenderCamera* camera,
         const RenderBoundsSphere& bounds,

@@ -34,6 +34,12 @@ void ForEachQueryStateMutableBatch(const QueryState* state, QueryExecutionSettin
 template <typename... Components>
 class Query {
 public:
+    // Create separate Query instances before concurrent read-only execution. One instance
+    // cannot be invoked concurrently because its record and change-filter caches are mutable.
+    // Keep World structure stable while queries run; CreateQuery is not synchronized.
+    // Mutable queries must not overlap other queries: they publish shared storage metadata.
+    // Read-only query telemetry is synchronized across separate instances.
+    // Queries remain usable after moving their World; the destination World must outlive them.
     using Visitor = void (*)(Entity entity, const Components&... components, void* context);
     using Batch = QueryBatch<Components...>;
     using MutableBatch = MutableQueryBatch<Components...>;

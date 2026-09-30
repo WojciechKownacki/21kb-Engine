@@ -238,7 +238,7 @@ struct ComponentAccess {
             KB_ASSERT_NOT_POINTER(static_cast<const Component*>(component)->field); \
             return ScriptValue{ static_cast<int>(static_cast<const Component*>(component)->field) }; }, \
         [](void* component, const ScriptValue& value) noexcept -> bool { \
-            if (value.Type() != ScriptValueType::Int || value.AsInt() < 0 || value.AsInt() > static_cast<int>(kb::scene::ColliderShape::Capsule)) { return false; } \
+            if (value.Type() != ScriptValueType::Int || value.AsInt() < 0 || value.AsInt() > static_cast<int>(kb::scene::ColliderShape::Mesh)) { return false; } \
             static_cast<Component*>(component)->field = static_cast<kb::scene::ColliderShape>(value.AsInt()); \
             return true; \
         } }
@@ -525,8 +525,9 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 12> kRigidbodyPropertyDes
     ScriptSceneComponentPropertyDesc{ "useContinuousCollision", ScriptValueType::Bool },
 };
 
-constexpr std::array<ScriptSceneComponentPropertyDesc, 13> kColliderPropertyDescs{
+constexpr std::array<ScriptSceneComponentPropertyDesc, 14> kColliderPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "shape", ScriptValueType::Int },
+    ScriptSceneComponentPropertyDesc{ "meshAssetId", ScriptValueType::Hash },
     ScriptSceneComponentPropertyDesc{ "center.x", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "center.y", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "center.z", ScriptValueType::Float },
@@ -724,8 +725,15 @@ constexpr std::array<FieldBinding, 12> kRigidbodyFields{
     KB_BOOL(kb::scene::RigidbodyComponent, useContinuousCollision),
 };
 
-constexpr std::array<FieldBinding, 13> kColliderFields{
+constexpr std::array<FieldBinding, 14> kColliderFields{
     KB_COLLIDER_SHAPE(kb::scene::ColliderComponent, shape),
+    FieldBinding{"meshAssetId",
+        [](const void* c) noexcept -> ScriptValue { return ScriptValue{static_cast<const kb::scene::ColliderComponent*>(c)->meshAssetId, ScriptValueType::Hash}; },
+        [](void* c, const ScriptValue& v) noexcept -> bool {
+            if (v.Type() != ScriptValueType::Hash) return false;
+            static_cast<kb::scene::ColliderComponent*>(c)->meshAssetId = v.AsUInt64();
+            return true;
+        }},
     KB_NESTED_FLOAT(kb::scene::ColliderComponent, center, x),
     KB_NESTED_FLOAT(kb::scene::ColliderComponent, center, y),
     KB_NESTED_FLOAT(kb::scene::ColliderComponent, center, z),

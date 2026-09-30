@@ -9,6 +9,7 @@
 #include "engine/script/ScriptFunctionRegistry.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 #include "engine/script/ScriptSceneComponentApi.hpp"
+#include "engine/scene/SceneUIHierarchyPresets.hpp"
 #include "engine/ui/UIComponentCatalog.hpp"
 #include "engine/ui/UIComponentPropertyCatalog.hpp"
 
@@ -108,6 +109,10 @@ ScriptFunctionCallResult Create(const ScriptFunctionCallContext& context,
         desc.parent = context.scene->Entities().Object(parent);
     }
 
+    if (kb::scene::IsUIHierarchyPreset(preset->preset)) {
+        // A dropdown, slider, progress bar or scroll view is a hierarchy wired to its parts, not one object.
+        return EntityResult("entity", kb::scene::CreateUIHierarchy(*context.scene, preset->preset, desc.parent, desc.name));
+    }
     const kb::scene::SceneEntity entity = context.scene->Entities().CreateEntity(std::move(desc));
     kb::scene::ApplySceneUIComponents(
         context.scene->Components().UI(), entity, kb::scene::BuildUIComponentPreset(preset->preset));

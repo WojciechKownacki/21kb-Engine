@@ -3,7 +3,9 @@
 #if defined(_WIN32)
 #include "app/EditorWorkspaceSession.hpp"
 #include "app/pointer/EditorRightButtonDownRouter.hpp"
+#include "app/EditorEditCommandInputHandler.hpp"
 #include "platform/win32/EditorMaterialAssetPickerDialog.hpp"
+#include "rendering/components/EditorDialogStyle.hpp"
 #include "docking/EditorWorkspaceArrangement.hpp"
 #include "windowing/EditorFloatingWindowFrame.hpp"
 #include "windowing/FloatingWindowFactory.hpp"
@@ -185,8 +187,14 @@ FindInspectorHit(
             }
         }
     }
+    const bool rightEdgeButton = property == InspectorPropertyId::UIAssetPicker ||
+        property == InspectorPropertyId::UIDropdownOptionAdd || property == InspectorPropertyId::UIDropdownOptionRemove;
+    const bool leftEdgeHandle = property == InspectorPropertyId::UIDropdownOptionHandle ||
+        property == InspectorPropertyId::UIDropdownOptionSelect;
     const int firstX = compactX >= 0 ? compactX
-        : property == InspectorPropertyId::UIAssetPicker ? kInspectorContent.right - 28
+        : leftEdgeHandle ? kInspectorContent.left
+        : property == InspectorPropertyId::UIAssetPicker ? kInspectorContent.right - 140
+        : rightEdgeButton ? kInspectorContent.right - 140
         : property == InspectorPropertyId::UIAnchorPresets ? 40
         : property == InspectorPropertyId::UIAnchorPreset ? 40 + 64 * (std::max(0, index) % 4)
         : property == InspectorPropertyId::UIRectLayoutField ? (index % 2 == 0 ? 225 : 585)
@@ -194,7 +202,11 @@ FindInspectorHit(
         ? kInspectorContent.left + (kInspectorContent.right - kInspectorContent.left) * 36 / 100 + 8
         : addButton ? (kInspectorContent.left + kInspectorContent.right) / 2
         : kInspectorContent.left;
-    const int lastX = uiField || addButton ? firstX + 1 : kInspectorContent.right;
+    // The picker button sits at the value column's right edge, which moves left once the Inspector
+    // is long enough to show its scrollbar, so it is searched across that edge rather than at one x.
+    const int lastX = leftEdgeHandle ? kInspectorContent.left + 40
+        : rightEdgeButton ? kInspectorContent.right - 4
+        : uiField || addButton ? firstX + 1 : kInspectorContent.right;
     for (int scroll = addButton ? InspectorPanelRenderer::MaxScrollOffset(kInspectorContent, context) : 0;;) {
         const int maxScroll = InspectorPanelRenderer::MaxScrollOffset(
             kInspectorContent, context);
@@ -202,8 +214,9 @@ FindInspectorHit(
             const_cast<EditorSceneContext&>(context).Inspector()
                 .SetScrollOffset(
                     std::min(scroll, maxScroll), maxScroll));
+        // Every Inspector control is at least 16 px tall, so a 3 px vertical step cannot miss one.
         for (int y = kInspectorContent.top;
-             y < kInspectorContent.bottom; ++y) {
+             y < kInspectorContent.bottom; y += 3) {
             for (int x = firstX; x < lastX; x += 4) {
                 const InspectorPanelRenderer::Hit hit =
                     InspectorPanelRenderer::HitTest(
@@ -252,18 +265,21 @@ FindInspectorHit(
 
 [[nodiscard]] bool ValidateCapturedImage(
     const std::filesystem::path& path,
-    bool requireNonUniform) {
+    bool requireNonUniform, std::uint32_t expectedWidth = 0U, std::uint32_t expectedHeight = 0U) {
     if (!std::filesystem::is_regular_file(path)) {
         return false;
     }
-    if (!requireNonUniform) {
+    if (!requireNonUniform && expectedWidth == 0U && expectedHeight == 0U) {
         return true;
     }
 
     HeroIconGdiplusRuntime::EnsureStarted();
     Gdiplus::Bitmap image(path.wstring().c_str());
     bool valid = image.GetLastStatus() == Gdiplus::Ok &&
-        image.GetWidth() > 0U && image.GetHeight() > 0U;
+        image.GetWidth() > 0U && image.GetHeight() > 0U &&
+        (expectedWidth == 0U || image.GetWidth() == expectedWidth) &&
+        (expectedHeight == 0U || image.GetHeight() == expectedHeight);
+    if (!requireNonUniform) return valid;
     Gdiplus::Color first{};
     bool firstSet = false;
     bool varied = false;
@@ -553,10 +569,17 @@ struct EditorHeadlessAutomation::Impl {
         viewport.Configure(
             GetModuleHandleW(nullptr), window, &backendSettings);
         viewport.SetErrorReporter(
-            [&sceneContext](std::string_view message) {
+            [this, &sceneContext](std::string_view message) {
+                renderFailed = true;
                 sceneContext.Console().Error(
                     "Renderer", std::string{ message });
             });
+        viewport.SetAaTraceReporter([this](std::string_view message) {
+            if (message.starts_with("AA state")) {
+                runtimeCompositeActive = message.find("finalComposite=1") != std::string_view::npos &&
+                    message.find("postProcess=1") != std::string_view::npos;
+            }
+        });
         sceneContext.SetRenderSceneReleaseHandler([this](const kb::scene::Scene& scene) { viewport.ReleaseScene(scene); });
         sceneContext.SetParticlePreviewReleaseHandler([this](const kb::scene::Scene& scene) { viewport.ReleaseScene(scene); });
     }
@@ -581,6 +604,31 @@ struct EditorHeadlessAutomation::Impl {
         std::uint64_t viewportKey,
         bool editorOverlaysEnabled) {
         if (window == nullptr) return false;
+        if (!editorOverlaysEnabled && runtimeWidth != 0U) {
+            if (!context.PlayCameraEntity().IsValid()) return false;
+            const RECT bounds{0, 0, static_cast<LONG>(runtimeWidth), static_cast<LONG>(runtimeHeight)};
+            const DockPanel panel{.id = static_cast<std::uint32_t>(viewportKey), .kind = DockPanelKind::Scene};
+            auto settings = ScenePanelContentRenderer::BuildSettings(
+                RECT{0, -34, bounds.right, bounds.bottom}, panel, context, backendSettings);
+            settings.renderWidth = runtimeWidth;
+            settings.renderHeight = runtimeHeight;
+            settings.presentToHost = true;
+            context.SetUIAuthoringViewportSize(static_cast<float>(runtimeWidth), static_cast<float>(runtimeHeight));
+            renderFailed = false;
+            viewport.BeginPaintLayout(window);
+            viewport.Present(window, bounds, context.Scene(), settings);
+            viewport.EndPaintLayout();
+            const auto stats = viewport.LastSceneSubmitStats();
+            if (stats.HasMissingResources() || stats.droppedInstanceCount != 0U) {
+                context.Console().Error("Renderer", "Runtime frame has missing resources or dropped instances.");
+                return false;
+            }
+            const bool rendered = !renderFailed && runtimeCompositeActive &&
+                std::string_view{viewport.ActiveBackendLabel()} != "Not initialized" &&
+                bgfx::getRendererType() != bgfx::RendererType::Noop;
+            if (rendered) context.AcknowledgeSceneRenderSubmitted();
+            return rendered;
+        }
         if (editorOverlaysEnabled && context.ViewportPreview(viewportKey).Is2D()) {
             viewport.BeginPaintLayout(window);
             const DockPanel panel{.id=static_cast<std::uint32_t>(viewportKey),.kind=DockPanelKind::Scene};
@@ -694,6 +742,10 @@ struct EditorHeadlessAutomation::Impl {
     kb::input::Win32XInputHapticsBackend hapticsBackend;
     EditorRenderBackendSettings backendSettings;
     EditorSceneBgfxViewport viewport;
+    std::uint32_t runtimeWidth = 0U;
+    std::uint32_t runtimeHeight = 0U;
+    bool renderFailed = false;
+    bool runtimeCompositeActive = false;
 };
 
 EditorHeadlessAutomation::EditorHeadlessAutomation(
@@ -901,6 +953,41 @@ bool EditorHeadlessAutomation::SetUIComponentProperty(
             current, component, property, currentValue)) {
         Trace("set_ui_component_property", false, "property-not-readable");
         return false;
+    }
+
+    if (component == kb::scene::UIComponentType::Dropdown && (property == "optionCount" || property.ends_with(".image"))) {
+        // The option count is not a field: the Options list grows with + and shrinks with -. An option image
+        // is chosen through its picker button.
+        const auto read = [&]() {
+            kb::scene::UIComponentPropertyValue now;
+            return kb::scene::ReadUIComponentProperty(
+                       kb::scene::CaptureSceneUIComponents(context_.Scene().Components().UI(), entity), component, property, now)
+                ? std::optional{now} : std::nullopt;
+        };
+        if (property.ends_with(".image")) {
+            const bool unchanged = currentValue == value;
+            Trace("set_ui_component_property", unchanged, unchanged ? "already-set" : "option-image-needs-picker");
+            return unchanged;
+        }
+        const std::uint32_t target = std::get<std::uint32_t>(value);
+        for (std::uint32_t guard = 0U; guard <= kb::scene::UIDropdown::MaxOptions; ++guard) {
+            const std::uint32_t count = std::get<std::uint32_t>(*read());
+            if (count == target) break;
+            const InspectorPropertyId button = count < target ? InspectorPropertyId::UIDropdownOptionAdd : InspectorPropertyId::UIDropdownOptionRemove;
+            POINT at{};
+            if (!FindInspectorHit(context_, InspectorUIComponentModel::Section(component), button, -1, InspectorHitKind::Row, &at) ||
+                !EditorInspectorPointerController{context_}.HandlePointerDown(kInspectorContent, at.x, at.y, impl_->viewport)) {
+                Trace("set_ui_component_property", false, "option-list-button-not-found");
+                return false;
+            }
+            if (std::get<std::uint32_t>(*read()) == count) {
+                Trace("set_ui_component_property", false, "option-list-button-did-not-apply");
+                return false;
+            }
+        }
+        const bool applied = read() == std::optional{value};
+        Trace("set_ui_component_property", applied, applied ? "dropdown-control" : "dropdown-control-not-applied");
+        return applied;
     }
 
     const auto& group = rows[static_cast<std::size_t>(row->groupStart)];
@@ -1545,6 +1632,320 @@ bool EditorHeadlessAutomation::VerifyUIGraphics() {
     return true;
 }
 
+bool EditorHeadlessAutomation::VerifyUINavigationLinks() {
+    const auto fail = [&](std::string_view reason) { Trace("ui_navigation_links", false, reason); return false; };
+    const auto selectable = kb::scene::UIComponentType::Selectable;
+    const auto canvas = context_.CreateUIObject(kb::scene::UIComponentType::Canvas);
+    const auto createNamed = [&](kb::scene::UIComponentType type, std::string_view name) {
+        const auto entity = context_.CreateUIObject(type, canvas);
+        if (entity.IsValid()) context_.Scene().Entities().SetName(entity, name);
+        return entity;
+    };
+    if (!canvas.IsValid() || !createNamed(kb::scene::UIComponentType::Button, "NavAuditPlay").IsValid() ||
+        !createNamed(kb::scene::UIComponentType::Button, "NavAuditQuit").IsValid() ||
+        !createNamed(kb::scene::UIComponentType::Text, "NavAuditLabel").IsValid())
+        return fail("create-failed");
+    // Undo restores the scene from a snapshot with new entity handles, so objects are looked up by
+    // name at every step - exactly the situation a navigation link itself has to survive.
+    const auto byName = [&](std::string_view name) {
+        const auto& scene = context_.Scene();
+        std::vector<kb::scene::SceneEntity> pending = scene.Hierarchy().RootEntities();
+        while (!pending.empty()) {
+            const auto entity = pending.back();
+            pending.pop_back();
+            if (scene.Entities().Name(entity) == name) return entity;
+            for (std::size_t index = 0U; index < scene.Hierarchy().ChildCount(entity); ++index)
+                pending.push_back(scene.Hierarchy().ChildAt(entity, index));
+        }
+        return kb::scene::SceneEntity{};
+    };
+    const auto link = [&]() -> std::optional<std::uint64_t> {
+        for (const auto& row : InspectorUIComponentModel::Properties(context_.Scene(), byName("NavAuditPlay"), selectable))
+            if (row.name == "navigationDown") return std::stoull(row.value);
+        return std::nullopt;
+    };
+    const auto shown = [&]() {
+        const auto value = link();
+        return value ? InspectorUIComponentModel::EntityReferenceLabel(context_.Scene(), *value) : std::string{"(no row)"};
+    };
+
+    context_.SelectEntity(byName("NavAuditPlay"));
+    const auto rows = InspectorUIComponentModel::Properties(context_.Scene(), byName("NavAuditPlay"), selectable);
+    const auto found = std::ranges::find(rows, std::string_view{"navigationDown"}, &InspectorUIPropertyRow::name);
+    if (found == rows.end()) return fail("navigation-row-missing");
+    if (!FindInspectorHit(context_, InspectorUIComponentModel::Section(selectable), InspectorPropertyId::UIAssetPicker,
+            static_cast<int>(found - rows.begin()), InspectorHitKind::TextField))
+        return fail("navigation-picker-button-not-found");
+    if (shown() != "(none)") return fail("empty-link-label: " + shown());
+
+    // The list picker accepts the row that is clicked. Row 0 is Clear; candidates follow in hierarchy
+    // order, and only widgets that can take focus - never the source itself - are candidates.
+    const auto pick = [&](int row) {
+        const auto source = byName("NavAuditPlay");
+        return EditorUIEntityPickerDialog::Show(impl_->window, MakeEditorDarkTheme(), context_, source,
+            kb::scene::UIComponentType::Selectable, "navigationDown",
+            kb::scene::SceneEntity{link().value_or(0U)},
+            {.visible = false, .onOpened = [row](HWND picker) {
+                const int y = EditorDialogStyle::HeaderHeight + 8 + row * EditorDialogStyle::ListRowHeight +
+                    EditorDialogStyle::ListRowHeight / 2;
+                SendMessageW(picker, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(EditorDialogStyle::Padding + 40, y));
+                PostMessageW(picker, WM_CLOSE, 0, 0);
+            }});
+    };
+    const auto candidates = InspectorUIComponentModel::NavigationTargets(context_.Scene(), byName("NavAuditPlay"));
+    if (candidates.size() != 1U || candidates.front() != byName("NavAuditQuit"))
+        return fail("picker-candidates-include-unfocusable-or-self");
+    const auto picked = pick(1);
+    if (!picked.accepted || picked.entity != byName("NavAuditQuit")) return fail("picker-did-not-return-target");
+    const auto assign = [&](std::uint64_t id) {
+        return context_.SetUIComponentProperty(byName("NavAuditPlay"), selectable, "navigationDown", id);
+    };
+    if (!assign(picked.entity.Id())) return fail("assign-link-failed");
+    if (shown() != "NavAuditQuit") return fail("link-label-is-not-target-name: " + shown());
+
+    if (assign(byName("NavAuditLabel").Id())) return fail("unfocusable-target-accepted");
+    if (assign(byName("NavAuditPlay").Id())) return fail("self-link-accepted");
+    if (shown() != "NavAuditQuit") return fail("rejected-link-changed-value");
+
+    if (!context_.UndoSceneCommand() || shown() != "(none)") return fail("undo-link-failed: " + shown());
+    if (!context_.RedoSceneCommand() || shown() != "NavAuditQuit") return fail("redo-link-failed: " + shown());
+
+    const auto cleared = pick(0);
+    if (!cleared.accepted || cleared.entity.IsValid()) return fail("picker-clear-failed");
+    if (!assign(0U) || shown() != "(none)") return fail("clear-link-failed");
+    if (!context_.UndoSceneCommand() || shown() != "NavAuditQuit") return fail("undo-clear-failed: " + shown());
+
+    // A deleted target leaves a link that is shown as broken rather than as a stale name or number.
+    context_.SelectEntity(byName("NavAuditQuit"));
+    if (!context_.DeleteSelectedHierarchyEntity()) return fail("delete-target-failed");
+    if (shown().rfind("(missing object #", 0) != 0) return fail("deleted-target-not-reported: " + shown());
+    if (!context_.UndoSceneCommand() || shown() != "NavAuditQuit") return fail("undo-delete-failed: " + shown());
+    context_.SelectEntity(byName("NavAuditPlay"));
+    Trace("ui_navigation_links", true, "picker-name-clear-invalid-deleted-undo-redo");
+    return true;
+}
+
+bool EditorHeadlessAutomation::VerifyUIWidgetFeatures() {
+    const auto fail = [&](std::string_view reason) { Trace("ui_widget_features", false, reason); return false; };
+    using kb::scene::UIComponentType;
+    const auto row = [&](kb::scene::SceneEntity entity, UIComponentType component, std::string_view name) {
+        const auto rows = InspectorUIComponentModel::Properties(context_.Scene(), entity, component);
+        const auto found = std::ranges::find(rows, name, &InspectorUIPropertyRow::name);
+        return found == rows.end() ? std::optional<InspectorUIPropertyRow>{} : std::optional<InspectorUIPropertyRow>{*found};
+    };
+    const auto shown = [&](kb::scene::SceneEntity entity, UIComponentType component, std::string_view name) {
+        const auto value = row(entity, component, name);
+        return value.has_value() && value->fieldCount != 0;
+    };
+    const auto set = [&](kb::scene::SceneEntity entity, UIComponentType component, std::string_view name,
+                         kb::scene::UIComponentPropertyValue value) {
+        return context_.SetUIComponentProperty(entity, component, name, std::move(value));
+    };
+    const auto canvas = context_.CreateUIObject(UIComponentType::Canvas);
+    const auto image = context_.CreateUIObject(UIComponentType::Image, canvas);
+    if (!canvas.IsValid() || !image.IsValid()) return fail("create-failed");
+
+    // A fill's settings appear once the image fills, and its ends read as the sides it grows from.
+    if (shown(image, UIComponentType::Image, "fillAmount") || shown(image, UIComponentType::Image, "fillOrigin"))
+        return fail("fill-settings-shown-without-fill");
+    if (!set(image, UIComponentType::Image, "fillMethod", std::int32_t{3}) || !shown(image, UIComponentType::Image, "fillAmount") ||
+        !shown(image, UIComponentType::Image, "fillClockwise") || row(image, UIComponentType::Image, "fillOrigin")->choices.front() != "Top")
+        return fail("radial-fill-settings-missing");
+    if (!set(image, UIComponentType::Image, "fillMethod", std::int32_t{1}) || shown(image, UIComponentType::Image, "fillClockwise") ||
+        row(image, UIComponentType::Image, "fillOrigin")->choices.front() != "Left")
+        return fail("horizontal-fill-settings-wrong");
+    context_.SelectEntity(image);
+    if (!CaptureInspector("ui-image-fill")) return false;
+
+    // Sprite Swap trades the state colours for state images.
+    const auto button = context_.CreateUIObject(UIComponentType::Button, canvas);
+    if (!button.IsValid() || !shown(button, UIComponentType::Selectable, "normalColor.r") ||
+        shown(button, UIComponentType::Selectable, "pressedImage"))
+        return fail("colour-tint-rows-wrong");
+    if (!set(button, UIComponentType::Selectable, "transition", std::int32_t{2}) ||
+        shown(button, UIComponentType::Selectable, "normalColor.r") || !shown(button, UIComponentType::Selectable, "pressedImage") ||
+        !set(button, UIComponentType::Selectable, "tooltip", std::string{"Start a new game"}))
+        return fail("sprite-swap-rows-wrong");
+    context_.SelectEntity(button);
+    if (!CaptureInspector("ui-selectable-sprite-swap")) return false;
+
+    // Part pickers offer what the setting can use.
+    const auto toggle = context_.CreateUIObject(UIComponentType::Toggle, canvas);
+    const auto groupChoice = InspectorUIComponentModel::ReferenceTargets(context_.Scene(), toggle, UIComponentType::Toggle, "group");
+    if (groupChoice.title != "Select Radio Group" || std::ranges::find(groupChoice.targets, canvas) == groupChoice.targets.end())
+        return fail("radio-group-picker-wrong");
+    const auto slider = context_.CreateUIObject(UIComponentType::Slider, canvas);
+    const auto* sliderComponent = slider.IsValid() ? context_.Scene().Components().UI().TryGet<kb::scene::UISlider>(slider) : nullptr;
+    if (sliderComponent == nullptr || sliderComponent->fillRect == 0U || sliderComponent->handleRect == 0U ||
+        InspectorUIComponentModel::EntityReferenceLabel(context_.Scene(), sliderComponent->fillRect) != "Fill")
+        return fail("created-slider-not-wired");
+    const auto fillChoice = InspectorUIComponentModel::ReferenceTargets(context_.Scene(), slider, UIComponentType::Slider, "fillRect");
+    if (fillChoice.targets.size() != 2U) return fail("fill-picker-offers-objects-outside-slider");
+    if (!shown(canvas, UIComponentType::Canvas, "respectSafeArea") || shown(canvas, UIComponentType::Canvas, "pixelsPerUnit"))
+        return fail("screen-canvas-rows-wrong");
+    // Undo restores a snapshot with new handles, so what follows looks the canvas up again.
+    if (!context_.UndoSceneCommand() || !context_.RedoSceneCommand()) return fail("undo-redo-created-slider-failed");
+
+    // The phone profile's safe area reaches the canvases laid out in the preview.
+    auto& preview = context_.ViewportPreview(1U);
+    const bool was2D = preview.Is2D();
+    if (!was2D) preview.Toggle2D();
+    preview.SetProfile(EditorViewportProfileKind::PhoneLandscape);
+    const bool captured = CaptureEditorScene("ui-safe-area-phone", true);
+    const kb::scene::UIEdges insets = context_.Scene().UI().SafeAreaInsets();
+    preview.SetProfile(EditorViewportProfileKind::Free);
+    if (!was2D) preview.Toggle2D();
+    if (!captured) return false;
+    if (insets.left <= 0.0F || insets.bottom <= 0.0F) return fail("phone-safe-area-not-applied");
+    Trace("ui_widget_features", true, "fill-rows-sprite-swap-rows-group-picker-slider-hierarchy-safe-area");
+    return true;
+}
+
+bool EditorHeadlessAutomation::VerifyUIDropdownOptions() {
+    const auto fail = [&](std::string_view reason) { Trace("ui_dropdown_options", false, reason); return false; };
+    const auto dropdownType = kb::scene::UIComponentType::Dropdown;
+    const auto section = InspectorUIComponentModel::Section(dropdownType);
+    const auto canvas = context_.CreateUIObject(kb::scene::UIComponentType::Canvas);
+    const auto created = context_.CreateUIObject(dropdownType, canvas);
+    if (!canvas.IsValid() || !created.IsValid()) return fail("create-failed");
+    context_.Scene().Entities().SetName(created, "OptionsAudit");
+    // Undo and reload restore from snapshots with new handles, so objects are looked up by name each step.
+    const auto named = [&](kb::scene::SceneEntity root, std::string_view name) {
+        std::vector<kb::scene::SceneEntity> pending;
+        if (root.IsValid()) pending.push_back(root);
+        else pending = context_.Scene().Hierarchy().RootEntities();
+        while (!pending.empty()) {
+            const auto entity = pending.back();
+            pending.pop_back();
+            if (context_.Scene().Entities().Name(entity) == name) return entity;
+            for (std::size_t index = 0U; index < context_.Scene().Hierarchy().ChildCount(entity); ++index)
+                pending.push_back(context_.Scene().Hierarchy().ChildAt(entity, index));
+        }
+        return kb::scene::SceneEntity{};
+    };
+    const auto current = [&]() { return named({}, "OptionsAudit"); };
+    const auto dropdown = [&]() { return context_.Scene().Components().UI().TryGet<kb::scene::UIDropdown>(current()); };
+    const auto labels = [&]() {
+        std::string joined;
+        if (const auto* value = dropdown())
+            for (std::uint32_t index = 0U; index < value->optionCount; ++index)
+                joined += std::string{index == 0U ? "" : "|"} + std::string{kb::scene::UIDropdownOptionText(value->options[index])};
+        return joined;
+    };
+    const auto click = [&](InspectorPropertyId control, int index) {
+        POINT at{};
+        return FindInspectorHit(context_, section, control, index, InspectorHitKind::None, &at).has_value() &&
+            EditorInspectorPointerController{context_}.HandlePointerDown(kInspectorContent, at.x, at.y, impl_->viewport);
+    };
+
+    // Create > Dropdown builds the whole widget and wires the dropdown to it.
+    const auto* value = dropdown();
+    if (value == nullptr || value->templateEntity != named(current(), "Template").Id() ||
+        value->captionText != named(current(), "Label").Id() || value->itemText != named(current(), "Item Label").Id())
+        return fail("dropdown-hierarchy-not-wired");
+    const auto* label = context_.Scene().Components().UI().TryGet<kb::scene::UIText>(named(current(), "Label"));
+    if (label == nullptr || label->fontAssetId == 0U) return fail("caption-has-no-font");
+    if (labels() != "Option A|Option B|Option C") return fail("starter-options: " + labels());
+    context_.SelectEntity(current());
+    for (const auto control : {InspectorPropertyId::UIDropdownOptionAdd, InspectorPropertyId::UIDropdownOptionRemove})
+        if (!FindInspectorHit(context_, section, control, -1, InspectorHitKind::Row)) return fail("list-footer-button-not-found");
+    if (!FindInspectorHit(context_, section, InspectorPropertyId::UIDropdownOptionHandle, 2, InspectorHitKind::Row))
+        return fail("option-handle-not-found");
+    const auto captionChoice = InspectorUIComponentModel::ReferenceTargets(context_.Scene(), current(), dropdownType, "captionText");
+    if (captionChoice.targets.size() != 4U) return fail("caption-text-picker-offers-non-text-objects");
+
+    // + repeats the last element; selecting an element and - removes it; dragging a handle reorders.
+    if (!click(InspectorPropertyId::UIDropdownOptionAdd, -1) || labels() != "Option A|Option B|Option C|Option C")
+        return fail("plus-did-not-add: " + labels());
+    if (!context_.SetUIComponentProperty(current(), dropdownType, "options.3.text", std::string{"Ultra"}) ||
+        !context_.SetUIComponentProperty(current(), dropdownType, "value", std::uint32_t{3U}))
+        return fail("rename-or-value-failed");
+    if (!click(InspectorPropertyId::UIDropdownOptionSelect, 1) || context_.Inspector().DropdownSelectedOption() != 1 ||
+        !click(InspectorPropertyId::UIDropdownOptionRemove, -1) || labels() != "Option A|Option C|Ultra" || dropdown()->value != 2U)
+        return fail("minus-did-not-remove-selected: " + labels());
+    POINT handle{};
+    if (!FindInspectorHit(context_, section, InspectorPropertyId::UIDropdownOptionHandle, 2, InspectorHitKind::Row, &handle))
+        return fail("handle-not-found");
+    const auto hit = InspectorPanelRenderer::HitTest(kInspectorContent, context_, handle.x, handle.y);
+    if (!InspectorPanelInteraction::HandlePointerDown(context_, hit, handle.x, handle.y) ||
+        !InspectorPanelInteraction::HandlePointerDrag(context_, handle.x, handle.y - 2 * 54) ||
+        !InspectorPanelInteraction::HandlePointerUp(context_) || labels() != "Ultra|Option A|Option C" || dropdown()->value != 0U)
+        return fail("drag-did-not-reorder: " + labels());
+    if (!context_.UndoSceneCommand() || labels() != "Option A|Option C|Ultra") return fail("undo-reorder-failed: " + labels());
+    if (!context_.RedoSceneCommand() || labels() != "Ultra|Option A|Option C") return fail("redo-reorder-failed: " + labels());
+
+    // Ctrl+S while an option label is being typed commits it and saves.
+    {
+        context_.SelectEntity(current());
+        const auto rows = InspectorUIComponentModel::Properties(context_.Scene(), current(), dropdownType);
+        const auto nameRow = std::ranges::find(rows, std::string_view{"options.1.text"}, &InspectorUIPropertyRow::name);
+        POINT at{};
+        if (nameRow == rows.end() ||
+            !FindInspectorHit(context_, section, InspectorUIComponentModel::Property(dropdownType),
+                static_cast<int>(nameRow - rows.begin()), InspectorHitKind::TextField, &at) ||
+            !EditorInspectorPointerController{context_}.HandlePointerDown(kInspectorContent, at.x, at.y, impl_->viewport) ||
+            !context_.Inspector().IsTextEditing())
+            return fail("option-name-edit-not-started");
+        static_cast<void>(InspectorPanelInteraction::HandleChar(context_, L'!'));
+        if (!EditorEditCommandInputHandler{context_}.ExecuteShortcut(EditorEditCommand::Save) ||
+            context_.Inspector().IsTextEditing() || labels().find("!") == std::string::npos || context_.SceneDocumentDirty())
+            return fail("ctrl-s-during-text-edit-did-not-commit-and-save: " + labels());
+    }
+    // The widget references survive a reload.
+    if (!context_.ReloadSceneFromProject() || dropdown() == nullptr ||
+        dropdown()->templateEntity != named(current(), "Template").Id() ||
+        dropdown()->itemText != named(current(), "Item Label").Id() || labels() != "Ultra|Option A!|Option C")
+        return fail("reload-lost-dropdown-widgets: " + labels());
+
+    kb::scene::SceneUIFrame frame;
+    if (!kb::scene::SceneUIQueries{context_.Scene()}.BuildFrame(1280.0F, 720.0F, frame)) return fail("layout-failed");
+    const auto caption = std::ranges::find(frame.elements, named(current(), "Label"), &kb::scene::SceneUIFrameElement::entity);
+    if (caption == frame.elements.end() || !caption->text || kb::scene::UITextContent(*caption->text) != "Ultra")
+        return fail("caption-is-not-chosen-label");
+    context_.SelectEntity(current());
+    if (!CaptureInspector("dropdown-options")) return false;
+    auto& preview = context_.ViewportPreview(1U);
+    const bool was2D = preview.Is2D();
+    if (!was2D) preview.Toggle2D();
+    const bool captured = CaptureEditorScene("dropdown-options-scene");
+    if (!was2D) preview.Toggle2D();
+    if (!captured) return false;
+    Trace("ui_dropdown_options", true, "hierarchy-wired-picker-filter-plus-minus-drag-undo-ctrl-s-reload-caption");
+    return true;
+}
+
+bool EditorHeadlessAutomation::VerifyPickerCloseButtons() {
+    const auto fail = [&](std::string_view reason) { Trace("picker_close_buttons", false, reason); return false; };
+    // Click the title-bar X the way a user does: a button press at its centre. The picker must return
+    // without a selection instead of staying open or treating the press as a pick.
+    const auto clickClose = [](HWND picker) {
+        RECT client{};
+        GetClientRect(picker, &client);
+        const int x = client.right - EditorDialogStyle::Padding - EditorDialogStyle::CloseButtonSize / 2;
+        const int y = 4 + EditorDialogStyle::CloseButtonSize / 2;
+        SendMessageW(picker, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(x, y));
+        SendMessageW(picker, WM_LBUTTONUP, 0, MAKELPARAM(x, y));
+    };
+    bool closed = false;
+    const auto texture = EditorTextureAssetPickerDialog::Show(impl_->window, MakeEditorDarkTheme(), context_, {},
+        EditorTextureAssetPickerFilter::Texture2D, {.visible = false, .onOpened = [&](HWND picker) {
+            clickClose(picker);
+            closed = IsWindow(picker) == 0;
+            if (!closed) PostMessageW(picker, WM_CLOSE, 0, 0);
+        }});
+    if (!closed || texture.accepted) return fail("texture-picker-x-did-not-close");
+    closed = false;
+    const auto list = EditorUIAssetPickerDialog::Show(impl_->window, MakeEditorDarkTheme(), context_, {},
+        kb::assets::AssetKind::Font, {.visible = false, .onOpened = [&](HWND picker) {
+            clickClose(picker);
+            closed = IsWindow(picker) == 0;
+            if (!closed) PostMessageW(picker, WM_CLOSE, 0, 0);
+        }});
+    if (!closed || list.accepted) return fail("list-picker-x-did-not-close");
+    Trace("picker_close_buttons", true, "texture-and-list-picker-x");
+    return true;
+}
+
 bool EditorHeadlessAutomation::VerifyUIComponentCatalog(std::optional<kb::scene::UIComponentType> only) {
     for (const auto& descriptor : kb::scene::UIComponentCatalog()) {
         if (only && descriptor.type != *only) continue;
@@ -1655,6 +2056,10 @@ bool EditorHeadlessAutomation::VerifyUIComponentCatalog(std::optional<kb::scene:
         std::size_t editedFields = 0;
         for (const auto& property : kb::scene::UIComponentPropertyCatalog(descriptor.type)) {
             kb::scene::UIComponentPropertyValue value;
+            // Option properties exist only for the options a dropdown has; the rest are not shown or editable.
+            if (descriptor.type == kb::scene::UIComponentType::Dropdown && property.name.starts_with("options.") &&
+                !kb::scene::ReadUIComponentProperty(values, descriptor.type, property.name, value))
+                continue;
             if (!kb::scene::ReadUIComponentProperty(values, descriptor.type, property.name, value) ||
                 (property.writable && !SetUIComponentProperty(descriptor.type, property.name, value))) {
                 Trace("ui_catalog", false, std::string{descriptor.displayName} + "." + std::string{property.name});
@@ -1798,11 +2203,25 @@ bool EditorHeadlessAutomation::SetGamepadConnected(
     return true;
 }
 
+bool EditorHeadlessAutomation::ConfigureRuntimeRendering(std::uint32_t width, std::uint32_t height, bool gpuVisibilityDiagnostics) {
+    if (width == 0U || height == 0U || width > 8192U || height > 8192U) return false;
+    if (impl_->window == nullptr || SetWindowPos(impl_->window, nullptr, 0, 0,
+            static_cast<int>(width), static_cast<int>(height),
+            SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE) == 0) return false;
+    impl_->runtimeWidth = width;
+    impl_->runtimeHeight = height;
+    impl_->backendSettings.SetGpuDrivenEnabled(gpuVisibilityDiagnostics);
+    context_.ViewportPreview(1U).SetCustomResolution(width, height);
+    context_.ViewportPreview(1U).SetProfile(EditorViewportProfileKind::Custom);
+    context_.ViewportPreview(1U).SetRenderProfile(EditorViewportRenderProfile::GamePreview);
+    return true;
+}
+
 bool EditorHeadlessAutomation::StepRuntime(
-    std::size_t frames, float deltaSeconds) {
+    std::size_t frames, float deltaSeconds, bool profile, bool requireShadows, bool gpuProfile) {
     if (frames == 0U || !std::isfinite(deltaSeconds) ||
         deltaSeconds < 0.0F ||
-        !context_.HasPlayModeSceneSession()) {
+        !context_.HasPlayModeSceneSession() || (gpuProfile && !profile)) {
         Trace("step_runtime", false, "invalid-step");
         return false;
     }
@@ -1810,13 +2229,118 @@ bool EditorHeadlessAutomation::StepRuntime(
         kb::input::InputHaptics::RegisterBackend(
             context_.Scene(), impl_->hapticsBackend);
     }
+    std::vector<std::array<double, 24>> samples;
+    if (profile) samples.reserve(frames);
+    struct GpuViewSample {
+        std::size_t sampleFrame;
+        bgfx::ViewStats view;
+        double milliseconds;
+    };
+    std::vector<GpuViewSample> gpuViews;
+    struct ViewProfilerScope {
+        bool enabled = false;
+        ~ViewProfilerScope() {
+            // The Windows headless renderer starts with debug text enabled.
+            if (enabled) bgfx::setDebug(BGFX_DEBUG_TEXT);
+        }
+    } viewProfiler;
     for (std::size_t frame = 0U; frame < frames; ++frame) {
+        const auto begin = profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
         if (!context_.TickPlayModeSceneSession(deltaSeconds)) {
             Trace("step_runtime", false, "runtime-requested-stop");
             return false;
         }
+        const auto simulated = profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
         if (!impl_->Render(context_)) {
             Trace("step_runtime", false, "render-backend-failed");
+            return false;
+        }
+        if (gpuProfile && !viewProfiler.enabled) {
+            bgfx::setDebug(BGFX_DEBUG_TEXT | BGFX_DEBUG_PROFILER);
+            viewProfiler.enabled = true;
+        }
+        if (requireShadows && impl_->viewport.LastSceneSubmitStats().submittedShadowDrawCallCount == 0U) {
+            Trace("step_runtime", false, "required-shadow-draws-missing");
+            return false;
+        }
+        if (profile) {
+            const auto end = std::chrono::steady_clock::now();
+            const auto stats = impl_->viewport.LastSceneSubmitStats();
+            const auto runtime = context_.Scene().Runtime().HotPathReport();
+            const bgfx::Stats* gpu = bgfx::getStats();
+            if (gpuProfile && gpu != nullptr && gpu->gpuTimerFreq > 0 && gpu->viewStats != nullptr) {
+                for (std::uint16_t index = 0U; index < gpu->numViews; ++index) {
+                    const auto& view = gpu->viewStats[index];
+                    if (view.gpuTimeEnd > view.gpuTimeBegin) {
+                        gpuViews.push_back({frame, view,
+                            static_cast<double>(view.gpuTimeEnd - view.gpuTimeBegin) * 1000.0 /
+                                static_cast<double>(gpu->gpuTimerFreq)});
+                    }
+                }
+            }
+            const double gpuMs = gpu != nullptr && gpu->gpuTimerFreq > 0 && gpu->gpuTimeEnd > gpu->gpuTimeBegin
+                ? static_cast<double>(gpu->gpuTimeEnd - gpu->gpuTimeBegin) * 1000.0 / static_cast<double>(gpu->gpuTimerFreq)
+                : -1.0;
+            const double cpuTickMilliseconds = gpu != nullptr && gpu->cpuTimerFreq > 0
+                ? 1000.0 / static_cast<double>(gpu->cpuTimerFreq) : 0.0;
+            samples.push_back({
+                std::chrono::duration<double, std::milli>(end - begin).count(),
+                std::chrono::duration<double, std::milli>(simulated - begin).count(),
+                std::chrono::duration<double, std::milli>(end - simulated).count(), gpuMs,
+                static_cast<double>(stats.submittedDrawCallCount), static_cast<double>(stats.shadowCasterCount),
+                static_cast<double>(stats.submittedMeshCount), static_cast<double>(stats.droppedInstanceCount),
+                static_cast<double>(stats.submittedShadowDrawCallCount), stats.HasMissingResources() ? 1.0 : 0.0,
+                static_cast<double>(context_.Scene().Runtime().LastFixedStepCount()),
+                static_cast<double>(stats.gpuCullingDispatchCount),
+                static_cast<double>(stats.gpuDrivenUploadBytes),
+                static_cast<double>(runtime.runtimeUpdateNanoseconds) / 1.0e6,
+                static_cast<double>(runtime.runtimeTransformSyncNanoseconds) / 1.0e6,
+                static_cast<double>(runtime.runtimeFixedCaptureStartNanoseconds) / 1.0e6,
+                static_cast<double>(runtime.runtimeFixedCaptureEndNanoseconds) / 1.0e6,
+                static_cast<double>(runtime.transformHierarchyUpdateNanoseconds) / 1.0e6,
+                static_cast<double>(stats.meshCommandLookupCapacity),
+                static_cast<double>(stats.meshPipelineScratchInstanceCapacity),
+                cpuTickMilliseconds > 0.0 ? static_cast<double>(gpu->waitRender) * cpuTickMilliseconds : -1.0,
+                cpuTickMilliseconds > 0.0 ? static_cast<double>(gpu->waitSubmit) * cpuTickMilliseconds : -1.0,
+                cpuTickMilliseconds > 0.0 && gpu->cpuTimeEnd >= gpu->cpuTimeBegin
+                    ? static_cast<double>(gpu->cpuTimeEnd - gpu->cpuTimeBegin) * cpuTickMilliseconds : -1.0,
+                gpu != nullptr ? static_cast<double>(gpu->gpuFrameNum) : -1.0});
+        }
+    }
+    if (profile) {
+        std::ofstream output{artifactRoot_ / "runtime-frames.csv"};
+        output.imbue(std::locale::classic());
+        output << "frame,cpu_ms,simulation_ms,render_ms,gpu_delayed_ms,draws,shadow_casters,submitted_meshes,dropped,shadow_draws,missing_resources,fixed_steps,gpu_culling_dispatches,gpu_culling_upload_bytes,runtime_ms,transform_sync_ms,fixed_capture_start_ms,fixed_capture_end_ms,transform_hierarchy_ms,command_lookup_buckets,command_instance_capacity,bgfx_wait_render_ms,bgfx_wait_submit_ms,bgfx_render_cpu_ms,bgfx_gpu_frame\n";
+        for (std::size_t index = 0; index < samples.size(); ++index) {
+            output << index;
+            for (const double value : samples[index]) output << ',' << value;
+            output << '\n';
+        }
+        output.flush();
+        if (!output) {
+            Trace("step_runtime", false, "profile-write-failed");
+            return false;
+        }
+    }
+    if (gpuProfile) {
+        if (gpuViews.empty()) {
+            Trace("step_runtime", false, "gpu-profile-no-valid-view-timings");
+            return false;
+        }
+        std::ofstream output{artifactRoot_ / "runtime-gpu-views.tsv"};
+        output.imbue(std::locale::classic());
+        output << "sample_frame\tgpu_frame\tview_id\tview_name\tgpu_ms\n";
+        for (const auto& sample : gpuViews) {
+            std::string name{sample.view.name};
+            for (char& character : name) {
+                if (character == '\t' || character == '\r' || character == '\n') character = ' ';
+            }
+            output << sample.sampleFrame << '\t' << sample.view.gpuFrameNum << '\t'
+                   << sample.view.view << '\t' << name << '\t' << sample.milliseconds << '\n';
+        }
+        output.flush();
+        if (!output) {
+            Trace("step_runtime", false, "gpu-profile-write-failed");
             return false;
         }
     }
@@ -2797,6 +3321,26 @@ bool EditorHeadlessAutomation::CaptureRuntime(
     const std::filesystem::path output =
         artifactRoot_ / "screenshots" /
         (SafeCheckpoint(checkpoint) + ".png");
+    if (impl_->runtimeWidth != 0U) {
+        std::error_code error;
+        std::filesystem::remove(output, error);
+        if (error || !impl_->viewport.RequestPresentedCapture(impl_->window, 1U, output.string()) ||
+            !impl_->Render(context_)) {
+            Trace("capture_runtime", false, "presented-capture-rejected");
+            return false;
+        }
+        for (std::size_t poll = 0U; poll < 240U; ++poll) {
+            if (!impl_->viewport.AdvanceAsyncReadbacks()) break;
+            if (std::filesystem::exists(output, error) && !error) {
+                const bool valid = ValidateCapturedImage(output, requireNonUniform, impl_->runtimeWidth, impl_->runtimeHeight);
+                Trace("capture_runtime", valid, output.filename().string());
+                return valid;
+            }
+            Sleep(5U);
+        }
+        Trace("capture_runtime", false, "presented-capture-timeout");
+        return false;
+    }
     const std::uint64_t capture =
         kb::scene::SceneRenderFeedback::RequestScreenCapture(
             context_.Scene(), output.string());

@@ -1,6 +1,7 @@
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
 
 #include "engine/assets/AssetMetadata.hpp"
+#include "engine/assets/TerrainAsset.hpp"
 
 #include <algorithm>
 #include <map>
@@ -51,6 +52,9 @@ namespace {
         }
     }
     if (asset.type == "RenderMesh") {
+        if (asset.sourceExtension == kTerrainAssetExtension) {
+            return sourceCount == 1U && asset.artifacts.size() == 1U;
+        }
         return meshCount == 1U && asset.artifacts.size() == 1U;
     }
     if (IsTextureAsset(asset)) {

@@ -168,7 +168,14 @@ public:
     [[nodiscard]] bool BeginFrame();
     void EndFrame();
     void SubmitClear(std::uint32_t rgba, float depth = SceneDepthPolicy::ClearDepth(), std::uint8_t stencil = 0);
-    void SubmitScene(const kb::scene::Scene& scene);
+    [[nodiscard]] bool SubmitScene(const kb::scene::Scene& scene);
+    struct RuntimeSceneSynchronization {
+        bool fullSync = true;
+        std::span<const std::uint64_t> dirtySceneEntityIds{};
+    };
+    // The caller preserves pre-update changes and requests a full sync after
+    // topology changes. Otherwise consume this runtime tick's transform/proxy updates.
+    [[nodiscard]] bool SubmitRuntimeScene(const kb::scene::Scene& scene, const RuntimeSceneSynchronization& synchronization);
     [[nodiscard]] bool SubmitScene(const kb::scene::Scene& scene, const RenderSceneSubmitDesc& desc);
     struct SceneFrameSubmission {
         const kb::scene::Scene* scene = nullptr;
@@ -200,6 +207,10 @@ public:
     [[nodiscard]] bool HasExposureHistory() const noexcept;
     void PrimeExposureAdaptation(float luminance) noexcept;
     [[nodiscard]] SceneRenderSubmitStats LastSceneSubmitStats() const noexcept;
+    [[nodiscard]] double LastSceneSynchronizationMilliseconds() const noexcept;
+    [[nodiscard]] double LastSceneVisibilityBuildMilliseconds() const noexcept;
+    [[nodiscard]] double LastSceneVisibilitySortMilliseconds() const noexcept;
+    [[nodiscard]] double LastSceneVisibilityPublishMilliseconds() const noexcept;
     [[nodiscard]] std::span<const SceneRenderPassSubmitStats> LastScenePassSubmitStats() const noexcept;
     [[nodiscard]] std::span<const SceneRenderExposureSubmitStats> LastSceneExposureStats() const noexcept;
     [[nodiscard]] std::span<const std::string> LastAaPipelineTraceLines() const noexcept;
@@ -219,6 +230,7 @@ public:
     [[nodiscard]] SceneRenderDrawBudget DefaultSceneDrawBudget() const noexcept;
     void SetDefaultSceneLightingConfig(SceneRenderLightingConfig lightingConfig) noexcept;
     [[nodiscard]] SceneRenderLightingConfig DefaultSceneLightingConfig() const noexcept;
+    // Compute visibility is diagnostic until draw submission consumes its output.
     void SetGpuDrivenRuntimeDispatchEnabled(bool enabled) noexcept;
     [[nodiscard]] bool GpuDrivenRuntimeDispatchEnabled() const noexcept;
     void SetGraphShaderCacheRoot(std::string root);
@@ -282,6 +294,10 @@ private:
     EditorRenderPassSubmitter editorPassSubmitter_;
     PostProcessChain postProcessChain_;
     SceneRenderSubmitStats lastSceneSubmitStats_{};
+    double lastSceneSynchronizationMilliseconds_ = 0.0;
+    double lastSceneVisibilityBuildMilliseconds_ = 0.0;
+    double lastSceneVisibilitySortMilliseconds_ = 0.0;
+    double lastSceneVisibilityPublishMilliseconds_ = 0.0;
     std::vector<SceneRenderPassSubmitStats> lastScenePassSubmitStats_;
     std::vector<SceneRenderExposureSubmitStats> lastSceneExposureStats_;
     std::vector<std::string> lastAaPipelineTraceLines_;
@@ -313,7 +329,7 @@ private:
     std::string graphShaderCacheRoot_;
     std::shared_ptr<const ShaderBinaryProvider> shaderBinaryProvider_;
     float frameDeltaSeconds_ = 1.0F / 60.0F;
-    bool gpuDrivenRuntimeDispatchEnabled_ = true;
+    bool gpuDrivenRuntimeDispatchEnabled_ = false;
     std::uint32_t lastUnresolvedMaterialTexturePathCount_ = 0;
     std::uint32_t lastDefaultMaterialFallbackCount_ = 0;
     std::uint32_t lastErrorMaterialFallbackCount_ = 0;

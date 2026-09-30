@@ -684,6 +684,7 @@ void RunGraphShaderManifestRoundTripTest() {
 // under them and refuse there: first the publication lock, then everything the external compiler
 // had to open. The cache is now addressed in extended-length form and shaderc works in a scratch
 // directory of its own, so a deep cache root cooks and re-hits exactly like a shallow one.
+#if defined(KB_TEST_GRAPH_SHADERC_PATH)
 void RunGraphShaderDeepCacheRootCookTest() {
     const RenderMaterialGraphShaderSource shader = CompileConstantColorGraph("0.15 0.65 0.25 1");
     const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Spirv };
@@ -738,6 +739,8 @@ void RunGraphShaderDeepCacheRootCookTest() {
         "The shader compiler must not leave its working files in a project's cache");
     std::filesystem::remove_all(kb::platform::ExtendedLengthPath(cacheRoot), error);
 }
+
+#endif
 
 void RunGraphShaderArtifactCookTests() {
     RunGraphShaderWrapperSourceTest();

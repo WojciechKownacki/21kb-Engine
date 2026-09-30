@@ -12,6 +12,7 @@
 #include "kb/render/scene/SceneGpuDrivenCullingPass.hpp"
 #include "kb/render/scene/SceneRenderResourceMap.hpp"
 #include "scene/submit/SceneMeshPassResources.hpp"
+#include "scene/submit/SceneMeshDrawCommandSubmitter.hpp"
 
 #include <bgfx/bgfx.h>
 
@@ -70,15 +71,20 @@ public:
     // across all of a submit's passes; read after the submit for the true GPU-vs-fallback material counts.
     void ResetGraphMaterialDrawStats() const noexcept { passResources_.ResetGraphMaterialDrawStats(); }
     [[nodiscard]] SceneMeshGraphMaterialDrawStats GraphMaterialDrawStats() const noexcept { return passResources_.GraphMaterialDrawStats(); }
-    void EndFrame(std::uint64_t frameIndex) const { passResources_.EndFrame(frameIndex); }
+    void EndFrame(std::uint64_t frameIndex) const {
+        instanceBuffers_.EndFrame();
+        passResources_.EndFrame(frameIndex);
+    }
     void SetGraphShaderCacheRoot(std::string root) { passResources_.SetGraphShaderCacheRoot(std::move(root)); }
     void SetSkinningPaletteAllocator(const RenderSkinningPaletteAllocator* allocator) noexcept { skinningPaletteAllocator_ = allocator; }
 
 private:
     SceneMeshPassResources passResources_;
     SceneGpuDrivenCullingPass gpuDrivenCullingPass_;
+    mutable SceneMeshInstanceBufferPool instanceBuffers_;
     mutable SceneGpuDrivenFrameResources gpuDrivenFrameResources_;
     mutable MeshPipelineBuildResult pipelineScratch_;
+    mutable std::array<std::vector<MeshDrawCommand>, static_cast<std::size_t>(MeshPassType::Gizmo) + 1U> passCommandScratch_;
     mutable std::vector<SceneRenderVisibilityBlocker> visibilityBlockerScratch_;
     mutable std::vector<TransparentDrawOrderEntry> transparentSubmissionScratch_;
     mutable std::vector<SceneMeshBatch> meshBatchSubmissionScratch_;

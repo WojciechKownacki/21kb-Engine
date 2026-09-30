@@ -16,6 +16,7 @@
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/assets/AssetRegistry.hpp"
 #include "engine/assets/bake/BakeTargetProfile.hpp"
+#include "engine/assets/bake/AssetPackReader.hpp"
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
 #include "engine/input/InputAssetIO.hpp"
 #include "engine/input/InputMappingContextAsset.hpp"
@@ -29,9 +30,13 @@
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneObject.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
+#include "engine/scene/SceneUI.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
+#include "engine/script/ScriptAsset.hpp"
+#include "engine/script/ScriptRuntimeHost.hpp"
 #include "kb/render/RuntimeAssetShaderProvider.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
+#include "kb/render/resources/RenderTextureAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialAssetWriter.hpp"
 #include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
@@ -321,6 +326,103 @@ void WriteSettings(const std::filesystem::path& root, const kb::project::Project
         "kb_game_core test project settings could not be written");
 }
 
+void RunTextureReuseCookTests() {
+    namespace bake = kb::assets::bake;
+    const Fixture fixture = BuildFixture(TestRoot() / "texture_reuse", "Project");
+    kb::project::ProjectSettings settings;
+    settings.defaultMap = fixture.sceneVirtualPath;
+    settings.physicsLayersAsset.clear();
+    settings.inputEnabled = false;
+    WriteSettings(fixture.root, settings);
+    const auto texturePath = fixture.root / "Assets/Textures/Reuse.tga";
+    std::string texture(18U + 4U * 4U * 3U, '\0');
+    texture[2] = 2; texture[12] = 4; texture[14] = 4; texture[16] = 24;
+    WriteTextFile(texturePath, texture);
+    {
+        kb::scene::Scene scene;
+        Require(scene.Assets().Manager().RegisterLoader(std::make_unique<kb::render::RenderTextureAssetLoader>()),
+            "Texture reuse fixture loader registration failed");
+        Require(scene.Assets().MountProject(fixture.root), "Texture reuse fixture mount failed");
+        static_cast<void>(scene.Assets().Discover());
+        const auto* metadata = scene.Assets().Manager().Registry().FindByPath("/Game/Textures/Reuse.tga");
+        Require(metadata != nullptr, "Texture reuse fixture texture was not discovered");
+        const auto object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Image" });
+        scene.Components().UI().Set(object.Entity(), kb::scene::UIRawImage{ .imageAssetId = metadata->id.value });
+        Require(kb::scene::SceneDocumentService::Save(scene,
+            fixture.root / "Assets/Scenes/Main.21kbscene", "Main"), "Texture reuse scene save failed");
+    }
+    kb::game::ProjectCookRequest request{
+        .projectPath = fixture.root, .targetProfileId = "Windows.x64",
+        .outputPackPath = fixture.root / "Game.kbpack",
+    };
+    auto cook = [&]() {
+        std::ostringstream diagnostics;
+        const auto result = kb::game::CookProject(request, diagnostics);
+        if (!result.succeeded) std::fprintf(stderr, "%s\n", result.error.c_str());
+        return std::pair{ result, diagnostics.str() };
+    };
+    const auto cold = cook();
+    Require(cold.first.succeeded && cold.first.textureArtifactCount > 0U &&
+        Mentions(cold.second, "cooking texture:"), "Cold texture cook failed");
+    const auto original = fixture.root / "Original.kbpack";
+    std::filesystem::copy_file(request.outputPackPath, original);
+    request.reusePackPath = request.outputPackPath;
+    const auto warm = cook();
+    Require(warm.first.succeeded && Mentions(warm.second, "reusing texture:") &&
+        !Mentions(warm.second, "cooking texture:"), "Same-output texture reuse failed");
+    std::uint64_t corruptOffset = 0U;
+    {
+        bake::AssetPackReader before, after;
+        Require(before.Mount(original) == bake::AssetPackReadStatus::Success &&
+            after.Mount(request.outputPackPath) == bake::AssetPackReadStatus::Success,
+            "Texture reuse packages could not be mounted");
+        for (const auto& artifact : before.Artifacts()) {
+            if (artifact.assetTypeId != "Texture2D") continue;
+            const auto* reused = after.FindArtifact(artifact.key);
+            std::vector<std::uint8_t> a, b;
+            Require(reused != nullptr && before.ReadBlock(artifact, bake::kBakedAssetPrimaryBlockName, a) ==
+                bake::AssetPackReadStatus::Success && after.ReadBlock(*reused, bake::kBakedAssetPrimaryBlockName, b) ==
+                bake::AssetPackReadStatus::Success && a == b, "Reused texture bytes or key changed");
+            corruptOffset = artifact.blocks.front().offset;
+        }
+    }
+    Require(corruptOffset != 0U, "Texture reuse fixture contains no texture blocks");
+    {
+        std::fstream corrupt{ original, std::ios::binary | std::ios::in | std::ios::out };
+        corrupt.seekg(static_cast<std::streamoff>(corruptOffset));
+        char byte = 0;
+        corrupt.read(&byte, 1);
+        byte ^= 1;
+        corrupt.seekp(static_cast<std::streamoff>(corruptOffset));
+        corrupt.write(&byte, 1);
+        Require(corrupt.good(), "Texture cache corruption fixture failed");
+    }
+    const auto readOutput = [&]() {
+        std::ifstream input{ request.outputPackPath, std::ios::binary };
+        return std::string{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+    };
+    const auto published = readOutput();
+    request.targetProfileId = "Linux.x64";
+    const auto incompatible = cook();
+    Require(!incompatible.first.succeeded && Mentions(incompatible.first.error, "incompatible with the target profile") &&
+        readOutput() == published, "Incompatible texture cache replaced a valid published package");
+    request.targetProfileId = "Windows.x64";
+    request.reusePackPath = original;
+    const auto corrupt = cook();
+    Require(!corrupt.first.succeeded && Mentions(corrupt.first.error, "cached texture artifact is invalid") &&
+        readOutput() == published, "Corrupt cached texture replaced a valid published package");
+    request.reusePackPath = fixture.root / "Invalid.kbpack";
+    WriteTextFile(request.reusePackPath, "invalid cache");
+    Require(!cook().first.succeeded && readOutput() == published,
+        "Invalid reuse package replaced a valid published package");
+    request.reusePackPath = request.outputPackPath;
+    texture[18] = 127;
+    WriteTextFile(texturePath, texture);
+    const auto changed = cook();
+    Require(changed.first.succeeded && Mentions(changed.second, "cooking texture:") &&
+        !Mentions(changed.second, "reusing texture:"), "Changed texture reused stale bytes");
+}
+
 class ScopedExternalCookOutputLock final {
 public:
     explicit ScopedExternalCookOutputLock(const std::filesystem::path& outputPath) {
@@ -430,6 +532,80 @@ void RunCookOutputLockTest() {
         Require(!leftCandidate,
             "CookProject created a candidate before acquiring the final-output lock");
     }
+}
+
+void RunNativeBehaviourPackagingTests() {
+    namespace bake = kb::assets::bake;
+    const Fixture fixture = BuildFixture(TestRoot() / "native_script_project", "Project");
+    kb::project::ProjectSettings settings;
+    settings.defaultMap = fixture.sceneVirtualPath;
+    settings.physicsLayersAsset.clear();
+    settings.inputEnabled = false;
+    WriteSettings(fixture.root, settings);
+    WriteTextFile(fixture.root / "Assets" / "Player.native",
+        "name = Player\nsymbol = Tests.PackagedNative\nmodule = ../Binaries/native.dll\n"
+        "source = ../Source/editor-only.cpp\nentry = kb_register_native_scripts\n");
+    std::filesystem::create_directories(fixture.root / "Binaries");
+    std::filesystem::copy_file(KB_WINDOWS_RUNTIME_MODULE_TEST_PLUGIN_PATH,
+        fixture.root / "Binaries" / "native.dll");
+    kb::assets::AssetId nativeId;
+    {
+        kb::scene::Scene authored{kb::scene::SceneMode::PrefabPrivate};
+        Require(authored.Assets().MountProject(fixture.root), "Native fixture mount failed");
+        static_cast<void>(authored.Assets().Discover());
+        const auto* asset = authored.Assets().Manager().Registry().FindByPath("/Game/Player.native");
+        Require(asset != nullptr, "Native fixture descriptor was not discovered");
+        nativeId = asset->id;
+        const auto entity = authored.Entities().CreateEntity();
+        authored.Components().Behaviours().Set(entity, {
+            .behaviourAssetId = nativeId.value, .backend = kb::scene::BehaviourBackend::Native,
+        });
+        Require(kb::scene::SceneDocumentService::Save(authored,
+            fixture.root / "Assets" / "Scenes" / "Main.21kbscene", "Main"), "Native fixture scene save failed");
+    }
+    const auto sealedRoot = TestRoot() / "native_script_package";
+    const auto packPath = sealedRoot / "Game.kbpack";
+    std::ostringstream diagnostics;
+    const kb::game::ProjectCookRequest request{
+        .projectPath = fixture.root,
+        .targetProfileId = "Windows.x64",
+        .outputPackPath = packPath,
+        .runtimeModulesOutputDirectory = sealedRoot / "RuntimeModules",
+    };
+    const auto cooked = kb::game::CookProject(request, diagnostics);
+    Require(cooked.succeeded, cooked.error.c_str());
+    Require(std::filesystem::remove(fixture.root / "Binaries" / "native.dll"),
+        "Native fixture authoring DLL removal failed");
+    auto pack = std::make_shared<bake::RuntimeAssetPack>();
+    Require(pack->Mount(packPath, bake::WindowsX64BakeTargetProfile()) == bake::RuntimeAssetPackStatus::Success,
+        "Native package could not be mounted");
+    {
+        kb::scene::Scene runtime{kb::scene::SceneMode::PrefabPrivate};
+        Require(runtime.Assets().Manager().MountRuntimePack(pack), "Native runtime registry mount failed");
+        const auto descriptor = runtime.Assets().Manager().Load<kb::script::NativeBehaviourDescriptor>(nativeId);
+        Require(descriptor.IsLoaded() && descriptor->sourcePath.empty() && !descriptor->build.enabled &&
+            !descriptor->shadowCopy && descriptor->modulePath == "RuntimeModules/Binaries/native.dll",
+            "Native package retained authoring paths or lost its staged DLL reference");
+        kb::script::ScriptRuntimeHost host{runtime};
+        Require(host.Succeeded(), "Native fixture script host failed");
+        host.AssetPreparer().SetNativeSettings({.buildPlugins = false, .runtimeModuleRoot = sealedRoot});
+        const auto prepared = host.AssetPreparer().PrepareAsset(nativeId);
+        Require(prepared.Succeeded(), prepared.diagnostics.empty() ? "Native preparation failed" : prepared.diagnostics.front().message.c_str());
+        const auto entity = runtime.Entities().CreateEntity();
+        kb::scene::BehaviourComponent behaviour{.behaviourAssetId = nativeId.value, .backend = kb::scene::BehaviourBackend::Native};
+        kb::script::ScriptExecutionContext context{runtime, entity, nativeId, behaviour.backend,
+            kb::script::ScriptLifecycleEvent::Ready, 0.0F, nullptr};
+        Require(host.NativeBackend().ExecuteLifecycle(behaviour, context).Succeeded(), "Packaged native callback failed");
+        const auto modulePath = std::filesystem::canonical(sealedRoot / descriptor->modulePath);
+        const auto module = GetModuleHandleW(modulePath.c_str());
+        Require(module != nullptr, "Native DLL was not loaded from the sealed runtime root");
+        const auto calls = reinterpret_cast<std::uint32_t(*)()>(GetProcAddress(module, "kb_native_ready_count"));
+        Require(calls != nullptr && calls() == 1U, "Packaged native callback did not execute exactly once");
+    }
+    pack->Unmount();
+    const auto rejected = kb::game::CookProject(request, diagnostics);
+    Require(!rejected.succeeded && Mentions(rejected.error, "native behaviour DLL"),
+        "Native package accepted a missing DLL after authoring content was removed");
 }
 
 void RunWindowsRuntimeModulePackagingTests() {
@@ -1346,10 +1522,21 @@ int main(int argc, char** argv) {
     std::filesystem::create_directories(TestRoot(), error);
     Require(!error, "kb_game_core test root could not be prepared");
 
+    if (argc == 2 && std::string_view{ argv[1] } == "--texture-reuse") {
+        RunTextureReuseCookTests();
+        std::fputs("kb_game_core texture reuse tests passed\n", stdout);
+        return EXIT_SUCCESS;
+    }
+
     if (argc == 2 && std::string_view{ argv[1] } == "--windows-runtime-modules") {
         RunPackagedRuntimeModuleContractTests();
         RunWindowsRuntimeModulePackagingTests();
         std::fputs("kb_game_core Windows runtime-module tests passed\n", stdout);
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "--native-behaviours") {
+        RunNativeBehaviourPackagingTests();
+        std::fputs("kb_game_core native-behaviour package tests passed\n", stdout);
         return EXIT_SUCCESS;
     }
     Require(argc == 1, "kb_game_core tests received an unsupported argument");
@@ -1357,8 +1544,10 @@ int main(int argc, char** argv) {
     RunRuntimeDeltaTests();
     RunPackagedRuntimeModuleContractTests();
     RunCookOutputLockTest();
+    RunTextureReuseCookTests();
     RunDeepOutputPathCookTest();
     RunWindowsRuntimeModulePackagingTests();
+    RunNativeBehaviourPackagingTests();
     RunSceneMetaCookValidationTests();
     RunAuthoritativeMaterialGraphCookTest();
     RunNarrowingTests();

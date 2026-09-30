@@ -8,6 +8,8 @@
 #include "kb/render/ViewIdPolicy.hpp"
 #include "engine/ecs/WorkerPool.hpp"
 #include "engine/assets/AssetManager.hpp"
+#include "engine/assets/AssetMetadata.hpp"
+#include "kb/render/resources/RenderTextureAssetLoader.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAuxFrameComponents.hpp"
 #include "engine/scene/SceneComponentQueries.hpp"
@@ -42,6 +44,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -55,6 +58,54 @@
 namespace kb::render {
 
 namespace {
+
+// Decodes the images the UI hit-tests by opacity and hands their alpha channel to the scene, once per image.
+// Only the renderer decodes images, so this is where the scene learns what an image's transparent parts are.
+void PublishUIImageAlpha(kb::scene::Scene& scene) {
+    const std::vector<std::uint64_t> pending = std::as_const(scene).UI().PendingImageAlpha();
+    if (pending.empty()) {
+        return;
+    }
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    for (const std::uint64_t assetId : pending) {
+        const kb::assets::AssetMetadata* metadata = manager.Registry().Find(kb::assets::AssetId{assetId});
+        if (metadata == nullptr) {
+            continue;
+        }
+        std::optional<kb::render::RenderTextureAssetData> texture;
+        if (const std::shared_ptr<kb::assets::bake::RuntimeAssetPack> pack = manager.RuntimePack(); pack != nullptr) {
+            kb::render::RenderTextureAssetLoader loader{bgfx::getRendererType()};
+            kb::assets::AssetLoadResult loaded =
+                loader.Load(kb::assets::AssetLoadRequest{.metadata = *metadata, .resolvedPath = {}, .runtimePack = pack});
+            if (loaded.Succeeded()) {
+                texture = *std::static_pointer_cast<const kb::render::RenderTextureAssetData>(loaded.asset);
+            }
+        } else {
+            const std::filesystem::path path = !metadata->physicalPath.empty()
+                ? metadata->physicalPath
+                : manager.Mounts().Resolve(metadata->virtualPath).value_or(std::filesystem::path{});
+            if (!path.empty()) {
+                texture = kb::render::RenderTextureAssetLoader::LoadTexture(path);
+            }
+        }
+        if (texture.has_value() && texture->gpuBlocks.has_value()) {
+            texture = kb::render::DecodeRenderTextureToRgba8(*texture);
+        }
+        kb::scene::SceneUIImageAlpha alpha;
+        if (texture.has_value() && texture->width > 0U && texture->height > 0U &&
+            texture->rgba8.size() >= static_cast<std::size_t>(texture->width) * texture->height * 4U) {
+            alpha.width = texture->width;
+            alpha.height = texture->height;
+            alpha.alpha.resize(static_cast<std::size_t>(texture->width) * texture->height);
+            for (std::size_t pixel = 0U; pixel < alpha.alpha.size(); ++pixel) {
+                alpha.alpha[pixel] = texture->rgba8[pixel * 4U + 3U];
+            }
+        }
+        // An image that cannot be decoded publishes no pixels, which keeps its whole rectangle clickable.
+        scene.UI().PublishImageAlpha(assetId, std::move(alpha));
+    }
+}
+
 
 void WriteRendererBreadcrumb(std::string_view category, std::string_view message) {
     WriteRendererDebugLog(category, message);
@@ -150,11 +201,9 @@ void WriteRendererBreadcrumb(std::string_view category, std::string_view message
 // directly (see this ticket's own research). Called only when the caller's own desc did NOT
 // already supply an explicit override, so an editor/player caller's explicit per-submit
 // override still always wins - this is purely an ADDITIVE fallback, not a new precedence
-// rule. An unset (0) or unresolvable profile asset id honestly resolves to std::nullopt (no
-// override at all, falling through to defaultPostProcessSettings_ exactly as before this
-// ticket), never a crash - the same "unresolvable reference silently falls back" shape every
-// other renderer-consumed asset reference already follows.
-[[nodiscard]] std::optional<ScenePostProcessSettings> ResolveScenePostProcessProfile(const kb::scene::Scene& scene) {
+// rule. Zero means no profile; a nonzero id that cannot load is a configuration error.
+[[nodiscard]] std::optional<ScenePostProcessSettings> ResolveScenePostProcessProfile(
+    const kb::scene::Scene& scene, std::uint64_t& unavailableAssetId) {
     const std::uint64_t profileAssetId = kb::scene::ScenePostProcessAccess::ActiveProfile(scene);
     if (profileAssetId == 0U) {
         return std::nullopt;
@@ -163,6 +212,7 @@ void WriteRendererBreadcrumb(std::string_view category, std::string_view message
     const kb::assets::AssetHandle<ScenePostProcessSettings> handle =
         manager.Load<ScenePostProcessSettings>(kb::assets::AssetId{ profileAssetId });
     if (!handle.IsLoaded()) {
+        unavailableAssetId = profileAssetId;
         return std::nullopt;
     }
     return *handle;
@@ -368,7 +418,6 @@ void Renderer::Shutdown() {
     particleRenderSynchronizer_.reset();
     if (screenCapture_ != nullptr) {
         screenCapture_->Shutdown();
-        screenCapture_.reset();
     }
     if (finalCompositePass_ != nullptr) {
         finalCompositePass_->Shutdown();
@@ -391,6 +440,7 @@ void Renderer::Shutdown() {
         context_->Shutdown();
         context_.reset();
     }
+    screenCapture_.reset();
     ShaderLoader::ClearBinaryProvider(shaderBinaryProvider_);
 }
 
@@ -449,22 +499,29 @@ void Renderer::SubmitClear(std::uint32_t rgba, float depth, std::uint8_t stencil
     bgfx::touch(ViewId::Scene3D);
 }
 
-void Renderer::SubmitScene(const kb::scene::Scene& scene) {
+bool Renderer::SubmitScene(const kb::scene::Scene& scene) {
+    return SubmitRuntimeScene(scene, {});
+}
+
+bool Renderer::SubmitRuntimeScene(const kb::scene::Scene& scene, const RuntimeSceneSynchronization& synchronization) {
+    if (!frameActive_) {
+        return false;
+    }
     const RenderExtent extent{ BackbufferWidth(), BackbufferHeight() };
     if (!extent.IsValid()) {
-        return;
+        return false;
     }
     if (!defaultSceneTarget_.Ensure(SceneRenderTargetDesc{
             .extent = extent,
             .colorPolicy = SceneColorFormatPolicy::Auto,
         })) {
-        return;
+        return false;
     }
     if (!defaultPostProcessTargets_.Ensure(ScenePostProcessTargetsDesc{
             .extent = extent,
             .colorPolicy = SceneColorFormatPolicy::Auto,
         })) {
-        return;
+        return false;
     }
 
     const RenderSceneSubmitDesc desc{
@@ -488,8 +545,11 @@ void Renderer::SubmitScene(const kb::scene::Scene& scene) {
         },
         .drawBudget = defaultSceneDrawBudget_,
         .lightingConfig = defaultSceneLightingConfig_,
+        .dirtySceneEntityIds = synchronization.dirtySceneEntityIds,
+        .synchronizeScene = synchronization.fullSync,
+        .transformAffineSync = !synchronization.fullSync,
     };
-    (void)SubmitScene(scene, desc);
+    return SubmitScene(scene, desc);
 }
 
 bool Renderer::SubmitScene(const kb::scene::Scene& scene, const RenderSceneSubmitDesc& desc) {
@@ -736,6 +796,10 @@ bool Renderer::SubmitScenes(std::span<const SceneFrameSubmission> submissions) {
 }
 
 bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const RenderSceneSubmitDesc& desc, const RenderViewportPlan& viewportPlan) {
+    lastSceneSynchronizationMilliseconds_ = 0.0;
+    lastSceneVisibilityBuildMilliseconds_ = 0.0;
+    lastSceneVisibilitySortMilliseconds_ = 0.0;
+    lastSceneVisibilityPublishMilliseconds_ = 0.0;
     {
         std::ostringstream message;
         message << "SubmitSceneToViewport begin viewportId=" << desc.target.viewport.id.value
@@ -762,8 +826,26 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         return false;
     }
 
+    // Resolve authored configuration before submitting any draw for this viewport.
+    std::uint64_t unavailableProfileAssetId = 0U;
+    const std::optional<ScenePostProcessSettings> resolvedPostProcessSettings =
+        desc.postProcessSettings.has_value() ? desc.postProcessSettings :
+            ResolveScenePostProcessProfile(scene, unavailableProfileAssetId);
+    if (unavailableProfileAssetId != 0U) {
+        lastSceneDiagnostics_.events.push_back(SceneRenderDiagnosticEvent{
+            .severity = SceneRenderDiagnosticSeverity::Error,
+            .kind = SceneRenderDiagnosticKind::PostProcessProfileUnavailable,
+            .postProcessProfileAssetId = unavailableProfileAssetId,
+        });
+        return false;
+    }
+    lastResolvedPostProcessSettings_ = resolvedPostProcessSettings;
+
     const std::uint32_t width = desc.target.viewport.extent.width;
     const std::uint32_t height = desc.target.viewport.extent.height;
+    if (desc.screenUIEnabled) {
+        PublishUIImageAlpha(const_cast<kb::scene::Scene&>(scene));
+    }
     kb::scene::SceneUIFrame screenUIFrame;
     // An editor viewport laying out the world asks for no UI layer. Skipping the build, rather
     // than discarding its result, also skips the layout pass the frame would have cost.
@@ -841,6 +923,7 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         skinningSynchronizedSceneIds_, scene.Id()) != skinningSynchronizedSceneIds_.end();
     const std::uint64_t renderProxyUpdateRevision = scene.Runtime().RenderProxyUpdateRevision();
     bool renderProxyUpdatesSynchronized = false;
+    const auto synchronizationBegin = std::chrono::steady_clock::now();
     if (desc.synchronizeScene) {
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport Sync full begin");
         renderSceneSynchronizer_->Sync(scene, renderScene);
@@ -850,12 +933,16 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         }
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport Sync full end");
     } else {
+        if (desc.structuralSync) {
+            renderSceneSynchronizer_->SyncStructural(scene, renderScene);
+            renderProxyUpdatesSynchronized = true;
+        }
         if (desc.transformAffineSync) {
             const std::span<const kb::scene::SceneEntity> affineEntities = scene.Runtime().TransformRenderProxyUpdateEntities();
             const std::span<const kb::scene::WorldTransformAffine3x4> affines = scene.Runtime().TransformRenderProxyWorldAffine3x4();
-            // Above a threshold the columnar affine sync is worth dispatching across
-            // the shared render-sync worker pool (H6); below it the serial path wins.
-            constexpr std::size_t kParallelAffineSyncThreshold = 8U * 1024U;
+            // The columnar worker path is amortized at the benchmark's
+            // 5k-instance scale; below it the serial path still wins.
+            constexpr std::size_t kParallelAffineSyncThreshold = 4U * 1024U;
             if (affineEntities.size() >= kParallelAffineSyncThreshold) {
                 std::ostringstream message;
                 message << "SubmitSceneToViewport SyncMeshWorldAffinesParallel begin count=" << affineEntities.size();
@@ -883,6 +970,9 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
             renderSceneSynchronizer_->SyncEntities(scene, renderScene, desc.dirtySceneEntityIds);
             WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport SyncEntities end");
         }
+        if (desc.structuralSync) {
+            renderProxySynchronizedRevisions_[scene.Id()] = renderProxyUpdateRevision;
+        }
         const auto synchronizedRevision = renderProxySynchronizedRevisions_.find(scene.Id());
         if (!scene.Runtime().RenderProxyUpdateEntities().empty() &&
             (synchronizedRevision == renderProxySynchronizedRevisions_.end() ||
@@ -904,15 +994,23 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         // transforms are unchanged, a new renderer frame needs fresh palette uploads; retaining
         // the previous handle made a Skeletal Mesh visible for two frames and then disappear.
         if (!skinningAlreadySynchronized) {
+            WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport SyncDeformedMeshPalettes begin");
             renderSceneSynchronizer_->SyncDeformedMeshPalettes(scene, renderScene);
+            WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport SyncDeformedMeshPalettes end");
             skinningSynchronizedSceneIds_.push_back(scene.Id());
         }
     }
     // History ribbons own transient samples in the render synchronizer. Full
     // sync already advances them; this idempotent call also covers the normal
     // transform/dirty-entity incremental path.
+    WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport AdvanceHistoryRibbons begin");
     renderSceneSynchronizer_->AdvanceHistoryRibbons(scene, renderScene);
+    WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport AdvanceHistoryRibbons end");
+    WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport SyncLensEchoes begin");
     renderSceneSynchronizer_->SyncLensEchoes(scene, renderScene, desc.target.viewport.id.value);
+    WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport SyncLensEchoes end");
+    lastSceneSynchronizationMilliseconds_ = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - synchronizationBegin).count();
     // Retain one view-independent, immutable simulation snapshot in renderer state.
     // GPU batching and alignment remain per-view work in the transparent pass.
     WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport particle sync begin");
@@ -1186,6 +1284,15 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
     // during its own submit. Mesh resources were ensured above, so bounds resolve this same
     // frame; when the same scene is submitted to several viewports, the last submit in the
     // frame's deterministic plan order wins (see SceneRenderFeedback.hpp's contract).
+    if (renderScene.MeshProxyCount() >= SceneRenderVisibilityPublisher::ParallelThreshold) {
+        if (renderSyncWorkerPool_ == nullptr) {
+            renderSyncWorkerPool_ = std::make_unique<kb::ecs::WorkerPool>(kb::ecs::WorkerPoolConfig{});
+        }
+        if (!renderSyncWorkerPool_->Running()) {
+            renderSyncWorkerPool_->Start(kb::ecs::WorkerPoolConfig{});
+        }
+    }
+    const auto visibilityBuildBegin = std::chrono::steady_clock::now();
     SceneRenderVisibilityPublisher::BuildFrame(
         renderScene,
         overlayCamera,
@@ -1195,21 +1302,21 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         height,
         &sceneRenderer_->Resources(),
         &sceneRenderer_->ResourceMap(),
-        sceneRenderVisibilityScratch_);
+        sceneRenderVisibilityScratch_,
+        &lastSceneVisibilitySortMilliseconds_,
+        renderSyncWorkerPool_.get());
+    const auto visibilityPublishBegin = std::chrono::steady_clock::now();
+    lastSceneVisibilityBuildMilliseconds_ = std::chrono::duration<double, std::milli>(
+        visibilityPublishBegin - visibilityBuildBegin).count();
     kb::scene::SceneRenderFeedback::Publish(const_cast<kb::scene::Scene&>(scene), sceneRenderVisibilityScratch_);
+    lastSceneVisibilityPublishMilliseconds_ = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - visibilityPublishBegin).count();
     // LIB-145: drive the scene's async screen-capture channel (finish a ready readback,
     // start a newly requested one) - same scene-mutable-during-its-own-submit convention
     // as the feedback publish above.
     screenCapture_->Process(scene, desc, viewportPlan.viewIds, static_cast<std::uint32_t>(lastCompletedFrame_));
     std::optional<SceneRenderCamera> jitteredCamera{};
     const std::uint64_t frameIndex = static_cast<std::uint64_t>(lastCompletedFrame_) + 1ULL;
-    // LIB-142: an explicit per-submit override (desc.postProcessSettings) always wins, exactly
-    // as before this ticket; only when the caller supplied none do we fall back to the
-    // scene's own asset-based active PostProcessProfile, and only when that resolves to
-    // nothing does defaultPostProcessSettings_ apply (unchanged pre-LIB-142 behavior).
-    const std::optional<ScenePostProcessSettings> resolvedPostProcessSettings =
-        desc.postProcessSettings.has_value() ? desc.postProcessSettings : ResolveScenePostProcessProfile(scene);
-    lastResolvedPostProcessSettings_ = resolvedPostProcessSettings;
     const bool temporalAntiAliasingEnabled = desc.postProcessEnabled &&
         (resolvedPostProcessSettings.has_value()
                 ? resolvedPostProcessSettings->temporalAntiAliasingEnabled
@@ -1523,7 +1630,8 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
                 viewportPlan,
                 renderScene,
                 effectiveLightingConfig,
-                lastCompletedFrame_));
+                lastCompletedFrame_,
+                frameDeltaSeconds_));
             WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport exposure submit end");
 
             TemporalViewportState& temporalState = TemporalStateFor(desc.target.viewport.id, desc.target.viewport.viewportIndex);
@@ -1831,6 +1939,22 @@ SceneRenderSubmitStats Renderer::LastSceneSubmitStats() const noexcept {
     return lastSceneSubmitStats_;
 }
 
+double Renderer::LastSceneSynchronizationMilliseconds() const noexcept {
+    return lastSceneSynchronizationMilliseconds_;
+}
+
+double Renderer::LastSceneVisibilityBuildMilliseconds() const noexcept {
+    return lastSceneVisibilityBuildMilliseconds_;
+}
+
+double Renderer::LastSceneVisibilitySortMilliseconds() const noexcept {
+    return lastSceneVisibilitySortMilliseconds_;
+}
+
+double Renderer::LastSceneVisibilityPublishMilliseconds() const noexcept {
+    return lastSceneVisibilityPublishMilliseconds_;
+}
+
 std::span<const SceneRenderPassSubmitStats> Renderer::LastScenePassSubmitStats() const noexcept {
     return lastScenePassSubmitStats_;
 }
@@ -1930,7 +2054,7 @@ void Renderer::SetGpuDrivenRuntimeDispatchEnabled(bool enabled) noexcept {
     const RendererCapabilityReport& capabilityReport = context_->CapabilityReport();
     sceneRenderer_->SetGpuDrivenRuntimeSupport(SceneGpuDrivenFeatureSupport{
         .computeCullingSupported = capabilityReport.gpuDrivenComputeCullingSupported,
-        .indirectDrawSupported = enabled ? false : capabilityReport.gpuDrivenIndirectSubmitSupported,
+        .indirectDrawSupported = capabilityReport.gpuDrivenIndirectSubmitSupported,
         .meshletSubmitSupported = capabilityReport.gpuDrivenMeshletSubmitSupported,
         .runtimeGpuDispatchSupported = enabled && capabilityReport.gpuDrivenComputeCullingSupported,
     });

@@ -1,4 +1,5 @@
 #include "RendererTestSupport.hpp"
+#include "kb/render/SceneDepthPolicy.hpp"
 
 #include "kb/render/resources/RenderResourceRegistry.hpp"
 #include "kb/render/frame/RenderPassKind.hpp"
@@ -11,6 +12,7 @@
 #include "kb/render/scene/batch/SceneMeshBatchBuilder.hpp"
 #include "../src/scene/pipeline/MeshPipelinePassPolicy.hpp"
 #include "../src/scene/pipeline/MeshPipelineResourceResolver.hpp"
+#include "../src/scene/pipeline/MeshPipelineVisibility.hpp"
 
 #include <array>
 #include <string_view>
@@ -33,6 +35,16 @@ namespace {
     matrix[13] = y;
     matrix[14] = z;
     return matrix;
+}
+
+[[nodiscard]] SceneRenderCamera PerspectiveCamera() {
+    RenderScene scene;
+    static_cast<void>(scene.UpsertCamera(CameraRenderProxyDesc{
+        .entityId = 1U, .verticalFovDegrees = 90.0F, .primary = true,
+    }));
+    const auto camera = scene.BuildPrimaryCamera(1024U, 1024U);
+    Require(camera.has_value(), "Perspective LOD test camera could not be built");
+    return *camera;
 }
 
 void RunMeshPassTypeNamesResolveTest() {
@@ -1027,6 +1039,73 @@ void RunMeshPipelineCullsBackFacesForSingleSidedMeshesTest() {
     Require((result.commands[0].state & BGFX_STATE_CULL_CW) == 0U, "MeshPipeline culls the authored front faces");
 }
 
+void RunMeshPipelineSeparatesMirroredInstancesTest() {
+    RenderMeshResource mesh{};
+    mesh.indexCount = 3U;
+    mesh.bounds = { .radius = 1.0F };
+    RenderMaterialResource material{};
+    std::vector<SceneRenderDrawGroup> groups{ SceneRenderDrawGroup{ .meshAssetId = 42U, .materialAssetId = 7U } };
+    for (std::uint64_t id = 1; id <= 3; ++id) {
+        auto model = IdentityMatrix();
+        if (id >= 2) model[0] = -2.0F;
+        if (id == 3) model[5] = -3.0F;
+        groups[0].instances.push_back({ .entityId = id, .meshAssetId = 42U, .materialAssetId = 7U, .model = model });
+    }
+    MeshPipelineBuildResult result;
+    for (const auto pass : { MeshPassType::BaseOpaque, MeshPassType::Depth, MeshPassType::ShadowDepth, MeshPassType::MotionVectors }) {
+        const MeshPipelineBuildDesc desc{
+            .pass = pass, .drawGroups = &groups,
+            .resolvedMeshResource = &mesh, .resolvedMaterialResource = &material,
+            .resourceValidation = MeshPipelineResourceValidation::Skip,
+        };
+        material.doubleSided = false;
+        MeshPipelineProcessor::BuildInto(desc, result);
+        Require(result.commands.size() == 2U && result.stats.visibleMeshCount == 3U,
+            "Opposite winding must split draw commands without losing instances");
+        for (const auto& command : result.commands) {
+            for (const auto& instance : command.instances) {
+                const auto expected = instance.entityId == 2 ? BGFX_STATE_CULL_CW : BGFX_STATE_CULL_CCW;
+                Require((command.state & BGFX_STATE_CULL_MASK) == expected,
+                    "Mirrored instance has incorrect culling in a geometry or shadow pass");
+            }
+        }
+        material.doubleSided = true;
+        MeshPipelineProcessor::BuildInto(desc, result);
+        Require(result.commands.size() == 1U && result.commands[0].instances.size() == 3U &&
+                (result.commands[0].state & BGFX_STATE_CULL_MASK) == 0U,
+            "Double-sided materials must retain one batch across transform handedness");
+    }
+}
+
+void RunMeshPipelineSkinnedCommandStorageScalesWithInstancesTest() {
+    constexpr std::uint32_t actorCount = 256U;
+    std::vector<SceneRenderDrawGroup> groups{SceneRenderDrawGroup{.meshAssetId = 42U, .materialAssetId = 7U}};
+    for (std::uint32_t index = 0U; index < actorCount; ++index) {
+        groups.front().instances.push_back(SceneRenderMeshInstance{
+            .entityId = index + 1U,
+            .meshAssetId = 42U,
+            .materialAssetId = 7U,
+            .currentSkinningPalette = {.frame = 10U, .firstMatrix = index * 2U, .matrixCount = 2U, .bufferIndex = 0U},
+            .previousSkinningPalette = {.frame = 9U, .firstMatrix = index * 2U, .matrixCount = 2U, .bufferIndex = 1U},
+        });
+    }
+    const auto result = MeshPipelineProcessor::Build({
+        .pass = MeshPassType::BaseOpaque,
+        .drawGroups = &groups,
+        .resourceValidation = MeshPipelineResourceValidation::Skip,
+    });
+    Require(result.commands.size() == actorCount && result.stats.visibleMeshCount == actorCount,
+        "Animated crowd must retain every independently skinned instance");
+    std::size_t capacity = 0U;
+    for (const auto& command : result.commands) {
+        capacity += command.instances.capacity();
+    }
+    Require(capacity <= actorCount * 2U,
+        "Split skinned commands must not each reserve storage for the entire crowd");
+    Require(result.stats.meshPipelineScratchInstanceCapacity == capacity,
+        "Mesh pipeline must report actual allocated instance storage");
+}
+
 void RunMeshPipelineKeepsBlendDisabledUntilTransparentPassIsReadyTest() {
     RenderMeshResource mesh{};
     mesh.indexCount = 3U;
@@ -1075,6 +1154,7 @@ void RunMeshPipelineKeepsBlendDisabledUntilTransparentPassIsReadyTest() {
 void RunMeshPipelineCpuCullsByFrustumBoundsTest() {
     RenderMeshResource mesh{};
     mesh.indexCount = 3U;
+    mesh.gpuCullingEnabled = true;
     mesh.bounds = RenderBoundsSphere{ .center = { 0.0F, 0.0F, 0.0F }, .radius = 0.25F };
     mesh.sections = {
         RenderMeshSection{
@@ -1112,6 +1192,105 @@ void RunMeshPipelineCpuCullsByFrustumBoundsTest() {
     Require(result.commands[0].instances[0].worldBounds.IsValid(), "MeshPipeline did not store per-instance world bounds");
     Require(result.stats.visibleMeshCount == 1U, "MeshPipeline culling stats did not count visible instances");
     Require(result.stats.culledInstanceCount == 1U, "MeshPipeline culling stats did not count culled instances");
+    Require(result.gpuDrivenInputRecords.size() == 1U && result.gpuDrivenInputRecords[0].entityId == 1U,
+        "MeshPipeline uploaded an instance already culled by the CPU");
+}
+
+void RunMeshPipelineSortsInterleavedTransparentInstancesTest() {
+    RenderMeshResource mesh{};
+    mesh.indexCount = 3U;
+    mesh.bounds = RenderBoundsSphere{ .center = { 0.0F, 0.0F, 0.0F }, .radius = 0.02F };
+    mesh.sections = { RenderMeshSection{ .indexStart = 0U, .indexCount = 3U, .bounds = mesh.bounds } };
+    RenderMaterialResource material{};
+    material.alphaMode = RenderMaterialAlphaMode::Blend;
+    const std::vector<SceneRenderDrawGroup> groups{
+        SceneRenderDrawGroup{
+            .meshAssetId = 42U,
+            .materialAssetId = 7U,
+            .instances = {
+                SceneRenderMeshInstance{ .entityId = 1U, .meshAssetId = 42U, .materialAssetId = 7U, .model = TranslationMatrix(0.0F, 0.0F, 0.8F) },
+                SceneRenderMeshInstance{ .entityId = 3U, .meshAssetId = 42U, .materialAssetId = 7U, .model = TranslationMatrix(0.0F, 0.0F, 0.2F) },
+            },
+        },
+        SceneRenderDrawGroup{
+            .meshAssetId = 42U,
+            .materialAssetId = 8U,
+            .instances = {
+                SceneRenderMeshInstance{ .entityId = 2U, .meshAssetId = 42U, .materialAssetId = 8U, .model = TranslationMatrix(0.0F, 0.0F, 0.5F) },
+            },
+        },
+    };
+    auto verify = [&](const SceneRenderCamera& camera, std::array<std::uint64_t, 3U> expected) {
+        const MeshPipelineBuildResult result = MeshPipelineProcessor::Build(MeshPipelineBuildDesc{
+            .pass = MeshPassType::BaseTransparent,
+            .drawGroups = &groups,
+            .resolvedMeshResource = &mesh,
+            .resolvedMaterialResource = &material,
+            .camera = &camera,
+            .resourceValidation = MeshPipelineResourceValidation::Skip,
+        });
+        Require(result.commands.size() == 3U && result.stats.visibleMeshCount == 3U,
+            "Transparent interleaved instances must remain individually ordered across materials");
+        for (std::size_t index = 0U; index < expected.size(); ++index) {
+            Require(result.commands[index].instances.size() == 1U &&
+                result.commands[index].instances.front().entityId == expected[index],
+                "Transparent commands are not globally back-to-front");
+        }
+    };
+    SceneRenderCamera camera{ .view = IdentityMatrix(), .projection = IdentityMatrix() };
+    verify(camera, { 1U, 2U, 3U });
+    camera.view[10] = -1.0F;
+    camera.view[14] = 1.0F;
+    verify(camera, { 3U, 2U, 1U });
+    camera.view = IdentityMatrix();
+    SceneRenderDiagnostics diagnostics;
+    const MeshPipelineBuildResult limited = MeshPipelineProcessor::Build(MeshPipelineBuildDesc{
+        .pass = MeshPassType::BaseTransparent,
+        .drawGroups = &groups,
+        .resolvedMeshResource = &mesh,
+        .resolvedMaterialResource = &material,
+        .camera = &camera,
+        .diagnostics = &diagnostics,
+        .maxDrawCommands = 2U,
+        .resourceValidation = MeshPipelineResourceValidation::Skip,
+    });
+    Require(limited.commands.size() == 2U && limited.stats.droppedInstanceCount == 1U &&
+        limited.stats.visibleMeshCount == 2U && !diagnostics.events.empty(),
+        "Transparent ordering must enforce the final draw budget and report dropped instances");
+}
+
+void RunMeshPipelineKeepsTerrainOverlayLayerOrderTest() {
+    RenderMeshResource mesh{};
+    mesh.indexCount = 3U;
+    mesh.terrainLayerCount = 3U;
+    mesh.bounds = RenderBoundsSphere{ .center = { 0.0F, 0.0F, 0.0F }, .radius = 0.02F };
+    mesh.sections = {
+        RenderMeshSection{ .indexStart = 0U, .indexCount = 3U, .bounds = mesh.bounds, .terrainLayerIndex = 2U },
+        RenderMeshSection{ .indexStart = 0U, .indexCount = 3U, .bounds = mesh.bounds, .terrainLayerIndex = 1U },
+        RenderMeshSection{ .indexStart = 0U, .indexCount = 3U, .bounds = mesh.bounds },
+    };
+    RenderMaterialResource material{};
+    material.alphaMode = RenderMaterialAlphaMode::Blend;
+    const std::vector<SceneRenderDrawGroup> groups{
+        SceneRenderDrawGroup{
+            .meshAssetId = 42U,
+            .materialAssetId = 7U,
+            .instances = { SceneRenderMeshInstance{ .entityId = 1U, .meshAssetId = 42U,
+                .materialAssetId = 7U, .model = TranslationMatrix(0.0F, 0.0F, 0.5F) } },
+        },
+    };
+    const SceneRenderCamera camera{ .view = IdentityMatrix(), .projection = IdentityMatrix() };
+    const MeshPipelineBuildResult result = MeshPipelineProcessor::Build(MeshPipelineBuildDesc{
+        .pass = MeshPassType::BaseTransparent,
+        .drawGroups = &groups,
+        .resolvedMeshResource = &mesh,
+        .resolvedMaterialResource = &material,
+        .camera = &camera,
+        .resourceValidation = MeshPipelineResourceValidation::Skip,
+    });
+    Require(result.commands.size() == 3U && result.commands[0].terrainLayerIndex == 1U &&
+        result.commands[1].terrainLayerIndex == 2U && result.commands[2].terrainLayerIndex == UINT8_MAX,
+        "Transparent terrain overlays must preserve authored layer order at equal depth");
 }
 
 void RunMeshPipelineAnimatedBoundsOverrideControlsCullingTest() {
@@ -1195,10 +1374,7 @@ void RunMeshPipelineSelectsLodAndCarriesMeshletRangesTest() {
     mesh.indirectDrawsEnabled = true;
     mesh.meshletCullingEnabled = true;
 
-    const SceneRenderCamera camera{
-        .view = IdentityMatrix(),
-        .projection = IdentityMatrix(),
-    };
+    const SceneRenderCamera camera = PerspectiveCamera();
     const std::vector<SceneRenderDrawGroup> drawGroups{
         SceneRenderDrawGroup{
             .meshAssetId = 42U,
@@ -1254,7 +1430,7 @@ void RunMeshPipelineCullsWithVisibilityBlockerTest() {
         .meshAssetId = 42U,
         .instances = { SceneRenderMeshInstance{ .entityId = 1U, .meshAssetId = 42U, .model = TranslationMatrix(0.0F, 0.0F, 0.9F) } },
     } };
-    const std::array<SceneRenderVisibilityBlocker, 1U> blockers{{
+    std::array<SceneRenderVisibilityBlocker, 1U> blockers{{
         SceneRenderVisibilityBlocker{ .entityId = 2U, .model = TranslationMatrix(0.0F, 0.0F, 0.5F), .size = { 0.2F, 0.2F, 0.2F } },
     }};
     const MeshPipelineBuildResult result = MeshPipelineProcessor::Build(MeshPipelineBuildDesc{
@@ -1263,6 +1439,29 @@ void RunMeshPipelineCullsWithVisibilityBlockerTest() {
     });
     Require(result.commands.empty(), "Visibility Blocker emitted a draw instead of rejecting the occluded instance");
     Require(result.stats.culledInstanceCount == 1U, "Visibility Blocker did not contribute to culling statistics");
+    blockers[0].model = TranslationMatrix(0.0F, 0.0F, -0.5F);
+    for (const float viewDirection : {1.0F, -1.0F}) {
+        auto oppositeCamera = camera;
+        oppositeCamera.view[10] = viewDirection;
+        oppositeCamera.projection[10] *= viewDirection;
+        const auto unobstructed = MeshPipelineProcessor::Build(MeshPipelineBuildDesc{
+            .pass = MeshPassType::BaseOpaque, .drawGroups = &drawGroups, .resolvedMeshResource = &mesh,
+            .camera = &oppositeCamera, .visibilityBlockers = blockers, .resourceValidation = MeshPipelineResourceValidation::Skip,
+        });
+        Require(unobstructed.commands.size() == 1U && unobstructed.stats.culledInstanceCount == 0U,
+            "A blocker on the opposite side of the camera culled the visible mesh");
+    }
+    auto distantGroups = drawGroups;
+    distantGroups[0].instances[0].model = TranslationMatrix(0.3F, 0.0F, 100.0F);
+    auto orthographicCamera = camera;
+    orthographicCamera.projection[10] = 0.001F;
+    blockers[0].model = TranslationMatrix(0.0F, 0.0F, 0.5F);
+    const auto besideBlocker = MeshPipelineProcessor::Build(MeshPipelineBuildDesc{
+        .pass = MeshPassType::BaseOpaque, .drawGroups = &distantGroups, .resolvedMeshResource = &mesh,
+        .camera = &orthographicCamera, .visibilityBlockers = blockers, .resourceValidation = MeshPipelineResourceValidation::Skip,
+    });
+    Require(besideBlocker.commands.size() == 1U && besideBlocker.stats.culledInstanceCount == 0U,
+        "Orthographic visibility used perspective angular bounds to hide a mesh beside the blocker");
 }
 
 void RunMeshPipelineCoordinatesDetailSwitchGroupsWithHysteresisTest() {
@@ -1277,7 +1476,7 @@ void RunMeshPipelineCoordinatesDetailSwitchGroupsWithHysteresisTest() {
         RenderMeshLodDesc{ .firstSection = 0U, .sectionCount = 1U, .minScreenCoverage = 0.5F },
         RenderMeshLodDesc{ .firstSection = 1U, .sectionCount = 1U, .minScreenCoverage = 0.0F },
     };
-    const SceneRenderCamera camera{ .view = IdentityMatrix(), .projection = IdentityMatrix() };
+    const SceneRenderCamera camera = PerspectiveCamera();
     std::vector<SceneRenderDrawGroup> groups{
         SceneRenderDrawGroup{
             .meshAssetId = 42U,
@@ -1679,6 +1878,41 @@ void RunGpuDrivenParityValidatorReportsMissingRecordsAndDropBudgetTest() {
     Require(result.cpuDroppedInstanceCount == 2U && result.gpuDroppedInstanceCount == 2U, "GPU-driven parity drop budget result did not preserve dropped counts");
 }
 
+void RunMeshLodRespectsCameraProjectionTest() {
+    RenderMeshResource mesh;
+    mesh.bounds = RenderBoundsSphere{ .radius = 1.0F };
+    mesh.lods = {
+        RenderMeshLodDesc{ .minScreenCoverage = 0.15F },
+        RenderMeshLodDesc{ .minScreenCoverage = 0.0F },
+    };
+    RenderScene scene;
+    CameraRenderProxyDesc cameraDesc{
+        .entityId = 1U, .projection = RenderCameraProjection::Orthographic,
+        .orthographicHeight = 10.0F, .primary = true,
+    };
+    auto select = [&](float depth) {
+        static_cast<void>(scene.UpsertCamera(cameraDesc));
+        const auto camera = scene.BuildPrimaryCamera(1280U, 720U);
+        Require(camera.has_value(), "LOD projection test camera could not be built");
+        return MeshPipelineVisibility::SelectLodLevel(&mesh,
+            SceneRenderMeshInstance{ .model = TranslationMatrix(0.0F, 0.0F, depth) }, &*camera);
+    };
+    Require(select(5.0F) == 0U && select(100.0F) == 0U,
+        "Orthographic LOD must depend on projected size rather than depth");
+    cameraDesc.orthographicHeight = 20.0F;
+    Require(select(5.0F) == 1U && select(100.0F) == 1U,
+        "Orthographic zoom must change LOD at every depth");
+    cameraDesc.projection = RenderCameraProjection::Perspective;
+    mesh.lods[0].minScreenCoverage = 0.3F;
+    cameraDesc.verticalFovDegrees = 60.0F;
+    Require(select(10.0F) == 1U, "Wide perspective should select the distant LOD");
+    cameraDesc.verticalFovDegrees = 20.0F;
+    Require(select(10.0F) == 0U, "Perspective zoom must promote the enlarged mesh LOD");
+    cameraDesc.verticalFovDegrees = 120.0F;
+    mesh.lods[0].minScreenCoverage = 0.8F;
+    Require(select(0.5F) == 0U, "A perspective camera inside mesh bounds must retain full coverage");
+}
+
 void RunRenderScenePropagatesMeshPassFlagsTest() {
     RenderScene renderScene;
     static_cast<void>(renderScene.UpsertMesh(MeshRenderProxyDesc{
@@ -1698,12 +1932,77 @@ void RunRenderScenePropagatesMeshPassFlagsTest() {
 } // namespace
 
 void RunMeshPipelineTests() {
+    // Compare accelerated generated ranges with the original per-instance path.
+    // Camera motion, shear, off-centre bounds, growth and mixed owners must not
+    // alter accepted ids or pass counters.
+    {
+        RenderScene scene;
+        auto model = IdentityMatrix();
+        model[4] = 1.5F; model[5] = 0.4F; model[10] = -2.0F; model[14] = 180.0F;
+        GeometrySwarmRenderProxyDesc swarm{.entityId = 42U, .meshAssetId = 7U,
+            .model = model, .instanceCount = 513U, .columns = 16U, .rows = 2U, .layers = 32U,
+            .spacing = {20.0F, -2.0F, 20.0F}, .instanceScale = 1.3F};
+        static_cast<void>(scene.UpsertGeometrySwarm(swarm));
+        static_cast<void>(scene.DrawGroups());
+        swarm.instanceCount = 900U;
+        static_cast<void>(scene.UpsertGeometrySwarm(swarm));
+        swarm.entityId = 77U; swarm.model[12] = 600.0F; swarm.castsShadow = false;
+        static_cast<void>(scene.UpsertGeometrySwarm(swarm));
+        static_cast<void>(scene.UpsertMesh(MeshRenderProxyDesc{.entityId = 2U, .meshAssetId = 7U, .model = TranslationMatrix(0.0F, 0.0F, 10.0F)}));
+        auto groups = scene.DrawGroups();
+        Require(!groups[0].visibilityClusters.empty(), "Swarm ranges must retain visibility acceleration");
+        auto reference = groups;
+        for (auto& group : reference) group.visibilityClusters.clear();
+        RenderMeshResource mesh{};
+        mesh.indexCount = 3U;
+        mesh.bounds = {.center = {3.0F, 1.0F, 2.0F}, .radius = 2.0F};
+        RenderMaterialResource material{};
+        for (const auto pass : {MeshPassType::BaseOpaque, MeshPassType::MotionVectors, MeshPassType::ShadowDepth}) {
+          for (const float offset : {-200.0F, 0.0F, 150.0F}) {
+            auto camera = PerspectiveCamera();
+            camera.view[12] = offset;
+            SceneDepthPolicy::MakePerspective(camera.projection.data(), 90.0F, 1.0F, 0.01F, 400.0F, SceneDepthPolicy::HomogeneousDepth());
+            const auto build = [&](const auto& source) {
+                return MeshPipelineProcessor::Build(MeshPipelineBuildDesc{.pass = pass, .drawGroups = &source,
+                    .resolvedMeshResource = &mesh, .resolvedMaterialResource = &material, .camera = &camera,
+                    .resourceValidation = MeshPipelineResourceValidation::Skip});
+            };
+            const auto accelerated = build(groups), original = build(reference);
+            const auto ids = [](const auto& result) {
+                std::vector<std::uint64_t> values;
+                for (const auto& command : result.commands)
+                    for (const auto& instance : command.instances) values.push_back(instance.entityId);
+                std::ranges::sort(values);
+                return values;
+            };
+            Require(ids(accelerated) == ids(original) && accelerated.stats.visibleMeshCount == original.stats.visibleMeshCount &&
+                accelerated.stats.culledInstanceCount == original.stats.culledInstanceCount,
+                "Cluster culling must match per-instance visibility and counters under camera motion and shear");
+          }
+        }
+    }
+    for (const bool homogeneous : {false, true}) {
+        for (const bool orthographic : {false, true}) {
+          for (const float nearClip : {0.1F, 0.01F, 0.001F}) {
+            SceneRenderCamera camera{};
+            camera.view = IdentityMatrix();
+            if (orthographic) SceneDepthPolicy::MakeOrthographic(camera.projection.data(), 10.0F, 1.0F, nearClip, 1200.0F, homogeneous);
+            else SceneDepthPolicy::MakePerspective(camera.projection.data(), 90.0F, 1.0F, nearClip, 1200.0F, homogeneous);
+            const auto frustum = MeshPipelineVisibility::BuildFrustum(&camera, homogeneous);
+            Require(MeshPipelineVisibility::IsInsideFrustum(frustum, RenderBoundsSphere{.center = {0.0F, 0.0F, 10.0F}, .radius = 0.01F}), "Frustum rejected visible reverse-Z geometry");
+            Require(!MeshPipelineVisibility::IsInsideFrustum(frustum, RenderBoundsSphere{.center = {0.0F, 0.0F, 2500.0F}, .radius = 1.0F}), "Frustum failed to reject geometry beyond the far clip");
+            Require(!MeshPipelineVisibility::IsInsideFrustum(frustum, RenderBoundsSphere{.center = {0.0F, 0.0F, nearClip * 0.1F}, .radius = nearClip * 0.01F}), "Frustum failed to reject geometry before the near clip");
+          }
+        }
+    }
+    RunMeshLodRespectsCameraProjectionTest();
     RunMeshPassTypeNamesResolveTest();
     RunStaticMeshVertexLayoutIsDefinedTest();
     RunFramePassKindsMapToMeshPassesTest();
     RunSceneMeshBatchBuilderCreatesStableViewsTest();
     RunMeshPipelineBuildsFromSceneMeshBatchesTest();
     RunMeshPipelineSplitsSkinnedPalettesAndPreservesMotionHistoryTest();
+    RunMeshPipelineSkinnedCommandStorageScalesWithInstancesTest();
     RunMeshPipelineReportsMissingMeshBindingPerInstanceTest();
     RunMeshPipelineReportsMissingOcclusionTextureBindingTest();
     RunMeshPipelineCanBuildPassCommandsWithoutResourceValidationTest();
@@ -1721,7 +2020,10 @@ void RunMeshPipelineTests() {
     RunMeshPipelineRoutesMaterialAlphaModesToPassesTest();
     RunMeshPipelineUsesMaterialDoubleSidedStateTest();
     RunMeshPipelineCullsBackFacesForSingleSidedMeshesTest();
+    RunMeshPipelineSeparatesMirroredInstancesTest();
     RunMeshPipelineKeepsBlendDisabledUntilTransparentPassIsReadyTest();
+    RunMeshPipelineSortsInterleavedTransparentInstancesTest();
+    RunMeshPipelineKeepsTerrainOverlayLayerOrderTest();
     RunMeshPipelineCpuCullsByFrustumBoundsTest();
     RunMeshPipelineAnimatedBoundsOverrideControlsCullingTest();
     RunMeshPipelineCullsWithVisibilityBlockerTest();

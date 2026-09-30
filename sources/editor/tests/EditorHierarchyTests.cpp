@@ -6,6 +6,7 @@
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/DrawD3DeformedGeometryComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
@@ -13,6 +14,7 @@
 #include "engine/scene/ScenePrefabInstance.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneTransforms.hpp"
+#include "engine/scene/VisibilityComponent.hpp"
 #include "engine/scene/SkeletonBindingComponent.hpp"
 #include "scene/EditorSceneMeshAssetActions.hpp"
 #include "scene/EditorScenePrefabActions.hpp"
@@ -26,6 +28,7 @@
 #include "scene/EditorSceneSelectionPivot.hpp"
 
 #include <array>
+#include <cstdint>
 #include <string>
 #include <filesystem>
 #include <optional>
@@ -138,6 +141,109 @@ void RunRowBuilderCreationOrderTest() {
     kb::editor::tests::Require(names[0] == "First", "Hierarchy row builder should keep the first created root at the top");
     kb::editor::tests::Require(names[1] == "Second", "Hierarchy row builder should keep middle roots in creation order");
     kb::editor::tests::Require(names[2] == "Third", "Hierarchy row builder should put the newest root at the bottom");
+}
+
+void RunAppendOnlyRootHierarchyTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity first = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "First" });
+    const std::uint64_t appendEpoch = scene.Hierarchy().RootAppendEpoch();
+    std::vector<kb::editor::EditorHierarchyRow> rows = kb::editor::EditorHierarchyRowBuilder::Build(scene, {}, "");
+    const kb::scene::SceneEntity second = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Second" });
+
+    kb::editor::tests::Require(scene.Hierarchy().RootCount() == 2U, "Root count did not follow entity creation");
+    kb::editor::tests::Require(scene.Hierarchy().RootAt(0U) == first && scene.Hierarchy().RootAt(1U) == second,
+        "Root index did not retain creation order");
+    kb::editor::tests::Require(scene.Hierarchy().RootAppendEpoch() == appendEpoch,
+        "Fresh root append invalidated existing hierarchy rows");
+
+    kb::editor::EditorHierarchyRowBuilder::AppendRoot(scene, {}, second, rows);
+    const auto rebuilt = kb::editor::EditorHierarchyRowBuilder::Build(scene, {}, "");
+    kb::editor::tests::Require(RowNames(rows) == RowNames(rebuilt),
+        "Appended hierarchy rows differ from full rebuild");
+
+    const kb::scene::SceneEntity third = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Third" });
+    kb::editor::tests::Require(third.IsValid() && scene.Hierarchy().RootAppendEpoch() == appendEpoch,
+        "Another fresh root should preserve append-only hierarchy state");
+    scene.Components().Visibility().Set(first, kb::scene::VisibilityComponent{
+        .mode = kb::scene::VisibilityMode::Hidden,
+        .visible = false,
+    });
+    kb::editor::tests::Require(scene.Hierarchy().RootAppendEpoch() != appendEpoch,
+        "Visibility edit alongside root append failed to invalidate cached hierarchy rows");
+    kb::editor::tests::Require(!kb::editor::EditorHierarchyRowBuilder::Build(scene, {}, "")[0].visible,
+        "Rebuilt hierarchy did not reflect the visibility edit");
+
+    const std::uint64_t visibilityEpoch = scene.Hierarchy().RootAppendEpoch();
+    kb::editor::tests::Require(scene.Hierarchy().SetParent(second, first), "Reparenting root failed");
+    kb::editor::tests::Require(scene.Hierarchy().RootAppendEpoch() != visibilityEpoch,
+        "Reparenting failed to invalidate append-only hierarchy view");
+    const std::uint64_t reparentEpoch = scene.Hierarchy().RootAppendEpoch();
+    scene.Entities().SetName(first, "Renamed First");
+    kb::editor::tests::Require(scene.Hierarchy().RootAppendEpoch() != reparentEpoch,
+        "Renaming existing row failed to invalidate append-only hierarchy view");
+    const std::uint64_t renameEpoch = scene.Hierarchy().RootAppendEpoch();
+    scene.Entities().Destroy(second);
+    kb::editor::tests::Require(scene.Hierarchy().RootAppendEpoch() != renameEpoch,
+        "Destroy failed to invalidate append-only hierarchy view");
+}
+
+void RunHierarchyRowEpochTracksOnlyDisplayedCameraAndVisibilityChangesTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity cameraEntity = scene.Entities().CreateEntity(
+        kb::scene::SceneObjectDesc{ .name = "Camera" });
+    kb::scene::CameraComponent camera{};
+    const std::uint64_t beforeCamera = scene.Hierarchy().RootAppendEpoch();
+    scene.Components().Cameras().Set(cameraEntity, camera);
+    kb::editor::tests::Require(scene.Hierarchy().RootAppendEpoch() != beforeCamera,
+        "Adding a camera must invalidate its hierarchy row");
+
+    const std::uint64_t stableEpoch = scene.Hierarchy().RootAppendEpoch();
+    std::vector<kb::editor::EditorHierarchyRow> rows = kb::editor::EditorHierarchyRowBuilder::Build(scene, {}, "");
+    for (std::uint32_t frame = 0U; frame < 60U; ++frame) {
+        camera.verticalFovDegrees = 60.0F + static_cast<float>(frame) * 0.25F;
+        scene.Components().Cameras().Set(cameraEntity, camera);
+        kb::scene::VisibilityComponent visibility{};
+        visibility.mask = kb::scene::VisibilityComponent::AllMask - frame;
+        scene.Components().Visibility().Set(cameraEntity, visibility);
+        const kb::scene::SceneEntity appended = scene.Entities().CreateEntity(
+            kb::scene::SceneObjectDesc{ .name = "Frame Root" });
+        kb::editor::tests::Require(appended.IsValid() && scene.Hierarchy().RootAppendEpoch() == stableEpoch,
+            "Camera values or unchanged visibility must not disable root append");
+        kb::editor::EditorHierarchyRowBuilder::AppendRoot(scene, {}, appended, rows);
+    }
+    kb::editor::tests::Require(RowNames(rows) == RowNames(kb::editor::EditorHierarchyRowBuilder::Build(scene, {}, "")) &&
+        rows.front().hasCamera && rows.front().visible,
+        "Value-only camera edits must retain correct appended hierarchy rows");
+
+    scene.Components().Cameras().Remove(cameraEntity);
+    kb::editor::tests::Require(scene.Hierarchy().RootAppendEpoch() != stableEpoch &&
+        !kb::editor::EditorHierarchyRowBuilder::Build(scene, {}, "").front().hasCamera,
+        "Removing a camera must invalidate the displayed hierarchy icon");
+    const std::uint64_t removedCameraEpoch = scene.Hierarchy().RootAppendEpoch();
+    scene.Components().Cameras().Remove(cameraEntity);
+    kb::editor::tests::Require(scene.Hierarchy().RootAppendEpoch() == removedCameraEpoch,
+        "Removing an absent camera must not invalidate hierarchy rows");
+
+    scene.Components().Visibility().Set(cameraEntity, kb::scene::VisibilityComponent{
+        .mode = kb::scene::VisibilityMode::Hidden, .visible = false });
+    kb::editor::tests::Require(scene.Hierarchy().RootAppendEpoch() != removedCameraEpoch &&
+        !kb::editor::EditorHierarchyRowBuilder::Build(scene, {}, "").front().visible,
+        "Hiding an entity must invalidate the displayed hierarchy icon");
+    const std::uint64_t hiddenEpoch = scene.Hierarchy().RootAppendEpoch();
+    kb::scene::VisibilityComponent* visibility = scene.Components().Visibility().TryGet(cameraEntity);
+    kb::editor::tests::Require(visibility != nullptr, "Visibility component is missing");
+    visibility->mask = 1U;
+    scene.Components().Visibility().MarkModified(cameraEntity);
+    kb::editor::tests::Require(scene.Hierarchy().RootAppendEpoch() == hiddenEpoch,
+        "Changing a hidden entity's mask must not invalidate its hierarchy row");
+    visibility = scene.Components().Visibility().TryGet(cameraEntity);
+    kb::editor::tests::Require(visibility != nullptr, "Visibility component disappeared after MarkModified");
+    visibility->mode = kb::scene::VisibilityMode::Visible;
+    visibility->visible = true;
+    scene.Components().Visibility().MarkModified(cameraEntity);
+    kb::editor::tests::Require(scene.Hierarchy().RootAppendEpoch() != hiddenEpoch &&
+        kb::editor::EditorHierarchyRowBuilder::Build(scene, {}, "").front().visible,
+        "Showing an entity through MarkModified must invalidate its hierarchy row");
 }
 
 void RunHierarchySelectionModelTest() {
@@ -397,6 +503,8 @@ void RunEditorHierarchyTests() {
     RunRowBuilderCollapsedTreeTest();
     RunRowBuilderFilteredTreeTest();
     RunRowBuilderCreationOrderTest();
+    RunAppendOnlyRootHierarchyTest();
+    RunHierarchyRowEpochTracksOnlyDisplayedCameraAndVisibilityChangesTest();
     RunHierarchySelectionModelTest();
     RunHierarchySelectionNormalizerKeepsAliveMultiSelectionTest();
     RunHierarchySelectionNormalizerSelectsFirstVisibleWhenSelectionIsDeadTest();

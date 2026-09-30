@@ -1,11 +1,8 @@
 #include "SceneMeshMaterialBindingResolver.hpp"
 
 #include "kb/render/resources/RenderMaterialTextureSlots.hpp"
-#include "renderer/RendererDebugLog.hpp"
 
 #include <algorithm>
-#include <sstream>
-#include <string>
 
 namespace kb::render {
 namespace {
@@ -22,24 +19,6 @@ namespace {
 
     const RenderTextureResource* texture = resources.FindTexture(textureHandle);
     const bool resolved = texture != nullptr && bgfx::isValid(texture->texture);
-    {
-        std::ostringstream row;
-        row << "slot-resolve assetId=" << slot.assetId
-            << " directHandle=" << slot.directHandle.value
-            << " resolvedHandle=" << textureHandle.value
-            << " expectedColorSpace=" << static_cast<int>(slot.policy.expectedColorSpace)
-            << " foundResource=" << (texture != nullptr ? "true" : "false")
-            << " resolved=" << (resolved ? "true" : "false")
-            << " bgfxHandle=" << (resolved ? std::to_string(texture->texture.idx) : std::string{ "fallback" })
-            << " fallbackHandle=" << (bgfx::isValid(fallback) ? std::to_string(fallback.idx) : std::string{ "invalid" });
-        if (texture != nullptr) {
-            row << " size=" << texture->width << 'x' << texture->height
-                << " format=" << static_cast<int>(texture->format)
-                << " colorSpace=" << static_cast<int>(texture->colorSpace)
-                << " version=" << texture->version;
-        }
-        WriteRendererMaterialGraphDebugLog("resolver", row.str());
-    }
     return resolved ? texture->texture : fallback;
 }
 
@@ -54,16 +33,6 @@ namespace {
 
     const RenderTextureResource* texture = resources.FindTexture(textureHandle);
     const bool resolved = texture != nullptr && bgfx::isValid(texture->texture);
-    {
-        std::ostringstream row;
-        row << "slot-probe assetId=" << slot.assetId
-            << " directHandle=" << slot.directHandle.value
-            << " resolvedHandle=" << textureHandle.value
-            << " expectedColorSpace=" << static_cast<int>(slot.policy.expectedColorSpace)
-            << " foundResource=" << (texture != nullptr ? "true" : "false")
-            << " resolved=" << (resolved ? "true" : "false");
-        WriteRendererMaterialGraphDebugLog("resolver", row.str());
-    }
     return resolved;
 }
 

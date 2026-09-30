@@ -172,6 +172,7 @@ bool EditorSceneBgfxViewport::PendingPaintSubmitter::SubmitPreparedSubmissions()
     }
     const auto frameStart = std::chrono::steady_clock::now();
     if (viewport_.backendSettings_ != nullptr) {
+        viewport_.renderer_.SetGpuDrivenRuntimeDispatchEnabled(viewport_.backendSettings_->GpuDrivenEnabled());
         render::ScenePostProcessSettings settings = viewport_.renderer_.DefaultPostProcessSettings();
         settings.fxaaEnabled = viewport_.backendSettings_->FxaaEnabled();
         settings.temporalAntiAliasingEnabled = viewport_.backendSettings_->TemporalAntiAliasingEnabled();

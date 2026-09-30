@@ -600,6 +600,28 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         }
         break;
     case WM_KEYDOWN:
+        if (wparam == '1' && ModifierDown(VK_CONTROL) && !ModifierDown(VK_MENU) &&
+            !ModifierDown(VK_SHIFT)) {
+            if (context_.dockModel.Commands().ActivatePanelKind(DockPanelKind::Scene, DockArea::Center)) {
+                context_.sceneViewport.RequestPresent();
+                InvalidateRect(context_.mainWindow, nullptr, FALSE);
+            }
+            return 0;
+        }
+        if (wparam == 'P' && ModifierDown(VK_CONTROL) && !ModifierDown(VK_MENU) &&
+            !ModifierDown(VK_SHIFT) && !context_.sceneContext.IsAnyInlineTextEditActive()) {
+            if (context_.playMode.Mode() == EditorPlayMode::Stopped) {
+                if (context_.sceneContext.BeginPlayModeSceneSession()) {
+                    context_.playMode.Play();
+                }
+            } else {
+                context_.playMode.Stop();
+                static_cast<void>(context_.sceneContext.RestorePlayModeSceneSession());
+            }
+            context_.sceneViewport.RequestPresent();
+            InvalidateRect(context_.mainWindow, nullptr, FALSE);
+            return 0;
+        }
         if (EditorBuildGameInputHandler{ context_.sceneContext }.HandleKeyDown(messageWindow, wparam)) {
             InvalidateRect(messageWindow, nullptr, FALSE);
             if (messageWindow != context_.mainWindow) InvalidateRect(context_.mainWindow, nullptr, FALSE);

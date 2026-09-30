@@ -21,6 +21,7 @@
 #include "engine/scene/WorldBackdropComponent.hpp"
 #include "engine/scene/AmbientRadianceComponent.hpp"
 #include "engine/scene/DetailSwitchComponent.hpp"
+#include "engine/scene/DrawD3DeformedGeometryComponent.hpp"
 #include "engine/scene/SkeletalMeshAsset.hpp"
 #include "engine/scene/VisibilityBlockerComponent.hpp"
 #include "engine/scene/GeometrySwarmComponent.hpp"
@@ -49,6 +50,7 @@
 #include <cmath>
 #include <cstdint>
 #include <span>
+#include <stdexcept>
 
 namespace kb::render {
 namespace {
@@ -325,10 +327,9 @@ struct SyncContext {
 [[nodiscard]] RenderBoundsSphere AnimatedBoundsForMesh(
     const kb::scene::Scene& scene,
     kb::scene::SceneEntity entity,
+    const kb::scene::DrawD3DeformedGeometryComponent* geometry,
     const std::optional<kb::scene::AnimatorInstanceSkeletonView>& skeleton) {
-    const kb::scene::DrawD3DeformedGeometryComponent* geometry =
-        scene.Components().DeformedGeometries().TryGet(entity);
-    if (geometry == nullptr || !geometry->enabled || skeleton == std::nullopt) return {};
+    if (geometry == nullptr || !geometry->enabled) return {};
     const kb::scene::SceneEntity poseSource = geometry->poseSource.IsValid() ? geometry->poseSource : entity;
     const std::optional<kb::scene::AnimatorInstanceSkeletonView> pose = poseSource == entity
         ? skeleton
@@ -474,7 +475,7 @@ void SyncMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent
         .materialSlotAssetIds = materialSlotAssetIds,
         .materialSlotOverrideCount = effectiveMaterialSlotOverrideCount,
         .model = SceneTransformMatrices::Model(renderTransform),
-        .boundsOverride = AnimatedBoundsForMesh(*sync->scene, entity, skeleton),
+        .boundsOverride = AnimatedBoundsForMesh(*sync->scene, entity, geometry, skeleton),
         .color = NeutralInstanceColor(),
         .currentSkinningPalette = currentSkinningPalette,
         .previousSkinningPalette = previousSkinningPalette,
@@ -495,14 +496,13 @@ void SyncMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent
     static_cast<void>(transform);
 }
 
-void SyncDeformedMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent& transform,
-    const kb::scene::MeshRendererComponent& renderer, void* context) {
+void SyncNewMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent& transform, const kb::scene::MeshRendererComponent& renderer, void* context) {
     auto* sync = static_cast<SyncContext*>(context);
-    const kb::scene::DrawD3DeformedGeometryComponent* geometry =
-        sync->scene->Components().DeformedGeometries().TryGet(entity);
-    if (geometry != nullptr && geometry->enabled) {
-        SyncMesh(entity, transform, renderer, context);
+    if (sync->renderScene->FindMeshByEntity(entity.Id()) != nullptr) {
+        sync->meshes->push_back(entity.Id());
+        return;
     }
+    SyncMesh(entity, transform, renderer, context);
 }
 
 void SyncLight(kb::scene::SceneEntity entity, const kb::scene::TransformComponent& transform, const kb::scene::LightComponent& light, void* context) {
@@ -748,6 +748,14 @@ void EcsRenderSceneSynchronizer::SetSkinningPaletteAllocator(
 }
 
 void EcsRenderSceneSynchronizer::Sync(const kb::scene::Scene& scene, RenderScene& renderScene) const {
+    SyncImpl(scene, renderScene, false);
+}
+
+void EcsRenderSceneSynchronizer::SyncStructural(const kb::scene::Scene& scene, RenderScene& renderScene) const {
+    SyncImpl(scene, renderScene, true);
+}
+
+void EcsRenderSceneSynchronizer::SyncImpl(const kb::scene::Scene& scene, RenderScene& renderScene, bool preserveExistingMeshes) const {
     seenMeshes_.clear();
     seenCameras_.clear();
     seenLights_.clear();
@@ -781,7 +789,7 @@ void EcsRenderSceneSynchronizer::Sync(const kb::scene::Scene& scene, RenderScene
 
     const kb::scene::SceneComponentVisitors visitors = scene.Components().Visitors();
     visitors.ForEachCamera(&SyncCamera, &context);
-    visitors.ForEachMeshRenderer(&SyncMesh, &context);
+    visitors.ForEachMeshRenderer(preserveExistingMeshes ? &SyncNewMesh : &SyncMesh, &context);
     scene.Components().GeometrySwarms().ForEach(&SyncGeometrySwarm, &context);
     scene.Components().SurfaceCasts().ForEach(&SyncSurfaceCast, &context);
     scene.Components().FacingPanels().ForEach(&SyncFacingPanel, &context);
@@ -1131,7 +1139,22 @@ void EcsRenderSceneSynchronizer::SyncDeformedMeshPalettes(
         .skinningPoseScratch = &skinningPoseScratch_,
         .basicLightingEnabled = kb::scene::SceneLightingAccess::BasicLightingEnabled(scene),
     };
-    scene.Components().Visitors().ForEachMeshRenderer(&SyncDeformedMesh, &context);
+    auto query = const_cast<kb::scene::Scene&>(scene).Runtime().EcsWorld().CreateQuery<
+        kb::scene::DrawD3DeformedGeometryComponent,
+        kb::scene::TransformComponent,
+        kb::scene::MeshRendererComponent>();
+    if (!query.IsValid()) {
+        throw std::logic_error{"Could not query deformed mesh renderers"};
+    }
+    query.ForEach([](kb::scene::SceneEntity entity,
+                      const kb::scene::DrawD3DeformedGeometryComponent& geometry,
+                      const kb::scene::TransformComponent& transform,
+                      const kb::scene::MeshRendererComponent& renderer,
+                      void* raw) {
+        if (geometry.enabled) {
+            SyncMesh(entity, transform, renderer, raw);
+        }
+    }, &context);
     transformPrecomputedReadCount_ = worldReader.PrecomputedReadCount();
     transformResolvedFallbackCount_ = worldReader.ResolvedFallbackCount();
 }

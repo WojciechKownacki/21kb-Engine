@@ -253,6 +253,7 @@ public:
     [[nodiscard]] std::uint64_t SceneRenderRevision() const noexcept;
     [[nodiscard]] std::uint64_t SceneRenderDirtyBaseRevision() const noexcept;
     [[nodiscard]] bool SceneRenderFullDirty() const noexcept;
+    [[nodiscard]] bool SceneRenderStructuralDirty() const noexcept;
     [[nodiscard]] const std::vector<std::uint64_t>& SceneRenderDirtyEntityIds() const noexcept;
     [[nodiscard]] bool SceneDocumentDirty() const noexcept;
     [[nodiscard]] bool TickAutosave(double elapsedSeconds, bool saveEligible);
@@ -262,6 +263,7 @@ public:
     [[nodiscard]] bool CommitEditorSettings(const EditorSavingPreferences& preferences);
     void MarkSceneRenderDirty() noexcept;
     void MarkSceneEntitiesRenderDirty(std::span<const kb::scene::SceneEntity> entities);
+    void MarkSceneStructuralRenderDirty(std::span<const kb::scene::SceneEntity> entities);
     void AcknowledgeSceneRenderSubmitted() noexcept;
     void MarkSceneDocumentDirty() noexcept;
     [[nodiscard]] bool SaveOpenDocuments();
@@ -499,6 +501,7 @@ public:
     [[nodiscard]] bool FindParticleEffectReferences(kb::assets::AssetId effectAssetId);
     [[nodiscard]] bool ExtractEmbeddedMaterials(kb::assets::AssetId meshAssetId);
     [[nodiscard]] bool CreateLuaScriptAsset(const std::filesystem::path& virtualFolder);
+    [[nodiscard]] bool CreateNativeScriptAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool OpenLuaScript(kb::assets::AssetId id);
     [[nodiscard]] bool OpenAnimationAsset(kb::assets::AssetId id);
     [[nodiscard]] bool OpenParticleEditorAsset(kb::assets::AssetId id);
@@ -1205,6 +1208,11 @@ public:
     [[nodiscard]] bool AddComponentToEntity(kb::scene::SceneEntity entity, std::string_view componentId);
     [[nodiscard]] bool RemoveUIComponentFromEntity(
         kb::scene::SceneEntity entity, kb::scene::UIComponentType component);
+    enum class UIDropdownOptionEdit : std::uint8_t { Add, Remove, Move };
+    // One undoable edit of a dropdown's Options list. Add appends a copy of the last option; Remove takes
+    // out option `index`; Move puts option `index` at position `target`.
+    [[nodiscard]] bool EditUIDropdownOption(kb::scene::SceneEntity entity, UIDropdownOptionEdit edit, std::uint32_t index,
+        std::uint32_t target = 0U);
     [[nodiscard]] bool SetUIComponentProperty(
         kb::scene::SceneEntity entity, kb::scene::UIComponentType component,
         std::string_view property, const kb::scene::UIComponentPropertyValue& value);
@@ -1216,6 +1224,11 @@ public:
     std::optional<EditorUIRectDragState>& UIRectDrag() noexcept { return uiRectDrag_; }
     void SetUIAuthoringViewportSize(float width, float height) const noexcept {
         if (width > 0.0F && height > 0.0F) uiAuthoringViewportSize_ = {width, height};
+    }
+    // The previewed device's safe area, applied to the scene's UI layout while the view is presented -
+    // a presentation setting like the authoring viewport size, not an edit.
+    void SetUIPreviewSafeArea(kb::scene::UIEdges insets) const noexcept {
+        static_cast<void>(scene_->UI().SetSafeAreaInsets(insets));
     }
     [[nodiscard]] std::vector<std::string> EntityTags(kb::scene::SceneEntity entity) const;
     [[nodiscard]] std::vector<std::string> KnownSceneTags() const;
@@ -1409,6 +1422,8 @@ private:
     EditorHierarchySearchState hierarchySearch_;
     mutable std::vector<EditorHierarchyRow> hierarchyRowsCache_;
     mutable bool hierarchyRowsDirty_ = true;
+    mutable std::size_t hierarchyRowsRootCount_ = 0U;
+    mutable std::uint64_t hierarchyRowsRootAppendEpoch_ = 0U;
     kb::scene::SceneEntity hierarchyRenameEntity_{};
     std::string hierarchyRenameBuffer_;
     bool hierarchyRenameSelectingAll_ = false;
@@ -1451,10 +1466,13 @@ private:
     std::uint64_t sceneRenderDirtyBaseRevision_ = 1U;
     std::vector<std::uint64_t> sceneRenderDirtyEntityIds_;
     bool sceneRenderFullDirty_ = true;
+    bool sceneRenderStructuralDirty_ = false;
     bool sceneDocumentDirty_ = false;
     EditorAutosaveState autosave_;
     EditorPlayModeSceneSession playModeSceneSession_;
     std::uint64_t playModeRenderTopologyVersion_ = 0U;
+    std::size_t playModeRootCount_ = 0U;
+    std::uint64_t playModeRootAppendEpoch_ = 0U;
     bool playModeRenderTopologyVersionInitialized_ = false;
     EditorPlayModeSelectionSnapshot playModeSelectionSnapshot_;
     kb::scene::SceneEntity playCameraEntity_{};

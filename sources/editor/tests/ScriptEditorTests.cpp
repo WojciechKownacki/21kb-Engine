@@ -3,7 +3,11 @@
 
 #include "rendering/script_editor/LuaSyntaxHighlighter.hpp"
 #include "rendering/script_editor/ScriptEditorDocument.hpp"
+#include "app/EditorScriptFileWatcher.hpp"
 
+#include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <string>
 
 namespace {
@@ -69,6 +73,28 @@ void RunDocumentTest() {
     Require(document.IsModified("longline\nab\nlongline2"), "Document did not report modified after an edit");
 }
 
+void RunExternalSaveObservationTest() {
+    const std::filesystem::path path = std::filesystem::temp_directory_path() / "21kb_script_external_save_test.lua";
+    {
+        std::ofstream file{ path, std::ios::binary | std::ios::trunc };
+        file << "function Tick(self, dt) end\n";
+        Require(file.good(), "External save test could not create a script file");
+    }
+
+    kb::editor::EditorScriptFileWatcher watcher;
+    watcher.Track(path);
+    Require(!watcher.HasChangedOnDisk(), "Opening a script was reported as an external save");
+    const auto initialWriteTime = std::filesystem::last_write_time(path);
+    std::filesystem::last_write_time(path, initialWriteTime + std::chrono::seconds{ 2 });
+    Require(watcher.HasChangedOnDisk(), "An external script save was not observed");
+    watcher.Acknowledge();
+    Require(!watcher.HasChangedOnDisk(), "An acknowledged script save was reported again");
+    watcher.Track({});
+    Require(!watcher.HasChangedOnDisk(), "An untracked script was reported as changed");
+    std::error_code error;
+    std::filesystem::remove(path, error);
+}
+
 } // namespace
 
 namespace kb::editor::tests {
@@ -76,6 +102,7 @@ namespace kb::editor::tests {
 void RunScriptEditorTests() {
     RunHighlighterTest();
     RunDocumentTest();
+    RunExternalSaveObservationTest();
 }
 
 } // namespace kb::editor::tests

@@ -211,6 +211,7 @@ struct RenderSceneSubmitDesc {
     bool selectionOutlineEnabled = true;
     bool gpuDrivenRuntimeDispatchEnabled = true;
     bool synchronizeScene = true;
+    bool structuralSync = false;
     // H2 - when set (and synchronizeScene is false), push the scene runtime's
     // precomputed world affine matrices for changed entities straight into the
     // render instance stream, bypassing per-entity proxy resync. Structural

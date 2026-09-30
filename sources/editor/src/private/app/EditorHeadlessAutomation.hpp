@@ -118,6 +118,10 @@ public:
     [[nodiscard]] bool VerifyUICreationMenu();
     [[nodiscard]] bool VerifyUIComponentCatalog(std::optional<kb::scene::UIComponentType> only = {});
     [[nodiscard]] bool VerifyUIGraphics();
+    [[nodiscard]] bool VerifyUINavigationLinks();
+    [[nodiscard]] bool VerifyUIDropdownOptions();
+    [[nodiscard]] bool VerifyUIWidgetFeatures();
+    [[nodiscard]] bool VerifyPickerCloseButtons();
     [[nodiscard]] bool VerifyUI2DEditing();
     [[nodiscard]] bool SelectUIAnchorPreset(int preset);
     [[nodiscard]] bool SetUIRectLayoutField(int field, float value);
@@ -134,7 +138,8 @@ public:
     [[nodiscard]] bool SetGamepadConnected(
         std::uint8_t gamepadIndex, bool connected);
     [[nodiscard]] bool StepRuntime(
-        std::size_t frames, float deltaSeconds);
+        std::size_t frames, float deltaSeconds, bool profile = false, bool requireShadows = false, bool gpuProfile = false);
+    [[nodiscard]] bool ConfigureRuntimeRendering(std::uint32_t width, std::uint32_t height, bool gpuVisibilityDiagnostics = false);
     [[nodiscard]] bool StepEditorParticles(
         std::size_t frames, float deltaSeconds);
     [[nodiscard]] bool VerifyParticlePickerInteraction();

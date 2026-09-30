@@ -33,11 +33,7 @@ public:
     [[nodiscard]] static bool Unload(Scene& scene, std::uint64_t id) noexcept;
     [[nodiscard]] static std::uint64_t Find(const Scene& scene, std::string_view name) noexcept;
     [[nodiscard]] static bool Exists(const Scene& scene, std::uint64_t id) noexcept;
-    // Always 1.0 for an existing record and 0.0 for an unknown one — loads
-    // are synchronous today (ScenePrefabs::Instantiate never runs partially
-    // across multiple calls), so there is no genuine partial-progress state
-    // to report; this is forward-compatible surface area for a future
-    // async loader, not a fabricated in-between value.
+    // Delegates pending progress to the streaming service; loaded records are 1.0.
     [[nodiscard]] static float Progress(const Scene& scene, std::uint64_t id) noexcept;
     [[nodiscard]] static bool SetActive(Scene& scene, std::uint64_t id) noexcept;
     [[nodiscard]] static std::uint64_t ActiveScene(const Scene& scene) noexcept;

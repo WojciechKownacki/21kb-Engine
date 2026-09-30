@@ -1,6 +1,9 @@
 #include "JoltPhysicsSceneSystem.hpp"
+#include "engine/assets/CollisionMeshAsset.hpp"
+#include "engine/scene/SceneAssets.hpp"
 
 #include "engine/ecs/Query.hpp"
+#include "engine/ecs/QueryFilter.hpp"
 #include "engine/ecs/World.hpp"
 #include "engine/math/EngineMath.hpp"
 #include "engine/scene/CharacterControllerComponent.hpp"
@@ -38,12 +41,15 @@
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
 #include <Jolt/Physics/Collision/ContactListener.h>
 #include <Jolt/Physics/Collision/NarrowPhaseQuery.h>
+#include <Jolt/Physics/Collision/RayCast.h>
+#include <Jolt/Physics/Collision/CastResult.h>
 #include <Jolt/Physics/Collision/TransformedShape.h>
 #include <Jolt/Physics/Collision/ObjectLayer.h>
 #include <Jolt/Physics/Collision/ObjectLayerPairFilterTable.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
+#include <Jolt/Physics/Collision/Shape/MeshShape.h>
 #include <Jolt/Physics/Collision/ShapeCast.h>
 #include <Jolt/Physics/Constraints/Constraint.h>
 #include <Jolt/Physics/Constraints/DistanceConstraint.h>
@@ -59,8 +65,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <limits>
 #include <map>
 #include <mutex>
+#include <stdexcept>
+#include <string>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
@@ -184,6 +193,7 @@ private:
 struct BodySignature {
     RigidbodyBodyType bodyType = RigidbodyBodyType::Dynamic;
     ColliderShape shape = ColliderShape::Box;
+    std::uint64_t meshAssetId = 0;
     Vec3 scale{ 1.0F, 1.0F, 1.0F };
     Vec3 center{};
     Vec3 boxSize{ 1.0F, 1.0F, 1.0F };
@@ -203,6 +213,8 @@ struct BodySignature {
 struct BodyRecord {
     JPH::BodyID bodyId{};
     BodySignature signature{};
+    Vec3 synchronizedPosition{};
+    Quat synchronizedRotation{};
     // MoveKinematic writes a velocity directly into the live Jolt body. The
     // next fixed-step ECS synchronization must not immediately replace that
     // target with the previous Transform pose before Jolt gets one chance to
@@ -210,9 +222,13 @@ struct BodyRecord {
     // transform-driven synchronization; WriteBack then publishes the new pose
     // as the next authoritative Transform.
     bool pendingKinematicMove = false;
+    std::uint32_t seenEpoch = 0U;
 };
 
-[[nodiscard]] float ClampPositive(float value) noexcept {
+[[nodiscard]] float ClampPositive(float value) {
+    if (!std::isfinite(value)) {
+        throw std::invalid_argument("Physics shape extent or mass is not finite");
+    }
     return std::max(value, MinimumShapeExtent);
 }
 
@@ -220,8 +236,8 @@ struct BodyRecord {
     return std::isfinite(value) && value >= MinimumShapeExtent;
 }
 
-[[nodiscard]] float AbsScale(float value) noexcept {
-    return std::max(std::fabs(value), MinimumShapeExtent);
+[[nodiscard]] float AbsScale(float value) {
+    return ClampPositive(std::fabs(value));
 }
 
 [[nodiscard]] JPH::Vec3 ToJolt(Vec3 value) noexcept {
@@ -329,9 +345,12 @@ struct BodyRecord {
 // its parent's world pose. A one-pass unordered_map traversal made dynamic parent+child results
 // depend on which record happened to be visited first.
 void StageWriteBackWorldPose(TransformComponent& transform, Vec3 worldPosition, Quat worldRotation) noexcept {
+    transform.worldDirty = transform.worldDirty ||
+        !SameVec3(transform.worldPosition, worldPosition) || transform.worldRotation.x != worldRotation.x ||
+        transform.worldRotation.y != worldRotation.y || transform.worldRotation.z != worldRotation.z ||
+        transform.worldRotation.w != worldRotation.w;
     transform.worldPosition = worldPosition;
     transform.worldRotation = worldRotation;
-    transform.worldDirty = true;
 }
 
 // Honest fallback to "local == world" when the entity has no parent OR its parent's
@@ -341,21 +360,25 @@ void StageWriteBackWorldPose(TransformComponent& transform, Vec3 worldPosition, 
 void FinalizeWriteBackLocalPose(SceneSystemContext& context, SceneEntity entity, TransformComponent& transform) {
     const SceneEntity parent = context.GetScene().Hierarchy().Parent(entity);
     const TransformComponent* parentTransform = parent.IsValid() ? context.Transforms().TryGet(parent) : nullptr;
-    if (parentTransform != nullptr) {
-        transform.localPosition = WorldToLocalPosition(*parentTransform, transform.worldPosition);
-        transform.localRotation = WorldToLocalRotation(*parentTransform, transform.worldRotation);
-    } else {
-        transform.localPosition = transform.worldPosition;
-        transform.localRotation = transform.worldRotation;
+    const Vec3 localPosition = parentTransform != nullptr
+        ? WorldToLocalPosition(*parentTransform, transform.worldPosition) : transform.worldPosition;
+    const Quat localRotation = parentTransform != nullptr
+        ? WorldToLocalRotation(*parentTransform, transform.worldRotation) : transform.worldRotation;
+    if (transform.worldDirty || !SameVec3(transform.localPosition, localPosition) ||
+        transform.localRotation.x != localRotation.x || transform.localRotation.y != localRotation.y ||
+        transform.localRotation.z != localRotation.z || transform.localRotation.w != localRotation.w) {
+        transform.localPosition = localPosition;
+        transform.localRotation = localRotation;
+        transform.worldDirty = true;
+        context.Transforms().MarkModified(entity);
     }
-    transform.worldDirty = true;
-    context.Transforms().MarkModified(entity);
 }
 
 [[nodiscard]] BodySignature MakeSignature(const RigidbodyComponent& rigidbody, const ColliderComponent& collider, const TransformComponent& transform) noexcept {
     return BodySignature{
         .bodyType = rigidbody.bodyType,
         .shape = collider.shape,
+        .meshAssetId = collider.meshAssetId,
         .scale = transform.worldScale,
         .center = collider.center,
         .boxSize = collider.boxSize,
@@ -374,7 +397,7 @@ void FinalizeWriteBackLocalPose(SceneSystemContext& context, SceneEntity entity,
 }
 
 [[nodiscard]] bool operator==(const BodySignature& lhs, const BodySignature& rhs) noexcept {
-    return lhs.bodyType == rhs.bodyType && lhs.shape == rhs.shape && SameVec3(lhs.scale, rhs.scale) &&
+    return lhs.bodyType == rhs.bodyType && lhs.shape == rhs.shape && lhs.meshAssetId == rhs.meshAssetId && SameVec3(lhs.scale, rhs.scale) &&
         SameVec3(lhs.center, rhs.center) && SameVec3(lhs.boxSize, rhs.boxSize) && lhs.radius == rhs.radius &&
         lhs.height == rhs.height && lhs.mass == rhs.mass && lhs.gravityScale == rhs.gravityScale &&
         lhs.useGravity == rhs.useGravity && lhs.lockRotation == rhs.lockRotation &&
@@ -456,7 +479,12 @@ struct JointRecord {
         settings.mSpace = JPH::EConstraintSpace::LocalToBodyCOM;
         settings.mPoint1 = ToJoltPosition(joint.anchor);
         settings.mPoint2 = ToJoltPosition(joint.connectedAnchor);
-        const JPH::Vec3 hingeAxis = ToJolt(joint.axis).NormalizedOr(JPH::Vec3::sAxisY());
+        const double axisLength = std::sqrt(static_cast<double>(joint.axis.x) * joint.axis.x +
+            static_cast<double>(joint.axis.y) * joint.axis.y + static_cast<double>(joint.axis.z) * joint.axis.z);
+        const JPH::Vec3 hingeAxis(
+            static_cast<float>(joint.axis.x / axisLength),
+            static_cast<float>(joint.axis.y / axisLength),
+            static_cast<float>(joint.axis.z / axisLength));
         settings.mHingeAxis1 = hingeAxis;
         settings.mHingeAxis2 = hingeAxis;
         const JPH::Vec3 normalAxis = hingeAxis.GetNormalizedPerpendicular();
@@ -492,7 +520,7 @@ struct JointRecord {
         return settings.Create(body1, body2);
     }
     }
-    return {};
+    throw std::invalid_argument("Joint has an unsupported type");
 }
 
 // LIB-131: which real shape a CharacterControllerComponent's JPH::CharacterVirtual was last
@@ -617,7 +645,7 @@ using RootMotionQueue = std::deque<RootMotionSegment>;
     return consumed;
 }
 
-[[nodiscard]] JPH::EMotionType ToMotionType(RigidbodyBodyType bodyType) noexcept {
+[[nodiscard]] JPH::EMotionType ToMotionType(RigidbodyBodyType bodyType) {
     switch (bodyType) {
     case RigidbodyBodyType::Static:
         return JPH::EMotionType::Static;
@@ -626,7 +654,7 @@ using RootMotionQueue = std::deque<RootMotionSegment>;
     case RigidbodyBodyType::Dynamic:
         return JPH::EMotionType::Dynamic;
     }
-    return JPH::EMotionType::Dynamic;
+    throw std::invalid_argument("Rigidbody has an unsupported body type");
 }
 
 // LIB-131: factored out of the Capsule case below so CharacterControllerComponent's shape
@@ -654,16 +682,11 @@ using RootMotionQueue = std::deque<RootMotionSegment>;
             ClampPositive(collider.boxSize.x * scaleX * 0.5F),
             ClampPositive(collider.boxSize.y * scaleY * 0.5F),
             ClampPositive(collider.boxSize.z * scaleZ * 0.5F)));
+    case ColliderShape::Mesh:
+        break;
     }
-    return new JPH::BoxShape(JPH::Vec3(0.5F, 0.5F, 0.5F));
+    throw std::invalid_argument("Collider has an unsupported shape");
 }
-
-struct PhysicsBodySnapshot {
-    SceneEntity entity{};
-    TransformComponent transform{};
-    RigidbodyComponent rigidbody{};
-    ColliderComponent collider{};
-};
 
 using PhysicsBodyQuery = kb::ecs::Query<TransformComponent, RigidbodyComponent, ColliderComponent>;
 
@@ -787,6 +810,38 @@ void InsertUniqueBounded(
     }
     [[maybe_unused]] const bool inserted = results.SetAt(insertAt, candidate);
 }
+
+class NonAllocRayCollector final : public JPH::CastRayCollector {
+public:
+    NonAllocRayCollector(const std::unordered_map<JPH::BodyID, SceneEntity>& entities,
+        const JPH::RRayCast& ray, float distance, kb::library::ArrayNonAlloc<kb::scene::PhysicsCastResult>& results)
+        : entities_(entities), ray_(ray), distance_(distance), results_(results) {}
+
+    void AddHit(const ResultType& hit) override {
+        const auto entity = entities_.find(hit.mBodyID);
+        if (entity == entities_.end() || GetContext() == nullptr) return;
+        const auto point = ray_.GetPointOnRay(hit.mFraction);
+        InsertUniqueBounded(results_, kb::scene::PhysicsCastResult{
+            .hit = true,
+            .entity = entity->second,
+            .distance = hit.mFraction * distance_,
+            .point = FromJoltPosition(point),
+            .normal = FromJolt(GetContext()->GetWorldSpaceSurfaceNormal(hit.mSubShapeID2, point)),
+        }, [](const auto& a, const auto& b) {
+            return a.distance < b.distance || (a.distance == b.distance && a.entity.Id() < b.entity.Id());
+        });
+        if (results_.Full()) {
+            UpdateEarlyOutFraction(std::nextafter(results_.GetAt(results_.Count() - 1)->distance / distance_,
+                std::numeric_limits<float>::infinity()));
+        }
+    }
+
+private:
+    const std::unordered_map<JPH::BodyID, SceneEntity>& entities_;
+    const JPH::RRayCast& ray_;
+    float distance_;
+    kb::library::ArrayNonAlloc<kb::scene::PhysicsCastResult>& results_;
+};
 
 class NonAllocCastShapeCollector final : public JPH::CastShapeCollector {
 public:
@@ -1076,14 +1131,16 @@ public:
     // the character after Step() instead would double-count (or lag a frame behind) however
     // far a platform the character is standing on moves this step.
     void OnFixedUpdate(SceneSystemContext& context) {
+        RefreshCollisionMeshes(context.GetScene());
         SynchronizeBodies(context);
+        std::erase_if(collisionMeshes_, [](const auto& entry) { return entry.second.shape->GetRefCount() == 1; });
         ApplyPendingRigidbodyRootMotion(context);
         SynchronizeJoints(context);
         SynchronizeCharacters(context);
         UpdateCharacters(context);
         Step(context.DeltaSeconds());
         writeBackEntities_.clear();
-        writeBackEntities_.reserve(bodies_.size() + characters_.size());
+        writeBackEntities_.reserve(nonStaticBodies_.size() + characters_.size());
         WriteBack(context);
         WriteBackCharacters(context);
         FinalizeWriteBackLocalPoses(context);
@@ -1483,6 +1540,28 @@ public:
     // directly into the caller's ArrayNonAlloc buffer. Query shapes live on
     // the stack and the collectors retain only the best Capacity() hits, so
     // neither query creates Jolt's allocating AllHitCollisionCollector array.
+    void RaycastAll(Vec3 origin, Vec3 direction, float maxDistance, std::uint32_t layerMask,
+        kb::library::ArrayNonAlloc<kb::scene::PhysicsCastResult>& results) const noexcept override {
+        results.Clear();
+        if (results.Capacity() == 0 || !IsFinite(origin) || !IsFinite(direction) || !std::isfinite(maxDistance) ||
+            maxDistance <= 0 || layerMask == 0 || scene_ == nullptr) return;
+        const double length = std::sqrt(double(direction.x) * direction.x + double(direction.y) * direction.y + double(direction.z) * direction.z);
+        if (length <= 0.000001) return;
+        const JPH::Vec3 displacement{
+            static_cast<float>(direction.x / length * maxDistance),
+            static_cast<float>(direction.y / length * maxDistance),
+            static_cast<float>(direction.z / length * maxDistance),
+        };
+        const JPH::RRayCast ray(ToJoltPosition(origin), displacement);
+        JPH::RayCastSettings settings;
+        settings.mTreatConvexAsSolid = false;
+        settings.mBackFaceModeTriangles = JPH::EBackFaceMode::CollideWithBackFaces;
+        settings.mBackFaceModeConvex = JPH::EBackFaceMode::CollideWithBackFaces;
+        NonAllocRayCollector collector(entityByBodyId_, ray, maxDistance, results);
+        const LayerMaskBodyFilter filter(layerMask, entityByBodyId_, bodies_, *scene_);
+        physicsSystem_.GetNarrowPhaseQuery().CastRay(ray, settings, collector, {}, {}, filter);
+    }
+
     void CastShapeAll(const kb::scene::PhysicsShapeDesc& shape, Vec3 origin, Vec3 direction, float maxDistance, std::uint32_t layerMask, kb::library::ArrayNonAlloc<kb::scene::PhysicsCastResult>& results) const noexcept override {
         results.Clear();
         if (results.Capacity() == 0U || !IsValidQueryShape(shape) || !IsFinite(origin) || !IsFinite(direction) ||
@@ -1519,32 +1598,61 @@ public:
         });
     }
 
-    void SynchronizeBody(
+    BodyRecord& SynchronizeBody(
         SceneEntity entity,
         const TransformComponent& transform,
         const RigidbodyComponent& rigidbody,
         const ColliderComponent& collider,
-        SceneSystemContext& context) {
-        seenEntities_->insert(entity.Id());
+        SceneSystemContext& context,
+        bool wakeSurvivingDynamicBodies) {
+        if (!IsFinite(transform.worldPosition) || !IsFinite(transform.worldScale) ||
+            !IsNormalized(transform.worldRotation) || !IsFinite(collider.center) ||
+            !IsFinite(collider.boxSize) || !std::isfinite(collider.radius) ||
+            !std::isfinite(collider.height) || !std::isfinite(collider.friction) ||
+            !std::isfinite(collider.restitution) || !std::isfinite(rigidbody.mass) ||
+            !std::isfinite(rigidbody.gravityScale) || !IsFinite(rigidbody.linearVelocity) ||
+            !IsFinite(rigidbody.angularVelocity)) {
+            throw std::invalid_argument("Physics body contains non-finite values or an invalid rotation");
+        }
         const BodySignature signature = MakeSignature(rigidbody, collider, transform);
-        const auto existing = bodies_.find(entity.Id());
-        if (existing != bodies_.end() && existing->second.signature == signature) {
+        const std::size_t cacheIndex = bodySyncCursor_++;
+        BodyRecord* existing = nullptr;
+        if (bodySyncCacheValid_ && cacheIndex < bodySyncCache_.size() &&
+            bodySyncCache_[cacheIndex].entity == entity) {
+            existing = bodySyncCache_[cacheIndex].body;
+        } else {
+            const auto found = bodies_.find(entity.Id());
+            existing = found != bodies_.end() ? &found->second : nullptr;
+        }
+        if (cacheIndex == bodySyncCache_.size()) {
+            bodySyncCache_.emplace_back();
+        }
+        bodySyncCache_[cacheIndex] = {entity, existing};
+        if (existing != nullptr && existing->signature == signature) {
+            existing->seenEpoch = bodySyncEpoch_;
             if (rigidbody.bodyType == RigidbodyBodyType::Kinematic &&
-                existing->second.pendingKinematicMove) {
-                existing->second.pendingKinematicMove = false;
-                return;
+                existing->pendingKinematicMove) {
+                existing->pendingKinematicMove = false;
+                return *existing;
             }
-            SynchronizeKinematicOrStaticBody(existing->second.bodyId, rigidbody, collider, transform, context.DeltaSeconds());
-            return;
+            SynchronizeKinematicOrStaticBody(*existing, rigidbody, collider, transform, context.DeltaSeconds(), wakeSurvivingDynamicBodies);
+            return *existing;
         }
 
-        if (existing != bodies_.end()) {
-            RemoveBody(existing->second.bodyId);
-            bodies_.erase(existing);
+        if (existing != nullptr) {
+            RemoveBody(existing->bodyId, wakeSurvivingDynamicBodies);
+            bodies_.erase(entity.Id());
         }
         const JPH::BodyID bodyId = CreateBody(rigidbody, collider, transform);
-        bodies_.emplace(entity.Id(), BodyRecord{ .bodyId = bodyId, .signature = signature });
+        const auto inserted = bodies_.emplace(entity.Id(), BodyRecord{ .bodyId = bodyId, .signature = signature,
+            .synchronizedPosition = transform.worldPosition, .synchronizedRotation = transform.worldRotation, .seenEpoch = bodySyncEpoch_ });
+        bodySyncCache_[cacheIndex].body = &inserted.first->second;
         entityByBodyId_.emplace(bodyId, entity);
+        if (rigidbody.bodyType == RigidbodyBodyType::Static && wakeSurvivingDynamicBodies) {
+            const JPH::AABox bounds = BodyNeighborhood(bodyId);
+            if (bounds.IsValid()) physicsSystem_.GetBodyInterface().ActivateBodiesInAABox(bounds, {}, {});
+        }
+        return inserted.first->second;
     }
 
 private:
@@ -1603,76 +1711,82 @@ private:
     }
 
     void SynchronizeBodies(SceneSystemContext& context) {
-        physicsBodyScratch_.clear();
-        physicsBodyScratch_.reserve(std::max<std::size_t>(bodies_.size(), 16U));
+        // Body synchronization changes backend state only, keeping ECS chunk references valid.
+        // A static collider change can affect dynamic bodies that survive this
+        // synchronization. During a full scene replacement, the old dynamic
+        // bodies are gone and newly created ones start active; broad-phase wake
+        // queries for every new and retired static body have no effect.
+        const bool wakeSurvivingDynamicBodies = std::ranges::any_of(nonStaticBodies_, [this, &context](const BodySyncCacheEntry& entry) {
+            if (!context.GetScene().Entities().IsAlive(entry.entity)) {
+                return false;
+            }
+            const auto body = bodies_.find(entry.entity.Id());
+            return body != bodies_.end() && body->second.signature.bodyType == RigidbodyBodyType::Dynamic;
+        });
+        bodySyncCursor_ = 0U;
+        nonStaticBodies_.clear();
+        if (++bodySyncEpoch_ == 0U) {
+            bodySyncEpoch_ = 1U;
+            for (auto& [entityId, body] : bodies_) {
+                body.seenEpoch = 0U;
+            }
+        }
         constexpr kb::ecs::QueryExecutionSettings settings{
             .maxBatchSize = 1024U,
             .policy = kb::ecs::QueryExecutionPolicy::SingleThread,
         };
-        std::unordered_set<std::uint64_t> rigidbodyEntities;
         {
             PhysicsBodyQuery physicsBodyQuery = context.EcsWorld().CreateQuery<TransformComponent, RigidbodyComponent, ColliderComponent>();
-            physicsBodyQuery.ForEachBatchKernel(settings, [this, &rigidbodyEntities](const PhysicsBodyQuery::Batch& batch) {
+            physicsBodyQuery.ForEachBatchKernel(settings, [this, &context, wakeSurvivingDynamicBodies](const PhysicsBodyQuery::Batch& batch) {
                 const TransformComponent* transforms = batch.Components<0>();
                 const RigidbodyComponent* rigidbodies = batch.Components<1>();
                 const ColliderComponent* colliders = batch.Components<2>();
                 for (std::size_t index = 0; index < batch.Count(); ++index) {
                     const SceneEntity entity{ batch.EntityAt(index).Id() };
-                    rigidbodyEntities.insert(entity.Id());
-                    physicsBodyScratch_.push_back(PhysicsBodySnapshot{
-                        .entity = entity,
-                        .transform = transforms[index],
-                        .rigidbody = rigidbodies[index],
-                        .collider = colliders[index],
-                    });
+                    BodyRecord& body = SynchronizeBody(entity, transforms[index], rigidbodies[index], colliders[index], context, wakeSurvivingDynamicBodies);
+                    if (rigidbodies[index].bodyType != RigidbodyBodyType::Static) {
+                        nonStaticBodies_.push_back({entity, &body});
+                    }
                 }
             });
         }
         // By design: a Collider without a Rigidbody becomes an implicit Static body.
         {
-            ColliderOnlyBodyQuery colliderQuery = context.EcsWorld().CreateQuery<TransformComponent, ColliderComponent>();
-            colliderQuery.ForEachBatchKernel(settings, [this, &rigidbodyEntities](const ColliderOnlyBodyQuery::Batch& batch) {
+            kb::ecs::QueryFilter filter;
+            filter.Exclude(context.EcsWorld().Component<RigidbodyComponent>());
+            ColliderOnlyBodyQuery colliderQuery = context.EcsWorld().CreateQuery<TransformComponent, ColliderComponent>(filter);
+            colliderQuery.ForEachBatchKernel(settings, [this, &context, wakeSurvivingDynamicBodies](const ColliderOnlyBodyQuery::Batch& batch) {
                 const TransformComponent* transforms = batch.Components<0>();
                 const ColliderComponent* colliders = batch.Components<1>();
                 for (std::size_t index = 0; index < batch.Count(); ++index) {
                     const SceneEntity entity{ batch.EntityAt(index).Id() };
-                    if (rigidbodyEntities.find(entity.Id()) != rigidbodyEntities.end()) {
-                        continue; // already handled above with its explicit Rigidbody
-                    }
-                    physicsBodyScratch_.push_back(PhysicsBodySnapshot{
-                        .entity = entity,
-                        .transform = transforms[index],
-                        .rigidbody = RigidbodyComponent{ .bodyType = RigidbodyBodyType::Static },
-                        .collider = colliders[index],
-                    });
+                    SynchronizeBody(entity, transforms[index],
+                        RigidbodyComponent{ .bodyType = RigidbodyBodyType::Static }, colliders[index], context, wakeSurvivingDynamicBodies);
                 }
             });
         }
 
-        std::unordered_set<std::uint64_t> seen;
-        seen.reserve(std::max(bodies_.size(), physicsBodyScratch_.size()));
-        seenEntities_ = &seen;
-
-        for (const PhysicsBodySnapshot& body : physicsBodyScratch_) {
-            SynchronizeBody(body.entity, body.transform, body.rigidbody, body.collider, context);
-        }
-        seenEntities_ = nullptr;
-
-        for (auto it = bodies_.begin(); it != bodies_.end();) {
-            if (seen.find(it->first) == seen.end()) {
-                RemoveBody(it->second.bodyId);
-                it = bodies_.erase(it);
-            } else {
-                ++it;
+        // The disjoint queries visit every live body once and ensure its map entry exists.
+        // Equal counts therefore exclude stale records without scanning the map.
+        if (bodies_.size() != bodySyncCursor_) {
+            for (auto it = bodies_.begin(); it != bodies_.end();) {
+                if (it->second.seenEpoch != bodySyncEpoch_) {
+                    RemoveBody(it->second.bodyId, wakeSurvivingDynamicBodies);
+                    it = bodies_.erase(it);
+                } else {
+                    ++it;
+                }
             }
         }
         for (auto it = pendingRigidbodyRootMotion_.begin(); it != pendingRigidbodyRootMotion_.end();) {
-            if (seen.find(it->first) == seen.end()) {
+            if (!bodies_.contains(it->first)) {
                 it = pendingRigidbodyRootMotion_.erase(it);
             } else {
                 ++it;
             }
         }
+        bodySyncCache_.resize(bodySyncCursor_);
+        bodySyncCacheValid_ = true;
     }
 
     // LIB-130: runs AFTER SynchronizeBodies (above) in the same OnFixedUpdate
@@ -1738,6 +1852,20 @@ private:
     // underlying reason: a freshly spawned entity's Jolt body does not exist
     // until its first SynchronizeBody call.
     void SynchronizeJoint(SceneEntity entity, const JointComponent& joint) {
+        if (!IsFinite(joint.anchor) || !IsFinite(joint.connectedAnchor) || !IsFinite(joint.axis) ||
+            !std::isfinite(joint.minLimit) || !std::isfinite(joint.maxLimit)) {
+            throw std::invalid_argument("Physics joint contains non-finite values");
+        }
+        if (joint.connectedEntity == entity) {
+            throw std::invalid_argument("Physics joint cannot connect a body to itself");
+        }
+        if (joint.type == JointType::Hinge && joint.axis.x == 0.0F && joint.axis.y == 0.0F && joint.axis.z == 0.0F) {
+            throw std::invalid_argument("Physics hinge axis must be nonzero");
+        }
+        if (joint.type == JointType::Distance && joint.enableLimit &&
+            (joint.minLimit < 0.0F || joint.maxLimit < joint.minLimit)) {
+            throw std::invalid_argument("Physics joint distance limits are invalid");
+        }
         const JPH::BodyID* ownerBodyId = FindBodyId(entity);
         if (ownerBodyId == nullptr) {
             return;
@@ -1859,6 +1987,13 @@ private:
     // have no Jolt-side "live setter", they are read directly off CharacterRecord by
     // UpdateCharacters below instead).
     void SynchronizeCharacter(SceneEntity entity, const TransformComponent& transform, const CharacterControllerComponent& component) {
+        if (!IsFinite(transform.worldPosition) || !IsFinite(transform.worldScale) ||
+            !IsNormalized(transform.worldRotation) || !IsFinite(component.center) ||
+            !std::isfinite(component.radius) || !std::isfinite(component.height) ||
+            !std::isfinite(component.slopeLimitDegrees) || !std::isfinite(component.stepOffset) ||
+            !std::isfinite(component.gravityScale)) {
+            throw std::invalid_argument("Physics character contains non-finite values or an invalid rotation");
+        }
         const CharacterSignature signature = MakeCharacterSignature(component, transform);
         const auto existing = characters_.find(entity.Id());
         if (existing != characters_.end() && existing->second.signature == signature) {
@@ -2030,9 +2165,101 @@ private:
         pendingCharacterRootMotion_.clear();
     }
 
+    void RefreshCollisionMeshes(kb::scene::Scene& scene) {
+        auto& assets = scene.Assets().Manager();
+        if (collisionAssetRevision_ == assets.Revision()) return;
+        for (auto& [id, mesh] : collisionMeshes_) {
+            const auto source = assets.Load<kb::assets::CollisionMeshAsset>(kb::assets::AssetId{id});
+            if (!source.IsLoaded()) {
+                throw std::runtime_error("Collision mesh reload failed: " + assets.LastError());
+            }
+            mesh.valid = source.Get() == mesh.source.get();
+        }
+        for (auto it = bodies_.begin(); it != bodies_.end();) {
+            const auto mesh = collisionMeshes_.find(it->second.signature.meshAssetId);
+            if (it->second.signature.shape == ColliderShape::Mesh && mesh != collisionMeshes_.end() && !mesh->second.valid) {
+                RemoveBody(it->second.bodyId);
+                it = bodies_.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        std::erase_if(collisionMeshes_, [](const auto& entry) { return !entry.second.valid; });
+        collisionAssetRevision_ = assets.Revision();
+    }
+
+    [[nodiscard]] JPH::RefConst<JPH::Shape> CreateMeshShape(const ColliderComponent& collider, Vec3 scale) {
+        if (collider.meshAssetId == 0 || !IsFinite(scale) ||
+            std::abs(scale.x) < MinimumShapeExtent || std::abs(scale.y) < MinimumShapeExtent || std::abs(scale.z) < MinimumShapeExtent) {
+            throw std::invalid_argument("Mesh collider requires a collision asset and finite nonzero scale");
+        }
+        const double limit = std::sqrt(double(std::numeric_limits<float>::max())) / 4;
+        auto cached = collisionMeshes_.find(collider.meshAssetId);
+        if (cached == collisionMeshes_.end()) {
+            auto& assets = scene_->Assets().Manager();
+            const auto source = assets.Load<kb::assets::CollisionMeshAsset>(kb::assets::AssetId{collider.meshAssetId});
+            if (!source.IsLoaded()) {
+                throw std::runtime_error("Collision mesh load failed: " + assets.LastError());
+            }
+            std::string error;
+            if (!kb::assets::ValidateCollisionMesh(*source, error)) throw std::invalid_argument(error);
+            JPH::VertexList vertices;
+            vertices.reserve(source->positions.size());
+            Vec3 maxAbs{};
+            for (const auto& p : source->positions) {
+                vertices.emplace_back(p.x, p.y, p.z);
+                maxAbs.x = std::max(maxAbs.x, std::abs(p.x));
+                maxAbs.y = std::max(maxAbs.y, std::abs(p.y));
+                maxAbs.z = std::max(maxAbs.z, std::abs(p.z));
+            }
+            if (maxAbs.x > limit || maxAbs.y > limit || maxAbs.z > limit) {
+                throw std::invalid_argument("Collision mesh exceeds finite physics bounds");
+            }
+            JPH::IndexedTriangleList triangles;
+            triangles.reserve(source->indices.size() / 3);
+            for (std::size_t i = 0; i < source->indices.size(); i += 3) {
+                triangles.emplace_back(source->indices[i], source->indices[i + 1], source->indices[i + 2], 0);
+            }
+            JPH::MeshShapeSettings settings(std::move(vertices), std::move(triangles));
+            const auto result = settings.Create();
+            if (result.HasError()) throw std::runtime_error("Collision mesh construction failed: " + std::string{result.GetError().c_str()});
+            cached = collisionMeshes_.emplace(collider.meshAssetId, CollisionMeshRecord{source.Shared(), result.Get(), maxAbs, true}).first;
+        }
+        const auto extent = cached->second.maxAbs;
+        if (double(extent.x) * std::abs(scale.x) > limit || double(extent.y) * std::abs(scale.y) > limit ||
+            double(extent.z) * std::abs(scale.z) > limit) {
+            throw std::invalid_argument("Scaled collision mesh exceeds finite physics bounds");
+        }
+        const auto scaled = cached->second.shape->ScaleShape(ToJolt(scale));
+        if (scaled.HasError()) throw std::runtime_error("Collision mesh scaling failed: " + std::string{scaled.GetError().c_str()});
+        return scaled.Get();
+    }
+
     [[nodiscard]] JPH::BodyID CreateBody(const RigidbodyComponent& rigidbody, const ColliderComponent& collider, const TransformComponent& transform) {
-        JPH::RefConst<JPH::Shape> shape = CreateShape(collider, transform.worldScale);
+        // A scene replacement can fill the backend with old bodies before the
+        // synchronization tail retires them. Reclaim only records absent from ECS.
+        if (physicsSystem_.GetNumBodies() >= MaxBodies && scene_ != nullptr) {
+            for (auto it = bodies_.begin(); it != bodies_.end();) {
+                const SceneEntity entity{it->first};
+                if (!scene_->Entities().IsAlive(entity) ||
+                    scene_->Transforms().TryGet(entity) == nullptr ||
+                    scene_->Components().Colliders().TryGet(entity) == nullptr) {
+                    RemoveBody(it->second.bodyId);
+                    it = bodies_.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
+        if (collider.shape == ColliderShape::Mesh && rigidbody.bodyType != RigidbodyBodyType::Static) {
+            throw std::invalid_argument("Triangle mesh colliders require a static rigidbody");
+        }
+        JPH::RefConst<JPH::Shape> shape = collider.shape == ColliderShape::Mesh
+            ? CreateMeshShape(collider, transform.worldScale) : CreateShape(collider, transform.worldScale);
         const Vec3 bodyPosition = Add(transform.worldPosition, ColliderWorldOffset(collider.center, transform.worldScale, transform.worldRotation));
+        if (!IsFinite(bodyPosition)) {
+            throw std::invalid_argument("Physics body position overflowed");
+        }
         const std::uint32_t namedLayer = kb::scene::LowestSetPhysicsLayerIndex(collider.layer);
         const bool isStaticBody = rigidbody.bodyType == RigidbodyBodyType::Static;
 
@@ -2056,34 +2283,75 @@ private:
             bodySettings.mMassPropertiesOverride.mMass = ClampPositive(rigidbody.mass);
         }
 
-        return physicsSystem_.GetBodyInterface().CreateAndAddBody(bodySettings, rigidbody.bodyType == RigidbodyBodyType::Static ? JPH::EActivation::DontActivate : JPH::EActivation::Activate);
+        const JPH::BodyID body = physicsSystem_.GetBodyInterface().CreateAndAddBody(
+            bodySettings, isStaticBody ? JPH::EActivation::DontActivate : JPH::EActivation::Activate);
+        if (body.IsInvalid()) {
+            throw std::runtime_error("Physics body capacity exhausted");
+        }
+        return body;
     }
 
-    void SynchronizeKinematicOrStaticBody(JPH::BodyID bodyId, const RigidbodyComponent& rigidbody, const ColliderComponent& collider, const TransformComponent& transform, float fixedDeltaSeconds) {
+    [[nodiscard]] JPH::AABox BodyNeighborhood(JPH::BodyID bodyId) const {
+        JPH::AABox bounds;
+        JPH::BodyLockRead lock(physicsSystem_.GetBodyLockInterface(), bodyId);
+        if (lock.SucceededAndIsInBroadPhase()) {
+            bounds = lock.GetBody().GetWorldSpaceBounds();
+            bounds.ExpandBy(JPH::Vec3::sReplicate(physicsSystem_.GetPhysicsSettings().mSpeculativeContactDistance));
+        }
+        return bounds;
+    }
+
+    void SynchronizeKinematicOrStaticBody(BodyRecord& record, const RigidbodyComponent& rigidbody, const ColliderComponent& collider, const TransformComponent& transform, float fixedDeltaSeconds, bool wakeSurvivingDynamicBodies) {
         if (rigidbody.bodyType == RigidbodyBodyType::Dynamic) {
+            return;
+        }
+        const bool isStatic = rigidbody.bodyType == RigidbodyBodyType::Static;
+        const auto& rotation = transform.worldRotation;
+        if (isStatic && SameVec3(record.synchronizedPosition, transform.worldPosition) &&
+            record.synchronizedRotation.x == rotation.x && record.synchronizedRotation.y == rotation.y &&
+            record.synchronizedRotation.z == rotation.z && record.synchronizedRotation.w == rotation.w) {
             return;
         }
 
         JPH::BodyInterface& bodyInterface = physicsSystem_.GetBodyInterface();
         const Vec3 bodyPosition = Add(transform.worldPosition, ColliderWorldOffset(collider.center, transform.worldScale, transform.worldRotation));
+        if (!IsFinite(bodyPosition)) {
+            throw std::invalid_argument("Physics body position overflowed");
+        }
         if (rigidbody.bodyType == RigidbodyBodyType::Kinematic && fixedDeltaSeconds > 0.0F) {
-            bodyInterface.MoveKinematic(bodyId, ToJoltPosition(bodyPosition), ToJolt(transform.worldRotation), fixedDeltaSeconds);
+            bodyInterface.MoveKinematic(record.bodyId, ToJoltPosition(bodyPosition), ToJolt(transform.worldRotation), fixedDeltaSeconds);
             return;
         }
-        bodyInterface.SetPositionAndRotationWhenChanged(bodyId, ToJoltPosition(bodyPosition), ToJolt(transform.worldRotation), JPH::EActivation::DontActivate);
+        const JPH::AABox previousBounds = isStatic && wakeSurvivingDynamicBodies ? BodyNeighborhood(record.bodyId) : JPH::AABox{};
+        bodyInterface.SetPositionAndRotationWhenChanged(record.bodyId, ToJoltPosition(bodyPosition), ToJolt(transform.worldRotation), JPH::EActivation::DontActivate);
+        if (isStatic) {
+            record.synchronizedPosition = transform.worldPosition;
+            record.synchronizedRotation = transform.worldRotation;
+            if (wakeSurvivingDynamicBodies) {
+                if (previousBounds.IsValid()) bodyInterface.ActivateBodiesInAABox(previousBounds, {}, {});
+                const JPH::AABox currentBounds = BodyNeighborhood(record.bodyId);
+                if (currentBounds.IsValid()) bodyInterface.ActivateBodiesInAABox(currentBounds, {}, {});
+            }
+        }
     }
 
     void Step(float fixedDeltaSeconds) {
         if (fixedDeltaSeconds <= 0.0F) {
             return;
         }
-        physicsSystem_.Update(fixedDeltaSeconds, settings_.collisionSteps, &tempAllocator_, &jobSystem_);
+        const JPH::EPhysicsUpdateError error = physicsSystem_.Update(
+            fixedDeltaSeconds, settings_.collisionSteps, &tempAllocator_, &jobSystem_);
+        if (error != JPH::EPhysicsUpdateError::None) {
+            throw std::runtime_error("Physics update exceeded collision capacity (flags=" +
+                std::to_string(static_cast<std::uint32_t>(error)) + ")");
+        }
     }
 
     void WriteBack(SceneSystemContext& context) {
         JPH::BodyInterface& bodyInterface = physicsSystem_.GetBodyInterface();
-        for (const auto& [entityId, body] : bodies_) {
-            SceneEntity entity{ entityId };
+        for (const auto& entry : nonStaticBodies_) {
+            const BodyRecord& body = *entry.body;
+            const SceneEntity entity = entry.entity;
             if (!context.Transforms().IsAlive(entity)) {
                 continue;
             }
@@ -2258,10 +2526,11 @@ private:
         }
     }
 
-    void RemoveBody(JPH::BodyID bodyId) {
+    void RemoveBody(JPH::BodyID bodyId, bool wakeNeighbors = true) {
         if (bodyId.IsInvalid()) {
             return;
         }
+        bodySyncCacheValid_ = false;
         // LIB-130: a joint's constraint references this body internally (as
         // either the owner's or the connected entity's body) - remove any
         // such constraint FIRST, so Jolt never holds a constraint pointing
@@ -2281,6 +2550,7 @@ private:
             }
         }
         JPH::BodyInterface& bodyInterface = physicsSystem_.GetBodyInterface();
+        const JPH::AABox removedBounds = wakeNeighbors ? BodyNeighborhood(bodyId) : JPH::AABox{};
         contactListener_.DiscardBody(bodyId);
         for (auto it = activeContacts_.begin(); it != activeContacts_.end();) {
             if (it->first.body1 == bodyId || it->first.body2 == bodyId) {
@@ -2292,14 +2562,19 @@ private:
         bodyInterface.RemoveBody(bodyId);
         bodyInterface.DestroyBody(bodyId);
         entityByBodyId_.erase(bodyId);
+        // Removing support does not wake sleeping contacts automatically.
+        if (removedBounds.IsValid()) bodyInterface.ActivateBodiesInAABox(removedBounds, {}, {});
     }
 
     void RemoveAllBodies() {
         for (const auto& [entityId, body] : bodies_) {
             static_cast<void>(entityId);
-            RemoveBody(body.bodyId);
+            RemoveBody(body.bodyId, false);
         }
         bodies_.clear();
+        bodySyncCache_.clear();
+        nonStaticBodies_.clear();
+        bodySyncCacheValid_ = false;
         pendingRigidbodyRootMotion_.clear();
     }
 
@@ -2312,11 +2587,27 @@ private:
     JPH::TempAllocatorImpl tempAllocator_;
     JPH::JobSystemThreadPool jobSystem_;
     std::unordered_map<std::uint64_t, BodyRecord> bodies_;
+    std::uint32_t bodySyncEpoch_ = 0U;
+    struct BodySyncCacheEntry {
+        SceneEntity entity{};
+        BodyRecord* body = nullptr;
+    };
+    // Map rehash preserves record addresses; removing any body invalidates this row cache.
+    std::vector<BodySyncCacheEntry> bodySyncCache_;
+    std::vector<BodySyncCacheEntry> nonStaticBodies_;
+    std::size_t bodySyncCursor_ = 0U;
+    bool bodySyncCacheValid_ = false;
+    struct CollisionMeshRecord {
+        std::shared_ptr<const kb::assets::CollisionMeshAsset> source;
+        JPH::RefConst<JPH::Shape> shape;
+        Vec3 maxAbs{};
+        bool valid = true;
+    };
+    std::unordered_map<std::uint64_t, CollisionMeshRecord> collisionMeshes_;
+    std::uint64_t collisionAssetRevision_ = 0;
     std::unordered_map<std::uint64_t, RootMotionQueue> pendingRigidbodyRootMotion_;
     kb::scene::Scene* scene_ = nullptr;
     std::unordered_map<JPH::BodyID, SceneEntity> entityByBodyId_;
-    std::vector<PhysicsBodySnapshot> physicsBodyScratch_;
-    std::unordered_set<std::uint64_t>* seenEntities_ = nullptr;
     std::unordered_map<std::uint64_t, JointRecord> joints_;
     std::vector<JointSnapshot> jointScratch_;
     std::unordered_map<std::uint64_t, CharacterRecord> characters_;

@@ -17,6 +17,7 @@ struct ProjectCookRequest {
     // Windows-only destination for custom project DLL snapshots. The package orchestrator
     // places this directory below the sealed runtime root after a successful cook.
     std::filesystem::path runtimeModulesOutputDirectory;
+    std::filesystem::path reusePackPath;
 };
 
 struct ProjectCookResult {

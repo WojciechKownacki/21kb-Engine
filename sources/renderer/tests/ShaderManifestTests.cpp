@@ -179,6 +179,10 @@ void PrebuiltShaderProfilesContainRequiredManifest() {
             }));
         Require(result.checkedRequiredShaderCount == requiredShaderCount, "Shader manifest validation checked the wrong number of required shaders");
         Require(result.Succeeded(), "Prebuilt shader profile is missing a required runtime shader");
+        if (profile == "dxbc" || profile == "dxil") {
+            Require(ValidatePackagedShaderManifestProfile(root / profile).Succeeded(),
+                "Desktop shader bundle is missing a required runtime program stage");
+        }
     }
 }
 

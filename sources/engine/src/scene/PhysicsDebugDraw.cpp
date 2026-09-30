@@ -4,6 +4,8 @@
 #include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/JointComponent.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/assets/CollisionMeshAsset.hpp"
+#include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
@@ -130,13 +132,13 @@ void CollectShapesVisitor(SceneEntity entity, const TransformComponent& transfor
     const float scaleY = NonZeroAbs(transform.worldScale.y);
     const float scaleZ = NonZeroAbs(transform.worldScale.z);
 
-    // LIB-132: center is added UNROTATED, matching JoltPhysicsSceneSystem::CreateBody's own
-    // `bodyPosition = transform.worldPosition + collider.center` exactly - the debug shape
-    // must show what is actually simulated, including this existing, documented
-    // simplification, not a "corrected" version of it.
     if (const ColliderComponent* collider = scene.Components().Colliders().TryGet(entity)) {
         const Vec3 color = collider->trigger ? kColliderTriggerColor : kColliderSolidColor;
-        const Vec3 center = transform.worldPosition + collider->center;
+        const Vec3 center = transform.worldPosition + Rotate(transform.worldRotation, Vec3{
+            collider->center.x * transform.worldScale.x,
+            collider->center.y * transform.worldScale.y,
+            collider->center.z * transform.worldScale.z,
+        });
         switch (collider->shape) {
         case ColliderShape::Sphere:
             AppendWireSphere(output, center, collider->radius * std::max({ scaleX, scaleY, scaleZ }), color, kShapeAlpha);
@@ -153,12 +155,29 @@ void CollectShapesVisitor(SceneEntity entity, const TransformComponent& transfor
                 Vec3{ collider->boxSize.x * scaleX * 0.5F, collider->boxSize.y * scaleY * 0.5F, collider->boxSize.z * scaleZ * 0.5F },
                 transform.worldRotation, color, kShapeAlpha);
             break;
+        case ColliderShape::Mesh: {
+            const auto mesh = scene.Assets().Manager().AcquireLoaded<kb::assets::CollisionMeshAsset>(kb::assets::AssetId{collider->meshAssetId});
+            if (!mesh.IsLoaded()) break;
+            const auto point = [&](std::uint32_t index) {
+                const auto p = mesh->positions[index];
+                return center + Rotate(transform.worldRotation, Vec3{
+                    p.x * transform.worldScale.x, p.y * transform.worldScale.y, p.z * transform.worldScale.z});
+            };
+            // Sample large terrain wireframes rather than allocate millions of debug lines.
+            const std::size_t step = 3 * std::max<std::size_t>(1, (mesh->indices.size() / 3 + 2047) / 2048);
+            for (std::size_t i = 0; i + 2 < mesh->indices.size(); i += step) {
+                if (mesh->indices[i] >= mesh->positions.size() || mesh->indices[i + 1] >= mesh->positions.size() ||
+                    mesh->indices[i + 2] >= mesh->positions.size()) break;
+                const auto a = point(mesh->indices[i]), b = point(mesh->indices[i + 1]), c = point(mesh->indices[i + 2]);
+                AppendLine(output, a, b, color, kShapeAlpha);
+                AppendLine(output, b, c, color, kShapeAlpha);
+                AppendLine(output, c, a, color, kShapeAlpha);
+            }
+            break;
+        }
         }
     }
 
-    // LIB-132: unlike Collider above, CharacterControllerComponent's center IS rotated -
-    // matches JPH::CharacterVirtual's own mShapeOffset formula exactly (see LIB-131's
-    // GetCenterOfMassPosition: `mPosition + mRotation * (mShapeOffset + ...)`).
     if (const CharacterControllerComponent* character = scene.Components().CharacterControllers().TryGet(entity)) {
         const Vec3 center = transform.worldPosition + Rotate(transform.worldRotation, character->center);
         const float radius = character->radius * std::max(scaleX, scaleZ);

@@ -772,6 +772,23 @@ public:
     }
 
     template <typename Kernel>
+    void ForEachMutableChunkWithCurrentDirtyCounts(const NativeArchetypeStorage& storage, Kernel&& kernel) const {
+        if (!valid_) {
+            return;
+        }
+
+        std::size_t rangeIndex = 0U;
+        for (const MutableQueryTableDispatchRecord& record : scratch_.mutableRecords_) {
+            if (record.entityCount == 0U) {
+                continue;
+            }
+            MutableChunk chunk{ record.entityIds, record.entityCount, MakeComponentPointers(record, 0U),
+                rangeIndex++, MakeCurrentComponentDirtyCounts(storage, record) };
+            std::forward<Kernel>(kernel)(chunk);
+        }
+    }
+
+    template <typename Kernel>
     UnsafeHotRangeDispatchStats ForEachMutableRange(std::size_t maxRangeSize, Kernel&& kernel) const {
         UnsafeHotRangeDispatchStats stats{};
         if (!valid_) {

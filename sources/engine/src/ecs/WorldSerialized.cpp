@@ -10,6 +10,7 @@
 #include "ecs/world/WorldRegistrySet.hpp"
 
 #include <algorithm>
+#include <cstring>
 #include <limits>
 #include <unordered_set>
 
@@ -209,7 +210,15 @@ bool World::ApplyChunkedDeltaSnapshot(const ChunkedWorldDeltaSnapshot& delta) {
         DestroyEntity(Entity{ entityId });
     }
 
+    std::size_t touchedCount = 0U;
+    for (const ChunkedWorldDeltaSnapshotChunk& chunk : delta.chunks) {
+        if (chunk.entityIds.size() > std::numeric_limits<std::size_t>::max() - touchedCount) {
+            return false;
+        }
+        touchedCount += chunk.entityIds.size();
+    }
     std::unordered_set<Entity::IdType> touchedEntities;
+    touchedEntities.reserve(touchedCount);
     for (const ChunkedWorldDeltaSnapshotChunk& chunk : delta.chunks) {
         if (chunk.entityIds.empty() || (!chunk.fullArchetype && chunk.components.empty())) {
             return false;
@@ -217,8 +226,10 @@ bool World::ApplyChunkedDeltaSnapshot(const ChunkedWorldDeltaSnapshot& delta) {
 
         std::vector<ComponentId> chunkComponentIds;
         std::vector<ComponentId> targetChunkComponentIds;
+        std::vector<BulkComponentData> rowComponents;
         chunkComponentIds.reserve(chunk.components.size());
         targetChunkComponentIds.reserve(chunk.components.size());
+        rowComponents.reserve(chunk.components.size());
         for (const ChunkedComponentSnapshot& component : chunk.components) {
             if (!ComponentPayloadSizeMatches(chunk.entityIds.size(), component.componentSize, component.data.size())) {
                 return false;
@@ -229,6 +240,10 @@ bool World::ApplyChunkedDeltaSnapshot(const ChunkedWorldDeltaSnapshot& delta) {
             }
             chunkComponentIds.push_back(component.componentId);
             targetChunkComponentIds.push_back(targetComponent->id);
+            rowComponents.push_back(BulkComponentData{
+                .componentId = targetComponent->id,
+                .componentSize = targetComponent->size,
+            });
         }
         std::sort(chunkComponentIds.begin(), chunkComponentIds.end());
         std::sort(targetChunkComponentIds.begin(), targetChunkComponentIds.end());
@@ -237,53 +252,87 @@ bool World::ApplyChunkedDeltaSnapshot(const ChunkedWorldDeltaSnapshot& delta) {
             return false;
         }
 
+        if (!chunk.fullArchetype) {
+            std::vector<Entity> entities;
+            entities.reserve(chunk.entityIds.size());
+            for (Entity::IdType entityId : chunk.entityIds) {
+                const Entity entity{ entityId };
+                if (!entity.IsValid() || !touchedEntities.insert(entityId).second || !IsAlive(entity)) {
+                    return false;
+                }
+                entities.push_back(entity);
+            }
+            for (std::size_t column = 0; column < chunk.components.size(); ++column) {
+                rowComponents[column].data = chunk.components[column].data.data();
+                rowComponents[column].sourceCount = entities.size();
+            }
+            AddComponents(entities, rowComponents);
+            continue;
+        }
+
+        std::vector<ComponentId> removalCandidates;
+        removalCandidates.reserve(delta.componentTypes.size());
+        for (const ComponentTypeInfo& componentType : delta.componentTypes) {
+            const ComponentTypeInfo* targetComponent = ResolveRestoreComponentType(*this, componentType);
+            if (targetComponent != nullptr &&
+                !std::binary_search(targetChunkComponentIds.begin(), targetChunkComponentIds.end(), targetComponent->id)) {
+                removalCandidates.push_back(targetComponent->id);
+            }
+        }
+        std::vector<Entity> existingEntities;
+        std::vector<std::size_t> existingRows;
+        std::vector<Entity::IdType> newEntityIds;
+        std::vector<std::size_t> newRows;
         for (std::size_t row = 0; row < chunk.entityIds.size(); ++row) {
             const Entity entity{ chunk.entityIds[row] };
             if (!entity.IsValid() || !touchedEntities.insert(entity.Id()).second) {
                 return false;
             }
-
-            std::vector<BulkComponentData> rowComponents;
-            rowComponents.reserve(chunk.components.size());
-            for (const ChunkedComponentSnapshot& component : chunk.components) {
-                const ComponentTypeInfo* targetComponent = ResolveRestoreComponentType(*this, header, component);
-                if (targetComponent == nullptr) {
-                    return false;
-                }
-
-                const auto* bytes = static_cast<const std::byte*>(component.data.data());
-                rowComponents.push_back(BulkComponentData{
-                    .componentId = targetComponent->id,
-                    .componentSize = targetComponent->size,
-                    .data = bytes + row * component.componentSize,
-                });
-            }
-
             if (IsAlive(entity)) {
-                AddComponents(entity, rowComponents);
+                existingEntities.push_back(entity);
+                existingRows.push_back(row);
             } else {
-                if (!chunk.fullArchetype) {
-                    return false;
-                }
-                const Entity::IdType entityId = entity.Id();
-                AdoptEntitiesWithComponents(std::span<const Entity::IdType>{ &entityId, 1U }, rowComponents);
+                newEntityIds.push_back(entity.Id());
+                newRows.push_back(row);
             }
+        }
 
-            if (!chunk.fullArchetype) {
-                continue;
-            }
-
-            std::vector<ComponentId> removedComponents;
-            removedComponents.reserve(delta.componentTypes.size());
-            for (const ComponentTypeInfo& componentType : delta.componentTypes) {
-                const ComponentTypeInfo* targetComponent = ResolveRestoreComponentType(*this, componentType);
-                if (targetComponent != nullptr &&
-                    !std::binary_search(targetChunkComponentIds.begin(), targetChunkComponentIds.end(), targetComponent->id) &&
-                    HasComponent(entity, targetComponent->id)) {
-                    removedComponents.push_back(targetComponent->id);
+        auto bindComponents = [&chunk, &rowComponents](
+                                  std::span<const std::size_t> rows,
+                                  std::vector<std::vector<std::byte>>& packedData,
+                                  std::vector<BulkComponentData>& components) {
+            components = rowComponents;
+            packedData.reserve(chunk.components.size());
+            for (std::size_t column = 0; column < chunk.components.size(); ++column) {
+                const ChunkedComponentSnapshot& source = chunk.components[column];
+                if (rows.size() == chunk.entityIds.size()) {
+                    components[column].data = source.data.data();
+                } else {
+                    std::vector<std::byte>& packed = packedData.emplace_back(rows.size() * source.componentSize);
+                    for (std::size_t index = 0; index < rows.size(); ++index) {
+                        std::memcpy(
+                            packed.data() + index * source.componentSize,
+                            source.data.data() + rows[index] * source.componentSize,
+                            source.componentSize);
+                    }
+                    components[column].data = packed.data();
                 }
+                components[column].sourceCount = rows.size();
             }
-            RemoveComponents(entity, removedComponents);
+        };
+
+        if (!existingEntities.empty()) {
+            std::vector<std::vector<std::byte>> packedData;
+            std::vector<BulkComponentData> components;
+            bindComponents(existingRows, packedData, components);
+            AddComponents(existingEntities, components);
+            RemoveComponents(existingEntities, removalCandidates);
+        }
+        if (!newEntityIds.empty()) {
+            std::vector<std::vector<std::byte>> packedData;
+            std::vector<BulkComponentData> components;
+            bindComponents(newRows, packedData, components);
+            AdoptEntitiesWithComponents(newEntityIds, components);
         }
     }
 

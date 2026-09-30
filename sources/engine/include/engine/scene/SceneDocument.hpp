@@ -35,7 +35,17 @@ struct SceneDocument {
     // v32: authored scene-global audio mixer, snapshot, and occlusion settings persist.
     // v33: ParticleEffectComponent persists particle-effect authoring policy.
     // v34: hierarchy-authored UI components persist with scene and prefab nodes.
-    static constexpr std::uint32_t CurrentFileVersion = 34U;
+    // v35: UIDropdown persists how many option rows its open list shows; UI navigation links persist
+    //      as stable node ids.
+    // v36: UIDropdown owns its options and row style; older child-object options are converted on load.
+    // v37: a dropdown option can show a child widget; the link persists as a stable node id.
+    // v38: UIDropdown points at its template, caption and item widgets; UIToggle persists its on-state
+    //      graphic, UISelectable its target graphic and UIScrollView its vertical scrollbar.
+    // v39: UI widgets persist world-space and per-player canvases, safe-area layout, show/hide
+    //      animation, image fill, localized and fitted text, soft masks, radio groups, sprite-swap
+    //      states, tooltips, drag and drop, event targets, slider and progress widgets, elastic and
+    //      snapping scroll views, and input content types with placeholders.
+    static constexpr std::uint32_t CurrentFileVersion = 40U;
 
     std::uint32_t fileVersion = CurrentFileVersion;
     std::string guid;

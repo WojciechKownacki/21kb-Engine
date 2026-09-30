@@ -33,6 +33,12 @@ bool PhysicsBackend::HasBackend(Scene& scene) noexcept {
     return FindBackend(scene) != nullptr;
 }
 
+void PhysicsBackend::RaycastAll(Scene& scene, Vec3 origin, Vec3 direction, float maxDistance, std::uint32_t layerMask,
+    kb::library::ArrayNonAlloc<PhysicsCastResult>& results) noexcept {
+    results.Clear();
+    if (auto* backend = FindBackend(scene)) backend->RaycastAll(origin, direction, maxDistance, layerMask, results);
+}
+
 bool PhysicsBackend::AddForce(Scene& scene, SceneEntity entity, Vec3 force) noexcept {
     IPhysicsBackend* backend = FindBackend(scene);
     return backend != nullptr && backend->AddForce(entity, force);

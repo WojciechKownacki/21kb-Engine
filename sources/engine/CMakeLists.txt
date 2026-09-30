@@ -28,6 +28,7 @@ add_library(kb_engine STATIC
     include/engine/assets/AssetKind.hpp
     include/engine/assets/AssetImportCatalog.hpp
     include/engine/assets/TerrainAsset.hpp
+    include/engine/assets/CollisionMeshAsset.hpp
     include/engine/assets/TerrainAssetIO.hpp
     include/engine/assets/AssetImportService.hpp
     include/engine/assets/AssetImportTypes.hpp
@@ -530,6 +531,7 @@ add_library(kb_engine STATIC
     src/assets/AssetFolderOperations.cpp
     src/assets/AssetImportCatalog.cpp
     src/assets/TerrainAsset.cpp
+    src/assets/CollisionMeshAsset.cpp
     src/assets/TerrainAssetIO.cpp
     src/assets/AssetImportService.cpp
     src/assets/AssetLoadRequest.cpp
@@ -676,6 +678,8 @@ add_library(kb_engine STATIC
     src/scene/SceneHierarchy.cpp
     src/scene/SceneLightIterationService.cpp
     src/scene/SceneLoadedContentService.cpp
+    src/scene/SceneStreamingService.cpp
+    src/scene/prefab/ScenePrefabReferenceResolver.cpp
     src/scene/SceneMeshRendererIterationService.cpp
     src/scene/ScenePhysicsBodyIterationService.cpp
     src/scene/SceneMaterialInstanceService.cpp
@@ -759,6 +763,7 @@ add_library(kb_engine STATIC
     src/scene/components/SceneUIComponents.cpp
     src/scene/components/SceneUIComponentSet.cpp
     src/scene/SceneUI.cpp
+    src/scene/ui/SceneUIHierarchyPresets.cpp
     src/ui/UIComponentValidation.cpp
     src/ui/UIComponentCatalog.cpp
     src/ui/UIComponentPropertyCatalog.cpp
@@ -1665,6 +1670,7 @@ if(BUILD_TESTING)
         tests/ScenePrefabInstantiationTests.cpp
         tests/ScenePrefabTestSuites.hpp
         tests/ScenePrefabTests.cpp
+        tests/SceneStreamingTests.cpp
         tests/SceneRuntimeTests.cpp
         tests/SceneSystemTestSuites.hpp
         tests/SceneSystemTests.cpp
@@ -1854,4 +1860,8 @@ if(BUILD_TESTING)
     )
 
     kb_apply_quality_gates(kb_ecs_snapshot_scale_tests)
+
+    add_executable(kb_ecs_workload_benchmark tests/EcsWorkloadBenchmark.cpp)
+    target_link_libraries(kb_ecs_workload_benchmark PRIVATE kb_engine)
+    kb_apply_quality_gates(kb_ecs_workload_benchmark)
 endif()

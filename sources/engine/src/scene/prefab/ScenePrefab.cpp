@@ -33,6 +33,7 @@ const ScenePrefabNodeDesc* ScenePrefab::TryGetNode(std::uint32_t nodeIndex) cons
 }
 
 ScenePrefabNodeDesc* ScenePrefab::TryGetMutableNode(std::uint32_t nodeIndex) noexcept {
+    mutableNodesExposed_ |= nodeIndex < nodes_.size();
     return nodeIndex < nodes_.size() ? &nodes_[nodeIndex] : nullptr;
 }
 
@@ -69,8 +70,9 @@ std::uint32_t ScenePrefab::ResolveNodeIndex(const ScenePrefabPropertyOverride& p
 std::uint32_t ScenePrefab::AddNode(ScenePrefabNodeDesc desc) {
     const std::uint32_t nodeIndex = static_cast<std::uint32_t>(nodes_.size());
     if (desc.stableId == ScenePrefabNodeDesc::InvalidStableId) {
-        desc.stableId = NextStableNodeId(nodes_);
+        desc.stableId = mutableNodesExposed_ ? NextStableNodeId(nodes_) : nextStableId_;
     }
+    nextStableId_ = std::max(nextStableId_, desc.stableId + 1U);
     nodes_.push_back(std::move(desc));
     return nodeIndex;
 }
@@ -81,6 +83,8 @@ void ScenePrefab::Reserve(std::size_t nodeCount) {
 
 void ScenePrefab::Clear() noexcept {
     nodes_.clear();
+    nextStableId_ = 1U;
+    mutableNodesExposed_ = false;
 }
 
 ScenePrefabInstance::ScenePrefabInstance(std::vector<SceneObject> objects) noexcept

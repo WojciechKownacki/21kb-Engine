@@ -38,11 +38,11 @@ void SceneAssetPhysicsComponentCodec::WriteRigidbody(std::vector<std::uint8_t>& 
     SceneAssetBinaryIO::WriteUInt8(output, rigidbody.useContinuousCollision ? 1U : 0U);
 }
 
-bool SceneAssetPhysicsComponentCodec::ReadCollider(SceneAssetBinaryIO::ByteReader& input, ColliderComponent& output) {
+bool SceneAssetPhysicsComponentCodec::ReadCollider(SceneAssetBinaryIO::ByteReader& input, std::uint32_t fileVersion, ColliderComponent& output) {
     std::uint32_t shape = 0;
     bool trigger = false;
     if (!input.ReadUInt32(shape) ||
-        shape > static_cast<std::uint32_t>(ColliderShape::Capsule) ||
+        shape > static_cast<std::uint32_t>(fileVersion >= 40U ? ColliderShape::Mesh : ColliderShape::Capsule) ||
         !SceneAssetPrimitiveCodec::ReadVec3(input, output.center) ||
         !SceneAssetPrimitiveCodec::ReadVec3(input, output.boxSize) ||
         !input.ReadFloat(output.radius) ||
@@ -55,6 +55,8 @@ bool SceneAssetPhysicsComponentCodec::ReadCollider(SceneAssetBinaryIO::ByteReade
     }
     output.shape = static_cast<ColliderShape>(shape);
     output.trigger = trigger;
+    output.meshAssetId = 0;
+    if (fileVersion >= 40U && !input.ReadUInt64(output.meshAssetId)) return false;
     return true;
 }
 
@@ -68,6 +70,7 @@ void SceneAssetPhysicsComponentCodec::WriteCollider(std::vector<std::uint8_t>& o
     SceneAssetBinaryIO::WriteFloat(output, collider.friction);
     SceneAssetBinaryIO::WriteFloat(output, collider.restitution);
     SceneAssetBinaryIO::WriteUInt32(output, collider.layer);
+    SceneAssetBinaryIO::WriteUInt64(output, collider.meshAssetId);
 }
 
 bool SceneAssetPhysicsComponentCodec::ReadCharacterController(SceneAssetBinaryIO::ByteReader& input, CharacterControllerComponent& output) {

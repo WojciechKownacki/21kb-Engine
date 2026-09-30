@@ -28,6 +28,12 @@ struct SceneDocumentAdditiveLoadResult {
     SceneEntity root{};
 };
 
+struct SceneDocumentOwnedLoadResult {
+    bool succeeded = false;
+    // Owns only the incoming document; persistent roots remain outside it.
+    SceneEntity root{};
+};
+
 class SceneDocumentService {
 public:
     SceneDocumentService() = delete;
@@ -37,6 +43,7 @@ public:
     [[nodiscard]] static bool Save(const SceneDocument& document, const std::filesystem::path& path);
     [[nodiscard]] static SceneDocumentLoadResult Load(const std::filesystem::path& path);
     [[nodiscard]] static bool LoadIntoScene(Scene& scene, const SceneDocument& document);
+    [[nodiscard]] static SceneDocumentOwnedLoadResult LoadIntoSceneOwned(Scene& scene, const SceneDocument& document);
     [[nodiscard]] static bool LoadFileIntoScene(Scene& scene, const std::filesystem::path& path);
     [[nodiscard]] static SceneDocumentAdditiveLoadResult LoadIntoSceneAdditive(Scene& scene, const SceneDocument& document);
 };

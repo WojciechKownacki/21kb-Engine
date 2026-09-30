@@ -558,6 +558,12 @@
     },
     {
       "op": "stop"
+    },
+    {
+      "op": "assert_picker_close_buttons"
+    },
+    {
+      "op": "assert_ui_widget_features"
     }
   ]
 }

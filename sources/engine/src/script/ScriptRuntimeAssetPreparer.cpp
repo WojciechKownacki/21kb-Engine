@@ -11,8 +11,12 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <fstream>
+#include <iterator>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <system_error>
 #include <unordered_set>
 #include <utility>
 
@@ -90,6 +94,103 @@ void ScriptRuntimeAssetPreparer::SetNativePluginManager(NativeScriptPluginManage
 
 void ScriptRuntimeAssetPreparer::SetNativeSettings(ScriptRuntimeNativePrepareSettings settings) {
     nativeSettings_ = std::move(settings);
+}
+
+namespace {
+
+void MixNativeSourceSignature(std::uint64_t& signature, std::string_view text) noexcept {
+    for (const unsigned char byte : text) {
+        signature ^= byte;
+        signature *= 1099511628211ULL;
+    }
+}
+
+[[nodiscard]] bool HashNativeSourceAndIncludes(
+    const std::filesystem::path& file,
+    const std::filesystem::path& buildDirectory,
+    std::unordered_set<std::filesystem::path>& visited,
+    std::uint64_t& signature,
+    std::string& error) {
+    const std::filesystem::path normalized = file.lexically_normal();
+    if (!visited.insert(normalized).second) {
+        return true;
+    }
+    std::ifstream input{normalized, std::ios::binary};
+    if (!input) {
+        error = "native script source or included header is unavailable: " + normalized.string();
+        return false;
+    }
+    const std::string contents{std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
+    if (input.bad()) {
+        error = "native script source or included header could not be read: " + normalized.string();
+        return false;
+    }
+    MixNativeSourceSignature(signature, normalized.generic_string());
+    MixNativeSourceSignature(signature, contents);
+
+    std::string_view remaining{contents};
+    while (!remaining.empty()) {
+        const std::size_t end = remaining.find('\n');
+        std::string_view line = remaining.substr(0U, end);
+        remaining = end == std::string_view::npos ? std::string_view{} : remaining.substr(end + 1U);
+        const std::size_t first = line.find_first_not_of(" \t");
+        if (first == std::string_view::npos) {
+            continue;
+        }
+        line.remove_prefix(first);
+        if (!line.starts_with('#')) {
+            continue;
+        }
+        line.remove_prefix(1U);
+        const std::size_t directive = line.find_first_not_of(" \t");
+        if (directive == std::string_view::npos) {
+            continue;
+        }
+        line.remove_prefix(directive);
+        if (!line.starts_with("include") || line.size() == 7U ||
+            (line[7U] != ' ' && line[7U] != '\t' && line[7U] != '"')) {
+            continue;
+        }
+        line.remove_prefix(7U);
+        const std::size_t openingQuote = line.find_first_not_of(" \t");
+        if (openingQuote == std::string_view::npos || line[openingQuote] != '"') {
+            continue;
+        }
+        line.remove_prefix(openingQuote + 1U);
+        const std::size_t closingQuote = line.find('"');
+        if (closingQuote == std::string_view::npos) {
+            continue;
+        }
+        const std::filesystem::path included{line.substr(0U, closingQuote)};
+        std::filesystem::path dependency = normalized.parent_path() / included;
+        std::error_code fileError;
+        bool exists = std::filesystem::is_regular_file(dependency, fileError);
+        if (fileError && fileError != std::errc::no_such_file_or_directory) {
+            error = "native script include could not be inspected: " + dependency.string();
+            return false;
+        }
+        fileError.clear();
+        if (!exists) {
+            dependency = buildDirectory / included;
+            exists = std::filesystem::is_regular_file(dependency, fileError);
+            if (fileError && fileError != std::errc::no_such_file_or_directory) {
+                error = "native script include could not be inspected: " + dependency.string();
+                return false;
+            }
+        }
+        if (exists &&
+            !HashNativeSourceAndIncludes(dependency, buildDirectory, visited, signature, error)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+} // namespace
+
+void ScriptRuntimeAssetPreparer::InvalidateNativeSourceObservations() noexcept {
+    nativeSourceObservations_.clear();
+    failedNativeAssetBuilds_.clear();
 }
 
 ScriptRuntimeAssetPrepareResult ScriptRuntimeAssetPreparer::PrepareAsset(kb::assets::AssetId assetId) {
@@ -276,26 +377,100 @@ ScriptRuntimeAssetPrepareResult ScriptRuntimeAssetPreparer::PrepareLuaImportsRec
 ScriptRuntimeAssetPrepareResult ScriptRuntimeAssetPreparer::PrepareNativeBehaviourAsset(const kb::assets::AssetMetadata& metadata) {
     ScriptRuntimeAssetPrepareResult result{};
     ++result.visitedAssets;
-    const auto preparedNative = preparedNativeAssetHashes_.find(metadata.id.value);
-    if (preparedNative != preparedNativeAssetHashes_.end() && preparedNative->second == metadata.contentHash) {
-        ++result.preparedAssets;
-        return result;
+    const auto now = std::chrono::steady_clock::now();
+    const auto observation = nativeSourceObservations_.find(metadata.id.value);
+    if (observation != nativeSourceObservations_.end() && observation->second.descriptorHash == metadata.contentHash &&
+        now < observation->second.nextCheck) {
+        const auto prepared = preparedNativeAssetHashes_.find(metadata.id.value);
+        if (prepared != preparedNativeAssetHashes_.end() && prepared->second == observation->second.signature) {
+            ++result.preparedAssets;
+            return result;
+        }
+        const auto failed = failedNativeAssetBuilds_.find(metadata.id.value);
+        if (failed != failedNativeAssetBuilds_.end() && failed->second.first == observation->second.signature) {
+            AddDiagnostic(result, metadata.id, kb::scene::BehaviourBackend::Native, failed->second.second);
+            return result;
+        }
+    }
+    if (observation == nativeSourceObservations_.end()) {
+        const auto prepared = preparedNativeAssetHashes_.find(metadata.id.value);
+        if (prepared != preparedNativeAssetHashes_.end() && prepared->second == metadata.contentHash) {
+            ++result.preparedAssets;
+            return result;
+        }
     }
     const kb::assets::AssetHandle<NativeBehaviourDescriptor> descriptor = assets_.Load<NativeBehaviourDescriptor>(metadata.id);
     if (!descriptor.IsLoaded()) {
         AddDiagnostic(result, metadata.id, kb::scene::BehaviourBackend::Native, assets_.LastError().empty() ? "native behaviour descriptor could not be loaded" : assets_.LastError());
         return result;
     }
+    std::uint64_t signature = metadata.contentHash;
+    const bool packaged = metadata.physicalPath.empty() && !nativeSettings_.runtimeModuleRoot.empty();
+    if (packaged && (!descriptor->sourcePath.empty() || descriptor->build.enabled)) {
+        AddDiagnostic(result, metadata.id, kb::scene::BehaviourBackend::Native,
+            "packaged native behaviour contains authoring source or build instructions");
+        return result;
+    }
+    if (!descriptor->sourcePath.empty()) {
+        const std::filesystem::path sourcePath = descriptor->sourcePath.is_absolute()
+            ? descriptor->sourcePath : metadata.physicalPath.parent_path() / descriptor->sourcePath;
+        const std::filesystem::path buildDirectory = descriptor->build.workingDirectory.empty()
+            ? sourcePath.parent_path()
+            : (descriptor->build.workingDirectory.is_absolute() ? descriptor->build.workingDirectory
+                : metadata.physicalPath.parent_path() / descriptor->build.workingDirectory);
+        std::unordered_set<std::filesystem::path> visited;
+        std::string sourceError;
+        if (!HashNativeSourceAndIncludes(sourcePath, buildDirectory, visited, signature, sourceError)) {
+            AddDiagnostic(result, metadata.id, kb::scene::BehaviourBackend::Native, std::move(sourceError));
+            return result;
+        }
+        nativeSourceObservations_[metadata.id.value] = NativeSourceObservation{
+            .descriptorHash = metadata.contentHash,
+            .signature = signature,
+            .nextCheck = now + std::chrono::milliseconds{ 250 },
+        };
+    } else {
+        nativeSourceObservations_.erase(metadata.id.value);
+    }
+    const auto preparedNative = preparedNativeAssetHashes_.find(metadata.id.value);
+    if (preparedNative != preparedNativeAssetHashes_.end() && preparedNative->second == signature) {
+        ++result.preparedAssets;
+        return result;
+    }
+    const auto failedBuild = failedNativeAssetBuilds_.find(metadata.id.value);
+    if (failedBuild != failedNativeAssetBuilds_.end() && failedBuild->second.first == signature) {
+        AddDiagnostic(result, metadata.id, kb::scene::BehaviourBackend::Native, failedBuild->second.second);
+        return result;
+    }
     if (nativeSettings_.buildPlugins && descriptor->build.enabled) {
-        NativeScriptBuildResult built = NativeScriptBuildPipeline::Build(descriptor->build);
+        NativeScriptBuildDesc build = descriptor->build;
+        if (!build.workingDirectory.empty() && build.workingDirectory.is_relative()) {
+            build.workingDirectory = (metadata.physicalPath.parent_path() / build.workingDirectory).lexically_normal();
+        }
+        NativeScriptBuildResult built = NativeScriptBuildPipeline::Build(build);
         if (!built.Succeeded()) {
             const std::string message = built.errors.empty() ? "native script plugin build failed" : built.errors.front();
+            failedNativeAssetBuilds_[metadata.id.value] = { signature, message };
             AddDiagnostic(result, metadata.id, kb::scene::BehaviourBackend::Native, message);
             return result;
         }
     }
     if (nativeSettings_.loadPlugins && nativePlugins_ != nullptr && !descriptor->modulePath.empty()) {
-        const std::filesystem::path modulePath = descriptor->modulePath.is_absolute() ? descriptor->modulePath : metadata.physicalPath.parent_path() / descriptor->modulePath;
+        std::filesystem::path modulePath = descriptor->modulePath.is_absolute() ? descriptor->modulePath : metadata.physicalPath.parent_path() / descriptor->modulePath;
+        if (packaged) {
+            std::error_code pathError;
+            const auto root = std::filesystem::canonical(nativeSettings_.runtimeModuleRoot, pathError);
+            if (pathError || descriptor->modulePath.is_absolute()) {
+                AddDiagnostic(result, metadata.id, kb::scene::BehaviourBackend::Native, "packaged native module root or relative path is invalid");
+                return result;
+            }
+            modulePath = std::filesystem::canonical(root / descriptor->modulePath, pathError);
+            const auto relative = modulePath.lexically_relative(root);
+            if (pathError || relative.empty() || relative.is_absolute() || *relative.begin() == "..") {
+                AddDiagnostic(result, metadata.id, kb::scene::BehaviourBackend::Native, "packaged native module is missing or escapes its runtime root");
+                return result;
+            }
+        }
         NativeScriptPluginLoadResult loaded = nativePlugins_->LoadOrReload(NativeScriptPluginLoadDesc{
             .key = "asset:" + std::to_string(metadata.id.value),
             .modulePath = modulePath,
@@ -313,7 +488,8 @@ ScriptRuntimeAssetPrepareResult ScriptRuntimeAssetPreparer::PrepareNativeBehavio
         AddDiagnostic(result, metadata.id, kb::scene::BehaviourBackend::Native, "native behaviour descriptor symbol could not be bound");
         return result;
     }
-    preparedNativeAssetHashes_[metadata.id.value] = metadata.contentHash;
+    failedNativeAssetBuilds_.erase(metadata.id.value);
+    preparedNativeAssetHashes_[metadata.id.value] = signature;
     ++result.preparedAssets;
     return result;
 }

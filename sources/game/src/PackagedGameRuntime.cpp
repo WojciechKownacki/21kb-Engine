@@ -88,6 +88,12 @@ bool PackagedGameRuntime::Initialize(
 
     std::filesystem::path scenePath;
     std::size_t discoveredAssets = 0U;
+    if (scriptActive_) {
+        script_->Host()->AssetPreparer().SetNativeSettings({
+            .buildPlugins = false,
+            .runtimeModuleRoot = project.projectRoot,
+        });
+    }
     if (!LoadGameProjectScene(project, *scene, scenePath, discoveredAssets, diagnostics)) {
         script_ = nullptr;
         scriptActive_ = false;
@@ -100,6 +106,7 @@ bool PackagedGameRuntime::Initialize(
                 << " modules=" << scene->ActiveModuleCount() << '\n';
     project_ = std::move(project);
     scene_ = std::move(scene);
+    renderSceneSync_.Reset();
     return true;
 }
 
@@ -116,13 +123,19 @@ bool PackagedGameRuntime::Tick(
     static_cast<void>(scene_->UI().SetViewport(
         static_cast<float>(renderer.BackbufferWidth()),
         static_cast<float>(renderer.BackbufferHeight())));
+    renderSceneSync_.BeforeUpdate(*scene_);
     static_cast<void>(scene_->Runtime().Update(deltaSeconds));
-    if (renderer.BeginFrame()) {
-        renderer.SubmitScene(*scene_);
-        renderer.EndFrame();
-        if (frameSubmitted != nullptr) {
-            *frameSubmitted = true;
-        }
+    renderer.SetFrameDeltaSeconds(deltaSeconds);
+    if (!renderer.BeginFrame()) {
+        return false;
+    }
+    const bool submitted = renderSceneSync_.Submit(*scene_, renderer);
+    renderer.EndFrame();
+    if (!submitted) {
+        return false;
+    }
+    if (frameSubmitted != nullptr) {
+        *frameSubmitted = true;
     }
     return !scene_->Runtime().ShouldQuit();
 }
@@ -140,6 +153,7 @@ bool PackagedGameRuntime::Shutdown(
         renderer.ReleaseScene(*scene_);
     }
     scene_.reset();
+    renderSceneSync_.Reset();
     script_ = nullptr;
     scriptActive_ = false;
     project_ = {};

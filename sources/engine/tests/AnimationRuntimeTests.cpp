@@ -2344,6 +2344,63 @@ end
         Require(!snapshotRevisionRegressed.load(std::memory_order_acquire),
             "Concurrent readers must never observe an async debug snapshot revision regression");
 
+        const auto beforeDependencyChange = sceneA->Animators().DebugSnapshot();
+        Require(beforeDependencyChange && !beforeDependencyChange->instances.empty(),
+            "Compatibility cache test requires a live animator snapshot");
+        const auto checkedEntity = beforeDependencyChange->instances.front().entity;
+        const auto diagnosticCount = beforeDependencyChange->instances.front().compatibilityDiagnostics.size();
+        auto& registry = sceneA->Assets().Manager().Registry();
+        const auto skeletonFile = registry.Find(kb::assets::AssetId{
+            beforeDependencyChange->instances.front().skeletonAssetId })->physicalPath;
+        auto offlineSkeletonFile = skeletonFile;
+        offlineSkeletonFile += ".offline";
+        std::filesystem::rename(skeletonFile, offlineSkeletonFile);
+        static_cast<void>(sceneA->Runtime().Update(0.0F));
+        sceneA->Animators().WaitForDebugSnapshot();
+        const auto cachedDiagnostics = sceneA->Animators().DebugSnapshot();
+        std::filesystem::rename(offlineSkeletonFile, skeletonFile);
+        Require(cachedDiagnostics && cachedDiagnostics->Find(checkedEntity) &&
+            cachedDiagnostics->Find(checkedEntity)->compatibilityDiagnostics.size() == diagnosticCount,
+            "Unchanged animator diagnostics must use resident results until an asset refresh");
+        const auto originalMetadata = *registry.Find(kb::assets::AssetId{
+            beforeDependencyChange->instances.front().controllerAssetId });
+        auto changedMetadata = originalMetadata;
+        changedMetadata.dependencies.push_back(kb::assets::AssetId{ 0xCAFE1234U });
+        Require(registry.Upsert(std::move(changedMetadata)), "Could not change animator dependency metadata");
+        static_cast<void>(sceneA->Runtime().Update(0.0F));
+        sceneA->Animators().WaitForDebugSnapshot();
+        const auto changedDiagnostics = sceneA->Animators().DebugSnapshot();
+        Require(changedDiagnostics && changedDiagnostics->Find(checkedEntity) &&
+            changedDiagnostics->Find(checkedEntity)->compatibilityDiagnostics.size() == diagnosticCount + 1U,
+            "Animator compatibility diagnostics must invalidate after dependency metadata changes");
+        Require(registry.Upsert(originalMetadata), "Could not restore animator dependency metadata");
+        static_cast<void>(sceneA->Runtime().Update(0.0F));
+        sceneA->Animators().WaitForDebugSnapshot();
+        const auto restoredDiagnostics = sceneA->Animators().DebugSnapshot();
+        Require(restoredDiagnostics && restoredDiagnostics->Find(checkedEntity) &&
+            restoredDiagnostics->Find(checkedEntity)->compatibilityDiagnostics.size() == diagnosticCount,
+            "Animator compatibility diagnostics must clear a repaired dependency failure");
+
+        const auto removedAnimator = restoredDiagnostics->instances.back().entity;
+        Require(removedAnimator != checkedEntity, "Animator removal test requires two separate rigs");
+        sceneA->Entities().Destroy(checkedEntity);
+        Require(!sceneA->Animators().Exists(checkedEntity) &&
+            sceneA->Animators().Controller(checkedEntity) == 0U &&
+            sceneA->Animators().Parameters(checkedEntity).empty() &&
+            sceneA->Animators().RuntimeBindingGeneration(checkedEntity) == 0U &&
+            !sceneA->Animators().InstanceSkeleton(checkedEntity).has_value(),
+            "Destroyed rigs must stop exposing runtime state before the next animation update");
+        sceneA->Components().Animators().Remove(removedAnimator);
+        static_cast<void>(sceneA->Runtime().Update(0.0F));
+        sceneA->Animators().WaitForDebugSnapshot();
+        Require(!sceneA->Animators().Exists(checkedEntity) && !sceneA->Animators().Exists(removedAnimator) &&
+            sceneA->Entities().IsAlive(removedAnimator),
+            "Animator synchronization must discard destroyed entities and removed components while other rigs remain");
+        const auto afterRemoval = sceneA->Animators().DebugSnapshot();
+        Require(afterRemoval && afterRemoval->Find(checkedEntity) == nullptr &&
+            restoredDiagnostics->Find(checkedEntity) != nullptr,
+            "Removing a rig must publish its absence without mutating retained snapshots");
+
         std::uint64_t teardownAsyncSubmissions = 0U;
         for (std::uint32_t iteration = 0U; iteration < 8U; ++iteration) {
             const std::unique_ptr<kb::scene::Scene> ephemeral = buildScene();

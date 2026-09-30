@@ -10,6 +10,8 @@
 #include "scene/pipeline/MeshPipelineVisibility.hpp"
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstdint>
 #include <unordered_map>
 #include <unordered_set>
@@ -75,8 +77,32 @@ void EmitInstanceDiagnostic(
     return true;
 }
 
+[[nodiscard]] bool PassNeedsPerInstanceCandidateFilter(MeshPassType pass) noexcept {
+    switch (pass) {
+    case MeshPassType::ShadowDepth:
+    case MeshPassType::SelectionId:
+    case MeshPassType::EditorSelection:
+        return true;
+    case MeshPassType::Depth:
+    case MeshPassType::BaseOpaque:
+    case MeshPassType::GBuffer:
+    case MeshPassType::BaseTransparent:
+    case MeshPassType::MotionVectors:
+    case MeshPassType::Gizmo:
+        return false;
+    }
+    return true;
+}
+
 [[nodiscard]] std::uint64_t DetailSwitchKey(const SceneRenderMeshInstance& instance) noexcept {
     return instance.detailSwitchGroupId != 0U ? instance.detailSwitchGroupId : (instance.entityId ^ 0x9e3779b97f4a7c15ULL);
+}
+
+[[nodiscard]] bool ReversesWinding(const std::array<float, 16>& m) noexcept {
+    const double determinant = double(m[0]) * (double(m[5]) * m[10] - double(m[9]) * m[6])
+        - double(m[4]) * (double(m[1]) * m[10] - double(m[9]) * m[2])
+        + double(m[8]) * (double(m[1]) * m[6] - double(m[5]) * m[2]);
+    return determinant < 0.0;
 }
 
 struct DetailSwitchCandidate {
@@ -101,16 +127,16 @@ void ResolveDetailSwitchLevels(const MeshPassProcessorDesc& desc, MeshPipelineBu
         } else {
             mesh = desc.resolvedMeshResource;
         }
-        if (mesh == nullptr || mesh->lods.empty()) continue;
+        if (mesh == nullptr || mesh->lods.size() <= 1U) continue;
         for (const SceneRenderMeshInstance& instance : batch.instances) {
             if (!instance.detailSwitchEnabled) continue;
             const std::uint64_t key = DetailSwitchKey(instance);
             DetailSwitchCandidate& candidate = candidates[key];
             const std::uint8_t desired = MeshPipelineVisibility::SelectLodLevel(mesh, instance, desc.camera);
             candidate.desiredLod = std::min(candidate.desiredLod, desired);
-            const RenderBoundsSphere bounds = MeshPipelineVisibility::TransformBounds(mesh->bounds, instance.model);
-            const float depth = std::max(std::abs(MeshPipelineVisibility::ViewDepth(desc.camera, bounds)), bounds.radius);
-            candidate.coverage = std::max(candidate.coverage, std::clamp(bounds.radius / std::max(depth, 0.0001F), 0.0F, 1.0F));
+            const RenderBoundsSphere bounds = MeshPipelineVisibility::TransformBounds(
+                instance.boundsOverride.IsValid() ? instance.boundsOverride : mesh->bounds, instance.model);
+            candidate.coverage = std::max(candidate.coverage, MeshPipelineVisibility::ScreenCoverage(desc.camera, bounds));
             if (instance.entityId < candidate.policyEntityId) {
                 candidate.policyEntityId = instance.entityId;
                 candidate.minimumLod = instance.detailSwitchMinimumLod;
@@ -164,7 +190,10 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
     std::size_t writeCommandCount = 0U;
     std::uint32_t acceptedInstanceCount = 0U;
     for (const SceneMeshBatch& batch : desc.meshBatches) {
-        const std::uint32_t instanceCount = MeshPipelinePassPolicy::CountCandidateInstances(desc.pass, batch, desc.selectedEntityIds, cullingMask);
+        const bool wholeBatchIsCandidate = cullingMask == 0xFFFFFFFFU && !PassNeedsPerInstanceCandidateFilter(desc.pass);
+        const std::uint32_t instanceCount = wholeBatchIsCandidate
+            ? static_cast<std::uint32_t>(batch.instances.size())
+            : MeshPipelinePassPolicy::CountCandidateInstances(desc.pass, batch, desc.selectedEntityIds, cullingMask);
         if (instanceCount == 0U) {
             continue;
         }
@@ -219,9 +248,12 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
             }
             const std::pair<std::uint32_t, std::uint32_t> meshletRange = MeshPipelineVisibility::MeshletRangeForSection(meshResource, sectionIndex);
             result.commandLookupScratch.clear();
-            result.commandLookupScratch.reserve(instanceCount);
             std::uint32_t culledForSection = 0U;
-            for (SceneRenderMeshInstance instance : batch.instances) {
+            std::uint64_t lastMaterialAssetId = 0U;
+            MeshPipelineMaterialResolution lastMaterialResolution{};
+            std::size_t clusterIndex = 0U;
+            for (std::size_t instanceIndex = 0U; instanceIndex < batch.instances.size(); ++instanceIndex) {
+                const SceneRenderMeshInstance& instance = batch.instances[instanceIndex];
                 if (!MeshPipelinePassPolicy::CanEverContain(desc.pass, instance, desc.selectedEntityIds, cullingMask)) {
                     continue;
                 }
@@ -241,8 +273,30 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                 RenderMaterialHandle materialHandle{};
                 const RenderMaterialResource* materialResource = validateResources ? nullptr : desc.resolvedMaterialResource;
                 if (validateResources) {
-                    materialResource = MeshPipelineResourceResolver::ResolveMaterialOrFallback(instance, materialAssetId, *desc.resources, *desc.resourceMap, materialHandle, result.stats, desc.diagnostics);
-                    MeshPipelineResourceResolver::ValidateMaterialTextureOrFallback(instance, materialAssetId, materialResource, *desc.resources, *desc.resourceMap, result.stats, desc.diagnostics);
+                    if (materialAssetId == lastMaterialAssetId && lastMaterialResolution.resource != nullptr) {
+                        materialHandle = lastMaterialResolution.handle;
+                        materialResource = lastMaterialResolution.resource;
+                    } else {
+                        const auto cached = result.materialResolutionScratch.find(materialAssetId);
+                        if (cached != result.materialResolutionScratch.end()) {
+                            materialHandle = cached->second.handle;
+                            materialResource = cached->second.resource;
+                        } else {
+                            materialResource = MeshPipelineResourceResolver::ResolveMaterialOrFallback(instance, materialAssetId, *desc.resources, *desc.resourceMap, materialHandle, result.stats, desc.diagnostics);
+                            MeshPipelineResourceResolver::ValidateMaterialTextureOrFallback(instance, materialAssetId, materialResource, *desc.resources, *desc.resourceMap, result.stats, desc.diagnostics);
+                            if (materialHandle.IsValid() && materialResource != nullptr) {
+                                result.materialResolutionScratch.emplace(materialAssetId, MeshPipelineMaterialResolution{
+                                    .handle = materialHandle,
+                                    .resource = materialResource,
+                                });
+                            }
+                        }
+                        lastMaterialAssetId = materialAssetId;
+                        lastMaterialResolution = MeshPipelineMaterialResolution{
+                            .handle = materialHandle,
+                            .resource = materialHandle.IsValid() ? materialResource : nullptr,
+                        };
+                    }
                 }
                 if (PassDisablesAlphaBlend(desc.pass) && MeshPipelinePassPolicy::UsesDisabledAlphaBlend(materialResource)) {
                     // Blended materials are skipped from opaque/depth/shadow and render in the transparent
@@ -255,27 +309,43 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                 const RenderBoundsSphere localBounds = instance.boundsOverride.IsValid()
                     ? instance.boundsOverride
                     : (section.bounds.IsValid() ? section.bounds : (meshResource == nullptr ? RenderBoundsSphere{} : meshResource->bounds));
-                instance.worldBounds = MeshPipelineVisibility::TransformBounds(localBounds, instance.model);
-                const bool gpuDrivenCandidate = MeshPipelineGpuDrivenRecorder::IsCandidate(meshResource);
-                if (!MeshPipelineVisibility::IsInsideFrustum(frustum, instance.worldBounds)) {
-                    if (gpuDrivenCandidate) {
-                        MeshPipelineGpuDrivenRecorder::Record(result, instance, UINT32_MAX, selectedLod, meshletRange, false, false);
+                while (clusterIndex < batch.visibilityClusters.size() &&
+                    batch.visibilityClusters[clusterIndex].firstInstance < instanceIndex) ++clusterIndex;
+                if (clusterIndex < batch.visibilityClusters.size() &&
+                    batch.visibilityClusters[clusterIndex].firstInstance == instanceIndex &&
+                    localBounds.IsValid() && meshResource != nullptr && meshResource->lods.size() <= 1U &&
+                    !instance.detailSwitchEnabled && !batch.hasMaterialSlotOverrides) {
+                    const auto& cluster = batch.visibilityClusters[clusterIndex];
+                    auto bounds = cluster.origins;
+                    const auto& center = localBounds.center;
+                    bounds.radius += cluster.maximumScale * (localBounds.radius +
+                        std::sqrt(center[0]*center[0] + center[1]*center[1] + center[2]*center[2]));
+                    if (cluster.instanceCount != 0U && cluster.instanceCount <= batch.instances.size()-instanceIndex &&
+                        !MeshPipelineVisibility::IsInsideFrustum(frustum, bounds)) {
+                        culledForSection += cluster.instanceCount;
+                        instanceIndex += cluster.instanceCount - 1U;
+                        continue;
                     }
+                }
+                const RenderBoundsSphere worldBounds = MeshPipelineVisibility::TransformBounds(localBounds, instance.model);
+                const bool gpuDrivenCandidate = MeshPipelineGpuDrivenRecorder::IsCandidate(meshResource);
+                if (!MeshPipelineVisibility::IsInsideFrustum(frustum, worldBounds)) {
                     ++culledForSection;
                     continue;
                 }
                 if (desc.pass != MeshPassType::ShadowDepth && desc.pass != MeshPassType::Gizmo &&
-                    MeshPipelineVisibility::IsOccludedByVisibilityBlockers(desc.camera, instance.worldBounds, desc.visibilityBlockers)) {
-                    if (gpuDrivenCandidate) MeshPipelineGpuDrivenRecorder::Record(result, instance, UINT32_MAX, selectedLod, meshletRange, false, false);
+                    MeshPipelineVisibility::IsOccludedByVisibilityBlockers(desc.camera, worldBounds, desc.visibilityBlockers)) {
                     ++culledForSection;
                     continue;
                 }
-                instance.depthBucket = MeshPipelineVisibility::DepthBucket(MeshPipelineVisibility::ViewDepth(desc.camera, instance.worldBounds));
+                const std::uint16_t depthBucket = MeshPipelineVisibility::DepthBucket(MeshPipelineVisibility::ViewDepth(desc.camera, worldBounds));
                 const MeshCommandLookupKey commandKey{
                     .materialAssetId = materialAssetId,
                     .materialHandleValue = materialHandle.value,
                     .currentSkinningPalette = instance.currentSkinningPalette,
                     .previousSkinningPalette = instance.previousSkinningPalette,
+                    .reversedWinding = !(meshResource != nullptr && meshResource->doubleSided) &&
+                        !(materialResource != nullptr && materialResource->doubleSided) && ReversesWinding(instance.model),
                 };
                 const auto commandLookupIt = result.commandLookupScratch.find(commandKey);
                 MeshDrawCommand* command = commandLookupIt == result.commandLookupScratch.end() ? nullptr : &result.commands[commandLookupIt->second];
@@ -284,7 +354,7 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                     : static_cast<std::uint32_t>(commandLookupIt->second);
                 if (command == nullptr && desc.maxDrawCommands != 0U && writeCommandCount >= desc.maxDrawCommands) {
                     if (gpuDrivenCandidate) {
-                        MeshPipelineGpuDrivenRecorder::Record(result, instance, UINT32_MAX, selectedLod, meshletRange, true, true);
+                        MeshPipelineGpuDrivenRecorder::Record(result, instance.entityId, worldBounds, UINT32_MAX, selectedLod, meshletRange, true);
                     }
                     ++result.stats.droppedInstanceCount;
                     EmitInstanceDiagnostic(desc.diagnostics, SceneRenderDiagnosticKind::DroppedInstances, SceneRenderDiagnosticSeverity::Warning, instance, materialAssetId);
@@ -292,14 +362,21 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                 }
                 if (desc.maxVisibleInstances != 0U && acceptedInstanceCount >= desc.maxVisibleInstances) {
                     if (gpuDrivenCandidate) {
-                        MeshPipelineGpuDrivenRecorder::Record(result, instance, UINT32_MAX, selectedLod, meshletRange, true, true);
+                        MeshPipelineGpuDrivenRecorder::Record(result, instance.entityId, worldBounds, UINT32_MAX, selectedLod, meshletRange, true);
                     }
                     ++result.stats.droppedInstanceCount;
                     EmitInstanceDiagnostic(desc.diagnostics, SceneRenderDiagnosticKind::DroppedInstances, SceneRenderDiagnosticSeverity::Warning, instance, materialAssetId);
                     continue;
                 }
                 if (command == nullptr) {
-                    const std::uint64_t commandState = MeshPipelinePassPolicy::State(desc.pass, meshResource, materialResource, &section);
+                    std::uint64_t commandState = MeshPipelinePassPolicy::State(desc.pass, meshResource, materialResource, &section);
+                    if (commandKey.reversedWinding) {
+                        const auto cull = commandState & BGFX_STATE_CULL_MASK;
+                        if (cull == BGFX_STATE_CULL_CCW || cull == BGFX_STATE_CULL_CW) {
+                            commandState = (commandState & ~BGFX_STATE_CULL_MASK) |
+                                (cull == BGFX_STATE_CULL_CCW ? BGFX_STATE_CULL_CW : BGFX_STATE_CULL_CCW);
+                        }
+                    }
                     const std::uint64_t materialTextureDependencySignature = PassUsesMaterialTextureDependencies(desc.pass)
                         ? SceneMaterialTextureDependencySignature::Build(SceneMaterialTextureDependencyDesc{
                               .material = materialResource,
@@ -336,8 +413,6 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                     SceneCachedDrawCommandMaterializer::ApplyTemplate(cachedCommand, *command);
                     command->currentSkinningPalette = instance.currentSkinningPalette;
                     command->previousSkinningPalette = instance.previousSkinningPalette;
-                    command->instances.reserve(instanceCount);
-                    result.stats.meshPipelineScratchInstanceCapacity += static_cast<std::uint32_t>(command->instances.capacity());
                     result.commandLookupScratch.emplace(commandKey, writeCommandCount);
                     result.stats.meshCommandLookupCapacity = std::max<std::uint32_t>(
                         result.stats.meshCommandLookupCapacity,
@@ -346,11 +421,24 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                     ++writeCommandCount;
                 }
                 MeshPipelineGpuDrivenRecorder::AccumulateCandidateStats(result.stats, meshResource, meshletRange);
+                const std::uint32_t gpuDrivenRecordIndex = gpuDrivenCandidate
+                    ? static_cast<std::uint32_t>(result.gpuDrivenInputRecords.size()) : UINT32_MAX;
                 if (gpuDrivenCandidate) {
-                    MeshPipelineGpuDrivenRecorder::Record(result, instance, drawCommandIndex, selectedLod, meshletRange, true, false);
+                    MeshPipelineGpuDrivenRecorder::Record(result, instance.entityId, worldBounds, drawCommandIndex, selectedLod, meshletRange, false);
                 }
-                command->sortKey += instance.depthBucket;
-                command->instances.push_back(instance);
+                command->sortKey += depthBucket;
+                SceneRenderMeshInstance& accepted = command->instances.emplace_back(instance);
+                accepted.worldBounds = worldBounds;
+                accepted.depthBucket = depthBucket;
+                if (desc.pass == MeshPassType::BaseTransparent) {
+                    const float viewDepth = std::abs(MeshPipelineVisibility::ViewDepth(desc.camera, worldBounds));
+                    result.transparentInstanceScratch.push_back(MeshPipelineTransparentInstanceRef{
+                        .commandIndex = drawCommandIndex,
+                        .instanceIndex = static_cast<std::uint32_t>(command->instances.size() - 1U),
+                        .gpuDrivenRecordIndex = gpuDrivenRecordIndex,
+                        .viewDepth = std::isfinite(viewDepth) ? viewDepth : 0.0F,
+                    });
+                }
                 ++acceptedInstanceCount;
             }
 
@@ -358,7 +446,8 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
         }
     }
 
-    MeshPipelineCommandBuilder::FinalizeCommands(result, desc.pass, writeCommandCount);
+    MeshPipelineCommandBuilder::FinalizeCommands(result, desc.pass, writeCommandCount,
+        desc.maxDrawCommands, desc.diagnostics);
 }
 
 } // namespace kb::render

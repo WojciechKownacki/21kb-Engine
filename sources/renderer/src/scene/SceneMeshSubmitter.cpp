@@ -40,6 +40,28 @@ void BuildVisibilityBlockerInputs(const RenderScene& scene, std::vector<SceneRen
     return 9U;
 }
 
+[[nodiscard]] bool IsOpaqueNonTerrainBatch(
+    const SceneMeshBatch& batch,
+    const RenderResourceRegistry& resources,
+    const SceneRenderResourceMap& resourceMap) noexcept {
+    if (batch.hasMaterialSlotOverrides) {
+        return false;
+    }
+    const RenderMeshHandle meshHandle = resourceMap.ResolveMesh(batch.meshAssetId);
+    const RenderMeshResource* mesh = meshHandle.IsValid() ? resources.FindMesh(meshHandle) : nullptr;
+    if (mesh == nullptr || mesh->terrainLayerCount != 0U) return false;
+    const auto opaque = [&resources, &resourceMap](std::uint64_t id) {
+        // Zero resolves to the built-in opaque fallback in the mesh pipeline.
+        if (id == 0U) return true;
+        const auto* material = resources.FindMaterial(resourceMap.ResolveMaterial(id));
+        return material != nullptr && material->alphaMode != RenderMaterialAlphaMode::Blend;
+    };
+    if (batch.materialAssetId != 0U) return opaque(batch.materialAssetId);
+    return std::ranges::all_of(mesh->materialSlots, [&opaque](const auto& slot) {
+        return opaque(slot.defaultMaterialAssetId);
+    });
+}
+
 } // namespace
 
 bool SceneMeshSubmitter::Initialize() {
@@ -63,9 +85,11 @@ bool SceneMeshSubmitter::Initialize() {
 }
 
 void SceneMeshSubmitter::Shutdown() {
+    instanceBuffers_.Shutdown();
     gpuDrivenFrameResources_.Shutdown();
     gpuDrivenCullingPass_.Shutdown();
     passResources_.Shutdown();
+    for (auto& commands : passCommandScratch_) commands.clear();
     pipelineScratch_.detailSwitchLevels.clear();
     pipelineScratch_.detailSwitchPreviousLevels.clear();
     detailSwitchScene_ = nullptr;
@@ -164,6 +188,14 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
         return stats;
     }
 
+    auto& passCommands = passCommandScratch_.at(static_cast<std::size_t>(pass));
+    pipelineScratch_.commands.swap(passCommands);
+    struct RestorePassCommands {
+        std::vector<MeshDrawCommand>& active;
+        std::vector<MeshDrawCommand>& stored;
+        ~RestorePassCommands() { active.swap(stored); }
+    } restoreCommands{pipelineScratch_.commands, passCommands};
+
     const std::vector<SceneRenderDrawGroup>& drawGroups = renderScene.DrawGroups();
     std::vector<SceneRenderVisibilityBlocker> visibilityBlockers;
     BuildVisibilityBlockerInputs(renderScene, visibilityBlockers);
@@ -173,6 +205,11 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
         const auto& particleMeshBatches = particleMeshBatchBuilder_.Batches();
         meshBatchSubmissionScratch_.insert(
             meshBatchSubmissionScratch_.end(), particleMeshBatches.begin(), particleMeshBatches.end());
+    }
+    if (pass == MeshPassType::BaseTransparent) {
+        std::erase_if(meshBatchSubmissionScratch_, [&resources, &resourceMap](const SceneMeshBatch& batch) {
+            return IsOpaqueNonTerrainBatch(batch, resources, resourceMap);
+        });
     }
     SceneRenderSubmitStats lightingStats{};
     const PackedSceneLighting lighting = SceneLightingPacker::Build(renderScene, lightingStats, lightingConfig, camera);
@@ -252,6 +289,7 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
         .motionVectorPreviousViewProjection = motionVectorPreviousViewProjection,
         .skinningPaletteAllocator = skinningPaletteAllocator_,
         .passResources = passResources_,
+        .instanceBufferPool = &instanceBuffers_,
         .diagnostics = diagnostics,
         .stats = stats,
         });
@@ -268,7 +306,7 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
                 .source = TransparentDrawSource::Mesh,
                 .depthBucket = command.depthBucket,
                 .sourceIndex = index,
-                .stableTie = command.sortKey,
+                .stableTie = index,
             });
         }
         for (std::uint32_t index = 0U; index < particleBuild.batches.size(); ++index) {

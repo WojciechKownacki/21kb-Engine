@@ -12,7 +12,8 @@ public:
     MeshPipelineCommandBuilder() = delete;
 
     [[nodiscard]] static MeshDrawCommand& WritableCommand(MeshPipelineBuildResult& result, std::size_t index);
-    static void FinalizeCommands(MeshPipelineBuildResult& result, MeshPassType pass, std::size_t commandCount) noexcept;
+    static void FinalizeCommands(MeshPipelineBuildResult& result, MeshPassType pass, std::size_t commandCount,
+        std::uint32_t maxDrawCommands, SceneRenderDiagnostics* diagnostics) noexcept;
     static void CountCommandsAsSubmitted(SceneRenderSubmitStats& stats, const std::vector<MeshDrawCommand>& commands) noexcept;
 };
 

@@ -9,6 +9,7 @@
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/assets/ImportedAsset.hpp"
 #include "engine/assets/ImportedAssetLoader.hpp"
+#include "engine/assets/TerrainAssetIO.hpp"
 #include "engine/assets/bake/AssetPackWriter.hpp"
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
 #include "engine/assets/bake/RuntimeAssetManifest.hpp"
@@ -18,6 +19,8 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssetMeta.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/script/ScriptAsset.hpp"
+#include "engine/script/ScriptAssetLoader.hpp"
 #include "kb/render/ShaderManifest.hpp"
 #include "kb/render/bake/MeshBaker.hpp"
 #include "kb/render/bake/RuntimeAssetPackValidation.hpp"
@@ -1288,6 +1291,93 @@ struct WindowsRuntimeModuleSnapshot {
     return true;
 }
 
+using NativeRuntimeSources = std::unordered_map<std::uint64_t, std::vector<std::uint8_t>>;
+
+[[nodiscard]] bool PrepareNativeRuntimeSources(
+    const std::vector<kb::assets::AssetMetadata>& assets,
+    const SourceSnapshotMap& snapshots,
+    const std::filesystem::path& projectRoot,
+    std::string_view target,
+    std::vector<WindowsRuntimeModulePlan>& plans,
+    NativeRuntimeSources& sources,
+    std::string& error) {
+    for (const auto& metadata : assets) {
+        if (metadata.type != kb::script::ScriptAssetTypes::NativeBehaviour) continue;
+        std::vector<std::uint8_t> bytes;
+        if (!ReadSourceSnapshot(snapshots, metadata.id.value, bytes, error)) return false;
+        kb::script::NativeBehaviourDescriptorAssetLoader loader;
+        const auto loaded = loader.Load(kb::assets::AssetLoadRequest{
+            .metadata = metadata,
+            .resolvedPath = metadata.physicalPath,
+            .sourceBytes = std::span<const std::uint8_t>{bytes},
+        });
+        if (!loaded.Succeeded()) {
+            error = "native behaviour could not be cooked: " + loaded.error;
+            return false;
+        }
+        const auto descriptor = std::static_pointer_cast<kb::script::NativeBehaviourDescriptor>(loaded.asset);
+        std::filesystem::path packagedModule;
+        if (!descriptor->modulePath.empty()) {
+            if (target != "Windows.x64") {
+                error = "native behaviour DLL cannot be shipped for target " + std::string{target};
+                return false;
+            }
+            if (descriptor->build.enabled) {
+                auto build = descriptor->build;
+                if (build.workingDirectory.empty()) build.workingDirectory = projectRoot;
+                else if (build.workingDirectory.is_relative())
+                    build.workingDirectory = metadata.physicalPath.parent_path() / build.workingDirectory;
+                const auto built = kb::script::NativeScriptBuildPipeline::Build(build);
+                if (!built.Succeeded()) {
+                    error = "native behaviour build failed: " +
+                        (built.errors.empty() ? std::to_string(built.exitCode) : built.errors.front());
+                    return false;
+                }
+            }
+            const auto configured = descriptor->modulePath.is_absolute() ? descriptor->modulePath
+                : metadata.physicalPath.parent_path() / descriptor->modulePath;
+            std::error_code fileError;
+            const auto status = std::filesystem::symlink_status(configured, fileError);
+            std::filesystem::path relative;
+            if (fileError || status.type() != std::filesystem::file_type::regular ||
+                !CanonicalRelativePathWithin(configured, projectRoot, relative) ||
+                !IsSafeWindowsRuntimeModuleRelativePath(relative)) {
+                error = "native behaviour DLL must be a regular file inside the project: " +
+                    metadata.virtualPath.generic_string();
+                return false;
+            }
+            const auto sourcePath = projectRoot / relative;
+            const std::string key = WindowsPathKey(relative);
+            const auto existing = std::ranges::find_if(plans, [&](const auto& plan) {
+                return WindowsPathKey(plan.relativeDestination) == key;
+            });
+            if (existing == plans.end()) {
+                plans.push_back({.sourcePath = sourcePath, .relativeDestination = relative});
+            } else if (existing->sourcePath != sourcePath) {
+                error = "native behaviour DLL collides with another runtime module: " + relative.generic_string();
+                return false;
+            }
+            packagedModule = std::filesystem::path{kWindowsCustomRuntimeModuleDirectory} / relative;
+        }
+        std::istringstream input{std::string{bytes.begin(), bytes.end()}};
+        std::ostringstream output;
+        std::string line;
+        while (std::getline(input, line)) {
+            const auto begin = line.find_first_not_of(" \t\r");
+            const std::string_view trimmed = begin == std::string::npos ? std::string_view{} : std::string_view{line}.substr(begin);
+            const auto key = trimmed.substr(0U, trimmed.find_first_of("= \t\r"));
+            if (key == "source" || key == "build" || key == "build_working_directory" || key == "build_cwd" ||
+                key == "module" || key == "dll" || key == "library" || key == "shadow_copy") continue;
+            output << line << '\n';
+        }
+        if (!packagedModule.empty()) output << "module = " << packagedModule.generic_string() << '\n';
+        output << "shadow_copy = false\n";
+        const auto text = output.str();
+        sources.emplace(metadata.id.value, std::vector<std::uint8_t>{text.begin(), text.end()});
+    }
+    return true;
+}
+
 [[nodiscard]] bool StageWindowsRuntimeModules(
     const std::vector<WindowsRuntimeModulePlan>& plans,
     const std::filesystem::path& outputDirectory,
@@ -2024,6 +2114,13 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
     if (!asset_bake::TryFindBakeTargetProfile(request.targetProfileId, profile)) {
         return Failure("unknown target profile: " + request.targetProfileId);
     }
+    asset_bake::AssetPackReader reusePack;
+    if (!request.reusePackPath.empty()) {
+        const auto mounted = reusePack.Mount(request.reusePackPath);
+        if (mounted != asset_bake::AssetPackReadStatus::Success || !reusePack.MatchesTargetProfile(profile)) {
+            return Failure("texture reuse package is invalid or incompatible with the target profile");
+        }
+    }
     const std::filesystem::path projectRoot = projectFile.parent_path();
     const std::filesystem::path settingsPath =
         kb::project::ProjectSettingsStore::FilePath(projectRoot);
@@ -2083,52 +2180,6 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
     std::vector<WindowsRuntimeModulePlan> windowsRuntimeModulePlans;
     std::vector<WindowsRuntimeModuleSnapshot> windowsRuntimeModuleSnapshots;
     std::unique_ptr<ScopedCookDirectory> windowsRuntimeModuleCleanup;
-    if (profile.identifier == "Windows.x64") {
-        if (!PlanWindowsRuntimeModules(
-                packagedDescriptor, projectRoot, windowsRuntimeModulePlans, error)) {
-            return Failure(std::move(error));
-        }
-        if (!windowsRuntimeModulePlans.empty()) {
-            if (request.runtimeModulesOutputDirectory.empty()) {
-                return Failure(
-                    "Windows package has custom runtime modules but no staging directory was provided");
-            }
-            std::error_code outputError;
-            request.runtimeModulesOutputDirectory = std::filesystem::absolute(
-                request.runtimeModulesOutputDirectory, outputError).lexically_normal();
-            if (outputError || request.runtimeModulesOutputDirectory.filename().empty() ||
-                PathIsWithin(request.runtimeModulesOutputDirectory, projectRoot)) {
-                return Failure(
-                    "Windows runtime module staging directory must be outside the project snapshot");
-            }
-            const std::filesystem::file_status outputStatus =
-                std::filesystem::symlink_status(request.runtimeModulesOutputDirectory, outputError);
-            if (outputError && outputError != std::errc::no_such_file_or_directory) {
-                return Failure("Windows runtime module staging directory could not be inspected");
-            }
-            if (outputStatus.type() != std::filesystem::file_type::not_found) {
-                return Failure("Windows runtime module staging directory already exists");
-            }
-            outputError.clear();
-            std::filesystem::create_directories(
-                request.runtimeModulesOutputDirectory.parent_path(), outputError);
-            if (outputError ||
-                !std::filesystem::create_directory(
-                    request.runtimeModulesOutputDirectory, outputError) || outputError) {
-                return Failure(
-                    "Windows runtime module staging directory could not be created exclusively");
-            }
-            windowsRuntimeModuleCleanup =
-                std::make_unique<ScopedCookDirectory>(request.runtimeModulesOutputDirectory);
-            if (!StageWindowsRuntimeModules(
-                    windowsRuntimeModulePlans,
-                    request.runtimeModulesOutputDirectory,
-                    windowsRuntimeModuleSnapshots,
-                    error)) {
-                return Failure(std::move(error));
-            }
-        }
-    }
     if (request.cacheRoot.empty()) {
         request.cacheRoot = request.outputPackPath.parent_path() / ".kb-cook-cache" / request.targetProfileId;
     }
@@ -2188,6 +2239,58 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
         return Failure(std::move(error));
     }
 
+    if (profile.identifier == "Windows.x64" &&
+        !PlanWindowsRuntimeModules(packagedDescriptor, projectRoot, windowsRuntimeModulePlans, error)) {
+        return Failure(std::move(error));
+    }
+    NativeRuntimeSources nativeRuntimeSources;
+    if (!PrepareNativeRuntimeSources(assets, sourceSnapshots, projectRoot, profile.identifier,
+            windowsRuntimeModulePlans, nativeRuntimeSources, error)) {
+        return Failure(std::move(error));
+    }
+    if (profile.identifier == "Windows.x64") {
+        if (!windowsRuntimeModulePlans.empty()) {
+            if (request.runtimeModulesOutputDirectory.empty()) {
+                return Failure(
+                    "Windows package has custom runtime modules but no staging directory was provided");
+            }
+            std::error_code outputError;
+            request.runtimeModulesOutputDirectory = std::filesystem::absolute(
+                request.runtimeModulesOutputDirectory, outputError).lexically_normal();
+            if (outputError || request.runtimeModulesOutputDirectory.filename().empty() ||
+                PathIsWithin(request.runtimeModulesOutputDirectory, projectRoot)) {
+                return Failure(
+                    "Windows runtime module staging directory must be outside the project snapshot");
+            }
+            const std::filesystem::file_status outputStatus =
+                std::filesystem::symlink_status(request.runtimeModulesOutputDirectory, outputError);
+            if (outputError && outputError != std::errc::no_such_file_or_directory) {
+                return Failure("Windows runtime module staging directory could not be inspected");
+            }
+            if (outputStatus.type() != std::filesystem::file_type::not_found) {
+                return Failure("Windows runtime module staging directory already exists");
+            }
+            outputError.clear();
+            std::filesystem::create_directories(
+                request.runtimeModulesOutputDirectory.parent_path(), outputError);
+            if (outputError ||
+                !std::filesystem::create_directory(
+                    request.runtimeModulesOutputDirectory, outputError) || outputError) {
+                return Failure(
+                    "Windows runtime module staging directory could not be created exclusively");
+            }
+            windowsRuntimeModuleCleanup =
+                std::make_unique<ScopedCookDirectory>(request.runtimeModulesOutputDirectory);
+            if (!StageWindowsRuntimeModules(
+                    windowsRuntimeModulePlans,
+                    request.runtimeModulesOutputDirectory,
+                    windowsRuntimeModuleSnapshots,
+                    error)) {
+                return Failure(std::move(error));
+            }
+        }
+    }
+
     ScopedCookOutputLock outputLock;
     if (!outputLock.Acquire(request.outputPackPath, error)) {
         return Failure(std::move(error));
@@ -2205,6 +2308,7 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
     manifest.descriptor = std::move(packagedDescriptor);
     manifest.settings = settings;
     std::set<std::string> packagedPaths;
+    std::set<asset_bake::AssetBakeDigest> bakedTextures;
     ProjectCookResult result{};
 
     if (!AddFixedShaders(request, cookerToolInputs, profile, writer, manifest, packagedPaths, error)) {
@@ -2224,6 +2328,9 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
         if (!ReadSourceSnapshot(sourceSnapshots, metadata.id.value, fileBytes, error)) {
             return Failure("asset source snapshot could not be read: " + virtualPath + "\n" + error);
         }
+        if (const auto native = nativeRuntimeSources.find(metadata.id.value); native != nativeRuntimeSources.end()) {
+            fileBytes = native->second;
+        }
 
         asset_bake::RuntimeAssetManifestEntry entry{
             .id = metadata.id,
@@ -2241,6 +2348,9 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
             .dependencies = metadata.dependencies,
         };
 
+        std::ranges::transform(entry.sourceExtension, entry.sourceExtension.begin(), [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
         if (IsTextureAsset(metadata)) {
             kb::render::RenderTextureAssetLoader loader;
             const kb::assets::AssetLoadResult loaded = loader.Load(kb::assets::AssetLoadRequest{
@@ -2268,24 +2378,54 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
                 if (!asset_bake::HasTextureCompressionFamily(profile.textureCompressions, family)) {
                     continue;
                 }
-                const render_bake::TextureBakeOutput baked =
-                    render_bake::BakeTextureBytes(textureSource, textureSettings, profile, family, writer);
-                if (baked.status != render_bake::TextureBakeStatus::Success) {
-                    return Failure("texture cook failed for " + virtualPath + " family=" +
-                        std::string{ asset_bake::TextureCompressionFamilyName(family) } + " status=" +
-                        std::string{ render_bake::ToString(baked.status) } +
-                        (baked.status == render_bake::TextureBakeStatus::SinkRejected
-                                ? " sink=" + std::string{ asset_bake::ToString(baked.sinkStatus) }
-                                : std::string{}));
+                const auto textureKey = render_bake::MakeTextureBakeKey(textureSource, profile, family, textureSettings);
+                const auto digest = textureKey.Digest();
+                if (!bakedTextures.contains(digest)) {
+                    if (const auto* cached = reusePack.FindArtifact(digest); cached != nullptr) {
+                        std::vector<std::uint8_t> bytes;
+                        if (cached->assetTypeId != render_bake::kTextureBakedAssetTypeId ||
+                            cached->blocks.size() != 1U ||
+                            cached->blocks[0].name != asset_bake::kBakedAssetPrimaryBlockName ||
+                            reusePack.ReadBlock(*cached, asset_bake::kBakedAssetPrimaryBlockName, bytes) !=
+                                asset_bake::AssetPackReadStatus::Success) {
+                            return Failure("cached texture artifact is invalid: " + virtualPath);
+                        }
+                        const asset_bake::BakedAssetDescriptor cachedDescriptor{
+                            .key = textureKey, .assetTypeId = cached->assetTypeId,
+                        };
+                        if (writer.BeginAsset(cachedDescriptor) != asset_bake::BakedAssetSinkStatus::Success ||
+                            writer.WritePrimaryBlock(bytes, profile.packageBlockAlignmentBytes) != asset_bake::BakedAssetSinkStatus::Success ||
+                            writer.CommitAsset() != asset_bake::BakedAssetSinkStatus::Success) {
+                            writer.AbortAsset();
+                            return Failure("cached texture could not be stored: " + virtualPath);
+                        }
+                        diagnostics << "reusing texture: " << virtualPath << " family="
+                                    << asset_bake::TextureCompressionFamilyName(family) << '\n';
+                    } else {
+                        diagnostics << "cooking texture: " << virtualPath << " family="
+                                    << asset_bake::TextureCompressionFamilyName(family) << '\n';
+                        diagnostics.flush();
+                        const render_bake::TextureBakeOutput baked =
+                            render_bake::BakeTextureBytes(textureSource, textureSettings, profile, family, writer);
+                        if (baked.status != render_bake::TextureBakeStatus::Success) {
+                            return Failure("texture cook failed for " + virtualPath + " family=" +
+                                std::string{ asset_bake::TextureCompressionFamilyName(family) } + " status=" +
+                                std::string{ render_bake::ToString(baked.status) } +
+                                (baked.status == render_bake::TextureBakeStatus::SinkRejected
+                                        ? " sink=" + std::string{ asset_bake::ToString(baked.sinkStatus) }
+                                        : std::string{}));
+                        }
+                    }
+                    bakedTextures.insert(digest);
                 }
                 entry.artifacts.push_back(asset_bake::RuntimeArtifactReference{
-                    .digest = baked.key.Digest(),
+                    .digest = digest,
                     .encoding = asset_bake::RuntimeArtifactEncoding::BakedTexture,
                     .qualifier = std::string{ asset_bake::TextureCompressionFamilyName(family) },
                 });
                 ++result.textureArtifactCount;
             }
-        } else if (IsMeshAsset(metadata)) {
+        } else if (IsMeshAsset(metadata) && entry.sourceExtension != kb::assets::kTerrainAssetExtension) {
             kb::render::RenderMeshAssetLoader loader;
             const kb::assets::AssetLoadResult loaded = loader.Load(kb::assets::AssetLoadRequest{
                 .metadata = metadata,
@@ -2311,6 +2451,10 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
             });
             ++result.meshArtifactCount;
         } else {
+            // Terrain heights, holes and layer weights are its compact runtime representation.
+            if (IsMeshAsset(metadata) && !kb::assets::TerrainAssetIO::Load(fileBytes, &error)) {
+                return Failure("terrain could not be validated for cooking: " + virtualPath + "\n" + error);
+            }
             asset_bake::AssetBakeDigest digest{};
             const std::string sourceSettings = metadata.type + ":" + entry.sourceExtension;
             if (!StoreSourceFile(writer, profile, fileBytes, sourceSettings, digest, error)) {
@@ -2385,6 +2529,7 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
         return Failure(std::move(error));
     }
     static_cast<void>(manifestDigest);
+    reusePack.Unmount();
     const asset_bake::BakedAssetSinkStatus finish = writer.Finish();
     if (finish != asset_bake::BakedAssetSinkStatus::Success) {
         return Failure("package publication failed: " + std::string{ asset_bake::ToString(finish) });

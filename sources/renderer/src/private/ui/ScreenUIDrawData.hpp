@@ -54,6 +54,8 @@ struct ScreenUIDrawStyle {
     float feather = 0.0F;
     float fontOutlineWidth = 0.0F;
     float blurStrength = 0.0F;
+    // Pixels over which the clip rectangle fades this batch out towards its edge; 0 is a hard edge.
+    float clipSoftness = 0.0F;
     ScreenUIFragmentKind fragmentKind = ScreenUIFragmentKind::Shape;
 
     [[nodiscard]] bool operator==(const ScreenUIDrawStyle&) const noexcept = default;

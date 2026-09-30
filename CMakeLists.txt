@@ -442,3 +442,9 @@ if(KB_BUILD_EDITOR)
     add_subdirectory(sources/editor editor)
     add_subdirectory(sources/hub hub)
 endif()
+
+# Optional performance harness; use benchmarks/openworld for the repository harness.
+set(KB_PERFORMANCE_SOURCE_DIR "" CACHE PATH "Directory containing the performance harness")
+if(KB_PERFORMANCE_SOURCE_DIR)
+    add_subdirectory("${KB_PERFORMANCE_SOURCE_DIR}" performance)
+endif()

@@ -2,7 +2,10 @@
 
 #include "engine/ecs/Entity.hpp"
 
+#include <cstddef>
+#include <limits>
 #include <span>
+#include <unordered_map>
 #include <vector>
 
 struct ecs_world_t;
@@ -20,7 +23,11 @@ public:
     [[nodiscard]] std::vector<Entity> AliveEntities(const ecs_world_t* world) const;
 
 private:
+    static constexpr std::size_t kInvalidPosition = std::numeric_limits<std::size_t>::max();
+
     std::vector<Entity> entities_;
+    std::vector<std::size_t> densePositions_;
+    std::unordered_map<Entity::IdType, std::size_t> positions_;
 };
 
 } // namespace kb::ecs

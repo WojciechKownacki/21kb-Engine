@@ -228,6 +228,17 @@ void EditorSceneBgfxViewport::SetAaTraceReporter(std::function<void(std::string_
     aaTraceReporter_ = std::move(reporter);
 }
 
+bool EditorSceneBgfxViewport::RequestPresentedCapture(HWND host, std::uint64_t key, std::string_view path) {
+    HostSurface* surface = hostSurfaceStore_.Find(host, key);
+    if (!renderer_.IsInitialized() || surface == nullptr || !surface->presentTarget.IsValid() ||
+        path.empty() || path.find('\0') != std::string_view::npos || bgfx::getRendererType() == bgfx::RendererType::Noop) {
+        return false;
+    }
+    const std::string filePath{path};
+    bgfx::requestScreenShot(surface->presentTarget.FrameBuffer(), filePath.c_str());
+    return true;
+}
+
 void EditorSceneBgfxViewport::SetGraphShaderCacheRoot(std::string root) {
     if (graphShaderCacheRoot_ == root) {
         return;
@@ -422,6 +433,10 @@ void EditorSceneBgfxViewport::ReleaseScene(
 
 std::uint32_t EditorSceneBgfxViewport::RendererCompletedFrame() const noexcept {
     return renderer_.LastCompletedFrame();
+}
+
+render::SceneRenderSubmitStats EditorSceneBgfxViewport::LastSceneSubmitStats() const noexcept {
+    return renderer_.LastSceneSubmitStats();
 }
 
 bool EditorSceneBgfxViewport::AdvanceAsyncReadbacks() {
