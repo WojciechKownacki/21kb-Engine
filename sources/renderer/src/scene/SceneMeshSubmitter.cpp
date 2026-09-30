@@ -90,6 +90,7 @@ void SceneMeshSubmitter::Shutdown() {
     gpuDrivenCullingPass_.Shutdown();
     passResources_.Shutdown();
     for (auto& commands : passCommandScratch_) commands.clear();
+    for (auto& reuse : passCommandReuse_) reuse.Reset();
     pipelineScratch_.detailSwitchLevels.clear();
     pipelineScratch_.detailSwitchPreviousLevels.clear();
     detailSwitchScene_ = nullptr;
@@ -217,9 +218,28 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
     if (detailSwitchScene_ != &renderScene) {
         pipelineScratch_.detailSwitchLevels.clear();
         pipelineScratch_.detailSwitchPreviousLevels.clear();
+        ++pipelineScratch_.detailSwitchHistoryRevision;
         detailSwitchScene_ = &renderScene;
     }
-    MeshPipelineProcessor::BuildInto(MeshPipelineBuildDesc{
+    auto& reuse = passCommandReuse_.at(static_cast<std::size_t>(pass));
+    const bool reuseAllowed = pass != MeshPassType::BaseTransparent && selectedEntityIds.empty() &&
+        renderScene.VisibilityBlockerProxyCount() == 0U &&
+        (particleSnapshot == nullptr || particleSnapshot->Emitters().empty());
+    const SceneMeshCommandReuseKey reuseKey{
+        .sceneRevision = renderScene.MeshContentRevision(),
+        .resourceRevision = resources.Revision(),
+        .bindingRevision = resourceMap.Revision(),
+        .detailSwitchHistoryRevision = pipelineScratch_.detailSwitchHistoryRevision,
+        .resources = &resources, .bindings = &resourceMap,
+        .camera = SceneMeshCullingCamera(camera),
+        .budget = drawBudget, .gpuSupport = gpuDrivenSupport, .terrainLayersOnly = terrainLayersOnly,
+    };
+    const auto diagnosticCount = diagnostics == nullptr ? 0U : diagnostics->events.size();
+    if (reuseAllowed && reuse.Matches(reuseKey)) {
+        pipelineScratch_.stats = reuse.Stats();
+    } else {
+        reuse.Reset();
+        MeshPipelineProcessor::BuildInto(MeshPipelineBuildDesc{
         .pass = pass,
         .meshBatches = &meshBatchSubmissionScratch_,
         .resources = &resources,
@@ -233,7 +253,13 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
         .selectedEntityIds = selectedEntityIds,
         .gpuDrivenSupport = gpuDrivenSupport,
         .terrainLayersOnly = terrainLayersOnly,
-    }, pipelineScratch_);
+        }, pipelineScratch_);
+        if (reuseAllowed && (diagnostics == nullptr || diagnosticCount == diagnostics->events.size())) {
+            auto committedKey = reuseKey;
+            committedKey.detailSwitchHistoryRevision = pipelineScratch_.detailSwitchHistoryRevision;
+            reuse.Commit(committedKey, pipelineScratch_.commands, pipelineScratch_.stats);
+        }
+    }
     stats = pipelineScratch_.stats;
     stats.sceneLightCount = lightingStats.sceneLightCount;
     stats.submittedForwardLightCount = lightingStats.submittedForwardLightCount;

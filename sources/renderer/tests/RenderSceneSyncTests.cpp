@@ -50,6 +50,7 @@
 #include "scene/lighting/SceneLightingPacker.hpp"
 #include "scene/SceneLightColor.hpp"
 #include "scene/SceneRenderVisibilityPublisher.hpp"
+#include "shadow/ShadowCasterBoundsCollector.hpp"
 
 #include <algorithm>
 #include <array>
@@ -2458,6 +2459,32 @@ void RunDirectionalShadowPlannerSkipsNonShadowCastingLightsTest() {
 }
 
 void RunDirectionalShadowCameraCoverageTest() {
+    RenderScene generated;
+    GeometrySwarmRenderProxyDesc swarm{.entityId = 91U, .meshAssetId = 42U};
+    swarm.model[0] = swarm.model[5] = swarm.model[10] = swarm.model[15] = 1.0F;
+    swarm.instanceCount = 256U;
+    swarm.columns = 16U;
+    swarm.layers = 16U;
+    swarm.spacing = {4.0F, 1.0F, 4.0F};
+    static_cast<void>(generated.UpsertGeometrySwarm(swarm));
+    RenderResourceRegistry generatedResources;
+    SceneRenderResourceMap generatedResourceMap;
+    const auto generatedBounds = ShadowCasterBoundsCollector::Collect(generated, generatedResources, generatedResourceMap, 1U);
+    Require(generatedBounds.casterCount == swarm.instanceCount && generatedBounds.bounds.IsValid(),
+        "Generated instances must contribute to shadow depth coverage");
+    for (const auto& group : generated.DrawGroups()) for (const auto& instance : group.instances) {
+        const auto& center = generatedBounds.bounds.center;
+        const float dx = instance.model[12]-center[0], dy = instance.model[13]-center[1], dz = instance.model[14]-center[2];
+        Require(std::sqrt(dx*dx+dy*dy+dz*dz)+1.0F <= generatedBounds.bounds.radius+0.001F,
+            "Shadow bounds excluded a generated instance");
+    }
+    swarm.castsShadow = false;
+    static_cast<void>(generated.UpsertGeometrySwarm(swarm));
+    const auto receiverBounds = ShadowCasterBoundsCollector::Collect(generated, generatedResources, generatedResourceMap, 1U);
+    Require(receiverBounds.casterCount == 0U && receiverBounds.bounds.IsValid(),
+        "Generated receivers must preserve coverage without consuming caster count");
+    Require(!ShadowCasterBoundsCollector::Collect(generated, generatedResources, generatedResourceMap, 2U).bounds.IsValid(),
+        "Generated shadow coverage ignored the camera layer mask");
     RenderScene scene;
     MeshRenderProxyDesc mesh{ .entityId = 1U, .meshAssetId = 42U };
     mesh.model[0] = mesh.model[5] = mesh.model[10] = mesh.model[15] = 1.0F;

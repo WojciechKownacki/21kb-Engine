@@ -83,6 +83,7 @@ void MixU64(std::uint64_t& seed, std::uint64_t value) noexcept {
 }
 
 void ResetCommandKeepingInstanceStorage(MeshDrawCommand& command) noexcept {
+    command.instanceRevision = 0U;
     command.pass = MeshPassType::BaseOpaque;
     command.meshAssetId = 0U;
     command.materialAssetId = 0U;

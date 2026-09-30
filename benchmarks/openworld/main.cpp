@@ -255,6 +255,43 @@ void Generate(const std::filesystem::path& root) {
             std::cout << "Generated " << c.name << std::endl;
         }
     }
+    const auto cell = Document(Case{.name="MixedStreamCell", .objects=10000, .meshes=true, .spacing=8.0F}, sphereId);
+    Require(SceneDocumentService::Save(cell,root/"Assets/Scenes/MixedStreamCell.21kbscene"),"Mixed cell save failed");
+    std::ofstream flight(root/"Assets/Scripts/MixedStreamFlyby.lua");
+    flight << "local frame = 0\nfunction Tick(self, dt)\n  frame = frame + 1\n  local p = frame % 1200\n"
+        << "  self:SetProperty(\"Transform\", \"localPosition.z\", -40 + math.min(p, 1200-p) * 1.25)\nend\n";
+    flight.close();
+    static_cast<void>(author.Assets().Discover());
+    const auto* cellAsset=author.Assets().Manager().Registry().FindByPath("/Game/Scenes/MixedStreamCell.21kbscene");
+    const auto* flightAsset=author.Assets().Manager().Registry().FindByPath("/Game/Scripts/MixedStreamFlyby.lua");
+    Require(cellAsset!=nullptr && flightAsset!=nullptr,"Mixed streaming assets were not discovered");
+    auto mixed=Document(Case{.name="mixed_stream_10k", .objects=10000, .statics=10000, .dynamics=512,
+        .lights=128, .active=true, .meshes=true, .shadows=true, .spacing=8.0F},meshId,true);
+    for(std::uint32_t i=0;i<mixed.worldPrefab.NodeCount();++i) {
+        auto* node=mixed.worldPrefab.TryGetMutableNode(i);
+        if(node->name=="BenchmarkCamera") {
+            node->components.behaviour=BehaviourComponent{.behaviourAssetId=flightAsset->id.value,.backend=BehaviourBackend::Lua};
+            node->components.streamFocus=StreamFocusComponent{.innerRadius=180.0F,.outerRadius=280.0F};
+        }
+        if(node->components.rigidbody) {
+            node->transform.localPosition.y+=5.0F;
+            node->components.collider->restitution=0.99F; node->components.collider->friction=0.0F;
+            node->components.rigidbody->linearVelocity={1.0F,15.0F,0.5F};
+        }
+    }
+    ScenePrefabNodeDesc cellOwner; cellOwner.name="StreamCellOwner"; cellOwner.parentNode=0U;
+    cellOwner.components.contentInstance=ContentInstanceComponent{.assetId=cellAsset->id.value,.kind=ContentInstanceKind::Subscene};
+    static_cast<void>(mixed.worldPrefab.AddNode(std::move(cellOwner)));
+    ScenePrefabNodeDesc plants; plants.name="MixedVegetation"; plants.parentNode=0U;
+    plants.components.geometrySwarm=GeometrySwarmComponent{.meshAssetId=plantId,.instanceCount=100000,
+        .columns=316,.rows=1,.layers=317,.spacing={2.0F,0.0F,2.0F},.castsShadow=false,.enabled=true};
+    static_cast<void>(mixed.worldPrefab.AddNode(std::move(plants)));
+    Require(SceneDocumentService::Save(mixed,root/"Assets/Scenes/mixed_stream_10k.21kbscene"),"Mixed scene save failed");
+    std::ofstream mixedManifest(root/"Benchmarks/mixed_manifest.json");
+    mixedManifest << "{\"base_entities\":" << mixed.worldPrefab.NodeCount()
+        << ",\"streamed_entities\":" << cell.worldPrefab.NodeCount()+1U
+        << ",\"plant_instances\":100000,\"dynamic_bodies\":512,\"point_lights\":128}";
+    std::cout << "Generated mixed_stream_10k: geometry, active physics, 128 lights, shadows, vegetation, async streaming\n";
 }
 void Cpu(const std::filesystem::path& root,const Case& c,unsigned repetition,bool trace=false) {
     std::filesystem::create_directories(root/"Results/raw");

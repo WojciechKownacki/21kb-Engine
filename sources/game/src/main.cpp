@@ -9,6 +9,7 @@
 #include "engine/platform/win32/Win32XInputHapticsBackend.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneLoadedContent.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneUI.hpp"
 #include "engine/script/ScriptModule.hpp"
@@ -55,6 +56,7 @@ struct GameOptions {
     bool fullscreen = false;
     bool headless = false;
     bool uncapped = false;
+    bool profileFixedStep = false;
     std::filesystem::path profilePath;
     std::optional<kb::render::SceneRenderLightingPath> profileLighting;
     std::filesystem::path screenshotPath;
@@ -93,6 +95,14 @@ struct GameFrameProfile {
     std::uint32_t lightingPath = 0U;
     std::uint32_t shadowDraws = 0U;
     std::uint64_t instanceUploadBytes = 0U;
+    double transformMilliseconds = 0.0;
+    double sceneSyncMilliseconds = 0.0;
+    std::uint32_t transformInspected = 0U;
+    std::uint32_t transformUpdated = 0U;
+    std::uint32_t meshCommandReuseCount = 0U;
+    std::uint32_t sceneEntities = 0U;
+    std::uint32_t streamingOperations = 0U;
+    double streamingMilliseconds = 0.0;
 };
 
 [[nodiscard]] bool HasPrefix(std::wstring_view value, std::wstring_view prefix) noexcept {
@@ -168,6 +178,8 @@ struct GameFrameProfile {
             options.uncapped = true;
         } else if (argument == L"--headless") {
             options.headless = true;
+        } else if (argument == L"--profile-fixed-step") {
+            options.profileFixedStep = true;
         } else if (HasPrefix(argument, L"--screenshot-file=")) {
             if (argument.size() == 18U) {
                 std::cerr << "kb_game: --screenshot-file requires a path\n";
@@ -202,6 +214,10 @@ struct GameFrameProfile {
     }
     if (options.headless && options.fullscreen) {
         std::cerr << "kb_game: --headless cannot use --fullscreen\n";
+        return false;
+    }
+    if (options.profileFixedStep && (!options.headless || options.profilePath.empty())) {
+        std::cerr << "kb_game: --profile-fixed-step requires --headless and --profile-file\n";
         return false;
     }
     if (options.fullscreen && (explicitWidth || explicitHeight)) {
@@ -359,7 +375,7 @@ int RunGame(const GameOptions& options) {
             return EXIT_FAILURE;
         }
         profileOutput.imbue(std::locale::classic());
-        profileOutput << "frame,cpu_ms,simulation_ms,render_ms,begin_submit_ms,end_frame_ms,gpu_delayed_ms,bgfx_wait_render_ms,bgfx_wait_submit_ms,draws,shadow_casters,submitted_meshes,dropped,missing_resources,fixed_steps,exposure_readback_submitted,exposure_sample_available,width,height,wall_frame_ms,visible_meshes,culled_instances,scene_lights,submitted_lights,skipped_lights,light_capacity,lighting_path,shadow_draws,instance_upload_bytes\n";
+        profileOutput << "frame,cpu_ms,simulation_ms,render_ms,begin_submit_ms,end_frame_ms,gpu_delayed_ms,bgfx_wait_render_ms,bgfx_wait_submit_ms,draws,shadow_casters,submitted_meshes,dropped,missing_resources,fixed_steps,exposure_readback_submitted,exposure_sample_available,width,height,wall_frame_ms,visible_meshes,culled_instances,scene_lights,submitted_lights,skipped_lights,light_capacity,lighting_path,shadow_draws,instance_upload_bytes,transform_ms,scene_sync_ms,transform_inspected,transform_updated,mesh_command_reuse,scene_entities,streaming_operations,streaming_ms\n";
         profileRows.reserve(options.frameLimit);
     }
     kb::input::Win32XInputHapticsBackend hapticsBackend;
@@ -393,7 +409,7 @@ int RunGame(const GameOptions& options) {
         const auto profileBegin = !options.profilePath.empty()
             ? now : std::chrono::steady_clock::time_point{};
         const double wallFrameMilliseconds = std::chrono::duration<double, std::milli>(now - previousTick).count();
-        const float deltaSeconds = kb::game::RuntimeDeltaSeconds(previousTick, now);
+        const float deltaSeconds = options.profileFixedStep ? 1.0F / 60.0F : kb::game::RuntimeDeltaSeconds(previousTick, now);
         previousTick = now;
 
         if (!options.headless) inputCollector.Collect(scene.Input().MutableDeviceState(), window.Handle());
@@ -486,6 +502,14 @@ int RunGame(const GameOptions& options) {
                 .lightingPath = renderStats.lightingPath,
                 .shadowDraws = renderStats.submittedShadowDrawCallCount,
                 .instanceUploadBytes = renderStats.instanceUploadBytes,
+                .transformMilliseconds = static_cast<double>(scene.Runtime().HotPathReport().runtimeTransformSyncNanoseconds) / 1e6,
+                .sceneSyncMilliseconds = renderer.LastSceneSynchronizationMilliseconds(),
+                .transformInspected = static_cast<std::uint32_t>(scene.Runtime().HotPathReport().transformHierarchyInspectedCount),
+                .transformUpdated = static_cast<std::uint32_t>(scene.Runtime().HotPathReport().transformHierarchyUpdatedCount),
+                .meshCommandReuseCount = renderStats.meshCommandReuseCount,
+                .sceneEntities = static_cast<std::uint32_t>(scene.Entities().Count()),
+                .streamingOperations = static_cast<std::uint32_t>(scene.LoadedContent().StreamingStats().operations),
+                .streamingMilliseconds = scene.LoadedContent().StreamingStats().milliseconds,
             });
         }
         if (!submitted || renderErrors) {
@@ -544,7 +568,10 @@ int RunGame(const GameOptions& options) {
                           << row.width << ',' << row.height << ',' << row.wallFrameMilliseconds << ','
                           << row.visibleMeshes << ',' << row.culledInstances << ',' << row.sceneLights << ','
                           << row.submittedLights << ',' << row.skippedLights << ',' << row.lightCapacity << ','
-                          << row.lightingPath << ',' << row.shadowDraws << ',' << row.instanceUploadBytes << '\n';
+                          << row.lightingPath << ',' << row.shadowDraws << ',' << row.instanceUploadBytes << ','
+                          << row.transformMilliseconds << ',' << row.sceneSyncMilliseconds << ','
+                          << row.transformInspected << ',' << row.transformUpdated << ',' << row.meshCommandReuseCount << ','
+                          << row.sceneEntities << ',' << row.streamingOperations << ',' << row.streamingMilliseconds << '\n';
         }
         profileOutput.flush();
         if (!profileOutput) {

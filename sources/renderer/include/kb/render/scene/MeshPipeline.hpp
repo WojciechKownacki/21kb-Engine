@@ -54,6 +54,8 @@ struct MeshDrawCommand {
     RenderSkinningPaletteHandle currentSkinningPalette{};
     RenderSkinningPaletteHandle previousSkinningPalette{};
     std::vector<SceneRenderMeshInstance> instances;
+    // Nonzero only for a successfully validated, retained instance list.
+    std::uint64_t instanceRevision = 0U;
 };
 
 struct MeshPipelineBuildDesc {
@@ -118,6 +120,7 @@ struct MeshPipelineBuildResult {
     // component data; caller reuse preserves hysteresis across submissions.
     std::unordered_map<std::uint64_t, std::uint8_t> detailSwitchLevels;
     std::unordered_map<std::uint64_t, std::uint8_t> detailSwitchPreviousLevels;
+    std::uint64_t detailSwitchHistoryRevision = 1U;
     SceneRenderSubmitStats stats{};
 };
 

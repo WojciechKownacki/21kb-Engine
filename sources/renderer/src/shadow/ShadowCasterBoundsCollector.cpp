@@ -2,6 +2,7 @@
 
 #include "kb/render/resources/RenderResourceRegistry.hpp"
 #include "kb/render/scene/SceneRenderResourceMap.hpp"
+#include "scene/pipeline/MeshPipelineVisibility.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -17,17 +18,7 @@ namespace {
         };
     }
 
-    const float sx = std::sqrt(model[0] * model[0] + model[1] * model[1] + model[2] * model[2]);
-    const float sy = std::sqrt(model[4] * model[4] + model[5] * model[5] + model[6] * model[6]);
-    const float sz = std::sqrt(model[8] * model[8] + model[9] * model[9] + model[10] * model[10]);
-    return RenderBoundsSphere{
-        .center = {
-            model[0] * localBounds.center[0] + model[4] * localBounds.center[1] + model[8] * localBounds.center[2] + model[12],
-            model[1] * localBounds.center[0] + model[5] * localBounds.center[1] + model[9] * localBounds.center[2] + model[13],
-            model[2] * localBounds.center[0] + model[6] * localBounds.center[1] + model[10] * localBounds.center[2] + model[14],
-        },
-        .radius = localBounds.radius * std::max(std::max(sx, sy), sz),
-    };
+    return MeshPipelineVisibility::TransformBounds(localBounds, model);
 }
 
 [[nodiscard]] RenderBoundsSphere MergeBounds(RenderBoundsSphere lhs, const RenderBoundsSphere& rhs) noexcept {
@@ -71,23 +62,9 @@ ShadowCasterBounds ShadowCasterBoundsCollector::Collect(
     const std::array<float, 16>* focusView,
     float focusHalfExtent) noexcept {
     ShadowCasterBounds result{};
-    for (const auto& [entityId, proxy] : renderScene.MeshProxies()) {
-        static_cast<void>(entityId);
-        const MeshRenderProxyDesc& mesh = proxy.desc;
-        if (!mesh.visible || (!mesh.castsShadow && !mesh.receivesShadow) || (mesh.layer & cameraCullingMask) == 0U) {
-            continue;
-        }
-
-        RenderBoundsSphere localBounds = mesh.boundsOverride;
-        if (!localBounds.IsValid()) {
-            const RenderMeshHandle meshHandle = resourceMap.ResolveMesh(mesh.meshAssetId);
-            if (const RenderMeshResource* meshResource = resources.FindMesh(meshHandle); meshResource != nullptr) {
-                localBounds = meshResource->bounds;
-            }
-        }
-        const auto worldBounds = TransformBoundsForShadow(localBounds, mesh.model);
+    const auto accumulate = [&](const RenderBoundsSphere& worldBounds, std::uint32_t casters) {
         result.bounds = MergeBounds(result.bounds, worldBounds);
-        result.casterCount += mesh.castsShadow ? 1U : 0U;
+        result.casterCount += casters;
         if (focusView != nullptr) {
             const auto& view = *focusView;
             const auto& center = worldBounds.center;
@@ -98,8 +75,36 @@ ShadowCasterBounds ShadowCasterBoundsCollector::Collect(
                 const float z = view[2] * center[0] + view[6] * center[1] + view[10] * center[2] + view[14];
                 result.focusedDepthMinimum = std::min(result.focusedDepthMinimum, z - worldBounds.radius);
                 result.focusedDepthMaximum = std::max(result.focusedDepthMaximum, z + worldBounds.radius);
-                result.focusedCasterCount += mesh.castsShadow ? 1U : 0U;
+                result.focusedCasterCount += casters;
             }
+        }
+    };
+    // The existing draw groups own visible instances, including generated
+    // vegetation and strokes. Resolve a mesh once per group, not per entity.
+    for (const auto& group : renderScene.DrawGroups()) {
+        const auto* resource = resources.FindMesh(resourceMap.ResolveMesh(group.meshAssetId));
+        const auto meshBounds = resource == nullptr ? RenderBoundsSphere{} : resource->bounds;
+        std::size_t clusterIndex = 0U;
+        for (std::size_t index = 0U; index < group.instances.size(); ++index) {
+            const auto& instance = group.instances[index];
+            while (clusterIndex < group.visibilityClusters.size() &&
+                group.visibilityClusters[clusterIndex].firstInstance < index) ++clusterIndex;
+            if ((!instance.castsShadow && !instance.receivesShadow) || (instance.layer & cameraCullingMask) == 0U) continue;
+            const auto localBounds = instance.boundsOverride.IsValid() ? instance.boundsOverride : meshBounds;
+            if (clusterIndex < group.visibilityClusters.size() &&
+                group.visibilityClusters[clusterIndex].firstInstance == index && localBounds.IsValid()) {
+                const auto& cluster = group.visibilityClusters[clusterIndex];
+                if (cluster.instanceCount != 0U && cluster.instanceCount <= group.instances.size()-index) {
+                    auto bounds = cluster.origins;
+                    const auto& center = localBounds.center;
+                    bounds.radius += cluster.maximumScale * (localBounds.radius +
+                        std::sqrt(center[0]*center[0] + center[1]*center[1] + center[2]*center[2]));
+                    accumulate(bounds, instance.castsShadow ? cluster.instanceCount : 0U);
+                    index += cluster.instanceCount-1U;
+                    continue;
+                }
+            }
+            accumulate(TransformBoundsForShadow(localBounds, instance.model), instance.castsShadow ? 1U : 0U);
         }
     }
     return result;
