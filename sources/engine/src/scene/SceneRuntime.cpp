@@ -6,6 +6,7 @@
 #include "scene/SceneRuntimeService.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/SceneTransformService.hpp"
+#include "scene/SceneStreamingService.hpp"
 #include "scene/components/SceneComponentRegistry.hpp"
 #include "scene/systems/SceneSystemScheduler.hpp"
 #include "scene/transform/SceneTransformHierarchySystem.hpp"
@@ -24,6 +25,25 @@ namespace {
 
 void SynchronizeTransformHierarchy(SceneState& state) {
     SceneTransformHierarchySystem{}.Update(state);
+    if ((state.fixedTransformTopologyVersion != state.hierarchyTopologyVersion || state.fixedTransformRootAppendEpoch != state.hierarchyRootAppendEpoch) ||
+        state.lastTransformHierarchyUpdatedCount == 0U) return;
+    for (const SceneEntity entity : state.transformHierarchyUpdatedEntitiesScratch) {
+        const auto sample = std::ranges::lower_bound(state.fixedTransformSamples, entity, {}, &SceneState::FixedTransformSample::entity);
+        if (sample == state.fixedTransformSamples.end() || sample->entity != entity) continue;
+        const TransformComponent* current = state.componentStorage.Transforms().TryGet(entity);
+        if (current == nullptr) continue;
+        auto& value = state.fixedTransformValues[sample->valueIndex];
+        if (state.fixedTransformCapturing) {
+            if (!value.touched) {
+                value.previous = value.current;
+                value.touched = true;
+                state.fixedTransformTouched.push_back(sample->valueIndex);
+            }
+        } else {
+            value.previous = *current;
+        }
+        value.current = *current;
+    }
 }
 
 void PublishRuntimeSnapshot(SceneState& state) {
@@ -96,71 +116,60 @@ using kb::math::Normalize;
     return result;
 }
 
+// Keep a pose cache across ticks. Only hierarchy writes refresh it; a static
+// world pays for one initial capture instead of two full copies every substep.
+void RebuildFixedTransformSamples(Scene& scene, SceneState& state, bool preservePrevious) {
+    auto oldSamples = std::move(state.fixedTransformSamples);
+    auto oldValues = std::move(state.fixedTransformValues);
+    state.fixedTransformSamples.clear();
+    state.fixedTransformValues.clear();
+    state.fixedTransformTouched.clear();
+    state.fixedTransformSamples.reserve(oldSamples.size());
+    state.fixedTransformValues.reserve(oldValues.size());
+    struct Context {
+        SceneState& state;
+        const std::vector<SceneState::FixedTransformSample>& oldSamples;
+        const std::vector<SceneState::FixedTransformValues>& oldValues;
+        bool preserve;
+    } context{state, oldSamples, oldValues, preservePrevious};
+    SceneIterationService::ForEachTransform(scene, [](SceneEntity entity, const TransformComponent& current, void* raw) {
+        auto& context = *static_cast<Context*>(raw);
+        TransformComponent previous = current;
+        if (context.preserve) {
+            const auto old = std::ranges::lower_bound(context.oldSamples, entity, {}, &SceneState::FixedTransformSample::entity);
+            if (old != context.oldSamples.end() && old->entity == entity) {
+                const auto& value = context.oldValues[old->valueIndex];
+                previous = value.touched ? value.previous : value.current;
+            }
+        }
+        const std::size_t index = context.state.fixedTransformValues.size();
+        context.state.fixedTransformSamples.push_back({entity, index});
+        context.state.fixedTransformValues.push_back({previous, current, context.preserve});
+        if (context.preserve) context.state.fixedTransformTouched.push_back(index);
+    }, &context);
+    std::ranges::sort(state.fixedTransformSamples, {}, &SceneState::FixedTransformSample::entity);
+    state.fixedTransformTopologyVersion = state.hierarchyTopologyVersion;
+    state.fixedTransformRootAppendEpoch = state.hierarchyRootAppendEpoch;
+}
+
 void CaptureFixedStepStart(Scene& scene, SceneState& state) {
-    state.fixedTransformStepStart.clear();
-    state.fixedTransformStepStart.reserve(state.fixedTransformSamples.size());
-    SceneIterationService::ForEachTransform(scene, [](SceneEntity entity, const TransformComponent& transform, void* context) {
-        auto& samples = *static_cast<std::vector<SceneState::FixedTransformStart>*>(context);
-        samples.push_back({entity, transform});
-    }, &state.fixedTransformStepStart);
+    if ((state.fixedTransformTopologyVersion != state.hierarchyTopologyVersion || state.fixedTransformRootAppendEpoch != state.hierarchyRootAppendEpoch) || state.fixedTransformSamples.empty()) {
+        RebuildFixedTransformSamples(scene, state, false);
+    }
+    for (const std::size_t index : state.fixedTransformTouched) {
+        auto& value = state.fixedTransformValues[index];
+        value.previous = value.current;
+        value.touched = false;
+    }
+    state.fixedTransformTouched.clear();
+    state.fixedTransformCapturing = true;
 }
 
 void CaptureFixedStepEnd(Scene& scene, SceneState& state) {
-    auto& samples = state.fixedTransformSamples;
-    if (samples.size() == state.fixedTransformStepStart.size() &&
-        state.fixedTransformValues.size() == samples.size() &&
-        std::ranges::all_of(samples, [&state](const auto& sample) {
-            return sample.valueIndex < state.fixedTransformStepStart.size() &&
-                state.fixedTransformStepStart[sample.valueIndex].entity == sample.entity;
-        })) {
-        struct RefreshContext {
-            SceneState& state;
-            std::size_t index = 0U;
-            bool sameOrder = true;
-        } refresh{state};
-        SceneIterationService::ForEachTransform(scene, [](SceneEntity entity, const TransformComponent& current, void* context) {
-            auto& refresh = *static_cast<RefreshContext*>(context);
-            auto& state = refresh.state;
-            const std::size_t index = refresh.index++;
-            if (index >= state.fixedTransformStepStart.size() ||
-                state.fixedTransformStepStart[index].entity != entity) {
-                refresh.sameOrder = false;
-                return;
-            }
-            state.fixedTransformValues[index] = {state.fixedTransformStepStart[index].transform, current};
-        }, &refresh);
-        if (refresh.sameOrder && refresh.index == samples.size()) {
-            return;
-        }
+    if ((state.fixedTransformTopologyVersion != state.hierarchyTopologyVersion || state.fixedTransformRootAppendEpoch != state.hierarchyRootAppendEpoch)) {
+        RebuildFixedTransformSamples(scene, state, true);
     }
-    samples.clear();
-    samples.reserve(state.fixedTransformStepStart.size());
-    state.fixedTransformValues.clear();
-    state.fixedTransformValues.reserve(state.fixedTransformStepStart.size());
-    struct CaptureContext {
-        SceneState& state;
-        bool sameOrder = true;
-    } capture{state};
-    SceneIterationService::ForEachTransform(scene, [](SceneEntity entity, const TransformComponent& current, void* context) {
-        auto& capture = *static_cast<CaptureContext*>(context);
-        auto& state = capture.state;
-        const std::size_t index = state.fixedTransformValues.size();
-        const bool matchesStart = index < state.fixedTransformStepStart.size() &&
-            state.fixedTransformStepStart[index].entity == entity;
-        capture.sameOrder &= matchesStart;
-        state.fixedTransformSamples.push_back({entity, index});
-        state.fixedTransformValues.push_back({matchesStart ? state.fixedTransformStepStart[index].transform : current, current});
-    }, &capture);
-    std::ranges::sort(samples, {}, &SceneState::FixedTransformSample::entity);
-    if (capture.sameOrder && samples.size() == state.fixedTransformStepStart.size()) {
-        return;
-    }
-    for (const auto& previous : state.fixedTransformStepStart) {
-        const auto sample = std::ranges::lower_bound(samples, previous.entity, {}, &SceneState::FixedTransformSample::entity);
-        if (sample != samples.end() && sample->entity == previous.entity) {
-            state.fixedTransformValues[sample->valueIndex].previous = previous.transform;
-        }
-    }
+    state.fixedTransformCapturing = false;
 }
 
 } // namespace
@@ -224,7 +233,10 @@ void SceneRuntimeService::SetFixedStepSettings(Scene& scene, SceneRuntimeFixedSt
     state.lastFixedStepCount = 0U;
     state.fixedTransformSamples.clear();
     state.fixedTransformValues.clear();
-    state.fixedTransformStepStart.clear();
+    state.fixedTransformTouched.clear();
+    state.fixedTransformTopologyVersion = 0U;
+    state.fixedTransformRootAppendEpoch = 0U;
+    state.fixedTransformCapturing = false;
 }
 
 SceneRuntimeFixedStepSettings SceneRuntimeService::FixedStepSettings(const Scene& scene) noexcept {
@@ -472,6 +484,7 @@ bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
     state.renderProxyUpdateEntityIds.reserve(HierarchyTrackedSlotCount(state));
     state.renderProxyDirtyTraversalScratch.reserve(HierarchyTrackedSlotCount(state));
 
+    SceneStreamingService::Pump(scene);
     synchronizeTransforms();
     state.sceneSystemScheduler.BeginFrame(scene, deltaSeconds);
     state.sceneSystemScheduler.Update(scene, deltaSeconds, SceneUpdatePhase::PreFixed);
@@ -511,7 +524,10 @@ bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
         state.fixedInterpolationAlpha = 0.0F;
         state.fixedTransformSamples.clear();
         state.fixedTransformValues.clear();
-        state.fixedTransformStepStart.clear();
+        state.fixedTransformTouched.clear();
+        state.fixedTransformTopologyVersion = 0U;
+        state.fixedTransformRootAppendEpoch = 0U;
+        state.fixedTransformCapturing = false;
     }
 
     // Variable consumers (notably script Tick/LateTick) run after the fixed

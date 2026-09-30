@@ -133,7 +133,8 @@ const std::vector<LibraryComponentInspectorDesc>& EngineLibraryComponentInspecto
             .displayName = "Collider",
             .category = "Physics",
             .fields = {
-                LibraryComponentInspectorFieldDesc{ "shape", "Shape", "Box, Sphere, or Capsule collision shape." },
+                LibraryComponentInspectorFieldDesc{ "shape", "Shape", "Box, Sphere, Capsule, or Mesh collision shape." },
+                LibraryComponentInspectorFieldDesc{ "meshAssetId", "Collision Mesh", "Collision mesh asset used by the Mesh shape." },
                 LibraryComponentInspectorFieldDesc{ "center.x", "Center X", "Local-space offset of the shape's center, X axis." },
                 LibraryComponentInspectorFieldDesc{ "center.y", "Center Y", "Local-space offset of the shape's center, Y axis." },
                 LibraryComponentInspectorFieldDesc{ "center.z", "Center Z", "Local-space offset of the shape's center, Z axis." },

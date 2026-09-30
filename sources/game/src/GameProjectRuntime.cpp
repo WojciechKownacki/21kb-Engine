@@ -178,6 +178,7 @@ bool ReadMountedGameProjectRuntime(
     packaged.physicsLayersAsset = manifest.settings.physicsLayersAsset;
     packaged.inputMappingContext = manifest.settings.inputMappingContext;
     packaged.inputEnabled = manifest.settings.inputEnabled;
+    packaged.lightingPath = manifest.settings.lightingPath;
     for (const kb::project::ProjectPluginReference& plugin : packaged.descriptor.plugins) {
         if (plugin.enabled && !plugin.name.empty()) {
             packaged.requiredModules.push_back(plugin.name);
@@ -386,6 +387,7 @@ bool ReadGameProjectRuntime(
     runtime.physicsLayersAsset = resolved.physicsLayersAsset;
     runtime.inputMappingContext = resolved.inputMappingContext;
     runtime.inputEnabled = resolved.inputEnabled;
+    runtime.lightingPath = resolved.lightingPath;
     runtime.descriptor = std::move(loaded.descriptor);
     return true;
 }

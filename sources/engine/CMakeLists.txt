@@ -678,6 +678,8 @@ add_library(kb_engine STATIC
     src/scene/SceneHierarchy.cpp
     src/scene/SceneLightIterationService.cpp
     src/scene/SceneLoadedContentService.cpp
+    src/scene/SceneStreamingService.cpp
+    src/scene/prefab/ScenePrefabReferenceResolver.cpp
     src/scene/SceneMeshRendererIterationService.cpp
     src/scene/ScenePhysicsBodyIterationService.cpp
     src/scene/SceneMaterialInstanceService.cpp
@@ -1668,6 +1670,7 @@ if(BUILD_TESTING)
         tests/ScenePrefabInstantiationTests.cpp
         tests/ScenePrefabTestSuites.hpp
         tests/ScenePrefabTests.cpp
+        tests/SceneStreamingTests.cpp
         tests/SceneRuntimeTests.cpp
         tests/SceneSystemTestSuites.hpp
         tests/SceneSystemTests.cpp

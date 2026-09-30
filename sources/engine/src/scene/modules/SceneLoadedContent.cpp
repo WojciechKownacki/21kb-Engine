@@ -1,6 +1,7 @@
 #include "engine/scene/SceneLoadedContent.hpp"
 
 #include "scene/SceneLoadedContentService.hpp"
+#include "scene/SceneStreamingService.hpp"
 
 namespace kb::scene {
 
@@ -33,6 +34,15 @@ SceneLoadedContent::SceneLoadedContent(Scene& scene) noexcept
 std::uint64_t SceneLoadedContent::Load(const std::filesystem::path& path, bool additive) {
     return SceneLoadedContentService::Load(scene_, path, additive);
 }
+
+std::uint64_t SceneLoadedContent::LoadAsync(const std::filesystem::path& path, SceneEntity parent) {
+    return SceneStreamingService::Load(scene_, path, parent);
+}
+bool SceneLoadedContent::UnloadAsync(std::uint64_t id) { return SceneStreamingService::Unload(scene_, id); }
+SceneLoadStatus SceneLoadedContent::Status(std::uint64_t id) const noexcept { return SceneStreamingService::Status(scene_, id); }
+std::string SceneLoadedContent::Error(std::uint64_t id) const { return SceneStreamingService::Error(scene_, id); }
+void SceneLoadedContent::ConfigureStreaming(SceneStreamingSettings settings) { SceneStreamingService::Configure(scene_, settings); }
+SceneStreamingStats SceneLoadedContent::StreamingStats() const noexcept { return SceneStreamingService::Stats(scene_); }
 
 bool SceneLoadedContent::Unload(std::uint64_t id) noexcept {
     return SceneLoadedContentService::Unload(scene_, id);

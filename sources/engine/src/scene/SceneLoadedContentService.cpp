@@ -8,6 +8,7 @@
 #include "assets/AssetPathUtilities.hpp"
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneState.hpp"
+#include "scene/SceneStreamingService.hpp"
 
 #include <algorithm>
 
@@ -176,13 +177,13 @@ bool SceneLoadedContentService::Exists(const Scene& scene, std::uint64_t id) noe
 }
 
 float SceneLoadedContentService::Progress(const Scene& scene, std::uint64_t id) noexcept {
-    return Exists(scene, id) ? 1.0F : 0.0F;
+    return SceneStreamingService::Progress(scene, id);
 }
 
 bool SceneLoadedContentService::SetActive(Scene& scene, std::uint64_t id) noexcept {
     SceneState& state = SceneAccess::State(scene);
     const SceneState::LoadedSceneRecord* record = FindRecord(state, id);
-    if (record == nullptr) {
+    if (record == nullptr || SceneStreamingService::Status(scene, id) != SceneLoadStatus::Ready) {
         return false;
     }
     if (state.activeLoadedSceneId != id) {
@@ -208,6 +209,7 @@ SceneEntity SceneLoadedContentService::ActiveSceneRoot(const Scene& scene) noexc
     if (state.activeLoadedSceneId == 0U) {
         return SceneEntity{};
     }
+    if (SceneStreamingService::Status(scene, state.activeLoadedSceneId) != SceneLoadStatus::Ready) return {};
     for (const SceneState::LoadedSceneRecord& record : state.loadedScenes) {
         if (record.id == state.activeLoadedSceneId) {
             if (!record.root.IsValid() || !scene.Entities().IsAlive(record.root)) {
@@ -233,13 +235,12 @@ std::uint64_t SceneLoadedContentService::OwningScene(const Scene& scene, SceneEn
     if (!entity.IsValid() || !scene.Entities().IsAlive(entity)) {
         return 0U;
     }
-    SceneEntity root = entity;
-    for (SceneEntity parent = scene.Hierarchy().Parent(root); parent.IsValid(); parent = scene.Hierarchy().Parent(root)) {
-        root = parent;
-    }
     const SceneState& state = SceneAccess::State(scene);
-    const auto iterator = std::ranges::find_if(state.loadedScenes, [root](const SceneState::LoadedSceneRecord& record) { return record.root == root; });
-    return iterator == state.loadedScenes.end() ? 0U : iterator->id;
+    for (SceneEntity root = entity; root.IsValid(); root = scene.Hierarchy().Parent(root)) {
+        const auto found = std::ranges::find(state.loadedScenes, root, &SceneState::LoadedSceneRecord::root);
+        if (found != state.loadedScenes.end()) return found->id;
+    }
+    return 0U;
 }
 
 std::vector<SceneLifecycleEventRecord> SceneLoadedContentService::DrainPendingLifecycleEvents(Scene& scene) {

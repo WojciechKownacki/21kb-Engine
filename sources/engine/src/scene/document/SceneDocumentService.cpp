@@ -1,5 +1,6 @@
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneTagCatalog.hpp"
+#include "scene/SceneStreamingService.hpp"
 
 #include "engine/audio/AudioPlayback.hpp"
 #include "engine/scene/Scene.hpp"
@@ -30,6 +31,7 @@ namespace {
 // alone preserves the entire subtree). See SceneState::persistentEntities'
 // comment for why this check is root-only.
 void ClearSceneRoots(Scene& scene) noexcept {
+    SceneStreamingService::CancelPending(scene);
     const std::vector<SceneEntity> roots = scene.Hierarchy().RootEntities();
     for (const SceneEntity root : roots) {
         if (scene.Entities().IsPersistent(root)) {

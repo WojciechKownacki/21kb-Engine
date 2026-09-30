@@ -35,6 +35,7 @@ struct GameProjectRuntime {
     std::string physicsLayersAsset;
     std::string inputMappingContext;
     bool inputEnabled = true;
+    kb::project::ProjectSceneLightingPath lightingPath = kb::project::ProjectSceneLightingPath::Forward;
     std::vector<std::string> requiredModules;
     std::shared_ptr<kb::assets::bake::RuntimeAssetPack> assetPack;
 

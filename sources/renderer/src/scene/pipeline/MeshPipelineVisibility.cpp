@@ -1,4 +1,5 @@
 #include "scene/pipeline/MeshPipelineVisibility.hpp"
+#include "kb/render/SceneDepthPolicy.hpp"
 
 #include "kb/render/scene/TransparentDepthKey.hpp"
 
@@ -16,7 +17,9 @@ namespace {
 
 [[nodiscard]] MeshPipelineFrustumPlane NormalizePlane(MeshPipelineFrustumPlane plane) noexcept {
     const float length = Length3(plane.x, plane.y, plane.z);
-    if (length <= 0.00001F) {
+    // Reverse-Z far planes can have very small, valid normals when near/far
+    // spans a large world. An absolute epsilon silently disables their culling.
+    if (!(length > 0.0F) || !std::isfinite(length)) {
         return {};
     }
     const float invLength = 1.0F / length;
@@ -88,6 +91,10 @@ float MeshPipelineVisibility::ScreenCoverage(const SceneRenderCamera* camera, co
 }
 
 MeshPipelineFrustum MeshPipelineVisibility::BuildFrustum(const SceneRenderCamera* camera) noexcept {
+    return BuildFrustum(camera, SceneDepthPolicy::HomogeneousDepth());
+}
+
+MeshPipelineFrustum MeshPipelineVisibility::BuildFrustum(const SceneRenderCamera* camera, bool homogeneousDepth) noexcept {
     if (camera == nullptr) {
         return {};
     }
@@ -97,6 +104,8 @@ MeshPipelineFrustum MeshPipelineVisibility::BuildFrustum(const SceneRenderCamera
     const std::array<float, 4> row1{ clip[1], clip[5], clip[9], clip[13] };
     const std::array<float, 4> row2{ clip[2], clip[6], clip[10], clip[14] };
     const std::array<float, 4> row3{ clip[3], clip[7], clip[11], clip[15] };
+    // Reverse-Z changes which boundary is far, but not the clip inequalities.
+    const float lower = homogeneousDepth ? 1.0F : 0.0F;
 
     return MeshPipelineFrustum{
         .planes = {
@@ -104,7 +113,7 @@ MeshPipelineFrustum MeshPipelineVisibility::BuildFrustum(const SceneRenderCamera
             NormalizePlane(MeshPipelineFrustumPlane{ row3[0] - row0[0], row3[1] - row0[1], row3[2] - row0[2], row3[3] - row0[3] }),
             NormalizePlane(MeshPipelineFrustumPlane{ row3[0] + row1[0], row3[1] + row1[1], row3[2] + row1[2], row3[3] + row1[3] }),
             NormalizePlane(MeshPipelineFrustumPlane{ row3[0] - row1[0], row3[1] - row1[1], row3[2] - row1[2], row3[3] - row1[3] }),
-            NormalizePlane(MeshPipelineFrustumPlane{ row3[0] + row2[0], row3[1] + row2[1], row3[2] + row2[2], row3[3] + row2[3] }),
+            NormalizePlane(MeshPipelineFrustumPlane{ lower * row3[0] + row2[0], lower * row3[1] + row2[1], lower * row3[2] + row2[2], lower * row3[3] + row2[3] }),
             NormalizePlane(MeshPipelineFrustumPlane{ row3[0] - row2[0], row3[1] - row2[1], row3[2] - row2[2], row3[3] - row2[3] }),
         },
         .valid = true,

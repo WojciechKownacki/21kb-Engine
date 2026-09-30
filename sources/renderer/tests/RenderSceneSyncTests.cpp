@@ -1683,6 +1683,10 @@ void RunRenderSceneExpandsGeometrySwarmIntoExistingDrawGroupTest() {
         "Growing a Geometry Swarm did not append the new instances to its existing draw group");
     Require(renderScene.DrawGroups()[0].instances[0].entityId == firstInstanceId,
         "Growing a Geometry Swarm changed an existing instance identifier");
+    const auto& clusters = renderScene.DrawGroups()[0].visibilityClusters;
+    Require(clusters.size() == 2U && clusters[0].firstInstance == 0U && clusters[0].instanceCount == 4U &&
+        clusters[1].firstInstance == 4U && clusters[1].instanceCount == 2U,
+        "Growing a Geometry Swarm must retain old cluster ranges and append only the new range");
     SceneRenderSnapshot snapshot;
     renderScene.BuildSnapshotInto(1280U, 720U, snapshot);
     Require(snapshot.meshes.size() == 6U, "Geometry Swarm did not reach the snapshot consumer used by the runtime renderer");

@@ -784,6 +784,8 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
     endif()
 
     kb_apply_quality_gates(kb_renderer_tests)
+    set_target_properties(kb_renderer_tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+    kb_target_copy_bgfx_runtime_shaders(kb_renderer_tests)
 
     if(MSVC AND KB_ENABLE_SANITIZERS)
         # The aggregate renderer test executable runs a large number of independently verified

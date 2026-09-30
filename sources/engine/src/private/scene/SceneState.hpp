@@ -219,6 +219,7 @@ struct TimelineRuntimeRecord {
 // The ECS component remains the sole source of placement, source and lifetime
 // policy; root/loadedSceneId are disposable runtime handles.
 struct ContentInstanceRuntimeRecord {
+    bool streamed = false;
     SceneEntity owner{};
     std::uint64_t assetId = 0U;
     ContentInstanceKind kind = ContentInstanceKind::Prefab;
@@ -258,6 +259,7 @@ public:
     SceneState& operator=(SceneState&&) = delete;
 
     kb::ecs::World world;
+    std::unique_ptr<struct SceneStreamingState> streaming;
     SceneComponentRegistry components;
     SceneComponentStorage componentStorage;
     // Single source of truth for authorable/runtime tag definitions. Entity
@@ -447,14 +449,14 @@ public:
     struct FixedTransformValues {
         TransformComponent previous;
         TransformComponent current;
-    };
-    struct FixedTransformStart {
-        SceneEntity entity;
-        TransformComponent transform;
+        bool touched = false;
     };
     std::vector<FixedTransformSample> fixedTransformSamples;
     std::vector<FixedTransformValues> fixedTransformValues;
-    std::vector<FixedTransformStart> fixedTransformStepStart;
+    std::vector<std::size_t> fixedTransformTouched;
+    std::uint64_t fixedTransformTopologyVersion = 0U;
+    std::uint64_t fixedTransformRootAppendEpoch = 0U;
+    bool fixedTransformCapturing = false;
     std::vector<std::string> denseEntityNames;
     std::unordered_map<SceneEntity::IdType, std::string> entityNames;
     // Per-instance overrides of behaviours' exposed ("@expose") script variables,
