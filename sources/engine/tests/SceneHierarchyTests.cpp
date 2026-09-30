@@ -626,6 +626,30 @@ void RunTransformPropagationBudgetTest() {
     kb::tests::Require(report.transformHierarchyInspectedCount == 3U, "Unlimited transform propagation did not inspect the full chain");
 }
 
+void RunParallelRootTransformAccountingTest() {
+    kb::ecs::WorldConfig config;
+    config.workerThreadLimit = 2U;
+    kb::scene::Scene scene{config};
+    std::vector<kb::scene::SceneEntity> roots;
+    for (unsigned index = 0U; index < 1024U; ++index) {
+        kb::scene::SceneObjectDesc desc;
+        if (index % 2U != 0U) desc.transform.localRotation = {0.0F, 0.70710678F, 0.0F, 0.70710678F};
+        roots.push_back(scene.Entities().CreateObject(desc).Entity());
+    }
+    scene.Runtime().SynchronizeTransforms();
+    for (const auto entity : roots) scene.Transforms().TryGet(entity)->localPosition.x = 7.0F;
+    scene.Transforms().MarkModified(roots);
+    scene.Runtime().SynchronizeTransforms();
+    const auto report = scene.Runtime().HotPathReport();
+    kb::tests::Require(report.transformHierarchyWorkerCount <= 2U,
+        "Transform hierarchy must honor the configured worker limit");
+    kb::tests::Require(report.transformHierarchyUpdatedCount == roots.size() &&
+        report.transformHierarchyRootFastPathCount == roots.size()/2U,
+        "Parallel root telemetry must count only identity-rotation updates, once each");
+    for (const auto entity : roots) kb::tests::Require(scene.Transforms().Get(entity).worldPosition.x == 7.0F,
+        "Parallel root propagation did not publish the authored position");
+}
+
 void RunTransformSparseFlushReportTest() {
     kb::scene::Scene scene;
     std::vector<kb::scene::SceneObject> roots;
@@ -1297,6 +1321,7 @@ void RunSceneHierarchyTests() {
     RunTransformHierarchyTest();
     RunTransformHierarchyReplayDeterminismTest();
     RunTransformRootFastPathReportTest();
+    RunParallelRootTransformAccountingTest();
     RunParentChildrenOwnershipTest();
     RunHierarchyStableCreationOrderTest();
     RunHierarchyCreationOrderSurvivesDeletionTest();

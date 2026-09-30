@@ -286,6 +286,7 @@ public:
 
     void Reserve(const RenderSceneReserveDesc& desc);
     [[nodiscard]] RenderSceneStats Stats() const noexcept;
+    [[nodiscard]] std::uint64_t MeshContentRevision() const noexcept { return meshContentRevision_; }
     [[nodiscard]] RenderProxyId UpsertMesh(const MeshRenderProxyDesc& desc);
     [[nodiscard]] RenderProxyId UpsertCamera(const CameraRenderProxyDesc& desc);
     [[nodiscard]] RenderProxyId UpsertLight(const LightRenderProxyDesc& desc);
@@ -314,6 +315,8 @@ public:
     [[nodiscard]] bool UpdateSurfaceCastTransform(std::uint64_t entityId, const std::array<float, 16>& model) noexcept;
     [[nodiscard]] bool UpdateSpaceStrokeTransform(std::uint64_t entityId, const std::array<float, 16>& model) noexcept;
 
+private:
+    friend class EcsRenderSceneSynchronizer;
     // H6 - shared core for the single-entity and parallel batch paths. Updates
     // the proxy's source-of-truth model and, when the cache is clean, the cached
     // instance in place. Never invalidates or touches telemetry, so it is safe to
@@ -326,6 +329,7 @@ public:
     void InvalidateDrawGroupsIfFallback(TransformUpdateOutcome outcome) noexcept;
     void AddTransformUpdateCounts(std::uint64_t inPlace, std::uint64_t fallback) noexcept;
 
+public:
     [[nodiscard]] bool RemoveMesh(std::uint64_t entityId) noexcept;
     [[nodiscard]] bool RemoveCamera(std::uint64_t entityId) noexcept;
     [[nodiscard]] bool RemoveLight(std::uint64_t entityId) noexcept;
@@ -427,11 +431,13 @@ private:
     };
 
     [[nodiscard]] RenderProxyId AllocateProxyId() noexcept;
+    [[nodiscard]] static std::uint64_t NextMeshContentRevision() noexcept;
     void InvalidateDrawGroups() noexcept;
     void RebuildDrawGroupsIfNeeded() const;
     void ApplySurfaceCasts(SceneRenderMeshInstance& instance) const;
 
     MeshProxyMap meshes_;
+    std::uint64_t meshContentRevision_ = NextMeshContentRevision();
     mutable SortedMeshProxyIndex sortedMeshProxies_;
     CameraProxyMap cameras_;
     LightProxyMap lights_;

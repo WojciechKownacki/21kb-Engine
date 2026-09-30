@@ -1,0 +1,61 @@
+CEL: produkcyjna wydajność istniejącego 21kb dla ogromnych światów.
+Wykonaj zadanie od diagnozy przez kod, kompilację i pomiary do commit/push.
+Punktem odniesienia jakości są dojrzałe silniki studyjne, w tym Unity HDRP
+i Unreal Engine 5. Nie zastępuj ich rzeczywistego porównania deklaracją.
+
+KONTRAKT
+- ECS jest jedynym właścicielem stanu sceny. Renderer i fizyka są konsumentami.
+  Pochodne cache mają jawne unieważnianie; nie mogą być drugim stanem autorskim.
+- Napraw przyczynę mierzonego kosztu, najmniejszą kompletną zmianą. SOLID:
+  własność i cykl życia w klasie mechanizmu, bez globalnych obejść i megaklas.
+- Zachowaj bgfx, istniejące ECS/bulk, serializację, edytor i semantykę komponentów.
+  Nie ukrywaj kosztów przez wyłączanie fizyki, cieni, materiałów lub obiektów.
+- Nie obniżaj szczegółowości obecnych scen porównawczych ani ich liczników.
+  Nie używaj nazw silników referencyjnych w nowych identyfikatorach.
+- Praca headless, bez okien i przejmowania wejścia; budowa maks. 4 procesy.
+  D:\Projekty\verthengineprod i D:\UE5 wyłącznie do odczytu, bez kopiowania kodu.
+  Bez delegowania zadania; zachowaj komputer dostępny dla użytkownika.
+
+WYKONANIE
+1. Zachowaj bazę 3f4a9fc6 i odtwarzalne pomiary Release. Rozdziel Runtime.Update,
+   synchronizację ECS/renderera, przygotowanie drawów, upload i opóźniony GPU.
+   Znajdź przyczynę pełnych skanów niezmiennych obiektów i regresji aktywnej fizyki.
+2. SceneRuntime / SceneTransformHierarchySystem / system fizyki:
+   przetwarzaj faktyczne zmiany przez istniejące dense query i publikację zmian.
+   Zachowaj interpolację, wiele substepów, dirty writes, edycję komponentów,
+   aktywację, zmianę rodzica, archetypu, bulk tworzenie i niszczenie.
+3. Renderer / EcsRenderSceneSynchronizer / RenderScene / MeshPassProcessor:
+   usuń zbędne odtwarzanie i skanowanie pochodnych danych. Statyczny świat
+   nie powinien aktualizować wszystkich proxy co klatkę. Kamera, materiały,
+   animacje i streaming muszą nadal poprawnie unieważniać właściwe zakresy.
+4. SceneMeshDrawCommandSubmitter / RenderInstanceBuffer / zasoby GPU:
+   ogranicz powtarzalne pakowanie i upload przez istniejące właścicielstwo
+   buforów. Zachowaj kolejność przezroczystości, selekcję, motion vectors,
+   cienie, limity urządzenia i poprawność danych między klatkami/pasami.
+5. GeometrySwarm / LOD / streaming: milion rezydentnych instancji, osobne
+   liczniki widocznych i aktywnych. Budżety per komórka i poprawna zmiana LOD;
+   brak cache ignorującego zmianę kamery, materiału, skali lub ownera.
+6. Testy funkcjonalne mają wykrywać rzeczywiste błędy: zmiany po rozgrzewce,
+   wielokamerowość, transformacje rodzica, usuwanie, ponowne użycie ID,
+   anulowanie, spóźnione publikacje i cykle wczytania/usunięcia.
+
+BRAMKA WYDAJNOŚCI (i7-13700F / RTX 4070, 1080p, D3D11, Release)
+- world_100k: średnia całej klatki <= 12 ms, P99 <= 16.67 ms.
+- city_dense_50k: średnia <= 16.67 ms; P99 <= 25 ms.
+- physics_4096: Runtime.Update średnia <= 5 ms, P99 <= 8 ms.
+- Statyczne 100k przy włączonej fizyce: średnia Update <= 0.1 ms.
+- foliage_1m: średnia <= 16.67 ms przy tych samych widocznych instancjach.
+- Streaming: co najmniej 9 cykli, zgodne referencje, zero pozostawionych encji,
+  brak blokowania I/O; pełny Update P99 <= 8 ms, maks. <= 16.67 ms.
+- Realistyczny mieszany test musi łączyć geometrię, światła, cienie, ruch,
+  kolizje i streaming. Raportuj P99, maksimum, pamięć i liczniki poprawności.
+- Minimum 3 niezależne powtórki na scenariusz. Rozdziel diagnostyczne trace
+  od pomiaru. Brak nowych regresji > 5% w niezmienionych scenariuszach.
+
+ODBIÓR
+Zielona kompilacja i celowane testy, pełne dostępne suite, pomiary przed/po,
+sprawdzone zasoby i cykl życia. Niezaliczona bramka oznacza dalszą pracę nad
+konkretną przyczyną, nie odpowiedź "trudno stwierdzić". Nie oznaczaj silnika
+jako produkcyjnie gotowego, jeśli kod lub pomiary temu przeczą. Nie zmyślaj
+równoważności z konkurencją ani uniwersalnej wydajności dla dowolnej sceny.
+Zapisz wyniki i polecenia odtworzenia, wykonaj zwykły commit/push origin/1.0.

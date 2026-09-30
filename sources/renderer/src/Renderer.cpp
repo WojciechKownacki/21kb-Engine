@@ -1360,7 +1360,7 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
     }
     if (overlayCamera != nullptr) {
         jitteredCamera = *overlayCamera;
-        RendererTemporalJitter::Apply(*jitteredCamera, jitter);
+        RendererTemporalJitter::Apply(*jitteredCamera, jitter, desc.target.viewport.extent);
     }
     const SceneRenderCamera* sceneCamera = jitteredCamera.has_value() ? &(*jitteredCamera) : overlayCamera;
     {

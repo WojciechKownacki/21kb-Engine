@@ -8,6 +8,10 @@ void WorldComponentMutator::Set(ecs_world_t* world, Entity entity, ComponentId c
     ComponentStorageMutation::Set(world, entity, componentId, size, component);
 }
 
+void WorldComponentMutator::SetExisting(ecs_world_t* world, Entity entity, ComponentId componentId, std::size_t size, const void* component) {
+    ComponentStorageMutation::SetExisting(world, entity, componentId, size, component);
+}
+
 void WorldComponentMutator::Remove(ecs_world_t* world, Entity entity, ComponentId componentId) noexcept {
     ComponentStorageMutation::Remove(world, entity, componentId);
 }

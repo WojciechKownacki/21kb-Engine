@@ -47,6 +47,9 @@
 #include "kb/render/resources/RenderResourceRegistry.hpp"
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
 #include "kb/render/runtime/RuntimeMaterialResolver.hpp"
+#include "../src/scene/submit/SceneMeshDrawCommandSubmitter.hpp"
+#include "../src/scene/pipeline/MeshPipelineVisibility.hpp"
+#include "../src/shadow/ShadowCasterBoundsCollector.hpp"
 
 #include <bgfx/bgfx.h>
 #include <bx/math.h>
@@ -3561,7 +3564,7 @@ void RunRendererReloadsChangedRuntimeMeshAssetTest() {
     std::filesystem::remove_all(root, error);
 }
 
-void RunRendererSubmitsRuntimeMeshAssetInHeadlessNoopTest() {
+void RunRendererSubmitsRuntimeMeshAssetInHeadlessNoopTest(bool testRetention = false) {
     const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_runtime_submit";
     std::error_code error;
     std::filesystem::remove_all(root, error);
@@ -3663,7 +3666,23 @@ void RunRendererSubmitsRuntimeMeshAssetInHeadlessNoopTest() {
         .syncTransformCacheEntries = 32U,
         .syncTransformResolvingEntries = 32U,
     });
-    Require(renderer.Initialize(surface, &config), "Renderer did not initialize in explicit headless Noop mode");
+    RenderSurface* testSurface = &surface;
+#if defined(_WIN32)
+    std::unique_ptr<NativeTestSurface> nativeSurface;
+    if (testRetention) {
+        nativeSurface = std::make_unique<NativeTestSurface>();
+        Require(nativeSurface->IsValid(), "Retention test could not create a hidden surface");
+        testSurface = nativeSurface.get();
+        config.allowHeadlessNoop = false;
+        config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
+    }
+#endif
+    Require(renderer.Initialize(*testSurface, &config), "Renderer did not initialize in the requested headless mode");
+    if (testRetention) {
+        auto settings = renderer.DefaultPostProcessSettings();
+        settings.temporalJitterEnabled = false;
+        renderer.SetDefaultPostProcessSettings(settings);
+    }
 
     const MaterialProgramRegistryStats programStats = renderer.MaterialProgramStats();
     Require(programStats.loads == 4U,
@@ -3765,6 +3784,71 @@ void RunRendererSubmitsRuntimeMeshAssetInHeadlessNoopTest() {
     Require(runtimeStats.renderSceneMeshProxyCapacity >= 32U, "Runtime submit did not apply render scene mesh proxy reserve");
 
     renderer.EndFrame();
+    if (testRetention) {
+        Require(renderer.BeginFrame() && renderer.SubmitScene(scene, desc), "Retained commands did not submit a steady frame");
+        const auto retained = renderer.LastSceneSubmitStats();
+        if (retained.meshCommandReuseCount == 0U) {
+            std::cerr << "Retained commands: reuse=" << retained.meshCommandReuseCount
+                << " visible=" << retained.visibleMeshCount << " submitted=" << retained.submittedMeshCount
+                << " upload=" << retained.instanceUploadBytes << '\n';
+            const auto* map = renderer.SceneResourceMap();
+            const auto* registry = renderer.SceneResources();
+            const auto* resource = registry->FindMesh(map->ResolveMesh(meshMetadata->id.value));
+            std::cerr << "Mesh LODs=" << resource->lods.size() << '\n';
+        }
+        Require(retained.meshCommandReuseCount >= 1U && retained.submittedMeshCount == submitStats.submittedMeshCount,
+            "Static opaque and shadow commands must be reused with unchanged submissions");
+        Require(retained.instanceUploadBytes < submitStats.instanceUploadBytes,
+            "Static GPU instances were needlessly uploaded again");
+        renderer.EndFrame();
+
+        Require(renderer.BeginFrame() && renderer.SubmitScene(scene, desc), "Retained commands did not submit after resource warmup");
+        Require(renderer.LastSceneSubmitStats().meshCommandReuseCount == 2U,
+            "Static opaque and shadow commands must both reuse after resource warmup");
+        renderer.EndFrame();
+
+        auto movedCamera = desc;
+        movedCamera.cameraOverride->view[12] = -100.0F;
+        Require(renderer.BeginFrame() && renderer.SubmitScene(scene, movedCamera), "Camera change did not submit");
+        Require(renderer.LastSceneSubmitStats().meshCommandReuseCount < 2U,
+            "Changed camera reused obsolete visibility");
+        renderer.EndFrame();
+
+        auto temporalDesc = desc;
+        temporalDesc.cameraOverride->view[14] = 5.0F;
+        SceneDepthPolicy::MakePerspective(temporalDesc.cameraOverride->projection.data(), 90.0F, 1.0F, 0.01F, 100.0F,
+            SceneDepthPolicy::HomogeneousDepth());
+        auto settings = renderer.DefaultPostProcessSettings();
+        settings.temporalJitterEnabled = true;
+        renderer.SetDefaultPostProcessSettings(settings);
+        for (unsigned frame = 0U; frame < 10U; ++frame) {
+            Require(renderer.BeginFrame() && renderer.SubmitScene(scene, temporalDesc), "Temporal retained frame did not submit");
+            const auto temporal = renderer.LastSceneSubmitStats();
+            Require(temporal.submittedMeshCount == submitStats.submittedMeshCount && !temporal.HasMissingResources(),
+                "Temporal retention changed static submissions");
+            Require(frame == 0U || temporal.meshCommandReuseCount == 2U,
+                "Temporal jitter rebuilt unchanged static commands");
+            renderer.EndFrame();
+        }
+    }
+
+    SceneMeshInstanceBufferPool pool;
+    std::array<SceneRenderMeshInstance, 2> instances{};
+    const auto buffer = pool.Upload(instances, nullptr, true, 91U);
+    Require(bgfx::isValid(buffer) && pool.LastUploadBytes() != 0U, "Retained pool did not upload initial contents");
+    pool.EndFrame();
+    Require(pool.Upload(instances, nullptr, true, 91U).idx == buffer.idx && pool.LastUploadBytes() == 0U,
+        "Retained pool did not reuse unchanged GPU contents");
+    pool.EndFrame();
+    static_cast<void>(pool.Upload(instances, nullptr, false, 91U));
+    Require(pool.LastUploadBytes() != 0U, "Changed instance encoding reused obsolete GPU contents");
+    pool.EndFrame();
+    static_cast<void>(pool.Upload(instances, nullptr, false, 92U));
+    Require(pool.LastUploadBytes() != 0U, "Changed command identity reused another command's GPU contents");
+    pool.EndFrame();
+    static_cast<void>(pool.Upload(std::span{instances}.first(1U), nullptr, false, 92U));
+    Require(pool.LastUploadBytes() != 0U, "Changed instance count reused obsolete GPU contents");
+    pool.Shutdown();
     renderer.Shutdown();
     std::filesystem::remove_all(root, error);
 }
@@ -5386,6 +5470,29 @@ void RunRendererSubmitsWorkspaceSceneCubeMaterialAfterReopenTest() {
     RenderResourceRegistry directResources;
     const RenderMeshHandle directMeshHandle = directResources.RegisterMesh(loadedMesh->desc);
     Require(directMeshHandle.IsValid(), "Workspace Cube.21kb loaded but its mesh desc could not register as a runtime mesh resource");
+    RenderScene generatedShadowScene;
+    SceneRenderResourceMap generatedShadowMap;
+    generatedShadowMap.BindMesh(42U, directMeshHandle);
+    GeometrySwarmRenderProxyDesc generatedShadowSwarm{.entityId = 90U, .meshAssetId = 42U};
+    generatedShadowSwarm.model[0] = generatedShadowSwarm.model[5] = generatedShadowSwarm.model[10] = generatedShadowSwarm.model[15] = 1.0F;
+    generatedShadowSwarm.model[4] = 1.0F; // Shear must remain conservatively bounded.
+    generatedShadowSwarm.instanceCount = 256U;
+    generatedShadowSwarm.columns = 16U;
+    generatedShadowSwarm.layers = 16U;
+    static_cast<void>(generatedShadowScene.UpsertGeometrySwarm(generatedShadowSwarm));
+    const auto clusterBounds = ShadowCasterBoundsCollector::Collect(generatedShadowScene, directResources, generatedShadowMap, 1U);
+    Require(clusterBounds.casterCount == generatedShadowSwarm.instanceCount, "Cluster shadow collection lost generated casters");
+    for (const auto& group : generatedShadowScene.DrawGroups()) {
+        Require(!group.visibilityClusters.empty(), "Generated shadow coverage did not exercise clusters");
+        for (const auto& instance : group.instances) {
+            const auto bounds = MeshPipelineVisibility::TransformBounds(directResources.FindMesh(directMeshHandle)->bounds, instance.model);
+            const float dx = bounds.center[0]-clusterBounds.bounds.center[0];
+            const float dy = bounds.center[1]-clusterBounds.bounds.center[1];
+            const float dz = bounds.center[2]-clusterBounds.bounds.center[2];
+            Require(std::sqrt(dx*dx+dy*dy+dz*dz)+bounds.radius <= clusterBounds.bounds.radius+0.001F,
+                "Cluster shadow bound excluded sheared generated geometry");
+        }
+    }
     directResources.Shutdown();
     Require(renderer.BeginFrame(), "Workspace scene renderer did not begin a frame");
 
@@ -7266,6 +7373,13 @@ void RunRendererRuntimeSubmitTests() {
     RunRendererSubmitsDeferredGBufferAndLightingPassesInHeadlessNoopTest();
     RunRendererSubmitsDockedAndDetachedViewportsInSameFrameTest();
     RunSecondaryFrameModesProduceRuntimeTargetsTest();
+}
+
+void RunRendererCommandReuseTests() {
+    RunRendererSubmitsRuntimeMeshAssetInHeadlessNoopTest(true);
+    RunRendererReloadsChangedRuntimeMaterialAssetTest();
+    RunRendererReloadsChangedRuntimeMeshAssetTest();
+    RunRendererSubmitsDockedAndDetachedViewportsInSameFrameTest();
 }
 
 void RunExposureReadbackResetTest() {

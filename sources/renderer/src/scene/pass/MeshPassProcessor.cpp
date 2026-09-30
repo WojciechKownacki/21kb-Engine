@@ -13,6 +13,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <optional>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -156,6 +157,7 @@ void ResolveDetailSwitchLevels(const MeshPassProcessorDesc& desc, MeshPipelineBu
         for (auto previous = result.detailSwitchPreviousLevels.begin(); previous != result.detailSwitchPreviousLevels.end();) {
             if (!activeKeys.contains(previous->first)) {
                 previous = result.detailSwitchPreviousLevels.erase(previous);
+                ++result.detailSwitchHistoryRevision;
             } else {
                 ++previous;
             }
@@ -173,7 +175,11 @@ void ResolveDetailSwitchLevels(const MeshPassProcessorDesc& desc, MeshPipelineBu
         }
         result.detailSwitchLevels.emplace(key, resolved);
         if (advancesHistory) {
-            result.detailSwitchPreviousLevels.insert_or_assign(key, resolved);
+            const auto previous = result.detailSwitchPreviousLevels.find(key);
+            if (previous == result.detailSwitchPreviousLevels.end() || previous->second != resolved) {
+                result.detailSwitchPreviousLevels.insert_or_assign(key, resolved);
+                ++result.detailSwitchHistoryRevision;
+            }
         }
     }
 }
@@ -251,6 +257,8 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
             std::uint32_t culledForSection = 0U;
             std::uint64_t lastMaterialAssetId = 0U;
             MeshPipelineMaterialResolution lastMaterialResolution{};
+            std::optional<MeshCommandLookupKey> lastCommandKey;
+            std::uint32_t lastCommandIndex = 0U;
             std::size_t clusterIndex = 0U;
             for (std::size_t instanceIndex = 0U; instanceIndex < batch.instances.size(); ++instanceIndex) {
                 const SceneRenderMeshInstance& instance = batch.instances[instanceIndex];
@@ -347,11 +355,13 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                     .reversedWinding = !(meshResource != nullptr && meshResource->doubleSided) &&
                         !(materialResource != nullptr && materialResource->doubleSided) && ReversesWinding(instance.model),
                 };
-                const auto commandLookupIt = result.commandLookupScratch.find(commandKey);
-                MeshDrawCommand* command = commandLookupIt == result.commandLookupScratch.end() ? nullptr : &result.commands[commandLookupIt->second];
-                std::uint32_t drawCommandIndex = commandLookupIt == result.commandLookupScratch.end()
-                    ? static_cast<std::uint32_t>(writeCommandCount)
-                    : static_cast<std::uint32_t>(commandLookupIt->second);
+                std::uint32_t drawCommandIndex = static_cast<std::uint32_t>(writeCommandCount);
+                if (lastCommandKey && *lastCommandKey == commandKey) {
+                    drawCommandIndex = lastCommandIndex;
+                } else if (const auto found = result.commandLookupScratch.find(commandKey); found != result.commandLookupScratch.end()) {
+                    drawCommandIndex = static_cast<std::uint32_t>(found->second);
+                }
+                MeshDrawCommand* command = drawCommandIndex < writeCommandCount ? &result.commands[drawCommandIndex] : nullptr;
                 if (command == nullptr && desc.maxDrawCommands != 0U && writeCommandCount >= desc.maxDrawCommands) {
                     if (gpuDrivenCandidate) {
                         MeshPipelineGpuDrivenRecorder::Record(result, instance.entityId, worldBounds, UINT32_MAX, selectedLod, meshletRange, true);
@@ -421,6 +431,8 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                     ++writeCommandCount;
                 }
                 MeshPipelineGpuDrivenRecorder::AccumulateCandidateStats(result.stats, meshResource, meshletRange);
+                lastCommandKey = commandKey;
+                lastCommandIndex = drawCommandIndex;
                 const std::uint32_t gpuDrivenRecordIndex = gpuDrivenCandidate
                     ? static_cast<std::uint32_t>(result.gpuDrivenInputRecords.size()) : UINT32_MAX;
                 if (gpuDrivenCandidate) {

@@ -5,6 +5,7 @@
 #include "scene/GeometrySwarmVisibilityClusters.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <iterator>
@@ -174,6 +175,7 @@ RenderProxyId RenderScene::UpsertMesh(const MeshRenderProxyDesc& desc) {
     auto [it, inserted] = meshes_.try_emplace(desc.entityId);
     MeshRenderProxy& proxy = it->second;
     if (inserted) {
+        meshContentRevision_ = NextMeshContentRevision();
         if (!sortedMeshProxies_.dirty) {
             if (sortedMeshProxies_.proxies.empty() ||
                 desc.entityId > sortedMeshProxies_.proxies.back()->desc.entityId) {
@@ -209,6 +211,7 @@ RenderProxyId RenderScene::UpsertMesh(const MeshRenderProxyDesc& desc) {
 
     const RenderProxyDirtyFlag dirty = RenderSceneProxyDirtyTracker::DirtyForMeshChange(proxy.desc, desc);
     if (dirty != RenderProxyDirtyFlag::None) {
+        meshContentRevision_ = NextMeshContentRevision();
         const bool sameGroupFlags = proxy.desc.visible && desc.visible &&
             proxy.desc.morphDeformationEnabled == desc.morphDeformationEnabled &&
             (proxy.desc.materialSlotOverrideCount != 0U) == (desc.materialSlotOverrideCount != 0U);
@@ -298,6 +301,7 @@ RenderProxyId RenderScene::UpsertGeometrySwarm(const GeometrySwarmRenderProxyDes
             if (group.meshAssetId == desc.meshAssetId && group.materialAssetId == desc.materialAssetId) {
                 const std::uint32_t firstNewInstance = previous.instanceCount;
                 const auto firstGenerated = group.instances.size();
+                meshContentRevision_ = NextMeshContentRevision();
                 proxy.desc = desc;
                 group.instances.reserve(group.instances.size() + (desc.instanceCount - firstNewInstance));
                 for (std::uint32_t index = firstNewInstance; index < desc.instanceCount; ++index) {
@@ -757,7 +761,13 @@ RenderProxyId RenderScene::AllocateProxyId() noexcept {
 }
 
 void RenderScene::InvalidateDrawGroups() noexcept {
+    meshContentRevision_ = NextMeshContentRevision();
     drawGroupsDirty_ = true;
+}
+
+std::uint64_t RenderScene::NextMeshContentRevision() noexcept {
+    static std::atomic<std::uint64_t> next{1U};
+    return next.fetch_add(1U, std::memory_order_relaxed);
 }
 
 void RenderScene::RebuildDrawGroupsIfNeeded() const {
@@ -913,6 +923,7 @@ void RenderScene::InvalidateDrawGroupsIfFallback(TransformUpdateOutcome outcome)
 }
 
 void RenderScene::AddTransformUpdateCounts(std::uint64_t inPlace, std::uint64_t fallback) noexcept {
+    if (inPlace != 0U || fallback != 0U) meshContentRevision_ = NextMeshContentRevision();
     transformInPlaceUpdateCount_ += inPlace;
     transformFallbackUpdateCount_ += fallback;
 }
@@ -923,6 +934,7 @@ bool RenderScene::UpdateMeshTransform(std::uint64_t entityId, const std::array<f
     case TransformUpdateOutcome::NotFound:
         return false;
     case TransformUpdateOutcome::InPlace:
+        meshContentRevision_ = NextMeshContentRevision();
         ++transformInPlaceUpdateCount_;
         return true;
     case TransformUpdateOutcome::Fallback:

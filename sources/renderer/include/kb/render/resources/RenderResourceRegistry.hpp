@@ -81,6 +81,7 @@ public:
     void Shutdown() noexcept;
 
     [[nodiscard]] RenderResourceRegistryStats Stats() const noexcept;
+    [[nodiscard]] std::uint64_t Revision() const noexcept { return nextResourceVersion_; }
 
 private:
     enum class DeferredDestroyKind : std::uint8_t {

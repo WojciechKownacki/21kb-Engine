@@ -159,7 +159,9 @@ SceneMeshInstanceBufferPool::~SceneMeshInstanceBufferPool() {
 bgfx::DynamicVertexBufferHandle SceneMeshInstanceBufferPool::Upload(
     std::span<const SceneRenderMeshInstance> instances,
     const RenderMaterialResource* material,
-    bool encodeShadowReceiver) {
+    bool encodeShadowReceiver,
+    std::uint64_t instanceRevision) {
+    lastUploadBytes_ = 0U;
     constexpr std::uint32_t stride = RenderInstanceBuffer::Stride();
     if (instances.empty() || instances.size() > std::numeric_limits<std::uint32_t>::max() / stride) {
         return BGFX_INVALID_HANDLE;
@@ -169,6 +171,11 @@ bgfx::DynamicVertexBufferHandle SceneMeshInstanceBufferPool::Upload(
         slots_.emplace_back();
     }
     Slot& slot = slots_[usedSlots_];
+    if (instanceRevision != 0U && instanceRevision == slot.instanceRevision &&
+        bgfx::isValid(slot.buffer) && count == slot.count && encodeShadowReceiver == slot.encodeShadowReceiver) {
+        ++usedSlots_;
+        return slot.buffer;
+    }
     if (!bgfx::isValid(slot.buffer) || count > slot.capacity) {
         const std::uint32_t maxCapacity = std::numeric_limits<std::uint32_t>::max() / stride;
         const std::uint32_t capacity = std::max(count,
@@ -197,6 +204,10 @@ bgfx::DynamicVertexBufferHandle SceneMeshInstanceBufferPool::Upload(
         std::span<RenderInstanceData>{reinterpret_cast<RenderInstanceData*>(memory->data), count},
         instances, material, encodeShadowReceiver);
     bgfx::update(slot.buffer, 0U, memory);
+    slot.instanceRevision = instanceRevision;
+    slot.count = count;
+    slot.encodeShadowReceiver = encodeShadowReceiver;
+    lastUploadBytes_ = static_cast<std::uint64_t>(count) * stride;
     ++usedSlots_;
     return slot.buffer;
 }
@@ -252,11 +263,12 @@ void SceneMeshDrawCommandSubmitter::Submit(const SceneMeshDrawCommandSubmitDesc&
         const std::uint32_t availableInstances = bgfx::getAvailInstanceDataBuffer(instanceCount, RenderInstanceBuffer::Stride());
         const bool selectionPass = IsSelectionPass(desc.pass);
         bgfx::DynamicVertexBufferHandle overflowBuffer = BGFX_INVALID_HANDLE;
-        if (availableInstances < instanceCount && desc.instanceBufferPool != nullptr) {
+        if ((availableInstances < instanceCount || command.instanceRevision != 0U) && desc.instanceBufferPool != nullptr) {
             overflowBuffer = desc.instanceBufferPool->Upload(
                 command.instances,
                 selectionPass ? nullptr : command.materialResource,
-                desc.pass != MeshPassType::ShadowDepth && !selectionPass);
+                desc.pass != MeshPassType::ShadowDepth && !selectionPass,
+                command.instanceRevision);
         }
         const bool usesOverflowBuffer = bgfx::isValid(overflowBuffer);
         const std::uint32_t submittedInstances = usesOverflowBuffer ? instanceCount : availableInstances;
@@ -414,7 +426,9 @@ void SceneMeshDrawCommandSubmitter::Submit(const SceneMeshDrawCommandSubmitDesc&
             desc.stats.submittedShadowCasterCount += submittedInstances;
             ++desc.stats.submittedShadowDrawCallCount;
         }
-        desc.stats.instanceUploadBytes += static_cast<std::uint64_t>(submittedInstances) * RenderInstanceBuffer::Stride();
+        desc.stats.instanceUploadBytes += usesOverflowBuffer
+            ? desc.instanceBufferPool->LastUploadBytes()
+            : static_cast<std::uint64_t>(submittedInstances) * RenderInstanceBuffer::Stride();
     }
     if (meshDrawDebugLogEnabled) {
         std::ostringstream message;

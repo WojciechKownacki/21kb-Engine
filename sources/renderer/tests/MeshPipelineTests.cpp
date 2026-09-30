@@ -13,6 +13,8 @@
 #include "../src/scene/pipeline/MeshPipelinePassPolicy.hpp"
 #include "../src/scene/pipeline/MeshPipelineResourceResolver.hpp"
 #include "../src/scene/pipeline/MeshPipelineVisibility.hpp"
+#include "../src/scene/cache/SceneMeshCommandReuseGate.hpp"
+#include "../src/renderer/RendererTemporalJitter.hpp"
 
 #include <array>
 #include <string_view>
@@ -45,6 +47,84 @@ namespace {
     const auto camera = scene.BuildPrimaryCamera(1024U, 1024U);
     Require(camera.has_value(), "Perspective LOD test camera could not be built");
     return *camera;
+}
+
+void RunTemporalCullingConservatismTest() {
+    const RenderExtent extent{64U, 64U};
+    for (const bool homogeneous : {false, true}) {
+        auto base = PerspectiveCamera();
+        SceneDepthPolicy::MakePerspective(base.projection.data(), 90.0F, 1.0F, 0.01F, 1200.0F, homogeneous);
+        std::optional<SceneRenderCamera> previousKey;
+        for (std::uint64_t frame = 0U; frame < 8U; ++frame) {
+            auto camera = base;
+            RendererTemporalJitter::Apply(camera, RendererTemporalJitter::Compute(frame, extent, true), extent);
+            const auto key = SceneMeshCullingCamera(&camera);
+            Require(!previousKey || key == previousKey, "Temporal samples must share a stable culling key");
+            previousKey = key;
+            const auto conservative = MeshPipelineVisibility::BuildFrustum(&camera, homogeneous);
+            camera.temporalProjectionOffset = {};
+            camera.cullingGuardBand = {};
+            const auto original = MeshPipelineVisibility::BuildFrustum(&camera, homogeneous);
+            for (const float depth : {0.011F, 1.0F, 100.0F, 1100.0F}) {
+                for (int x = -102; x <= 102; ++x) {
+                    for (const float y : {-1.01F, -1.0F, 0.0F, 1.0F, 1.01F}) {
+                        const RenderBoundsSphere bounds{.center = {x * depth * 0.01F, y * depth, depth}, .radius = depth * 0.0001F};
+                        Require(!MeshPipelineVisibility::IsInsideFrustum(original, bounds) ||
+                            MeshPipelineVisibility::IsInsideFrustum(conservative, bounds),
+                            "Stable culling dropped geometry visible in a temporal sample");
+                    }
+                }
+            }
+        }
+    }
+}
+
+void RunSceneMeshCommandReuseInvalidationTest() {
+    RenderMeshResource mesh{};
+    std::vector<MeshDrawCommand> commands(2U);
+    for (auto& command : commands) command.meshResource = &mesh;
+    SceneMeshCommandReuseKey key{.sceneRevision = 1U, .resourceRevision = 2U, .bindingRevision = 3U,
+        .camera = PerspectiveCamera()};
+    SceneMeshCommandReuseGate gate;
+    gate.Commit(key, commands, {});
+    Require(gate.Matches(key), "Valid static commands were not retained");
+    Require(commands[0].instanceRevision != 0U && commands[0].instanceRevision != commands[1].instanceRevision,
+        "Distinct commands must never share a GPU content identity");
+    for (int change = 0; change < 7; ++change) {
+        auto altered = key;
+        switch (change) {
+        case 0: ++altered.sceneRevision; break;
+        case 1: ++altered.resourceRevision; break;
+        case 2: ++altered.bindingRevision; break;
+        case 3: altered.camera->view[12] += 1.0F; break;
+        case 4: altered.camera->projection[0] *= 2.0F; break;
+        case 5: altered.camera->cullingMask = 0U; break;
+        case 6: ++altered.budget.maxVisibleInstances; break;
+        }
+        Require(!gate.Matches(altered), "Changed renderer input reused obsolete commands");
+    }
+    SceneRenderSubmitStats incomplete{};
+    incomplete.droppedInstanceCount = 1U;
+    gate.Commit(key, commands, incomplete);
+    Require(!gate.Matches(key), "Incomplete commands must rebuild instead of remaining cached");
+    mesh.lods.resize(2U);
+    gate.Commit(key, commands, {});
+    Require(gate.Matches(key), "Static multi-LOD commands should retain valid contents");
+    auto advancedHistory = key;
+    ++advancedHistory.detailSwitchHistoryRevision;
+    Require(!gate.Matches(advancedHistory), "Advanced LOD history must invalidate an earlier shadow pass");
+    RenderScene scene;
+    auto revision = scene.MeshContentRevision();
+    static_cast<void>(scene.UpsertMesh(MeshRenderProxyDesc{.entityId = 1U, .meshAssetId = 7U, .model = IdentityMatrix()}));
+    Require(scene.MeshContentRevision() != revision, "Mesh insertion did not publish invalidation");
+    revision = scene.MeshContentRevision();
+    static_cast<void>(scene.DrawGroups());
+    Require(scene.UpdateMeshTransform(1U, TranslationMatrix(1.0F, 0.0F, 0.0F)) && scene.MeshContentRevision() != revision,
+        "In-place transform mutation did not invalidate retained commands");
+    revision = scene.MeshContentRevision();
+    Require(scene.RemoveMesh(1U) && scene.MeshContentRevision() != revision, "Mesh removal did not publish invalidation");
+    RenderScene nextScene;
+    Require(nextScene.MeshContentRevision() != scene.MeshContentRevision(), "A replacement scene reused another scene's identity");
 }
 
 void RunMeshPassTypeNamesResolveTest() {
@@ -1512,12 +1592,32 @@ void RunMeshPipelineCoordinatesDetailSwitchGroupsWithHysteresisTest() {
         "Detail Switch changed LOD inside its hysteresis band");
 
     groups[0].instances[0].model = TranslationMatrix(0.0F, 0.0F, 0.8F);
+    // Shadows run before the opaque pass that advances the shared hysteresis.
+    MeshPipelineProcessor::BuildInto(MeshPipelineBuildDesc{
+        .pass = MeshPassType::ShadowDepth, .drawGroups = &groups, .resolvedMeshResource = &mesh, .camera = &camera,
+        .resourceValidation = MeshPipelineResourceValidation::Skip,
+    }, result);
+    Require(result.commands.size() == 1U && result.commands[0].lodLevel == 0U,
+        "Shadow pass unexpectedly advanced the opaque LOD history");
+    SceneMeshCommandReuseKey shadowKey{.detailSwitchHistoryRevision = result.detailSwitchHistoryRevision};
+    SceneMeshCommandReuseGate shadowReuse;
+    shadowReuse.Commit(shadowKey, result.commands, result.stats);
+    const auto historyBeforeDemotion = result.detailSwitchHistoryRevision;
     MeshPipelineProcessor::BuildInto(MeshPipelineBuildDesc{
         .pass = MeshPassType::BaseOpaque, .drawGroups = &groups, .resolvedMeshResource = &mesh, .camera = &camera,
         .resourceValidation = MeshPipelineResourceValidation::Skip,
     }, result);
     Require(result.commands.size() == 1U && result.commands[0].lodLevel == 1U,
         "Detail Switch did not demote after leaving its hysteresis band");
+    shadowKey.detailSwitchHistoryRevision = result.detailSwitchHistoryRevision;
+    Require(result.detailSwitchHistoryRevision != historyBeforeDemotion && !shadowReuse.Matches(shadowKey),
+        "Opaque LOD demotion retained a shadow command with obsolete geometry");
+    MeshPipelineProcessor::BuildInto(MeshPipelineBuildDesc{
+        .pass = MeshPassType::ShadowDepth, .drawGroups = &groups, .resolvedMeshResource = &mesh, .camera = &camera,
+        .resourceValidation = MeshPipelineResourceValidation::Skip,
+    }, result);
+    Require(result.commands.size() == 1U && result.commands[0].lodLevel == 1U,
+        "Rebuilt shadow commands did not consume the updated LOD history");
 
     groups[0].instances[0].model = TranslationMatrix(0.0F, 0.0F, 0.0F);
     groups[0].instances[0].detailSwitchMinimumLod = 1U;
@@ -1932,6 +2032,16 @@ void RunRenderScenePropagatesMeshPassFlagsTest() {
 } // namespace
 
 void RunMeshPipelineTests() {
+    auto shear = IdentityMatrix();
+    shear[4] = 1.0F;
+    const auto shearedBounds = MeshPipelineVisibility::TransformBounds(RenderBoundsSphere{.radius = 1.0F}, shear);
+    for (int sample = 0; sample < 360; ++sample) {
+        const float angle = sample * 0.0174532925F;
+        const float x = std::cos(angle) + std::sin(angle), y = std::sin(angle);
+        Require(shearedBounds.radius >= std::sqrt(x*x + y*y), "World bounds must enclose sheared geometry");
+    }
+    RunTemporalCullingConservatismTest();
+    RunSceneMeshCommandReuseInvalidationTest();
     // Compare accelerated generated ranges with the original per-instance path.
     // Camera motion, shear, off-centre bounds, growth and mixed owners must not
     // alter accepted ids or pass counters.

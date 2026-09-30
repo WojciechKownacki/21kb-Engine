@@ -25,7 +25,9 @@ public:
     [[nodiscard]] bgfx::DynamicVertexBufferHandle Upload(
         std::span<const SceneRenderMeshInstance> instances,
         const RenderMaterialResource* material,
-        bool encodeShadowReceiver);
+        bool encodeShadowReceiver,
+        std::uint64_t instanceRevision = 0U);
+    [[nodiscard]] std::uint64_t LastUploadBytes() const noexcept { return lastUploadBytes_; }
     void EndFrame() noexcept { usedSlots_ = 0U; }
     void Shutdown() noexcept;
 
@@ -33,9 +35,13 @@ private:
     struct Slot {
         bgfx::DynamicVertexBufferHandle buffer = BGFX_INVALID_HANDLE;
         std::uint32_t capacity = 0U;
+        std::uint64_t instanceRevision = 0U;
+        std::uint32_t count = 0U;
+        bool encodeShadowReceiver = false;
     };
     std::vector<Slot> slots_;
     std::size_t usedSlots_ = 0U;
+    std::uint64_t lastUploadBytes_ = 0U;
 };
 
 struct SceneMeshDrawCommandSubmitDesc {

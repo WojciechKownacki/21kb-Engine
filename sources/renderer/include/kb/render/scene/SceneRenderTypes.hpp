@@ -136,8 +136,19 @@ enum class SceneRenderCameraClearMode : std::uint8_t {
 };
 
 struct SceneRenderCamera {
+    [[nodiscard]] bool operator==(const SceneRenderCamera&) const noexcept = default;
     std::array<float, 16> view{};
     std::array<float, 16> projection{};
+    // Derived by temporal jitter. Culling uses the original projection and a
+    // conservative guard band containing every sample in the pixel sequence.
+    std::array<float, 2> temporalProjectionOffset{};
+    std::array<float, 2> cullingGuardBand{};
+    [[nodiscard]] std::array<float, 16> CullingProjection() const noexcept {
+        auto result = projection;
+        result[8] -= temporalProjectionOffset[0];
+        result[9] -= temporalProjectionOffset[1];
+        return result;
+    }
     // LIB-136: resolved from the selected CameraComponent's cullingMask/clearMode/clearColor
     // (kb::scene::CameraComponent). Defaults are "no filtering, full clear" so every
     // call site that default-constructs a SceneRenderCamera without an ECS camera behind it
@@ -255,6 +266,7 @@ struct SceneRenderSnapshot {
 };
 
 struct SceneRenderDrawBudget {
+    [[nodiscard]] bool operator==(const SceneRenderDrawBudget&) const noexcept = default;
     std::uint32_t maxDrawCommands = 0;
     std::uint32_t maxVisibleInstances = 0;
     std::uint32_t maxDroppedInstances = 0;
@@ -335,6 +347,7 @@ struct SceneRenderSubmitStats {
     std::uint32_t meshDrawCommandCacheMissCount = 0;
     std::uint32_t meshDrawCommandCacheBuildCount = 0;
     std::uint32_t meshDrawCommandCachePruneCount = 0;
+    std::uint32_t meshCommandReuseCount = 0;
     std::uint32_t meshPipelineScratchInstanceCapacity = 0;
     std::uint32_t gpuDrivenDrawCandidateCount = 0;
     std::uint32_t indirectDrawCandidateCount = 0;
@@ -549,6 +562,7 @@ struct SceneRenderDiagnostics {
     lhs.meshDrawCommandCacheHitCount += rhs.meshDrawCommandCacheHitCount;
     lhs.meshDrawCommandCacheMissCount += rhs.meshDrawCommandCacheMissCount;
     lhs.meshDrawCommandCacheBuildCount += rhs.meshDrawCommandCacheBuildCount;
+    lhs.meshCommandReuseCount += rhs.meshCommandReuseCount;
     lhs.meshDrawCommandCachePruneCount += rhs.meshDrawCommandCachePruneCount;
     lhs.meshPipelineScratchInstanceCapacity += rhs.meshPipelineScratchInstanceCapacity;
     lhs.gpuDrivenDrawCandidateCount += rhs.gpuDrivenDrawCandidateCount;

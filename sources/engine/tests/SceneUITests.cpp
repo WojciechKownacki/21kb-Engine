@@ -29,6 +29,9 @@
 #include "scene/asset/io/SceneAssetReader.hpp"
 #include "scene/asset/io/components/SceneAssetUIComponentCodec.hpp"
 #include "scene/ui/SceneUIComponentTextCodec.hpp"
+#include "scene/SceneAccess.hpp"
+#include "scene/SceneState.hpp"
+#include "scene/ui/SceneUIGroupTransitions.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1306,6 +1309,28 @@ void TestInputFieldContentTypes() {
 
 // Show/Hide animation on a Canvas Group, safe-area layout, a world-space canvas seen through the camera,
 // and a second player's focus kept on their own canvas.
+void TestSparseGroupTransitionLifetime() {
+    using kb::tests::Require;
+    using kb::tests::NearlyEqual;
+    kb::scene::Scene scene;
+    const auto unrelated = scene.Runtime().EcsWorld().CreateEntities(10'000U, {});
+    const auto owner = scene.Entities().CreateEntity();
+    auto ui = scene.Components().UI();
+    ui.Set(owner, kb::scene::UICanvasGroup{.transitionSeconds = 1.0F});
+    Require(!kb::scene::SceneUIGroupTransitions::Update(scene, 0.1F), "A new group starts at its authored visibility");
+    auto& shown = kb::scene::SceneAccess::State(scene).uiGroupShown;
+    Require(shown.size() == 1U && shown.at(owner.Id()) == 1.0F, "Only actual groups own animation state");
+    ui.TryGet<kb::scene::UICanvasGroup>(owner)->visible = false;
+    Require(kb::scene::SceneUIGroupTransitions::Update(scene, 0.25F) && NearlyEqual(shown.at(owner.Id()), 0.75F), "Existing groups animate after a direct component edit");
+    ui.Remove<kb::scene::UICanvasGroup>(owner);
+    Require(!kb::scene::SceneUIGroupTransitions::Update(scene, 0.1F) && shown.empty(), "Removing a component releases derived animation state");
+    ui.Set(owner, kb::scene::UICanvasGroup{.visible = false, .transitionSeconds = 1.0F});
+    Require(!kb::scene::SceneUIGroupTransitions::Update(scene, 0.1F) && shown.at(owner.Id()) == 0.0F, "Readding a group starts from current authored visibility");
+    scene.Entities().Destroy(owner);
+    Require(!kb::scene::SceneUIGroupTransitions::Update(scene, 0.1F) && shown.empty(), "Destroying a group releases its state");
+    Require(unrelated.size() == 10'000U, "Unrelated entities remain present");
+}
+
 void TestCanvasPlacementAnimationAndPlayers() {
     kb::scene::Scene scene;
     const kb::scene::SceneObject canvas = AddUI(scene, {}, CanvasComponents());
@@ -1582,6 +1607,7 @@ void RunSceneUITests() {
     TestDragAndDrop();
     TestInputFieldContentTypes();
     TestCanvasPlacementAnimationAndPlayers();
+    TestSparseGroupTransitionLifetime();
     TestScrollMovementAndLocalizedText();
     TestWidgetSettingsPersistence();
 }

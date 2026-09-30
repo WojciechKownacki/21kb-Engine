@@ -639,10 +639,10 @@ void World::RemoveComponent(Entity entity, ComponentId componentId) {
 void World::MarkComponentModified(Entity entity, ComponentId componentId) {
     ValidateEntityHandle(entity, "MarkComponentModified");
     if (nativeStorage_ != nullptr && nativeStorage_->IsAlive(entity) && nativeStorage_->HasComponent(entity, componentId)) {
-        if (config_.mirrorNativeComponentChangesToBackend && BackendEntityAlive(entity) && WorldComponentReader::Has(world_, entity, componentId)) {
+        if (config_.mirrorNativeComponentChangesToBackend) {
             const ComponentTypeInfo* componentInfo = registries_ == nullptr ? nullptr : registries_->Components().FindInfo(componentId);
             if (componentInfo != nullptr) {
-                WorldComponentMutator::Set(world_, entity, componentId, componentInfo->size, nativeStorage_->ComponentData(entity, componentId));
+                WorldComponentMutator::SetExisting(world_, entity, componentId, componentInfo->size, nativeStorage_->ComponentData(entity, componentId));
             }
         }
         nativeStorage_->MarkComponentModified(entity, componentId);

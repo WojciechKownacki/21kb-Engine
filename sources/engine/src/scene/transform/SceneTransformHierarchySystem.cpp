@@ -23,6 +23,7 @@
 #include <memory>
 #include <mutex>
 #include <span>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -190,7 +191,6 @@ struct TransformFlushContext {
 struct TransformCacheBuildContext {
     TransformValueCache* cache = nullptr;
     std::mutex sparseMutex;
-    std::atomic_size_t loadedCount = 0U;
 };
 
 void EnsureWorkerPool(SceneState& state);
@@ -266,7 +266,6 @@ void AddTransformCacheEntryFromHotBatch(
             .valid = true,
             .dirty = false,
         };
-        buildContext.loadedCount.fetch_add(1U, std::memory_order_relaxed);
         return;
     }
 
@@ -280,7 +279,6 @@ void AddTransformCacheEntryFromHotBatch(
             .dirty = false,
         };
     }
-    buildContext.loadedCount.fetch_add(1U, std::memory_order_relaxed);
 }
 
 [[nodiscard]] TransformValueCache BeginTransformValueCache(SceneState& state) {
@@ -678,10 +676,15 @@ void StoreTransformScratch(SceneState& state, SceneEntity entity, const Transfor
 }
 
 void EnsureWorkerPool(SceneState& state) {
+    const auto available = std::max(1U, std::thread::hardware_concurrency());
+    const auto limit = state.world.Config().workerThreadLimit;
+    const kb::ecs::WorkerPoolConfig config{
+        .workerCount = std::min<std::size_t>(available > 1U ? available - 1U : 1U, limit == 0U ? 8U : limit),
+    };
     if (state.transformWorkerPool == nullptr) {
-        state.transformWorkerPool = std::make_unique<kb::ecs::WorkerPool>(kb::ecs::WorkerPoolConfig{});
+        state.transformWorkerPool = std::make_unique<kb::ecs::WorkerPool>(config);
     } else if (!state.transformWorkerPool->Running()) {
-        state.transformWorkerPool->Start(kb::ecs::WorkerPoolConfig{});
+        state.transformWorkerPool->Start(config);
     }
 }
 
@@ -1311,7 +1314,6 @@ void RunHierarchyDirtyFrontier(
                 }
 
                 const std::size_t writeBegin = updatedCount.fetch_add(localUpdatedCount, std::memory_order_relaxed);
-                rootFastPathCount.fetch_add(localUpdatedCount, std::memory_order_relaxed);
                 std::size_t writeOffset = 0U;
                 for (std::size_t row = 0U; row < chunk.Count(); ++row) {
                     TransformComponent& transform = transforms[row];
