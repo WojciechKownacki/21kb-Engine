@@ -265,8 +265,7 @@ ParticleEditorResult ParticlePreviewSession::Tick(float wallDeltaSeconds) {
 
 bool ParticlePreviewSession::Submit(kb::render::Renderer& renderer) const {
     if (scene_ == nullptr || !renderer.IsFrameActive()) return false;
-    renderer.SubmitScene(*scene_);
-    return true;
+    return renderer.SubmitScene(*scene_);
 }
 
 void ParticlePreviewSession::Release(kb::render::Renderer& renderer) {

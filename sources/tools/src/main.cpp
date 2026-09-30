@@ -21,6 +21,9 @@ Commands:
   init-agent   Provision a game project for AI coding agents (AGENTS.md,
                .luarc.json, .kb/api/*).
                  --project <dir>
+  import       Import external source assets into the project's runtime asset
+               format (.21kb plus metadata).
+                 --project <dir> --destination /Game/<folder> <file> [more files...]
   validate     Validate Lua behaviour scripts (syntax + sandbox load).
                  [--project <dir>] <file.lua> [more files...]
   scene-list   List nodes, components, and behaviours of a scene file.
@@ -73,6 +76,9 @@ int main(int argc, char** argv) {
     }
     if (command == "init-agent") {
         return kb::cli::RunInitAgentCommand(arguments, io);
+    }
+    if (command == "import") {
+        return kb::cli::RunImportCommand(arguments, io);
     }
     if (command == "validate") {
         return kb::cli::RunValidateCommand(arguments, io);

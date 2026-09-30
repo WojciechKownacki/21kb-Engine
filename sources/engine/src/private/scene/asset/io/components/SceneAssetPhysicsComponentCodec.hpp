@@ -18,7 +18,7 @@ public:
     [[nodiscard]] static bool ReadRigidbody(SceneAssetBinaryIO::ByteReader& input, RigidbodyComponent& output);
     static void WriteRigidbody(std::vector<std::uint8_t>& output, const RigidbodyComponent& rigidbody);
 
-    [[nodiscard]] static bool ReadCollider(SceneAssetBinaryIO::ByteReader& input, ColliderComponent& output);
+    [[nodiscard]] static bool ReadCollider(SceneAssetBinaryIO::ByteReader& input, std::uint32_t fileVersion, ColliderComponent& output);
     static void WriteCollider(std::vector<std::uint8_t>& output, const ColliderComponent& collider);
 
     [[nodiscard]] static bool ReadCharacterController(SceneAssetBinaryIO::ByteReader& input, CharacterControllerComponent& output);

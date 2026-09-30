@@ -42,6 +42,7 @@ QueryState* QueryStateFactory::Create(
         mutableBorrowLocks,
         structuralChangeValidator,
         nullptr,
+        nullptr,
     };
 }
 

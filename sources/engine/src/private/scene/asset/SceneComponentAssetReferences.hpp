@@ -65,6 +65,9 @@ template <typename Sink>
 
 template <typename Sink>
 void ForEachReference(const ScenePrefabNodeComponents& components, Sink&& sink) {
+    if (components.collider.has_value() && components.collider->shape == ColliderShape::Mesh) {
+        sink(components.collider->meshAssetId, std::string_view{"collisionMesh"}, nullptr);
+    }
     if (components.meshRenderer.has_value()) {
         sink(components.meshRenderer->meshAssetId, std::string_view{ "mesh" }, nullptr);
         sink(components.meshRenderer->materialAssetId, std::string_view{ "material" }, nullptr);

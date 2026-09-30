@@ -1,8 +1,8 @@
 #include "kb/render/scene/SceneGpuDrivenFrameResources.hpp"
 
-#include <algorithm>
 #include <array>
 #include <cstring>
+#include <stdexcept>
 
 namespace kb::render {
 namespace {
@@ -10,6 +10,11 @@ namespace {
 struct PackedGpuDrivenMetadata {
     std::array<float, 4> values{};
 };
+
+// The rounded capacity must still fit bgfx's 32-bit buffer byte size.
+constexpr std::uint32_t kMaxCapacity = 1U << 27U;
+static_assert(sizeof(PackedGpuDrivenMetadata) == 16U);
+static_assert(sizeof(std::array<float, 4>) == 16U);
 
 [[nodiscard]] bgfx::VertexLayout GpuDrivenVec4Layout() {
     bgfx::VertexLayout layout{};
@@ -28,15 +33,6 @@ struct PackedGpuDrivenMetadata {
     return capacity;
 }
 
-[[nodiscard]] const bgfx::Memory* CopyMemory(const void* source, std::uint32_t byteCount) noexcept {
-    const bgfx::Memory* memory = bgfx::alloc(byteCount);
-    if (memory == nullptr || memory->data == nullptr) {
-        return nullptr;
-    }
-    std::memcpy(memory->data, source, byteCount);
-    return memory;
-}
-
 } // namespace
 
 SceneGpuDrivenFrameResources::~SceneGpuDrivenFrameResources() {
@@ -52,17 +48,23 @@ SceneGpuDrivenFrameBatch SceneGpuDrivenFrameResources::Upload(std::span<const Sc
     if (records.empty()) {
         return batch;
     }
-    const std::uint32_t recordCount = static_cast<std::uint32_t>(std::min<std::size_t>(records.size(), UINT32_MAX));
+    if (records.size() > kMaxCapacity) {
+        throw std::length_error("GPU culling upload exceeds the buffer byte-size limit");
+    }
+    const std::uint32_t recordCount = static_cast<std::uint32_t>(records.size());
     if (!EnsureCapacity(recordCount)) {
         return batch;
     }
 
-    std::vector<std::array<float, 4>> bounds(recordCount);
-    std::vector<PackedGpuDrivenMetadata> metadata(recordCount);
+    const std::uint32_t boundsBytes = recordCount * sizeof(std::array<float, 4>);
+    const std::uint32_t metadataBytes = recordCount * sizeof(PackedGpuDrivenMetadata);
+    const bgfx::Memory* boundsMemory = bgfx::alloc(boundsBytes);
+    const bgfx::Memory* metadataMemory = bgfx::alloc(metadataBytes);
     for (std::uint32_t index = 0; index < recordCount; ++index) {
         const SceneGpuDrivenInputRecord& record = records[index];
-        bounds[index] = record.worldBounds;
-        metadata[index] = PackedGpuDrivenMetadata{
+        std::memcpy(boundsMemory->data + index * sizeof(record.worldBounds),
+            record.worldBounds.data(), sizeof(record.worldBounds));
+        const PackedGpuDrivenMetadata metadata{
             .values = {
                 record.drawCommandIndex == UINT32_MAX ? -1.0F : static_cast<float>(record.drawCommandIndex),
                 static_cast<float>(record.lodLevel),
@@ -70,14 +72,7 @@ SceneGpuDrivenFrameBatch SceneGpuDrivenFrameResources::Upload(std::span<const Sc
                 static_cast<float>(record.meshletCount),
             },
         };
-    }
-
-    const std::uint32_t boundsBytes = static_cast<std::uint32_t>(bounds.size() * sizeof(bounds[0]));
-    const std::uint32_t metadataBytes = static_cast<std::uint32_t>(metadata.size() * sizeof(metadata[0]));
-    const bgfx::Memory* boundsMemory = CopyMemory(bounds.data(), boundsBytes);
-    const bgfx::Memory* metadataMemory = CopyMemory(metadata.data(), metadataBytes);
-    if (boundsMemory == nullptr || metadataMemory == nullptr) {
-        return batch;
+        std::memcpy(metadataMemory->data + index * sizeof(metadata), &metadata, sizeof(metadata));
     }
 
     bgfx::update(boundsBuffer_, 0U, boundsMemory);

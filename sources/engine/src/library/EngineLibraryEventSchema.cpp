@@ -44,6 +44,7 @@ using kb::script::ScriptValueType;
         ScriptFunctionPin{ "value2", ScriptValueType::Float, true },
         ScriptFunctionPin{ "text", ScriptValueType::String, true },
         ScriptFunctionPin{ "action", ScriptValueType::String, true },
+        ScriptFunctionPin{ "other", ScriptValueType::Entity, true },
     };
 }
 

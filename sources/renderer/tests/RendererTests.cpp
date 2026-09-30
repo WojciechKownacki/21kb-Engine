@@ -18,6 +18,14 @@ void RunGraphShaderArtifactCookTests();
 void RunMaterialProgramRegistryTests();
 void RunSceneMeshPassProgramSelectionTests();
 void RunRendererRuntimeSubmitTests();
+void RunRendererTransparentGpuReadbackTests();
+void RunRendererDefaultSubmissionResultTest();
+void RunRendererPostProcessProfileDiagnosticTest();
+void RunRendererResourceGroupEnsureTests();
+void RunRendererSceneSubmitScaleBenchmark(bool spiralLayout);
+void RunRendererPacedSceneSubmitStressBenchmark(bool staticMillionSnapshot,
+    bool gpuDrivenDispatchEnabled, unsigned maxForwardLights);
+void RunRendererVisibilityFeedbackTest();
 void RunEditorUIViewTransformValidationTests();
 void RunRendererParticleMeshSnapshotSubmitTest();
 void RunRendererParticleStripSnapshotSubmitTest();
@@ -27,6 +35,7 @@ void RunRendererCapabilityReportTests();
 void RunMeshPipelineTests();
 void RunSceneDisplayCompositeTests();
 void RunSceneExposureMeterTests();
+void RunExposureReadbackResetTest();
 void RunSceneDepthPolicyTests();
 void RunRenderSceneSyncTests();
 void RunSceneRenderTargetFormatTests();
@@ -40,6 +49,24 @@ void RunScreenUIDrawBatchTests();
 }
 
 int main(int argc, char** argv) {
+    if (argc == 2 && std::string_view{argv[1]} == "mesh-visibility") {
+        kb::render::tests::RunMeshPipelineTests();
+        kb::render::tests::RunSceneDepthPolicyTests();
+        kb::render::tests::RunRenderSceneSyncTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "post-profile-diagnostic") {
+        kb::render::tests::RunRendererPostProcessProfileDiagnosticTest();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "exposure-readback") {
+        kb::render::tests::RunExposureReadbackResetTest();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "default-submit") {
+        kb::render::tests::RunRendererDefaultSubmissionResultTest();
+        return EXIT_SUCCESS;
+    }
     if (argc == 2 && std::string_view{ argv[1] } == "mesh-bake") {
         kb::render::tests::RunMeshBakeTests();
         return EXIT_SUCCESS;
@@ -88,6 +115,10 @@ int main(int argc, char** argv) {
         kb::render::tests::RunMeshPipelineTests();
         return EXIT_SUCCESS;
     }
+    if (argc == 2 && std::string_view{ argv[1] } == "transparent-gpu-readback") {
+        kb::render::tests::RunRendererTransparentGpuReadbackTests();
+        return EXIT_SUCCESS;
+    }
     if (argc == 2 && std::string_view{ argv[1] } == "mesh-pass-program-selection") {
         kb::render::tests::RunSceneMeshPassProgramSelectionTests();
         return EXIT_SUCCESS;
@@ -100,8 +131,24 @@ int main(int argc, char** argv) {
         kb::render::tests::RunSkinnedMeshGpuReadbackTests();
         return EXIT_SUCCESS;
     }
+    if (argc == 2 && std::string_view{ argv[1] } == "capabilities") {
+        kb::render::tests::RunRendererCapabilityReportTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "exposure-meter") {
+        kb::render::tests::RunSceneExposureMeterTests();
+        return EXIT_SUCCESS;
+    }
     if (argc == 2 && std::string_view{ argv[1] } == "scene-sync") {
         kb::render::tests::RunRenderSceneSyncTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "resource-group-ensure") {
+        kb::render::tests::RunRendererResourceGroupEnsureTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "visibility-feedback") {
+        kb::render::tests::RunRendererVisibilityFeedbackTest();
         return EXIT_SUCCESS;
     }
     if (argc == 2 && std::string_view{ argv[1] } == "scene-render-target-format") {
@@ -110,6 +157,34 @@ int main(int argc, char** argv) {
     }
     if (argc == 2 && std::string_view{ argv[1] } == "particle-mesh-submit") {
         kb::render::tests::RunRendererParticleMeshSnapshotSubmitTest();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "scene-submit-scale") {
+        kb::render::tests::RunRendererSceneSubmitScaleBenchmark(false);
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "scene-submit-scale-spiral") {
+        kb::render::tests::RunRendererSceneSubmitScaleBenchmark(true);
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "paced-scene-submit-stress") {
+        kb::render::tests::RunRendererPacedSceneSubmitStressBenchmark(false, true, 4U);
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "million-scene-snapshot") {
+        kb::render::tests::RunRendererPacedSceneSubmitStressBenchmark(true, true, 4U);
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "million-scene-snapshot-off4") {
+        kb::render::tests::RunRendererPacedSceneSubmitStressBenchmark(true, false, 4U);
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "million-scene-snapshot-on0") {
+        kb::render::tests::RunRendererPacedSceneSubmitStressBenchmark(true, true, 0U);
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "million-scene-snapshot-off0") {
+        kb::render::tests::RunRendererPacedSceneSubmitStressBenchmark(true, false, 0U);
         return EXIT_SUCCESS;
     }
     if (argc == 2 && std::string_view{ argv[1] } == "particle-strip-submit") {
@@ -167,6 +242,7 @@ int main(int argc, char** argv) {
     kb::render::tests::RunSceneMeshPassProgramSelectionTests();
     kb::render::tests::RunRendererCapabilityReportTests();
     kb::render::tests::RunRendererRuntimeSubmitTests();
+    kb::render::tests::RunRendererDefaultSubmissionResultTest();
     kb::render::tests::RunMeshPipelineTests();
     kb::render::tests::RunSceneDisplayCompositeTests();
     kb::render::tests::RunSceneExposureMeterTests();

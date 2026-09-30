@@ -157,6 +157,9 @@ bool CommandBufferPlaybackResult::WasDestroyed(CommandEntity entity) const {
 }
 
 bool CommandBufferPlaybackResult::WasDestroyed(Entity entity) const noexcept {
+    if (destroyedEntitiesSorted_) {
+        return std::binary_search(destroyedEntities_.begin(), destroyedEntities_.end(), entity);
+    }
     return std::any_of(destroyedEntities_.begin(), destroyedEntities_.end(), [entity](Entity destroyed) {
         return destroyed == entity;
     });
@@ -185,6 +188,7 @@ const CommandBufferPlaybackResult& CommandBufferPlaybackState::Result() const no
 void CommandBufferPlaybackState::Reset() noexcept {
     result_ = CommandBufferPlaybackResult{};
     playbackCreatedIds_.clear();
+    trackPlaybackCreatedIds_ = false;
     destroyedIds_.clear();
     destroyedIdsActive_ = false;
     scratchEntities_.clear();
@@ -590,11 +594,36 @@ CommandBufferPlaybackResult CommandBuffer::Playback(World& world) {
     for (const Lane& lane : lanes_) {
         deferredEntityCount += lane.nextDeferredEntity;
     }
+    bool trackPlaybackCreatedIds = false;
+    for (const Lane& lane : lanes_) {
+        if (trackPlaybackCreatedIds) {
+            break;
+        }
+        trackPlaybackCreatedIds = std::any_of(lane.commands.begin(), lane.commands.end(), [](const Command& command) {
+            switch (command.kind) {
+            case CommandKind::SetComponent:
+            case CommandKind::RemoveComponent:
+            case CommandKind::SetComponents:
+            case CommandKind::RemoveComponents:
+            case CommandKind::SetParent:
+            case CommandKind::ClearParent:
+            case CommandKind::ClearParents:
+                return true;
+            case CommandKind::SetParents:
+                return !command.parentBatchKnownAcyclicForNewEntities;
+            default:
+                return false;
+            }
+        });
+    }
     std::unordered_set<Entity::IdType> playbackCreatedIds;
-    playbackCreatedIds.reserve(deferredEntityCount);
+    if (trackPlaybackCreatedIds) {
+        playbackCreatedIds.reserve(deferredEntityCount);
+    }
 
     std::vector<PlaybackComponentSnapshot> componentRollback;
     std::unordered_set<PlaybackComponentSnapshotKey, PlaybackComponentSnapshotKeyHash> componentRollbackKeys;
+    bool componentRollbackKeysDeferred = false;
     std::vector<PlaybackParentSnapshot> parentRollback;
     std::unordered_set<Entity::IdType> parentRollbackIds;
     std::vector<Entity> playbackScratchEntities;
@@ -607,13 +636,28 @@ CommandBufferPlaybackResult CommandBuffer::Playback(World& world) {
         return entity.IsValid() && playbackCreatedIds.find(entity.Id()) != playbackCreatedIds.end();
     };
 
-    auto snapshotComponent = [&world, &componentRollback, &componentRollbackKeys, &isPlaybackCreated](Entity entity, ComponentId componentId) {
+    auto ensureComponentRollbackKeys = [&componentRollback, &componentRollbackKeys, &componentRollbackKeysDeferred]() {
+        if (!componentRollbackKeysDeferred) {
+            return;
+        }
+        componentRollbackKeys.reserve(componentRollback.size());
+        for (const PlaybackComponentSnapshot& snapshot : componentRollback) {
+            componentRollbackKeys.insert(PlaybackComponentSnapshotKey{ .entity = snapshot.entity, .componentId = snapshot.componentId });
+        }
+        componentRollbackKeysDeferred = false;
+    };
+
+    auto snapshotComponent = [&world, &componentRollback, &componentRollbackKeys, &isPlaybackCreated,
+                              &ensureComponentRollbackKeys](Entity entity, ComponentId componentId, bool deferIndex = false) {
         if (componentId == 0 || !world.IsAlive(entity) || isPlaybackCreated(entity)) {
             return;
         }
-        const PlaybackComponentSnapshotKey key{ .entity = entity, .componentId = componentId };
-        if (!componentRollbackKeys.insert(key).second) {
-            return;
+        if (!deferIndex) {
+            ensureComponentRollbackKeys();
+            const PlaybackComponentSnapshotKey key{ .entity = entity, .componentId = componentId };
+            if (!componentRollbackKeys.insert(key).second) {
+                return;
+            }
         }
 
         PlaybackComponentSnapshot snapshot;
@@ -633,10 +677,11 @@ CommandBufferPlaybackResult CommandBuffer::Playback(World& world) {
         componentRollback.push_back(std::move(snapshot));
     };
 
-    auto reserveComponentSnapshots = [&componentRollback, &componentRollbackKeys](std::size_t count) {
+    auto reserveComponentSnapshots = [&componentRollback, &componentRollbackKeys, &ensureComponentRollbackKeys](std::size_t count) {
         if (count == 0U) {
             return;
         }
+        ensureComponentRollbackKeys();
         const std::size_t targetSize = componentRollback.size() + count;
         if (componentRollback.capacity() < targetSize) {
             componentRollback.reserve(targetSize);
@@ -812,7 +857,9 @@ CommandBufferPlaybackResult CommandBuffer::Playback(World& world) {
                     }
                     for (std::size_t index = 0; index < playbackScratchCreatedEntities.size(); ++index) {
                         result.createdEntities_[workerIndex][command.first.LocalIndex() + index] = playbackScratchCreatedEntities[index];
-                        playbackCreatedIds.insert(playbackScratchCreatedEntities[index].Id());
+                        if (trackPlaybackCreatedIds) {
+                            playbackCreatedIds.insert(playbackScratchCreatedEntities[index].Id());
+                        }
                     }
                     continue;
                 }
@@ -823,7 +870,9 @@ CommandBufferPlaybackResult CommandBuffer::Playback(World& world) {
                 ++result.stats_.createCommands;
                 Entity createdEntity = world.CreateEntity(command.name);
                 result.createdEntities_[workerIndex][command.first.LocalIndex()] = createdEntity;
-                playbackCreatedIds.insert(createdEntity.Id());
+                if (trackPlaybackCreatedIds) {
+                    playbackCreatedIds.insert(createdEntity.Id());
+                }
             }
         }
         result.stats_.createPhaseNanoseconds = ElapsedCommandBufferNanoseconds(createPhaseStart, CommandBufferStatsClock::now());
@@ -907,11 +956,31 @@ CommandBufferPlaybackResult CommandBuffer::Playback(World& world) {
 
                     playbackScratchEntities.clear();
                     ResolveCommandEntitiesForPlayback(command, result, playbackScratchEntities);
-                    reserveComponentSnapshots(playbackScratchEntities.size() * playbackScratchComponentIds.size());
+                    const bool strictlyIncreasingEntities = std::adjacent_find(
+                        playbackScratchEntities.begin(), playbackScratchEntities.end(),
+                        [](Entity left, Entity right) { return left.Id() >= right.Id(); }) == playbackScratchEntities.end();
+                    bool uniqueComponentIds = true;
+                    for (std::size_t index = 0; index < playbackScratchComponentIds.size(); ++index) {
+                        if (std::find(playbackScratchComponentIds.begin(), playbackScratchComponentIds.begin() + index,
+                                      playbackScratchComponentIds[index]) != playbackScratchComponentIds.begin() + index) {
+                            uniqueComponentIds = false;
+                            break;
+                        }
+                    }
+                    const bool deferSnapshotIndex = componentRollback.empty() && componentRollbackKeys.empty()
+                        && strictlyIncreasingEntities && uniqueComponentIds;
+                    if (deferSnapshotIndex) {
+                        componentRollback.reserve(playbackScratchEntities.size() * playbackScratchComponentIds.size());
+                    } else {
+                        reserveComponentSnapshots(playbackScratchEntities.size() * playbackScratchComponentIds.size());
+                    }
                     for (Entity entity : playbackScratchEntities) {
                         for (ComponentId componentId : playbackScratchComponentIds) {
-                            snapshotComponent(entity, componentId);
+                            snapshotComponent(entity, componentId, deferSnapshotIndex);
                         }
+                    }
+                    if (deferSnapshotIndex && !componentRollback.empty()) {
+                        componentRollbackKeysDeferred = true;
                     }
 
                     playbackScratchComponents.clear();
@@ -1034,6 +1103,12 @@ CommandBufferPlaybackResult CommandBuffer::Playback(World& world) {
             world.DestroyEntities(result.destroyedEntities_);
         }
         result.stats_.destroyPhaseNanoseconds = result.destroyedEntities_.empty() ? 0U : ElapsedCommandBufferNanoseconds(destroyPhaseStart, CommandBufferStatsClock::now());
+        if (result.destroyedEntities_.size() > 64U) {
+            if (!std::is_sorted(result.destroyedEntities_.begin(), result.destroyedEntities_.end())) {
+                std::sort(result.destroyedEntities_.begin(), result.destroyedEntities_.end());
+            }
+            result.destroyedEntitiesSorted_ = true;
+        }
 
         Clear();
         return result;
@@ -1066,8 +1141,15 @@ CommandBufferPlaybackSlice CommandBuffer::PlaybackSlice(World& world, const Comm
             const Lane& lane = lanes_[workerIndex];
             state.result_.createdEntities_[workerIndex].resize(lane.nextDeferredEntity);
             deferredEntityCount += lane.nextDeferredEntity;
+            if (!state.trackPlaybackCreatedIds_) {
+                state.trackPlaybackCreatedIds_ = std::any_of(lane.commands.begin(), lane.commands.end(), [](const Command& command) {
+                    return command.kind == CommandKind::SetParents && !command.parentBatchKnownAcyclicForNewEntities;
+                });
+            }
         }
-        state.playbackCreatedIds_.reserve(deferredEntityCount);
+        if (state.trackPlaybackCreatedIds_) {
+            state.playbackCreatedIds_.reserve(deferredEntityCount);
+        }
     }
 
     auto projectedFits = [&budget, &slice](const CommandBufferPlaybackResult::Stats& cost) {
@@ -1193,7 +1275,9 @@ CommandBufferPlaybackSlice CommandBuffer::PlaybackSlice(World& world, const Comm
             }
             for (std::size_t index = 0; index < state.scratchEntities_.size(); ++index) {
                 state.result_.createdEntities_[workerIndex][command.first.LocalIndex() + index] = state.scratchEntities_[index];
-                state.playbackCreatedIds_.insert(state.scratchEntities_[index].Id());
+                if (state.trackPlaybackCreatedIds_) {
+                    state.playbackCreatedIds_.insert(state.scratchEntities_[index].Id());
+                }
             }
             return;
         }
@@ -1204,7 +1288,9 @@ CommandBufferPlaybackSlice CommandBuffer::PlaybackSlice(World& world, const Comm
         }
         const Entity createdEntity = world.CreateEntity(command.name);
         state.result_.createdEntities_[workerIndex][command.first.LocalIndex()] = createdEntity;
-        state.playbackCreatedIds_.insert(createdEntity.Id());
+        if (state.trackPlaybackCreatedIds_) {
+            state.playbackCreatedIds_.insert(createdEntity.Id());
+        }
     };
 
     auto applyCommand = [&world, &state, &isPlaybackCreated, &scheduleDestroy](const Command& command) {
@@ -1747,6 +1833,12 @@ CommandBufferPlaybackSlice CommandBuffer::PlaybackSlice(World& world, const Comm
             state.destroyIndex_ += entityCount;
             slice.destroyedEntitiesApplied += entityCount;
             slice.madeProgress = true;
+        }
+        if (state.result_.destroyedEntities_.size() > 64U) {
+            if (!std::is_sorted(state.result_.destroyedEntities_.begin(), state.result_.destroyedEntities_.end())) {
+                std::sort(state.result_.destroyedEntities_.begin(), state.result_.destroyedEntities_.end());
+            }
+            state.result_.destroyedEntitiesSorted_ = true;
         }
         state.phase_ = CommandBufferPlaybackState::Phase::Complete;
         Clear();

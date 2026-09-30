@@ -179,10 +179,22 @@ struct SceneRenderMeshInstance {
     bool lodEnabled = true;
 };
 
+// A homogeneous generated range; origin bounds are padded by the resolved
+// section bound at submission. Ordinary mesh proxies keep per-instance culling.
+struct SceneMeshVisibilityCluster {
+    std::uint32_t firstInstance = 0U;
+    std::uint32_t instanceCount = 0U;
+    RenderBoundsSphere origins{};
+    float maximumScale = 0.0F;
+};
+
 struct SceneRenderDrawGroup {
     std::uint64_t meshAssetId = 0;
     std::uint64_t materialAssetId = 0;
+    bool hasMaterialSlotOverrides = false;
+    bool hasMorphDeformation = false;
     std::vector<SceneRenderMeshInstance> instances;
+    std::vector<SceneMeshVisibilityCluster> visibilityClusters;
 };
 
 struct SceneRenderLight {
@@ -464,6 +476,7 @@ enum class SceneRenderDiagnosticKind : std::uint8_t {
     // glyphs that do not fit an atlas. That element draws without its text; the rest of the
     // UI is unaffected. `entityId` names it.
     UITextUnavailable,
+    PostProcessProfileUnavailable,
 };
 
 enum class SceneRenderMaterialProgramStatus : std::uint8_t {
@@ -495,6 +508,7 @@ struct SceneRenderDiagnosticEvent {
     std::uint32_t materialProgramBackend = 0U;
     std::uint16_t materialProgramHandle = bgfx::kInvalidHandle;
     SceneRenderMaterialProgramStatus materialProgramStatus = SceneRenderMaterialProgramStatus::None;
+    std::uint64_t postProcessProfileAssetId = 0U;
 };
 
 struct SceneRenderDiagnostics {

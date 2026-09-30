@@ -341,6 +341,59 @@ void RunCommandBufferBulkParentChangesTest() {
     kb::tests::Require(!world.Parent(third).IsValid(), "ECS command buffer bulk clear parent did not clear third parent");
 }
 
+void RunCommandBufferTrustedNestedParentsAndDestroyTest() {
+    kb::ecs::World world;
+    kb::ecs::CommandBuffer buffer{ 2 };
+    const std::vector<kb::ecs::CommandEntity> created = buffer.Worker(0).CreateEntities(5);
+    const std::array<kb::ecs::CommandEntity, 4> children{ created[1], created[2], created[3], created[4] };
+    const std::array<kb::ecs::CommandEntity, 4> parents{ created[0], created[0], created[1], created[3] };
+    buffer.Worker(1).SetParents(children, parents);
+    buffer.Worker(1).DestroyEntity(created[2]);
+
+    const kb::ecs::CommandBufferPlaybackResult result = buffer.PlaybackTrusted(world);
+    const kb::ecs::Entity root = result.Resolve(created[0]);
+    const kb::ecs::Entity child = result.Resolve(created[1]);
+    const kb::ecs::Entity destroyedSibling = result.Resolve(created[2]);
+    const kb::ecs::Entity grandchild = result.Resolve(created[3]);
+    const kb::ecs::Entity leaf = result.Resolve(created[4]);
+    kb::tests::Require(result.CreatedCount() == created.size() && result.DestroyedCount() == 1U,
+        "ECS trusted nested parent playback reported invalid structural counts");
+    kb::tests::Require(result.WasDestroyed(destroyedSibling) && !world.IsAlive(destroyedSibling),
+        "ECS trusted nested parent playback did not destroy the selected sibling");
+    kb::tests::Require(world.IsAlive(root) && world.IsAlive(child) && world.IsAlive(grandchild) && world.IsAlive(leaf),
+        "ECS trusted nested parent playback destroyed a surviving hierarchy member");
+    kb::tests::Require(world.Parent(child) == root && world.Parent(grandchild) == child && world.Parent(leaf) == grandchild,
+        "ECS trusted nested parent playback changed a nested hierarchy");
+}
+
+void RunCommandBufferDestroyedMembershipUnorderedTest() {
+    for (bool trusted : { false, true }) {
+        kb::ecs::World world;
+        std::vector<kb::ecs::Entity> entities;
+        entities.reserve(192U);
+        for (std::size_t index = 0; index < 192U; ++index) {
+            entities.push_back(world.CreateEntity());
+        }
+
+        std::vector<kb::ecs::Entity> reversed;
+        reversed.reserve(96U);
+        for (std::size_t index = 96U; index != 0U; --index) {
+            reversed.push_back(entities[index - 1U]);
+        }
+        kb::ecs::CommandBuffer buffer{ 1 };
+        buffer.Worker(0).DestroyEntities(reversed);
+        const kb::ecs::CommandBufferPlaybackResult result = trusted ? buffer.PlaybackTrusted(world) : buffer.Playback(world);
+        kb::tests::Require(result.DestroyedCount() == reversed.size(), "ECS unordered destroy playback reported an invalid count");
+        for (std::size_t index = 0; index < entities.size(); ++index) {
+            const bool destroyed = index < 96U;
+            kb::tests::Require(result.WasDestroyed(entities[index]) == destroyed,
+                "ECS unordered destroy playback reported invalid destroyed membership");
+            kb::tests::Require(world.IsAlive(entities[index]) != destroyed,
+                "ECS unordered destroy playback changed an unexpected entity lifetime");
+        }
+    }
+}
+
 void RunCommandBufferKnownAcyclicNewEntityParentChangesTest() {
     kb::ecs::World world;
     const kb::ecs::Entity existingParent = world.CreateEntity("KnownAcyclicParentRoot");
@@ -1337,6 +1390,42 @@ void RunCommandBufferRollbackOnPlaybackErrorTest() {
     kb::tests::Require(!buffer.Empty(), "ECS command buffer cleared commands after a failed playback");
 }
 
+void RunCommandBufferBulkSnapshotRollbackAfterRepeatedWriteTest() {
+    kb::ecs::World world;
+    std::array<kb::ecs::Entity, 4U> entities{};
+    std::array<EcsPosition, 4U> positions{};
+    std::array<EcsQueryMarker, 4U> markers{};
+    for (std::size_t index = 0; index < entities.size(); ++index) {
+        entities[index] = world.CreateEntity();
+        world.Set(entities[index], EcsPosition{ .x = static_cast<float>(index + 1U) });
+        positions[index].x = static_cast<float>(index + 11U);
+        markers[index].value = static_cast<std::uint32_t>(index + 21U);
+    }
+
+    kb::ecs::CommandBuffer buffer{ 1 };
+    buffer.Worker(0).SetBorrowed(
+        std::span<const kb::ecs::Entity>{ entities },
+        std::span<const EcsPosition>{ positions },
+        std::span<const EcsQueryMarker>{ markers });
+    buffer.Worker(0).Set(entities[1], EcsPosition{ .x = 99.0F });
+    buffer.Worker(0).Set(kb::ecs::CommandEntity::Deferred(8, 0), EcsVelocity{ .x = 1.0F });
+
+    bool threw = false;
+    try {
+        static_cast<void>(buffer.Playback(world));
+    } catch (const std::exception&) {
+        threw = true;
+    }
+    kb::tests::Require(threw, "ECS bulk snapshot rollback did not propagate playback failure");
+    for (std::size_t index = 0; index < entities.size(); ++index) {
+        const EcsPosition* restored = world.TryGet<EcsPosition>(entities[index]);
+        kb::tests::Require(restored != nullptr && kb::tests::NearlyEqual(restored->x, static_cast<float>(index + 1U)),
+            "ECS bulk snapshot rollback lost the original component value");
+        kb::tests::Require(!world.Has<EcsQueryMarker>(entities[index]),
+            "ECS bulk snapshot rollback retained an added component");
+    }
+}
+
 void RunCommandBufferRollbackBulkCreateRestoresWorldTest() {
     kb::ecs::World world;
     const kb::ecs::Entity originalParent = world.CreateEntity("BulkRollbackParent");
@@ -1386,6 +1475,8 @@ void RunEcsCommandBufferTests() {
     RunCommandBufferMultiWorkerDeterministicStructuralChangesTest();
     RunCommandBufferRandomStructuralChangeStressTest();
     RunCommandBufferBulkParentChangesTest();
+    RunCommandBufferTrustedNestedParentsAndDestroyTest();
+    RunCommandBufferDestroyedMembershipUnorderedTest();
     RunCommandBufferKnownAcyclicNewEntityParentChangesTest();
     RunCommandBufferKnownAcyclicMovedParentBatchTest();
     RunCommandBufferTrustedPlaybackBulkStructuralTest();
@@ -1411,6 +1502,7 @@ void RunEcsCommandBufferTests() {
     RunCommandBufferBulkDestroyBudgetTest();
     RunCommandBufferNestedCreateDestroyFromJobsTest();
     RunCommandBufferRollbackOnPlaybackErrorTest();
+    RunCommandBufferBulkSnapshotRollbackAfterRepeatedWriteTest();
     RunCommandBufferRollbackBulkCreateRestoresWorldTest();
 }
 

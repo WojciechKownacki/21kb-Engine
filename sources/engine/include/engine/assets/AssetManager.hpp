@@ -158,6 +158,7 @@ public:
             .weak = erased,
             .typeName = typeid(T).name(),
             .policy = AssetUnloadPolicy::Retain,
+            .runtimePublished = true,
         };
         return true;
     }
@@ -209,6 +210,14 @@ public:
         return payload == nullptr
             ? AssetHandle<T>{}
             : AssetHandle<T>{ id, std::static_pointer_cast<const T>(std::move(payload)) };
+    }
+
+    // Returns only an explicitly published payload; a cached disk or package load is not a publication.
+    template <typename T>
+    [[nodiscard]] AssetHandle<T> AcquirePublishedRuntimeAsset(AssetId id) const {
+        const auto cached = cache_.find(id.value);
+        return cached != cache_.end() && cached->second.runtimePublished
+            ? AcquireLoaded<T>(id) : AssetHandle<T>{};
     }
 
     [[nodiscard]] bool RequestLoadAsync(AssetId id, AssetUnloadPolicy policy = AssetUnloadPolicy::Retain);
@@ -305,6 +314,7 @@ private:
         // module is unloaded, while the cache intentionally survives reloads.
         std::string typeName;
         AssetUnloadPolicy policy = AssetUnloadPolicy::Retain;
+        bool runtimePublished = false;
     };
 
     struct AsyncPreparedAsset {

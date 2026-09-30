@@ -88,10 +88,13 @@ void RuntimeTextureResourceEnsurer::Ensure(
             return;
         }
 
+        const TextureRef loadedAsset = manager.AcquirePublishedRuntimeAsset<RenderTextureAssetData>(assetId);
         if (cacheIt != textures.end()) {
             context.sceneRenderer.ResourceMap().UnbindTextureHandle(cacheIt->second.handle);
             context.sceneRenderer.Resources().DestroyTexture(cacheIt->second.handle);
-            static_cast<void>(manager.Unload(assetId));
+            if (!loadedAsset.IsLoaded()) {
+                static_cast<void>(manager.Unload(assetId));
+            }
             textures.erase(cacheIt);
         }
 
@@ -105,8 +108,8 @@ void RuntimeTextureResourceEnsurer::Ensure(
         // a texture / opening a material no longer freezes the render thread ~1s on a large image - the texture
         // streams in a frame or two later. When disabled (tests, headless captures) decode synchronously so a
         // texture is deterministically bound in the same submit.
-        std::shared_ptr<const RenderTextureAssetData> asset;
-        if (packaged) {
+        std::shared_ptr<const RenderTextureAssetData> asset = loadedAsset.Shared();
+        if (asset == nullptr && packaged) {
             const bgfx::RendererType::Enum rendererType = bgfx::getRendererType();
             RenderTextureAssetLoader loader{ rendererType };
             kb::assets::AssetLoadResult loaded = loader.Load(kb::assets::AssetLoadRequest{
@@ -117,7 +120,7 @@ void RuntimeTextureResourceEnsurer::Ensure(
             if (loaded.Succeeded()) {
                 asset = std::static_pointer_cast<const RenderTextureAssetData>(std::move(loaded.asset));
             }
-        } else if (!texturePath.empty()) {
+        } else if (asset == nullptr && !texturePath.empty()) {
             if (RenderTextureAssetLoader::IsAsyncTextureDecodeEnabled()) {
                 asset = RenderTextureAssetLoader::TryAcquireDecodedTexture(texturePath);
                 if (asset == nullptr) {
@@ -177,7 +180,9 @@ void RuntimeTextureResourceEnsurer::Ensure(
         const RenderTextureHandle handle = context.sceneRenderer.Resources().RegisterTexture(textureDesc);
         if (!handle.IsValid()) {
             context.sceneRenderer.ResourceMap().UnbindTexture(textureAssetId, colorSpace);
-            static_cast<void>(manager.Unload(assetId));
+            if (!loadedAsset.IsLoaded()) {
+                static_cast<void>(manager.Unload(assetId));
+            }
             return;
         }
 

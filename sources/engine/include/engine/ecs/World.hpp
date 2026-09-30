@@ -18,12 +18,15 @@
 
 #include <cstddef>
 #include <initializer_list>
+#include <list>
 #include <memory>
+#include <mutex>
 #include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <typeindex>
+#include <unordered_map>
 #include <vector>
 
 struct ecs_world_t;
@@ -166,6 +169,7 @@ private:
     ecs_world_t* world_ = nullptr;
     WorldConfig config_{};
     struct QueryPlanCacheEntry {
+        std::size_t hash = 0;
         std::vector<ComponentId> componentIds;
         std::vector<std::size_t> componentSizes;
         std::vector<ComponentId> requiredComponentIds;
@@ -174,13 +178,20 @@ private:
         std::vector<ComponentId> changedComponentIds;
         std::shared_ptr<QueryPlan> plan;
     };
+    struct QueryTelemetryState {
+        WorldTelemetryCounters counters{};
+        std::mutex mutex;
+    };
+    using QueryPlanCache = std::list<QueryPlanCacheEntry>;
+    void EraseCachedQueryPlan(QueryPlanCache::iterator entry) const noexcept;
 
     std::unique_ptr<WorldRegistrySet> registries_;
     std::unique_ptr<NativeArchetypeStorage> nativeStorage_;
     std::unique_ptr<MutableComponentBorrowLocks> mutableComponentBorrowLocks_;
     std::unique_ptr<StructuralChangeValidator> structuralChangeValidator_;
-    mutable WorldTelemetryCounters telemetryCounters_{};
-    mutable std::vector<QueryPlanCacheEntry> queryPlanCache_;
+    std::shared_ptr<QueryTelemetryState> telemetryState_;
+    mutable QueryPlanCache queryPlanCache_;
+    mutable std::unordered_multimap<std::size_t, QueryPlanCache::iterator> queryPlanIndex_;
 };
 
 } // namespace kb::ecs

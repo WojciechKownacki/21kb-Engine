@@ -1,0 +1,59 @@
+Wyniki 30.09.2026 — i7-13700F, 64 GiB, RTX 4070 12 GiB, sterownik 591.74
+Release / D3D11 / headless / 1920x1080 / ForwardPlus / uncapped
+Baza: 48ddd0164f84c2f60d9dd047e839865e5ac70d86, gałąź 1.0.
+
+Średnie z trzech powtórek (pełne P99 i liczniki: comparison_20260930.json):
+  statyczny świat 100k + fizyka: Runtime.Update 4.050 -> 0.038 ms
+  budowanie dokumentu static_100k: 14029 -> 211 ms
+  renderowany world_100k: pełna klatka 39.358 -> 25.919 ms
+  city_dense_50k: pełna klatka 34.758 -> 38.114 ms (regresja 9.7%)
+  physics_4096: Runtime.Update 6.974 -> 7.742 ms (regresja 11.0%)
+  dense_4096: Runtime.Update 11.857 -> 14.101 ms (regresja 18.9%)
+  batch_dirty_100k: Runtime.Update 18.371 -> 22.957 ms (regresja 25.0%)
+  culling_far_10k: widoczne 20000 -> 0, odrzucone 0 -> 20000 / przebiegi
+  roślinność 100k: 12.733 -> 11.993 ms
+  roślinność 1m: 143.421 -> 120.939 ms (nadal za wolno do płynnej gry)
+
+Baza roślinności to ten sam nowo wygenerowany projekt przed cullingiem grup,
+już po pozostałych poprawkach; nie jest pomiarem starszego projektu z commita.
+Rośliny to proste cztery trójkąty na instancję, bez wiatru/cieni/alpha overdraw,
+jeden GeometrySwarm ECS. Średnio 674793 widocznych instancji / przebiegi dla
+miliona rezydentnych; nie oznacza miliona indywidualnych encji lub ciał fizycznych.
+
+Streaming static_100k: trzy próby po trzy cykle, 100002 encje po wczytaniu,
+0 po usunięciu. Brak przekroczeń 256 operacji na Update. Pełny Update przy
+ładowaniu: P99 8.33–13.30 ms, maks. 34.99 ms. Streamer maks. 21.38 ms.
+Budżet 2 ms jest miękki, nie stanowi gwarancji czasu całej klatki. Test nie
+renderuje mapy ani nie uruchamia fizyki; nie dowodzi pełnego hitch-free streamingu.
+Sleep(1 ms) między Update nie jest rzeczywistym harmonogramem gry 60 Hz.
+Sprzątnięcie encji nie jest dowodem braku wszystkich możliwych wycieków pamięci.
+
+Potwierdzona poprawność: pełny engine suite i renderer suite; końcowe focused
+engine-library / scene-prefab / scene-runtime po guardzie kolejki; renderer
+ponownie w całości. Cross-batch referencje, trzy cykle prefabów, częściowe
+anulowanie, śmierć właściciela, równoległe żądania jednego źródła, bounded queue,
+spóźniona publikacja po anulowaniu i pakiet po usunięciu luźnego źródła.
+Culling grup zachowuje accepted IDs i liczniki dla ruchu kamery, shear i wzrostu.
+WebGPU fallback: skip w pełnym renderer suite z już uruchomionym urządzeniem.
+Game-core cooker suite: niezaliczony, konfiguracja nie zawiera shaderc.
+Nie porównywano gotowej gry AAA z identyczną sceną/artem na tym sprzęcie.
+
+Priorytety pozostałej pracy:
+  MeshPassProcessor / SceneMeshDrawCommandSubmitter / RenderInstanceBuffer:
+  koszt przygotowania i uploadu widocznych instancji; HLOD i budżety widoczności.
+  SceneRuntime / SceneTransformHierarchySystem / PhysicsSceneSystem:
+  profile regresji aktywnej fizyki i masowych zmian; strukturalne przebudowy
+  hierarchii/pose cache w streamingu z fizyką wymagają osobnego pomiaru.
+  SceneLightingPacker / shaders: ForwardPlus ma nadal ograniczony globalny
+  budżet lokalnych świateł, a samo zliczenie źródeł nie dowodzi ich renderowania.
+  Production foliage: LOD, alpha mask/overdraw, wiatr, streaming GPU i cienie.
+
+Projekt i surowe dane:
+  E:\21kbProjekty\OpenWorldAfter_20260930
+  Results\Raport_po_poprawkach.html
+  Results\raw\ oraz Results\runs.json
+Raport bazowy ze szerszymi scenami:
+  E:\21kbProjekty\OpenWorldPerf_20260930\Results\Raport.html
+
+Te poprawki są zweryfikowanym krokiem pod duże światy. Wyniki nie uprawniają
+do deklaracji, że silnik jest już gotowy do produkcji gry klasy Wiedźmin/GTA.

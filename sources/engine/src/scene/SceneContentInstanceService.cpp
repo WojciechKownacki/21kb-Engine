@@ -26,6 +26,7 @@ struct AuthoredContentInstance {
     SceneEntity entity{};
     ContentInstanceComponent component{};
     std::int32_t streamPriority = 0;
+    bool streamed = false;
 };
 
 struct ActiveStreamFocus {
@@ -89,7 +90,8 @@ struct ActiveStreamFocus {
 void Release(Scene& scene, ContentInstanceRuntimeRecord& runtime, bool preserve) noexcept {
     if (preserve) return;
     if (runtime.loadedSceneId != 0U) {
-        static_cast<void>(scene.LoadedContent().Unload(runtime.loadedSceneId));
+        if (runtime.streamed) static_cast<void>(scene.LoadedContent().UnloadAsync(runtime.loadedSceneId));
+        else static_cast<void>(scene.LoadedContent().Unload(runtime.loadedSceneId));
     } else if (runtime.root.IsValid() && scene.Entities().IsAlive(runtime.root)) {
         scene.Entities().Destroy(runtime.root);
     }
@@ -160,7 +162,7 @@ void Release(Scene& scene, ContentInstanceRuntimeRecord& runtime, bool preserve)
             if (transform == nullptr) continue;
             const bool retain = state.contentInstances.contains(entity.Id());
             const std::optional<std::int32_t> priority = StreamPriority(focuses, transform->worldPosition, component.kind, retain);
-            if (priority.has_value()) output.push_back({ entity, component, *priority });
+            if (priority.has_value()) output.push_back({ entity, component, *priority, !focuses.empty() });
         }
     });
     std::ranges::sort(output, [](const AuthoredContentInstance& left, const AuthoredContentInstance& right) {
@@ -178,11 +180,14 @@ void SceneContentInstanceService::Synchronize(Scene& scene) {
         return;
     }
     const std::vector<AuthoredContentInstance> authored = Collect(scene, state);
+    std::unordered_map<std::uint64_t, const AuthoredContentInstance*> byEntity;
+    byEntity.reserve(authored.size());
+    for (const auto& item : authored) byEntity.emplace(item.entity.Id(), &item);
     for (auto it = state.contentInstances.begin(); it != state.contentInstances.end();) {
-        const auto current = std::ranges::find_if(authored, [entity = it->second.owner](const AuthoredContentInstance& candidate) { return candidate.entity == entity; });
+        const auto current = byEntity.find(it->second.owner.Id());
         const bool ownerAlive = scene.Entities().IsAlive(it->second.owner);
         const bool preserve = !ownerAlive && it->second.lifetime == ContentInstanceLifetime::Persistent;
-        if (current == authored.end() || !ownerAlive || !Matches(it->second, current->component)) {
+        if (current == byEntity.end() || !ownerAlive || !Matches(it->second, current->second->component)) {
             Release(scene, it->second, preserve);
             it = state.contentInstances.erase(it);
         } else ++it;
@@ -190,7 +195,18 @@ void SceneContentInstanceService::Synchronize(Scene& scene) {
     for (const AuthoredContentInstance& item : authored) {
         if (state.contentInstances.contains(item.entity.Id())) continue;
         ContentInstanceRuntimeRecord runtime{};
-        if (Activate(scene, item.entity, item.component, runtime)) state.contentInstances.emplace(item.entity.Id(), std::move(runtime));
+        if (item.streamed) {
+            const auto* metadata = scene.Assets().Manager().Registry().Find(kb::assets::AssetId{item.component.assetId});
+            if (metadata == nullptr) continue;
+            runtime.streamed = true;
+            runtime.owner = item.entity;
+            runtime.assetId = item.component.assetId;
+            runtime.kind = item.component.kind;
+            runtime.lifetime = item.component.lifetime;
+            runtime.loadedSceneId = scene.LoadedContent().LoadAsync(metadata->virtualPath,
+                item.component.lifetime == ContentInstanceLifetime::Owner ? item.entity : SceneEntity{});
+            if (runtime.loadedSceneId != 0U) state.contentInstances.emplace(item.entity.Id(), std::move(runtime));
+        } else if (Activate(scene, item.entity, item.component, runtime)) state.contentInstances.emplace(item.entity.Id(), std::move(runtime));
     }
 }
 

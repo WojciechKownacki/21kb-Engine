@@ -34,6 +34,7 @@
 #include "scene/EditorSceneContext.hpp"
 #include "scene/EditorSceneMaterialAssetActions.hpp"
 #include "scene/EditorSceneMeshAssetActions.hpp"
+#include "inspection/ui/InspectorUIComponentModel.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -1245,7 +1246,8 @@ private:
             } else if (Contains(CloseButton(), x, y)) {
                 next = -2;
             } else if (Contains(TextureSearchRect(), x, y)) {
-                next = -5;
+                // The search field is not a button; hovering it must not light up Clear (-5).
+                next = -6;
             } else {
                 next = TextureTileAt(x, y);
             }
@@ -1553,13 +1555,14 @@ private:
             if (picker != nullptr) {
                 const int x = GET_X_LPARAM(lparam);
                 const int y = GET_Y_LPARAM(lparam);
-                if (picker->textureThumbnails_) {
-                    picker->HandleTextureLeftButtonDown(x, y);
-                    return 0;
-                }
+                // The title-bar X closes every picker layout; the texture grid used to take the click first.
                 if (Contains(picker->CloseButton(), x, y)) {
                     picker->running_ = false;
                     DestroyWindow(window);
+                    return 0;
+                }
+                if (picker->textureThumbnails_) {
+                    picker->HandleTextureLeftButtonDown(x, y);
                     return 0;
                 }
                 if (picker->tileKind_ != AssetPickerTileKind::None) {
@@ -1892,6 +1895,26 @@ EditorTextureAssetPickerDialog::Result EditorUIAssetPickerDialog::Show(
         "Choose a font asset from this project.", "Clear font selection", HeroIconKind::RectangleGroup};
     const auto result = window.Show(owner, options);
     return {.accepted = result.accepted, .assetId = result.assetId};
+}
+
+EditorUIEntityPickerDialog::Result EditorUIEntityPickerDialog::Show(
+    HWND owner, const EditorTheme& theme, const EditorSceneContext& sceneContext,
+    kb::scene::SceneEntity source, kb::scene::UIComponentType component, std::string_view property,
+    kb::scene::SceneEntity current, const EditorAssetPickerWindowOptions& options) {
+    const kb::scene::Scene& scene = sceneContext.Scene();
+    const InspectorUIComponentModel::ReferenceChoice choice =
+        InspectorUIComponentModel::ReferenceTargets(scene, source, component, property);
+    // The picker rows are keyed by a 64-bit id; a scene entity id fits that slot exactly and 0 stays
+    // the "nothing selected" value Clear returns.
+    std::vector<AssetPickerRow> rows;
+    for (const kb::scene::SceneEntity target : choice.targets) {
+        rows.push_back({kb::assets::AssetId{target.Id()}, scene.Entities().Name(target),
+            InspectorUIComponentModel::HierarchyPath(scene, target)});
+    }
+    AssetPickerWindow window{theme, std::move(rows), kb::assets::AssetId{current.Id()}, choice.title,
+        choice.description, "Clear reference", HeroIconKind::RectangleGroup};
+    const AssetPickerResult result = window.Show(owner, options);
+    return {.accepted = result.accepted, .entity = kb::scene::SceneEntity{result.assetId.value}};
 }
 
 } // namespace kb::editor

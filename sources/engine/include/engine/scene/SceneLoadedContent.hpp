@@ -3,6 +3,7 @@
 #include "engine/scene/SceneEntity.hpp"
 
 #include <cstdint>
+#include <cstddef>
 #include <filesystem>
 #include <string>
 #include <string_view>
@@ -12,9 +13,22 @@ namespace kb::scene {
 
 class Scene;
 
+enum class SceneLoadStatus : std::uint8_t { Unknown, Loading, Creating, Ready, Unloading, Failed, Cancelled };
+
+struct SceneStreamingSettings {
+    std::size_t maxPendingLoads = 8U;
+    std::size_t maxOperationsPerFrame = 256U;
+    float maxMillisecondsPerFrame = 2.0F;
+};
+
+struct SceneStreamingStats {
+    std::size_t operations = 0U;
+    double milliseconds = 0.0;
+};
+
 // LIB-073: one flat notification of a scene lifecycle transition
 // (name is one of "SceneLoading"/"SceneLoaded"/"SceneActivated"/
-// "SceneUnloading"/"SceneUnloaded") drained from the engine's pending
+// "SceneUnloading"/"SceneUnloaded"/"SceneLoadFailed") drained from the engine's pending
 // queue — see SceneLoadedContent::DrainPendingLifecycleEvents. This is the
 // raw payload kb::script::ScriptRuntimeSceneSystem turns into a real
 // ScriptEvent broadcast once per frame; it is deliberately NOT itself a
@@ -44,8 +58,7 @@ public:
 
     [[nodiscard]] std::uint64_t Find(std::string_view name) const noexcept;
     [[nodiscard]] bool Exists(std::uint64_t id) const noexcept;
-    // Always 1.0 for a currently-loaded id, 0.0 for an unknown one — loads
-    // are synchronous today; see SceneLoadedContentService's own comment.
+    // 0..1 during asynchronous creation, 1 when loaded, 0 for unknown ids.
     [[nodiscard]] float Progress(std::uint64_t id) const noexcept;
     [[nodiscard]] std::uint64_t ActiveScene() const noexcept;
     // LIB-106: which loaded-scene record `entity`'s hierarchy root belongs
@@ -63,6 +76,16 @@ public:
 
     // Returns 0 (never a valid id) on failure.
     [[nodiscard]] std::uint64_t Load(const std::filesystem::path& path, bool additive);
+    // Additive streaming. Decoding/validation run off-thread; live ECS changes
+    // occur only during Runtime.Update in bounded batches. Activation is gradual.
+    // Registered Scene and Prefab assets work in development and cooked packs.
+    [[nodiscard]] std::uint64_t LoadAsync(const std::filesystem::path& path, SceneEntity parent = {});
+    // Also cancels a pending load. Includes runtime-created descendants on unload.
+    [[nodiscard]] bool UnloadAsync(std::uint64_t id);
+    [[nodiscard]] SceneLoadStatus Status(std::uint64_t id) const noexcept;
+    [[nodiscard]] std::string Error(std::uint64_t id) const;
+    void ConfigureStreaming(SceneStreamingSettings settings);
+    [[nodiscard]] SceneStreamingStats StreamingStats() const noexcept;
     [[nodiscard]] bool Unload(std::uint64_t id) noexcept;
     [[nodiscard]] std::uint64_t Find(std::string_view name) const noexcept;
     [[nodiscard]] bool Exists(std::uint64_t id) const noexcept;

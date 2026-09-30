@@ -10,6 +10,9 @@
 #include "engine/assets/AssetCompatibility.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/AssetRegistry.hpp"
+#include "engine/assets/CollisionMeshAsset.hpp"
+#include "engine/assets/TerrainAsset.hpp"
+#include "engine/assets/TerrainAssetIO.hpp"
 #include "engine/assets/ImportedAsset.hpp"
 #include "engine/assets/ImportedAssetLoader.hpp"
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
@@ -44,6 +47,7 @@
 #include <fstream>
 #include <future>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
@@ -53,6 +57,14 @@
 #include <thread>
 #include <utility>
 #include <vector>
+
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#define WIN32_LEAN_AND_MEAN
+#include <Windows.h>
+#endif
 
 namespace {
 
@@ -185,6 +197,122 @@ void RunAssetManagerDiscoveryCacheAndManifestTest() {
     kb::tests::Require(restoredMetadata->importCategory == metadata->importCategory, "Restored asset manifest did not preserve import category");
 }
 
+void RunCollisionMeshAssetTest() {
+    ResetTestRoot();
+    const auto root = TestRoot() / "Collision";
+    std::filesystem::create_directories(root);
+    const auto path = root / "Slope.kbcollision";
+    kb::assets::CollisionMeshAsset mesh{
+        .positions = {{-4, 0, -4}, {-4, 0, 4}, {4, 2, -4}, {4, 2, 4}},
+        .indices = {0, 1, 2, 2, 1, 3},
+    };
+    std::string error;
+    kb::tests::Require(kb::assets::WriteCollisionMesh(path, mesh, error), "Collision mesh write failed");
+    kb::assets::AssetManager manager;
+    kb::tests::Require(manager.RegisterLoader(std::make_unique<kb::assets::CollisionMeshAssetLoader>()),
+        "Collision mesh loader registration failed");
+    kb::tests::Require(manager.Mounts().Mount("Game", root) && manager.DiscoverMountedAssets() == 1,
+        "Collision mesh discovery failed");
+    const auto loaded = manager.Load<kb::assets::CollisionMeshAsset>("/Game/Slope.kbcollision");
+    kb::tests::Require(loaded.IsLoaded() && loaded->indices == mesh.indices &&
+        loaded->positions.size() == 4 && loaded->positions[3].y == 2,
+        "Collision mesh geometry did not survive asset loading");
+    std::ifstream input(path, std::ios::binary);
+    const std::vector<std::uint8_t> bytes{std::istreambuf_iterator<char>{input}, {}};
+    input.close();
+#if defined(_WIN32)
+    const auto verifyBlockedReplacement = [](const auto& assetPath, auto&& save) {
+        std::ifstream beforeInput(assetPath, std::ios::binary);
+        const std::vector<char> before{std::istreambuf_iterator<char>{beforeInput}, {}};
+        beforeInput.close();
+        const auto closeHandle = [](void* handle) { CloseHandle(handle); };
+        const HANDLE rawHandle = CreateFileW(assetPath.c_str(), GENERIC_READ,
+            FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        kb::tests::Require(rawHandle != INVALID_HANDLE_VALUE, "Asset replacement lock could not be acquired");
+        std::unique_ptr<void, decltype(closeHandle)> lock(rawHandle, closeHandle);
+        const bool saved = save();
+        std::ifstream afterInput(assetPath, std::ios::binary);
+        const std::vector<char> after{std::istreambuf_iterator<char>{afterInput}, {}};
+        afterInput.close();
+        kb::tests::Require(!saved && after == before,
+            "Blocked asset replacement changed the previous valid file");
+        lock.reset();
+        kb::tests::Require(save(), "Asset replacement failed after releasing the file lock");
+    };
+    auto replacement = mesh;
+    replacement.positions[3].y = 4;
+    verifyBlockedReplacement(path, [&] { return kb::assets::WriteCollisionMesh(path, replacement, error); });
+    std::ifstream replacedInput(path, std::ios::binary);
+    const std::vector<std::uint8_t> replacedBytes{std::istreambuf_iterator<char>{replacedInput}, {}};
+    replacedInput.close();
+    const auto replaced = kb::assets::ReadCollisionMesh(replacedBytes, error);
+    kb::tests::Require(replaced && replaced->positions[3].y == 4, "Collision replacement lost geometry");
+    auto savedTerrain = kb::assets::MakeFlatTerrainAsset(17, 16, 16);
+    const auto terrainPath = root / "Slope.kbterrain";
+    kb::tests::Require(kb::assets::TerrainAssetIO::Save(terrainPath, savedTerrain, &error), "Terrain initial save failed");
+    savedTerrain.heights[0] = 5;
+    verifyBlockedReplacement(terrainPath, [&] { return kb::assets::TerrainAssetIO::Save(terrainPath, savedTerrain, &error); });
+    const auto replacedTerrain = kb::assets::TerrainAssetIO::Load(terrainPath, &error);
+    kb::tests::Require(replacedTerrain && replacedTerrain->heights[0] == 5, "Terrain replacement lost heights");
+#endif
+    for (std::size_t length = 0; length < bytes.size(); ++length) {
+        kb::tests::Require(!kb::assets::ReadCollisionMesh(std::span{bytes}.first(length), error) && !error.empty(),
+            "Truncated collision mesh was accepted");
+    }
+    auto corrupt = bytes;
+    corrupt.push_back(0);
+    kb::tests::Require(!kb::assets::ReadCollisionMesh(corrupt, error), "Trailing collision bytes were accepted");
+    corrupt = bytes;
+    std::fill(corrupt.begin() + 12, corrupt.begin() + 20, 255);
+    kb::tests::Require(!kb::assets::ReadCollisionMesh(corrupt, error), "Overflowed collision counts were accepted");
+    corrupt = bytes;
+    corrupt[8] = 2;
+    kb::tests::Require(!kb::assets::ReadCollisionMesh(corrupt, error), "Unsupported collision version was accepted");
+    mesh.indices[0] = 99;
+    kb::tests::Require(!kb::assets::ValidateCollisionMesh(mesh, error), "Invalid collision index was accepted");
+    mesh.indices[0] = 1;
+    kb::tests::Require(!kb::assets::ValidateCollisionMesh(mesh, error), "Degenerate collision triangle was accepted");
+    mesh.indices[0] = 0;
+    mesh.positions[0].x = std::numeric_limits<float>::infinity();
+    kb::tests::Require(!kb::assets::WriteCollisionMesh(path, mesh, error), "Non-finite collision geometry was saved");
+    auto terrain = kb::assets::MakeFlatTerrainAsset(17, 16, 16);
+    terrain.heights[0] = 3;
+    terrain.holes[0] = 1;
+    const auto terrainMesh = kb::assets::BuildTerrainCollisionMesh(terrain, error);
+    kb::tests::Require(terrainMesh && terrainMesh->positions.size() == 289 && terrainMesh->indices.size() == 255 * 6 &&
+        terrainMesh->positions[0].y == 3 && terrainMesh->positions[0].x == -8 &&
+        std::ranges::find(terrainMesh->indices, 0U) == terrainMesh->indices.end(),
+        "Terrain collision geometry lost heights, origin or holes");
+}
+
+void RunAssetDiscoveryHashCompatibilityTest() {
+    ResetTestRoot();
+    const auto root = TestRoot() / "HashCompatibility";
+    constexpr std::pair<std::size_t, std::uint64_t> cases[]{
+        {0U, 0xcbf29ce484222325ULL},
+        {65535U, 0x00edf3b01c8a6b38ULL},
+        {65536U, 0x1ec0db407f352325ULL},
+        {65537U, 0x76d7b398274ab7dfULL},
+        {131089U, 0x1166a90aae38c09fULL},
+    };
+    for (const auto& [size, hash] : cases) {
+        std::string bytes(size, '\0');
+        for (std::size_t index = 0; index < size; ++index) {
+            bytes[index] = static_cast<char>(index % 256U);
+        }
+        WriteTextFile(root / (std::to_string(size) + ".txt"), bytes);
+    }
+    kb::assets::AssetManager manager;
+    kb::tests::Require(manager.RegisterLoader(std::make_unique<TextAssetLoader>()), "Hash fixture loader registration failed");
+    kb::tests::Require(manager.Mounts().Mount("Game", root), "Hash fixture mount failed");
+    kb::tests::Require(manager.DiscoverMountedAssets() == std::size(cases), "Hash fixture discovery failed");
+    for (const auto& [size, hash] : cases) {
+        const auto* metadata = manager.Registry().FindByPath("/Game/" + std::to_string(size) + ".txt");
+        kb::tests::Require(metadata != nullptr && metadata->contentHash == hash,
+            "Asset hash changed for empty, binary, or read-block boundary content");
+    }
+}
+
 void RunSingleAssetRefreshTest() {
     ResetTestRoot();
 
@@ -239,6 +367,10 @@ void RunAssetManagerRuntimePublicationTest() {
     kb::tests::Require(metadata != nullptr, "Runtime publication asset metadata is missing");
     const kb::assets::AssetId id = metadata->id;
     const std::uint64_t generation = manager.LoadGeneration(id);
+    const kb::assets::AssetHandle<std::string> diskAsset = manager.Load<std::string>(id);
+    kb::tests::Require(diskAsset.IsLoaded() && *diskAsset == "canonical" &&
+            !manager.AcquirePublishedRuntimeAsset<std::string>(id).IsLoaded(),
+        "A disk-loaded payload was classified as a published runtime asset");
 
     kb::tests::Require(
         manager.PublishRuntimeAsset<std::string>(
@@ -248,6 +380,10 @@ void RunAssetManagerRuntimePublicationTest() {
     kb::tests::Require(
         preview.IsLoaded() && *preview.Get() == "working copy",
         "A canonical load did not observe the published runtime payload");
+    const kb::assets::AssetHandle<std::string> published =
+        manager.AcquirePublishedRuntimeAsset<std::string>(id);
+    kb::tests::Require(published.IsLoaded() && *published == "working copy",
+        "The published runtime payload was not available to render consumers");
     kb::tests::Require(
         manager.LoadGeneration(id) > generation,
         "Runtime publication did not invalidate an older async generation");
@@ -256,10 +392,14 @@ void RunAssetManagerRuntimePublicationTest() {
         "Runtime publication accepted a payload type that does not match the loader");
 
     kb::tests::Require(manager.Unload(id), "Published runtime payload could not be unloaded");
+    kb::tests::Require(!manager.AcquirePublishedRuntimeAsset<std::string>(id).IsLoaded(),
+        "An unloaded runtime publication remained marked as published");
     const kb::assets::AssetHandle<std::string> canonical = manager.Load<std::string>(id);
     kb::tests::Require(
         canonical.IsLoaded() && *canonical.Get() == "canonical",
         "Unloading a runtime publication did not restore canonical disk loading");
+    kb::tests::Require(!manager.AcquirePublishedRuntimeAsset<std::string>(id).IsLoaded(),
+        "A restored disk payload was classified as a runtime publication");
 }
 
 // LIB-155: AssetManager::LoadOpaque — the type-erased force-load the
@@ -427,8 +567,11 @@ void RunAssetManagerAsyncLoaderReplacementTest() {
     kb::tests::Require(manager.RequestLoadAsync(id), "Replacement-test async request was rejected");
     kb::tests::Require(manager.AsyncLoadStatus(id) == kb::assets::AsyncAssetLoadStatus::Pending,
         "Replacement-test async request was not pending before loader replacement");
+    const auto revisionBeforeReplacement = manager.Revision();
     kb::tests::Require(manager.RegisterLoader(std::make_unique<TextAssetLoader>()),
         "Replacement-test same-type loader registration failed");
+    kb::tests::Require(manager.Revision() != revisionBeforeReplacement,
+        "Replacing an asset loader must invalidate cached compatibility diagnostics");
     for (std::size_t spin = 0; spin < 1000000U && manager.AsyncLoadStatus(id) == kb::assets::AsyncAssetLoadStatus::Pending; ++spin) {
         manager.PumpAsyncLoads();
         std::this_thread::yield();
@@ -455,8 +598,11 @@ void RunAssetManagerNewLoaderPreservesRetainedAssetsTest() {
         "Retained-asset test could not publish its payload");
 
     const auto gate = std::make_shared<AsyncLoaderGate>();
+    const auto revisionBeforeNewLoader = manager.Revision();
     kb::tests::Require(manager.RegisterLoader(std::make_unique<GatedTextAssetLoader>(gate)),
         "Retained-asset test could not add an unrelated loader type");
+    kb::tests::Require(manager.Revision() != revisionBeforeNewLoader,
+        "Adding an asset loader must invalidate cached compatibility diagnostics");
     const kb::assets::AssetHandle<std::string> retained = manager.AcquireLoaded<std::string>(textId);
     kb::tests::Require(retained.IsLoaded() && *retained == "resident",
         "Adding an unrelated loader evicted a retained runtime asset");
@@ -2193,6 +2339,8 @@ void RunSceneAssetDiscoveryStaysLinearInNestedPrefabsTest() {
 namespace kb::tests {
 
 void RunAssetRuntimeTests() {
+    RunCollisionMeshAssetTest();
+    RunAssetDiscoveryHashCompatibilityTest();
     RunAssetManagerDiscoveryCacheAndManifestTest();
     RunSingleAssetRefreshTest();
     RunAssetManagerRuntimePublicationTest();

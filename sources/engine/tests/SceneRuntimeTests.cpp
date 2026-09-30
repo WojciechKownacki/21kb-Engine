@@ -1,9 +1,15 @@
 #include "ScenePrefabTestSuites.hpp"
+#include "EcsTestSuites.hpp"
 #include "SceneSystemTestSuites.hpp"
 #include "TestSuites.hpp"
 
 #include <cstdlib>
 #include <string_view>
+
+namespace kb::tests {
+void RunScriptNativeHeaderReloadTest();
+void RunPhysicsReplayOnlyTest();
+}
 
 namespace {
 
@@ -18,12 +24,18 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunSaveGameTests();
     } else if (suite == "ecs") {
         kb::tests::RunEcsRuntimeTests();
+    } else if (suite == "ecs-native") {
+        kb::tests::RunEcsNativeArchetypeStorageTests();
     } else if (suite == "scene-hierarchy") {
         kb::tests::RunSceneHierarchyTests();
     } else if (suite == "scene-ui") {
         kb::tests::RunSceneUITests();
+    } else if (suite == "scene-ui-bench") {
+        kb::tests::RunSceneUIBuildFrameBenchmark();
     } else if (suite == "scene-system") {
         kb::tests::RunSceneSystemTests();
+    } else if (suite == "physics-replay") {
+        kb::tests::RunPhysicsReplayOnlyTest();
     } else if (suite == "audio") {
         kb::tests::RunAudioSceneSystemTests();
     } else if (suite == "scene-runtime") {
@@ -36,8 +48,12 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunScenePrefabCaptureTests();
     } else if (suite == "project-scene") {
         kb::tests::RunProjectSceneTests();
+    } else if (suite == "project-scene-transition-bench") {
+        kb::tests::RunLargeNonAdditiveSceneTransitionBenchmark();
     } else if (suite == "script") {
         kb::tests::RunScriptRuntimeTests();
+    } else if (suite == "script-native-header") {
+        kb::tests::RunScriptNativeHeaderReloadTest();
     } else if (suite == "script-api") {
         kb::tests::RunScriptApiCatalogTests();
     } else if (suite == "visual-graph") {

@@ -26,6 +26,9 @@ add_executable(kb_editor WIN32
     src/app/EditorAssetBrowserContextMenuPointerHandler.cpp
     src/app/EditorAssetBrowserDeleteConfirmPointerHandler.cpp
     src/app/EditorAssetBrowserDoubleClickHandler.cpp
+    src/private/app/EditorExternalCodeLauncher.hpp
+    src/app/EditorExternalCodeLauncher.cpp
+    src/private/app/EditorScriptFileWatcher.hpp
     src/app/EditorAssetBrowserInputHandler.cpp
     src/app/EditorBuildGameInputHandler.cpp
     src/private/app/ParticleEditorPanelInteraction.hpp
@@ -1398,6 +1401,9 @@ if(BUILD_TESTING)
 
     add_test(NAME kb_editor_tests COMMAND $<TARGET_FILE:kb_editor_tests>)
     set_tests_properties(kb_editor_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+    add_test(NAME kb_editor_script_editor_tests COMMAND $<TARGET_FILE:kb_editor_tests> script-editor)
+    set_tests_properties(kb_editor_script_editor_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
     add_test(NAME kb_editor_user_widget_headless
         COMMAND $<TARGET_FILE:kb_editor>

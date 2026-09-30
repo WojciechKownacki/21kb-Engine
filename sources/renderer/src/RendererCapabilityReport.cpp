@@ -46,6 +46,13 @@ const char* RendererBackendName(bgfx::RendererType::Enum renderer) noexcept {
 }
 
 bgfx::RendererType::Enum ResolvePreferredRendererBackend(const bgfx::RendererType::Enum* supportedBackends, std::uint8_t supportedBackendCount) noexcept {
+#if defined(_WIN32)
+    // Use the same low-latency desktop path for game and editor. Explicit
+    // backend requests bypass this default policy.
+    if (ContainsBackend(supportedBackends, supportedBackendCount, bgfx::RendererType::Direct3D11)) {
+        return bgfx::RendererType::Direct3D11;
+    }
+#endif
     constexpr std::array<bgfx::RendererType::Enum, 4U> preferredBackends{
         bgfx::RendererType::Direct3D12,
         bgfx::RendererType::Vulkan,
@@ -89,7 +96,7 @@ RendererCapabilityReport BuildRendererCapabilityReport(bgfx::RendererType::Enum 
     report.textureReadbackSupported = SupportedFlagsContain(caps->supported, BGFX_CAPS_TEXTURE_READ_BACK);
     report.hdrExposureMeteringSupported = report.textureBlitSupported && report.textureReadbackSupported;
     report.gpuDrivenComputeCullingSupported = report.computeSupported;
-    report.gpuDrivenIndirectSubmitSupported = report.computeSupported && report.indirectDrawSupported;
+    report.gpuDrivenIndirectSubmitSupported = false;
     report.gpuDrivenMeshletSubmitSupported = false;
     report.particleInstancingSupported = SupportedFlagsContain(caps->supported, BGFX_CAPS_INSTANCING);
     report.particleGpuDrawingSupported = report.particleInstancingSupported;
@@ -135,6 +142,8 @@ RendererCapabilityReport BuildRendererCapabilityReport(bgfx::RendererType::Enum 
     }
     if (!report.indirectDrawSupported) {
         AddFallbackReason(report, "indirect draw submit is unsupported on selected backend");
+    } else if (!report.gpuDrivenIndirectSubmitSupported) {
+        AddFallbackReason(report, "GPU-driven indirect submit is not implemented for the selected renderer path");
     }
     if (!report.gpuDrivenMeshletSubmitSupported) {
         AddFallbackReason(report, "meshlet submit is not implemented for the selected renderer path");

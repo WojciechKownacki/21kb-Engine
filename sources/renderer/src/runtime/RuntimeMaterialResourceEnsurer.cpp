@@ -15,6 +15,7 @@
 #include <functional>
 #include <optional>
 #include <span>
+#include <unordered_set>
 #include <vector>
 
 namespace kb::render {
@@ -252,9 +253,10 @@ void RuntimeMaterialResourceEnsurer::Ensure(
     RuntimeMaterialResourceMap& materials,
     RuntimeMaterialResourceMap& embeddedMaterials) {
     kb::assets::AssetManager& manager = context.scene.Assets().Manager();
+    std::unordered_set<std::uint64_t> ensuredMaterialAssetIds;
 
     auto ensureMaterial = [&](std::uint64_t materialAssetId) {
-        if (materialAssetId == 0U) {
+        if (materialAssetId == 0U || !ensuredMaterialAssetIds.insert(materialAssetId).second) {
             return;
         }
 
@@ -379,34 +381,40 @@ void RuntimeMaterialResourceEnsurer::Ensure(
         context.sceneRenderer.ResourceMap().BindMaterial(materialAssetId, handle);
     };
 
-    for (const auto& [entityId, proxy] : context.renderScene.MeshProxies()) {
-        static_cast<void>(entityId);
-        ensureMaterial(proxy.desc.materialAssetId);
-        for (std::uint32_t slotIndex = 0U; slotIndex < proxy.desc.materialSlotOverrideCount && slotIndex < kMaxSceneMaterialSlotOverrides; ++slotIndex) {
-            ensureMaterial(proxy.desc.materialSlotAssetIds[slotIndex]);
+    std::unordered_set<std::uint64_t> ensuredMeshMaterialSlots;
+    const auto ensureMeshMaterialSlots = [&](std::uint64_t meshAssetId) {
+        if (meshAssetId == 0U || !ensuredMeshMaterialSlots.insert(meshAssetId).second) {
+            return;
         }
-
-        const RenderMeshHandle meshHandle = context.sceneRenderer.ResourceMap().ResolveMesh(proxy.desc.meshAssetId);
+        const RenderMeshHandle meshHandle = context.sceneRenderer.ResourceMap().ResolveMesh(meshAssetId);
         const RenderMeshResource* meshResource = context.sceneRenderer.Resources().FindMesh(meshHandle);
         if (meshResource == nullptr) {
-            continue;
+            return;
         }
         for (const RenderMaterialSlot& slot : meshResource->materialSlots) {
             ensureMaterial(slot.defaultMaterialAssetId);
+        }
+    };
+
+    if (context.renderScene.ResourceGroupsCoverMeshProxies().materials) {
+        for (const SceneRenderDrawGroup& group : context.renderScene.DrawGroups()) {
+            ensureMaterial(group.materialAssetId);
+            ensureMeshMaterialSlots(group.meshAssetId);
+        }
+    } else {
+        for (const auto& [entityId, proxy] : context.renderScene.MeshProxies()) {
+            static_cast<void>(entityId);
+            ensureMaterial(proxy.desc.materialAssetId);
+            for (std::uint32_t slotIndex = 0U; slotIndex < proxy.desc.materialSlotOverrideCount && slotIndex < kMaxSceneMaterialSlotOverrides; ++slotIndex) {
+                ensureMaterial(proxy.desc.materialSlotAssetIds[slotIndex]);
+            }
+            ensureMeshMaterialSlots(proxy.desc.meshAssetId);
         }
     }
     for (const auto& [entityId, proxy] : context.renderScene.GeometrySwarmProxies()) {
         static_cast<void>(entityId);
         ensureMaterial(proxy.desc.materialAssetId);
-
-        const RenderMeshHandle meshHandle = context.sceneRenderer.ResourceMap().ResolveMesh(proxy.desc.meshAssetId);
-        const RenderMeshResource* meshResource = context.sceneRenderer.Resources().FindMesh(meshHandle);
-        if (meshResource == nullptr) {
-            continue;
-        }
-        for (const RenderMaterialSlot& slot : meshResource->materialSlots) {
-            ensureMaterial(slot.defaultMaterialAssetId);
-        }
+        ensureMeshMaterialSlots(proxy.desc.meshAssetId);
     }
     for (const auto& [entityId, proxy] : context.renderScene.SurfaceCastProxies()) {
         static_cast<void>(entityId);

@@ -290,7 +290,7 @@ bool ScenePrefabPropertyOverrideApplier::Apply(ScenePrefabNodeDesc& node, const 
     }
     if (property.propertyPath == "collider.shape") {
         int value = 0;
-        if (!ParseNumber(property.value, value) || value < static_cast<int>(ColliderShape::Box) || value > static_cast<int>(ColliderShape::Capsule)) {
+        if (!ParseNumber(property.value, value) || value < static_cast<int>(ColliderShape::Box) || value > static_cast<int>(ColliderShape::Mesh)) {
             return false;
         }
         Ensure(node.components.collider).shape = static_cast<ColliderShape>(value);
@@ -298,6 +298,9 @@ bool ScenePrefabPropertyOverrideApplier::Apply(ScenePrefabNodeDesc& node, const 
     }
     if (property.propertyPath == "collider.center") {
         return ParseVec3(property.value, Ensure(node.components.collider).center);
+    }
+    if (property.propertyPath == "collider.meshAssetId") {
+        return ParseNumber(property.value, Ensure(node.components.collider).meshAssetId);
     }
     if (property.propertyPath == "collider.boxSize") {
         return ParseVec3(property.value, Ensure(node.components.collider).boxSize);

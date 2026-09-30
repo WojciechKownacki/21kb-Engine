@@ -583,6 +583,13 @@ void RunBulkPrefabBatchStatsOnlyInstantiationTest() {
     kb::tests::Require(scene.Hierarchy().Parent(firstRootChildren.front()) == roots[1], "Batch stats-only prefab spawn dense hierarchy parent cache did not update");
     kb::tests::Require(scene.Hierarchy().ChildEntities(roots[0]).empty(), "Batch stats-only prefab spawn dense hierarchy did not remove old child link");
     kb::tests::Require(scene.Hierarchy().ChildEntities(roots[1]).size() == 2U, "Batch stats-only prefab spawn dense hierarchy did not append new child link");
+
+    const kb::scene::SceneObject ordinary = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Mirrored Count Root" });
+    const kb::ecs::World& world = scene.Runtime().EcsWorld();
+    kb::tests::Require(world.BackendEntityAlive(ordinary.Entity()) && !world.BackendEntityAlive(roots[2]),
+        "Mixed scene count test did not contain both mirrored and native-only entities");
+    kb::tests::Require(scene.Entities().Count() == 11U && world.NativeStorageStats().liveEntities == 11U,
+        "Mixed scene count omitted native-only prefab entities after a mirrored entity was created");
 }
 
 void RunBulkPrefabMultiArchetypeNodeOrderTest() {

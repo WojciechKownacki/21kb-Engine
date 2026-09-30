@@ -18,11 +18,12 @@ World::World(WorldConfig config)
     , registries_(std::make_unique<WorldRegistrySet>())
     , nativeStorage_(std::make_unique<NativeArchetypeStorage>(config))
     , mutableComponentBorrowLocks_(std::make_unique<MutableComponentBorrowLocks>())
-    , structuralChangeValidator_(std::make_unique<StructuralChangeValidator>()) {
+    , structuralChangeValidator_(std::make_unique<StructuralChangeValidator>())
+    , telemetryState_(std::make_shared<QueryTelemetryState>()) {
     if (world_ == nullptr) {
         throw std::runtime_error("Failed to initialize ECS world");
     }
-    queryPlanCache_.reserve(config_.reserveQueryCache);
+    queryPlanIndex_.reserve(config_.reserveQueryCache);
 }
 
 World::~World() {
@@ -36,8 +37,9 @@ World::World(World&& other) noexcept
     , nativeStorage_(std::move(other.nativeStorage_))
     , mutableComponentBorrowLocks_(std::move(other.mutableComponentBorrowLocks_))
     , structuralChangeValidator_(std::move(other.structuralChangeValidator_))
-    , telemetryCounters_(other.telemetryCounters_)
-    , queryPlanCache_(std::move(other.queryPlanCache_)) {}
+    , telemetryState_(other.telemetryState_)
+    , queryPlanCache_(std::move(other.queryPlanCache_))
+    , queryPlanIndex_(std::move(other.queryPlanIndex_)) {}
 
 World& World::operator=(World&& other) noexcept {
     if (this != &other) {
@@ -48,8 +50,9 @@ World& World::operator=(World&& other) noexcept {
         nativeStorage_ = std::move(other.nativeStorage_);
         mutableComponentBorrowLocks_ = std::move(other.mutableComponentBorrowLocks_);
         structuralChangeValidator_ = std::move(other.structuralChangeValidator_);
-        telemetryCounters_ = other.telemetryCounters_;
+        telemetryState_ = other.telemetryState_;
         queryPlanCache_ = std::move(other.queryPlanCache_);
+        queryPlanIndex_ = std::move(other.queryPlanIndex_);
     }
     return *this;
 }
@@ -65,6 +68,7 @@ void World::Reset() noexcept {
     if (mutableComponentBorrowLocks_ != nullptr) {
         mutableComponentBorrowLocks_->Clear();
     }
+    queryPlanIndex_.clear();
     queryPlanCache_.clear();
     structuralChangeValidator_.reset();
     nativeStorage_.reset();

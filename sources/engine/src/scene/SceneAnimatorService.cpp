@@ -1,6 +1,7 @@
 #include "scene/SceneAnimatorService.hpp"
 
 #include "engine/assets/AssetId.hpp"
+#include "engine/ecs/Query.hpp"
 #include "engine/math/EngineMath.hpp"
 #include "engine/scene/AnimationAssetIO.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
@@ -14,6 +15,7 @@
 #include "engine/scene/SceneTransforms.hpp"
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneState.hpp"
+#include "scene/entities/SceneEntityCounter.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -27,11 +29,13 @@ namespace kb::scene {
 namespace {
 
 AnimatorRuntimeRecord* Find(SceneState& state, SceneEntity entity) {
+    if (!state.world.IsAlive(entity)) return nullptr;
     const auto it = state.animators.find(entity.Id());
     return it != state.animators.end() && it->second.entity == entity ? &it->second : nullptr;
 }
 
 const AnimatorRuntimeRecord* Find(const SceneState& state, SceneEntity entity) {
+    if (!state.world.IsAlive(entity)) return nullptr;
     const auto it = state.animators.find(entity.Id());
     return it != state.animators.end() && it->second.entity == entity ? &it->second : nullptr;
 }
@@ -156,6 +160,15 @@ struct AnimatorDebugSnapshotCapture {
 };
 
 AnimatorDebugSnapshotCapture CaptureAnimatorDebugSnapshot(Scene& scene, SceneState& state) {
+    auto& assets = scene.Assets().Manager();
+    const std::uint64_t registryGeneration = assets.Registry().Generation();
+    const std::uint64_t managerRevision = assets.Revision();
+    if (state.animatorCompatibilityRegistryGeneration != registryGeneration ||
+        state.animatorCompatibilityManagerRevision != managerRevision) {
+        state.animatorCompatibilityReports.clear();
+        state.animatorCompatibilityRegistryGeneration = registryGeneration;
+        state.animatorCompatibilityManagerRevision = managerRevision;
+    }
     AnimatorDebugSnapshotCapture capture{};
     AnimatorDebugSnapshot& published = capture.snapshot;
     published.revision = ++state.animatorDebugSnapshotRevision;
@@ -172,11 +185,14 @@ AnimatorDebugSnapshotCapture CaptureAnimatorDebugSnapshot(Scene& scene, SceneSta
         instance.entity = record.entity;
         instance.controllerAssetId = record.controller.Id().value;
         instance.runtimeBindingGeneration = record.runtimeBindingGeneration;
-        const auto appendCompatibilityDiagnostics = [&scene, &instance](std::uint64_t assetId) {
+        const auto appendCompatibilityDiagnostics = [&assets, &state, &instance](std::uint64_t assetId) {
             if (assetId == 0U) return;
-            const kb::assets::AssetCompatibilityReport report =
-                scene.Assets().Manager().ValidateCompatibility(kb::assets::AssetId{ assetId });
-            for (const kb::assets::AssetCompatibilityDiagnostic& diagnostic : report.diagnostics) {
+            auto cached = state.animatorCompatibilityReports.find(assetId);
+            if (cached == state.animatorCompatibilityReports.end()) {
+                cached = state.animatorCompatibilityReports.emplace(assetId,
+                    assets.ValidateCompatibility(kb::assets::AssetId{ assetId })).first;
+            }
+            for (const kb::assets::AssetCompatibilityDiagnostic& diagnostic : cached->second.diagnostics) {
                 instance.compatibilityDiagnostics.push_back(diagnostic.message);
             }
         };
@@ -473,6 +489,7 @@ void InitializePoseBuffers(AnimatorInstanceSkeleton& derived) {
 
 [[nodiscard]] const AnimatorInstanceSkeleton* FindSkeletonPose(
     const SceneState& state, SceneEntity entity) noexcept {
+    if (!state.world.IsAlive(entity)) return nullptr;
     if (const AnimatorRuntimeRecord* animator = Find(state, entity);
         animator != nullptr && animator->skeleton.has_value()) {
         return &*animator->skeleton;
@@ -2256,6 +2273,7 @@ std::span<const AnimatorParameterValue> SceneAnimatorService::Parameters(const S
 std::uint64_t SceneAnimatorService::RuntimeBindingGeneration(
     const Scene& scene, SceneEntity entity) noexcept {
     const SceneState& state = SceneAccess::State(scene);
+    if (!state.world.IsAlive(entity)) return 0U;
     const AnimatorRuntimeRecord* record = Find(state, entity);
     if (record != nullptr && record->skeleton.has_value()) {
         return record->runtimeBindingGeneration;
@@ -2555,12 +2573,17 @@ std::vector<AnimationEventRecord> SceneAnimatorService::DrainEvents(Scene& scene
 void SceneAnimatorService::SyncComponents(Scene& scene) {
     // Structural mutations below invalidate the pointers an in-flight debug
     // snapshot build may still be reading.
-    JoinAnimatorDebugSnapshotJob(SceneAccess::State(scene));
+    SceneState& sceneState = SceneAccess::State(scene);
+    JoinAnimatorDebugSnapshotJob(sceneState);
+    if (sceneState.animators.empty() && sceneState.skeletonBindingPoses.empty() && sceneState.pendingAnimationEvents.empty() &&
+        SceneEntityCounter::CountWithComponent(sceneState.world, sceneState.components.AnimatorComponentId()) == 0U &&
+        SceneEntityCounter::CountWithComponent(sceneState.world, sceneState.components.SkeletonBindingComponentId()) == 0U) {
+        return;
+    }
     if (scene.Entities().Count() == 0U) {
-        SceneState& state = SceneAccess::State(scene);
-        state.animators.clear();
-        state.skeletonBindingPoses.clear();
-        state.pendingAnimationEvents.clear();
+        sceneState.animators.clear();
+        sceneState.skeletonBindingPoses.clear();
+        sceneState.pendingAnimationEvents.clear();
         return;
     }
     struct AuthoredAnimator {
@@ -2573,20 +2596,21 @@ void SceneAnimatorService::SyncComponents(Scene& scene) {
     };
     std::vector<AuthoredAnimator> authored;
     std::vector<AuthoredSkeletonBinding> authoredSkeletonBindings;
-    std::vector<SceneEntity> pending = scene.Hierarchy().RootEntities();
-    while (!pending.empty()) {
-        const SceneEntity entity = pending.back();
-        pending.pop_back();
-        const auto children = scene.Hierarchy().ChildEntities(entity);
-        pending.insert(pending.end(), children.begin(), children.end());
-        if (const Animator* animator = SceneAccess::State(scene).componentStorage.Animators().TryGet(entity)) {
-            authored.push_back(AuthoredAnimator{ .entity = entity, .animator = *animator });
-        }
-        if (const SkeletonBindingComponent* binding =
-                SceneAccess::State(scene).componentStorage.SkeletonBindings().TryGet(entity)) {
-            authoredSkeletonBindings.push_back(AuthoredSkeletonBinding{ .entity = entity, .binding = *binding });
-        }
-    }
+    authored.reserve(SceneEntityCounter::CountWithComponent(
+        sceneState.world, sceneState.components.AnimatorComponentId()));
+    authoredSkeletonBindings.reserve(SceneEntityCounter::CountWithComponent(
+        sceneState.world, sceneState.components.SkeletonBindingComponentId()));
+    // Snapshot matching components before Attach can mutate component storage.
+    sceneState.world.CreateQuery<Animator>().ForEach(
+        [](SceneEntity entity, const Animator& animator, void* context) {
+            static_cast<std::vector<AuthoredAnimator>*>(context)->push_back(
+                { .entity = entity, .animator = animator });
+        }, &authored);
+    sceneState.world.CreateQuery<SkeletonBindingComponent>().ForEach(
+        [](SceneEntity entity, const SkeletonBindingComponent& binding, void* context) {
+            static_cast<std::vector<AuthoredSkeletonBinding>*>(context)->push_back(
+                { .entity = entity, .binding = binding });
+        }, &authoredSkeletonBindings);
 
     std::map<std::uint64_t, bool> retained;
     for (const AuthoredAnimator& value : authored) {
@@ -2675,8 +2699,7 @@ void SceneAnimatorService::SyncComponents(Scene& scene) {
     }
     SceneState& state = SceneAccess::State(scene);
     for (auto it = state.animators.begin(); it != state.animators.end();) {
-        const Animator* component = state.componentStorage.Animators().TryGet(it->second.entity);
-        if (component == nullptr || !component->enabled || !retained.contains(it->first)) {
+        if (!retained.contains(it->first)) {
             it = state.animators.erase(it);
         } else {
             ++it;

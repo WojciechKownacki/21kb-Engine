@@ -1,6 +1,7 @@
 #pragma once
 
 #include "GameProjectRuntime.hpp"
+#include "RuntimeSceneFrameSync.hpp"
 
 #include <filesystem>
 #include <iosfwd>
@@ -56,6 +57,7 @@ private:
     std::unique_ptr<kb::scene::Scene> scene_;
     kb::script::ScriptModule* script_ = nullptr;
     bool scriptActive_ = false;
+    RuntimeSceneFrameSync renderSceneSync_;
 };
 
 } // namespace kb::game

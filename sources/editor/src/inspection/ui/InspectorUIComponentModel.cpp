@@ -3,10 +3,14 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneUIComponentSet.hpp"
 #include "engine/ui/UIComponentValidation.hpp"
 
+#include <algorithm>
 #include <charconv>
+#include <initializer_list>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
@@ -32,6 +36,27 @@ static_assert(static_cast<std::uint16_t>(InspectorPropertyId::UIWidgetSwitcherFi
     if (name == "fontAssetId") return "Font";
     if (name == "spriteAssetId") return "Sprite";
     if (name == "content") return "Text";
+    if (name == "optionCount") return "Option Count";
+    if (name == "templateEntity") return "Template";
+    if (name == "player") return "Player (-1 = Everyone)";
+    if (name == "respectSafeArea") return "Fit Safe Area";
+    if (name == "maxLines") return "Max Lines (0 = All)";
+    if (name == "group") return "Radio Group";
+    if (name == "fillRect") return "Fill";
+    if (name == "handleRect") return "Handle";
+    if (name == "snapToChildren") return "Snap to Children";
+    if (name == "transitionSeconds") return "Show/Hide Seconds";
+    // "options.3.text" -> "Option 4", "options.3.icon" -> "Option 4 Icon": the list reads as numbered
+    // choices rather than as indexed fields.
+    if (name.starts_with("options.")) {
+        const std::string_view rest = name.substr(8U);
+        const std::size_t dot = rest.find('.');
+        std::uint32_t index = 0U;
+        if (dot != std::string_view::npos &&
+            std::from_chars(rest.data(), rest.data() + dot, index).ec == std::errc{}) {
+            return "Option " + std::to_string(index + 1U) + (rest.substr(dot) == ".icon" ? " Icon" : "");
+        }
+    }
     if (name == "sizeDelta.x") return "Width / Size Delta X";
     if (name == "sizeDelta.y") return "Height / Size Delta Y";
     std::string output;
@@ -61,14 +86,22 @@ static_assert(static_cast<std::uint16_t>(InspectorPropertyId::UIWidgetSwitcherFi
         return component == Text ? std::vector<std::string_view>{"Top", "Center", "Bottom"}
                                  : std::vector<std::string_view>{"Top", "Center", "Bottom", "Stretch"};
     if (component == Text && name == "wrapMode") return {"No Wrap", "Word", "Character"};
-    if (component == Image && name == "scaleMode") return {"Stretch", "Fit Inside", "Fill and Crop"};
+    if (component == Image && name == "scaleMode") return {"Stretch", "Fit Inside", "Fill and Crop", "Tiled"};
+    if (component == Image && name == "fillMethod") return {"None", "Horizontal", "Vertical", "Radial 360"};
+    if (component == Image && name == "fillOrigin") return {"Start", "End"};
+    if (component == Canvas && name == "renderMode") return {"Screen Space", "World Space"};
+    if (component == Text && name == "overflow") return {"Overflow", "Truncate", "Ellipsis"};
+    if (component == Selectable && name == "transition") return {"None", "Color Tint", "Sprite Swap"};
+    if (component == ScrollView && name == "movementType") return {"Clamped", "Elastic", "Unrestricted"};
+    if (component == InputField && name == "contentType")
+        return {"Standard", "Integer Number", "Decimal Number", "Alphanumeric", "Email Address", "Password", "Pin"};
     if (component == CanvasScaler && name == "scaleMode") return {"Constant Pixel Size", "Scale with Screen Size"};
     if (component == ContentSizeFitter && (name == "horizontalFit" || name == "verticalFit"))
         return {"Unconstrained", "Minimum Size", "Preferred Size"};
     if (component == AspectRatioFitter && name == "mode")
         return {"None", "Width Controls Height", "Height Controls Width", "Fit Inside Parent", "Fill Parent"};
     if (component == Selectable && name == "navigationMode") return {"None", "Automatic", "Explicit"};
-    if ((component == Slider || component == Scrollbar) && name == "direction")
+    if ((component == Slider || component == Scrollbar || component == ProgressBar) && name == "direction")
         return {"Left to Right", "Right to Left", "Bottom to Top", "Top to Bottom"};
     return {};
 }
@@ -275,6 +308,53 @@ std::vector<InspectorUIPropertyRow> InspectorUIComponentModel::Properties(
         }
         index += count - 1;
     }
+    // Settings that do nothing in the current mode stay out of the way: a row with no fields is neither
+    // drawn nor hit, and its index keeps addressing the same property.
+    const auto value = [&output](std::string_view name) {
+        const auto found = std::ranges::find(output, name, &InspectorUIPropertyRow::name);
+        return found == output.end() ? std::string{} : found->value;
+    };
+    const auto hide = [&output](std::initializer_list<std::string_view> names) {
+        for (InspectorUIPropertyRow& row : output)
+            if (std::ranges::find(names, row.name) != names.end()) row.fieldCount = 0;
+    };
+    using enum kb::scene::UIComponentType;
+    switch (component) {
+    case Canvas:
+        hide(value("renderMode") == "1" ? std::initializer_list<std::string_view>{"respectSafeArea"}
+                                         : std::initializer_list<std::string_view>{"pixelsPerUnit"});
+        break;
+    case CanvasGroup:
+        if (value("transitionSeconds") == "0") hide({"hiddenOffset.x", "hiddenScale"});
+        break;
+    case Image: {
+        const std::string method = value("fillMethod");
+        if (method == "0") hide({"fillOrigin", "fillAmount", "fillClockwise"});
+        else if (method != "3") hide({"fillClockwise"});
+        // The two ends of a fill read as the sides of the image it grows from.
+        const auto origin = std::ranges::find(output, std::string_view{"fillOrigin"}, &InspectorUIPropertyRow::name);
+        if (origin != output.end())
+            origin->choices = method == "1" ? std::vector<std::string_view>{"Left", "Right"}
+                : method == "2"             ? std::vector<std::string_view>{"Bottom", "Top"}
+                                            : std::vector<std::string_view>{"Top", "Bottom"};
+        break;
+    }
+    case Text:
+        if (value("autoSize") != "true") hide({"minFontSize"});
+        break;
+    case Selectable: {
+        const std::string transition = value("transition");
+        if (transition != "1")
+            hide({"normalColor.r", "highlightedColor.r", "pressedColor.r", "selectedColor.r", "disabledColor.r", "colorFadeSeconds"});
+        if (transition != "2") hide({"highlightedImage", "pressedImage", "selectedImage", "disabledImage"});
+        break;
+    }
+    case ScrollView:
+        if (value("movementType") != "1") hide({"elasticity"});
+        break;
+    default:
+        break;
+    }
     return output;
 }
 
@@ -308,6 +388,108 @@ std::optional<kb::scene::UIComponentType> InspectorUIComponentModel::Component(
         ? std::optional<kb::scene::UIComponentType>{
               static_cast<kb::scene::UIComponentType>(value - first) }
         : std::nullopt;
+}
+
+std::string InspectorUIComponentModel::EntityReferenceLabel(const kb::scene::Scene& scene, std::uint64_t id,
+    bool requireSelectable) {
+    if (id == 0U) return "(none)";
+    const kb::scene::SceneEntity entity{ id };
+    if (!scene.Entities().IsAlive(entity)) return "(missing object #" + std::to_string(id) + ")";
+    std::string name = scene.Entities().Name(entity);
+    if (requireSelectable && !scene.Components().UI().Has<kb::scene::UISelectable>(entity)) return name + " (not selectable)";
+    return name;
+}
+
+std::vector<kb::scene::SceneEntity> InspectorUIComponentModel::NavigationTargets(
+    const kb::scene::Scene& scene, kb::scene::SceneEntity source) {
+    std::vector<kb::scene::SceneEntity> output;
+    const std::vector<kb::scene::SceneEntity> roots = scene.Hierarchy().RootEntities();
+    std::vector<kb::scene::SceneEntity> pending(roots.rbegin(), roots.rend());
+    while (!pending.empty()) {
+        const kb::scene::SceneEntity entity = pending.back();
+        pending.pop_back();
+        if (entity != source && scene.Components().UI().Has<kb::scene::UISelectable>(entity))
+            output.push_back(entity);
+        for (std::size_t index = scene.Hierarchy().ChildCount(entity); index > 0U; --index)
+            pending.push_back(scene.Hierarchy().ChildAt(entity, index - 1U));
+    }
+    return output;
+}
+
+InspectorUIComponentModel::ReferenceChoice InspectorUIComponentModel::ReferenceTargets(
+    const kb::scene::Scene& scene, kb::scene::SceneEntity source, kb::scene::UIComponentType component, std::string_view property) {
+    ReferenceChoice choice;
+    const auto ui = scene.Components().UI();
+    const auto collect = [&](kb::scene::SceneEntity root, bool includeRoot, auto&& accept) {
+        std::vector<kb::scene::SceneEntity> pending;
+        if (root.IsValid()) pending.push_back(root);
+        else {
+            const std::vector<kb::scene::SceneEntity> roots = scene.Hierarchy().RootEntities();
+            pending.assign(roots.rbegin(), roots.rend());
+        }
+        while (!pending.empty()) {
+            const kb::scene::SceneEntity entity = pending.back();
+            pending.pop_back();
+            if ((includeRoot || entity != root) && entity != source && accept(entity)) choice.targets.push_back(entity);
+            for (std::size_t index = scene.Hierarchy().ChildCount(entity); index > 0U; --index)
+                pending.push_back(scene.Hierarchy().ChildAt(entity, index - 1U));
+        }
+    };
+    const auto draws = [&ui](kb::scene::SceneEntity entity) {
+        return ui.Has<kb::scene::UIImage>(entity) || ui.Has<kb::scene::UIRawImage>(entity) || ui.Has<kb::scene::UISprite>(entity) ||
+            ui.Has<kb::scene::UIText>(entity) || ui.Has<kb::scene::UIBorder>(entity);
+    };
+    if (property.starts_with("navigation")) {
+        choice.targets = NavigationTargets(scene, source);
+        choice.title = "Select Navigation Target";
+        choice.description = "Choose the widget focus moves to in this direction.";
+    } else if (component == kb::scene::UIComponentType::Dropdown && property == "templateEntity") {
+        for (std::size_t index = 0U; index < scene.Hierarchy().ChildCount(source); ++index) {
+            const kb::scene::SceneEntity child = scene.Hierarchy().ChildAt(source, index);
+            if (ui.Has<kb::scene::UIRectTransform>(child)) choice.targets.push_back(child);
+        }
+        choice.title = "Select Template";
+        choice.description = "Choose the child object cloned as the open list.";
+    } else if (component == kb::scene::UIComponentType::Dropdown && (property == "captionText" || property == "itemText")) {
+        collect(source, false, [&ui](kb::scene::SceneEntity entity) { return ui.Has<kb::scene::UIText>(entity); });
+        choice.title = property == "captionText" ? "Select Caption Text" : "Select Item Text";
+        choice.description = property == "captionText" ? "Choose the Text that shows the chosen option."
+                                                       : "Choose the Text inside the template's item that shows each option.";
+    } else if (component == kb::scene::UIComponentType::Dropdown && (property == "captionImage" || property == "itemImage")) {
+        collect(source, false, [&ui](kb::scene::SceneEntity entity) { return ui.Has<kb::scene::UIImage>(entity); });
+        choice.title = property == "captionImage" ? "Select Caption Image" : "Select Item Image";
+        choice.description = property == "captionImage" ? "Choose the Image that shows the chosen option's image."
+                                                        : "Choose the Image inside the template's item that shows each option's image.";
+    } else if (component == kb::scene::UIComponentType::Toggle && property == "group") {
+        collect({}, true, [&ui](kb::scene::SceneEntity entity) { return ui.Has<kb::scene::UIRectTransform>(entity); });
+        choice.title = "Select Radio Group";
+        choice.description = "Toggles that name the same object switch each other off - usually the parent they share.";
+    } else if (property == "fillRect" || property == "handleRect") {
+        collect(source, false, [&ui](kb::scene::SceneEntity entity) { return ui.Has<kb::scene::UIRectTransform>(entity); });
+        choice.title = property == "fillRect" ? "Select Fill" : "Select Handle";
+        choice.description = property == "fillRect" ? "Choose the child stretched from the start up to the value."
+                                                    : "Choose the child placed at the value.";
+    } else if (property == "eventTarget") {
+        collect({}, true, [](kb::scene::SceneEntity) { return true; });
+        choice.title = "Select Event Target";
+        choice.description = "Choose the object whose scripts receive the click's action event.";
+    } else if (component == kb::scene::UIComponentType::ScrollView) {
+        collect({}, true, [&ui](kb::scene::SceneEntity entity) { return ui.Has<kb::scene::UIScrollbar>(entity); });
+        choice.title = "Select Scrollbar";
+        choice.description = "Choose the scrollbar that follows this scroll view.";
+    } else {
+        collect({}, true, draws);
+        choice.title = "Select Graphic";
+        choice.description = "Choose the widget that shows this state.";
+    }
+    return choice;
+}
+
+std::string InspectorUIComponentModel::HierarchyPath(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) {
+    std::string path = scene.Entities().Name(entity);
+    for (auto parent = scene.Hierarchy().Parent(entity); parent.IsValid(); parent = scene.Hierarchy().Parent(parent))
+        path = scene.Entities().Name(parent) + " / " + path;
+    return path;
 }
 
 std::optional<kb::scene::UIComponentPropertyValue> InspectorUIComponentModel::Parse(

@@ -271,6 +271,11 @@ struct RenderSceneStats {
 
 class RenderScene {
 public:
+    struct ResourceGroupCoverage {
+        bool meshes = false;
+        bool materials = false;
+    };
+
     using MeshProxyMap = std::unordered_map<std::uint64_t, MeshRenderProxy>;
     using CameraProxyMap = std::unordered_map<std::uint64_t, CameraRenderProxy>;
     using LightProxyMap = std::unordered_map<std::uint64_t, LightRenderProxy>;
@@ -350,6 +355,7 @@ public:
     [[nodiscard]] std::size_t SpaceStrokeProxyCount() const noexcept;
 
     [[nodiscard]] const MeshProxyMap& MeshProxies() const noexcept;
+    [[nodiscard]] std::span<const MeshRenderProxy* const> SortedMeshProxies() const;
     [[nodiscard]] const CameraProxyMap& CameraProxies() const noexcept;
     [[nodiscard]] const LightProxyMap& LightProxies() const noexcept;
     [[nodiscard]] const VisibilityBlockerProxyMap& VisibilityBlockerProxies() const noexcept;
@@ -375,6 +381,9 @@ public:
     [[nodiscard]] const CameraRenderProxyDesc* FindPrimaryCameraProxy(std::uint32_t targetViewportId = 0U) const noexcept;
     // The returned cache is refreshed lazily and remains stable until the next mesh proxy mutation.
     [[nodiscard]] const std::vector<SceneRenderDrawGroup>& DrawGroups() const;
+    // Draw groups can supply the resource IDs only when every mesh proxy is represented
+    // and no per-proxy resource state is hidden by grouping.
+    [[nodiscard]] ResourceGroupCoverage ResourceGroupsCoverMeshProxies() const;
     void BuildDrawGroups(std::vector<SceneRenderDrawGroup>& outDrawGroups) const;
     [[nodiscard]] std::size_t DrawGroupCapacity() const noexcept;
     [[nodiscard]] std::size_t DrawGroupInstanceCapacity() const noexcept;
@@ -393,12 +402,37 @@ private:
         [[nodiscard]] std::size_t operator()(DrawGroupKey key) const noexcept;
     };
 
+    struct SortedMeshProxyIndex {
+        std::vector<const MeshRenderProxy*> proxies;
+        bool dirty = false;
+
+        SortedMeshProxyIndex() = default;
+        SortedMeshProxyIndex(const SortedMeshProxyIndex&) noexcept : dirty(true) {}
+        SortedMeshProxyIndex& operator=(const SortedMeshProxyIndex&) noexcept {
+            proxies.clear();
+            dirty = true;
+            return *this;
+        }
+        SortedMeshProxyIndex(SortedMeshProxyIndex&& source) noexcept : dirty(true) {
+            source.proxies.clear();
+            source.dirty = true;
+        }
+        SortedMeshProxyIndex& operator=(SortedMeshProxyIndex&& source) noexcept {
+            proxies.clear();
+            dirty = true;
+            source.proxies.clear();
+            source.dirty = true;
+            return *this;
+        }
+    };
+
     [[nodiscard]] RenderProxyId AllocateProxyId() noexcept;
     void InvalidateDrawGroups() noexcept;
     void RebuildDrawGroupsIfNeeded() const;
     void ApplySurfaceCasts(SceneRenderMeshInstance& instance) const;
 
     MeshProxyMap meshes_;
+    mutable SortedMeshProxyIndex sortedMeshProxies_;
     CameraProxyMap cameras_;
     LightProxyMap lights_;
     VisibilityBlockerProxyMap visibilityBlockers_;

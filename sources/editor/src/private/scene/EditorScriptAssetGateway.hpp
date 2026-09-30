@@ -13,10 +13,8 @@ namespace kb::editor {
 
 class EditorAssetBrowserState;
 
-// Persistence for Lua script assets: creates a new .lua file with a starter
-// template (discovered + selected in the browser), and reads/writes script
-// source on disk. Single responsibility: Lua script asset file IO. Mirrors
-// EditorInputAssetGateway for the input assets.
+// Creates script assets and their source files, then discovers and selects
+// the behaviour asset in the browser.
 class EditorScriptAssetGateway {
 public:
     EditorScriptAssetGateway(kb::scene::Scene& scene, EditorAssetBrowserState& browser) noexcept;
@@ -24,6 +22,7 @@ public:
     // Writes a new "NewScript.lua" (uniquified) under the resolved folder, then
     // discovers and selects it. Returns the created file's physical path.
     [[nodiscard]] std::optional<std::filesystem::path> CreateLuaScript(const std::filesystem::path& virtualFolder);
+    [[nodiscard]] std::optional<std::filesystem::path> CreateNativeScript(const std::filesystem::path& virtualFolder, std::string& error);
 
     [[nodiscard]] static std::string ReadSource(const std::filesystem::path& path);
     [[nodiscard]] static bool WriteSource(const std::filesystem::path& path, std::string_view text);

@@ -47,9 +47,14 @@ void PreferredBackendPolicyUsesProductionPriorityOrder() {
         bgfx::RendererType::Vulkan,
         bgfx::RendererType::Noop,
     };
+#if defined(_WIN32)
+    constexpr auto preferredWithD3d11 = bgfx::RendererType::Direct3D11;
+#else
+    constexpr auto preferredWithD3d11 = bgfx::RendererType::Vulkan;
+#endif
     Require(
-        ResolvePreferredRendererBackend(vulkanBeforeD3d11.data(), static_cast<std::uint8_t>(vulkanBeforeD3d11.size())) == bgfx::RendererType::Vulkan,
-        "Backend policy did not prefer Vulkan over D3D11");
+        ResolvePreferredRendererBackend(vulkanBeforeD3d11.data(), static_cast<std::uint8_t>(vulkanBeforeD3d11.size())) == preferredWithD3d11,
+        "Backend policy did not preserve the platform's desktop preference");
 
     constexpr std::array<bgfx::RendererType::Enum, 3U> d3d12BeforeAll{
         bgfx::RendererType::Vulkan,
@@ -57,8 +62,16 @@ void PreferredBackendPolicyUsesProductionPriorityOrder() {
         bgfx::RendererType::Direct3D12,
     };
     Require(
-        ResolvePreferredRendererBackend(d3d12BeforeAll.data(), static_cast<std::uint8_t>(d3d12BeforeAll.size())) == bgfx::RendererType::Direct3D12,
-        "Backend policy did not prefer D3D12 over Vulkan and D3D11");
+        ResolvePreferredRendererBackend(d3d12BeforeAll.data(), static_cast<std::uint8_t>(d3d12BeforeAll.size())) ==
+#if defined(_WIN32)
+            bgfx::RendererType::Direct3D11,
+#else
+            bgfx::RendererType::Direct3D12,
+#endif
+        "Backend policy did not preserve the platform's preferred backend");
+    constexpr std::array withoutD3d11{bgfx::RendererType::Vulkan, bgfx::RendererType::Direct3D12};
+    Require(ResolvePreferredRendererBackend(withoutD3d11.data(), static_cast<std::uint8_t>(withoutD3d11.size())) == bgfx::RendererType::Direct3D12,
+        "Backend policy must retain D3D12 when D3D11 is unavailable");
 }
 
 void RendererExposesRuntimeCapabilityReport() {
@@ -70,6 +83,11 @@ void RendererExposesRuntimeCapabilityReport() {
     Renderer renderer;
     Require(renderer.Initialize(surface, &config), "Renderer did not initialize for capability report test");
 
+    Require(!renderer.GpuDrivenRuntimeDispatchEnabled(),
+        "Unconsumed GPU visibility dispatch must be opt-in");
+    renderer.SetGpuDrivenRuntimeDispatchEnabled(true);
+    Require(renderer.GpuDrivenRuntimeDispatchEnabled(), "Explicit compute diagnostics were not enabled");
+    renderer.SetGpuDrivenRuntimeDispatchEnabled(false);
     const RendererCapabilityReport& report = renderer.CapabilityReport();
     Require(report.initialized, "Renderer capability report was not marked initialized");
     Require(report.requestedBackend == bgfx::RendererType::Noop, "Capability report did not preserve requested backend");
@@ -88,8 +106,8 @@ void RendererExposesRuntimeCapabilityReport() {
         report.gpuDrivenComputeCullingSupported == report.computeSupported,
         "Capability report did not gate GPU-driven compute culling on compute support");
     Require(
-        report.gpuDrivenIndirectSubmitSupported == (report.computeSupported && report.indirectDrawSupported),
-        "Capability report did not gate GPU-driven indirect submit on compute and indirect draw support");
+        !report.gpuDrivenIndirectSubmitSupported,
+        "Capability report must not advertise GPU-driven indirect submit without a draw consumer");
     Require(!report.gpuDrivenMeshletSubmitSupported, "Capability report should keep meshlet submit disabled until a meshlet path exists");
     Require(report.particleGpuDrawingSupported == report.particleInstancingSupported &&
             report.particleSubtractiveBlendSupported == report.particleGpuDrawingSupported,

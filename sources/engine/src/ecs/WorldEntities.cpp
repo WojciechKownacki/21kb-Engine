@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <limits>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace kb::ecs {
@@ -82,30 +83,33 @@ Entity World::CreateEntity() {
         throw std::runtime_error("ECS world is not initialized");
     }
     const Entity entity = nativeStorage_->CreateEntity();
-    if (config_.mirrorEntitiesToBackend) {
-        try {
+    try {
+        if (config_.mirrorEntitiesToBackend) {
             ecs_make_alive(world_, FlecsEntityId(entity));
-        } catch (...) {
-            if (nativeStorage_ != nullptr && nativeStorage_->IsAlive(entity)) {
-                nativeStorage_->DestroyEntity(entity);
-            }
-            if (ecs_is_alive(world_, FlecsEntityId(entity))) {
-                ecs_delete(world_, FlecsEntityId(entity));
-            }
-            throw;
         }
-    }
-    if (config_.trackEntityCatalog && registries_ != nullptr) {
-        registries_->Entities().Add(entity);
+        if (config_.trackEntityCatalog && registries_ != nullptr) {
+            registries_->Entities().Add(entity);
+        }
+    } catch (...) {
+        if (config_.trackEntityCatalog && registries_ != nullptr) {
+            registries_->Entities().Remove(entity);
+        }
+        if (nativeStorage_->IsAlive(entity)) {
+            nativeStorage_->DestroyEntity(entity);
+        }
+        if (ecs_is_alive(world_, FlecsEntityId(entity))) {
+            ecs_delete(world_, FlecsEntityId(entity));
+        }
+        throw;
     }
     RecordStructuralChange();
     return entity;
 }
 
 Entity World::CreateEntity(std::string_view name) {
+    const std::string ownedName{ name };
     Entity entity = CreateEntity();
-    if (!name.empty()) {
-        const std::string ownedName{ name };
+    if (!ownedName.empty()) {
         ecs_set_name(world_, FlecsEntityId(entity), ownedName.c_str());
     }
     return entity;
@@ -346,13 +350,25 @@ void World::DestroyEntities(std::span<const Entity> entities) {
     }
     ValidateStructuralChangeAllowed("DestroyEntities");
 
+    constexpr std::size_t kLinearArchetypeLimit = 16U;
     std::vector<ecs_table_t*> previousArchetypes;
-    previousArchetypes.reserve(entities.size());
+    previousArchetypes.reserve(std::min(entities.size(), kLinearArchetypeLimit));
+    std::unordered_set<ecs_table_t*> seenArchetypes;
     for (Entity entity : entities) {
         ValidateEntityHandle(entity, "DestroyEntities");
         ecs_table_t* previousArchetype = EntityArchetype(entity);
-        if (std::find(previousArchetypes.begin(), previousArchetypes.end(), previousArchetype) == previousArchetypes.end()) {
-            previousArchetypes.push_back(previousArchetype);
+        if (previousArchetypes.size() < kLinearArchetypeLimit) {
+            if (std::find(previousArchetypes.begin(), previousArchetypes.end(), previousArchetype) == previousArchetypes.end()) {
+                previousArchetypes.push_back(previousArchetype);
+            }
+        } else {
+            if (seenArchetypes.empty()) {
+                seenArchetypes.reserve(64U);
+                seenArchetypes.insert(previousArchetypes.begin(), previousArchetypes.end());
+            }
+            if (seenArchetypes.insert(previousArchetype).second) {
+                previousArchetypes.push_back(previousArchetype);
+            }
         }
     }
 

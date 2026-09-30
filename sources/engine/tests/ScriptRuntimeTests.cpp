@@ -350,6 +350,11 @@ public:
         }
     }
 
+    void RaycastAll(kb::scene::Vec3 origin, kb::scene::Vec3 direction, float maxDistance, std::uint32_t layerMask,
+        kb::library::ArrayNonAlloc<kb::scene::PhysicsCastResult>& results) const noexcept override {
+        CastShapeAll({}, origin, direction, maxDistance, layerMask, results);
+    }
+
     void OverlapShapeAll(const kb::scene::PhysicsShapeDesc& shape, kb::scene::Vec3 center, std::uint32_t layerMask, kb::library::ArrayNonAlloc<kb::scene::PhysicsOverlapResult>& results) const noexcept override {
         lastOverlapShape = shape;
         lastOverlapCenter = center;
@@ -5718,6 +5723,13 @@ void RunScriptWorldTimePhysicsApiTest() {
         kb::scene::TagsComponent prefabTags;
         kb::scene::SetTagsText(prefabTags, "Prefab");
         prefabSource.Components().Tags().Set(prefabRoot.Entity(), prefabTags);
+        prefabSource.Components().MeshRenderers().Set(prefabRoot.Entity(), kb::scene::MeshRendererComponent{
+            .meshAssetId = 501U,
+            .materialAssetId = 502U,
+            .castsShadow = false,
+            .receivesShadow = false,
+            .layer = 7U,
+        });
         const kb::scene::ScenePrefabHandle prefab = prefabSource.Prefabs().CaptureRegistered(prefabRoot, "RuntimePrefab");
         kb::tests::Require(prefabSource.Prefabs().Save(prefab, prefabPath), "Script world API prefab fixture was not saved");
     }
@@ -5751,6 +5763,28 @@ void RunScriptWorldTimePhysicsApiTest() {
             && kb::tests::NearlyEqual(scene.Transforms().Get(enemy).localPosition.y, 3.0F)
             && kb::tests::NearlyEqual(scene.Transforms().Get(enemy).localPosition.z, 4.0F),
         "World.Spawn did not apply direct spawn position");
+
+    const std::vector<kb::script::ScriptFunctionArgument> swarmArgs{
+        kb::script::ScriptFunctionArgument{ .name = "prefab", .value = kb::script::ScriptValue{ std::string{ "/Game/Prefabs/RuntimePrefab.kbprefab" } } },
+        kb::script::ScriptFunctionArgument{ .name = "name", .value = kb::script::ScriptValue{ std::string{ "Runtime Swarm" } } },
+        kb::script::ScriptFunctionArgument{ .name = "instanceCount", .value = kb::script::ScriptValue{ std::uint32_t{ 5000U } } },
+        kb::script::ScriptFunctionArgument{ .name = "columns", .value = kb::script::ScriptValue{ std::uint32_t{ 100U } } },
+        kb::script::ScriptFunctionArgument{ .name = "rows", .value = kb::script::ScriptValue{ std::uint32_t{ 10U } } },
+        kb::script::ScriptFunctionArgument{ .name = "layers", .value = kb::script::ScriptValue{ std::uint32_t{ 5U } } },
+        kb::script::ScriptFunctionArgument{ .name = "spacingX", .value = kb::script::ScriptValue{ 1.5F } },
+        kb::script::ScriptFunctionArgument{ .name = "spacingY", .value = kb::script::ScriptValue{ 2.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "spacingZ", .value = kb::script::ScriptValue{ 2.5F } },
+        kb::script::ScriptFunctionArgument{ .name = "instanceScale", .value = kb::script::ScriptValue{ 0.35F } },
+    };
+    const kb::script::ScriptFunctionCallResult spawnedSwarm = host.Functions().Call("World.SpawnGeometrySwarm", swarmArgs, context);
+    const kb::scene::SceneEntity swarmEntity{ spawnedSwarm.Output("entity").value_or(kb::script::ScriptValue{ 0U, kb::script::ScriptValueType::Entity }).AsUInt64() };
+    const kb::scene::GeometrySwarmComponent* swarm = scene.Components().GeometrySwarms().TryGet(swarmEntity);
+    kb::tests::Require(spawnedSwarm.Succeeded() && swarmEntity.IsValid() && swarm != nullptr &&
+            swarm->meshAssetId == 501U && swarm->materialAssetId == 502U && swarm->instanceCount == 5000U &&
+            swarm->columns == 100U && swarm->rows == 10U && swarm->layers == 5U &&
+            kb::tests::NearlyEqual(swarm->spacing.x, 1.5F) && kb::tests::NearlyEqual(swarm->instanceScale, 0.35F) &&
+            !swarm->castsShadow && !swarm->receivesShadow && swarm->layer == 7U,
+        "World.SpawnGeometrySwarm did not create the canonical geometry swarm from its prefab source");
 
     // LIB-065: World.Current/IsPlaying/FrameIndex/FixedStepIndex, called
     // the same way any other World.* function is (through the registry,
@@ -11390,10 +11424,16 @@ void RunScriptRuntimeHostNativeDescriptorBindingTest() {
     const std::filesystem::path assetsRoot = projectRoot / "Assets";
     const std::filesystem::path pluginPath = KB_NATIVE_SCRIPT_TEST_PLUGIN_PATH;
     const std::filesystem::path buildMarker = projectRoot / "native_descriptor_build.marker";
+    const std::filesystem::path sourcePath = projectRoot / "Source" / "HostNative.cpp";
+    const std::filesystem::path headerPath = projectRoot / "Source" / "HostNative.hpp";
+    const std::filesystem::path nestedHeaderPath = projectRoot / "Source" / "HostNativeSettings.hpp";
     kb::tests::Require(!pluginPath.empty() && std::filesystem::is_regular_file(pluginPath), "Script runtime host native test plugin DLL is missing");
+    WriteTextFile(nestedHeaderPath, "#define KB_NATIVE_VALUE 1\n");
+    WriteTextFile(headerPath, "#include \"HostNativeSettings.hpp\"\n");
+    WriteTextFile(sourcePath, "#include \"HostNative.hpp\"\ninitial source");
     WriteTextFile(assetsRoot / "Logic" / "HostNative.native",
         std::string{ "name Host Native\nsymbol tests.NativePlugin\nmodule = " } + pluginPath.string() +
-            "\nentry = kb_register_native_scripts\nbuild = cmake -E touch \"" + buildMarker.string() + "\"\n");
+            "\nentry = kb_register_native_scripts\nsource = ../../Source/HostNative.cpp\nbuild = cmake -E touch \"" + buildMarker.string() + "\"\n");
 
     kb::scene::Scene scene;
     kb::tests::Require(scene.Assets().MountProject(projectRoot), "Script runtime host native project mount failed");
@@ -11426,10 +11466,29 @@ void RunScriptRuntimeHostNativeDescriptorBindingTest() {
     kb::tests::Require(tickValue.has_value() && tickValue->AsInt() == 1, "Script runtime host did not load native descriptor plugin symbol");
     kb::tests::Require(std::filesystem::is_regular_file(buildMarker), "Script runtime host did not execute native descriptor build command");
 
+    kb::tests::Require(std::filesystem::remove(buildMarker), "Script runtime host native build marker could not be cleared");
+    WriteTextFile(sourcePath, "#include \"HostNative.hpp\"\nedited source with different size");
+    host.AssetPreparer().InvalidateNativeSourceObservations();
+    const kb::script::ScriptRuntimeAssetPrepareResult sourceReprepared = host.AssetPreparer().PrepareSceneBehaviours(scene);
+    kb::tests::Require(sourceReprepared.Succeeded() && std::filesystem::is_regular_file(buildMarker),
+        "Script runtime host did not rebuild after a source edit at the next play boundary");
+
+    kb::tests::Require(std::filesystem::remove(buildMarker), "Script runtime host header build marker could not be cleared");
+    WriteTextFile(nestedHeaderPath, "#define KB_NATIVE_VALUE 2\n");
+    host.AssetPreparer().InvalidateNativeSourceObservations();
+    const kb::script::ScriptRuntimeAssetPrepareResult headerReprepared = host.AssetPreparer().PrepareSceneBehaviours(scene);
+    kb::tests::Require(headerReprepared.Succeeded() && std::filesystem::is_regular_file(buildMarker),
+        "Script runtime host did not rebuild after a transitive included header changed");
+    kb::tests::Require(std::filesystem::remove(buildMarker), "Script runtime host unchanged header build marker could not be cleared");
+    host.AssetPreparer().InvalidateNativeSourceObservations();
+    const kb::script::ScriptRuntimeAssetPrepareResult unchangedHeader = host.AssetPreparer().PrepareSceneBehaviours(scene);
+    kb::tests::Require(unchangedHeader.Succeeded() && !std::filesystem::exists(buildMarker),
+        "Unchanged native source dependencies must not rebuild the script");
+
     const std::filesystem::path rebuildMarker = projectRoot / "native_descriptor_rebuild.marker";
     WriteTextFile(assetsRoot / "Logic" / "HostNative.native",
         std::string{ "name Host Native\nsymbol tests.NativePlugin\nmodule = " } + pluginPath.string() +
-            "\nentry = kb_register_native_scripts\nbuild = cmake -E touch \"" + rebuildMarker.string() + "\"\n");
+            "\nentry = kb_register_native_scripts\nsource = ../../Source/HostNative.cpp\nbuild = cmake -E touch \"" + rebuildMarker.string() + "\"\n");
     kb::tests::Require(scene.Assets().Discover() == 1U, "Script runtime host native asset rediscovery failed");
     const kb::script::ScriptRuntimeAssetPrepareResult nativeReprepared = host.AssetPreparer().PrepareSceneBehaviours(scene);
     kb::tests::Require(nativeReprepared.Succeeded(), "Script runtime host native descriptor did not reprepare after file changes");
@@ -11702,6 +11761,8 @@ void AttachAllUIComponents(kb::scene::Scene& scene, kb::scene::SceneEntity entit
     components.scrollView.emplace();
     components.inputField.emplace();
     components.dropdown.emplace();
+    // Option properties exist only for options the dropdown has; a full list exposes all of them.
+    components.dropdown->optionCount = static_cast<std::uint32_t>(kb::scene::UIDropdown::MaxOptions);
     components.progressBar.emplace();
     components.widgetSwitcher.emplace();
     kb::scene::ApplySceneUIComponents(scene.Components().UI(), entity, components);
@@ -12112,7 +12173,7 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
     // task components and the complete Lens Echo schema.
     // Light is a public compatibility alias for 3D Radiance Emitter and
     // deliberately exercises the same 16 generated accessors.
-    kb::tests::Require(fieldsChecked == 497U, "Script component API generated accessor coverage test did not exercise the expected total field count (497, including all UI components and the Light compatibility alias)");
+    kb::tests::Require(fieldsChecked == 617U, "Script component API generated accessor coverage test did not exercise the expected total field count (617, including collision mesh assets and the Light compatibility alias)");
 }
 
 // LIB-082: defensive regression guard — the KB_ASSERT_NOT_POINTER
@@ -12193,7 +12254,7 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
     // LIB-136: Camera grew three more fields (cullingMask/clearMode/clearColor, the latter
     // decomposed into x/y/z), and MeshRenderer grew one (layer), so the total climbs from
     // 86 to 92.
-    kb::tests::Require(propertiesChecked == 497U, "LIB-082 raw-pointer audit did not exercise the expected total field count (497, including all UI components and the Light compatibility alias)");
+    kb::tests::Require(propertiesChecked == 617U, "LIB-082 raw-pointer audit did not exercise the expected total field count (617, including collision mesh assets and the Light compatibility alias)");
 }
 
 void RunVisualGraphSceneComponentBindingTest() {
@@ -15917,6 +15978,10 @@ end
 } // namespace
 
 namespace kb::tests {
+
+void RunScriptNativeHeaderReloadTest() {
+    RunScriptRuntimeHostNativeDescriptorBindingTest();
+}
 
 void RunScriptRuntimeTests() {
     RunNativeScriptRuntimeDispatchTest();

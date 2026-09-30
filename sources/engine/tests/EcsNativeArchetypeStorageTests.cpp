@@ -475,6 +475,30 @@ void RunChunkCommitGuardTest() {
     kb::tests::Require(!storage.HasComponent(reused, kVelocityId), "native ECS chunk commit guard partially migrated a rejected entity");
 }
 
+void RunAdoptEntityCommitGuardRollbackTest() {
+    kb::ecs::WorldConfig config;
+    config.chunkSizeProfile = kb::ecs::ChunkSizeProfile::Chunk4KB;
+    config.maxNativeStorageCommittedPayloadBytes = kb::ecs::ChunkPayloadBytes(config.chunkSizeProfile) - 1U;
+    kb::ecs::NativeArchetypeStorage storage{ config };
+    constexpr kb::ecs::Entity external{ 5'000'000U };
+    constexpr Position position{ .x = 7.0F };
+    const std::array components{
+        kb::ecs::NativeComponentValue{ .type = ComponentType<Position>(kPositionId), .data = &position },
+    };
+
+    bool rejected = false;
+    try {
+        storage.AdoptEntity(external, components);
+    } catch (const std::length_error&) {
+        rejected = true;
+    }
+    kb::tests::Require(rejected, "native ECS chunk commit guard allowed an adopted entity beyond the budget");
+    kb::tests::Require(!storage.IsAlive(external) && storage.Stats().liveEntities == 0U,
+        "native ECS kept a live record after rejecting an adopted entity");
+    kb::tests::Require(!storage.ResolveAliveEntity(external.Id()).IsValid(),
+        "native ECS resolved a rejected adopted entity");
+}
+
 void RunGeneratedEntityResolveFastPathTest() {
     kb::ecs::NativeArchetypeStorage storage;
     Position position{ .x = 1.0F, .y = 2.0F };
@@ -809,6 +833,67 @@ void RunBulkRemoveComponentMigrationTest() {
     }
 
     RequireStorageStatsConsistent(storage.Stats(), kEntityCount, "native ECS bulk remove migration storage stats are inconsistent");
+}
+
+void RunBulkAddEntityOrderValidationTest() {
+    kb::ecs::NativeArchetypeStorage storage;
+    const std::array positions{
+        Position{ .x = 1.0F }, Position{ .x = 2.0F },
+        Position{ .x = 3.0F }, Position{ .x = 4.0F },
+    };
+    const std::array positionColumn{
+        kb::ecs::NativeBulkComponentColumn{
+            .type = ComponentType<Position>(kPositionId),
+            .data = positions.data(),
+            .stride = sizeof(Position),
+        },
+    };
+    const std::vector<kb::ecs::Entity> entities = storage.CreateEntities(positions.size(), positionColumn);
+    const std::array unorderedEntities{ entities[2], entities[0], entities[3], entities[1] };
+    const std::array masses{ Mass{ 30.0F }, Mass{ 10.0F }, Mass{ 40.0F }, Mass{ 20.0F } };
+    const std::array massColumn{
+        kb::ecs::NativeBulkComponentColumn{
+            .type = ComponentType<Mass>(kMassId),
+            .data = masses.data(),
+            .stride = sizeof(Mass),
+        },
+    };
+    storage.AddComponents(unorderedEntities, massColumn);
+    kb::tests::Require(storage.CountWithComponent(kPositionId) == entities.size() &&
+            storage.CountWithComponent(kMassId) == entities.size(),
+        "native ECS component count missed bulk migrated entities");
+    for (std::size_t index = 0; index < entities.size(); ++index) {
+        kb::tests::Require(Component<Position>(storage, entities[index], kPositionId).x == positions[index].x,
+            "native ECS unordered bulk add changed an existing component");
+        kb::tests::Require(Component<Mass>(storage, entities[index], kMassId).value == static_cast<float>((index + 1U) * 10U),
+            "native ECS unordered bulk add mapped a component to the wrong entity");
+    }
+
+    const std::array velocities{ Velocity{ 1.0F }, Velocity{ 2.0F }, Velocity{ 3.0F } };
+    const std::array velocityColumn{
+        kb::ecs::NativeBulkComponentColumn{
+            .type = ComponentType<Velocity>(kVelocityId),
+            .data = velocities.data(),
+            .stride = sizeof(Velocity),
+        },
+    };
+    const std::array sortedDuplicates{ entities[0], entities[0], entities[1] };
+    const std::array unorderedDuplicates{ entities[2], entities[0], entities[2] };
+    for (const auto& batch : { sortedDuplicates, unorderedDuplicates }) {
+        bool rejected = false;
+        try {
+            storage.AddComponents(batch, velocityColumn);
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        kb::tests::Require(rejected, "native ECS bulk add accepted duplicate entity IDs");
+        for (kb::ecs::Entity entity : entities) {
+            kb::tests::Require(!storage.HasComponent(entity, kVelocityId),
+                "native ECS duplicate bulk add partially migrated an entity");
+        }
+        kb::tests::Require(storage.CountWithComponent(kVelocityId) == 0U,
+            "native ECS component count included a rejected bulk migration");
+    }
 }
 
 void RunBulkStructuralScratchReuseTest() {
@@ -2017,6 +2102,78 @@ void RunClearRetainingCapacityTest() {
     kb::tests::Require(afterReleaseClear.chunkPoolInUse == 0U, "native ECS release clear after retaining clear kept chunks in use");
 }
 
+void RunGeneratedAndAdoptedIdentityTest() {
+    using kb::ecs::Entity;
+    using kb::ecs::NativeArchetypeStorage;
+    constexpr auto base = kb::ecs::kGeneratedEntityIndexBase;
+    for (bool bulk : { false, true }) {
+        NativeArchetypeStorage storage;
+        const Entity generated = storage.CreateEntity();
+        bool rejected = false;
+        try {
+            if (bulk) {
+                const std::array batch{ Entity{ base + 50U }, generated };
+                storage.AdoptEntities(batch);
+            } else {
+                storage.AdoptEntity(generated);
+            }
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        kb::tests::Require(rejected && storage.Stats().liveEntities == 1U && storage.IsAlive(generated),
+            "adoption must reject a generated identity without mutating live entities");
+
+        storage.DestroyEntity(generated);
+        storage.AdoptEntity(generated);
+        kb::tests::Require(storage.IsAlive(generated), "restored identity must resolve past a dead generated record");
+        const auto spawned = bulk ? storage.CreateEntities(3U) : std::vector<Entity>{ storage.CreateEntity() };
+        for (Entity entity : spawned) {
+            kb::tests::Require((entity.Id() & 0xFFFFFFFFULL) != base && storage.IsAlive(entity),
+                "generated allocation must not alias a restored entity index");
+        }
+        storage.DestroyEntity(generated);
+        for (Entity entity : spawned) {
+            kb::tests::Require(storage.IsAlive(entity), "destroying restored entity removed another entity");
+        }
+    }
+    for (bool bulk : { false, true }) {
+        NativeArchetypeStorage storage;
+        const Entity imported{ base + 1U };
+        storage.AdoptEntity(imported);
+        const auto spawned = bulk ? storage.CreateEntities(4U) : std::vector<Entity>{ storage.CreateEntity() };
+        for (Entity entity : spawned) {
+            kb::tests::Require(entity != imported && storage.IsAlive(entity),
+                "generated allocation collided with an imported future index");
+        }
+        kb::tests::Require(storage.IsAlive(imported) && storage.Stats().liveEntities == spawned.size() + 1U,
+            "generated allocation lost imported entity");
+        storage.DestroyEntities(spawned);
+        kb::tests::Require(storage.IsAlive(imported), "bulk destruction removed imported entity");
+        storage.DestroyEntity(imported);
+        kb::tests::Require(storage.Stats().liveEntities == 0U, "identity collision handling leaked a live entity");
+    }
+    {
+        NativeArchetypeStorage storage;
+        const std::array sameIndex{ Entity{ base + 5U }, Entity{ (7ULL << 32U) | (base + 5U) } };
+        bool rejected = false;
+        try {
+            storage.AdoptEntities(sameIndex);
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        kb::tests::Require(rejected && storage.Stats().liveEntities == 0U,
+            "bulk adoption must reject simultaneous generations of one entity index");
+        storage.AdoptEntity(sameIndex[1]);
+        const auto spawned = storage.CreateEntities(8U);
+        for (Entity entity : spawned) {
+            kb::tests::Require((entity.Id() & 0xFFFFFFFFULL) != base + 5U,
+                "allocation must reserve the index of a generation-bearing imported entity");
+        }
+        kb::tests::Require(storage.ResolveAliveEntity(base + 5U) == sameIndex[1],
+            "imported generation must remain unambiguous after bulk allocation");
+    }
+}
+
 void RunBulkAdoptDuplicateValidationTest() {
     kb::ecs::NativeArchetypeStorage storage;
     std::array<Position, 4U> positions{
@@ -2290,22 +2447,30 @@ void RunHotArchetypeLayoutAdvisorTest() {
 
 namespace kb::tests {
 
+void RunManyArchetypeLookupTest();
+void RunStorageClassDistinguishesArchetypesTest();
+void RunBulkDestroyManyBackendArchetypesTest();
+
 void RunEcsNativeArchetypeStorageTests() {
     RunChunkProfileAndStatsTest();
     RunArchetypeCapacityReportTest();
     RunChunkPoolReuseAccountingTest();
     RunChunkPoolMaintenanceBudgetTest();
     RunChunkCommitGuardTest();
+    RunAdoptEntityCommitGuardRollbackTest();
     RunGeneratedEntityResolveFastPathTest();
     RunMemoryCountersPerArchetypeAndChunkTest();
     RunMultiComponentMigrationTest();
     RunBulkRemoveComponentMigrationTest();
+    RunBulkAddEntityOrderValidationTest();
     RunBulkStructuralScratchReuseTest();
     RunBulkColumnSourceCountValidationTest();
     RunSwapDeleteAndGenerationTest();
     RunMoveLastCompactionAcrossChunksTest();
     RunStructuralChurnOccupancyTest();
     RunArchetypeSignatureMatchingTest();
+    RunManyArchetypeLookupTest();
+    RunStorageClassDistinguishesArchetypesTest();
     RunNativeBulkCreateAdoptColumnAppendTest();
     RunWorldNativeStorageMirrorTest();
     RunWorldDirectBulkCreateTest();
@@ -2320,13 +2485,115 @@ void RunEcsNativeArchetypeStorageTests() {
     RunNativeComponentAlignmentTest();
     RunNativeComponentAlignmentValidationTest();
     RunBulkAdoptDuplicateValidationTest();
+    RunGeneratedAndAdoptedIdentityTest();
     RunBulkAdoptExternalResolveFastPathTest();
     RunBulkAdoptContiguousExternalRangeFastPathTest();
     RunBulkDestroyDuplicateValidationTest();
+    RunBulkDestroyManyBackendArchetypesTest();
     RunBulkDestroyAllFastPathTest();
     RunClearRetainingCapacityTest();
     RunNativeStorageStructuralVersionTest();
     RunHotArchetypeLayoutAdvisorTest();
+}
+
+void RunManyArchetypeLookupTest() {
+    kb::ecs::WorldConfig config;
+    config.chunkSizeProfile = kb::ecs::ChunkSizeProfile::Chunk4KB;
+    config.reserveArchetypes = 128U;
+    kb::ecs::NativeArchetypeStorage storage{ config };
+    const std::uint32_t value = 17U;
+    std::vector<kb::ecs::NativeComponentValue> components;
+    std::vector<kb::ecs::Entity> entities;
+    entities.reserve(128U);
+
+    for (std::size_t mask = 0; mask < 128U; ++mask) {
+        components.clear();
+        for (std::size_t bit = 0; bit < 7U; ++bit) {
+            if ((mask & (std::size_t{ 1 } << bit)) != 0U) {
+                components.push_back({
+                    .type = ComponentType<std::uint32_t>(static_cast<kb::ecs::ComponentId>(6000U + bit)),
+                    .data = &value,
+                });
+            }
+        }
+        entities.push_back(storage.CreateEntity(components));
+    }
+
+    kb::tests::Require(storage.Stats().archetypeCount == 128U, "native ECS many-archetype lookup merged distinct signatures");
+    for (std::size_t mask = 0; mask < entities.size(); ++mask) {
+        for (std::size_t bit = 0; bit < 7U; ++bit) {
+            const auto componentId = static_cast<kb::ecs::ComponentId>(6000U + bit);
+            const bool expected = (mask & (std::size_t{ 1 } << bit)) != 0U;
+            kb::tests::Require(storage.HasComponent(entities[mask], componentId) == expected,
+                "native ECS many-archetype lookup returned an incorrect component set");
+        }
+    }
+
+    const kb::ecs::Entity repeated = storage.CreateEntity(components);
+    kb::tests::Require(storage.Stats().archetypeCount == 128U && storage.HasComponent(repeated, 6006U),
+        "native ECS many-archetype lookup did not reuse an existing table");
+    storage.ClearRetainingCapacity();
+    const kb::ecs::Entity afterClear = storage.CreateEntity(components);
+    kb::tests::Require(storage.Stats().archetypeCount == 128U && storage.IsAlive(afterClear),
+        "native ECS many-archetype lookup lost table indexes after clear");
+}
+
+void RunStorageClassDistinguishesArchetypesTest() {
+    kb::ecs::NativeArchetypeStorage storage;
+    const Position hotValue{ .x = 1.0F, .y = 2.0F };
+    const Position coldValue{ .x = 3.0F, .y = 4.0F };
+    const std::array hotComponents{
+        kb::ecs::NativeComponentValue{ .type = ComponentType<Position>(kPositionId), .data = &hotValue },
+    };
+    const std::array coldComponents{
+        kb::ecs::NativeComponentValue{
+            .type = kb::ecs::NativeComponentType{
+                .id = kPositionId,
+                .size = sizeof(Position),
+                .alignment = alignof(Position),
+                .storageClass = kb::ecs::ComponentStorageClass::ColdTable,
+            },
+            .data = &coldValue,
+        },
+    };
+
+    const kb::ecs::Entity hot = storage.CreateEntity(hotComponents);
+    const kb::ecs::Entity cold = storage.CreateEntity(coldComponents);
+    const kb::ecs::Entity hotAgain = storage.CreateEntity(hotComponents);
+    const kb::ecs::NativeEcsStorageStats stats = storage.Stats();
+    kb::tests::Require(stats.archetypeCount == 2U, "native ECS table lookup merged different storage classes");
+    kb::tests::Require(stats.archetypeCounters[0].hotTableComponents == 1U && stats.archetypeCounters[1].coldTableComponents == 1U,
+        "native ECS table lookup lost the component storage class");
+    kb::tests::Require(Component<Position>(storage, hot, kPositionId).x == hotValue.x &&
+                           Component<Position>(storage, cold, kPositionId).x == coldValue.x &&
+                           Component<Position>(storage, hotAgain, kPositionId).x == hotValue.x,
+        "native ECS table lookup returned data from the wrong storage class");
+}
+
+void RunBulkDestroyManyBackendArchetypesTest() {
+    kb::ecs::WorldConfig config;
+    config.trackEntityCatalog = false;
+    kb::ecs::World world{ config };
+    const std::vector<kb::ecs::Entity> entities = world.CreateEntities(64U, {});
+    std::array<ecs_entity_t, 6U> tags{};
+    for (ecs_entity_t& tag : tags) {
+        tag = ecs_new(world.NativeHandle());
+    }
+    for (std::size_t mask = 0; mask < entities.size(); ++mask) {
+        for (std::size_t bit = 0; bit < tags.size(); ++bit) {
+            if ((mask & (std::size_t{ 1 } << bit)) != 0U) {
+                ecs_add_id(world.NativeHandle(), entities[mask].Id(), tags[bit]);
+            }
+        }
+    }
+
+    world.DestroyEntities(std::span<const kb::ecs::Entity>{ entities.data(), 32U });
+    for (std::size_t index = 0; index < entities.size(); ++index) {
+        kb::tests::Require(world.IsAlive(entities[index]) == (index >= 32U),
+            "ECS bulk destroy with many backend archetypes changed the wrong entity");
+    }
+    kb::tests::Require(world.NativeStorageStats().liveEntities == 32U,
+        "ECS bulk destroy with many backend archetypes reported an invalid live count");
 }
 
 } // namespace kb::tests

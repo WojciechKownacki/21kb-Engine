@@ -20,7 +20,8 @@ public:
         const RenderViewportPlan& viewportPlan,
         const RenderScene& renderScene,
         const SceneRenderLightingConfig& lightingConfig,
-        std::uint32_t lastCompletedFrame);
+        std::uint32_t lastCompletedFrame,
+        float frameDeltaSeconds);
 };
 
 } // namespace kb::render

@@ -212,6 +212,27 @@ void RunValidateCommandTests() {
     Require(Contains(bad.output, "FAIL"), "validate did not report FAIL");
 }
 
+void RunImportCommandTests() {
+    PrepareProject();
+    const std::filesystem::path root = TestRoot();
+    const std::filesystem::path source = root / "External" / "Benchmark.ttf";
+    WriteTextFile(source, "test font payload");
+
+    const CommandRun imported = Run(&kb::cli::RunImportCommand, {
+        "--project", root.string(),
+        "--destination", "/Game/Fonts",
+        source.string(),
+    });
+    Require(imported.exitCode == 0, "import failed for a supported source asset");
+    Require(Contains(imported.output, "created /Game/Fonts/Benchmark.21kb"), "import did not report its virtual asset path");
+    Require(std::filesystem::exists(root / "Assets" / "Fonts" / "Benchmark.21kb"), "import did not write the runtime asset");
+    Require(std::filesystem::exists(root / "Assets" / "Fonts" / "Benchmark.meta"), "import did not write the metadata sidecar");
+
+    const CommandRun missing = Run(&kb::cli::RunImportCommand, { "--project", root.string(), source.string() });
+    Require(missing.exitCode == 1, "import accepted a missing destination");
+    Require(Contains(missing.output, "--destination"), "import did not report its missing destination");
+}
+
 void RunSceneCommandTests() {
     PrepareProject();
     const std::string root = TestRoot().string();
@@ -2029,6 +2050,7 @@ void RunApiCommandTests() {
 
     const std::filesystem::path audioDemoRoot = TestRoot() / "Assets" / "Samples" / "AudioShooter";
     const std::filesystem::path audioDemoScenePath = TestRoot() / "Assets" / "Scenes" / "AudioShooterDemo.21kbscene";
+    const std::filesystem::path benchmarkScenePath = TestRoot() / "Assets" / "Scenes" / "MeshSpawnBenchmark.21kbscene";
     for (const std::filesystem::path& demoAsset : {
              audioDemoRoot / "AudioShooterController.lua",
              audioDemoRoot / "AudioProjectile.lua",
@@ -2103,6 +2125,26 @@ void RunApiCommandTests() {
             beaconNode->components.audioSource->attenuationModel == kb::audio::AudioAttenuationModel::Linear &&
             beaconNode->components.audioSource->maxDistance > beaconNode->components.audioSource->minDistance,
         "Audio Shooter spatial beacon does not demonstrate distance attenuation");
+
+    const kb::scene::SceneDocumentLoadResult benchmarkScene = kb::scene::SceneDocumentService::Load(benchmarkScenePath);
+    Require(benchmarkScene.succeeded, "init-agent Mesh Spawn Benchmark scene could not be loaded");
+    const std::span<const kb::scene::ScenePrefabNodeDesc> benchmarkNodes = benchmarkScene.document.worldPrefab.Nodes();
+    const auto findBenchmarkNode = [&benchmarkNodes](std::string_view name) -> const kb::scene::ScenePrefabNodeDesc* {
+        for (const kb::scene::ScenePrefabNodeDesc& node : benchmarkNodes) {
+            if (node.name == name) return &node;
+        }
+        return nullptr;
+    };
+    const kb::scene::ScenePrefabNodeDesc* benchmarkEnvironment = findBenchmarkNode("Environment");
+    const kb::scene::ScenePrefabNodeDesc* benchmarkCamera = findBenchmarkNode("Benchmark Camera");
+    const kb::scene::ScenePrefabNodeDesc* benchmarkLight = findBenchmarkNode("Key Light");
+    Require(benchmarkNodes.size() == 3U && benchmarkEnvironment != nullptr &&
+            benchmarkEnvironment->components.worldBackdrop.has_value() &&
+            benchmarkEnvironment->components.ambientRadiance.has_value() &&
+            benchmarkCamera != nullptr && benchmarkCamera->components.camera.has_value() &&
+            benchmarkCamera->components.camera->primary && benchmarkLight != nullptr &&
+            benchmarkLight->components.light.has_value(),
+        "init-agent Mesh Spawn Benchmark scene is not the minimal camera, light, and environment setup");
 
     // LIB-013 regression: init-agent internally rebuilds its catalog and
     // calls ScriptAgentProjectFiles::Write() a second time whenever the
@@ -2241,6 +2283,8 @@ void RunMcpCommandTests() {
     input += '\n';
     input += R"({"jsonrpc":"2.0","id":4,"method":"no/such/method"})";
     input += '\n';
+    input += R"({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"import_asset","arguments":{"source":"Assets/Logic/Player.lua","destination":"/Game/Data"}}})";
+    input += '\n';
 
     std::istringstream in{ input };
     std::ostringstream out;
@@ -2258,7 +2302,7 @@ void RunMcpCommandTests() {
             responses.push_back(line);
         }
     }
-    Require(responses.size() == 4U, "mcp server response count is wrong");
+    Require(responses.size() == 5U, "mcp server response count is wrong");
 
     for (const std::string& response : responses) {
         JsonValue parsed;
@@ -2268,8 +2312,10 @@ void RunMcpCommandTests() {
     Require(Contains(responses[0], "\"protocolVersion\""), "mcp initialize response is wrong");
     Require(Contains(responses[1], "\"tools\""), "mcp tools/list response is wrong");
     Require(Contains(responses[1], "scene_attach"), "mcp tools/list is missing tools");
+    Require(Contains(responses[1], "import_asset"), "mcp tools/list is missing import_asset");
     Require(Contains(responses[2], "OK") && Contains(responses[2], "\"isError\":false"), "mcp validate_script call failed");
     Require(Contains(responses[3], "-32601"), "mcp unknown method error is wrong");
+    Require(Contains(responses[4], "created /Game/Data/Player.21kb") && Contains(responses[4], "\"isError\":false"), "mcp import_asset call failed");
 }
 
 } // namespace
@@ -2278,6 +2324,7 @@ int main() {
     RunMiniJsonTests();
     RunArgumentListTests();
     RunValidateCommandTests();
+    RunImportCommandTests();
     RunSceneCommandTests();
     RunRunCommandTests();
     RunPlayerControllerTemplateTests();

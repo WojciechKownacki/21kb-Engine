@@ -2,6 +2,7 @@
 
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneState.hpp"
+#include "scene/SceneRenderProxyComponentMask.hpp"
 #include "scene/SceneTransformService.hpp"
 #include "scene/hierarchy/SceneHierarchyCache.hpp"
 #include "scene/hierarchy/SceneHierarchyOperations.hpp"
@@ -35,6 +36,7 @@ bool SceneHierarchyParentAssignmentService::SetParent(Scene& scene, SceneEntity 
         }
         SceneHierarchyCache::Move(state, child, oldParent, parent);
         SceneTransformService::MarkParentModified(scene, child);
+        MarkSceneRenderProxySubtreeDirty(state, child);
         MarkScenePrefabTopologyDirty(state, child);
         MarkScenePrefabTopologyDirty(state, oldParent);
         MarkScenePrefabTopologyDirty(state, parent);
@@ -45,6 +47,7 @@ bool SceneHierarchyParentAssignmentService::SetParent(Scene& scene, SceneEntity 
     if (changed) {
         SceneHierarchyCache::Move(state, child, oldParent, parent);
         SceneTransformService::MarkParentModified(scene, child);
+        MarkSceneRenderProxySubtreeDirty(state, child);
         MarkScenePrefabTopologyDirty(state, child);
         MarkScenePrefabTopologyDirty(state, oldParent);
         MarkScenePrefabTopologyDirty(state, parent);

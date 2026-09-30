@@ -3,6 +3,9 @@
 #if defined(_WIN32)
 
 #include "app/EditorEditCommandPolicy.hpp"
+#include "app/EditorPendingTextEditCommitter.hpp"
+#include "inspection/InspectorPanelInteraction.hpp"
+#include "scene/EditorSceneContext.hpp"
 
 #include <optional>
 
@@ -45,7 +48,19 @@ bool EditorEditCommandInputHandler::HandleKeyDown(WPARAM key) const {
     if (!command.has_value()) {
         return false;
     }
-    return EditorEditCommandPolicy::Execute(sceneContext_, *command);
+    return ExecuteShortcut(*command);
+}
+
+bool EditorEditCommandInputHandler::ExecuteShortcut(EditorEditCommand command) const {
+    // Ctrl+S never types into a field, so a value still being edited is committed - exactly as Enter would -
+    // and then saved. Refusing instead made Save do nothing at all whenever an Inspector field was left open.
+    if (command == EditorEditCommand::Save) {
+        if (sceneContext_.Inspector().IsTextEditing()) {
+            static_cast<void>(InspectorPanelInteraction::HandleKeyDown(nullptr, sceneContext_, VK_RETURN));
+        }
+        static_cast<void>(EditorPendingTextEditCommitter{ sceneContext_ }.CommitPendingEdits());
+    }
+    return EditorEditCommandPolicy::Execute(sceneContext_, command);
 }
 
 } // namespace kb::editor

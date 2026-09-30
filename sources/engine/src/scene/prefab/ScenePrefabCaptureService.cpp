@@ -1,5 +1,6 @@
 #include "scene/prefab/ScenePrefabCaptureService.hpp"
 
+#include "engine/ui/UIEntityReferences.hpp"
 #include "scene/prefab/ScenePrefabCaptureValidator.hpp"
 #include "scene/prefab/ScenePrefabCaptureTraversal.hpp"
 #include "scene/prefab/ScenePrefabHierarchyCounter.hpp"
@@ -51,6 +52,15 @@ void ResolveEntityReferences(ScenePrefab& prefab, std::span<const SceneEntity> c
                 echo.sourceNodeStableId = source == stableNodeIds.end() ? ScenePrefabLensEchoComponent::UnresolvedSourceNodeStableId : source->second;
             }
         }
+        // UI references - navigation links, graphics, scrollbars, a dropdown's widgets - hold live entity
+        // ids, which a reload, an undo snapshot or a packaged scene all hand out afresh. Persist them as
+        // the target's stable node id. A target outside what is being captured cannot be expressed by
+        // this prefab, so that reference is dropped rather than kept as an id naming an unrelated object.
+        ForEachUIEntityReference(node->components.ui, [&stableNodeIds](std::uint64_t& reference) {
+            if (reference == 0U) return;
+            const auto target = stableNodeIds.find(reference);
+            reference = target == stableNodeIds.end() ? 0U : target->second;
+        });
     }
 }
 

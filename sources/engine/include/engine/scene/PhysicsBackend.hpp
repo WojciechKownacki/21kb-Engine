@@ -20,7 +20,7 @@ struct PhysicsVectorResult {
 };
 
 // LIB-125: the query SHAPE for CastShape/OverlapShape - a closed, tagged set
-// (Sphere/Box/Capsule, matching kb::scene::ColliderShape exactly) rather
+// (Sphere/Box/Capsule) rather
 // than a virtual Shape type, since ScriptValue crossing the script boundary
 // is purely scalar (LIB-058) and every Physics.*Cast/Overlap script function
 // needs a flat, fixed field list anyway. Box/Capsule queries are
@@ -113,15 +113,14 @@ public:
 
     // LIB-125: swept-shape cast (closest hit only, along direction*maxDistance),
     // fixed-position overlap (closest overlapping body), and closest surface
-    // point on a specific entity's collider, all filtered by layerMask. Real, physics-engine-backed
-    // queries (unlike Physics.Raycast, which stays pure ColliderComponent/
-    // TransformComponent geometry - a deliberate, unchanged, zero-regression
-    // decision; swept-shape collision detection against arbitrary
-    // sphere/box/capsule pairs is a fundamentally harder problem this
-    // engine's real physics backend already solves correctly).
+    // point on a specific entity's collider, all filtered by layerMask and
+    // evaluated against the synchronized physics state.
     [[nodiscard]] virtual PhysicsCastResult CastShape(const PhysicsShapeDesc& shape, Vec3 origin, Vec3 direction, float maxDistance, std::uint32_t layerMask) const noexcept = 0;
     [[nodiscard]] virtual PhysicsOverlapResult OverlapShape(const PhysicsShapeDesc& shape, Vec3 center, std::uint32_t layerMask) const noexcept = 0;
     [[nodiscard]] virtual PhysicsClosestPointResult ClosestPoint(SceneEntity entity, Vec3 point, std::uint32_t layerMask) const noexcept = 0;
+    // Queries the last synchronized physics state, including triangle geometry.
+    virtual void RaycastAll(Vec3 origin, Vec3 direction, float maxDistance, std::uint32_t layerMask,
+        kb::library::ArrayNonAlloc<PhysicsCastResult>& results) const noexcept = 0;
 
     // LIB-126: "All hits" variants of CastShape/OverlapShape - unlike the
     // closest-hit-only queries above, a call here can genuinely intersect an
@@ -258,6 +257,8 @@ public:
     static void RegisterBackend(Scene& scene, IPhysicsBackend& backend);
     static void UnregisterBackend(Scene& scene, IPhysicsBackend& backend) noexcept;
     [[nodiscard]] static bool HasBackend(Scene& scene) noexcept;
+    static void RaycastAll(Scene& scene, Vec3 origin, Vec3 direction, float maxDistance, std::uint32_t layerMask,
+        kb::library::ArrayNonAlloc<PhysicsCastResult>& results) noexcept;
 
     static bool AddForce(Scene& scene, SceneEntity entity, Vec3 force) noexcept;
     static bool AddImpulse(Scene& scene, SceneEntity entity, Vec3 impulse) noexcept;
@@ -328,14 +329,9 @@ public:
         Scene& scene, SceneEntity entity, Vec3 localTranslation, Quat localRotation, float durationSeconds) noexcept;
 };
 
-// LIB-126: Raycast has stayed pure ColliderComponent/TransformComponent
-// geometry since before IPhysicsBackend existed (LIB-125's own deliberate,
-// unchanged decision) - RaycastAllNonAlloc extends that SAME geometry (not
-// IPhysicsBackend) to collect every intersecting collider instead of only
-// the closest, into a caller-provided buffer, for exactly the reason
-// CastShapeAll/OverlapShapeAll above do. Shares its intersection math with
-// kb::script::ScriptPhysicsApi's single-hit Physics.Raycast via
-// PhysicsGeometryQueries.hpp, not duplicated.
+// Uses the physics acceleration structure when a backend is active. Without
+// simulation, primitive colliders remain queryable from their authored poses.
+// Results are bounded, nearest first, with one hit per entity.
 void RaycastAllNonAlloc(Scene& scene, Vec3 origin, Vec3 direction, float maxDistance, std::uint32_t layerMask, kb::library::ArrayNonAlloc<PhysicsCastResult>& results);
 
 } // namespace kb::scene

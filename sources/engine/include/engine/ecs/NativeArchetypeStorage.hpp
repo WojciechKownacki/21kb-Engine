@@ -237,6 +237,7 @@ public:
     [[nodiscard]] void* MutableComponentData(Entity entity, ComponentId componentId);
     [[nodiscard]] const void* ComponentData(Entity entity, ComponentId componentId) const;
     [[nodiscard]] bool HasComponent(Entity entity, ComponentId componentId) const;
+    [[nodiscard]] std::size_t CountWithComponent(ComponentId componentId) const noexcept;
     [[nodiscard]] bool EntityArchetypeMatches(Entity entity, std::span<const ComponentId> requiredComponentIds) const;
     [[nodiscard]] bool EntityArchetypeMatches(Entity entity, std::span<const ComponentId> requiredComponentIds, std::span<const ComponentId> excludedComponentIds) const;
     [[nodiscard]] std::vector<NativeArchetypeMatch> MatchingArchetypes(std::span<const ComponentId> requiredComponentIds) const;

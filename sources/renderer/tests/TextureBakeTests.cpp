@@ -2220,6 +2220,7 @@ void RunBakedTextureEnsuredFromPackTest() {
 // the GPU's own block decoder. The expected value is bimg's decode of the SAME bytes, which is
 // an independent decoder, so agreement is evidence about the bytes rather than about either
 // decoder.
+#if defined(KB_TEST_GRAPH_SHADERC_PATH)
 void RunBakedTextureGpuUploadTest() {
     const char* const shadercPath = KB_TEST_GRAPH_SHADERC_PATH;
     TempStore store{ "21kb_texture_pack_gpu_upload" };
@@ -2441,6 +2442,8 @@ void RunBakedTextureGpuUploadTest() {
 
 #endif
 
+#endif
+
 } // namespace
 
 void RunPackagedWebGpuTextureFallbackTestOnly() {
@@ -2467,7 +2470,9 @@ void RunTextureBakeTests() {
     RunPackagedWebGpuTextureFallbackTest();
 #if defined(_WIN32)
     RunBakedTextureEnsuredFromPackTest();
+#if defined(KB_TEST_GRAPH_SHADERC_PATH)
     RunBakedTextureGpuUploadTest();
+#endif
 #endif
 }
 

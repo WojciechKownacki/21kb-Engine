@@ -1822,9 +1822,9 @@ using StandaloneProjectRuntimeConfig = kb::game::GameProjectRuntime;
             "kb_standalone_player: default-target BeginFrame failed\n");
         return false;
     }
-    renderer.SubmitScene(scene);
+    const bool submitted = renderer.SubmitScene(scene);
     renderer.EndFrame();
-    return true;
+    return submitted;
 }
 
 [[nodiscard]] bool ValidateStats(const StandaloneOptions& options, const kb::render::Renderer& renderer) {

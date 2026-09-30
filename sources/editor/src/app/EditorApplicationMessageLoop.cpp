@@ -12,6 +12,18 @@
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/PhysicsDebugDraw.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneComponentQueries.hpp"
+#include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/LightComponent.hpp"
+#include "engine/scene/SceneLightingAccess.hpp"
+#include "engine/scene/MeshRendererComponent.hpp"
+#include "kb/render/resources/RenderMaterialAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialGraphDocument.hpp"
+#include "kb/render/resources/RenderMeshAssetBuilder.hpp"
+#include "kb/render/resources/RenderTextureAssetLoader.hpp"
+#include "scene/material_preview/EditorMaterialPreviewMeshFactory.hpp"
+#include "project/EditorProjectPaths.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
 #include "rendering/MaterialPreviewViewportKeys.hpp"
@@ -29,6 +41,7 @@
 #include "rendering/EditorMeshPreviewService.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
 #include "rendering/script_editor/ScriptEditorWindow.hpp"
+#include "app/EditorScriptFileWatcher.hpp"
 #include "app/scene_viewport/EditorSceneViewportCameraController.hpp"
 #include "app/scene_viewport/EditorViewportCameraNavigationInput.hpp"
 #include "app/scene_viewport/EditorSceneViewportObjectInteraction.hpp"
@@ -40,8 +53,10 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <optional>
 #include <span>
 #include <sstream>
@@ -51,6 +66,26 @@
 
 namespace kb::editor {
 namespace {
+
+struct VisualStressFrameStages {
+    double spawnMs = 0.0;
+    double sceneUpdateMs = 0.0;
+    double renderQueueMs = 0.0;
+    double presentMs = 0.0;
+};
+
+[[nodiscard]] bool VisualStressEnabled() noexcept {
+    static const bool enabled = [] {
+        char value[2]{};
+        return GetEnvironmentVariableA("KB_EDITOR_VISUAL_STRESS", value, 2U) == 1U && value[0] == '1';
+    }();
+    return enabled;
+}
+
+VisualStressFrameStages& StressFrameStages() noexcept {
+    static VisualStressFrameStages stages;
+    return stages;
+}
 
 // [perf] Slow-frame trace: only writes when a loop iteration exceeds a threshold, so it adds no per-frame cost
 // on healthy frames. It pins down whether an "action stutters 1-2s" is the GDI message pump (panel repaints) or
@@ -124,6 +159,11 @@ constexpr int kMaxMessagesPerPump = 128;
 }
 
 [[nodiscard]] std::chrono::steady_clock::duration EditorFrameInterval() noexcept {
+    char uncapped[2]{};
+    if (GetEnvironmentVariableA("KB_EDITOR_BENCHMARK_UNCAPPED", uncapped, 2U) == 1U &&
+        uncapped[0] == '1') {
+        return std::chrono::steady_clock::duration::zero();
+    }
     return std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<double>(1.0 / kEditorTargetFrameRate));
 }
 
@@ -620,6 +660,10 @@ void InvalidateMeshPreviewPanels(EditorApplicationState& state) noexcept {
     state.sceneViewport.EndPaintLayout();
     const double endMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - endStart).count();
     const double presentMs = beginMs + mainMs + floatMs + endMs;
+    if (VisualStressEnabled()) {
+        StressFrameStages().renderQueueMs = beginMs + mainMs + floatMs;
+        StressFrameStages().presentMs = endMs;
+    }
     if (cookMs > 25.0 || presentMs > 25.0) {
         std::ostringstream row;
         row << "[present] cook=" << cookMs << "ms(r=" << cookResults << ") begin=" << beginMs
@@ -706,6 +750,477 @@ void ConfigurePlayModePointerViewport(EditorApplicationState& state) {
         preview.RenderHeightForPanel(displayHeight));
 }
 
+struct VisualStressRun {
+    static constexpr std::size_t TargetEntities = 1'000'000U;
+    static constexpr std::size_t EntitiesPerSecond = 1'000U;
+    static constexpr std::size_t MaximumCatchUpPerFrame = 5'000U;
+
+    bool active = false;
+    bool failed = false;
+    bool spawning = true;
+    std::size_t created = 0U;
+    std::size_t initialLiveEntities = 0U;
+    std::size_t lights = 0U;
+    std::size_t lastReportedCount = 0U;
+    std::vector<kb::scene::SceneEntity> spawnedEntities;
+    double slowDurationSeconds = 0.0;
+    std::vector<double> frameTimesMs;
+    double spawnTimeMs = 0.0;
+    double sceneUpdateTimeMs = 0.0;
+    double runtimeUpdateTimeMs = 0.0;
+    double ecsSyncTimeMs = 0.0;
+    double fixedCaptureTimeMs = 0.0;
+    double renderQueueTimeMs = 0.0;
+    double presentTimeMs = 0.0;
+    double editorOverheadTimeMs = 0.0;
+    double editorPaintTimeMs = 0.0;
+    double gpuTimeMs = 0.0;
+    double renderThreadTimeMs = 0.0;
+    std::size_t gpuSamples = 0U;
+    std::chrono::steady_clock::time_point started{};
+    std::chrono::steady_clock::time_point lastReported{};
+    std::optional<std::chrono::steady_clock::time_point> pauseStarted;
+    std::ofstream log;
+
+    void Reset() {
+        active = false;
+        failed = false;
+        spawning = true;
+        created = 0U;
+        initialLiveEntities = 0U;
+        lights = 0U;
+        lastReportedCount = 0U;
+        spawnedEntities.clear();
+        slowDurationSeconds = 0.0;
+        frameTimesMs.clear();
+        spawnTimeMs = sceneUpdateTimeMs = runtimeUpdateTimeMs = ecsSyncTimeMs = fixedCaptureTimeMs =
+            renderQueueTimeMs = presentTimeMs = editorOverheadTimeMs = editorPaintTimeMs = 0.0;
+        gpuTimeMs = renderThreadTimeMs = 0.0;
+        gpuSamples = 0U;
+        pauseStarted.reset();
+        log.close();
+    }
+
+    void Pause() noexcept {
+        if (active && !pauseStarted.has_value()) {
+            pauseStarted = std::chrono::steady_clock::now();
+        }
+    }
+
+    void Resume() noexcept {
+        if (!pauseStarted.has_value()) {
+            return;
+        }
+        const auto pausedFor = std::chrono::steady_clock::now() - *pauseStarted;
+        started += pausedFor;
+        lastReported += pausedFor;
+        pauseStarted.reset();
+    }
+
+    void VerifyLiveMeshes(EditorSceneContext& context) {
+        const auto verificationStart = std::chrono::steady_clock::now();
+        const kb::scene::Scene& scene = context.Scene();
+        const std::uint64_t meshId = kb::assets::MakeAssetId("EditorVisualStress:Cube").value;
+        const std::uint64_t materialId = kb::assets::MakeAssetId("EditorVisualStress:Material").value;
+        std::size_t liveMeshes = 0U;
+        for (const kb::scene::SceneEntity entity : spawnedEntities) {
+            if (!scene.Entities().IsAlive(entity)) {
+                continue;
+            }
+            const kb::scene::MeshRendererComponent* renderer = scene.Components().MeshRenderers().TryGet(entity);
+            if (renderer != nullptr && renderer->meshAssetId == meshId && renderer->materialAssetId == materialId) {
+                ++liveMeshes;
+            }
+        }
+        log << "verified_live_stress_meshes=" << liveMeshes
+            << " created=" << created
+            << " verification_ms=" << std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - verificationStart).count() << '\n';
+        if (liveMeshes != created) {
+            failed = true;
+            context.Console().Error("VisualStress", "Some spawned entities are no longer live meshes with the expected material.");
+            log << "verification_failed=live_mesh_count_mismatch\n";
+        }
+        log.flush();
+    }
+
+    [[nodiscard]] bool Prepare(EditorSceneContext& context) {
+        kb::scene::Scene& scene = context.Scene();
+        kb::scene::SceneLightingAccess::SetBasicLightingEnabled(scene, true);
+        kb::assets::AssetManager& manager = scene.Assets().Manager();
+        const auto registerRuntimeAsset = [&manager](kb::assets::AssetId id, std::string_view type, std::string_view name) {
+            return manager.Registry().Find(id) != nullptr || manager.RegisterAsset(kb::assets::AssetMetadata{
+                .id = id,
+                .type = std::string{ type },
+                .name = std::string{ name },
+                .virtualPath = std::filesystem::path{ "/Editor/VisualStress" } / name,
+                .physicalPath = std::filesystem::path{ "__editor_visual_stress__" } / name,
+                .runtimeLoadable = true,
+            });
+        };
+
+        const kb::assets::AssetId meshId = kb::assets::MakeAssetId("EditorVisualStress:Cube");
+        const kb::assets::AssetId textureId = kb::assets::MakeAssetId("EditorVisualStress:Checker");
+        const kb::assets::AssetId materialId = kb::assets::MakeAssetId("EditorVisualStress:Material");
+        if (!registerRuntimeAsset(meshId, "RenderMesh", "Cube") ||
+            !registerRuntimeAsset(textureId, "RenderTexture", "Checker") ||
+            !registerRuntimeAsset(materialId, "RenderMaterial", "Material")) {
+            context.Console().Error("VisualStress", "Could not register runtime render assets: " + manager.LastError());
+            return false;
+        }
+
+        auto mesh = std::make_shared<kb::render::RenderMeshAssetData>(EditorMaterialPreviewMeshFactory::BuildCube());
+        auto texture = std::make_shared<kb::render::RenderTextureAssetData>();
+        texture->width = 64U;
+        texture->height = 64U;
+        texture->colorSpace = kb::render::RenderTextureAssetColorSpace::Srgb;
+        texture->semantic = kb::render::RenderTextureAssetSemantic::BaseColor;
+        texture->rgba8.resize(64U * 64U * 4U);
+        for (std::size_t y = 0U; y < 64U; ++y) {
+            for (std::size_t x = 0U; x < 64U; ++x) {
+                const std::size_t offset = (y * 64U + x) * 4U;
+                const bool alternate = ((x / 8U) + (y / 8U)) % 2U != 0U;
+                texture->rgba8[offset] = alternate ? 255U : 30U;
+                texture->rgba8[offset + 1U] = alternate ? 128U : 205U;
+                texture->rgba8[offset + 2U] = alternate ? 45U : 245U;
+                texture->rgba8[offset + 3U] = 255U;
+            }
+        }
+        auto material = std::make_shared<kb::render::RenderMaterialAssetData>();
+        material->desc.albedoTextureAssetId = textureId.value;
+        material->desc.roughnessFactor = 0.75F;
+        material->graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+        if (!manager.PublishRuntimeAsset(meshId, std::move(mesh)) ||
+            !manager.PublishRuntimeAsset(textureId, std::move(texture)) ||
+            !manager.PublishRuntimeAsset(materialId, std::move(material))) {
+            context.Console().Error("VisualStress", "Could not publish runtime render assets: " + manager.LastError());
+            return false;
+        }
+
+        std::error_code error;
+        const auto runId = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        const std::filesystem::path path = std::filesystem::current_path() / "Saved" / "Logs" /
+            ("ecs-visual-stress-" + std::to_string(runId) + ".log");
+        std::filesystem::create_directories(path.parent_path(), error);
+        log.open(path, std::ios::out | std::ios::trunc);
+        if (error || !log.is_open()) {
+            context.Console().Error("VisualStress", "Could not open visual stress progress log.");
+            return false;
+        }
+        started = lastReported = std::chrono::steady_clock::now();
+        initialLiveEntities = scene.Entities().Count();
+        spawnedEntities.reserve(TargetEntities);
+        active = true;
+        context.Console().Info("VisualStress", "Spawning 1,000 textured mesh entities/s up to 1,000,000; one point light per 1,000 entities.");
+        log << "target=1000000 rate=1000/s mesh=Cube texture=Checker point_light_every=1000"
+            << " initial_live=" << initialLiveEntities
+            << " lighting=basic renderer_stats_scope=all_editor_viewports"
+            << " editor_overhead_includes_message_pump=1" << '\n';
+        context.Console().Info("VisualStress", "Log: " + path.string());
+        log.flush();
+        return true;
+    }
+
+    void Tick(EditorSceneContext& context) {
+        if (failed || !spawning || (created == TargetEntities && active)) {
+            return;
+        }
+        if (!active && !Prepare(context)) {
+            failed = true;
+            return;
+        }
+        const auto now = std::chrono::steady_clock::now();
+        const double elapsed = std::chrono::duration<double>(now - started).count();
+        const std::size_t scheduled = std::min(TargetEntities,
+            static_cast<std::size_t>(elapsed * static_cast<double>(EntitiesPerSecond)));
+        const std::size_t toCreate = scheduled > created
+            ? std::min(scheduled - created, MaximumCatchUpPerFrame) : 0U;
+        kb::scene::Scene& scene = context.Scene();
+        const std::uint64_t meshId = kb::assets::MakeAssetId("EditorVisualStress:Cube").value;
+        const std::uint64_t materialId = kb::assets::MakeAssetId("EditorVisualStress:Material").value;
+        for (std::size_t count = 0U; count < toCreate; ++count) {
+            const std::size_t index = created;
+            const float radius = 0.65F * std::sqrt(static_cast<float>(index));
+            const float angle = static_cast<float>(index) * 2.39996323F;
+            kb::scene::SceneObjectDesc object{ .name = "Stress Cube" };
+            object.transform.localPosition = kb::scene::Vec3{
+                std::cos(angle) * radius, 0.0F, std::sin(angle) * radius };
+            object.transform.localScale = kb::scene::Vec3{ 0.45F, 0.45F, 0.45F };
+            const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(std::move(object));
+            if (!entity.IsValid()) {
+                failed = true;
+                context.Console().Error("VisualStress", "Entity creation failed at " + std::to_string(created));
+                log << "failed_at=" << created << "\n";
+                log.flush();
+                return;
+            }
+            scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{
+                .meshAssetId = meshId,
+                .materialAssetId = materialId,
+                .castsShadow = false,
+            });
+            if (!scene.Components().MeshRenderers().Has(entity)) {
+                failed = true;
+                context.Console().Error("VisualStress", "Mesh renderer creation failed at " + std::to_string(created));
+                log << "mesh_failed_at=" << created << "\n";
+                log.flush();
+                return;
+            }
+            if (index % 1'000U == 0U) {
+                kb::scene::LightComponent light{};
+                light.kind = kb::scene::LightKind::Point;
+                light.color = kb::scene::Vec3{ 0.65F, 0.8F, 1.0F };
+                light.intensity = 6.0F;
+                light.range = 12.0F;
+                light.castsShadow = false;
+                scene.Components().Lights().Set(entity, light);
+                if (!scene.Components().Lights().Has(entity)) {
+                    failed = true;
+                    context.Console().Error("VisualStress", "Point light creation failed at " + std::to_string(created));
+                    log << "light_failed_at=" << created << "\n";
+                    log.flush();
+                    return;
+                }
+                ++lights;
+            }
+            spawnedEntities.push_back(entity);
+            ++created;
+        }
+        if (created == TargetEntities) {
+            spawning = false;
+            log << "completed_entities=" << created << '\n';
+            VerifyLiveMeshes(context);
+        }
+    }
+
+    void RecordFrame(EditorApplicationState& state, double frameMs, double playMs,
+                     double editorOverheadMs, double editorPaintMs) {
+        if (!active || failed) {
+            return;
+        }
+        const VisualStressFrameStages stages = StressFrameStages();
+        frameTimesMs.push_back(frameMs);
+        spawnTimeMs += stages.spawnMs;
+        sceneUpdateTimeMs += stages.sceneUpdateMs;
+        const kb::scene::SceneRuntimeHotPathReport hotPath =
+            state.sceneContext.Scene().Runtime().HotPathReport();
+        runtimeUpdateTimeMs += static_cast<double>(hotPath.runtimeUpdateNanoseconds) / 1'000'000.0;
+        ecsSyncTimeMs += static_cast<double>(hotPath.runtimeTransformSyncNanoseconds) / 1'000'000.0;
+        fixedCaptureTimeMs += static_cast<double>(
+            hotPath.runtimeFixedCaptureStartNanoseconds + hotPath.runtimeFixedCaptureEndNanoseconds) / 1'000'000.0;
+        renderQueueTimeMs += stages.renderQueueMs;
+        presentTimeMs += stages.presentMs;
+        editorOverheadTimeMs += editorOverheadMs +
+            std::max(0.0, playMs - stages.spawnMs - stages.sceneUpdateMs);
+        editorPaintTimeMs += editorPaintMs;
+        if (const bgfx::Stats* gpuStats = bgfx::getStats(); gpuStats != nullptr &&
+            gpuStats->gpuTimerFreq > 0 && gpuStats->gpuTimeEnd > gpuStats->gpuTimeBegin &&
+            gpuStats->cpuTimerFreq > 0 && gpuStats->cpuTimeEnd > gpuStats->cpuTimeBegin) {
+            gpuTimeMs += static_cast<double>(gpuStats->gpuTimeEnd - gpuStats->gpuTimeBegin) *
+                1000.0 / static_cast<double>(gpuStats->gpuTimerFreq);
+            renderThreadTimeMs += static_cast<double>(gpuStats->cpuTimeEnd - gpuStats->cpuTimeBegin) *
+                1000.0 / static_cast<double>(gpuStats->cpuTimerFreq);
+            ++gpuSamples;
+        }
+        const auto now = std::chrono::steady_clock::now();
+        const double reportSeconds = std::chrono::duration<double>(now - lastReported).count();
+        if (reportSeconds < 1.0 && frameMs < 10'000.0) {
+            return;
+        }
+        std::sort(frameTimesMs.begin(), frameTimesMs.end());
+        const auto percentile = [this](double fraction) {
+            return frameTimesMs[std::min(frameTimesMs.size() - 1U,
+                static_cast<std::size_t>(fraction * static_cast<double>(frameTimesMs.size() - 1U)))];
+        };
+        const double p50 = percentile(0.50);
+        const double p95 = percentile(0.95);
+        const double frames = static_cast<double>(frameTimesMs.size());
+        const std::size_t live = state.sceneContext.Scene().Entities().Count();
+        const std::size_t liveStress = live >= initialLiveEntities ? live - initialLiveEntities : 0U;
+        const auto stats = state.sceneViewport.LastSceneSubmitStats();
+        const double actualRate = static_cast<double>(created - lastReportedCount) / reportSeconds;
+        bool pausedThisFrame = false;
+        if (spawning) {
+            slowDurationSeconds = p95 > 1000.0 / 60.0
+                ? slowDurationSeconds + reportSeconds : 0.0;
+            if (slowDurationSeconds >= 5.0) {
+                spawning = false;
+                pausedThisFrame = true;
+            }
+        }
+        log << "seconds=" << std::chrono::duration<double>(now - started).count()
+            << " created=" << created << " live=" << live << " live_stress=" << liveStress
+            << " lights_created=" << lights << " rate=" << actualRate
+            << " fps=" << frames / reportSeconds << " frame_p50_ms=" << p50 << " frame_p95_ms=" << p95
+            << " spawn_ms=" << spawnTimeMs / frames << " scene_update_ms=" << sceneUpdateTimeMs / frames
+            << " runtime_update_ms=" << runtimeUpdateTimeMs / frames
+            << " ecs_sync_ms=" << ecsSyncTimeMs / frames
+            << " fixed_capture_ms=" << fixedCaptureTimeMs / frames
+            << " render_queue_ms=" << renderQueueTimeMs / frames << " present_ms=" << presentTimeMs / frames
+            << " editor_overhead_ms=" << editorOverheadTimeMs / frames
+            << " editor_wm_paint_ms=" << editorPaintTimeMs / frames
+            << " gpu_ms=" << (gpuSamples != 0U ? gpuTimeMs / static_cast<double>(gpuSamples) : 0.0)
+            << " gpu_samples=" << gpuSamples
+            << " render_thread_ms=" << (gpuSamples != 0U ? renderThreadTimeMs / static_cast<double>(gpuSamples) : 0.0)
+            << " backend=" << state.sceneViewport.ActiveBackendLabel()
+            << " draw_calls=" << stats.submittedDrawCallCount
+            << " submitted_instances=" << stats.submittedMeshCount
+            << " visible_meshes=" << stats.visibleMeshCount
+            << " culled_instances=" << stats.culledInstanceCount
+            << " scene_lights=" << stats.sceneLightCount
+            << " forward_lights=" << stats.submittedForwardLightCount
+            << " instance_upload_bytes=" << stats.instanceUploadBytes
+            << " missing_texture_bindings=" << stats.missingTextureBindingCount
+            << " missing_texture_resources=" << stats.missingTextureResourceCount
+            << " texture_dimension_mismatches=" << stats.textureDimensionMismatchCount
+            << " dropped_instances=" << stats.droppedInstanceCount
+            << " spawning=" << (spawning ? 1 : 0) << '\n';
+        if (pausedThisFrame) {
+            log << "pause_reason=p95_above_16.67ms_for_5_seconds created=" << created
+                << " live_stress=" << liveStress << '\n';
+            state.sceneContext.Console().Info("VisualStress", "Spawn paused at " + std::to_string(created)
+                + " entities after five slow seconds; scene remains active.");
+            VerifyLiveMeshes(state.sceneContext);
+        }
+        if (frameMs >= 10'000.0) {
+            log << "abort_reason=frame_over_10_seconds frame_ms=" << frameMs << '\n';
+            state.running = false;
+        }
+        log.flush();
+        if (!log.good()) {
+            failed = true;
+            state.sceneContext.Console().Error("VisualStress", "Visual stress progress log write failed.");
+            state.running = false;
+        }
+        lastReported = now;
+        lastReportedCount = created;
+        frameTimesMs.clear();
+        spawnTimeMs = sceneUpdateTimeMs = runtimeUpdateTimeMs = ecsSyncTimeMs = fixedCaptureTimeMs =
+            renderQueueTimeMs = presentTimeMs = editorOverheadTimeMs = editorPaintTimeMs = 0.0;
+        gpuTimeMs = renderThreadTimeMs = 0.0;
+        gpuSamples = 0U;
+    }
+};
+
+VisualStressRun& StressRun() {
+    static VisualStressRun run;
+    return run;
+}
+
+[[nodiscard]] bool BenchmarkCaptureEnabled() noexcept {
+    static const bool enabled = [] {
+        char value[2]{};
+        return GetEnvironmentVariableA("KB_EDITOR_BENCHMARK_CAPTURE", value, 2U) == 1U && value[0] == '1';
+    }();
+    return enabled;
+}
+
+struct EditorBenchmarkCapture {
+    static constexpr double WarmupSeconds = 10.0;
+    static constexpr double MeasureSeconds = 15.0;
+
+    bool active = false;
+    bool complete = false;
+    std::chrono::steady_clock::time_point started{};
+    std::vector<double> frameTimesMs;
+    double tickTimeMs = 0.0;
+    double runtimeTimeMs = 0.0;
+    double gpuTimeMs = 0.0;
+    std::size_t gpuSamples = 0U;
+
+    void Record(EditorApplicationState& state, double frameMs, double tickMs) {
+        if (!state.playMode.IsPlaying()) {
+            active = false;
+            complete = false;
+            return;
+        }
+        if (complete) return;
+        const auto now = std::chrono::steady_clock::now();
+        if (!active) {
+            active = true;
+            started = now;
+            frameTimesMs.clear();
+            tickTimeMs = runtimeTimeMs = gpuTimeMs = 0.0;
+            gpuSamples = 0U;
+        }
+        const double elapsed = std::chrono::duration<double>(now - started).count();
+        if (elapsed < WarmupSeconds) return;
+        if (elapsed < WarmupSeconds + MeasureSeconds) {
+            frameTimesMs.push_back(frameMs);
+            tickTimeMs += tickMs;
+            const kb::scene::SceneRuntimeHotPathReport hotPath =
+                state.sceneContext.Scene().Runtime().HotPathReport();
+            runtimeTimeMs += static_cast<double>(hotPath.runtimeUpdateNanoseconds) / 1'000'000.0;
+            if (const bgfx::Stats* stats = bgfx::getStats(); stats != nullptr &&
+                stats->gpuTimerFreq > 0 && stats->gpuTimeEnd > stats->gpuTimeBegin) {
+                gpuTimeMs += static_cast<double>(stats->gpuTimeEnd - stats->gpuTimeBegin) *
+                    1000.0 / static_cast<double>(stats->gpuTimerFreq);
+                ++gpuSamples;
+            }
+            return;
+        }
+        complete = true;
+        if (frameTimesMs.empty()) {
+            state.sceneContext.Console().Error("Benchmark", "No Play frames were captured.");
+            return;
+        }
+        std::sort(frameTimesMs.begin(), frameTimesMs.end());
+        const auto percentile = [this](double fraction) {
+            return frameTimesMs[static_cast<std::size_t>(fraction * static_cast<double>(frameTimesMs.size() - 1U))];
+        };
+        char variantSetting[8]{};
+        const bool cppVariant = GetEnvironmentVariableA("KB_EDITOR_BENCHMARK_VARIANT", variantSetting,
+            static_cast<DWORD>(std::size(variantSetting))) == 3U &&
+            std::string_view{ variantSetting } == "Cpp";
+        const std::filesystem::path path = EditorProjectPaths::ProjectRoot() /
+            "BenchmarkResults" / (cppVariant ? "21kb-cpp.csv" : "21kb.csv");
+        std::error_code error;
+        std::filesystem::create_directories(path.parent_path(), error);
+        std::ofstream output{ path, std::ios::out | std::ios::trunc };
+        if (error || !output.is_open()) {
+            state.sceneContext.Console().Error("Benchmark", "Could not write benchmark results.");
+            return;
+        }
+        const double samples = static_cast<double>(frameTimesMs.size());
+        output << "engine,variant,cpu_count,gpu_count,samples,frame_p50_ms,frame_p95_ms,cpu_main_mean_ms,gpu_mean_ms,work_mean_ms,viewport_width,viewport_height\n";
+        output << "21kb," << (cppVariant ? "Cpp" : "Lua") << ",2048,8192," << frameTimesMs.size() << ','
+            << percentile(0.50) << ',' << percentile(0.95) << ','
+            << tickTimeMs / samples << ',';
+        if (gpuSamples != 0U) output << gpuTimeMs / static_cast<double>(gpuSamples);
+        else output << "NA";
+        output << ',' << runtimeTimeMs / samples << ",NA,NA\n";
+        output.flush();
+        if (!output.good()) {
+            state.sceneContext.Console().Error("Benchmark", "Benchmark results write failed.");
+            return;
+        }
+        state.sceneContext.Console().Info("Benchmark", "Results: " + path.string());
+    }
+};
+
+EditorBenchmarkCapture& BenchmarkCapture() {
+    static EditorBenchmarkCapture capture;
+    return capture;
+}
+
+void TickVisualStress(EditorApplicationState& state) {
+    if (!VisualStressEnabled()) {
+        return;
+    }
+    VisualStressRun& run = StressRun();
+    if (!state.playMode.IsPlaying()) {
+        if (state.sceneContext.HasPlayModeSceneSession()) {
+            run.Pause();
+        } else if (run.active || run.failed) {
+            run.Reset();
+        }
+        return;
+    }
+    run.Resume();
+    run.Tick(state.sceneContext);
+}
+
 void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
     // LIB-153: the editor is the host that owns the physical XInput devices, so it owns
     // the haptics actuator too. Function-local static: one process-wide backend whose
@@ -714,6 +1229,7 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
     static kb::input::Win32XInputHapticsBackend hapticsBackend;
     static bool hapticsActive = false;
     if (!state.playMode.IsPlaying()) {
+        TickVisualStress(state);
         if (hapticsActive) {
             hapticsBackend.StopAll();
             hapticsActive = false;
@@ -724,6 +1240,13 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
         kb::input::InputHaptics::RegisterBackend(state.sceneContext.Scene(), hapticsBackend);
     }
     hapticsActive = true;
+    const auto spawnStart = VisualStressEnabled() ? std::chrono::steady_clock::now()
+        : std::chrono::steady_clock::time_point{};
+    TickVisualStress(state);
+    if (VisualStressEnabled()) {
+        StressFrameStages().spawnMs = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - spawnStart).count();
+    }
     const auto tickStart = std::chrono::steady_clock::now();
     // Feed real device input to the runtime before systems tick (Input phase).
     kb::input::InputSubsystem& input = state.sceneContext.Scene().Input();
@@ -734,6 +1257,10 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
     const auto runtimeStart = std::chrono::steady_clock::now();
     const bool continuePlaying = state.sceneContext.TickPlayModeSceneSession(deltaSeconds);
     const auto runtimeEnd = std::chrono::steady_clock::now();
+    if (VisualStressEnabled()) {
+        StressFrameStages().sceneUpdateMs = std::chrono::duration<double, std::milli>(
+            runtimeEnd - runtimeStart).count();
+    }
     const double totalMs = std::chrono::duration<double, std::milli>(runtimeEnd - tickStart).count();
     if (totalMs >= 4.0) {
         const kb::scene::SceneRuntimeHotPathReport hotPath =
@@ -852,14 +1379,30 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
             state.window, state.dockModel, state.floatingWindows, state.metrics, DockPanelKind::Assets);
     }
 
-    // Saving a script in the Script Editor (Ctrl+S) writes the file but leaves the
-    // cached asset stale; detect the save here and reload it so the Inspector's
-    // exposed-variable schema reflects the edit immediately (no editor/scene save
-    // required). SaveSerial is monotonic, so a single equality check suffices.
+    // Refresh the cached asset after a save in either the built-in panel or the
+    // external editor so the Inspector sees the current script schema.
+    static EditorScriptFileWatcher scriptFileWatcher;
+    static std::chrono::steady_clock::time_point lastExternalScriptCheck{};
+    const EditorScriptEditorState& openScript = state.sceneContext.ScriptEditor();
+    if (openScript.IsOpen() && openScript.FilePath().extension() == ".lua") {
+        scriptFileWatcher.Track(openScript.FilePath());
+    } else {
+        scriptFileWatcher.Track({});
+    }
     bool scriptSaved = false;
     if (const std::uint64_t saveSerial = ScriptEditorWindow::SaveSerial(); saveSerial != state.lastScriptSaveSerial) {
         state.lastScriptSaveSerial = saveSerial;
         if (state.sceneContext.ReloadOpenScriptAsset()) {
+            scriptFileWatcher.Acknowledge();
+            InvalidateInspectorPanels(state);
+            scriptSaved = true;
+        }
+    }
+    const auto scriptCheckTime = std::chrono::steady_clock::now();
+    if (scriptCheckTime - lastExternalScriptCheck >= std::chrono::milliseconds{ 250 }) {
+        lastExternalScriptCheck = scriptCheckTime;
+        if (scriptFileWatcher.HasChangedOnDisk() && state.sceneContext.ReloadOpenScriptAsset()) {
+            scriptFileWatcher.Acknowledge();
             InvalidateInspectorPanels(state);
             scriptSaved = true;
         }
@@ -933,6 +1476,9 @@ void EditorApplicationMessageLoop::Run(EditorApplicationState& state) {
     auto previousTick = std::chrono::steady_clock::now();
     auto nextEditorFrame = previousTick;
     const auto editorFrameInterval = EditorFrameInterval();
+    const bool stressEnabled = VisualStressEnabled();
+    double pumpSinceLastSceneFrameMs = 0.0;
+    double paintSinceLastSceneFrameMs = 0.0;
     while (state.running) {
         const auto pumpStart = std::chrono::steady_clock::now();
         int pumpedMessages = 0;
@@ -984,6 +1530,13 @@ void EditorApplicationMessageLoop::Run(EditorApplicationState& state) {
             }
         }
         const double pumpMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - pumpStart).count();
+        if (stressEnabled && state.playMode.IsPlaying()) {
+            pumpSinceLastSceneFrameMs += pumpMs;
+            paintSinceLastSceneFrameMs += paintMs;
+        } else {
+            pumpSinceLastSceneFrameMs = 0.0;
+            paintSinceLastSceneFrameMs = 0.0;
+        }
         if (!state.running) {
             break;
         }
@@ -1012,15 +1565,34 @@ void EditorApplicationMessageLoop::Run(EditorApplicationState& state) {
         const float deltaSeconds = RuntimeDeltaSeconds(previousTick, currentTick);
         previousTick = currentTick;
         const auto tickStart = std::chrono::steady_clock::now();
+        if (stressEnabled) {
+            StressFrameStages() = {};
+        }
         if (state.sceneContext.TickAutosave(
                 wallDeltaSeconds,
                 EditorEditCommandPolicy::CanExecute(state.sceneContext))) {
             InvalidateRect(state.window, nullptr, FALSE);
         }
+        const auto playStart = stressEnabled ? std::chrono::steady_clock::now()
+            : std::chrono::steady_clock::time_point{};
         TickPlayMode(state, deltaSeconds);
+        const double playMs = stressEnabled ? std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - playStart).count() : 0.0;
         static_cast<void>(TickPointerDragFrame(state));
         const bool sceneFramePresented = TickEditorFrame(state, deltaSeconds);
         const double tickMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tickStart).count();
+        if (BenchmarkCaptureEnabled()) {
+            BenchmarkCapture().Record(state, wallDeltaSeconds * 1000.0, tickMs);
+        }
+        if (stressEnabled && state.playMode.IsPlaying()) {
+            const VisualStressFrameStages stages = StressFrameStages();
+            const double editorOverheadMs = pumpSinceLastSceneFrameMs + std::max(0.0,
+                tickMs - playMs - stages.renderQueueMs - stages.presentMs);
+            StressRun().RecordFrame(state, wallDeltaSeconds * 1000.0, playMs,
+                editorOverheadMs, paintSinceLastSceneFrameMs);
+            pumpSinceLastSceneFrameMs = 0.0;
+            paintSinceLastSceneFrameMs = 0.0;
+        }
         if (pumpMs > 40.0 || tickMs > 40.0) {
             std::ostringstream row;
             row << "[frame] pump=" << pumpMs << "ms wmpaint=" << paintMs << "ms(" << (dispatchedPaint ? 1 : 0)

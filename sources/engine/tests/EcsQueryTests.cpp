@@ -16,6 +16,7 @@
 #include <span>
 #include <stdexcept>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -2086,6 +2087,161 @@ void RunTypedEcsQueryFilterValidationTest() {
     kb::tests::Require(optionalChangedRejected, "ECS query filter allowed an optional change-filtered component");
 }
 
+void RunTypedEcsQueryTelemetryCountsArchetypesTest() {
+    kb::ecs::World world(kb::ecs::WorldConfig{
+        .chunkSizeProfile = kb::ecs::ChunkSizeProfile::Chunk4KB,
+        .mirrorEntitiesToBackend = false,
+        .mirrorNativeComponentChangesToBackend = false,
+        .trackEntityCatalog = false,
+    });
+
+    std::vector<EcsPosition> positions(600U);
+    std::vector<EcsVelocity> velocities(600U);
+    const std::array positionViews{ kb::ecs::World::MakeBulkComponentView<EcsPosition>(positions) };
+    const std::array movingViews{
+        kb::ecs::World::MakeBulkComponentView<EcsPosition>(positions),
+        kb::ecs::World::MakeBulkComponentView<EcsVelocity>(velocities),
+    };
+    const std::vector<kb::ecs::Entity> stationary = world.CreateEntitiesNativeOnly(positions.size(), positionViews);
+    const std::vector<kb::ecs::Entity> moving = world.CreateEntitiesNativeOnly(positions.size(), movingViews);
+    kb::tests::Require(stationary.size() == positions.size() && moving.size() == positions.size(), "ECS archetype telemetry setup did not create all entities");
+
+    kb::ecs::Query<EcsPosition> query = world.CreateQuery<EcsPosition>();
+    kb::ecs::QueryBatchExecutionScratch scratch;
+    const kb::ecs::QueryExecutionSettings settings{ .telemetryEnabled = true };
+    query.PrepareBatchExecution(settings, scratch);
+    const std::size_t readRecordCount = scratch.records_.size();
+    kb::tests::Require(readRecordCount > 2U, "ECS archetype telemetry setup did not span multiple chunks");
+    kb::ecs::WorldTelemetrySnapshot telemetry = world.TelemetrySnapshot();
+    kb::tests::Require(telemetry.queryMatchedChunks == readRecordCount, "ECS read query telemetry reported an invalid chunk count");
+    kb::tests::Require(telemetry.queryMatchedArchetypes == 2U, "ECS read query telemetry reported an invalid archetype count");
+
+    query.PrepareMutableBatchExecution(settings, scratch);
+    telemetry = world.TelemetrySnapshot();
+    kb::tests::Require(telemetry.queryMatchedChunks == readRecordCount + scratch.mutableRecords_.size(), "ECS mutable query telemetry reported an invalid chunk count");
+    kb::tests::Require(telemetry.queryMatchedArchetypes == 4U, "ECS mutable query telemetry reported an invalid archetype count");
+}
+
+void RunTypedEcsQueryPlanCacheBoundedTest() {
+    kb::ecs::World world;
+    const kb::ecs::Entity entity = world.CreateEntity();
+    world.Set(entity, EcsPosition{ .x = 7.0F, .y = 0.0F });
+
+    constexpr kb::ecs::ComponentId kFilterBase = 0x40000000U;
+    kb::ecs::QueryFilter oldestFilter;
+    oldestFilter.Exclude(kFilterBase);
+    auto oldestQuery = world.CreateQuery<EcsPosition>(oldestFilter);
+    for (std::size_t index = 1U; index <= 1024U; ++index) {
+        kb::ecs::QueryFilter filter;
+        filter.Exclude(kFilterBase + static_cast<kb::ecs::ComponentId>(index));
+        [[maybe_unused]] auto query = world.CreateQuery<EcsPosition>(filter);
+    }
+
+    kb::ecs::QueryFilter recentFilter;
+    recentFilter.Exclude(kFilterBase + 1024U);
+    const auto beforeRecent = world.TelemetrySnapshot();
+    [[maybe_unused]] auto recentQuery = world.CreateQuery<EcsPosition>(recentFilter);
+    const auto afterRecent = world.TelemetrySnapshot();
+    kb::tests::Require(afterRecent.queryCacheHits == beforeRecent.queryCacheHits + 1U, "ECS bounded query cache missed a recent plan");
+
+    [[maybe_unused]] auto rebuiltOldest = world.CreateQuery<EcsPosition>(oldestFilter);
+    const auto afterOldest = world.TelemetrySnapshot();
+    kb::tests::Require(afterOldest.queryCacheMisses == afterRecent.queryCacheMisses + 1U, "ECS query cache did not evict the oldest plan at capacity");
+    EcsIterationCounters counters;
+    oldestQuery.ForEach(&CountPositions, &counters);
+    kb::tests::Require(counters.visited == 1U && kb::tests::NearlyEqual(counters.sumX, 7.0F), "ECS query lost its plan after cache eviction");
+
+    kb::ecs::QueryFilter unusedFilter;
+    unusedFilter.Exclude(kFilterBase + 1023U);
+    world.ReleaseUnusedQueryPlans();
+    const auto beforeReleaseLookup = world.TelemetrySnapshot();
+    [[maybe_unused]] auto afterReleaseQuery = world.CreateQuery<EcsPosition>(unusedFilter);
+    const auto afterReleaseLookup = world.TelemetrySnapshot();
+    kb::tests::Require(afterReleaseLookup.queryCacheMisses == beforeReleaseLookup.queryCacheMisses + 1U, "ECS query cache release retained an unused indexed plan");
+}
+
+void RunTypedEcsQueryNestedRowScratchTest() {
+    kb::ecs::World world;
+    for (int index = 0; index < 3; ++index) {
+        const kb::ecs::Entity entity = world.CreateEntity();
+        world.Set(entity, EcsPosition{ .x = static_cast<float>(index + 1), .y = 0.0F });
+    }
+    auto outer = world.CreateQuery<EcsPosition>();
+    auto inner = world.CreateQuery<EcsPosition>();
+    struct Context {
+        kb::ecs::Query<EcsPosition>* inner = nullptr;
+        std::size_t outerRows = 0U;
+        std::size_t innerRows = 0U;
+    } context{ .inner = &inner };
+    auto outerVisitor = [](kb::ecs::Entity, const EcsPosition&, void* rawContext) {
+        auto& state = *static_cast<Context*>(rawContext);
+        if (state.outerRows == 0U) {
+            auto innerVisitor = [](kb::ecs::Entity, const EcsPosition&, void* innerContext) {
+                ++static_cast<Context*>(innerContext)->innerRows;
+            };
+            state.inner->ForEach(innerVisitor, &state);
+        }
+        ++state.outerRows;
+    };
+    outer.ForEach(outerVisitor, &context);
+    kb::tests::Require(context.outerRows == 3U && context.innerRows == 3U, "Nested ECS row queries corrupted reusable scratch");
+}
+
+void RunTypedEcsConcurrentReadTelemetryTest() {
+    kb::ecs::World world(kb::ecs::WorldConfig{
+        .mirrorEntitiesToBackend = false,
+        .mirrorNativeComponentChangesToBackend = false,
+        .trackEntityCatalog = false,
+    });
+    std::vector<EcsPosition> positions(256U);
+    const std::array views{ kb::ecs::World::MakeBulkComponentView<EcsPosition>(positions) };
+    [[maybe_unused]] const auto entities = world.CreateEntitiesNativeOnly(positions.size(), views);
+    auto first = world.CreateQuery<EcsPosition>();
+    auto second = world.CreateQuery<EcsPosition>();
+    constexpr std::size_t kIterations = 100U;
+    std::atomic_size_t visited{ 0U };
+    auto run = [&visited](kb::ecs::Query<EcsPosition>& query) {
+        kb::ecs::QueryBatchExecutionScratch scratch;
+        for (std::size_t repeat = 0U; repeat < kIterations; ++repeat) {
+            query.PrepareBatchExecution(kb::ecs::QueryExecutionSettings{ .telemetryEnabled = true }, scratch);
+            std::size_t prepared = 0U;
+            for (const auto& record : scratch.records_) {
+                prepared += record.entityCount;
+            }
+            visited.fetch_add(prepared, std::memory_order_relaxed);
+        }
+    };
+    std::thread firstThread([&] { run(first); });
+    std::thread secondThread([&] { run(second); });
+    firstThread.join();
+    secondThread.join();
+    const auto telemetry = world.TelemetrySnapshot();
+    kb::tests::Require(visited.load(std::memory_order_relaxed) == 2U * kIterations * positions.size(), "Concurrent ECS read queries lost records");
+    kb::tests::Require(telemetry.queryPrepareCalls == 2U * kIterations, "Concurrent ECS query telemetry lost prepare calls");
+    kb::tests::Require(telemetry.queryRecordCacheMisses == 2U && telemetry.queryRecordCacheHits == 2U * (kIterations - 1U), "Concurrent ECS query telemetry lost record-cache events");
+}
+
+void RunTypedEcsQuerySurvivesWorldMoveTest() {
+    kb::ecs::World original;
+    for (int index = 0; index < 4; ++index) {
+        const kb::ecs::Entity entity = original.CreateEntity();
+        original.Set(entity, EcsPosition{ .x = static_cast<float>(index + 1), .y = 0.0F });
+    }
+    auto query = original.CreateQuery<EcsPosition>();
+    kb::ecs::World moved(std::move(original));
+    kb::ecs::QueryBatchExecutionScratch scratch;
+    query.PrepareBatchExecution(kb::ecs::QueryExecutionSettings{ .telemetryEnabled = true }, scratch);
+    kb::tests::Require(moved.TelemetrySnapshot().queryPrepareCalls == 1U, "ECS query telemetry did not follow move-constructed World");
+
+    kb::ecs::World assigned;
+    assigned = std::move(moved);
+    query.PrepareBatchExecution(kb::ecs::QueryExecutionSettings{ .telemetryEnabled = true }, scratch);
+    kb::tests::Require(assigned.TelemetrySnapshot().queryPrepareCalls == 2U, "ECS query telemetry did not follow move-assigned World");
+    EcsIterationCounters counters;
+    query.ForEach(&CountPositions, &counters);
+    kb::tests::Require(counters.visited == 4U && kb::tests::NearlyEqual(counters.sumX, 10.0F), "ECS query lost native storage after World move");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -2122,6 +2278,11 @@ void RunEcsQueryTests() {
     RunTypedEcsQueryComponentFilterTest();
     RunTypedEcsQueryChangeFilterTest();
     RunTypedEcsQueryFilterValidationTest();
+    RunTypedEcsQueryTelemetryCountsArchetypesTest();
+    RunTypedEcsQueryPlanCacheBoundedTest();
+    RunTypedEcsQueryNestedRowScratchTest();
+    RunTypedEcsConcurrentReadTelemetryTest();
+    RunTypedEcsQuerySurvivesWorldMoveTest();
 }
 
 } // namespace kb::tests

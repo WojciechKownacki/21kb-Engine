@@ -76,6 +76,7 @@ std::size_t MeshCommandLookupKeyHash::operator()(MeshCommandLookupKey key) const
     mixed ^= static_cast<std::uint64_t>(key.currentSkinningPalette.firstMatrix) << 32U;
     mixed ^= key.previousSkinningPalette.frame + (mixed << 6U) + (mixed >> 2U);
     mixed ^= static_cast<std::uint64_t>(key.previousSkinningPalette.firstMatrix) << 16U;
+    mixed ^= key.reversedWinding ? 0x85ebca77c2b2ae63ULL : 0ULL;
     return static_cast<std::size_t>(mixed);
 }
 
@@ -90,8 +91,9 @@ void MeshPipelineProcessor::BuildInto(const MeshPipelineBuildDesc& desc, MeshPip
         command.instances.clear();
     }
     result.gpuDrivenInputRecords.clear();
-    result.gpuDrivenCpuValidationRecords.clear();
+    result.transparentInstanceScratch.clear();
     result.commandLookupScratch.clear();
+    result.materialResolutionScratch.clear();
     result.stats = SceneRenderSubmitStats{};
     const bool hasBatchSource = desc.meshBatches != nullptr || desc.drawGroups != nullptr;
     const std::span<const SceneMeshBatch> meshBatches = SceneMeshBatchSourceResolver::Resolve(SceneMeshBatchSourceDesc{

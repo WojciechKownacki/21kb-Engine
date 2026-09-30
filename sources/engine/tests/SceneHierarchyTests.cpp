@@ -16,9 +16,50 @@
 
 #include <array>
 #include <span>
+#include <stdexcept>
 #include <vector>
 
 namespace {
+
+void RunEntityCreationBudgetRollbackTest() {
+    kb::ecs::WorldConfig config;
+    config.maxNativeStorageCommittedPayloadBytes = kb::ecs::ChunkPayloadBytes(config.chunkSizeProfile);
+    kb::scene::Scene scene{ config };
+    const auto originalCount = scene.Entities().Count();
+    const auto originalRoots = scene.Hierarchy().RootEntities();
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        bool rejected = false;
+        try {
+            static_cast<void>(scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Rejected spawn" }));
+        } catch (const std::length_error&) {
+            rejected = true;
+        }
+        kb::tests::Require(rejected, "Scene spawn must report its component allocation budget failure");
+        kb::tests::Require(scene.Entities().Count() == originalCount && scene.Hierarchy().RootEntities() == originalRoots,
+            "Failed scene spawn must not leave a live entity or hierarchy root");
+    }
+}
+
+void RunDeepHierarchyDestructionTest() {
+    kb::scene::Scene scene;
+    const auto survivor = scene.Entities().CreateObject({ .name = "Survivor" });
+    const auto root = scene.Entities().CreateObject({ .name = "Sector", .parent = survivor });
+    auto parent = root;
+    for (std::size_t depth = 0U; depth < 4096U; ++depth) {
+        parent = scene.Entities().CreateObject({ .parent = parent });
+    }
+    const auto leaf = parent;
+    const auto sibling = scene.Entities().CreateObject({ .parent = root });
+    const auto retainedSibling = scene.Entities().CreateObject({ .parent = survivor });
+    scene.Entities().Destroy(root);
+    kb::tests::Require(scene.Entities().Count() == 2U && scene.Entities().IsAlive(survivor.Entity()) &&
+        scene.Entities().IsAlive(retainedSibling.Entity()), "Hierarchy destruction must retain objects outside the subtree");
+    kb::tests::Require(!scene.Entities().IsAlive(leaf.Entity()) && !scene.Entities().IsAlive(sibling.Entity()),
+        "Hierarchy destruction must remove both deep descendants and sibling branches");
+    kb::tests::Require(scene.Hierarchy().ChildCount(survivor.Entity()) == 1U &&
+        scene.Hierarchy().ChildAt(survivor.Entity(), 0U) == retainedSibling.Entity(),
+        "Hierarchy destruction must preserve the surviving parent's child list");
+}
 
 struct SceneCameraLightVisitorStats {
     std::size_t cameraCount = 0;
@@ -503,11 +544,29 @@ void RunTransformTopologicalBatchCacheInvalidationTest() {
         secondReport.transformTopologicalBatchBuildCount == firstReport.transformTopologicalBatchBuildCount,
         "Transform topological cache rebuilt without a hierarchy change");
 
+    const kb::scene::SceneObject appendedRoot = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "Appended Cache Root",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 9.0F, 0.0F, 0.0F } },
+    });
+    scene.Runtime().SetTransformPropagationBudget(kb::scene::SceneTransformPropagationBudget{ .maxInspectedEntitiesPerSync = 2U });
+    scene.Runtime().SynchronizeTransforms();
+    const kb::scene::SceneRuntimeHotPathReport appendedReport = scene.Runtime().HotPathReport();
+    kb::tests::Require(
+        appendedReport.transformTopologicalBatchBuildCount == secondReport.transformTopologicalBatchBuildCount,
+        "Transform topological cache fully rebuilt after appending an independent root");
+    kb::tests::Require(appendedReport.transformTopologicalBatchCount == 2U,
+        "Transform topological cache lost the existing child level after root append");
+    kb::tests::Require(appendedReport.transformHierarchyBudgetExhausted,
+        "Budgeted transform propagation did not leave the existing child level after two cached roots");
+    kb::tests::Require(kb::tests::NearlyEqual(scene.Transforms().Get(appendedRoot).worldPosition.x, 9.0F),
+        "Transform topological cache did not propagate the appended root");
+    scene.Runtime().SetTransformPropagationBudget(kb::scene::SceneTransformPropagationBudget{});
+
     kb::tests::Require(scene.Hierarchy().SetParent(child, {}), "Transform topological cache test could not detach child");
     static_cast<void>(scene.Runtime().Update(0.016F));
     const kb::scene::SceneRuntimeHotPathReport detachedReport = scene.Runtime().HotPathReport();
     kb::tests::Require(
-        detachedReport.transformTopologicalBatchBuildCount == secondReport.transformTopologicalBatchBuildCount + 1U,
+        detachedReport.transformTopologicalBatchBuildCount == appendedReport.transformTopologicalBatchBuildCount + 1U,
         "Transform topological cache did not rebuild after hierarchy change");
     kb::tests::Require(detachedReport.transformTopologicalBatchCount == 1U, "Transform topological cache kept stale child level after detach");
 
@@ -597,10 +656,28 @@ void RunTransformSparseFlushReportTest() {
     kb::tests::Require(report.transformHierarchySparseFlushCount == 1U, "Transform runtime did not report sparse dirty flush");
     kb::tests::Require(report.transformHierarchyBatchFlushCount == 0U, "Transform runtime used a batch flush for sparse dirty roots");
     kb::tests::Require(report.transformHierarchyFlushedEntityCount == 1U, "Transform runtime reported an unexpected sparse flush entity count");
-    kb::tests::Require(report.transformHierarchyDirtyFrontierCount == 1U, "Transform runtime did not use the dirty frontier queue");
+    kb::tests::Require(report.transformHierarchyDirtyFrontierCount == 0U &&
+            report.transformHierarchyDirtyListFlushCount == 1U,
+        "Transform runtime did not use the safe dirty-list flush while its query cache was cold");
     kb::tests::Require(report.transformHierarchyUpdatedCount == 1U, "Transform runtime updated more than the moved sparse root");
     kb::tests::Require(report.transformHierarchyInspectedCount == 1U, "Transform runtime inspected clean roots during sparse flush");
     kb::tests::Require(kb::tests::NearlyEqual(scene.Transforms().Get(roots.front()).worldPosition.x, 42.0F), "Sparse flush did not write the moved root");
+
+    moved = scene.Transforms().Get(roots.front());
+    moved.localPosition.x = 43.0F;
+    scene.Transforms().Set(roots.front(), moved);
+    scene.Runtime().SynchronizeTransforms();
+    const kb::scene::SceneRuntimeHotPathReport warmReport = scene.Runtime().HotPathReport();
+    kb::tests::Require(warmReport.transformHierarchyDirtyFrontierCount == 1U &&
+            warmReport.transformHierarchyUpdatedCount == 1U &&
+            warmReport.transformHierarchyInspectedCount == 1U &&
+            kb::tests::NearlyEqual(scene.Transforms().Get(roots.front()).worldPosition.x, 43.0F),
+        "Transform runtime did not use the dirty frontier after its query cache warmed up");
+}
+
+void WarmTransformQueryCache(kb::scene::Scene& scene, kb::scene::SceneObject root) {
+    scene.Transforms().Set(root, scene.Transforms().Get(root));
+    scene.Runtime().SynchronizeTransforms();
 }
 
 void RunTransformHierarchyDirtyFrontierReportTest() {
@@ -626,6 +703,7 @@ void RunTransformHierarchyDirtyFrontierReportTest() {
     }
 
     scene.Runtime().SynchronizeTransforms();
+    WarmTransformQueryCache(scene, roots.front());
     kb::scene::TransformComponent moved = scene.Transforms().Get(roots.front());
     moved.localPosition.x = 24.0F;
     scene.Transforms().Set(roots.front(), moved);
@@ -667,6 +745,7 @@ void RunTransformHierarchyDeepDirtyFrontierReportTest() {
     }
 
     scene.Runtime().SynchronizeTransforms();
+    WarmTransformQueryCache(scene, roots.front());
     kb::scene::TransformComponent moved = scene.Transforms().Get(roots.front());
     moved.localPosition.x = 10.0F;
     scene.Transforms().Set(roots.front(), moved);
@@ -710,6 +789,7 @@ void RunTransformHierarchyNestedDirtyFrontierReportTest() {
     }
 
     scene.Runtime().SynchronizeTransforms();
+    WarmTransformQueryCache(scene, dirtyChain.front());
     kb::scene::TransformComponent moved = scene.Transforms().Get(dirtyChain[3]);
     moved.localPosition.x = 20.0F;
     scene.Transforms().Set(dirtyChain[3], moved);
@@ -737,6 +817,7 @@ void RunTransformHierarchyDirtyFrontierDuplicateSetTest() {
     });
 
     scene.Runtime().SynchronizeTransforms();
+    WarmTransformQueryCache(scene, root);
     kb::scene::TransformComponent moved = scene.Transforms().Get(root);
     moved.localPosition.x = 11.0F;
     scene.Transforms().Set(root, moved);
@@ -777,6 +858,7 @@ void RunTransformHierarchyMultiRootDirtyFrontierReportTest() {
     }
 
     scene.Runtime().SynchronizeTransforms();
+    WarmTransformQueryCache(scene, roots.front());
     for (std::size_t index = 0; index < 4U; ++index) {
         kb::scene::TransformComponent moved = scene.Transforms().Get(roots[index]);
         moved.localPosition.x = 30.0F + static_cast<float>(index);
@@ -820,6 +902,7 @@ void RunTransformHierarchyWideFanoutDirtyFrontierReportTest() {
     }
 
     scene.Runtime().SynchronizeTransforms();
+    WarmTransformQueryCache(scene, roots.front());
     kb::scene::TransformComponent moved = scene.Transforms().Get(roots.front());
     moved.localPosition.x = 50.0F;
     scene.Transforms().Set(roots.front(), moved);
@@ -871,6 +954,7 @@ void RunTransformHierarchyParallelFanoutDirtyFrontierReportTest() {
     }
 
     scene.Runtime().SynchronizeTransforms();
+    WarmTransformQueryCache(scene, roots.front());
     kb::scene::TransformComponent moved = scene.Transforms().Get(roots.front());
     moved.localPosition.x = 70.0F;
     scene.Transforms().Set(roots.front(), moved);
@@ -1208,6 +1292,8 @@ void RunSceneBehaviourIterationUsesUnsafeHotQueryTest() {
 namespace kb::tests {
 
 void RunSceneHierarchyTests() {
+    RunEntityCreationBudgetRollbackTest();
+    RunDeepHierarchyDestructionTest();
     RunTransformHierarchyTest();
     RunTransformHierarchyReplayDeterminismTest();
     RunTransformRootFastPathReportTest();

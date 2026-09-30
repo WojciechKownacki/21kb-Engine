@@ -2,6 +2,7 @@
 
 #if defined(_WIN32)
 #include "app/EditorSceneLifecycleGuard.hpp"
+#include "app/EditorExternalCodeLauncher.hpp"
 #include "app/EditorParticleDocumentLifecycle.hpp"
 #include "assets/EditorAssetBrowserHitPayloadResolver.hpp"
 #include "assets/EditorAssetBrowserHitTester.hpp"
@@ -14,12 +15,15 @@
 #include "engine/scene/SkeletalMeshAssetIO.hpp"
 #include "engine/scene/SkeletonAssetIO.hpp"
 #include "engine/scene/TimelineAssetIO.hpp"
+#include "engine/script/ScriptAsset.hpp"
 #include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
 #include "rendering/ProjectFilesAssetIconResolver.hpp"
 #include "scene/EditorSceneContext.hpp"
+#include "project/EditorProjectPaths.hpp"
 
 #include <filesystem>
 #include <optional>
+#include <string>
 
 namespace kb::editor {
 namespace {
@@ -73,9 +77,32 @@ EditorAssetBrowserDoubleClickResult EditorAssetBrowserDoubleClickHandler::OpenAs
     kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
     const kb::assets::AssetMetadata* const metadata = &metadataValue;
     if (metadata->type == "LuaScript") {
+        std::string error;
+        if (!EditorExternalCodeLauncher::OpenProjectFile(
+                EditorProjectPaths::ProjectRoot(), ResolveAssetPath(*metadata, manager), error)) {
+            sceneContext.Console().Error("Scripts", error);
+            return EditorAssetBrowserDoubleClickResult::None;
+        }
         return sceneContext.OpenLuaScript(metadata->id)
-            ? EditorAssetBrowserDoubleClickResult::ScriptEditorOpened
+            ? EditorAssetBrowserDoubleClickResult::ExternalScriptOpened
             : EditorAssetBrowserDoubleClickResult::None;
+    }
+    if (metadata->type == kb::script::ScriptAssetTypes::NativeBehaviour) {
+        const std::filesystem::path descriptorPath = ResolveAssetPath(*metadata, manager);
+        const auto descriptor = manager.Load<kb::script::NativeBehaviourDescriptor>(metadata->id);
+        if (!descriptor.IsLoaded()) {
+            sceneContext.Console().Error("Scripts", manager.LastError());
+            return EditorAssetBrowserDoubleClickResult::None;
+        }
+        const std::filesystem::path sourcePath = descriptor->sourcePath.empty()
+            ? descriptorPath
+            : descriptor->sourcePath.is_absolute() ? descriptor->sourcePath : descriptorPath.parent_path() / descriptor->sourcePath;
+        std::string error;
+        if (!EditorExternalCodeLauncher::OpenProjectFile(EditorProjectPaths::ProjectRoot(), sourcePath.lexically_normal(), error)) {
+            sceneContext.Console().Error("Scripts", error);
+            return EditorAssetBrowserDoubleClickResult::None;
+        }
+        return EditorAssetBrowserDoubleClickResult::ExternalScriptOpened;
     }
         // The Project Files glyph and its activation must classify the two
         // skeletal document kinds identically.

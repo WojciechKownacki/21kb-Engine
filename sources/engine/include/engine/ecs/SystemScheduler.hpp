@@ -71,9 +71,11 @@ private:
     };
 
     [[nodiscard]] std::vector<std::vector<std::size_t>> BuildDependencyGraph() const;
-    [[nodiscard]] std::vector<std::vector<std::size_t>> BuildReverseDependencyGraph() const;
-    [[nodiscard]] std::vector<std::size_t> BuildExecutionOrder() const;
-    [[nodiscard]] std::vector<ExecutionStage> BuildExecutionStages(const std::vector<std::size_t>& order) const;
+    [[nodiscard]] static std::vector<std::vector<std::size_t>> BuildReverseDependencyGraph(const std::vector<std::vector<std::size_t>>& graph);
+    [[nodiscard]] std::vector<std::size_t> BuildExecutionOrder(const std::vector<std::vector<std::size_t>>& graph) const;
+    [[nodiscard]] std::vector<ExecutionStage> BuildExecutionStages(
+        const std::vector<std::size_t>& order,
+        const std::vector<std::vector<std::size_t>>& graph) const;
     void RebuildExecutionOrder();
     void BeginDebugTrace();
     void EndDebugTrace(std::uint64_t frameDurationNanoseconds);
@@ -96,15 +98,13 @@ private:
     [[nodiscard]] WorkerPool& RuntimeWorkerPool();
 
     [[nodiscard]] bool IsBeforeInSchedulingOrder(std::size_t left, std::size_t right) const noexcept;
-    [[nodiscard]] bool IsSeparatedBySyncPoint(std::size_t left, std::size_t right) const noexcept;
-    [[nodiscard]] static bool HasComponent(const std::vector<ComponentId>& components, ComponentId componentId) noexcept;
-    [[nodiscard]] static bool AccessConflicts(const SystemAccess& first, const SystemAccess& second) noexcept;
-    static void AddSyncPointEdges(std::vector<std::vector<std::size_t>>& graph, std::size_t syncPointIndex);
     static void AddEdge(std::vector<std::vector<std::size_t>>& graph, std::size_t from, std::size_t to);
 
     std::vector<ScheduledSystem> systems_;
     std::vector<std::size_t> executionOrder_;
     std::vector<ExecutionStage> executionStages_;
+    std::vector<std::vector<std::size_t>> reverseDependencyGraph_;
+    std::vector<std::size_t> traceCounterIndexBySystem_;
     SystemSchedulingMode schedulingMode_ = SystemSchedulingMode::Automatic;
     bool debugTraceEnabled_ = false;
     bool profilerEnabled_ = false;

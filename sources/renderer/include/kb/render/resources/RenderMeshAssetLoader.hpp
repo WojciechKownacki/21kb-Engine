@@ -16,6 +16,9 @@ public:
     [[nodiscard]] std::vector<std::string> Extensions() const override;
     [[nodiscard]] std::vector<std::string> BakedAssetTypes() const override;
     [[nodiscard]] kb::assets::AssetLoadResult Load(const kb::assets::AssetLoadRequest& request) override;
+    [[nodiscard]] std::vector<kb::assets::AssetId> DiscoverDependencies(
+        const kb::assets::AssetMetadata& metadata,
+        const kb::assets::AssetRegistry& registry) const override;
 };
 
 } // namespace kb::render

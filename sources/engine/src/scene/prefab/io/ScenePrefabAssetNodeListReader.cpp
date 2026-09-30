@@ -1,4 +1,6 @@
 #include "scene/prefab/io/ScenePrefabAssetNodeListReader.hpp"
+#include "scene/asset/io/SceneAssetReader.hpp"
+#include "scene/ui/SceneUIComponentTextCodec.hpp"
 
 #include "scene/prefab/io/ScenePrefabAssetFieldParser.hpp"
 #include "scene/prefab/io/ScenePrefabAssetFormat.hpp"
@@ -48,17 +50,25 @@ bool ScenePrefabAssetNodeListReader::Read(std::istream& input, std::size_t nodeC
     prefab.Reserve(nodeCount);
     ScenePrefabAssetFieldMap fields;
     std::string line;
+    bool childObjectDropdownOptions = false;
     for (std::size_t index = 0; index < nodeCount; ++index) {
         if (!ScenePrefabAssetFieldParser::ReadLine(input, line) || line != ScenePrefabAssetFormat::NodeMarker || !ScenePrefabAssetFieldParser::ReadNodeFields(input, fields)) {
             return false;
         }
         DetectMigrationNeeds(fields, missingNodeStableIds, missingOverrideNodeIds);
+        if (const auto ui = fields.find("ui"); ui != fields.end() && SceneUIComponentTextCodec::EncodedVersion(ui->second) < 36U) {
+            childObjectDropdownOptions = true;
+        }
 
         ScenePrefabNodeDesc node;
         if (!ScenePrefabAssetNodeParser::Parse(fields, node)) {
             return false;
         }
         static_cast<void>(prefab.AddNode(std::move(node)));
+    }
+    // Prefabs written before v36 kept dropdown options as child objects, the same as scenes did.
+    if (childObjectDropdownOptions) {
+        SceneAssetReader::ConvertChildDropdownOptions(prefab);
     }
     return true;
 }

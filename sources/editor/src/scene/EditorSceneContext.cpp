@@ -1,7 +1,9 @@
 #include "scene/EditorSceneContext.hpp"
+#include "scene/EditorPlayCameraResolver.hpp"
 
 #include "app/EditorCrashBreadcrumbs.hpp"
 #include "engine/audio/AudioPlayback.hpp"
+#include "engine/assets/CollisionMeshAsset.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneAnimators.hpp"
 #include "engine/scene/SceneAssets.hpp"
@@ -56,6 +58,7 @@
 #include "inspection/InspectorPhysicsModel.hpp"
 #include "scene/audio/EditorSceneAudioSettingsService.hpp"
 #include "scene/ui/EditorUIComponentAuthoring.hpp"
+#include "engine/scene/SceneUIHierarchyPresets.hpp"
 #include "scene/EditorHierarchyObjectFactory.hpp"
 #include "inspection/ui/InspectorUIComponentModel.hpp"
 #include "engine/scene/SceneUI.hpp"
@@ -579,6 +582,7 @@ void EditorSceneContext::ResetScriptRuntimeStateForPlayMode() {
         return;
     }
     kb::script::ScriptRuntimeHost& host = *scriptModule_->Host();
+    host.AssetPreparer().InvalidateNativeSourceObservations();
     host.LuaRuntime().Clear();
     host.VisualGraphInstances().Clear();
     host.SharedState().Clear();
@@ -604,23 +608,89 @@ bool EditorSceneContext::TickPlayModeSceneSession(float deltaSeconds) {
     }
     if (!playModeRenderTopologyVersionInitialized_) {
         playModeRenderTopologyVersion_ = runtime.RenderTopologyVersion();
+        const kb::scene::SceneHierarchyQueries hierarchy =
+            static_cast<const kb::scene::Scene&>(*scene_).Hierarchy();
+        playModeRootCount_ = hierarchy.RootCount();
+        playModeRootAppendEpoch_ = hierarchy.RootAppendEpoch();
         playModeRenderTopologyVersionInitialized_ = true;
     }
+    const std::span<const kb::scene::SceneEntity> pendingRenderUpdates = runtime.RenderProxyUpdateEntities();
+    const std::vector<kb::scene::SceneEntity> preUpdateRenderUpdates{
+        pendingRenderUpdates.begin(), pendingRenderUpdates.end() };
     static_cast<void>(runtime.Update(deltaSeconds));
+    // Ready may create the camera on the first tick of an already attached
+    // script module. A destroyed or disabled camera also needs a new selection.
+    if (!PlayCameraEntity().IsValid()) {
+        playCameraEntity_ = EditorPlayCameraResolver::Resolve(*scene_);
+    }
     for (const std::string& systemError :
          runtime.DrainSceneSystemErrors()) {
         console_.Error("Scripts", systemError);
     }
     SurfaceScriptDiagnostics();
-    // Transforms and render-proxy value edits are published by SceneRuntime as
-    // compact render-proxy update lists and are consumed directly by the
-    // renderer. Only a render hierarchy/topology change requires rebuilding
-    // the full proxy set (spawn, destroy, reparent, or a global render toggle).
+    // Preserve updates made before Runtime::Update clears its dirty list.
+    // Fresh appended roots can use the same compact proxy update path;
+    // reparenting, removal and global render changes require a full sync.
     const std::uint64_t topologyVersion = runtime.RenderTopologyVersion();
+    const kb::scene::SceneHierarchyQueries hierarchy =
+        static_cast<const kb::scene::Scene&>(*scene_).Hierarchy();
+    const std::uint64_t rootAppendEpoch = hierarchy.RootAppendEpoch();
+    const std::size_t rootCount = hierarchy.RootCount();
     if (topologyVersion != playModeRenderTopologyVersion_) {
-        MarkSceneRenderDirty();
+        const std::size_t appendedRootCount = rootCount > playModeRootCount_
+            ? rootCount - playModeRootCount_ : 0U;
+        const bool appendOnly = rootAppendEpoch == playModeRootAppendEpoch_ &&
+            appendedRootCount != 0U &&
+            topologyVersion > playModeRenderTopologyVersion_ &&
+            topologyVersion - playModeRenderTopologyVersion_ == appendedRootCount;
+        std::vector<kb::scene::SceneEntity> appendedRoots;
+        if (appendOnly) {
+            appendedRoots.reserve(appendedRootCount);
+            for (std::size_t index = playModeRootCount_; index < rootCount; ++index) {
+                const kb::scene::SceneEntity root = hierarchy.RootAt(index);
+                appendedRoots.push_back(root);
+            }
+        }
+        if (appendOnly) {
+            std::vector<kb::scene::SceneEntity> dirtyEntities = preUpdateRenderUpdates;
+            dirtyEntities.insert(dirtyEntities.end(), appendedRoots.begin(), appendedRoots.end());
+            const std::span<const kb::scene::SceneEntity> postUpdateRenderUpdates = runtime.RenderProxyUpdateEntities();
+            dirtyEntities.insert(dirtyEntities.end(), postUpdateRenderUpdates.begin(), postUpdateRenderUpdates.end());
+            MarkSceneEntitiesRenderDirty(std::span<const kb::scene::SceneEntity>{ dirtyEntities });
+            if (!hierarchyRowsDirty_ && hierarchySearch_.Query().empty() &&
+                hierarchyRowsRootAppendEpoch_ == rootAppendEpoch &&
+                hierarchyRowsRootCount_ == playModeRootCount_) {
+                for (const kb::scene::SceneEntity root : appendedRoots) {
+                    EditorHierarchyRowBuilder::AppendRoot(*scene_, hierarchyExpansion_.CollapsedEntities(),
+                        root, hierarchyRowsCache_);
+                }
+                hierarchyRowsRootCount_ = rootCount;
+            } else {
+                InvalidateHierarchyRows();
+            }
+        } else {
+            std::vector<kb::scene::SceneEntity> dirtyEntities = preUpdateRenderUpdates;
+            const std::span<const kb::scene::SceneEntity> postUpdateRenderUpdates = runtime.RenderProxyUpdateEntities();
+            dirtyEntities.insert(dirtyEntities.end(), postUpdateRenderUpdates.begin(), postUpdateRenderUpdates.end());
+            MarkSceneStructuralRenderDirty(std::span<const kb::scene::SceneEntity>{ dirtyEntities });
+            InvalidateHierarchyRows();
+        }
+    } else if (!preUpdateRenderUpdates.empty() || rootAppendEpoch != playModeRootAppendEpoch_) {
+        std::vector<kb::scene::SceneEntity> dirtyEntities = preUpdateRenderUpdates;
+        if (rootAppendEpoch != playModeRootAppendEpoch_) {
+            const std::span<const kb::scene::SceneEntity> postUpdateRenderUpdates = runtime.RenderProxyUpdateEntities();
+            dirtyEntities.insert(dirtyEntities.end(), postUpdateRenderUpdates.begin(), postUpdateRenderUpdates.end());
+            InvalidateHierarchyRows();
+        }
+        if (!dirtyEntities.empty()) {
+            MarkSceneEntitiesRenderDirty(std::span<const kb::scene::SceneEntity>{ dirtyEntities });
+        } else {
+            MarkSceneRenderDirty();
+        }
     }
     playModeRenderTopologyVersion_ = topologyVersion;
+    playModeRootCount_ = rootCount;
+    playModeRootAppendEpoch_ = rootAppendEpoch;
     return !runtime.ShouldQuit();
 }
 
@@ -855,6 +925,10 @@ bool EditorSceneContext::SceneRenderFullDirty() const noexcept {
     return sceneRenderFullDirty_;
 }
 
+bool EditorSceneContext::SceneRenderStructuralDirty() const noexcept {
+    return sceneRenderStructuralDirty_;
+}
+
 const std::vector<std::uint64_t>& EditorSceneContext::SceneRenderDirtyEntityIds() const noexcept {
     return sceneRenderDirtyEntityIds_;
 }
@@ -932,6 +1006,7 @@ void EditorSceneContext::MarkSceneRenderDirty() noexcept {
     }
     InvalidateHierarchyRows();
     sceneRenderFullDirty_ = true;
+    sceneRenderStructuralDirty_ = false;
     sceneRenderDirtyBaseRevision_ = sceneRenderRevision_;
     sceneRenderDirtyEntityIds_.clear();
 }
@@ -957,8 +1032,24 @@ void EditorSceneContext::MarkSceneEntitiesRenderDirty(std::span<const kb::scene:
     }
 }
 
+void EditorSceneContext::MarkSceneStructuralRenderDirty(std::span<const kb::scene::SceneEntity> entities) {
+    if (sceneRenderFullDirty_) {
+        MarkSceneRenderDirty();
+        return;
+    }
+    if (entities.empty()) {
+        if (sceneRenderDirtyEntityIds_.empty()) sceneRenderDirtyBaseRevision_ = sceneRenderRevision_;
+        ++sceneRenderRevision_;
+        if (sceneRenderRevision_ == 0U) sceneRenderRevision_ = 1U;
+    } else {
+        MarkSceneEntitiesRenderDirty(entities);
+    }
+    sceneRenderStructuralDirty_ = true;
+}
+
 void EditorSceneContext::AcknowledgeSceneRenderSubmitted() noexcept {
     sceneRenderFullDirty_ = false;
+    sceneRenderStructuralDirty_ = false;
     sceneRenderDirtyEntityIds_.clear();
     sceneRenderDirtyBaseRevision_ = sceneRenderRevision_;
 }
@@ -2287,6 +2378,24 @@ kb::scene::SceneEntity EditorSceneContext::CreateUIObject(kb::scene::UIComponent
     if (descriptor == nullptr || (parent.IsValid() && !scene_->Entities().IsAlive(parent))) return {};
     kb::scene::SceneEntity created{};
     const bool succeeded = ExecuteSceneCommand("Create " + std::string{descriptor->displayName}, [this, descriptor, parent, &created]() {
+        const auto preset = kb::scene::FindUIComponentPreset(descriptor->displayName);
+        if (preset != nullptr && kb::scene::IsUIHierarchyPreset(preset->preset)) {
+            // A dropdown, slider, progress bar or scroll view is created as its whole hierarchy, wired to the
+            // parts it drives. Every part gets its dependencies (a font for text) in the same command.
+            std::vector<kb::scene::SceneEntity> parts;
+            created = kb::scene::CreateUIHierarchy(*scene_, preset->preset,
+                parent.IsValid() ? scene_->Entities().Object(parent) : kb::scene::SceneObject{}, descriptor->displayName, &parts);
+            if (!created.IsValid()) return false;
+            for (const kb::scene::SceneEntity part : parts)
+                if (!CompleteUIComponentDependencies(part)) return false;
+            auto rect = *scene_->Components().UI().TryGet<kb::scene::UIRectTransform>(created);
+            if (!InspectorUIComponentModel::ApplyAnchorPreset(rect, 5, {}, true, true)) return false;
+            scene_->Components().UI().Set(created, rect);
+            for (auto ancestor = scene_->Hierarchy().Parent(created); ancestor.IsValid(); ancestor = scene_->Hierarchy().Parent(ancestor))
+                hierarchyExpansion_.SetExpanded(ancestor, true);
+            SelectEntity(created);
+            return true;
+        }
         created = EditorHierarchyObjectFactory::CreateObject(*scene_, descriptor->displayName);
         if (!created.IsValid() || (parent.IsValid() && !scene_->Hierarchy().SetParent(created, parent)) ||
             !EditorUIComponentAuthoring::Add(*scene_, created, descriptor->stableId) ||
@@ -2561,6 +2670,18 @@ bool EditorSceneContext::CreateLuaScriptAsset(const std::filesystem::path& virtu
         return false;
     }
     console_.Info("Scripts", "Lua script created: " + path->generic_string());
+    return true;
+}
+
+bool EditorSceneContext::CreateNativeScriptAsset(const std::filesystem::path& virtualFolder) {
+    EditorScriptAssetGateway gateway{ *scene_, assetBrowser_ };
+    std::string error;
+    const std::optional<std::filesystem::path> path = gateway.CreateNativeScript(virtualFolder, error);
+    if (!path.has_value()) {
+        console_.Error("Scripts", error.empty() ? "C++ script could not be created." : error);
+        return false;
+    }
+    console_.Info("Scripts", "C++ script created: " + path->generic_string());
     return true;
 }
 
@@ -3403,9 +3524,11 @@ bool EditorSceneContext::ReloadOpenScriptAsset() {
     if (!assetId.IsValid()) {
         return false;
     }
-    // Erase the cache entry so EntityScriptExposedVariables' next Load re-reads
-    // the file the Script Editor just wrote and re-parses the Inspector schema.
-    return scene_->Assets().Manager().Unload(assetId);
+    if (!scene_->Assets().Manager().RefreshAsset(assetId)) {
+        console_.Error("Scripts", "Script asset refresh failed: " + scene_->Assets().Manager().LastError());
+        return false;
+    }
+    return true;
 }
 
 std::vector<std::pair<kb::assets::AssetId, std::string>> EditorSceneContext::AvailableScriptAssets() const {
@@ -3567,6 +3690,7 @@ struct EntityMeshBounds {
 // keeps a flat axis from collapsing to a degenerate zero-thickness shape the
 // physics backend would reject.
 void ApplyMeshBoundsToCollider(kb::scene::ColliderComponent& collider, const EntityMeshBounds& bounds) {
+    if (collider.shape == kb::scene::ColliderShape::Mesh) return;
     constexpr float kMinHalfExtent = 0.005F;
     collider.center = bounds.center;
     switch (collider.shape) {
@@ -3607,6 +3731,87 @@ bool EditorSceneContext::ApplyColliderFitToMesh(kb::scene::SceneEntity entity, s
     if (collider == nullptr) {
         reason = "the entity has no Collider";
         return false;
+    }
+    if (collider->shape == kb::scene::ColliderShape::Mesh) {
+        const auto* body = scene_->Components().Rigidbodies().TryGet(entity);
+        if (body != nullptr && body->bodyType != kb::scene::RigidbodyBodyType::Static) {
+            reason = "triangle collision geometry requires a static body";
+            return false;
+        }
+        const auto* renderer = scene_->Components().MeshRenderers().TryGet(entity);
+        auto& manager = scene_->Assets().Manager();
+        const auto mesh = renderer == nullptr ? kb::assets::AssetHandle<kb::render::RenderMeshAssetData>{}
+            : manager.Load<kb::render::RenderMeshAssetData>({renderer->meshAssetId});
+        if (!mesh.IsLoaded()) { reason = "the static mesh could not be loaded"; return false; }
+        kb::assets::CollisionMeshAsset geometry;
+        const auto copyPositions = [&geometry](const auto& vertices) {
+            geometry.positions.reserve(vertices.size());
+            for (const auto& p : vertices) geometry.positions.push_back({p.x, p.y, p.z});
+        };
+        if (!mesh->tangentVertices.empty()) copyPositions(mesh->tangentVertices);
+        else copyPositions(mesh->vertices);
+        const std::size_t indexCount = !mesh->indices16.empty() ? mesh->indices16.size() : mesh->indices32.size();
+        const auto appendSection = [&](std::uint32_t start, std::uint32_t count, std::uint32_t vertexStart) {
+            if (start > indexCount || count > indexCount - start || count % 3 != 0) return false;
+            for (std::size_t i = start; i < std::size_t{start} + count; ++i) {
+                const std::uint64_t index = std::uint64_t{vertexStart} +
+                    (!mesh->indices16.empty() ? mesh->indices16[i] : mesh->indices32[i]);
+                if (index >= geometry.positions.size()) return false;
+                geometry.indices.push_back(static_cast<std::uint32_t>(index));
+            }
+            return true;
+        };
+        if (mesh->sections.empty()) {
+            if (indexCount > UINT32_MAX || !appendSection(0, static_cast<std::uint32_t>(indexCount), 0)) {
+                reason = "mesh triangle indices are invalid"; return false;
+            }
+        } else {
+            for (const auto& section : mesh->sections) {
+                if (section.lodLevel != 0 || (section.terrainLayerIndex != UINT8_MAX && section.terrainLayerIndex != 0)) continue;
+                if (!appendSection(section.indexStart, section.indexCount, section.vertexStart)) {
+                    reason = "mesh section indices are invalid"; return false;
+                }
+            }
+        }
+        if (!kb::assets::ValidateCollisionMesh(geometry, reason)) return false;
+        std::uint64_t hash = 14695981039346656037ULL;
+        const auto hashWord = [&hash](std::uint32_t word) {
+            for (unsigned shift = 0; shift < 32; shift += 8) {
+                hash = (hash ^ static_cast<std::uint8_t>(word >> shift)) * 1099511628211ULL;
+            }
+        };
+        hashWord(static_cast<std::uint32_t>(geometry.positions.size()));
+        for (const auto& p : geometry.positions) {
+            hashWord(std::bit_cast<std::uint32_t>(p.x)); hashWord(std::bit_cast<std::uint32_t>(p.y)); hashWord(std::bit_cast<std::uint32_t>(p.z));
+        }
+        for (const auto index : geometry.indices) hashWord(index);
+        const std::filesystem::path virtualPath = "/Game/Generated/Collision/" + std::to_string(hash) + ".kbcollision";
+        const auto path = manager.Mounts().Resolve(virtualPath);
+        if (!path) { reason = "the project asset directory is unavailable"; return false; }
+        std::error_code error;
+        const bool exists = std::filesystem::exists(*path, error);
+        if (error) { reason = error.message(); return false; }
+        if (!exists) {
+            std::filesystem::create_directories(path->parent_path(), error);
+            if (error) { reason = error.message(); return false; }
+            if (!kb::assets::WriteCollisionMesh(*path, geometry, reason)) return false;
+        }
+        static_cast<void>(manager.DiscoverMountedAssets());
+        const auto saved = manager.Load<kb::assets::CollisionMeshAsset>(virtualPath);
+        if (!saved.IsLoaded() || saved->indices != geometry.indices ||
+            !std::ranges::equal(saved->positions, geometry.positions, [](const auto& a, const auto& b) {
+                return a.x == b.x && a.y == b.y && a.z == b.z;
+            })) {
+            reason = "generated collision geometry could not be verified"; return false;
+        }
+        // Content-addressed assets keep an earlier fit available to scene undo.
+        collider = scene_->Components().Colliders().TryGet(entity);
+        if (collider == nullptr) { reason = "the collider was removed"; return false; }
+        collider->meshAssetId = saved.Id().value;
+        collider->center = {};
+        scene_->Components().Colliders().MarkModified(entity);
+        reason = std::to_string(geometry.indices.size() / 3) + " collision triangles";
+        return true;
     }
     EntityMeshBounds bounds;
     if (!TryLoadEntityMeshBounds(*scene_, entity, bounds, reason)) {
@@ -4184,6 +4389,43 @@ bool EditorSceneContext::SetUIColor(kb::scene::SceneEntity entity, kb::scene::UI
     });
 }
 
+bool EditorSceneContext::EditUIDropdownOption(kb::scene::SceneEntity entity, UIDropdownOptionEdit edit, std::uint32_t index,
+    std::uint32_t target) {
+    if (!scene_->Entities().IsAlive(entity)) return false;
+    kb::scene::UIComponentSet candidate = kb::scene::CaptureSceneUIComponents(scene_->Components().UI(), entity);
+    if (!candidate.dropdown.has_value()) return false;
+    kb::scene::UIDropdown& dropdown = *candidate.dropdown;
+    bool edited = false;
+    std::string label;
+    switch (edit) {
+    case UIDropdownOptionEdit::Add:
+        if (dropdown.optionCount >= kb::scene::UIDropdown::MaxOptions) {
+            console_.Warning("Inspector", "A dropdown holds at most 32 options.");
+            return false;
+        }
+        // A new element repeats the last one, ready to be edited into the next choice.
+        dropdown.options[dropdown.optionCount] =
+            dropdown.optionCount > 0U ? dropdown.options[dropdown.optionCount - 1U] : kb::scene::UIDropdownOption{};
+        ++dropdown.optionCount;
+        edited = true;
+        label = "Add Dropdown Option";
+        break;
+    case UIDropdownOptionEdit::Remove:
+        edited = kb::scene::RemoveUIDropdownOption(dropdown, index);
+        label = "Remove Dropdown Option";
+        break;
+    case UIDropdownOptionEdit::Move:
+        edited = index != target && kb::scene::MoveUIDropdownOption(dropdown, index, target);
+        label = "Reorder Dropdown Options";
+        break;
+    }
+    if (!edited) return false;
+    return ExecuteSceneCommand(label, [this, entity, candidate = std::move(candidate)]() {
+        kb::scene::SynchronizeSceneUIComponents(scene_->Components().UI(), entity, candidate);
+        return true;
+    });
+}
+
 bool EditorSceneContext::SetUIComponentProperty(
     kb::scene::SceneEntity entity, kb::scene::UIComponentType component,
     std::string_view property, const kb::scene::UIComponentPropertyValue& value) {
@@ -4212,6 +4454,17 @@ bool EditorSceneContext::SetUIComponentProperty(
         const std::uint64_t id = *authoredId;
         if (id != 0U && !scene_->Entities().IsAlive(kb::scene::SceneEntity{ id })) {
             console_.Warning("Inspector", "UI entity property references an unknown entity.");
+            return false;
+        }
+        // A navigation link can only land on a widget that takes focus - anything else would be accepted
+        // here and then silently never followed.
+        if (property.starts_with("navigation") && id != 0U && id == entity.Id()) {
+            console_.Warning("Inspector", "A navigation link cannot point at the widget it starts from.");
+            return false;
+        }
+        if (property.starts_with("navigation") && id != 0U &&
+            !scene_->Components().UI().Has<kb::scene::UISelectable>(kb::scene::SceneEntity{ id })) {
+            console_.Warning("Inspector", "A navigation link must point at a widget with a Selectable component.");
             return false;
         }
     }
@@ -5394,12 +5647,25 @@ void EditorSceneContext::InvalidateHierarchyRows() noexcept {
 }
 
 void EditorSceneContext::RebuildHierarchyRowsIfNeeded() const {
-    if (!hierarchyRowsDirty_) {
+    if (!hierarchyRowsDirty_ &&
+        scene_->Hierarchy().RootAppendEpoch() == hierarchyRowsRootAppendEpoch_) {
         return;
     }
 
+    const auto rebuildStart = std::chrono::steady_clock::now();
     hierarchyRowsCache_ = EditorHierarchyRowBuilder::Build(*scene_, hierarchyExpansion_.CollapsedEntities(), hierarchySearch_.Query());
     hierarchyRowsDirty_ = false;
+    const kb::scene::SceneHierarchyQueries hierarchy =
+        static_cast<const kb::scene::Scene&>(*scene_).Hierarchy();
+    hierarchyRowsRootCount_ = hierarchy.RootCount();
+    hierarchyRowsRootAppendEpoch_ = hierarchy.RootAppendEpoch();
+    const double rebuildMs = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - rebuildStart).count();
+    if (rebuildMs >= 4.0) {
+        diagnostics::EditorLagTrace::Slow(
+            "hierarchy-rebuild", diagnostics::EditorLagTrace::NextEventId(), rebuildMs,
+            "rows=" + std::to_string(hierarchyRowsCache_.size()), 4.0);
+    }
 }
 
 void EditorSceneContext::ResetSceneEditState() {

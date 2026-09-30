@@ -463,6 +463,55 @@ inline void DrawAssetFieldRow(HDC dc, RECT row, const EditorTheme& theme, const 
     HeroIconPainter::Draw(dc, Shrink(button, 3, 3, 3, 3), HeroIconKind::MagnifyingGlass, buttonHovered ? Color(theme.textPrimary) : Color(theme.textSecondary), 1);
 }
 
+// One element of the Dropdown's Options list, first line: a drag handle and the option's label field.
+[[nodiscard]] inline RECT DropdownOptionHandleRect(RECT row) noexcept {
+    return Rect(row.left + kRowPadX, row.top, row.left + kRowPadX + 16, row.bottom);
+}
+
+[[nodiscard]] inline RECT DropdownOptionTextRect(RECT row) noexcept {
+    const int top = CenteredY(row, kValueHeight);
+    return Rect(row.left + kRowPadX + 22, top, row.right - kValueRightInset, top + kValueHeight);
+}
+
+// The list footer's + and - buttons, right-aligned under the elements.
+[[nodiscard]] inline RECT DropdownOptionFooterButtonRect(RECT row, bool remove) noexcept {
+    constexpr int kButtonWidth = 26;
+    const int top = CenteredY(row, kValueHeight);
+    const int right = row.right - kValueRightInset - (remove ? 0 : kButtonWidth + 4);
+    return Rect(right - kButtonWidth, top, right, top + kValueHeight);
+}
+
+inline void DrawDropdownOptionTextRow(HDC dc, RECT row, const EditorTheme& theme, const InspectorPanelState& state,
+    InspectorSectionId section, InspectorPropertyId textProperty, int textRow, int option, std::string_view value, bool selected) {
+    GdiDrawing::FillRectColor(dc, row, selected ? HoverFill(theme) : Color(theme.panel));
+    const bool handleHovered = state.IsHovered(InspectorHitKind::Row, section, InspectorPropertyId::UIDropdownOptionHandle, option);
+    ScopedFont handleFont(13, FW_SEMIBOLD);
+    {
+        const ScopedGdiObject selectedFont(dc, handleFont.handle);
+        Text(dc, DropdownOptionHandleRect(row), "\xE2\x89\xA1", handleHovered ? Color(theme.textPrimary) : Color(theme.textSecondary),
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+    const bool editing = state.EditedProperty() == textProperty && state.EditIndex() == textRow;
+    DrawValueBox(dc, DropdownOptionTextRect(row), theme, editing ? std::string_view{state.EditBuffer()} : value,
+        state.IsHovered(InspectorHitKind::TextField, section, textProperty, textRow), editing, state.IsTextCaretVisible());
+}
+
+inline void DrawDropdownOptionFooter(HDC dc, RECT row, const EditorTheme& theme, const InspectorPanelState& state,
+    InspectorSectionId section, bool canAdd, bool canRemove) {
+    GdiDrawing::FillRectColor(dc, row, Color(theme.panel));
+    ScopedFont font(14, FW_SEMIBOLD);
+    const ScopedGdiObject selectedFont(dc, font.handle);
+    for (const bool remove : { false, true }) {
+        const RECT box = DropdownOptionFooterButtonRect(row, remove);
+        const InspectorPropertyId property = remove ? InspectorPropertyId::UIDropdownOptionRemove : InspectorPropertyId::UIDropdownOptionAdd;
+        const bool enabled = remove ? canRemove : canAdd;
+        const bool hovered = enabled && state.IsHovered(InspectorHitKind::Row, section, property, -1);
+        DrawInputFrame(dc, box, hovered ? HoverFill(theme) : Color(theme.chrome), hovered ? Color(theme.accent) : Color(theme.borderPanel));
+        Text(dc, box, remove ? "-" : "+", !enabled ? Color(theme.textDisabled) : hovered ? Color(theme.textPrimary) : Color(theme.textSecondary),
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+}
+
 [[nodiscard]] inline RECT CheckboxRectForRow(RECT row) noexcept {
     const RECT labelRect = Rect(row.left + kRowPadX, row.top, row.left + ((row.right - row.left) * 36 / 100), row.bottom);
     return CenteredRect(row, labelRect.right, kCheckboxSize, kCheckboxSize);

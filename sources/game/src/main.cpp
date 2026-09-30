@@ -1,5 +1,6 @@
 #include "GameProjectRuntime.hpp"
 #include "GameWindow.hpp"
+#include "RuntimeSceneFrameSync.hpp"
 
 #include "engine/input/InputHaptics.hpp"
 #include "engine/input/InputSubsystem.hpp"
@@ -31,7 +32,9 @@
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <locale>
 #include <memory>
 #include <optional>
 #include <string>
@@ -47,9 +50,49 @@ constexpr std::uint32_t kDefaultWindowHeight = 720U;
 struct GameOptions {
     std::filesystem::path projectPath;
     std::string sceneOverride;
+    std::uint32_t width = kDefaultWindowWidth;
+    std::uint32_t height = kDefaultWindowHeight;
+    bool fullscreen = false;
+    bool headless = false;
+    bool uncapped = false;
+    std::filesystem::path profilePath;
+    std::optional<kb::render::SceneRenderLightingPath> profileLighting;
+    std::filesystem::path screenshotPath;
+    std::uint32_t screenshotFrame = 0U;
     // 0 runs until the player closes the window; a positive value bounds the
     // run so an automated check can drive the real executable to completion.
     std::uint32_t frameLimit = 0U;
+};
+
+struct GameFrameProfile {
+    double wallFrameMilliseconds = 0.0;
+    double cpuMilliseconds = 0.0;
+    double simulationMilliseconds = 0.0;
+    double renderMilliseconds = 0.0;
+    double beginSubmitMilliseconds = 0.0;
+    double endFrameMilliseconds = 0.0;
+    double gpuDelayedMilliseconds = -1.0;
+    double bgfxWaitRenderMilliseconds = -1.0;
+    double bgfxWaitSubmitMilliseconds = -1.0;
+    std::uint32_t draws = 0U;
+    std::uint32_t shadowCasters = 0U;
+    std::uint32_t submittedMeshes = 0U;
+    std::uint32_t droppedInstances = 0U;
+    std::uint32_t missingResources = 0U;
+    std::uint32_t fixedSteps = 0U;
+    std::uint32_t exposureReadbackSubmitted = 0U;
+    std::uint32_t exposureSampleAvailable = 0U;
+    std::uint32_t width = 0U;
+    std::uint32_t height = 0U;
+    std::uint32_t visibleMeshes = 0U;
+    std::uint32_t culledInstances = 0U;
+    std::uint32_t sceneLights = 0U;
+    std::uint32_t submittedLights = 0U;
+    std::uint32_t skippedLights = 0U;
+    std::uint32_t lightCapacity = 0U;
+    std::uint32_t lightingPath = 0U;
+    std::uint32_t shadowDraws = 0U;
+    std::uint64_t instanceUploadBytes = 0U;
 };
 
 [[nodiscard]] bool HasPrefix(std::wstring_view value, std::wstring_view prefix) noexcept {
@@ -80,7 +123,16 @@ struct GameOptions {
     return true;
 }
 
+[[nodiscard]] bool ParseWindowExtent(std::wstring_view text, std::uint32_t& extent) noexcept {
+    if (!ParseFrameLimit(text, extent) || extent < 64U || extent > 8192U) {
+        return false;
+    }
+    return true;
+}
+
 [[nodiscard]] bool ParseArguments(int argc, wchar_t** argv, GameOptions& options) {
+    bool explicitWidth = false;
+    bool explicitHeight = false;
     for (int index = 1; index < argc; ++index) {
         const std::wstring_view argument{ argv[index] };
         if (HasPrefix(argument, L"--project=")) {
@@ -98,11 +150,80 @@ struct GameOptions {
                 return false;
             }
             options.frameLimit = frames;
+        } else if (HasPrefix(argument, L"--width=")) {
+            if (!ParseWindowExtent(argument.substr(8U), options.width)) {
+                std::cerr << "kb_game: --width expects 64..8192 pixels\n";
+                return false;
+            }
+            explicitWidth = true;
+        } else if (HasPrefix(argument, L"--height=")) {
+            if (!ParseWindowExtent(argument.substr(9U), options.height)) {
+                std::cerr << "kb_game: --height expects 64..8192 pixels\n";
+                return false;
+            }
+            explicitHeight = true;
+        } else if (argument == L"--fullscreen") {
+            options.fullscreen = true;
+        } else if (argument == L"--uncapped") {
+            options.uncapped = true;
+        } else if (argument == L"--headless") {
+            options.headless = true;
+        } else if (HasPrefix(argument, L"--screenshot-file=")) {
+            if (argument.size() == 18U) {
+                std::cerr << "kb_game: --screenshot-file requires a path\n";
+                return false;
+            }
+            options.screenshotPath = std::filesystem::path{std::wstring{argument.substr(18U)}};
+        } else if (HasPrefix(argument, L"--screenshot-frame=")) {
+            if (!ParseFrameLimit(argument.substr(19U), options.screenshotFrame)) {
+                std::cerr << "kb_game: --screenshot-frame expects a positive frame count\n";
+                return false;
+            }
+        } else if (HasPrefix(argument, L"--profile-lighting=")) {
+            const auto value = argument.substr(19U);
+            if (value == L"Forward") options.profileLighting = kb::render::SceneRenderLightingPath::Forward;
+            else if (value == L"ForwardPlus") options.profileLighting = kb::render::SceneRenderLightingPath::ClusteredForwardPlus;
+            else if (value == L"Deferred") options.profileLighting = kb::render::SceneRenderLightingPath::Deferred;
+            else {
+                std::cerr << "kb_game: --profile-lighting expects Forward, ForwardPlus or Deferred\n";
+                return false;
+            }
+        } else if (HasPrefix(argument, L"--profile-file=")) {
+            if (argument.size() == 15U) {
+                std::cerr << "kb_game: --profile-file requires a path\n";
+                return false;
+            }
+            options.profilePath = std::filesystem::path{std::wstring{argument.substr(15U)}};
         } else {
             std::cerr << "kb_game: unknown option '"
                       << kb::game::NarrowForDiagnostics(argument) << "'\n";
             return false;
         }
+    }
+    if (options.headless && options.fullscreen) {
+        std::cerr << "kb_game: --headless cannot use --fullscreen\n";
+        return false;
+    }
+    if (options.fullscreen && (explicitWidth || explicitHeight)) {
+        std::cerr << "kb_game: --fullscreen uses the primary monitor's native resolution; omit --width and --height\n";
+        return false;
+    }
+    if (!options.profilePath.empty() &&
+        (options.frameLimit == 0U || options.frameLimit > 120'000U)) {
+        std::cerr << "kb_game: --profile-file requires --frames=1..120000\n";
+        return false;
+    }
+    if (options.screenshotPath.empty() != (options.screenshotFrame == 0U) ||
+        (options.screenshotFrame != 0U &&
+            (options.frameLimit == 0U || options.screenshotFrame > options.frameLimit))) {
+        std::cerr << "kb_game: screenshot requires --screenshot-file, --screenshot-frame and --frames covering that frame\n";
+        return false;
+    }
+    if (!options.screenshotPath.empty() &&
+        (std::filesystem::exists(options.screenshotPath) ||
+            std::filesystem::exists(options.screenshotPath.string() + ".pending"))) {
+        std::cerr << "kb_game: screenshot destination must not already exist\n";
+        return false;
     }
     return true;
 }
@@ -115,6 +236,13 @@ struct GameOptions {
 }
 
 int RunGame(const GameOptions& options) {
+    if (options.fullscreen &&
+        SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) == 0 &&
+        AreDpiAwarenessContextsEqual(
+            GetThreadDpiAwarenessContext(), DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) == 0) {
+        std::cerr << "kb_game: fullscreen requires per-monitor DPI awareness\n";
+        return EXIT_FAILURE;
+    }
     kb::game::GameProjectRuntime projectRuntime{};
     if (!ReadGameProjectRuntime(
             options.projectPath, options.sceneOverride, projectRuntime, std::cerr)) {
@@ -125,15 +253,20 @@ int RunGame(const GameOptions& options) {
     kb::game::GameWindow window;
     if (!window.Open(
             WindowTitle(projectRuntime),
-            kDefaultWindowWidth,
-            kDefaultWindowHeight,
-            inputCollector)) {
+            options.width,
+            options.height,
+            options.fullscreen,
+            inputCollector,
+            !options.headless)) {
         std::cerr << "kb_game: game window could not be created\n";
         return EXIT_FAILURE;
     }
 
     kb::render::DisplayConfig displayConfig{};
     displayConfig.enableEditorRendering = false;
+    if (options.uncapped) {
+        displayConfig.syncMode = kb::render::DisplaySyncMode::Uncapped;
+    }
     kb::render::Renderer renderer;
     if (projectRuntime.IsPackaged()) {
         std::string providerError;
@@ -163,6 +296,18 @@ int RunGame(const GameOptions& options) {
         std::cerr << "kb_game: renderer initialization failed\n";
         return EXIT_FAILURE;
     }
+    {
+        auto lighting = renderer.DefaultSceneLightingConfig();
+        switch (projectRuntime.lightingPath) {
+        case kb::project::ProjectSceneLightingPath::Forward: lighting.lightingPath = kb::render::SceneRenderLightingPath::Forward; break;
+        case kb::project::ProjectSceneLightingPath::ForwardPlus: lighting.lightingPath = kb::render::SceneRenderLightingPath::ClusteredForwardPlus; break;
+        case kb::project::ProjectSceneLightingPath::Deferred: lighting.lightingPath = kb::render::SceneRenderLightingPath::Deferred; break;
+        }
+        if (options.profileLighting) lighting.lightingPath = *options.profileLighting;
+        lighting.maxForwardLights = lighting.lightingPath == kb::render::SceneRenderLightingPath::ClusteredForwardPlus
+            ? kb::render::kMaxSceneForwardPlusLights : kb::render::kMaxSceneForwardLights;
+        renderer.SetDefaultSceneLightingConfig(lighting);
+    }
 
     auto scriptModuleOwner = std::make_unique<kb::script::ScriptModule>();
     kb::script::ScriptModule* scriptModule = scriptModuleOwner.get();
@@ -181,24 +326,57 @@ int RunGame(const GameOptions& options) {
 
     std::filesystem::path scenePath;
     std::size_t discoveredAssets = 0U;
+    if (scriptActive && projectRuntime.IsPackaged()) {
+        scriptModule->Host()->AssetPreparer().SetNativeSettings({
+            .buildPlugins = false,
+            .runtimeModuleRoot = projectRuntime.projectRoot,
+        });
+    }
     if (!LoadGameProjectScene(projectRuntime, scene, scenePath, discoveredAssets, std::cerr)) {
         return EXIT_FAILURE;
     }
+    renderer.SetRuntimeAssetDiscoveryEnabled(false);
     std::cout << "kb_game: project=" << kb::game::NarrowForDiagnostics(projectRuntime.projectRoot)
               << " scene=" << kb::game::NarrowForDiagnostics(scenePath)
               << " entities=" << scene.Entities().Count()
               << " assets=" << discoveredAssets
-              << " modules=" << scene.ActiveModuleCount() << '\n';
+              << " modules=" << scene.ActiveModuleCount()
+              << " backend=" << renderer.CapabilityReport().selectedBackendName
+              << " resolution=" << window.Width() << 'x' << window.Height()
+              << " sync=" << (options.uncapped ? "uncapped" : "vsync")
+              << " headless=" << options.headless
+              << " gpu_vendor=" << renderer.CapabilityReport().vendorId
+              << " gpu_device=" << renderer.CapabilityReport().deviceId << '\n';
     std::cout.flush();
 
+    std::ofstream profileOutput;
+    std::vector<GameFrameProfile> profileRows;
+    if (!options.profilePath.empty()) {
+        profileOutput.open(options.profilePath, std::ios::trunc);
+        if (!profileOutput) {
+            std::cerr << "kb_game: profile file could not be opened: "
+                      << kb::game::NarrowForDiagnostics(options.profilePath) << '\n';
+            return EXIT_FAILURE;
+        }
+        profileOutput.imbue(std::locale::classic());
+        profileOutput << "frame,cpu_ms,simulation_ms,render_ms,begin_submit_ms,end_frame_ms,gpu_delayed_ms,bgfx_wait_render_ms,bgfx_wait_submit_ms,draws,shadow_casters,submitted_meshes,dropped,missing_resources,fixed_steps,exposure_readback_submitted,exposure_sample_available,width,height,wall_frame_ms,visible_meshes,culled_instances,scene_lights,submitted_lights,skipped_lights,light_capacity,lighting_path,shadow_draws,instance_upload_bytes\n";
+        profileRows.reserve(options.frameLimit);
+    }
     kb::input::Win32XInputHapticsBackend hapticsBackend;
     kb::input::InputHaptics::RegisterBackend(scene, hapticsBackend);
 
     std::uint32_t renderedFrames = 0U;
     std::uint32_t submittedFrames = 0U;
+    bool runtimeClean = true;
+    kb::game::RuntimeSceneFrameSync renderSceneSync;
     auto previousTick = std::chrono::steady_clock::now();
     while (window.PumpMessages() && !scene.Runtime().ShouldQuit()) {
         if (window.Width() == 0U || window.Height() == 0U) {
+            if (!options.profilePath.empty()) {
+                std::cerr << "kb_game: benchmark interrupted by minimization\n";
+                runtimeClean = false;
+                break;
+            }
             // Minimized: there is nothing to draw and nothing to time against,
             // so block on the queue instead of spinning.
             static_cast<void>(WaitMessage());
@@ -212,20 +390,120 @@ int RunGame(const GameOptions& options) {
         }
 
         const auto now = std::chrono::steady_clock::now();
+        const auto profileBegin = !options.profilePath.empty()
+            ? now : std::chrono::steady_clock::time_point{};
+        const double wallFrameMilliseconds = std::chrono::duration<double, std::milli>(now - previousTick).count();
         const float deltaSeconds = kb::game::RuntimeDeltaSeconds(previousTick, now);
         previousTick = now;
 
-        inputCollector.Collect(scene.Input().MutableDeviceState(), window.Handle());
+        if (!options.headless) inputCollector.Collect(scene.Input().MutableDeviceState(), window.Handle());
         static_cast<void>(scene.UI().SetViewport(
             static_cast<float>(window.Width()),
             static_cast<float>(window.Height())));
+        renderSceneSync.BeforeUpdate(scene);
         static_cast<void>(scene.Runtime().Update(deltaSeconds));
-
-        if (renderer.BeginFrame()) {
-            renderer.SubmitScene(scene);
-            renderer.EndFrame();
-            ++submittedFrames;
+        for (const std::string& error : scene.Runtime().DrainSceneSystemErrors()) {
+            std::cerr << "kb_game: scene runtime failed: " << error << '\n';
+            runtimeClean = false;
         }
+        if (scriptActive) {
+            for (const std::string& error : scriptModule->Host()->DrainSceneSystemDiagnostics()) {
+                std::cerr << "kb_game: script runtime failed: " << error << '\n';
+                runtimeClean = false;
+            }
+        }
+        if (!runtimeClean) {
+            break;
+        }
+        const auto profileSimulationEnd = !options.profilePath.empty()
+            ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+
+        renderer.SetFrameDeltaSeconds(deltaSeconds);
+        if (!renderer.BeginFrame()) {
+            std::cerr << "kb_game: renderer could not begin a frame\n";
+            runtimeClean = false;
+            break;
+        }
+        const bool submitted = renderSceneSync.Submit(scene, renderer);
+        const auto& renderStats = renderer.LastSceneSubmitStats();
+        const bool renderErrors = renderer.LastSceneDiagnostics().HasErrors() ||
+            renderStats.HasMissingResources() || renderStats.droppedInstanceCount != 0U;
+        const auto profileAfterSubmit = !options.profilePath.empty()
+            ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+        if (submitted && !renderErrors && renderedFrames + 1U == options.screenshotFrame) {
+            // Capture the final backbuffer, including display output and screen UI.
+            bgfx::requestScreenShot(BGFX_INVALID_HANDLE, options.screenshotPath.string().c_str());
+        }
+        renderer.EndFrame();
+        if (!options.profilePath.empty()) {
+            const auto profileEnd = std::chrono::steady_clock::now();
+            const bgfx::Stats* gpu = bgfx::getStats();
+            bool readbackSubmitted = false;
+            bool exposureSampleAvailable = false;
+            for (const auto& exposure : renderer.LastSceneExposureStats()) {
+                readbackSubmitted |= exposure.gpuReadbackSubmitted;
+                exposureSampleAvailable |= exposure.gpuReadbackSampleAvailable;
+            }
+            const double gpuMilliseconds = gpu != nullptr && gpu->gpuTimerFreq > 0 &&
+                gpu->gpuTimeEnd > gpu->gpuTimeBegin
+                ? static_cast<double>(gpu->gpuTimeEnd - gpu->gpuTimeBegin) * 1000.0 /
+                    static_cast<double>(gpu->gpuTimerFreq)
+                : -1.0;
+            const double cpuTickMilliseconds = gpu != nullptr && gpu->cpuTimerFreq > 0
+                ? 1000.0 / static_cast<double>(gpu->cpuTimerFreq) : 0.0;
+            profileRows.push_back(GameFrameProfile{
+                .wallFrameMilliseconds = wallFrameMilliseconds,
+                .cpuMilliseconds = std::chrono::duration<double, std::milli>(profileEnd - profileBegin).count(),
+                .simulationMilliseconds = std::chrono::duration<double, std::milli>(
+                    profileSimulationEnd - profileBegin).count(),
+                .renderMilliseconds = std::chrono::duration<double, std::milli>(
+                    profileEnd - profileSimulationEnd).count(),
+                .beginSubmitMilliseconds = std::chrono::duration<double, std::milli>(
+                    profileAfterSubmit - profileSimulationEnd).count(),
+                .endFrameMilliseconds = std::chrono::duration<double, std::milli>(
+                    profileEnd - profileAfterSubmit).count(),
+                .gpuDelayedMilliseconds = gpuMilliseconds,
+                .bgfxWaitRenderMilliseconds = cpuTickMilliseconds > 0.0
+                    ? static_cast<double>(gpu->waitRender) * cpuTickMilliseconds : -1.0,
+                .bgfxWaitSubmitMilliseconds = cpuTickMilliseconds > 0.0
+                    ? static_cast<double>(gpu->waitSubmit) * cpuTickMilliseconds : -1.0,
+                .draws = renderStats.submittedDrawCallCount,
+                .shadowCasters = renderStats.shadowCasterCount,
+                .submittedMeshes = renderStats.submittedMeshCount,
+                .droppedInstances = renderStats.droppedInstanceCount,
+                .missingResources = renderStats.HasMissingResources() ? 1U : 0U,
+                .fixedSteps = static_cast<std::uint32_t>(scene.Runtime().LastFixedStepCount()),
+                .exposureReadbackSubmitted = readbackSubmitted ? 1U : 0U,
+                .exposureSampleAvailable = exposureSampleAvailable ? 1U : 0U,
+                .width = window.Width(),
+                .height = window.Height(),
+                .visibleMeshes = renderStats.visibleMeshCount,
+                .culledInstances = renderStats.culledInstanceCount,
+                .sceneLights = renderStats.sceneLightCount,
+                .submittedLights = renderStats.submittedForwardLightCount,
+                .skippedLights = renderStats.skippedForwardLightCount,
+                .lightCapacity = renderStats.forwardLightCapacity,
+                .lightingPath = renderStats.lightingPath,
+                .shadowDraws = renderStats.submittedShadowDrawCallCount,
+                .instanceUploadBytes = renderStats.instanceUploadBytes,
+            });
+        }
+        if (!submitted || renderErrors) {
+            std::cerr << "kb_game: renderer could not submit the scene cleanly; accepted=" << submitted
+                      << " missing-resources=" << renderStats.HasMissingResources()
+                      << " dropped-instances=" << renderStats.droppedInstanceCount << '\n';
+            for (const auto& event : renderer.LastSceneDiagnostics().events) {
+                if (event.severity == kb::render::SceneRenderDiagnosticSeverity::Error) {
+                    std::cerr << "kb_game: render error kind=" << static_cast<unsigned>(event.kind)
+                              << " entity=" << event.entityId << " mesh=" << event.meshAssetId
+                              << " material=" << event.materialAssetId << " texture=" << event.textureAssetId
+                              << " profile=" << event.postProcessProfileAssetId << '\n';
+                }
+            }
+            runtimeClean = false;
+            break;
+        }
+        ++submittedFrames;
         ++renderedFrames;
         if (options.frameLimit != 0U && renderedFrames >= options.frameLimit) {
             break;
@@ -245,6 +523,35 @@ int RunGame(const GameOptions& options) {
     kb::input::InputHaptics::UnregisterBackend(scene, hapticsBackend);
     renderer.ReleaseScene(scene);
     renderer.Shutdown();
+    if (!options.screenshotPath.empty()) {
+        std::error_code error;
+        const auto size = std::filesystem::file_size(options.screenshotPath, error);
+        if (renderedFrames < options.screenshotFrame || error || size == 0U) {
+            std::cerr << "kb_game: final screenshot was not written\n";
+            runtimeClean = false;
+        }
+    }
+    if (!options.profilePath.empty()) {
+        for (std::size_t index = 0U; index < profileRows.size(); ++index) {
+            const GameFrameProfile& row = profileRows[index];
+            profileOutput << index << ',' << row.cpuMilliseconds << ',' << row.simulationMilliseconds << ','
+                          << row.renderMilliseconds << ',' << row.beginSubmitMilliseconds << ','
+                          << row.endFrameMilliseconds << ',' << row.gpuDelayedMilliseconds << ','
+                          << row.bgfxWaitRenderMilliseconds << ',' << row.bgfxWaitSubmitMilliseconds << ','
+                          << row.draws << ',' << row.shadowCasters << ',' << row.submittedMeshes << ','
+                          << row.droppedInstances << ',' << row.missingResources << ',' << row.fixedSteps << ','
+                          << row.exposureReadbackSubmitted << ',' << row.exposureSampleAvailable << ','
+                          << row.width << ',' << row.height << ',' << row.wallFrameMilliseconds << ','
+                          << row.visibleMeshes << ',' << row.culledInstances << ',' << row.sceneLights << ','
+                          << row.submittedLights << ',' << row.skippedLights << ',' << row.lightCapacity << ','
+                          << row.lightingPath << ',' << row.shadowDraws << ',' << row.instanceUploadBytes << '\n';
+        }
+        profileOutput.flush();
+        if (!profileOutput) {
+            std::cerr << "kb_game: profile file could not be written\n";
+            runtimeClean = false;
+        }
+    }
 
     // frames counts loop iterations; rendered counts the ones the renderer
     // actually accepted, ticks the ones the scene runtime actually stepped and
@@ -257,7 +564,7 @@ int RunGame(const GameOptions& options) {
               << " ticks=" << scene.Runtime().FrameIndex()
               << " simulated=" << scene.Runtime().ElapsedSeconds() << '\n';
     std::cout.flush();
-    return shutdownClean ? EXIT_SUCCESS : EXIT_FAILURE;
+    return shutdownClean && runtimeClean ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
 } // namespace

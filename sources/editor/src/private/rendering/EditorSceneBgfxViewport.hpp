@@ -79,6 +79,7 @@ public:
         std::uint64_t sceneRevision = 1U;
         std::uint64_t sceneDirtyBaseRevision = 1U;
         bool sceneFullSyncRequired = true;
+        bool sceneStructuralSyncRequired = false;
         // Runtime transform propagation already publishes compact entity/affine
         // columns. Consume those columns during Play instead of rebuilding every
         // render proxy when the scene structure is unchanged.
@@ -118,10 +119,12 @@ public:
     void NotifyHostDpiChanged(HWND host) noexcept;
     void ReleaseScene(const kb::scene::Scene& scene) noexcept;
     [[nodiscard]] std::uint32_t RendererCompletedFrame() const noexcept;
+    [[nodiscard]] render::SceneRenderSubmitStats LastSceneSubmitStats() const noexcept;
     // Advances renderer-owned asynchronous readbacks without rebuilding or
     // submitting a scene. Used only when no visible viewport advanced the
     // renderer since the previous poll.
     [[nodiscard]] bool AdvanceAsyncReadbacks();
+    [[nodiscard]] bool RequestPresentedCapture(HWND host, std::uint64_t key, std::string_view path);
     void Shutdown();
     void BeginPaintLayout() noexcept;
     void BeginPaintLayout(HWND parent) noexcept;

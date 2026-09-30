@@ -7,6 +7,7 @@
 #include "app/EditorAssetBrowserPointerHandler.hpp"
 #include "app/EditorCrashBreadcrumbs.hpp"
 #include "app/EditorPendingTextEditCommitter.hpp"
+#include "inspection/InspectorPanelInteraction.hpp"
 #include "app/EditorParticleDocumentLifecycle.hpp"
 #include "app/ParticleEditorPanelInteraction.hpp"
 #include "app/EditorPointerDragInteraction.hpp"
@@ -532,6 +533,8 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                 if (!selected.accepted) return;
                 selectedMaterial = selected.assetId;
             } else if (hit.action == ParticleEditorPanelAction::AddModule) {
+                // The button is drawn disabled once the emitter holds the maximum number of modules.
+                if (inspector.modules.size() >= kb::scene::kParticleEffectMaxModulesPerEmitter) return;
                 HMENU menu = CreatePopupMenu();
                 if (menu == nullptr) return;
                 constexpr const char* labels[] = {"Initial Velocity", "Gravity", "Wind", "Drag", "Color Over Life",
@@ -1665,6 +1668,17 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                         if (result.accepted) {
                             static_cast<void>(sceneContext_.SetUIComponentProperty(entity, *component,
                                 row.name, kb::scene::UIComponentPropertyValue{result.assetId.value}));
+                            sceneViewport_.RequestPresent();
+                        }
+                        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                        return;
+                    }
+                    if (descriptor != nullptr && descriptor->type == kb::scene::UIComponentPropertyType::Entity) {
+                        const auto result = EditorUIEntityPickerDialog::Show(mainWindow_, MakeEditorDarkTheme(),
+                            sceneContext_, entity, *component, row.name, kb::scene::SceneEntity{std::stoull(row.value)});
+                        if (result.accepted) {
+                            static_cast<void>(sceneContext_.SetUIComponentProperty(entity, *component,
+                                row.name, kb::scene::UIComponentPropertyValue{result.entity.Id()}));
                             sceneViewport_.RequestPresent();
                         }
                         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);

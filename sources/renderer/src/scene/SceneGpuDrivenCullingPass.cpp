@@ -150,7 +150,6 @@ SceneRenderSubmitStats SceneGpuDrivenCullingPass::Submit(const SceneGpuDrivenCul
     stats.gpuDrivenFeatureState = desc.featureState;
     stats.gpuDrivenCounterSource = SceneGpuDrivenCounterSource::GpuDispatchCounters;
     stats.gpuCullingDispatchCount = 3U;
-    stats.gpuDrivenInputInstanceCount = desc.batch.instanceCount;
     stats.gpuDrivenBufferCapacity = desc.batch.capacity;
     stats.gpuDrivenUploadBytes = desc.batch.uploadBytes;
     return stats;

@@ -202,6 +202,40 @@ void RunWorkerPoolRunBatchesStaticStridedVisitsOnceTest() {
     kb::tests::Require(rows.load(std::memory_order_acquire) == batches.size() * 5U, "ECS static batch dispatch did not process every row");
 }
 
+void RunWorkerPoolModuloPreferredStaticDispatchTest() {
+    kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{ .workerCount = 4, .collectDispatchTelemetry = true } };
+    std::vector<kb::ecs::WorkerPoolBatch> batches(64U);
+    std::vector<kb::ecs::WorkerPoolChunk> chunks(64U);
+    std::vector<std::atomic<std::size_t>> batchVisits(64U);
+    std::vector<std::atomic<std::size_t>> chunkVisits(64U);
+    for (std::size_t index = 0; index < batches.size(); ++index) {
+        batches[index] = kb::ecs::WorkerPoolBatch{ .index = index, .begin = index, .count = 1U, .preferredWorkerIndex = index % 4U };
+        chunks[index] = kb::ecs::WorkerPoolChunk{ .index = index, .begin = index, .count = 1U, .preferredWorkerIndex = index % 4U };
+    }
+
+    pool.RunBatches(batches, [&batchVisits](kb::ecs::WorkerContext context, const kb::ecs::WorkerPoolBatch& batch) {
+        kb::tests::Require(context.workerIndex == batch.preferredWorkerIndex,
+            "ECS modulo preferred batch ran on a different worker");
+        batchVisits[batch.index].fetch_add(1U, std::memory_order_relaxed);
+    });
+    kb::tests::Require(pool.DispatchTelemetry().lastMode == kb::ecs::WorkerPoolDispatchMode::BatchesStaticStrided,
+        "ECS modulo preferred batches did not use static dispatch");
+
+    pool.ParallelForChunks(chunks, [&chunkVisits](kb::ecs::WorkerContext context, const kb::ecs::WorkerPoolChunk& chunk) {
+        kb::tests::Require(context.workerIndex == chunk.preferredWorkerIndex,
+            "ECS modulo preferred chunk ran on a different worker");
+        chunkVisits[chunk.index].fetch_add(1U, std::memory_order_relaxed);
+    });
+    kb::tests::Require(pool.DispatchTelemetry().lastMode == kb::ecs::WorkerPoolDispatchMode::ChunksStaticStrided,
+        "ECS modulo preferred chunks did not use static dispatch");
+    for (std::size_t index = 0; index < batches.size(); ++index) {
+        kb::tests::Require(batchVisits[index].load(std::memory_order_relaxed) == 1U,
+            "ECS modulo preferred batch was not visited exactly once");
+        kb::tests::Require(chunkVisits[index].load(std::memory_order_relaxed) == 1U,
+            "ECS modulo preferred chunk was not visited exactly once");
+    }
+}
+
 void RunWorkerPoolParallelForChunksPartitionsRangeTest() {
     kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{ .workerCount = 2 } };
 
@@ -838,6 +872,7 @@ void RunEcsWorkerPoolTests() {
     RunWorkerPoolStealsPreferredBatchesTest();
     RunWorkerPoolBatchesHonorWorkerCountLimitTest();
     RunWorkerPoolRunBatchesStaticStridedVisitsOnceTest();
+    RunWorkerPoolModuloPreferredStaticDispatchTest();
     RunWorkerPoolParallelForChunksPartitionsRangeTest();
     RunWorkerPoolParallelForChunksPreservesChunkMetadataTest();
     RunWorkerPoolParallelForChunksStaticStridedVisitsOnceTest();

@@ -81,6 +81,7 @@ struct MeshCommandLookupKey {
     std::uint64_t materialHandleValue = 0;
     RenderSkinningPaletteHandle currentSkinningPalette{};
     RenderSkinningPaletteHandle previousSkinningPalette{};
+    bool reversedWinding = false;
 
     [[nodiscard]] friend constexpr bool operator==(MeshCommandLookupKey lhs, MeshCommandLookupKey rhs) noexcept = default;
 };
@@ -89,14 +90,30 @@ struct MeshCommandLookupKeyHash {
     [[nodiscard]] std::size_t operator()(MeshCommandLookupKey key) const noexcept;
 };
 
+struct MeshPipelineMaterialResolution {
+    RenderMaterialHandle handle{};
+    const RenderMaterialResource* resource = nullptr;
+};
+
+struct MeshPipelineTransparentInstanceRef {
+    std::uint32_t commandIndex = 0;
+    std::uint32_t instanceIndex = 0;
+    std::uint32_t gpuDrivenRecordIndex = UINT32_MAX;
+    float viewDepth = 0.0F;
+};
+
 struct MeshPipelineBuildResult {
     std::vector<MeshDrawCommand> commands;
+    std::vector<MeshDrawCommand> transparentSourceCommands;
+    std::vector<MeshPipelineTransparentInstanceRef> transparentInstanceScratch;
     // Transient adapter storage for draw-group input. Cleared before BuildInto returns because batches contain spans.
     std::vector<SceneMeshBatch> meshBatchScratch;
     SceneCachedDrawCommandStore drawCommandCache;
     std::vector<SceneGpuDrivenInputRecord> gpuDrivenInputRecords;
-    std::vector<SceneGpuDrivenInstanceValidationRecord> gpuDrivenCpuValidationRecords;
     std::unordered_map<MeshCommandLookupKey, std::size_t, MeshCommandLookupKeyHash> commandLookupScratch;
+    // Per-build cache for resource resolution shared by every instance using one material.
+    // It is renderer-owned scratch and cleared at the next BuildInto call.
+    std::unordered_map<std::uint64_t, MeshPipelineMaterialResolution> materialResolutionScratch;
     // Renderer-owned frame cache. It holds only the resolved level, never authored
     // component data; caller reuse preserves hysteresis across submissions.
     std::unordered_map<std::uint64_t, std::uint8_t> detailSwitchLevels;

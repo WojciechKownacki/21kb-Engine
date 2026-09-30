@@ -1,4 +1,5 @@
 #include "scene/pipeline/MeshPipelineVisibility.hpp"
+#include "kb/render/SceneDepthPolicy.hpp"
 
 #include "kb/render/scene/TransparentDepthKey.hpp"
 
@@ -16,7 +17,9 @@ namespace {
 
 [[nodiscard]] MeshPipelineFrustumPlane NormalizePlane(MeshPipelineFrustumPlane plane) noexcept {
     const float length = Length3(plane.x, plane.y, plane.z);
-    if (length <= 0.00001F) {
+    // Reverse-Z far planes can have very small, valid normals when near/far
+    // spans a large world. An absolute epsilon silently disables their culling.
+    if (!(length > 0.0F) || !std::isfinite(length)) {
         return {};
     }
     const float invLength = 1.0F / length;
@@ -43,10 +46,10 @@ namespace {
 }
 
 [[nodiscard]] float MaxAxisScale(const std::array<float, 16>& model) noexcept {
-    const float scaleX = Length3(model[0], model[1], model[2]);
-    const float scaleY = Length3(model[4], model[5], model[6]);
-    const float scaleZ = Length3(model[8], model[9], model[10]);
-    return std::max(scaleX, std::max(scaleY, scaleZ));
+    const float scaleXSquared = model[0] * model[0] + model[1] * model[1] + model[2] * model[2];
+    const float scaleYSquared = model[4] * model[4] + model[5] * model[5] + model[6] * model[6];
+    const float scaleZSquared = model[8] * model[8] + model[9] * model[9] + model[10] * model[10];
+    return std::sqrt(std::max(scaleXSquared, std::max(scaleYSquared, scaleZSquared)));
 }
 
 [[nodiscard]] float MinAxisScale(const std::array<float, 16>& model) noexcept {
@@ -69,17 +72,29 @@ namespace {
              view[2] * point[0] + view[6] * point[1] + view[10] * point[2] + view[14] };
 }
 
-[[nodiscard]] float ScreenCoverageEstimate(const SceneRenderCamera* camera, const RenderBoundsSphere& worldBounds) noexcept {
-    if (camera == nullptr || !worldBounds.IsValid()) {
-        return 1.0F;
-    }
-    const float depth = std::max(std::abs(MeshPipelineVisibility::ViewDepth(camera, worldBounds)), worldBounds.radius);
-    return std::clamp(worldBounds.radius / std::max(depth, 0.0001F), 0.0F, 1.0F);
+[[nodiscard]] bool IsOrthographic(const SceneRenderCamera& camera) noexcept {
+    return camera.projection[3] == 0.0F && camera.projection[7] == 0.0F &&
+        camera.projection[11] == 0.0F && camera.projection[15] != 0.0F;
 }
 
 } // namespace
 
+float MeshPipelineVisibility::ScreenCoverage(const SceneRenderCamera* camera, const RenderBoundsSphere& worldBounds) noexcept {
+    if (camera == nullptr || !worldBounds.IsValid()) {
+        return 1.0F;
+    }
+    const bool orthographic = IsOrthographic(*camera);
+    const float depth = std::abs(ViewDepth(camera, worldBounds));
+    if (!orthographic && depth <= worldBounds.radius) return 1.0F;
+    const float divisor = orthographic ? std::abs(camera->projection[15]) : depth * std::abs(camera->projection[11]);
+    return std::clamp(worldBounds.radius * std::abs(camera->projection[5]) / std::max(divisor, 0.0001F), 0.0F, 1.0F);
+}
+
 MeshPipelineFrustum MeshPipelineVisibility::BuildFrustum(const SceneRenderCamera* camera) noexcept {
+    return BuildFrustum(camera, SceneDepthPolicy::HomogeneousDepth());
+}
+
+MeshPipelineFrustum MeshPipelineVisibility::BuildFrustum(const SceneRenderCamera* camera, bool homogeneousDepth) noexcept {
     if (camera == nullptr) {
         return {};
     }
@@ -89,6 +104,8 @@ MeshPipelineFrustum MeshPipelineVisibility::BuildFrustum(const SceneRenderCamera
     const std::array<float, 4> row1{ clip[1], clip[5], clip[9], clip[13] };
     const std::array<float, 4> row2{ clip[2], clip[6], clip[10], clip[14] };
     const std::array<float, 4> row3{ clip[3], clip[7], clip[11], clip[15] };
+    // Reverse-Z changes which boundary is far, but not the clip inequalities.
+    const float lower = homogeneousDepth ? 1.0F : 0.0F;
 
     return MeshPipelineFrustum{
         .planes = {
@@ -96,7 +113,7 @@ MeshPipelineFrustum MeshPipelineVisibility::BuildFrustum(const SceneRenderCamera
             NormalizePlane(MeshPipelineFrustumPlane{ row3[0] - row0[0], row3[1] - row0[1], row3[2] - row0[2], row3[3] - row0[3] }),
             NormalizePlane(MeshPipelineFrustumPlane{ row3[0] + row1[0], row3[1] + row1[1], row3[2] + row1[2], row3[3] + row1[3] }),
             NormalizePlane(MeshPipelineFrustumPlane{ row3[0] - row1[0], row3[1] - row1[1], row3[2] - row1[2], row3[3] - row1[3] }),
-            NormalizePlane(MeshPipelineFrustumPlane{ row3[0] + row2[0], row3[1] + row2[1], row3[2] + row2[2], row3[3] + row2[3] }),
+            NormalizePlane(MeshPipelineFrustumPlane{ lower * row3[0] + row2[0], lower * row3[1] + row2[1], lower * row3[2] + row2[2], lower * row3[3] + row2[3] }),
             NormalizePlane(MeshPipelineFrustumPlane{ row3[0] - row2[0], row3[1] - row2[1], row3[2] - row2[2], row3[3] - row2[3] }),
         },
         .valid = true,
@@ -125,6 +142,12 @@ RenderBoundsSphere MeshPipelineVisibility::TransformBounds(const RenderBoundsSph
     const float x = localBounds.center[0];
     const float y = localBounds.center[1];
     const float z = localBounds.center[2];
+    if (x == 0.0F && y == 0.0F && z == 0.0F) {
+        return RenderBoundsSphere{
+            .center = { model[12], model[13], model[14] },
+            .radius = localBounds.radius * MaxAxisScale(model),
+        };
+    }
     return RenderBoundsSphere{
         .center = {
             model[0] * x + model[4] * y + model[8] * z + model[12],
@@ -151,16 +174,26 @@ bool MeshPipelineVisibility::IsOccludedByVisibilityBlockers(
     const std::array<float, 3> candidateView = ViewPoint(*camera, bounds.center);
     const float candidateDepth = std::abs(candidateView[2]);
     if (candidateDepth <= bounds.radius || candidateDepth <= 0.0001F) return false;
+    const bool orthographic = IsOrthographic(*camera);
     const float candidateAngularRadius = bounds.radius / candidateDepth;
     for (const SceneRenderVisibilityBlocker& blocker : blockers) {
         const float smallestSize = std::min(blocker.size[0], std::min(blocker.size[1], blocker.size[2]));
         const float radius = 0.5F * smallestSize * MinAxisScale(blocker.model);
         if (!(radius > 0.0F) || !std::isfinite(radius)) continue;
         const std::array<float, 3> blockerView = ViewPoint(*camera, TransformPoint(blocker.model, blocker.localCenter));
+        if (std::signbit(blockerView[2]) != std::signbit(candidateView[2])) continue;
         const float blockerDepth = std::abs(blockerView[2]);
         // The inscribed sphere is entirely within the authored box. Rejection
         // therefore remains conservative even under a simplified proxy.
         if (blockerDepth <= radius || candidateDepth <= blockerDepth + bounds.radius) continue;
+        if (orthographic) {
+            const float margin = radius - bounds.radius;
+            const float dx = candidateView[0] - blockerView[0];
+            const float dy = candidateView[1] - blockerView[1];
+            if (margin > 0.0F && candidateDepth > blockerDepth + radius + bounds.radius &&
+                dx * dx + dy * dy <= margin * margin) return true;
+            continue;
+        }
         const float blockerAngularRadius = radius / (blockerDepth + radius);
         const float dx = candidateView[0] / candidateDepth - blockerView[0] / blockerDepth;
         const float dy = candidateView[1] / candidateDepth - blockerView[1] / blockerDepth;
@@ -177,13 +210,13 @@ std::uint8_t MeshPipelineVisibility::SelectLodLevel(
     const RenderMeshResource* mesh,
     const SceneRenderMeshInstance& instance,
     const SceneRenderCamera* camera) noexcept {
-    if (mesh == nullptr || mesh->lods.empty()) {
+    if (mesh == nullptr || mesh->lods.size() <= 1U) {
         return 0U;
     }
 
     const RenderBoundsSphere worldBounds = TransformBounds(
         instance.boundsOverride.IsValid() ? instance.boundsOverride : mesh->bounds, instance.model);
-    const float coverage = ScreenCoverageEstimate(camera, worldBounds);
+    const float coverage = ScreenCoverage(camera, worldBounds);
     std::uint8_t selected = static_cast<std::uint8_t>(std::min<std::size_t>(mesh->lods.size() - 1U, UINT8_MAX));
     for (std::size_t lodIndex = 0U; lodIndex < mesh->lods.size(); ++lodIndex) {
         const RenderMeshLodDesc& lod = mesh->lods[lodIndex];

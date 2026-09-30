@@ -504,6 +504,54 @@ void AddMarker(
     });
 }
 
+[[nodiscard]] bool WriteMeshSpawnBenchmarkScene(
+    const std::filesystem::path& path,
+    ScriptAgentProjectFilesResult& result) {
+    return WriteAssetOnce(path, result, [](const std::filesystem::path& assetPath) {
+        kb::scene::Scene scene;
+
+        const kb::scene::SceneObject environment = scene.Entities().CreateObject(
+            kb::scene::SceneObjectDesc{ .name = "Environment" });
+        scene.Components().WorldBackdrops().Set(environment.Entity(), kb::scene::WorldBackdropComponent{
+            .mode = kb::scene::WorldBackdropMode::VerticalGradient,
+            .horizonColor = kb::scene::Vec3{ 0.035F, 0.055F, 0.10F },
+            .zenithColor = kb::scene::Vec3{ 0.005F, 0.010F, 0.025F },
+            .gradientExponent = 1.4F,
+        });
+        scene.Components().AmbientRadiances().Set(environment.Entity(), kb::scene::AmbientRadianceComponent{
+            .mode = kb::scene::AmbientRadianceMode::Gradient,
+            .color = kb::scene::Vec3{ 0.10F, 0.14F, 0.22F },
+            .horizonColor = kb::scene::Vec3{ 0.12F, 0.16F, 0.25F },
+            .zenithColor = kb::scene::Vec3{ 0.03F, 0.05F, 0.12F },
+            .intensity = 1.15F,
+        });
+
+        kb::scene::SceneObjectDesc cameraDesc{ .name = "Benchmark Camera" };
+        cameraDesc.transform.localPosition = kb::scene::Vec3{ 0.0F, 85.8528137F, 84.8528137F };
+        cameraDesc.transform.localRotation = kb::scene::Quat{ 0.0F, 0.9238795F, -0.3826834F, 0.0F };
+        const kb::scene::SceneObject camera = scene.Entities().CreateObject(cameraDesc);
+        scene.Components().Cameras().Set(camera.Entity(), kb::scene::CameraComponent{
+            .verticalFovDegrees = 60.0F,
+            .nearClip = 0.05F,
+            .farClip = 1000.0F,
+            .primary = true,
+            .clearColor = kb::scene::Vec3{ 0.005F, 0.010F, 0.025F },
+        });
+
+        kb::scene::SceneObjectDesc lightDesc{ .name = "Key Light" };
+        lightDesc.transform.localRotation = kb::scene::Quat{ -0.3826834F, 0.0F, 0.0F, 0.9238795F };
+        const kb::scene::SceneObject light = scene.Entities().CreateObject(lightDesc);
+        scene.Components().Lights().Set(light.Entity(), kb::scene::LightComponent{
+            .kind = kb::scene::LightKind::Directional,
+            .color = kb::scene::Vec3{ 0.72F, 0.82F, 1.0F },
+            .intensity = 2.4F,
+            .castsShadow = true,
+        });
+
+        return kb::scene::SceneDocumentService::Save(scene, assetPath, "Mesh Spawn Benchmark");
+    });
+}
+
 } // namespace
 
 bool WriteAudioShooterDemoProjectFiles(
@@ -519,7 +567,8 @@ bool WriteAudioShooterDemoProjectFiles(
         || !WriteBytesOnce(demoRoot / "EngineLoop.wav", engineLoopWave, result)
         || !WriteInputAssets(demoRoot, result)
         || !WriteProjectilePrefab(demoRoot / "AudioProjectile.kbprefab", result)
-        || !WriteDemoScene(projectRoot / "Assets" / "Scenes" / "AudioShooterDemo.21kbscene", result)) {
+        || !WriteDemoScene(projectRoot / "Assets" / "Scenes" / "AudioShooterDemo.21kbscene", result)
+        || !WriteMeshSpawnBenchmarkScene(projectRoot / "Assets" / "Scenes" / "MeshSpawnBenchmark.21kbscene", result)) {
         return false;
     }
     return true;

@@ -5,8 +5,12 @@
 #include "rendering/HierarchyPanelToolbarRenderer.hpp"
 #include "rendering/HierarchyRowRenderer.hpp"
 #include "scene/EditorHierarchyMetrics.hpp"
+#include "diagnostics/EditorLagTrace.hpp"
 
 #include <algorithm>
+#include <chrono>
+#include <cstdint>
+#include <string>
 
 namespace kb::editor {
 namespace {
@@ -37,7 +41,8 @@ constexpr int kHierarchyScrollbarMinThumb = 24;
     const int thumbHeight = std::clamp((trackHeight * viewportHeight) / std::max(1, contentHeight), kHierarchyScrollbarMinThumb, trackHeight);
     const int maxOffset = std::max(1, contentHeight - viewportHeight);
     const int travel = std::max(0, trackHeight - thumbHeight);
-    const int thumbTop = track.top + (travel * std::clamp(offset, 0, maxOffset)) / maxOffset;
+    const int thumbTop = track.top + static_cast<int>(
+        (static_cast<std::int64_t>(travel) * std::clamp(offset, 0, maxOffset)) / maxOffset);
     return RECT{ track.left + 2, thumbTop, track.right - 2, thumbTop + thumbHeight };
 }
 
@@ -58,6 +63,7 @@ void DrawScrollbar(HDC dc, const RECT& listContent, const EditorTheme& theme, co
 } // namespace
 
 void HierarchyPanelRenderer::Paint(HDC dc, const RECT& content, const EditorTheme& theme, const EditorSceneContext& sceneContext) const {
+    const auto paintStart = std::chrono::steady_clock::now();
     const std::vector<EditorHierarchyRow>& rows = sceneContext.HierarchyRows();
 
     GdiDrawing::FillRectColor(dc, content, GdiDrawing::ToColorRef(theme.panel));
@@ -83,6 +89,13 @@ void HierarchyPanelRenderer::Paint(HDC dc, const RECT& content, const EditorThem
         }
     }
     DrawScrollbar(dc, listContent, theme, sceneContext, contentHeight);
+    const double paintMs = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - paintStart).count();
+    if (paintMs >= 4.0) {
+        diagnostics::EditorLagTrace::Slow("hierarchy-paint",
+            diagnostics::EditorLagTrace::NextEventId(), paintMs,
+            "rows=" + std::to_string(rows.size()), 4.0);
+    }
 }
 
 } // namespace kb::editor

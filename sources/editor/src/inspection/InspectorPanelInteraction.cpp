@@ -1,4 +1,5 @@
 #include "inspection/InspectorPanelInteraction.hpp"
+#include "rendering/EditorPanelStyle.hpp"
 #include "inspection/InspectorAudioMixerAssetInteraction.hpp"
 #include "inspection/InspectorSceneAudioInteraction.hpp"
 #include "inspection/TerrainMaterialLayerMenuState.hpp"
@@ -3065,6 +3066,26 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
                     sceneContext.Scene().Components().VisibilityCells().Remove(entity);
                     static_cast<void>(sceneContext.CommitSceneEditTransaction());
                 }
+            } else if (hit.section == InspectorSectionId::RegionShape && sceneContext.Scene().Components().RegionShapes().Has(entity)) {
+                if (sceneContext.BeginSceneEditTransaction("Remove Region Shape")) {
+                    sceneContext.Scene().Components().RegionShapes().Remove(entity);
+                    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+                }
+            } else if (hit.section == InspectorSectionId::GuideCurve && sceneContext.Scene().Components().GuideCurves().Has(entity)) {
+                if (sceneContext.BeginSceneEditTransaction("Remove Guide Curve")) {
+                    sceneContext.Scene().Components().GuideCurves().Remove(entity);
+                    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+                }
+            } else if (hit.section == InspectorSectionId::ContentInstance && sceneContext.Scene().Components().ContentInstances().Has(entity)) {
+                if (sceneContext.BeginSceneEditTransaction("Remove Content Instance")) {
+                    sceneContext.Scene().Components().ContentInstances().Remove(entity);
+                    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+                }
+            } else if (hit.section == InspectorSectionId::StreamFocus && sceneContext.Scene().Components().StreamFocuses().Has(entity)) {
+                if (sceneContext.BeginSceneEditTransaction("Remove Stream Focus")) {
+                    sceneContext.Scene().Components().StreamFocuses().Remove(entity);
+                    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+                }
             } else if (hit.section == InspectorSectionId::RegionPortal && sceneContext.Scene().Components().RegionPortals().Has(entity)) {
                 if (sceneContext.BeginSceneEditTransaction("Remove Region Portal")) {
                     sceneContext.Scene().Components().RegionPortals().Remove(entity);
@@ -3193,6 +3214,32 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
                 (GetKeyState(VK_MENU) & 0x8000) != 0, (GetKeyState(VK_SHIFT) & 0x8000) != 0)) {
             sceneContext.Inspector().ToggleDisclosure(InspectorDisclosureId::UIAnchorPresets);
         }
+        return true;
+    }
+    if (hit.property == InspectorPropertyId::UIDropdownOptionSelect || hit.property == InspectorPropertyId::UIDropdownOptionHandle) {
+        // Clicking an element selects it for removal; pressing its handle also starts dragging it.
+        sceneContext.Inspector().EndTextEdit();
+        sceneContext.Inspector().SetDropdownSelectedOption(hit.index);
+        if (hit.property == InspectorPropertyId::UIDropdownOptionHandle)
+            sceneContext.Inspector().BeginDropdownOptionDrag(hit.index, y);
+        return true;
+    }
+    if (hit.property == InspectorPropertyId::UIDropdownOptionAdd || hit.property == InspectorPropertyId::UIDropdownOptionRemove) {
+        sceneContext.Inspector().EndTextEdit();
+        const auto* dropdown = sceneContext.Scene().Components().UI().TryGet<kb::scene::UIDropdown>(entity);
+        if (dropdown == nullptr) return true;
+        using Edit = EditorSceneContext::UIDropdownOptionEdit;
+        if (hit.property == InspectorPropertyId::UIDropdownOptionAdd) {
+            if (sceneContext.EditUIDropdownOption(entity, Edit::Add, 0U))
+                sceneContext.Inspector().SetDropdownSelectedOption(static_cast<int>(dropdown->optionCount));
+            return true;
+        }
+        // - removes the selected element, or the last one when none is selected.
+        const int selected = sceneContext.Inspector().DropdownSelectedOption();
+        const std::uint32_t index = selected >= 0 && static_cast<std::uint32_t>(selected) < dropdown->optionCount
+            ? static_cast<std::uint32_t>(selected) : dropdown->optionCount - 1U;
+        if (dropdown->optionCount > 0U && sceneContext.EditUIDropdownOption(entity, Edit::Remove, index))
+            sceneContext.Inspector().SetDropdownSelectedOption(-1);
         return true;
     }
     if (hit.property == InspectorPropertyId::UIRectLayoutField) {
@@ -3364,6 +3411,10 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
 }
 
 bool InspectorPanelInteraction::HandlePointerDrag(EditorSceneContext& sceneContext, int x, int y) noexcept {
+    if (sceneContext.Inspector().IsDraggingDropdownOption()) {
+        sceneContext.Inspector().UpdateDropdownOptionDrag(y);
+        return true;
+    }
     if (sceneContext.Inspector().IsDraggingMeshPreview()) {
         sceneContext.Inspector().DragMeshPreview(x, y);
         return true;
@@ -3434,6 +3485,24 @@ bool InspectorPanelInteraction::HandlePointerDrag(EditorSceneContext& sceneConte
 }
 
 bool InspectorPanelInteraction::HandlePointerUp(EditorSceneContext& sceneContext) noexcept {
+    if (sceneContext.Inspector().IsDraggingDropdownOption()) {
+        // Dropping an element moves it by as many elements as the pointer travelled, rounded to the nearest.
+        InspectorPanelState& inspector = sceneContext.Inspector();
+        const int from = inspector.DraggedDropdownOption();
+        const int offset = inspector.DropdownOptionDragOffset();
+        inspector.EndDropdownOptionDrag();
+        const kb::scene::SceneEntity entity = sceneContext.SelectedEntity();
+        const auto* dropdown = sceneContext.Scene().Entities().IsAlive(entity)
+            ? sceneContext.Scene().Components().UI().TryGet<kb::scene::UIDropdown>(entity) : nullptr;
+        if (dropdown == nullptr || dropdown->optionCount == 0U) return true;
+        const int pitch = 2 * (panel_style::kFieldRowHeight + panel_style::kDividerHeight);
+        const int steps = (offset + (offset >= 0 ? pitch / 2 : -pitch / 2)) / pitch;
+        const int to = std::clamp(from + steps, 0, static_cast<int>(dropdown->optionCount) - 1);
+        if (to != from && sceneContext.EditUIDropdownOption(entity, EditorSceneContext::UIDropdownOptionEdit::Move,
+                static_cast<std::uint32_t>(from), static_cast<std::uint32_t>(to)))
+            inspector.SetDropdownSelectedOption(to);
+        return true;
+    }
     if (sceneContext.Inspector().IsDraggingMeshPreview()) {
         sceneContext.Inspector().EndMeshPreviewDrag();
         return true;

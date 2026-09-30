@@ -6,6 +6,8 @@
 #include "kb/render/shadow/ShadowMapResource.hpp"
 #include "renderer/RendererViewConfigurator.hpp"
 
+#include <bx/math.h>
+
 namespace kb::render {
 
 SceneRenderShadowMapBinding RendererShadowSubmitter::Submit(const RendererShadowSubmitDesc& desc) {
@@ -18,6 +20,14 @@ SceneRenderShadowMapBinding RendererShadowSubmitter::Submit(const RendererShadow
     const std::uint32_t cameraCullingMask = desc.sceneDesc.cameraOverride.has_value()
         ? desc.sceneDesc.cameraOverride->cullingMask
         : (sceneCamera != nullptr ? sceneCamera->cullingMask : 0xFFFFFFFFU);
+    std::array<float, 3> cameraPosition{};
+    if (desc.sceneDesc.cameraOverride.has_value()) {
+        std::array<float, 16> inverseView{};
+        bx::mtxInverse(inverseView.data(), desc.sceneDesc.cameraOverride->view.data());
+        cameraPosition = { inverseView[12], inverseView[13], inverseView[14] };
+    } else if (sceneCamera != nullptr) {
+        cameraPosition = sceneCamera->position;
+    }
 
     DirectionalShadowSetup shadowSetup = DirectionalShadowPassPlanner{}.Build(
         desc.renderScene,
@@ -25,7 +35,8 @@ SceneRenderShadowMapBinding RendererShadowSubmitter::Submit(const RendererShadow
         desc.sceneRenderer.ResourceMap(),
         desc.lightingConfig,
         BGFX_INVALID_HANDLE,
-        cameraCullingMask);
+        cameraCullingMask,
+        desc.sceneDesc.cameraOverride.has_value() || sceneCamera != nullptr ? &cameraPosition : nullptr);
     if (!shadowSetup.valid || !desc.shadowMap.Ensure(desc.lightingConfig.shadowMapSize)) {
         return {};
     }

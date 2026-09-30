@@ -8,6 +8,7 @@
 #include "assets/AssetPathUtilities.hpp"
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneState.hpp"
+#include "scene/SceneStreamingService.hpp"
 
 #include <algorithm>
 
@@ -105,39 +106,21 @@ std::uint64_t SceneLoadedContentService::Load(Scene& scene, const std::filesyste
     // signal, not a fabricated success.
     QueueLifecycleEvent(state, "SceneLoading", state.nextLoadedSceneId, loaded.document.name);
     if (!additive) {
-        // LoadIntoScene's ClearSceneRoots destroys every root entity EXCEPT
-        // ones marked persistent (LIB-072) — so every existing record is
-        // now stale and must be dropped, EXCEPT that a persistent entity
-        // that happened to be a previous record's root survives the wipe
-        // while its record does not: it stays alive in the hierarchy, just
-        // no longer addressable via Scene.Find/Unload under its old id.
-        // Documented scope limit, not a crash risk — the entity itself is
-        // never destroyed by this.
-        const std::vector<SceneEntity> rootsBefore = scene.Hierarchy().RootEntities();
-        if (!SceneDocumentService::LoadIntoScene(scene, loaded.document)) {
+        // ClearSceneRoots preserves persistent roots. The document load
+        // attaches its new roots to one owner during prefab creation, so
+        // persistent survivors cannot become part of the new scene record.
+        const SceneDocumentOwnedLoadResult owned = SceneDocumentService::LoadIntoSceneOwned(scene, loaded.document);
+        if (!owned.succeeded) {
             return 0U;
         }
         state.loadedScenes.clear();
         state.activeLoadedSceneId = 0U;
-        // Persistent roots survive ClearSceneRoots, so RootEntities() after
-        // the load can contain BOTH the freshly instantiated document root
-        // and any persistent survivors from before — the survivors were
-        // already present in rootsBefore, so the one genuinely NEW root is
-        // whichever entity in the after-set was not in the before-set.
-        const std::vector<SceneEntity> rootsAfter = scene.Hierarchy().RootEntities();
-        SceneEntity newRoot{};
-        for (const SceneEntity candidate : rootsAfter) {
-            if (std::ranges::find(rootsBefore, candidate) == rootsBefore.end()) {
-                newRoot = candidate;
-                break;
-            }
-        }
         const std::uint64_t id = state.nextLoadedSceneId++;
         state.loadedScenes.push_back(SceneState::LoadedSceneRecord{
             .id = id,
             .name = loaded.document.name,
             .path = path.string(),
-            .root = newRoot,
+            .root = owned.root,
         });
         QueueLifecycleEvent(state, "SceneLoaded", id, loaded.document.name);
         state.activeLoadedSceneId = id;
@@ -194,13 +177,13 @@ bool SceneLoadedContentService::Exists(const Scene& scene, std::uint64_t id) noe
 }
 
 float SceneLoadedContentService::Progress(const Scene& scene, std::uint64_t id) noexcept {
-    return Exists(scene, id) ? 1.0F : 0.0F;
+    return SceneStreamingService::Progress(scene, id);
 }
 
 bool SceneLoadedContentService::SetActive(Scene& scene, std::uint64_t id) noexcept {
     SceneState& state = SceneAccess::State(scene);
     const SceneState::LoadedSceneRecord* record = FindRecord(state, id);
-    if (record == nullptr) {
+    if (record == nullptr || SceneStreamingService::Status(scene, id) != SceneLoadStatus::Ready) {
         return false;
     }
     if (state.activeLoadedSceneId != id) {
@@ -226,6 +209,7 @@ SceneEntity SceneLoadedContentService::ActiveSceneRoot(const Scene& scene) noexc
     if (state.activeLoadedSceneId == 0U) {
         return SceneEntity{};
     }
+    if (SceneStreamingService::Status(scene, state.activeLoadedSceneId) != SceneLoadStatus::Ready) return {};
     for (const SceneState::LoadedSceneRecord& record : state.loadedScenes) {
         if (record.id == state.activeLoadedSceneId) {
             if (!record.root.IsValid() || !scene.Entities().IsAlive(record.root)) {
@@ -251,13 +235,12 @@ std::uint64_t SceneLoadedContentService::OwningScene(const Scene& scene, SceneEn
     if (!entity.IsValid() || !scene.Entities().IsAlive(entity)) {
         return 0U;
     }
-    SceneEntity root = entity;
-    for (SceneEntity parent = scene.Hierarchy().Parent(root); parent.IsValid(); parent = scene.Hierarchy().Parent(root)) {
-        root = parent;
-    }
     const SceneState& state = SceneAccess::State(scene);
-    const auto iterator = std::ranges::find_if(state.loadedScenes, [root](const SceneState::LoadedSceneRecord& record) { return record.root == root; });
-    return iterator == state.loadedScenes.end() ? 0U : iterator->id;
+    for (SceneEntity root = entity; root.IsValid(); root = scene.Hierarchy().Parent(root)) {
+        const auto found = std::ranges::find(state.loadedScenes, root, &SceneState::LoadedSceneRecord::root);
+        if (found != state.loadedScenes.end()) return found->id;
+    }
+    return 0U;
 }
 
 std::vector<SceneLifecycleEventRecord> SceneLoadedContentService::DrainPendingLifecycleEvents(Scene& scene) {

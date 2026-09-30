@@ -20,4 +20,16 @@ std::vector<SceneEntity> SceneHierarchyRootsService::RootEntities(const Scene& s
     return SceneHierarchyCache::Roots(state);
 }
 
+std::size_t SceneHierarchyRootsService::RootCount(const Scene& scene) noexcept {
+    return SceneHierarchyCache::RootCount(SceneAccess::State(scene));
+}
+
+SceneEntity SceneHierarchyRootsService::RootAt(const Scene& scene, std::size_t index) noexcept {
+    return SceneHierarchyCache::RootAt(SceneAccess::State(scene), index);
+}
+
+std::uint64_t SceneHierarchyRootsService::RootAppendEpoch(const Scene& scene) noexcept {
+    return SceneHierarchyCache::RootAppendEpoch(SceneAccess::State(scene));
+}
+
 } // namespace kb::scene

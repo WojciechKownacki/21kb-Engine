@@ -23,12 +23,6 @@ void MixU64(std::uint64_t& seed, std::uint64_t value) noexcept {
     return identity;
 }
 
-[[nodiscard]] std::uint16_t SortDepthBucket(MeshPassType pass, std::uint16_t depthBucket) noexcept {
-    return pass == MeshPassType::BaseTransparent
-        ? static_cast<std::uint16_t>(UINT16_MAX - depthBucket)
-        : depthBucket;
-}
-
 [[nodiscard]] std::uint64_t BuildSortKey(
     MeshPassType pass,
     RenderMaterialHandle material,
@@ -53,7 +47,39 @@ void MixU64(std::uint64_t& seed, std::uint64_t value) noexcept {
             (static_cast<std::uint64_t>(terrainLayerIndex & 0x0FU) << 20U) |
             materialKey;
     }
-    return (passKey << 60U) | (materialKey << 40U) | (meshKey << 20U) | static_cast<std::uint64_t>(SortDepthBucket(pass, depthBucket));
+    if (pass == MeshPassType::BaseTransparent) {
+        return (passKey << 60U) |
+            (static_cast<std::uint64_t>(UINT16_MAX - depthBucket) << 44U) |
+            (materialKey << 24U) | (meshKey << 4U);
+    }
+    return (passKey << 60U) | (materialKey << 40U) | (meshKey << 20U) | depthBucket;
+}
+
+[[nodiscard]] MeshDrawCommand CloneCommandWithoutInstances(const MeshDrawCommand& source) {
+    return MeshDrawCommand{
+        .pass = source.pass,
+        .meshAssetId = source.meshAssetId,
+        .materialAssetId = source.materialAssetId,
+        .sectionIndex = source.sectionIndex,
+        .materialSlot = source.materialSlot,
+        .firstMeshlet = source.firstMeshlet,
+        .meshletCount = source.meshletCount,
+        .indexStart = source.indexStart,
+        .indexCount = source.indexCount,
+        .vertexStart = source.vertexStart,
+        .vertexCount = source.vertexCount,
+        .lodLevel = source.lodLevel,
+        .terrainLayerIndex = source.terrainLayerIndex,
+        .depthBucket = source.depthBucket,
+        .mesh = source.mesh,
+        .material = source.material,
+        .meshResource = source.meshResource,
+        .materialResource = source.materialResource,
+        .state = source.state,
+        .sortKey = source.sortKey,
+        .currentSkinningPalette = source.currentSkinningPalette,
+        .previousSkinningPalette = source.previousSkinningPalette,
+    };
 }
 
 void ResetCommandKeepingInstanceStorage(MeshDrawCommand& command) noexcept {
@@ -93,9 +119,77 @@ MeshDrawCommand& MeshPipelineCommandBuilder::WritableCommand(MeshPipelineBuildRe
     return command;
 }
 
-void MeshPipelineCommandBuilder::FinalizeCommands(MeshPipelineBuildResult& result, MeshPassType pass, std::size_t commandCount) noexcept {
+void MeshPipelineCommandBuilder::FinalizeCommands(MeshPipelineBuildResult& result, MeshPassType pass,
+    std::size_t commandCount, std::uint32_t maxDrawCommands, SceneRenderDiagnostics* diagnostics) noexcept {
     result.commands.resize(commandCount);
+    if (pass == MeshPassType::BaseTransparent) {
+        std::ranges::sort(result.transparentInstanceScratch, [&result](const auto& lhs, const auto& rhs) {
+            if (lhs.viewDepth != rhs.viewDepth) return lhs.viewDepth > rhs.viewDepth;
+            const MeshDrawCommand& left = result.commands[lhs.commandIndex];
+            const MeshDrawCommand& right = result.commands[rhs.commandIndex];
+            const bool leftTerrain = left.terrainLayerIndex != UINT8_MAX;
+            const bool rightTerrain = right.terrainLayerIndex != UINT8_MAX;
+            if (leftTerrain != rightTerrain) return leftTerrain;
+            if (leftTerrain) {
+                if (left.meshAssetId != right.meshAssetId) return left.meshAssetId < right.meshAssetId;
+                if (left.terrainLayerIndex != right.terrainLayerIndex) {
+                    return left.terrainLayerIndex < right.terrainLayerIndex;
+                }
+            }
+            if (lhs.commandIndex != rhs.commandIndex) return lhs.commandIndex < rhs.commandIndex;
+            return lhs.instanceIndex < rhs.instanceIndex;
+        });
+        result.transparentSourceCommands.swap(result.commands);
+        result.commands.clear();
+        std::uint32_t previousSourceIndex = UINT32_MAX;
+        for (const MeshPipelineTransparentInstanceRef& reference : result.transparentInstanceScratch) {
+            const MeshDrawCommand& source = result.transparentSourceCommands[reference.commandIndex];
+            const SceneRenderMeshInstance& instance = source.instances[reference.instanceIndex];
+            const bool startsCommand = result.commands.empty() || previousSourceIndex != reference.commandIndex ||
+                result.commands.back().depthBucket != instance.depthBucket;
+            if (startsCommand && maxDrawCommands != 0U && result.commands.size() >= maxDrawCommands) {
+                ++result.stats.droppedInstanceCount;
+                if (reference.gpuDrivenRecordIndex != UINT32_MAX) {
+                    result.gpuDrivenInputRecords[reference.gpuDrivenRecordIndex].drawCommandIndex = UINT32_MAX;
+                    ++result.stats.gpuDrivenParityCpuDroppedInstanceCount;
+                }
+                if (diagnostics != nullptr) {
+                    diagnostics->events.push_back(SceneRenderDiagnosticEvent{
+                        .severity = SceneRenderDiagnosticSeverity::Warning,
+                        .kind = SceneRenderDiagnosticKind::DroppedInstances,
+                        .entityId = instance.entityId,
+                        .meshAssetId = instance.meshAssetId,
+                        .materialAssetId = instance.materialAssetId,
+                        .instanceCount = 1U,
+                    });
+                }
+                continue;
+            }
+            if (startsCommand) {
+                result.commands.push_back(CloneCommandWithoutInstances(source));
+                result.commands.back().depthBucket = instance.depthBucket;
+                result.commands.back().sortKey = BuildSortKey(pass, source.material, source.materialAssetId,
+                    source.materialResource, source.mesh, source.meshAssetId, instance.depthBucket, source.terrainLayerIndex);
+            }
+            result.commands.back().instances.push_back(instance);
+            previousSourceIndex = reference.commandIndex;
+            if (reference.gpuDrivenRecordIndex != UINT32_MAX) {
+                result.gpuDrivenInputRecords[reference.gpuDrivenRecordIndex].drawCommandIndex =
+                    static_cast<std::uint32_t>(result.commands.size() - 1U);
+            }
+        }
+        for (const MeshDrawCommand& command : result.commands) {
+            result.stats.meshPipelineScratchInstanceCapacity += static_cast<std::uint32_t>(command.instances.capacity());
+            result.stats.visibleMeshCount += static_cast<std::uint32_t>(command.instances.size());
+            ++result.stats.visibleDrawGroupCount;
+        }
+        result.stats.meshPipelineCommandCount = static_cast<std::uint32_t>(result.commands.size());
+        result.stats.meshPipelineCommandCapacity = static_cast<std::uint32_t>(result.commands.capacity());
+        result.stats.meshPipelineSortKeyCount = result.stats.meshPipelineCommandCount;
+        return;
+    }
     for (MeshDrawCommand& command : result.commands) {
+        result.stats.meshPipelineScratchInstanceCapacity += static_cast<std::uint32_t>(command.instances.capacity());
         command.pass = pass;
         command.depthBucket = command.instances.empty()
             ? 0U

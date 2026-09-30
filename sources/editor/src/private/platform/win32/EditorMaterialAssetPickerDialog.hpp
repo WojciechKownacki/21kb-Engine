@@ -3,6 +3,8 @@
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/assets/AssetId.hpp"
 #include "engine/assets/AssetKind.hpp"
+#include "engine/scene/SceneEntity.hpp"
+#include "engine/ui/UIComponentCatalog.hpp"
 #include "kb/editor/theme/EditorTheme.hpp"
 #include "scene/material/EditorTextureAssetMetadataResolver.hpp"
 
@@ -108,6 +110,23 @@ public:
         HWND owner, const EditorTheme& theme, const EditorSceneContext& sceneContext,
         kb::assets::AssetId currentAsset, kb::assets::AssetKind kind,
         const EditorAssetPickerWindowOptions& options = {});
+#endif
+};
+
+// Picks the hierarchy object an entity-valued UI property points at, from the candidates that property
+// accepts, listed by name with their hierarchy path; Clear empties the reference.
+class EditorUIEntityPickerDialog {
+public:
+#if defined(_WIN32)
+    struct Result {
+        bool accepted = false;
+        kb::scene::SceneEntity entity{};
+    };
+
+    [[nodiscard]] static Result Show(
+        HWND owner, const EditorTheme& theme, const EditorSceneContext& sceneContext,
+        kb::scene::SceneEntity source, kb::scene::UIComponentType component, std::string_view property,
+        kb::scene::SceneEntity current, const EditorAssetPickerWindowOptions& options = {});
 #endif
 };
 

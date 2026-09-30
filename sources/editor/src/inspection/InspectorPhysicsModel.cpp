@@ -57,6 +57,8 @@ namespace {
         return "Sphere";
     case kb::scene::ColliderShape::Capsule:
         return "Capsule";
+    case kb::scene::ColliderShape::Mesh:
+        return "Mesh";
     }
     return "Box";
 }
@@ -164,6 +166,7 @@ std::vector<PhysicsField> InspectorPhysicsModel::Fields(const kb::scene::Collide
         FloatField("Friction", c.friction),
         FloatField("Restitution", c.restitution),
         ReadOnlyField("Layer Mask", std::to_string(c.layer)),
+        ReadOnlyField("Collision Mesh Asset", std::to_string(c.meshAssetId)),
     };
 }
 
@@ -214,7 +217,8 @@ bool InspectorPhysicsModel::CycleEnum(kb::scene::ColliderComponent& c, int index
     switch (c.shape) {
     case kb::scene::ColliderShape::Box: c.shape = kb::scene::ColliderShape::Sphere; break;
     case kb::scene::ColliderShape::Sphere: c.shape = kb::scene::ColliderShape::Capsule; break;
-    case kb::scene::ColliderShape::Capsule: c.shape = kb::scene::ColliderShape::Box; break;
+    case kb::scene::ColliderShape::Capsule: c.shape = kb::scene::ColliderShape::Mesh; break;
+    case kb::scene::ColliderShape::Mesh: c.shape = kb::scene::ColliderShape::Box; break;
     }
     return true;
 }

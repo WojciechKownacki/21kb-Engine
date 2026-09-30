@@ -20,11 +20,14 @@ bool GameWindow::Open(
     const std::wstring& title,
     std::uint32_t width,
     std::uint32_t height,
-    kb::input::Win32InputCollector& inputCollector) {
+    bool fullscreen,
+    kb::input::Win32InputCollector& inputCollector,
+    bool visible) {
     if (width == 0U || height == 0U) {
         return false;
     }
     inputCollector_ = &inputCollector;
+    fullscreen_ = fullscreen;
 
     WNDCLASSEXW windowClass{};
     windowClass.cbSize = sizeof(windowClass);
@@ -43,16 +46,31 @@ bool GameWindow::Open(
         .right = static_cast<LONG>(width),
         .bottom = static_cast<LONG>(height),
     };
-    if (AdjustWindowRect(&frame, WS_OVERLAPPEDWINDOW, FALSE) == 0) {
+    DWORD style = WS_OVERLAPPEDWINDOW;
+    DWORD extendedStyle = visible ? 0U : WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
+    int x = CW_USEDEFAULT;
+    int y = CW_USEDEFAULT;
+    if (fullscreen_) {
+        MONITORINFO monitorInfo{ .cbSize = sizeof(MONITORINFO) };
+        const HMONITOR monitor = MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY);
+        if (monitor == nullptr || GetMonitorInfoW(monitor, &monitorInfo) == 0) {
+            return false;
+        }
+        frame = monitorInfo.rcMonitor;
+        style = WS_POPUP;
+        extendedStyle = WS_EX_APPWINDOW | WS_EX_TOPMOST;
+        x = frame.left;
+        y = frame.top;
+    } else if (AdjustWindowRect(&frame, style, FALSE) == 0) {
         return false;
     }
     window_ = CreateWindowExW(
-        0U,
+        extendedStyle,
         kWindowClassName,
         title.c_str(),
-        WS_OVERLAPPEDWINDOW,
-        CW_USEDEFAULT,
-        CW_USEDEFAULT,
+        style,
+        x,
+        y,
         frame.right - frame.left,
         frame.bottom - frame.top,
         nullptr,
@@ -71,13 +89,13 @@ bool GameWindow::Open(
     // launcher that starts the game minimized - lands here with a zero client
     // area, which no renderer can be initialized against. The game asks for its
     // window back rather than refusing to start.
-    ShowWindow(window_, SW_SHOWNORMAL);
+    if (visible) ShowWindow(window_, SW_SHOWNORMAL);
     RECT client{};
     if (GetClientRect(window_, &client) == 0) {
         return false;
     }
     if (client.right <= client.left || client.bottom <= client.top) {
-        ShowWindow(window_, SW_RESTORE);
+        if (visible) ShowWindow(window_, SW_RESTORE);
         if (GetClientRect(window_, &client) == 0) {
             return false;
         }
@@ -89,7 +107,7 @@ bool GameWindow::Open(
     height_ = static_cast<std::uint32_t>(client.bottom - client.top);
     resizePending_ = true;
 
-    UpdateWindow(window_);
+    if (visible) UpdateWindow(window_);
     return true;
 }
 
@@ -147,6 +165,20 @@ LRESULT CALLBACK GameWindow::WindowProc(
 
     if (self != nullptr) {
         switch (message) {
+        case WM_DISPLAYCHANGE:
+        case WM_DPICHANGED:
+            if (self->fullscreen_) {
+                MONITORINFO monitorInfo{ .cbSize = sizeof(MONITORINFO) };
+                const HMONITOR monitor = MonitorFromWindow(window, MONITOR_DEFAULTTOPRIMARY);
+                if (monitor != nullptr && GetMonitorInfoW(monitor, &monitorInfo) != 0) {
+                    const RECT& bounds = monitorInfo.rcMonitor;
+                    SetWindowPos(window, HWND_TOPMOST, bounds.left, bounds.top,
+                        bounds.right - bounds.left, bounds.bottom - bounds.top,
+                        SWP_NOACTIVATE | SWP_FRAMECHANGED);
+                }
+                return 0;
+            }
+            break;
         case WM_SIZE: {
             const auto width = static_cast<std::uint32_t>(LOWORD(lparam));
             const auto height = static_cast<std::uint32_t>(HIWORD(lparam));

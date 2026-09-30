@@ -712,6 +712,21 @@ ReadScriptValue(
     if (*operation == "assert_ui_graphics") {
         return {state.automation.VerifyUIGraphics(), "Native image picker and GPU pixels for Image, Raw Image and Sprite"};
     }
+    if (*operation == "assert_picker_close_buttons") {
+        return {state.automation.VerifyPickerCloseButtons(), "Asset picker title-bar X closes texture and list pickers"};
+    }
+    if (*operation == "assert_ui_widget_features") {
+        return {state.automation.VerifyUIWidgetFeatures(),
+            "Widget settings: mode-dependent Inspector rows, part pickers, created hierarchies, device safe area"};
+    }
+    if (*operation == "assert_ui_dropdown_options") {
+        return {state.automation.VerifyUIDropdownOptions(),
+            "Dropdown option list: Inspector buttons, add, rename, move, remove, undo/redo, caption, font"};
+    }
+    if (*operation == "assert_ui_navigation_links") {
+        return {state.automation.VerifyUINavigationLinks(),
+            "Selectable navigation links: hierarchy picker, names, clear, invalid and deleted targets, undo"};
+    }
     if (*operation == "assert_ui_catalog") {
         const auto component = StringMember(step, "component", error, false);
         const auto* descriptor = component ? kb::scene::FindUIComponentDescriptor(*component) : nullptr;
@@ -1764,6 +1779,29 @@ ReadScriptValue(
         return { true, *alias + '=' + std::to_string(entity.Id()) };
     }
 
+    if (*operation == "create_ui_object") {
+        // Creates a UI widget the way the Create menu does, including the hierarchy a widget such as a
+        // Dropdown is built from.
+        const auto alias = StringMember(step, "id", error);
+        const auto type = StringMember(step, "type", error);
+        const auto parentAlias = StringMember(step, "parent", error, false);
+        if (!alias || !type) return { false, error };
+        if (state.entities.contains(*alias)) return { false, "entity alias already exists" };
+        const kb::scene::UIComponentDescriptor* descriptor = kb::scene::FindUIComponentDescriptor(*type);
+        if (descriptor == nullptr) return { false, "unknown UI component type" };
+        kb::scene::SceneEntity parent{};
+        if (parentAlias.has_value()) {
+            parent = ResolveEntity(state, *parentAlias);
+            if (!parent.IsValid()) return { false, "parent alias could not be resolved" };
+        }
+        const kb::scene::SceneEntity entity = state.context.CreateUIObject(descriptor->type, parent);
+        if (!entity.IsValid()) return { false, "UI object creation failed" };
+        const std::string name = *alias;
+        state.context.Scene().Entities().SetName(entity, name);
+        state.entities.emplace(*alias, EntityAlias{ .entity = entity, .name = name });
+        return { true, *alias + '=' + std::to_string(entity.Id()) };
+    }
+
     if (*operation == "create_mesh_entity") {
         const auto alias = StringMember(step, "id", error);
         const auto asset = StringMember(step, "asset", error);
@@ -1787,6 +1825,14 @@ ReadScriptValue(
                 .entity = entity,
                 .name = state.context.Scene().Entities().Name(entity) });
         return { true, *alias + '=' + std::to_string(entity.Id()) };
+    }
+
+    if (*operation == "fit_collider_to_mesh") {
+        const auto alias = StringMember(step, "entity", error);
+        if (!alias) return { false, error };
+        const auto entity = ResolveEntity(state, *alias);
+        if (!state.context.Scene().Entities().IsAlive(entity)) return { false, "entity alias is not alive" };
+        return { state.context.FitColliderToMesh(entity), "fit collider to mesh on " + *alias };
     }
 
     if (*operation == "create_particle_effect_entity") {
@@ -2703,7 +2749,9 @@ ReadScriptValue(
         const std::vector<kb::assets::AssetMetadata> before{
             beforeSpan.begin(), beforeSpan.end() };
         bool created = false;
-        if (*type == "lua_script") {
+        if (*type == "script" || *type == "native_script") {
+            created = state.context.CreateNativeScriptAsset(virtualFolder);
+        } else if (*type == "lua_script") {
             created =
                 state.context.CreateLuaScriptAsset(virtualFolder);
         } else if (*type == "input_action") {
@@ -3795,6 +3843,19 @@ ReadScriptValue(
             std::to_string(*index) };
     }
 
+    if (*operation == "configure_runtime_rendering") {
+        const auto width = NumberMember(step, "width", error);
+        const auto height = NumberMember(step, "height", error);
+        const auto gpuDiagnostics = BoolMember(step, "gpu_visibility_diagnostics", error, false);
+        if (step.Find("gpu_visibility_diagnostics") != nullptr && !gpuDiagnostics.has_value()) return {false, error};
+        if (!width || !height || *width < 1.0 || *height < 1.0 || *width > 8192.0 || *height > 8192.0 ||
+            std::floor(*width) != *width || std::floor(*height) != *height) {
+            return {false, "runtime dimensions must be integers in [1, 8192]"};
+        }
+        return {state.automation.ConfigureRuntimeRendering(
+            static_cast<std::uint32_t>(*width), static_cast<std::uint32_t>(*height), gpuDiagnostics.value_or(false)), "production Play viewport"};
+    }
+
     if (*operation == "step") {
         if (state.playMode.IsPaused()) {
             return { false, "runtime step requested while transport is paused" };
@@ -3803,6 +3864,12 @@ ReadScriptValue(
         const auto delta =
             NumberMember(step, "dt", error, false)
                 .value_or(1.0 / 60.0);
+        const auto profile = BoolMember(step, "profile", error, false);
+        if (step.Find("profile") != nullptr && !profile.has_value()) return {false, error};
+        const auto requireShadows = BoolMember(step, "require_shadows", error, false);
+        if (step.Find("require_shadows") != nullptr && !requireShadows.has_value()) return {false, error};
+        const auto gpuProfile = BoolMember(step, "gpu_profile", error, false);
+        if (step.Find("gpu_profile") != nullptr && !gpuProfile.has_value()) return {false, error};
         if (!frames || *frames < 1.0 ||
             std::floor(*frames) != *frames) {
             return { false, "frames must be a positive integer" };
@@ -3810,7 +3877,7 @@ ReadScriptValue(
         return {
             state.automation.StepRuntime(
                 static_cast<std::size_t>(*frames),
-                static_cast<float>(delta)),
+                static_cast<float>(delta), profile.value_or(false), requireShadows.value_or(false), gpuProfile.value_or(false)),
             std::to_string(*frames) + " frame(s)" };
     }
 

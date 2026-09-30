@@ -13,10 +13,12 @@
 #include "engine/visual/VisualGraphRuntimeRegistry.hpp"
 
 #include <cstddef>
+#include <chrono>
 #include <filesystem>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace kb::script {
@@ -54,6 +56,7 @@ struct ScriptRuntimeNativePrepareSettings {
     std::filesystem::path shadowCopyDirectory;
     bool buildPlugins = true;
     bool loadPlugins = true;
+    std::filesystem::path runtimeModuleRoot;
 };
 
 class ScriptRuntimeAssetPreparer final {
@@ -67,6 +70,7 @@ public:
     void SetNativeBackend(NativeScriptBackend& nativeBackend) noexcept;
     void SetNativePluginManager(NativeScriptPluginManager& pluginManager) noexcept;
     void SetNativeSettings(ScriptRuntimeNativePrepareSettings settings);
+    void InvalidateNativeSourceObservations() noexcept;
 
     [[nodiscard]] ScriptRuntimeAssetPrepareResult PrepareAsset(kb::assets::AssetId assetId);
     [[nodiscard]] ScriptRuntimeAssetPrepareResult PrepareBehaviour(const kb::scene::BehaviourComponent& behaviour);
@@ -102,6 +106,13 @@ private:
     ScriptRuntimeVisualGraphPrepareSettings visualGraphSettings_{};
     ScriptRuntimeNativePrepareSettings nativeSettings_{};
     std::unordered_map<std::uint64_t, std::uint64_t> preparedNativeAssetHashes_;
+    struct NativeSourceObservation {
+        std::uint64_t descriptorHash = 0;
+        std::uint64_t signature = 0;
+        std::chrono::steady_clock::time_point nextCheck{};
+    };
+    std::unordered_map<std::uint64_t, NativeSourceObservation> nativeSourceObservations_;
+    std::unordered_map<std::uint64_t, std::pair<std::uint64_t, std::string>> failedNativeAssetBuilds_;
     std::unordered_map<std::uint64_t, std::uint64_t> preparedVisualGraphAssetHashes_;
 };
 

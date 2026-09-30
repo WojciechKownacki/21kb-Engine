@@ -9,6 +9,8 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <functional>
+#include <iterator>
 #include <memory>
 #include <span>
 #include <stdexcept>
@@ -31,6 +33,34 @@ template <typename T>
     return std::vector<std::size_t>{ componentSizes.begin(), componentSizes.end() };
 }
 
+template <typename T>
+void HashValues(std::size_t& hash, std::span<const T> values) noexcept {
+    auto combine = [&hash](std::size_t value) {
+        hash ^= value + static_cast<std::size_t>(0x9E3779B97F4A7C15ULL) + (hash << 6U) + (hash >> 2U);
+    };
+    combine(values.size());
+    for (T value : values) {
+        combine(std::hash<T>{}(value));
+    }
+}
+
+[[nodiscard]] std::size_t QueryPlanHash(
+    std::span<const ComponentId> componentIds,
+    std::span<const std::size_t> componentSizes,
+    std::span<const ComponentId> requiredComponentIds,
+    std::span<const ComponentId> optionalComponentIds,
+    std::span<const ComponentId> excludedComponentIds,
+    std::span<const ComponentId> changedComponentIds) noexcept {
+    std::size_t hash = 0;
+    HashValues(hash, componentIds);
+    HashValues(hash, componentSizes);
+    HashValues(hash, requiredComponentIds);
+    HashValues(hash, optionalComponentIds);
+    HashValues(hash, excludedComponentIds);
+    HashValues(hash, changedComponentIds);
+    return hash;
+}
+
 [[nodiscard]] std::uint64_t ElapsedNanoseconds(std::chrono::steady_clock::time_point startedAt) noexcept {
     std::uint64_t elapsedNanoseconds = static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - startedAt).count());
@@ -51,7 +81,7 @@ QueryState* World::CreateQueryState(
         return nullptr;
     }
 
-    ++telemetryCounters_.queryPlanRequests;
+    ++telemetryState_->counters.queryPlanRequests;
     const std::span<const ComponentId> selectedComponentIds{ componentIds, componentCount };
     const std::span<const std::size_t> selectedComponentSizes{ componentSizes, componentCount };
     const auto lookupStartedAt = std::chrono::steady_clock::now();
@@ -62,8 +92,8 @@ QueryState* World::CreateQueryState(
             optionalComponentIds,
             excludedComponentIds,
             changedComponentIds)) {
-        telemetryCounters_.queryPlanCacheLookupElapsedNanoseconds += ElapsedNanoseconds(lookupStartedAt);
-        ++telemetryCounters_.queryCacheHits;
+        telemetryState_->counters.queryPlanCacheLookupElapsedNanoseconds += ElapsedNanoseconds(lookupStartedAt);
+        ++telemetryState_->counters.queryCacheHits;
         return new QueryState{
             nativeStorage_.get(),
             std::move(cachedPlan),
@@ -71,13 +101,14 @@ QueryState* World::CreateQueryState(
             config_.queryPrefetchDistance,
             mutableComponentBorrowLocks_.get(),
             structuralChangeValidator_.get(),
-            &telemetryCounters_,
+            &telemetryState_->counters,
+            &telemetryState_->mutex,
         };
     }
 
-    telemetryCounters_.queryPlanCacheLookupElapsedNanoseconds += ElapsedNanoseconds(lookupStartedAt);
-    ++telemetryCounters_.queryCacheMisses;
-    ++telemetryCounters_.queryPlanBuilds;
+    telemetryState_->counters.queryPlanCacheLookupElapsedNanoseconds += ElapsedNanoseconds(lookupStartedAt);
+    ++telemetryState_->counters.queryCacheMisses;
+    ++telemetryState_->counters.queryPlanBuilds;
     const auto buildStartedAt = std::chrono::steady_clock::now();
     auto plan = std::make_shared<QueryPlan>(
         selectedComponentIds,
@@ -87,7 +118,7 @@ QueryState* World::CreateQueryState(
         excludedComponentIds,
         changedComponentIds);
     if (!plan->IsValid()) {
-        telemetryCounters_.queryPlanBuildElapsedNanoseconds += ElapsedNanoseconds(buildStartedAt);
+        telemetryState_->counters.queryPlanBuildElapsedNanoseconds += ElapsedNanoseconds(buildStartedAt);
         return nullptr;
     }
 
@@ -99,7 +130,7 @@ QueryState* World::CreateQueryState(
         excludedComponentIds,
         changedComponentIds,
         plan);
-    telemetryCounters_.queryPlanBuildElapsedNanoseconds += ElapsedNanoseconds(buildStartedAt);
+    telemetryState_->counters.queryPlanBuildElapsedNanoseconds += ElapsedNanoseconds(buildStartedAt);
     return new QueryState{
         nativeStorage_.get(),
         std::move(plan),
@@ -107,7 +138,8 @@ QueryState* World::CreateQueryState(
         config_.queryPrefetchDistance,
         mutableComponentBorrowLocks_.get(),
         structuralChangeValidator_.get(),
-        &telemetryCounters_,
+        &telemetryState_->counters,
+        &telemetryState_->mutex,
     };
 }
 
@@ -118,13 +150,19 @@ std::shared_ptr<QueryPlan> World::FindCachedQueryPlan(
     std::span<const ComponentId> optionalComponentIds,
     std::span<const ComponentId> excludedComponentIds,
     std::span<const ComponentId> changedComponentIds) const {
-    for (const QueryPlanCacheEntry& entry : queryPlanCache_) {
+    const std::size_t hash = QueryPlanHash(
+        componentIds, componentSizes, requiredComponentIds, optionalComponentIds, excludedComponentIds, changedComponentIds);
+    const auto [first, last] = queryPlanIndex_.equal_range(hash);
+    for (auto indexed = first; indexed != last; ++indexed) {
+        QueryPlanCache::iterator cached = indexed->second;
+        const QueryPlanCacheEntry& entry = *cached;
         if (SpanEquals(componentIds, entry.componentIds)
             && SpanEquals(componentSizes, entry.componentSizes)
             && SpanEquals(requiredComponentIds, entry.requiredComponentIds)
             && SpanEquals(optionalComponentIds, entry.optionalComponentIds)
             && SpanEquals(excludedComponentIds, entry.excludedComponentIds)
             && SpanEquals(changedComponentIds, entry.changedComponentIds)) {
+            queryPlanCache_.splice(queryPlanCache_.end(), queryPlanCache_, cached);
             return entry.plan;
         }
     }
@@ -142,7 +180,10 @@ void World::StoreCachedQueryPlan(
     if (!plan) {
         return;
     }
+    const std::size_t hash = QueryPlanHash(
+        componentIds, componentSizes, requiredComponentIds, optionalComponentIds, excludedComponentIds, changedComponentIds);
     queryPlanCache_.push_back(QueryPlanCacheEntry{
+        .hash = hash,
         .componentIds = CopyComponentIds(componentIds),
         .componentSizes = CopyComponentSizes(componentSizes),
         .requiredComponentIds = CopyComponentIds(requiredComponentIds),
@@ -151,12 +192,42 @@ void World::StoreCachedQueryPlan(
         .changedComponentIds = CopyComponentIds(changedComponentIds),
         .plan = std::move(plan),
     });
+    const QueryPlanCache::iterator added = std::prev(queryPlanCache_.end());
+    try {
+        queryPlanIndex_.emplace(hash, added);
+    } catch (...) {
+        queryPlanCache_.pop_back();
+        throw;
+    }
+
+    constexpr std::size_t kDefaultQueryPlanCacheCapacity = 1024U;
+    const std::size_t capacity = std::max(kDefaultQueryPlanCacheCapacity, config_.reserveQueryCache);
+    if (queryPlanCache_.size() > capacity) {
+        EraseCachedQueryPlan(queryPlanCache_.begin());
+    }
 }
 
 void World::ReleaseUnusedQueryPlans() {
-    std::erase_if(queryPlanCache_, [](const QueryPlanCacheEntry& entry) {
-        return entry.plan.use_count() == 1L;
-    });
+    for (auto entry = queryPlanCache_.begin(); entry != queryPlanCache_.end();) {
+        if (entry->plan.use_count() == 1L) {
+            const auto next = std::next(entry);
+            EraseCachedQueryPlan(entry);
+            entry = next;
+        } else {
+            ++entry;
+        }
+    }
+}
+
+void World::EraseCachedQueryPlan(QueryPlanCache::iterator entry) const noexcept {
+    const auto [first, last] = queryPlanIndex_.equal_range(entry->hash);
+    for (auto indexed = first; indexed != last; ++indexed) {
+        if (indexed->second == entry) {
+            queryPlanIndex_.erase(indexed);
+            break;
+        }
+    }
+    queryPlanCache_.erase(entry);
 }
 
 ecs_table_t* World::EntityArchetype(Entity entity) const noexcept {
@@ -168,8 +239,8 @@ ecs_table_t* World::EntityArchetype(Entity entity) const noexcept {
 
 void World::InvalidateQueryPlansForArchetypeChange(ecs_table_t* previousArchetype, ecs_table_t* currentArchetype) noexcept {
     if (previousArchetype != currentArchetype || (previousArchetype == nullptr && currentArchetype == nullptr)) {
-        ++telemetryCounters_.archetypeTransitionInvalidationsSinceReset;
-        ++telemetryCounters_.totalArchetypeTransitionInvalidations;
+        ++telemetryState_->counters.archetypeTransitionInvalidationsSinceReset;
+        ++telemetryState_->counters.totalArchetypeTransitionInvalidations;
         RecordStructuralChange();
     }
 }
@@ -200,8 +271,8 @@ StructuralChangeValidator::Guard World::EnterIteration() const noexcept {
 }
 
 void World::RecordStructuralChange(std::size_t count) const noexcept {
-    telemetryCounters_.structuralChangesSinceReset += count;
-    telemetryCounters_.totalStructuralChanges += count;
+    telemetryState_->counters.structuralChangesSinceReset += count;
+    telemetryState_->counters.totalStructuralChanges += count;
 }
 
 } // namespace kb::ecs

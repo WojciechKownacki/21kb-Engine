@@ -53,6 +53,7 @@ std::vector<EditorAssetContextMenuItem> EditorAssetBrowserContextMenuState::Item
             items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Import, .label = "Import..." });
             items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewFolder, .label = "New Folder", .separatorAfter = true });
         }
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewNativeScript, .label = "New Script (C++)" });
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewLuaScript, .label = "New Lua Script" });
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewMaterial, .label = "New Material" });
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewMaterialFunction, .label = "New Material Function" });
@@ -68,6 +69,7 @@ std::vector<EditorAssetContextMenuItem> EditorAssetBrowserContextMenuState::Item
     case EditorAssetContextTargetKind::Background:
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Import, .label = "Import..." });
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewFolder, .label = "New Folder", .separatorAfter = true });
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewNativeScript, .label = "New Script (C++)" });
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewLuaScript, .label = "New Lua Script" });
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewMaterial, .label = "New Material" });
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewMaterialFunction, .label = "New Material Function" });

@@ -78,6 +78,7 @@ class IParticleSimulationBackend;
 namespace kb::scene {
 
 class IPhysicsBackend;
+struct SceneTransformRootQueryCache;
 
 struct AnimatorRuntimeState {
     struct Motion {
@@ -218,6 +219,7 @@ struct TimelineRuntimeRecord {
 // The ECS component remains the sole source of placement, source and lifetime
 // policy; root/loadedSceneId are disposable runtime handles.
 struct ContentInstanceRuntimeRecord {
+    bool streamed = false;
     SceneEntity owner{};
     std::uint64_t assetId = 0U;
     ContentInstanceKind kind = ContentInstanceKind::Prefab;
@@ -257,6 +259,7 @@ public:
     SceneState& operator=(SceneState&&) = delete;
 
     kb::ecs::World world;
+    std::unique_ptr<struct SceneStreamingState> streaming;
     SceneComponentRegistry components;
     SceneComponentStorage componentStorage;
     // Single source of truth for authorable/runtime tag definitions. Entity
@@ -309,6 +312,10 @@ public:
     float fixedStepAccumulatorSeconds = 0.0F;
     float fixedInterpolationAlpha = 0.0F;
     std::size_t lastFixedStepCount = 0U;
+    std::uint64_t lastRuntimeUpdateNanoseconds = 0U;
+    std::uint64_t lastRuntimeTransformSyncNanoseconds = 0U;
+    std::uint64_t lastRuntimeFixedCaptureStartNanoseconds = 0U;
+    std::uint64_t lastRuntimeFixedCaptureEndNanoseconds = 0U;
     // LIB-065: monotonic counters, never reset (unlike lastFixedStepCount,
     // which is a per-frame count reset at the top of every Update()).
     // frameIndex counts Update() calls; fixedStepIndex counts individual
@@ -341,6 +348,9 @@ public:
     kb::core::ReadSnapshotPublisher<SceneRuntimeReadSnapshot> runtimeSnapshots;
     std::uint64_t animatorDebugSnapshotRevision = 0U;
     kb::core::ReadSnapshotPublisher<AnimatorDebugSnapshot> animatorDebugSnapshots;
+    std::unordered_map<std::uint64_t, kb::assets::AssetCompatibilityReport> animatorCompatibilityReports;
+    std::uint64_t animatorCompatibilityRegistryGeneration = 0U;
+    std::uint64_t animatorCompatibilityManagerRevision = 0U;
     // At most one asynchronous debug snapshot build is in flight per scene.
     // The job owns a capture of scalar animator state and reads only frozen
     // pose buffers; every animator-state mutation entry point (Attach,
@@ -433,11 +443,20 @@ public:
     std::uint64_t nextMaterialInstanceId = 1U;
     std::shared_ptr<const MaterialParameterSchemaValidator> materialParameterSchemaValidator;
     struct FixedTransformSample {
+        SceneEntity entity;
+        std::size_t valueIndex = 0U;
+    };
+    struct FixedTransformValues {
         TransformComponent previous;
         TransformComponent current;
+        bool touched = false;
     };
-    std::unordered_map<SceneEntity::IdType, FixedTransformSample> fixedTransformSamples;
-    std::unordered_map<SceneEntity::IdType, TransformComponent> fixedTransformStepStart;
+    std::vector<FixedTransformSample> fixedTransformSamples;
+    std::vector<FixedTransformValues> fixedTransformValues;
+    std::vector<std::size_t> fixedTransformTouched;
+    std::uint64_t fixedTransformTopologyVersion = 0U;
+    std::uint64_t fixedTransformRootAppendEpoch = 0U;
+    bool fixedTransformCapturing = false;
     std::vector<std::string> denseEntityNames;
     std::unordered_map<SceneEntity::IdType, std::string> entityNames;
     // Per-instance overrides of behaviours' exposed ("@expose") script variables,
@@ -516,9 +535,13 @@ public:
     std::vector<std::size_t> prefabHierarchyChildrenPerNodeScratch;
     std::vector<std::vector<SceneEntity>> transformTopologicalBatches;
     std::uint64_t hierarchyTopologyVersion = 1;
+    std::uint64_t hierarchyRootAppendEpoch = 1U;
     std::uint64_t nextAnimatorRuntimeBindingGeneration = 1U;
     std::uint64_t transformTopologicalBatchesVersion = 0;
+    std::uint64_t transformTopologicalBatchesRootAppendEpoch = 0U;
+    std::size_t transformTopologicalBatchesRootCount = 0U;
     std::uint64_t transformTopologicalBatchBuildCount = 0;
+    std::unique_ptr<SceneTransformRootQueryCache> transformRootQueryCache;
     std::uint64_t transformPropagationCursorVersion = 0;
     std::size_t transformPropagationCursorLevel = 0U;
     std::size_t transformPropagationCursorOffset = 0U;
@@ -721,9 +744,49 @@ public:
     kb::math::Vec2 uiScrollVelocity{};
     kb::math::Vec2 uiViewportSize{};
     std::size_t uiTextCursorByteOffset = 0U;
+    // The dropdown list that is open or fading out: the dropdown it belongs to, the cloned list, the
+    // full-screen blocker under it, one cloned item per option in option order, and its fade.
+    struct UIDropdownList {
+        SceneEntity dropdown{};
+        SceneEntity list{};
+        SceneEntity blocker{};
+        std::vector<SceneEntity> items;
+        float alpha = 0.0F;
+        bool closing = false;
+    };
+    std::optional<UIDropdownList> uiDropdownList;
+    // A widget to focus once the next frame has laid it out.
+    SceneEntity uiPendingFocus{};
+    // The navigation direction being held and the time left until it repeats. A pad or arrow key
+    // held on a long list keeps stepping instead of moving exactly once per press.
+    kb::math::Vec2 uiNavigationHeldDirection{};
+    float uiNavigationRepeatSeconds = 0.0F;
     // Caret blink phase in seconds for the focused input field, reset on every edit so typing
     // never hides the caret mid-stroke.
     float uiTextCaretPhase = 0.0F;
+    UIEdges uiSafeAreaInsets{};
+    // Focus, held direction and repeat timer of players 1-3, each confined to their own canvases.
+    struct UIPlayerFocus {
+        SceneEntity focused{};
+        SceneUIPlayerNavigation previous{};
+        kb::math::Vec2 heldDirection{};
+        float repeatSeconds = 0.0F;
+    };
+    std::array<UIPlayerFocus, 3U> uiPlayers{};
+    // How far each Canvas Group with a show/hide animation is shown, 0-1, by entity id. A group without an
+    // entry sits where its `visible` flag puts it.
+    std::unordered_map<std::uint64_t, float> uiGroupShown;
+    // The hovered widget's rest time, and the tooltip it shows once that passes the delay.
+    float uiHoverSeconds = 0.0F;
+    kb::math::Vec2 uiTooltipPointer{};
+    // A press on a draggable widget, and whether it has moved far enough to be a drag.
+    SceneEntity uiDragged{};
+    kb::math::Vec2 uiDragOrigin{};
+    bool uiDragging = false;
+    // The scroll view being eased onto a child after a drag or flick settled.
+    SceneEntity uiSnappingScrollView{};
+    // Published image opacity by image asset id, for alpha hit tests.
+    std::unordered_map<std::uint64_t, std::shared_ptr<const SceneUIImageAlpha>> uiImageAlpha;
     // LIB-144: the renderer-published per-entity visibility/bounds feedback frame
     // (Renderer.IsVisible/GetBounds/TestFrustum's backing state) - written by
     // kb::render::Renderer at every SubmitScene through SceneRenderFeedback::Publish

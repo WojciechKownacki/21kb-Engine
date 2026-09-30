@@ -247,11 +247,17 @@ bool IntersectRayCollider(
         }
         outNormal = Rotate(transform.worldRotation, outNormal);
         return true;
+    case ColliderShape::Mesh:
+        return false;
     }
     return false;
 }
 
 void RaycastAllNonAlloc(Scene& scene, Vec3 origin, Vec3 direction, float maxDistance, std::uint32_t layerMask, kb::library::ArrayNonAlloc<PhysicsCastResult>& results) {
+    if (PhysicsBackend::HasBackend(scene)) {
+        PhysicsBackend::RaycastAll(scene, origin, direction, maxDistance, layerMask, results);
+        return;
+    }
     results.Clear();
     if (!std::isfinite(origin.x) || !std::isfinite(origin.y) || !std::isfinite(origin.z) ||
         !std::isfinite(direction.x) || !std::isfinite(direction.y) || !std::isfinite(direction.z) ||
