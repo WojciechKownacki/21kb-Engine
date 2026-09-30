@@ -37,6 +37,15 @@ Surowe pliki przed:
 Surowe pliki po:
   E:\21kbProjekty\OpenWorldProduction_20260930\Results
 
+Pamięć procesu w próbkach CPU (Working Set / private MB):
+  static_100k: 816.0 / 816.2
+  physics_idle_world_100k: 844.3 / 871.6
+  physics_4096: 376.5 / 403.8
+  dense_4096: 410.1 / 443.4
+  batch_dirty_100k: 823.4 / 824.8
+To pamięć całego procesu z utrzymanym dokumentem fixture, instancją prefab,
+metadanymi, cache i backendem; nie jest miarą bajtów na encję native ECS ani VRAM.
+
 Wykonane poprawki:
 - SceneUIGroupTransitions: query wyłącznie UICanvasGroup, bez pełnego spaceru
   po hierarchii świata. Istniejący uiGroupShown pozostaje jedynym stanem animacji.
