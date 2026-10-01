@@ -317,6 +317,8 @@ add_library(kb_renderer STATIC
     src/scene/pipeline/MeshPipelineVisibility.hpp
     src/scene/pass/MeshPassProcessor.cpp
     src/scene/pass/MeshPassProcessor.hpp
+    src/scene/submit/SceneMeshInstanceBufferPool.cpp
+    src/scene/submit/SceneMeshInstanceBufferPool.hpp
     src/scene/submit/SceneMeshDrawCommandSubmitter.cpp
     src/scene/submit/SceneMeshDrawCommandSubmitter.hpp
     src/scene/submit/SceneMeshMaterialBindingResolver.cpp

@@ -206,6 +206,11 @@ struct SceneRenderDrawGroup {
     bool hasMorphDeformation = false;
     std::vector<SceneRenderMeshInstance> instances;
     std::vector<SceneMeshVisibilityCluster> visibilityClusters;
+    // Renderer-derived partition and validity. Authored data remains in the proxies.
+    std::uint64_t cacheId = 0U;
+    std::uint64_t contentRevision = 0U;
+    std::uint64_t partitionOwner = 0U;
+    std::uint8_t partitionKind = 0U;
 };
 
 struct SceneRenderLight {

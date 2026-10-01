@@ -3,6 +3,7 @@
 namespace kb::render {
 
 void SceneCachedDrawCommandMaterializer::ApplyTemplate(const SceneCachedDrawCommand& cachedCommand, MeshDrawCommand& outCommand) noexcept {
+    outCommand.cachedTemplateKey = cachedCommand.key;
     outCommand.pass = cachedCommand.key.pass;
     outCommand.meshAssetId = cachedCommand.key.meshAssetId;
     outCommand.materialAssetId = cachedCommand.key.materialAssetId;

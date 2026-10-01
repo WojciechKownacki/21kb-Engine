@@ -1,4 +1,5 @@
 #include "scene/pass/MeshPassProcessor.hpp"
+#include "scene/cache/SceneMeshBatchCommandCache.hpp"
 
 #include "kb/render/scene/cache/SceneCachedDrawCommand.hpp"
 #include "scene/cache/SceneCachedDrawCommandMaterializer.hpp"
@@ -196,6 +197,10 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
     std::size_t writeCommandCount = 0U;
     std::uint32_t acceptedInstanceCount = 0U;
     for (const SceneMeshBatch& batch : desc.meshBatches) {
+        SceneMeshBatchCommandCache::BatchScope batchScope(desc.batchCommandCache, result, batch,
+            writeCommandCount, acceptedInstanceCount, desc.diagnostics);
+        if (batchScope.TryReuse()) continue;
+        batchScope.RecycleStorage();
         const bool wholeBatchIsCandidate = cullingMask == 0xFFFFFFFFU && !PassNeedsPerInstanceCandidateFilter(desc.pass);
         const std::uint32_t instanceCount = wholeBatchIsCandidate
             ? static_cast<std::uint32_t>(batch.instances.size())
@@ -253,7 +258,7 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                 continue;
             }
             const std::pair<std::uint32_t, std::uint32_t> meshletRange = MeshPipelineVisibility::MeshletRangeForSection(meshResource, sectionIndex);
-            result.commandLookupScratch.clear();
+            if (desc.batchCommandCache != nullptr) result.commandLookupScratch.clear();
             std::uint32_t culledForSection = 0U;
             std::uint64_t lastMaterialAssetId = 0U;
             MeshPipelineMaterialResolution lastMaterialResolution{};
@@ -348,6 +353,7 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                 }
                 const std::uint16_t depthBucket = MeshPipelineVisibility::DepthBucket(MeshPipelineVisibility::ViewDepth(desc.camera, worldBounds));
                 const MeshCommandLookupKey commandKey{
+                    .meshAssetId = batch.meshAssetId, .sectionIndex = sectionIndex,
                     .materialAssetId = materialAssetId,
                     .materialHandleValue = materialHandle.value,
                     .currentSkinningPalette = instance.currentSkinningPalette,

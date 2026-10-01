@@ -28,6 +28,11 @@ struct SceneMeshCommandReuseKey {
     return stable;
 }
 
+inline void RetainSceneMeshInstanceRevision(MeshDrawCommand& command) noexcept {
+    static std::atomic<std::uint64_t> next{1U};
+    if (command.instanceRevision == 0U) command.instanceRevision = next.fetch_add(1U, std::memory_order_relaxed);
+}
+
 // Owns only validity and telemetry. Instance lists stay in the existing per-pass
 // storage; ECS and resource owners publish revisions when their inputs change.
 class SceneMeshCommandReuseGate {
@@ -47,9 +52,7 @@ public:
             if (command.meshResource == nullptr ||
                 command.currentSkinningPalette.IsValid() || command.previousSkinningPalette.IsValid()) return;
         }
-        static std::atomic<std::uint64_t> next{1U};
-        auto revision = next.fetch_add(commands.size(), std::memory_order_relaxed);
-        for (auto& command : commands) command.instanceRevision = revision++;
+        for (auto& command : commands) RetainSceneMeshInstanceRevision(command);
         stats_ = stats;
         stats_.meshDrawCommandCacheMissCount = 0U;
         stats_.meshDrawCommandCacheHitCount = static_cast<std::uint32_t>(commands.size());

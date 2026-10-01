@@ -948,6 +948,73 @@ void RunRenderSceneBuildsMeshMaterialDrawGroupsTest() {
         "RenderScene marked a draw group without material-slot overrides as dynamic");
 }
 
+void RunRenderScenePageRemovalKeepsGeneratedOwnersTest() {
+    RenderScene scene;
+    MeshRenderProxyDesc mesh{.meshAssetId = 42U, .materialAssetId = 7U};
+    mesh.model = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
+    for (std::uint64_t id = 1U; id <= 3072U; ++id) {
+        mesh.entityId = id; static_cast<void>(scene.UpsertMesh(mesh));
+    }
+    static_cast<void>(scene.UpsertGeometrySwarm(GeometrySwarmRenderProxyDesc{
+        .entityId = 9000U, .meshAssetId = 42U, .materialAssetId = 7U, .model = mesh.model,
+        .instanceCount = 100'000U, .columns = 100U, .rows = 100U, .layers = 10U}));
+    const auto generated = [&]() -> const SceneRenderDrawGroup& {
+        const auto& groups = scene.DrawGroups();
+        const auto found = std::ranges::find_if(groups, [](const auto& group) { return group.partitionKind == 1U; });
+        Require(found != groups.end(), "Generated owner disappeared after native deletion");
+        return *found;
+    };
+    const auto* storage = generated().instances.data();
+    const auto revision = generated().contentRevision;
+    const auto ownerId = generated().cacheId;
+    for (const int change : {0, 1, 2, 3}) {
+        mesh.entityId = 2U;
+        if (change == 0) mesh.visible = false;
+        if (change == 1) mesh.visible = true;
+        if (change == 2) { mesh.meshAssetId = 43U; mesh.materialAssetId = 8U; mesh.morphDeformationEnabled = true; }
+        if (change == 3) { mesh.meshAssetId = 42U; mesh.materialAssetId = 7U; mesh.morphDeformationEnabled = false; }
+        static_cast<void>(scene.UpsertMesh(mesh));
+        Require(generated().instances.data() == storage && generated().contentRevision == revision && generated().cacheId == ownerId,
+            "Native visibility, material or mesh rekey rebuilt an independent generated owner");
+        bool found = false;
+        for (const auto& group : scene.DrawGroups()) if (group.partitionKind == 0U) {
+            for (const auto& instance : group.instances) if (instance.entityId == 2U) {
+                found = true;
+                Require(instance.meshAssetId == mesh.meshAssetId && instance.materialAssetId == mesh.materialAssetId,
+                    "Mesh rekey retained old instance resources");
+            }
+        }
+        Require(found == mesh.visible, "Incremental visibility retained a hidden mesh or lost a visible mesh");
+    }
+    for (std::uint64_t id = 1U; id < 1024U; ++id) Require(scene.RemoveMesh(id), "Native page deletion failed");
+    auto changed = mesh.model; changed[12] = 12.0F;
+    Require(scene.UpdateMeshTransform(2049U, changed), "Compacted native location was invalid");
+    Require(generated().instances.data() == storage && generated().contentRevision == revision && generated().cacheId == ownerId,
+        "Native removal rebuilt unchanged generated instances");
+    std::size_t nativeCount = 0U;
+    for (const auto& group : scene.DrawGroups()) if (group.partitionKind == 0U) {
+        Require(group.instances.size() <= 1024U, "Native instance page exceeded its bound");
+        nativeCount += group.instances.size();
+        for (const auto& instance : group.instances) {
+            Require(instance.entityId >= 1024U, "Compacted page retained deleted entity");
+            if (instance.entityId == 2049U) Require(instance.model == changed, "Compacted proxy updated the wrong instance");
+        }
+    }
+    Require(nativeCount == 2049U, "Page compaction changed native instance count");
+    std::vector<std::uint64_t> keep;
+    for (std::uint64_t id = 1024U; id <= 2048U; ++id) keep.push_back(id);
+    Require(scene.RemoveMeshesNotInSorted(keep) == 1024U, "Bulk prune removed an incorrect native set");
+    Require(generated().instances.data() == storage && generated().contentRevision == revision,
+        "Native bulk pruning rebuilt the generated owner");
+    const auto groupCount = scene.DrawGroups().size();
+    for (std::uint64_t cycle = 1U; cycle <= 100U; ++cycle) {
+        mesh.entityId = (cycle << 32U) | 2U;
+        static_cast<void>(scene.UpsertMesh(mesh));
+        Require(scene.RemoveMesh(mesh.entityId), "Generation-reused native removal failed");
+        Require(scene.DrawGroups().size() == groupCount, "Empty pages leaked across streaming generations");
+    }
+}
+
 void RunRenderSceneBuildsLargeMeshMaterialDrawGroupsTest() {
     RenderScene renderScene;
     constexpr std::uint32_t uniqueGroupCount = 512U;
@@ -3095,7 +3162,9 @@ void RunSceneRenderVisibilityPublisherParallelParityTest() {
         const auto begin = std::chrono::steady_clock::now();
         const auto& groups = renderScene.DrawGroups();
         groupTimesMs[frame] = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count();
-        Require(groups.size() == 1U && groups[0].instances.size() == initialCount + (frame + 1U) * additionsPerFrame,
+        std::size_t instanceCount = 0U;
+        for (const auto& group : groups) instanceCount += group.instances.size();
+        Require(instanceCount == initialCount + (frame + 1U) * additionsPerFrame,
             "RenderScene spawn benchmark lost mesh instances");
     }
     std::sort(groupTimesMs.begin(), groupTimesMs.end());
@@ -3421,6 +3490,7 @@ void RunRenderSceneSyncTests() {
     RunRenderSceneBuildsMeshMaterialDrawGroupsTest();
     RunRenderSceneResourceGroupCoverageTest();
     RunRenderSceneBuildsLargeMeshMaterialDrawGroupsTest();
+    RunRenderScenePageRemovalKeepsGeneratedOwnersTest();
     RunRenderSceneExpandsGeometrySwarmIntoExistingDrawGroupTest();
     RunRenderSceneExpandsSpaceStrokeIntoExistingDrawGroupTest();
     RunEcsSyncBuildsSpaceStrokeFromGuideCurveTest();

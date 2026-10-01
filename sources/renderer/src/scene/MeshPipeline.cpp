@@ -1,4 +1,5 @@
 #include "kb/render/scene/MeshPipeline.hpp"
+#include "scene/cache/SceneMeshBatchCommandCache.hpp"
 
 #include "kb/render/frame/RenderPassKind.hpp"
 #include "kb/render/scene/cache/SceneCachedDrawCommand.hpp"
@@ -77,6 +78,8 @@ std::size_t MeshCommandLookupKeyHash::operator()(MeshCommandLookupKey key) const
     mixed ^= key.previousSkinningPalette.frame + (mixed << 6U) + (mixed >> 2U);
     mixed ^= static_cast<std::uint64_t>(key.previousSkinningPalette.firstMatrix) << 16U;
     mixed ^= key.reversedWinding ? 0x85ebca77c2b2ae63ULL : 0ULL;
+    mixed ^= key.meshAssetId * 0x85ebca77c2b2ae63ULL;
+    mixed ^= static_cast<std::uint64_t>(key.sectionIndex) * 0xc2b2ae3d27d4eb4fULL;
     return static_cast<std::size_t>(mixed);
 }
 
@@ -87,9 +90,11 @@ MeshPipelineBuildResult MeshPipelineProcessor::Build(const MeshPipelineBuildDesc
 }
 
 void MeshPipelineProcessor::BuildInto(const MeshPipelineBuildDesc& desc, MeshPipelineBuildResult& result) noexcept {
-    for (MeshDrawCommand& command : result.commands) {
-        command.instances.clear();
-    }
+    auto* batchCache = desc.pass != MeshPassType::BaseTransparent && desc.selectedEntityIds.empty() &&
+        desc.visibilityBlockers.empty() ? desc.batchCommandCache : nullptr;
+    if (batchCache == nullptr && desc.batchCommandCache != nullptr) desc.batchCommandCache->Reset();
+    if (batchCache != nullptr) batchCache->BeginBuild(desc.pass, result);
+    else for (MeshDrawCommand& command : result.commands) command.instances.clear();
     result.gpuDrivenInputRecords.clear();
     result.transparentInstanceScratch.clear();
     result.commandLookupScratch.clear();
@@ -106,12 +111,14 @@ void MeshPipelineProcessor::BuildInto(const MeshPipelineBuildDesc& desc, MeshPip
             SceneDrawCommandCache::BeginBuild(result.drawCommandCache, desc.pass);
             SceneDrawCommandCache::EndBuild(result.drawCommandCache, desc.pass, result.stats);
         }
+        if (batchCache != nullptr) batchCache->EndBuild(result);
         return;
     }
 
     if (desc.resourceValidation == MeshPipelineResourceValidation::ResolveAndValidate &&
         (desc.resources == nullptr || desc.resourceMap == nullptr)) {
         result.commands.clear();
+        if (batchCache != nullptr) batchCache->EndBuild(result);
         return;
     }
 
@@ -131,10 +138,12 @@ void MeshPipelineProcessor::BuildInto(const MeshPipelineBuildDesc& desc, MeshPip
         .selectedEntityIds = desc.selectedEntityIds,
         .resourceValidation = desc.resourceValidation,
         .terrainLayersOnly = desc.terrainLayersOnly,
+        .batchCommandCache = batchCache,
     }, result);
     SceneDrawCommandCache::EndBuild(result.drawCommandCache, desc.pass, result.stats);
     result.meshBatchScratch.clear();
     MeshPipelineGpuDrivenRecorder::Finalize(result, desc.gpuDrivenSupport, desc.maxDroppedInstances);
+    if (batchCache != nullptr) batchCache->EndBuild(result);
 }
 
 void MeshPipelineProcessor::CountCommandsAsSubmitted(SceneRenderSubmitStats& stats, const std::vector<MeshDrawCommand>& commands) noexcept {

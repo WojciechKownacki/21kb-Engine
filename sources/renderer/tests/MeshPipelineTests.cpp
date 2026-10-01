@@ -14,6 +14,7 @@
 #include "../src/scene/pipeline/MeshPipelineResourceResolver.hpp"
 #include "../src/scene/pipeline/MeshPipelineVisibility.hpp"
 #include "../src/scene/cache/SceneMeshCommandReuseGate.hpp"
+#include "../src/scene/cache/SceneMeshBatchCommandCache.hpp"
 #include "../src/renderer/RendererTemporalJitter.hpp"
 
 #include <array>
@@ -77,6 +78,108 @@ void RunTemporalCullingConservatismTest() {
             }
         }
     }
+}
+
+void RunSceneMeshBatchCommandRetentionTest() {
+    RenderScene scene;
+    MeshRenderProxyDesc proxy{.meshAssetId = 42U, .materialAssetId = 7U, .model = IdentityMatrix()};
+    for (std::uint64_t id = 1U; id <= 3072U; ++id) {
+        proxy.entityId = id;
+        static_cast<void>(scene.UpsertMesh(proxy));
+    }
+    RenderMeshResource mesh{};
+    mesh.indexCount = 3U; mesh.vertexCount = 3U;
+    mesh.bounds = {.radius = 0.25F};
+    RenderMaterialResource material{};
+    SceneMeshBatchCommandCache cache;
+    MeshPipelineBuildResult result;
+    SceneMeshCommandReuseKey key;
+    const auto build = [&](MeshPassType pass = MeshPassType::BaseOpaque, SceneRenderCamera* camera = nullptr) {
+        key.camera = SceneMeshCullingCamera(camera);
+        cache.Prepare(key);
+        MeshPipelineBuildDesc desc{.pass = pass, .drawGroups = &scene.DrawGroups(),
+            .resolvedMeshResource = &mesh, .resolvedMaterialResource = &material,
+            .camera = camera, .maxDrawCommands = key.budget.maxDrawCommands,
+            .maxVisibleInstances = key.budget.maxVisibleInstances,
+            .resourceValidation = MeshPipelineResourceValidation::Skip, .batchCommandCache = &cache};
+        MeshPipelineProcessor::BuildInto(desc, result);
+        SceneMeshBatchCommandCache referenceCache;
+        referenceCache.Prepare(key);
+        desc.batchCommandCache = &referenceCache;
+        const auto reference = MeshPipelineProcessor::Build(desc);
+        Require(result.stats.visibleMeshCount == reference.stats.visibleMeshCount &&
+            result.stats.culledInstanceCount == reference.stats.culledInstanceCount &&
+            result.stats.droppedInstanceCount == reference.stats.droppedInstanceCount,
+            "Batch retention changed culling or instance budgets");
+        std::unordered_map<std::uint64_t, const SceneRenderMeshInstance*> expected;
+        for (const auto& command : reference.commands) for (const auto& instance : command.instances) expected.emplace(instance.entityId, &instance);
+        for (const auto& command : result.commands) {
+            for (const auto& instance : command.instances) {
+                const auto found = expected.find(instance.entityId);
+                Require(found != expected.end(), "Retained command duplicated or invented an instance");
+                const auto& ref = *found->second;
+                Require(instance.model == ref.model && instance.depthBucket == ref.depthBucket &&
+                    instance.worldBounds.center == ref.worldBounds.center && instance.worldBounds.radius == ref.worldBounds.radius,
+                    "Retained command kept obsolete transform, bounds or depth");
+                expected.erase(found);
+            }
+        }
+        Require(expected.empty(), "Retained command lost an instance");
+        std::unordered_map<std::uint64_t, const SceneGpuDrivenInputRecord*> expectedGpu;
+        for (const auto& input : reference.gpuDrivenInputRecords) expectedGpu.emplace(input.entityId, &input);
+        for (const auto& input : result.gpuDrivenInputRecords) {
+            const auto found = expectedGpu.find(input.entityId);
+            Require(found != expectedGpu.end(), "CPU validation retention duplicated or invented an entity");
+            const auto& ref = *found->second;
+            Require(input.worldBounds == ref.worldBounds && input.lodLevel == ref.lodLevel &&
+                input.firstMeshlet == ref.firstMeshlet && input.meshletCount == ref.meshletCount,
+                "CPU validation retention kept obsolete bounds or meshlets");
+            expectedGpu.erase(found);
+        }
+        Require(expectedGpu.empty(), "CPU validation retention lost a record");
+    };
+    build();
+    Require(result.commands.size() == 4U, "Native instance pages were not bounded");
+    std::unordered_map<std::uint64_t, std::pair<std::uint64_t, const SceneRenderMeshInstance*>> identities;
+    for (const auto& command : result.commands) identities.emplace(command.sourceBatchId, std::pair{command.instanceRevision, command.instances.data()});
+    Require(scene.UpdateMeshTransform(2050U, TranslationMatrix(0.3F, 0.0F, 0.0F)), "Dynamic mesh did not update");
+    build();
+    Require(result.stats.meshCommandReuseCount == 3U, "A moving page rebuilt unchanged pages");
+    for (const auto& command : result.commands) {
+        const bool moving = std::ranges::any_of(command.instances, [](const auto& instance) { return instance.entityId == 2050U; });
+        const auto old = identities.at(command.sourceBatchId);
+        Require(moving ? command.instanceRevision != old.first :
+            command.instanceRevision == old.first && command.instances.data() == old.second,
+            "Batch retention did not preserve unchanged GPU identity and owned storage");
+    }
+    Require(scene.RemoveMesh(2U), "Mesh deletion failed"); build();
+    Require(result.stats.meshCommandReuseCount == 3U, "Mesh deletion invalidated unrelated pages");
+    proxy.entityId = 2U; static_cast<void>(scene.UpsertMesh(proxy)); build();
+    Require(result.stats.meshCommandReuseCount == 3U, "Mesh insertion invalidated unrelated pages");
+    ++key.resourceRevision; build(); Require(result.stats.meshCommandReuseCount == 0U, "Resource reload retained old commands");
+    ++key.bindingRevision; build(); Require(result.stats.meshCommandReuseCount == 0U, "Binding reload retained old commands");
+    ++result.detailSwitchHistoryRevision; build(); Require(result.stats.meshCommandReuseCount == 0U, "LOD history retained old commands");
+    key.budget.maxVisibleInstances = 2000U; build(); build();
+    key.budget.maxDrawCommands = 1U; build(); build();
+    key.budget = {};
+    auto camera = PerspectiveCamera();
+    build(MeshPassType::BaseOpaque, &camera); build(MeshPassType::BaseOpaque, &camera);
+    camera.view[12] = 20.0F; build(MeshPassType::BaseOpaque, &camera);
+    Require(result.stats.meshCommandReuseCount == 0U, "Camera movement retained old visibility");
+    camera.cullingMask = 0U; build(MeshPassType::BaseOpaque, &camera);
+    camera.cullingMask = UINT32_MAX; build(MeshPassType::BaseOpaque, &camera);
+    for (const auto pass : {MeshPassType::Depth, MeshPassType::ShadowDepth, MeshPassType::MotionVectors, MeshPassType::GBuffer}) {
+        build(pass); build(pass);
+        Require(result.stats.meshCommandReuseCount == 4U, "Opaque pass did not retain its valid pages");
+    }
+    proxy.entityId = 2050U; proxy.currentSkinningPalette = {.frame = 1U, .matrixCount = 1U};
+    static_cast<void>(scene.UpsertMesh(proxy));
+    build(); build();
+    Require(result.stats.meshCommandReuseCount == 3U, "Skinning prevented retention of independent static pages");
+    mesh.gpuCullingEnabled = true; ++key.resourceRevision;
+    build(); build();
+    Require(result.stats.meshCommandReuseCount == 3U && result.stats.gpuDrivenInputInstanceCount == 3072U,
+        "Batch retention skipped CPU validation records or rebuilt independent pages");
 }
 
 void RunSceneMeshCommandReuseInvalidationTest() {
@@ -2042,6 +2145,7 @@ void RunMeshPipelineTests() {
     }
     RunTemporalCullingConservatismTest();
     RunSceneMeshCommandReuseInvalidationTest();
+    RunSceneMeshBatchCommandRetentionTest();
     // Compare accelerated generated ranges with the original per-instance path.
     // Camera motion, shear, off-centre bounds, growth and mixed owners must not
     // alter accepted ids or pass counters.
@@ -2060,7 +2164,8 @@ void RunMeshPipelineTests() {
         static_cast<void>(scene.UpsertGeometrySwarm(swarm));
         static_cast<void>(scene.UpsertMesh(MeshRenderProxyDesc{.entityId = 2U, .meshAssetId = 7U, .model = TranslationMatrix(0.0F, 0.0F, 10.0F)}));
         auto groups = scene.DrawGroups();
-        Require(!groups[0].visibilityClusters.empty(), "Swarm ranges must retain visibility acceleration");
+        Require(std::ranges::any_of(groups, [](const auto& group) { return !group.visibilityClusters.empty(); }),
+            "Swarm ranges must retain visibility acceleration");
         auto reference = groups;
         for (auto& group : reference) group.visibilityClusters.clear();
         RenderMeshResource mesh{};
