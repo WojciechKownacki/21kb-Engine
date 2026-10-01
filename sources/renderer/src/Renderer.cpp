@@ -547,6 +547,7 @@ bool Renderer::SubmitRuntimeScene(const kb::scene::Scene& scene, const RuntimeSc
         .lightingConfig = defaultSceneLightingConfig_,
         .dirtySceneEntityIds = synchronization.dirtySceneEntityIds,
         .synchronizeScene = synchronization.fullSync,
+        .structuralSync = synchronization.structuralSync,
         .transformAffineSync = !synchronization.fullSync,
     };
     return SubmitScene(scene, desc);
@@ -970,9 +971,8 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
             renderSceneSynchronizer_->SyncEntities(scene, renderScene, desc.dirtySceneEntityIds);
             WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport SyncEntities end");
         }
-        if (desc.structuralSync) {
-            renderProxySynchronizedRevisions_[scene.Id()] = renderProxyUpdateRevision;
-        }
+        // Structural reconciliation preserves existing mesh proxies. Their queued
+        // property/visibility changes still need the incremental update below.
         const auto synchronizedRevision = renderProxySynchronizedRevisions_.find(scene.Id());
         if (!scene.Runtime().RenderProxyUpdateEntities().empty() &&
             (synchronizedRevision == renderProxySynchronizedRevisions_.end() ||

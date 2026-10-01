@@ -116,3 +116,17 @@ Nie twórz dodatkowego źródła stanu, kolejnego cache'u transformów ani flag 
 4. Reporter egzekwuje 16.67 ms dla P99 city fixed, P99 mixed po 120 klatkach
    i średniej/P99 pełnego bulk. Jego FAIL jest otwartą pracą, nie powodem do
    obniżania limitu ani uznania całego celu za ukończony. Zachowaj zimny start.
+
+KONTYNUACJA PO ETAPIE 5 (PRODUCTION_RESULTS_STAGE5_20261001.txt)
+RuntimeSceneFrameSync oddziela pełny start od SyncStructural i bieżących affine.
+Renderer po uzgodnieniu struktury nadal odbiera aktualną kolejkę zmian proxy.
+Nie wracaj do pełnej synchronizacji świata przy publikacji każdej paczki streamingu.
+1. Mixed gameplay P99 <=16.67 ms; baza etapu 5: średnia 3.252934, P99 22.7613.
+   Zachowaj wyższe maksimum 60.6711 i zimny start w próbkach/raporcie.
+2. Bulk total_ms średnia/P99 <=16.67 ms; baza: 16.648590 / 21.5316.
+   Zmierz odczyty istniejących kolumn NativeArchetypeStorage/WorldComponents.
+   Łącz powtarzane sprawdzenia danych bez drugiego indeksu/rejestru komponentów.
+   Zachowaj kontrakt publicznych metod dla brakujących/starych encji, odziedziczone
+   komponenty, odroczenie i każdy OnSet wraz ze zmianami struktury z callbacka.
+3. Nadal obowiązują wszystkie pozostałe wymagania 512 świateł, pełnej roślinności,
+   asynchronicznego przygotowania zasobów i budżetu publikacji. Cel jest aktywny.

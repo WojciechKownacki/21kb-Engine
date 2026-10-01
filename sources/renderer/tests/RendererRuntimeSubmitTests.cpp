@@ -19,6 +19,7 @@
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/ScenePostProcessAccess.hpp"
 #include "engine/scene/SceneRenderFeedback.hpp"
+#include "../../game/src/private/RuntimeSceneFrameSync.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneUI.hpp"
@@ -2771,6 +2772,85 @@ void SubmitLifecycleFrame(Renderer& renderer, const kb::scene::Scene& scene, con
     Require(renderer.BeginFrame(), failure);
     Require(renderer.SubmitScene(scene, desc), failure);
     renderer.EndFrame();
+}
+
+void RunRuntimeStructuralFrameSyncKeepsQueuedChangesTest() {
+    const auto root = std::filesystem::temp_directory_path() / "21kb_runtime_structural_sync";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    LifecycleSceneFixture fixture;
+    PrepareLifecycleScene(fixture, root);
+    auto& scene = fixture.scene;
+    const auto makeMesh = [&] {
+        const auto entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+            .transform = TransformAt(0.0F, 0.0F, 0.0F)});
+        scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{.meshAssetId = fixture.meshAssetId});
+        return entity;
+    };
+    const auto second = makeMesh();
+    const auto camera = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .transform = TransformAt(0.0F, 0.0F, -5.0F)});
+    scene.Components().Cameras().Set(camera, kb::scene::CameraComponent{
+        .projection = kb::scene::CameraProjection::Orthographic, .orthographicHeight = 6.0F, .primary = true});
+    HeadlessSurface surface;
+    DisplayConfig config{};
+    config.allowHeadlessNoop = true;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "Runtime topology test could not initialize headless renderer");
+    kb::game::RuntimeSceneFrameSync sync;
+    const auto submit = [&] {
+        Require(renderer.BeginFrame() && sync.Submit(scene, renderer), "Runtime topology frame did not submit");
+        Require(!renderer.LastSceneSubmitStats().HasMissingResources(), "Runtime topology frame lost a resource");
+        renderer.EndFrame();
+    };
+    sync.BeforeUpdate(scene);
+    static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+    submit();
+    Require(kb::scene::SceneRenderFeedback::IsVisible(scene, fixture.entity) &&
+        kb::scene::SceneRenderFeedback::IsVisible(scene, second), "Runtime topology setup was not visible");
+
+    // Changes before Update must survive its queue reset; a different retained
+    // mesh changes during the same tick as topology publication.
+    scene.Components().Visibility().Set(fixture.entity, kb::scene::VisibilityComponent{.visible = false});
+    const auto arrived = makeMesh();
+    sync.BeforeUpdate(scene);
+    static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+    scene.Components().Visibility().Set(second, kb::scene::VisibilityComponent{.visible = false});
+    submit();
+    Require(!kb::scene::SceneRenderFeedback::IsVisible(scene, fixture.entity) &&
+        !kb::scene::SceneRenderFeedback::IsVisible(scene, second) &&
+        kb::scene::SceneRenderFeedback::IsVisible(scene, arrived),
+        "Structural publication discarded pre-update or current-tick visibility changes");
+
+    // Reconcile removal, a new full-generation ID and a transform without
+    // rebuilding the authored properties of every retained mesh.
+    scene.Entities().Destroy(arrived);
+    const auto replacement = makeMesh();
+    scene.Transforms().Set(fixture.entity, TransformAt(0.25F, 0.0F, 0.0F));
+    scene.Components().Visibility().Set(fixture.entity, kb::scene::VisibilityComponent{.visible = true});
+    sync.BeforeUpdate(scene);
+    static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+    scene.Components().Visibility().Set(replacement, kb::scene::VisibilityComponent{.visible = false});
+    submit();
+    Require(kb::scene::SceneRenderFeedback::IsVisible(scene, fixture.entity) &&
+        !kb::scene::SceneRenderFeedback::IsVisible(scene, second) &&
+        !kb::scene::SceneRenderFeedback::IsVisible(scene, replacement),
+        "Runtime topology reconciliation retained obsolete visibility");
+    Require(NearlyEqual(kb::scene::SceneRenderFeedback::WorldBounds(scene, fixture.entity).center.x, 0.25F),
+        "Runtime topology reconciliation skipped the retained mesh transform");
+    Require(renderer.RuntimeResourceStats().renderSceneMeshProxyCount == 3U &&
+        !kb::scene::SceneRenderFeedback::IsVisible(scene, arrived),
+        "Runtime topology reconciliation leaked a destroyed generation");
+
+    sync.Reset();
+    sync.BeforeUpdate(scene);
+    static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+    submit();
+    Require(kb::scene::SceneRenderFeedback::IsVisible(scene, fixture.entity),
+        "Runtime scene reset did not perform its initial full synchronization");
+    renderer.Shutdown();
+    std::filesystem::remove_all(root, error);
 }
 
 void RunRendererSubmitsParticleMeshSnapshotAsOneDrawTest() {
@@ -7346,6 +7426,7 @@ void RunRendererVisibilityFeedbackTest() {
 }
 
 void RunRendererRuntimeSubmitTests() {
+    RunRuntimeStructuralFrameSyncKeepsQueuedChangesTest();
     RunRendererResourceGroupEnsureFallbacksTest();
     RunEditorUIViewTransformValidationTests();
     RunEditorCameraWireframesSubmitInHeadlessNoopTest();
@@ -7401,6 +7482,7 @@ void RunRendererRuntimeSubmitTests() {
 }
 
 void RunRendererCommandReuseTests() {
+    RunRuntimeStructuralFrameSyncKeepsQueuedChangesTest();
     RunRendererSubmitsRuntimeMeshAssetInHeadlessNoopTest(true);
     RunRendererReloadsChangedRuntimeMaterialAssetTest();
     RunRendererReloadsChangedRuntimeMeshAssetTest();

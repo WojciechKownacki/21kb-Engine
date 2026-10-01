@@ -172,9 +172,10 @@ public:
     struct RuntimeSceneSynchronization {
         bool fullSync = true;
         std::span<const std::uint64_t> dirtySceneEntityIds{};
+        bool structuralSync = false;
     };
-    // The caller preserves pre-update changes and requests a full sync after
-    // topology changes. Otherwise consume this runtime tick's transform/proxy updates.
+    // The caller preserves pre-update changes and reconciles topology separately
+    // from this runtime tick's transform/proxy updates.
     [[nodiscard]] bool SubmitRuntimeScene(const kb::scene::Scene& scene, const RuntimeSceneSynchronization& synchronization);
     [[nodiscard]] bool SubmitScene(const kb::scene::Scene& scene, const RenderSceneSubmitDesc& desc);
     struct SceneFrameSubmission {
