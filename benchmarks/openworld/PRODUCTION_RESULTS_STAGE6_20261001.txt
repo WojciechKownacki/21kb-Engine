@@ -1,0 +1,104 @@
+21kb — etap 6: odczyt kolumn ECS, bezpieczna publikacja i statyczna fizyka
+Data: 2026-10-01. Gałąź 1.0. Baza: bfae3465e7d2c2a672b79a7e7be6bcb689a92e4b.
+Pełny cel produkcyjny pozostaje aktywny. Mixed gameplay P99 nie zalicza 16.67 ms.
+
+Zmiana i własność
+NativeArchetypeStorage odczytuje pełną generację rekordu i istniejącą kolumnę
+bez osobnego HasComponent i wyszukiwania bitu w rejestrze sygnatur.
+Nowe TryGetComponentData/TryGetMutableComponentData zwracają null dla brakującej
+kolumny lub nieżywego uchwytu. Dotychczasowe ścisłe odczyty oraz publiczny
+World.TryGet zachowują wyjątki dla nieważnych i usuniętych uchwytów.
+SceneTransformComponentStore używa tej ścieżki; WorldInternalAccess udostępnia
+wąski most do natywnego odczytu mutable. Brak cache wskaźników, nowego indeksu,
+rejestru lub kopii stanu komponentów. Backend pozostaje fallbackiem dla
+odziedziczonych i posiadanych wartości przy braku natywnej kolumny.
+SceneTransformService, SceneTransformLeafBatchUpdater i publikacja hierarchy
+korzystają z tego samego odczytu; bieżąca wartość jest pobierana przed każdym OnSet.
+World.MarkComponentModified po OnSet ponownie sprawdza komponent bieżącej generacji.
+Usunięcie przez własny callback nie kończy publikacji wyjątkiem i nie odtwarza danych.
+Zachowane mirroring, odroczenie, dziedziczenie i kolejność powiadomienia przed mark.
+JoltPhysicsSceneSystem zachowuje właścicieli ciał oraz dotychczasowy bodySyncCache.
+Niezmienny zakres colliderów przesuwa cursor; zapisy seenEpoch wykonuje się na
+odwiedzonym prefiksie dopiero wtedy, gdy liczba ciał wymaga usunięcia starych rekordów.
+Nie ma nowych flag autorskich, drugiego rejestru ciał ani wyłączonej symulacji.
+
+Poprawność
+Test natywnych odczytów: Hot/Cold/Sparse/Shared/ExternalBlob, brak komponentu,
+pełne ID adoptowane, stara generacja, migracja i usunięcie; odczyt nie zmienia wersji.
+Test Scene: null/stara generacja, usunięcie/re-add, migracja i fallback backendu.
+Test World OnSet: usunięcie własnego komponentu/encji, migracja i nowa generacja.
+Nowy test na starej metodzie publikacji: build exit 0, test exit 1 z komunikatem
+"Publication accessed a removed native component after its own OnSet".
+Po poprawce przechodzi. Sondy diagnostyczne usunięte przed pomiarami.
+Test fizyki sprawdza pozostałe ciała z różnych batchy po usunięciu collidera,
+ponownym użyciu ID oraz utworzeniu i usunięciu dynamicznego ciała.
+Pełna kompilacja wszystkich celów i pełne testy engine, ECS API, renderer,
+osobny WebGPU fallback, ECS stress/replay/scheduler/snapshot scale: exit 0.
+Snapshot i katalog ECS obejmują milion encji. Graph shaderc ON, GPU readbacks przechodzą.
+Nie uruchamiano widocznego edytora ani gry; bez przejmowania wejścia.
+
+Metoda
+Projekt: E:/21kbProjekty/OpenWorldProductionStage6_20261001.
+i7-13700F, RTX 4070 12 GB, 64 GB RAM, sterownik 591.74.
+Release /O2 /DNDEBUG, D3D11 1920x1080, ForwardPlus, headless.
+54 procesy: 18 scenariuszy x 3. Wszystkie exit 0. Kolejno po build/testach,
+bez trace, innych benchmarków i kompilacji w tle. Generator i obciążenia bez zmian.
+Identyczne źródła geometrii/skryptów; ID zasobów zależą od katalogu projektu,
+więc pliki scen nie są porównywane jako identyczne binarnie.
+CPU 180 rozgrzewki + 360 próbek; zwykły GPU 120 + 480.
+Mixed 3420 klatek/proces: gameplay od 120, zimny start w pełnej serii.
+P99 z połączonych próbek, wyższa ranga. GPU timer opóźniony.
+Results/capture_manifest.json: hashe 14 zmienionych źródeł i trzech binariów.
+Results/measurement_verification.json: wszystkie hashe zgodne po pomiarze.
+
+Wyniki względem etapu 5 (ms)
+Bulk 100k mutation+Update: 16.648590 -> 13.335143
+(-19.90%). P99 21.5316 -> 15.0481; maks. 19.1218.
+Mutation: średnia 8.005814, P99 8.8385, maks. 12.1184.
+Runtime.Update: średnia 5.328990, P99 6.7021, maks. 8.6875.
+Średnie pełnego bulk/proces: 13.376589 / 13.188548 / 13.440291.
+100k rzeczywistych colliderów Update: 0.495486 -> 0.103099
+(-79.19%). P99 1.0107 -> 0.1790; maks. 0.2457.
+1000 raycastów jest mierzone osobno; total_ms je obejmuje, runtime_ms ich nie obejmuje.
+City 50k fixed: średnia 3.617615, P99 4.7592, maks. 6.2131.
+Mixed gameplay: średnia 3.161880, P99 22.8164, maks. 51.6818.
+Mixed z zimnym startem: średnia 3.485647, P99 23.4147, maks. 197.3070.
+Async 100k Update: średnia 0.926142, P99 3.4213, maks. 8.3957.
+Brak regresji średniej >5% względem etapu 5.
+Regresje >5% względem poprawionej bazy 3f4a9fc6: brak.
+To zmiana ścieżek CPU. Bez deklaracji poprawy shaderów/GPU w tym etapie.
+
+Zachowane wcześniejsze pomiary
+pilot_optional_lookup: pierwsza poprawka kolumn, 15 procesów CPU.
+pilot_transform_store: drugi wariant, 15 procesów CPU.
+pilot_native_lookup_full: 54 procesy przed usunięciem zapisów epoch fizyki.
+W ostatniej z tych serii collider Update miał średnią 0.532473 ms (+7.46% do etapu 5).
+Ten alarm doprowadził do poprawki fizyki; nie został usunięty z danych.
+Bulk przed poprawką fizyki: średnia 13.340501 ms, P99 19.9395 ms, maks. 23.2411 ms.
+Kod bulk/ECS i jego binarium nie zmieniały się między tą a końcową serią.
+Końcowy PASS bulk dotyczy końcowych próbek; wcześniejszy rozrzut nadal jest
+materiałem do testu stabilności ogona. Nie przypisuj poprawy jego P99 zmianie fizyki.
+
+Liczniki i granice weryfikacji
+Fixed city/geometry/lights/shadow: submitted/visible/culled, encje, światła i
+rozdzielczość identyczne klatka po klatce wobec etapu 5 w każdej powtórce.
+Mixed: 9 pełnych cykli 20646 -> 30648 -> 20646, max. 256 operacji/tick.
+Async: 9 cykli 100002 -> 0. Render: dropped=0, missing=0, stały fixed step.
+Physics 4096 zachowuje wybudzone ciała i odbierane zdarzenia kolizji.
+Collider 100k: 1000 rzeczywistych trafień/klatkę. Nie obniżono zawartości scen.
+Foliage nadal: 4 trójkąty/instancję, opaque, bez wiatru i cieni.
+Lights 512 nadal używa globalnej selekcji 32/pass; nie zalicza pełnego oświetlenia 512.
+
+Dalsza praca
+1. Mixed gameplay P99 22.8164 >16.67 ms: przygotowanie drawów przy ruchu kamery,
+   rzeczywiste zasoby i publikacja streamingu; zimny start zachowaj w raporcie.
+2. Stabilność ogona bulk: zachowaj obie serie 13.34 ms z różnymi P99 i sprawdź
+   dłuższe obciążenie; kolejna poprawka ma wynikać z konkretnej mierzonej ścieżki.
+3. Rzeczywiste przestrzenne listy i zasoby GPU dla >=512 oświetlających świateł.
+4. Roślinność: alpha/overdraw, wiatr, cienie, LOD i streaming rzeczywistych zasobów.
+5. Asynchroniczne przygotowanie zasobów oraz ograniczenie kosztu publikacji.
+Reporter exit 1 zachowuje otwarte mixed. Pełny cel nie jest complete.
+Nie deklaruj zgodności jakości/wydajności z silnikami referencyjnymi na tych próbkach.
+
+Liczby wszystkich scen: production_stage6_summary.csv.
+Surowe dane, manifesty, logi i obie wersje porównania: katalog projektu Results.

@@ -1,4 +1,5 @@
 #include "scene/components/SceneTransformComponentStore.hpp"
+#include "engine/ecs/NativeArchetypeStorage.hpp"
 
 #include "ecs/world/WorldInternalAccess.hpp"
 
@@ -13,11 +14,19 @@ SceneTransformComponentStore::SceneTransformComponentStore(kb::ecs::World& world
     : world_(&world), componentId_(componentId) {}
 
 const TransformComponent* SceneTransformComponentStore::TryGet(SceneEntity entity) const noexcept {
-    return entity.IsValid() ? static_cast<const TransformComponent*>(kb::ecs::WorldInternalAccess::TryGetComponent(*world_, entity, componentId_)) : nullptr;
+    if (const void* data = world_->NativeStorage().TryGetComponentData(entity, componentId_); data != nullptr) {
+        return static_cast<const TransformComponent*>(data);
+    }
+    if (!world_->IsAlive(entity)) return nullptr;
+    return static_cast<const TransformComponent*>(kb::ecs::WorldInternalAccess::TryGetComponent(*world_, entity, componentId_));
 }
 
 TransformComponent* SceneTransformComponentStore::TryGet(SceneEntity entity) noexcept {
-    return entity.IsValid() ? static_cast<TransformComponent*>(kb::ecs::WorldInternalAccess::TryGetMutableComponent(*world_, entity, componentId_)) : nullptr;
+    if (void* data = kb::ecs::WorldInternalAccess::TryGetMutableNativeComponent(*world_, entity, componentId_); data != nullptr) {
+        return static_cast<TransformComponent*>(data);
+    }
+    if (!world_->IsAlive(entity)) return nullptr;
+    return static_cast<TransformComponent*>(kb::ecs::WorldInternalAccess::TryGetMutableComponent(*world_, entity, componentId_));
 }
 
 void SceneTransformComponentStore::Set(SceneEntity entity, const TransformComponent& transform) {

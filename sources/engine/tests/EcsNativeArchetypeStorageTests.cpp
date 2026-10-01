@@ -2451,6 +2451,7 @@ void RunManyArchetypeLookupTest();
 void RunStorageClassDistinguishesArchetypesTest();
 void RunBulkDestroyManyBackendArchetypesTest();
 void RunNativeRemovalVersionTest();
+void RunNativeOptionalColumnReadTest();
 
 void RunEcsNativeArchetypeStorageTests() {
     RunChunkProfileAndStatsTest();
@@ -2492,6 +2493,7 @@ void RunEcsNativeArchetypeStorageTests() {
     RunBulkDestroyDuplicateValidationTest();
     RunBulkDestroyManyBackendArchetypesTest();
     RunNativeRemovalVersionTest();
+    RunNativeOptionalColumnReadTest();
     RunBulkDestroyAllFastPathTest();
     RunClearRetainingCapacityTest();
     RunNativeStorageStructuralVersionTest();
@@ -2596,6 +2598,83 @@ void RunBulkDestroyManyBackendArchetypesTest() {
     }
     kb::tests::Require(world.NativeStorageStats().liveEntities == 32U,
         "ECS bulk destroy with many backend archetypes reported an invalid live count");
+}
+
+void RunNativeOptionalColumnReadTest() {
+    const Position initial{3.0F, 7.0F};
+    for (const auto storageClass : {kb::ecs::ComponentStorageClass::HotTable, kb::ecs::ComponentStorageClass::ColdTable,
+            kb::ecs::ComponentStorageClass::SparsePayload, kb::ecs::ComponentStorageClass::SharedValue,
+            kb::ecs::ComponentStorageClass::ExternalBlob}) {
+        kb::ecs::NativeArchetypeStorage storage;
+        auto type = ComponentType<Position>(kPositionId);
+        type.storageClass = storageClass;
+        const std::array values{kb::ecs::NativeComponentValue{.type = type, .data = &initial}};
+        const auto entity = storage.CreateEntity(values);
+        const auto version = storage.ComponentVersion(entity, kPositionId);
+        const auto& readOnly = storage;
+        const auto* data = static_cast<const Position*>(readOnly.TryGetComponentData(entity, kPositionId));
+        Require(data != nullptr && data->x == initial.x && data->y == initial.y &&
+            data == readOnly.ComponentData(entity, kPositionId) &&
+            storage.TryGetMutableComponentData(entity, kPositionId) == storage.MutableComponentData(entity, kPositionId),
+            "Optional native column read selected the wrong storage or copied its data");
+        Require(readOnly.TryGetComponentData(entity, kVelocityId) == nullptr &&
+            storage.TryGetMutableComponentData(entity, kVelocityId) == nullptr &&
+            readOnly.TryGetComponentData(entity, 0U) == nullptr &&
+            storage.ComponentVersion(entity, kPositionId) == version,
+            "Optional native column read created or dirtied a missing component");
+
+        const kb::ecs::Entity external{(0x70000000ULL << 32U) | 5'000'042ULL};
+        storage.AdoptEntity(external, values);
+        Require(static_cast<const Position*>(readOnly.TryGetComponentData(external, kPositionId))->x == initial.x,
+            "Optional native column read failed an adopted full-generation entity");
+        storage.DestroyEntity(entity);
+        const auto replacement = storage.CreateEntity(values);
+        Require(readOnly.TryGetComponentData(entity, kPositionId) == nullptr &&
+            storage.TryGetMutableComponentData(entity, kPositionId) == nullptr &&
+            readOnly.TryGetComponentData({}, kPositionId) == nullptr &&
+            storage.TryGetMutableComponentData({}, kPositionId) == nullptr &&
+            readOnly.TryGetComponentData(replacement, kPositionId) != nullptr,
+            "Optional native column read accepted a destroyed generation");
+    }
+
+    kb::ecs::NativeArchetypeStorage storage;
+    const std::array values{kb::ecs::NativeComponentValue{.type = ComponentType<Position>(kPositionId), .data = &initial}};
+    const auto entity = storage.CreateEntity(values);
+    const Velocity velocity{2.0F, 4.0F};
+    const std::array added{kb::ecs::NativeComponentValue{.type = ComponentType<Velocity>(kVelocityId), .data = &velocity}};
+    storage.AddComponents(entity, added);
+    Require(static_cast<const Position*>(storage.TryGetComponentData(entity, kPositionId))->x == initial.x &&
+        static_cast<const Velocity*>(storage.TryGetComponentData(entity, kVelocityId))->y == velocity.y,
+        "Optional native column read did not follow an archetype migration");
+    const std::array removed{kPositionId};
+    storage.RemoveComponents(entity, removed);
+    Require(storage.TryGetComponentData(entity, kPositionId) == nullptr &&
+        storage.TryGetMutableComponentData(entity, kPositionId) == nullptr,
+        "Optional native column read retained a removed column");
+    bool strictRejected = false;
+    try { static_cast<void>(storage.ComponentData(entity, kPositionId)); }
+    catch (const std::out_of_range&) { strictRejected = true; }
+    Require(strictRejected, "Strict native column access changed its missing-component contract");
+
+    kb::ecs::World world;
+    const auto component = world.RegisterComponent<Position>("test.OptionalInheritedPosition");
+    const auto base = world.CreateEntity();
+    const auto child = world.CreateEntity();
+    world.Set(base, initial);
+    ecs_add_pair(world.NativeHandle(), component, EcsOnInstantiate, EcsInherit);
+    ecs_add_pair(world.NativeHandle(), ecs_strip_generation(child.Id()), EcsIsA, ecs_strip_generation(base.Id()));
+    const auto* inherited = world.TryGet<Position>(child);
+    Require(inherited != nullptr && inherited->x == initial.x &&
+        !world.NativeStorage().HasComponent(child, component),
+        "World optional column lookup lost its inherited backend fallback");
+    world.Set(child, Position{11.0F, 13.0F});
+    Require(world.TryGet<Position>(child)->x == 11.0F && world.TryGet<Position>(base)->x == initial.x,
+        "World optional column lookup returned the inherited value after an owned override");
+    world.DestroyEntity(child);
+    bool worldRejected = false;
+    try { static_cast<void>(world.TryGet<Position>(child)); }
+    catch (const std::out_of_range&) { worldRejected = true; }
+    Require(worldRejected, "World optional column lookup changed stale-handle validation");
 }
 
 void RunNativeRemovalVersionTest() {

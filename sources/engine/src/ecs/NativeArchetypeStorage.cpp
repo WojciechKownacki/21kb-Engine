@@ -1198,6 +1198,11 @@ public:
         }
     }
 
+    [[nodiscard]] void* TryGetComponentData(EntityLocation location, ComponentId componentId) {
+        const ComponentLayout* column = FindColumn(componentId);
+        return column == nullptr ? nullptr : ComponentData(location, *column);
+    }
+
     [[nodiscard]] void* ComponentData(EntityLocation location, ComponentId componentId) {
         const ComponentLayout* column = FindColumn(componentId);
         if (column == nullptr) {
@@ -1238,6 +1243,11 @@ public:
             throw std::out_of_range("Native ECS component column is not available");
         }
         return ColumnBase(chunks_[chunkIndex], *column);
+    }
+
+    [[nodiscard]] const void* TryGetComponentData(EntityLocation location, ComponentId componentId) const {
+        const ComponentLayout* column = FindColumn(componentId);
+        return column == nullptr ? nullptr : ComponentData(location, *column);
     }
 
     [[nodiscard]] const void* ComponentData(EntityLocation location, ComponentId componentId) const {
@@ -2268,20 +2278,25 @@ public:
     }
 
     [[nodiscard]] bool IsAlive(Entity entity) const noexcept {
+        return FindLiveRecordIndex(entity).has_value();
+    }
+
+    [[nodiscard]] std::optional<std::uint32_t> FindLiveRecordIndex(Entity entity) const noexcept {
         const std::uint32_t generatedIndex = EntityIndex(entity);
         if (generatedIndex != kInvalidEntityIndex && generatedIndex < records_.size()) {
             const EntityRecord& record = records_[generatedIndex];
             if (record.ownsGeneratedId && record.alive && record.entity == entity && record.generation == EntityGeneration(entity)) {
-                return true;
+                return generatedIndex;
             }
         }
 
         const std::optional<std::uint32_t> found = LookupExternalSlot(entity.Id());
         if (!found.has_value() || *found >= records_.size()) {
-            return false;
+            return std::nullopt;
         }
         const EntityRecord& record = records_[*found];
-        return record.alive && record.entity == entity && record.generation == EntityGeneration(entity);
+        return record.alive && record.entity == entity && record.generation == EntityGeneration(entity)
+            ? found : std::nullopt;
     }
 
     [[nodiscard]] Entity ResolveAliveEntity(Entity::IdType entityIdWithoutGeneration) const noexcept {
@@ -2590,6 +2605,20 @@ public:
     [[nodiscard]] const void* ComponentData(Entity entity, ComponentId componentId) const {
         const EntityRecord& record = LiveRecord(entity);
         return tables_[record.location.table].ComponentData(record.location, componentId);
+    }
+
+    [[nodiscard]] void* TryGetMutableComponentData(Entity entity, ComponentId componentId) {
+        const auto index = FindLiveRecordIndex(entity);
+        if (!index.has_value()) return nullptr;
+        EntityRecord& record = records_[*index];
+        return tables_[record.location.table].TryGetComponentData(record.location, componentId);
+    }
+
+    [[nodiscard]] const void* TryGetComponentData(Entity entity, ComponentId componentId) const {
+        const auto index = FindLiveRecordIndex(entity);
+        if (!index.has_value()) return nullptr;
+        const EntityRecord& record = records_[*index];
+        return tables_[record.location.table].TryGetComponentData(record.location, componentId);
     }
 
     [[nodiscard]] bool HasComponent(Entity entity, ComponentId componentId) const {
@@ -3796,6 +3825,14 @@ void* NativeArchetypeStorage::MutableComponentData(Entity entity, ComponentId co
 
 const void* NativeArchetypeStorage::ComponentData(Entity entity, ComponentId componentId) const {
     return impl_->ComponentData(entity, componentId);
+}
+
+void* NativeArchetypeStorage::TryGetMutableComponentData(Entity entity, ComponentId componentId) {
+    return impl_->TryGetMutableComponentData(entity, componentId);
+}
+
+const void* NativeArchetypeStorage::TryGetComponentData(Entity entity, ComponentId componentId) const {
+    return impl_->TryGetComponentData(entity, componentId);
 }
 
 bool NativeArchetypeStorage::HasComponent(Entity entity, ComponentId componentId) const {

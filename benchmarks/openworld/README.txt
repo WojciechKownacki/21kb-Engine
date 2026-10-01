@@ -227,3 +227,14 @@ Porównanie:
   python benchmarks/openworld/report_production.py --before E:/21kbProjekty/OpenWorldProductionStage4_20261001 --after E:/21kbProjekty/OpenWorldProductionStage5_20261001
 Pełny raport: PRODUCTION_RESULTS_STAGE5_20261001.txt; dane: production_stage5_summary.csv.
 Bramki pozostają bez zmian. Wynik reportera exit 1 zachowuje otwartą pracę.
+
+Etap 6 (2026-10-01): opcjonalny odczyt natywnych kolumn, bezpieczny OnSet,
+odroczone seenEpoch statycznych ciał. Projekt OpenWorldProductionStage6_20261001.
+Odtworzenie: generator i polecenia etapu 4 ze Stage6 zamiast Stage4. Uruchamiaj
+kolejno suite compare, capacity, foliage, production --fixed-step; bez buildów
+w trakcie pomiaru. Porównanie do etapu 5:
+  python benchmarks/openworld/report_production.py --before E:/21kbProjekty/OpenWorldProductionStage5_20261001 --after E:/21kbProjekty/OpenWorldProductionStage6_20261001
+Pełny raport: PRODUCTION_RESULTS_STAGE6_20261001.txt; production_stage6_summary.csv.
+Results/pilot_native_lookup_full zachowuje serię przed ostatnią zmianą fizyki,
+w tym P99 bulk 19.9395 ms przy tym samym kodzie bulk, oraz alarm collider +7.46%.
+Końcowy report exit 1 zachowuje mixed P99; pełny cel nadal aktywny.

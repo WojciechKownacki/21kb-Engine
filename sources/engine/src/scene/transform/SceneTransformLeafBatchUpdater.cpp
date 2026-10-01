@@ -7,8 +7,7 @@ namespace kb::scene {
 namespace {
 const TransformComponent* NativeTransform(const SceneState& state, SceneEntity entity) noexcept {
     const auto& storage = state.world.NativeStorage();
-    return storage.IsAlive(entity) && storage.HasComponent(entity, state.components.TransformComponentId()) ? static_cast<const TransformComponent*>(
-        storage.ComponentData(entity, state.components.TransformComponentId())) : nullptr;
+    return static_cast<const TransformComponent*>(storage.TryGetComponentData(entity, state.components.TransformComponentId()));
 }
 } // namespace
 

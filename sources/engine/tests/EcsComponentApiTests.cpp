@@ -146,6 +146,68 @@ void RunComponentMirrorNotificationTest() {
         "Canonical publication must override an inherited mirror without modifying the base");
 }
 
+void RunComponentMirrorStructuralCallbackTest() {
+    for (unsigned action = 0U; action < 4U; ++action) {
+        kb::ecs::World world;
+        const auto component = world.RegisterComponent<EcsPosition>("test.StructuralMirrorPosition");
+        const auto entity = world.CreateEntity();
+        world.Set(entity, EcsPosition{});
+        struct Context {
+            kb::ecs::World& world;
+            kb::ecs::Entity entity;
+            kb::ecs::Entity replacement;
+            unsigned action;
+            unsigned notifications = 0U;
+            bool armed = true;
+        } context{world, entity, {}, action};
+        ecs_observer_desc_t observer{};
+        observer.query.terms[0].id = component;
+        observer.events[0] = EcsOnSet;
+        observer.ctx = &context;
+        observer.callback = [](ecs_iter_t* iterator) {
+            auto& ctx = *static_cast<Context*>(iterator->ctx);
+            if (!ctx.armed) return;
+            ctx.armed = false;
+            ++ctx.notifications;
+            const auto* position = ecs_field(iterator, EcsPosition, 0);
+            kb::tests::Require(position != nullptr && position->x == 7.0F,
+                "Structural OnSet did not receive the published canonical component");
+            if (ctx.action == 0U) {
+                ctx.world.Remove<EcsPosition>(ctx.entity);
+            } else if (ctx.action == 1U) {
+                ctx.world.DestroyEntity(ctx.entity);
+            } else if (ctx.action == 2U) {
+                ctx.world.Set(ctx.entity, EcsVelocity{.x = 3.0F});
+            } else {
+                ctx.world.DestroyEntity(ctx.entity);
+                ctx.replacement = ctx.world.CreateEntity();
+                ctx.world.Set(ctx.replacement, EcsPosition{.x = 43.0F});
+            }
+        };
+        kb::tests::Require(ecs_observer_init(world.NativeHandle(), &observer) != 0U,
+            "Structural mirror observer registration failed");
+        world.TryGetMutable<EcsPosition>(entity)->x = 7.0F;
+        bool publicationSucceeded = true;
+        try { world.MarkModified<EcsPosition>(entity); }
+        catch (const std::out_of_range&) { publicationSucceeded = false; }
+        kb::tests::Require(publicationSucceeded,
+            "Publication accessed a removed native component after its own OnSet");
+        kb::tests::Require(context.notifications == 1U, "Structural mirror callback changed its notification count");
+        if (action == 0U) {
+            kb::tests::Require(world.IsAlive(entity) && world.TryGet<EcsPosition>(entity) == nullptr,
+                "Publication recreated a component removed by its own OnSet");
+        } else if (action == 2U) {
+            kb::tests::Require(world.TryGet<EcsPosition>(entity)->x == 7.0F && world.TryGet<EcsVelocity>(entity)->x == 3.0F,
+                "Publication lost a component after an OnSet archetype migration");
+        } else {
+            kb::tests::Require(!world.IsAlive(entity), "Publication retained an entity destroyed by its own OnSet");
+            if (action == 3U) kb::tests::Require(world.IsAlive(context.replacement) &&
+                world.TryGet<EcsPosition>(context.replacement)->x == 43.0F,
+                "Publication modified the replacement generation after OnSet");
+        }
+    }
+}
+
 void RunTypedEcsComponentApiTest() {
     kb::ecs::World world;
     const kb::ecs::ComponentId positionComponent = world.RegisterComponent<EcsPosition>("test.EcsPosition");
@@ -642,6 +704,7 @@ namespace kb::tests {
 
 void RunEcsComponentApiTests() {
     RunComponentMirrorNotificationTest();
+    RunComponentMirrorStructuralCallbackTest();
     RunTypedEcsComponentApiTest();
     RunTypedEcsComponentStoragePolicyTest();
     RunTypedEcsEntityAndComponentLifetimeValidationTest();

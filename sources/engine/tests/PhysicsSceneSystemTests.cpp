@@ -2358,6 +2358,23 @@ void RunStaticColliderBatchInvalidationTest() {
     update(); update();
     cast(20000.0F);
     kb::tests::Require(hits.Count() == 0U, "Removed collider survived its cached batch");
+    const auto requireSurvivors = [&] {
+        for (const std::size_t index : {1U, 1024U, 2047U}) {
+            cast(4.0F * static_cast<float>(index));
+            kb::tests::Require(hits.Count() == 1U && storage[0].entity == objects[index].Entity(),
+                "Static body retirement removed a survivor from another cached batch");
+        }
+    };
+    requireSurvivors();
+    const auto dynamic = scene.Entities().CreateObject({.transform = {.localPosition = {10000.0F, 3.0F, 0.0F}}});
+    scene.Components().Colliders().Set(dynamic.Entity(), {});
+    scene.Components().Rigidbodies().Set(dynamic.Entity(), {});
+    update(); update();
+    kb::tests::Require(kb::scene::PhysicsBackend::GetVelocity(scene, dynamic.Entity()).found,
+        "Mixed static retirement fixture did not create a simulated body");
+    scene.Entities().Destroy(dynamic);
+    update(); update();
+    requireSurvivors();
 }
 
 void RunPhysicsEventBatchReuseTest() {
