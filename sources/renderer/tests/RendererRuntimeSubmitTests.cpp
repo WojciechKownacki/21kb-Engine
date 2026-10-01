@@ -5509,6 +5509,59 @@ void RunRendererReloadsMaterialInstanceWhenParentMaterialChangesTest() {
     std::filesystem::remove_all(root, error);
 }
 
+void RunGeneratedClusterMissingResourceDiagnosticsTest() {
+    HeadlessSurface surface;
+    DisplayConfig config{};
+    config.allowHeadlessNoop = true;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "Cluster diagnostic fixture could not initialize bgfx");
+    const std::array<RenderStaticMeshVertexP3N3UV2, 3> vertices{{
+        {-0.5F, -0.5F, 0.0F, 1.0F, 1.0F, 1.0F},
+        {0.5F, -0.5F, 0.0F, 1.0F, 1.0F, 1.0F},
+        {0.0F, 0.5F, 0.0F, 1.0F, 1.0F, 1.0F},
+    }};
+    const std::array<std::uint16_t, 3> indices{0U, 1U, 2U};
+    RenderResourceRegistry resources;
+    const auto handle = resources.RegisterMesh(RenderMeshDesc{.vertexData = vertices.data(),
+        .vertexCount = 3U, .indices = indices.data(), .indexCount = 3U, .vertexFormat = RenderVertexFormat::P3N3UV2, .bounds = {.radius = 2.0F}});
+    Require(handle.IsValid(), "Cluster diagnostic fixture could not register its mesh");
+    SceneRenderResourceMap bindings;
+    bindings.BindMesh(42U, handle);
+    RenderScene scene;
+    GeometrySwarmRenderProxyDesc swarm{.entityId = 90U, .meshAssetId = 42U, .materialAssetId = 999U};
+    swarm.model[0] = swarm.model[5] = swarm.model[10] = swarm.model[15] = 1.0F;
+    swarm.model[12] = 1000.0F;
+    swarm.model[14] = 100.0F;
+    swarm.instanceCount = 256U;
+    swarm.columns = swarm.layers = 16U;
+    static_cast<void>(scene.UpsertGeometrySwarm(swarm));
+    const auto groups = scene.DrawGroups();
+    Require(std::ranges::any_of(groups, [](const auto& group) { return !group.visibilityClusters.empty(); }),
+        "Cluster diagnostic fixture did not generate visibility clusters");
+    auto reference = groups;
+    for (auto& group : reference) group.visibilityClusters.clear();
+    SceneRenderCamera camera{};
+    camera.view[0] = camera.view[5] = camera.view[10] = camera.view[15] = 1.0F;
+    SceneDepthPolicy::MakePerspective(camera.projection.data(), 90.0F, 1.0F, 0.1F, 1200.0F, SceneDepthPolicy::HomogeneousDepth());
+    const auto validate = [&](const auto& source, SceneRenderDiagnostics& diagnostics) {
+        return MeshPipelineProcessor::Build(MeshPipelineBuildDesc{.pass = MeshPassType::BaseOpaque,
+            .drawGroups = &source, .resources = &resources, .resourceMap = &bindings,
+            .camera = &camera, .diagnostics = &diagnostics});
+    };
+    SceneRenderDiagnostics diagnostics, referenceDiagnostics;
+    const auto accelerated = validate(groups, diagnostics);
+    const auto original = validate(reference, referenceDiagnostics);
+    Require(original.stats.culledInstanceCount == swarm.instanceCount &&
+        accelerated.stats.missingMaterialBindingCount == swarm.instanceCount &&
+        accelerated.stats.missingMaterialBindingCount == original.stats.missingMaterialBindingCount &&
+        diagnostics.events.size() == referenceDiagnostics.events.size() &&
+        accelerated.stats.culledInstanceCount == original.stats.culledInstanceCount,
+        "Coarse visibility culling hid per-instance missing-resource diagnostics");
+    resources.Shutdown();
+    renderer.Shutdown();
+}
+
 void RunRendererSubmitsWorkspaceSceneCubeMaterialAfterReopenTest() {
     const std::optional<std::filesystem::path> projectAssets = FindWorkspaceProjectAssets();
     if (!projectAssets.has_value()) {
@@ -7448,6 +7501,7 @@ void RunRendererVisibilityFeedbackTest() {
 }
 
 void RunRendererRuntimeSubmitTests() {
+    RunGeneratedClusterMissingResourceDiagnosticsTest();
     RunRuntimeStructuralFrameSyncKeepsQueuedChangesTest();
     RunRendererResourceGroupEnsureFallbacksTest();
     RunEditorUIViewTransformValidationTests();
@@ -7504,6 +7558,7 @@ void RunRendererRuntimeSubmitTests() {
 }
 
 void RunRendererCommandReuseTests() {
+    RunGeneratedClusterMissingResourceDiagnosticsTest();
     RunRuntimeStructuralFrameSyncKeepsQueuedChangesTest();
     RunRendererSubmitsRuntimeMeshAssetInHeadlessNoopTest(true);
     RunRendererReloadsChangedRuntimeMaterialAssetTest();
