@@ -2495,7 +2495,7 @@ void RunSceneRendererReportsClusteredIblAndAdvancedLightStatsTest() {
     renderer.SetDefaultLightingConfig(lighting);
     const SceneRenderSubmitStats stats = renderer.ValidateSceneResources(renderScene);
     Require(stats.lightingPath == static_cast<std::uint32_t>(SceneRenderLightingPath::ClusteredForwardPlus) + 1U, "SceneRenderer validation did not report clustered lighting path");
-    Require(stats.lightClusterCount == 24U, "SceneRenderer validation did not report clustered light grid size");
+    Require(stats.lightClusterCount == 0U, "Validation-only uniform lighting must not report an uploaded GPU light grid");
     Require(stats.forwardLightCapacity == 6U, "KBMAT-MAT64: ClusteredForwardPlus did not use the expanded forward+ light budget");
     Require(stats.submittedForwardLightCount == 6U, "KBMAT-MAT64: ClusteredForwardPlus did not submit all lights within its expanded budget");
     Require(stats.skippedForwardLightCount == 0U, "KBMAT-MAT64: ClusteredForwardPlus incorrectly skipped lights within its expanded budget");

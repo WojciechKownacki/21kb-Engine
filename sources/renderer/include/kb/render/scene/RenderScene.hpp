@@ -287,6 +287,7 @@ public:
     void Reserve(const RenderSceneReserveDesc& desc);
     [[nodiscard]] RenderSceneStats Stats() const noexcept;
     [[nodiscard]] std::uint64_t MeshContentRevision() const noexcept { return meshContentRevision_; }
+    [[nodiscard]] std::uint64_t LightContentRevision() const noexcept { return lightContentRevision_; }
     [[nodiscard]] RenderProxyId UpsertMesh(const MeshRenderProxyDesc& desc);
     [[nodiscard]] RenderProxyId UpsertCamera(const CameraRenderProxyDesc& desc);
     [[nodiscard]] RenderProxyId UpsertLight(const LightRenderProxyDesc& desc);
@@ -433,7 +434,7 @@ private:
     };
 
     [[nodiscard]] RenderProxyId AllocateProxyId() noexcept;
-    [[nodiscard]] static std::uint64_t NextMeshContentRevision() noexcept;
+    [[nodiscard]] static std::uint64_t NextContentRevision() noexcept;
     void InvalidateDrawGroups() noexcept;
     [[nodiscard]] bool RemoveMeshInstance(const MeshRenderProxy& proxy) noexcept;
     void AppendMeshInstance(MeshRenderProxy& proxy);
@@ -441,7 +442,8 @@ private:
     void ApplySurfaceCasts(SceneRenderMeshInstance& instance) const;
 
     MeshProxyMap meshes_;
-    std::uint64_t meshContentRevision_ = NextMeshContentRevision();
+    std::uint64_t meshContentRevision_ = NextContentRevision();
+    std::uint64_t lightContentRevision_ = NextContentRevision();
     mutable SortedMeshProxyIndex sortedMeshProxies_;
     CameraProxyMap cameras_;
     LightProxyMap lights_;

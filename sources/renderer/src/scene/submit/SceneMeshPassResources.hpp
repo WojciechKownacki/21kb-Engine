@@ -75,6 +75,7 @@ public:
     [[nodiscard]] bgfx::ProgramHandle Bind(const SceneMeshPassBindDesc& desc) const noexcept;
     [[nodiscard]] MaterialProgramRegistryStats ProgramRegistryStats() const noexcept { return programRegistry_.Stats(); }
     void EndFrame(std::uint64_t frameIndex) const;
+    [[nodiscard]] SceneLightGridResources& LightGrid() const noexcept { return lightGrid_; }
 
     void SetGraphShaderCacheRoot(std::string root) { graphShaderCacheRoot_ = std::move(root); }
     [[nodiscard]] SceneMeshPassProgramResolution ResolveMeshPassProgram(
@@ -102,6 +103,7 @@ private:
         std::string_view name,
         bool sampler) const;
 
+    mutable SceneLightGridResources lightGrid_;
     std::string graphShaderCacheRoot_;
     mutable MaterialProgramRegistry programRegistry_;
     mutable std::vector<MaterialProgramKey> residentProgramKeys_;

@@ -1,6 +1,8 @@
 $input v_texcoord0
 
 #include <bgfx_shader.sh>
+#define KB_LIGHT_GRID_DEFERRED 1
+#include "light_grid.sh"
 #include "gbuffer_contract.sh"
 
 SAMPLER2D(s_gbufferAlbedo, 0);
@@ -100,45 +102,30 @@ vec3 EvaluateEnvironment(vec3 normal, vec3 viewDir, vec3 albedo, float metallic,
     return diffuseEnv + specularEnv;
 }
 
-vec3 SurfaceEmitterSamplePosition(vec3 center, vec3 normal, vec3 right, float kind, vec2 dimensions, vec3 worldPos)
-{
-    if (kind < 2.5) {
-        return center;
-    }
-
-    vec3 localRight = normalize(right);
-    vec3 localUp = normalize(cross(normal, localRight));
-    vec3 fromCenter = worldPos - center;
-    if (kind < 3.5) {
-        return center + localRight * clamp(dot(fromCenter, localRight), -dimensions.x * 0.5, dimensions.x * 0.5)
-            + localUp * clamp(dot(fromCenter, localUp), -dimensions.y * 0.5, dimensions.y * 0.5);
-    }
-    if (kind < 4.5) {
-        vec3 planar = localRight * dot(fromCenter, localRight) + localUp * dot(fromCenter, localUp);
-        float planarLength = length(planar);
-        return center + planar * min(1.0, dimensions.x * 0.5 / max(planarLength, 0.0001));
-    }
-
-    vec3 axisPoint = center + localRight * clamp(dot(fromCenter, localRight), -dimensions.x * 0.5, dimensions.x * 0.5);
-    vec3 radial = worldPos - axisPoint;
-    float radialLength = length(radial);
-    return axisPoint + radial * min(1.0, dimensions.y * 0.5 / max(radialLength, 0.0001));
-}
-
 vec3 EvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldPos, vec3 albedo, float metallic, float roughness, float specular, float occlusion)
 {
-    vec4 dirKind = u_deferredLightDirKind[lightIndex];
-    vec4 positionRange = u_deferredLightPositionRange[lightIndex];
-    vec4 colorIntensity = u_deferredLightColorIntensity[lightIndex];
-    vec4 spot = u_deferredLightSpot[lightIndex];
-    vec4 areaRight = u_deferredLightAreaRight[lightIndex];
+    vec4 dirKind, positionRange, colorIntensity, spot, areaRight;
+    if (u_sceneLightGridDimensions.w > 0.5) {
+        float base = float(lightIndex) * 5.0;
+        dirKind = KbLightGridTexel(base);
+        positionRange = KbLightGridTexel(base + 1.0);
+        colorIntensity = KbLightGridTexel(base + 2.0);
+        spot = KbLightGridTexel(base + 3.0);
+        areaRight = KbLightGridTexel(base + 4.0);
+    } else {
+        dirKind = u_deferredLightDirKind[lightIndex];
+        positionRange = u_deferredLightPositionRange[lightIndex];
+        colorIntensity = u_deferredLightColorIntensity[lightIndex];
+        spot = u_deferredLightSpot[lightIndex];
+        areaRight = u_deferredLightAreaRight[lightIndex];
+    }
 
     vec3 lightVector = vec3(0.0, 1.0, 0.0);
     float attenuation = 1.0;
     if (dirKind.w < 0.5) {
         lightVector = normalize(-dirKind.xyz);
     } else {
-        vec3 emitterPosition = SurfaceEmitterSamplePosition(positionRange.xyz, dirKind.xyz, areaRight.xyz, dirKind.w, spot.zw, worldPos);
+        vec3 emitterPosition = KbSurfaceEmitterSamplePosition(positionRange.xyz, dirKind.xyz, areaRight.xyz, dirKind.w, spot.zw, worldPos);
         vec3 toLight = emitterPosition - worldPos;
         float distanceToLight = length(toLight);
         lightVector = distanceToLight > 0.0001 ? toLight / distanceToLight : vec3(0.0, 1.0, 0.0);
@@ -261,8 +248,10 @@ void main()
 
     vec3 lighting = EvaluateEnvironment(normal, viewDir, albedo.rgb, metallic, roughness, specular, occlusion);
 
-    for (int lightIndex = 0; lightIndex < 32; ++lightIndex) {
-        if (float(lightIndex) < u_deferredLightParams.x) {
+    vec2 lightList = KbLightGridList(worldPos, u_deferredLightParams.x);
+    for (int entry = 0; entry < int(lightList.y); ++entry) {
+        {
+            int lightIndex = KbLightGridIndex(lightList, entry);
             vec3 directLight = EvaluateSceneLight(lightIndex, normal, viewDir, worldPos, albedo.rgb, metallic, roughness, specular, occlusion);
             lighting += lightIndex == 0 ? directLight * shadowVisible : directLight;
         }

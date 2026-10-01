@@ -1,6 +1,7 @@
 #pragma once
 
 #include "kb/render/scene/RenderScene.hpp"
+#include "kb/render/scene/SceneLightGridResources.hpp"
 #include "kb/render/scene/SceneRenderTypes.hpp"
 
 #include <array>
@@ -9,6 +10,8 @@
 namespace kb::render {
 
 struct PackedSceneLighting {
+    SceneLightGridBinding lightGrid{};
+    std::uint64_t primaryLightId = 0U;
     std::array<float, kMaxSceneForwardPlusLights * 4U> dirKind{};
     std::array<float, kMaxSceneForwardPlusLights * 4U> positionRange{};
     std::array<float, kMaxSceneForwardPlusLights * 4U> colorIntensity{};
