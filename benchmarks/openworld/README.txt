@@ -261,3 +261,19 @@ Results/pilot_mask_publication zachowuje pierwsze 54 pomiary; Results/raw
 zawiera finalne 54 na kodzie z const odczytem metadanych. Results/diagnostics
 zawiera regresję przed/po oraz ślad rozbieżnej kamery z etapu 6.
 Bramki i pełny cel produkcyjny pozostają bez zmian.
+
+Etap 8 (2026-10-01): zachowanie diagnostyki, selekcji i liczników LOD przy
+odrzucaniu generowanych klastrów. Niezależny obowiązkowy test używa wspieranej
+siatki P3N3UV2 i sprawdza 256 brakujących materiałów poza widokiem. Mutant bez
+warunku ochronnego nie przechodzi; pełny build/suite przechodzi po poprawce.
+Projekt: E:/21kbProjekty/OpenWorldProductionStage8_20261001.
+Odtworzenie: polecenia etapu 4 ze Stage8 zamiast Stage4, bez zmiany generatora.
+Porównanie do poprawnej kamery etapu 7:
+  python benchmarks/openworld/report_production.py --before E:/21kbProjekty/OpenWorldProductionStage7_20261001 --after E:/21kbProjekty/OpenWorldProductionStage8_20261001
+Raport: PRODUCTION_RESULTS_STAGE8_20261001.txt; production_stage8_summary.csv.
+Results/raw zawiera finalne 54 pomiary; pilot_clusters i rejected_native_clusters
+zachowują 18 parowych procesów oraz patch odrzuconej optymalizacji zwykłych stron.
+Nie łącz ich z finalną serią. cpu_repeat_control zachowuje 9 kontroli identycznej
+CPU binarki, bez zastępowania wyników kanonicznych. diagnostics zawiera mutant,
+pełne logi testów oraz odrzucone niepoprawne/opcjonalne próbki.
+City, mixed i bulk P99 nadal FAIL. Pozostałe wymagania pełnego celu bez zmian.

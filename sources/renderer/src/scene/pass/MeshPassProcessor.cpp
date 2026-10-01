@@ -327,7 +327,9 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                 if (clusterIndex < batch.visibilityClusters.size() &&
                     batch.visibilityClusters[clusterIndex].firstInstance == instanceIndex &&
                     localBounds.IsValid() && meshResource != nullptr && meshResource->lods.size() <= 1U &&
-                    !instance.detailSwitchEnabled && !batch.hasMaterialSlotOverrides) {
+                    !instance.detailSwitchEnabled && !batch.hasMaterialSlotOverrides &&
+                    desc.pass != MeshPassType::SelectionId && desc.pass != MeshPassType::EditorSelection &&
+                    !result.stats.HasMissingResources()) {
                     const auto& cluster = batch.visibilityClusters[clusterIndex];
                     auto bounds = cluster.origins;
                     const auto& center = localBounds.center;
@@ -336,6 +338,7 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                     if (cluster.instanceCount != 0U && cluster.instanceCount <= batch.instances.size()-instanceIndex &&
                         !MeshPipelineVisibility::IsInsideFrustum(frustum, bounds)) {
                         culledForSection += cluster.instanceCount;
+                        if (!meshResource->lods.empty()) result.stats.lodSelectionCount += cluster.instanceCount - 1U;
                         instanceIndex += cluster.instanceCount - 1U;
                         continue;
                     }

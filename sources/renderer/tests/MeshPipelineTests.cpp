@@ -2172,28 +2172,35 @@ void RunMeshPipelineTests() {
         mesh.indexCount = 3U;
         mesh.bounds = {.center = {3.0F, 1.0F, 2.0F}, .radius = 2.0F};
         RenderMaterialResource material{};
-        for (const auto pass : {MeshPassType::BaseOpaque, MeshPassType::MotionVectors, MeshPassType::ShadowDepth}) {
-          for (const float offset : {-200.0F, 0.0F, 150.0F}) {
-            auto camera = PerspectiveCamera();
-            camera.view[12] = offset;
-            SceneDepthPolicy::MakePerspective(camera.projection.data(), 90.0F, 1.0F, 0.01F, 400.0F, SceneDepthPolicy::HomogeneousDepth());
-            const auto build = [&](const auto& source) {
-                return MeshPipelineProcessor::Build(MeshPipelineBuildDesc{.pass = pass, .drawGroups = &source,
-                    .resolvedMeshResource = &mesh, .resolvedMaterialResource = &material, .camera = &camera,
-                    .resourceValidation = MeshPipelineResourceValidation::Skip});
-            };
-            const auto accelerated = build(groups), original = build(reference);
-            const auto ids = [](const auto& result) {
-                std::vector<std::uint64_t> values;
-                for (const auto& command : result.commands)
-                    for (const auto& instance : command.instances) values.push_back(instance.entityId);
-                std::ranges::sort(values);
-                return values;
-            };
-            Require(ids(accelerated) == ids(original) && accelerated.stats.visibleMeshCount == original.stats.visibleMeshCount &&
-                accelerated.stats.culledInstanceCount == original.stats.culledInstanceCount,
-                "Cluster culling must match per-instance visibility and counters under camera motion and shear");
-          }
+        const std::array<std::uint64_t, 2> selected{groups.front().instances.front().entityId,
+            groups.back().instances.front().entityId};
+        for (const std::size_t lodCount : {0U, 1U}) {
+            mesh.lods.assign(lodCount, RenderMeshLodDesc{});
+            for (const auto pass : {MeshPassType::BaseOpaque, MeshPassType::MotionVectors, MeshPassType::ShadowDepth,
+                    MeshPassType::SelectionId, MeshPassType::EditorSelection}) {
+                for (const float offset : {-200.0F, 0.0F, 150.0F}) {
+                    auto camera = PerspectiveCamera();
+                    camera.view[12] = offset;
+                    SceneDepthPolicy::MakePerspective(camera.projection.data(), 90.0F, 1.0F, 0.01F, 400.0F, SceneDepthPolicy::HomogeneousDepth());
+                    const auto build = [&](const auto& source) {
+                        return MeshPipelineProcessor::Build(MeshPipelineBuildDesc{.pass = pass, .drawGroups = &source,
+                            .resolvedMeshResource = &mesh, .resolvedMaterialResource = &material, .camera = &camera,
+                            .selectedEntityIds = selected, .resourceValidation = MeshPipelineResourceValidation::Skip});
+                    };
+                    const auto accelerated = build(groups), original = build(reference);
+                    const auto ids = [](const auto& result) {
+                        std::vector<std::uint64_t> values;
+                        for (const auto& command : result.commands)
+                            for (const auto& instance : command.instances) values.push_back(instance.entityId);
+                        std::ranges::sort(values);
+                        return values;
+                    };
+                    Require(ids(accelerated) == ids(original) && accelerated.stats.visibleMeshCount == original.stats.visibleMeshCount &&
+                        accelerated.stats.culledInstanceCount == original.stats.culledInstanceCount &&
+                        accelerated.stats.lodSelectionCount == original.stats.lodSelectionCount,
+                        "Cluster culling must match per-instance visibility, selection and LOD counters under camera motion and shear");
+                }
+            }
         }
     }
     for (const bool homogeneous : {false, true}) {

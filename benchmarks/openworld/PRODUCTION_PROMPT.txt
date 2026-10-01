@@ -171,3 +171,24 @@ sprawdza jej rzeczywistą trasę w każdej klatce city i mixed.
 5. Rozwiąż zachowany alarm world_100k mean +18.93% vs etap 6 w kontrolowanym
    A/B. Kontrole dały 1.047685/0.911218/0.847631 ms; nie zastępuj serii ani nie
    kasuj alarmu na podstawie korzystnej pojedynczej powtórki.
+
+KONTYNUACJA PO ETAPIE 8 (PRODUCTION_RESULTS_STAGE8_20261001.txt)
+MeshPassProcessor zachowuje diagnostykę, selekcję i liczniki LOD dla generowanych
+klastrów. Nie przywracaj odrzuconych klastrów zwykłych stron: city poprawiło się,
+lecz mixed P99 wzrosło w trzech parach. Zachowaj wszystkie piloty i ich porażki.
+1. Baza etapu 8 ma city fixed P99 18.9771, mixed warm P99 20.3168 oraz bulk
+   total P99 21.9411. Cel wszystkich trzech <=16.67 pozostaje aktywny. Koszt
+   cullingu/pakowania jest ponawiany w pasach opaque/motion/shadow; usuń jego
+   przyczynę bez drugiego stanu autorskiego, obniżania liczników i starej kamery.
+2. CPU benchmark i Jolt mają identyczny hash jak etap 7. Kontrola tej samej
+   binarki dała bulk P99 16.1793, lecz nie usuwa FAIL serii kanonicznej.
+   Ustabilizuj bulk i zachowaj OnSet, odroczenia, migrację i każdą serię.
+3. Pełne listy przestrzenne >=512 świateł, faktyczny odczyt GPU w builtin/graph
+   materiałach i testy pikseli pozostają wymagane. Nie zwiększaj tylko liczników
+   lub globalnej tablicy 32. Właściciel pochodnych list i zasobów w klasie.
+4. Roślinność z alpha, wiatrem, cieniami, LOD i streamingiem zasobów, async
+   I/O/dekodowanie/przygotowanie GPU oraz budżet publikacji pozostają wymagane.
+5. Stary alarm world +18.93% vs etap 6 nie został zamknięty. Wykonaj kontrolowane
+   A/B. Testy muszą być obowiązkowe, niezależne od opcjonalnego Project/Assets;
+   udowodnij awarię przed i powodzenie po poprawce na rzeczywiście obsługiwanym
+   formacie i funkcji. Funkcjonalne 54/54 nie zalicza bramek ani pełnego celu.
