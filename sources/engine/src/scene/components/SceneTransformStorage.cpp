@@ -1,5 +1,7 @@
 #include "scene/components/SceneTransformComponentStore.hpp"
 
+#include "ecs/world/WorldInternalAccess.hpp"
+
 #include "scene/components/SceneComponentAccess.hpp"
 #include "scene/components/SceneComponentStorageAccess.hpp"
 
@@ -8,16 +10,14 @@
 namespace kb::scene {
 
 SceneTransformComponentStore::SceneTransformComponentStore(kb::ecs::World& world, std::uint64_t componentId) noexcept
-    : world_(&world) {
-    static_cast<void>(componentId);
-}
+    : world_(&world), componentId_(componentId) {}
 
 const TransformComponent* SceneTransformComponentStore::TryGet(SceneEntity entity) const noexcept {
-    return SceneComponentStorageAccess::TryGet<TransformComponent>(world_, entity);
+    return entity.IsValid() ? static_cast<const TransformComponent*>(kb::ecs::WorldInternalAccess::TryGetComponent(*world_, entity, componentId_)) : nullptr;
 }
 
 TransformComponent* SceneTransformComponentStore::TryGet(SceneEntity entity) noexcept {
-    return SceneComponentStorageAccess::TryGetMutable<TransformComponent>(world_, entity);
+    return entity.IsValid() ? static_cast<TransformComponent*>(kb::ecs::WorldInternalAccess::TryGetMutableComponent(*world_, entity, componentId_)) : nullptr;
 }
 
 void SceneTransformComponentStore::Set(SceneEntity entity, const TransformComponent& transform) {
@@ -35,14 +35,14 @@ void SceneTransformComponentStore::MarkModified(SceneEntity entity) noexcept {
         ++transform->localVersion;
         transform->worldDirty = true;
     }
-    SceneComponentStorageAccess::MarkModified<TransformComponent>(world_, entity);
+    if (entity.IsValid()) kb::ecs::WorldInternalAccess::MarkComponentModified(*world_, entity, componentId_);
 }
 
 void SceneTransformComponentStore::MarkParentModified(SceneEntity entity) noexcept {
     if (TransformComponent* transform = TryGet(entity); transform != nullptr) {
         transform->worldDirty = true;
     }
-    SceneComponentStorageAccess::MarkModified<TransformComponent>(world_, entity);
+    if (entity.IsValid()) kb::ecs::WorldInternalAccess::MarkComponentModified(*world_, entity, componentId_);
 }
 
 } // namespace kb::scene

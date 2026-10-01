@@ -66,7 +66,7 @@ cases = [('static_100k', 'cpu', 'runtime_ms', .1, None),
          ('physics_idle_world_100k', 'cpu', 'runtime_ms', .1, None),
          ('physics_4096', 'cpu', 'runtime_ms', 5, 8),
          ('dense_4096', 'cpu', 'runtime_ms', None, None),
-         ('batch_dirty_100k', 'cpu', 'runtime_ms', None, None),
+         ('batch_dirty_100k', 'cpu', 'runtime_ms', 8, 12),
          ('world_100k', 'gpu', 'wall_frame_ms', 12, 16.67),
          ('city_dense_50k', 'gpu', 'wall_frame_ms', 16.67, 25),
          ('culling_far_10k', 'gpu', 'wall_frame_ms', None, None),
@@ -112,12 +112,17 @@ for case, kind, metric, mean_limit, p99_limit in cases:
 if (a.after / 'Results/raw/colliders_100k_cpu_1.csv').exists():
     after = read(a.after, 'colliders_100k', 'cpu')
     new = after['runtime_ms']
+    before = read(a.before, 'colliders_100k', 'cpu') if (a.before / 'Results/raw/colliders_100k_cpu_1.csv').exists() else None
+    change = (new['mean'] / before['runtime_ms']['mean'] - 1) * 100 if before else None
     status = 'PASS' if new['mean'] <= 1 and new['p99'] <= 2 else 'FAIL'
-    report.append({'case': 'colliders_100k', 'kind': 'cpu', 'before': None, 'after': after,
-                   'change_percent': None, 'gate': status, 'regression_over_5_percent': False})
-    lines.append(f"colliders_100k (cpu) | brak bazy | {new['mean']:.4f} | "
-                 f"{new['p99']:.4f} | {new['max']:.4f} | brak porównania | {status}")
-    lines.append('100k colliderów: nowy test pojemności; baza miała limit 65536 ciał.')
+    report.append({'case': 'colliders_100k', 'kind': 'cpu', 'before': before, 'after': after,
+                   'change_percent': change, 'gate': status, 'regression_over_5_percent': change is not None and change > 5})
+    old_text = f"{before['runtime_ms']['mean']:.4f}" if before else 'brak bazy'
+    change_text = f'{change:+.1f}%' if change is not None else 'brak porównania'
+    lines.append(f"colliders_100k (cpu) | {old_text} | {new['mean']:.4f} | "
+                 f"{new['p99']:.4f} | {new['max']:.4f} | {change_text} | {status}")
+    if before is None:
+        lines.append('100k colliderów: nowy test pojemności; baza miała limit 65536 ciał.')
 lines.extend(['', 'Szczegółowe metryki i średnie każdej powtórki: production_summary.json.',
               'Nieudane bramki i regresje są zachowane w raporcie.'])
 destination = a.after / 'Results'
