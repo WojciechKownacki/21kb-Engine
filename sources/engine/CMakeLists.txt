@@ -720,6 +720,7 @@ add_library(kb_engine STATIC
     src/scene/SceneTagCatalog.cpp
     src/scene/SceneObject.cpp
     src/scene/SceneRuntime.cpp
+    src/scene/SceneRenderProxyComponentMask.cpp
     src/scene/SceneState.cpp
     src/scene/SceneTaskService.cpp
     src/scene/SceneTimerService.cpp

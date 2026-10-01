@@ -10,6 +10,7 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneLoadedContent.hpp"
+#include "engine/scene/SceneRenderFeedback.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneUI.hpp"
 #include "engine/script/ScriptModule.hpp"
@@ -103,6 +104,10 @@ struct GameFrameProfile {
     std::uint32_t sceneEntities = 0U;
     std::uint32_t streamingOperations = 0U;
     double streamingMilliseconds = 0.0;
+    float renderCameraX = 0.0F;
+    float renderCameraY = 0.0F;
+    float renderCameraZ = 0.0F;
+    bool renderCameraValid = false;
 };
 
 [[nodiscard]] bool HasPrefix(std::wstring_view value, std::wstring_view prefix) noexcept {
@@ -375,7 +380,7 @@ int RunGame(const GameOptions& options) {
             return EXIT_FAILURE;
         }
         profileOutput.imbue(std::locale::classic());
-        profileOutput << "frame,cpu_ms,simulation_ms,render_ms,begin_submit_ms,end_frame_ms,gpu_delayed_ms,bgfx_wait_render_ms,bgfx_wait_submit_ms,draws,shadow_casters,submitted_meshes,dropped,missing_resources,fixed_steps,exposure_readback_submitted,exposure_sample_available,width,height,wall_frame_ms,visible_meshes,culled_instances,scene_lights,submitted_lights,skipped_lights,light_capacity,lighting_path,shadow_draws,instance_upload_bytes,transform_ms,scene_sync_ms,transform_inspected,transform_updated,mesh_command_reuse,scene_entities,streaming_operations,streaming_ms\n";
+        profileOutput << "frame,cpu_ms,simulation_ms,render_ms,begin_submit_ms,end_frame_ms,gpu_delayed_ms,bgfx_wait_render_ms,bgfx_wait_submit_ms,draws,shadow_casters,submitted_meshes,dropped,missing_resources,fixed_steps,exposure_readback_submitted,exposure_sample_available,width,height,wall_frame_ms,visible_meshes,culled_instances,scene_lights,submitted_lights,skipped_lights,light_capacity,lighting_path,shadow_draws,instance_upload_bytes,transform_ms,scene_sync_ms,transform_inspected,transform_updated,mesh_command_reuse,scene_entities,streaming_operations,streaming_ms,render_camera_x,render_camera_y,render_camera_z,render_camera_valid\n";
         profileRows.reserve(options.frameLimit);
     }
     kb::input::Win32XInputHapticsBackend hapticsBackend;
@@ -452,6 +457,8 @@ int RunGame(const GameOptions& options) {
         }
         renderer.EndFrame();
         if (!options.profilePath.empty()) {
+            const auto renderCamera = kb::scene::SceneRenderFeedback::ScreenPointToRay(scene,
+                static_cast<float>(window.Width()) * 0.5F, static_cast<float>(window.Height()) * 0.5F);
             const auto profileEnd = std::chrono::steady_clock::now();
             const bgfx::Stats* gpu = bgfx::getStats();
             bool readbackSubmitted = false;
@@ -510,6 +517,10 @@ int RunGame(const GameOptions& options) {
                 .sceneEntities = static_cast<std::uint32_t>(scene.Entities().Count()),
                 .streamingOperations = static_cast<std::uint32_t>(scene.LoadedContent().StreamingStats().operations),
                 .streamingMilliseconds = scene.LoadedContent().StreamingStats().milliseconds,
+                .renderCameraX = renderCamera.ray.origin.x,
+                .renderCameraY = renderCamera.ray.origin.y,
+                .renderCameraZ = renderCamera.ray.origin.z,
+                .renderCameraValid = renderCamera.valid,
             });
         }
         if (!submitted || renderErrors) {
@@ -571,7 +582,9 @@ int RunGame(const GameOptions& options) {
                           << row.lightingPath << ',' << row.shadowDraws << ',' << row.instanceUploadBytes << ','
                           << row.transformMilliseconds << ',' << row.sceneSyncMilliseconds << ','
                           << row.transformInspected << ',' << row.transformUpdated << ',' << row.meshCommandReuseCount << ','
-                          << row.sceneEntities << ',' << row.streamingOperations << ',' << row.streamingMilliseconds << '\n';
+                          << row.sceneEntities << ',' << row.streamingOperations << ',' << row.streamingMilliseconds << ','
+                          << row.renderCameraX << ',' << row.renderCameraY << ',' << row.renderCameraZ << ','
+                          << row.renderCameraValid << '\n';
         }
         profileOutput.flush();
         if (!profileOutput) {

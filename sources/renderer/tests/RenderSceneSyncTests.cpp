@@ -19,6 +19,8 @@
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/SceneParticleSystems.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/ScenePrefabs.hpp"
+#include "engine/script/ScriptSceneComponentApi.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 #include "engine/scene/WorldBackdropComponent.hpp"
@@ -671,6 +673,85 @@ void RunRuntimeRenderProxyQueueSynchronizesCameraLightAndVisibilityTest() {
     static_cast<void>(scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "RuntimeTopologyChange" }));
     Require(scene.Runtime().RenderTopologyVersion() != topologyBeforeValueEdits,
         "Entity creation did not advance render topology");
+}
+
+void RunBulkPrefabRenderTransformPublicationTest() {
+    for (const bool syncWorldHierarchy : {false, true}) {
+        for (const bool collectInstances : {true, false}) {
+            kb::scene::Scene scene;
+            kb::scene::SceneLightingAccess::SetBasicLightingEnabled(scene, true);
+            kb::scene::ScenePrefab prefab;
+            const auto root = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "BulkRoot" });
+            const auto cameraNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+                .name = "BulkCamera", .parentNode = root,
+                .components = { .camera = kb::scene::CameraComponent{} },
+            });
+            const auto lightNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+                .name = "BulkLight", .parentNode = root,
+                .components = { .light = kb::scene::LightComponent{} },
+            });
+            const auto meshNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+                .name = "BulkMesh", .parentNode = root,
+                .components = { .meshRenderer = kb::scene::MeshRendererComponent{ .meshAssetId = 41U } },
+            });
+            const auto hiddenNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+                .name = "BulkHidden", .parentNode = root,
+                .visibility = { .mode = kb::scene::VisibilityMode::Hidden, .visible = false },
+                .components = { .meshRenderer = kb::scene::MeshRendererComponent{ .meshAssetId = 41U } },
+            });
+            const std::size_t count = collectInstances ? 2U : 129U;
+            const kb::scene::ScenePrefabInstantiationSettings settings{ .syncWorldHierarchy = syncWorldHierarchy };
+            if (collectInstances) Require(scene.Prefabs().InstantiateMany(prefab, count, settings).size() == count,
+                "Bulk transform publication setup failed");
+            else Require(scene.Prefabs().InstantiateBatch(prefab, count, settings).entitiesCreated == count * 5U,
+                "Bulk stats-only transform publication setup failed");
+            const auto roots = scene.Hierarchy().RootEntities();
+            Require(roots.size() == count, "Bulk publication setup lost roots");
+            const auto children = scene.Hierarchy().ChildEntities(roots.front());
+            Require(children.size() == 4U && cameraNode == 1U && lightNode == 2U && meshNode == 3U && hiddenNode == 4U,
+                "Bulk publication setup lost node order");
+            RenderScene renderScene;
+            EcsRenderSceneSynchronizer synchronizer;
+            static_cast<void>(scene.Runtime().Update(0.016F));
+            synchronizer.Sync(scene, renderScene);
+            const auto topology = scene.Runtime().RenderTopologyVersion();
+            const auto camera = children[0];
+            const auto light = children[1];
+            const auto mesh = children[2];
+            const auto hidden = children[3];
+            for (std::uint32_t frame = 1U; frame <= 32U; ++frame) {
+                const float z = static_cast<float>(frame) * 1.25F;
+                for (const auto entity : roots) Require(kb::script::ScriptSceneComponentApi::SetProperty(scene, entity,
+                    "Transform", "localPosition.z", kb::script::ScriptValue{z}).succeeded,
+                    "Bulk transform publication script mutation failed");
+                static_cast<void>(scene.Runtime().Update(0.016F));
+                const auto report = scene.Runtime().HotPathReport();
+                Require(report.transformRenderProxyCameraCount == count && report.transformRenderProxyLightCount == count,
+                    "Bulk prefab camera and light transforms were omitted from render publication");
+                Require(report.transformRenderProxyMeshRendererCount == count * 2U && report.transformRenderProxyVisibleMeshRendererCount == count,
+                    "Bulk prefab mesh and hidden flags were omitted from render publication");
+                synchronizer.SyncMeshWorldAffines(renderScene, scene.Runtime().TransformRenderProxyUpdateEntities(),
+                    scene.Runtime().TransformRenderProxyWorldAffine3x4());
+                synchronizer.SyncRenderProxyUpdates(scene, renderScene);
+                Require(NearlyEqual(renderScene.FindCameraByEntity(camera.Id())->desc.position[2], z) &&
+                        NearlyEqual(renderScene.FindLightByEntity(light.Id())->desc.position[2], z) &&
+                        NearlyEqual(renderScene.FindMeshByEntity(mesh.Id())->desc.model[14], z) &&
+                        !renderScene.FindMeshByEntity(hidden.Id())->desc.visible,
+                    "Bulk prefab transforms did not reach camera, light and mesh proxies in the current frame");
+                Require(scene.Runtime().RenderTopologyVersion() == topology,
+                    "Bulk transform publication required a structural scene change");
+            }
+            scene.Components().Cameras().Remove(camera);
+            scene.Components().Lights().Remove(light);
+            Require(kb::script::ScriptSceneComponentApi::SetProperty(scene, roots.front(),
+                "Transform", "localPosition.z", kb::script::ScriptValue{50.0F}).succeeded,
+                "Bulk transform publication removal mutation failed");
+            static_cast<void>(scene.Runtime().Update(0.016F));
+            Require(scene.Runtime().HotPathReport().transformRenderProxyCameraCount == 0U &&
+                    scene.Runtime().HotPathReport().transformRenderProxyLightCount == 0U,
+                "Removed bulk prefab camera or light retained its publication flag");
+        }
+    }
 }
 
 void RunRuntimeRenderProxyQueueRemovesDisabledProxyTest() {
@@ -3480,6 +3561,7 @@ void RunRenderSceneSyncTests() {
     RunSyncEntitiesUpdatesOnlyRequestedProxyTest();
     RunMeshRendererModifiedRuntimeQueueInvalidatesMaterialProxyTest();
     RunRuntimeRenderProxyQueueSynchronizesCameraLightAndVisibilityTest();
+    RunBulkPrefabRenderTransformPublicationTest();
     RunRuntimeRenderProxyQueueRemovesDisabledProxyTest();
     RunSyncTransformUpdatesUsesRuntimeCacheTest();
     RunSyncEntitiesRemovesDestroyedProxyTest();

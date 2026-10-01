@@ -5,6 +5,7 @@ import json
 import math
 import statistics
 from pathlib import Path
+from benchmark_validation import validate_camera_path
 
 p = argparse.ArgumentParser()
 p.add_argument('--before', type=Path, required=True)
@@ -38,6 +39,8 @@ def read(root, case, kind):
         elif kind.endswith('gpu'):
             assert len(rows) == (3420 if case == 'mixed_stream_10k' else 600), path
             assert all(int(r['dropped']) == int(r['missing_resources']) == 0 for r in rows), path
+            if root == a.after:
+                validate_camera_path(rows, case)
             if kind == 'fixed_gpu':
                 assert all(int(r['fixed_steps']) == 1 for r in rows), path
             if case != 'mixed_stream_10k':
@@ -56,7 +59,7 @@ def read(root, case, kind):
     common = set(runs[0][0])
     metrics = {}
     for column in sorted(common):
-        if column in ('frame', 'phase', 'cycle'):
+        if column in ('frame', 'phase', 'cycle') or column.startswith('render_camera_'):
             continue
         per_run = [[float(r[column]) for r in rows if float(r[column]) >= 0] for rows in runs]
         if all(per_run):

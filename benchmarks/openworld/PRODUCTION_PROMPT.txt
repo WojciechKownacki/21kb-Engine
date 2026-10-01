@@ -148,3 +148,26 @@ statycznych ciał do istniejącej ścieżki usuwania. Nie dodawaj nowego indeksu
 4. Nadal obowiązują alpha/wiatr/cienie/LOD/streaming roślinności, asynchroniczne
    przygotowanie zasobów i budżet publikacji. Brak regresji >5% do etapu 6.
 5. Funkcjonalne 54/54 i ostatni PASS bulk nie kończą pełnego celu produkcyjnego.
+
+KONTYNUACJA PO ETAPIE 7 (PRODUCTION_RESULTS_STAGE7_20261001.txt)
+Naprawiono brak flag publikacji kamer/świateł/siatek po bulk prefabu. Istniejący
+SceneRenderProxyComponentMask odtwarza je z kanonicznego ECS w momencie tworzenia.
+Nie dodawaj nowej mapy własności lub drugiego źródła stanu. Runtime profiler
+odczytuje kamerę z opublikowanego feedbacku renderera; benchmark_validation.py
+sprawdza jej rzeczywistą trasę w każdej klatce city i mixed.
+1. Wyniki ruchomych scen etapów 5/6 zawierały starą kamerę. Zachowaj te serie
+   i diagnostykę, ale bazą następnych optymalizacji jest zweryfikowany etap 7.
+   Nie przedstawiaj procentów względem błędnego widoku jako zysku CPU/GPU.
+2. Cel city fixed i mixed gameplay P99 <=16.67 ms pozostaje bez zmian. Usuń
+   koszt przebudowy cullingu/pakowania/uploadu przy rzeczywistym ruchu kamery.
+   Klasy: SceneMeshSubmitter, MeshPassProcessor, SceneMeshBatchCommandCache,
+   SceneMeshInstanceBufferPool. Zachowaj poprawne LOD, cienie, maski, zasoby,
+   wszystkie instancje, 512 aktywnych ciał i 9 pełnych cykli streamingu.
+3. Utrzymaj bulk mutation+Update mean/P99 <=16.67 ms i sprawdź dłuższą stabilność
+   ogona. Zachowaj wcześniejsze pomiary i każdy OnSet/odroczenie/dziedziczenie.
+4. Nadal wykonaj pełne oświetlenie >=512 świateł przez listy przestrzenne,
+   alpha/wiatr/cienie/LOD/streaming roślinności oraz asynchroniczne I/O i
+   przygotowanie zasobów z budżetem publikacji. Pełny cel pozostaje aktywny.
+5. Rozwiąż zachowany alarm world_100k mean +18.93% vs etap 6 w kontrolowanym
+   A/B. Kontrole dały 1.047685/0.911218/0.847631 ms; nie zastępuj serii ani nie
+   kasuj alarmu na podstawie korzystnej pojedynczej powtórki.
