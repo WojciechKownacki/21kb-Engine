@@ -238,3 +238,26 @@ Pełny raport: PRODUCTION_RESULTS_STAGE6_20261001.txt; production_stage6_summary
 Results/pilot_native_lookup_full zachowuje serię przed ostatnią zmianą fizyki,
 w tym P99 bulk 19.9395 ms przy tym samym kodzie bulk, oraz alarm collider +7.46%.
 Końcowy report exit 1 zachowuje mixed P99; pełny cel nadal aktywny.
+
+Etap 7 (2026-10-01): poprawna publikacja transformów po bulk prefabu.
+SceneRenderProxyComponentMask odtwarza istniejące flagi z kanonicznego ECS
+przy przypisaniu porządku nowych encji. Kamer, świateł i ukrytych siatek nie
+trzeba ponownie publikować zmianą struktury sceny.
+UWAGA: diagnoza etapu 6 wykazała starą kamerę w 3057/3420 klatkach mixed.
+Wyniki ruchomych scen city/mixed etapów 5/6 nie dowodzą wydajności przy
+ciągłym ruchu renderowanej kamery. Zachowano dane i trace diagnostyczny;
+procenty względem tych scen nie są zyskiem tej samej pracy.
+Profiler zapisuje render_camera_x/y/z/valid z istniejącego feedbacku renderera.
+benchmark_validation.py odrzuca city/mixed z brakującą, starą lub nieprawidłową
+kamerą w dowolnej klatce. Wszystkie nowe powtórki oraz reporter wykonują tę
+samą walidację, bez drugiej implementacji trasy.
+Projekt: E:/21kbProjekty/OpenWorldProductionStage7_20261001.
+Odtworzenie: polecenia etapu 4 ze Stage7 zamiast Stage4. Zachowaj generator,
+compare, capacity, foliage oraz production --fixed-step i wszystkie próbki.
+Porównanie do etapu 6 jest diagnostyczne dla city/mixed; bazą następnej
+optymalizacji jest poprawny etap 7. Pozostałe sceny porównuje się bez zmiany
+ich kamer i liczników. Raport: PRODUCTION_RESULTS_STAGE7_20261001.txt.
+Results/pilot_mask_publication zachowuje pierwsze 54 pomiary; Results/raw
+zawiera finalne 54 na kodzie z const odczytem metadanych. Results/diagnostics
+zawiera regresję przed/po oraz ślad rozbieżnej kamery z etapu 6.
+Bramki i pełny cel produkcyjny pozostają bez zmian.

@@ -1,6 +1,7 @@
 """Run comparable Windows headless measurements sequentially and preserve baselines."""
 import argparse, csv, json, subprocess, time
 from pathlib import Path
+from benchmark_validation import validate_camera_path
 p=argparse.ArgumentParser()
 p.add_argument('--build',type=Path,required=True)
 p.add_argument('--project',type=Path,required=True)
@@ -55,6 +56,7 @@ for rep in ([a.repetition] if a.repetition else range(1,4)):
             raise RuntimeError(f'{name}: incomplete or invalid submissions')
         if a.fixed_step and any(int(r['fixed_steps'])!=1 for r in rows):
             raise RuntimeError(f'{name}: simulation work was not constant')
+        validate_camera_path(rows, case)
         if case=='mixed_stream_10k':
             fixture=json.loads((a.project/'Benchmarks/mixed_manifest.json').read_text())
             base=fixture['base_entities']; full=base+fixture['streamed_entities']

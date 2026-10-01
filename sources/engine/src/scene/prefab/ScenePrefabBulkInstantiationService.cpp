@@ -5,6 +5,7 @@
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneUIComponentSet.hpp"
 #include "scene/SceneAccess.hpp"
+#include "scene/SceneRenderProxyComponentMask.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/entities/SceneEntityNaming.hpp"
 #include "scene/hierarchy/SceneHierarchyCache.hpp"
@@ -502,6 +503,7 @@ void AssignPrefabHierarchyOrderRange(SceneState& state, std::span<const SceneEnt
 
     for (std::size_t index = 0; index < entities.size(); ++index) {
         const SceneEntity entity = entities[index];
+        RefreshSceneRenderProxyComponentMask(state, entity);
         const std::uint32_t denseIndex = kb::ecs::GeneratedEntityIndex(entity);
         if (denseIndex != kb::ecs::kInvalidGeneratedEntityIndex) {
             if (denseIndex >= state.denseHierarchyOrder.size()) {

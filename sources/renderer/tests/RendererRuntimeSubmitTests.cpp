@@ -21,6 +21,8 @@
 #include "engine/scene/SceneRenderFeedback.hpp"
 #include "../../game/src/private/RuntimeSceneFrameSync.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/ScenePrefabs.hpp"
+#include "engine/script/ScriptSceneComponentApi.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneUI.hpp"
 #include "engine/scene/SceneUIComponents.hpp"
@@ -2788,10 +2790,15 @@ void RunRuntimeStructuralFrameSyncKeepsQueuedChangesTest() {
         return entity;
     };
     const auto second = makeMesh();
-    const auto camera = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
-        .transform = TransformAt(0.0F, 0.0F, -5.0F)});
-    scene.Components().Cameras().Set(camera, kb::scene::CameraComponent{
-        .projection = kb::scene::CameraProjection::Orthographic, .orthographicHeight = 6.0F, .primary = true});
+    kb::scene::ScenePrefab cameraPrefab;
+    static_cast<void>(cameraPrefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .transform = TransformAt(0.0F, 0.0F, -5.0F),
+        .components = { .camera = kb::scene::CameraComponent{
+            .projection = kb::scene::CameraProjection::Orthographic, .orthographicHeight = 6.0F, .primary = true} },
+    }));
+    const auto cameraInstances = scene.Prefabs().InstantiateMany(cameraPrefab, 1U);
+    Require(cameraInstances.size() == 1U, "Runtime bulk camera setup failed");
+    const auto camera = cameraInstances.front().ObjectAt(0U).Entity();
     HeadlessSurface surface;
     DisplayConfig config{};
     config.allowHeadlessNoop = true;
@@ -2809,6 +2816,21 @@ void RunRuntimeStructuralFrameSyncKeepsQueuedChangesTest() {
     submit();
     Require(kb::scene::SceneRenderFeedback::IsVisible(scene, fixture.entity) &&
         kb::scene::SceneRenderFeedback::IsVisible(scene, second), "Runtime topology setup was not visible");
+
+    const auto topology = scene.Runtime().RenderTopologyVersion();
+    for (std::uint32_t frame = 1U; frame <= 32U; ++frame) {
+        sync.BeforeUpdate(scene);
+        const float z = -5.0F - static_cast<float>(frame) * 0.05F;
+        Require(kb::script::ScriptSceneComponentApi::SetProperty(scene, camera, "Transform", "localPosition.z",
+            kb::script::ScriptValue{z}).succeeded, "Runtime bulk camera script movement failed");
+        static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+        submit();
+        const auto point = kb::scene::SceneRenderFeedback::WorldToScreen(scene, kb::math::Vec3{});
+        Require(point.valid && NearlyEqual(point.viewDepth, -z),
+            "Runtime renderer retained an old bulk camera transform after script movement");
+        Require(scene.Runtime().RenderTopologyVersion() == topology,
+            "Runtime bulk camera movement required structural synchronization");
+    }
 
     // Changes before Update must survive its queue reset; a different retained
     // mesh changes during the same tick as topology publication.
