@@ -265,6 +265,8 @@ public:
     [[nodiscard]] std::uint64_t ComponentVersion(Entity entity, ComponentId componentId) const;
     [[nodiscard]] std::uint64_t ArchetypeComponentVersion(std::size_t archetypeIndex, ComponentId componentId) const;
     [[nodiscard]] std::uint64_t StructuralVersion() const noexcept;
+    // Latest successful entity/component removal; additions do not advance it.
+    [[nodiscard]] std::uint64_t RemovalVersion() const noexcept;
     [[nodiscard]] std::size_t ChunkCount() const noexcept;
     [[nodiscard]] std::size_t ChunkPayloadBytes() const noexcept;
     [[nodiscard]] NativeEcsStorageStats Stats() const;

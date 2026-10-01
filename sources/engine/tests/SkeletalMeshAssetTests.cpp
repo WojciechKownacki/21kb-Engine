@@ -24,6 +24,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string_view>
+#include <thread>
 
 namespace {
 
@@ -705,8 +706,14 @@ void RunSkeletalMeshAssetTests() {
     Require(!reloadedRuntime.IsLoaded() &&
             scene.Assets().Manager().LastError().find("incompatible compatibility signature") != std::string::npos,
         "SkeletalMeshAsset reimport silently loaded an incompatible dependent mesh");
-    Require(scene.Assets().Manager().LoadAsync<kb::scene::SkeletalMeshAsset>(meshId) &&
-            scene.Assets().Manager().AsyncLoadStatus(meshId) == kb::assets::AsyncAssetLoadStatus::Failed &&
+    Require(scene.Assets().Manager().LoadAsync<kb::scene::SkeletalMeshAsset>(meshId),
+        "SkeletalMeshAsset async reload request was rejected before validation");
+    for (unsigned spin = 0U; spin < 1000000U &&
+            scene.Assets().Manager().AsyncLoadStatus(meshId) == kb::assets::AsyncAssetLoadStatus::Pending; ++spin) {
+        scene.Assets().Manager().PumpAsyncLoads();
+        std::this_thread::yield();
+    }
+    Require(scene.Assets().Manager().AsyncLoadStatus(meshId) == kb::assets::AsyncAssetLoadStatus::Failed &&
             scene.Assets().Manager().AsyncLoadError(meshId).find("incompatible compatibility signature") != std::string::npos,
         "SkeletalMeshAsset async reload silently accepted an incompatible dependent mesh");
     const auto report = scene.Assets().Manager().ValidateCompatibility(meshId);

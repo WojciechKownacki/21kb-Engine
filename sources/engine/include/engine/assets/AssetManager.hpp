@@ -22,6 +22,7 @@ namespace kb::assets {
 
 class AssetDiscoveryService;
 class AssetRuntimeLoadService;
+class AssetRegistrySnapshotCache;
 namespace bake {
 class RuntimeAssetPack;
 }
@@ -75,7 +76,7 @@ struct AssetMoveResult {
 
 class AssetManager {
 public:
-    AssetManager() = default;
+    AssetManager();
     ~AssetManager();
 
     [[nodiscard]] AssetMountTable& Mounts() noexcept;
@@ -331,6 +332,7 @@ private:
         std::shared_ptr<AsyncPreparedState> state;
         AssetUnloadPolicy policy = AssetUnloadPolicy::Retain;
         std::uint64_t generation = 0U;
+        std::uint64_t registryGeneration = 0U;
     };
 
     struct AsyncLoadJob {
@@ -339,6 +341,7 @@ private:
         std::filesystem::path resolvedPath;
         std::shared_ptr<bake::RuntimeAssetPack> runtimePack;
         std::string typeName;
+        std::shared_ptr<const AssetRegistry> registry;
         std::shared_ptr<AsyncPreparedState> state;
     };
 
@@ -365,6 +368,7 @@ private:
     [[nodiscard]] static std::uint64_t HashFile(const std::filesystem::path& path) noexcept;
     AssetMountTable mounts_;
     AssetRegistry registry_;
+    std::unique_ptr<AssetRegistrySnapshotCache> dependencySnapshots_;
     std::shared_ptr<bake::RuntimeAssetPack> runtimePack_;
     std::vector<std::unique_ptr<IAssetLoader>> loaders_;
     std::unordered_map<std::uint64_t, CachedAsset> cache_;

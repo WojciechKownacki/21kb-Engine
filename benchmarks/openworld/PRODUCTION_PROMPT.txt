@@ -38,12 +38,20 @@ WYKONANIE
 6. Testy funkcjonalne mają wykrywać rzeczywiste błędy: zmiany po rozgrzewce,
    wielokamerowość, transformacje rodzica, usuwanie, ponowne użycie ID,
    anulowanie, spóźnione publikacje i cykle wczytania/usunięcia.
+7. AssetManager::RequestLoadAsync / PrepareAsyncLoad: walidacja zależności
+   czytająca i dekodująca plik musi działać na istniejącym workerze. Walidator
+   otrzymuje niemutowalny widok kanonicznego rejestru, współdzielony między
+   zadaniami tej samej generacji. Zmiana rejestru przed publikacją odrzuca
+   nieaktualny wynik. Nie wyłączaj kontroli sidecarów, hashów i referencji UI.
+   Zbuduj shaderc i sprawdź rzeczywiste gotowanie oraz użycie graph shaderów.
 
 BRAMKA WYDAJNOŚCI (i7-13700F / RTX 4070, 1080p, D3D11, Release)
 - world_100k: średnia całej klatki <= 12 ms, P99 <= 16.67 ms.
 - city_dense_50k: średnia <= 16.67 ms; P99 <= 25 ms.
 - physics_4096: Runtime.Update średnia <= 5 ms, P99 <= 8 ms.
 - Statyczne 100k przy włączonej fizyce: średnia Update <= 0.1 ms.
+- 100k rzeczywistych colliderów statycznych: brak błędu pojemności, 1000
+  trafionych raycastów na klatkę; Update średnia <= 1 ms, P99 <= 2 ms.
 - foliage_1m: średnia <= 16.67 ms przy tych samych widocznych instancjach.
 - Streaming: co najmniej 9 cykli, zgodne referencje, zero pozostawionych encji,
   brak blokowania I/O; pełny Update P99 <= 8 ms, maks. <= 16.67 ms.
@@ -59,3 +67,8 @@ konkretną przyczyną, nie odpowiedź "trudno stwierdzić". Nie oznaczaj silnika
 jako produkcyjnie gotowego, jeśli kod lub pomiary temu przeczą. Nie zmyślaj
 równoważności z konkurencją ani uniwersalnej wydajności dla dowolnej sceny.
 Zapisz wyniki i polecenia odtworzenia, wykonaj zwykły commit/push origin/1.0.
+
+Uzupełnienie weryfikacji fizyki: każda klatka odbiera wszystkie zdarzenia
+kolizji przez rzeczywistego konsumenta. Raportuj ich liczbę i pamięć. Nie
+porównuj serii z rosnącą, nieodbieraną kolejką ze stałym obciążeniem. Po
+zmianie harness odtwórz bazę i wykonaj pomiar identycznym odbiorcą.

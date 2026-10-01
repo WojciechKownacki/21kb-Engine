@@ -287,6 +287,8 @@ public:
     // queued since the last drain, in the exact order they were queued.
     static void QueueCollisionEvent(Scene& scene, PendingCollisionEvent event);
     [[nodiscard]] static std::vector<PendingCollisionEvent> DrainPendingCollisionEvents(Scene& scene);
+    // Recycles the caller's completed batch storage; queued events keep their order.
+    static void DrainPendingCollisionEvents(Scene& scene, std::vector<PendingCollisionEvent>& output);
 
     // LIB-129: stores `layers` on the scene (so LayerBit below can resolve
     // names even without a backend) and applies it to the registered

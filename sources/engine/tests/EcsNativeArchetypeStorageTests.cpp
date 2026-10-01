@@ -2450,6 +2450,7 @@ namespace kb::tests {
 void RunManyArchetypeLookupTest();
 void RunStorageClassDistinguishesArchetypesTest();
 void RunBulkDestroyManyBackendArchetypesTest();
+void RunNativeRemovalVersionTest();
 
 void RunEcsNativeArchetypeStorageTests() {
     RunChunkProfileAndStatsTest();
@@ -2490,6 +2491,7 @@ void RunEcsNativeArchetypeStorageTests() {
     RunBulkAdoptContiguousExternalRangeFastPathTest();
     RunBulkDestroyDuplicateValidationTest();
     RunBulkDestroyManyBackendArchetypesTest();
+    RunNativeRemovalVersionTest();
     RunBulkDestroyAllFastPathTest();
     RunClearRetainingCapacityTest();
     RunNativeStorageStructuralVersionTest();
@@ -2594,6 +2596,41 @@ void RunBulkDestroyManyBackendArchetypesTest() {
     }
     kb::tests::Require(world.NativeStorageStats().liveEntities == 32U,
         "ECS bulk destroy with many backend archetypes reported an invalid live count");
+}
+
+void RunNativeRemovalVersionTest() {
+    kb::ecs::NativeArchetypeStorage storage;
+    const auto first = storage.CreateEntity();
+    const Position position{1.0F, 2.0F};
+    const std::array values{kb::ecs::NativeComponentValue{.type = ComponentType<Position>(kPositionId), .data = &position}};
+    storage.AddComponents(first, values);
+    storage.SetComponent(first, kPositionId, &position, sizeof(position));
+    kb::tests::Require(storage.RemovalVersion() == 0U, "Additions and writes advanced the removal revision");
+    const std::array ids{kPositionId};
+    storage.RemoveComponents(first, ids);
+    auto revision = storage.RemovalVersion();
+    kb::tests::Require(revision != 0U, "Single component removal was not recorded");
+    try { storage.RemoveComponents(first, ids); } catch (const std::out_of_range&) {}
+    kb::tests::Require(storage.RemovalVersion() == revision, "Rejected removal advanced the revision");
+    const auto second = storage.CreateEntity(values);
+    const auto third = storage.CreateEntity(values);
+    const std::array pair{second, third};
+    storage.RemoveComponents(pair, ids);
+    kb::tests::Require(storage.RemovalVersion() != revision, "Bulk component removal was not recorded");
+    revision = storage.RemovalVersion();
+    storage.DestroyEntity(first);
+    kb::tests::Require(storage.RemovalVersion() != revision, "Entity destruction was not recorded");
+    revision = storage.RemovalVersion();
+    storage.DestroyEntities(pair);
+    kb::tests::Require(storage.RemovalVersion() != revision, "Bulk destruction of the whole world was not recorded");
+    static_cast<void>(storage.CreateEntity());
+    revision = storage.RemovalVersion();
+    storage.ClearRetainingCapacity();
+    kb::tests::Require(storage.RemovalVersion() != revision, "Retained clear was not recorded");
+    static_cast<void>(storage.CreateEntity());
+    revision = storage.RemovalVersion();
+    storage.Clear();
+    kb::tests::Require(storage.RemovalVersion() != revision, "Storage clear was not recorded");
 }
 
 } // namespace kb::tests

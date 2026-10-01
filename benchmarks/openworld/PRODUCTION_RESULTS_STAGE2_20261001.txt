@@ -1,0 +1,129 @@
+21kb — drugi etap weryfikacji produkcyjnych ścieżek (01.10.2026)
+Stan: wszystkie jawne bramki PRODUCTION_PROMPT.txt zaliczone; brak regresji średniej >5%.
+Nie jest to certyfikat równoważności całego silnika z silnikami studyjnymi.
+
+Pochodzenie danych i metoda
+Baza kodu: 3f4a9fc630f7f9413a35942e600ba9a01d014eef.
+Przed: E:/21kbProjekty/OpenWorldProductionBeforeCorrected_20261001.
+Po: E:/21kbProjekty/OpenWorldProductionStage2_20261001.
+CPU bazy ponownie zbudowano i zmierzono po dodaniu odbiorcy kontaktów.
+Archiwalny pierwszy etap kumulował nieodebrane kontakty, więc nie był
+porównaniem stałego obciążenia. Zachowano stare próbki i odtworzono bazę.
+Niezmienione GPU/streaming pochodzą z zachowanej bazy; rebaseline_manifest.json
+opisuje ich pochodzenie. Wszystkie końcowe serie zmierzono po ostatniej
+poprawce walidacji zasobów. Polecenia odtworzenia znajdują się w README.txt.
+MSVC Release /O2 /DNDEBUG; i7-13700F, 64 GB, RTX 4070 12 GB, driver 591.74.
+D3D11, 1920x1080, ForwardPlus. Wszystkie procesy headless, serie kolejno.
+CPU Runtime.Update nie obejmuje Wake/odbioru zdarzeń/raycastów. total_ms
+obejmuje tę pracę, query_ms mierzy raycasty. Nie utożsamiaj Update z klatką gry.
+world_100k oznacza rezydentny świat 100k, z zachowanym cullingiem kamery.
+wall_frame_ms mierzy odstęp między początkiem iteracji, czyli koszt poprzedniej
+iteracji. GPU timer jest opóźniony. Nie sumuj CPU+GPU i nie przypisuj piku
+wall_frame_ms do bieżącej symulacji. Przepustowość headless nie jest FPS ekranu.
+
+21kb: pomiary produkcyjnych ścieżek CPU/GPU
+Release; i7-13700F, RTX 4070, 64 GB; D3D11 1920x1080.
+Trzy powtórki. GPU: 120 klatek rozgrzewki, 480 mierzonych; mieszany: wszystkie 3420.
+CPU: 180 rozgrzewki, 360 mierzonych; streaming: wszystkie klatki.
+P99: percentyl z połączonych próbek. GPU timer jest opóźniony; -1 pominięto.
+Liczniki renderowanych instancji i świateł są sumą pasów, nie liczbą unikalnych obiektów.
+Roślinność: cztery trójkąty, bez alpha, wiatru i cieni. Wynik nie certyfikuje gier AAA.
+
+Scenariusz | Przed średnia | Po średnia | Po P99 | Po maksimum | Zmiana | Bramka
+--- | ---: | ---: | ---: | ---: | ---: | ---
+static_100k (cpu) | 0.0086 | 0.0081 | 0.0091 | 0.0232 | -6.1% | PASS
+physics_idle_world_100k (cpu) | 0.0260 | 0.0254 | 0.0264 | 0.0548 | -2.0% | PASS
+physics_4096 (cpu) | 8.1529 | 4.0989 | 4.9530 | 5.9569 | -49.7% | PASS
+dense_4096 (cpu) | 15.3104 | 9.5451 | 13.4063 | 14.4906 | -37.7% | pomiar
+batch_dirty_100k (cpu) | 21.6700 | 18.7967 | 26.3764 | 34.5243 | -13.3% | pomiar
+world_100k (gpu) | 23.1340 | 1.1000 | 1.7715 | 2.2779 | -95.2% | PASS
+city_dense_50k (gpu) | 43.6231 | 7.8958 | 18.2339 | 25.3590 | -81.9% | PASS
+culling_far_10k (gpu) | 2.0362 | 0.5054 | 0.9242 | 3.5993 | -75.2% | pomiar
+culling_side_10k (gpu) | 1.7988 | 0.4888 | 1.1154 | 2.3975 | -72.8% | pomiar
+foliage_100k (gpu) | 20.6227 | 0.6958 | 1.9578 | 2.2213 | -96.6% | pomiar
+foliage_1m (gpu) | 133.9573 | 1.2728 | 3.6864 | 4.1602 | -99.0% | PASS
+city_dense_50k (fixed_gpu) | 30.7782 | 13.5517 | 20.5353 | 26.8645 | -56.0% | PASS
+geometry_10k (fixed_gpu) | 3.3664 | 1.8710 | 5.1196 | 8.3637 | -44.4% | pomiar
+lights_512 (fixed_gpu) | 3.2925 | 0.8284 | 1.7903 | 1.9540 | -74.8% | pomiar
+shadow_50k (fixed_gpu) | 19.2519 | 1.3811 | 1.7333 | 1.9572 | -92.8% | pomiar
+mixed_stream_10k (fixed_gpu) | 16.7190 | 8.9625 | 26.6574 | 201.5620 | -46.4% | pomiar
+static_100k (async) | 4.1585 | 0.9447 | 3.6145 | 8.8861 | -77.3% | PASS
+colliders_100k (cpu) | brak bazy | 0.6145 | 0.9693 | 1.7714 | brak porównania | PASS
+100k colliderów: nowy test pojemności; baza miała limit 65536 ciał.
+
+Szczegółowe metryki i średnie każdej powtórki: production_summary.json.
+Nieudane bramki i regresje są zachowane w raporcie.
+
+Najważniejsze liczniki poprawności i zakres testów
+Aktywna fizyka: 4096 nieśpiących ciał i jeden fixed step w każdej z 1080 próbek.
+Odebrano 9,806,400 kontaktów; max private 163.94 MiB.
+100k colliderów: 1 080 000 trafionych raycastów; query średnio 1.5792 ms
+na 1000 raycastów. Całe obciążenie total średnio 2.1939 ms, P99 2.8296 ms.
+Max private 947.51 MiB obejmuje proces, dokument fixture, ECS i Jolt; nie jest VRAM ani kosztem samego ciała.
+Pojemność Jolt: 131072 ciała. To test 100k statyków, nie 100k aktywnych ciał.
+Oddzielny streaming 100k: dziewięć cykli, 100002 encje po wczytaniu, zero po
+usunięciu, maks. 256 operacji na Update, jedna pełna budowa topologii/proces.
+Scena mieszana: 10k meshów, 10k statycznych colliderów, 512 ruchomych ciał,
+128 świateł + słońce, cienie, 100k prostych instancji i komórka 10k meshów
+po 960 trójkątów. Dziewięć cykli 20646 -> 30648 -> 20646 encji.
+Zero dropped/missing_resources w scenach GPU. Liczniki meshes/lights są
+sumą pasów: world_100k zgłasza 32504 instancje/2 drawy; nie 100k widocznych.
+Roślinność: 1 mln rezydentnych instancji, 674892 zgłoszenia w dwóch pasach,
+cztery trójkąty/instancję, jeden owner ECS, bez alpha, wiatru i cieni.
+
+Usunięty pik ponownego wczytania i pozostały koszt
+RequestLoadAsync wcześniej wywoływał walidator dekodujący cały plik na ownerze.
+Powtarzalne piki 80–85 ms przy ponownym wejściu w komórkę trafiały do symulacji.
+Walidacja działa teraz na istniejącym workerze wraz z przygotowaniem zasobu.
+Widok katalogu jest współdzielony w generacji; wynik starej generacji jest
+odrzucany. Pierwszy widok po zmianie rejestru nadal wymaga jego kopii.
+Główna tabela zawiera wszystkie 3420 klatek/proces, także zimny start.
+Osobno, po wyłączeniu pierwszych 120 klatek: mixed średnia 8.4921 ms, P99 25.4676 ms, max 57.8786 ms.
+Ta dodatkowa statystyka nie zastępuje pełnej serii ani nie ukrywa startu.
+
+Zmiany i właściciele
+- SceneTransformTopologyCache: pochodne poziomy i indeksy generacji, dodawanie
+  i usuwanie liści bez pełnego skanu, bezpieczny fallback dla poddrzewa.
+- NativeArchetypeStorage::RemovalVersion + SceneTransformHierarchySystem:
+  zachowanie dirty frontier przy dodaniu i znanym usunięciu liścia; nieznane
+  usunięcie komponentu/rodzica wciąż wymusza bezpieczny fallback.
+- JoltStaticBodyBatchCache: wyłącznie klucze ważności istniejących batchy,
+  bez drugiej kopii ciał/komponentów. Zmiana Transform/Collider/archetypu lub
+  ponowne użycie ID unieważnia zakres. Stała pojemności podniesiona do 131072.
+- JoltCollisionContactListener: dwie wielokrotnie używane kolejki callbacków.
+  WriteBackPoseView: pożyczony wiersz ważny tylko do zmiany wersji storage.
+- PhysicsBackend / ScriptRuntimeSceneSystem: odbiór kontaktów z zachowaniem
+  kolejności, zdarzeń dopisanych podczas dispatch i ponownym użyciem buforów.
+- AssetRegistrySnapshotCache / AssetManager: walidacja poza ownerem i kontrola
+  generacji przed publikacją. Jedyny mutowalny katalog to istniejący rejestr.
+  Błąd zależności jest teraz wynikiem async, a nie synchronicznej walidacji.
+
+Weryfikacja kompilacji i zachowania
+Zbudowano kb_game, kb_editor, kb_openworld_perf, kb_engine_tests,
+kb_renderer_tests, kb_ecs_api_tests oraz shaderc; wszystkie exit 0.
+Pełne engine, renderer i ECS API suite: exit 0. Osobny WebGPU fallback: exit 0.
+Renderer z KB_BUILD_GRAPH_SHADERC=ON sprawdził rzeczywiste gotowanie artefaktów
+i graph forward GPU, w tym odczyt zmienionych pikseli. Nie pominięto tych
+testów przez brak narzędzia. KB_GENERATE_RENDERER_SHADERS pozostało OFF:
+istniejące shadery renderera były jednakowe w porównaniu.
+LIB-134 zgłasza determinism max abs 0.0121826 w istniejącej tolerancji 0.02.
+Testy po rozgrzewce: transform/kształt/usunięcie collidera, generacje ID,
+zmiana rodzica i archetypu, mirror on/off, zachowanie zdarzeń podczas dispatch,
+worker walidacji blokowany podczas edycji rejestru, odrzucenie i ponowienie
+starego zadania. Zachowano test odrzucenia niezgodnego skeletal mesh po async
+walidacji. Wszystkie serie wydajności wykonano po testach, bez nakładania.
+
+Pozostałe cele pełnej jakości studyjnej
+- Forward+ nadal ma 32 światła/pas. lights_512 sprawdza selekcję, nie pełne
+  równoczesne oświetlenie 512 światłami. Wymaga prawdziwych list na klaster
+  w SceneLightingPacker i kontrakcie shaderów, z mierzalnym odczytem GPU.
+- Aktualizacja wszystkich 100k transformów nadal kosztuje więcej niż budżet
+  60 Hz. SceneTransformHierarchySystem i publikacja batchy do backendu są
+  następnym celem: Update <=8 ms, P99 <=12 ms przy zachowaniu obserwatorów.
+- Ruch w mieście nadal wymusza pakowanie statycznych grup. RenderScene,
+  MeshPassProcessor i SceneMeshDrawCommandSubmitter wymagają zawężenia
+  unieważniania grup. Cel city/mixed: P99 całej klatki <=16.67 ms.
+- Test miliona prostych instancji nie zastępuje pomiaru materiałów roślin
+  z alpha overdraw, wiatrem, cieniami i strumieniowaniem właściwych zasobów.
+Zielone bramki powyżej potwierdzają mierzone ścieżki i ich poprawność.
+Cały ambitniejszy cel jakości studyjnej pozostaje otwarty w wymienionym zakresie.

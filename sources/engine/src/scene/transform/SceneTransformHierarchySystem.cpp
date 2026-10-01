@@ -75,7 +75,7 @@ void PrintRootSyncProfile(
         return;
     }
     std::cout << "root_sync_profile,roots=" << state.hierarchyRoots.size()
-              << ",full_builds=" << state.transformTopologicalBatchBuildCount
+              << ",full_builds=" << state.transformTopology.BuildCount()
               << ",dirty_rows=" << dirtyRows
               << ",topology_ns=" << timings->topologyNanoseconds
               << ",dense_scratch_ns=" << timings->denseScratchNanoseconds
@@ -473,66 +473,6 @@ void AddTransformCacheEntryFromHotBatch(
     return stats;
 }
 
-void BuildTopologicalBatches(SceneState& state) {
-    if (state.transformTopologicalBatchesVersion == state.hierarchyTopologyVersion) {
-        return;
-    }
-
-    const std::size_t rootCount = state.hierarchyRoots.size();
-    if (state.transformTopologicalBatchesRootAppendEpoch == state.hierarchyRootAppendEpoch
-        && rootCount >= state.transformTopologicalBatchesRootCount
-        && !state.transformTopologicalBatches.empty()) {
-        auto& rootBatch = state.transformTopologicalBatches.front();
-        rootBatch.insert(rootBatch.end(),
-            state.hierarchyRoots.begin() + static_cast<std::ptrdiff_t>(state.transformTopologicalBatchesRootCount),
-            state.hierarchyRoots.end());
-        state.transformTopologicalBatchesRootCount = rootCount;
-        state.transformTopologicalBatchesVersion = state.hierarchyTopologyVersion;
-        return;
-    }
-
-    state.transformTopologicalBatches.clear();
-    if (state.hierarchyRoots.empty()) {
-        state.transformTopologicalBatchesRootCount = 0U;
-        state.transformTopologicalBatchesRootAppendEpoch = state.hierarchyRootAppendEpoch;
-        state.transformTopologicalBatchesVersion = state.hierarchyTopologyVersion;
-        ++state.transformTopologicalBatchBuildCount;
-        return;
-    }
-
-    state.transformTopologicalBatches.push_back(state.hierarchyRoots);
-    for (std::size_t levelIndex = 0; levelIndex < state.transformTopologicalBatches.size(); ++levelIndex) {
-        const std::vector<SceneEntity>& level = state.transformTopologicalBatches[levelIndex];
-        std::vector<SceneEntity>* nextLevel = nullptr;
-        for (const SceneEntity entity : level) {
-            std::span<const SceneEntity> childEntities;
-            const std::uint32_t denseIndex = kb::ecs::GeneratedEntityIndex(entity);
-            if (denseIndex != kb::ecs::kInvalidGeneratedEntityIndex && denseIndex < state.denseHierarchyChildren.size()) {
-                childEntities = state.denseHierarchyChildren[denseIndex];
-            } else {
-                const auto children = state.hierarchyChildren.find(entity.Id());
-                if (children != state.hierarchyChildren.end()) {
-                    childEntities = children->second;
-                }
-            }
-            if (childEntities.empty()) {
-                continue;
-            }
-            if (nextLevel == nullptr) {
-                if (levelIndex + 1U == state.transformTopologicalBatches.size()) {
-                    state.transformTopologicalBatches.emplace_back();
-                }
-                nextLevel = &state.transformTopologicalBatches[levelIndex + 1U];
-            }
-            nextLevel->insert(nextLevel->end(), childEntities.begin(), childEntities.end());
-        }
-    }
-    state.transformTopologicalBatchesRootCount = rootCount;
-    state.transformTopologicalBatchesRootAppendEpoch = state.hierarchyRootAppendEpoch;
-    state.transformTopologicalBatchesVersion = state.hierarchyTopologyVersion;
-    ++state.transformTopologicalBatchBuildCount;
-}
-
 [[nodiscard]] SceneEntity ParentOf(const SceneState& state, SceneEntity entity) noexcept {
     const std::uint32_t denseIndex = kb::ecs::GeneratedEntityIndex(entity);
     if (denseIndex != kb::ecs::kInvalidGeneratedEntityIndex && denseIndex < state.denseHierarchyParents.size()) {
@@ -797,9 +737,9 @@ void ResetPropagationCursor(SceneState& state) noexcept {
 }
 
 void PrewarmTransformScratchForCompletedLevels(SceneState& state, const TransformValueCache& transformValues) {
-    const std::size_t levelCount = std::min(state.transformPropagationCursorLevel, state.transformTopologicalBatches.size());
+    const std::size_t levelCount = std::min(state.transformPropagationCursorLevel, state.transformTopology.Levels().size());
     for (std::size_t levelIndex = 0; levelIndex < levelCount; ++levelIndex) {
-        for (const SceneEntity entity : state.transformTopologicalBatches[levelIndex]) {
+        for (const SceneEntity entity : state.transformTopology.Levels()[levelIndex]) {
             const TransformComponent* transform = transformValues.Find(entity);
             if (transform == nullptr) {
                 continue;
@@ -1189,8 +1129,8 @@ void RunHierarchyDirtyFrontier(
     return state.transformPropagationBudget.maxInspectedEntitiesPerSync == 0U
         && state.transformPropagationCursorLevel == 0U
         && state.transformPropagationCursorOffset == 0U
-        && state.transformTopologicalBatches.size() == 1U
-        && !state.transformTopologicalBatches.front().empty();
+        && state.transformTopology.Levels().size() == 1U
+        && !state.transformTopology.Levels().front().empty();
 }
 
 [[nodiscard]] bool RunNativeDirtyRanges(
@@ -1221,8 +1161,10 @@ void RunHierarchyDirtyFrontier(
     }
 
     kb::ecs::UnsafeHotQuery<TransformComponent>& hotQuery = queryCache.hotQuery;
-    if (queryCache.hierarchyTopologyVersion != state.hierarchyTopologyVersion || hotQuery.IsStale(queryCache.query)) {
-        if (!rootsOnly) {
+    const auto removalSafetyEpoch = state.transformTopology.RemovalSafetyEpoch(state.world.NativeStorage().RemovalVersion());
+    const bool unknownRemoval = queryCache.removalSafetyEpoch != removalSafetyEpoch;
+    if (unknownRemoval || queryCache.hierarchyTopologyVersion != state.hierarchyTopologyVersion || hotQuery.IsStale(queryCache.query)) {
+        if (!rootsOnly && unknownRemoval) {
             // Structural changes can invalidate parents without leaving a live dirty row.
             ClearSceneTransformDirtyFrontier(state);
         }
@@ -1231,7 +1173,8 @@ void RunHierarchyDirtyFrontier(
             return false;
         }
         queryCache.hierarchyTopologyVersion = state.hierarchyTopologyVersion;
-        if (!rootsOnly) {
+        queryCache.removalSafetyEpoch = removalSafetyEpoch;
+        if (!rootsOnly && unknownRemoval) {
             return false;
         }
         if (profileTimings != nullptr) {
@@ -1251,6 +1194,9 @@ void RunHierarchyDirtyFrontier(
     }
 
     if (!rootsOnly) {
+        // Known leaf destruction may leave a queued handle from an earlier
+        // write in this frame. The remaining frontier still contains live work.
+        std::erase_if(state.transformDirtyFrontierEntities, [&state](SceneEntity entity) { return !state.world.IsAlive(entity); });
         auto& nativeStorage = const_cast<kb::ecs::NativeArchetypeStorage&>(state.world.NativeStorage());
         static_cast<void>(hotQuery.ForEachDirtyMutableRange<0>(
             nativeStorage, kTransformBatchGrainSize, state.transformNativeDirtyRangesScratch, true,
@@ -1411,16 +1357,16 @@ void SceneTransformHierarchySystem::Update(SceneState& state) const {
     const auto topologyStart = profileTimings != nullptr ? Clock::now() : Clock::time_point{};
     // Structural changes can remove queued handles and introduce transforms
     // outside the dirty frontier. Rebuild from the live hierarchy in that case.
-    const bool topologyChanged = state.transformTopologicalBatchesVersion != state.hierarchyTopologyVersion;
+    const bool topologyChanged = state.transformTopology.Version() != state.hierarchyTopologyVersion;
     if (topologyChanged) {
         ClearSceneTransformDirtyFrontier(state);
     }
-    BuildTopologicalBatches(state);
+    state.transformTopology.Refresh(state);
     if (profileTimings != nullptr) {
         profileTimings->topologyNanoseconds = Nanoseconds(Clock::now() - topologyStart);
     }
     if (state.transformPropagationCursorVersion != state.hierarchyTopologyVersion ||
-        state.transformPropagationCursorLevel >= state.transformTopologicalBatches.size()) {
+        state.transformPropagationCursorLevel >= state.transformTopology.Levels().size()) {
         ResetPropagationCursor(state);
     }
 
@@ -1544,8 +1490,8 @@ void SceneTransformHierarchySystem::Update(SceneState& state) const {
 
     std::size_t remainingBudget = budgetLimit;
     bool completed = true;
-    for (std::size_t levelIndex = state.transformPropagationCursorLevel; levelIndex < state.transformTopologicalBatches.size(); ++levelIndex) {
-        const std::vector<SceneEntity>& level = state.transformTopologicalBatches[levelIndex];
+    for (std::size_t levelIndex = state.transformPropagationCursorLevel; levelIndex < state.transformTopology.Levels().size(); ++levelIndex) {
+        const std::vector<SceneEntity>& level = state.transformTopology.Levels()[levelIndex];
         const std::size_t levelBegin = levelIndex == state.transformPropagationCursorLevel ? state.transformPropagationCursorOffset : 0U;
         if (levelBegin >= level.size()) {
             continue;

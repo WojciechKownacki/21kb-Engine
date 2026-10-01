@@ -5,7 +5,7 @@ p=argparse.ArgumentParser()
 p.add_argument('--build',type=Path,required=True)
 p.add_argument('--project',type=Path,required=True)
 p.add_argument('--output',type=Path,required=True)
-p.add_argument('--suite',choices=['compare','cpu','foliage','stream','render','render-stream','production'],default='compare')
+p.add_argument('--suite',choices=['compare','cpu','capacity','foliage','stream','render','render-stream','production'],default='compare')
 p.add_argument('--repetition',type=int,choices=[1,2,3],help='Repeat just one measurement series')
 p.add_argument('--fixed-step',action='store_true',help='Identical 1/60 s simulation per headless profiled frame')
 a=p.parse_args()
@@ -26,9 +26,21 @@ def run(name,args,timeout=300):
     (a.output/'Results/runs.json').write_text(json.dumps(events,indent=2))
     if result.returncode: raise RuntimeError(f'{name} failed; see {logs}')
 for rep in ([a.repetition] if a.repetition else range(1,4)):
-    for case in (['static_100k','physics_idle_world_100k','physics_4096','dense_4096','batch_dirty_100k'] if a.suite in ['compare','cpu'] else []):
+    for case in (['colliders_100k'] if a.suite=='capacity' else
+                 ['static_100k','physics_idle_world_100k','physics_4096','dense_4096','batch_dirty_100k'] if a.suite in ['compare','cpu'] else []):
         run(f'{case}_{rep}',[binary/'kb_openworld_perf.exe','cpu',a.output,case,rep])
-    render_cases = ([] if a.suite in ['stream','cpu'] else ['foliage_100k','foliage_1m'] if a.suite=='foliage'
+        rows=list(csv.DictReader((raw/f'{case}_cpu_{rep}.csv').open()))
+        if len(rows)!=360:
+            raise RuntimeError(f'{case}_{rep}: incomplete CPU capture')
+        if case in ('physics_4096','dense_4096'):
+            if any(int(r['awake_bodies'])!=4096 or int(r['fixed_steps'])!=1 for r in rows):
+                raise RuntimeError(f'{case}_{rep}: active physics workload changed')
+            if 'collision_events' not in rows[0] or sum(int(r['collision_events']) for r in rows)==0:
+                raise RuntimeError(f'{case}_{rep}: collision events were not consumed')
+        if case=='colliders_100k' and any(int(r['fixed_steps'])!=1 or int(r['hits'])!=1000 for r in rows):
+            raise RuntimeError(f'{case}_{rep}: resident collider/raycast workload changed')
+
+    render_cases = ([] if a.suite in ['stream','cpu','capacity'] else ['foliage_100k','foliage_1m'] if a.suite=='foliage'
         else ['city_dense_50k','geometry_10k','lights_512','shadow_50k','mixed_stream_10k'] if a.suite=='production'
         else ['world_100k','city_dense_50k','culling_far_10k','culling_side_10k'])
     for case in render_cases:
