@@ -2135,6 +2135,7 @@ public:
         }
         --liveEntities_;
         BumpStructuralVersion();
+        removalVersion_ = structuralVersion_;
     }
 
     void DestroyEntities(std::span<const Entity> entities) {
@@ -2174,6 +2175,7 @@ public:
             }
             DestroyAllLiveEntities(false);
             BumpStructuralVersion(entities.size());
+            removalVersion_ = structuralVersion_;
             return;
         }
 
@@ -2248,18 +2250,21 @@ public:
         }
         liveEntities_ -= entities.size();
         BumpStructuralVersion(entities.size());
+        removalVersion_ = structuralVersion_;
     }
 
     void Clear() {
         const std::size_t removedCount = liveEntities_;
         DestroyAllLiveEntities(false);
         BumpStructuralVersion(removedCount);
+        removalVersion_ = structuralVersion_;
     }
 
     void ClearRetainingCapacity() {
         const std::size_t removedCount = liveEntities_;
         DestroyAllLiveEntities(true);
         BumpStructuralVersion(removedCount);
+        removalVersion_ = structuralVersion_;
     }
 
     [[nodiscard]] bool IsAlive(Entity entity) const noexcept {
@@ -2423,6 +2428,7 @@ public:
         }
         Migrate(entity, record, sourceIndex, EdgeKind::Remove, removedIds, targetTypes, {});
         BumpStructuralVersion();
+        removalVersion_ = structuralVersion_;
     }
 
     void RemoveComponents(std::span<const Entity> entities, std::span<const ComponentId> componentIds) {
@@ -2471,6 +2477,7 @@ public:
             BulkMigrate(sourceIndex, EdgeKind::Remove, removedIds, targetTypes, group, {});
         }
         BumpStructuralVersion(entities.size());
+        removalVersion_ = structuralVersion_;
     }
 
     void SetComponent(Entity entity, ComponentId componentId, const void* data, std::size_t size) {
@@ -2786,6 +2793,8 @@ public:
     [[nodiscard]] std::uint64_t StructuralVersion() const noexcept {
         return structuralVersion_;
     }
+
+    [[nodiscard]] std::uint64_t RemovalVersion() const noexcept { return removalVersion_; }
 
     [[nodiscard]] std::size_t ChunkPayloadBytes() const noexcept {
         return chunkPayloadBytes_;
@@ -3653,6 +3662,7 @@ private:
     std::vector<ComponentId> singleRemovedIdsScratch_;
     std::vector<ComponentId> singleEdgeIdsScratch_;
     std::uint64_t structuralVersion_ = 1;
+    std::uint64_t removalVersion_ = 0;
 };
 
 NativeArchetypeStorage::NativeArchetypeStorage(WorldConfig config)
@@ -3866,6 +3876,10 @@ std::uint64_t NativeArchetypeStorage::ArchetypeComponentVersion(std::size_t arch
 
 std::uint64_t NativeArchetypeStorage::StructuralVersion() const noexcept {
     return impl_ != nullptr ? impl_->StructuralVersion() : 0;
+}
+
+std::uint64_t NativeArchetypeStorage::RemovalVersion() const noexcept {
+    return impl_ != nullptr ? impl_->RemovalVersion() : 0;
 }
 
 std::size_t NativeArchetypeStorage::ChunkPayloadBytes() const noexcept {

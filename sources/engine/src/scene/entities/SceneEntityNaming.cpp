@@ -43,6 +43,7 @@ void SetBackendName(kb::ecs::World& world, SceneEntity entity, std::string_view 
 }
 
 void MarkNameTopologyDirty(SceneState& state, bool existingHierarchyRow = true) noexcept {
+    const auto previousVersion = state.hierarchyTopologyVersion;
     ++state.hierarchyTopologyVersion;
     if (state.hierarchyTopologyVersion == 0U) {
         state.hierarchyTopologyVersion = 1U;
@@ -50,6 +51,7 @@ void MarkNameTopologyDirty(SceneState& state, bool existingHierarchyRow = true) 
     if (existingHierarchyRow) {
         SceneHierarchyCache::MarkRowContentDirty(state);
     }
+    state.transformTopology.MetadataChanged(previousVersion, state.hierarchyTopologyVersion);
 }
 
 } // namespace

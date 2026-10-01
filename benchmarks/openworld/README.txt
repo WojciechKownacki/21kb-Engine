@@ -85,6 +85,8 @@ Nie deklaruj gotowości gry klasy AAA na podstawie kostek i prostych trójkątó
 Produkcja: kolejna seria z bazą 3f4a9fc6 (01.10.2026)
 PRODUCTION_PROMPT.txt zawiera cel, klasy, kontrakt własności i bramki.
 PRODUCTION_RESULTS_20261001.txt zawiera wyniki i konkretne niezaliczone bramki.
+Jest to raport historyczny pierwszego etapu. Wyniki kolejnego etapu i poprawkę
+metodologii CPU opisuje PRODUCTION_RESULTS_STAGE2_20261001.txt.
 Baza została osobno skompilowana z tym samym harness pomiarowym. Sceny, liczba
 obiektów, rozdzielczość i backend pozostały zgodne. Nie porównuj serii pomiarów
 z różnych dat jako jednego kontrolowanego eksperymentu.
@@ -116,3 +118,51 @@ Nowe testy API i rendererowego unieważniania:
 Testy obejmują publikację ECS przed OnSet, odroczenie i dziedziczenie backendu,
 limit wątków, animację UI, LOD między pasami, TAA, zmianę zasobów i kamer,
 brak kolejnego uploadu statycznych instancji oraz cienie generowanej geometrii.
+
+Drugi etap (01.10.2026): topologia transformów, aktywna fizyka i pojemność
+SceneTransformTopologyCache jest właścicielem pochodnych poziomów wykonania.
+Dodanie i usuwanie liści nie przebudowuje całego świata. Przeniesienie poddrzewa
+zachowuje bezpieczną pełną przebudowę. RemovalVersion w NativeArchetypeStorage
+rozróżnia dodanie od usunięcia: nieznane usunięcie komponentu/rodzica nadal
+wymusza bezpieczne przeliczenie, także po późniejszym usunięciu znanego liścia.
+JoltStaticBodyBatchCache przechowuje wyłącznie klucze ważności batchy. Nie
+kopiuje komponentów ani ciał. Transform/Collider, archetyp i generacja encji
+unieważniają zakres. Limit backendu wynosi 131072 ciała; nie oznacza to testu
+131072 aktywnych ciał ani zwiększenia limitu kontaktów solvera.
+
+CPU odbiera teraz zdarzenia kolizji w każdej klatce. ProductionBeforeCorrected
+zawiera świeże CPU z bazy 3f4a9fc6 z identycznym konsumentem. Pomiary GPU oraz
+streamingu skopiowano z zachowanej bazy, ponieważ ich obciążenie nie zmieniło
+się przy dodaniu konsumenta do testu CPU. Manifest opisuje pochodzenie próbek.
+Runtime.Update nie obejmuje testowego Wake, odczytu zdarzeń ani raycastów;
+total_ms je obejmuje, query_ms mierzy raycasty osobno. Nie porównuj CPU z
+pierwszym etapem, który kumulował nieodebrane kontakty.
+
+Końcowe serie (każda zawiera trzy procesy, uruchamiaj kolejno):
+  python benchmarks/openworld/run_compare.py --build build/perf-release --project E:/21kbProjekty/OpenWorldAfter_20260930 --output E:/21kbProjekty/OpenWorldProductionStage2_20261001 --suite compare
+  python benchmarks/openworld/run_compare.py --build build/perf-release --project E:/21kbProjekty/OpenWorldAfter_20260930 --output E:/21kbProjekty/OpenWorldProductionStage2_20261001 --suite capacity
+  python benchmarks/openworld/run_compare.py --build build/perf-release --project E:/21kbProjekty/OpenWorldAfter_20260930 --output E:/21kbProjekty/OpenWorldProductionStage2_20261001 --suite foliage
+  python benchmarks/openworld/run_compare.py --build build/perf-release --project E:/21kbProjekty/OpenWorldProduction_20260930 --output E:/21kbProjekty/OpenWorldProductionStage2_20261001 --suite production --fixed-step
+  python benchmarks/openworld/report_production.py --before E:/21kbProjekty/OpenWorldProductionBeforeCorrected_20261001 --after E:/21kbProjekty/OpenWorldProductionStage2_20261001
+Nowy colliders_100k wymaga 1000 rzeczywistych trafień raycastów/klatkę. Baza
+65536 ciał nie ma poprawnego pomiaru 100k; raport podaje brak porównania.
+Reporter zapisuje też niezaliczone wyniki i zwraca exit 1 przy nieudanej
+bramce lub regresji średniej ponad 5%, zamiast ukrywać je zielonym statusem.
+
+AssetManager::PrepareAsyncLoad obejmuje walidację zależności. Jej czytanie
+i dekodowanie sceny działa na istniejącym workerze. AssetRegistrySnapshotCache
+współdzieli widok do odczytu między zadaniami jednej generacji; jedynym
+mutowalnym katalogiem jest istniejący AssetRegistry. Zmiana generacji przed
+publikacją daje błąd do obsłużenia i wymaga ponownego zgłoszenia wczytania.
+Pierwszy widok po zmianie katalogu wymaga jego kopii; nie jest to darmowy
+streaming dowolnej liczby zasobów. Anulowanie i wymiana loadera zachowują
+istniejący kontrakt generacji zadań.
+
+Pełna weryfikacja kompilacji graph shaderów (osobno od porównania wydajności):
+  cmake -S . -B build/perf-release -DKB_BUILD_GRAPH_SHADERC=ON
+  cmake --build build/perf-release --parallel 4 --target kb_game kb_editor kb_renderer_tests kb_engine_tests kb_ecs_api_tests kb_openworld_perf
+  build\perf-release\bin\kb_renderer_tests.exe graph-shader-artifact
+  build\perf-release\bin\kb_renderer_tests.exe graph-forward-gpu
+Nie używaj czasu budowania shaderc jako czasu renderera. KB_GENERATE_RENDERER_SHADERS
+pozostaje OFF, więc istniejące shadery renderera nie zmieniają się w porównaniu.
+Rzeczywiste gotowanie graph shaderów sprawdza oddzielny test artefaktów.

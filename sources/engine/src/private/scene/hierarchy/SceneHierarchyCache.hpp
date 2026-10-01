@@ -16,13 +16,16 @@ public:
     SceneHierarchyCache() = delete;
 
     static void Add(SceneState& state, SceneEntity entity, SceneEntity parent) {
+        const auto previousVersion = state.hierarchyTopologyVersion;
         state.hierarchyParents[entity.Id()] = parent;
         SetDenseParent(state, entity, parent);
         AddToParentList(state, parent, entity);
         MarkTopologyDirty(state);
+        state.transformTopology.Added(state, {&entity, 1U}, previousVersion);
     }
 
     static void AddRoot(SceneState& state, SceneEntity entity) {
+        const auto previousVersion = state.hierarchyTopologyVersion;
         // Entity creation calls this once for a fresh entity. Moving an existing
         // entity into the root list still goes through Move/AppendUnique.
         if (!state.hierarchyParents.emplace(entity.Id(), SceneEntity{}).second) {
@@ -31,6 +34,7 @@ public:
         SetDenseParent(state, entity, {});
         state.hierarchyRoots.push_back(entity);
         MarkTopologyDirty(state, true);
+        state.transformTopology.Added(state, {&entity, 1U}, previousVersion);
     }
 
     static void AssignOrder(SceneState& state, SceneEntity entity) {
@@ -46,6 +50,7 @@ public:
     }
 
     static void AddMany(SceneState& state, std::span<const SceneEntity> entities, std::span<const SceneEntity> parents) {
+        const auto previousVersion = state.hierarchyTopologyVersion;
         if (entities.size() != parents.size()) {
             throw std::invalid_argument("Scene hierarchy cache bulk add requires matching entity and parent counts");
         }
@@ -66,9 +71,11 @@ public:
             }
         }
         MarkTopologyDirty(state);
+        state.transformTopology.Added(state, entities, previousVersion);
     }
 
     static void AddManyDense(SceneState& state, std::span<const SceneEntity> entities, std::span<const SceneEntity> parents) {
+        const auto previousVersion = state.hierarchyTopologyVersion;
         if (entities.size() != parents.size()) {
             throw std::invalid_argument("Scene hierarchy cache dense bulk add requires matching entity and parent counts");
         }
@@ -150,6 +157,7 @@ public:
             }
         }
         MarkTopologyDirty(state);
+        state.transformTopology.Added(state, entities, previousVersion);
     }
 
     static void AssignOrderRange(SceneState& state, std::span<const SceneEntity> entities) {
@@ -174,20 +182,24 @@ public:
     }
 
     static void Move(SceneState& state, SceneEntity child, SceneEntity oldParent, SceneEntity newParent) {
+        const auto previousVersion = state.hierarchyTopologyVersion;
         RemoveFromParentList(state, oldParent, child);
         state.hierarchyParents[child.Id()] = newParent;
         SetDenseParent(state, child, newParent);
         AddToParentList(state, newParent, child);
         MarkTopologyDirty(state);
+        state.transformTopology.Moved(state, child, previousVersion);
     }
 
     static void Remove(SceneState& state, SceneEntity entity, SceneEntity parent) {
+        const auto previousVersion = state.hierarchyTopologyVersion;
         RemoveFromParentList(state, parent, entity);
         state.hierarchyParents.erase(entity.Id());
         state.hierarchyChildren.erase(entity.Id());
         state.hierarchyOrder.erase(entity.Id());
         ClearDenseEntry(state, entity);
         MarkTopologyDirty(state);
+        state.transformTopology.Removed(state, entity, previousVersion);
     }
 
     [[nodiscard]] static std::vector<SceneEntity> Roots(const SceneState& state) {

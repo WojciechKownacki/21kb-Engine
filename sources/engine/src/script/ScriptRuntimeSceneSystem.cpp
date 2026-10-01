@@ -397,7 +397,8 @@ void ScriptRuntimeSceneSystem::DispatchPendingCollisionEvents(kb::scene::Scene& 
     // isTrigger) — the six standard OnCollision*/OnTrigger* callback names,
     // so existing Lua/Native/VisualGraph scripts written against that
     // convention need no translation layer.
-    for (const kb::scene::PendingCollisionEvent& pending : kb::scene::PhysicsBackend::DrainPendingCollisionEvents(scene)) {
+    kb::scene::PhysicsBackend::DrainPendingCollisionEvents(scene, collisionEventScratch_);
+    for (const kb::scene::PendingCollisionEvent& pending : collisionEventScratch_) {
         const char* name = nullptr;
         switch (pending.phase) {
         case kb::scene::PhysicsContactPhase::Enter:

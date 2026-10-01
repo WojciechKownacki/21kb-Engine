@@ -616,11 +616,13 @@ void AssignPrefabHierarchyOrderRange(SceneState& state, std::span<const SceneEnt
         }
     }
 
+    const auto previousTopologyVersion = state.hierarchyTopologyVersion;
     ++state.hierarchyTopologyVersion;
     ++state.renderTopologyVersion;
     SceneHierarchyCache::MarkRowContentDirty(state);
     if (state.hierarchyTopologyVersion == 0U) state.hierarchyTopologyVersion = 1U;
     if (state.renderTopologyVersion == 0U) state.renderTopologyVersion = 1U;
+    state.transformTopology.Added(state, entities, previousTopologyVersion);
     return true;
 }
 
@@ -718,11 +720,13 @@ void AssignPrefabHierarchyOrderRange(SceneState& state, std::span<const SceneEnt
             }
         }
     }
+    const auto previousTopologyVersion = state.hierarchyTopologyVersion;
     ++state.hierarchyTopologyVersion;
     ++state.renderTopologyVersion;
     SceneHierarchyCache::MarkRowContentDirty(state);
     if (state.hierarchyTopologyVersion == 0U) state.hierarchyTopologyVersion = 1U;
     if (state.renderTopologyVersion == 0U) state.renderTopologyVersion = 1U;
+    state.transformTopology.Added(state, entities, previousTopologyVersion);
     return hasDenseEntity ? maxEntityIndex : kb::ecs::kInvalidGeneratedEntityIndex;
 }
 

@@ -125,6 +125,13 @@ NIEZALICZONE BRAMKI / KONKRETNY ZAKRES DALSZEJ IMPLEMENTACJI
   rzeczywistej listy świateł na klaster. Samo podniesienie stałej 32 nie jest
   działającą poprawką i może przekroczyć limity uniformów GPU.
 
-Stan odbioru: poprawki przeszły testy i dają mierzalną poprawę; pełna bramka
+UWAGA HISTORYCZNA (kolejny etap, 01.10.2026): poniższy stan i powyższe wyniki
+dotyczą pierwszego etapu. Kolejny raport to PRODUCTION_RESULTS_STAGE2_20261001.txt.
+Pierwotne testy CPU nie odbierały zdarzeń kolizji i mierzyły rosnącą kolejkę.
+Do porównania fizyki w kolejnym etapie odtworzono bazę 3f4a9fc6 i zmierzono ją
+tym samym harness z konsumentem zdarzeń. Archiwalne próbki zachowano; nie
+porównuj aktywnej fizyki obu serii bez uwzględnienia zmiany metodologii.
+
+Stan odbioru pierwszego etapu: poprawki przeszły testy i dają mierzalną poprawę; pełna bramka
 jakości produkcyjnej NIE jest zaliczona. Ten raport nie certyfikuje równoważności
 z dużymi silnikami studyjnymi ani gotowości dowolnej gry AAA.

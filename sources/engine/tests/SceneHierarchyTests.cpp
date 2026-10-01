@@ -566,12 +566,96 @@ void RunTransformTopologicalBatchCacheInvalidationTest() {
     static_cast<void>(scene.Runtime().Update(0.016F));
     const kb::scene::SceneRuntimeHotPathReport detachedReport = scene.Runtime().HotPathReport();
     kb::tests::Require(
-        detachedReport.transformTopologicalBatchBuildCount == appendedReport.transformTopologicalBatchBuildCount + 1U,
-        "Transform topological cache did not rebuild after hierarchy change");
+        detachedReport.transformTopologicalBatchBuildCount == appendedReport.transformTopologicalBatchBuildCount,
+        "Detaching a leaf must update the cached levels without a full rebuild");
     kb::tests::Require(detachedReport.transformTopologicalBatchCount == 1U, "Transform topological cache kept stale child level after detach");
 
     const kb::scene::TransformComponent childTransform = scene.Transforms().Get(child);
     kb::tests::Require(kb::tests::NearlyEqual(childTransform.worldPosition.x, 2.0F), "Transform topological cache invalidation did not update detached child world position");
+}
+
+void RunIncrementalTransformTopologyLifetimeTest() {
+    kb::scene::Scene scene;
+    const auto parent = scene.Entities().CreateObject({.transform = {.localPosition = {10.0F, 0.0F, 0.0F}}});
+    scene.Runtime().SynchronizeTransforms();
+    const auto initialBuilds = scene.Runtime().HotPathReport().transformTopologicalBatchBuildCount;
+    std::vector<kb::scene::SceneObject> leaves;
+    for (unsigned index = 0U; index < 512U; ++index) {
+        leaves.push_back(scene.Entities().CreateObject({.parent = parent,
+            .transform = {.localPosition = {static_cast<float>(index), 0.0F, 0.0F}}}));
+        if (index % 32U == 31U) scene.Runtime().SynchronizeTransforms();
+    }
+    kb::tests::Require(scene.Runtime().HotPathReport().transformTopologicalBatchBuildCount == initialBuilds,
+        "Streaming leaf appends rebuilt the whole transform topology");
+    // Remove from the middle to exercise moved-index bookkeeping, then reuse
+    // entity slots. Hierarchy sibling order is still owned by the scene.
+    for (unsigned index = 1U; index < leaves.size(); index += 2U) scene.Entities().Destroy(leaves[index]);
+    scene.Runtime().SynchronizeTransforms();
+    for (unsigned index = 0U; index < leaves.size(); index += 2U) {
+        kb::tests::Require(scene.Transforms().Get(leaves[index]).worldPosition.x == 10.0F + index,
+            "Leaf removal corrupted a surviving transform");
+    }
+    const auto replacement = scene.Entities().CreateObject({.parent = parent, .transform = {.localPosition = {7.0F, 0.0F, 0.0F}}});
+    const auto grandchild = scene.Entities().CreateObject({.parent = replacement, .transform = {.localPosition = {3.0F, 0.0F, 0.0F}}});
+    scene.Runtime().SynchronizeTransforms();
+    kb::tests::Require(scene.Runtime().HotPathReport().transformTopologicalBatchBuildCount == initialBuilds &&
+        scene.Transforms().Get(grandchild).worldPosition.x == 20.0F,
+        "Incremental topology lost a reused slot or a newly appended depth level");
+    scene.Entities().SetName(parent, "Renamed parent");
+    scene.Runtime().SynchronizeTransforms();
+    kb::tests::Require(scene.Runtime().HotPathReport().transformTopologicalBatchBuildCount == initialBuilds,
+        "Metadata changes must not rebuild transform execution order");
+    kb::tests::Require(scene.Hierarchy().SetParent(replacement, {}), "Subtree detach failed");
+    scene.Runtime().SynchronizeTransforms();
+    kb::tests::Require(scene.Runtime().HotPathReport().transformTopologicalBatchBuildCount == initialBuilds + 1U &&
+        scene.Transforms().Get(grandchild).worldPosition.x == 10.0F,
+        "Subtree reparent fallback did not rebuild valid depths and poses");
+    scene.Entities().Destroy(parent);
+    scene.Entities().Destroy(replacement);
+    scene.Runtime().SynchronizeTransforms();
+    kb::tests::Require(scene.Entities().Count() == 0U && scene.Runtime().HotPathReport().transformTopologicalBatchCount == 0U,
+        "Incremental topology kept deleted generations or depth levels");
+}
+
+void RunTransformStreamingStructuralInvalidationTest() {
+    struct ExtraTag { unsigned value = 0U; };
+    for (const bool mirrored : {true, false}) {
+        kb::ecs::WorldConfig config;
+        config.mirrorEntitiesToBackend = mirrored;
+        config.mirrorNativeComponentChangesToBackend = mirrored;
+        kb::scene::Scene scene{config};
+        const auto parent = scene.Entities().CreateObject({.transform = {.localPosition = {10.0F, 0.0F, 0.0F}}});
+        const auto child = scene.Entities().CreateObject({.parent = parent, .transform = {.localPosition = {2.0F, 0.0F, 0.0F}}});
+        const auto grandchild = scene.Entities().CreateObject({.parent = child, .transform = {.localPosition = {3.0F, 0.0F, 0.0F}}});
+        std::vector<kb::scene::SceneObject> unrelated;
+        for (unsigned index = 0U; index < 1024U; ++index) unrelated.push_back(scene.Entities().CreateObject({}));
+        scene.Runtime().SynchronizeTransforms();
+        scene.Runtime().SynchronizeTransforms();
+        auto transform = scene.Transforms().Get(child);
+        transform.localPosition.x = 4.0F;
+        scene.Transforms().Set(child, transform);
+        scene.Runtime().EcsWorld().Set<ExtraTag>(unrelated.front().Entity(), {});
+        scene.Runtime().SynchronizeTransforms();
+        kb::tests::Require(scene.Transforms().Get(grandchild).worldPosition.x == 17.0F &&
+            scene.Runtime().HotPathReport().transformHierarchyInspectedCount == 2U,
+            "Adding an unrelated component lost dirty descendants or scanned the whole world");
+        // A known leaf removal must not conceal the earlier unsafe removal.
+        scene.Runtime().EcsWorld().Remove<kb::scene::TransformComponent>(parent.Entity());
+        scene.Entities().Destroy(unrelated.back()); unrelated.pop_back();
+        scene.Runtime().SynchronizeTransforms();
+        kb::tests::Require(scene.Transforms().Get(child).worldPosition.x == 4.0F &&
+            scene.Transforms().Get(grandchild).worldPosition.x == 7.0F,
+            "Component removal followed by streamed leaf removal lost parent invalidation");
+        scene.Transforms().Set(parent, {.localPosition = {20.0F, 0.0F, 0.0F}});
+        scene.Runtime().SynchronizeTransforms();
+        kb::tests::Require(scene.Transforms().Get(grandchild).worldPosition.x == 27.0F,
+            "Restored parent transform did not propagate through the native dirty ranges");
+        scene.Runtime().EcsWorld().DestroyEntity(parent.Entity());
+        scene.Entities().Destroy(unrelated.back());
+        scene.Runtime().SynchronizeTransforms();
+        kb::tests::Require(scene.Transforms().Get(grandchild).worldPosition.x == 7.0F,
+            "Untracked parent destruction was concealed by a later known leaf removal");
+    }
 }
 
 void RunTransformPropagationBudgetTest() {
@@ -680,9 +764,9 @@ void RunTransformSparseFlushReportTest() {
     kb::tests::Require(report.transformHierarchySparseFlushCount == 1U, "Transform runtime did not report sparse dirty flush");
     kb::tests::Require(report.transformHierarchyBatchFlushCount == 0U, "Transform runtime used a batch flush for sparse dirty roots");
     kb::tests::Require(report.transformHierarchyFlushedEntityCount == 1U, "Transform runtime reported an unexpected sparse flush entity count");
-    kb::tests::Require(report.transformHierarchyDirtyFrontierCount == 0U &&
+    kb::tests::Require(report.transformHierarchyDirtyFrontierCount == 1U &&
             report.transformHierarchyDirtyListFlushCount == 1U,
-        "Transform runtime did not use the safe dirty-list flush while its query cache was cold");
+        "Transform runtime lost the sparse dirty frontier while rebuilding its query cache");
     kb::tests::Require(report.transformHierarchyUpdatedCount == 1U, "Transform runtime updated more than the moved sparse root");
     kb::tests::Require(report.transformHierarchyInspectedCount == 1U, "Transform runtime inspected clean roots during sparse flush");
     kb::tests::Require(kb::tests::NearlyEqual(scene.Transforms().Get(roots.front()).worldPosition.x, 42.0F), "Sparse flush did not write the moved root");
@@ -1328,6 +1412,8 @@ void RunSceneHierarchyTests() {
     RunHierarchyNoOpParentingKeepsSiblingOrderTest();
     RunTransformTopologicalBatchMassParentingTest();
     RunTransformTopologicalBatchCacheInvalidationTest();
+    RunIncrementalTransformTopologyLifetimeTest();
+    RunTransformStreamingStructuralInvalidationTest();
     RunTransformPropagationBudgetTest();
     RunTransformSparseFlushReportTest();
     RunTransformHierarchyDirtyFrontierReportTest();

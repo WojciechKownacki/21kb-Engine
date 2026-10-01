@@ -1,4 +1,5 @@
 #include "JoltPhysicsSceneSystem.hpp"
+#include "JoltStaticBodyBatchCache.hpp"
 #include "engine/assets/CollisionMeshAsset.hpp"
 #include "engine/scene/SceneAssets.hpp"
 
@@ -98,7 +99,7 @@ using kb::scene::Vec3;
 namespace {
 
 constexpr float MinimumShapeExtent = 0.001F;
-constexpr std::uint32_t MaxBodies = 65536U;
+constexpr std::uint32_t MaxBodies = 131072U;
 constexpr std::uint32_t NumBodyMutexes = 0U;
 constexpr std::uint32_t MaxBodyPairs = 65536U;
 constexpr std::uint32_t MaxContactConstraints = 10240U;
@@ -1013,11 +1014,14 @@ public:
         });
     }
 
-    [[nodiscard]] std::vector<RawContactEvent> DrainAndClear() {
+    [[nodiscard]] std::span<RawContactEvent> DrainAndClear() {
         std::lock_guard<std::mutex> lock(mutex_);
-        std::vector<RawContactEvent> drained;
-        drained.swap(pending_);
-        return drained;
+        // The completed step borrows this buffer until the next drain. Both
+        // buffers retain capacity so contact callbacks do not reallocate it
+        // under the shared mutex on every fixed step.
+        drained_.clear();
+        drained_.swap(pending_);
+        return drained_;
     }
 
     void DiscardBody(JPH::BodyID bodyId) {
@@ -1053,6 +1057,7 @@ private:
 
     std::mutex mutex_;
     std::vector<RawContactEvent> pending_;
+    std::vector<RawContactEvent> drained_;
 };
 
 } // namespace
@@ -1141,8 +1146,8 @@ public:
         SynchronizeCharacters(context);
         UpdateCharacters(context);
         Step(context.DeltaSeconds());
-        writeBackEntities_.clear();
-        writeBackEntities_.reserve(nonStaticBodies_.size() + characters_.size());
+        writeBackPoses_.clear();
+        writeBackPoses_.reserve(nonStaticBodies_.size() + characters_.size());
         WriteBack(context);
         WriteBackCharacters(context);
         FinalizeWriteBackLocalPoses(context);
@@ -1758,7 +1763,28 @@ private:
             kb::ecs::QueryFilter filter;
             filter.Exclude(context.EcsWorld().Component<RigidbodyComponent>());
             ColliderOnlyBodyQuery colliderQuery = context.EcsWorld().CreateQuery<TransformComponent, ColliderComponent>(filter);
-            colliderQuery.ForEachBatchKernel(settings, [this, &context, wakeSurvivingDynamicBodies](const ColliderOnlyBodyQuery::Batch& batch) {
+            std::size_t batchIndex = 0U;
+            const auto transformId = context.EcsWorld().Component<TransformComponent>();
+            const auto colliderId = context.EcsWorld().Component<ColliderComponent>();
+            colliderQuery.ForEachBatchKernel(settings, [this, &context, &batchIndex, transformId, colliderId, wakeSurvivingDynamicBodies](const ColliderOnlyBodyQuery::Batch& batch) {
+                if (batch.Empty()) return;
+                const auto& storage = context.EcsWorld().NativeStorage();
+                const JoltStaticBodyBatchCache::Key key{
+                    .firstEntity = batch.EntityAt(0U), .count = batch.Count(),
+                    .structuralVersion = storage.StructuralVersion(),
+                    .transformVersion = storage.ComponentVersion(batch.EntityAt(0U), transformId),
+                    .colliderVersion = storage.ComponentVersion(batch.EntityAt(0U), colliderId),
+                };
+                if (bodySyncCacheValid_ && staticBodyBatchCache_.Matches(batchIndex, key) &&
+                    bodySyncCursor_ + batch.Count() <= bodySyncCache_.size()) {
+                    // These rows still own exactly the validated bodies. Mark
+                    // them seen so a different batch can retire its stale body.
+                    for (std::size_t index = 0U; index < batch.Count(); ++index) {
+                        bodySyncCache_[bodySyncCursor_++].body->seenEpoch = bodySyncEpoch_;
+                    }
+                    ++batchIndex;
+                    return;
+                }
                 const TransformComponent* transforms = batch.Components<0>();
                 const ColliderComponent* colliders = batch.Components<1>();
                 for (std::size_t index = 0; index < batch.Count(); ++index) {
@@ -1766,7 +1792,9 @@ private:
                     SynchronizeBody(entity, transforms[index],
                         RigidbodyComponent{ .bodyType = RigidbodyBodyType::Static }, colliders[index], context, wakeSurvivingDynamicBodies);
                 }
+                staticBodyBatchCache_.Store(batchIndex++, key);
             });
+            staticBodyBatchCache_.Finish(batchIndex);
         }
 
         // The disjoint queries visit every live body once and ensure its map entry exists.
@@ -2160,7 +2188,7 @@ private:
             const Vec3 position = FromJoltPosition(record.character->GetPosition());
             const Quat rotation = FromJolt(record.character->GetRotation());
             StageWriteBackWorldPose(*transform, position, rotation);
-            writeBackEntities_.push_back(entity);
+            writeBackPoses_.push_back({entity, transform, context.EcsWorld().NativeStorage().StructuralVersion()});
         }
     }
 
@@ -2380,7 +2408,7 @@ private:
                 angularVelocity = FromJolt(simulated.GetAngularVelocity());
             }
             StageWriteBackWorldPose(*transform, position, rotation);
-            writeBackEntities_.push_back(entity);
+            writeBackPoses_.push_back({entity, transform, context.EcsWorld().NativeStorage().StructuralVersion()});
 
             if (!SameVec3(rigidbody->linearVelocity, linearVelocity) || !SameVec3(rigidbody->angularVelocity, angularVelocity)) {
                 rigidbody->linearVelocity = linearVelocity;
@@ -2395,13 +2423,13 @@ private:
         // world poses before this compact scratch list is consumed. Local conversion is
         // therefore independent of bodies_/characters_ hash order, including dynamic
         // parent+child and mixed rigidbody/character hierarchies.
-        for (const SceneEntity entity : writeBackEntities_) {
-            if (!context.Transforms().IsAlive(entity)) {
-                continue;
-            }
-            TransformComponent* transform = context.Transforms().TryGet(entity);
+        for (const auto& pose : writeBackPoses_) {
+            // A borrowed row belongs to this fixed step only. Modified
+            // observers may still change the archetype before the next row.
+            TransformComponent* transform = pose.storageVersion == context.EcsWorld().NativeStorage().StructuralVersion()
+                ? pose.transform : context.Transforms().TryGet(pose.entity);
             if (transform != nullptr) {
-                FinalizeWriteBackLocalPose(context, entity, *transform);
+                FinalizeWriteBackLocalPose(context, pose.entity, *transform);
             }
         }
     }
@@ -2416,7 +2444,7 @@ private:
     // in a collision event") for kb::script::ScriptRuntimeSceneSystem to
     // drain and dispatch as real, entity-local ScriptEvents.
     void DispatchContactEvents(SceneSystemContext& context) {
-        std::vector<RawContactEvent> drained = contactListener_.DrainAndClear();
+        const auto drained = contactListener_.DrainAndClear();
         if (drained.empty()) {
             return;
         }
@@ -2618,6 +2646,7 @@ private:
     };
     // Map rehash preserves record addresses; removing any body invalidates this row cache.
     std::vector<BodySyncCacheEntry> bodySyncCache_;
+    JoltStaticBodyBatchCache staticBodyBatchCache_;
     struct BodyWriteBackView {
         SceneEntity entity{};
         BodyRecord* body = nullptr;
@@ -2644,7 +2673,12 @@ private:
     std::unordered_map<std::uint64_t, CharacterRecord> characters_;
     std::unordered_map<std::uint64_t, RootMotionQueue> pendingCharacterRootMotion_;
     std::vector<CharacterSnapshot> characterScratch_;
-    std::vector<SceneEntity> writeBackEntities_;
+    struct WriteBackPoseView {
+        SceneEntity entity{};
+        TransformComponent* transform = nullptr;
+        std::uint64_t storageVersion = 0U;
+    };
+    std::vector<WriteBackPoseView> writeBackPoses_;
     JoltCollisionContactListener contactListener_;
     // LIB-127: authoritative active sub-shape sets, aggregated by body pair.
     // Besides preventing duplicate entity callbacks for compound shapes,
