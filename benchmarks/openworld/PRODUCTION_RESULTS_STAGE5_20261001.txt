@@ -1,0 +1,76 @@
+21kb — etap 5: osobna synchronizacja struktury w runtime
+Data: 2026-10-01. Gałąź 1.0. Baza: 46f7772e335b8cceb8da253460eda0a584605990.
+Pełny cel produkcyjny pozostaje aktywny; P99 mieszanego gameplay i pełnego bulk nie są zaliczone.
+
+Zmiana
+RuntimeSceneFrameSync wykonuje pełną synchronizację przy pierwszym submit.
+Zmiana RenderTopologyVersion wybiera istniejący SyncStructural; bieżące affine
+i kolejka zmian właściwości nadal są odbierane. Renderer nie oznacza kolejki
+jako odebranej po samym SyncStructural, który zachowuje istniejące mesh proxy.
+Kamera, światła, widoczność, materiał i transformy nadal pochodzą z ECS.
+Bez nowych kopii komponentów, właścicieli cache ani flag mobilności.
+Klasy: RuntimeSceneFrameSync, Renderer::RuntimeSceneSynchronization, Renderer.
+Test integracyjny: zmiany przed Update, zmiany w bieżącym ticku równocześnie
+z dodaniem obiektu, usunięcie i ponowne wykorzystanie pełnego ID, transform
+zachowanej siatki, Reset i ponowny pełny submit. Rzeczywisty renderer headless Noop.
+
+Metoda
+i7-13700F, RTX 4070 12 GB, 64 GB RAM, sterownik 591.74.
+Release /O2 /DNDEBUG, D3D11 1920×1080, ForwardPlus, headless.
+Projekt: E:/21kbProjekty/OpenWorldProductionStage5_20261001.
+54 niezależne procesy: 18 scenariuszy × 3 powtórki. Wszystkie exit 0.
+Generator i obciążenia bez zmian. Identyczne źródła geometrii/skryptów; identyfikatory
+zasobów są przypisane do osobnych katalogów projektów. Nie porównujemy binarnej
+tożsamości plików scen zawierających te identyfikatory.
+CPU: 180 rozgrzewki + 360 próbek. Zwykły render: 120 + 480.
+Mixed: 3420 klatek/proces, gameplay od klatki 120; zimny start zachowany.
+P99 z połączonych próbek, najbliższa wyższa ranga. GPU timer opóźniony.
+Serie kolejno po kompilacji/testach; bez buildów, trace i innych benchmarków w tle.
+Manifest Results/capture_manifest.json: cztery hashe zmienionych źródeł.
+Wszystkie tymczasowe sondy usunięte przed pełną kompilacją/testami/pomiarem.
+
+Wyniki względem etapu 4
+Mixed gameplay: średnia 3.624781 -> 3.252934 ms (-10.26%).
+P99: 24.3260 -> 22.7613 ms. Maksimum: 29.1659 -> 60.6711 ms.
+Średnie procesów: 3.205788 / 3.246040 / 3.306975 ms.
+Pełna seria z zimnym startem: średnia 3.585036, P99 23.7991, maks. 197.4030 ms.
+Synchronizacja sceny (pełna seria): średnia 0.795831 -> 0.240734 ms;
+P99 9.4378 -> 2.2250 ms. GPU średnio 1.424608 -> 1.438735 ms.
+To poprawa CPU synchronizacji, bez deklaracji poprawy GPU.
+City 50k fixed: średnia 3.964766 -> 3.869230 ms; P99 5.5555 ms.
+Pełny bulk 100k mutation+Update: średnia 16.648590 ms, P99 21.5316,
+maks. 28.4972 ms. Sam Update: średnia 6.003716, P99 8.5372 ms.
+Etap nie zmienia kodu CPU ECS/fizyki; odchylenia tych pomiarów zachowujemy,
+bez przypisywania ich zmianie synchronizacji renderera.
+idle physics: 0.015524 -> 0.016358 ms (+5.38%, +0.835 mikrosekundy).
+Reporter zachowuje ten alarm regresji względem etapu 4; nie poluzowano progu.
+Brak regresji średniej >5% względem bazy 3f4a9fc6.
+
+Poprawność i stabilność
+Pełna kompilacja wszystkich celów, pełne testy silnika, ECS API i renderera:
+exit 0. Graph shaderc włączony; testy odczytów GPU przechodzą. WebGPU fallback
+zweryfikowany w osobnym procesie. Nie uruchamiano widocznego edytora ani gry.
+Fixed city/geometry/lights/shadow: submitted, visible, culled, scene_entities,
+scene_lights, submitted_lights, width i height identyczne klatka po klatce
+w każdej z trzech powtórek względem etapu 4.
+Mixed: dziewięć pełnych cykli 20646 -> 30648 -> 20646; max. 256 operacji/tick.
+Async 100k: dziewięć cykli 100002 -> 0. Każde renderowanie: dropped=0, missing=0.
+Aktywna fizyka zachowuje 4096 wybudzonych ciał, 1 fixed step i odbiór kontaktów.
+100k colliderów: 1000 trafień raycast/klatkę. Brak zmiany scen/testów dla lepszego wyniku.
+
+Otwarte bramki i dalsza praca
+1. Mixed gameplay P99 22.7613 > 16.67 ms. Wyższe maksimum zachowane w raporcie.
+   Pozostaje praca przy poruszającej się kamerze i publikacji streamingu.
+2. Bulk mutation+Update P99 21.5316 > 16.67 ms. Sprawdź koszt wielokrotnych
+   odczytów/rejestracji kolumn w NativeArchetypeStorage i WorldComponents,
+   zachowując OnSet, dziedziczenie, odroczenie i obsługę usuniętych generacji.
+3. 512 aktywnych świateł nadal wymagają rzeczywistych list przestrzennych;
+   obecny globalny limit 32/pass nie zalicza pełnego oświetlenia.
+4. Roślinność nadal wymaga alpha, wiatru, cieni, LOD i streamingu zasobów.
+5. Przenieś zimne I/O/dekodowanie zasobów na workery i ogranicz publikację budżetem.
+Reporter exit 1 zachowuje dwie otwarte bramki i opisany alarm idle.
+Nie oznaczaj całego celu complete; brak certyfikacji równoważności z innymi silnikami.
+
+Pełne liczby: production_stage5_summary.csv.
+Surowe próbki, logi, manifesty i raporty: katalog projektu Results.
+Porównania: production_summary_vs_46f7772e.json oraz _vs_3f4a9fc6.json.

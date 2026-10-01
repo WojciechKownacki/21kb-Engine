@@ -217,3 +217,13 @@ Aktualne bramki pełnego celu: bulk total_ms średnia i P99 <=16.67 ms; city fix
 wall_frame_ms P99 <=16.67 ms; mixed fixed warm_wall_frame_ms P99 <=16.67 ms.
 Mixed: ciepłe próbki od klatki 120; pełna seria i zimny maksimum pozostają
 w raporcie. FAIL oznacza dalszą pracę; pliki historyczne zachowują stare bramki.
+
+Etap 5 (2026-10-01): runtime SyncStructural po zmianie topologii zamiast pełnego Sync.
+Bieżące zmiany proxy są odbierane również po uzgodnieniu struktury.
+Projekt: E:/21kbProjekty/OpenWorldProductionStage5_20261001.
+Odtworzenie: polecenia etapu 4 z Stage5 zamiast Stage4 w ścieżkach; identyczne
+suite compare, capacity, foliage, production --fixed-step i generator.
+Porównanie:
+  python benchmarks/openworld/report_production.py --before E:/21kbProjekty/OpenWorldProductionStage4_20261001 --after E:/21kbProjekty/OpenWorldProductionStage5_20261001
+Pełny raport: PRODUCTION_RESULTS_STAGE5_20261001.txt; dane: production_stage5_summary.csv.
+Bramki pozostają bez zmian. Wynik reportera exit 1 zachowuje otwartą pracę.
