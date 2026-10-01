@@ -4,6 +4,7 @@
 #include "kb/render/frame/FullscreenTexturePass.hpp"
 #include "kb/render/frame/RenderSceneSubmitDesc.hpp"
 #include "kb/render/scene/RenderScene.hpp"
+#include "kb/render/scene/SceneLightGridResources.hpp"
 #include "kb/render/scene/SceneRenderTypes.hpp"
 
 #include <bgfx/bgfx.h>
@@ -38,10 +39,12 @@ public:
 
     [[nodiscard]] bool Initialize();
     void Shutdown() noexcept;
+    void EndFrame() noexcept { lightGrid_.EndFrame(); }
     [[nodiscard]] bool Submit(const SceneDeferredLightingPassDesc& desc, SceneRenderSubmitStats& stats) const;
     [[nodiscard]] bool IsInitialized() const noexcept;
 
 private:
+    mutable SceneLightGridResources lightGrid_;
     bgfx::ProgramHandle program_ = BGFX_INVALID_HANDLE;
     FullscreenTexturePass debugNormalPresentPass_{};
     bgfx::UniformHandle albedoSampler_ = BGFX_INVALID_HANDLE;

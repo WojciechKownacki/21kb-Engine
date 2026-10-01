@@ -175,7 +175,7 @@ RenderProxyId RenderScene::UpsertMesh(const MeshRenderProxyDesc& desc) {
     auto [it, inserted] = meshes_.try_emplace(desc.entityId);
     MeshRenderProxy& proxy = it->second;
     if (inserted) {
-        meshContentRevision_ = NextMeshContentRevision();
+        meshContentRevision_ = NextContentRevision();
         if (!sortedMeshProxies_.dirty) {
             if (sortedMeshProxies_.proxies.empty() ||
                 desc.entityId > sortedMeshProxies_.proxies.back()->desc.entityId) {
@@ -193,7 +193,7 @@ RenderProxyId RenderScene::UpsertMesh(const MeshRenderProxyDesc& desc) {
 
     const RenderProxyDirtyFlag dirty = RenderSceneProxyDirtyTracker::DirtyForMeshChange(proxy.desc, desc);
     if (dirty != RenderProxyDirtyFlag::None) {
-        meshContentRevision_ = NextMeshContentRevision();
+        meshContentRevision_ = NextContentRevision();
         const bool sameGroupFlags = proxy.desc.visible && desc.visible &&
             proxy.desc.morphDeformationEnabled == desc.morphDeformationEnabled &&
             (proxy.desc.materialSlotOverrideCount != 0U) == (desc.materialSlotOverrideCount != 0U);
@@ -207,7 +207,7 @@ RenderProxyId RenderScene::UpsertMesh(const MeshRenderProxyDesc& desc) {
                 ApplySurfaceCasts(instance);
                 if (instance.meshAssetId == group.meshAssetId && instance.materialAssetId == group.materialAssetId) {
                     group.instances[proxy.instanceIndexInGroup] = instance;
-                    group.contentRevision = NextMeshContentRevision();
+                    group.contentRevision = NextContentRevision();
                     proxy.desc = desc;
                     proxy.dirty |= dirty;
                     return proxy.id;
@@ -249,6 +249,7 @@ RenderProxyId RenderScene::UpsertLight(const LightRenderProxyDesc& desc) {
         proxy.id = AllocateProxyId();
         proxy.desc = desc;
         proxy.dirty = RenderProxyDirtyFlag::All;
+        lightContentRevision_ = NextContentRevision();
         return proxy.id;
     }
 
@@ -256,6 +257,7 @@ RenderProxyId RenderScene::UpsertLight(const LightRenderProxyDesc& desc) {
     if (dirty != RenderProxyDirtyFlag::None) {
         proxy.desc = desc;
         proxy.dirty |= dirty;
+        lightContentRevision_ = NextContentRevision();
     }
     return proxy.id;
 }
@@ -289,8 +291,8 @@ RenderProxyId RenderScene::UpsertGeometrySwarm(const GeometrySwarmRenderProxyDes
             if (group.meshAssetId == desc.meshAssetId && group.materialAssetId == desc.materialAssetId) {
                 const std::uint32_t firstNewInstance = previous.instanceCount;
                 const auto firstGenerated = group.instances.size();
-                meshContentRevision_ = NextMeshContentRevision();
-                group.contentRevision = NextMeshContentRevision();
+                meshContentRevision_ = NextContentRevision();
+                group.contentRevision = NextContentRevision();
                 proxy.desc = desc;
                 group.instances.reserve(group.instances.size() + (desc.instanceCount - firstNewInstance));
                 for (std::uint32_t index = firstNewInstance; index < desc.instanceCount; ++index) {
@@ -362,7 +364,7 @@ bool RenderScene::RemoveMesh(std::uint64_t entityId) noexcept {
     const auto found = meshes_.find(entityId);
     if (found == meshes_.end()) return false;
     if (!RemoveMeshInstance(found->second)) InvalidateDrawGroups();
-    else meshContentRevision_ = NextMeshContentRevision();
+    else meshContentRevision_ = NextContentRevision();
     meshes_.erase(found);
     sortedMeshProxies_.dirty = true;
     return true;
@@ -373,7 +375,9 @@ bool RenderScene::RemoveCamera(std::uint64_t entityId) noexcept {
 }
 
 bool RenderScene::RemoveLight(std::uint64_t entityId) noexcept {
-    return lights_.erase(entityId) != 0U;
+    if (lights_.erase(entityId) == 0U) return false;
+    lightContentRevision_ = NextContentRevision();
+    return true;
 }
 
 bool RenderScene::UpdateVisibilityBlockerTransform(std::uint64_t entityId, const std::array<float, 16>& model) noexcept {
@@ -463,7 +467,7 @@ std::uint32_t RenderScene::RemoveMeshesNotInSorted(std::span<const std::uint64_t
     }
     if (removed != 0U) {
         sortedMeshProxies_.dirty = true;
-        meshContentRevision_ = NextMeshContentRevision();
+        meshContentRevision_ = NextContentRevision();
     }
     return removed;
 }
@@ -491,6 +495,7 @@ std::uint32_t RenderScene::RemoveLightsNotInSorted(std::span<const std::uint64_t
         it = lights_.erase(it);
         ++removed;
     }
+    if (removed != 0U) lightContentRevision_ = NextContentRevision();
     return removed;
 }
 std::uint32_t RenderScene::RemoveVisibilityBlockersNotInSorted(std::span<const std::uint64_t> sortedEntityIds) noexcept {
@@ -764,11 +769,11 @@ void RenderScene::AppendMeshInstance(MeshRenderProxy& proxy) {
     }
     SceneRenderDrawGroup& group = drawGroups_[groupIt->second];
     if (newGroup) {
-        group.cacheId = NextMeshContentRevision();
+        group.cacheId = NextContentRevision();
         group.partitionOwner = key.owner;
         group.partitionKind = key.kind;
     }
-    group.contentRevision = NextMeshContentRevision();
+    group.contentRevision = NextContentRevision();
     proxy.instanceGroupIndex = static_cast<std::uint32_t>(groupIt->second);
     proxy.instanceIndexInGroup = static_cast<std::uint32_t>(group.instances.size());
     proxy.instanceLocationVersion = drawGroupBuildVersion_;
@@ -790,7 +795,7 @@ bool RenderScene::RemoveMeshInstance(const MeshRenderProxy& proxy) noexcept {
         meshes_.at(group.instances[instanceIndex].entityId).instanceIndexInGroup = static_cast<std::uint32_t>(instanceIndex);
     }
     group.instances.pop_back();
-    group.contentRevision = NextMeshContentRevision();
+    group.contentRevision = NextContentRevision();
     if (!group.instances.empty()) {
         if (proxy.desc.materialSlotOverrideCount != 0U || proxy.desc.morphDeformationEnabled) {
             group.hasMaterialSlotOverrides = false; group.hasMorphDeformation = false;
@@ -814,11 +819,11 @@ bool RenderScene::RemoveMeshInstance(const MeshRenderProxy& proxy) noexcept {
 }
 
 void RenderScene::InvalidateDrawGroups() noexcept {
-    meshContentRevision_ = NextMeshContentRevision();
+    meshContentRevision_ = NextContentRevision();
     drawGroupsDirty_ = true;
 }
 
-std::uint64_t RenderScene::NextMeshContentRevision() noexcept {
+std::uint64_t RenderScene::NextContentRevision() noexcept {
     static std::atomic<std::uint64_t> next{1U};
     return next.fetch_add(1U, std::memory_order_relaxed);
 }
@@ -854,7 +859,7 @@ void RenderScene::RebuildDrawGroupsIfNeeded() const {
                 drawGroups_.push_back(SceneRenderDrawGroup{});
             }
             SceneRenderDrawGroup& group = drawGroups_[writeGroupCount];
-            group.cacheId = NextMeshContentRevision();
+            group.cacheId = NextContentRevision();
             group.contentRevision = group.cacheId;
             group.partitionOwner = key.owner; group.partitionKind = key.kind;
             group.meshAssetId = instance.meshAssetId;
@@ -902,7 +907,7 @@ void RenderScene::RebuildDrawGroupsIfNeeded() const {
             if (lookupIt == drawGroupLookupScratch_.end()) {
                 if (writeGroupCount == drawGroups_.size()) drawGroups_.push_back(SceneRenderDrawGroup{});
                 SceneRenderDrawGroup& group = drawGroups_[writeGroupCount];
-                group.cacheId = NextMeshContentRevision(); group.contentRevision = group.cacheId;
+                group.cacheId = NextContentRevision(); group.contentRevision = group.cacheId;
                 group.partitionOwner = key.owner; group.partitionKind = key.kind;
                 group.meshAssetId = instance.meshAssetId; group.materialAssetId = instance.materialAssetId; group.hasMaterialSlotOverrides = false; group.hasMorphDeformation = false;
                 lookupIt = drawGroupLookupScratch_.emplace(key, writeGroupCount).first; ++writeGroupCount;
@@ -926,7 +931,7 @@ void RenderScene::RebuildDrawGroupsIfNeeded() const {
             if (lookupIt == drawGroupLookupScratch_.end()) {
                 if (writeGroupCount == drawGroups_.size()) drawGroups_.push_back(SceneRenderDrawGroup{});
                 SceneRenderDrawGroup& group = drawGroups_[writeGroupCount];
-                group.cacheId = NextMeshContentRevision(); group.contentRevision = group.cacheId;
+                group.cacheId = NextContentRevision(); group.contentRevision = group.cacheId;
                 group.partitionOwner = key.owner; group.partitionKind = key.kind;
                 group.meshAssetId = instance.meshAssetId; group.materialAssetId = instance.materialAssetId; group.hasMaterialSlotOverrides = false; group.hasMorphDeformation = false;
                 lookupIt = drawGroupLookupScratch_.emplace(key, writeGroupCount).first; ++writeGroupCount;
@@ -968,7 +973,7 @@ RenderScene::TransformUpdateOutcome RenderScene::ApplyMeshTransform(std::uint64_
             group.instances[proxy.instanceIndexInGroup].entityId == entityId) {
             group.instances[proxy.instanceIndexInGroup].model = model;
             // Parallel affine publication writes disjoint instances in the same page.
-            std::atomic_ref<std::uint64_t>(group.contentRevision).store(NextMeshContentRevision(), std::memory_order_relaxed);
+            std::atomic_ref<std::uint64_t>(group.contentRevision).store(NextContentRevision(), std::memory_order_relaxed);
             proxy.dirty |= RenderProxyDirtyFlag::Transform;
             return TransformUpdateOutcome::InPlace;
         }
@@ -986,7 +991,7 @@ void RenderScene::InvalidateDrawGroupsIfFallback(TransformUpdateOutcome outcome)
 
 void RenderScene::AddTransformUpdateCounts(std::uint64_t inPlace, std::uint64_t fallback) noexcept {
     if (inPlace != 0U || fallback != 0U) {
-        meshContentRevision_ = NextMeshContentRevision();
+        meshContentRevision_ = NextContentRevision();
         if (!surfaceCasts_.empty()) drawGroupsDirty_ = true;
     }
     transformInPlaceUpdateCount_ += inPlace;
@@ -999,7 +1004,7 @@ bool RenderScene::UpdateMeshTransform(std::uint64_t entityId, const std::array<f
     case TransformUpdateOutcome::NotFound:
         return false;
     case TransformUpdateOutcome::InPlace:
-        meshContentRevision_ = NextMeshContentRevision();
+        meshContentRevision_ = NextContentRevision();
         if (!surfaceCasts_.empty()) drawGroupsDirty_ = true;
         ++transformInPlaceUpdateCount_;
         return true;

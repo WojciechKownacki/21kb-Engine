@@ -214,7 +214,13 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
         });
     }
     SceneRenderSubmitStats lightingStats{};
-    const PackedSceneLighting lighting = SceneLightingPacker::Build(renderScene, lightingStats, lightingConfig, camera);
+    PackedSceneLighting lighting = SceneLightingPacker::Build(renderScene, lightingStats, lightingConfig, camera);
+    if ((pass == MeshPassType::BaseOpaque || pass == MeshPassType::BaseTransparent) &&
+        lightingConfig.lightingPath != SceneRenderLightingPath::Forward &&
+        lightingConfig.maxForwardLights != 0U && lightingStats.skippedForwardLightCount != 0U) {
+        lighting.lightGrid = passResources_.LightGrid().Prepare(renderScene, lightingConfig,
+            camera != nullptr ? camera->cullingMask : 0xFFFFFFFFU, lighting.primaryLightId, lightingStats, diagnostics);
+    }
     const std::array<float, 4> cameraPosition = SceneLightingPacker::CameraPosition(camera);
     if (detailSwitchScene_ != &renderScene) {
         pipelineScratch_.detailSwitchLevels.clear();

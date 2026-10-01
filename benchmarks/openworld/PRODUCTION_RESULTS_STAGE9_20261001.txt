@@ -1,0 +1,130 @@
+21kb — etap 9: rzeczywiste przestrzenne listy świateł i kontrola GPU
+Data: 2026-10-01. Gałąź 1.0. Baza: e1921677.
+Pełny cel produkcyjny pozostaje aktywny. Bulk i mixed P99 nadal FAIL.
+
+Minimalna zmiana i własność
+SceneLightShaderData jest wspólnym kontraktem pakowania i walidacji świateł.
+SceneLightGrid tworzy pochodne listy CSR w komórkach przestrzeni świata;
+każda komórka może zawierać więcej niż 32 światła. Kierunkowe pozostają
+dostępne również poza granicami siatki. Pierwsze wybrane światło zachowuje
+dotychczasową identyfikację przy próbkowaniu cienia.
+SceneLightGridResources posiada builder, tekstury, uniformy i ich cykl życia.
+Klucz cache korzysta z kanonicznej LightContentRevision, maski, wymiarów,
+wybranego pierwszego światła oraz opcjonalnego podglądu. Niezmienione światła
+nie wymagają ponownego zbudowania ani uploadu list. Zmiana sceny, viewportu
+lub świateł w tej samej klatce nie nadpisuje zasobu już użytego przez draw.
+Nie ma drugiego źródła danych autorskich ECS. Właściciel usuwa nieużywane
+zasoby po trzech klatkach. Zbyt duży atlas lub brak wymaganej możliwości GPU
+daje diagnostykę LightGridUnavailable i nie publikuje częściowych list.
+Builder sprawdza budżet odwołań przed kosztownym wypełnianiem komórek.
+
+Forward nadal używa maksymalnie 4 uniform lights. ForwardPlus i Deferred
+zachowują małą ścieżkę uniform do 32; po przekroczeniu dodatniego budżetu
+maxForwardLights rzeczywiste pasy oświetlenia korzystają z pełnych list.
+W tej ścieżce maxForwardLights jest budżetem fallback, a nie limitem wszystkich
+świateł sceny. Wartość 0 wyłącza oświetlenie. Pasy nieoświetlane nie tworzą
+siatki, dlatego sumy statystyk wszystkich pasów mogą nadal zawierać skipped.
+W scenie lights_512 jest 512 punktowych i jedno kierunkowe: 513 unikalnych
+świateł. Submitted_lights=1058 jest sumą pasów, nie 1058 unikalnymi światłami.
+SceneMeshPassResources i SceneDeferredLightingPass posiadają zasoby mechanizmu.
+Builtin/graph/deferred shadery odczytują atlas RGBA32F; odczyt małej ścieżki
+nie korzysta ze starej tekstury pozostawionej przez wcześniejszy draw.
+
+Dowód funkcjonalny
+Obowiązkowe SceneLightGridTests: 640 świateł sześciu typów, 1200 niezależnych
+zapytań wpływu, granice komórek, kierunkowe poza siatką, 512 nakładających się
+świateł, maski, widoczność, NaN, podgląd, rewizje i przekroczenie budżetu.
+SceneLightGridGpuTests używa rzeczywistego D3D11, ukrytego okna, produkcyjnych
+SceneRenderer/GBuffer/DeferredLightingPass oraz materiałów builtin i graph.
+ForwardPlus/Deferred x builtin/graph: 512 punktowych o sumarycznej energii
+równej jednemu światłu daje ten sam piksel (60,60,60); usunięcie 480 świateł
+zmniejsza wynik do (4,4,4). Testuje również dwa różne zestawy świateł w tej
+samej klatce, maskę kamery, ruch przez granicę komórki, przeniesienie świateł
+poza zasięg oraz wzrost tekstury do 1024 świateł.
+Mutant zmieniający jedynie pętlę shaderów na maks. 32: exit 1. Produkcja: exit 0,
+przy tym samym hashu wykonywalnego testu. Przywrócono właściwe shadery.
+Pełny build, renderer suite, świeży WebGPU fallback, engine, ECS API/stress/
+replay/scheduler/snapshot: wszystkie exit 0. Snapshot obejmuje milion encji.
+12 shaderów builtin/deferred skompilowano dla dxbc/dxil/glsl/essl/spirv/metal.
+Nowy test pikseli wykonano na D3D11. Nie jest dowodem działania dużych list
+na pozostałych backendach ani dla wszystkich wariantów transparent/skinned/
+terrain i 512 mieszanych area/spot/directional. Te warianty wymagają odbioru.
+Zachowano początkowe odrzucone logi: błędny clearDepth fixture i brak CMake
+w PATH testu engine. Końcowy fixture i środowisko przeszły pełną walidację.
+
+Metoda i integralność
+Projekt: E:/21kbProjekty/OpenWorldProductionStage9_20261001.
+i7-13700F, RTX 4070 12 GB, 64 GB RAM, rzeczywiste D3D11 1920x1080,
+ForwardPlus, Release /O2 /DNDEBUG. Headless, bez przejmowania wejścia.
+54 procesy, 18 scenariuszy x 3, wszystkie exit 0. Results/raw zawiera 54 CSV
+obciążeń oraz 18 CSV przygotowania CPU, łącznie 72. 28260 klatek renderera,
+13860 zgodnych pozycji poruszającej się kamery, z czego 12060 fixed-step.
+Po 9 kompletnych cykli mixed i async 100k; limit 256 operacji/klatkę.
+4096 aktywnych ciał wykonuje krok i publikuje kontakty. 100k colliderów daje
+1000 trafień raycast/klatkę. SHA-256 wszystkich 638 zamrożonych plików źródeł,
+shaderów, skryptów i binarek zgodny po pomiarach i po kontrolach.
+Bez buildów/testów w czasie serii. Liczba rezydentów nie oznacza widocznych
+obiektów. Foliage jest dotychczasową próbką czterech trójkątów bez pełnej
+roślinności. GPU timer zwraca -1; poniższe wall_frame_ms to całe klatki,
+nie niezależne czasy pracy GPU. Rzeczywisty backend potwierdzają logi procesu.
+Silniki referencyjne pozostają tylko do odczytu.
+
+Finalne wyniki: średnia / P99 / maksimum [ms]
+static_100k runtime_ms: 0.005360 / 0.0315 / 0.0531
+physics_idle_world_100k runtime_ms: 0.017597 / 0.0443 / 0.1354
+physics_4096 runtime_ms: 3.758335 / 4.6409 / 5.2712
+dense_4096 runtime_ms: 8.324953 / 11.1766 / 12.5687
+batch_dirty_100k total_ms: 14.754290 / 21.4655 / 24.3604
+batch_dirty_100k runtime_ms: 5.955427 / 8.5854 / 9.8932
+world_100k wall_frame_ms: 1.442025 / 3.2685 / 3.9476
+city_dense_50k fixed wall_frame_ms: 12.334731 / 15.3858 / 23.8887
+lights_512 fixed wall_frame_ms: 1.693960 / 4.6780 / 5.4718
+mixed fixed warm_wall_frame_ms: 7.309227 / 21.2276 / 53.0296
+mixed fixed ALL wall_frame_ms: 7.752075 / 24.2801 / 206.4540
+async static_100k update_ms: 0.982261 / 3.4739 / 9.6228
+colliders_100k runtime_ms: 0.107099 / 0.1931 / 0.3012
+Wszystkie metryki i niezaokrąglone wartości: production_stage9_summary.csv.
+
+Bramki i kontrolowane porównania
+City fixed P99 15.3858 zalicza 16.67 ms w tej serii. Mixed warm 21.2276
+i bulk total 21.4655 nadal nie zaliczają. Nie usunięto zimnego mixed 206.454 ms.
+Reporter porównania do etapu 8 zwraca exit 1; alarmy regresji pozostają.
+Oświetlenie w lights/mixed wykonuje teraz inną, pełniejszą pracę GPU, więc
+ich procenty vs etap 8 nie są porównaniem identycznego oświetlenia.
+Alarm world mean +43.82% vs etap 8 pozostaje w serii. CPU benchmark jest
+bitowo identyczny z etapami 7/8; nie przypisujemy jego różnic zmianie renderera.
+Osobne 36 kontrolnych procesów, trzy sceny x trzy pary dla każdej kontroli,
+po 1200 fixed-step klatek i warm-up 240. Wszystkie exit 0. W 18 parach są
+zgodne kamery i liczniki geometrii/uploadu. Nie zastępują finalnych 54 pomiarów.
+Te same obecne exe, stare/nowe DXBC shadery, średnia [ms]:
+  world: 1.456518 -> 1.514270 (+3.97%)
+  culling_far: 1.023344 -> 1.016912 (-0.63%)
+  foliage_100k: 1.571327 -> 1.578208 (+0.44%)
+Zachowana stara binarka etapu 7 / obecna, właściwe shadery, średnia [ms]:
+  world: 1.470608 -> 1.461451 (-0.62%)
+  culling_far: 1.021173 -> 1.022924 (+0.17%)
+  foliage_100k: 1.575199 -> 1.561279 (-0.88%)
+Stara binarka w obecnych warunkach ma world około 1.47, a historyczna seria
+etapu 7 około 1.05 ms. Kontrole nie dowodzą konkretnej przyczyny środowiskowej
+i nie kasują wcześniejszego alarmu +18.93% vs etap 6. Zachowano wszystkie serie.
+
+Kontynuacja pełnego celu
+1. SceneMeshSubmitter/MeshPassProcessor/SceneMeshInstanceBufferPool: mixed
+   P99 <=16.67 ms z aktualną kamerą, pełnymi światłami, cieniami i streamingiem.
+2. SceneTransformService/SceneTransformComponentStore/World: bulk mutation+
+   Update średnia/P99 <=16.67 ms, każdy OnSet, odroczenie, migracja i generacja.
+3. Rozszerz niezależny odbiór list GPU na duże mieszane światła oraz warianty
+   transparent/skinned/terrain; zmierz rzeczywisty czas GPU i backendy docelowe.
+4. Pełna roślinność alpha/wiatr/cienie/LOD i streaming rzeczywistych zasobów.
+5. Async I/O/dekodowanie/przygotowanie GPU z budżetem publikacji, dłuższa
+   stabilność czasów i pamięci. Funkcjonalne 54/54 nie zamyka pełnego celu.
+
+Dane i odtworzenie
+README etapu 4 ze Stage9 zamiast Stage4; generator bez zmian, kolejno compare,
+capacity, foliage, production --fixed-step. Results/measurement_runner.py
+zachowuje dokładne polecenia. Results/verify_measurements.py weryfikuje istniejące
+serie bez ich zastępowania. Results/measurement_verification.json potwierdza
+integralność; diagnostics/final2-full-validation.json i gpu_cap_mutant_final
+zachowują logi. shader_a_b/runtime_a_b zawierają surowe kontrole i stare shadery.
+Porównanie:
+  python benchmarks/openworld/report_production.py --before E:/21kbProjekty/OpenWorldProductionStage8_20261001 --after E:/21kbProjekty/OpenWorldProductionStage9_20261001

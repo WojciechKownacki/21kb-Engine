@@ -277,3 +277,26 @@ Nie łącz ich z finalną serią. cpu_repeat_control zachowuje 9 kontroli identy
 CPU binarki, bez zastępowania wyników kanonicznych. diagnostics zawiera mutant,
 pełne logi testów oraz odrzucone niepoprawne/opcjonalne próbki.
 City, mixed i bulk P99 nadal FAIL. Pozostałe wymagania pełnego celu bez zmian.
+
+Etap 9 (2026-10-01): rzeczywiste przestrzenne listy światła dla ForwardPlus
+i Deferred. SceneLightGridResources posiada atlas GPU i pochodny cache;
+RenderScene.LightContentRevision unieważnia go po zmianach kanonicznego stanu.
+Dodatnie maxForwardLights jest budżetem małej ścieżki uniform, a duże listy
+w oświetlanych pasach obsługują wszystkie poprawne światła maski; 0 wyłącza.
+Testy pikseli D3D11 builtin/graph x ForwardPlus/Deferred obejmują 512 i 1024
+punktowe, maskę, ruch, usuwanie i dwa różne zestawy w tej samej klatce.
+Mutant cap32 nie przechodzi, produkcja przechodzi. 12 shaderów zbudowano dla
+sześciu backendów; pełne duże warianty materiałów nadal wymagają odbioru GPU.
+Projekt: E:/21kbProjekty/OpenWorldProductionStage9_20261001.
+Odtworzenie: polecenia etapu 4 ze Stage9 zamiast Stage4, generator bez zmian.
+Porównanie:
+  python benchmarks/openworld/report_production.py --before E:/21kbProjekty/OpenWorldProductionStage8_20261001 --after E:/21kbProjekty/OpenWorldProductionStage9_20261001
+Raport: PRODUCTION_RESULTS_STAGE9_20261001.txt; production_stage9_summary.csv.
+Results/raw: 54 CSV obciążeń +18 CSV setup. verify_measurements.py niezależnie
+sprawdza 28260 klatek, 13860 kamer, 9 mixed i 9 async cykli oraz 638 hashy.
+shader_a_b/runtime_a_b zachowują dodatkowe 36 kontrolnych procesów; nie
+zastępują finalnych 54. GPU timer -1 oznacza brak pomiaru czasu GPU, a logi
+potwierdzają rzeczywiste D3D11. Wszystkie wall_frame_ms są czasem całej klatki.
+City fixed P99 15.3858 zalicza limit tej serii; mixed 21.2276 i bulk 21.4655
+nadal FAIL. Reporter exit 1 i historyczne alarmy pozostają. Foliage to nadal
+próbka czterech trójkątów. Pełny cel produkcyjny pozostaje aktywny.

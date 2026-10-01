@@ -495,6 +495,7 @@ enum class SceneRenderDiagnosticKind : std::uint8_t {
     // UI is unaffected. `entityId` names it.
     UITextUnavailable,
     PostProcessProfileUnavailable,
+    LightGridUnavailable,
 };
 
 enum class SceneRenderMaterialProgramStatus : std::uint8_t {

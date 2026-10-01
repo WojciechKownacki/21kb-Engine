@@ -1,4 +1,5 @@
 #include "scene/lighting/SceneForwardLightSelector.hpp"
+#include "scene/lighting/SceneLightShaderData.hpp"
 
 #include "engine/math/EngineMath.hpp"
 
@@ -63,13 +64,7 @@ void Normalize(float& x, float& y, float& z) noexcept {
 }
 
 [[nodiscard]] bool IsValidForwardLight(const LightRenderProxyDesc& light) noexcept {
-    if (!light.visible || light.intensity <= 0.0F || MaxColorChannel(light) <= 0.0F) {
-        return false;
-    }
-    if (light.kind != RenderLightKind::Directional && light.range <= 0.0F) {
-        return false;
-    }
-    return true;
+    return SceneLightShaderData::IsValid(light);
 }
 
 [[nodiscard]] float LightSelectionScore(const LightRenderProxyDesc& light, const std::array<float, 4>& cameraPosition) noexcept {

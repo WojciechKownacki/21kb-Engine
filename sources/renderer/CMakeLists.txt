@@ -303,6 +303,11 @@ add_library(kb_renderer STATIC
     src/scene/SceneMeshSubmitter.hpp
     src/scene/lighting/SceneForwardLightSelector.cpp
     src/scene/lighting/SceneForwardLightSelector.hpp
+    src/scene/lighting/SceneLightGrid.cpp
+    src/scene/lighting/SceneLightGrid.hpp
+    src/scene/lighting/SceneLightShaderData.hpp
+    src/scene/lighting/SceneLightGridResources.cpp
+    include/kb/render/scene/SceneLightGridResources.hpp
     src/scene/lighting/SceneLightingPacker.cpp
     src/scene/lighting/SceneLightingPacker.hpp
     src/scene/pipeline/MeshPipelineCommandBuilder.cpp
@@ -705,6 +710,8 @@ endif()
 if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_validation)
     add_executable(kb_renderer_tests
         tests/RendererTests.cpp
+        tests/SceneLightGridTests.cpp
+        tests/SceneLightGridGpuTests.cpp
         tests/RendererTestSupport.hpp
         tests/FinalCompositePassTests.cpp
         tests/PostProcessChainTests.cpp

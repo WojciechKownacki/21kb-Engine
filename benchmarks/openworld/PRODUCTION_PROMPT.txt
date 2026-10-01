@@ -192,3 +192,35 @@ lecz mixed P99 wzrosło w trzech parach. Zachowaj wszystkie piloty i ich porażk
    A/B. Testy muszą być obowiązkowe, niezależne od opcjonalnego Project/Assets;
    udowodnij awarię przed i powodzenie po poprawce na rzeczywiście obsługiwanym
    formacie i funkcji. Funkcjonalne 54/54 nie zalicza bramek ani pełnego celu.
+
+KONTYNUACJA PO ETAPIE 9 (PRODUCTION_RESULTS_STAGE9_20261001.txt)
+SceneLightGridResources posiada pochodne listy CSR i atlas GPU. Kanoniczny
+RenderScene.LightContentRevision unieważnia cache; nie dodawaj kopii danych
+autorskich. ForwardPlus/Deferred builtin/graph rzeczywiście czyta 512/1024
+punktowe, a mutant shader cap32 nie przechodzi obowiązkowego testu pikseli.
+Nie cofaj list do globalnego limitu 32 ani ochrony tekstur użytych w tej klatce.
+1. Mixed warm P99 21.2276 i bulk mutation+Update P99 21.4655 nadal FAIL.
+   Cel <=16.67 ms pozostaje. City fixed P99 15.3858 zalicza tę serię, lecz
+   wymaga utrzymania pod dłuższym obciążeniem. Zachowaj zimny mixed 206.454 ms,
+   wszystkie kamery, instancje, kontakty, cienie i 9 pełnych cykli streamingu.
+2. SceneMeshSubmitter/MeshPassProcessor/SceneMeshInstanceBufferPool oraz
+   SceneTransformService/SceneTransformComponentStore/World: zmniejsz koszt
+   i ogon bez drugiego źródła prawdy; zachowaj OnSet, dziedziczenie, odroczenie,
+   usuwanie i migrację w callbackach, generacje i interpolację. Własność danych
+   w klasie odpowiedniego mechanizmu, minimalne zmiany SOLID.
+3. SceneLightGrid/SceneLightGridResources/kontrakt shaderów: niezależne piksele
+   dużych mieszanych area/spot/directional i transparent/skinned/terrain,
+   docelowe backendy, wielokrotne viewporty i brak zasobów. Sześć kompilacji
+   shaderów nie jest odbiorem GPU sześciu backendów. Uruchom rzeczywisty pomiar
+   GPU; obecny gpu_delayed_ms=-1, a wall_frame_ms mierzy całą klatkę.
+4. Wykonaj pełną roślinność alpha/wiatr/cienie/LOD/streaming i asynchroniczne
+   I/O/dekodowanie/przygotowanie GPU z budżetem publikacji. Dotychczasowy milion
+   instancji czterech trójkątów nie dowodzi gotowości roślinności produkcyjnej.
+5. Zachowaj kanoniczny alarm world +43.82% vs etap 8 i wcześniejszy +18.93%.
+   W 36 osobnych kontrolach stary/current runtime ma world 1.470608/1.461451;
+   liczniki 18 par są zgodne. To nie dowód konkretnej przyczyny środowiskowej
+   ani powód usunięcia historycznych próbek. Kolejne A/B mają własny katalog.
+6. Odbiór end to end nadal obejmuje cały pierwotny cel. 54/54 procesy, milion
+   ECS i nowy test światła nie oznaczają pełnej gotowości gigantycznego świata.
+   Nie obniżaj bramek. Headless, silniki referencyjne read-only, bez nazw obcych
+   silników w identyfikatorach, najwyżej jeden agent. Commit i push po testach.

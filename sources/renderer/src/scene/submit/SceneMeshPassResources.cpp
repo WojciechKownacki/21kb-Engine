@@ -295,6 +295,7 @@ bool SceneMeshPassResources::Initialize() {
         return true;
     }
 
+    if (!lightGrid_.Initialize()) return false;
     programRegistry_.Configure(
         [this](const MaterialProgramKey& key) { return LoadProgramForKey(key); },
         [](bgfx::ProgramHandle handle) { bgfx::destroy(handle); });
@@ -371,6 +372,7 @@ bool SceneMeshPassResources::Initialize() {
 }
 
 void SceneMeshPassResources::Shutdown() {
+    lightGrid_.Shutdown();
     if (bgfx::isValid(motionVectorParamsUniform_)) {
         bgfx::destroy(motionVectorParamsUniform_);
         motionVectorParamsUniform_ = BGFX_INVALID_HANDLE;
@@ -762,6 +764,7 @@ bgfx::UniformHandle& SceneMeshPassResources::AcquireGraphUniform(
 }
 
 void SceneMeshPassResources::EndFrame(std::uint64_t frameIndex) const {
+    lightGrid_.EndFrame();
     for (const MaterialProgramKey& resident : residentProgramKeys_) {
         if (std::ranges::find(usedProgramKeys_, resident) == usedProgramKeys_.end()) {
             programRegistry_.Release(resident);
@@ -1054,6 +1057,8 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
             std::clamp(material->normalScale, 0.0F, 8.0F),
             material->alphaCutoff,
         };
+        if (desc.pass == MeshPassType::BaseOpaque || desc.pass == MeshPassType::BaseTransparent)
+            lightGrid_.Bind(desc.lighting.lightGrid, 0U);
         bgfx::setUniform(materialParamsUniform_, graphMaterialParams.data());
         bgfx::setUniform(cameraPositionUniform_, desc.cameraPosition.data());
         bgfx::setUniform(timeUniform_, desc.frameTime.data());
@@ -1181,6 +1186,8 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
     bgfx::setTexture(3U, occlusionSampler_, materialBinding.occlusionTexture);
     bgfx::setTexture(4U, emissiveSampler_, materialBinding.emissiveTexture);
     bgfx::setTexture(5U, shadowSampler_, desc.shadowMap != nullptr && desc.shadowMap->IsValid() ? desc.shadowMap->depthTexture : fallbackWhiteTexture_);
+    if (desc.pass == MeshPassType::BaseOpaque || desc.pass == MeshPassType::BaseTransparent)
+        lightGrid_.Bind(desc.lighting.lightGrid, 6U);
     bgfx::setUniform(materialEmissiveUniform_, materialBinding.emissive.data());
     bgfx::setUniform(cameraPositionUniform_, desc.cameraPosition.data());
     bgfx::setUniform(timeUniform_, desc.frameTime.data());

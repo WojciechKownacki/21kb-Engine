@@ -471,6 +471,7 @@ void Renderer::EndFrame() {
     }
 
     lastCompletedFrame_ = context_->EndFrame();
+    if (deferredLightingPass_ != nullptr) deferredLightingPass_->EndFrame();
     if (screenCapture_ != nullptr) {
         screenCapture_->Poll(
             static_cast<std::uint32_t>(lastCompletedFrame_));

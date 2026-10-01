@@ -93,6 +93,7 @@ bool SceneDeferredLightingPass::Initialize() {
     }
 
     WriteRendererDebugLog("deferred_lighting", "Initialize begin");
+    if (!lightGrid_.Initialize()) return false;
     program_ = ShaderLoader::LoadProgram("vs_present.sc", "fs_deferred_lighting.sc");
     static_cast<void>(debugNormalPresentPass_.Initialize());
     albedoSampler_ = bgfx::createUniform("s_gbufferAlbedo", bgfx::UniformType::Sampler);
@@ -145,6 +146,7 @@ bool SceneDeferredLightingPass::Initialize() {
 }
 
 void SceneDeferredLightingPass::Shutdown() noexcept {
+    lightGrid_.Shutdown();
     if (IsInitialized() || bgfx::isValid(program_)) {
         std::ostringstream message;
         message << "Shutdown program=" << HandleValue(program_)
@@ -359,7 +361,12 @@ bool SceneDeferredLightingPass::Submit(const SceneDeferredLightingPassDesc& desc
     }
 
     SceneRenderSubmitStats lightingStats{};
-    const PackedSceneLighting lighting = SceneLightingPacker::Build(*desc.renderScene, lightingStats, desc.lightingConfig, desc.camera);
+    PackedSceneLighting lighting = SceneLightingPacker::Build(*desc.renderScene, lightingStats, desc.lightingConfig, desc.camera);
+    if (desc.lightingConfig.maxForwardLights != 0U && lightingStats.skippedForwardLightCount != 0U) {
+        lighting.lightGrid = lightGrid_.Prepare(*desc.renderScene, desc.lightingConfig,
+            desc.camera != nullptr ? desc.camera->cullingMask : 0xFFFFFFFFU, lighting.primaryLightId, lightingStats);
+        if (!lightingStats.lightingPathProduction) return false;
+    }
     {
         std::ostringstream message;
         message << "Lighting packed submittedForward=" << lightingStats.submittedForwardLightCount
@@ -443,6 +450,7 @@ bool SceneDeferredLightingPass::Submit(const SceneDeferredLightingPassDesc& desc
     bgfx::setTexture(4U, depthSampler_, desc.gbuffer->DepthTexture());
     bgfx::setTexture(5U, shadowMapSampler_, shadowValid ? desc.shadowMap->depthTexture : fallbackShadowTexture_);
     bgfx::setTexture(6U, backdropEnvironmentSampler_, environmentBackdrop ? desc.worldBackdropEnvironment : fallbackBackdropEnvironmentTexture_);
+    lightGrid_.Bind(lighting.lightGrid, 7U);
     bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
     bgfx::setVertexBuffer(0, &vertices);
     bgfx::submit(desc.viewId, program_);

@@ -1,6 +1,7 @@
 $input v_normal, v_color0, v_texcoord0, v_worldPos, v_shadowPos, v_shadowFlags, v_tangent, v_bitangent, v_objectLocalPos, v_objectWorldPos, v_objectOrientation, v_preSkinnedNormal
 
 #include <bgfx_shader.sh>
+#include "light_grid.sh"
 
 SAMPLER2D(s_albedo, 0);
 SAMPLER2D(s_normal, 1);
@@ -78,45 +79,30 @@ float DiffuseBurley(float nDotV, float nDotL, float lDotH, float roughness)
     return lightScatter * viewScatter * energyFactor;
 }
 
-vec3 SurfaceEmitterSamplePosition(vec3 center, vec3 normal, vec3 right, float kind, vec2 dimensions, vec3 worldPos)
-{
-    if (kind < 2.5) {
-        return center;
-    }
-
-    vec3 localRight = normalize(right);
-    vec3 localUp = normalize(cross(normal, localRight));
-    vec3 fromCenter = worldPos - center;
-    if (kind < 3.5) {
-        return center + localRight * clamp(dot(fromCenter, localRight), -dimensions.x * 0.5, dimensions.x * 0.5)
-            + localUp * clamp(dot(fromCenter, localUp), -dimensions.y * 0.5, dimensions.y * 0.5);
-    }
-    if (kind < 4.5) {
-        vec3 planar = localRight * dot(fromCenter, localRight) + localUp * dot(fromCenter, localUp);
-        float planarLength = length(planar);
-        return center + planar * min(1.0, dimensions.x * 0.5 / max(planarLength, 0.0001));
-    }
-
-    vec3 axisPoint = center + localRight * clamp(dot(fromCenter, localRight), -dimensions.x * 0.5, dimensions.x * 0.5);
-    vec3 radial = worldPos - axisPoint;
-    float radialLength = length(radial);
-    return axisPoint + radial * min(1.0, dimensions.y * 0.5 / max(radialLength, 0.0001));
-}
-
 vec3 EvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldPos, vec3 albedo, float metallic, float roughness, float occlusion)
 {
-    vec4 dirKind = u_lightDirKind[lightIndex];
-    vec4 positionRange = u_lightPositionRange[lightIndex];
-    vec4 colorIntensity = u_lightColorIntensity[lightIndex];
-    vec4 spot = u_lightSpot[lightIndex];
-    vec4 areaRight = u_lightAreaRight[lightIndex];
+    vec4 dirKind, positionRange, colorIntensity, spot, areaRight;
+    if (u_sceneLightGridDimensions.w > 0.5) {
+        float base = float(lightIndex) * 5.0;
+        dirKind = KbLightGridTexel(base);
+        positionRange = KbLightGridTexel(base + 1.0);
+        colorIntensity = KbLightGridTexel(base + 2.0);
+        spot = KbLightGridTexel(base + 3.0);
+        areaRight = KbLightGridTexel(base + 4.0);
+    } else {
+        dirKind = u_lightDirKind[lightIndex];
+        positionRange = u_lightPositionRange[lightIndex];
+        colorIntensity = u_lightColorIntensity[lightIndex];
+        spot = u_lightSpot[lightIndex];
+        areaRight = u_lightAreaRight[lightIndex];
+    }
 
     vec3 lightVector = vec3(0.0, 1.0, 0.0);
     float attenuation = 1.0;
     if (dirKind.w < 0.5) {
         lightVector = normalize(-dirKind.xyz);
     } else {
-        vec3 emitterPosition = SurfaceEmitterSamplePosition(positionRange.xyz, dirKind.xyz, areaRight.xyz, dirKind.w, spot.zw, worldPos);
+        vec3 emitterPosition = KbSurfaceEmitterSamplePosition(positionRange.xyz, dirKind.xyz, areaRight.xyz, dirKind.w, spot.zw, worldPos);
         vec3 toLight = emitterPosition - worldPos;
         float distanceToLight = length(toLight);
         lightVector = distanceToLight > 0.0001 ? toLight / distanceToLight : vec3(0.0, 1.0, 0.0);
@@ -232,8 +218,10 @@ void main()
         shadowVisible = SampleShadowVisibility(shadowCoord);
     }
     vec3 lighting = EvaluateEnvironment(normal, viewDir, albedo.rgb, metallic, roughness, occlusion);
-    for (int lightIndex = 0; lightIndex < 32; ++lightIndex) {
-        if (float(lightIndex) < u_lightParams.x) {
+    vec2 lightList = KbLightGridList(v_worldPos, u_lightParams.x);
+    for (int entry = 0; entry < int(lightList.y); ++entry) {
+        {
+            int lightIndex = KbLightGridIndex(lightList, entry);
             vec3 directLight = EvaluateSceneLight(lightIndex, normal, viewDir, v_worldPos, albedo.rgb, metallic, roughness, occlusion);
             lighting += lightIndex == 0 ? directLight * shadowVisible : directLight;
         }
