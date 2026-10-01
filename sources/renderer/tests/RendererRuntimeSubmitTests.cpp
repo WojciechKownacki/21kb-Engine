@@ -3849,6 +3849,31 @@ void RunRendererSubmitsRuntimeMeshAssetInHeadlessNoopTest(bool testRetention = f
     static_cast<void>(pool.Upload(std::span{instances}.first(1U), nullptr, false, 92U));
     Require(pool.LastUploadBytes() != 0U, "Changed instance count reused obsolete GPU contents");
     pool.Shutdown();
+    const SceneMeshInstanceBufferOwner ownerA{1001U, 0U, MeshPassType::BaseOpaque, 3U};
+    const SceneMeshInstanceBufferOwner ownerB{1002U, 0U, MeshPassType::BaseOpaque, 3U};
+    const auto ownedA = pool.Upload(instances, nullptr, true, 100U, ownerA);
+    const auto ownedB = pool.Upload(instances, nullptr, true, 101U, ownerB);
+    Require(ownedA.idx != ownedB.idx, "Independent batches shared an instance allocation");
+    pool.EndFrame();
+    Require(pool.Upload(instances, nullptr, true, 101U, ownerB).idx == ownedB.idx && pool.LastUploadBytes() == 0U,
+        "Draw reordering discarded the batch's GPU allocation");
+    Require(pool.Upload(instances, nullptr, true, 100U, ownerA).idx == ownedA.idx && pool.LastUploadBytes() == 0U,
+        "Draw reordering uploaded unchanged instance contents");
+    const auto repeated = pool.Upload(instances, nullptr, true, 102U, ownerA);
+    Require(repeated.idx != ownedA.idx && pool.LastUploadBytes() != 0U,
+        "Repeated in-frame draw overwrote an allocation still referenced by an earlier draw");
+    auto otherView = ownerA; otherView.viewId = 4U;
+    Require(pool.Upload(instances, nullptr, true, 100U, otherView).idx != ownedA.idx,
+        "Different viewports shared in-frame instance storage");
+    auto otherPass = ownerA; otherPass.pass = MeshPassType::ShadowDepth;
+    Require(pool.Upload(instances, nullptr, false, 100U, otherPass).idx != ownedA.idx,
+        "Different mesh passes shared in-frame instance storage");
+    pool.EndFrame();
+    Require(pool.Upload(instances, nullptr, true, 103U, ownerA).idx == ownedA.idx && pool.LastUploadBytes() != 0U,
+        "Changing instance data replaced capacity instead of refreshing its owned buffer");
+    for (int frame = 0; frame < 242; ++frame) pool.EndFrame();
+    Require(pool.OwnedBufferCount() == 0U, "Unloaded batch GPU allocations survived their retention window");
+    pool.Shutdown();
     renderer.Shutdown();
     std::filesystem::remove_all(root, error);
 }

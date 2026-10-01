@@ -398,6 +398,8 @@ private:
     struct DrawGroupKey {
         std::uint64_t meshAssetId = 0;
         std::uint64_t materialAssetId = 0;
+        std::uint64_t owner = 0U;
+        std::uint8_t kind = 0U;
 
         [[nodiscard]] friend constexpr bool operator==(DrawGroupKey lhs, DrawGroupKey rhs) noexcept = default;
     };
@@ -433,6 +435,8 @@ private:
     [[nodiscard]] RenderProxyId AllocateProxyId() noexcept;
     [[nodiscard]] static std::uint64_t NextMeshContentRevision() noexcept;
     void InvalidateDrawGroups() noexcept;
+    [[nodiscard]] bool RemoveMeshInstance(const MeshRenderProxy& proxy) noexcept;
+    void AppendMeshInstance(MeshRenderProxy& proxy);
     void RebuildDrawGroupsIfNeeded() const;
     void ApplySurfaceCasts(SceneRenderMeshInstance& instance) const;
 

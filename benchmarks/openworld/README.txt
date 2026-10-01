@@ -193,3 +193,27 @@ Reporter wymusza nową bramkę bulk; historyczny raport etapu 2 zawiera bramki
 obowiązujące w momencie jego pomiaru. Do porównania etapów użyj --before
 E:/21kbProjekty/OpenWorldProductionStage2_20261001. colliders_100k ma wtedy
 rzeczywiste porównanie przed/po, bez przypisywania mu nieistniejącej bazy 3f4a.
+
+
+Etap 4 (2026-10-01): lokalna retencja poleceń i własność buforów instancji
+RenderScene grupuje zwykłe siatki w strony po maks. 1024 ID na mesh/material.
+Geometry Swarm i Space Stroke mają własne grupy właścicieli. Dane pozostają
+w ECS/proxy; strony, polecenia i rekordy cullingu są pochodnym stanem renderera.
+SceneMeshBatchCommandCache przenosi istniejące wektory poleceń. Pełne przebudowy
+łączą zgodne polecenia między stronami; stabilna kamera pozwala na retencję stron.
+SceneMeshInstanceBufferPool oddziela alokacje od sortowania, chroni wielokrotne
+submit w klatce i viewporty; nieużywane klucze usuwa po 3 klatkach.
+Zmiany widoczności, usuwanie i rekey siatki aktualizują tylko zależne grupy.
+
+Projekt: E:/21kbProjekty/OpenWorldProductionStage4_20261001. Powtórzenie:
+  build/perf-release/bin/kb_openworld_perf.exe generate E:/21kbProjekty/OpenWorldProductionStage4_20261001
+  python benchmarks/openworld/run_compare.py --build build/perf-release --project E:/21kbProjekty/OpenWorldProductionStage4_20261001 --output E:/21kbProjekty/OpenWorldProductionStage4_20261001 --suite compare
+  python benchmarks/openworld/run_compare.py --build build/perf-release --project E:/21kbProjekty/OpenWorldProductionStage4_20261001 --output E:/21kbProjekty/OpenWorldProductionStage4_20261001 --suite capacity
+  python benchmarks/openworld/run_compare.py --build build/perf-release --project E:/21kbProjekty/OpenWorldProductionStage4_20261001 --output E:/21kbProjekty/OpenWorldProductionStage4_20261001 --suite foliage
+  python benchmarks/openworld/run_compare.py --build build/perf-release --project E:/21kbProjekty/OpenWorldProductionStage4_20261001 --output E:/21kbProjekty/OpenWorldProductionStage4_20261001 --suite production --fixed-step
+  python benchmarks/openworld/report_production.py --before E:/21kbProjekty/OpenWorldProductionStage3_20261001 --after E:/21kbProjekty/OpenWorldProductionStage4_20261001
+
+Aktualne bramki pełnego celu: bulk total_ms średnia i P99 <=16.67 ms; city fixed
+wall_frame_ms P99 <=16.67 ms; mixed fixed warm_wall_frame_ms P99 <=16.67 ms.
+Mixed: ciepłe próbki od klatki 120; pełna seria i zimny maksimum pozostają
+w raporcie. FAIL oznacza dalszą pracę; pliki historyczne zachowują stare bramki.

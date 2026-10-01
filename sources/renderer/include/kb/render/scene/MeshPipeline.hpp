@@ -18,6 +18,7 @@
 
 namespace kb::render {
 
+class SceneMeshBatchCommandCache;
 class RenderResourceRegistry;
 class SceneRenderResourceMap;
 enum class RenderPassKind : std::uint8_t;
@@ -56,6 +57,9 @@ struct MeshDrawCommand {
     std::vector<SceneRenderMeshInstance> instances;
     // Nonzero only for a successfully validated, retained instance list.
     std::uint64_t instanceRevision = 0U;
+    std::uint64_t sourceBatchId = 0U;
+    std::uint32_t sourceBatchCommandIndex = 0U;
+    SceneCachedDrawCommandKey cachedTemplateKey{};
 };
 
 struct MeshPipelineBuildDesc {
@@ -76,9 +80,12 @@ struct MeshPipelineBuildDesc {
     SceneGpuDrivenFeatureSupport gpuDrivenSupport{};
     MeshPipelineResourceValidation resourceValidation = MeshPipelineResourceValidation::ResolveAndValidate;
     bool terrainLayersOnly = false;
+    SceneMeshBatchCommandCache* batchCommandCache = nullptr;
 };
 
 struct MeshCommandLookupKey {
+    std::uint64_t meshAssetId = 0U;
+    std::uint32_t sectionIndex = 0U;
     std::uint64_t materialAssetId = 0;
     std::uint64_t materialHandleValue = 0;
     RenderSkinningPaletteHandle currentSkinningPalette{};

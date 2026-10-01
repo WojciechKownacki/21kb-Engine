@@ -1,0 +1,107 @@
+21kb — etap 4: retencja grup renderowania i własność buforów GPU
+Data: 2026-10-01. Gałąź 1.0. Baza etapu 3: 6ec9590e6c11599e9b438f625ae46ab3f40f50dc.
+Pełny cel produkcyjny pozostaje aktywny. Etap domyka budżet sceny miejskiej;
+nie domyka jeszcze P99 mieszanego gameplay, pełnego bulk, 512 świateł ani pełnej roślinności.
+
+Metoda
+Windows, i7-13700F, RTX 4070 12 GB, 64 GB RAM, sterownik 591.74.
+Release /O2 /DNDEBUG, D3D11 1920×1080, ForwardPlus. Wszystkie procesy headless.
+Ten sam generator scen i odbiorca kontaktów co w etapie 3. Nowy samodzielny projekt:
+E:/21kbProjekty/OpenWorldProductionStage4_20261001.
+54 procesy: 18 scenariuszy × 3 niezależne powtórki. Wszystkie zakończyły się kodem 0.
+Serie kolejno po pełnej kompilacji i testach; bez równoległego buildu ani trace.
+CPU: 180 rozgrzewki + 360 próbek/proces. Render: 120 rozgrzewki + 480 próbek.
+Mixed: wszystkie 3420 klatek; gameplay od klatki 120, zimny start zachowany osobno.
+P99: najbliższy wyższy rangą percentyl połączonych próbek. GPU timer opóźniony.
+Manifest Results/capture_manifest.json: 25 hashów źródeł zgodnych z pomiarem.
+
+Zmiana
+- RenderScene: zwykłe mesh proxy w stronach ID po maks. 1024 na mesh/material.
+  Geometry Swarm i Space Stroke mają grupy swoich właścicieli. Rewizja dotyczy
+  zmienionej grupy; równoległe publikacje affine używają atomic_ref jej rewizji.
+  Insert, remove, hide/show, rekey i zmiana flag aktualizują istniejące pochodne
+  grupy. Puste grupy są kompaktowane, z poprawieniem lokalizacji proxy.
+  Niezmienione 100k instancji roślinności nie rozwija się ponownie przy ukryciu siatki.
+- SceneMeshBatchCommandCache: osobny właściciel ważności i tymczasowych poleceń.
+  Przenosi istniejące wektory instancji. Zachowuje pochodne rekordy CPU validation
+  cullingu i dotyka istniejących szablonów poleceń, bez drugiej kopii danych ECS.
+  Zmiana kamery/resource context unieważnia treść; przejście nie gubi pojemności.
+  Historia LOD, budżety, diagnozy, skinning i faktyczne GPU dispatch wymuszają
+  odpowiednią przebudowę. Brak retencji dla transparent, selection i blockerów.
+  Pełne przebudowy łączą zgodne polecenia między stronami; klucz obejmuje mesh i sekcję.
+- SceneMeshInstanceBufferPool: własna klasa/pliki. Alokacje po grupie, poleceniu,
+  passie i viewId, niezależnie od sortowania. Ponowny submit w tej samej klatce
+  dostaje osobny bufor. Nieużywane klucze są zwalniane po 3 klatkach.
+  Rewizje niezmienionych danych pozostają stabilne. Bez flag mobilności w ECS.
+- Ścieżka transformów z Surface Cast unieważnia pochodne materiały po publikacji.
+  W trakcie równoległych zapisów nie czyta zmieniających się regionów projekcji.
+
+Wyniki względem etapu 3 (ms; CPU=Update, GPU=cała klatka, async=Update)
+Scenariusz | Rodzaj | Przed średnia | Po średnia | Po P99 | Po maks. | Bramka pełnego celu
+static_100k | cpu | 0.004984 | 0.005015 | 0.005400 | 0.006700 | PASS
+physics_idle_world_100k | cpu | 0.016811 | 0.015524 | 0.018800 | 0.041600 | PASS
+physics_4096 | cpu | 3.959527 | 3.575557 | 4.262500 | 4.479500 | PASS
+dense_4096 | cpu | 8.518668 | 7.752688 | 11.961400 | 13.753500 | pomiar
+batch_dirty_100k | cpu | 6.371863 | 5.937365 | 7.210300 | 9.150900 | FAIL
+world_100k | gpu | 1.051613 | 0.958937 | 3.896500 | 4.720700 | PASS
+city_dense_50k | gpu | 7.662486 | 2.079018 | 4.327400 | 5.850300 | PASS
+culling_far_10k | gpu | 0.513867 | 0.471590 | 0.806300 | 1.124300 | pomiar
+culling_side_10k | gpu | 0.490790 | 0.478308 | 0.864800 | 3.209300 | pomiar
+foliage_100k | gpu | 0.694262 | 0.693178 | 2.093000 | 3.254000 | pomiar
+foliage_1m | gpu | 1.269746 | 1.270009 | 3.736300 | 4.289300 | PASS
+city_dense_50k | fixed_gpu | 13.304352 | 3.964766 | 6.524900 | 7.615800 | PASS
+geometry_10k | fixed_gpu | 1.861032 | 1.907733 | 5.317700 | 7.003700 | pomiar
+lights_512 | fixed_gpu | 0.836285 | 0.865921 | 1.982600 | 2.436000 | pomiar
+shadow_50k | fixed_gpu | 1.356509 | 1.391863 | 3.136000 | 3.957900 | pomiar
+mixed_stream_10k | fixed_gpu | 8.898267 | 3.935307 | 25.640400 | 204.341000 | FAIL
+static_100k | async | 0.940185 | 0.932593 | 3.493000 | 8.148900 | PASS
+colliders_100k | cpu | 0.550725 | 0.482661 | 0.903500 | 1.523700 | PASS
+
+Najważniejsze
+- city_dense_50k fixed: 13.3044 -> 3.9648 ms; P99 19.1612 -> 6.5249 ms.
+  80 zachowanych poleceń/klatkę. Średni upload: 5,972,619 -> 187,339 B (-96.9%).
+  GPU średnio 1.5666 ms. Wszystkie liczniki submitted/visible/culled, światła,
+  encje i rozdzielczość są identyczne klatka po klatce we wszystkich 3 powtórkach.
+- Mixed gameplay: średnia 8.4120 -> 3.6248; P99 25.8006 -> 24.3260;
+  maksimum 53.7459 -> 29.1659 ms. Wszystkie klatki z zimnym startem:
+  średnia 3.9353, P99 25.6404, maksimum 204.3410 ms.
+- Bulk mutation+Update: średnia 16.5451, P99 18.5529, maksimum 23.5791 ms.
+  Średnie trzech procesów: 16.4696 / 16.5045 / 16.6610. Mutation średnio 10.6073 ms.
+  Ten etap nie zmienia kodu CPU ECS/fizyki. Niższych wyników CPU względem etapu 3
+  nie przypisujemy poprawce renderera ani nie ogłaszamy domknięcia ogona bulk.
+- Brak regresji średniej >5% w 18 scenariuszach względem etapu 3 i bazy 3f4a9fc6.
+  P99 nie poprawił się wszędzie: shadow_50k P99 wynosi 3.1360 ms (baza 1.6520).
+  Tabela zachowuje ogony i maksima; brak deklaracji powszechnej poprawy P99.
+
+Poprawność i obciążenie
+- Pełne engine, ECS API, stress, deterministic replay, scheduler correctness,
+  million-entity snapshot scale i renderer z compilerem graph shaderów: kod 0.
+- Osobny świeży proces WebGPU fallback: kod 0. Pełna kompilacja wszystkich targetów: kod 0.
+- Nowe testy: ruch jednej strony, przechowanie adresu/rewizji statycznych instancji,
+  parytet model/bounds/depth i rekordów GPU validation z pełną przebudową, zmiana
+  kamery/maski/bindings/resources/LOD, budżety, skinning, passtypes, hide/show/rekey,
+  usuwanie/kompaktowanie, 100 generacji streamingu i nienaruszona grupa roślinności.
+- Bufory GPU: kolejność A/B -> B/A, inne viewporty/pass, ponowny submit tej samej
+  grupy w klatce, odświeżenie zmienionej treści i zwolnienie nieaktywnych buforów.
+- 9 cykli async 100k; 9 mieszanych cykli 20646 -> 30648 -> 20646.
+  Zero dropped/missing resources. Aktywne 4096 ciał: 9,806,400 odebranych kontaktów.
+  Dense 4096: 15,712,470 kontaktów. 100k colliderów: 1000 trafień/klatkę.
+- Fixture geometry/lights/shadow ma identyczne liczniki instancji i świateł
+  klatka po klatce w trzech procesach względem etapu 3.
+
+Otwarte bramki i następna praca
+1. Mixed gameplay P99 24.3260 >16.67 ms. Rozdziel powód utraty retencji
+   statycznych grup od kosztu scene_sync (~9.4 ms P99 w próbnej serii).
+   Trace sprzed poprawki hide/show: polecenia do ~12 ms/pass; submit GPU
+   ~1.1-1.3 ms. Po poprawce potrzebny jest świeży trace pozostałych szczytów.
+   Diagnostyka nie wchodzi do porównania ani nie określa kosztu końcowej wersji.
+2. Bulk pełna mutacja P99 18.5529 >16.67 ms; praca w SceneTransformService/
+   SceneTransformComponentStore i publikacji World, z zachowaniem OnSet i generacji.
+3. 512 świateł nadal bada selekcję globalnych 32/pass, nie pełne listy przestrzenne.
+4. Roślinność nadal ma 4 trójkąty, bez alpha/wind/shadow; 1m instancji pochodzi
+   z jednego właściciela ECS. Wymagany rzeczywisty test materiałów, LOD i zasobów.
+5. Zimny start wymaga workera dla I/O/dekodowania oraz budżetu publikacji.
+
+Reporter celowo zwraca 1 dla otwartych bramek bulk i mixed; testy i captures zwróciły 0.
+Nie zmieniano referencji D:/Projekty/verthengineprod ani D:/UE5.
+Polecenia odtworzenia: README.txt. Kontynuacja: PRODUCTION_PROMPT.txt.

@@ -42,6 +42,9 @@ def read(root, case, kind):
                 assert all(int(r['fixed_steps']) == 1 for r in rows), path
             if case != 'mixed_stream_10k':
                 rows = rows[120:]
+            else:
+                for index, row in enumerate(rows):
+                    row['warm_wall_frame_ms'] = row['wall_frame_ms'] if index >= 120 else '-1'
         if kind == 'async':
             endings = {(int(r['cycle']), int(r['phase'])): r for r in rows}
             assert set(endings) == {(c, phase) for c in range(3) for phase in range(2)}, path
@@ -73,7 +76,7 @@ cases = [('static_100k', 'cpu', 'runtime_ms', .1, None),
          ('culling_side_10k', 'gpu', 'wall_frame_ms', None, None),
          ('foliage_100k', 'gpu', 'wall_frame_ms', None, None),
          ('foliage_1m', 'gpu', 'wall_frame_ms', 16.67, None),
-         ('city_dense_50k', 'fixed_gpu', 'wall_frame_ms', 16.67, 25),
+         ('city_dense_50k', 'fixed_gpu', 'wall_frame_ms', 16.67, 16.67),
          ('geometry_10k', 'fixed_gpu', 'wall_frame_ms', None, None),
          ('lights_512', 'fixed_gpu', 'wall_frame_ms', None, None),
          ('shadow_50k', 'fixed_gpu', 'wall_frame_ms', None, None),
@@ -86,7 +89,9 @@ lines = ['21kb: pomiary produkcyjnych ścieżek CPU/GPU',
          'CPU: 180 rozgrzewki, 360 mierzonych; streaming: wszystkie klatki.',
          'P99: percentyl z połączonych próbek. GPU timer jest opóźniony; -1 pominięto.',
          'Liczniki renderowanych instancji i świateł są sumą pasów, nie liczbą unikalnych obiektów.',
-         'Roślinność: cztery trójkąty, bez alpha, wiatru i cieni. Wynik nie certyfikuje gier AAA.', '',
+         'Roślinność: cztery trójkąty, bez alpha, wiatru i cieni. Wynik nie certyfikuje gier AAA.',
+         'Pełny cel: bulk mutation+Update średnia i P99 <=16.67 ms; city fixed P99 <=16.67 ms;',
+         'mixed fixed gameplay P99 <=16.67 ms po pierwszych 120 klatkach. Zimny start raportowany osobno.', '',
          'Scenariusz | Przed średnia | Po średnia | Po P99 | Po maksimum | Zmiana | Bramka',
          '--- | ---: | ---: | ---: | ---: | ---: | ---']
 for case, kind, metric, mean_limit, p99_limit in cases:
@@ -101,6 +106,10 @@ for case, kind, metric, mean_limit, p99_limit in cases:
         gates.append(new['mean'] <= mean_limit)
     if p99_limit is not None:
         gates.append(new['p99'] <= p99_limit)
+    if case == 'batch_dirty_100k' and kind == 'cpu':
+        gates.append(after['total_ms']['mean'] <= 16.67 and after['total_ms']['p99'] <= 16.67)
+    if case == 'mixed_stream_10k' and kind == 'fixed_gpu':
+        gates.append(after['warm_wall_frame_ms']['p99'] <= 16.67)
     if kind == 'async':
         gates.append(new['max'] <= 16.67)
         assert after['operations']['max'] <= 256

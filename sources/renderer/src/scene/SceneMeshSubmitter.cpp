@@ -91,6 +91,7 @@ void SceneMeshSubmitter::Shutdown() {
     passResources_.Shutdown();
     for (auto& commands : passCommandScratch_) commands.clear();
     for (auto& reuse : passCommandReuse_) reuse.Reset();
+    for (auto& reuse : passBatchCommandReuse_) reuse.Reset();
     pipelineScratch_.detailSwitchLevels.clear();
     pipelineScratch_.detailSwitchPreviousLevels.clear();
     detailSwitchScene_ = nullptr;
@@ -222,6 +223,7 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
         detailSwitchScene_ = &renderScene;
     }
     auto& reuse = passCommandReuse_.at(static_cast<std::size_t>(pass));
+    auto& batchReuse = passBatchCommandReuse_.at(static_cast<std::size_t>(pass));
     const bool reuseAllowed = pass != MeshPassType::BaseTransparent && selectedEntityIds.empty() &&
         renderScene.VisibilityBlockerProxyCount() == 0U &&
         (particleSnapshot == nullptr || particleSnapshot->Emitters().empty());
@@ -239,6 +241,11 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
         pipelineScratch_.stats = reuse.Stats();
     } else {
         reuse.Reset();
+        const bool retainBatches = reuseAllowed && batchReuse.HasStableCamera(reuseKey);
+        if (reuseAllowed) {
+            batchReuse.Prepare(reuseKey);
+            if (!retainBatches) batchReuse.DiscardContent();
+        } else batchReuse.Reset();
         MeshPipelineProcessor::BuildInto(MeshPipelineBuildDesc{
         .pass = pass,
         .meshBatches = &meshBatchSubmissionScratch_,
@@ -253,6 +260,7 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
         .selectedEntityIds = selectedEntityIds,
         .gpuDrivenSupport = gpuDrivenSupport,
         .terrainLayersOnly = terrainLayersOnly,
+        .batchCommandCache = retainBatches ? &batchReuse : nullptr,
         }, pipelineScratch_);
         if (reuseAllowed && (diagnostics == nullptr || diagnosticCount == diagnostics->events.size())) {
             auto committedKey = reuseKey;

@@ -136,6 +136,13 @@ const SceneCachedDrawCommand& SceneDrawCommandCache::Resolve(
     return store.commands[commandIndex];
 }
 
+bool SceneDrawCommandCache::Touch(SceneCachedDrawCommandStore& store, const SceneCachedDrawCommandKey& key) noexcept {
+    const auto found = store.lookup.find(key);
+    if (found == store.lookup.end()) return false;
+    store.commands[found->second].lastUsedBuildId = store.currentBuildId;
+    return true;
+}
+
 void SceneDrawCommandCache::EndBuild(SceneCachedDrawCommandStore& store, MeshPassType pass, SceneRenderSubmitStats& stats) {
     std::size_t writeIndex = 0U;
     for (std::size_t readIndex = 0U; readIndex < store.commands.size(); ++readIndex) {

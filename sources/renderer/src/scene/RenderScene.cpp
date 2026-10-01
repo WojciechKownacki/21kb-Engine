@@ -130,7 +130,7 @@ using StrokePoint = std::array<float, 3>;
 
 std::size_t RenderScene::DrawGroupKeyHash::operator()(DrawGroupKey key) const noexcept {
     const std::uint64_t mixed = key.meshAssetId ^ (key.materialAssetId + 0x9e3779b97f4a7c15ULL + (key.meshAssetId << 6U) + (key.meshAssetId >> 2U));
-    return static_cast<std::size_t>(mixed);
+    return static_cast<std::size_t>(mixed ^ (key.owner * 0x85ebca77c2b2ae63ULL) ^ key.kind);
 }
 
 void RenderScene::Reserve(const RenderSceneReserveDesc& desc) {
@@ -187,25 +187,7 @@ RenderProxyId RenderScene::UpsertMesh(const MeshRenderProxyDesc& desc) {
         proxy.id = AllocateProxyId();
         proxy.desc = desc;
         proxy.dirty = RenderProxyDirtyFlag::All;
-        if (!drawGroupsDirty_ && desc.visible) {
-            SceneRenderMeshInstance instance = RenderSceneMeshInstanceBuilder::Build(desc);
-            ApplySurfaceCasts(instance);
-            const DrawGroupKey key{ .meshAssetId = instance.meshAssetId, .materialAssetId = instance.materialAssetId };
-            auto [groupIt, newGroup] = drawGroupLookupScratch_.try_emplace(key, drawGroups_.size());
-            if (newGroup) {
-                drawGroups_.push_back(SceneRenderDrawGroup{
-                    .meshAssetId = instance.meshAssetId,
-                    .materialAssetId = instance.materialAssetId,
-                });
-            }
-            SceneRenderDrawGroup& group = drawGroups_[groupIt->second];
-            proxy.instanceGroupIndex = static_cast<std::uint32_t>(groupIt->second);
-            proxy.instanceIndexInGroup = static_cast<std::uint32_t>(group.instances.size());
-            proxy.instanceLocationVersion = drawGroupBuildVersion_;
-            group.hasMaterialSlotOverrides = group.hasMaterialSlotOverrides || instance.materialSlotOverrideCount != 0U;
-            group.hasMorphDeformation = group.hasMorphDeformation || desc.morphDeformationEnabled;
-            group.instances.push_back(instance);
-        }
+        if (!drawGroupsDirty_ && desc.visible) AppendMeshInstance(proxy);
         return proxy.id;
     }
 
@@ -215,8 +197,6 @@ RenderProxyId RenderScene::UpsertMesh(const MeshRenderProxyDesc& desc) {
         const bool sameGroupFlags = proxy.desc.visible && desc.visible &&
             proxy.desc.morphDeformationEnabled == desc.morphDeformationEnabled &&
             (proxy.desc.materialSlotOverrideCount != 0U) == (desc.materialSlotOverrideCount != 0U);
-        proxy.desc = desc;
-        proxy.dirty |= dirty;
         if (!drawGroupsDirty_ && sameGroupFlags &&
             proxy.instanceLocationVersion == drawGroupBuildVersion_ &&
             proxy.instanceGroupIndex < drawGroups_.size()) {
@@ -227,11 +207,19 @@ RenderProxyId RenderScene::UpsertMesh(const MeshRenderProxyDesc& desc) {
                 ApplySurfaceCasts(instance);
                 if (instance.meshAssetId == group.meshAssetId && instance.materialAssetId == group.materialAssetId) {
                     group.instances[proxy.instanceIndexInGroup] = instance;
+                    group.contentRevision = NextMeshContentRevision();
+                    proxy.desc = desc;
+                    proxy.dirty |= dirty;
                     return proxy.id;
                 }
             }
         }
-        InvalidateDrawGroups();
+        const bool removedInPlace = RemoveMeshInstance(proxy);
+        proxy.desc = desc;
+        proxy.dirty |= dirty;
+        if (removedInPlace) {
+            if (desc.visible) AppendMeshInstance(proxy);
+        } else InvalidateDrawGroups();
     }
     return proxy.id;
 }
@@ -293,8 +281,8 @@ RenderProxyId RenderScene::UpsertGeometrySwarm(const GeometrySwarmRenderProxyDes
         previous.rows == desc.rows && previous.layers == desc.layers && previous.spacing == desc.spacing &&
         previous.instanceScale == desc.instanceScale && previous.visible == desc.visible &&
         previous.castsShadow == desc.castsShadow && previous.receivesShadow == desc.receivesShadow && previous.layer == desc.layer;
-    if (onlyGrew && !drawGroupsDirty_) {
-        const DrawGroupKey key{ .meshAssetId = desc.meshAssetId, .materialAssetId = desc.materialAssetId };
+    if (onlyGrew && !drawGroupsDirty_ && surfaceCasts_.empty()) {
+        const DrawGroupKey key{ .meshAssetId = desc.meshAssetId, .materialAssetId = desc.materialAssetId, .owner = desc.entityId, .kind = 1U };
         const auto groupIt = drawGroupLookupScratch_.find(key);
         if (groupIt != drawGroupLookupScratch_.end() && groupIt->second < drawGroups_.size()) {
             SceneRenderDrawGroup& group = drawGroups_[groupIt->second];
@@ -302,6 +290,7 @@ RenderProxyId RenderScene::UpsertGeometrySwarm(const GeometrySwarmRenderProxyDes
                 const std::uint32_t firstNewInstance = previous.instanceCount;
                 const auto firstGenerated = group.instances.size();
                 meshContentRevision_ = NextMeshContentRevision();
+                group.contentRevision = NextMeshContentRevision();
                 proxy.desc = desc;
                 group.instances.reserve(group.instances.size() + (desc.instanceCount - firstNewInstance));
                 for (std::uint32_t index = firstNewInstance; index < desc.instanceCount; ++index) {
@@ -370,12 +359,13 @@ const std::optional<SceneRenderAmbientRadiance>& RenderScene::AmbientRadiance() 
 }
 
 bool RenderScene::RemoveMesh(std::uint64_t entityId) noexcept {
-    const bool removed = meshes_.erase(entityId) != 0U;
-    if (removed) {
-        sortedMeshProxies_.dirty = true;
-        InvalidateDrawGroups();
-    }
-    return removed;
+    const auto found = meshes_.find(entityId);
+    if (found == meshes_.end()) return false;
+    if (!RemoveMeshInstance(found->second)) InvalidateDrawGroups();
+    else meshContentRevision_ = NextMeshContentRevision();
+    meshes_.erase(found);
+    sortedMeshProxies_.dirty = true;
+    return true;
 }
 
 bool RenderScene::RemoveCamera(std::uint64_t entityId) noexcept {
@@ -467,12 +457,13 @@ std::uint32_t RenderScene::RemoveMeshesNotInSorted(std::span<const std::uint64_t
             ++it;
             continue;
         }
+        if (!RemoveMeshInstance(it->second)) InvalidateDrawGroups();
         it = meshes_.erase(it);
         ++removed;
     }
     if (removed != 0U) {
         sortedMeshProxies_.dirty = true;
-        InvalidateDrawGroups();
+        meshContentRevision_ = NextMeshContentRevision();
     }
     return removed;
 }
@@ -760,6 +751,68 @@ RenderProxyId RenderScene::AllocateProxyId() noexcept {
     return RenderProxyId{ nextProxyId_++ };
 }
 
+void RenderScene::AppendMeshInstance(MeshRenderProxy& proxy) {
+    SceneRenderMeshInstance instance = RenderSceneMeshInstanceBuilder::Build(proxy.desc);
+    ApplySurfaceCasts(instance);
+    const DrawGroupKey key{ .meshAssetId = instance.meshAssetId, .materialAssetId = instance.materialAssetId, .owner = proxy.desc.entityId / 1024U, .kind = 0U };
+    auto [groupIt, newGroup] = drawGroupLookupScratch_.try_emplace(key, drawGroups_.size());
+    if (newGroup) {
+        drawGroups_.push_back(SceneRenderDrawGroup{
+            .meshAssetId = instance.meshAssetId,
+            .materialAssetId = instance.materialAssetId,
+        });
+    }
+    SceneRenderDrawGroup& group = drawGroups_[groupIt->second];
+    if (newGroup) {
+        group.cacheId = NextMeshContentRevision();
+        group.partitionOwner = key.owner;
+        group.partitionKind = key.kind;
+    }
+    group.contentRevision = NextMeshContentRevision();
+    proxy.instanceGroupIndex = static_cast<std::uint32_t>(groupIt->second);
+    proxy.instanceIndexInGroup = static_cast<std::uint32_t>(group.instances.size());
+    proxy.instanceLocationVersion = drawGroupBuildVersion_;
+    group.hasMaterialSlotOverrides = group.hasMaterialSlotOverrides || instance.materialSlotOverrideCount != 0U;
+    group.hasMorphDeformation = group.hasMorphDeformation || proxy.desc.morphDeformationEnabled;
+    group.instances.push_back(instance);
+}
+
+bool RenderScene::RemoveMeshInstance(const MeshRenderProxy& proxy) noexcept {
+    if (drawGroupsDirty_) return false;
+    if (!proxy.desc.visible) return true;
+    if (proxy.instanceLocationVersion != drawGroupBuildVersion_ || proxy.instanceGroupIndex >= drawGroups_.size()) return false;
+    const std::size_t groupIndex = proxy.instanceGroupIndex;
+    SceneRenderDrawGroup& group = drawGroups_[groupIndex];
+    const std::size_t instanceIndex = proxy.instanceIndexInGroup;
+    if (instanceIndex >= group.instances.size() || group.instances[instanceIndex].entityId != proxy.desc.entityId) return false;
+    if (instanceIndex + 1U != group.instances.size()) {
+        group.instances[instanceIndex] = std::move(group.instances.back());
+        meshes_.at(group.instances[instanceIndex].entityId).instanceIndexInGroup = static_cast<std::uint32_t>(instanceIndex);
+    }
+    group.instances.pop_back();
+    group.contentRevision = NextMeshContentRevision();
+    if (!group.instances.empty()) {
+        if (proxy.desc.materialSlotOverrideCount != 0U || proxy.desc.morphDeformationEnabled) {
+            group.hasMaterialSlotOverrides = false; group.hasMorphDeformation = false;
+            for (const auto& instance : group.instances) {
+                group.hasMaterialSlotOverrides |= instance.materialSlotOverrideCount != 0U;
+                group.hasMorphDeformation |= meshes_.at(instance.entityId).desc.morphDeformationEnabled;
+            }
+        }
+        return true;
+    }
+    drawGroupLookupScratch_.erase(DrawGroupKey{group.meshAssetId, group.materialAssetId, group.partitionOwner, group.partitionKind});
+    if (groupIndex + 1U != drawGroups_.size()) {
+        group = std::move(drawGroups_.back());
+        drawGroupLookupScratch_.at(DrawGroupKey{group.meshAssetId, group.materialAssetId, group.partitionOwner, group.partitionKind}) = groupIndex;
+        if (group.partitionKind == 0U) {
+            for (const auto& instance : group.instances) meshes_.at(instance.entityId).instanceGroupIndex = static_cast<std::uint32_t>(groupIndex);
+        }
+    }
+    drawGroups_.pop_back();
+    return true;
+}
+
 void RenderScene::InvalidateDrawGroups() noexcept {
     meshContentRevision_ = NextMeshContentRevision();
     drawGroupsDirty_ = true;
@@ -794,13 +847,16 @@ void RenderScene::RebuildDrawGroupsIfNeeded() const {
 
         SceneRenderMeshInstance instance = RenderSceneMeshInstanceBuilder::Build(mesh);
         ApplySurfaceCasts(instance);
-        const DrawGroupKey key{ .meshAssetId = instance.meshAssetId, .materialAssetId = instance.materialAssetId };
+        const DrawGroupKey key{ .meshAssetId = instance.meshAssetId, .materialAssetId = instance.materialAssetId, .owner = entityId / 1024U, .kind = 0U };
         auto lookupIt = drawGroupLookupScratch_.find(key);
         if (lookupIt == drawGroupLookupScratch_.end()) {
             if (writeGroupCount == drawGroups_.size()) {
                 drawGroups_.push_back(SceneRenderDrawGroup{});
             }
             SceneRenderDrawGroup& group = drawGroups_[writeGroupCount];
+            group.cacheId = NextMeshContentRevision();
+            group.contentRevision = group.cacheId;
+            group.partitionOwner = key.owner; group.partitionKind = key.kind;
             group.meshAssetId = instance.meshAssetId;
             group.materialAssetId = instance.materialAssetId;
             group.hasMaterialSlotOverrides = false;
@@ -841,11 +897,13 @@ void RenderScene::RebuildDrawGroupsIfNeeded() const {
                 .layer = swarm.layer,
             };
             ApplySurfaceCasts(instance);
-            const DrawGroupKey key{ .meshAssetId = instance.meshAssetId, .materialAssetId = instance.materialAssetId };
+            const DrawGroupKey key{ .meshAssetId = instance.meshAssetId, .materialAssetId = instance.materialAssetId, .owner = entityId, .kind = 1U };
             auto lookupIt = drawGroupLookupScratch_.find(key);
             if (lookupIt == drawGroupLookupScratch_.end()) {
                 if (writeGroupCount == drawGroups_.size()) drawGroups_.push_back(SceneRenderDrawGroup{});
                 SceneRenderDrawGroup& group = drawGroups_[writeGroupCount];
+                group.cacheId = NextMeshContentRevision(); group.contentRevision = group.cacheId;
+                group.partitionOwner = key.owner; group.partitionKind = key.kind;
                 group.meshAssetId = instance.meshAssetId; group.materialAssetId = instance.materialAssetId; group.hasMaterialSlotOverrides = false; group.hasMorphDeformation = false;
                 lookupIt = drawGroupLookupScratch_.emplace(key, writeGroupCount).first; ++writeGroupCount;
             }
@@ -863,11 +921,13 @@ void RenderScene::RebuildDrawGroupsIfNeeded() const {
             if (model[15] == 0.0F) continue;
             SceneRenderMeshInstance instance{ .entityId = SpaceStrokeInstanceId(entityId, index), .meshAssetId = stroke.meshAssetId, .materialAssetId = stroke.materialAssetId, .model = model, .castsShadow = stroke.castsShadow, .receivesShadow = stroke.receivesShadow, .layer = stroke.layer };
             ApplySurfaceCasts(instance);
-            const DrawGroupKey key{ .meshAssetId = instance.meshAssetId, .materialAssetId = instance.materialAssetId };
+            const DrawGroupKey key{ .meshAssetId = instance.meshAssetId, .materialAssetId = instance.materialAssetId, .owner = entityId, .kind = 2U };
             auto lookupIt = drawGroupLookupScratch_.find(key);
             if (lookupIt == drawGroupLookupScratch_.end()) {
                 if (writeGroupCount == drawGroups_.size()) drawGroups_.push_back(SceneRenderDrawGroup{});
                 SceneRenderDrawGroup& group = drawGroups_[writeGroupCount];
+                group.cacheId = NextMeshContentRevision(); group.contentRevision = group.cacheId;
+                group.partitionOwner = key.owner; group.partitionKind = key.kind;
                 group.meshAssetId = instance.meshAssetId; group.materialAssetId = instance.materialAssetId; group.hasMaterialSlotOverrides = false; group.hasMorphDeformation = false;
                 lookupIt = drawGroupLookupScratch_.emplace(key, writeGroupCount).first; ++writeGroupCount;
             }
@@ -907,6 +967,8 @@ RenderScene::TransformUpdateOutcome RenderScene::ApplyMeshTransform(std::uint64_
         if (proxy.instanceIndexInGroup < group.instances.size() &&
             group.instances[proxy.instanceIndexInGroup].entityId == entityId) {
             group.instances[proxy.instanceIndexInGroup].model = model;
+            // Parallel affine publication writes disjoint instances in the same page.
+            std::atomic_ref<std::uint64_t>(group.contentRevision).store(NextMeshContentRevision(), std::memory_order_relaxed);
             proxy.dirty |= RenderProxyDirtyFlag::Transform;
             return TransformUpdateOutcome::InPlace;
         }
@@ -923,7 +985,10 @@ void RenderScene::InvalidateDrawGroupsIfFallback(TransformUpdateOutcome outcome)
 }
 
 void RenderScene::AddTransformUpdateCounts(std::uint64_t inPlace, std::uint64_t fallback) noexcept {
-    if (inPlace != 0U || fallback != 0U) meshContentRevision_ = NextMeshContentRevision();
+    if (inPlace != 0U || fallback != 0U) {
+        meshContentRevision_ = NextMeshContentRevision();
+        if (!surfaceCasts_.empty()) drawGroupsDirty_ = true;
+    }
     transformInPlaceUpdateCount_ += inPlace;
     transformFallbackUpdateCount_ += fallback;
 }
@@ -935,6 +1000,7 @@ bool RenderScene::UpdateMeshTransform(std::uint64_t entityId, const std::array<f
         return false;
     case TransformUpdateOutcome::InPlace:
         meshContentRevision_ = NextMeshContentRevision();
+        if (!surfaceCasts_.empty()) drawGroupsDirty_ = true;
         ++transformInPlaceUpdateCount_;
         return true;
     case TransformUpdateOutcome::Fallback:

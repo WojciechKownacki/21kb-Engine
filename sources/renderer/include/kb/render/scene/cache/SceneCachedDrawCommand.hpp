@@ -95,6 +95,7 @@ public:
         SceneCachedDrawCommandStore& store,
         const SceneCachedDrawCommandDesc& desc,
         SceneRenderSubmitStats& stats);
+    [[nodiscard]] static bool Touch(SceneCachedDrawCommandStore& store, const SceneCachedDrawCommandKey& key) noexcept;
     static void EndBuild(SceneCachedDrawCommandStore& store, MeshPassType pass, SceneRenderSubmitStats& stats);
 };
 

@@ -23,6 +23,7 @@ struct MeshPassProcessorDesc {
     std::span<const std::uint64_t> selectedEntityIds{};
     MeshPipelineResourceValidation resourceValidation = MeshPipelineResourceValidation::ResolveAndValidate;
     bool terrainLayersOnly = false;
+    SceneMeshBatchCommandCache* batchCommandCache = nullptr;
 };
 
 class MeshPassProcessor {
