@@ -10,9 +10,11 @@
 #include "scene/transform/SceneTransformDirtyFrontier.hpp"
 #include "scene/transform/SceneTransformRootHotKernel.hpp"
 #include "scene/transform/SceneTransformRootQueryCache.hpp"
+#include "scene/transform/SceneTransformLeafBatchUpdater.hpp"
 #include "scene/transform/TransformMath.hpp"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -82,6 +84,13 @@ void PrintRootSyncProfile(
               << ",query_create_ns=" << timings->queryCreateNanoseconds
               << ",query_rebuild_ns=" << timings->queryRebuildNanoseconds
               << ",dirty_scan_ns=" << timings->dirtyScanNanoseconds
+              << ",cache_build_ns=" << state.lastTransformHierarchyCacheBuildNanoseconds
+              << ",entry_build_ns=" << state.lastTransformHierarchyEntryBuildNanoseconds
+              << ",kernel_ns=" << state.lastTransformHierarchyKernelApplyNanoseconds
+              << ",frontier_append_ns=" << state.lastTransformHierarchyFrontierAppendNanoseconds
+              << ",flush_write_ns=" << state.lastTransformHierarchyFlushWriteNanoseconds
+              << ",backend_mark_ns=" << state.lastTransformHierarchyBackendMarkNanoseconds
+              << ",propagate_ns=" << state.lastTransformHierarchyPropagateNanoseconds
               << ",total_ns=" << Nanoseconds(std::chrono::steady_clock::now() - updateStart) << '\n';
 }
 
@@ -1198,20 +1207,35 @@ void RunHierarchyDirtyFrontier(
         // write in this frame. The remaining frontier still contains live work.
         std::erase_if(state.transformDirtyFrontierEntities, [&state](SceneEntity entity) { return !state.world.IsAlive(entity); });
         auto& nativeStorage = const_cast<kb::ecs::NativeArchetypeStorage&>(state.world.NativeStorage());
-        static_cast<void>(hotQuery.ForEachDirtyMutableRange<0>(
-            nativeStorage, kTransformBatchGrainSize, state.transformNativeDirtyRangesScratch, true,
-            [&state](const kb::ecs::UnsafeHotMutableChunk<TransformComponent>& chunk, std::size_t) {
+        SceneTransformLeafBatchUpdater leafValidator{state};
+        bool independentLeaves = dirtyRows > kTransformBatchGrainSize * 4U;
+        std::size_t dirtyLeafCount = 0U;
+        if (dirtyRows != 0U) static_cast<void>(hotQuery.ForEachDirtyMutableRange<0>(
+            nativeStorage, kTransformBatchGrainSize, state.transformNativeDirtyRangesScratch, false,
+            [&state, &leafValidator, &independentLeaves, &dirtyLeafCount](const kb::ecs::UnsafeHotMutableChunk<TransformComponent>& chunk, std::size_t) {
                 const TransformComponent* transforms = chunk.Components<0>();
                 for (std::size_t row = 0U; row < chunk.Count(); ++row) {
                     if (transforms[row].worldDirty) {
-                        EnqueueSceneTransformDirtyFrontierUnchecked(state, chunk.EntityAt(row));
+                        const auto entity = chunk.EntityAt(row);
+                        ++dirtyLeafCount;
+                        EnqueueSceneTransformDirtyFrontierUnchecked(state, entity);
+                        if (independentLeaves && !leafValidator.CanUpdate(entity)) independentLeaves = false;
                     }
                 }
             }));
         if (!state.transformDirtyFrontierEntities.empty()) {
-            return false;
+            if (!independentLeaves || state.transformDirtyFrontierEntities.size() != dirtyLeafCount) {
+                static_cast<void>(hotQuery.ForEachDirtyMutableRange<0>(nativeStorage,
+                    kTransformBatchGrainSize, state.transformNativeDirtyRangesScratch, true,
+                    [](const auto&, std::size_t) {}));
+                return false;
+            }
+        } else {
+            if (dirtyRows != 0U) static_cast<void>(hotQuery.ForEachDirtyMutableRange<0>(nativeStorage,
+                kTransformBatchGrainSize, state.transformNativeDirtyRangesScratch, true,
+                [](const auto&, std::size_t) {}));
+            dirtyRows = 0U;
         }
-        dirtyRows = 0U;
     }
 
     ResetPropagationCursor(state);
@@ -1236,13 +1260,14 @@ void RunHierarchyDirtyFrontier(
         std::atomic_size_t inspectedCount{ 0U };
         std::atomic_size_t updatedCount{ 0U };
         std::atomic_size_t rootFastPathCount{ 0U };
+        std::array<std::atomic_size_t, 5U> parentFastPaths{};
         const kb::ecs::UnsafeHotDirtyRangeDispatchStats dispatchStats = hotQuery.ForEachDirtyMutableRangeParallel<0>(
             nativeStorage,
             kTransformBatchGrainSize,
             *state.transformWorkerPool,
             0U,
             true,
-            [&state, &inspectedCount, &updatedCount, &rootFastPathCount](
+            [&state, rootsOnly, &inspectedCount, &updatedCount, &rootFastPathCount, &parentFastPaths](
                 kb::ecs::UnsafeHotMutableChunk<TransformComponent>& chunk,
                 std::size_t dirtyCount,
                 kb::ecs::WorkerContext workerContext) {
@@ -1251,6 +1276,7 @@ void RunHierarchyDirtyFrontier(
                 inspectedCount.fetch_add(chunk.Count(), std::memory_order_relaxed);
                 std::size_t localUpdatedCount = 0U;
                 std::size_t localRootFastPathCount = 0U;
+                std::array<std::size_t, 5U> localParentFastPaths{};
                 TransformComponent* transforms = chunk.template Components<0>();
                 for (std::size_t row = 0U; row < chunk.Count(); ++row) {
                     localUpdatedCount += transforms[row].worldDirty ? 1U : 0U;
@@ -1261,10 +1287,19 @@ void RunHierarchyDirtyFrontier(
 
                 const std::size_t writeBegin = updatedCount.fetch_add(localUpdatedCount, std::memory_order_relaxed);
                 std::size_t writeOffset = 0U;
+                SceneTransformLeafBatchUpdater leafUpdater{state};
                 for (std::size_t row = 0U; row < chunk.Count(); ++row) {
                     TransformComponent& transform = transforms[row];
                     if (transform.worldDirty) {
-                        if (SceneTransformRootHotKernel::CanApplyIdentityRotationFastPath(transform)) {
+                        if (!rootsOnly) {
+                            const auto entry = leafUpdater.Update(chunk.EntityAt(row), transform);
+                            localRootFastPathCount += entry.rootFastPath;
+                            localParentFastPaths[0] += entry.translatedParentFastPath;
+                            localParentFastPaths[1] += entry.unrotatedParentFastPath;
+                            localParentFastPaths[2] += entry.unitScaleParentFastPath;
+                            localParentFastPaths[3] += entry.uniformScaleParentFastPath;
+                            localParentFastPaths[4] += entry.staticLocalRotationFastPath;
+                        } else if (SceneTransformRootHotKernel::CanApplyIdentityRotationFastPath(transform)) {
                             SceneTransformRootHotKernel::ApplyIdentityRotationRoot(transform);
                             ++localRootFastPathCount;
                         } else {
@@ -1276,13 +1311,21 @@ void RunHierarchyDirtyFrontier(
                     }
                 }
                 rootFastPathCount.fetch_add(localRootFastPathCount, std::memory_order_relaxed);
+                for (std::size_t index = 0U; index < localParentFastPaths.size(); ++index)
+                    if (localParentFastPaths[index] != 0U) parentFastPaths[index].fetch_add(localParentFastPaths[index], std::memory_order_relaxed);
             });
         state.lastTransformHierarchyInspectedCount += inspectedCount.load(std::memory_order_relaxed);
         const std::size_t finalUpdatedCount = updatedCount.load(std::memory_order_relaxed);
         state.transformHierarchyUpdatedEntitiesScratch.resize(finalUpdatedCount);
         state.transformHierarchyUpdatedTransformsScratch.resize(finalUpdatedCount);
         state.lastTransformHierarchyUpdatedCount += finalUpdatedCount;
+        if (!rootsOnly) state.lastTransformHierarchyDirtyFrontierCount = finalUpdatedCount;
         state.lastTransformHierarchyRootFastPathCount += rootFastPathCount.load(std::memory_order_relaxed);
+        state.lastTransformHierarchyTranslatedParentFastPathCount += parentFastPaths[0].load(std::memory_order_relaxed);
+        state.lastTransformHierarchyUnrotatedParentFastPathCount += parentFastPaths[1].load(std::memory_order_relaxed);
+        state.lastTransformHierarchyUnitScaleParentFastPathCount += parentFastPaths[2].load(std::memory_order_relaxed);
+        state.lastTransformHierarchyUniformScaleParentFastPathCount += parentFastPaths[3].load(std::memory_order_relaxed);
+        state.lastTransformHierarchyStaticLocalRotationFastPathCount += parentFastPaths[4].load(std::memory_order_relaxed);
         ++state.lastTransformHierarchyParallelBatchCount;
         state.lastTransformHierarchyParallelChunkCount += dispatchStats.ranges;
         state.lastTransformHierarchyParallelEntityCount += dispatchStats.entities;
@@ -1327,12 +1370,19 @@ void RunHierarchyDirtyFrontier(
             state.transformHierarchyUpdatedEntitiesScratch.size(),
             state.transformHierarchyUpdatedTransformsScratch.size());
         for (std::size_t index = 0U; index < updatedTransformCount; ++index) {
-            SceneComponentAccess::Set(
+            const auto entity = state.transformHierarchyUpdatedEntitiesScratch[index];
+            if (!nativeStorage.IsAlive(entity) || !nativeStorage.HasComponent(entity, state.components.TransformComponentId())) continue;
+            const auto* current = static_cast<const TransformComponent*>(nativeStorage.ComponentData(entity, state.components.TransformComponentId()));
+            if (current == nullptr) continue;
+            // An earlier OnSet may have edited or migrated this row. Publish
+            // the current canonical value, with no pointer held across callbacks.
+            const TransformComponent published = *current;
+            SceneComponentAccess::SetExisting(
                 state.world.NativeHandle(),
-                state.transformHierarchyUpdatedEntitiesScratch[index],
+                entity,
                 state.components.TransformComponentId(),
                 sizeof(TransformComponent),
-                &state.transformHierarchyUpdatedTransformsScratch[index]);
+                &published);
         }
     }
     state.lastTransformHierarchyBackendMarkNanoseconds = Nanoseconds(Clock::now() - backendMarkStart);
@@ -1450,6 +1500,7 @@ void SceneTransformHierarchySystem::Update(SceneState& state) const {
             state.lastTransformHierarchyParallelFlushWorkerCount = flushStats.parallelFlushWorkerCount;
             CacheRenderProxyUpdatesAfterTransforms(state, transformValues, updatedEntities);
             ClearSceneTransformDirtyFrontier(state);
+            PrintRootSyncProfile(state, profileTimings, updatedEntities.size(), updateStart);
             return;
         }
         entries.clear();
@@ -1485,6 +1536,7 @@ void SceneTransformHierarchySystem::Update(SceneState& state) const {
         state.lastTransformHierarchyParallelFlushWorkerCount = flushStats.parallelFlushWorkerCount;
         CacheRenderProxyUpdatesAfterTransforms(state, transformValues, updatedEntities);
         ClearSceneTransformDirtyFrontier(state);
+        PrintRootSyncProfile(state, profileTimings, updatedEntities.size(), updateStart);
         return;
     }
 
@@ -1568,6 +1620,7 @@ void SceneTransformHierarchySystem::Update(SceneState& state) const {
     state.lastTransformHierarchyParallelFlushWorkerCount = flushStats.parallelFlushWorkerCount;
     CacheRenderProxyUpdatesAfterTransforms(state, transformValues, updatedEntities);
     ClearSceneTransformDirtyFrontier(state);
+    PrintRootSyncProfile(state, profileTimings, updatedEntities.size(), updateStart);
 }
 
 } // namespace kb::scene

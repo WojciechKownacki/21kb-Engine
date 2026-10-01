@@ -28,6 +28,14 @@ const void* WorldInternalAccess::TryGetComponent(const World& world, Entity enti
     return world.TryGetComponent(entity, componentId);
 }
 
+void* WorldInternalAccess::TryGetMutableComponent(World& world, Entity entity, ComponentId componentId) {
+    return world.TryGetMutableComponent(entity, componentId);
+}
+
+void WorldInternalAccess::MarkComponentModified(World& world, Entity entity, ComponentId componentId) {
+    world.MarkComponentModified(entity, componentId);
+}
+
 void WorldInternalAccess::SetComponent(World& world, Entity entity, ComponentId componentId, std::size_t size, const void* component) {
     world.SetComponent(entity, componentId, size, component);
 }

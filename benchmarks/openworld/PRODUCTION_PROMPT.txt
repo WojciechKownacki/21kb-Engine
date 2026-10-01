@@ -49,6 +49,9 @@ BRAMKA WYDAJNOŚCI (i7-13700F / RTX 4070, 1080p, D3D11, Release)
 - world_100k: średnia całej klatki <= 12 ms, P99 <= 16.67 ms.
 - city_dense_50k: średnia <= 16.67 ms; P99 <= 25 ms.
 - physics_4096: Runtime.Update średnia <= 5 ms, P99 <= 8 ms.
+- batch_dirty_100k: Runtime.Update średnia <= 8 ms, P99 <= 12 ms. Zachowaj
+  publikację OnSet, mirroring, generacje, hierarchię i interpolację. Osobno
+  raportuj koszt mutowania komponentów oraz całe mutation + Runtime.Update.
 - Statyczne 100k przy włączonej fizyce: średnia Update <= 0.1 ms.
 - 100k rzeczywistych colliderów statycznych: brak błędu pojemności, 1000
   trafionych raycastów na klatkę; Update średnia <= 1 ms, P99 <= 2 ms.
@@ -72,3 +75,26 @@ Uzupełnienie weryfikacji fizyki: każda klatka odbiera wszystkie zdarzenia
 kolizji przez rzeczywistego konsumenta. Raportuj ich liczbę i pamięć. Nie
 porównuj serii z rosnącą, nieodbieraną kolejką ze stałym obciążeniem. Po
 zmianie harness odtwórz bazę i wykonaj pomiar identycznym odbiorcą.
+
+KONTYNUACJA PO ETAPIE 3 (baza: wyniki PRODUCTION_RESULTS_STAGE3_20261001.txt)
+1. Zaliczone bulk Update 8/12 ms nie kończy zadania. SceneTransformService,
+   SceneTransformComponentStore i publikacja World: mutation + Runtime.Update
+   <=16.67 ms dla tego samego batch_dirty_100k. Zachowaj każdy OnSet, odroczenie,
+   dziedziczenie, generacje i zmiany struktury z callbacków; nie wyłączaj lustra.
+2. RenderScene / MeshPassProcessor / SceneMeshDrawCommandSubmitter: usuń
+   pakowanie niezmiennych statycznych grup przy ruchu małego podzbioru. Cel
+   city_dense_50k i mixed_stream_10k: P99 całej klatki gameplay <=16.67 ms.
+   Osobno zmierz zimny start; przenieś rzeczywiste I/O, dekodowanie i przygotowanie
+   zasobów na istniejące workery, a koszt publikacji ogranicz budżetem. Zachowaj
+   wszystkie scenariusze, cienie, liczniki i kontaktowy odbiór fizyki.
+3. SceneLightingPacker i kontrakt shaderów: pełne oświetlenie co najmniej 512
+   świateł przez rzeczywiste listy przestrzenne, zamiast globalnej selekcji 32.
+   Właściciel pochodnych list i zasobów GPU w osobnej klasie. Sprawdź piksele,
+   zmianę kamery/światła, granice klastrów, przepełnienie i warianty materiałów.
+   Nie zaliczaj sceny, która po cichu odrzuca aktywne światła.
+4. Uzupełnij test roślinności o alpha overdraw, wiatr, cienie, LOD i streaming
+   rzeczywistych zasobów. Gdy test wykrywa brak funkcji, dodaj najmniejszą pełną
+   implementację w istniejącym systemie materiałów/instancji, z testem GPU.
+5. Po każdej zmianie wykonaj poprawność, 3 powtórki i porównanie do etapu 3.
+   Cel pełnej jakości produkcyjnej pozostaje aktywny do usunięcia powyższych
+   ograniczeń. Zielony historyczny zestaw węższych bramek nie zastępuje tego celu.

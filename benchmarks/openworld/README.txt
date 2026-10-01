@@ -166,3 +166,30 @@ Pełna weryfikacja kompilacji graph shaderów (osobno od porównania wydajności
 Nie używaj czasu budowania shaderc jako czasu renderera. KB_GENERATE_RENDERER_SHADERS
 pozostaje OFF, więc istniejące shadery renderera nie zmieniają się w porównaniu.
 Rzeczywiste gotowanie graph shaderów sprawdza oddzielny test artefaktów.
+
+Etap 3: masowe transformy (PRODUCTION_RESULTS_STAGE3_20261001.txt)
+SceneTransformLeafBatchUpdater działa na pożyczonych wierszach kanonicznego
+ECS. Liście mogą ominąć kopię całej hierarchii, gdy cały łańcuch rodziców jest
+zsynchronizowany. Zmieniony przodek, poddrzewo, nieznane usunięcie i aktywny
+budżet propagacji zachowują dotychczasowy algorytm. Wskaźniki rodzica żyją
+wyłącznie w obrębie zakresu; nie są trwałą kopią danych sceny.
+Publikacja odczytuje bieżący komponent przed każdym OnSet. Obserwator może
+usunąć lub edytować kolejny komponent bez jego odtworzenia ze starej kopii.
+SceneTransformComponentStore używa zarejestrowanego ID swojego World zamiast
+ponownie wyszukiwać typ przy każdym odczycie i sygnale dirty.
+
+Aktualna bramka batch_dirty_100k: Runtime.Update średnia <=8 ms, P99 <=12 ms.
+mutation_ms i total_ms nadal są mierzone; zaliczenie Update nie oznacza,
+że 100k mutowanych obiektów wraz z renderowaniem mieści się w 16.67 ms.
+Nowy projekt i surowe serie: E:/21kbProjekty/OpenWorldProductionStage3_20261001.
+Ten sam generator i scenariusze, trzy procesy na scenariusz, bez trace:
+  build\perf-release\bin\kb_openworld_perf.exe generate E:/21kbProjekty/OpenWorldProductionStage3_20261001
+  python benchmarks/openworld/run_compare.py --build build/perf-release --project E:/21kbProjekty/OpenWorldProductionStage3_20261001 --output E:/21kbProjekty/OpenWorldProductionStage3_20261001 --suite compare
+  python benchmarks/openworld/run_compare.py --build build/perf-release --project E:/21kbProjekty/OpenWorldProductionStage3_20261001 --output E:/21kbProjekty/OpenWorldProductionStage3_20261001 --suite capacity
+  python benchmarks/openworld/run_compare.py --build build/perf-release --project E:/21kbProjekty/OpenWorldProductionStage3_20261001 --output E:/21kbProjekty/OpenWorldProductionStage3_20261001 --suite foliage
+  python benchmarks/openworld/run_compare.py --build build/perf-release --project E:/21kbProjekty/OpenWorldProductionStage3_20261001 --output E:/21kbProjekty/OpenWorldProductionStage3_20261001 --suite production --fixed-step
+  python benchmarks/openworld/report_production.py --before E:/21kbProjekty/OpenWorldProductionBeforeCorrected_20261001 --after E:/21kbProjekty/OpenWorldProductionStage3_20261001
+Reporter wymusza nową bramkę bulk; historyczny raport etapu 2 zawiera bramki
+obowiązujące w momencie jego pomiaru. Do porównania etapów użyj --before
+E:/21kbProjekty/OpenWorldProductionStage2_20261001. colliders_100k ma wtedy
+rzeczywiste porównanie przed/po, bez przypisywania mu nieistniejącej bazy 3f4a.

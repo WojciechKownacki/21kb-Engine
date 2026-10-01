@@ -1,4 +1,5 @@
 #include "scene/components/SceneComponentAccess.hpp"
+#include "ecs/component/ComponentStorageMutation.hpp"
 
 #include "ecs/FlecsEntityIds.hpp"
 
@@ -31,6 +32,10 @@ bool SceneComponentAccess::Has(const ecs_world_t* world, SceneEntity entity, std
 
     const ecs_entity_t flecsEntity = kb::ecs::FlecsEntityId(entity);
     return ecs_is_alive(world, flecsEntity) && ecs_has_id(world, flecsEntity, componentId);
+}
+
+void SceneComponentAccess::SetExisting(ecs_world_t* world, SceneEntity entity, std::uint64_t componentId, std::size_t size, const void* value) {
+    kb::ecs::ComponentStorageMutation::SetExisting(world, entity, componentId, size, value, true);
 }
 
 void SceneComponentAccess::Set(ecs_world_t* world, SceneEntity entity, std::uint64_t componentId, std::size_t size, const void* value) {
