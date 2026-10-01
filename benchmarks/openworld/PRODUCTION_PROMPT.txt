@@ -130,3 +130,21 @@ Nie wracaj do pełnej synchronizacji świata przy publikacji każdej paczki stre
    komponenty, odroczenie i każdy OnSet wraz ze zmianami struktury z callbacka.
 3. Nadal obowiązują wszystkie pozostałe wymagania 512 świateł, pełnej roślinności,
    asynchronicznego przygotowania zasobów i budżetu publikacji. Cel jest aktywny.
+
+KONTYNUACJA PO ETAPIE 6 (PRODUCTION_RESULTS_STAGE6_20261001.txt)
+NativeArchetypeStorage jest właścicielem walidowanego odczytu rekordu/kolumny;
+SceneTransformComponentStore zachowuje backend fallback. World po własnym OnSet
+obsługuje usunięcie/migrację/nową generację. JoltPhysicsSceneSystem odracza znaczniki
+statycznych ciał do istniejącej ścieżki usuwania. Nie dodawaj nowego indeksu lub lustra.
+1. Mixed gameplay P99 <=16.67 ms; baza etapu 6: 3.161880 / 22.8164 ms.
+   Domknij koszt poruszającej się kamery i publikacji rzeczywistych zasobów.
+2. Bulk końcowy mean/P99 13.335143/15.0481 ms, ale zachowany wcześniejszy
+   pomiar tego samego kodu ECS ma 13.340501/19.9395 ms. Sprawdź stabilność ogona
+   pod dłuższym obciążeniem. Nie usuwaj wcześniejszych wyników i nie przypisuj
+   spadku P99 bulk zmianie fizyki, która w tym scenariuszu jest wyłączona.
+3. SceneLightingPacker/SceneForwardLightSelector i shadery nadal ograniczają
+   światło globalnie do 32/pass. Wykonaj rzeczywiste listy przestrzenne >=512,
+   z właścicielem zasobów GPU w klasie mechanizmu i odczytami pikseli.
+4. Nadal obowiązują alpha/wiatr/cienie/LOD/streaming roślinności, asynchroniczne
+   przygotowanie zasobów i budżet publikacji. Brak regresji >5% do etapu 6.
+5. Funkcjonalne 54/54 i ostatni PASS bulk nie kończą pełnego celu produkcyjnego.

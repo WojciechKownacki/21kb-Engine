@@ -32,6 +32,10 @@ void* WorldInternalAccess::TryGetMutableComponent(World& world, Entity entity, C
     return world.TryGetMutableComponent(entity, componentId);
 }
 
+void* WorldInternalAccess::TryGetMutableNativeComponent(World& world, Entity entity, ComponentId componentId) {
+    return world.nativeStorage_ == nullptr ? nullptr : world.nativeStorage_->TryGetMutableComponentData(entity, componentId);
+}
+
 void WorldInternalAccess::MarkComponentModified(World& world, Entity entity, ComponentId componentId) {
     world.MarkComponentModified(entity, componentId);
 }

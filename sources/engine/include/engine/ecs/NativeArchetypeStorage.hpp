@@ -236,6 +236,9 @@ public:
         std::size_t count = std::numeric_limits<std::size_t>::max());
     [[nodiscard]] void* MutableComponentData(Entity entity, ComponentId componentId);
     [[nodiscard]] const void* ComponentData(Entity entity, ComponentId componentId) const;
+    // Missing columns and invalid/stale entity handles return null.
+    [[nodiscard]] void* TryGetMutableComponentData(Entity entity, ComponentId componentId);
+    [[nodiscard]] const void* TryGetComponentData(Entity entity, ComponentId componentId) const;
     [[nodiscard]] bool HasComponent(Entity entity, ComponentId componentId) const;
     [[nodiscard]] std::size_t CountWithComponent(ComponentId componentId) const noexcept;
     [[nodiscard]] bool EntityArchetypeMatches(Entity entity, std::span<const ComponentId> requiredComponentIds) const;

@@ -1371,8 +1371,7 @@ void RunHierarchyDirtyFrontier(
             state.transformHierarchyUpdatedTransformsScratch.size());
         for (std::size_t index = 0U; index < updatedTransformCount; ++index) {
             const auto entity = state.transformHierarchyUpdatedEntitiesScratch[index];
-            if (!nativeStorage.IsAlive(entity) || !nativeStorage.HasComponent(entity, state.components.TransformComponentId())) continue;
-            const auto* current = static_cast<const TransformComponent*>(nativeStorage.ComponentData(entity, state.components.TransformComponentId()));
+            const auto* current = static_cast<const TransformComponent*>(nativeStorage.TryGetComponentData(entity, state.components.TransformComponentId()));
             if (current == nullptr) continue;
             // An earlier OnSet may have edited or migrated this row. Publish
             // the current canonical value, with no pointer held across callbacks.

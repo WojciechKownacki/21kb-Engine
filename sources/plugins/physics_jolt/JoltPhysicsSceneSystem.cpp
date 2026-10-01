@@ -1777,11 +1777,9 @@ private:
                 };
                 if (bodySyncCacheValid_ && staticBodyBatchCache_.Matches(batchIndex, key) &&
                     bodySyncCursor_ + batch.Count() <= bodySyncCache_.size()) {
-                    // These rows still own exactly the validated bodies. Mark
-                    // them seen so a different batch can retire its stale body.
-                    for (std::size_t index = 0U; index < batch.Count(); ++index) {
-                        bodySyncCache_[bodySyncCursor_++].body->seenEpoch = bodySyncEpoch_;
-                    }
+                    // Validated rows still own these bodies. Defer their epoch
+                    // writes until a stale record actually needs retirement.
+                    bodySyncCursor_ += batch.Count();
                     ++batchIndex;
                     return;
                 }
@@ -1800,6 +1798,9 @@ private:
         // The disjoint queries visit every live body once and ensure its map entry exists.
         // Equal counts therefore exclude stale records without scanning the map.
         if (bodies_.size() != bodySyncCursor_) {
+            for (std::size_t index = 0U; index < bodySyncCursor_; ++index) {
+                bodySyncCache_[index].body->seenEpoch = bodySyncEpoch_;
+            }
             for (auto it = bodies_.begin(); it != bodies_.end();) {
                 if (it->second.seenEpoch != bodySyncEpoch_) {
                     RemoveBody(it->second.bodyId, wakeSurvivingDynamicBodies);
