@@ -56,7 +56,7 @@ namespace kb::render {
 namespace {
 
 [[nodiscard]] std::array<float, 4> NeutralInstanceColor() noexcept {
-    return { 0.76F, 0.80F, 0.86F, 1.0F };
+    return { 1.0F, 1.0F, 1.0F, 1.0F };
 }
 
 [[nodiscard]] std::uint32_t CopyMaterialSlotOverrides(
