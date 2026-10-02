@@ -216,6 +216,15 @@ void CopyGraph(RenderPassGraph& graph, RenderViewportPlan& plan) {
             plan.viewOrder.insert(opaque, ViewId::GpuCompute);
         }
     }
+    const auto shadow = std::ranges::find(plan.viewOrder, plan.viewIds.shadowDepth);
+    if (shadow != plan.viewOrder.end()) {
+        auto insertAt = std::next(shadow);
+        for (const std::uint16_t view : plan.viewIds.shadowCascadeViews) {
+            if (ViewId::IsValid(view)) {
+                insertAt = std::next(plan.viewOrder.insert(insertAt, view));
+            }
+        }
+    }
     const auto blurV = std::ranges::find(plan.viewOrder, plan.viewIds.postProcessBloomBlurV);
     if (blurV != plan.viewOrder.end()) {
         auto insertAt = std::next(blurV);

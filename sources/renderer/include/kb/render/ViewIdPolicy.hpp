@@ -37,6 +37,12 @@ constexpr std::uint16_t DetachedViewportStride = 36;
 constexpr std::uint16_t Max = 256;
 // Global asynchronous capture runs after every remapped viewport draw.
 constexpr std::uint16_t ScreenCapture = Max - 1U;
+// Cascaded shadows of the primary viewport render one extra depth view per cascade beyond the
+// first, in the ids left over above the last detached viewport.
+constexpr std::uint16_t ShadowCascadeExtraViews = 2;
+constexpr std::uint16_t ShadowCascadeExtraStart = ScreenCapture - ShadowCascadeExtraViews;
+static_assert(DetachedViewportStart + ((ScreenCapture - DetachedViewportStart) / DetachedViewportStride) * DetachedViewportStride <= ShadowCascadeExtraStart,
+    "Shadow cascade views overlap the detached viewport view range");
 
 [[nodiscard]] constexpr bool IsValid(std::uint16_t viewId) noexcept {
     return viewId < Max;

@@ -2645,11 +2645,20 @@ void RunDirectionalShadowCameraCoverageTest() {
     SceneRenderResourceMap resourceMap;
     SceneRenderLightingConfig config;
     config.shadowDistance = 50.0F;
+    config.shadowCascadeCount = 1U;
     const std::array<float, 3> eye{ 10.0F, 5.0F, 0.0F };
     const auto setup = DirectionalShadowPassPlanner{}.Build(scene, resources, resourceMap, config, BGFX_INVALID_HANDLE, 1U, &eye);
     Require(setup.valid && NearlyEqual(std::abs(setup.camera.projection[0]), 1.0F / 50.0F),
         "Distant world geometry must not expand camera shadow coverage");
     Require(setup.camera.cullingMask == 1U, "Shadow submission must retain camera layer filtering");
+    config.shadowCascadeCount = 3U;
+    const auto cascaded = DirectionalShadowPassPlanner{}.Build(scene, resources, resourceMap, config, BGFX_INVALID_HANDLE, 1U, &eye);
+    Require(cascaded.valid && cascaded.binding.cascadeCount == 3U && cascaded.atlasSize == 2U * config.shadowMapSize,
+        "Cascaded shadows must pack three cascades into a 2x2 atlas");
+    Require(NearlyEqual(std::abs(cascaded.cascadeCameras[0].projection[0]), 4.0F / 50.0F) &&
+            NearlyEqual(std::abs(cascaded.cascadeCameras[2].projection[0]), 1.0F / 50.0F),
+        "Cascade extents must halve from the shadow distance down to the nearest cascade");
+    config.shadowCascadeCount = 1U;
     const bgfx::Caps* caps = bgfx::getCaps();
     const float textureYScale = caps != nullptr && caps->originBottomLeft ? 0.5F : -0.5F;
     Require(NearlyEqual(setup.binding.lightViewProjection[5], textureYScale * setup.camera.projection[5] * setup.camera.view[5]),

@@ -3,6 +3,7 @@ $input v_texcoord0
 #include <bgfx_shader.sh>
 #define KB_LIGHT_GRID_DEFERRED 1
 #include "light_grid.sh"
+#include "shadow_cascades.sh"
 #include "gbuffer_contract.sh"
 
 SAMPLER2D(s_gbufferAlbedo, 0);
@@ -236,14 +237,12 @@ void main()
     vec3 worldPos = ReconstructWorldPosition(v_texcoord0, depth);
     vec3 viewDir = normalize(u_deferredCameraPosition.xyz - worldPos);
 
-    vec4 shadowClip = mul(u_deferredShadowViewProj, vec4(worldPos, 1.0));
-    vec3 shadowCoord = shadowClip.xyz / max(shadowClip.w, 0.0001);
     float shadowVisible = 1.0;
-    if (u_deferredShadowParams.w > 0.5 &&
-        shadowCoord.x >= 0.0 && shadowCoord.x <= 1.0 &&
-        shadowCoord.y >= 0.0 && shadowCoord.y <= 1.0 &&
-        shadowCoord.z >= 0.0 && shadowCoord.z <= 1.0) {
-        shadowVisible = SampleShadowVisibility(shadowCoord);
+    if (u_deferredShadowParams.w > 0.5) {
+        vec4 shadowCoord = KbResolveShadowCascade(worldPos);
+        if (shadowCoord.w > 0.5) {
+            shadowVisible = SampleShadowVisibility(shadowCoord.xyz);
+        }
     }
 
     vec3 lighting = EvaluateEnvironment(normal, viewDir, albedo.rgb, metallic, roughness, specular, occlusion);

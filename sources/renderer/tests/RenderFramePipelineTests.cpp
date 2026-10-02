@@ -256,8 +256,10 @@ void FramePipelineBuildsCanonicalPassOrder() {
     Require(selectionMask != nullptr && selectionMask->meshPass.value_or(MeshPassType::Depth) == MeshPassType::SelectionId, "EditorSelectionMask pass did not carry SelectionId mesh pass metadata");
     Require(finalComposite != nullptr && !finalComposite->meshPass.has_value(), "FinalComposite pass unexpectedly carried mesh pass metadata");
 
-    constexpr std::array<std::uint16_t, RenderPassKindCount + (RenderViewportViewIds::kBloomPyramidExtraMipCount * 3U)> expectedViewOrder{
+    constexpr std::array<std::uint16_t, RenderPassKindCount + (RenderViewportViewIds::kBloomPyramidExtraMipCount * 3U) + ViewId::ShadowCascadeExtraViews> expectedViewOrder{
         ViewId::ShadowDepth,
+        ViewId::ShadowCascadeExtraStart,
+        ViewId::ShadowCascadeExtraStart + 1U,
         ViewId::GpuCompute,
         ViewId::Scene3D,
         ViewId::GBufferGeometry,
@@ -339,8 +341,10 @@ void FrameStateAccumulatesMultipleViewportViewOrders() {
     Require(state.IsActive(), "RenderFrameState became inactive during viewport registration");
     Require(state.FrameIndex() == frame.frameIndex, "RenderFrameState has the wrong frame index");
 
-    constexpr std::array<std::uint16_t, 73U> expectedViewOrder{
+    constexpr std::array<std::uint16_t, 75U> expectedViewOrder{
         ViewId::ShadowDepth,
+        ViewId::ShadowCascadeExtraStart,
+        ViewId::ShadowCascadeExtraStart + 1U,
         ViewId::GpuCompute,
         ViewId::Scene3D,
         ViewId::GBufferGeometry,

@@ -8,6 +8,8 @@
 
 #include <bx/math.h>
 
+#include <algorithm>
+
 namespace kb::render {
 
 SceneRenderShadowMapBinding RendererShadowSubmitter::Submit(const RendererShadowSubmitDesc& desc) {
@@ -36,42 +38,53 @@ SceneRenderShadowMapBinding RendererShadowSubmitter::Submit(const RendererShadow
         desc.lightingConfig,
         BGFX_INVALID_HANDLE,
         cameraCullingMask,
-        desc.sceneDesc.cameraOverride.has_value() || sceneCamera != nullptr ? &cameraPosition : nullptr);
-    if (!shadowSetup.valid || !desc.shadowMap.Ensure(desc.lightingConfig.shadowMapSize)) {
+        desc.sceneDesc.cameraOverride.has_value() || sceneCamera != nullptr ? &cameraPosition : nullptr,
+        1U + static_cast<std::uint32_t>(std::ranges::count_if(
+            desc.viewportPlan.viewIds.shadowCascadeViews, [](std::uint16_t view) { return ViewId::IsValid(view); })));
+    if (!shadowSetup.valid || !desc.shadowMap.Ensure(shadowSetup.atlasSize)) {
         return {};
     }
 
     shadowSetup.binding.depthTexture = desc.shadowMap.DepthTexture();
     shadowSetup.binding.params[2] = desc.shadowMap.Size() == 0U ? 0.0F : 1.0F / static_cast<float>(desc.shadowMap.Size());
-    RendererViewConfigurator::ConfigureShadowDepth(desc.viewportPlan.viewIds.shadowDepth, desc.shadowMap.FrameBuffer(), desc.shadowMap.Size());
-    desc.sceneRenderer.SubmitMeshPass(
-        desc.viewportPlan.viewIds.shadowDepth,
-        MeshPassType::ShadowDepth,
-        desc.renderScene,
-        desc.shadowMap.Size(),
-        desc.shadowMap.Size(),
-        &shadowSetup.camera,
-        desc.sceneDesc.drawBudget,
-        desc.lightingConfig,
-        nullptr,
-        {},
-        &desc.gpuDrivenSupport);
+    const std::uint32_t tileSize = shadowSetup.binding.cascadeCount > 1U ? desc.shadowMap.Size() / 2U : desc.shadowMap.Size();
+    std::uint32_t submittedCasters = 0U;
+    for (std::uint32_t cascade = 0U; cascade < shadowSetup.binding.cascadeCount; ++cascade) {
+        const std::uint16_t viewId = cascade == 0U
+            ? desc.viewportPlan.viewIds.shadowDepth
+            : desc.viewportPlan.viewIds.shadowCascadeViews[cascade - 1U];
+        RendererViewConfigurator::ConfigureShadowDepth(
+            viewId, desc.shadowMap.FrameBuffer(), (cascade & 1U) * tileSize, (cascade >> 1U) * tileSize, tileSize);
+        desc.sceneRenderer.SubmitMeshPass(
+            viewId,
+            MeshPassType::ShadowDepth,
+            desc.renderScene,
+            tileSize,
+            tileSize,
+            &shadowSetup.cascadeCameras[cascade],
+            desc.sceneDesc.drawBudget,
+            desc.lightingConfig,
+            nullptr,
+            {},
+            &desc.gpuDrivenSupport);
 
-    SceneRenderSubmitStats shadowStats = desc.sceneRenderer.LastSubmitStats();
-    shadowStats.shadowLightEntityId = shadowSetup.lightEntityId;
-    shadowStats.shadowMapAllocationBytes = desc.shadowMap.AllocationBytes();
-    desc.aggregateSubmitStats += shadowStats;
-    desc.diagnostics += desc.sceneRenderer.LastDiagnostics();
-    desc.passSubmitStats.push_back(SceneRenderPassSubmitStats{
-        .viewportId = desc.sceneDesc.target.viewport.id.value,
-        .viewportIndex = desc.sceneDesc.target.viewport.viewportIndex,
-        .renderPass = RenderPassKind::ShadowDepth,
-        .pass = MeshPassType::ShadowDepth,
-        .stats = shadowStats,
-    });
+        SceneRenderSubmitStats shadowStats = desc.sceneRenderer.LastSubmitStats();
+        shadowStats.shadowLightEntityId = shadowSetup.lightEntityId;
+        shadowStats.shadowMapAllocationBytes = cascade == 0U ? desc.shadowMap.AllocationBytes() : 0U;
+        submittedCasters += shadowStats.submittedShadowCasterCount;
+        desc.aggregateSubmitStats += shadowStats;
+        desc.diagnostics += desc.sceneRenderer.LastDiagnostics();
+        desc.passSubmitStats.push_back(SceneRenderPassSubmitStats{
+            .viewportId = desc.sceneDesc.target.viewport.id.value,
+            .viewportIndex = desc.sceneDesc.target.viewport.viewportIndex,
+            .renderPass = RenderPassKind::ShadowDepth,
+            .pass = MeshPassType::ShadowDepth,
+            .stats = shadowStats,
+        });
+    }
 
     SceneRenderShadowMapBinding shadowBinding = shadowSetup.binding;
-    shadowBinding.params[3] = shadowStats.submittedShadowCasterCount == 0U ? 0.0F : shadowBinding.params[3];
+    shadowBinding.params[3] = submittedCasters == 0U ? 0.0F : shadowBinding.params[3];
     return shadowBinding;
 }
 
