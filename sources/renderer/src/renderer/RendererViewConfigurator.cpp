@@ -111,12 +111,12 @@ void RendererViewConfigurator::ConfigureFramebufferNoClear(bgfx::ViewId viewId, 
     bgfx::setViewRect(viewId, 0, 0, width, height);
 }
 
-void RendererViewConfigurator::ConfigureShadowDepth(bgfx::ViewId viewId, bgfx::FrameBufferHandle frameBuffer, std::uint32_t size) {
+void RendererViewConfigurator::ConfigureShadowDepth(bgfx::ViewId viewId, bgfx::FrameBufferHandle frameBuffer, std::uint32_t x, std::uint32_t y, std::uint32_t size) {
     const std::uint16_t extent = ClampToViewExtent(size);
     bgfx::setViewName(viewId, "KB Shadow Depth");
     bgfx::setViewFrameBuffer(viewId, frameBuffer);
     bgfx::setViewClear(viewId, BGFX_CLEAR_DEPTH, 0U, SceneDepthPolicy::ClearDepth(), 0U);
-    bgfx::setViewRect(viewId, 0, 0, extent, extent);
+    bgfx::setViewRect(viewId, ClampToViewExtent(x), ClampToViewExtent(y), extent, extent);
     bgfx::touch(viewId);
 }
 

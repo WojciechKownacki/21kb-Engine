@@ -13,6 +13,7 @@ struct RenderViewportViewIds {
     static constexpr std::size_t kBloomPyramidExtraMipCount = 5U;
 
     std::uint16_t shadowDepth = ViewId::Invalid;
+    std::array<std::uint16_t, ViewId::ShadowCascadeExtraViews> shadowCascadeViews{ ViewId::Invalid, ViewId::Invalid };
     std::uint16_t opaqueScene = ViewId::Invalid;
     std::uint16_t gbufferGeometry = ViewId::Invalid;
     std::uint16_t deferredLighting = ViewId::Invalid;
@@ -125,6 +126,7 @@ public:
         if (viewportIndex == 0U) {
             return RenderViewportViewIds{
                 .shadowDepth = ViewId::ShadowDepth,
+                .shadowCascadeViews = CascadeViews(ViewId::ShadowCascadeExtraStart),
                 .opaqueScene = ViewId::Scene3D,
                 .gbufferGeometry = ViewId::GBufferGeometry,
                 .deferredLighting = ViewId::DeferredLighting,
@@ -185,6 +187,14 @@ public:
     }
 
 private:
+    [[nodiscard]] static constexpr std::array<std::uint16_t, ViewId::ShadowCascadeExtraViews> CascadeViews(std::uint32_t start) noexcept {
+        std::array<std::uint16_t, ViewId::ShadowCascadeExtraViews> views{};
+        for (std::size_t index = 0; index < views.size(); ++index) {
+            views[index] = static_cast<std::uint16_t>(start + index);
+        }
+        return views;
+    }
+
     [[nodiscard]] static constexpr std::array<std::uint16_t, RenderViewportViewIds::kBloomPyramidExtraMipCount> BloomMipViews(std::uint32_t start) noexcept {
         std::array<std::uint16_t, RenderViewportViewIds::kBloomPyramidExtraMipCount> views{};
         for (std::size_t index = 0; index < views.size(); ++index) {

@@ -130,7 +130,8 @@ DirectionalShadowSetup DirectionalShadowPassPlanner::Build(
     SceneRenderLightingConfig lightingConfig,
     bgfx::TextureHandle shadowDepthTexture,
     std::uint32_t cameraCullingMask,
-    const std::array<float, 3>* cameraPosition) const noexcept {
+    const std::array<float, 3>* cameraPosition,
+    std::uint32_t maxCascades) const noexcept {
     DirectionalShadowSetup setup{};
     if (!lightingConfig.shadowsEnabled) {
         return setup;
@@ -183,33 +184,50 @@ DirectionalShadowSetup DirectionalShadowPassPlanner::Build(
         focus[1] + basis.zy * (minimumDepth - 1.0F),
         focus[2] + basis.zz * (minimumDepth - 1.0F),
     };
-    setup.camera.view = focusView;
-    SetShadowViewOrigin(setup.camera.view, eye);
     setup.casterCount = focusCamera ? casterBounds.focusedCasterCount : casterBounds.casterCount;
     const bool homogeneousDepth = SceneDepthPolicy::HomogeneousDepth();
-    const float orthoHeight = 2.0F * (focusCamera ? lightingConfig.shadowDistance : radius);
-    if (lightingConfig.stableShadowCascades) {
-        SnapShadowViewToTexel(setup.camera.view, orthoHeight, lightingConfig.shadowMapSize);
-    }
-    setup.camera.cullingMask = cameraCullingMask;
-    SceneDepthPolicy::MakeOrthographic(
-        setup.camera.projection.data(),
-        orthoHeight,
-        1.0F,
-        0.1F,
-        maximumDepth - minimumDepth + 2.0F,
-        homogeneousDepth);
 
-    const std::array<float, 16> viewProjection = MultiplyColumnMajor(setup.camera.projection, setup.camera.view);
-    setup.binding = SceneRenderShadowMapBinding{
-        .depthTexture = shadowDepthTexture,
-        .lightViewProjection = MultiplyColumnMajor(ShadowTextureMatrix(homogeneousDepth), viewProjection),
-        .params = {
-            std::max(lightingConfig.shadowDepthBias, 0.0F),
-            std::clamp(lightingConfig.shadowStrength, 0.0F, 1.0F),
-            lightingConfig.shadowMapSize == 0U ? 0.0F : 1.0F / static_cast<float>(lightingConfig.shadowMapSize),
-            ShadowFilterModeValue(lightingConfig.shadowFilter),
-        },
+    // Cascades are camera-centred squares of halving size (stable under camera rotation); a cascade
+    // needs a camera focus, otherwise the single bounds-fitted map is used.
+    constexpr std::uint32_t kMaxCascades = SceneRenderShadowMapBinding::kMaxCascades;
+    const std::uint32_t cascadeCount = focusCamera
+        ? std::clamp(lightingConfig.shadowCascadeCount, 1U, std::clamp(maxCascades, 1U, kMaxCascades)) : 1U;
+    const std::uint32_t tileSize = lightingConfig.shadowMapSize;
+    setup.atlasSize = cascadeCount > 1U ? tileSize * 2U : tileSize;
+    const std::array<float, 16> textureMatrix = ShadowTextureMatrix(homogeneousDepth);
+
+    setup.binding.cascadeCount = cascadeCount;
+    for (std::uint32_t cascade = 0U; cascade < cascadeCount; ++cascade) {
+        const float cascadeRadius = focusCamera
+            ? lightingConfig.shadowDistance / static_cast<float>(1U << (cascadeCount - 1U - cascade))
+            : radius;
+        const float orthoHeight = 2.0F * cascadeRadius;
+        SceneRenderCamera& camera = setup.cascadeCameras[cascade];
+        camera.view = focusView;
+        SetShadowViewOrigin(camera.view, eye);
+        if (lightingConfig.stableShadowCascades) {
+            SnapShadowViewToTexel(camera.view, orthoHeight, tileSize);
+        }
+        camera.cullingMask = cameraCullingMask;
+        SceneDepthPolicy::MakeOrthographic(
+            camera.projection.data(), orthoHeight, 1.0F, 0.1F, maximumDepth - minimumDepth + 2.0F, homogeneousDepth);
+        const std::array<float, 16> lightViewProjection =
+            MultiplyColumnMajor(textureMatrix, MultiplyColumnMajor(camera.projection, camera.view));
+        std::ranges::copy(lightViewProjection, setup.binding.cascadeViewProjection.begin() + cascade * 16U);
+        const float tileScale = cascadeCount > 1U ? 0.5F : 1.0F;
+        setup.binding.cascadeAtlas[cascade * 4U + 0U] = static_cast<float>(cascade & 1U) * 0.5F;
+        setup.binding.cascadeAtlas[cascade * 4U + 1U] = static_cast<float>(cascade >> 1U) * 0.5F;
+        setup.binding.cascadeAtlas[cascade * 4U + 2U] = tileScale;
+    }
+    setup.camera = setup.cascadeCameras[0];
+    setup.binding.depthTexture = shadowDepthTexture;
+    std::ranges::copy_n(setup.binding.cascadeViewProjection.begin(), 16, setup.binding.lightViewProjection.begin());
+    setup.binding.cascadeInfo = { static_cast<float>(cascadeCount), tileSize == 0U ? 0.0F : 2.0F / static_cast<float>(tileSize), 0.0F, 0.0F };
+    setup.binding.params = {
+        std::max(lightingConfig.shadowDepthBias, 0.0F),
+        std::clamp(lightingConfig.shadowStrength, 0.0F, 1.0F),
+        setup.atlasSize == 0U ? 0.0F : 1.0F / static_cast<float>(setup.atlasSize),
+        ShadowFilterModeValue(lightingConfig.shadowFilter),
     };
     setup.valid = true;
     return setup;

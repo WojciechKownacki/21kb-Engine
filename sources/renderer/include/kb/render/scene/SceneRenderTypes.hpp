@@ -300,7 +300,7 @@ struct SceneRenderLightingConfig {
     SceneRenderIblConfig ibl{};
     SceneRenderGlobalIlluminationMode globalIllumination = SceneRenderGlobalIlluminationMode::Disabled;
     std::uint32_t shadowMapSize = 1024U;
-    std::uint32_t shadowCascadeCount = 1U;
+    std::uint32_t shadowCascadeCount = 3U;
     std::uint32_t shadowAtlasSize = 2048U;
     float shadowDistance = 50.0F;
     float shadowDepthBias = 0.002F;
@@ -318,6 +318,12 @@ struct SceneRenderShadowMapBinding {
     bgfx::TextureHandle depthTexture = BGFX_INVALID_HANDLE;
     std::array<float, 16> lightViewProjection{};
     std::array<float, 4> params{};
+    // Cascades share one atlas (2x2 tiles). xy = tile offset, z = tile scale; cascade 0 is the finest.
+    static constexpr std::uint32_t kMaxCascades = 4U;
+    std::uint32_t cascadeCount = 1U;
+    std::array<float, 16U * kMaxCascades> cascadeViewProjection{};
+    std::array<float, 4U * kMaxCascades> cascadeAtlas{ 0.0F, 0.0F, 1.0F, 0.0F };
+    std::array<float, 4> cascadeInfo{ 1.0F, 0.0F, 0.0F, 0.0F }; // x = count, y = edge margin (tile uv)
 
     [[nodiscard]] bool IsValid() const noexcept {
         return bgfx::isValid(depthTexture) && params[3] > 0.0F;

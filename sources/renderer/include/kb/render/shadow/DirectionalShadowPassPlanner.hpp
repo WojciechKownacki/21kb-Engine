@@ -4,6 +4,7 @@
 
 #include <bgfx/bgfx.h>
 
+#include <array>
 #include <cstdint>
 
 namespace kb::render {
@@ -14,6 +15,8 @@ class SceneRenderResourceMap;
 
 struct DirectionalShadowSetup {
     SceneRenderCamera camera{};
+    std::array<SceneRenderCamera, SceneRenderShadowMapBinding::kMaxCascades> cascadeCameras{};
+    std::uint32_t atlasSize = 0;
     SceneRenderShadowMapBinding binding{};
     std::uint64_t lightEntityId = 0;
     std::uint32_t casterCount = 0;
@@ -29,7 +32,8 @@ public:
         SceneRenderLightingConfig lightingConfig,
         bgfx::TextureHandle shadowDepthTexture,
         std::uint32_t cameraCullingMask = 0xFFFFFFFFU,
-        const std::array<float, 3>* cameraPosition = nullptr) const noexcept;
+        const std::array<float, 3>* cameraPosition = nullptr,
+        std::uint32_t maxCascades = SceneRenderShadowMapBinding::kMaxCascades) const noexcept;
 };
 
 } // namespace kb::render

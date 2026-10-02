@@ -117,6 +117,7 @@ bool SceneDeferredLightingPass::Initialize() {
     shadowMapSampler_ = bgfx::createUniform("s_deferredShadowMap", bgfx::UniformType::Sampler);
     shadowViewProjUniform_ = bgfx::createUniform("u_deferredShadowViewProj", bgfx::UniformType::Mat4);
     shadowParamsUniform_ = bgfx::createUniform("u_deferredShadowParams", bgfx::UniformType::Vec4);
+    shadowCascades_.Create();
     backdropHorizonUniform_ = bgfx::createUniform("u_deferredBackdropHorizon", bgfx::UniformType::Vec4);
     backdropZenithUniform_ = bgfx::createUniform("u_deferredBackdropZenith", bgfx::UniformType::Vec4);
     backdropParamsUniform_ = bgfx::createUniform("u_deferredBackdropParams", bgfx::UniformType::Vec4);
@@ -181,6 +182,7 @@ void SceneDeferredLightingPass::Shutdown() noexcept {
         bgfx::destroy(fallbackBackdropEnvironmentTexture_);
         fallbackBackdropEnvironmentTexture_ = BGFX_INVALID_HANDLE;
     }
+    shadowCascades_.Destroy();
     if (bgfx::isValid(shadowParamsUniform_)) {
         bgfx::destroy(shadowParamsUniform_);
         shadowParamsUniform_ = BGFX_INVALID_HANDLE;
@@ -425,6 +427,7 @@ bool SceneDeferredLightingPass::Submit(const SceneDeferredLightingPassDesc& desc
     static const std::array<float, 4> disabledShadowParams{};
     bgfx::setUniform(shadowViewProjUniform_, shadowValid ? desc.shadowMap->lightViewProjection.data() : disabledShadowViewProj.data());
     bgfx::setUniform(shadowParamsUniform_, shadowValid ? desc.shadowMap->params.data() : disabledShadowParams.data());
+    shadowCascades_.Set(desc.shadowMap);
     {
         std::ostringstream message;
         message << "bind-gbuffer viewId=" << desc.viewId
@@ -477,7 +480,7 @@ bool SceneDeferredLightingPass::IsInitialized() const noexcept {
         bgfx::isValid(environmentZenithUniform_) && bgfx::isValid(environmentGroundUniform_) &&
         bgfx::isValid(environmentParamsUniform_) && bgfx::isValid(cameraPositionUniform_) &&
         bgfx::isValid(inverseViewProjectionUniform_) && bgfx::isValid(depthParamsUniform_) &&
-        bgfx::isValid(shadowMapSampler_) && bgfx::isValid(shadowViewProjUniform_) && bgfx::isValid(shadowParamsUniform_) &&
+        bgfx::isValid(shadowMapSampler_) && bgfx::isValid(shadowViewProjUniform_) && bgfx::isValid(shadowParamsUniform_) && shadowCascades_.IsValid() &&
         bgfx::isValid(backdropHorizonUniform_) && bgfx::isValid(backdropZenithUniform_) && bgfx::isValid(backdropParamsUniform_) &&
         bgfx::isValid(backdropEnvironmentSampler_) && bgfx::isValid(fallbackShadowTexture_) &&
         bgfx::isValid(fallbackBackdropEnvironmentTexture_);

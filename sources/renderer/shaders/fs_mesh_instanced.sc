@@ -2,6 +2,7 @@ $input v_normal, v_color0, v_texcoord0, v_worldPos, v_shadowPos, v_shadowFlags, 
 
 #include <bgfx_shader.sh>
 #include "light_grid.sh"
+#include "shadow_cascades.sh"
 
 SAMPLER2D(s_albedo, 0);
 SAMPLER2D(s_normal, 1);
@@ -209,13 +210,12 @@ void main()
     float occlusionSample = texture2D(s_occlusion, materialUv).r;
     float occlusion = mix(1.0, occlusionSample, clamp(u_materialFlags.y, 0.0, 1.0));
     vec3 viewDir = normalize(u_cameraPosition.xyz - v_worldPos);
-    vec3 shadowCoord = v_shadowPos.xyz / max(v_shadowPos.w, 0.0001);
     float shadowVisible = 1.0;
-    if (u_shadowParams.w > 0.5 && v_shadowFlags.x > 0.5 &&
-        shadowCoord.x >= 0.0 && shadowCoord.x <= 1.0 &&
-        shadowCoord.y >= 0.0 && shadowCoord.y <= 1.0 &&
-        shadowCoord.z >= 0.0 && shadowCoord.z <= 1.0) {
-        shadowVisible = SampleShadowVisibility(shadowCoord);
+    if (u_shadowParams.w > 0.5 && v_shadowFlags.x > 0.5) {
+        vec4 shadowCoord = KbResolveShadowCascade(v_worldPos);
+        if (shadowCoord.w > 0.5) {
+            shadowVisible = SampleShadowVisibility(shadowCoord.xyz);
+        }
     }
     vec3 lighting = EvaluateEnvironment(normal, viewDir, albedo.rgb, metallic, roughness, occlusion);
     vec2 lightList = KbLightGridList(v_worldPos, u_lightParams.x);

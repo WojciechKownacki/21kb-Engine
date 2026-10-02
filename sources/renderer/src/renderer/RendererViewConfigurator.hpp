@@ -32,7 +32,7 @@ public:
         float depth,
         std::uint8_t stencil);
     static void ConfigureFramebufferNoClear(bgfx::ViewId viewId, bgfx::FrameBufferHandle frameBuffer, RenderExtent extent, const char* name);
-    static void ConfigureShadowDepth(bgfx::ViewId viewId, bgfx::FrameBufferHandle frameBuffer, std::uint32_t size);
+    static void ConfigureShadowDepth(bgfx::ViewId viewId, bgfx::FrameBufferHandle frameBuffer, std::uint32_t x, std::uint32_t y, std::uint32_t size);
 };
 
 } // namespace kb::render
