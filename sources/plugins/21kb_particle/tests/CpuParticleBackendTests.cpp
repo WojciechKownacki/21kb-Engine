@@ -2760,6 +2760,59 @@ void TestGpuLocalSpaceEmitterRouting() {
     Require(planeCommands.empty() && planeCpuLive > 0U, "A local-space emitter with a collision plane must stay on the CPU");
 }
 
+// Mesh and trail outputs run on the GPU too: the mesh draw carries the mesh and material of the emitter, the trail
+// the segment count and spacing (one fewer segment than samples, at the CPU path's sample cadence); a trail of a
+// local-space emitter stays on the CPU because its path is not the closed form.
+void TestGpuMeshAndTrailRouting() {
+    const auto run = [](kb::scene::ParticleOutputType type, bool local) {
+        auto effect = Fixture::MakeEffect(600.0F, 1'000U);
+        effect.backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualPreferred;
+        auto& output = effect.emitters[0].output;
+        output.type = type;
+        output.material.assetId = 72U;
+        if (type == kb::scene::ParticleOutputType::Mesh) {
+            output.mesh.assetId = 75U;
+            output.payload = kb::scene::ParticleMeshOutput{ .castsShadow = true, .receivesShadow = false };
+        } else {
+            output.payload = kb::scene::ParticleTrailOutput{ .sampleIntervalSeconds = 0.05F, .maxSamplesPerParticle = 8U, .width = 0.5F };
+        }
+        if (local) effect.emitters[0].simulationSpace = kb::scene::ParticleSimulationSpace::Local;
+        Fixture fixture{ effect };
+        Require(fixture.scene.Assets().Manager().RegisterAsset({
+                    .id = kb::assets::AssetId{ 75U }, .type = "RenderMesh", .name = "Particle Test Mesh",
+                    .virtualPath = "/Game/Meshes/ParticleTest.obj", .physicalPath = "ParticleTest.obj", .contentHash = 1U }),
+            "particle mesh metadata registration failed");
+        kb::particle_plugin::CpuParticleBackend backend;
+        backend.Warmup();
+        const kb::particles::ParticleRuntimeResult created = backend.Create(fixture.scene, fixture.effectAssetId, fixture.owner);
+        Require(created.Succeeded() && backend.Play(fixture.scene, created.instanceId).Succeeded(), "mesh/trail routing fixture could not play");
+        kb::particles::ParticlePlayback::SetGpuEmitterConsumer(fixture.scene, true);
+        for (int step = 0; step < 10; ++step) {
+            Require(backend.Step(fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(), "mesh/trail routing step failed");
+        }
+        std::vector<kb::particles::ParticleGpuEmitterCommand> commands;
+        kb::particles::ParticlePlayback::DrainGpuEmitterCommands(fixture.scene, commands);
+        return commands;
+    };
+    const auto meshCommands = run(kb::scene::ParticleOutputType::Mesh, false);
+    bool mesh = false;
+    for (const kb::particles::ParticleGpuEmitterCommand& command : meshCommands) {
+        mesh = mesh || (command.hasParams && command.params.output == kb::particles::ParticleRenderOutput::Mesh &&
+            command.params.meshAssetId == 75U && command.params.materialAssetId == 72U &&
+            command.params.castsShadow && !command.params.receivesShadow);
+    }
+    Require(mesh, "A mesh emitter must run on the GPU with its mesh, material and shadow flags");
+    const auto trailCommands = run(kb::scene::ParticleOutputType::Trail, false);
+    bool trail = false;
+    for (const kb::particles::ParticleGpuEmitterCommand& command : trailCommands) {
+        trail = trail || (command.hasParams && command.params.output == kb::particles::ParticleRenderOutput::Trail &&
+            command.params.trailSegments == 7U && std::abs(command.params.trailSegmentSeconds - 0.05F) < 0.0001F &&
+            command.params.trailWidth == 0.5F);
+    }
+    Require(trail, "A trail emitter must run on the GPU with its segment count, spacing and width");
+    Require(run(kb::scene::ParticleOutputType::Trail, true).empty(), "A local-space trail must stay on the CPU");
+}
+
 // Birth and death events of a GPU particle are queued by the backend itself, so sub-emitters work on the
 // GPU: one parent born by a manual emit dies 2 s later at its closed-form position (no acceleration, so
 // start + velocity * lifetime), and its death sub-emitter spawns child records there; a collision-triggered sub-emitter
@@ -2827,6 +2880,7 @@ void TestGpuSubEmitterEvents() {
 int main() {
     try {
         TestGpuSubEmitterEvents();
+        TestGpuMeshAndTrailRouting();
         TestGpuLocalSpaceEmitterRouting();
         TestGpuEmitterRouting();
         TestGpuEmitterCollisionRouting();

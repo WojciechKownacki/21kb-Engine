@@ -93,6 +93,12 @@ bool ParticleGpuRenderer::Initialize() {
     volumetricParamsUniform_ = bgfx::createUniform("u_particleVolumetricParams", bgfx::UniformType::Vec4);
     whiteTexture_ = CreateParticleSprite(256U, 256U, ParticleSpriteKind::EnergyGlow);
     streakTexture_ = CreateParticleSprite(256U, 256U, ParticleSpriteKind::VelocityStreak);
+    {
+        std::array<std::uint32_t, 16U> solid{};
+        solid.fill(0xFFFFFFFFU);
+        solidTexture_ = bgfx::createTexture2D(4U, 4U, false, 1U, bgfx::TextureFormat::RGBA8,
+            BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP, bgfx::copy(solid.data(), sizeof(solid)));
+    }
     if (!stripRenderer_.Initialize()) {
         Shutdown();
         return false;
@@ -111,6 +117,7 @@ void ParticleGpuRenderer::Shutdown() noexcept {
     gpuEmitters_.Shutdown();
     visualSimulation_.Shutdown();
     stripRenderer_.Shutdown();
+    if (bgfx::isValid(solidTexture_)) bgfx::destroy(solidTexture_);
     if (bgfx::isValid(streakTexture_)) bgfx::destroy(streakTexture_);
     if (bgfx::isValid(whiteTexture_)) bgfx::destroy(whiteTexture_);
     if (bgfx::isValid(depthParamsUniform_)) bgfx::destroy(depthParamsUniform_);
@@ -122,6 +129,7 @@ void ParticleGpuRenderer::Shutdown() noexcept {
     if (bgfx::isValid(sceneDepthSampler_)) bgfx::destroy(sceneDepthSampler_);
     if (bgfx::isValid(atlasSampler_)) bgfx::destroy(atlasSampler_);
     if (bgfx::isValid(program_)) bgfx::destroy(program_);
+    solidTexture_ = BGFX_INVALID_HANDLE;
     streakTexture_ = BGFX_INVALID_HANDLE;
     whiteTexture_ = BGFX_INVALID_HANDLE;
     depthParamsUniform_ = BGFX_INVALID_HANDLE;
@@ -347,7 +355,9 @@ void ParticleGpuRenderer::DispatchGpuEmitters(
     const SceneRenderCamera& camera,
     bgfx::TextureHandle sceneDepthTexture,
     std::uint32_t viewportWidth,
-    std::uint32_t viewportHeight) noexcept {
+    std::uint32_t viewportHeight,
+    const RenderResourceRegistry& resources,
+    const SceneRenderResourceMap& resourceMap) noexcept {
     if (!GpuEmittersReady()) return;
     const auto pending = gpuEmitterDispatchPending_.find(sceneId);
     if (pending == gpuEmitterDispatchPending_.end() || !pending->second) return;
@@ -359,8 +369,22 @@ void ParticleGpuRenderer::DispatchGpuEmitters(
     collision.cameraPosition = SceneLightingPacker::CameraPosition(&camera);
     collision.texelSize = { 1.0F / static_cast<float>(std::max(viewportWidth, 1U)), 1.0F / static_cast<float>(std::max(viewportHeight, 1U)) };
     collision.homogeneousDepth = SceneDepthPolicy::HomogeneousDepth();
+    collision.resources = &resources;
+    collision.resourceMap = &resourceMap;
     gpuEmitters_.Dispatch(viewId, sceneId, collision);
     pending->second = false;
+}
+
+void ParticleGpuRenderer::CollectGpuMeshDraws(std::uint64_t sceneId, std::vector<ParticleGpuMeshDraw>& draws) noexcept {
+    draws.clear();
+    if (!GpuEmittersReady()) return;
+    for (const ParticleGpuEmitterSimulation::Draw& draw : gpuEmitters_.Draws(sceneId)) {
+        const kb::particles::ParticleGpuEmitterParams& params = *draw.params;
+        if (params.output != kb::particles::ParticleRenderOutput::Mesh || params.meshAssetId == 0U) continue;
+        draws.push_back(ParticleGpuMeshDraw{ .meshAssetId = params.meshAssetId, .materialAssetId = params.materialAssetId,
+            .instances = draw.instances, .count = draw.capacity, .castsShadow = params.castsShadow,
+            .receivesShadow = params.receivesShadow });
+    }
 }
 
 ParticleGpuSubmitResult ParticleGpuRenderer::SubmitGpuEmitters(
@@ -383,11 +407,15 @@ ParticleGpuSubmitResult ParticleGpuRenderer::SubmitGpuEmitters(
     result.succeeded = true;
     for (const ParticleGpuEmitterSimulation::Draw& draw : gpuEmitters_.Draws(sceneId)) {
         const kb::particles::ParticleGpuEmitterParams& params = *draw.params;
+        if (params.output == kb::particles::ParticleRenderOutput::Mesh) continue; // drawn by the mesh pipeline
+        const bool trail = params.output == kb::particles::ParticleRenderOutput::Trail;
         bgfx::setUniform(cameraBasisUniform_, cameraBasis.data(), 3U);
         bgfx::setInstanceDataBuffer(draw.instances, 0U, draw.capacity);
         bgfx::setVertexBuffer(0U, quad->vertexBuffer);
         bgfx::setIndexBuffer(quad->indexBuffer);
-        const std::array<float, 4> emitterParams{ 1.0F, 1.0F, static_cast<float>(params.alignment), 1.0F };
+        // A trail segment is a quad stretched along its own direction (the velocity slot of the instance).
+        const float alignment = trail ? 1.0F : static_cast<float>(params.alignment);
+        const std::array<float, 4> emitterParams{ 1.0F, 1.0F, alignment, 1.0F };
         const std::array<float, 4> localBasis{ 0.0F, 0.0F, 0.0F, 1.0F };
         const bool soft = params.softParticles && bgfx::isValid(sceneDepthTexture);
         const std::array<float, 4> depthParams{
@@ -404,7 +432,8 @@ ParticleGpuSubmitResult ParticleGpuRenderer::SubmitGpuEmitters(
         bgfx::TextureHandle atlas =
             params.output == kb::particles::ParticleRenderOutput::StretchedBillboard && bgfx::isValid(streakTexture_)
             ? streakTexture_ : whiteTexture_;
-        if (params.textureAtlasAssetId != 0U) {
+        if (trail && bgfx::isValid(solidTexture_)) atlas = solidTexture_;
+        if (params.textureAtlasAssetId != 0U && !trail) {
             const RenderTextureHandle atlasHandle =
                 resourceMap.ResolveTexture(params.textureAtlasAssetId, RenderTextureColorSpace::Srgb);
             if (const RenderTextureResource* texture = resources.FindTexture(atlasHandle);

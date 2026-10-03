@@ -148,7 +148,8 @@ bool SceneRenderer::HasGpuParticleEmitters(std::uint64_t sceneId) const noexcept
 void SceneRenderer::DispatchGpuParticleEmitters(
     bgfx::ViewId viewId, const SceneRenderCamera& camera, std::uint32_t viewportWidth, std::uint32_t viewportHeight) {
     if (particleRenderer_ == nullptr || gpuParticleSceneId_ == 0U) return;
-    particleRenderer_->DispatchGpuEmitters(viewId, gpuParticleSceneId_, camera, sceneDepthTexture_, viewportWidth, viewportHeight);
+    particleRenderer_->DispatchGpuEmitters(viewId, gpuParticleSceneId_, camera, sceneDepthTexture_, viewportWidth, viewportHeight,
+        resources_, resourceMap_);
 }
 
 void SceneRenderer::SyncGpuParticleEmitters(kb::scene::Scene& scene, float frameDeltaSeconds, std::uint64_t frameIndex) {
@@ -260,6 +261,11 @@ void SceneRenderer::SubmitMeshPass(
 
     if (meshSubmitter_ != nullptr) {
         const auto& particleSnapshot = renderScene.ParticleRenderSnapshot();
+        if (particleRenderer_ != nullptr && gpuParticleSceneId_ != 0U) {
+            particleRenderer_->CollectGpuMeshDraws(gpuParticleSceneId_, gpuMeshDrawScratch_);
+        } else {
+            gpuMeshDrawScratch_.clear();
+        }
         lastSubmitStats_ = meshSubmitter_->Submit(
             viewId,
             renderScene,
@@ -285,7 +291,8 @@ void SceneRenderer::SubmitMeshPass(
             // particleRenderer_'s quad/billboard path above) need the snapshot in every pass - their
             // material determines opaque/GBuffer/transparent/ShadowDepth participation the same way
             // it already does for ordinary meshes, so this cannot stay gated to BaseTransparent only.
-            particleSnapshot.get());
+            particleSnapshot.get(),
+            gpuMeshDrawScratch_);
         if (pass == MeshPassType::BaseTransparent && particleRenderer_ != nullptr && gpuParticleSceneId_ != 0U) {
             const ParticleGpuSubmitResult gpuEmitters = particleRenderer_->SubmitGpuEmitters(
                 viewId, gpuParticleSceneId_, *camera, resources_, resourceMap_, sceneDepthTexture_);

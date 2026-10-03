@@ -12,6 +12,20 @@
 
 namespace kb::render {
 
+class RenderResourceRegistry;
+class SceneRenderResourceMap;
+
+// A GPU emitter that draws mesh instances: the mesh pipeline binds `instances` (a compute-written buffer in its own
+// instance layout, `count` entries) and applies the material.
+struct ParticleGpuMeshDraw {
+    std::uint64_t meshAssetId = 0U;
+    std::uint64_t materialAssetId = 0U;
+    bgfx::DynamicVertexBufferHandle instances = BGFX_INVALID_HANDLE;
+    std::uint32_t count = 0U;
+    bool castsShadow = false;
+    bool receivesShadow = true;
+};
+
 // Renderer side of GPU-simulated particle emitters. Owns, per emitter, a ring buffer of birth records
 // and the instance buffer a compute pass rebuilds every frame from them; nothing is read back.
 class ParticleGpuEmitterSimulation final {
@@ -19,6 +33,7 @@ public:
     struct Draw {
         const kb::particles::ParticleGpuEmitterParams* params = nullptr;
         bgfx::DynamicVertexBufferHandle instances = BGFX_INVALID_HANDLE;
+        // Instances in the buffer: the slot count, times the segments per slot of a trail emitter.
         std::uint32_t capacity = 0U;
     };
 
@@ -41,6 +56,9 @@ public:
         std::array<float, 4> cameraPosition{};
         std::array<float, 2> texelSize{};
         bool homogeneousDepth = false;
+        // Resolve the material of a mesh emitter, whose base colour goes into the instance colour.
+        const RenderResourceRegistry* resources = nullptr;
+        const SceneRenderResourceMap* resourceMap = nullptr;
     };
 
     // Rebuilds the instance buffers of the scene emitters; call once per rendered frame.
@@ -82,6 +100,8 @@ private:
         bgfx::DynamicVertexBufferHandle sortKeys = BGFX_INVALID_HANDLE;
         bgfx::DynamicVertexBufferHandle sortedInstances = BGFX_INVALID_HANDLE;
         std::uint32_t capacity = 0U;
+        // Instances written per slot: 1, or the trail segments.
+        std::uint32_t perSlot = 1U;
         std::uint64_t nextSlot = 0U;
         std::uint64_t bytes = 0U;
     };
@@ -127,6 +147,7 @@ private:
     bgfx::UniformHandle timeUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle colorUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle sizeUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle outputUniform_ = BGFX_INVALID_HANDLE;
     std::unordered_map<Key, Emitter, KeyHash> emitters_;
     std::unordered_map<std::uint64_t, SceneClock> scenes_;
     std::uint64_t allocatedBytes_ = 0U;

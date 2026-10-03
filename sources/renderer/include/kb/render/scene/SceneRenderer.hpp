@@ -2,6 +2,7 @@
 
 #include "engine/particles/ParticleRenderCapabilities.hpp"
 #include "kb/render/MaterialProgramRegistry.hpp"
+#include "kb/render/particles/ParticleGpuEmitterSimulation.hpp"
 #include "kb/render/resources/RenderResourceRegistry.hpp"
 #include "kb/render/resources/RenderSkinningPaletteAllocator.hpp"
 #include "kb/render/scene/MeshPipeline.hpp"
@@ -111,6 +112,7 @@ private:
         RenderSkinningPaletteAllocatorDesc{ .matrixCapacityPerFrame = 4096U } };
     std::unique_ptr<SceneMeshSubmitter> meshSubmitter_;
     std::unique_ptr<ParticleGpuRenderer> particleRenderer_;
+    mutable std::vector<ParticleGpuMeshDraw> gpuMeshDrawScratch_;
     std::uint64_t gpuParticleSceneId_ = 0U;
     mutable MeshPipelineBuildResult validationPipelineScratch_;
     mutable SceneRenderSubmitStats lastSubmitStats_{};

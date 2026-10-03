@@ -55,6 +55,10 @@ struct MeshDrawCommand {
     RenderSkinningPaletteHandle currentSkinningPalette{};
     RenderSkinningPaletteHandle previousSkinningPalette{};
     std::vector<SceneRenderMeshInstance> instances;
+    // Instances produced on the GPU (a compute-written buffer in the mesh instance layout): drawn as they are,
+    // `instances` then holds one placeholder that only identifies the source.
+    bgfx::DynamicVertexBufferHandle gpuInstanceBuffer = BGFX_INVALID_HANDLE;
+    std::uint32_t gpuInstanceCount = 0U;
     // Nonzero only for a successfully validated, retained instance list.
     std::uint64_t instanceRevision = 0U;
     std::uint64_t sourceBatchId = 0U;
