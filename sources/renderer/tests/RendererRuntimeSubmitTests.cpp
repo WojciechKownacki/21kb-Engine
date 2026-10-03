@@ -6772,6 +6772,76 @@ void RunRendererDrawsGpuSimulatedParticlesTest() {
     renderer.Shutdown();
 }
 
+
+// One GPU emitter holding 1,048,576 live particles: far above the CPU pipeline cap of 262,144.
+void RunRendererDrawsMillionGpuParticlesTest() {
+    kb::scene::Scene scene;
+    NativeTestSurface surface;
+    Require(surface.IsValid(), "Million particle test could not create a hidden D3D11 surface");
+    DisplayConfig config{};
+    config.syncMode = DisplaySyncMode::Uncapped;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "Million particle test could not initialize the renderer");
+    renderer.SetRuntimeAssetDiscoveryEnabled(false);
+
+    SceneRenderCamera camera{};
+    bx::mtxLookAt(camera.view.data(), bx::Vec3{ 0.0F, 0.0F, -10.0F }, bx::Vec3{ 0.0F, 0.0F, 5.0F });
+    SceneDepthPolicy::MakePerspective(camera.projection.data(), 30.0F, 1.0F, 0.1F, 100.0F, SceneDepthPolicy::HomogeneousDepth());
+    {
+        ParticleMeshReadbackTarget target;
+        Require(target.Initialize(), "Million particle test could not create its readback target");
+        const RenderSceneSubmitDesc desc{
+            .target = target.Binding(),
+            .cameraOverride = camera,
+            .meshPassMode = SceneRenderMeshPassMode::OpaqueAndTransparent,
+            .clearRgba = 0x000000FFU,
+            .editorSceneOverlaysEnabled = false,
+            .shadowPassEnabled = false,
+            .postProcessEnabled = false,
+            .selectionMaskEnabled = false,
+            .selectionOutlineEnabled = false,
+        };
+        SubmitLifecycleFrame(renderer, scene, desc, "Million particle test did not submit its first frame");
+
+        constexpr std::uint32_t kCount = kb::particles::kParticleGpuMaxCapacity;
+        kb::particles::ParticleGpuEmitterCommand command{};
+        command.key = { 1U, 1U };
+        command.simTime = 0.5;
+        command.hasParams = true;
+        command.params.capacity = kCount;
+        command.params.blend = kb::particles::ParticleRenderBlendMode::Add;
+        command.params.depth = kb::particles::ParticleRenderDepthMode::Disabled;
+        command.params.color.fill({ 0.5F, 0.5F, 0.5F, 1.0F });
+        command.params.size.fill(0.05F);
+        command.spawns.resize(kCount);
+        std::uint32_t seed = 12345U;
+        const auto random01 = [&seed] {
+            seed = seed * 1664525U + 1013904223U;
+            return static_cast<float>(seed >> 8U) / 16777216.0F;
+        };
+        for (kb::particles::ParticleGpuSpawn& spawn : command.spawns) {
+            spawn.position = { (random01() - 0.5F) * 6.0F, (random01() - 0.5F) * 6.0F, 5.0F };
+            spawn.birthTime = 0.0F;
+            spawn.lifetime = 10.0F;
+        }
+        kb::particles::ParticlePlayback::QueueGpuEmitterCommand(scene, command);
+        SubmitLifecycleFrame(renderer, scene, desc, "Million particle test did not submit the spawn frame");
+        const auto start = std::chrono::steady_clock::now();
+        for (int frame = 0; frame < 10; ++frame) {
+            SubmitLifecycleFrame(renderer, scene, desc, "Million particle test did not submit a steady frame");
+        }
+        const double milliseconds = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count() / 10.0;
+        const std::vector<std::uint8_t> pixels = target.ReadPixels();
+        std::size_t lit = 0U;
+        for (std::size_t offset = 0U; offset < pixels.size(); offset += 4U) lit += pixels[offset] > 20U;
+        std::fprintf(stderr, "gpu_million_particles lit_pixels=%zu of 4096 frame_ms=%.2f%c",
+            lit, milliseconds, 10);
+        Require(lit > 2000U, "A million GPU particles must cover the box they were spread over");
+    }
+    renderer.Shutdown();
+}
+
 void RunRendererRendersPointLightShadowTest() {
     ShadowFloorScene scene{};
     scene.lightCastsShadow = false;
@@ -6793,6 +6863,7 @@ void RunRendererParticleMeshSnapshotSubmitTest() {
     RunRendererRendersDirectionalCascadeShadowTest();
     RunRendererRendersScreenSpaceGiBounceTest();
     RunRendererDrawsGpuSimulatedParticlesTest();
+    RunRendererDrawsMillionGpuParticlesTest();
 #endif
 }
 
