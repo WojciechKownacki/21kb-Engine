@@ -6502,6 +6502,8 @@ struct ShadowFloorScene {
     bool point = true;
     bool spot = false;
     bool lightCastsShadow = true;
+    int extraPointLights = 0; // more shadow-casting point lights just beside the main one
+    float pointIntensity = 3.0F;
     bx::Vec3 cameraPosition{ 0.0F, 2.0F, -14.0F };
     float fovDegrees = 40.0F;
 };
@@ -6547,7 +6549,14 @@ struct ShadowFloorScene {
     scene.Components().Lights().Set(light, kb::scene::LightComponent{
         .kind = setup.point ? kb::scene::LightKind::Point
               : setup.spot ? kb::scene::LightKind::Spot : kb::scene::LightKind::Directional,
-        .intensity = setup.point || setup.spot ? 3.0F : 1.0F, .range = 30.0F, .castsShadow = lightCastsShadow });
+        .intensity = setup.point ? setup.pointIntensity : setup.spot ? 3.0F : 1.0F, .range = 30.0F, .castsShadow = lightCastsShadow });
+    for (int extra = 0; extra < setup.extraPointLights; ++extra) {
+        const float angle = static_cast<float>(extra) * 1.3F;
+        const kb::scene::SceneEntity other = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+            .name = "Extra Shadow Light", .transform = TransformAt(0.4F * std::cos(angle), 6.0F, 0.4F * std::sin(angle)) });
+        scene.Components().Lights().Set(other, kb::scene::LightComponent{
+            .kind = kb::scene::LightKind::Point, .intensity = setup.pointIntensity, .range = 30.0F, .castsShadow = lightCastsShadow });
+    }
 
     NativeTestSurface surface;
     Require(surface.IsValid(), "Point shadow test could not create a hidden D3D11 surface");
@@ -6557,6 +6566,13 @@ struct ShadowFloorScene {
     Renderer renderer;
     Require(renderer.Initialize(surface, &config), "Point shadow test could not initialize the renderer");
     renderer.SetRuntimeAssetDiscoveryEnabled(false);
+    if (setup.extraPointLights > 0) {
+        // The default lighting path lights four lights; many lights need the clustered one.
+        SceneRenderLightingConfig lighting{};
+        lighting.lightingPath = SceneRenderLightingPath::ClusteredForwardPlus;
+        lighting.maxForwardLights = kMaxSceneForwardPlusLights;
+        renderer.SetDefaultSceneLightingConfig(lighting);
+    }
 
     SceneRenderCamera camera{};
     bx::mtxLookAt(camera.view.data(), setup.cameraPosition, bx::Vec3{ 0.0F, 0.0F, 0.0F });
@@ -7476,6 +7492,26 @@ void RunRendererRendersSpotLightShadowTest() {
     Require(shadowed * 10 < unshadowed * 8, "Spot shadow test: the plate must darken the floor beneath a spot light");
 }
 
+// More shadow-casting point lights than the old limit of four: the fifth and sixth must shadow the floor too.
+// The share of light that survives the plate is measured for four lights (the old limit) and for six; it must
+// not grow when lights are added.
+[[nodiscard]] double PointShadowSurvivingShare(int extraPointLights) {
+    ShadowFloorScene scene{ .extraPointLights = extraPointLights, .pointIntensity = 0.5F };
+    scene.lightCastsShadow = false;
+    const int unshadowed = RenderShadowFloorBrightness(scene);
+    scene.lightCastsShadow = true;
+    const int shadowed = RenderShadowFloorBrightness(scene);
+    Require(unshadowed > 100 && unshadowed < 700, "Multi point light test: the unshadowed floor must be lit but not saturated");
+    return static_cast<double>(shadowed) / static_cast<double>(unshadowed);
+}
+
+void RunRendererRendersSixPointLightShadowsTest() {
+    const double four = PointShadowSurvivingShare(3);
+    const double six = PointShadowSurvivingShare(5);
+    std::fprintf(stderr, "multi_point_shadow_share four=%.3f six=%.3f%c", four, six, 10);
+    Require(six < four + 0.05, "Six point light test: the fifth and sixth light must be shadowed by the plate like the first four");
+}
+
 void RunRendererRendersPointLightShadowTest() {
     ShadowFloorScene scene{};
     scene.lightCastsShadow = false;
@@ -7495,6 +7531,7 @@ void RunRendererParticleMeshSnapshotSubmitTest() {
     RunRendererDrawsPublishedRuntimeTexturePixelsTest();
     RunRendererRendersPointLightShadowTest();
     RunRendererRendersSpotLightShadowTest();
+    RunRendererRendersSixPointLightShadowsTest();
     RunRendererRendersDirectionalCascadeShadowTest();
     RunRendererBlendsShadowCascadesTest();
     RunRendererRendersScreenSpaceGiBounceTest();

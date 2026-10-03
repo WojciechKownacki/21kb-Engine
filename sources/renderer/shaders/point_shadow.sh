@@ -10,9 +10,9 @@ SAMPLER2D(s_pointShadowMap, 1);
 #else
 SAMPLER2D(s_pointShadowMap, 9);
 #endif
-uniform vec4 u_pointShadowLight[4]; // xyz = light position, w = packed light slot (< 0 = none)
-uniform vec4 u_pointShadowDepth[4]; // x = near plane, y = far plane, z = depth bias (m)
-uniform vec4 u_pointShadowSpot[4];  // xyz = spot axis, w = tan(half fov) (0 = cube light)
+uniform vec4 u_pointShadowLight[8]; // xyz = light position, w = packed light slot (< 0 = none)
+uniform vec4 u_pointShadowDepth[8]; // x = near plane, y = far plane, z = depth bias (m)
+uniform vec4 u_pointShadowSpot[8];  // xyz = spot axis, w = tan(half fov) (0 = cube light)
 uniform vec4 u_pointShadowAtlas;    // x,y = 1 / atlas size, z = tile px, w = tan(half fov)
 uniform vec4 u_pointShadowInfo;     // x = light count, y = texture v scale (+-0.5), z = strength
 
@@ -35,7 +35,7 @@ float KbPointShadowTap(vec2 tilePx, vec2 tileOrigin, float fragmentDepth, float 
 float KbPointShadowFactor(int lightSlot, vec3 worldPos)
 {
     int count = int(u_pointShadowInfo.x);
-    for (int s = 0; s < 4; ++s) {
+    for (int s = 0; s < 8; ++s) {
         if (s >= count) {
             break;
         }

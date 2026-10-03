@@ -16,7 +16,11 @@ struct PackedSceneLighting {
     // matched to the slot the shader loops over.
     std::array<std::uint64_t, kMaxSceneForwardPlusLights> slotEntityId{};
     // Packed light slot of each point-shadow light, or -1 when it did not fit the uniform budget.
-    std::array<float, ScenePointShadowBinding::kMaxLights> pointShadowSlot{ -1.0F, -1.0F, -1.0F, -1.0F };
+    std::array<float, ScenePointShadowBinding::kMaxLights> pointShadowSlot = [] {
+        std::array<float, ScenePointShadowBinding::kMaxLights> slots{};
+        slots.fill(-1.0F);
+        return slots;
+    }();
     std::array<float, kMaxSceneForwardPlusLights * 4U> dirKind{};
     std::array<float, kMaxSceneForwardPlusLights * 4U> positionRange{};
     std::array<float, kMaxSceneForwardPlusLights * 4U> colorIntensity{};

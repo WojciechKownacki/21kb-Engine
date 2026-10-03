@@ -55,7 +55,7 @@ public:
         std::uint32_t cameraCullingMask,
         bgfx::TextureHandle depthTexture) noexcept;
 
-    [[nodiscard]] static std::uint32_t TileSizeFor(const SceneRenderLightingConfig& lightingConfig) noexcept;
+    [[nodiscard]] static std::uint32_t TileSizeFor(const SceneRenderLightingConfig& lightingConfig, std::uint32_t lightCount) noexcept;
 };
 
 } // namespace kb::render
