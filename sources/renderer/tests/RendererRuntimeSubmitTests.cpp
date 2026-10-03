@@ -7375,6 +7375,49 @@ void RunRendererSpinsGpuMeshParticlesTest() {
     Require(spinningZ[0] > 60 && spinningY[0] > 60, "GPU mesh spin test: a cube with an angular velocity must have turned by its age");
 }
 
+// A mesh particle flying along +x that follows its velocity has its Y axis along x, so a quarter turn about its own
+// Z axis (which then points along the world's Y) widens the cube to the side only; without the alignment the same
+// turn is about the view axis and widens it both ways.
+[[nodiscard]] std::array<int, 2> GpuMeshFlyingReach(bool followVelocity) {
+    constexpr std::uint16_t kSize = 64U;
+    const std::vector<kb::scene::Vec3> lights{ { 0.0F, 3.0F, -4.0F } };
+    SceneRenderLightingConfig lighting{};
+    const auto queue = [&](kb::scene::Scene& scene, int frame) {
+        if (frame != 1) return;
+        const kb::assets::AssetMetadata* mesh = scene.Assets().Manager().Registry().FindByPath("/Game/cube.obj");
+        Require(mesh != nullptr, "GPU mesh alignment test lost its cube mesh");
+        kb::particles::ParticleGpuEmitterCommand command{};
+        command.key = { 1U, 1U };
+        command.simTime = 0.5;
+        command.hasParams = true;
+        command.params.capacity = 16U;
+        command.params.output = kb::particles::ParticleRenderOutput::Mesh;
+        command.params.alignment = followVelocity ? kb::particles::ParticleRenderAlignment::Velocity
+                                                  : kb::particles::ParticleRenderAlignment::CameraFacing;
+        command.params.meshAssetId = mesh->id.value;
+        command.params.materialAssetId = kb::assets::MakeAssetId("SsRed").value;
+        command.params.color.fill({ 1.0F, 1.0F, 1.0F, 1.0F });
+        command.params.size.fill(2.0F);
+        command.params.spinMin = command.params.spinMax = { 0.0F, 0.0F, 0.7853982F };
+        // The clock stands at about 0.4833 s, so the particle born at x = -1.9333 with 4 m/s is at the centre.
+        command.spawns.push_back(kb::particles::ParticleGpuSpawn{
+            .position = { -1.9333F, 0.0F, 5.0F }, .birthTime = 0.0F, .velocity = { 4.0F, 0.0F, 0.0F }, .lifetime = 20.0F });
+        kb::particles::ParticlePlayback::QueueGpuEmitterCommand(scene, command);
+    };
+    const std::vector<SsBox> boxes{ { { 0.0F, -40.0F, 0.0F }, { 1.0F, 1.0F, 1.0F }, SsMaterial::Red } };
+    const auto pixels = RenderScreenSpaceScene(boxes, lights, bx::Vec3{ 0.0F, 0.0F, -10.0F }, bx::Vec3{ 0.0F, 0.0F, 5.0F }, 30.0F,
+        lighting, 4, kSize, SceneRenderMeshPassMode::OpaqueAndTransparent, queue);
+    return { pixels[(32U * kSize + 42U) * 4U], pixels[(42U * kSize + 32U) * 4U] };
+}
+
+void RunRendererAlignsGpuMeshParticlesToVelocityTest() {
+    const auto followed = GpuMeshFlyingReach(true);
+    const auto free = GpuMeshFlyingReach(false);
+    std::fprintf(stderr, "gpu_mesh_align followed=%d,%d free=%d,%d%c", followed[0], followed[1], free[0], free[1], 10);
+    Require(followed[0] > 60 && followed[1] < 20, "GPU mesh alignment test: a mesh following its velocity must turn about the world Y axis");
+    Require(free[0] > 60 && free[1] > 60, "GPU mesh alignment test: without the alignment the turn is about the view axis");
+}
+
 // Two overlapping translucent mesh particles, the older one blue and the younger one red: whichever is nearer
 // to the camera must be drawn last and so dominate, whatever the order of their ring slots.
 [[nodiscard]] std::array<int, 3> GpuTranslucentMeshCentre(bool olderIsNearer, bool translucent) {
@@ -7881,6 +7924,7 @@ void RunRendererParticleMeshSnapshotSubmitTest() {
     RunRendererSortsAlphaGpuParticlesTest();
     RunRendererDrawsGpuMeshParticlesTest();
     RunRendererSpinsGpuMeshParticlesTest();
+    RunRendererAlignsGpuMeshParticlesToVelocityTest();
     RunRendererSortsTranslucentGpuMeshParticlesTest();
     RunRendererOrdersGpuMeshParticlesAmongSceneMeshesTest();
     RunRendererDrawsGpuTrailParticlesTest();

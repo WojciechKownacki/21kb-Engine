@@ -401,6 +401,26 @@ void TestMeshBatchBuilderOrdersTranslucentAndSpins() {
     Require(build(3010U, Sort::Age).first == std::vector<std::uint64_t>{3U, 1U, 2U}, "age order is wrong (oldest first)");
     Require(build(3011U, Sort::BackToFront).first == std::vector<std::uint64_t>{1U, 2U, 3U}, "an opaque mesh emitter must keep the snapshot order");
     Require(build(3010U, Sort::None).first == std::vector<std::uint64_t>{1U, 2U, 3U}, "sort mode None must keep the snapshot order");
+    // A mesh that follows its velocity (here +x): its Y axis is the velocity, X = (0, 0, -1) and Z = (0, -1, 0); a particle
+    // that stands still keeps the emitter's basis.
+    {
+        kb::particles::ParticleRenderEmitterRecord emitter = Emitter(0U, 2U, Sort::None);
+        emitter.output = kb::particles::ParticleRenderOutput::Mesh;
+        emitter.alignment = kb::particles::ParticleRenderAlignment::Velocity;
+        emitter.meshAssetId = 4010U;
+        emitter.localBasisQuaternionSnorm = {0, 0, 0, 32'767};
+        std::array<kb::particles::ParticleRenderRecord, 2U> particles{Particle(1U, 0.0F, 1.0F, 0U), Particle(2U, 0.0F, 2.0F, 0U)};
+        particles[1].velocity = {};
+        const std::array emitters{emitter};
+        kb::render::ParticleMeshBatchBuilder builder;
+        builder.Build(*Snapshot(emitters, particles));
+        const auto& moving = builder.Batches().front().instances[0].model;
+        const auto& still = builder.Batches().front().instances[1].model;
+        Require(std::fabs(moving[4] - 1.0F) < 0.001F && std::fabs(moving[2] + 1.0F) < 0.001F && std::fabs(moving[9] + 1.0F) < 0.001F,
+                "a mesh following its +x velocity did not get Y = velocity, X = -Z and Z = -Y");
+        Require(std::fabs(still[0] - 1.0F) < 0.001F && std::fabs(still[5] - 1.0F) < 0.001F && std::fabs(still[10] - 1.0F) < 0.001F,
+                "a standing particle must keep the emitter's basis");
+    }
     // A turn about Y alone: the Z axis becomes X (and the X axis becomes -Z).
     {
         kb::particles::ParticleRenderEmitterRecord emitter = Emitter(0U, 1U, Sort::None);

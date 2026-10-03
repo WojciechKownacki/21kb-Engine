@@ -417,7 +417,10 @@ void ParticleGpuEmitterSimulation::Dispatch(bgfx::ViewId viewId, std::uint64_t s
         bgfx::setUniform(sizeUniform_, params.size.data(), 2U);
         const float outputMode = params.output == kb::particles::ParticleRenderOutput::Mesh ? 1.0F
             : params.output == kb::particles::ParticleRenderOutput::Trail ? 2.0F : 0.0F;
-        const std::array<float, 4> output{ outputMode, static_cast<float>(emitter.perSlot), params.trailSegmentSeconds, params.trailWidth };
+        const bool followsVelocity = params.output == kb::particles::ParticleRenderOutput::Mesh &&
+            params.alignment == kb::particles::ParticleRenderAlignment::Velocity;
+        const std::array<float, 4> output{ outputMode, static_cast<float>(emitter.perSlot),
+            followsVelocity ? 1.0F : params.trailSegmentSeconds, params.trailWidth };
         bgfx::setUniform(outputUniform_, output.data());
         const std::array<float, 16> spin{ params.spinMin.x, params.spinMin.y, params.spinMin.z, 0.0F,
             params.spinMax.x, params.spinMax.y, params.spinMax.z, 0.0F,
