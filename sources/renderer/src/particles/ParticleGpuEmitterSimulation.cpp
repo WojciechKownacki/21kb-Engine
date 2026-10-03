@@ -3,6 +3,8 @@
 #include "engine/scene/ParticleEffectAssetSchema.hpp"
 #include "kb/render/ShaderLoader.hpp"
 
+#include <bx/math.h>
+
 #include <algorithm>
 #include <array>
 #include <cstring>
@@ -72,6 +74,9 @@ bool ParticleGpuEmitterSimulation::Initialize() {
         static_cast<std::uint16_t>(kb::particles::kParticleGpuCurveSamples));
     sizeUniform_ = bgfx::createUniform("u_gpuParticleSize", bgfx::UniformType::Vec4, 2U);
     collideProgram_ = ShaderLoader::LoadComputeProgram("cs_particle_gpu_collide.sc");
+    worldUniform_ = bgfx::createUniform("u_gpuParticleWorld", bgfx::UniformType::Mat4);
+    worldInverseUniform_ = bgfx::createUniform("u_gpuParticleWorldInverse", bgfx::UniformType::Mat4);
+    localUniform_ = bgfx::createUniform("u_gpuParticleLocal", bgfx::UniformType::Vec4);
     planeUniform_ = bgfx::createUniform("u_gpuParticlePlane", bgfx::UniformType::Vec4, 2U);
     collisionUniform_ = bgfx::createUniform("u_gpuParticleCollision", bgfx::UniformType::Vec4);
     depthBounceUniform_ = bgfx::createUniform("u_gpuParticleDepthBounce", bgfx::UniformType::Vec4);
@@ -102,7 +107,7 @@ bool ParticleGpuEmitterSimulation::IsReady() const noexcept {
 
 void ParticleGpuEmitterSimulation::Shutdown() noexcept {
     ReleaseAllScenes();
-    for (bgfx::UniformHandle* handle : { &motionUniform_, &timeUniform_, &colorUniform_, &sizeUniform_, &planeUniform_,
+    for (bgfx::UniformHandle* handle : { &motionUniform_, &timeUniform_, &colorUniform_, &sizeUniform_, &worldUniform_, &worldInverseUniform_, &localUniform_, &planeUniform_,
              &collisionUniform_, &depthBounceUniform_, &texelUniform_, &viewProjectionUniform_, &depthSampler_,
              &inverseViewProjectionUniform_, &depthParamsUniform_, &cameraPositionUniform_, &sortCameraUniform_,
              &sortParamsUniform_ }) {
@@ -300,6 +305,10 @@ void ParticleGpuEmitterSimulation::Apply(
             }
         }
         if (found == emitters_.end()) continue;
+        if (command.hasWorldMatrix) {
+            found->second.world = command.worldMatrix;
+            bx::mtxInverse(found->second.worldInverse.data(), command.worldMatrix.data());
+        }
         if (command.clear) Clear(found->second);
         Upload(found->second, command.spawns);
     }
@@ -354,6 +363,10 @@ void ParticleGpuEmitterSimulation::Dispatch(bgfx::ViewId viewId, std::uint64_t s
             bgfx::setUniform(depthParamsUniform_, depthParams.data());
             bgfx::setUniform(cameraPositionUniform_, collision.cameraPosition.data());
         }
+        const std::array<float, 4> local{ params.localSpace ? 1.0F : 0.0F, 0.0F, 0.0F, 0.0F };
+        bgfx::setUniform(worldUniform_, emitter.world.data());
+        bgfx::setUniform(worldInverseUniform_, emitter.worldInverse.data());
+        bgfx::setUniform(localUniform_, local.data());
         bgfx::setUniform(motionUniform_, motion.data());
         bgfx::setUniform(timeUniform_, time.data());
         bgfx::setUniform(colorUniform_, colors.data(), static_cast<std::uint16_t>(kb::particles::kParticleGpuCurveSamples));

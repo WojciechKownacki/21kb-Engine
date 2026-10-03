@@ -7,6 +7,12 @@
 BUFFER_RO(spawnRecords, vec4, 0);
 #include "particle_gpu_common.sh"
 
+// Local-space emitters: the birth records are in the owner's frame; u_gpuParticleWorld carries them to
+// world space every frame. The (world-space) acceleration is expressed in that frame for the closed form.
+uniform mat4 u_gpuParticleWorld;
+uniform mat4 u_gpuParticleWorldInverse;
+uniform vec4 u_gpuParticleLocal; // x = 1 for a local-space emitter
+
 NUM_THREADS(64, 1, 1)
 void main()
 {
@@ -27,7 +33,12 @@ void main()
         return;
     }
 
+    bool local = u_gpuParticleLocal.x > 0.5;
     vec3 accel = u_gpuParticleMotion.xyz;
+    if (local)
+    {
+        accel = mul(u_gpuParticleWorldInverse, vec4(accel, 0.0)).xyz;
+    }
     float drag = u_gpuParticleMotion.w;
     vec3 position;
     vec3 velocity;
@@ -44,5 +55,10 @@ void main()
         position = start.xyz + motion.xyz * age + accel * (0.5 * age * age);
     }
 
+    if (local)
+    {
+        position = mul(u_gpuParticleWorld, vec4(position, 1.0)).xyz;
+        velocity = mul(u_gpuParticleWorld, vec4(velocity, 0.0)).xyz;
+    }
     WriteLiveInstance(base, position, velocity, age / lifetime);
 }

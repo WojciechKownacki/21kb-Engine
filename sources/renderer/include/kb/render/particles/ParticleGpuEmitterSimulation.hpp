@@ -70,6 +70,9 @@ private:
     };
     struct Emitter {
         kb::particles::ParticleGpuEmitterParams params{};
+        // Owner matrix of a local-space emitter (identity for world-space ones) and its inverse.
+        std::array<float, 16> world{ 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F };
+        std::array<float, 16> worldInverse = world;
         bgfx::DynamicVertexBufferHandle spawns = BGFX_INVALID_HANDLE;
         bgfx::DynamicVertexBufferHandle instances = BGFX_INVALID_HANDLE;
         // Per-slot position/velocity record of the colliding kernel; only created for colliding emitters.
@@ -101,6 +104,9 @@ private:
     bgfx::ProgramHandle program_ = BGFX_INVALID_HANDLE;
     // Optional: without it (e.g. no variant for this backend) colliding emitters use the closed-form kernel.
     bgfx::ProgramHandle collideProgram_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle worldUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle worldInverseUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle localUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle planeUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle collisionUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle depthBounceUniform_ = BGFX_INVALID_HANDLE;
