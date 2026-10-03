@@ -321,7 +321,8 @@ struct SceneRenderLightingConfig {
 
 // Cube shadows of up to four point lights share one depth atlas: face f of light s occupies the
 // tile at column f, row s. Faces use a slightly wider than 90 degree frustum so that filtering
-// near a face edge stays inside the tile.
+// near a face edge stays inside the tile. A spot light takes a slot too but renders only column 0,
+// one frustum along its axis that covers the cone.
 struct ScenePointShadowBinding {
     static constexpr std::uint32_t kMaxLights = 4U;
     static constexpr std::uint32_t kFaceCount = 6U;
@@ -330,6 +331,7 @@ struct ScenePointShadowBinding {
     std::array<std::uint64_t, kMaxLights> entityId{};
     std::array<float, 4U * kMaxLights> positionRange{}; // xyz = light position, w = far plane
     std::array<float, 4U * kMaxLights> depthParams{};   // x = near plane, y = depth bias (m)
+    std::array<float, 4U * kMaxLights> spot{};          // xyz = spot axis, w = tan(half fov); w = 0 for a cube light
     std::array<float, 4U> atlas{};                      // x,y = 1 / atlas size, z = tile px, w = tan(half fov)
     float strength = 0.0F;                              // 0 = no darkening, 1 = fully dark
 

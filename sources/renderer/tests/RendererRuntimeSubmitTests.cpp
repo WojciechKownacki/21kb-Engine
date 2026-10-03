@@ -6495,6 +6495,7 @@ void RunRendererDrawsPublishedRuntimeTexturePixelsTest() {
 // renderer into a hidden offscreen target, so the comparison needs no reference image.
 struct ShadowFloorScene {
     bool point = true;
+    bool spot = false;
     bool lightCastsShadow = true;
     bx::Vec3 cameraPosition{ 0.0F, 2.0F, -14.0F };
     float fovDegrees = 40.0F;
@@ -6503,7 +6504,7 @@ struct ShadowFloorScene {
 [[nodiscard]] int RenderShadowFloorBrightness(const ShadowFloorScene& setup) {
     const bool lightCastsShadow = setup.lightCastsShadow;
     const std::filesystem::path root = std::filesystem::temp_directory_path() /
-        ("21kb_shadow_floor_" + std::to_string(GetCurrentProcessId()) + (setup.point ? "_p" : "_d") + (lightCastsShadow ? "_on" : "_off"));
+        ("21kb_shadow_floor_" + std::to_string(GetCurrentProcessId()) + (setup.point ? "_p" : setup.spot ? "_s" : "_d") + (lightCastsShadow ? "_on" : "_off"));
     std::error_code error;
     std::filesystem::create_directories(root, error);
     Require(!error, "Point shadow test could not create its asset directory");
@@ -6539,8 +6540,9 @@ struct ShadowFloorScene {
     const kb::scene::SceneEntity light = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
         .name = "Shadow Light", .transform = lightTransform });
     scene.Components().Lights().Set(light, kb::scene::LightComponent{
-        .kind = setup.point ? kb::scene::LightKind::Point : kb::scene::LightKind::Directional,
-        .intensity = setup.point ? 3.0F : 1.0F, .range = 30.0F, .castsShadow = lightCastsShadow });
+        .kind = setup.point ? kb::scene::LightKind::Point
+              : setup.spot ? kb::scene::LightKind::Spot : kb::scene::LightKind::Directional,
+        .intensity = setup.point || setup.spot ? 3.0F : 1.0F, .range = 30.0F, .castsShadow = lightCastsShadow });
 
     NativeTestSurface surface;
     Require(surface.IsValid(), "Point shadow test could not create a hidden D3D11 surface");
@@ -6875,6 +6877,18 @@ void RunRendererDrawsMillionGpuParticlesTest() {
     renderer.Shutdown();
 }
 
+// A spot light shining straight down must be darkened under the plate only when it casts a shadow.
+void RunRendererRendersSpotLightShadowTest() {
+    ShadowFloorScene scene{ .point = false, .spot = true };
+    scene.lightCastsShadow = false;
+    const int unshadowed = RenderShadowFloorBrightness(scene);
+    scene.lightCastsShadow = true;
+    const int shadowed = RenderShadowFloorBrightness(scene);
+    std::fprintf(stderr, "spot_shadow_pixels unshadowed=%d shadowed=%d%c", unshadowed, shadowed, 10);
+    Require(unshadowed > 60, "Spot shadow test: the unshadowed floor under the plate must be visibly lit");
+    Require(shadowed * 10 < unshadowed * 8, "Spot shadow test: the plate must darken the floor beneath a spot light");
+}
+
 void RunRendererRendersPointLightShadowTest() {
     ShadowFloorScene scene{};
     scene.lightCastsShadow = false;
@@ -6893,6 +6907,7 @@ void RunRendererParticleMeshSnapshotSubmitTest() {
     RunRendererDrawsParticleMeshSnapshotPixelsTest();
     RunRendererDrawsPublishedRuntimeTexturePixelsTest();
     RunRendererRendersPointLightShadowTest();
+    RunRendererRendersSpotLightShadowTest();
     RunRendererRendersDirectionalCascadeShadowTest();
     RunRendererRendersScreenSpaceGiBounceTest();
     RunRendererSmoothsScreenSpaceGiOverTimeTest();

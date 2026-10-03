@@ -8,7 +8,7 @@
 
 namespace kb::render {
 
-// Shadow-casting point lights chosen for this frame, nearest to the camera first. The result is a
+// Shadow-casting point and spot lights chosen for this frame, nearest to the camera first. The result is a
 // pure function of the scene and camera, so the shadow pass and the light packer agree on it.
 struct PointShadowLightSelection {
     std::uint32_t count = 0U;
@@ -26,6 +26,8 @@ struct PointShadowSetup {
     bool valid = false;
     std::uint32_t lightCount = 0U;
     std::uint32_t tileSize = 0U;
+    // Faces rendered per light: all of them for a point light, only the first for a spot light.
+    std::array<std::uint32_t, ScenePointShadowBinding::kMaxLights> faceCount{};
     std::uint32_t atlasWidth = 0U;
     std::uint32_t atlasHeight = 0U;
     std::array<std::array<PointShadowFace, ScenePointShadowBinding::kFaceCount>, ScenePointShadowBinding::kMaxLights> faces{};
@@ -38,6 +40,8 @@ public:
 
     // Vertical and horizontal field of view of each cube face, a little wider than 90 degrees.
     static constexpr float kFaceFovDegrees = 95.0F;
+    // A spot frustum is this much wider than the cone so that filtering at the cone edge stays inside the tile.
+    static constexpr float kSpotMarginDegrees = 6.0F;
 
     [[nodiscard]] static PointShadowLightSelection Select(
         const RenderScene& renderScene,
