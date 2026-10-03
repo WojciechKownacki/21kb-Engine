@@ -29,6 +29,14 @@ struct ParticleGpuSpawn {
 static_assert(sizeof(ParticleGpuSpawn) == 32U);
 static_assert(std::is_trivially_copyable_v<ParticleGpuSpawn>);
 
+// A world-space plane (normal . p = distance) that particles bounce off, like the CPU collision module.
+struct ParticleGpuCollisionPlane {
+    kb::math::Vec3 normal{ 0.0F, 1.0F, 0.0F };
+    float distance = 0.0F;
+    float restitution = 0.5F;
+    float friction = 0.0F;
+};
+
 // Appearance and motion constants of one GPU emitter. Colour and size over normalized age are
 // sampled at kParticleGpuCurveSamples evenly spaced ages and interpolated linearly by the GPU.
 struct ParticleGpuEmitterParams {
@@ -45,6 +53,14 @@ struct ParticleGpuEmitterParams {
     bool softParticles = false;
     float stretchVelocityScale = 0.0F;
     float stretchMinimumLength = 1.0F;
+    // Collisions make the motion stateful: the renderer integrates each particle frame by frame instead of
+    // evaluating the closed form. The plane is exact; scene depth collision bounces off whatever surface
+    // the depth buffer of the frame shows (with the restitution and friction of the plane, or defaults).
+    ParticleGpuCollisionPlane plane{};
+    bool hasPlane = false;
+    bool sceneDepthCollision = false;
+
+    [[nodiscard]] constexpr bool HasCollision() const noexcept { return hasPlane || sceneDepthCollision; }
 };
 
 struct ParticleGpuEmitterKey {

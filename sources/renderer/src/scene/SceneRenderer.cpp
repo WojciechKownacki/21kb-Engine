@@ -145,6 +145,12 @@ bool SceneRenderer::HasGpuParticleEmitters(std::uint64_t sceneId) const noexcept
     return particleRenderer_ != nullptr && particleRenderer_->HasGpuEmitters(sceneId);
 }
 
+void SceneRenderer::DispatchGpuParticleEmitters(
+    bgfx::ViewId viewId, const SceneRenderCamera& camera, std::uint32_t viewportWidth, std::uint32_t viewportHeight) {
+    if (particleRenderer_ == nullptr || gpuParticleSceneId_ == 0U) return;
+    particleRenderer_->DispatchGpuEmitters(viewId, gpuParticleSceneId_, camera, sceneDepthTexture_, viewportWidth, viewportHeight);
+}
+
 void SceneRenderer::SyncGpuParticleEmitters(kb::scene::Scene& scene, float frameDeltaSeconds, std::uint64_t frameIndex) {
     if (particleRenderer_ == nullptr || !particleRenderer_->GpuEmittersReady()) return;
     gpuParticleSceneId_ = scene.Id();

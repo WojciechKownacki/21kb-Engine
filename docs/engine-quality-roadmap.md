@@ -43,7 +43,7 @@ Kryterium „zrobione" = test, który musi przejść; test ma być headless (bez
 
 ### B. Cząstki GPU
 
-- **B1 — Kolizje cząstek GPU z głębią sceny** · P1 · M · do zrobienia
+- **B1 — Kolizje cząstek GPU z głębią sceny** · P1 · M · **zrobione** (płaszczyzna i głębia, forward i deferred)
   Dziś emitery z kolizjami wracają na CPU. Zrobione gdy: test, że cząstka odbija się od płaszczyzny widocznej
   w buforze głębi, oraz że emitery z `CollisionPlane` mogą działać na GPU.
 - **B2 — Sortowanie cząstek przezroczystych na GPU** · P2 · M · do zrobienia

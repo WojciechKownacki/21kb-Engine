@@ -1507,6 +1507,11 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
             sceneRenderer_->SetSceneColorTexture(desc.postProcess.pingTexture);
             WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport transparent sceneColor blit end");
         }
+        if (sceneCamera != nullptr) {
+            // The lighting view is unused by the forward path and binds no scene depth in the deferred one.
+            sceneRenderer_->DispatchGpuParticleEmitters(
+                viewportPlan.viewIds.deferredLighting, *sceneCamera, desc.target.viewport.extent.width, desc.target.viewport.extent.height);
+        }
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport transparent pass begin");
         RendererMeshPassSubmitter::SubmitViewportPass(
             meshPassSubmitDesc,

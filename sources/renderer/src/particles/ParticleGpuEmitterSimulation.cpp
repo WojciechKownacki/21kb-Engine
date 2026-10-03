@@ -12,6 +12,10 @@ namespace {
 
 constexpr std::uint32_t kThreadGroupSize = 64U;
 constexpr std::uint32_t kInstanceBytes = 80U;
+constexpr std::uint32_t kStateBytes = 32U;
+// How far behind a visible surface (m) a particle still counts as having hit it.
+constexpr float kDepthCollisionThickness = 0.5F;
+constexpr float kDefaultDepthRestitution = 0.5F;
 constexpr double kFixedStepSeconds = 1.0 / static_cast<double>(kb::scene::kParticleEffectFixedStepsPerSecond);
 
 [[nodiscard]] bgfx::VertexLayout SpawnLayout() {
@@ -54,6 +58,18 @@ bool ParticleGpuEmitterSimulation::Initialize() {
     colorUniform_ = bgfx::createUniform("u_gpuParticleColor", bgfx::UniformType::Vec4,
         static_cast<std::uint16_t>(kb::particles::kParticleGpuCurveSamples));
     sizeUniform_ = bgfx::createUniform("u_gpuParticleSize", bgfx::UniformType::Vec4, 2U);
+    collideProgram_ = ShaderLoader::LoadComputeProgram("cs_particle_gpu_collide.sc");
+    planeUniform_ = bgfx::createUniform("u_gpuParticlePlane", bgfx::UniformType::Vec4, 2U);
+    collisionUniform_ = bgfx::createUniform("u_gpuParticleCollision", bgfx::UniformType::Vec4);
+    depthBounceUniform_ = bgfx::createUniform("u_gpuParticleDepthBounce", bgfx::UniformType::Vec4);
+    texelUniform_ = bgfx::createUniform("u_gpuParticleTexel", bgfx::UniformType::Vec4);
+    viewProjectionUniform_ = bgfx::createUniform("u_gpuParticleViewProj", bgfx::UniformType::Mat4);
+    depthSampler_ = bgfx::createUniform("s_particleDepth", bgfx::UniformType::Sampler);
+    inverseViewProjectionUniform_ = bgfx::createUniform("u_deferredInverseViewProjection", bgfx::UniformType::Mat4);
+    depthParamsUniform_ = bgfx::createUniform("u_deferredDepthParams", bgfx::UniformType::Vec4);
+    cameraPositionUniform_ = bgfx::createUniform("u_deferredCameraPosition", bgfx::UniformType::Vec4);
+    const std::uint32_t zeroTexel = 0U;
+    fallbackDepth_ = bgfx::createTexture2D(1U, 1U, false, 1U, bgfx::TextureFormat::RGBA8, BGFX_SAMPLER_NONE, bgfx::copy(&zeroTexel, sizeof(zeroTexel)));
     if (!IsReady()) {
         Shutdown();
         return false;
@@ -68,10 +84,16 @@ bool ParticleGpuEmitterSimulation::IsReady() const noexcept {
 
 void ParticleGpuEmitterSimulation::Shutdown() noexcept {
     ReleaseAllScenes();
-    for (bgfx::UniformHandle* handle : { &motionUniform_, &timeUniform_, &colorUniform_, &sizeUniform_ }) {
+    for (bgfx::UniformHandle* handle : { &motionUniform_, &timeUniform_, &colorUniform_, &sizeUniform_, &planeUniform_,
+             &collisionUniform_, &depthBounceUniform_, &texelUniform_, &viewProjectionUniform_, &depthSampler_,
+             &inverseViewProjectionUniform_, &depthParamsUniform_, &cameraPositionUniform_ }) {
         if (bgfx::isValid(*handle)) bgfx::destroy(*handle);
         *handle = BGFX_INVALID_HANDLE;
     }
+    if (bgfx::isValid(fallbackDepth_)) bgfx::destroy(fallbackDepth_);
+    fallbackDepth_ = BGFX_INVALID_HANDLE;
+    if (bgfx::isValid(collideProgram_)) bgfx::destroy(collideProgram_);
+    collideProgram_ = BGFX_INVALID_HANDLE;
     if (bgfx::isValid(program_)) bgfx::destroy(program_);
     program_ = BGFX_INVALID_HANDLE;
 }
@@ -98,15 +120,37 @@ bool ParticleGpuEmitterSimulation::Create(const Key& key, const kb::particles::P
         return false;
     }
     allocatedBytes_ += bytes;
+    if (params.HasCollision() && !EnsureState(emitter)) {
+        allocatedBytes_ -= bytes;
+        Destroy(emitter);
+        return false;
+    }
     emitters_[key] = emitter;
+    return true;
+}
+
+bool ParticleGpuEmitterSimulation::EnsureState(Emitter& emitter) noexcept {
+    if (bgfx::isValid(emitter.state)) return true;
+    const std::uint64_t stateBytes = static_cast<std::uint64_t>(emitter.capacity) * kStateBytes;
+    if (allocatedBytes_ + stateBytes > kb::scene::kParticleEffectMaxGpuResourceBytes) return false;
+    // A zeroed record never matches a birth stamp, so every particle starts from its birth record.
+    const bgfx::Memory* zero = bgfx::alloc(static_cast<std::uint32_t>(stateBytes));
+    if (zero == nullptr || zero->data == nullptr) return false;
+    std::memset(zero->data, 0, static_cast<std::size_t>(stateBytes));
+    emitter.state = bgfx::createDynamicVertexBuffer(zero, SpawnLayout(), BGFX_BUFFER_COMPUTE_READ_WRITE);
+    if (!bgfx::isValid(emitter.state)) return false;
+    emitter.bytes += stateBytes;
+    allocatedBytes_ += stateBytes;
     return true;
 }
 
 void ParticleGpuEmitterSimulation::Destroy(Emitter& emitter) noexcept {
     if (bgfx::isValid(emitter.spawns)) bgfx::destroy(emitter.spawns);
     if (bgfx::isValid(emitter.instances)) bgfx::destroy(emitter.instances);
+    if (bgfx::isValid(emitter.state)) bgfx::destroy(emitter.state);
     emitter.spawns = BGFX_INVALID_HANDLE;
     emitter.instances = BGFX_INVALID_HANDLE;
+    emitter.state = BGFX_INVALID_HANDLE;
 }
 
 void ParticleGpuEmitterSimulation::Upload(Emitter& emitter, std::span<const kb::particles::ParticleGpuSpawn> spawns) noexcept {
@@ -168,6 +212,11 @@ void ParticleGpuEmitterSimulation::Apply(
             } else {
                 found->second.params = command.params;
                 found->second.params.capacity = capacity;
+                if (command.params.HasCollision() && !EnsureState(found->second)) {
+                    // No budget left for the state: the emitter keeps simulating without collisions.
+                    found->second.params.hasPlane = false;
+                    found->second.params.sceneDepthCollision = false;
+                }
             }
         }
         if (found == emitters_.end()) continue;
@@ -185,7 +234,7 @@ void ParticleGpuEmitterSimulation::Advance(std::uint64_t sceneId, float frameDel
     clock.now = std::clamp(clock.now, clock.latest - kFixedStepSeconds, clock.latest + kFixedStepSeconds);
 }
 
-void ParticleGpuEmitterSimulation::Dispatch(bgfx::ViewId viewId, std::uint64_t sceneId) noexcept {
+void ParticleGpuEmitterSimulation::Dispatch(bgfx::ViewId viewId, std::uint64_t sceneId, const CollisionContext& collision) noexcept {
     const auto sceneIt = scenes_.find(sceneId);
     if (!IsReady() || sceneIt == scenes_.end()) return;
     SceneClock& clock = sceneIt->second;
@@ -203,11 +252,33 @@ void ParticleGpuEmitterSimulation::Dispatch(bgfx::ViewId viewId, std::uint64_t s
         }
         bgfx::setBuffer(0U, emitter.spawns, bgfx::Access::Read);
         bgfx::setBuffer(1U, emitter.instances, bgfx::Access::Write);
+        const bool colliding = params.HasCollision() && bgfx::isValid(emitter.state) && bgfx::isValid(collideProgram_);
+        if (colliding) {
+            const kb::particles::ParticleGpuCollisionPlane& plane = params.plane;
+            const std::array<float, 8> planeData{
+                plane.normal.x, plane.normal.y, plane.normal.z, plane.distance, plane.restitution, plane.friction, 0.0F, 0.0F };
+            const bool depth = params.sceneDepthCollision && bgfx::isValid(collision.depthTexture);
+            const std::array<float, 4> collisionParams{ params.hasPlane ? 1.0F : 0.0F, depth ? 1.0F : 0.0F, kDepthCollisionThickness, 0.0F };
+            const std::array<float, 4> bounce{
+                params.hasPlane ? plane.restitution : kDefaultDepthRestitution, params.hasPlane ? plane.friction : 0.0F, 0.0F, 0.0F };
+            const std::array<float, 4> texel{ collision.texelSize[0], collision.texelSize[1], 0.0F, 0.0F };
+            const std::array<float, 4> depthParams{ collision.homogeneousDepth ? 1.0F : 0.0F, 0.0F, 0.0F, 0.0F };
+            bgfx::setBuffer(2U, emitter.state, bgfx::Access::ReadWrite);
+            bgfx::setTexture(3U, depthSampler_, depth ? collision.depthTexture : fallbackDepth_);
+            bgfx::setUniform(planeUniform_, planeData.data(), 2U);
+            bgfx::setUniform(collisionUniform_, collisionParams.data());
+            bgfx::setUniform(depthBounceUniform_, bounce.data());
+            bgfx::setUniform(texelUniform_, texel.data());
+            bgfx::setUniform(viewProjectionUniform_, collision.viewProjection.data());
+            bgfx::setUniform(inverseViewProjectionUniform_, collision.inverseViewProjection.data());
+            bgfx::setUniform(depthParamsUniform_, depthParams.data());
+            bgfx::setUniform(cameraPositionUniform_, collision.cameraPosition.data());
+        }
         bgfx::setUniform(motionUniform_, motion.data());
         bgfx::setUniform(timeUniform_, time.data());
         bgfx::setUniform(colorUniform_, colors.data(), static_cast<std::uint16_t>(kb::particles::kParticleGpuCurveSamples));
         bgfx::setUniform(sizeUniform_, params.size.data(), 2U);
-        bgfx::dispatch(viewId, program_, (emitter.capacity + kThreadGroupSize - 1U) / kThreadGroupSize, 1U, 1U);
+        bgfx::dispatch(viewId, colliding ? collideProgram_ : program_, (emitter.capacity + kThreadGroupSize - 1U) / kThreadGroupSize, 1U, 1U);
         clock.draws.push_back(Draw{ &emitter.params, emitter.instances, emitter.capacity });
     }
 }

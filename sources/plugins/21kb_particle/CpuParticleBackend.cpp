@@ -1890,10 +1890,10 @@ bool CpuParticleBackend::GpuEligible(std::uint32_t denseIndex, std::uint8_t emit
         emitter.maxParticles > kb::particles::kParticleGpuMaxCapacity) {
         return false;
     }
+    // A collision plane runs on the GPU too; sub-emitters need CPU events.
     for (std::uint8_t index = 0U; index < emitter.moduleCount; ++index) {
         const auto& module = emitter.modules[index];
-        if (module.enabled && (module.type == kb::scene::ParticleModuleType::CollisionPlane ||
-                module.type == kb::scene::ParticleModuleType::SubEmitter)) {
+        if (module.enabled && module.type == kb::scene::ParticleModuleType::SubEmitter) {
             return false;
         }
     }
@@ -1924,8 +1924,15 @@ kb::particles::ParticleGpuEmitterParams CpuParticleBackend::BuildGpuParams(
             drag += std::get<kb::scene::ParticleDragModule>(module.payload).coefficient;
         } else if (module.type == kb::scene::ParticleModuleType::AlphaOverLife) {
             alphaOverLife = true;
+        } else if (module.type == kb::scene::ParticleModuleType::CollisionPlane) {
+            const auto& plane = std::get<kb::scene::ParticleCollisionPlaneModule>(module.payload);
+            params.plane = {
+                .normal = plane.normal, .distance = plane.distance, .restitution = plane.restitution, .friction = plane.friction };
+            params.hasPlane = true;
         }
     }
+    // A colliding emitter also bounces off the surfaces the renderer's depth buffer shows.
+    params.sceneDepthCollision = params.hasPlane;
     params.acceleration = acceleration;
     params.drag = drag;
     for (std::size_t sample = 0U; sample < kb::particles::kParticleGpuCurveSamples; ++sample) {
