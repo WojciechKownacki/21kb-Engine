@@ -1,4 +1,5 @@
 #include "kb/render/scene/SceneRenderer.hpp"
+#include "engine/scene/Scene.hpp"
 
 #include "kb/render/scene/RenderScene.hpp"
 #include "kb/render/particles/ParticleGpuRenderer.hpp"
@@ -127,6 +128,16 @@ void SceneRenderer::Shutdown() {
     resources_.Shutdown();
     skinningPalettes_.Shutdown();
     initialized_ = false;
+}
+
+bool SceneRenderer::HasGpuParticleEmitters(std::uint64_t sceneId) const noexcept {
+    return particleRenderer_ != nullptr && particleRenderer_->HasGpuEmitters(sceneId);
+}
+
+void SceneRenderer::SyncGpuParticleEmitters(kb::scene::Scene& scene, float frameDeltaSeconds, std::uint64_t frameIndex) {
+    if (particleRenderer_ == nullptr || !particleRenderer_->GpuEmittersReady()) return;
+    gpuParticleSceneId_ = scene.Id();
+    particleRenderer_->SyncGpuEmitters(scene, frameDeltaSeconds, frameIndex);
 }
 
 void SceneRenderer::ReleaseParticleScene(std::uint64_t sceneId) noexcept {
@@ -258,6 +269,12 @@ void SceneRenderer::SubmitMeshPass(
             // material determines opaque/GBuffer/transparent/ShadowDepth participation the same way
             // it already does for ordinary meshes, so this cannot stay gated to BaseTransparent only.
             particleSnapshot.get());
+        if (pass == MeshPassType::BaseTransparent && particleRenderer_ != nullptr && gpuParticleSceneId_ != 0U) {
+            const ParticleGpuSubmitResult gpuEmitters = particleRenderer_->SubmitGpuEmitters(
+                viewId, gpuParticleSceneId_, *camera, resources_, resourceMap_, sceneDepthTexture_);
+            lastSubmitStats_.submittedParticleCount += gpuEmitters.submittedParticles;
+            lastSubmitStats_.submittedParticleDrawCallCount += gpuEmitters.drawCalls;
+        }
         if (lastSubmitStats_.failedParticleBatchCount != 0U) {
             lastDiagnostics_.events.push_back(SceneRenderDiagnosticEvent{
                 .severity = SceneRenderDiagnosticSeverity::Error,

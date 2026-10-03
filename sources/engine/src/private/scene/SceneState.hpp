@@ -12,6 +12,7 @@
 #include "engine/particles/ParticleRuntimeResult.hpp"
 #include "engine/particles/ParticleRenderCapabilities.hpp"
 #include "engine/particles/ParticleRenderSnapshot.hpp"
+#include "engine/particles/ParticleGpuEmitter.hpp"
 #include "engine/localization/LocalizationCatalog.hpp"
 #include "engine/scene/BehaviourVariableOverride.hpp"
 #include "engine/scene/ContentInstanceComponent.hpp"
@@ -733,6 +734,8 @@ public:
     const std::thread::id particlePlaybackOwnerThread = std::this_thread::get_id();
 #endif
     std::vector<kb::particles::PendingParticleRuntimeEvent> pendingParticleRuntimeEvents;
+    std::vector<kb::particles::ParticleGpuEmitterCommand> pendingParticleGpuEmitterCommands;
+    bool particleGpuEmitterConsumer = false;
     mutable std::vector<kb::particles::ParticleRuntimeState> particleRuntimeStateScratch;
     SceneUIFrame uiFrame;
     std::vector<SceneUIEvent> uiEvents;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/particles/IParticleSimulationBackend.hpp"
+#include "engine/particles/ParticleGpuEmitter.hpp"
 #include "engine/particles/ParticleRenderCapabilities.hpp"
 #include "engine/particles/ParticleRenderSnapshot.hpp"
 #include "engine/particles/ParticleGpuVisualStepJournal.hpp"
@@ -70,6 +71,14 @@ public:
     [[nodiscard]] static std::span<const ParticleRuntimeState> LiveParticleStates(
         const kb::scene::Scene& scene,
         std::uint64_t instanceId);
+
+    // GPU-simulated emitters: the backend queues per-step commands, the renderer drains them once per
+    // frame (the scene's single consumer), exactly as pending collision events are handled. Without a
+    // registered consumer the backend should not generate GPU work (HasGpuEmitterConsumer).
+    static void SetGpuEmitterConsumer(kb::scene::Scene& scene, bool present) noexcept;
+    [[nodiscard]] static bool HasGpuEmitterConsumer(const kb::scene::Scene& scene) noexcept;
+    static void QueueGpuEmitterCommand(kb::scene::Scene& scene, ParticleGpuEmitterCommand command);
+    static void DrainGpuEmitterCommands(kb::scene::Scene& scene, std::vector<ParticleGpuEmitterCommand>& output);
 
     [[nodiscard]] static ParticleRuntimeResult QueueEvent(kb::scene::Scene& scene, PendingParticleRuntimeEvent event);
     [[nodiscard]] static std::vector<PendingParticleRuntimeEvent> DrainEvents(kb::scene::Scene& scene);

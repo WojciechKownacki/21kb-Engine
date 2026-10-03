@@ -23,6 +23,8 @@ constexpr auto kRequiredShaders = std::to_array<ShaderManifestEntry>({
     ShaderManifestEntry{.name = "cs_massive_fill.sc", .stage = ShaderStage::Compute, .required = false},
     ShaderManifestEntry{.name = "cs_particle_visual_integrate.sc", .stage = ShaderStage::Compute,
         .requiredFeature = ShaderRuntimeFeatureBit(ShaderRuntimeFeature::ParticleGpuVisual)},
+    // Optional: without it (no Metal variant is generated on Windows hosts) emitters fall back to the CPU path.
+    ShaderManifestEntry{.name = "cs_particle_gpu_emit.sc", .stage = ShaderStage::Compute, .required = false},
     ShaderManifestEntry{.name = "fs_editor_gizmo.sc", .stage = ShaderStage::Fragment,
         .requiredFeature = ShaderRuntimeFeatureBit(ShaderRuntimeFeature::Editor)},
     ShaderManifestEntry{.name = "fs_editor_gizmo_resolve.sc", .stage = ShaderStage::Fragment,

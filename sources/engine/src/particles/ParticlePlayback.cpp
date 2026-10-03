@@ -253,6 +253,25 @@ std::span<const ParticleRuntimeState> ParticlePlayback::LiveParticleStates(
     return scratch;
 }
 
+void ParticlePlayback::SetGpuEmitterConsumer(kb::scene::Scene& scene, bool present) noexcept {
+    kb::scene::SceneAccess::State(scene).particleGpuEmitterConsumer = present;
+}
+
+bool ParticlePlayback::HasGpuEmitterConsumer(const kb::scene::Scene& scene) noexcept {
+    return kb::scene::SceneAccess::State(scene).particleGpuEmitterConsumer;
+}
+
+void ParticlePlayback::QueueGpuEmitterCommand(kb::scene::Scene& scene, ParticleGpuEmitterCommand command) {
+    AssertOwnerThread(scene);
+    kb::scene::SceneAccess::State(scene).pendingParticleGpuEmitterCommands.push_back(std::move(command));
+}
+
+void ParticlePlayback::DrainGpuEmitterCommands(kb::scene::Scene& scene, std::vector<ParticleGpuEmitterCommand>& output) {
+    AssertOwnerThread(scene);
+    output.clear();
+    output.swap(kb::scene::SceneAccess::State(scene).pendingParticleGpuEmitterCommands);
+}
+
 ParticleRuntimeResult ParticlePlayback::QueueEvent(kb::scene::Scene& scene, PendingParticleRuntimeEvent event) {
     AssertOwnerThread(scene);
     kb::scene::SceneState& state = kb::scene::SceneAccess::State(scene);

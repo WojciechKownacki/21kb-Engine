@@ -6709,6 +6709,69 @@ void RunRendererRendersScreenSpaceGiBounceTest() {
     Require(with >= without + 6, "GI test: the red wall must tint the nearby floor when screen-space GI is enabled");
 }
 
+
+// GPU-simulated emitters: the engine queues a birth record, the renderer uploads it and a compute
+// pass evaluates the particle in closed form. A particle born at x = -2 moving at +4 m/s must be at
+// the screen centre half a second later and must not still be drawn at its birth position.
+void RunRendererDrawsGpuSimulatedParticlesTest() {
+    kb::scene::Scene scene;
+    NativeTestSurface surface;
+    Require(surface.IsValid(), "GPU particle test could not create a hidden D3D11 surface");
+    DisplayConfig config{};
+    config.syncMode = DisplaySyncMode::Uncapped;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "GPU particle test could not initialize the renderer");
+    renderer.SetRuntimeAssetDiscoveryEnabled(false);
+
+    SceneRenderCamera camera{};
+    bx::mtxLookAt(camera.view.data(), bx::Vec3{ 0.0F, 0.0F, -10.0F }, bx::Vec3{ 0.0F, 0.0F, 5.0F });
+    SceneDepthPolicy::MakePerspective(camera.projection.data(), 30.0F, 1.0F, 0.1F, 100.0F, SceneDepthPolicy::HomogeneousDepth());
+
+    {
+    ParticleMeshReadbackTarget target;
+    Require(target.Initialize(), "GPU particle test could not create its readback target");
+    const RenderSceneSubmitDesc desc{
+        .target = target.Binding(),
+        .cameraOverride = camera,
+        .meshPassMode = SceneRenderMeshPassMode::OpaqueAndTransparent,
+        .clearRgba = 0x000000FFU,
+        .editorSceneOverlaysEnabled = false,
+        .shadowPassEnabled = false,
+        .postProcessEnabled = false,
+        .selectionMaskEnabled = false,
+        .selectionOutlineEnabled = false,
+    };
+    // The first frame registers the renderer as the scene GPU emitter consumer.
+    SubmitLifecycleFrame(renderer, scene, desc, "GPU particle test did not submit its first frame");
+    Require(kb::particles::ParticlePlayback::HasGpuEmitterConsumer(scene),
+        "The renderer must register itself as GPU emitter consumer once GPU simulation is available");
+
+    kb::particles::ParticleGpuEmitterCommand command{};
+    command.key = { 1U, 1U };
+    command.simTime = 0.5;
+    command.hasParams = true;
+    command.params.capacity = 1024U;
+    command.params.blend = kb::particles::ParticleRenderBlendMode::Add;
+    command.params.depth = kb::particles::ParticleRenderDepthMode::Disabled;
+    command.params.color.fill({ 1.0F, 1.0F, 1.0F, 1.0F });
+    command.params.size.fill(1.2F);
+    command.spawns.push_back(kb::particles::ParticleGpuSpawn{
+        .position = { -2.0F, 0.0F, 5.0F }, .birthTime = 0.0F, .velocity = { 4.0F, 0.0F, 0.0F }, .lifetime = 10.0F });
+    kb::particles::ParticlePlayback::QueueGpuEmitterCommand(scene, command);
+    SubmitLifecycleFrame(renderer, scene, desc, "GPU particle test did not submit the spawn frame");
+    const std::vector<std::uint8_t> pixels = target.ReadPixels();
+    const auto brightness = [&pixels](std::size_t x, std::size_t y) {
+        const std::size_t offset = (y * 64U + x) * 4U;
+        return static_cast<int>(pixels[offset]) + pixels[offset + 1U] + pixels[offset + 2U];
+    };
+    std::fprintf(stderr, "gpu_particle_pixels centre=%d birth=%d%c", brightness(32U, 32U), brightness(16U, 32U), 10);
+    Require(brightness(32U, 32U) > 150, "A GPU-simulated particle must be drawn at its closed-form position");
+    Require(brightness(16U, 32U) < 40, "A GPU-simulated particle must have left its birth position");
+    }
+    renderer.Shutdown();
+}
+
 void RunRendererRendersPointLightShadowTest() {
     ShadowFloorScene scene{};
     scene.lightCastsShadow = false;
@@ -6729,6 +6792,7 @@ void RunRendererParticleMeshSnapshotSubmitTest() {
     RunRendererRendersPointLightShadowTest();
     RunRendererRendersDirectionalCascadeShadowTest();
     RunRendererRendersScreenSpaceGiBounceTest();
+    RunRendererDrawsGpuSimulatedParticlesTest();
 #endif
 }
 

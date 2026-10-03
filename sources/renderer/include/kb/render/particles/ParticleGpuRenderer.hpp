@@ -2,6 +2,7 @@
 
 #include "kb/render/particles/ParticleRenderBatcher.hpp"
 #include "kb/render/particles/ParticleStripRenderer.hpp"
+#include "kb/render/particles/ParticleGpuEmitterSimulation.hpp"
 #include "kb/render/particles/ParticleGpuVisualSimulation.hpp"
 #include "kb/render/resources/RenderResourceRegistry.hpp"
 #include "kb/render/scene/SceneRenderResourceMap.hpp"
@@ -9,7 +10,12 @@
 #include <bgfx/bgfx.h>
 
 #include <cstdint>
+#include <unordered_map>
 #include <vector>
+
+namespace kb::scene {
+class Scene;
+}
 
 namespace kb::render {
 
@@ -60,6 +66,19 @@ public:
         bgfx::ViewId viewId,
         const kb::particles::ParticleRenderSnapshot& snapshot) noexcept;
     [[nodiscard]] ParticleStripSubmitResult SubmitStripDraw(bgfx::ViewId viewId, std::uint32_t drawIndex) noexcept;
+    // GPU-simulated emitters (see engine/particles/ParticleGpuEmitter.hpp). SyncGpuEmitters drains the
+    // queued commands of a scene once per rendered frame; SubmitGpuEmitters dispatches the simulation
+    // for that frame (once) and draws every emitter of the scene into the given view.
+    [[nodiscard]] bool GpuEmittersReady() const noexcept;
+    [[nodiscard]] bool HasGpuEmitters(std::uint64_t sceneId) const noexcept;
+    void SyncGpuEmitters(kb::scene::Scene& scene, float frameDeltaSeconds, std::uint64_t frameIndex);
+    [[nodiscard]] ParticleGpuSubmitResult SubmitGpuEmitters(
+        bgfx::ViewId viewId,
+        std::uint64_t sceneId,
+        const SceneRenderCamera& camera,
+        const RenderResourceRegistry& resources,
+        const SceneRenderResourceMap& resourceMap,
+        bgfx::TextureHandle sceneDepthTexture) noexcept;
     void ReleaseParticleScene(std::uint64_t sceneId) noexcept;
     void ReleaseAllParticleScenes() noexcept;
 
@@ -69,6 +88,10 @@ private:
     ParticleRenderBatcher batcher_;
     ParticleStripRenderer stripRenderer_;
     ParticleGpuVisualSimulation visualSimulation_;
+    ParticleGpuEmitterSimulation gpuEmitters_;
+    std::vector<kb::particles::ParticleGpuEmitterCommand> gpuEmitterCommandScratch_;
+    std::unordered_map<std::uint64_t, std::uint64_t> gpuEmitterSyncedFrame_;
+    std::unordered_map<std::uint64_t, bool> gpuEmitterDispatchPending_;
     ParticleRenderBatchBuildResult lastBuild_{};
     std::vector<std::uint32_t> visualMaskScratch_;
     bgfx::ProgramHandle program_ = BGFX_INVALID_HANDLE;

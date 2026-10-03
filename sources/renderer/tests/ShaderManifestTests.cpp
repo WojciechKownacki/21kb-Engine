@@ -210,6 +210,7 @@ void ShaderManifestFeatureRequirementsAreTargetSelectable() {
             !missing(core, "cs_instance_cull_clear.sc") &&
             !missing(core, "cs_instance_cull_finalize.sc") &&
             !missing(core, "cs_particle_visual_integrate.sc") &&
+            !missing(core, "cs_particle_gpu_emit.sc") &&
             !missing(core, "fs_editor_gizmo.sc") &&
             !missing(core, "vs_editor_grid.sc"),
         "A game-runtime shader manifest incorrectly requires compute or editor shaders");
