@@ -22,6 +22,7 @@
 #include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/SceneSystem.hpp"
 #include "engine/scene/SceneSystemContext.hpp"
+#include "engine/modules/IEngineModule.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/ScenePrefab.hpp"
 #include "engine/scene/SceneAssets.hpp"
@@ -62,6 +63,7 @@
 #if !defined(KB_PHYSICS_JOLT_PLUGIN_PATH)
 #define KB_PHYSICS_JOLT_PLUGIN_PATH ""
 #endif
+
 
 namespace {
 
@@ -2517,6 +2519,94 @@ private:
     times.p99 = sorted[std::min(sorted.size() - 1U, sorted.size() * 99U / 100U)];
     times.max = sorted.back();
     return times;
+}
+
+// The engine's share of a crowd frame (the "agents" benchmark scenario): 30000 agents that are plain entities with a
+// transform, 64 static box colliders, every frame a Transforms().Set per agent, a raycast for one agent in eight and
+// Runtime().Update. The steering of the agents is the application's own code and is not measured here.
+void RunAgentsFrameBenchmarkWith(const kb::ecs::WorldConfig& worldConfig, const char* label) {
+    if (std::filesystem::path{ KB_PHYSICS_JOLT_PLUGIN_PATH }.empty()) {
+        return;
+    }
+    constexpr int kAgents = 30000;
+    constexpr int kFrames = 150;
+    constexpr int kWarmup = 30;
+    kb::project::ProjectDescriptor descriptor;
+    descriptor.disableEnginePluginsByDefault = true;
+    descriptor.plugins.push_back(kb::project::ProjectPluginReference{
+        .name = "Physics.Jolt", .binaryPath = KB_PHYSICS_JOLT_PLUGIN_PATH, .enabled = true });
+    kb::scene::Scene scene{ std::move(descriptor), {}, worldConfig };
+    for (int row = 0; row < 8; ++row) {
+        for (int column = 0; column < 8; ++column) {
+            const kb::scene::SceneObject obstacle = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+                .name = "Obstacle",
+                .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ (static_cast<float>(row) - 3.5F) * 25.0F, 1.0F, (static_cast<float>(column) - 3.5F) * 25.0F },
+                    .localScale = kb::scene::Vec3{ 2.0F, 2.0F, 2.0F } } });
+            scene.Components().Colliders().Set(obstacle.Entity(), kb::scene::ColliderComponent{
+                .shape = kb::scene::ColliderShape::Box, .boxSize = kb::scene::Vec3{ 1.0F, 1.0F, 1.0F } });
+        }
+    }
+    std::vector<kb::scene::SceneObjectDesc> descs(kAgents);
+    std::vector<kb::scene::Vec3> positions(kAgents);
+    for (int index = 0; index < kAgents; ++index) {
+        positions[index] = kb::scene::Vec3{ static_cast<float>(index % 200) - 100.0F, 0.5F, static_cast<float>(index / 200) - 75.0F };
+        descs[index].transform = kb::scene::TransformComponent{ .localPosition = positions[index] };
+    }
+    std::vector<kb::scene::SceneEntity> agents;
+    for (const kb::scene::SceneObject& object : scene.Entities().CreateObjects(descs)) agents.push_back(object.Entity());
+    kb::tests::Require(agents.size() == static_cast<std::size_t>(kAgents), "agent benchmark could not create its agents");
+    using Clock = std::chrono::steady_clock;
+    std::vector<double> setMs, rayMs, updateMs, syncMs;
+    kb::scene::SceneRuntimeHotPathReport lastSyncReport{};
+    std::array<kb::scene::PhysicsCastResult, 1> hitStorage{};
+    for (int frame = 0; frame < kFrames + kWarmup; ++frame) {
+        const auto t0 = Clock::now();
+        for (int index = 0; index < kAgents; ++index) {
+            positions[index].x += 0.03F;
+            if (positions[index].x > 100.0F) positions[index].x -= 200.0F;
+            scene.Transforms().Set(agents[index], kb::scene::TransformComponent{ .localPosition = positions[index],
+                .localRotation = kb::scene::Quat{ 0.0F, std::sin(0.005F * static_cast<float>(index % 628)), 0.0F, std::cos(0.005F * static_cast<float>(index % 628)) } });
+        }
+        const auto t1 = Clock::now();
+        scene.Runtime().SynchronizeTransforms();
+        const auto tSync = Clock::now();
+        if (frame == kFrames + kWarmup - 1) lastSyncReport = scene.Runtime().HotPathReport();
+        syncMs.push_back(std::chrono::duration<double, std::milli>(tSync - t1).count());
+        for (int index = frame % 8; index < kAgents; index += 8) {
+            kb::library::ArrayNonAlloc<kb::scene::PhysicsCastResult> hits{ std::span<kb::scene::PhysicsCastResult>(hitStorage) };
+            kb::scene::RaycastAllNonAlloc(scene, kb::scene::Vec3{ positions[index].x, 1.0F, positions[index].z }, kb::scene::Vec3{ 1.0F, 0.0F, 0.0F }, 5.0F, 0xFFFFFFFFU, hits);
+        }
+        const auto t2 = Clock::now();
+        static_cast<void>(scene.Runtime().Update(0.037F)); // a frame of the real benchmark: two fixed steps
+        const auto t3 = Clock::now();
+        if (frame >= kWarmup) {
+            setMs.push_back(std::chrono::duration<double, std::milli>(t1 - t0).count());
+            rayMs.push_back(std::chrono::duration<double, std::milli>(t2 - t1).count());
+            updateMs.push_back(std::chrono::duration<double, std::milli>(t3 - t2).count());
+        }
+    }
+    const auto median = [](std::vector<double> values) { std::ranges::sort(values); return values[values.size() / 2U]; };
+    const kb::scene::SceneRuntimeHotPathReport report = lastSyncReport;
+    const double setMedian = median(setMs);
+    const double syncMedian = median(syncMs);
+    std::cout << "agents_frame " << label << " agents=" << kAgents << " set_ms=" << median(setMs) << " raycast_ms=" << median(rayMs)
+              << " sync_ms=" << median(syncMs) << " update_ms=" << median(updateMs) << " transform_sync_ms=" << static_cast<double>(report.runtimeTransformSyncNanoseconds) * 1e-6
+              << " cache_ms=" << static_cast<double>(report.transformHierarchyCacheBuildNanoseconds) * 1e-6 << " entry_ms=" << static_cast<double>(report.transformHierarchyEntryBuildNanoseconds) * 1e-6 << " kernel_ms=" << static_cast<double>(report.transformHierarchyKernelApplyNanoseconds) * 1e-6 << " frontier_ms=" << static_cast<double>(report.transformHierarchyFrontierAppendNanoseconds) * 1e-6 << " propagate_ms=" << static_cast<double>(report.transformHierarchyPropagateNanoseconds) * 1e-6 << " flush_ms=" << static_cast<double>(report.transformHierarchyFlushNanoseconds) * 1e-6 << " parallel_flush=" << report.transformHierarchyParallelFlushCount << " workers=" << report.transformHierarchyParallelFlushWorkerCount << " updated=" << report.transformHierarchyUpdatedCount << " inspected=" << report.transformHierarchyInspectedCount << " rootFast=" << report.transformHierarchyRootFastPathCount
+              << " hierarchy_update_ms=" << static_cast<double>(report.transformHierarchyUpdateNanoseconds) * 1e-6
+              << " hierarchy_flush_write_ms=" << static_cast<double>(report.transformHierarchyFlushWriteNanoseconds) * 1e-6
+              << " backend_mark_ms=" << static_cast<double>(report.transformHierarchyBackendMarkNanoseconds) * 1e-6
+              << " fixed_capture_start_ms=" << static_cast<double>(report.runtimeFixedCaptureStartNanoseconds) * 1e-6 << " fixed_capture_end_ms=" << static_cast<double>(report.runtimeFixedCaptureEndNanoseconds) * 1e-6
+              << " runtime_update_ms=" << static_cast<double>(report.runtimeUpdateNanoseconds) * 1e-6 << '\n';
+    // Publishing the poses of 30000 moved agents is a pass over them like the loop that moved them: it was 1.75 times
+    // that loop (pose records of the fixed-step interpolation found by binary search) and is now about 1.1 times.
+    kb::tests::Require(syncMedian < setMedian * 1.4, "Synchronizing 30000 moved transforms must not cost much more than setting them");
+}
+
+void RunAgentsFrameBenchmark() {
+    RunAgentsFrameBenchmarkWith(kb::ecs::WorldConfig{}, "mirror=on(default)");
+    kb::ecs::WorldConfig native{};
+    native.mirrorNativeComponentChangesToBackend = false;
+    RunAgentsFrameBenchmarkWith(native, "mirror=off");
 }
 
 // The step of a large pile, as a frame sees it. The mean hides the occasional long step a frame budget cannot

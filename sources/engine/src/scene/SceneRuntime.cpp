@@ -27,17 +27,30 @@ void SynchronizeTransformHierarchy(SceneState& state) {
     SceneTransformHierarchySystem{}.Update(state);
     if ((state.fixedTransformTopologyVersion != state.hierarchyTopologyVersion || state.fixedTransformRootAppendEpoch != state.hierarchyRootAppendEpoch) ||
         state.lastTransformHierarchyUpdatedCount == 0U) return;
-    for (const SceneEntity entity : state.transformHierarchyUpdatedEntitiesScratch) {
-        const auto sample = std::ranges::lower_bound(state.fixedTransformSamples, entity, {}, &SceneState::FixedTransformSample::entity);
-        if (sample == state.fixedTransformSamples.end() || sample->entity != entity) continue;
-        const TransformComponent* current = state.componentStorage.Transforms().TryGet(entity);
+    // The hierarchy update published the new value of every entity it touched next to the entity itself.
+    const bool publishedValues = state.transformHierarchyUpdatedTransformsScratch.size() == state.transformHierarchyUpdatedEntitiesScratch.size();
+    for (std::size_t updated = 0U; updated < state.transformHierarchyUpdatedEntitiesScratch.size(); ++updated) {
+        const SceneEntity entity = state.transformHierarchyUpdatedEntitiesScratch[updated];
+        std::size_t valueIndex = state.fixedTransformValues.size();
+        const std::uint32_t denseIndex = kb::ecs::GeneratedEntityIndex(entity);
+        if (denseIndex != kb::ecs::kInvalidGeneratedEntityIndex && denseIndex < state.fixedTransformDenseValueIndex.size() &&
+            state.fixedTransformDenseValueIndex[denseIndex] != SceneState::kNoFixedTransformValue) {
+            valueIndex = state.fixedTransformDenseValueIndex[denseIndex];
+        }
+        if (valueIndex >= state.fixedTransformValues.size() || state.fixedTransformValues[valueIndex].entity != entity) {
+            const auto sample = std::ranges::lower_bound(state.fixedTransformSamples, entity, {}, &SceneState::FixedTransformSample::entity);
+            if (sample == state.fixedTransformSamples.end() || sample->entity != entity) continue;
+            valueIndex = sample->valueIndex;
+        }
+        const TransformComponent* current = publishedValues ? &state.transformHierarchyUpdatedTransformsScratch[updated]
+                                                            : state.componentStorage.Transforms().TryGet(entity);
         if (current == nullptr) continue;
-        auto& value = state.fixedTransformValues[sample->valueIndex];
+        auto& value = state.fixedTransformValues[valueIndex];
         if (state.fixedTransformCapturing) {
             if (!value.touched) {
                 value.previous = value.current;
                 value.touched = true;
-                state.fixedTransformTouched.push_back(sample->valueIndex);
+                state.fixedTransformTouched.push_back(valueIndex);
             }
         } else {
             value.previous = *current;
@@ -122,6 +135,7 @@ void RebuildFixedTransformSamples(Scene& scene, SceneState& state, bool preserve
     auto oldSamples = std::move(state.fixedTransformSamples);
     auto oldValues = std::move(state.fixedTransformValues);
     state.fixedTransformSamples.clear();
+    state.fixedTransformDenseValueIndex.clear();
     state.fixedTransformValues.clear();
     state.fixedTransformTouched.clear();
     state.fixedTransformSamples.reserve(oldSamples.size());
@@ -144,10 +158,19 @@ void RebuildFixedTransformSamples(Scene& scene, SceneState& state, bool preserve
         }
         const std::size_t index = context.state.fixedTransformValues.size();
         context.state.fixedTransformSamples.push_back({entity, index});
-        context.state.fixedTransformValues.push_back({previous, current, context.preserve});
+        context.state.fixedTransformValues.push_back({previous, current, context.preserve, entity});
         if (context.preserve) context.state.fixedTransformTouched.push_back(index);
     }, &context);
     std::ranges::sort(state.fixedTransformSamples, {}, &SceneState::FixedTransformSample::entity);
+    state.fixedTransformDenseValueIndex.clear();
+    for (std::size_t index = 0U; index < state.fixedTransformValues.size(); ++index) {
+        const std::uint32_t denseIndex = kb::ecs::GeneratedEntityIndex(state.fixedTransformValues[index].entity);
+        if (denseIndex == kb::ecs::kInvalidGeneratedEntityIndex) continue;
+        if (state.fixedTransformDenseValueIndex.size() <= denseIndex) {
+            state.fixedTransformDenseValueIndex.resize(static_cast<std::size_t>(denseIndex) + 1U, SceneState::kNoFixedTransformValue);
+        }
+        state.fixedTransformDenseValueIndex[denseIndex] = static_cast<std::uint32_t>(index);
+    }
     state.fixedTransformTopologyVersion = state.hierarchyTopologyVersion;
     state.fixedTransformRootAppendEpoch = state.hierarchyRootAppendEpoch;
 }
@@ -232,6 +255,7 @@ void SceneRuntimeService::SetFixedStepSettings(Scene& scene, SceneRuntimeFixedSt
     state.fixedInterpolationAlpha = 0.0F;
     state.lastFixedStepCount = 0U;
     state.fixedTransformSamples.clear();
+    state.fixedTransformDenseValueIndex.clear();
     state.fixedTransformValues.clear();
     state.fixedTransformTouched.clear();
     state.fixedTransformTopologyVersion = 0U;
@@ -531,6 +555,7 @@ bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
         state.fixedStepAccumulatorSeconds = 0.0F;
         state.fixedInterpolationAlpha = 0.0F;
         state.fixedTransformSamples.clear();
+        state.fixedTransformDenseValueIndex.clear();
         state.fixedTransformValues.clear();
         state.fixedTransformTouched.clear();
         state.fixedTransformTopologyVersion = 0U;

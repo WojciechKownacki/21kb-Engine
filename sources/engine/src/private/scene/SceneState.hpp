@@ -452,9 +452,14 @@ public:
         TransformComponent previous;
         TransformComponent current;
         bool touched = false;
+        SceneEntity entity{};
     };
     std::vector<FixedTransformSample> fixedTransformSamples;
     std::vector<FixedTransformValues> fixedTransformValues;
+    // Index into fixedTransformValues by the dense index of the entity (kNoFixedTransformValue where none), so that
+    // a moved entity finds its pose record without a binary search over the sorted samples.
+    static constexpr std::uint32_t kNoFixedTransformValue = 0xFFFFFFFFU;
+    std::vector<std::uint32_t> fixedTransformDenseValueIndex;
     std::vector<std::size_t> fixedTransformTouched;
     std::uint64_t fixedTransformTopologyVersion = 0U;
     std::uint64_t fixedTransformRootAppendEpoch = 0U;
