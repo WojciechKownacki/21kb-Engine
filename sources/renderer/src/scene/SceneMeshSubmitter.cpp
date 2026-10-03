@@ -204,7 +204,7 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
     BuildVisibilityBlockerInputs(renderScene, visibilityBlockers);
     SceneMeshBatchBuilder::BuildInto(drawGroups, meshBatchSubmissionScratch_);
     if (particleSnapshot != nullptr) {
-        particleMeshBatchBuilder_.Build(*particleSnapshot);
+        particleMeshBatchBuilder_.Build(*particleSnapshot, camera, &resources, &resourceMap);
         const auto& particleMeshBatches = particleMeshBatchBuilder_.Batches();
         meshBatchSubmissionScratch_.insert(
             meshBatchSubmissionScratch_.end(), particleMeshBatches.begin(), particleMeshBatches.end());

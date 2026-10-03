@@ -133,6 +133,12 @@ struct ParticleSpawnAsset {
     float prewarmSeconds = 0.0F;
     kb::math::Color startColor{1.0F, 1.0F, 1.0F, 1.0F};
     float startSize = 1.0F;
+    // Every particle draws a random initial angle and angular velocity from these ranges at birth and spins by
+    // angle + velocity x age. Billboards turn about the view axis, mesh particles about the emitter's local Z.
+    float initialRotationMinDegrees = 0.0F;
+    float initialRotationMaxDegrees = 0.0F;
+    float angularVelocityMinDegrees = 0.0F;
+    float angularVelocityMaxDegrees = 0.0F;
 };
 
 struct ParticleInitialVelocityModule {

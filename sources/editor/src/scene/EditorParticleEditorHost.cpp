@@ -774,6 +774,22 @@ bool EditorSceneContext::EditParticleEditorProperty(std::size_t propertyIndex, s
         break;
     }
     case kb::particle_editor::ParticleEditorProperty::SpawnStartSize: parsed = setFloat(spawn.startSize); break;
+    case kb::particle_editor::ParticleEditorProperty::SpawnRotationMin:
+        parsed = setFloat(spawn.initialRotationMinDegrees);
+        if (parsed && spawn.initialRotationMinDegrees > spawn.initialRotationMaxDegrees) spawn.initialRotationMaxDegrees = spawn.initialRotationMinDegrees;
+        break;
+    case kb::particle_editor::ParticleEditorProperty::SpawnRotationMax:
+        parsed = setFloat(spawn.initialRotationMaxDegrees);
+        if (parsed && spawn.initialRotationMaxDegrees < spawn.initialRotationMinDegrees) spawn.initialRotationMinDegrees = spawn.initialRotationMaxDegrees;
+        break;
+    case kb::particle_editor::ParticleEditorProperty::SpawnAngularVelocityMin:
+        parsed = setFloat(spawn.angularVelocityMinDegrees);
+        if (parsed && spawn.angularVelocityMinDegrees > spawn.angularVelocityMaxDegrees) spawn.angularVelocityMaxDegrees = spawn.angularVelocityMinDegrees;
+        break;
+    case kb::particle_editor::ParticleEditorProperty::SpawnAngularVelocityMax:
+        parsed = setFloat(spawn.angularVelocityMaxDegrees);
+        if (parsed && spawn.angularVelocityMaxDegrees < spawn.angularVelocityMinDegrees) spawn.angularVelocityMinDegrees = spawn.angularVelocityMaxDegrees;
+        break;
     case kb::particle_editor::ParticleEditorProperty::SpawnSpeedMin:
         parsed = setFloat(spawn.speedMin);
         if (parsed && spawn.speedMin > spawn.speedMax) spawn.speedMax = spawn.speedMin;

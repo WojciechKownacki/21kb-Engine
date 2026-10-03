@@ -2760,6 +2760,45 @@ void TestGpuLocalSpaceEmitterRouting() {
     Require(planeCommands.empty() && planeCpuLive > 0U, "A local-space emitter with a collision plane must stay on the CPU");
 }
 
+// Every particle carries an angle drawn at birth and turns by its angular velocity: with fixed values the published
+// rotation is angle + rate x age exactly; with a range the particles differ from each other.
+void TestCpuParticleSpin() {
+    const auto publish = [](float rotationMin, float rotationMax, float rateMin, float rateMax) {
+        auto effect = Fixture::MakeEffect(600.0F, 64U);
+        effect.emitters[0].spawn.initialRotationMinDegrees = rotationMin;
+        effect.emitters[0].spawn.initialRotationMaxDegrees = rotationMax;
+        effect.emitters[0].spawn.angularVelocityMinDegrees = rateMin;
+        effect.emitters[0].spawn.angularVelocityMaxDegrees = rateMax;
+        Fixture fixture(std::move(effect));
+        fixture.scene.Components().ParticleEffects().Set(fixture.owner, { .effectAssetId = fixture.effectAssetId });
+        kb::particle_plugin::ParticleSceneSystem system;
+        kb::scene::SceneSystemContext context{ fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds };
+        system.OnCreate(context);
+        for (int step = 0; step < 20; ++step) system.OnFixedUpdate(context);
+        const auto snapshot = kb::particles::ParticlePlayback::ReadRenderSnapshot(fixture.scene);
+        Require(snapshot && snapshot->Particles().size() > 4U, "spin fixture published no particles");
+        std::vector<std::pair<float, float>> rotations; // (age in seconds, rotation)
+        for (const auto& particle : snapshot->Particles()) {
+            rotations.emplace_back(static_cast<float>(particle.normalizedAgeUnorm) / 65535.0F * 2.0F, particle.rotationRadians);
+        }
+        return rotations;
+    };
+    constexpr float kPi = 3.14159265F;
+    for (const auto& [age, rotation] : publish(90.0F, 90.0F, 180.0F, 180.0F)) {
+        Require(std::abs(rotation - (0.5F * kPi + kPi * age)) < 0.02F, "a fixed spin must be angle + rate x age");
+    }
+    const auto spread = publish(0.0F, 360.0F, 0.0F, 0.0F);
+    float lowest = 100.0F;
+    float highest = -100.0F;
+    for (const auto& [age, rotation] : spread) {
+        static_cast<void>(age);
+        Require(rotation >= -0.001F && rotation <= 2.0F * kPi + 0.001F, "a random angle must stay inside its range");
+        lowest = std::min(lowest, rotation);
+        highest = std::max(highest, rotation);
+    }
+    Require(highest - lowest > 1.0F, "particles of a spin range must not all start at the same angle");
+}
+
 // Mesh and trail outputs run on the GPU too: the mesh draw carries the mesh and material of the emitter, the trail
 // the segment count and spacing (one fewer segment than samples, at the CPU path's sample cadence); a trail of a
 // local-space emitter stays on the CPU because its path is not the closed form.
@@ -2881,6 +2920,7 @@ int main() {
     try {
         TestGpuSubEmitterEvents();
         TestGpuMeshAndTrailRouting();
+        TestCpuParticleSpin();
         TestGpuLocalSpaceEmitterRouting();
         TestGpuEmitterRouting();
         TestGpuEmitterCollisionRouting();

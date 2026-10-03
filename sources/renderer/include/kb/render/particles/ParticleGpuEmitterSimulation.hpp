@@ -91,6 +91,8 @@ private:
         // Owner matrix of a local-space emitter (identity for world-space ones) and its inverse.
         std::array<float, 16> world{ 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F };
         std::array<float, 16> worldInverse = world;
+        // Columns of the rotation matrix mesh particles are oriented by (identity until the owner's orientation arrives).
+        std::array<float, 12> basis{ 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F };
         bgfx::DynamicVertexBufferHandle spawns = BGFX_INVALID_HANDLE;
         bgfx::DynamicVertexBufferHandle instances = BGFX_INVALID_HANDLE;
         // Per-slot position/velocity record of the colliding kernel; only created for colliding emitters.
@@ -120,6 +122,9 @@ private:
     // Creates the sort buffers of an alpha-blended emitter; false when the budget or a kernel is missing.
     [[nodiscard]] bool EnsureSort(Emitter& emitter) noexcept;
     void SortInstances(bgfx::ViewId viewId, const Emitter& emitter, const std::array<float, 4>& cameraPosition) noexcept;
+    // Whether the draw order of this emitter's instances matters: alpha-blended billboards, and mesh particles
+    // whose material is translucent (an opaque mesh is depth-tested and needs no order).
+    [[nodiscard]] static bool NeedsSort(const kb::particles::ParticleGpuEmitterParams& params, bool translucentMaterial) noexcept;
 
     bgfx::ProgramHandle program_ = BGFX_INVALID_HANDLE;
     // Optional: without it (e.g. no variant for this backend) colliding emitters use the closed-form kernel.
@@ -148,6 +153,8 @@ private:
     bgfx::UniformHandle colorUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle sizeUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle outputUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle spinUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle basisUniform_ = BGFX_INVALID_HANDLE;
     std::unordered_map<Key, Emitter, KeyHash> emitters_;
     std::unordered_map<std::uint64_t, SceneClock> scenes_;
     std::uint64_t allocatedBytes_ = 0U;

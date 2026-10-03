@@ -186,6 +186,32 @@ void RunCanonicalGoldenTest() {
     Require(serialized->find('\r') == std::string::npos, "writer emitted a non-canonical newline");
 }
 
+// Spin ranges survive a round trip, an empty or reversed range is judged by the validator, and an asset that
+// uses no spin does not mention it in its text.
+void RunSpinSchemaTest() {
+    using namespace kb::scene;
+    ParticleEffectAsset asset = MakeComprehensiveAsset();
+    std::vector<ParticleEffectDiagnostic> diagnostics;
+    const std::optional<std::string> plain = ParticleEffectAssetIO::Serialize(asset, diagnostics);
+    Require(plain.has_value() && plain->find("angularVelocity") == std::string::npos && plain->find("initialRotation") == std::string::npos,
+            "an asset without spin must not write spin properties");
+    asset.emitters[0].spawn.initialRotationMinDegrees = -30.0F;
+    asset.emitters[0].spawn.initialRotationMaxDegrees = 90.0F;
+    asset.emitters[0].spawn.angularVelocityMinDegrees = 10.0F;
+    asset.emitters[0].spawn.angularVelocityMaxDegrees = 200.0F;
+    Require(ParticleEffectAssetValidator::ValidateStructure(asset).Succeeded(), "a valid spin range failed validation");
+    const std::optional<std::string> encoded = ParticleEffectAssetIO::Serialize(asset, diagnostics);
+    Require(encoded.has_value(), "an asset with spin did not serialize");
+    const ParticleEffectLoadResult decoded = ParticleEffectAssetIO::Parse(*encoded);
+    Require(decoded.Succeeded() && decoded.asset->emitters[0].spawn.initialRotationMinDegrees == -30.0F &&
+                decoded.asset->emitters[0].spawn.initialRotationMaxDegrees == 90.0F &&
+                decoded.asset->emitters[0].spawn.angularVelocityMinDegrees == 10.0F &&
+                decoded.asset->emitters[0].spawn.angularVelocityMaxDegrees == 200.0F,
+            "spin ranges did not round-trip");
+    asset.emitters[0].spawn.angularVelocityMinDegrees = 300.0F; // above the maximum
+    Require(!ParticleEffectAssetValidator::ValidateStructure(asset).Succeeded(), "a reversed spin range passed validation");
+}
+
 void RunComprehensiveSchemaTest() {
     using namespace kb::scene;
     const ParticleEffectAsset asset = MakeComprehensiveAsset();
@@ -1108,6 +1134,7 @@ int main() {
     try {
         RunCanonicalGoldenTest();
         RunComprehensiveSchemaTest();
+        RunSpinSchemaTest();
         RunAuthoringOrderTest();
         RunHardLimitBoundaryTest();
         RunBoundedFileLoadTest();

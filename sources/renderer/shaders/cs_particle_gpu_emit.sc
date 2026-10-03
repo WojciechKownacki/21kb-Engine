@@ -99,5 +99,5 @@ void main()
         position = mul(u_gpuParticleWorld, vec4(position, 1.0)).xyz;
         velocity = mul(u_gpuParticleWorld, vec4(velocity, 0.0)).xyz;
     }
-    WriteLiveInstance(base, position, velocity, age / lifetime);
+    WriteLiveInstance(base, position, velocity, age / lifetime, ParticleSpin(slot, start.w, age));
 }

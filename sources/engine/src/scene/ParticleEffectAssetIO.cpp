@@ -511,6 +511,14 @@ void AnnotateDiagnosticContext(ParticleEffectLoadResult& result, const ParticleE
                                           ParseColor));
         static_cast<void>(reader.Optional(IndexPath(emitterIndex, "spawn.startSize"), emitter.spawn.startSize,
                                           ParseFloat));
+        static_cast<void>(reader.Optional(IndexPath(emitterIndex, "spawn.initialRotationMinDegrees"),
+                                          emitter.spawn.initialRotationMinDegrees, ParseFloat));
+        static_cast<void>(reader.Optional(IndexPath(emitterIndex, "spawn.initialRotationMaxDegrees"),
+                                          emitter.spawn.initialRotationMaxDegrees, ParseFloat));
+        static_cast<void>(reader.Optional(IndexPath(emitterIndex, "spawn.angularVelocityMinDegrees"),
+                                          emitter.spawn.angularVelocityMinDegrees, ParseFloat));
+        static_cast<void>(reader.Optional(IndexPath(emitterIndex, "spawn.angularVelocityMaxDegrees"),
+                                          emitter.spawn.angularVelocityMaxDegrees, ParseFloat));
         std::uint32_t moduleCount = 0U;
         reader.RequiredBoundedCount(IndexPath(emitterIndex, "moduleCount"), moduleCount,
                                     kParticleEffectMaxModulesPerEmitter);
@@ -1069,6 +1077,14 @@ std::optional<std::string> ParticleEffectAssetIO::Serialize(const ParticleEffect
         Line(out, IndexPath(ei, "spawn.prewarmSeconds"), Float(e.spawn.prewarmSeconds));
         ColorLine(out, IndexPath(ei, "spawn.startColor"), e.spawn.startColor);
         Line(out, IndexPath(ei, "spawn.startSize"), Float(e.spawn.startSize));
+        // Spin is written only when used, so assets that never touch it stay byte-identical to what they were.
+        if (e.spawn.initialRotationMinDegrees != 0.0F || e.spawn.initialRotationMaxDegrees != 0.0F ||
+            e.spawn.angularVelocityMinDegrees != 0.0F || e.spawn.angularVelocityMaxDegrees != 0.0F) {
+            Line(out, IndexPath(ei, "spawn.initialRotationMinDegrees"), Float(e.spawn.initialRotationMinDegrees));
+            Line(out, IndexPath(ei, "spawn.initialRotationMaxDegrees"), Float(e.spawn.initialRotationMaxDegrees));
+            Line(out, IndexPath(ei, "spawn.angularVelocityMinDegrees"), Float(e.spawn.angularVelocityMinDegrees));
+            Line(out, IndexPath(ei, "spawn.angularVelocityMaxDegrees"), Float(e.spawn.angularVelocityMaxDegrees));
+        }
         Line(out, IndexPath(ei, "moduleCount"), std::to_string(e.modules.size()));
         for (std::size_t mi = 0; mi < e.modules.size(); ++mi) {
             const auto& m = e.modules[mi];

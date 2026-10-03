@@ -6853,7 +6853,7 @@ struct GiFloorStats {
 
 // A small scene for the screen-space effects: boxes (white matte, red matte or glossy white) lit by
 // point lights, rendered for several frames into a square readback target.
-enum class SsMaterial : std::uint8_t { White, Red, Glossy };
+enum class SsMaterial : std::uint8_t { White, Red, Glossy, Blend };
 
 struct SsBox {
     kb::scene::Vec3 position;
@@ -6885,7 +6885,8 @@ struct SsBox {
         "Screen-space test could not discover its mesh");
     const kb::assets::AssetMetadata* mesh = manager.Registry().FindByPath("/Game/cube.obj");
     Require(mesh != nullptr, "Screen-space test lost its cube mesh");
-    const auto publishMaterial = [&](const char* name, std::array<float, 3> color, float roughness) {
+    const auto publishMaterial = [&](const char* name, std::array<float, 3> color, float roughness,
+                                     RenderMaterialAlphaMode alphaMode = RenderMaterialAlphaMode::Opaque) {
         const kb::assets::AssetId id = kb::assets::MakeAssetId(name);
         Require(manager.RegisterAsset(kb::assets::AssetMetadata{
                     .id = id, .type = "RenderMaterial", .name = name, .virtualPath = std::string{ "/Game/" } + name,
@@ -6896,10 +6897,13 @@ struct SsBox {
         data->desc.baseColor[1] = color[1];
         data->desc.baseColor[2] = color[2];
         data->desc.roughnessFactor = roughness;
+        data->desc.alphaMode = alphaMode;
         data->graph = MakeDefaultRenderMaterialGraphDocument();
+        if (alphaMode == RenderMaterialAlphaMode::Blend) data->graph.blendMode = "translucent";
         Require(manager.PublishRuntimeAsset(id, std::move(data)), "Screen-space test could not publish a material");
         return id.value;
     };
+    const std::uint64_t blend = publishMaterial("SsBlend", { 1.0F, 1.0F, 1.0F }, 0.9F, RenderMaterialAlphaMode::Blend);
     const std::uint64_t red = publishMaterial("SsRed", { 0.8F, 0.05F, 0.05F }, 0.9F);
     const std::uint64_t glossy = publishMaterial("SsGlossy", { 0.9F, 0.9F, 0.9F }, 0.05F);
     for (const SsBox& box : boxes) {
@@ -6909,7 +6913,8 @@ struct SsBox {
         });
         scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{
             .meshAssetId = mesh->id.value,
-            .materialAssetId = box.material == SsMaterial::Red ? red : box.material == SsMaterial::Glossy ? glossy : 0U,
+            .materialAssetId = box.material == SsMaterial::Red ? red : box.material == SsMaterial::Glossy ? glossy
+                : box.material == SsMaterial::Blend ? blend : 0U,
             .castsShadow = false });
     }
     for (const kb::scene::Vec3& position : pointLights) {
@@ -7317,6 +7322,106 @@ void RunRendererDrawsGpuMeshParticlesTest() {
     Require(without[0] < 20, "GPU mesh particle test: the pixel must be empty without the particle");
 }
 
+// Red cubes of a GPU mesh emitter turn by their spin: a cube of side 2 turned 45 degrees about the view axis
+// reaches 1.41 m to the side, which an unturned one (1 m) does not.
+[[nodiscard]] int GpuMeshSpinReach(float spinRadians, float spinRateRadians) {
+    constexpr std::uint16_t kSize = 64U;
+    const std::vector<kb::scene::Vec3> lights{ { 0.0F, 3.0F, -4.0F } };
+    SceneRenderLightingConfig lighting{};
+    const auto queue = [&](kb::scene::Scene& scene, int frame) {
+        if (frame != 1) return;
+        const kb::assets::AssetMetadata* mesh = scene.Assets().Manager().Registry().FindByPath("/Game/cube.obj");
+        Require(mesh != nullptr, "GPU mesh spin test lost its cube mesh");
+        kb::particles::ParticleGpuEmitterCommand command{};
+        command.key = { 1U, 1U };
+        command.simTime = 0.5;
+        command.hasParams = true;
+        command.params.capacity = 16U;
+        command.params.output = kb::particles::ParticleRenderOutput::Mesh;
+        command.params.meshAssetId = mesh->id.value;
+        command.params.materialAssetId = kb::assets::MakeAssetId("SsRed").value;
+        command.params.blend = kb::particles::ParticleRenderBlendMode::Alpha;
+        command.params.depth = kb::particles::ParticleRenderDepthMode::ReadWrite;
+        command.params.color.fill({ 1.0F, 1.0F, 1.0F, 1.0F });
+        command.params.size.fill(2.0F);
+        command.params.spinMin = command.params.spinMax = spinRadians;
+        command.params.spinRateMin = command.params.spinRateMax = spinRateRadians;
+        command.spawns.push_back(kb::particles::ParticleGpuSpawn{
+            .position = { 0.0F, 0.0F, 5.0F }, .birthTime = 0.0F, .velocity = { 0.0F, 0.0F, 0.0F }, .lifetime = 20.0F });
+        kb::particles::ParticlePlayback::QueueGpuEmitterCommand(scene, command);
+    };
+    const std::vector<SsBox> boxes{ { { 0.0F, -40.0F, 0.0F }, { 1.0F, 1.0F, 1.0F }, SsMaterial::Red } };
+    const auto pixels = RenderScreenSpaceScene(boxes, lights, bx::Vec3{ 0.0F, 0.0F, -10.0F }, bx::Vec3{ 0.0F, 0.0F, 5.0F }, 30.0F,
+        lighting, 4, kSize, SceneRenderMeshPassMode::OpaqueAndTransparent, queue);
+    return pixels[(32U * kSize + 42U) * 4U]; // 10 px = 1.25 m to the right of the centre
+}
+
+void RunRendererSpinsGpuMeshParticlesTest() {
+    const int still = GpuMeshSpinReach(0.0F, 0.0F);
+    const int turned = GpuMeshSpinReach(0.7853982F, 0.0F);
+    // The clock stands at about 0.48 s, so 1.5708 rad/s has turned the cube by about 43 degrees.
+    const int spinning = GpuMeshSpinReach(0.0F, 1.5707964F);
+    std::fprintf(stderr, "gpu_mesh_spin still=%d turned=%d spinning=%d%c", still, turned, spinning, 10);
+    Require(still < 20, "GPU mesh spin test: an unturned cube must not reach 1.25 m to the side");
+    Require(turned > 60, "GPU mesh spin test: a cube turned 45 degrees must reach its corner there");
+    Require(spinning > 60, "GPU mesh spin test: a cube with an angular velocity must have turned by its age");
+}
+
+// Two overlapping translucent mesh particles, the older one blue and the younger one red: whichever is nearer
+// to the camera must be drawn last and so dominate, whatever the order of their ring slots.
+[[nodiscard]] std::array<int, 3> GpuTranslucentMeshCentre(bool olderIsNearer, bool translucent) {
+    constexpr std::uint16_t kSize = 64U;
+    const std::vector<kb::scene::Vec3> lights{ { 0.0F, 3.0F, -4.0F } };
+    SceneRenderLightingConfig lighting{};
+    const auto queue = [&](kb::scene::Scene& scene, int frame) {
+        if (frame != 1) return;
+        const kb::assets::AssetMetadata* mesh = scene.Assets().Manager().Registry().FindByPath("/Game/cube.obj");
+        Require(mesh != nullptr, "GPU translucent mesh test lost its cube mesh");
+        // SsBlend is the translucent white material the helper publishes; SsRed stands in for an opaque one.
+        const kb::assets::AssetId materialId = kb::assets::MakeAssetId(translucent ? "SsBlend" : "SsRed");
+        kb::particles::ParticleGpuEmitterCommand command{};
+        command.key = { 1U, 1U };
+        command.simTime = 10.0;
+        command.hasParams = true;
+        command.params.capacity = 16U;
+        command.params.output = kb::particles::ParticleRenderOutput::Mesh;
+        command.params.meshAssetId = mesh->id.value;
+        command.params.materialAssetId = materialId.value;
+        command.params.blend = kb::particles::ParticleRenderBlendMode::Alpha;
+        command.params.depth = kb::particles::ParticleRenderDepthMode::ReadOnly;
+        for (std::size_t sample = 0U; sample < command.params.color.size(); ++sample) {
+            command.params.color[sample] = sample < 3U ? std::array<float, 4>{ 1.0F, 0.0F, 0.0F, 0.9F }
+                                                       : std::array<float, 4>{ 0.0F, 0.0F, 1.0F, 0.9F };
+        }
+        command.params.size.fill(2.0F);
+        const float olderZ = olderIsNearer ? 3.0F : 6.0F;
+        const float youngerZ = olderIsNearer ? 6.0F : 3.0F;
+        // The older particle takes ring slot 0, the younger slot 1: drawn in slot order, the younger would win.
+        command.spawns.push_back(kb::particles::ParticleGpuSpawn{
+            .position = { 0.0F, 0.0F, olderZ }, .birthTime = 0.0F, .velocity = { 0.0F, 0.0F, 0.0F }, .lifetime = 20.0F });
+        command.spawns.push_back(kb::particles::ParticleGpuSpawn{
+            .position = { 0.0F, 0.0F, youngerZ }, .birthTime = 8.0F, .velocity = { 0.0F, 0.0F, 0.0F }, .lifetime = 20.0F });
+        kb::particles::ParticlePlayback::QueueGpuEmitterCommand(scene, command);
+    };
+    // The renderer makes the GPU resource of a mesh only for meshes the scene uses: a far box uses the cube.
+    // (The same holds for materials: SsBlend is created because a far box uses it.)
+    const std::vector<SsBox> boxes{ { { 0.0F, -40.0F, 0.0F }, { 1.0F, 1.0F, 1.0F }, SsMaterial::Red },
+        { { 5.0F, -40.0F, 0.0F }, { 1.0F, 1.0F, 1.0F }, SsMaterial::Blend } };
+    const auto pixels = RenderScreenSpaceScene(boxes, lights, bx::Vec3{ 0.0F, 0.0F, -10.0F }, bx::Vec3{ 0.0F, 0.0F, 5.0F }, 30.0F,
+        lighting, 4, kSize, SceneRenderMeshPassMode::OpaqueAndTransparent, queue);
+    const std::size_t offset = (32U * kSize + 32U) * 4U;
+    return { pixels[offset], pixels[offset + 1U], pixels[offset + 2U] };
+}
+
+void RunRendererSortsTranslucentGpuMeshParticlesTest() {
+    const std::array<int, 3> olderNearer = GpuTranslucentMeshCentre(true, true);
+    const std::array<int, 3> youngerNearer = GpuTranslucentMeshCentre(false, true);
+    std::fprintf(stderr, "gpu_mesh_sort older_nearer=%d,%d,%d younger_nearer=%d,%d,%d%c",
+        olderNearer[0], olderNearer[1], olderNearer[2], youngerNearer[0], youngerNearer[1], youngerNearer[2], 10);
+    Require(olderNearer[2] > olderNearer[0] + 15, "GPU mesh sort test: the nearer, older (blue) cube must be drawn over the farther one");
+    Require(youngerNearer[0] > youngerNearer[2] + 15, "GPU mesh sort test: the nearer, younger (red) cube must be drawn over the farther one");
+}
+
 // One GPU particle flying along +x draws a trail of camera-facing quads along the path it has travelled:
 // the middle of the path is covered, the space beyond the oldest segment is not.
 [[nodiscard]] std::array<int, 3> GpuTrailCoverage(bool trail) {
@@ -7722,6 +7827,8 @@ void RunRendererParticleMeshSnapshotSubmitTest() {
     RunRendererCollidesGpuParticlesTest();
     RunRendererSortsAlphaGpuParticlesTest();
     RunRendererDrawsGpuMeshParticlesTest();
+    RunRendererSpinsGpuMeshParticlesTest();
+    RunRendererSortsTranslucentGpuMeshParticlesTest();
     RunRendererDrawsGpuTrailParticlesTest();
     RunRendererFollowsLocalSpaceGpuParticlesTest();
 #if defined(KB_21KB_PARTICLE_PLUGIN_PATH)

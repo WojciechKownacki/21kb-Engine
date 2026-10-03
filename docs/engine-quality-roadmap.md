@@ -47,7 +47,7 @@ Kryterium „zrobione" = test, który musi przejść; test ma być headless (bez
   Dziś emitery z kolizjami wracają na CPU. Zrobione gdy: test, że cząstka odbija się od płaszczyzny widocznej
   w buforze głębi, oraz że emitery z `CollisionPlane` mogą działać na GPU.
 - **B2 — Sortowanie cząstek przezroczystych na GPU** · P2 · M · **zrobione** (sortowanie bitoniczne; 1 mln cząstek: +4,4 ms)
-- **B3 — Przestrzeń lokalna, podążanie za transformacją, wyjście mesh/trail** · P2 · L · **zrobione** (przestrzeń lokalna, mesh przez potok mesh z materiałem, smugi jako pasy liczone ze wzoru zamkniętego; wstęgi i belki nadal na CPU)
+- **B3 — Przestrzeń lokalna, podążanie za transformacją, wyjście mesh/trail** · P2 · L · **zrobione** (przestrzeń lokalna, mesh przez potok mesh z materiałem, smugi jako pasy liczone ze wzoru zamkniętego; rotacja cząstek (kąt początkowy i prędkość kątowa z zakresu, na CPU i GPU, mesh obraca się wokół osi Z emitera); sortowanie przezroczystych meshy po głębi (GPU i CPU); wstęgi i belki nadal na CPU)
   Dziś kwalifikują się tylko emitery w przestrzeni świata z wyjściem billboard/stretched.
 - **B4 — Pod-emitery i zdarzenia na GPU** · P3 · L · **zrobione** (zdarzenia narodzin i śmierci; kolizyjne nadal na CPU)
 - **B5 — Test „od pliku do piksela"** · P1 · S · **zrobione** (plik .kbvfx → wtyczka → kolejka GPU → renderer → piksele, jeden proces)

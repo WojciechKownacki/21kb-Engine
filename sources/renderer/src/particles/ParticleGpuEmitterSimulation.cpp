@@ -44,13 +44,13 @@ constexpr double kFixedStepSeconds = 1.0 / static_cast<double>(kb::scene::kParti
     return layout;
 }
 
-// Alpha and premultiplied blending depend on draw order; the other modes are commutative. Only billboards are
-// sorted: mesh instances go through the mesh pipeline and trail segments follow each other in the buffer.
-[[nodiscard]] bool NeedsSort(const kb::particles::ParticleGpuEmitterParams& params) noexcept {
-    const bool billboard = params.output == kb::particles::ParticleRenderOutput::Billboard ||
-        params.output == kb::particles::ParticleRenderOutput::StretchedBillboard;
-    return billboard && (params.blend == kb::particles::ParticleRenderBlendMode::Alpha ||
-        params.blend == kb::particles::ParticleRenderBlendMode::Premultiplied);
+// The rotation matrix of a quaternion (x, y, z, w) as three columns (padded to four floats).
+[[nodiscard]] std::array<float, 12> BasisColumns(const std::array<float, 4>& q) noexcept {
+    const float x = q[0], y = q[1], z = q[2], w = q[3];
+    return {
+        1.0F - 2.0F * (y * y + z * z), 2.0F * (x * y + w * z), 2.0F * (x * z - w * y), 0.0F,
+        2.0F * (x * y - w * z), 1.0F - 2.0F * (x * x + z * z), 2.0F * (y * z + w * x), 0.0F,
+        2.0F * (x * z + w * y), 2.0F * (y * z - w * x), 1.0F - 2.0F * (x * x + y * y), 0.0F };
 }
 
 [[nodiscard]] std::uint32_t InstancesPerSlot(const kb::particles::ParticleGpuEmitterParams& params) noexcept {
@@ -72,6 +72,16 @@ constexpr double kFixedStepSeconds = 1.0 / static_cast<double>(kb::scene::kParti
 
 } // namespace
 
+// Alpha and premultiplied blending depend on draw order; the other modes are commutative. Billboards follow the
+// emitter's blend mode, mesh instances their material's; trail segments follow each other in the buffer.
+bool ParticleGpuEmitterSimulation::NeedsSort(const kb::particles::ParticleGpuEmitterParams& params, bool translucentMaterial) noexcept {
+    if (params.output == kb::particles::ParticleRenderOutput::Mesh) return translucentMaterial;
+    const bool billboard = params.output == kb::particles::ParticleRenderOutput::Billboard ||
+        params.output == kb::particles::ParticleRenderOutput::StretchedBillboard;
+    return billboard && (params.blend == kb::particles::ParticleRenderBlendMode::Alpha ||
+        params.blend == kb::particles::ParticleRenderBlendMode::Premultiplied);
+}
+
 bool ParticleGpuEmitterSimulation::Initialize() {
     if (IsReady()) return true;
     const bgfx::Caps* caps = bgfx::getCaps();
@@ -83,6 +93,8 @@ bool ParticleGpuEmitterSimulation::Initialize() {
         static_cast<std::uint16_t>(kb::particles::kParticleGpuCurveSamples));
     sizeUniform_ = bgfx::createUniform("u_gpuParticleSize", bgfx::UniformType::Vec4, 2U);
     outputUniform_ = bgfx::createUniform("u_gpuParticleOutput", bgfx::UniformType::Vec4);
+    spinUniform_ = bgfx::createUniform("u_gpuParticleSpin", bgfx::UniformType::Vec4);
+    basisUniform_ = bgfx::createUniform("u_gpuParticleBasis", bgfx::UniformType::Vec4, 3U);
     collideProgram_ = ShaderLoader::LoadComputeProgram("cs_particle_gpu_collide.sc");
     worldUniform_ = bgfx::createUniform("u_gpuParticleWorld", bgfx::UniformType::Mat4);
     worldInverseUniform_ = bgfx::createUniform("u_gpuParticleWorldInverse", bgfx::UniformType::Mat4);
@@ -120,7 +132,7 @@ void ParticleGpuEmitterSimulation::Shutdown() noexcept {
     for (bgfx::UniformHandle* handle : { &motionUniform_, &timeUniform_, &colorUniform_, &sizeUniform_, &worldUniform_, &worldInverseUniform_, &localUniform_, &planeUniform_,
              &collisionUniform_, &depthBounceUniform_, &texelUniform_, &viewProjectionUniform_, &depthSampler_,
              &inverseViewProjectionUniform_, &depthParamsUniform_, &cameraPositionUniform_, &sortCameraUniform_,
-             &sortParamsUniform_, &outputUniform_ }) {
+             &sortParamsUniform_, &outputUniform_, &spinUniform_, &basisUniform_ }) {
         if (bgfx::isValid(*handle)) bgfx::destroy(*handle);
         *handle = BGFX_INVALID_HANDLE;
     }
@@ -167,8 +179,9 @@ bool ParticleGpuEmitterSimulation::Create(const Key& key, const kb::particles::P
         Destroy(emitter);
         return false;
     }
-    // Sorting is an enhancement: without budget or kernels the emitter is simply drawn in ring order.
-    if (NeedsSort(params)) static_cast<void>(EnsureSort(emitter));
+    // Sorting is an enhancement: without budget or kernels the emitter is simply drawn in ring order. (A mesh
+    // emitter finds out whether its material is translucent at dispatch.)
+    if (NeedsSort(params, false)) static_cast<void>(EnsureSort(emitter));
     emitters_[key] = emitter;
     return true;
 }
@@ -198,13 +211,14 @@ bool ParticleGpuEmitterSimulation::EnsureSort(Emitter& emitter) noexcept {
 
 void ParticleGpuEmitterSimulation::SortInstances(
     bgfx::ViewId viewId, const Emitter& emitter, const std::array<float, 4>& cameraPosition) noexcept {
+    const float meshLayout = emitter.params.output == kb::particles::ParticleRenderOutput::Mesh ? 1.0F : 0.0F;
     const std::uint32_t padded = PaddedSortCount(emitter.capacity);
     const std::array<float, 4> camera{ cameraPosition[0], cameraPosition[1], cameraPosition[2], static_cast<float>(emitter.capacity) };
     const auto groups = [](std::uint32_t threads) { return (threads + kThreadGroupSize - 1U) / kThreadGroupSize; };
     bgfx::setBuffer(0U, emitter.instances, bgfx::Access::Read);
     bgfx::setBuffer(1U, emitter.sortKeys, bgfx::Access::Write);
     bgfx::setUniform(sortCameraUniform_, camera.data());
-    const std::array<float, 4> keyParams{ static_cast<float>(padded), 0.0F, 0.0F, 0.0F };
+    const std::array<float, 4> keyParams{ static_cast<float>(padded), meshLayout, 0.0F, 0.0F };
     bgfx::setUniform(sortParamsUniform_, keyParams.data());
     bgfx::dispatch(viewId, sortKeysProgram_, groups(padded), 1U, 1U);
     // Bitonic sort, farthest first.
@@ -310,7 +324,7 @@ void ParticleGpuEmitterSimulation::Apply(
             } else {
                 found->second.params = command.params;
                 found->second.params.capacity = capacity;
-                if (NeedsSort(command.params)) static_cast<void>(EnsureSort(found->second));
+                if (NeedsSort(command.params, false)) static_cast<void>(EnsureSort(found->second));
                 if (command.params.HasCollision() && !EnsureState(found->second)) {
                     // No budget left for the state: the emitter keeps simulating without collisions.
                     found->second.params.hasPlane = false;
@@ -323,6 +337,7 @@ void ParticleGpuEmitterSimulation::Apply(
             found->second.world = command.worldMatrix;
             bx::mtxInverse(found->second.worldInverse.data(), command.worldMatrix.data());
         }
+        if (command.hasOrientation) found->second.basis = BasisColumns(command.orientation);
         if (command.clear) Clear(found->second);
         Upload(found->second, command.spawns);
     }
@@ -352,11 +367,14 @@ void ParticleGpuEmitterSimulation::Dispatch(bgfx::ViewId viewId, std::uint64_t s
         std::array<float, 4U * kb::particles::kParticleGpuCurveSamples> colors{};
         // The mesh pipeline expects the material's base colour already multiplied into the instance colour.
         std::array<float, 4> tint{ 1.0F, 1.0F, 1.0F, 1.0F };
+        bool translucentMaterial = false;
         if (params.output == kb::particles::ParticleRenderOutput::Mesh && collision.resources != nullptr && collision.resourceMap != nullptr) {
             if (const RenderMaterialResource* material = collision.resources->FindMaterial(collision.resourceMap->ResolveMaterial(params.materialAssetId))) {
                 tint = { material->baseColor[0], material->baseColor[1], material->baseColor[2], material->baseColor[3] };
+                translucentMaterial = material->alphaMode == RenderMaterialAlphaMode::Blend;
             }
         }
+        const bool sortNow = NeedsSort(params, translucentMaterial) && EnsureSort(emitter);
         for (std::size_t sample = 0U; sample < kb::particles::kParticleGpuCurveSamples; ++sample) {
             for (std::size_t channel = 0U; channel < 4U; ++channel) {
                 colors[sample * 4U + channel] = params.color[sample][channel] * tint[channel];
@@ -398,10 +416,13 @@ void ParticleGpuEmitterSimulation::Dispatch(bgfx::ViewId viewId, std::uint64_t s
             : params.output == kb::particles::ParticleRenderOutput::Trail ? 2.0F : 0.0F;
         const std::array<float, 4> output{ outputMode, static_cast<float>(emitter.perSlot), params.trailSegmentSeconds, params.trailWidth };
         bgfx::setUniform(outputUniform_, output.data());
+        const std::array<float, 4> spin{ params.spinMin, params.spinMax, params.spinRateMin, params.spinRateMax };
+        bgfx::setUniform(spinUniform_, spin.data());
+        bgfx::setUniform(basisUniform_, emitter.basis.data(), 3U);
         const std::uint32_t threads = emitter.capacity * emitter.perSlot;
         bgfx::dispatch(viewId, colliding ? collideProgram_ : program_, (threads + kThreadGroupSize - 1U) / kThreadGroupSize, 1U, 1U);
         bgfx::DynamicVertexBufferHandle drawn = emitter.instances;
-        if (NeedsSort(params) && bgfx::isValid(emitter.sortedInstances)) {
+        if (sortNow && bgfx::isValid(emitter.sortedInstances)) {
             SortInstances(viewId, emitter, collision.cameraPosition);
             drawn = emitter.sortedInstances;
         }
