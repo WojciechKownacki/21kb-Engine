@@ -577,6 +577,9 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_particle_visual_integrate.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_particle_gpu_emit.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_particle_gpu_collide.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_particle_gpu_sort_keys.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_particle_gpu_sort_step.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_particle_gpu_sort_gather.sc
         VARYING_DEF ${KB_RENDERER_SHADER_VARYING_DEF}
         OUTPUT_DIR ${KB_RENDERER_GENERATED_SHADER_DIR}
         INCLUDE_DIRS

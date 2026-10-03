@@ -32,8 +32,9 @@ public:
     // Moves the scene render clock forward by the frame time, never more than one fixed step away
     // from the newest simulated time.
     void Advance(std::uint64_t sceneId, float frameDeltaSeconds) noexcept;
-    // What colliding emitters need from the frame: the scene depth the camera has drawn so far.
-    struct CollisionContext {
+    // What the frame gives the simulation: the scene depth the camera has drawn so far (colliding emitters
+    // bounce off it) and the camera position (alpha-blended emitters are sorted back to front from it).
+    struct FrameContext {
         bgfx::TextureHandle depthTexture = BGFX_INVALID_HANDLE;
         std::array<float, 16> viewProjection{};
         std::array<float, 16> inverseViewProjection{};
@@ -43,7 +44,7 @@ public:
     };
 
     // Rebuilds the instance buffers of the scene emitters; call once per rendered frame.
-    void Dispatch(bgfx::ViewId viewId, std::uint64_t sceneId, const CollisionContext& collision) noexcept;
+    void Dispatch(bgfx::ViewId viewId, std::uint64_t sceneId, const FrameContext& frame) noexcept;
     // Emitters of the scene that were dispatched this frame.
     [[nodiscard]] std::span<const Draw> Draws(std::uint64_t sceneId) noexcept;
     [[nodiscard]] bool HasEmitters(std::uint64_t sceneId) const noexcept;
@@ -73,6 +74,10 @@ private:
         bgfx::DynamicVertexBufferHandle instances = BGFX_INVALID_HANDLE;
         // Per-slot position/velocity record of the colliding kernel; only created for colliding emitters.
         bgfx::DynamicVertexBufferHandle state = BGFX_INVALID_HANDLE;
+        // Alpha-blended emitters only: sort keys (distance, slot) padded to a power of two, and the
+        // instance records in back-to-front order, which is what gets drawn.
+        bgfx::DynamicVertexBufferHandle sortKeys = BGFX_INVALID_HANDLE;
+        bgfx::DynamicVertexBufferHandle sortedInstances = BGFX_INVALID_HANDLE;
         std::uint32_t capacity = 0U;
         std::uint64_t nextSlot = 0U;
         std::uint64_t bytes = 0U;
@@ -89,6 +94,9 @@ private:
     void Clear(Emitter& emitter) noexcept;
     // Creates the state buffer of a colliding emitter; false when the memory budget would be exceeded.
     [[nodiscard]] bool EnsureState(Emitter& emitter) noexcept;
+    // Creates the sort buffers of an alpha-blended emitter; false when the budget or a kernel is missing.
+    [[nodiscard]] bool EnsureSort(Emitter& emitter) noexcept;
+    void SortInstances(bgfx::ViewId viewId, const Emitter& emitter, const std::array<float, 4>& cameraPosition) noexcept;
 
     bgfx::ProgramHandle program_ = BGFX_INVALID_HANDLE;
     // Optional: without it (e.g. no variant for this backend) colliding emitters use the closed-form kernel.
@@ -103,6 +111,12 @@ private:
     bgfx::UniformHandle depthParamsUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle cameraPositionUniform_ = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle fallbackDepth_ = BGFX_INVALID_HANDLE;
+    // Optional kernels of the back-to-front sort (all three are needed).
+    bgfx::ProgramHandle sortKeysProgram_ = BGFX_INVALID_HANDLE;
+    bgfx::ProgramHandle sortStepProgram_ = BGFX_INVALID_HANDLE;
+    bgfx::ProgramHandle sortGatherProgram_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle sortCameraUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle sortParamsUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle motionUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle timeUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle colorUniform_ = BGFX_INVALID_HANDLE;

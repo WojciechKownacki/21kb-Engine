@@ -7082,6 +7082,50 @@ void RunRendererRendersVoxelGiFromOffscreenObjectsTest() {
     return best;
 }
 
+// Two overlapping alpha-blended particles of one GPU emitter: the older one is blue, the younger red (the
+// colour curve turns blue at half the life). Whichever is nearer to the camera must end up on top,
+// whatever the order of their ring slots.
+[[nodiscard]] std::array<int, 3> OverlappingAlphaParticlesCentre(bool olderIsNearer) {
+    constexpr std::uint16_t kSize = 64U;
+    SceneRenderLightingConfig lighting{};
+    const auto queue = [&](kb::scene::Scene& scene, int frame) {
+        if (frame != 1) return;
+        kb::particles::ParticleGpuEmitterCommand command{};
+        command.key = { 1U, 1U };
+        command.simTime = 10.0;
+        command.hasParams = true;
+        command.params.capacity = 16U;
+        command.params.blend = kb::particles::ParticleRenderBlendMode::Alpha;
+        command.params.depth = kb::particles::ParticleRenderDepthMode::Disabled;
+        for (std::size_t sample = 0U; sample < command.params.color.size(); ++sample) {
+            command.params.color[sample] = sample < 3U ? std::array<float, 4>{ 1.0F, 0.0F, 0.0F, 0.9F }
+                                                       : std::array<float, 4>{ 0.0F, 0.0F, 1.0F, 0.9F };
+        }
+        command.params.size.fill(2.0F);
+        const float olderZ = olderIsNearer ? -1.0F : 3.0F;
+        const float youngerZ = olderIsNearer ? 3.0F : -1.0F;
+        // The older particle takes ring slot 0, the younger slot 1: drawn in slot order, the younger would win.
+        command.spawns.push_back(kb::particles::ParticleGpuSpawn{
+            .position = { 0.0F, 0.0F, olderZ }, .birthTime = 0.0F, .velocity = { 0.0F, 0.0F, 0.0F }, .lifetime = 20.0F });
+        command.spawns.push_back(kb::particles::ParticleGpuSpawn{
+            .position = { 0.0F, 0.0F, youngerZ }, .birthTime = 8.0F, .velocity = { 0.0F, 0.0F, 0.0F }, .lifetime = 20.0F });
+        kb::particles::ParticlePlayback::QueueGpuEmitterCommand(scene, command);
+    };
+    const auto pixels = RenderScreenSpaceScene({}, {}, bx::Vec3{ 0.0F, 0.0F, -6.0F }, bx::Vec3{ 0.0F, 0.0F, 0.0F }, 30.0F, lighting, 4,
+        kSize, SceneRenderMeshPassMode::OpaqueAndTransparent, queue);
+    const std::size_t offset = (32U * kSize + 32U) * 4U;
+    return { pixels[offset], pixels[offset + 1U], pixels[offset + 2U] };
+}
+
+void RunRendererSortsAlphaGpuParticlesTest() {
+    const std::array<int, 3> olderNearer = OverlappingAlphaParticlesCentre(true);
+    const std::array<int, 3> youngerNearer = OverlappingAlphaParticlesCentre(false);
+    std::fprintf(stderr, "gpu_particle_sort older_nearer=%d,%d,%d younger_nearer=%d,%d,%d%c",
+        olderNearer[0], olderNearer[1], olderNearer[2], youngerNearer[0], youngerNearer[1], youngerNearer[2], 10);
+    Require(olderNearer[2] > olderNearer[0] + 100, "GPU sort test: the nearer, older (blue) particle must be drawn over the farther one");
+    Require(youngerNearer[0] > youngerNearer[2] + 100, "GPU sort test: the nearer, younger (red) particle must be drawn over the farther one");
+}
+
 void RunRendererCollidesGpuParticlesTest() {
     const SceneRenderLightingPath forward = SceneRenderLightingPath::Forward;
     const SceneRenderLightingPath deferred = SceneRenderLightingPath::Deferred;
@@ -7292,6 +7336,7 @@ void RunRendererParticleMeshSnapshotSubmitTest() {
     RunRendererRendersScreenSpaceReflectionsTest();
     RunRendererRendersVoxelGiFromOffscreenObjectsTest();
     RunRendererCollidesGpuParticlesTest();
+    RunRendererSortsAlphaGpuParticlesTest();
     RunRendererDrawsGpuSimulatedParticlesTest();
     RunRendererDrawsMillionGpuParticlesTest();
 #endif

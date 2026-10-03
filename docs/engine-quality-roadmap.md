@@ -46,7 +46,7 @@ Kryterium „zrobione" = test, który musi przejść; test ma być headless (bez
 - **B1 — Kolizje cząstek GPU z głębią sceny** · P1 · M · **zrobione** (płaszczyzna i głębia, forward i deferred)
   Dziś emitery z kolizjami wracają na CPU. Zrobione gdy: test, że cząstka odbija się od płaszczyzny widocznej
   w buforze głębi, oraz że emitery z `CollisionPlane` mogą działać na GPU.
-- **B2 — Sortowanie cząstek przezroczystych na GPU** · P2 · M · do zrobienia
+- **B2 — Sortowanie cząstek przezroczystych na GPU** · P2 · M · **zrobione** (sortowanie bitoniczne; 1 mln cząstek: +4,4 ms)
 - **B3 — Przestrzeń lokalna, podążanie za transformacją, wyjście mesh/trail** · P2 · L · do zrobienia
   Dziś kwalifikują się tylko emitery w przestrzeni świata z wyjściem billboard/stretched.
 - **B4 — Pod-emitery i zdarzenia na GPU** · P3 · L · do zrobienia
