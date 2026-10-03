@@ -5,6 +5,7 @@
 #include "renderer/RendererMatrixMath.hpp"
 #include "scene/lighting/SceneLightingPacker.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstring>
@@ -24,6 +25,10 @@ struct PosTexVertex {
 constexpr std::uint8_t kNormalStage = 1U;
 constexpr std::uint8_t kDepthStage = 4U;
 constexpr std::uint8_t kLitStage = 9U;
+constexpr std::uint8_t kVoxelAlbedoStage = 12U;
+constexpr std::uint8_t kVoxelEmissiveStage = 13U;
+// The voxel shading loop of ssgi_voxel.sh handles this many lights.
+constexpr std::uint16_t kVoxelLightCount = 8U;
 
 [[nodiscard]] std::uint16_t ClampToViewExtent(std::uint32_t value) noexcept {
     return static_cast<std::uint16_t>(value > UINT16_MAX ? UINT16_MAX : value);
@@ -50,6 +55,14 @@ bool SceneGiResolvePass::Initialize() {
     cameraPositionUniform_ = bgfx::createUniform("u_deferredCameraPosition", bgfx::UniformType::Vec4);
     inverseViewProjectionUniform_ = bgfx::createUniform("u_deferredInverseViewProjection", bgfx::UniformType::Mat4);
     depthParamsUniform_ = bgfx::createUniform("u_deferredDepthParams", bgfx::UniformType::Vec4);
+    voxelAlbedoSampler_ = bgfx::createUniform("s_voxelAlbedo", bgfx::UniformType::Sampler);
+    voxelEmissiveSampler_ = bgfx::createUniform("s_voxelEmissive", bgfx::UniformType::Sampler);
+    voxelGridUniform_ = bgfx::createUniform("u_voxelGrid", bgfx::UniformType::Vec4);
+    voxelInfoUniform_ = bgfx::createUniform("u_voxelInfo", bgfx::UniformType::Vec4);
+    voxelLightDirKindUniform_ = bgfx::createUniform("u_voxelLightDirKind", bgfx::UniformType::Vec4, kVoxelLightCount);
+    voxelLightPositionRangeUniform_ = bgfx::createUniform("u_voxelLightPositionRange", bgfx::UniformType::Vec4, kVoxelLightCount);
+    voxelLightColorIntensityUniform_ = bgfx::createUniform("u_voxelLightColorIntensity", bgfx::UniformType::Vec4, kVoxelLightCount);
+    voxelLightSpotUniform_ = bgfx::createUniform("u_voxelLightSpot", bgfx::UniformType::Vec4, kVoxelLightCount);
     if (!IsInitialized()) {
         Shutdown();
         return false;
@@ -60,7 +73,9 @@ bool SceneGiResolvePass::Initialize() {
 void SceneGiResolvePass::Shutdown() noexcept {
     giUniforms_.Destroy();
     for (bgfx::UniformHandle* handle : { &normalSampler_, &depthSampler_, &litSampler_, &cameraPositionUniform_,
-             &inverseViewProjectionUniform_, &depthParamsUniform_ }) {
+             &inverseViewProjectionUniform_, &depthParamsUniform_, &voxelAlbedoSampler_,
+             &voxelEmissiveSampler_, &voxelGridUniform_, &voxelInfoUniform_, &voxelLightDirKindUniform_,
+             &voxelLightPositionRangeUniform_, &voxelLightColorIntensityUniform_, &voxelLightSpotUniform_ }) {
         if (bgfx::isValid(*handle)) {
             bgfx::destroy(*handle);
         }
@@ -75,7 +90,10 @@ void SceneGiResolvePass::Shutdown() noexcept {
 bool SceneGiResolvePass::IsInitialized() const noexcept {
     return bgfx::isValid(program_) && giUniforms_.IsValid() && bgfx::isValid(normalSampler_) && bgfx::isValid(depthSampler_) &&
         bgfx::isValid(litSampler_) && bgfx::isValid(cameraPositionUniform_) && bgfx::isValid(inverseViewProjectionUniform_) &&
-        bgfx::isValid(depthParamsUniform_);
+        bgfx::isValid(depthParamsUniform_) && bgfx::isValid(voxelAlbedoSampler_) && bgfx::isValid(voxelEmissiveSampler_) &&
+        bgfx::isValid(voxelGridUniform_) && bgfx::isValid(voxelInfoUniform_) && bgfx::isValid(voxelLightDirKindUniform_) &&
+        bgfx::isValid(voxelLightPositionRangeUniform_) && bgfx::isValid(voxelLightColorIntensityUniform_) &&
+        bgfx::isValid(voxelLightSpotUniform_);
 }
 
 bool SceneGiResolvePass::Submit(const SceneGiResolvePassDesc& desc) const {
@@ -120,6 +138,26 @@ bool SceneGiResolvePass::Submit(const SceneGiResolvePassDesc& desc) const {
     bgfx::setTexture(kNormalStage, normalSampler_, desc.gbuffer->NormalTexture());
     bgfx::setTexture(kDepthStage, depthSampler_, desc.gbuffer->DepthTexture());
     bgfx::setTexture(kLitStage, litSampler_, desc.history->LitTexture());
+    // Voxel GI traces the world-space grid and shades what a ray hits with the scene lights.
+    const bool voxelGi = desc.lightingConfig.globalIllumination == SceneRenderGlobalIlluminationMode::VoxelGrid &&
+        desc.voxels != nullptr && desc.voxels->IsValid() && desc.renderScene != nullptr;
+    PackedSceneLighting lighting{};
+    if (voxelGi) {
+        SceneRenderSubmitStats lightingStats{};
+        lighting = SceneLightingPacker::Build(*desc.renderScene, lightingStats, desc.lightingConfig, desc.camera);
+    }
+    const float voxelLights = voxelGi ? std::min(lighting.params[0], static_cast<float>(kVoxelLightCount)) : 0.0F;
+    const std::array<float, 4> voxelInfo{ voxelGi ? 1.0F : 0.0F, voxelLights, static_cast<float>(SceneGiVoxelGrid::kDimension), 0.0F };
+    bgfx::setUniform(voxelInfoUniform_, voxelInfo.data());
+    bgfx::setUniform(voxelGridUniform_, (voxelGi ? desc.voxels->Origin() : std::array<float, 4>{}).data());
+    bgfx::setUniform(voxelLightDirKindUniform_, lighting.dirKind.data(), kVoxelLightCount);
+    bgfx::setUniform(voxelLightPositionRangeUniform_, lighting.positionRange.data(), kVoxelLightCount);
+    bgfx::setUniform(voxelLightColorIntensityUniform_, lighting.colorIntensity.data(), kVoxelLightCount);
+    bgfx::setUniform(voxelLightSpotUniform_, lighting.spot.data(), kVoxelLightCount);
+    if (voxelGi) {
+        bgfx::setTexture(kVoxelAlbedoStage, voxelAlbedoSampler_, desc.voxels->Albedo());
+        bgfx::setTexture(kVoxelEmissiveStage, voxelEmissiveSampler_, desc.voxels->Emissive());
+    }
     bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
     bgfx::setVertexBuffer(0, &vertices);
     bgfx::submit(desc.viewId, program_);

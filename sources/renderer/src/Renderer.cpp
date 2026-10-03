@@ -33,6 +33,7 @@
 #include "renderer/RendererDebugLog.hpp"
 #include "renderer/RendererMeshPassSubmitter.hpp"
 #include "renderer/RendererMatrixMath.hpp"
+#include "scene/lighting/SceneLightingPacker.hpp"
 #include "renderer/RendererPostProcessSubmitter.hpp"
 #include "renderer/RendererRuntimeResourceStatsBuilder.hpp"
 #include "renderer/RendererSceneLightingConfigResolver.hpp"
@@ -353,6 +354,7 @@ bool Renderer::Initialize(RenderSurface& surface, const DisplayConfig* config) {
     }
     // Optional: without its shader screen-space GI simply contributes nothing.
     static_cast<void>(giResolvePass_.Initialize());
+    static_cast<void>(giVoxelGrid_.Initialize());
     if (displayConfig_.enableEditorRendering && !editorPassSubmitter_.Initialize()) {
         Shutdown();
         return false;
@@ -429,6 +431,7 @@ void Renderer::Shutdown() {
         finalCompositePass_->Shutdown();
         finalCompositePass_.reset();
     }
+    giVoxelGrid_.Shutdown();
     giResolvePass_.Shutdown();
     if (deferredLightingPass_ != nullptr) {
         deferredLightingPass_->Shutdown();
@@ -1527,6 +1530,12 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         // The gather reads this frame's finished lit colour; its accumulated result lights the next frame.
         SceneGiHistory& giHistory = giHistories_[desc.target.viewport.viewportIndex];
         giHistory.Capture(viewportPlan.viewIds.sceneOverlays, desc.target.colorTexture);
+        if (effectiveLightingConfig.globalIllumination == SceneRenderGlobalIlluminationMode::VoxelGrid &&
+            sceneRenderer_ != nullptr) {
+            const std::array<float, 4> focus = SceneLightingPacker::CameraPosition(sceneCamera);
+            giVoxelGrid_.Update(renderScene, sceneRenderer_->Resources(), sceneRenderer_->ResourceMap(),
+                { focus[0], focus[1], focus[2] }, effectiveLightingConfig.giVoxelSize);
+        }
         static_cast<void>(giResolvePass_.Submit(SceneGiResolvePassDesc{
             .viewId = viewportPlan.viewIds.giResolve,
             .history = &giHistory,
@@ -1534,6 +1543,8 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
             .camera = sceneCamera,
             .lightingConfig = effectiveLightingConfig,
             .extent = desc.target.viewport.extent,
+            .voxels = &giVoxelGrid_,
+            .renderScene = &renderScene,
         }));
     }
 

@@ -24,6 +24,7 @@ SceneRenderLightingConfig RendererSceneLightingConfigResolver::Resolve(SceneRend
         .giIntensity = requested.giIntensity != defaultConfig.giIntensity ? requested.giIntensity : fallback.giIntensity,
         .giRange = requested.giRange != defaultConfig.giRange ? requested.giRange : fallback.giRange,
         .giHistoryWeight = requested.giHistoryWeight != defaultConfig.giHistoryWeight ? requested.giHistoryWeight : fallback.giHistoryWeight,
+        .giVoxelSize = requested.giVoxelSize != defaultConfig.giVoxelSize ? requested.giVoxelSize : fallback.giVoxelSize,
         .ambientOcclusionEnabled = requested.ambientOcclusionEnabled != defaultConfig.ambientOcclusionEnabled ? requested.ambientOcclusionEnabled : fallback.ambientOcclusionEnabled,
         .aoIntensity = requested.aoIntensity != defaultConfig.aoIntensity ? requested.aoIntensity : fallback.aoIntensity,
         .aoRadius = requested.aoRadius != defaultConfig.aoRadius ? requested.aoRadius : fallback.aoRadius,

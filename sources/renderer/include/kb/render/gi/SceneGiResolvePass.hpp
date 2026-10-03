@@ -3,6 +3,8 @@
 #include "kb/render/SceneGBuffer.hpp"
 #include "kb/render/gi/SceneGiHistory.hpp"
 #include "kb/render/gi/SceneGiUniforms.hpp"
+#include "kb/render/gi/SceneGiVoxelGrid.hpp"
+#include "kb/render/scene/RenderScene.hpp"
 #include "kb/render/scene/SceneRenderTypes.hpp"
 
 #include <bgfx/bgfx.h>
@@ -16,6 +18,9 @@ struct SceneGiResolvePassDesc {
     const SceneRenderCamera* camera = nullptr;
     SceneRenderLightingConfig lightingConfig{};
     RenderExtent extent{};
+    // Voxel GI only: the grid to trace and the scene whose lights shade the voxels that rays hit.
+    const SceneGiVoxelGrid* voxels = nullptr;
+    const RenderScene* renderScene = nullptr;
 };
 
 // Gathers this frame's screen-space bounce light and ambient occlusion, blends them with the previous
@@ -44,6 +49,14 @@ private:
     bgfx::UniformHandle cameraPositionUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle inverseViewProjectionUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle depthParamsUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle voxelAlbedoSampler_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle voxelEmissiveSampler_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle voxelGridUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle voxelInfoUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle voxelLightDirKindUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle voxelLightPositionRangeUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle voxelLightColorIntensityUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle voxelLightSpotUniform_ = BGFX_INVALID_HANDLE;
 };
 
 } // namespace kb::render

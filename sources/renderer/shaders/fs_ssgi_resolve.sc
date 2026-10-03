@@ -8,6 +8,7 @@ SAMPLER2D(s_gbufferDepth, 4);
 
 #include "ssgi.sh"
 #include "ssgi_gather.sh"
+#include "ssgi_voxel.sh"
 #include "ssao.sh"
 
 // Gathers this frame's bounce light and ambient occlusion and blends them with the previous frame's,
@@ -23,7 +24,10 @@ void main()
     }
     vec3 normal = normalize(encodedNormal.xyz * 2.0 - 1.0);
     vec3 worldPos = ReconstructWorldPosition(v_texcoord0, texture2D(s_gbufferDepth, v_texcoord0).x);
-    vec3 gi = u_giParams.x > 0.0 ? KbScreenSpaceGi(worldPos, normal, gl_FragCoord.xy) : vec3(0.0, 0.0, 0.0);
+    vec3 gi = vec3(0.0, 0.0, 0.0);
+    if (u_giParams.x > 0.0) {
+        gi = u_voxelInfo.x > 0.5 ? KbVoxelGi(worldPos, normal, gl_FragCoord.xy) : KbScreenSpaceGi(worldPos, normal, gl_FragCoord.xy);
+    }
     float ao = u_aoParams.x > 0.0 ? KbScreenSpaceAo(worldPos, normal, gl_FragCoord.xy) : 1.0;
     vec3 giHistory;
     float aoHistory;

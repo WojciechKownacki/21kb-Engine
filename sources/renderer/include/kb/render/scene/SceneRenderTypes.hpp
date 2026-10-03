@@ -119,6 +119,9 @@ enum class SceneRenderGlobalIlluminationMode : std::uint8_t {
     Ddgi,
     ProbeGrid,
     Lightmaps,
+    // Bounce light traced through a coarse voxel copy of the scene (all mesh instances as boxes), so
+    // objects outside the camera's view still light what is on screen.
+    VoxelGrid,
 };
 
 enum class SceneRenderReflectionProbeShape : std::uint8_t {
@@ -304,6 +307,8 @@ struct SceneRenderLightingConfig {
     float giIntensity = 1.0F;
     float giRange = 3.0F;
     float giHistoryWeight = 0.9F;
+    // Voxel GI: edge length (m) of one voxel of the 64^3 grid centred on the camera.
+    float giVoxelSize = 0.5F;
     // Screen-space ambient occlusion of the indirect light: strength and radius (m) of the sampled hemisphere.
     bool ambientOcclusionEnabled = false;
     float aoIntensity = 1.0F;
