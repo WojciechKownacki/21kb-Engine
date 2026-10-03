@@ -352,7 +352,7 @@ void ParticleGpuRenderer::DispatchGpuEmitters(
     const auto pending = gpuEmitterDispatchPending_.find(sceneId);
     if (pending == gpuEmitterDispatchPending_.end() || !pending->second) return;
     // Colliding emitters bounce off the depth the opaque passes of this frame have drawn.
-    ParticleGpuEmitterSimulation::CollisionContext collision{};
+    ParticleGpuEmitterSimulation::FrameContext collision{};
     collision.depthTexture = sceneDepthTexture;
     collision.viewProjection = RendererMatrixMath::ViewProjection(camera);
     collision.inverseViewProjection = RendererMatrixMath::Inverse(collision.viewProjection);

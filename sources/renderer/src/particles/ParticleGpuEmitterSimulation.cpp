@@ -13,6 +13,7 @@ namespace {
 constexpr std::uint32_t kThreadGroupSize = 64U;
 constexpr std::uint32_t kInstanceBytes = 80U;
 constexpr std::uint32_t kStateBytes = 32U;
+constexpr std::uint32_t kSortKeyBytes = 16U;
 // How far behind a visible surface (m) a particle still counts as having hit it.
 constexpr float kDepthCollisionThickness = 0.5F;
 constexpr float kDefaultDepthRestitution = 0.5F;
@@ -37,6 +38,18 @@ constexpr double kFixedStepSeconds = 1.0 / static_cast<double>(kb::scene::kParti
         .add(bgfx::Attrib::TexCoord4, 4U, bgfx::AttribType::Float)
         .end();
     return layout;
+}
+
+// Alpha and premultiplied blending depend on draw order; the other modes are commutative.
+[[nodiscard]] bool NeedsSort(const kb::particles::ParticleGpuEmitterParams& params) noexcept {
+    return params.blend == kb::particles::ParticleRenderBlendMode::Alpha ||
+        params.blend == kb::particles::ParticleRenderBlendMode::Premultiplied;
+}
+
+[[nodiscard]] std::uint32_t PaddedSortCount(std::uint32_t capacity) noexcept {
+    std::uint32_t padded = 2U;
+    while (padded < capacity) padded <<= 1U;
+    return padded;
 }
 
 [[nodiscard]] const bgfx::Memory* CopyMemory(const void* source, std::uint32_t bytes) noexcept {
@@ -68,6 +81,11 @@ bool ParticleGpuEmitterSimulation::Initialize() {
     inverseViewProjectionUniform_ = bgfx::createUniform("u_deferredInverseViewProjection", bgfx::UniformType::Mat4);
     depthParamsUniform_ = bgfx::createUniform("u_deferredDepthParams", bgfx::UniformType::Vec4);
     cameraPositionUniform_ = bgfx::createUniform("u_deferredCameraPosition", bgfx::UniformType::Vec4);
+    sortKeysProgram_ = ShaderLoader::LoadComputeProgram("cs_particle_gpu_sort_keys.sc");
+    sortStepProgram_ = ShaderLoader::LoadComputeProgram("cs_particle_gpu_sort_step.sc");
+    sortGatherProgram_ = ShaderLoader::LoadComputeProgram("cs_particle_gpu_sort_gather.sc");
+    sortCameraUniform_ = bgfx::createUniform("u_gpuSortCamera", bgfx::UniformType::Vec4);
+    sortParamsUniform_ = bgfx::createUniform("u_gpuSortParams", bgfx::UniformType::Vec4);
     const std::uint32_t zeroTexel = 0U;
     fallbackDepth_ = bgfx::createTexture2D(1U, 1U, false, 1U, bgfx::TextureFormat::RGBA8, BGFX_SAMPLER_NONE, bgfx::copy(&zeroTexel, sizeof(zeroTexel)));
     if (!IsReady()) {
@@ -86,7 +104,12 @@ void ParticleGpuEmitterSimulation::Shutdown() noexcept {
     ReleaseAllScenes();
     for (bgfx::UniformHandle* handle : { &motionUniform_, &timeUniform_, &colorUniform_, &sizeUniform_, &planeUniform_,
              &collisionUniform_, &depthBounceUniform_, &texelUniform_, &viewProjectionUniform_, &depthSampler_,
-             &inverseViewProjectionUniform_, &depthParamsUniform_, &cameraPositionUniform_ }) {
+             &inverseViewProjectionUniform_, &depthParamsUniform_, &cameraPositionUniform_, &sortCameraUniform_,
+             &sortParamsUniform_ }) {
+        if (bgfx::isValid(*handle)) bgfx::destroy(*handle);
+        *handle = BGFX_INVALID_HANDLE;
+    }
+    for (bgfx::ProgramHandle* handle : { &sortKeysProgram_, &sortStepProgram_, &sortGatherProgram_ }) {
         if (bgfx::isValid(*handle)) bgfx::destroy(*handle);
         *handle = BGFX_INVALID_HANDLE;
     }
@@ -125,8 +148,60 @@ bool ParticleGpuEmitterSimulation::Create(const Key& key, const kb::particles::P
         Destroy(emitter);
         return false;
     }
+    // Sorting is an enhancement: without budget or kernels the emitter is simply drawn in ring order.
+    if (NeedsSort(params)) static_cast<void>(EnsureSort(emitter));
     emitters_[key] = emitter;
     return true;
+}
+
+bool ParticleGpuEmitterSimulation::EnsureSort(Emitter& emitter) noexcept {
+    if (bgfx::isValid(emitter.sortedInstances)) return true;
+    if (!bgfx::isValid(sortKeysProgram_) || !bgfx::isValid(sortStepProgram_) || !bgfx::isValid(sortGatherProgram_)) return false;
+    const std::uint32_t padded = PaddedSortCount(emitter.capacity);
+    const std::uint64_t sortBytes = static_cast<std::uint64_t>(padded) * kSortKeyBytes +
+        static_cast<std::uint64_t>(emitter.capacity) * kInstanceBytes;
+    if (allocatedBytes_ + sortBytes > kb::scene::kParticleEffectMaxGpuResourceBytes) return false;
+    bgfx::VertexLayout keyLayout{};
+    keyLayout.begin().add(bgfx::Attrib::TexCoord0, 4U, bgfx::AttribType::Float).end();
+    emitter.sortKeys = bgfx::createDynamicVertexBuffer(padded, keyLayout, BGFX_BUFFER_COMPUTE_READ_WRITE);
+    emitter.sortedInstances = bgfx::createDynamicVertexBuffer(emitter.capacity, InstanceLayout(), BGFX_BUFFER_COMPUTE_READ_WRITE);
+    if (!bgfx::isValid(emitter.sortKeys) || !bgfx::isValid(emitter.sortedInstances)) {
+        if (bgfx::isValid(emitter.sortKeys)) bgfx::destroy(emitter.sortKeys);
+        if (bgfx::isValid(emitter.sortedInstances)) bgfx::destroy(emitter.sortedInstances);
+        emitter.sortKeys = BGFX_INVALID_HANDLE;
+        emitter.sortedInstances = BGFX_INVALID_HANDLE;
+        return false;
+    }
+    emitter.bytes += sortBytes;
+    allocatedBytes_ += sortBytes;
+    return true;
+}
+
+void ParticleGpuEmitterSimulation::SortInstances(
+    bgfx::ViewId viewId, const Emitter& emitter, const std::array<float, 4>& cameraPosition) noexcept {
+    const std::uint32_t padded = PaddedSortCount(emitter.capacity);
+    const std::array<float, 4> camera{ cameraPosition[0], cameraPosition[1], cameraPosition[2], static_cast<float>(emitter.capacity) };
+    const auto groups = [](std::uint32_t threads) { return (threads + kThreadGroupSize - 1U) / kThreadGroupSize; };
+    bgfx::setBuffer(0U, emitter.instances, bgfx::Access::Read);
+    bgfx::setBuffer(1U, emitter.sortKeys, bgfx::Access::Write);
+    bgfx::setUniform(sortCameraUniform_, camera.data());
+    const std::array<float, 4> keyParams{ static_cast<float>(padded), 0.0F, 0.0F, 0.0F };
+    bgfx::setUniform(sortParamsUniform_, keyParams.data());
+    bgfx::dispatch(viewId, sortKeysProgram_, groups(padded), 1U, 1U);
+    // Bitonic sort, farthest first.
+    for (std::uint32_t block = 2U; block <= padded; block <<= 1U) {
+        for (std::uint32_t distance = block >> 1U; distance > 0U; distance >>= 1U) {
+            const std::array<float, 4> step{ static_cast<float>(padded), static_cast<float>(block), static_cast<float>(distance), 0.0F };
+            bgfx::setBuffer(0U, emitter.sortKeys, bgfx::Access::ReadWrite);
+            bgfx::setUniform(sortParamsUniform_, step.data());
+            bgfx::dispatch(viewId, sortStepProgram_, groups(padded / 2U), 1U, 1U);
+        }
+    }
+    bgfx::setBuffer(0U, emitter.instances, bgfx::Access::Read);
+    bgfx::setBuffer(1U, emitter.sortKeys, bgfx::Access::Read);
+    bgfx::setBuffer(2U, emitter.sortedInstances, bgfx::Access::Write);
+    bgfx::setUniform(sortCameraUniform_, camera.data());
+    bgfx::dispatch(viewId, sortGatherProgram_, groups(emitter.capacity), 1U, 1U);
 }
 
 bool ParticleGpuEmitterSimulation::EnsureState(Emitter& emitter) noexcept {
@@ -148,6 +223,10 @@ void ParticleGpuEmitterSimulation::Destroy(Emitter& emitter) noexcept {
     if (bgfx::isValid(emitter.spawns)) bgfx::destroy(emitter.spawns);
     if (bgfx::isValid(emitter.instances)) bgfx::destroy(emitter.instances);
     if (bgfx::isValid(emitter.state)) bgfx::destroy(emitter.state);
+    if (bgfx::isValid(emitter.sortKeys)) bgfx::destroy(emitter.sortKeys);
+    if (bgfx::isValid(emitter.sortedInstances)) bgfx::destroy(emitter.sortedInstances);
+    emitter.sortKeys = BGFX_INVALID_HANDLE;
+    emitter.sortedInstances = BGFX_INVALID_HANDLE;
     emitter.spawns = BGFX_INVALID_HANDLE;
     emitter.instances = BGFX_INVALID_HANDLE;
     emitter.state = BGFX_INVALID_HANDLE;
@@ -212,6 +291,7 @@ void ParticleGpuEmitterSimulation::Apply(
             } else {
                 found->second.params = command.params;
                 found->second.params.capacity = capacity;
+                if (NeedsSort(command.params)) static_cast<void>(EnsureSort(found->second));
                 if (command.params.HasCollision() && !EnsureState(found->second)) {
                     // No budget left for the state: the emitter keeps simulating without collisions.
                     found->second.params.hasPlane = false;
@@ -234,7 +314,7 @@ void ParticleGpuEmitterSimulation::Advance(std::uint64_t sceneId, float frameDel
     clock.now = std::clamp(clock.now, clock.latest - kFixedStepSeconds, clock.latest + kFixedStepSeconds);
 }
 
-void ParticleGpuEmitterSimulation::Dispatch(bgfx::ViewId viewId, std::uint64_t sceneId, const CollisionContext& collision) noexcept {
+void ParticleGpuEmitterSimulation::Dispatch(bgfx::ViewId viewId, std::uint64_t sceneId, const FrameContext& collision) noexcept {
     const auto sceneIt = scenes_.find(sceneId);
     if (!IsReady() || sceneIt == scenes_.end()) return;
     SceneClock& clock = sceneIt->second;
@@ -279,7 +359,12 @@ void ParticleGpuEmitterSimulation::Dispatch(bgfx::ViewId viewId, std::uint64_t s
         bgfx::setUniform(colorUniform_, colors.data(), static_cast<std::uint16_t>(kb::particles::kParticleGpuCurveSamples));
         bgfx::setUniform(sizeUniform_, params.size.data(), 2U);
         bgfx::dispatch(viewId, colliding ? collideProgram_ : program_, (emitter.capacity + kThreadGroupSize - 1U) / kThreadGroupSize, 1U, 1U);
-        clock.draws.push_back(Draw{ &emitter.params, emitter.instances, emitter.capacity });
+        bgfx::DynamicVertexBufferHandle drawn = emitter.instances;
+        if (NeedsSort(params) && bgfx::isValid(emitter.sortedInstances)) {
+            SortInstances(viewId, emitter, collision.cameraPosition);
+            drawn = emitter.sortedInstances;
+        }
+        clock.draws.push_back(Draw{ &emitter.params, drawn, emitter.capacity });
     }
 }
 

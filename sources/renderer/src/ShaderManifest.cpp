@@ -27,6 +27,10 @@ constexpr auto kRequiredShaders = std::to_array<ShaderManifestEntry>({
     ShaderManifestEntry{.name = "cs_particle_gpu_emit.sc", .stage = ShaderStage::Compute, .required = false},
     // Optional likewise: emitters with collisions then simulate without them.
     ShaderManifestEntry{.name = "cs_particle_gpu_collide.sc", .stage = ShaderStage::Compute, .required = false},
+    // Optional likewise: alpha-blended emitters are then drawn in ring order instead of back to front.
+    ShaderManifestEntry{.name = "cs_particle_gpu_sort_keys.sc", .stage = ShaderStage::Compute, .required = false},
+    ShaderManifestEntry{.name = "cs_particle_gpu_sort_step.sc", .stage = ShaderStage::Compute, .required = false},
+    ShaderManifestEntry{.name = "cs_particle_gpu_sort_gather.sc", .stage = ShaderStage::Compute, .required = false},
     ShaderManifestEntry{.name = "fs_editor_gizmo.sc", .stage = ShaderStage::Fragment,
         .requiredFeature = ShaderRuntimeFeatureBit(ShaderRuntimeFeature::Editor)},
     ShaderManifestEntry{.name = "fs_editor_gizmo_resolve.sc", .stage = ShaderStage::Fragment,
