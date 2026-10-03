@@ -168,6 +168,20 @@ void SceneSystemScheduler::Update(Scene& scene, float deltaSeconds, SceneUpdateP
     }
 }
 
+void SceneSystemScheduler::FixedStepBegin(Scene& scene, float fixedDeltaSeconds) {
+    DispatchScope dispatchScope{ dispatching_ };
+    SceneSystemContext context{ scene, fixedDeltaSeconds };
+    for (const Entry& entry : systems_) {
+        try {
+            entry.system->OnFixedStepBegin(context);
+        } catch (const std::exception& error) {
+            RecordSystemError("OnFixedStepBegin", error.what());
+        } catch (...) {
+            RecordSystemError("OnFixedStepBegin", nullptr);
+        }
+    }
+}
+
 void SceneSystemScheduler::FixedUpdate(Scene& scene, float fixedDeltaSeconds, SceneFixedUpdatePhase phase) {
     DispatchScope dispatchScope{ dispatching_ };
     SceneSystemContext context{ scene, fixedDeltaSeconds };

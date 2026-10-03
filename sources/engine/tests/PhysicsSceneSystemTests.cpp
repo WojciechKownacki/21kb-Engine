@@ -20,6 +20,8 @@
 #include "engine/scene/PhysicsLayersAsset.hpp"
 #include "engine/scene/PhysicsLayersAssetIO.hpp"
 #include "engine/scene/RigidbodyComponent.hpp"
+#include "engine/scene/SceneSystem.hpp"
+#include "engine/scene/SceneSystemContext.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/ScenePrefab.hpp"
 #include "engine/scene/SceneAssets.hpp"
@@ -2527,6 +2529,23 @@ void RunPhysicsStepSpikeBenchmark() {
 
 // Pipelining only moves the arrival of results: the poses of the scene after update k are exactly the poses a
 // synchronous scene had after update k - 1 (the physics world sees the same operations in the same order).
+// Stands in for a script FixedTick: runs in the PreSimulation phase and records the pose it sees.
+class FixedTickPoseRecorder final : public kb::scene::SceneSystem {
+public:
+    explicit FixedTickPoseRecorder(kb::scene::SceneEntity body) noexcept : body_(body) {}
+    [[nodiscard]] kb::scene::SceneFixedUpdatePhase FixedUpdatePhase() const noexcept override {
+        return kb::scene::SceneFixedUpdatePhase::PreSimulation;
+    }
+    [[nodiscard]] bool RequiresFixedStep() const override { return true; }
+    void OnFixedUpdate(kb::scene::SceneSystemContext& context) override {
+        seenY.push_back(std::bit_cast<std::uint32_t>(context.GetScene().Transforms().Get(body_).localPosition.y));
+    }
+    std::vector<std::uint32_t> seenY;
+
+private:
+    kb::scene::SceneEntity body_{};
+};
+
 void RunPhysicsPipelinedStepEquivalenceTest() {
     if (std::filesystem::path{ KB_PHYSICS_JOLT_PLUGIN_PATH }.empty()) {
         return;
@@ -2535,6 +2554,12 @@ void RunPhysicsPipelinedStepEquivalenceTest() {
     constexpr int kSteps = 150;
     PhysicsPile synchronous(kBodies, false);
     PhysicsPile pipelined(kBodies, true);
+    auto synchronousRecorder = std::make_unique<FixedTickPoseRecorder>(synchronous.bodies[199].Entity());
+    auto pipelinedRecorder = std::make_unique<FixedTickPoseRecorder>(pipelined.bodies[199].Entity());
+    const FixedTickPoseRecorder& synchronousSeen = *synchronousRecorder;
+    const FixedTickPoseRecorder& pipelinedSeen = *pipelinedRecorder;
+    static_cast<void>(synchronous.scene->Runtime().AddSceneSystem(std::move(synchronousRecorder)));
+    static_cast<void>(pipelined.scene->Runtime().AddSceneSystem(std::move(pipelinedRecorder)));
     const std::array<std::size_t, 4U> tracked{ 0U, 17U, 199U, 399U };
     const auto snapshot = [&tracked](PhysicsPile& pile) {
         std::array<std::uint32_t, 4U * 7U> bits{};
@@ -2561,6 +2586,8 @@ void RunPhysicsPipelinedStepEquivalenceTest() {
         moved = moved || previousSynchronous != initial;
     }
     kb::tests::Require(moved, "Pipelining equivalence test never moved a body, so it proved nothing");
+    kb::tests::Require(!synchronousSeen.seenY.empty() && pipelinedSeen.seenY == synchronousSeen.seenY,
+        "A FixedTick must see the same poses whether or not the physics step is pipelined");
 }
 
 void RunPhysicsSceneSystemTests() {

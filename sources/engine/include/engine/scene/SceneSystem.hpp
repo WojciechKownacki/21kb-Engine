@@ -33,6 +33,10 @@ public:
     virtual void OnFrameStart(SceneSystemContext& context);
     virtual void OnUpdate(SceneSystemContext& context);
     virtual void OnFixedUpdate(SceneSystemContext& context);
+    // Runs for every system at the start of each fixed step, before any PreSimulation work (script FixedTick):
+    // a system that finished work in the background publishes it here, so FixedTick sees the results of the
+    // previous step exactly as it would if that step had run synchronously.
+    virtual void OnFixedStepBegin(SceneSystemContext& context);
     virtual void OnDestroy(SceneSystemContext& context);
 
     [[nodiscard]] virtual SceneUpdatePhase UpdatePhase() const noexcept {

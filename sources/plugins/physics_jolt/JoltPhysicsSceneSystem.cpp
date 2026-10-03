@@ -1152,15 +1152,20 @@ public:
     // and Step() then advances those same ground bodies by that same velocity*dt - running
     // the character after Step() instead would double-count (or lag a frame behind) however
     // far a platform the character is standing on moves this step.
-    void OnFixedUpdate(SceneSystemContext& context) {
-        // The step launched at the end of the previous fixed update (see StepPipelining below) is published first;
-        // everything after this point sees the same world a synchronous step would have left behind.
+    // The step launched at the end of the previous fixed update (see StepPipelining below) is published before
+    // any script FixedTick runs, so everything in this fixed step sees the world a synchronous step would
+    // have left behind.
+    void PublishPendingStep(SceneSystemContext& context) {
         if (stepAwaitingWriteBack_) {
             JoinStep();
             stepAwaitingWriteBack_ = false;
             ThrowOnStepError(stepDriver_.error);
             ApplyStepResults(context);
         }
+    }
+
+    void OnFixedUpdate(SceneSystemContext& context) {
+        PublishPendingStep(context);
         RefreshCollisionMeshes(context.GetScene());
         SynchronizeBodies(context);
         std::erase_if(collisionMeshes_, [](const auto& entry) { return entry.second.shape->GetRefCount() == 1; });
@@ -2845,6 +2850,10 @@ void JoltPhysicsSceneSystem::OnCreate(kb::scene::SceneSystemContext& context) {
 
 void JoltPhysicsSceneSystem::OnFixedUpdate(kb::scene::SceneSystemContext& context) {
     impl_->OnFixedUpdate(context);
+}
+
+void JoltPhysicsSceneSystem::OnFixedStepBegin(kb::scene::SceneSystemContext& context) {
+    impl_->PublishPendingStep(context);
 }
 
 void JoltPhysicsSceneSystem::OnDestroy(kb::scene::SceneSystemContext& context) {
