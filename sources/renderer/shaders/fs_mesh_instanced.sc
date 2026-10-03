@@ -213,9 +213,13 @@ void main()
     vec3 viewDir = normalize(u_cameraPosition.xyz - v_worldPos);
     float shadowVisible = 1.0;
     if (u_shadowParams.w > 0.5 && v_shadowFlags.x > 0.5) {
-        vec4 shadowCoord = KbResolveShadowCascade(v_worldPos);
+        vec4 coarserCoord;
+        vec4 shadowCoord = KbResolveShadowCascade(v_worldPos, coarserCoord);
         if (shadowCoord.w > 0.5) {
             shadowVisible = SampleShadowVisibility(shadowCoord.xyz);
+            if (coarserCoord.w > 0.0) {
+                shadowVisible = mix(shadowVisible, SampleShadowVisibility(coarserCoord.xyz), coarserCoord.w);
+            }
         }
     }
     vec3 lighting = EvaluateEnvironment(normal, viewDir, albedo.rgb, metallic, roughness, occlusion);

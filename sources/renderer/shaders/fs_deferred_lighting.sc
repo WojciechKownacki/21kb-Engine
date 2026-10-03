@@ -231,9 +231,13 @@ void main()
 
     float shadowVisible = 1.0;
     if (u_deferredShadowParams.w > 0.5) {
-        vec4 shadowCoord = KbResolveShadowCascade(worldPos);
+        vec4 coarserCoord;
+        vec4 shadowCoord = KbResolveShadowCascade(worldPos, coarserCoord);
         if (shadowCoord.w > 0.5) {
             shadowVisible = SampleShadowVisibility(shadowCoord.xyz);
+            if (coarserCoord.w > 0.0) {
+                shadowVisible = mix(shadowVisible, SampleShadowVisibility(coarserCoord.xyz), coarserCoord.w);
+            }
         }
     }
 

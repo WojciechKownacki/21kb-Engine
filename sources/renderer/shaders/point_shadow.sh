@@ -3,7 +3,13 @@
 // kFaces in PointShadowPassPlanner.cpp; faces are rendered with a perspective frustum that is a
 // little wider than 90 degrees (u_pointShadowAtlas.w = tan(half fov)).
 // A spot light (u_pointShadowSpot[s].w > 0) uses a single frustum along its axis in column 0.
+// Graph material shaders define KB_POINT_SHADOW_GRAPH: they own the stages from 6 up for their own
+// textures. (The stage has to be a literal here; some backends reject a macro as the register.)
+#if defined(KB_POINT_SHADOW_GRAPH)
+SAMPLER2D(s_pointShadowMap, 1);
+#else
 SAMPLER2D(s_pointShadowMap, 9);
+#endif
 uniform vec4 u_pointShadowLight[4]; // xyz = light position, w = packed light slot (< 0 = none)
 uniform vec4 u_pointShadowDepth[4]; // x = near plane, y = far plane, z = depth bias (m)
 uniform vec4 u_pointShadowSpot[4];  // xyz = spot axis, w = tan(half fov) (0 = cube light)

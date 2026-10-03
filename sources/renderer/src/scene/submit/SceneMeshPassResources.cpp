@@ -1077,6 +1077,8 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
         bgfx::setUniform(environmentZenithUniform_, desc.lighting.environmentZenith.data());
         bgfx::setUniform(environmentGroundUniform_, desc.lighting.environmentGround.data());
         bgfx::setUniform(environmentParamsUniform_, desc.lighting.environmentParams.data());
+        pointShadows_.Set(desc.shadowMap != nullptr ? &desc.shadowMap->point : nullptr, desc.lighting.pointShadowSlot,
+            fallbackWhiteTexture_, PointShadowUniforms::kGraphSamplerStage);
 
         for (const RenderMaterialGraphUniformBinding& graphUniform : material->graphProgram.uniforms) {
             std::array<float, 4U> value{

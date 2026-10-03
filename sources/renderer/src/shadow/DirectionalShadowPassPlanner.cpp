@@ -222,7 +222,8 @@ DirectionalShadowSetup DirectionalShadowPassPlanner::Build(
     setup.camera = setup.cascadeCameras[0];
     setup.binding.depthTexture = shadowDepthTexture;
     std::ranges::copy_n(setup.binding.cascadeViewProjection.begin(), 16, setup.binding.lightViewProjection.begin());
-    setup.binding.cascadeInfo = { static_cast<float>(cascadeCount), tileSize == 0U ? 0.0F : 2.0F / static_cast<float>(tileSize), 0.0F, 0.0F };
+    setup.binding.cascadeInfo = { static_cast<float>(cascadeCount), tileSize == 0U ? 0.0F : 2.0F / static_cast<float>(tileSize),
+        std::clamp(lightingConfig.shadowCascadeBlend, 0.0F, 0.4F), 0.0F };
     setup.binding.params = {
         std::max(lightingConfig.shadowDepthBias, 0.0F),
         std::clamp(lightingConfig.shadowStrength, 0.0F, 1.0F),

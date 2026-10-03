@@ -33,7 +33,7 @@ Kryterium „zrobione" = test, który musi przejść; test ma być headless (bez
 - **A2 — Cienie reflektorów (spot)** · P1 · M · **zrobione** (jasność pod płytą 527 → 281)
   Użyć istniejącego atlasu cieni punktowych (jedna ściana zamiast sześciu). Zrobione gdy: test pikselowy
   „z cieniem / bez cienia" dla światła spot.
-- **A3 — Cienie punktowe poza ograniczeniami** · P2 · M · do zrobienia
+- **A3 — Cienie punktowe poza ograniczeniami** · P2 · M · **zrobione częściowo** (materiały z grafu odbierają cienie punktowe, kaskady płynnie przechodzą; limit 4 świateł bez zmian)
   Materiały z edytora grafów nie odbierają cieni punktowych; limit 4 światła; brak płynnego przejścia kaskad.
   Zrobione gdy: test dla materiału grafowego oraz test przejścia między kaskadami bez widocznego szwu.
 - **A4 — Ambient occlusion i odbicia w przestrzeni ekranu** · P2 · L · do zrobienia
