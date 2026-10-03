@@ -57,7 +57,7 @@ Kryterium „zrobione" = test, który musi przejść; test ma być headless (bez
 
 ### C. Wydajność CPU i fizyka
 
-- **C1 — Skoki kroku fizyki (Jolt)** · P1 · M · **zrobione** (krok Jolt nakłada się z resztą klatki; hosty gry włączają `SetStepPipelining`, silnik domyślnie wyłączone; wyniki fizyki docierają o jeden krok później)
+- **C1 — Skoki kroku fizyki (Jolt)** · P1 · M · **zrobione** (krok Jolt nakłada się z resztą klatki, domyślnie włączone; wyniki fizyki docierają o jeden krok później; `SetStepPipelining(scene, false)` przywraca wynik w tej samej aktualizacji, używa tego `kb_cli run`)
   Pojedyncze kroki do ~20 ms przy 4000 ciał. Profilować, rozważyć nakładanie kroku z pracą renderera lub
   porcjowanie. Zrobione gdy: p99 kroku 4000 ciał poniżej połowy dzisiejszej wartości (pomiar w teście headless).
 - **C2 — Zapis transformacji 30 tys. obiektów** · P1 · M · **zrobione** (zapis w miejscu zamiast pełnego `World::Set`: pętla 30 tys. `Transform.Set` 4,0 → 1,7 ms; razem z synchronizacją ok. −40% dla płaskich obiektów, ok. −35% dla obiektów z rodzicem)

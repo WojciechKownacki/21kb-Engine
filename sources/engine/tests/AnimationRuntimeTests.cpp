@@ -7,6 +7,7 @@
 #include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/DrawD3DeformedGeometryComponent.hpp"
 #include "engine/scene/RigidbodyComponent.hpp"
+#include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAnimators.hpp"
 #include "engine/scene/SceneAssets.hpp"
@@ -938,6 +939,7 @@ end
             .enabled = true,
         });
         kb::scene::Scene scene{ std::move(descriptor) };
+        kb::scene::PhysicsBackend::SetStepPipelining(scene, false); // the test reads the pose in the update that stepped it
         Require(scene.Assets().MountProject(root), "Root-motion Jolt project mount failed");
         Require(scene.Assets().Discover() == 8U, "Root-motion Jolt assets were not discovered");
         const auto* metadata =

@@ -10,7 +10,6 @@
 #include "engine/input/InputSubsystem.hpp"
 #include "engine/input/InputText.hpp"
 #include "engine/input/InputTouchPoint.hpp"
-#include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneRuntime.hpp"
@@ -373,8 +372,6 @@ public:
         scriptModule_ = staticModules.script;
         scene_ = std::make_unique<kb::scene::Scene>(
             std::move(projectRuntime_.descriptor), std::move(staticModules.modules));
-        // The frame renders between updates, so the physics step can overlap with that work.
-        kb::scene::PhysicsBackend::SetStepPipelining(*scene_, true);
         const bool scriptActive = scene_->IsModuleActive("Script");
         if (scriptActive &&
             (scriptModule_ == nullptr || !scriptModule_->Succeeded() || scriptModule_->Host() == nullptr)) {

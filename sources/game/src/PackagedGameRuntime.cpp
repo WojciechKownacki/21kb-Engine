@@ -4,7 +4,6 @@
 
 #include "engine/assets/bake/BakeTargetProfile.hpp"
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
-#include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneRuntime.hpp"
@@ -73,8 +72,6 @@ bool PackagedGameRuntime::Initialize(
         std::move(staticModules.modules),
         kb::ecs::WorldConfig{},
         kb::scene::SceneMode::Runtime);
-    // The frame renders between updates, so the physics step can overlap with that work.
-    kb::scene::PhysicsBackend::SetStepPipelining(*scene, true);
     scriptActive_ = scene->IsModuleActive("Script");
     if (scriptActive_ &&
         (script_ == nullptr || !script_->Succeeded() || script_->Host() == nullptr)) {

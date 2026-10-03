@@ -291,9 +291,9 @@ public:
     [[nodiscard]] static bool HasCollisionEventConsumer(Scene& scene) noexcept;
     // A backend may overlap the physics step of fixed step N with the rest of the frame and publish its
     // results to the scene at the start of fixed step N + 1 (the order of operations on the physics world is
-    // unchanged; scene transforms and contact events just arrive one fixed step later). Off by default so
-    // code that reads the results right after an update keeps its timing; real-time hosts, which render
-    // between updates, turn it on.
+    // unchanged; scene transforms and contact events just arrive one fixed step later). On by default;
+    // turn it off where results must be visible right after the update that stepped them (strict
+    // determinism tools, tests of same-step behaviour).
     static void SetStepPipelining(Scene& scene, bool enabled) noexcept;
     [[nodiscard]] static bool StepPipeliningEnabled(Scene& scene) noexcept;
     [[nodiscard]] static std::vector<PendingCollisionEvent> DrainPendingCollisionEvents(Scene& scene);
