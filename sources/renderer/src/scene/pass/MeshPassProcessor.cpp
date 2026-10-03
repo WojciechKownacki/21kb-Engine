@@ -1,4 +1,5 @@
 #include "scene/pass/MeshPassProcessor.hpp"
+#include "scene/cache/SceneMeshBatchCommandCache.hpp"
 
 #include "kb/render/scene/cache/SceneCachedDrawCommand.hpp"
 #include "scene/cache/SceneCachedDrawCommandMaterializer.hpp"
@@ -13,6 +14,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <optional>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -156,6 +158,7 @@ void ResolveDetailSwitchLevels(const MeshPassProcessorDesc& desc, MeshPipelineBu
         for (auto previous = result.detailSwitchPreviousLevels.begin(); previous != result.detailSwitchPreviousLevels.end();) {
             if (!activeKeys.contains(previous->first)) {
                 previous = result.detailSwitchPreviousLevels.erase(previous);
+                ++result.detailSwitchHistoryRevision;
             } else {
                 ++previous;
             }
@@ -173,7 +176,11 @@ void ResolveDetailSwitchLevels(const MeshPassProcessorDesc& desc, MeshPipelineBu
         }
         result.detailSwitchLevels.emplace(key, resolved);
         if (advancesHistory) {
-            result.detailSwitchPreviousLevels.insert_or_assign(key, resolved);
+            const auto previous = result.detailSwitchPreviousLevels.find(key);
+            if (previous == result.detailSwitchPreviousLevels.end() || previous->second != resolved) {
+                result.detailSwitchPreviousLevels.insert_or_assign(key, resolved);
+                ++result.detailSwitchHistoryRevision;
+            }
         }
     }
 }
@@ -190,6 +197,10 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
     std::size_t writeCommandCount = 0U;
     std::uint32_t acceptedInstanceCount = 0U;
     for (const SceneMeshBatch& batch : desc.meshBatches) {
+        SceneMeshBatchCommandCache::BatchScope batchScope(desc.batchCommandCache, result, batch,
+            writeCommandCount, acceptedInstanceCount, desc.diagnostics);
+        if (batchScope.TryReuse()) continue;
+        batchScope.RecycleStorage();
         const bool wholeBatchIsCandidate = cullingMask == 0xFFFFFFFFU && !PassNeedsPerInstanceCandidateFilter(desc.pass);
         const std::uint32_t instanceCount = wholeBatchIsCandidate
             ? static_cast<std::uint32_t>(batch.instances.size())
@@ -247,10 +258,12 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                 continue;
             }
             const std::pair<std::uint32_t, std::uint32_t> meshletRange = MeshPipelineVisibility::MeshletRangeForSection(meshResource, sectionIndex);
-            result.commandLookupScratch.clear();
+            if (desc.batchCommandCache != nullptr) result.commandLookupScratch.clear();
             std::uint32_t culledForSection = 0U;
             std::uint64_t lastMaterialAssetId = 0U;
             MeshPipelineMaterialResolution lastMaterialResolution{};
+            std::optional<MeshCommandLookupKey> lastCommandKey;
+            std::uint32_t lastCommandIndex = 0U;
             std::size_t clusterIndex = 0U;
             for (std::size_t instanceIndex = 0U; instanceIndex < batch.instances.size(); ++instanceIndex) {
                 const SceneRenderMeshInstance& instance = batch.instances[instanceIndex];
@@ -314,7 +327,9 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                 if (clusterIndex < batch.visibilityClusters.size() &&
                     batch.visibilityClusters[clusterIndex].firstInstance == instanceIndex &&
                     localBounds.IsValid() && meshResource != nullptr && meshResource->lods.size() <= 1U &&
-                    !instance.detailSwitchEnabled && !batch.hasMaterialSlotOverrides) {
+                    !instance.detailSwitchEnabled && !batch.hasMaterialSlotOverrides &&
+                    desc.pass != MeshPassType::SelectionId && desc.pass != MeshPassType::EditorSelection &&
+                    !result.stats.HasMissingResources()) {
                     const auto& cluster = batch.visibilityClusters[clusterIndex];
                     auto bounds = cluster.origins;
                     const auto& center = localBounds.center;
@@ -323,6 +338,7 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                     if (cluster.instanceCount != 0U && cluster.instanceCount <= batch.instances.size()-instanceIndex &&
                         !MeshPipelineVisibility::IsInsideFrustum(frustum, bounds)) {
                         culledForSection += cluster.instanceCount;
+                        if (!meshResource->lods.empty()) result.stats.lodSelectionCount += cluster.instanceCount - 1U;
                         instanceIndex += cluster.instanceCount - 1U;
                         continue;
                     }
@@ -340,6 +356,7 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                 }
                 const std::uint16_t depthBucket = MeshPipelineVisibility::DepthBucket(MeshPipelineVisibility::ViewDepth(desc.camera, worldBounds));
                 const MeshCommandLookupKey commandKey{
+                    .meshAssetId = batch.meshAssetId, .sectionIndex = sectionIndex,
                     .materialAssetId = materialAssetId,
                     .materialHandleValue = materialHandle.value,
                     .currentSkinningPalette = instance.currentSkinningPalette,
@@ -347,11 +364,13 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                     .reversedWinding = !(meshResource != nullptr && meshResource->doubleSided) &&
                         !(materialResource != nullptr && materialResource->doubleSided) && ReversesWinding(instance.model),
                 };
-                const auto commandLookupIt = result.commandLookupScratch.find(commandKey);
-                MeshDrawCommand* command = commandLookupIt == result.commandLookupScratch.end() ? nullptr : &result.commands[commandLookupIt->second];
-                std::uint32_t drawCommandIndex = commandLookupIt == result.commandLookupScratch.end()
-                    ? static_cast<std::uint32_t>(writeCommandCount)
-                    : static_cast<std::uint32_t>(commandLookupIt->second);
+                std::uint32_t drawCommandIndex = static_cast<std::uint32_t>(writeCommandCount);
+                if (lastCommandKey && *lastCommandKey == commandKey) {
+                    drawCommandIndex = lastCommandIndex;
+                } else if (const auto found = result.commandLookupScratch.find(commandKey); found != result.commandLookupScratch.end()) {
+                    drawCommandIndex = static_cast<std::uint32_t>(found->second);
+                }
+                MeshDrawCommand* command = drawCommandIndex < writeCommandCount ? &result.commands[drawCommandIndex] : nullptr;
                 if (command == nullptr && desc.maxDrawCommands != 0U && writeCommandCount >= desc.maxDrawCommands) {
                     if (gpuDrivenCandidate) {
                         MeshPipelineGpuDrivenRecorder::Record(result, instance.entityId, worldBounds, UINT32_MAX, selectedLod, meshletRange, true);
@@ -421,6 +440,8 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                     ++writeCommandCount;
                 }
                 MeshPipelineGpuDrivenRecorder::AccumulateCandidateStats(result.stats, meshResource, meshletRange);
+                lastCommandKey = commandKey;
+                lastCommandIndex = drawCommandIndex;
                 const std::uint32_t gpuDrivenRecordIndex = gpuDrivenCandidate
                     ? static_cast<std::uint32_t>(result.gpuDrivenInputRecords.size()) : UINT32_MAX;
                 if (gpuDrivenCandidate) {

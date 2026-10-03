@@ -1,6 +1,7 @@
 #include "renderer/RendererTemporalJitter.hpp"
 
 #include <algorithm>
+#include <cmath>
 
 namespace kb::render {
 namespace {
@@ -29,7 +30,19 @@ std::array<float, 2> RendererTemporalJitter::Compute(std::uint64_t frameIndex, R
     };
 }
 
-void RendererTemporalJitter::Apply(SceneRenderCamera& camera, std::array<float, 2> jitter) noexcept {
+void RendererTemporalJitter::Apply(SceneRenderCamera& camera, std::array<float, 2> jitter, RenderExtent extent) noexcept {
+    camera.temporalProjectionOffset = {};
+    camera.cullingGuardBand = {};
+    if (camera.projection[3] == 0.0F && camera.projection[7] == 0.0F &&
+        camera.projection[11] != 0.0F && camera.projection[15] == 0.0F &&
+        (jitter[0] != 0.0F || jitter[1] != 0.0F)) {
+        camera.temporalProjectionOffset = {jitter[0] * 2.0F, jitter[1] * 2.0F};
+        const float wScale = std::abs(camera.projection[11]);
+        camera.cullingGuardBand = {
+            std::max(std::abs(jitter[0]) * 2.0F, extent.IsValid() ? 1.0F / extent.width : 0.0F) / wScale,
+            std::max(std::abs(jitter[1]) * 2.0F, extent.IsValid() ? 1.0F / extent.height : 0.0F) / wScale,
+        };
+    }
     camera.projection[8] += jitter[0] * 2.0F;
     camera.projection[9] += jitter[1] * 2.0F;
 }

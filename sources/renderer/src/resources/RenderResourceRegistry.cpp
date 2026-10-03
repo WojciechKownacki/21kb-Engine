@@ -241,6 +241,7 @@ bool RenderResourceRegistry::ContainsMesh(RenderMeshHandle handle) const noexcep
 }
 
 void RenderResourceRegistry::DestroyMesh(RenderMeshHandle handle) noexcept {
+    if (ContainsMesh(handle)) static_cast<void>(AllocateResourceVersion());
     const std::uint32_t slotIndex = meshes_.MarkPendingDestroy(handle);
     if (slotIndex != 0U) {
         QueueDestroy(DeferredDestroyKind::Mesh, slotIndex);
@@ -288,6 +289,7 @@ bool RenderResourceRegistry::ContainsMaterial(RenderMaterialHandle handle) const
 }
 
 void RenderResourceRegistry::DestroyMaterial(RenderMaterialHandle handle) noexcept {
+    if (ContainsMaterial(handle)) static_cast<void>(AllocateResourceVersion());
     const std::uint32_t slotIndex = materials_.MarkPendingDestroy(handle);
     if (slotIndex != 0U) {
         QueueDestroy(DeferredDestroyKind::Material, slotIndex);
@@ -366,6 +368,7 @@ bool RenderResourceRegistry::ContainsTexture(RenderTextureHandle handle) const n
 }
 
 void RenderResourceRegistry::DestroyTexture(RenderTextureHandle handle) noexcept {
+    if (ContainsTexture(handle)) static_cast<void>(AllocateResourceVersion());
     const std::uint32_t slotIndex = textures_.MarkPendingDestroy(handle);
     if (slotIndex != 0U) {
         QueueDestroy(DeferredDestroyKind::Texture, slotIndex);
@@ -373,6 +376,7 @@ void RenderResourceRegistry::DestroyTexture(RenderTextureHandle handle) noexcept
 }
 
 void RenderResourceRegistry::Reserve(const RenderResourceRegistryReserveDesc& desc) {
+    static_cast<void>(AllocateResourceVersion());
     meshes_.Reserve(desc.meshSlots);
     materials_.Reserve(desc.materialSlots);
     textures_.Reserve(desc.textureSlots);
@@ -393,6 +397,7 @@ void RenderResourceRegistry::TickFrame() noexcept {
 }
 
 void RenderResourceRegistry::Shutdown() noexcept {
+    static_cast<void>(AllocateResourceVersion());
     deferredDestroy_.clear();
     meshes_.Shutdown([](RenderMeshResource& resource) noexcept {
         RenderResourceReleaser::ReleaseMesh(resource);

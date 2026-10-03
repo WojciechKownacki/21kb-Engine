@@ -23,6 +23,7 @@ public:
         std::size_t alignment,
         ComponentRegistrationOptions options);
     [[nodiscard]] ComponentId Find(std::type_index type) const noexcept;
+    [[nodiscard]] ComponentId Find(const std::type_info& type) const noexcept;
     [[nodiscard]] const ComponentTypeInfo* FindInfo(ComponentId componentId) const noexcept;
     [[nodiscard]] std::span<const ComponentTypeInfo> Types() const noexcept;
     void Clear() noexcept;

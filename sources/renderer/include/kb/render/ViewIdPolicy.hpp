@@ -34,9 +34,20 @@ constexpr std::uint16_t PostProcessBloomMipBlurHStart = 23;
 constexpr std::uint16_t PostProcessBloomMipBlurVStart = 28;
 constexpr std::uint16_t DetachedViewportStart = 37;
 constexpr std::uint16_t DetachedViewportStride = 36;
-constexpr std::uint16_t Max = 256;
+constexpr std::uint16_t Max = 512;
 // Global asynchronous capture runs after every remapped viewport draw.
 constexpr std::uint16_t ScreenCapture = Max - 1U;
+// Detached viewports occupy ids below this limit (six of them, as before the view budget grew).
+constexpr std::uint16_t DetachedViewportLimit = 253;
+// Shadow views of the primary viewport live above the detached range: one extra depth view per
+// cascade beyond the first, then six cube faces for each shadow-casting point light.
+constexpr std::uint16_t ShadowCascadeExtraViews = 3;
+constexpr std::uint16_t ShadowCascadeExtraStart = 256;
+constexpr std::uint16_t MaxPointShadowLights = 4;
+constexpr std::uint16_t PointShadowFaceCount = 6;
+constexpr std::uint16_t PointShadowViewCount = MaxPointShadowLights * PointShadowFaceCount;
+constexpr std::uint16_t PointShadowStart = ShadowCascadeExtraStart + ShadowCascadeExtraViews;
+static_assert(PointShadowStart + PointShadowViewCount <= ScreenCapture, "Shadow views overlap the capture view");
 
 [[nodiscard]] constexpr bool IsValid(std::uint16_t viewId) noexcept {
     return viewId < Max;

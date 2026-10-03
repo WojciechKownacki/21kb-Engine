@@ -63,6 +63,19 @@ using ParticleStableId = std::uint64_t;
 
 enum class ParticleBackendPolicy : std::uint8_t { CpuDeterministic, GpuVisualPreferred, GpuVisualRequired };
 enum class ParticleGpuCatchupPolicy : std::uint8_t { RestartFromSeed, BoundedWarmup };
+
+// Effects that prefer the GPU may keep far more particles per emitter and effect than the CPU
+// pipeline allows: eligible emitters are simulated on the GPU, the others fall back to the CPU caps
+// at run time.
+[[nodiscard]] constexpr std::uint32_t ParticleEmitterCapacityLimit(ParticleBackendPolicy policy) noexcept {
+    return policy == ParticleBackendPolicy::CpuDeterministic ? kParticleEffectMaxCpuParticlesPerEmitter
+                                                               : kParticleEffectMaxGpuParticlesPerScene;
+}
+
+[[nodiscard]] constexpr std::uint32_t ParticleEffectCapacityLimit(ParticleBackendPolicy policy) noexcept {
+    return policy == ParticleBackendPolicy::CpuDeterministic ? kParticleEffectMaxCpuParticlesPerScene
+                                                               : kParticleEffectMaxGpuParticlesPerScene;
+}
 enum class ParticleSimulationSpace : std::uint8_t { Local, World };
 enum class ParticleSpawnMode : std::uint8_t { Continuous, Burst };
 enum class ParticleModuleType : std::uint8_t {

@@ -5,6 +5,8 @@
 
 namespace kb::render::tests {
 void RunGraphForwardGpuRenderTests();
+void RunSceneLightGridTests();
+void RunSceneLightGridGpuTests();
 void RunSkinnedMeshGpuReadbackTests();
 void RunFinalCompositePassTests();
 void RunPostProcessChainTests();
@@ -18,6 +20,7 @@ void RunGraphShaderArtifactCookTests();
 void RunMaterialProgramRegistryTests();
 void RunSceneMeshPassProgramSelectionTests();
 void RunRendererRuntimeSubmitTests();
+void RunRendererCommandReuseTests();
 void RunRendererTransparentGpuReadbackTests();
 void RunRendererDefaultSubmissionResultTest();
 void RunRendererPostProcessProfileDiagnosticTest();
@@ -49,6 +52,12 @@ void RunScreenUIDrawBatchTests();
 }
 
 int main(int argc, char** argv) {
+    if (argc == 2 && std::string_view{argv[1]} == "command-reuse") {
+        kb::render::tests::RunMeshPipelineTests();
+        kb::render::tests::RunRenderSceneSyncTests();
+        kb::render::tests::RunRendererCommandReuseTests();
+        return EXIT_SUCCESS;
+    }
     if (argc == 2 && std::string_view{argv[1]} == "mesh-visibility") {
         kb::render::tests::RunMeshPipelineTests();
         kb::render::tests::RunSceneDepthPolicyTests();
@@ -226,9 +235,16 @@ int main(int argc, char** argv) {
             return EXIT_FAILURE;
         }
     }
+    if (argc == 2 && std::string_view{argv[1]} == "light-grid") {
+        kb::render::tests::RunSceneLightGridTests();
+        kb::render::tests::RunSceneLightGridGpuTests();
+        return EXIT_SUCCESS;
+    }
     if (argc != 1) {
         return EXIT_FAILURE;
     }
+    kb::render::tests::RunSceneLightGridTests();
+    kb::render::tests::RunSceneLightGridGpuTests();
     kb::render::tests::RunGraphForwardGpuRenderTests();
     kb::render::tests::RunFinalCompositePassTests();
     kb::render::tests::RunPostProcessChainTests();

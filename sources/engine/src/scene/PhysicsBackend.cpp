@@ -132,11 +132,23 @@ void PhysicsBackend::QueueCollisionEvent(Scene& scene, PendingCollisionEvent eve
     SceneAccess::State(scene).pendingCollisionEvents.push_back(std::move(event));
 }
 
+void PhysicsBackend::SetCollisionEventConsumer(Scene& scene, bool present) noexcept {
+    SceneAccess::State(scene).collisionEventConsumer = present;
+}
+
+bool PhysicsBackend::HasCollisionEventConsumer(Scene& scene) noexcept {
+    return SceneAccess::State(scene).collisionEventConsumer;
+}
+
 std::vector<PendingCollisionEvent> PhysicsBackend::DrainPendingCollisionEvents(Scene& scene) {
-    SceneState& state = SceneAccess::State(scene);
     std::vector<PendingCollisionEvent> drained;
-    drained.swap(state.pendingCollisionEvents);
+    DrainPendingCollisionEvents(scene, drained);
     return drained;
+}
+
+void PhysicsBackend::DrainPendingCollisionEvents(Scene& scene, std::vector<PendingCollisionEvent>& output) {
+    output.clear();
+    output.swap(SceneAccess::State(scene).pendingCollisionEvents);
 }
 
 bool PhysicsBackend::ConfigureLayers(Scene& scene, const PhysicsLayersAsset& layers) noexcept {

@@ -1,4 +1,5 @@
 #include "JoltPhysicsSceneSystem.hpp"
+#include "JoltStaticBodyBatchCache.hpp"
 #include "engine/assets/CollisionMeshAsset.hpp"
 #include "engine/scene/SceneAssets.hpp"
 
@@ -60,6 +61,7 @@
 #include <Jolt/Physics/PhysicsSystem.h>
 
 #include <algorithm>
+#include <atomic>
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -68,6 +70,8 @@
 #include <limits>
 #include <map>
 #include <mutex>
+#include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -96,7 +100,7 @@ using kb::scene::Vec3;
 namespace {
 
 constexpr float MinimumShapeExtent = 0.001F;
-constexpr std::uint32_t MaxBodies = 65536U;
+constexpr std::uint32_t MaxBodies = 131072U;
 constexpr std::uint32_t NumBodyMutexes = 0U;
 constexpr std::uint32_t MaxBodyPairs = 65536U;
 constexpr std::uint32_t MaxContactConstraints = 10240U;
@@ -222,6 +226,9 @@ struct BodyRecord {
     // transform-driven synchronization; WriteBack then publishes the new pose
     // as the next authoritative Transform.
     bool pendingKinematicMove = false;
+    // Set once the final pose of a body that went to sleep has been written back; sleeping bodies
+    // cannot move, so further write-backs would only repeat that pose.
+    bool writeBackSettled = false;
     std::uint32_t seenEpoch = 0U;
 };
 
@@ -986,6 +993,10 @@ struct ActiveBodyContact {
 
 class JoltCollisionContactListener final : public JPH::ContactListener {
 public:
+    // Contact bookkeeping is wasted work (and an unbounded queue) while nothing consumes the events.
+    void SetEnabled(bool enabled) noexcept { enabled_.store(enabled, std::memory_order_relaxed); }
+    [[nodiscard]] bool Enabled() const noexcept { return enabled_.load(std::memory_order_relaxed); }
+
     void OnContactAdded(const JPH::Body& body1, const JPH::Body& body2, const JPH::ContactManifold& manifold, JPH::ContactSettings& settings) override {
         static_cast<void>(settings);
         Record(body1, body2, manifold, RawContactPhase::Added);
@@ -1002,6 +1013,7 @@ public:
     // events; only the two BodyIDs (still valid to read from the pair
     // itself) are available.
     void OnContactRemoved(const JPH::SubShapeIDPair& subShapePair) override {
+        if (!Enabled()) return;
         std::lock_guard<std::mutex> lock(mutex_);
         pending_.push_back(RawContactEvent{
             .pair = subShapePair,
@@ -1011,11 +1023,14 @@ public:
         });
     }
 
-    [[nodiscard]] std::vector<RawContactEvent> DrainAndClear() {
+    [[nodiscard]] std::span<RawContactEvent> DrainAndClear() {
         std::lock_guard<std::mutex> lock(mutex_);
-        std::vector<RawContactEvent> drained;
-        drained.swap(pending_);
-        return drained;
+        // The completed step borrows this buffer until the next drain. Both
+        // buffers retain capacity so contact callbacks do not reallocate it
+        // under the shared mutex on every fixed step.
+        drained_.clear();
+        drained_.swap(pending_);
+        return drained_;
     }
 
     void DiscardBody(JPH::BodyID bodyId) {
@@ -1032,6 +1047,7 @@ public:
 
 private:
     void Record(const JPH::Body& body1, const JPH::Body& body2, const JPH::ContactManifold& manifold, RawContactPhase phase) {
+        if (!Enabled()) return;
         Vec3 point{};
         if (!manifold.mRelativeContactPointsOn1.empty()) {
             point = FromJoltPosition(manifold.GetWorldSpaceContactPointOn1(0));
@@ -1049,8 +1065,10 @@ private:
         });
     }
 
+    std::atomic<bool> enabled_{ true };
     std::mutex mutex_;
     std::vector<RawContactEvent> pending_;
+    std::vector<RawContactEvent> drained_;
 };
 
 } // namespace
@@ -1063,7 +1081,7 @@ public:
         , objectLayerPairFilter_(kObjectLayerCount)
         , objectVsBroadPhaseFilter_(objectLayerPairFilter_, broadPhaseLayers_)
         , tempAllocator_(10U * 1024U * 1024U)
-        , jobSystem_(JPH::cMaxPhysicsJobs, JPH::cMaxPhysicsBarriers, WorkerThreadCount()) {
+        , jobSystem_(JPH::cMaxPhysicsJobs, JPH::cMaxPhysicsBarriers, WorkerThreadCount(settings)) {
         for (JPH::ObjectLayer namedLayer = 0; namedLayer < static_cast<JPH::ObjectLayer>(kNamedLayerCount); ++namedLayer) {
             broadPhaseLayers_.MapObjectToBroadPhaseLayer(ToObjectLayer(namedLayer, true), BroadPhaseLayers::NonMoving);
             broadPhaseLayers_.MapObjectToBroadPhaseLayer(ToObjectLayer(namedLayer, false), BroadPhaseLayers::Moving);
@@ -1138,9 +1156,16 @@ public:
         SynchronizeJoints(context);
         SynchronizeCharacters(context);
         UpdateCharacters(context);
+        const bool contactEvents = kb::scene::PhysicsBackend::HasCollisionEventConsumer(context.GetScene());
+        if (contactListener_.Enabled() != contactEvents) {
+            // Pair state tracked while disabled would be stale; start clean when events (re)start.
+            contactListener_.SetEnabled(contactEvents);
+            activeContacts_.clear();
+            static_cast<void>(contactListener_.DrainAndClear());
+        }
         Step(context.DeltaSeconds());
-        writeBackEntities_.clear();
-        writeBackEntities_.reserve(nonStaticBodies_.size() + characters_.size());
+        writeBackPoses_.clear();
+        writeBackPoses_.reserve(nonStaticBodies_.size() + characters_.size());
         WriteBack(context);
         WriteBackCharacters(context);
         FinalizeWriteBackLocalPoses(context);
@@ -1705,9 +1730,10 @@ private:
             : nullptr;
     }
 
-    [[nodiscard]] static std::uint32_t WorkerThreadCount() noexcept {
+    [[nodiscard]] static std::uint32_t WorkerThreadCount(const JoltPhysicsSceneSystemSettings& settings) noexcept {
         const unsigned int hardwareThreads = std::thread::hardware_concurrency();
-        return hardwareThreads <= 1U ? 0U : static_cast<std::uint32_t>(hardwareThreads - 1U);
+        const auto available = hardwareThreads <= 1U ? 0U : static_cast<std::uint32_t>(hardwareThreads - 1U);
+        return std::min(available, settings.workerThreadCount == 0U ? 8U : settings.workerThreadCount);
     }
 
     void SynchronizeBodies(SceneSystemContext& context) {
@@ -1716,7 +1742,7 @@ private:
         // synchronization. During a full scene replacement, the old dynamic
         // bodies are gone and newly created ones start active; broad-phase wake
         // queries for every new and retired static body have no effect.
-        const bool wakeSurvivingDynamicBodies = std::ranges::any_of(nonStaticBodies_, [this, &context](const BodySyncCacheEntry& entry) {
+        const bool wakeSurvivingDynamicBodies = std::ranges::any_of(nonStaticBodies_, [this, &context](const BodyWriteBackView& entry) {
             if (!context.GetScene().Entities().IsAlive(entry.entity)) {
                 return false;
             }
@@ -1745,7 +1771,7 @@ private:
                     const SceneEntity entity{ batch.EntityAt(index).Id() };
                     BodyRecord& body = SynchronizeBody(entity, transforms[index], rigidbodies[index], colliders[index], context, wakeSurvivingDynamicBodies);
                     if (rigidbodies[index].bodyType != RigidbodyBodyType::Static) {
-                        nonStaticBodies_.push_back({entity, &body});
+                        nonStaticBodies_.push_back({entity, &body, &transforms[index], &rigidbodies[index]});
                     }
                 }
             });
@@ -1755,7 +1781,26 @@ private:
             kb::ecs::QueryFilter filter;
             filter.Exclude(context.EcsWorld().Component<RigidbodyComponent>());
             ColliderOnlyBodyQuery colliderQuery = context.EcsWorld().CreateQuery<TransformComponent, ColliderComponent>(filter);
-            colliderQuery.ForEachBatchKernel(settings, [this, &context, wakeSurvivingDynamicBodies](const ColliderOnlyBodyQuery::Batch& batch) {
+            std::size_t batchIndex = 0U;
+            const auto transformId = context.EcsWorld().Component<TransformComponent>();
+            const auto colliderId = context.EcsWorld().Component<ColliderComponent>();
+            colliderQuery.ForEachBatchKernel(settings, [this, &context, &batchIndex, transformId, colliderId, wakeSurvivingDynamicBodies](const ColliderOnlyBodyQuery::Batch& batch) {
+                if (batch.Empty()) return;
+                const auto& storage = context.EcsWorld().NativeStorage();
+                const JoltStaticBodyBatchCache::Key key{
+                    .firstEntity = batch.EntityAt(0U), .count = batch.Count(),
+                    .structuralVersion = storage.StructuralVersion(),
+                    .transformVersion = storage.ComponentVersion(batch.EntityAt(0U), transformId),
+                    .colliderVersion = storage.ComponentVersion(batch.EntityAt(0U), colliderId),
+                };
+                if (bodySyncCacheValid_ && staticBodyBatchCache_.Matches(batchIndex, key) &&
+                    bodySyncCursor_ + batch.Count() <= bodySyncCache_.size()) {
+                    // Validated rows still own these bodies. Defer their epoch
+                    // writes until a stale record actually needs retirement.
+                    bodySyncCursor_ += batch.Count();
+                    ++batchIndex;
+                    return;
+                }
                 const TransformComponent* transforms = batch.Components<0>();
                 const ColliderComponent* colliders = batch.Components<1>();
                 for (std::size_t index = 0; index < batch.Count(); ++index) {
@@ -1763,12 +1808,17 @@ private:
                     SynchronizeBody(entity, transforms[index],
                         RigidbodyComponent{ .bodyType = RigidbodyBodyType::Static }, colliders[index], context, wakeSurvivingDynamicBodies);
                 }
+                staticBodyBatchCache_.Store(batchIndex++, key);
             });
+            staticBodyBatchCache_.Finish(batchIndex);
         }
 
         // The disjoint queries visit every live body once and ensure its map entry exists.
         // Equal counts therefore exclude stale records without scanning the map.
         if (bodies_.size() != bodySyncCursor_) {
+            for (std::size_t index = 0U; index < bodySyncCursor_; ++index) {
+                bodySyncCache_[index].body->seenEpoch = bodySyncEpoch_;
+            }
             for (auto it = bodies_.begin(); it != bodies_.end();) {
                 if (it->second.seenEpoch != bodySyncEpoch_) {
                     RemoveBody(it->second.bodyId, wakeSurvivingDynamicBodies);
@@ -1787,6 +1837,7 @@ private:
         }
         bodySyncCache_.resize(bodySyncCursor_);
         bodySyncCacheValid_ = true;
+        writeBackStorageVersion_ = context.EcsWorld().NativeStorage().StructuralVersion();
     }
 
     // LIB-130: runs AFTER SynchronizeBodies (above) in the same OnFixedUpdate
@@ -2156,7 +2207,7 @@ private:
             const Vec3 position = FromJoltPosition(record.character->GetPosition());
             const Quat rotation = FromJolt(record.character->GetRotation());
             StageWriteBackWorldPose(*transform, position, rotation);
-            writeBackEntities_.push_back(entity);
+            writeBackPoses_.push_back({entity, transform, context.EcsWorld().NativeStorage().StructuralVersion()});
         }
     }
 
@@ -2348,28 +2399,44 @@ private:
     }
 
     void WriteBack(SceneSystemContext& context) {
-        JPH::BodyInterface& bodyInterface = physicsSystem_.GetBodyInterface();
         for (const auto& entry : nonStaticBodies_) {
             const BodyRecord& body = *entry.body;
             const SceneEntity entity = entry.entity;
-            if (!context.Transforms().IsAlive(entity)) {
-                continue;
-            }
-
-            RigidbodyComponent* rigidbody = context.GetScene().Components().Rigidbodies().TryGet(entity);
-            TransformComponent* transform = context.Transforms().TryGet(entity);
+            // Borrowed query rows are consumed only in their fixed step.
+            // Structural edits invalidate all borrowed addresses.
+            const bool rowsValid = writeBackStorageVersion_ == context.EcsWorld().NativeStorage().StructuralVersion();
+            RigidbodyComponent* rigidbody = rowsValid ? const_cast<RigidbodyComponent*>(entry.rigidbody)
+                : context.GetScene().Components().Rigidbodies().TryGet(entity);
+            TransformComponent* transform = rowsValid ? const_cast<TransformComponent*>(entry.transform)
+                : context.Transforms().TryGet(entity);
             if (rigidbody == nullptr || transform == nullptr || rigidbody->bodyType == RigidbodyBodyType::Static) {
                 continue;
             }
 
-            const Quat rotation = FromJolt(bodyInterface.GetRotation(body.bodyId));
-            const Vec3 position = Subtract(FromJoltPosition(bodyInterface.GetPosition(body.bodyId)), ColliderWorldOffset(body.signature.center, body.signature.scale, rotation));
+            // A single read lock supplies one coherent pose/velocity snapshot.
+            // Four separate BodyInterface getters acquired this same lock four times.
+            Quat rotation{};
+            Vec3 position{}, linearVelocity{}, angularVelocity{};
+            {
+                JPH::BodyLockRead lock(physicsSystem_.GetBodyLockInterface(), body.bodyId);
+                if (!lock.Succeeded()) continue;
+                const auto& simulated = lock.GetBody();
+                const bool asleep = !simulated.IsActive();
+                if (asleep && entry.body->writeBackSettled) continue;
+                entry.body->writeBackSettled = asleep;
+                rotation = FromJolt(simulated.GetRotation());
+                position = Subtract(FromJoltPosition(simulated.GetPosition()), ColliderWorldOffset(body.signature.center, body.signature.scale, rotation));
+                linearVelocity = FromJolt(simulated.GetLinearVelocity());
+                angularVelocity = FromJolt(simulated.GetAngularVelocity());
+            }
             StageWriteBackWorldPose(*transform, position, rotation);
-            writeBackEntities_.push_back(entity);
+            writeBackPoses_.push_back({entity, transform, context.EcsWorld().NativeStorage().StructuralVersion()});
 
-            rigidbody->linearVelocity = FromJolt(bodyInterface.GetLinearVelocity(body.bodyId));
-            rigidbody->angularVelocity = FromJolt(bodyInterface.GetAngularVelocity(body.bodyId));
-            context.GetScene().Components().Rigidbodies().MarkModified(entity);
+            if (!SameVec3(rigidbody->linearVelocity, linearVelocity) || !SameVec3(rigidbody->angularVelocity, angularVelocity)) {
+                rigidbody->linearVelocity = linearVelocity;
+                rigidbody->angularVelocity = angularVelocity;
+                context.GetScene().Components().Rigidbodies().MarkModified(entity);
+            }
         }
     }
 
@@ -2378,13 +2445,13 @@ private:
         // world poses before this compact scratch list is consumed. Local conversion is
         // therefore independent of bodies_/characters_ hash order, including dynamic
         // parent+child and mixed rigidbody/character hierarchies.
-        for (const SceneEntity entity : writeBackEntities_) {
-            if (!context.Transforms().IsAlive(entity)) {
-                continue;
-            }
-            TransformComponent* transform = context.Transforms().TryGet(entity);
+        for (const auto& pose : writeBackPoses_) {
+            // A borrowed row belongs to this fixed step only. Modified
+            // observers may still change the archetype before the next row.
+            TransformComponent* transform = pose.storageVersion == context.EcsWorld().NativeStorage().StructuralVersion()
+                ? pose.transform : context.Transforms().TryGet(pose.entity);
             if (transform != nullptr) {
-                FinalizeWriteBackLocalPose(context, entity, *transform);
+                FinalizeWriteBackLocalPose(context, pose.entity, *transform);
             }
         }
     }
@@ -2399,7 +2466,7 @@ private:
     // in a collision event") for kb::script::ScriptRuntimeSceneSystem to
     // drain and dispatch as real, entity-local ScriptEvents.
     void DispatchContactEvents(SceneSystemContext& context) {
-        std::vector<RawContactEvent> drained = contactListener_.DrainAndClear();
+        const auto drained = contactListener_.DrainAndClear();
         if (drained.empty()) {
             return;
         }
@@ -2409,13 +2476,17 @@ private:
         // compares authoritative active sets at fixed-step boundaries and
         // selects their lowest SubShapeIDPair payload, so compound-shape
         // results do not depend on callback interleaving either.
-        std::map<BodyContactKey, std::vector<RawContactEvent>> grouped;
-        for (const RawContactEvent& contact : drained) {
-            grouped[BodyContactKey{ .body1 = contact.body1, .body2 = contact.body2 }].push_back(contact);
-        }
+        std::stable_sort(drained.begin(), drained.end(), [](const auto& lhs, const auto& rhs) {
+            return BodyContactKey{lhs.body1, lhs.body2} < BodyContactKey{rhs.body1, rhs.body2};
+        });
 
         kb::scene::Scene& scene = context.GetScene();
-        for (const auto& [bodyPair, contacts] : grouped) {
+        for (std::size_t begin = 0U; begin < drained.size();) {
+            const BodyContactKey bodyPair{drained[begin].body1, drained[begin].body2};
+            std::size_t end = begin + 1U;
+            while (end < drained.size() && drained[end].body1 == bodyPair.body1 && drained[end].body2 == bodyPair.body2) ++end;
+            const auto contacts = std::span{drained}.subspan(begin, end - begin);
+            begin = end;
             const auto entity1It = entityByBodyId_.find(bodyPair.body1);
             const auto entity2It = entityByBodyId_.find(bodyPair.body2);
             if (entity1It == entityByBodyId_.end() || entity2It == entityByBodyId_.end()) {
@@ -2427,10 +2498,11 @@ private:
                 kb::scene::PhysicsContactPhase phase = kb::scene::PhysicsContactPhase::Enter;
                 ContactPayload payload{};
             };
-            std::vector<Dispatch> dispatches;
+            std::array<Dispatch, 2> dispatches{};
+            std::size_t dispatchCount = 0U;
             const bool wasActive = !active.subShapes.empty();
             const ContactPayload previousPayload = wasActive ? active.subShapes.begin()->second : ContactPayload{};
-            std::map<JPH::SubShapeIDPair, ContactPayload> activatedThisStep;
+            std::optional<std::pair<JPH::SubShapeIDPair, ContactPayload>> firstActivation;
 
             for (const RawContactEvent& contact : contacts) {
                 if (contact.phase == RawContactPhase::Removed) {
@@ -2448,7 +2520,9 @@ private:
                         .isTrigger = contact.isSensor1 || contact.isSensor2,
                     };
                     active.subShapes[contact.pair] = payload;
-                    activatedThisStep[contact.pair] = payload;
+                    if (!firstActivation || contact.pair < firstActivation->first || contact.pair == firstActivation->first) {
+                        firstActivation = std::pair{contact.pair, payload};
+                    }
                 }
             }
 
@@ -2457,43 +2531,43 @@ private:
                 // Use the lowest SubShapeIDPair as representative once
                 // more than one became active. Its operator< is Jolt's own
                 // deterministic contact ordering.
-                dispatches.push_back(Dispatch{
+                dispatches[dispatchCount++] = Dispatch{
                     .phase = kb::scene::PhysicsContactPhase::Enter,
                     .payload = active.subShapes.begin()->second,
-                });
+                };
             } else if (wasActive && isActive) {
                 // The body pair existed at both fixed-step boundaries:
                 // exactly one Stay, even when Jolt replaced individual
                 // compound-shape manifolds during the step.
-                dispatches.push_back(Dispatch{
+                dispatches[dispatchCount++] = Dispatch{
                     .phase = kb::scene::PhysicsContactPhase::Stay,
                     .payload = active.subShapes.begin()->second,
-                });
+                };
             } else if (wasActive) {
                 // Removed has no manifold. The lowest previously-active
                 // SubShapeIDPair is the stable retained payload; choosing
                 // "whichever removal callback arrived last" would make
                 // Exit depend on worker scheduling for compound shapes.
-                dispatches.push_back(Dispatch{
+                dispatches[dispatchCount++] = Dispatch{
                     .phase = kb::scene::PhysicsContactPhase::Exit,
                     .payload = previousPayload,
-                });
-            } else if (!activatedThisStep.empty()) {
+                };
+            } else if (firstActivation) {
                 // A contact can begin and end within one physics update.
                 // Preserve both observable transitions with the same
                 // canonical payload rather than dropping the interaction.
-                const ContactPayload transientPayload = activatedThisStep.begin()->second;
-                dispatches.push_back(Dispatch{
+                const ContactPayload transientPayload = firstActivation->second;
+                dispatches[dispatchCount++] = Dispatch{
                     .phase = kb::scene::PhysicsContactPhase::Enter,
                     .payload = transientPayload,
-                });
-                dispatches.push_back(Dispatch{
+                };
+                dispatches[dispatchCount++] = Dispatch{
                     .phase = kb::scene::PhysicsContactPhase::Exit,
                     .payload = transientPayload,
-                });
+                };
             }
 
-            for (const Dispatch& dispatch : dispatches) {
+            for (const Dispatch& dispatch : std::span{dispatches}.first(dispatchCount)) {
                 // `normal` is recipient-local: Jolt defines the manifold
                 // normal from body1 toward body2, therefore body2 receives
                 // its exact inverse. Point remains a world-space point for
@@ -2594,7 +2668,15 @@ private:
     };
     // Map rehash preserves record addresses; removing any body invalidates this row cache.
     std::vector<BodySyncCacheEntry> bodySyncCache_;
-    std::vector<BodySyncCacheEntry> nonStaticBodies_;
+    JoltStaticBodyBatchCache staticBodyBatchCache_;
+    struct BodyWriteBackView {
+        SceneEntity entity{};
+        BodyRecord* body = nullptr;
+        const TransformComponent* transform = nullptr;
+        const RigidbodyComponent* rigidbody = nullptr;
+    };
+    std::vector<BodyWriteBackView> nonStaticBodies_;
+    std::uint64_t writeBackStorageVersion_ = 0U;
     std::size_t bodySyncCursor_ = 0U;
     bool bodySyncCacheValid_ = false;
     struct CollisionMeshRecord {
@@ -2613,7 +2695,12 @@ private:
     std::unordered_map<std::uint64_t, CharacterRecord> characters_;
     std::unordered_map<std::uint64_t, RootMotionQueue> pendingCharacterRootMotion_;
     std::vector<CharacterSnapshot> characterScratch_;
-    std::vector<SceneEntity> writeBackEntities_;
+    struct WriteBackPoseView {
+        SceneEntity entity{};
+        TransformComponent* transform = nullptr;
+        std::uint64_t storageVersion = 0U;
+    };
+    std::vector<WriteBackPoseView> writeBackPoses_;
     JoltCollisionContactListener contactListener_;
     // LIB-127: authoritative active sub-shape sets, aggregated by body pair.
     // Besides preventing duplicate entity callbacks for compound shapes,

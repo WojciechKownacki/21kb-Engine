@@ -1,0 +1,226 @@
+CEL: produkcyjna wydajność istniejącego 21kb dla ogromnych światów.
+Wykonaj zadanie od diagnozy przez kod, kompilację i pomiary do commit/push.
+Punktem odniesienia jakości są dojrzałe silniki studyjne, w tym Unity HDRP
+i Unreal Engine 5. Nie zastępuj ich rzeczywistego porównania deklaracją.
+
+KONTRAKT
+- ECS jest jedynym właścicielem stanu sceny. Renderer i fizyka są konsumentami.
+  Pochodne cache mają jawne unieważnianie; nie mogą być drugim stanem autorskim.
+- Napraw przyczynę mierzonego kosztu, najmniejszą kompletną zmianą. SOLID:
+  własność i cykl życia w klasie mechanizmu, bez globalnych obejść i megaklas.
+- Zachowaj bgfx, istniejące ECS/bulk, serializację, edytor i semantykę komponentów.
+  Nie ukrywaj kosztów przez wyłączanie fizyki, cieni, materiałów lub obiektów.
+- Nie obniżaj szczegółowości obecnych scen porównawczych ani ich liczników.
+  Nie używaj nazw silników referencyjnych w nowych identyfikatorach.
+- Praca headless, bez okien i przejmowania wejścia; budowa maks. 4 procesy.
+  D:\Projekty\verthengineprod i D:\UE5 wyłącznie do odczytu, bez kopiowania kodu.
+  Bez delegowania zadania; zachowaj komputer dostępny dla użytkownika.
+
+WYKONANIE
+1. Zachowaj bazę 3f4a9fc6 i odtwarzalne pomiary Release. Rozdziel Runtime.Update,
+   synchronizację ECS/renderera, przygotowanie drawów, upload i opóźniony GPU.
+   Znajdź przyczynę pełnych skanów niezmiennych obiektów i regresji aktywnej fizyki.
+2. SceneRuntime / SceneTransformHierarchySystem / system fizyki:
+   przetwarzaj faktyczne zmiany przez istniejące dense query i publikację zmian.
+   Zachowaj interpolację, wiele substepów, dirty writes, edycję komponentów,
+   aktywację, zmianę rodzica, archetypu, bulk tworzenie i niszczenie.
+3. Renderer / EcsRenderSceneSynchronizer / RenderScene / MeshPassProcessor:
+   usuń zbędne odtwarzanie i skanowanie pochodnych danych. Statyczny świat
+   nie powinien aktualizować wszystkich proxy co klatkę. Kamera, materiały,
+   animacje i streaming muszą nadal poprawnie unieważniać właściwe zakresy.
+4. SceneMeshDrawCommandSubmitter / RenderInstanceBuffer / zasoby GPU:
+   ogranicz powtarzalne pakowanie i upload przez istniejące właścicielstwo
+   buforów. Zachowaj kolejność przezroczystości, selekcję, motion vectors,
+   cienie, limity urządzenia i poprawność danych między klatkami/pasami.
+5. GeometrySwarm / LOD / streaming: milion rezydentnych instancji, osobne
+   liczniki widocznych i aktywnych. Budżety per komórka i poprawna zmiana LOD;
+   brak cache ignorującego zmianę kamery, materiału, skali lub ownera.
+6. Testy funkcjonalne mają wykrywać rzeczywiste błędy: zmiany po rozgrzewce,
+   wielokamerowość, transformacje rodzica, usuwanie, ponowne użycie ID,
+   anulowanie, spóźnione publikacje i cykle wczytania/usunięcia.
+7. AssetManager::RequestLoadAsync / PrepareAsyncLoad: walidacja zależności
+   czytająca i dekodująca plik musi działać na istniejącym workerze. Walidator
+   otrzymuje niemutowalny widok kanonicznego rejestru, współdzielony między
+   zadaniami tej samej generacji. Zmiana rejestru przed publikacją odrzuca
+   nieaktualny wynik. Nie wyłączaj kontroli sidecarów, hashów i referencji UI.
+   Zbuduj shaderc i sprawdź rzeczywiste gotowanie oraz użycie graph shaderów.
+
+BRAMKA WYDAJNOŚCI (i7-13700F / RTX 4070, 1080p, D3D11, Release)
+- world_100k: średnia całej klatki <= 12 ms, P99 <= 16.67 ms.
+- city_dense_50k: średnia <= 16.67 ms; P99 <= 25 ms.
+- physics_4096: Runtime.Update średnia <= 5 ms, P99 <= 8 ms.
+- batch_dirty_100k: Runtime.Update średnia <= 8 ms, P99 <= 12 ms. Zachowaj
+  publikację OnSet, mirroring, generacje, hierarchię i interpolację. Osobno
+  raportuj koszt mutowania komponentów oraz całe mutation + Runtime.Update.
+- Statyczne 100k przy włączonej fizyce: średnia Update <= 0.1 ms.
+- 100k rzeczywistych colliderów statycznych: brak błędu pojemności, 1000
+  trafionych raycastów na klatkę; Update średnia <= 1 ms, P99 <= 2 ms.
+- foliage_1m: średnia <= 16.67 ms przy tych samych widocznych instancjach.
+- Streaming: co najmniej 9 cykli, zgodne referencje, zero pozostawionych encji,
+  brak blokowania I/O; pełny Update P99 <= 8 ms, maks. <= 16.67 ms.
+- Realistyczny mieszany test musi łączyć geometrię, światła, cienie, ruch,
+  kolizje i streaming. Raportuj P99, maksimum, pamięć i liczniki poprawności.
+- Minimum 3 niezależne powtórki na scenariusz. Rozdziel diagnostyczne trace
+  od pomiaru. Brak nowych regresji > 5% w niezmienionych scenariuszach.
+
+ODBIÓR
+Zielona kompilacja i celowane testy, pełne dostępne suite, pomiary przed/po,
+sprawdzone zasoby i cykl życia. Niezaliczona bramka oznacza dalszą pracę nad
+konkretną przyczyną, nie odpowiedź "trudno stwierdzić". Nie oznaczaj silnika
+jako produkcyjnie gotowego, jeśli kod lub pomiary temu przeczą. Nie zmyślaj
+równoważności z konkurencją ani uniwersalnej wydajności dla dowolnej sceny.
+Zapisz wyniki i polecenia odtworzenia, wykonaj zwykły commit/push origin/1.0.
+
+Uzupełnienie weryfikacji fizyki: każda klatka odbiera wszystkie zdarzenia
+kolizji przez rzeczywistego konsumenta. Raportuj ich liczbę i pamięć. Nie
+porównuj serii z rosnącą, nieodbieraną kolejką ze stałym obciążeniem. Po
+zmianie harness odtwórz bazę i wykonaj pomiar identycznym odbiorcą.
+
+KONTYNUACJA PO ETAPIE 3 (baza: wyniki PRODUCTION_RESULTS_STAGE3_20261001.txt)
+1. Zaliczone bulk Update 8/12 ms nie kończy zadania. SceneTransformService,
+   SceneTransformComponentStore i publikacja World: mutation + Runtime.Update
+   <=16.67 ms dla tego samego batch_dirty_100k. Zachowaj każdy OnSet, odroczenie,
+   dziedziczenie, generacje i zmiany struktury z callbacków; nie wyłączaj lustra.
+2. RenderScene / MeshPassProcessor / SceneMeshDrawCommandSubmitter: usuń
+   pakowanie niezmiennych statycznych grup przy ruchu małego podzbioru. Cel
+   city_dense_50k i mixed_stream_10k: P99 całej klatki gameplay <=16.67 ms.
+   Osobno zmierz zimny start; przenieś rzeczywiste I/O, dekodowanie i przygotowanie
+   zasobów na istniejące workery, a koszt publikacji ogranicz budżetem. Zachowaj
+   wszystkie scenariusze, cienie, liczniki i kontaktowy odbiór fizyki.
+3. SceneLightingPacker i kontrakt shaderów: pełne oświetlenie co najmniej 512
+   świateł przez rzeczywiste listy przestrzenne, zamiast globalnej selekcji 32.
+   Właściciel pochodnych list i zasobów GPU w osobnej klasie. Sprawdź piksele,
+   zmianę kamery/światła, granice klastrów, przepełnienie i warianty materiałów.
+   Nie zaliczaj sceny, która po cichu odrzuca aktywne światła.
+4. Uzupełnij test roślinności o alpha overdraw, wiatr, cienie, LOD i streaming
+   rzeczywistych zasobów. Gdy test wykrywa brak funkcji, dodaj najmniejszą pełną
+   implementację w istniejącym systemie materiałów/instancji, z testem GPU.
+5. Po każdej zmianie wykonaj poprawność, 3 powtórki i porównanie do etapu 3.
+   Cel pełnej jakości produkcyjnej pozostaje aktywny do usunięcia powyższych
+   ograniczeń. Zielony historyczny zestaw węższych bramek nie zastępuje tego celu.
+
+
+KONTYNUACJA PO ETAPIE 4 (wyniki PRODUCTION_RESULTS_STAGE4_20261001.txt)
+RenderScene posiada pochodne strony instancji i rewizje grup. SceneMeshBatchCommandCache
+zachowuje polecenia niezmienionych grup; SceneMeshInstanceBufferPool posiada bufory GPU.
+Usuwanie, widoczność i zmiana zasobów pojedynczej siatki nie przebudowują roślinności.
+Nie twórz dodatkowego źródła stanu, kolejnego cache'u transformów ani flag mobilności.
+1. Domknij P99 gameplay mixed_stream_10k <=16.67 ms. Diagnozuj powód utraty
+   retencji grup (kamera, rewizje zasobów/bindingów, historia LOD, dane grupy)
+   oraz koszt scene_sync. Zachowaj poruszającą się kamerę, wszystkie instancje,
+   512 ciał, kontakty, światła, cienie i 9 cykli. Nie usuwaj szczytów z próbek.
+2. Domknij mutation + Runtime.Update 100k transformów średnia/P99 <=16.67 ms. Dotychczasowy
+   limit samego Update 8/12 ms pozostaje, a pełna mutacja jest osobną bramką.
+3. Nadal obowiązuje pełne oświetlenie 512 świateł, roślinność z alpha, wiatrem,
+   cieniami i LOD oraz asynchroniczne przygotowanie zasobów z budżetem publikacji.
+4. Reporter egzekwuje 16.67 ms dla P99 city fixed, P99 mixed po 120 klatkach
+   i średniej/P99 pełnego bulk. Jego FAIL jest otwartą pracą, nie powodem do
+   obniżania limitu ani uznania całego celu za ukończony. Zachowaj zimny start.
+
+KONTYNUACJA PO ETAPIE 5 (PRODUCTION_RESULTS_STAGE5_20261001.txt)
+RuntimeSceneFrameSync oddziela pełny start od SyncStructural i bieżących affine.
+Renderer po uzgodnieniu struktury nadal odbiera aktualną kolejkę zmian proxy.
+Nie wracaj do pełnej synchronizacji świata przy publikacji każdej paczki streamingu.
+1. Mixed gameplay P99 <=16.67 ms; baza etapu 5: średnia 3.252934, P99 22.7613.
+   Zachowaj wyższe maksimum 60.6711 i zimny start w próbkach/raporcie.
+2. Bulk total_ms średnia/P99 <=16.67 ms; baza: 16.648590 / 21.5316.
+   Zmierz odczyty istniejących kolumn NativeArchetypeStorage/WorldComponents.
+   Łącz powtarzane sprawdzenia danych bez drugiego indeksu/rejestru komponentów.
+   Zachowaj kontrakt publicznych metod dla brakujących/starych encji, odziedziczone
+   komponenty, odroczenie i każdy OnSet wraz ze zmianami struktury z callbacka.
+3. Nadal obowiązują wszystkie pozostałe wymagania 512 świateł, pełnej roślinności,
+   asynchronicznego przygotowania zasobów i budżetu publikacji. Cel jest aktywny.
+
+KONTYNUACJA PO ETAPIE 6 (PRODUCTION_RESULTS_STAGE6_20261001.txt)
+NativeArchetypeStorage jest właścicielem walidowanego odczytu rekordu/kolumny;
+SceneTransformComponentStore zachowuje backend fallback. World po własnym OnSet
+obsługuje usunięcie/migrację/nową generację. JoltPhysicsSceneSystem odracza znaczniki
+statycznych ciał do istniejącej ścieżki usuwania. Nie dodawaj nowego indeksu lub lustra.
+1. Mixed gameplay P99 <=16.67 ms; baza etapu 6: 3.161880 / 22.8164 ms.
+   Domknij koszt poruszającej się kamery i publikacji rzeczywistych zasobów.
+2. Bulk końcowy mean/P99 13.335143/15.0481 ms, ale zachowany wcześniejszy
+   pomiar tego samego kodu ECS ma 13.340501/19.9395 ms. Sprawdź stabilność ogona
+   pod dłuższym obciążeniem. Nie usuwaj wcześniejszych wyników i nie przypisuj
+   spadku P99 bulk zmianie fizyki, która w tym scenariuszu jest wyłączona.
+3. SceneLightingPacker/SceneForwardLightSelector i shadery nadal ograniczają
+   światło globalnie do 32/pass. Wykonaj rzeczywiste listy przestrzenne >=512,
+   z właścicielem zasobów GPU w klasie mechanizmu i odczytami pikseli.
+4. Nadal obowiązują alpha/wiatr/cienie/LOD/streaming roślinności, asynchroniczne
+   przygotowanie zasobów i budżet publikacji. Brak regresji >5% do etapu 6.
+5. Funkcjonalne 54/54 i ostatni PASS bulk nie kończą pełnego celu produkcyjnego.
+
+KONTYNUACJA PO ETAPIE 7 (PRODUCTION_RESULTS_STAGE7_20261001.txt)
+Naprawiono brak flag publikacji kamer/świateł/siatek po bulk prefabu. Istniejący
+SceneRenderProxyComponentMask odtwarza je z kanonicznego ECS w momencie tworzenia.
+Nie dodawaj nowej mapy własności lub drugiego źródła stanu. Runtime profiler
+odczytuje kamerę z opublikowanego feedbacku renderera; benchmark_validation.py
+sprawdza jej rzeczywistą trasę w każdej klatce city i mixed.
+1. Wyniki ruchomych scen etapów 5/6 zawierały starą kamerę. Zachowaj te serie
+   i diagnostykę, ale bazą następnych optymalizacji jest zweryfikowany etap 7.
+   Nie przedstawiaj procentów względem błędnego widoku jako zysku CPU/GPU.
+2. Cel city fixed i mixed gameplay P99 <=16.67 ms pozostaje bez zmian. Usuń
+   koszt przebudowy cullingu/pakowania/uploadu przy rzeczywistym ruchu kamery.
+   Klasy: SceneMeshSubmitter, MeshPassProcessor, SceneMeshBatchCommandCache,
+   SceneMeshInstanceBufferPool. Zachowaj poprawne LOD, cienie, maski, zasoby,
+   wszystkie instancje, 512 aktywnych ciał i 9 pełnych cykli streamingu.
+3. Utrzymaj bulk mutation+Update mean/P99 <=16.67 ms i sprawdź dłuższą stabilność
+   ogona. Zachowaj wcześniejsze pomiary i każdy OnSet/odroczenie/dziedziczenie.
+4. Nadal wykonaj pełne oświetlenie >=512 świateł przez listy przestrzenne,
+   alpha/wiatr/cienie/LOD/streaming roślinności oraz asynchroniczne I/O i
+   przygotowanie zasobów z budżetem publikacji. Pełny cel pozostaje aktywny.
+5. Rozwiąż zachowany alarm world_100k mean +18.93% vs etap 6 w kontrolowanym
+   A/B. Kontrole dały 1.047685/0.911218/0.847631 ms; nie zastępuj serii ani nie
+   kasuj alarmu na podstawie korzystnej pojedynczej powtórki.
+
+KONTYNUACJA PO ETAPIE 8 (PRODUCTION_RESULTS_STAGE8_20261001.txt)
+MeshPassProcessor zachowuje diagnostykę, selekcję i liczniki LOD dla generowanych
+klastrów. Nie przywracaj odrzuconych klastrów zwykłych stron: city poprawiło się,
+lecz mixed P99 wzrosło w trzech parach. Zachowaj wszystkie piloty i ich porażki.
+1. Baza etapu 8 ma city fixed P99 18.9771, mixed warm P99 20.3168 oraz bulk
+   total P99 21.9411. Cel wszystkich trzech <=16.67 pozostaje aktywny. Koszt
+   cullingu/pakowania jest ponawiany w pasach opaque/motion/shadow; usuń jego
+   przyczynę bez drugiego stanu autorskiego, obniżania liczników i starej kamery.
+2. CPU benchmark i Jolt mają identyczny hash jak etap 7. Kontrola tej samej
+   binarki dała bulk P99 16.1793, lecz nie usuwa FAIL serii kanonicznej.
+   Ustabilizuj bulk i zachowaj OnSet, odroczenia, migrację i każdą serię.
+3. Pełne listy przestrzenne >=512 świateł, faktyczny odczyt GPU w builtin/graph
+   materiałach i testy pikseli pozostają wymagane. Nie zwiększaj tylko liczników
+   lub globalnej tablicy 32. Właściciel pochodnych list i zasobów w klasie.
+4. Roślinność z alpha, wiatrem, cieniami, LOD i streamingiem zasobów, async
+   I/O/dekodowanie/przygotowanie GPU oraz budżet publikacji pozostają wymagane.
+5. Stary alarm world +18.93% vs etap 6 nie został zamknięty. Wykonaj kontrolowane
+   A/B. Testy muszą być obowiązkowe, niezależne od opcjonalnego Project/Assets;
+   udowodnij awarię przed i powodzenie po poprawce na rzeczywiście obsługiwanym
+   formacie i funkcji. Funkcjonalne 54/54 nie zalicza bramek ani pełnego celu.
+
+KONTYNUACJA PO ETAPIE 9 (PRODUCTION_RESULTS_STAGE9_20261001.txt)
+SceneLightGridResources posiada pochodne listy CSR i atlas GPU. Kanoniczny
+RenderScene.LightContentRevision unieważnia cache; nie dodawaj kopii danych
+autorskich. ForwardPlus/Deferred builtin/graph rzeczywiście czyta 512/1024
+punktowe, a mutant shader cap32 nie przechodzi obowiązkowego testu pikseli.
+Nie cofaj list do globalnego limitu 32 ani ochrony tekstur użytych w tej klatce.
+1. Mixed warm P99 21.2276 i bulk mutation+Update P99 21.4655 nadal FAIL.
+   Cel <=16.67 ms pozostaje. City fixed P99 15.3858 zalicza tę serię, lecz
+   wymaga utrzymania pod dłuższym obciążeniem. Zachowaj zimny mixed 206.454 ms,
+   wszystkie kamery, instancje, kontakty, cienie i 9 pełnych cykli streamingu.
+2. SceneMeshSubmitter/MeshPassProcessor/SceneMeshInstanceBufferPool oraz
+   SceneTransformService/SceneTransformComponentStore/World: zmniejsz koszt
+   i ogon bez drugiego źródła prawdy; zachowaj OnSet, dziedziczenie, odroczenie,
+   usuwanie i migrację w callbackach, generacje i interpolację. Własność danych
+   w klasie odpowiedniego mechanizmu, minimalne zmiany SOLID.
+3. SceneLightGrid/SceneLightGridResources/kontrakt shaderów: niezależne piksele
+   dużych mieszanych area/spot/directional i transparent/skinned/terrain,
+   docelowe backendy, wielokrotne viewporty i brak zasobów. Sześć kompilacji
+   shaderów nie jest odbiorem GPU sześciu backendów. Uruchom rzeczywisty pomiar
+   GPU; obecny gpu_delayed_ms=-1, a wall_frame_ms mierzy całą klatkę.
+4. Wykonaj pełną roślinność alpha/wiatr/cienie/LOD/streaming i asynchroniczne
+   I/O/dekodowanie/przygotowanie GPU z budżetem publikacji. Dotychczasowy milion
+   instancji czterech trójkątów nie dowodzi gotowości roślinności produkcyjnej.
+5. Zachowaj kanoniczny alarm world +43.82% vs etap 8 i wcześniejszy +18.93%.
+   W 36 osobnych kontrolach stary/current runtime ma world 1.470608/1.461451;
+   liczniki 18 par są zgodne. To nie dowód konkretnej przyczyny środowiskowej
+   ani powód usunięcia historycznych próbek. Kolejne A/B mają własny katalog.
+6. Odbiór end to end nadal obejmuje cały pierwotny cel. 54/54 procesy, milion
+   ECS i nowy test światła nie oznaczają pełnej gotowości gigantycznego świata.
+   Nie obniżaj bramek. Headless, silniki referencyjne read-only, bez nazw obcych
+   silników w identyfikatorach, najwyżej jeden agent. Commit i push po testach.

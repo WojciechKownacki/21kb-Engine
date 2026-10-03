@@ -83,6 +83,8 @@ void MixU64(std::uint64_t& seed, std::uint64_t value) noexcept {
 }
 
 void ResetCommandKeepingInstanceStorage(MeshDrawCommand& command) noexcept {
+    command.instanceRevision = 0U;
+    command.sourceBatchId = 0U;
     command.pass = MeshPassType::BaseOpaque;
     command.meshAssetId = 0U;
     command.materialAssetId = 0U;
@@ -191,9 +193,11 @@ void MeshPipelineCommandBuilder::FinalizeCommands(MeshPipelineBuildResult& resul
     for (MeshDrawCommand& command : result.commands) {
         result.stats.meshPipelineScratchInstanceCapacity += static_cast<std::uint32_t>(command.instances.capacity());
         command.pass = pass;
-        command.depthBucket = command.instances.empty()
-            ? 0U
-            : static_cast<std::uint16_t>(command.sortKey / static_cast<std::uint64_t>(command.instances.size()));
+        if (command.instanceRevision == 0U) {
+            command.depthBucket = command.instances.empty()
+                ? 0U
+                : static_cast<std::uint16_t>(command.sortKey / static_cast<std::uint64_t>(command.instances.size()));
+        }
         command.sortKey = BuildSortKey(pass, command.material, command.materialAssetId, command.materialResource, command.mesh, command.meshAssetId, command.depthBucket, command.terrainLayerIndex);
         result.stats.visibleMeshCount += static_cast<std::uint32_t>(command.instances.size());
         ++result.stats.visibleDrawGroupCount;

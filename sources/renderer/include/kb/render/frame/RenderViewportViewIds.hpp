@@ -12,7 +12,15 @@ namespace kb::render {
 struct RenderViewportViewIds {
     static constexpr std::size_t kBloomPyramidExtraMipCount = 5U;
 
+    [[nodiscard]] static constexpr std::array<std::uint16_t, ViewId::PointShadowViewCount> NoPointShadowViews() noexcept {
+        std::array<std::uint16_t, ViewId::PointShadowViewCount> views{};
+        for (std::uint16_t& view : views) view = ViewId::Invalid;
+        return views;
+    }
+
     std::uint16_t shadowDepth = ViewId::Invalid;
+    std::array<std::uint16_t, ViewId::ShadowCascadeExtraViews> shadowCascadeViews{ ViewId::Invalid, ViewId::Invalid, ViewId::Invalid };
+    std::array<std::uint16_t, ViewId::PointShadowViewCount> pointShadowViews = NoPointShadowViews();
     std::uint16_t opaqueScene = ViewId::Invalid;
     std::uint16_t gbufferGeometry = ViewId::Invalid;
     std::uint16_t deferredLighting = ViewId::Invalid;
@@ -119,12 +127,14 @@ private:
 class RenderViewportViewIdAllocator {
 public:
     static constexpr std::size_t kMaxViewportCount =
-        1U + (ViewId::ScreenCapture - ViewId::DetachedViewportStart) / ViewId::DetachedViewportStride;
+        1U + (ViewId::DetachedViewportLimit - ViewId::DetachedViewportStart) / ViewId::DetachedViewportStride;
 
     [[nodiscard]] static constexpr RenderViewportViewIds ForViewportIndex(std::uint32_t viewportIndex) noexcept {
         if (viewportIndex == 0U) {
             return RenderViewportViewIds{
                 .shadowDepth = ViewId::ShadowDepth,
+                .shadowCascadeViews = CascadeViews(ViewId::ShadowCascadeExtraStart),
+                .pointShadowViews = PointShadowViews(ViewId::PointShadowStart),
                 .opaqueScene = ViewId::Scene3D,
                 .gbufferGeometry = ViewId::GBufferGeometry,
                 .deferredLighting = ViewId::DeferredLighting,
@@ -152,7 +162,7 @@ public:
         }
 
         const std::uint32_t base = ViewId::DetachedViewportStart + (viewportIndex - 1U) * ViewId::DetachedViewportStride;
-        if (base + ViewId::DetachedViewportStride > ViewId::ScreenCapture) {
+        if (base + ViewId::DetachedViewportStride > ViewId::DetachedViewportLimit) {
             return {};
         }
 
@@ -185,6 +195,22 @@ public:
     }
 
 private:
+    [[nodiscard]] static constexpr std::array<std::uint16_t, ViewId::PointShadowViewCount> PointShadowViews(std::uint32_t start) noexcept {
+        std::array<std::uint16_t, ViewId::PointShadowViewCount> views{};
+        for (std::size_t index = 0; index < views.size(); ++index) {
+            views[index] = static_cast<std::uint16_t>(start + index);
+        }
+        return views;
+    }
+
+    [[nodiscard]] static constexpr std::array<std::uint16_t, ViewId::ShadowCascadeExtraViews> CascadeViews(std::uint32_t start) noexcept {
+        std::array<std::uint16_t, ViewId::ShadowCascadeExtraViews> views{};
+        for (std::size_t index = 0; index < views.size(); ++index) {
+            views[index] = static_cast<std::uint16_t>(start + index);
+        }
+        return views;
+    }
+
     [[nodiscard]] static constexpr std::array<std::uint16_t, RenderViewportViewIds::kBloomPyramidExtraMipCount> BloomMipViews(std::uint32_t start) noexcept {
         std::array<std::uint16_t, RenderViewportViewIds::kBloomPyramidExtraMipCount> views{};
         for (std::size_t index = 0; index < views.size(); ++index) {

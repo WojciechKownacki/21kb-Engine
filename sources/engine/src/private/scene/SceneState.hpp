@@ -12,6 +12,7 @@
 #include "engine/particles/ParticleRuntimeResult.hpp"
 #include "engine/particles/ParticleRenderCapabilities.hpp"
 #include "engine/particles/ParticleRenderSnapshot.hpp"
+#include "engine/particles/ParticleGpuEmitter.hpp"
 #include "engine/localization/LocalizationCatalog.hpp"
 #include "engine/scene/BehaviourVariableOverride.hpp"
 #include "engine/scene/ContentInstanceComponent.hpp"
@@ -39,6 +40,7 @@
 #include "scene/prefab/ScenePrefabRegistry.hpp"
 #include "scene/systems/SceneSystemScheduler.hpp"
 #include "scene/transform/SceneTransformBranchUpdater.hpp"
+#include "scene/transform/SceneTransformTopologyCache.hpp"
 
 #include <array>
 #include <cstdint>
@@ -533,14 +535,10 @@ public:
     std::vector<SceneEntity> denseHierarchyParents;
     std::vector<std::vector<SceneEntity>> denseHierarchyChildren;
     std::vector<std::size_t> prefabHierarchyChildrenPerNodeScratch;
-    std::vector<std::vector<SceneEntity>> transformTopologicalBatches;
+    SceneTransformTopologyCache transformTopology;
     std::uint64_t hierarchyTopologyVersion = 1;
     std::uint64_t hierarchyRootAppendEpoch = 1U;
     std::uint64_t nextAnimatorRuntimeBindingGeneration = 1U;
-    std::uint64_t transformTopologicalBatchesVersion = 0;
-    std::uint64_t transformTopologicalBatchesRootAppendEpoch = 0U;
-    std::size_t transformTopologicalBatchesRootCount = 0U;
-    std::uint64_t transformTopologicalBatchBuildCount = 0;
     std::unique_ptr<SceneTransformRootQueryCache> transformRootQueryCache;
     std::uint64_t transformPropagationCursorVersion = 0;
     std::size_t transformPropagationCursorLevel = 0U;
@@ -683,6 +681,9 @@ public:
     // pendingSceneLifecycleEvents above exactly (see PhysicsBackend.hpp's
     // own doc comment on PendingCollisionEvent for the full contract).
     std::vector<PendingCollisionEvent> pendingCollisionEvents;
+    // True while something drains pendingCollisionEvents (the script runtime). Physics plugins skip
+    // contact-event bookkeeping otherwise, so an unconsumed queue cannot grow without bound.
+    bool collisionEventConsumer = false;
     // LIB-160: prefab-instantiation completion notifications. World.
     // InstantiatePrefab queues one per instantiation whose caller is a live
     // entity; ScriptRuntimeSceneSystem drains them each frame into an
@@ -733,6 +734,8 @@ public:
     const std::thread::id particlePlaybackOwnerThread = std::this_thread::get_id();
 #endif
     std::vector<kb::particles::PendingParticleRuntimeEvent> pendingParticleRuntimeEvents;
+    std::vector<kb::particles::ParticleGpuEmitterCommand> pendingParticleGpuEmitterCommands;
+    bool particleGpuEmitterConsumer = false;
     mutable std::vector<kb::particles::ParticleRuntimeState> particleRuntimeStateScratch;
     SceneUIFrame uiFrame;
     std::vector<SceneUIEvent> uiEvents;

@@ -566,12 +566,96 @@ void RunTransformTopologicalBatchCacheInvalidationTest() {
     static_cast<void>(scene.Runtime().Update(0.016F));
     const kb::scene::SceneRuntimeHotPathReport detachedReport = scene.Runtime().HotPathReport();
     kb::tests::Require(
-        detachedReport.transformTopologicalBatchBuildCount == appendedReport.transformTopologicalBatchBuildCount + 1U,
-        "Transform topological cache did not rebuild after hierarchy change");
+        detachedReport.transformTopologicalBatchBuildCount == appendedReport.transformTopologicalBatchBuildCount,
+        "Detaching a leaf must update the cached levels without a full rebuild");
     kb::tests::Require(detachedReport.transformTopologicalBatchCount == 1U, "Transform topological cache kept stale child level after detach");
 
     const kb::scene::TransformComponent childTransform = scene.Transforms().Get(child);
     kb::tests::Require(kb::tests::NearlyEqual(childTransform.worldPosition.x, 2.0F), "Transform topological cache invalidation did not update detached child world position");
+}
+
+void RunIncrementalTransformTopologyLifetimeTest() {
+    kb::scene::Scene scene;
+    const auto parent = scene.Entities().CreateObject({.transform = {.localPosition = {10.0F, 0.0F, 0.0F}}});
+    scene.Runtime().SynchronizeTransforms();
+    const auto initialBuilds = scene.Runtime().HotPathReport().transformTopologicalBatchBuildCount;
+    std::vector<kb::scene::SceneObject> leaves;
+    for (unsigned index = 0U; index < 512U; ++index) {
+        leaves.push_back(scene.Entities().CreateObject({.parent = parent,
+            .transform = {.localPosition = {static_cast<float>(index), 0.0F, 0.0F}}}));
+        if (index % 32U == 31U) scene.Runtime().SynchronizeTransforms();
+    }
+    kb::tests::Require(scene.Runtime().HotPathReport().transformTopologicalBatchBuildCount == initialBuilds,
+        "Streaming leaf appends rebuilt the whole transform topology");
+    // Remove from the middle to exercise moved-index bookkeeping, then reuse
+    // entity slots. Hierarchy sibling order is still owned by the scene.
+    for (unsigned index = 1U; index < leaves.size(); index += 2U) scene.Entities().Destroy(leaves[index]);
+    scene.Runtime().SynchronizeTransforms();
+    for (unsigned index = 0U; index < leaves.size(); index += 2U) {
+        kb::tests::Require(scene.Transforms().Get(leaves[index]).worldPosition.x == 10.0F + index,
+            "Leaf removal corrupted a surviving transform");
+    }
+    const auto replacement = scene.Entities().CreateObject({.parent = parent, .transform = {.localPosition = {7.0F, 0.0F, 0.0F}}});
+    const auto grandchild = scene.Entities().CreateObject({.parent = replacement, .transform = {.localPosition = {3.0F, 0.0F, 0.0F}}});
+    scene.Runtime().SynchronizeTransforms();
+    kb::tests::Require(scene.Runtime().HotPathReport().transformTopologicalBatchBuildCount == initialBuilds &&
+        scene.Transforms().Get(grandchild).worldPosition.x == 20.0F,
+        "Incremental topology lost a reused slot or a newly appended depth level");
+    scene.Entities().SetName(parent, "Renamed parent");
+    scene.Runtime().SynchronizeTransforms();
+    kb::tests::Require(scene.Runtime().HotPathReport().transformTopologicalBatchBuildCount == initialBuilds,
+        "Metadata changes must not rebuild transform execution order");
+    kb::tests::Require(scene.Hierarchy().SetParent(replacement, {}), "Subtree detach failed");
+    scene.Runtime().SynchronizeTransforms();
+    kb::tests::Require(scene.Runtime().HotPathReport().transformTopologicalBatchBuildCount == initialBuilds + 1U &&
+        scene.Transforms().Get(grandchild).worldPosition.x == 10.0F,
+        "Subtree reparent fallback did not rebuild valid depths and poses");
+    scene.Entities().Destroy(parent);
+    scene.Entities().Destroy(replacement);
+    scene.Runtime().SynchronizeTransforms();
+    kb::tests::Require(scene.Entities().Count() == 0U && scene.Runtime().HotPathReport().transformTopologicalBatchCount == 0U,
+        "Incremental topology kept deleted generations or depth levels");
+}
+
+void RunTransformStreamingStructuralInvalidationTest() {
+    struct ExtraTag { unsigned value = 0U; };
+    for (const bool mirrored : {true, false}) {
+        kb::ecs::WorldConfig config;
+        config.mirrorEntitiesToBackend = mirrored;
+        config.mirrorNativeComponentChangesToBackend = mirrored;
+        kb::scene::Scene scene{config};
+        const auto parent = scene.Entities().CreateObject({.transform = {.localPosition = {10.0F, 0.0F, 0.0F}}});
+        const auto child = scene.Entities().CreateObject({.parent = parent, .transform = {.localPosition = {2.0F, 0.0F, 0.0F}}});
+        const auto grandchild = scene.Entities().CreateObject({.parent = child, .transform = {.localPosition = {3.0F, 0.0F, 0.0F}}});
+        std::vector<kb::scene::SceneObject> unrelated;
+        for (unsigned index = 0U; index < 1024U; ++index) unrelated.push_back(scene.Entities().CreateObject({}));
+        scene.Runtime().SynchronizeTransforms();
+        scene.Runtime().SynchronizeTransforms();
+        auto transform = scene.Transforms().Get(child);
+        transform.localPosition.x = 4.0F;
+        scene.Transforms().Set(child, transform);
+        scene.Runtime().EcsWorld().Set<ExtraTag>(unrelated.front().Entity(), {});
+        scene.Runtime().SynchronizeTransforms();
+        kb::tests::Require(scene.Transforms().Get(grandchild).worldPosition.x == 17.0F &&
+            scene.Runtime().HotPathReport().transformHierarchyInspectedCount == 2U,
+            "Adding an unrelated component lost dirty descendants or scanned the whole world");
+        // A known leaf removal must not conceal the earlier unsafe removal.
+        scene.Runtime().EcsWorld().Remove<kb::scene::TransformComponent>(parent.Entity());
+        scene.Entities().Destroy(unrelated.back()); unrelated.pop_back();
+        scene.Runtime().SynchronizeTransforms();
+        kb::tests::Require(scene.Transforms().Get(child).worldPosition.x == 4.0F &&
+            scene.Transforms().Get(grandchild).worldPosition.x == 7.0F,
+            "Component removal followed by streamed leaf removal lost parent invalidation");
+        scene.Transforms().Set(parent, {.localPosition = {20.0F, 0.0F, 0.0F}});
+        scene.Runtime().SynchronizeTransforms();
+        kb::tests::Require(scene.Transforms().Get(grandchild).worldPosition.x == 27.0F,
+            "Restored parent transform did not propagate through the native dirty ranges");
+        scene.Runtime().EcsWorld().DestroyEntity(parent.Entity());
+        scene.Entities().Destroy(unrelated.back());
+        scene.Runtime().SynchronizeTransforms();
+        kb::tests::Require(scene.Transforms().Get(grandchild).worldPosition.x == 7.0F,
+            "Untracked parent destruction was concealed by a later known leaf removal");
+    }
 }
 
 void RunTransformPropagationBudgetTest() {
@@ -626,6 +710,179 @@ void RunTransformPropagationBudgetTest() {
     kb::tests::Require(report.transformHierarchyInspectedCount == 3U, "Unlimited transform propagation did not inspect the full chain");
 }
 
+void RunLargeIndependentLeafTransformTest() {
+    using namespace kb::scene;
+    for (const bool mirrored : {true, false}) {
+        kb::ecs::WorldConfig config;
+        config.mirrorEntitiesToBackend = mirrored;
+        config.mirrorNativeComponentChangesToBackend = mirrored;
+        Scene optimized{config}, reference{config};
+        const auto build = [](Scene& scene) {
+            std::vector<SceneObject> objects;
+            objects.push_back(scene.Entities().CreateObject({.transform = {.localPosition = {4.0F, 2.0F, -3.0F}}}));
+            objects.push_back(scene.Entities().CreateObject({.parent = objects[0], .transform = {
+                .localPosition = {2.0F, 3.0F, 4.0F}, .localRotation = {0.0F, 0.38268343F, 0.0F, 0.92387953F},
+                .localScale = {2.0F, 3.0F, 4.0F}}}));
+            objects.push_back(scene.Entities().CreateObject({.parent = objects[0], .transform = {.localPosition = {-3.0F, 1.0F, 7.0F}}}));
+            for (unsigned row = 0U; row < 2048U; ++row)
+                objects.push_back(scene.Entities().CreateObject({.parent = objects[1U + row / 1024U],
+                    .transform = {.localPosition = {static_cast<float>(row % 17U), 1.0F, -2.0F}}}));
+            scene.Runtime().SynchronizeTransforms();
+            scene.Runtime().SynchronizeTransforms();
+            return objects;
+        };
+        auto actual = build(optimized), expected = build(reference);
+        // This exercises the bounded hierarchy algorithm as an independent
+        // reference while allowing the complete fixture to finish in one sync.
+        reference.Runtime().SetTransformPropagationBudget({.maxInspectedEntitiesPerSync = 100000U});
+        const auto modifyLeaves = [](Scene& scene, const auto& objects) {
+            std::vector<SceneEntity> entities;
+            for (std::size_t row = 3U; row < objects.size(); ++row) {
+                if (auto* transform = scene.Transforms().TryGet(objects[row].Entity()); transform != nullptr) {
+                    transform->localPosition.y += 0.5F;
+                    if ((row & 1U) != 0U) transform->localRotation = {0.0F, 0.38268343F, 0.0F, 0.92387953F};
+                    entities.push_back(objects[row].Entity());
+                }
+            }
+            scene.Transforms().MarkModified(entities);
+        };
+        const auto compare = [&] {
+            optimized.Runtime().SynchronizeTransforms();
+            reference.Runtime().SynchronizeTransforms();
+            for (std::size_t row = 0U; row < actual.size(); ++row) {
+                const auto* lhs = optimized.Transforms().TryGet(actual[row].Entity());
+                const auto* rhs = reference.Transforms().TryGet(expected[row].Entity());
+                kb::tests::Require((lhs == nullptr) == (rhs == nullptr), "Leaf batch changed component lifetime");
+                if (lhs == nullptr) continue;
+                const auto sameVector = [](Vec3 a, Vec3 b) {
+                    return kb::tests::NearlyEqual(a.x, b.x) && kb::tests::NearlyEqual(a.y, b.y) && kb::tests::NearlyEqual(a.z, b.z);
+                };
+                kb::tests::Require(sameVector(lhs->worldPosition, rhs->worldPosition) && sameVector(lhs->worldScale, rhs->worldScale) &&
+                    kb::tests::NearlyEqual(lhs->worldRotation.x, rhs->worldRotation.x) && kb::tests::NearlyEqual(lhs->worldRotation.y, rhs->worldRotation.y) &&
+                    kb::tests::NearlyEqual(lhs->worldRotation.z, rhs->worldRotation.z) && kb::tests::NearlyEqual(lhs->worldRotation.w, rhs->worldRotation.w) &&
+                    lhs->localVersion == rhs->localVersion && lhs->parentVersion == rhs->parentVersion && lhs->worldVersion == rhs->worldVersion &&
+                    !lhs->worldDirty && !rhs->worldDirty, "Leaf batch disagrees with bounded hierarchy poses or versions");
+            }
+        };
+        modifyLeaves(optimized, actual); modifyLeaves(reference, expected); compare();
+        // The immediate parent is clean; only its ancestor is dirtied directly
+        // through World, without a scene-service frontier entry.
+        modifyLeaves(optimized, actual); modifyLeaves(reference, expected);
+        for (auto* scene : {&optimized, &reference}) {
+            auto& objects = scene == &optimized ? actual : expected;
+            auto* ancestor = scene->Runtime().EcsWorld().TryGetMutable<TransformComponent>(objects[0].Entity());
+            ancestor->localPosition.x += 5.0F;
+            ancestor->worldDirty = true;
+            ++ancestor->localVersion;
+            scene->Runtime().EcsWorld().MarkModified<TransformComponent>(objects[0].Entity());
+        }
+        compare();
+        kb::tests::Require(optimized.Hierarchy().SetParent(actual[3], actual[2]) && reference.Hierarchy().SetParent(expected[3], expected[2]),
+            "Leaf reparent fixture failed");
+        modifyLeaves(optimized, actual); modifyLeaves(reference, expected); compare();
+        optimized.Entities().Destroy(actual[4]); reference.Entities().Destroy(expected[4]);
+        actual[4] = optimized.Entities().CreateObject({.parent = actual[2], .transform = {.localPosition = {9.0F, 2.0F, 1.0F}}});
+        expected[4] = reference.Entities().CreateObject({.parent = expected[2], .transform = {.localPosition = {9.0F, 2.0F, 1.0F}}});
+        modifyLeaves(optimized, actual); modifyLeaves(reference, expected); compare();
+        optimized.Runtime().EcsWorld().Remove<TransformComponent>(actual[1].Entity());
+        reference.Runtime().EcsWorld().Remove<TransformComponent>(expected[1].Entity());
+        modifyLeaves(optimized, actual); modifyLeaves(reference, expected); compare();
+    }
+}
+
+void RunLeafBatchReentrantRemovalTest() {
+    using namespace kb::scene;
+    Scene scene;
+    const auto parent = scene.Entities().CreateObject({.transform = {.localPosition = {10.0F, 0.0F, 0.0F}}});
+    std::vector<SceneEntity> leaves;
+    for (unsigned row = 0U; row < 1024U; ++row)
+        leaves.push_back(scene.Entities().CreateObject({.parent = parent, .transform = {.localPosition = {2.0F, 0.0F, 0.0F}}}).Entity());
+    scene.Runtime().SynchronizeTransforms();
+    scene.Runtime().SynchronizeTransforms();
+    scene.Transforms().MarkModified(leaves);
+    struct Context { Scene* scene; const std::vector<SceneEntity>* leaves; SceneEntity survivor; unsigned notifications = 0U; } context{&scene, &leaves};
+    const auto observer = scene.Runtime().EcsWorld().ObserveComponent<TransformComponent>(kb::ecs::ComponentEventKind::Modified,
+        [](SceneEntity entity, kb::ecs::ComponentEventKind, const TransformComponent* transform, void* user) {
+            auto& state = *static_cast<Context*>(user);
+            const auto canonical = state.scene->Transforms().Get(entity);
+            kb::tests::Require(transform != nullptr && !transform->worldDirty && transform->worldPosition.x == 12.0F &&
+                canonical.worldVersion == transform->worldVersion, "OnSet saw an unpublished leaf pose");
+            if (state.notifications++ == 0U) {
+                state.survivor = entity;
+                for (const auto other : *state.leaves)
+                    if (other != entity) state.scene->Runtime().EcsWorld().Remove<TransformComponent>(other);
+            }
+        }, &context);
+    kb::tests::Require(observer != 0U, "Leaf OnSet observer registration failed");
+    scene.Runtime().SynchronizeTransforms();
+    kb::tests::Require(context.notifications == 1U, "Leaf publication resurrected components removed by an earlier OnSet");
+    for (const auto entity : leaves)
+        kb::tests::Require(scene.Runtime().EcsWorld().Has<TransformComponent>(entity) == (entity == context.survivor),
+            "Leaf batch restored a removed canonical component");
+    scene.Runtime().EcsWorld().DestroyObserver(observer);
+    scene.Runtime().SynchronizeTransforms();
+}
+
+void RunLeafBatchReentrantEditTest() {
+    using namespace kb::scene;
+    Scene scene;
+    const auto parent = scene.Entities().CreateObject({.transform = {.localPosition = {10.0F, 0.0F, 0.0F}}});
+    std::vector<SceneEntity> leaves;
+    for (unsigned row = 0U; row < 1024U; ++row)
+        leaves.push_back(scene.Entities().CreateObject({.parent = parent, .transform = {.localPosition = {2.0F, 0.0F, 0.0F}}}).Entity());
+    scene.Runtime().SynchronizeTransforms();
+    scene.Runtime().SynchronizeTransforms();
+    scene.Transforms().MarkModified(leaves);
+    struct Context { Scene* scene; const std::vector<SceneEntity>* leaves; SceneEntity edited; bool handled = false; } context{&scene, &leaves};
+    const auto observer = scene.Runtime().EcsWorld().ObserveComponent<TransformComponent>(kb::ecs::ComponentEventKind::Modified,
+        [](SceneEntity entity, kb::ecs::ComponentEventKind, const TransformComponent* transform, void* user) {
+            auto& state = *static_cast<Context*>(user);
+            const auto canonical = state.scene->Transforms().Get(entity);
+            kb::tests::Require(transform != nullptr && transform->localPosition.x == canonical.localPosition.x &&
+                transform->worldPosition.x == canonical.worldPosition.x && transform->worldVersion == canonical.worldVersion &&
+                transform->worldDirty == canonical.worldDirty, "Leaf publication overwrote a newer canonical edit from OnSet");
+            if (!state.handled) {
+                state.handled = true;
+                state.edited = entity == state.leaves->back() ? state.leaves->front() : state.leaves->back();
+                auto changed = state.scene->Transforms().Get(state.edited);
+                changed.localPosition.x = 42.0F;
+                state.scene->Transforms().Set(state.edited, changed);
+            }
+        }, &context);
+    kb::tests::Require(observer != 0U, "Leaf edit observer registration failed");
+    scene.Runtime().SynchronizeTransforms();
+    kb::tests::Require(context.handled && scene.Transforms().Get(context.edited).localPosition.x == 42.0F &&
+        scene.Transforms().Get(context.edited).worldDirty, "OnSet edit was lost during the remaining leaf publications");
+    scene.Runtime().SynchronizeTransforms();
+    kb::tests::Require(scene.Transforms().Get(context.edited).worldPosition.x == 52.0F && !scene.Transforms().Get(context.edited).worldDirty,
+        "A reentrant leaf edit was not propagated by the next synchronization");
+    scene.Runtime().EcsWorld().DestroyObserver(observer);
+}
+
+void RunParallelRootTransformAccountingTest() {
+    kb::ecs::WorldConfig config;
+    config.workerThreadLimit = 2U;
+    kb::scene::Scene scene{config};
+    std::vector<kb::scene::SceneEntity> roots;
+    for (unsigned index = 0U; index < 1024U; ++index) {
+        kb::scene::SceneObjectDesc desc;
+        if (index % 2U != 0U) desc.transform.localRotation = {0.0F, 0.70710678F, 0.0F, 0.70710678F};
+        roots.push_back(scene.Entities().CreateObject(desc).Entity());
+    }
+    scene.Runtime().SynchronizeTransforms();
+    for (const auto entity : roots) scene.Transforms().TryGet(entity)->localPosition.x = 7.0F;
+    scene.Transforms().MarkModified(roots);
+    scene.Runtime().SynchronizeTransforms();
+    const auto report = scene.Runtime().HotPathReport();
+    kb::tests::Require(report.transformHierarchyWorkerCount <= 2U,
+        "Transform hierarchy must honor the configured worker limit");
+    kb::tests::Require(report.transformHierarchyUpdatedCount == roots.size() &&
+        report.transformHierarchyRootFastPathCount == roots.size()/2U,
+        "Parallel root telemetry must count only identity-rotation updates, once each");
+    for (const auto entity : roots) kb::tests::Require(scene.Transforms().Get(entity).worldPosition.x == 7.0F,
+        "Parallel root propagation did not publish the authored position");
+}
+
 void RunTransformSparseFlushReportTest() {
     kb::scene::Scene scene;
     std::vector<kb::scene::SceneObject> roots;
@@ -656,9 +913,9 @@ void RunTransformSparseFlushReportTest() {
     kb::tests::Require(report.transformHierarchySparseFlushCount == 1U, "Transform runtime did not report sparse dirty flush");
     kb::tests::Require(report.transformHierarchyBatchFlushCount == 0U, "Transform runtime used a batch flush for sparse dirty roots");
     kb::tests::Require(report.transformHierarchyFlushedEntityCount == 1U, "Transform runtime reported an unexpected sparse flush entity count");
-    kb::tests::Require(report.transformHierarchyDirtyFrontierCount == 0U &&
+    kb::tests::Require(report.transformHierarchyDirtyFrontierCount == 1U &&
             report.transformHierarchyDirtyListFlushCount == 1U,
-        "Transform runtime did not use the safe dirty-list flush while its query cache was cold");
+        "Transform runtime lost the sparse dirty frontier while rebuilding its query cache");
     kb::tests::Require(report.transformHierarchyUpdatedCount == 1U, "Transform runtime updated more than the moved sparse root");
     kb::tests::Require(report.transformHierarchyInspectedCount == 1U, "Transform runtime inspected clean roots during sparse flush");
     kb::tests::Require(kb::tests::NearlyEqual(scene.Transforms().Get(roots.front()).worldPosition.x, 42.0F), "Sparse flush did not write the moved root");
@@ -1297,13 +1554,19 @@ void RunSceneHierarchyTests() {
     RunTransformHierarchyTest();
     RunTransformHierarchyReplayDeterminismTest();
     RunTransformRootFastPathReportTest();
+    RunParallelRootTransformAccountingTest();
     RunParentChildrenOwnershipTest();
     RunHierarchyStableCreationOrderTest();
     RunHierarchyCreationOrderSurvivesDeletionTest();
     RunHierarchyNoOpParentingKeepsSiblingOrderTest();
     RunTransformTopologicalBatchMassParentingTest();
     RunTransformTopologicalBatchCacheInvalidationTest();
+    RunIncrementalTransformTopologyLifetimeTest();
+    RunTransformStreamingStructuralInvalidationTest();
     RunTransformPropagationBudgetTest();
+    RunLargeIndependentLeafTransformTest();
+    RunLeafBatchReentrantRemovalTest();
+    RunLeafBatchReentrantEditTest();
     RunTransformSparseFlushReportTest();
     RunTransformHierarchyDirtyFrontierReportTest();
     RunTransformHierarchyDeepDirtyFrontierReportTest();

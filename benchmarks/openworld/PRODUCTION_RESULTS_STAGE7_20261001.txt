@@ -1,0 +1,97 @@
+21kb — etap 7: poprawna publikacja transformów po bulk prefabu
+Data: 2026-10-01. Gałąź 1.0. Baza: ef00cb45013664d21da74be2fc203385da720330.
+Pełny cel produkcyjny pozostaje aktywny. Mixed gameplay P99 nie zalicza 16.67 ms.
+
+Korekta wcześniejszych pomiarów
+Diagnoza etapu 6: ECS aktualizował kamerę, ale renderer zachowywał starą pozycję
+aż do synchronizacji struktury. W śladzie 3420 klatek wykryto 3057 rozbieżności,
+z maksymalnym błędem Z 336.25 jednostek. Przykład: ECS Z=611.25, proxy Z=380.
+Brak flag publikacji po bulk powodował transformRenderProxyCameraCount=0.
+Wyniki ruchomych city/mixed etapów 5/6 nie są bazą tej samej pracy renderera.
+Zachowano je i diagnostykę. Ich procenty w historycznym reporterze są opisowe,
+nie przypisujemy poprawce zysku lub regresji wydajności tego samego widoku.
+Nową bazą optymalizacji jest etap 7 z kamerą sprawdzaną w każdej klatce.
+
+Minimalna zmiana i własność
+SceneRenderProxyComponentMask odtwarza istniejące flagi z kanonicznych komponentów
+ECS podczas AssignPrefabHierarchyOrderRange w ScenePrefabBulkInstantiationService.
+Obejmuje kamerę, światło, siatkę i ukrytą widoczność, dla obu ścieżek bulk oraz
+wariantu bez zbierania instancji. Odczyt jest const. Brak nowego indeksu, mapy,
+kopii komponentów, flag autorskich lub obejścia przez pełny Sync co klatkę.
+Runtime profiler czyta pozycję kamery z istniejącego SceneRenderFeedback.
+CSV zawiera render_camera_x/y/z/valid. Wspólny benchmark_validation.py sprawdza
+trasę city/mixed w runnerze i reporterze. Dane kamery nie są agregowane jako
+metryki wydajności. Brak/starą pozycję/NaN odrzuca się zamiast zaliczać scenę.
+
+Poprawność
+Nowa regresja na wcześniejszym kodzie: build exit 0, scene-sync test exit 1:
+"Bulk prefab camera and light transforms were omitted from render publication".
+Po poprawce test przechodzi: oba tryby hierarchii, collect/stats-only, paczka
+645 encji, 32 kolejne ruchy przodka bez zmiany topologii i usunięcie komponentów.
+Pełna ścieżka RuntimeSceneFrameSync i renderer Noop sprawdza 32 ruchy kamery
+przez publiczne konwersje ekran/świat, bez wymuszania synchronizacji struktury.
+Pełny build, engine, ECS API, renderer, świeży WebGPU fallback, stress, replay,
+scheduler i snapshot scale: exit 0. Snapshot i katalog obejmują milion encji.
+Sondy czasowe/kamery usunięto przed pomiarami. Referencyjne silniki bez zmian.
+
+Metoda
+Projekt: E:/21kbProjekty/OpenWorldProductionStage7_20261001.
+i7-13700F, RTX 4070 12 GB, 64 GB RAM, sterownik 591.74, Release /O2 /DNDEBUG.
+D3D11 1920x1080, ForwardPlus, headless. Bez widocznego edytora/przejmowania wejścia.
+54 finalne procesy: 18 scenariuszy x 3, wszystkie exit 0. Osobno 3 kontrole świata.
+Bez trace, buildów i innych benchmarków w czasie pomiarów. Generator bez zmian.
+Pierwsze 54 pomiary zachowano w Results/pilot_mask_publication; finalne w Results/raw.
+Kamery: 13860/13860 klatek zgodnych z trasą, maks. błąd pozycji 0.
+Mixed: 9 pełnych cykli 20646 -> 30648 -> 20646, limit 256 operacji/klatkę.
+Async 100k: 9 pełnych cykli. Aktywna fizyka zachowuje 4096 awake i odbiór kontaktów.
+Colliders 100k: 1000 trafień raycast na klatkę. Zero braków zasobów i dropped.
+Sześć nieruchomych scen zachowuje wszystkie kontrolowane liczniki klatka po klatce
+względem etapu 6 (po 1800 klatek): world, geometry, lights, shadow, foliage 100k/1m.
+Sumy submitted obejmują przebiegi; liczba rezydentów nie oznacza obiektów widocznych.
+SHA-256 zmienionych źródeł, testów, skryptów i binariów zgodne przed/po pomiarach.
+
+Wyniki finalne: średnia / P99 / maksimum [ms]
+batch_dirty_100k (cpu, total_ms): 13.127868 / 14.9167 / 18.0102
+batch_dirty_100k (cpu, runtime_ms): 5.190986 / 6.3906 / 7.8357
+physics_4096 (cpu, runtime_ms): 3.535553 / 4.2318 / 4.7507
+dense_4096 (cpu, runtime_ms): 7.338212 / 8.6213 / 11.7294
+colliders_100k (cpu, runtime_ms): 0.098343 / 0.1623 / 0.3251
+city_dense_50k (fixed_gpu, wall_frame_ms): 12.134985 / 16.5691 / 20.1506
+mixed_stream_10k (fixed_gpu, warm_wall_frame_ms): 6.716895 / 20.1703 / 56.0497
+mixed_stream_10k (fixed_gpu, wall_frame_ms): 7.146325 / 23.3714 / 199.1830
+world_100k (gpu, wall_frame_ms): 1.053642 / 1.7293 / 4.8996
+static_100k (async, update_ms): 0.936122 / 3.4270 / 7.9146
+
+Nieudane bramki i alarmy
+Mixed gameplay P99 20.1703 > 16.67 ms. Zimny maksimum 199.183 ms pozostaje
+w próbkach; ciepłe maksimum 56.0497 ms. City fixed P99 16.5691 przechodzi,
+lecz pilot miał 16.8216; dłuższa stabilność ogona wymaga dalszej optymalizacji.
+Bulk finalny mean/P99 13.127868/14.9167, pilot 13.072142/14.6206. Zachowano
+także wcześniejszy etap 6 z P99 19.9395 przy tym samym kodzie ECS.
+world_100k finalny mean 1.053642 vs 0.885938: alarm +18.93%, bez zmiany liczników.
+Kontrole bez zastępowania serii: mean 1.047685 / 0.911218 / 0.847631 ms.
+Ich wspólna średnia 0.935511 ms (+5.60% vs etap 6).
+Wszystkie serie pozostają w danych. Alarm world nie jest uznany za rozwiązany.
+Reporter exit 1 vs etap 6: mixed FAIL, world oraz opisowe alarmy ruchomych scen.
+Reporter exit 1 vs skorygowana pierwotna baza 3f4a9fc6: mixed FAIL, brak alarmów
+średniej >5%. Nie używamy tego drugiego porównania do kasowania alarmu etapu 6.
+
+Dalsza praca pełnego celu
+1. Zmierz fazy renderowania przy zweryfikowanym ruchu i usuń koszt CPU cullingu,
+   pakowania/uploadu: SceneMeshSubmitter, MeshPassProcessor, SceneMeshBatchCommandCache,
+   SceneMeshInstanceBufferPool. City ma około 10.5 ms CPU renderowania, 4.2 ms GPU,
+   około 6 MB uploadu/klatkę i 0 ponownie użytych poleceń. Nie wyłączaj ruchu,
+   cieni, LOD, fizyki lub instancji. Zamknij mixed P99 i stabilność city/bulk.
+2. Rozwiąż alarm nieruchomego świata w porównaniu A/B na tej samej maszynie;
+   zachowaj wszystkie dotychczasowe powtórki i koszty inicjalizacji flag.
+3. Pełne oświetlenie >=512 świateł przez listy przestrzenne i testy pikseli.
+   Obecny globalny limit to 32/pass; benchmark 512 nie dowodzi 512 źródeł światła.
+4. Rzeczywista roślinność: alpha overdraw, wiatr, cienie, LOD, zasoby streamingu.
+5. Asynchroniczne I/O/dekodowanie/przygotowanie GPU i budżet publikacji zasobów.
+Pełny cel pozostaje aktywny. Te wyniki nie deklarują gotowości na dowolny świat AAA.
+
+Dane
+production_stage7_summary.csv; Results/production_summary_vs_ef00cb45.json;
+Results/production_summary_vs_3f4a9fc6.json; Results/measurement_verification.json;
+Results/diagnostics/camera_publication_before.json; Results/world_repeat/summary.json.
+W CSV procenty dla nieporównywalnych ruchomych widoków są puste.

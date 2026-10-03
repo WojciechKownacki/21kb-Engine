@@ -610,10 +610,12 @@ void RunValidatorMatrixTest() {
     rejects(
         "capacity ceiling",
         [](ParticleEffectAsset& value) {
+            value.backendPolicy = ParticleBackendPolicy::CpuDeterministic;
             value.emitters[0].maxParticles = kParticleEffectMaxCpuParticlesPerEmitter + 1U;
         },
         ParticleEffectDiagnosticCode::LimitExceeded);
     ParticleEffectAsset capacityBoundary = valid;
+    capacityBoundary.backendPolicy = ParticleBackendPolicy::CpuDeterministic;
     for (ParticleEmitterAsset& emitter : capacityBoundary.emitters)
         emitter.maxParticles = kParticleEffectMaxCpuParticlesPerScene / kParticleEffectMaxEmitters;
     Require(ParticleEffectAssetValidator::ValidateStructure(capacityBoundary).Succeeded(),
@@ -622,6 +624,18 @@ void RunValidatorMatrixTest() {
     Require(HasDiagnostic(ParticleEffectAssetValidator::ValidateStructure(capacityBoundary).diagnostics,
                           ParticleEffectDiagnosticCode::LimitExceeded, "effect.emitterCapacity"),
             "combined CPU scene capacity boundary plus one was accepted");
+    // GPU-preferring effects may exceed the CPU caps, up to the GPU scene limit.
+    ParticleEffectAsset gpuCapacity = valid;
+    gpuCapacity.backendPolicy = ParticleBackendPolicy::GpuVisualPreferred;
+    const std::uint32_t gpuShare = kParticleEffectMaxGpuParticlesPerScene / static_cast<std::uint32_t>(gpuCapacity.emitters.size());
+    for (ParticleEmitterAsset& emitter : gpuCapacity.emitters) emitter.maxParticles = gpuShare;
+    gpuCapacity.emitters.back().maxParticles += kParticleEffectMaxGpuParticlesPerScene -
+        gpuShare * static_cast<std::uint32_t>(gpuCapacity.emitters.size());
+    Require(ParticleEffectAssetValidator::ValidateStructure(gpuCapacity).Succeeded(),
+            "GPU scene capacity boundary was rejected");
+    ++gpuCapacity.emitters.back().maxParticles;
+    Require(!ParticleEffectAssetValidator::ValidateStructure(gpuCapacity).Succeeded(),
+            "GPU scene capacity boundary plus one was accepted");
     static_assert(kParticleEffectMaxInstancesPerScene == 256U);
     rejects(
         "output payload", [](ParticleEffectAsset& value) { value.emitters[0].output.payload = ParticleMeshOutput{}; },

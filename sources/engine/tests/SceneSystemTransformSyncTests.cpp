@@ -21,6 +21,8 @@
 #include "engine/scene/VisibilityComponent.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 
+#include <flecs.h>
+
 #include <array>
 #include <algorithm>
 #include <atomic>
@@ -1233,6 +1235,49 @@ void RunSceneRuntimeFixedInterpolationTest() {
         "Reused interpolation indices must rebuild when a fixed step replaces an entity generation");
 }
 
+void RunSceneTransformLookupLifetimeAndFallbackTest() {
+    kb::scene::Scene scene;
+    const kb::scene::Scene& readOnly = scene;
+    auto& world = scene.Runtime().EcsWorld();
+    const auto entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "Transform lookup",
+        .transform = kb::scene::TransformComponent{.localPosition = {17.0F, 0.0F, 0.0F}},
+    });
+    kb::tests::Require(scene.Transforms().TryGet({}) == nullptr && readOnly.Transforms().TryGet({}) == nullptr,
+        "Scene transform lookup must reject an invalid handle");
+    world.Remove<kb::scene::VisibilityComponent>(entity);
+    kb::tests::Require(kb::tests::NearlyEqual(scene.Transforms().TryGet(entity)->localPosition.x, 17.0F) &&
+        readOnly.Transforms().TryGet(entity) == scene.Transforms().TryGet(entity),
+        "Scene transform lookup lost its native column after archetype migration");
+    world.Remove<kb::scene::TransformComponent>(entity);
+    kb::tests::Require(scene.Transforms().TryGet(entity) == nullptr && readOnly.Transforms().TryGet(entity) == nullptr,
+        "Scene transform lookup retained a removed component");
+
+    const auto component = world.Component<kb::scene::TransformComponent>();
+    const auto base = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "Inherited transform base",
+        .transform = kb::scene::TransformComponent{.localPosition = {31.0F, 0.0F, 0.0F}},
+    });
+    ecs_add_pair(world.NativeHandle(), component, EcsOnInstantiate, EcsInherit);
+    ecs_add_pair(world.NativeHandle(), ecs_strip_generation(entity.Id()), EcsIsA, ecs_strip_generation(base.Id()));
+    const auto* inherited = readOnly.Transforms().TryGet(entity);
+    kb::tests::Require(inherited != nullptr && kb::tests::NearlyEqual(inherited->localPosition.x, 31.0F),
+        "Scene transform lookup lost its inherited backend fallback");
+    const kb::scene::TransformComponent backendPose{.localPosition = {43.0F, 0.0F, 0.0F}};
+    ecs_set_id(world.NativeHandle(), ecs_strip_generation(entity.Id()), component, sizeof(backendPose), &backendPose);
+    auto* backend = scene.Transforms().TryGet(entity);
+    kb::tests::Require(backend != nullptr && kb::tests::NearlyEqual(backend->localPosition.x, 43.0F),
+        "Mutable scene transform lookup lost an owned backend fallback");
+    world.Set(entity, kb::scene::TransformComponent{.localPosition = {59.0F, 0.0F, 0.0F}});
+    kb::tests::Require(kb::tests::NearlyEqual(readOnly.Transforms().TryGet(entity)->localPosition.x, 59.0F),
+        "Scene transform lookup retained backend data after native component recreation");
+    scene.Entities().Destroy(entity);
+    const auto replacement = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{.name = "Lookup replacement"});
+    kb::tests::Require(scene.Transforms().TryGet(entity) == nullptr && readOnly.Transforms().TryGet(entity) == nullptr &&
+        scene.Transforms().TryGet(replacement) != nullptr,
+        "Scene transform lookup accepted a destroyed generation after entity replacement");
+}
+
 void RunSceneRuntimeDestroyedDirtyTransformTest() {
     kb::scene::Scene scene;
     const auto parent = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
@@ -1789,6 +1834,7 @@ void RunSceneSystemTransformSyncTests() {
     RunSceneRuntimeFrameAndPlayStateTest();
     RunSceneRuntimeReadSnapshotAndCommandQueueTest();
     RunSceneRuntimeFixedInterpolationTest();
+    RunSceneTransformLookupLifetimeAndFallbackTest();
     RunSceneRuntimeDestroyedDirtyTransformTest();
     RunSceneRuntimeMixedTransformWritesTest();
     RunSceneRuntimeTransformHotPathReportTest();

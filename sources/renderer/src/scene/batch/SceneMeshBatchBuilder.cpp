@@ -27,6 +27,7 @@ void SceneMeshBatchBuilder::BuildInto(std::span<const SceneRenderDrawGroup> draw
             .hasMaterialSlotOverrides = group.hasMaterialSlotOverrides,
             .instances = std::span<const SceneRenderMeshInstance>(group.instances.data(), group.instances.size()),
             .visibilityClusters = group.visibilityClusters,
+            .cacheId = group.cacheId, .contentRevision = group.contentRevision,
         });
     }
 }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/scene/SceneSystem.hpp"
+#include "engine/scene/PhysicsBackend.hpp"
 #include "engine/script/ScriptRuntime.hpp"
 #include "engine/script/ScriptRuntimeAssetPreparer.hpp"
 
@@ -140,6 +141,7 @@ private:
     [[nodiscard]] std::vector<BehaviourLifecycleRecord> CollectBehaviourRecords(kb::scene::Scene& scene) const;
     [[nodiscard]] static BehaviourLifecycleKey MakeKey(kb::scene::SceneEntity entity, const kb::scene::BehaviourComponent& behaviour) noexcept;
 
+    std::vector<kb::scene::PendingCollisionEvent> collisionEventScratch_;
     ScriptRuntime& runtime_;
     ScriptRuntimeAssetPreparer* assetPreparer_ = nullptr;
     kb::scene::Scene* attachedScene_ = nullptr;

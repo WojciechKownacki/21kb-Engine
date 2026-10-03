@@ -136,8 +136,19 @@ enum class SceneRenderCameraClearMode : std::uint8_t {
 };
 
 struct SceneRenderCamera {
+    [[nodiscard]] bool operator==(const SceneRenderCamera&) const noexcept = default;
     std::array<float, 16> view{};
     std::array<float, 16> projection{};
+    // Derived by temporal jitter. Culling uses the original projection and a
+    // conservative guard band containing every sample in the pixel sequence.
+    std::array<float, 2> temporalProjectionOffset{};
+    std::array<float, 2> cullingGuardBand{};
+    [[nodiscard]] std::array<float, 16> CullingProjection() const noexcept {
+        auto result = projection;
+        result[8] -= temporalProjectionOffset[0];
+        result[9] -= temporalProjectionOffset[1];
+        return result;
+    }
     // LIB-136: resolved from the selected CameraComponent's cullingMask/clearMode/clearColor
     // (kb::scene::CameraComponent). Defaults are "no filtering, full clear" so every
     // call site that default-constructs a SceneRenderCamera without an ECS camera behind it
@@ -195,6 +206,11 @@ struct SceneRenderDrawGroup {
     bool hasMorphDeformation = false;
     std::vector<SceneRenderMeshInstance> instances;
     std::vector<SceneMeshVisibilityCluster> visibilityClusters;
+    // Renderer-derived partition and validity. Authored data remains in the proxies.
+    std::uint64_t cacheId = 0U;
+    std::uint64_t contentRevision = 0U;
+    std::uint64_t partitionOwner = 0U;
+    std::uint8_t partitionKind = 0U;
 };
 
 struct SceneRenderLight {
@@ -255,6 +271,7 @@ struct SceneRenderSnapshot {
 };
 
 struct SceneRenderDrawBudget {
+    [[nodiscard]] bool operator==(const SceneRenderDrawBudget&) const noexcept = default;
     std::uint32_t maxDrawCommands = 0;
     std::uint32_t maxVisibleInstances = 0;
     std::uint32_t maxDroppedInstances = 0;
@@ -283,7 +300,7 @@ struct SceneRenderLightingConfig {
     SceneRenderIblConfig ibl{};
     SceneRenderGlobalIlluminationMode globalIllumination = SceneRenderGlobalIlluminationMode::Disabled;
     std::uint32_t shadowMapSize = 1024U;
-    std::uint32_t shadowCascadeCount = 1U;
+    std::uint32_t shadowCascadeCount = 4U;
     std::uint32_t shadowAtlasSize = 2048U;
     float shadowDistance = 50.0F;
     float shadowDepthBias = 0.002F;
@@ -297,13 +314,44 @@ struct SceneRenderLightingConfig {
     SceneRenderDebugView debugView = SceneRenderDebugView::None;
 };
 
+// Cube shadows of up to four point lights share one depth atlas: face f of light s occupies the
+// tile at column f, row s. Faces use a slightly wider than 90 degree frustum so that filtering
+// near a face edge stays inside the tile.
+struct ScenePointShadowBinding {
+    static constexpr std::uint32_t kMaxLights = 4U;
+    static constexpr std::uint32_t kFaceCount = 6U;
+    bgfx::TextureHandle depthTexture = BGFX_INVALID_HANDLE;
+    std::uint32_t lightCount = 0U;
+    std::array<std::uint64_t, kMaxLights> entityId{};
+    std::array<float, 4U * kMaxLights> positionRange{}; // xyz = light position, w = far plane
+    std::array<float, 4U * kMaxLights> depthParams{};   // x = near plane, y = depth bias (m)
+    std::array<float, 4U> atlas{};                      // x,y = 1 / atlas size, z = tile px, w = tan(half fov)
+    float strength = 0.0F;                              // 0 = no darkening, 1 = fully dark
+
+    [[nodiscard]] bool IsValid() const noexcept {
+        return lightCount != 0U && bgfx::isValid(depthTexture);
+    }
+};
+
 struct SceneRenderShadowMapBinding {
     bgfx::TextureHandle depthTexture = BGFX_INVALID_HANDLE;
+    ScenePointShadowBinding point{};
     std::array<float, 16> lightViewProjection{};
     std::array<float, 4> params{};
+    // Cascades share one atlas (2x2 tiles). xy = tile offset, z = tile scale; cascade 0 is the finest.
+    static constexpr std::uint32_t kMaxCascades = 4U;
+    std::uint32_t cascadeCount = 1U;
+    std::array<float, 16U * kMaxCascades> cascadeViewProjection{};
+    std::array<float, 4U * kMaxCascades> cascadeAtlas{ 0.0F, 0.0F, 1.0F, 0.0F };
+    std::array<float, 4> cascadeInfo{ 1.0F, 0.0F, 0.0F, 0.0F }; // x = count, y = edge margin (tile uv)
 
     [[nodiscard]] bool IsValid() const noexcept {
         return bgfx::isValid(depthTexture) && params[3] > 0.0F;
+    }
+
+    // Whether any shadow (directional or point) is bound for lighting.
+    [[nodiscard]] bool HasAny() const noexcept {
+        return IsValid() || point.IsValid();
     }
 };
 
@@ -335,6 +383,7 @@ struct SceneRenderSubmitStats {
     std::uint32_t meshDrawCommandCacheMissCount = 0;
     std::uint32_t meshDrawCommandCacheBuildCount = 0;
     std::uint32_t meshDrawCommandCachePruneCount = 0;
+    std::uint32_t meshCommandReuseCount = 0;
     std::uint32_t meshPipelineScratchInstanceCapacity = 0;
     std::uint32_t gpuDrivenDrawCandidateCount = 0;
     std::uint32_t indirectDrawCandidateCount = 0;
@@ -477,6 +526,7 @@ enum class SceneRenderDiagnosticKind : std::uint8_t {
     // UI is unaffected. `entityId` names it.
     UITextUnavailable,
     PostProcessProfileUnavailable,
+    LightGridUnavailable,
 };
 
 enum class SceneRenderMaterialProgramStatus : std::uint8_t {
@@ -549,6 +599,7 @@ struct SceneRenderDiagnostics {
     lhs.meshDrawCommandCacheHitCount += rhs.meshDrawCommandCacheHitCount;
     lhs.meshDrawCommandCacheMissCount += rhs.meshDrawCommandCacheMissCount;
     lhs.meshDrawCommandCacheBuildCount += rhs.meshDrawCommandCacheBuildCount;
+    lhs.meshCommandReuseCount += rhs.meshCommandReuseCount;
     lhs.meshDrawCommandCachePruneCount += rhs.meshDrawCommandCachePruneCount;
     lhs.meshPipelineScratchInstanceCapacity += rhs.meshPipelineScratchInstanceCapacity;
     lhs.gpuDrivenDrawCandidateCount += rhs.gpuDrivenDrawCandidateCount;

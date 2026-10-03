@@ -64,6 +64,7 @@ void AppendGltfIndex(RenderMeshAssetData& asset, std::uint32_t index) {
 
 [[nodiscard]] bool AppendGltfPrimitive(
     RenderMeshAssetData& asset,
+    const cgltf_data& data,
     const cgltf_primitive& primitive,
     const float nodeToWorld[16],
     const RenderMeshGltfImportDesc& desc) {
@@ -130,9 +131,15 @@ void AppendGltfIndex(RenderMeshAssetData& asset, std::uint32_t index) {
         RenderMeshAssetFinalizer::EnsureTangentVertexStorage(asset);
     }
 
-    const std::string_view materialName = primitive.material != nullptr && primitive.material->name != nullptr
-        ? std::string_view{ primitive.material->name }
-        : std::string_view{};
+    // Unnamed materials get the same "Material_<index>" name the material import step
+    // assigns; keying them by an empty name would collapse them all into one slot.
+    std::string unnamedMaterial;
+    if (primitive.material != nullptr && (primitive.material->name == nullptr || primitive.material->name[0] == 0)) {
+        unnamedMaterial = "Material_" + std::to_string(static_cast<std::size_t>(primitive.material - data.materials));
+    }
+    const std::string_view materialName = !unnamedMaterial.empty()
+        ? std::string_view{ unnamedMaterial }
+        : primitive.material != nullptr ? std::string_view{ primitive.material->name } : std::string_view{};
     const std::uint32_t materialSlot = RenderMeshGltfMaterialImporter::EnsureMaterialSlot(asset, materialName, primitive.material, desc);
     const std::uint32_t sectionStart = static_cast<std::uint32_t>(asset.indices32.size());
     const bool useTangentFormat = tangentData.has_value() || !asset.tangentVertices.empty();
@@ -248,7 +255,7 @@ void AppendGltfIndex(RenderMeshAssetData& asset, std::uint32_t index) {
     return true;
 }
 
-[[nodiscard]] bool ProcessGltfNode(RenderMeshAssetData& asset, const cgltf_node& node, const RenderMeshGltfImportDesc& desc) {
+[[nodiscard]] bool ProcessGltfNode(RenderMeshAssetData& asset, const cgltf_data& data, const cgltf_node& node, const RenderMeshGltfImportDesc& desc) {
     if (node.skin != nullptr) {
         return false;
     }
@@ -257,22 +264,22 @@ void AppendGltfIndex(RenderMeshAssetData& asset, std::uint32_t index) {
     cgltf_node_transform_world(&node, nodeToWorld);
     if (node.mesh != nullptr) {
         for (cgltf_size primitiveIndex = 0U; primitiveIndex < node.mesh->primitives_count; ++primitiveIndex) {
-            if (!AppendGltfPrimitive(asset, node.mesh->primitives[primitiveIndex], nodeToWorld, desc)) {
+            if (!AppendGltfPrimitive(asset, data, node.mesh->primitives[primitiveIndex], nodeToWorld, desc)) {
                 return false;
             }
         }
     }
     for (cgltf_size childIndex = 0U; childIndex < node.children_count; ++childIndex) {
-        if (node.children[childIndex] == nullptr || !ProcessGltfNode(asset, *node.children[childIndex], desc)) {
+        if (node.children[childIndex] == nullptr || !ProcessGltfNode(asset, data, *node.children[childIndex], desc)) {
             return false;
         }
     }
     return true;
 }
 
-[[nodiscard]] bool ProcessGltfScene(RenderMeshAssetData& asset, const cgltf_scene& scene, const RenderMeshGltfImportDesc& desc) {
+[[nodiscard]] bool ProcessGltfScene(RenderMeshAssetData& asset, const cgltf_data& data, const cgltf_scene& scene, const RenderMeshGltfImportDesc& desc) {
     for (cgltf_size nodeIndex = 0U; nodeIndex < scene.nodes_count; ++nodeIndex) {
-        if (scene.nodes[nodeIndex] == nullptr || !ProcessGltfNode(asset, *scene.nodes[nodeIndex], desc)) {
+        if (scene.nodes[nodeIndex] == nullptr || !ProcessGltfNode(asset, data, *scene.nodes[nodeIndex], desc)) {
             return false;
         }
     }
@@ -289,11 +296,11 @@ void AppendGltfIndex(RenderMeshAssetData& asset, std::uint32_t index) {
     RenderMeshAssetData asset{};
     bool imported = false;
     if (data->scene != nullptr) {
-        imported = ProcessGltfScene(asset, *data->scene, desc);
+        imported = ProcessGltfScene(asset, *data, *data->scene, desc);
     } else {
         imported = true;
         for (cgltf_size sceneIndex = 0U; sceneIndex < data->scenes_count; ++sceneIndex) {
-            imported = imported && ProcessGltfScene(asset, data->scenes[sceneIndex], desc);
+            imported = imported && ProcessGltfScene(asset, *data, data->scenes[sceneIndex], desc);
         }
     }
     if (!imported || (asset.vertices.empty() && asset.tangentVertices.empty()) || asset.indices32.empty()) {

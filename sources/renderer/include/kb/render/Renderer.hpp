@@ -8,6 +8,7 @@
 #include "kb/render/SceneDepthPolicy.hpp"
 #include "kb/render/SceneGBuffer.hpp"
 #include "kb/render/frame/EditorRenderPassSubmitter.hpp"
+#include "kb/render/gi/SceneGiHistory.hpp"
 #include "kb/render/frame/FinalCompositePass.hpp"
 #include "kb/render/frame/RenderFramePipeline.hpp"
 #include "kb/render/frame/RenderFrameState.hpp"
@@ -172,9 +173,10 @@ public:
     struct RuntimeSceneSynchronization {
         bool fullSync = true;
         std::span<const std::uint64_t> dirtySceneEntityIds{};
+        bool structuralSync = false;
     };
-    // The caller preserves pre-update changes and requests a full sync after
-    // topology changes. Otherwise consume this runtime tick's transform/proxy updates.
+    // The caller preserves pre-update changes and reconciles topology separately
+    // from this runtime tick's transform/proxy updates.
     [[nodiscard]] bool SubmitRuntimeScene(const kb::scene::Scene& scene, const RuntimeSceneSynchronization& synchronization);
     [[nodiscard]] bool SubmitScene(const kb::scene::Scene& scene, const RenderSceneSubmitDesc& desc);
     struct SceneFrameSubmission {
@@ -287,8 +289,10 @@ private:
     // earlier viewport, producing intermittent grid/depth corruption. Each view-index owns its
     // resources for the complete frame lifetime.
     std::array<SceneGBuffer, RenderViewportViewIdAllocator::kMaxViewportCount> sceneGBuffers_{};
+    std::array<SceneGiHistory, RenderViewportViewIdAllocator::kMaxViewportCount> giHistories_{};
     ScenePostProcessTargets defaultPostProcessTargets_;
     ShadowMapResource defaultShadowMap_;
+    ShadowMapResource defaultPointShadowMap_;
     RenderFramePipeline framePipeline_;
     RenderFrameState frameState_;
     EditorRenderPassSubmitter editorPassSubmitter_;

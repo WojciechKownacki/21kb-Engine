@@ -16,6 +16,7 @@ struct RendererShadowSubmitDesc {
     const RenderScene& renderScene;
     SceneRenderer& sceneRenderer;
     ShadowMapResource& shadowMap;
+    ShadowMapResource& pointShadowMap;
     const RenderSceneSubmitDesc& sceneDesc;
     const RenderViewportPlan& viewportPlan;
     const SceneRenderLightingConfig& lightingConfig;

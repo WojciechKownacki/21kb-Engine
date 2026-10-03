@@ -12,6 +12,7 @@ namespace kb::ecs {
 class ComponentStorageMutation {
 public:
     static void Set(ecs_world_t* world, Entity entity, ComponentId componentId, std::size_t size, const void* component);
+    static void SetExisting(ecs_world_t* world, Entity entity, ComponentId componentId, std::size_t size, const void* component, bool createIfMissing = false);
     static void Remove(ecs_world_t* world, Entity entity, ComponentId componentId) noexcept;
     static void MarkModified(ecs_world_t* world, Entity entity, ComponentId componentId) noexcept;
 };

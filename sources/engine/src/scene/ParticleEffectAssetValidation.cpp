@@ -198,7 +198,7 @@ ParticleEffectValidationResult ParticleEffectAssetValidator::ValidateStructure(c
             emitter.localScale.x <= 0.0F || emitter.localScale.y <= 0.0F || emitter.localScale.z <= 0.0F)
             Add(result, ParticleEffectDiagnosticCode::InvalidValue, base + ".transform",
                 "emitter transform must be finite and have positive scale", emitter.emitterId);
-        if (emitter.maxParticles == 0U || emitter.maxParticles > kParticleEffectMaxCpuParticlesPerEmitter)
+        if (emitter.maxParticles == 0U || emitter.maxParticles > ParticleEmitterCapacityLimit(asset.backendPolicy))
             Add(result, ParticleEffectDiagnosticCode::LimitExceeded, base + ".maxParticles",
                 "emitter particle capacity is outside the hard limit", emitter.emitterId);
         if (emitter.modules.size() > kParticleEffectMaxModulesPerEmitter)
@@ -413,9 +413,9 @@ ParticleEffectValidationResult ParticleEffectAssetValidator::ValidateStructure(c
                 "volumetric output values are invalid", emitter.emitterId);
     }
 
-    if (totalParticleCapacity > kParticleEffectMaxCpuParticlesPerScene)
+    if (totalParticleCapacity > ParticleEffectCapacityLimit(asset.backendPolicy))
         Add(result, ParticleEffectDiagnosticCode::LimitExceeded, "effect.emitterCapacity",
-            "combined emitter particle capacity exceeds the CPU scene hard limit");
+            "combined emitter particle capacity exceeds the scene hard limit");
 
     for (std::size_t emitterIndex = 0U; emitterIndex < asset.emitters.size(); ++emitterIndex) {
         const ParticleEmitterAsset& emitter = asset.emitters[emitterIndex];

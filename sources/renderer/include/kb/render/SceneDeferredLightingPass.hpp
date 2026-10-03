@@ -1,9 +1,13 @@
 #pragma once
 
+#include "kb/render/shadow/PointShadowUniforms.hpp"
+#include "kb/render/shadow/ShadowCascadeUniforms.hpp"
 #include "kb/render/SceneGBuffer.hpp"
+#include "kb/render/gi/SceneGiHistory.hpp"
 #include "kb/render/frame/FullscreenTexturePass.hpp"
 #include "kb/render/frame/RenderSceneSubmitDesc.hpp"
 #include "kb/render/scene/RenderScene.hpp"
+#include "kb/render/scene/SceneLightGridResources.hpp"
 #include "kb/render/scene/SceneRenderTypes.hpp"
 
 #include <bgfx/bgfx.h>
@@ -24,6 +28,7 @@ struct SceneDeferredLightingPassDesc {
     const SceneRenderShadowMapBinding* shadowMap = nullptr;
     const SceneRenderWorldBackdrop* worldBackdrop = nullptr;
     bgfx::TextureHandle worldBackdropEnvironment = BGFX_INVALID_HANDLE;
+    const SceneGiBinding* gi = nullptr;
 
     [[nodiscard]] bool IsValid() const noexcept;
 };
@@ -38,10 +43,12 @@ public:
 
     [[nodiscard]] bool Initialize();
     void Shutdown() noexcept;
+    void EndFrame() noexcept { lightGrid_.EndFrame(); }
     [[nodiscard]] bool Submit(const SceneDeferredLightingPassDesc& desc, SceneRenderSubmitStats& stats) const;
     [[nodiscard]] bool IsInitialized() const noexcept;
 
 private:
+    mutable SceneLightGridResources lightGrid_;
     bgfx::ProgramHandle program_ = BGFX_INVALID_HANDLE;
     FullscreenTexturePass debugNormalPresentPass_{};
     bgfx::UniformHandle albedoSampler_ = BGFX_INVALID_HANDLE;
@@ -65,6 +72,12 @@ private:
     bgfx::UniformHandle shadowMapSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle shadowViewProjUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle shadowParamsUniform_ = BGFX_INVALID_HANDLE;
+    ShadowCascadeUniforms shadowCascades_{};
+    PointShadowUniforms pointShadows_{};
+    bgfx::UniformHandle giHistorySampler_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle giViewProjUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle giPrevViewProjUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle giParamsUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle backdropHorizonUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle backdropZenithUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle backdropParamsUniform_ = BGFX_INVALID_HANDLE;

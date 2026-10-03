@@ -295,6 +295,7 @@ bool SceneMeshPassResources::Initialize() {
         return true;
     }
 
+    if (!lightGrid_.Initialize()) return false;
     programRegistry_.Configure(
         [this](const MaterialProgramKey& key) { return LoadProgramForKey(key); },
         [](bgfx::ProgramHandle handle) { bgfx::destroy(handle); });
@@ -354,6 +355,8 @@ bool SceneMeshPassResources::Initialize() {
     environmentParamsUniform_ = bgfx::createUniform("u_environmentParams", bgfx::UniformType::Vec4);
     shadowViewProjUniform_ = bgfx::createUniform("u_shadowViewProj", bgfx::UniformType::Mat4);
     shadowParamsUniform_ = bgfx::createUniform("u_shadowParams", bgfx::UniformType::Vec4);
+    shadowCascades_.Create();
+    pointShadows_.Create();
     fallbackWhiteTexture_ = CreateFallbackTexture(0xFFFF'FFFFU, RenderTextureDimension::Texture2D);
     fallbackNormalTexture_ = CreateFallbackTexture(0xFFFF'8080U, RenderTextureDimension::Texture2D);
     fallbackWhiteCubeTexture_ = CreateFallbackTexture(0xFFFF'FFFFU, RenderTextureDimension::TextureCube);
@@ -371,6 +374,7 @@ bool SceneMeshPassResources::Initialize() {
 }
 
 void SceneMeshPassResources::Shutdown() {
+    lightGrid_.Shutdown();
     if (bgfx::isValid(motionVectorParamsUniform_)) {
         bgfx::destroy(motionVectorParamsUniform_);
         motionVectorParamsUniform_ = BGFX_INVALID_HANDLE;
@@ -439,6 +443,8 @@ void SceneMeshPassResources::Shutdown() {
         bgfx::destroy(fallbackWhiteTexture_);
         fallbackWhiteTexture_ = BGFX_INVALID_HANDLE;
     }
+    shadowCascades_.Destroy();
+    pointShadows_.Destroy();
     if (bgfx::isValid(shadowParamsUniform_)) {
         bgfx::destroy(shadowParamsUniform_);
         shadowParamsUniform_ = BGFX_INVALID_HANDLE;
@@ -610,7 +616,7 @@ bool SceneMeshPassResources::IsInitialized() const noexcept {
         bgfx::isValid(environmentGroundUniform_) &&
         bgfx::isValid(environmentParamsUniform_) &&
         bgfx::isValid(shadowViewProjUniform_) &&
-        bgfx::isValid(shadowParamsUniform_) &&
+        bgfx::isValid(shadowParamsUniform_) && shadowCascades_.IsValid() && pointShadows_.IsValid() &&
         bgfx::isValid(fallbackWhiteTexture_) &&
         bgfx::isValid(fallbackNormalTexture_) &&
         bgfx::isValid(fallbackWhiteCubeTexture_) &&
@@ -762,6 +768,7 @@ bgfx::UniformHandle& SceneMeshPassResources::AcquireGraphUniform(
 }
 
 void SceneMeshPassResources::EndFrame(std::uint64_t frameIndex) const {
+    lightGrid_.EndFrame();
     for (const MaterialProgramKey& resident : residentProgramKeys_) {
         if (std::ranges::find(usedProgramKeys_, resident) == usedProgramKeys_.end()) {
             programRegistry_.Release(resident);
@@ -1054,6 +1061,8 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
             std::clamp(material->normalScale, 0.0F, 8.0F),
             material->alphaCutoff,
         };
+        if (desc.pass == MeshPassType::BaseOpaque || desc.pass == MeshPassType::BaseTransparent)
+            lightGrid_.Bind(desc.lighting.lightGrid, 0U);
         bgfx::setUniform(materialParamsUniform_, graphMaterialParams.data());
         bgfx::setUniform(cameraPositionUniform_, desc.cameraPosition.data());
         bgfx::setUniform(timeUniform_, desc.frameTime.data());
@@ -1181,6 +1190,8 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
     bgfx::setTexture(3U, occlusionSampler_, materialBinding.occlusionTexture);
     bgfx::setTexture(4U, emissiveSampler_, materialBinding.emissiveTexture);
     bgfx::setTexture(5U, shadowSampler_, desc.shadowMap != nullptr && desc.shadowMap->IsValid() ? desc.shadowMap->depthTexture : fallbackWhiteTexture_);
+    if (desc.pass == MeshPassType::BaseOpaque || desc.pass == MeshPassType::BaseTransparent)
+        lightGrid_.Bind(desc.lighting.lightGrid, 6U);
     bgfx::setUniform(materialEmissiveUniform_, materialBinding.emissive.data());
     bgfx::setUniform(cameraPositionUniform_, desc.cameraPosition.data());
     bgfx::setUniform(timeUniform_, desc.frameTime.data());
@@ -1197,6 +1208,9 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
     bgfx::setUniform(environmentParamsUniform_, desc.lighting.environmentParams.data());
     bgfx::setUniform(shadowViewProjUniform_, desc.shadowMap != nullptr && desc.shadowMap->IsValid() ? desc.shadowMap->lightViewProjection.data() : disabledShadowViewProj.data());
     bgfx::setUniform(shadowParamsUniform_, desc.shadowMap != nullptr && desc.shadowMap->IsValid() ? desc.shadowMap->params.data() : disabledShadowParams.data());
+    shadowCascades_.Set(desc.shadowMap);
+    pointShadows_.Set(desc.shadowMap != nullptr ? &desc.shadowMap->point : nullptr, desc.lighting.pointShadowSlot,
+        fallbackWhiteTexture_);
 
     return resolution.program;
 }

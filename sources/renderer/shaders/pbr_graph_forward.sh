@@ -1,11 +1,15 @@
 #ifndef KB_PBR_GRAPH_FORWARD_SH
 #define KB_PBR_GRAPH_FORWARD_SH
 
+#define KB_LIGHT_GRID_GRAPH 1
+#include "light_grid.sh"
+
 uniform vec4 u_cameraPosition;
 uniform vec4 u_lightDirKind[32];
 uniform vec4 u_lightPositionRange[32];
 uniform vec4 u_lightColorIntensity[32];
 uniform vec4 u_lightSpot[32];
+uniform vec4 u_lightAreaRight[32];
 uniform vec4 u_lightParams;
 uniform vec4 u_ambientColor;
 uniform vec4 u_environmentZenith;
@@ -50,28 +54,41 @@ float KbDiffuseBurley(float nDotV, float nDotL, float lDotH, float roughness)
 
 vec3 KbEvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldPos, vec3 albedo, float metallic, float roughness, float specular, float occlusion)
 {
-    vec4 dirKind = u_lightDirKind[lightIndex];
-    vec4 positionRange = u_lightPositionRange[lightIndex];
-    vec4 colorIntensity = u_lightColorIntensity[lightIndex];
-    vec4 spot = u_lightSpot[lightIndex];
+    vec4 dirKind, positionRange, colorIntensity, spot, areaRight;
+    if (u_sceneLightGridDimensions.w > 0.5) {
+        float base = float(lightIndex) * 5.0;
+        dirKind = KbLightGridTexel(base);
+        positionRange = KbLightGridTexel(base + 1.0);
+        colorIntensity = KbLightGridTexel(base + 2.0);
+        spot = KbLightGridTexel(base + 3.0);
+        areaRight = KbLightGridTexel(base + 4.0);
+    } else {
+        dirKind = u_lightDirKind[lightIndex];
+        positionRange = u_lightPositionRange[lightIndex];
+        colorIntensity = u_lightColorIntensity[lightIndex];
+        spot = u_lightSpot[lightIndex];
+        areaRight = u_lightAreaRight[lightIndex];
+    }
 
     vec3 lightVector = vec3(0.0, 1.0, 0.0);
     float attenuation = 1.0;
     if (dirKind.w < 0.5) {
         lightVector = normalize(-dirKind.xyz);
     } else {
-        vec3 toLight = positionRange.xyz - worldPos;
+        vec3 emitterPosition = KbSurfaceEmitterSamplePosition(positionRange.xyz, dirKind.xyz, areaRight.xyz, dirKind.w, spot.zw, worldPos);
+        vec3 toLight = emitterPosition - worldPos;
         float distanceToLight = length(toLight);
         lightVector = distanceToLight > 0.0001 ? toLight / distanceToLight : vec3(0.0, 1.0, 0.0);
         float range = max(positionRange.w, 0.0001);
         float rangeAttenuation = clamp(1.0 - distanceToLight / range, 0.0, 1.0);
         attenuation = rangeAttenuation * rangeAttenuation;
-        if (dirKind.w > 1.5) {
+        if (dirKind.w > 1.5 && dirKind.w < 2.5) {
             float coneCos = dot(normalize(dirKind.xyz), normalize(-lightVector));
             float coneWidth = max(spot.x - spot.y, 0.001);
             float coneAttenuation = clamp((coneCos - spot.y) / coneWidth, 0.0, 1.0);
             attenuation *= coneAttenuation * coneAttenuation;
         }
+        if (dirKind.w > 2.5) attenuation *= max(dot(normalize(dirKind.xyz), normalize(-lightVector)), 0.0);
     }
 
     float nDotL = max(dot(normal, lightVector), 0.0);
@@ -122,8 +139,10 @@ vec3 KbEvaluateForwardLighting(vec3 worldNormal, vec3 worldPos, vec3 albedo, flo
 {
     vec3 viewDir = normalize(u_cameraPosition.xyz - worldPos);
     vec3 lighting = KbEvaluateEnvironment(worldNormal, viewDir, albedo, metallic, roughness, specular, occlusion);
-    for (int lightIndex = 0; lightIndex < 32; ++lightIndex) {
-        if (float(lightIndex) < u_lightParams.x) {
+    vec2 lightList = KbLightGridList(worldPos, u_lightParams.x);
+    for (int entry = 0; entry < int(lightList.y); ++entry) {
+        {
+            int lightIndex = KbLightGridIndex(lightList, entry);
             lighting += KbEvaluateSceneLight(lightIndex, worldNormal, viewDir, worldPos, albedo, metallic, roughness, specular, occlusion);
         }
     }

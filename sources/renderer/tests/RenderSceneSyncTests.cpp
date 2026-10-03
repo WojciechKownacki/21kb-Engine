@@ -19,6 +19,8 @@
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/SceneParticleSystems.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/ScenePrefabs.hpp"
+#include "engine/script/ScriptSceneComponentApi.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 #include "engine/scene/WorldBackdropComponent.hpp"
@@ -50,6 +52,7 @@
 #include "scene/lighting/SceneLightingPacker.hpp"
 #include "scene/SceneLightColor.hpp"
 #include "scene/SceneRenderVisibilityPublisher.hpp"
+#include "shadow/ShadowCasterBoundsCollector.hpp"
 
 #include <algorithm>
 #include <array>
@@ -672,6 +675,85 @@ void RunRuntimeRenderProxyQueueSynchronizesCameraLightAndVisibilityTest() {
         "Entity creation did not advance render topology");
 }
 
+void RunBulkPrefabRenderTransformPublicationTest() {
+    for (const bool syncWorldHierarchy : {false, true}) {
+        for (const bool collectInstances : {true, false}) {
+            kb::scene::Scene scene;
+            kb::scene::SceneLightingAccess::SetBasicLightingEnabled(scene, true);
+            kb::scene::ScenePrefab prefab;
+            const auto root = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "BulkRoot" });
+            const auto cameraNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+                .name = "BulkCamera", .parentNode = root,
+                .components = { .camera = kb::scene::CameraComponent{} },
+            });
+            const auto lightNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+                .name = "BulkLight", .parentNode = root,
+                .components = { .light = kb::scene::LightComponent{} },
+            });
+            const auto meshNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+                .name = "BulkMesh", .parentNode = root,
+                .components = { .meshRenderer = kb::scene::MeshRendererComponent{ .meshAssetId = 41U } },
+            });
+            const auto hiddenNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+                .name = "BulkHidden", .parentNode = root,
+                .visibility = { .mode = kb::scene::VisibilityMode::Hidden, .visible = false },
+                .components = { .meshRenderer = kb::scene::MeshRendererComponent{ .meshAssetId = 41U } },
+            });
+            const std::size_t count = collectInstances ? 2U : 129U;
+            const kb::scene::ScenePrefabInstantiationSettings settings{ .syncWorldHierarchy = syncWorldHierarchy };
+            if (collectInstances) Require(scene.Prefabs().InstantiateMany(prefab, count, settings).size() == count,
+                "Bulk transform publication setup failed");
+            else Require(scene.Prefabs().InstantiateBatch(prefab, count, settings).entitiesCreated == count * 5U,
+                "Bulk stats-only transform publication setup failed");
+            const auto roots = scene.Hierarchy().RootEntities();
+            Require(roots.size() == count, "Bulk publication setup lost roots");
+            const auto children = scene.Hierarchy().ChildEntities(roots.front());
+            Require(children.size() == 4U && cameraNode == 1U && lightNode == 2U && meshNode == 3U && hiddenNode == 4U,
+                "Bulk publication setup lost node order");
+            RenderScene renderScene;
+            EcsRenderSceneSynchronizer synchronizer;
+            static_cast<void>(scene.Runtime().Update(0.016F));
+            synchronizer.Sync(scene, renderScene);
+            const auto topology = scene.Runtime().RenderTopologyVersion();
+            const auto camera = children[0];
+            const auto light = children[1];
+            const auto mesh = children[2];
+            const auto hidden = children[3];
+            for (std::uint32_t frame = 1U; frame <= 32U; ++frame) {
+                const float z = static_cast<float>(frame) * 1.25F;
+                for (const auto entity : roots) Require(kb::script::ScriptSceneComponentApi::SetProperty(scene, entity,
+                    "Transform", "localPosition.z", kb::script::ScriptValue{z}).succeeded,
+                    "Bulk transform publication script mutation failed");
+                static_cast<void>(scene.Runtime().Update(0.016F));
+                const auto report = scene.Runtime().HotPathReport();
+                Require(report.transformRenderProxyCameraCount == count && report.transformRenderProxyLightCount == count,
+                    "Bulk prefab camera and light transforms were omitted from render publication");
+                Require(report.transformRenderProxyMeshRendererCount == count * 2U && report.transformRenderProxyVisibleMeshRendererCount == count,
+                    "Bulk prefab mesh and hidden flags were omitted from render publication");
+                synchronizer.SyncMeshWorldAffines(renderScene, scene.Runtime().TransformRenderProxyUpdateEntities(),
+                    scene.Runtime().TransformRenderProxyWorldAffine3x4());
+                synchronizer.SyncRenderProxyUpdates(scene, renderScene);
+                Require(NearlyEqual(renderScene.FindCameraByEntity(camera.Id())->desc.position[2], z) &&
+                        NearlyEqual(renderScene.FindLightByEntity(light.Id())->desc.position[2], z) &&
+                        NearlyEqual(renderScene.FindMeshByEntity(mesh.Id())->desc.model[14], z) &&
+                        !renderScene.FindMeshByEntity(hidden.Id())->desc.visible,
+                    "Bulk prefab transforms did not reach camera, light and mesh proxies in the current frame");
+                Require(scene.Runtime().RenderTopologyVersion() == topology,
+                    "Bulk transform publication required a structural scene change");
+            }
+            scene.Components().Cameras().Remove(camera);
+            scene.Components().Lights().Remove(light);
+            Require(kb::script::ScriptSceneComponentApi::SetProperty(scene, roots.front(),
+                "Transform", "localPosition.z", kb::script::ScriptValue{50.0F}).succeeded,
+                "Bulk transform publication removal mutation failed");
+            static_cast<void>(scene.Runtime().Update(0.016F));
+            Require(scene.Runtime().HotPathReport().transformRenderProxyCameraCount == 0U &&
+                    scene.Runtime().HotPathReport().transformRenderProxyLightCount == 0U,
+                "Removed bulk prefab camera or light retained its publication flag");
+        }
+    }
+}
+
 void RunRuntimeRenderProxyQueueRemovesDisabledProxyTest() {
     kb::scene::Scene scene;
     const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(
@@ -945,6 +1027,73 @@ void RunRenderSceneBuildsMeshMaterialDrawGroupsTest() {
     Require(materialEight != groups.end() && materialEight->instances.size() == 1U, "RenderScene draw group included the wrong instance count");
     Require(materialEight != groups.end() && !materialEight->hasMaterialSlotOverrides,
         "RenderScene marked a draw group without material-slot overrides as dynamic");
+}
+
+void RunRenderScenePageRemovalKeepsGeneratedOwnersTest() {
+    RenderScene scene;
+    MeshRenderProxyDesc mesh{.meshAssetId = 42U, .materialAssetId = 7U};
+    mesh.model = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
+    for (std::uint64_t id = 1U; id <= 3072U; ++id) {
+        mesh.entityId = id; static_cast<void>(scene.UpsertMesh(mesh));
+    }
+    static_cast<void>(scene.UpsertGeometrySwarm(GeometrySwarmRenderProxyDesc{
+        .entityId = 9000U, .meshAssetId = 42U, .materialAssetId = 7U, .model = mesh.model,
+        .instanceCount = 100'000U, .columns = 100U, .rows = 100U, .layers = 10U}));
+    const auto generated = [&]() -> const SceneRenderDrawGroup& {
+        const auto& groups = scene.DrawGroups();
+        const auto found = std::ranges::find_if(groups, [](const auto& group) { return group.partitionKind == 1U; });
+        Require(found != groups.end(), "Generated owner disappeared after native deletion");
+        return *found;
+    };
+    const auto* storage = generated().instances.data();
+    const auto revision = generated().contentRevision;
+    const auto ownerId = generated().cacheId;
+    for (const int change : {0, 1, 2, 3}) {
+        mesh.entityId = 2U;
+        if (change == 0) mesh.visible = false;
+        if (change == 1) mesh.visible = true;
+        if (change == 2) { mesh.meshAssetId = 43U; mesh.materialAssetId = 8U; mesh.morphDeformationEnabled = true; }
+        if (change == 3) { mesh.meshAssetId = 42U; mesh.materialAssetId = 7U; mesh.morphDeformationEnabled = false; }
+        static_cast<void>(scene.UpsertMesh(mesh));
+        Require(generated().instances.data() == storage && generated().contentRevision == revision && generated().cacheId == ownerId,
+            "Native visibility, material or mesh rekey rebuilt an independent generated owner");
+        bool found = false;
+        for (const auto& group : scene.DrawGroups()) if (group.partitionKind == 0U) {
+            for (const auto& instance : group.instances) if (instance.entityId == 2U) {
+                found = true;
+                Require(instance.meshAssetId == mesh.meshAssetId && instance.materialAssetId == mesh.materialAssetId,
+                    "Mesh rekey retained old instance resources");
+            }
+        }
+        Require(found == mesh.visible, "Incremental visibility retained a hidden mesh or lost a visible mesh");
+    }
+    for (std::uint64_t id = 1U; id < 1024U; ++id) Require(scene.RemoveMesh(id), "Native page deletion failed");
+    auto changed = mesh.model; changed[12] = 12.0F;
+    Require(scene.UpdateMeshTransform(2049U, changed), "Compacted native location was invalid");
+    Require(generated().instances.data() == storage && generated().contentRevision == revision && generated().cacheId == ownerId,
+        "Native removal rebuilt unchanged generated instances");
+    std::size_t nativeCount = 0U;
+    for (const auto& group : scene.DrawGroups()) if (group.partitionKind == 0U) {
+        Require(group.instances.size() <= 1024U, "Native instance page exceeded its bound");
+        nativeCount += group.instances.size();
+        for (const auto& instance : group.instances) {
+            Require(instance.entityId >= 1024U, "Compacted page retained deleted entity");
+            if (instance.entityId == 2049U) Require(instance.model == changed, "Compacted proxy updated the wrong instance");
+        }
+    }
+    Require(nativeCount == 2049U, "Page compaction changed native instance count");
+    std::vector<std::uint64_t> keep;
+    for (std::uint64_t id = 1024U; id <= 2048U; ++id) keep.push_back(id);
+    Require(scene.RemoveMeshesNotInSorted(keep) == 1024U, "Bulk prune removed an incorrect native set");
+    Require(generated().instances.data() == storage && generated().contentRevision == revision,
+        "Native bulk pruning rebuilt the generated owner");
+    const auto groupCount = scene.DrawGroups().size();
+    for (std::uint64_t cycle = 1U; cycle <= 100U; ++cycle) {
+        mesh.entityId = (cycle << 32U) | 2U;
+        static_cast<void>(scene.UpsertMesh(mesh));
+        Require(scene.RemoveMesh(mesh.entityId), "Generation-reused native removal failed");
+        Require(scene.DrawGroups().size() == groupCount, "Empty pages leaked across streaming generations");
+    }
 }
 
 void RunRenderSceneBuildsLargeMeshMaterialDrawGroupsTest() {
@@ -2346,7 +2495,7 @@ void RunSceneRendererReportsClusteredIblAndAdvancedLightStatsTest() {
     renderer.SetDefaultLightingConfig(lighting);
     const SceneRenderSubmitStats stats = renderer.ValidateSceneResources(renderScene);
     Require(stats.lightingPath == static_cast<std::uint32_t>(SceneRenderLightingPath::ClusteredForwardPlus) + 1U, "SceneRenderer validation did not report clustered lighting path");
-    Require(stats.lightClusterCount == 24U, "SceneRenderer validation did not report clustered light grid size");
+    Require(stats.lightClusterCount == 0U, "Validation-only uniform lighting must not report an uploaded GPU light grid");
     Require(stats.forwardLightCapacity == 6U, "KBMAT-MAT64: ClusteredForwardPlus did not use the expanded forward+ light budget");
     Require(stats.submittedForwardLightCount == 6U, "KBMAT-MAT64: ClusteredForwardPlus did not submit all lights within its expanded budget");
     Require(stats.skippedForwardLightCount == 0U, "KBMAT-MAT64: ClusteredForwardPlus incorrectly skipped lights within its expanded budget");
@@ -2458,6 +2607,32 @@ void RunDirectionalShadowPlannerSkipsNonShadowCastingLightsTest() {
 }
 
 void RunDirectionalShadowCameraCoverageTest() {
+    RenderScene generated;
+    GeometrySwarmRenderProxyDesc swarm{.entityId = 91U, .meshAssetId = 42U};
+    swarm.model[0] = swarm.model[5] = swarm.model[10] = swarm.model[15] = 1.0F;
+    swarm.instanceCount = 256U;
+    swarm.columns = 16U;
+    swarm.layers = 16U;
+    swarm.spacing = {4.0F, 1.0F, 4.0F};
+    static_cast<void>(generated.UpsertGeometrySwarm(swarm));
+    RenderResourceRegistry generatedResources;
+    SceneRenderResourceMap generatedResourceMap;
+    const auto generatedBounds = ShadowCasterBoundsCollector::Collect(generated, generatedResources, generatedResourceMap, 1U);
+    Require(generatedBounds.casterCount == swarm.instanceCount && generatedBounds.bounds.IsValid(),
+        "Generated instances must contribute to shadow depth coverage");
+    for (const auto& group : generated.DrawGroups()) for (const auto& instance : group.instances) {
+        const auto& center = generatedBounds.bounds.center;
+        const float dx = instance.model[12]-center[0], dy = instance.model[13]-center[1], dz = instance.model[14]-center[2];
+        Require(std::sqrt(dx*dx+dy*dy+dz*dz)+1.0F <= generatedBounds.bounds.radius+0.001F,
+            "Shadow bounds excluded a generated instance");
+    }
+    swarm.castsShadow = false;
+    static_cast<void>(generated.UpsertGeometrySwarm(swarm));
+    const auto receiverBounds = ShadowCasterBoundsCollector::Collect(generated, generatedResources, generatedResourceMap, 1U);
+    Require(receiverBounds.casterCount == 0U && receiverBounds.bounds.IsValid(),
+        "Generated receivers must preserve coverage without consuming caster count");
+    Require(!ShadowCasterBoundsCollector::Collect(generated, generatedResources, generatedResourceMap, 2U).bounds.IsValid(),
+        "Generated shadow coverage ignored the camera layer mask");
     RenderScene scene;
     MeshRenderProxyDesc mesh{ .entityId = 1U, .meshAssetId = 42U };
     mesh.model[0] = mesh.model[5] = mesh.model[10] = mesh.model[15] = 1.0F;
@@ -2470,11 +2645,20 @@ void RunDirectionalShadowCameraCoverageTest() {
     SceneRenderResourceMap resourceMap;
     SceneRenderLightingConfig config;
     config.shadowDistance = 50.0F;
+    config.shadowCascadeCount = 1U;
     const std::array<float, 3> eye{ 10.0F, 5.0F, 0.0F };
     const auto setup = DirectionalShadowPassPlanner{}.Build(scene, resources, resourceMap, config, BGFX_INVALID_HANDLE, 1U, &eye);
     Require(setup.valid && NearlyEqual(std::abs(setup.camera.projection[0]), 1.0F / 50.0F),
         "Distant world geometry must not expand camera shadow coverage");
     Require(setup.camera.cullingMask == 1U, "Shadow submission must retain camera layer filtering");
+    config.shadowCascadeCount = 3U;
+    const auto cascaded = DirectionalShadowPassPlanner{}.Build(scene, resources, resourceMap, config, BGFX_INVALID_HANDLE, 1U, &eye);
+    Require(cascaded.valid && cascaded.binding.cascadeCount == 3U && cascaded.atlasSize == 2U * config.shadowMapSize,
+        "Cascaded shadows must pack three cascades into a 2x2 atlas");
+    Require(NearlyEqual(std::abs(cascaded.cascadeCameras[0].projection[0]), 4.0F / 50.0F) &&
+            NearlyEqual(std::abs(cascaded.cascadeCameras[2].projection[0]), 1.0F / 50.0F),
+        "Cascade extents must halve from the shadow distance down to the nearest cascade");
+    config.shadowCascadeCount = 1U;
     const bgfx::Caps* caps = bgfx::getCaps();
     const float textureYScale = caps != nullptr && caps->originBottomLeft ? 0.5F : -0.5F;
     Require(NearlyEqual(setup.binding.lightViewProjection[5], textureYScale * setup.camera.projection[5] * setup.camera.view[5]),
@@ -3068,7 +3252,9 @@ void RunSceneRenderVisibilityPublisherParallelParityTest() {
         const auto begin = std::chrono::steady_clock::now();
         const auto& groups = renderScene.DrawGroups();
         groupTimesMs[frame] = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count();
-        Require(groups.size() == 1U && groups[0].instances.size() == initialCount + (frame + 1U) * additionsPerFrame,
+        std::size_t instanceCount = 0U;
+        for (const auto& group : groups) instanceCount += group.instances.size();
+        Require(instanceCount == initialCount + (frame + 1U) * additionsPerFrame,
             "RenderScene spawn benchmark lost mesh instances");
     }
     std::sort(groupTimesMs.begin(), groupTimesMs.end());
@@ -3384,6 +3570,7 @@ void RunRenderSceneSyncTests() {
     RunSyncEntitiesUpdatesOnlyRequestedProxyTest();
     RunMeshRendererModifiedRuntimeQueueInvalidatesMaterialProxyTest();
     RunRuntimeRenderProxyQueueSynchronizesCameraLightAndVisibilityTest();
+    RunBulkPrefabRenderTransformPublicationTest();
     RunRuntimeRenderProxyQueueRemovesDisabledProxyTest();
     RunSyncTransformUpdatesUsesRuntimeCacheTest();
     RunSyncEntitiesRemovesDestroyedProxyTest();
@@ -3394,6 +3581,7 @@ void RunRenderSceneSyncTests() {
     RunRenderSceneBuildsMeshMaterialDrawGroupsTest();
     RunRenderSceneResourceGroupCoverageTest();
     RunRenderSceneBuildsLargeMeshMaterialDrawGroupsTest();
+    RunRenderScenePageRemovalKeepsGeneratedOwnersTest();
     RunRenderSceneExpandsGeometrySwarmIntoExistingDrawGroupTest();
     RunRenderSceneExpandsSpaceStrokeIntoExistingDrawGroupTest();
     RunEcsSyncBuildsSpaceStrokeFromGuideCurveTest();

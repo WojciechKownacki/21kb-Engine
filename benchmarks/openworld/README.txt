@@ -81,3 +81,222 @@ Wyniki z 30.09.2026: Results/comparison.csv oraz .json w nowym projekcie,
 Results/Raport_po_poprawkach.html i surowe CSV. Mała kopia comparison.csv jest
 w repozytorium. Nie dołączaj wygenerowanych projektów/binariów do źródeł silnika.
 Nie deklaruj gotowości gry klasy AAA na podstawie kostek i prostych trójkątów.
+
+Produkcja: kolejna seria z bazą 3f4a9fc6 (01.10.2026)
+PRODUCTION_PROMPT.txt zawiera cel, klasy, kontrakt własności i bramki.
+PRODUCTION_RESULTS_20261001.txt zawiera wyniki i konkretne niezaliczone bramki.
+Jest to raport historyczny pierwszego etapu. Wyniki kolejnego etapu i poprawkę
+metodologii CPU opisuje PRODUCTION_RESULTS_STAGE2_20261001.txt.
+Baza została osobno skompilowana z tym samym harness pomiarowym. Sceny, liczba
+obiektów, rozdzielczość i backend pozostały zgodne. Nie porównuj serii pomiarów
+z różnych dat jako jednego kontrolowanego eksperymentu.
+
+Projekt mieszany: 10k prostych meshów, 10k colliderów statycznych, 512 ciał
+ruchomych, 128 świateł punktowych + słońce, cienie, 100k instancji oraz komórka
+10k meshów po 960 trójkątów. Kamera steruje StreamFocus, trzy kompletne cykle
+w 3420 klatkach. Trzy procesy dają dziewięć zweryfikowanych cykli.
+Forward+ ma obecnie limit 32 świateł/pas. Scena lights_512 bada selekcję
+spośród 512 świateł; nie dowodzi jednoczesnego oświetlenia wszystkimi.
+
+Generowanie na danej maszynie:
+  build\perf-release\bin\kb_openworld_perf.exe generate E:\21kbProjekty\OpenWorldProduction_20260930
+Seria bazowa oraz końcowa: identyczne poniższe polecenia, osobne --output.
+  python benchmarks/openworld/run_compare.py --build build/perf-release --project E:/21kbProjekty/OpenWorldAfter_20260930 --output E:/21kbProjekty/OpenWorldProduction_20260930 --suite compare
+  python benchmarks/openworld/run_compare.py --build build/perf-release --project E:/21kbProjekty/OpenWorldAfter_20260930 --output E:/21kbProjekty/OpenWorldProduction_20260930 --suite foliage
+  python benchmarks/openworld/run_compare.py --build build/perf-release --project E:/21kbProjekty/OpenWorldProduction_20260930 --output E:/21kbProjekty/OpenWorldProduction_20260930 --suite production --fixed-step
+  python benchmarks/openworld/report_production.py --before E:/21kbProjekty/OpenWorldProductionBefore_20260930 --after E:/21kbProjekty/OpenWorldProduction_20260930
+--fixed-step wymusza symulację 1/60 s tylko w headless z profile-file. Daje
+stałą pracę symulacji mimo zmiennej przepustowości CPU/GPU. Seria zwykła
+zachowuje rzeczywisty zegar. Raport rozdziela obie serie.
+--repetition 1/2/3 pozwala powtórzyć konkretną serię; nie wybieraj najładniejszej.
+
+Nowe testy API i rendererowego unieważniania:
+  cmake --build build/perf-release --parallel 4 --target kb_ecs_api_tests
+  build\perf-release\engine\kb_ecs_api_tests.exe
+  build\perf-release\bin\kb_renderer_tests.exe command-reuse
+  build\perf-release\bin\kb_renderer_tests.exe webgpu-texture-fallback
+Testy obejmują publikację ECS przed OnSet, odroczenie i dziedziczenie backendu,
+limit wątków, animację UI, LOD między pasami, TAA, zmianę zasobów i kamer,
+brak kolejnego uploadu statycznych instancji oraz cienie generowanej geometrii.
+
+Drugi etap (01.10.2026): topologia transformów, aktywna fizyka i pojemność
+SceneTransformTopologyCache jest właścicielem pochodnych poziomów wykonania.
+Dodanie i usuwanie liści nie przebudowuje całego świata. Przeniesienie poddrzewa
+zachowuje bezpieczną pełną przebudowę. RemovalVersion w NativeArchetypeStorage
+rozróżnia dodanie od usunięcia: nieznane usunięcie komponentu/rodzica nadal
+wymusza bezpieczne przeliczenie, także po późniejszym usunięciu znanego liścia.
+JoltStaticBodyBatchCache przechowuje wyłącznie klucze ważności batchy. Nie
+kopiuje komponentów ani ciał. Transform/Collider, archetyp i generacja encji
+unieważniają zakres. Limit backendu wynosi 131072 ciała; nie oznacza to testu
+131072 aktywnych ciał ani zwiększenia limitu kontaktów solvera.
+
+CPU odbiera teraz zdarzenia kolizji w każdej klatce. ProductionBeforeCorrected
+zawiera świeże CPU z bazy 3f4a9fc6 z identycznym konsumentem. Pomiary GPU oraz
+streamingu skopiowano z zachowanej bazy, ponieważ ich obciążenie nie zmieniło
+się przy dodaniu konsumenta do testu CPU. Manifest opisuje pochodzenie próbek.
+Runtime.Update nie obejmuje testowego Wake, odczytu zdarzeń ani raycastów;
+total_ms je obejmuje, query_ms mierzy raycasty osobno. Nie porównuj CPU z
+pierwszym etapem, który kumulował nieodebrane kontakty.
+
+Końcowe serie (każda zawiera trzy procesy, uruchamiaj kolejno):
+  python benchmarks/openworld/run_compare.py --build build/perf-release --project E:/21kbProjekty/OpenWorldAfter_20260930 --output E:/21kbProjekty/OpenWorldProductionStage2_20261001 --suite compare
+  python benchmarks/openworld/run_compare.py --build build/perf-release --project E:/21kbProjekty/OpenWorldAfter_20260930 --output E:/21kbProjekty/OpenWorldProductionStage2_20261001 --suite capacity
+  python benchmarks/openworld/run_compare.py --build build/perf-release --project E:/21kbProjekty/OpenWorldAfter_20260930 --output E:/21kbProjekty/OpenWorldProductionStage2_20261001 --suite foliage
+  python benchmarks/openworld/run_compare.py --build build/perf-release --project E:/21kbProjekty/OpenWorldProduction_20260930 --output E:/21kbProjekty/OpenWorldProductionStage2_20261001 --suite production --fixed-step
+  python benchmarks/openworld/report_production.py --before E:/21kbProjekty/OpenWorldProductionBeforeCorrected_20261001 --after E:/21kbProjekty/OpenWorldProductionStage2_20261001
+Nowy colliders_100k wymaga 1000 rzeczywistych trafień raycastów/klatkę. Baza
+65536 ciał nie ma poprawnego pomiaru 100k; raport podaje brak porównania.
+Reporter zapisuje też niezaliczone wyniki i zwraca exit 1 przy nieudanej
+bramce lub regresji średniej ponad 5%, zamiast ukrywać je zielonym statusem.
+
+AssetManager::PrepareAsyncLoad obejmuje walidację zależności. Jej czytanie
+i dekodowanie sceny działa na istniejącym workerze. AssetRegistrySnapshotCache
+współdzieli widok do odczytu między zadaniami jednej generacji; jedynym
+mutowalnym katalogiem jest istniejący AssetRegistry. Zmiana generacji przed
+publikacją daje błąd do obsłużenia i wymaga ponownego zgłoszenia wczytania.
+Pierwszy widok po zmianie katalogu wymaga jego kopii; nie jest to darmowy
+streaming dowolnej liczby zasobów. Anulowanie i wymiana loadera zachowują
+istniejący kontrakt generacji zadań.
+
+Pełna weryfikacja kompilacji graph shaderów (osobno od porównania wydajności):
+  cmake -S . -B build/perf-release -DKB_BUILD_GRAPH_SHADERC=ON
+  cmake --build build/perf-release --parallel 4 --target kb_game kb_editor kb_renderer_tests kb_engine_tests kb_ecs_api_tests kb_openworld_perf
+  build\perf-release\bin\kb_renderer_tests.exe graph-shader-artifact
+  build\perf-release\bin\kb_renderer_tests.exe graph-forward-gpu
+Nie używaj czasu budowania shaderc jako czasu renderera. KB_GENERATE_RENDERER_SHADERS
+pozostaje OFF, więc istniejące shadery renderera nie zmieniają się w porównaniu.
+Rzeczywiste gotowanie graph shaderów sprawdza oddzielny test artefaktów.
+
+Etap 3: masowe transformy (PRODUCTION_RESULTS_STAGE3_20261001.txt)
+SceneTransformLeafBatchUpdater działa na pożyczonych wierszach kanonicznego
+ECS. Liście mogą ominąć kopię całej hierarchii, gdy cały łańcuch rodziców jest
+zsynchronizowany. Zmieniony przodek, poddrzewo, nieznane usunięcie i aktywny
+budżet propagacji zachowują dotychczasowy algorytm. Wskaźniki rodzica żyją
+wyłącznie w obrębie zakresu; nie są trwałą kopią danych sceny.
+Publikacja odczytuje bieżący komponent przed każdym OnSet. Obserwator może
+usunąć lub edytować kolejny komponent bez jego odtworzenia ze starej kopii.
+SceneTransformComponentStore używa zarejestrowanego ID swojego World zamiast
+ponownie wyszukiwać typ przy każdym odczycie i sygnale dirty.
+
+Aktualna bramka batch_dirty_100k: Runtime.Update średnia <=8 ms, P99 <=12 ms.
+mutation_ms i total_ms nadal są mierzone; zaliczenie Update nie oznacza,
+że 100k mutowanych obiektów wraz z renderowaniem mieści się w 16.67 ms.
+Nowy projekt i surowe serie: E:/21kbProjekty/OpenWorldProductionStage3_20261001.
+Ten sam generator i scenariusze, trzy procesy na scenariusz, bez trace:
+  build\perf-release\bin\kb_openworld_perf.exe generate E:/21kbProjekty/OpenWorldProductionStage3_20261001
+  python benchmarks/openworld/run_compare.py --build build/perf-release --project E:/21kbProjekty/OpenWorldProductionStage3_20261001 --output E:/21kbProjekty/OpenWorldProductionStage3_20261001 --suite compare
+  python benchmarks/openworld/run_compare.py --build build/perf-release --project E:/21kbProjekty/OpenWorldProductionStage3_20261001 --output E:/21kbProjekty/OpenWorldProductionStage3_20261001 --suite capacity
+  python benchmarks/openworld/run_compare.py --build build/perf-release --project E:/21kbProjekty/OpenWorldProductionStage3_20261001 --output E:/21kbProjekty/OpenWorldProductionStage3_20261001 --suite foliage
+  python benchmarks/openworld/run_compare.py --build build/perf-release --project E:/21kbProjekty/OpenWorldProductionStage3_20261001 --output E:/21kbProjekty/OpenWorldProductionStage3_20261001 --suite production --fixed-step
+  python benchmarks/openworld/report_production.py --before E:/21kbProjekty/OpenWorldProductionBeforeCorrected_20261001 --after E:/21kbProjekty/OpenWorldProductionStage3_20261001
+Reporter wymusza nową bramkę bulk; historyczny raport etapu 2 zawiera bramki
+obowiązujące w momencie jego pomiaru. Do porównania etapów użyj --before
+E:/21kbProjekty/OpenWorldProductionStage2_20261001. colliders_100k ma wtedy
+rzeczywiste porównanie przed/po, bez przypisywania mu nieistniejącej bazy 3f4a.
+
+
+Etap 4 (2026-10-01): lokalna retencja poleceń i własność buforów instancji
+RenderScene grupuje zwykłe siatki w strony po maks. 1024 ID na mesh/material.
+Geometry Swarm i Space Stroke mają własne grupy właścicieli. Dane pozostają
+w ECS/proxy; strony, polecenia i rekordy cullingu są pochodnym stanem renderera.
+SceneMeshBatchCommandCache przenosi istniejące wektory poleceń. Pełne przebudowy
+łączą zgodne polecenia między stronami; stabilna kamera pozwala na retencję stron.
+SceneMeshInstanceBufferPool oddziela alokacje od sortowania, chroni wielokrotne
+submit w klatce i viewporty; nieużywane klucze usuwa po 3 klatkach.
+Zmiany widoczności, usuwanie i rekey siatki aktualizują tylko zależne grupy.
+
+Projekt: E:/21kbProjekty/OpenWorldProductionStage4_20261001. Powtórzenie:
+  build/perf-release/bin/kb_openworld_perf.exe generate E:/21kbProjekty/OpenWorldProductionStage4_20261001
+  python benchmarks/openworld/run_compare.py --build build/perf-release --project E:/21kbProjekty/OpenWorldProductionStage4_20261001 --output E:/21kbProjekty/OpenWorldProductionStage4_20261001 --suite compare
+  python benchmarks/openworld/run_compare.py --build build/perf-release --project E:/21kbProjekty/OpenWorldProductionStage4_20261001 --output E:/21kbProjekty/OpenWorldProductionStage4_20261001 --suite capacity
+  python benchmarks/openworld/run_compare.py --build build/perf-release --project E:/21kbProjekty/OpenWorldProductionStage4_20261001 --output E:/21kbProjekty/OpenWorldProductionStage4_20261001 --suite foliage
+  python benchmarks/openworld/run_compare.py --build build/perf-release --project E:/21kbProjekty/OpenWorldProductionStage4_20261001 --output E:/21kbProjekty/OpenWorldProductionStage4_20261001 --suite production --fixed-step
+  python benchmarks/openworld/report_production.py --before E:/21kbProjekty/OpenWorldProductionStage3_20261001 --after E:/21kbProjekty/OpenWorldProductionStage4_20261001
+
+Aktualne bramki pełnego celu: bulk total_ms średnia i P99 <=16.67 ms; city fixed
+wall_frame_ms P99 <=16.67 ms; mixed fixed warm_wall_frame_ms P99 <=16.67 ms.
+Mixed: ciepłe próbki od klatki 120; pełna seria i zimny maksimum pozostają
+w raporcie. FAIL oznacza dalszą pracę; pliki historyczne zachowują stare bramki.
+
+Etap 5 (2026-10-01): runtime SyncStructural po zmianie topologii zamiast pełnego Sync.
+Bieżące zmiany proxy są odbierane również po uzgodnieniu struktury.
+Projekt: E:/21kbProjekty/OpenWorldProductionStage5_20261001.
+Odtworzenie: polecenia etapu 4 z Stage5 zamiast Stage4 w ścieżkach; identyczne
+suite compare, capacity, foliage, production --fixed-step i generator.
+Porównanie:
+  python benchmarks/openworld/report_production.py --before E:/21kbProjekty/OpenWorldProductionStage4_20261001 --after E:/21kbProjekty/OpenWorldProductionStage5_20261001
+Pełny raport: PRODUCTION_RESULTS_STAGE5_20261001.txt; dane: production_stage5_summary.csv.
+Bramki pozostają bez zmian. Wynik reportera exit 1 zachowuje otwartą pracę.
+
+Etap 6 (2026-10-01): opcjonalny odczyt natywnych kolumn, bezpieczny OnSet,
+odroczone seenEpoch statycznych ciał. Projekt OpenWorldProductionStage6_20261001.
+Odtworzenie: generator i polecenia etapu 4 ze Stage6 zamiast Stage4. Uruchamiaj
+kolejno suite compare, capacity, foliage, production --fixed-step; bez buildów
+w trakcie pomiaru. Porównanie do etapu 5:
+  python benchmarks/openworld/report_production.py --before E:/21kbProjekty/OpenWorldProductionStage5_20261001 --after E:/21kbProjekty/OpenWorldProductionStage6_20261001
+Pełny raport: PRODUCTION_RESULTS_STAGE6_20261001.txt; production_stage6_summary.csv.
+Results/pilot_native_lookup_full zachowuje serię przed ostatnią zmianą fizyki,
+w tym P99 bulk 19.9395 ms przy tym samym kodzie bulk, oraz alarm collider +7.46%.
+Końcowy report exit 1 zachowuje mixed P99; pełny cel nadal aktywny.
+
+Etap 7 (2026-10-01): poprawna publikacja transformów po bulk prefabu.
+SceneRenderProxyComponentMask odtwarza istniejące flagi z kanonicznego ECS
+przy przypisaniu porządku nowych encji. Kamer, świateł i ukrytych siatek nie
+trzeba ponownie publikować zmianą struktury sceny.
+UWAGA: diagnoza etapu 6 wykazała starą kamerę w 3057/3420 klatkach mixed.
+Wyniki ruchomych scen city/mixed etapów 5/6 nie dowodzą wydajności przy
+ciągłym ruchu renderowanej kamery. Zachowano dane i trace diagnostyczny;
+procenty względem tych scen nie są zyskiem tej samej pracy.
+Profiler zapisuje render_camera_x/y/z/valid z istniejącego feedbacku renderera.
+benchmark_validation.py odrzuca city/mixed z brakującą, starą lub nieprawidłową
+kamerą w dowolnej klatce. Wszystkie nowe powtórki oraz reporter wykonują tę
+samą walidację, bez drugiej implementacji trasy.
+Projekt: E:/21kbProjekty/OpenWorldProductionStage7_20261001.
+Odtworzenie: polecenia etapu 4 ze Stage7 zamiast Stage4. Zachowaj generator,
+compare, capacity, foliage oraz production --fixed-step i wszystkie próbki.
+Porównanie do etapu 6 jest diagnostyczne dla city/mixed; bazą następnej
+optymalizacji jest poprawny etap 7. Pozostałe sceny porównuje się bez zmiany
+ich kamer i liczników. Raport: PRODUCTION_RESULTS_STAGE7_20261001.txt.
+Results/pilot_mask_publication zachowuje pierwsze 54 pomiary; Results/raw
+zawiera finalne 54 na kodzie z const odczytem metadanych. Results/diagnostics
+zawiera regresję przed/po oraz ślad rozbieżnej kamery z etapu 6.
+Bramki i pełny cel produkcyjny pozostają bez zmian.
+
+Etap 8 (2026-10-01): zachowanie diagnostyki, selekcji i liczników LOD przy
+odrzucaniu generowanych klastrów. Niezależny obowiązkowy test używa wspieranej
+siatki P3N3UV2 i sprawdza 256 brakujących materiałów poza widokiem. Mutant bez
+warunku ochronnego nie przechodzi; pełny build/suite przechodzi po poprawce.
+Projekt: E:/21kbProjekty/OpenWorldProductionStage8_20261001.
+Odtworzenie: polecenia etapu 4 ze Stage8 zamiast Stage4, bez zmiany generatora.
+Porównanie do poprawnej kamery etapu 7:
+  python benchmarks/openworld/report_production.py --before E:/21kbProjekty/OpenWorldProductionStage7_20261001 --after E:/21kbProjekty/OpenWorldProductionStage8_20261001
+Raport: PRODUCTION_RESULTS_STAGE8_20261001.txt; production_stage8_summary.csv.
+Results/raw zawiera finalne 54 pomiary; pilot_clusters i rejected_native_clusters
+zachowują 18 parowych procesów oraz patch odrzuconej optymalizacji zwykłych stron.
+Nie łącz ich z finalną serią. cpu_repeat_control zachowuje 9 kontroli identycznej
+CPU binarki, bez zastępowania wyników kanonicznych. diagnostics zawiera mutant,
+pełne logi testów oraz odrzucone niepoprawne/opcjonalne próbki.
+City, mixed i bulk P99 nadal FAIL. Pozostałe wymagania pełnego celu bez zmian.
+
+Etap 9 (2026-10-01): rzeczywiste przestrzenne listy światła dla ForwardPlus
+i Deferred. SceneLightGridResources posiada atlas GPU i pochodny cache;
+RenderScene.LightContentRevision unieważnia go po zmianach kanonicznego stanu.
+Dodatnie maxForwardLights jest budżetem małej ścieżki uniform, a duże listy
+w oświetlanych pasach obsługują wszystkie poprawne światła maski; 0 wyłącza.
+Testy pikseli D3D11 builtin/graph x ForwardPlus/Deferred obejmują 512 i 1024
+punktowe, maskę, ruch, usuwanie i dwa różne zestawy w tej samej klatce.
+Mutant cap32 nie przechodzi, produkcja przechodzi. 12 shaderów zbudowano dla
+sześciu backendów; pełne duże warianty materiałów nadal wymagają odbioru GPU.
+Projekt: E:/21kbProjekty/OpenWorldProductionStage9_20261001.
+Odtworzenie: polecenia etapu 4 ze Stage9 zamiast Stage4, generator bez zmian.
+Porównanie:
+  python benchmarks/openworld/report_production.py --before E:/21kbProjekty/OpenWorldProductionStage8_20261001 --after E:/21kbProjekty/OpenWorldProductionStage9_20261001
+Raport: PRODUCTION_RESULTS_STAGE9_20261001.txt; production_stage9_summary.csv.
+Results/raw: 54 CSV obciążeń +18 CSV setup. verify_measurements.py niezależnie
+sprawdza 28260 klatek, 13860 kamer, 9 mixed i 9 async cykli oraz 638 hashy.
+shader_a_b/runtime_a_b zachowują dodatkowe 36 kontrolnych procesów; nie
+zastępują finalnych 54. GPU timer -1 oznacza brak pomiaru czasu GPU, a logi
+potwierdzają rzeczywiste D3D11. Wszystkie wall_frame_ms są czasem całej klatki.
+City fixed P99 15.3858 zalicza limit tej serii; mixed 21.2276 i bulk 21.4655
+nadal FAIL. Reporter exit 1 i historyczne alarmy pozostają. Foliage to nadal
+próbka czterech trójkątów. Pełny cel produkcyjny pozostaje aktywny.

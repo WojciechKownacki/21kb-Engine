@@ -56,7 +56,7 @@ namespace kb::render {
 namespace {
 
 [[nodiscard]] std::array<float, 4> NeutralInstanceColor() noexcept {
-    return { 0.76F, 0.80F, 0.86F, 1.0F };
+    return { 1.0F, 1.0F, 1.0F, 1.0F };
 }
 
 [[nodiscard]] std::uint32_t CopyMaterialSlotOverrides(
@@ -1108,9 +1108,19 @@ void EcsRenderSceneSynchronizer::SyncFacingPanelUpdates(
             },
             &transformUpdateEntities_);
     } else {
-        for (const kb::scene::SceneEntity entity : scene.Runtime().TransformRenderProxyUpdateEntities()) {
-            if (scene.Components().FacingPanels().Has(entity)) {
-                transformUpdateEntities_.push_back(entity.Id());
+        // Most scenes have no facing panels; one query then replaces a per-entity lookup of every
+        // transform update.
+        scene.Components().FacingPanels().ForEach(
+            [](kb::scene::SceneEntity entity, const kb::scene::FacingPanelComponent&, void* context) {
+                static_cast<std::vector<std::uint64_t>*>(context)->push_back(entity.Id());
+            },
+            &transformUpdateEntities_);
+        if (!transformUpdateEntities_.empty()) {
+            transformUpdateEntities_.clear();
+            for (const kb::scene::SceneEntity entity : scene.Runtime().TransformRenderProxyUpdateEntities()) {
+                if (scene.Components().FacingPanels().Has(entity)) {
+                    transformUpdateEntities_.push_back(entity.Id());
+                }
             }
         }
     }

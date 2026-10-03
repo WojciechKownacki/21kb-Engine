@@ -18,6 +18,7 @@ public:
     [[nodiscard]] static bool Has(const ecs_world_t* world, SceneEntity entity, std::uint64_t componentId) noexcept;
 
     static void Set(ecs_world_t* world, SceneEntity entity, std::uint64_t componentId, std::size_t size, const void* value);
+    static void SetExisting(ecs_world_t* world, SceneEntity entity, std::uint64_t componentId, std::size_t size, const void* value);
     static void Remove(ecs_world_t* world, SceneEntity entity, std::uint64_t componentId) noexcept;
     static void MarkModified(ecs_world_t* world, SceneEntity entity, std::uint64_t componentId) noexcept;
 };

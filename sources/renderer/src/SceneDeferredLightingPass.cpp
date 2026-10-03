@@ -93,6 +93,7 @@ bool SceneDeferredLightingPass::Initialize() {
     }
 
     WriteRendererDebugLog("deferred_lighting", "Initialize begin");
+    if (!lightGrid_.Initialize()) return false;
     program_ = ShaderLoader::LoadProgram("vs_present.sc", "fs_deferred_lighting.sc");
     static_cast<void>(debugNormalPresentPass_.Initialize());
     albedoSampler_ = bgfx::createUniform("s_gbufferAlbedo", bgfx::UniformType::Sampler);
@@ -116,6 +117,12 @@ bool SceneDeferredLightingPass::Initialize() {
     shadowMapSampler_ = bgfx::createUniform("s_deferredShadowMap", bgfx::UniformType::Sampler);
     shadowViewProjUniform_ = bgfx::createUniform("u_deferredShadowViewProj", bgfx::UniformType::Mat4);
     shadowParamsUniform_ = bgfx::createUniform("u_deferredShadowParams", bgfx::UniformType::Vec4);
+    shadowCascades_.Create();
+    pointShadows_.Create();
+    giHistorySampler_ = bgfx::createUniform("s_giHistory", bgfx::UniformType::Sampler);
+    giViewProjUniform_ = bgfx::createUniform("u_giViewProj", bgfx::UniformType::Mat4);
+    giPrevViewProjUniform_ = bgfx::createUniform("u_giPrevViewProj", bgfx::UniformType::Mat4);
+    giParamsUniform_ = bgfx::createUniform("u_giParams", bgfx::UniformType::Vec4);
     backdropHorizonUniform_ = bgfx::createUniform("u_deferredBackdropHorizon", bgfx::UniformType::Vec4);
     backdropZenithUniform_ = bgfx::createUniform("u_deferredBackdropZenith", bgfx::UniformType::Vec4);
     backdropParamsUniform_ = bgfx::createUniform("u_deferredBackdropParams", bgfx::UniformType::Vec4);
@@ -145,6 +152,7 @@ bool SceneDeferredLightingPass::Initialize() {
 }
 
 void SceneDeferredLightingPass::Shutdown() noexcept {
+    lightGrid_.Shutdown();
     if (IsInitialized() || bgfx::isValid(program_)) {
         std::ostringstream message;
         message << "Shutdown program=" << HandleValue(program_)
@@ -178,6 +186,14 @@ void SceneDeferredLightingPass::Shutdown() noexcept {
     if (bgfx::isValid(fallbackBackdropEnvironmentTexture_)) {
         bgfx::destroy(fallbackBackdropEnvironmentTexture_);
         fallbackBackdropEnvironmentTexture_ = BGFX_INVALID_HANDLE;
+    }
+    shadowCascades_.Destroy();
+    pointShadows_.Destroy();
+    for (bgfx::UniformHandle* handle : { &giHistorySampler_, &giViewProjUniform_, &giPrevViewProjUniform_, &giParamsUniform_ }) {
+        if (bgfx::isValid(*handle)) {
+            bgfx::destroy(*handle);
+        }
+        *handle = BGFX_INVALID_HANDLE;
     }
     if (bgfx::isValid(shadowParamsUniform_)) {
         bgfx::destroy(shadowParamsUniform_);
@@ -359,7 +375,12 @@ bool SceneDeferredLightingPass::Submit(const SceneDeferredLightingPassDesc& desc
     }
 
     SceneRenderSubmitStats lightingStats{};
-    const PackedSceneLighting lighting = SceneLightingPacker::Build(*desc.renderScene, lightingStats, desc.lightingConfig, desc.camera);
+    PackedSceneLighting lighting = SceneLightingPacker::Build(*desc.renderScene, lightingStats, desc.lightingConfig, desc.camera);
+    if (desc.lightingConfig.maxForwardLights != 0U && lightingStats.skippedForwardLightCount != 0U) {
+        lighting.lightGrid = lightGrid_.Prepare(*desc.renderScene, desc.lightingConfig,
+            desc.camera != nullptr ? desc.camera->cullingMask : 0xFFFFFFFFU, lighting.primaryLightId, lightingStats);
+        if (!lightingStats.lightingPathProduction) return false;
+    }
     {
         std::ostringstream message;
         message << "Lighting packed submittedForward=" << lightingStats.submittedForwardLightCount
@@ -418,6 +439,12 @@ bool SceneDeferredLightingPass::Submit(const SceneDeferredLightingPassDesc& desc
     static const std::array<float, 4> disabledShadowParams{};
     bgfx::setUniform(shadowViewProjUniform_, shadowValid ? desc.shadowMap->lightViewProjection.data() : disabledShadowViewProj.data());
     bgfx::setUniform(shadowParamsUniform_, shadowValid ? desc.shadowMap->params.data() : disabledShadowParams.data());
+    shadowCascades_.Set(desc.shadowMap);
+    if (desc.shadowMap != nullptr) {
+        SceneLightingPacker::AssignPointShadowSlots(lighting, desc.shadowMap->point);
+    }
+    pointShadows_.Set(desc.shadowMap != nullptr ? &desc.shadowMap->point : nullptr, lighting.pointShadowSlot,
+        fallbackShadowTexture_);
     {
         std::ostringstream message;
         message << "bind-gbuffer viewId=" << desc.viewId
@@ -443,6 +470,19 @@ bool SceneDeferredLightingPass::Submit(const SceneDeferredLightingPassDesc& desc
     bgfx::setTexture(4U, depthSampler_, desc.gbuffer->DepthTexture());
     bgfx::setTexture(5U, shadowMapSampler_, shadowValid ? desc.shadowMap->depthTexture : fallbackShadowTexture_);
     bgfx::setTexture(6U, backdropEnvironmentSampler_, environmentBackdrop ? desc.worldBackdropEnvironment : fallbackBackdropEnvironmentTexture_);
+    // Screen-space GI gathers bounce light from last frame's lit colour; without a captured frame
+    // (first frame, resize) it stays off rather than reading an undefined texture.
+    const bool giActive = desc.lightingConfig.globalIllumination == SceneRenderGlobalIlluminationMode::SsGi &&
+        desc.gi != nullptr && desc.gi->active && bgfx::isValid(desc.gi->history);
+    constexpr float kGiRayLength = 3.0F;
+    constexpr float kGiThicknessFactor = 0.5F;
+    const std::array<float, 4> giParams{
+        giActive ? 1.0F : 0.0F, kGiRayLength, static_cast<float>(giActive ? desc.gi->frameIndex % 1024U : 0U), kGiThicknessFactor };
+    bgfx::setUniform(giViewProjUniform_, viewProjection.data());
+    bgfx::setUniform(giPrevViewProjUniform_, giActive ? desc.gi->previousViewProjection.data() : viewProjection.data());
+    bgfx::setUniform(giParamsUniform_, giParams.data());
+    bgfx::setTexture(8U, giHistorySampler_, giActive ? desc.gi->history : fallbackShadowTexture_);
+    lightGrid_.Bind(lighting.lightGrid, 7U);
     bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
     bgfx::setVertexBuffer(0, &vertices);
     bgfx::submit(desc.viewId, program_);
@@ -469,7 +509,9 @@ bool SceneDeferredLightingPass::IsInitialized() const noexcept {
         bgfx::isValid(environmentZenithUniform_) && bgfx::isValid(environmentGroundUniform_) &&
         bgfx::isValid(environmentParamsUniform_) && bgfx::isValid(cameraPositionUniform_) &&
         bgfx::isValid(inverseViewProjectionUniform_) && bgfx::isValid(depthParamsUniform_) &&
-        bgfx::isValid(shadowMapSampler_) && bgfx::isValid(shadowViewProjUniform_) && bgfx::isValid(shadowParamsUniform_) &&
+        bgfx::isValid(shadowMapSampler_) && bgfx::isValid(shadowViewProjUniform_) && bgfx::isValid(shadowParamsUniform_) && shadowCascades_.IsValid() && pointShadows_.IsValid() &&
+        bgfx::isValid(giHistorySampler_) && bgfx::isValid(giViewProjUniform_) &&
+        bgfx::isValid(giPrevViewProjUniform_) && bgfx::isValid(giParamsUniform_) &&
         bgfx::isValid(backdropHorizonUniform_) && bgfx::isValid(backdropZenithUniform_) && bgfx::isValid(backdropParamsUniform_) &&
         bgfx::isValid(backdropEnvironmentSampler_) && bgfx::isValid(fallbackShadowTexture_) &&
         bgfx::isValid(fallbackBackdropEnvironmentTexture_);

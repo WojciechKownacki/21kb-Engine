@@ -3,12 +3,15 @@
 #include "engine/scene/SceneSystem.hpp"
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 
 namespace kb::physics_jolt {
 
 struct JoltPhysicsSceneSystemSettings {
     int collisionSteps = 1;
+    // Zero selects a bounded automatic pool; explicit values tune large simulations.
+    std::uint32_t workerThreadCount = 0U;
 };
 
 class JoltPhysicsSceneSystem final : public kb::scene::SceneSystem {

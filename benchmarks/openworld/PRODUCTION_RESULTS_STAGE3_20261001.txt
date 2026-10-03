@@ -1,0 +1,129 @@
+21kb — etap 3: szybka aktualizacja masowych transformów
+Data: 2026-10-01. Gałąź 1.0. Bazowy etap 2: 7ac37d783921d1b929fcbf26f70f14f07157080d.
+Cel etapu: batch_dirty_100k Runtime.Update średnio <=8 ms, P99 <=12 ms,
+bez utraty OnSet, mirroringu, wersji transformów, hierarchii i interpolacji.
+Pierwotny cel pełnej jakości studyjnej jest kontynuowany w zakresie podanym na końcu.
+
+Metoda
+Windows, i7-13700F, RTX 4070 12 GB, 64 GB RAM, sterownik 591.74.
+Release /O2 /DNDEBUG, D3D11 1920×1080, ForwardPlus. Praca headless.
+CPU: 180 klatek rozgrzewki + 360 mierzonych, 3 osobne procesy/scenariusz.
+GPU: 120 klatek rozgrzewki + 480 mierzonych, 3 osobne procesy/scenariusz.
+Mixed: wszystkie 3420 klatek/proces, także zimny start, 3 procesy.
+P99 to najbliższy wyższy rangą percentyl z połączonych próbek. Trace nie
+wchodzi do raportu. Wszystkie serie wykonano kolejno po testach, bez buildów
+i innych benchmarków równolegle. Generator scen i obciążenia pozostają takie
+jak w etapie 2; nowy samodzielny projekt w E:/21kbProjekty/OpenWorldProductionStage3_20261001.
+CPU fizyki odbiera kontakty w każdej klatce tak samo jak poprawiona baza.
+Zachowano oryginalną poprawioną bazę 3f4a9fc6 oraz wszystkie próbki etapu 2.
+Manifest z hashami zmienionych źródeł: Results/capture_manifest.json.
+
+Przed/po względem etapu 2 (ms)
+Scenariusz | Etap 2 średnia | Etap 3 średnia | P99 | Maksimum | Zmiana | Bramka
+static_100k (cpu) | 0.0081 | 0.0050 | 0.0053 | 0.0284 | -38.4% | PASS
+physics_idle_world_100k (cpu) | 0.0254 | 0.0168 | 0.0201 | 0.0670 | -33.9% | PASS
+physics_4096 (cpu) | 4.0989 | 3.9595 | 4.7207 | 5.7623 | -3.4% | PASS
+dense_4096 (cpu) | 9.5451 | 8.5187 | 12.1906 | 13.4284 | -10.8% | pomiar
+batch_dirty_100k (cpu) | 18.7967 | 6.3719 | 8.3451 | 10.8001 | -66.1% | PASS
+world_100k (gpu) | 1.1000 | 1.0516 | 3.3064 | 4.1941 | -4.4% | PASS
+city_dense_50k (gpu) | 7.8958 | 7.6625 | 18.7146 | 21.3789 | -3.0% | PASS
+culling_far_10k (gpu) | 0.5054 | 0.5139 | 1.0565 | 1.7206 | +1.7% | pomiar
+culling_side_10k (gpu) | 0.4888 | 0.4908 | 1.1703 | 3.4510 | +0.4% | pomiar
+foliage_100k (gpu) | 0.6958 | 0.6943 | 2.0286 | 2.7673 | -0.2% | pomiar
+foliage_1m (gpu) | 1.2728 | 1.2697 | 3.7244 | 4.4302 | -0.2% | PASS
+city_dense_50k (fixed_gpu) | 13.5517 | 13.3044 | 19.1612 | 23.1392 | -1.8% | PASS
+geometry_10k (fixed_gpu) | 1.8710 | 1.8610 | 5.0446 | 5.3791 | -0.5% | pomiar
+lights_512 (fixed_gpu) | 0.8284 | 0.8363 | 1.9187 | 2.2513 | +1.0% | pomiar
+shadow_50k (fixed_gpu) | 1.3811 | 1.3565 | 1.6520 | 1.9190 | -1.8% | pomiar
+mixed_stream_10k (fixed_gpu) | 8.9625 | 8.8983 | 27.1778 | 226.4640 | -0.7% | pomiar
+static_100k (async) | 0.9447 | 0.9402 | 3.4916 | 7.9334 | -0.5% | PASS
+colliders_100k (cpu) | 0.6145 | 0.5507 | 0.9438 | 1.1523 | -10.4% | PASS
+
+Pełny koszt bulk — nie pomijamy pracy mutatora
+100 tys. rzeczywistych komponentów zmienia pozycję każdą klatkę pod jednym ownerem.
+mutation_ms: 18.2988 -> 11.1649 ms; P99 13.3914; max 21.7338.
+runtime_ms: 18.7967 -> 6.3719 ms; P99 8.3451; max 10.8001.
+total_ms: 37.0960 -> 17.5372 ms; P99 22.0787; max 32.5346.
+Runtime.Update zalicza 8/12 ms. Łączne 17.54 ms CPU nadal przekracza 16.67 ms
+przed doliczeniem renderowania. Nie jest to deklaracja 60 Hz dla 100k mutacji + pełnej gry.
+
+Zmiana kodu — właściciele i ścieżki
+- SceneTransformLeafBatchUpdater: nowa mała klasa pożyczająca rodziców na czas
+  zakresu. Sprawdza cały łańcuch przodków, nie tylko bezpośredniego rodzica.
+  Rodzic pozostaje w kanonicznym ECS; cursor przechowuje wskaźnik, nie stan autorski.
+  Obliczenia delegują do istniejącego UpdateSceneTransformBatchEntry, bez drugiej matematyki.
+- SceneTransformHierarchySystem::RunNativeDirtyRanges: sprawdzenie liści podczas
+  istniejącego odczytu dirty range, następnie obliczenia na kanonicznych wierszach.
+  Nie buduje kopii całej hierarchii ani pośredniej tablicy wpisów dla niezależnych liści.
+  Przodek dirty, poddrzewo, nieznane usunięcie i budżet propagacji wracają do
+  dotychczasowego algorytmu. Duplikaty, generacje i niekompletna frontier są sprawdzane.
+  Czysta scena nie wykonuje ponownych pętli po zakresach z zerowym dirty count.
+- SceneTransformComponentStore: używa zarejestrowanego ID komponentu tego World;
+  odczyty i mark korzystają z istniejących metod World przez WorldInternalAccess.
+  Bez dodatkowego rejestru typów lub kopii komponentów.
+- ComponentStorageMutation::SetExisting i SceneComponentAccess: publikacja
+  do istniejącego backendu przez kopię i ecs_modified, z dotychczasowym fallbackiem
+  do ecs_set dla odroczenia, dziedziczenia lub brakującego lustra. Domyślne
+  MarkModified nadal nie odtwarza komponentu usuniętego wyłącznie z backendu.
+  Synchronizacja sceny sprawdza aktualną generację i obecność kanonicznego
+  komponentu przed każdą publikacją. Kopiuje bieżącą wartość, bo wcześniejszy
+  OnSet może edytować lub usunąć następny wiersz. Wskaźnik nie żyje przez callback.
+- Istniejący opcjonalny root_sync_profile raportuje także koszty ścieżki
+  hierarchii: cache, wpisy, kernel, frontier, flush i publikację. Domyślnie wyłączony.
+- report_production.py wymusza bramkę bulk 8/12 ms i porównuje 100k colliderów
+  z bazą, jeśli ta rzeczywiście zawiera taki test.
+
+Weryfikacja
+Pełna kompilacja wszystkich skonfigurowanych targetów, --parallel 4: exit 0.
+Pełne engine i ECS API: exit 0. Standalone ECS stress, deterministic replay,
+scheduler correctness i snapshot scale: exit 0. Pełny renderer z shaderc ON
+oraz osobny świeży WebGPU texture fallback: exit 0. Graph shader cooking i
+graph forward GPU z odczytem pikseli wykonano rzeczywiście. Prebuilt shadery
+rendera pozostają takie same (KB_GENERATE_RENDERER_SHADERS=OFF).
+LIB-134: max abs 0.0121826 przy dotychczasowej tolerancji 0.02 — zaliczony.
+Nowe testy 2048 liści pod obróconym/nierównomiernie skalowanym rodzicem i
+rodzicem przesuniętym porównują pozycje, obroty, skale i wersje z istniejącą
+budżetowaną ścieżką. Mirror on/off, przodek zmieniony bez scene frontier,
+reparent, niszczenie i ponowne użycie slotu oraz usunięcie transformu rodzica.
+OnSet usuwa 1023 przyszłe komponenty podczas publikacji: brak odtworzenia.
+OnSet edytuje przyszły komponent: lustro zgadza się z kanonicznym ECS,
+zmiana nie ginie i propaguje się przy następnym sync.
+Snapshot 1m: create 0.0749 s, save 0.0489 s, load 0.1429 s; katalog 1m:
+create 0.0602 s, destroy 0.0370 s. To pojedyncze pomiary testów poprawności,
+nie trzykrotnie powtórzony test renderowania miliona obiektów.
+Wszystkie 18 scenariuszy po 3 procesy: exit 0. Reportery względem 3f4a9fc6
+i 7ac37d78: exit 0. Brak regresji średniej >5% w sprawdzonych scenariuszach.
+W obu testach async wykonano po 9 kompletnych cykli; mixed 20646 -> 30648
+-> 20646 encji. Zero dropped i missing_resources. 100k colliderów zachowuje
+1000 trafień raycastów/klatkę i poprawność limitu backendu.
+
+Maksimum pamięci prywatnej procesu (MiB): static_100k 818.70,
+physics_idle_world_100k 875.81, physics_4096 163.67, dense_4096 82.00,
+batch_dirty_100k 834.61, colliders_100k 947.49. Obejmuje dokument fixture,
+prefaby, cały ECS, backend i runtime; nie jest VRAM ani kosztem samej encji.
+physics_4096 odebrał 9806400 zdarzeń kolizji w 1080 mierzonych klatkach.
+Statyczne scenariusze GPU mają te same zakresy liczników submitted/visible,
+culled, encji, świateł, pojemności i rozdzielczości co etap 2.
+
+Pozostała praca nad pełnym celem jakości studyjnej
+- Pełny mutator bulk: 11.16 ms; publikacja i dirty signaling nadal mają pracę
+  per encja. Cel mutation + Update <=16.67 ms bez zmiany obciążenia ani OnSet.
+- city fixed P99 19.16 ms oraz mixed P99 27.18 ms przekraczają cel 16.67 ms
+  całej klatki. RenderScene, MeshPassProcessor, SceneMeshDrawCommandSubmitter:
+  ograniczyć unieważnianie i pakowanie grup statycznych podczas ruchu.
+- Mixed ma zimny max 226.46 ms. Rozdzielić inicjalizację zasobów od klatki
+  gameplay i ograniczyć rzeczywisty owner-thread koszt pierwszej publikacji.
+- SceneLightingPacker i kontrakt shaderów nadal wybierają maks. 32 światła
+  na pas. lights_512 to selekcja, nie pełna iluminacja wszystkimi światłami.
+  Potrzebne rzeczywiste listy klastrów, poprawność GPU i test przepełnienia.
+- foliage_1m pozostaje czterema trójkątami/instancję, jednym ownerem ECS,
+  bez alpha, wiatru i cieni. Dodać realistyczny test tych funkcji i zasobów.
+- 100k rezydentnych renderowanych obiektów to 32504 submitted instancji
+  sumowanych przez pasy; nie 100k jednocześnie widocznych modeli AAA.
+Nie przypisujemy tym pomiarom porównania gotowych gier ani równoważności
+z innymi silnikami. Kolejne etapy mają usunąć powyższe konkretne ograniczenia.
+
+Odtworzenie: README.txt; prompt: PRODUCTION_PROMPT.txt.
+Pełne metryki każdej powtórki: Results/production_summary_vs_3f4a9fc6.json
+oraz Results/production_summary_vs_7ac37d78.json. Kompaktowe metryki w repo:
+production_stage3_summary.csv. Projekty referencyjne pozostają read only.

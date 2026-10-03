@@ -10,9 +10,11 @@
 #include "scene/transform/SceneTransformDirtyFrontier.hpp"
 #include "scene/transform/SceneTransformRootHotKernel.hpp"
 #include "scene/transform/SceneTransformRootQueryCache.hpp"
+#include "scene/transform/SceneTransformLeafBatchUpdater.hpp"
 #include "scene/transform/TransformMath.hpp"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -23,6 +25,7 @@
 #include <memory>
 #include <mutex>
 #include <span>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -74,13 +77,20 @@ void PrintRootSyncProfile(
         return;
     }
     std::cout << "root_sync_profile,roots=" << state.hierarchyRoots.size()
-              << ",full_builds=" << state.transformTopologicalBatchBuildCount
+              << ",full_builds=" << state.transformTopology.BuildCount()
               << ",dirty_rows=" << dirtyRows
               << ",topology_ns=" << timings->topologyNanoseconds
               << ",dense_scratch_ns=" << timings->denseScratchNanoseconds
               << ",query_create_ns=" << timings->queryCreateNanoseconds
               << ",query_rebuild_ns=" << timings->queryRebuildNanoseconds
               << ",dirty_scan_ns=" << timings->dirtyScanNanoseconds
+              << ",cache_build_ns=" << state.lastTransformHierarchyCacheBuildNanoseconds
+              << ",entry_build_ns=" << state.lastTransformHierarchyEntryBuildNanoseconds
+              << ",kernel_ns=" << state.lastTransformHierarchyKernelApplyNanoseconds
+              << ",frontier_append_ns=" << state.lastTransformHierarchyFrontierAppendNanoseconds
+              << ",flush_write_ns=" << state.lastTransformHierarchyFlushWriteNanoseconds
+              << ",backend_mark_ns=" << state.lastTransformHierarchyBackendMarkNanoseconds
+              << ",propagate_ns=" << state.lastTransformHierarchyPropagateNanoseconds
               << ",total_ns=" << Nanoseconds(std::chrono::steady_clock::now() - updateStart) << '\n';
 }
 
@@ -190,7 +200,6 @@ struct TransformFlushContext {
 struct TransformCacheBuildContext {
     TransformValueCache* cache = nullptr;
     std::mutex sparseMutex;
-    std::atomic_size_t loadedCount = 0U;
 };
 
 void EnsureWorkerPool(SceneState& state);
@@ -266,7 +275,6 @@ void AddTransformCacheEntryFromHotBatch(
             .valid = true,
             .dirty = false,
         };
-        buildContext.loadedCount.fetch_add(1U, std::memory_order_relaxed);
         return;
     }
 
@@ -280,7 +288,6 @@ void AddTransformCacheEntryFromHotBatch(
             .dirty = false,
         };
     }
-    buildContext.loadedCount.fetch_add(1U, std::memory_order_relaxed);
 }
 
 [[nodiscard]] TransformValueCache BeginTransformValueCache(SceneState& state) {
@@ -475,66 +482,6 @@ void AddTransformCacheEntryFromHotBatch(
     return stats;
 }
 
-void BuildTopologicalBatches(SceneState& state) {
-    if (state.transformTopologicalBatchesVersion == state.hierarchyTopologyVersion) {
-        return;
-    }
-
-    const std::size_t rootCount = state.hierarchyRoots.size();
-    if (state.transformTopologicalBatchesRootAppendEpoch == state.hierarchyRootAppendEpoch
-        && rootCount >= state.transformTopologicalBatchesRootCount
-        && !state.transformTopologicalBatches.empty()) {
-        auto& rootBatch = state.transformTopologicalBatches.front();
-        rootBatch.insert(rootBatch.end(),
-            state.hierarchyRoots.begin() + static_cast<std::ptrdiff_t>(state.transformTopologicalBatchesRootCount),
-            state.hierarchyRoots.end());
-        state.transformTopologicalBatchesRootCount = rootCount;
-        state.transformTopologicalBatchesVersion = state.hierarchyTopologyVersion;
-        return;
-    }
-
-    state.transformTopologicalBatches.clear();
-    if (state.hierarchyRoots.empty()) {
-        state.transformTopologicalBatchesRootCount = 0U;
-        state.transformTopologicalBatchesRootAppendEpoch = state.hierarchyRootAppendEpoch;
-        state.transformTopologicalBatchesVersion = state.hierarchyTopologyVersion;
-        ++state.transformTopologicalBatchBuildCount;
-        return;
-    }
-
-    state.transformTopologicalBatches.push_back(state.hierarchyRoots);
-    for (std::size_t levelIndex = 0; levelIndex < state.transformTopologicalBatches.size(); ++levelIndex) {
-        const std::vector<SceneEntity>& level = state.transformTopologicalBatches[levelIndex];
-        std::vector<SceneEntity>* nextLevel = nullptr;
-        for (const SceneEntity entity : level) {
-            std::span<const SceneEntity> childEntities;
-            const std::uint32_t denseIndex = kb::ecs::GeneratedEntityIndex(entity);
-            if (denseIndex != kb::ecs::kInvalidGeneratedEntityIndex && denseIndex < state.denseHierarchyChildren.size()) {
-                childEntities = state.denseHierarchyChildren[denseIndex];
-            } else {
-                const auto children = state.hierarchyChildren.find(entity.Id());
-                if (children != state.hierarchyChildren.end()) {
-                    childEntities = children->second;
-                }
-            }
-            if (childEntities.empty()) {
-                continue;
-            }
-            if (nextLevel == nullptr) {
-                if (levelIndex + 1U == state.transformTopologicalBatches.size()) {
-                    state.transformTopologicalBatches.emplace_back();
-                }
-                nextLevel = &state.transformTopologicalBatches[levelIndex + 1U];
-            }
-            nextLevel->insert(nextLevel->end(), childEntities.begin(), childEntities.end());
-        }
-    }
-    state.transformTopologicalBatchesRootCount = rootCount;
-    state.transformTopologicalBatchesRootAppendEpoch = state.hierarchyRootAppendEpoch;
-    state.transformTopologicalBatchesVersion = state.hierarchyTopologyVersion;
-    ++state.transformTopologicalBatchBuildCount;
-}
-
 [[nodiscard]] SceneEntity ParentOf(const SceneState& state, SceneEntity entity) noexcept {
     const std::uint32_t denseIndex = kb::ecs::GeneratedEntityIndex(entity);
     if (denseIndex != kb::ecs::kInvalidGeneratedEntityIndex && denseIndex < state.denseHierarchyParents.size()) {
@@ -678,10 +625,15 @@ void StoreTransformScratch(SceneState& state, SceneEntity entity, const Transfor
 }
 
 void EnsureWorkerPool(SceneState& state) {
+    const auto available = std::max(1U, std::thread::hardware_concurrency());
+    const auto limit = state.world.Config().workerThreadLimit;
+    const kb::ecs::WorkerPoolConfig config{
+        .workerCount = std::min<std::size_t>(available > 1U ? available - 1U : 1U, limit == 0U ? 8U : limit),
+    };
     if (state.transformWorkerPool == nullptr) {
-        state.transformWorkerPool = std::make_unique<kb::ecs::WorkerPool>(kb::ecs::WorkerPoolConfig{});
+        state.transformWorkerPool = std::make_unique<kb::ecs::WorkerPool>(config);
     } else if (!state.transformWorkerPool->Running()) {
-        state.transformWorkerPool->Start(kb::ecs::WorkerPoolConfig{});
+        state.transformWorkerPool->Start(config);
     }
 }
 
@@ -794,9 +746,9 @@ void ResetPropagationCursor(SceneState& state) noexcept {
 }
 
 void PrewarmTransformScratchForCompletedLevels(SceneState& state, const TransformValueCache& transformValues) {
-    const std::size_t levelCount = std::min(state.transformPropagationCursorLevel, state.transformTopologicalBatches.size());
+    const std::size_t levelCount = std::min(state.transformPropagationCursorLevel, state.transformTopology.Levels().size());
     for (std::size_t levelIndex = 0; levelIndex < levelCount; ++levelIndex) {
-        for (const SceneEntity entity : state.transformTopologicalBatches[levelIndex]) {
+        for (const SceneEntity entity : state.transformTopology.Levels()[levelIndex]) {
             const TransformComponent* transform = transformValues.Find(entity);
             if (transform == nullptr) {
                 continue;
@@ -1186,8 +1138,8 @@ void RunHierarchyDirtyFrontier(
     return state.transformPropagationBudget.maxInspectedEntitiesPerSync == 0U
         && state.transformPropagationCursorLevel == 0U
         && state.transformPropagationCursorOffset == 0U
-        && state.transformTopologicalBatches.size() == 1U
-        && !state.transformTopologicalBatches.front().empty();
+        && state.transformTopology.Levels().size() == 1U
+        && !state.transformTopology.Levels().front().empty();
 }
 
 [[nodiscard]] bool RunNativeDirtyRanges(
@@ -1218,8 +1170,10 @@ void RunHierarchyDirtyFrontier(
     }
 
     kb::ecs::UnsafeHotQuery<TransformComponent>& hotQuery = queryCache.hotQuery;
-    if (queryCache.hierarchyTopologyVersion != state.hierarchyTopologyVersion || hotQuery.IsStale(queryCache.query)) {
-        if (!rootsOnly) {
+    const auto removalSafetyEpoch = state.transformTopology.RemovalSafetyEpoch(state.world.NativeStorage().RemovalVersion());
+    const bool unknownRemoval = queryCache.removalSafetyEpoch != removalSafetyEpoch;
+    if (unknownRemoval || queryCache.hierarchyTopologyVersion != state.hierarchyTopologyVersion || hotQuery.IsStale(queryCache.query)) {
+        if (!rootsOnly && unknownRemoval) {
             // Structural changes can invalidate parents without leaving a live dirty row.
             ClearSceneTransformDirtyFrontier(state);
         }
@@ -1228,7 +1182,8 @@ void RunHierarchyDirtyFrontier(
             return false;
         }
         queryCache.hierarchyTopologyVersion = state.hierarchyTopologyVersion;
-        if (!rootsOnly) {
+        queryCache.removalSafetyEpoch = removalSafetyEpoch;
+        if (!rootsOnly && unknownRemoval) {
             return false;
         }
         if (profileTimings != nullptr) {
@@ -1248,21 +1203,39 @@ void RunHierarchyDirtyFrontier(
     }
 
     if (!rootsOnly) {
+        // Known leaf destruction may leave a queued handle from an earlier
+        // write in this frame. The remaining frontier still contains live work.
+        std::erase_if(state.transformDirtyFrontierEntities, [&state](SceneEntity entity) { return !state.world.IsAlive(entity); });
         auto& nativeStorage = const_cast<kb::ecs::NativeArchetypeStorage&>(state.world.NativeStorage());
-        static_cast<void>(hotQuery.ForEachDirtyMutableRange<0>(
-            nativeStorage, kTransformBatchGrainSize, state.transformNativeDirtyRangesScratch, true,
-            [&state](const kb::ecs::UnsafeHotMutableChunk<TransformComponent>& chunk, std::size_t) {
+        SceneTransformLeafBatchUpdater leafValidator{state};
+        bool independentLeaves = dirtyRows > kTransformBatchGrainSize * 4U;
+        std::size_t dirtyLeafCount = 0U;
+        if (dirtyRows != 0U) static_cast<void>(hotQuery.ForEachDirtyMutableRange<0>(
+            nativeStorage, kTransformBatchGrainSize, state.transformNativeDirtyRangesScratch, false,
+            [&state, &leafValidator, &independentLeaves, &dirtyLeafCount](const kb::ecs::UnsafeHotMutableChunk<TransformComponent>& chunk, std::size_t) {
                 const TransformComponent* transforms = chunk.Components<0>();
                 for (std::size_t row = 0U; row < chunk.Count(); ++row) {
                     if (transforms[row].worldDirty) {
-                        EnqueueSceneTransformDirtyFrontierUnchecked(state, chunk.EntityAt(row));
+                        const auto entity = chunk.EntityAt(row);
+                        ++dirtyLeafCount;
+                        EnqueueSceneTransformDirtyFrontierUnchecked(state, entity);
+                        if (independentLeaves && !leafValidator.CanUpdate(entity)) independentLeaves = false;
                     }
                 }
             }));
         if (!state.transformDirtyFrontierEntities.empty()) {
-            return false;
+            if (!independentLeaves || state.transformDirtyFrontierEntities.size() != dirtyLeafCount) {
+                static_cast<void>(hotQuery.ForEachDirtyMutableRange<0>(nativeStorage,
+                    kTransformBatchGrainSize, state.transformNativeDirtyRangesScratch, true,
+                    [](const auto&, std::size_t) {}));
+                return false;
+            }
+        } else {
+            if (dirtyRows != 0U) static_cast<void>(hotQuery.ForEachDirtyMutableRange<0>(nativeStorage,
+                kTransformBatchGrainSize, state.transformNativeDirtyRangesScratch, true,
+                [](const auto&, std::size_t) {}));
+            dirtyRows = 0U;
         }
-        dirtyRows = 0U;
     }
 
     ResetPropagationCursor(state);
@@ -1287,13 +1260,14 @@ void RunHierarchyDirtyFrontier(
         std::atomic_size_t inspectedCount{ 0U };
         std::atomic_size_t updatedCount{ 0U };
         std::atomic_size_t rootFastPathCount{ 0U };
+        std::array<std::atomic_size_t, 5U> parentFastPaths{};
         const kb::ecs::UnsafeHotDirtyRangeDispatchStats dispatchStats = hotQuery.ForEachDirtyMutableRangeParallel<0>(
             nativeStorage,
             kTransformBatchGrainSize,
             *state.transformWorkerPool,
             0U,
             true,
-            [&state, &inspectedCount, &updatedCount, &rootFastPathCount](
+            [&state, rootsOnly, &inspectedCount, &updatedCount, &rootFastPathCount, &parentFastPaths](
                 kb::ecs::UnsafeHotMutableChunk<TransformComponent>& chunk,
                 std::size_t dirtyCount,
                 kb::ecs::WorkerContext workerContext) {
@@ -1302,6 +1276,7 @@ void RunHierarchyDirtyFrontier(
                 inspectedCount.fetch_add(chunk.Count(), std::memory_order_relaxed);
                 std::size_t localUpdatedCount = 0U;
                 std::size_t localRootFastPathCount = 0U;
+                std::array<std::size_t, 5U> localParentFastPaths{};
                 TransformComponent* transforms = chunk.template Components<0>();
                 for (std::size_t row = 0U; row < chunk.Count(); ++row) {
                     localUpdatedCount += transforms[row].worldDirty ? 1U : 0U;
@@ -1311,12 +1286,20 @@ void RunHierarchyDirtyFrontier(
                 }
 
                 const std::size_t writeBegin = updatedCount.fetch_add(localUpdatedCount, std::memory_order_relaxed);
-                rootFastPathCount.fetch_add(localUpdatedCount, std::memory_order_relaxed);
                 std::size_t writeOffset = 0U;
+                SceneTransformLeafBatchUpdater leafUpdater{state};
                 for (std::size_t row = 0U; row < chunk.Count(); ++row) {
                     TransformComponent& transform = transforms[row];
                     if (transform.worldDirty) {
-                        if (SceneTransformRootHotKernel::CanApplyIdentityRotationFastPath(transform)) {
+                        if (!rootsOnly) {
+                            const auto entry = leafUpdater.Update(chunk.EntityAt(row), transform);
+                            localRootFastPathCount += entry.rootFastPath;
+                            localParentFastPaths[0] += entry.translatedParentFastPath;
+                            localParentFastPaths[1] += entry.unrotatedParentFastPath;
+                            localParentFastPaths[2] += entry.unitScaleParentFastPath;
+                            localParentFastPaths[3] += entry.uniformScaleParentFastPath;
+                            localParentFastPaths[4] += entry.staticLocalRotationFastPath;
+                        } else if (SceneTransformRootHotKernel::CanApplyIdentityRotationFastPath(transform)) {
                             SceneTransformRootHotKernel::ApplyIdentityRotationRoot(transform);
                             ++localRootFastPathCount;
                         } else {
@@ -1328,13 +1311,21 @@ void RunHierarchyDirtyFrontier(
                     }
                 }
                 rootFastPathCount.fetch_add(localRootFastPathCount, std::memory_order_relaxed);
+                for (std::size_t index = 0U; index < localParentFastPaths.size(); ++index)
+                    if (localParentFastPaths[index] != 0U) parentFastPaths[index].fetch_add(localParentFastPaths[index], std::memory_order_relaxed);
             });
         state.lastTransformHierarchyInspectedCount += inspectedCount.load(std::memory_order_relaxed);
         const std::size_t finalUpdatedCount = updatedCount.load(std::memory_order_relaxed);
         state.transformHierarchyUpdatedEntitiesScratch.resize(finalUpdatedCount);
         state.transformHierarchyUpdatedTransformsScratch.resize(finalUpdatedCount);
         state.lastTransformHierarchyUpdatedCount += finalUpdatedCount;
+        if (!rootsOnly) state.lastTransformHierarchyDirtyFrontierCount = finalUpdatedCount;
         state.lastTransformHierarchyRootFastPathCount += rootFastPathCount.load(std::memory_order_relaxed);
+        state.lastTransformHierarchyTranslatedParentFastPathCount += parentFastPaths[0].load(std::memory_order_relaxed);
+        state.lastTransformHierarchyUnrotatedParentFastPathCount += parentFastPaths[1].load(std::memory_order_relaxed);
+        state.lastTransformHierarchyUnitScaleParentFastPathCount += parentFastPaths[2].load(std::memory_order_relaxed);
+        state.lastTransformHierarchyUniformScaleParentFastPathCount += parentFastPaths[3].load(std::memory_order_relaxed);
+        state.lastTransformHierarchyStaticLocalRotationFastPathCount += parentFastPaths[4].load(std::memory_order_relaxed);
         ++state.lastTransformHierarchyParallelBatchCount;
         state.lastTransformHierarchyParallelChunkCount += dispatchStats.ranges;
         state.lastTransformHierarchyParallelEntityCount += dispatchStats.entities;
@@ -1379,12 +1370,18 @@ void RunHierarchyDirtyFrontier(
             state.transformHierarchyUpdatedEntitiesScratch.size(),
             state.transformHierarchyUpdatedTransformsScratch.size());
         for (std::size_t index = 0U; index < updatedTransformCount; ++index) {
-            SceneComponentAccess::Set(
+            const auto entity = state.transformHierarchyUpdatedEntitiesScratch[index];
+            const auto* current = static_cast<const TransformComponent*>(nativeStorage.TryGetComponentData(entity, state.components.TransformComponentId()));
+            if (current == nullptr) continue;
+            // An earlier OnSet may have edited or migrated this row. Publish
+            // the current canonical value, with no pointer held across callbacks.
+            const TransformComponent published = *current;
+            SceneComponentAccess::SetExisting(
                 state.world.NativeHandle(),
-                state.transformHierarchyUpdatedEntitiesScratch[index],
+                entity,
                 state.components.TransformComponentId(),
                 sizeof(TransformComponent),
-                &state.transformHierarchyUpdatedTransformsScratch[index]);
+                &published);
         }
     }
     state.lastTransformHierarchyBackendMarkNanoseconds = Nanoseconds(Clock::now() - backendMarkStart);
@@ -1409,16 +1406,16 @@ void SceneTransformHierarchySystem::Update(SceneState& state) const {
     const auto topologyStart = profileTimings != nullptr ? Clock::now() : Clock::time_point{};
     // Structural changes can remove queued handles and introduce transforms
     // outside the dirty frontier. Rebuild from the live hierarchy in that case.
-    const bool topologyChanged = state.transformTopologicalBatchesVersion != state.hierarchyTopologyVersion;
+    const bool topologyChanged = state.transformTopology.Version() != state.hierarchyTopologyVersion;
     if (topologyChanged) {
         ClearSceneTransformDirtyFrontier(state);
     }
-    BuildTopologicalBatches(state);
+    state.transformTopology.Refresh(state);
     if (profileTimings != nullptr) {
         profileTimings->topologyNanoseconds = Nanoseconds(Clock::now() - topologyStart);
     }
     if (state.transformPropagationCursorVersion != state.hierarchyTopologyVersion ||
-        state.transformPropagationCursorLevel >= state.transformTopologicalBatches.size()) {
+        state.transformPropagationCursorLevel >= state.transformTopology.Levels().size()) {
         ResetPropagationCursor(state);
     }
 
@@ -1502,6 +1499,7 @@ void SceneTransformHierarchySystem::Update(SceneState& state) const {
             state.lastTransformHierarchyParallelFlushWorkerCount = flushStats.parallelFlushWorkerCount;
             CacheRenderProxyUpdatesAfterTransforms(state, transformValues, updatedEntities);
             ClearSceneTransformDirtyFrontier(state);
+            PrintRootSyncProfile(state, profileTimings, updatedEntities.size(), updateStart);
             return;
         }
         entries.clear();
@@ -1537,13 +1535,14 @@ void SceneTransformHierarchySystem::Update(SceneState& state) const {
         state.lastTransformHierarchyParallelFlushWorkerCount = flushStats.parallelFlushWorkerCount;
         CacheRenderProxyUpdatesAfterTransforms(state, transformValues, updatedEntities);
         ClearSceneTransformDirtyFrontier(state);
+        PrintRootSyncProfile(state, profileTimings, updatedEntities.size(), updateStart);
         return;
     }
 
     std::size_t remainingBudget = budgetLimit;
     bool completed = true;
-    for (std::size_t levelIndex = state.transformPropagationCursorLevel; levelIndex < state.transformTopologicalBatches.size(); ++levelIndex) {
-        const std::vector<SceneEntity>& level = state.transformTopologicalBatches[levelIndex];
+    for (std::size_t levelIndex = state.transformPropagationCursorLevel; levelIndex < state.transformTopology.Levels().size(); ++levelIndex) {
+        const std::vector<SceneEntity>& level = state.transformTopology.Levels()[levelIndex];
         const std::size_t levelBegin = levelIndex == state.transformPropagationCursorLevel ? state.transformPropagationCursorOffset : 0U;
         if (levelBegin >= level.size()) {
             continue;
@@ -1620,6 +1619,7 @@ void SceneTransformHierarchySystem::Update(SceneState& state) const {
     state.lastTransformHierarchyParallelFlushWorkerCount = flushStats.parallelFlushWorkerCount;
     CacheRenderProxyUpdatesAfterTransforms(state, transformValues, updatedEntities);
     ClearSceneTransformDirtyFrontier(state);
+    PrintRootSyncProfile(state, profileTimings, updatedEntities.size(), updateStart);
 }
 
 } // namespace kb::scene

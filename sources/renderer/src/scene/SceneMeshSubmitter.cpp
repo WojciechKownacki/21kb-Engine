@@ -90,6 +90,8 @@ void SceneMeshSubmitter::Shutdown() {
     gpuDrivenCullingPass_.Shutdown();
     passResources_.Shutdown();
     for (auto& commands : passCommandScratch_) commands.clear();
+    for (auto& reuse : passCommandReuse_) reuse.Reset();
+    for (auto& reuse : passBatchCommandReuse_) reuse.Reset();
     pipelineScratch_.detailSwitchLevels.clear();
     pipelineScratch_.detailSwitchPreviousLevels.clear();
     detailSwitchScene_ = nullptr;
@@ -212,14 +214,48 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
         });
     }
     SceneRenderSubmitStats lightingStats{};
-    const PackedSceneLighting lighting = SceneLightingPacker::Build(renderScene, lightingStats, lightingConfig, camera);
+    PackedSceneLighting lighting = SceneLightingPacker::Build(renderScene, lightingStats, lightingConfig, camera);
+    if ((pass == MeshPassType::BaseOpaque || pass == MeshPassType::BaseTransparent) &&
+        lightingConfig.lightingPath != SceneRenderLightingPath::Forward &&
+        lightingConfig.maxForwardLights != 0U && lightingStats.skippedForwardLightCount != 0U) {
+        lighting.lightGrid = passResources_.LightGrid().Prepare(renderScene, lightingConfig,
+            camera != nullptr ? camera->cullingMask : 0xFFFFFFFFU, lighting.primaryLightId, lightingStats, diagnostics);
+    }
+    if (shadowMap != nullptr) {
+        SceneLightingPacker::AssignPointShadowSlots(lighting, shadowMap->point);
+    }
     const std::array<float, 4> cameraPosition = SceneLightingPacker::CameraPosition(camera);
     if (detailSwitchScene_ != &renderScene) {
         pipelineScratch_.detailSwitchLevels.clear();
         pipelineScratch_.detailSwitchPreviousLevels.clear();
+        ++pipelineScratch_.detailSwitchHistoryRevision;
         detailSwitchScene_ = &renderScene;
     }
-    MeshPipelineProcessor::BuildInto(MeshPipelineBuildDesc{
+    auto& reuse = passCommandReuse_.at(static_cast<std::size_t>(pass));
+    auto& batchReuse = passBatchCommandReuse_.at(static_cast<std::size_t>(pass));
+    const bool reuseAllowed = pass != MeshPassType::BaseTransparent && selectedEntityIds.empty() &&
+        renderScene.VisibilityBlockerProxyCount() == 0U &&
+        (particleSnapshot == nullptr || particleSnapshot->Emitters().empty());
+    const SceneMeshCommandReuseKey reuseKey{
+        .sceneRevision = renderScene.MeshContentRevision(),
+        .resourceRevision = resources.Revision(),
+        .bindingRevision = resourceMap.Revision(),
+        .detailSwitchHistoryRevision = pipelineScratch_.detailSwitchHistoryRevision,
+        .resources = &resources, .bindings = &resourceMap,
+        .camera = SceneMeshCullingCamera(camera),
+        .budget = drawBudget, .gpuSupport = gpuDrivenSupport, .terrainLayersOnly = terrainLayersOnly,
+    };
+    const auto diagnosticCount = diagnostics == nullptr ? 0U : diagnostics->events.size();
+    if (reuseAllowed && reuse.Matches(reuseKey)) {
+        pipelineScratch_.stats = reuse.Stats();
+    } else {
+        reuse.Reset();
+        const bool retainBatches = reuseAllowed && batchReuse.HasStableCamera(reuseKey);
+        if (reuseAllowed) {
+            batchReuse.Prepare(reuseKey);
+            if (!retainBatches) batchReuse.DiscardContent();
+        } else batchReuse.Reset();
+        MeshPipelineProcessor::BuildInto(MeshPipelineBuildDesc{
         .pass = pass,
         .meshBatches = &meshBatchSubmissionScratch_,
         .resources = &resources,
@@ -233,7 +269,14 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
         .selectedEntityIds = selectedEntityIds,
         .gpuDrivenSupport = gpuDrivenSupport,
         .terrainLayersOnly = terrainLayersOnly,
-    }, pipelineScratch_);
+        .batchCommandCache = retainBatches ? &batchReuse : nullptr,
+        }, pipelineScratch_);
+        if (reuseAllowed && (diagnostics == nullptr || diagnosticCount == diagnostics->events.size())) {
+            auto committedKey = reuseKey;
+            committedKey.detailSwitchHistoryRevision = pipelineScratch_.detailSwitchHistoryRevision;
+            reuse.Commit(committedKey, pipelineScratch_.commands, pipelineScratch_.stats);
+        }
+    }
     stats = pipelineScratch_.stats;
     stats.sceneLightCount = lightingStats.sceneLightCount;
     stats.submittedForwardLightCount = lightingStats.submittedForwardLightCount;

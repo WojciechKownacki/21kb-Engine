@@ -1,6 +1,7 @@
 #include "scene/lighting/SceneLightingPacker.hpp"
 
 #include "scene/lighting/SceneForwardLightSelector.hpp"
+#include "scene/lighting/SceneLightShaderData.hpp"
 
 #include "engine/math/EngineMath.hpp"
 
@@ -12,148 +13,31 @@
 namespace kb::render {
 namespace {
 
-struct Basis {
-    float xx = 1.0F;
-    float xy = 0.0F;
-    float xz = 0.0F;
-    float zx = 0.0F;
-    float zy = 0.0F;
-    float zz = 1.0F;
-};
-
-// LIB-044: delegates to the single canonical kb::math::ToRadians instead
-// of an independently-rederived degrees-to-radians constant.
-[[nodiscard]] float DegreesToRadians(float degrees) noexcept {
-    return kb::math::ToRadians(kb::math::Degrees{ degrees }).Value();
-}
-
-[[nodiscard]] Basis BasisFromQuat(const std::array<float, 4>& q) noexcept {
-    const float x = q[0];
-    const float y = q[1];
-    const float z = q[2];
-    const float w = q[3];
-    const float x2 = x + x;
-    const float y2 = y + y;
-    const float z2 = z + z;
-    const float xz = x * z2;
-    const float xy = x * y2;
-    const float yy = y * y2;
-    const float zz = z * z2;
-    const float yz = y * z2;
-    const float wx = w * x2;
-    const float wy = w * y2;
-    const float wz = w * z2;
-    const float xx = x * x2;
-
-    return Basis{
-        .xx = 1.0F - (yy + zz),
-        .xy = xy + wz,
-        .xz = xz - wy,
-        .zx = xz + wy,
-        .zy = yz - wx,
-        .zz = 1.0F - (xx + yy),
-    };
-}
-
-void Normalize(float& x, float& y, float& z) noexcept {
-    const float length = std::sqrt(x * x + y * y + z * z);
-    if (length <= 0.0001F) {
-        x = 0.0F;
-        y = 0.0F;
-        z = 1.0F;
-        return;
-    }
-
-    x /= length;
-    y /= length;
-    z /= length;
-}
-
-[[nodiscard]] float LightKindValue(RenderLightKind kind) noexcept {
-    switch (kind) {
-    case RenderLightKind::Directional:
-        return 0.0F;
-    case RenderLightKind::Point:
-        return 1.0F;
-    case RenderLightKind::Spot:
-        return 2.0F;
-    case RenderLightKind::AreaRect:
-        return 3.0F;
-    case RenderLightKind::AreaDisk:
-        return 4.0F;
-    case RenderLightKind::Tube:
-        return 5.0F;
-    }
-    return 1.0F;
+bool CopyLight(const ScenePackedLight& packed, std::uint32_t slot, PackedSceneLighting& lighting) noexcept {
+    if (slot >= kMaxSceneForwardPlusLights) return false;
+    const std::array<float*, 5> destinations{lighting.dirKind.data(), lighting.positionRange.data(),
+        lighting.colorIntensity.data(), lighting.spot.data(), lighting.areaRight.data()};
+    for (std::size_t index = 0U; index < destinations.size(); ++index)
+        std::copy(packed.texels[index].begin(), packed.texels[index].end(), destinations[index] + slot * 4U);
+    return true;
 }
 
 bool PackLight(const LightRenderProxyDesc& light, std::uint32_t slot, PackedSceneLighting& lighting) noexcept {
-    if (slot >= kMaxSceneForwardPlusLights) {
-        return false;
-    }
-
-    const std::uint32_t offset = slot * 4U;
-    Basis basis = BasisFromQuat(light.rotation);
-    Normalize(basis.zx, basis.zy, basis.zz);
-
-    lighting.dirKind[offset + 0U] = basis.zx;
-    lighting.dirKind[offset + 1U] = basis.zy;
-    lighting.dirKind[offset + 2U] = basis.zz;
-    lighting.dirKind[offset + 3U] = LightKindValue(light.kind);
-    lighting.positionRange[offset + 0U] = light.position[0];
-    lighting.positionRange[offset + 1U] = light.position[1];
-    lighting.positionRange[offset + 2U] = light.position[2];
-    lighting.positionRange[offset + 3U] = std::max(light.range, 0.0F);
-    lighting.colorIntensity[offset + 0U] = std::max(light.color[0], 0.0F);
-    lighting.colorIntensity[offset + 1U] = std::max(light.color[1], 0.0F);
-    lighting.colorIntensity[offset + 2U] = std::max(light.color[2], 0.0F);
-    lighting.colorIntensity[offset + 3U] = light.intensity;
-
-    const float innerCos = std::cos(DegreesToRadians(light.innerConeDegrees));
-    const float outerCos = std::cos(DegreesToRadians(light.outerConeDegrees));
-    lighting.spot[offset + 0U] = std::max(innerCos, outerCos);
-    lighting.spot[offset + 1U] = std::min(innerCos, outerCos);
-    lighting.spot[offset + 2U] = std::max(light.areaWidth, 0.0F);
-    lighting.spot[offset + 3U] = std::max(light.areaHeight, 0.0F);
-    lighting.areaRight[offset + 0U] = basis.xx;
-    lighting.areaRight[offset + 1U] = basis.xy;
-    lighting.areaRight[offset + 2U] = basis.xz;
-    return true;
+    return CopyLight(SceneLightShaderData::Pack(light), slot, lighting);
 }
 
 bool PackEditorPreviewKeyLight(SceneRenderLightingConfig config, std::uint32_t slot, PackedSceneLighting& lighting) noexcept {
-    if (!config.editorPreviewKeyLightEnabled || config.editorPreviewKeyLightIntensity <= 0.0F || slot >= kMaxSceneForwardPlusLights) {
-        return false;
-    }
-
-    float x = config.editorPreviewKeyLightDirection[0];
-    float y = config.editorPreviewKeyLightDirection[1];
-    float z = config.editorPreviewKeyLightDirection[2];
-    Normalize(x, y, z);
-
-    const std::uint32_t offset = slot * 4U;
-    lighting.dirKind[offset + 0U] = x;
-    lighting.dirKind[offset + 1U] = y;
-    lighting.dirKind[offset + 2U] = z;
-    lighting.dirKind[offset + 3U] = LightKindValue(RenderLightKind::Directional);
-    lighting.positionRange[offset + 0U] = 0.0F;
-    lighting.positionRange[offset + 1U] = 0.0F;
-    lighting.positionRange[offset + 2U] = 0.0F;
-    lighting.positionRange[offset + 3U] = 0.0F;
-    lighting.colorIntensity[offset + 0U] = std::max(config.editorPreviewKeyLightColor[0], 0.0F);
-    lighting.colorIntensity[offset + 1U] = std::max(config.editorPreviewKeyLightColor[1], 0.0F);
-    lighting.colorIntensity[offset + 2U] = std::max(config.editorPreviewKeyLightColor[2], 0.0F);
-    lighting.colorIntensity[offset + 3U] = std::max(config.editorPreviewKeyLightIntensity, 0.0F);
-    return true;
+    const auto preview = SceneLightShaderData::EditorPreview(config);
+    return preview && CopyLight(*preview, slot, lighting);
 }
 
 [[nodiscard]] std::uint32_t ClampedForwardLightBudget(SceneRenderLightingConfig config) noexcept {
     if (config.maxForwardLights == 0U) {
         return 0U;
     }
-    const std::uint32_t maxSupported = config.lightingPath == SceneRenderLightingPath::ClusteredForwardPlus
-        ? kMaxSceneForwardPlusLights
-        : kMaxSceneForwardLights;
+    const std::uint32_t maxSupported = config.lightingPath == SceneRenderLightingPath::Forward
+        ? kMaxSceneForwardLights
+        : kMaxSceneForwardPlusLights;
     return std::min<std::uint32_t>(config.maxForwardLights, maxSupported);
 }
 
@@ -185,19 +69,11 @@ bool PackEditorPreviewKeyLight(SceneRenderLightingConfig config, std::uint32_t s
     return 1U;
 }
 
-[[nodiscard]] std::uint32_t ClusterCount(SceneRenderLightingConfig config) noexcept {
-    if (config.lightingPath != SceneRenderLightingPath::ClusteredForwardPlus) {
-        return 0U;
-    }
-    return static_cast<std::uint32_t>(config.clusterDimensions[0]) *
-        static_cast<std::uint32_t>(config.clusterDimensions[1]) *
-        static_cast<std::uint32_t>(config.clusterDimensions[2]);
-}
-
 void FillIblStats(SceneRenderSubmitStats& stats, SceneRenderLightingConfig config) noexcept {
     stats.lightingPath = static_cast<std::uint32_t>(config.lightingPath) + 1U;
     stats.lightingPathProduction = IsSceneRenderLightingPathProduction(config.lightingPath);
-    stats.lightClusterCount = ClusterCount(config);
+    // Actual grid statistics are published by its GPU resource owner after upload.
+    stats.lightClusterCount = 0U;
     stats.globalIlluminationMode = static_cast<std::uint32_t>(config.globalIllumination) + 1U;
     const std::uint32_t probeCount = std::min<std::uint32_t>(config.ibl.reflectionProbeCount, kMaxSceneReflectionProbes);
     stats.reflectionProbeCount = probeCount;
@@ -228,6 +104,20 @@ std::array<float, 4> SceneLightingPacker::CameraPosition(const SceneRenderCamera
         -(view[8] * tx + view[9] * ty + view[10] * tz),
         1.0F,
     };
+}
+
+void SceneLightingPacker::AssignPointShadowSlots(PackedSceneLighting& lighting, const ScenePointShadowBinding& binding) noexcept {
+    lighting.pointShadowSlot.fill(-1.0F);
+    const std::uint32_t packedCount = std::min<std::uint32_t>(
+        static_cast<std::uint32_t>(lighting.params[0]), kMaxSceneForwardPlusLights);
+    for (std::uint32_t shadow = 0U; shadow < binding.lightCount; ++shadow) {
+        for (std::uint32_t slot = 0U; slot < packedCount; ++slot) {
+            if (lighting.slotEntityId[slot] == binding.entityId[shadow]) {
+                lighting.pointShadowSlot[shadow] = static_cast<float>(slot);
+                break;
+            }
+        }
+    }
 }
 
 PackedSceneLighting SceneLightingPacker::Build(
@@ -272,9 +162,11 @@ PackedSceneLighting SceneLightingPacker::Build(
     const std::array<float, 4> cameraPosition = CameraPosition(camera);
     const std::uint32_t cameraCullingMask = camera != nullptr ? camera->cullingMask : 0xFFFFFFFFU;
     const SceneForwardLightSelection selection = SceneForwardLightSelector::Select(renderScene.LightProxies(), capacity, cameraPosition, stats, config, cameraCullingMask);
+    if (selection.selectedCount != 0U) lighting.primaryLightId = selection.selected[0].entityId;
     std::uint32_t submittedSceneLightCount = 0U;
     for (std::uint32_t slot = 0U; slot < selection.selectedCount; ++slot) {
         if (selection.selected[slot].light != nullptr && PackLight(*selection.selected[slot].light, slot, lighting)) {
+            lighting.slotEntityId[slot] = selection.selected[slot].entityId;
             ++stats.submittedForwardLightCount;
             ++submittedSceneLightCount;
         }
