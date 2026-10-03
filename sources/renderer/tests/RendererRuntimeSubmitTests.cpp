@@ -6586,6 +6586,111 @@ struct ShadowFloorScene {
     return brightness;
 }
 
+// A thin plate high above the floor casts a stripe of shadow that runs away from the camera across
+// several cascades. The stripe is thin enough that its darkness depends on the shadow map resolution,
+// so a cascade switch shows as a step in the stripe's contrast between neighbouring image rows. The
+// largest such step measures the seam.
+[[nodiscard]] double RenderCascadeSeamJump(float cascadeBlend) {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() /
+        ("21kb_cascade_seam_" + std::to_string(GetCurrentProcessId()));
+    std::error_code error;
+    std::filesystem::create_directories(root, error);
+    Require(!error, "Cascade seam test could not create its asset directory");
+    WriteStressCubeObj(root / "cube.obj");
+
+    kb::scene::Scene scene;
+    kb::scene::SceneLightingAccess::SetBasicLightingEnabled(scene, true);
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    Require(manager.RegisterLoader(std::make_unique<RenderMeshAssetLoader>()) &&
+            manager.RegisterLoader(std::make_unique<RenderMaterialAssetLoader>()) &&
+            manager.RegisterLoader(std::make_unique<RenderTextureAssetLoader>()),
+        "Cascade seam test could not register render asset loaders");
+    Require(manager.Mounts().Mount("Game", root) && manager.DiscoverMountedAssets() >= 1U,
+        "Cascade seam test could not discover its mesh");
+    const kb::assets::AssetMetadata* mesh = manager.Registry().FindByPath("/Game/cube.obj");
+    Require(mesh != nullptr, "Cascade seam test lost its cube mesh");
+    const auto addBox = [&](kb::scene::Vec3 position, kb::scene::Vec3 scale) {
+        const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+            .name = "Box",
+            .transform = kb::scene::TransformComponent{ .localPosition = position, .localScale = scale },
+        });
+        scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{
+            .meshAssetId = mesh->id.value, .castsShadow = true });
+    };
+    addBox({ 0.0F, -0.5F, 20.0F }, { 60.0F, 1.0F, 90.0F });  // floor, top face at y = 0
+    addBox({ 0.0F, 10.0F, 25.0F }, { 0.15F, 0.2F, 70.0F });   // long plate above the camera, along the view direction
+    kb::scene::TransformComponent lightTransform = TransformAt(0.0F, 20.0F, 0.0F);
+    // A turn of 50 degrees about X tilts the light's forward axis down and away from the camera.
+    lightTransform.localRotation = kb::scene::Quat{ 0.42261826F, 0.0F, 0.0F, 0.90630779F };
+    const kb::scene::SceneEntity light = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "Sun", .transform = lightTransform });
+    scene.Components().Lights().Set(light, kb::scene::LightComponent{
+        .kind = kb::scene::LightKind::Directional, .intensity = 1.0F, .range = 30.0F, .castsShadow = true });
+
+    NativeTestSurface surface;
+    Require(surface.IsValid(), "Cascade seam test could not create a hidden D3D11 surface");
+    DisplayConfig config{};
+    config.syncMode = DisplaySyncMode::Uncapped;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "Cascade seam test could not initialize the renderer");
+    renderer.SetRuntimeAssetDiscoveryEnabled(false);
+
+    SceneRenderCamera camera{};
+    bx::mtxLookAt(camera.view.data(), bx::Vec3{ 0.0F, 4.0F, -4.0F }, bx::Vec3{ 0.0F, 0.0F, 20.0F });
+    SceneDepthPolicy::MakePerspective(camera.projection.data(), 40.0F, 1.0F, 0.1F, 200.0F, SceneDepthPolicy::HomogeneousDepth());
+
+    double maxJump = 0.0;
+    {
+        constexpr std::uint16_t kSize = 256U;
+        ParticleMeshReadbackTarget target;
+        Require(target.Initialize(kSize, kSize), "Cascade seam test could not create its readback target");
+        SceneRenderLightingConfig lighting{};
+        lighting.shadowCascadeBlend = cascadeBlend;
+        const RenderSceneSubmitDesc desc{
+            .target = target.Binding(),
+            .cameraOverride = camera,
+            .lightingConfig = lighting,
+            .meshPassMode = SceneRenderMeshPassMode::OpaqueOnly,
+            .clearRgba = 0x000000FFU,
+            .editorSceneOverlaysEnabled = false,
+            .shadowPassEnabled = true,
+            .postProcessEnabled = false,
+            .selectionMaskEnabled = false,
+            .selectionOutlineEnabled = false,
+        };
+        SubmitLifecycleFrame(renderer, scene, desc, "Cascade seam test did not submit its first frame");
+        SubmitLifecycleFrame(renderer, scene, desc, "Cascade seam test did not submit its second frame");
+        const std::vector<std::uint8_t> pixels = target.ReadPixels();
+        // Contrast of the stripe against a lit floor pixel of the same row: the floor gradient cancels out.
+        const auto brightness = [&](std::size_t row, std::size_t x) {
+            const std::size_t offset = (row * kSize + x) * 4U;
+            return static_cast<double>(pixels[offset] + pixels[offset + 1U] + pixels[offset + 2U]);
+        };
+        std::vector<double> contrast;
+        for (std::size_t row = 100U; row < kSize; ++row) {
+            double darkest = brightness(row, 96U);
+            for (std::size_t x = 96U; x < 160U; ++x) darkest = std::min(darkest, brightness(row, x));
+            const double lit = brightness(row, 40U);
+            contrast.push_back((lit - darkest) / std::max(lit, 1.0));
+        }
+        for (std::size_t i = 1U; i < contrast.size(); ++i) {
+            maxJump = std::max(maxJump, std::abs(contrast[i] - contrast[i - 1U]));
+        }
+    }
+    renderer.Shutdown();
+    std::filesystem::remove_all(root, error);
+    return maxJump;
+}
+
+void RunRendererBlendsShadowCascadesTest() {
+    const double hard = RenderCascadeSeamJump(0.0F);
+    const double blended = RenderCascadeSeamJump(0.1F);
+    std::fprintf(stderr, "cascade_seam_jump hard=%.3f blended=%.3f%c", hard, blended, 10);
+    Require(hard > 0.08, "Cascade blend test: the hard switch must show a visible seam for the comparison to mean anything");
+    Require(blended * 2.0 < hard, "Cascade blend test: blending must clearly reduce the step at the cascade boundary");
+}
+
 void RunRendererRendersDirectionalCascadeShadowTest() {
     // The occluder is 40 m from the camera: outside the two nearest cascades, inside the widest one.
     ShadowFloorScene farScene{ .point = false, .cameraPosition = bx::Vec3{ 0.0F, 2.0F, -40.0F }, .fovDegrees = 8.0F };
@@ -6909,6 +7014,7 @@ void RunRendererParticleMeshSnapshotSubmitTest() {
     RunRendererRendersPointLightShadowTest();
     RunRendererRendersSpotLightShadowTest();
     RunRendererRendersDirectionalCascadeShadowTest();
+    RunRendererBlendsShadowCascadesTest();
     RunRendererRendersScreenSpaceGiBounceTest();
     RunRendererSmoothsScreenSpaceGiOverTimeTest();
     RunRendererDrawsGpuSimulatedParticlesTest();

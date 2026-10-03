@@ -3,6 +3,9 @@
 
 #define KB_LIGHT_GRID_GRAPH 1
 #include "light_grid.sh"
+// The point-shadow atlas takes a free builtin stage (see PointShadowUniforms::kGraphSamplerStage).
+#define KB_POINT_SHADOW_GRAPH 1
+#include "point_shadow.sh"
 
 uniform vec4 u_cameraPosition;
 uniform vec4 u_lightDirKind[32];
@@ -143,7 +146,8 @@ vec3 KbEvaluateForwardLighting(vec3 worldNormal, vec3 worldPos, vec3 albedo, flo
     for (int entry = 0; entry < int(lightList.y); ++entry) {
         {
             int lightIndex = KbLightGridIndex(lightList, entry);
-            lighting += KbEvaluateSceneLight(lightIndex, worldNormal, viewDir, worldPos, albedo, metallic, roughness, specular, occlusion);
+            lighting += KbEvaluateSceneLight(lightIndex, worldNormal, viewDir, worldPos, albedo, metallic, roughness, specular, occlusion) *
+                KbPointShadowFactor(lightIndex, worldPos);
         }
     }
     return lighting;

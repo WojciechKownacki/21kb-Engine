@@ -9,11 +9,13 @@
 #include "kb/render/resources/RenderMeshAssetBuilder.hpp"
 #include "kb/render/resources/RenderResourceRegistry.hpp"
 #include "kb/render/scene/RenderInstanceBuffer.hpp"
+#include "kb/render/shadow/PointShadowUniforms.hpp"
 
 #include <bgfx/bgfx.h>
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstring>
 #include <cstdint>
 #include <cstdio>
@@ -445,6 +447,22 @@ public:
             lightColorIntensity[2] = 1.0F;
             lightColorIntensity[3] = 9.0F;
         }
+        if (pointShadowBinding_ != nullptr) {
+            lightParams = { 1.0F, 0.0F, 0.0F, 0.0F };
+            ambient = { 0.0F, 0.0F, 0.0F, 1.0F };
+            environmentZenith = { 0.0F, 0.0F, 0.0F, 1.0F };
+            environmentGround = { 0.0F, 0.0F, 0.0F, 1.0F };
+            envParams = { 0.0F, 0.0F, 0.0F, 0.0F };
+            lightDirKind[3] = 1.0F; // point light 3 m above the quad, at the origin of its plane
+            lightPositionRange[0] = pointShadowBinding_->positionRange[0];
+            lightPositionRange[1] = pointShadowBinding_->positionRange[1];
+            lightPositionRange[2] = pointShadowBinding_->positionRange[2];
+            lightPositionRange[3] = pointShadowBinding_->positionRange[3];
+            lightColorIntensity[0] = 1.0F;
+            lightColorIntensity[1] = 1.0F;
+            lightColorIntensity[2] = 1.0F;
+            lightColorIntensity[3] = 12.0F;
+        }
         // u_time.x = time (MAT-72); .y = per-instance random, .z = object radius (MAT-77 proof lanes).
         const std::array<float, 4U> timeConstants{ time, instanceRandom, objectRadius, 0.0F };
         const std::array<float, 4U> dynamicParameter{ dynamicR, dynamicG, dynamicB, dynamicA };
@@ -465,6 +483,10 @@ public:
         bgfx::setUniform(uTime_, timeConstants.data());
         bgfx::setUniform(uDynamicParameter_, dynamicParameter.data());
         bgfx::setUniform(uMaterialParams_, materialParams.data());
+        if (pointShadowBinding_ != nullptr) {
+            const std::array<float, ScenePointShadowBinding::kMaxLights> lightSlots{ 0.0F, -1.0F, -1.0F, -1.0F };
+            pointShadowUniforms_.Set(pointShadowBinding_, lightSlots, pointShadowAtlas_, PointShadowUniforms::kGraphSamplerStage);
+        }
         if (bgfx::isValid(graphUniform) && graphUniformValue != nullptr) {
             bgfx::setUniform(graphUniform, graphUniformValue->data());
         }
@@ -661,7 +683,18 @@ public:
         return ProbeAt(RenderPixels(program, sampler, texture, time), 32U, 32U);
     }
 
+    // Lights the next renders with one point light above the quad whose shadow atlas is `atlas`;
+    // pass a null binding to go back to the default lighting.
+    void SetPointShadow(const ScenePointShadowBinding* binding, bgfx::TextureHandle atlas) {
+        if (!pointShadowUniforms_.IsValid()) {
+            pointShadowUniforms_.Create();
+        }
+        pointShadowBinding_ = binding;
+        pointShadowAtlas_ = atlas;
+    }
+
     void Shutdown() {
+        pointShadowUniforms_.Destroy();
         bgfx::destroy(uSceneDepth_);
         bgfx::destroy(uSceneColor_);
         bgfx::destroy(uMaterialParams_);
@@ -711,6 +744,9 @@ private:
     bgfx::UniformHandle uMaterialParams_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle uSceneColor_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle uSceneDepth_ = BGFX_INVALID_HANDLE;
+    PointShadowUniforms pointShadowUniforms_{};
+    const ScenePointShadowBinding* pointShadowBinding_ = nullptr;
+    bgfx::TextureHandle pointShadowAtlas_ = BGFX_INVALID_HANDLE;
 };
 
 void RunTerrainLayerWeightTextureUpdatesGpuTest() {
@@ -1669,6 +1705,72 @@ void RunForwardGraphRenderTest() {
     Require(static_cast<std::uint32_t>(dielectric.r) + dielectric.g + dielectric.b > static_cast<std::uint32_t>(metal.r) + metal.g + metal.b + 30U,
         "KBMAT-MAT08: A metallic surface must change the BRDF and render darker than the dielectric surface");
 
+    harness.Shutdown();
+}
+
+// A graph material must darken under a point-light shadow like the builtin material does. The shadow
+// atlas is filled by hand: stored depth 0 is the (reverse-z) far plane, so nothing occludes; stored
+// depth 1 is the near plane, so everything between it and the light is occluded.
+void RunForwardGraphPointShadowTest() {
+    const std::filesystem::path cacheDir = std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "a3_point_shadow";
+    std::error_code error;
+    std::filesystem::remove_all(cacheDir, error);
+    std::filesystem::create_directories(cacheDir, error);
+    const std::filesystem::path vsBin = cacheDir / "vs_graph_probe.bin";
+    Require(CookHarnessVertexShader(vsBin), "A3: harness vertex shader must cook");
+    const std::vector<std::uint8_t> vsBytes = ReadAllBytes(vsBin);
+
+    RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+    RenderMaterialGraphNode white{ .id = 2U, .kind = RenderMaterialGraphNodeKind::ConstantColor, .positionX = 40, .positionY = 40 };
+    white.parameter.defaultValueHint = "0.9 0.9 0.9 1";
+    graph.nodes.push_back(white);
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantColor, 2U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+    const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(graph, RenderMaterialGraphBuildContext{ .assetId = 0x0A30U });
+    Require(compiled.Succeeded(), "A3: point shadow graph must compile");
+    const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Dxbc };
+    const RenderMaterialGraphShaderArtifactResult cooked = CookRenderMaterialGraphShaderArtifact(compiled.shader, backends, CookRequest(cacheDir.generic_string()));
+    Require(cooked.Succeeded() && cooked.artifact.has_value(), "A3: point shadow graph must cook");
+
+    ForwardRenderHarness harness;
+    Require(harness.Init(), "A3: a Direct3D11 device is required to prove graph point shadows");
+    const bgfx::ProgramHandle program = BuildGraphProgram(vsBytes, *cooked.artifact);
+    Require(bgfx::isValid(program), "A3: point shadow graph program must link");
+
+    constexpr std::uint32_t kTile = 8U;
+    constexpr std::uint32_t kAtlasWidth = kTile * ScenePointShadowBinding::kFaceCount;
+    constexpr std::uint32_t kAtlasHeight = kTile * ScenePointShadowBinding::kMaxLights;
+    const auto makeAtlas = [&](float storedDepth) {
+        const std::vector<float> texels(static_cast<std::size_t>(kAtlasWidth) * kAtlasHeight, storedDepth);
+        return bgfx::createTexture2D(static_cast<std::uint16_t>(kAtlasWidth), static_cast<std::uint16_t>(kAtlasHeight), false, 1U,
+            bgfx::TextureFormat::R32F, BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT | BGFX_SAMPLER_MIP_POINT,
+            bgfx::copy(texels.data(), static_cast<std::uint32_t>(texels.size() * sizeof(float))));
+    };
+    const bgfx::TextureHandle openAtlas = makeAtlas(0.0F);
+    const bgfx::TextureHandle blockedAtlas = makeAtlas(1.0F);
+    Require(bgfx::isValid(openAtlas) && bgfx::isValid(blockedAtlas), "A3: shadow atlas textures must be created");
+
+    ScenePointShadowBinding binding{};
+    binding.lightCount = 1U;
+    binding.entityId[0] = 1U;
+    binding.positionRange = { 0.0F, 0.0F, 3.0F, 20.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F };
+    binding.depthParams = { 0.1F, 0.01F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F };
+    binding.atlas = { 1.0F / kAtlasWidth, 1.0F / kAtlasHeight, static_cast<float>(kTile), std::tan(47.5F * 3.14159265F / 180.0F) };
+    binding.strength = 1.0F;
+
+    binding.depthTexture = openAtlas;
+    harness.SetPointShadow(&binding, openAtlas);
+    const ForwardRenderProbe lit = harness.Render(program, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE);
+    binding.depthTexture = blockedAtlas;
+    harness.SetPointShadow(&binding, blockedAtlas);
+    const ForwardRenderProbe shadowed = harness.Render(program, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE);
+    harness.SetPointShadow(nullptr, BGFX_INVALID_HANDLE);
+    std::fprintf(stderr, "graph_point_shadow lit=%u,%u,%u shadowed=%u,%u,%u\n", lit.r, lit.g, lit.b, shadowed.r, shadowed.g, shadowed.b);
+    Require(lit.r > 40U, "A3: the graph material must be lit by the point light when nothing occludes it");
+    Require(static_cast<std::uint32_t>(shadowed.r) * 4U < lit.r, "A3: an occluded point light must darken the graph material");
+
+    bgfx::destroy(blockedAtlas);
+    bgfx::destroy(openAtlas);
+    bgfx::destroy(program);
     harness.Shutdown();
 }
 
@@ -4943,6 +5045,7 @@ void RunGraphForwardGpuRenderTests() {
     RunDeferredGBufferTextureNormalMapReadbackProofTest();
     RunForwardGraphRenderTest();
     RunForwardGraphNormalMapLightingTest();
+    RunForwardGraphPointShadowTest();
     RunForwardGraphAcceptanceSuiteTest();
     RunForwardGraphOrganizationNodesRenderTest();
     RunForwardGraphTimeAnimationTest();

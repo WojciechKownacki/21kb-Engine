@@ -311,6 +311,8 @@ struct SceneRenderLightingConfig {
     float shadowDepthBias = 0.002F;
     float shadowStrength = 0.65F;
     SceneRenderShadowFilter shadowFilter = SceneRenderShadowFilter::Pcf3x3;
+    // Width of the fade between neighbouring cascades, as a fraction of the finer cascade (0 = hard switch).
+    float shadowCascadeBlend = 0.1F;
     bool shadowsEnabled = true;
     bool stableShadowCascades = true;
     bool perLightShadowCaching = true;
@@ -350,7 +352,7 @@ struct SceneRenderShadowMapBinding {
     std::uint32_t cascadeCount = 1U;
     std::array<float, 16U * kMaxCascades> cascadeViewProjection{};
     std::array<float, 4U * kMaxCascades> cascadeAtlas{ 0.0F, 0.0F, 1.0F, 0.0F };
-    std::array<float, 4> cascadeInfo{ 1.0F, 0.0F, 0.0F, 0.0F }; // x = count, y = edge margin (tile uv)
+    std::array<float, 4> cascadeInfo{ 1.0F, 0.0F, 0.0F, 0.0F }; // x = count, y = edge margin, z = blend width (tile uv)
 
     [[nodiscard]] bool IsValid() const noexcept {
         return bgfx::isValid(depthTexture) && params[3] > 0.0F;

@@ -13,6 +13,8 @@ namespace kb::render {
 // reference; bgfx resolves equal names to one handle.
 struct PointShadowUniforms {
     static constexpr std::uint8_t kSamplerStage = 9U;
+    // Graph material shaders own the stages from 6 up for their textures; see pbr_graph_forward.sh.
+    static constexpr std::uint8_t kGraphSamplerStage = 1U;
 
     bgfx::UniformHandle sampler = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle light = BGFX_INVALID_HANDLE;
@@ -48,7 +50,7 @@ struct PointShadowUniforms {
     // Publishes zero lights when `binding` is null or invalid, which the shader treats as "no shadow".
     // lightSlots holds the packed light slot of each shadow light (negative = not packed).
     void Set(const ScenePointShadowBinding* binding, const std::array<float, ScenePointShadowBinding::kMaxLights>& lightSlots,
-        bgfx::TextureHandle fallbackTexture) const {
+        bgfx::TextureHandle fallbackTexture, std::uint8_t samplerStage = kSamplerStage) const {
         const bool enabled = binding != nullptr && binding->IsValid();
         std::array<float, 4U * ScenePointShadowBinding::kMaxLights> lightData{};
         std::array<float, 4U * ScenePointShadowBinding::kMaxLights> depthData{};
@@ -69,7 +71,7 @@ struct PointShadowUniforms {
             const bgfx::Caps* caps = bgfx::getCaps();
             infoData = { static_cast<float>(binding->lightCount), caps != nullptr && caps->originBottomLeft ? 0.5F : -0.5F, binding->strength, 0.0F };
         }
-        bgfx::setTexture(kSamplerStage, sampler, enabled ? binding->depthTexture : fallbackTexture);
+        bgfx::setTexture(samplerStage, sampler, enabled ? binding->depthTexture : fallbackTexture);
         bgfx::setUniform(light, lightData.data(), ScenePointShadowBinding::kMaxLights);
         bgfx::setUniform(depth, depthData.data(), ScenePointShadowBinding::kMaxLights);
         bgfx::setUniform(spot, enabled ? binding->spot.data() : noSpot.data(), ScenePointShadowBinding::kMaxLights);
