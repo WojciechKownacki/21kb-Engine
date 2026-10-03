@@ -414,6 +414,9 @@ void Renderer::Shutdown() {
     for (SceneGBuffer& gbuffer : sceneGBuffers_) {
         gbuffer.Shutdown();
     }
+    for (SceneGiHistory& history : giHistories_) {
+        history.Shutdown();
+    }
     defaultSceneTarget_.Shutdown();
     renderSceneSynchronizer_.reset();
     particleRenderSynchronizer_.reset();
@@ -1073,7 +1076,9 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
          worldBackdrop->mode == SceneRenderWorldBackdropMode::ProceduralSky ||
          worldBackdrop->mode == SceneRenderWorldBackdropMode::EnvironmentMap);
     const bool deferredLighting = UsesDeferredLighting(effectiveLightingConfig.lightingPath) ||
-        effectiveLightingConfig.debugView == SceneRenderDebugView::GBufferNormal || backdropRequiresDeferredPass;
+        effectiveLightingConfig.debugView == SceneRenderDebugView::GBufferNormal || backdropRequiresDeferredPass ||
+        // Screen-space GI reads the G-buffer, so it implies the deferred path.
+        effectiveLightingConfig.globalIllumination == SceneRenderGlobalIlluminationMode::SsGi;
     RenderMaterialGraphBuildContext runtimeGraphContext = desc.materialGraphContext;
     runtimeGraphContext.shadingPath = deferredLighting
         ? RenderMaterialGraphShadingPath::Deferred
@@ -1431,6 +1436,11 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
             WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport deferredLightingPass missing");
             return false;
         }
+        SceneGiBinding giBinding{};
+        const bool giEnabled = effectiveLightingConfig.globalIllumination == SceneRenderGlobalIlluminationMode::SsGi;
+        if (giEnabled && giHistories_[desc.target.viewport.viewportIndex].Ensure(desc.target.viewport.extent, desc.target.colorFormat)) {
+            giBinding = giHistories_[desc.target.viewport.viewportIndex].Binding();
+        }
         SceneRenderSubmitStats deferredStats{};
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport deferred lighting pass begin");
         if (!deferredLightingPass_->Submit(SceneDeferredLightingPassDesc{
@@ -1447,6 +1457,7 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
                 .shadowMap = shadowBinding.HasAny() ? &shadowBinding : nullptr,
                 .worldBackdrop = worldBackdrop.has_value() ? &*worldBackdrop : nullptr,
                 .worldBackdropEnvironment = worldBackdropEnvironment,
+                .gi = giEnabled ? &giBinding : nullptr,
             }, deferredStats)) {
             lastSceneDiagnostics_.events.push_back(SceneRenderDiagnosticEvent{
                 .severity = SceneRenderDiagnosticSeverity::Error,
@@ -1504,6 +1515,13 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         }
         sceneRenderer_->SetSceneColorTexture(BGFX_INVALID_HANDLE);
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport transparent pass end");
+    }
+
+    if (deferredLighting && effectiveLightingConfig.globalIllumination == SceneRenderGlobalIlluminationMode::SsGi &&
+        sceneCamera != nullptr && bgfx::isValid(desc.target.colorTexture)) {
+        // Next frame's bounce lookups read this frame's finished lit colour.
+        giHistories_[desc.target.viewport.viewportIndex].Capture(
+            viewportPlan.viewIds.sceneOverlays, desc.target.colorTexture, RendererMatrixMath::ViewProjection(*sceneCamera));
     }
 
     RenderSceneSubmitDesc editorOverlayDesc = desc;
@@ -1875,6 +1893,9 @@ void Renderer::OnResize(std::uint32_t width, std::uint32_t height) {
     defaultPostProcessTargets_.Shutdown();
     for (SceneGBuffer& gbuffer : sceneGBuffers_) {
         gbuffer.Shutdown();
+    }
+    for (SceneGiHistory& history : giHistories_) {
+        history.Shutdown();
     }
     defaultSceneTarget_.Shutdown();
     temporalViewportStates_.clear();

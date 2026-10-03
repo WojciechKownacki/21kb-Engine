@@ -6596,6 +6596,119 @@ void RunRendererRendersDirectionalCascadeShadowTest() {
     Require(shadowed * 10 < unshadowed * 8, "Cascade shadow test: the widest cascade must shadow the floor under a farScene occluder");
 }
 
+
+// Screen-space GI: a lit red wall must tint the nearby white floor, but only when GI is enabled.
+// Several frames are rendered so the pass can read the previous frame's lit colour.
+[[nodiscard]] int RenderGiFloorRedExcess(bool globalIllumination) {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() /
+        ("21kb_gi_bounce_" + std::to_string(GetCurrentProcessId()) + (globalIllumination ? "_on" : "_off"));
+    std::error_code error;
+    std::filesystem::create_directories(root, error);
+    Require(!error, "GI test could not create its asset directory");
+    WriteStressCubeObj(root / "cube.obj");
+
+    kb::scene::Scene scene;
+    kb::scene::SceneLightingAccess::SetBasicLightingEnabled(scene, true);
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    Require(manager.RegisterLoader(std::make_unique<RenderMeshAssetLoader>()) &&
+            manager.RegisterLoader(std::make_unique<RenderMaterialAssetLoader>()) &&
+            manager.RegisterLoader(std::make_unique<RenderTextureAssetLoader>()),
+        "GI test could not register render asset loaders");
+    Require(manager.Mounts().Mount("Game", root) && manager.DiscoverMountedAssets() >= 1U,
+        "GI test could not discover its mesh");
+    const kb::assets::AssetMetadata* mesh = manager.Registry().FindByPath("/Game/cube.obj");
+    Require(mesh != nullptr, "GI test lost its cube mesh");
+    const kb::assets::AssetId redId = kb::assets::MakeAssetId("GiRedMaterial");
+    Require(manager.RegisterAsset(kb::assets::AssetMetadata{
+                .id = redId, .type = "RenderMaterial", .name = "Red", .virtualPath = "/Game/RedMaterial",
+                .physicalPath = root / "runtime_red_material_only", .contentHash = 1U, .runtimeLoadable = true }),
+        "GI test could not register the red material");
+    {
+        auto red = std::make_shared<RenderMaterialAssetData>();
+        red->desc.baseColor[0] = 0.8F;
+        red->desc.baseColor[1] = 0.05F;
+        red->desc.baseColor[2] = 0.05F;
+        red->desc.roughnessFactor = 0.9F;
+        red->graph = MakeDefaultRenderMaterialGraphDocument();
+        Require(manager.PublishRuntimeAsset(redId, std::move(red)), "GI test could not publish the red material");
+    }
+
+    const auto addBox = [&](kb::scene::Vec3 position, kb::scene::Vec3 scale, std::uint64_t material) {
+        const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+            .name = "Box",
+            .transform = kb::scene::TransformComponent{ .localPosition = position, .localScale = scale },
+        });
+        scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{
+            .meshAssetId = mesh->id.value, .materialAssetId = material, .castsShadow = false });
+    };
+    addBox({ 0.0F, -0.5F, 0.0F }, { 40.0F, 1.0F, 40.0F }, 0U);      // white floor, top face at y = 0
+    addBox({ 3.0F, 3.0F, 0.0F }, { 0.5F, 6.0F, 20.0F }, redId.value); // red wall, floor-side face at x = 2.75
+    const kb::scene::SceneEntity light = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "Point Light", .transform = TransformAt(-1.0F, 5.0F, 0.0F) });
+    scene.Components().Lights().Set(light, kb::scene::LightComponent{
+        .kind = kb::scene::LightKind::Point, .intensity = 4.0F, .range = 40.0F, .castsShadow = false });
+
+    NativeTestSurface surface;
+    Require(surface.IsValid(), "GI test could not create a hidden D3D11 surface");
+    DisplayConfig config{};
+    config.syncMode = DisplaySyncMode::Uncapped;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "GI test could not initialize the renderer");
+    renderer.SetRuntimeAssetDiscoveryEnabled(false);
+
+    SceneRenderCamera camera{};
+    bx::mtxLookAt(camera.view.data(), bx::Vec3{ -2.0F, 4.0F, -8.0F }, bx::Vec3{ 2.0F, 0.0F, 0.0F });
+    SceneDepthPolicy::MakePerspective(camera.projection.data(), 30.0F, 1.0F, 0.1F, 100.0F, SceneDepthPolicy::HomogeneousDepth());
+
+    int redExcess = 0;
+    {
+        ParticleMeshReadbackTarget target;
+        Require(target.Initialize(), "GI test could not create its readback target");
+        SceneRenderLightingConfig lighting{};
+        lighting.globalIllumination = globalIllumination ? SceneRenderGlobalIlluminationMode::SsGi
+                                                         : SceneRenderGlobalIlluminationMode::Disabled;
+        lighting.shadowsEnabled = false;
+        const RenderSceneSubmitDesc desc{
+            .target = target.Binding(),
+            .cameraOverride = camera,
+            .lightingConfig = lighting,
+            .meshPassMode = SceneRenderMeshPassMode::OpaqueOnly,
+            .clearRgba = 0x000000FFU,
+            .editorSceneOverlaysEnabled = false,
+            .shadowPassEnabled = false,
+            .postProcessEnabled = false,
+            .selectionMaskEnabled = false,
+            .selectionOutlineEnabled = false,
+        };
+        for (int frame = 0; frame < 6; ++frame) {
+            SubmitLifecycleFrame(renderer, scene, desc, "GI test did not submit a frame");
+        }
+        const std::vector<std::uint8_t> pixels = target.ReadPixels();
+        // Average a 5x5 block around the centre pixel (the floor 0.75 m from the wall) to hide ray noise.
+        int red = 0;
+        int blue = 0;
+        for (int y = 30; y < 35; ++y) {
+            for (int x = 30; x < 35; ++x) {
+                const std::size_t offset = (static_cast<std::size_t>(y) * 64U + static_cast<std::size_t>(x)) * 4U;
+                red += pixels[offset];
+                blue += pixels[offset + 2U];
+            }
+        }
+        redExcess = (red - blue) / 25;
+    }
+    renderer.Shutdown();
+    std::filesystem::remove_all(root, error);
+    return redExcess;
+}
+
+void RunRendererRendersScreenSpaceGiBounceTest() {
+    const int without = RenderGiFloorRedExcess(false);
+    const int with = RenderGiFloorRedExcess(true);
+    std::fprintf(stderr, "gi_bounce_pixels red_minus_blue without=%d with=%d%c", without, with, 10);
+    Require(with >= without + 6, "GI test: the red wall must tint the nearby floor when screen-space GI is enabled");
+}
+
 void RunRendererRendersPointLightShadowTest() {
     ShadowFloorScene scene{};
     scene.lightCastsShadow = false;
@@ -6615,6 +6728,7 @@ void RunRendererParticleMeshSnapshotSubmitTest() {
     RunRendererDrawsPublishedRuntimeTexturePixelsTest();
     RunRendererRendersPointLightShadowTest();
     RunRendererRendersDirectionalCascadeShadowTest();
+    RunRendererRendersScreenSpaceGiBounceTest();
 #endif
 }
 

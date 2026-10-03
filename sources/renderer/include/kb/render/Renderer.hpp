@@ -8,6 +8,7 @@
 #include "kb/render/SceneDepthPolicy.hpp"
 #include "kb/render/SceneGBuffer.hpp"
 #include "kb/render/frame/EditorRenderPassSubmitter.hpp"
+#include "kb/render/gi/SceneGiHistory.hpp"
 #include "kb/render/frame/FinalCompositePass.hpp"
 #include "kb/render/frame/RenderFramePipeline.hpp"
 #include "kb/render/frame/RenderFrameState.hpp"
@@ -288,6 +289,7 @@ private:
     // earlier viewport, producing intermittent grid/depth corruption. Each view-index owns its
     // resources for the complete frame lifetime.
     std::array<SceneGBuffer, RenderViewportViewIdAllocator::kMaxViewportCount> sceneGBuffers_{};
+    std::array<SceneGiHistory, RenderViewportViewIdAllocator::kMaxViewportCount> giHistories_{};
     ScenePostProcessTargets defaultPostProcessTargets_;
     ShadowMapResource defaultShadowMap_;
     ShadowMapResource defaultPointShadowMap_;

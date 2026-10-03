@@ -186,6 +186,8 @@ float SampleShadowVisibility(vec3 shadowCoord)
     return mix(1.0, 1.0 - u_deferredShadowParams.y, selectedShadow);
 }
 
+#include "ssgi.sh"
+
 void main()
 {
     vec4 albedo = texture2D(s_gbufferAlbedo, v_texcoord0);
@@ -255,6 +257,10 @@ void main()
             vec3 directLight = EvaluateSceneLight(lightIndex, normal, viewDir, worldPos, albedo.rgb, metallic, roughness, specular, occlusion);
             lighting += directLight * (lightIndex == 0 ? shadowVisible : 1.0) * KbPointShadowFactor(lightIndex, worldPos);
         }
+    }
+
+    if (u_giParams.x > 0.0) {
+        lighting += KbScreenSpaceGi(worldPos, normal, gl_FragCoord.xy) * albedo.rgb * ((1.0 - metallic) * occlusion * u_giParams.x);
     }
 
     gl_FragColor = vec4(lighting + surface.rgb, 1.0);
