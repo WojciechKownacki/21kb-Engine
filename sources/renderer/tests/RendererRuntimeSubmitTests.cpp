@@ -7117,7 +7117,8 @@ void RunRendererRendersVoxelGiFromOffscreenObjectsTest() {
     };
     const auto pixels = RenderScreenSpaceScene({}, {}, bx::Vec3{ 0.0F, 0.0F, -6.0F }, bx::Vec3{ 0.0F, 0.0F, 0.0F }, 30.0F, lighting, 4,
         kSize, SceneRenderMeshPassMode::OpaqueAndTransparent, queue);
-    const std::size_t offset = (32U * kSize + 32U) * 4U;
+    // The particle core is drawn white whatever its colour; its soft edge, a few pixels out, keeps the tint.
+    const std::size_t offset = (32U * kSize + 42U) * 4U;
     return { pixels[offset], pixels[offset + 1U], pixels[offset + 2U] };
 }
 
@@ -7167,8 +7168,8 @@ void RunRendererSortsAlphaGpuParticlesTest() {
     const std::array<int, 3> youngerNearer = OverlappingAlphaParticlesCentre(false);
     std::fprintf(stderr, "gpu_particle_sort older_nearer=%d,%d,%d younger_nearer=%d,%d,%d%c",
         olderNearer[0], olderNearer[1], olderNearer[2], youngerNearer[0], youngerNearer[1], youngerNearer[2], 10);
-    Require(olderNearer[2] > olderNearer[0] + 100, "GPU sort test: the nearer, older (blue) particle must be drawn over the farther one");
-    Require(youngerNearer[0] > youngerNearer[2] + 100, "GPU sort test: the nearer, younger (red) particle must be drawn over the farther one");
+    Require(olderNearer[2] > olderNearer[0] + 20, "GPU sort test: the nearer, older (blue) particle must be drawn over the farther one");
+    Require(youngerNearer[0] > youngerNearer[2] + 20, "GPU sort test: the nearer, younger (red) particle must be drawn over the farther one");
 }
 
 #if defined(KB_21KB_PARTICLE_PLUGIN_PATH)
