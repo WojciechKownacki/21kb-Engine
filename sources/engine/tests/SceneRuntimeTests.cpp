@@ -9,6 +9,7 @@
 namespace kb::tests {
 void RunScriptNativeHeaderReloadTest();
 void RunPhysicsReplayOnlyTest();
+void RunPhysicsStepSpikeBenchmark();
 }
 
 namespace {
@@ -36,6 +37,8 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunSceneSystemTests();
     } else if (suite == "physics-replay") {
         kb::tests::RunPhysicsReplayOnlyTest();
+    } else if (suite == "physics-step-spikes") {
+        kb::tests::RunPhysicsStepSpikeBenchmark();
     } else if (suite == "audio") {
         kb::tests::RunAudioSceneSystemTests();
     } else if (suite == "scene-runtime") {

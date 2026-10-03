@@ -289,6 +289,13 @@ public:
     // Declared by whatever drains the queue; backends skip producing events while it is false.
     static void SetCollisionEventConsumer(Scene& scene, bool present) noexcept;
     [[nodiscard]] static bool HasCollisionEventConsumer(Scene& scene) noexcept;
+    // A backend may overlap the physics step of fixed step N with the rest of the frame and publish its
+    // results to the scene at the start of fixed step N + 1 (the order of operations on the physics world is
+    // unchanged; scene transforms and contact events just arrive one fixed step later). Off by default so
+    // code that reads the results right after an update keeps its timing; real-time hosts, which render
+    // between updates, turn it on.
+    static void SetStepPipelining(Scene& scene, bool enabled) noexcept;
+    [[nodiscard]] static bool StepPipeliningEnabled(Scene& scene) noexcept;
     [[nodiscard]] static std::vector<PendingCollisionEvent> DrainPendingCollisionEvents(Scene& scene);
     // Recycles the caller's completed batch storage; queued events keep their order.
     static void DrainPendingCollisionEvents(Scene& scene, std::vector<PendingCollisionEvent>& output);

@@ -40,9 +40,11 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
+#include <functional>
 #include <fstream>
 #include <iostream>
 #include <limits>
@@ -2406,6 +2408,156 @@ void RunPhysicsEventBatchReuseTest() {
         "Contact drain left an already consumed event queued");
 }
 
+// A pile of one-metre boxes in layers on a floor: the scenario of the step-time benchmark and of the
+// pipelining equivalence check below.
+struct PhysicsPile {
+    explicit PhysicsPile(int bodyCount, bool pipelined) {
+        kb::project::ProjectDescriptor descriptor;
+        descriptor.disableEnginePluginsByDefault = true;
+        descriptor.plugins.push_back(kb::project::ProjectPluginReference{
+            .name = "Physics.Jolt", .binaryPath = KB_PHYSICS_JOLT_PLUGIN_PATH, .enabled = true });
+        scene = std::make_unique<kb::scene::Scene>(std::move(descriptor));
+        kb::scene::PhysicsBackend::SetStepPipelining(*scene, pipelined);
+        kb::scene::SceneObject floor = scene->Entities().CreateObject(kb::scene::SceneObjectDesc{
+            .name = "Floor",
+            .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 0.0F, -0.5F, 0.0F } },
+        });
+        scene->Components().Rigidbodies().Set(floor.Entity(), kb::scene::RigidbodyComponent{
+            .bodyType = kb::scene::RigidbodyBodyType::Static });
+        scene->Components().Colliders().Set(floor.Entity(), kb::scene::ColliderComponent{
+            .shape = kb::scene::ColliderShape::Box, .boxSize = kb::scene::Vec3{ 60.0F, 1.0F, 60.0F }, .restitution = 0.3F });
+        // A square grid of ceil(sqrt(count / 10)) columns, 1.5 m apart, in layers, each box turned a little differently.
+        const int footprint = std::max(1, static_cast<int>(std::ceil(std::sqrt(static_cast<double>(bodyCount) / 10.0))));
+        for (int index = 0; index < bodyCount; ++index) {
+            const int layer = index / (footprint * footprint);
+            const int cell = index % (footprint * footprint);
+            const float half = static_cast<float>(footprint - 1) * 0.5F;
+            const float angleY = static_cast<float>(index) * 0.37F;
+            const float angleX = static_cast<float>(index) * 0.21F;
+            const kb::scene::Quat turnY{ 0.0F, std::sin(angleY * 0.5F), 0.0F, std::cos(angleY * 0.5F) };
+            const kb::scene::Quat turnX{ std::sin(angleX * 0.5F), 0.0F, 0.0F, std::cos(angleX * 0.5F) };
+            kb::scene::SceneObject body = scene->Entities().CreateObject(kb::scene::SceneObjectDesc{
+                .name = "Box",
+                .transform = kb::scene::TransformComponent{
+                    .localPosition = kb::scene::Vec3{ (static_cast<float>(cell % footprint) - half) * 1.5F,
+                        3.0F + static_cast<float>(layer) * 1.5F, (static_cast<float>(cell / footprint) - half) * 1.5F },
+                    .localRotation = turnY * turnX },
+            });
+            scene->Components().Rigidbodies().Set(body.Entity(), kb::scene::RigidbodyComponent{
+                .bodyType = kb::scene::RigidbodyBodyType::Dynamic, .mass = 1.0F });
+            scene->Components().Colliders().Set(body.Entity(), kb::scene::ColliderComponent{
+                .shape = kb::scene::ColliderShape::Box, .boxSize = kb::scene::Vec3{ 1.0F, 1.0F, 1.0F }, .restitution = 0.3F });
+            bodies.push_back(body);
+        }
+    }
+
+    std::unique_ptr<kb::scene::Scene> scene;
+    std::vector<kb::scene::SceneObject> bodies;
+};
+
+struct StepTimes {
+    double mean = 0.0;
+    double p50 = 0.0;
+    double p99 = 0.0;
+    double max = 0.0;
+};
+
+// The first steps create 4000 bodies and meet the first contacts; the tail a frame budget has to survive is
+// the one of the steady state after that.
+constexpr int kStartupSteps = 60;
+
+// Times one fixed step per update. `frameWorkMilliseconds` stands in for the rest of a frame (scripts, render
+// submission) that a pipelined physics step can overlap with.
+[[nodiscard]] StepTimes MeasurePhysicsSteps(int bodyCount, bool pipelined, int steps, double frameWorkMilliseconds) {
+    PhysicsPile pile(bodyCount, pipelined);
+    std::vector<double> milliseconds;
+    milliseconds.reserve(static_cast<std::size_t>(steps));
+    for (int step = 0; step < steps; ++step) {
+        const auto start = std::chrono::steady_clock::now();
+        [[maybe_unused]] const bool progressed = pile.scene->Runtime().Update(1.0F / 60.0F);
+        milliseconds.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
+        const auto frameEnd = std::chrono::steady_clock::now() + std::chrono::duration<double, std::milli>(frameWorkMilliseconds);
+        while (std::chrono::steady_clock::now() < frameEnd) {
+        }
+    }
+    std::vector<double> sorted(milliseconds.begin() + kStartupSteps, milliseconds.end());
+    std::ranges::sort(sorted);
+    StepTimes times;
+    for (const double value : sorted) times.mean += value;
+    times.mean /= static_cast<double>(sorted.size());
+    times.p50 = sorted[sorted.size() / 2U];
+    times.p99 = sorted[std::min(sorted.size() - 1U, sorted.size() * 99U / 100U)];
+    times.max = sorted.back();
+    return times;
+}
+
+// The step of a large pile, as a frame sees it. The mean hides the occasional long step a frame budget cannot
+// absorb, so the tail (p99, max) is reported too. The same 4000-box pile runs synchronously and pipelined; the
+// pipelined step overlaps the Jolt update with the rest of the frame (modelled by a busy loop), so only the
+// part that is not hidden remains in the update time. Other load on the machine moves single trials a lot, so
+// the verdict is the median of three trials: the pipelined p99 must be below 60 % of the synchronous one (about
+// 45 % on the machine this was written on).
+void RunPhysicsStepSpikeBenchmark() {
+    if (std::filesystem::path{ KB_PHYSICS_JOLT_PLUGIN_PATH }.empty()) {
+        return;
+    }
+    constexpr int kBodies = 4000;
+    constexpr int kSteps = 300;
+    constexpr int kTrials = 3;
+    constexpr double kFrameWorkMilliseconds = 8.0;
+    std::array<double, kTrials> ratios{};
+    for (int trial = 0; trial < kTrials; ++trial) {
+        const StepTimes synchronous = MeasurePhysicsSteps(kBodies, false, kSteps, kFrameWorkMilliseconds);
+        const StepTimes pipelined = MeasurePhysicsSteps(kBodies, true, kSteps, kFrameWorkMilliseconds);
+        ratios[trial] = pipelined.p99 / synchronous.p99;
+        std::cout << "physics_step_spikes bodies=" << kBodies << " steps=" << kSteps
+                  << " sync_mean_ms=" << synchronous.mean << " sync_p99_ms=" << synchronous.p99 << " sync_max_ms=" << synchronous.max
+                  << " pipelined_mean_ms=" << pipelined.mean << " pipelined_p99_ms=" << pipelined.p99
+                  << " pipelined_max_ms=" << pipelined.max << " p99_ratio=" << ratios[trial] << '\n';
+    }
+    std::ranges::sort(ratios);
+    kb::tests::Require(ratios[kTrials / 2] < 0.6,
+        "Pipelining the physics step must cut the p99 update time of a 4000-body pile well below the synchronous one");
+}
+
+// Pipelining only moves the arrival of results: the poses of the scene after update k are exactly the poses a
+// synchronous scene had after update k - 1 (the physics world sees the same operations in the same order).
+void RunPhysicsPipelinedStepEquivalenceTest() {
+    if (std::filesystem::path{ KB_PHYSICS_JOLT_PLUGIN_PATH }.empty()) {
+        return;
+    }
+    constexpr int kBodies = 400;
+    constexpr int kSteps = 150;
+    PhysicsPile synchronous(kBodies, false);
+    PhysicsPile pipelined(kBodies, true);
+    const std::array<std::size_t, 4U> tracked{ 0U, 17U, 199U, 399U };
+    const auto snapshot = [&tracked](PhysicsPile& pile) {
+        std::array<std::uint32_t, 4U * 7U> bits{};
+        for (std::size_t index = 0U; index < tracked.size(); ++index) {
+            const kb::scene::TransformComponent& transform = pile.scene->Transforms().Get(pile.bodies[tracked[index]]);
+            const std::array<float, 7U> values{ transform.localPosition.x, transform.localPosition.y, transform.localPosition.z,
+                transform.localRotation.x, transform.localRotation.y, transform.localRotation.z, transform.localRotation.w };
+            for (std::size_t component = 0U; component < values.size(); ++component) {
+                bits[index * 7U + component] = std::bit_cast<std::uint32_t>(values[component]);
+            }
+        }
+        return bits;
+    };
+    const auto initial = snapshot(pipelined);
+    std::array<std::uint32_t, 28U> previousSynchronous = initial;
+    bool moved = false;
+    for (int step = 0; step < kSteps; ++step) {
+        kb::tests::Require(synchronous.scene->Runtime().Update(1.0F / 60.0F) && pipelined.scene->Runtime().Update(1.0F / 60.0F),
+            "Pipelining equivalence test could not update its scenes");
+        const auto pipelinedPoses = snapshot(pipelined);
+        kb::tests::Require(pipelinedPoses == previousSynchronous,
+            "A pipelined physics scene must show exactly the poses its synchronous twin had one update earlier");
+        previousSynchronous = snapshot(synchronous);
+        moved = moved || previousSynchronous != initial;
+    }
+    kb::tests::Require(moved, "Pipelining equivalence test never moved a body, so it proved nothing");
+}
+
 void RunPhysicsSceneSystemTests() {
     RunStaticColliderBatchInvalidationTest();
     RunPhysicsEventBatchReuseTest();
@@ -2414,6 +2566,7 @@ void RunPhysicsSceneSystemTests() {
     RunPhysicsIdenticalReplayTest();
     RunPhysicsSceneSystemFallingBodyTest();
     RunPhysicsPersistentSleeperTransitionTest();
+    RunPhysicsPipelinedStepEquivalenceTest();
 }
 
 void RunPhysicsReplayOnlyTest() {
