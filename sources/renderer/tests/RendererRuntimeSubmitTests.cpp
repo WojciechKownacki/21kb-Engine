@@ -7117,6 +7117,47 @@ void RunRendererRendersVoxelGiFromOffscreenObjectsTest() {
     return { pixels[offset], pixels[offset + 1U], pixels[offset + 2U] };
 }
 
+// A particle born at x = 2 in the owner's frame must appear at the owner's current position: with the owner
+// moved by -2 m along x it is at the screen centre if the emitter is local-space, and still 2 m to the
+// side if the emitter is world-space (the same record then means a world position).
+[[nodiscard]] double LocalSpaceParticleCentreBrightness(bool localSpace) {
+    constexpr std::uint16_t kSize = 64U;
+    SceneRenderLightingConfig lighting{};
+    const auto queue = [&](kb::scene::Scene& scene, int frame) {
+        if (frame == 0) return;
+        kb::particles::ParticleGpuEmitterCommand command{};
+        command.key = { 1U, 1U };
+        command.simTime = static_cast<double>(frame - 1) / 60.0;
+        if (localSpace) {
+            command.hasWorldMatrix = true;
+            command.worldMatrix[12] = -2.0F; // the owner stands 2 m to the left of the origin
+        }
+        if (frame == 1) {
+            command.hasParams = true;
+            command.params.capacity = 16U;
+            command.params.blend = kb::particles::ParticleRenderBlendMode::Add;
+            command.params.depth = kb::particles::ParticleRenderDepthMode::Disabled;
+            command.params.color.fill({ 1.0F, 1.0F, 1.0F, 1.0F });
+            command.params.size.fill(1.2F);
+            command.params.localSpace = localSpace;
+            command.spawns.push_back(kb::particles::ParticleGpuSpawn{
+                .position = { 2.0F, 0.0F, 5.0F }, .birthTime = 0.0F, .velocity = { 0.0F, 0.0F, 0.0F }, .lifetime = 20.0F });
+        }
+        kb::particles::ParticlePlayback::QueueGpuEmitterCommand(scene, command);
+    };
+    const auto pixels = RenderScreenSpaceScene({}, {}, bx::Vec3{ 0.0F, 0.0F, -10.0F }, bx::Vec3{ 0.0F, 0.0F, 5.0F }, 30.0F, lighting, 6,
+        kSize, SceneRenderMeshPassMode::OpaqueAndTransparent, queue);
+    return MeanBrightness(pixels, kSize, 28, 28, 36, 36);
+}
+
+void RunRendererFollowsLocalSpaceGpuParticlesTest() {
+    const double local = LocalSpaceParticleCentreBrightness(true);
+    const double world = LocalSpaceParticleCentreBrightness(false);
+    std::fprintf(stderr, "gpu_particle_local_space local=%.1f world=%.1f%c", local, world, 10);
+    Require(local > 150.0, "Local-space test: the particle must follow the owner matrix to the screen centre");
+    Require(world < 30.0, "Local-space test: a world-space particle must not move with the owner matrix");
+}
+
 void RunRendererSortsAlphaGpuParticlesTest() {
     const std::array<int, 3> olderNearer = OverlappingAlphaParticlesCentre(true);
     const std::array<int, 3> youngerNearer = OverlappingAlphaParticlesCentre(false);
@@ -7337,6 +7378,7 @@ void RunRendererParticleMeshSnapshotSubmitTest() {
     RunRendererRendersVoxelGiFromOffscreenObjectsTest();
     RunRendererCollidesGpuParticlesTest();
     RunRendererSortsAlphaGpuParticlesTest();
+    RunRendererFollowsLocalSpaceGpuParticlesTest();
     RunRendererDrawsGpuSimulatedParticlesTest();
     RunRendererDrawsMillionGpuParticlesTest();
 #endif

@@ -2715,8 +2715,53 @@ void TestGpuEmitterCollisionRouting() {
     Require(!onCpu.hasParams && cpuLive > 0U, "An emitter with a sub-emitter module must stay on the CPU");
 }
 
+// A local-space emitter is eligible for the GPU path: its birth records are in the owner's frame (emitter
+// offset, rotation-free velocity scaled back by the owner scale) and a world matrix follows every step;
+// a local-space emitter with a collision plane stays on the CPU because planes are world-space.
+void TestGpuLocalSpaceEmitterRouting() {
+    const auto run = [](bool withPlane) {
+        auto effect = Fixture::MakeEffect(600.0F, 200'000U);
+        effect.backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualPreferred;
+        effect.emitters[0].simulationSpace = kb::scene::ParticleSimulationSpace::Local;
+        effect.emitters[0].localPosition = { 0.0F, 1.0F, 0.0F };
+        if (withPlane) {
+            AddModule(effect.emitters[0], 1U, kb::scene::ParticleModuleType::CollisionPlane,
+                kb::scene::ParticleCollisionPlaneModule{ .normal = { 0.0F, 1.0F, 0.0F }, .maxEventsPerStep = 4U });
+        }
+        Fixture fixture{ effect };
+        kb::particle_plugin::CpuParticleBackend backend;
+        backend.Warmup();
+        const kb::particles::ParticleRuntimeResult created = backend.Create(fixture.scene, fixture.effectAssetId, fixture.owner);
+        Require(created.Succeeded() && backend.Play(fixture.scene, created.instanceId).Succeeded(), "local routing fixture could not play");
+        kb::particles::ParticlePlayback::SetGpuEmitterConsumer(fixture.scene, true);
+        for (int step = 0; step < 10; ++step) {
+            Require(backend.Step(fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(), "local routing step failed");
+        }
+        std::vector<kb::particles::ParticleGpuEmitterCommand> commands;
+        kb::particles::ParticlePlayback::DrainGpuEmitterCommands(fixture.scene, commands);
+        return std::pair{ commands, backend.Query(fixture.scene, created.instanceId).liveParticleCount };
+    };
+    const auto [commands, cpuLive] = run(false);
+    std::size_t spawns = 0U;
+    std::size_t matrices = 0U;
+    bool localFlag = false;
+    for (const kb::particles::ParticleGpuEmitterCommand& command : commands) {
+        localFlag = localFlag || (command.hasParams && command.params.localSpace);
+        matrices += command.hasWorldMatrix ? 1U : 0U;
+        for (const kb::particles::ParticleGpuSpawn& spawn : command.spawns) {
+            Require(spawn.position.y == 1.0F && spawn.position.x == 0.0F, "A local-space spawn record must be in the owner's frame");
+            ++spawns;
+        }
+    }
+    Require(localFlag && spawns > 0U && cpuLive == 0U && matrices >= 10U,
+        "A local-space emitter must run on the GPU with a world matrix every step");
+    const auto [planeCommands, planeCpuLive] = run(true);
+    Require(planeCommands.empty() && planeCpuLive > 0U, "A local-space emitter with a collision plane must stay on the CPU");
+}
+
 int main() {
     try {
+        TestGpuLocalSpaceEmitterRouting();
         TestGpuEmitterRouting();
         TestGpuEmitterCollisionRouting();
         TestSharedImmutableCompilerArtifact();

@@ -59,6 +59,9 @@ struct ParticleGpuEmitterParams {
     ParticleGpuCollisionPlane plane{};
     bool hasPlane = false;
     bool sceneDepthCollision = false;
+    // Local-space emitters keep their birth records in the owner's frame; the world matrix sent with the
+    // commands carries the particles along with the owner (acceleration is still a world-space vector).
+    bool localSpace = false;
 
     [[nodiscard]] constexpr bool HasCollision() const noexcept { return hasPlane || sceneDepthCollision; }
 };
@@ -79,6 +82,9 @@ struct ParticleGpuEmitterCommand {
     bool clear = false;         // drop all live particles (restart/stop with clear)
     bool hasParams = false;     // params below are valid (sent on creation and whenever they change)
     ParticleGpuEmitterParams params{};
+    // Column-major world matrix of the owner, sent every step for local-space emitters.
+    bool hasWorldMatrix = false;
+    std::array<float, 16> worldMatrix{ 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F };
     std::vector<ParticleGpuSpawn> spawns;
 };
 
