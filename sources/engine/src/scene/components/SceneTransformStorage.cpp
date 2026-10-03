@@ -38,6 +38,14 @@ void SceneTransformComponentStore::Set(SceneEntity entity, const TransformCompon
         stored.worldDirty = true;
         return stored;
     };
+    // Nothing observes transforms: one lookup finds the row and flags it.
+    if (!world_->MirrorsValueWrites(componentId_)) {
+        if (void* data = kb::ecs::WorldInternalAccess::TryGetMutableNativeComponentMarkModified(*world_, entity, componentId_); data != nullptr) {
+            auto* current = static_cast<TransformComponent*>(data);
+            *current = bumpVersions(current);
+            return;
+        }
+    }
     // A component that already lives in the native storage is overwritten in place and flagged: no
     // structural bookkeeping.
     if (void* data = kb::ecs::WorldInternalAccess::TryGetMutableNativeComponent(*world_, entity, componentId_); data != nullptr) {

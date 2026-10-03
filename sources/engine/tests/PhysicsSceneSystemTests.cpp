@@ -2524,7 +2524,7 @@ private:
 // The engine's share of a crowd frame (the "agents" benchmark scenario): 30000 agents that are plain entities with a
 // transform, 64 static box colliders, every frame a Transforms().Set per agent, a raycast for one agent in eight and
 // Runtime().Update. The steering of the agents is the application's own code and is not measured here.
-void RunAgentsFrameBenchmarkWith(const kb::ecs::WorldConfig& worldConfig, const char* label) {
+void RunAgentsFrameBenchmarkWith(const kb::ecs::WorldConfig& worldConfig, const char* label, bool batched = false) {
     if (std::filesystem::path{ KB_PHYSICS_JOLT_PLUGIN_PATH }.empty()) {
         return;
     }
@@ -2556,6 +2556,7 @@ void RunAgentsFrameBenchmarkWith(const kb::ecs::WorldConfig& worldConfig, const 
     for (const kb::scene::SceneObject& object : scene.Entities().CreateObjects(descs)) agents.push_back(object.Entity());
     kb::tests::Require(agents.size() == static_cast<std::size_t>(kAgents), "agent benchmark could not create its agents");
     using Clock = std::chrono::steady_clock;
+    std::vector<kb::scene::TransformComponent> batch(batched ? static_cast<std::size_t>(kAgents) : 0U);
     std::vector<double> setMs, rayMs, updateMs, syncMs;
     kb::scene::SceneRuntimeHotPathReport lastSyncReport{};
     std::array<kb::scene::PhysicsCastResult, 1> hitStorage{};
@@ -2564,9 +2565,15 @@ void RunAgentsFrameBenchmarkWith(const kb::ecs::WorldConfig& worldConfig, const 
         for (int index = 0; index < kAgents; ++index) {
             positions[index].x += 0.03F;
             if (positions[index].x > 100.0F) positions[index].x -= 200.0F;
-            scene.Transforms().Set(agents[index], kb::scene::TransformComponent{ .localPosition = positions[index],
-                .localRotation = kb::scene::Quat{ 0.0F, std::sin(0.005F * static_cast<float>(index % 628)), 0.0F, std::cos(0.005F * static_cast<float>(index % 628)) } });
+            const kb::scene::TransformComponent value{ .localPosition = positions[index],
+                .localRotation = kb::scene::Quat{ 0.0F, std::sin(0.005F * static_cast<float>(index % 628)), 0.0F, std::cos(0.005F * static_cast<float>(index % 628)) } };
+            if (batched) {
+                batch[index] = value;
+            } else {
+                scene.Transforms().Set(agents[index], value);
+            }
         }
+        if (batched) scene.Transforms().SetMany(agents, batch);
         const auto t1 = Clock::now();
         scene.Runtime().SynchronizeTransforms();
         const auto tSync = Clock::now();
@@ -2589,6 +2596,8 @@ void RunAgentsFrameBenchmarkWith(const kb::ecs::WorldConfig& worldConfig, const 
     const kb::scene::SceneRuntimeHotPathReport report = lastSyncReport;
     const double setMedian = median(setMs);
     const double syncMedian = median(syncMs);
+    const kb::scene::TransformComponent checked = scene.Transforms().Get(agents[kAgents - 1]);
+    kb::tests::Require(std::abs(checked.worldPosition.x - positions[kAgents - 1].x) < 1e-3F, "agent benchmark: a written transform did not reach the world pose");
     std::cout << "agents_frame " << label << " agents=" << kAgents << " set_ms=" << median(setMs) << " raycast_ms=" << median(rayMs)
               << " sync_ms=" << median(syncMs) << " update_ms=" << median(updateMs) << " transform_sync_ms=" << static_cast<double>(report.runtimeTransformSyncNanoseconds) * 1e-6
               << " cache_ms=" << static_cast<double>(report.transformHierarchyCacheBuildNanoseconds) * 1e-6 << " entry_ms=" << static_cast<double>(report.transformHierarchyEntryBuildNanoseconds) * 1e-6 << " kernel_ms=" << static_cast<double>(report.transformHierarchyKernelApplyNanoseconds) * 1e-6 << " frontier_ms=" << static_cast<double>(report.transformHierarchyFrontierAppendNanoseconds) * 1e-6 << " propagate_ms=" << static_cast<double>(report.transformHierarchyPropagateNanoseconds) * 1e-6 << " flush_ms=" << static_cast<double>(report.transformHierarchyFlushNanoseconds) * 1e-6 << " parallel_flush=" << report.transformHierarchyParallelFlushCount << " workers=" << report.transformHierarchyParallelFlushWorkerCount << " updated=" << report.transformHierarchyUpdatedCount << " inspected=" << report.transformHierarchyInspectedCount << " rootFast=" << report.transformHierarchyRootFastPathCount
@@ -2607,6 +2616,7 @@ void RunAgentsFrameBenchmark() {
     kb::ecs::WorldConfig native{};
     native.mirrorNativeComponentChangesToBackend = false;
     RunAgentsFrameBenchmarkWith(native, "mirror=off");
+    RunAgentsFrameBenchmarkWith(kb::ecs::WorldConfig{}, "mirror=on(default),SetMany", true);
 }
 
 // The step of a large pile, as a frame sees it. The mean hides the occasional long step a frame budget cannot

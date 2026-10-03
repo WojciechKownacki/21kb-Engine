@@ -644,7 +644,7 @@ void World::MarkComponentModified(Entity entity, ComponentId componentId) {
     ValidateEntityHandle(entity, "MarkComponentModified");
     const void* component = nativeStorage_ == nullptr ? nullptr : nativeStorage_->TryGetComponentData(entity, componentId);
     if (component != nullptr) {
-        if (config_.mirrorNativeComponentChangesToBackend) {
+        if (MirrorsValueWrites(componentId)) {
             const ComponentTypeInfo* componentInfo = registries_ == nullptr ? nullptr : registries_->Components().FindInfo(componentId);
             if (componentInfo != nullptr) {
                 WorldComponentMutator::SetExisting(world_, entity, componentId, componentInfo->size, component);

@@ -5,6 +5,8 @@
 #include "scene/prefab/ScenePrefabDirtyTracker.hpp"
 #include "scene/transform/SceneTransformDirtyFrontier.hpp"
 
+#include <stdexcept>
+
 namespace kb::scene {
 
 TransformComponent SceneTransformService::Get(const Scene& scene, SceneObject object) {
@@ -36,6 +38,26 @@ void SceneTransformService::Set(Scene& scene, SceneEntity entity, const Transfor
         state.componentStorage.Transforms().Set(entity, transform);
         EnqueueSceneTransformDirtyFrontier(state, entity);
         MarkScenePrefabNodeDirty(state, entity);
+    }
+}
+
+void SceneTransformService::SetMany(Scene& scene, std::span<const SceneEntity> entities, std::span<const TransformComponent> transforms) {
+    if (entities.size() != transforms.size()) {
+        throw std::invalid_argument("Scene transform batch write requires one transform per entity");
+    }
+    SceneState& state = SceneAccess::State(scene);
+    const bool trackPrefab = !state.suppressPrefabDirtyTracking && state.prefabInstances.Count() > 0U;
+    auto& store = state.componentStorage.Transforms();
+    for (std::size_t index = 0U; index < entities.size(); ++index) {
+        const SceneEntity entity = entities[index];
+        if (!SceneEntityService::IsAlive(scene, entity)) {
+            continue;
+        }
+        store.Set(entity, transforms[index]);
+        EnqueueSceneTransformDirtyFrontier(state, entity);
+        if (trackPrefab) {
+            MarkScenePrefabNodeDirty(state, entity);
+        }
     }
 }
 

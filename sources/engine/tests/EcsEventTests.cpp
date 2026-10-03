@@ -60,12 +60,38 @@ void RunComponentObserverTest() {
     kb::tests::Require(counters.modified == 2, "Destroyed ECS component observer was called");
 }
 
+// Value writes to an existing component are published to the backend world only once something observes the component:
+// writes made before the first observer must still be what that observer sees.
+void RunUnobservedValueWriteTest() {
+    ComponentEventCounters counters;
+    kb::ecs::World world;
+    const kb::ecs::Entity first = world.CreateEntity("First");
+    const kb::ecs::Entity second = world.CreateEntity("Second");
+    world.Set(first, EcsPosition{ .x = 1.0F });
+    world.Set(second, EcsPosition{ .x = 2.0F });
+    for (float x = 10.0F; x < 13.0F; x += 1.0F) {
+        world.TryGetMutable<EcsPosition>(first)->x = x;
+        world.MarkModified<EcsPosition>(first);
+    }
+    world.TryGetMutable<EcsPosition>(second)->x = 20.0F; // never marked: only the native value changes
+    const kb::ecs::ObserverId observer = world.ObserveComponent<EcsPosition>(kb::ecs::ComponentEventKind::Modified, &CountComponentEvents, &counters);
+    kb::tests::Require(observer != 0, "ECS late observer registration failed");
+    kb::tests::Require(counters.modified == 0, "Registering an observer must not report a change");
+    world.MarkModified<EcsPosition>(first);
+    kb::tests::Require(counters.modified == 1 && kb::tests::NearlyEqual(counters.lastX, 12.0F),
+        "The first observer must see the value written before it was registered");
+    world.MarkModified<EcsPosition>(second);
+    kb::tests::Require(counters.modified == 2 && kb::tests::NearlyEqual(counters.lastX, 20.0F),
+        "The observer must see a value written without a notification");
+}
+
 } // namespace
 
 namespace kb::tests {
 
 void RunEcsEventTests() {
     RunComponentObserverTest();
+    RunUnobservedValueWriteTest();
 }
 
 } // namespace kb::tests

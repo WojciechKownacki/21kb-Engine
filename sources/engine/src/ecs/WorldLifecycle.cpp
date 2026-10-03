@@ -38,6 +38,7 @@ World::World(World&& other) noexcept
     , mutableComponentBorrowLocks_(std::move(other.mutableComponentBorrowLocks_))
     , structuralChangeValidator_(std::move(other.structuralChangeValidator_))
     , telemetryState_(other.telemetryState_)
+    , observedComponentIds_(std::move(other.observedComponentIds_))
     , queryPlanCache_(std::move(other.queryPlanCache_))
     , queryPlanIndex_(std::move(other.queryPlanIndex_)) {}
 
@@ -51,6 +52,7 @@ World& World::operator=(World&& other) noexcept {
         mutableComponentBorrowLocks_ = std::move(other.mutableComponentBorrowLocks_);
         structuralChangeValidator_ = std::move(other.structuralChangeValidator_);
         telemetryState_ = other.telemetryState_;
+        observedComponentIds_ = std::move(other.observedComponentIds_);
         queryPlanCache_ = std::move(other.queryPlanCache_);
         queryPlanIndex_ = std::move(other.queryPlanIndex_);
     }
@@ -68,6 +70,7 @@ void World::Reset() noexcept {
     if (mutableComponentBorrowLocks_ != nullptr) {
         mutableComponentBorrowLocks_->Clear();
     }
+    observedComponentIds_.clear();
     queryPlanIndex_.clear();
     queryPlanCache_.clear();
     structuralChangeValidator_.reset();

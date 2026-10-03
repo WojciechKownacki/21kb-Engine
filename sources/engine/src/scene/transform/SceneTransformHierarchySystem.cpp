@@ -472,7 +472,7 @@ void AddTransformCacheEntryFromHotBatch(
 
     const auto backendMarkStart = std::chrono::steady_clock::now();
     stats.writeNanoseconds = Nanoseconds(backendMarkStart - writeStart);
-    if (!state.world.Config().mirrorNativeComponentChangesToBackend) {
+    if (!state.world.MirrorsValueWrites(state.components.TransformComponentId())) {
         return stats;
     }
     for (const SceneEntity entity : updatedEntities) {
@@ -691,10 +691,26 @@ void CacheRenderProxyUpdatesAfterTransformsWithResolver(
     state.transformRenderProxyVisibleMeshRendererIndices.reserve(state.transformRenderProxyVisibleMeshRendererIndices.size() + updatedEntities.size());
     state.transformRenderProxyCameraIndices.reserve(state.transformRenderProxyCameraIndices.size() + updatedEntities.size());
     state.transformRenderProxyLightIndices.reserve(state.transformRenderProxyLightIndices.size() + updatedEntities.size());
+    // Reading the component masks is the bulk of this pass and is read-only; the shared lists below are only touched for
+    // the (usually few) entities that carry a render component, so the masks are gathered in parallel first.
+    thread_local std::vector<std::uint8_t> gatheredMasks;
+    const bool gatherInParallel = updatedEntities.size() > kTransformBatchGrainSize;
+    if (gatherInParallel) {
+        gatheredMasks.resize(updatedEntities.size());
+        std::vector<std::uint8_t>& masks = gatheredMasks; // the workers must write this thread's buffer, not their own
+        state.transformWorkerPool->ParallelForChunks(updatedEntities.size(), kTransformBatchGrainSize, [&state, updatedEntities, &masks](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk& chunk) {
+            for (std::size_t offset = chunk.begin; offset < chunk.begin + chunk.count; ++offset) {
+                masks[offset] = SceneRenderProxyComponentMaskOf(state, updatedEntities[offset]);
+            }
+        });
+    }
     for (std::size_t offset = 0; offset < updatedEntities.size(); ++offset) {
         const std::size_t proxyIndex = writeBegin + offset;
         const SceneEntity entity = updatedEntities[offset];
-        const std::uint8_t componentMask = SceneRenderProxyComponentMaskOf(state, entity);
+        const std::uint8_t componentMask = gatherInParallel ? gatheredMasks[offset] : SceneRenderProxyComponentMaskOf(state, entity);
+        if (componentMask == 0U) {
+            continue;
+        }
         if (SceneRenderProxyMaskHas(componentMask, SceneRenderProxyComponentMask::MeshRenderer)) {
             state.transformRenderProxyMeshRendererIndices.push_back(proxyIndex);
             if (!SceneRenderProxyMaskHas(componentMask, SceneRenderProxyComponentMask::Hidden)) {
@@ -1365,7 +1381,7 @@ void RunHierarchyDirtyFrontier(
     state.lastTransformHierarchyFlushedEntityCount = state.transformHierarchyUpdatedEntitiesScratch.size();
 
     const auto backendMarkStart = Clock::now();
-    if (state.world.Config().mirrorNativeComponentChangesToBackend) {
+    if (state.world.MirrorsValueWrites(state.components.TransformComponentId())) {
         const std::size_t updatedTransformCount = std::min(
             state.transformHierarchyUpdatedEntitiesScratch.size(),
             state.transformHierarchyUpdatedTransformsScratch.size());

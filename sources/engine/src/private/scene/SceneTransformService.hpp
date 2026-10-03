@@ -21,6 +21,9 @@ public:
     [[nodiscard]] static TransformComponent* TryGet(Scene& scene, SceneEntity entity) noexcept;
     static void Set(Scene& scene, SceneObject object, const TransformComponent& transform);
     static void Set(Scene& scene, SceneEntity entity, const TransformComponent& transform);
+    // Writes one transform per entity (the two spans must be the same length) with the scene state and the
+    // prefab-tracking decision resolved once for the whole batch. Dead entities are skipped.
+    static void SetMany(Scene& scene, std::span<const SceneEntity> entities, std::span<const TransformComponent> transforms);
     static void MarkModified(Scene& scene, SceneEntity entity) noexcept;
     // Bulk transform dirty signal. Fetches scene state once and resolves the
     // prefab-tracking decision once for the whole batch, so a scene with no

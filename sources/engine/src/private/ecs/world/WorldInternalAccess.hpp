@@ -24,6 +24,8 @@ public:
     [[nodiscard]] static void* TryGetMutableComponent(World& world, Entity entity, ComponentId componentId);
     // Native optional lookup validates lifetime; no backend lookup or copied state.
     [[nodiscard]] static void* TryGetMutableNativeComponent(World& world, Entity entity, ComponentId componentId);
+    // Same lookup, and the row is flagged modified in the same pass.
+    [[nodiscard]] static void* TryGetMutableNativeComponentMarkModified(World& world, Entity entity, ComponentId componentId);
     // MarkComponentModified for a native component the caller just wrote through `data` (size known):
     // the same mirroring and OnSet behaviour with fewer lookups.
     static void MarkNativeComponentWritten(World& world, Entity entity, ComponentId componentId, std::size_t size, const void* data);

@@ -29,7 +29,9 @@ void SynchronizeTransformHierarchy(SceneState& state) {
         state.lastTransformHierarchyUpdatedCount == 0U) return;
     // The hierarchy update published the new value of every entity it touched next to the entity itself.
     const bool publishedValues = state.transformHierarchyUpdatedTransformsScratch.size() == state.transformHierarchyUpdatedEntitiesScratch.size();
-    for (std::size_t updated = 0U; updated < state.transformHierarchyUpdatedEntitiesScratch.size(); ++updated) {
+    // Every updated entity owns its own pose record, so records can be published from several threads; only the list of
+    // records touched during a fixed step is shared, and each chunk collects its part of it separately.
+    const auto publish = [&state, publishedValues](std::size_t updated, std::vector<std::size_t>& touchedSink) {
         const SceneEntity entity = state.transformHierarchyUpdatedEntitiesScratch[updated];
         std::size_t valueIndex = state.fixedTransformValues.size();
         const std::uint32_t denseIndex = kb::ecs::GeneratedEntityIndex(entity);
@@ -39,24 +41,41 @@ void SynchronizeTransformHierarchy(SceneState& state) {
         }
         if (valueIndex >= state.fixedTransformValues.size() || state.fixedTransformValues[valueIndex].entity != entity) {
             const auto sample = std::ranges::lower_bound(state.fixedTransformSamples, entity, {}, &SceneState::FixedTransformSample::entity);
-            if (sample == state.fixedTransformSamples.end() || sample->entity != entity) continue;
+            if (sample == state.fixedTransformSamples.end() || sample->entity != entity) return;
             valueIndex = sample->valueIndex;
         }
         const TransformComponent* current = publishedValues ? &state.transformHierarchyUpdatedTransformsScratch[updated]
                                                             : state.componentStorage.Transforms().TryGet(entity);
-        if (current == nullptr) continue;
+        if (current == nullptr) return;
         auto& value = state.fixedTransformValues[valueIndex];
         if (state.fixedTransformCapturing) {
             if (!value.touched) {
                 value.previous = value.current;
                 value.touched = true;
-                state.fixedTransformTouched.push_back(valueIndex);
+                touchedSink.push_back(valueIndex);
             }
         } else {
             value.previous = *current;
         }
         value.current = *current;
+    };
+    const std::size_t updatedTotal = state.transformHierarchyUpdatedEntitiesScratch.size();
+    constexpr std::size_t kPublishGrainSize = 2048U;
+    // The fallback lookups (TryGet, binary search) are read-only too, but only the published-value path is worth the dispatch.
+    if (publishedValues && updatedTotal >= kPublishGrainSize * 2U && state.transformWorkerPool != nullptr && state.transformWorkerPool->Running()) {
+        const std::size_t chunkCount = (updatedTotal + kPublishGrainSize - 1U) / kPublishGrainSize;
+        std::vector<std::vector<std::size_t>> chunkTouched(state.fixedTransformCapturing ? chunkCount : 0U);
+        state.transformWorkerPool->ParallelForChunks(updatedTotal, kPublishGrainSize, [&](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk& chunk) {
+            std::vector<std::size_t> localUnused;
+            std::vector<std::size_t>& sink = chunkTouched.empty() ? localUnused : chunkTouched[chunk.index];
+            for (std::size_t offset = 0U; offset < chunk.count; ++offset) publish(chunk.begin + offset, sink);
+        });
+        for (const std::vector<std::size_t>& touched : chunkTouched) {
+            state.fixedTransformTouched.insert(state.fixedTransformTouched.end(), touched.begin(), touched.end());
+        }
+        return;
     }
+    for (std::size_t updated = 0U; updated < updatedTotal; ++updated) publish(updated, state.fixedTransformTouched);
 }
 
 void PublishRuntimeSnapshot(SceneState& state) {

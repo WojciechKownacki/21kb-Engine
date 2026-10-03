@@ -38,8 +38,12 @@ void* WorldInternalAccess::TryGetMutableNativeComponent(World& world, Entity ent
     return world.nativeStorage_ == nullptr ? nullptr : world.nativeStorage_->TryGetMutableComponentData(entity, componentId);
 }
 
+void* WorldInternalAccess::TryGetMutableNativeComponentMarkModified(World& world, Entity entity, ComponentId componentId) {
+    return world.nativeStorage_ == nullptr ? nullptr : world.nativeStorage_->TryGetMutableComponentDataMarkModified(entity, componentId);
+}
+
 void WorldInternalAccess::MarkNativeComponentWritten(World& world, Entity entity, ComponentId componentId, std::size_t size, const void* data) {
-    if (world.config_.mirrorNativeComponentChangesToBackend) {
+    if (world.MirrorsValueWrites(componentId)) {
         WorldComponentMutator::SetExisting(world.world_, entity, componentId, size, data);
     }
     // OnSet may remove this component, migrate its row or destroy the entity; the lookup that flags the row

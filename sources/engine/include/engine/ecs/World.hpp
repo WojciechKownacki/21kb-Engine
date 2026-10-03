@@ -97,6 +97,10 @@ public:
     [[nodiscard]] StructuralChangeValidator::Guard EnterIteration() const noexcept;
     void ValidateStructuralChangeAllowed(std::string_view operation) const;
     void ReleaseUnusedQueryPlans();
+    // Whether an in-place value write to an existing native component must also be published to the backend
+    // world. Only the backend's change observers read those values (every read of a native component is served
+    // by the native storage), so the publish is skipped until an observer is registered for the component.
+    [[nodiscard]] bool MirrorsValueWrites(ComponentId componentId) const noexcept;
 
 #include "engine/ecs/world/WorldEntityApi.inl"
 #include "engine/ecs/world/WorldComponentApi.inl"
@@ -190,6 +194,7 @@ private:
     std::unique_ptr<MutableComponentBorrowLocks> mutableComponentBorrowLocks_;
     std::unique_ptr<StructuralChangeValidator> structuralChangeValidator_;
     std::shared_ptr<QueryTelemetryState> telemetryState_;
+    std::vector<ComponentId> observedComponentIds_;
     mutable QueryPlanCache queryPlanCache_;
     mutable std::unordered_multimap<std::size_t, QueryPlanCache::iterator> queryPlanIndex_;
 };

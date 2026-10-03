@@ -36,6 +36,9 @@ public:
     [[nodiscard]] bool ReadNonAlloc(std::span<const SceneEntity> entities, std::span<TransformComponent> transforms) const noexcept;
     void Set(SceneObject object, const TransformComponent& transform);
     void Set(SceneEntity entity, const TransformComponent& transform);
+    // Batch write: transforms[i] goes to entities[i] (same length required, std::invalid_argument otherwise).
+    // Cheaper per entity than a loop of Set; dead entities are skipped.
+    void SetMany(std::span<const SceneEntity> entities, std::span<const TransformComponent> transforms);
     void MarkModified(SceneEntity entity) noexcept;
     // Bulk dirty signal: marks many transforms modified in one batched pass.
     void MarkModified(std::span<const SceneEntity> entities) noexcept;
