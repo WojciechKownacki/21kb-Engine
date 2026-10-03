@@ -88,7 +88,7 @@ void SubmitPointShadows(
     }
     setup.binding.depthTexture = desc.pointShadowMap.DepthTexture();
     for (std::uint32_t light = 0U; light < setup.lightCount; ++light) {
-        for (std::uint32_t face = 0U; face < ScenePointShadowBinding::kFaceCount; ++face) {
+        for (std::uint32_t face = 0U; face < setup.faceCount[light]; ++face) {
             const std::uint32_t index = light * ScenePointShadowBinding::kFaceCount + face;
             const std::uint16_t viewId = desc.viewportPlan.viewIds.pointShadowViews[index];
             if (!ViewId::IsValid(viewId)) {

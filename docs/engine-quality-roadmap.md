@@ -30,7 +30,7 @@ Kryterium „zrobione" = test, który musi przejść; test ma być headless (bez
   historii + odrzucenie przy zmianie), parametry intensywności i zasięgu w `SceneRenderLightingConfig`.
   Zrobione gdy: test pikselowy pokazuje wyraźnie mniejszą wariancję jasności podłogi po N klatkach niż przed zmianą,
   a istniejący test odbicia koloru nadal przechodzi.
-- **A2 — Cienie reflektorów (spot)** · P1 · M · do zrobienia
+- **A2 — Cienie reflektorów (spot)** · P1 · M · **zrobione** (jasność pod płytą 527 → 281)
   Użyć istniejącego atlasu cieni punktowych (jedna ściana zamiast sześciu). Zrobione gdy: test pikselowy
   „z cieniem / bez cienia" dla światła spot.
 - **A3 — Cienie punktowe poza ograniczeniami** · P2 · M · do zrobienia
