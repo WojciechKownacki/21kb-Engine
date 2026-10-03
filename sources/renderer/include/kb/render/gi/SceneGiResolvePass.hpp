@@ -57,6 +57,7 @@ private:
     bgfx::UniformHandle voxelLightPositionRangeUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle voxelLightColorIntensityUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle voxelLightSpotUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle voxelLightFlagsUniform_ = BGFX_INVALID_HANDLE;
 };
 
 } // namespace kb::render

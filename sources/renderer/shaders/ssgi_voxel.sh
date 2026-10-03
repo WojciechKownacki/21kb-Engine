@@ -1,7 +1,8 @@
 // Bounce light traced through the world-space voxel grid of SceneGiVoxelGrid (resolve pass only). A
 // ray steps voxel by voxel until it enters an occupied one; the radiance leaving that voxel is its
-// emissive colour plus its albedo lit by the scene lights (no shadows). Because the grid is built from
-// the scene, not from the screen, the rays also find objects outside the camera's view.
+// emissive colour plus its albedo lit by the scene lights; a light that casts shadows is blocked when a ray
+// from the hit towards it meets another occupied voxel. Because the grid is built from the scene, not from
+// the screen, the rays also find objects outside the camera's view.
 SAMPLER3D(s_voxelAlbedo, 12);
 SAMPLER3D(s_voxelEmissive, 13);
 uniform vec4 u_voxelGrid; // xyz = world position of the minimum corner, w = voxel size
@@ -10,6 +11,7 @@ uniform vec4 u_voxelLightDirKind[8];
 uniform vec4 u_voxelLightPositionRange[8];
 uniform vec4 u_voxelLightColorIntensity[8];
 uniform vec4 u_voxelLightSpot[8];
+uniform vec4 u_voxelLightFlags[8]; // w = 1 when the light casts shadows
 
 bool KbVoxelOutside(vec3 cell)
 {
@@ -23,6 +25,41 @@ float KbVoxelOccupied(vec3 cell)
         return 0.0;
     }
     return texture3DLod(s_voxelAlbedo, (cell + vec3_splat(0.5)) / u_voxelInfo.z, 0.0).a;
+}
+
+// 1.0 when the grid blocks the way from `start` along `dir` within `maxDistance` (metres), else 0.0.
+float KbVoxelBlocked(vec3 start, vec3 dir, float maxDistance)
+{
+    float voxelSize = u_voxelGrid.w;
+    vec3 gridPos = (start - u_voxelGrid.xyz) / voxelSize;
+    vec3 cell = floor(gridPos);
+    vec3 stepDir = vec3(dir.x >= 0.0 ? 1.0 : -1.0, dir.y >= 0.0 ? 1.0 : -1.0, dir.z >= 0.0 ? 1.0 : -1.0);
+    vec3 inverseDir = vec3(1.0, 1.0, 1.0) / max(abs(dir), vec3_splat(0.00001));
+    vec3 nextBoundary = cell + max(stepDir, vec3_splat(0.0));
+    vec3 tMax = abs(nextBoundary - gridPos) * inverseDir;
+    for (int stepIndex = 0; stepIndex < 64; ++stepIndex) {
+        if (KbVoxelOutside(cell)) {
+            return 0.0;
+        }
+        if (KbVoxelOccupied(cell) > 0.5) {
+            return 1.0;
+        }
+        float nextCrossing = min(min(tMax.x, tMax.y), tMax.z);
+        if (nextCrossing * voxelSize > maxDistance) {
+            return 0.0;
+        }
+        if (tMax.x < tMax.y && tMax.x < tMax.z) {
+            cell.x += stepDir.x;
+            tMax.x += inverseDir.x;
+        } else if (tMax.y < tMax.z) {
+            cell.y += stepDir.y;
+            tMax.y += inverseDir.y;
+        } else {
+            cell.z += stepDir.z;
+            tMax.z += inverseDir.z;
+        }
+    }
+    return 0.0;
 }
 
 // Light arriving at a voxel hit, evaluated like the lighting shader's diffuse term.
@@ -42,10 +79,12 @@ vec3 KbVoxelDirect(vec3 position, vec3 normal)
         }
         vec3 lightVector = normalize(-dirKind.xyz);
         float attenuation = 1.0;
+        float lightDistance = u_voxelInfo.z * u_voxelGrid.w * 1.8;
         if (dirKind.w > 0.5) {
             vec3 toLight = positionRange.xyz - position;
             float distanceToLight = length(toLight);
             lightVector = toLight / max(distanceToLight, 0.0001);
+            lightDistance = distanceToLight;
             float rangeAttenuation = clamp(1.0 - distanceToLight / max(positionRange.w, 0.0001), 0.0, 1.0);
             attenuation = rangeAttenuation * rangeAttenuation;
             if (dirKind.w > 1.5) {
@@ -54,7 +93,11 @@ vec3 KbVoxelDirect(vec3 position, vec3 normal)
                 attenuation *= coneAttenuation * coneAttenuation;
             }
         }
-        sum += colorIntensity.rgb * (colorIntensity.a * attenuation * max(dot(normal, lightVector), 0.0));
+        float facing = max(dot(normal, lightVector), 0.0);
+        if (facing > 0.0 && attenuation > 0.0 && u_voxelLightFlags[i].w > 0.5) {
+            attenuation *= 1.0 - KbVoxelBlocked(position + normal * (0.9 * u_voxelGrid.w), lightVector, lightDistance);
+        }
+        sum += colorIntensity.rgb * (colorIntensity.a * attenuation * facing);
     }
     return sum * 0.31830989;
 }
