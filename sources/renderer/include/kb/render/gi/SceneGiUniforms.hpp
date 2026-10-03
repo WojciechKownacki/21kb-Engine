@@ -9,11 +9,16 @@
 
 namespace kb::render {
 
+// Whether the bounce light is gathered by the resolve pass (screen-space or voxel GI).
+[[nodiscard]] constexpr bool UsesGatheredGi(const SceneRenderLightingConfig& config) noexcept {
+    return config.globalIllumination == SceneRenderGlobalIlluminationMode::SsGi ||
+        config.globalIllumination == SceneRenderGlobalIlluminationMode::VoxelGrid;
+}
+
 // Whether the frame needs the screen-space resolve (GI, ambient occlusion) or the previous frame's lit
-// colour (reflections). All three read the G-buffer, so they imply the deferred path.
+// colour (reflections). All of them read the G-buffer, so they imply the deferred path.
 [[nodiscard]] constexpr bool UsesScreenSpaceEffects(const SceneRenderLightingConfig& config) noexcept {
-    return config.globalIllumination == SceneRenderGlobalIlluminationMode::SsGi || config.ambientOcclusionEnabled ||
-        config.screenSpaceReflectionsEnabled;
+    return UsesGatheredGi(config) || config.ambientOcclusionEnabled || config.screenSpaceReflectionsEnabled;
 }
 
 // The uniforms of ssgi.sh, ssao.sh and ssr.sh, shared by the resolve pass (writes the accumulated

@@ -43,7 +43,7 @@ bool SceneGiUniforms::IsValid() const noexcept {
 void SceneGiUniforms::Set(const SceneGiBinding* binding, const SceneRenderLightingConfig& config,
     const std::array<float, 16>& viewProjection, bgfx::TextureHandle unavailableTexture) const {
     const bool present = binding != nullptr;
-    const bool giEnabled = present && config.globalIllumination == SceneRenderGlobalIlluminationMode::SsGi;
+    const bool giEnabled = present && UsesGatheredGi(config);
     const bool aoEnabled = present && config.ambientOcclusionEnabled;
     const bool ssrEnabled = present && config.screenSpaceReflectionsEnabled;
     const bool active = present && binding->active && bgfx::isValid(binding->accum);

@@ -7001,6 +7001,36 @@ void RunRendererRendersScreenSpaceReflectionsTest() {
     Require(with > without + 15.0, "SSR test: the glossy floor must reflect the red wall when screen-space reflections are on");
 }
 
+// A red wall that is outside the camera's view must tint the floor in view only when the bounce light is
+// traced through the world-space voxel grid: screen-space GI cannot see what is not on screen.
+void RunRendererRendersVoxelGiFromOffscreenObjectsTest() {
+    constexpr std::uint16_t kSize = 64U;
+    const std::vector<SsBox> boxes{
+        { { 0.0F, -0.5F, 0.0F }, { 40.0F, 1.0F, 40.0F } },
+        { { -4.0F, 3.0F, 0.0F }, { 0.5F, 6.0F, 20.0F }, SsMaterial::Red },
+    };
+    const std::vector<kb::scene::Vec3> lights{ { -1.0F, 5.0F, 0.0F } };
+    const auto redExcess = [&](SceneRenderGlobalIlluminationMode mode) {
+        SceneRenderLightingConfig lighting{};
+        lighting.globalIllumination = mode;
+        const auto pixels = RenderScreenSpaceScene(boxes, lights, bx::Vec3{ 0.0F, 3.0F, -6.0F }, bx::Vec3{ 0.0F, 0.0F, 2.0F }, 30.0F, lighting, 30, kSize);
+        double sum = 0.0;
+        for (int y = 28; y < 36; ++y) {
+            for (int x = 28; x < 36; ++x) {
+                const std::size_t offset = (static_cast<std::size_t>(y) * kSize + static_cast<std::size_t>(x)) * 4U;
+                sum += static_cast<double>(pixels[offset]) - pixels[offset + 2U];
+            }
+        }
+        return sum / 64.0;
+    };
+    const double none = redExcess(SceneRenderGlobalIlluminationMode::Disabled);
+    const double screenSpace = redExcess(SceneRenderGlobalIlluminationMode::SsGi);
+    const double voxel = redExcess(SceneRenderGlobalIlluminationMode::VoxelGrid);
+    std::fprintf(stderr, "voxel_gi_pixels red_minus_blue none=%.1f screen_space=%.1f voxel=%.1f%c", none, screenSpace, voxel, 10);
+    Require(voxel > none + 8.0, "Voxel GI test: a red wall outside the view must tint the floor through the voxel grid");
+    Require(screenSpace < none + 3.0, "Voxel GI test: screen-space GI must not see the off-screen wall");
+}
+
 void RunRendererRendersScreenSpaceGiBounceTest() {
     const int without = RenderGiFloorStats(false, 0.9F, 6).redExcess;
     const int with = RenderGiFloorStats(true, 0.9F, 6).redExcess;
@@ -7191,6 +7221,7 @@ void RunRendererParticleMeshSnapshotSubmitTest() {
     RunRendererSmoothsScreenSpaceGiOverTimeTest();
     RunRendererRendersScreenSpaceAmbientOcclusionTest();
     RunRendererRendersScreenSpaceReflectionsTest();
+    RunRendererRendersVoxelGiFromOffscreenObjectsTest();
     RunRendererDrawsGpuSimulatedParticlesTest();
     RunRendererDrawsMillionGpuParticlesTest();
 #endif

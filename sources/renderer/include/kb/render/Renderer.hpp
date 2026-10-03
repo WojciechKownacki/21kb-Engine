@@ -10,6 +10,7 @@
 #include "kb/render/frame/EditorRenderPassSubmitter.hpp"
 #include "kb/render/gi/SceneGiHistory.hpp"
 #include "kb/render/gi/SceneGiResolvePass.hpp"
+#include "kb/render/gi/SceneGiVoxelGrid.hpp"
 #include "kb/render/frame/FinalCompositePass.hpp"
 #include "kb/render/frame/RenderFramePipeline.hpp"
 #include "kb/render/frame/RenderFrameState.hpp"
@@ -285,6 +286,7 @@ private:
     std::unique_ptr<FinalCompositePass> finalCompositePass_;
     std::unique_ptr<SceneDeferredLightingPass> deferredLightingPass_;
     SceneGiResolvePass giResolvePass_;
+    SceneGiVoxelGrid giVoxelGrid_;
     SceneRenderTarget defaultSceneTarget_;
     // G-buffer commands are consumed asynchronously by bgfx. Reusing one allocation for
     // differently-sized viewports in the same frame destroys attachments still referenced by an

@@ -108,6 +108,7 @@ add_library(kb_renderer STATIC
     include/kb/render/gi/SceneGiHistory.hpp
     include/kb/render/gi/SceneGiResolvePass.hpp
     include/kb/render/gi/SceneGiUniforms.hpp
+    include/kb/render/gi/SceneGiVoxelGrid.hpp
     include/kb/render/particles/ParticleGpuEmitterSimulation.hpp
     include/kb/render/ViewIdPolicy.hpp
     src/BgfxContext.cpp
@@ -352,6 +353,7 @@ add_library(kb_renderer STATIC
     src/gi/SceneGiHistory.cpp
     src/gi/SceneGiResolvePass.cpp
     src/gi/SceneGiUniforms.cpp
+    src/gi/SceneGiVoxelGrid.cpp
     src/particles/ParticleGpuEmitterSimulation.cpp
     src/shadow/PointShadowPassPlanner.hpp
     src/private/ui/ScreenUIBackgroundBlur.hpp
