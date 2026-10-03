@@ -50,7 +50,7 @@ Kryterium „zrobione" = test, który musi przejść; test ma być headless (bez
 - **B3 — Przestrzeń lokalna, podążanie za transformacją, wyjście mesh/trail** · P2 · L · **zrobione częściowo** (przestrzeń lokalna i podążanie za właścicielem na GPU; mesh/trail nadal na CPU)
   Dziś kwalifikują się tylko emitery w przestrzeni świata z wyjściem billboard/stretched.
 - **B4 — Pod-emitery i zdarzenia na GPU** · P3 · L · **zrobione** (zdarzenia narodzin i śmierci; kolizyjne nadal na CPU)
-- **B5 — Test „od pliku do piksela"** · P1 · S · do zrobienia
+- **B5 — Test „od pliku do piksela"** · P1 · S · **zrobione** (plik .kbvfx → wtyczka → kolejka GPU → renderer → piksele, jeden proces)
   Jeden test łączący plugin cząstek, kolejkę i renderer w jednym procesie (dziś sprawdzone w częściach).
 - **B6 — Warianty shaderów dla macOS (Metal)** · P3 · wymaga komputera Mac · zablokowane
   Bez nich `cs_particle_gpu_emit` jest opcjonalny w manifeście, a emitery wracają na CPU.
