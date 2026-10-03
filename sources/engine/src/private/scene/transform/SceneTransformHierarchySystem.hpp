@@ -22,4 +22,7 @@ public:
     void Update(SceneState& state) const;
 };
 
+// Starts the scene's worker threads (shared by the transform passes and SceneRuntime::ParallelFor) if they are not running.
+void EnsureSceneTransformWorkerPool(SceneState& state);
+
 } // namespace kb::scene

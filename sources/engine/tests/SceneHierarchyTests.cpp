@@ -1596,10 +1596,11 @@ void RunTransformWriteBenchmark() {
         kb::tests::Require(last.localPosition.y == static_cast<float>(kFrames + kWarmupFrames - 1), "Transform write benchmark lost its last write");
         std::cout << "transform_write objects=" << kObjects << " parented=" << parented
                   << " set_ms=" << setMilliseconds[setMilliseconds.size() / 2U] << " sync_ms=" << syncMilliseconds[syncMilliseconds.size() / 2U] << '\n';
-        // The Set loop and the synchronization both end in one backend mirror write per object, so the loop
-        // costs about as much as the synchronization (ratio ~1.1 with the in-place write path, ~2.7 with the
-        // full World::Set it replaced); a ratio keeps the check independent of the machine.
-        kb::tests::Require(setMilliseconds[setMilliseconds.size() / 2U] < syncMilliseconds[syncMilliseconds.size() / 2U] * 1.8,
+        // The Set loop writes each transform in place (one lookup per object) and the synchronization, which publishes
+        // the poses in parallel and skips the backend mirror of an unobserved transform, got cheaper than that loop:
+        // the ratio is ~1.9 now, and ~8 with the full World::Set the in-place path replaced. A ratio keeps the check
+        // independent of the machine.
+        kb::tests::Require(setMilliseconds[setMilliseconds.size() / 2U] < syncMilliseconds[syncMilliseconds.size() / 2U] * 3.5,
             "Setting the transforms of 30000 objects must not cost much more than synchronizing them (in-place write path)");
     }
 }
