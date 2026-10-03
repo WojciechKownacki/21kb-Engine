@@ -340,7 +340,7 @@ struct SceneRenderLightingConfig {
 // near a face edge stays inside the tile. A spot light takes a slot too but renders only column 0,
 // one frustum along its axis that covers the cone.
 struct ScenePointShadowBinding {
-    static constexpr std::uint32_t kMaxLights = 4U;
+    static constexpr std::uint32_t kMaxLights = 8U;
     static constexpr std::uint32_t kFaceCount = 6U;
     bgfx::TextureHandle depthTexture = BGFX_INVALID_HANDLE;
     std::uint32_t lightCount = 0U;

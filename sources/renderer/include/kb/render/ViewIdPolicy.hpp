@@ -43,14 +43,14 @@ constexpr std::uint16_t DetachedViewportLimit = 253;
 // cascade beyond the first, then six cube faces for each shadow-casting point light.
 constexpr std::uint16_t ShadowCascadeExtraViews = 3;
 constexpr std::uint16_t ShadowCascadeExtraStart = 256;
-constexpr std::uint16_t MaxPointShadowLights = 4;
+constexpr std::uint16_t MaxPointShadowLights = 8;
 constexpr std::uint16_t PointShadowFaceCount = 6;
 constexpr std::uint16_t PointShadowViewCount = MaxPointShadowLights * PointShadowFaceCount;
 constexpr std::uint16_t PointShadowStart = ShadowCascadeExtraStart + ShadowCascadeExtraViews;
 static_assert(PointShadowStart + PointShadowViewCount <= ScreenCapture, "Shadow views overlap the capture view");
 // The screen-space GI resolve of a viewport runs after every other view of the frame (it reads the
 // lit colour the scene produced and feeds the next frame): one view per viewport index.
-constexpr std::uint16_t GiResolveStart = 300;
+constexpr std::uint16_t GiResolveStart = 320;
 constexpr std::uint16_t GiResolveMaxViewports = 8;
 static_assert(GiResolveStart >= PointShadowStart + PointShadowViewCount, "GI resolve views overlap the shadow views");
 static_assert(GiResolveStart + GiResolveMaxViewports <= ScreenCapture, "GI resolve views overlap the capture view");

@@ -40,6 +40,9 @@ constexpr std::array<FaceBasis, ScenePointShadowBinding::kFaceCount> kFaces{{
     return dx * dx + dy * dy + dz * dz;
 }
 
+// Up to this many lights get full-size tiles; more share a smaller-tile atlas of the same memory.
+constexpr std::uint32_t kFullQualityLights = 4U;
+
 } // namespace
 
 PointShadowLightSelection PointShadowPassPlanner::Select(
@@ -88,9 +91,11 @@ PointShadowLightSelection PointShadowPassPlanner::Select(
     return selection;
 }
 
-std::uint32_t PointShadowPassPlanner::TileSizeFor(const SceneRenderLightingConfig& lightingConfig) noexcept {
-    // One tile per face: half the directional map size keeps the atlas near 3072 x 2048 at the default.
-    return std::clamp(lightingConfig.shadowMapSize / 2U, 128U, 1024U);
+std::uint32_t PointShadowPassPlanner::TileSizeFor(const SceneRenderLightingConfig& lightingConfig, std::uint32_t lightCount) noexcept {
+    // One tile per face: half the directional map size keeps the atlas near 6144 x 4096 at the default. Beyond
+    // kFullQualityLights lights the tiles halve, so eight lights cost half the memory of four at full size.
+    const std::uint32_t tile = std::clamp(lightingConfig.shadowMapSize / 2U, 128U, 1024U);
+    return lightCount > kFullQualityLights ? std::max(tile / 2U, 128U) : tile;
 }
 
 PointShadowSetup PointShadowPassPlanner::Build(
@@ -109,9 +114,9 @@ PointShadowSetup PointShadowPassPlanner::Build(
     }
 
     const bool homogeneousDepth = SceneDepthPolicy::HomogeneousDepth();
-    setup.tileSize = TileSizeFor(lightingConfig);
+    setup.tileSize = TileSizeFor(lightingConfig, selection.count);
     setup.atlasWidth = setup.tileSize * ScenePointShadowBinding::kFaceCount;
-    setup.atlasHeight = setup.tileSize * ScenePointShadowBinding::kMaxLights;
+    setup.atlasHeight = setup.tileSize * (selection.count > kFullQualityLights ? ScenePointShadowBinding::kMaxLights : kFullQualityLights);
     setup.lightCount = selection.count;
 
     ScenePointShadowBinding& binding = setup.binding;
