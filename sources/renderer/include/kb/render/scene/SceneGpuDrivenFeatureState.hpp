@@ -39,6 +39,7 @@ struct SceneGpuDrivenFeatureRequest {
 };
 
 struct SceneGpuDrivenFeatureSupport {
+    [[nodiscard]] bool operator==(const SceneGpuDrivenFeatureSupport&) const noexcept = default;
     bool computeCullingSupported = false;
     bool indirectDrawSupported = false;
     bool meshletSubmitSupported = false;

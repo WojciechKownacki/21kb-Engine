@@ -64,6 +64,7 @@ const std::vector<Case> cases{
     {.name="colliders_1k", .statics=1000},
     {.name="colliders_10k", .statics=10000},
     {.name="colliders_50k", .statics=50000},
+    {.name="colliders_100k", .statics=100000, .rays=1000},
     {.name="physics_128", .statics=10000, .dynamics=128, .active=true},
     {.name="physics_1024", .statics=10000, .dynamics=1024, .active=true},
     {.name="physics_4096", .statics=10000, .dynamics=4096, .active=true},
@@ -255,11 +256,57 @@ void Generate(const std::filesystem::path& root) {
             std::cout << "Generated " << c.name << std::endl;
         }
     }
+    const auto cell = Document(Case{.name="MixedStreamCell", .objects=10000, .meshes=true, .spacing=8.0F}, sphereId);
+    Require(SceneDocumentService::Save(cell,root/"Assets/Scenes/MixedStreamCell.21kbscene"),"Mixed cell save failed");
+    std::ofstream flight(root/"Assets/Scripts/MixedStreamFlyby.lua");
+    flight << "local frame = 0\nfunction Tick(self, dt)\n  frame = frame + 1\n  local p = frame % 1200\n"
+        << "  self:SetProperty(\"Transform\", \"localPosition.z\", -40 + math.min(p, 1200-p) * 1.25)\nend\n";
+    flight.close();
+    static_cast<void>(author.Assets().Discover());
+    const auto* cellAsset=author.Assets().Manager().Registry().FindByPath("/Game/Scenes/MixedStreamCell.21kbscene");
+    const auto* flightAsset=author.Assets().Manager().Registry().FindByPath("/Game/Scripts/MixedStreamFlyby.lua");
+    Require(cellAsset!=nullptr && flightAsset!=nullptr,"Mixed streaming assets were not discovered");
+    auto mixed=Document(Case{.name="mixed_stream_10k", .objects=10000, .statics=10000, .dynamics=512,
+        .lights=128, .active=true, .meshes=true, .shadows=true, .spacing=8.0F},meshId,true);
+    for(std::uint32_t i=0;i<mixed.worldPrefab.NodeCount();++i) {
+        auto* node=mixed.worldPrefab.TryGetMutableNode(i);
+        if(node->name=="BenchmarkCamera") {
+            node->components.behaviour=BehaviourComponent{.behaviourAssetId=flightAsset->id.value,.backend=BehaviourBackend::Lua};
+            node->components.streamFocus=StreamFocusComponent{.innerRadius=180.0F,.outerRadius=280.0F};
+        }
+        if(node->components.rigidbody) {
+            node->transform.localPosition.y+=5.0F;
+            node->components.collider->restitution=0.99F; node->components.collider->friction=0.0F;
+            node->components.rigidbody->linearVelocity={1.0F,15.0F,0.5F};
+        }
+    }
+    ScenePrefabNodeDesc cellOwner; cellOwner.name="StreamCellOwner"; cellOwner.parentNode=0U;
+    cellOwner.components.contentInstance=ContentInstanceComponent{.assetId=cellAsset->id.value,.kind=ContentInstanceKind::Subscene};
+    static_cast<void>(mixed.worldPrefab.AddNode(std::move(cellOwner)));
+    ScenePrefabNodeDesc plants; plants.name="MixedVegetation"; plants.parentNode=0U;
+    plants.components.geometrySwarm=GeometrySwarmComponent{.meshAssetId=plantId,.instanceCount=100000,
+        .columns=316,.rows=1,.layers=317,.spacing={2.0F,0.0F,2.0F},.castsShadow=false,.enabled=true};
+    static_cast<void>(mixed.worldPrefab.AddNode(std::move(plants)));
+    Require(SceneDocumentService::Save(mixed,root/"Assets/Scenes/mixed_stream_10k.21kbscene"),"Mixed scene save failed");
+    std::ofstream mixedManifest(root/"Benchmarks/mixed_manifest.json");
+    mixedManifest << "{\"base_entities\":" << mixed.worldPrefab.NodeCount()
+        << ",\"streamed_entities\":" << cell.worldPrefab.NodeCount()+1U
+        << ",\"plant_instances\":100000,\"dynamic_bodies\":512,\"point_lights\":128}";
+    std::cout << "Generated mixed_stream_10k: geometry, active physics, 128 lights, shadows, vegetation, async streaming\n";
+}
+// The same consumer workload also builds against the archived baseline API.
+template <typename Backend = PhysicsBackend>
+void DrainPhysicsEvents(Scene& scene, std::vector<PendingCollisionEvent>& output) {
+    if constexpr (requires { Backend::DrainPendingCollisionEvents(scene, output); }) {
+        Backend::DrainPendingCollisionEvents(scene, output);
+    } else {
+        output = Backend::DrainPendingCollisionEvents(scene);
+    }
 }
 void Cpu(const std::filesystem::path& root,const Case& c,unsigned repetition,bool trace=false) {
     std::filesystem::create_directories(root/"Results/raw");
     std::ofstream out(root/"Results/raw"/(c.name+(trace?"_profiled_cpu_":"_cpu_")+std::to_string(repetition)+".csv"));
-    out << "frame,total_ms,mutation_ms,runtime_ms,query_ms,transform_ms,fixed_capture_ms,updated,inspected,fixed_steps,working_set_mb,private_mb,awake_bodies,hits\n";
+    out << "frame,total_ms,mutation_ms,runtime_ms,query_ms,transform_ms,fixed_capture_ms,updated,inspected,fixed_steps,working_set_mb,private_mb,awake_bodies,hits,collision_events\n";
     out << std::fixed << std::setprecision(6);
     const auto docStart=Clock::now(); auto document=Document(c); const double documentMs=Ms(docStart);
     const auto sceneStart=Clock::now(); auto scene=std::make_unique<Scene>(Descriptor(c.statics+c.dynamics>0)); const double constructorMs=Ms(sceneStart);
@@ -279,7 +326,9 @@ void Cpu(const std::filesystem::path& root,const Case& c,unsigned repetition,boo
     if(!dynamic.empty()) Require(PhysicsBackend::GetVelocity(*scene,dynamic.front()).found,"No real simulated body");
     std::array<PhysicsCastResult,8> hitStorage{}; kb::library::ArrayNonAlloc<PhysicsCastResult> hits{hitStorage};
     constexpr unsigned warmup=180, frames=360;
-    std::size_t hitsTotal=0;
+    std::size_t hitsTotal=0, collisionEventsTotal=0;
+    std::vector<PendingCollisionEvent> collisionEvents;
+    DrainPhysicsEvents(*scene, collisionEvents);
     for(unsigned frame=0;frame<warmup+frames;++frame) {
         const auto frameStart=Clock::now();
         const std::size_t dirty=c.dirtyPercent==101?0:c.objects*c.dirtyPercent/100;
@@ -300,6 +349,7 @@ void Cpu(const std::filesystem::path& root,const Case& c,unsigned repetition,boo
         if(c.active) for(const auto body:dynamic) Require(PhysicsBackend::Wake(*scene,body),"Wake failed");
         const double mutationMs=Ms(frameStart); const auto updateStart=Clock::now();
         static_cast<void>(scene->Runtime().Update(1.0F/60.0F)); const double updateMs=Ms(updateStart);
+        DrainPhysicsEvents(*scene, collisionEvents);
         const auto queryStart=Clock::now(); std::size_t frameHits=0;
         for(unsigned ray=0;ray<c.rays;++ray) {
             const auto i=static_cast<std::size_t>((ray*73U+frame)%c.statics);
@@ -311,13 +361,15 @@ void Cpu(const std::filesystem::path& root,const Case& c,unsigned repetition,boo
             const auto report=scene->Runtime().HotPathReport(); PROCESS_MEMORY_COUNTERS_EX memory{}; memory.cb=sizeof(memory);
             Require(GetProcessMemoryInfo(GetCurrentProcess(),reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&memory),sizeof(memory))!=0,"Memory sample failed");
             std::size_t awake=0; for(const auto body:dynamic) if(!PhysicsBackend::IsSleeping(*scene,body)) ++awake;
-            out << frame-warmup << ',' << totalMs << ',' << mutationMs << ',' << updateMs << ',' << queryMs << ',' << static_cast<double>(report.runtimeTransformSyncNanoseconds)/1e6 << ',' << static_cast<double>(report.runtimeFixedCaptureStartNanoseconds+report.runtimeFixedCaptureEndNanoseconds)/1e6 << ',' << report.transformHierarchyUpdatedCount << ',' << report.transformHierarchyInspectedCount << ',' << scene->Runtime().LastFixedStepCount() << ',' << static_cast<double>(memory.WorkingSetSize)/1048576 << ',' << static_cast<double>(memory.PrivateUsage)/1048576 << ',' << awake << ',' << frameHits << '\n';
+            out << frame-warmup << ',' << totalMs << ',' << mutationMs << ',' << updateMs << ',' << queryMs << ',' << static_cast<double>(report.runtimeTransformSyncNanoseconds)/1e6 << ',' << static_cast<double>(report.runtimeFixedCaptureStartNanoseconds+report.runtimeFixedCaptureEndNanoseconds)/1e6 << ',' << report.transformHierarchyUpdatedCount << ',' << report.transformHierarchyInspectedCount << ',' << scene->Runtime().LastFixedStepCount() << ',' << static_cast<double>(memory.WorkingSetSize)/1048576 << ',' << static_cast<double>(memory.PrivateUsage)/1048576 << ',' << awake << ',' << frameHits << ',' << collisionEvents.size() << '\n';
             hitsTotal+=frameHits;
+            collisionEventsTotal+=collisionEvents.size();
             if(trace) for(const auto& system:scene->Runtime().LastEcsProfilerTrace().systemCounters) {
                 traceOutput << frame-warmup << ',' << system.systemName << ',' << static_cast<double>(system.cpuTimeNanoseconds)/1e6 << ',' << system.entitiesProcessed << ',' << system.jobsCount << '\n';
             }
         }
     }
+    if(c.active) Require(collisionEventsTotal > 0U, "Active physics produced no consumed collision events");
     if(c.rays) Require(hitsTotal>=static_cast<std::size_t>(c.rays)*frames,"Raycast test did not hit authored colliders");
     // Instance stores lightweight handles; its destruction does not destroy scene objects.
     const auto teardownStart=Clock::now(); scene.reset(); const double teardownMs=Ms(teardownStart);
@@ -352,7 +404,7 @@ void Stream(const std::filesystem::path& root,const Case& c,unsigned repetition)
     Scene scene{Descriptor(c.statics+c.dynamics>0)};
     scene.LoadedContent().ConfigureStreaming({.maxPendingLoads=2,.maxOperationsPerFrame=256,.maxMillisecondsPerFrame=2.0F});
     std::ofstream out(root/"Results/raw"/(c.name+"_async_"+std::to_string(repetition)+".csv"));
-    out << "cycle,phase,frame,update_ms,stream_ms,operations,progress,entities\n";
+    out << "cycle,phase,frame,update_ms,stream_ms,operations,progress,entities,transform_sync_ms,topology_builds\n";
     for(unsigned cycle=0;cycle<3;++cycle) {
         const auto id=scene.LoadedContent().LoadAsync(path); Require(id!=0,"Async load rejected");
         for(unsigned phase=0;phase<2;++phase) {
@@ -364,9 +416,10 @@ void Stream(const std::filesystem::path& root,const Case& c,unsigned repetition)
                 Require(scene.LoadedContent().Status(id)!=SceneLoadStatus::Failed,scene.LoadedContent().Error(id));
                 const auto start=Clock::now(); static_cast<void>(scene.Runtime().Update(1.0F/60.0F)); const double duration=Ms(start);
                 const auto stats=scene.LoadedContent().StreamingStats();
+                const auto report=scene.Runtime().HotPathReport();
                 Require(stats.operations<=256,"Streaming operation budget exceeded");
                 CheckErrors(scene);
-                out << cycle << ',' << phase << ',' << frame++ << ',' << duration << ',' << stats.milliseconds << ',' << stats.operations << ',' << scene.LoadedContent().Progress(id) << ',' << scene.Entities().Count() << '\n';
+                out << cycle << ',' << phase << ',' << frame++ << ',' << duration << ',' << stats.milliseconds << ',' << stats.operations << ',' << scene.LoadedContent().Progress(id) << ',' << scene.Entities().Count() << ',' << report.runtimeTransformSyncNanoseconds/1.0e6 << ',' << report.transformTopologicalBatchBuildCount << '\n';
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }
             Require(scene.Entities().Count()==(phase?0:document.worldPrefab.NodeCount()+1),"Async transition leaked or lost entities");

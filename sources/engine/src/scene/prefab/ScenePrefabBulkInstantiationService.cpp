@@ -5,6 +5,7 @@
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneUIComponentSet.hpp"
 #include "scene/SceneAccess.hpp"
+#include "scene/SceneRenderProxyComponentMask.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/entities/SceneEntityNaming.hpp"
 #include "scene/hierarchy/SceneHierarchyCache.hpp"
@@ -502,6 +503,7 @@ void AssignPrefabHierarchyOrderRange(SceneState& state, std::span<const SceneEnt
 
     for (std::size_t index = 0; index < entities.size(); ++index) {
         const SceneEntity entity = entities[index];
+        RefreshSceneRenderProxyComponentMask(state, entity);
         const std::uint32_t denseIndex = kb::ecs::GeneratedEntityIndex(entity);
         if (denseIndex != kb::ecs::kInvalidGeneratedEntityIndex) {
             if (denseIndex >= state.denseHierarchyOrder.size()) {
@@ -616,11 +618,13 @@ void AssignPrefabHierarchyOrderRange(SceneState& state, std::span<const SceneEnt
         }
     }
 
+    const auto previousTopologyVersion = state.hierarchyTopologyVersion;
     ++state.hierarchyTopologyVersion;
     ++state.renderTopologyVersion;
     SceneHierarchyCache::MarkRowContentDirty(state);
     if (state.hierarchyTopologyVersion == 0U) state.hierarchyTopologyVersion = 1U;
     if (state.renderTopologyVersion == 0U) state.renderTopologyVersion = 1U;
+    state.transformTopology.Added(state, entities, previousTopologyVersion);
     return true;
 }
 
@@ -718,11 +722,13 @@ void AssignPrefabHierarchyOrderRange(SceneState& state, std::span<const SceneEnt
             }
         }
     }
+    const auto previousTopologyVersion = state.hierarchyTopologyVersion;
     ++state.hierarchyTopologyVersion;
     ++state.renderTopologyVersion;
     SceneHierarchyCache::MarkRowContentDirty(state);
     if (state.hierarchyTopologyVersion == 0U) state.hierarchyTopologyVersion = 1U;
     if (state.renderTopologyVersion == 0U) state.renderTopologyVersion = 1U;
+    state.transformTopology.Added(state, entities, previousTopologyVersion);
     return hasDenseEntity ? maxEntityIndex : kb::ecs::kInvalidGeneratedEntityIndex;
 }
 

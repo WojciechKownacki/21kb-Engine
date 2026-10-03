@@ -1,5 +1,7 @@
 #pragma once
 
+#include "kb/render/shadow/PointShadowUniforms.hpp"
+#include "kb/render/shadow/ShadowCascadeUniforms.hpp"
 #include "kb/render/MaterialProgramRegistry.hpp"
 #include "kb/render/resources/RenderResourceRegistry.hpp"
 #include "kb/render/resources/RenderSkinningPaletteAllocator.hpp"
@@ -75,6 +77,7 @@ public:
     [[nodiscard]] bgfx::ProgramHandle Bind(const SceneMeshPassBindDesc& desc) const noexcept;
     [[nodiscard]] MaterialProgramRegistryStats ProgramRegistryStats() const noexcept { return programRegistry_.Stats(); }
     void EndFrame(std::uint64_t frameIndex) const;
+    [[nodiscard]] SceneLightGridResources& LightGrid() const noexcept { return lightGrid_; }
 
     void SetGraphShaderCacheRoot(std::string root) { graphShaderCacheRoot_ = std::move(root); }
     [[nodiscard]] SceneMeshPassProgramResolution ResolveMeshPassProgram(
@@ -102,6 +105,7 @@ private:
         std::string_view name,
         bool sampler) const;
 
+    mutable SceneLightGridResources lightGrid_;
     std::string graphShaderCacheRoot_;
     mutable MaterialProgramRegistry programRegistry_;
     mutable std::vector<MaterialProgramKey> residentProgramKeys_;
@@ -162,6 +166,8 @@ private:
     bgfx::UniformHandle environmentParamsUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle shadowViewProjUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle shadowParamsUniform_ = BGFX_INVALID_HANDLE;
+    ShadowCascadeUniforms shadowCascades_{};
+    PointShadowUniforms pointShadows_{};
     bgfx::TextureHandle fallbackWhiteTexture_ = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle fallbackNormalTexture_ = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle fallbackWhiteCubeTexture_ = BGFX_INVALID_HANDLE;

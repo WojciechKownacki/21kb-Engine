@@ -1198,6 +1198,11 @@ public:
         }
     }
 
+    [[nodiscard]] void* TryGetComponentData(EntityLocation location, ComponentId componentId) {
+        const ComponentLayout* column = FindColumn(componentId);
+        return column == nullptr ? nullptr : ComponentData(location, *column);
+    }
+
     [[nodiscard]] void* ComponentData(EntityLocation location, ComponentId componentId) {
         const ComponentLayout* column = FindColumn(componentId);
         if (column == nullptr) {
@@ -1238,6 +1243,11 @@ public:
             throw std::out_of_range("Native ECS component column is not available");
         }
         return ColumnBase(chunks_[chunkIndex], *column);
+    }
+
+    [[nodiscard]] const void* TryGetComponentData(EntityLocation location, ComponentId componentId) const {
+        const ComponentLayout* column = FindColumn(componentId);
+        return column == nullptr ? nullptr : ComponentData(location, *column);
     }
 
     [[nodiscard]] const void* ComponentData(EntityLocation location, ComponentId componentId) const {
@@ -2135,6 +2145,7 @@ public:
         }
         --liveEntities_;
         BumpStructuralVersion();
+        removalVersion_ = structuralVersion_;
     }
 
     void DestroyEntities(std::span<const Entity> entities) {
@@ -2174,6 +2185,7 @@ public:
             }
             DestroyAllLiveEntities(false);
             BumpStructuralVersion(entities.size());
+            removalVersion_ = structuralVersion_;
             return;
         }
 
@@ -2248,35 +2260,43 @@ public:
         }
         liveEntities_ -= entities.size();
         BumpStructuralVersion(entities.size());
+        removalVersion_ = structuralVersion_;
     }
 
     void Clear() {
         const std::size_t removedCount = liveEntities_;
         DestroyAllLiveEntities(false);
         BumpStructuralVersion(removedCount);
+        removalVersion_ = structuralVersion_;
     }
 
     void ClearRetainingCapacity() {
         const std::size_t removedCount = liveEntities_;
         DestroyAllLiveEntities(true);
         BumpStructuralVersion(removedCount);
+        removalVersion_ = structuralVersion_;
     }
 
     [[nodiscard]] bool IsAlive(Entity entity) const noexcept {
+        return FindLiveRecordIndex(entity).has_value();
+    }
+
+    [[nodiscard]] std::optional<std::uint32_t> FindLiveRecordIndex(Entity entity) const noexcept {
         const std::uint32_t generatedIndex = EntityIndex(entity);
         if (generatedIndex != kInvalidEntityIndex && generatedIndex < records_.size()) {
             const EntityRecord& record = records_[generatedIndex];
             if (record.ownsGeneratedId && record.alive && record.entity == entity && record.generation == EntityGeneration(entity)) {
-                return true;
+                return generatedIndex;
             }
         }
 
         const std::optional<std::uint32_t> found = LookupExternalSlot(entity.Id());
         if (!found.has_value() || *found >= records_.size()) {
-            return false;
+            return std::nullopt;
         }
         const EntityRecord& record = records_[*found];
-        return record.alive && record.entity == entity && record.generation == EntityGeneration(entity);
+        return record.alive && record.entity == entity && record.generation == EntityGeneration(entity)
+            ? found : std::nullopt;
     }
 
     [[nodiscard]] Entity ResolveAliveEntity(Entity::IdType entityIdWithoutGeneration) const noexcept {
@@ -2423,6 +2443,7 @@ public:
         }
         Migrate(entity, record, sourceIndex, EdgeKind::Remove, removedIds, targetTypes, {});
         BumpStructuralVersion();
+        removalVersion_ = structuralVersion_;
     }
 
     void RemoveComponents(std::span<const Entity> entities, std::span<const ComponentId> componentIds) {
@@ -2471,6 +2492,7 @@ public:
             BulkMigrate(sourceIndex, EdgeKind::Remove, removedIds, targetTypes, group, {});
         }
         BumpStructuralVersion(entities.size());
+        removalVersion_ = structuralVersion_;
     }
 
     void SetComponent(Entity entity, ComponentId componentId, const void* data, std::size_t size) {
@@ -2583,6 +2605,20 @@ public:
     [[nodiscard]] const void* ComponentData(Entity entity, ComponentId componentId) const {
         const EntityRecord& record = LiveRecord(entity);
         return tables_[record.location.table].ComponentData(record.location, componentId);
+    }
+
+    [[nodiscard]] void* TryGetMutableComponentData(Entity entity, ComponentId componentId) {
+        const auto index = FindLiveRecordIndex(entity);
+        if (!index.has_value()) return nullptr;
+        EntityRecord& record = records_[*index];
+        return tables_[record.location.table].TryGetComponentData(record.location, componentId);
+    }
+
+    [[nodiscard]] const void* TryGetComponentData(Entity entity, ComponentId componentId) const {
+        const auto index = FindLiveRecordIndex(entity);
+        if (!index.has_value()) return nullptr;
+        const EntityRecord& record = records_[*index];
+        return tables_[record.location.table].TryGetComponentData(record.location, componentId);
     }
 
     [[nodiscard]] bool HasComponent(Entity entity, ComponentId componentId) const {
@@ -2786,6 +2822,8 @@ public:
     [[nodiscard]] std::uint64_t StructuralVersion() const noexcept {
         return structuralVersion_;
     }
+
+    [[nodiscard]] std::uint64_t RemovalVersion() const noexcept { return removalVersion_; }
 
     [[nodiscard]] std::size_t ChunkPayloadBytes() const noexcept {
         return chunkPayloadBytes_;
@@ -3653,6 +3691,7 @@ private:
     std::vector<ComponentId> singleRemovedIdsScratch_;
     std::vector<ComponentId> singleEdgeIdsScratch_;
     std::uint64_t structuralVersion_ = 1;
+    std::uint64_t removalVersion_ = 0;
 };
 
 NativeArchetypeStorage::NativeArchetypeStorage(WorldConfig config)
@@ -3788,6 +3827,14 @@ const void* NativeArchetypeStorage::ComponentData(Entity entity, ComponentId com
     return impl_->ComponentData(entity, componentId);
 }
 
+void* NativeArchetypeStorage::TryGetMutableComponentData(Entity entity, ComponentId componentId) {
+    return impl_->TryGetMutableComponentData(entity, componentId);
+}
+
+const void* NativeArchetypeStorage::TryGetComponentData(Entity entity, ComponentId componentId) const {
+    return impl_->TryGetComponentData(entity, componentId);
+}
+
 bool NativeArchetypeStorage::HasComponent(Entity entity, ComponentId componentId) const {
     return impl_->HasComponent(entity, componentId);
 }
@@ -3866,6 +3913,10 @@ std::uint64_t NativeArchetypeStorage::ArchetypeComponentVersion(std::size_t arch
 
 std::uint64_t NativeArchetypeStorage::StructuralVersion() const noexcept {
     return impl_ != nullptr ? impl_->StructuralVersion() : 0;
+}
+
+std::uint64_t NativeArchetypeStorage::RemovalVersion() const noexcept {
+    return impl_ != nullptr ? impl_->RemovalVersion() : 0;
 }
 
 std::size_t NativeArchetypeStorage::ChunkPayloadBytes() const noexcept {

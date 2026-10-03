@@ -17,11 +17,11 @@ TransformComponent SceneTransformService::Get(const Scene& scene, SceneEntity en
 }
 
 const TransformComponent* SceneTransformService::TryGet(const Scene& scene, SceneEntity entity) noexcept {
-    return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.Transforms().TryGet(entity) : nullptr;
+    return SceneAccess::State(scene).componentStorage.Transforms().TryGet(entity);
 }
 
 TransformComponent* SceneTransformService::TryGet(Scene& scene, SceneEntity entity) noexcept {
-    return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.Transforms().TryGet(entity) : nullptr;
+    return SceneAccess::State(scene).componentStorage.Transforms().TryGet(entity);
 }
 
 void SceneTransformService::Set(Scene& scene, SceneObject object, const TransformComponent& transform) {

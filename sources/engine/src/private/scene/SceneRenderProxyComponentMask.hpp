@@ -71,6 +71,10 @@ inline void ClearSceneRenderProxyComponentMask(SceneState& state, SceneEntity en
     state.renderProxySparseComponentMasks.erase(entity.Id());
 }
 
+// Bulk creation bypasses the individual scene component setters. Rebuild their
+// derived publication flags from the live ECS before publishing the new rows.
+void RefreshSceneRenderProxyComponentMask(SceneState& state, SceneEntity entity);
+
 [[nodiscard]] constexpr bool SceneRenderProxyMaskHas(std::uint8_t mask, SceneRenderProxyComponentMask bit) noexcept {
     return (mask & SceneRenderProxyMask(bit)) != 0U;
 }

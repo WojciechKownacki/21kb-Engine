@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/particles/IParticleSimulationBackend.hpp"
+#include "engine/particles/ParticleGpuEmitter.hpp"
 #include "engine/particles/ParticleCompiledEffect.hpp"
 #include "engine/particles/ParticleRenderSnapshot.hpp"
 #include "engine/scene/ParticleEffectAsset.hpp"
@@ -224,6 +225,23 @@ private:
         kb::scene::Scene& scene,
         std::uint64_t fixedStepIndex) noexcept;
     [[nodiscard]] std::uint32_t InstanceParticleLimit(std::uint32_t denseIndex) const noexcept;
+
+    // GPU-simulated emitters (see engine/particles/ParticleGpuEmitter.hpp). An emitter of a
+    // GPU-preferring effect is simulated on the GPU once the renderer has registered as consumer and
+    // the emitter only needs closed-form motion; everything else stays on the CPU path.
+    struct GpuPending {
+        std::uint64_t instanceId = 0U;
+        std::uint32_t denseIndex = 0U;
+        std::uint8_t emitterIndex = 0U;
+        std::vector<kb::particles::ParticleGpuSpawn> spawns;
+    };
+    [[nodiscard]] bool GpuEligible(std::uint32_t denseIndex, std::uint8_t emitterIndex, std::uint8_t prewarmGroup) const noexcept;
+    void SpawnGpu(std::uint32_t denseIndex, std::uint8_t emitterIndex, std::uint32_t count,
+        const kb::math::Vec3* eventPosition) noexcept;
+    void FlushGpuSpawns() noexcept;
+    void QueueGpuRelease(std::uint64_t instanceId, std::uint32_t denseIndex, bool release) noexcept;
+    [[nodiscard]] kb::particles::ParticleGpuEmitterParams BuildGpuParams(
+        std::uint32_t denseIndex, std::uint8_t emitterIndex) const noexcept;
     [[nodiscard]] float EvaluateRate(const CompiledEmitter& emitter, float timeSeconds) const noexcept;
     [[nodiscard]] static float EvaluateCurve(const CompiledCurve& curve, float normalizedAge) noexcept;
     [[nodiscard]] static kb::math::Color EvaluateGradient(
@@ -264,6 +282,9 @@ private:
     std::vector<InternalEvent> prewarmCurrentEvents_;
     std::vector<InternalEvent> prewarmNextEvents_;
     std::uint64_t prewarmingInstanceId_ = 0U;
+    kb::scene::Scene* gpuScene_ = nullptr;
+    double gpuSimTime_ = 0.0;
+    std::vector<GpuPending> gpuPending_;
 
     std::vector<std::uint64_t> particleInstanceIds_;
     std::vector<std::uint64_t> particleIds_;

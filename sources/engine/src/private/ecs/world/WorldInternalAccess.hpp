@@ -21,6 +21,10 @@ public:
     [[nodiscard]] static Entity ResolveAliveEntity(const World& world, Entity::IdType entityIdWithoutGeneration) noexcept;
 
     [[nodiscard]] static const void* TryGetComponent(const World& world, Entity entity, ComponentId componentId);
+    [[nodiscard]] static void* TryGetMutableComponent(World& world, Entity entity, ComponentId componentId);
+    // Native optional lookup validates lifetime; no backend lookup or copied state.
+    [[nodiscard]] static void* TryGetMutableNativeComponent(World& world, Entity entity, ComponentId componentId);
+    static void MarkComponentModified(World& world, Entity entity, ComponentId componentId);
     static void SetComponent(World& world, Entity entity, ComponentId componentId, std::size_t size, const void* component);
 };
 

@@ -6,6 +6,7 @@
 #include "kb/render/scene/SceneRenderResourceMap.hpp"
 #include "scene/lighting/SceneLightingPacker.hpp"
 #include "scene/submit/SceneMeshPassResources.hpp"
+#include "scene/submit/SceneMeshInstanceBufferPool.hpp"
 
 #include <bgfx/bgfx.h>
 
@@ -14,29 +15,6 @@
 #include <vector>
 
 namespace kb::render {
-
-class SceneMeshInstanceBufferPool {
-public:
-    SceneMeshInstanceBufferPool() = default;
-    ~SceneMeshInstanceBufferPool();
-    SceneMeshInstanceBufferPool(const SceneMeshInstanceBufferPool&) = delete;
-    SceneMeshInstanceBufferPool& operator=(const SceneMeshInstanceBufferPool&) = delete;
-
-    [[nodiscard]] bgfx::DynamicVertexBufferHandle Upload(
-        std::span<const SceneRenderMeshInstance> instances,
-        const RenderMaterialResource* material,
-        bool encodeShadowReceiver);
-    void EndFrame() noexcept { usedSlots_ = 0U; }
-    void Shutdown() noexcept;
-
-private:
-    struct Slot {
-        bgfx::DynamicVertexBufferHandle buffer = BGFX_INVALID_HANDLE;
-        std::uint32_t capacity = 0U;
-    };
-    std::vector<Slot> slots_;
-    std::size_t usedSlots_ = 0U;
-};
 
 struct SceneMeshDrawCommandSubmitDesc {
     bgfx::ViewId viewId = 0;

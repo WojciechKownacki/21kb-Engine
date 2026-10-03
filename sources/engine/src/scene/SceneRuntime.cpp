@@ -339,8 +339,8 @@ SceneRuntimeHotPathReport SceneRuntimeService::HotPathReport(const Scene& scene)
         .runtimeTransformSyncNanoseconds = state.lastRuntimeTransformSyncNanoseconds,
         .runtimeFixedCaptureStartNanoseconds = state.lastRuntimeFixedCaptureStartNanoseconds,
         .runtimeFixedCaptureEndNanoseconds = state.lastRuntimeFixedCaptureEndNanoseconds,
-        .transformTopologicalBatchCount = state.transformTopologicalBatches.size(),
-        .transformTopologicalBatchBuildCount = state.transformTopologicalBatchBuildCount,
+        .transformTopologicalBatchCount = state.transformTopology.Levels().size(),
+        .transformTopologicalBatchBuildCount = state.transformTopology.BuildCount(),
         .transformRenderProxyUpdateCount = state.transformRenderProxyUpdateEntities.size(),
         .transformRenderProxyMeshRendererCount = state.transformRenderProxyMeshRendererIndices.size(),
         .transformRenderProxyVisibleMeshRendererCount = state.transformRenderProxyVisibleMeshRendererIndices.size(),
@@ -495,7 +495,8 @@ bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
         while (state.fixedStepAccumulatorSeconds >= fixed.fixedDeltaSeconds &&
             state.lastFixedStepCount < fixed.maxFixedStepsPerFrame) {
             synchronizeTransforms();
-            const auto captureStart = Clock::now();
+            const auto stepStart = Clock::now();
+            const auto captureStart = stepStart;
             CaptureFixedStepStart(scene, state);
             state.lastRuntimeFixedCaptureStartNanoseconds += nanosecondsSince(captureStart);
             state.sceneSystemScheduler.FixedUpdate(scene, fixed.fixedDeltaSeconds, SceneFixedUpdatePhase::PreSimulation);
@@ -513,6 +514,12 @@ bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
             state.fixedStepAccumulatorSeconds -= fixed.fixedDeltaSeconds;
             ++state.lastFixedStepCount;
             ++state.fixedStepIndex;
+            // A step slower than real time can never be caught up; further steps
+            // would only multiply the frame cost (spiral of death), so drop the debt.
+            if (static_cast<double>(nanosecondsSince(stepStart)) * 1e-9 >= static_cast<double>(fixed.fixedDeltaSeconds)) {
+                state.fixedStepAccumulatorSeconds = std::min(state.fixedStepAccumulatorSeconds, fixed.fixedDeltaSeconds * 0.5F);
+                break;
+            }
         }
         if (state.lastFixedStepCount == fixed.maxFixedStepsPerFrame &&
             state.fixedStepAccumulatorSeconds >= fixed.fixedDeltaSeconds) {

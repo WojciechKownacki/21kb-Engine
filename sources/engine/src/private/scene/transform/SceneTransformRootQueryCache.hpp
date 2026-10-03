@@ -12,6 +12,7 @@ struct SceneTransformRootQueryCache {
     kb::ecs::Query<TransformComponent> query;
     kb::ecs::UnsafeHotQuery<TransformComponent> hotQuery;
     std::uint64_t hierarchyTopologyVersion = 0U;
+    std::uint64_t removalSafetyEpoch = 0U;
 };
 
 } // namespace kb::scene

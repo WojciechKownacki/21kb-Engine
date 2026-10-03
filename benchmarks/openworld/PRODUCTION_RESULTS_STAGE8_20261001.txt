@@ -1,0 +1,128 @@
+21kb — etap 8: poprawność odrzucania generowanych instancji i zweryfikowana baza
+Data: 2026-10-01. Gałąź 1.0. Baza: ae2d955c71a23c426bbfe181f9d7099220bcea15.
+Pełny cel produkcyjny pozostaje aktywny. Mixed, city i bulk P99 nadal FAIL.
+
+Minimalna zaakceptowana zmiana
+MeshPassProcessor zachowuje per-instance ścieżkę dla SelectionId/EditorSelection
+oraz gdy istnieją braki zasobów. Przy odrzuceniu jednego generowanego klastra
+uzupełnia lodSelectionCount o pozostałe instancje, gdy siatka ma jeden LOD.
+Nie dodano cache'u, rejestru, kopii komponentów, drugiego stanu autorskiego
+ani zmiany szczegółowości scen. To poprawka poprawności; nie deklarujemy zysku CPU.
+MeshPipelineTests porównuje akceptowane ID i liczniki widoczności/cullingu/LOD
+ze ścieżką scalar: 30 kombinacji dwóch liczb LOD, pięciu pasów i trzech kamer,
+z shear, off-centre bounds, wzrostem swarmu i różnymi właścicielami.
+
+Dowód regresji i walidacja
+Test bazowego cullingu z nowymi asercjami na kodzie sprzed poprawki: exit 1.
+Nowy obowiązkowy RunGeneratedClusterMissingResourceDiagnosticsTest rejestruje
+rzeczywisty bufor siatki P3N3UV2 i 256 generowanych instancji poza frustum.
+Scalar reference wymaga 256 brakujących materiałów i 256 odrzuconych instancji.
+Mutant usuwający tylko warunek HasMissingResources: build 0, test 1. Poprawka:
+build 0, command-reuse 0. Dowód zapisano w diagnostics/missing_resource_regression.json.
+Początkowy test w opcjonalnym scenariuszu Project/Assets nie wykonywał się;
+nie był dowodem regresji. Niezależna próbka P3C3 również była niepoprawna,
+bo scene mesh pipeline nie obsługuje tego formatu. Zastąpiono ją P3N3UV2;
+zachowano odrzucone logi i przyczynę w diagnostics/invalid_fixture.
+Pełny build, renderer, świeży WebGPU fallback, engine, ECS API, stress, replay,
+scheduler oraz snapshot scale: exit 0. Snapshot/katalog obejmują milion encji.
+Nowy test diagnostyczny jest headless, bez zależności od lokalnych assetów;
+nie jest testem pikseli shaderów. Testy istniejącego opcjonalnego projektu
+nie zastępują wymaganej walidacji produkcyjnych funkcji GPU.
+
+Odrzucony eksperyment wydajnościowy
+Rozszerzenie klastrów widoczności na zwykłe strony siatek zmniejszyło city
+mean 12.074093 -> 11.305457 ms i P99 18.8196 -> 15.1816 ms, lecz zwiększyło
+mixed gameplay P99 w KAŻDYM z trzech porównań:
+  20.0046 -> 22.4959; 19.5626 -> 22.5688; 19.7479 -> 22.1401 ms.
+Łącznie mixed mean 6.678803 -> 6.607138, P99 19.8152 -> 22.4797 ms,
+max 49.9318 -> 59.0866 ms. Eksperyment w całości wycofano z runtime/testów.
+Zachowano 18 pilotowych procesów, CSV/logi, patch i źródło mechanizmu w
+Results/pilot_clusters i Results/rejected_native_clusters. Eksperymentalnej
+binarce nie przypisujemy dostępności: zapisano jej hash, źródła i dane;
+kb_game_stage7.exe jest zachowaną kontrolą. Finalne 54 pomiary używają poprawki
+poprawności bez odrzuconego mechanizmu.
+World/city: pełna zgodność kontrolowanych liczników we wszystkich parach.
+Mixed: zgodne kamery, po trzy pełne cykle w każdej z sześciu serii, zgodność
+liczników w porównywalnych stanach bazowym/pełnym bez operacji streamingu.
+Nie deklarujemy pełnej zgodności klatka-po-klatce w fazie async publikacji;
+zachowano także pierwszy nieudany ścisły test oraz oddzielne weryfikacje.
+Diagnostyczny refresh klastrów miał P99 0.3292/max 0.3978 ms; sam ten koszt
+nie dowodzi przyczyny całego wzrostu P99. Nie przypisujemy mu całej regresji.
+
+Diagnoza kosztu CPU renderera na poprawnej ruchomej kamerze
+Trace etapu 7, poza pomiarami finalnymi: city opaque build 2.5616 ms,
+motion build 2.3771 ms, shadow build 1.4910 ms; opaque/motion submit około
+0.78 ms każdy, upload około 5.92 MB/klatkę. Mixed suma build mean 3.2612,
+P99 8.9374, max 24.2839 ms; submit mean 0.3287/P99 2.1650 ms.
+Powtarzanie cullingu/kopiowania instancji w kolejnych pasach nadal kosztuje CPU.
+Ślady zachowano w Results/diagnostics. Sondy usunięto przed finalną kompilacją.
+
+Metoda finalna
+Projekt: E:/21kbProjekty/OpenWorldProductionStage8_20261001.
+i7-13700F, RTX 4070 12 GB, 64 GB RAM, D3D11 1920x1080, ForwardPlus,
+Release /O2 /DNDEBUG. Headless, bez widocznego edytora i przejmowania wejścia.
+54 procesy: 18 scenariuszy x 3, wszystkie exit 0. Stałe kroki city/mixed.
+13860/13860 opublikowanych pozycji kamer zgodnych z trasą. Porównanie do etapu
+7 zachowuje 10 liczników wszystkich klatek sześciu nieruchomych scen i city
+fixed; mixed zachowuje liczniki porównywalnych stabilnych stanów. Wszystkie
+9 cykli mixed i 9 cykli async 100k kompletne, limit 256 operacji/klatkę.
+100k colliderów: 1000 trafień raycast/klatkę. Fizyka: 4096 awake, odbiór kontaktów.
+SHA-256 12 źródeł/testów/skryptów/binariów zgodne przed i po pomiarach.
+Bez buildów, testów i diagnostycznych trace w czasie serii. Liczba rezydentów
+nie oznacza tylu obiektów widocznych; submitted to suma przebiegów.
+Referencyjne silniki pozostają wyłącznie do odczytu.
+
+Finalne wyniki: średnia / P99 / maksimum [ms]
+batch_dirty_100k total_ms: 14.066957 / 21.9411 / 28.2771
+batch_dirty_100k runtime_ms: 5.801879 / 10.2033 / 12.7388
+physics_4096 runtime_ms: 3.651332 / 4.4893 / 5.2759
+dense_4096 runtime_ms: 8.151202 / 13.7178 / 18.1234
+colliders_100k runtime_ms: 0.102396 / 0.1778 / 0.2803
+world_100k wall_frame_ms: 1.002628 / 2.2701 / 3.6457
+city_dense_50k fixed wall_frame_ms: 12.138464 / 18.9771 / 24.3562
+mixed fixed warm_wall_frame_ms: 6.757993 / 20.3168 / 49.3147
+mixed fixed ALL wall_frame_ms: 7.187891 / 23.2542 / 208.0110
+async static_100k update_ms: 0.957881 / 3.5482 / 9.2901
+
+Nieudane bramki i kontrola CPU
+Mixed warm P99 20.3168, city fixed P99 18.9771 i bulk total P99 21.9411
+przekraczają 16.67 ms. Zimny mixed max 208.011 ms pozostaje w próbkach.
+Reporter vs etap 7 i pierwotna skorygowana baza: exit 1; nie obniżono bramek.
+Alarmy średniej >5% vs etap 7: physics_idle +7.43%, dense +11.08%, bulk Update
++11.77%, culling_far +5.42%. CPU benchmark i DLL Jolt są bitowo identyczne
+z etapem 7 (SHA-256). Zmiana kodu cullingu nie jest przyczyną różnicy tych
+pomiarów CPU; pozostaje rzeczywista zmienność kosztu/budżetu do zbadania.
+Osobne 9 kontroli, po 3 powtórki, TEJ SAMEJ binarki, bez zastępowania serii:
+physics_idle_world_100k: 0.016861 / 0.0326 / 0.1920
+dense_4096: 6.826778 / 8.7188 / 10.5293
+batch_dirty_100k: 13.583986 / 16.1793 / 19.3270
+Kontrola bulk P99 16.1793 nie usuwa zachowanego FAIL 21.9411. World mean spadł
+w tej serii o 4.84% vs etap 7, ale historyczny alarm +18.93% vs etap 6 nadal
+wymaga kontrolowanego A/B; nie uznajemy go za rozwiązany tą korzystną serią.
+
+Kontynuacja pełnego celu
+1. SceneMeshSubmitter/MeshPassProcessor/SceneMeshInstanceBufferPool: domknij
+   P99 city/mixed <=16.67 ms bez cofania kamery, cieni, LOD lub streamingu.
+   Nie przywracaj odrzuconych klastrów zwykłych stron bez nowego dowodu.
+2. SceneTransformService/SceneTransformComponentStore/World: zmniejsz koszt
+   bulk mutation+Update i ustabilizuj P99 <=16.67. Zachowaj każdy OnSet,
+   odroczenie, migrację, generację, interpolację i dotychczasowe pomiary.
+3. SceneLightingPacker/SceneForwardLightSelector/kontrakt shaderów: pełne
+   listy przestrzenne >=512 realnie świecących świateł. Obecny limit 32/pass
+   oraz lights_512 nie dowodzą tego wymagania. Własność zasobów w klasie
+   mechanizmu, testy pikseli, kamer/świateł, granic, overflow i wariantów.
+4. Alpha overdraw/wiatr/cienie/LOD/streaming prawdziwych zasobów roślinności;
+   obecny test czterech trójkątów bez tych funkcji nie zalicza tego celu.
+5. Asynchroniczne I/O/dekodowanie/przygotowanie GPU i budżet publikacji zasobów;
+   rozwiąż alarm world. Funkcjonalne 54/54 nie kończy pełnego celu.
+
+Dane i odtworzenie
+production_stage8_summary.csv; Results/production_summary_vs_ae2d955c.json;
+Results/production_summary_vs_3f4a9fc6.json; Results/measurement_verification.json;
+Results/measurement_hashes_before.json; Results/cpu_repeat_control/summary.json;
+Results/rejected_native_clusters/decision.json i experiment.patch.
+Generator oraz run_compare.py/report_production.py pozostają bez zmian.
+Użyj poleceń README etapu 4 z Stage8 zamiast Stage4; suite compare, capacity,
+foliage, production --fixed-step kolejno, po pełnej kompilacji/testach. Porównanie:
+  python benchmarks/openworld/report_production.py --before E:/21kbProjekty/OpenWorldProductionStage7_20261001 --after E:/21kbProjekty/OpenWorldProductionStage8_20261001
+Nie zastępuj nowych serii wcześniejszymi; zapisuj je w oddzielnym katalogu.

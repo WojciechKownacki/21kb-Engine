@@ -1,0 +1,137 @@
+21kb: pomiary produkcyjnych ścieżek CPU/GPU
+Release; i7-13700F, RTX 4070, 64 GB; D3D11 1920x1080.
+Trzy powtórki. GPU: 120 klatek rozgrzewki, 480 mierzonych; mieszany: wszystkie 3420.
+CPU: 180 rozgrzewki, 360 mierzonych; streaming: wszystkie klatki.
+P99: percentyl z połączonych próbek. GPU timer jest opóźniony; -1 pominięto.
+Liczniki renderowanych instancji i świateł są sumą pasów, nie liczbą unikalnych obiektów.
+Roślinność: cztery trójkąty, bez alpha, wiatru i cieni. Wynik nie certyfikuje gier AAA.
+
+Scenariusz | Przed średnia | Po średnia | Po P99 | Po maksimum | Zmiana | Bramka
+--- | ---: | ---: | ---: | ---: | ---: | ---
+static_100k (cpu) | 0.0124 | 0.0085 | 0.0093 | 0.0513 | -31.9% | PASS
+physics_idle_world_100k (cpu) | 0.0542 | 0.0261 | 0.0328 | 0.0748 | -51.8% | PASS
+physics_4096 (cpu) | 9.8023 | 6.2158 | 10.0755 | 37.7735 | -36.6% | FAIL
+dense_4096 (cpu) | 17.1086 | 11.6570 | 17.3295 | 57.0976 | -31.9% | pomiar
+batch_dirty_100k (cpu) | 30.7514 | 22.2574 | 90.0451 | 100.3560 | -27.6% | pomiar
+world_100k (gpu) | 23.1340 | 1.4976 | 4.3466 | 13.5040 | -93.5% | PASS
+city_dense_50k (gpu) | 43.6231 | 16.6127 | 31.1610 | 54.2895 | -61.9% | FAIL
+culling_far_10k (gpu) | 2.0362 | 0.5719 | 1.7388 | 2.7165 | -71.9% | pomiar
+culling_side_10k (gpu) | 1.7988 | 0.5379 | 1.5538 | 1.9233 | -70.1% | pomiar
+foliage_100k (gpu) | 20.6227 | 0.8463 | 3.2458 | 4.7635 | -95.9% | pomiar
+foliage_1m (gpu) | 133.9573 | 1.5248 | 5.3024 | 5.9047 | -98.9% | PASS
+city_dense_50k (fixed_gpu) | 30.7782 | 16.8781 | 26.4260 | 43.9864 | -45.2% | FAIL
+geometry_10k (fixed_gpu) | 3.3664 | 2.1254 | 6.7959 | 7.9888 | -36.9% | pomiar
+lights_512 (fixed_gpu) | 3.2925 | 0.9180 | 2.5536 | 4.0229 | -72.1% | pomiar
+shadow_50k (fixed_gpu) | 19.2519 | 1.5993 | 2.4191 | 3.7676 | -91.7% | pomiar
+mixed_stream_10k (fixed_gpu) | 16.7190 | 10.8293 | 32.5807 | 237.6420 | -35.2% | pomiar
+static_100k (async) | 4.1585 | 3.2701 | 11.9147 | 43.9790 | -21.4% | FAIL
+
+Szczegółowe metryki i średnie każdej powtórki: production_summary.json.
+Nieudane bramki i regresje są zachowane w raporcie.
+
+Baza źródeł: 3f4a9fc630f7f9413a35942e600ba9a01d014eef, branch 1.0.
+Nowa baza została osobno zbudowana z tym samym harness i nowymi scenami.
+Poprzednia seria RESULTS_20260930.txt ma inne uruchomienia; nie łącz timingów.
+Surowe pliki przed:
+  E:\21kbProjekty\OpenWorldProductionBefore_20260930\Results
+Surowe pliki po:
+  E:\21kbProjekty\OpenWorldProduction_20260930\Results
+
+Pamięć procesu w próbkach CPU (Working Set / private MB):
+  static_100k: 816.0 / 816.2
+  physics_idle_world_100k: 844.3 / 871.6
+  physics_4096: 376.5 / 403.8
+  dense_4096: 410.1 / 443.4
+  batch_dirty_100k: 823.4 / 824.8
+To pamięć całego procesu z utrzymanym dokumentem fixture, instancją prefab,
+metadanymi, cache i backendem; nie jest miarą bajtów na encję native ECS ani VRAM.
+
+Wykonane poprawki:
+- SceneUIGroupTransitions: query wyłącznie UICanvasGroup, bez pełnego spaceru
+  po hierarchii świata. Istniejący uiGroupShown pozostaje jedynym stanem animacji.
+- SceneMeshCommandReuseGate / SceneMeshSubmitter: istniejące listy drawów są
+  ponownie używane tylko przy zgodnych rewizjach sceny, zasobów, bindingów,
+  kamery, historii LOD i konfiguracji. Bez dodatkowej kopii autorskiej sceny.
+- SceneMeshInstanceBufferPool: zachowanie zawartości istniejących buforów GPU;
+  brak ponownego pakowania/uploadu przy tej samej wersji komendy i kodowaniu.
+- RendererTemporalJitter / MeshPipelineVisibility: stabilny, konserwatywny
+  frustum dla TAA, poprawne granice przy shear, szybka skala diagonalna.
+- ShadowCasterBoundsCollector: istniejące grupy instancji, jedno rozwiązanie
+  zasobu na grupę. Pokrycie cieni również dla GeometrySwarm i wygenerowanych
+  segmentów. Klastry zachowują konserwatywne granice.
+- JoltPhysicsSceneSystem: wersjonowane adresy query na czas fixed step,
+  pojedynczy lock odczytu ciała, mniej publikacji niezmiennych prędkości,
+  redukcja kontaktów bez alokacji wektorów na każdą parę; semantyka Enter/Stay/
+  Exit i dwufazowe przeliczanie parent/child pozostają sprawdzone testami.
+- SceneTransformHierarchySystem: usunięcie atomików bez konsumenta, poprawa
+  licznika root fast path, respektowanie world.workerThreadLimit, domyślnie 8.
+- ComponentStorageMutation / WorldComponentMutator: zapis istniejącego
+  komponentu bez ścieżki tworzenia archetypu. OnSet, odroczenie i dziedziczenie
+  zachowane. Native ECS jest nadal właścicielem; zgodność backendu działa.
+
+Sprawdzone:
+- Release: kb_game, kb_editor, kb_renderer_tests, kb_engine_tests,
+  kb_openworld_perf, kb_ecs_api_tests.
+- Pełne skonfigurowane suite silnika, renderera i API ECS: exit 0.
+- WebGPU texture fallback: osobny proces, exit 0. Pełne suite raportuje skip
+  tej fixture po utworzeniu urządzenia; nie jest to pomiar wydajności WebGPU.
+- Brak dropped/missing_resources we wszystkich scenach; 3 powtórki na każdą.
+- Aktywne testy CPU: wszystkie 4096 ciał obudzone, jeden fixed step/klatkę.
+- Streaming CPU: 9 pełnych cykli po 100002 encje, powrót do zera, operacje <=256.
+- Mieszany test: 9 pełnych cykli 20646 -> 30648 -> 20646, jeden fixed step,
+  rzeczywiste światła, cienie, geometria 960 trójkątów/mesh oraz fizyka.
+- Żaden raportowany scenariusz nie ma regresji średniej powyżej 5%.
+
+Granice pomiarów:
+- wall_frame_ms jest odstępem pomiędzy początkiem iteracji; koszty CPU w tym
+  samym wierszu dotyczą bieżącej iteracji. Do przypisania piku trzeba przesunąć
+  wiersz o jedną klatkę. GPU timers oraz bgfx wait są dodatkowo opóźnione.
+- Mieszany test obejmuje również zimny start. Jego maksimum 237.642 ms jest
+  kosztem pierwszej iteracji, nie kosztem LoadAsync. Dalsze piki pozostają w CSV.
+- Milion roślin to milion rezydentnych instancji jednego właściciela ECS, nie
+  milion encji/fizycznych obiektów. 674892 submitów sumuje dwa pasy, czyli około
+  337446 unikalnych widocznych instancji. Cztery trójkąty, brak alpha i wiatru.
+- world_100k: 32504 submitów w dwóch pasach, około 16252 widocznych obiektów.
+  Obie statyczne sceny mają po rozgrzewce zero uploadu instancji; drawy/GPU
+  nadal wykonują się. GPU średnio 0.718 ms world i 1.347 ms roślinność.
+- Forward+ obsługuje maksymalnie 32 światła na pas. lights_512 mierzy selekcję
+  i render wybranych świateł, nie render 512 świateł jednocześnie.
+- Wykorzystano istniejące binarne shadery; GRAPH_SHADERC i generowanie shaderów
+  OFF. Cały cooker i wszystkie docelowe API/GPU nie są tym testem sprawdzone.
+- Brak przebudowy ciężkich produkcyjnych materiałów, alpha overdraw roślin,
+  animowanych tłumów, GI oraz kompletnej gry podczas tego pomiaru.
+
+NIEZALICZONE BRAMKI / KONKRETNY ZAKRES DALSZEJ IMPLEMENTACJI
+- Physics_4096: średnia >5 ms i P99 >8 ms. SynchronizeBodies oraz
+  FinalizeWriteBackLocalPoses w JoltPhysicsSceneSystem nadal wykonują pracę
+  liniową dla aktywnego zbioru. Zachować kontakty, jointy, root motion i parent/
+  child; nie wyłączać mirroringu/kolizji ani nie pozwalać ciałom zasnąć w teście.
+- City_dense_50k: P99 >25 ms; również stały krok nie zalicza całej bramki.
+  SceneMeshSubmitter unieważnia listę pasa po zmianie dowolnego mesha. Ruch
+  niewielkiej części sceny wymusza ponowną pracę nad statycznymi instancjami.
+  Zmniejszyć zakres unieważniania w istniejącym RenderScene i listach komend,
+  bez dodawania drugiej sceny lub rozdzielania autorskiej prawdy.
+- Streaming: pełny Update P99 >8 ms, max >16.67 ms. Sam budżet streamera nie
+  obejmuje przebudów po zmianie hierarchii. BuildTopologicalBatches / Update
+  w SceneTransformHierarchySystem przebudowują stan i skanują istniejące
+  encje przy zmianach strukturalnych. W scenie z fizyką dochodzi pełne
+  RebuildFixedTransformSamples w SceneRuntime. Potrzebna aktualizacja tylko
+  dodanych/usuniętych zakresów z zachowaniem interpolacji oraz fallbacku
+  dla reparentingu, nie zmniejszenie testowej sceny.
+- Batch_dirty_100k: koszt aktualizacji i jego ogon wciąż przekracza budżet
+  gry 60 Hz. FlushDirtyTransforms publikuje i ponownie oznacza każdy wiersz;
+  SceneTransformService::MarkModified(span) nadal ma pracę per encja.
+- Limit świateł: SceneLightingPacker i kontrakt danych shaderów wymagają
+  rzeczywistej listy świateł na klaster. Samo podniesienie stałej 32 nie jest
+  działającą poprawką i może przekroczyć limity uniformów GPU.
+
+UWAGA HISTORYCZNA (kolejny etap, 01.10.2026): poniższy stan i powyższe wyniki
+dotyczą pierwszego etapu. Kolejny raport to PRODUCTION_RESULTS_STAGE2_20261001.txt.
+Pierwotne testy CPU nie odbierały zdarzeń kolizji i mierzyły rosnącą kolejkę.
+Do porównania fizyki w kolejnym etapie odtworzono bazę 3f4a9fc6 i zmierzono ją
+tym samym harness z konsumentem zdarzeń. Archiwalne próbki zachowano; nie
+porównuj aktywnej fizyki obu serii bez uwzględnienia zmiany metodologii.
+
+Stan odbioru pierwszego etapu: poprawki przeszły testy i dają mierzalną poprawę; pełna bramka
+jakości produkcyjnej NIE jest zaliczona. Ten raport nie certyfikuje równoważności
+z dużymi silnikami studyjnymi ani gotowości dowolnej gry AAA.

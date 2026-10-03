@@ -11,7 +11,7 @@ namespace kb::render {
 class RendererTemporalJitter {
 public:
     [[nodiscard]] static std::array<float, 2> Compute(std::uint64_t frameIndex, RenderExtent extent, bool enabled) noexcept;
-    static void Apply(SceneRenderCamera& camera, std::array<float, 2> jitter) noexcept;
+    static void Apply(SceneRenderCamera& camera, std::array<float, 2> jitter, RenderExtent extent = {}) noexcept;
 };
 
 } // namespace kb::render

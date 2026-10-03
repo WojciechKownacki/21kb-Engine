@@ -370,6 +370,7 @@ add_library(kb_engine STATIC
         include/engine/particles/ParticleCompiledEffectCache.hpp
         include/engine/particles/ParticleRenderSnapshot.hpp
         include/engine/particles/ParticleGpuVisualStepJournal.hpp
+        include/engine/particles/ParticleGpuEmitter.hpp
         include/engine/project/ParticleProjectPolicy.hpp
         include/engine/scene/SceneParticleEffectComponents.hpp
         include/engine/scene/LensEchoComponent.hpp
@@ -720,6 +721,7 @@ add_library(kb_engine STATIC
     src/scene/SceneTagCatalog.cpp
     src/scene/SceneObject.cpp
     src/scene/SceneRuntime.cpp
+    src/scene/SceneRenderProxyComponentMask.cpp
     src/scene/SceneState.cpp
     src/scene/SceneTaskService.cpp
     src/scene/SceneTimerService.cpp
@@ -1031,6 +1033,8 @@ add_library(kb_engine STATIC
     src/scene/assets/ScenePrefabAssetLoader.cpp
     src/scene/transform/SceneTransformBranchUpdater.cpp
     src/scene/transform/SceneTransformHierarchySystem.cpp
+    src/scene/transform/SceneTransformTopologyCache.cpp
+    src/scene/transform/SceneTransformLeafBatchUpdater.cpp
     src/scene/transform/SceneTransformRootCollector.cpp
     src/math/EngineMath.cpp
     src/scene/transform/QuatMath.cpp

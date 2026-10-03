@@ -84,6 +84,7 @@ void RunPhysicsSceneSystemFallingBodyTest() {
     });
 
     kb::scene::Scene scene{ std::move(descriptor) };
+    kb::scene::PhysicsBackend::SetCollisionEventConsumer(scene, true);
 
     kb::scene::SceneObject floor = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
         .name = "Floor",
@@ -2308,7 +2309,106 @@ void RunPhysicsDebugDrawTest() {
 
 namespace kb::tests {
 
+void RunStaticColliderBatchInvalidationTest() {
+    if (std::filesystem::path{KB_PHYSICS_JOLT_PLUGIN_PATH}.empty()) return;
+    kb::project::ProjectDescriptor descriptor;
+    descriptor.disableEnginePluginsByDefault = true;
+    descriptor.plugins.push_back({.name = "Physics.Jolt", .binaryPath = KB_PHYSICS_JOLT_PLUGIN_PATH, .enabled = true});
+    kb::scene::Scene scene{std::move(descriptor)};
+    kb::tests::Require(scene.IsModuleActive("Physics.Jolt"), "Static cache test did not load the real physics backend");
+    std::vector<kb::scene::SceneObject> objects;
+    for (unsigned index = 0U; index < 2048U; ++index) {
+        objects.push_back(scene.Entities().CreateObject({.transform = {.localPosition = {4.0F*static_cast<float>(index), 0.0F, 0.0F}}}));
+        scene.Components().Colliders().Set(objects.back().Entity(), {});
+    }
+    const auto update = [&] {
+        static_cast<void>(scene.Runtime().Update(1.0F/60.0F));
+        kb::tests::Require(scene.Runtime().DrainSceneSystemErrors().empty(), "Cached static body synchronization failed");
+    };
+    std::array<kb::scene::PhysicsCastResult, 2U> storage{};
+    kb::library::ArrayNonAlloc<kb::scene::PhysicsCastResult> hits{storage};
+    const auto cast = [&](float x) {
+        kb::scene::PhysicsBackend::RaycastAll(scene, {x, 10.0F, 0.0F}, {0.0F, -1.0F, 0.0F}, 20.0F,
+            kb::scene::kPhysicsAllLayers, hits);
+    };
+    update(); update();
+    cast(0.0F);
+    kb::tests::Require(hits.Count() == 1U && storage[0].entity == objects.front().Entity(), "Initial static backend body was missing");
+    scene.Transforms().Set(objects.front(), {.localPosition = {15000.0F, 0.0F, 0.0F}});
+    update();
+    cast(0.0F);
+    kb::tests::Require(hits.Count() == 0U, "Cached collider retained its old world position");
+    cast(15000.4F);
+    kb::tests::Require(hits.Count() == 1U, "Moved static box was not synchronized");
+    scene.Components().Colliders().Set(objects.front().Entity(), {.shape = kb::scene::ColliderShape::Sphere, .radius = 0.1F});
+    update();
+    cast(15000.4F);
+    kb::tests::Require(hits.Count() == 0U, "Cached collider retained its old geometry");
+    cast(15000.0F);
+    kb::tests::Require(hits.Count() == 1U, "Rebuilt static sphere was missing");
+    scene.Entities().Destroy(objects.front());
+    const auto replacement = scene.Entities().CreateObject({.transform = {.localPosition = {20000.0F, 0.0F, 0.0F}}});
+    scene.Components().Colliders().Set(replacement.Entity(), {});
+    update(); update();
+    cast(15000.0F);
+    kb::tests::Require(hits.Count() == 0U, "Deleted static body survived cached synchronization");
+    cast(20000.0F);
+    kb::tests::Require(hits.Count() == 1U && storage[0].entity == replacement.Entity(),
+        "Cached static batches confused a reused entity generation");
+    scene.Components().Colliders().Remove(replacement.Entity());
+    update(); update();
+    cast(20000.0F);
+    kb::tests::Require(hits.Count() == 0U, "Removed collider survived its cached batch");
+    const auto requireSurvivors = [&] {
+        for (const std::size_t index : {1U, 1024U, 2047U}) {
+            cast(4.0F * static_cast<float>(index));
+            kb::tests::Require(hits.Count() == 1U && storage[0].entity == objects[index].Entity(),
+                "Static body retirement removed a survivor from another cached batch");
+        }
+    };
+    requireSurvivors();
+    const auto dynamic = scene.Entities().CreateObject({.transform = {.localPosition = {10000.0F, 3.0F, 0.0F}}});
+    scene.Components().Colliders().Set(dynamic.Entity(), {});
+    scene.Components().Rigidbodies().Set(dynamic.Entity(), {});
+    update(); update();
+    kb::tests::Require(kb::scene::PhysicsBackend::GetVelocity(scene, dynamic.Entity()).found,
+        "Mixed static retirement fixture did not create a simulated body");
+    scene.Entities().Destroy(dynamic);
+    update(); update();
+    requireSurvivors();
+}
+
+void RunPhysicsEventBatchReuseTest() {
+    kb::scene::Scene scene;
+    const auto first = scene.Entities().CreateObject({}).Entity();
+    const auto second = scene.Entities().CreateObject({}).Entity();
+    std::vector<kb::scene::PendingCollisionEvent> batch;
+    batch.reserve(32U);
+    kb::scene::PhysicsBackend::QueueCollisionEvent(scene, {.target = first, .other = second, .phase = kb::scene::PhysicsContactPhase::Enter});
+    kb::scene::PhysicsBackend::QueueCollisionEvent(scene, {.target = second, .other = first, .phase = kb::scene::PhysicsContactPhase::Stay});
+    kb::scene::PhysicsBackend::DrainPendingCollisionEvents(scene, batch);
+    kb::tests::Require(batch.size() == 2U && batch[0].target == first && batch[1].target == second,
+        "Reusable contact drain changed event order");
+    const auto* originalStorage = batch.data();
+    // Events emitted while the completed batch is consumed belong to the next
+    // drain; the completed span must stay intact.
+    kb::scene::PhysicsBackend::QueueCollisionEvent(scene, {.target = first, .other = second, .phase = kb::scene::PhysicsContactPhase::Exit});
+    kb::tests::Require(batch.size() == 2U && batch[0].phase == kb::scene::PhysicsContactPhase::Enter,
+        "Queued contacts mutated the batch being dispatched");
+    kb::scene::PhysicsBackend::DrainPendingCollisionEvents(scene, batch);
+    kb::tests::Require(batch.size() == 1U && batch[0].phase == kb::scene::PhysicsContactPhase::Exit && batch.capacity() >= 32U,
+        "Reusable contact drain lost a late event or the recycled capacity");
+    kb::scene::PhysicsBackend::QueueCollisionEvent(scene, {.target = second, .other = first});
+    kb::scene::PhysicsBackend::DrainPendingCollisionEvents(scene, batch);
+    kb::tests::Require(batch.data() == originalStorage && batch.size() == 1U,
+        "Contact drain did not reuse its first completed buffer");
+    kb::tests::Require(kb::scene::PhysicsBackend::DrainPendingCollisionEvents(scene).empty(),
+        "Contact drain left an already consumed event queued");
+}
+
 void RunPhysicsSceneSystemTests() {
+    RunStaticColliderBatchInvalidationTest();
+    RunPhysicsEventBatchReuseTest();
     RunPhysicsLayersAssetIOTest();
     RunPhysicsDebugDrawTest();
     RunPhysicsIdenticalReplayTest();

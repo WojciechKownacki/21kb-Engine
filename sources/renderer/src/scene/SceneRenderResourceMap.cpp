@@ -61,15 +61,18 @@ void SceneRenderResourceMap::BindMesh(std::uint64_t meshAssetId, RenderMeshHandl
     if (meshAssetId == 0U || !handle.IsValid()) {
         return;
     }
-    meshes_[meshAssetId] = handle;
+    auto [entry, inserted] = meshes_.try_emplace(meshAssetId, handle);
+    if (inserted || entry->second != handle) { entry->second = handle; ++revision_; }
 }
 
 void SceneRenderResourceMap::UnbindMesh(std::uint64_t meshAssetId) noexcept {
-    meshes_.erase(meshAssetId);
+    if (meshes_.erase(meshAssetId) != 0U) ++revision_;
 }
 
 void SceneRenderResourceMap::UnbindMeshHandle(RenderMeshHandle handle) noexcept {
+    const auto previous = meshes_.size();
     EraseHandle(meshes_, handle);
+    if (meshes_.size() != previous) ++revision_;
 }
 
 RenderMeshHandle SceneRenderResourceMap::ResolveMesh(std::uint64_t meshAssetId) const noexcept {
@@ -81,15 +84,18 @@ void SceneRenderResourceMap::BindMaterial(std::uint64_t materialAssetId, RenderM
     if (materialAssetId == 0U || !handle.IsValid()) {
         return;
     }
-    materials_[materialAssetId] = handle;
+    auto [entry, inserted] = materials_.try_emplace(materialAssetId, handle);
+    if (inserted || entry->second != handle) { entry->second = handle; ++revision_; }
 }
 
 void SceneRenderResourceMap::UnbindMaterial(std::uint64_t materialAssetId) noexcept {
-    materials_.erase(materialAssetId);
+    if (materials_.erase(materialAssetId) != 0U) ++revision_;
 }
 
 void SceneRenderResourceMap::UnbindMaterialHandle(RenderMaterialHandle handle) noexcept {
+    const auto previous = materials_.size();
     EraseHandle(materials_, handle);
+    if (materials_.size() != previous) ++revision_;
 }
 
 RenderMaterialHandle SceneRenderResourceMap::ResolveMaterial(std::uint64_t materialAssetId) const noexcept {
@@ -105,18 +111,20 @@ void SceneRenderResourceMap::BindTexture(std::uint64_t textureAssetId, RenderTex
     if (textureAssetId == 0U || !handle.IsValid()) {
         return;
     }
-    textures_[TextureBindingKey{.assetId = textureAssetId, .colorSpace = colorSpace}] = handle;
+    auto [entry, inserted] = textures_.try_emplace(TextureBindingKey{.assetId = textureAssetId, .colorSpace = colorSpace}, handle);
+    if (inserted || entry->second != handle) { entry->second = handle; ++revision_; }
 }
 
 void SceneRenderResourceMap::BindDynamicTexture(std::uint64_t textureAssetId, RenderTextureColorSpace colorSpace, RenderTextureHandle handle) {
     if (textureAssetId == 0U || !handle.IsValid()) {
         return;
     }
-    dynamicTextures_[TextureBindingKey{.assetId = textureAssetId, .colorSpace = colorSpace}] = handle;
+    auto [entry, inserted] = dynamicTextures_.try_emplace(TextureBindingKey{.assetId = textureAssetId, .colorSpace = colorSpace}, handle);
+    if (inserted || entry->second != handle) { entry->second = handle; ++revision_; }
 }
 
 void SceneRenderResourceMap::UnbindDynamicTexture(std::uint64_t textureAssetId, RenderTextureColorSpace colorSpace) noexcept {
-    dynamicTextures_.erase(TextureBindingKey{.assetId = textureAssetId, .colorSpace = colorSpace});
+    if (dynamicTextures_.erase(TextureBindingKey{.assetId = textureAssetId, .colorSpace = colorSpace}) != 0U) ++revision_;
 }
 
 void SceneRenderResourceMap::UnbindTexture(std::uint64_t textureAssetId) noexcept {
@@ -124,12 +132,14 @@ void SceneRenderResourceMap::UnbindTexture(std::uint64_t textureAssetId) noexcep
 }
 
 void SceneRenderResourceMap::UnbindTexture(std::uint64_t textureAssetId, RenderTextureColorSpace colorSpace) noexcept {
-    textures_.erase(TextureBindingKey{.assetId = textureAssetId, .colorSpace = colorSpace});
+    if (textures_.erase(TextureBindingKey{.assetId = textureAssetId, .colorSpace = colorSpace}) != 0U) ++revision_;
 }
 
 void SceneRenderResourceMap::UnbindTextureHandle(RenderTextureHandle handle) noexcept {
+    const auto previous = textures_.size() + dynamicTextures_.size();
     EraseTextureHandle(textures_, handle);
     EraseTextureHandle(dynamicTextures_, handle);
+    if (textures_.size() + dynamicTextures_.size() != previous) ++revision_;
 }
 
 RenderTextureHandle SceneRenderResourceMap::ResolveTexture(std::uint64_t textureAssetId) const noexcept {
@@ -146,6 +156,7 @@ RenderTextureHandle SceneRenderResourceMap::ResolveTexture(std::uint64_t texture
 }
 
 void SceneRenderResourceMap::PruneInvalidBindings(const RenderResourceRegistry& registry) noexcept {
+    const auto previous = meshes_.size() + materials_.size() + textures_.size() + dynamicTextures_.size();
     for (auto it = meshes_.begin(); it != meshes_.end();) {
         if (!registry.ContainsMesh(it->second)) {
             it = meshes_.erase(it);
@@ -174,9 +185,11 @@ void SceneRenderResourceMap::PruneInvalidBindings(const RenderResourceRegistry& 
             ++it;
         }
     }
+    if (meshes_.size() + materials_.size() + textures_.size() + dynamicTextures_.size() != previous) ++revision_;
 }
 
 void SceneRenderResourceMap::Clear() noexcept {
+    ++revision_;
     meshes_.clear();
     materials_.clear();
     textures_.clear();

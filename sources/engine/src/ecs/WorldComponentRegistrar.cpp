@@ -20,4 +20,8 @@ ComponentId WorldComponentRegistrar::Find(const WorldRegistrySet* registries, st
     return registries == nullptr ? 0 : registries->Components().Find(type);
 }
 
+ComponentId WorldComponentRegistrar::Find(const WorldRegistrySet* registries, const std::type_info& type) noexcept {
+    return registries == nullptr ? 0 : registries->Components().Find(type);
+}
+
 } // namespace kb::ecs

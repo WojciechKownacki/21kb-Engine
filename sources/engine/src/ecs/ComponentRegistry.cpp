@@ -37,6 +37,10 @@ ComponentId ComponentRegistry::Find(std::type_index type) const noexcept {
     return cache_.Find(type);
 }
 
+ComponentId ComponentRegistry::Find(const std::type_info& type) const noexcept {
+    return cache_.Find(type);
+}
+
 const ComponentTypeInfo* ComponentRegistry::FindInfo(ComponentId componentId) const noexcept {
     return catalog_.Find(componentId);
 }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "kb/render/scene/RenderScene.hpp"
+#include "kb/render/scene/SceneLightGridResources.hpp"
 #include "kb/render/scene/SceneRenderTypes.hpp"
 
 #include <array>
@@ -9,6 +10,13 @@
 namespace kb::render {
 
 struct PackedSceneLighting {
+    SceneLightGridBinding lightGrid{};
+    std::uint64_t primaryLightId = 0U;
+    // Entity id of the light packed into each uniform slot, so point-light shadow slots can be
+    // matched to the slot the shader loops over.
+    std::array<std::uint64_t, kMaxSceneForwardPlusLights> slotEntityId{};
+    // Packed light slot of each point-shadow light, or -1 when it did not fit the uniform budget.
+    std::array<float, ScenePointShadowBinding::kMaxLights> pointShadowSlot{ -1.0F, -1.0F, -1.0F, -1.0F };
     std::array<float, kMaxSceneForwardPlusLights * 4U> dirKind{};
     std::array<float, kMaxSceneForwardPlusLights * 4U> positionRange{};
     std::array<float, kMaxSceneForwardPlusLights * 4U> colorIntensity{};
@@ -33,6 +41,8 @@ public:
         SceneRenderLightingConfig config,
         const SceneRenderCamera* camera) noexcept;
     [[nodiscard]] static std::array<float, 4> CameraPosition(const SceneRenderCamera* camera) noexcept;
+    // Maps each point-shadow light to the uniform slot the shader loops over.
+    static void AssignPointShadowSlots(PackedSceneLighting& lighting, const ScenePointShadowBinding& binding) noexcept;
 };
 
 } // namespace kb::render

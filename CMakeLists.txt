@@ -148,6 +148,9 @@ if(WIN32 AND NOT KB_DXCOMPILER_RUNTIME
                     "set -DKB_DXCOMPILER_RUNTIME=<path to dxcompiler.dll> to enable it.")
 endif()
 
+# The renderer budgets shadow cascades and point-light shadow faces as dedicated views.
+set(BGFX_CONFIG_MAX_VIEWS 512 CACHE STRING "" FORCE)
+
 function(kb_add_bgfx_subdirectory)
     if(MSVC)
         set(_kb_saved_cxx_flags "${CMAKE_CXX_FLAGS}")

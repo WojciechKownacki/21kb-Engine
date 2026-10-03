@@ -57,6 +57,10 @@ ComponentId World::FindComponent(std::type_index type) const noexcept {
     return WorldComponentRegistrar::Find(registries_.get(), type);
 }
 
+ComponentId World::FindComponent(const std::type_info& type) const noexcept {
+    return WorldComponentRegistrar::Find(registries_.get(), type);
+}
+
 ComponentStorageClass World::ComponentStorage(ComponentId componentId) const noexcept {
     if (componentId == 0 || registries_ == nullptr) {
         return ComponentStorageClass::HotTable;
@@ -608,16 +612,16 @@ bool World::HasComponent(Entity entity, ComponentId componentId) const {
 
 const void* World::TryGetComponent(Entity entity, ComponentId componentId) const {
     ValidateEntityHandle(entity, "TryGetComponent");
-    if (nativeStorage_ != nullptr && nativeStorage_->IsAlive(entity) && nativeStorage_->HasComponent(entity, componentId)) {
-        return nativeStorage_->ComponentData(entity, componentId);
+    if (nativeStorage_ != nullptr) {
+        if (const void* component = nativeStorage_->TryGetComponentData(entity, componentId); component != nullptr) return component;
     }
     return BackendEntityAlive(entity) ? WorldComponentReader::TryGet(world_, entity, componentId) : nullptr;
 }
 
 void* World::TryGetMutableComponent(Entity entity, ComponentId componentId) {
     ValidateEntityHandle(entity, "TryGetMutableComponent");
-    if (nativeStorage_ != nullptr && nativeStorage_->IsAlive(entity) && nativeStorage_->HasComponent(entity, componentId)) {
-        return nativeStorage_->MutableComponentData(entity, componentId);
+    if (nativeStorage_ != nullptr) {
+        if (void* component = nativeStorage_->TryGetMutableComponentData(entity, componentId); component != nullptr) return component;
     }
     return BackendEntityAlive(entity) ? WorldComponentReader::TryGetMutable(world_, entity, componentId) : nullptr;
 }
@@ -638,11 +642,14 @@ void World::RemoveComponent(Entity entity, ComponentId componentId) {
 
 void World::MarkComponentModified(Entity entity, ComponentId componentId) {
     ValidateEntityHandle(entity, "MarkComponentModified");
-    if (nativeStorage_ != nullptr && nativeStorage_->IsAlive(entity) && nativeStorage_->HasComponent(entity, componentId)) {
-        if (config_.mirrorNativeComponentChangesToBackend && BackendEntityAlive(entity) && WorldComponentReader::Has(world_, entity, componentId)) {
+    const void* component = nativeStorage_ == nullptr ? nullptr : nativeStorage_->TryGetComponentData(entity, componentId);
+    if (component != nullptr) {
+        if (config_.mirrorNativeComponentChangesToBackend) {
             const ComponentTypeInfo* componentInfo = registries_ == nullptr ? nullptr : registries_->Components().FindInfo(componentId);
             if (componentInfo != nullptr) {
-                WorldComponentMutator::Set(world_, entity, componentId, componentInfo->size, nativeStorage_->ComponentData(entity, componentId));
+                WorldComponentMutator::SetExisting(world_, entity, componentId, componentInfo->size, component);
+                // OnSet may remove this component, migrate its row or destroy the entity.
+                if (nativeStorage_->TryGetComponentData(entity, componentId) == nullptr) return;
             }
         }
         nativeStorage_->MarkComponentModified(entity, componentId);

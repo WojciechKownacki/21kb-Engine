@@ -19,7 +19,10 @@
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/ScenePostProcessAccess.hpp"
 #include "engine/scene/SceneRenderFeedback.hpp"
+#include "../../game/src/private/RuntimeSceneFrameSync.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/ScenePrefabs.hpp"
+#include "engine/script/ScriptSceneComponentApi.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneUI.hpp"
 #include "engine/scene/SceneUIComponents.hpp"
@@ -47,6 +50,9 @@
 #include "kb/render/resources/RenderResourceRegistry.hpp"
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
 #include "kb/render/runtime/RuntimeMaterialResolver.hpp"
+#include "../src/scene/submit/SceneMeshDrawCommandSubmitter.hpp"
+#include "../src/scene/pipeline/MeshPipelineVisibility.hpp"
+#include "../src/shadow/ShadowCasterBoundsCollector.hpp"
 
 #include <bgfx/bgfx.h>
 #include <bx/math.h>
@@ -2770,6 +2776,105 @@ void SubmitLifecycleFrame(Renderer& renderer, const kb::scene::Scene& scene, con
     renderer.EndFrame();
 }
 
+void RunRuntimeStructuralFrameSyncKeepsQueuedChangesTest() {
+    const auto root = std::filesystem::temp_directory_path() / "21kb_runtime_structural_sync";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    LifecycleSceneFixture fixture;
+    PrepareLifecycleScene(fixture, root);
+    auto& scene = fixture.scene;
+    const auto makeMesh = [&] {
+        const auto entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+            .transform = TransformAt(0.0F, 0.0F, 0.0F)});
+        scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{.meshAssetId = fixture.meshAssetId});
+        return entity;
+    };
+    const auto second = makeMesh();
+    kb::scene::ScenePrefab cameraPrefab;
+    static_cast<void>(cameraPrefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .transform = TransformAt(0.0F, 0.0F, -5.0F),
+        .components = { .camera = kb::scene::CameraComponent{
+            .projection = kb::scene::CameraProjection::Orthographic, .orthographicHeight = 6.0F, .primary = true} },
+    }));
+    const auto cameraInstances = scene.Prefabs().InstantiateMany(cameraPrefab, 1U);
+    Require(cameraInstances.size() == 1U, "Runtime bulk camera setup failed");
+    const auto camera = cameraInstances.front().ObjectAt(0U).Entity();
+    HeadlessSurface surface;
+    DisplayConfig config{};
+    config.allowHeadlessNoop = true;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "Runtime topology test could not initialize headless renderer");
+    kb::game::RuntimeSceneFrameSync sync;
+    const auto submit = [&] {
+        Require(renderer.BeginFrame() && sync.Submit(scene, renderer), "Runtime topology frame did not submit");
+        Require(!renderer.LastSceneSubmitStats().HasMissingResources(), "Runtime topology frame lost a resource");
+        renderer.EndFrame();
+    };
+    sync.BeforeUpdate(scene);
+    static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+    submit();
+    Require(kb::scene::SceneRenderFeedback::IsVisible(scene, fixture.entity) &&
+        kb::scene::SceneRenderFeedback::IsVisible(scene, second), "Runtime topology setup was not visible");
+
+    const auto topology = scene.Runtime().RenderTopologyVersion();
+    for (std::uint32_t frame = 1U; frame <= 32U; ++frame) {
+        sync.BeforeUpdate(scene);
+        const float z = -5.0F - static_cast<float>(frame) * 0.05F;
+        Require(kb::script::ScriptSceneComponentApi::SetProperty(scene, camera, "Transform", "localPosition.z",
+            kb::script::ScriptValue{z}).succeeded, "Runtime bulk camera script movement failed");
+        static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+        submit();
+        const auto point = kb::scene::SceneRenderFeedback::WorldToScreen(scene, kb::math::Vec3{});
+        Require(point.valid && NearlyEqual(point.viewDepth, -z),
+            "Runtime renderer retained an old bulk camera transform after script movement");
+        Require(scene.Runtime().RenderTopologyVersion() == topology,
+            "Runtime bulk camera movement required structural synchronization");
+    }
+
+    // Changes before Update must survive its queue reset; a different retained
+    // mesh changes during the same tick as topology publication.
+    scene.Components().Visibility().Set(fixture.entity, kb::scene::VisibilityComponent{.visible = false});
+    const auto arrived = makeMesh();
+    sync.BeforeUpdate(scene);
+    static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+    scene.Components().Visibility().Set(second, kb::scene::VisibilityComponent{.visible = false});
+    submit();
+    Require(!kb::scene::SceneRenderFeedback::IsVisible(scene, fixture.entity) &&
+        !kb::scene::SceneRenderFeedback::IsVisible(scene, second) &&
+        kb::scene::SceneRenderFeedback::IsVisible(scene, arrived),
+        "Structural publication discarded pre-update or current-tick visibility changes");
+
+    // Reconcile removal, a new full-generation ID and a transform without
+    // rebuilding the authored properties of every retained mesh.
+    scene.Entities().Destroy(arrived);
+    const auto replacement = makeMesh();
+    scene.Transforms().Set(fixture.entity, TransformAt(0.25F, 0.0F, 0.0F));
+    scene.Components().Visibility().Set(fixture.entity, kb::scene::VisibilityComponent{.visible = true});
+    sync.BeforeUpdate(scene);
+    static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+    scene.Components().Visibility().Set(replacement, kb::scene::VisibilityComponent{.visible = false});
+    submit();
+    Require(kb::scene::SceneRenderFeedback::IsVisible(scene, fixture.entity) &&
+        !kb::scene::SceneRenderFeedback::IsVisible(scene, second) &&
+        !kb::scene::SceneRenderFeedback::IsVisible(scene, replacement),
+        "Runtime topology reconciliation retained obsolete visibility");
+    Require(NearlyEqual(kb::scene::SceneRenderFeedback::WorldBounds(scene, fixture.entity).center.x, 0.25F),
+        "Runtime topology reconciliation skipped the retained mesh transform");
+    Require(renderer.RuntimeResourceStats().renderSceneMeshProxyCount == 3U &&
+        !kb::scene::SceneRenderFeedback::IsVisible(scene, arrived),
+        "Runtime topology reconciliation leaked a destroyed generation");
+
+    sync.Reset();
+    sync.BeforeUpdate(scene);
+    static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+    submit();
+    Require(kb::scene::SceneRenderFeedback::IsVisible(scene, fixture.entity),
+        "Runtime scene reset did not perform its initial full synchronization");
+    renderer.Shutdown();
+    std::filesystem::remove_all(root, error);
+}
+
 void RunRendererSubmitsParticleMeshSnapshotAsOneDrawTest() {
     const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_particle_mesh_submit";
     std::error_code error;
@@ -3561,7 +3666,7 @@ void RunRendererReloadsChangedRuntimeMeshAssetTest() {
     std::filesystem::remove_all(root, error);
 }
 
-void RunRendererSubmitsRuntimeMeshAssetInHeadlessNoopTest() {
+void RunRendererSubmitsRuntimeMeshAssetInHeadlessNoopTest(bool testRetention = false) {
     const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_runtime_submit";
     std::error_code error;
     std::filesystem::remove_all(root, error);
@@ -3663,7 +3768,23 @@ void RunRendererSubmitsRuntimeMeshAssetInHeadlessNoopTest() {
         .syncTransformCacheEntries = 32U,
         .syncTransformResolvingEntries = 32U,
     });
-    Require(renderer.Initialize(surface, &config), "Renderer did not initialize in explicit headless Noop mode");
+    RenderSurface* testSurface = &surface;
+#if defined(_WIN32)
+    std::unique_ptr<NativeTestSurface> nativeSurface;
+    if (testRetention) {
+        nativeSurface = std::make_unique<NativeTestSurface>();
+        Require(nativeSurface->IsValid(), "Retention test could not create a hidden surface");
+        testSurface = nativeSurface.get();
+        config.allowHeadlessNoop = false;
+        config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
+    }
+#endif
+    Require(renderer.Initialize(*testSurface, &config), "Renderer did not initialize in the requested headless mode");
+    if (testRetention) {
+        auto settings = renderer.DefaultPostProcessSettings();
+        settings.temporalJitterEnabled = false;
+        renderer.SetDefaultPostProcessSettings(settings);
+    }
 
     const MaterialProgramRegistryStats programStats = renderer.MaterialProgramStats();
     Require(programStats.loads == 4U,
@@ -3765,6 +3886,96 @@ void RunRendererSubmitsRuntimeMeshAssetInHeadlessNoopTest() {
     Require(runtimeStats.renderSceneMeshProxyCapacity >= 32U, "Runtime submit did not apply render scene mesh proxy reserve");
 
     renderer.EndFrame();
+    if (testRetention) {
+        Require(renderer.BeginFrame() && renderer.SubmitScene(scene, desc), "Retained commands did not submit a steady frame");
+        const auto retained = renderer.LastSceneSubmitStats();
+        if (retained.meshCommandReuseCount == 0U) {
+            std::cerr << "Retained commands: reuse=" << retained.meshCommandReuseCount
+                << " visible=" << retained.visibleMeshCount << " submitted=" << retained.submittedMeshCount
+                << " upload=" << retained.instanceUploadBytes << '\n';
+            const auto* map = renderer.SceneResourceMap();
+            const auto* registry = renderer.SceneResources();
+            const auto* resource = registry->FindMesh(map->ResolveMesh(meshMetadata->id.value));
+            std::cerr << "Mesh LODs=" << resource->lods.size() << '\n';
+        }
+        Require(retained.meshCommandReuseCount >= 1U && retained.submittedMeshCount == submitStats.submittedMeshCount,
+            "Static opaque and shadow commands must be reused with unchanged submissions");
+        Require(retained.instanceUploadBytes < submitStats.instanceUploadBytes,
+            "Static GPU instances were needlessly uploaded again");
+        renderer.EndFrame();
+
+        Require(renderer.BeginFrame() && renderer.SubmitScene(scene, desc), "Retained commands did not submit after resource warmup");
+        Require(renderer.LastSceneSubmitStats().meshCommandReuseCount == 2U,
+            "Static opaque and shadow commands must both reuse after resource warmup");
+        renderer.EndFrame();
+
+        auto movedCamera = desc;
+        movedCamera.cameraOverride->view[12] = -100.0F;
+        Require(renderer.BeginFrame() && renderer.SubmitScene(scene, movedCamera), "Camera change did not submit");
+        Require(renderer.LastSceneSubmitStats().meshCommandReuseCount < 2U,
+            "Changed camera reused obsolete visibility");
+        renderer.EndFrame();
+
+        auto temporalDesc = desc;
+        temporalDesc.cameraOverride->view[14] = 5.0F;
+        SceneDepthPolicy::MakePerspective(temporalDesc.cameraOverride->projection.data(), 90.0F, 1.0F, 0.01F, 100.0F,
+            SceneDepthPolicy::HomogeneousDepth());
+        auto settings = renderer.DefaultPostProcessSettings();
+        settings.temporalJitterEnabled = true;
+        renderer.SetDefaultPostProcessSettings(settings);
+        for (unsigned frame = 0U; frame < 10U; ++frame) {
+            Require(renderer.BeginFrame() && renderer.SubmitScene(scene, temporalDesc), "Temporal retained frame did not submit");
+            const auto temporal = renderer.LastSceneSubmitStats();
+            Require(temporal.submittedMeshCount == submitStats.submittedMeshCount && !temporal.HasMissingResources(),
+                "Temporal retention changed static submissions");
+            Require(frame == 0U || temporal.meshCommandReuseCount == 2U,
+                "Temporal jitter rebuilt unchanged static commands");
+            renderer.EndFrame();
+        }
+    }
+
+    SceneMeshInstanceBufferPool pool;
+    std::array<SceneRenderMeshInstance, 2> instances{};
+    const auto buffer = pool.Upload(instances, nullptr, true, 91U);
+    Require(bgfx::isValid(buffer) && pool.LastUploadBytes() != 0U, "Retained pool did not upload initial contents");
+    pool.EndFrame();
+    Require(pool.Upload(instances, nullptr, true, 91U).idx == buffer.idx && pool.LastUploadBytes() == 0U,
+        "Retained pool did not reuse unchanged GPU contents");
+    pool.EndFrame();
+    static_cast<void>(pool.Upload(instances, nullptr, false, 91U));
+    Require(pool.LastUploadBytes() != 0U, "Changed instance encoding reused obsolete GPU contents");
+    pool.EndFrame();
+    static_cast<void>(pool.Upload(instances, nullptr, false, 92U));
+    Require(pool.LastUploadBytes() != 0U, "Changed command identity reused another command's GPU contents");
+    pool.EndFrame();
+    static_cast<void>(pool.Upload(std::span{instances}.first(1U), nullptr, false, 92U));
+    Require(pool.LastUploadBytes() != 0U, "Changed instance count reused obsolete GPU contents");
+    pool.Shutdown();
+    const SceneMeshInstanceBufferOwner ownerA{1001U, 0U, MeshPassType::BaseOpaque, 3U};
+    const SceneMeshInstanceBufferOwner ownerB{1002U, 0U, MeshPassType::BaseOpaque, 3U};
+    const auto ownedA = pool.Upload(instances, nullptr, true, 100U, ownerA);
+    const auto ownedB = pool.Upload(instances, nullptr, true, 101U, ownerB);
+    Require(ownedA.idx != ownedB.idx, "Independent batches shared an instance allocation");
+    pool.EndFrame();
+    Require(pool.Upload(instances, nullptr, true, 101U, ownerB).idx == ownedB.idx && pool.LastUploadBytes() == 0U,
+        "Draw reordering discarded the batch's GPU allocation");
+    Require(pool.Upload(instances, nullptr, true, 100U, ownerA).idx == ownedA.idx && pool.LastUploadBytes() == 0U,
+        "Draw reordering uploaded unchanged instance contents");
+    const auto repeated = pool.Upload(instances, nullptr, true, 102U, ownerA);
+    Require(repeated.idx != ownedA.idx && pool.LastUploadBytes() != 0U,
+        "Repeated in-frame draw overwrote an allocation still referenced by an earlier draw");
+    auto otherView = ownerA; otherView.viewId = 4U;
+    Require(pool.Upload(instances, nullptr, true, 100U, otherView).idx != ownedA.idx,
+        "Different viewports shared in-frame instance storage");
+    auto otherPass = ownerA; otherPass.pass = MeshPassType::ShadowDepth;
+    Require(pool.Upload(instances, nullptr, false, 100U, otherPass).idx != ownedA.idx,
+        "Different mesh passes shared in-frame instance storage");
+    pool.EndFrame();
+    Require(pool.Upload(instances, nullptr, true, 103U, ownerA).idx == ownedA.idx && pool.LastUploadBytes() != 0U,
+        "Changing instance data replaced capacity instead of refreshing its owned buffer");
+    for (int frame = 0; frame < 242; ++frame) pool.EndFrame();
+    Require(pool.OwnedBufferCount() == 0U, "Unloaded batch GPU allocations survived their retention window");
+    pool.Shutdown();
     renderer.Shutdown();
     std::filesystem::remove_all(root, error);
 }
@@ -5298,6 +5509,59 @@ void RunRendererReloadsMaterialInstanceWhenParentMaterialChangesTest() {
     std::filesystem::remove_all(root, error);
 }
 
+void RunGeneratedClusterMissingResourceDiagnosticsTest() {
+    HeadlessSurface surface;
+    DisplayConfig config{};
+    config.allowHeadlessNoop = true;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "Cluster diagnostic fixture could not initialize bgfx");
+    const std::array<RenderStaticMeshVertexP3N3UV2, 3> vertices{{
+        {-0.5F, -0.5F, 0.0F, 1.0F, 1.0F, 1.0F},
+        {0.5F, -0.5F, 0.0F, 1.0F, 1.0F, 1.0F},
+        {0.0F, 0.5F, 0.0F, 1.0F, 1.0F, 1.0F},
+    }};
+    const std::array<std::uint16_t, 3> indices{0U, 1U, 2U};
+    RenderResourceRegistry resources;
+    const auto handle = resources.RegisterMesh(RenderMeshDesc{.vertexData = vertices.data(),
+        .vertexCount = 3U, .indices = indices.data(), .indexCount = 3U, .vertexFormat = RenderVertexFormat::P3N3UV2, .bounds = {.radius = 2.0F}});
+    Require(handle.IsValid(), "Cluster diagnostic fixture could not register its mesh");
+    SceneRenderResourceMap bindings;
+    bindings.BindMesh(42U, handle);
+    RenderScene scene;
+    GeometrySwarmRenderProxyDesc swarm{.entityId = 90U, .meshAssetId = 42U, .materialAssetId = 999U};
+    swarm.model[0] = swarm.model[5] = swarm.model[10] = swarm.model[15] = 1.0F;
+    swarm.model[12] = 1000.0F;
+    swarm.model[14] = 100.0F;
+    swarm.instanceCount = 256U;
+    swarm.columns = swarm.layers = 16U;
+    static_cast<void>(scene.UpsertGeometrySwarm(swarm));
+    const auto groups = scene.DrawGroups();
+    Require(std::ranges::any_of(groups, [](const auto& group) { return !group.visibilityClusters.empty(); }),
+        "Cluster diagnostic fixture did not generate visibility clusters");
+    auto reference = groups;
+    for (auto& group : reference) group.visibilityClusters.clear();
+    SceneRenderCamera camera{};
+    camera.view[0] = camera.view[5] = camera.view[10] = camera.view[15] = 1.0F;
+    SceneDepthPolicy::MakePerspective(camera.projection.data(), 90.0F, 1.0F, 0.1F, 1200.0F, SceneDepthPolicy::HomogeneousDepth());
+    const auto validate = [&](const auto& source, SceneRenderDiagnostics& diagnostics) {
+        return MeshPipelineProcessor::Build(MeshPipelineBuildDesc{.pass = MeshPassType::BaseOpaque,
+            .drawGroups = &source, .resources = &resources, .resourceMap = &bindings,
+            .camera = &camera, .diagnostics = &diagnostics});
+    };
+    SceneRenderDiagnostics diagnostics, referenceDiagnostics;
+    const auto accelerated = validate(groups, diagnostics);
+    const auto original = validate(reference, referenceDiagnostics);
+    Require(original.stats.culledInstanceCount == swarm.instanceCount &&
+        accelerated.stats.missingMaterialBindingCount == swarm.instanceCount &&
+        accelerated.stats.missingMaterialBindingCount == original.stats.missingMaterialBindingCount &&
+        diagnostics.events.size() == referenceDiagnostics.events.size() &&
+        accelerated.stats.culledInstanceCount == original.stats.culledInstanceCount,
+        "Coarse visibility culling hid per-instance missing-resource diagnostics");
+    resources.Shutdown();
+    renderer.Shutdown();
+}
+
 void RunRendererSubmitsWorkspaceSceneCubeMaterialAfterReopenTest() {
     const std::optional<std::filesystem::path> projectAssets = FindWorkspaceProjectAssets();
     if (!projectAssets.has_value()) {
@@ -5386,6 +5650,29 @@ void RunRendererSubmitsWorkspaceSceneCubeMaterialAfterReopenTest() {
     RenderResourceRegistry directResources;
     const RenderMeshHandle directMeshHandle = directResources.RegisterMesh(loadedMesh->desc);
     Require(directMeshHandle.IsValid(), "Workspace Cube.21kb loaded but its mesh desc could not register as a runtime mesh resource");
+    RenderScene generatedShadowScene;
+    SceneRenderResourceMap generatedShadowMap;
+    generatedShadowMap.BindMesh(42U, directMeshHandle);
+    GeometrySwarmRenderProxyDesc generatedShadowSwarm{.entityId = 90U, .meshAssetId = 42U};
+    generatedShadowSwarm.model[0] = generatedShadowSwarm.model[5] = generatedShadowSwarm.model[10] = generatedShadowSwarm.model[15] = 1.0F;
+    generatedShadowSwarm.model[4] = 1.0F; // Shear must remain conservatively bounded.
+    generatedShadowSwarm.instanceCount = 256U;
+    generatedShadowSwarm.columns = 16U;
+    generatedShadowSwarm.layers = 16U;
+    static_cast<void>(generatedShadowScene.UpsertGeometrySwarm(generatedShadowSwarm));
+    const auto clusterBounds = ShadowCasterBoundsCollector::Collect(generatedShadowScene, directResources, generatedShadowMap, 1U);
+    Require(clusterBounds.casterCount == generatedShadowSwarm.instanceCount, "Cluster shadow collection lost generated casters");
+    for (const auto& group : generatedShadowScene.DrawGroups()) {
+        Require(!group.visibilityClusters.empty(), "Generated shadow coverage did not exercise clusters");
+        for (const auto& instance : group.instances) {
+            const auto bounds = MeshPipelineVisibility::TransformBounds(directResources.FindMesh(directMeshHandle)->bounds, instance.model);
+            const float dx = bounds.center[0]-clusterBounds.bounds.center[0];
+            const float dy = bounds.center[1]-clusterBounds.bounds.center[1];
+            const float dz = bounds.center[2]-clusterBounds.bounds.center[2];
+            Require(std::sqrt(dx*dx+dy*dy+dz*dz)+bounds.radius <= clusterBounds.bounds.radius+0.001F,
+                "Cluster shadow bound excluded sheared generated geometry");
+        }
+    }
     directResources.Shutdown();
     Require(renderer.BeginFrame(), "Workspace scene renderer did not begin a frame");
 
@@ -6202,6 +6489,369 @@ void RunRendererDrawsPublishedRuntimeTexturePixelsTest() {
     std::filesystem::remove(root / "triangle.obj", error);
     std::filesystem::remove(root, error);
 }
+
+// A point light above a horizontal plate must darken the floor under the plate only when its
+// shadow is enabled. The same scene is rendered twice (shadow on / off) through the real D3D11
+// renderer into a hidden offscreen target, so the comparison needs no reference image.
+struct ShadowFloorScene {
+    bool point = true;
+    bool lightCastsShadow = true;
+    bx::Vec3 cameraPosition{ 0.0F, 2.0F, -14.0F };
+    float fovDegrees = 40.0F;
+};
+
+[[nodiscard]] int RenderShadowFloorBrightness(const ShadowFloorScene& setup) {
+    const bool lightCastsShadow = setup.lightCastsShadow;
+    const std::filesystem::path root = std::filesystem::temp_directory_path() /
+        ("21kb_shadow_floor_" + std::to_string(GetCurrentProcessId()) + (setup.point ? "_p" : "_d") + (lightCastsShadow ? "_on" : "_off"));
+    std::error_code error;
+    std::filesystem::create_directories(root, error);
+    Require(!error, "Point shadow test could not create its asset directory");
+    WriteStressCubeObj(root / "cube.obj");
+
+    kb::scene::Scene scene;
+    kb::scene::SceneLightingAccess::SetBasicLightingEnabled(scene, true);
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    Require(manager.RegisterLoader(std::make_unique<RenderMeshAssetLoader>()) &&
+            manager.RegisterLoader(std::make_unique<RenderMaterialAssetLoader>()) &&
+            manager.RegisterLoader(std::make_unique<RenderTextureAssetLoader>()),
+        "Point shadow test could not register render asset loaders");
+    Require(manager.Mounts().Mount("Game", root) && manager.DiscoverMountedAssets() >= 1U,
+        "Point shadow test could not discover its mesh");
+    const kb::assets::AssetMetadata* mesh = manager.Registry().FindByPath("/Game/cube.obj");
+    Require(mesh != nullptr, "Point shadow test lost its cube mesh");
+
+    const auto addBox = [&](kb::scene::Vec3 position, kb::scene::Vec3 scale) {
+        const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+            .name = "Box",
+            .transform = kb::scene::TransformComponent{ .localPosition = position, .localScale = scale },
+        });
+        scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{
+            .meshAssetId = mesh->id.value, .castsShadow = true });
+    };
+    addBox({ 0.0F, -0.5F, 0.0F }, { 40.0F, 1.0F, 40.0F });   // floor, top face at y = 0
+    addBox({ 0.0F, 3.0F, 0.0F }, { 4.0F, 0.2F, 4.0F });      // occluder plate
+    kb::scene::TransformComponent lightTransform = TransformAt(0.0F, 6.0F, 0.0F);
+    if (!setup.point) {
+        // A +90 degree turn about X points the light's forward axis straight down.
+        lightTransform.localRotation = kb::scene::Quat{ 0.70710678F, 0.0F, 0.0F, 0.70710678F };
+    }
+    const kb::scene::SceneEntity light = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "Shadow Light", .transform = lightTransform });
+    scene.Components().Lights().Set(light, kb::scene::LightComponent{
+        .kind = setup.point ? kb::scene::LightKind::Point : kb::scene::LightKind::Directional,
+        .intensity = setup.point ? 3.0F : 1.0F, .range = 30.0F, .castsShadow = lightCastsShadow });
+
+    NativeTestSurface surface;
+    Require(surface.IsValid(), "Point shadow test could not create a hidden D3D11 surface");
+    DisplayConfig config{};
+    config.syncMode = DisplaySyncMode::Uncapped;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "Point shadow test could not initialize the renderer");
+    renderer.SetRuntimeAssetDiscoveryEnabled(false);
+
+    SceneRenderCamera camera{};
+    bx::mtxLookAt(camera.view.data(), setup.cameraPosition, bx::Vec3{ 0.0F, 0.0F, 0.0F });
+    SceneDepthPolicy::MakePerspective(camera.projection.data(), setup.fovDegrees, 1.0F, 0.1F, 200.0F, SceneDepthPolicy::HomogeneousDepth());
+
+    int brightness = 0;
+    {
+        ParticleMeshReadbackTarget target;
+        Require(target.Initialize(), "Point shadow test could not create its readback target");
+        const RenderSceneSubmitDesc desc{
+            .target = target.Binding(),
+            .cameraOverride = camera,
+            .meshPassMode = SceneRenderMeshPassMode::OpaqueOnly,
+            .clearRgba = 0x000000FFU,
+            .editorSceneOverlaysEnabled = false,
+            .shadowPassEnabled = true,
+            .postProcessEnabled = false,
+            .selectionMaskEnabled = false,
+            .selectionOutlineEnabled = false,
+        };
+        // The first frame creates GPU resources; the second one is the measured frame.
+        SubmitLifecycleFrame(renderer, scene, desc, "Point shadow test did not submit its first frame");
+        SubmitLifecycleFrame(renderer, scene, desc, "Point shadow test did not submit its second frame");
+        { const auto passes = renderer.LastScenePassSubmitStats(); std::size_t shadowPasses = 0U, shadowMeshes = 0U; for (const auto& pass : passes) { if (pass.pass == MeshPassType::ShadowDepth) { ++shadowPasses; shadowMeshes += pass.stats.submittedMeshCount; } } if (false) std::fprintf(stderr, "point_shadow_debug on=%d passes=%zu shadowPasses=%zu shadowMeshes=%zu%c", int(lightCastsShadow), passes.size(), shadowPasses, shadowMeshes, 10); }
+        const std::vector<std::uint8_t> pixels = target.ReadPixels();
+        // The camera looks at the world origin, which is the centre pixel.
+        const std::size_t center = (32U * 64U + 32U) * 4U;
+        brightness = static_cast<int>(pixels[center]) + pixels[center + 1U] + pixels[center + 2U];
+    }
+    renderer.Shutdown();
+    std::filesystem::remove_all(root, error);
+    return brightness;
+}
+
+void RunRendererRendersDirectionalCascadeShadowTest() {
+    // The occluder is 40 m from the camera: outside the two nearest cascades, inside the widest one.
+    ShadowFloorScene farScene{ .point = false, .cameraPosition = bx::Vec3{ 0.0F, 2.0F, -40.0F }, .fovDegrees = 8.0F };
+    farScene.lightCastsShadow = false;
+    const int unshadowed = RenderShadowFloorBrightness(farScene);
+    farScene.lightCastsShadow = true;
+    const int shadowed = RenderShadowFloorBrightness(farScene);
+    std::fprintf(stderr, "cascade_shadow_pixels unshadowed=%d shadowed=%d%c", unshadowed, shadowed, 10);
+    Require(unshadowed > 60, "Cascade shadow test: the unshadowed floor must be visibly lit");
+    Require(shadowed * 10 < unshadowed * 8, "Cascade shadow test: the widest cascade must shadow the floor under a farScene occluder");
+}
+
+
+// Screen-space GI: a lit red wall must tint the nearby white floor, but only when GI is enabled.
+// Several frames are rendered so the pass can read the previous frame's lit colour.
+[[nodiscard]] int RenderGiFloorRedExcess(bool globalIllumination) {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() /
+        ("21kb_gi_bounce_" + std::to_string(GetCurrentProcessId()) + (globalIllumination ? "_on" : "_off"));
+    std::error_code error;
+    std::filesystem::create_directories(root, error);
+    Require(!error, "GI test could not create its asset directory");
+    WriteStressCubeObj(root / "cube.obj");
+
+    kb::scene::Scene scene;
+    kb::scene::SceneLightingAccess::SetBasicLightingEnabled(scene, true);
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    Require(manager.RegisterLoader(std::make_unique<RenderMeshAssetLoader>()) &&
+            manager.RegisterLoader(std::make_unique<RenderMaterialAssetLoader>()) &&
+            manager.RegisterLoader(std::make_unique<RenderTextureAssetLoader>()),
+        "GI test could not register render asset loaders");
+    Require(manager.Mounts().Mount("Game", root) && manager.DiscoverMountedAssets() >= 1U,
+        "GI test could not discover its mesh");
+    const kb::assets::AssetMetadata* mesh = manager.Registry().FindByPath("/Game/cube.obj");
+    Require(mesh != nullptr, "GI test lost its cube mesh");
+    const kb::assets::AssetId redId = kb::assets::MakeAssetId("GiRedMaterial");
+    Require(manager.RegisterAsset(kb::assets::AssetMetadata{
+                .id = redId, .type = "RenderMaterial", .name = "Red", .virtualPath = "/Game/RedMaterial",
+                .physicalPath = root / "runtime_red_material_only", .contentHash = 1U, .runtimeLoadable = true }),
+        "GI test could not register the red material");
+    {
+        auto red = std::make_shared<RenderMaterialAssetData>();
+        red->desc.baseColor[0] = 0.8F;
+        red->desc.baseColor[1] = 0.05F;
+        red->desc.baseColor[2] = 0.05F;
+        red->desc.roughnessFactor = 0.9F;
+        red->graph = MakeDefaultRenderMaterialGraphDocument();
+        Require(manager.PublishRuntimeAsset(redId, std::move(red)), "GI test could not publish the red material");
+    }
+
+    const auto addBox = [&](kb::scene::Vec3 position, kb::scene::Vec3 scale, std::uint64_t material) {
+        const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+            .name = "Box",
+            .transform = kb::scene::TransformComponent{ .localPosition = position, .localScale = scale },
+        });
+        scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{
+            .meshAssetId = mesh->id.value, .materialAssetId = material, .castsShadow = false });
+    };
+    addBox({ 0.0F, -0.5F, 0.0F }, { 40.0F, 1.0F, 40.0F }, 0U);      // white floor, top face at y = 0
+    addBox({ 3.0F, 3.0F, 0.0F }, { 0.5F, 6.0F, 20.0F }, redId.value); // red wall, floor-side face at x = 2.75
+    const kb::scene::SceneEntity light = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "Point Light", .transform = TransformAt(-1.0F, 5.0F, 0.0F) });
+    scene.Components().Lights().Set(light, kb::scene::LightComponent{
+        .kind = kb::scene::LightKind::Point, .intensity = 4.0F, .range = 40.0F, .castsShadow = false });
+
+    NativeTestSurface surface;
+    Require(surface.IsValid(), "GI test could not create a hidden D3D11 surface");
+    DisplayConfig config{};
+    config.syncMode = DisplaySyncMode::Uncapped;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "GI test could not initialize the renderer");
+    renderer.SetRuntimeAssetDiscoveryEnabled(false);
+
+    SceneRenderCamera camera{};
+    bx::mtxLookAt(camera.view.data(), bx::Vec3{ -2.0F, 4.0F, -8.0F }, bx::Vec3{ 2.0F, 0.0F, 0.0F });
+    SceneDepthPolicy::MakePerspective(camera.projection.data(), 30.0F, 1.0F, 0.1F, 100.0F, SceneDepthPolicy::HomogeneousDepth());
+
+    int redExcess = 0;
+    {
+        ParticleMeshReadbackTarget target;
+        Require(target.Initialize(), "GI test could not create its readback target");
+        SceneRenderLightingConfig lighting{};
+        lighting.globalIllumination = globalIllumination ? SceneRenderGlobalIlluminationMode::SsGi
+                                                         : SceneRenderGlobalIlluminationMode::Disabled;
+        lighting.shadowsEnabled = false;
+        const RenderSceneSubmitDesc desc{
+            .target = target.Binding(),
+            .cameraOverride = camera,
+            .lightingConfig = lighting,
+            .meshPassMode = SceneRenderMeshPassMode::OpaqueOnly,
+            .clearRgba = 0x000000FFU,
+            .editorSceneOverlaysEnabled = false,
+            .shadowPassEnabled = false,
+            .postProcessEnabled = false,
+            .selectionMaskEnabled = false,
+            .selectionOutlineEnabled = false,
+        };
+        for (int frame = 0; frame < 6; ++frame) {
+            SubmitLifecycleFrame(renderer, scene, desc, "GI test did not submit a frame");
+        }
+        const std::vector<std::uint8_t> pixels = target.ReadPixels();
+        // Average a 5x5 block around the centre pixel (the floor 0.75 m from the wall) to hide ray noise.
+        int red = 0;
+        int blue = 0;
+        for (int y = 30; y < 35; ++y) {
+            for (int x = 30; x < 35; ++x) {
+                const std::size_t offset = (static_cast<std::size_t>(y) * 64U + static_cast<std::size_t>(x)) * 4U;
+                red += pixels[offset];
+                blue += pixels[offset + 2U];
+            }
+        }
+        redExcess = (red - blue) / 25;
+    }
+    renderer.Shutdown();
+    std::filesystem::remove_all(root, error);
+    return redExcess;
+}
+
+void RunRendererRendersScreenSpaceGiBounceTest() {
+    const int without = RenderGiFloorRedExcess(false);
+    const int with = RenderGiFloorRedExcess(true);
+    std::fprintf(stderr, "gi_bounce_pixels red_minus_blue without=%d with=%d%c", without, with, 10);
+    Require(with >= without + 6, "GI test: the red wall must tint the nearby floor when screen-space GI is enabled");
+}
+
+
+// GPU-simulated emitters: the engine queues a birth record, the renderer uploads it and a compute
+// pass evaluates the particle in closed form. A particle born at x = -2 moving at +4 m/s must be at
+// the screen centre half a second later and must not still be drawn at its birth position.
+void RunRendererDrawsGpuSimulatedParticlesTest() {
+    kb::scene::Scene scene;
+    NativeTestSurface surface;
+    Require(surface.IsValid(), "GPU particle test could not create a hidden D3D11 surface");
+    DisplayConfig config{};
+    config.syncMode = DisplaySyncMode::Uncapped;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "GPU particle test could not initialize the renderer");
+    renderer.SetRuntimeAssetDiscoveryEnabled(false);
+
+    SceneRenderCamera camera{};
+    bx::mtxLookAt(camera.view.data(), bx::Vec3{ 0.0F, 0.0F, -10.0F }, bx::Vec3{ 0.0F, 0.0F, 5.0F });
+    SceneDepthPolicy::MakePerspective(camera.projection.data(), 30.0F, 1.0F, 0.1F, 100.0F, SceneDepthPolicy::HomogeneousDepth());
+
+    {
+    ParticleMeshReadbackTarget target;
+    Require(target.Initialize(), "GPU particle test could not create its readback target");
+    const RenderSceneSubmitDesc desc{
+        .target = target.Binding(),
+        .cameraOverride = camera,
+        .meshPassMode = SceneRenderMeshPassMode::OpaqueAndTransparent,
+        .clearRgba = 0x000000FFU,
+        .editorSceneOverlaysEnabled = false,
+        .shadowPassEnabled = false,
+        .postProcessEnabled = false,
+        .selectionMaskEnabled = false,
+        .selectionOutlineEnabled = false,
+    };
+    // The first frame registers the renderer as the scene GPU emitter consumer.
+    SubmitLifecycleFrame(renderer, scene, desc, "GPU particle test did not submit its first frame");
+    Require(kb::particles::ParticlePlayback::HasGpuEmitterConsumer(scene),
+        "The renderer must register itself as GPU emitter consumer once GPU simulation is available");
+
+    kb::particles::ParticleGpuEmitterCommand command{};
+    command.key = { 1U, 1U };
+    command.simTime = 0.5;
+    command.hasParams = true;
+    command.params.capacity = 1024U;
+    command.params.blend = kb::particles::ParticleRenderBlendMode::Add;
+    command.params.depth = kb::particles::ParticleRenderDepthMode::Disabled;
+    command.params.color.fill({ 1.0F, 1.0F, 1.0F, 1.0F });
+    command.params.size.fill(1.2F);
+    command.spawns.push_back(kb::particles::ParticleGpuSpawn{
+        .position = { -2.0F, 0.0F, 5.0F }, .birthTime = 0.0F, .velocity = { 4.0F, 0.0F, 0.0F }, .lifetime = 10.0F });
+    kb::particles::ParticlePlayback::QueueGpuEmitterCommand(scene, command);
+    SubmitLifecycleFrame(renderer, scene, desc, "GPU particle test did not submit the spawn frame");
+    const std::vector<std::uint8_t> pixels = target.ReadPixels();
+    const auto brightness = [&pixels](std::size_t x, std::size_t y) {
+        const std::size_t offset = (y * 64U + x) * 4U;
+        return static_cast<int>(pixels[offset]) + pixels[offset + 1U] + pixels[offset + 2U];
+    };
+    std::fprintf(stderr, "gpu_particle_pixels centre=%d birth=%d%c", brightness(32U, 32U), brightness(16U, 32U), 10);
+    Require(brightness(32U, 32U) > 150, "A GPU-simulated particle must be drawn at its closed-form position");
+    Require(brightness(16U, 32U) < 40, "A GPU-simulated particle must have left its birth position");
+    }
+    renderer.Shutdown();
+}
+
+
+// One GPU emitter holding 1,048,576 live particles: far above the CPU pipeline cap of 262,144.
+void RunRendererDrawsMillionGpuParticlesTest() {
+    kb::scene::Scene scene;
+    NativeTestSurface surface;
+    Require(surface.IsValid(), "Million particle test could not create a hidden D3D11 surface");
+    DisplayConfig config{};
+    config.syncMode = DisplaySyncMode::Uncapped;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "Million particle test could not initialize the renderer");
+    renderer.SetRuntimeAssetDiscoveryEnabled(false);
+
+    SceneRenderCamera camera{};
+    bx::mtxLookAt(camera.view.data(), bx::Vec3{ 0.0F, 0.0F, -10.0F }, bx::Vec3{ 0.0F, 0.0F, 5.0F });
+    SceneDepthPolicy::MakePerspective(camera.projection.data(), 30.0F, 1.0F, 0.1F, 100.0F, SceneDepthPolicy::HomogeneousDepth());
+    {
+        ParticleMeshReadbackTarget target;
+        Require(target.Initialize(), "Million particle test could not create its readback target");
+        const RenderSceneSubmitDesc desc{
+            .target = target.Binding(),
+            .cameraOverride = camera,
+            .meshPassMode = SceneRenderMeshPassMode::OpaqueAndTransparent,
+            .clearRgba = 0x000000FFU,
+            .editorSceneOverlaysEnabled = false,
+            .shadowPassEnabled = false,
+            .postProcessEnabled = false,
+            .selectionMaskEnabled = false,
+            .selectionOutlineEnabled = false,
+        };
+        SubmitLifecycleFrame(renderer, scene, desc, "Million particle test did not submit its first frame");
+
+        constexpr std::uint32_t kCount = kb::particles::kParticleGpuMaxCapacity;
+        kb::particles::ParticleGpuEmitterCommand command{};
+        command.key = { 1U, 1U };
+        command.simTime = 0.5;
+        command.hasParams = true;
+        command.params.capacity = kCount;
+        command.params.blend = kb::particles::ParticleRenderBlendMode::Add;
+        command.params.depth = kb::particles::ParticleRenderDepthMode::Disabled;
+        command.params.color.fill({ 0.5F, 0.5F, 0.5F, 1.0F });
+        command.params.size.fill(0.05F);
+        command.spawns.resize(kCount);
+        std::uint32_t seed = 12345U;
+        const auto random01 = [&seed] {
+            seed = seed * 1664525U + 1013904223U;
+            return static_cast<float>(seed >> 8U) / 16777216.0F;
+        };
+        for (kb::particles::ParticleGpuSpawn& spawn : command.spawns) {
+            spawn.position = { (random01() - 0.5F) * 6.0F, (random01() - 0.5F) * 6.0F, 5.0F };
+            spawn.birthTime = 0.0F;
+            spawn.lifetime = 10.0F;
+        }
+        kb::particles::ParticlePlayback::QueueGpuEmitterCommand(scene, command);
+        SubmitLifecycleFrame(renderer, scene, desc, "Million particle test did not submit the spawn frame");
+        const auto start = std::chrono::steady_clock::now();
+        for (int frame = 0; frame < 10; ++frame) {
+            SubmitLifecycleFrame(renderer, scene, desc, "Million particle test did not submit a steady frame");
+        }
+        const double milliseconds = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count() / 10.0;
+        const std::vector<std::uint8_t> pixels = target.ReadPixels();
+        std::size_t lit = 0U;
+        for (std::size_t offset = 0U; offset < pixels.size(); offset += 4U) lit += pixels[offset] > 20U;
+        std::fprintf(stderr, "gpu_million_particles lit_pixels=%zu of 4096 frame_ms=%.2f%c",
+            lit, milliseconds, 10);
+        Require(lit > 2000U, "A million GPU particles must cover the box they were spread over");
+    }
+    renderer.Shutdown();
+}
+
+void RunRendererRendersPointLightShadowTest() {
+    ShadowFloorScene scene{};
+    scene.lightCastsShadow = false;
+    const int unshadowed = RenderShadowFloorBrightness(scene);
+    scene.lightCastsShadow = true;
+    const int shadowed = RenderShadowFloorBrightness(scene);
+    std::fprintf(stderr, "point_shadow_pixels unshadowed=%d shadowed=%d%c", unshadowed, shadowed, 10);
+    Require(unshadowed > 60, "Point shadow test: the unshadowed floor under the plate must be visibly lit");
+    Require(shadowed * 10 < unshadowed * 8, "Point shadow test: the plate must darken the floor beneath it");
+}
 #endif
 
 void RunRendererParticleMeshSnapshotSubmitTest() {
@@ -6209,6 +6859,11 @@ void RunRendererParticleMeshSnapshotSubmitTest() {
 #if defined(_WIN32)
     RunRendererDrawsParticleMeshSnapshotPixelsTest();
     RunRendererDrawsPublishedRuntimeTexturePixelsTest();
+    RunRendererRendersPointLightShadowTest();
+    RunRendererRendersDirectionalCascadeShadowTest();
+    RunRendererRendersScreenSpaceGiBounceTest();
+    RunRendererDrawsGpuSimulatedParticlesTest();
+    RunRendererDrawsMillionGpuParticlesTest();
 #endif
 }
 
@@ -7214,6 +7869,8 @@ void RunRendererVisibilityFeedbackTest() {
 }
 
 void RunRendererRuntimeSubmitTests() {
+    RunGeneratedClusterMissingResourceDiagnosticsTest();
+    RunRuntimeStructuralFrameSyncKeepsQueuedChangesTest();
     RunRendererResourceGroupEnsureFallbacksTest();
     RunEditorUIViewTransformValidationTests();
     RunEditorCameraWireframesSubmitInHeadlessNoopTest();
@@ -7266,6 +7923,15 @@ void RunRendererRuntimeSubmitTests() {
     RunRendererSubmitsDeferredGBufferAndLightingPassesInHeadlessNoopTest();
     RunRendererSubmitsDockedAndDetachedViewportsInSameFrameTest();
     RunSecondaryFrameModesProduceRuntimeTargetsTest();
+}
+
+void RunRendererCommandReuseTests() {
+    RunGeneratedClusterMissingResourceDiagnosticsTest();
+    RunRuntimeStructuralFrameSyncKeepsQueuedChangesTest();
+    RunRendererSubmitsRuntimeMeshAssetInHeadlessNoopTest(true);
+    RunRendererReloadsChangedRuntimeMaterialAssetTest();
+    RunRendererReloadsChangedRuntimeMeshAssetTest();
+    RunRendererSubmitsDockedAndDetachedViewportsInSameFrameTest();
 }
 
 void RunExposureReadbackResetTest() {

@@ -46,10 +46,20 @@ namespace {
 }
 
 [[nodiscard]] float MaxAxisScale(const std::array<float, 16>& model) noexcept {
+    if (model[1] == 0.0F && model[2] == 0.0F && model[4] == 0.0F &&
+        model[6] == 0.0F && model[8] == 0.0F && model[9] == 0.0F) {
+        return std::max({std::abs(model[0]), std::abs(model[5]), std::abs(model[10])});
+    }
     const float scaleXSquared = model[0] * model[0] + model[1] * model[1] + model[2] * model[2];
     const float scaleYSquared = model[4] * model[4] + model[5] * model[5] + model[6] * model[6];
     const float scaleZSquared = model[8] * model[8] + model[9] * model[9] + model[10] * model[10];
-    return std::sqrt(std::max(scaleXSquared, std::max(scaleYSquared, scaleZSquared)));
+    // The largest absolute row sum of M^T M bounds its largest eigenvalue.
+    // Unlike column lengths alone this also encloses sheared child transforms.
+    const float xy = std::abs(model[0] * model[4] + model[1] * model[5] + model[2] * model[6]);
+    const float xz = std::abs(model[0] * model[8] + model[1] * model[9] + model[2] * model[10]);
+    const float yz = std::abs(model[4] * model[8] + model[5] * model[9] + model[6] * model[10]);
+    return std::sqrt(std::min(scaleXSquared + scaleYSquared + scaleZSquared,
+        std::max({scaleXSquared + xy + xz, scaleYSquared + xy + yz, scaleZSquared + xz + yz})));
 }
 
 [[nodiscard]] float MinAxisScale(const std::array<float, 16>& model) noexcept {
@@ -99,20 +109,26 @@ MeshPipelineFrustum MeshPipelineVisibility::BuildFrustum(const SceneRenderCamera
         return {};
     }
 
-    const std::array<float, 16> clip = MultiplyColumnMajor(camera->projection, camera->view);
+    const std::array<float, 16> clip = MultiplyColumnMajor(camera->CullingProjection(), camera->view);
     const std::array<float, 4> row0{ clip[0], clip[4], clip[8], clip[12] };
     const std::array<float, 4> row1{ clip[1], clip[5], clip[9], clip[13] };
     const std::array<float, 4> row2{ clip[2], clip[6], clip[10], clip[14] };
     const std::array<float, 4> row3{ clip[3], clip[7], clip[11], clip[15] };
+    auto rowX = row3;
+    auto rowY = row3;
+    for (std::size_t i = 0U; i < row3.size(); ++i) {
+        rowX[i] *= 1.0F + camera->cullingGuardBand[0];
+        rowY[i] *= 1.0F + camera->cullingGuardBand[1];
+    }
     // Reverse-Z changes which boundary is far, but not the clip inequalities.
     const float lower = homogeneousDepth ? 1.0F : 0.0F;
 
     return MeshPipelineFrustum{
         .planes = {
-            NormalizePlane(MeshPipelineFrustumPlane{ row3[0] + row0[0], row3[1] + row0[1], row3[2] + row0[2], row3[3] + row0[3] }),
-            NormalizePlane(MeshPipelineFrustumPlane{ row3[0] - row0[0], row3[1] - row0[1], row3[2] - row0[2], row3[3] - row0[3] }),
-            NormalizePlane(MeshPipelineFrustumPlane{ row3[0] + row1[0], row3[1] + row1[1], row3[2] + row1[2], row3[3] + row1[3] }),
-            NormalizePlane(MeshPipelineFrustumPlane{ row3[0] - row1[0], row3[1] - row1[1], row3[2] - row1[2], row3[3] - row1[3] }),
+            NormalizePlane(MeshPipelineFrustumPlane{ rowX[0] + row0[0], rowX[1] + row0[1], rowX[2] + row0[2], rowX[3] + row0[3] }),
+            NormalizePlane(MeshPipelineFrustumPlane{ rowX[0] - row0[0], rowX[1] - row0[1], rowX[2] - row0[2], rowX[3] - row0[3] }),
+            NormalizePlane(MeshPipelineFrustumPlane{ rowY[0] + row1[0], rowY[1] + row1[1], rowY[2] + row1[2], rowY[3] + row1[3] }),
+            NormalizePlane(MeshPipelineFrustumPlane{ rowY[0] - row1[0], rowY[1] - row1[1], rowY[2] - row1[2], rowY[3] - row1[3] }),
             NormalizePlane(MeshPipelineFrustumPlane{ lower * row3[0] + row2[0], lower * row3[1] + row2[1], lower * row3[2] + row2[2], lower * row3[3] + row2[3] }),
             NormalizePlane(MeshPipelineFrustumPlane{ row3[0] - row2[0], row3[1] - row2[1], row3[2] - row2[2], row3[3] - row2[3] }),
         },

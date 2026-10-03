@@ -17,6 +17,11 @@ ComponentId World::RegisterComponent(ComponentRegistrationOptions options) {
 template <typename T>
 ComponentId World::RegisterComponent(std::string_view name, ComponentRegistrationOptions options) {
     ValidateComponentType<T>();
+    // Registration is idempotent (the first registration wins), so an already-registered type
+    // skips the type-name hash entirely.
+    if (const ComponentId registered = FindComponent(typeid(T)); registered != 0) {
+        return registered;
+    }
     return RegisterComponent(
         std::type_index{ typeid(T) },
         name.empty() ? DefaultComponentName<T>() : name,
@@ -74,7 +79,7 @@ World::BulkComponentView World::MakeBulkComponentBroadcastView(const T& componen
 template <typename T>
 ComponentId World::Component() const noexcept {
     ValidateComponentType<T>();
-    return FindComponent(std::type_index{ typeid(T) });
+    return FindComponent(typeid(T));
 }
 
 template <typename T>

@@ -66,8 +66,10 @@ public:
     void PruneInvalidBindings(const RenderResourceRegistry& registry) noexcept;
     void Clear() noexcept;
     [[nodiscard]] SceneRenderResourceMapStats Stats() const noexcept;
+    [[nodiscard]] std::uint64_t Revision() const noexcept { return revision_; }
 
 private:
+    std::uint64_t revision_ = 1U;
     std::unordered_map<std::uint64_t, RenderMeshHandle> meshes_;
     std::unordered_map<std::uint64_t, RenderMaterialHandle> materials_;
     std::unordered_map<TextureBindingKey, RenderTextureHandle, TextureBindingKeyHash> textures_;

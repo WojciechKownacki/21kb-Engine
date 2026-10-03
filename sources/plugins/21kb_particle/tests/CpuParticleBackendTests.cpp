@@ -2609,8 +2609,66 @@ void TestPlayModeDiscoversComponentAddedAfterSystemCreation() {
     system.OnDestroy(context);
 }
 
+
+// A GPU-preferring effect with closed-form motion is routed to the GPU emitter queue once a renderer
+// has declared itself consumer: spawns become 32-byte birth records and no CPU particle is kept.
+void TestGpuEmitterRouting() {
+    auto effect = Fixture::MakeEffect(600.0F, 200'000U);
+    effect.backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualPreferred;
+    AddModule(effect.emitters[0], 1U, kb::scene::ParticleModuleType::Gravity,
+        kb::scene::ParticleGravityModule{ .acceleration = { 0.0F, -2.0F, 0.0F }, .sceneGravityScale = 0.0F });
+    AddModule(effect.emitters[0], 2U, kb::scene::ParticleModuleType::Drag, kb::scene::ParticleDragModule{ .coefficient = 0.5F });
+    Fixture fixture{ effect };
+    kb::particle_plugin::CpuParticleBackend backend;
+    backend.Warmup();
+    const kb::particles::ParticleRuntimeResult created = backend.Create(fixture.scene, fixture.effectAssetId, fixture.owner);
+    Require(created.Succeeded(), "GPU emitter routing fixture could not create its effect");
+    Require(backend.Play(fixture.scene, created.instanceId).Succeeded(), "GPU emitter routing fixture could not play");
+
+    // Without a renderer consumer everything stays on the CPU path.
+    for (int step = 0; step < 10; ++step) {
+        Require(backend.Step(fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(), "CPU step failed");
+    }
+    std::vector<kb::particles::ParticleGpuEmitterCommand> commands;
+    kb::particles::ParticlePlayback::DrainGpuEmitterCommands(fixture.scene, commands);
+    const std::size_t cpuLive = backend.Query(fixture.scene, created.instanceId).liveParticleCount;
+    Require(commands.empty() && cpuLive > 0U, "Without a GPU emitter consumer the effect must simulate on the CPU");
+
+    kb::particles::ParticlePlayback::SetGpuEmitterConsumer(fixture.scene, true);
+    for (int step = 0; step < 30; ++step) {
+        Require(backend.Step(fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(), "GPU step failed");
+    }
+    kb::particles::ParticlePlayback::DrainGpuEmitterCommands(fixture.scene, commands);
+    std::size_t spawned = 0U;
+    for (const kb::particles::ParticleGpuEmitterCommand& command : commands) {
+        Require(command.hasParams && command.params.capacity == 200'000U &&
+                command.params.acceleration.y == -2.0F && command.params.drag == 0.5F &&
+                command.key.instanceId == created.instanceId && command.key.emitterId == 1U,
+            "GPU emitter command carries wrong parameters");
+        for (const kb::particles::ParticleGpuSpawn& spawn : command.spawns) {
+            Require(spawn.lifetime == 2.0F && spawn.velocity.x > 0.9F && spawn.birthTime > 0.0F &&
+                std::abs(std::sqrt(spawn.velocity.x * spawn.velocity.x + spawn.velocity.y * spawn.velocity.y +
+                    spawn.velocity.z * spawn.velocity.z) - 1.0F) < 0.001F,
+                "GPU spawn record does not match the authored emitter");
+        }
+        spawned += command.spawns.size();
+    }
+    // 600/s for half a second.
+    Require(spawned >= 290U && spawned <= 310U, "GPU emitter spawned an unexpected number of particles");
+    const std::size_t cpuLiveAfter = backend.Query(fixture.scene, created.instanceId).liveParticleCount;
+    Require(cpuLiveAfter <= cpuLive, "GPU-routed spawns must not add CPU particles");
+
+    Require(backend.Release(fixture.scene, created.instanceId).Succeeded(), "GPU emitter routing fixture could not release");
+    Require(backend.Step(fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(), "post-release step failed");
+    kb::particles::ParticlePlayback::DrainGpuEmitterCommands(fixture.scene, commands);
+    bool released = false;
+    for (const kb::particles::ParticleGpuEmitterCommand& command : commands) released = released || command.release;
+    Require(released, "Releasing an instance must release its GPU emitter state");
+}
+
 int main() {
     try {
+        TestGpuEmitterRouting();
         TestSharedImmutableCompilerArtifact();
         TestAuthoredEmitterOrderDrivesRuntime();
         TestValidationAndLifecycle();

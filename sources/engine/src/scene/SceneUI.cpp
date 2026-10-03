@@ -21,6 +21,7 @@
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/entities/SceneEntityCounter.hpp"
+#include "scene/ui/SceneUIGroupTransitions.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -2266,39 +2267,6 @@ void DestroyEntity(Scene& scene, SceneEntity entity) noexcept {
     return scrolled;
 }
 
-// Moves every animating Canvas Group towards where its `visible` flag puts it.
-[[nodiscard]] bool UpdateGroupTransitions(Scene& scene, SceneState& state, float deltaSeconds) {
-    bool changed = false;
-    const SceneUIComponentQueries ui = std::as_const(scene).Components().UI();
-    std::vector<SceneEntity> pending = scene.Hierarchy().RootEntities();
-    while (!pending.empty()) {
-        const SceneEntity entity = pending.back();
-        pending.pop_back();
-        for (std::size_t index = 0U; index < scene.Hierarchy().ChildCount(entity); ++index)
-            pending.push_back(scene.Hierarchy().ChildAt(entity, index));
-        const UICanvasGroup* group = ui.TryGet<UICanvasGroup>(entity);
-        const auto entry = state.uiGroupShown.find(entity.Id());
-        if (group == nullptr) {
-            if (entry != state.uiGroupShown.end())
-                state.uiGroupShown.erase(entry);
-            continue;
-        }
-        const float target = group->visible ? 1.0F : 0.0F;
-        if (entry == state.uiGroupShown.end()) {
-            // A group seen for the first time starts where it is set; only a later change animates.
-            state.uiGroupShown.emplace(entity.Id(), target);
-            continue;
-        }
-        float& shown = entry->second;
-        if (shown == target)
-            continue;
-        const float step = group->transitionSeconds <= 0.0F ? 1.0F : deltaSeconds / group->transitionSeconds;
-        shown = target > shown ? std::min(target, shown + step) : std::max(target, shown - step);
-        changed = true;
-    }
-    return changed;
-}
-
 [[nodiscard]] bool Activate(Scene& scene, SceneState& state, SceneEntity entity, const SceneUIInput& input) {
     SceneUIComponents ui = scene.Components().UI();
     if (state.uiDropdownList.has_value() && !state.uiDropdownList->closing) {
@@ -2624,7 +2592,7 @@ bool SceneUIAccess::Update(float viewportWidth, float viewportHeight, const Scen
     SceneState& state = SceneAccess::State(scene_);
     SceneUIFrame previousFrame = std::move(state.uiFrame);
     state.uiFrame = std::move(frame);
-    bool presentationDirty = UpdateGroupTransitions(scene_, state, deltaSeconds);
+    bool presentationDirty = SceneUIGroupTransitions::Update(scene_, deltaSeconds);
     presentationDirty = ClampAllScrollOffsets(scene_, state, input, deltaSeconds) || presentationDirty;
     if (presentationDirty) {
         SceneUIFrame clampedFrame;

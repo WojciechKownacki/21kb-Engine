@@ -1,4 +1,5 @@
 #include "kb/render/scene/SceneRenderer.hpp"
+#include "engine/scene/Scene.hpp"
 
 #include "kb/render/scene/RenderScene.hpp"
 #include "kb/render/particles/ParticleGpuRenderer.hpp"
@@ -129,6 +130,16 @@ void SceneRenderer::Shutdown() {
     initialized_ = false;
 }
 
+bool SceneRenderer::HasGpuParticleEmitters(std::uint64_t sceneId) const noexcept {
+    return particleRenderer_ != nullptr && particleRenderer_->HasGpuEmitters(sceneId);
+}
+
+void SceneRenderer::SyncGpuParticleEmitters(kb::scene::Scene& scene, float frameDeltaSeconds, std::uint64_t frameIndex) {
+    if (particleRenderer_ == nullptr || !particleRenderer_->GpuEmittersReady()) return;
+    gpuParticleSceneId_ = scene.Id();
+    particleRenderer_->SyncGpuEmitters(scene, frameDeltaSeconds, frameIndex);
+}
+
 void SceneRenderer::ReleaseParticleScene(std::uint64_t sceneId) noexcept {
     if (particleRenderer_ != nullptr) particleRenderer_->ReleaseParticleScene(sceneId);
 }
@@ -209,7 +220,10 @@ void SceneRenderer::SubmitMeshPass(
     bgfx::setViewName(viewId, MeshPassName(pass));
     bgfx::setViewMode(viewId, bgfx::ViewMode::Sequential);
     bgfx::setViewTransform(viewId, camera->view.data(), camera->projection.data());
-    bgfx::setViewRect(viewId, 0, 0, width, height);
+    // A shadow pass renders into a tile of a shared atlas; its rect was configured by the caller.
+    if (pass != MeshPassType::ShadowDepth) {
+        bgfx::setViewRect(viewId, 0, 0, width, height);
+    }
     bgfx::touch(viewId);
     {
         std::ostringstream message;
@@ -255,6 +269,12 @@ void SceneRenderer::SubmitMeshPass(
             // material determines opaque/GBuffer/transparent/ShadowDepth participation the same way
             // it already does for ordinary meshes, so this cannot stay gated to BaseTransparent only.
             particleSnapshot.get());
+        if (pass == MeshPassType::BaseTransparent && particleRenderer_ != nullptr && gpuParticleSceneId_ != 0U) {
+            const ParticleGpuSubmitResult gpuEmitters = particleRenderer_->SubmitGpuEmitters(
+                viewId, gpuParticleSceneId_, *camera, resources_, resourceMap_, sceneDepthTexture_);
+            lastSubmitStats_.submittedParticleCount += gpuEmitters.submittedParticles;
+            lastSubmitStats_.submittedParticleDrawCallCount += gpuEmitters.drawCalls;
+        }
         if (lastSubmitStats_.failedParticleBatchCount != 0U) {
             lastDiagnostics_.events.push_back(SceneRenderDiagnosticEvent{
                 .severity = SceneRenderDiagnosticSeverity::Error,

@@ -96,6 +96,11 @@ public:
 struct AsyncLoaderGate {
     std::atomic_bool entered{ false };
     std::shared_future<void> release{};
+    bool validate = false;
+    std::thread::id ownerThread = std::this_thread::get_id();
+    kb::assets::AssetId dependency{};
+    std::atomic_bool validatedOnWorker{ false };
+    std::atomic_uint loadCount{ 0U };
 };
 
 class GatedTextAssetLoader final : public kb::assets::IAssetLoader {
@@ -108,6 +113,7 @@ public:
     [[nodiscard]] std::vector<std::string> Extensions() const override { return { ".gated" }; }
 
     [[nodiscard]] kb::assets::AssetLoadResult Load(const kb::assets::AssetLoadRequest& request) override {
+        ++gate_->loadCount;
         gate_->entered.store(true, std::memory_order_release);
         gate_->release.wait();
         std::ifstream input{ request.resolvedPath, std::ios::binary };
@@ -116,6 +122,17 @@ public:
         }
         std::string content{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
         return { .asset = std::make_shared<std::string>(std::move(content)), .error = {} };
+    }
+
+    [[nodiscard]] std::optional<std::string> ValidateRuntimeDependencies(
+        const kb::assets::AssetLoadRequest&, const kb::assets::AssetRegistry& registry) const override {
+        if (!gate_->validate) return std::nullopt;
+        if (std::this_thread::get_id() == gate_->ownerThread) return "Validation ran on the owner thread";
+        gate_->validatedOnWorker.store(true, std::memory_order_release);
+        gate_->entered.store(true, std::memory_order_release);
+        gate_->release.wait();
+        return registry.Find(gate_->dependency) == nullptr
+            ? std::optional<std::string>{"Missing dependency in request snapshot"} : std::nullopt;
     }
 
 private:
@@ -549,6 +566,55 @@ void RunAssetManagerTrueAsyncLoadTest() {
     kb::tests::Require(cancelManager.AsyncLoadStatus(cancelMetadata->id) == kb::assets::AsyncAssetLoadStatus::NotRequested &&
             !cancelManager.IsLoaded(cancelMetadata->id),
         "Unload during an async request must invalidate the worker result before owner-thread commit");
+}
+
+void RunAssetManagerAsyncDependencyValidationTest() {
+    ResetTestRoot();
+    const auto assetsRoot = TestRoot() / "AsyncValidationProject" / "Assets";
+    WriteTextFile(assetsRoot / "Text" / "Validated.gated", "validated payload");
+    std::promise<void> release;
+    const auto gate = std::make_shared<AsyncLoaderGate>();
+    gate->release = release.get_future().share();
+    gate->validate = true;
+    gate->dependency = kb::assets::AssetId{0xA55D001U};
+    kb::assets::AssetManager manager;
+    kb::tests::Require(manager.RegisterLoader(std::make_unique<GatedTextAssetLoader>(gate)) &&
+        manager.Mounts().Mount("Game", assetsRoot) && manager.DiscoverMountedAssets() == 1U,
+        "Async validation fixture could not be registered");
+    const auto id = manager.Registry().FindByPath("/Game/Text/Validated.gated")->id;
+    const kb::assets::AssetMetadata dependency{.id = gate->dependency, .type = "Text", .name = "Dependency",
+        .virtualPath = "/Game/Text/Dependency.txt", .physicalPath = "Dependency.txt"};
+    kb::tests::Require(manager.RegisterAsset(dependency), "Validation dependency registration failed");
+    const bool accepted = manager.RequestLoadAsync(id);
+    for (unsigned spin = 0U; spin < 1000000U && !gate->entered.load(std::memory_order_acquire); ++spin)
+        std::this_thread::yield();
+    const bool workerEntered = gate->validatedOnWorker.load(std::memory_order_acquire);
+    // Mutation while validation is blocked must not race its immutable view or
+    // let an obsolete dependency closure publish into the canonical cache.
+    static_cast<void>(manager.Registry().Remove(gate->dependency));
+    release.set_value();
+    kb::tests::Require(accepted && workerEntered, "Async request performed dependency validation on its owner thread");
+    const auto pump = [&] {
+        for (unsigned spin = 0U; spin < 1000000U && manager.AsyncLoadStatus(id) == kb::assets::AsyncAssetLoadStatus::Pending; ++spin) {
+            manager.PumpAsyncLoads();
+            std::this_thread::yield();
+        }
+    };
+    pump();
+    kb::tests::Require(manager.AsyncLoadStatus(id) == kb::assets::AsyncAssetLoadStatus::Failed &&
+        !manager.IsLoaded(id) && gate->loadCount == 1U && manager.AsyncLoadError(id).find("registry changed") != std::string::npos,
+        "Async validation raced registry edits or published a stale dependency closure");
+    kb::tests::Require(manager.RegisterAsset(dependency) && manager.RequestLoadAsync(id), "Validation retry was rejected");
+    pump();
+    const auto loaded = manager.AcquireLoaded<std::string>(id);
+    kb::tests::Require(loaded.IsLoaded() && *loaded == "validated payload", "Fresh validation snapshot did not publish the retry");
+    static_cast<void>(manager.Unload(id));
+    gate->dependency = kb::assets::AssetId{0xA55D002U};
+    kb::tests::Require(manager.RequestLoadAsync(id), "Invalid-dependency request was rejected before asynchronous validation");
+    pump();
+    kb::tests::Require(manager.AsyncLoadStatus(id) == kb::assets::AsyncAssetLoadStatus::Failed && gate->loadCount == 2U &&
+        manager.AsyncLoadError(id).find("Missing dependency") != std::string::npos,
+        "Async dependency failure was hidden or decoded an invalid payload");
 }
 
 void RunAssetManagerAsyncLoaderReplacementTest() {
@@ -2346,6 +2412,7 @@ void RunAssetRuntimeTests() {
     RunAssetManagerRuntimePublicationTest();
     RunAssetManagerLoadOpaqueTest();
     RunAssetManagerTrueAsyncLoadTest();
+    RunAssetManagerAsyncDependencyValidationTest();
     RunAssetManagerAsyncLoaderReplacementTest();
     RunAssetManagerNewLoaderPreservesRetainedAssetsTest();
     RunAssetCacheReferenceAndPolicyTest();

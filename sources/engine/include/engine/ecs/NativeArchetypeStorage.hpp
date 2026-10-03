@@ -236,6 +236,9 @@ public:
         std::size_t count = std::numeric_limits<std::size_t>::max());
     [[nodiscard]] void* MutableComponentData(Entity entity, ComponentId componentId);
     [[nodiscard]] const void* ComponentData(Entity entity, ComponentId componentId) const;
+    // Missing columns and invalid/stale entity handles return null.
+    [[nodiscard]] void* TryGetMutableComponentData(Entity entity, ComponentId componentId);
+    [[nodiscard]] const void* TryGetComponentData(Entity entity, ComponentId componentId) const;
     [[nodiscard]] bool HasComponent(Entity entity, ComponentId componentId) const;
     [[nodiscard]] std::size_t CountWithComponent(ComponentId componentId) const noexcept;
     [[nodiscard]] bool EntityArchetypeMatches(Entity entity, std::span<const ComponentId> requiredComponentIds) const;
@@ -265,6 +268,8 @@ public:
     [[nodiscard]] std::uint64_t ComponentVersion(Entity entity, ComponentId componentId) const;
     [[nodiscard]] std::uint64_t ArchetypeComponentVersion(std::size_t archetypeIndex, ComponentId componentId) const;
     [[nodiscard]] std::uint64_t StructuralVersion() const noexcept;
+    // Latest successful entity/component removal; additions do not advance it.
+    [[nodiscard]] std::uint64_t RemovalVersion() const noexcept;
     [[nodiscard]] std::size_t ChunkCount() const noexcept;
     [[nodiscard]] std::size_t ChunkPayloadBytes() const noexcept;
     [[nodiscard]] NativeEcsStorageStats Stats() const;

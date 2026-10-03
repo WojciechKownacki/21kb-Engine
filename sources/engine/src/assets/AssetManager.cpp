@@ -9,6 +9,7 @@
 #include "assets/AssetLoaderRegistry.hpp"
 #include "assets/AssetPathUtilities.hpp"
 #include "assets/AssetRuntimeLoadService.hpp"
+#include "assets/AssetRegistrySnapshotCache.hpp"
 
 #include <string>
 #include <exception>
@@ -18,6 +19,8 @@
 #include <vector>
 
 namespace kb::assets {
+
+AssetManager::AssetManager() = default;
 
 AssetManager::~AssetManager() {
     StopAsyncWorker();
@@ -548,18 +551,11 @@ bool AssetManager::RequestLoadAsync(AssetId id, AssetUnloadPolicy policy) {
         asyncLoadErrors_[id.value] = lastError_;
         return true;
     }
-    const AssetLoadRequest request{
-        .metadata = *registered,
-        .resolvedPath = resolvedPath,
-        .runtimePack = runtimePack_,
-    };
-    if (const std::optional<std::string> diagnostic =
-            loader->ValidateRuntimeDependencies(request, registry_);
-        diagnostic.has_value()) {
-        lastError_ = "Asset dependency validation failed: " + *diagnostic;
-        asyncLoadErrors_[id.value] = lastError_;
-        return true;
-    }
+    // Source-reading validators are part of background preparation too.
+    // A shared immutable view avoids racing owner-thread registry mutations;
+    // unchanged requests reuse it rather than copying the catalogue per cell.
+    if (!dependencySnapshots_) dependencySnapshots_ = std::make_unique<AssetRegistrySnapshotCache>();
+    const auto registrySnapshot = dependencySnapshots_->Acquire(registry_);
 
     const std::uint64_t generation = asyncLoadGenerations_[id.value];
     const std::string payloadTypeName = loader->PayloadType().name();
@@ -569,6 +565,7 @@ bool AssetManager::RequestLoadAsync(AssetId id, AssetUnloadPolicy policy) {
         .state = state,
         .policy = policy,
         .generation = generation,
+        .registryGeneration = registrySnapshot->Generation(),
     });
     try {
 #if defined(__EMSCRIPTEN__)
@@ -578,6 +575,7 @@ bool AssetManager::RequestLoadAsync(AssetId id, AssetUnloadPolicy policy) {
             .resolvedPath = resolvedPath,
             .runtimePack = runtimePack_,
             .typeName = payloadTypeName,
+            .registry = registrySnapshot,
             .state = std::move(state),
         });
 #else
@@ -590,6 +588,7 @@ bool AssetManager::RequestLoadAsync(AssetId id, AssetUnloadPolicy policy) {
                 .resolvedPath = resolvedPath,
                 .runtimePack = runtimePack_,
                 .typeName = payloadTypeName,
+                .registry = registrySnapshot,
                 .state = std::move(state),
             });
         }
@@ -628,6 +627,8 @@ void AssetManager::StopAsyncWorker() noexcept {
 
 void AssetManager::RestartAsyncLoads() {
     auto pendingLoads = std::move(asyncLoads_);
+    if (!dependencySnapshots_) dependencySnapshots_ = std::make_unique<AssetRegistrySnapshotCache>();
+    const auto registrySnapshot = dependencySnapshots_->Acquire(registry_);
     for (auto& [assetValue, record] : pendingLoads) {
         const AssetId id{ assetValue };
         const AssetMetadata* metadata = registry_.Find(id);
@@ -651,6 +652,7 @@ void AssetManager::RestartAsyncLoads() {
         // now bound to the newly registered loader, so it must publish under
         // the current generation.
         record.generation = LoadGeneration(id);
+        record.registryGeneration = registrySnapshot->Generation();
         const std::string typeName = loader->PayloadType().name();
         const std::shared_ptr<AsyncPreparedState> state = record.state;
         asyncLoads_.emplace(assetValue, std::move(record));
@@ -662,6 +664,7 @@ void AssetManager::RestartAsyncLoads() {
                 .resolvedPath = resolvedPath,
                 .runtimePack = runtimePack_,
                 .typeName = typeName,
+                .registry = registrySnapshot,
                 .state = state,
             });
 #else
@@ -673,6 +676,7 @@ void AssetManager::RestartAsyncLoads() {
                 .resolvedPath = resolvedPath,
                 .runtimePack = runtimePack_,
                 .typeName = typeName,
+                .registry = registrySnapshot,
                 .state = state,
             });
 #endif
@@ -690,14 +694,17 @@ void AssetManager::PrepareAsyncLoad(AsyncLoadJob job) noexcept {
     AsyncPreparedAsset prepared;
     try {
         std::scoped_lock lock{ loaderExecutionMutex_ };
-        prepared = AsyncPreparedAsset{
-            .result = job.loader->Load(AssetLoadRequest{
-                .metadata = job.metadata,
-                .resolvedPath = job.resolvedPath,
-                .runtimePack = std::move(job.runtimePack),
-            }),
-            .typeName = job.typeName,
+        const AssetLoadRequest request{
+            .metadata = job.metadata,
+            .resolvedPath = job.resolvedPath,
+            .runtimePack = std::move(job.runtimePack),
         };
+        if (const auto diagnostic = job.loader->ValidateRuntimeDependencies(request, *job.registry)) {
+            prepared.result.error = "Asset dependency validation failed: " + *diagnostic;
+        } else {
+            prepared.result = job.loader->Load(request);
+        }
+        prepared.typeName = job.typeName;
     } catch (const std::exception& exception) {
         prepared = AsyncPreparedAsset{
             .result = AssetLoadResult{ .asset = {}, .error = "Asset loader threw an exception: " + std::string{ exception.what() } },
@@ -748,8 +755,13 @@ void AssetManager::PumpAsyncLoads() {
         const std::uint64_t assetId = iterator->first;
         const AssetUnloadPolicy policy = iterator->second.policy;
         const std::uint64_t generation = iterator->second.generation;
+        const std::uint64_t registryGeneration = iterator->second.registryGeneration;
         iterator = asyncLoads_.erase(iterator);
         if (asyncLoadGenerations_[assetId] != generation) {
+            continue;
+        }
+        if (registry_.Generation() != registryGeneration) {
+            asyncLoadErrors_[assetId] = "Asset registry changed during asynchronous preparation; request again";
             continue;
         }
         if (!prepared->result.Succeeded()) {

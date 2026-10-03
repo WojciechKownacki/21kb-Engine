@@ -25,8 +25,9 @@ public:
         const std::uint64_t topology = scene.Runtime().RenderTopologyVersion();
         const std::uint64_t proxyRevision = scene.Runtime().RenderProxyUpdateRevision();
         if (!renderer.SubmitRuntimeScene(scene, {
-                .fullSync = !initialized_ || topology != synchronizedTopology_,
+                .fullSync = !initialized_,
                 .dirtySceneEntityIds = preUpdateChanges_,
+                .structuralSync = initialized_ && topology != synchronizedTopology_,
             })) {
             return false;
         }

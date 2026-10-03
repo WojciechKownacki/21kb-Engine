@@ -556,6 +556,10 @@ void RuntimeMeshResourceEnsurer::Ensure(
         }
         if (requiresQuad) ensureMeshOnce(BuiltInParticleQuadMeshAssetId().value);
     }
+    // GPU-simulated emitters draw instanced quads without a CPU snapshot.
+    if (context.sceneRenderer.HasGpuParticleEmitters(context.scene.Id())) {
+        ensureMeshOnce(BuiltInParticleQuadMeshAssetId().value);
+    }
 }
 
 } // namespace kb::render
