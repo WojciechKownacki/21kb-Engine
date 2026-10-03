@@ -4,6 +4,7 @@
 
 #include <bgfx/bgfx.h>
 
+#include <array>
 #include <cstdint>
 #include <span>
 #include <unordered_map>
@@ -31,8 +32,18 @@ public:
     // Moves the scene render clock forward by the frame time, never more than one fixed step away
     // from the newest simulated time.
     void Advance(std::uint64_t sceneId, float frameDeltaSeconds) noexcept;
+    // What colliding emitters need from the frame: the scene depth the camera has drawn so far.
+    struct CollisionContext {
+        bgfx::TextureHandle depthTexture = BGFX_INVALID_HANDLE;
+        std::array<float, 16> viewProjection{};
+        std::array<float, 16> inverseViewProjection{};
+        std::array<float, 4> cameraPosition{};
+        std::array<float, 2> texelSize{};
+        bool homogeneousDepth = false;
+    };
+
     // Rebuilds the instance buffers of the scene emitters; call once per rendered frame.
-    void Dispatch(bgfx::ViewId viewId, std::uint64_t sceneId) noexcept;
+    void Dispatch(bgfx::ViewId viewId, std::uint64_t sceneId, const CollisionContext& collision) noexcept;
     // Emitters of the scene that were dispatched this frame.
     [[nodiscard]] std::span<const Draw> Draws(std::uint64_t sceneId) noexcept;
     [[nodiscard]] bool HasEmitters(std::uint64_t sceneId) const noexcept;
@@ -60,6 +71,8 @@ private:
         kb::particles::ParticleGpuEmitterParams params{};
         bgfx::DynamicVertexBufferHandle spawns = BGFX_INVALID_HANDLE;
         bgfx::DynamicVertexBufferHandle instances = BGFX_INVALID_HANDLE;
+        // Per-slot position/velocity record of the colliding kernel; only created for colliding emitters.
+        bgfx::DynamicVertexBufferHandle state = BGFX_INVALID_HANDLE;
         std::uint32_t capacity = 0U;
         std::uint64_t nextSlot = 0U;
         std::uint64_t bytes = 0U;
@@ -74,8 +87,22 @@ private:
     void Destroy(Emitter& emitter) noexcept;
     void Upload(Emitter& emitter, std::span<const kb::particles::ParticleGpuSpawn> spawns) noexcept;
     void Clear(Emitter& emitter) noexcept;
+    // Creates the state buffer of a colliding emitter; false when the memory budget would be exceeded.
+    [[nodiscard]] bool EnsureState(Emitter& emitter) noexcept;
 
     bgfx::ProgramHandle program_ = BGFX_INVALID_HANDLE;
+    // Optional: without it (e.g. no variant for this backend) colliding emitters use the closed-form kernel.
+    bgfx::ProgramHandle collideProgram_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle planeUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle collisionUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle depthBounceUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle texelUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle viewProjectionUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle depthSampler_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle inverseViewProjectionUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle depthParamsUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle cameraPositionUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle fallbackDepth_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle motionUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle timeUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle colorUniform_ = BGFX_INVALID_HANDLE;

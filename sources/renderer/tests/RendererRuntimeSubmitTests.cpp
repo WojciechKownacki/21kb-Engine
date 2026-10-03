@@ -3,6 +3,7 @@
 #include "engine/assets/AssetId.hpp"
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/particles/ParticlePlayback.hpp"
+#include <functional>
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/AuxFrameComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
@@ -6841,7 +6842,9 @@ struct SsBox {
 
 [[nodiscard]] std::vector<std::uint8_t> RenderScreenSpaceScene(
     const std::vector<SsBox>& boxes, const std::vector<kb::scene::Vec3>& pointLights, bx::Vec3 eye, bx::Vec3 target,
-    float fovDegrees, const SceneRenderLightingConfig& lighting, int frames, std::uint16_t size) {
+    float fovDegrees, const SceneRenderLightingConfig& lighting, int frames, std::uint16_t size,
+    SceneRenderMeshPassMode meshPassMode = SceneRenderMeshPassMode::OpaqueOnly,
+    const std::function<void(kb::scene::Scene&, int)>& beforeFrame = {}) {
     static int counter = 0;
     const std::filesystem::path root = std::filesystem::temp_directory_path() /
         ("21kb_ss_scene_" + std::to_string(GetCurrentProcessId()) + "_" + std::to_string(counter++));
@@ -6917,7 +6920,7 @@ struct SsBox {
             .target = readback.Binding(),
             .cameraOverride = camera,
             .lightingConfig = frameLighting,
-            .meshPassMode = SceneRenderMeshPassMode::OpaqueOnly,
+            .meshPassMode = meshPassMode,
             .clearRgba = 0x000000FFU,
             .editorSceneOverlaysEnabled = false,
             .shadowPassEnabled = false,
@@ -6926,6 +6929,7 @@ struct SsBox {
             .selectionOutlineEnabled = false,
         };
         for (int frame = 0; frame < frames; ++frame) {
+            if (beforeFrame) beforeFrame(scene, frame);
             SubmitLifecycleFrame(renderer, scene, desc, "Screen-space test did not submit a frame");
         }
         pixels = readback.ReadPixels();
@@ -7029,6 +7033,71 @@ void RunRendererRendersVoxelGiFromOffscreenObjectsTest() {
     std::fprintf(stderr, "voxel_gi_pixels red_minus_blue none=%.1f screen_space=%.1f voxel=%.1f%c", none, screenSpace, voxel, 10);
     Require(voxel > none + 8.0, "Voxel GI test: a red wall outside the view must tint the floor through the voxel grid");
     Require(screenSpace < none + 3.0, "Voxel GI test: screen-space GI must not see the off-screen wall");
+}
+
+// A GPU-simulated particle dropped from 2 m above the origin falls through the floor unless it collides.
+// Collision can come from a plane (exact) or from the surface the scene depth buffer shows; with either
+// the particle is still near the floor 1.5 s later, without it it is far below the camera's view.
+[[nodiscard]] double CollidingParticleBrightness(bool floor, bool plane, bool sceneDepth, SceneRenderLightingPath path) {
+    constexpr std::uint16_t kSize = 64U;
+    std::vector<SsBox> boxes;
+    if (floor) {
+        boxes.push_back({ { 0.0F, -0.5F, 0.0F }, { 40.0F, 1.0F, 40.0F } });
+    }
+    SceneRenderLightingConfig lighting{};
+    lighting.lightingPath = path;
+    const auto spawnAndStep = [&](kb::scene::Scene& scene, int frame) {
+        // Frame 0 registers the renderer as GPU emitter consumer; frame 1 creates the emitter and its particle;
+        // every later frame advances the simulation clock by one fixed step, as the particle backend does.
+        if (frame == 0) return;
+        kb::particles::ParticleGpuEmitterCommand command{};
+        command.key = { 1U, 1U };
+        command.simTime = static_cast<double>(frame - 1) / 60.0;
+        if (frame == 1) {
+            command.hasParams = true;
+            command.params.capacity = 64U;
+            command.params.blend = kb::particles::ParticleRenderBlendMode::Add;
+            command.params.depth = kb::particles::ParticleRenderDepthMode::Disabled;
+            command.params.color.fill({ 1.0F, 1.0F, 1.0F, 1.0F });
+            command.params.size.fill(0.8F);
+            command.params.acceleration = { 0.0F, -9.8F, 0.0F };
+            if (plane) {
+                command.params.plane = { .normal = { 0.0F, 1.0F, 0.0F }, .distance = 0.0F, .restitution = 0.5F, .friction = 0.0F };
+                command.params.hasPlane = true;
+            }
+            command.params.sceneDepthCollision = sceneDepth;
+            command.spawns.push_back(kb::particles::ParticleGpuSpawn{
+                .position = { 0.0F, 2.0F, 0.0F }, .birthTime = 0.0F, .velocity = { 0.0F, 0.0F, 0.0F }, .lifetime = 20.0F });
+        }
+        kb::particles::ParticlePlayback::QueueGpuEmitterCommand(scene, command);
+    };
+    const auto pixels = RenderScreenSpaceScene(boxes, {}, bx::Vec3{ 0.0F, 3.0F, -6.0F }, bx::Vec3{ 0.0F, 0.0F, 0.0F }, 30.0F, lighting,
+        100, kSize, SceneRenderMeshPassMode::OpaqueAndTransparent, spawnAndStep);
+    double best = 0.0;
+    for (int y = 20; y < 44; ++y) {
+        for (int x = 24; x < 40; ++x) {
+            best = std::max(best, MeanBrightness(pixels, kSize, x, y, x + 1, y + 1));
+        }
+    }
+    return best;
+}
+
+void RunRendererCollidesGpuParticlesTest() {
+    const SceneRenderLightingPath forward = SceneRenderLightingPath::Forward;
+    const SceneRenderLightingPath deferred = SceneRenderLightingPath::Deferred;
+    const double freeFall = CollidingParticleBrightness(false, false, false, forward);
+    const double plane = CollidingParticleBrightness(false, true, false, forward);
+    const double floorOnly = CollidingParticleBrightness(true, false, false, forward);
+    // The depth buffer is a render target of the forward path and a G-buffer texture of the deferred one.
+    const double sceneDepthForward = CollidingParticleBrightness(true, false, true, forward);
+    const double sceneDepthDeferred = CollidingParticleBrightness(true, false, true, deferred);
+    std::fprintf(stderr, "gpu_particle_collision free_fall=%.1f plane=%.1f floor_only=%.1f scene_depth forward=%.1f deferred=%.1f%c",
+        freeFall, plane, floorOnly, sceneDepthForward, sceneDepthDeferred, 10);
+    Require(freeFall < 50.0, "GPU collision test: without collisions the particle must have fallen out of view");
+    Require(plane > 400.0, "GPU collision test: a collision plane must keep the particle near the floor level");
+    Require(floorOnly < 300.0, "GPU collision test: the bare floor must be darker than the particle");
+    Require(sceneDepthForward > 400.0, "GPU collision test: the particle must bounce off the floor shown in the forward depth buffer");
+    Require(sceneDepthDeferred > 400.0, "GPU collision test: the particle must bounce off the floor shown in the G-buffer depth");
 }
 
 void RunRendererRendersScreenSpaceGiBounceTest() {
@@ -7222,6 +7291,7 @@ void RunRendererParticleMeshSnapshotSubmitTest() {
     RunRendererRendersScreenSpaceAmbientOcclusionTest();
     RunRendererRendersScreenSpaceReflectionsTest();
     RunRendererRendersVoxelGiFromOffscreenObjectsTest();
+    RunRendererCollidesGpuParticlesTest();
     RunRendererDrawsGpuSimulatedParticlesTest();
     RunRendererDrawsMillionGpuParticlesTest();
 #endif

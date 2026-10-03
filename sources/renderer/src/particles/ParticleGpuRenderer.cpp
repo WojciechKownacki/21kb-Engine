@@ -2,8 +2,12 @@
 
 #include "engine/particles/ParticlePlayback.hpp"
 #include "engine/scene/Scene.hpp"
+#include "kb/render/SceneDepthPolicy.hpp"
 #include "kb/render/ShaderLoader.hpp"
 #include "kb/render/resources/BuiltInParticleQuadMesh.hpp"
+
+#include "renderer/RendererMatrixMath.hpp"
+#include "scene/lighting/SceneLightingPacker.hpp"
 
 #include <algorithm>
 #include <array>
@@ -337,6 +341,28 @@ void ParticleGpuRenderer::SyncGpuEmitters(kb::scene::Scene& scene, float frameDe
     gpuEmitterDispatchPending_[sceneId] = true;
 }
 
+void ParticleGpuRenderer::DispatchGpuEmitters(
+    bgfx::ViewId viewId,
+    std::uint64_t sceneId,
+    const SceneRenderCamera& camera,
+    bgfx::TextureHandle sceneDepthTexture,
+    std::uint32_t viewportWidth,
+    std::uint32_t viewportHeight) noexcept {
+    if (!GpuEmittersReady()) return;
+    const auto pending = gpuEmitterDispatchPending_.find(sceneId);
+    if (pending == gpuEmitterDispatchPending_.end() || !pending->second) return;
+    // Colliding emitters bounce off the depth the opaque passes of this frame have drawn.
+    ParticleGpuEmitterSimulation::CollisionContext collision{};
+    collision.depthTexture = sceneDepthTexture;
+    collision.viewProjection = RendererMatrixMath::ViewProjection(camera);
+    collision.inverseViewProjection = RendererMatrixMath::Inverse(collision.viewProjection);
+    collision.cameraPosition = SceneLightingPacker::CameraPosition(&camera);
+    collision.texelSize = { 1.0F / static_cast<float>(std::max(viewportWidth, 1U)), 1.0F / static_cast<float>(std::max(viewportHeight, 1U)) };
+    collision.homogeneousDepth = SceneDepthPolicy::HomogeneousDepth();
+    gpuEmitters_.Dispatch(viewId, sceneId, collision);
+    pending->second = false;
+}
+
 ParticleGpuSubmitResult ParticleGpuRenderer::SubmitGpuEmitters(
     bgfx::ViewId viewId,
     std::uint64_t sceneId,
@@ -346,11 +372,6 @@ ParticleGpuSubmitResult ParticleGpuRenderer::SubmitGpuEmitters(
     bgfx::TextureHandle sceneDepthTexture) noexcept {
     ParticleGpuSubmitResult result{};
     if (!GpuEmittersReady()) return result;
-    if (const auto pending = gpuEmitterDispatchPending_.find(sceneId);
-        pending != gpuEmitterDispatchPending_.end() && pending->second) {
-        gpuEmitters_.Dispatch(viewId, sceneId);
-        pending->second = false;
-    }
     const RenderMeshHandle quadHandle = resourceMap.ResolveMesh(BuiltInParticleQuadMeshAssetId().value);
     const RenderMeshResource* quad = resources.FindMesh(quadHandle);
     if (quad == nullptr || !bgfx::isValid(quad->vertexBuffer) || !bgfx::isValid(quad->indexBuffer)) return result;

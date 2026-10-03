@@ -25,6 +25,8 @@ constexpr auto kRequiredShaders = std::to_array<ShaderManifestEntry>({
         .requiredFeature = ShaderRuntimeFeatureBit(ShaderRuntimeFeature::ParticleGpuVisual)},
     // Optional: without it (no Metal variant is generated on Windows hosts) emitters fall back to the CPU path.
     ShaderManifestEntry{.name = "cs_particle_gpu_emit.sc", .stage = ShaderStage::Compute, .required = false},
+    // Optional likewise: emitters with collisions then simulate without them.
+    ShaderManifestEntry{.name = "cs_particle_gpu_collide.sc", .stage = ShaderStage::Compute, .required = false},
     ShaderManifestEntry{.name = "fs_editor_gizmo.sc", .stage = ShaderStage::Fragment,
         .requiredFeature = ShaderRuntimeFeatureBit(ShaderRuntimeFeature::Editor)},
     ShaderManifestEntry{.name = "fs_editor_gizmo_resolve.sc", .stage = ShaderStage::Fragment,

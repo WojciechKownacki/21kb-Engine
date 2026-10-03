@@ -2666,9 +2666,59 @@ void TestGpuEmitterRouting() {
     Require(released, "Releasing an instance must release its GPU emitter state");
 }
 
+// An emitter with a collision plane is eligible for the GPU path too: the plane travels with the emitter
+// parameters (the kernel bounces particles off it and off the scene depth); a sub-emitter still needs the CPU.
+void TestGpuEmitterCollisionRouting() {
+    const auto firstCommand = [](bool withSubEmitter) {
+        auto effect = Fixture::MakeEffect(600.0F, 200'000U);
+        effect.backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualPreferred;
+        AddModule(effect.emitters[0], 1U, kb::scene::ParticleModuleType::Gravity,
+            kb::scene::ParticleGravityModule{ .acceleration = { 0.0F, -2.0F, 0.0F }, .sceneGravityScale = 0.0F });
+        AddModule(effect.emitters[0], 2U, kb::scene::ParticleModuleType::CollisionPlane,
+            kb::scene::ParticleCollisionPlaneModule{
+                .normal = { 0.0F, 1.0F, 0.0F }, .distance = 1.5F, .restitution = 0.4F, .friction = 0.1F, .maxEventsPerStep = 4U });
+        if (withSubEmitter) {
+            kb::scene::ParticleEmitterAsset target = effect.emitters[0];
+            target.emitterId = 2U;
+            target.authoringOrder = 1U;
+            target.name = "Target";
+            target.modules.clear();
+            target.spawn.rateOverTime.keyframes = { kb::math::CurveKeyframe{ .time = 0.0F, .value = 0.0F } };
+            effect.emitters.push_back(std::move(target));
+            AddModule(effect.emitters[0], 3U, kb::scene::ParticleModuleType::SubEmitter,
+                kb::scene::ParticleSubEmitterModule{ .targetEmitterId = 2U });
+        }
+        Fixture fixture{ effect };
+        kb::particle_plugin::CpuParticleBackend backend;
+        backend.Warmup();
+        const kb::particles::ParticleRuntimeResult created = backend.Create(fixture.scene, fixture.effectAssetId, fixture.owner);
+        Require(created.Succeeded() && backend.Play(fixture.scene, created.instanceId).Succeeded(), "collision routing fixture could not play");
+        kb::particles::ParticlePlayback::SetGpuEmitterConsumer(fixture.scene, true);
+        for (int step = 0; step < 10; ++step) {
+            Require(backend.Step(fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(), "collision routing step failed");
+        }
+        std::vector<kb::particles::ParticleGpuEmitterCommand> commands;
+        kb::particles::ParticlePlayback::DrainGpuEmitterCommands(fixture.scene, commands);
+        const std::size_t cpuLive = backend.Query(fixture.scene, created.instanceId).liveParticleCount;
+        kb::particles::ParticleGpuEmitterCommand source{};
+        for (const kb::particles::ParticleGpuEmitterCommand& command : commands) {
+            if (command.key.emitterId == 1U) source = command;
+        }
+        return std::pair{ source, cpuLive };
+    };
+    const auto [onGpu, gpuCpuLive] = firstCommand(false);
+    Require(onGpu.hasParams && onGpu.params.hasPlane && onGpu.params.sceneDepthCollision &&
+            onGpu.params.plane.distance == 1.5F && onGpu.params.plane.restitution == 0.4F &&
+            onGpu.params.plane.friction == 0.1F && onGpu.params.plane.normal.y == 1.0F && gpuCpuLive == 0U,
+        "An emitter with a collision plane must run on the GPU with its plane");
+    const auto [onCpu, cpuLive] = firstCommand(true);
+    Require(!onCpu.hasParams && cpuLive > 0U, "An emitter with a sub-emitter module must stay on the CPU");
+}
+
 int main() {
     try {
         TestGpuEmitterRouting();
+        TestGpuEmitterCollisionRouting();
         TestSharedImmutableCompilerArtifact();
         TestAuthoredEmitterOrderDrivesRuntime();
         TestValidationAndLifecycle();

@@ -67,11 +67,19 @@ public:
         const kb::particles::ParticleRenderSnapshot& snapshot) noexcept;
     [[nodiscard]] ParticleStripSubmitResult SubmitStripDraw(bgfx::ViewId viewId, std::uint32_t drawIndex) noexcept;
     // GPU-simulated emitters (see engine/particles/ParticleGpuEmitter.hpp). SyncGpuEmitters drains the
-    // queued commands of a scene once per rendered frame; SubmitGpuEmitters dispatches the simulation
-    // for that frame (once) and draws every emitter of the scene into the given view.
+    // queued commands of a scene once per rendered frame; DispatchGpuEmitters runs the simulation for
+    // that frame (once) in a view that does not bind the scene depth as a render target, because
+    // colliding emitters sample it; SubmitGpuEmitters draws every emitter of the scene into the given view.
     [[nodiscard]] bool GpuEmittersReady() const noexcept;
     [[nodiscard]] bool HasGpuEmitters(std::uint64_t sceneId) const noexcept;
     void SyncGpuEmitters(kb::scene::Scene& scene, float frameDeltaSeconds, std::uint64_t frameIndex);
+    void DispatchGpuEmitters(
+        bgfx::ViewId viewId,
+        std::uint64_t sceneId,
+        const SceneRenderCamera& camera,
+        bgfx::TextureHandle sceneDepthTexture,
+        std::uint32_t viewportWidth,
+        std::uint32_t viewportHeight) noexcept;
     [[nodiscard]] ParticleGpuSubmitResult SubmitGpuEmitters(
         bgfx::ViewId viewId,
         std::uint64_t sceneId,
