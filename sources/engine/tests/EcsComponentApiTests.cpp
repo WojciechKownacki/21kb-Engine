@@ -101,7 +101,9 @@ template <typename Fn>
 }
 
 void RunComponentMirrorNotificationTest() {
-    kb::ecs::World world;
+    kb::ecs::WorldConfig config;
+    config.mirrorValueWritesOnlyForObservedComponents = false; // the observer below is a raw backend one
+    kb::ecs::World world{ config };
     const auto component = world.RegisterComponent<EcsPosition>("test.MirrorPosition");
     const auto entity = world.CreateEntity();
     world.Set(entity, EcsPosition{});
@@ -148,7 +150,9 @@ void RunComponentMirrorNotificationTest() {
 
 void RunComponentMirrorStructuralCallbackTest() {
     for (unsigned action = 0U; action < 4U; ++action) {
-        kb::ecs::World world;
+        kb::ecs::WorldConfig config;
+        config.mirrorValueWritesOnlyForObservedComponents = false; // the observer below is a raw backend one
+        kb::ecs::World world{ config };
         const auto component = world.RegisterComponent<EcsPosition>("test.StructuralMirrorPosition");
         const auto entity = world.CreateEntity();
         world.Set(entity, EcsPosition{});

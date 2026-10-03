@@ -19,6 +19,10 @@ struct WorldConfig {
     bool adaptiveQueryExecution = true;
     bool mirrorEntitiesToBackend = true;
     bool mirrorNativeComponentChangesToBackend = true;
+    // With mirroring on, in-place value writes to existing native components are published to the backend world only
+    // for components that have a World::ObserveComponent observer (the backend copy is read by nothing else).
+    // Set this to false to publish every write, e.g. when raw backend observers are registered through NativeHandle().
+    bool mirrorValueWritesOnlyForObservedComponents = true;
     bool trackEntityCatalog = true;
 };
 

@@ -12,6 +12,10 @@ void SceneTransforms::Set(SceneEntity entity, const TransformComponent& transfor
     SceneTransformService::Set(scene_, entity, transform);
 }
 
+void SceneTransforms::SetMany(std::span<const SceneEntity> entities, std::span<const TransformComponent> transforms) {
+    SceneTransformService::SetMany(scene_, entities, transforms);
+}
+
 void SceneTransforms::MarkModified(SceneEntity entity) noexcept {
     SceneTransformService::MarkModified(scene_, entity);
 }
