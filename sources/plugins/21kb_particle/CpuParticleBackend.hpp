@@ -307,8 +307,8 @@ private:
     std::vector<float> particleLifetimes_;
     std::vector<kb::math::Color> particleColors_;
     std::vector<float> particleSizes_;
-    std::vector<float> particleSpins_;     // angle at birth (radians)
-    std::vector<float> particleSpinRates_; // angular velocity (radians per second)
+    std::vector<kb::math::Vec3> particleSpins_;     // angles at birth (radians), per axis
+    std::vector<kb::math::Vec3> particleSpinRates_; // angular velocities (radians per second), per axis
     std::vector<std::uint8_t> particleEventDepths_;
     std::vector<std::uint8_t> particlePrewarmGroups_;
     std::vector<kb::particles::ParticleRenderEmitterRecord> renderEmitterScratch_;

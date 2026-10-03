@@ -37,6 +37,16 @@ namespace {
     return kb::math::Quat{0.0F, 0.0F, std::sin(half), std::cos(half)};
 }
 
+[[nodiscard]] kb::math::Quat SpinAroundY(float radians) noexcept {
+    const float half = radians * 0.5F;
+    return kb::math::Quat{0.0F, std::sin(half), 0.0F, std::cos(half)};
+}
+
+[[nodiscard]] kb::math::Quat SpinAroundX(float radians) noexcept {
+    const float half = radians * 0.5F;
+    return kb::math::Quat{std::sin(half), 0.0F, 0.0F, std::cos(half)};
+}
+
 [[nodiscard]] std::array<float, 4> UnpackColor(std::uint32_t packedColor) noexcept {
     const auto channel = [&](unsigned shift) noexcept {
         return static_cast<float>((packedColor >> shift) & 0xFFU) / 255.0F;
@@ -122,7 +132,10 @@ void ParticleMeshBatchBuilder::Build(const kb::particles::ParticleRenderSnapshot
         const std::size_t firstInstance = instances_.size();
         for (const std::uint32_t local : orderScratch_) {
             const auto& particle = particles[emitter.firstParticle + local];
-            const kb::math::Quat orientation = basis * SpinAroundZ(particle.rotationRadians);
+            // Euler turn about X, then Y, then Z (z is rotationRadians, the spin a billboard uses too).
+            const kb::math::Quat orientation = basis * (SpinAroundZ(particle.rotationRadians) *
+                SpinAroundY(kb::particles::UnpackParticleAngle(particle.rotationYSnorm)) *
+                SpinAroundX(kb::particles::UnpackParticleAngle(particle.rotationXSnorm)));
             const kb::math::Vec3 scale{particle.size, particle.size, particle.size};
             SceneRenderMeshInstance instance{};
             instance.entityId = particle.particleId;

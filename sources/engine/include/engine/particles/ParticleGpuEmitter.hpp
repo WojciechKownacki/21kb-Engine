@@ -75,13 +75,14 @@ struct ParticleGpuEmitterParams {
     std::uint32_t trailSegments = 0U;
     float trailSegmentSeconds = 0.0F;
     float trailWidth = 0.1F;
-    // Spin: every slot draws an angle in [spinMin, spinMax] (radians) and an angular velocity in
+    // Spin: every slot draws, per axis, an angle in [spinMin, spinMax] (radians) and an angular velocity in
     // [spinRateMin, spinRateMax] (radians per second) from a hash of its slot and birth time; its angle is
-    // angle + velocity x age. Equal bounds mean a fixed value.
-    float spinMin = 0.0F;
-    float spinMax = 0.0F;
-    float spinRateMin = 0.0F;
-    float spinRateMax = 0.0F;
+    // angle + velocity x age. Equal bounds mean a fixed value. Z turns a billboard about the view axis; a mesh
+    // is turned by all three as Euler angles (Z after Y after X).
+    kb::math::Vec3 spinMin{};
+    kb::math::Vec3 spinMax{};
+    kb::math::Vec3 spinRateMin{};
+    kb::math::Vec3 spinRateMax{};
 
     [[nodiscard]] constexpr bool HasCollision() const noexcept { return hasPlane || sceneDepthCollision; }
 };
@@ -105,10 +106,12 @@ struct ParticleGpuEmitterCommand {
     // Column-major world matrix of the owner, sent every step for local-space emitters.
     bool hasWorldMatrix = false;
     std::array<float, 16> worldMatrix{ 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F };
-    // Orientation (x, y, z, w) of a mesh emitter's particles: the owner's rotation times the emitter's own, sent
-    // every step like the CPU path publishes it with every snapshot.
+    // Pose of a mesh emitter, sent every step: the orientation (x, y, z, w) of its particles (the owner's rotation
+    // times the emitter's own, as the CPU path publishes it with every snapshot) and the emitter's origin in the
+    // world, by which the whole emitter is placed among the other translucent draws of the frame.
     bool hasOrientation = false;
     std::array<float, 4> orientation{ 0.0F, 0.0F, 0.0F, 1.0F };
+    std::array<float, 3> origin{ 0.0F, 0.0F, 0.0F };
     std::vector<ParticleGpuSpawn> spawns;
 };
 

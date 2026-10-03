@@ -385,14 +385,15 @@ ParticleEmitterInspectorView ParticleEmitterInspectorModel::Build(
             FormatColor(spawn.startColor)), spawn.startColor);
         AddSlider(addProperty(ParticleEditorProperty::SpawnStartSize, "Start size", ScalarText(spawn.startSize)),
             spawn.startSize, 0.01F, 8.0F);
-        AddSlider(addProperty(ParticleEditorProperty::SpawnRotationMin, "Rotation min (deg)", ScalarText(spawn.initialRotationMinDegrees)),
-            spawn.initialRotationMinDegrees, -360.0F, 360.0F);
-        AddSlider(addProperty(ParticleEditorProperty::SpawnRotationMax, "Rotation max (deg)", ScalarText(spawn.initialRotationMaxDegrees)),
-            spawn.initialRotationMaxDegrees, -360.0F, 360.0F);
-        AddSlider(addProperty(ParticleEditorProperty::SpawnAngularVelocityMin, "Spin min (deg/s)", ScalarText(spawn.angularVelocityMinDegrees)),
-            spawn.angularVelocityMinDegrees, -720.0F, 720.0F);
-        AddSlider(addProperty(ParticleEditorProperty::SpawnAngularVelocityMax, "Spin max (deg/s)", ScalarText(spawn.angularVelocityMaxDegrees)),
-            spawn.angularVelocityMaxDegrees, -720.0F, 720.0F);
+        // X, Y, Z in degrees; Z turns a billboard, a mesh is turned by all three (Euler: X, then Y, then Z).
+        AddVector(addProperty(ParticleEditorProperty::SpawnRotationMin, "Rotation min XYZ (deg)", VecText(spawn.initialRotationMinDegrees)),
+            spawn.initialRotationMinDegrees);
+        AddVector(addProperty(ParticleEditorProperty::SpawnRotationMax, "Rotation max XYZ (deg)", VecText(spawn.initialRotationMaxDegrees)),
+            spawn.initialRotationMaxDegrees);
+        AddVector(addProperty(ParticleEditorProperty::SpawnAngularVelocityMin, "Spin min XYZ (deg/s)", VecText(spawn.angularVelocityMinDegrees)),
+            spawn.angularVelocityMinDegrees);
+        AddVector(addProperty(ParticleEditorProperty::SpawnAngularVelocityMax, "Spin max XYZ (deg/s)", VecText(spawn.angularVelocityMaxDegrees)),
+            spawn.angularVelocityMaxDegrees);
         AddSlider(addProperty(ParticleEditorProperty::SpawnSpeedMin, "Speed min", ScalarText(spawn.speedMin)),
             spawn.speedMin, 0.0F, 40.0F);
         AddSlider(addProperty(ParticleEditorProperty::SpawnSpeedMax, "Speed max", ScalarText(spawn.speedMax)),

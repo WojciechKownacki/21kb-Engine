@@ -383,7 +383,7 @@ void ParticleGpuRenderer::CollectGpuMeshDraws(std::uint64_t sceneId, std::vector
         if (params.output != kb::particles::ParticleRenderOutput::Mesh || params.meshAssetId == 0U) continue;
         draws.push_back(ParticleGpuMeshDraw{ .meshAssetId = params.meshAssetId, .materialAssetId = params.materialAssetId,
             .instances = draw.instances, .count = draw.capacity, .castsShadow = params.castsShadow,
-            .receivesShadow = params.receivesShadow });
+            .receivesShadow = params.receivesShadow, .origin = draw.origin });
     }
 }
 

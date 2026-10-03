@@ -2763,7 +2763,7 @@ void TestGpuLocalSpaceEmitterRouting() {
 // Every particle carries an angle drawn at birth and turns by its angular velocity: with fixed values the published
 // rotation is angle + rate x age exactly; with a range the particles differ from each other.
 void TestCpuParticleSpin() {
-    const auto publish = [](float rotationMin, float rotationMax, float rateMin, float rateMax) {
+    const auto publish = [](kb::math::Vec3 rotationMin, kb::math::Vec3 rotationMax, kb::math::Vec3 rateMin, kb::math::Vec3 rateMax) {
         auto effect = Fixture::MakeEffect(600.0F, 64U);
         effect.emitters[0].spawn.initialRotationMinDegrees = rotationMin;
         effect.emitters[0].spawn.initialRotationMaxDegrees = rotationMax;
@@ -2777,21 +2777,27 @@ void TestCpuParticleSpin() {
         for (int step = 0; step < 20; ++step) system.OnFixedUpdate(context);
         const auto snapshot = kb::particles::ParticlePlayback::ReadRenderSnapshot(fixture.scene);
         Require(snapshot && snapshot->Particles().size() > 4U, "spin fixture published no particles");
-        std::vector<std::pair<float, float>> rotations; // (age in seconds, rotation)
+        struct Angles { float age; float x; float y; float z; };
+        std::vector<Angles> rotations;
         for (const auto& particle : snapshot->Particles()) {
-            rotations.emplace_back(static_cast<float>(particle.normalizedAgeUnorm) / 65535.0F * 2.0F, particle.rotationRadians);
+            rotations.push_back({ static_cast<float>(particle.normalizedAgeUnorm) / 65535.0F * 2.0F,
+                kb::particles::UnpackParticleAngle(particle.rotationXSnorm), kb::particles::UnpackParticleAngle(particle.rotationYSnorm),
+                particle.rotationRadians });
         }
         return rotations;
     };
     constexpr float kPi = 3.14159265F;
-    for (const auto& [age, rotation] : publish(90.0F, 90.0F, 180.0F, 180.0F)) {
-        Require(std::abs(rotation - (0.5F * kPi + kPi * age)) < 0.02F, "a fixed spin must be angle + rate x age");
+    // Z turns by 90 deg + 180 deg/s, Y by -45 deg + 90 deg/s, X by 30 deg and no velocity.
+    for (const auto& angles : publish({ 30.0F, -45.0F, 90.0F }, { 30.0F, -45.0F, 90.0F }, { 0.0F, 90.0F, 180.0F }, { 0.0F, 90.0F, 180.0F })) {
+        Require(std::abs(angles.z - (0.5F * kPi + kPi * angles.age)) < 0.02F, "a fixed spin must be angle + rate x age about Z");
+        Require(std::abs(angles.y - (-0.25F * kPi + 0.5F * kPi * angles.age)) < 0.02F, "a fixed spin must be angle + rate x age about Y");
+        Require(std::abs(angles.x - (kPi / 6.0F)) < 0.02F, "a fixed angle without velocity must stay put about X");
     }
-    const auto spread = publish(0.0F, 360.0F, 0.0F, 0.0F);
+    const auto spread = publish({ 0.0F, 0.0F, 0.0F }, { 0.0F, 0.0F, 360.0F }, {}, {});
     float lowest = 100.0F;
     float highest = -100.0F;
-    for (const auto& [age, rotation] : spread) {
-        static_cast<void>(age);
+    for (const auto& angles : spread) {
+        const float rotation = angles.z;
         Require(rotation >= -0.001F && rotation <= 2.0F * kPi + 0.001F, "a random angle must stay inside its range");
         lowest = std::min(lowest, rotation);
         highest = std::max(highest, rotation);

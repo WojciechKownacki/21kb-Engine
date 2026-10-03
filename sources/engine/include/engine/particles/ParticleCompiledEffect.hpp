@@ -102,11 +102,12 @@ struct ParticleCompiledEmitter {
     float lifetimeMin = 1.0F;
     float lifetimeMax = 1.0F;
     float prewarmSeconds = 0.0F;
-    // Spin of a particle at birth (radians) and its angular velocity (radians per second), each drawn from [min, max].
-    float spinMinRadians = 0.0F;
-    float spinMaxRadians = 0.0F;
-    float spinRateMinRadians = 0.0F;
-    float spinRateMaxRadians = 0.0F;
+    // Spin of a particle at birth (radians) and its angular velocity (radians per second), per axis (z: the spin
+    // of a billboard; x, y, z: Euler angles of a mesh), each drawn from [min, max].
+    kb::math::Vec3 spinMinRadians{};
+    kb::math::Vec3 spinMaxRadians{};
+    kb::math::Vec3 spinRateMinRadians{};
+    kb::math::Vec3 spinRateMaxRadians{};
     std::uint8_t rateKeyCount = 0U;
     std::uint8_t burstCount = 0U;
     std::array<ParticleCompiledCurveKey, kb::scene::kParticleEffectMaxCurveKeys> rateKeys{};
