@@ -44,6 +44,7 @@ struct RenderViewportViewIds {
     std::uint16_t screenUIComposite = ViewId::Invalid;
     std::uint16_t editorUiComposite = ViewId::Invalid;
     std::uint16_t editorGizmoOverlay = ViewId::Invalid;
+    std::uint16_t giResolve = ViewId::Invalid;
 
     [[nodiscard]] constexpr std::uint16_t ViewFor(RenderPassKind kind) const noexcept {
         switch (kind) {
@@ -110,7 +111,7 @@ struct RenderViewportViewIds {
                ViewId::IsValid(postProcessHdrCombine) && ViewId::IsValid(postProcessHdrFinalize) &&
                ViewId::IsValid(sceneOverlays) && ViewId::IsValid(screenUIBlurH) && ViewId::IsValid(screenUIBlurV) &&
                ViewId::IsValid(finalComposite) && ViewId::IsValid(screenUIComposite) && ViewId::IsValid(editorUiComposite) &&
-               ViewId::IsValid(editorGizmoOverlay);
+               ViewId::IsValid(editorGizmoOverlay) && ViewId::IsValid(giResolve);
     }
 
 private:
@@ -128,6 +129,7 @@ class RenderViewportViewIdAllocator {
 public:
     static constexpr std::size_t kMaxViewportCount =
         1U + (ViewId::DetachedViewportLimit - ViewId::DetachedViewportStart) / ViewId::DetachedViewportStride;
+    static_assert(kMaxViewportCount <= ViewId::GiResolveMaxViewports, "Not enough GI resolve views for every viewport");
 
     [[nodiscard]] static constexpr RenderViewportViewIds ForViewportIndex(std::uint32_t viewportIndex) noexcept {
         if (viewportIndex == 0U) {
@@ -158,6 +160,7 @@ public:
                 .screenUIComposite = ViewId::ScreenUIComposite,
                 .editorUiComposite = ViewId::EditorUi,
                 .editorGizmoOverlay = ViewId::EditorGizmoOverlay,
+                .giResolve = ViewId::GiResolveStart,
             };
         }
 
@@ -191,6 +194,7 @@ public:
             .screenUIComposite = static_cast<std::uint16_t>(base + 35U),
             .editorUiComposite = static_cast<std::uint16_t>(base + 16U),
             .editorGizmoOverlay = static_cast<std::uint16_t>(base + 32U),
+            .giResolve = static_cast<std::uint16_t>(ViewId::GiResolveStart + viewportIndex),
         };
     }
 

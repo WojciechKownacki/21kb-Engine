@@ -25,7 +25,7 @@ Kryterium „zrobione" = test, który musi przejść; test ma być headless (bez
 
 ### A. Jakość obrazu
 
-- **A1 — Wygładzanie GI w czasie** · P1 · M · do zrobienia
+- **A1 — Wygładzanie GI w czasie** · P1 · M · **zrobione** (szum podłogi 27,1 → 7,2 w teście pikselowym)
   Dziś GI jest ziarniste (6 promieni na piksel, losowanie co klatkę). Dodać akumulację czasową (reprojekcja
   historii + odrzucenie przy zmianie), parametry intensywności i zasięgu w `SceneRenderLightingConfig`.
   Zrobione gdy: test pikselowy pokazuje wyraźnie mniejszą wariancję jasności podłogi po N klatkach niż przed zmianą,

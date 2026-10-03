@@ -6599,7 +6599,13 @@ void RunRendererRendersDirectionalCascadeShadowTest() {
 
 // Screen-space GI: a lit red wall must tint the nearby white floor, but only when GI is enabled.
 // Several frames are rendered so the pass can read the previous frame's lit colour.
-[[nodiscard]] int RenderGiFloorRedExcess(bool globalIllumination) {
+struct GiFloorStats {
+    int redExcess = 0;
+    // Mean absolute brightness difference between horizontally adjacent floor pixels: ray noise raises it.
+    double noise = 0.0;
+};
+
+[[nodiscard]] GiFloorStats RenderGiFloorStats(bool globalIllumination, float historyWeight, int frames) {
     const std::filesystem::path root = std::filesystem::temp_directory_path() /
         ("21kb_gi_bounce_" + std::to_string(GetCurrentProcessId()) + (globalIllumination ? "_on" : "_off"));
     std::error_code error;
@@ -6661,13 +6667,14 @@ void RunRendererRendersDirectionalCascadeShadowTest() {
     bx::mtxLookAt(camera.view.data(), bx::Vec3{ -2.0F, 4.0F, -8.0F }, bx::Vec3{ 2.0F, 0.0F, 0.0F });
     SceneDepthPolicy::MakePerspective(camera.projection.data(), 30.0F, 1.0F, 0.1F, 100.0F, SceneDepthPolicy::HomogeneousDepth());
 
-    int redExcess = 0;
+    GiFloorStats stats;
     {
         ParticleMeshReadbackTarget target;
         Require(target.Initialize(), "GI test could not create its readback target");
         SceneRenderLightingConfig lighting{};
         lighting.globalIllumination = globalIllumination ? SceneRenderGlobalIlluminationMode::SsGi
                                                          : SceneRenderGlobalIlluminationMode::Disabled;
+        lighting.giHistoryWeight = historyWeight;
         lighting.shadowsEnabled = false;
         const RenderSceneSubmitDesc desc{
             .target = target.Binding(),
@@ -6681,7 +6688,7 @@ void RunRendererRendersDirectionalCascadeShadowTest() {
             .selectionMaskEnabled = false,
             .selectionOutlineEnabled = false,
         };
-        for (int frame = 0; frame < 6; ++frame) {
+        for (int frame = 0; frame < frames; ++frame) {
             SubmitLifecycleFrame(renderer, scene, desc, "GI test did not submit a frame");
         }
         const std::vector<std::uint8_t> pixels = target.ReadPixels();
@@ -6695,18 +6702,44 @@ void RunRendererRendersDirectionalCascadeShadowTest() {
                 blue += pixels[offset + 2U];
             }
         }
-        redExcess = (red - blue) / 25;
+        stats.redExcess = (red - blue) / 25;
+        int differenceSum = 0;
+        int differenceCount = 0;
+        for (int y = 36; y < 48; ++y) {
+            for (int x = 24; x < 40; ++x) {
+                const auto brightness = [&](int px) {
+                    const std::size_t offset = (static_cast<std::size_t>(y) * 64U + static_cast<std::size_t>(px)) * 4U;
+                    return static_cast<int>(pixels[offset]) + pixels[offset + 1U] + pixels[offset + 2U];
+                };
+                differenceSum += std::abs(brightness(x + 1) - brightness(x));
+                ++differenceCount;
+            }
+        }
+        stats.noise = static_cast<double>(differenceSum) / differenceCount;
     }
     renderer.Shutdown();
     std::filesystem::remove_all(root, error);
-    return redExcess;
+    return stats;
 }
 
 void RunRendererRendersScreenSpaceGiBounceTest() {
-    const int without = RenderGiFloorRedExcess(false);
-    const int with = RenderGiFloorRedExcess(true);
+    const int without = RenderGiFloorStats(false, 0.9F, 6).redExcess;
+    const int with = RenderGiFloorStats(true, 0.9F, 6).redExcess;
     std::fprintf(stderr, "gi_bounce_pixels red_minus_blue without=%d with=%d%c", without, with, 10);
     Require(with >= without + 6, "GI test: the red wall must tint the nearby floor when screen-space GI is enabled");
+}
+
+// Temporal accumulation: the same scene with the history weight at zero (the raw 6-ray gather) and at
+// its default must differ in floor noise, while the bounce itself stays visible.
+void RunRendererSmoothsScreenSpaceGiOverTimeTest() {
+    const GiFloorStats raw = RenderGiFloorStats(true, 0.0F, 40);
+    const GiFloorStats smoothed = RenderGiFloorStats(true, 0.9F, 40);
+    const int without = RenderGiFloorStats(false, 0.9F, 40).redExcess;
+    std::fprintf(stderr, "gi_temporal_noise raw=%.2f smoothed=%.2f red_excess raw=%d smoothed=%d off=%d%c",
+        raw.noise, smoothed.noise, raw.redExcess, smoothed.redExcess, without, 10);
+    Require(raw.noise > 0.5, "GI temporal test: the raw gather must be visibly noisy for the comparison to mean anything");
+    Require(smoothed.noise * 2.0 < raw.noise, "GI temporal test: accumulation must clearly reduce the floor noise");
+    Require(smoothed.redExcess >= without + 6, "GI temporal test: accumulation must keep the red bounce");
 }
 
 
@@ -6862,6 +6895,7 @@ void RunRendererParticleMeshSnapshotSubmitTest() {
     RunRendererRendersPointLightShadowTest();
     RunRendererRendersDirectionalCascadeShadowTest();
     RunRendererRendersScreenSpaceGiBounceTest();
+    RunRendererSmoothsScreenSpaceGiOverTimeTest();
     RunRendererDrawsGpuSimulatedParticlesTest();
     RunRendererDrawsMillionGpuParticlesTest();
 #endif
