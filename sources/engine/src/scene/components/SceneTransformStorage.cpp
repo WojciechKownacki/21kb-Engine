@@ -30,12 +30,23 @@ TransformComponent* SceneTransformComponentStore::TryGet(SceneEntity entity) noe
 }
 
 void SceneTransformComponentStore::Set(SceneEntity entity, const TransformComponent& transform) {
-    const TransformComponent* current = TryGet(entity);
-    TransformComponent stored = transform;
-    stored.localVersion = current == nullptr ? std::max<std::uint64_t>(stored.localVersion, 1ULL) : current->localVersion + 1U;
-    stored.parentVersion = current == nullptr ? 0U : current->parentVersion;
-    stored.worldVersion = current == nullptr ? 0U : current->worldVersion;
-    stored.worldDirty = true;
+    const auto bumpVersions = [&transform](const TransformComponent* current) {
+        TransformComponent stored = transform;
+        stored.localVersion = current == nullptr ? std::max<std::uint64_t>(stored.localVersion, 1ULL) : current->localVersion + 1U;
+        stored.parentVersion = current == nullptr ? 0U : current->parentVersion;
+        stored.worldVersion = current == nullptr ? 0U : current->worldVersion;
+        stored.worldDirty = true;
+        return stored;
+    };
+    // A component that already lives in the native storage is overwritten in place and flagged: no
+    // structural bookkeeping.
+    if (void* data = kb::ecs::WorldInternalAccess::TryGetMutableNativeComponent(*world_, entity, componentId_); data != nullptr) {
+        auto* current = static_cast<TransformComponent*>(data);
+        *current = bumpVersions(current);
+        kb::ecs::WorldInternalAccess::MarkNativeComponentWritten(*world_, entity, componentId_, sizeof(TransformComponent), current);
+        return;
+    }
+    const TransformComponent stored = bumpVersions(TryGet(entity));
     SceneComponentStorageAccess::Set<TransformComponent>(world_, entity, stored);
 }
 
@@ -45,6 +56,14 @@ void SceneTransformComponentStore::MarkModified(SceneEntity entity) noexcept {
         transform->worldDirty = true;
     }
     if (entity.IsValid()) kb::ecs::WorldInternalAccess::MarkComponentModified(*world_, entity, componentId_);
+}
+
+void SceneTransformComponentStore::MarkWritten(SceneEntity entity) noexcept {
+    if (const void* data = kb::ecs::WorldInternalAccess::TryGetMutableNativeComponent(*world_, entity, componentId_); data != nullptr) {
+        kb::ecs::WorldInternalAccess::MarkNativeComponentWritten(*world_, entity, componentId_, sizeof(TransformComponent), data);
+    } else if (entity.IsValid()) {
+        kb::ecs::WorldInternalAccess::MarkComponentModified(*world_, entity, componentId_);
+    }
 }
 
 void SceneTransformComponentStore::MarkParentModified(SceneEntity entity) noexcept {

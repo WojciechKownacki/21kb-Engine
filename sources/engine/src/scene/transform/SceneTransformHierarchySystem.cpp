@@ -476,7 +476,7 @@ void AddTransformCacheEntryFromHotBatch(
         return stats;
     }
     for (const SceneEntity entity : updatedEntities) {
-        SceneComponentStorageAccess::MarkModified<TransformComponent>(&state.world, entity);
+        state.componentStorage.Transforms().MarkWritten(entity);
     }
     stats.backendMarkNanoseconds = Nanoseconds(std::chrono::steady_clock::now() - backendMarkStart);
     return stats;

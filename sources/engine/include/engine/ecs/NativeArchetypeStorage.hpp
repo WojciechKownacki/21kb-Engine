@@ -239,6 +239,9 @@ public:
     // Missing columns and invalid/stale entity handles return null.
     [[nodiscard]] void* TryGetMutableComponentData(Entity entity, ComponentId componentId);
     [[nodiscard]] const void* TryGetComponentData(Entity entity, ComponentId componentId) const;
+    // Like TryGetMutableComponentData, and flags the row as modified in the same lookup: the caller writes
+    // through the returned pointer.
+    [[nodiscard]] void* TryGetMutableComponentDataMarkModified(Entity entity, ComponentId componentId);
     [[nodiscard]] bool HasComponent(Entity entity, ComponentId componentId) const;
     [[nodiscard]] std::size_t CountWithComponent(ComponentId componentId) const noexcept;
     [[nodiscard]] bool EntityArchetypeMatches(Entity entity, std::span<const ComponentId> requiredComponentIds) const;

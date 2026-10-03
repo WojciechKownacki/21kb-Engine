@@ -29,6 +29,8 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunEcsNativeArchetypeStorageTests();
     } else if (suite == "scene-hierarchy") {
         kb::tests::RunSceneHierarchyTests();
+    } else if (suite == "scene-transform-bench") {
+        kb::tests::RunTransformWriteBenchmark();
     } else if (suite == "scene-ui") {
         kb::tests::RunSceneUITests();
     } else if (suite == "scene-ui-bench") {

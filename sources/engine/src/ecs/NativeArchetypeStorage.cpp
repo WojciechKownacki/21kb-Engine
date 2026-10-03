@@ -1203,6 +1203,19 @@ public:
         return column == nullptr ? nullptr : ComponentData(location, *column);
     }
 
+    [[nodiscard]] void* TryGetComponentDataMarkModified(EntityLocation location, ComponentId componentId) {
+        const ComponentLayout* column = FindColumn(componentId);
+        if (column == nullptr) {
+            return nullptr;
+        }
+        const std::size_t index = static_cast<std::size_t>(column - layout_.columns.data());
+        ++componentVersions_[index];
+        ++version_;
+        NativeChunk& chunk = chunks_[location.chunk];
+        chunk.dirtyRowCounts[index] += SetDirtyBits(DirtyWords(chunk, index), location.row, 1U);
+        return ComponentData(location, *column);
+    }
+
     [[nodiscard]] void* ComponentData(EntityLocation location, ComponentId componentId) {
         const ComponentLayout* column = FindColumn(componentId);
         if (column == nullptr) {
@@ -2614,6 +2627,13 @@ public:
         return tables_[record.location.table].TryGetComponentData(record.location, componentId);
     }
 
+    [[nodiscard]] void* TryGetMutableComponentDataMarkModified(Entity entity, ComponentId componentId) {
+        const auto index = FindLiveRecordIndex(entity);
+        if (!index.has_value()) return nullptr;
+        EntityRecord& record = records_[*index];
+        return tables_[record.location.table].TryGetComponentDataMarkModified(record.location, componentId);
+    }
+
     [[nodiscard]] const void* TryGetComponentData(Entity entity, ComponentId componentId) const {
         const auto index = FindLiveRecordIndex(entity);
         if (!index.has_value()) return nullptr;
@@ -3829,6 +3849,10 @@ const void* NativeArchetypeStorage::ComponentData(Entity entity, ComponentId com
 
 void* NativeArchetypeStorage::TryGetMutableComponentData(Entity entity, ComponentId componentId) {
     return impl_->TryGetMutableComponentData(entity, componentId);
+}
+
+void* NativeArchetypeStorage::TryGetMutableComponentDataMarkModified(Entity entity, ComponentId componentId) {
+    return impl_->TryGetMutableComponentDataMarkModified(entity, componentId);
 }
 
 const void* NativeArchetypeStorage::TryGetComponentData(Entity entity, ComponentId componentId) const {
