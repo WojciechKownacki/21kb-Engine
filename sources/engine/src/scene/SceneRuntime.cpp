@@ -494,6 +494,7 @@ bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
         state.fixedStepAccumulatorSeconds += clampedDelta;
         while (state.fixedStepAccumulatorSeconds >= fixed.fixedDeltaSeconds &&
             state.lastFixedStepCount < fixed.maxFixedStepsPerFrame) {
+            state.sceneSystemScheduler.FixedStepBegin(scene, fixed.fixedDeltaSeconds);
             synchronizeTransforms();
             const auto stepStart = Clock::now();
             const auto captureStart = stepStart;

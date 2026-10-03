@@ -18,6 +18,10 @@ void SceneSystem::OnFixedUpdate(SceneSystemContext& context) {
     static_cast<void>(context);
 }
 
+void SceneSystem::OnFixedStepBegin(SceneSystemContext& context) {
+    static_cast<void>(context);
+}
+
 void SceneSystem::OnDestroy(SceneSystemContext& context) {
     static_cast<void>(context);
 }
