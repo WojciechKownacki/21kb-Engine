@@ -3,6 +3,7 @@ $input v_normal, v_color0, v_texcoord0, v_worldPos, v_shadowPos, v_shadowFlags, 
 #include <bgfx_shader.sh>
 #include "light_grid.sh"
 #include "shadow_cascades.sh"
+#include "point_shadow.sh"
 
 SAMPLER2D(s_albedo, 0);
 SAMPLER2D(s_normal, 1);
@@ -223,7 +224,7 @@ void main()
         {
             int lightIndex = KbLightGridIndex(lightList, entry);
             vec3 directLight = EvaluateSceneLight(lightIndex, normal, viewDir, v_worldPos, albedo.rgb, metallic, roughness, occlusion);
-            lighting += lightIndex == 0 ? directLight * shadowVisible : directLight;
+            lighting += directLight * (lightIndex == 0 ? shadowVisible : 1.0) * KbPointShadowFactor(lightIndex, v_worldPos);
         }
     }
     vec3 emissive = texture2D(s_emissive, materialUv).rgb * u_materialEmissive.rgb * u_materialEmissive.a;

@@ -409,6 +409,7 @@ void Renderer::Shutdown() {
     sceneExposureMeter_.ShutdownGpuResources();
     editorPassSubmitter_.Shutdown();
     defaultShadowMap_.Shutdown();
+    defaultPointShadowMap_.Shutdown();
     defaultPostProcessTargets_.Shutdown();
     for (SceneGBuffer& gbuffer : sceneGBuffers_) {
         gbuffer.Shutdown();
@@ -1256,6 +1257,7 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         .renderScene = renderScene,
         .sceneRenderer = *sceneRenderer_,
         .shadowMap = defaultShadowMap_,
+        .pointShadowMap = defaultPointShadowMap_,
         .sceneDesc = desc,
         .viewportPlan = viewportPlan,
         .lightingConfig = effectiveLightingConfig,
@@ -1394,7 +1396,7 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
             viewportPlan.viewIds.gbufferGeometry,
             RenderPassKind::GBufferGeometry,
             MeshPassType::GBuffer,
-            shadowBinding.IsValid() ? &shadowBinding : nullptr);
+            shadowBinding.HasAny() ? &shadowBinding : nullptr);
         const SceneRenderPassSubmitStats* gbufferPassStats = lastScenePassSubmitStats_.empty()
             ? nullptr
             : &lastScenePassSubmitStats_.back();
@@ -1442,7 +1444,7 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
                 .clearRgba = worldBackdrop.has_value() && worldBackdrop->mode == SceneRenderWorldBackdropMode::SolidColor
                     ? PackOpaqueRgba(worldBackdrop->color)
                     : desc.clearRgba,
-                .shadowMap = shadowBinding.IsValid() ? &shadowBinding : nullptr,
+                .shadowMap = shadowBinding.HasAny() ? &shadowBinding : nullptr,
                 .worldBackdrop = worldBackdrop.has_value() ? &*worldBackdrop : nullptr,
                 .worldBackdropEnvironment = worldBackdropEnvironment,
             }, deferredStats)) {
@@ -1475,7 +1477,7 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
             viewportPlan.viewIds.opaqueScene,
             RenderPassKind::OpaqueScene,
             MeshPassType::BaseOpaque,
-            shadowBinding.IsValid() ? &shadowBinding : nullptr);
+            shadowBinding.HasAny() ? &shadowBinding : nullptr);
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport opaque pass end");
     }
     if (desc.meshPassMode != SceneRenderMeshPassMode::OpaqueOnly) {
@@ -1492,7 +1494,7 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
             viewportPlan.viewIds.transparentScene,
             RenderPassKind::TransparentScene,
             MeshPassType::BaseTransparent,
-            shadowBinding.IsValid() ? &shadowBinding : nullptr,
+            shadowBinding.HasAny() ? &shadowBinding : nullptr,
             terrainLayersOnly);
         if (!terrainLayersOnly && sceneRenderer_->LastSubmitStats().failedParticleBatchCount == 0U) {
             const auto& particleSnapshot = renderScene.ParticleRenderSnapshot();

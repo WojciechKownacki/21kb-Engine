@@ -6489,6 +6489,123 @@ void RunRendererDrawsPublishedRuntimeTexturePixelsTest() {
     std::filesystem::remove(root / "triangle.obj", error);
     std::filesystem::remove(root, error);
 }
+
+// A point light above a horizontal plate must darken the floor under the plate only when its
+// shadow is enabled. The same scene is rendered twice (shadow on / off) through the real D3D11
+// renderer into a hidden offscreen target, so the comparison needs no reference image.
+struct ShadowFloorScene {
+    bool point = true;
+    bool lightCastsShadow = true;
+    bx::Vec3 cameraPosition{ 0.0F, 2.0F, -14.0F };
+    float fovDegrees = 40.0F;
+};
+
+[[nodiscard]] int RenderShadowFloorBrightness(const ShadowFloorScene& setup) {
+    const bool lightCastsShadow = setup.lightCastsShadow;
+    const std::filesystem::path root = std::filesystem::temp_directory_path() /
+        ("21kb_shadow_floor_" + std::to_string(GetCurrentProcessId()) + (setup.point ? "_p" : "_d") + (lightCastsShadow ? "_on" : "_off"));
+    std::error_code error;
+    std::filesystem::create_directories(root, error);
+    Require(!error, "Point shadow test could not create its asset directory");
+    WriteStressCubeObj(root / "cube.obj");
+
+    kb::scene::Scene scene;
+    kb::scene::SceneLightingAccess::SetBasicLightingEnabled(scene, true);
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    Require(manager.RegisterLoader(std::make_unique<RenderMeshAssetLoader>()) &&
+            manager.RegisterLoader(std::make_unique<RenderMaterialAssetLoader>()) &&
+            manager.RegisterLoader(std::make_unique<RenderTextureAssetLoader>()),
+        "Point shadow test could not register render asset loaders");
+    Require(manager.Mounts().Mount("Game", root) && manager.DiscoverMountedAssets() >= 1U,
+        "Point shadow test could not discover its mesh");
+    const kb::assets::AssetMetadata* mesh = manager.Registry().FindByPath("/Game/cube.obj");
+    Require(mesh != nullptr, "Point shadow test lost its cube mesh");
+
+    const auto addBox = [&](kb::scene::Vec3 position, kb::scene::Vec3 scale) {
+        const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+            .name = "Box",
+            .transform = kb::scene::TransformComponent{ .localPosition = position, .localScale = scale },
+        });
+        scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{
+            .meshAssetId = mesh->id.value, .castsShadow = true });
+    };
+    addBox({ 0.0F, -0.5F, 0.0F }, { 40.0F, 1.0F, 40.0F });   // floor, top face at y = 0
+    addBox({ 0.0F, 3.0F, 0.0F }, { 4.0F, 0.2F, 4.0F });      // occluder plate
+    kb::scene::TransformComponent lightTransform = TransformAt(0.0F, 6.0F, 0.0F);
+    if (!setup.point) {
+        // A +90 degree turn about X points the light's forward axis straight down.
+        lightTransform.localRotation = kb::scene::Quat{ 0.70710678F, 0.0F, 0.0F, 0.70710678F };
+    }
+    const kb::scene::SceneEntity light = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "Shadow Light", .transform = lightTransform });
+    scene.Components().Lights().Set(light, kb::scene::LightComponent{
+        .kind = setup.point ? kb::scene::LightKind::Point : kb::scene::LightKind::Directional,
+        .intensity = setup.point ? 3.0F : 1.0F, .range = 30.0F, .castsShadow = lightCastsShadow });
+
+    NativeTestSurface surface;
+    Require(surface.IsValid(), "Point shadow test could not create a hidden D3D11 surface");
+    DisplayConfig config{};
+    config.syncMode = DisplaySyncMode::Uncapped;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "Point shadow test could not initialize the renderer");
+    renderer.SetRuntimeAssetDiscoveryEnabled(false);
+
+    SceneRenderCamera camera{};
+    bx::mtxLookAt(camera.view.data(), setup.cameraPosition, bx::Vec3{ 0.0F, 0.0F, 0.0F });
+    SceneDepthPolicy::MakePerspective(camera.projection.data(), setup.fovDegrees, 1.0F, 0.1F, 200.0F, SceneDepthPolicy::HomogeneousDepth());
+
+    int brightness = 0;
+    {
+        ParticleMeshReadbackTarget target;
+        Require(target.Initialize(), "Point shadow test could not create its readback target");
+        const RenderSceneSubmitDesc desc{
+            .target = target.Binding(),
+            .cameraOverride = camera,
+            .meshPassMode = SceneRenderMeshPassMode::OpaqueOnly,
+            .clearRgba = 0x000000FFU,
+            .editorSceneOverlaysEnabled = false,
+            .shadowPassEnabled = true,
+            .postProcessEnabled = false,
+            .selectionMaskEnabled = false,
+            .selectionOutlineEnabled = false,
+        };
+        // The first frame creates GPU resources; the second one is the measured frame.
+        SubmitLifecycleFrame(renderer, scene, desc, "Point shadow test did not submit its first frame");
+        SubmitLifecycleFrame(renderer, scene, desc, "Point shadow test did not submit its second frame");
+        { const auto passes = renderer.LastScenePassSubmitStats(); std::size_t shadowPasses = 0U, shadowMeshes = 0U; for (const auto& pass : passes) { if (pass.pass == MeshPassType::ShadowDepth) { ++shadowPasses; shadowMeshes += pass.stats.submittedMeshCount; } } if (false) std::fprintf(stderr, "point_shadow_debug on=%d passes=%zu shadowPasses=%zu shadowMeshes=%zu%c", int(lightCastsShadow), passes.size(), shadowPasses, shadowMeshes, 10); }
+        const std::vector<std::uint8_t> pixels = target.ReadPixels();
+        // The camera looks at the world origin, which is the centre pixel.
+        const std::size_t center = (32U * 64U + 32U) * 4U;
+        brightness = static_cast<int>(pixels[center]) + pixels[center + 1U] + pixels[center + 2U];
+    }
+    renderer.Shutdown();
+    std::filesystem::remove_all(root, error);
+    return brightness;
+}
+
+void RunRendererRendersDirectionalCascadeShadowTest() {
+    // The occluder is 40 m from the camera: outside the two nearest cascades, inside the widest one.
+    ShadowFloorScene farScene{ .point = false, .cameraPosition = bx::Vec3{ 0.0F, 2.0F, -40.0F }, .fovDegrees = 8.0F };
+    farScene.lightCastsShadow = false;
+    const int unshadowed = RenderShadowFloorBrightness(farScene);
+    farScene.lightCastsShadow = true;
+    const int shadowed = RenderShadowFloorBrightness(farScene);
+    std::fprintf(stderr, "cascade_shadow_pixels unshadowed=%d shadowed=%d%c", unshadowed, shadowed, 10);
+    Require(unshadowed > 60, "Cascade shadow test: the unshadowed floor must be visibly lit");
+    Require(shadowed * 10 < unshadowed * 8, "Cascade shadow test: the widest cascade must shadow the floor under a farScene occluder");
+}
+
+void RunRendererRendersPointLightShadowTest() {
+    ShadowFloorScene scene{};
+    scene.lightCastsShadow = false;
+    const int unshadowed = RenderShadowFloorBrightness(scene);
+    scene.lightCastsShadow = true;
+    const int shadowed = RenderShadowFloorBrightness(scene);
+    std::fprintf(stderr, "point_shadow_pixels unshadowed=%d shadowed=%d%c", unshadowed, shadowed, 10);
+    Require(unshadowed > 60, "Point shadow test: the unshadowed floor under the plate must be visibly lit");
+    Require(shadowed * 10 < unshadowed * 8, "Point shadow test: the plate must darken the floor beneath it");
+}
 #endif
 
 void RunRendererParticleMeshSnapshotSubmitTest() {
@@ -6496,6 +6613,8 @@ void RunRendererParticleMeshSnapshotSubmitTest() {
 #if defined(_WIN32)
     RunRendererDrawsParticleMeshSnapshotPixelsTest();
     RunRendererDrawsPublishedRuntimeTexturePixelsTest();
+    RunRendererRendersPointLightShadowTest();
+    RunRendererRendersDirectionalCascadeShadowTest();
 #endif
 }
 

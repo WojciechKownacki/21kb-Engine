@@ -1,5 +1,6 @@
 #pragma once
 
+#include "kb/render/shadow/PointShadowUniforms.hpp"
 #include "kb/render/shadow/ShadowCascadeUniforms.hpp"
 #include "kb/render/SceneGBuffer.hpp"
 #include "kb/render/frame/FullscreenTexturePass.hpp"
@@ -70,6 +71,7 @@ private:
     bgfx::UniformHandle shadowViewProjUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle shadowParamsUniform_ = BGFX_INVALID_HANDLE;
     ShadowCascadeUniforms shadowCascades_{};
+    PointShadowUniforms pointShadows_{};
     bgfx::UniformHandle backdropHorizonUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle backdropZenithUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle backdropParamsUniform_ = BGFX_INVALID_HANDLE;

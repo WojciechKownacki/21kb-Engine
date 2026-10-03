@@ -11,10 +11,15 @@ ShadowMapResource::~ShadowMapResource() {
 }
 
 bool ShadowMapResource::Ensure(std::uint32_t size) {
-    size = std::clamp(size, 64U, 8192U);
+    return Ensure(size, size);
+}
+
+bool ShadowMapResource::Ensure(std::uint32_t width, std::uint32_t height) {
+    const std::uint32_t size = std::clamp(width, 64U, 8192U);
+    height = std::clamp(height, 64U, 8192U);
     if (bgfx::isValid(frameBuffer_) &&
         bgfx::isValid(depthTexture_) &&
-        size_ == size) {
+        size_ == size && height_ == height) {
         return true;
     }
 
@@ -32,8 +37,7 @@ bool ShadowMapResource::Ensure(std::uint32_t size) {
         return false;
     }
 
-    const auto extent = static_cast<std::uint16_t>(size);
-    depthTexture_ = bgfx::createTexture2D(extent, extent, false, 1U, depthSelection.format, textureFlags);
+    depthTexture_ = bgfx::createTexture2D(static_cast<std::uint16_t>(size), static_cast<std::uint16_t>(height), false, 1U, depthSelection.format, textureFlags);
     if (!bgfx::isValid(depthTexture_)) {
         Shutdown();
         return false;
@@ -47,6 +51,7 @@ bool ShadowMapResource::Ensure(std::uint32_t size) {
     }
 
     size_ = size;
+    height_ = height;
     return true;
 }
 
@@ -59,6 +64,7 @@ void ShadowMapResource::Shutdown() noexcept {
     frameBuffer_ = BGFX_INVALID_HANDLE;
     depthTexture_ = BGFX_INVALID_HANDLE;
     size_ = 0U;
+    height_ = 0U;
 }
 
 bgfx::TextureHandle ShadowMapResource::DepthTexture() const noexcept {
@@ -73,16 +79,24 @@ std::uint32_t ShadowMapResource::Size() const noexcept {
     return size_;
 }
 
+std::uint32_t ShadowMapResource::Height() const noexcept {
+    return height_;
+}
+
 bool ShadowMapResource::IsAllocated() const noexcept {
     return bgfx::isValid(frameBuffer_) && bgfx::isValid(depthTexture_);
 }
 
 std::uint64_t ShadowMapResource::AllocationBytes() const noexcept {
-    return AllocationBytesFor(size_);
+    return AllocationBytesFor(size_, height_);
 }
 
 std::uint64_t ShadowMapResource::AllocationBytesFor(std::uint32_t shadowMapSize) noexcept {
-    return static_cast<std::uint64_t>(shadowMapSize) * static_cast<std::uint64_t>(shadowMapSize) * 4ULL;
+    return AllocationBytesFor(shadowMapSize, shadowMapSize);
+}
+
+std::uint64_t ShadowMapResource::AllocationBytesFor(std::uint32_t width, std::uint32_t height) noexcept {
+    return static_cast<std::uint64_t>(width) * static_cast<std::uint64_t>(height) * 4ULL;
 }
 
 } // namespace kb::render

@@ -290,6 +290,7 @@ private:
     std::array<SceneGBuffer, RenderViewportViewIdAllocator::kMaxViewportCount> sceneGBuffers_{};
     ScenePostProcessTargets defaultPostProcessTargets_;
     ShadowMapResource defaultShadowMap_;
+    ShadowMapResource defaultPointShadowMap_;
     RenderFramePipeline framePipeline_;
     RenderFrameState frameState_;
     EditorRenderPassSubmitter editorPassSubmitter_;

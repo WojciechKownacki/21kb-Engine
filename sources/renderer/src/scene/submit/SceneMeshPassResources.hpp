@@ -1,5 +1,6 @@
 #pragma once
 
+#include "kb/render/shadow/PointShadowUniforms.hpp"
 #include "kb/render/shadow/ShadowCascadeUniforms.hpp"
 #include "kb/render/MaterialProgramRegistry.hpp"
 #include "kb/render/resources/RenderResourceRegistry.hpp"
@@ -166,6 +167,7 @@ private:
     bgfx::UniformHandle shadowViewProjUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle shadowParamsUniform_ = BGFX_INVALID_HANDLE;
     ShadowCascadeUniforms shadowCascades_{};
+    PointShadowUniforms pointShadows_{};
     bgfx::TextureHandle fallbackWhiteTexture_ = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle fallbackNormalTexture_ = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle fallbackWhiteCubeTexture_ = BGFX_INVALID_HANDLE;

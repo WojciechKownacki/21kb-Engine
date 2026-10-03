@@ -300,7 +300,7 @@ struct SceneRenderLightingConfig {
     SceneRenderIblConfig ibl{};
     SceneRenderGlobalIlluminationMode globalIllumination = SceneRenderGlobalIlluminationMode::Disabled;
     std::uint32_t shadowMapSize = 1024U;
-    std::uint32_t shadowCascadeCount = 3U;
+    std::uint32_t shadowCascadeCount = 4U;
     std::uint32_t shadowAtlasSize = 2048U;
     float shadowDistance = 50.0F;
     float shadowDepthBias = 0.002F;
@@ -314,8 +314,28 @@ struct SceneRenderLightingConfig {
     SceneRenderDebugView debugView = SceneRenderDebugView::None;
 };
 
+// Cube shadows of up to four point lights share one depth atlas: face f of light s occupies the
+// tile at column f, row s. Faces use a slightly wider than 90 degree frustum so that filtering
+// near a face edge stays inside the tile.
+struct ScenePointShadowBinding {
+    static constexpr std::uint32_t kMaxLights = 4U;
+    static constexpr std::uint32_t kFaceCount = 6U;
+    bgfx::TextureHandle depthTexture = BGFX_INVALID_HANDLE;
+    std::uint32_t lightCount = 0U;
+    std::array<std::uint64_t, kMaxLights> entityId{};
+    std::array<float, 4U * kMaxLights> positionRange{}; // xyz = light position, w = far plane
+    std::array<float, 4U * kMaxLights> depthParams{};   // x = near plane, y = depth bias (m)
+    std::array<float, 4U> atlas{};                      // x,y = 1 / atlas size, z = tile px, w = tan(half fov)
+    float strength = 0.0F;                              // 0 = no darkening, 1 = fully dark
+
+    [[nodiscard]] bool IsValid() const noexcept {
+        return lightCount != 0U && bgfx::isValid(depthTexture);
+    }
+};
+
 struct SceneRenderShadowMapBinding {
     bgfx::TextureHandle depthTexture = BGFX_INVALID_HANDLE;
+    ScenePointShadowBinding point{};
     std::array<float, 16> lightViewProjection{};
     std::array<float, 4> params{};
     // Cascades share one atlas (2x2 tiles). xy = tile offset, z = tile scale; cascade 0 is the finest.
@@ -327,6 +347,11 @@ struct SceneRenderShadowMapBinding {
 
     [[nodiscard]] bool IsValid() const noexcept {
         return bgfx::isValid(depthTexture) && params[3] > 0.0F;
+    }
+
+    // Whether any shadow (directional or point) is bound for lighting.
+    [[nodiscard]] bool HasAny() const noexcept {
+        return IsValid() || point.IsValid();
     }
 };
 

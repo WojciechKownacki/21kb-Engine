@@ -356,6 +356,7 @@ bool SceneMeshPassResources::Initialize() {
     shadowViewProjUniform_ = bgfx::createUniform("u_shadowViewProj", bgfx::UniformType::Mat4);
     shadowParamsUniform_ = bgfx::createUniform("u_shadowParams", bgfx::UniformType::Vec4);
     shadowCascades_.Create();
+    pointShadows_.Create();
     fallbackWhiteTexture_ = CreateFallbackTexture(0xFFFF'FFFFU, RenderTextureDimension::Texture2D);
     fallbackNormalTexture_ = CreateFallbackTexture(0xFFFF'8080U, RenderTextureDimension::Texture2D);
     fallbackWhiteCubeTexture_ = CreateFallbackTexture(0xFFFF'FFFFU, RenderTextureDimension::TextureCube);
@@ -443,6 +444,7 @@ void SceneMeshPassResources::Shutdown() {
         fallbackWhiteTexture_ = BGFX_INVALID_HANDLE;
     }
     shadowCascades_.Destroy();
+    pointShadows_.Destroy();
     if (bgfx::isValid(shadowParamsUniform_)) {
         bgfx::destroy(shadowParamsUniform_);
         shadowParamsUniform_ = BGFX_INVALID_HANDLE;
@@ -614,7 +616,7 @@ bool SceneMeshPassResources::IsInitialized() const noexcept {
         bgfx::isValid(environmentGroundUniform_) &&
         bgfx::isValid(environmentParamsUniform_) &&
         bgfx::isValid(shadowViewProjUniform_) &&
-        bgfx::isValid(shadowParamsUniform_) && shadowCascades_.IsValid() &&
+        bgfx::isValid(shadowParamsUniform_) && shadowCascades_.IsValid() && pointShadows_.IsValid() &&
         bgfx::isValid(fallbackWhiteTexture_) &&
         bgfx::isValid(fallbackNormalTexture_) &&
         bgfx::isValid(fallbackWhiteCubeTexture_) &&
@@ -1207,6 +1209,8 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
     bgfx::setUniform(shadowViewProjUniform_, desc.shadowMap != nullptr && desc.shadowMap->IsValid() ? desc.shadowMap->lightViewProjection.data() : disabledShadowViewProj.data());
     bgfx::setUniform(shadowParamsUniform_, desc.shadowMap != nullptr && desc.shadowMap->IsValid() ? desc.shadowMap->params.data() : disabledShadowParams.data());
     shadowCascades_.Set(desc.shadowMap);
+    pointShadows_.Set(desc.shadowMap != nullptr ? &desc.shadowMap->point : nullptr, desc.lighting.pointShadowSlot,
+        fallbackWhiteTexture_);
 
     return resolution.program;
 }

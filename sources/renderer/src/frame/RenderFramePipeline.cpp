@@ -224,6 +224,11 @@ void CopyGraph(RenderPassGraph& graph, RenderViewportPlan& plan) {
                 insertAt = std::next(plan.viewOrder.insert(insertAt, view));
             }
         }
+        for (const std::uint16_t view : plan.viewIds.pointShadowViews) {
+            if (ViewId::IsValid(view)) {
+                insertAt = std::next(plan.viewOrder.insert(insertAt, view));
+            }
+        }
     }
     const auto blurV = std::ranges::find(plan.viewOrder, plan.viewIds.postProcessBloomBlurV);
     if (blurV != plan.viewOrder.end()) {
