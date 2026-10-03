@@ -14,6 +14,7 @@
 #include "engine/scene/SceneRuntime.hpp"
 
 #include <algorithm>
+#include <numeric>
 #include <cmath>
 #include <cstring>
 #include <exception>
@@ -803,6 +804,8 @@ void CpuParticleBackend::RemoveParticles(std::uint64_t instanceId) noexcept {
         particleEventDepths_.pop_back();
         particlePrewarmGroups_.pop_back();
     }
+    const std::uint32_t denseIndex = ResolveDenseIndex(instanceId);
+    if (denseIndex != kInvalidDenseIndex) instanceRuntime_[denseIndex].liveParticles.fill(0U);
 }
 
 std::uint32_t CpuParticleBackend::AcquireCompiledEffect(
@@ -1869,7 +1872,12 @@ std::uint32_t CpuParticleBackend::InstanceParticleLimit(std::uint32_t denseIndex
 }
 
 std::uint32_t CpuParticleBackend::LiveParticleCount(std::uint64_t instanceId) const noexcept {
-    return static_cast<std::uint32_t>(std::count(particleInstanceIds_.begin(), particleInstanceIds_.end(), instanceId));
+    // Per-emitter counters are kept in step with spawns, deaths and RemoveParticles, so this stays O(1)
+    // instead of scanning every particle in the scene on each spawn request.
+    const std::uint32_t denseIndex = ResolveDenseIndex(instanceId);
+    if (denseIndex == kInvalidDenseIndex) return 0U;
+    const auto& live = instanceRuntime_[denseIndex].liveParticles;
+    return std::accumulate(live.begin(), live.end(), 0U);
 }
 
 } // namespace kb::particle_plugin
