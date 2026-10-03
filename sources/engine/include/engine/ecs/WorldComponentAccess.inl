@@ -74,7 +74,7 @@ World::BulkComponentView World::MakeBulkComponentBroadcastView(const T& componen
 template <typename T>
 ComponentId World::Component() const noexcept {
     ValidateComponentType<T>();
-    return FindComponent(std::type_index{ typeid(T) });
+    return FindComponent(typeid(T));
 }
 
 template <typename T>

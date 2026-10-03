@@ -1,5 +1,7 @@
 #include "engine/modules/EngineModuleLoader.hpp"
 
+#include "ecs/component/ComponentTypeCache.hpp"
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -79,6 +81,7 @@ void CloseNativeLibrary(void* library) noexcept {
     if (library == nullptr) {
         return;
     }
+    kb::ecs::ComponentTypeCache::InvalidateTypeInfoEntries();
 #if defined(_WIN32)
     FreeLibrary(reinterpret_cast<HMODULE>(library));
 #else

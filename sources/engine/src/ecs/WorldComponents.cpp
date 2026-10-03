@@ -57,6 +57,10 @@ ComponentId World::FindComponent(std::type_index type) const noexcept {
     return WorldComponentRegistrar::Find(registries_.get(), type);
 }
 
+ComponentId World::FindComponent(const std::type_info& type) const noexcept {
+    return WorldComponentRegistrar::Find(registries_.get(), type);
+}
+
 ComponentStorageClass World::ComponentStorage(ComponentId componentId) const noexcept {
     if (componentId == 0 || registries_ == nullptr) {
         return ComponentStorageClass::HotTable;
