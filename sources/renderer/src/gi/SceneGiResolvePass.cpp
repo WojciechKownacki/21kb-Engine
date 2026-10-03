@@ -63,6 +63,7 @@ bool SceneGiResolvePass::Initialize() {
     voxelLightPositionRangeUniform_ = bgfx::createUniform("u_voxelLightPositionRange", bgfx::UniformType::Vec4, kVoxelLightCount);
     voxelLightColorIntensityUniform_ = bgfx::createUniform("u_voxelLightColorIntensity", bgfx::UniformType::Vec4, kVoxelLightCount);
     voxelLightSpotUniform_ = bgfx::createUniform("u_voxelLightSpot", bgfx::UniformType::Vec4, kVoxelLightCount);
+    voxelLightFlagsUniform_ = bgfx::createUniform("u_voxelLightFlags", bgfx::UniformType::Vec4, kVoxelLightCount);
     if (!IsInitialized()) {
         Shutdown();
         return false;
@@ -75,7 +76,7 @@ void SceneGiResolvePass::Shutdown() noexcept {
     for (bgfx::UniformHandle* handle : { &normalSampler_, &depthSampler_, &litSampler_, &cameraPositionUniform_,
              &inverseViewProjectionUniform_, &depthParamsUniform_, &voxelAlbedoSampler_,
              &voxelEmissiveSampler_, &voxelGridUniform_, &voxelInfoUniform_, &voxelLightDirKindUniform_,
-             &voxelLightPositionRangeUniform_, &voxelLightColorIntensityUniform_, &voxelLightSpotUniform_ }) {
+             &voxelLightPositionRangeUniform_, &voxelLightColorIntensityUniform_, &voxelLightSpotUniform_, &voxelLightFlagsUniform_ }) {
         if (bgfx::isValid(*handle)) {
             bgfx::destroy(*handle);
         }
@@ -93,7 +94,7 @@ bool SceneGiResolvePass::IsInitialized() const noexcept {
         bgfx::isValid(depthParamsUniform_) && bgfx::isValid(voxelAlbedoSampler_) && bgfx::isValid(voxelEmissiveSampler_) &&
         bgfx::isValid(voxelGridUniform_) && bgfx::isValid(voxelInfoUniform_) && bgfx::isValid(voxelLightDirKindUniform_) &&
         bgfx::isValid(voxelLightPositionRangeUniform_) && bgfx::isValid(voxelLightColorIntensityUniform_) &&
-        bgfx::isValid(voxelLightSpotUniform_);
+        bgfx::isValid(voxelLightSpotUniform_) && bgfx::isValid(voxelLightFlagsUniform_);
 }
 
 bool SceneGiResolvePass::Submit(const SceneGiResolvePassDesc& desc) const {
@@ -154,6 +155,7 @@ bool SceneGiResolvePass::Submit(const SceneGiResolvePassDesc& desc) const {
     bgfx::setUniform(voxelLightPositionRangeUniform_, lighting.positionRange.data(), kVoxelLightCount);
     bgfx::setUniform(voxelLightColorIntensityUniform_, lighting.colorIntensity.data(), kVoxelLightCount);
     bgfx::setUniform(voxelLightSpotUniform_, lighting.spot.data(), kVoxelLightCount);
+    bgfx::setUniform(voxelLightFlagsUniform_, lighting.areaRight.data(), kVoxelLightCount); // w = casts shadows
     if (voxelGi) {
         bgfx::setTexture(kVoxelAlbedoStage, voxelAlbedoSampler_, desc.voxels->Albedo());
         bgfx::setTexture(kVoxelEmissiveStage, voxelEmissiveSampler_, desc.voxels->Emissive());

@@ -49,7 +49,7 @@ public:
                 std::max(light.color[2], 0.0F), light.intensity},
             {std::max(inner, outer), std::min(inner, outer),
                 std::max(light.areaWidth, 0.0F), std::max(light.areaHeight, 0.0F)},
-            {1.0F - (q[1]*y2 + q[2]*z2), q[0]*y2 + q[3]*z2, q[0]*z2 - q[3]*y2, 0.0F},
+            {1.0F - (q[1]*y2 + q[2]*z2), q[0]*y2 + q[3]*z2, q[0]*z2 - q[3]*y2, light.castsShadow ? 1.0F : 0.0F},
         }}};
     }
 

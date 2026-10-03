@@ -35,6 +35,7 @@
 #include "engine/scene/VisibilityComponent.hpp"
 #include "engine/scene/TransformComponent.hpp"
 #include "kb/render/Renderer.hpp"
+#include "kb/render/gi/SceneGiVoxelGrid.hpp"
 #include "kb/render/RenderSurface.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
 #include "kb/render/SceneRenderTarget.hpp"
@@ -6864,7 +6865,7 @@ struct SsBox {
     const std::vector<SsBox>& boxes, const std::vector<kb::scene::Vec3>& pointLights, bx::Vec3 eye, bx::Vec3 target,
     float fovDegrees, const SceneRenderLightingConfig& lighting, int frames, std::uint16_t size,
     SceneRenderMeshPassMode meshPassMode = SceneRenderMeshPassMode::OpaqueOnly,
-    const std::function<void(kb::scene::Scene&, int)>& beforeFrame = {}) {
+    const std::function<void(kb::scene::Scene&, int)>& beforeFrame = {}, bool lightsCastShadow = false) {
     static int counter = 0;
     const std::filesystem::path root = std::filesystem::temp_directory_path() /
         ("21kb_ss_scene_" + std::to_string(GetCurrentProcessId()) + "_" + std::to_string(counter++));
@@ -6915,7 +6916,7 @@ struct SsBox {
         const kb::scene::SceneEntity light = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
             .name = "Point Light", .transform = TransformAt(position.x, position.y, position.z) });
         scene.Components().Lights().Set(light, kb::scene::LightComponent{
-            .kind = kb::scene::LightKind::Point, .intensity = 4.0F, .range = 40.0F, .castsShadow = false });
+            .kind = kb::scene::LightKind::Point, .intensity = 4.0F, .range = 40.0F, .castsShadow = lightsCastShadow });
     }
 
     NativeTestSurface surface;
@@ -7053,6 +7054,101 @@ void RunRendererRendersVoxelGiFromOffscreenObjectsTest() {
     std::fprintf(stderr, "voxel_gi_pixels red_minus_blue none=%.1f screen_space=%.1f voxel=%.1f%c", none, screenSpace, voxel, 10);
     Require(voxel > none + 8.0, "Voxel GI test: a red wall outside the view must tint the floor through the voxel grid");
     Require(screenSpace < none + 3.0, "Voxel GI test: screen-space GI must not see the off-screen wall");
+}
+
+// The same red wall, with a plate that hides it from the light but not from the floor: the bounce off the
+// wall must vanish when the light casts shadows (the voxel grid traces a ray towards the light) and stay when
+// the light does not.
+void RunRendererShadowsVoxelGiBounceTest() {
+    constexpr std::uint16_t kSize = 64U;
+    const std::vector<SsBox> boxes{
+        { { 0.0F, -0.5F, 0.0F }, { 40.0F, 1.0F, 40.0F } },
+        { { -4.0F, 3.0F, 0.0F }, { 0.5F, 6.0F, 20.0F }, SsMaterial::Red },
+        { { -2.5F, 4.2F, 0.0F }, { 2.6F, 0.2F, 20.0F } }, // above the wall's lower part, below the light
+    };
+    const std::vector<kb::scene::Vec3> lights{ { -1.0F, 5.0F, 0.0F } };
+    const auto redExcess = [&](bool lightCastsShadow) {
+        SceneRenderLightingConfig lighting{};
+        lighting.globalIllumination = SceneRenderGlobalIlluminationMode::VoxelGrid;
+        const auto pixels = RenderScreenSpaceScene(boxes, lights, bx::Vec3{ 0.0F, 3.0F, -6.0F }, bx::Vec3{ 0.0F, 0.0F, 2.0F }, 30.0F,
+            lighting, 30, kSize, SceneRenderMeshPassMode::OpaqueOnly, {}, lightCastsShadow);
+        double sum = 0.0;
+        for (int y = 28; y < 36; ++y) {
+            for (int x = 28; x < 36; ++x) {
+                const std::size_t offset = (static_cast<std::size_t>(y) * kSize + static_cast<std::size_t>(x)) * 4U;
+                sum += static_cast<double>(pixels[offset]) - pixels[offset + 2U];
+            }
+        }
+        return sum / 64.0;
+    };
+    const double unshadowed = redExcess(false);
+    const double shadowed = redExcess(true);
+    std::fprintf(stderr, "voxel_gi_shadow red_minus_blue unshadowed=%.1f shadowed=%.1f%c", unshadowed, shadowed, 10);
+    // -12.2 is the floor with no bounce at all (see the voxel GI test): the shadowed wall must add nothing.
+    Require(unshadowed > shadowed + 8.0, "Voxel GI shadow test: the lit red wall must tint the floor");
+    Require(shadowed < -10.0, "Voxel GI shadow test: a wall in shadow must bounce (almost) no light");
+}
+
+// A hollow sphere must fill the voxels its surface passes through, not its whole bounding box.
+void RunVoxelGridFollowsMeshGeometryTest() {
+    HeadlessSurface surface;
+    DisplayConfig config{};
+    config.allowHeadlessNoop = true;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "Voxel mesh test could not initialize bgfx");
+    {
+        constexpr int kRings = 16;
+        constexpr int kSegments = 24;
+        std::vector<RenderStaticMeshVertexP3N3UV2> vertices;
+        std::vector<std::uint16_t> indices;
+        for (int ring = 0; ring <= kRings; ++ring) {
+            const float theta = 3.14159265F * static_cast<float>(ring) / static_cast<float>(kRings);
+            for (int segment = 0; segment <= kSegments; ++segment) {
+                const float phi = 6.2831853F * static_cast<float>(segment) / static_cast<float>(kSegments);
+                const float x = std::sin(theta) * std::cos(phi);
+                const float y = std::cos(theta);
+                const float z = std::sin(theta) * std::sin(phi);
+                vertices.push_back({ x, y, z, x, y, z });
+            }
+        }
+        for (int ring = 0; ring < kRings; ++ring) {
+            for (int segment = 0; segment < kSegments; ++segment) {
+                const auto a = static_cast<std::uint16_t>(ring * (kSegments + 1) + segment);
+                const auto b = static_cast<std::uint16_t>(a + kSegments + 1);
+                indices.insert(indices.end(), { a, b, static_cast<std::uint16_t>(a + 1), static_cast<std::uint16_t>(a + 1), b, static_cast<std::uint16_t>(b + 1) });
+            }
+        }
+        RenderResourceRegistry resources;
+        const auto registerSphere = [&](bool dynamic) {
+            return resources.RegisterMesh(RenderMeshDesc{ .vertexData = vertices.data(),
+                .vertexCount = static_cast<std::uint32_t>(vertices.size()), .indices = indices.data(),
+                .indexCount = static_cast<std::uint32_t>(indices.size()), .vertexFormat = RenderVertexFormat::P3N3UV2,
+                .bounds = { .radius = 1.0F }, .boundsBox = { .center = { 0.0F, 0.0F, 0.0F }, .halfExtents = { 1.0F, 1.0F, 1.0F } },
+                .dynamicVertexBuffer = dynamic });
+        };
+        SceneRenderResourceMap bindings;
+        bindings.BindMesh(7U, registerSphere(false)); // keeps its triangles: filled by geometry
+        bindings.BindMesh(8U, registerSphere(true));  // dynamic: no triangles kept, filled as its bounding box
+        Require(resources.FindMesh(bindings.ResolveMesh(7U)) != nullptr && resources.FindMesh(bindings.ResolveMesh(8U)) != nullptr,
+            "Voxel mesh test could not register its spheres");
+        const auto occupied = [&](std::uint64_t meshAssetId) {
+            RenderScene scene;
+            MeshRenderProxyDesc desc{ .entityId = 1U, .meshAssetId = meshAssetId };
+            desc.model[0] = desc.model[5] = desc.model[10] = desc.model[15] = 1.0F;
+            static_cast<void>(scene.UpsertMesh(desc));
+            SceneGiVoxelGrid grid;
+            Require(grid.Initialize(), "Voxel mesh test could not create the voxel grid");
+            grid.Update(scene, resources, bindings, { 0.0F, 0.0F, 0.0F }, 0.25F);
+            return grid.OccupiedVoxelCount();
+        };
+        const std::uint32_t shell = occupied(7U);
+        const std::uint32_t box = occupied(8U);
+        std::fprintf(stderr, "voxel_mesh_proxy shell=%u box=%u%c", shell, box, 10);
+        Require(shell > 100U, "Voxel mesh test: the sphere must fill the voxels its surface passes through");
+        Require(shell * 10U < box * 7U, "Voxel mesh test: a hollow sphere must fill clearly fewer voxels than its bounding box");
+    }
+    renderer.Shutdown();
 }
 
 // A GPU-simulated particle dropped from 2 m above the origin falls through the floor unless it collides.
@@ -7539,6 +7635,8 @@ void RunRendererParticleMeshSnapshotSubmitTest() {
     RunRendererRendersScreenSpaceAmbientOcclusionTest();
     RunRendererRendersScreenSpaceReflectionsTest();
     RunRendererRendersVoxelGiFromOffscreenObjectsTest();
+    RunRendererShadowsVoxelGiBounceTest();
+    RunVoxelGridFollowsMeshGeometryTest();
     RunRendererCollidesGpuParticlesTest();
     RunRendererSortsAlphaGpuParticlesTest();
     RunRendererFollowsLocalSpaceGpuParticlesTest();

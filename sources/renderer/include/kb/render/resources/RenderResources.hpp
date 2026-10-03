@@ -8,6 +8,7 @@
 #include <array>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -261,6 +262,13 @@ struct RenderMeshDesc {
     std::uint8_t terrainLayerCount = 0U;
 };
 
+// A CPU copy of the triangles of a mesh small enough to voxelise (positions xyz, triangle-list indices); the
+// global illumination voxel grid builds its per-mesh occupancy from it. Empty for dynamic, skinned or huge meshes.
+struct RenderMeshProxyGeometry {
+    std::vector<float> positions;
+    std::vector<std::uint32_t> indices;
+};
+
 struct RenderMeshResource {
     bgfx::VertexBufferHandle vertexBuffer = BGFX_INVALID_HANDLE;
     bgfx::DynamicVertexBufferHandle dynamicVertexBuffer = BGFX_INVALID_HANDLE;
@@ -285,6 +293,7 @@ struct RenderMeshResource {
     std::uint16_t terrainLayerWeightWidth = 0U;
     std::uint16_t terrainLayerWeightHeight = 0U;
     std::uint8_t terrainLayerCount = 0U;
+    std::shared_ptr<const RenderMeshProxyGeometry> proxyGeometry;
     std::uint64_t version = 0;
 };
 
