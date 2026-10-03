@@ -25,6 +25,7 @@ public:
         ComponentRegistrationOptions options);
 
     [[nodiscard]] static ComponentId Find(const WorldRegistrySet* registries, std::type_index type) noexcept;
+    [[nodiscard]] static ComponentId Find(const WorldRegistrySet* registries, const std::type_info& type) noexcept;
 };
 
 } // namespace kb::ecs
