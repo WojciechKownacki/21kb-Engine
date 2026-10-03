@@ -7,7 +7,7 @@ uniform vec4 u_gpuParticleTime;   // x = now, y = slot count, z = stretch veloci
 uniform vec4 u_gpuParticleColor[8];
 uniform vec4 u_gpuParticleSize[2]; // eight sizes over normalized age
 // x = output mode (0 billboard, 1 mesh instance, 2 trail segments), y = instances written per slot,
-// z = trail segment seconds, w = trail width.
+// z = trail segment seconds (trail) or 1 when a mesh particle's Y axis follows its velocity, w = trail width.
 uniform vec4 u_gpuParticleOutput;
 // Spin ranges per axis (xyz): [0] initial angle min, [1] max, [2] angular velocity min, [3] max
 // (radians, radians per second).
@@ -97,17 +97,31 @@ void WriteDeadInstance(uint base)
 
 // A mesh particle: a uniformly scaled, unrotated instance in the layout of the mesh pipeline's instance
 // buffer (model columns with the material data lanes in w, then the colour).
-void WriteMeshInstance(uint base, uint slot, vec3 position, float u, vec3 angles)
+void WriteMeshInstance(uint base, uint slot, vec3 position, vec3 velocity, float u, vec3 angles)
 {
     float size = SampleSize(u);
     float random = frac(sin(float(slot) * 12.9898) * 43758.5453);
+    // The frame the Euler turn is expressed in: the emitter's basis, or - when the mesh follows its velocity and
+    // there is one - a frame whose Y axis is the velocity (X horizontal-ish, from the world up).
+    vec3 frame0 = u_gpuParticleBasis[0].xyz;
+    vec3 frame1 = u_gpuParticleBasis[1].xyz;
+    vec3 frame2 = u_gpuParticleBasis[2].xyz;
+    float speed = length(velocity);
+    if (u_gpuParticleOutput.z > 0.5 && speed > 0.00001)
+    {
+        vec3 forward = velocity / speed;
+        vec3 helper = abs(forward.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(0.0, 0.0, 1.0);
+        frame0 = normalize(cross(helper, forward));
+        frame1 = forward;
+        frame2 = cross(frame0, frame1);
+    }
     // orientation = basis x Euler turn; the columns of the model are the turned axes, expressed in the world by the basis
     vec3 localX = EulerTurn(vec3(1.0, 0.0, 0.0), angles);
     vec3 localY = EulerTurn(vec3(0.0, 1.0, 0.0), angles);
     vec3 localZ = EulerTurn(vec3(0.0, 0.0, 1.0), angles);
-    vec3 axisX = (u_gpuParticleBasis[0].xyz * localX.x + u_gpuParticleBasis[1].xyz * localX.y + u_gpuParticleBasis[2].xyz * localX.z) * size;
-    vec3 axisY = (u_gpuParticleBasis[0].xyz * localY.x + u_gpuParticleBasis[1].xyz * localY.y + u_gpuParticleBasis[2].xyz * localY.z) * size;
-    vec3 axisZ = (u_gpuParticleBasis[0].xyz * localZ.x + u_gpuParticleBasis[1].xyz * localZ.y + u_gpuParticleBasis[2].xyz * localZ.z) * size;
+    vec3 axisX = (frame0 * localX.x + frame1 * localX.y + frame2 * localX.z) * size;
+    vec3 axisY = (frame0 * localY.x + frame1 * localY.y + frame2 * localY.z) * size;
+    vec3 axisZ = (frame0 * localZ.x + frame1 * localZ.y + frame2 * localZ.z) * size;
     instanceOut[base] = vec4(axisX, random);
     instanceOut[base + 1u] = vec4(axisY, 0.0);
     instanceOut[base + 2u] = vec4(axisZ, 1.0);
@@ -119,7 +133,7 @@ void WriteLiveInstance(uint base, vec3 position, vec3 velocity, float u, vec3 an
 {
     if (u_gpuParticleOutput.x > 0.5)
     {
-        WriteMeshInstance(base, base / 5u, position, u, angles);
+        WriteMeshInstance(base, base / 5u, position, velocity, u, angles);
         return;
     }
     float speed = length(velocity);

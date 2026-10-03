@@ -37,6 +37,31 @@ namespace {
     return kb::math::Quat{0.0F, 0.0F, std::sin(half), std::cos(half)};
 }
 
+// The orientation whose Y axis is `forward` (unit length), X horizontal-ish (from the world up) and Z = X x Y.
+[[nodiscard]] kb::math::Quat FollowVelocity(kb::math::Vec3 forward) noexcept {
+    const kb::math::Vec3 helper = std::fabs(forward.y) < 0.99F ? kb::math::Vec3{0.0F, 1.0F, 0.0F} : kb::math::Vec3{0.0F, 0.0F, 1.0F};
+    const kb::math::Vec3 x = kb::math::Normalize(kb::math::Cross(helper, forward));
+    const kb::math::Vec3 y = forward;
+    const kb::math::Vec3 z = kb::math::Cross(x, y);
+    // Rotation matrix with the columns x, y, z to a quaternion.
+    const float trace = x.x + y.y + z.z;
+    kb::math::Quat q{};
+    if (trace > 0.0F) {
+        const float s = std::sqrt(trace + 1.0F) * 2.0F;
+        q = {(y.z - z.y) / s, (z.x - x.z) / s, (x.y - y.x) / s, 0.25F * s};
+    } else if (x.x > y.y && x.x > z.z) {
+        const float s = std::sqrt(1.0F + x.x - y.y - z.z) * 2.0F;
+        q = {0.25F * s, (y.x + x.y) / s, (z.x + x.z) / s, (y.z - z.y) / s};
+    } else if (y.y > z.z) {
+        const float s = std::sqrt(1.0F + y.y - x.x - z.z) * 2.0F;
+        q = {(y.x + x.y) / s, 0.25F * s, (z.y + y.z) / s, (z.x - x.z) / s};
+    } else {
+        const float s = std::sqrt(1.0F + z.z - x.x - y.y) * 2.0F;
+        q = {(z.x + x.z) / s, (z.y + y.z) / s, 0.25F * s, (x.y - y.x) / s};
+    }
+    return kb::math::Normalize(q);
+}
+
 [[nodiscard]] kb::math::Quat SpinAroundY(float radians) noexcept {
     const float half = radians * 0.5F;
     return kb::math::Quat{0.0F, std::sin(half), 0.0F, std::cos(half)};
@@ -133,7 +158,12 @@ void ParticleMeshBatchBuilder::Build(const kb::particles::ParticleRenderSnapshot
         for (const std::uint32_t local : orderScratch_) {
             const auto& particle = particles[emitter.firstParticle + local];
             // Euler turn about X, then Y, then Z (z is rotationRadians, the spin a billboard uses too).
-            const kb::math::Quat orientation = basis * (SpinAroundZ(particle.rotationRadians) *
+            // A mesh that follows its velocity is turned from a frame whose Y axis is the velocity instead of the
+            // emitter's basis (the basis stays for a particle that is standing still).
+            const float speedSquared = kb::math::Dot(particle.velocity, particle.velocity);
+            const kb::math::Quat frame = emitter.alignment == kb::particles::ParticleRenderAlignment::Velocity && speedSquared > 1.0e-10F
+                ? FollowVelocity(particle.velocity * (1.0F / std::sqrt(speedSquared))) : basis;
+            const kb::math::Quat orientation = frame * (SpinAroundZ(particle.rotationRadians) *
                 SpinAroundY(kb::particles::UnpackParticleAngle(particle.rotationYSnorm)) *
                 SpinAroundX(kb::particles::UnpackParticleAngle(particle.rotationXSnorm)));
             const kb::math::Vec3 scale{particle.size, particle.size, particle.size};
