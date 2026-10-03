@@ -1208,12 +1208,20 @@ bool CpuParticleBackend::SpawnExact(
         particlePrewarmGroups_.push_back(prewarmGroup);
         // Spin is drawn after everything else of the particle, and only from a real range, so effects that do not
         // use it consume exactly the random numbers they always did.
-        particleSpins_.push_back(emitter.spinMinRadians != emitter.spinMaxRadians
-            ? emitter.spinMinRadians + (emitter.spinMaxRadians - emitter.spinMinRadians) * NextRandom01(runtime)
-            : emitter.spinMinRadians);
-        particleSpinRates_.push_back(emitter.spinRateMinRadians != emitter.spinRateMaxRadians
-            ? emitter.spinRateMinRadians + (emitter.spinRateMaxRadians - emitter.spinRateMinRadians) * NextRandom01(runtime)
-            : emitter.spinRateMinRadians);
+        const auto drawAxis = [this, &runtime](float low, float high) noexcept {
+            return low != high ? low + (high - low) * NextRandom01(runtime) : low;
+        };
+        // Axis by axis, X then Y then Z, angles before velocities.
+        kb::math::Vec3 spin{};
+        spin.x = drawAxis(emitter.spinMinRadians.x, emitter.spinMaxRadians.x);
+        spin.y = drawAxis(emitter.spinMinRadians.y, emitter.spinMaxRadians.y);
+        spin.z = drawAxis(emitter.spinMinRadians.z, emitter.spinMaxRadians.z);
+        kb::math::Vec3 spinRate{};
+        spinRate.x = drawAxis(emitter.spinRateMinRadians.x, emitter.spinRateMaxRadians.x);
+        spinRate.y = drawAxis(emitter.spinRateMinRadians.y, emitter.spinRateMaxRadians.y);
+        spinRate.z = drawAxis(emitter.spinRateMinRadians.z, emitter.spinRateMaxRadians.z);
+        particleSpins_.push_back(spin);
+        particleSpinRates_.push_back(spinRate);
         static_cast<void>(QueueInternalEvent({
             .instanceId = instanceId,
             .sourceEmitterIndex = emitterIndex,
@@ -1851,7 +1859,7 @@ kb::particles::ParticleRenderSnapshotResult CpuParticleBackend::PublishRenderSna
             .position = particlePositions_[particleIndex],
             .size = particleSizes_[particleIndex],
             .previousPosition = particlePreviousPositions_[particleIndex],
-            .rotationRadians = particleSpins_[particleIndex] + particleSpinRates_[particleIndex] * particleAges_[particleIndex],
+            .rotationRadians = particleSpins_[particleIndex].z + particleSpinRates_[particleIndex].z * particleAges_[particleIndex],
             .velocity = particleVelocities_[particleIndex],
             .stretch = std::max(emitter.stretchMinimumLength, speed * emitter.stretchVelocityScale),
             .particleId = particleIds_[particleIndex],
@@ -1865,6 +1873,10 @@ kb::particles::ParticleRenderSnapshotResult CpuParticleBackend::PublishRenderSna
                         : 0.0F,
                     0.0F,
                     1.0F) * 65535.0F)),
+            .rotationXSnorm = kb::particles::PackParticleAngle(
+                particleSpins_[particleIndex].x + particleSpinRates_[particleIndex].x * particleAges_[particleIndex]),
+            .rotationYSnorm = kb::particles::PackParticleAngle(
+                particleSpins_[particleIndex].y + particleSpinRates_[particleIndex].y * particleAges_[particleIndex]),
         };
         kb::particles::ParticleRenderEmitterRecord& batch =
             renderEmitterScratch_[renderGroupRecordIndices_[groupIndex]];
@@ -2154,6 +2166,9 @@ void CpuParticleBackend::FlushGpuSpawns() noexcept {
                 const kb::math::Quat basis = kb::math::Normalize(owner.rotation * effect.emitters[emitterIndex].localRotation);
                 command.hasOrientation = true;
                 command.orientation = { basis.x, basis.y, basis.z, basis.w };
+                const kb::math::Vec3 origin = owner.position + TransformDirection(owner,
+                    Scale(effect.emitters[emitterIndex].localPosition, owner.scale));
+                command.origin = { origin.x, origin.y, origin.z };
             }
             kb::particles::ParticlePlayback::QueueGpuEmitterCommand(*gpuScene_, std::move(command));
         }

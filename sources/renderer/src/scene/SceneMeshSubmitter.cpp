@@ -6,6 +6,8 @@
 #include "scene/lighting/SceneLightingPacker.hpp"
 #include "scene/submit/SceneMeshDrawCommandSubmitter.hpp"
 
+#include "kb/render/scene/TransparentDepthKey.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -281,6 +283,7 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
     // Mesh particles simulated on the GPU join this pass's commands for the submission only: the same pipeline
     // resolves their material, state and pass membership; their instances are the emitters' GPU buffers.
     const std::size_t regularCommandCount = pipelineScratch_.commands.size();
+    gpuMeshCommandScratch_.clear();
     struct DropGpuMeshCommands {
         std::vector<MeshDrawCommand>& commands;
         std::size_t keep;
@@ -338,10 +341,38 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
                     gpuCommand.instanceRevision = 0U;
                     gpuCommand.gpuInstanceBuffer = gpuMeshDraws[drawIndex].instances;
                     gpuCommand.gpuInstanceCount = gpuMeshDraws[drawIndex].count;
-                    pipelineScratch_.commands.push_back(std::move(gpuCommand));
+                    if (pass == MeshPassType::BaseTransparent) {
+                        // A translucent emitter is placed among the other translucent draws by the depth of its origin
+                        // (the particles inside it are ordered on the GPU).
+                        const auto& origin = gpuMeshDraws[drawIndex].origin;
+                        const float viewDepth = camera == nullptr ? 0.0F
+                            : camera->view[2] * origin[0] + camera->view[6] * origin[1] + camera->view[10] * origin[2] + camera->view[14];
+                        gpuCommand.depthBucket = QuantizeTransparentViewDepth(viewDepth);
+                        gpuMeshCommandScratch_.push_back(std::move(gpuCommand));
+                    } else {
+                        pipelineScratch_.commands.push_back(std::move(gpuCommand));
+                    }
                 }
             }
         }
+    }
+    // The translucent pass draws the regular commands (already ordered far to near by depth bucket) merged with the
+    // GPU emitters by the same key; every other pass has the GPU commands appended.
+    const std::vector<MeshDrawCommand>* submitCommands = &pipelineScratch_.commands;
+    if (!gpuMeshCommandScratch_.empty()) {
+        std::stable_sort(gpuMeshCommandScratch_.begin(), gpuMeshCommandScratch_.end(),
+            [](const MeshDrawCommand& lhs, const MeshDrawCommand& rhs) { return lhs.depthBucket > rhs.depthBucket; });
+        mergedCommandScratch_.clear();
+        mergedCommandScratch_.reserve(pipelineScratch_.commands.size() + gpuMeshCommandScratch_.size());
+        std::size_t gpuIndex = 0U;
+        for (const MeshDrawCommand& regular : pipelineScratch_.commands) {
+            while (gpuIndex < gpuMeshCommandScratch_.size() && gpuMeshCommandScratch_[gpuIndex].depthBucket > regular.depthBucket) {
+                mergedCommandScratch_.push_back(gpuMeshCommandScratch_[gpuIndex++]);
+            }
+            mergedCommandScratch_.push_back(regular);
+        }
+        while (gpuIndex < gpuMeshCommandScratch_.size()) mergedCommandScratch_.push_back(gpuMeshCommandScratch_[gpuIndex++]);
+        submitCommands = &mergedCommandScratch_;
     }
     stats = pipelineScratch_.stats;
     stats.sceneLightCount = lightingStats.sceneLightCount;
@@ -409,8 +440,8 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
         static_cast<void>(particleRenderer->PrepareVisualSimulation(viewId, *particleSnapshot));
         const ParticleStripBuildResult& stripBuild = particleRenderer->BuildStrips(*particleSnapshot, *camera);
         transparentSubmissionScratch_.clear();
-        for (std::uint32_t index = 0U; index < pipelineScratch_.commands.size(); ++index) {
-            const MeshDrawCommand& command = pipelineScratch_.commands[index];
+        for (std::uint32_t index = 0U; index < submitCommands->size(); ++index) {
+            const MeshDrawCommand& command = (*submitCommands)[index];
             transparentSubmissionScratch_.push_back(TransparentDrawOrderEntry{
                 .source = TransparentDrawSource::Mesh,
                 .depthBucket = command.depthBucket,
@@ -468,7 +499,7 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
         for (const TransparentDrawOrderEntry& entry : transparentSubmissionScratch_) {
             if (entry.source == TransparentDrawSource::Mesh) {
                 submitMeshCommands(std::span<const MeshDrawCommand>{
-                    &pipelineScratch_.commands[entry.sourceIndex], 1U});
+                    &(*submitCommands)[entry.sourceIndex], 1U});
                 continue;
             }
             if (entry.source == TransparentDrawSource::Particle && particleBuild.Succeeded()) {
@@ -494,7 +525,7 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
             }
         }
     } else {
-        submitMeshCommands(pipelineScratch_.commands);
+        submitMeshCommands(*submitCommands);
     }
 
     return stats;

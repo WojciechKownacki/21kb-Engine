@@ -401,6 +401,21 @@ void TestMeshBatchBuilderOrdersTranslucentAndSpins() {
     Require(build(3010U, Sort::Age).first == std::vector<std::uint64_t>{3U, 1U, 2U}, "age order is wrong (oldest first)");
     Require(build(3011U, Sort::BackToFront).first == std::vector<std::uint64_t>{1U, 2U, 3U}, "an opaque mesh emitter must keep the snapshot order");
     Require(build(3010U, Sort::None).first == std::vector<std::uint64_t>{1U, 2U, 3U}, "sort mode None must keep the snapshot order");
+    // A turn about Y alone: the Z axis becomes X (and the X axis becomes -Z).
+    {
+        kb::particles::ParticleRenderEmitterRecord emitter = Emitter(0U, 1U, Sort::None);
+        emitter.output = kb::particles::ParticleRenderOutput::Mesh;
+        emitter.meshAssetId = 4010U;
+        emitter.localBasisQuaternionSnorm = {0, 0, 0, 32'767};
+        std::array<kb::particles::ParticleRenderRecord, 1U> particles{Particle(1U, 0.0F, 1.0F, 0U)};
+        particles[0].rotationYSnorm = kb::particles::PackParticleAngle(1.5707964F);
+        const std::array emitters{emitter};
+        kb::render::ParticleMeshBatchBuilder builder;
+        builder.Build(*Snapshot(emitters, particles));
+        const auto& model = builder.Batches().front().instances.front().model;
+        Require(std::fabs(model[2] + 1.0F) < 0.001F && std::fabs(model[8] - 1.0F) < 0.001F && std::fabs(model[0]) < 0.001F,
+                "a turn about Y did not carry the mesh X axis to -Z and the Z axis to X");
+    }
     // A quarter turn about Z: the X axis becomes Y and the Y axis becomes -X.
     const std::array<float, 16>& turned = backToFront.second;
     Require(std::fabs(turned[0]) < 0.001F && std::fabs(turned[1] - 1.0F) < 0.001F && std::fabs(turned[4] + 1.0F) < 0.001F &&

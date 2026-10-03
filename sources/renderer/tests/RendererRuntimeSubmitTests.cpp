@@ -7324,7 +7324,7 @@ void RunRendererDrawsGpuMeshParticlesTest() {
 
 // Red cubes of a GPU mesh emitter turn by their spin: a cube of side 2 turned 45 degrees about the view axis
 // reaches 1.41 m to the side, which an unturned one (1 m) does not.
-[[nodiscard]] int GpuMeshSpinReach(float spinRadians, float spinRateRadians) {
+[[nodiscard]] std::array<int, 2> GpuMeshSpinReach(kb::math::Vec3 spinRadians, kb::math::Vec3 spinRateRadians) {
     constexpr std::uint16_t kSize = 64U;
     const std::vector<kb::scene::Vec3> lights{ { 0.0F, 3.0F, -4.0F } };
     SceneRenderLightingConfig lighting{};
@@ -7353,18 +7353,26 @@ void RunRendererDrawsGpuMeshParticlesTest() {
     const std::vector<SsBox> boxes{ { { 0.0F, -40.0F, 0.0F }, { 1.0F, 1.0F, 1.0F }, SsMaterial::Red } };
     const auto pixels = RenderScreenSpaceScene(boxes, lights, bx::Vec3{ 0.0F, 0.0F, -10.0F }, bx::Vec3{ 0.0F, 0.0F, 5.0F }, 30.0F,
         lighting, 4, kSize, SceneRenderMeshPassMode::OpaqueAndTransparent, queue);
-    return pixels[(32U * kSize + 42U) * 4U]; // 10 px = 1.25 m to the right of the centre
+    // 10 px = 1.25 m to the right of and above the centre
+    return { pixels[(32U * kSize + 42U) * 4U], pixels[(42U * kSize + 32U) * 4U] };
 }
 
 void RunRendererSpinsGpuMeshParticlesTest() {
-    const int still = GpuMeshSpinReach(0.0F, 0.0F);
-    const int turned = GpuMeshSpinReach(0.7853982F, 0.0F);
+    constexpr float kQuarterTurn = 0.7853982F;
+    const auto still = GpuMeshSpinReach({}, {});
+    const auto aboutZ = GpuMeshSpinReach({ 0.0F, 0.0F, kQuarterTurn }, {});
+    const auto aboutY = GpuMeshSpinReach({ 0.0F, kQuarterTurn, 0.0F }, {});
+    const auto aboutX = GpuMeshSpinReach({ kQuarterTurn, 0.0F, 0.0F }, {});
     // The clock stands at about 0.48 s, so 1.5708 rad/s has turned the cube by about 43 degrees.
-    const int spinning = GpuMeshSpinReach(0.0F, 1.5707964F);
-    std::fprintf(stderr, "gpu_mesh_spin still=%d turned=%d spinning=%d%c", still, turned, spinning, 10);
-    Require(still < 20, "GPU mesh spin test: an unturned cube must not reach 1.25 m to the side");
-    Require(turned > 60, "GPU mesh spin test: a cube turned 45 degrees must reach its corner there");
-    Require(spinning > 60, "GPU mesh spin test: a cube with an angular velocity must have turned by its age");
+    const auto spinningZ = GpuMeshSpinReach({}, { 0.0F, 0.0F, 1.5707964F });
+    const auto spinningY = GpuMeshSpinReach({}, { 0.0F, 1.5707964F, 0.0F });
+    std::fprintf(stderr, "gpu_mesh_spin still=%d,%d z=%d,%d y=%d,%d x=%d,%d rate_z=%d,%d rate_y=%d,%d%c", still[0], still[1],
+        aboutZ[0], aboutZ[1], aboutY[0], aboutY[1], aboutX[0], aboutX[1], spinningZ[0], spinningZ[1], spinningY[0], spinningY[1], 10);
+    Require(still[0] < 20 && still[1] < 20, "GPU mesh spin test: an unturned cube must not reach 1.25 m to the side or above");
+    Require(aboutZ[0] > 60 && aboutZ[1] > 60, "GPU mesh spin test: a cube turned about the view axis must reach its corners both ways");
+    Require(aboutY[0] > 60 && aboutY[1] < 20, "GPU mesh spin test: a cube turned about Y must widen to the side only");
+    Require(aboutX[1] > 60 && aboutX[0] < 20, "GPU mesh spin test: a cube turned about X must grow upward only");
+    Require(spinningZ[0] > 60 && spinningY[0] > 60, "GPU mesh spin test: a cube with an angular velocity must have turned by its age");
 }
 
 // Two overlapping translucent mesh particles, the older one blue and the younger one red: whichever is nearer
@@ -7420,6 +7428,51 @@ void RunRendererSortsTranslucentGpuMeshParticlesTest() {
         olderNearer[0], olderNearer[1], olderNearer[2], youngerNearer[0], youngerNearer[1], youngerNearer[2], 10);
     Require(olderNearer[2] > olderNearer[0] + 15, "GPU mesh sort test: the nearer, older (blue) cube must be drawn over the farther one");
     Require(youngerNearer[0] > youngerNearer[2] + 15, "GPU mesh sort test: the nearer, younger (red) cube must be drawn over the farther one");
+}
+
+// A translucent red mesh particle and a translucent white box of the scene overlap: whichever is nearer to the
+// camera must be drawn last, so the GPU emitter is placed among the scene's translucent draws by its depth.
+[[nodiscard]] std::array<int, 3> GpuMeshParticleAmongTranslucentBoxes(bool particleIsNearer) {
+    constexpr std::uint16_t kSize = 64U;
+    const std::vector<kb::scene::Vec3> lights{ { 0.0F, 3.0F, -4.0F } };
+    SceneRenderLightingConfig lighting{};
+    const float particleZ = particleIsNearer ? 2.0F : 6.0F;
+    const float boxZ = particleIsNearer ? 6.0F : 2.0F;
+    const auto queue = [&](kb::scene::Scene& scene, int frame) {
+        if (frame != 1) return;
+        const kb::assets::AssetMetadata* mesh = scene.Assets().Manager().Registry().FindByPath("/Game/cube.obj");
+        Require(mesh != nullptr, "GPU translucent ordering test lost its cube mesh");
+        kb::particles::ParticleGpuEmitterCommand command{};
+        command.key = { 1U, 1U };
+        command.simTime = 0.5;
+        command.hasParams = true;
+        command.hasOrientation = true;
+        command.origin = { 0.0F, 0.0F, particleZ };
+        command.params.capacity = 16U;
+        command.params.output = kb::particles::ParticleRenderOutput::Mesh;
+        command.params.meshAssetId = mesh->id.value;
+        command.params.materialAssetId = kb::assets::MakeAssetId("SsBlend").value;
+        command.params.blend = kb::particles::ParticleRenderBlendMode::Alpha;
+        command.params.color.fill({ 1.0F, 0.0F, 0.0F, 1.0F });
+        command.params.size.fill(2.0F);
+        command.spawns.push_back(kb::particles::ParticleGpuSpawn{
+            .position = { 0.0F, 0.0F, particleZ }, .birthTime = 0.0F, .velocity = { 0.0F, 0.0F, 0.0F }, .lifetime = 20.0F });
+        kb::particles::ParticlePlayback::QueueGpuEmitterCommand(scene, command);
+    };
+    const std::vector<SsBox> boxes{ { { 0.0F, 0.0F, boxZ }, { 2.0F, 2.0F, 2.0F }, SsMaterial::Blend } };
+    const auto pixels = RenderScreenSpaceScene(boxes, lights, bx::Vec3{ 0.0F, 0.0F, -10.0F }, bx::Vec3{ 0.0F, 0.0F, 5.0F }, 30.0F,
+        lighting, 4, kSize, SceneRenderMeshPassMode::OpaqueAndTransparent, queue);
+    const std::size_t offset = (32U * kSize + 32U) * 4U;
+    return { pixels[offset], pixels[offset + 1U], pixels[offset + 2U] };
+}
+
+void RunRendererOrdersGpuMeshParticlesAmongSceneMeshesTest() {
+    const std::array<int, 3> particleFar = GpuMeshParticleAmongTranslucentBoxes(false);
+    const std::array<int, 3> particleNear = GpuMeshParticleAmongTranslucentBoxes(true);
+    std::fprintf(stderr, "gpu_mesh_among_scene particle_far=%d,%d,%d particle_near=%d,%d,%d%c",
+        particleFar[0], particleFar[1], particleFar[2], particleNear[0], particleNear[1], particleNear[2], 10);
+    Require(particleFar[0] - particleFar[2] < 25, "GPU mesh order test: a translucent box nearer than the particle must be drawn over it");
+    Require(particleNear[0] - particleNear[2] > 60, "GPU mesh order test: a particle nearer than the translucent box must be drawn over it");
 }
 
 // One GPU particle flying along +x draws a trail of camera-facing quads along the path it has travelled:
@@ -7829,6 +7882,7 @@ void RunRendererParticleMeshSnapshotSubmitTest() {
     RunRendererDrawsGpuMeshParticlesTest();
     RunRendererSpinsGpuMeshParticlesTest();
     RunRendererSortsTranslucentGpuMeshParticlesTest();
+    RunRendererOrdersGpuMeshParticlesAmongSceneMeshesTest();
     RunRendererDrawsGpuTrailParticlesTest();
     RunRendererFollowsLocalSpaceGpuParticlesTest();
 #if defined(KB_21KB_PARTICLE_PLUGIN_PATH)

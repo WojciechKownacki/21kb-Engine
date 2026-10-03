@@ -9,8 +9,9 @@ uniform vec4 u_gpuParticleSize[2]; // eight sizes over normalized age
 // x = output mode (0 billboard, 1 mesh instance, 2 trail segments), y = instances written per slot,
 // z = trail segment seconds, w = trail width.
 uniform vec4 u_gpuParticleOutput;
-// Spin ranges: x, y = initial angle min, max; z, w = angular velocity min, max (radians, radians per second).
-uniform vec4 u_gpuParticleSpin;
+// Spin ranges per axis (xyz): [0] initial angle min, [1] max, [2] angular velocity min, [3] max
+// (radians, radians per second).
+uniform vec4 u_gpuParticleSpin[4];
 // Orientation of mesh particles: the columns of a rotation matrix.
 uniform vec4 u_gpuParticleBasis[3];
 
@@ -26,14 +27,43 @@ float Hash01(uint seed)
     return float(PcgHash(seed) & 16777215u) / 16777216.0;
 }
 
-// The angle of a particle: a random start and a random angular velocity (both drawn once from the slot and the
-// birth time, so they never change over the particle's life), turned by the age.
-float ParticleSpin(uint slot, float birth, float age)
+// The angles of a particle about X, Y and Z: a random start and a random angular velocity per axis (all drawn once
+// from the slot and the birth time, so they never change over the particle's life), turned by the age.
+vec3 ParticleSpin(uint slot, float birth, float age)
 {
     uint seed = slot * 9781u + uint(max(birth, 0.0) * 1000.0) * 6271u;
-    float angle = mix(u_gpuParticleSpin.x, u_gpuParticleSpin.y, Hash01(seed));
-    float rate = mix(u_gpuParticleSpin.z, u_gpuParticleSpin.w, Hash01(seed ^ 2654435769u));
+    vec3 randomAngle = vec3(Hash01(seed ^ 2654435769u), Hash01(seed ^ 1640531527u), Hash01(seed ^ 3294967296u + 7u));
+    vec3 randomRate = vec3(Hash01(seed ^ 40503u), Hash01(seed ^ 69069u), Hash01(seed ^ 1812433253u));
+    vec3 angle = mix(u_gpuParticleSpin[0].xyz, u_gpuParticleSpin[1].xyz, randomAngle);
+    vec3 rate = mix(u_gpuParticleSpin[2].xyz, u_gpuParticleSpin[3].xyz, randomRate);
     return angle + rate * age;
+}
+
+vec3 RotateAboutX(vec3 v, float a)
+{
+    float c = cos(a);
+    float s = sin(a);
+    return vec3(v.x, c * v.y - s * v.z, s * v.y + c * v.z);
+}
+
+vec3 RotateAboutY(vec3 v, float a)
+{
+    float c = cos(a);
+    float s = sin(a);
+    return vec3(c * v.x + s * v.z, v.y, -s * v.x + c * v.z);
+}
+
+vec3 RotateAboutZ(vec3 v, float a)
+{
+    float c = cos(a);
+    float s = sin(a);
+    return vec3(c * v.x - s * v.y, s * v.x + c * v.y, v.z);
+}
+
+// Euler turn: about X first, then Y, then Z.
+vec3 EulerTurn(vec3 v, vec3 angles)
+{
+    return RotateAboutZ(RotateAboutY(RotateAboutX(v, angles.x), angles.y), angles.z);
 }
 
 float SampleSize(float u)
@@ -67,16 +97,17 @@ void WriteDeadInstance(uint base)
 
 // A mesh particle: a uniformly scaled, unrotated instance in the layout of the mesh pipeline's instance
 // buffer (model columns with the material data lanes in w, then the colour).
-void WriteMeshInstance(uint base, uint slot, vec3 position, float u, float angle)
+void WriteMeshInstance(uint base, uint slot, vec3 position, float u, vec3 angles)
 {
     float size = SampleSize(u);
     float random = frac(sin(float(slot) * 12.9898) * 43758.5453);
-    float cosine = cos(angle);
-    float sine = sin(angle);
-    // orientation = basis x spin about the local Z axis; the columns of the model are the turned axes
-    vec3 axisX = (u_gpuParticleBasis[0].xyz * cosine + u_gpuParticleBasis[1].xyz * sine) * size;
-    vec3 axisY = (u_gpuParticleBasis[1].xyz * cosine - u_gpuParticleBasis[0].xyz * sine) * size;
-    vec3 axisZ = u_gpuParticleBasis[2].xyz * size;
+    // orientation = basis x Euler turn; the columns of the model are the turned axes, expressed in the world by the basis
+    vec3 localX = EulerTurn(vec3(1.0, 0.0, 0.0), angles);
+    vec3 localY = EulerTurn(vec3(0.0, 1.0, 0.0), angles);
+    vec3 localZ = EulerTurn(vec3(0.0, 0.0, 1.0), angles);
+    vec3 axisX = (u_gpuParticleBasis[0].xyz * localX.x + u_gpuParticleBasis[1].xyz * localX.y + u_gpuParticleBasis[2].xyz * localX.z) * size;
+    vec3 axisY = (u_gpuParticleBasis[0].xyz * localY.x + u_gpuParticleBasis[1].xyz * localY.y + u_gpuParticleBasis[2].xyz * localY.z) * size;
+    vec3 axisZ = (u_gpuParticleBasis[0].xyz * localZ.x + u_gpuParticleBasis[1].xyz * localZ.y + u_gpuParticleBasis[2].xyz * localZ.z) * size;
     instanceOut[base] = vec4(axisX, random);
     instanceOut[base + 1u] = vec4(axisY, 0.0);
     instanceOut[base + 2u] = vec4(axisZ, 1.0);
@@ -84,16 +115,16 @@ void WriteMeshInstance(uint base, uint slot, vec3 position, float u, float angle
     instanceOut[base + 4u] = SampleColor(u);
 }
 
-void WriteLiveInstance(uint base, vec3 position, vec3 velocity, float u, float angle)
+void WriteLiveInstance(uint base, vec3 position, vec3 velocity, float u, vec3 angles)
 {
     if (u_gpuParticleOutput.x > 0.5)
     {
-        WriteMeshInstance(base, base / 5u, position, u, angle);
+        WriteMeshInstance(base, base / 5u, position, u, angles);
         return;
     }
     float speed = length(velocity);
     instanceOut[base] = vec4(position, SampleSize(u));
-    instanceOut[base + 1u] = vec4(position - velocity * 0.016666668, angle);
+    instanceOut[base + 1u] = vec4(position - velocity * 0.016666668, angles.z);
     instanceOut[base + 2u] = vec4(velocity, max(u_gpuParticleTime.w, speed * u_gpuParticleTime.z));
     instanceOut[base + 3u] = SampleColor(u);
     instanceOut[base + 4u] = vec4(0.0, u, 0.0, 0.0);

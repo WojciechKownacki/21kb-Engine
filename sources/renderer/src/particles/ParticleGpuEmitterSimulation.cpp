@@ -93,7 +93,7 @@ bool ParticleGpuEmitterSimulation::Initialize() {
         static_cast<std::uint16_t>(kb::particles::kParticleGpuCurveSamples));
     sizeUniform_ = bgfx::createUniform("u_gpuParticleSize", bgfx::UniformType::Vec4, 2U);
     outputUniform_ = bgfx::createUniform("u_gpuParticleOutput", bgfx::UniformType::Vec4);
-    spinUniform_ = bgfx::createUniform("u_gpuParticleSpin", bgfx::UniformType::Vec4);
+    spinUniform_ = bgfx::createUniform("u_gpuParticleSpin", bgfx::UniformType::Vec4, 4U);
     basisUniform_ = bgfx::createUniform("u_gpuParticleBasis", bgfx::UniformType::Vec4, 3U);
     collideProgram_ = ShaderLoader::LoadComputeProgram("cs_particle_gpu_collide.sc");
     worldUniform_ = bgfx::createUniform("u_gpuParticleWorld", bgfx::UniformType::Mat4);
@@ -337,7 +337,10 @@ void ParticleGpuEmitterSimulation::Apply(
             found->second.world = command.worldMatrix;
             bx::mtxInverse(found->second.worldInverse.data(), command.worldMatrix.data());
         }
-        if (command.hasOrientation) found->second.basis = BasisColumns(command.orientation);
+        if (command.hasOrientation) {
+            found->second.basis = BasisColumns(command.orientation);
+            found->second.origin = command.origin;
+        }
         if (command.clear) Clear(found->second);
         Upload(found->second, command.spawns);
     }
@@ -416,8 +419,11 @@ void ParticleGpuEmitterSimulation::Dispatch(bgfx::ViewId viewId, std::uint64_t s
             : params.output == kb::particles::ParticleRenderOutput::Trail ? 2.0F : 0.0F;
         const std::array<float, 4> output{ outputMode, static_cast<float>(emitter.perSlot), params.trailSegmentSeconds, params.trailWidth };
         bgfx::setUniform(outputUniform_, output.data());
-        const std::array<float, 4> spin{ params.spinMin, params.spinMax, params.spinRateMin, params.spinRateMax };
-        bgfx::setUniform(spinUniform_, spin.data());
+        const std::array<float, 16> spin{ params.spinMin.x, params.spinMin.y, params.spinMin.z, 0.0F,
+            params.spinMax.x, params.spinMax.y, params.spinMax.z, 0.0F,
+            params.spinRateMin.x, params.spinRateMin.y, params.spinRateMin.z, 0.0F,
+            params.spinRateMax.x, params.spinRateMax.y, params.spinRateMax.z, 0.0F };
+        bgfx::setUniform(spinUniform_, spin.data(), 4U);
         bgfx::setUniform(basisUniform_, emitter.basis.data(), 3U);
         const std::uint32_t threads = emitter.capacity * emitter.perSlot;
         bgfx::dispatch(viewId, colliding ? collideProgram_ : program_, (threads + kThreadGroupSize - 1U) / kThreadGroupSize, 1U, 1U);
@@ -426,7 +432,7 @@ void ParticleGpuEmitterSimulation::Dispatch(bgfx::ViewId viewId, std::uint64_t s
             SortInstances(viewId, emitter, collision.cameraPosition);
             drawn = emitter.sortedInstances;
         }
-        clock.draws.push_back(Draw{ &emitter.params, drawn, emitter.capacity * emitter.perSlot });
+        clock.draws.push_back(Draw{ &emitter.params, drawn, emitter.capacity * emitter.perSlot, emitter.origin });
     }
 }
 

@@ -24,6 +24,9 @@ struct ParticleGpuMeshDraw {
     std::uint32_t count = 0U;
     bool castsShadow = false;
     bool receivesShadow = true;
+    // World position the emitter is placed by among the translucent draws (its particles are ordered among
+    // themselves on the GPU).
+    std::array<float, 3> origin{};
 };
 
 // Renderer side of GPU-simulated particle emitters. Owns, per emitter, a ring buffer of birth records
@@ -35,6 +38,7 @@ public:
         bgfx::DynamicVertexBufferHandle instances = BGFX_INVALID_HANDLE;
         // Instances in the buffer: the slot count, times the segments per slot of a trail emitter.
         std::uint32_t capacity = 0U;
+        std::array<float, 3> origin{};
     };
 
     [[nodiscard]] bool Initialize();
@@ -92,6 +96,7 @@ private:
         std::array<float, 16> world{ 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F };
         std::array<float, 16> worldInverse = world;
         // Columns of the rotation matrix mesh particles are oriented by (identity until the owner's orientation arrives).
+        std::array<float, 3> origin{};
         std::array<float, 12> basis{ 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F };
         bgfx::DynamicVertexBufferHandle spawns = BGFX_INVALID_HANDLE;
         bgfx::DynamicVertexBufferHandle instances = BGFX_INVALID_HANDLE;

@@ -89,6 +89,8 @@ private:
     mutable SceneGpuDrivenFrameResources gpuDrivenFrameResources_;
     mutable MeshPipelineBuildResult pipelineScratch_;
     mutable MeshPipelineBuildResult gpuMeshScratch_;
+    mutable std::vector<MeshDrawCommand> gpuMeshCommandScratch_;
+    mutable std::vector<MeshDrawCommand> mergedCommandScratch_;
     mutable std::vector<SceneMeshBatch> gpuMeshBatchScratch_;
     mutable std::vector<SceneRenderMeshInstance> gpuMeshInstanceScratch_;
     mutable std::array<std::vector<MeshDrawCommand>, static_cast<std::size_t>(MeshPassType::Gizmo) + 1U> passCommandScratch_;
