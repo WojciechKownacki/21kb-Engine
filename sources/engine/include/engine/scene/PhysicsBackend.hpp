@@ -286,6 +286,9 @@ public:
     // kb::script::ScriptRuntimeSceneSystem; returns and clears every event
     // queued since the last drain, in the exact order they were queued.
     static void QueueCollisionEvent(Scene& scene, PendingCollisionEvent event);
+    // Declared by whatever drains the queue; backends skip producing events while it is false.
+    static void SetCollisionEventConsumer(Scene& scene, bool present) noexcept;
+    [[nodiscard]] static bool HasCollisionEventConsumer(Scene& scene) noexcept;
     [[nodiscard]] static std::vector<PendingCollisionEvent> DrainPendingCollisionEvents(Scene& scene);
     // Recycles the caller's completed batch storage; queued events keep their order.
     static void DrainPendingCollisionEvents(Scene& scene, std::vector<PendingCollisionEvent>& output);
