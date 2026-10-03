@@ -49,7 +49,7 @@ Kryterium „zrobione" = test, który musi przejść; test ma być headless (bez
 - **B2 — Sortowanie cząstek przezroczystych na GPU** · P2 · M · **zrobione** (sortowanie bitoniczne; 1 mln cząstek: +4,4 ms)
 - **B3 — Przestrzeń lokalna, podążanie za transformacją, wyjście mesh/trail** · P2 · L · **zrobione częściowo** (przestrzeń lokalna i podążanie za właścicielem na GPU; mesh/trail nadal na CPU)
   Dziś kwalifikują się tylko emitery w przestrzeni świata z wyjściem billboard/stretched.
-- **B4 — Pod-emitery i zdarzenia na GPU** · P3 · L · do zrobienia
+- **B4 — Pod-emitery i zdarzenia na GPU** · P3 · L · **zrobione** (zdarzenia narodzin i śmierci; kolizyjne nadal na CPU)
 - **B5 — Test „od pliku do piksela"** · P1 · S · do zrobienia
   Jeden test łączący plugin cząstek, kolejkę i renderer w jednym procesie (dziś sprawdzone w częściach).
 - **B6 — Warianty shaderów dla macOS (Metal)** · P3 · wymaga komputera Mac · zablokowane
