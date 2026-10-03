@@ -4,6 +4,7 @@
 #include "kb/render/scene/SceneRenderer.hpp"
 #include "kb/render/shadow/DirectionalShadowPassPlanner.hpp"
 #include "kb/render/shadow/ShadowMapResource.hpp"
+#include "shadow/PointShadowPassPlanner.hpp"
 #include "renderer/RendererViewConfigurator.hpp"
 
 #include <bx/math.h>
@@ -12,25 +13,12 @@
 
 namespace kb::render {
 
-SceneRenderShadowMapBinding RendererShadowSubmitter::Submit(const RendererShadowSubmitDesc& desc) {
-    if (!desc.lightingConfig.shadowsEnabled) {
-        return {};
-    }
+namespace {
 
-    const CameraRenderProxyDesc* sceneCamera =
-        desc.renderScene.FindPrimaryCameraProxy(desc.sceneDesc.target.viewport.id.value);
-    const std::uint32_t cameraCullingMask = desc.sceneDesc.cameraOverride.has_value()
-        ? desc.sceneDesc.cameraOverride->cullingMask
-        : (sceneCamera != nullptr ? sceneCamera->cullingMask : 0xFFFFFFFFU);
-    std::array<float, 3> cameraPosition{};
-    if (desc.sceneDesc.cameraOverride.has_value()) {
-        std::array<float, 16> inverseView{};
-        bx::mtxInverse(inverseView.data(), desc.sceneDesc.cameraOverride->view.data());
-        cameraPosition = { inverseView[12], inverseView[13], inverseView[14] };
-    } else if (sceneCamera != nullptr) {
-        cameraPosition = sceneCamera->position;
-    }
-
+[[nodiscard]] SceneRenderShadowMapBinding SubmitDirectionalShadows(
+    const RendererShadowSubmitDesc& desc,
+    std::uint32_t cameraCullingMask,
+    const std::array<float, 3>* cameraPosition) {
     DirectionalShadowSetup shadowSetup = DirectionalShadowPassPlanner{}.Build(
         desc.renderScene,
         desc.sceneRenderer.Resources(),
@@ -38,7 +26,7 @@ SceneRenderShadowMapBinding RendererShadowSubmitter::Submit(const RendererShadow
         desc.lightingConfig,
         BGFX_INVALID_HANDLE,
         cameraCullingMask,
-        desc.sceneDesc.cameraOverride.has_value() || sceneCamera != nullptr ? &cameraPosition : nullptr,
+        cameraPosition,
         1U + static_cast<std::uint32_t>(std::ranges::count_if(
             desc.viewportPlan.viewIds.shadowCascadeViews, [](std::uint16_t view) { return ViewId::IsValid(view); })));
     if (!shadowSetup.valid || !desc.shadowMap.Ensure(shadowSetup.atlasSize)) {
@@ -86,6 +74,84 @@ SceneRenderShadowMapBinding RendererShadowSubmitter::Submit(const RendererShadow
     SceneRenderShadowMapBinding shadowBinding = shadowSetup.binding;
     shadowBinding.params[3] = submittedCasters == 0U ? 0.0F : shadowBinding.params[3];
     return shadowBinding;
+}
+
+void SubmitPointShadows(
+    const RendererShadowSubmitDesc& desc,
+    std::uint32_t cameraCullingMask,
+    const std::array<float, 3>* cameraPosition,
+    SceneRenderShadowMapBinding& binding) {
+    PointShadowSetup setup = PointShadowPassPlanner::Build(
+        desc.renderScene, desc.lightingConfig, cameraPosition, cameraCullingMask, BGFX_INVALID_HANDLE);
+    if (!setup.valid || !desc.pointShadowMap.Ensure(setup.atlasWidth, setup.atlasHeight)) {
+        return;
+    }
+    setup.binding.depthTexture = desc.pointShadowMap.DepthTexture();
+    for (std::uint32_t light = 0U; light < setup.lightCount; ++light) {
+        for (std::uint32_t face = 0U; face < ScenePointShadowBinding::kFaceCount; ++face) {
+            const std::uint32_t index = light * ScenePointShadowBinding::kFaceCount + face;
+            const std::uint16_t viewId = desc.viewportPlan.viewIds.pointShadowViews[index];
+            if (!ViewId::IsValid(viewId)) {
+                // A viewport without dedicated point-shadow views (a detached editor view) renders none.
+                return;
+            }
+            PointShadowFace& tile = setup.faces[light][face];
+            RendererViewConfigurator::ConfigureShadowDepth(
+                viewId, desc.pointShadowMap.FrameBuffer(), tile.tileColumn * setup.tileSize, tile.tileRow * setup.tileSize, setup.tileSize);
+            desc.sceneRenderer.SubmitMeshPass(
+                viewId,
+                MeshPassType::ShadowDepth,
+                desc.renderScene,
+                setup.tileSize,
+                setup.tileSize,
+                &tile.camera,
+                desc.sceneDesc.drawBudget,
+                desc.lightingConfig,
+                nullptr,
+                {},
+                &desc.gpuDrivenSupport);
+            SceneRenderSubmitStats stats = desc.sceneRenderer.LastSubmitStats();
+            stats.shadowMapAllocationBytes = index == 0U ? desc.pointShadowMap.AllocationBytes() : 0U;
+            desc.aggregateSubmitStats += stats;
+            desc.diagnostics += desc.sceneRenderer.LastDiagnostics();
+            desc.passSubmitStats.push_back(SceneRenderPassSubmitStats{
+                .viewportId = desc.sceneDesc.target.viewport.id.value,
+                .viewportIndex = desc.sceneDesc.target.viewport.viewportIndex,
+                .renderPass = RenderPassKind::ShadowDepth,
+                .pass = MeshPassType::ShadowDepth,
+                .stats = stats,
+            });
+        }
+    }
+    binding.point = setup.binding;
+}
+
+} // namespace
+
+SceneRenderShadowMapBinding RendererShadowSubmitter::Submit(const RendererShadowSubmitDesc& desc) {
+    if (!desc.lightingConfig.shadowsEnabled) {
+        return {};
+    }
+
+    const CameraRenderProxyDesc* sceneCamera =
+        desc.renderScene.FindPrimaryCameraProxy(desc.sceneDesc.target.viewport.id.value);
+    const std::uint32_t cameraCullingMask = desc.sceneDesc.cameraOverride.has_value()
+        ? desc.sceneDesc.cameraOverride->cullingMask
+        : (sceneCamera != nullptr ? sceneCamera->cullingMask : 0xFFFFFFFFU);
+    std::array<float, 3> cameraPosition{};
+    if (desc.sceneDesc.cameraOverride.has_value()) {
+        std::array<float, 16> inverseView{};
+        bx::mtxInverse(inverseView.data(), desc.sceneDesc.cameraOverride->view.data());
+        cameraPosition = { inverseView[12], inverseView[13], inverseView[14] };
+    } else if (sceneCamera != nullptr) {
+        cameraPosition = sceneCamera->position;
+    }
+    const std::array<float, 3>* cameraPositionPointer =
+        desc.sceneDesc.cameraOverride.has_value() || sceneCamera != nullptr ? &cameraPosition : nullptr;
+
+    SceneRenderShadowMapBinding binding = SubmitDirectionalShadows(desc, cameraCullingMask, cameraPositionPointer);
+    SubmitPointShadows(desc, cameraCullingMask, cameraPositionPointer, binding);
+    return binding;
 }
 
 } // namespace kb::render

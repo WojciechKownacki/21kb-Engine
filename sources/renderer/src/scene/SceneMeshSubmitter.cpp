@@ -221,6 +221,9 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
         lighting.lightGrid = passResources_.LightGrid().Prepare(renderScene, lightingConfig,
             camera != nullptr ? camera->cullingMask : 0xFFFFFFFFU, lighting.primaryLightId, lightingStats, diagnostics);
     }
+    if (shadowMap != nullptr) {
+        SceneLightingPacker::AssignPointShadowSlots(lighting, shadowMap->point);
+    }
     const std::array<float, 4> cameraPosition = SceneLightingPacker::CameraPosition(camera);
     if (detailSwitchScene_ != &renderScene) {
         pipelineScratch_.detailSwitchLevels.clear();

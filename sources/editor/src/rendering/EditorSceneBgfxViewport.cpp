@@ -25,7 +25,7 @@ namespace {
 constexpr wchar_t kSceneViewportClassName[] = L"KBEditorSceneBgfxViewport";
 constexpr std::uint32_t kSceneClearRgba = 0x000000FFU;
 constexpr std::uint32_t kMaxEditorViewportIndex =
-    (render::ViewId::ScreenCapture - render::ViewId::DetachedViewportStart) / render::ViewId::DetachedViewportStride;
+    (render::ViewId::DetachedViewportLimit - render::ViewId::DetachedViewportStart) / render::ViewId::DetachedViewportStride;
 
 [[nodiscard]] std::uint32_t RectWidth(const RECT& rect) noexcept {
     return EditorSceneViewportGeometry::RectWidth(rect);

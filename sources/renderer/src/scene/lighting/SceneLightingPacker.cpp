@@ -106,6 +106,20 @@ std::array<float, 4> SceneLightingPacker::CameraPosition(const SceneRenderCamera
     };
 }
 
+void SceneLightingPacker::AssignPointShadowSlots(PackedSceneLighting& lighting, const ScenePointShadowBinding& binding) noexcept {
+    lighting.pointShadowSlot.fill(-1.0F);
+    const std::uint32_t packedCount = std::min<std::uint32_t>(
+        static_cast<std::uint32_t>(lighting.params[0]), kMaxSceneForwardPlusLights);
+    for (std::uint32_t shadow = 0U; shadow < binding.lightCount; ++shadow) {
+        for (std::uint32_t slot = 0U; slot < packedCount; ++slot) {
+            if (lighting.slotEntityId[slot] == binding.entityId[shadow]) {
+                lighting.pointShadowSlot[shadow] = static_cast<float>(slot);
+                break;
+            }
+        }
+    }
+}
+
 PackedSceneLighting SceneLightingPacker::Build(
     const RenderScene& renderScene,
     SceneRenderSubmitStats& stats,
@@ -152,6 +166,7 @@ PackedSceneLighting SceneLightingPacker::Build(
     std::uint32_t submittedSceneLightCount = 0U;
     for (std::uint32_t slot = 0U; slot < selection.selectedCount; ++slot) {
         if (selection.selected[slot].light != nullptr && PackLight(*selection.selected[slot].light, slot, lighting)) {
+            lighting.slotEntityId[slot] = selection.selected[slot].entityId;
             ++stats.submittedForwardLightCount;
             ++submittedSceneLightCount;
         }

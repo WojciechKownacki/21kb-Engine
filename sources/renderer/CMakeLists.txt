@@ -104,6 +104,7 @@ add_library(kb_renderer STATIC
     include/kb/render/scene/RenderSceneStore.hpp
     include/kb/render/shadow/DirectionalShadowPassPlanner.hpp
     include/kb/render/shadow/ShadowMapResource.hpp
+    include/kb/render/shadow/PointShadowUniforms.hpp
     include/kb/render/ViewIdPolicy.hpp
     src/BgfxContext.cpp
     src/bake/MeshBaker.cpp
@@ -343,6 +344,8 @@ add_library(kb_renderer STATIC
     src/shadow/ShadowCasterBoundsCollector.cpp
     src/shadow/ShadowCasterBoundsCollector.hpp
     src/shadow/ShadowMapResource.cpp
+    src/shadow/PointShadowPassPlanner.cpp
+    src/shadow/PointShadowPassPlanner.hpp
     src/private/ui/ScreenUIBackgroundBlur.hpp
     src/private/ui/ScreenUIComposite.hpp
     src/private/ui/ScreenUIRenderer.hpp

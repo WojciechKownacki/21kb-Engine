@@ -7,9 +7,24 @@
 
 #include <algorithm>
 #include <array>
+#include <vector>
 #include <span>
 
 namespace kb::render::tests {
+
+// The primary viewport appends its cascade and point-shadow depth views right after ShadowDepth.
+[[nodiscard]] static std::vector<std::uint16_t> WithPrimaryShadowViews(std::span<const std::uint16_t> base) {
+    std::vector<std::uint16_t> order(base.begin(), base.end());
+    std::vector<std::uint16_t> extras;
+    for (std::uint16_t index = 0U; index < ViewId::ShadowCascadeExtraViews; ++index) {
+        extras.push_back(static_cast<std::uint16_t>(ViewId::ShadowCascadeExtraStart + index));
+    }
+    for (std::uint16_t index = 0U; index < ViewId::PointShadowViewCount; ++index) {
+        extras.push_back(static_cast<std::uint16_t>(ViewId::PointShadowStart + index));
+    }
+    order.insert(order.begin() + 1, extras.begin(), extras.end());
+    return order;
+}
 namespace {
 
 [[nodiscard]] RenderFrameDesc OneViewportFrame() {
@@ -256,10 +271,8 @@ void FramePipelineBuildsCanonicalPassOrder() {
     Require(selectionMask != nullptr && selectionMask->meshPass.value_or(MeshPassType::Depth) == MeshPassType::SelectionId, "EditorSelectionMask pass did not carry SelectionId mesh pass metadata");
     Require(finalComposite != nullptr && !finalComposite->meshPass.has_value(), "FinalComposite pass unexpectedly carried mesh pass metadata");
 
-    constexpr std::array<std::uint16_t, RenderPassKindCount + (RenderViewportViewIds::kBloomPyramidExtraMipCount * 3U) + ViewId::ShadowCascadeExtraViews> expectedViewOrder{
+    constexpr std::array<std::uint16_t, RenderPassKindCount + (RenderViewportViewIds::kBloomPyramidExtraMipCount * 3U)> expectedBaseViewOrder{
         ViewId::ShadowDepth,
-        ViewId::ShadowCascadeExtraStart,
-        ViewId::ShadowCascadeExtraStart + 1U,
         ViewId::GpuCompute,
         ViewId::Scene3D,
         ViewId::GBufferGeometry,
@@ -297,6 +310,7 @@ void FramePipelineBuildsCanonicalPassOrder() {
         ViewId::EditorUi,
         ViewId::EditorGizmoOverlay,
     };
+    const std::vector<std::uint16_t> expectedViewOrder = WithPrimaryShadowViews(expectedBaseViewOrder);
     Require(viewport.viewOrder.size() == expectedViewOrder.size(), "RenderFramePipeline view order count is wrong");
     for (std::size_t index = 0; index < expectedViewOrder.size(); ++index) {
         Require(viewport.viewOrder[index] == expectedViewOrder[index], "RenderFramePipeline view order is wrong");
@@ -341,10 +355,8 @@ void FrameStateAccumulatesMultipleViewportViewOrders() {
     Require(state.IsActive(), "RenderFrameState became inactive during viewport registration");
     Require(state.FrameIndex() == frame.frameIndex, "RenderFrameState has the wrong frame index");
 
-    constexpr std::array<std::uint16_t, 75U> expectedViewOrder{
+    constexpr std::array<std::uint16_t, 73U> expectedBaseViewOrder{
         ViewId::ShadowDepth,
-        ViewId::ShadowCascadeExtraStart,
-        ViewId::ShadowCascadeExtraStart + 1U,
         ViewId::GpuCompute,
         ViewId::Scene3D,
         ViewId::GBufferGeometry,
@@ -419,6 +431,7 @@ void FrameStateAccumulatesMultipleViewportViewOrders() {
         ViewId::DetachedViewportStart + 32U,
     };
 
+    const std::vector<std::uint16_t> expectedViewOrder = WithPrimaryShadowViews(expectedBaseViewOrder);
     const std::span<const std::uint16_t> viewOrder = state.ViewOrder();
     Require(viewOrder.size() == expectedViewOrder.size(), "RenderFrameState accumulated the wrong view order count");
     for (std::size_t index = 0; index < expectedViewOrder.size(); ++index) {

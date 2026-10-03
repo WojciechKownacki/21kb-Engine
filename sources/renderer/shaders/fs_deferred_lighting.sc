@@ -4,6 +4,7 @@ $input v_texcoord0
 #define KB_LIGHT_GRID_DEFERRED 1
 #include "light_grid.sh"
 #include "shadow_cascades.sh"
+#include "point_shadow.sh"
 #include "gbuffer_contract.sh"
 
 SAMPLER2D(s_gbufferAlbedo, 0);
@@ -252,7 +253,7 @@ void main()
         {
             int lightIndex = KbLightGridIndex(lightList, entry);
             vec3 directLight = EvaluateSceneLight(lightIndex, normal, viewDir, worldPos, albedo.rgb, metallic, roughness, specular, occlusion);
-            lighting += lightIndex == 0 ? directLight * shadowVisible : directLight;
+            lighting += directLight * (lightIndex == 0 ? shadowVisible : 1.0) * KbPointShadowFactor(lightIndex, worldPos);
         }
     }
 

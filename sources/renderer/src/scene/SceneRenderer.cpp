@@ -209,7 +209,10 @@ void SceneRenderer::SubmitMeshPass(
     bgfx::setViewName(viewId, MeshPassName(pass));
     bgfx::setViewMode(viewId, bgfx::ViewMode::Sequential);
     bgfx::setViewTransform(viewId, camera->view.data(), camera->projection.data());
-    bgfx::setViewRect(viewId, 0, 0, width, height);
+    // A shadow pass renders into a tile of a shared atlas; its rect was configured by the caller.
+    if (pass != MeshPassType::ShadowDepth) {
+        bgfx::setViewRect(viewId, 0, 0, width, height);
+    }
     bgfx::touch(viewId);
     {
         std::ostringstream message;
