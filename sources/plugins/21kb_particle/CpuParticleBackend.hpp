@@ -237,7 +237,15 @@ private:
     };
     [[nodiscard]] bool GpuEligible(std::uint32_t denseIndex, std::uint8_t emitterIndex, std::uint8_t prewarmGroup) const noexcept;
     void SpawnGpu(std::uint32_t denseIndex, std::uint8_t emitterIndex, std::uint32_t count,
-        const kb::math::Vec3* eventPosition) noexcept;
+        const kb::math::Vec3* eventPosition, std::uint8_t eventDepth = 0U) noexcept;
+    // Birth and death events of GPU particles are known when the particle is born (its motion is closed
+    // form), so the backend queues them itself: births at once, deaths scheduled for birth + lifetime.
+    struct ScheduledGpuEvent {
+        double due = 0.0;
+        InternalEvent event;
+    };
+    void ScheduleGpuDeath(const InternalEvent& event, double due) noexcept;
+    void ReleaseDueGpuEvents() noexcept;
     void FlushGpuSpawns() noexcept;
     void QueueGpuRelease(std::uint64_t instanceId, std::uint32_t denseIndex, bool release) noexcept;
     [[nodiscard]] kb::particles::ParticleGpuEmitterParams BuildGpuParams(
@@ -285,6 +293,7 @@ private:
     kb::scene::Scene* gpuScene_ = nullptr;
     double gpuSimTime_ = 0.0;
     std::vector<GpuPending> gpuPending_;
+    std::vector<ScheduledGpuEvent> gpuScheduledEvents_; // min-heap on due time
 
     std::vector<std::uint64_t> particleInstanceIds_;
     std::vector<std::uint64_t> particleIds_;

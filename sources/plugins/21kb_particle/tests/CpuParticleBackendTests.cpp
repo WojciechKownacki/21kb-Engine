@@ -2712,7 +2712,8 @@ void TestGpuEmitterCollisionRouting() {
             onGpu.params.plane.friction == 0.1F && onGpu.params.plane.normal.y == 1.0F && gpuCpuLive == 0U,
         "An emitter with a collision plane must run on the GPU with its plane");
     const auto [onCpu, cpuLive] = firstCommand(true);
-    Require(!onCpu.hasParams && cpuLive > 0U, "An emitter with a sub-emitter module must stay on the CPU");
+    Require(!onCpu.hasParams && cpuLive > 0U,
+        "An emitter with a plane and a death sub-emitter must stay on the CPU: the death position is not closed form");
 }
 
 // A local-space emitter is eligible for the GPU path: its birth records are in the owner's frame (emitter
@@ -2759,8 +2760,73 @@ void TestGpuLocalSpaceEmitterRouting() {
     Require(planeCommands.empty() && planeCpuLive > 0U, "A local-space emitter with a collision plane must stay on the CPU");
 }
 
+// Birth and death events of a GPU particle are queued by the backend itself, so sub-emitters work on the
+// GPU: one parent born by a manual emit dies 2 s later at its closed-form position (no acceleration, so
+// start + velocity * lifetime), and its death sub-emitter spawns child records there; a collision-triggered sub-emitter
+// would need the GPU to report the collision, so that emitter stays on the CPU.
+void TestGpuSubEmitterEvents() {
+    const auto run = [](kb::scene::ParticleEventTrigger trigger, int steps) {
+        auto effect = Fixture::MakeEffect(0.0F, 1024U);
+        effect.backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualPreferred;
+        kb::scene::ParticleEmitterAsset child = effect.emitters[0];
+        child.emitterId = 2U;
+        child.authoringOrder = 1U;
+        child.name = "Child";
+        child.modules.clear();
+        effect.emitters.push_back(std::move(child));
+        AddModule(effect.emitters[0], 1U, kb::scene::ParticleModuleType::SubEmitter,
+            kb::scene::ParticleSubEmitterModule{ .targetEmitterId = 2U, .trigger = trigger, .count = 3U });
+        RuntimeFixture runtime(std::move(effect));
+        kb::scene::Scene& scene = runtime.fixture.scene;
+        kb::particles::ParticlePlayback::SetGpuEmitterConsumer(scene, true);
+        Require(kb::particles::ParticlePlayback::Play(scene, runtime.instanceId).Succeeded(), "sub-emitter fixture could not play");
+        // The first step tells the backend which scene its GPU records go to.
+        static_cast<void>(scene.Runtime().Update(kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds));
+        Require(kb::particles::ParticlePlayback::Emit(scene, runtime.instanceId, 1U).Succeeded(), "sub-emitter fixture could not emit");
+        for (int step = 0; step < steps; ++step) {
+            static_cast<void>(scene.Runtime().Update(kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds));
+        }
+        std::vector<kb::particles::ParticleGpuEmitterCommand> commands;
+        kb::particles::ParticlePlayback::DrainGpuEmitterCommands(scene, commands);
+        return std::pair{ commands, kb::particles::ParticlePlayback::Query(scene, runtime.instanceId).liveParticleCount };
+    };
+    const auto [commands, cpuLive] = run(kb::scene::ParticleEventTrigger::Death, 150);
+    std::vector<kb::particles::ParticleGpuSpawn> parents;
+    std::vector<kb::particles::ParticleGpuSpawn> children;
+    for (const kb::particles::ParticleGpuEmitterCommand& command : commands) {
+        auto& target = command.key.emitterId == 1U ? parents : children;
+        target.insert(target.end(), command.spawns.begin(), command.spawns.end());
+    }
+    Require(parents.size() == 1U && children.size() == 3U && cpuLive == 0U,
+        "A death sub-emitter of a GPU emitter must spawn its children on the GPU");
+    const kb::particles::ParticleGpuSpawn& parent = parents.front();
+    for (const kb::particles::ParticleGpuSpawn& child : children) {
+        Require(std::abs(child.position.x - (parent.position.x + parent.velocity.x * parent.lifetime)) < 0.001F &&
+                std::abs(child.position.y - (parent.position.y + parent.velocity.y * parent.lifetime)) < 0.001F &&
+                std::abs(child.position.z - (parent.position.z + parent.velocity.z * parent.lifetime)) < 0.001F &&
+                child.birthTime >= parent.birthTime + 2.0F && child.birthTime < parent.birthTime + 2.1F,
+            "A death sub-emitter child must appear where the parent dies, when it dies");
+    }
+    // A birth sub-emitter spawns its children at the parent's birth record, a step later.
+    const auto [birthCommands, birthCpuLive] = run(kb::scene::ParticleEventTrigger::Birth, 30);
+    std::vector<kb::particles::ParticleGpuSpawn> birthParents;
+    std::vector<kb::particles::ParticleGpuSpawn> birthChildren;
+    for (const kb::particles::ParticleGpuEmitterCommand& command : birthCommands) {
+        auto& target = command.key.emitterId == 1U ? birthParents : birthChildren;
+        target.insert(target.end(), command.spawns.begin(), command.spawns.end());
+    }
+    Require(birthParents.size() == 1U && birthChildren.size() == 3U && birthCpuLive == 0U &&
+            std::abs(birthChildren.front().position.x - birthParents.front().position.x) < 0.001F &&
+            birthChildren.front().birthTime < birthParents.front().birthTime + 0.1F,
+        "A birth sub-emitter of a GPU emitter must spawn its children at the parent's birth");
+    const auto [collisionCommands, collisionCpuLive] = run(kb::scene::ParticleEventTrigger::Collision, 30);
+    Require(collisionCommands.empty() && collisionCpuLive > 0U,
+        "An emitter with a collision-triggered sub-emitter must stay on the CPU");
+}
+
 int main() {
     try {
+        TestGpuSubEmitterEvents();
         TestGpuLocalSpaceEmitterRouting();
         TestGpuEmitterRouting();
         TestGpuEmitterCollisionRouting();
