@@ -6865,7 +6865,8 @@ struct SsBox {
     const std::vector<SsBox>& boxes, const std::vector<kb::scene::Vec3>& pointLights, bx::Vec3 eye, bx::Vec3 target,
     float fovDegrees, const SceneRenderLightingConfig& lighting, int frames, std::uint16_t size,
     SceneRenderMeshPassMode meshPassMode = SceneRenderMeshPassMode::OpaqueOnly,
-    const std::function<void(kb::scene::Scene&, int)>& beforeFrame = {}, bool lightsCastShadow = false) {
+    const std::function<void(kb::scene::Scene&, int)>& beforeFrame = {}, bool lightsCastShadow = false,
+    float lightIntensity = 4.0F, float lightRange = 40.0F) {
     static int counter = 0;
     const std::filesystem::path root = std::filesystem::temp_directory_path() /
         ("21kb_ss_scene_" + std::to_string(GetCurrentProcessId()) + "_" + std::to_string(counter++));
@@ -6921,7 +6922,7 @@ struct SsBox {
         const kb::scene::SceneEntity light = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
             .name = "Point Light", .transform = TransformAt(position.x, position.y, position.z) });
         scene.Components().Lights().Set(light, kb::scene::LightComponent{
-            .kind = kb::scene::LightKind::Point, .intensity = 4.0F, .range = 40.0F, .castsShadow = lightsCastShadow });
+            .kind = kb::scene::LightKind::Point, .intensity = lightIntensity, .range = lightRange, .castsShadow = lightsCastShadow });
     }
 
     NativeTestSurface surface;
@@ -7686,6 +7687,119 @@ void RunRendererDrawsAuthoredParticleFileTest() {
     Require(right > 40.0, "File-to-pixel test: the particles from the authored file must be visible along +x");
     Require(left < 5.0, "File-to-pixel test: nothing may be drawn to the left of the emitter");
 }
+void RunRendererMillionParticleFileTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() /
+        ("21kb_particle_million_file_" + std::to_string(GetCurrentProcessId()));
+    std::error_code error;
+    std::filesystem::create_directories(root, error);
+    Require(!error, "File-to-pixel test could not create its asset directory");
+
+    kb::scene::ParticleEffectAsset effect;
+    effect.effectId = 9002U;
+    effect.displayName = "Million";
+    effect.recipeCategory = "Simple";
+    effect.determinismSeed = 0x5EEDF11EULL;
+    effect.durationSeconds = 5.0F;
+    effect.looping = true;
+    effect.backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualPreferred;
+    // One million live particles in one emitter: a GPU emitter holds up to 1,048,576 of them.
+    constexpr int kEmitters = 1;
+    for (int index = 0; index < kEmitters; ++index) {
+        kb::scene::ParticleEmitterAsset emitter;
+        emitter.emitterId = static_cast<std::uint64_t>(index + 1);
+        emitter.authoringOrder = static_cast<std::uint32_t>(index);
+        emitter.name = "Simple" + std::to_string(index);
+        emitter.maxParticles = 1'040'000U;
+        emitter.spawn.rateOverTime.keyframes = { { .time = 0.0F, .value = 1'000'000.0F / 2.0F / static_cast<float>(kEmitters) } };
+        emitter.spawn.lifetimeMin = 2.0F;
+        emitter.spawn.lifetimeMax = 2.0F;
+        emitter.spawn.speedMin = 4.0F;
+        emitter.spawn.speedMax = 6.0F;
+        emitter.spawn.direction = { 1.0F, 0.0F, 0.0F };
+        emitter.spawn.spreadDegrees = 30.0F;
+        emitter.spawn.startSize = 0.05F;
+        emitter.output.material.virtualPath = "/Game/Materials/Spark.21kb";
+        emitter.output.blend = kb::scene::ParticleBlendMode::Add;
+        emitter.output.depthTest = false;
+        effect.emitters.push_back(std::move(emitter));
+    }
+    Require(kb::scene::ParticleEffectAssetIO::Save(root / "million.kbvfx", effect), "Million particle file test could not write its effect file");
+
+    kb::project::ProjectDescriptor project;
+    project.disableEnginePluginsByDefault = true;
+    project.plugins.push_back({ .name = "Rendering.21kbParticle", .binaryPath = KB_21KB_PARTICLE_PLUGIN_PATH, .enabled = true });
+    kb::scene::Scene scene(project, kb::scene::SceneMode::Runtime);
+    Require(scene.IsModuleActive("Rendering.21kbParticle") && kb::particles::ParticlePlayback::HasBackend(scene),
+        "File-to-pixel test could not load the particle provider module");
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    static_cast<void>(manager.RegisterLoader(std::make_unique<kb::scene::ParticleEffectAssetLoader>()));
+    Require(manager.Mounts().Mount("Game", root) && manager.DiscoverMountedAssets() >= 1U,
+        "File-to-pixel test could not discover its effect file");
+    // The effect names its material by path; the material itself is only a registry entry here.
+    Require(manager.Registry().Upsert(kb::assets::AssetMetadata{
+                .id = kb::assets::AssetId{ 72U }, .type = "RenderMaterial", .name = "Spark",
+                .virtualPath = "/Game/Materials/Spark.21kb", .physicalPath = "Spark.21kb", .contentHash = 1U }),
+        "File-to-pixel test could not register the particle material");
+    const kb::assets::AssetMetadata* effectAsset = manager.Registry().FindByPath("/Game/million.kbvfx");
+    Require(effectAsset != nullptr, "File-to-pixel test did not find its effect asset");
+    const kb::scene::SceneEntity owner = scene.Entities().CreateEntity();
+    scene.Transforms().Set(owner, {});
+    scene.Components().ParticleEffects().Set(owner, {
+        .effectAssetId = effectAsset->id.value, .deterministicSeed = effect.determinismSeed, .enabled = true, .autoPlay = true,
+        .followTransform = true, .restartOnActivate = true });
+
+    NativeTestSurface surface;
+    Require(surface.IsValid(), "File-to-pixel test could not create a hidden D3D11 surface");
+    DisplayConfig config{};
+    config.syncMode = DisplaySyncMode::Uncapped;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "File-to-pixel test could not initialize the renderer");
+    renderer.SetRuntimeAssetDiscoveryEnabled(false);
+    SceneRenderCamera camera{};
+    bx::mtxLookAt(camera.view.data(), bx::Vec3{ 0.0F, 0.0F, -10.0F }, bx::Vec3{ 1.2F, 0.0F, 0.0F });
+    SceneDepthPolicy::MakePerspective(camera.projection.data(), 30.0F, 1.0F, 0.1F, 100.0F, SceneDepthPolicy::HomogeneousDepth());
+
+    std::vector<std::uint8_t> pixels;
+    bool consumer = false;
+    std::size_t cpuParticles = 0U;
+    std::uint32_t gpuDrawCalls = 0U;
+    {
+        ParticleMeshReadbackTarget target;
+        Require(target.Initialize(), "File-to-pixel test could not create its readback target");
+        const RenderSceneSubmitDesc desc{
+            .target = target.Binding(),
+            .cameraOverride = camera,
+            .meshPassMode = SceneRenderMeshPassMode::OpaqueAndTransparent,
+            .clearRgba = 0x000000FFU,
+            .editorSceneOverlaysEnabled = false,
+            .shadowPassEnabled = false,
+            .postProcessEnabled = false,
+            .selectionMaskEnabled = false,
+            .selectionOutlineEnabled = false,
+        };
+        for (int frame = 0; frame < 240; ++frame) {
+            Require(scene.Runtime().Update(1.0F / 60.0F), "File-to-pixel test scene update failed");
+            SubmitLifecycleFrame(renderer, scene, desc, "File-to-pixel test did not submit a frame");
+        }
+        pixels = target.ReadPixels();
+        consumer = kb::particles::ParticlePlayback::HasGpuEmitterConsumer(scene);
+        gpuDrawCalls = renderer.LastSceneSubmitStats().submittedParticleDrawCallCount;
+        const auto ids = kb::particles::ParticlePlayback::LiveInstanceIds(scene);
+        for (const std::uint64_t instance : ids) {
+            cpuParticles += kb::particles::ParticlePlayback::Query(scene, instance).liveParticleCount;
+        }
+    }
+    renderer.ReleaseScene(scene);
+    renderer.Shutdown();
+    std::filesystem::remove_all(root, error);
+
+    std::size_t litPixels = 0U;
+    for (std::size_t offset = 0U; offset < pixels.size(); offset += 4U) litPixels += pixels[offset] > 10U ? 1U : 0U;
+    std::fprintf(stderr, "million_particle_file lit_pixels=%zu gpu_consumer=%d gpu_draws=%u cpu_particles=%zu%c", litPixels, consumer ? 1 : 0, gpuDrawCalls, cpuParticles, 10);
+    Require(consumer && gpuDrawCalls >= 1U && cpuParticles <= 4096U, "Million particle file test: the effect must be simulated and drawn on the GPU");
+    Require(litPixels > 50U, "Million particle file test: the particles must be visible");
+}
 #endif
 
 void RunRendererCollidesGpuParticlesTest() {
@@ -7931,6 +8045,7 @@ void RunRendererParticleMeshSnapshotSubmitTest() {
     RunRendererFollowsLocalSpaceGpuParticlesTest();
 #if defined(KB_21KB_PARTICLE_PLUGIN_PATH)
     RunRendererDrawsAuthoredParticleFileTest();
+    RunRendererMillionParticleFileTest();
 #endif
     RunRendererDrawsGpuSimulatedParticlesTest();
     RunRendererDrawsMillionGpuParticlesTest();
