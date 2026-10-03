@@ -86,6 +86,8 @@ void RunPhysicsSceneSystemFallingBodyTest() {
     });
 
     kb::scene::Scene scene{ std::move(descriptor) };
+
+    kb::scene::PhysicsBackend::SetStepPipelining(scene, false); // these tests read results in the update that stepped them
     kb::scene::PhysicsBackend::SetCollisionEventConsumer(scene, true);
 
     kb::scene::SceneObject floor = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
@@ -1959,6 +1961,7 @@ void RunPhysicsPersistentSleeperTransitionTest() {
         .enabled = true,
     });
     kb::scene::Scene scene{std::move(descriptor)};
+    kb::scene::PhysicsBackend::SetStepPipelining(scene, false); // these tests read results in the update that stepped them
     const auto support = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
         .name = "Transition support",
         .transform = kb::scene::TransformComponent{.localPosition = {1500.0F, -0.5F, 0.0F}},
@@ -2013,6 +2016,7 @@ void RunPhysicsIdenticalReplayTest() {
             .enabled = true,
         });
         kb::scene::Scene scene{std::move(descriptor)};
+        kb::scene::PhysicsBackend::SetStepPipelining(scene, false); // these tests read results in the update that stepped them
         const auto floor = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
             .name = "Replay floor",
             .transform = kb::scene::TransformComponent{.localPosition = {0.0F, -0.5F, 0.0F}},
@@ -2317,6 +2321,7 @@ void RunStaticColliderBatchInvalidationTest() {
     descriptor.disableEnginePluginsByDefault = true;
     descriptor.plugins.push_back({.name = "Physics.Jolt", .binaryPath = KB_PHYSICS_JOLT_PLUGIN_PATH, .enabled = true});
     kb::scene::Scene scene{std::move(descriptor)};
+    kb::scene::PhysicsBackend::SetStepPipelining(scene, false); // these tests read results in the update that stepped them
     kb::tests::Require(scene.IsModuleActive("Physics.Jolt"), "Static cache test did not load the real physics backend");
     std::vector<kb::scene::SceneObject> objects;
     for (unsigned index = 0U; index < 2048U; ++index) {
