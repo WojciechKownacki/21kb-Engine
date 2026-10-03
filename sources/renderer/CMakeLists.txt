@@ -776,6 +776,13 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
             KB_TEST_AUDIO_ASSET_DIR="${CMAKE_SOURCE_DIR}/sources/plugins/audio_miniaudio/tests/assets"
     )
 
+    # The file-to-pixel particle test loads the real particle provider as a module.
+    if(KB_BUILD_PROVIDER_MODULES_AS_DLL AND TARGET kb_21kb_particle_plugin)
+        target_compile_definitions(kb_renderer_tests PRIVATE
+            KB_21KB_PARTICLE_PLUGIN_PATH="$<TARGET_FILE:kb_21kb_particle_plugin>")
+        add_dependencies(kb_renderer_tests kb_21kb_particle_plugin)
+    endif()
+
     add_test(NAME kb_renderer_tests COMMAND $<TARGET_FILE:kb_renderer_tests>)
     add_test(NAME kb_renderer_editor_ui_view COMMAND $<TARGET_FILE:kb_renderer_tests> editor-ui-view)
     set_tests_properties(kb_renderer_editor_ui_view PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;headless;ui")
