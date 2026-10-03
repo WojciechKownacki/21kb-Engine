@@ -14,7 +14,10 @@
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 
+#include <algorithm>
 #include <array>
+#include <chrono>
+#include <iostream>
 #include <span>
 #include <stdexcept>
 #include <vector>
@@ -1547,6 +1550,56 @@ void RunSceneBehaviourIterationUsesUnsafeHotQueryTest() {
 } // namespace
 
 namespace kb::tests {
+
+// The write path of a busy scene: every frame a script moves 30000 objects with Transforms().Set, then the
+// hierarchy is synchronized. Flat objects and objects under a few parents are timed separately (median of the
+// frames after a warm-up); the time of the Set loop and of the synchronization is reported.
+void RunTransformWriteBenchmark() {
+    using Clock = std::chrono::steady_clock;
+    constexpr std::size_t kObjects = 30000U;
+    constexpr int kFrames = 40;
+    constexpr int kWarmupFrames = 8;
+    for (const bool parented : {false, true}) {
+        kb::scene::Scene scene;
+        std::vector<kb::scene::SceneObject> parents;
+        for (int index = 0; index < 8 && parented; ++index) {
+            parents.push_back(scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Parent" }));
+        }
+        std::vector<kb::scene::SceneObject> objects;
+        objects.reserve(kObjects);
+        for (std::size_t index = 0U; index < kObjects; ++index) {
+            kb::scene::SceneObjectDesc desc{ .name = "Object" };
+            if (parented) desc.parent = parents[index % parents.size()];
+            objects.push_back(scene.Entities().CreateObject(desc));
+        }
+        scene.Runtime().SynchronizeTransforms();
+        std::vector<double> setMilliseconds;
+        std::vector<double> syncMilliseconds;
+        for (int frame = 0; frame < kFrames + kWarmupFrames; ++frame) {
+            const auto setStart = Clock::now();
+            for (std::size_t index = 0U; index < kObjects; ++index) {
+                kb::scene::TransformComponent transform;
+                transform.localPosition = kb::scene::Vec3{ static_cast<float>(index % 100U), static_cast<float>(frame), static_cast<float>(index / 100U) };
+                scene.Transforms().Set(objects[index], transform);
+            }
+            const auto syncStart = Clock::now();
+            scene.Runtime().SynchronizeTransforms();
+            const auto end = Clock::now();
+            if (frame >= kWarmupFrames) {
+                setMilliseconds.push_back(std::chrono::duration<double, std::milli>(syncStart - setStart).count());
+                syncMilliseconds.push_back(std::chrono::duration<double, std::milli>(end - syncStart).count());
+            }
+        }
+        std::ranges::sort(setMilliseconds);
+        std::ranges::sort(syncMilliseconds);
+        const kb::scene::TransformComponent& last = scene.Transforms().Get(objects[kObjects - 1U]);
+        kb::tests::Require(last.localPosition.y == static_cast<float>(kFrames + kWarmupFrames - 1), "Transform write benchmark lost its last write");
+        std::cout << "transform_write objects=" << kObjects << " parented=" << parented
+                  << " set_ms=" << setMilliseconds[setMilliseconds.size() / 2U] << " sync_ms=" << syncMilliseconds[syncMilliseconds.size() / 2U] << '\n';
+        kb::tests::Require(setMilliseconds[setMilliseconds.size() / 2U] < 3.0,
+            "Setting the transforms of 30000 objects took longer than the in-place write path allows (about 1.7 ms; 4.0 ms before it)");
+    }
+}
 
 void RunSceneHierarchyTests() {
     RunEntityCreationBudgetRollbackTest();

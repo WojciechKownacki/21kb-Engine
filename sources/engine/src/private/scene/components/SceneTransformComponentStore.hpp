@@ -17,6 +17,8 @@ public:
     [[nodiscard]] TransformComponent* TryGet(SceneEntity entity) noexcept;
     void Set(SceneEntity entity, const TransformComponent& transform);
     void MarkModified(SceneEntity entity) noexcept;
+    // Publishes a row that was written in place (versions untouched): flags it and mirrors it to the backend.
+    void MarkWritten(SceneEntity entity) noexcept;
     void MarkParentModified(SceneEntity entity) noexcept;
 
 private:
