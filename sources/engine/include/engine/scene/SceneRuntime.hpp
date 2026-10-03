@@ -12,6 +12,7 @@
 #include <vector>
 #include <optional>
 #include <span>
+#include <type_traits>
 
 namespace kb::ecs {
 
@@ -257,6 +258,21 @@ public:
     [[nodiscard]] float TimeScale() const noexcept;
     void SetTimeScale(float scale) noexcept;
     [[nodiscard]] bool EnqueueCommand(SceneRuntimeCommand command);
+
+    // Runs body(begin, end) over [0, count) split into ranges of at least grainSize items on the scene's worker threads
+    // and returns when every range is done; a small count runs on the calling thread. For the application's own per-entity
+    // work (steering, animation sampling...): compute in parallel into the application's buffers, then publish with
+    // Transforms().SetMany. The body must not call the scene's mutating API, and ParallelFor must not be called from
+    // inside a scene system that already runs on the worker threads.
+    using ParallelForBody = void (*)(std::size_t begin, std::size_t end, void* context);
+    void ParallelFor(std::size_t count, std::size_t grainSize, ParallelForBody body, void* context);
+    template <typename Body>
+    void ParallelFor(std::size_t count, std::size_t grainSize, Body&& body) {
+        using BodyType = std::remove_reference_t<Body>;
+        ParallelFor(count, grainSize, [](std::size_t begin, std::size_t end, void* context) {
+            (*static_cast<BodyType*>(context))(begin, end);
+        }, const_cast<std::remove_const_t<BodyType>*>(&body));
+    }
 
 private:
     Scene& scene_;

@@ -2562,18 +2562,26 @@ void RunAgentsFrameBenchmarkWith(const kb::ecs::WorldConfig& worldConfig, const 
     std::array<kb::scene::PhysicsCastResult, 1> hitStorage{};
     for (int frame = 0; frame < kFrames + kWarmup; ++frame) {
         const auto t0 = Clock::now();
-        for (int index = 0; index < kAgents; ++index) {
-            positions[index].x += 0.03F;
-            if (positions[index].x > 100.0F) positions[index].x -= 200.0F;
-            const kb::scene::TransformComponent value{ .localPosition = positions[index],
-                .localRotation = kb::scene::Quat{ 0.0F, std::sin(0.005F * static_cast<float>(index % 628)), 0.0F, std::cos(0.005F * static_cast<float>(index % 628)) } };
-            if (batched) {
-                batch[index] = value;
-            } else {
-                scene.Transforms().Set(agents[index], value);
+        const auto step = [&](std::size_t begin, std::size_t end) {
+            for (std::size_t index = begin; index < end; ++index) {
+                positions[index].x += 0.03F;
+                if (positions[index].x > 100.0F) positions[index].x -= 200.0F;
+                const kb::scene::TransformComponent value{ .localPosition = positions[index],
+                    .localRotation = kb::scene::Quat{ 0.0F, std::sin(0.005F * static_cast<float>(index % 628)), 0.0F, std::cos(0.005F * static_cast<float>(index % 628)) } };
+                if (batched) {
+                    batch[index] = value;
+                } else {
+                    scene.Transforms().Set(agents[index], value);
+                }
             }
+        };
+        if (batched) {
+            // the application's own per-agent work runs on the scene's worker threads, the write is one batch
+            scene.Runtime().ParallelFor(static_cast<std::size_t>(kAgents), 2048U, step);
+            scene.Transforms().SetMany(agents, batch);
+        } else {
+            step(0U, static_cast<std::size_t>(kAgents));
         }
-        if (batched) scene.Transforms().SetMany(agents, batch);
         const auto t1 = Clock::now();
         scene.Runtime().SynchronizeTransforms();
         const auto tSync = Clock::now();
@@ -2616,7 +2624,7 @@ void RunAgentsFrameBenchmark() {
     kb::ecs::WorldConfig native{};
     native.mirrorNativeComponentChangesToBackend = false;
     RunAgentsFrameBenchmarkWith(native, "mirror=off");
-    RunAgentsFrameBenchmarkWith(kb::ecs::WorldConfig{}, "mirror=on(default),SetMany", true);
+    RunAgentsFrameBenchmarkWith(kb::ecs::WorldConfig{}, "mirror=on(default),ParallelFor+SetMany", true);
 }
 
 // The step of a large pile, as a frame sees it. The mean hides the occasional long step a frame budget cannot

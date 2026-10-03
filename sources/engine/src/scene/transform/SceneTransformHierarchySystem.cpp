@@ -1412,6 +1412,10 @@ void RunHierarchyDirtyFrontier(
 
 } // namespace
 
+void EnsureSceneTransformWorkerPool(SceneState& state) {
+    EnsureWorkerPool(state);
+}
+
 void SceneTransformHierarchySystem::Update(SceneState& state) const {
     using Clock = std::chrono::steady_clock;
 
