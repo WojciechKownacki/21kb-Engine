@@ -2475,8 +2475,29 @@ constexpr int kStartupSteps = 60;
 
 // Times one fixed step per update. `frameWorkMilliseconds` stands in for the rest of a frame (scripts, render
 // submission) that a pipelined physics step can overlap with.
-[[nodiscard]] StepTimes MeasurePhysicsSteps(int bodyCount, bool pipelined, int steps, double frameWorkMilliseconds) {
+// A script Tick that talks to physics every frame: reads a body's velocity and pushes it (a zero impulse), the
+// way gameplay code queries and steers bodies.
+class PhysicsTouchingScript final : public kb::scene::SceneSystem {
+public:
+    explicit PhysicsTouchingScript(kb::scene::SceneEntity body) noexcept : body_(body) {}
+    [[nodiscard]] kb::scene::SceneUpdatePhase UpdatePhase() const noexcept override {
+        return kb::scene::SceneUpdatePhase::PostFixed;
+    }
+    void OnUpdate(kb::scene::SceneSystemContext& context) override {
+        static_cast<void>(kb::scene::PhysicsBackend::GetVelocity(context.GetScene(), body_));
+        static_cast<void>(kb::scene::PhysicsBackend::AddImpulse(context.GetScene(), body_, kb::scene::Vec3{}));
+    }
+
+private:
+    kb::scene::SceneEntity body_{};
+};
+
+[[nodiscard]] StepTimes MeasurePhysicsSteps(int bodyCount, bool pipelined, int steps, double frameWorkMilliseconds,
+    bool scriptsTouchPhysics = false) {
     PhysicsPile pile(bodyCount, pipelined);
+    if (scriptsTouchPhysics) {
+        static_cast<void>(pile.scene->Runtime().AddSceneSystem(std::make_unique<PhysicsTouchingScript>(pile.bodies.front().Entity())));
+    }
     std::vector<double> milliseconds;
     milliseconds.reserve(static_cast<std::size_t>(steps));
     for (int step = 0; step < steps; ++step) {
@@ -2513,18 +2534,26 @@ void RunPhysicsStepSpikeBenchmark() {
     constexpr int kTrials = 3;
     constexpr double kFrameWorkMilliseconds = 8.0;
     std::array<double, kTrials> ratios{};
+    std::array<double, kTrials> touchingRatios{};
     for (int trial = 0; trial < kTrials; ++trial) {
         const StepTimes synchronous = MeasurePhysicsSteps(kBodies, false, kSteps, kFrameWorkMilliseconds);
         const StepTimes pipelined = MeasurePhysicsSteps(kBodies, true, kSteps, kFrameWorkMilliseconds);
         ratios[trial] = pipelined.p99 / synchronous.p99;
+        // Scripts that read and steer physics every frame must not give the overlap back.
+        const StepTimes syncTouching = MeasurePhysicsSteps(kBodies, false, kSteps, kFrameWorkMilliseconds, true);
+        const StepTimes pipelinedTouching = MeasurePhysicsSteps(kBodies, true, kSteps, kFrameWorkMilliseconds, true);
+        touchingRatios[trial] = pipelinedTouching.p99 / syncTouching.p99;
         std::cout << "physics_step_spikes bodies=" << kBodies << " steps=" << kSteps
                   << " sync_mean_ms=" << synchronous.mean << " sync_p99_ms=" << synchronous.p99 << " sync_max_ms=" << synchronous.max
                   << " pipelined_mean_ms=" << pipelined.mean << " pipelined_p99_ms=" << pipelined.p99
-                  << " pipelined_max_ms=" << pipelined.max << " p99_ratio=" << ratios[trial] << '\n';
+                  << " pipelined_max_ms=" << pipelined.max << " p99_ratio=" << ratios[trial] << " p99_ratio_with_script_calls=" << touchingRatios[trial] << '\n';
     }
     std::ranges::sort(ratios);
     kb::tests::Require(ratios[kTrials / 2] < 0.6,
         "Pipelining the physics step must cut the p99 update time of a 4000-body pile well below the synchronous one");
+    std::ranges::sort(touchingRatios);
+    kb::tests::Require(touchingRatios[kTrials / 2] < 0.6,
+        "Script calls into physics every frame must not take the pipelining gain away");
 }
 
 // Pipelining only moves the arrival of results: the poses of the scene after update k are exactly the poses a

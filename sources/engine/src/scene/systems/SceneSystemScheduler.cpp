@@ -151,6 +151,20 @@ void SceneSystemScheduler::BeginFrame(Scene& scene, float deltaSeconds) {
     }
 }
 
+void SceneSystemScheduler::EndUpdate(Scene& scene, float deltaSeconds) {
+    DispatchScope dispatchScope{ dispatching_ };
+    SceneSystemContext context{ scene, deltaSeconds };
+    for (const Entry& entry : systems_) {
+        try {
+            entry.system->OnUpdateEnd(context);
+        } catch (const std::exception& error) {
+            RecordSystemError("OnUpdateEnd", error.what());
+        } catch (...) {
+            RecordSystemError("OnUpdateEnd", nullptr);
+        }
+    }
+}
+
 void SceneSystemScheduler::Update(Scene& scene, float deltaSeconds, SceneUpdatePhase phase) {
     DispatchScope dispatchScope{ dispatching_ };
     SceneSystemContext context{ scene, deltaSeconds };
