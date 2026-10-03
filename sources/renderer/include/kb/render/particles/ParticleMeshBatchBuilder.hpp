@@ -1,6 +1,8 @@
 #pragma once
 
 #include "engine/particles/ParticleRenderSnapshot.hpp"
+#include "kb/render/resources/RenderResourceRegistry.hpp"
+#include "kb/render/scene/SceneRenderResourceMap.hpp"
 #include "kb/render/scene/batch/SceneMeshBatch.hpp"
 
 #include <cstdint>
@@ -18,13 +20,18 @@ namespace kb::render {
 class ParticleMeshBatchBuilder final {
 public:
     void Warmup(std::uint32_t particleCapacity);
-    void Build(const kb::particles::ParticleRenderSnapshot& snapshot) noexcept;
+    // With a camera and the resources, the particles of an emitter whose sort mode asks for it and whose material
+    // is translucent are put in the emitter's draw order (back to front, front to back, by distance or by age);
+    // opaque meshes are depth-tested and keep the snapshot order.
+    void Build(const kb::particles::ParticleRenderSnapshot& snapshot, const SceneRenderCamera* camera = nullptr,
+        const RenderResourceRegistry* resources = nullptr, const SceneRenderResourceMap* resourceMap = nullptr) noexcept;
 
     [[nodiscard]] const std::vector<SceneMeshBatch>& Batches() const noexcept { return batches_; }
 
 private:
     std::vector<SceneRenderMeshInstance> instances_;
     std::vector<SceneMeshBatch> batches_;
+    std::vector<std::uint32_t> orderScratch_;
 };
 
 } // namespace kb::render

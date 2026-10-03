@@ -75,6 +75,13 @@ struct ParticleGpuEmitterParams {
     std::uint32_t trailSegments = 0U;
     float trailSegmentSeconds = 0.0F;
     float trailWidth = 0.1F;
+    // Spin: every slot draws an angle in [spinMin, spinMax] (radians) and an angular velocity in
+    // [spinRateMin, spinRateMax] (radians per second) from a hash of its slot and birth time; its angle is
+    // angle + velocity x age. Equal bounds mean a fixed value.
+    float spinMin = 0.0F;
+    float spinMax = 0.0F;
+    float spinRateMin = 0.0F;
+    float spinRateMax = 0.0F;
 
     [[nodiscard]] constexpr bool HasCollision() const noexcept { return hasPlane || sceneDepthCollision; }
 };
@@ -98,6 +105,10 @@ struct ParticleGpuEmitterCommand {
     // Column-major world matrix of the owner, sent every step for local-space emitters.
     bool hasWorldMatrix = false;
     std::array<float, 16> worldMatrix{ 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F };
+    // Orientation (x, y, z, w) of a mesh emitter's particles: the owner's rotation times the emitter's own, sent
+    // every step like the CPU path publishes it with every snapshot.
+    bool hasOrientation = false;
+    std::array<float, 4> orientation{ 0.0F, 0.0F, 0.0F, 1.0F };
     std::vector<ParticleGpuSpawn> spawns;
 };
 

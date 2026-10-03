@@ -213,6 +213,8 @@ void CpuParticleBackend::Warmup() {
     particleLifetimes_.reserve(kb::scene::kParticleEffectMaxCpuParticlesPerScene);
     particleColors_.reserve(kb::scene::kParticleEffectMaxCpuParticlesPerScene);
     particleSizes_.reserve(kb::scene::kParticleEffectMaxCpuParticlesPerScene);
+    particleSpins_.reserve(kb::scene::kParticleEffectMaxCpuParticlesPerScene);
+    particleSpinRates_.reserve(kb::scene::kParticleEffectMaxCpuParticlesPerScene);
     particleEventDepths_.reserve(kb::scene::kParticleEffectMaxCpuParticlesPerScene);
     particlePrewarmGroups_.reserve(kb::scene::kParticleEffectMaxCpuParticlesPerScene);
     renderEmitterScratch_.resize(kb::particles::kParticleRenderSnapshotMaxEmitterRecords);
@@ -795,6 +797,8 @@ void CpuParticleBackend::RemoveParticles(std::uint64_t instanceId) noexcept {
         particleLifetimes_[index] = particleLifetimes_[last];
         particleColors_[index] = particleColors_[last];
         particleSizes_[index] = particleSizes_[last];
+        particleSpins_[index] = particleSpins_[last];
+        particleSpinRates_[index] = particleSpinRates_[last];
         particleEventDepths_[index] = particleEventDepths_[last];
         particlePrewarmGroups_[index] = particlePrewarmGroups_[last];
         particleInstanceIds_.pop_back();
@@ -809,6 +813,8 @@ void CpuParticleBackend::RemoveParticles(std::uint64_t instanceId) noexcept {
         particleLifetimes_.pop_back();
         particleColors_.pop_back();
         particleSizes_.pop_back();
+        particleSpins_.pop_back();
+        particleSpinRates_.pop_back();
         particleEventDepths_.pop_back();
         particlePrewarmGroups_.pop_back();
     }
@@ -1200,6 +1206,14 @@ bool CpuParticleBackend::SpawnExact(
             ? EvaluateCurve(emitter.sizeOverLife, 0.0F) : 1.0F);
         particleEventDepths_.push_back(eventDepth);
         particlePrewarmGroups_.push_back(prewarmGroup);
+        // Spin is drawn after everything else of the particle, and only from a real range, so effects that do not
+        // use it consume exactly the random numbers they always did.
+        particleSpins_.push_back(emitter.spinMinRadians != emitter.spinMaxRadians
+            ? emitter.spinMinRadians + (emitter.spinMaxRadians - emitter.spinMinRadians) * NextRandom01(runtime)
+            : emitter.spinMinRadians);
+        particleSpinRates_.push_back(emitter.spinRateMinRadians != emitter.spinRateMaxRadians
+            ? emitter.spinRateMinRadians + (emitter.spinRateMaxRadians - emitter.spinRateMinRadians) * NextRandom01(runtime)
+            : emitter.spinRateMinRadians);
         static_cast<void>(QueueInternalEvent({
             .instanceId = instanceId,
             .sourceEmitterIndex = emitterIndex,
@@ -1387,6 +1401,8 @@ void CpuParticleBackend::AdvanceParticleAges(
         particleLifetimes_[index] = particleLifetimes_[last];
         particleColors_[index] = particleColors_[last];
         particleSizes_[index] = particleSizes_[last];
+        particleSpins_[index] = particleSpins_[last];
+        particleSpinRates_[index] = particleSpinRates_[last];
         particleEventDepths_[index] = particleEventDepths_[last];
         particlePrewarmGroups_[index] = particlePrewarmGroups_[last];
         particleInstanceIds_.pop_back();
@@ -1401,6 +1417,8 @@ void CpuParticleBackend::AdvanceParticleAges(
         particleLifetimes_.pop_back();
         particleColors_.pop_back();
         particleSizes_.pop_back();
+        particleSpins_.pop_back();
+        particleSpinRates_.pop_back();
         particleEventDepths_.pop_back();
         particlePrewarmGroups_.pop_back();
         ++stepTelemetry_.deaths;
@@ -1833,7 +1851,7 @@ kb::particles::ParticleRenderSnapshotResult CpuParticleBackend::PublishRenderSna
             .position = particlePositions_[particleIndex],
             .size = particleSizes_[particleIndex],
             .previousPosition = particlePreviousPositions_[particleIndex],
-            .rotationRadians = 0.0F,
+            .rotationRadians = particleSpins_[particleIndex] + particleSpinRates_[particleIndex] * particleAges_[particleIndex],
             .velocity = particleVelocities_[particleIndex],
             .stretch = std::max(emitter.stretchMinimumLength, speed * emitter.stretchVelocityScale),
             .particleId = particleIds_[particleIndex],
@@ -1992,6 +2010,10 @@ kb::particles::ParticleGpuEmitterParams CpuParticleBackend::BuildGpuParams(
         params.size[sample] = emitter.sizeOverLife.keyCount > 0U ? EvaluateCurve(emitter.sizeOverLife, age) : 1.0F;
     }
     params.textureAtlasAssetId = emitter.textureAtlasAssetId;
+    params.spinMin = emitter.spinMinRadians;
+    params.spinMax = emitter.spinMaxRadians;
+    params.spinRateMin = emitter.spinRateMinRadians;
+    params.spinRateMax = emitter.spinRateMaxRadians;
     params.capacity = maxParticlesOverrides_[denseIndex] != 0U
         ? std::min(emitter.maxParticles, maxParticlesOverrides_[denseIndex]) : emitter.maxParticles;
     params.output = ToRenderOutput(emitter.outputType);
@@ -2105,13 +2127,15 @@ void CpuParticleBackend::FlushGpuSpawns() noexcept {
         kb::particles::ParticlePlayback::QueueGpuEmitterCommand(*gpuScene_, std::move(command));
     }
     gpuPending_.clear();
-    // Local-space emitters follow their owner: refresh the world matrix of every one of them each step.
+    // Local-space emitters follow their owner (world matrix) and mesh emitters orient their instances by it
+    // (owner rotation times the emitter's own): refresh both of them each step.
     for (std::uint32_t denseIndex = 0U; denseIndex < denseInstanceCount_; ++denseIndex) {
         if (playbackStates_[denseIndex] == PlaybackState::Stopped) continue;
         const CompiledEffect& effect = *compiledEffects_[instanceRuntime_[denseIndex].compiledEffectIndex].effect;
         for (std::uint8_t emitterIndex = 0U; emitterIndex < effect.emitterCount; ++emitterIndex) {
-            if (effect.emitters[emitterIndex].simulationSpace != kb::scene::ParticleSimulationSpace::Local ||
-                !GpuEligible(denseIndex, emitterIndex, UINT8_MAX)) {
+            const bool local = effect.emitters[emitterIndex].simulationSpace == kb::scene::ParticleSimulationSpace::Local;
+            const bool mesh = effect.emitters[emitterIndex].outputType == kb::scene::ParticleOutputType::Mesh;
+            if ((!local && !mesh) || !GpuEligible(denseIndex, emitterIndex, UINT8_MAX)) {
                 continue;
             }
             const kb::scene::WorldTransform& owner = ownerTransforms_[denseIndex];
@@ -2121,9 +2145,16 @@ void CpuParticleBackend::FlushGpuSpawns() noexcept {
             kb::particles::ParticleGpuEmitterCommand command{};
             command.key = { MakeInstanceId(denseToSlot_[denseIndex], slotGenerations_[denseToSlot_[denseIndex]]), effect.emitters[emitterIndex].emitterId };
             command.simTime = gpuSimTime_;
-            command.hasWorldMatrix = true;
-            command.worldMatrix = { axisX.x, axisX.y, axisX.z, 0.0F, axisY.x, axisY.y, axisY.z, 0.0F,
-                axisZ.x, axisZ.y, axisZ.z, 0.0F, owner.position.x, owner.position.y, owner.position.z, 1.0F };
+            if (local) {
+                command.hasWorldMatrix = true;
+                command.worldMatrix = { axisX.x, axisX.y, axisX.z, 0.0F, axisY.x, axisY.y, axisY.z, 0.0F,
+                    axisZ.x, axisZ.y, axisZ.z, 0.0F, owner.position.x, owner.position.y, owner.position.z, 1.0F };
+            }
+            if (mesh) {
+                const kb::math::Quat basis = kb::math::Normalize(owner.rotation * effect.emitters[emitterIndex].localRotation);
+                command.hasOrientation = true;
+                command.orientation = { basis.x, basis.y, basis.z, basis.w };
+            }
             kb::particles::ParticlePlayback::QueueGpuEmitterCommand(*gpuScene_, std::move(command));
         }
     }

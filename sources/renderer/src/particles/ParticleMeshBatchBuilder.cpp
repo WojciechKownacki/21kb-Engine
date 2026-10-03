@@ -1,7 +1,9 @@
 #include "kb/render/particles/ParticleMeshBatchBuilder.hpp"
 
 #include "engine/math/EngineMath.hpp"
+#include "scene/lighting/SceneLightingPacker.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 namespace kb::render {
@@ -49,7 +51,8 @@ void ParticleMeshBatchBuilder::Warmup(std::uint32_t particleCapacity) {
     batches_.reserve(kb::particles::kParticleRenderSnapshotMaxEmitterRecords);
 }
 
-void ParticleMeshBatchBuilder::Build(const kb::particles::ParticleRenderSnapshot& snapshot) noexcept {
+void ParticleMeshBatchBuilder::Build(const kb::particles::ParticleRenderSnapshot& snapshot, const SceneRenderCamera* camera,
+    const RenderResourceRegistry* resources, const SceneRenderResourceMap* resourceMap) noexcept {
     instances_.clear();
     batches_.clear();
     if (snapshot.IsTombstone()) return;
@@ -82,8 +85,42 @@ void ParticleMeshBatchBuilder::Build(const kb::particles::ParticleRenderSnapshot
         const bool receivesShadow = kb::particles::HasParticleRenderEmitterFlag(
             emitter.flags, kb::particles::ParticleRenderEmitterFlag::ReceivesShadow);
 
+        // The draw order of a translucent emitter: indices into its particles, sorted like the billboard batcher does.
+        orderScratch_.resize(emitter.particleCount);
+        for (std::uint32_t local = 0U; local < emitter.particleCount; ++local) orderScratch_[local] = local;
+        const RenderMaterialResource* material = resources != nullptr && resourceMap != nullptr
+            ? resources->FindMaterial(resourceMap->ResolveMaterial(emitter.materialAssetId)) : nullptr;
+        const bool translucent = material != nullptr && material->alphaMode == RenderMaterialAlphaMode::Blend;
+        if (camera != nullptr && translucent && emitter.sort != kb::particles::ParticleRenderSortMode::None) {
+            const std::array<float, 4> cameraPosition = SceneLightingPacker::CameraPosition(camera);
+            const auto key = [&](std::uint32_t local) noexcept {
+                const auto& particle = particles[emitter.firstParticle + local];
+                switch (emitter.sort) {
+                case kb::particles::ParticleRenderSortMode::BackToFront:
+                case kb::particles::ParticleRenderSortMode::FrontToBack:
+                    return camera->view[2] * particle.position.x + camera->view[6] * particle.position.y +
+                        camera->view[10] * particle.position.z + camera->view[14];
+                case kb::particles::ParticleRenderSortMode::Distance: {
+                    const float dx = particle.position.x - cameraPosition[0];
+                    const float dy = particle.position.y - cameraPosition[1];
+                    const float dz = particle.position.z - cameraPosition[2];
+                    return dx * dx + dy * dy + dz * dz;
+                }
+                case kb::particles::ParticleRenderSortMode::Age: return static_cast<float>(particle.normalizedAgeUnorm);
+                case kb::particles::ParticleRenderSortMode::None: break;
+                }
+                return 0.0F;
+            };
+            const bool descending = emitter.sort != kb::particles::ParticleRenderSortMode::FrontToBack;
+            std::sort(orderScratch_.begin(), orderScratch_.end(), [&](std::uint32_t lhs, std::uint32_t rhs) noexcept {
+                const float lhsKey = key(lhs);
+                const float rhsKey = key(rhs);
+                if (lhsKey == rhsKey) return particles[emitter.firstParticle + lhs].particleId < particles[emitter.firstParticle + rhs].particleId;
+                return descending ? lhsKey > rhsKey : lhsKey < rhsKey;
+            });
+        }
         const std::size_t firstInstance = instances_.size();
-        for (std::uint32_t local = 0U; local < emitter.particleCount; ++local) {
+        for (const std::uint32_t local : orderScratch_) {
             const auto& particle = particles[emitter.firstParticle + local];
             const kb::math::Quat orientation = basis * SpinAroundZ(particle.rotationRadians);
             const kb::math::Vec3 scale{particle.size, particle.size, particle.size};

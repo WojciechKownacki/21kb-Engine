@@ -9,7 +9,7 @@
 
 namespace kb::particles {
 
-inline constexpr std::uint32_t kParticleCompiledEffectVersion = 4U;
+inline constexpr std::uint32_t kParticleCompiledEffectVersion = 5U;
 
 enum class ParticleCompilePlatform : std::uint8_t {
     PlatformIndependent,
@@ -102,6 +102,11 @@ struct ParticleCompiledEmitter {
     float lifetimeMin = 1.0F;
     float lifetimeMax = 1.0F;
     float prewarmSeconds = 0.0F;
+    // Spin of a particle at birth (radians) and its angular velocity (radians per second), each drawn from [min, max].
+    float spinMinRadians = 0.0F;
+    float spinMaxRadians = 0.0F;
+    float spinRateMinRadians = 0.0F;
+    float spinRateMaxRadians = 0.0F;
     std::uint8_t rateKeyCount = 0U;
     std::uint8_t burstCount = 0U;
     std::array<ParticleCompiledCurveKey, kb::scene::kParticleEffectMaxCurveKeys> rateKeys{};

@@ -152,5 +152,5 @@ void main()
 
     stateRecords[slot * 2u] = vec4(position, now);
     stateRecords[slot * 2u + 1u] = vec4(velocity, stamp);
-    WriteLiveInstance(base, position, velocity, age / lifetime);
+    WriteLiveInstance(base, position, velocity, age / lifetime, ParticleSpin(slot, start.w, age));
 }

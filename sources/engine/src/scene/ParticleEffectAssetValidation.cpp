@@ -242,7 +242,13 @@ ParticleEffectValidationResult ParticleEffectAssetValidator::ValidateStructure(c
             emitter.spawn.startColor.g < 0.0F || emitter.spawn.startColor.g > 1.0F ||
             emitter.spawn.startColor.b < 0.0F || emitter.spawn.startColor.b > 1.0F ||
             emitter.spawn.startColor.a < 0.0F || emitter.spawn.startColor.a > 1.0F ||
-            !Finite(emitter.spawn.startSize) || emitter.spawn.startSize <= 0.0F)
+            !Finite(emitter.spawn.startSize) || emitter.spawn.startSize <= 0.0F ||
+            !Finite(emitter.spawn.initialRotationMinDegrees) || !Finite(emitter.spawn.initialRotationMaxDegrees) ||
+            emitter.spawn.initialRotationMinDegrees > emitter.spawn.initialRotationMaxDegrees ||
+            std::abs(emitter.spawn.initialRotationMinDegrees) > 3600.0F || std::abs(emitter.spawn.initialRotationMaxDegrees) > 3600.0F ||
+            !Finite(emitter.spawn.angularVelocityMinDegrees) || !Finite(emitter.spawn.angularVelocityMaxDegrees) ||
+            emitter.spawn.angularVelocityMinDegrees > emitter.spawn.angularVelocityMaxDegrees ||
+            std::abs(emitter.spawn.angularVelocityMinDegrees) > 36000.0F || std::abs(emitter.spawn.angularVelocityMaxDegrees) > 36000.0F)
             Add(result, ParticleEffectDiagnosticCode::InvalidValue, base + ".spawn",
                 "spawn values are outside the supported range", emitter.emitterId);
 
