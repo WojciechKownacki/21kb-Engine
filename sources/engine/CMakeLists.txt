@@ -1707,6 +1707,16 @@ if(BUILD_TESTING)
     add_test(NAME kb_engine_tests COMMAND $<TARGET_FILE:kb_engine_tests>)
     set_tests_properties(kb_engine_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+    # Machine-independent performance gates: each compares two measurements taken in the same run.
+    foreach(kb_perf_suite physics-step-spikes scene-transform-bench)
+        add_test(NAME kb_engine_${kb_perf_suite} COMMAND $<TARGET_FILE:kb_engine_tests> ${kb_perf_suite})
+        set_tests_properties(kb_engine_${kb_perf_suite} PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+            LABELS "performance"
+            TIMEOUT 300
+        )
+    endforeach()
+
     kb_apply_quality_gates(kb_engine_tests)
 
     # Produces a real, writer-validated package used by the Android packaging
