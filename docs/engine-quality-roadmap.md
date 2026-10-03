@@ -36,7 +36,7 @@ Kryterium „zrobione" = test, który musi przejść; test ma być headless (bez
 - **A3 — Cienie punktowe poza ograniczeniami** · P2 · M · **zrobione częściowo** (materiały z grafu odbierają cienie punktowe, kaskady płynnie przechodzą; limit 4 świateł bez zmian)
   Materiały z edytora grafów nie odbierają cieni punktowych; limit 4 światła; brak płynnego przejścia kaskad.
   Zrobione gdy: test dla materiału grafowego oraz test przejścia między kaskadami bez widocznego szwu.
-- **A4 — Ambient occlusion i odbicia w przestrzeni ekranu** · P2 · L · do zrobienia
+- **A4 — Ambient occlusion i odbicia w przestrzeni ekranu** · P2 · L · **zrobione** (AO: 149 → 127,5 przy ścianie; SSR: czerwień odbicia −9,3 → 21,9)
   Zrobione gdy: testy pikselowe dla obu efektów + przełączniki w konfiguracji.
 - **A5 — GI poza ekranem (sondy lub voxele)** · P3 · L · do zrobienia
   Zrobione gdy: oświetlenie pośrednie z obiektów spoza kadru widoczne w teście pikselowym.

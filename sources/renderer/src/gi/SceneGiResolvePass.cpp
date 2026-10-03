@@ -50,7 +50,6 @@ bool SceneGiResolvePass::Initialize() {
     cameraPositionUniform_ = bgfx::createUniform("u_deferredCameraPosition", bgfx::UniformType::Vec4);
     inverseViewProjectionUniform_ = bgfx::createUniform("u_deferredInverseViewProjection", bgfx::UniformType::Mat4);
     depthParamsUniform_ = bgfx::createUniform("u_deferredDepthParams", bgfx::UniformType::Vec4);
-    viewProjUniform_ = bgfx::createUniform("u_giViewProj", bgfx::UniformType::Mat4);
     if (!IsInitialized()) {
         Shutdown();
         return false;
@@ -61,7 +60,7 @@ bool SceneGiResolvePass::Initialize() {
 void SceneGiResolvePass::Shutdown() noexcept {
     giUniforms_.Destroy();
     for (bgfx::UniformHandle* handle : { &normalSampler_, &depthSampler_, &litSampler_, &cameraPositionUniform_,
-             &inverseViewProjectionUniform_, &depthParamsUniform_, &viewProjUniform_ }) {
+             &inverseViewProjectionUniform_, &depthParamsUniform_ }) {
         if (bgfx::isValid(*handle)) {
             bgfx::destroy(*handle);
         }
@@ -76,7 +75,7 @@ void SceneGiResolvePass::Shutdown() noexcept {
 bool SceneGiResolvePass::IsInitialized() const noexcept {
     return bgfx::isValid(program_) && giUniforms_.IsValid() && bgfx::isValid(normalSampler_) && bgfx::isValid(depthSampler_) &&
         bgfx::isValid(litSampler_) && bgfx::isValid(cameraPositionUniform_) && bgfx::isValid(inverseViewProjectionUniform_) &&
-        bgfx::isValid(depthParamsUniform_) && bgfx::isValid(viewProjUniform_);
+        bgfx::isValid(depthParamsUniform_);
 }
 
 bool SceneGiResolvePass::Submit(const SceneGiResolvePassDesc& desc) const {
@@ -116,9 +115,8 @@ bool SceneGiResolvePass::Submit(const SceneGiResolvePassDesc& desc) const {
     bgfx::setUniform(cameraPositionUniform_, cameraPosition.data());
     bgfx::setUniform(inverseViewProjectionUniform_, inverseViewProjection.data());
     bgfx::setUniform(depthParamsUniform_, depthParams.data());
-    bgfx::setUniform(viewProjUniform_, viewProjection.data());
     const SceneGiBinding binding = desc.history->Binding();
-    giUniforms_.Set(&binding, desc.lightingConfig, BGFX_INVALID_HANDLE);
+    giUniforms_.Set(&binding, desc.lightingConfig, viewProjection, BGFX_INVALID_HANDLE);
     bgfx::setTexture(kNormalStage, normalSampler_, desc.gbuffer->NormalTexture());
     bgfx::setTexture(kDepthStage, depthSampler_, desc.gbuffer->DepthTexture());
     bgfx::setTexture(kLitStage, litSampler_, desc.history->LitTexture());

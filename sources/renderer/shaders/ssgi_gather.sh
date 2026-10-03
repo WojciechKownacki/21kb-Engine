@@ -2,12 +2,6 @@
 // this frame's lit colour (s_giLit), so bounced light follows dynamic lights and objects.
 // Needs ReconstructWorldPosition, s_gbufferDepth, s_gbufferNormal, u_deferredCameraPosition and ssgi.sh.
 SAMPLER2D(s_giLit, 9);
-uniform mat4 u_giViewProj;
-
-float KbGiHash(vec2 p, float seed)
-{
-    return fract(sin(dot(p, vec2(12.9898, 78.233)) + seed * 37.719) * 43758.5453);
-}
 
 vec3 KbGiDirection(vec3 n, float u1, float u2)
 {

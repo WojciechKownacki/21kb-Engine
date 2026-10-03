@@ -33,6 +33,9 @@ uniform vec4 u_deferredBackdropHorizon;
 uniform vec4 u_deferredBackdropZenith;
 uniform vec4 u_deferredBackdropParams;
 
+#include "ssgi.sh"
+#include "ssr.sh"
+
 vec3 FresnelSchlick(float cosTheta, vec3 f0)
 {
     return f0 + (vec3(1.0, 1.0, 1.0) - f0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
@@ -77,7 +80,9 @@ vec3 EnvironmentColor(vec3 direction)
     return u_deferredEnvironmentParams.x < 1.5 ? constantColor : hemisphereColor;
 }
 
-vec3 EvaluateEnvironment(vec3 normal, vec3 viewDir, vec3 albedo, float metallic, float roughness, float specular, float occlusion)
+// `reflection` is the screen-space reflection (rgb radiance, a confidence); it replaces the environment
+// specular where a ray hit something.
+vec3 EvaluateEnvironment(vec3 normal, vec3 viewDir, vec3 albedo, float metallic, float roughness, float specular, float occlusion, vec4 reflection)
 {
     if (u_deferredEnvironmentParams.x < 0.5) {
         return vec3(0.0, 0.0, 0.0);
@@ -90,7 +95,8 @@ vec3 EvaluateEnvironment(vec3 normal, vec3 viewDir, vec3 albedo, float metallic,
     vec3 reflectionDir = reflect(-viewDir, normal);
     float specularEnergy = mix(1.0, 0.18, roughness * roughness);
     vec3 specularEnv = EnvironmentColor(reflectionDir) * fresnel * specularEnergy * u_deferredEnvironmentParams.z;
-    return diffuseEnv + specularEnv;
+    vec3 specularSsr = reflection.rgb * fresnel * specularEnergy * u_ssrParams.x;
+    return diffuseEnv + mix(specularEnv, specularSsr, reflection.a);
 }
 
 vec3 EvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldPos, vec3 albedo, float metallic, float roughness, float specular, float occlusion)
@@ -175,8 +181,6 @@ float SampleShadowVisibility(vec3 shadowCoord)
     return mix(1.0, 1.0 - u_deferredShadowParams.y, selectedShadow);
 }
 
-#include "ssgi.sh"
-
 void main()
 {
     vec4 albedo = texture2D(s_gbufferAlbedo, v_texcoord0);
@@ -241,7 +245,13 @@ void main()
         }
     }
 
-    vec3 lighting = EvaluateEnvironment(normal, viewDir, albedo.rgb, metallic, roughness, specular, occlusion);
+    // Screen-space results of the previous frame: bounce light, ambient visibility, reflections.
+    vec3 giAccumulated;
+    float aoAccumulated;
+    KbScreenSpaceAccumulated(worldPos, giAccumulated, aoAccumulated);
+    aoAccumulated = mix(1.0, aoAccumulated, step(0.0001, u_aoParams.x));
+    vec4 reflection = KbScreenSpaceReflection(worldPos, normal, viewDir, roughness, gl_FragCoord.xy);
+    vec3 lighting = EvaluateEnvironment(normal, viewDir, albedo.rgb, metallic, roughness, specular, occlusion * aoAccumulated, reflection);
 
     vec2 lightList = KbLightGridList(worldPos, u_deferredLightParams.x);
     for (int entry = 0; entry < int(lightList.y); ++entry) {
@@ -253,7 +263,7 @@ void main()
     }
 
     if (u_giParams.x > 0.0) {
-        lighting += KbGiAccumulated(worldPos).rgb * albedo.rgb * ((1.0 - metallic) * occlusion * u_giParams.x);
+        lighting += giAccumulated * albedo.rgb * ((1.0 - metallic) * occlusion * aoAccumulated * u_giParams.x);
     }
 
     gl_FragColor = vec4(lighting + surface.rgb, 1.0);

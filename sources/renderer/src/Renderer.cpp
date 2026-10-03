@@ -1082,8 +1082,8 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
          worldBackdrop->mode == SceneRenderWorldBackdropMode::EnvironmentMap);
     const bool deferredLighting = UsesDeferredLighting(effectiveLightingConfig.lightingPath) ||
         effectiveLightingConfig.debugView == SceneRenderDebugView::GBufferNormal || backdropRequiresDeferredPass ||
-        // Screen-space GI reads the G-buffer, so it implies the deferred path.
-        effectiveLightingConfig.globalIllumination == SceneRenderGlobalIlluminationMode::SsGi;
+        // Screen-space GI, ambient occlusion and reflections read the G-buffer, so they imply the deferred path.
+        UsesScreenSpaceEffects(effectiveLightingConfig);
     RenderMaterialGraphBuildContext runtimeGraphContext = desc.materialGraphContext;
     runtimeGraphContext.shadingPath = deferredLighting
         ? RenderMaterialGraphShadingPath::Deferred
@@ -1442,7 +1442,7 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
             return false;
         }
         SceneGiBinding giBinding{};
-        const bool giEnabled = effectiveLightingConfig.globalIllumination == SceneRenderGlobalIlluminationMode::SsGi;
+        const bool giEnabled = UsesScreenSpaceEffects(effectiveLightingConfig);
         if (giEnabled && giHistories_[desc.target.viewport.viewportIndex].Ensure(desc.target.viewport.extent, desc.target.colorFormat)) {
             giBinding = giHistories_[desc.target.viewport.viewportIndex].Binding();
         }
@@ -1522,7 +1522,7 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport transparent pass end");
     }
 
-    if (deferredLighting && effectiveLightingConfig.globalIllumination == SceneRenderGlobalIlluminationMode::SsGi &&
+    if (deferredLighting && UsesScreenSpaceEffects(effectiveLightingConfig) &&
         sceneCamera != nullptr && bgfx::isValid(desc.target.colorTexture)) {
         // The gather reads this frame's finished lit colour; its accumulated result lights the next frame.
         SceneGiHistory& giHistory = giHistories_[desc.target.viewport.viewportIndex];

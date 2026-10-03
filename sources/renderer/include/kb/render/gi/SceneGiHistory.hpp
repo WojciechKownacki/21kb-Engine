@@ -9,19 +9,25 @@
 
 namespace kb::render {
 
-// What the deferred lighting pass needs to add the accumulated bounce light to the current frame.
+// What the deferred lighting pass needs to apply the screen-space results of the previous frame.
 struct SceneGiBinding {
     // Resolved bounce light of the previous frame: rgb = radiance, a = view depth of the surface.
     bgfx::TextureHandle accum = BGFX_INVALID_HANDLE;
-    // View-projection of the frame that `accum` was resolved for, used to reproject into it.
+    // Ambient visibility of the previous frame (r), resolved together with `accum`.
+    bgfx::TextureHandle aoAccum = BGFX_INVALID_HANDLE;
+    // Lit colour of the previous frame, the radiance source of screen-space reflections.
+    bgfx::TextureHandle lit = BGFX_INVALID_HANDLE;
+    // View-projection of the frame that the three textures belong to, used to reproject into it.
     std::array<float, 16> accumViewProjection{};
     std::uint32_t frameIndex = 0U;
-    // False until a frame has been resolved; the pass then skips the bounce light.
+    // False until a frame has been resolved; the pass then skips the screen-space results.
     bool active = false;
 };
 
-// Per-viewport screen-space GI state: a copy of the frame's lit HDR colour (the radiance source of the
-// gather) and two accumulation targets that ping-pong between "last resolved frame" and "being resolved".
+// Per-viewport screen-space GI, ambient occlusion and reflection state: a copy of the frame's lit HDR
+// colour (the radiance source of the gather and of reflections) and two accumulation targets that
+// ping-pong between "last resolved frame" and "being resolved". Each target holds the GI radiance with
+// the surface depth in a and the ambient visibility in a second attachment.
 class SceneGiHistory {
 public:
     ~SceneGiHistory();
@@ -47,6 +53,7 @@ public:
 private:
     bgfx::TextureHandle lit_ = BGFX_INVALID_HANDLE;
     std::array<bgfx::TextureHandle, 2> accum_{ bgfx::TextureHandle{ bgfx::kInvalidHandle }, bgfx::TextureHandle{ bgfx::kInvalidHandle } };
+    std::array<bgfx::TextureHandle, 2> aoAccum_{ bgfx::TextureHandle{ bgfx::kInvalidHandle }, bgfx::TextureHandle{ bgfx::kInvalidHandle } };
     std::array<bgfx::FrameBufferHandle, 2> frameBuffers_{ bgfx::FrameBufferHandle{ bgfx::kInvalidHandle }, bgfx::FrameBufferHandle{ bgfx::kInvalidHandle } };
     RenderExtent extent_{};
     bgfx::TextureFormat::Enum format_ = bgfx::TextureFormat::Count;
