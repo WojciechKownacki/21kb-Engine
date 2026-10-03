@@ -299,6 +299,11 @@ struct SceneRenderLightingConfig {
     float editorPreviewKeyLightIntensity = 0.0F;
     SceneRenderIblConfig ibl{};
     SceneRenderGlobalIlluminationMode globalIllumination = SceneRenderGlobalIlluminationMode::Disabled;
+    // Screen-space GI: bounce strength, how far (m) rays travel, and how much of the previous frame's
+    // result is kept (0 = no temporal accumulation, the raw noisy gather).
+    float giIntensity = 1.0F;
+    float giRange = 3.0F;
+    float giHistoryWeight = 0.9F;
     std::uint32_t shadowMapSize = 1024U;
     std::uint32_t shadowCascadeCount = 4U;
     std::uint32_t shadowAtlasSize = 2048U;

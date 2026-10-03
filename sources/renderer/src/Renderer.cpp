@@ -351,6 +351,8 @@ bool Renderer::Initialize(RenderSurface& surface, const DisplayConfig* config) {
         Shutdown();
         return false;
     }
+    // Optional: without its shader screen-space GI simply contributes nothing.
+    static_cast<void>(giResolvePass_.Initialize());
     if (displayConfig_.enableEditorRendering && !editorPassSubmitter_.Initialize()) {
         Shutdown();
         return false;
@@ -427,6 +429,7 @@ void Renderer::Shutdown() {
         finalCompositePass_->Shutdown();
         finalCompositePass_.reset();
     }
+    giResolvePass_.Shutdown();
     if (deferredLightingPass_ != nullptr) {
         deferredLightingPass_->Shutdown();
         deferredLightingPass_.reset();
@@ -1521,9 +1524,17 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
 
     if (deferredLighting && effectiveLightingConfig.globalIllumination == SceneRenderGlobalIlluminationMode::SsGi &&
         sceneCamera != nullptr && bgfx::isValid(desc.target.colorTexture)) {
-        // Next frame's bounce lookups read this frame's finished lit colour.
-        giHistories_[desc.target.viewport.viewportIndex].Capture(
-            viewportPlan.viewIds.sceneOverlays, desc.target.colorTexture, RendererMatrixMath::ViewProjection(*sceneCamera));
+        // The gather reads this frame's finished lit colour; its accumulated result lights the next frame.
+        SceneGiHistory& giHistory = giHistories_[desc.target.viewport.viewportIndex];
+        giHistory.Capture(viewportPlan.viewIds.sceneOverlays, desc.target.colorTexture);
+        static_cast<void>(giResolvePass_.Submit(SceneGiResolvePassDesc{
+            .viewId = viewportPlan.viewIds.giResolve,
+            .history = &giHistory,
+            .gbuffer = &sceneGBuffer,
+            .camera = sceneCamera,
+            .lightingConfig = effectiveLightingConfig,
+            .extent = desc.target.viewport.extent,
+        }));
     }
 
     RenderSceneSubmitDesc editorOverlayDesc = desc;

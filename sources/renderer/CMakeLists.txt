@@ -106,6 +106,8 @@ add_library(kb_renderer STATIC
     include/kb/render/shadow/ShadowMapResource.hpp
     include/kb/render/shadow/PointShadowUniforms.hpp
     include/kb/render/gi/SceneGiHistory.hpp
+    include/kb/render/gi/SceneGiResolvePass.hpp
+    include/kb/render/gi/SceneGiUniforms.hpp
     include/kb/render/particles/ParticleGpuEmitterSimulation.hpp
     include/kb/render/ViewIdPolicy.hpp
     src/BgfxContext.cpp
@@ -348,6 +350,8 @@ add_library(kb_renderer STATIC
     src/shadow/ShadowMapResource.cpp
     src/shadow/PointShadowPassPlanner.cpp
     src/gi/SceneGiHistory.cpp
+    src/gi/SceneGiResolvePass.cpp
+    src/gi/SceneGiUniforms.cpp
     src/particles/ParticleGpuEmitterSimulation.cpp
     src/shadow/PointShadowPassPlanner.hpp
     src/private/ui/ScreenUIBackgroundBlur.hpp
@@ -549,6 +553,7 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_post_motion_vectors.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_post_taa_resolve.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_deferred_lighting.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_ssgi_resolve.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_editor_gizmo.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_editor_grid.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_editor_selection_outline.sc

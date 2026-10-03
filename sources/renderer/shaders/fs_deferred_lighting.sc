@@ -6,6 +6,7 @@ $input v_texcoord0
 #include "shadow_cascades.sh"
 #include "point_shadow.sh"
 #include "gbuffer_contract.sh"
+#include "gbuffer_position.sh"
 
 SAMPLER2D(s_gbufferAlbedo, 0);
 SAMPLER2D(s_gbufferNormal, 1);
@@ -24,9 +25,6 @@ uniform vec4 u_deferredAmbientColor;
 uniform vec4 u_deferredEnvironmentZenith;
 uniform vec4 u_deferredEnvironmentGround;
 uniform vec4 u_deferredEnvironmentParams;
-uniform vec4 u_deferredCameraPosition;
-uniform mat4 u_deferredInverseViewProjection;
-uniform vec4 u_deferredDepthParams;
 uniform mat4 u_deferredShadowViewProj;
 uniform vec4 u_deferredShadowParams;
 // x: 1 for gradient/procedural, 2 for an equirectangular environment map;
@@ -69,15 +67,6 @@ float DiffuseBurley(float nDotV, float nDotL, float lDotH, float roughness)
     float lightScatter = 1.0 + (fd90 - 1.0) * pow(clamp(1.0 - nDotL, 0.0, 1.0), 5.0);
     float viewScatter = 1.0 + (fd90 - 1.0) * pow(clamp(1.0 - nDotV, 0.0, 1.0), 5.0);
     return lightScatter * viewScatter * energyFactor;
-}
-
-vec3 ReconstructWorldPosition(vec2 uv, float depth)
-{
-    vec2 ndc = vec2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
-    float clipDepth = u_deferredDepthParams.x > 0.5 ? depth * 2.0 - 1.0 : depth;
-    vec4 world = mul(u_deferredInverseViewProjection, vec4(ndc, clipDepth, 1.0));
-    world.xyz /= max(world.w, 0.000001);
-    return world.xyz;
 }
 
 vec3 EnvironmentColor(vec3 direction)
@@ -260,7 +249,7 @@ void main()
     }
 
     if (u_giParams.x > 0.0) {
-        lighting += KbScreenSpaceGi(worldPos, normal, gl_FragCoord.xy) * albedo.rgb * ((1.0 - metallic) * occlusion * u_giParams.x);
+        lighting += KbGiAccumulated(worldPos).rgb * albedo.rgb * ((1.0 - metallic) * occlusion * u_giParams.x);
     }
 
     gl_FragColor = vec4(lighting + surface.rgb, 1.0);
