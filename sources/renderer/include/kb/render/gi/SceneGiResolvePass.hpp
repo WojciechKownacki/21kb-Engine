@@ -18,8 +18,9 @@ struct SceneGiResolvePassDesc {
     RenderExtent extent{};
 };
 
-// Gathers this frame's screen-space bounce light, blends it with the previous frame's and stores the
-// result in the history's resolve target; the deferred lighting pass of the next frame adds it.
+// Gathers this frame's screen-space bounce light and ambient occlusion, blends them with the previous
+// frame's and stores the result in the history's resolve target; the deferred lighting pass of the next
+// frame applies it.
 class SceneGiResolvePass {
 public:
     SceneGiResolvePass() = default;
@@ -43,7 +44,6 @@ private:
     bgfx::UniformHandle cameraPositionUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle inverseViewProjectionUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle depthParamsUniform_ = BGFX_INVALID_HANDLE;
-    bgfx::UniformHandle viewProjUniform_ = BGFX_INVALID_HANDLE;
 };
 
 } // namespace kb::render

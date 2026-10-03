@@ -304,6 +304,15 @@ struct SceneRenderLightingConfig {
     float giIntensity = 1.0F;
     float giRange = 3.0F;
     float giHistoryWeight = 0.9F;
+    // Screen-space ambient occlusion of the indirect light: strength and radius (m) of the sampled hemisphere.
+    bool ambientOcclusionEnabled = false;
+    float aoIntensity = 1.0F;
+    float aoRadius = 0.6F;
+    // Screen-space reflections of the previous frame's lit colour on smooth surfaces: strength and how far
+    // (m) a reflection ray travels.
+    bool screenSpaceReflectionsEnabled = false;
+    float ssrIntensity = 1.0F;
+    float ssrMaxDistance = 25.0F;
     std::uint32_t shadowMapSize = 1024U;
     std::uint32_t shadowCascadeCount = 4U;
     std::uint32_t shadowAtlasSize = 2048U;

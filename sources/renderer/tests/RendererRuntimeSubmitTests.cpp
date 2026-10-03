@@ -6829,6 +6829,178 @@ struct GiFloorStats {
     return stats;
 }
 
+// A small scene for the screen-space effects: boxes (white matte, red matte or glossy white) lit by
+// point lights, rendered for several frames into a square readback target.
+enum class SsMaterial : std::uint8_t { White, Red, Glossy };
+
+struct SsBox {
+    kb::scene::Vec3 position;
+    kb::scene::Vec3 scale;
+    SsMaterial material = SsMaterial::White;
+};
+
+[[nodiscard]] std::vector<std::uint8_t> RenderScreenSpaceScene(
+    const std::vector<SsBox>& boxes, const std::vector<kb::scene::Vec3>& pointLights, bx::Vec3 eye, bx::Vec3 target,
+    float fovDegrees, const SceneRenderLightingConfig& lighting, int frames, std::uint16_t size) {
+    static int counter = 0;
+    const std::filesystem::path root = std::filesystem::temp_directory_path() /
+        ("21kb_ss_scene_" + std::to_string(GetCurrentProcessId()) + "_" + std::to_string(counter++));
+    std::error_code error;
+    std::filesystem::create_directories(root, error);
+    Require(!error, "Screen-space test could not create its asset directory");
+    WriteStressCubeObj(root / "cube.obj");
+
+    kb::scene::Scene scene;
+    kb::scene::SceneLightingAccess::SetBasicLightingEnabled(scene, true);
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    Require(manager.RegisterLoader(std::make_unique<RenderMeshAssetLoader>()) &&
+            manager.RegisterLoader(std::make_unique<RenderMaterialAssetLoader>()) &&
+            manager.RegisterLoader(std::make_unique<RenderTextureAssetLoader>()),
+        "Screen-space test could not register render asset loaders");
+    Require(manager.Mounts().Mount("Game", root) && manager.DiscoverMountedAssets() >= 1U,
+        "Screen-space test could not discover its mesh");
+    const kb::assets::AssetMetadata* mesh = manager.Registry().FindByPath("/Game/cube.obj");
+    Require(mesh != nullptr, "Screen-space test lost its cube mesh");
+    const auto publishMaterial = [&](const char* name, std::array<float, 3> color, float roughness) {
+        const kb::assets::AssetId id = kb::assets::MakeAssetId(name);
+        Require(manager.RegisterAsset(kb::assets::AssetMetadata{
+                    .id = id, .type = "RenderMaterial", .name = name, .virtualPath = std::string{ "/Game/" } + name,
+                    .physicalPath = root / (std::string{ "runtime_" } + name), .contentHash = 1U, .runtimeLoadable = true }),
+            "Screen-space test could not register a material");
+        auto data = std::make_shared<RenderMaterialAssetData>();
+        data->desc.baseColor[0] = color[0];
+        data->desc.baseColor[1] = color[1];
+        data->desc.baseColor[2] = color[2];
+        data->desc.roughnessFactor = roughness;
+        data->graph = MakeDefaultRenderMaterialGraphDocument();
+        Require(manager.PublishRuntimeAsset(id, std::move(data)), "Screen-space test could not publish a material");
+        return id.value;
+    };
+    const std::uint64_t red = publishMaterial("SsRed", { 0.8F, 0.05F, 0.05F }, 0.9F);
+    const std::uint64_t glossy = publishMaterial("SsGlossy", { 0.9F, 0.9F, 0.9F }, 0.05F);
+    for (const SsBox& box : boxes) {
+        const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+            .name = "Box",
+            .transform = kb::scene::TransformComponent{ .localPosition = box.position, .localScale = box.scale },
+        });
+        scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{
+            .meshAssetId = mesh->id.value,
+            .materialAssetId = box.material == SsMaterial::Red ? red : box.material == SsMaterial::Glossy ? glossy : 0U,
+            .castsShadow = false });
+    }
+    for (const kb::scene::Vec3& position : pointLights) {
+        const kb::scene::SceneEntity light = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+            .name = "Point Light", .transform = TransformAt(position.x, position.y, position.z) });
+        scene.Components().Lights().Set(light, kb::scene::LightComponent{
+            .kind = kb::scene::LightKind::Point, .intensity = 4.0F, .range = 40.0F, .castsShadow = false });
+    }
+
+    NativeTestSurface surface;
+    Require(surface.IsValid(), "Screen-space test could not create a hidden D3D11 surface");
+    DisplayConfig config{};
+    config.syncMode = DisplaySyncMode::Uncapped;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "Screen-space test could not initialize the renderer");
+    renderer.SetRuntimeAssetDiscoveryEnabled(false);
+
+    SceneRenderCamera camera{};
+    bx::mtxLookAt(camera.view.data(), eye, target);
+    SceneDepthPolicy::MakePerspective(camera.projection.data(), fovDegrees, 1.0F, 0.1F, 100.0F, SceneDepthPolicy::HomogeneousDepth());
+    std::vector<std::uint8_t> pixels;
+    {
+        ParticleMeshReadbackTarget readback;
+        Require(readback.Initialize(size, size), "Screen-space test could not create its readback target");
+        SceneRenderLightingConfig frameLighting = lighting;
+        frameLighting.shadowsEnabled = false;
+        const RenderSceneSubmitDesc desc{
+            .target = readback.Binding(),
+            .cameraOverride = camera,
+            .lightingConfig = frameLighting,
+            .meshPassMode = SceneRenderMeshPassMode::OpaqueOnly,
+            .clearRgba = 0x000000FFU,
+            .editorSceneOverlaysEnabled = false,
+            .shadowPassEnabled = false,
+            .postProcessEnabled = false,
+            .selectionMaskEnabled = false,
+            .selectionOutlineEnabled = false,
+        };
+        for (int frame = 0; frame < frames; ++frame) {
+            SubmitLifecycleFrame(renderer, scene, desc, "Screen-space test did not submit a frame");
+        }
+        pixels = readback.ReadPixels();
+    }
+    renderer.Shutdown();
+    std::filesystem::remove_all(root, error);
+    return pixels;
+}
+
+[[nodiscard]] double MeanBrightness(const std::vector<std::uint8_t>& pixels, std::uint16_t size, int x0, int y0, int x1, int y1) {
+    double sum = 0.0;
+    for (int y = y0; y < y1; ++y) {
+        for (int x = x0; x < x1; ++x) {
+            const std::size_t offset = (static_cast<std::size_t>(y) * size + static_cast<std::size_t>(x)) * 4U;
+            sum += pixels[offset] + pixels[offset + 1U] + pixels[offset + 2U];
+        }
+    }
+    return sum / (static_cast<double>(x1 - x0) * (y1 - y0));
+}
+
+void RunRendererRendersScreenSpaceAmbientOcclusionTest() {
+    constexpr std::uint16_t kSize = 64U;
+    // Ambient light only (no lights): a white floor next to a tall wall, seen from above and the side.
+    const std::vector<SsBox> boxes{
+        { { 0.0F, -0.5F, 0.0F }, { 40.0F, 1.0F, 40.0F } },
+        { { 3.0F, 3.0F, 0.0F }, { 0.5F, 6.0F, 20.0F } },
+    };
+    SceneRenderLightingConfig lighting{};
+    lighting.ambientOcclusionEnabled = false;
+    const auto off = RenderScreenSpaceScene(boxes, {}, bx::Vec3{ -2.0F, 4.0F, -8.0F }, bx::Vec3{ 2.55F, 0.0F, 0.0F }, 30.0F, lighting, 30, kSize);
+    lighting.ambientOcclusionEnabled = true;
+    lighting.aoRadius = 1.0F;
+    const auto on = RenderScreenSpaceScene(boxes, {}, bx::Vec3{ -2.0F, 4.0F, -8.0F }, bx::Vec3{ 2.55F, 0.0F, 0.0F }, 30.0F, lighting, 30, kSize);
+    // Cells of 8x8 pixels: near the wall base (centre) and on open floor (left).
+    const double nearOff = MeanBrightness(off, kSize, 28, 30, 36, 38);
+    const double nearOn = MeanBrightness(on, kSize, 28, 30, 36, 38);
+    const double farOff = MeanBrightness(off, kSize, 4, 44, 12, 52);
+    const double farOn = MeanBrightness(on, kSize, 4, 44, 12, 52);
+    std::fprintf(stderr, "ao_pixels near off=%.1f on=%.1f far off=%.1f on=%.1f%c", nearOff, nearOn, farOff, farOn, 10);
+    Require(nearOn < nearOff * 0.9, "AO test: the floor at the wall base must be darker with ambient occlusion");
+    Require(farOn > farOff * 0.98, "AO test: open floor must stay unoccluded");
+}
+
+// A glossy floor in front of a lit red wall must show the wall's reflection once screen-space
+// reflections are on: the floor region where the mirror image of the wall appears turns red.
+void RunRendererRendersScreenSpaceReflectionsTest() {
+    constexpr std::uint16_t kSize = 128U;
+    const std::vector<SsBox> boxes{
+        { { 0.0F, -0.5F, 0.0F }, { 40.0F, 1.0F, 40.0F }, SsMaterial::Glossy },
+        { { 3.0F, 3.0F, 0.0F }, { 0.5F, 6.0F, 20.0F }, SsMaterial::Red },
+    };
+    const std::vector<kb::scene::Vec3> lights{ { -1.0F, 5.0F, 0.0F } };
+    SceneRenderLightingConfig lighting{};
+    const bx::Vec3 eye{ -6.0F, 1.0F, -3.0F };
+    const bx::Vec3 target{ 2.0F, 0.0F, 0.0F };
+    const auto off = RenderScreenSpaceScene(boxes, lights, eye, target, 40.0F, lighting, 8, kSize);
+    lighting.screenSpaceReflectionsEnabled = true;
+    const auto on = RenderScreenSpaceScene(boxes, lights, eye, target, 40.0F, lighting, 8, kSize);
+    // The mirror image of the wall lies on the floor below the wall's base line in the image.
+    const auto redExcess = [&](const std::vector<std::uint8_t>& pixels) {
+        double sum = 0.0;
+        for (int y = 72; y < 108; ++y) {
+            for (int x = 24; x < 104; ++x) {
+                const std::size_t offset = (static_cast<std::size_t>(y) * kSize + static_cast<std::size_t>(x)) * 4U;
+                sum += static_cast<double>(pixels[offset]) - pixels[offset + 2U];
+            }
+        }
+        return sum / (36.0 * 80.0);
+    };
+    const double without = redExcess(off);
+    const double with = redExcess(on);
+    std::fprintf(stderr, "ssr_pixels red_minus_blue without=%.1f with=%.1f%c", without, with, 10);
+    Require(with > without + 15.0, "SSR test: the glossy floor must reflect the red wall when screen-space reflections are on");
+}
+
 void RunRendererRendersScreenSpaceGiBounceTest() {
     const int without = RenderGiFloorStats(false, 0.9F, 6).redExcess;
     const int with = RenderGiFloorStats(true, 0.9F, 6).redExcess;
@@ -7017,6 +7189,8 @@ void RunRendererParticleMeshSnapshotSubmitTest() {
     RunRendererBlendsShadowCascadesTest();
     RunRendererRendersScreenSpaceGiBounceTest();
     RunRendererSmoothsScreenSpaceGiOverTimeTest();
+    RunRendererRendersScreenSpaceAmbientOcclusionTest();
+    RunRendererRendersScreenSpaceReflectionsTest();
     RunRendererDrawsGpuSimulatedParticlesTest();
     RunRendererDrawsMillionGpuParticlesTest();
 #endif

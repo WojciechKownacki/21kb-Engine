@@ -464,7 +464,7 @@ bool SceneDeferredLightingPass::Submit(const SceneDeferredLightingPassDesc& desc
     bgfx::setTexture(6U, backdropEnvironmentSampler_, environmentBackdrop ? desc.worldBackdropEnvironment : fallbackBackdropEnvironmentTexture_);
     // Adds the bounce light the resolve pass accumulated up to the previous frame; without one
     // (first frame, resize) the shader skips it rather than reading an undefined texture.
-    giUniforms_.Set(desc.gi, desc.lightingConfig, fallbackShadowTexture_);
+    giUniforms_.Set(desc.gi, desc.lightingConfig, viewProjection, fallbackShadowTexture_);
     lightGrid_.Bind(lighting.lightGrid, 7U);
     bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
     bgfx::setVertexBuffer(0, &vertices);

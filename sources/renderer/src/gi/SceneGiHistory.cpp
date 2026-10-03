@@ -16,14 +16,16 @@ bool SceneGiHistory::Ensure(RenderExtent extent, bgfx::TextureFormat::Enum forma
     }
     const auto width = static_cast<std::uint16_t>(extent.width);
     const auto height = static_cast<std::uint16_t>(extent.height);
+    constexpr std::uint64_t kRenderTargetFlags = BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP;
     lit_ = bgfx::createTexture2D(width, height, false, 1U, format, BGFX_TEXTURE_BLIT_DST | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
     bool created = bgfx::isValid(lit_);
     for (std::size_t index = 0U; created && index < accum_.size(); ++index) {
-        accum_[index] = bgfx::createTexture2D(
-            width, height, false, 1U, bgfx::TextureFormat::RGBA16F, BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
-        created = bgfx::isValid(accum_[index]);
+        accum_[index] = bgfx::createTexture2D(width, height, false, 1U, bgfx::TextureFormat::RGBA16F, kRenderTargetFlags);
+        aoAccum_[index] = bgfx::createTexture2D(width, height, false, 1U, bgfx::TextureFormat::R16F, kRenderTargetFlags);
+        created = bgfx::isValid(accum_[index]) && bgfx::isValid(aoAccum_[index]);
         if (created) {
-            frameBuffers_[index] = bgfx::createFrameBuffer(1U, &accum_[index], false);
+            const std::array<bgfx::TextureHandle, 2> attachments{ accum_[index], aoAccum_[index] };
+            frameBuffers_[index] = bgfx::createFrameBuffer(static_cast<std::uint8_t>(attachments.size()), attachments.data(), false);
             created = bgfx::isValid(frameBuffers_[index]);
         }
     }
@@ -31,9 +33,11 @@ bool SceneGiHistory::Ensure(RenderExtent extent, bgfx::TextureFormat::Enum forma
         Shutdown();
         return false;
     }
-    bgfx::setName(lit_, "KB GI Lit Colour");
+    bgfx::setName(lit_, "KB Screen-space Lit Colour");
     bgfx::setName(accum_[0], "KB GI Accum 0");
     bgfx::setName(accum_[1], "KB GI Accum 1");
+    bgfx::setName(aoAccum_[0], "KB AO Accum 0");
+    bgfx::setName(aoAccum_[1], "KB AO Accum 1");
     extent_ = extent;
     format_ = format;
     return true;
@@ -47,8 +51,12 @@ void SceneGiHistory::Shutdown() noexcept {
         if (bgfx::isValid(accum_[index])) {
             bgfx::destroy(accum_[index]);
         }
+        if (bgfx::isValid(aoAccum_[index])) {
+            bgfx::destroy(aoAccum_[index]);
+        }
         frameBuffers_[index] = BGFX_INVALID_HANDLE;
         accum_[index] = BGFX_INVALID_HANDLE;
+        aoAccum_[index] = BGFX_INVALID_HANDLE;
     }
     if (bgfx::isValid(lit_)) {
         bgfx::destroy(lit_);
@@ -65,6 +73,8 @@ void SceneGiHistory::Shutdown() noexcept {
 SceneGiBinding SceneGiHistory::Binding() const noexcept {
     return SceneGiBinding{
         .accum = accum_[readIndex_],
+        .aoAccum = aoAccum_[readIndex_],
+        .lit = lit_,
         .accumViewProjection = accumViewProjection_,
         .frameIndex = frameIndex_,
         .active = hasAccum_ && bgfx::isValid(accum_[readIndex_]),
