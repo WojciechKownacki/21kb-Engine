@@ -31,6 +31,9 @@ public:
 
     virtual void OnCreate(SceneSystemContext& context);
     virtual void OnFrameStart(SceneSystemContext& context);
+    // Runs once at the very end of SceneRuntime::Update, after every script callback: work that should overlap
+    // with whatever the host does between updates (rendering) starts here.
+    virtual void OnUpdateEnd(SceneSystemContext& context);
     virtual void OnUpdate(SceneSystemContext& context);
     virtual void OnFixedUpdate(SceneSystemContext& context);
     // Runs for every system at the start of each fixed step, before any PreSimulation work (script FixedTick):

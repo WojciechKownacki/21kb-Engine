@@ -28,6 +28,7 @@ public:
     void OnCreate(kb::scene::SceneSystemContext& context) override;
     void OnFixedUpdate(kb::scene::SceneSystemContext& context) override;
     void OnFixedStepBegin(kb::scene::SceneSystemContext& context) override;
+    void OnUpdateEnd(kb::scene::SceneSystemContext& context) override;
     void OnDestroy(kb::scene::SceneSystemContext& context) override;
     [[nodiscard]] bool RequiresFixedStep() const override {
         return true;

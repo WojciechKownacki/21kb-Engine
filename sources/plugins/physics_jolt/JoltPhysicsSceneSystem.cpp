@@ -1157,11 +1157,24 @@ public:
     // have left behind.
     void PublishPendingStep(SceneSystemContext& context) {
         if (stepAwaitingWriteBack_) {
+            LaunchPendingStep(); // a second fixed step in one update: the first one has to run now
             JoinStep();
             stepAwaitingWriteBack_ = false;
             ThrowOnStepError(stepDriver_.error);
             ApplyStepResults(context);
         }
+    }
+
+    void LaunchPendingStep() {
+        if (pendingLaunchSeconds_ > 0.0F) {
+            const float deltaSeconds = pendingLaunchSeconds_;
+            pendingLaunchSeconds_ = 0.0F;
+            LaunchStep(deltaSeconds);
+        }
+    }
+
+    void OnUpdateEnd() {
+        LaunchPendingStep();
     }
 
     void OnFixedUpdate(SceneSystemContext& context) {
@@ -1182,7 +1195,9 @@ public:
         }
         const float deltaSeconds = context.DeltaSeconds();
         if (deltaSeconds > 0.0F && kb::scene::PhysicsBackend::StepPipeliningEnabled(context.GetScene())) {
-            LaunchStep(deltaSeconds);
+            // The step starts at the end of the update (OnUpdateEnd), after the scripts: they see an idle world,
+            // and the step overlaps with the rendering that follows.
+            pendingLaunchSeconds_ = deltaSeconds;
             stepAwaitingWriteBack_ = true;
             return;
         }
@@ -1258,6 +1273,7 @@ public:
     void OnDestroy() {
         JoinStep();
         stepAwaitingWriteBack_ = false;
+        pendingLaunchSeconds_ = 0.0F;
         // LIB-130: a constraint references its two bodies internally -
         // remove joints BEFORE the bodies they connect, matching the real
         // dependency order (mirrors why Jolt itself requires
@@ -2783,6 +2799,7 @@ private:
     mutable StepDriver stepDriver_;
     mutable std::atomic<bool> stepInFlight_{ false };
     bool stepAwaitingWriteBack_ = false;
+    float pendingLaunchSeconds_ = 0.0F; // a pipelined step decided in a fixed update, started at the end of the update
     std::unordered_map<std::uint64_t, BodyRecord> bodies_;
     std::uint32_t bodySyncEpoch_ = 0U;
     struct BodySyncCacheEntry {
@@ -2854,6 +2871,10 @@ void JoltPhysicsSceneSystem::OnFixedUpdate(kb::scene::SceneSystemContext& contex
 
 void JoltPhysicsSceneSystem::OnFixedStepBegin(kb::scene::SceneSystemContext& context) {
     impl_->PublishPendingStep(context);
+}
+
+void JoltPhysicsSceneSystem::OnUpdateEnd(kb::scene::SceneSystemContext&) {
+    impl_->OnUpdateEnd();
 }
 
 void JoltPhysicsSceneSystem::OnDestroy(kb::scene::SceneSystemContext& context) {

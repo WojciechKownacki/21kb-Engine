@@ -546,6 +546,7 @@ bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
     const bool progressed = state.world.Progress(deltaSeconds);
     synchronizeTransforms();
     PublishRuntimeSnapshot(state);
+    state.sceneSystemScheduler.EndUpdate(scene, deltaSeconds);
     state.lastRuntimeUpdateNanoseconds = nanosecondsSince(updateStart);
     return progressed;
 }
