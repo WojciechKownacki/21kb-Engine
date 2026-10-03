@@ -3,6 +3,7 @@
 #include "RuntimeSceneFrameSync.hpp"
 
 #include "engine/input/InputHaptics.hpp"
+#include "engine/scene/PhysicsBackend.hpp"
 #include "engine/input/InputSubsystem.hpp"
 #include "engine/modules/IEngineModule.hpp"
 #include "engine/platform/win32/Win32InputCollector.hpp"
@@ -336,6 +337,8 @@ int RunGame(const GameOptions& options) {
     staticModules.push_back(std::move(scriptModuleOwner));
 
     kb::scene::Scene scene{ std::move(projectRuntime.descriptor), std::move(staticModules) };
+    // The frame renders between updates, so the physics step can overlap with that work.
+    kb::scene::PhysicsBackend::SetStepPipelining(scene, true);
     const bool scriptActive = scene.IsModuleActive("Script");
     if (scriptActive && (!scriptModule->Succeeded() || scriptModule->Host() == nullptr)) {
         std::cerr << "kb_game: script module initialization failed\n";

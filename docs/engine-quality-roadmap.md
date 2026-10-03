@@ -57,7 +57,7 @@ Kryterium „zrobione" = test, który musi przejść; test ma być headless (bez
 
 ### C. Wydajność CPU i fizyka
 
-- **C1 — Skoki kroku fizyki (Jolt)** · P1 · M · do zrobienia
+- **C1 — Skoki kroku fizyki (Jolt)** · P1 · M · **zrobione** (krok Jolt nakłada się z resztą klatki; hosty gry włączają `SetStepPipelining`, silnik domyślnie wyłączone; wyniki fizyki docierają o jeden krok później)
   Pojedyncze kroki do ~20 ms przy 4000 ciał. Profilować, rozważyć nakładanie kroku z pracą renderera lub
   porcjowanie. Zrobione gdy: p99 kroku 4000 ciał poniżej połowy dzisiejszej wartości (pomiar w teście headless).
 - **C2 — Zapis transformacji 30 tys. obiektów** · P1 · M · do zrobienia

@@ -62,6 +62,8 @@
 
 #include <algorithm>
 #include <atomic>
+#include <condition_variable>
+#include <atomic>
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -1116,6 +1118,7 @@ public:
     // point in Impl's lifetime, before or after Init/bodies exist - no
     // re-Init of physicsSystem_ needed.
     bool ConfigureLayers(const kb::scene::PhysicsLayersAsset& layers) noexcept override {
+        JoinStep();
         for (std::uint32_t a = 0U; a < kb::scene::kPhysicsLayerCount; ++a) {
             for (std::uint32_t b = a; b < kb::scene::kPhysicsLayerCount; ++b) {
                 const bool interact = layers.LayersInteract(a, b);
@@ -1136,6 +1139,7 @@ public:
     }
 
     ~Impl() override {
+        StopStepDriver();
         RemoveAllCharacters();
         RemoveAllJoints();
         RemoveAllBodies();
@@ -1149,6 +1153,14 @@ public:
     // the character after Step() instead would double-count (or lag a frame behind) however
     // far a platform the character is standing on moves this step.
     void OnFixedUpdate(SceneSystemContext& context) {
+        // The step launched at the end of the previous fixed update (see StepPipelining below) is published first;
+        // everything after this point sees the same world a synchronous step would have left behind.
+        if (stepAwaitingWriteBack_) {
+            JoinStep();
+            stepAwaitingWriteBack_ = false;
+            ThrowOnStepError(stepDriver_.error);
+            ApplyStepResults(context);
+        }
         RefreshCollisionMeshes(context.GetScene());
         SynchronizeBodies(context);
         std::erase_if(collisionMeshes_, [](const auto& entry) { return entry.second.shape->GetRefCount() == 1; });
@@ -1163,7 +1175,18 @@ public:
             activeContacts_.clear();
             static_cast<void>(contactListener_.DrainAndClear());
         }
-        Step(context.DeltaSeconds());
+        const float deltaSeconds = context.DeltaSeconds();
+        if (deltaSeconds > 0.0F && kb::scene::PhysicsBackend::StepPipeliningEnabled(context.GetScene())) {
+            LaunchStep(deltaSeconds);
+            stepAwaitingWriteBack_ = true;
+            return;
+        }
+        Step(deltaSeconds);
+        ApplyStepResults(context);
+    }
+
+    // Poses, velocities and contact events of the step that just finished reach the scene.
+    void ApplyStepResults(SceneSystemContext& context) {
         writeBackPoses_.clear();
         writeBackPoses_.reserve(nonStaticBodies_.size() + characters_.size());
         WriteBack(context);
@@ -1228,6 +1251,8 @@ public:
     }
 
     void OnDestroy() {
+        JoinStep();
+        stepAwaitingWriteBack_ = false;
         // LIB-130: a constraint references its two bodies internally -
         // remove joints BEFORE the bodies they connect, matching the real
         // dependency order (mirrors why Jolt itself requires
@@ -1251,6 +1276,7 @@ public:
     // Rigidbody/Collider at all) is a real, honest "not applied" (false /
     // found=false), never a crash or silent success.
     bool AddForce(SceneEntity entity, Vec3 force) noexcept override {
+        JoinStep();
         const BodyRecord* body = FindDynamicBody(entity);
         if (body == nullptr || !IsFinite(force)) {
             return false;
@@ -1260,6 +1286,7 @@ public:
     }
 
     bool AddImpulse(SceneEntity entity, Vec3 impulse) noexcept override {
+        JoinStep();
         const BodyRecord* body = FindDynamicBody(entity);
         if (body == nullptr || !IsFinite(impulse)) {
             return false;
@@ -1269,6 +1296,7 @@ public:
     }
 
     bool SetVelocity(SceneEntity entity, Vec3 velocity) noexcept override {
+        JoinStep();
         const BodyRecord* body = FindDynamicBody(entity);
         if (body == nullptr || !IsFinite(velocity)) {
             return false;
@@ -1278,6 +1306,7 @@ public:
     }
 
     [[nodiscard]] kb::scene::PhysicsVectorResult GetVelocity(SceneEntity entity) const noexcept override {
+        JoinStep();
         const BodyRecord* body = FindDynamicBody(entity);
         if (body == nullptr) {
             return {};
@@ -1286,6 +1315,7 @@ public:
     }
 
     bool SetAngularVelocity(SceneEntity entity, Vec3 angularVelocity) noexcept override {
+        JoinStep();
         const BodyRecord* body = FindDynamicBody(entity);
         if (body == nullptr || !IsFinite(angularVelocity)) {
             return false;
@@ -1295,6 +1325,7 @@ public:
     }
 
     [[nodiscard]] kb::scene::PhysicsVectorResult GetAngularVelocity(SceneEntity entity) const noexcept override {
+        JoinStep();
         const BodyRecord* body = FindDynamicBody(entity);
         if (body == nullptr) {
             return {};
@@ -1303,6 +1334,7 @@ public:
     }
 
     bool MoveKinematic(SceneEntity entity, Vec3 targetPosition, Quat targetRotation, float deltaSeconds) noexcept override {
+        JoinStep();
         BodyRecord* existing = FindKinematicBody(entity);
         if (existing == nullptr || !IsFinite(targetPosition) || !IsNormalized(targetRotation) || !std::isfinite(deltaSeconds) || deltaSeconds <= 0.0F) {
             return false;
@@ -1314,6 +1346,7 @@ public:
     }
 
     bool Sleep(SceneEntity entity) noexcept override {
+        JoinStep();
         const BodyRecord* body = FindDynamicBody(entity);
         if (body == nullptr) {
             return false;
@@ -1323,6 +1356,7 @@ public:
     }
 
     bool Wake(SceneEntity entity) noexcept override {
+        JoinStep();
         const BodyRecord* body = FindDynamicBody(entity);
         if (body == nullptr) {
             return false;
@@ -1332,6 +1366,7 @@ public:
     }
 
     [[nodiscard]] bool IsSleeping(SceneEntity entity) const noexcept override {
+        JoinStep();
         const BodyRecord* body = FindDynamicBody(entity);
         return body != nullptr && !physicsSystem_.GetBodyInterface().IsActive(body->bodyId);
     }
@@ -1340,6 +1375,7 @@ public:
     // JPH::CharacterVirtual per CharacterControllerComponent entity), entirely separate from
     // bodies_ above.
     bool CharacterMove(SceneEntity entity, Vec3 horizontalVelocity) noexcept override {
+        JoinStep();
         CharacterRecord* record = FindCharacterRecord(entity);
         if (record == nullptr) {
             return false;
@@ -1349,6 +1385,7 @@ public:
     }
 
     bool CharacterJump(SceneEntity entity, float verticalSpeed) noexcept override {
+        JoinStep();
         CharacterRecord* record = FindCharacterRecord(entity);
         if (record == nullptr) {
             return false;
@@ -1358,6 +1395,7 @@ public:
     }
 
     [[nodiscard]] kb::scene::PhysicsVectorResult CharacterVelocity(SceneEntity entity) const noexcept override {
+        JoinStep();
         const CharacterRecord* record = FindCharacterRecord(entity);
         if (record == nullptr) {
             return {};
@@ -1366,6 +1404,7 @@ public:
     }
 
     [[nodiscard]] bool CharacterIsGrounded(SceneEntity entity) const noexcept override {
+        JoinStep();
         const CharacterRecord* record = FindCharacterRecord(entity);
         return record != nullptr && record->character->GetGroundState() == JPH::CharacterVirtual::EGroundState::OnGround;
     }
@@ -1376,6 +1415,7 @@ public:
     // merely "not fully supported" (which would also exclude the still-meaningful
     // OnSteepGround/NotSupported states).
     [[nodiscard]] kb::scene::PhysicsVectorResult CharacterGroundNormal(SceneEntity entity) const noexcept override {
+        JoinStep();
         const CharacterRecord* record = FindCharacterRecord(entity);
         if (record == nullptr || record->character->GetGroundState() == JPH::CharacterVirtual::EGroundState::InAir) {
             return {};
@@ -1384,6 +1424,7 @@ public:
     }
 
     [[nodiscard]] kb::scene::PhysicsVectorResult CharacterGroundVelocity(SceneEntity entity) const noexcept override {
+        JoinStep();
         const CharacterRecord* record = FindCharacterRecord(entity);
         if (record == nullptr || record->character->GetGroundState() == JPH::CharacterVirtual::EGroundState::InAir) {
             return {};
@@ -1394,6 +1435,7 @@ public:
     bool QueueCharacterRootMotion(
         SceneEntity entity, Vec3 localTranslation, Quat localRotation,
         float durationSeconds) noexcept override {
+        JoinStep();
         if (scene_ == nullptr || !IsFinite(localTranslation) || !IsNormalized(localRotation) ||
             !std::isfinite(durationSeconds) || durationSeconds < 0.0F ||
             !scene_->Entities().IsActive(entity) ||
@@ -1449,6 +1491,7 @@ public:
     bool QueueRigidbodyRootMotion(
         SceneEntity entity, Vec3 localTranslation, Quat localRotation,
         float durationSeconds) noexcept override {
+        JoinStep();
         if (scene_ == nullptr || !IsFinite(localTranslation) || !IsNormalized(localRotation) ||
             !std::isfinite(durationSeconds) || durationSeconds < 0.0F ||
             !scene_->Entities().IsActive(entity)) return false;
@@ -1492,6 +1535,7 @@ public:
     }
 
     [[nodiscard]] kb::scene::PhysicsCastResult CastShape(const kb::scene::PhysicsShapeDesc& shape, Vec3 origin, Vec3 direction, float maxDistance, std::uint32_t layerMask) const noexcept override {
+        JoinStep();
         std::array<kb::scene::PhysicsCastResult, 1U> storage{};
         kb::library::ArrayNonAlloc<kb::scene::PhysicsCastResult> results(storage);
         CastShapeAll(shape, origin, direction, maxDistance, layerMask, results);
@@ -1499,6 +1543,7 @@ public:
     }
 
     [[nodiscard]] kb::scene::PhysicsOverlapResult OverlapShape(const kb::scene::PhysicsShapeDesc& shape, Vec3 center, std::uint32_t layerMask) const noexcept override {
+        JoinStep();
         std::array<kb::scene::PhysicsOverlapResult, 1U> storage{};
         kb::library::ArrayNonAlloc<kb::scene::PhysicsOverlapResult> results(storage);
         OverlapShapeAll(shape, center, layerMask, results);
@@ -1506,6 +1551,7 @@ public:
     }
 
     [[nodiscard]] kb::scene::PhysicsClosestPointResult ClosestPoint(SceneEntity entity, Vec3 point, std::uint32_t layerMask) const noexcept override {
+        JoinStep();
         if (!IsFinite(point) || layerMask == 0U || scene_ == nullptr || !scene_->Entities().IsAlive(entity)) {
             return {};
         }
@@ -1567,6 +1613,7 @@ public:
     // neither query creates Jolt's allocating AllHitCollisionCollector array.
     void RaycastAll(Vec3 origin, Vec3 direction, float maxDistance, std::uint32_t layerMask,
         kb::library::ArrayNonAlloc<kb::scene::PhysicsCastResult>& results) const noexcept override {
+        JoinStep();
         results.Clear();
         if (results.Capacity() == 0 || !IsFinite(origin) || !IsFinite(direction) || !std::isfinite(maxDistance) ||
             maxDistance <= 0 || layerMask == 0 || scene_ == nullptr) return;
@@ -1588,6 +1635,7 @@ public:
     }
 
     void CastShapeAll(const kb::scene::PhysicsShapeDesc& shape, Vec3 origin, Vec3 direction, float maxDistance, std::uint32_t layerMask, kb::library::ArrayNonAlloc<kb::scene::PhysicsCastResult>& results) const noexcept override {
+        JoinStep();
         results.Clear();
         if (results.Capacity() == 0U || !IsValidQueryShape(shape) || !IsFinite(origin) || !IsFinite(direction) ||
             !std::isfinite(maxDistance) || maxDistance <= 0.0F || layerMask == 0U || scene_ == nullptr) {
@@ -1609,6 +1657,7 @@ public:
     }
 
     void OverlapShapeAll(const kb::scene::PhysicsShapeDesc& shape, Vec3 center, std::uint32_t layerMask, kb::library::ArrayNonAlloc<kb::scene::PhysicsOverlapResult>& results) const noexcept override {
+        JoinStep();
         results.Clear();
         if (results.Capacity() == 0U || !IsValidQueryShape(shape) || !IsFinite(center) ||
             layerMask == 0U || scene_ == nullptr) {
@@ -2390,12 +2439,68 @@ private:
         if (fixedDeltaSeconds <= 0.0F) {
             return;
         }
-        const JPH::EPhysicsUpdateError error = physicsSystem_.Update(
-            fixedDeltaSeconds, settings_.collisionSteps, &tempAllocator_, &jobSystem_);
+        ThrowOnStepError(physicsSystem_.Update(
+            fixedDeltaSeconds, settings_.collisionSteps, &tempAllocator_, &jobSystem_));
+    }
+
+    static void ThrowOnStepError(JPH::EPhysicsUpdateError error) {
         if (error != JPH::EPhysicsUpdateError::None) {
             throw std::runtime_error("Physics update exceeded collision capacity (flags=" +
                 std::to_string(static_cast<std::uint32_t>(error)) + ")");
         }
+    }
+
+    // Step pipelining (kb::scene::PhysicsBackend::SetStepPipelining): the Jolt update of a fixed step runs on a
+    // driver thread while the main thread carries on with the rest of the frame (scripts, rendering). The
+    // order of operations on the physics world stays the same as in a synchronous step, because every
+    // entry point that touches the world joins the step first and the next fixed update publishes the
+    // results before it synchronizes the world again; only the arrival of poses and contact events in
+    // the scene shifts by one fixed step.
+    void LaunchStep(float deltaSeconds) {
+        {
+            std::lock_guard lock(stepDriver_.mutex);
+            if (!stepDriver_.thread.joinable()) {
+                stepDriver_.thread = std::thread([this] { RunStepDriver(); });
+            }
+            stepDriver_.deltaSeconds = deltaSeconds;
+            stepDriver_.requested = true;
+            stepInFlight_.store(true, std::memory_order_release);
+        }
+        stepDriver_.wake.notify_one();
+    }
+
+    void RunStepDriver() {
+        std::unique_lock lock(stepDriver_.mutex);
+        for (;;) {
+            stepDriver_.wake.wait(lock, [this] { return stepDriver_.requested || stepDriver_.stopping; });
+            if (stepDriver_.stopping) return;
+            stepDriver_.requested = false;
+            const float deltaSeconds = stepDriver_.deltaSeconds;
+            lock.unlock();
+            const JPH::EPhysicsUpdateError error = physicsSystem_.Update(
+                deltaSeconds, settings_.collisionSteps, &tempAllocator_, &jobSystem_);
+            lock.lock();
+            stepDriver_.error = error;
+            stepInFlight_.store(false, std::memory_order_release);
+            stepDriver_.done.notify_all();
+        }
+    }
+
+    // Waits until no step is running. Cheap (one atomic load) when none is.
+    void JoinStep() const noexcept {
+        if (!stepInFlight_.load(std::memory_order_acquire)) return;
+        std::unique_lock lock(stepDriver_.mutex);
+        stepDriver_.done.wait(lock, [this] { return !stepInFlight_.load(std::memory_order_acquire); });
+    }
+
+    void StopStepDriver() noexcept {
+        JoinStep();
+        {
+            std::lock_guard lock(stepDriver_.mutex);
+            stepDriver_.stopping = true;
+        }
+        stepDriver_.wake.notify_all();
+        if (stepDriver_.thread.joinable()) stepDriver_.thread.join();
     }
 
     void WriteBack(SceneSystemContext& context) {
@@ -2660,6 +2765,19 @@ private:
     JPH::PhysicsSystem physicsSystem_;
     JPH::TempAllocatorImpl tempAllocator_;
     JPH::JobSystemThreadPool jobSystem_;
+    struct StepDriver {
+        std::mutex mutex;
+        std::condition_variable wake;
+        std::condition_variable done;
+        std::thread thread;
+        float deltaSeconds = 0.0F;
+        JPH::EPhysicsUpdateError error = JPH::EPhysicsUpdateError::None;
+        bool requested = false;
+        bool stopping = false;
+    };
+    mutable StepDriver stepDriver_;
+    mutable std::atomic<bool> stepInFlight_{ false };
+    bool stepAwaitingWriteBack_ = false;
     std::unordered_map<std::uint64_t, BodyRecord> bodies_;
     std::uint32_t bodySyncEpoch_ = 0U;
     struct BodySyncCacheEntry {

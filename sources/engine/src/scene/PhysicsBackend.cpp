@@ -140,6 +140,14 @@ bool PhysicsBackend::HasCollisionEventConsumer(Scene& scene) noexcept {
     return SceneAccess::State(scene).collisionEventConsumer;
 }
 
+void PhysicsBackend::SetStepPipelining(Scene& scene, bool enabled) noexcept {
+    SceneAccess::State(scene).physicsStepPipelining = enabled;
+}
+
+bool PhysicsBackend::StepPipeliningEnabled(Scene& scene) noexcept {
+    return SceneAccess::State(scene).physicsStepPipelining;
+}
+
 std::vector<PendingCollisionEvent> PhysicsBackend::DrainPendingCollisionEvents(Scene& scene) {
     std::vector<PendingCollisionEvent> drained;
     DrainPendingCollisionEvents(scene, drained);
