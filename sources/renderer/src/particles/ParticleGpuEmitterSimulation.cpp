@@ -2,6 +2,8 @@
 
 #include "engine/scene/ParticleEffectAssetSchema.hpp"
 #include "kb/render/ShaderLoader.hpp"
+#include "kb/render/resources/RenderResourceRegistry.hpp"
+#include "kb/render/scene/SceneRenderResourceMap.hpp"
 
 #include <bx/math.h>
 
@@ -42,10 +44,17 @@ constexpr double kFixedStepSeconds = 1.0 / static_cast<double>(kb::scene::kParti
     return layout;
 }
 
-// Alpha and premultiplied blending depend on draw order; the other modes are commutative.
+// Alpha and premultiplied blending depend on draw order; the other modes are commutative. Only billboards are
+// sorted: mesh instances go through the mesh pipeline and trail segments follow each other in the buffer.
 [[nodiscard]] bool NeedsSort(const kb::particles::ParticleGpuEmitterParams& params) noexcept {
-    return params.blend == kb::particles::ParticleRenderBlendMode::Alpha ||
-        params.blend == kb::particles::ParticleRenderBlendMode::Premultiplied;
+    const bool billboard = params.output == kb::particles::ParticleRenderOutput::Billboard ||
+        params.output == kb::particles::ParticleRenderOutput::StretchedBillboard;
+    return billboard && (params.blend == kb::particles::ParticleRenderBlendMode::Alpha ||
+        params.blend == kb::particles::ParticleRenderBlendMode::Premultiplied);
+}
+
+[[nodiscard]] std::uint32_t InstancesPerSlot(const kb::particles::ParticleGpuEmitterParams& params) noexcept {
+    return params.output == kb::particles::ParticleRenderOutput::Trail ? std::max(params.trailSegments, 1U) : 1U;
 }
 
 [[nodiscard]] std::uint32_t PaddedSortCount(std::uint32_t capacity) noexcept {
@@ -73,6 +82,7 @@ bool ParticleGpuEmitterSimulation::Initialize() {
     colorUniform_ = bgfx::createUniform("u_gpuParticleColor", bgfx::UniformType::Vec4,
         static_cast<std::uint16_t>(kb::particles::kParticleGpuCurveSamples));
     sizeUniform_ = bgfx::createUniform("u_gpuParticleSize", bgfx::UniformType::Vec4, 2U);
+    outputUniform_ = bgfx::createUniform("u_gpuParticleOutput", bgfx::UniformType::Vec4);
     collideProgram_ = ShaderLoader::LoadComputeProgram("cs_particle_gpu_collide.sc");
     worldUniform_ = bgfx::createUniform("u_gpuParticleWorld", bgfx::UniformType::Mat4);
     worldInverseUniform_ = bgfx::createUniform("u_gpuParticleWorldInverse", bgfx::UniformType::Mat4);
@@ -110,7 +120,7 @@ void ParticleGpuEmitterSimulation::Shutdown() noexcept {
     for (bgfx::UniformHandle* handle : { &motionUniform_, &timeUniform_, &colorUniform_, &sizeUniform_, &worldUniform_, &worldInverseUniform_, &localUniform_, &planeUniform_,
              &collisionUniform_, &depthBounceUniform_, &texelUniform_, &viewProjectionUniform_, &depthSampler_,
              &inverseViewProjectionUniform_, &depthParamsUniform_, &cameraPositionUniform_, &sortCameraUniform_,
-             &sortParamsUniform_ }) {
+             &sortParamsUniform_, &outputUniform_ }) {
         if (bgfx::isValid(*handle)) bgfx::destroy(*handle);
         *handle = BGFX_INVALID_HANDLE;
     }
@@ -128,13 +138,17 @@ void ParticleGpuEmitterSimulation::Shutdown() noexcept {
 
 bool ParticleGpuEmitterSimulation::Create(const Key& key, const kb::particles::ParticleGpuEmitterParams& params) noexcept {
     const std::uint32_t capacity = std::clamp(params.capacity, 1U, kb::particles::kParticleGpuMaxCapacity);
-    const std::uint64_t bytes =
-        static_cast<std::uint64_t>(capacity) * (sizeof(kb::particles::ParticleGpuSpawn) + kInstanceBytes);
+    const std::uint32_t perSlot = InstancesPerSlot(params);
+    if (static_cast<std::uint64_t>(capacity) * perSlot > kb::particles::kParticleGpuMaxTrailSegments &&
+        perSlot > 1U) return false;
+    const std::uint64_t bytes = static_cast<std::uint64_t>(capacity) *
+        (sizeof(kb::particles::ParticleGpuSpawn) + static_cast<std::uint64_t>(kInstanceBytes) * perSlot);
     if (allocatedBytes_ + bytes > kb::scene::kParticleEffectMaxGpuResourceBytes) return false;
     Emitter emitter{};
     emitter.params = params;
     emitter.params.capacity = capacity;
     emitter.capacity = capacity;
+    emitter.perSlot = perSlot;
     emitter.bytes = bytes;
     // Zeroed birth records have lifetime 0, so every slot starts dead.
     const std::uint32_t spawnBytes = capacity * static_cast<std::uint32_t>(sizeof(kb::particles::ParticleGpuSpawn));
@@ -142,7 +156,7 @@ bool ParticleGpuEmitterSimulation::Create(const Key& key, const kb::particles::P
     if (zero == nullptr || zero->data == nullptr) return false;
     std::memset(zero->data, 0, spawnBytes);
     emitter.spawns = bgfx::createDynamicVertexBuffer(zero, SpawnLayout(), BGFX_BUFFER_COMPUTE_READ);
-    emitter.instances = bgfx::createDynamicVertexBuffer(capacity, InstanceLayout(), BGFX_BUFFER_COMPUTE_READ_WRITE);
+    emitter.instances = bgfx::createDynamicVertexBuffer(capacity * perSlot, InstanceLayout(), BGFX_BUFFER_COMPUTE_READ_WRITE);
     if (!bgfx::isValid(emitter.spawns) || !bgfx::isValid(emitter.instances)) {
         Destroy(emitter);
         return false;
@@ -284,7 +298,7 @@ void ParticleGpuEmitterSimulation::Apply(
         }
         if (command.hasParams) {
             const std::uint32_t capacity = std::clamp(command.params.capacity, 1U, kb::particles::kParticleGpuMaxCapacity);
-            if (found != emitters_.end() && found->second.capacity != capacity) {
+            if (found != emitters_.end() && (found->second.capacity != capacity || found->second.perSlot != InstancesPerSlot(command.params))) {
                 allocatedBytes_ -= found->second.bytes;
                 Destroy(found->second);
                 emitters_.erase(found);
@@ -336,8 +350,17 @@ void ParticleGpuEmitterSimulation::Dispatch(bgfx::ViewId viewId, std::uint64_t s
             static_cast<float>(clock.now), static_cast<float>(emitter.capacity),
             params.stretchVelocityScale, params.stretchMinimumLength };
         std::array<float, 4U * kb::particles::kParticleGpuCurveSamples> colors{};
+        // The mesh pipeline expects the material's base colour already multiplied into the instance colour.
+        std::array<float, 4> tint{ 1.0F, 1.0F, 1.0F, 1.0F };
+        if (params.output == kb::particles::ParticleRenderOutput::Mesh && collision.resources != nullptr && collision.resourceMap != nullptr) {
+            if (const RenderMaterialResource* material = collision.resources->FindMaterial(collision.resourceMap->ResolveMaterial(params.materialAssetId))) {
+                tint = { material->baseColor[0], material->baseColor[1], material->baseColor[2], material->baseColor[3] };
+            }
+        }
         for (std::size_t sample = 0U; sample < kb::particles::kParticleGpuCurveSamples; ++sample) {
-            std::copy(params.color[sample].begin(), params.color[sample].end(), colors.begin() + sample * 4U);
+            for (std::size_t channel = 0U; channel < 4U; ++channel) {
+                colors[sample * 4U + channel] = params.color[sample][channel] * tint[channel];
+            }
         }
         bgfx::setBuffer(0U, emitter.spawns, bgfx::Access::Read);
         bgfx::setBuffer(1U, emitter.instances, bgfx::Access::Write);
@@ -371,13 +394,18 @@ void ParticleGpuEmitterSimulation::Dispatch(bgfx::ViewId viewId, std::uint64_t s
         bgfx::setUniform(timeUniform_, time.data());
         bgfx::setUniform(colorUniform_, colors.data(), static_cast<std::uint16_t>(kb::particles::kParticleGpuCurveSamples));
         bgfx::setUniform(sizeUniform_, params.size.data(), 2U);
-        bgfx::dispatch(viewId, colliding ? collideProgram_ : program_, (emitter.capacity + kThreadGroupSize - 1U) / kThreadGroupSize, 1U, 1U);
+        const float outputMode = params.output == kb::particles::ParticleRenderOutput::Mesh ? 1.0F
+            : params.output == kb::particles::ParticleRenderOutput::Trail ? 2.0F : 0.0F;
+        const std::array<float, 4> output{ outputMode, static_cast<float>(emitter.perSlot), params.trailSegmentSeconds, params.trailWidth };
+        bgfx::setUniform(outputUniform_, output.data());
+        const std::uint32_t threads = emitter.capacity * emitter.perSlot;
+        bgfx::dispatch(viewId, colliding ? collideProgram_ : program_, (threads + kThreadGroupSize - 1U) / kThreadGroupSize, 1U, 1U);
         bgfx::DynamicVertexBufferHandle drawn = emitter.instances;
         if (NeedsSort(params) && bgfx::isValid(emitter.sortedInstances)) {
             SortInstances(viewId, emitter, collision.cameraPosition);
             drawn = emitter.sortedInstances;
         }
-        clock.draws.push_back(Draw{ &emitter.params, drawn, emitter.capacity });
+        clock.draws.push_back(Draw{ &emitter.params, drawn, emitter.capacity * emitter.perSlot });
     }
 }
 

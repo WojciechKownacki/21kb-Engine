@@ -184,7 +184,8 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
     bool terrainLayersOnly,
     std::array<float, 16> motionVectorPreviousViewProjection,
     ParticleGpuRenderer* particleRenderer,
-    const kb::particles::ParticleRenderSnapshot* particleSnapshot) const {
+    const kb::particles::ParticleRenderSnapshot* particleSnapshot,
+    std::span<const ParticleGpuMeshDraw> gpuMeshDraws) const {
     SceneRenderSubmitStats stats{};
     if (!IsInitialized()) {
         return stats;
@@ -275,6 +276,71 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
             auto committedKey = reuseKey;
             committedKey.detailSwitchHistoryRevision = pipelineScratch_.detailSwitchHistoryRevision;
             reuse.Commit(committedKey, pipelineScratch_.commands, pipelineScratch_.stats);
+        }
+    }
+    // Mesh particles simulated on the GPU join this pass's commands for the submission only: the same pipeline
+    // resolves their material, state and pass membership; their instances are the emitters' GPU buffers.
+    const std::size_t regularCommandCount = pipelineScratch_.commands.size();
+    struct DropGpuMeshCommands {
+        std::vector<MeshDrawCommand>& commands;
+        std::size_t keep;
+        ~DropGpuMeshCommands() {
+            if (commands.size() > keep) commands.erase(commands.begin() + static_cast<std::ptrdiff_t>(keep), commands.end());
+        }
+    } dropGpuMeshCommands{ pipelineScratch_.commands, regularCommandCount };
+    if (!gpuMeshDraws.empty()) {
+        gpuMeshInstanceScratch_.clear();
+        gpuMeshInstanceScratch_.reserve(gpuMeshDraws.size());
+        gpuMeshBatchScratch_.clear();
+        for (std::size_t index = 0U; index < gpuMeshDraws.size(); ++index) {
+            const ParticleGpuMeshDraw& draw = gpuMeshDraws[index];
+            if (draw.count == 0U || !bgfx::isValid(draw.instances)) continue;
+            SceneRenderMeshInstance placeholder{};
+            placeholder.entityId = index + 1U; // identifies the draw after the pipeline merged equal meshes
+            placeholder.meshAssetId = draw.meshAssetId;
+            placeholder.materialAssetId = draw.materialAssetId;
+            placeholder.model = { 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F };
+            placeholder.castsShadow = draw.castsShadow;
+            placeholder.receivesShadow = draw.receivesShadow;
+            gpuMeshInstanceScratch_.push_back(placeholder);
+        }
+        for (const SceneRenderMeshInstance& placeholder : gpuMeshInstanceScratch_) {
+            gpuMeshBatchScratch_.push_back(SceneMeshBatch{
+                .meshAssetId = placeholder.meshAssetId,
+                .materialAssetId = placeholder.materialAssetId,
+                .sourceDrawGroupIndex = 0U,
+                .instances = std::span<const SceneRenderMeshInstance>{ &placeholder, 1U },
+            });
+        }
+        if (pass == MeshPassType::BaseTransparent) {
+            std::erase_if(gpuMeshBatchScratch_, [&resources, &resourceMap](const SceneMeshBatch& batch) {
+                return IsOpaqueNonTerrainBatch(batch, resources, resourceMap);
+            });
+        }
+        if (!gpuMeshBatchScratch_.empty()) {
+            MeshPipelineProcessor::BuildInto(MeshPipelineBuildDesc{
+                .pass = pass,
+                .meshBatches = &gpuMeshBatchScratch_,
+                .resources = &resources,
+                .resourceMap = &resourceMap,
+                .diagnostics = diagnostics,
+                .maxDrawCommands = drawBudget.maxDrawCommands,
+                .maxVisibleInstances = drawBudget.maxVisibleInstances,
+                .maxDroppedInstances = drawBudget.maxDroppedInstances,
+                .terrainLayersOnly = terrainLayersOnly,
+            }, gpuMeshScratch_);
+            for (const MeshDrawCommand& command : gpuMeshScratch_.commands) {
+                for (const SceneRenderMeshInstance& instance : command.instances) {
+                    const std::size_t drawIndex = static_cast<std::size_t>(instance.entityId) - 1U;
+                    if (drawIndex >= gpuMeshDraws.size()) continue;
+                    MeshDrawCommand gpuCommand = command;
+                    gpuCommand.instances.assign(1U, instance);
+                    gpuCommand.instanceRevision = 0U;
+                    gpuCommand.gpuInstanceBuffer = gpuMeshDraws[drawIndex].instances;
+                    gpuCommand.gpuInstanceCount = gpuMeshDraws[drawIndex].count;
+                    pipelineScratch_.commands.push_back(std::move(gpuCommand));
+                }
+            }
         }
     }
     stats = pipelineScratch_.stats;

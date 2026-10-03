@@ -7275,6 +7275,88 @@ void RunRendererFollowsLocalSpaceGpuParticlesTest() {
     Require(world < 30.0, "Local-space test: a world-space particle must not move with the owner matrix");
 }
 
+// A GPU emitter whose particles are red cubes drawn through the mesh pipeline: lit by the scene light and
+// coloured by the material (red minus blue is positive), nothing there without the particle.
+[[nodiscard]] std::array<int, 3> GpuMeshParticleCentre(bool spawn) {
+    constexpr std::uint16_t kSize = 64U;
+    const std::vector<kb::scene::Vec3> lights{ { 0.0F, 3.0F, -4.0F } };
+    SceneRenderLightingConfig lighting{};
+    const auto queue = [&](kb::scene::Scene& scene, int frame) {
+        if (frame != 1 || !spawn) return;
+        const kb::assets::AssetMetadata* mesh = scene.Assets().Manager().Registry().FindByPath("/Game/cube.obj");
+        Require(mesh != nullptr, "GPU mesh particle test lost its cube mesh");
+        kb::particles::ParticleGpuEmitterCommand command{};
+        command.key = { 1U, 1U };
+        command.simTime = 0.5;
+        command.hasParams = true;
+        command.params.capacity = 16U;
+        command.params.output = kb::particles::ParticleRenderOutput::Mesh;
+        command.params.meshAssetId = mesh->id.value;
+        command.params.materialAssetId = kb::assets::MakeAssetId("SsRed").value;
+        command.params.blend = kb::particles::ParticleRenderBlendMode::Alpha;
+        command.params.depth = kb::particles::ParticleRenderDepthMode::ReadWrite;
+        command.params.color.fill({ 1.0F, 1.0F, 1.0F, 1.0F });
+        command.params.size.fill(2.0F);
+        command.spawns.push_back(kb::particles::ParticleGpuSpawn{
+            .position = { 0.0F, 0.0F, 5.0F }, .birthTime = 0.0F, .velocity = { 0.0F, 0.0F, 0.0F }, .lifetime = 20.0F });
+        kb::particles::ParticlePlayback::QueueGpuEmitterCommand(scene, command);
+    };
+    // SsRed is published by the helper only when a box uses it; a far-away red box makes it exist.
+    const std::vector<SsBox> boxes{ { { 0.0F, -40.0F, 0.0F }, { 1.0F, 1.0F, 1.0F }, SsMaterial::Red } };
+    const auto pixels = RenderScreenSpaceScene(boxes, lights, bx::Vec3{ 0.0F, 0.0F, -10.0F }, bx::Vec3{ 0.0F, 0.0F, 5.0F }, 30.0F,
+        lighting, 4, kSize, SceneRenderMeshPassMode::OpaqueAndTransparent, queue);
+    const std::size_t offset = (32U * kSize + 32U) * 4U;
+    return { pixels[offset], pixels[offset + 1U], pixels[offset + 2U] };
+}
+
+void RunRendererDrawsGpuMeshParticlesTest() {
+    const std::array<int, 3> with = GpuMeshParticleCentre(true);
+    const std::array<int, 3> without = GpuMeshParticleCentre(false);
+    std::fprintf(stderr, "gpu_mesh_particle with=%d,%d,%d without=%d,%d,%d%c", with[0], with[1], with[2], without[0], without[1], without[2], 10);
+    Require(with[0] > 60 && with[0] > with[2] + 40, "GPU mesh particle test: the cube must be drawn lit and red through the mesh pipeline");
+    Require(without[0] < 20, "GPU mesh particle test: the pixel must be empty without the particle");
+}
+
+// One GPU particle flying along +x draws a trail of camera-facing quads along the path it has travelled:
+// the middle of the path is covered, the space beyond the oldest segment is not.
+[[nodiscard]] std::array<int, 3> GpuTrailCoverage(bool trail) {
+    constexpr std::uint16_t kSize = 64U;
+    SceneRenderLightingConfig lighting{};
+    const auto queue = [&](kb::scene::Scene& scene, int frame) {
+        if (frame != 1) return;
+        kb::particles::ParticleGpuEmitterCommand command{};
+        command.key = { 1U, 1U };
+        command.simTime = 1.0;
+        command.hasParams = true;
+        command.params.capacity = 4U;
+        command.params.output = trail ? kb::particles::ParticleRenderOutput::Trail : kb::particles::ParticleRenderOutput::Billboard;
+        command.params.blend = kb::particles::ParticleRenderBlendMode::Add;
+        command.params.depth = kb::particles::ParticleRenderDepthMode::Disabled;
+        command.params.color.fill({ 1.0F, 1.0F, 1.0F, 1.0F });
+        command.params.size.fill(0.2F);
+        command.params.trailSegments = 8U;
+        command.params.trailSegmentSeconds = 0.1F;
+        command.params.trailWidth = 0.4F;
+        // At t = 1 the head is at x = 2 and the trail reaches back 8 x 0.1 s x 4 m/s = 3.2 m, to about x = -1.2.
+        command.spawns.push_back(kb::particles::ParticleGpuSpawn{
+            .position = { -2.0F, 0.0F, 5.0F }, .birthTime = 0.0F, .velocity = { 4.0F, 0.0F, 0.0F }, .lifetime = 20.0F });
+        kb::particles::ParticlePlayback::QueueGpuEmitterCommand(scene, command);
+    };
+    const auto pixels = RenderScreenSpaceScene({}, {}, bx::Vec3{ 0.0F, 0.0F, -10.0F }, bx::Vec3{ 0.0F, 0.0F, 5.0F }, 30.0F,
+        lighting, 4, kSize, SceneRenderMeshPassMode::OpaqueAndTransparent, queue);
+    const auto at = [&](std::size_t x) { return static_cast<int>(pixels[(32U * kSize + x) * 4U]); };
+    return { at(32U), at(24U), at(6U) }; // path middle (x = 0), near the trail's oldest end (x = -1), beyond it
+}
+
+void RunRendererDrawsGpuTrailParticlesTest() {
+    const std::array<int, 3> trail = GpuTrailCoverage(true);
+    const std::array<int, 3> head = GpuTrailCoverage(false);
+    std::fprintf(stderr, "gpu_trail_particle trail=%d,%d,%d head_only=%d,%d,%d%c", trail[0], trail[1], trail[2], head[0], head[1], head[2], 10);
+    Require(trail[0] > 150 && trail[1] > 150, "GPU trail test: the path the particle travelled must be covered by trail segments");
+    Require(trail[2] < 30, "GPU trail test: nothing may be drawn beyond the oldest trail segment");
+    Require(head[0] < 30, "GPU trail test: without the trail the middle of the path stays empty");
+}
+
 void RunRendererSortsAlphaGpuParticlesTest() {
     const std::array<int, 3> olderNearer = OverlappingAlphaParticlesCentre(true);
     const std::array<int, 3> youngerNearer = OverlappingAlphaParticlesCentre(false);
@@ -7639,6 +7721,8 @@ void RunRendererParticleMeshSnapshotSubmitTest() {
     RunVoxelGridFollowsMeshGeometryTest();
     RunRendererCollidesGpuParticlesTest();
     RunRendererSortsAlphaGpuParticlesTest();
+    RunRendererDrawsGpuMeshParticlesTest();
+    RunRendererDrawsGpuTrailParticlesTest();
     RunRendererFollowsLocalSpaceGpuParticlesTest();
 #if defined(KB_21KB_PARTICLE_PLUGIN_PATH)
     RunRendererDrawsAuthoredParticleFileTest();

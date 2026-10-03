@@ -6,6 +6,9 @@ uniform vec4 u_gpuParticleMotion; // xyz = acceleration, w = linear drag
 uniform vec4 u_gpuParticleTime;   // x = now, y = slot count, z = stretch velocity scale, w = minimum stretch
 uniform vec4 u_gpuParticleColor[8];
 uniform vec4 u_gpuParticleSize[2]; // eight sizes over normalized age
+// x = output mode (0 billboard, 1 mesh instance, 2 trail segments), y = instances written per slot,
+// z = trail segment seconds, w = trail width.
+uniform vec4 u_gpuParticleOutput;
 
 float SampleSize(float u)
 {
@@ -36,8 +39,26 @@ void WriteDeadInstance(uint base)
     instanceOut[base + 4u] = vec4(0.0, 0.0, 0.0, 0.0);
 }
 
+// A mesh particle: a uniformly scaled, unrotated instance in the layout of the mesh pipeline's instance
+// buffer (model columns with the material data lanes in w, then the colour).
+void WriteMeshInstance(uint base, uint slot, vec3 position, float u)
+{
+    float size = SampleSize(u);
+    float random = frac(sin(float(slot) * 12.9898) * 43758.5453);
+    instanceOut[base] = vec4(size, 0.0, 0.0, random);
+    instanceOut[base + 1u] = vec4(0.0, size, 0.0, 0.0);
+    instanceOut[base + 2u] = vec4(0.0, 0.0, size, 1.0);
+    instanceOut[base + 3u] = vec4(position, 0.0);
+    instanceOut[base + 4u] = SampleColor(u);
+}
+
 void WriteLiveInstance(uint base, vec3 position, vec3 velocity, float u)
 {
+    if (u_gpuParticleOutput.x > 0.5)
+    {
+        WriteMeshInstance(base, base / 5u, position, u);
+        return;
+    }
     float speed = length(velocity);
     instanceOut[base] = vec4(position, SampleSize(u));
     instanceOut[base + 1u] = vec4(position - velocity * 0.016666668, 0.0);

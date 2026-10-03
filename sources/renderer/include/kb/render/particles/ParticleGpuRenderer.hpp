@@ -79,7 +79,11 @@ public:
         const SceneRenderCamera& camera,
         bgfx::TextureHandle sceneDepthTexture,
         std::uint32_t viewportWidth,
-        std::uint32_t viewportHeight) noexcept;
+        std::uint32_t viewportHeight,
+        const RenderResourceRegistry& resources,
+        const SceneRenderResourceMap& resourceMap) noexcept;
+    // The mesh-output emitters of a scene as of the last dispatch; the mesh pipeline draws them.
+    void CollectGpuMeshDraws(std::uint64_t sceneId, std::vector<ParticleGpuMeshDraw>& draws) noexcept;
     [[nodiscard]] ParticleGpuSubmitResult SubmitGpuEmitters(
         bgfx::ViewId viewId,
         std::uint64_t sceneId,
@@ -111,6 +115,7 @@ private:
     bgfx::UniformHandle localBasisUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle depthParamsUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle volumetricParamsUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle solidTexture_ = BGFX_INVALID_HANDLE; // plain white: trail segments are flat quads
     bgfx::TextureHandle whiteTexture_ = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle streakTexture_ = BGFX_INVALID_HANDLE;
     ParticleVolumetricQuality volumetricQuality_ = ParticleVolumetricQuality::High;

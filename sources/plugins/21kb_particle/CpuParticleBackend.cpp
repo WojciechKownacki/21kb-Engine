@@ -1892,9 +1892,20 @@ bool CpuParticleBackend::GpuEligible(std::uint32_t denseIndex, std::uint8_t emit
     if ((emitter.simulationSpace != kb::scene::ParticleSimulationSpace::World &&
          emitter.simulationSpace != kb::scene::ParticleSimulationSpace::Local) ||
         (emitter.outputType != kb::scene::ParticleOutputType::Billboard &&
-         emitter.outputType != kb::scene::ParticleOutputType::StretchedBillboard) ||
+         emitter.outputType != kb::scene::ParticleOutputType::StretchedBillboard &&
+         emitter.outputType != kb::scene::ParticleOutputType::Mesh &&
+         emitter.outputType != kb::scene::ParticleOutputType::Trail) ||
         emitter.alignment == kb::scene::ParticleAlignment::Local || emitter.flipbookFrameCount > 1U ||
         emitter.maxParticles > kb::particles::kParticleGpuMaxCapacity) {
+        return false;
+    }
+    if (emitter.outputType == kb::scene::ParticleOutputType::Mesh && (emitter.meshAssetId == 0U || emitter.materialAssetId == 0U)) {
+        return false;
+    }
+    // A trail follows the closed form back in time, which a colliding or local-space particle does not obey.
+    const bool trail = emitter.outputType == kb::scene::ParticleOutputType::Trail;
+    if (trail && (emitter.simulationSpace == kb::scene::ParticleSimulationSpace::Local || emitter.trailMaxSamplesPerParticle < 2U ||
+        static_cast<std::uint64_t>(emitter.maxParticles) * (emitter.trailMaxSamplesPerParticle - 1U) > kb::particles::kParticleGpuMaxTrailSegments)) {
         return false;
     }
     const bool local = emitter.simulationSpace == kb::scene::ParticleSimulationSpace::Local;
@@ -1905,7 +1916,7 @@ bool CpuParticleBackend::GpuEligible(std::uint32_t denseIndex, std::uint8_t emit
         if (!module.enabled) continue;
         if (module.type == kb::scene::ParticleModuleType::CollisionPlane) {
             // A plane runs on the GPU too, but in world space only.
-            if (local) return false;
+            if (local || trail) return false;
             collisionPlane = true;
         } else if (module.type == kb::scene::ParticleModuleType::SubEmitter) {
             // Collision events would have to come back from the GPU.
@@ -1990,6 +2001,18 @@ kb::particles::ParticleGpuEmitterParams CpuParticleBackend::BuildGpuParams(
     params.softParticles = emitter.softParticles;
     params.stretchVelocityScale = emitter.stretchVelocityScale;
     params.stretchMinimumLength = emitter.stretchMinimumLength;
+    if (emitter.outputType == kb::scene::ParticleOutputType::Mesh) {
+        params.meshAssetId = emitter.meshAssetId;
+        params.materialAssetId = emitter.materialAssetId;
+        params.castsShadow = emitter.meshCastsShadow;
+        params.receivesShadow = emitter.meshReceivesShadow;
+    } else if (emitter.outputType == kb::scene::ParticleOutputType::Trail) {
+        // The CPU path records a sample every `cadence` fixed steps; the closed form is sampled at the same spacing.
+        const float stepsPerSecond = static_cast<float>(kb::scene::kParticleEffectFixedStepsPerSecond);
+        params.trailSegments = emitter.trailMaxSamplesPerParticle - 1U;
+        params.trailSegmentSeconds = std::max(1.0F, std::ceil(emitter.trailSampleIntervalSeconds * stepsPerSecond)) / stepsPerSecond;
+        params.trailWidth = emitter.trailWidth;
+    }
     return params;
 }
 

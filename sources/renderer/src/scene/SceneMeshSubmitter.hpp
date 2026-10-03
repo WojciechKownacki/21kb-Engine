@@ -5,6 +5,7 @@
 #include "engine/particles/ParticleRenderSnapshot.hpp"
 
 #include "kb/render/resources/RenderResourceRegistry.hpp"
+#include "kb/render/particles/ParticleGpuEmitterSimulation.hpp"
 #include "kb/render/particles/ParticleMeshBatchBuilder.hpp"
 #include "kb/render/particles/ParticleRenderBatcher.hpp"
 #include "kb/render/resources/RenderSkinningPaletteAllocator.hpp"
@@ -52,7 +53,8 @@ public:
         bool terrainLayersOnly = false,
         std::array<float, 16> motionVectorPreviousViewProjection = {},
         ParticleGpuRenderer* particleRenderer = nullptr,
-        const kb::particles::ParticleRenderSnapshot* particleSnapshot = nullptr) const;
+        const kb::particles::ParticleRenderSnapshot* particleSnapshot = nullptr,
+        std::span<const ParticleGpuMeshDraw> gpuMeshDraws = {}) const;
     [[nodiscard]] static SceneRenderSubmitStats ValidateResourcesInto(
         const RenderScene& renderScene,
         const RenderResourceRegistry& resources,
@@ -86,6 +88,9 @@ private:
     mutable SceneMeshInstanceBufferPool instanceBuffers_;
     mutable SceneGpuDrivenFrameResources gpuDrivenFrameResources_;
     mutable MeshPipelineBuildResult pipelineScratch_;
+    mutable MeshPipelineBuildResult gpuMeshScratch_;
+    mutable std::vector<SceneMeshBatch> gpuMeshBatchScratch_;
+    mutable std::vector<SceneRenderMeshInstance> gpuMeshInstanceScratch_;
     mutable std::array<std::vector<MeshDrawCommand>, static_cast<std::size_t>(MeshPassType::Gizmo) + 1U> passCommandScratch_;
     mutable std::array<SceneMeshCommandReuseGate, static_cast<std::size_t>(MeshPassType::Gizmo) + 1U> passCommandReuse_;
     mutable std::array<SceneMeshBatchCommandCache, static_cast<std::size_t>(MeshPassType::Gizmo) + 1U> passBatchCommandReuse_;

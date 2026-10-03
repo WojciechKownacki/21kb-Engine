@@ -33,12 +33,12 @@ Kryterium „zrobione" = test, który musi przejść; test ma być headless (bez
 - **A2 — Cienie reflektorów (spot)** · P1 · M · **zrobione** (jasność pod płytą 527 → 281)
   Użyć istniejącego atlasu cieni punktowych (jedna ściana zamiast sześciu). Zrobione gdy: test pikselowy
   „z cieniem / bez cienia" dla światła spot.
-- **A3 — Cienie punktowe poza ograniczeniami** · P2 · M · **zrobione częściowo** (materiały z grafu odbierają cienie punktowe, kaskady płynnie przechodzą; limit 4 świateł bez zmian)
+- **A3 — Cienie punktowe poza ograniczeniami** · P2 · M · **zrobione** (materiały z grafu odbierają cienie punktowe, kaskady płynnie przechodzą; limit podniesiony z 4 do 8 świateł z cieniem, przy więcej niż 4 kafelki mają połowę rozmiaru)
   Materiały z edytora grafów nie odbierają cieni punktowych; limit 4 światła; brak płynnego przejścia kaskad.
   Zrobione gdy: test dla materiału grafowego oraz test przejścia między kaskadami bez widocznego szwu.
 - **A4 — Ambient occlusion i odbicia w przestrzeni ekranu** · P2 · L · **zrobione** (AO: 149 → 127,5 przy ścianie; SSR: czerwień odbicia −9,3 → 21,9)
   Zrobione gdy: testy pikselowe dla obu efektów + przełączniki w konfiguracji.
-- **A5 — GI poza ekranem (sondy lub voxele)** · P3 · L · **zrobione** (siatka wokseli z pudełek OBB; czerwień z obiektu poza kadrem −12,2 → +12,2)
+- **A5 — GI poza ekranem (sondy lub voxele)** · P3 · L · **zrobione** (siatka wokseli; czerwień z obiektu poza kadrem −12,2 → +12,2; woksele z prawdziwej geometrii siatek do 200 tys. trójkątów zamiast pudełek, cienie światła przez siatkę)
   Zrobione gdy: oświetlenie pośrednie z obiektów spoza kadru widoczne w teście pikselowym.
 
 ### B. Cząstki GPU
@@ -47,7 +47,7 @@ Kryterium „zrobione" = test, który musi przejść; test ma być headless (bez
   Dziś emitery z kolizjami wracają na CPU. Zrobione gdy: test, że cząstka odbija się od płaszczyzny widocznej
   w buforze głębi, oraz że emitery z `CollisionPlane` mogą działać na GPU.
 - **B2 — Sortowanie cząstek przezroczystych na GPU** · P2 · M · **zrobione** (sortowanie bitoniczne; 1 mln cząstek: +4,4 ms)
-- **B3 — Przestrzeń lokalna, podążanie za transformacją, wyjście mesh/trail** · P2 · L · **zrobione częściowo** (przestrzeń lokalna i podążanie za właścicielem na GPU; mesh/trail nadal na CPU)
+- **B3 — Przestrzeń lokalna, podążanie za transformacją, wyjście mesh/trail** · P2 · L · **zrobione** (przestrzeń lokalna, mesh przez potok mesh z materiałem, smugi jako pasy liczone ze wzoru zamkniętego; wstęgi i belki nadal na CPU)
   Dziś kwalifikują się tylko emitery w przestrzeni świata z wyjściem billboard/stretched.
 - **B4 — Pod-emitery i zdarzenia na GPU** · P3 · L · **zrobione** (zdarzenia narodzin i śmierci; kolizyjne nadal na CPU)
 - **B5 — Test „od pliku do piksela"** · P1 · S · **zrobione** (plik .kbvfx → wtyczka → kolejka GPU → renderer → piksele, jeden proces)

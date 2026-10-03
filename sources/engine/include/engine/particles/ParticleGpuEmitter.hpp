@@ -18,6 +18,8 @@ namespace kb::particles {
 // scale with the CPU particle pipeline.
 inline constexpr std::size_t kParticleGpuCurveSamples = 8U;
 inline constexpr std::uint32_t kParticleGpuMaxCapacity = 1'048'576U;
+// A trail emitter draws one stretched quad per trail segment of every slot; this bounds capacity x segments.
+inline constexpr std::uint32_t kParticleGpuMaxTrailSegments = 1'048'576U;
 
 struct ParticleGpuSpawn {
     kb::math::Vec3 position{};
@@ -62,6 +64,17 @@ struct ParticleGpuEmitterParams {
     // Local-space emitters keep their birth records in the owner's frame; the world matrix sent with the
     // commands carries the particles along with the owner (acceleration is still a world-space vector).
     bool localSpace = false;
+    // Mesh output: every particle is an instance of the mesh drawn through the ordinary mesh pipeline with the
+    // material (so lighting and shadows apply); the instance uses the size curve as a uniform scale.
+    std::uint64_t meshAssetId = 0U;
+    std::uint64_t materialAssetId = 0U;
+    bool castsShadow = false;
+    bool receivesShadow = true;
+    // Trail output: the path of a free-flying particle is known in closed form, so each slot draws
+    // `trailSegments` camera-facing quads along its last trailSegments x trailSegmentSeconds of travel.
+    std::uint32_t trailSegments = 0U;
+    float trailSegmentSeconds = 0.0F;
+    float trailWidth = 0.1F;
 
     [[nodiscard]] constexpr bool HasCollision() const noexcept { return hasPlane || sceneDepthCollision; }
 };
