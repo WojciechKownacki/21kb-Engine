@@ -84,6 +84,7 @@ void RunPhysicsSceneSystemFallingBodyTest() {
     });
 
     kb::scene::Scene scene{ std::move(descriptor) };
+    kb::scene::PhysicsBackend::SetCollisionEventConsumer(scene, true);
 
     kb::scene::SceneObject floor = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
         .name = "Floor",

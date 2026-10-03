@@ -94,6 +94,7 @@ void ScriptRuntimeSceneSystem::OnFixedUpdate(kb::scene::SceneSystemContext& cont
 
 void ScriptRuntimeSceneSystem::OnDestroy(kb::scene::SceneSystemContext& context) {
     static_cast<void>(ExecuteShutdown(context.GetScene(), context.DeltaSeconds()));
+    kb::scene::PhysicsBackend::SetCollisionEventConsumer(context.GetScene(), false);
     attachedScene_ = nullptr;
 }
 
@@ -239,6 +240,7 @@ const ScriptRuntimeAssetPrepareResult& ScriptRuntimeSceneSystem::LastPrepareResu
 }
 
 void ScriptRuntimeSceneSystem::PrepareScene(kb::scene::Scene& scene) {
+    kb::scene::PhysicsBackend::SetCollisionEventConsumer(scene, true);
     scene.Assets().Manager().PumpAsyncLoads();
     ScriptAssetsApi::ReleaseDeadOwnerHandles(scene);
     ScriptWorldApi::ReleaseDeadPrefabParameterSets(scene);

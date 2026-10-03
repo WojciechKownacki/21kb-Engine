@@ -61,6 +61,7 @@
 #include <Jolt/Physics/PhysicsSystem.h>
 
 #include <algorithm>
+#include <atomic>
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -225,6 +226,9 @@ struct BodyRecord {
     // transform-driven synchronization; WriteBack then publishes the new pose
     // as the next authoritative Transform.
     bool pendingKinematicMove = false;
+    // Set once the final pose of a body that went to sleep has been written back; sleeping bodies
+    // cannot move, so further write-backs would only repeat that pose.
+    bool writeBackSettled = false;
     std::uint32_t seenEpoch = 0U;
 };
 
@@ -989,6 +993,10 @@ struct ActiveBodyContact {
 
 class JoltCollisionContactListener final : public JPH::ContactListener {
 public:
+    // Contact bookkeeping is wasted work (and an unbounded queue) while nothing consumes the events.
+    void SetEnabled(bool enabled) noexcept { enabled_.store(enabled, std::memory_order_relaxed); }
+    [[nodiscard]] bool Enabled() const noexcept { return enabled_.load(std::memory_order_relaxed); }
+
     void OnContactAdded(const JPH::Body& body1, const JPH::Body& body2, const JPH::ContactManifold& manifold, JPH::ContactSettings& settings) override {
         static_cast<void>(settings);
         Record(body1, body2, manifold, RawContactPhase::Added);
@@ -1005,6 +1013,7 @@ public:
     // events; only the two BodyIDs (still valid to read from the pair
     // itself) are available.
     void OnContactRemoved(const JPH::SubShapeIDPair& subShapePair) override {
+        if (!Enabled()) return;
         std::lock_guard<std::mutex> lock(mutex_);
         pending_.push_back(RawContactEvent{
             .pair = subShapePair,
@@ -1038,6 +1047,7 @@ public:
 
 private:
     void Record(const JPH::Body& body1, const JPH::Body& body2, const JPH::ContactManifold& manifold, RawContactPhase phase) {
+        if (!Enabled()) return;
         Vec3 point{};
         if (!manifold.mRelativeContactPointsOn1.empty()) {
             point = FromJoltPosition(manifold.GetWorldSpaceContactPointOn1(0));
@@ -1055,6 +1065,7 @@ private:
         });
     }
 
+    std::atomic<bool> enabled_{ true };
     std::mutex mutex_;
     std::vector<RawContactEvent> pending_;
     std::vector<RawContactEvent> drained_;
@@ -1145,6 +1156,13 @@ public:
         SynchronizeJoints(context);
         SynchronizeCharacters(context);
         UpdateCharacters(context);
+        const bool contactEvents = kb::scene::PhysicsBackend::HasCollisionEventConsumer(context.GetScene());
+        if (contactListener_.Enabled() != contactEvents) {
+            // Pair state tracked while disabled would be stale; start clean when events (re)start.
+            contactListener_.SetEnabled(contactEvents);
+            activeContacts_.clear();
+            static_cast<void>(contactListener_.DrainAndClear());
+        }
         Step(context.DeltaSeconds());
         writeBackPoses_.clear();
         writeBackPoses_.reserve(nonStaticBodies_.size() + characters_.size());
@@ -2403,6 +2421,9 @@ private:
                 JPH::BodyLockRead lock(physicsSystem_.GetBodyLockInterface(), body.bodyId);
                 if (!lock.Succeeded()) continue;
                 const auto& simulated = lock.GetBody();
+                const bool asleep = !simulated.IsActive();
+                if (asleep && entry.body->writeBackSettled) continue;
+                entry.body->writeBackSettled = asleep;
                 rotation = FromJolt(simulated.GetRotation());
                 position = Subtract(FromJoltPosition(simulated.GetPosition()), ColliderWorldOffset(body.signature.center, body.signature.scale, rotation));
                 linearVelocity = FromJolt(simulated.GetLinearVelocity());
