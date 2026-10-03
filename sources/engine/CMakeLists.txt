@@ -370,6 +370,7 @@ add_library(kb_engine STATIC
         include/engine/particles/ParticleCompiledEffectCache.hpp
         include/engine/particles/ParticleRenderSnapshot.hpp
         include/engine/particles/ParticleGpuVisualStepJournal.hpp
+        include/engine/particles/ParticleGpuEmitter.hpp
         include/engine/project/ParticleProjectPolicy.hpp
         include/engine/scene/SceneParticleEffectComponents.hpp
         include/engine/scene/LensEchoComponent.hpp

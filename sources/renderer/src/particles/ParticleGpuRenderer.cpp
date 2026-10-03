@@ -1,5 +1,7 @@
 #include "kb/render/particles/ParticleGpuRenderer.hpp"
 
+#include "engine/particles/ParticlePlayback.hpp"
+#include "engine/scene/Scene.hpp"
 #include "kb/render/ShaderLoader.hpp"
 #include "kb/render/resources/BuiltInParticleQuadMesh.hpp"
 
@@ -92,6 +94,7 @@ bool ParticleGpuRenderer::Initialize() {
         return false;
     }
     static_cast<void>(visualSimulation_.Initialize());
+    static_cast<void>(gpuEmitters_.Initialize());
     if (!IsInitialized()) {
         Shutdown();
         return false;
@@ -101,6 +104,7 @@ bool ParticleGpuRenderer::Initialize() {
 }
 
 void ParticleGpuRenderer::Shutdown() noexcept {
+    gpuEmitters_.Shutdown();
     visualSimulation_.Shutdown();
     stripRenderer_.Shutdown();
     if (bgfx::isValid(streakTexture_)) bgfx::destroy(streakTexture_);
@@ -312,6 +316,91 @@ ParticleGpuSubmitResult ParticleGpuRenderer::SubmitBatch(
 
 const ParticleRenderBatchBuildResult& ParticleGpuRenderer::LastBuild() const noexcept { return lastBuild_; }
 
+bool ParticleGpuRenderer::GpuEmittersReady() const noexcept {
+    return gpuEmitters_.IsReady() && IsInitialized();
+}
+
+bool ParticleGpuRenderer::HasGpuEmitters(std::uint64_t sceneId) const noexcept {
+    return gpuEmitters_.HasEmitters(sceneId);
+}
+
+void ParticleGpuRenderer::SyncGpuEmitters(kb::scene::Scene& scene, float frameDeltaSeconds, std::uint64_t frameIndex) {
+    if (!GpuEmittersReady()) return;
+    kb::particles::ParticlePlayback::SetGpuEmitterConsumer(scene, true);
+    const std::uint64_t sceneId = scene.Id();
+    const auto synced = gpuEmitterSyncedFrame_.find(sceneId);
+    if (synced != gpuEmitterSyncedFrame_.end() && synced->second == frameIndex) return;
+    gpuEmitterSyncedFrame_[sceneId] = frameIndex;
+    kb::particles::ParticlePlayback::DrainGpuEmitterCommands(scene, gpuEmitterCommandScratch_);
+    gpuEmitters_.Apply(sceneId, gpuEmitterCommandScratch_);
+    gpuEmitters_.Advance(sceneId, frameDeltaSeconds);
+    gpuEmitterDispatchPending_[sceneId] = true;
+}
+
+ParticleGpuSubmitResult ParticleGpuRenderer::SubmitGpuEmitters(
+    bgfx::ViewId viewId,
+    std::uint64_t sceneId,
+    const SceneRenderCamera& camera,
+    const RenderResourceRegistry& resources,
+    const SceneRenderResourceMap& resourceMap,
+    bgfx::TextureHandle sceneDepthTexture) noexcept {
+    ParticleGpuSubmitResult result{};
+    if (!GpuEmittersReady()) return result;
+    if (const auto pending = gpuEmitterDispatchPending_.find(sceneId);
+        pending != gpuEmitterDispatchPending_.end() && pending->second) {
+        gpuEmitters_.Dispatch(viewId, sceneId);
+        pending->second = false;
+    }
+    const RenderMeshHandle quadHandle = resourceMap.ResolveMesh(BuiltInParticleQuadMeshAssetId().value);
+    const RenderMeshResource* quad = resources.FindMesh(quadHandle);
+    if (quad == nullptr || !bgfx::isValid(quad->vertexBuffer) || !bgfx::isValid(quad->indexBuffer)) return result;
+    const std::array<float, 12> cameraBasis{
+        camera.view[0], camera.view[4], camera.view[8], 0.0F,
+        camera.view[1], camera.view[5], camera.view[9], 0.0F,
+        camera.view[2], camera.view[6], camera.view[10], 0.0F,
+    };
+    result.succeeded = true;
+    for (const ParticleGpuEmitterSimulation::Draw& draw : gpuEmitters_.Draws(sceneId)) {
+        const kb::particles::ParticleGpuEmitterParams& params = *draw.params;
+        bgfx::setUniform(cameraBasisUniform_, cameraBasis.data(), 3U);
+        bgfx::setInstanceDataBuffer(draw.instances, 0U, draw.capacity);
+        bgfx::setVertexBuffer(0U, quad->vertexBuffer);
+        bgfx::setIndexBuffer(quad->indexBuffer);
+        const std::array<float, 4> emitterParams{ 1.0F, 1.0F, static_cast<float>(params.alignment), 1.0F };
+        const std::array<float, 4> localBasis{ 0.0F, 0.0F, 0.0F, 1.0F };
+        const bool soft = params.softParticles && bgfx::isValid(sceneDepthTexture);
+        const std::array<float, 4> depthParams{
+            camera.projection[10], camera.projection[14], kParticleSoftFadeDistanceMeters, soft ? 1.0F : 0.0F };
+        const std::array<float, 4> featureParams{
+            0.0F, static_cast<float>(params.output),
+            params.blend == kb::particles::ParticleRenderBlendMode::Add ? 1.0F : 0.0F, 0.0F };
+        const std::array<float, 4> volumetricParams{ 1.0F, 1.0F, 1.0F, 0.0F };
+        bgfx::setUniform(emitterParamsUniform_, emitterParams.data());
+        bgfx::setUniform(featureParamsUniform_, featureParams.data());
+        bgfx::setUniform(volumetricParamsUniform_, volumetricParams.data());
+        bgfx::setUniform(localBasisUniform_, localBasis.data());
+        bgfx::setUniform(depthParamsUniform_, depthParams.data());
+        bgfx::TextureHandle atlas =
+            params.output == kb::particles::ParticleRenderOutput::StretchedBillboard && bgfx::isValid(streakTexture_)
+            ? streakTexture_ : whiteTexture_;
+        if (params.textureAtlasAssetId != 0U) {
+            const RenderTextureHandle atlasHandle =
+                resourceMap.ResolveTexture(params.textureAtlasAssetId, RenderTextureColorSpace::Srgb);
+            if (const RenderTextureResource* texture = resources.FindTexture(atlasHandle);
+                texture != nullptr && bgfx::isValid(texture->texture)) {
+                atlas = texture->texture;
+            }
+        }
+        bgfx::setTexture(0U, atlasSampler_, atlas);
+        bgfx::setTexture(1U, sceneDepthSampler_, bgfx::isValid(sceneDepthTexture) ? sceneDepthTexture : whiteTexture_);
+        bgfx::setState(ParticleBlendState(params.blend, params.depth));
+        bgfx::submit(viewId, program_);
+        result.submittedParticles += draw.capacity;
+        ++result.drawCalls;
+    }
+    return result;
+}
+
 const ParticleStripBuildResult& ParticleGpuRenderer::BuildStrips(
     const kb::particles::ParticleRenderSnapshot& snapshot,
     const SceneRenderCamera& camera) noexcept {
@@ -323,11 +412,17 @@ ParticleStripSubmitResult ParticleGpuRenderer::SubmitStripDraw(bgfx::ViewId view
 }
 
 void ParticleGpuRenderer::ReleaseParticleScene(std::uint64_t sceneId) noexcept {
+    gpuEmitters_.ReleaseScene(sceneId);
+    gpuEmitterSyncedFrame_.erase(sceneId);
+    gpuEmitterDispatchPending_.erase(sceneId);
     visualSimulation_.ReleaseScene(sceneId);
     stripRenderer_.ReleaseScene(sceneId);
 }
 
 void ParticleGpuRenderer::ReleaseAllParticleScenes() noexcept {
+    gpuEmitters_.ReleaseAllScenes();
+    gpuEmitterSyncedFrame_.clear();
+    gpuEmitterDispatchPending_.clear();
     visualSimulation_.ReleaseAllScenes();
     stripRenderer_.ReleaseAllScenes();
 }

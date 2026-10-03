@@ -106,6 +106,7 @@ add_library(kb_renderer STATIC
     include/kb/render/shadow/ShadowMapResource.hpp
     include/kb/render/shadow/PointShadowUniforms.hpp
     include/kb/render/gi/SceneGiHistory.hpp
+    include/kb/render/particles/ParticleGpuEmitterSimulation.hpp
     include/kb/render/ViewIdPolicy.hpp
     src/BgfxContext.cpp
     src/bake/MeshBaker.cpp
@@ -347,6 +348,7 @@ add_library(kb_renderer STATIC
     src/shadow/ShadowMapResource.cpp
     src/shadow/PointShadowPassPlanner.cpp
     src/gi/SceneGiHistory.cpp
+    src/particles/ParticleGpuEmitterSimulation.cpp
     src/shadow/PointShadowPassPlanner.hpp
     src/private/ui/ScreenUIBackgroundBlur.hpp
     src/private/ui/ScreenUIComposite.hpp
@@ -566,6 +568,7 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_instance_cull.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_instance_cull_finalize.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_particle_visual_integrate.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_particle_gpu_emit.sc
         VARYING_DEF ${KB_RENDERER_SHADER_VARYING_DEF}
         OUTPUT_DIR ${KB_RENDERER_GENERATED_SHADER_DIR}
         INCLUDE_DIRS
