@@ -235,7 +235,7 @@ bool ReadEffect(Reader& reader, ParticleCompiledEffect& effect) {
         if (emitter.emitterId == 0U || emitter.emitterId <= previousEmitterId || emitter.materialAssetId == 0U ||
             ((emitter.outputType == kb::scene::ParticleOutputType::Mesh) != (emitter.meshAssetId != 0U)) ||
             emitter.maxParticles == 0U ||
-            emitter.maxParticles > kb::scene::kParticleEffectMaxCpuParticlesPerEmitter || emitter.rateKeyCount == 0U ||
+            emitter.maxParticles > kb::scene::ParticleEmitterCapacityLimit(effect.backendPolicy) || emitter.rateKeyCount == 0U ||
             emitter.lifetimeMin <= 0.0F || emitter.lifetimeMax < emitter.lifetimeMin ||
             emitter.prewarmSeconds < 0.0F || emitter.prewarmSeconds > kb::scene::kParticleEffectMaxPrewarmSeconds ||
             emitter.flipbookColumns == 0U || emitter.flipbookRows == 0U || emitter.flipbookFrameCount == 0U ||
@@ -267,7 +267,7 @@ bool ReadEffect(Reader& reader, ParticleCompiledEffect& effect) {
             previousModuleId = module.moduleId;
         }
     }
-    if (totalCapacity > kb::scene::kParticleEffectMaxCpuParticlesPerScene) return false;
+    if (totalCapacity > kb::scene::ParticleEffectCapacityLimit(effect.backendPolicy)) return false;
     for (std::uint8_t index = 0U; index < effect.eventBindingCount; ++index) {
         const auto& binding = effect.eventBindings[index];
         if (binding.count == 0U || binding.count > kb::scene::kParticleEffectMaxSpawnsPerStep ||
