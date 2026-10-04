@@ -1838,11 +1838,6 @@ void SceneTransformHierarchySystem::Update(SceneState& state) const {
 
     state.transformDirtyScratch.clear();
     state.transformWorldScratch.clear();
-    const auto denseScratchStart = profileTimings != nullptr ? Clock::now() : Clock::time_point{};
-    PrepareDenseTransformScratch(state);
-    if (profileTimings != nullptr) {
-        profileTimings->denseScratchNanoseconds = Nanoseconds(Clock::now() - denseScratchStart);
-    }
     const std::size_t trackedSlotCount = HierarchyTrackedSlotCount(state);
     state.transformDirtyScratch.reserve(state.hierarchyOrder.size());
     state.transformWorldScratch.reserve(state.hierarchyOrder.size());
@@ -1885,6 +1880,15 @@ void SceneTransformHierarchySystem::Update(SceneState& state) const {
     }
     if (RunNativeDirtyRanges(state, updateStart, profileTimings, topologyChanged)) {
         return;
+    }
+
+    // The native lane reads and composes component rows directly. Dense caches
+    // are needed only by the generic hierarchy lanes below, including their
+    // first use after a root-only scene acquires a parent or a bounded budget.
+    const auto denseScratchStart = profileTimings != nullptr ? Clock::now() : Clock::time_point{};
+    PrepareDenseTransformScratch(state);
+    if (profileTimings != nullptr) {
+        profileTimings->denseScratchNanoseconds = Nanoseconds(Clock::now() - denseScratchStart);
     }
 
     std::vector<SceneTransformBatchEntry>& entries = state.transformHierarchyEntriesScratch;
