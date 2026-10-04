@@ -89,7 +89,8 @@ SceneEntity SceneEntityCreationService::CreateEntity(Scene& scene, SceneObjectDe
     return entity;
 }
 
-std::vector<SceneObject> SceneEntityCreationService::CreateObjects(Scene& scene, std::span<const SceneObjectDesc> descs) {
+std::vector<SceneObject> SceneEntityCreationService::CreateObjects(Scene& scene, std::span<const SceneObjectDesc> descs,
+    std::span<const kb::ecs::World::BulkComponentView> components) {
     SceneState& state = SceneAccess::State(scene);
     std::vector<TransformComponent> transforms(descs.size());
     std::vector<VisibilityComponent> visibilities(descs.size());
@@ -98,11 +99,12 @@ std::vector<SceneObject> SceneEntityCreationService::CreateObjects(Scene& scene,
         visibilities[index] = NormalizedVisibility(descs[index].visibility);
     }
     // The entities are born in their final archetype instead of passing through the empty and transform-only ones.
-    const std::array<kb::ecs::World::BulkComponentView, 2U> components{
+    std::vector<kb::ecs::World::BulkComponentView> views{
         kb::ecs::World::MakeBulkComponentView(std::span<const TransformComponent>{ transforms }),
         kb::ecs::World::MakeBulkComponentView(std::span<const VisibilityComponent>{ visibilities }),
     };
-    const std::vector<SceneEntity> entities = state.world.CreateEntities(descs.size(), components);
+    views.insert(views.end(), components.begin(), components.end());
+    const std::vector<SceneEntity> entities = state.world.CreateEntities(descs.size(), views);
     try {
         RegisterCreatedEntities(scene, state, entities, descs, visibilities);
     } catch (...) {

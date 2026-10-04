@@ -2155,6 +2155,26 @@ void RunTransformPassContractTest() {
         "A transform pass must compose a plain row's world transform in place");
     kb::tests::Require(scene.Transforms().Get(agents[43]).localPosition.y == 0.0F, "A transform pass must not touch rows outside its archetypes");
 
+    // objects created with the application's component are born in its archetype
+    std::vector<TransformPassAgentState> spawnStates(3000U);
+    for (std::size_t index = 0U; index < spawnStates.size(); ++index) spawnStates[index].speed = 1000.0F + static_cast<float>(index);
+    const std::array<kb::ecs::World::BulkComponentView, 1U> spawnComponents{ kb::ecs::World::MakeBulkComponentView(std::span<const TransformPassAgentState>{ spawnStates }) };
+    std::vector<kb::scene::SceneObjectDesc> spawnDescs(spawnStates.size());
+    const std::vector<kb::scene::SceneObject> spawned = scene.Entities().CreateObjects(spawnDescs, spawnComponents);
+    kb::tests::Require(spawned.size() == spawnStates.size() && world.TryGet<TransformPassAgentState>(spawned[7].Entity()) != nullptr &&
+            world.TryGet<TransformPassAgentState>(spawned[7].Entity())->speed == 1007.0F,
+        "Objects created with an application component must carry its value");
+    const kb::scene::TransformPassStats spawnedStats = scene.Transforms().ParallelForEachRoot<TransformPassAgentState>(512U, [](kb::scene::TransformRowRange& range) {
+        const TransformPassAgentState* states = range.Column<TransformPassAgentState>();
+        for (std::size_t row = 0U; row < range.Count(); ++row) {
+            range.SetLocal(row, kb::scene::Vec3{ states[row].speed, 2.0F, 0.0F }, range.Get(row).localRotation, range.Get(row).localScale);
+        }
+    });
+    kb::tests::Require(spawnedStats.rowsWritten == agents.size() / 2U + spawned.size() &&
+            scene.Transforms().Get(spawned[7]).worldPosition.x == 1007.0F,
+        "A transform pass must reach objects created with the application component");
+    for (const kb::scene::SceneObject& object : spawned) scene.Entities().Destroy(object);
+
     bool structuralChangeRejected = false;
     try {
         static_cast<void>(scene.Transforms().ParallelForEachRoot(4096U, [&scene](kb::scene::TransformRowRange&) {
