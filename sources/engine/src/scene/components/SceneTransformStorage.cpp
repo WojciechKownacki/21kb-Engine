@@ -38,26 +38,39 @@ TransformComponent SceneTransformComponentStore::Written(const TransformComponen
     return stored;
 }
 
-void SceneTransformComponentStore::Set(SceneEntity entity, const TransformComponent& transform) {
-    const auto bumpVersions = [&transform](const TransformComponent* current) { return Written(current, transform); };
-    // Nothing observes transforms: one lookup finds the row and flags it.
+void SceneTransformComponentStore::Write(TransformComponent& current, const TransformComponent& transform) noexcept {
+    // `transform` may be the stored row itself: its versions are read before the copy.
+    const std::uint64_t localVersion = current.localVersion + 1U;
+    const std::uint64_t parentVersion = current.parentVersion;
+    const std::uint64_t worldVersion = current.worldVersion;
+    current = transform;
+    current.localVersion = localVersion;
+    current.parentVersion = parentVersion;
+    current.worldVersion = worldVersion;
+    current.worldDirty = true;
+}
+
+bool SceneTransformComponentStore::Set(SceneEntity entity, const TransformComponent& transform) {
+    // Nothing observes transforms: one lookup finds the row of a live entity and flags it.
     if (!world_->MirrorsValueWrites(componentId_)) {
         if (void* data = kb::ecs::WorldInternalAccess::TryGetMutableNativeComponentMarkModified(*world_, entity, componentId_); data != nullptr) {
-            auto* current = static_cast<TransformComponent*>(data);
-            *current = bumpVersions(current);
-            return;
+            Write(*static_cast<TransformComponent*>(data), transform);
+            return true;
         }
     }
     // A component that already lives in the native storage is overwritten in place and flagged: no
     // structural bookkeeping.
     if (void* data = kb::ecs::WorldInternalAccess::TryGetMutableNativeComponent(*world_, entity, componentId_); data != nullptr) {
-        auto* current = static_cast<TransformComponent*>(data);
-        *current = bumpVersions(current);
-        kb::ecs::WorldInternalAccess::MarkNativeComponentWritten(*world_, entity, componentId_, sizeof(TransformComponent), current);
-        return;
+        Write(*static_cast<TransformComponent*>(data), transform);
+        kb::ecs::WorldInternalAccess::MarkNativeComponentWritten(*world_, entity, componentId_, sizeof(TransformComponent), data);
+        return true;
     }
-    const TransformComponent stored = bumpVersions(TryGet(entity));
+    if (!world_->IsAlive(entity)) {
+        return false;
+    }
+    const TransformComponent stored = Written(TryGet(entity), transform);
     SceneComponentStorageAccess::Set<TransformComponent>(world_, entity, stored);
+    return true;
 }
 
 void SceneTransformComponentStore::MarkModified(SceneEntity entity) noexcept {

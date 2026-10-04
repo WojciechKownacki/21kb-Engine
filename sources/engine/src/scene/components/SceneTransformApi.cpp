@@ -76,15 +76,14 @@ TransformComponent* SceneTransformService::TryGet(Scene& scene, SceneEntity enti
 }
 
 void SceneTransformService::Set(Scene& scene, SceneObject object, const TransformComponent& transform) {
-    if (SceneEntityService::IsAlive(scene, object)) {
+    if (SceneAccess::BelongsTo(scene, object)) {
         Set(scene, object.Entity(), transform);
     }
 }
 
 void SceneTransformService::Set(Scene& scene, SceneEntity entity, const TransformComponent& transform) {
-    if (SceneEntityService::IsAlive(scene, entity)) {
-        SceneState& state = SceneAccess::State(scene);
-        state.componentStorage.Transforms().Set(entity, transform);
+    SceneState& state = SceneAccess::State(scene);
+    if (state.componentStorage.Transforms().Set(entity, transform)) {
         // the sync composes a row without parent or children from its dirty flag alone
         if (SceneHierarchyCache::HasTransformLink(state, entity)) {
             EnqueueSceneTransformDirtyFrontier(state, entity);
@@ -100,12 +99,11 @@ void SceneTransformService::SetMany(Scene& scene, std::span<const SceneEntity> e
     SceneState& state = SceneAccess::State(scene);
     const bool trackPrefab = !state.suppressPrefabDirtyTracking && state.prefabInstances.Count() > 0U;
     auto& store = state.componentStorage.Transforms();
-    const auto set = [&scene, &state, &store, trackPrefab, entities, transforms](std::size_t index) {
+    const auto set = [&state, &store, trackPrefab, entities, transforms](std::size_t index) {
         const SceneEntity entity = entities[index];
-        if (!SceneEntityService::IsAlive(scene, entity)) {
+        if (!store.Set(entity, transforms[index])) {
             return;
         }
-        store.Set(entity, transforms[index]);
         if (SceneHierarchyCache::HasTransformLink(state, entity)) {
             EnqueueSceneTransformDirtyFrontier(state, entity);
         }
@@ -148,8 +146,7 @@ void SceneTransformService::SetMany(Scene& scene, std::span<const SceneEntity> e
                     if (state.world.IsAlive(entity)) range.unstored.push_back(index);
                     continue;
                 }
-                auto& current = *static_cast<TransformComponent*>(data);
-                current = SceneTransformComponentStore::Written(&current, transforms[index]);
+                SceneTransformComponentStore::Write(*static_cast<TransformComponent*>(data), transforms[index]);
                 kb::ecs::NativeComponentRows* run = range.writtenRows.empty() ? nullptr : &range.writtenRows.back();
                 if (run != nullptr && run->archetypeIndex == row.archetypeIndex && run->chunkIndex == row.chunkIndex && run->firstRow + run->count == row.firstRow) {
                     ++run->count;

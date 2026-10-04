@@ -1220,7 +1220,10 @@ public:
         ++componentVersions_[index];
         ++version_;
         NativeChunk& chunk = chunks_[location.chunk];
-        chunk.dirtyRowCounts[index] += SetDirtyBits(DirtyWords(chunk, index), location.row, 1U);
+        std::uint64_t& word = DirtyWords(chunk, index)[location.row / 64U];
+        const std::uint64_t bit = std::uint64_t{ 1 } << (location.row % 64U);
+        chunk.dirtyRowCounts[index] += (word & bit) == 0U ? 1U : 0U;
+        word |= bit;
         return ComponentData(location, *column);
     }
 
@@ -1293,6 +1296,15 @@ private:
     }
 
     [[nodiscard]] const ComponentLayout* FindColumn(ComponentId componentId) const noexcept {
+        // An archetype has a few columns: a scan of the sorted ids beats a binary search on every row access.
+        if (layout_.columns.size() <= 8U) {
+            for (const ComponentLayout& column : layout_.columns) {
+                if (column.type.id >= componentId) {
+                    return column.type.id == componentId ? &column : nullptr;
+                }
+            }
+            return nullptr;
+        }
         const auto match = std::lower_bound(
             layout_.columns.begin(),
             layout_.columns.end(),

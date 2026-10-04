@@ -15,9 +15,12 @@ public:
 
     [[nodiscard]] const TransformComponent* TryGet(SceneEntity entity) const noexcept;
     [[nodiscard]] TransformComponent* TryGet(SceneEntity entity) noexcept;
-    void Set(SceneEntity entity, const TransformComponent& transform);
+    // Writes the transform of a live entity; false when the entity is not alive.
+    bool Set(SceneEntity entity, const TransformComponent& transform);
     // The row Set stores for `transform` over the row `current` (null for a new one): the versions carry on.
     [[nodiscard]] static TransformComponent Written(const TransformComponent* current, const TransformComponent& transform) noexcept;
+    // Overwrites the stored row `current` with `transform` the way Set does.
+    static void Write(TransformComponent& current, const TransformComponent& transform) noexcept;
     void MarkModified(SceneEntity entity) noexcept;
     // Publishes a row that was written in place (versions untouched): flags it and mirrors it to the backend.
     void MarkWritten(SceneEntity entity) noexcept;
