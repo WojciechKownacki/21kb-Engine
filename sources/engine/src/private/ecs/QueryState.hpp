@@ -74,14 +74,22 @@ private:
         }
     };
 
-    [[nodiscard]] bool RecordChanged(const QueryTableDispatchRecord& record) const;
-    [[nodiscard]] bool RecordChanged(const MutableQueryTableDispatchRecord& record) const;
+    struct ChangeVersionSnapshot {
+        std::uint64_t version = 0;
+        std::optional<std::uint64_t> previousObservation;
+        bool changed = false;
+    };
+
+    using ChangeVersionSnapshots = std::optional<std::unordered_map<ChangeVersionKey, ChangeVersionSnapshot, ChangeVersionKeyHash>>;
+
+    template <typename Record>
+    [[nodiscard]] ChangeVersionSnapshots SnapshotRecordVersions(std::span<const Record> records) const;
+    [[nodiscard]] bool RecordChanged(std::size_t archetypeIndex, const ChangeVersionSnapshots& snapshots) const;
     void PrepareReadRecords(QueryExecutionSettings settings, QueryBatchExecutionScratch& scratch, bool refreshMetadata) const;
     void PrepareMutableRecords(QueryExecutionSettings settings, QueryBatchExecutionScratch& scratch, bool refreshMetadata) const;
     void RefreshRecordMetadata(std::span<QueryTableDispatchRecord> records) const;
     void RefreshRecordMetadata(std::span<MutableQueryTableDispatchRecord> records) const;
-    void CommitRecordVersions(const QueryTableDispatchRecord& record) const;
-    void CommitRecordVersions(const MutableQueryTableDispatchRecord& record) const;
+    void CommitRecordVersions(const ChangeVersionSnapshots& snapshots) const;
 
     NativeArchetypeStorage* nativeStorage_ = nullptr;
     std::shared_ptr<QueryPlan> plan_;

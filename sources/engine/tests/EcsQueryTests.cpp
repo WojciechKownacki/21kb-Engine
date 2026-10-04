@@ -1,5 +1,6 @@
 #include "EcsTestTypes.hpp"
 #include "EcsTestSuites.hpp"
+#include "EcsChangedQueryTests.inl"
 #include "TestSupport.hpp"
 
 #include "engine/ecs/QueryExecutionScratch.hpp"
@@ -2405,6 +2406,7 @@ void RunEcsQueryTests() {
     RunTypedEcsQueryComponentFilterTest();
     RunUnsafeHotQueryAppendRefreshTest();
     RunTypedEcsQueryChangeFilterTest();
+    RunEcsChangedQueryTests();
     RunTypedEcsQueryFilterValidationTest();
     RunTypedEcsQueryTelemetryCountsArchetypesTest();
     RunTypedEcsQueryPlanCacheBoundedTest();

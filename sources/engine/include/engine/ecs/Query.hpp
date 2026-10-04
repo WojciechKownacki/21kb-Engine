@@ -41,6 +41,8 @@ public:
     // Mutable queries must not overlap other queries: they publish shared storage metadata.
     // Read-only query telemetry is synchronized across separate instances.
     // Queries remain usable after moving their World; the destination World must outlive them.
+    // Changed filters consume execution-start archetype versions after complete success.
+    // Newer callback writes remain pending; exceptions retain the filter observations.
     using Visitor = void (*)(Entity entity, const Components&... components, void* context);
     using Batch = QueryBatch<Components...>;
     using MutableBatch = MutableQueryBatch<Components...>;
