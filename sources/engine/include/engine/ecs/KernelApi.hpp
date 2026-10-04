@@ -72,6 +72,8 @@ public:
 
     template <typename T, std::size_t Alignment = kKernelColumnAlignment>
     [[nodiscard]] AlignedColumn<T, Alignment> Aligned(std::size_t index, std::size_t rowCount) const noexcept {
+        // Component bases and subranges may have less than Alignment alignment;
+        // the view checks the actual address before issuing a compiler hint.
         return AlignedColumn<T, Alignment>{ Column<T>(index), rowCount };
     }
 
