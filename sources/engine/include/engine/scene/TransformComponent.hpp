@@ -94,4 +94,60 @@ struct TransformComponent {
     }
 };
 
+// The world transform as the column-major affine the renderer consumes. The scene's render-proxy lists and the
+// renderer's transform pull both build it here, so the two agree bit for bit.
+[[nodiscard]] inline WorldTransformAffine3x4 BuildWorldAffine3x4(const TransformComponent& transform) noexcept {
+    if (transform.worldRotation.x == 0.0F &&
+        transform.worldRotation.y == 0.0F &&
+        transform.worldRotation.z == 0.0F &&
+        transform.worldRotation.w == 1.0F) {
+        WorldTransformAffine3x4 affine;
+        affine.values[0] = transform.worldScale.x;
+        affine.values[1] = 0.0F;
+        affine.values[2] = 0.0F;
+        affine.values[3] = 0.0F;
+        affine.values[4] = transform.worldScale.y;
+        affine.values[5] = 0.0F;
+        affine.values[6] = 0.0F;
+        affine.values[7] = 0.0F;
+        affine.values[8] = transform.worldScale.z;
+        affine.values[9] = transform.worldPosition.x;
+        affine.values[10] = transform.worldPosition.y;
+        affine.values[11] = transform.worldPosition.z;
+        return affine;
+    }
+
+    const float x = transform.worldRotation.x;
+    const float y = transform.worldRotation.y;
+    const float z = transform.worldRotation.z;
+    const float w = transform.worldRotation.w;
+    const float xx = x * x;
+    const float yy = y * y;
+    const float zz = z * z;
+    const float xy = x * y;
+    const float xz = x * z;
+    const float yz = y * z;
+    const float wx = w * x;
+    const float wy = w * y;
+    const float wz = w * z;
+    const float sx = transform.worldScale.x;
+    const float sy = transform.worldScale.y;
+    const float sz = transform.worldScale.z;
+
+    WorldTransformAffine3x4 affine;
+    affine.values[0] = (1.0F - 2.0F * (yy + zz)) * sx;
+    affine.values[1] = (2.0F * (xy + wz)) * sx;
+    affine.values[2] = (2.0F * (xz - wy)) * sx;
+    affine.values[3] = (2.0F * (xy - wz)) * sy;
+    affine.values[4] = (1.0F - 2.0F * (xx + zz)) * sy;
+    affine.values[5] = (2.0F * (yz + wx)) * sy;
+    affine.values[6] = (2.0F * (xz + wy)) * sz;
+    affine.values[7] = (2.0F * (yz - wx)) * sz;
+    affine.values[8] = (1.0F - 2.0F * (xx + yy)) * sz;
+    affine.values[9] = transform.worldPosition.x;
+    affine.values[10] = transform.worldPosition.y;
+    affine.values[11] = transform.worldPosition.z;
+    return affine;
+}
+
 } // namespace kb::scene

@@ -1,6 +1,7 @@
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneIterationService.hpp"
 #include "scene/SceneState.hpp"
+#include "scene/transform/SceneTransformHierarchySystem.hpp"
 #include "scene/components/SceneComponentIteration.hpp"
 
 #include <algorithm>
@@ -19,6 +20,7 @@ void ForEachUpdatedMeshRendererRenderProxyImpl(
     }
 
     const SceneState& state = SceneAccess::State(scene);
+    EnsureSceneTransformRenderProxyLists(state);
     const std::span<const std::size_t> proxyIndices = visibleOnly
         ? std::span<const std::size_t>{ state.transformRenderProxyVisibleMeshRendererIndices }
         : std::span<const std::size_t>{ state.transformRenderProxyMeshRendererIndices };

@@ -22,6 +22,13 @@ public:
     void Update(SceneState& state) const;
 };
 
+// Forgets the transforms composed so far this frame, at the start of an Update.
+void ResetSceneTransformRenderProxyUpdates(SceneState& state) noexcept;
+
+// Builds the render-proxy lists (updated entities, their world affines, and the mesh, camera and light entries
+// among them) from this frame's update bits, if a sync changed them since the last read.
+void EnsureSceneTransformRenderProxyLists(const SceneState& state);
+
 // Starts the scene's worker threads (shared by the transform passes and SceneRuntime::ParallelFor) if they are not running.
 void EnsureSceneTransformWorkerPool(SceneState& state);
 

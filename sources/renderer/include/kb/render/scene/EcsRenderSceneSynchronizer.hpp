@@ -26,6 +26,30 @@ namespace kb::render {
 
 class RenderScene;
 
+// Every proxy kind that shows an entity's world transform, in the order PullTransforms refreshes them: cameras
+// first, as a view-facing panel faces the primary camera, and facing panels before the meshes they orient.
+enum class RenderTransformProxyKind : std::uint8_t {
+    Camera,
+    Light,
+    FacingPanel,
+    Mesh,
+    VisibilityBlocker,
+    GeometrySwarm,
+    SurfaceCast,
+    SpaceStroke,
+};
+
+inline constexpr std::array<RenderTransformProxyKind, 8U> kRenderTransformProxyKinds{
+    RenderTransformProxyKind::Camera,
+    RenderTransformProxyKind::Light,
+    RenderTransformProxyKind::FacingPanel,
+    RenderTransformProxyKind::Mesh,
+    RenderTransformProxyKind::VisibilityBlocker,
+    RenderTransformProxyKind::GeometrySwarm,
+    RenderTransformProxyKind::SurfaceCast,
+    RenderTransformProxyKind::SpaceStroke,
+};
+
 struct EcsRenderSceneSynchronizerReserveDesc {
     std::uint32_t meshProxies = 0;
     std::uint32_t cameraProxies = 0;
@@ -83,6 +107,11 @@ public:
         SyncRenderProxyUpdates(scene, renderScene);
     }
     void SyncFacingPanelUpdates(const kb::scene::Scene& scene, RenderScene& renderScene, bool primaryCameraChanged) const;
+    // Refreshes the transform of every existing proxy of the kinds above by reading the scene's transform store in
+    // place: a proxy whose entity's world version it already applied is skipped, a row written after the last
+    // transform sync is resolved as the structural sync resolves it. Models are built as the scene's render-proxy
+    // affines are. Proxies are created and removed by the structural and entity syncs, not here.
+    void PullTransforms(const kb::scene::Scene& scene, RenderScene& renderScene) const;
     // Skinning palette handles address the renderer's current frame buffer and cannot be
     // retained in a render proxy across frames. Refresh only deformed mesh proxies on an
     // otherwise unchanged scene so camera-only presents keep their GPU skinning data alive.

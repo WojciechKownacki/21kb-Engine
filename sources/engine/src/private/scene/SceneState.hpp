@@ -605,6 +605,12 @@ public:
     std::vector<SceneEntity> transformDirtyFrontierNextScratch;
     std::vector<std::uint8_t> renderProxyDenseComponentMasks;
     std::unordered_map<SceneEntity::IdType, std::uint8_t> renderProxySparseComponentMasks;
+    // One bit per dense entity index: the transform sync composed the entity's world transform during this frame
+    // (entities without a dense index are listed). The render-proxy lists below are derived from them and from the
+    // transform store when somebody reads them, and are not kept up to date otherwise.
+    std::vector<std::uint64_t> transformUpdatedBits;
+    std::vector<SceneEntity> transformUpdatedSparseEntities;
+    bool transformRenderProxyListsStale = false;
     std::vector<SceneEntity> transformRenderProxyUpdateEntities;
     std::vector<WorldTransformAffine3x4> transformRenderProxyWorldAffine3x4;
     std::vector<std::size_t> transformRenderProxyMeshRendererIndices;
@@ -616,7 +622,6 @@ public:
     std::vector<SceneEntity> renderProxyDirtyTraversalScratch;
     std::uint64_t renderProxyUpdateRevision = 1U;
     std::uint64_t renderTopologyVersion = 1U;
-    std::vector<std::size_t> transformRenderProxyIdentityAffineChunkCountsScratch;
     std::size_t lastTransformRenderProxyIdentityAffineFastPathCount = 0U;
     std::unique_ptr<kb::ecs::WorkerPool> transformWorkerPool;
     std::size_t lastTransformHierarchyInspectedCount = 0U;

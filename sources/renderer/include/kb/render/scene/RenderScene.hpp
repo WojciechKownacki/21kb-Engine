@@ -211,33 +211,39 @@ struct MeshRenderProxy {
     mutable std::uint32_t instanceGroupIndex = 0;
     mutable std::uint32_t instanceIndexInGroup = 0;
     mutable std::uint64_t instanceLocationVersion = 0;
+    // The entity's world transform version the transform pull last applied (EcsRenderSceneSynchronizer::PullTransforms).
+    mutable std::uint64_t pulledWorldVersion = 0;
 };
 
 struct CameraRenderProxy {
     RenderProxyId id{};
     CameraRenderProxyDesc desc{};
     RenderProxyDirtyFlag dirty = RenderProxyDirtyFlag::None;
+    mutable std::uint64_t pulledWorldVersion = 0;
 };
 
 struct LightRenderProxy {
     RenderProxyId id{};
     LightRenderProxyDesc desc{};
     RenderProxyDirtyFlag dirty = RenderProxyDirtyFlag::None;
+    mutable std::uint64_t pulledWorldVersion = 0;
 };
 
 struct VisibilityBlockerRenderProxy {
     RenderProxyId id{};
     VisibilityBlockerRenderProxyDesc desc{};
     RenderProxyDirtyFlag dirty = RenderProxyDirtyFlag::None;
+    mutable std::uint64_t pulledWorldVersion = 0;
 };
 
 struct GeometrySwarmRenderProxy {
     RenderProxyId id{};
     GeometrySwarmRenderProxyDesc desc{};
     RenderProxyDirtyFlag dirty = RenderProxyDirtyFlag::None;
+    mutable std::uint64_t pulledWorldVersion = 0;
 };
-struct SurfaceCastRenderProxy { RenderProxyId id{}; SurfaceCastRenderProxyDesc desc{}; RenderProxyDirtyFlag dirty = RenderProxyDirtyFlag::None; };
-struct SpaceStrokeRenderProxy { RenderProxyId id{}; SpaceStrokeRenderProxyDesc desc{}; RenderProxyDirtyFlag dirty = RenderProxyDirtyFlag::None; };
+struct SurfaceCastRenderProxy { RenderProxyId id{}; SurfaceCastRenderProxyDesc desc{}; RenderProxyDirtyFlag dirty = RenderProxyDirtyFlag::None; mutable std::uint64_t pulledWorldVersion = 0; };
+struct SpaceStrokeRenderProxy { RenderProxyId id{}; SpaceStrokeRenderProxyDesc desc{}; RenderProxyDirtyFlag dirty = RenderProxyDirtyFlag::None; mutable std::uint64_t pulledWorldVersion = 0; };
 
 struct RenderSceneReserveDesc {
     std::uint32_t meshProxies = 0;
