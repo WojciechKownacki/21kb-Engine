@@ -2425,6 +2425,7 @@ public:
         }
         Migrate(entity, record, sourceIndex, EdgeKind::Add, singleEdgeIdsScratch_, targetTypes, components);
         BumpStructuralVersion();
+        migrationVersion_ = structuralVersion_;
     }
 
     void AddComponents(std::span<const Entity> entities, std::span<const NativeBulkComponentColumn> components) {
@@ -2493,6 +2494,7 @@ public:
                 components);
         }
         BumpStructuralVersion(entities.size());
+        migrationVersion_ = structuralVersion_;
     }
 
     void RemoveComponents(Entity entity, std::span<const ComponentId> componentIds) {
@@ -2928,6 +2930,82 @@ public:
                 records.push_back(record);
             }
         }
+    }
+
+    [[nodiscard]] bool IsAppendOnlySince(std::uint64_t version) const noexcept {
+        return version != 0U && version <= structuralVersion_ && removalVersion_ <= version && migrationVersion_ <= version;
+    }
+
+    [[nodiscard]] bool RefreshMutableQueryRecordsAfterAppends(
+        std::span<const ComponentId> componentIds,
+        std::span<const ComponentId> requiredComponentIds,
+        std::span<const ComponentId> excludedComponentIds,
+        std::uint64_t structuralVersion,
+        std::vector<MutableQueryTableDispatchRecord>& records,
+        std::size_t& firstChangedRecord) {
+        if (!IsAppendOnlySince(structuralVersion) || componentIds.empty() || componentIds.size() > kQueryExecutionScratchMaxTerms) {
+            return false;
+        }
+        firstChangedRecord = records.size();
+        if (structuralVersion == structuralVersion_) {
+            return true;
+        }
+        StackComponentIdSet requiredIds;
+        StackComponentIdSet excludedIds;
+        if (!requiredIds.AssignUnion(componentIds, requiredComponentIds) || !excludedIds.Assign(excludedComponentIds)) {
+            return false;
+        }
+        const auto requiredSignature = signatureRegistry_.TryBuild(requiredIds.Values());
+        if (!requiredSignature.has_value()) {
+            return true;
+        }
+        for (std::size_t tableIndex = 0U; tableIndex < tables_.size(); ++tableIndex) {
+            ArchetypeTable& table = tables_[tableIndex];
+            if (table.LiveEntities() == 0U || !table.Matches(*requiredSignature) || HasExcludedComponent(table, excludedIds.Values())) {
+                continue;
+            }
+            const auto end = std::upper_bound(records.begin(), records.end(), tableIndex,
+                [](std::size_t index, const MutableQueryTableDispatchRecord& record) { return index < record.nativeArchetypeIndex; });
+            std::size_t insertIndex = static_cast<std::size_t>(end - records.begin());
+            std::size_t firstNewChunk = 0U;
+            if (insertIndex != 0U && records[insertIndex - 1U].nativeArchetypeIndex == tableIndex) {
+                MutableQueryTableDispatchRecord& last = records[insertIndex - 1U];
+                const std::size_t rowCount = table.ChunkRowCount(last.nativeChunkIndex);
+                if (last.entityCount != rowCount) {
+                    last.entityCount = rowCount;
+                    for (std::size_t field = 0U; field < componentIds.size(); ++field) {
+                        last.componentVersions[field] = table.ComponentVersionOrZero(componentIds[field]);
+                        last.componentDirtyCounts[field] = table.ComponentDirtyCount(last.nativeChunkIndex, componentIds[field]);
+                    }
+                    firstChangedRecord = std::min(firstChangedRecord, insertIndex - 1U);
+                }
+                firstNewChunk = last.nativeChunkIndex + 1U;
+            }
+            for (std::size_t chunkIndex = firstNewChunk; chunkIndex < table.ChunkCount(); ++chunkIndex) {
+                const std::size_t rowCount = table.ChunkRowCount(chunkIndex);
+                if (rowCount == 0U) {
+                    continue;
+                }
+                MutableQueryTableDispatchRecord record{
+                    .entityIds = table.ChunkEntityIds(chunkIndex),
+                    .entityCount = rowCount,
+                    .nativeArchetypeIndex = tableIndex,
+                    .nativeChunkIndex = chunkIndex,
+                    .firstEntityId = table.ChunkEntityIds(chunkIndex)[0],
+                };
+                for (std::size_t field = 0U; field < componentIds.size(); ++field) {
+                    record.fieldComponents[field] = table.MutableComponentColumnData(chunkIndex, componentIds[field]);
+                    record.componentVersions[field] = table.ComponentVersionOrZero(componentIds[field]);
+                    record.componentDirtyCounts[field] = table.ComponentDirtyCount(chunkIndex, componentIds[field]);
+                }
+                firstChangedRecord = std::min(firstChangedRecord, insertIndex);
+                records.insert(records.begin() + static_cast<std::ptrdiff_t>(insertIndex++), record);
+            }
+        }
+        for (std::size_t index = firstChangedRecord; index < records.size(); ++index) {
+            records[index].sequence = index;
+        }
+        return true;
     }
 
     [[nodiscard]] std::uint64_t ArchetypeVersion(Entity entity) const {
@@ -3821,6 +3899,7 @@ private:
     std::vector<ComponentId> singleEdgeIdsScratch_;
     std::uint64_t structuralVersion_ = 1;
     std::uint64_t removalVersion_ = 0;
+    std::uint64_t migrationVersion_ = 0;
 };
 
 NativeArchetypeStorage::NativeArchetypeStorage(WorldConfig config)
@@ -4022,6 +4101,21 @@ void NativeArchetypeStorage::CollectMutableQueryRecords(
     std::span<const ComponentId> excludedComponentIds,
     std::vector<MutableQueryTableDispatchRecord>& records) {
     impl_->CollectMutableQueryRecords(componentIds, requiredComponentIds, excludedComponentIds, records);
+}
+
+bool NativeArchetypeStorage::IsAppendOnlySince(std::uint64_t structuralVersion) const noexcept {
+    return impl_ != nullptr && impl_->IsAppendOnlySince(structuralVersion);
+}
+
+bool NativeArchetypeStorage::RefreshMutableQueryRecordsAfterAppends(
+    std::span<const ComponentId> componentIds,
+    std::span<const ComponentId> requiredComponentIds,
+    std::span<const ComponentId> excludedComponentIds,
+    std::uint64_t structuralVersion,
+    std::vector<MutableQueryTableDispatchRecord>& records,
+    std::size_t& firstChangedRecord) {
+    return impl_ != nullptr && impl_->RefreshMutableQueryRecordsAfterAppends(
+        componentIds, requiredComponentIds, excludedComponentIds, structuralVersion, records, firstChangedRecord);
 }
 
 void NativeArchetypeStorage::CaptureChunkedSnapshot(std::span<const ComponentTypeInfo> componentTypes, ChunkedWorldSnapshot& snapshot) const {

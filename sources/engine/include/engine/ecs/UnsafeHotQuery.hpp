@@ -715,6 +715,24 @@ public:
         return true;
     }
 
+    // Refresh the same source query after appends. Retained chunks keep their metadata snapshots;
+    // dirty-range iteration reads current counts from storage.
+    // A migration or removal falls back to a full rebuild before any stored pointer is used.
+    [[nodiscard]] bool RefreshAfterAppends(const Query<ComponentTypes...>& query) {
+        if (!valid_) {
+            return Rebuild(query, settings_);
+        }
+        std::size_t firstChangedRecord = 0U;
+        if (!query.RefreshMutableChunksAfterAppends(cachedStructuralVersion_, scratch_, firstChangedRecord)) {
+            return Rebuild(query, settings_);
+        }
+        if (firstChangedRecord < scratch_.mutableRecords_.size()) {
+            BuildCachedRangePlan(cachedRangeSize_, firstChangedRecord);
+        }
+        cachedStructuralVersion_ = query.StructuralVersion();
+        return true;
+    }
+
     [[nodiscard]] bool IsValid() const noexcept {
         return valid_;
     }
@@ -1046,18 +1064,26 @@ private:
         std::size_t dirtyCount = 0U;
     };
 
-    void BuildCachedRangePlan(std::size_t rangeSize) {
+    void BuildCachedRangePlan(std::size_t rangeSize, std::size_t firstChangedRecord = 0U) {
         cachedRangeSize_ = rangeSize == 0U ? kDefaultQueryExecutionGrainSize : rangeSize;
         cachedWorkerCountLimit_ = std::numeric_limits<std::size_t>::max();
-        scratch_.workItems_.clear();
-        scratch_.chunks_.clear();
-        std::size_t workItemCount = 0U;
-        for (const MutableQueryTableDispatchRecord& record : scratch_.mutableRecords_) {
+        const auto firstChangedItem = std::lower_bound(scratch_.workItems_.begin(), scratch_.workItems_.end(), firstChangedRecord,
+            [](const QueryBatchWorkItem& item, std::size_t recordIndex) { return item.recordIndex < recordIndex; });
+        const std::size_t retainedItems = static_cast<std::size_t>(firstChangedItem - scratch_.workItems_.begin());
+        scratch_.workItems_.resize(retainedItems);
+        scratch_.chunks_.resize(retainedItems);
+        std::size_t workItemCount = retainedItems;
+        for (std::size_t recordIndex = firstChangedRecord; recordIndex < scratch_.mutableRecords_.size(); ++recordIndex) {
+            const MutableQueryTableDispatchRecord& record = scratch_.mutableRecords_[recordIndex];
             workItemCount += record.entityCount == 0U ? 0U : ((record.entityCount - 1U) / cachedRangeSize_) + 1U;
         }
-        scratch_.workItems_.reserve(workItemCount);
-        scratch_.chunks_.reserve(workItemCount);
-        for (std::size_t recordIndex = 0U; recordIndex < scratch_.mutableRecords_.size(); ++recordIndex) {
+        if (workItemCount > scratch_.workItems_.capacity()) {
+            scratch_.workItems_.reserve(std::max(workItemCount, scratch_.workItems_.capacity() + scratch_.workItems_.capacity() / 2U));
+        }
+        if (workItemCount > scratch_.chunks_.capacity()) {
+            scratch_.chunks_.reserve(std::max(workItemCount, scratch_.chunks_.capacity() + scratch_.chunks_.capacity() / 2U));
+        }
+        for (std::size_t recordIndex = firstChangedRecord; recordIndex < scratch_.mutableRecords_.size(); ++recordIndex) {
             const MutableQueryTableDispatchRecord& record = scratch_.mutableRecords_[recordIndex];
             for (std::size_t offset = 0U; offset < record.entityCount; offset += cachedRangeSize_) {
                 const std::size_t count = record.entityCount - offset < cachedRangeSize_ ? record.entityCount - offset : cachedRangeSize_;

@@ -26,6 +26,7 @@ void DestroyQueryState(QueryState* state) noexcept;
 void ForEachQueryState(const QueryState* state, QueryRawVisitor visitor, void* context);
 void PrepareQueryStateBatchExecution(const QueryState* state, QueryExecutionSettings settings, QueryBatchExecutionScratch& scratch);
 void PrepareQueryStateMutableBatchExecution(const QueryState* state, QueryExecutionSettings settings, QueryBatchExecutionScratch& scratch);
+[[nodiscard]] bool RefreshQueryStateMutableChunksAfterAppends(const QueryState* state, std::uint64_t structuralVersion, QueryBatchExecutionScratch& scratch, std::size_t& firstChangedRecord);
 void ForEachQueryStateBatch(const QueryState* state, QueryExecutionSettings settings, QueryRawBatchVisitor visitor, void* context);
 void ForEachQueryStateBatch(const QueryState* state, QueryExecutionSettings settings, QueryRawBatchVisitor visitor, void* context, QueryBatchExecutionScratch& scratch);
 void ForEachQueryStateMutableBatch(const QueryState* state, QueryExecutionSettings settings, QueryRawMutableBatchVisitor visitor, void* context);
@@ -53,6 +54,8 @@ public:
     [[nodiscard]] std::uint64_t StructuralVersion() const noexcept;
     void PrepareBatchExecution(QueryExecutionSettings settings, QueryBatchExecutionScratch& scratch) const;
     void PrepareMutableBatchExecution(QueryExecutionSettings settings, QueryBatchExecutionScratch& scratch) const;
+    // Retains existing pointers and metadata snapshots; only appended rows/chunks are refreshed.
+    [[nodiscard]] bool RefreshMutableChunksAfterAppends(std::uint64_t structuralVersion, QueryBatchExecutionScratch& scratch, std::size_t& firstChangedRecord) const;
     void ForEach(Visitor visitor, void* context) const;
     void ForEachBatch(BatchVisitor visitor, void* context) const;
     void ForEachBatch(QueryExecutionSettings settings, BatchVisitor visitor, void* context) const;

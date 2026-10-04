@@ -1078,7 +1078,10 @@ void RunHierarchyDirtyFrontier(
             ClearSceneTransformDirtyFrontier(state);
         }
         const auto queryRebuildStart = profileTimings != nullptr ? Clock::now() : Clock::time_point{};
-        if (!hotQuery.Rebuild(queryCache.query, kb::ecs::QueryExecutionSettings{ .maxBatchSize = kTransformBatchGrainSize })) {
+        const bool rebuilt = hotQuery.IsValid()
+            ? hotQuery.RefreshAfterAppends(queryCache.query)
+            : hotQuery.Rebuild(queryCache.query, kb::ecs::QueryExecutionSettings{ .maxBatchSize = kTransformBatchGrainSize });
+        if (!rebuilt) {
             ClearSceneTransformDirtyFrontier(state);
             return false;
         }
