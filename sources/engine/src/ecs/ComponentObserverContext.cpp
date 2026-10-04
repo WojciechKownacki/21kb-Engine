@@ -3,7 +3,9 @@
 
 #include <flecs.h>
 
+#include <array>
 #include <cstddef>
+#include <vector>
 
 namespace kb::ecs {
 
@@ -76,8 +78,25 @@ void ComponentObserverContext::FinishDispatch() noexcept {
 }
 
 void ComponentObserverContext::DispatchRows(ecs_iter_t& iterator) const {
-    if (visitor_ == nullptr || componentSize_ == 0) {
+    if (visitor_ == nullptr || componentSize_ == 0 || iterator.count <= 0 || iterator.entities == nullptr) {
         return;
+    }
+
+    // Resolve the whole event batch before any visitor can destroy native
+    // owners, register nested observers or release this observer's registry.
+    std::array<Entity, 32U> inlineEntities{};
+    std::vector<Entity> largeEntities;
+    Entity* entities = inlineEntities.data();
+    const std::size_t count = static_cast<std::size_t>(iterator.count);
+    if (count > inlineEntities.size()) {
+        largeEntities.resize(count);
+        entities = largeEntities.data();
+    }
+    for (std::size_t row = 0U; row < count; ++row) {
+        const Entity::IdType backendId = static_cast<Entity::IdType>(iterator.entities[row]);
+        entities[row] = observerRegistry_ != nullptr
+            ? observerRegistry_->ResolveObserverEntity(backendId)
+            : Entity{ backendId };
     }
 
     const bool rowField = (iterator.row_fields & 1U) != 0U;
@@ -86,7 +105,7 @@ void ComponentObserverContext::DispatchRows(ecs_iter_t& iterator) const {
     for (int32_t row = 0; row < iterator.count && !freePending_; ++row) {
         const void* component = rowField ? ecs_field_at_w_size(&iterator, static_cast<ecs_size_t>(componentSize_), 0, row)
             : components == nullptr ? nullptr : components + (selfField ? static_cast<std::size_t>(row) * componentSize_ : 0U);
-        visitor_(Entity{ static_cast<Entity::IdType>(iterator.entities[row]) }, event_, component, visitorContext_);
+        visitor_(entities[static_cast<std::size_t>(row)], event_, component, visitorContext_);
     }
 }
 
