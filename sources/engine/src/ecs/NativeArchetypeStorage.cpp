@@ -2,6 +2,7 @@
 
 #include "ecs/GeometricReserve.hpp"
 #include "ecs/NativeArchetypeLayout.hpp"
+#include "ecs/NoInitAllocator.hpp"
 
 #include <algorithm>
 #include <array>
@@ -303,7 +304,8 @@ private:
 struct NativeChunk {
     NativeChunkBuffer payload;
     NativeSidePayloadBuffer sidePayload;
-    std::vector<Entity> entities;
+    // Rows past rowCount are never read, so a new chunk does not clear its entity slots.
+    std::vector<Entity, NoInitAllocator<Entity>> entities;
     std::vector<std::uint64_t> dirtyRowWords;
     std::vector<std::size_t> dirtyRowCounts;
     std::size_t rowCount = 0;

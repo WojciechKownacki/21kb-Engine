@@ -1818,6 +1818,23 @@ void RunSceneBulkCreateObjectsTest() {
     }
 }
 
+// Creating objects in bulk takes about one heap allocation per object, not a chunk created and destroyed for every
+// intermediate archetype of every object.
+void RunSceneBulkCreateObjectsAllocationTest() {
+    kb::scene::Scene scene;
+    std::vector<kb::scene::SceneObjectDesc> descs(20000U);
+    static_cast<void>(scene.Entities().CreateObjects(descs));
+    for (std::size_t index = 0U; index < descs.size(); ++index) {
+        descs[index].transform.localPosition = kb::scene::Vec3{ static_cast<float>(index), 0.0F, 0.0F };
+    }
+    kb::tests::BeginAllocationTally();
+    const std::vector<kb::scene::SceneObject> created = scene.Entities().CreateObjects(descs);
+    const kb::tests::AllocationTally tally = kb::tests::EndAllocationTally();
+    const double allocationsPerObject = static_cast<double>(tally.count) / static_cast<double>(created.size());
+    std::cout << "bulk create allocations per object: " << allocationsPerObject << " bytes per object: " << static_cast<double>(tally.bytes) / static_cast<double>(created.size()) << '\n';
+    kb::tests::Require(created.size() == descs.size() && allocationsPerObject <= 1.0, "Creating objects in bulk took more than one heap allocation per object");
+}
+
 // Golden transform state of a fixed-dt run: FNV-1a over local and world TRS, versions and the dirty flag of every
 // object (in creation order), its interpolated pose and the runtime's render-proxy transform list, after every
 // write and every Update. The expected values were recorded from the transform path before the per-row lanes.
@@ -2147,6 +2164,7 @@ void RunSceneSystemTransformSyncTests() {
     RunTransformGoldenHashTest();
     RunSceneRuntimeGrowingCrowdUpdateAllocationTest();
     RunSceneTransformSetManyMatchesPerEntityWritesTest();
+    RunSceneBulkCreateObjectsAllocationTest();
 }
 
 } // namespace kb::tests
