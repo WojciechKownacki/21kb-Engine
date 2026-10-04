@@ -26,8 +26,7 @@ namespace {
 
 void SynchronizeTransformHierarchy(SceneState& state) {
     SceneTransformHierarchySystem{}.Update(state);
-    if ((state.fixedTransformTopologyVersion != state.hierarchyTopologyVersion || state.fixedTransformRootAppendEpoch != state.hierarchyRootAppendEpoch) ||
-        state.lastTransformHierarchyUpdatedCount == 0U) return;
+    if (!SceneFixedTransformPosesCurrent(state) || state.lastTransformHierarchyUpdatedCount == 0U) return;
     // The hierarchy update published the new value of every entity it touched next to the entity itself.
     const bool publishedValues = state.transformHierarchyUpdatedTransformsScratch.size() == state.transformHierarchyUpdatedEntitiesScratch.size();
     // Every updated entity owns its own pose record, so records can be published from several threads; only the list of

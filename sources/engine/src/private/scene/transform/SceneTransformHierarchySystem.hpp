@@ -22,6 +22,12 @@ public:
     void Update(SceneState& state) const;
 };
 
+// The fixed-step pose records are current, so the rows a transform sync composes are published to them.
+[[nodiscard]] inline bool SceneFixedTransformPosesCurrent(const SceneState& state) noexcept {
+    return state.fixedTransformTopologyVersion == state.hierarchyTopologyVersion &&
+        state.fixedTransformRootAppendEpoch == state.hierarchyRootAppendEpoch;
+}
+
 // Forgets the transforms composed so far this frame, at the start of an Update.
 void ResetSceneTransformRenderProxyUpdates(SceneState& state) noexcept;
 
