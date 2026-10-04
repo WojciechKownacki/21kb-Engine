@@ -34,10 +34,11 @@ struct WorldTransformAffine3x4 {
     };
 };
 
+// 32-bit counters keep the stored transform row at 96 bytes; each counts the writes of one entity.
 struct TransformVersionMetadata {
-    std::uint64_t localVersion = 1;
-    std::uint64_t parentVersion = 0;
-    std::uint64_t worldVersion = 0;
+    std::uint32_t localVersion = 1;
+    std::uint32_t parentVersion = 0;
+    std::uint32_t worldVersion = 0;
     bool worldDirty = true;
 };
 
@@ -53,9 +54,9 @@ struct TransformComponent {
     Vec3 worldPosition{};
     Quat worldRotation{};
     Vec3 worldScale{ 1.0F, 1.0F, 1.0F };
-    std::uint64_t localVersion = 1;
-    std::uint64_t parentVersion = 0;
-    std::uint64_t worldVersion = 0;
+    std::uint32_t localVersion = 1;
+    std::uint32_t parentVersion = 0;
+    std::uint32_t worldVersion = 0;
     bool worldDirty = true;
 
     [[nodiscard]] constexpr LocalTransform LocalPayload() const noexcept {
@@ -93,6 +94,8 @@ struct TransformComponent {
         };
     }
 };
+
+static_assert(sizeof(TransformComponent) == 96U, "The stored transform row is 96 bytes");
 
 // The world transform as the column-major affine the renderer consumes. The scene's render-proxy lists and the
 // renderer's transform pull both build it here, so the two agree bit for bit.
