@@ -1164,14 +1164,21 @@ void RunHierarchyDirtyFrontier(
         return true;
     }
 
-    kb::ecs::ReserveGeometric(state.transformHierarchyUpdatedEntitiesScratch, dirtyRows);
-    kb::ecs::ReserveGeometric(state.transformHierarchyUpdatedTransformsScratch, dirtyRows);
+    // The composed rows are listed only for a reader after the pass, an observer of the transform component or the
+    // fixed-step pose records; otherwise the pass only writes the rows in place.
+    const bool listUpdatedRows = state.world.MirrorsValueWrites(state.components.TransformComponentId()) || SceneFixedTransformPosesCurrent(state);
+    if (listUpdatedRows) {
+        kb::ecs::ReserveGeometric(state.transformHierarchyUpdatedEntitiesScratch, dirtyRows);
+        kb::ecs::ReserveGeometric(state.transformHierarchyUpdatedTransformsScratch, dirtyRows);
+    }
     auto& nativeStorage = const_cast<kb::ecs::NativeArchetypeStorage&>(state.world.NativeStorage());
     const auto applyStart = Clock::now();
     if (dirtyRows > kTransformBatchGrainSize * 4U) {
         EnsureWorkerPool(state);
-        state.transformHierarchyUpdatedEntitiesScratch.resize(dirtyRows);
-        state.transformHierarchyUpdatedTransformsScratch.resize(dirtyRows);
+        if (listUpdatedRows) {
+            state.transformHierarchyUpdatedEntitiesScratch.resize(dirtyRows);
+            state.transformHierarchyUpdatedTransformsScratch.resize(dirtyRows);
+        }
         std::atomic_size_t inspectedCount{ 0U };
         std::atomic_size_t updatedCount{ 0U };
         std::atomic_size_t rootFastPathCount{ 0U };
@@ -1183,7 +1190,7 @@ void RunHierarchyDirtyFrontier(
             *state.transformWorkerPool,
             0U,
             true,
-            [&state, rootsOnly, &inspectedCount, &updatedCount, &rootFastPathCount, &linkedRows, &linkedRowsMutex, &sparseUpdatedMutex](
+            [&state, rootsOnly, listUpdatedRows, &inspectedCount, &updatedCount, &rootFastPathCount, &linkedRows, &linkedRowsMutex, &sparseUpdatedMutex](
                 kb::ecs::UnsafeHotMutableChunk<TransformComponent>& chunk,
                 std::size_t dirtyCount,
                 kb::ecs::WorkerContext workerContext) {
@@ -1223,9 +1230,11 @@ void RunHierarchyDirtyFrontier(
                         } else {
                             transform = TransformMath::ComposeRoot(transform);
                         }
-                        state.transformHierarchyUpdatedEntitiesScratch[writeBegin + writeOffset] = chunk.EntityAt(row);
-                        state.transformHierarchyUpdatedTransformsScratch[writeBegin + writeOffset] = transform;
-                        ++writeOffset;
+                        if (listUpdatedRows) {
+                            state.transformHierarchyUpdatedEntitiesScratch[writeBegin + writeOffset] = chunk.EntityAt(row);
+                            state.transformHierarchyUpdatedTransformsScratch[writeBegin + writeOffset] = transform;
+                            ++writeOffset;
+                        }
                         updatedBits.Record(chunk.EntityAt(row));
                     }
                 }
@@ -1233,8 +1242,10 @@ void RunHierarchyDirtyFrontier(
             });
         state.lastTransformHierarchyInspectedCount += inspectedCount.load(std::memory_order_relaxed);
         const std::size_t finalUpdatedCount = updatedCount.load(std::memory_order_relaxed);
-        state.transformHierarchyUpdatedEntitiesScratch.resize(finalUpdatedCount);
-        state.transformHierarchyUpdatedTransformsScratch.resize(finalUpdatedCount);
+        if (listUpdatedRows) {
+            state.transformHierarchyUpdatedEntitiesScratch.resize(finalUpdatedCount);
+            state.transformHierarchyUpdatedTransformsScratch.resize(finalUpdatedCount);
+        }
         state.lastTransformHierarchyUpdatedCount += finalUpdatedCount;
         state.lastTransformHierarchyRootFastPathCount += rootFastPathCount.load(std::memory_order_relaxed);
         ++state.lastTransformHierarchyParallelBatchCount;
@@ -1249,7 +1260,7 @@ void RunHierarchyDirtyFrontier(
             kTransformBatchGrainSize,
             state.transformNativeDirtyRangesScratch,
             true,
-            [&state, rootsOnly, &linkedRows](kb::ecs::UnsafeHotMutableChunk<TransformComponent>& chunk, std::size_t dirtyCount) {
+            [&state, rootsOnly, listUpdatedRows, &linkedRows](kb::ecs::UnsafeHotMutableChunk<TransformComponent>& chunk, std::size_t dirtyCount) {
                 state.lastTransformHierarchyInspectedCount += rootsOnly ? chunk.Count() : 0U;
                 static_cast<void>(dirtyCount);
                 TransformComponent* transforms = chunk.template Components<0>();
@@ -1270,8 +1281,10 @@ void RunHierarchyDirtyFrontier(
                     }
                     ++state.lastTransformHierarchyUpdatedCount;
                     state.lastTransformHierarchyInspectedCount += rootsOnly ? 0U : 1U;
-                    state.transformHierarchyUpdatedEntitiesScratch.push_back(chunk.EntityAt(row));
-                    state.transformHierarchyUpdatedTransformsScratch.push_back(transform);
+                    if (listUpdatedRows) {
+                        state.transformHierarchyUpdatedEntitiesScratch.push_back(chunk.EntityAt(row));
+                        state.transformHierarchyUpdatedTransformsScratch.push_back(transform);
+                    }
                     RecordUpdatedTransform(state, chunk.EntityAt(row));
                 }
             }));
@@ -1300,8 +1313,10 @@ void RunHierarchyDirtyFrontier(
                 state.lastTransformHierarchyUnitScaleParentFastPathCount += entry.unitScaleParentFastPath;
                 state.lastTransformHierarchyUniformScaleParentFastPathCount += entry.uniformScaleParentFastPath;
                 state.lastTransformHierarchyStaticLocalRotationFastPathCount += entry.staticLocalRotationFastPath;
-                state.transformHierarchyUpdatedEntitiesScratch.push_back(linked.entity);
-                state.transformHierarchyUpdatedTransformsScratch.push_back(*linked.transform);
+                if (listUpdatedRows) {
+                    state.transformHierarchyUpdatedEntitiesScratch.push_back(linked.entity);
+                    state.transformHierarchyUpdatedTransformsScratch.push_back(*linked.transform);
+                }
                 RecordUpdatedTransform(state, linked.entity);
             }
             state.lastTransformHierarchyInspectedCount += linkedRows.size();
@@ -1314,7 +1329,7 @@ void RunHierarchyDirtyFrontier(
     state.lastTransformHierarchyUpdateNanoseconds = Nanoseconds(applyEnd - updateStart);
     state.lastTransformHierarchyPropagateNanoseconds = state.lastTransformHierarchyUpdateNanoseconds;
     state.lastTransformHierarchyFlushWriteNanoseconds = state.lastTransformHierarchyKernelApplyNanoseconds;
-    state.lastTransformHierarchyFlushedEntityCount = state.transformHierarchyUpdatedEntitiesScratch.size();
+    state.lastTransformHierarchyFlushedEntityCount = state.lastTransformHierarchyUpdatedCount;
 
     const auto backendMarkStart = Clock::now();
     if (state.world.MirrorsValueWrites(state.components.TransformComponentId())) {
@@ -1337,7 +1352,7 @@ void RunHierarchyDirtyFrontier(
         }
     }
     state.lastTransformHierarchyBackendMarkNanoseconds = Nanoseconds(Clock::now() - backendMarkStart);
-    if (!state.transformHierarchyUpdatedEntitiesScratch.empty()) {
+    if (state.lastTransformHierarchyUpdatedCount != 0U) {
         PublishRenderProxyTransformUpdates(state);
     }
     if (linkedRowsLeft) {
