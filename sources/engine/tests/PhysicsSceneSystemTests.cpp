@@ -2524,11 +2524,11 @@ private:
 // The engine's share of a crowd frame (the "agents" benchmark scenario): 30000 agents that are plain entities with a
 // transform, 64 static box colliders, every frame a Transforms().Set per agent, a raycast for one agent in eight and
 // Runtime().Update. The steering of the agents is the application's own code and is not measured here.
-void RunAgentsFrameBenchmarkWith(const kb::ecs::WorldConfig& worldConfig, const char* label, bool batched = false) {
+void RunAgentsFrameBenchmarkWith(const kb::ecs::WorldConfig& worldConfig, const char* label, bool batched = false, int agentCount = 30000, bool withHierarchy = false) {
     if (std::filesystem::path{ KB_PHYSICS_JOLT_PLUGIN_PATH }.empty()) {
         return;
     }
-    constexpr int kAgents = 30000;
+    const int kAgents = agentCount;
     constexpr int kFrames = 150;
     constexpr int kWarmup = 30;
     kb::project::ProjectDescriptor descriptor;
@@ -2554,6 +2554,15 @@ void RunAgentsFrameBenchmarkWith(const kb::ecs::WorldConfig& worldConfig, const 
     }
     std::vector<kb::scene::SceneEntity> agents;
     for (const kb::scene::SceneObject& object : scene.Entities().CreateObjects(descs)) agents.push_back(object.Entity());
+    if (withHierarchy) {
+        // a screen-UI-like overlay: one canvas with a few parented children. A single parent link makes the whole scene
+        // "hierarchical" for the transform sync, so every parentless agent used to take the slow generic lane.
+        const kb::scene::SceneObject canvas = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Canvas" });
+        for (int child = 0; child < 6; ++child) {
+            const kb::scene::SceneObject node = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Node" });
+            static_cast<void>(scene.Hierarchy().SetParent(node.Entity(), canvas.Entity()));
+        }
+    }
     kb::tests::Require(agents.size() == static_cast<std::size_t>(kAgents), "agent benchmark could not create its agents");
     using Clock = std::chrono::steady_clock;
     std::vector<kb::scene::TransformComponent> batch(batched ? static_cast<std::size_t>(kAgents) : 0U);
@@ -2616,7 +2625,7 @@ void RunAgentsFrameBenchmarkWith(const kb::ecs::WorldConfig& worldConfig, const 
               << " runtime_update_ms=" << static_cast<double>(report.runtimeUpdateNanoseconds) * 1e-6 << '\n';
     // Publishing the poses of 30000 moved agents is a pass over them like the loop that moved them: it was 1.75 times
     // that loop (pose records of the fixed-step interpolation found by binary search) and is now about 1.1 times.
-    kb::tests::Require(syncMedian < setMedian * 1.4, "Synchronizing 30000 moved transforms must not cost much more than setting them");
+    if (!withHierarchy && agentCount == 30000) kb::tests::Require(syncMedian < setMedian * 1.4, "Synchronizing 30000 moved transforms must not cost much more than setting them");
 }
 
 void RunAgentsFrameBenchmark() {
@@ -2625,6 +2634,9 @@ void RunAgentsFrameBenchmark() {
     native.mirrorNativeComponentChangesToBackend = false;
     RunAgentsFrameBenchmarkWith(native, "mirror=off");
     RunAgentsFrameBenchmarkWith(kb::ecs::WorldConfig{}, "mirror=on(default),ParallelFor+SetMany", true);
+    // the same crowd next to a small parented overlay, at a size where the sync pass dominates
+    RunAgentsFrameBenchmarkWith(kb::ecs::WorldConfig{}, "flat 300k", true, 300000, false);
+    RunAgentsFrameBenchmarkWith(kb::ecs::WorldConfig{}, "with overlay hierarchy 300k", true, 300000, true);
 }
 
 // The step of a large pile, as a frame sees it. The mean hides the occasional long step a frame budget cannot

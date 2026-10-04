@@ -42,8 +42,11 @@ public:
     }
 
     [[nodiscard]] static SceneEntity Parent(const SceneState& state, SceneEntity entity) noexcept {
-        if (const SceneEntity* parent = DenseParent(state, entity); parent != nullptr) {
-            return *parent;
+        // An entity with a slot in the dense table is registered there by every writer (the hash map is only the store of
+        // entities without a dense index), so a root's empty slot is the answer: no second lookup in the hash map.
+        const std::uint32_t denseIndex = DenseIndex(entity);
+        if (denseIndex != kb::ecs::kInvalidGeneratedEntityIndex && denseIndex < state.denseHierarchyParents.size()) {
+            return state.denseHierarchyParents[denseIndex];
         }
         const auto parent = state.hierarchyParents.find(entity.Id());
         return parent == state.hierarchyParents.end() ? SceneEntity{} : parent->second;
@@ -239,8 +242,9 @@ public:
     // itself already does, just without materializing a new vector for a
     // single count or a single element.
     [[nodiscard]] static std::size_t ChildCount(const SceneState& state, SceneEntity entity) noexcept {
-        if (const std::vector<SceneEntity>* children = DenseChildren(state, entity); children != nullptr) {
-            return children->size();
+        const std::uint32_t denseIndex = DenseIndex(entity);
+        if (denseIndex != kb::ecs::kInvalidGeneratedEntityIndex && denseIndex < state.denseHierarchyChildren.size()) {
+            return state.denseHierarchyChildren[denseIndex].size();   // a leaf's empty slot is the answer
         }
         const auto children = state.hierarchyChildren.find(entity.Id());
         return children == state.hierarchyChildren.end() ? 0U : children->second.size();
