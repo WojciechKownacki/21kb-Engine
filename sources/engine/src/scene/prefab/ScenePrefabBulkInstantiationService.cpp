@@ -1,4 +1,5 @@
 #include "scene/prefab/ScenePrefabBulkInstantiationService.hpp"
+#include "ecs/GeometricReserve.hpp"
 #include "scene/prefab/ScenePrefabReferenceResolver.hpp"
 
 #include "engine/ecs/CommandBuffer.hpp"
@@ -677,16 +678,16 @@ void AssignPrefabHierarchyOrderRange(SceneState& state, std::span<const SceneEnt
             ++childrenPerNode[node.parentNode];
         }
     }
-    state.hierarchyRoots.reserve(state.hierarchyRoots.size() + (settings.parent.Entity().IsValid() ? 0U : rootCount * instanceCount));
+    kb::ecs::ReserveGeometric(state.hierarchyRoots, state.hierarchyRoots.size() + (settings.parent.Entity().IsValid() ? 0U : rootCount * instanceCount));
     if (settings.parent.Entity().IsValid()) {
         const std::uint32_t parentIndex = kb::ecs::GeneratedEntityIndex(settings.parent.Entity());
         if (parentIndex != kb::ecs::kInvalidGeneratedEntityIndex) {
             if (state.denseHierarchyChildren.size() <= parentIndex) {
                 state.denseHierarchyChildren.resize(static_cast<std::size_t>(parentIndex) + 1U);
             }
-            state.denseHierarchyChildren[parentIndex].reserve(state.denseHierarchyChildren[parentIndex].size() + rootCount * instanceCount);
+            kb::ecs::ReserveGeometric(state.denseHierarchyChildren[parentIndex], state.denseHierarchyChildren[parentIndex].size() + rootCount * instanceCount);
         } else {
-            state.hierarchyChildren[settings.parent.Entity().Id()].reserve(state.hierarchyChildren[settings.parent.Entity().Id()].size() + rootCount * instanceCount);
+            kb::ecs::ReserveGeometric(state.hierarchyChildren[settings.parent.Entity().Id()], state.hierarchyChildren[settings.parent.Entity().Id()].size() + rootCount * instanceCount);
         }
     }
 

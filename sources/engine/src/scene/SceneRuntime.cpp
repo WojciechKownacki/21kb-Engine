@@ -1,6 +1,7 @@
 #include "engine/ecs/SystemScheduler.hpp"
 #include "engine/math/EngineMath.hpp"
 #include "engine/scene/SceneSystem.hpp"
+#include "ecs/GeometricReserve.hpp"
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneIterationService.hpp"
 #include "scene/SceneRuntimeService.hpp"
@@ -517,15 +518,15 @@ bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
     state.renderProxyUpdateEntities.clear();
     state.renderProxyUpdateEntityIds.clear();
     state.lastTransformRenderProxyIdentityAffineFastPathCount = 0U;
-    state.transformRenderProxyUpdateEntities.reserve(HierarchyTrackedSlotCount(state));
-    state.transformRenderProxyWorldAffine3x4.reserve(HierarchyTrackedSlotCount(state));
-    state.transformRenderProxyMeshRendererIndices.reserve(HierarchyTrackedSlotCount(state));
-    state.transformRenderProxyVisibleMeshRendererIndices.reserve(HierarchyTrackedSlotCount(state));
-    state.transformRenderProxyCameraIndices.reserve(HierarchyTrackedSlotCount(state));
-    state.transformRenderProxyLightIndices.reserve(HierarchyTrackedSlotCount(state));
-    state.renderProxyUpdateEntities.reserve(HierarchyTrackedSlotCount(state));
+    kb::ecs::ReserveGeometric(state.transformRenderProxyUpdateEntities, HierarchyTrackedSlotCount(state));
+    kb::ecs::ReserveGeometric(state.transformRenderProxyWorldAffine3x4, HierarchyTrackedSlotCount(state));
+    kb::ecs::ReserveGeometric(state.transformRenderProxyMeshRendererIndices, HierarchyTrackedSlotCount(state));
+    kb::ecs::ReserveGeometric(state.transformRenderProxyVisibleMeshRendererIndices, HierarchyTrackedSlotCount(state));
+    kb::ecs::ReserveGeometric(state.transformRenderProxyCameraIndices, HierarchyTrackedSlotCount(state));
+    kb::ecs::ReserveGeometric(state.transformRenderProxyLightIndices, HierarchyTrackedSlotCount(state));
+    kb::ecs::ReserveGeometric(state.renderProxyUpdateEntities, HierarchyTrackedSlotCount(state));
     state.renderProxyUpdateEntityIds.reserve(HierarchyTrackedSlotCount(state));
-    state.renderProxyDirtyTraversalScratch.reserve(HierarchyTrackedSlotCount(state));
+    kb::ecs::ReserveGeometric(state.renderProxyDirtyTraversalScratch, HierarchyTrackedSlotCount(state));
 
     SceneStreamingService::Pump(scene);
     synchronizeTransforms();

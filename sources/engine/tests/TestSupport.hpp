@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cmath>
+#include <cstddef>
 #include <cstdlib>
 #include <iostream>
 
@@ -32,5 +33,14 @@ inline void Require(bool condition, const char* message) {
         std::exit(EXIT_FAILURE);
     }
 }
+
+// Heap allocations made on any thread between the two calls (operator new is replaced in SceneRuntimeTests.cpp).
+struct AllocationTally {
+    std::size_t count = 0U;
+    std::size_t bytes = 0U;
+    std::size_t largeCount = 0U; // 16 KB and more
+};
+void BeginAllocationTally() noexcept;
+[[nodiscard]] AllocationTally EndAllocationTally() noexcept;
 
 } // namespace kb::tests
