@@ -1420,7 +1420,12 @@ TransformPassStats RunSceneTransformPass(SceneState& state, std::size_t grainRow
     }
     const std::span<const kb::ecs::ComponentId> queried{ ids.data(), extraComponents.size() + 1U };
     if (state.transformPassRecordsVersion != storage.StructuralVersion() || state.transformPassRecordIds != ids || state.transformPassRecords.empty()) {
-        storage.CollectMutableQueryRecords(queried, {}, {}, state.transformPassRecords);
+        std::size_t firstChangedRecord = 0U;
+        if (state.transformPassRecordIds != ids || state.transformPassRecords.empty() ||
+            !storage.RefreshMutableQueryRecordsAfterAppends(queried, {}, {}, state.transformPassRecordsVersion,
+                state.transformPassRecords, firstChangedRecord)) {
+            storage.CollectMutableQueryRecords(queried, {}, {}, state.transformPassRecords);
+        }
         // cameras and lights are queued for the renderer's proxies by the sync
         state.transformPassDeferredArchetypes.clear();
         for (const kb::ecs::ComponentId componentId : { state.components.CameraComponentId(), state.components.LightComponentId() }) {
