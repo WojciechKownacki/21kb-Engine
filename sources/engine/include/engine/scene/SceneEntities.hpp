@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/ecs/World.hpp"
 #include "engine/scene/BehaviourVariableOverride.hpp"
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/SceneObject.hpp"
@@ -45,6 +46,9 @@ public:
     // changes batch through the world's version-based query-plan invalidation, so
     // the query cache rebuilds lazily once rather than per spawned object.
     [[nodiscard]] std::vector<SceneObject> CreateObjects(std::span<const SceneObjectDesc> descs);
+    // CreateObjects with more components of the application, one value per description (or one for all), created with
+    // the objects in their archetype (World::MakeBulkComponentView / MakeBulkComponentBroadcastView).
+    [[nodiscard]] std::vector<SceneObject> CreateObjects(std::span<const SceneObjectDesc> descs, std::span<const kb::ecs::World::BulkComponentView> components);
     [[nodiscard]] SceneEntity CreateEntity();
     [[nodiscard]] SceneEntity CreateEntity(SceneObjectDesc desc);
     [[nodiscard]] SceneObject Duplicate(SceneObject object);
