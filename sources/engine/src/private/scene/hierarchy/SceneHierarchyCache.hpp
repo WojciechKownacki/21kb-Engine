@@ -36,6 +36,7 @@ public:
         }
         SetDenseParent(state, entity, {});
         state.hierarchyRoots.push_back(entity);
+        NoteRootAppended(state, entity);
         MarkTopologyDirty(state, true);
         state.transformTopology.Added(state, {&entity, 1U}, previousVersion);
     }
@@ -74,6 +75,7 @@ public:
                 AddDenseChild(state, parent, entity);
             } else {
                 state.hierarchyRoots.push_back(entity);
+                NoteRootAppended(state, entity);
             }
         }
         RefreshTransformLinks(state, entities, parents);
@@ -153,6 +155,7 @@ public:
 
             if (!parent.IsValid()) {
                 state.hierarchyRoots.push_back(entity);
+                NoteRootAppended(state, entity);
                 continue;
             }
 
@@ -208,6 +211,7 @@ public:
         state.hierarchyParents.erase(entity.Id());
         state.hierarchyChildren.erase(entity.Id());
         state.hierarchyOrder.erase(entity.Id());
+        state.hierarchyRootSequence.erase(entity.Id());
         ClearDenseEntry(state, entity);
         RefreshTransformLink(state, entity);
         RefreshTransformLink(state, parent);
@@ -297,6 +301,33 @@ public:
         }
         const std::uint64_t bit = std::uint64_t{ 1U } << (denseIndex % 64U);
         state.transformLinkBits[word] = linked ? state.transformLinkBits[word] | bit : state.transformLinkBits[word] & ~bit;
+    }
+
+    // Records that the entity was just appended to hierarchyRoots.
+    static void NoteRootAppended(SceneState& state, SceneEntity entity) {
+        const std::uint64_t sequence = state.nextHierarchyRootSequence++;
+        const std::uint32_t index = DenseIndex(entity);
+        if (index == kb::ecs::kInvalidGeneratedEntityIndex) {
+            state.hierarchyRootSequence[entity.Id()] = sequence;
+            return;
+        }
+        if (state.denseHierarchyRootSequence.size() <= index) {
+            state.denseHierarchyRootSequence.resize(static_cast<std::size_t>(index) + 1U, 0U);
+        }
+        state.denseHierarchyRootSequence[index] = sequence;
+    }
+
+    // Orders roots as hierarchyRoots does; 0 for an entity that is not a root.
+    [[nodiscard]] static std::uint64_t RootSequence(const SceneState& state, SceneEntity entity) noexcept {
+        if (Parent(state, entity).IsValid()) {
+            return 0U;
+        }
+        const std::uint32_t index = DenseIndex(entity);
+        if (index == kb::ecs::kInvalidGeneratedEntityIndex) {
+            const auto sequence = state.hierarchyRootSequence.find(entity.Id());
+            return sequence == state.hierarchyRootSequence.end() ? 0U : sequence->second;
+        }
+        return index < state.denseHierarchyRootSequence.size() ? state.denseHierarchyRootSequence[index] : 0U;
     }
 
     static void RefreshTransformLinks(SceneState& state, std::span<const SceneEntity> entities, std::span<const SceneEntity> parents) {
@@ -418,14 +449,18 @@ private:
         if (index < state.denseHierarchyOrder.size()) {
             state.denseHierarchyOrder[index] = 0U;
         }
+        if (index < state.denseHierarchyRootSequence.size()) {
+            state.denseHierarchyRootSequence[index] = 0U;
+        }
     }
 
     static void AddToParentList(SceneState& state, SceneEntity parent, SceneEntity child) {
         if (parent.IsValid()) {
             AppendUnique(state.hierarchyChildren[parent.Id()], child);
             AddDenseChild(state, parent, child);
-        } else {
-            AppendUnique(state.hierarchyRoots, child);
+        } else if (std::ranges::find(state.hierarchyRoots, child) == state.hierarchyRoots.end()) {
+            state.hierarchyRoots.push_back(child);
+            NoteRootAppended(state, child);
         }
     }
 

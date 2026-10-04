@@ -597,7 +597,9 @@ void AssignPrefabHierarchyOrderRange(SceneState& state, std::span<const SceneEnt
         }
 
         for (std::size_t rootNodeIndex : rootNodeIndices) {
-            (*rootAppendTarget)[rootWriteCursor++] = entities[EntityIndex(instanceIndex, rootNodeIndex, nodes.size())];
+            const SceneEntity root = entities[EntityIndex(instanceIndex, rootNodeIndex, nodes.size())];
+            (*rootAppendTarget)[rootWriteCursor++] = root;
+            if (rootAppendTarget == &state.hierarchyRoots) SceneHierarchyCache::NoteRootAppended(state, root);
         }
 
         for (std::size_t parentNodeIndex = 0; parentNodeIndex < childNodesByParentNode.size(); ++parentNodeIndex) {
@@ -717,6 +719,7 @@ void AssignPrefabHierarchyOrderRange(SceneState& state, std::span<const SceneEnt
 
             if (!parent.IsValid()) {
                 state.hierarchyRoots.push_back(entity);
+                SceneHierarchyCache::NoteRootAppended(state, entity);
                 continue;
             }
             const std::uint32_t parentIndex = kb::ecs::GeneratedEntityIndex(parent);
