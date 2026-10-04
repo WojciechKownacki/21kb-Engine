@@ -88,6 +88,17 @@ private:
 // Composes a written row without parent or children as the sync's root lane does.
 void ComposeSceneTransformRoot(TransformComponent& transform) noexcept;
 
+// Set followed by ComposeSceneTransformRoot: the composition replaces every world field, so only the local transform
+// of `transform` is read.
+inline void WriteAndComposeSceneTransformRoot(TransformComponent& current, const TransformComponent& transform) noexcept {
+    current.localPosition = transform.localPosition;
+    current.localRotation = transform.localRotation;
+    current.localScale = transform.localScale;
+    ++current.localVersion;
+    current.worldDirty = true;
+    ComposeSceneTransformRoot(current);
+}
+
 // Records a composed row for the render-proxy updates, on the calling thread.
 void RecordComposedSceneTransform(SceneState& state, SceneEntity entity, const TransformComponent& transform);
 
