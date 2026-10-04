@@ -59,7 +59,23 @@ const WorldEntityCatalog& WorldRegistrySet::Entities() const noexcept {
     return *entities_;
 }
 
+bool WorldRegistrySet::HasComponentObserver(ComponentId componentId) const noexcept {
+    return componentObservers_.find(componentId) != componentObservers_.end();
+}
+
+void WorldRegistrySet::RetainComponentObserver(ComponentId componentId) {
+    ++componentObservers_[componentId];
+}
+
+void WorldRegistrySet::ReleaseComponentObserver(ComponentId componentId) noexcept {
+    const auto found = componentObservers_.find(componentId);
+    if (found != componentObservers_.end() && --found->second == 0U) {
+        componentObservers_.erase(found);
+    }
+}
+
 void WorldRegistrySet::Clear() noexcept {
+    componentObservers_.clear();
     components_->Clear();
     componentReflections_->Clear();
     tags_->Clear();
