@@ -55,13 +55,26 @@ struct TextLine {
 }
 
 // Breaks text into lines no wider than `availableWidth`, by word or by character as the wrap mode asks.
-[[nodiscard]] std::vector<TextLine> BreakLines(const ScreenUIFontAtlasCache::FontEntry& entry,
-                                               std::span<const ScreenUITextMarkupGlyph> text,
-                                               kb::scene::UITextWrapMode wrapMode, float availableWidth, float spacing) {
-    std::vector<TextLine> lines(1U);
+// The lines of every text are broken into one list, whose lines keep their glyph capacity for the next text.
+thread_local std::vector<TextLine> tTextLines;
+
+[[nodiscard]] std::vector<TextLine>& BreakLines(const ScreenUIFontAtlasCache::FontEntry& entry,
+                                                std::span<const ScreenUITextMarkupGlyph> text,
+                                                kb::scene::UITextWrapMode wrapMode, float availableWidth, float spacing) {
+    std::vector<TextLine>& lines = tTextLines;
+    std::size_t used = 0U;
+    const auto startLine = [&lines, &used] {
+        if (used == lines.size()) {
+            lines.emplace_back();
+        }
+        lines[used].glyphs.clear();
+        lines[used].width = 0.0F;
+        ++used;
+    };
+    startLine();
     for (const ScreenUITextMarkupGlyph& styledGlyph : text) {
         if (styledGlyph.codepoint == '\n') {
-            lines.emplace_back();
+            startLine();
             continue;
         }
         const ScreenUIFontAtlasCache::Glyph* glyph = FindGlyph(entry, styledGlyph.codepoint);
@@ -69,12 +82,13 @@ struct TextLine {
             continue;
         }
         const bool canWrap = wrapMode != kb::scene::UITextWrapMode::NoWrap;
-        if (canWrap && !lines.back().glyphs.empty() && lines.back().width + glyph->advance > availableWidth) {
-            lines.emplace_back();
+        if (canWrap && !lines[used - 1U].glyphs.empty() && lines[used - 1U].width + glyph->advance > availableWidth) {
+            startLine();
         }
-        lines.back().glyphs.push_back(styledGlyph);
-        lines.back().width += glyph->advance + spacing;
+        lines[used - 1U].glyphs.push_back(styledGlyph);
+        lines[used - 1U].width += glyph->advance + spacing;
     }
+    lines.resize(used);
     if (wrapMode == kb::scene::UITextWrapMode::Word && lines.size() > 1U) {
         for (std::size_t lineIndex = 0U; lineIndex + 1U < lines.size(); ++lineIndex) {
             TextLine& line = lines[lineIndex];
@@ -392,7 +406,7 @@ bool ScreenUIFontAtlasCache::Fits(const kb::scene::SceneUIFrameElement& element,
                                   std::span<const ScreenUITextMarkupGlyph> text, float factor) {
     const float spacing = element.text->characterSpacing * element.canvasScale / factor;
     const float width = element.rect.width / factor;
-    const std::vector<TextLine> lines = BreakLines(entry, text, element.text->wrapMode, width, spacing);
+    const std::vector<TextLine>& lines = BreakLines(entry, text, element.text->wrapMode, width, spacing);
     if (element.text->maxLines != 0U && lines.size() > element.text->maxLines)
         return false;
     if (LineHeight(entry, *element.text) * static_cast<float>(lines.size()) > element.rect.height / factor)
@@ -404,7 +418,7 @@ void ScreenUIFontAtlasCache::Layout(const kb::scene::SceneUIFrameElement& elemen
                                     std::span<const ScreenUITextMarkupGlyph> text, ScreenUITextRun& run) {
     const float availableWidth = element.rect.width;
     const float spacing = element.text->characterSpacing * element.canvasScale;
-    std::vector<TextLine> lines = BreakLines(entry, text, element.text->wrapMode, availableWidth, spacing);
+    std::vector<TextLine>& lines = BreakLines(entry, text, element.text->wrapMode, availableWidth, spacing);
 
     const float lineHeight = LineHeight(entry, *element.text);
     // Lines past the limit, and with Truncate or Ellipsis the lines past the bottom of the box, are left

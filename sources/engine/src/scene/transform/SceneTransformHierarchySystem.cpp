@@ -672,12 +672,12 @@ void AppendRenderProxyListEntry(SceneState& state, SceneEntity entity, const Tra
 void PublishRenderProxyTransformUpdates(SceneState& state) {
     state.transformRenderProxyListsStale = true;
     SceneComponentIteration::ForEachCamera(state.world, state.components.TransformComponentId(), state.components.CameraComponentId(),
-        state.cameraIterationQuery, [](SceneEntity entity, const TransformComponent&, const CameraComponent&, void* context) {
+        state.ComponentIterationQueries(), [](SceneEntity entity, const TransformComponent&, const CameraComponent&, void* context) {
             SceneState& state = *static_cast<SceneState*>(context);
             if (IsTransformUpdated(state, entity)) MarkSceneRenderProxyDirty(state, entity);
         }, &state);
     SceneComponentIteration::ForEachLight(state.world, state.components.TransformComponentId(), state.components.LightComponentId(),
-        state.lightIterationQuery, [](SceneEntity entity, const TransformComponent&, const LightComponent&, void* context) {
+        state.ComponentIterationQueries(), [](SceneEntity entity, const TransformComponent&, const LightComponent&, void* context) {
             SceneState& state = *static_cast<SceneState*>(context);
             if (IsTransformUpdated(state, entity)) MarkSceneRenderProxyDirty(state, entity);
         }, &state);
@@ -1411,19 +1411,19 @@ SceneTransformRenderProxyCounts CountSceneTransformRenderProxyUpdates(const Scen
         SceneTransformRenderProxyCounts& counts;
     } context{ state, counts };
     SceneComponentIteration::ForEachMeshRenderer(state.world, state.components.TransformComponentId(), state.components.MeshRendererComponentId(),
-        state.meshRendererIterationQuery, [](SceneEntity entity, const TransformComponent&, const MeshRendererComponent&, void* context) {
+        state.ComponentIterationQueries(), [](SceneEntity entity, const TransformComponent&, const MeshRendererComponent&, void* context) {
             auto& data = *static_cast<Context*>(context);
             if (!IsTransformUpdated(data.state, entity)) return;
             ++data.counts.meshRenderers;
             data.counts.visibleMeshRenderers += SceneRenderProxyMaskHas(SceneRenderProxyComponentMaskOf(data.state, entity), SceneRenderProxyComponentMask::Hidden) ? 0U : 1U;
         }, &context);
     SceneComponentIteration::ForEachCamera(state.world, state.components.TransformComponentId(), state.components.CameraComponentId(),
-        state.cameraIterationQuery, [](SceneEntity entity, const TransformComponent&, const CameraComponent&, void* context) {
+        state.ComponentIterationQueries(), [](SceneEntity entity, const TransformComponent&, const CameraComponent&, void* context) {
             auto& data = *static_cast<Context*>(context);
             data.counts.cameras += IsTransformUpdated(data.state, entity) ? 1U : 0U;
         }, &context);
     SceneComponentIteration::ForEachLight(state.world, state.components.TransformComponentId(), state.components.LightComponentId(),
-        state.lightIterationQuery, [](SceneEntity entity, const TransformComponent&, const LightComponent&, void* context) {
+        state.ComponentIterationQueries(), [](SceneEntity entity, const TransformComponent&, const LightComponent&, void* context) {
             auto& data = *static_cast<Context*>(context);
             data.counts.lights += IsTransformUpdated(data.state, entity) ? 1U : 0U;
         }, &context);

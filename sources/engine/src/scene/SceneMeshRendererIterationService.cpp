@@ -46,7 +46,7 @@ void SceneIterationService::ForEachMeshRenderer(const Scene& scene, MeshRenderer
         state.world,
         state.components.TransformComponentId(),
         state.components.MeshRendererComponentId(),
-        state.meshRendererIterationQuery,
+        state.ComponentIterationQueries(),
         visitor,
         context);
 }
@@ -58,7 +58,7 @@ void SceneIterationService::ForEachVisibleMeshRenderer(const Scene& scene, MeshR
         state.components.TransformComponentId(),
         state.components.VisibilityComponentId(),
         state.components.MeshRendererComponentId(),
-        state.visibleMeshRendererIterationQuery,
+        state.ComponentIterationQueries(),
         visitor,
         context);
 }

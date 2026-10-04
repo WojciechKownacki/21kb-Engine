@@ -38,7 +38,7 @@ void SceneIterationService::ForEachLight(const Scene& scene, LightVisitor visito
         state.world,
         state.components.TransformComponentId(),
         state.components.LightComponentId(),
-        state.lightIterationQuery,
+        state.ComponentIterationQueries(),
         visitor,
         context);
 }

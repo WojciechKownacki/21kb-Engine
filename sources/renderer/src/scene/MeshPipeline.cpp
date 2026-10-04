@@ -97,8 +97,8 @@ void MeshPipelineProcessor::BuildInto(const MeshPipelineBuildDesc& desc, MeshPip
     else for (MeshDrawCommand& command : result.commands) command.instances.clear();
     result.gpuDrivenInputRecords.clear();
     result.transparentInstanceScratch.clear();
-    result.commandLookupScratch.clear();
-    result.materialResolutionScratch.clear();
+    ClearKeepingNodes(result.commandLookupScratch, result.commandLookupNodes);
+    ClearKeepingNodes(result.materialResolutionScratch, result.materialResolutionNodes);
     result.stats = SceneRenderSubmitStats{};
     const bool hasBatchSource = desc.meshBatches != nullptr || desc.drawGroups != nullptr;
     const std::span<const SceneMeshBatch> meshBatches = SceneMeshBatchSourceResolver::Resolve(SceneMeshBatchSourceDesc{

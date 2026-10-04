@@ -30,6 +30,7 @@
 #include "kb/render/shadow/ShadowMapResource.hpp"
 
 #include "engine/scene/SceneRenderFeedback.hpp"
+#include "engine/scene/SceneUI.hpp"
 
 #include <cstdint>
 #include <array>
@@ -298,6 +299,9 @@ private:
     ShadowMapResource defaultShadowMap_;
     ShadowMapResource defaultPointShadowMap_;
     RenderFramePipeline framePipeline_;
+    // The frame plan depends only on the viewports: it is rebuilt when they change.
+    RenderFramePlan framePlan_;
+    std::vector<RenderViewportDesc> framePlanViewports_;
     RenderFrameState frameState_;
     EditorRenderPassSubmitter editorPassSubmitter_;
     PostProcessChain postProcessChain_;
@@ -315,6 +319,8 @@ private:
     // entries vector with the scene's stored frame, so both sides keep their capacity and
     // the steady state allocates nothing per frame.
     kb::scene::SceneRenderVisibilityFrame sceneRenderVisibilityScratch_{};
+    // The screen UI frame of a SubmitSceneToViewport, whose elements keep their capacity for the next one.
+    kb::scene::SceneUIFrame screenUIFrameScratch_{};
     // LIB-145: the async screen-capture controller (frame-gated blit+readTexture+PNG, see
     // RendererScreenCapture.hpp).
     std::unique_ptr<RendererScreenCapture> screenCapture_;

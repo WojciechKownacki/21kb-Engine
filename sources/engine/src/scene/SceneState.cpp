@@ -1,5 +1,6 @@
 #include "scene/SceneState.hpp"
 #include "scene/SceneStreamingService.hpp"
+#include "scene/components/SceneComponentIteration.hpp"
 #include "scene/transform/SceneTransformRootQueryCache.hpp"
 
 #include <flecs.h>
@@ -20,26 +21,17 @@ SceneState::~SceneState() {
     // reads (animator records, pose buffers, the publisher) is destroyed.
     // The job callback never throws, so this wait cannot rethrow here.
     animatorDebugSnapshotJob.Wait();
-    if (cameraIterationQuery != nullptr) {
-        ecs_query_fini(cameraIterationQuery);
-        cameraIterationQuery = nullptr;
-    }
-    if (lightIterationQuery != nullptr) {
-        ecs_query_fini(lightIterationQuery);
-        lightIterationQuery = nullptr;
-    }
-    if (meshRendererIterationQuery != nullptr) {
-        ecs_query_fini(meshRendererIterationQuery);
-        meshRendererIterationQuery = nullptr;
-    }
-    if (visibleMeshRendererIterationQuery != nullptr) {
-        ecs_query_fini(visibleMeshRendererIterationQuery);
-        visibleMeshRendererIterationQuery = nullptr;
-    }
     if (physicsBodyIterationQuery != nullptr) {
         ecs_query_fini(physicsBodyIterationQuery);
         physicsBodyIterationQuery = nullptr;
     }
+}
+
+SceneComponentIterationQueries& SceneState::ComponentIterationQueries() const {
+    if (componentIterationQueries == nullptr) {
+        componentIterationQueries = std::make_unique<SceneComponentIterationQueries>();
+    }
+    return *componentIterationQueries;
 }
 
 } // namespace kb::scene

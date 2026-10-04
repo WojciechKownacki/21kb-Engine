@@ -736,7 +736,11 @@ bool Renderer::SubmitScenes(std::span<const SceneFrameSubmission> submissions) {
     }
 
     WriteRendererBreadcrumb("renderer", "SubmitScenes BuildFramePlan begin");
-    const RenderFramePlan plan = framePipeline_.Build(frameDesc);
+    if (framePlan_.viewports.empty() || framePlanViewports_ != frameDesc.viewports) {
+        framePlan_ = framePipeline_.Build(frameDesc);
+        framePlanViewports_ = frameDesc.viewports;
+    }
+    const RenderFramePlan& plan = framePlan_;
     if (!plan.Succeeded() || plan.viewports.size() != submitList.size()) {
         if (RendererDebugLogEnabled("renderer")) {
             std::ostringstream message;
@@ -872,7 +876,10 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
     if (desc.screenUIEnabled) {
         PublishUIImageAlpha(const_cast<kb::scene::Scene&>(scene));
     }
-    kb::scene::SceneUIFrame screenUIFrame;
+    kb::scene::SceneUIFrame& screenUIFrame = screenUIFrameScratch_;
+    screenUIFrame.viewportSize = {};
+    screenUIFrame.elements.clear();
+    screenUIFrame.refusal = {};
     // An editor viewport laying out the world asks for no UI layer. Skipping the build, rather
     // than discarding its result, also skips the layout pass the frame would have cost.
     if (desc.screenUIEnabled &&

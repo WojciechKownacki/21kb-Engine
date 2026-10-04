@@ -193,6 +193,10 @@ public:
         Stop();
     }
 
+    // The chunk list of ParallelForChunks(itemCount, chunkSize), kept with its capacity for the next call.
+    std::mutex chunkScratchMutex;
+    std::vector<WorkerPoolChunk> chunkScratch;
+
     void Start() {
         std::unique_lock lock{ mutex_ };
         if (running_) {
@@ -1449,8 +1453,15 @@ void WorkerPool::ParallelForChunks(std::size_t itemCount, std::size_t chunkSize,
     if (chunkSize == 0) {
         throw std::invalid_argument("ECS worker pool chunk size must be non-zero");
     }
+    if (state_ == nullptr) {
+        throw std::logic_error("ECS worker pool must be started before running chunks");
+    }
 
-    std::vector<WorkerPoolChunk> chunks;
+    // A nested or concurrent call, which finds the kept list in use, builds its own.
+    const std::unique_lock scratchLock{ state_->chunkScratchMutex, std::try_to_lock };
+    std::vector<WorkerPoolChunk> ownChunks;
+    std::vector<WorkerPoolChunk>& chunks = scratchLock.owns_lock() ? state_->chunkScratch : ownChunks;
+    chunks.clear();
     chunks.reserve(((itemCount - 1U) / chunkSize) + 1U);
     for (std::size_t begin = 0; begin < itemCount; begin += chunkSize) {
         const std::size_t chunkIndex = chunks.size();
