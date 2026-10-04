@@ -2,6 +2,7 @@
 #include "scene/SceneEntityService.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/SceneTransformService.hpp"
+#include "scene/hierarchy/SceneHierarchyCache.hpp"
 #include "scene/prefab/ScenePrefabDirtyTracker.hpp"
 #include "scene/transform/SceneTransformDirtyFrontier.hpp"
 
@@ -36,7 +37,10 @@ void SceneTransformService::Set(Scene& scene, SceneEntity entity, const Transfor
     if (SceneEntityService::IsAlive(scene, entity)) {
         SceneState& state = SceneAccess::State(scene);
         state.componentStorage.Transforms().Set(entity, transform);
-        EnqueueSceneTransformDirtyFrontier(state, entity);
+        // the sync composes a row without parent or children from its dirty flag alone
+        if (SceneHierarchyCache::HasTransformLink(state, entity)) {
+            EnqueueSceneTransformDirtyFrontier(state, entity);
+        }
         MarkScenePrefabNodeDirty(state, entity);
     }
 }
@@ -54,7 +58,9 @@ void SceneTransformService::SetMany(Scene& scene, std::span<const SceneEntity> e
             continue;
         }
         store.Set(entity, transforms[index]);
-        EnqueueSceneTransformDirtyFrontier(state, entity);
+        if (SceneHierarchyCache::HasTransformLink(state, entity)) {
+            EnqueueSceneTransformDirtyFrontier(state, entity);
+        }
         if (trackPrefab) {
             MarkScenePrefabNodeDirty(state, entity);
         }

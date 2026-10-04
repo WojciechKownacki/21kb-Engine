@@ -7,12 +7,15 @@
 #include "engine/scene/SceneAudioMixerAccess.hpp"
 #include "engine/scene/SceneAudioOcclusionAccess.hpp"
 #include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneHistory.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
+#include "scene/SceneAccess.hpp"
+#include "scene/hierarchy/SceneHierarchyCache.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1419,6 +1422,68 @@ void RunDestroyedEntityHandleDoesNotAffectNewEntityTest() {
     kb::tests::Require(!scene.Components().Tags().Has(replacement.Entity()), "Stale destroyed component write affected the replacement object");
 }
 
+// The transform link bit is a cache of the hierarchy tables; it must equal "has a parent or children" everywhere.
+void RequireTransformLinksMatchHierarchy(kb::scene::Scene& scene, const char* message) {
+    const kb::scene::SceneState& state = kb::scene::SceneAccess::State(scene);
+    std::vector<kb::scene::SceneEntity> pending = scene.Hierarchy().RootEntities();
+    std::size_t checked = 0U;
+    bool matches = true;
+    while (!pending.empty()) {
+        const kb::scene::SceneEntity entity = pending.back();
+        pending.pop_back();
+        ++checked;
+        const bool linked = scene.Hierarchy().Parent(entity).IsValid() || scene.Hierarchy().ChildCount(entity) != 0U;
+        matches = matches && kb::scene::SceneHierarchyCache::HasTransformLink(state, entity) == linked;
+        for (const kb::scene::SceneEntity child : scene.Hierarchy().ChildEntities(entity)) pending.push_back(child);
+    }
+    kb::tests::Require(matches && checked != 0U, message);
+}
+
+void RunTransformLinkBitsFollowHierarchyTest() {
+    kb::scene::Scene scene;
+    std::vector<kb::scene::SceneObjectDesc> descs(40U);
+    const std::vector<kb::scene::SceneObject> plain = scene.Entities().CreateObjects(descs);
+    const kb::scene::SceneObject rootA = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "A" });
+    const kb::scene::SceneObject middleA = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "A1", .parent = rootA });
+    const kb::scene::SceneObject leafA = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "A2", .parent = middleA });
+    const kb::scene::SceneObject rootB = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "B" });
+    const kb::scene::SceneObject middleB = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "B1" });
+    kb::tests::Require(scene.Hierarchy().SetParent(middleB, rootB), "Transform link test could not parent");
+    RequireTransformLinksMatchHierarchy(scene, "Transform link bits differ from the hierarchy after creation");
+
+    kb::tests::Require(scene.Hierarchy().SetParent(leafA, middleB) && scene.Hierarchy().SetParent(middleA, kb::scene::SceneObject{}) &&
+            scene.Hierarchy().SetParent(plain[3], plain[4]), "Transform link test could not move");
+    RequireTransformLinksMatchHierarchy(scene, "Transform link bits differ from the hierarchy after moves");
+    kb::tests::Require(scene.Hierarchy().SetParent(plain[3], kb::scene::SceneObject{}), "Transform link test could not unparent");
+    RequireTransformLinksMatchHierarchy(scene, "Transform link bits differ from the hierarchy after unparenting");
+
+    scene.Entities().Destroy(rootB);
+    descs.resize(8U);
+    static_cast<void>(scene.Entities().CreateObjects(descs));
+    RequireTransformLinksMatchHierarchy(scene, "Transform link bits differ from the hierarchy after a subtree was destroyed and its slots reused");
+
+    kb::scene::ScenePrefab prefab;
+    const std::uint32_t rootNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Link Root" });
+    static_cast<void>(prefab.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Link Child", .parentNode = rootNode }));
+    kb::scene::ScenePrefab single;
+    static_cast<void>(single.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Link Single" }));
+    kb::tests::Require(scene.Prefabs().InstantiateMany(prefab, 3U).size() == 3U &&
+            scene.Prefabs().InstantiateMany(single, 3U).size() == 3U &&
+            scene.Prefabs().InstantiateMany(single, 2U, kb::scene::ScenePrefabInstantiationSettings{ .parent = plain[7] }).size() == 2U,
+        "Transform link test could not instantiate its prefabs");
+    RequireTransformLinksMatchHierarchy(scene, "Transform link bits differ from the hierarchy after prefab instantiation");
+
+    kb::tests::Require(scene.History().Record("before reparent"), "Transform link test could not record history");
+    kb::tests::Require(scene.Hierarchy().SetParent(plain[9], plain[10]), "Transform link test could not parent before undo");
+    kb::tests::Require(scene.History().Undo(), "Transform link test could not undo");
+    RequireTransformLinksMatchHierarchy(scene, "Transform link bits differ from the hierarchy after undo");
+
+    kb::scene::Scene loaded;
+    kb::tests::Require(kb::scene::SceneDocumentService::LoadIntoScene(loaded, kb::scene::SceneDocumentService::Capture(scene, "Links")),
+        "Transform link test could not load its captured scene");
+    RequireTransformLinksMatchHierarchy(loaded, "Transform link bits differ from the hierarchy of a loaded scene");
+}
+
 void RunSceneCameraLightVisitorBatchPathTest() {
     kb::scene::Scene scene;
     const kb::scene::SceneObject cameraObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
@@ -1640,6 +1705,7 @@ void RunSceneHierarchyTests() {
     RunSceneHistoryUndoRedoTest();
     RunDestroyedEntityHandleDoesNotAffectNewEntityTest();
     RunSceneCameraLightVisitorBatchPathTest();
+    RunTransformLinkBitsFollowHierarchyTest();
 }
 
 } // namespace kb::tests
