@@ -11,6 +11,7 @@
 #include <atomic>
 #include <cstdint>
 #include <limits>
+#include <mutex>
 #include <stdexcept>
 
 namespace kb::scene {
@@ -56,6 +57,24 @@ inline constexpr std::size_t kParallelSetManyGrainSize = 2048U;
     return once.load(std::memory_order_relaxed);
 }
 
+// Writes a live entity's transform; a row that composes on write gets its world transform here, as the sync would
+// compose it, and an observed transform is left to the sync. False when the entity is not alive.
+bool WriteTransform(SceneState& state, SceneEntity entity, const TransformComponent& transform) {
+    const kb::ecs::ComponentId transformId = state.components.TransformComponentId();
+    if (!state.world.MirrorsValueWrites(transformId) && SceneTransformComposesOnWrite(state, entity)) {
+        auto& storage = const_cast<kb::ecs::NativeArchetypeStorage&>(state.world.NativeStorage());
+        if (void* data = storage.TryGetMutableComponentDataNoteWritten(entity, transformId); data != nullptr) {
+            auto& row = *static_cast<TransformComponent*>(data);
+            SceneTransformComponentStore::Write(row, transform);
+            ComposeSceneTransformRoot(row);
+            PrepareSceneTransformUpdateRecording(state);
+            RecordComposedSceneTransform(state, entity, row);
+            return true;
+        }
+    }
+    return state.componentStorage.Transforms().Set(entity, transform);
+}
+
 } // namespace
 
 TransformComponent SceneTransformService::Get(const Scene& scene, SceneObject object) {
@@ -83,8 +102,8 @@ void SceneTransformService::Set(Scene& scene, SceneObject object, const Transfor
 
 void SceneTransformService::Set(Scene& scene, SceneEntity entity, const TransformComponent& transform) {
     SceneState& state = SceneAccess::State(scene);
-    if (state.componentStorage.Transforms().Set(entity, transform)) {
-        // the sync composes a row without parent or children from its dirty flag alone
+    if (WriteTransform(state, entity, transform)) {
+        // a row with parent or children is composed by the sync from the frontier
         if (SceneHierarchyCache::HasTransformLink(state, entity)) {
             EnqueueSceneTransformDirtyFrontier(state, entity);
         }
@@ -98,10 +117,9 @@ void SceneTransformService::SetMany(Scene& scene, std::span<const SceneEntity> e
     }
     SceneState& state = SceneAccess::State(scene);
     const bool trackPrefab = !state.suppressPrefabDirtyTracking && state.prefabInstances.Count() > 0U;
-    auto& store = state.componentStorage.Transforms();
-    const auto set = [&state, &store, trackPrefab, entities, transforms](std::size_t index) {
+    const auto set = [&state, trackPrefab, entities, transforms](std::size_t index) {
         const SceneEntity entity = entities[index];
-        if (!store.Set(entity, transforms[index])) {
+        if (!WriteTransform(state, entity, transforms[index])) {
             return;
         }
         if (SceneHierarchyCache::HasTransformLink(state, entity)) {
@@ -131,13 +149,17 @@ void SceneTransformService::SetMany(Scene& scene, std::span<const SceneEntity> e
         ranges.resize(rangeCount);
     }
     auto& storage = const_cast<kb::ecs::NativeArchetypeStorage&>(state.world.NativeStorage());
+    PrepareSceneTransformUpdateRecording(state);
+    std::mutex sparseMutex;
     state.transformWorkerPool->ParallelForChunks(entities.size(), kParallelSetManyGrainSize,
-        [&state, &storage, &ranges, transformId, trackPrefab, entities, transforms](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk& chunk) {
+        [&state, &storage, &ranges, &sparseMutex, transformId, trackPrefab, entities, transforms](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk& chunk) {
             SceneState::TransformSetManyRange& range = ranges[chunk.index];
             range.writtenRows.clear();
+            range.composedArchetypes.clear();
             range.linked.clear();
             range.prefabNodes.clear();
             range.unstored.clear();
+            UpdatedTransformBitWriter updatedBits{ state, sparseMutex };
             for (std::size_t index = chunk.begin; index < chunk.begin + chunk.count; ++index) {
                 const SceneEntity entity = entities[index];
                 kb::ecs::NativeComponentRows row;
@@ -146,7 +168,16 @@ void SceneTransformService::SetMany(Scene& scene, std::span<const SceneEntity> e
                     if (state.world.IsAlive(entity)) range.unstored.push_back(index);
                     continue;
                 }
-                SceneTransformComponentStore::Write(*static_cast<TransformComponent*>(data), transforms[index]);
+                auto& current = *static_cast<TransformComponent*>(data);
+                SceneTransformComponentStore::Write(current, transforms[index]);
+                std::uint32_t nodeIndex = 0U;
+                if (trackPrefab && state.prefabInstances.FindContainingEntity(entity, nodeIndex).IsValid()) range.prefabNodes.push_back(entity);
+                if (SceneTransformComposesOnWrite(state, entity)) {
+                    ComposeSceneTransformRoot(current);
+                    updatedBits.Record(entity, current);
+                    if (range.composedArchetypes.empty() || range.composedArchetypes.back() != row.archetypeIndex) range.composedArchetypes.push_back(row.archetypeIndex);
+                    continue;
+                }
                 kb::ecs::NativeComponentRows* run = range.writtenRows.empty() ? nullptr : &range.writtenRows.back();
                 if (run != nullptr && run->archetypeIndex == row.archetypeIndex && run->chunkIndex == row.chunkIndex && run->firstRow + run->count == row.firstRow) {
                     ++run->count;
@@ -154,8 +185,6 @@ void SceneTransformService::SetMany(Scene& scene, std::span<const SceneEntity> e
                     range.writtenRows.push_back(row);
                 }
                 if (SceneHierarchyCache::HasTransformLink(state, entity)) range.linked.push_back(entity);
-                std::uint32_t nodeIndex = 0U;
-                if (trackPrefab && state.prefabInstances.FindContainingEntity(entity, nodeIndex).IsValid()) range.prefabNodes.push_back(entity);
             }
         });
     state.transformSetManyRowsScratch.clear();
@@ -163,6 +192,13 @@ void SceneTransformService::SetMany(Scene& scene, std::span<const SceneEntity> e
         state.transformSetManyRowsScratch.insert(state.transformSetManyRowsScratch.end(), ranges[rangeIndex].writtenRows.begin(), ranges[rangeIndex].writtenRows.end());
     }
     storage.MarkComponentRowsModified(transformId, state.transformSetManyRowsScratch);
+    std::size_t notedArchetype = std::numeric_limits<std::size_t>::max();
+    for (std::size_t rangeIndex = 0U; rangeIndex < rangeCount; ++rangeIndex) {
+        for (const std::size_t archetype : ranges[rangeIndex].composedArchetypes) {
+            if (archetype != notedArchetype) storage.NoteComponentWritten(archetype, transformId);
+            notedArchetype = archetype;
+        }
+    }
     for (std::size_t rangeIndex = 0U; rangeIndex < rangeCount; ++rangeIndex) {
         for (const SceneEntity entity : ranges[rangeIndex].linked) EnqueueSceneTransformDirtyFrontier(state, entity);
         for (const SceneEntity entity : ranges[rangeIndex].prefabNodes) MarkScenePrefabNodeDirty(state, entity);

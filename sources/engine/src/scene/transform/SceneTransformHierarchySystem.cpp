@@ -616,58 +616,6 @@ void RecordUpdatedTransform(SceneState& state, SceneEntity entity, const Transfo
     return (state.transformUpdatedBits[denseIndex / 64U] >> (denseIndex % 64U) & 1U) != 0U;
 }
 
-// Records a worker's run of composed rows: consecutive entities share a word, which is published once.
-class UpdatedTransformBitWriter {
-public:
-    explicit UpdatedTransformBitWriter(SceneState& state, std::mutex& sparseMutex) noexcept : state_(state), sparseMutex_(sparseMutex) {}
-    UpdatedTransformBitWriter(const UpdatedTransformBitWriter&) = delete;
-    UpdatedTransformBitWriter& operator=(const UpdatedTransformBitWriter&) = delete;
-    ~UpdatedTransformBitWriter() { Finish(); }
-
-    // Publishes what was recorded so far.
-    void Finish() noexcept {
-        Flush();
-        if (identityAffineCount_ != 0U) {
-            std::atomic_ref<std::size_t>{ state_.lastTransformRenderProxyIdentityAffineFastPathCount }.fetch_add(identityAffineCount_, std::memory_order_relaxed);
-            identityAffineCount_ = 0U;
-        }
-    }
-
-    void Record(SceneEntity entity, const TransformComponent& transform) {
-        const bool identityAffine = SceneTransformRootHotKernel::CanWriteIdentityAffineFastPath(transform);
-        const std::uint32_t denseIndex = kb::ecs::GeneratedEntityIndex(entity);
-        if (denseIndex == kb::ecs::kInvalidGeneratedEntityIndex || denseIndex / 64U >= state_.transformUpdatedBits.size()) {
-            const std::lock_guard lock{ sparseMutex_ };
-            state_.transformUpdatedSparseEntities.push_back(entity);
-            identityAffineCount_ += identityAffine ? 1U : 0U;
-            return;
-        }
-        if (denseIndex / 64U != word_) {
-            Flush();
-            word_ = denseIndex / 64U;
-        }
-        const std::uint64_t bit = std::uint64_t{ 1U } << (denseIndex % 64U);
-        bits_ |= bit;
-        identityAffineBits_ |= identityAffine ? bit : 0U;
-    }
-
-private:
-    void Flush() noexcept {
-        if (bits_ != 0U) {
-            const std::uint64_t previous = std::atomic_ref<std::uint64_t>{ state_.transformUpdatedBits[word_] }.fetch_or(bits_, std::memory_order_relaxed);
-            identityAffineCount_ += static_cast<std::size_t>(std::popcount(identityAffineBits_ & ~previous));
-            bits_ = 0U;
-            identityAffineBits_ = 0U;
-        }
-    }
-
-    SceneState& state_;
-    std::mutex& sparseMutex_;
-    std::size_t word_ = 0U;
-    std::uint64_t bits_ = 0U;
-    std::uint64_t identityAffineBits_ = 0U;
-    std::size_t identityAffineCount_ = 0U;
-};
 
 void AppendRenderProxyListEntry(SceneState& state, SceneEntity entity, const TransformComponent& transform) {
     state.transformRenderProxyUpdateEntities.push_back(entity);
@@ -1441,12 +1389,7 @@ public:
             task.deferred.push_back({ entity, kb::ecs::NativeComponentRows{ .archetypeIndex = range.archetypeIndex_, .chunkIndex = range.chunkIndex_, .firstRow = row, .count = 1U } });
             return;
         }
-        // the root lane of the transform sync
-        if (SceneTransformRootHotKernel::CanApplyIdentityRotationFastPath(transform)) {
-            SceneTransformRootHotKernel::ApplyIdentityRotationRoot(transform);
-        } else {
-            transform = TransformMath::ComposeRoot(transform);
-        }
+        ComposeSceneTransformRoot(transform);
         task.updatedBits.Record(entity, transform);
     }
 };
@@ -1490,10 +1433,7 @@ TransformPassStats RunSceneTransformPass(SceneState& state, std::size_t grainRow
     const auto& records = state.transformPassRecords;
     if (records.empty()) return stats;
 
-    BeginSceneTransformRenderProxyUpdates(state);
-    if (const std::size_t words = (state.denseHierarchyParents.size() + 63U) / 64U; state.transformUpdatedBits.size() < words) {
-        state.transformUpdatedBits.resize(words, 0U);
-    }
+    PrepareSceneTransformUpdateRecording(state);
     // An observed transform is published in order after the pass, and cameras and lights are queued for the
     // renderer's proxies by the sync: their rows take the sync's lanes.
     const bool observed = state.world.MirrorsValueWrites(transformId);
@@ -1582,6 +1522,32 @@ TransformPassStats RunSceneTransformPass(SceneState& state, std::size_t grainRow
     state.transformRenderProxyListsStale = true;
     if (firstException != nullptr) std::rethrow_exception(firstException);
     return stats;
+}
+
+bool SceneTransformComposesOnWrite(const SceneState& state, SceneEntity entity) noexcept {
+    if (SceneHierarchyCache::HasTransformLink(state, entity)) return false;
+    const std::uint8_t mask = SceneRenderProxyComponentMaskOf(state, entity);
+    return !SceneRenderProxyMaskHas(mask, SceneRenderProxyComponentMask::Camera) && !SceneRenderProxyMaskHas(mask, SceneRenderProxyComponentMask::Light);
+}
+
+void ComposeSceneTransformRoot(TransformComponent& transform) noexcept {
+    if (SceneTransformRootHotKernel::CanApplyIdentityRotationFastPath(transform)) {
+        SceneTransformRootHotKernel::ApplyIdentityRotationRoot(transform);
+    } else {
+        transform = TransformMath::ComposeRoot(transform);
+    }
+}
+
+void RecordComposedSceneTransform(SceneState& state, SceneEntity entity, const TransformComponent& transform) {
+    RecordUpdatedTransform(state, entity, &transform);
+}
+
+void PrepareSceneTransformUpdateRecording(SceneState& state) {
+    BeginSceneTransformRenderProxyUpdates(state);
+    if (const std::size_t words = (state.denseHierarchyParents.size() + 63U) / 64U; state.transformUpdatedBits.size() < words) {
+        state.transformUpdatedBits.resize(words, 0U);
+    }
+    state.transformRenderProxyListsStale = true;
 }
 
 void BeginSceneTransformRenderProxyUpdates(SceneState& state) noexcept {

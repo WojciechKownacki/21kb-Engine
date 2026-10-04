@@ -329,12 +329,13 @@ void RunTransformRootFastPathReportTest() {
             .localScale = kb::scene::Vec3{ 0.5F, 0.25F, 2.0F },
         },
     });
-    scene.Transforms().Set(firstRoot, scene.Transforms().Get(firstRoot));
-    scene.Transforms().Set(secondRoot, scene.Transforms().Get(secondRoot));
-    scene.Transforms().Set(scaledRoot, scene.Transforms().Get(scaledRoot));
-    scene.Transforms().Set(unitScaleRotatedRoot, scene.Transforms().Get(unitScaleRotatedRoot));
-    scene.Transforms().Set(uniformScaleRotatedRoot, scene.Transforms().Get(uniformScaleRotatedRoot));
-    scene.Transforms().Set(staticRotationParent, scene.Transforms().Get(staticRotationParent));
+    // writes compose a plain root at once; MarkModified leaves the roots to the sync whose lanes this test counts
+    scene.Transforms().MarkModified(firstRoot.Entity());
+    scene.Transforms().MarkModified(secondRoot.Entity());
+    scene.Transforms().MarkModified(scaledRoot.Entity());
+    scene.Transforms().MarkModified(unitScaleRotatedRoot.Entity());
+    scene.Transforms().MarkModified(uniformScaleRotatedRoot.Entity());
+    scene.Transforms().MarkModified(staticRotationParent.Entity());
 
     scene.Runtime().SynchronizeTransforms();
     const kb::scene::SceneRuntimeHotPathReport firstReport = scene.Runtime().HotPathReport();
@@ -914,6 +915,8 @@ void RunTransformSparseFlushReportTest() {
     kb::scene::TransformComponent moved = scene.Transforms().Get(roots.front());
     moved.localPosition.x = 42.0F;
     scene.Transforms().Set(roots.front(), moved);
+    // the write composed the plain root; flag it for the sync whose flush this test reports
+    scene.Transforms().MarkModified(roots.front().Entity());
     scene.Runtime().SynchronizeTransforms();
 
     const kb::scene::SceneRuntimeHotPathReport report = scene.Runtime().HotPathReport();
@@ -930,6 +933,7 @@ void RunTransformSparseFlushReportTest() {
     moved = scene.Transforms().Get(roots.front());
     moved.localPosition.x = 43.0F;
     scene.Transforms().Set(roots.front(), moved);
+    scene.Transforms().MarkModified(roots.front().Entity());
     scene.Runtime().SynchronizeTransforms();
     const kb::scene::SceneRuntimeHotPathReport warmReport = scene.Runtime().HotPathReport();
     kb::tests::Require(warmReport.transformHierarchyDirtyFrontierCount == 1U &&
@@ -1662,11 +1666,13 @@ void RunTransformWriteBenchmark() {
         kb::tests::Require(last.localPosition.y == static_cast<float>(kFrames + kWarmupFrames - 1), "Transform write benchmark lost its last write");
         std::cout << "transform_write objects=" << kObjects << " parented=" << parented
                   << " set_ms=" << setMilliseconds[setMilliseconds.size() / 2U] << " sync_ms=" << syncMilliseconds[syncMilliseconds.size() / 2U] << '\n';
-        // The Set loop writes each transform in place (one lookup per object); the synchronization composes the flagged
-        // rows of unlinked objects from their update bits and costs a fraction of that loop, whose 112-byte writes
-        // alone take ~40% of it: the ratio is ~5.6 now, and ~11 before the per-object write lost its repeated lookups.
-        // A ratio keeps the check independent of the machine.
-        kb::tests::Require(setMilliseconds[setMilliseconds.size() / 2U] < syncMilliseconds[syncMilliseconds.size() / 2U] * 7.0,
+        // The Set loop writes each transform in place (one lookup per object). A plain object's world transform is
+        // composed by the write, so the synchronization after it has nothing left and costs a fraction of the loop;
+        // children of the few parents are composed by the synchronization, which then costs more than the loop. A
+        // ratio keeps the check independent of the machine.
+        const double setMedian = setMilliseconds[setMilliseconds.size() / 2U];
+        const double syncMedian = syncMilliseconds[syncMilliseconds.size() / 2U];
+        kb::tests::Require(parented ? setMedian < syncMedian * 7.0 : syncMedian < setMedian * 0.5,
             "Setting the transforms of 30000 objects must not cost much more than synchronizing them (in-place write path)");
     }
 }
