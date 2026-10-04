@@ -1955,6 +1955,103 @@ void RunTypedEcsQueryStructuralChangeValidationTest() {
     kb::tests::Require(!world.IsAlive(second), "ECS structural iteration guard was not released after component iteration exception");
 }
 
+void RunUnsafeHotQueryAppendRefreshTest() {
+    kb::ecs::World world(kb::ecs::WorldConfig{ .chunkSizeProfile = kb::ecs::ChunkSizeProfile::Chunk4KB });
+    const EcsPosition position{ .x = 3.0F, .y = 5.0F };
+    const EcsVelocity velocity{ .x = 2.0F };
+    const EcsQueryMarker marker{};
+    const EcsDisabled disabled{};
+    const std::array moving{
+        kb::ecs::World::MakeBulkComponentBroadcastView(position),
+        kb::ecs::World::MakeBulkComponentBroadcastView(velocity),
+    };
+    const std::array marked{
+        moving[0], moving[1], kb::ecs::World::MakeBulkComponentBroadcastView(marker),
+    };
+    const std::array excluded{
+        moving[0], moving[1], kb::ecs::World::MakeBulkComponentBroadcastView(disabled),
+    };
+    const auto original = world.CreateEntities(257U, moving);
+    static_cast<void>(world.CreateEntities(37U, marked));
+    kb::ecs::QueryFilter filter;
+    filter.Require(world.Component<EcsVelocity>()).Exclude(world.RegisterComponent<EcsDisabled>());
+    auto query = world.CreateQuery<EcsPosition>(filter);
+    kb::ecs::UnsafeHotQuery<EcsPosition> hot;
+    kb::tests::Require(hot.Rebuild(query, kb::ecs::QueryExecutionSettings{ .maxBatchSize = 17U }), "Append test could not build a hot query");
+    kb::ecs::WorkerPool pool(kb::ecs::WorkerPoolConfig{ .workerCount = 2U });
+    const auto verify = [&] {
+        kb::ecs::QueryBatchExecutionScratch reference;
+        query.PrepareMutableBatchExecution({}, reference);
+        std::vector<kb::ecs::Entity::IdType> expected;
+        std::size_t expectedRanges = 0U;
+        for (const auto& record : reference.mutableRecords_) {
+            expected.insert(expected.end(), record.entityIds, record.entityIds + record.entityCount);
+            expectedRanges += (record.entityCount + 16U) / 17U;
+        }
+        std::vector<kb::ecs::Entity::IdType> actual;
+        hot.ForEachMutableChunkWithCurrentDirtyCounts(world.NativeStorage(), [&](auto& chunk) {
+            for (std::size_t row = 0U; row < chunk.Count(); ++row) {
+                actual.push_back(chunk.EntityAt(row).Id());
+                kb::tests::Require(chunk.template Components<0>()[row].x == position.x, "Append refresh retained an invalid component pointer");
+            }
+        });
+        kb::tests::Require(actual == expected, "Append refresh lost, duplicated or reordered query rows");
+        std::atomic_size_t visited{ 0U };
+        const auto stats = hot.ForEachMutableRangeParallel(17U, pool, 2U, [&](auto& chunk, auto) {
+            visited.fetch_add(chunk.Count(), std::memory_order_relaxed);
+        });
+        kb::tests::Require(visited == expected.size() && stats.ranges == expectedRanges, "Append refresh retained an invalid parallel range plan");
+        kb::tests::Require(!hot.IsStale(query), "Append refresh did not capture the new structural version");
+    };
+    verify();
+    for (std::size_t count : { 1U, 311U, 2U, 513U }) {
+        const auto version = world.NativeStorage().StructuralVersion();
+        static_cast<void>(world.CreateEntities(count, moving));
+        static_cast<void>(world.CreateEntities(3U, excluded));
+        kb::tests::Require(world.NativeStorage().IsAppendOnlySince(version), "Entity appends were reported as migrations");
+        kb::tests::Require(hot.RefreshAfterAppends(query), "Hot query could not refresh appended chunks");
+        verify();
+    }
+    // Growing the earlier archetype above shifts the later group's record/range indices; extend that group too.
+    static_cast<void>(world.CreateEntities(83U, marked));
+    kb::tests::Require(hot.RefreshAfterAppends(query), "Hot query could not extend another archetype");
+    verify();
+    const EcsAlignedQueryPayload aligned{};
+    const std::array newArchetype{ moving[0], moving[1], kb::ecs::World::MakeBulkComponentBroadcastView(aligned) };
+    static_cast<void>(world.CreateEntities(29U, newArchetype));
+    kb::tests::Require(hot.RefreshAfterAppends(query), "Hot query could not append a new matching archetype");
+    verify();
+    auto version = world.NativeStorage().StructuralVersion();
+    world.Set(original[0], marker);
+    kb::tests::Require(!world.NativeStorage().IsAppendOnlySince(version), "Single component addition hid a row migration");
+    kb::tests::Require(hot.RefreshAfterAppends(query), "Hot query could not rebuild after a migration");
+    verify();
+    version = world.NativeStorage().StructuralVersion();
+    const std::array markers{ marker, marker, marker };
+    world.SetMany<EcsQueryMarker>(std::span<const kb::ecs::Entity>{ original.data() + 1U, 3U }, markers);
+    kb::tests::Require(!world.NativeStorage().IsAppendOnlySince(version), "Bulk component addition hid row migrations");
+    kb::tests::Require(hot.RefreshAfterAppends(query), "Hot query could not rebuild after bulk migration");
+    verify();
+    world.DestroyEntity(original[4]);
+    kb::tests::Require(hot.RefreshAfterAppends(query), "Hot query could not rebuild after destruction");
+    verify();
+    world.Remove<EcsVelocity>(original[5]);
+    kb::tests::Require(hot.RefreshAfterAppends(query), "Hot query could not rebuild after required-component removal");
+    verify();
+    auto& storage = const_cast<kb::ecs::NativeArchetypeStorage&>(world.NativeStorage());
+    version = storage.StructuralVersion();
+    storage.ClearRetainingCapacity();
+    kb::tests::Require(!storage.IsAppendOnlySince(version), "Retained clear was treated as an append");
+    kb::tests::Require(hot.RefreshAfterAppends(query), "Hot query could not rebuild after retained clear");
+    verify();
+    // The first bulk append reuses an early retained chunk; the next append can fill the retained tail.
+    for (int append = 0; append < 3; ++append) {
+        static_cast<void>(world.CreateEntities(1U, moving));
+        kb::tests::Require(hot.RefreshAfterAppends(query), "Hot query could not refresh retained chunks");
+        verify();
+    }
+}
+
 void RunTypedEcsQueryComponentFilterTest() {
     kb::ecs::World world(kb::ecs::WorldConfig{
         .executionGrainSize = 16,
@@ -2276,6 +2373,7 @@ void RunEcsQueryTests() {
     RunTypedEcsQueryCacheChurnStressTest();
     RunTypedEcsQueryStructuralChangeValidationTest();
     RunTypedEcsQueryComponentFilterTest();
+    RunUnsafeHotQueryAppendRefreshTest();
     RunTypedEcsQueryChangeFilterTest();
     RunTypedEcsQueryFilterValidationTest();
     RunTypedEcsQueryTelemetryCountsArchetypesTest();

@@ -51,6 +51,7 @@ public:
     [[nodiscard]] std::uint64_t StructuralVersion() const noexcept;
     void PrepareBatchExecution(QueryExecutionSettings settings, QueryBatchExecutionScratch& scratch) const;
     void PrepareMutableBatchExecution(QueryExecutionSettings settings, QueryBatchExecutionScratch& scratch) const;
+    [[nodiscard]] bool RefreshMutableChunksAfterAppends(std::uint64_t structuralVersion, QueryBatchExecutionScratch& scratch, std::size_t& firstChangedRecord) const;
     void ForEach(QueryRawVisitor visitor, void* context) const;
     void ForEachBatch(QueryExecutionSettings settings, QueryRawBatchVisitor visitor, void* context) const;
     void ForEachBatch(QueryExecutionSettings settings, QueryRawBatchVisitor visitor, void* context, QueryBatchExecutionScratch& scratch) const;

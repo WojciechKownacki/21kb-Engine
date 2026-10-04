@@ -1233,8 +1233,12 @@ void EcsRenderSceneSynchronizer::SyncFacingPanelUpdates(
 // sync is left to the caller, which has the resolver.
 void EcsRenderSceneSynchronizer::PullComposedMeshTransforms(const kb::scene::Scene& scene, RenderScene& renderScene) const {
     constexpr std::size_t kMeshPullGrainSize = 1024U;
-    const std::uint64_t structuralVersion = scene.Runtime().EcsWorld().NativeStorage().StructuralVersion();
-    if (meshPullScene_ != &scene || meshPullRenderScene_ != &renderScene || meshPullStructuralVersion_ != structuralVersion ||
+    const auto& world = scene.Runtime().EcsWorld();
+    const auto& storage = world.NativeStorage();
+    const std::uint64_t structuralVersion = storage.StructuralVersion();
+    const std::size_t meshCount = storage.CountWithComponent(world.Component<kb::scene::MeshRendererComponent>());
+    if (meshPullScene_ != &scene || meshPullRenderScene_ != &renderScene || !storage.IsAppendOnlySince(meshPullStructuralVersion_) ||
+        meshPullMeshCount_ != meshCount ||
         meshPullMeshSetVersion_ != renderScene.MeshSetVersion()) {
         meshPullRows_.clear();
         struct Context {
@@ -1249,9 +1253,10 @@ void EcsRenderSceneSynchronizer::PullComposedMeshTransforms(const kb::scene::Sce
         }, &context);
         meshPullScene_ = &scene;
         meshPullRenderScene_ = &renderScene;
-        meshPullStructuralVersion_ = structuralVersion;
         meshPullMeshSetVersion_ = renderScene.MeshSetVersion();
+        meshPullMeshCount_ = meshCount;
     }
+    meshPullStructuralVersion_ = structuralVersion;
     meshPullDirtyRows_.clear();
     std::mutex dirtyRowsMutex;
     std::vector<std::size_t>& dirtyRows = meshPullDirtyRows_;

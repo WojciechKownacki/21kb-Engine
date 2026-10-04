@@ -277,6 +277,17 @@ public:
         std::span<const ComponentId> excludedComponentIds,
         std::vector<MutableQueryTableDispatchRecord>& records);
     void CaptureChunkedSnapshot(std::span<const ComponentTypeInfo> componentTypes, ChunkedWorldSnapshot& snapshot) const;
+    // False after removals or migrations (including adding components to existing entities).
+    [[nodiscard]] bool IsAppendOnlySince(std::uint64_t structuralVersion) const noexcept;
+    // Extend an earlier collection for the same query and report the first changed record.
+    // Existing full chunks retain their metadata snapshots; dirty queries read live counts from storage.
+    [[nodiscard]] bool RefreshMutableQueryRecordsAfterAppends(
+        std::span<const ComponentId> componentIds,
+        std::span<const ComponentId> requiredComponentIds,
+        std::span<const ComponentId> excludedComponentIds,
+        std::uint64_t structuralVersion,
+        std::vector<MutableQueryTableDispatchRecord>& records,
+        std::size_t& firstChangedRecord);
     void CaptureChunkedDeltaSnapshot(
         std::span<const ComponentTypeInfo> componentTypes,
         const ChunkedWorldSnapshot& baseline,

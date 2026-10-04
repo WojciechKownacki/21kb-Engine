@@ -3958,6 +3958,42 @@ void RunPulledMeshFollowsComponentChangesAndDestructionTest() {
     }
 }
 
+void RunPulledMeshCacheSurvivesAppendAndMigrationTest() {
+    kb::scene::Scene scene;
+    const auto mesh = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{}).Entity();
+    scene.Components().MeshRenderers().Set(mesh, kb::scene::MeshRendererComponent{ .meshAssetId = 41U });
+    EcsRenderSceneSynchronizer synchronizer;
+    RenderScene renderScene;
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    synchronizer.Sync(scene, renderScene);
+    // Initialize the cached pointers, then append only plain transforms for several frames.
+    synchronizer.PullTransforms(scene, renderScene);
+    for (int frame = 1; frame <= 5; ++frame) {
+        const std::vector<kb::scene::SceneObjectDesc> descs(333U);
+        static_cast<void>(scene.Entities().CreateObjects(descs));
+        scene.Transforms().Set(mesh, LocalOnlyTransformAt(static_cast<float>(frame), 2.0F, 3.0F));
+        synchronizer.PullTransforms(scene, renderScene);
+        const auto* proxy = renderScene.FindMeshByEntity(mesh.Id());
+        Require(proxy != nullptr && proxy->desc.model == ExpectedPulledModel(*scene.Transforms().TryGet(mesh)),
+            "Appending plain transforms broke cached mesh transform reads");
+    }
+    // A component addition relocates the mesh's transform without changing the mesh count or proxy set.
+    struct MeshPullMarker { std::uint32_t value = 1U; };
+    auto& world = scene.Runtime().EcsWorld();
+    world.Set(mesh, MeshPullMarker{});
+    scene.Transforms().Set(mesh, LocalOnlyTransformAt(7.0F, 2.0F, 3.0F));
+    synchronizer.PullTransforms(scene, renderScene);
+    const auto* proxy = renderScene.FindMeshByEntity(mesh.Id());
+    Require(proxy != nullptr && proxy->desc.model == ExpectedPulledModel(*scene.Transforms().TryGet(mesh)),
+        "Adding an unrelated component left a cached transform pointer in the old archetype");
+    world.Remove<MeshPullMarker>(mesh);
+    scene.Transforms().Set(mesh, LocalOnlyTransformAt(9.0F, 2.0F, 3.0F));
+    synchronizer.PullTransforms(scene, renderScene);
+    proxy = renderScene.FindMeshByEntity(mesh.Id());
+    Require(proxy != nullptr && proxy->desc.model == ExpectedPulledModel(*scene.Transforms().TryGet(mesh)),
+        "Removing an unrelated component left a stale mesh transform pointer");
+}
+
 } // namespace
 
 void RunRenderSceneSyncTests() {
@@ -4052,6 +4088,7 @@ void RunRenderSceneSyncTests() {
     RunRenderProxyTransformGoldenHashTest();
     RunPulledProxyKindsFollowMovementAmongPlainMoversTest();
     RunPulledMeshFollowsComponentChangesAndDestructionTest();
+    RunPulledMeshCacheSurvivesAppendAndMigrationTest();
 }
 
 } // namespace kb::render::tests

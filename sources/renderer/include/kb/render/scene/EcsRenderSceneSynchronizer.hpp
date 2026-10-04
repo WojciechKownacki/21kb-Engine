@@ -161,8 +161,7 @@ private:
     mutable std::vector<std::uint64_t> seenSurfaceCasts_;
     mutable std::vector<std::uint64_t> seenSpaceStrokes_;
     mutable std::vector<std::uint64_t> transformUpdateEntities_;
-    // PullTransforms: every mesh proxy with its entity's transform row, kept while neither the scene's storage nor
-    // the render scene's set of mesh proxies changes structurally, and pulled on the scene's workers.
+    // PullTransforms: every mesh proxy with its transform row, retained through appends without mesh renderers.
     struct MeshPullRow {
         kb::scene::SceneEntity entity{};
         const kb::scene::TransformComponent* transform = nullptr;
@@ -173,6 +172,7 @@ private:
     mutable const RenderScene* meshPullRenderScene_ = nullptr;
     mutable std::uint64_t meshPullStructuralVersion_ = 0U;
     mutable std::uint64_t meshPullMeshSetVersion_ = 0U;
+    mutable std::size_t meshPullMeshCount_ = 0U;
     // Rows written after the last transform sync, resolved on the calling thread after the workers.
     mutable std::vector<std::size_t> meshPullDirtyRows_;
     mutable std::vector<std::uint32_t> meshPullChangedGroups_;

@@ -504,6 +504,12 @@ void QueryState::PrepareMutableBatchExecution(QueryExecutionSettings settings, Q
         EndQueryTelemetryTiming(telemetryCounters_, settings, prepareStartedAt));
 }
 
+bool QueryState::RefreshMutableChunksAfterAppends(std::uint64_t structuralVersion, QueryBatchExecutionScratch& scratch, std::size_t& firstChangedRecord) const {
+    return IsValid() && nativeStorage_->RefreshMutableQueryRecordsAfterAppends(
+        plan_->ComponentIds(), plan_->RequiredComponentIds(), plan_->ExcludedComponentIds(),
+        structuralVersion, scratch.mutableRecords_, firstChangedRecord);
+}
+
 void QueryState::ForEach(QueryRawVisitor visitor, void* context) const {
     if (!IsValid() || visitor == nullptr) {
         return;
@@ -1075,6 +1081,10 @@ void PrepareQueryStateMutableBatchExecution(const QueryState* state, QueryExecut
     if (state != nullptr) {
         state->PrepareMutableBatchExecution(settings, scratch);
     }
+}
+
+bool RefreshQueryStateMutableChunksAfterAppends(const QueryState* state, std::uint64_t structuralVersion, QueryBatchExecutionScratch& scratch, std::size_t& firstChangedRecord) {
+    return state != nullptr && state->RefreshMutableChunksAfterAppends(structuralVersion, scratch, firstChangedRecord);
 }
 
 void ForEachQueryStateBatch(const QueryState* state, QueryExecutionSettings settings, QueryRawBatchVisitor visitor, void* context) {
