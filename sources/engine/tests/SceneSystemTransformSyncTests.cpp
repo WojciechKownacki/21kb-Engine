@@ -2038,6 +2038,81 @@ void RunSceneRuntimeGrowingCrowdUpdateAllocationTest() {
     kb::tests::Require(megabytesPerUpdate <= 1.0, "Update of a crowd growing by 333 entities per frame allocated more than 1 MB per frame");
 }
 
+// A batch write gives every row exactly what writing the same list one entity at a time gives: random batches over
+// plain, parented and prefab rows, with dead entities and, in some batches, entities listed twice.
+void RunSceneTransformSetManyMatchesPerEntityWritesTest() {
+    struct World {
+        kb::scene::Scene scene;
+        std::vector<kb::scene::SceneEntity> entities;
+    };
+    const auto build = [](World& world) {
+        std::vector<kb::scene::SceneObjectDesc> descs(40000U);
+        for (const kb::scene::SceneObject& object : world.scene.Entities().CreateObjects(descs)) world.entities.push_back(object.Entity());
+        for (std::size_t index = 0U; index < 200U; ++index) {
+            kb::tests::Require(world.scene.Hierarchy().SetParent(world.entities[index * 7U + 1U], world.entities[index * 7U]), "Batch write test could not parent");
+        }
+        kb::scene::ScenePrefab prefab;
+        const std::uint32_t rootNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Batch Root" });
+        static_cast<void>(prefab.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Batch Child", .parentNode = rootNode }));
+        for (const kb::scene::ScenePrefabInstance& instance : world.scene.Prefabs().InstantiateMany(prefab, 50U)) {
+            world.entities.push_back(instance.ObjectAt(0U).Entity());
+            world.entities.push_back(instance.ObjectAt(1U).Entity());
+        }
+        for (std::size_t index = 30000U; index < 30400U; ++index) world.scene.Entities().Destroy(world.entities[index]);
+        static_cast<void>(world.scene.Runtime().Update(1.0F / 60.0F));
+    };
+    World batched;
+    World single;
+    build(batched);
+    build(single);
+    std::uint32_t seed = 777U;
+    const auto next = [&seed](std::uint32_t range) {
+        seed = seed * 1664525U + 1013904223U;
+        return (seed >> 8U) % range;
+    };
+    const auto compare = [&batched, &single](const char* message) {
+        TransformGoldenHash batchedHash;
+        TransformGoldenHash singleHash;
+        for (std::size_t index = 0U; index < batched.entities.size(); ++index) {
+            const kb::scene::TransformComponent* left = batched.scene.Transforms().TryGet(batched.entities[index]);
+            const kb::scene::TransformComponent* right = single.scene.Transforms().TryGet(single.entities[index]);
+            batchedHash.U64(left == nullptr ? 0U : 1U);
+            singleHash.U64(right == nullptr ? 0U : 1U);
+            if (left != nullptr) batchedHash.Transform(*left);
+            if (right != nullptr) singleHash.Transform(*right);
+        }
+        kb::tests::Require(batchedHash.value == singleHash.value, message);
+    };
+    std::vector<std::size_t> picks;
+    std::vector<kb::scene::SceneEntity> batch;
+    std::vector<kb::scene::TransformComponent> values;
+    for (int round = 0; round < 6; ++round) {
+        picks.resize(20000U + next(15000U));
+        for (std::size_t& pick : picks) pick = next(static_cast<std::uint32_t>(batched.entities.size()));
+        if (round % 2 == 0) {
+            // most batches list each entity once: sort the picks and drop repeats
+            std::ranges::sort(picks);
+            picks.erase(std::unique(picks.begin(), picks.end()), picks.end());
+            for (std::size_t index = picks.size(); index > 1U; --index) std::swap(picks[index - 1U], picks[next(static_cast<std::uint32_t>(index))]);
+        }
+        batch.resize(picks.size());
+        values.resize(picks.size());
+        for (std::size_t index = 0U; index < picks.size(); ++index) {
+            batch[index] = batched.entities[picks[index]];
+            values[index] = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ static_cast<float>(round), static_cast<float>(index), 1.0F },
+                .localRotation = kb::scene::Quat{ 0.0F, 0.6F, 0.0F, 0.8F }, .localScale = kb::scene::Vec3{ 1.0F, 2.0F, 1.0F } };
+        }
+        batched.scene.Transforms().SetMany(batch, values);
+        for (std::size_t index = 0U; index < picks.size(); ++index) {
+            if (single.scene.Entities().IsAlive(single.entities[picks[index]])) single.scene.Transforms().Set(single.entities[picks[index]], values[index]);
+        }
+        compare("A batch transform write differs from writing each entity on its own");
+        static_cast<void>(batched.scene.Runtime().Update(1.0F / 60.0F));
+        static_cast<void>(single.scene.Runtime().Update(1.0F / 60.0F));
+        compare("A batch transform write synchronized differently from writing each entity on its own");
+    }
+}
+
 void RunSceneSystemTransformSyncTests() {
     if (EnvironmentFlagEnabled("KB_SCENE_RUNTIME_STRESS")) {
         RunSceneRuntimeHeadlessStress();
@@ -2071,6 +2146,7 @@ void RunSceneSystemTransformSyncTests() {
     RunSceneBulkCreateObjectsTest();
     RunTransformGoldenHashTest();
     RunSceneRuntimeGrowingCrowdUpdateAllocationTest();
+    RunSceneTransformSetManyMatchesPerEntityWritesTest();
 }
 
 } // namespace kb::tests

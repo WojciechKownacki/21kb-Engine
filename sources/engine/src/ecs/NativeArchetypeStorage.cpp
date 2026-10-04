@@ -1199,6 +1199,11 @@ public:
         }
     }
 
+    // Flags rows a bulk writer wrote, whose version it moves once with MarkComponentsModified.
+    void MarkComponentRowsWritten(ComponentId componentId, std::size_t chunkIndex, std::size_t firstRow, std::size_t count) {
+        MarkComponentRowsDirty(componentId, chunkIndex, firstRow, count);
+    }
+
     [[nodiscard]] void* TryGetComponentData(EntityLocation location, ComponentId componentId) {
         const ComponentLayout* column = FindColumn(componentId);
         return column == nullptr ? nullptr : ComponentData(location, *column);
@@ -2635,6 +2640,33 @@ public:
         return tables_[record.location.table].TryGetComponentDataMarkModified(record.location, componentId);
     }
 
+    [[nodiscard]] void* TryGetMutableComponentRow(Entity entity, ComponentId componentId, NativeComponentRows& row) {
+        const auto index = FindLiveRecordIndex(entity);
+        if (!index.has_value()) return nullptr;
+        const EntityLocation location = records_[*index].location;
+        void* data = tables_[location.table].TryGetComponentData(location, componentId);
+        if (data != nullptr) {
+            row = NativeComponentRows{ .archetypeIndex = location.table, .chunkIndex = location.chunk, .firstRow = location.row, .count = 1U };
+        }
+        return data;
+    }
+
+    void MarkComponentRowsModified(ComponentId componentId, std::span<const NativeComponentRows> runs) {
+        const ComponentId componentIds[]{ componentId };
+        std::size_t touchedArchetype = std::numeric_limits<std::size_t>::max();
+        for (const NativeComponentRows& run : runs) {
+            if (run.archetypeIndex >= tables_.size()) {
+                throw std::out_of_range("Native ECS archetype index is invalid");
+            }
+            if (run.archetypeIndex != touchedArchetype) {
+                tables_[run.archetypeIndex].MarkComponentsModified(run.chunkIndex, run.firstRow, run.count, componentIds);
+                touchedArchetype = run.archetypeIndex;
+            } else {
+                tables_[run.archetypeIndex].MarkComponentRowsWritten(componentId, run.chunkIndex, run.firstRow, run.count);
+            }
+        }
+    }
+
     [[nodiscard]] const void* TryGetComponentData(Entity entity, ComponentId componentId) const {
         const auto index = FindLiveRecordIndex(entity);
         if (!index.has_value()) return nullptr;
@@ -3850,6 +3882,14 @@ const void* NativeArchetypeStorage::ComponentData(Entity entity, ComponentId com
 
 void* NativeArchetypeStorage::TryGetMutableComponentData(Entity entity, ComponentId componentId) {
     return impl_->TryGetMutableComponentData(entity, componentId);
+}
+
+void* NativeArchetypeStorage::TryGetMutableComponentRow(Entity entity, ComponentId componentId, NativeComponentRows& row) {
+    return impl_->TryGetMutableComponentRow(entity, componentId, row);
+}
+
+void NativeArchetypeStorage::MarkComponentRowsModified(ComponentId componentId, std::span<const NativeComponentRows> runs) {
+    impl_->MarkComponentRowsModified(componentId, runs);
 }
 
 void* NativeArchetypeStorage::TryGetMutableComponentDataMarkModified(Entity entity, ComponentId componentId) {

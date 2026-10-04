@@ -609,6 +609,17 @@ public:
     // (entities without a dense index are listed). The render-proxy lists below are derived from them and from the
     // transform store when somebody reads them, and are not kept up to date otherwise.
     std::vector<std::uint64_t> transformUpdatedBits;
+    // A parallel Transforms().SetMany: one bit per dense entity index to find entities listed twice, and what each
+    // worker range leaves to the serial step after the join.
+    struct TransformSetManyRange {
+        std::vector<kb::ecs::NativeComponentRows> writtenRows;
+        std::vector<SceneEntity> linked;
+        std::vector<SceneEntity> prefabNodes;
+        std::vector<std::size_t> unstored;
+    };
+    std::vector<std::uint64_t> transformSetManyMarksScratch;
+    std::vector<TransformSetManyRange> transformSetManyRangesScratch;
+    std::vector<kb::ecs::NativeComponentRows> transformSetManyRowsScratch;
     std::vector<SceneEntity> transformUpdatedSparseEntities;
     bool transformRenderProxyListsStale = false;
     std::vector<SceneEntity> transformRenderProxyUpdateEntities;
