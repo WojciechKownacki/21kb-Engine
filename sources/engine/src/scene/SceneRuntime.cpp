@@ -374,7 +374,7 @@ const kb::ecs::SystemSchedulerTrace& SceneRuntimeService::LastEcsProfilerTrace(c
 
 SceneRuntimeHotPathReport SceneRuntimeService::HotPathReport(const Scene& scene) noexcept {
     const SceneState& state = SceneAccess::State(scene);
-    EnsureSceneTransformRenderProxyLists(state);
+    const SceneTransformRenderProxyCounts renderProxyCounts = CountSceneTransformRenderProxyUpdates(state);
     return SceneRuntimeHotPathReport{
         .transformHierarchyUsesBatchPath = true,
         .transformHierarchyUsesKernelContract = true,
@@ -385,12 +385,12 @@ SceneRuntimeHotPathReport SceneRuntimeService::HotPathReport(const Scene& scene)
         .runtimeFixedCaptureEndNanoseconds = state.lastRuntimeFixedCaptureEndNanoseconds,
         .transformTopologicalBatchCount = state.transformTopology.Levels().size(),
         .transformTopologicalBatchBuildCount = state.transformTopology.BuildCount(),
-        .transformRenderProxyUpdateCount = state.transformRenderProxyUpdateEntities.size(),
-        .transformRenderProxyMeshRendererCount = state.transformRenderProxyMeshRendererIndices.size(),
-        .transformRenderProxyVisibleMeshRendererCount = state.transformRenderProxyVisibleMeshRendererIndices.size(),
-        .transformRenderProxyCameraCount = state.transformRenderProxyCameraIndices.size(),
-        .transformRenderProxyLightCount = state.transformRenderProxyLightIndices.size(),
-        .transformRenderProxyIdentityAffineFastPathCount = state.lastTransformRenderProxyIdentityAffineFastPathCount,
+        .transformRenderProxyUpdateCount = renderProxyCounts.updated,
+        .transformRenderProxyMeshRendererCount = renderProxyCounts.meshRenderers,
+        .transformRenderProxyVisibleMeshRendererCount = renderProxyCounts.visibleMeshRenderers,
+        .transformRenderProxyCameraCount = renderProxyCounts.cameras,
+        .transformRenderProxyLightCount = renderProxyCounts.lights,
+        .transformRenderProxyIdentityAffineFastPathCount = renderProxyCounts.identityAffine,
         .transformHierarchyInspectedCount = state.lastTransformHierarchyInspectedCount,
         .transformHierarchyUpdatedCount = state.lastTransformHierarchyUpdatedCount,
         .transformHierarchyRootFastPathCount = state.lastTransformHierarchyRootFastPathCount,

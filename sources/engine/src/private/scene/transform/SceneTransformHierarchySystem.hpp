@@ -31,6 +31,18 @@ public:
 // Forgets the transforms composed so far this frame, at the start of an Update.
 void ResetSceneTransformRenderProxyUpdates(SceneState& state) noexcept;
 
+// The sizes of the render-proxy lists, counted from this frame's update bits and the mesh, camera and light
+// components without building the lists.
+struct SceneTransformRenderProxyCounts {
+    std::size_t updated = 0U;
+    std::size_t meshRenderers = 0U;
+    std::size_t visibleMeshRenderers = 0U;
+    std::size_t cameras = 0U;
+    std::size_t lights = 0U;
+    std::size_t identityAffine = 0U;
+};
+[[nodiscard]] SceneTransformRenderProxyCounts CountSceneTransformRenderProxyUpdates(const SceneState& state);
+
 // Builds the render-proxy lists (updated entities, their world affines, and the mesh, camera and light entries
 // among them) from this frame's update bits, if a sync changed them since the last read.
 void EnsureSceneTransformRenderProxyLists(const SceneState& state);

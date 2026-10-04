@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bit>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -588,14 +589,20 @@ void EnsureWorkerPool(SceneState& state) {
     }
 }
 
-// The render-proxy lists are derived from these bits when they are read; recording an update is all the sync does.
-void RecordUpdatedTransform(SceneState& state, SceneEntity entity) {
+// The render-proxy lists are derived from these bits when they are read; recording an update (and whether its world
+// affine is a translation, for the hot-path report) is all the sync does.
+void RecordUpdatedTransform(SceneState& state, SceneEntity entity, const TransformComponent* transform) {
+    const bool identityAffine = transform != nullptr && SceneTransformRootHotKernel::CanWriteIdentityAffineFastPath(*transform);
     const std::uint32_t denseIndex = kb::ecs::GeneratedEntityIndex(entity);
     if (denseIndex == kb::ecs::kInvalidGeneratedEntityIndex || denseIndex / 64U >= state.transformUpdatedBits.size()) {
         state.transformUpdatedSparseEntities.push_back(entity);
+        state.lastTransformRenderProxyIdentityAffineFastPathCount += identityAffine ? 1U : 0U;
         return;
     }
-    state.transformUpdatedBits[denseIndex / 64U] |= std::uint64_t{ 1U } << (denseIndex % 64U);
+    std::uint64_t& word = state.transformUpdatedBits[denseIndex / 64U];
+    const std::uint64_t bit = std::uint64_t{ 1U } << (denseIndex % 64U);
+    state.lastTransformRenderProxyIdentityAffineFastPathCount += identityAffine && (word & bit) == 0U ? 1U : 0U;
+    word |= bit;
 }
 
 [[nodiscard]] bool IsTransformUpdated(const SceneState& state, SceneEntity entity) noexcept {
@@ -612,27 +619,38 @@ public:
     explicit UpdatedTransformBitWriter(SceneState& state, std::mutex& sparseMutex) noexcept : state_(state), sparseMutex_(sparseMutex) {}
     UpdatedTransformBitWriter(const UpdatedTransformBitWriter&) = delete;
     UpdatedTransformBitWriter& operator=(const UpdatedTransformBitWriter&) = delete;
-    ~UpdatedTransformBitWriter() { Flush(); }
+    ~UpdatedTransformBitWriter() {
+        Flush();
+        if (identityAffineCount_ != 0U) {
+            std::atomic_ref<std::size_t>{ state_.lastTransformRenderProxyIdentityAffineFastPathCount }.fetch_add(identityAffineCount_, std::memory_order_relaxed);
+        }
+    }
 
-    void Record(SceneEntity entity) {
+    void Record(SceneEntity entity, const TransformComponent& transform) {
+        const bool identityAffine = SceneTransformRootHotKernel::CanWriteIdentityAffineFastPath(transform);
         const std::uint32_t denseIndex = kb::ecs::GeneratedEntityIndex(entity);
         if (denseIndex == kb::ecs::kInvalidGeneratedEntityIndex || denseIndex / 64U >= state_.transformUpdatedBits.size()) {
             const std::lock_guard lock{ sparseMutex_ };
             state_.transformUpdatedSparseEntities.push_back(entity);
+            identityAffineCount_ += identityAffine ? 1U : 0U;
             return;
         }
         if (denseIndex / 64U != word_) {
             Flush();
             word_ = denseIndex / 64U;
         }
-        bits_ |= std::uint64_t{ 1U } << (denseIndex % 64U);
+        const std::uint64_t bit = std::uint64_t{ 1U } << (denseIndex % 64U);
+        bits_ |= bit;
+        identityAffineBits_ |= identityAffine ? bit : 0U;
     }
 
 private:
     void Flush() noexcept {
         if (bits_ != 0U) {
-            std::atomic_ref<std::uint64_t>{ state_.transformUpdatedBits[word_] }.fetch_or(bits_, std::memory_order_relaxed);
+            const std::uint64_t previous = std::atomic_ref<std::uint64_t>{ state_.transformUpdatedBits[word_] }.fetch_or(bits_, std::memory_order_relaxed);
+            identityAffineCount_ += static_cast<std::size_t>(std::popcount(identityAffineBits_ & ~previous));
             bits_ = 0U;
+            identityAffineBits_ = 0U;
         }
     }
 
@@ -640,12 +658,13 @@ private:
     std::mutex& sparseMutex_;
     std::size_t word_ = 0U;
     std::uint64_t bits_ = 0U;
+    std::uint64_t identityAffineBits_ = 0U;
+    std::size_t identityAffineCount_ = 0U;
 };
 
 void AppendRenderProxyListEntry(SceneState& state, SceneEntity entity, const TransformComponent& transform) {
     state.transformRenderProxyUpdateEntities.push_back(entity);
     state.transformRenderProxyWorldAffine3x4.push_back(BuildWorldAffine3x4(transform));
-    state.lastTransformRenderProxyIdentityAffineFastPathCount += SceneTransformRootHotKernel::CanWriteIdentityAffineFastPath(transform) ? 1U : 0U;
 }
 
 // Cameras and lights composed this frame are queued for the renderer's proxy updates, as the render-proxy lists
@@ -1235,7 +1254,7 @@ void RunHierarchyDirtyFrontier(
                             state.transformHierarchyUpdatedTransformsScratch[writeBegin + writeOffset] = transform;
                             ++writeOffset;
                         }
-                        updatedBits.Record(chunk.EntityAt(row));
+                        updatedBits.Record(chunk.EntityAt(row), transform);
                     }
                 }
                 rootFastPathCount.fetch_add(localRootFastPathCount, std::memory_order_relaxed);
@@ -1285,7 +1304,7 @@ void RunHierarchyDirtyFrontier(
                         state.transformHierarchyUpdatedEntitiesScratch.push_back(chunk.EntityAt(row));
                         state.transformHierarchyUpdatedTransformsScratch.push_back(transform);
                     }
-                    RecordUpdatedTransform(state, chunk.EntityAt(row));
+                    RecordUpdatedTransform(state, chunk.EntityAt(row), &transform);
                 }
             }));
     }
@@ -1317,7 +1336,7 @@ void RunHierarchyDirtyFrontier(
                     state.transformHierarchyUpdatedEntitiesScratch.push_back(linked.entity);
                     state.transformHierarchyUpdatedTransformsScratch.push_back(*linked.transform);
                 }
-                RecordUpdatedTransform(state, linked.entity);
+                RecordUpdatedTransform(state, linked.entity, linked.transform);
             }
             state.lastTransformHierarchyInspectedCount += linkedRows.size();
             state.lastTransformHierarchyUpdatedCount += linkedRows.size();
@@ -1374,7 +1393,41 @@ void EnsureSceneTransformWorkerPool(SceneState& state) {
 void ResetSceneTransformRenderProxyUpdates(SceneState& state) noexcept {
     std::ranges::fill(state.transformUpdatedBits, 0U);
     state.transformUpdatedSparseEntities.clear();
+    state.lastTransformRenderProxyIdentityAffineFastPathCount = 0U;
     state.transformRenderProxyListsStale = true;
+}
+
+SceneTransformRenderProxyCounts CountSceneTransformRenderProxyUpdates(const SceneState& state) {
+    SceneTransformRenderProxyCounts counts{ .identityAffine = state.lastTransformRenderProxyIdentityAffineFastPathCount };
+    for (const std::uint64_t word : state.transformUpdatedBits) {
+        counts.updated += static_cast<std::size_t>(std::popcount(word));
+    }
+    for (const SceneEntity entity : state.transformUpdatedSparseEntities) {
+        counts.updated += state.componentStorage.Transforms().TryGet(entity) != nullptr ? 1U : 0U;
+    }
+    // The mesh, camera and light entries among the updated ones, found by their components.
+    struct Context {
+        const SceneState& state;
+        SceneTransformRenderProxyCounts& counts;
+    } context{ state, counts };
+    SceneComponentIteration::ForEachMeshRenderer(state.world, state.components.TransformComponentId(), state.components.MeshRendererComponentId(),
+        state.meshRendererIterationQuery, [](SceneEntity entity, const TransformComponent&, const MeshRendererComponent&, void* context) {
+            auto& data = *static_cast<Context*>(context);
+            if (!IsTransformUpdated(data.state, entity)) return;
+            ++data.counts.meshRenderers;
+            data.counts.visibleMeshRenderers += SceneRenderProxyMaskHas(SceneRenderProxyComponentMaskOf(data.state, entity), SceneRenderProxyComponentMask::Hidden) ? 0U : 1U;
+        }, &context);
+    SceneComponentIteration::ForEachCamera(state.world, state.components.TransformComponentId(), state.components.CameraComponentId(),
+        state.cameraIterationQuery, [](SceneEntity entity, const TransformComponent&, const CameraComponent&, void* context) {
+            auto& data = *static_cast<Context*>(context);
+            data.counts.cameras += IsTransformUpdated(data.state, entity) ? 1U : 0U;
+        }, &context);
+    SceneComponentIteration::ForEachLight(state.world, state.components.TransformComponentId(), state.components.LightComponentId(),
+        state.lightIterationQuery, [](SceneEntity entity, const TransformComponent&, const LightComponent&, void* context) {
+            auto& data = *static_cast<Context*>(context);
+            data.counts.lights += IsTransformUpdated(data.state, entity) ? 1U : 0U;
+        }, &context);
+    return counts;
 }
 
 void EnsureSceneTransformRenderProxyLists(const SceneState& constState) {
@@ -1390,7 +1443,6 @@ void EnsureSceneTransformRenderProxyLists(const SceneState& constState) {
     state.transformRenderProxyVisibleMeshRendererIndices.clear();
     state.transformRenderProxyCameraIndices.clear();
     state.transformRenderProxyLightIndices.clear();
-    state.lastTransformRenderProxyIdentityAffineFastPathCount = 0U;
     SceneComponentIteration::ForEachTransform(state.world, state.components.TransformComponentId(),
         [](SceneEntity entity, const TransformComponent& transform, void* context) {
             SceneState& state = *static_cast<SceneState*>(context);
@@ -1503,7 +1555,7 @@ void SceneTransformHierarchySystem::Update(SceneState& state) const {
     const std::size_t nativeUpdatedCount = updatedEntities.size();
     const auto genericUpdated = [&updatedEntities, nativeUpdatedCount] { return std::span<const SceneEntity>{ updatedEntities }.subspan(nativeUpdatedCount); };
     const auto recordGenericUpdates = [&state, &genericUpdated] {
-        for (const SceneEntity entity : genericUpdated()) RecordUpdatedTransform(state, entity);
+        for (const SceneEntity entity : genericUpdated()) RecordUpdatedTransform(state, entity, state.componentStorage.Transforms().TryGet(entity));
         if (!genericUpdated().empty()) PublishRenderProxyTransformUpdates(state);
     };
     const std::size_t budgetLimit = state.transformPropagationBudget.maxInspectedEntitiesPerSync;
