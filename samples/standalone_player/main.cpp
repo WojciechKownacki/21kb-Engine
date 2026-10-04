@@ -914,17 +914,25 @@ using StandaloneProjectRuntimeConfig = kb::game::GameProjectRuntime;
     kb::project::ProjectDescriptor descriptor{};
     descriptor.plugins.push_back(kb::project::ProjectPluginReference{
         .name = "Rendering.BasicLighting",
+#if defined(KB_STANDALONE_BASIC_LIGHTING_PLUGIN_PATH)
+        .binaryPath = KB_STANDALONE_BASIC_LIGHTING_PLUGIN_PATH,
+#else
         .binaryPath = (
             ExeDirectory().parent_path().parent_path() /
             "basic_lighting" / "Debug" / "kb_basic_lighting_plugin.dll").string(),
+#endif
         .enabled = true,
     });
     descriptor.plugins.push_back(kb::project::ProjectPluginReference{
         .name = "Audio.Miniaudio",
+#if defined(KB_STANDALONE_AUDIO_PLUGIN_PATH)
+        .binaryPath = KB_STANDALONE_AUDIO_PLUGIN_PATH,
+#else
         .binaryPath = (
             ExeDirectory().parent_path().parent_path() /
             "audio_miniaudio" / "Debug" /
             "kb_audio_miniaudio_plugin.dll").string(),
+#endif
         .enabled = true,
     });
     descriptor.plugins.push_back(kb::project::ProjectPluginReference{
