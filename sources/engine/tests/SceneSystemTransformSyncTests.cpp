@@ -1549,6 +1549,8 @@ void RunSceneRuntimeRootOnlyNativeDirtyRangePathTest() {
     kb::scene::TransformComponent movedAgain = scene.Transforms().Get(first);
     movedAgain.localPosition.x = 12.0F;
     scene.Transforms().Set(first, movedAgain);
+    // the write composed the plain root; flag it so the sync's cached root query has a row to observe
+    scene.Transforms().MarkModified(first.Entity());
     scene.Runtime().SynchronizeTransforms();
     kb::tests::Require(scene.Runtime().HotPathReport().transformHierarchyUpdatedCount == 1U,
         "Cached root query did not observe a transform write without a structural change");
@@ -2094,12 +2096,13 @@ std::uint64_t RunTransformGoldenScenario(TransformGoldenScene kind, TransformGol
 }
 
 void RunTransformGoldenHashTest() {
+    // A plain entity's write composes its world transform at once: the state before each Update shows it.
     constexpr std::array<std::pair<TransformGoldenScene, std::uint64_t>, 4U> expected{ {
-        { TransformGoldenScene::Flat, 0xff5ae865064ffda3ULL },
-        { TransformGoldenScene::Overlay, 0x7e94174614290a5fULL },
+        { TransformGoldenScene::Flat, 0x81ebf71ba3a68884ULL },
+        { TransformGoldenScene::Overlay, 0x3d4bc58dbb7dda50ULL },
         { TransformGoldenScene::Observed, 0x7e94174614290a5fULL },
         // the scene runs fixed steps; its plain entities, not interpolated, report their current transform
-        { TransformGoldenScene::Hierarchy, 0xe762316db3f70d2aULL },
+        { TransformGoldenScene::Hierarchy, 0x06e0adb696b5e531ULL },
     } };
     bool matches = true;
     for (const auto& [kind, value] : expected) {

@@ -229,6 +229,8 @@ public:
         std::size_t firstRow,
         std::size_t count,
         std::span<const ComponentId> componentIds);
+    // Like TryGetMutableComponentData, and moves the component's version for the write without flagging the row.
+    [[nodiscard]] void* TryGetMutableComponentDataNoteWritten(Entity entity, ComponentId componentId);
     // Moves the archetype's version of the component once for rows written in place without flagging them.
     void NoteComponentWritten(std::size_t archetypeIndex, ComponentId componentId);
     // An upper bound of the rows of the archetype flagged for the component (0 when none is).

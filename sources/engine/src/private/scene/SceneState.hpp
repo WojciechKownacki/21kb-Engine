@@ -601,6 +601,7 @@ public:
     // worker range leaves to the serial step after the join.
     struct TransformSetManyRange {
         std::vector<kb::ecs::NativeComponentRows> writtenRows;
+        std::vector<std::size_t> composedArchetypes;
         std::vector<SceneEntity> linked;
         std::vector<SceneEntity> prefabNodes;
         std::vector<std::size_t> unstored;

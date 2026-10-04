@@ -1488,6 +1488,16 @@ public:
         TouchComponent(componentId);
     }
 
+    [[nodiscard]] void* TryGetComponentDataNoteWritten(EntityLocation location, ComponentId componentId) {
+        const ComponentLayout* column = FindColumn(componentId);
+        if (column == nullptr) {
+            return nullptr;
+        }
+        ++componentVersions_[static_cast<std::size_t>(column - layout_.columns.data())];
+        ++version_;
+        return ComponentData(location, *column);
+    }
+
     [[nodiscard]] std::size_t ComponentDirtyTotal(ComponentId componentId) const {
         const std::size_t componentIndex = ComponentColumnIndex(componentId);
         return componentIndex < dirtyRowTotals_.size() ? dirtyRowTotals_[componentIndex] : 0U;
@@ -2696,6 +2706,13 @@ public:
         if (!index.has_value()) return nullptr;
         EntityRecord& record = records_[*index];
         return tables_[record.location.table].TryGetComponentDataMarkModified(record.location, componentId);
+    }
+
+    [[nodiscard]] void* TryGetMutableComponentDataNoteWritten(Entity entity, ComponentId componentId) {
+        const auto index = FindLiveRecordIndex(entity);
+        if (!index.has_value()) return nullptr;
+        EntityRecord& record = records_[*index];
+        return tables_[record.location.table].TryGetComponentDataNoteWritten(record.location, componentId);
     }
 
     [[nodiscard]] void* TryGetMutableComponentRow(Entity entity, ComponentId componentId, NativeComponentRows& row) {
@@ -3907,6 +3924,10 @@ void NativeArchetypeStorage::MarkArchetypeChunkComponentsModified(
     std::size_t count,
     std::span<const ComponentId> componentIds) {
     impl_->MarkArchetypeChunkComponentsModified(archetypeIndex, chunkIndex, firstRow, count, componentIds);
+}
+
+void* NativeArchetypeStorage::TryGetMutableComponentDataNoteWritten(Entity entity, ComponentId componentId) {
+    return impl_->TryGetMutableComponentDataNoteWritten(entity, componentId);
 }
 
 void NativeArchetypeStorage::NoteComponentWritten(std::size_t archetypeIndex, ComponentId componentId) {
