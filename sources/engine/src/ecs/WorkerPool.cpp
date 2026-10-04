@@ -1,6 +1,7 @@
 #include "engine/ecs/WorkerPool.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -410,6 +411,7 @@ public:
             activeWorkerLimit_ = ResolveBatchWorkerLimit(batches);
             const bool useStaticStridedBatches = CanRunBatchesStaticStrided(batches, activeWorkerLimit_);
             if (useStaticStridedBatches) {
+                staticWorkShared_ = AnyWorkerFor(std::span<const std::remove_cvref_t<decltype(batches[0])>>{ batches });
                 PrepareStaticStridedWorkLocked(batches.size());
             } else {
                 PrepareWorkerBatchQueuesLocked(batches.size());
@@ -481,6 +483,7 @@ public:
             activeWorkerLimit_ = ResolveChunkWorkerLimit(chunks);
             const bool useStaticStridedChunks = CanRunChunksStaticStrided(chunks, activeWorkerLimit_);
             if (useStaticStridedChunks) {
+                staticWorkShared_ = AnyWorkerFor(std::span<const std::remove_cvref_t<decltype(chunks[0])>>{ chunks });
                 PrepareStaticStridedWorkLocked(chunks.size());
             } else {
                 PrepareWorkerBatchQueuesLocked(chunks.size());
@@ -593,6 +596,7 @@ public:
             activeWorkerLimit_ = ResolveBatchWorkerLimit(ownedBatches_);
             const bool useStaticStridedBatches = CanRunBatchesStaticStrided(ownedBatches_, activeWorkerLimit_);
             if (useStaticStridedBatches) {
+                staticWorkShared_ = AnyWorkerFor(std::span<const std::remove_cvref_t<decltype(ownedBatches_[0])>>{ ownedBatches_ });
                 PrepareStaticStridedWorkLocked(ownedBatches_.size());
             } else {
                 PrepareWorkerBatchQueuesLocked(ownedBatches_.size());
@@ -649,6 +653,7 @@ public:
             activeWorkerLimit_ = ResolveChunkWorkerLimit(ownedChunks_);
             const bool useStaticStridedChunks = CanRunChunksStaticStrided(ownedChunks_, activeWorkerLimit_);
             if (useStaticStridedChunks) {
+                staticWorkShared_ = AnyWorkerFor(std::span<const std::remove_cvref_t<decltype(ownedChunks_[0])>>{ ownedChunks_ });
                 PrepareStaticStridedWorkLocked(ownedChunks_.size());
             } else {
                 PrepareWorkerBatchQueuesLocked(ownedChunks_.size());
@@ -1098,13 +1103,15 @@ private:
                 } else if (mode == WorkMode::Batches) {
                     batchCallback(context, batch, batchCallbackContext);
                 } else if (mode == WorkMode::BatchesStaticStrided) {
-                    for (std::size_t batchIndex = workerIndex; batchIndex < staticBatchCount; batchIndex += workerCount) {
+                    for (std::size_t batchIndex = FirstStaticWork(workerIndex); batchIndex < staticBatchCount;
+                         batchIndex = NextStaticWork(batchIndex, workerCount)) {
                         batchCallback(context, staticBatches[batchIndex], batchCallbackContext);
                     }
                 } else if (mode == WorkMode::Chunks) {
                     chunkCallback(context, chunk, chunkCallbackContext);
                 } else if (mode == WorkMode::ChunksStaticStrided) {
-                    for (std::size_t chunkIndex = workerIndex; chunkIndex < staticChunkCount; chunkIndex += workerCount) {
+                    for (std::size_t chunkIndex = FirstStaticWork(workerIndex); chunkIndex < staticChunkCount;
+                         chunkIndex = NextStaticWork(chunkIndex, workerCount)) {
                         chunkCallback(context, staticChunks[chunkIndex], chunkCallbackContext);
                     }
                 }
@@ -1244,6 +1251,7 @@ private:
         }
         std::fill(staticStridedWorkerDone_.begin(), staticStridedWorkerDone_.end(), 1U);
         std::fill_n(staticStridedWorkerDone_.begin(), activeWorkerLimit_, 0U);
+        nextStaticWork_.store(0U, std::memory_order_relaxed);
     }
 
     void ResetWorkerBatchQueuesLocked() noexcept {
@@ -1349,6 +1357,23 @@ private:
     std::vector<std::vector<std::size_t>> workerBatchQueues_;
     std::vector<std::size_t> workerBatchQueueCursors_;
     std::vector<unsigned char> staticStridedWorkerDone_;
+    // Items without a preferred worker are taken from a shared counter, so a slower core takes fewer; items with one
+    // run on it (stride by the worker count).
+    std::atomic<std::size_t> nextStaticWork_{ 0U };
+    bool staticWorkShared_ = false;
+
+    [[nodiscard]] std::size_t FirstStaticWork(std::size_t workerIndex) noexcept {
+        return staticWorkShared_ ? nextStaticWork_.fetch_add(1U, std::memory_order_relaxed) : workerIndex;
+    }
+
+    [[nodiscard]] std::size_t NextStaticWork(std::size_t previous, std::size_t workerCount) noexcept {
+        return staticWorkShared_ ? nextStaticWork_.fetch_add(1U, std::memory_order_relaxed) : previous + workerCount;
+    }
+
+    template <typename Work>
+    [[nodiscard]] static bool AnyWorkerFor(std::span<const Work> work) noexcept {
+        return std::ranges::all_of(work, [](const Work& item) { return item.preferredWorkerIndex == kAnyWorkerPoolWorker; });
+    }
     WorkerPoolDispatchTelemetry telemetry_;
     DispatchTimePoint activeDispatchStartedAt_{};
     std::size_t activeWorkerLimit_ = 1;
@@ -1469,7 +1494,7 @@ void WorkerPool::ParallelForChunks(std::size_t itemCount, std::size_t chunkSize,
             .index = chunkIndex,
             .begin = begin,
             .count = std::min(chunkSize, itemCount - begin),
-            .preferredWorkerIndex = chunkIndex,
+            .preferredWorkerIndex = kAnyWorkerPoolWorker,
         });
     }
 

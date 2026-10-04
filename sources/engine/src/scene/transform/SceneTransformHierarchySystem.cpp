@@ -583,7 +583,7 @@ void EnsureWorkerPool(SceneState& state) {
     const auto available = std::max(1U, std::thread::hardware_concurrency());
     const auto limit = state.world.Config().workerThreadLimit;
     const kb::ecs::WorkerPoolConfig config{
-        .workerCount = std::min<std::size_t>(available > 1U ? available - 1U : 1U, limit == 0U ? 8U : limit),
+        .workerCount = std::min<std::size_t>(available > 1U ? available - 1U : 1U, limit == 0U ? 16U : limit),
     };
     if (state.transformWorkerPool == nullptr) {
         state.transformWorkerPool = std::make_unique<kb::ecs::WorkerPool>(config);
