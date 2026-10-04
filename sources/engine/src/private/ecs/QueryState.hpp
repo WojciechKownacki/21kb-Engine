@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <unordered_map>
 #include <vector>
@@ -39,6 +40,10 @@ public:
     QueryState& operator=(const QueryState&) = delete;
     QueryState(QueryState&&) = delete;
     QueryState& operator=(QueryState&&) = delete;
+
+    // A freed state's memory is kept for the next one: a query created and dropped every frame allocates nothing.
+    [[nodiscard]] static void* operator new(std::size_t size);
+    static void operator delete(void* pointer, std::size_t size) noexcept;
 
     [[nodiscard]] bool IsValid() const noexcept;
     [[nodiscard]] std::span<const ComponentId> ComponentIds() const noexcept;
@@ -87,7 +92,8 @@ private:
     std::mutex* telemetryMutex_ = nullptr;
     std::size_t defaultExecutionGrainSize_ = kDefaultQueryExecutionGrainSize;
     std::size_t defaultPrefetchDistance_ = 0;
-    mutable std::unordered_map<ChangeVersionKey, std::uint64_t, ChangeVersionKeyHash> observedVersions_;
+    // Created by the first commit of a query with change filters: the map allocates when it is constructed.
+    mutable std::optional<std::unordered_map<ChangeVersionKey, std::uint64_t, ChangeVersionKeyHash>> observedVersions_;
     mutable std::vector<QueryTableDispatchRecord> cachedReadRecords_;
     mutable std::vector<MutableQueryTableDispatchRecord> cachedMutableRecords_;
     mutable std::uint64_t cachedReadStructuralVersion_ = 0;

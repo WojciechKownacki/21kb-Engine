@@ -29,6 +29,8 @@ struct RenderViewportDesc {
     [[nodiscard]] constexpr bool IsValid() const noexcept {
         return id.IsValid() && extent.IsValid();
     }
+
+    [[nodiscard]] friend constexpr bool operator==(const RenderViewportDesc& lhs, const RenderViewportDesc& rhs) noexcept = default;
 };
 
 } // namespace kb::render

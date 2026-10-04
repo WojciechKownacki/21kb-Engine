@@ -25,6 +25,23 @@ thread_local QueryWorkerContext tCurrentQueryWorkerContext{};
 thread_local QueryBatchExecutionScratch tBatchExecutionScratch{};
 thread_local bool tBatchExecutionScratchInUse = false;
 
+inline constexpr std::size_t kMaxKeptQueryStateBlocks = 256U;
+
+struct QueryStateBlocks {
+    QueryStateBlocks() {
+        blocks.reserve(kMaxKeptQueryStateBlocks);
+    }
+
+    std::mutex mutex;
+    std::vector<void*> blocks;
+};
+
+// Never destroyed: a query state may be freed during static destruction.
+[[nodiscard]] QueryStateBlocks& KeptQueryStateBlocks() {
+    static QueryStateBlocks* const blocks = new QueryStateBlocks{};
+    return *blocks;
+}
+
 class ScopedQueryWorkerContext {
 public:
     explicit ScopedQueryWorkerContext(WorkerContext workerContext) noexcept
@@ -952,14 +969,14 @@ void QueryState::RefreshRecordMetadata(std::span<MutableQueryTableDispatchRecord
 }
 
 bool QueryState::RecordChanged(const QueryTableDispatchRecord& record) const {
-    if (!plan_->HasChangeFilters()) {
+    if (!plan_->HasChangeFilters() || !observedVersions_.has_value()) {
         return true;
     }
     for (ComponentId componentId : plan_->ChangedComponentIds()) {
         const std::uint64_t version = nativeStorage_->ArchetypeComponentVersion(record.nativeArchetypeIndex, componentId);
         const ChangeVersionKey key{ .archetypeIndex = record.nativeArchetypeIndex, .componentId = componentId };
-        const auto observed = observedVersions_.find(key);
-        if (observed == observedVersions_.end() || observed->second != version) {
+        const auto observed = observedVersions_->find(key);
+        if (observed == observedVersions_->end() || observed->second != version) {
             return true;
         }
     }
@@ -967,14 +984,14 @@ bool QueryState::RecordChanged(const QueryTableDispatchRecord& record) const {
 }
 
 bool QueryState::RecordChanged(const MutableQueryTableDispatchRecord& record) const {
-    if (!plan_->HasChangeFilters()) {
+    if (!plan_->HasChangeFilters() || !observedVersions_.has_value()) {
         return true;
     }
     for (ComponentId componentId : plan_->ChangedComponentIds()) {
         const std::uint64_t version = nativeStorage_->ArchetypeComponentVersion(record.nativeArchetypeIndex, componentId);
         const ChangeVersionKey key{ .archetypeIndex = record.nativeArchetypeIndex, .componentId = componentId };
-        const auto observed = observedVersions_.find(key);
-        if (observed == observedVersions_.end() || observed->second != version) {
+        const auto observed = observedVersions_->find(key);
+        if (observed == observedVersions_->end() || observed->second != version) {
             return true;
         }
     }
@@ -983,16 +1000,47 @@ bool QueryState::RecordChanged(const MutableQueryTableDispatchRecord& record) co
 
 void QueryState::CommitRecordVersions(const QueryTableDispatchRecord& record) const {
     for (ComponentId componentId : plan_->ChangedComponentIds()) {
-        observedVersions_[ChangeVersionKey{ .archetypeIndex = record.nativeArchetypeIndex, .componentId = componentId }] =
+        if (!observedVersions_.has_value()) {
+            observedVersions_.emplace();
+        }
+        (*observedVersions_)[ChangeVersionKey{ .archetypeIndex = record.nativeArchetypeIndex, .componentId = componentId }] =
             nativeStorage_->ArchetypeComponentVersion(record.nativeArchetypeIndex, componentId);
     }
 }
 
 void QueryState::CommitRecordVersions(const MutableQueryTableDispatchRecord& record) const {
     for (ComponentId componentId : plan_->ChangedComponentIds()) {
-        observedVersions_[ChangeVersionKey{ .archetypeIndex = record.nativeArchetypeIndex, .componentId = componentId }] =
+        if (!observedVersions_.has_value()) {
+            observedVersions_.emplace();
+        }
+        (*observedVersions_)[ChangeVersionKey{ .archetypeIndex = record.nativeArchetypeIndex, .componentId = componentId }] =
             nativeStorage_->ArchetypeComponentVersion(record.nativeArchetypeIndex, componentId);
     }
+}
+
+void* QueryState::operator new(std::size_t size) {
+    if (size == sizeof(QueryState)) {
+        QueryStateBlocks& kept = KeptQueryStateBlocks();
+        const std::lock_guard lock{ kept.mutex };
+        if (!kept.blocks.empty()) {
+            void* block = kept.blocks.back();
+            kept.blocks.pop_back();
+            return block;
+        }
+    }
+    return ::operator new(size);
+}
+
+void QueryState::operator delete(void* pointer, std::size_t size) noexcept {
+    if (pointer != nullptr && size == sizeof(QueryState)) {
+        QueryStateBlocks& kept = KeptQueryStateBlocks();
+        const std::lock_guard lock{ kept.mutex };
+        if (kept.blocks.size() < kMaxKeptQueryStateBlocks) {
+            kept.blocks.push_back(pointer);
+            return;
+        }
+    }
+    ::operator delete(pointer);
 }
 
 void DestroyQueryState(QueryState* state) noexcept {

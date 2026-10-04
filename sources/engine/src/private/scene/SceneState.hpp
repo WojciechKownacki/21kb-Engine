@@ -82,6 +82,7 @@ namespace kb::scene {
 
 class IPhysicsBackend;
 struct SceneTransformRootQueryCache;
+struct SceneComponentIterationQueries;
 
 struct AnimatorRuntimeState {
     struct Motion {
@@ -648,10 +649,9 @@ public:
     std::uint64_t lastTransformHierarchyUpdateNanoseconds = 0U;
     std::uint64_t lastTransformHierarchyFlushNanoseconds = 0U;
     bool lastTransformHierarchyBudgetExhausted = false;
-    mutable ecs_query_t* cameraIterationQuery = nullptr;
-    mutable ecs_query_t* lightIterationQuery = nullptr;
-    mutable ecs_query_t* meshRendererIterationQuery = nullptr;
-    mutable ecs_query_t* visibleMeshRendererIterationQuery = nullptr;
+    // The queries of the camera, light and mesh-renderer iterators, created on their first use.
+    mutable std::unique_ptr<SceneComponentIterationQueries> componentIterationQueries;
+    [[nodiscard]] SceneComponentIterationQueries& ComponentIterationQueries() const;
     mutable ecs_query_t* physicsBodyIterationQuery = nullptr;
     std::uint64_t nextHierarchyOrder = 1;
     kb::audio::IAudioPlaybackBackend* audioPlaybackBackend = nullptr;

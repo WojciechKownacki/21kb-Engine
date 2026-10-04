@@ -38,7 +38,7 @@ void SceneIterationService::ForEachCamera(const Scene& scene, CameraVisitor visi
         state.world,
         state.components.TransformComponentId(),
         state.components.CameraComponentId(),
-        state.cameraIterationQuery,
+        state.ComponentIterationQueries(),
         visitor,
         context);
 }
