@@ -2021,6 +2021,37 @@ void RunUnsafeHotQueryAppendRefreshTest() {
     static_cast<void>(world.CreateEntities(29U, newArchetype));
     kb::tests::Require(hot.RefreshAfterAppends(query), "Hot query could not append a new matching archetype");
     verify();
+    auto& storage = const_cast<kb::ecs::NativeArchetypeStorage&>(world.NativeStorage());
+    kb::ecs::QueryBatchExecutionScratch dirtyReference;
+    query.PrepareMutableBatchExecution({}, dirtyReference);
+    const auto& records = dirtyReference.mutableRecords_;
+    const auto positionId = world.Component<EcsPosition>();
+    for (const auto& record : records) {
+        storage.ClearComponentDirtyRows(record.nativeArchetypeIndex, record.nativeChunkIndex, positionId);
+    }
+    const auto firstGroupEnd = std::upper_bound(records.begin(), records.end(), records.front().nativeArchetypeIndex,
+        [](std::size_t index, const auto& record) { return index < record.nativeArchetypeIndex; });
+    kb::tests::Require(firstGroupEnd - records.begin() > 1, "Sparse dirty test requires several chunks in one archetype");
+    const std::array dirtyRecords{ records.front(), *(firstGroupEnd - 1), records.back() };
+    for (const auto& record : dirtyRecords) {
+        storage.MarkArchetypeChunkComponentsModified(record.nativeArchetypeIndex, record.nativeChunkIndex,
+            record.entityCount - 1U, 1U, std::span<const kb::ecs::ComponentId>{ &positionId, 1U });
+    }
+    std::vector<kb::ecs::NativeComponentDirtyRange> ranges;
+    std::vector<kb::ecs::Entity::IdType> expectedDirty;
+    for (const auto& record : records) {
+        ranges.clear();
+        static_cast<void>(storage.CollectComponentDirtyRanges(record.nativeArchetypeIndex, record.nativeChunkIndex, positionId, 17U, ranges));
+        for (const auto& range : ranges) {
+            expectedDirty.insert(expectedDirty.end(), record.entityIds + range.begin, record.entityIds + range.begin + range.count);
+        }
+    }
+    std::vector<kb::ecs::Entity::IdType> actualDirty;
+    const auto dirtyStats = hot.ForEachDirtyMutableRange<0>(storage, 17U, ranges, true, [&](auto& chunk, std::size_t) {
+        for (std::size_t row = 0U; row < chunk.Count(); ++row) actualDirty.push_back(chunk.EntityAt(row).Id());
+    });
+    kb::tests::Require(actualDirty == expectedDirty && dirtyStats.dirtyRows == 3U, "Sparse dirty traversal missed or reordered ranges across chunk/archetype boundaries");
+    kb::tests::Require(hot.DirtyRowCount<0>(storage) == 0U, "Sparse dirty traversal did not clear every visited dirty row");
     auto version = world.NativeStorage().StructuralVersion();
     world.Set(original[0], marker);
     kb::tests::Require(!world.NativeStorage().IsAppendOnlySince(version), "Single component addition hid a row migration");
@@ -2038,7 +2069,6 @@ void RunUnsafeHotQueryAppendRefreshTest() {
     world.Remove<EcsVelocity>(original[5]);
     kb::tests::Require(hot.RefreshAfterAppends(query), "Hot query could not rebuild after required-component removal");
     verify();
-    auto& storage = const_cast<kb::ecs::NativeArchetypeStorage&>(world.NativeStorage());
     version = storage.StructuralVersion();
     storage.ClearRetainingCapacity();
     kb::tests::Require(!storage.IsAppendOnlySince(version), "Retained clear was treated as an append");
