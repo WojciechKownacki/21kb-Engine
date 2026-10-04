@@ -229,6 +229,8 @@ public:
         std::size_t firstRow,
         std::size_t count,
         std::span<const ComponentId> componentIds);
+    // An upper bound of the rows of the archetype flagged for the component (0 when none is).
+    [[nodiscard]] std::size_t ArchetypeComponentDirtyCount(std::size_t archetypeIndex, ComponentId componentId) const;
     [[nodiscard]] std::size_t ComponentDirtyCount(std::size_t archetypeIndex, std::size_t chunkIndex, ComponentId componentId) const;
     [[nodiscard]] std::size_t CollectComponentDirtyRanges(
         std::size_t archetypeIndex,

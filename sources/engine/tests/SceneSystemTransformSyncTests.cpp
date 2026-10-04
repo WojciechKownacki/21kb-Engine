@@ -4,6 +4,7 @@
 #include "engine/assets/AssetId.hpp"
 #include "engine/ecs/World.hpp"
 #include "engine/library/EngineLibraryCommandBatch.hpp"
+#include "engine/ecs/NativeArchetypeStorage.hpp"
 #include "engine/scene/AnimationAssets.hpp"
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/ColliderComponent.hpp"
@@ -44,6 +45,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <map>
 #include <vector>
 
 namespace {
@@ -1858,6 +1860,39 @@ void RunSceneSingleCreateObjectAllocationTest() {
     kb::tests::Require(scene.Transforms().Get(created.back()).localPosition.x == static_cast<float>(kObjects - 1U), "A single created object lost its transform");
 }
 
+// The flagged-row count a table keeps for the transform sync matches the counts of its chunks through writes,
+// destruction and the sync that clears them.
+void RunTransformTableDirtyCountTest() {
+    kb::scene::Scene scene;
+    std::vector<kb::scene::SceneObjectDesc> descs(5000U);
+    std::vector<kb::scene::SceneEntity> entities;
+    for (const kb::scene::SceneObject& object : scene.Entities().CreateObjects(descs)) entities.push_back(object.Entity());
+    kb::ecs::World& world = scene.Runtime().EcsWorld();
+    const kb::ecs::ComponentId transformId = world.Component<kb::scene::TransformComponent>();
+    const auto countsMatch = [&world, transformId] {
+        std::vector<kb::ecs::QueryTableDispatchRecord> records;
+        const std::array<kb::ecs::ComponentId, 1U> ids{ transformId };
+        world.NativeStorage().CollectQueryRecords(ids, {}, {}, records);
+        std::map<std::size_t, std::size_t> chunkSums;
+        for (const kb::ecs::QueryTableDispatchRecord& record : records) {
+            chunkSums[record.nativeArchetypeIndex] += world.NativeStorage().ComponentDirtyCount(record.nativeArchetypeIndex, record.nativeChunkIndex, transformId);
+        }
+        return std::ranges::all_of(chunkSums, [&world, transformId](const auto& entry) {
+            return world.NativeStorage().ArchetypeComponentDirtyCount(entry.first, transformId) == entry.second;
+        });
+    };
+    kb::tests::Require(countsMatch(), "Table dirty count differs from its chunks after creation");
+    scene.Runtime().SynchronizeTransforms();
+    kb::tests::Require(countsMatch(), "Table dirty count differs from its chunks after a sync");
+    std::vector<kb::scene::TransformComponent> transforms(entities.size() / 3U);
+    scene.Transforms().SetMany(std::span<const kb::scene::SceneEntity>{ entities }.first(transforms.size()), transforms);
+    scene.Transforms().Set(entities.back(), kb::scene::TransformComponent{});
+    for (std::size_t index = 0U; index < entities.size(); index += 7U) scene.Entities().Destroy(entities[index]);
+    kb::tests::Require(countsMatch(), "Table dirty count differs from its chunks after writes and destruction");
+    scene.Runtime().SynchronizeTransforms();
+    kb::tests::Require(countsMatch(), "Table dirty count differs from its chunks after the sync cleared them");
+}
+
 // Golden transform state of a fixed-dt run: FNV-1a over local and world TRS, versions and the dirty flag of every
 // object (in creation order), its interpolated pose and the runtime's render-proxy transform list, after every
 // write and every Update. The expected values were recorded from the transform path before the per-row lanes.
@@ -2189,6 +2224,7 @@ void RunSceneSystemTransformSyncTests() {
     RunSceneTransformSetManyMatchesPerEntityWritesTest();
     RunSceneBulkCreateObjectsAllocationTest();
     RunSceneSingleCreateObjectAllocationTest();
+    RunTransformTableDirtyCountTest();
 }
 
 } // namespace kb::tests
