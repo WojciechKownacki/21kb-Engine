@@ -2009,6 +2009,35 @@ void RunTransformGoldenHashTest() {
     kb::tests::Require(matches, "Transform state of a fixed-dt run differs from the recorded golden hash");
 }
 
+// A spawning crowd grows the per-frame transform lists by a few hundred entries every frame. Reserving exactly the
+// new size reallocated every one of them each frame (hundreds of MB per Update at a million entities).
+void RunSceneRuntimeGrowingCrowdUpdateAllocationTest() {
+    kb::scene::Scene scene;
+    std::vector<kb::scene::SceneEntity> movers;
+    std::vector<kb::scene::SceneObjectDesc> descs(200000U);
+    const auto spawn = [&scene, &movers, &descs]() {
+        for (const kb::scene::SceneObject& object : scene.Entities().CreateObjects(descs)) movers.push_back(object.Entity());
+    };
+    spawn();
+    descs.resize(333U);
+    std::vector<kb::scene::TransformComponent> batch;
+    std::size_t updateBytes = 0U;
+    constexpr int kWarmup = 5;
+    constexpr int kFrames = 40;
+    for (int frame = 0; frame < kWarmup + kFrames; ++frame) {
+        spawn();
+        batch.assign(movers.size(), kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ static_cast<float>(frame), 0.0F, 0.0F } });
+        scene.Transforms().SetMany(movers, batch);
+        kb::tests::BeginAllocationTally();
+        static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+        const kb::tests::AllocationTally tally = kb::tests::EndAllocationTally();
+        if (frame >= kWarmup) updateBytes += tally.bytes;
+    }
+    const double megabytesPerUpdate = static_cast<double>(updateBytes) / static_cast<double>(kFrames) / (1024.0 * 1024.0);
+    std::cout << "growing crowd update allocations: " << megabytesPerUpdate << " MB per frame\n";
+    kb::tests::Require(megabytesPerUpdate <= 1.0, "Update of a crowd growing by 333 entities per frame allocated more than 1 MB per frame");
+}
+
 void RunSceneSystemTransformSyncTests() {
     if (EnvironmentFlagEnabled("KB_SCENE_RUNTIME_STRESS")) {
         RunSceneRuntimeHeadlessStress();
@@ -2041,6 +2070,7 @@ void RunSceneSystemTransformSyncTests() {
     RunSceneBulkMarkModifiedTest();
     RunSceneBulkCreateObjectsTest();
     RunTransformGoldenHashTest();
+    RunSceneRuntimeGrowingCrowdUpdateAllocationTest();
 }
 
 } // namespace kb::tests

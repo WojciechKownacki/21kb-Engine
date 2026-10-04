@@ -2,6 +2,7 @@
 
 #include "engine/ecs/Query.hpp"
 #include "engine/ecs/UnsafeHotQuery.hpp"
+#include "ecs/GeometricReserve.hpp"
 #include "scene/components/SceneComponentAccess.hpp"
 #include "scene/components/SceneComponentRegistry.hpp"
 #include "scene/components/SceneComponentStorageAccess.hpp"
@@ -390,7 +391,7 @@ void AddTransformCacheEntryFromHotBatch(
         stats.sparseFlushCount = 1U;
         stats.dirtyListFlushCount = 1U;
         state.transformHierarchyFlushComponentsScratch.clear();
-        state.transformHierarchyFlushComponentsScratch.reserve(updatedEntities.size());
+        kb::ecs::ReserveGeometric(state.transformHierarchyFlushComponentsScratch, updatedEntities.size());
         for (const SceneEntity entity : updatedEntities) {
             if (const TransformComponent* cached = transformValues.FindDirty(entity); cached != nullptr) {
                 state.transformHierarchyFlushComponentsScratch.push_back(*cached);
@@ -406,7 +407,7 @@ void AddTransformCacheEntryFromHotBatch(
     if (updatedEntities.size() * kDirtyListTransformFlushFactor < transformValues.TrackedCount()) {
         stats.dirtyListFlushCount = 1U;
         state.transformHierarchyFlushComponentsScratch.clear();
-        state.transformHierarchyFlushComponentsScratch.reserve(updatedEntities.size());
+        kb::ecs::ReserveGeometric(state.transformHierarchyFlushComponentsScratch, updatedEntities.size());
         for (const SceneEntity entity : updatedEntities) {
             if (const TransformComponent* cached = transformValues.FindDirty(entity); cached != nullptr) {
                 state.transformHierarchyFlushComponentsScratch.push_back(*cached);
@@ -687,10 +688,10 @@ void CacheRenderProxyUpdatesAfterTransformsWithResolver(
         }
     }
 
-    state.transformRenderProxyMeshRendererIndices.reserve(state.transformRenderProxyMeshRendererIndices.size() + updatedEntities.size());
-    state.transformRenderProxyVisibleMeshRendererIndices.reserve(state.transformRenderProxyVisibleMeshRendererIndices.size() + updatedEntities.size());
-    state.transformRenderProxyCameraIndices.reserve(state.transformRenderProxyCameraIndices.size() + updatedEntities.size());
-    state.transformRenderProxyLightIndices.reserve(state.transformRenderProxyLightIndices.size() + updatedEntities.size());
+    kb::ecs::ReserveGeometric(state.transformRenderProxyMeshRendererIndices, state.transformRenderProxyMeshRendererIndices.size() + updatedEntities.size());
+    kb::ecs::ReserveGeometric(state.transformRenderProxyVisibleMeshRendererIndices, state.transformRenderProxyVisibleMeshRendererIndices.size() + updatedEntities.size());
+    kb::ecs::ReserveGeometric(state.transformRenderProxyCameraIndices, state.transformRenderProxyCameraIndices.size() + updatedEntities.size());
+    kb::ecs::ReserveGeometric(state.transformRenderProxyLightIndices, state.transformRenderProxyLightIndices.size() + updatedEntities.size());
     // Reading the component masks is the bulk of this pass and is read-only; the shared lists below are only touched for
     // the (usually few) entities that carry a render component, so the masks are gathered in parallel first.
     thread_local std::vector<std::uint8_t> gatheredMasks;
@@ -849,13 +850,13 @@ void AddTransformCacheEntryFromSparseLookup(TransformValueCache& cache, const Sc
 [[nodiscard]] TransformValueCache BuildDirtyFrontierTransformValueCache(SceneState& state) {
     TransformValueCache cache = BeginTransformValueCache(state);
     AdvanceTransformValueCacheLoadMarkEpoch(state);
-    state.transformValueCacheLoadEntitiesScratch.reserve(std::min<std::size_t>(
+    kb::ecs::ReserveGeometric(state.transformValueCacheLoadEntitiesScratch, std::min<std::size_t>(
         state.hierarchyOrder.size(),
         std::max<std::size_t>(state.transformDirtyFrontierEntities.size() * 4U, 16U)));
 
     std::vector<SceneEntity>& subtreeStack = state.transformDirtyFrontierLevelScratch;
     subtreeStack.clear();
-    subtreeStack.reserve(state.transformDirtyFrontierEntities.size());
+    kb::ecs::ReserveGeometric(subtreeStack, state.transformDirtyFrontierEntities.size());
     for (const SceneEntity entity : state.transformDirtyFrontierEntities) {
         std::size_t guard = HierarchyTrackedSlotCount(state) + state.transformDirtyFrontierEntities.size() + 1U;
         SceneEntity cursor = entity;
@@ -1120,7 +1121,7 @@ void RunHierarchyDirtyFrontier(
     std::vector<SceneEntity>& nextFrontier = state.transformDirtyFrontierNextScratch;
     currentFrontier.clear();
     nextFrontier.clear();
-    currentFrontier.reserve(state.transformDirtyFrontierEntities.size());
+    kb::ecs::ReserveGeometric(currentFrontier, state.transformDirtyFrontierEntities.size());
     for (const SceneEntity entity : state.transformDirtyFrontierEntities) {
         if (HasDirtyAncestorInFrontier(state, entity)) {
             continue;
@@ -1130,7 +1131,7 @@ void RunHierarchyDirtyFrontier(
 
     while (!currentFrontier.empty()) {
         entries.clear();
-        entries.reserve(currentFrontier.size());
+        kb::ecs::ReserveGeometric(entries, currentFrontier.size());
         const auto entryBuildStart = std::chrono::steady_clock::now();
         for (const SceneEntity entity : currentFrontier) {
             AppendTransformEntryIfDirty(state, transformValues, identity, entity, entries);
@@ -1265,8 +1266,8 @@ void RunHierarchyDirtyFrontier(
         return true;
     }
 
-    state.transformHierarchyUpdatedEntitiesScratch.reserve(dirtyRows);
-    state.transformHierarchyUpdatedTransformsScratch.reserve(dirtyRows);
+    kb::ecs::ReserveGeometric(state.transformHierarchyUpdatedEntitiesScratch, dirtyRows);
+    kb::ecs::ReserveGeometric(state.transformHierarchyUpdatedTransformsScratch, dirtyRows);
     auto& nativeStorage = const_cast<kb::ecs::NativeArchetypeStorage&>(state.world.NativeStorage());
     const auto applyStart = Clock::now();
     if (dirtyRows > kTransformBatchGrainSize * 4U) {
@@ -1496,7 +1497,7 @@ void SceneTransformHierarchySystem::Update(SceneState& state) const {
         TransformValueCache transformValues = BuildDirtyFrontierTransformValueCache(state);
         const auto cacheBuildEnd = Clock::now();
         state.lastTransformHierarchyCacheBuildNanoseconds = Nanoseconds(cacheBuildEnd - cacheBuildStart);
-        updatedEntities.reserve(state.transformDirtyFrontierEntities.size());
+        kb::ecs::ReserveGeometric(updatedEntities, state.transformDirtyFrontierEntities.size());
         if (CanUseHierarchyDirtyFrontier(state, transformValues)) {
             RunHierarchyDirtyFrontier(state, transformValues, identity, entries, updatedEntities);
             ResetPropagationCursor(state);
@@ -1532,7 +1533,7 @@ void SceneTransformHierarchySystem::Update(SceneState& state) const {
     state.lastTransformHierarchyCacheBuildNanoseconds = Nanoseconds(cacheBuildEnd - cacheBuildStart);
     PrewarmTransformScratchForCompletedLevels(state, transformValues);
 
-    updatedEntities.reserve(trackedSlotCount);
+    kb::ecs::ReserveGeometric(updatedEntities, trackedSlotCount);
     if (CanUseHierarchyDirtyFrontier(state, transformValues)) {
         RunHierarchyDirtyFrontier(state, transformValues, identity, entries, updatedEntities);
         ResetPropagationCursor(state);
@@ -1579,7 +1580,7 @@ void SceneTransformHierarchySystem::Update(SceneState& state) const {
         const std::size_t batchEntityCount = budgetLimit == 0U ? candidateCount : std::min(candidateCount, remainingBudget);
         const std::span<const SceneEntity> levelSlice{ level.data() + static_cast<std::ptrdiff_t>(levelBegin), batchEntityCount };
         entries.clear();
-        entries.reserve(levelSlice.size());
+        kb::ecs::ReserveGeometric(entries, levelSlice.size());
 
         const auto entryBuildStart = Clock::now();
         for (const SceneEntity entity : levelSlice) {

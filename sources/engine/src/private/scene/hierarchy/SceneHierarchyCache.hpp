@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/scene/SceneEntity.hpp"
+#include "ecs/GeometricReserve.hpp"
 #include "scene/SceneState.hpp"
 
 #include <algorithm>
@@ -60,7 +61,7 @@ public:
 
         state.hierarchyParents.reserve(state.hierarchyParents.size() + entities.size());
         state.hierarchyChildren.reserve(state.hierarchyChildren.size() + entities.size());
-        state.hierarchyRoots.reserve(state.hierarchyRoots.size() + entities.size());
+        kb::ecs::ReserveGeometric(state.hierarchyRoots, state.hierarchyRoots.size() + entities.size());
         for (std::size_t index = 0; index < entities.size(); ++index) {
             const SceneEntity entity = entities[index];
             const SceneEntity parent = parents[index];
@@ -126,10 +127,10 @@ public:
             }
         }
 
-        state.hierarchyRoots.reserve(state.hierarchyRoots.size() + rootCount);
+        kb::ecs::ReserveGeometric(state.hierarchyRoots, state.hierarchyRoots.size() + rootCount);
         for (std::uint32_t index = 0; index < childCounts.size(); ++index) {
             if (childCounts[index] != 0U) {
-                state.denseHierarchyChildren[index].reserve(state.denseHierarchyChildren[index].size() + childCounts[index]);
+                kb::ecs::ReserveGeometric(state.denseHierarchyChildren[index], state.denseHierarchyChildren[index].size() + childCounts[index]);
             }
         }
         if (fallbackParentCount != 0U) {

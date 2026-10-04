@@ -1,4 +1,5 @@
 #include "scene/prefab/ScenePrefabInstanceRegistry.hpp"
+#include "ecs/GeometricReserve.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -154,8 +155,8 @@ std::vector<ScenePrefabInstanceHandle> ScenePrefabInstanceRegistry::RegisterMany
 
     std::vector<ScenePrefabInstanceHandle> handles;
     handles.reserve(objectSets.size());
-    records_.reserve(records_.size() + objectSets.size());
-    recordAlive_.reserve(recordAlive_.size() + objectSets.size());
+    kb::ecs::ReserveGeometric(records_, records_.size() + objectSets.size());
+    kb::ecs::ReserveGeometric(recordAlive_, recordAlive_.size() + objectSets.size());
     const std::uint64_t firstBatchId = nextId_;
     EnsureRecordSlots(firstBatchId, objectSets.size());
     const PrefabInstanceBatchIndexPlan indexPlan = AnalyzePrefabInstanceBatch(
@@ -184,7 +185,7 @@ std::vector<ScenePrefabInstanceHandle> ScenePrefabInstanceRegistry::RegisterMany
     const bool denseOnlyBatch = indexPlan.DenseOnly();
     const bool contiguousDenseBatch = indexPlan.ContiguousDense();
     std::vector<ScenePrefabInstanceHandle>& prefabHandles = prefabIndex_[prefab];
-    prefabHandles.reserve(prefabHandles.size() + objectSets.size());
+    kb::ecs::ReserveGeometric(prefabHandles, prefabHandles.size() + objectSets.size());
     auto sharedNodeIds = std::make_shared<std::vector<std::uint64_t>>(NodeIdsFor(resolvedPrefab));
     const std::vector<std::uint64_t>* pooledNodeIds = sharedNodeIds.get();
     batchNodeIdPool_.push_back(std::move(sharedNodeIds));
@@ -238,8 +239,8 @@ std::vector<ScenePrefabInstanceHandle> ScenePrefabInstanceRegistry::RegisterMany
 
     std::vector<ScenePrefabInstanceHandle> handles;
     handles.reserve(instances.size());
-    records_.reserve(records_.size() + instances.size());
-    recordAlive_.reserve(recordAlive_.size() + instances.size());
+    kb::ecs::ReserveGeometric(records_, records_.size() + instances.size());
+    kb::ecs::ReserveGeometric(recordAlive_, recordAlive_.size() + instances.size());
     const std::uint64_t firstBatchId = nextId_;
     EnsureRecordSlots(firstBatchId, instances.size());
     const PrefabInstanceBatchIndexPlan indexPlan = AnalyzePrefabInstanceBatch(
@@ -269,7 +270,7 @@ std::vector<ScenePrefabInstanceHandle> ScenePrefabInstanceRegistry::RegisterMany
     const bool contiguousDenseBatch = indexPlan.ContiguousDense();
 
     std::vector<ScenePrefabInstanceHandle>& prefabHandles = prefabIndex_[prefab];
-    prefabHandles.reserve(prefabHandles.size() + instances.size());
+    kb::ecs::ReserveGeometric(prefabHandles, prefabHandles.size() + instances.size());
     auto sharedNodeIds = std::make_shared<std::vector<std::uint64_t>>(NodeIdsFor(resolvedPrefab));
     const std::vector<std::uint64_t>* pooledNodeIds = sharedNodeIds.get();
     batchNodeIdPool_.push_back(std::move(sharedNodeIds));
@@ -328,8 +329,8 @@ std::size_t ScenePrefabInstanceRegistry::RegisterManyInstancesInPlace(
         return 0U;
     }
 
-    records_.reserve(records_.size() + instances.size());
-    recordAlive_.reserve(recordAlive_.size() + instances.size());
+    kb::ecs::ReserveGeometric(records_, records_.size() + instances.size());
+    kb::ecs::ReserveGeometric(recordAlive_, recordAlive_.size() + instances.size());
     const std::uint64_t firstBatchId = nextId_;
     EnsureRecordSlots(firstBatchId, instances.size());
     const PrefabInstanceBatchIndexPlan indexPlan = AnalyzePrefabInstanceBatch(
@@ -359,7 +360,7 @@ std::size_t ScenePrefabInstanceRegistry::RegisterManyInstancesInPlace(
     const bool contiguousDenseBatch = indexPlan.ContiguousDense();
 
     std::vector<ScenePrefabInstanceHandle>& prefabHandles = prefabIndex_[prefab];
-    prefabHandles.reserve(prefabHandles.size() + instances.size());
+    kb::ecs::ReserveGeometric(prefabHandles, prefabHandles.size() + instances.size());
     auto sharedNodeIds = std::make_shared<std::vector<std::uint64_t>>(NodeIdsFor(resolvedPrefab));
     const std::vector<std::uint64_t>* pooledNodeIds = sharedNodeIds.get();
     batchNodeIdPool_.push_back(std::move(sharedNodeIds));
@@ -448,8 +449,8 @@ std::size_t ScenePrefabInstanceRegistry::RegisterManyCreatedDenseInstancesInPlac
         return 0U;
     }
 
-    records_.reserve(records_.size() + instances.size());
-    recordAlive_.reserve(recordAlive_.size() + instances.size());
+    kb::ecs::ReserveGeometric(records_, records_.size() + instances.size());
+    kb::ecs::ReserveGeometric(recordAlive_, recordAlive_.size() + instances.size());
     const std::uint64_t firstBatchId = nextId_;
     EnsureRecordSlots(firstBatchId, instances.size());
     const std::size_t requiredDenseSize = static_cast<std::size_t>(maxDenseIndex) + 1U;
@@ -461,7 +462,7 @@ std::size_t ScenePrefabInstanceRegistry::RegisterManyCreatedDenseInstancesInPlac
     }
 
     std::vector<ScenePrefabInstanceHandle>& prefabHandles = prefabIndex_[prefab];
-    prefabHandles.reserve(prefabHandles.size() + instances.size());
+    kb::ecs::ReserveGeometric(prefabHandles, prefabHandles.size() + instances.size());
     auto sharedNodeIds = std::make_shared<std::vector<std::uint64_t>>(NodeIdsFor(resolvedPrefab));
     const std::vector<std::uint64_t>* pooledNodeIds = sharedNodeIds.get();
     batchNodeIdPool_.push_back(std::move(sharedNodeIds));

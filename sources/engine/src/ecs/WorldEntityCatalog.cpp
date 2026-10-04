@@ -1,4 +1,5 @@
 #include "ecs/world/WorldEntityCatalog.hpp"
+#include "ecs/GeometricReserve.hpp"
 
 #include "ecs/FlecsEntityIds.hpp"
 
@@ -41,7 +42,7 @@ void WorldEntityCatalog::Add(Entity entity) {
 }
 
 void WorldEntityCatalog::AddMany(std::span<const Entity> entities) {
-    entities_.reserve(entities_.size() + entities.size());
+    ReserveGeometric(entities_, entities_.size() + entities.size());
     std::size_t anticipatedDenseSize = densePositions_.size();
     for (Entity entity : entities) {
         if (GeneratedEntityIndex(entity) == anticipatedDenseSize) {

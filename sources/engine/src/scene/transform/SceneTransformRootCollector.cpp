@@ -1,4 +1,5 @@
 #include "scene/transform/SceneTransformRootCollector.hpp"
+#include "ecs/GeometricReserve.hpp"
 
 #include "ecs/FlecsEntityIds.hpp"
 #include "engine/ecs/Query.hpp"
@@ -31,7 +32,7 @@ std::vector<SceneEntity> SceneTransformRootCollector::Collect(const kb::ecs::Wor
         return roots;
     }
     hotQuery.ForEachRange(settings.maxBatchSize, [&context](const auto& batch) {
-        context.roots->reserve(context.roots->size() + batch.Count());
+        kb::ecs::ReserveGeometric(*context.roots, context.roots->size() + batch.Count());
         for (std::size_t index = 0; index < batch.Count(); ++index) {
             const SceneEntity entity = batch.EntityAt(index);
             if (entity.IsValid() && ecs_get_parent(context.world->NativeHandle(), kb::ecs::FlecsEntityId(entity)) == 0) {

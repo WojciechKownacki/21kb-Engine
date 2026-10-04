@@ -1,5 +1,6 @@
 #include "engine/ecs/NativeArchetypeStorage.hpp"
 
+#include "ecs/GeometricReserve.hpp"
 #include "ecs/NativeArchetypeLayout.hpp"
 
 #include <algorithm>
@@ -1860,7 +1861,7 @@ public:
         const std::size_t tableIndex = FindOrCreateTable(types);
         ArchetypeTable& table = tables_[tableIndex];
         EnsureChunkCommitBudget(table.NewChunkAcquiresForAppend(1U));
-        freeEntityIndices_.reserve(freeEntityIndices_.size() + 1U);
+        ReserveGeometric(freeEntityIndices_, freeEntityIndices_.size() + 1U);
         const Entity entity = AllocateEntity();
         bool rowAdded = false;
         EntityLocation location{};
@@ -2023,7 +2024,7 @@ public:
         const std::size_t originalTableLiveEntities = tables_[tableIndex].LiveEntities();
         const std::size_t originalRecordCount = records_.size();
 
-        records_.reserve(records_.size() + entities.size());
+        ReserveGeometric(records_, records_.size() + entities.size());
         const Entity::IdType rangeFirstId = entities.front().Id();
         const Entity::IdType rangeLastIdExclusive = rangeFirstId + entities.size();
         const std::optional<std::size_t> reusableExternalRangeIndex = FindReusableExternalRangeIndex(rangeFirstId, rangeLastIdExclusive);
@@ -2031,7 +2032,7 @@ public:
             (reusableExternalRangeIndex.has_value() || !ExternalRangeOverlaps(rangeFirstId, rangeLastIdExclusive));
 
         if (registerExternalRange) {
-            externalRecordRanges_.reserve(externalRecordRanges_.size() + 1U);
+            ReserveGeometric(externalRecordRanges_, externalRecordRanges_.size() + 1U);
         } else {
             entitySlots_.reserve(entitySlots_.size() + entities.size());
         }
@@ -2141,7 +2142,7 @@ public:
         const std::uint32_t recordIndex = RecordIndex(entity);
         EntityRecord& record = LiveRecord(entity);
         if (record.ownsGeneratedId) {
-            freeEntityIndices_.reserve(freeEntityIndices_.size() + 1U);
+            ReserveGeometric(freeEntityIndices_, freeEntityIndices_.size() + 1U);
         }
         ArchetypeTable& table = tables_[record.location.table];
         const Entity movedEntity = table.RemoveAt(record.location);
@@ -2220,7 +2221,7 @@ public:
 
         movedEntitiesScratch_.reserve(entities.size());
         removedRowsScratch_.reserve(entities.size());
-        freeEntityIndices_.reserve(freeEntityIndices_.size() + entities.size());
+        ReserveGeometric(freeEntityIndices_, freeEntityIndices_.size() + entities.size());
 
         if (singleTable) {
             tables_[firstTableIndex].RemoveMany(singleTableLocations, movedEntitiesScratch_, removedRowsScratch_);
@@ -3381,7 +3382,7 @@ private:
             throw std::runtime_error("Native ECS entity capacity exceeded");
         }
         entities.reserve(count);
-        records_.reserve(records_.size() + remainingCount);
+        ReserveGeometric(records_, records_.size() + remainingCount);
         entities.resize(count);
         const std::uint32_t firstIndex = static_cast<std::uint32_t>(records_.size());
         records_.resize(records_.size() + remainingCount);
@@ -3467,7 +3468,7 @@ private:
             return;
         }
         const std::size_t removedCount = liveEntities_;
-        freeEntityIndices_.reserve(freeEntityIndices_.size() + removedCount);
+        ReserveGeometric(freeEntityIndices_, freeEntityIndices_.size() + removedCount);
         for (ArchetypeTable& table : tables_) {
             if (retainCapacity) {
                 table.RemoveAllRetainingCapacity();

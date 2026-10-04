@@ -2,8 +2,11 @@
 #include "EcsTestSuites.hpp"
 #include "SceneSystemTestSuites.hpp"
 #include "TestSuites.hpp"
+#include "TestSupport.hpp"
 
+#include <atomic>
 #include <cstdlib>
+#include <new>
 #include <string_view>
 
 namespace kb::tests {
@@ -116,6 +119,39 @@ void RunAllSuites() {
 }
 
 } // namespace
+
+namespace {
+
+std::atomic<bool> g_tallyAllocations{ false };
+std::atomic<std::size_t> g_allocationCount{ 0U };
+std::atomic<std::size_t> g_allocationBytes{ 0U };
+std::atomic<std::size_t> g_largeAllocationCount{ 0U };
+
+} // namespace
+
+void kb::tests::BeginAllocationTally() noexcept {
+    g_allocationCount.store(0U);
+    g_allocationBytes.store(0U);
+    g_largeAllocationCount.store(0U);
+    g_tallyAllocations.store(true);
+}
+
+kb::tests::AllocationTally kb::tests::EndAllocationTally() noexcept {
+    g_tallyAllocations.store(false);
+    return AllocationTally{ .count = g_allocationCount.load(), .bytes = g_allocationBytes.load(), .largeCount = g_largeAllocationCount.load() };
+}
+
+void* operator new(std::size_t size) {
+    if (g_tallyAllocations.load(std::memory_order_relaxed)) {
+        g_allocationCount.fetch_add(1U, std::memory_order_relaxed);
+        g_allocationBytes.fetch_add(size, std::memory_order_relaxed);
+        if (size >= 16U * 1024U) g_largeAllocationCount.fetch_add(1U, std::memory_order_relaxed);
+    }
+    if (void* memory = std::malloc(size == 0U ? 1U : size)) return memory;
+    throw std::bad_alloc{};
+}
+
+void operator delete(void* memory) noexcept { std::free(memory); }
 
 int main(int argc, char** argv) {
     if (argc <= 1) {
