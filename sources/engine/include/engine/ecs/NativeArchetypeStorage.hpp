@@ -229,6 +229,8 @@ public:
         std::size_t firstRow,
         std::size_t count,
         std::span<const ComponentId> componentIds);
+    // Moves the archetype's version of the component once for rows written in place without flagging them.
+    void NoteComponentWritten(std::size_t archetypeIndex, ComponentId componentId);
     // An upper bound of the rows of the archetype flagged for the component (0 when none is).
     [[nodiscard]] std::size_t ArchetypeComponentDirtyCount(std::size_t archetypeIndex, ComponentId componentId) const;
     [[nodiscard]] std::size_t ComponentDirtyCount(std::size_t archetypeIndex, std::size_t chunkIndex, ComponentId componentId) const;

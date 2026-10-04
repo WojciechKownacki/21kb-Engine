@@ -28,7 +28,7 @@ namespace {
 
 void SynchronizeTransformHierarchy(SceneState& state) {
     SceneTransformHierarchySystem{}.Update(state);
-    if (state.fixedTransformValues.empty() || state.lastTransformHierarchyUpdatedCount == 0U) return;
+    if (state.fixedTransformValues.empty()) return;
     // Each pose record takes the pose the sync composed for its entity (a new world version).
     for (std::size_t index = 0U; index < state.fixedTransformValues.size(); ++index) {
         auto& value = state.fixedTransformValues[index];
@@ -481,18 +481,19 @@ bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
     if (state.mode == SceneMode::PrefabPrivate) {
         state.lastFixedStepCount = 0U;
         state.fixedInterpolationAlpha = 0.0F;
-        ResetSceneTransformRenderProxyUpdates(state);
+        BeginSceneTransformRenderProxyUpdates(state);
         state.renderProxyUpdateEntities.clear();
         state.renderProxyUpdateEntityIds.clear();
         synchronizeTransforms();
         PublishRuntimeSnapshot(state);
+        state.transformUpdatesResetPending = true;
         state.lastRuntimeUpdateNanoseconds = nanosecondsSince(updateStart);
         return false;
     }
 
     const SceneRuntimeFixedStepSettings fixed = state.fixedStepSettings;
     state.lastFixedStepCount = 0U;
-    ResetSceneTransformRenderProxyUpdates(state);
+    BeginSceneTransformRenderProxyUpdates(state);
     state.renderProxyUpdateEntities.clear();
     state.renderProxyUpdateEntityIds.clear();
     kb::ecs::ReserveGeometric(state.renderProxyUpdateEntities, HierarchyTrackedSlotCount(state));
@@ -562,6 +563,7 @@ bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
     synchronizeTransforms();
     PublishRuntimeSnapshot(state);
     state.sceneSystemScheduler.EndUpdate(scene, deltaSeconds);
+    state.transformUpdatesResetPending = true;
     state.lastRuntimeUpdateNanoseconds = nanosecondsSince(updateStart);
     return progressed;
 }

@@ -199,6 +199,11 @@ void SceneTransformService::MarkModified(Scene& scene, std::span<const SceneEnti
     }
 }
 
+TransformPassStats SceneTransformService::ParallelForEachRoot(Scene& scene, std::size_t grainRows, std::span<const kb::ecs::ComponentId> extraComponents,
+    SceneTransforms::TransformRangeBody body, void* context) {
+    return RunSceneTransformPass(SceneAccess::State(scene), grainRows, extraComponents, body, context);
+}
+
 void SceneTransformService::SetInterpolated(Scene& scene, SceneEntity entity, bool interpolated) {
     SceneState& state = SceneAccess::State(scene);
     if (!state.world.IsAlive(entity)) {

@@ -1484,6 +1484,10 @@ private:
     }
 
 public:
+    void NoteComponentWritten(ComponentId componentId) {
+        TouchComponent(componentId);
+    }
+
     [[nodiscard]] std::size_t ComponentDirtyTotal(ComponentId componentId) const {
         const std::size_t componentIndex = ComponentColumnIndex(componentId);
         return componentIndex < dirtyRowTotals_.size() ? dirtyRowTotals_[componentIndex] : 0U;
@@ -2623,6 +2627,13 @@ public:
             throw std::out_of_range("Native ECS archetype index is invalid");
         }
         tables_[archetypeIndex].MarkComponentsModified(chunkIndex, firstRow, count, componentIds);
+    }
+
+    void NoteComponentWritten(std::size_t archetypeIndex, ComponentId componentId) {
+        if (archetypeIndex >= tables_.size()) {
+            throw std::out_of_range("Native ECS archetype index is invalid");
+        }
+        tables_[archetypeIndex].NoteComponentWritten(componentId);
     }
 
     [[nodiscard]] std::size_t ArchetypeComponentDirtyCount(std::size_t archetypeIndex, ComponentId componentId) const {
@@ -3896,6 +3907,10 @@ void NativeArchetypeStorage::MarkArchetypeChunkComponentsModified(
     std::size_t count,
     std::span<const ComponentId> componentIds) {
     impl_->MarkArchetypeChunkComponentsModified(archetypeIndex, chunkIndex, firstRow, count, componentIds);
+}
+
+void NativeArchetypeStorage::NoteComponentWritten(std::size_t archetypeIndex, ComponentId componentId) {
+    impl_->NoteComponentWritten(archetypeIndex, componentId);
 }
 
 std::size_t NativeArchetypeStorage::ArchetypeComponentDirtyCount(std::size_t archetypeIndex, ComponentId componentId) const {

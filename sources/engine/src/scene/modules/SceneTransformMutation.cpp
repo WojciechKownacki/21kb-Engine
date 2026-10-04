@@ -1,5 +1,8 @@
 #include "engine/scene/SceneTransforms.hpp"
 
+#include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneRuntime.hpp"
+
 #include "scene/SceneTransformService.hpp"
 
 namespace kb::scene {
@@ -22,6 +25,14 @@ void SceneTransforms::MarkModified(SceneEntity entity) noexcept {
 
 void SceneTransforms::MarkModified(std::span<const SceneEntity> entities) noexcept {
     SceneTransformService::MarkModified(scene_, entities);
+}
+
+TransformPassStats SceneTransforms::ParallelForEachRoot(std::size_t grainRows, std::span<const kb::ecs::ComponentId> extraComponents, TransformRangeBody body, void* context) {
+    return SceneTransformService::ParallelForEachRoot(scene_, grainRows, extraComponents, body, context);
+}
+
+const void* SceneTransforms::EcsWorldHandle() const noexcept {
+    return &scene_.Runtime().EcsWorld();
 }
 
 void SceneTransforms::SetInterpolated(SceneEntity entity, bool interpolated) {
