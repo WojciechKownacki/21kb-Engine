@@ -41,6 +41,23 @@ public:
         state.transformTopology.Added(state, {&entity, 1U}, previousVersion);
     }
 
+    // AddRoot for a batch of fresh entities. Only an entity without a dense slot is kept in the hash map, as
+    // AddManyDense does; each root still moves the topology version by one, so the batch reads as appended roots.
+    static void AddRoots(SceneState& state, std::span<const SceneEntity> entities) {
+        const auto previousVersion = state.hierarchyTopologyVersion;
+        kb::ecs::ReserveGeometric(state.hierarchyRoots, state.hierarchyRoots.size() + entities.size());
+        for (const SceneEntity entity : entities) {
+            if (DenseIndex(entity) == kb::ecs::kInvalidGeneratedEntityIndex && !state.hierarchyParents.emplace(entity.Id(), SceneEntity{}).second) {
+                throw std::logic_error("Scene hierarchy root already registered");
+            }
+            SetDenseParent(state, entity, {});
+            state.hierarchyRoots.push_back(entity);
+            NoteRootAppended(state, entity);
+            MarkTopologyDirty(state, true);
+        }
+        state.transformTopology.Added(state, entities, previousVersion);
+    }
+
     static void AssignOrder(SceneState& state, SceneEntity entity) {
         SetOrder(state, entity, state.nextHierarchyOrder++);
     }
