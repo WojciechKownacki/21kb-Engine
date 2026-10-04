@@ -31,6 +31,10 @@ TransformPassStats SceneTransforms::ParallelForEachRoot(std::size_t grainRows, s
     return SceneTransformService::ParallelForEachRoot(scene_, grainRows, extraComponents, body, context);
 }
 
+TransformPassStats SceneTransforms::ParallelForEachRootDeclared(std::size_t grainRows, std::span<const kb::ecs::ComponentId> extraComponents, TransformRangeBody body, void* context) {
+    return SceneTransformService::ParallelForEachRoot(scene_, grainRows, extraComponents, body, context, true);
+}
+
 const void* SceneTransforms::EcsWorldHandle() const noexcept {
     return &scene_.Runtime().EcsWorld();
 }

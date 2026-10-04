@@ -2142,7 +2142,7 @@ void RunTransformPassContractTest() {
     static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
 
     const kb::scene::TransformPassStats stats = scene.Transforms().ParallelForEachRoot<TransformPassAgentState>(512U, [](kb::scene::TransformRowRange& range) {
-        const TransformPassAgentState* states = range.Column<TransformPassAgentState>();
+        const TransformPassAgentState* states = range.Column<const TransformPassAgentState>();
         for (std::size_t row = 0U; row < range.Count(); ++row) {
             const kb::scene::TransformComponent& current = range.Get(row);
             range.SetLocal(row, kb::scene::Vec3{ states[row].speed, 1.0F, 0.0F }, current.localRotation, current.localScale);
@@ -2165,7 +2165,7 @@ void RunTransformPassContractTest() {
             world.TryGet<TransformPassAgentState>(spawned[7].Entity())->speed == 1007.0F,
         "Objects created with an application component must carry its value");
     const kb::scene::TransformPassStats spawnedStats = scene.Transforms().ParallelForEachRoot<TransformPassAgentState>(512U, [](kb::scene::TransformRowRange& range) {
-        const TransformPassAgentState* states = range.Column<TransformPassAgentState>();
+        const TransformPassAgentState* states = range.Column<const TransformPassAgentState>();
         for (std::size_t row = 0U; row < range.Count(); ++row) {
             range.SetLocal(row, kb::scene::Vec3{ states[row].speed, 2.0F, 0.0F }, range.Get(row).localRotation, range.Get(row).localScale);
         }

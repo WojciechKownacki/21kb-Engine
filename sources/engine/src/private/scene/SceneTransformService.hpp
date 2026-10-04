@@ -33,7 +33,7 @@ public:
     static void MarkParentModified(Scene& scene, SceneEntity entity) noexcept;
     static void SetInterpolated(Scene& scene, SceneEntity entity, bool interpolated);
     static TransformPassStats ParallelForEachRoot(Scene& scene, std::size_t grainRows, std::span<const kb::ecs::ComponentId> extraComponents,
-        SceneTransforms::TransformRangeBody body, void* context);
+        SceneTransforms::TransformRangeBody body, void* context, bool declaredAccess = false);
     [[nodiscard]] static bool IsInterpolated(const Scene& scene, SceneEntity entity) noexcept;
     static void ForEach(const Scene& scene, ConstTransformVisitor visitor, void* context = nullptr);
     static void ForEachMutable(Scene& scene, MutableTransformVisitor visitor, void* context = nullptr);
