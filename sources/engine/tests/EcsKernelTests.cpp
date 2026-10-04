@@ -13,6 +13,7 @@
 #include "engine/ecs/World.hpp"
 #include "engine/ecs/WorldConfigPresets.hpp"
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cmath>
@@ -2949,6 +2950,8 @@ void RunEcsKernelColumnContractTest() {
     static_assert(!kb::ecs::IsPowerOfTwo(48U), "ECS column alignment helper must reject non powers of two");
     static_assert(kb::ecs::AlignedColumn<float>::kAlignment == kb::ecs::kKernelColumnAlignment);
     static_assert(kb::ecs::AlignedColumn<float, 32U>::kAlignment == 32U);
+    static_assert(sizeof(kb::ecs::RestrictPtr<float>) == sizeof(float*));
+    static_assert(sizeof(kb::ecs::AlignedColumn<float>) == sizeof(float*) + sizeof(std::size_t));
 
     constexpr std::size_t kCount = 64U;
     alignas(kb::ecs::kKernelColumnAlignment) std::array<float, kCount> values{};
@@ -2960,6 +2963,7 @@ void RunEcsKernelColumnContractTest() {
     kb::tests::Require(column.Count() == kCount, "ECS aligned column reported wrong count");
     kb::tests::Require(!column.Empty(), "ECS aligned column should not be empty");
     kb::tests::Require(kb::ecs::IsPointerAligned(column.Data(), kb::ecs::kKernelColumnAlignment), "ECS aligned column base is not aligned");
+    kb::tests::Require(column.IsAligned(), "ECS aligned column must report actual aligned base");
 
     float sum = 0.0F;
     const kb::ecs::RestrictPtr<float> restricted = column.Restrict();
@@ -2975,8 +2979,56 @@ void RunEcsKernelColumnContractTest() {
     kb::tests::Require(tail.Count() == 16U, "ECS aligned column subrange count mismatch");
     kb::tests::Require(kb::tests::NearlyEqual(tail[0], 16.0F), "ECS aligned column subrange offset mismatch");
 
+    // Every legal offset, including short tails, preserves the pointer and count
+    // without promising the preferred alignment at an unaligned address.
+    for (std::size_t begin = 0U; begin <= kCount; ++begin) {
+        const std::size_t remaining = kCount - begin;
+        const std::size_t count = std::min<std::size_t>(remaining, 7U);
+        const auto subrange = column.Subrange(begin, count);
+        kb::tests::Require(subrange.Data() == values.data() + begin, "ECS column subrange changed its base pointer");
+        kb::tests::Require(subrange.Count() == count, "ECS column short tail reported wrong count");
+        kb::tests::Require(subrange.IsAligned() == kb::ecs::IsPointerAligned(values.data() + begin, 64U),
+            "ECS column subrange reported an incorrect alignment");
+        for (std::size_t index = 0U; index < count; ++index) {
+            kb::tests::Require(subrange[index] == static_cast<float>(begin + index), "ECS unaligned column subrange read wrong element");
+        }
+    }
+    const auto nestedAligned = column.Subrange(1U, 31U).Subrange(15U, 16U);
+    kb::tests::Require(nestedAligned.IsAligned() && nestedAligned.Data() == values.data() + 16U,
+        "ECS nested subrange must recheck its actual aligned address");
+
+    kb::ecs::AlignedColumn<const float> constUnaligned{ values.data() + 1U, 3U };
+    kb::tests::Require(!constUnaligned.IsAligned() && constUnaligned.Data() == values.data() + 1U && constUnaligned[2U] == 3.0F,
+        "ECS const column must accept an element-aligned base");
+    kb::tests::Require(kb::ecs::AssumeAligned<64U>(values.data() + 1U) == values.data() + 1U,
+        "ECS alignment helper must preserve an unaligned pointer");
+    kb::tests::Require(kb::ecs::AssumeAligned<64U>(static_cast<float*>(nullptr)) == nullptr,
+        "ECS alignment helper must preserve a null pointer");
+
+    kb::ecs::ColumnBundle columns;
+    columns.Add(values.data() + 1U);
+    columns.Add(values.data() + 1U); // Duplicate columns intentionally alias.
+    auto firstAlias = columns.Aligned<float>(0U, 7U);
+    auto secondAlias = columns.Aligned<float>(1U, 7U);
+    firstAlias[3U] = 123.0F;
+    kb::tests::Require(!firstAlias.IsAligned() && secondAlias[3U] == 123.0F,
+        "ECS duplicate column views must preserve aliasing writes");
+
+    // This forward overlapping copy has a loop-carried dependency. A no-alias
+    // promise would permit a different result, so neither wrapper can imply it.
+    for (std::size_t index = 0U; index < kCount; ++index) values[index] = static_cast<float>(index * 10U);
+    const auto source = column.Subrange(0U, 31U).Restrict();
+    const auto destination = column.Subrange(1U, 31U).Restrict();
+    for (std::size_t index = 0U; index < 31U; ++index) destination[index] = source[index] + 1.0F;
+    for (std::size_t index = 0U; index < 32U; ++index) {
+        kb::tests::Require(values[index] == static_cast<float>(index), "ECS overlapping column views lost a loop-carried write");
+    }
+    kb::tests::Require(values[32U] == 320.0F, "ECS overlapping column write crossed its tail");
+
     kb::ecs::AlignedColumn<float> empty{};
     kb::tests::Require(empty.Empty(), "ECS default aligned column should be empty");
+    kb::tests::Require(empty.Data() == nullptr && empty.Subrange(0U, 0U).Data() == nullptr,
+        "ECS empty column subrange must preserve its null pointer");
 }
 
 } // namespace
