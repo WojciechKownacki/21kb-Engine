@@ -2636,6 +2636,7 @@ void RunAgentsFrameBenchmark() {
     RunAgentsFrameBenchmarkWith(kb::ecs::WorldConfig{}, "mirror=on(default),ParallelFor+SetMany", true);
     // the same crowd next to a small parented overlay, at a size where the sync pass dominates
     RunAgentsFrameBenchmarkWith(kb::ecs::WorldConfig{}, "flat 300k", true, 300000, false);
+    RunAgentsFrameBenchmarkWith(kb::ecs::WorldConfig{}, "with overlay hierarchy 1M", true, 1000000, true);
     RunAgentsFrameBenchmarkWith(kb::ecs::WorldConfig{}, "with overlay hierarchy 300k", true, 300000, true);
 }
 

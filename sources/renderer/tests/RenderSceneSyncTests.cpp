@@ -31,6 +31,11 @@
 #include "engine/scene/SkeletonAssetIO.hpp"
 #include "engine/scene/SkeletalMeshAssetIO.hpp"
 #include "engine/scene/FacingPanelComponent.hpp"
+#include "engine/scene/GeometrySwarmComponent.hpp"
+#include "engine/scene/GuideCurveComponent.hpp"
+#include "engine/scene/RegionShapeComponent.hpp"
+#include "engine/scene/SurfaceCastComponent.hpp"
+#include "engine/scene/VisibilityBlockerComponent.hpp"
 #include "engine/scene/SpaceStrokeComponent.hpp"
 #include "engine/scene/HistoryRibbonComponent.hpp"
 #include "engine/scene/LensEchoComponent.hpp"
@@ -3547,6 +3552,232 @@ void RunSharedPoseMeshBoundsTest() {
         "A shared pose mesh must derive animated bounds from its pose source");
 }
 
+struct ProxyGoldenHash {
+    std::uint64_t value = 1469598103934665603ULL;
+
+    void Bytes(const void* data, std::size_t size) noexcept {
+        const auto* bytes = static_cast<const unsigned char*>(data);
+        for (std::size_t index = 0U; index < size; ++index) {
+            value ^= bytes[index];
+            value *= 1099511628211ULL;
+        }
+    }
+    void U64(std::uint64_t number) noexcept { Bytes(&number, sizeof(number)); }
+    template <std::size_t Count>
+    void Floats(const std::array<float, Count>& values) noexcept { Bytes(values.data(), sizeof(float) * Count); }
+    void Transform(const kb::scene::TransformComponent& transform) noexcept {
+        const std::array<float, 20> values{
+            transform.localPosition.x, transform.localPosition.y, transform.localPosition.z,
+            transform.localRotation.x, transform.localRotation.y, transform.localRotation.z, transform.localRotation.w,
+            transform.localScale.x, transform.localScale.y, transform.localScale.z,
+            transform.worldPosition.x, transform.worldPosition.y, transform.worldPosition.z,
+            transform.worldRotation.x, transform.worldRotation.y, transform.worldRotation.z, transform.worldRotation.w,
+            transform.worldScale.x, transform.worldScale.y, transform.worldScale.z };
+        Floats(values);
+        U64(transform.localVersion); U64(transform.parentVersion); U64(transform.worldVersion); U64(transform.worldDirty ? 1U : 0U);
+    }
+};
+
+// The renderer's incremental runtime path (Renderer::SubmitSceneToViewport without a full sync, fed the way
+// RuntimeSceneFrameSync feeds it) on a local RenderScene, so the proxies can be read back after each frame.
+struct RuntimeTransformFrameDriver {
+    EcsRenderSceneSynchronizer synchronizer;
+    RenderScene renderScene;
+    std::unique_ptr<kb::ecs::WorkerPool> workerPool = std::make_unique<kb::ecs::WorkerPool>(kb::ecs::WorkerPoolConfig{});
+    bool initialized = false;
+    std::uint64_t topology = 0U;
+    std::uint64_t frameSyncRevision = 0U;
+    std::uint64_t rendererRevision = 0U;
+    std::vector<std::uint64_t> preUpdateChanges;
+
+    void BeforeUpdate(const kb::scene::Scene& scene) {
+        preUpdateChanges.clear();
+        if (initialized && scene.Runtime().RenderProxyUpdateRevision() != frameSyncRevision) {
+            for (const kb::scene::SceneEntity entity : scene.Runtime().RenderProxyUpdateEntities()) preUpdateChanges.push_back(entity.Id());
+        }
+    }
+
+    void Submit(const kb::scene::Scene& scene) {
+        const std::uint64_t currentTopology = scene.Runtime().RenderTopologyVersion();
+        const std::uint64_t revision = scene.Runtime().RenderProxyUpdateRevision();
+        if (!initialized) {
+            synchronizer.Sync(scene, renderScene);
+            rendererRevision = revision;
+        } else {
+            bool renderProxyUpdatesSynchronized = false;
+            if (currentTopology != topology) {
+                synchronizer.SyncStructural(scene, renderScene);
+                renderProxyUpdatesSynchronized = true;
+            }
+            const std::span<const kb::scene::SceneEntity> affineEntities = scene.Runtime().TransformRenderProxyUpdateEntities();
+            const std::span<const kb::scene::WorldTransformAffine3x4> affines = scene.Runtime().TransformRenderProxyWorldAffine3x4();
+            if (affineEntities.size() >= 4U * 1024U) {
+                synchronizer.SyncMeshWorldAffinesParallel(renderScene, affineEntities, affines, *workerPool);
+            } else {
+                synchronizer.SyncMeshWorldAffines(renderScene, affineEntities, affines);
+            }
+            if (!preUpdateChanges.empty()) synchronizer.SyncEntities(scene, renderScene, preUpdateChanges);
+            if (!scene.Runtime().RenderProxyUpdateEntities().empty() && rendererRevision != revision) {
+                synchronizer.SyncRenderProxyUpdates(scene, renderScene);
+                rendererRevision = revision;
+                renderProxyUpdatesSynchronized = true;
+            }
+            synchronizer.SyncFacingPanelUpdates(scene, renderScene,
+                renderProxyUpdatesSynchronized || scene.Runtime().HotPathReport().transformRenderProxyCameraCount != 0U);
+        }
+        synchronizer.AdvanceHistoryRibbons(scene, renderScene);
+        static_cast<void>(renderScene.DrawGroups());
+        initialized = true;
+        topology = currentTopology;
+        frameSyncRevision = revision;
+    }
+};
+
+// Golden render proxies of a fixed-dt run: every proxy kind that takes an entity's world transform, moving among
+// plain movers next to a parented overlay, hashed with the transform state of every object after each frame.
+// The expected value was recorded from the push path (render-proxy lists and affine array) of the transform sync.
+void RunRenderProxyTransformGoldenHashTest() {
+    kb::scene::Scene scene;
+    kb::scene::SceneLightingAccess::SetBasicLightingEnabled(scene, true);
+    std::vector<kb::scene::SceneEntity> objects;
+    std::vector<kb::scene::SceneEntity> movers;
+    const auto create = [&](float x, float y, float z) {
+        const kb::scene::SceneEntity entity = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .transform = LocalOnlyTransformAt(x, y, z) }).Entity();
+        objects.push_back(entity);
+        return entity;
+    };
+    const auto createMovers = [&](std::size_t count, std::size_t rendered) {
+        std::vector<kb::scene::SceneObjectDesc> descs(count);
+        for (std::size_t index = 0U; index < count; ++index) descs[index].transform = LocalOnlyTransformAt(static_cast<float>(movers.size() + index), 0.5F, 1.0F);
+        for (const kb::scene::SceneObject& object : scene.Entities().CreateObjects(descs)) {
+            if (rendered > 0U) {
+                scene.Components().MeshRenderers().Set(object.Entity(), kb::scene::MeshRendererComponent{ .meshAssetId = 41U, .materialAssetId = 5U });
+                --rendered;
+            }
+            objects.push_back(object.Entity());
+            movers.push_back(object.Entity());
+        }
+    };
+    const kb::scene::SceneEntity camera = create(0.0F, 2.0F, -10.0F);
+    scene.Components().Cameras().Set(camera, kb::scene::CameraComponent{ .primary = true });
+    const kb::scene::SceneEntity light = create(0.0F, 5.0F, 0.0F);
+    scene.Components().Lights().Set(light, kb::scene::LightComponent{});
+    const kb::scene::SceneEntity canvas = create(0.0F, 0.0F, 0.0F);
+    for (int child = 0; child < 8; ++child) {
+        Require(scene.Hierarchy().SetParent(create(static_cast<float>(child), 1.0F, 0.0F), canvas), "Golden proxy overlay could not be parented");
+    }
+    createMovers(5000U, 1000U);
+    const kb::scene::SceneEntity blocker = create(1.0F, 0.0F, 3.0F);
+    scene.Components().VisibilityBlockers().Set(blocker, kb::scene::SceneVisibilityBlockerComponent{});
+    const kb::scene::SceneEntity swarmEntity = create(2.0F, 0.0F, 3.0F);
+    kb::scene::GeometrySwarmComponent swarm{};
+    swarm.meshAssetId = 42U;
+    swarm.instanceCount = 4U;
+    swarm.columns = 2U;
+    swarm.rows = 2U;
+    swarm.enabled = true;
+    scene.Components().GeometrySwarms().Set(swarmEntity, swarm);
+    const kb::scene::SceneEntity cast = create(3.0F, 0.0F, 3.0F);
+    scene.Components().RegionShapes().Set(cast, kb::scene::RegionShapeComponent{});
+    scene.Components().SurfaceCasts().Set(cast, kb::scene::SurfaceCastComponent{ .materialAssetId = 9U, .enabled = true });
+    const kb::scene::SceneEntity stroke = create(4.0F, 0.0F, 3.0F);
+    kb::scene::GuideCurveComponent curve{};
+    curve.controlPointCount = 3U;
+    curve.controlPoints[0] = kb::scene::Vec3{ -2.0F, 0.0F, 0.0F };
+    curve.controlPoints[1] = kb::scene::Vec3{ 0.0F, 1.0F, 0.0F };
+    curve.controlPoints[2] = kb::scene::Vec3{ 2.0F, 0.0F, 0.0F };
+    scene.Components().GuideCurves().Set(stroke, curve);
+    scene.Components().SpaceStrokes().Set(stroke, kb::scene::SpaceStrokeComponent{
+        .meshAssetId = 11U, .materialAssetId = 19U, .mode = kb::scene::SpaceStrokeMode::Spline, .width = 0.2F, .splineSegments = 6U, .enabled = true });
+    const kb::scene::SceneEntity viewPanel = create(5.0F, 0.0F, 3.0F);
+    scene.Components().MeshRenderers().Set(viewPanel, kb::scene::MeshRendererComponent{ .meshAssetId = 7U, .materialAssetId = 9U });
+    scene.Components().FacingPanels().Set(viewPanel, kb::scene::FacingPanelComponent{ .mode = kb::scene::FacingPanelMode::View, .enabled = true });
+    const kb::scene::SceneEntity axisPanel = create(6.0F, 0.0F, 3.0F);
+    scene.Components().MeshRenderers().Set(axisPanel, kb::scene::MeshRendererComponent{ .meshAssetId = 7U, .materialAssetId = 9U });
+    scene.Components().FacingPanels().Set(axisPanel, kb::scene::FacingPanelComponent{
+        .mode = kb::scene::FacingPanelMode::Axis, .axis = kb::scene::Vec3{ -1.0F, 0.0F, 0.0F }, .enabled = true });
+    const kb::scene::SceneEntity parentRoot = create(7.0F, 0.0F, 3.0F);
+    const kb::scene::SceneEntity parentedMesh = create(0.0F, 1.0F, 0.0F);
+    scene.Components().MeshRenderers().Set(parentedMesh, kb::scene::MeshRendererComponent{ .meshAssetId = 41U, .materialAssetId = 5U });
+    Require(scene.Hierarchy().SetParent(parentedMesh, parentRoot), "Golden proxy renderable could not be parented");
+    const std::array<kb::scene::SceneEntity, 10U> special{ camera, light, blocker, swarmEntity, cast, stroke, viewPanel, axisPanel, parentRoot, parentedMesh };
+
+    RuntimeTransformFrameDriver driver;
+    ProxyGoldenHash hash;
+    std::vector<kb::scene::TransformComponent> batch;
+    for (int frame = 0; frame < 8; ++frame) {
+        if (frame == 2) createMovers(40U, 5U);
+        if (frame == 3) scene.Components().MeshRenderers().Set(movers[1500], kb::scene::MeshRendererComponent{ .meshAssetId = 41U, .materialAssetId = 5U });
+        if (frame == 4) scene.Entities().Destroy(movers[10]);
+        if (frame == 5) scene.Components().MeshRenderers().Remove(movers[1500]);
+        batch.resize(movers.size());
+        for (std::size_t index = 0U; index < movers.size(); ++index) {
+            const float phase = static_cast<float>(frame) * 0.25F + static_cast<float>(index) * 0.001F;
+            batch[index] = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ static_cast<float>(index % 97) + std::sin(phase), 0.5F, static_cast<float>(index / 97) + std::cos(phase) },
+                .localRotation = kb::scene::Quat{ 0.0F, std::sin(phase * 0.5F), 0.0F, std::cos(phase * 0.5F) } };
+        }
+        scene.Transforms().SetMany(movers, batch);
+        for (std::size_t index = 0U; index < special.size(); ++index) {
+            const float phase = static_cast<float>(frame) * 0.3F + static_cast<float>(index);
+            scene.Transforms().Set(special[index], kb::scene::TransformComponent{
+                .localPosition = kb::scene::Vec3{ static_cast<float>(index) + std::sin(phase), 1.0F + (index == 0U ? 1.0F : 0.0F), (index == 0U ? -10.0F : 3.0F) + std::cos(phase) },
+                .localRotation = kb::scene::Quat{ 0.0F, std::sin(phase * 0.2F), 0.0F, std::cos(phase * 0.2F) } });
+        }
+        driver.BeforeUpdate(scene);
+        static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+        driver.Submit(scene);
+
+        const RenderScene& renderScene = driver.renderScene;
+        for (const kb::scene::SceneEntity entity : objects) {
+            const kb::scene::TransformComponent* transform = scene.Transforms().TryGet(entity);
+            hash.U64(transform == nullptr ? 0U : 1U);
+            if (transform != nullptr) hash.Transform(*transform);
+            const std::uint64_t id = entity.Id();
+            const MeshRenderProxy* mesh = renderScene.FindMeshByEntity(id);
+            hash.U64(mesh == nullptr ? 0U : (mesh->desc.visible ? 2U : 1U));
+            if (mesh != nullptr) hash.Floats(mesh->desc.model);
+            const CameraRenderProxy* cameraProxy = renderScene.FindCameraByEntity(id);
+            hash.U64(cameraProxy == nullptr ? 0U : 1U);
+            if (cameraProxy != nullptr) { hash.Floats(cameraProxy->desc.position); hash.Floats(cameraProxy->desc.rotation); }
+            const LightRenderProxy* lightProxy = renderScene.FindLightByEntity(id);
+            hash.U64(lightProxy == nullptr ? 0U : 1U);
+            if (lightProxy != nullptr) { hash.Floats(lightProxy->desc.position); hash.Floats(lightProxy->desc.rotation); }
+            const auto blockerProxy = renderScene.VisibilityBlockerProxies().find(id);
+            hash.U64(blockerProxy == renderScene.VisibilityBlockerProxies().end() ? 0U : 1U);
+            if (blockerProxy != renderScene.VisibilityBlockerProxies().end()) hash.Floats(blockerProxy->second.desc.model);
+            const auto swarmProxy = renderScene.GeometrySwarmProxies().find(id);
+            hash.U64(swarmProxy == renderScene.GeometrySwarmProxies().end() ? 0U : 1U);
+            if (swarmProxy != renderScene.GeometrySwarmProxies().end()) hash.Floats(swarmProxy->second.desc.model);
+            const auto castProxy = renderScene.SurfaceCastProxies().find(id);
+            hash.U64(castProxy == renderScene.SurfaceCastProxies().end() ? 0U : 1U);
+            if (castProxy != renderScene.SurfaceCastProxies().end()) hash.Floats(castProxy->second.desc.model);
+            const auto strokeProxy = renderScene.SpaceStrokeProxies().find(id);
+            hash.U64(strokeProxy == renderScene.SpaceStrokeProxies().end() ? 0U : 1U);
+            if (strokeProxy != renderScene.SpaceStrokeProxies().end()) hash.Floats(strokeProxy->second.desc.model);
+        }
+        // the instances that reach the GPU, folded order-independently (their order follows the proxy maps)
+        std::uint64_t instanceSum = 0U;
+        std::uint64_t instanceCount = 0U;
+        for (const SceneRenderDrawGroup& group : renderScene.DrawGroups()) {
+            for (const SceneRenderMeshInstance& instance : group.instances) {
+                ProxyGoldenHash entry;
+                entry.Floats(instance.model);
+                instanceSum += entry.value;
+                ++instanceCount;
+            }
+        }
+        hash.U64(instanceSum);
+        hash.U64(instanceCount);
+    }
+    const RenderScene& finalScene = driver.renderScene;
+    Require(finalScene.CameraProxyCount() == 1U && finalScene.LightProxyCount() == 1U && finalScene.VisibilityBlockerProxyCount() == 1U &&
+            finalScene.GeometrySwarmProxyCount() == 1U && finalScene.SurfaceCastProxyCount() == 1U && finalScene.SpaceStrokeProxyCount() == 1U,
+        "Golden proxy scene lost a proxy kind");
+    constexpr std::uint64_t expected = 0xa3de516236e323c9ULL;
+    if (hash.value != expected) std::fprintf(stderr, "render proxy golden hash 0x%llx\n", static_cast<unsigned long long>(hash.value));
+    Require(hash.value == expected, "Render proxies of a fixed-dt run differ from the recorded golden hash");
+}
+
 } // namespace
 
 void RunRenderSceneSyncTests() {
@@ -3638,6 +3869,7 @@ void RunRenderSceneSyncTests() {
     RunParticleReleaseBeforeSyncIsOwnershipNeutralTest();
     RunSceneRenderVisibilityPublisherBuildsFrameTest();
     RunSceneRenderVisibilityPublisherParallelParityTest();
+    RunRenderProxyTransformGoldenHashTest();
 }
 
 } // namespace kb::render::tests

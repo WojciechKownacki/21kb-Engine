@@ -14,6 +14,9 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneHierarchyAccess.hpp"
+#include "engine/scene/ScenePrefab.hpp"
+#include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneSystem.hpp"
 #include "engine/scene/SceneSystemContext.hpp"
@@ -1815,6 +1818,197 @@ void RunSceneBulkCreateObjectsTest() {
     }
 }
 
+// Golden transform state of a fixed-dt run: FNV-1a over local and world TRS, versions and the dirty flag of every
+// object (in creation order), its interpolated pose and the runtime's render-proxy transform list, after every
+// write and every Update. The expected values were recorded from the transform path before the per-row lanes.
+struct TransformGoldenHash {
+    std::uint64_t value = 1469598103934665603ULL;
+
+    void Bytes(const void* data, std::size_t size) noexcept {
+        const auto* bytes = static_cast<const unsigned char*>(data);
+        for (std::size_t index = 0U; index < size; ++index) {
+            value ^= bytes[index];
+            value *= 1099511628211ULL;
+        }
+    }
+    void U64(std::uint64_t number) noexcept { Bytes(&number, sizeof(number)); }
+    void Float(float number) noexcept { Bytes(&number, sizeof(number)); }
+    void Vec(const kb::scene::Vec3& vector) noexcept { Float(vector.x); Float(vector.y); Float(vector.z); }
+    void Rotation(const kb::scene::Quat& rotation) noexcept { Float(rotation.x); Float(rotation.y); Float(rotation.z); Float(rotation.w); }
+    void Transform(const kb::scene::TransformComponent& transform) noexcept {
+        Vec(transform.localPosition); Rotation(transform.localRotation); Vec(transform.localScale);
+        Vec(transform.worldPosition); Rotation(transform.worldRotation); Vec(transform.worldScale);
+        U64(transform.localVersion); U64(transform.parentVersion); U64(transform.worldVersion); U64(transform.worldDirty ? 1U : 0U);
+    }
+};
+
+enum class TransformGoldenScene { Flat, Overlay, Observed, Hierarchy };
+
+class TransformGoldenFixedSystem final : public kb::scene::SceneSystem {
+public:
+    [[nodiscard]] bool RequiresFixedStep() const override { return true; }
+};
+
+std::uint64_t RunTransformGoldenScenario(TransformGoldenScene kind) {
+    kb::ecs::WorldConfig config{};
+    config.mirrorValueWritesOnlyForObservedComponents = kind != TransformGoldenScene::Observed;
+    kb::scene::Scene scene{ config };
+    std::vector<kb::scene::SceneEntity> objects;
+    std::vector<kb::scene::SceneEntity> movers;
+    std::vector<kb::scene::SceneEntity> overlay;
+    const auto create = [&](kb::scene::Vec3 position) {
+        const kb::scene::SceneEntity entity = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+            .transform = kb::scene::TransformComponent{ .localPosition = position } }).Entity();
+        objects.push_back(entity);
+        return entity;
+    };
+    const auto createMovers = [&](std::size_t count) {
+        std::vector<kb::scene::SceneObjectDesc> descs(count);
+        for (std::size_t index = 0U; index < count; ++index) {
+            descs[index].transform.localPosition = kb::scene::Vec3{ static_cast<float>(movers.size() + index), 0.5F, 1.0F };
+        }
+        for (const kb::scene::SceneObject& object : scene.Entities().CreateObjects(descs)) {
+            objects.push_back(object.Entity());
+            movers.push_back(object.Entity());
+        }
+    };
+    if (kind == TransformGoldenScene::Overlay || kind == TransformGoldenScene::Observed) {
+        // the benchmark's screen overlay: a canvas with parented children, created before the crowd
+        const kb::scene::SceneEntity canvas = create(kb::scene::Vec3{ 0.0F, 0.0F, 0.0F });
+        for (int child = 0; child < 8; ++child) {
+            overlay.push_back(create(kb::scene::Vec3{ static_cast<float>(child), 1.0F, 0.0F }));
+            kb::tests::Require(scene.Hierarchy().SetParent(overlay.back(), canvas), "Golden transform overlay could not be parented");
+        }
+    }
+    createMovers(3000U);
+    std::vector<kb::scene::SceneEntity> chainRoots;
+    std::vector<kb::scene::SceneEntity> chainMiddles;
+    std::vector<kb::scene::SceneEntity> chainLeaves;
+    std::vector<kb::scene::SceneEntity> prefabRoots;
+    if (kind == TransformGoldenScene::Hierarchy) {
+        for (int chain = 0; chain < 20; ++chain) {
+            chainRoots.push_back(create(kb::scene::Vec3{ static_cast<float>(chain), 2.0F, 0.0F }));
+            chainMiddles.push_back(create(kb::scene::Vec3{ 0.0F, 1.0F, 0.5F }));
+            kb::tests::Require(scene.Hierarchy().SetParent(chainMiddles.back(), chainRoots.back()), "Golden transform chain could not be parented");
+            for (int leaf = 0; leaf < 2; ++leaf) {
+                chainLeaves.push_back(create(kb::scene::Vec3{ static_cast<float>(leaf), 0.0F, 1.0F }));
+                kb::tests::Require(scene.Hierarchy().SetParent(chainLeaves.back(), chainMiddles.back()), "Golden transform leaf could not be parented");
+            }
+        }
+        kb::scene::ScenePrefab prefab;
+        const std::uint32_t rootNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+            .name = "Golden Root", .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 4.0F, 0.0F, 0.0F } } });
+        static_cast<void>(prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+            .name = "Golden Child", .parentNode = rootNode, .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 0.0F, 2.0F, 0.0F } } }));
+        for (const kb::scene::ScenePrefabInstance& instance : scene.Prefabs().InstantiateMany(prefab, 3U)) {
+            prefabRoots.push_back(instance.ObjectAt(0U).Entity());
+            objects.push_back(instance.ObjectAt(0U).Entity());
+            objects.push_back(instance.ObjectAt(1U).Entity());
+        }
+        scene.Runtime().AddSceneSystem(std::make_unique<TransformGoldenFixedSystem>());
+    }
+
+    const auto indexOf = [&objects](kb::scene::SceneEntity entity) -> std::uint64_t {
+        const auto found = std::ranges::find(objects, entity);
+        return found == objects.end() ? UINT64_MAX : static_cast<std::uint64_t>(found - objects.begin());
+    };
+    TransformGoldenHash hash;
+    const auto hashState = [&](bool afterUpdate) {
+        for (const kb::scene::SceneEntity entity : objects) {
+            const kb::scene::TransformComponent* transform = scene.Transforms().TryGet(entity);
+            hash.U64(transform == nullptr ? 0U : 1U);
+            if (transform != nullptr) hash.Transform(*transform);
+            if (afterUpdate) {
+                const std::optional<kb::scene::TransformComponent> interpolated = scene.Runtime().InterpolatedTransform(entity);
+                hash.U64(interpolated.has_value() ? 1U : 0U);
+                if (interpolated.has_value()) hash.Transform(*interpolated);
+            }
+        }
+        if (!afterUpdate) return;
+        // the list is a set: its order follows storage, so it is folded order-independently
+        const std::span<const kb::scene::SceneEntity> proxyEntities = scene.Runtime().TransformRenderProxyUpdateEntities();
+        const std::span<const kb::scene::WorldTransformAffine3x4> proxyAffines = scene.Runtime().TransformRenderProxyWorldAffine3x4();
+        std::uint64_t proxySum = 0U;
+        for (std::size_t index = 0U; index < proxyEntities.size(); ++index) {
+            TransformGoldenHash entry;
+            entry.U64(indexOf(proxyEntities[index]));
+            if (index < proxyAffines.size()) entry.Bytes(proxyAffines[index].values, sizeof(proxyAffines[index].values));
+            proxySum += entry.value;
+        }
+        hash.U64(proxyEntities.size());
+        hash.U64(proxyAffines.size());
+        hash.U64(proxySum);
+        hash.U64(scene.Runtime().HotPathReport().transformRenderProxyUpdateCount);
+    };
+
+    std::vector<kb::scene::TransformComponent> batch;
+    std::vector<kb::scene::SceneEntity> written;
+    for (int frame = 0; frame < 8; ++frame) {
+        if (frame == 2) createMovers(40U);
+        if (frame == 4) {
+            for (std::size_t index = 5U; index < 15U; ++index) scene.Entities().Destroy(movers[index]);
+        }
+        written = movers;
+        if (frame == 5) written.push_back(movers[1]);
+        batch.resize(written.size());
+        for (std::size_t index = 0U; index < written.size(); ++index) {
+            const float phase = static_cast<float>(frame) * 0.25F + static_cast<float>(index) * 0.001F + (index + 1U == written.size() && frame == 5 ? 3.0F : 0.0F);
+            kb::scene::TransformComponent& value = batch[index];
+            value = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ static_cast<float>(index % 97) + std::sin(phase), 0.5F, static_cast<float>(index / 97) + std::cos(phase) } };
+            if (index % 2U == 1U) value.localRotation = kb::scene::Quat{ 0.0F, std::sin(phase * 0.5F), 0.0F, std::cos(phase * 0.5F) };
+            if (index % 7U == 0U) value.localScale = kb::scene::Vec3{ 1.5F, 1.5F, 1.5F };
+        }
+        scene.Transforms().SetMany(written, batch);
+        scene.Transforms().Set(movers[2], kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ static_cast<float>(frame), 3.0F, 0.0F } });
+        if (!overlay.empty() && frame == 3) {
+            scene.Transforms().Set(overlay[0], kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 0.0F, 5.0F, 0.0F } });
+        }
+        for (std::size_t chain = 0U; chain < chainRoots.size(); ++chain) {
+            const float offset = static_cast<float>(frame) * 0.5F + static_cast<float>(chain);
+            scene.Transforms().Set(chainRoots[chain], kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ offset, 2.0F, 0.0F },
+                .localRotation = kb::scene::Quat{ 0.0F, std::sin(offset * 0.1F), 0.0F, std::cos(offset * 0.1F) } });
+            if (chain % 2U == 0U) {
+                scene.Transforms().Set(chainMiddles[chain], kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 0.0F, 1.0F + offset * 0.1F, 0.5F },
+                    .localScale = kb::scene::Vec3{ 2.0F, 2.0F, 2.0F } });
+            }
+        }
+        if (!chainLeaves.empty() && frame % 2 == 1) {
+            scene.Transforms().Set(chainLeaves[0], kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ static_cast<float>(frame), 0.0F, 1.0F } });
+        }
+        if (!chainLeaves.empty() && frame == 5) {
+            kb::tests::Require(scene.Hierarchy().SetParent(chainLeaves[3], chainMiddles[4]), "Golden transform leaf could not be moved");
+        }
+        if (!chainLeaves.empty() && frame == 6) {
+            kb::tests::Require(scene.Hierarchy().SetParent(chainLeaves[5], kb::scene::SceneEntity{}), "Golden transform leaf could not be unparented");
+        }
+        for (std::size_t index = 0U; index < prefabRoots.size(); ++index) {
+            scene.Transforms().Set(prefabRoots[index], kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ static_cast<float>(frame + index), 0.0F, 4.0F } });
+        }
+        hashState(false);
+        static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+        hashState(true);
+    }
+    return hash.value;
+}
+
+void RunTransformGoldenHashTest() {
+    constexpr std::array<std::pair<TransformGoldenScene, std::uint64_t>, 4U> expected{ {
+        { TransformGoldenScene::Flat, 0xff5ae865064ffda3ULL },
+        { TransformGoldenScene::Overlay, 0x7e94174614290a5fULL },
+        { TransformGoldenScene::Observed, 0x7e94174614290a5fULL },
+        { TransformGoldenScene::Hierarchy, 0x91264c8f73872b99ULL },
+    } };
+    bool matches = true;
+    for (const auto& [kind, value] : expected) {
+        const std::uint64_t actual = RunTransformGoldenScenario(kind);
+        if (actual != value) {
+            std::cerr << "transform golden scene " << static_cast<int>(kind) << " hash 0x" << std::hex << actual << std::dec << '\n';
+            matches = false;
+        }
+    }
+    kb::tests::Require(matches, "Transform state of a fixed-dt run differs from the recorded golden hash");
+}
+
 void RunSceneSystemTransformSyncTests() {
     if (EnvironmentFlagEnabled("KB_SCENE_RUNTIME_STRESS")) {
         RunSceneRuntimeHeadlessStress();
@@ -1846,6 +2040,7 @@ void RunSceneSystemTransformSyncTests() {
     RunSceneSystemPhysicsBodyQueryAccessTest();
     RunSceneBulkMarkModifiedTest();
     RunSceneBulkCreateObjectsTest();
+    RunTransformGoldenHashTest();
 }
 
 } // namespace kb::tests
