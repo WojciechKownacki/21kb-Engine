@@ -46,7 +46,9 @@
 
 #include <algorithm>
 #include <array>
+#include "engine/ecs/NativeArchetypeStorage.hpp"
 #include <atomic>
+#include <mutex>
 #include <cmath>
 #include <cstdint>
 #include <optional>
@@ -695,7 +697,7 @@ void PullMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent
     const MeshRenderProxy* proxy = pull.sync.renderScene->FindMeshByEntity(entity.Id());
     if (proxy == nullptr) return;
     if (const std::optional<kb::scene::TransformComponent> pulled = PulledTransform(pull, entity, transform, proxy->pulledWorldVersion)) {
-        static_cast<void>(pull.sync.renderScene->UpdateMeshTransform(entity.Id(), PulledModel(*pulled)));
+        pull.sync.renderScene->UpdateMeshTransform(entity.Id(), *proxy, PulledModel(*pulled));
     }
 }
 
@@ -1226,6 +1228,79 @@ void EcsRenderSceneSynchronizer::SyncFacingPanelUpdates(
     }
 }
 
+// Each listed mesh proxy is refreshed by one worker (ApplyMeshTransform writes only its proxy and instance); the
+// draw groups are invalidated and the updates counted once after the join. A row written after the last transform
+// sync is left to the caller, which has the resolver.
+void EcsRenderSceneSynchronizer::PullComposedMeshTransforms(const kb::scene::Scene& scene, RenderScene& renderScene) const {
+    constexpr std::size_t kMeshPullGrainSize = 1024U;
+    const std::uint64_t structuralVersion = scene.Runtime().EcsWorld().NativeStorage().StructuralVersion();
+    if (meshPullScene_ != &scene || meshPullRenderScene_ != &renderScene || meshPullStructuralVersion_ != structuralVersion ||
+        meshPullMeshSetVersion_ != renderScene.MeshSetVersion()) {
+        meshPullRows_.clear();
+        struct Context {
+            const RenderScene& renderScene;
+            std::vector<MeshPullRow>& rows;
+        } context{ renderScene, meshPullRows_ };
+        scene.Components().Visitors().ForEachMeshRenderer([](kb::scene::SceneEntity entity, const kb::scene::TransformComponent& transform, const kb::scene::MeshRendererComponent&, void* raw) {
+            auto& data = *static_cast<Context*>(raw);
+            if (const MeshRenderProxy* proxy = data.renderScene.FindMeshByEntity(entity.Id()); proxy != nullptr) {
+                data.rows.push_back(MeshPullRow{ .entity = entity, .transform = &transform, .proxy = proxy });
+            }
+        }, &context);
+        meshPullScene_ = &scene;
+        meshPullRenderScene_ = &renderScene;
+        meshPullStructuralVersion_ = structuralVersion;
+        meshPullMeshSetVersion_ = renderScene.MeshSetVersion();
+    }
+    meshPullDirtyRows_.clear();
+    std::mutex dirtyRowsMutex;
+    std::vector<std::size_t>& dirtyRows = meshPullDirtyRows_;
+    std::atomic<std::uint64_t> inPlace{ 0U };
+    std::atomic<std::uint64_t> fallback{ 0U };
+    std::mutex changedGroupsMutex;
+    std::vector<std::uint32_t>& changedGroups = meshPullChangedGroups_;
+    changedGroups.clear();
+    const auto& rows = meshPullRows_;
+    const_cast<kb::scene::Scene&>(scene).Runtime().ParallelFor(rows.size(), kMeshPullGrainSize, [&renderScene, &rows, &inPlace, &fallback, &changedGroupsMutex, &changedGroups, &dirtyRowsMutex, &dirtyRows](std::size_t begin, std::size_t end) {
+        std::uint64_t localInPlace = 0U;
+        std::uint64_t localFallback = 0U;
+        std::uint32_t lastGroup = UINT32_MAX;
+        for (std::size_t index = begin; index < end; ++index) {
+            const auto [entity, transform, proxy] = rows[index];
+            if (transform->worldDirty) {
+                const std::lock_guard lock{ dirtyRowsMutex };
+                dirtyRows.push_back(index);
+                continue;
+            }
+            if (proxy->pulledWorldVersion == transform->worldVersion) continue;
+            proxy->pulledWorldVersion = transform->worldVersion;
+            switch (renderScene.ApplyMeshTransform(entity.Id(), const_cast<MeshRenderProxy&>(*proxy), PulledModel(*transform), false)) {
+            case RenderScene::TransformUpdateOutcome::InPlace:
+                ++localInPlace;
+                if (proxy->instanceGroupIndex != lastGroup) {
+                    lastGroup = proxy->instanceGroupIndex;
+                    const std::lock_guard lock{ changedGroupsMutex };
+                    changedGroups.push_back(lastGroup);
+                }
+                break;
+            case RenderScene::TransformUpdateOutcome::Fallback:
+                ++localFallback;
+                break;
+            case RenderScene::TransformUpdateOutcome::NotFound:
+                break;
+            }
+        }
+        inPlace.fetch_add(localInPlace, std::memory_order_relaxed);
+        fallback.fetch_add(localFallback, std::memory_order_relaxed);
+    });
+    std::ranges::sort(changedGroups);
+    changedGroups.erase(std::unique(changedGroups.begin(), changedGroups.end()), changedGroups.end());
+    for (const std::uint32_t group : changedGroups) renderScene.MarkDrawGroupContentChanged(group);
+    const std::uint64_t fallbackCount = fallback.load(std::memory_order_relaxed);
+    renderScene.InvalidateDrawGroupsIfFallback(fallbackCount > 0U ? RenderScene::TransformUpdateOutcome::Fallback : RenderScene::TransformUpdateOutcome::InPlace);
+    renderScene.AddTransformUpdateCounts(inPlace.load(std::memory_order_relaxed), fallbackCount);
+}
+
 void EcsRenderSceneSynchronizer::PullTransforms(const kb::scene::Scene& scene, RenderScene& renderScene) const {
     transformCache_.clear();
     transformResolving_.clear();
@@ -1245,7 +1320,11 @@ void EcsRenderSceneSynchronizer::PullTransforms(const kb::scene::Scene& scene, R
             scene.Components().FacingPanels().ForEach(&PullFacingPanel, &pull);
             break;
         case RenderTransformProxyKind::Mesh:
-            visitors.ForEachMeshRenderer(&PullMesh, &pull);
+            PullComposedMeshTransforms(scene, renderScene);
+            for (const std::size_t index : meshPullDirtyRows_) {
+                const MeshPullRow& row = meshPullRows_[index];
+                PullMesh(row.entity, *row.transform, kb::scene::MeshRendererComponent{}, &pull);
+            }
             break;
         case RenderTransformProxyKind::VisibilityBlocker:
             for (const auto& [entityId, proxy] : renderScene.VisibilityBlockerProxies()) {

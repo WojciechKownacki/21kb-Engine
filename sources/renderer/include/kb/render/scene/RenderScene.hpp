@@ -293,6 +293,8 @@ public:
     void Reserve(const RenderSceneReserveDesc& desc);
     [[nodiscard]] RenderSceneStats Stats() const noexcept;
     [[nodiscard]] std::uint64_t MeshContentRevision() const noexcept { return meshContentRevision_; }
+    // Changes when a mesh proxy is added or removed: a pointer to a proxy stays valid while it is unchanged.
+    [[nodiscard]] std::uint64_t MeshSetVersion() const noexcept { return meshSetVersion_; }
     [[nodiscard]] std::uint64_t LightContentRevision() const noexcept { return lightContentRevision_; }
     [[nodiscard]] RenderProxyId UpsertMesh(const MeshRenderProxyDesc& desc);
     [[nodiscard]] RenderProxyId UpsertCamera(const CameraRenderProxyDesc& desc);
@@ -317,6 +319,8 @@ public:
     // rebuild); otherwise it updates the proxy and invalidates so the next
     // rebuild picks it up. Returns false only when the entity has no mesh proxy.
     [[nodiscard]] bool UpdateMeshTransform(std::uint64_t entityId, const std::array<float, 16>& model);
+    // UpdateMeshTransform for the proxy FindMeshByEntity found: no second lookup.
+    void UpdateMeshTransform(std::uint64_t entityId, const MeshRenderProxy& proxy, const std::array<float, 16>& model);
     [[nodiscard]] bool UpdateVisibilityBlockerTransform(std::uint64_t entityId, const std::array<float, 16>& model) noexcept;
     [[nodiscard]] bool UpdateGeometrySwarmTransform(std::uint64_t entityId, const std::array<float, 16>& model) noexcept;
     [[nodiscard]] bool UpdateSurfaceCastTransform(std::uint64_t entityId, const std::array<float, 16>& model) noexcept;
@@ -330,6 +334,10 @@ private:
     // call concurrently for distinct entity ids (each owns a distinct proxy and
     // instance slot). The caller applies invalidation/telemetry once per batch.
     [[nodiscard]] TransformUpdateOutcome ApplyMeshTransform(std::uint64_t entityId, const std::array<float, 16>& model);
+    // With markGroupChanged false the draw group's content revision is left to MarkDrawGroupContentChanged, so that
+    // workers refreshing instances of one group do not all write its revision.
+    [[nodiscard]] TransformUpdateOutcome ApplyMeshTransform(std::uint64_t entityId, MeshRenderProxy& proxy, const std::array<float, 16>& model, bool markGroupChanged = true);
+    void MarkDrawGroupContentChanged(std::uint32_t groupIndex) noexcept;
     [[nodiscard]] bool ApplyGeometrySwarmTransform(std::uint64_t entityId, const std::array<float, 16>& model) noexcept;
     [[nodiscard]] bool ApplySurfaceCastTransform(std::uint64_t entityId, const std::array<float, 16>& model) noexcept;
     [[nodiscard]] bool ApplySpaceStrokeTransform(std::uint64_t entityId, const std::array<float, 16>& model) noexcept;
@@ -449,6 +457,7 @@ private:
 
     MeshProxyMap meshes_;
     std::uint64_t meshContentRevision_ = NextContentRevision();
+    std::uint64_t meshSetVersion_ = NextContentRevision();
     std::uint64_t lightContentRevision_ = NextContentRevision();
     mutable SortedMeshProxyIndex sortedMeshProxies_;
     CameraProxyMap cameras_;
