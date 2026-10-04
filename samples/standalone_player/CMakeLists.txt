@@ -18,6 +18,11 @@ target_link_libraries(kb_standalone_player
 
 add_dependencies(kb_standalone_player kb_21kb_particle_plugin)
 if(KB_BUILD_PROVIDER_MODULES_AS_DLL)
+    add_dependencies(kb_standalone_player kb_basic_lighting_plugin kb_audio_miniaudio_plugin)
+    target_compile_definitions(kb_standalone_player PRIVATE
+        KB_STANDALONE_BASIC_LIGHTING_PLUGIN_PATH="$<PATH:CMAKE_PATH,$<TARGET_FILE:kb_basic_lighting_plugin>>"
+        KB_STANDALONE_AUDIO_PLUGIN_PATH="$<PATH:CMAKE_PATH,$<TARGET_FILE:kb_audio_miniaudio_plugin>>"
+    )
     add_custom_command(TARGET kb_standalone_player POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             $<TARGET_FILE:kb_21kb_particle_plugin>
