@@ -1829,6 +1829,8 @@ if(BUILD_TESTING)
     kb_add_ecs_test_target(kb_ecs_observer_identity_tests tests/EcsObserverIdentityTests.cpp)
     kb_add_ecs_test_target(kb_ecs_cascade_owner_tests tests/EcsCascadeOwnerTests.cpp)
     kb_add_ecs_test_target(kb_ecs_native_allocation_policy_tests tests/EcsNativeAllocationPolicyTests.cpp)
+    kb_add_ecs_test_target(kb_ecs_retained_chunk_prefix_tests tests/EcsRetainedChunkPrefixTests.cpp)
+    set_tests_properties(kb_ecs_retained_chunk_prefix_tests PROPERTIES LABELS "ecs;storage;correctness")
     set_tests_properties(kb_ecs_observer_identity_tests kb_ecs_cascade_owner_tests kb_ecs_native_allocation_policy_tests
         PROPERTIES LABELS "ecs;lifecycle;correctness")
     if(MSVC)
