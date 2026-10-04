@@ -42,6 +42,11 @@ public:
     void MarkModified(SceneEntity entity) noexcept;
     // Bulk dirty signal: marks many transforms modified in one batched pass.
     void MarkModified(std::span<const SceneEntity> entities) noexcept;
+    // Whether SceneRuntime::InterpolatedTransform blends the entity's poses of the last two fixed steps. On by default for
+    // entities with a Rigidbody, CharacterController or Joint; any other entity reports its current transform unless
+    // this turns interpolation on for it.
+    void SetInterpolated(SceneEntity entity, bool interpolated);
+    [[nodiscard]] bool IsInterpolated(SceneEntity entity) const noexcept;
 
     void ForEach(ConstTransformVisitor visitor, void* context = nullptr) const;
     void ForEachMutable(MutableTransformVisitor visitor, void* context = nullptr);

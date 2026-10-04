@@ -24,4 +24,12 @@ void SceneTransforms::MarkModified(std::span<const SceneEntity> entities) noexce
     SceneTransformService::MarkModified(scene_, entities);
 }
 
+void SceneTransforms::SetInterpolated(SceneEntity entity, bool interpolated) {
+    SceneTransformService::SetInterpolated(scene_, entity, interpolated);
+}
+
+bool SceneTransforms::IsInterpolated(SceneEntity entity) const noexcept {
+    return SceneTransformService::IsInterpolated(scene_, entity);
+}
+
 } // namespace kb::scene

@@ -1150,6 +1150,8 @@ void RunSceneRuntimeFixedInterpolationTest() {
             .localPosition = kb::scene::Vec3{ 0.0F, 0.0F, 0.0F },
         },
     });
+    // Interpolation is opt-in for an entity without a physics body.
+    scene.Transforms().SetInterpolated(object.Entity(), true);
     const auto moveSystem = scene.Runtime().AddSceneSystem(std::make_unique<FixedMoveSceneSystem>(object.Entity(), kb::scene::Vec3{ 10.0F, 0.0F, 0.0F }));
 
     std::array<kb::scene::SceneEntity, 3U> otherArchetypes;
@@ -2071,7 +2073,8 @@ void RunTransformGoldenHashTest() {
         { TransformGoldenScene::Flat, 0xff5ae865064ffda3ULL },
         { TransformGoldenScene::Overlay, 0x7e94174614290a5fULL },
         { TransformGoldenScene::Observed, 0x7e94174614290a5fULL },
-        { TransformGoldenScene::Hierarchy, 0x91264c8f73872b99ULL },
+        // the scene runs fixed steps; its plain entities, not interpolated, report their current transform
+        { TransformGoldenScene::Hierarchy, 0xe762316db3f70d2aULL },
     } };
     bool matches = true;
     for (const auto& [kind, value] : expected) {

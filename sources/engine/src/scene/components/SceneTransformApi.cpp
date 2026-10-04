@@ -199,6 +199,34 @@ void SceneTransformService::MarkModified(Scene& scene, std::span<const SceneEnti
     }
 }
 
+void SceneTransformService::SetInterpolated(Scene& scene, SceneEntity entity, bool interpolated) {
+    SceneState& state = SceneAccess::State(scene);
+    if (!state.world.IsAlive(entity)) {
+        return;
+    }
+    const bool changed = interpolated ? state.interpolatedEntities.insert(entity.Id()).second : state.interpolatedEntities.erase(entity.Id()) != 0U;
+    if (changed) {
+        ++state.interpolatedEntitiesVersion;
+    }
+}
+
+bool SceneTransformService::IsInterpolated(const Scene& scene, SceneEntity entity) noexcept {
+    const SceneState& state = SceneAccess::State(scene);
+    if (!state.world.IsAlive(entity)) {
+        return false;
+    }
+    if (state.interpolatedEntities.contains(entity.Id())) {
+        return true;
+    }
+    const auto& components = state.components;
+    for (const std::uint64_t componentId : { components.RigidbodyComponentId(), components.CharacterControllerComponentId(), components.JointComponentId() }) {
+        if (componentId != 0U && state.world.NativeStorage().HasComponent(entity, componentId)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void SceneTransformService::MarkParentModified(Scene& scene, SceneEntity entity) noexcept {
     if (SceneEntityService::IsAlive(scene, entity)) {
         SceneState& state = SceneAccess::State(scene);
