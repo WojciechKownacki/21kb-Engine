@@ -1,6 +1,10 @@
 #pragma once
 
+#include "engine/ecs/ComponentId.hpp"
+
+#include <cstddef>
 #include <memory>
+#include <unordered_map>
 
 namespace kb::ecs {
 
@@ -31,6 +35,10 @@ public:
     [[nodiscard]] WorldEntityCatalog& Entities() noexcept;
     [[nodiscard]] const WorldEntityCatalog& Entities() const noexcept;
 
+    [[nodiscard]] bool HasComponentObserver(ComponentId componentId) const noexcept;
+    void RetainComponentObserver(ComponentId componentId);
+    void ReleaseComponentObserver(ComponentId componentId) noexcept;
+
     void Clear() noexcept;
 
 private:
@@ -39,6 +47,9 @@ private:
     std::unique_ptr<TagTypeRegistry> tags_;
     std::unique_ptr<RelationTypeRegistry> relations_;
     std::unique_ptr<WorldEntityCatalog> entities_;
+    // Owned behind World::registries_ so World's public object layout stays
+    // unchanged and observer contexts remain valid when a World is moved.
+    std::unordered_map<ComponentId, std::size_t> componentObservers_;
 };
 
 } // namespace kb::ecs

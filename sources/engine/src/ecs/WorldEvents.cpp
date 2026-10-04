@@ -2,9 +2,9 @@
 
 #include "ecs/events/ComponentObserverStorage.hpp"
 #include "ecs/world/WorldComponentMutator.hpp"
+#include "ecs/world/WorldRegistrySet.hpp"
 #include "engine/ecs/NativeArchetypeStorage.hpp"
 
-#include <algorithm>
 #include <array>
 #include <vector>
 
@@ -12,7 +12,7 @@ namespace kb::ecs {
 
 bool World::MirrorsValueWrites(ComponentId componentId) const noexcept {
     return config_.mirrorNativeComponentChangesToBackend
-        && (!config_.mirrorValueWritesOnlyForObservedComponents || std::find(observedComponentIds_.begin(), observedComponentIds_.end(), componentId) != observedComponentIds_.end());
+        && (!config_.mirrorValueWritesOnlyForObservedComponents || (registries_ != nullptr && registries_->HasComponentObserver(componentId)));
 }
 
 ObserverId World::ObserveComponent(
@@ -23,11 +23,15 @@ ObserverId World::ObserveComponent(
     void* context,
     RawContextFree contextFree,
     bool yieldExisting) noexcept {
-    if (config_.mirrorNativeComponentChangesToBackend && config_.mirrorValueWritesOnlyForObservedComponents && nativeStorage_ != nullptr && componentId != 0 && componentSize != 0
-        && std::find(observedComponentIds_.begin(), observedComponentIds_.end(), componentId) == observedComponentIds_.end()) {
-        // Value writes were not published while nothing observed this component: bring the backend copies up to
-        // date before the first observer can look at them (the component is not observed yet, so nothing fires).
-        try {
+    if (world_ == nullptr || registries_ == nullptr || componentId == 0U || componentSize == 0U || visitor == nullptr) {
+        if (contextFree != nullptr) contextFree(context);
+        return 0U;
+    }
+    try {
+        if (config_.mirrorNativeComponentChangesToBackend && config_.mirrorValueWritesOnlyForObservedComponents && nativeStorage_ != nullptr
+            && !registries_->HasComponentObserver(componentId)) {
+            // Value writes were not published while nothing observed this component: bring the backend copies up to
+            // date before the first observer can look at them (the component is not observed yet, so nothing fires).
             std::vector<QueryTableDispatchRecord> records;
             records.reserve(nativeStorage_->ChunkCount());
             const std::array componentIds{ componentId };
@@ -41,15 +45,16 @@ ObserverId World::ObserveComponent(
                     }
                 }
             }
-            observedComponentIds_.push_back(componentId);
-        } catch (...) {
-            if (contextFree != nullptr) {
-                contextFree(context);
-            }
-            return 0;
         }
+        // Retain before Create: yieldExisting can reenter registration or delete
+        // another receiver. The backend-owned context balances this on every
+        // creation failure and at actual destruction, including raw deletion.
+        registries_->RetainComponentObserver(componentId);
+    } catch (...) {
+        if (contextFree != nullptr) contextFree(context);
+        return 0U;
     }
-    return ComponentObserverStorage::Create(world_, componentId, componentSize, event, visitor, context, contextFree, yieldExisting);
+    return ComponentObserverStorage::Create(world_, componentId, componentSize, event, visitor, context, contextFree, yieldExisting, registries_.get());
 }
 
 void World::DestroyObserver(ObserverId observer) noexcept {
