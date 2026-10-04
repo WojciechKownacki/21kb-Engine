@@ -1835,6 +1835,29 @@ void RunSceneBulkCreateObjectsAllocationTest() {
     kb::tests::Require(created.size() == descs.size() && allocationsPerObject <= 1.0, "Creating objects in bulk took more than one heap allocation per object");
 }
 
+// One CreateObject at a time is born in its final archetype too: no chunk of the empty or transform-only archetype is
+// created and released for each object.
+void RunSceneSingleCreateObjectAllocationTest() {
+    kb::scene::Scene scene;
+    constexpr std::size_t kObjects = 20000U;
+    for (std::size_t index = 0U; index < kObjects; ++index) {
+        static_cast<void>(scene.Entities().CreateObject(kb::scene::SceneObjectDesc{}));
+    }
+    std::vector<kb::scene::SceneObject> created;
+    created.reserve(kObjects);
+    kb::tests::BeginAllocationTally();
+    for (std::size_t index = 0U; index < kObjects; ++index) {
+        kb::scene::SceneObjectDesc desc;
+        desc.transform.localPosition = kb::scene::Vec3{ static_cast<float>(index), 0.0F, 0.0F };
+        created.push_back(scene.Entities().CreateObject(desc));
+    }
+    const kb::tests::AllocationTally tally = kb::tests::EndAllocationTally();
+    const double allocationsPerObject = static_cast<double>(tally.count) / static_cast<double>(created.size());
+    std::cout << "single create allocations per object: " << allocationsPerObject << " bytes per object: " << static_cast<double>(tally.bytes) / static_cast<double>(created.size()) << '\n';
+    kb::tests::Require(allocationsPerObject <= 1.0, "Creating one object at a time took more than one heap allocation per object");
+    kb::tests::Require(scene.Transforms().Get(created.back()).localPosition.x == static_cast<float>(kObjects - 1U), "A single created object lost its transform");
+}
+
 // Golden transform state of a fixed-dt run: FNV-1a over local and world TRS, versions and the dirty flag of every
 // object (in creation order), its interpolated pose and the runtime's render-proxy transform list, after every
 // write and every Update. The expected values were recorded from the transform path before the per-row lanes.
@@ -2165,6 +2188,7 @@ void RunSceneSystemTransformSyncTests() {
     RunSceneRuntimeGrowingCrowdUpdateAllocationTest();
     RunSceneTransformSetManyMatchesPerEntityWritesTest();
     RunSceneBulkCreateObjectsAllocationTest();
+    RunSceneSingleCreateObjectAllocationTest();
 }
 
 } // namespace kb::tests

@@ -38,18 +38,23 @@ void World::BulkInitFlecsEntities(std::span<const Entity> entities, std::span<co
         throw std::runtime_error("ECS bulk create component count exceeds Flecs bulk descriptor limits");
     }
 
+    // A single entity needs no id array on the heap.
+    ecs_entity_t singleEntityId = 0;
     std::vector<ecs_entity_t> entityIds;
-    entityIds.reserve(entities.size());
-    for (Entity entity : entities) {
-        entityIds.push_back(FlecsEntityId(entity));
+    if (entities.size() == 1U) {
+        singleEntityId = FlecsEntityId(entities.front());
+    } else {
+        entityIds.reserve(entities.size());
+        for (Entity entity : entities) {
+            entityIds.push_back(FlecsEntityId(entity));
+        }
     }
 
     std::array<void*, FLECS_ID_DESC_MAX> componentData{};
     std::vector<std::vector<std::byte>> expandedComponentData;
-    expandedComponentData.reserve(components.size());
     ecs_bulk_desc_t descriptor{};
-    descriptor.entities = entityIds.data();
-    descriptor.count = static_cast<int32_t>(entityIds.size());
+    descriptor.entities = entities.size() == 1U ? &singleEntityId : entityIds.data();
+    descriptor.count = static_cast<int32_t>(entities.size());
     descriptor.data = componentData.data();
     for (std::size_t index = 0; index < components.size(); ++index) {
         const BulkComponentData& component = components[index];
@@ -61,6 +66,9 @@ void World::BulkInitFlecsEntities(std::span<const Entity> entities, std::span<co
             continue;
         }
 
+        if (expandedComponentData.empty()) {
+            expandedComponentData.reserve(components.size());
+        }
         std::vector<std::byte>& expanded = expandedComponentData.emplace_back();
         expanded.resize(entities.size() * component.componentSize);
         const auto* source = static_cast<const std::byte*>(component.data);
@@ -112,6 +120,65 @@ Entity World::CreateEntity(std::string_view name) {
     if (!ownedName.empty()) {
         ecs_set_name(world_, FlecsEntityId(entity), ownedName.c_str());
     }
+    return entity;
+}
+
+Entity World::CreateEntity(std::span<const BulkComponentView> components) {
+    ValidateStructuralChangeAllowed("CreateEntity");
+    if (world_ == nullptr || nativeStorage_ == nullptr) {
+        throw std::runtime_error("ECS world is not initialized");
+    }
+    if (components.size() >= FLECS_ID_DESC_MAX) {
+        throw std::invalid_argument("ECS create component count exceeds Flecs bulk descriptor limits");
+    }
+    // CreateEntities for one entity, with the component lists on the stack.
+    std::array<BulkComponentData, FLECS_ID_DESC_MAX> componentData{};
+    std::array<NativeComponentValue, FLECS_ID_DESC_MAX> nativeComponents{};
+    for (std::size_t index = 0; index < components.size(); ++index) {
+        const BulkComponentView& component = components[index];
+        if ((component.registerComponent == nullptr && component.registerComponentWithOptions == nullptr) || component.componentSize == 0) {
+            throw std::invalid_argument("ECS bulk create component view is incomplete");
+        }
+        if ((component.sourceCount == 0U ? component.componentCount : component.sourceCount) != 1U || component.data == nullptr) {
+            throw std::invalid_argument("ECS bulk create component counts must match entity count");
+        }
+        componentData[index] = BulkComponentData{
+            .componentId = RegisterBulkComponent(*this, component),
+            .componentSize = component.componentSize,
+            .componentCount = 1U,
+            .sourceCount = 1U,
+            .data = component.data,
+        };
+        for (std::size_t previous = 0; previous < index; ++previous) {
+            if (componentData[previous].componentId == componentData[index].componentId) {
+                throw std::invalid_argument("ECS bulk create received duplicate component data");
+            }
+        }
+        nativeComponents[index] = MakeNativeComponentValue(componentData[index]);
+    }
+
+    const Entity entity = nativeStorage_->CreateEntity(std::span<const NativeComponentValue>{ nativeComponents.data(), components.size() });
+    try {
+        if (config_.mirrorEntitiesToBackend) {
+            BulkInitFlecsEntities(std::span<const Entity>{ &entity, 1U }, std::span<const BulkComponentData>{ componentData.data(), components.size() });
+        }
+        if (config_.trackEntityCatalog && registries_ != nullptr) {
+            registries_->Entities().Add(entity);
+        }
+    } catch (...) {
+        if (config_.trackEntityCatalog && registries_ != nullptr) {
+            registries_->Entities().Remove(entity);
+        }
+        if (nativeStorage_->IsAlive(entity)) {
+            nativeStorage_->DestroyEntity(entity);
+        }
+        if (ecs_is_alive(world_, FlecsEntityId(entity))) {
+            ecs_delete(world_, FlecsEntityId(entity));
+        }
+        throw;
+    }
+
+    InvalidateQueryPlansForArchetypeChange(nullptr, EntityArchetype(entity));
     return entity;
 }
 

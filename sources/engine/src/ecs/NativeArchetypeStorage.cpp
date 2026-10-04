@@ -1876,7 +1876,8 @@ public:
     }
 
     [[nodiscard]] Entity CreateEntity(std::span<const NativeComponentValue> components) {
-        const std::vector<NativeComponentType> types = NormalizeTypes(components);
+        std::vector<NativeComponentType>& types = createTypesScratch_;
+        NormalizeTypesInto(components, types);
         const std::size_t tableIndex = FindOrCreateTable(types);
         ArchetypeTable& table = tables_[tableIndex];
         EnsureChunkCommitBudget(table.NewChunkAcquiresForAppend(1U));
@@ -3750,6 +3751,7 @@ private:
     std::unordered_map<std::size_t, BulkMigrationGroup> migrationGroupsScratch_;
     std::vector<Entity> adoptedEntitiesScratch_;
     std::vector<BulkAppendRange> appendRangesScratch_;
+    std::vector<NativeComponentType> createTypesScratch_;
     std::vector<EntityLocation> targetLocationsScratch_;
     std::vector<std::pair<Entity, EntityLocation>> movedEntitiesScratch_;
     std::vector<std::size_t> removedRowsScratch_;

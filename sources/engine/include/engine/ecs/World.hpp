@@ -80,6 +80,8 @@ public:
     template <typename T>
     [[nodiscard]] static BulkComponentView MakeBulkComponentBroadcastView(const T& component, ComponentRegistrationOptions options) noexcept;
 
+    // One entity created straight in the archetype of `components` (one component per view).
+    [[nodiscard]] Entity CreateEntity(std::span<const BulkComponentView> components);
     [[nodiscard]] std::vector<Entity> CreateEntities(std::size_t count, std::span<const BulkComponentView> components);
     [[nodiscard]] std::vector<Entity> CreateEntitiesNativeOnly(std::size_t count, std::span<const BulkComponentView> components);
     void CreateEntitiesInto(std::vector<Entity>& output, std::size_t count, std::span<const BulkComponentView> components);

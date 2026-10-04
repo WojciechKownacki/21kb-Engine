@@ -29,7 +29,8 @@ namespace {
 
 void RunEntityCreationBudgetRollbackTest() {
     kb::ecs::WorldConfig config;
-    config.maxNativeStorageCommittedPayloadBytes = kb::ecs::ChunkPayloadBytes(config.chunkSizeProfile);
+    // An object is born in its final archetype and needs one chunk: a budget below one chunk rejects it.
+    config.maxNativeStorageCommittedPayloadBytes = kb::ecs::ChunkPayloadBytes(config.chunkSizeProfile) / 2U;
     kb::scene::Scene scene{ config };
     const auto originalCount = scene.Entities().Count();
     const auto originalRoots = scene.Hierarchy().RootEntities();
