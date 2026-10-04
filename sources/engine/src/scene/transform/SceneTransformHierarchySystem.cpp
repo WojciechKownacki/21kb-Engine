@@ -2,8 +2,11 @@
 
 #include "engine/ecs/Query.hpp"
 #include "engine/ecs/UnsafeHotQuery.hpp"
+#include "engine/scene/CameraComponent.hpp"
+#include "engine/scene/LightComponent.hpp"
 #include "ecs/GeometricReserve.hpp"
 #include "scene/components/SceneComponentAccess.hpp"
+#include "scene/components/SceneComponentIteration.hpp"
 #include "scene/components/SceneComponentRegistry.hpp"
 #include "scene/components/SceneComponentStorageAccess.hpp"
 #include "scene/SceneRenderProxyComponentMask.hpp"
@@ -553,60 +556,6 @@ void AddTransformCacheEntryFromHotBatch(
     return children == state.hierarchyChildren.end() ? std::span<const SceneEntity>{} : std::span<const SceneEntity>{ children->second };
 }
 
-[[nodiscard]] WorldTransformAffine3x4 BuildWorldAffine3x4(const TransformComponent& transform) noexcept {
-    if (transform.worldRotation.x == 0.0F &&
-        transform.worldRotation.y == 0.0F &&
-        transform.worldRotation.z == 0.0F &&
-        transform.worldRotation.w == 1.0F) {
-        WorldTransformAffine3x4 affine;
-        affine.values[0] = transform.worldScale.x;
-        affine.values[1] = 0.0F;
-        affine.values[2] = 0.0F;
-        affine.values[3] = 0.0F;
-        affine.values[4] = transform.worldScale.y;
-        affine.values[5] = 0.0F;
-        affine.values[6] = 0.0F;
-        affine.values[7] = 0.0F;
-        affine.values[8] = transform.worldScale.z;
-        affine.values[9] = transform.worldPosition.x;
-        affine.values[10] = transform.worldPosition.y;
-        affine.values[11] = transform.worldPosition.z;
-        return affine;
-    }
-
-    const float x = transform.worldRotation.x;
-    const float y = transform.worldRotation.y;
-    const float z = transform.worldRotation.z;
-    const float w = transform.worldRotation.w;
-    const float xx = x * x;
-    const float yy = y * y;
-    const float zz = z * z;
-    const float xy = x * y;
-    const float xz = x * z;
-    const float yz = y * z;
-    const float wx = w * x;
-    const float wy = w * y;
-    const float wz = w * z;
-    const float sx = transform.worldScale.x;
-    const float sy = transform.worldScale.y;
-    const float sz = transform.worldScale.z;
-
-    WorldTransformAffine3x4 affine;
-    affine.values[0] = (1.0F - 2.0F * (yy + zz)) * sx;
-    affine.values[1] = (2.0F * (xy + wz)) * sx;
-    affine.values[2] = (2.0F * (xz - wy)) * sx;
-    affine.values[3] = (2.0F * (xy - wz)) * sy;
-    affine.values[4] = (1.0F - 2.0F * (xx + zz)) * sy;
-    affine.values[5] = (2.0F * (yz + wx)) * sy;
-    affine.values[6] = (2.0F * (xz + wy)) * sz;
-    affine.values[7] = (2.0F * (yz - wx)) * sz;
-    affine.values[8] = (1.0F - 2.0F * (xx + yy)) * sz;
-    affine.values[9] = transform.worldPosition.x;
-    affine.values[10] = transform.worldPosition.y;
-    affine.values[11] = transform.worldPosition.z;
-    return affine;
-}
-
 void StoreTransformScratch(SceneState& state, SceneEntity entity, const TransformComponent& transform, bool dirty) {
     const std::uint32_t denseIndex = kb::ecs::GeneratedEntityIndex(entity);
     if (denseIndex != kb::ecs::kInvalidGeneratedEntityIndex) {
@@ -639,122 +588,80 @@ void EnsureWorkerPool(SceneState& state) {
     }
 }
 
-template <typename TransformResolver>
-void CacheRenderProxyUpdatesAfterTransformsWithResolver(
-    SceneState& state,
-    std::span<const SceneEntity> updatedEntities,
-    TransformResolver resolveTransform) {
-    if (updatedEntities.empty()) {
+// The render-proxy lists are derived from these bits when they are read; recording an update is all the sync does.
+void RecordUpdatedTransform(SceneState& state, SceneEntity entity) {
+    const std::uint32_t denseIndex = kb::ecs::GeneratedEntityIndex(entity);
+    if (denseIndex == kb::ecs::kInvalidGeneratedEntityIndex || denseIndex / 64U >= state.transformUpdatedBits.size()) {
+        state.transformUpdatedSparseEntities.push_back(entity);
         return;
     }
-
-    const std::size_t writeBegin = state.transformRenderProxyUpdateEntities.size();
-    state.transformRenderProxyUpdateEntities.resize(writeBegin + updatedEntities.size());
-    state.transformRenderProxyWorldAffine3x4.resize(writeBegin + updatedEntities.size());
-    const auto writeProxy = [&state, updatedEntities, writeBegin, &resolveTransform](std::size_t offset) -> bool {
-        const SceneEntity entity = updatedEntities[offset];
-        state.transformRenderProxyUpdateEntities[writeBegin + offset] = entity;
-        if (const TransformComponent* transform = resolveTransform(entity, offset); transform != nullptr) {
-            WorldTransformAffine3x4& affine = state.transformRenderProxyWorldAffine3x4[writeBegin + offset];
-            if (SceneTransformRootHotKernel::CanWriteIdentityAffineFastPath(*transform)) {
-                SceneTransformRootHotKernel::WriteIdentityAffine(*transform, affine);
-                return true;
-            }
-            affine = BuildWorldAffine3x4(*transform);
-        } else {
-            state.transformRenderProxyWorldAffine3x4[writeBegin + offset] = WorldTransformAffine3x4{};
-        }
-        return false;
-    };
-    if (updatedEntities.size() <= kTransformBatchGrainSize) {
-        std::size_t identityAffineFastPathCount = 0U;
-        for (std::size_t offset = 0; offset < updatedEntities.size(); ++offset) {
-            identityAffineFastPathCount += writeProxy(offset) ? 1U : 0U;
-        }
-        state.lastTransformRenderProxyIdentityAffineFastPathCount += identityAffineFastPathCount;
-    } else {
-        EnsureWorkerPool(state);
-        const std::size_t chunkCount = (updatedEntities.size() + kTransformBatchGrainSize - 1U) / kTransformBatchGrainSize;
-        state.transformRenderProxyIdentityAffineChunkCountsScratch.clear();
-        state.transformRenderProxyIdentityAffineChunkCountsScratch.resize(chunkCount);
-        state.transformWorkerPool->ParallelForChunks(updatedEntities.size(), kTransformBatchGrainSize, [&state, &writeProxy](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk& chunk) {
-            std::size_t identityAffineFastPathCount = 0U;
-            for (std::size_t offset = 0; offset < chunk.count; ++offset) {
-                identityAffineFastPathCount += writeProxy(chunk.begin + offset) ? 1U : 0U;
-            }
-            state.transformRenderProxyIdentityAffineChunkCountsScratch[chunk.index] = identityAffineFastPathCount;
-        });
-        for (const std::size_t identityAffineFastPathCount : state.transformRenderProxyIdentityAffineChunkCountsScratch) {
-            state.lastTransformRenderProxyIdentityAffineFastPathCount += identityAffineFastPathCount;
-        }
-    }
-
-    kb::ecs::ReserveGeometric(state.transformRenderProxyMeshRendererIndices, state.transformRenderProxyMeshRendererIndices.size() + updatedEntities.size());
-    kb::ecs::ReserveGeometric(state.transformRenderProxyVisibleMeshRendererIndices, state.transformRenderProxyVisibleMeshRendererIndices.size() + updatedEntities.size());
-    kb::ecs::ReserveGeometric(state.transformRenderProxyCameraIndices, state.transformRenderProxyCameraIndices.size() + updatedEntities.size());
-    kb::ecs::ReserveGeometric(state.transformRenderProxyLightIndices, state.transformRenderProxyLightIndices.size() + updatedEntities.size());
-    // Reading the component masks is the bulk of this pass and is read-only; the shared lists below are only touched for
-    // the (usually few) entities that carry a render component, so the masks are gathered in parallel first.
-    thread_local std::vector<std::uint8_t> gatheredMasks;
-    const bool gatherInParallel = updatedEntities.size() > kTransformBatchGrainSize;
-    if (gatherInParallel) {
-        gatheredMasks.resize(updatedEntities.size());
-        std::vector<std::uint8_t>& masks = gatheredMasks; // the workers must write this thread's buffer, not their own
-        state.transformWorkerPool->ParallelForChunks(updatedEntities.size(), kTransformBatchGrainSize, [&state, updatedEntities, &masks](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk& chunk) {
-            for (std::size_t offset = chunk.begin; offset < chunk.begin + chunk.count; ++offset) {
-                masks[offset] = SceneRenderProxyComponentMaskOf(state, updatedEntities[offset]);
-            }
-        });
-    }
-    for (std::size_t offset = 0; offset < updatedEntities.size(); ++offset) {
-        const std::size_t proxyIndex = writeBegin + offset;
-        const SceneEntity entity = updatedEntities[offset];
-        const std::uint8_t componentMask = gatherInParallel ? gatheredMasks[offset] : SceneRenderProxyComponentMaskOf(state, entity);
-        if (componentMask == 0U) {
-            continue;
-        }
-        if (SceneRenderProxyMaskHas(componentMask, SceneRenderProxyComponentMask::MeshRenderer)) {
-            state.transformRenderProxyMeshRendererIndices.push_back(proxyIndex);
-            if (!SceneRenderProxyMaskHas(componentMask, SceneRenderProxyComponentMask::Hidden)) {
-                state.transformRenderProxyVisibleMeshRendererIndices.push_back(proxyIndex);
-            }
-        }
-        if (SceneRenderProxyMaskHas(componentMask, SceneRenderProxyComponentMask::Camera)) {
-            state.transformRenderProxyCameraIndices.push_back(proxyIndex);
-            MarkSceneRenderProxyDirty(state, entity);
-        }
-        if (SceneRenderProxyMaskHas(componentMask, SceneRenderProxyComponentMask::Light)) {
-            state.transformRenderProxyLightIndices.push_back(proxyIndex);
-            MarkSceneRenderProxyDirty(state, entity);
-        }
-    }
+    state.transformUpdatedBits[denseIndex / 64U] |= std::uint64_t{ 1U } << (denseIndex % 64U);
 }
 
-void CacheRenderProxyUpdatesAfterTransforms(
-    SceneState& state,
-    std::span<const SceneEntity> updatedEntities,
-    std::span<const TransformComponent> updatedTransforms) {
-    CacheRenderProxyUpdatesAfterTransformsWithResolver(
-        state,
-        updatedEntities,
-        [updatedTransforms](SceneEntity, std::size_t offset) -> const TransformComponent* {
-            if (offset < updatedTransforms.size()) {
-                return &updatedTransforms[offset];
-            }
-            return nullptr;
-        });
+[[nodiscard]] bool IsTransformUpdated(const SceneState& state, SceneEntity entity) noexcept {
+    const std::uint32_t denseIndex = kb::ecs::GeneratedEntityIndex(entity);
+    if (denseIndex == kb::ecs::kInvalidGeneratedEntityIndex || denseIndex / 64U >= state.transformUpdatedBits.size()) {
+        return std::ranges::find(state.transformUpdatedSparseEntities, entity) != state.transformUpdatedSparseEntities.end();
+    }
+    return (state.transformUpdatedBits[denseIndex / 64U] >> (denseIndex % 64U) & 1U) != 0U;
 }
 
-void CacheRenderProxyUpdatesAfterTransforms(
-    SceneState& state,
-    const TransformValueCache& transformValues,
-    std::span<const SceneEntity> updatedEntities) {
-    CacheRenderProxyUpdatesAfterTransformsWithResolver(
-        state,
-        updatedEntities,
-        [&transformValues](SceneEntity entity, std::size_t) -> const TransformComponent* {
-            return transformValues.Find(entity);
-        });
+// Records a worker's run of composed rows: consecutive entities share a word, which is published once.
+class UpdatedTransformBitWriter {
+public:
+    explicit UpdatedTransformBitWriter(SceneState& state, std::mutex& sparseMutex) noexcept : state_(state), sparseMutex_(sparseMutex) {}
+    UpdatedTransformBitWriter(const UpdatedTransformBitWriter&) = delete;
+    UpdatedTransformBitWriter& operator=(const UpdatedTransformBitWriter&) = delete;
+    ~UpdatedTransformBitWriter() { Flush(); }
+
+    void Record(SceneEntity entity) {
+        const std::uint32_t denseIndex = kb::ecs::GeneratedEntityIndex(entity);
+        if (denseIndex == kb::ecs::kInvalidGeneratedEntityIndex || denseIndex / 64U >= state_.transformUpdatedBits.size()) {
+            const std::lock_guard lock{ sparseMutex_ };
+            state_.transformUpdatedSparseEntities.push_back(entity);
+            return;
+        }
+        if (denseIndex / 64U != word_) {
+            Flush();
+            word_ = denseIndex / 64U;
+        }
+        bits_ |= std::uint64_t{ 1U } << (denseIndex % 64U);
+    }
+
+private:
+    void Flush() noexcept {
+        if (bits_ != 0U) {
+            std::atomic_ref<std::uint64_t>{ state_.transformUpdatedBits[word_] }.fetch_or(bits_, std::memory_order_relaxed);
+            bits_ = 0U;
+        }
+    }
+
+    SceneState& state_;
+    std::mutex& sparseMutex_;
+    std::size_t word_ = 0U;
+    std::uint64_t bits_ = 0U;
+};
+
+void AppendRenderProxyListEntry(SceneState& state, SceneEntity entity, const TransformComponent& transform) {
+    state.transformRenderProxyUpdateEntities.push_back(entity);
+    state.transformRenderProxyWorldAffine3x4.push_back(BuildWorldAffine3x4(transform));
+    state.lastTransformRenderProxyIdentityAffineFastPathCount += SceneTransformRootHotKernel::CanWriteIdentityAffineFastPath(transform) ? 1U : 0U;
+}
+
+// Cameras and lights composed this frame are queued for the renderer's proxy updates, as the render-proxy lists
+// did when they were built by the sync.
+void PublishRenderProxyTransformUpdates(SceneState& state) {
+    state.transformRenderProxyListsStale = true;
+    SceneComponentIteration::ForEachCamera(state.world, state.components.TransformComponentId(), state.components.CameraComponentId(),
+        state.cameraIterationQuery, [](SceneEntity entity, const TransformComponent&, const CameraComponent&, void* context) {
+            SceneState& state = *static_cast<SceneState*>(context);
+            if (IsTransformUpdated(state, entity)) MarkSceneRenderProxyDirty(state, entity);
+        }, &state);
+    SceneComponentIteration::ForEachLight(state.world, state.components.TransformComponentId(), state.components.LightComponentId(),
+        state.lightIterationQuery, [](SceneEntity entity, const TransformComponent&, const LightComponent&, void* context) {
+            SceneState& state = *static_cast<SceneState*>(context);
+            if (IsTransformUpdated(state, entity)) MarkSceneRenderProxyDirty(state, entity);
+        }, &state);
 }
 
 void ResetPropagationCursor(SceneState& state) noexcept {
@@ -1269,13 +1176,14 @@ void RunHierarchyDirtyFrontier(
         std::atomic_size_t updatedCount{ 0U };
         std::atomic_size_t rootFastPathCount{ 0U };
         std::mutex linkedRowsMutex;
+        std::mutex sparseUpdatedMutex;
         const kb::ecs::UnsafeHotDirtyRangeDispatchStats dispatchStats = hotQuery.ForEachDirtyMutableRangeParallel<0>(
             nativeStorage,
             kTransformBatchGrainSize,
             *state.transformWorkerPool,
             0U,
             true,
-            [&state, rootsOnly, &inspectedCount, &updatedCount, &rootFastPathCount, &linkedRows, &linkedRowsMutex](
+            [&state, rootsOnly, &inspectedCount, &updatedCount, &rootFastPathCount, &linkedRows, &linkedRowsMutex, &sparseUpdatedMutex](
                 kb::ecs::UnsafeHotMutableChunk<TransformComponent>& chunk,
                 std::size_t dirtyCount,
                 kb::ecs::WorkerContext workerContext) {
@@ -1300,6 +1208,7 @@ void RunHierarchyDirtyFrontier(
 
                 const std::size_t writeBegin = updatedCount.fetch_add(localUpdatedCount, std::memory_order_relaxed);
                 std::size_t writeOffset = 0U;
+                UpdatedTransformBitWriter updatedBits{ state, sparseUpdatedMutex };
                 for (std::size_t row = 0U; row < chunk.Count(); ++row) {
                     TransformComponent& transform = transforms[row];
                     if (transform.worldDirty) {
@@ -1317,6 +1226,7 @@ void RunHierarchyDirtyFrontier(
                         state.transformHierarchyUpdatedEntitiesScratch[writeBegin + writeOffset] = chunk.EntityAt(row);
                         state.transformHierarchyUpdatedTransformsScratch[writeBegin + writeOffset] = transform;
                         ++writeOffset;
+                        updatedBits.Record(chunk.EntityAt(row));
                     }
                 }
                 rootFastPathCount.fetch_add(localRootFastPathCount, std::memory_order_relaxed);
@@ -1362,6 +1272,7 @@ void RunHierarchyDirtyFrontier(
                     state.lastTransformHierarchyInspectedCount += rootsOnly ? 0U : 1U;
                     state.transformHierarchyUpdatedEntitiesScratch.push_back(chunk.EntityAt(row));
                     state.transformHierarchyUpdatedTransformsScratch.push_back(transform);
+                    RecordUpdatedTransform(state, chunk.EntityAt(row));
                 }
             }));
     }
@@ -1391,6 +1302,7 @@ void RunHierarchyDirtyFrontier(
                 state.lastTransformHierarchyStaticLocalRotationFastPathCount += entry.staticLocalRotationFastPath;
                 state.transformHierarchyUpdatedEntitiesScratch.push_back(linked.entity);
                 state.transformHierarchyUpdatedTransformsScratch.push_back(*linked.transform);
+                RecordUpdatedTransform(state, linked.entity);
             }
             state.lastTransformHierarchyInspectedCount += linkedRows.size();
             state.lastTransformHierarchyUpdatedCount += linkedRows.size();
@@ -1425,10 +1337,9 @@ void RunHierarchyDirtyFrontier(
         }
     }
     state.lastTransformHierarchyBackendMarkNanoseconds = Nanoseconds(Clock::now() - backendMarkStart);
-    CacheRenderProxyUpdatesAfterTransforms(
-        state,
-        state.transformHierarchyUpdatedEntitiesScratch,
-        state.transformHierarchyUpdatedTransformsScratch);
+    if (!state.transformHierarchyUpdatedEntitiesScratch.empty()) {
+        PublishRenderProxyTransformUpdates(state);
+    }
     if (linkedRowsLeft) {
         // Parents moved with their children, or rows were queued without a dirty write: the generic lanes finish the
         // linked rows from the frontier after the rows composed here.
@@ -1443,6 +1354,57 @@ void RunHierarchyDirtyFrontier(
 
 void EnsureSceneTransformWorkerPool(SceneState& state) {
     EnsureWorkerPool(state);
+}
+
+void ResetSceneTransformRenderProxyUpdates(SceneState& state) noexcept {
+    std::ranges::fill(state.transformUpdatedBits, 0U);
+    state.transformUpdatedSparseEntities.clear();
+    state.transformRenderProxyListsStale = true;
+}
+
+void EnsureSceneTransformRenderProxyLists(const SceneState& constState) {
+    if (!constState.transformRenderProxyListsStale) {
+        return;
+    }
+    // A derived view, built on the first read after the transforms changed: the scene state is not otherwise changed.
+    SceneState& state = const_cast<SceneState&>(constState);
+    state.transformRenderProxyListsStale = false;
+    state.transformRenderProxyUpdateEntities.clear();
+    state.transformRenderProxyWorldAffine3x4.clear();
+    state.transformRenderProxyMeshRendererIndices.clear();
+    state.transformRenderProxyVisibleMeshRendererIndices.clear();
+    state.transformRenderProxyCameraIndices.clear();
+    state.transformRenderProxyLightIndices.clear();
+    state.lastTransformRenderProxyIdentityAffineFastPathCount = 0U;
+    SceneComponentIteration::ForEachTransform(state.world, state.components.TransformComponentId(),
+        [](SceneEntity entity, const TransformComponent& transform, void* context) {
+            SceneState& state = *static_cast<SceneState*>(context);
+            const std::uint32_t denseIndex = kb::ecs::GeneratedEntityIndex(entity);
+            if (denseIndex != kb::ecs::kInvalidGeneratedEntityIndex && denseIndex / 64U < state.transformUpdatedBits.size() &&
+                IsTransformUpdated(state, entity)) {
+                AppendRenderProxyListEntry(state, entity, transform);
+            }
+        }, &state);
+    for (const SceneEntity entity : state.transformUpdatedSparseEntities) {
+        if (const TransformComponent* transform = state.componentStorage.Transforms().TryGet(entity); transform != nullptr) {
+            AppendRenderProxyListEntry(state, entity, *transform);
+        }
+    }
+    for (std::size_t proxyIndex = 0U; proxyIndex < state.transformRenderProxyUpdateEntities.size(); ++proxyIndex) {
+        const std::uint8_t componentMask = SceneRenderProxyComponentMaskOf(state, state.transformRenderProxyUpdateEntities[proxyIndex]);
+        if (SceneRenderProxyMaskHas(componentMask, SceneRenderProxyComponentMask::MeshRenderer)) {
+            state.transformRenderProxyMeshRendererIndices.push_back(proxyIndex);
+            if (!SceneRenderProxyMaskHas(componentMask, SceneRenderProxyComponentMask::Hidden)) {
+                state.transformRenderProxyVisibleMeshRendererIndices.push_back(proxyIndex);
+            }
+        }
+        if (SceneRenderProxyMaskHas(componentMask, SceneRenderProxyComponentMask::Camera)) {
+            state.transformRenderProxyCameraIndices.push_back(proxyIndex);
+        }
+        if (SceneRenderProxyMaskHas(componentMask, SceneRenderProxyComponentMask::Light)) {
+            state.transformRenderProxyLightIndices.push_back(proxyIndex);
+        }
+    }
 }
 
 void SceneTransformHierarchySystem::Update(SceneState& state) const {
@@ -1512,6 +1474,9 @@ void SceneTransformHierarchySystem::Update(SceneState& state) const {
     state.lastTransformHierarchyBudgetExhausted = false;
     state.transformHierarchyUpdatedEntitiesScratch.clear();
     state.transformHierarchyUpdatedTransformsScratch.clear();
+    if (const std::size_t words = (state.denseHierarchyParents.size() + 63U) / 64U; state.transformUpdatedBits.size() < words) {
+        state.transformUpdatedBits.resize(words, 0U);
+    }
     if (RunNativeDirtyRanges(state, updateStart, profileTimings, topologyChanged)) {
         return;
     }
@@ -1522,6 +1487,10 @@ void SceneTransformHierarchySystem::Update(SceneState& state) const {
     // Rows the native lane already composed stay first; the generic lanes append the linked rows they update.
     const std::size_t nativeUpdatedCount = updatedEntities.size();
     const auto genericUpdated = [&updatedEntities, nativeUpdatedCount] { return std::span<const SceneEntity>{ updatedEntities }.subspan(nativeUpdatedCount); };
+    const auto recordGenericUpdates = [&state, &genericUpdated] {
+        for (const SceneEntity entity : genericUpdated()) RecordUpdatedTransform(state, entity);
+        if (!genericUpdated().empty()) PublishRenderProxyTransformUpdates(state);
+    };
     const std::size_t budgetLimit = state.transformPropagationBudget.maxInspectedEntitiesPerSync;
 
     if (!state.transformDirtyFrontierEntities.empty() && budgetLimit == 0U && state.transformPropagationCursorLevel == 0U && state.transformPropagationCursorOffset == 0U) {
@@ -1550,7 +1519,7 @@ void SceneTransformHierarchySystem::Update(SceneState& state) const {
             state.lastTransformHierarchyParallelFlushChunkCount = flushStats.parallelFlushChunkCount;
             state.lastTransformHierarchyParallelFlushEntityCount = flushStats.parallelFlushEntityCount;
             state.lastTransformHierarchyParallelFlushWorkerCount = flushStats.parallelFlushWorkerCount;
-            CacheRenderProxyUpdatesAfterTransforms(state, transformValues, genericUpdated());
+            recordGenericUpdates();
             ClearSceneTransformDirtyFrontier(state);
             PrintRootSyncProfile(state, profileTimings, updatedEntities.size(), updateStart);
             return;
@@ -1586,7 +1555,7 @@ void SceneTransformHierarchySystem::Update(SceneState& state) const {
         state.lastTransformHierarchyParallelFlushChunkCount = flushStats.parallelFlushChunkCount;
         state.lastTransformHierarchyParallelFlushEntityCount = flushStats.parallelFlushEntityCount;
         state.lastTransformHierarchyParallelFlushWorkerCount = flushStats.parallelFlushWorkerCount;
-        CacheRenderProxyUpdatesAfterTransforms(state, transformValues, genericUpdated());
+        recordGenericUpdates();
         ClearSceneTransformDirtyFrontier(state);
         PrintRootSyncProfile(state, profileTimings, updatedEntities.size(), updateStart);
         return;
@@ -1670,7 +1639,7 @@ void SceneTransformHierarchySystem::Update(SceneState& state) const {
     state.lastTransformHierarchyParallelFlushChunkCount = flushStats.parallelFlushChunkCount;
     state.lastTransformHierarchyParallelFlushEntityCount = flushStats.parallelFlushEntityCount;
     state.lastTransformHierarchyParallelFlushWorkerCount = flushStats.parallelFlushWorkerCount;
-    CacheRenderProxyUpdatesAfterTransforms(state, transformValues, genericUpdated());
+    recordGenericUpdates();
     ClearSceneTransformDirtyFrontier(state);
     PrintRootSyncProfile(state, profileTimings, updatedEntities.size(), updateStart);
 }

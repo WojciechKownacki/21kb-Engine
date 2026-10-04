@@ -375,6 +375,7 @@ const kb::ecs::SystemSchedulerTrace& SceneRuntimeService::LastEcsProfilerTrace(c
 
 SceneRuntimeHotPathReport SceneRuntimeService::HotPathReport(const Scene& scene) noexcept {
     const SceneState& state = SceneAccess::State(scene);
+    EnsureSceneTransformRenderProxyLists(state);
     return SceneRuntimeHotPathReport{
         .transformHierarchyUsesBatchPath = true,
         .transformHierarchyUsesKernelContract = true,
@@ -447,10 +448,12 @@ std::optional<TransformComponent> SceneRuntimeService::InterpolatedTransform(con
 }
 
 std::span<const SceneEntity> SceneRuntimeService::TransformRenderProxyUpdateEntities(const Scene& scene) noexcept {
+    EnsureSceneTransformRenderProxyLists(SceneAccess::State(scene));
     return SceneAccess::State(scene).transformRenderProxyUpdateEntities;
 }
 
 std::span<const WorldTransformAffine3x4> SceneRuntimeService::TransformRenderProxyWorldAffine3x4(const Scene& scene) noexcept {
+    EnsureSceneTransformRenderProxyLists(SceneAccess::State(scene));
     return SceneAccess::State(scene).transformRenderProxyWorldAffine3x4;
 }
 
@@ -492,15 +495,9 @@ bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
     if (state.mode == SceneMode::PrefabPrivate) {
         state.lastFixedStepCount = 0U;
         state.fixedInterpolationAlpha = 0.0F;
-        state.transformRenderProxyUpdateEntities.clear();
-        state.transformRenderProxyWorldAffine3x4.clear();
-        state.transformRenderProxyMeshRendererIndices.clear();
-        state.transformRenderProxyVisibleMeshRendererIndices.clear();
-        state.transformRenderProxyCameraIndices.clear();
-        state.transformRenderProxyLightIndices.clear();
+        ResetSceneTransformRenderProxyUpdates(state);
         state.renderProxyUpdateEntities.clear();
         state.renderProxyUpdateEntityIds.clear();
-        state.lastTransformRenderProxyIdentityAffineFastPathCount = 0U;
         synchronizeTransforms();
         PublishRuntimeSnapshot(state);
         state.lastRuntimeUpdateNanoseconds = nanosecondsSince(updateStart);
@@ -509,21 +506,9 @@ bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
 
     const SceneRuntimeFixedStepSettings fixed = state.fixedStepSettings;
     state.lastFixedStepCount = 0U;
-    state.transformRenderProxyUpdateEntities.clear();
-    state.transformRenderProxyWorldAffine3x4.clear();
-    state.transformRenderProxyMeshRendererIndices.clear();
-    state.transformRenderProxyVisibleMeshRendererIndices.clear();
-    state.transformRenderProxyCameraIndices.clear();
-    state.transformRenderProxyLightIndices.clear();
+    ResetSceneTransformRenderProxyUpdates(state);
     state.renderProxyUpdateEntities.clear();
     state.renderProxyUpdateEntityIds.clear();
-    state.lastTransformRenderProxyIdentityAffineFastPathCount = 0U;
-    kb::ecs::ReserveGeometric(state.transformRenderProxyUpdateEntities, HierarchyTrackedSlotCount(state));
-    kb::ecs::ReserveGeometric(state.transformRenderProxyWorldAffine3x4, HierarchyTrackedSlotCount(state));
-    kb::ecs::ReserveGeometric(state.transformRenderProxyMeshRendererIndices, HierarchyTrackedSlotCount(state));
-    kb::ecs::ReserveGeometric(state.transformRenderProxyVisibleMeshRendererIndices, HierarchyTrackedSlotCount(state));
-    kb::ecs::ReserveGeometric(state.transformRenderProxyCameraIndices, HierarchyTrackedSlotCount(state));
-    kb::ecs::ReserveGeometric(state.transformRenderProxyLightIndices, HierarchyTrackedSlotCount(state));
     kb::ecs::ReserveGeometric(state.renderProxyUpdateEntities, HierarchyTrackedSlotCount(state));
     state.renderProxyUpdateEntityIds.reserve(HierarchyTrackedSlotCount(state));
     kb::ecs::ReserveGeometric(state.renderProxyDirtyTraversalScratch, HierarchyTrackedSlotCount(state));

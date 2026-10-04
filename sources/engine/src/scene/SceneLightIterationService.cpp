@@ -1,6 +1,7 @@
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneIterationService.hpp"
 #include "scene/SceneState.hpp"
+#include "scene/transform/SceneTransformHierarchySystem.hpp"
 #include "scene/components/SceneComponentIteration.hpp"
 
 #include <algorithm>
@@ -15,6 +16,7 @@ void ForEachUpdatedLightRenderProxyImpl(const Scene& scene, LightRenderProxyVisi
     }
 
     const SceneState& state = SceneAccess::State(scene);
+    EnsureSceneTransformRenderProxyLists(state);
     for (const std::size_t proxyIndex : state.transformRenderProxyLightIndices) {
         if (proxyIndex >= state.transformRenderProxyUpdateEntities.size() ||
             proxyIndex >= state.transformRenderProxyWorldAffine3x4.size()) {

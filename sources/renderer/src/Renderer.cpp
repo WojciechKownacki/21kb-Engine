@@ -950,30 +950,9 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
             renderProxyUpdatesSynchronized = true;
         }
         if (desc.transformAffineSync) {
-            const std::span<const kb::scene::SceneEntity> affineEntities = scene.Runtime().TransformRenderProxyUpdateEntities();
-            const std::span<const kb::scene::WorldTransformAffine3x4> affines = scene.Runtime().TransformRenderProxyWorldAffine3x4();
-            // The columnar worker path is amortized at the benchmark's
-            // 5k-instance scale; below it the serial path still wins.
-            constexpr std::size_t kParallelAffineSyncThreshold = 4U * 1024U;
-            if (affineEntities.size() >= kParallelAffineSyncThreshold) {
-                std::ostringstream message;
-                message << "SubmitSceneToViewport SyncMeshWorldAffinesParallel begin count=" << affineEntities.size();
-                WriteRendererBreadcrumb("renderer", message.str());
-                if (renderSyncWorkerPool_ == nullptr) {
-                    renderSyncWorkerPool_ = std::make_unique<kb::ecs::WorkerPool>(kb::ecs::WorkerPoolConfig{});
-                }
-                if (!renderSyncWorkerPool_->Running()) {
-                    renderSyncWorkerPool_->Start(kb::ecs::WorkerPoolConfig{});
-                }
-                renderSceneSynchronizer_->SyncMeshWorldAffinesParallel(renderScene, affineEntities, affines, *renderSyncWorkerPool_);
-                WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport SyncMeshWorldAffinesParallel end");
-            } else {
-                std::ostringstream message;
-                message << "SubmitSceneToViewport SyncMeshWorldAffines begin count=" << affineEntities.size();
-                WriteRendererBreadcrumb("renderer", message.str());
-                renderSceneSynchronizer_->SyncMeshWorldAffines(renderScene, affineEntities, affines);
-                WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport SyncMeshWorldAffines end");
-            }
+            WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport PullTransforms begin");
+            renderSceneSynchronizer_->PullTransforms(scene, renderScene);
+            WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport PullTransforms end");
         }
         if (!desc.dirtySceneEntityIds.empty()) {
             std::ostringstream message;
@@ -996,10 +975,9 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
             renderProxyUpdatesSynchronized = true;
             WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport SyncRenderProxyUpdates end");
         }
-        if (desc.transformAffineSync) {
-            const bool primaryCameraChanged = renderProxyUpdatesSynchronized ||
-                scene.Runtime().HotPathReport().transformRenderProxyCameraCount != 0U;
-            renderSceneSynchronizer_->SyncFacingPanelUpdates(scene, renderScene, primaryCameraChanged);
+        if (desc.transformAffineSync && renderProxyUpdatesSynchronized) {
+            // The pull oriented the facing panels; proxy updates may since have chosen another primary camera.
+            renderSceneSynchronizer_->SyncFacingPanelUpdates(scene, renderScene, true);
         }
         // Deformed proxies store frame-local palette handles. Even when the ECS scene and its
         // transforms are unchanged, a new renderer frame needs fresh palette uploads; retaining
