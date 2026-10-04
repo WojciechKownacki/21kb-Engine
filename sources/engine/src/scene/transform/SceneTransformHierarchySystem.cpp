@@ -5,6 +5,7 @@
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "ecs/GeometricReserve.hpp"
+#include "ecs/world/WorldInternalAccess.hpp"
 #include "scene/components/SceneComponentAccess.hpp"
 #include "scene/components/SceneComponentIteration.hpp"
 #include "scene/components/SceneComponentRegistry.hpp"
@@ -1344,6 +1345,17 @@ void EnsureSceneTransformWorkerPool(SceneState& state) {
     EnsureWorkerPool(state);
 }
 
+struct TransformPassRangeWrites {
+    struct ExtraRows {
+        std::size_t extraIndex;
+        std::size_t firstRow;
+        std::size_t count;
+    };
+    std::vector<ExtraRows> extraRows;
+    std::uint8_t fullExtraMask = 0U;
+    bool transformWritten = false;
+};
+
 // The engine side of a ParallelForEachRoot task: one per worker range of chunks.
 struct TransformPassTask {
     struct Deferred {
@@ -1356,6 +1368,7 @@ struct TransformPassTask {
     SceneState& state;
     UpdatedTransformBitWriter updatedBits;
     std::vector<Deferred> deferred;
+    TransformPassRangeWrites* rangeWrites = nullptr;
     std::size_t written = 0U;
     bool trackPrefab = false;
 };
@@ -1363,7 +1376,7 @@ struct TransformPassTask {
 class TransformPassAccess {
 public:
     static void Bind(TransformRowRange& range, const kb::ecs::MutableQueryTableDispatchRecord& record, std::size_t extraCount,
-        TransformPassTask& task, bool composes) noexcept {
+        TransformPassTask& task, TransformPassRangeWrites& writes, bool composes) noexcept {
         range.entityIds_ = record.entityIds;
         range.rows_ = static_cast<TransformComponent*>(record.fieldComponents[0]);
         range.count_ = record.entityCount;
@@ -1371,6 +1384,7 @@ public:
             range.extraColumns_[extra] = extra < extraCount ? record.fieldComponents[extra + 1U] : nullptr;
         }
         range.pass_ = &task;
+        task.rangeWrites = &writes;
         range.archetypeIndex_ = record.nativeArchetypeIndex;
         range.chunkIndex_ = record.nativeChunkIndex;
         range.composes_ = composes;
@@ -1380,20 +1394,41 @@ public:
         auto& task = *static_cast<TransformPassTask*>(range.pass_);
         TransformComponent& transform = range.rows_[row];
         const SceneEntity entity{ range.entityIds_[row] };
+        std::uint32_t nodeIndex = 0U;
+        const bool deferred = !range.composes_ || SceneHierarchyCache::HasTransformLink(task.state, entity) ||
+            (task.trackPrefab && task.state.prefabInstances.FindContainingEntity(entity, nodeIndex).IsValid());
+        // Allocate the deferred record before modifying the value, so a failed allocation cannot lose a write.
+        if (deferred) {
+            task.deferred.push_back({ entity, kb::ecs::NativeComponentRows{ .archetypeIndex = range.archetypeIndex_, .chunkIndex = range.chunkIndex_, .firstRow = row, .count = 1U } });
+        }
         transform.localPosition = position;
         transform.localRotation = rotation;
         transform.localScale = scale;
         ++transform.localVersion;
         transform.worldDirty = true;
         ++task.written;
-        std::uint32_t nodeIndex = 0U;
-        if (!range.composes_ || SceneHierarchyCache::HasTransformLink(task.state, entity) ||
-            (task.trackPrefab && task.state.prefabInstances.FindContainingEntity(entity, nodeIndex).IsValid())) {
-            task.deferred.push_back({ entity, kb::ecs::NativeComponentRows{ .archetypeIndex = range.archetypeIndex_, .chunkIndex = range.chunkIndex_, .firstRow = row, .count = 1U } });
-            return;
-        }
+        task.rangeWrites->transformWritten = true;
+        if (deferred) return;
         ComposeSceneTransformRoot(transform);
         task.updatedBits.Record(entity, transform);
+    }
+
+    static void DeclareColumnWritable(const TransformRowRange& range, std::size_t extraIndex) noexcept {
+        if (extraIndex >= TransformRowRange::kMaxExtraComponents || range.extraColumns_[extraIndex] == nullptr) return;
+        auto& task = *static_cast<TransformPassTask*>(range.pass_);
+        task.rangeWrites->fullExtraMask |= static_cast<std::uint8_t>(1U << extraIndex);
+    }
+
+    static void DeclareColumnRowsWritable(const TransformRowRange& range, std::size_t extraIndex, std::size_t firstRow, std::size_t count) {
+        if (extraIndex >= TransformRowRange::kMaxExtraComponents || range.extraColumns_[extraIndex] == nullptr ||
+            firstRow > range.count_ || count > range.count_ - firstRow) {
+            throw std::out_of_range("An extra-column write span is outside its transform range");
+        }
+        if (count == 0U) return;
+        auto& task = *static_cast<TransformPassTask*>(range.pass_);
+        if ((task.rangeWrites->fullExtraMask & (1U << extraIndex)) == 0U) {
+            task.rangeWrites->extraRows.push_back({ extraIndex, firstRow, count });
+        }
     }
 };
 
@@ -1401,8 +1436,16 @@ void TransformRowRange::SetLocal(std::size_t row, const Vec3& position, const Qu
     TransformPassAccess::SetLocal(*this, row, position, rotation, scale);
 }
 
+void TransformRowRange::DeclareColumnWritable(std::size_t extraIndex) const noexcept {
+    TransformPassAccess::DeclareColumnWritable(*this, extraIndex);
+}
+
+void TransformRowRange::DeclareColumnRowsWritable(std::size_t extraIndex, std::size_t firstRow, std::size_t count) const {
+    TransformPassAccess::DeclareColumnRowsWritable(*this, extraIndex, firstRow, count);
+}
+
 TransformPassStats RunSceneTransformPass(SceneState& state, std::size_t grainRows, std::span<const kb::ecs::ComponentId> extraComponents,
-    SceneTransforms::TransformRangeBody body, void* context) {
+    SceneTransforms::TransformRangeBody body, void* context, bool declaredAccess) {
     TransformPassStats stats;
     if (body == nullptr) return stats;
     if (extraComponents.size() > TransformRowRange::kMaxExtraComponents) {
@@ -1418,13 +1461,35 @@ TransformPassStats RunSceneTransformPass(SceneState& state, std::size_t grainRow
         if (extraComponents[extra] == 0U) return stats;
         ids[extra + 1U] = extraComponents[extra];
     }
-    const std::span<const kb::ecs::ComponentId> queried{ ids.data(), extraComponents.size() + 1U };
+    std::array<kb::ecs::ComponentId, 5U> uniqueIds{};
+    std::array<std::size_t, 5U> fieldIndices{};
+    std::size_t uniqueCount = 0U;
+    for (std::size_t field = 0U; field < extraComponents.size() + 1U; ++field) {
+        std::size_t unique = 0U;
+        while (unique < uniqueCount && uniqueIds[unique] != ids[field]) ++unique;
+        if (unique == uniqueCount) uniqueIds[uniqueCount++] = ids[field];
+        fieldIndices[field] = unique;
+    }
+    const bool aliasedColumns = uniqueCount != extraComponents.size() + 1U;
+    const std::span<const kb::ecs::ComponentId> queried{ uniqueIds.data(), uniqueCount };
     if (state.transformPassRecordsVersion != storage.StructuralVersion() || state.transformPassRecordIds != ids || state.transformPassRecords.empty()) {
         std::size_t firstChangedRecord = 0U;
-        if (state.transformPassRecordIds != ids || state.transformPassRecords.empty() ||
+        if (aliasedColumns || state.transformPassRecordIds != ids || state.transformPassRecords.empty() ||
             !storage.RefreshMutableQueryRecordsAfterAppends(queried, {}, {}, state.transformPassRecordsVersion,
                 state.transformPassRecords, firstChangedRecord)) {
             storage.CollectMutableQueryRecords(queried, {}, {}, state.transformPassRecords);
+        }
+        if (aliasedColumns) {
+            // Native queries require distinct component IDs. Expand the unique query's fields in reverse,
+            // so each public Extra index still exposes its alias without overwriting a source field early.
+            for (auto& record : state.transformPassRecords) {
+                for (std::size_t field = extraComponents.size() + 1U; field != 0U; --field) {
+                    const std::size_t index = field - 1U;
+                    record.fieldComponents[index] = record.fieldComponents[fieldIndices[index]];
+                    record.componentVersions[index] = record.componentVersions[fieldIndices[index]];
+                    record.componentDirtyCounts[index] = record.componentDirtyCounts[fieldIndices[index]];
+                }
+            }
         }
         // cameras and lights are queued for the renderer's proxies by the sync
         state.transformPassDeferredArchetypes.clear();
@@ -1453,6 +1518,7 @@ TransformPassStats RunSceneTransformPass(SceneState& state, std::size_t grainRow
     const std::size_t taskCount = (records.size() + recordsPerTask - 1U) / recordsPerTask;
     std::mutex sparseMutex;
     std::vector<std::unique_ptr<TransformPassTask>> tasks(taskCount);
+    std::vector<TransformPassRangeWrites> rangeWrites(records.size());
     std::atomic_bool stopped{ false };
     std::exception_ptr firstException;
     std::mutex exceptionMutex;
@@ -1470,7 +1536,8 @@ TransformPassStats RunSceneTransformPass(SceneState& state, std::size_t grainRow
                     const bool composes = !observed && (record.nativeArchetypeIndex >= state.transformPassDeferredArchetypes.size() ||
                         !state.transformPassDeferredArchetypes[record.nativeArchetypeIndex]);
                     TransformRowRange range;
-                    TransformPassAccess::Bind(range, record, extraComponents.size(), task, composes);
+                    TransformPassAccess::Bind(range, record, extraComponents.size(), task, rangeWrites[index], composes);
+                    if (!declaredAccess) rangeWrites[index].fullExtraMask = static_cast<std::uint8_t>((1U << extraComponents.size()) - 1U);
                     try {
                         body(range, context);
                     } catch (...) {
@@ -1482,51 +1549,151 @@ TransformPassStats RunSceneTransformPass(SceneState& state, std::size_t grainRow
                 task.updatedBits.Finish();
             });
         } catch (...) {
-            state.transformPassRunning = false;
-            throw;
+            if (firstException == nullptr) firstException = std::current_exception();
         }
     }
     state.transformPassRunning = false;
 
+    TransformPassTask transformAliasTask{ state, sparseMutex };
+    transformAliasTask.trackPrefab = trackPrefab;
+    std::uint8_t transformExtraMask = 0U;
+    for (std::size_t extra = 0U; extra < extraComponents.size(); ++extra) {
+        if (extraComponents[extra] == transformId) transformExtraMask |= static_cast<std::uint8_t>(1U << extra);
+    }
+    if (transformExtraMask != 0U) {
+        // Direct mutable transform aliases declare a further local write. Reconcile their final local TRS
+        // before metadata or observers are published, with the same setter and composition as SetLocal.
+        for (std::size_t index = 0U; index < records.size(); ++index) {
+            const auto& record = records[index];
+            auto& written = rangeWrites[index];
+            const bool full = (written.fullExtraMask & transformExtraMask) != 0U;
+            const bool composes = !observed && (record.nativeArchetypeIndex >= state.transformPassDeferredArchetypes.size() ||
+                !state.transformPassDeferredArchetypes[record.nativeArchetypeIndex]);
+            TransformRowRange range;
+            TransformPassAccess::Bind(range, record, extraComponents.size(), transformAliasTask, written, composes);
+            for (std::size_t row = 0U; row < record.entityCount; ++row) {
+                const bool partial = !full && std::any_of(written.extraRows.begin(), written.extraRows.end(), [&](const auto& declared) {
+                    return (transformExtraMask & (1U << declared.extraIndex)) != 0U &&
+                        row >= declared.firstRow && row - declared.firstRow < declared.count;
+                });
+                if (!full && !partial) continue;
+                const TransformComponent& current = range.Get(row);
+                TransformPassAccess::SetLocal(range, row, current.localPosition, current.localRotation, current.localScale);
+            }
+        }
+        transformAliasTask.updatedBits.Finish();
+    }
+
     // Serial publication: the version of each written table once, then the deferred rows as Set flags them.
-    std::size_t lastArchetype = std::numeric_limits<std::size_t>::max();
     for (std::size_t index = 0U; index < records.size(); ++index) {
         stats.rowsVisited += records[index].entityCount;
         ++stats.ranges;
     }
     std::vector<kb::ecs::NativeComponentRows>& deferredRows = state.transformSetManyRowsScratch;
     deferredRows.clear();
+    const auto collectDeferred = [&deferredRows, observed](const TransformPassTask& task) {
+        if (observed) return;
+        for (const auto& deferred : task.deferred) {
+            kb::ecs::NativeComponentRows* run = deferredRows.empty() ? nullptr : &deferredRows.back();
+            if (run != nullptr && run->archetypeIndex == deferred.row.archetypeIndex && run->chunkIndex == deferred.row.chunkIndex &&
+                run->firstRow + run->count == deferred.row.firstRow) {
+                ++run->count;
+            } else {
+                deferredRows.push_back(deferred.row);
+            }
+        }
+    };
     for (const auto& task : tasks) {
         if (task == nullptr) continue;
         stats.rowsWritten += task->written;
         stats.rowsDeferred += task->deferred.size();
-        for (const auto& deferred : task->deferred) {
-            if (!observed) {
-                kb::ecs::NativeComponentRows* run = deferredRows.empty() ? nullptr : &deferredRows.back();
-                if (run != nullptr && run->archetypeIndex == deferred.row.archetypeIndex && run->chunkIndex == deferred.row.chunkIndex &&
-                    run->firstRow + run->count == deferred.row.firstRow) {
-                    ++run->count;
-                } else {
-                    deferredRows.push_back(deferred.row);
+        collectDeferred(*task);
+    }
+    collectDeferred(transformAliasTask);
+    std::size_t lastWrittenArchetype = std::numeric_limits<std::size_t>::max();
+    for (std::size_t index = 0U; index < records.size(); ++index) {
+        const auto& record = records[index];
+        if (rangeWrites[index].transformWritten && record.nativeArchetypeIndex != lastWrittenArchetype) {
+            lastWrittenArchetype = record.nativeArchetypeIndex;
+            storage.NoteComponentWritten(lastWrittenArchetype, transformId);
+        }
+    }
+    if (!deferredRows.empty()) storage.MarkComponentRowsModified(transformId, deferredRows);
+
+    std::array<std::vector<kb::ecs::Entity>, TransformRowRange::kMaxExtraComponents> observedExtraRows;
+    // Publish all metadata before any observer can change structure. Capture entity identities for observer
+    // publication now; record pointers/row locations can become invalid during the first OnSet callback.
+    for (std::size_t extra = 0U; extra < extraComponents.size(); ++extra) {
+        if (extraComponents[extra] == transformId) continue;
+        if (std::find(extraComponents.begin(), extraComponents.begin() + extra, extraComponents[extra]) != extraComponents.begin() + extra) continue;
+        std::uint8_t componentExtraMask = 0U;
+        for (std::size_t alias = extra; alias < extraComponents.size(); ++alias) {
+            if (extraComponents[alias] == extraComponents[extra]) componentExtraMask |= static_cast<std::uint8_t>(1U << alias);
+        }
+        std::vector<kb::ecs::NativeComponentRows> writes;
+        for (std::size_t index = 0U; index < records.size(); ++index) {
+            const auto& record = records[index];
+            const auto& written = rangeWrites[index];
+            if ((written.fullExtraMask & componentExtraMask) != 0U) {
+                writes.push_back({ record.nativeArchetypeIndex, record.nativeChunkIndex, 0U, record.entityCount });
+            } else {
+                for (const auto& rowsWritten : written.extraRows) {
+                    if ((componentExtraMask & (1U << rowsWritten.extraIndex)) != 0U) {
+                        writes.push_back({ record.nativeArchetypeIndex, record.nativeChunkIndex, rowsWritten.firstRow, rowsWritten.count });
+                    }
+                }
+            }
+        }
+        std::sort(writes.begin(), writes.end(), [](const auto& left, const auto& right) {
+            if (left.archetypeIndex != right.archetypeIndex) return left.archetypeIndex < right.archetypeIndex;
+            if (left.chunkIndex != right.chunkIndex) return left.chunkIndex < right.chunkIndex;
+            return left.firstRow < right.firstRow;
+        });
+        std::size_t uniqueRuns = 0U;
+        for (const auto& run : writes) {
+            if (uniqueRuns != 0U) {
+                auto& previous = writes[uniqueRuns - 1U];
+                if (previous.archetypeIndex == run.archetypeIndex && previous.chunkIndex == run.chunkIndex &&
+                    run.firstRow <= previous.firstRow + previous.count) {
+                    previous.count = std::max(previous.firstRow + previous.count, run.firstRow + run.count) - previous.firstRow;
+                    continue;
+                }
+            }
+            writes[uniqueRuns++] = run;
+        }
+        writes.resize(uniqueRuns);
+        if (writes.empty()) continue;
+        storage.MarkComponentRowsModified(extraComponents[extra], writes);
+        if (state.world.MirrorsValueWrites(extraComponents[extra])) {
+            std::size_t recordIndex = 0U;
+            for (const auto& run : writes) {
+                while (recordIndex < records.size() && (records[recordIndex].nativeArchetypeIndex != run.archetypeIndex ||
+                    records[recordIndex].nativeChunkIndex != run.chunkIndex)) ++recordIndex;
+                if (recordIndex == records.size()) throw std::logic_error("An extra-column write lost its transform range");
+                for (std::size_t row = run.firstRow; row < run.firstRow + run.count; ++row) {
+                    observedExtraRows[extra].push_back(kb::ecs::Entity{ records[recordIndex].entityIds[row] });
                 }
             }
         }
     }
-    for (const auto& record : records) {
-        if (record.nativeArchetypeIndex != lastArchetype) {
-            lastArchetype = record.nativeArchetypeIndex;
-            if (stats.rowsWritten != 0U) storage.NoteComponentWritten(lastArchetype, transformId);
+    for (std::size_t extra = 0U; extra < extraComponents.size(); ++extra) {
+        for (const kb::ecs::Entity entity : observedExtraRows[extra]) {
+            if (storage.TryGetComponentData(entity, extraComponents[extra]) != nullptr) {
+                kb::ecs::WorldInternalAccess::MarkComponentModified(state.world, entity, extraComponents[extra]);
+            }
         }
     }
-    if (!deferredRows.empty()) storage.MarkComponentRowsModified(transformId, deferredRows);
-    for (const auto& task : tasks) {
-        if (task == nullptr) continue;
-        for (const auto& deferred : task->deferred) {
+    const auto publishDeferred = [&state, observed, trackPrefab](const TransformPassTask& task) {
+        for (const auto& deferred : task.deferred) {
             if (observed) state.componentStorage.Transforms().MarkWritten(deferred.entity);
             if (SceneHierarchyCache::HasTransformLink(state, deferred.entity)) EnqueueSceneTransformDirtyFrontier(state, deferred.entity);
             if (trackPrefab) MarkScenePrefabNodeDirty(state, deferred.entity);
         }
+    };
+    for (const auto& task : tasks) {
+        if (task != nullptr) publishDeferred(*task);
     }
+    publishDeferred(transformAliasTask);
     state.transformRenderProxyListsStale = true;
     if (firstException != nullptr) std::rethrow_exception(firstException);
     return stats;

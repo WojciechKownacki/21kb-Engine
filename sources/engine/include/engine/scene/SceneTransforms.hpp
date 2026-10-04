@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <type_traits>
 
 namespace kb::scene {
 
@@ -26,14 +27,36 @@ public:
     // Writes the row's local transform with the result of Transforms().Set followed by the transform sync: a row
     // without parent or children gets its world transform here; any other row is left to the next sync.
     void SetLocal(std::size_t row, const Vec3& position, const Quat& rotation, const Vec3& scale);
-    // The rows of the pass's index-th Extra component, which lives in the same chunk.
+    // The rows of the pass's index-th Extra component, which lives in the same chunk. Mutable access declares
+    // every row written: versions, dirty flags and OnSet are published after workers finish, even if the body
+    // throws. Use Column<const T> or ReadColumn<T> for reads, and WriteColumn<T> for a partial write.
+    // A mutable TransformComponent extra is a further local-transform write intent: after the body, its
+    // declared rows pass through the normal setter/compose path using their final local TRS. Derived world
+    // fields and version metadata are managed by the engine. Duplicate extra aliases declare one intent.
     template <typename T>
     [[nodiscard]] T* Column(std::size_t extraIndex = 0U) const noexcept {
+        if constexpr (!std::is_const_v<T>) DeclareColumnWritable(extraIndex);
         return extraIndex < kMaxExtraComponents ? static_cast<T*>(extraColumns_[extraIndex]) : nullptr;
+    }
+    template <typename T>
+    [[nodiscard]] const T* ReadColumn(std::size_t extraIndex = 0U) const noexcept {
+        return Column<const T>(extraIndex);
+    }
+    // Returns the first row of the declared write span. Overlapping/repeated declarations publish each row
+    // once with its final value. A zero-length span declares no write; an invalid span throws before access.
+    template <typename T>
+    [[nodiscard]] T* WriteColumn(std::size_t firstRow, std::size_t count, std::size_t extraIndex = 0U) const {
+        static_assert(!std::is_const_v<T>, "WriteColumn requires a mutable component type");
+        DeclareColumnRowsWritable(extraIndex, firstRow, count);
+        T* rows = static_cast<T*>(extraColumns_[extraIndex]);
+        return rows == nullptr ? nullptr : rows + firstRow;
     }
 
 private:
     friend class TransformPassAccess;
+
+    void DeclareColumnWritable(std::size_t extraIndex) const noexcept;
+    void DeclareColumnRowsWritable(std::size_t extraIndex, std::size_t firstRow, std::size_t count) const;
 
     const std::uint64_t* entityIds_ = nullptr;
     TransformComponent* rows_ = nullptr;
@@ -47,7 +70,8 @@ private:
 
 struct TransformPassStats {
     std::size_t rowsVisited = 0U;
-    // Rows the body wrote with SetLocal; the ones the next sync composes (a parent or children, a prefab node, a
+    // Explicit SetLocal writes by the body (mutable TransformComponent extras are not counted); the ones the
+    // next sync composes (a parent or children, a prefab node, a
     // camera or light, an observed transform) are counted in rowsDeferred too.
     std::size_t rowsWritten = 0U;
     std::size_t rowsDeferred = 0U;
@@ -96,18 +120,25 @@ public:
 
     // Runs body(range) on the scene's worker threads over every chunk of the rows that have a transform and every
     // component of `extraComponents`, and returns when all are done, with the same result as Set of the written
-    // rows followed by the transform sync. The body may only read and write its own range (rows and Column<T>
+    // rows followed by the transform sync. Mutable extra-column access also publishes its declared rows,
+    // independently of SetLocal. Typed passes use access declarations, so read-only columns signal no write.
+    // The body may only read and write its own range (rows and Column<T>
     // values) and memory of the application; it must not call the scene's API or change structure (that throws).
     // The first exception a body throws is rethrown here after the written rows were published. Call it from the
     // application's thread, not from a scene system or inside ParallelFor.
     using TransformRangeBody = void (*)(TransformRowRange& range, void* context);
+    // The original callback entry point conservatively declares all Extra rows mutable in every visited range.
+    // This also publishes writes from prebuilt callbacks whose inline Column<T> predates access declarations.
     TransformPassStats ParallelForEachRoot(std::size_t grainRows, std::span<const kb::ecs::ComponentId> extraComponents, TransformRangeBody body, void* context);
+    // Access-aware callback entry point: respects Column/ReadColumn/WriteColumn declarations from this header.
+    // Its callback must be compiled with the declaring accessors; the typed overload calls this automatically.
+    TransformPassStats ParallelForEachRootDeclared(std::size_t grainRows, std::span<const kb::ecs::ComponentId> extraComponents, TransformRangeBody body, void* context);
     template <typename... Extra, typename Body>
     TransformPassStats ParallelForEachRoot(std::size_t grainRows, Body&& body) {
         static_assert(sizeof...(Extra) <= TransformRowRange::kMaxExtraComponents, "Too many extra components for a transform pass");
         const std::array<kb::ecs::ComponentId, sizeof...(Extra)> ids{ ExtraComponentId<Extra>()... };
         using BodyType = std::remove_reference_t<Body>;
-        return ParallelForEachRoot(grainRows, ids, [](TransformRowRange& range, void* context) {
+        return ParallelForEachRootDeclared(grainRows, ids, [](TransformRowRange& range, void* context) {
             (*static_cast<BodyType*>(context))(range);
         }, const_cast<std::remove_const_t<BodyType>*>(&body));
     }

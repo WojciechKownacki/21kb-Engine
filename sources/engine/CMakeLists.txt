@@ -1824,6 +1824,12 @@ if(BUILD_TESTING)
         tests/EcsSnapshotTests.cpp
     )
     set_tests_properties(kb_ecs_api_tests PROPERTIES LABELS "ecs;api;debug")
+    target_include_directories(kb_ecs_api_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/private)
+
+    kb_add_ecs_test_target(kb_scene_transform_extra_column_tests
+        tests/SceneTransformExtraColumnTests.cpp
+    )
+    set_tests_properties(kb_scene_transform_extra_column_tests PROPERTIES LABELS "ecs;scene;transform;correctness")
 
     kb_add_ecs_test_target(kb_ecs_scheduler_correctness_tests
         tests/EcsSchedulerCorrectnessTestMain.cpp

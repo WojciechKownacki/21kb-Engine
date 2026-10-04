@@ -111,7 +111,7 @@ void BeginSceneTransformRenderProxyUpdates(SceneState& state) noexcept;
 
 // Transforms().ParallelForEachRoot.
 TransformPassStats RunSceneTransformPass(SceneState& state, std::size_t grainRows, std::span<const kb::ecs::ComponentId> extraComponents,
-    SceneTransforms::TransformRangeBody body, void* context);
+    SceneTransforms::TransformRangeBody body, void* context, bool declaredAccess);
 
 // The sizes of the render-proxy lists, counted from this frame's update bits and the mesh, camera and light
 // components without building the lists.
