@@ -52,6 +52,13 @@ namespace {
 
 std::atomic<std::uint64_t> g_nextSceneId{ 1U };
 
+// A scene's transform rows are swept every frame: 64 KB chunks halve the per-chunk work of those passes.
+[[nodiscard]] kb::ecs::WorldConfig DefaultSceneWorldConfig() noexcept {
+    kb::ecs::WorldConfig config;
+    config.chunkSizeProfile = kb::ecs::ChunkSizeProfile::Chunk64KB;
+    return config;
+}
+
 } // namespace
 
 Scene::Scene()
@@ -73,7 +80,7 @@ Scene::Scene(
     kb::project::ProjectDescriptor descriptor,
     std::vector<std::unique_ptr<kb::modules::IEngineModule>> staticModules,
     SceneMode mode)
-    : Scene(std::move(descriptor), std::move(staticModules), kb::ecs::WorldConfig{}, mode) {}
+    : Scene(std::move(descriptor), std::move(staticModules), DefaultSceneWorldConfig(), mode) {}
 
 Scene::Scene(
     kb::project::ProjectDescriptor descriptor,
