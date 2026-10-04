@@ -80,6 +80,9 @@ void World::BulkInitFlecsEntities(std::span<const Entity> entities, std::span<co
         componentData[index] = expanded.data();
     }
 
+    if (registries_ != nullptr) {
+        registries_->BindMirroredEntities(world_, entities);
+    }
     if (ecs_bulk_init(world_, &descriptor) == nullptr) {
         throw std::runtime_error("ECS bulk create failed to populate Flecs entities");
     }
@@ -93,6 +96,9 @@ Entity World::CreateEntity() {
     const Entity entity = nativeStorage_->CreateEntity();
     try {
         if (config_.mirrorEntitiesToBackend) {
+            if (registries_ != nullptr) {
+                registries_->BindMirroredEntities(world_, std::span<const Entity>{ &entity, 1U });
+            }
             ecs_make_alive(world_, FlecsEntityId(entity));
         }
         if (config_.trackEntityCatalog && registries_ != nullptr) {
@@ -105,8 +111,11 @@ Entity World::CreateEntity() {
         if (nativeStorage_->IsAlive(entity)) {
             nativeStorage_->DestroyEntity(entity);
         }
-        if (ecs_is_alive(world_, FlecsEntityId(entity))) {
+        if (registries_ != nullptr && registries_->OwnsMirroredEntity(entity) && ecs_is_alive(world_, FlecsEntityId(entity))) {
             ecs_delete(world_, FlecsEntityId(entity));
+        }
+        if (registries_ != nullptr) {
+            registries_->CompleteMirroredEntityDeletion(world_, entity);
         }
         throw;
     }
@@ -117,7 +126,7 @@ Entity World::CreateEntity() {
 Entity World::CreateEntity(std::string_view name) {
     const std::string ownedName{ name };
     Entity entity = CreateEntity();
-    if (!ownedName.empty()) {
+    if (!ownedName.empty() && BackendEntityAlive(entity)) {
         ecs_set_name(world_, FlecsEntityId(entity), ownedName.c_str());
     }
     return entity;
@@ -172,8 +181,11 @@ Entity World::CreateEntity(std::span<const BulkComponentView> components) {
         if (nativeStorage_->IsAlive(entity)) {
             nativeStorage_->DestroyEntity(entity);
         }
-        if (ecs_is_alive(world_, FlecsEntityId(entity))) {
+        if (registries_ != nullptr && registries_->OwnsMirroredEntity(entity) && ecs_is_alive(world_, FlecsEntityId(entity))) {
             ecs_delete(world_, FlecsEntityId(entity));
+        }
+        if (registries_ != nullptr) {
+            registries_->CompleteMirroredEntityDeletion(world_, entity);
         }
         throw;
     }
@@ -307,8 +319,11 @@ void World::CreateEntitiesWithComponentsInto(std::vector<Entity>& entities, std:
             if (nativeStorage_ != nullptr && nativeStorage_->IsAlive(entity)) {
                 nativeStorage_->DestroyEntity(entity);
             }
-            if (world_ != nullptr && ecs_is_alive(world_, FlecsEntityId(entity))) {
+            if (world_ != nullptr && registries_ != nullptr && registries_->OwnsMirroredEntity(entity) && ecs_is_alive(world_, FlecsEntityId(entity))) {
                 ecs_delete(world_, FlecsEntityId(entity));
+            }
+            if (registries_ != nullptr) {
+                registries_->CompleteMirroredEntityDeletion(world_, entity);
             }
         }
         throw;
@@ -385,8 +400,11 @@ void World::AdoptEntitiesWithComponents(std::span<const Entity::IdType> entityId
             if (nativeStorage_ != nullptr && nativeStorage_->IsAlive(entity)) {
                 nativeStorage_->DestroyEntity(entity);
             }
-            if (world_ != nullptr && ecs_is_alive(world_, FlecsEntityId(entity))) {
+            if (world_ != nullptr && registries_ != nullptr && registries_->OwnsMirroredEntity(entity) && ecs_is_alive(world_, FlecsEntityId(entity))) {
                 ecs_delete(world_, FlecsEntityId(entity));
+            }
+            if (registries_ != nullptr) {
+                registries_->CompleteMirroredEntityDeletion(world_, entity);
             }
         }
         throw;
@@ -402,8 +420,11 @@ void World::DestroyEntity(Entity entity) {
     }
     ecs_table_t* previousArchetype = EntityArchetype(entity);
     DestroyNativeEntity(entity);
-    if (config_.mirrorEntitiesToBackend && world_ != nullptr && entity.IsValid() && ecs_is_valid(world_, FlecsEntityId(entity))) {
+    if (config_.mirrorEntitiesToBackend && world_ != nullptr && registries_ != nullptr && registries_->OwnsMirroredEntity(entity) && ecs_is_valid(world_, FlecsEntityId(entity))) {
         ecs_delete(world_, FlecsEntityId(entity));
+    }
+    if (registries_ != nullptr) {
+        registries_->CompleteMirroredEntityDeletion(world_, entity);
     }
     InvalidateQueryPlansForArchetypeChange(previousArchetype, EntityArchetype(entity));
     if (config_.trackEntityCatalog && registries_ != nullptr) {
@@ -444,8 +465,11 @@ void World::DestroyEntities(std::span<const Entity> entities) {
     }
     if (config_.mirrorEntitiesToBackend && world_ != nullptr) {
         for (Entity entity : entities) {
-            if (entity.IsValid() && ecs_is_valid(world_, FlecsEntityId(entity))) {
+            if (registries_ != nullptr && registries_->OwnsMirroredEntity(entity) && ecs_is_valid(world_, FlecsEntityId(entity))) {
                 ecs_delete(world_, FlecsEntityId(entity));
+            }
+            if (registries_ != nullptr) {
+                registries_->CompleteMirroredEntityDeletion(world_, entity);
             }
         }
     }
@@ -468,8 +492,11 @@ void World::DestroyEntitiesTrusted(std::span<const Entity> entities) {
     }
     if (config_.mirrorEntitiesToBackend && world_ != nullptr) {
         for (Entity entity : entities) {
-            if (entity.IsValid() && ecs_is_valid(world_, FlecsEntityId(entity))) {
+            if (registries_ != nullptr && registries_->OwnsMirroredEntity(entity) && ecs_is_valid(world_, FlecsEntityId(entity))) {
                 ecs_delete(world_, FlecsEntityId(entity));
+            }
+            if (registries_ != nullptr) {
+                registries_->CompleteMirroredEntityDeletion(world_, entity);
             }
         }
     }

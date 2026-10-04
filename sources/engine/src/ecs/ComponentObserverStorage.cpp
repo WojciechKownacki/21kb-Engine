@@ -62,6 +62,13 @@ ObserverId ComponentObserverStorage::Create(
     }
 
     ecs_observer_desc_t desc{};
+    try {
+        if (observerRegistry != nullptr) desc.entity = observerRegistry->CreateObserverEntity(world);
+    } catch (...) {
+        ComponentObserverContext::Free(observerContext);
+        observerContext->FinishDispatch();
+        return 0U;
+    }
     desc.query.terms[0].id = componentId;
     desc.events[0] = ComponentEventMapper::ToFlecsEvent(event);
     desc.callback = &ComponentObserverContext::Dispatch;
@@ -74,6 +81,7 @@ ObserverId ComponentObserverStorage::Create(
 
     const ObserverId observer = static_cast<ObserverId>(ecs_observer_init(world, &desc));
     if (observer == 0) {
+        if (desc.entity != 0U && ecs_is_alive(world, desc.entity)) ecs_delete(world, desc.entity);
         ComponentObserverContext::Free(observerContext);
     }
     if (observer != 0U && yieldExisting && event != ComponentEventKind::Removed) {

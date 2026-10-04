@@ -1914,6 +1914,11 @@ public:
         tableIndicesByHash_.reserve(config.reserveArchetypes);
     }
 
+    void SetEntityIndexAvailabilityPolicy(EntityIndexAvailabilityPolicy policy, void* context) noexcept {
+        entityIndexAvailabilityPolicy_ = policy;
+        entityIndexAvailabilityContext_ = context;
+    }
+
     [[nodiscard]] Entity CreateEntity(std::span<const NativeComponentValue> components) {
         std::vector<NativeComponentType>& types = createTypesScratch_;
         NormalizeTypesInto(components, types);
@@ -1964,16 +1969,21 @@ public:
         EnsureChunkCommitBudget(tables_[tableIndex].NewChunkAcquiresForAppend(count));
         const std::size_t originalTableLiveEntities = tables_[tableIndex].LiveEntities();
         const std::size_t originalRecordCount = records_.size();
-        AllocateEntities(entities, count);
+        const bool preserveFreeOrder = entityIndexAvailabilityPolicy_ != nullptr;
+        std::vector<std::uint32_t> originalFreeIndices;
+        AllocateEntities(entities, count, preserveFreeOrder ? &originalFreeIndices : nullptr);
         try {
             AppendEntitiesToTable(tableIndex, entities, components, true);
         } catch (...) {
             tables_[tableIndex].RollbackAppendedRows(originalTableLiveEntities);
+            // Restore exact free-slot order, including skipped backend slots.
+            // New placeholders disappear together with the resized records.
+            if (preserveFreeOrder) freeEntityIndices_ = std::move(originalFreeIndices);
             for (Entity entity : entities) {
                 const std::uint32_t recordIndex = EntityIndex(entity);
                 if (recordIndex < originalRecordCount) {
                     records_[recordIndex].alive = false;
-                    freeEntityIndices_.push_back(recordIndex);
+                    if (!preserveFreeOrder) freeEntityIndices_.push_back(recordIndex);
                 }
             }
             records_.resize(originalRecordCount);
@@ -1999,6 +2009,9 @@ public:
         const std::vector<NativeComponentType> types = NormalizeTypes(components);
         if (ResolveAliveEntity(StripEntityGeneration(entity)).IsValid()) {
             throw std::invalid_argument("Native ECS cannot adopt an already live entity");
+        }
+        if (!EntityIndexAvailable(StripEntityGeneration(entity))) {
+            throw std::invalid_argument("Native ECS cannot adopt a backend-owned entity index");
         }
 
         const std::size_t tableIndex = FindOrCreateTable(types);
@@ -2055,6 +2068,9 @@ public:
             }
             if (ResolveAliveEntity(StripEntityGeneration(entity)).IsValid()) {
                 throw std::invalid_argument("Native ECS cannot bulk adopt an already live entity index");
+            }
+            if (!EntityIndexAvailable(StripEntityGeneration(entity))) {
+                throw std::invalid_argument("Native ECS cannot bulk adopt a backend-owned entity index");
             }
             needsStrippedExternalSlots = needsStrippedExternalSlots || StripEntityGeneration(entity) != entity.Id();
             contiguousIds = contiguousIds && entity.Id() == expectedEntityId;
@@ -3493,10 +3509,16 @@ private:
         return false;
     }
 
+    [[nodiscard]] bool EntityIndexAvailable(Entity::IdType strippedId) const noexcept {
+        return entityIndexAvailabilityPolicy_ == nullptr
+            || entityIndexAvailabilityPolicy_(strippedId, entityIndexAvailabilityContext_);
+    }
+
     [[nodiscard]] Entity AllocateEntity() {
         for (std::size_t offset = freeEntityIndices_.size(); offset > 0U; --offset) {
             const std::uint32_t index = freeEntityIndices_[offset - 1U];
-            if (ResolveAliveEntity(PackEntity(index, 0U).Id()).IsValid()) {
+            const auto strippedId = PackEntity(index, 0U).Id();
+            if (ResolveAliveEntity(strippedId).IsValid() || !EntityIndexAvailable(strippedId)) {
                 continue;
             }
             freeEntityIndices_.erase(freeEntityIndices_.begin() + static_cast<std::ptrdiff_t>(offset - 1U));
@@ -3512,11 +3534,23 @@ private:
             if (records_.size() > std::numeric_limits<std::uint32_t>::max() - kGeneratedEntityIndexBase) {
                 throw std::runtime_error("Native ECS entity capacity exceeded");
             }
-            if (!ResolveAliveEntity(PackEntity(static_cast<std::uint32_t>(records_.size()), 0U).Id()).IsValid()) {
+            const std::uint32_t index = static_cast<std::uint32_t>(records_.size());
+            const auto strippedId = PackEntity(index, 0U).Id();
+            const bool backendAvailable = EntityIndexAvailable(strippedId);
+            if (!ResolveAliveEntity(strippedId).IsValid() && backendAvailable) {
                 break;
             }
+            if (!backendAvailable) {
+                // Reserve before growing records so a blocked slot is always
+                // retained for reuse once its backend owner is actually dead.
+                ReserveGeometric(freeEntityIndices_, freeEntityIndices_.size() + 1U);
+            }
             records_.push_back(EntityRecord{});
+            if (!backendAvailable) freeEntityIndices_.push_back(index);
         }
+        // A failed row append must be able to return this new slot without
+        // allocating, even after retaining several backend-blocked slots.
+        ReserveGeometric(freeEntityIndices_, freeEntityIndices_.size() + 1U);
         const std::uint32_t index = static_cast<std::uint32_t>(records_.size());
         Entity entity = PackEntity(index, 0U);
         records_.push_back(EntityRecord{
@@ -3529,12 +3563,17 @@ private:
         return entity;
     }
 
-    void AllocateEntities(std::vector<Entity>& entities, std::size_t count) {
+    void AllocateEntities(std::vector<Entity>& entities, std::size_t count,
+        std::vector<std::uint32_t>* originalFreeIndicesForAppend = nullptr) {
         if (count == 0U) {
             return;
         }
 
         entities.clear();
+        if (entityIndexAvailabilityPolicy_ != nullptr) {
+            AllocateAvailableEntities(entities, count, originalFreeIndicesForAppend);
+            return;
+        }
         if (!entitySlots_.empty() || !externalRecordRanges_.empty() || !strippedEntitySlots_.empty()) {
             const std::size_t originalRecordCount = records_.size();
             const std::size_t originalLiveCount = liveEntities_;
@@ -3592,6 +3631,65 @@ private:
             entities[reusedCount + offset] = entity;
         }
         liveEntities_ += count;
+    }
+
+    void AllocateAvailableEntities(std::vector<Entity>& entities, std::size_t count,
+        std::vector<std::uint32_t>* originalFreeIndicesForAppend) {
+        const std::size_t originalRecordCount = records_.size();
+        const std::size_t originalLiveCount = liveEntities_;
+        auto originalFreeIndices = freeEntityIndices_;
+        entities.reserve(count);
+        try {
+            // Inspect each retained free slot at most once in this batch.
+            for (std::size_t offset = freeEntityIndices_.size(); offset > 0U && entities.size() < count; --offset) {
+                const std::uint32_t index = freeEntityIndices_[offset - 1U];
+                const auto strippedId = PackEntity(index, 0U).Id();
+                if (ResolveAliveEntity(strippedId).IsValid() || !EntityIndexAvailable(strippedId)) continue;
+                EntityRecord& record = records_[index];
+                record.alive = true;
+                record.ownsGeneratedId = true;
+                record.entity = PackEntity(index, record.generation);
+                entities.push_back(record.entity);
+                ++liveEntities_;
+            }
+            std::erase_if(freeEntityIndices_, [this](std::uint32_t index) {
+                return records_[index].alive && records_[index].ownsGeneratedId;
+            });
+            // Keep the existing bulk order for selected LIFO recycled slots.
+            std::reverse(entities.begin(), entities.end());
+
+            const std::size_t remainingCount = count - entities.size();
+            constexpr std::size_t maxGeneratedRecords = std::numeric_limits<std::uint32_t>::max() - kGeneratedEntityIndexBase + 1U;
+            if (remainingCount != 0U && (records_.size() > maxGeneratedRecords || remainingCount > maxGeneratedRecords - records_.size())) {
+                throw std::runtime_error("Native ECS entity capacity exceeded");
+            }
+            if (remainingCount != 0U) ReserveGeometric(records_, records_.size() + remainingCount);
+            while (entities.size() < count) {
+                if (records_.size() >= maxGeneratedRecords) throw std::runtime_error("Native ECS entity capacity exceeded");
+                const std::uint32_t index = static_cast<std::uint32_t>(records_.size());
+                const Entity entity = PackEntity(index, 0U);
+                const bool backendAvailable = EntityIndexAvailable(entity.Id());
+                if (ResolveAliveEntity(entity.Id()).IsValid() || !backendAvailable) {
+                    if (!backendAvailable) ReserveGeometric(freeEntityIndices_, freeEntityIndices_.size() + 1U);
+                    records_.push_back(EntityRecord{});
+                    if (!backendAvailable) freeEntityIndices_.push_back(index);
+                    continue;
+                }
+                records_.push_back(EntityRecord{.generation = 0U, .alive = true, .ownsGeneratedId = true, .entity = entity});
+                entities.push_back(entity);
+                ++liveEntities_;
+            }
+            // Transfer the existing backup without another copy so a later
+            // row-append failure can restore interleaved skipped slots exactly.
+            if (originalFreeIndicesForAppend != nullptr) *originalFreeIndicesForAppend = std::move(originalFreeIndices);
+        } catch (...) {
+            for (Entity entity : entities) records_[EntityIndex(entity)].alive = false;
+            records_.resize(originalRecordCount);
+            freeEntityIndices_ = std::move(originalFreeIndices);
+            liveEntities_ = originalLiveCount;
+            entities.clear();
+            throw;
+        }
     }
 
     [[nodiscard]] std::uint32_t AllocateExternalRecord(Entity entity) {
@@ -3900,6 +3998,8 @@ private:
     std::uint64_t structuralVersion_ = 1;
     std::uint64_t removalVersion_ = 0;
     std::uint64_t migrationVersion_ = 0;
+    EntityIndexAvailabilityPolicy entityIndexAvailabilityPolicy_ = nullptr;
+    void* entityIndexAvailabilityContext_ = nullptr;
 };
 
 NativeArchetypeStorage::NativeArchetypeStorage(WorldConfig config)
@@ -3918,6 +4018,10 @@ NativeArchetypeStorage& NativeArchetypeStorage::operator=(NativeArchetypeStorage
         impl_ = std::exchange(other.impl_, nullptr);
     }
     return *this;
+}
+
+void NativeArchetypeStorage::SetEntityIndexAvailabilityPolicy(EntityIndexAvailabilityPolicy policy, void* context) noexcept {
+    impl_->SetEntityIndexAvailabilityPolicy(policy, context);
 }
 
 Entity NativeArchetypeStorage::CreateEntity(std::span<const NativeComponentValue> components) {

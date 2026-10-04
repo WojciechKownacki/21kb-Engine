@@ -309,6 +309,11 @@ public:
     [[nodiscard]] NativeEcsMaintenanceStats MaintainChunks(NativeEcsMaintenanceBudget budget);
 
 private:
+    friend class World;
+    // Serial allocation/adoption only. Null keeps standalone native ID policy.
+    using EntityIndexAvailabilityPolicy = bool (*)(Entity::IdType strippedId, void* context) noexcept;
+    void SetEntityIndexAvailabilityPolicy(EntityIndexAvailabilityPolicy policy, void* context) noexcept;
+
     class Impl;
 
     Impl* impl_ = nullptr;
