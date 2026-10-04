@@ -465,6 +465,9 @@ public:
     std::vector<std::size_t> fixedTransformTouched;
     std::uint64_t fixedTransformTopologyVersion = 0U;
     std::uint64_t fixedTransformRootAppendEpoch = 0U;
+    // Roots appended while the pose records were current: the records stay current, and the next capture adds
+    // these roots' records as a rebuild would have created them.
+    std::vector<SceneEntity> fixedTransformAppendedRoots;
     bool fixedTransformCapturing = false;
     std::vector<std::string> denseEntityNames;
     std::unordered_map<SceneEntity::IdType, std::string> entityNames;

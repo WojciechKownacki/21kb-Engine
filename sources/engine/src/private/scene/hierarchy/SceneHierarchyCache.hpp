@@ -39,6 +39,7 @@ public:
         NoteRootAppended(state, entity);
         MarkTopologyDirty(state, true);
         state.transformTopology.Added(state, {&entity, 1U}, previousVersion);
+        NoteFixedTransformRootsAppended(state, {&entity, 1U}, previousVersion);
     }
 
     // AddRoot for a batch of fresh entities. Only an entity without a dense slot is kept in the hash map, as
@@ -56,6 +57,16 @@ public:
             MarkTopologyDirty(state, true);
         }
         state.transformTopology.Added(state, entities, previousVersion);
+        NoteFixedTransformRootsAppended(state, entities, previousVersion);
+    }
+
+    // Appended roots leave the fixed-step pose records current: the roots wait for their records.
+    static void NoteFixedTransformRootsAppended(SceneState& state, std::span<const SceneEntity> entities, std::uint64_t previousVersion) {
+        if (state.fixedTransformTopologyVersion != previousVersion || state.fixedTransformRootAppendEpoch != state.hierarchyRootAppendEpoch) {
+            return;
+        }
+        state.fixedTransformAppendedRoots.insert(state.fixedTransformAppendedRoots.end(), entities.begin(), entities.end());
+        state.fixedTransformTopologyVersion = state.hierarchyTopologyVersion;
     }
 
     static void AssignOrder(SceneState& state, SceneEntity entity) {

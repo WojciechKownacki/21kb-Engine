@@ -151,6 +151,7 @@ using kb::math::Normalize;
 // Keep a pose cache across ticks. Only hierarchy writes refresh it; a static
 // world pays for one initial capture instead of two full copies every substep.
 void RebuildFixedTransformSamples(Scene& scene, SceneState& state, bool preservePrevious) {
+    state.fixedTransformAppendedRoots.clear();
     auto oldSamples = std::move(state.fixedTransformSamples);
     auto oldValues = std::move(state.fixedTransformValues);
     state.fixedTransformSamples.clear();
@@ -194,9 +195,37 @@ void RebuildFixedTransformSamples(Scene& scene, SceneState& state, bool preserve
     state.fixedTransformRootAppendEpoch = state.hierarchyRootAppendEpoch;
 }
 
+// The records of the roots appended since the last capture, as RebuildFixedTransformSamples creates the record of an
+// entity it has no record of: the live pose as both poses, touched when the rebuild preserves the previous poses.
+void AddAppendedRootTransformSamples(SceneState& state, bool touched) {
+    const std::size_t firstSample = state.fixedTransformSamples.size();
+    for (const SceneEntity entity : state.fixedTransformAppendedRoots) {
+        const TransformComponent* current = state.componentStorage.Transforms().TryGet(entity);
+        if (current == nullptr) continue;
+        const std::size_t index = state.fixedTransformValues.size();
+        state.fixedTransformSamples.push_back({entity, index});
+        state.fixedTransformValues.push_back({*current, *current, touched, entity});
+        if (touched) state.fixedTransformTouched.push_back(index);
+        const std::uint32_t denseIndex = kb::ecs::GeneratedEntityIndex(entity);
+        if (denseIndex == kb::ecs::kInvalidGeneratedEntityIndex) continue;
+        if (state.fixedTransformDenseValueIndex.size() <= denseIndex) {
+            state.fixedTransformDenseValueIndex.resize(static_cast<std::size_t>(denseIndex) + 1U, SceneState::kNoFixedTransformValue);
+        }
+        state.fixedTransformDenseValueIndex[denseIndex] = static_cast<std::uint32_t>(index);
+    }
+    state.fixedTransformAppendedRoots.clear();
+    const auto middle = state.fixedTransformSamples.begin() + static_cast<std::ptrdiff_t>(firstSample);
+    std::ranges::sort(middle, state.fixedTransformSamples.end(), {}, &SceneState::FixedTransformSample::entity);
+    if (middle != state.fixedTransformSamples.begin() && middle != state.fixedTransformSamples.end() && middle->entity < std::prev(middle)->entity) {
+        std::ranges::inplace_merge(state.fixedTransformSamples, middle, {}, &SceneState::FixedTransformSample::entity);
+    }
+}
+
 void CaptureFixedStepStart(Scene& scene, SceneState& state) {
     if ((state.fixedTransformTopologyVersion != state.hierarchyTopologyVersion || state.fixedTransformRootAppendEpoch != state.hierarchyRootAppendEpoch) || state.fixedTransformSamples.empty()) {
         RebuildFixedTransformSamples(scene, state, false);
+    } else if (!state.fixedTransformAppendedRoots.empty()) {
+        AddAppendedRootTransformSamples(state, false);
     }
     for (const std::size_t index : state.fixedTransformTouched) {
         auto& value = state.fixedTransformValues[index];
@@ -210,6 +239,8 @@ void CaptureFixedStepStart(Scene& scene, SceneState& state) {
 void CaptureFixedStepEnd(Scene& scene, SceneState& state) {
     if ((state.fixedTransformTopologyVersion != state.hierarchyTopologyVersion || state.fixedTransformRootAppendEpoch != state.hierarchyRootAppendEpoch)) {
         RebuildFixedTransformSamples(scene, state, true);
+    } else if (!state.fixedTransformAppendedRoots.empty()) {
+        AddAppendedRootTransformSamples(state, true);
     }
     state.fixedTransformCapturing = false;
 }
@@ -279,6 +310,7 @@ void SceneRuntimeService::SetFixedStepSettings(Scene& scene, SceneRuntimeFixedSt
     state.fixedTransformTouched.clear();
     state.fixedTransformTopologyVersion = 0U;
     state.fixedTransformRootAppendEpoch = 0U;
+    state.fixedTransformAppendedRoots.clear();
     state.fixedTransformCapturing = false;
 }
 
@@ -564,6 +596,7 @@ bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
         state.fixedTransformTouched.clear();
         state.fixedTransformTopologyVersion = 0U;
         state.fixedTransformRootAppendEpoch = 0U;
+        state.fixedTransformAppendedRoots.clear();
         state.fixedTransformCapturing = false;
     }
 
