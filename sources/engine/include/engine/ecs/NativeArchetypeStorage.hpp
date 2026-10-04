@@ -160,6 +160,14 @@ struct NativeComponentDirtyRange {
     std::size_t dirtyCount = 0;
 };
 
+// A run of rows of one chunk of an archetype.
+struct NativeComponentRows {
+    std::size_t archetypeIndex = 0;
+    std::size_t chunkIndex = 0;
+    std::size_t firstRow = 0;
+    std::size_t count = 0;
+};
+
 struct NativeEcsMaintenanceBudget {
     std::size_t maxFreeChunksToKeep = std::numeric_limits<std::size_t>::max();
     std::size_t maxChunksToRelease = std::numeric_limits<std::size_t>::max();
@@ -242,6 +250,11 @@ public:
     // Like TryGetMutableComponentData, and flags the row as modified in the same lookup: the caller writes
     // through the returned pointer.
     [[nodiscard]] void* TryGetMutableComponentDataMarkModified(Entity entity, ComponentId componentId);
+    // Like TryGetMutableComponentData, and reports the entity's row (a run of one) so that a writer on several
+    // threads can flag what it wrote afterwards with MarkComponentRowsModified. Only reads the storage.
+    [[nodiscard]] void* TryGetMutableComponentRow(Entity entity, ComponentId componentId, NativeComponentRows& row);
+    // Flags runs of rows as modified; the component's version moves once per archetype run of the list.
+    void MarkComponentRowsModified(ComponentId componentId, std::span<const NativeComponentRows> runs);
     [[nodiscard]] bool HasComponent(Entity entity, ComponentId componentId) const;
     [[nodiscard]] std::size_t CountWithComponent(ComponentId componentId) const noexcept;
     [[nodiscard]] bool EntityArchetypeMatches(Entity entity, std::span<const ComponentId> requiredComponentIds) const;

@@ -29,15 +29,17 @@ TransformComponent* SceneTransformComponentStore::TryGet(SceneEntity entity) noe
     return static_cast<TransformComponent*>(kb::ecs::WorldInternalAccess::TryGetMutableComponent(*world_, entity, componentId_));
 }
 
+TransformComponent SceneTransformComponentStore::Written(const TransformComponent* current, const TransformComponent& transform) noexcept {
+    TransformComponent stored = transform;
+    stored.localVersion = current == nullptr ? std::max<std::uint64_t>(stored.localVersion, 1ULL) : current->localVersion + 1U;
+    stored.parentVersion = current == nullptr ? 0U : current->parentVersion;
+    stored.worldVersion = current == nullptr ? 0U : current->worldVersion;
+    stored.worldDirty = true;
+    return stored;
+}
+
 void SceneTransformComponentStore::Set(SceneEntity entity, const TransformComponent& transform) {
-    const auto bumpVersions = [&transform](const TransformComponent* current) {
-        TransformComponent stored = transform;
-        stored.localVersion = current == nullptr ? std::max<std::uint64_t>(stored.localVersion, 1ULL) : current->localVersion + 1U;
-        stored.parentVersion = current == nullptr ? 0U : current->parentVersion;
-        stored.worldVersion = current == nullptr ? 0U : current->worldVersion;
-        stored.worldDirty = true;
-        return stored;
-    };
+    const auto bumpVersions = [&transform](const TransformComponent* current) { return Written(current, transform); };
     // Nothing observes transforms: one lookup finds the row and flags it.
     if (!world_->MirrorsValueWrites(componentId_)) {
         if (void* data = kb::ecs::WorldInternalAccess::TryGetMutableNativeComponentMarkModified(*world_, entity, componentId_); data != nullptr) {
