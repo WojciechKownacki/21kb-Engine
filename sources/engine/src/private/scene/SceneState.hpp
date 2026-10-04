@@ -555,6 +555,11 @@ public:
     std::unordered_map<SceneEntity::IdType, std::uint64_t> hierarchyOrder;
     std::vector<std::uint64_t> denseHierarchyOrder;
     std::vector<SceneEntity> hierarchyRoots;
+    // When each root was last appended to hierarchyRoots (0: not a root since its slot was cleared): their order
+    // there, for a walk over a few roots that must not scan all of them.
+    std::vector<std::uint64_t> denseHierarchyRootSequence;
+    std::unordered_map<SceneEntity::IdType, std::uint64_t> hierarchyRootSequence;
+    std::uint64_t nextHierarchyRootSequence = 1U;
     std::unordered_map<SceneEntity::IdType, SceneEntity> hierarchyParents;
     std::unordered_map<SceneEntity::IdType, std::vector<SceneEntity>> hierarchyChildren;
     std::vector<SceneEntity> denseHierarchyParents;

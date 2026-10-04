@@ -1587,6 +1587,164 @@ void TestWidgetSettingsPersistence() {
 
 namespace kb::tests {
 
+struct UIFrameHash {
+    std::uint64_t value = 1469598103934665603ULL;
+
+    void Bytes(const void* data, std::size_t size) noexcept {
+        const auto* bytes = static_cast<const unsigned char*>(data);
+        for (std::size_t index = 0U; index < size; ++index) {
+            value ^= bytes[index];
+            value *= 1099511628211ULL;
+        }
+    }
+    void U64(std::uint64_t number) noexcept { Bytes(&number, sizeof(number)); }
+    void Float(float number) noexcept { Bytes(&number, sizeof(number)); }
+    void Rect(const kb::math::Rect& rect) noexcept { Float(rect.x); Float(rect.y); Float(rect.width); Float(rect.height); }
+    void Quad(const std::array<kb::math::Vec2, 4U>& quad) noexcept { for (const kb::math::Vec2 point : quad) { Float(point.x); Float(point.y); } }
+};
+
+[[nodiscard]] std::uint64_t HashUIFrame(const kb::scene::SceneUIFrame& frame) {
+    UIFrameHash hash;
+    hash.U64(frame.elements.size());
+    hash.U64(frame.refusal.entity.Id());
+    for (const kb::scene::SceneUIFrameElement& element : frame.elements) {
+        hash.U64(element.entity.Id());
+        hash.U64(element.canvas.Id());
+        hash.Rect(element.rect);
+        hash.Quad(element.corners);
+        hash.Quad(element.hitCorners);
+        hash.Rect(element.clipRect);
+        hash.Float(element.clipSoftness);
+        hash.U64(element.clipQuads.size());
+        for (const auto& quad : element.clipQuads) hash.Quad(quad);
+        hash.Float(element.canvasScale);
+        hash.Float(element.effectiveOpacity);
+        hash.U64(static_cast<std::uint64_t>(static_cast<std::uint32_t>(element.canvasSortingOrder)));
+        hash.U64(static_cast<std::uint64_t>(static_cast<std::uint32_t>(element.player)));
+        hash.U64(static_cast<std::uint64_t>(static_cast<std::uint32_t>(element.zOrder)));
+        hash.U64(element.traversalOrder);
+        hash.U64(static_cast<std::uint64_t>(element.interactionState));
+        hash.Float(element.interactionTint.r); hash.Float(element.interactionTint.g); hash.Float(element.interactionTint.b); hash.Float(element.interactionTint.a);
+        hash.U64((element.interactionEnabled ? 1U : 0U) | (element.hitTestable ? 2U : 0U) | (element.tooltip ? 4U : 0U) | (element.textCaretVisible ? 8U : 0U));
+        hash.U64((element.sprite ? 1U : 0U) | (element.image ? 2U : 0U) | (element.rawImage ? 4U : 0U) | (element.text ? 8U : 0U) |
+            (element.border ? 16U : 0U) | (element.mask ? 32U : 0U) | (element.shadow ? 64U : 0U) | (element.outline ? 128U : 0U) |
+            (element.backgroundBlur ? 256U : 0U) | (element.toggle ? 512U : 0U) | (element.slider ? 1024U : 0U) | (element.scrollbar ? 2048U : 0U) |
+            (element.scrollView ? 4096U : 0U) | (element.dropdown ? 8192U : 0U) | (element.progressBar ? 16384U : 0U) | (element.inputField ? 32768U : 0U));
+        if (element.text) {
+            const std::string_view content = kb::scene::UITextContent(*element.text);
+            hash.Bytes(content.data(), content.size());
+        }
+        if (element.toggle) hash.U64(element.toggle->toggled ? 1U : 0U);
+        if (element.slider) hash.Float(element.slider->value);
+        if (element.dropdown) hash.U64(element.dropdown->value);
+        hash.U64(element.textCaretByteOffset);
+    }
+    return hash.value;
+}
+
+// Canvases among many plain roots, with root order changed by reparenting and destruction, equal sorting orders
+// and widgets that drive the same caption, graphic and fill: the frame was recorded before the frame builder
+// stopped walking every root, and must not depend on how the canvases are found.
+void TestFrameAmongManyRootsMatchesRecordedFrame() {
+    kb::scene::Scene scene;
+    std::uint32_t seed = 12345U;
+    const auto next = [&seed](std::uint32_t range) {
+        seed = seed * 1664525U + 1013904223U;
+        return (seed >> 8U) % range;
+    };
+    std::vector<kb::scene::SceneObject> plain;
+    const auto addPlain = [&](std::size_t count) {
+        for (std::size_t index = 0U; index < count; ++index) plain.push_back(scene.Entities().CreateObject());
+    };
+    addPlain(100U);
+    std::vector<kb::scene::SceneObject> canvases;
+    kb::scene::SceneObject shared;
+    kb::scene::SceneObject sharedFill;
+    constexpr std::array<kb::scene::UIComponentPreset, 5U> presets{ kb::scene::UIComponentPreset::Button, kb::scene::UIComponentPreset::Text,
+        kb::scene::UIComponentPreset::Toggle, kb::scene::UIComponentPreset::Slider, kb::scene::UIComponentPreset::ProgressBar };
+    for (std::uint32_t canvasIndex = 0U; canvasIndex < 6U; ++canvasIndex) {
+        addPlain(50U + next(200U));
+        kb::scene::UIComponentSet canvasComponents = CanvasComponents();
+        canvasComponents.canvas->sortingOrder = static_cast<std::int32_t>(next(3U));
+        const kb::scene::SceneObject parent = canvasIndex == 4U ? plain[next(static_cast<std::uint32_t>(plain.size()))] : kb::scene::SceneObject{};
+        const kb::scene::SceneObject canvas = AddUI(scene, parent, canvasComponents);
+        canvases.push_back(canvas);
+        if (canvasIndex == 0U) {
+            kb::scene::UIComponentSet text = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Text);
+            text.rectTransform = Rect(10.0F, 10.0F, 100.0F, 20.0F);
+            shared = AddUI(scene, canvas, text);
+            kb::scene::UIComponentSet fill;
+            fill.rectTransform = Rect(10.0F, 40.0F, 100.0F, 10.0F);
+            fill.border.emplace();
+            sharedFill = AddUI(scene, canvas, fill);
+        }
+        for (std::uint32_t widgetIndex = 0U; widgetIndex < 5U; ++widgetIndex) {
+            kb::scene::UIComponentSet widget = kb::scene::BuildUIComponentPreset(presets[next(static_cast<std::uint32_t>(presets.size()))]);
+            widget.rectTransform = Rect(static_cast<float>(next(500U)), static_cast<float>(next(300U)), 40.0F + static_cast<float>(next(80U)),
+                20.0F + static_cast<float>(next(40U)), static_cast<std::int32_t>(next(3U)));
+            if (widget.toggle) {
+                widget.toggle->toggled = next(2U) == 1U;
+                widget.toggle->graphic = shared.Entity().Id();
+            }
+            if (widget.slider) {
+                widget.slider->value = static_cast<float>(next(100U)) * 0.01F;
+                widget.slider->fillRect = sharedFill.Entity().Id();
+            }
+            if (widget.progressBar) {
+                widget.progressBar->value = static_cast<float>(next(100U)) * 0.01F;
+                widget.progressBar->fillRect = sharedFill.Entity().Id();
+            }
+            static_cast<void>(AddUI(scene, canvas, widget));
+        }
+    }
+    addPlain(100U);
+    kb::tests::Require(scene.Hierarchy().SetParent(canvases[1], plain[3]) && scene.Hierarchy().SetParent(canvases[1], kb::scene::SceneObject{}),
+        "Recorded UI frame scene could not move a canvas to the end of the roots");
+    scene.Entities().Destroy(plain[7]);
+    scene.Entities().Destroy(plain[120]);
+
+    kb::scene::SceneUIFrame frame;
+    kb::tests::Require(kb::scene::SceneUIQueries{scene}.BuildFrame(640.0F, 360.0F, frame) && frame.elements.size() > 30U,
+        "Recorded UI frame scene must build");
+    const std::uint64_t hash = HashUIFrame(frame);
+    constexpr std::uint64_t expected = 0x21362496b433b984ULL;
+    if (hash != expected) std::cerr << "recorded UI frame hash 0x" << std::hex << hash << std::dec << '\n';
+    kb::tests::Require(hash == expected, "UI frame among many roots differs from the recorded frame");
+}
+
+// The frame builder walks the roots above UI objects only: a small overlay next to a million plain roots must
+// build in well under a millisecond and without large allocations.
+void TestFrameNextToMillionRootsIsCheap() {
+    kb::scene::Scene scene;
+    const std::vector<kb::scene::SceneObjectDesc> descs(1'000'000U);
+    static_cast<void>(scene.Entities().CreateObjects(descs));
+    const kb::scene::SceneObject canvas = AddUI(scene, {}, CanvasComponents());
+    for (std::uint32_t index = 0U; index < 8U; ++index) {
+        kb::scene::UIComponentSet text = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Text);
+        text.rectTransform = Rect(10.0F, 10.0F + 30.0F * static_cast<float>(index), 200.0F, 24.0F);
+        static_cast<void>(AddUI(scene, canvas, text));
+    }
+    const kb::scene::SceneUIQueries ui{scene};
+    kb::scene::SceneUIFrame frame;
+    std::array<double, 5U> samples{};
+    std::size_t largeAllocations = 0U;
+    for (int warmup = 0; warmup < 2; ++warmup) {
+        kb::tests::Require(ui.BuildFrame(1920.0F, 1080.0F, frame) && frame.elements.size() == 9U, "Overlay frame next to a million roots must build");
+    }
+    for (double& sample : samples) {
+        kb::tests::BeginAllocationTally();
+        const auto start = std::chrono::steady_clock::now();
+        const bool built = ui.BuildFrame(1920.0F, 1080.0F, frame);
+        sample = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+        largeAllocations += kb::tests::EndAllocationTally().largeCount;
+        kb::tests::Require(built && frame.elements.size() == 9U, "Overlay frame next to a million roots must build");
+    }
+    std::ranges::sort(samples);
+    std::cout << "ui_buildframe_million_roots median_ms=" << samples[2] << " large_allocations=" << largeAllocations << '\n';
+    kb::tests::Require(samples[2] < 0.5 && largeAllocations == 0U,
+        "A small overlay next to a million plain roots must build in under 0.5 ms without allocations of 16 KB or more");
+}
+
 void RunSceneUITests() {
     TestAuthoredDimensionsAndVisibility();
     TestCatalogAndPresets();
@@ -1610,6 +1768,8 @@ void RunSceneUITests() {
     TestSparseGroupTransitionLifetime();
     TestScrollMovementAndLocalizedText();
     TestWidgetSettingsPersistence();
+    TestFrameAmongManyRootsMatchesRecordedFrame();
+    TestFrameNextToMillionRootsIsCheap();
 }
 
 void RunSceneUIBuildFrameBenchmark() {
