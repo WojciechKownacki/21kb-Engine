@@ -49,7 +49,7 @@ void WorldEntityCatalog::AddMany(std::span<const Entity> entities) {
             ++anticipatedDenseSize;
         }
     }
-    densePositions_.reserve(anticipatedDenseSize);
+    ReserveGeometric(densePositions_, anticipatedDenseSize);
     for (Entity entity : entities) {
         Add(entity);
     }

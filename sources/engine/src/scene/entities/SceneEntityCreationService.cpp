@@ -32,6 +32,30 @@ void RollBackCreatedEntity(SceneState& state, SceneEntity entity) {
     state.world.DestroyEntity(entity);
 }
 
+// Names, orders and roots the entities just created with their transform and visibility, then parents them.
+void RegisterCreatedEntities(
+    Scene& scene,
+    SceneState& state,
+    std::span<const SceneEntity> entities,
+    std::span<const SceneObjectDesc> descs,
+    std::span<const VisibilityComponent> visibilities) {
+    for (std::size_t index = 0U; index < descs.size(); ++index) {
+        if (!descs[index].name.empty()) {
+            SceneEntityNaming::SetName(state, entities[index], descs[index].name);
+        }
+    }
+    SceneHierarchyCache::AssignOrderRange(state, entities);
+    SceneHierarchyCache::AddRoots(state, entities);
+    for (std::size_t index = 0U; index < descs.size(); ++index) {
+        if (visibilities[index].mode == VisibilityMode::Hidden) {
+            SetSceneRenderProxyComponentMask(state, entities[index], SceneRenderProxyComponentMask::Hidden);
+        }
+        if (descs[index].parent.EntityHandle().IsValid()) {
+            [[maybe_unused]] const bool parentAssigned = SceneHierarchyService::SetParent(scene, entities[index], descs[index].parent.Entity());
+        }
+    }
+}
+
 } // namespace
 
 SceneObject SceneEntityCreationService::CreateObject(Scene& scene) {
@@ -48,27 +72,20 @@ SceneEntity SceneEntityCreationService::CreateEntity(Scene& scene) {
 
 SceneEntity SceneEntityCreationService::CreateEntity(Scene& scene, SceneObjectDesc desc) {
     SceneState& state = SceneAccess::State(scene);
-    kb::ecs::Entity entity = state.world.CreateEntity();
+    const TransformComponent transform = SceneTransformComponentStore::Written(nullptr, desc.transform);
+    const VisibilityComponent visibility = NormalizedVisibility(desc.visibility);
+    // Born in its final archetype like a bulk-created object, without the chunks of the empty and transform-only ones.
+    const std::array<kb::ecs::World::BulkComponentView, 2U> components{
+        kb::ecs::World::MakeBulkComponentView(std::span<const TransformComponent>{ &transform, 1U }),
+        kb::ecs::World::MakeBulkComponentView(std::span<const VisibilityComponent>{ &visibility, 1U }),
+    };
+    const SceneEntity entity = state.world.CreateEntity(components);
     try {
-        if (!desc.name.empty()) {
-            SceneEntityNaming::SetName(state, entity, desc.name);
-        }
-        SceneHierarchyCache::AssignOrder(state, entity);
-        SceneHierarchyCache::AddRoot(state, entity);
-        const VisibilityComponent visibility = NormalizedVisibility(desc.visibility);
-        state.componentStorage.SetDefaults(entity, desc.transform, visibility);
-        if (visibility.mode == VisibilityMode::Hidden) {
-            SetSceneRenderProxyComponentMask(state, entity, SceneRenderProxyComponentMask::Hidden);
-        }
-
-        if (desc.parent.EntityHandle().IsValid()) {
-            [[maybe_unused]] const bool parentAssigned = SceneHierarchyService::SetParent(scene, entity, desc.parent.Entity());
-        }
+        RegisterCreatedEntities(scene, state, { &entity, 1U }, { &desc, 1U }, { &visibility, 1U });
     } catch (...) {
         RollBackCreatedEntity(state, entity);
         throw;
     }
-
     return entity;
 }
 
@@ -87,21 +104,7 @@ std::vector<SceneObject> SceneEntityCreationService::CreateObjects(Scene& scene,
     };
     const std::vector<SceneEntity> entities = state.world.CreateEntities(descs.size(), components);
     try {
-        for (std::size_t index = 0U; index < descs.size(); ++index) {
-            if (!descs[index].name.empty()) {
-                SceneEntityNaming::SetName(state, entities[index], descs[index].name);
-            }
-        }
-        SceneHierarchyCache::AssignOrderRange(state, entities);
-        SceneHierarchyCache::AddRoots(state, entities);
-        for (std::size_t index = 0U; index < descs.size(); ++index) {
-            if (visibilities[index].mode == VisibilityMode::Hidden) {
-                SetSceneRenderProxyComponentMask(state, entities[index], SceneRenderProxyComponentMask::Hidden);
-            }
-            if (descs[index].parent.EntityHandle().IsValid()) {
-                [[maybe_unused]] const bool parentAssigned = SceneHierarchyService::SetParent(scene, entities[index], descs[index].parent.Entity());
-            }
-        }
+        RegisterCreatedEntities(scene, state, entities, descs, visibilities);
     } catch (...) {
         for (const SceneEntity entity : entities) {
             RollBackCreatedEntity(state, entity);
