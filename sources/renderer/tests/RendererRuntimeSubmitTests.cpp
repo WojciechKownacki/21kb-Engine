@@ -2881,6 +2881,52 @@ void RunRuntimeStructuralFrameSyncKeepsQueuedChangesTest() {
     std::filesystem::remove_all(root, error);
 }
 
+// A spawning crowd appends roots every frame; the frame sync reconciles just them, and their meshes still arrive.
+void RunRuntimeFrameSyncAppendsRootsTest() {
+    const auto root = std::filesystem::temp_directory_path() / "21kb_runtime_append_sync";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    LifecycleSceneFixture fixture;
+    PrepareLifecycleScene(fixture, root);
+    auto& scene = fixture.scene;
+    HeadlessSurface surface;
+    DisplayConfig config{};
+    config.allowHeadlessNoop = true;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "Root append test could not initialize headless renderer");
+    kb::game::RuntimeSceneFrameSync sync;
+    const auto frame = [&] {
+        sync.BeforeUpdate(scene);
+        static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+        Require(renderer.BeginFrame() && sync.Submit(scene, renderer), "Root append frame did not submit");
+        renderer.EndFrame();
+    };
+    frame();
+    std::vector<kb::scene::SceneEntity> meshes;
+    for (std::uint32_t step = 1U; step <= 6U; ++step) {
+        for (std::uint32_t index = 0U; index < 3U; ++index) {
+            const auto entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+                .transform = TransformAt(0.1F * static_cast<float>(meshes.size()), 0.0F, 0.0F)});
+            scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{.meshAssetId = fixture.meshAssetId});
+            meshes.push_back(entity);
+        }
+        static_cast<void>(scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{}));
+        frame();
+        for (const auto mesh : meshes) {
+            Require(kb::scene::SceneRenderFeedback::IsVisible(scene, mesh), "An appended root mesh did not reach the renderer");
+        }
+        Require(renderer.RuntimeResourceStats().renderSceneMeshProxyCount == meshes.size() + 1U,
+            "Appending roots changed the renderer's mesh proxies");
+    }
+    scene.Entities().Destroy(meshes.back());
+    frame();
+    Require(renderer.RuntimeResourceStats().renderSceneMeshProxyCount == meshes.size(),
+        "A destroyed root after appended roots kept its mesh proxy");
+    renderer.Shutdown();
+    std::filesystem::remove_all(root, error);
+}
+
 void RunRendererSubmitsParticleMeshSnapshotAsOneDrawTest() {
     const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_particle_mesh_submit";
     std::error_code error;
@@ -9056,6 +9102,7 @@ void RunRendererVisibilityFeedbackTest() {
 void RunRendererRuntimeSubmitTests() {
     RunGeneratedClusterMissingResourceDiagnosticsTest();
     RunRuntimeStructuralFrameSyncKeepsQueuedChangesTest();
+    RunRuntimeFrameSyncAppendsRootsTest();
     RunRendererResourceGroupEnsureFallbacksTest();
     RunEditorUIViewTransformValidationTests();
     RunEditorCameraWireframesSubmitInHeadlessNoopTest();
