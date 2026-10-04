@@ -620,8 +620,6 @@ public:
     std::vector<bool> transformPassDeferredArchetypes;
     std::uint64_t transformPassRecordsVersion = 0U;
     bool transformPassRunning = false;
-    // Passive pass outputs keep capacity; a lease also covers serial observer publication.
-    std::shared_ptr<SceneTransformPassArena> transformPassArena;
     bool transformRenderProxyListsStale = false;
     std::vector<SceneEntity> transformRenderProxyUpdateEntities;
     std::vector<WorldTransformAffine3x4> transformRenderProxyWorldAffine3x4;
@@ -868,6 +866,12 @@ public:
     std::uint64_t lastScreenCaptureId = 0U;
     bool lastScreenCaptureSucceeded = false;
     std::optional<SceneScreenCapturePixels> lastScreenCapturePixels;
+
+    // Private additions stay after the historical SceneState prefix. Frozen provider
+    // DLLs which contain a static engine copy can embed offsets of existing fields.
+    // This placement preserves those offsets; it does not certify every old DLL path.
+    // Passive pass outputs keep capacity; a lease also covers serial observer publication.
+    std::shared_ptr<SceneTransformPassArena> transformPassArena;
 };
 
 } // namespace kb::scene
