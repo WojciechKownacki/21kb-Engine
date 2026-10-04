@@ -416,6 +416,11 @@ void RuntimeMaterialResourceEnsurer::Ensure(
         ensureMaterial(proxy.desc.materialAssetId);
         ensureMeshMaterialSlots(proxy.desc.meshAssetId);
     }
+    for (const auto& [entityId, proxy] : context.renderScene.SpaceStrokeProxies()) {
+        static_cast<void>(entityId);
+        ensureMaterial(proxy.desc.materialAssetId);
+        ensureMeshMaterialSlots(proxy.desc.meshAssetId);
+    }
     for (const auto& [entityId, proxy] : context.renderScene.SurfaceCastProxies()) {
         static_cast<void>(entityId);
         ensureMaterial(proxy.desc.materialAssetId);

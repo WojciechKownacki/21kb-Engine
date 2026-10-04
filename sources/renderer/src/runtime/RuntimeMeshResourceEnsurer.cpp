@@ -545,6 +545,10 @@ void RuntimeMeshResourceEnsurer::Ensure(
         static_cast<void>(entityId);
         ensureMeshOnce(proxy.desc.meshAssetId);
     }
+    for (const auto& [entityId, proxy] : context.renderScene.SpaceStrokeProxies()) {
+        static_cast<void>(entityId);
+        ensureMeshOnce(proxy.desc.meshAssetId);
+    }
     if (const auto& snapshot = context.renderScene.ParticleRenderSnapshot(); snapshot != nullptr) {
         bool requiresQuad = false;
         for (const kb::particles::ParticleRenderEmitterRecord& emitter : snapshot->Emitters()) {

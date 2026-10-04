@@ -727,6 +727,16 @@ if((ANDROID OR EMSCRIPTEN) AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 endif()
 
 if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_validation)
+    add_executable(kb_renderer_cpu_contract_tests tests/RendererCpuContractTests.cpp)
+    target_link_libraries(kb_renderer_cpu_contract_tests PRIVATE
+        kb_renderer kb_renderer_bake kb_runtime_asset_pack_validation flecs::flecs_static)
+    kb_apply_quality_gates(kb_renderer_cpu_contract_tests)
+    set_target_properties(kb_renderer_cpu_contract_tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+    kb_target_copy_bgfx_runtime_shaders(kb_renderer_cpu_contract_tests)
+    add_test(NAME kb_renderer_cpu_contract_tests COMMAND $<TARGET_FILE:kb_renderer_cpu_contract_tests>)
+    set_tests_properties(kb_renderer_cpu_contract_tests PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;headless;correctness")
+
     add_executable(kb_renderer_tests
         tests/RendererTests.cpp
         tests/SceneLightGridTests.cpp
