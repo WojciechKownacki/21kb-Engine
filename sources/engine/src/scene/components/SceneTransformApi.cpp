@@ -65,8 +65,7 @@ bool WriteTransform(SceneState& state, SceneEntity entity, const TransformCompon
         auto& storage = const_cast<kb::ecs::NativeArchetypeStorage&>(state.world.NativeStorage());
         if (void* data = storage.TryGetMutableComponentDataNoteWritten(entity, transformId); data != nullptr) {
             auto& row = *static_cast<TransformComponent*>(data);
-            SceneTransformComponentStore::Write(row, transform);
-            ComposeSceneTransformRoot(row);
+            WriteAndComposeSceneTransformRoot(row, transform);
             PrepareSceneTransformUpdateRecording(state);
             RecordComposedSceneTransform(state, entity, row);
             return true;
@@ -169,15 +168,15 @@ void SceneTransformService::SetMany(Scene& scene, std::span<const SceneEntity> e
                     continue;
                 }
                 auto& current = *static_cast<TransformComponent*>(data);
-                SceneTransformComponentStore::Write(current, transforms[index]);
                 std::uint32_t nodeIndex = 0U;
                 if (trackPrefab && state.prefabInstances.FindContainingEntity(entity, nodeIndex).IsValid()) range.prefabNodes.push_back(entity);
                 if (SceneTransformComposesOnWrite(state, entity)) {
-                    ComposeSceneTransformRoot(current);
+                    WriteAndComposeSceneTransformRoot(current, transforms[index]);
                     updatedBits.Record(entity, current);
                     if (range.composedArchetypes.empty() || range.composedArchetypes.back() != row.archetypeIndex) range.composedArchetypes.push_back(row.archetypeIndex);
                     continue;
                 }
+                SceneTransformComponentStore::Write(current, transforms[index]);
                 kb::ecs::NativeComponentRows* run = range.writtenRows.empty() ? nullptr : &range.writtenRows.back();
                 if (run != nullptr && run->archetypeIndex == row.archetypeIndex && run->chunkIndex == row.chunkIndex && run->firstRow + run->count == row.firstRow) {
                     ++run->count;
