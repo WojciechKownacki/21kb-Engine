@@ -463,11 +463,14 @@ public:
     static constexpr std::uint32_t kNoFixedTransformValue = 0xFFFFFFFFU;
     std::vector<std::uint32_t> fixedTransformDenseValueIndex;
     std::vector<std::size_t> fixedTransformTouched;
-    std::uint64_t fixedTransformTopologyVersion = 0U;
-    std::uint64_t fixedTransformRootAppendEpoch = 0U;
-    // Roots appended while the pose records were current: the records stay current, and the next capture adds
-    // these roots' records as a rebuild would have created them.
-    std::vector<SceneEntity> fixedTransformAppendedRoots;
+    // The pose records exist only for interpolated entities (Transforms().SetInterpolated, and every entity with a
+    // Rigidbody, CharacterController or Joint); they are rebuilt after a structural change or a change of that set.
+    std::unordered_set<SceneEntity::IdType> interpolatedEntities;
+    std::uint64_t interpolatedEntitiesVersion = 0U;
+    std::vector<SceneEntity> fixedTransformCandidatesScratch;
+    bool fixedTransformRecordsBuilt = false;
+    std::uint64_t fixedTransformStructuralVersion = 0U;
+    std::uint64_t fixedTransformInterpolationVersion = 0U;
     bool fixedTransformCapturing = false;
     std::vector<std::string> denseEntityNames;
     std::unordered_map<SceneEntity::IdType, std::string> entityNames;

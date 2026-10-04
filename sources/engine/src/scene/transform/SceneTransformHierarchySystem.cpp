@@ -1179,9 +1179,9 @@ void RunHierarchyDirtyFrontier(
         return true;
     }
 
-    // The composed rows are listed only for a reader after the pass, an observer of the transform component or the
-    // fixed-step pose records; otherwise the pass only writes the rows in place.
-    const bool listUpdatedRows = state.world.MirrorsValueWrites(state.components.TransformComponentId()) || SceneFixedTransformPosesCurrent(state);
+    // The composed rows are listed only for an observer of the transform component; otherwise the pass only writes the
+    // rows in place.
+    const bool listUpdatedRows = state.world.MirrorsValueWrites(state.components.TransformComponentId());
     if (listUpdatedRows) {
         kb::ecs::ReserveGeometric(state.transformHierarchyUpdatedEntitiesScratch, dirtyRows);
         kb::ecs::ReserveGeometric(state.transformHierarchyUpdatedTransformsScratch, dirtyRows);

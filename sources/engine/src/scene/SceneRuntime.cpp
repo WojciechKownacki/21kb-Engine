@@ -11,8 +11,10 @@
 #include "scene/components/SceneComponentRegistry.hpp"
 #include "scene/systems/SceneSystemScheduler.hpp"
 #include "scene/transform/SceneTransformHierarchySystem.hpp"
+#include "engine/ecs/NativeArchetypeStorage.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -26,56 +28,23 @@ namespace {
 
 void SynchronizeTransformHierarchy(SceneState& state) {
     SceneTransformHierarchySystem{}.Update(state);
-    if (!SceneFixedTransformPosesCurrent(state) || state.lastTransformHierarchyUpdatedCount == 0U) return;
-    // The hierarchy update published the new value of every entity it touched next to the entity itself.
-    const bool publishedValues = state.transformHierarchyUpdatedTransformsScratch.size() == state.transformHierarchyUpdatedEntitiesScratch.size();
-    // Every updated entity owns its own pose record, so records can be published from several threads; only the list of
-    // records touched during a fixed step is shared, and each chunk collects its part of it separately.
-    const auto publish = [&state, publishedValues](std::size_t updated, std::vector<std::size_t>& touchedSink) {
-        const SceneEntity entity = state.transformHierarchyUpdatedEntitiesScratch[updated];
-        std::size_t valueIndex = state.fixedTransformValues.size();
-        const std::uint32_t denseIndex = kb::ecs::GeneratedEntityIndex(entity);
-        if (denseIndex != kb::ecs::kInvalidGeneratedEntityIndex && denseIndex < state.fixedTransformDenseValueIndex.size() &&
-            state.fixedTransformDenseValueIndex[denseIndex] != SceneState::kNoFixedTransformValue) {
-            valueIndex = state.fixedTransformDenseValueIndex[denseIndex];
-        }
-        if (valueIndex >= state.fixedTransformValues.size() || state.fixedTransformValues[valueIndex].entity != entity) {
-            const auto sample = std::ranges::lower_bound(state.fixedTransformSamples, entity, {}, &SceneState::FixedTransformSample::entity);
-            if (sample == state.fixedTransformSamples.end() || sample->entity != entity) return;
-            valueIndex = sample->valueIndex;
-        }
-        const TransformComponent* current = publishedValues ? &state.transformHierarchyUpdatedTransformsScratch[updated]
-                                                            : state.componentStorage.Transforms().TryGet(entity);
-        if (current == nullptr) return;
-        auto& value = state.fixedTransformValues[valueIndex];
+    if (state.fixedTransformValues.empty() || state.lastTransformHierarchyUpdatedCount == 0U) return;
+    // Each pose record takes the pose the sync composed for its entity (a new world version).
+    for (std::size_t index = 0U; index < state.fixedTransformValues.size(); ++index) {
+        auto& value = state.fixedTransformValues[index];
+        const TransformComponent* current = state.componentStorage.Transforms().TryGet(value.entity);
+        if (current == nullptr || current->worldDirty || current->worldVersion == value.current.worldVersion) continue;
         if (state.fixedTransformCapturing) {
             if (!value.touched) {
                 value.previous = value.current;
                 value.touched = true;
-                touchedSink.push_back(valueIndex);
+                state.fixedTransformTouched.push_back(index);
             }
         } else {
             value.previous = *current;
         }
         value.current = *current;
-    };
-    const std::size_t updatedTotal = state.transformHierarchyUpdatedEntitiesScratch.size();
-    constexpr std::size_t kPublishGrainSize = 2048U;
-    // The fallback lookups (TryGet, binary search) are read-only too, but only the published-value path is worth the dispatch.
-    if (publishedValues && updatedTotal >= kPublishGrainSize * 2U && state.transformWorkerPool != nullptr && state.transformWorkerPool->Running()) {
-        const std::size_t chunkCount = (updatedTotal + kPublishGrainSize - 1U) / kPublishGrainSize;
-        std::vector<std::vector<std::size_t>> chunkTouched(state.fixedTransformCapturing ? chunkCount : 0U);
-        state.transformWorkerPool->ParallelForChunks(updatedTotal, kPublishGrainSize, [&](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk& chunk) {
-            std::vector<std::size_t> localUnused;
-            std::vector<std::size_t>& sink = chunkTouched.empty() ? localUnused : chunkTouched[chunk.index];
-            for (std::size_t offset = 0U; offset < chunk.count; ++offset) publish(chunk.begin + offset, sink);
-        });
-        for (const std::vector<std::size_t>& touched : chunkTouched) {
-            state.fixedTransformTouched.insert(state.fixedTransformTouched.end(), touched.begin(), touched.end());
-        }
-        return;
     }
-    for (std::size_t updated = 0U; updated < updatedTotal; ++updated) publish(updated, state.fixedTransformTouched);
 }
 
 void PublishRuntimeSnapshot(SceneState& state) {
@@ -150,8 +119,7 @@ using kb::math::Normalize;
 
 // Keep a pose cache across ticks. Only hierarchy writes refresh it; a static
 // world pays for one initial capture instead of two full copies every substep.
-void RebuildFixedTransformSamples(Scene& scene, SceneState& state, bool preservePrevious) {
-    state.fixedTransformAppendedRoots.clear();
+void RebuildFixedTransformSamples(Scene&, SceneState& state, bool preservePrevious) {
     auto oldSamples = std::move(state.fixedTransformSamples);
     auto oldValues = std::move(state.fixedTransformValues);
     state.fixedTransformSamples.clear();
@@ -160,27 +128,39 @@ void RebuildFixedTransformSamples(Scene& scene, SceneState& state, bool preserve
     state.fixedTransformTouched.clear();
     state.fixedTransformSamples.reserve(oldSamples.size());
     state.fixedTransformValues.reserve(oldValues.size());
-    struct Context {
-        SceneState& state;
-        const std::vector<SceneState::FixedTransformSample>& oldSamples;
-        const std::vector<SceneState::FixedTransformValues>& oldValues;
-        bool preserve;
-    } context{state, oldSamples, oldValues, preservePrevious};
-    SceneIterationService::ForEachTransform(scene, [](SceneEntity entity, const TransformComponent& current, void* raw) {
-        auto& context = *static_cast<Context*>(raw);
+    // The interpolated entities: the explicit ones and every entity with a physics body, controller or joint.
+    std::vector<SceneEntity>& candidates = state.fixedTransformCandidatesScratch;
+    candidates.clear();
+    for (const SceneEntity::IdType id : state.interpolatedEntities) candidates.push_back(SceneEntity{ id });
+    std::vector<kb::ecs::QueryTableDispatchRecord> records;
+    for (const std::uint64_t componentId : { state.components.RigidbodyComponentId(), state.components.CharacterControllerComponentId(), state.components.JointComponentId() }) {
+        if (componentId == 0U) continue;
+        records.clear();
+        const std::array<kb::ecs::ComponentId, 1U> ids{ componentId };
+        state.world.NativeStorage().CollectQueryRecords(ids, {}, {}, records);
+        for (const kb::ecs::QueryTableDispatchRecord& record : records) {
+            for (std::size_t row = 0U; row < record.entityCount; ++row) candidates.push_back(SceneEntity{ record.entityIds[row] });
+        }
+    }
+    std::ranges::sort(candidates, {}, &SceneEntity::Id);
+    candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
+    for (const SceneEntity entity : candidates) {
+        const TransformComponent* live = state.componentStorage.Transforms().TryGet(entity);
+        if (live == nullptr) continue;
+        const TransformComponent& current = *live;
         TransformComponent previous = current;
-        if (context.preserve) {
-            const auto old = std::ranges::lower_bound(context.oldSamples, entity, {}, &SceneState::FixedTransformSample::entity);
-            if (old != context.oldSamples.end() && old->entity == entity) {
-                const auto& value = context.oldValues[old->valueIndex];
+        if (preservePrevious) {
+            const auto old = std::ranges::lower_bound(oldSamples, entity, {}, &SceneState::FixedTransformSample::entity);
+            if (old != oldSamples.end() && old->entity == entity) {
+                const auto& value = oldValues[old->valueIndex];
                 previous = value.touched ? value.previous : value.current;
             }
         }
-        const std::size_t index = context.state.fixedTransformValues.size();
-        context.state.fixedTransformSamples.push_back({entity, index});
-        context.state.fixedTransformValues.push_back({previous, current, context.preserve, entity});
-        if (context.preserve) context.state.fixedTransformTouched.push_back(index);
-    }, &context);
+        const std::size_t index = state.fixedTransformValues.size();
+        state.fixedTransformSamples.push_back({entity, index});
+        state.fixedTransformValues.push_back({previous, current, preservePrevious, entity});
+        if (preservePrevious) state.fixedTransformTouched.push_back(index);
+    }
     std::ranges::sort(state.fixedTransformSamples, {}, &SceneState::FixedTransformSample::entity);
     state.fixedTransformDenseValueIndex.clear();
     for (std::size_t index = 0U; index < state.fixedTransformValues.size(); ++index) {
@@ -191,41 +171,20 @@ void RebuildFixedTransformSamples(Scene& scene, SceneState& state, bool preserve
         }
         state.fixedTransformDenseValueIndex[denseIndex] = static_cast<std::uint32_t>(index);
     }
-    state.fixedTransformTopologyVersion = state.hierarchyTopologyVersion;
-    state.fixedTransformRootAppendEpoch = state.hierarchyRootAppendEpoch;
+    state.fixedTransformRecordsBuilt = true;
+    state.fixedTransformStructuralVersion = state.world.NativeStorage().StructuralVersion();
+    state.fixedTransformInterpolationVersion = state.interpolatedEntitiesVersion;
 }
 
-// The records of the roots appended since the last capture, as RebuildFixedTransformSamples creates the record of an
-// entity it has no record of: the live pose as both poses, touched when the rebuild preserves the previous poses.
-void AddAppendedRootTransformSamples(SceneState& state, bool touched) {
-    const std::size_t firstSample = state.fixedTransformSamples.size();
-    for (const SceneEntity entity : state.fixedTransformAppendedRoots) {
-        const TransformComponent* current = state.componentStorage.Transforms().TryGet(entity);
-        if (current == nullptr) continue;
-        const std::size_t index = state.fixedTransformValues.size();
-        state.fixedTransformSamples.push_back({entity, index});
-        state.fixedTransformValues.push_back({*current, *current, touched, entity});
-        if (touched) state.fixedTransformTouched.push_back(index);
-        const std::uint32_t denseIndex = kb::ecs::GeneratedEntityIndex(entity);
-        if (denseIndex == kb::ecs::kInvalidGeneratedEntityIndex) continue;
-        if (state.fixedTransformDenseValueIndex.size() <= denseIndex) {
-            state.fixedTransformDenseValueIndex.resize(static_cast<std::size_t>(denseIndex) + 1U, SceneState::kNoFixedTransformValue);
-        }
-        state.fixedTransformDenseValueIndex[denseIndex] = static_cast<std::uint32_t>(index);
-    }
-    state.fixedTransformAppendedRoots.clear();
-    const auto middle = state.fixedTransformSamples.begin() + static_cast<std::ptrdiff_t>(firstSample);
-    std::ranges::sort(middle, state.fixedTransformSamples.end(), {}, &SceneState::FixedTransformSample::entity);
-    if (middle != state.fixedTransformSamples.begin() && middle != state.fixedTransformSamples.end() && middle->entity < std::prev(middle)->entity) {
-        std::ranges::inplace_merge(state.fixedTransformSamples, middle, {}, &SceneState::FixedTransformSample::entity);
-    }
+// The records list the interpolated entities of the current storage.
+[[nodiscard]] bool FixedTransformRecordsCurrent(const SceneState& state) noexcept {
+    return state.fixedTransformRecordsBuilt && state.fixedTransformStructuralVersion == state.world.NativeStorage().StructuralVersion() &&
+        state.fixedTransformInterpolationVersion == state.interpolatedEntitiesVersion;
 }
 
 void CaptureFixedStepStart(Scene& scene, SceneState& state) {
-    if ((state.fixedTransformTopologyVersion != state.hierarchyTopologyVersion || state.fixedTransformRootAppendEpoch != state.hierarchyRootAppendEpoch) || state.fixedTransformSamples.empty()) {
+    if (!FixedTransformRecordsCurrent(state)) {
         RebuildFixedTransformSamples(scene, state, false);
-    } else if (!state.fixedTransformAppendedRoots.empty()) {
-        AddAppendedRootTransformSamples(state, false);
     }
     for (const std::size_t index : state.fixedTransformTouched) {
         auto& value = state.fixedTransformValues[index];
@@ -237,10 +196,8 @@ void CaptureFixedStepStart(Scene& scene, SceneState& state) {
 }
 
 void CaptureFixedStepEnd(Scene& scene, SceneState& state) {
-    if ((state.fixedTransformTopologyVersion != state.hierarchyTopologyVersion || state.fixedTransformRootAppendEpoch != state.hierarchyRootAppendEpoch)) {
+    if (!FixedTransformRecordsCurrent(state)) {
         RebuildFixedTransformSamples(scene, state, true);
-    } else if (!state.fixedTransformAppendedRoots.empty()) {
-        AddAppendedRootTransformSamples(state, true);
     }
     state.fixedTransformCapturing = false;
 }
@@ -308,9 +265,7 @@ void SceneRuntimeService::SetFixedStepSettings(Scene& scene, SceneRuntimeFixedSt
     state.fixedTransformDenseValueIndex.clear();
     state.fixedTransformValues.clear();
     state.fixedTransformTouched.clear();
-    state.fixedTransformTopologyVersion = 0U;
-    state.fixedTransformRootAppendEpoch = 0U;
-    state.fixedTransformAppendedRoots.clear();
+    state.fixedTransformRecordsBuilt = false;
     state.fixedTransformCapturing = false;
 }
 
@@ -594,9 +549,7 @@ bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
         state.fixedTransformDenseValueIndex.clear();
         state.fixedTransformValues.clear();
         state.fixedTransformTouched.clear();
-        state.fixedTransformTopologyVersion = 0U;
-        state.fixedTransformRootAppendEpoch = 0U;
-        state.fixedTransformAppendedRoots.clear();
+        state.fixedTransformRecordsBuilt = false;
         state.fixedTransformCapturing = false;
     }
 

@@ -30,6 +30,8 @@ public:
     // prefab instances pays zero per-entity prefab lookups.
     static void MarkModified(Scene& scene, std::span<const SceneEntity> entities) noexcept;
     static void MarkParentModified(Scene& scene, SceneEntity entity) noexcept;
+    static void SetInterpolated(Scene& scene, SceneEntity entity, bool interpolated);
+    [[nodiscard]] static bool IsInterpolated(const Scene& scene, SceneEntity entity) noexcept;
     static void ForEach(const Scene& scene, ConstTransformVisitor visitor, void* context = nullptr);
     static void ForEachMutable(Scene& scene, MutableTransformVisitor visitor, void* context = nullptr);
 };
