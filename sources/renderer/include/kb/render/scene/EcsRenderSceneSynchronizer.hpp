@@ -12,6 +12,7 @@
 #include <span>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace kb::scene {
@@ -23,6 +24,8 @@ class WorkerPool;
 }
 
 namespace kb::render {
+
+struct MeshRenderProxy;
 
 class RenderScene;
 
@@ -149,6 +152,7 @@ public:
 
 private:
     void SyncImpl(const kb::scene::Scene& scene, RenderScene& renderScene, bool preserveExistingMeshes) const;
+    void PullComposedMeshTransforms(const kb::scene::Scene& scene, RenderScene& renderScene) const;
     mutable std::vector<std::uint64_t> seenMeshes_;
     mutable std::vector<std::uint64_t> seenCameras_;
     mutable std::vector<std::uint64_t> seenLights_;
@@ -157,6 +161,21 @@ private:
     mutable std::vector<std::uint64_t> seenSurfaceCasts_;
     mutable std::vector<std::uint64_t> seenSpaceStrokes_;
     mutable std::vector<std::uint64_t> transformUpdateEntities_;
+    // PullTransforms: every mesh proxy with its entity's transform row, kept while neither the scene's storage nor
+    // the render scene's set of mesh proxies changes structurally, and pulled on the scene's workers.
+    struct MeshPullRow {
+        kb::scene::SceneEntity entity{};
+        const kb::scene::TransformComponent* transform = nullptr;
+        const MeshRenderProxy* proxy = nullptr;
+    };
+    mutable std::vector<MeshPullRow> meshPullRows_;
+    mutable const kb::scene::Scene* meshPullScene_ = nullptr;
+    mutable const RenderScene* meshPullRenderScene_ = nullptr;
+    mutable std::uint64_t meshPullStructuralVersion_ = 0U;
+    mutable std::uint64_t meshPullMeshSetVersion_ = 0U;
+    // Rows written after the last transform sync, resolved on the calling thread after the workers.
+    mutable std::vector<std::size_t> meshPullDirtyRows_;
+    mutable std::vector<std::uint32_t> meshPullChangedGroups_;
     mutable std::vector<RenderSkinningMatrix> skinningMatrixScratch_;
     mutable std::vector<kb::scene::SkeletonBoneId> skinningBoneScratch_;
     mutable std::vector<kb::math::Mat4> skinningPoseScratch_;

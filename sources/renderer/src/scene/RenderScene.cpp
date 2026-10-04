@@ -176,6 +176,7 @@ RenderProxyId RenderScene::UpsertMesh(const MeshRenderProxyDesc& desc) {
     MeshRenderProxy& proxy = it->second;
     if (inserted) {
         meshContentRevision_ = NextContentRevision();
+        meshSetVersion_ = NextContentRevision();
         if (!sortedMeshProxies_.dirty) {
             if (sortedMeshProxies_.proxies.empty() ||
                 desc.entityId > sortedMeshProxies_.proxies.back()->desc.entityId) {
@@ -366,6 +367,7 @@ bool RenderScene::RemoveMesh(std::uint64_t entityId) noexcept {
     if (!RemoveMeshInstance(found->second)) InvalidateDrawGroups();
     else meshContentRevision_ = NextContentRevision();
     meshes_.erase(found);
+    meshSetVersion_ = NextContentRevision();
     sortedMeshProxies_.dirty = true;
     return true;
 }
@@ -463,6 +465,7 @@ std::uint32_t RenderScene::RemoveMeshesNotInSorted(std::span<const std::uint64_t
         }
         if (!RemoveMeshInstance(it->second)) InvalidateDrawGroups();
         it = meshes_.erase(it);
+        meshSetVersion_ = NextContentRevision();
         ++removed;
     }
     if (removed != 0U) {
@@ -960,8 +963,10 @@ RenderScene::TransformUpdateOutcome RenderScene::ApplyMeshTransform(std::uint64_
     if (proxyIt == meshes_.end()) {
         return TransformUpdateOutcome::NotFound;
     }
+    return ApplyMeshTransform(entityId, proxyIt->second, model);
+}
 
-    MeshRenderProxy& proxy = proxyIt->second;
+RenderScene::TransformUpdateOutcome RenderScene::ApplyMeshTransform(std::uint64_t entityId, MeshRenderProxy& proxy, const std::array<float, 16>& model, bool markGroupChanged) {
     proxy.desc.model = model; // source of truth, always current
 
     // Fast path: clean cache + a location stamped by the current build. Single
@@ -973,7 +978,7 @@ RenderScene::TransformUpdateOutcome RenderScene::ApplyMeshTransform(std::uint64_
             group.instances[proxy.instanceIndexInGroup].entityId == entityId) {
             group.instances[proxy.instanceIndexInGroup].model = model;
             // Parallel affine publication writes disjoint instances in the same page.
-            std::atomic_ref<std::uint64_t>(group.contentRevision).store(NextContentRevision(), std::memory_order_relaxed);
+            if (markGroupChanged) std::atomic_ref<std::uint64_t>(group.contentRevision).store(NextContentRevision(), std::memory_order_relaxed);
             proxy.dirty |= RenderProxyDirtyFlag::Transform;
             return TransformUpdateOutcome::InPlace;
         }
@@ -981,6 +986,12 @@ RenderScene::TransformUpdateOutcome RenderScene::ApplyMeshTransform(std::uint64_
 
     proxy.dirty |= RenderProxyDirtyFlag::Transform;
     return TransformUpdateOutcome::Fallback;
+}
+
+void RenderScene::MarkDrawGroupContentChanged(std::uint32_t groupIndex) noexcept {
+    if (groupIndex < drawGroups_.size()) {
+        drawGroups_[groupIndex].contentRevision = NextContentRevision();
+    }
 }
 
 void RenderScene::InvalidateDrawGroupsIfFallback(TransformUpdateOutcome outcome) noexcept {
@@ -999,21 +1010,30 @@ void RenderScene::AddTransformUpdateCounts(std::uint64_t inPlace, std::uint64_t 
 }
 
 bool RenderScene::UpdateMeshTransform(std::uint64_t entityId, const std::array<float, 16>& model) {
-    const TransformUpdateOutcome outcome = ApplyMeshTransform(entityId, model);
+    const auto proxyIt = meshes_.find(entityId);
+    if (proxyIt == meshes_.end()) {
+        return false;
+    }
+    UpdateMeshTransform(entityId, proxyIt->second, model);
+    return true;
+}
+
+void RenderScene::UpdateMeshTransform(std::uint64_t entityId, const MeshRenderProxy& proxy, const std::array<float, 16>& model) {
+    // The proxy is one of meshes_, found through the const lookup.
+    const TransformUpdateOutcome outcome = ApplyMeshTransform(entityId, const_cast<MeshRenderProxy&>(proxy), model);
     switch (outcome) {
     case TransformUpdateOutcome::NotFound:
-        return false;
+        return;
     case TransformUpdateOutcome::InPlace:
         meshContentRevision_ = NextContentRevision();
         if (!surfaceCasts_.empty()) drawGroupsDirty_ = true;
         ++transformInPlaceUpdateCount_;
-        return true;
+        return;
     case TransformUpdateOutcome::Fallback:
         ++transformFallbackUpdateCount_;
         InvalidateDrawGroups();
-        return true;
+        return;
     }
-    return false;
 }
 
 } // namespace kb::render
