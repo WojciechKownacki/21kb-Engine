@@ -1831,6 +1831,25 @@ if(BUILD_TESTING)
     )
     set_tests_properties(kb_scene_transform_extra_column_tests PROPERTIES LABELS "ecs;scene;transform;correctness")
 
+    kb_add_ecs_test_target(kb_scene_transform_cpu_reference_tests
+        tests/SceneTransformCpuReferenceTests.cpp
+        tests/SceneTransformCpuReferenceOracle.cpp
+    )
+    # Keep the independently ordered scalar oracle outside whole-program optimization.
+    set_property(TARGET kb_scene_transform_cpu_reference_tests PROPERTY INTERPROCEDURAL_OPTIMIZATION FALSE)
+    if(MSVC)
+        target_compile_options(kb_scene_transform_cpu_reference_tests PRIVATE /GL-)
+        set_property(SOURCE tests/SceneTransformCpuReferenceOracle.cpp APPEND PROPERTY COMPILE_OPTIONS /GL-)
+    endif()
+    set_tests_properties(kb_scene_transform_cpu_reference_tests PROPERTIES LABELS "ecs;scene;transform;correctness;reference")
+
+    kb_add_ecs_test_target(kb_scene_transform_scratch_tests
+        tests/SceneTransformScratchTests.cpp
+    )
+    target_compile_definitions(kb_scene_transform_scratch_tests PRIVATE KB_SCENE_TRANSFORM_SCRATCH_STANDALONE)
+    target_include_directories(kb_scene_transform_scratch_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/private)
+    set_tests_properties(kb_scene_transform_scratch_tests PROPERTIES LABELS "ecs;scene;transform;correctness")
+
     kb_add_ecs_test_target(kb_ecs_scheduler_correctness_tests
         tests/EcsSchedulerCorrectnessTestMain.cpp
         tests/EcsSystemSchedulerTests.cpp
