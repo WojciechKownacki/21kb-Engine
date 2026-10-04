@@ -525,6 +525,341 @@ void RunObserverStructureChangeTest() {
         "Extra publication must retain entity identities after an observer migrates and destroys later rows");
 }
 
+template<std::size_t Bit>
+struct ArenaPartitionMarker {
+    std::uint32_t value = static_cast<std::uint32_t>(Bit);
+};
+
+struct ArenaLifetimeContext {
+    ExtraFixture* fixture = nullptr;
+    kb::ecs::ComponentId transformId = 0U;
+    kb::ecs::ComponentId partitionId = 0U;
+    std::size_t outerRecordCount = 0U;
+    std::size_t nestedCount = 0U;
+    std::size_t nestedBodies = 0U;
+    bool entered = false;
+    bool nestedRethrown = false;
+    std::vector<kb::scene::TransformComponent> initial;
+    std::vector<std::array<std::uint64_t, 4U>> initialNative;
+    std::vector<std::array<std::uint64_t, 4U>> migratedNative;
+    std::vector<std::array<std::size_t, 3U>> events;
+    std::vector<std::array<std::uint32_t, 2U>> lastExtra;
+    std::vector<float> lastTransformX;
+    std::vector<std::uint32_t> lastTransformLocalVersion;
+    std::vector<std::uint8_t> nestedRows;
+    std::vector<std::uint8_t> selectedTable;
+    std::vector<std::size_t> tableRows;
+
+    std::size_t Index(kb::ecs::Entity entity) const {
+        const auto& objects = fixture->objects;
+        const auto found = std::find_if(objects.begin(), objects.end(), [entity](const auto& object) {
+            return object.Entity() == entity;
+        });
+        kb::tests::Require(found != objects.end(), "Arena lifetime publication delivered an unknown entity");
+        return static_cast<std::size_t>(found - objects.begin());
+    }
+
+    std::array<std::uint64_t, 4U> NativeVersions(std::size_t index) const {
+        const auto entity = fixture->objects[index].Entity();
+        return { fixture->storage.ComponentVersion(entity, fixture->extraId),
+            fixture->storage.ComponentVersion(entity, fixture->readId),
+            fixture->storage.ComponentVersion(entity, transformId),
+            fixture->world.Has<PartitionState>(entity) ? fixture->storage.ComponentVersion(entity, partitionId) : 0U };
+    }
+};
+
+void RunNestedArenaPasses(ArenaLifetimeContext& observed) {
+    ExtraFixture& fixture = *observed.fixture;
+    const std::size_t count = fixture.objects.size();
+    // Every outer native component's metadata must be complete before the first observer runs.
+    for (std::size_t index = 0U; index < count; ++index) {
+        const auto entity = fixture.objects[index].Entity();
+        const auto transform = fixture.scene.Transforms().Get(entity);
+        const auto versions = observed.NativeVersions(index);
+        kb::tests::Require(fixture.world.TryGet<ExtraState>(entity)->value == 10000U + index &&
+                fixture.world.TryGet<ExtraReadState>(entity)->value == 20000U + index &&
+                transform.localPosition.x == 13.0F && transform.localVersion == observed.initial[index].localVersion + 1U &&
+                transform.worldVersion == observed.initial[index].worldVersion && transform.worldDirty &&
+                versions[0] > observed.initialNative[index][0] && versions[1] > observed.initialNative[index][1] &&
+                versions[2] > observed.initialNative[index][2],
+            "Arena lifetime outer publication began before all native values and metadata were ready");
+    }
+
+    // Split four outer chunks into eight schemas. Native migration happens immediately, even when
+    // backend observer delivery is deferred, and invalidates the outer cached query's row pointers.
+    for (std::size_t index = 0U; index < count; ++index) {
+        const auto entity = fixture.objects[index].Entity();
+        fixture.world.Set(entity, PartitionState{ static_cast<std::uint32_t>(index) });
+        if ((index & 1U) != 0U) fixture.world.Set(entity, ArenaPartitionMarker<0U>{});
+        if ((index & 2U) != 0U) fixture.world.Set(entity, ArenaPartitionMarker<1U>{});
+        if ((index & 4U) != 0U) fixture.world.Set(entity, ArenaPartitionMarker<2U>{});
+    }
+    observed.partitionId = fixture.world.Component<PartitionState>();
+    const std::array<kb::ecs::ComponentId, 3U> ids{ fixture.readId, fixture.extraId, observed.partitionId };
+    std::vector<kb::ecs::QueryTableDispatchRecord> nestedRecords;
+    fixture.storage.CollectQueryRecords(ids, {}, {}, nestedRecords);
+    kb::tests::Require(nestedRecords.size() >= 8U && nestedRecords.size() > observed.outerRecordCount,
+        "Arena lifetime migration must grow the nested query's record and task counts");
+    observed.nestedCount = nestedRecords[0].entityCount;
+    for (std::size_t row = 0U; row < observed.nestedCount; ++row) {
+        observed.nestedRows[observed.Index(kb::ecs::Entity{ nestedRecords[0].entityIds[row] })] = 1U;
+    }
+    for (const auto& record : nestedRecords) {
+        std::size_t tableRows = 0U;
+        for (const auto& sameTable : nestedRecords) {
+            if (sameTable.nativeArchetypeIndex == record.nativeArchetypeIndex) tableRows += sameTable.entityCount;
+        }
+        for (std::size_t row = 0U; row < record.entityCount; ++row) {
+            const auto index = observed.Index(kb::ecs::Entity{ record.entityIds[row] });
+            observed.tableRows[index] = tableRows;
+            observed.selectedTable[index] = static_cast<std::uint8_t>(record.nativeArchetypeIndex == nestedRecords[0].nativeArchetypeIndex);
+        }
+    }
+    for (std::size_t index = 0U; index < count; ++index) observed.migratedNative[index] = observed.NativeVersions(index);
+
+    // A single task makes the exception's exact first-record coverage independent of scheduling.
+    try {
+        static_cast<void>(fixture.scene.Transforms().ParallelForEachRoot<ExtraReadState, ExtraState, PartitionState>(
+            count * nestedRecords.size(), [&observed](kb::scene::TransformRowRange& range) {
+                ++observed.nestedBodies;
+                kb::tests::Require(observed.nestedBodies == 1U && range.Count() == observed.nestedCount,
+                    "Arena lifetime exception must visit exactly its first nested record");
+                auto* reads = range.Column<ExtraReadState>(0U);
+                auto* extras = range.Column<ExtraState>(1U);
+                const auto* partitions = range.ReadColumn<PartitionState>(2U);
+                for (std::size_t row = 0U; row < range.Count(); ++row) {
+                    const auto index = observed.Index(range.Entity(row));
+                    kb::tests::Require(observed.nestedRows[index] != 0U && partitions[row].value == index,
+                        "Arena lifetime nested range lost its exact entity or partition value");
+                    extras[row].value = 33300U + static_cast<std::uint32_t>(index);
+                    reads[row].value = 44400U + static_cast<std::uint32_t>(index);
+                    range.SetLocal(row, kb::scene::Vec3{ 29.0F, 0.0F, 0.0F }, range.Get(row).localRotation, range.Get(row).localScale);
+                }
+                throw std::runtime_error("arena nested sentinel");
+            }));
+    } catch (const std::runtime_error& exception) {
+        if (std::string_view{ exception.what() } != "arena nested sentinel") throw;
+        observed.nestedRethrown = true;
+    }
+    kb::tests::Require(observed.nestedRethrown && observed.nestedBodies == 1U,
+        "Arena lifetime nested exception was not published and rethrown");
+    for (std::size_t index = 0U; index < count; ++index) {
+        const auto versions = observed.NativeVersions(index);
+        const std::uint64_t delta = observed.selectedTable[index] != 0U ? 1U + observed.nestedCount : 0U;
+        for (std::size_t component = 0U; component < 3U; ++component) {
+            kb::tests::Require(versions[component] == observed.migratedNative[index][component] + delta,
+                "Arena lifetime nested exception published an incorrect component version increment");
+        }
+        kb::tests::Require(versions[3] == observed.migratedNative[index][3],
+            "Arena lifetime nested exception wrote its read-only partition component");
+    }
+
+    // Change both the plan key and task count while the outer output/deferred lists are still live.
+    // This successful nested read must clear its own declarations, without clearing the outer arena.
+    const auto read = fixture.scene.Transforms().ParallelForEachRoot<PartitionState>(1U, [&observed](kb::scene::TransformRowRange& range) {
+        const auto* partitions = range.Column<const PartitionState>();
+        for (std::size_t row = 0U; row < range.Count(); ++row) {
+            kb::tests::Require(partitions[row].value == observed.Index(range.Entity(row)),
+                "Arena lifetime nested recovery read used stale query records");
+        }
+    });
+    kb::tests::Require(read.rowsVisited == count && read.rowsWritten == 0U && read.rowsDeferred == 0U,
+        "Arena lifetime nested recovery read retained an exception's transform writes");
+    for (std::size_t index = 0U; index < count; ++index) {
+        const auto versions = observed.NativeVersions(index);
+        const std::uint64_t delta = observed.selectedTable[index] != 0U ? 1U + observed.nestedCount : 0U;
+        for (std::size_t component = 0U; component < 4U; ++component) {
+            kb::tests::Require(versions[component] == observed.migratedNative[index][component] + (component < 3U ? delta : 0U),
+                "Arena lifetime nested recovery read published stale component declarations");
+        }
+    }
+}
+
+void ObserveArenaExtra(kb::ecs::Entity entity, kb::ecs::ComponentEventKind event, const ExtraState* state, void* context) {
+    if (event != kb::ecs::ComponentEventKind::Modified || state == nullptr) return;
+    auto& observed = *static_cast<ArenaLifetimeContext*>(context);
+    const std::uint32_t value = state->value; // Never retain a backend pointer across the nested migration.
+    const auto index = observed.Index(entity);
+    kb::tests::Require(value == observed.fixture->world.TryGet<ExtraState>(entity)->value,
+        "Arena lifetime extra observer received a stale native value");
+    ++observed.events[index][0];
+    observed.lastExtra[index][0] = value;
+    if (!observed.entered) {
+        observed.entered = true;
+        RunNestedArenaPasses(observed);
+    }
+}
+
+void ObserveArenaReadExtra(kb::ecs::Entity entity, kb::ecs::ComponentEventKind event, const ExtraReadState* state, void* context) {
+    if (event != kb::ecs::ComponentEventKind::Modified || state == nullptr) return;
+    auto& observed = *static_cast<ArenaLifetimeContext*>(context);
+    const auto index = observed.Index(entity);
+    const std::uint32_t value = state->value;
+    kb::tests::Require(value == observed.fixture->world.TryGet<ExtraReadState>(entity)->value,
+        "Arena lifetime second extra observer received a stale native value");
+    ++observed.events[index][1];
+    observed.lastExtra[index][1] = value;
+}
+
+void ObserveArenaTransform(kb::ecs::Entity entity, kb::ecs::ComponentEventKind event, const kb::scene::TransformComponent* state, void* context) {
+    if (event != kb::ecs::ComponentEventKind::Modified || state == nullptr) return;
+    auto& observed = *static_cast<ArenaLifetimeContext*>(context);
+    const auto index = observed.Index(entity);
+    const auto current = observed.fixture->scene.Transforms().Get(entity);
+    kb::tests::Require(state->localPosition.x == current.localPosition.x && state->localVersion == current.localVersion,
+        "Arena lifetime transform observer received stale local metadata");
+    ++observed.events[index][2];
+    observed.lastTransformX[index] = state->localPosition.x;
+    observed.lastTransformLocalVersion[index] = state->localVersion;
+}
+
+void RunObserverNestedArenaLifetimeTest() {
+    ExtraFixture fixture;
+    fixture.CreateThreeChunksAndTail();
+    fixture.scene.Runtime().SynchronizeTransforms();
+    const std::size_t count = fixture.objects.size();
+    ArenaLifetimeContext observed{ .fixture = &fixture,
+        .transformId = fixture.world.Component<kb::scene::TransformComponent>(),
+        .partitionId = fixture.world.Component<PartitionState>(), .outerRecordCount = fixture.records.size() };
+    observed.initial.resize(count);
+    observed.initialNative.resize(count);
+    observed.migratedNative.resize(count);
+    observed.events.resize(count);
+    observed.lastExtra.resize(count);
+    observed.lastTransformX.resize(count);
+    observed.lastTransformLocalVersion.resize(count);
+    observed.nestedRows.resize(count, 0U);
+    observed.selectedTable.resize(count, 0U);
+    observed.tableRows.resize(count, 0U);
+    const auto extraObserver = fixture.world.ObserveComponent<ExtraState>(kb::ecs::ComponentEventKind::Modified, &ObserveArenaExtra, &observed);
+    const auto readObserver = fixture.world.ObserveComponent<ExtraReadState>(kb::ecs::ComponentEventKind::Modified, &ObserveArenaReadExtra, &observed);
+    const auto transformObserver = fixture.world.ObserveComponent<kb::scene::TransformComponent>(kb::ecs::ComponentEventKind::Modified, &ObserveArenaTransform, &observed);
+    kb::tests::Require(extraObserver != 0U && readObserver != 0U && transformObserver != 0U,
+        "Arena lifetime observer registration failed");
+    for (std::size_t index = 0U; index < count; ++index) {
+        observed.initial[index] = fixture.scene.Transforms().Get(fixture.objects[index]);
+        observed.initialNative[index] = observed.NativeVersions(index);
+    }
+    const auto outer = fixture.scene.Transforms().ParallelForEachRoot<ExtraState, ExtraReadState>(1U, [&observed](kb::scene::TransformRowRange& range) {
+        auto* extras = range.Column<ExtraState>(0U);
+        auto* reads = range.Column<ExtraReadState>(1U);
+        for (std::size_t row = 0U; row < range.Count(); ++row) {
+            const auto index = observed.Index(range.Entity(row));
+            extras[row].value = 10000U + static_cast<std::uint32_t>(index);
+            reads[row].value = 20000U + static_cast<std::uint32_t>(index);
+            range.SetLocal(row, kb::scene::Vec3{ 13.0F, 0.0F, 0.0F }, range.Get(row).localRotation, range.Get(row).localScale);
+        }
+    });
+    kb::tests::Require(observed.entered && observed.nestedRethrown && outer.rowsWritten == count && outer.rowsDeferred == count,
+        "Arena lifetime outer pass lost its deferred output or did not enter the nested pass");
+    // Flecs may defer nested OnSet delivery until the first outer callback returns. Count complete
+    // per-entity coverage here, without depending on callback ordering or the delivery phase.
+    for (std::size_t index = 0U; index < count; ++index) {
+        const auto entity = fixture.objects[index].Entity();
+        const bool nested = observed.nestedRows[index] != 0U;
+        const std::uint32_t expectedExtra = (nested ? 33300U : 10000U) + static_cast<std::uint32_t>(index);
+        const std::uint32_t expectedRead = (nested ? 44400U : 20000U) + static_cast<std::uint32_t>(index);
+        const std::size_t expectedEvents = 1U + static_cast<std::size_t>(nested);
+        const auto transform = fixture.scene.Transforms().Get(entity);
+        const auto versions = observed.NativeVersions(index);
+        kb::tests::Require(observed.events[index] == std::array<std::size_t, 3U>{ expectedEvents, expectedEvents, expectedEvents } &&
+                fixture.world.TryGet<ExtraState>(entity)->value == expectedExtra && fixture.world.TryGet<ExtraReadState>(entity)->value == expectedRead &&
+                observed.lastExtra[index] == std::array<std::uint32_t, 2U>{ expectedExtra, expectedRead } &&
+                transform.localPosition.x == (nested ? 29.0F : 13.0F) && transform.localVersion == observed.initial[index].localVersion + expectedEvents &&
+                transform.worldVersion == observed.initial[index].worldVersion && transform.worldDirty && transform.parentVersion == 0U &&
+                observed.lastTransformX[index] == transform.localPosition.x && observed.lastTransformLocalVersion[index] == transform.localVersion,
+            "Arena lifetime outer/nested publication lost an entity event, value or logical version");
+        const std::uint64_t delta = observed.tableRows[index] + (observed.selectedTable[index] != 0U ? 1U + observed.nestedCount : 0U);
+        for (std::size_t component = 0U; component < 4U; ++component) {
+            kb::tests::Require(versions[component] == observed.migratedNative[index][component] + (component < 3U ? delta : 0U),
+                "Arena lifetime outer/nested publication lost or repeated a component version increment");
+        }
+    }
+
+    fixture.world.DestroyObserver(transformObserver);
+    fixture.scene.Runtime().SynchronizeTransforms();
+    fixture.RefreshRecords();
+    fixture.ClearDirty();
+    const auto eventBaseline = observed.events;
+    std::vector<std::array<std::uint64_t, 4U>> versionBaseline(count);
+    std::vector<kb::scene::TransformComponent> transformBaseline(count);
+    for (std::size_t index = 0U; index < count; ++index) {
+        versionBaseline[index] = observed.NativeVersions(index);
+        transformBaseline[index] = fixture.scene.Transforms().Get(fixture.objects[index]);
+        kb::tests::Require(!transformBaseline[index].worldDirty &&
+                transformBaseline[index].worldPosition.x == transformBaseline[index].localPosition.x &&
+                transformBaseline[index].worldVersion == observed.initial[index].worldVersion + 1U,
+            "Arena lifetime deferred roots did not synchronize once with their final local values");
+    }
+    const auto read = fixture.scene.Transforms().ParallelForEachRoot<ExtraState, ExtraReadState>(1U, [&observed](kb::scene::TransformRowRange& range) {
+        const auto* extras = range.Column<const ExtraState>(0U);
+        const auto* reads = range.Column<const ExtraReadState>(1U);
+        for (std::size_t row = 0U; row < range.Count(); ++row) {
+            const auto index = observed.Index(range.Entity(row));
+            kb::tests::Require(extras[row].value == observed.lastExtra[index][0] && reads[row].value == observed.lastExtra[index][1],
+                "Arena lifetime later read used stale query rows");
+        }
+    });
+    kb::tests::Require(read.rowsVisited == count && read.rowsWritten == 0U && read.rowsDeferred == 0U && observed.events == eventBaseline,
+        "Arena lifetime retained primary outputs were not reset before a later read-only pass");
+    for (std::size_t index = 0U; index < count; ++index) {
+        kb::tests::Require(observed.NativeVersions(index) == versionBaseline[index],
+            "Arena lifetime later read replayed stale component publication");
+    }
+    for (const auto& record : fixture.records) {
+        kb::tests::Require(fixture.storage.ComponentDirtyCount(record.nativeArchetypeIndex, record.nativeChunkIndex, fixture.extraId) == 0U &&
+                fixture.storage.ComponentDirtyCount(record.nativeArchetypeIndex, record.nativeChunkIndex, fixture.readId) == 0U,
+            "Arena lifetime later read replayed old extra dirty rows");
+    }
+
+    const auto untouched = std::find(observed.nestedRows.begin(), observed.nestedRows.end(), std::uint8_t{ 0U });
+    kb::tests::Require(untouched != observed.nestedRows.end(), "Arena lifetime recovery needs a row outside the exception's coverage");
+    const std::size_t target = static_cast<std::size_t>(untouched - observed.nestedRows.begin());
+    std::size_t targetArchetype = std::numeric_limits<std::size_t>::max();
+    for (const auto& record : fixture.records) {
+        for (std::size_t row = 0U; row < record.entityCount; ++row) {
+            if (kb::ecs::Entity{ record.entityIds[row] } == fixture.objects[target].Entity()) targetArchetype = record.nativeArchetypeIndex;
+        }
+    }
+    const auto recovered = fixture.scene.Transforms().ParallelForEachRoot<ExtraState, ExtraReadState>(1U, [&observed, target](kb::scene::TransformRowRange& range) {
+        static_cast<void>(range.ReadColumn<ExtraReadState>(1U));
+        for (std::size_t row = 0U; row < range.Count(); ++row) {
+            if (range.Entity(row) != observed.fixture->objects[target].Entity()) continue;
+            range.WriteColumn<ExtraState>(row, 1U)[0].value = 60600U + static_cast<std::uint32_t>(target);
+            range.SetLocal(row, kb::scene::Vec3{ 47.0F, 0.0F, 0.0F }, range.Get(row).localRotation, range.Get(row).localScale);
+        }
+    });
+    kb::tests::Require(recovered.rowsWritten == 1U && recovered.rowsDeferred == 0U,
+        "Arena lifetime successful recovery pass retained stale transform outputs");
+    for (const auto& record : fixture.records) {
+        bool containsTarget = false;
+        for (std::size_t row = 0U; row < record.entityCount; ++row) {
+            const auto index = observed.Index(kb::ecs::Entity{ record.entityIds[row] });
+            const bool isTarget = index == target;
+            containsTarget = containsTarget || isTarget;
+            const bool sameTable = record.nativeArchetypeIndex == targetArchetype;
+            const auto versions = observed.NativeVersions(index);
+            const auto transform = fixture.scene.Transforms().Get(fixture.objects[index]);
+            auto expectedEvents = eventBaseline[index];
+            if (isTarget) ++expectedEvents[0];
+            kb::tests::Require(observed.events[index] == expectedEvents &&
+                    fixture.world.TryGet<ExtraState>(fixture.objects[index].Entity())->value == (isTarget ? 60600U + target : observed.lastExtra[index][0]) &&
+                    fixture.world.TryGet<ExtraReadState>(fixture.objects[index].Entity())->value == observed.lastExtra[index][1] &&
+                    transform.localVersion == transformBaseline[index].localVersion + static_cast<std::size_t>(isTarget) &&
+                    transform.worldVersion == transformBaseline[index].worldVersion + static_cast<std::size_t>(isTarget) &&
+                    transform.worldPosition.x == (isTarget ? 47.0F : transformBaseline[index].worldPosition.x) && !transform.worldDirty &&
+                    versions[0] == versionBaseline[index][0] + (sameTable ? 2U : 0U) && versions[1] == versionBaseline[index][1] &&
+                    versions[2] == versionBaseline[index][2] + (sameTable ? 1U : 0U) && versions[3] == versionBaseline[index][3],
+                "Arena lifetime successful recovery published anything beyond its one declared row");
+        }
+        kb::tests::Require(fixture.storage.ComponentDirtyCount(record.nativeArchetypeIndex, record.nativeChunkIndex, fixture.extraId) == (containsTarget ? 1U : 0U) &&
+                fixture.storage.ComponentDirtyCount(record.nativeArchetypeIndex, record.nativeChunkIndex, fixture.readId) == 0U,
+            "Arena lifetime successful recovery leaked old full or partial extra declarations");
+    }
+    fixture.world.DestroyObserver(extraObserver);
+    fixture.world.DestroyObserver(readObserver);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -552,5 +887,6 @@ int main(int argc, char** argv) {
     run("transform-alias", &RunTransformAliasTest);
     run("raw-contract", &RunRawEntryPointContractTest);
     run("structure", &RunObserverStructureChangeTest);
+    run("arena-lifetime", &RunObserverNestedArenaLifetimeTest);
     std::cout << "Scene transform extra column tests passed" << std::endl;
 }
