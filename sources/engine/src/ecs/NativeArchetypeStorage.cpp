@@ -521,28 +521,15 @@ public:
             (chunk.dirtyRowCounts.capacity() * sizeof(std::size_t));
     }
     [[nodiscard]] std::size_t NewChunkAcquiresForAppend(std::size_t entityCount) const noexcept {
-        if (entityCount == 0U || layout_.capacity == 0U) {
-            return 0U;
-        }
-
-        std::size_t remaining = entityCount;
-        if (liveEntities_ == 0U && !chunks_.empty()) {
-            for (const NativeChunk& chunk : chunks_) {
-                const std::size_t available = layout_.capacity > chunk.rowCount ? layout_.capacity - chunk.rowCount : 0U;
-                if (available >= remaining) {
-                    return 0U;
-                }
-                remaining -= available;
-            }
-        } else if (!chunks_.empty()) {
-            const std::size_t available = layout_.capacity > chunks_.back().rowCount ? layout_.capacity - chunks_.back().rowCount : 0U;
-            if (available >= remaining) {
-                return 0U;
-            }
-            remaining -= available;
-        }
-
-        return (remaining + layout_.capacity - 1U) / layout_.capacity;
+        if (entityCount == 0U || layout_.capacity == 0U) return 0U;
+        const std::size_t activeChunks = liveEntities_ == 0U ? 0U : (liveEntities_ - 1U) / layout_.capacity + 1U;
+        const std::size_t tailRows = liveEntities_ % layout_.capacity;
+        const std::size_t tailAvailable = tailRows == 0U ? 0U : layout_.capacity - tailRows;
+        if (entityCount <= tailAvailable) return 0U;
+        const std::size_t remaining = entityCount - tailAvailable;
+        const std::size_t requiredChunks = remaining / layout_.capacity + static_cast<std::size_t>(remaining % layout_.capacity != 0U);
+        const std::size_t retainedChunks = chunks_.size() > activeChunks ? chunks_.size() - activeChunks : 0U;
+        return requiredChunks > retainedChunks ? requiredChunks - retainedChunks : 0U;
     }
 
     [[nodiscard]] bool HasComponent(ComponentId componentId) const noexcept {
@@ -587,13 +574,16 @@ public:
         if (componentVersions_.empty()) {
             componentVersions_.resize(layout_.columns.size(), 1U);
         }
-        if (chunks_.empty() || chunks_.back().rowCount == layout_.capacity) {
+        const std::size_t chunkIndex = liveEntities_ / layout_.capacity;
+        assert(chunkIndex <= chunks_.size());
+        if (chunkIndex == chunks_.size()) {
             chunks_.emplace_back(*pool_, layout_.capacity, layout_.columns.size(), DirtyWordCount(), layout_.sidePayloadBytes);
         }
-        EntityLocation location{ .chunk = chunks_.size() - 1U, .row = chunks_.back().rowCount };
-        chunks_.back().entities[location.row] = entity;
+        NativeChunk& chunk = chunks_[chunkIndex];
+        EntityLocation location{ .chunk = chunkIndex, .row = chunk.rowCount };
+        chunk.entities[location.row] = entity;
         ZeroRow(location);
-        ++chunks_.back().rowCount;
+        ++chunk.rowCount;
         ++liveEntities_;
         ++version_;
         MarkAllComponentRowsDirty(location.chunk, location.row, 1U);
@@ -610,23 +600,13 @@ public:
             componentVersions_.resize(layout_.columns.size(), 1U);
         }
         std::size_t consumed = 0;
-        const bool reuseRetainedChunks = liveEntities_ == 0U && !chunks_.empty();
-        std::size_t retainedChunkCursor = 0U;
         while (consumed < entities.size()) {
-            std::size_t chunkIndex = chunks_.size();
-            if (reuseRetainedChunks) {
-                while (retainedChunkCursor < chunks_.size() && chunks_[retainedChunkCursor].rowCount == layout_.capacity) {
-                    ++retainedChunkCursor;
-                }
-                if (retainedChunkCursor < chunks_.size()) {
-                    chunkIndex = retainedChunkCursor++;
-                }
-            } else if (!chunks_.empty() && chunks_.back().rowCount < layout_.capacity) {
-                chunkIndex = chunks_.size() - 1U;
-            }
+            // Logical rows form a dense prefix even while later physical chunks
+            // remain retained after ClearRetainingCapacity.
+            const std::size_t chunkIndex = liveEntities_ / layout_.capacity;
+            assert(chunkIndex <= chunks_.size());
             if (chunkIndex == chunks_.size()) {
                 chunks_.emplace_back(*pool_, layout_.capacity, layout_.columns.size(), DirtyWordCount(), layout_.sidePayloadBytes);
-                chunkIndex = chunks_.size() - 1U;
             }
 
             NativeChunk& chunk = chunks_[chunkIndex];
@@ -663,23 +643,13 @@ public:
             componentVersions_.resize(layout_.columns.size(), 1U);
         }
         std::size_t consumed = 0;
-        const bool reuseRetainedChunks = liveEntities_ == 0U && !chunks_.empty();
-        std::size_t retainedChunkCursor = 0U;
         while (consumed < entities.size()) {
-            std::size_t chunkIndex = chunks_.size();
-            if (reuseRetainedChunks) {
-                while (retainedChunkCursor < chunks_.size() && chunks_[retainedChunkCursor].rowCount == layout_.capacity) {
-                    ++retainedChunkCursor;
-                }
-                if (retainedChunkCursor < chunks_.size()) {
-                    chunkIndex = retainedChunkCursor++;
-                }
-            } else if (!chunks_.empty() && chunks_.back().rowCount < layout_.capacity) {
-                chunkIndex = chunks_.size() - 1U;
-            }
+            // Logical rows form a dense prefix even while later physical chunks
+            // remain retained after ClearRetainingCapacity.
+            const std::size_t chunkIndex = liveEntities_ / layout_.capacity;
+            assert(chunkIndex <= chunks_.size());
             if (chunkIndex == chunks_.size()) {
                 chunks_.emplace_back(*pool_, layout_.capacity, layout_.columns.size(), DirtyWordCount(), layout_.sidePayloadBytes);
-                chunkIndex = chunks_.size() - 1U;
             }
 
             NativeChunk& chunk = chunks_[chunkIndex];
@@ -727,8 +697,9 @@ public:
             throw std::out_of_range("Invalid native ECS row location");
         }
 
-        NativeChunk& lastChunk = chunks_.back();
-        EntityLocation last{ .chunk = chunks_.size() - 1U, .row = lastChunk.rowCount - 1U };
+        const std::size_t lastChunkIndex = (liveEntities_ - 1U) / layout_.capacity;
+        NativeChunk& lastChunk = chunks_[lastChunkIndex];
+        EntityLocation last{ .chunk = lastChunkIndex, .row = lastChunk.rowCount - 1U };
         Entity movedEntity{};
         if (location.chunk != last.chunk || location.row != last.row) {
             CopyRow(last, location);
@@ -745,7 +716,7 @@ public:
             ++componentVersion;
         }
 
-        if (lastChunk.rowCount == 0) {
+        if (lastChunk.rowCount == 0 && lastChunkIndex + 1U == chunks_.size()) {
             chunks_.pop_back();
         }
         return movedEntity;
