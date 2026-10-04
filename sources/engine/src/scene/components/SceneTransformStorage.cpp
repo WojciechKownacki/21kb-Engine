@@ -31,7 +31,7 @@ TransformComponent* SceneTransformComponentStore::TryGet(SceneEntity entity) noe
 
 TransformComponent SceneTransformComponentStore::Written(const TransformComponent* current, const TransformComponent& transform) noexcept {
     TransformComponent stored = transform;
-    stored.localVersion = current == nullptr ? std::max<std::uint64_t>(stored.localVersion, 1ULL) : current->localVersion + 1U;
+    stored.localVersion = current == nullptr ? std::max<std::uint32_t>(stored.localVersion, 1U) : current->localVersion + 1U;
     stored.parentVersion = current == nullptr ? 0U : current->parentVersion;
     stored.worldVersion = current == nullptr ? 0U : current->worldVersion;
     stored.worldDirty = true;
@@ -40,9 +40,9 @@ TransformComponent SceneTransformComponentStore::Written(const TransformComponen
 
 void SceneTransformComponentStore::Write(TransformComponent& current, const TransformComponent& transform) noexcept {
     // `transform` may be the stored row itself: its versions are read before the copy.
-    const std::uint64_t localVersion = current.localVersion + 1U;
-    const std::uint64_t parentVersion = current.parentVersion;
-    const std::uint64_t worldVersion = current.worldVersion;
+    const std::uint32_t localVersion = current.localVersion + 1U;
+    const std::uint32_t parentVersion = current.parentVersion;
+    const std::uint32_t worldVersion = current.worldVersion;
     current = transform;
     current.localVersion = localVersion;
     current.parentVersion = parentVersion;
