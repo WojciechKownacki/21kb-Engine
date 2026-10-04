@@ -1,5 +1,7 @@
 #pragma once
 
+#include "engine/scene/SceneTransforms.hpp"
+
 #include "engine/ecs/World.hpp"
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/TransformComponent.hpp"
@@ -22,8 +24,13 @@ public:
     void Update(SceneState& state) const;
 };
 
-// Forgets the transforms composed so far this frame, at the start of an Update.
-void ResetSceneTransformRenderProxyUpdates(SceneState& state) noexcept;
+// Forgets the transforms composed in the last frame, once: by the first transform pass after an Update or by the
+// next Update.
+void BeginSceneTransformRenderProxyUpdates(SceneState& state) noexcept;
+
+// Transforms().ParallelForEachRoot.
+TransformPassStats RunSceneTransformPass(SceneState& state, std::size_t grainRows, std::span<const kb::ecs::ComponentId> extraComponents,
+    SceneTransforms::TransformRangeBody body, void* context);
 
 // The sizes of the render-proxy lists, counted from this frame's update bits and the mesh, camera and light
 // components without building the lists.

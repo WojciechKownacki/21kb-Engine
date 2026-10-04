@@ -46,6 +46,7 @@
 #include <string>
 #include <thread>
 #include <map>
+#include <unordered_map>
 #include <vector>
 
 namespace {
@@ -1926,7 +1927,11 @@ public:
     [[nodiscard]] bool RequiresFixedStep() const override { return true; }
 };
 
-std::uint64_t RunTransformGoldenScenario(TransformGoldenScene kind) {
+// How the scenario writes the movers: SetMany with the state hashed before and after every Update (the golden
+// hash), SetMany or a transform pass with the state hashed after every Update only.
+enum class TransformGoldenWrites { SetMany, SetManyAfterUpdate, Pass };
+
+std::uint64_t RunTransformGoldenScenario(TransformGoldenScene kind, TransformGoldenWrites writes = TransformGoldenWrites::SetMany) {
     kb::ecs::WorldConfig config{};
     config.mirrorValueWritesOnlyForObservedComponents = kind != TransformGoldenScene::Observed;
     kb::scene::Scene scene{ config };
@@ -2026,7 +2031,10 @@ std::uint64_t RunTransformGoldenScenario(TransformGoldenScene kind) {
             for (std::size_t index = 5U; index < 15U; ++index) scene.Entities().Destroy(movers[index]);
         }
         written = movers;
-        if (frame == 5) written.push_back(movers[1]);
+        // the comparison writes each row once, and the one written twice before the batch (the pass composes it)
+        const bool once = writes != TransformGoldenWrites::SetMany;
+        if (frame == 5 && !once) written.push_back(movers[1]);
+        if (once) scene.Transforms().Set(movers[2], kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ static_cast<float>(frame), 3.0F, 0.0F } });
         batch.resize(written.size());
         for (std::size_t index = 0U; index < written.size(); ++index) {
             const float phase = static_cast<float>(frame) * 0.25F + static_cast<float>(index) * 0.001F + (index + 1U == written.size() && frame == 5 ? 3.0F : 0.0F);
@@ -2035,8 +2043,25 @@ std::uint64_t RunTransformGoldenScenario(TransformGoldenScene kind) {
             if (index % 2U == 1U) value.localRotation = kb::scene::Quat{ 0.0F, std::sin(phase * 0.5F), 0.0F, std::cos(phase * 0.5F) };
             if (index % 7U == 0U) value.localScale = kb::scene::Vec3{ 1.5F, 1.5F, 1.5F };
         }
-        scene.Transforms().SetMany(written, batch);
-        scene.Transforms().Set(movers[2], kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ static_cast<float>(frame), 3.0F, 0.0F } });
+        if (writes == TransformGoldenWrites::Pass) {
+            std::unordered_map<kb::scene::SceneEntity::IdType, std::size_t> batchIndex;
+            for (std::size_t index = 0U; index < written.size(); ++index) batchIndex[written[index].Id()] = index;
+            const kb::scene::TransformPassStats stats = scene.Transforms().ParallelForEachRoot(256U, [&batchIndex, &batch](kb::scene::TransformRowRange& range) {
+                for (std::size_t row = 0U; row < range.Count(); ++row) {
+                    const auto found = batchIndex.find(range.Entity(row).Id());
+                    if (found == batchIndex.end()) continue;
+                    const kb::scene::TransformComponent& value = batch[found->second];
+                    range.SetLocal(row, value.localPosition, value.localRotation, value.localScale);
+                }
+            });
+            const std::size_t alive = static_cast<std::size_t>(std::ranges::count_if(batchIndex, [&scene](const auto& entry) {
+                return scene.Entities().IsAlive(kb::scene::SceneEntity{ entry.first });
+            }));
+            kb::tests::Require(stats.rowsWritten == alive, "Transform pass did not write every listed live row");
+        } else {
+            scene.Transforms().SetMany(written, batch);
+        }
+        if (!once) scene.Transforms().Set(movers[2], kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ static_cast<float>(frame), 3.0F, 0.0F } });
         if (!overlay.empty() && frame == 3) {
             scene.Transforms().Set(overlay[0], kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 0.0F, 5.0F, 0.0F } });
         }
@@ -2061,7 +2086,7 @@ std::uint64_t RunTransformGoldenScenario(TransformGoldenScene kind) {
         for (std::size_t index = 0U; index < prefabRoots.size(); ++index) {
             scene.Transforms().Set(prefabRoots[index], kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ static_cast<float>(frame + index), 0.0F, 4.0F } });
         }
-        hashState(false);
+        if (writes == TransformGoldenWrites::SetMany) hashState(false);
         static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
         hashState(true);
     }
@@ -2085,6 +2110,78 @@ void RunTransformGoldenHashTest() {
         }
     }
     kb::tests::Require(matches, "Transform state of a fixed-dt run differs from the recorded golden hash");
+}
+
+// A transform pass writing the movers leaves every scene in the state SetMany and Update leave it in: local and world
+// TRS, versions, interpolated poses and the render-proxy updates after each Update.
+void RunTransformPassMatchesSetManyTest() {
+    for (const TransformGoldenScene kind : { TransformGoldenScene::Flat, TransformGoldenScene::Overlay, TransformGoldenScene::Observed, TransformGoldenScene::Hierarchy }) {
+        const std::uint64_t setMany = RunTransformGoldenScenario(kind, TransformGoldenWrites::SetManyAfterUpdate);
+        const std::uint64_t pass = RunTransformGoldenScenario(kind, TransformGoldenWrites::Pass);
+        if (setMany != pass) std::cerr << "transform pass scene " << static_cast<int>(kind) << " differs\n";
+        kb::tests::Require(setMany == pass, "A transform pass left a different state than SetMany and Update");
+    }
+}
+
+struct TransformPassAgentState {
+    float speed = 0.0F;
+};
+
+// The contract of a transform pass: the application's component of the same rows, the rows-written counter, a
+// structural change in the body, and an exception thrown by the body.
+void RunTransformPassContractTest() {
+    kb::scene::Scene scene;
+    std::vector<kb::scene::SceneObjectDesc> descs(20000U);
+    std::vector<kb::scene::SceneEntity> agents;
+    for (const kb::scene::SceneObject& object : scene.Entities().CreateObjects(descs)) agents.push_back(object.Entity());
+    kb::ecs::World& world = scene.Runtime().EcsWorld();
+    for (std::size_t index = 0U; index < agents.size(); index += 2U) world.Set(agents[index], TransformPassAgentState{ .speed = static_cast<float>(index) });
+    static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+
+    const kb::scene::TransformPassStats stats = scene.Transforms().ParallelForEachRoot<TransformPassAgentState>(512U, [](kb::scene::TransformRowRange& range) {
+        const TransformPassAgentState* states = range.Column<TransformPassAgentState>();
+        for (std::size_t row = 0U; row < range.Count(); ++row) {
+            const kb::scene::TransformComponent& current = range.Get(row);
+            range.SetLocal(row, kb::scene::Vec3{ states[row].speed, 1.0F, 0.0F }, current.localRotation, current.localScale);
+        }
+    });
+    kb::tests::Require(stats.rowsVisited == agents.size() / 2U && stats.rowsWritten == stats.rowsVisited && stats.rowsDeferred == 0U,
+        "A transform pass over an application component must visit and write exactly its rows");
+    const kb::scene::TransformComponent moved = scene.Transforms().Get(agents[42]);
+    kb::tests::Require(moved.localPosition.x == 42.0F && moved.worldPosition.x == 42.0F && !moved.worldDirty,
+        "A transform pass must compose a plain row's world transform in place");
+    kb::tests::Require(scene.Transforms().Get(agents[43]).localPosition.y == 0.0F, "A transform pass must not touch rows outside its archetypes");
+
+    bool structuralChangeRejected = false;
+    try {
+        static_cast<void>(scene.Transforms().ParallelForEachRoot(4096U, [&scene](kb::scene::TransformRowRange&) {
+            static_cast<void>(scene.Entities().CreateObject());
+        }));
+    } catch (const std::exception&) {
+        structuralChangeRejected = true;
+    }
+    kb::tests::Require(structuralChangeRejected && scene.Entities().Count() == agents.size(), "A structural change inside a transform pass must throw");
+
+    bool rethrown = false;
+    try {
+        static_cast<void>(scene.Transforms().ParallelForEachRoot(512U, [](kb::scene::TransformRowRange& range) {
+            for (std::size_t row = 0U; row < range.Count(); ++row) {
+                const kb::scene::TransformComponent& current = range.Get(row);
+                range.SetLocal(row, kb::scene::Vec3{ 7.0F, 7.0F, 7.0F }, current.localRotation, current.localScale);
+            }
+            throw std::runtime_error("body failed");
+        }));
+    } catch (const std::runtime_error&) {
+        rethrown = true;
+    }
+    kb::tests::Require(rethrown, "A transform pass must rethrow the exception of its body");
+    static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+    for (const kb::scene::SceneEntity agent : agents) {
+        const kb::scene::TransformComponent transform = scene.Transforms().Get(agent);
+        if (transform.worldDirty || transform.worldPosition.x != transform.localPosition.x) {
+            kb::tests::Require(false, "Rows written before a body threw must stay consistent");
+        }
+    }
 }
 
 // A spawning crowd grows the per-frame transform lists by a few hundred entries every frame. Reserving exactly the
@@ -2223,6 +2320,8 @@ void RunSceneSystemTransformSyncTests() {
     RunSceneBulkMarkModifiedTest();
     RunSceneBulkCreateObjectsTest();
     RunTransformGoldenHashTest();
+    RunTransformPassMatchesSetManyTest();
+    RunTransformPassContractTest();
     RunSceneRuntimeGrowingCrowdUpdateAllocationTest();
     RunSceneTransformSetManyMatchesPerEntityWritesTest();
     RunSceneBulkCreateObjectsAllocationTest();

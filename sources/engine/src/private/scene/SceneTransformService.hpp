@@ -3,6 +3,7 @@
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/SceneObject.hpp"
 #include "engine/scene/SceneVisitorTypes.hpp"
+#include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/TransformComponent.hpp"
 
 #include <span>
@@ -31,6 +32,8 @@ public:
     static void MarkModified(Scene& scene, std::span<const SceneEntity> entities) noexcept;
     static void MarkParentModified(Scene& scene, SceneEntity entity) noexcept;
     static void SetInterpolated(Scene& scene, SceneEntity entity, bool interpolated);
+    static TransformPassStats ParallelForEachRoot(Scene& scene, std::size_t grainRows, std::span<const kb::ecs::ComponentId> extraComponents,
+        SceneTransforms::TransformRangeBody body, void* context);
     [[nodiscard]] static bool IsInterpolated(const Scene& scene, SceneEntity entity) noexcept;
     static void ForEach(const Scene& scene, ConstTransformVisitor visitor, void* context = nullptr);
     static void ForEachMutable(Scene& scene, MutableTransformVisitor visitor, void* context = nullptr);

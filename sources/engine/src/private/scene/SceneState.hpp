@@ -609,6 +609,15 @@ public:
     std::vector<TransformSetManyRange> transformSetManyRangesScratch;
     std::vector<kb::ecs::NativeComponentRows> transformSetManyRowsScratch;
     std::vector<SceneEntity> transformUpdatedSparseEntities;
+    // The update bits are cleared by the first writer after an Update (a transform pass or the next Update), so the
+    // rows a pass composes before Update count for that Update.
+    bool transformUpdatesResetPending = true;
+    // ParallelForEachRoot: its chunk records, kept while the storage structure and the extra components are unchanged.
+    std::vector<kb::ecs::MutableQueryTableDispatchRecord> transformPassRecords;
+    std::array<kb::ecs::ComponentId, 5U> transformPassRecordIds{};
+    std::vector<bool> transformPassDeferredArchetypes;
+    std::uint64_t transformPassRecordsVersion = 0U;
+    bool transformPassRunning = false;
     bool transformRenderProxyListsStale = false;
     std::vector<SceneEntity> transformRenderProxyUpdateEntities;
     std::vector<WorldTransformAffine3x4> transformRenderProxyWorldAffine3x4;

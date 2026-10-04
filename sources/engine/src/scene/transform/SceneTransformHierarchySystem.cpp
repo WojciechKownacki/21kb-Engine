@@ -11,6 +11,7 @@
 #include "scene/components/SceneComponentStorageAccess.hpp"
 #include "scene/SceneRenderProxyComponentMask.hpp"
 #include "scene/hierarchy/SceneHierarchyCache.hpp"
+#include "scene/prefab/ScenePrefabDirtyTracker.hpp"
 #include "scene/transform/SceneTransformBranchUpdater.hpp"
 #include "scene/transform/SceneTransformDirtyFrontier.hpp"
 #include "scene/transform/SceneTransformRootHotKernel.hpp"
@@ -26,6 +27,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <stdexcept>
+#include <exception>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -619,10 +622,14 @@ public:
     explicit UpdatedTransformBitWriter(SceneState& state, std::mutex& sparseMutex) noexcept : state_(state), sparseMutex_(sparseMutex) {}
     UpdatedTransformBitWriter(const UpdatedTransformBitWriter&) = delete;
     UpdatedTransformBitWriter& operator=(const UpdatedTransformBitWriter&) = delete;
-    ~UpdatedTransformBitWriter() {
+    ~UpdatedTransformBitWriter() { Finish(); }
+
+    // Publishes what was recorded so far.
+    void Finish() noexcept {
         Flush();
         if (identityAffineCount_ != 0U) {
             std::atomic_ref<std::size_t>{ state_.lastTransformRenderProxyIdentityAffineFastPathCount }.fetch_add(identityAffineCount_, std::memory_order_relaxed);
+            identityAffineCount_ = 0U;
         }
     }
 
@@ -1386,7 +1393,202 @@ void EnsureSceneTransformWorkerPool(SceneState& state) {
     EnsureWorkerPool(state);
 }
 
-void ResetSceneTransformRenderProxyUpdates(SceneState& state) noexcept {
+// The engine side of a ParallelForEachRoot task: one per worker range of chunks.
+struct TransformPassTask {
+    struct Deferred {
+        SceneEntity entity;
+        kb::ecs::NativeComponentRows row;
+    };
+
+    TransformPassTask(SceneState& state, std::mutex& sparseMutex) noexcept : state(state), updatedBits(state, sparseMutex) {}
+
+    SceneState& state;
+    UpdatedTransformBitWriter updatedBits;
+    std::vector<Deferred> deferred;
+    std::size_t written = 0U;
+    bool trackPrefab = false;
+};
+
+class TransformPassAccess {
+public:
+    static void Bind(TransformRowRange& range, const kb::ecs::MutableQueryTableDispatchRecord& record, std::size_t extraCount,
+        TransformPassTask& task, bool composes) noexcept {
+        range.entityIds_ = record.entityIds;
+        range.rows_ = static_cast<TransformComponent*>(record.fieldComponents[0]);
+        range.count_ = record.entityCount;
+        for (std::size_t extra = 0U; extra < TransformRowRange::kMaxExtraComponents; ++extra) {
+            range.extraColumns_[extra] = extra < extraCount ? record.fieldComponents[extra + 1U] : nullptr;
+        }
+        range.pass_ = &task;
+        range.archetypeIndex_ = record.nativeArchetypeIndex;
+        range.chunkIndex_ = record.nativeChunkIndex;
+        range.composes_ = composes;
+    }
+
+    static void SetLocal(TransformRowRange& range, std::size_t row, const Vec3& position, const Quat& rotation, const Vec3& scale) {
+        auto& task = *static_cast<TransformPassTask*>(range.pass_);
+        TransformComponent& transform = range.rows_[row];
+        const SceneEntity entity{ range.entityIds_[row] };
+        transform.localPosition = position;
+        transform.localRotation = rotation;
+        transform.localScale = scale;
+        ++transform.localVersion;
+        transform.worldDirty = true;
+        ++task.written;
+        std::uint32_t nodeIndex = 0U;
+        if (!range.composes_ || SceneHierarchyCache::HasTransformLink(task.state, entity) ||
+            (task.trackPrefab && task.state.prefabInstances.FindContainingEntity(entity, nodeIndex).IsValid())) {
+            task.deferred.push_back({ entity, kb::ecs::NativeComponentRows{ .archetypeIndex = range.archetypeIndex_, .chunkIndex = range.chunkIndex_, .firstRow = row, .count = 1U } });
+            return;
+        }
+        // the root lane of the transform sync
+        if (SceneTransformRootHotKernel::CanApplyIdentityRotationFastPath(transform)) {
+            SceneTransformRootHotKernel::ApplyIdentityRotationRoot(transform);
+        } else {
+            transform = TransformMath::ComposeRoot(transform);
+        }
+        task.updatedBits.Record(entity, transform);
+    }
+};
+
+void TransformRowRange::SetLocal(std::size_t row, const Vec3& position, const Quat& rotation, const Vec3& scale) {
+    TransformPassAccess::SetLocal(*this, row, position, rotation, scale);
+}
+
+TransformPassStats RunSceneTransformPass(SceneState& state, std::size_t grainRows, std::span<const kb::ecs::ComponentId> extraComponents,
+    SceneTransforms::TransformRangeBody body, void* context) {
+    TransformPassStats stats;
+    if (body == nullptr) return stats;
+    if (extraComponents.size() > TransformRowRange::kMaxExtraComponents) {
+        throw std::invalid_argument("A transform pass takes at most four extra components");
+    }
+    if (state.transformPassRunning) {
+        throw std::logic_error("A transform pass cannot run inside another one");
+    }
+    const kb::ecs::ComponentId transformId = state.components.TransformComponentId();
+    auto& storage = const_cast<kb::ecs::NativeArchetypeStorage&>(state.world.NativeStorage());
+    std::array<kb::ecs::ComponentId, 5U> ids{ transformId };
+    for (std::size_t extra = 0U; extra < extraComponents.size(); ++extra) {
+        if (extraComponents[extra] == 0U) return stats;
+        ids[extra + 1U] = extraComponents[extra];
+    }
+    const std::span<const kb::ecs::ComponentId> queried{ ids.data(), extraComponents.size() + 1U };
+    if (state.transformPassRecordsVersion != storage.StructuralVersion() || state.transformPassRecordIds != ids || state.transformPassRecords.empty()) {
+        storage.CollectMutableQueryRecords(queried, {}, {}, state.transformPassRecords);
+        // cameras and lights are queued for the renderer's proxies by the sync
+        state.transformPassDeferredArchetypes.clear();
+        for (const kb::ecs::ComponentId componentId : { state.components.CameraComponentId(), state.components.LightComponentId() }) {
+            if (componentId == 0U) continue;
+            for (const kb::ecs::NativeArchetypeMatch& match : storage.MatchingArchetypes(std::span<const kb::ecs::ComponentId>{ &componentId, 1U })) {
+                if (state.transformPassDeferredArchetypes.size() <= match.archetypeIndex) state.transformPassDeferredArchetypes.resize(match.archetypeIndex + 1U, false);
+                state.transformPassDeferredArchetypes[match.archetypeIndex] = true;
+            }
+        }
+        state.transformPassRecordIds = ids;
+        state.transformPassRecordsVersion = storage.StructuralVersion();
+    }
+    const auto& records = state.transformPassRecords;
+    if (records.empty()) return stats;
+
+    BeginSceneTransformRenderProxyUpdates(state);
+    if (const std::size_t words = (state.denseHierarchyParents.size() + 63U) / 64U; state.transformUpdatedBits.size() < words) {
+        state.transformUpdatedBits.resize(words, 0U);
+    }
+    // An observed transform is published in order after the pass, and cameras and lights are queued for the
+    // renderer's proxies by the sync: their rows take the sync's lanes.
+    const bool observed = state.world.MirrorsValueWrites(transformId);
+    const bool trackPrefab = !state.suppressPrefabDirtyTracking && state.prefabInstances.Count() > 0U;
+
+    std::size_t rows = 0U;
+    for (const auto& record : records) rows += record.entityCount;
+    const std::size_t recordsPerTask = std::max<std::size_t>(1U, grainRows * records.size() / std::max<std::size_t>(rows, 1U));
+    const std::size_t taskCount = (records.size() + recordsPerTask - 1U) / recordsPerTask;
+    std::mutex sparseMutex;
+    std::vector<std::unique_ptr<TransformPassTask>> tasks(taskCount);
+    std::atomic_bool stopped{ false };
+    std::exception_ptr firstException;
+    std::mutex exceptionMutex;
+    EnsureWorkerPool(state);
+    state.transformPassRunning = true;
+    {
+        const auto iterationGuard = state.world.EnterIteration();
+        try {
+            state.transformWorkerPool->ParallelForChunks(records.size(), recordsPerTask, [&](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk& chunk) {
+                tasks[chunk.index] = std::make_unique<TransformPassTask>(state, sparseMutex);
+                TransformPassTask& task = *tasks[chunk.index];
+                task.trackPrefab = trackPrefab;
+                for (std::size_t index = chunk.begin; index < chunk.begin + chunk.count && !stopped.load(std::memory_order_relaxed); ++index) {
+                    const auto& record = records[index];
+                    const bool composes = !observed && (record.nativeArchetypeIndex >= state.transformPassDeferredArchetypes.size() ||
+                        !state.transformPassDeferredArchetypes[record.nativeArchetypeIndex]);
+                    TransformRowRange range;
+                    TransformPassAccess::Bind(range, record, extraComponents.size(), task, composes);
+                    try {
+                        body(range, context);
+                    } catch (...) {
+                        const std::lock_guard lock{ exceptionMutex };
+                        if (firstException == nullptr) firstException = std::current_exception();
+                        stopped.store(true, std::memory_order_relaxed);
+                    }
+                }
+                task.updatedBits.Finish();
+            });
+        } catch (...) {
+            state.transformPassRunning = false;
+            throw;
+        }
+    }
+    state.transformPassRunning = false;
+
+    // Serial publication: the version of each written table once, then the deferred rows as Set flags them.
+    std::size_t lastArchetype = std::numeric_limits<std::size_t>::max();
+    for (std::size_t index = 0U; index < records.size(); ++index) {
+        stats.rowsVisited += records[index].entityCount;
+        ++stats.ranges;
+    }
+    std::vector<kb::ecs::NativeComponentRows>& deferredRows = state.transformSetManyRowsScratch;
+    deferredRows.clear();
+    for (const auto& task : tasks) {
+        if (task == nullptr) continue;
+        stats.rowsWritten += task->written;
+        stats.rowsDeferred += task->deferred.size();
+        for (const auto& deferred : task->deferred) {
+            if (!observed) {
+                kb::ecs::NativeComponentRows* run = deferredRows.empty() ? nullptr : &deferredRows.back();
+                if (run != nullptr && run->archetypeIndex == deferred.row.archetypeIndex && run->chunkIndex == deferred.row.chunkIndex &&
+                    run->firstRow + run->count == deferred.row.firstRow) {
+                    ++run->count;
+                } else {
+                    deferredRows.push_back(deferred.row);
+                }
+            }
+        }
+    }
+    for (const auto& record : records) {
+        if (record.nativeArchetypeIndex != lastArchetype) {
+            lastArchetype = record.nativeArchetypeIndex;
+            if (stats.rowsWritten != 0U) storage.NoteComponentWritten(lastArchetype, transformId);
+        }
+    }
+    if (!deferredRows.empty()) storage.MarkComponentRowsModified(transformId, deferredRows);
+    for (const auto& task : tasks) {
+        if (task == nullptr) continue;
+        for (const auto& deferred : task->deferred) {
+            if (observed) state.componentStorage.Transforms().MarkWritten(deferred.entity);
+            if (SceneHierarchyCache::HasTransformLink(state, deferred.entity)) EnqueueSceneTransformDirtyFrontier(state, deferred.entity);
+            if (trackPrefab) MarkScenePrefabNodeDirty(state, deferred.entity);
+        }
+    }
+    state.transformRenderProxyListsStale = true;
+    if (firstException != nullptr) std::rethrow_exception(firstException);
+    return stats;
+}
+
+void BeginSceneTransformRenderProxyUpdates(SceneState& state) noexcept {
+    if (!state.transformUpdatesResetPending) {
+        return;
+    }
+    state.transformUpdatesResetPending = false;
     std::ranges::fill(state.transformUpdatedBits, 0U);
     state.transformUpdatedSparseEntities.clear();
     state.lastTransformRenderProxyIdentityAffineFastPathCount = 0U;
