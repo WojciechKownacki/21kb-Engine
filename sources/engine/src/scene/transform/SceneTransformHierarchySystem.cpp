@@ -1356,18 +1356,73 @@ struct TransformPassRangeWrites {
     bool transformWritten = false;
 };
 
-// The engine side of a ParallelForEachRoot task: one per worker range of chunks.
-struct TransformPassTask {
+// Retained outputs hold no writer, mutex reference, or storage pointer.
+struct TransformPassOutput {
     struct Deferred {
         SceneEntity entity;
         kb::ecs::NativeComponentRows row;
     };
 
-    TransformPassTask(SceneState& state, std::mutex& sparseMutex) noexcept : state(state), updatedBits(state, sparseMutex) {}
+    void Clear() noexcept {
+        deferred.clear();
+        written = 0U;
+    }
+
+    std::vector<Deferred> deferred;
+    std::size_t written = 0U;
+};
+
+struct SceneTransformPassArena {
+    void Prepare(std::size_t taskCount, std::size_t recordCount) {
+        if (outputs.size() < taskCount) outputs.resize(taskCount);
+        if (rangeWrites.size() < recordCount) rangeWrites.resize(recordCount);
+        // Clear even slots skipped by an exception-stopped worker; no previous pass may publish again.
+        for (std::size_t index = 0U; index < taskCount; ++index) outputs[index].Clear();
+        for (std::size_t index = 0U; index < recordCount; ++index) {
+            rangeWrites[index].extraRows.clear();
+            rangeWrites[index].fullExtraMask = 0U;
+            rangeWrites[index].transformWritten = false;
+        }
+        aliasOutput.Clear();
+        writes.clear();
+        for (auto& entities : observedExtraRows) entities.clear();
+    }
+
+    std::vector<TransformPassOutput> outputs;
+    std::vector<TransformPassRangeWrites> rangeWrites;
+    TransformPassOutput aliasOutput;
+    std::vector<kb::ecs::NativeComponentRows> writes;
+    std::array<std::vector<kb::ecs::Entity>, TransformRowRange::kMaxExtraComponents> observedExtraRows;
+    bool leased = false;
+};
+
+class TransformPassArenaLease {
+public:
+    explicit TransformPassArenaLease(SceneState& state) {
+        if (state.transformPassArena == nullptr) state.transformPassArena = std::make_shared<SceneTransformPassArena>();
+        // OnSet may start another pass after workers join. Its outputs must not replace those being published.
+        arena_ = state.transformPassArena->leased ? std::make_shared<SceneTransformPassArena>() : state.transformPassArena;
+        arena_->leased = true;
+    }
+
+    TransformPassArenaLease(const TransformPassArenaLease&) = delete;
+    TransformPassArenaLease& operator=(const TransformPassArenaLease&) = delete;
+    ~TransformPassArenaLease() { arena_->leased = false; }
+
+    [[nodiscard]] SceneTransformPassArena& Arena() const noexcept { return *arena_; }
+
+private:
+    std::shared_ptr<SceneTransformPassArena> arena_;
+};
+
+// Live worker context: its writer and stack mutex references end before the worker joins.
+struct TransformPassTask {
+    TransformPassTask(SceneState& state, std::mutex& sparseMutex, TransformPassOutput& output) noexcept
+        : state(state), updatedBits(state, sparseMutex), deferred(output.deferred) {}
 
     SceneState& state;
     UpdatedTransformBitWriter updatedBits;
-    std::vector<Deferred> deferred;
+    std::vector<TransformPassOutput::Deferred>& deferred;
     TransformPassRangeWrites* rangeWrites = nullptr;
     std::size_t written = 0U;
     bool trackPrefab = false;
@@ -1516,9 +1571,12 @@ TransformPassStats RunSceneTransformPass(SceneState& state, std::size_t grainRow
     for (const auto& record : records) rows += record.entityCount;
     const std::size_t recordsPerTask = std::max<std::size_t>(1U, grainRows * records.size() / std::max<std::size_t>(rows, 1U));
     const std::size_t taskCount = (records.size() + recordsPerTask - 1U) / recordsPerTask;
+    TransformPassArenaLease arenaLease{ state };
+    SceneTransformPassArena& arena = arenaLease.Arena();
+    arena.Prepare(taskCount, records.size());
+    const auto outputs = std::span<TransformPassOutput>{ arena.outputs }.first(taskCount);
+    const auto rangeWrites = std::span<TransformPassRangeWrites>{ arena.rangeWrites }.first(records.size());
     std::mutex sparseMutex;
-    std::vector<std::unique_ptr<TransformPassTask>> tasks(taskCount);
-    std::vector<TransformPassRangeWrites> rangeWrites(records.size());
     std::atomic_bool stopped{ false };
     std::exception_ptr firstException;
     std::mutex exceptionMutex;
@@ -1528,8 +1586,7 @@ TransformPassStats RunSceneTransformPass(SceneState& state, std::size_t grainRow
         const auto iterationGuard = state.world.EnterIteration();
         try {
             state.transformWorkerPool->ParallelForChunks(records.size(), recordsPerTask, [&](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk& chunk) {
-                tasks[chunk.index] = std::make_unique<TransformPassTask>(state, sparseMutex);
-                TransformPassTask& task = *tasks[chunk.index];
+                TransformPassTask task{ state, sparseMutex, outputs[chunk.index] };
                 task.trackPrefab = trackPrefab;
                 for (std::size_t index = chunk.begin; index < chunk.begin + chunk.count && !stopped.load(std::memory_order_relaxed); ++index) {
                     const auto& record = records[index];
@@ -1547,6 +1604,7 @@ TransformPassStats RunSceneTransformPass(SceneState& state, std::size_t grainRow
                     }
                 }
                 task.updatedBits.Finish();
+                outputs[chunk.index].written = task.written;
             });
         } catch (...) {
             if (firstException == nullptr) firstException = std::current_exception();
@@ -1554,7 +1612,7 @@ TransformPassStats RunSceneTransformPass(SceneState& state, std::size_t grainRow
     }
     state.transformPassRunning = false;
 
-    TransformPassTask transformAliasTask{ state, sparseMutex };
+    TransformPassTask transformAliasTask{ state, sparseMutex, arena.aliasOutput };
     transformAliasTask.trackPrefab = trackPrefab;
     std::uint8_t transformExtraMask = 0U;
     for (std::size_t extra = 0U; extra < extraComponents.size(); ++extra) {
@@ -1591,9 +1649,9 @@ TransformPassStats RunSceneTransformPass(SceneState& state, std::size_t grainRow
     }
     std::vector<kb::ecs::NativeComponentRows>& deferredRows = state.transformSetManyRowsScratch;
     deferredRows.clear();
-    const auto collectDeferred = [&deferredRows, observed](const TransformPassTask& task) {
+    const auto collectDeferred = [&deferredRows, observed](const TransformPassOutput& output) {
         if (observed) return;
-        for (const auto& deferred : task.deferred) {
+        for (const auto& deferred : output.deferred) {
             kb::ecs::NativeComponentRows* run = deferredRows.empty() ? nullptr : &deferredRows.back();
             if (run != nullptr && run->archetypeIndex == deferred.row.archetypeIndex && run->chunkIndex == deferred.row.chunkIndex &&
                 run->firstRow + run->count == deferred.row.firstRow) {
@@ -1603,13 +1661,12 @@ TransformPassStats RunSceneTransformPass(SceneState& state, std::size_t grainRow
             }
         }
     };
-    for (const auto& task : tasks) {
-        if (task == nullptr) continue;
-        stats.rowsWritten += task->written;
-        stats.rowsDeferred += task->deferred.size();
-        collectDeferred(*task);
+    for (const auto& output : outputs) {
+        stats.rowsWritten += output.written;
+        stats.rowsDeferred += output.deferred.size();
+        collectDeferred(output);
     }
-    collectDeferred(transformAliasTask);
+    collectDeferred(arena.aliasOutput);
     std::size_t lastWrittenArchetype = std::numeric_limits<std::size_t>::max();
     for (std::size_t index = 0U; index < records.size(); ++index) {
         const auto& record = records[index];
@@ -1620,7 +1677,7 @@ TransformPassStats RunSceneTransformPass(SceneState& state, std::size_t grainRow
     }
     if (!deferredRows.empty()) storage.MarkComponentRowsModified(transformId, deferredRows);
 
-    std::array<std::vector<kb::ecs::Entity>, TransformRowRange::kMaxExtraComponents> observedExtraRows;
+    auto& observedExtraRows = arena.observedExtraRows;
     // Publish all metadata before any observer can change structure. Capture entity identities for observer
     // publication now; record pointers/row locations can become invalid during the first OnSet callback.
     for (std::size_t extra = 0U; extra < extraComponents.size(); ++extra) {
@@ -1630,7 +1687,8 @@ TransformPassStats RunSceneTransformPass(SceneState& state, std::size_t grainRow
         for (std::size_t alias = extra; alias < extraComponents.size(); ++alias) {
             if (extraComponents[alias] == extraComponents[extra]) componentExtraMask |= static_cast<std::uint8_t>(1U << alias);
         }
-        std::vector<kb::ecs::NativeComponentRows> writes;
+        auto& writes = arena.writes;
+        writes.clear();
         for (std::size_t index = 0U; index < records.size(); ++index) {
             const auto& record = records[index];
             const auto& written = rangeWrites[index];
@@ -1683,17 +1741,16 @@ TransformPassStats RunSceneTransformPass(SceneState& state, std::size_t grainRow
             }
         }
     }
-    const auto publishDeferred = [&state, observed, trackPrefab](const TransformPassTask& task) {
-        for (const auto& deferred : task.deferred) {
+    const auto publishDeferred = [&state, observed, trackPrefab](const TransformPassOutput& output) {
+        for (const auto& deferred : output.deferred) {
             if (observed) state.componentStorage.Transforms().MarkWritten(deferred.entity);
             if (SceneHierarchyCache::HasTransformLink(state, deferred.entity)) EnqueueSceneTransformDirtyFrontier(state, deferred.entity);
             if (trackPrefab) MarkScenePrefabNodeDirty(state, deferred.entity);
         }
     };
-    for (const auto& task : tasks) {
-        if (task != nullptr) publishDeferred(*task);
-    }
-    publishDeferred(transformAliasTask);
+    // The arena lease survives every observer callback and any nested pass until publication is complete.
+    for (const auto& output : outputs) publishDeferred(output);
+    publishDeferred(arena.aliasOutput);
     state.transformRenderProxyListsStale = true;
     if (firstException != nullptr) std::rethrow_exception(firstException);
     return stats;

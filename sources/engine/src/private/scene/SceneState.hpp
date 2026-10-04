@@ -82,6 +82,7 @@ namespace kb::scene {
 
 class IPhysicsBackend;
 struct SceneTransformRootQueryCache;
+struct SceneTransformPassArena;
 struct SceneComponentIterationQueries;
 
 struct AnimatorRuntimeState {
@@ -619,6 +620,8 @@ public:
     std::vector<bool> transformPassDeferredArchetypes;
     std::uint64_t transformPassRecordsVersion = 0U;
     bool transformPassRunning = false;
+    // Passive pass outputs keep capacity; a lease also covers serial observer publication.
+    std::shared_ptr<SceneTransformPassArena> transformPassArena;
     bool transformRenderProxyListsStale = false;
     std::vector<SceneEntity> transformRenderProxyUpdateEntities;
     std::vector<WorldTransformAffine3x4> transformRenderProxyWorldAffine3x4;
