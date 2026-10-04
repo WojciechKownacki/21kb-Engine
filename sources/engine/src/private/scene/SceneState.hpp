@@ -559,6 +559,9 @@ public:
     std::unordered_map<SceneEntity::IdType, std::vector<SceneEntity>> hierarchyChildren;
     std::vector<SceneEntity> denseHierarchyParents;
     std::vector<std::vector<SceneEntity>> denseHierarchyChildren;
+    // One bit per dense entity index: the entity has a parent or children. Derived from the tables above by
+    // SceneHierarchyCache; the transform sync composes an unlinked row with the root kernel without the frontier.
+    std::vector<std::uint64_t> transformLinkBits;
     std::vector<std::size_t> prefabHierarchyChildrenPerNodeScratch;
     SceneTransformTopologyCache transformTopology;
     std::uint64_t hierarchyTopologyVersion = 1;

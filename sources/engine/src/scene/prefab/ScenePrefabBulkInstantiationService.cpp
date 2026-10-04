@@ -619,6 +619,10 @@ void AssignPrefabHierarchyOrderRange(SceneState& state, std::span<const SceneEnt
         }
     }
 
+    for (const SceneEntity entity : entities) {
+        SceneHierarchyCache::RefreshTransformLink(state, entity);
+    }
+    SceneHierarchyCache::RefreshTransformLink(state, settings.parent.Entity());
     const auto previousTopologyVersion = state.hierarchyTopologyVersion;
     ++state.hierarchyTopologyVersion;
     ++state.renderTopologyVersion;
@@ -723,6 +727,10 @@ void AssignPrefabHierarchyOrderRange(SceneState& state, std::span<const SceneEnt
             }
         }
     }
+    for (const SceneEntity entity : entities) {
+        SceneHierarchyCache::RefreshTransformLink(state, entity);
+    }
+    SceneHierarchyCache::RefreshTransformLink(state, settings.parent.Entity());
     const auto previousTopologyVersion = state.hierarchyTopologyVersion;
     ++state.hierarchyTopologyVersion;
     ++state.renderTopologyVersion;

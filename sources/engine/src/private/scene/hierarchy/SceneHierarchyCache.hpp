@@ -21,6 +21,8 @@ public:
         state.hierarchyParents[entity.Id()] = parent;
         SetDenseParent(state, entity, parent);
         AddToParentList(state, parent, entity);
+        RefreshTransformLink(state, entity);
+        RefreshTransformLink(state, parent);
         MarkTopologyDirty(state);
         state.transformTopology.Added(state, {&entity, 1U}, previousVersion);
     }
@@ -74,6 +76,7 @@ public:
                 state.hierarchyRoots.push_back(entity);
             }
         }
+        RefreshTransformLinks(state, entities, parents);
         MarkTopologyDirty(state);
         state.transformTopology.Added(state, entities, previousVersion);
     }
@@ -160,6 +163,7 @@ public:
                 state.hierarchyChildren[parent.Id()].push_back(entity);
             }
         }
+        RefreshTransformLinks(state, entities, parents);
         MarkTopologyDirty(state);
         state.transformTopology.Added(state, entities, previousVersion);
     }
@@ -191,6 +195,9 @@ public:
         state.hierarchyParents[child.Id()] = newParent;
         SetDenseParent(state, child, newParent);
         AddToParentList(state, newParent, child);
+        RefreshTransformLink(state, child);
+        RefreshTransformLink(state, oldParent);
+        RefreshTransformLink(state, newParent);
         MarkTopologyDirty(state);
         state.transformTopology.Moved(state, child, previousVersion);
     }
@@ -202,6 +209,8 @@ public:
         state.hierarchyChildren.erase(entity.Id());
         state.hierarchyOrder.erase(entity.Id());
         ClearDenseEntry(state, entity);
+        RefreshTransformLink(state, entity);
+        RefreshTransformLink(state, parent);
         MarkTopologyDirty(state);
         state.transformTopology.Removed(state, entity, previousVersion);
     }
@@ -260,6 +269,43 @@ public:
             return SceneEntity{};
         }
         return children->second[index];
+    }
+
+    // Whether the entity has a parent or children, from the link bits for a dense index (safe to read from the
+    // transform workers) and from the tables otherwise.
+    [[nodiscard]] static bool HasTransformLink(const SceneState& state, SceneEntity entity) noexcept {
+        const std::uint32_t denseIndex = DenseIndex(entity);
+        if (denseIndex == kb::ecs::kInvalidGeneratedEntityIndex) {
+            return Parent(state, entity).IsValid() || ChildCount(state, entity) != 0U;
+        }
+        const std::size_t word = denseIndex / 64U;
+        return word < state.transformLinkBits.size() && (state.transformLinkBits[word] >> (denseIndex % 64U) & 1U) != 0U;
+    }
+
+    static void RefreshTransformLink(SceneState& state, SceneEntity entity) {
+        const std::uint32_t denseIndex = DenseIndex(entity);
+        if (!entity.IsValid() || denseIndex == kb::ecs::kInvalidGeneratedEntityIndex) {
+            return;
+        }
+        const bool linked = Parent(state, entity).IsValid() || ChildCount(state, entity) != 0U;
+        const std::size_t word = denseIndex / 64U;
+        if (word >= state.transformLinkBits.size()) {
+            if (!linked) {
+                return;
+            }
+            state.transformLinkBits.resize(word + 1U, 0U);
+        }
+        const std::uint64_t bit = std::uint64_t{ 1U } << (denseIndex % 64U);
+        state.transformLinkBits[word] = linked ? state.transformLinkBits[word] | bit : state.transformLinkBits[word] & ~bit;
+    }
+
+    static void RefreshTransformLinks(SceneState& state, std::span<const SceneEntity> entities, std::span<const SceneEntity> parents) {
+        for (std::size_t index = 0U; index < entities.size(); ++index) {
+            RefreshTransformLink(state, entities[index]);
+            if (index < parents.size()) {
+                RefreshTransformLink(state, parents[index]);
+            }
+        }
     }
 
 private:
