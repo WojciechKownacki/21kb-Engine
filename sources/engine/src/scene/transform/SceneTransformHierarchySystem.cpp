@@ -1138,12 +1138,8 @@ void RunHierarchyDirtyFrontier(
     }
 
     const auto dirtyScanStart = profileTimings != nullptr ? Clock::now() : Clock::time_point{};
-    std::size_t dirtyRows = 0U;
-    // Component writes can change dirty counts without changing archetype structure.
-    hotQuery.ForEachMutableChunkWithCurrentDirtyCounts(state.world.NativeStorage(),
-        [&dirtyRows](const kb::ecs::UnsafeHotMutableChunk<TransformComponent>& chunk) {
-            dirtyRows += chunk.DirtyCount<0>();
-        });
+    // Component writes can change dirty counts without changing archetype structure; each table keeps its count.
+    std::size_t dirtyRows = hotQuery.DirtyRowCount<0>(state.world.NativeStorage());
     if (profileTimings != nullptr) {
         profileTimings->dirtyScanNanoseconds = Nanoseconds(Clock::now() - dirtyScanStart);
     }

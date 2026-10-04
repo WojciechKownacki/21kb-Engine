@@ -840,6 +840,7 @@ public:
             std::fill(chunk.dirtyRowWords.begin(), chunk.dirtyRowWords.end(), 0ULL);
             std::fill(chunk.dirtyRowCounts.begin(), chunk.dirtyRowCounts.end(), 0U);
         }
+        std::ranges::fill(dirtyRowTotals_, 0U);
         liveEntities_ = 0U;
         version_ += removedCount;
         for (std::uint64_t& componentVersion : componentVersions_) {
@@ -1222,7 +1223,7 @@ public:
         NativeChunk& chunk = chunks_[location.chunk];
         std::uint64_t& word = DirtyWords(chunk, index)[location.row / 64U];
         const std::uint64_t bit = std::uint64_t{ 1 } << (location.row % 64U);
-        chunk.dirtyRowCounts[index] += (word & bit) == 0U ? 1U : 0U;
+        AddDirtyRowCount(chunk, index, (word & bit) == 0U ? 1U : 0U);
         word |= bit;
         return ComponentData(location, *column);
     }
@@ -1404,7 +1405,7 @@ private:
         ValidateRowRange(chunkIndex, firstRow, count);
         const std::size_t componentIndex = ComponentColumnIndex(componentId);
         NativeChunk& chunk = chunks_[chunkIndex];
-        chunk.dirtyRowCounts[componentIndex] += SetDirtyBits(DirtyWords(chunk, componentIndex), firstRow, count);
+        AddDirtyRowCount(chunk, componentIndex, SetDirtyBits(DirtyWords(chunk, componentIndex), firstRow, count));
     }
 
     void MarkComponentRowsDirtyByIndex(std::size_t componentIndex, std::size_t chunkIndex, std::size_t firstRow, std::size_t count) {
@@ -1416,7 +1417,7 @@ private:
             throw std::out_of_range("Native ECS component column index is unavailable");
         }
         NativeChunk& chunk = chunks_[chunkIndex];
-        chunk.dirtyRowCounts[componentIndex] += SetDirtyBits(DirtyWords(chunk, componentIndex), firstRow, count);
+        AddDirtyRowCount(chunk, componentIndex, SetDirtyBits(DirtyWords(chunk, componentIndex), firstRow, count));
     }
 
     void MarkComponentAllLiveRowsDirty(ComponentId componentId) {
@@ -1425,7 +1426,7 @@ private:
             if (chunk.rowCount == 0U) {
                 continue;
             }
-            chunk.dirtyRowCounts[componentIndex] += SetDirtyBits(DirtyWords(chunk, componentIndex), 0U, chunk.rowCount);
+            AddDirtyRowCount(chunk, componentIndex, SetDirtyBits(DirtyWords(chunk, componentIndex), 0U, chunk.rowCount));
         }
     }
 
@@ -1436,7 +1437,7 @@ private:
         ValidateRowRange(chunkIndex, firstRow, count);
         NativeChunk& chunk = chunks_[chunkIndex];
         for (std::size_t componentIndex = 0U; componentIndex < layout_.columns.size(); ++componentIndex) {
-            chunk.dirtyRowCounts[componentIndex] += SetDirtyBits(DirtyWords(chunk, componentIndex), firstRow, count);
+            AddDirtyRowCount(chunk, componentIndex, SetDirtyBits(DirtyWords(chunk, componentIndex), firstRow, count));
         }
     }
 
@@ -1447,7 +1448,7 @@ private:
         ValidateRowRange(chunkIndex, firstRow, count);
         NativeChunk& chunk = chunks_[chunkIndex];
         for (std::size_t componentIndex = 0U; componentIndex < layout_.columns.size(); ++componentIndex) {
-            chunk.dirtyRowCounts[componentIndex] -= ClearDirtyBits(DirtyWords(chunk, componentIndex), firstRow, count);
+            RemoveDirtyRowCount(chunk, componentIndex, ClearDirtyBits(DirtyWords(chunk, componentIndex), firstRow, count));
         }
     }
 
@@ -1464,7 +1465,30 @@ private:
         }
     }
 
+    // The dirty rows of a component in the whole table: a clean table is skipped without visiting its chunks. Rows
+    // dropped with their chunk stay counted, so the total never falls below the rows still flagged.
+    void AddDirtyRowCount(NativeChunk& chunk, std::size_t componentIndex, std::size_t count) {
+        chunk.dirtyRowCounts[componentIndex] += count;
+        if (dirtyRowTotals_.size() <= componentIndex) {
+            dirtyRowTotals_.resize(layout_.columns.size(), 0U);
+        }
+        dirtyRowTotals_[componentIndex] += count;
+    }
+
+    void RemoveDirtyRowCount(NativeChunk& chunk, std::size_t componentIndex, std::size_t count) noexcept {
+        if (count == 0U) {
+            return;
+        }
+        chunk.dirtyRowCounts[componentIndex] -= count;
+        dirtyRowTotals_[componentIndex] -= count;
+    }
+
 public:
+    [[nodiscard]] std::size_t ComponentDirtyTotal(ComponentId componentId) const {
+        const std::size_t componentIndex = ComponentColumnIndex(componentId);
+        return componentIndex < dirtyRowTotals_.size() ? dirtyRowTotals_[componentIndex] : 0U;
+    }
+
     [[nodiscard]] std::size_t ComponentDirtyCount(std::size_t chunkIndex, ComponentId componentId) const {
         if (chunkIndex >= chunks_.size()) {
             throw std::out_of_range("Invalid native ECS chunk index");
@@ -1513,7 +1537,7 @@ public:
         ValidateRowRange(chunkIndex, firstRow, resolvedCount);
         const std::size_t componentIndex = ComponentColumnIndex(componentId);
         NativeChunk& chunk = chunks_[chunkIndex];
-        chunk.dirtyRowCounts[componentIndex] -= ClearDirtyBits(DirtyWords(chunk, componentIndex), firstRow, resolvedCount);
+        RemoveDirtyRowCount(chunk, componentIndex, ClearDirtyBits(DirtyWords(chunk, componentIndex), firstRow, resolvedCount));
     }
 
 private:
@@ -1586,6 +1610,7 @@ private:
     }
 
     NativeChunkPool* pool_ = nullptr;
+    std::vector<std::size_t> dirtyRowTotals_;
     std::vector<NativeComponentType> types_;
     ComponentSignature signature_;
     ArchetypeLayout layout_;
@@ -2598,6 +2623,13 @@ public:
             throw std::out_of_range("Native ECS archetype index is invalid");
         }
         tables_[archetypeIndex].MarkComponentsModified(chunkIndex, firstRow, count, componentIds);
+    }
+
+    [[nodiscard]] std::size_t ArchetypeComponentDirtyCount(std::size_t archetypeIndex, ComponentId componentId) const {
+        if (archetypeIndex >= tables_.size()) {
+            throw std::out_of_range("Native ECS archetype index is invalid");
+        }
+        return tables_[archetypeIndex].ComponentDirtyTotal(componentId);
     }
 
     [[nodiscard]] std::size_t ComponentDirtyCount(std::size_t archetypeIndex, std::size_t chunkIndex, ComponentId componentId) const {
@@ -3864,6 +3896,10 @@ void NativeArchetypeStorage::MarkArchetypeChunkComponentsModified(
     std::size_t count,
     std::span<const ComponentId> componentIds) {
     impl_->MarkArchetypeChunkComponentsModified(archetypeIndex, chunkIndex, firstRow, count, componentIds);
+}
+
+std::size_t NativeArchetypeStorage::ArchetypeComponentDirtyCount(std::size_t archetypeIndex, ComponentId componentId) const {
+    return impl_->ArchetypeComponentDirtyCount(archetypeIndex, componentId);
 }
 
 std::size_t NativeArchetypeStorage::ComponentDirtyCount(std::size_t archetypeIndex, std::size_t chunkIndex, ComponentId componentId) const {

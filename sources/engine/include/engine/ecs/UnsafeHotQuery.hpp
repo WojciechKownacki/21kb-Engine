@@ -875,6 +875,22 @@ public:
         return stats;
     }
 
+    // The rows of the query's tables flagged for the component, from one count per table (an upper bound, as
+    // NativeArchetypeStorage::ArchetypeComponentDirtyCount is).
+    template <std::size_t DirtyComponentIndex>
+    [[nodiscard]] std::size_t DirtyRowCount(const NativeArchetypeStorage& storage) const {
+        std::size_t rows = 0U;
+        std::size_t countedArchetype = std::numeric_limits<std::size_t>::max();
+        for (const MutableQueryTableDispatchRecord& record : scratch_.mutableRecords_) {
+            if (record.nativeArchetypeIndex == countedArchetype) {
+                continue;
+            }
+            countedArchetype = record.nativeArchetypeIndex;
+            rows += storage.ArchetypeComponentDirtyCount(countedArchetype, componentIds_[DirtyComponentIndex]);
+        }
+        return valid_ ? rows : 0U;
+    }
+
     template <std::size_t DirtyComponentIndex, typename Kernel>
     UnsafeHotDirtyRangeDispatchStats ForEachDirtyMutableRange(
         NativeArchetypeStorage& storage,
