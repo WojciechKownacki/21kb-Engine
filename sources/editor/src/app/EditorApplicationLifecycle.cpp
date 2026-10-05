@@ -33,7 +33,8 @@ void RestoreParticleEditorHostSession(EditorApplicationState& state) {
         return;
     }
     const EditorPanelSession& session = *stored;
-    if (!session.visible) {
+    // Without a document the panel only says "open a .kbvfx asset"; opening one docks it again.
+    if (!session.visible || session.documentPath.empty()) {
         static_cast<void>(state.dockModel.Commands().ClosePanel(panelId));
         return;
     }
