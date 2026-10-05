@@ -3377,7 +3377,13 @@ bool EditorHeadlessAutomation::CaptureRuntime(
         return false;
     }
     for (std::size_t poll = 0U; poll < 240U; ++poll) {
-        if (!impl_->viewport.AdvanceAsyncReadbacks()) {
+        // A capture already in flight elsewhere defers this request to the
+        // scene's next submit (see CaptureEditorScene).
+        const bool awaitingSubmit =
+            kb::scene::SceneRenderFeedback::PeekScreenCaptureRequest(
+                context_.Scene()).id == capture;
+        if (!(awaitingSubmit ? impl_->Render(context_)
+                             : impl_->viewport.AdvanceAsyncReadbacks())) {
             Trace("capture_runtime", false, "render-backend-failed");
             return false;
         }
@@ -3438,7 +3444,17 @@ bool EditorHeadlessAutomation::CaptureEditorScene(std::string_view checkpoint, b
         return false;
     }
     for (std::size_t poll = 0U; poll < 240U; ++poll) {
-        if (!impl_->viewport.AdvanceAsyncReadbacks()) {
+        // The renderer keeps one capture in flight; while another scene's
+        // capture (e.g. a particle thumbnail) holds it, this request waits
+        // for the scene's next submit, so keep presenting until it starts.
+        const bool awaitingSubmit =
+            kb::scene::SceneRenderFeedback::PeekScreenCaptureRequest(
+                context_.Scene()).id == capture;
+        const bool advanced = awaitingSubmit
+            ? impl_->RenderScene(
+                  context_, sceneViewportKey, editorOverlaysEnabled)
+            : impl_->viewport.AdvanceAsyncReadbacks();
+        if (!advanced) {
             Trace(
                 "capture_editor_scene", false,
                 "scene-present-failed");
