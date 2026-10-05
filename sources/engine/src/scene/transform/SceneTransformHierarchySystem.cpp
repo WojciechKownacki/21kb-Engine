@@ -248,6 +248,8 @@ void EnqueueTransformValueCacheLoadCandidate(SceneState& state, SceneEntity enti
         const std::size_t requiredSize = static_cast<std::size_t>(denseIndex) + 1U;
         if (state.transformValueCacheLoadDenseMarkEpochs.size() < requiredSize) {
             state.transformValueCacheLoadDenseMarkEpochs.resize(requiredSize, 0U);
+        }
+        if (state.transformValueCacheLoadDenseMarkedEntities.size() < requiredSize) {
             state.transformValueCacheLoadDenseMarkedEntities.resize(requiredSize);
         }
         if (IsTransformValueCacheLoadMarked(state, entity)) {
