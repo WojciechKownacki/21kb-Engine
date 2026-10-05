@@ -9,10 +9,28 @@
 #include <memory>
 #include <stdexcept>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
 namespace {
+
+void RunWorkerPoolDefaultConstructionTest() {
+    static_assert(std::is_nothrow_default_constructible_v<kb::ecs::WorkerPool>);
+    kb::ecs::WorkerPool pool;
+    kb::tests::Require(!pool.Running() && pool.WorkerCount() == 0U,
+        "Default ECS worker pool must remain stopped until Start");
+    pool.Start(kb::ecs::WorkerPoolConfig{ .workerCount = 2U });
+    std::atomic<std::size_t> visits = 0U;
+    pool.ParallelForChunks(129U, 65U, [&](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk& chunk) {
+        visits.fetch_add(chunk.count, std::memory_order_relaxed);
+    });
+    kb::tests::Require(visits.load(std::memory_order_relaxed) == 129U,
+        "Default ECS worker pool did not execute all rows after Start");
+    pool.Stop();
+    kb::tests::Require(!pool.Running() && pool.WorkerCount() == 0U,
+        "Default ECS worker pool did not return to its stopped state");
+}
 
 void RunWorkerPoolExecutesConcurrentJobsTest() {
     kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{ .workerCount = 2 } };
@@ -865,6 +883,7 @@ void RunJobGraphResolvesDependencyWavesTest() {
 namespace kb::tests {
 
 void RunEcsWorkerPoolTests() {
+    RunWorkerPoolDefaultConstructionTest();
     RunJobGraphResolvesDependencyWavesTest();
     RunWorkerPoolExecutesConcurrentJobsTest();
     RunWorkerPoolPropagatesJobExceptionTest();

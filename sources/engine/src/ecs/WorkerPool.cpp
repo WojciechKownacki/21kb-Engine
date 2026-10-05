@@ -1389,6 +1389,8 @@ private:
     bool batchActive_ = false;
 };
 
+WorkerPool::WorkerPool() noexcept = default;
+
 WorkerPool::WorkerPool(WorkerPoolConfig config) {
     Start(config);
 }
