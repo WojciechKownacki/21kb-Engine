@@ -1476,12 +1476,29 @@ bool EditorHeadlessAutomation::VerifyUICreationMenu() {
         if (!EditorRightButtonDownRouter::ExecuteHierarchyMenuCommand(command->second, context_))
             return fail(std::string{descriptor.displayName} + ": creation failed");
         auto entity = context_.SelectedEntity();
-        const auto components = InspectorUIComponentModel::Components(context_.Scene(), entity);
-        if (std::ranges::find(components, descriptor.type) == components.end() ||
-            context_.Scene().Entities().Name(entity) != descriptor.displayName ||
-            context_.SceneRenderRevision() == revision) return fail("component-name-or-refresh-missing");
+        const std::string name{ descriptor.displayName };
+        // A widget created as a hierarchy may keep its component on a part: a Scroll View scrolls from its Viewport.
+        auto holder = entity;
+        std::vector<kb::scene::SceneEntity> pending{ entity };
+        while (!pending.empty()) {
+            const auto candidate = pending.back();
+            pending.pop_back();
+            const auto candidateComponents = InspectorUIComponentModel::Components(context_.Scene(), candidate);
+            if (std::ranges::find(candidateComponents, descriptor.type) != candidateComponents.end()) {
+                holder = candidate;
+                break;
+            }
+            for (const auto& child : context_.Scene().Hierarchy().Children(context_.Scene().Entities().Object(candidate)))
+                pending.push_back(child.Entity());
+        }
+        const auto components = InspectorUIComponentModel::Components(context_.Scene(), holder);
+        if (std::ranges::find(components, descriptor.type) == components.end()) return fail(name + ": component missing");
+        if (context_.Scene().Entities().Name(entity) != descriptor.displayName)
+            return fail(name + ": entity named '" + std::string{ context_.Scene().Entities().Name(entity) } + "'");
+        if (context_.SceneRenderRevision() == revision) return fail(name + ": scene not refreshed");
+        // The flat preset's dependencies apply when the widget is one entity; a hierarchy spreads them over its parts.
         for (const auto& preset : kb::scene::UIComponentPresetCatalog()) {
-            if (preset.name != descriptor.displayName) continue;
+            if (preset.name != descriptor.displayName || holder != entity) continue;
             for (const auto dependency : preset.components)
                 if (std::ranges::find(components, dependency) == components.end()) return fail("missing-preset-dependency");
         }
@@ -2060,6 +2077,13 @@ bool EditorHeadlessAutomation::VerifyUIComponentCatalog(std::optional<kb::scene:
             if (descriptor.type == kb::scene::UIComponentType::Dropdown && property.name.starts_with("options.") &&
                 !kb::scene::ReadUIComponentProperty(values, descriptor.type, property.name, value))
                 continue;
+            // The Inspector hides a setting that does not apply to the current mode (a screen canvas has no
+            // pixels per unit), so there is no field to edit; its own rows test covers when it is shown.
+            {
+                const auto rows = InspectorUIComponentModel::Properties(context_.Scene(), entity, descriptor.type);
+                const auto row = std::ranges::find(rows, property.name, &InspectorUIPropertyRow::name);
+                if (row != rows.end() && row->fieldCount == 0) continue;
+            }
             if (!kb::scene::ReadUIComponentProperty(values, descriptor.type, property.name, value) ||
                 (property.writable && !SetUIComponentProperty(descriptor.type, property.name, value))) {
                 Trace("ui_catalog", false, std::string{descriptor.displayName} + "." + std::string{property.name});
