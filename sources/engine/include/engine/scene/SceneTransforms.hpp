@@ -31,6 +31,8 @@ public:
     // Applies already computed local TRS values to consecutive rows. Bounds are checked before any write;
     // an empty span at Count() is valid. On return each row has SetLocal's immediate/deferred state.
     // Payloads are copied in groups of up to four before each group's writes; no whole-span snapshot is promised.
+    // A group of four plain roots is written whole without reading the old rows, so its local and world versions take
+    // the pass's stamp instead of counting up by one; other rows count up as SetLocal does. Versions only mean "changed".
     // Does not retain values or change single-row SetLocal. Failing scalar fallback keeps its written prefix.
     void SetLocalBatch(std::size_t firstRow, std::span<const RowLocalTRS> values);
     // The rows of the pass's index-th Extra component, which lives in the same chunk. Mutable access declares

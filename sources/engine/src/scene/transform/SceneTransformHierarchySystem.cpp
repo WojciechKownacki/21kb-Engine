@@ -22,6 +22,9 @@
 #include "scene/transform/ExactRootNormalize4.hpp"
 
 #include <algorithm>
+#if defined(_M_X64) || defined(__x86_64__)
+#include <emmintrin.h>
+#endif
 #include <array>
 #include <atomic>
 #include <bit>
@@ -1429,7 +1432,22 @@ struct TransformPassTask {
     TransformPassRangeWrites* rangeWrites = nullptr;
     std::size_t written = 0U;
     bool trackPrefab = false;
+    std::uint32_t stamp = 0U;
 };
+
+// Writes four complete rows without reading them first: streaming stores when the rows are 16-byte aligned.
+void StoreRows4(TransformComponent* destination, const std::array<TransformComponent, 4U>& rows) noexcept {
+    static_assert(sizeof(TransformComponent) % 16U == 0U);
+#if defined(_M_X64) || defined(__x86_64__)
+    if ((reinterpret_cast<std::uintptr_t>(destination) & 15U) == 0U) {
+        const auto* source = reinterpret_cast<const __m128i*>(rows.data());
+        auto* target = reinterpret_cast<__m128i*>(destination);
+        for (std::size_t index = 0U; index < sizeof(TransformComponent) * 4U / 16U; ++index) _mm_stream_si128(target + index, _mm_loadu_si128(source + index));
+        return;
+    }
+#endif
+    std::copy(rows.begin(), rows.end(), destination);
+}
 
 class TransformPassAccess {
 public:
@@ -1510,27 +1528,32 @@ public:
                     SetLocal(range, firstRow + offset + lane, value.position, value.rotation, value.scale);
                 }
             } else {
+                std::array<TransformComponent, 4U> rows{};
                 for (std::size_t lane = 0U; lane < 4U; ++lane) {
-                    TransformComponent& transform = range.rows_[firstRow + offset + lane];
+                    TransformComponent& transform = rows[lane];
                     const auto& value = values[lane];
                     transform.localPosition = value.position;
                     transform.localRotation = value.rotation;
                     transform.localScale = value.scale;
-                    ++transform.localVersion;
+                    transform.localVersion = task.stamp;
                     transform.worldPosition = value.position;
                     transform.worldRotation = normalized[lane];
                     transform.worldScale = value.scale;
                     transform.parentVersion = 0U;
-                    ++transform.worldVersion;
+                    transform.worldVersion = task.stamp;
                     transform.worldDirty = false;
                     ++task.written;
                     task.rangeWrites->transformWritten = true;
                     // Preserve existing full ID, word grouping and identity-affine accounting in storage order.
                     task.updatedBits.Record(SceneEntity{ range.entityIds_[firstRow + offset + lane] }, transform);
                 }
+                StoreRows4(&range.rows_[firstRow + offset], rows);
             }
             offset += count;
         }
+#if defined(_M_X64) || defined(__x86_64__)
+        _mm_sfence();
+#endif
     }
 
     static void DeclareColumnWritable(const TransformRowRange& range, std::size_t extraIndex) noexcept {
@@ -1651,12 +1674,16 @@ TransformPassStats RunSceneTransformPass(SceneState& state, std::size_t grainRow
     std::mutex exceptionMutex;
     EnsureWorkerPool(state);
     state.transformPassRunning = true;
+    // Blind batch writes version their rows with this pass's stamp: high bit set, so it never meets a per-write counter.
+    state.transformPassStamp = 0x80000000U | ((state.transformPassStamp + 1U) & 0x7FFFFFFFU);
+    const std::uint32_t passStamp = state.transformPassStamp;
     {
         const auto iterationGuard = state.world.EnterIteration();
         try {
             state.transformWorkerPool->ParallelForChunks(records.size(), recordsPerTask, [&](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk& chunk) {
                 TransformPassTask task{ state, sparseMutex, outputs[chunk.index] };
                 task.trackPrefab = trackPrefab;
+                task.stamp = passStamp;
                 for (std::size_t index = chunk.begin; index < chunk.begin + chunk.count && !stopped.load(std::memory_order_relaxed); ++index) {
                     const auto& record = records[index];
                     const bool composes = !observed && (record.nativeArchetypeIndex >= state.transformPassDeferredArchetypes.size() ||

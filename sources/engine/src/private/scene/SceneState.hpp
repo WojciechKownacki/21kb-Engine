@@ -620,6 +620,7 @@ public:
     std::vector<bool> transformPassDeferredArchetypes;
     std::uint64_t transformPassRecordsVersion = 0U;
     bool transformPassRunning = false;
+    std::uint32_t transformPassStamp = 0U;
     bool transformRenderProxyListsStale = false;
     std::vector<SceneEntity> transformRenderProxyUpdateEntities;
     std::vector<WorldTransformAffine3x4> transformRenderProxyWorldAffine3x4;
