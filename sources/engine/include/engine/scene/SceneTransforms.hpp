@@ -15,6 +15,7 @@
 namespace kb::scene {
 
 class Scene;
+using RowLocalTRS = LocalTransform;
 
 // The rows of one storage chunk handed to a ParallelForEachRoot body, in storage order.
 class TransformRowRange {
@@ -27,6 +28,11 @@ public:
     // Writes the row's local transform with the result of Transforms().Set followed by the transform sync: a row
     // without parent or children gets its world transform here; any other row is left to the next sync.
     void SetLocal(std::size_t row, const Vec3& position, const Quat& rotation, const Vec3& scale);
+    // Applies already computed local TRS values to consecutive rows. Bounds are checked before any write;
+    // an empty span at Count() is valid. On return each row has SetLocal's immediate/deferred state.
+    // Payloads are copied in groups of up to four before each group's writes; no whole-span snapshot is promised.
+    // Does not retain values or change single-row SetLocal. Failing scalar fallback keeps its written prefix.
+    void SetLocalBatch(std::size_t firstRow, std::span<const RowLocalTRS> values);
     // The rows of the pass's index-th Extra component, which lives in the same chunk. Mutable access declares
     // every row written: versions, dirty flags and OnSet are published after workers finish, even if the body
     // throws. Use Column<const T> or ReadColumn<T> for reads, and WriteColumn<T> for a partial write.

@@ -1033,6 +1033,7 @@ add_library(kb_engine STATIC
     src/scene/assets/ScenePrefabAssetLoader.cpp
     src/scene/transform/SceneTransformBranchUpdater.cpp
     src/scene/transform/SceneTransformHierarchySystem.cpp
+    src/scene/transform/ExactRootNormalize4.cpp
     src/scene/transform/SceneTransformTopologyCache.cpp
     src/scene/transform/SceneTransformLeafBatchUpdater.cpp
     src/scene/transform/SceneTransformRootCollector.cpp
@@ -1565,6 +1566,26 @@ if(KB_ENGINE_ENABLE_NATIVE_AVX2)
 endif()
 
 kb_apply_quality_gates(kb_engine)
+
+if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+    # The isolated helper observes FP controls; engine/oracle/vendor flags stay unchanged.
+    set_property(SOURCE src/scene/transform/ExactRootNormalize4.cpp APPEND PROPERTY COMPILE_OPTIONS /GL-)
+endif()
+
+if(KB_ENGINE_TRANSFORM_LTO AND CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+    # Limit the experiment to these engine TUs; consumer code stays native.
+    set_property(SOURCE
+        src/scene/transform/SceneTransformHierarchySystem.cpp
+        src/scene/transform/TransformMath.cpp
+        src/scene/transform/QuatMath.cpp
+        APPEND PROPERTY COMPILE_OPTIONS "$<$<CONFIG:Release>:/GL>"
+    )
+    # kb_engine is static; final EXE/DLL consumers perform the LTCG link.
+    target_link_options(kb_engine INTERFACE
+        "$<$<CONFIG:Release>:/LTCG>"
+        "$<$<CONFIG:Release>:/INCREMENTAL:NO>"
+    )
+endif()
 
 if(NOT CMAKE_CROSSCOMPILING)
     # Host-side release gate used before platform packaging. It deliberately
