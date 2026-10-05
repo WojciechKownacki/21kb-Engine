@@ -19,6 +19,7 @@
 #include "scene/transform/SceneTransformRootQueryCache.hpp"
 #include "scene/transform/SceneTransformLeafBatchUpdater.hpp"
 #include "scene/transform/TransformMath.hpp"
+#include "scene/transform/ExactRootNormalize4.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1470,6 +1471,68 @@ public:
         task.updatedBits.Record(entity, transform);
     }
 
+    static void SetLocalBatch(TransformRowRange& range, std::size_t firstRow, std::span<const RowLocalTRS> supplied) {
+        if (firstRow > range.count_ || supplied.size() > range.count_ - firstRow) {
+            throw std::out_of_range("A local TRS batch is outside its transform range");
+        }
+        if (supplied.empty()) return;
+        auto& task = *static_cast<TransformPassTask*>(range.pass_);
+        for (std::size_t offset = 0U; offset < supplied.size();) {
+            const std::size_t remaining = supplied.size() - offset;
+            const std::size_t count = std::min<std::size_t>(4U, remaining);
+            // Load complete payloads before any group store; no alignment or consecutive-ID promise.
+            std::array<RowLocalTRS, 4U> values{};
+            std::array<Quat, 4U> normalized{};
+            for (std::size_t lane = 0U; lane < count; ++lane) {
+                values[lane] = supplied[offset + lane];
+            }
+            // Use the existing per-row SetLocal gates, without a retained range certificate.
+            // Any active prefab tracking conservatively keeps this whole group scalar.
+            bool packed = count == 4U && range.composes_ && !task.trackPrefab;
+            if (packed) {
+                for (std::size_t lane = 0U; lane < 4U; ++lane) {
+                    const SceneEntity entity{ range.entityIds_[firstRow + offset + lane] };
+                    const std::uint32_t denseIndex = kb::ecs::GeneratedEntityIndex(entity);
+                    // Exactly Record's allocation-free branch, including bounded adopted IDs.
+                    if (denseIndex == kb::ecs::kInvalidGeneratedEntityIndex ||
+                        denseIndex / 64U >= task.state.transformUpdatedBits.size() ||
+                        SceneHierarchyCache::HasTransformLink(task.state, entity)) {
+                        packed = false;
+                        break;
+                    }
+                }
+            }
+            if (packed) packed = exact_local_batch::TryNormalizeRoot4Exact(values, normalized);
+            if (!packed) {
+                // Entire groups/tails retain ordinary per-row allocation, exception and deferred behavior.
+                for (std::size_t lane = 0U; lane < count; ++lane) {
+                    const auto& value = values[lane];
+                    SetLocal(range, firstRow + offset + lane, value.position, value.rotation, value.scale);
+                }
+            } else {
+                for (std::size_t lane = 0U; lane < 4U; ++lane) {
+                    TransformComponent& transform = range.rows_[firstRow + offset + lane];
+                    const auto& value = values[lane];
+                    transform.localPosition = value.position;
+                    transform.localRotation = value.rotation;
+                    transform.localScale = value.scale;
+                    ++transform.localVersion;
+                    transform.worldPosition = value.position;
+                    transform.worldRotation = normalized[lane];
+                    transform.worldScale = value.scale;
+                    transform.parentVersion = 0U;
+                    ++transform.worldVersion;
+                    transform.worldDirty = false;
+                    ++task.written;
+                    task.rangeWrites->transformWritten = true;
+                    // Preserve existing full ID, word grouping and identity-affine accounting in storage order.
+                    task.updatedBits.Record(SceneEntity{ range.entityIds_[firstRow + offset + lane] }, transform);
+                }
+            }
+            offset += count;
+        }
+    }
+
     static void DeclareColumnWritable(const TransformRowRange& range, std::size_t extraIndex) noexcept {
         if (extraIndex >= TransformRowRange::kMaxExtraComponents || range.extraColumns_[extraIndex] == nullptr) return;
         auto& task = *static_cast<TransformPassTask*>(range.pass_);
@@ -1491,6 +1554,10 @@ public:
 
 void TransformRowRange::SetLocal(std::size_t row, const Vec3& position, const Quat& rotation, const Vec3& scale) {
     TransformPassAccess::SetLocal(*this, row, position, rotation, scale);
+}
+
+void TransformRowRange::SetLocalBatch(std::size_t firstRow, std::span<const RowLocalTRS> values) {
+    TransformPassAccess::SetLocalBatch(*this, firstRow, values);
 }
 
 void TransformRowRange::DeclareColumnWritable(std::size_t extraIndex) const noexcept {
