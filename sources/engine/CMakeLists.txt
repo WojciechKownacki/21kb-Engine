@@ -1567,6 +1567,11 @@ endif()
 
 kb_apply_quality_gates(kb_engine)
 
+if(MSVC)
+    # Under AddressSanitizer this test translation unit exceeds the default object-file section limit.
+    set_property(SOURCE tests/ScriptRuntimeTests.cpp APPEND PROPERTY COMPILE_OPTIONS /bigobj)
+endif()
+
 if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
     # The isolated helper observes FP controls; engine/oracle/vendor flags stay unchanged.
     set_property(SOURCE src/scene/transform/ExactRootNormalize4.cpp APPEND PROPERTY COMPILE_OPTIONS /GL-)
@@ -1886,6 +1891,12 @@ if(BUILD_TESTING)
     target_compile_definitions(kb_scene_transform_scratch_tests PRIVATE KB_SCENE_TRANSFORM_SCRATCH_STANDALONE)
     target_include_directories(kb_scene_transform_scratch_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/private)
     set_tests_properties(kb_scene_transform_scratch_tests PROPERTIES LABELS "ecs;scene;transform;correctness")
+
+    kb_add_ecs_test_target(kb_scene_transform_local_batch_tests
+        tests/SceneTransformLocalBatchTests.cpp
+    )
+    target_compile_definitions(kb_scene_transform_local_batch_tests PRIVATE KB_SCENE_TRANSFORM_LOCAL_BATCH_STANDALONE)
+    set_tests_properties(kb_scene_transform_local_batch_tests PROPERTIES LABELS "ecs;scene;transform;correctness")
 
     kb_add_ecs_test_target(kb_ecs_scheduler_correctness_tests
         tests/EcsSchedulerCorrectnessTestMain.cpp
