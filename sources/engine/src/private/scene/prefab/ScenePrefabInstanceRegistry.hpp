@@ -233,6 +233,7 @@ private:
     void IndexDensePreparedObjectSpan(ScenePrefabInstanceHandle handle, std::span<const SceneObject> objects) noexcept;
     void IndexDensePreparedObjects(ScenePrefabInstanceHandle handle, const ScenePrefabInstanceRecord& record) noexcept;
     void UnindexObjects(ScenePrefabInstanceHandle handle, std::span<const SceneObject> objects) noexcept;
+    void ReleaseObjects(std::span<const SceneObject> objects);
     void RemoveFromPrefabIndex(ScenePrefabHandle prefab, ScenePrefabInstanceHandle handle) noexcept;
     void EnsureRecordSlot(ScenePrefabInstanceHandle handle);
     void EnsureRecordSlots(std::uint64_t firstId, std::size_t count);

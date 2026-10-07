@@ -89,6 +89,7 @@ ScenePrefabInstanceHandle ScenePrefabInstanceRegistry::Register(ScenePrefabHandl
         return {};
     }
 
+    ReleaseObjects(objects);
     const std::uint64_t id = nextId_++;
     const ScenePrefabInstanceHandle handle{ id };
     EnsureRecordSlot(handle);
@@ -963,6 +964,25 @@ void ScenePrefabInstanceRegistry::UnindexObjects(ScenePrefabInstanceHandle handl
                 objectIndex_.erase(objectIterator);
             }
         }
+    }
+}
+
+// An object belongs to one instance. Registering it again takes it out of the instance that held it,
+// and an instance whose root is taken goes away: its objects belong to the new instance's prefab.
+void ScenePrefabInstanceRegistry::ReleaseObjects(std::span<const SceneObject> objects) {
+    for (const SceneObject object : objects) {
+        std::uint32_t nodeIndex = 0U;
+        const ScenePrefabInstanceHandle owner = FindContainingEntity(object.Entity(), nodeIndex);
+        ScenePrefabInstanceRecord* record = FindMutable(owner);
+        if (record == nullptr || nodeIndex >= record->Objects().size() || record->Objects()[nodeIndex].Entity() != object.Entity()) {
+            continue;
+        }
+        if (nodeIndex == 0U) {
+            static_cast<void>(Remove(owner));
+            continue;
+        }
+        record->MutableObjects()[nodeIndex] = SceneObject{};
+        UnindexObjects(owner, std::span<const SceneObject>{ &object, 1U });
     }
 }
 

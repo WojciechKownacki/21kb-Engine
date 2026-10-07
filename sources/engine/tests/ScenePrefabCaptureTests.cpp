@@ -357,6 +357,48 @@ void RunPrefabCreateAssetRegistersSourceInstanceTest() {
     std::filesystem::remove(prefabPath, removeError);
 }
 
+// A prefab created from an instance root nests the old prefab and takes the instance over; one created
+// from an instance child takes that subtree out of the outer instance. Either way every object keeps
+// exactly one owner.
+void RunPrefabCreateAssetFromInstanceKeepsOneOwnerTest() {
+    const std::filesystem::path directory = std::filesystem::temp_directory_path() / "21kb_engine_prefab_one_owner";
+    std::error_code removeError;
+    std::filesystem::remove_all(directory, removeError);
+    std::filesystem::create_directories(directory);
+
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject root = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Owner Root" });
+    const kb::scene::SceneObject child = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Owner Child", .parent = root });
+    const kb::scene::ScenePrefabHandle inner = scene.Prefabs().CreateAsset(root, "Inner", directory / "Inner.kbprefab");
+    const kb::scene::ScenePrefabInstanceHandle innerInstance = scene.Prefabs().RootInstance(root);
+    kb::tests::Require(inner.IsValid() && innerInstance.IsValid(), "One-owner setup did not create the inner prefab instance");
+
+    const kb::scene::ScenePrefabHandle outer = scene.Prefabs().CreateAsset(root, "Outer", directory / "Outer.kbprefab");
+    const kb::scene::ScenePrefabInstanceHandle outerInstance = scene.Prefabs().RootInstance(root);
+    kb::tests::Require(outer.IsValid() && outerInstance.IsValid() && scene.Prefabs().SourcePrefab(outerInstance) == outer,
+        "Prefab created from an instance root did not take the instance over");
+    kb::tests::Require(!scene.Prefabs().IsInstance(innerInstance), "Prefab created from an instance root left the old instance record");
+    kb::tests::Require(scene.Prefabs().RefreshInstances(inner) == 0U, "Old prefab still lists an instance after its root was taken over");
+    std::uint32_t childNode = 99U;
+    kb::tests::Require(scene.Prefabs().ContainingInstance(child, childNode) == outerInstance && childNode == 1U, "Instance child did not move to the new prefab instance");
+    kb::tests::Require(scene.Prefabs().Get(outer).Nodes()[0].nestedPrefabGuid == scene.Prefabs().Guid(inner), "Prefab created from an instance root does not nest the old prefab");
+
+    const kb::scene::ScenePrefabHandle part = scene.Prefabs().CreateAsset(child, "Part", directory / "Part.kbprefab");
+    const kb::scene::ScenePrefabInstanceHandle partInstance = scene.Prefabs().RootInstance(child);
+    kb::tests::Require(part.IsValid() && partInstance.IsValid(), "Prefab created from an instance child is not linked");
+    kb::tests::Require(scene.Prefabs().ContainingInstance(child, childNode) == partInstance && childNode == 0U, "Instance child still belongs to the outer instance");
+    kb::tests::Require(scene.Prefabs().RootInstance(root) == outerInstance, "Outer instance lost its root when a child became a prefab");
+    bool childMissing = false;
+    bool childAdded = false;
+    for (const kb::scene::ScenePrefabPropertyOverride& property : scene.Prefabs().Overrides(outerInstance).properties) {
+        childMissing = childMissing || (property.nodeIndex == 1U && property.flag == kb::scene::ScenePrefabOverrideFlag::MissingObject);
+        childAdded = childAdded || (property.nodeIndex == 0U && property.flag == kb::scene::ScenePrefabOverrideFlag::AddedChild);
+    }
+    kb::tests::Require(childMissing && childAdded, "Outer instance does not report the child it gave up to the new prefab");
+
+    std::filesystem::remove_all(directory, removeError);
+}
+
 // A scene file keeps an instance only as the prefab guid on its root node. Reopening the file in a
 // fresh scene, and reloading the captured document in place (how Play mode stops), must link the
 // instance, its node mapping and its overrides again.
@@ -755,6 +797,7 @@ void RunScenePrefabCaptureTests() {
     run("RunPrefabCaptureTest", RunPrefabCaptureTest);
     run("RunPrefabAssetRoundTripTest", RunPrefabAssetRoundTripTest);
     run("RunPrefabCreateAssetRegistersSourceInstanceTest", RunPrefabCreateAssetRegistersSourceInstanceTest);
+    run("RunPrefabCreateAssetFromInstanceKeepsOneOwnerTest", RunPrefabCreateAssetFromInstanceKeepsOneOwnerTest);
     run("RunPrefabInstanceLinkSurvivesSceneReopenTest", RunPrefabInstanceLinkSurvivesSceneReopenTest);
     run("RunPrefabVariantAssetRoundTripTest", RunPrefabVariantAssetRoundTripTest);
     run("RunPrefabParentOverrideAssetRoundTripTest", RunPrefabParentOverrideAssetRoundTripTest);
