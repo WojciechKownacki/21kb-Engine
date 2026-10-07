@@ -7,6 +7,7 @@
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneAnimators.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/script/ScriptAsset.hpp"
 #include "engine/scene/SceneBehaviourComponents.hpp"
@@ -2557,6 +2558,66 @@ bool EditorSceneContext::CreatePrefabAsset(kb::scene::SceneEntity entity, const 
         console_.Error("Prefabs", AssetErrorOr(scene_->Assets().Manager(), "Prefab asset creation failed."));
     }
     return created;
+}
+
+bool EditorSceneContext::SelectPrefabSourceAsset(kb::scene::SceneEntity entity) {
+    const std::filesystem::path path = scene_->Prefabs().SourcePath(scene_->Prefabs().SourcePrefab(entity));
+    kb::assets::AssetManager& manager = scene_->Assets().Manager();
+    const std::optional<std::filesystem::path> virtualPath = path.empty() ? std::nullopt : manager.Mounts().ToVirtual(path);
+    const kb::assets::AssetMetadata* metadata = virtualPath.has_value() ? manager.Registry().FindByPath(*virtualPath) : nullptr;
+    if (metadata == nullptr || !assetBrowser_.SelectAsset(metadata->id, manager)) {
+        return false;
+    }
+    assetBrowser_.FocusSelection(true);
+    return true;
+}
+
+bool EditorSceneContext::SelectPrefabInstanceRoot(kb::scene::SceneEntity entity) {
+    std::uint32_t nodeIndex = 0U;
+    const kb::scene::ScenePrefabInstanceHandle instance = scene_->Prefabs().ContainingInstance(entity, nodeIndex);
+    if (!instance.IsValid()) {
+        return false;
+    }
+    for (kb::scene::SceneEntity candidate = entity; candidate.IsValid(); candidate = scene_->Hierarchy().Parent(candidate)) {
+        if (scene_->Prefabs().RootInstance(candidate) == instance) {
+            SelectEntity(candidate);
+            return true;
+        }
+    }
+    return false;
+}
+
+// Apply writes the prefab asset and refreshes the other instances. Undo restores the scene; the
+// written asset keeps the applied content, as creating a prefab keeps its file.
+bool EditorSceneContext::ApplyPrefabInstance(kb::scene::SceneEntity entity) {
+    const kb::scene::ScenePrefabInstanceHandle instance = scene_->Prefabs().RootInstance(entity);
+    if (!instance.IsValid()) {
+        return false;
+    }
+    const std::filesystem::path assetPath = scene_->Prefabs().SourcePath(scene_->Prefabs().SourcePrefab(instance));
+    const bool applied = ExecuteSceneCommand("Apply Prefab", [this, instance, assetPath]() {
+        return assetPath.empty()
+            ? scene_->Prefabs().ApplyOverrides(instance)
+            : scene_->Prefabs().ApplyOverrides(instance, assetPath);
+    });
+    if (applied) {
+        console_.Info("Prefabs", "Prefab overrides applied.");
+    }
+    return applied;
+}
+
+bool EditorSceneContext::RevertPrefabInstance(kb::scene::SceneEntity entity) {
+    const kb::scene::ScenePrefabInstanceHandle instance = scene_->Prefabs().RootInstance(entity);
+    return instance.IsValid() && ExecuteSceneCommand("Revert Prefab", [this, instance]() {
+        return scene_->Prefabs().RevertOverrides(instance);
+    });
+}
+
+bool EditorSceneContext::UnpackPrefabInstance(kb::scene::SceneEntity entity) {
+    const kb::scene::ScenePrefabInstanceHandle instance = scene_->Prefabs().RootInstance(entity);
+    return instance.IsValid() && ExecuteSceneCommand("Unpack Prefab", [this, instance]() {
+        return scene_->Prefabs().Unpack(instance);
+    });
 }
 
 EditorInputActionAuthoring EditorSceneContext::InputActionAuthoring() noexcept {

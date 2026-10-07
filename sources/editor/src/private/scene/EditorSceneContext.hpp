@@ -456,6 +456,11 @@ public:
     [[nodiscard]] bool DeleteSelectedAssetBrowserItem();
     [[nodiscard]] bool DeleteSelectedHierarchyEntity() noexcept;
     [[nodiscard]] bool DuplicateSelectedHierarchyEntities();
+    [[nodiscard]] bool SelectPrefabSourceAsset(kb::scene::SceneEntity entity);
+    [[nodiscard]] bool SelectPrefabInstanceRoot(kb::scene::SceneEntity entity);
+    [[nodiscard]] bool ApplyPrefabInstance(kb::scene::SceneEntity entity);
+    [[nodiscard]] bool RevertPrefabInstance(kb::scene::SceneEntity entity);
+    [[nodiscard]] bool UnpackPrefabInstance(kb::scene::SceneEntity entity);
     // Objects a scene command recreated keep their identity in the scene history and the other commands.
     void RemapRecreatedEntities(std::span<const kb::scene::SceneEntityRemap> recreated);
     [[nodiscard]] bool AdoptCreatedHierarchyEntities(std::string label, std::span<const kb::scene::SceneEntity> entities);

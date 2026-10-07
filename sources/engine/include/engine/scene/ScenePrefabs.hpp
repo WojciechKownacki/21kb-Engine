@@ -105,6 +105,8 @@ public:
     [[nodiscard]] ScenePrefabHandle CreateAsset(SceneObject root, const ScenePrefabCaptureSettings& settings, std::string name, const std::filesystem::path& path);
     [[nodiscard]] bool Contains(ScenePrefabHandle handle) const noexcept;
     [[nodiscard]] std::string Guid(ScenePrefabHandle handle) const;
+    // The .kbprefab file the prefab was loaded from or last saved to; empty for one that lives only in memory.
+    [[nodiscard]] std::filesystem::path SourcePath(ScenePrefabHandle handle) const;
     [[nodiscard]] ScenePrefabAssetType AssetType(ScenePrefabHandle handle) const noexcept;
     [[nodiscard]] std::size_t RegisteredCount() const noexcept;
     void Clear() noexcept;
