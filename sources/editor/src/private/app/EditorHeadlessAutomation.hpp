@@ -123,6 +123,7 @@ public:
     [[nodiscard]] bool VerifyUIWidgetFeatures();
     [[nodiscard]] bool VerifyPickerCloseButtons();
     [[nodiscard]] bool VerifyUI2DEditing();
+    [[nodiscard]] bool VerifyPrefabRoundTrip();
     [[nodiscard]] bool SelectUIAnchorPreset(int preset);
     [[nodiscard]] bool SetUIRectLayoutField(int field, float value);
     [[nodiscard]] bool SetGameplayKey(

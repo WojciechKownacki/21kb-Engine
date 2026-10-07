@@ -18,6 +18,8 @@
 #include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorPanelInteraction.hpp"
 #include "inspection/ui/InspectorUIComponentModel.hpp"
+#include "engine/scene/ScenePrefabs.hpp"
+#include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneUI.hpp"
 #include "platform/win32/EditorParticleEffectAssetPickerDialog.hpp"
 #include "rendering/DockWorkspaceRenderer.hpp"
@@ -1104,6 +1106,68 @@ bool EditorHeadlessAutomation::SetUIComponentProperty(
     if (openedAdvanced) context_.Inspector().ToggleDisclosure(InspectorDisclosureId::UIRectAdvanced);
     Trace("set_ui_component_property", succeeded, property);
     return succeeded;
+}
+
+// One prefab through the whole editor round - create, place, override, apply, save, reopen, play,
+// stop and undo - with both instances checked for their link to the asset after every step.
+bool EditorHeadlessAutomation::VerifyPrefabRoundTrip() {
+    const auto findNamed = [this](std::string_view name) {
+        for (const EditorHierarchyRow& row : context_.HierarchyRows()) {
+            if (row.name == name) {
+                return row.entity;
+            }
+        }
+        return kb::scene::SceneEntity{};
+    };
+    const auto linked = [this, &findNamed](std::string_view name) {
+        kb::scene::ScenePrefabs prefabs = context_.Scene().Prefabs();
+        const kb::scene::ScenePrefabInstanceHandle instance = prefabs.RootInstance(findNamed(name));
+        return instance.IsValid() && prefabs.SourcePath(prefabs.SourcePrefab(instance)).stem() == "RoundTripCrate";
+    };
+    const auto positionX = [this, &findNamed](std::string_view name) {
+        return context_.Scene().Transforms().Get(findNamed(name)).localPosition.x;
+    };
+    const auto step = [this, &linked](std::string_view name, bool succeeded) {
+        const bool passed = succeeded && linked("RoundTripCrate") && linked("RoundTripPlaced");
+        Trace("prefab_round_trip", passed, name);
+        return passed;
+    };
+
+    const kb::scene::SceneEntity source = context_.CreateHierarchyObject();
+    context_.Scene().Entities().SetName(source, "RoundTripCrate");
+    static_cast<void>(context_.Scene().Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "RoundTripLid", .parent = context_.Scene().Entities().Object(source) }));
+    const std::filesystem::path prefabPath = EditorProjectPaths::PrefabsRoot() / "RoundTripCrate.kbprefab";
+    if (!context_.CreatePrefabAsset(source, prefabPath) ||
+        !context_.InstantiatePrefabAsset(prefabPath, "/Game/Prefabs/RoundTripCrate.kbprefab", {})) {
+        Trace("prefab_round_trip", false, "create-and-place");
+        return false;
+    }
+    context_.Scene().Entities().SetName(context_.SelectedEntity(), "RoundTripPlaced");
+    if (!step("create-and-place", true)) {
+        return false;
+    }
+
+    kb::scene::TransformComponent transform = context_.Scene().Transforms().Get(findNamed("RoundTripCrate"));
+    transform.localPosition.x = 4.0F;
+    context_.Scene().Transforms().Set(findNamed("RoundTripCrate"), transform);
+    kb::scene::ScenePrefabs prefabs = context_.Scene().Prefabs();
+    if (!step("override", !prefabs.Overrides(prefabs.RootInstance(findNamed("RoundTripCrate"))).Empty()) ||
+        !step("apply", context_.ApplyPrefabInstance(findNamed("RoundTripCrate")) && positionX("RoundTripPlaced") == 4.0F)) {
+        return false;
+    }
+
+    const std::filesystem::path scenePath = EditorProjectPaths::ScenesRoot() / "PrefabRoundTrip.21kbscene";
+    if (!step("save", context_.SaveCurrentSceneAs(scenePath)) ||
+        !step("reopen", context_.OpenScene(scenePath) && positionX("RoundTripCrate") == 4.0F && positionX("RoundTripPlaced") == 4.0F) ||
+        !step("play", context_.BeginPlayModeSceneSession() && context_.TickPlayModeSceneSession(1.0F / 60.0F)) ||
+        !step("stop", context_.RestorePlayModeSceneSession())) {
+        return false;
+    }
+
+    // Stopping Play starts a fresh history, so the undo step undoes an edit made after it.
+    return step("edit", context_.ToggleEntityVisibility(findNamed("RoundTripPlaced"))) &&
+        step("undo", context_.UndoSceneCommand() &&
+            context_.Scene().Components().Visibility().Get(findNamed("RoundTripPlaced")).mode != kb::scene::VisibilityMode::Hidden);
 }
 
 bool EditorHeadlessAutomation::VerifyUI2DEditing() {

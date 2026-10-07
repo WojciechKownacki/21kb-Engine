@@ -703,6 +703,9 @@ ReadScriptValue(
     const auto operation = StringMember(step, "op", error);
     if (!operation.has_value()) return { false, error };
 
+    if (*operation == "verify_prefab_round_trip") {
+        return {state.automation.VerifyPrefabRoundTrip(), "Prefab create, place, override, apply, save, reopen, play, stop and undo keep the asset link"};
+    }
     if (*operation == "verify_ui_2d") {
         return {state.automation.VerifyUI2DEditing(), "2D toolbar, UI selection, eight resize handles, move, undo and cancel"};
     }
