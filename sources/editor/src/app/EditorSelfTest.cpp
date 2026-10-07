@@ -5398,6 +5398,18 @@ void RunPrefabPlacementSuite(Report& report) {
     report.Check(context.BeginPlayModeSceneSession(), "Enter Play mode with linked prefab instances");
     report.Check(context.RestorePlayModeSceneSession(), "Leave Play mode");
     report.Check(linkedCrate(findNamed("LinkedCrate")), "Leaving Play mode keeps the prefab link");
+
+    const std::filesystem::path linkedPath = EditorProjectPaths::PrefabsRoot() / "LinkedCrate.kbprefab";
+    const kb::assets::AssetMetadata* linkedAsset = context.Scene().Assets().Manager().Registry().FindByPath("/Game/Prefabs/LinkedCrate.kbprefab");
+    report.Check(linkedAsset != nullptr && !context.DeleteAssetBrowserItem(linkedAsset->id) && std::filesystem::exists(linkedPath), "Deleting a prefab asset with scene instances is blocked");
+    report.Check(linkedAsset != nullptr && !context.MoveAssetToFolder(linkedAsset->id, "/Game") && std::filesystem::exists(linkedPath), "Moving a prefab asset with scene instances is blocked");
+    const kb::scene::SceneEntity unused = context.CreateHierarchyObject();
+    context.Scene().Entities().SetName(unused, "UnusedPrefabSource");
+    report.Check(context.CreatePrefabAsset(unused, EditorProjectPaths::PrefabsRoot() / "UnusedPrefab.kbprefab"), "Create prefab asset to delete");
+    context.SelectEntity(findNamed("UnusedPrefabSource"));
+    report.Check(context.DeleteSelectedHierarchyEntity(), "Delete the only instance of a prefab asset");
+    const kb::assets::AssetMetadata* unusedAsset = context.Scene().Assets().Manager().Registry().FindByPath("/Game/Prefabs/UnusedPrefab.kbprefab");
+    report.Check(unusedAsset != nullptr && context.DeleteAssetBrowserItem(unusedAsset->id), "Deleting a prefab asset without scene instances is allowed");
 }
 
 void RunHierarchyCommandSuite(Report& report) {
