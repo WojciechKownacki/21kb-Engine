@@ -1432,10 +1432,9 @@ struct TransformPassTask {
     TransformPassRangeWrites* rangeWrites = nullptr;
     std::size_t written = 0U;
     bool trackPrefab = false;
-    std::uint32_t stamp = 0U;
 };
 
-// Writes four complete rows without reading them first: streaming stores when the rows are 16-byte aligned.
+// Writes four complete rows: streaming stores when the rows are 16-byte aligned.
 void StoreRows4(TransformComponent* destination, const std::array<TransformComponent, 4U>& rows) noexcept {
     static_assert(sizeof(TransformComponent) % 16U == 0U);
 #if defined(_M_X64) || defined(__x86_64__)
@@ -1535,12 +1534,14 @@ public:
                     transform.localPosition = value.position;
                     transform.localRotation = value.rotation;
                     transform.localScale = value.scale;
-                    transform.localVersion = task.stamp;
+                    // Count each row's versions up as SetLocal does: a shared value could repeat one a reader has seen.
+                    const TransformComponent& old = range.rows_[firstRow + offset + lane];
+                    transform.localVersion = old.localVersion + 1U;
                     transform.worldPosition = value.position;
                     transform.worldRotation = normalized[lane];
                     transform.worldScale = value.scale;
                     transform.parentVersion = 0U;
-                    transform.worldVersion = task.stamp;
+                    transform.worldVersion = old.worldVersion + 1U;
                     transform.worldDirty = false;
                     ++task.written;
                     task.rangeWrites->transformWritten = true;
@@ -1674,16 +1675,12 @@ TransformPassStats RunSceneTransformPass(SceneState& state, std::size_t grainRow
     std::mutex exceptionMutex;
     EnsureWorkerPool(state);
     state.transformPassRunning = true;
-    // Blind batch writes version their rows with this pass's stamp: high bit set, so it never meets a per-write counter.
-    state.transformPassStamp = 0x80000000U | ((state.transformPassStamp + 1U) & 0x7FFFFFFFU);
-    const std::uint32_t passStamp = state.transformPassStamp;
     {
         const auto iterationGuard = state.world.EnterIteration();
         try {
             state.transformWorkerPool->ParallelForChunks(records.size(), recordsPerTask, [&](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk& chunk) {
                 TransformPassTask task{ state, sparseMutex, outputs[chunk.index] };
                 task.trackPrefab = trackPrefab;
-                task.stamp = passStamp;
                 for (std::size_t index = chunk.begin; index < chunk.begin + chunk.count && !stopped.load(std::memory_order_relaxed); ++index) {
                     const auto& record = records[index];
                     const bool composes = !observed && (record.nativeArchetypeIndex >= state.transformPassDeferredArchetypes.size() ||

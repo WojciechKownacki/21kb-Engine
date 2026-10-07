@@ -85,7 +85,8 @@ void RequireSameTransforms(Scene& actual, const std::vector<SceneObject>& actual
         kb::tests::Require(SameBits(left.localPosition, right.localPosition) && SameBits(left.localRotation, right.localRotation) &&
                 SameBits(left.localScale, right.localScale) && SameBits(left.worldPosition, right.worldPosition) &&
                 SameBits(left.worldRotation, right.worldRotation) && SameBits(left.worldScale, right.worldScale) &&
-                left.worldDirty == right.worldDirty && left.parentVersion == right.parentVersion,
+                left.worldDirty == right.worldDirty && left.parentVersion == right.parentVersion &&
+                left.localVersion == right.localVersion && left.worldVersion == right.worldVersion,
             message);
     }
 }
@@ -161,6 +162,36 @@ void RunBatchRepeatedPassesTest() {
     }
 }
 
+// A plain Set between two batch passes: the second pass must still give the row a world version no reader has seen,
+// or the renderer, which pulls a row only when its world version changed, keeps showing the Set's position.
+void RunBatchAfterSetTest() {
+    Scene actual;
+    Scene reference;
+    const auto actualRoots = CreateRoots(actual);
+    const auto referenceRoots = CreateRoots(reference);
+    actual.Runtime().SynchronizeTransforms();
+    reference.Runtime().SynchronizeTransforms();
+    for (std::size_t pass = 0U; pass < 4U; ++pass) {
+        RunPass(actual, 64U, pass, true);
+        RunPass(reference, 64U, pass, false);
+        std::vector<std::uint32_t> seen(kRoots);
+        for (std::size_t index = 0U; index < kRoots; index += 2U) {
+            auto transform = actual.Transforms().Get(actualRoots[index]);
+            transform.localScale.y += 1.0F;
+            actual.Transforms().Set(actualRoots[index], transform);
+            reference.Transforms().Set(referenceRoots[index], transform);
+        }
+        for (std::size_t index = 0U; index < kRoots; ++index) seen[index] = actual.Transforms().Get(actualRoots[index]).worldVersion;
+        RunPass(actual, 64U, pass + 1U, true);
+        RunPass(reference, 64U, pass + 1U, false);
+        RequireSameTransforms(actual, actualRoots, reference, referenceRoots, "A batch after Set must give SetLocal's rows and versions");
+        for (std::size_t index = 0U; index < kRoots; ++index) {
+            kb::tests::Require(actual.Transforms().Get(actualRoots[index]).worldVersion != seen[index],
+                "A batch after Set must not repeat a world version a reader has already seen");
+        }
+    }
+}
+
 void RunBatchBoundsTest() {
     Scene scene;
     const auto roots = CreateRoots(scene);
@@ -200,6 +231,8 @@ void RunSceneTransformLocalBatchTests() {
     RunBatchWithHierarchyTest();
     std::cout << "START local batch repeated passes" << std::endl;
     RunBatchRepeatedPassesTest();
+    std::cout << "START local batch after Set" << std::endl;
+    RunBatchAfterSetTest();
     std::cout << "START local batch bounds" << std::endl;
     RunBatchBoundsTest();
     std::cout << "PASS local batch" << std::endl;
