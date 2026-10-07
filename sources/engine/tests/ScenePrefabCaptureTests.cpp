@@ -399,6 +399,41 @@ void RunPrefabCreateAssetFromInstanceKeepsOneOwnerTest() {
     std::filesystem::remove_all(directory, removeError);
 }
 
+// A .kbprefab changed on disk by someone else is the same asset: loading it again keeps the guid stored
+// in the file and the loaded prefab, and RefreshInstances brings existing instances to the new content.
+void RunPrefabReloadOfChangedFileKeepsGuidTest() {
+    const std::filesystem::path prefabPath = std::filesystem::temp_directory_path() / "21kb_engine_prefab_reload_changed.kbprefab";
+    std::error_code removeError;
+    std::filesystem::remove(prefabPath, removeError);
+
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject root = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Barrel" });
+    static_cast<void>(scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Band", .parent = root }));
+    const kb::scene::ScenePrefabHandle handle = scene.Prefabs().CreateAsset(root, "Barrel", prefabPath);
+    kb::tests::Require(handle.IsValid(), "Reload setup did not create the prefab asset");
+    const std::string guid = scene.Prefabs().Guid(handle);
+    const kb::scene::ScenePrefabInstanceHandle instance = scene.Prefabs().RootInstance(root);
+
+    {
+        kb::scene::Scene writer;
+        const kb::scene::ScenePrefabHandle written = writer.Prefabs().Load(prefabPath);
+        const kb::scene::ScenePrefabInstance writerInstance = writer.Prefabs().Instantiate(written);
+        kb::scene::TransformComponent transform = writer.Transforms().Get(writerInstance.RootObject());
+        transform.localPosition.x = 4.0F;
+        writer.Transforms().Set(writerInstance.RootObject(), transform);
+        kb::tests::Require(writer.Prefabs().ApplyOverrides(writerInstance.Handle(), prefabPath), "Reload setup did not write the changed prefab");
+    }
+
+    const kb::scene::ScenePrefabHandle reloaded = scene.Prefabs().Load(prefabPath);
+    kb::tests::Require(reloaded == handle && scene.Prefabs().Guid(reloaded) == guid, "Reloading a changed prefab file gave it a new identity");
+    kb::tests::Require(scene.Prefabs().RegisteredCount() == 1U, "Reloading a changed prefab file registered a second prefab");
+    kb::tests::Require(scene.Prefabs().RefreshInstances(reloaded) == 1U, "Existing instance was not refreshed from the changed prefab");
+    kb::tests::Require(kb::tests::NearlyEqual(scene.Transforms().Get(root).localPosition.x, 4.0F), "Existing instance did not take the changed prefab content");
+    kb::tests::Require(scene.Prefabs().Overrides(instance).properties.empty(), "Refreshed instance reports the new prefab content as overrides");
+
+    std::filesystem::remove(prefabPath, removeError);
+}
+
 // A scene file keeps an instance only as the prefab guid on its root node. Reopening the file in a
 // fresh scene, and reloading the captured document in place (how Play mode stops), must link the
 // instance, its node mapping and its overrides again.
@@ -798,6 +833,7 @@ void RunScenePrefabCaptureTests() {
     run("RunPrefabAssetRoundTripTest", RunPrefabAssetRoundTripTest);
     run("RunPrefabCreateAssetRegistersSourceInstanceTest", RunPrefabCreateAssetRegistersSourceInstanceTest);
     run("RunPrefabCreateAssetFromInstanceKeepsOneOwnerTest", RunPrefabCreateAssetFromInstanceKeepsOneOwnerTest);
+    run("RunPrefabReloadOfChangedFileKeepsGuidTest", RunPrefabReloadOfChangedFileKeepsGuidTest);
     run("RunPrefabInstanceLinkSurvivesSceneReopenTest", RunPrefabInstanceLinkSurvivesSceneReopenTest);
     run("RunPrefabVariantAssetRoundTripTest", RunPrefabVariantAssetRoundTripTest);
     run("RunPrefabParentOverrideAssetRoundTripTest", RunPrefabParentOverrideAssetRoundTripTest);
