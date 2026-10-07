@@ -1,9 +1,11 @@
 #pragma once
 
 #include "commands/IEditorCommand.hpp"
+#include "engine/scene/SceneHistory.hpp"
 
 #include <cstddef>
 #include <memory>
+#include <span>
 #include <vector>
 
 namespace kb::editor {
@@ -23,6 +25,7 @@ public:
     [[nodiscard]] bool Redo(EditorCommandHistoryKey key);
     void Clear() noexcept;
     void Clear(EditorCommandHistoryKey key) noexcept;
+    void RemapEntities(EditorCommandHistoryKey key, std::span<const kb::scene::SceneEntityRemap> remap);
 
     [[nodiscard]] std::size_t UndoCount() const noexcept;
     [[nodiscard]] std::size_t RedoCount() const noexcept;

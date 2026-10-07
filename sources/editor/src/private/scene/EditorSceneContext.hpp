@@ -5,6 +5,7 @@
 #include "engine/audio/AudioMixerAsset.hpp"
 
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneHistory.hpp"
 #include "engine/scene/SceneAudioOcclusionAccess.hpp"
 #include "engine/scene/SceneRenderFeedback.hpp"
 #include "engine/scene/SceneEntity.hpp"
@@ -455,6 +456,8 @@ public:
     [[nodiscard]] bool DeleteSelectedAssetBrowserItem();
     [[nodiscard]] bool DeleteSelectedHierarchyEntity() noexcept;
     [[nodiscard]] bool DuplicateSelectedHierarchyEntities();
+    // Objects a scene command recreated keep their identity in the scene history and the other commands.
+    void RemapRecreatedEntities(std::span<const kb::scene::SceneEntityRemap> recreated);
     [[nodiscard]] bool AdoptCreatedHierarchyEntities(std::string label, std::span<const kb::scene::SceneEntity> entities);
     [[nodiscard]] bool DeleteAssetBrowserItem(kb::assets::AssetId id);
     [[nodiscard]] bool DeleteAssetBrowserFolder(const std::filesystem::path& virtualFolder);

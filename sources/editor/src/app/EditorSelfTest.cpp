@@ -5410,6 +5410,19 @@ void RunPrefabPlacementSuite(Report& report) {
     report.Check(context.DeleteSelectedHierarchyEntity(), "Delete the only instance of a prefab asset");
     const kb::assets::AssetMetadata* unusedAsset = context.Scene().Assets().Manager().Registry().FindByPath("/Game/Prefabs/UnusedPrefab.kbprefab");
     report.Check(unusedAsset != nullptr && context.DeleteAssetBrowserItem(unusedAsset->id), "Deleting a prefab asset without scene instances is allowed");
+
+    // A snapshot command recreates every object; the placement before it must still undo and redo.
+    const std::size_t entitiesBeforePlacement = context.Scene().Entities().Count();
+    report.Check(context.InstantiatePrefabAssetAt(prefabPath, "/Game/Prefabs/PlacedPrefab.kbprefab", kb::scene::Vec3{ 0.0F, 0.0F, 9.0F }), "Place prefab before a snapshot command");
+    report.Check(context.ToggleEntityVisibility(context.SelectedEntity()), "Run a snapshot command after placing a prefab");
+    report.Check(context.UndoSceneCommand(), "Undo the snapshot command");
+    report.Check(context.UndoSceneCommand() && context.Scene().Entities().Count() == entitiesBeforePlacement, "Undo the placement after a snapshot command removes the placed prefab");
+    report.Check(context.RedoSceneCommand() && showsPrefabRoot(context.SelectedEntity()), "Redo the placement after a snapshot command");
+    report.Check(context.RedoSceneCommand() && context.Scene().Entities().Count() == entitiesBeforePlacement + 1U, "Redo the snapshot command after redoing the placement");
+    const auto hiddenPlacement = std::ranges::find_if(context.HierarchyRows(), [](const EditorHierarchyRow& row) { return !row.visible; });
+    report.Check(hiddenPlacement != context.HierarchyRows().end() && showsPrefabRoot(hiddenPlacement->entity), "Redone snapshot command hides the linked placement");
+    report.Check(context.UndoSceneCommand() && context.UndoSceneCommand() && context.Scene().Entities().Count() == entitiesBeforePlacement,
+        "Undo both again removes the placed prefab");
 }
 
 void RunHierarchyCommandSuite(Report& report) {

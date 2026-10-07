@@ -12,6 +12,7 @@
 #include "scene/prefab/ScenePrefabInstanceRegistry.hpp"
 #include "scene/prefab/ScenePrefabInstantiationService.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <span>
 #include <unordered_map>
@@ -23,21 +24,23 @@ namespace {
 
 using SceneHistoryObjectPathIndex = std::unordered_map<std::uint64_t, SceneHistoryObjectPath>;
 
-void IndexObjectPath(SceneObject object, SceneHistoryObjectPath path, SceneHistoryObjectPathIndex& output) {
+// Walks each root in the order prefab capture adds its nodes, so `entities` lines up with the captured nodes.
+void IndexObjectPath(SceneObject object, SceneHistoryObjectPath path, SceneHistoryObjectPathIndex& output, std::vector<SceneEntity>& entities) {
     output[object.Entity().Id()] = path;
+    entities.push_back(object.Entity());
 
     const std::vector<SceneObject> children = object.Children();
     for (std::uint32_t childIndex = 0U; childIndex < static_cast<std::uint32_t>(children.size()); ++childIndex) {
         SceneHistoryObjectPath childPath = path;
         childPath.push_back(childIndex);
-        IndexObjectPath(children[childIndex], std::move(childPath), output);
+        IndexObjectPath(children[childIndex], std::move(childPath), output, entities);
     }
 }
 
-[[nodiscard]] SceneHistoryObjectPathIndex BuildObjectPathIndex(const std::vector<SceneObject>& roots) {
+[[nodiscard]] SceneHistoryObjectPathIndex BuildObjectPathIndex(const std::vector<SceneObject>& roots, std::vector<SceneEntity>& entities) {
     SceneHistoryObjectPathIndex index;
     for (std::uint32_t rootIndex = 0U; rootIndex < static_cast<std::uint32_t>(roots.size()); ++rootIndex) {
-        IndexObjectPath(roots[rootIndex], SceneHistoryObjectPath{ rootIndex }, index);
+        IndexObjectPath(roots[rootIndex], SceneHistoryObjectPath{ rootIndex }, index, entities);
     }
     return index;
 }
@@ -78,7 +81,8 @@ void IndexObjectPath(SceneObject object, SceneHistoryObjectPath path, SceneHisto
         roots.push_back(ScenePrefabCaptureService::Capture(scene, rootObject, ScenePrefabCaptureSettings{}));
     }
 
-    const SceneHistoryObjectPathIndex objectPaths = BuildObjectPathIndex(rootObjects);
+    std::vector<SceneEntity> entities;
+    const SceneHistoryObjectPathIndex objectPaths = BuildObjectPathIndex(rootObjects, entities);
     for (const ScenePrefabInstanceHandle instanceHandle : state.prefabInstances.Handles()) {
         const ScenePrefabInstanceRecord* record = state.prefabInstances.Find(instanceHandle);
         if (record == nullptr) {
@@ -110,11 +114,12 @@ void IndexObjectPath(SceneObject object, SceneHistoryObjectPath path, SceneHisto
         .audioOcclusionSettings = SceneAudioOcclusionAccess::Settings(scene),
         .roots = std::move(roots),
         .prefabInstances = std::move(prefabInstances),
+        .entities = std::move(entities),
     };
     return true;
 }
 
-[[nodiscard]] bool RestoreSnapshot(Scene& scene, const SceneHistoryEntry& entry) {
+[[nodiscard]] bool RestoreSnapshot(Scene& scene, const SceneHistoryEntry& entry, std::vector<SceneEntityRemap>& recreated) {
     SceneState& state = SceneAccess::State(scene);
     const std::vector<SceneEntity> roots = SceneHierarchyService::RootEntities(scene);
     for (const SceneEntity root : roots) {
@@ -124,12 +129,18 @@ void IndexObjectPath(SceneObject object, SceneHistoryObjectPath path, SceneHisto
 
     std::vector<SceneObject> restoredRoots;
     restoredRoots.reserve(entry.roots.size());
+    recreated.reserve(entry.entities.size());
     for (const ScenePrefab& prefab : entry.roots) {
         ScenePrefabInstance root = ScenePrefabInstantiationService::Instantiate(scene, prefab, ScenePrefabInstantiationSettings{});
         if (root.Empty()) {
             return false;
         }
         restoredRoots.push_back(root.RootObject());
+        for (const SceneObject object : root.Objects()) {
+            if (recreated.size() < entry.entities.size()) {
+                recreated.push_back(SceneEntityRemap{ .from = entry.entities[recreated.size()], .to = object.Entity() });
+            }
+        }
     }
 
     for (const SceneHistoryPrefabInstanceSnapshot& snapshot : entry.prefabInstances) {
@@ -164,6 +175,18 @@ void IndexObjectPath(SceneObject object, SceneHistoryObjectPath path, SceneHisto
     return true;
 }
 
+void RemapRecordedEntities(SceneState& state, std::span<const SceneEntityRemap> remap) {
+    if (remap.empty()) {
+        return;
+    }
+    std::vector<SceneEntityRemap> sorted{ remap.begin(), remap.end() };
+    std::ranges::sort(sorted, {}, [](const SceneEntityRemap& entry) noexcept {
+        return entry.from.Id();
+    });
+    state.undoHistory.RemapEntities(sorted);
+    state.redoHistory.RemapEntities(sorted);
+}
+
 } // namespace
 
 bool SceneHistoryService::Record(Scene& scene, std::string label) {
@@ -196,10 +219,13 @@ bool SceneHistoryService::Undo(Scene& scene) {
         return false;
     }
     SceneHistoryEntry previous = state.undoHistory.Pop();
-    if (!RestoreSnapshot(scene, previous)) {
+    std::vector<SceneEntityRemap> recreated;
+    if (!RestoreSnapshot(scene, previous, recreated)) {
         return false;
     }
     state.redoHistory.Push(std::move(current));
+    RemapRecordedEntities(state, recreated);
+    state.recreatedEntities = std::move(recreated);
     return true;
 }
 
@@ -214,10 +240,13 @@ bool SceneHistoryService::Redo(Scene& scene) {
         return false;
     }
     SceneHistoryEntry next = state.redoHistory.Pop();
-    if (!RestoreSnapshot(scene, next)) {
+    std::vector<SceneEntityRemap> recreated;
+    if (!RestoreSnapshot(scene, next, recreated)) {
         return false;
     }
     state.undoHistory.Push(std::move(current));
+    RemapRecordedEntities(state, recreated);
+    state.recreatedEntities = std::move(recreated);
     return true;
 }
 
@@ -233,6 +262,14 @@ std::size_t SceneHistoryService::UndoCount(const Scene& scene) noexcept {
 
 std::size_t SceneHistoryService::RedoCount(const Scene& scene) noexcept {
     return SceneAccess::State(scene).redoHistory.Size();
+}
+
+std::vector<SceneEntityRemap> SceneHistoryService::TakeRecreatedEntities(Scene& scene) noexcept {
+    return std::exchange(SceneAccess::State(scene).recreatedEntities, {});
+}
+
+void SceneHistoryService::RemapEntities(Scene& scene, std::span<const SceneEntityRemap> remap) {
+    RemapRecordedEntities(SceneAccess::State(scene), remap);
 }
 
 } // namespace kb::scene

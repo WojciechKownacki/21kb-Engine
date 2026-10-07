@@ -41,4 +41,12 @@ std::size_t SceneHistory::RedoCount() const noexcept {
     return SceneHistoryService::RedoCount(scene_);
 }
 
+std::vector<SceneEntityRemap> SceneHistory::TakeRecreatedEntities() {
+    return SceneHistoryService::TakeRecreatedEntities(scene_);
+}
+
+void SceneHistory::RemapEntities(std::span<const SceneEntityRemap> remap) {
+    SceneHistoryService::RemapEntities(scene_, remap);
+}
+
 } // namespace kb::scene

@@ -5662,6 +5662,11 @@ bool EditorSceneContext::ExecuteSceneCommand(std::string label, std::function<bo
     return SceneCommands().Execute(std::move(label), std::move(mutation));
 }
 
+void EditorSceneContext::RemapRecreatedEntities(std::span<const kb::scene::SceneEntityRemap> recreated) {
+    scene_->History().RemapEntities(recreated);
+    commandStack_.RemapEntities(EditorCommandHistoryKey::Scene(), recreated);
+}
+
 void EditorSceneContext::ClearSceneDocumentDirty() noexcept {
     sceneDocumentDirty_ = false;
 }

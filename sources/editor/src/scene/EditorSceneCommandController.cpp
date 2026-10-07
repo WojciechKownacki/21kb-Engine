@@ -52,7 +52,9 @@ EditorSceneCommandController::EditorSceneCommandController(
     , hierarchyRowsDirty_(hierarchyRowsDirty) {}
 
 bool EditorSceneCommandController::Undo() {
-    if (!commandStack_.Undo(EditorCommandHistoryKey::Scene())) {
+    const bool undone = commandStack_.Undo(EditorCommandHistoryKey::Scene());
+    RemapRecreatedEntities();
+    if (!undone) {
         console_.Warning("Edit", "Undo ignored.");
         return false;
     }
@@ -66,7 +68,9 @@ bool EditorSceneCommandController::Undo() {
 }
 
 bool EditorSceneCommandController::Redo() {
-    if (!commandStack_.Redo(EditorCommandHistoryKey::Scene())) {
+    const bool redone = commandStack_.Redo(EditorCommandHistoryKey::Scene());
+    RemapRecreatedEntities();
+    if (!redone) {
         console_.Warning("Edit", "Redo ignored.");
         return false;
     }
@@ -105,6 +109,7 @@ bool EditorSceneCommandController::CommitTransaction() {
 void EditorSceneCommandController::CancelTransaction() {
     if (pendingTransactionLabel_.has_value()) {
         static_cast<void>(scene_.History().Undo());
+        RemapRecreatedEntities();
         NormalizeHierarchySelectionAfterSceneRestore();
         NotifySceneChanged(false);
     }
@@ -118,7 +123,9 @@ bool EditorSceneCommandController::Execute(std::string label, Mutation mutation)
     }
 
     const std::string labelCopy = label;
-    if (!commandStack_.Execute(EditorSceneHistoryCommand::Create(scene_, std::move(label), std::move(mutation)))) {
+    const bool executed = commandStack_.Execute(EditorSceneHistoryCommand::Create(scene_, std::move(label), std::move(mutation)));
+    RemapRecreatedEntities();
+    if (!executed) {
         console_.Warning("Edit", "Scene command failed: " + labelCopy);
         return false;
     }
@@ -136,6 +143,11 @@ void EditorSceneCommandController::NormalizeHierarchySelectionAfterSceneRestore(
     const std::vector<EditorHierarchyRow> rows = HierarchyRows();
     EditorHierarchySelectionNormalizer::NormalizeAfterSceneRestore(scene_, hierarchySelection_, rows);
     assetBrowser_.ClearSelection();
+}
+
+// A snapshot restore recreates every object; the other commands must keep naming the same objects.
+void EditorSceneCommandController::RemapRecreatedEntities() {
+    commandStack_.RemapEntities(EditorCommandHistoryKey::Scene(), scene_.History().TakeRecreatedEntities());
 }
 
 void EditorSceneCommandController::NotifySceneChanged(bool documentChanged) {

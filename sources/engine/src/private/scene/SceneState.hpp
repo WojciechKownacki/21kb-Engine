@@ -20,6 +20,7 @@
 #include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/PhysicsDebugDraw.hpp"
 #include "engine/scene/SceneEntity.hpp"
+#include "engine/scene/SceneHistory.hpp"
 #include "engine/scene/SceneMaterialInstances.hpp"
 #include "engine/save/SaveGame.hpp"
 #include "engine/scene/SceneMode.hpp"
@@ -300,6 +301,7 @@ public:
     std::unordered_map<std::uint32_t, kb::input::InputSubsystem> secondaryInputSubsystems;
     SceneHistoryStack undoHistory;
     SceneHistoryStack redoHistory;
+    std::vector<SceneEntityRemap> recreatedEntities;
     kb::ecs::SystemScheduler systemScheduler;
     SceneSystemScheduler sceneSystemScheduler;
     SceneRuntimeFixedStepSettings fixedStepSettings;

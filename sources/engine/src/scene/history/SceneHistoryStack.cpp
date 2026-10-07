@@ -1,5 +1,6 @@
 #include "scene/history/SceneHistoryStack.hpp"
 
+#include <algorithm>
 #include <utility>
 
 namespace kb::scene {
@@ -24,6 +25,19 @@ SceneHistoryEntry SceneHistoryStack::Pop() {
 
 void SceneHistoryStack::Clear() noexcept {
     entries_.clear();
+}
+
+void SceneHistoryStack::RemapEntities(std::span<const SceneEntityRemap> remap) noexcept {
+    for (SceneHistoryEntry& entry : entries_) {
+        for (SceneEntity& entity : entry.entities) {
+            const auto replacement = std::ranges::lower_bound(remap, entity.Id(), {}, [](const SceneEntityRemap& candidate) noexcept {
+                return candidate.from.Id();
+            });
+            if (replacement != remap.end() && replacement->from == entity) {
+                entity = replacement->to;
+            }
+        }
+    }
 }
 
 } // namespace kb::scene

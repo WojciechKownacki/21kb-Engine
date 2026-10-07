@@ -54,6 +54,7 @@ private:
     [[nodiscard]] std::vector<EditorHierarchyRow> HierarchyRows() const;
     void NormalizeHierarchySelectionAfterSceneRestore();
     void NotifySceneChanged(bool documentChanged);
+    void RemapRecreatedEntities();
 
     kb::scene::Scene& scene_;
     EditorCommandStack& commandStack_;
