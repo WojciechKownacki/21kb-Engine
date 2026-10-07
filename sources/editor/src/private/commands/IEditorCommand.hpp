@@ -1,7 +1,10 @@
 #pragma once
 
+#include "engine/scene/SceneEntity.hpp"
+
 #include <cstdint>
 #include <string_view>
+#include <unordered_map>
 
 namespace kb::editor {
 
@@ -32,6 +35,9 @@ struct EditorCommandHistoryKey {
     [[nodiscard]] constexpr bool operator==(const EditorCommandHistoryKey&) const noexcept = default;
 };
 
+// Replacement entity for each entity id that was recreated (a snapshot restore or an undone delete).
+using EditorEntityRemap = std::unordered_map<kb::scene::SceneEntity::IdType, kb::scene::SceneEntity>;
+
 class IEditorCommand {
 public:
     virtual ~IEditorCommand() = default;
@@ -52,6 +58,10 @@ public:
     [[nodiscard]] virtual bool Execute() = 0;
     [[nodiscard]] virtual bool Undo() = 0;
     [[nodiscard]] virtual bool Redo() = 0;
+    // Commands that hold scene entities follow them when something else recreates them.
+    virtual void RemapEntities(const EditorEntityRemap& remap) {
+        static_cast<void>(remap);
+    }
 };
 
 } // namespace kb::editor

@@ -31,6 +31,7 @@ public:
     [[nodiscard]] bool Execute() override;
     [[nodiscard]] bool Undo() override;
     [[nodiscard]] bool Redo() override;
+    void RemapEntities(const EditorEntityRemap& remap) override;
 
 private:
     [[nodiscard]] bool Apply(bool after);
@@ -56,6 +57,7 @@ public:
     [[nodiscard]] bool Execute() override;
     [[nodiscard]] bool Undo() override;
     [[nodiscard]] bool Redo() override;
+    void RemapEntities(const EditorEntityRemap& remap) override;
 
     [[nodiscard]] const std::vector<kb::scene::SceneEntity>& CreatedEntities() const noexcept;
 
@@ -69,6 +71,8 @@ private:
     std::string label_;
     std::vector<EditorSceneObjectPrefabPayload> payloads_;
     std::vector<kb::scene::SceneEntity> createdEntities_;
+    // Every node the last instantiation created, in payload order, so a redo can say what it replaced.
+    std::vector<kb::scene::SceneEntity> createdObjects_;
     bool materializedOnConstruction_ = false;
 };
 
@@ -84,6 +88,7 @@ public:
     [[nodiscard]] bool Execute() override;
     [[nodiscard]] bool Undo() override;
     [[nodiscard]] bool Redo() override;
+    void RemapEntities(const EditorEntityRemap& remap) override;
 
 private:
     [[nodiscard]] bool DestroyCurrent();
