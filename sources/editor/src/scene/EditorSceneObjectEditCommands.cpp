@@ -315,6 +315,8 @@ bool EditorScenePrefabRemoveCommand::RestorePayloads() {
     currentEntities_.clear();
     currentEntities_.reserve(payloads_.size());
     std::unordered_map<std::uint64_t, std::uint64_t> restoredIds;
+    std::vector<kb::scene::SceneEntity> destroyedObjects;
+    std::vector<kb::scene::SceneObject> restoredObjects;
     for (EditorSceneObjectPrefabPayload& payload : payloads_) {
         kb::scene::SceneObject parent = AliveParentObject(scene, payload.parent);
         const kb::scene::ScenePrefabInstance instance = scene.Prefabs().Instantiate(
@@ -327,11 +329,14 @@ bool EditorScenePrefabRemoveCommand::RestorePayloads() {
             for (std::size_t index = 0U; index < payload.capturedEntities.size(); ++index) {
                 const kb::scene::SceneEntity restored = instance.ObjectAt(static_cast<std::uint32_t>(index)).Entity();
                 restoredIds.emplace(payload.capturedEntities[index].Id(), restored.Id());
+                destroyedObjects.push_back(payload.capturedEntities[index]);
+                restoredObjects.push_back(instance.ObjectAt(static_cast<std::uint32_t>(index)));
                 payload.capturedEntities[index] = restored;
             }
         }
     }
     RelinkNavigation(scene, restoredIds);
+    scene.Prefabs().RelinkRestoredObjects(destroyedObjects, restoredObjects);
 
     if (currentEntities_.empty()) {
         return false;

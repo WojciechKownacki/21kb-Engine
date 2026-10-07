@@ -2,7 +2,9 @@
 #include "TestSupport.hpp"
 
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/ScenePrefab.hpp"
@@ -355,6 +357,78 @@ void RunPrefabCreateAssetRegistersSourceInstanceTest() {
     std::filesystem::remove(prefabPath, removeError);
 }
 
+// A scene file keeps an instance only as the prefab guid on its root node. Reopening the file in a
+// fresh scene, and reloading the captured document in place (how Play mode stops), must link the
+// instance, its node mapping and its overrides again.
+void RequireRelinkedCrate(kb::scene::Scene& scene, const std::string& prefabGuid, const char* phase) {
+    const std::string prefix = std::string{ phase } + ": ";
+    const std::vector<kb::scene::SceneObject> roots = scene.Hierarchy().RootObjects();
+    kb::tests::Require(roots.size() == 1U && scene.Entities().Name(roots.front()) == "Crate", (prefix + "scene did not reload the crate root").c_str());
+    const kb::scene::SceneObject root = roots.front();
+    const kb::scene::ScenePrefabInstanceHandle instance = scene.Prefabs().RootInstance(root);
+    kb::tests::Require(instance.IsValid(), (prefix + "crate root lost its prefab instance").c_str());
+    kb::tests::Require(scene.Prefabs().Guid(scene.Prefabs().SourcePrefab(instance)) == prefabGuid, (prefix + "crate instance links the wrong prefab").c_str());
+
+    const std::vector<kb::scene::SceneObject> children = scene.Hierarchy().Children(root);
+    kb::tests::Require(children.size() == 2U, (prefix + "crate children were not reloaded").c_str());
+    std::uint32_t lidNode = 99U;
+    kb::tests::Require(scene.Entities().Name(children[0]) == "Open Lid" && scene.Prefabs().ContainingInstance(children[0], lidNode) == instance && lidNode == 1U,
+        (prefix + "renamed lid did not map to its prefab node").c_str());
+    std::uint32_t noteNode = 99U;
+    kb::tests::Require(scene.Entities().Name(children[1]) == "Note" && !scene.Prefabs().ContainingInstance(children[1], noteNode).IsValid(),
+        (prefix + "added child was linked as a prefab node").c_str());
+
+    bool renamedLid = false;
+    bool missingHinge = false;
+    bool addedChild = false;
+    for (const kb::scene::ScenePrefabPropertyOverride& property : scene.Prefabs().Overrides(instance).properties) {
+        renamedLid = renamedLid || (property.nodeIndex == 1U && property.propertyPath == "name" && property.value == "Open Lid");
+        missingHinge = missingHinge || (property.nodeIndex == 2U && property.flag == kb::scene::ScenePrefabOverrideFlag::MissingObject);
+        addedChild = addedChild || (property.nodeIndex == 0U && property.flag == kb::scene::ScenePrefabOverrideFlag::AddedChild);
+    }
+    kb::tests::Require(renamedLid && missingHinge && addedChild, (prefix + "crate overrides were not kept").c_str());
+}
+
+void RunPrefabInstanceLinkSurvivesSceneReopenTest() {
+    const std::filesystem::path projectRoot = std::filesystem::temp_directory_path() / "21kb_engine_prefab_relink_project";
+    std::error_code removeError;
+    std::filesystem::remove_all(projectRoot, removeError);
+    std::filesystem::create_directories(projectRoot / "Assets");
+    const std::filesystem::path prefabPath = projectRoot / "Assets" / "Crate.kbprefab";
+    const std::filesystem::path scenePath = projectRoot / "Assets" / "Relink.21kbscene";
+
+    std::string prefabGuid;
+    {
+        kb::scene::Scene scene;
+        kb::tests::Require(scene.Assets().MountProject(projectRoot), "Relink project mount failed");
+        const kb::scene::SceneObject root = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Crate" });
+        const kb::scene::SceneObject lid = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lid", .parent = root });
+        const kb::scene::SceneObject hinge = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Hinge", .parent = lid });
+        const kb::scene::ScenePrefabHandle prefab = scene.Prefabs().CreateAsset(root, "Crate", prefabPath);
+        kb::tests::Require(prefab.IsValid(), "Relink prefab asset was not created");
+        prefabGuid = scene.Prefabs().Guid(prefab);
+
+        scene.Entities().SetName(lid, "Open Lid");
+        scene.Entities().Destroy(hinge);
+        static_cast<void>(scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Note", .parent = root }));
+        kb::tests::Require(kb::scene::SceneDocumentService::Save(scene, scenePath, "Relink"), "Relink scene was not saved");
+
+        const kb::scene::SceneDocument document = kb::scene::SceneDocumentService::Capture(scene, "Relink");
+        kb::tests::Require(kb::scene::SceneDocumentService::LoadIntoScene(scene, document), "Relink document did not reload in place");
+        RequireRelinkedCrate(scene, prefabGuid, "in-place reload");
+    }
+    {
+        kb::scene::Scene reopened;
+        kb::tests::Require(reopened.Assets().MountProject(projectRoot), "Relink reopen project mount failed");
+        static_cast<void>(reopened.Assets().Discover());
+        kb::tests::Require(reopened.Prefabs().RegisteredCount() == 0U, "Reopened scene should start without loaded prefabs");
+        kb::tests::Require(kb::scene::SceneDocumentService::LoadFileIntoScene(reopened, scenePath), "Relink scene did not reopen");
+        RequireRelinkedCrate(reopened, prefabGuid, "reopen");
+    }
+
+    std::filesystem::remove_all(projectRoot, removeError);
+}
+
 void RunPrefabVariantAssetRoundTripTest() {
     const std::filesystem::path basePath = std::filesystem::temp_directory_path() / "21kb_engine_prefab_variant_base.kbprefab";
     const std::filesystem::path variantPath = std::filesystem::temp_directory_path() / "21kb_engine_prefab_variant_roundtrip.kbprefab";
@@ -681,6 +755,7 @@ void RunScenePrefabCaptureTests() {
     run("RunPrefabCaptureTest", RunPrefabCaptureTest);
     run("RunPrefabAssetRoundTripTest", RunPrefabAssetRoundTripTest);
     run("RunPrefabCreateAssetRegistersSourceInstanceTest", RunPrefabCreateAssetRegistersSourceInstanceTest);
+    run("RunPrefabInstanceLinkSurvivesSceneReopenTest", RunPrefabInstanceLinkSurvivesSceneReopenTest);
     run("RunPrefabVariantAssetRoundTripTest", RunPrefabVariantAssetRoundTripTest);
     run("RunPrefabParentOverrideAssetRoundTripTest", RunPrefabParentOverrideAssetRoundTripTest);
     run("RunPrefabVariantAddedChildAssetRoundTripTest", RunPrefabVariantAddedChildAssetRoundTripTest);

@@ -146,6 +146,9 @@ public:
     [[nodiscard]] ScenePrefabInstanceHandle ContainingInstance(SceneEntity entity, std::uint32_t& nodeIndex, std::uint64_t& nodeId) const noexcept;
     [[nodiscard]] std::size_t RefreshInstances(ScenePrefabHandle handle);
     [[nodiscard]] bool Reconnect(ScenePrefabInstanceHandle handle, ScenePrefabHandle sourcePrefab);
+    // Puts objects recreated for destroyed instance objects (an undone delete) back into the
+    // instances that tracked the destroyed ones, at the same nodes.
+    void RelinkRestoredObjects(std::span<const SceneEntity> destroyed, std::span<const SceneObject> restored);
     [[nodiscard]] bool Unpack(ScenePrefabInstanceHandle handle, ScenePrefabUnpackMode mode = ScenePrefabUnpackMode::RootOnly);
     [[nodiscard]] ScenePrefabOverrideReport Overrides(ScenePrefabInstanceHandle handle) const;
     [[nodiscard]] bool RevertOverrides(ScenePrefabInstanceHandle handle);
