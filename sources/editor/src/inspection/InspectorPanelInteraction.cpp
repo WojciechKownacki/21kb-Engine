@@ -191,6 +191,29 @@ void SelectAssetInProjectFiles(EditorSceneContext& sceneContext, kb::assets::Ass
     }
 }
 
+[[nodiscard]] bool HandlePrefabClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
+    sceneContext.Inspector().EndTextEdit();
+    switch (hit.property) {
+    case InspectorPropertyId::PrefabSource:
+        static_cast<void>(sceneContext.SelectPrefabSourceAsset(entity));
+        return true;
+    case InspectorPropertyId::PrefabApply:
+        static_cast<void>(sceneContext.ApplyPrefabInstance(entity));
+        return true;
+    case InspectorPropertyId::PrefabRevert:
+        static_cast<void>(sceneContext.RevertPrefabInstance(entity));
+        return true;
+    case InspectorPropertyId::PrefabUnpack:
+        static_cast<void>(sceneContext.UnpackPrefabInstance(entity));
+        return true;
+    case InspectorPropertyId::PrefabSelectRoot:
+        static_cast<void>(sceneContext.SelectPrefabInstanceRoot(entity));
+        return true;
+    default:
+        return true;
+    }
+}
+
 [[nodiscard]] bool HandleScriptClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
     sceneContext.Inspector().EndTextEdit();
     switch (hit.property) {
@@ -3311,6 +3334,9 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
 
     if (hit.section == InspectorSectionId::Script) {
         return HandleScriptClick(sceneContext, entity, hit);
+    }
+    if (hit.section == InspectorSectionId::Prefab) {
+        return HandlePrefabClick(sceneContext, entity, hit);
     }
     if (hit.section == InspectorSectionId::Terrain) {
         return HandleTerrainClick(sceneContext, entity, hit);

@@ -5425,6 +5425,94 @@ void RunPrefabPlacementSuite(Report& report) {
         "Undo both again removes the placed prefab");
 }
 
+void RunPrefabInspectorSuite(Report& report) {
+    EditorSceneContext context;
+    const auto findNamed = [&context](std::string_view name) {
+        for (const EditorHierarchyRow& row : context.HierarchyRows()) {
+            if (row.name == name) {
+                return row.entity;
+            }
+        }
+        return kb::scene::SceneEntity{};
+    };
+    const auto findPrefabHit = [&context](InspectorPropertyId property) {
+        const int maxScroll = InspectorPanelRenderer::MaxScrollOffset(kContent, context);
+        for (int scroll = 0;; scroll = std::min(scroll + 400, maxScroll)) {
+            static_cast<void>(context.Inspector().SetScrollOffset(scroll, maxScroll));
+            for (int y = kContent.top; y < kContent.bottom; y += 4) {
+                for (int x = kContent.left + 8; x < kContent.right; x += 48) {
+                    const InspectorPanelRenderer::Hit hit = InspectorPanelRenderer::HitTest(kContent, context, x, y);
+                    if (hit.section == InspectorSectionId::Prefab && hit.property == property && hit.kind == InspectorHitKind::TextField) {
+                        return hit;
+                    }
+                }
+            }
+            if (scroll >= maxScroll) {
+                return InspectorPanelRenderer::Hit{};
+            }
+        }
+    };
+    const auto click = [&context, &findPrefabHit](InspectorPropertyId property) {
+        const InspectorPanelRenderer::Hit hit = findPrefabHit(property);
+        const POINT point = Center(hit.rect);
+        return hit.kind != InspectorHitKind::None && InspectorPanelInteraction::HandlePointerDown(context, hit, point.x, point.y);
+    };
+    const auto positionX = [&context](kb::scene::SceneEntity entity) {
+        return context.Scene().Transforms().Get(entity).localPosition.x;
+    };
+    const auto overrideCount = [&context](kb::scene::SceneEntity entity) {
+        return context.Scene().Prefabs().Overrides(context.Scene().Prefabs().RootInstance(entity)).properties.size();
+    };
+
+    const kb::scene::SceneEntity crate = context.CreateHierarchyObject();
+    context.Scene().Entities().SetName(crate, "InspectedCrate");
+    static_cast<void>(context.Scene().Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "InspectedLid", .parent = context.Scene().Entities().Object(crate) }));
+    const std::filesystem::path prefabPath = EditorProjectPaths::PrefabsRoot() / "InspectedCrate.kbprefab";
+    report.Check(context.CreatePrefabAsset(crate, prefabPath), "Create prefab asset for the Inspector Prefab section");
+    report.Check(context.InstantiatePrefabAsset(prefabPath, "/Game/Prefabs/InspectedCrate.kbprefab", {}), "Place a second instance of the prefab");
+    const kb::scene::SceneEntity other = context.SelectedEntity();
+    context.Scene().Entities().SetName(other, "OtherCrate");
+
+    context.SelectEntity(crate);
+    const int heightWithoutOverrides = InspectorPanelRenderer::ContentHeight(kContent, context);
+    kb::scene::TransformComponent transform = context.Scene().Transforms().Get(crate);
+    transform.localPosition.x = 3.0F;
+    context.Scene().Transforms().Set(crate, transform);
+    const std::size_t overrides = overrideCount(crate);
+    // Each listed override is one 26 px row and its divider.
+    report.Check(overrides > 0U && InspectorPanelRenderer::ContentHeight(kContent, context) - heightWithoutOverrides == static_cast<int>(overrides) * 27,
+        "Prefab section lists every override of the selected instance");
+
+    const kb::assets::AssetMetadata* asset = context.Scene().Assets().Manager().Registry().FindByPath("/Game/Prefabs/InspectedCrate.kbprefab");
+    report.Check(asset != nullptr && click(InspectorPropertyId::PrefabSource) && context.AssetBrowser().SelectedAsset() == asset->id,
+        "Prefab section source row selects the prefab asset in Project Files");
+    context.SelectEntity(crate);
+
+    report.Check(click(InspectorPropertyId::PrefabApply), "Apply prefab overrides from the Inspector");
+    kb::scene::Scene reader;
+    const kb::scene::ScenePrefabHandle written = reader.Prefabs().Load(prefabPath);
+    report.Check(written.IsValid() && reader.Prefabs().Get(written).Nodes()[0].transform.localPosition.x == 3.0F, "Apply writes the prefab asset");
+    report.Check(positionX(findNamed("OtherCrate")) == 3.0F && overrideCount(findNamed("InspectedCrate")) == 0U, "Apply refreshes the other instance and clears the overrides");
+    report.Check(context.UndoSceneCommand() && positionX(findNamed("OtherCrate")) == 0.0F && overrideCount(findNamed("InspectedCrate")) == overrides,
+        "Undo Apply restores the other instance and the overrides");
+
+    context.SelectEntity(findNamed("InspectedCrate"));
+    report.Check(click(InspectorPropertyId::PrefabRevert) && overrideCount(findNamed("InspectedCrate")) == 0U && positionX(findNamed("InspectedCrate")) == 0.0F,
+        "Revert prefab overrides from the Inspector");
+    report.Check(context.UndoSceneCommand() && positionX(findNamed("InspectedCrate")) == 3.0F, "Undo Revert brings the override back");
+
+    context.SelectEntity(findNamed("InspectedCrate"));
+    report.Check(click(InspectorPropertyId::PrefabUnpack) && !context.Scene().Prefabs().RootInstance(findNamed("InspectedCrate")).IsValid(),
+        "Unpack the prefab instance from the Inspector");
+    report.Check(context.UndoSceneCommand() && context.Scene().Prefabs().RootInstance(findNamed("InspectedCrate")).IsValid(), "Undo Unpack restores the prefab link");
+
+    context.SelectEntity(findNamed("InspectedLid"));
+    report.Check(findPrefabHit(InspectorPropertyId::PrefabUnpack).kind == InspectorHitKind::None && findPrefabHit(InspectorPropertyId::PrefabSource).kind != InspectorHitKind::None,
+        "A node inside an instance names its prefab without the root actions");
+    const kb::scene::SceneEntity lidOwner = context.Scene().Hierarchy().Parent(context.SelectedEntity());
+    report.Check(click(InspectorPropertyId::PrefabSelectRoot) && context.SelectedEntity() == lidOwner, "Select Root selects the instance root");
+}
+
 void RunHierarchyCommandSuite(Report& report) {
     EditorSceneContext context;
     const auto findHierarchyEntityNamed = [&context](std::string_view name) {
@@ -6195,6 +6283,7 @@ int EditorSelfTest::Run(
     RunSuiteInScratch(report, "inspector_material_drop_target", &RunInspectorMaterialDropTargetSuite);
     RunSuiteInScratch(report, "inspector_light_component", &RunInspectorLightComponentSuite);
     RunSuiteInScratch(report, "prefab_placement", &RunPrefabPlacementSuite);
+    RunSuiteInScratch(report, "prefab_inspector", &RunPrefabInspectorSuite);
     RunSuiteInScratch(report, "script_log", &RunScriptLogSuite);
     RunSuiteInScratch(report, "plugins", &RunPluginsPanelSuite);
     gCurrentSuiteArtifactRoot.clear();

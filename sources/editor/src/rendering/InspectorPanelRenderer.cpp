@@ -11,6 +11,7 @@
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/IAssetLoader.hpp"
 #include "engine/input/InputAssetIO.hpp"
+#include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/DrawD3DeformedGeometryComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
@@ -3215,6 +3216,49 @@ void PaintTagsDropdown(HDC dc, const RECT& content, const EditorTheme& theme, co
     }
 }
 
+// The Prefab section of an object inside a prefab instance: the instance root lists its overrides and
+// the instance actions, any other node names its prefab and leads to the root.
+struct PrefabSectionModel {
+    struct OverrideRow {
+        std::string node;
+        std::string change;
+    };
+
+    bool shown = false;
+    bool root = false;
+    std::string prefabName;
+    std::vector<OverrideRow> overrides;
+
+    [[nodiscard]] int Rows() const noexcept {
+        return root ? 5 + static_cast<int>(overrides.size()) : 2;
+    }
+};
+
+[[nodiscard]] PrefabSectionModel BuildPrefabSection(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) {
+    PrefabSectionModel model;
+    const kb::scene::ScenePrefabs prefabs = scene.Prefabs();
+    std::uint32_t nodeIndex = 0U;
+    const kb::scene::ScenePrefabInstanceHandle instance = prefabs.ContainingInstance(entity, nodeIndex);
+    if (!instance.IsValid()) {
+        return model;
+    }
+    model.shown = true;
+    model.root = prefabs.RootInstance(entity) == instance;
+    const std::filesystem::path source = prefabs.SourcePath(prefabs.SourcePrefab(instance));
+    model.prefabName = source.empty() ? std::string{ "Unsaved prefab" } : source.stem().string();
+    if (model.root) {
+        for (const kb::scene::ScenePrefabPropertyOverride& property : prefabs.Overrides(instance).properties) {
+            model.overrides.push_back(PrefabSectionModel::OverrideRow{
+                .node = property.target.IsValid() && scene.Entities().IsAlive(property.target)
+                    ? scene.Entities().Name(property.target)
+                    : "Node " + std::to_string(property.nodeIndex),
+                .change = property.propertyPath + " = " + property.value,
+            });
+        }
+    }
+    return model;
+}
+
 void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& theme, const EditorSceneContext& sceneContext, kb::scene::SceneEntity selected) {
     const kb::scene::Scene& scene = sceneContext.Scene();
     const InspectorPanelState& inspector = sceneContext.Inspector();
@@ -3276,6 +3320,27 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
             section.Vec3("Position", transform.localPosition, InspectorPropertyId::PositionX, InspectorPropertyId::PositionY, InspectorPropertyId::PositionZ);
             section.Rotation("Rotation", transform.localRotation);
             section.Vec3("Scale", transform.localScale, InspectorPropertyId::ScaleX, InspectorPropertyId::ScaleY, InspectorPropertyId::ScaleZ);
+        }
+        y += h + kSectionGap;
+    }
+
+    if (const PrefabSectionModel prefab = BuildPrefabSection(scene, selected); prefab.shown) {
+        const int h = SectionHeight(inspector, InspectorSectionId::Prefab, prefab.Rows());
+        if (sectionVisible(y, h)) {
+            SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Prefab, HeroIconKind::Cube, "Prefab");
+            if (prefab.root) {
+                section.Field("Source", prefab.prefabName, InspectorPropertyId::PrefabSource);
+                section.Field("Overrides", std::to_string(prefab.overrides.size()));
+                for (const PrefabSectionModel::OverrideRow& row : prefab.overrides) {
+                    section.Field(row.node, row.change);
+                }
+                section.Action("Apply", InspectorPropertyId::PrefabApply, true);
+                section.Action("Revert", InspectorPropertyId::PrefabRevert);
+                section.Action("Unpack", InspectorPropertyId::PrefabUnpack);
+            } else {
+                section.Field("Prefab", prefab.prefabName, InspectorPropertyId::PrefabSource);
+                section.Action("Select Root", InspectorPropertyId::PrefabSelectRoot);
+            }
         }
         y += h + kSectionGap;
     }
@@ -3624,6 +3689,9 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     height += SectionHeight(inspector, InspectorSectionId::General, 3) + kSectionGap;
     if (!scene.Components().UI().Has<kb::scene::UIRectTransform>(selected))
         height += SectionHeight(inspector, InspectorSectionId::Transform, 3) + kSectionGap;
+    if (const PrefabSectionModel prefab = BuildPrefabSection(scene, selected); prefab.shown) {
+        height += SectionHeight(inspector, InspectorSectionId::Prefab, prefab.Rows()) + kSectionGap;
+    }
     for (const kb::scene::UIComponentType component :
         InspectorUIComponentModel::Components(scene, selected)) {
         height += UIComponentSectionHeight(inspector, component,
@@ -5054,6 +5122,34 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
         }
         y += kSectionGap;
 
+    }
+
+    if (const PrefabSectionModel prefab = BuildPrefabSection(sceneContext.Scene(), selected); prefab.shown) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::Prefab, x, scrolledY); hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+        if (!state.IsCollapsed(InspectorSectionId::Prefab)) {
+            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::Prefab, InspectorPropertyId::PrefabSource, x, scrolledY); hit.kind != InspectorHitKind::None) {
+                return hit;
+            }
+            AdvanceRow(y);
+            std::vector<InspectorPropertyId> actions{ InspectorPropertyId::PrefabSelectRoot };
+            if (prefab.root) {
+                // The override count and list rows only show text.
+                for (std::size_t row = 0U; row <= prefab.overrides.size(); ++row) {
+                    AdvanceRow(y);
+                }
+                actions = { InspectorPropertyId::PrefabApply, InspectorPropertyId::PrefabRevert, InspectorPropertyId::PrefabUnpack };
+            }
+            for (const InspectorPropertyId action : actions) {
+                const RECT row = RowRect(viewport, y);
+                if (Contains(row, x, scrolledY)) {
+                    return MakeHit(InspectorHitKind::TextField, InspectorSectionId::Prefab, action, row);
+                }
+                AdvanceRow(y);
+            }
+        }
+        y += kSectionGap;
     }
 
     if (sceneContext.Scene().Components().RegionShapes().Has(selected)) {

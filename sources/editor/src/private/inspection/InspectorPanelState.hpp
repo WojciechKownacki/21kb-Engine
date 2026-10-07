@@ -94,6 +94,7 @@ enum class InspectorSectionId : std::uint8_t {
     UIDropdown,
     UIProgressBar,
     UIWidgetSwitcher,
+    Prefab,
 };
 
 enum class InspectorHitKind : std::uint8_t {
@@ -554,6 +555,11 @@ enum class InspectorPropertyId : std::uint16_t {
     UIDropdownOptionRemove,
     UIDropdownOptionSelect,
     UIDropdownOptionHandle,
+    PrefabSource,
+    PrefabApply,
+    PrefabRevert,
+    PrefabUnpack,
+    PrefabSelectRoot,
 };
 
 struct InspectorDynamicRowIdentity {

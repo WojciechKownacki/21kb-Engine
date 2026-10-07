@@ -1,5 +1,8 @@
 #include "engine/scene/ScenePrefabs.hpp"
 
+#include "scene/SceneAccess.hpp"
+#include "scene/SceneState.hpp"
+#include "scene/prefab/ScenePrefabRecord.hpp"
 #include "scene/prefab/ScenePrefabRegistryFacade.hpp"
 
 #include <utility>
@@ -20,6 +23,11 @@ bool ScenePrefabs::Contains(ScenePrefabHandle handle) const noexcept {
 
 std::string ScenePrefabs::Guid(ScenePrefabHandle handle) const {
     return ScenePrefabRegistryFacade::Guid(scene_, handle);
+}
+
+std::filesystem::path ScenePrefabs::SourcePath(ScenePrefabHandle handle) const {
+    const ScenePrefabRecord* record = SceneAccess::State(scene_).prefabs.FindRecord(handle);
+    return record == nullptr ? std::filesystem::path{} : std::filesystem::path{ record->sourcePath };
 }
 
 std::size_t ScenePrefabs::RegisteredCount() const noexcept {
