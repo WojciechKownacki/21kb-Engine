@@ -209,7 +209,7 @@ bool EditorSceneContext::TickEditorSceneParticles(float deltaSeconds) {
         std::size_t retainedCount = 0U;
         bool any = false;
         bool releasedAny = false;
-    } context{scene_.get(), &liveIds};
+    } context{scene_, &liveIds};
     const auto visit = [](kb::scene::SceneEntity entity, const kb::scene::ParticleEffectComponent& component, void* raw) {
         auto* pulse = static_cast<PulseContext*>(raw);
         if (!component.enabled || component.effectAssetId == 0U || pulse->scene == nullptr || pulse->liveIds == nullptr) {

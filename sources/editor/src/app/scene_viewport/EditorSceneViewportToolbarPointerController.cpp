@@ -223,6 +223,18 @@ bool EditorSceneViewportToolbarPointerController::HandlePointerDown(const Editor
         sceneViewport_.RequestPresent();
         return true;
     }
+    if (sceneContext_.InPrefabEditMode() && PointInRect(toolbar.prefabSaveButton, x, y)) {
+        preview.CloseToolbarDropdown();
+        static_cast<void>(sceneContext_.SavePrefabEditMode());
+        sceneViewport_.RequestPresent();
+        return true;
+    }
+    if (sceneContext_.InPrefabEditMode() && PointInRect(toolbar.prefabCloseButton, x, y)) {
+        preview.CloseToolbarDropdown();
+        static_cast<void>(sceneContext_.ClosePrefabEditMode());
+        sceneViewport_.RequestPresent();
+        return true;
+    }
     if (preview.ToolbarDropdown() != EditorViewportToolbarDropdown::None) {
         preview.CloseToolbarDropdown();
         sceneViewport_.RequestPresent();

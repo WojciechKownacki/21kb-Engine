@@ -1,3 +1,4 @@
+#include "rendering/ProjectFilesAssetIconResolver.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
 
 #if defined(_WIN32)
@@ -266,6 +267,21 @@ void SceneViewportToolbarRenderer::Paint(HDC dc, const RECT& content, const Edit
         GdiDrawing::ToColorRef(theme.borderPanel), 4);
     GdiDrawing::DrawTabText(dc, rects.twoDButton, "2D", GdiDrawing::ToColorRef(theme.textPrimary));
 
+}
+
+void SceneViewportToolbarRenderer::PaintPrefabEditBar(HDC dc, const RECT& content, const EditorTheme& theme, const EditorSceneContext& sceneContext) {
+    if (!sceneContext.InPrefabEditMode()) {
+        return;
+    }
+    const SceneViewportToolbarRects rects = SceneViewportToolbarLayout::Resolve(content);
+    SceneViewportToolbarDrawing::DrawDivider(dc, rects.toolbar, rects.twoDButton.right + 7, theme);
+    SceneViewportToolbarDrawing::FillRound(dc, rects.prefabName, ProjectFilesAssetIconResolver::kPrefabColor, GdiDrawing::ToColorRef(theme.borderPanel), 4);
+    const std::string name = sceneContext.PrefabEditModeName();
+    GdiDrawing::DrawTabText(dc, rects.prefabName, name.c_str(), GdiDrawing::ToColorRef(theme.textPrimary));
+    SceneViewportToolbarDrawing::FillRound(dc, rects.prefabSaveButton, GdiDrawing::ToColorRef(theme.toolbarButton), GdiDrawing::ToColorRef(theme.borderPanel), 4);
+    GdiDrawing::DrawTabText(dc, rects.prefabSaveButton, "Save", GdiDrawing::ToColorRef(theme.textPrimary));
+    SceneViewportToolbarDrawing::FillRound(dc, rects.prefabCloseButton, GdiDrawing::ToColorRef(theme.toolbarButton), GdiDrawing::ToColorRef(theme.borderPanel), 4);
+    GdiDrawing::DrawTabText(dc, rects.prefabCloseButton, "Close", GdiDrawing::ToColorRef(theme.textPrimary));
 }
 
 void SceneViewportToolbarRenderer::PaintTerrainTools(

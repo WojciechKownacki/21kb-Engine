@@ -12,6 +12,7 @@
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneInputActivation.hpp"
+#include "engine/scene/ScenePrefabs.hpp"
 #include "engine/script/ScriptModule.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
@@ -193,6 +194,9 @@ bool EditorSceneContext::BeginPlayModeSceneSession() {
     if (playModeSceneSession_.Active()) {
         return true;
     }
+    if (RejectWhilePrefabEditing()) {
+        return false;
+    }
     auto phaseStarted = std::chrono::steady_clock::now();
     if (plugins_.HasPendingReload() && !ReloadSceneFromProject()) {
         return false;
@@ -307,7 +311,7 @@ kb::scene::SceneEntity EditorSceneContext::PlayCameraEntity() const noexcept {
 }
 
 bool EditorSceneContext::ReloadSceneFromProject() {
-    if (!RestorePlayModeSceneSession()) {
+    if (RejectWhilePrefabEditing() || !RestorePlayModeSceneSession()) {
         return false;
     }
     if (!SaveDirtySceneDocument("reloading project plugins")) {
@@ -346,7 +350,8 @@ bool EditorSceneContext::ReloadSceneFromProject() {
     EditorSceneAudioSettingsService::PrepareDocument(*nextScene);
 
     ReleaseRenderedSceneResources();
-    scene_ = std::move(nextScene);
+    documentScene_ = std::move(nextScene);
+    scene_ = documentScene_.get();
     AdvanceSceneDocumentGeneration();
     plugins_.ClearPendingReload();
     SelectFirstSceneEntityOrClear();
@@ -358,7 +363,7 @@ bool EditorSceneContext::ReloadSceneFromProject() {
 }
 
 bool EditorSceneContext::NewScene(EditorDirtySceneResolution dirtyResolution) {
-    if (!RestorePlayModeSceneSession()) {
+    if (RejectWhilePrefabEditing() || !RestorePlayModeSceneSession()) {
         return false;
     }
     if (!PrepareDirtySceneTransition("creating a new scene", dirtyResolution)) {
@@ -386,7 +391,7 @@ bool EditorSceneContext::OpenDefaultScene() {
 }
 
 bool EditorSceneContext::OpenScene(const std::filesystem::path& path, EditorDirtySceneResolution dirtyResolution) {
-    if (!RestorePlayModeSceneSession()) {
+    if (RejectWhilePrefabEditing() || !RestorePlayModeSceneSession()) {
         return false;
     }
     if (!PrepareDirtySceneTransition("opening a scene", dirtyResolution)) {
@@ -418,6 +423,87 @@ bool EditorSceneContext::OpenScene(const std::filesystem::path& path, EditorDirt
     return true;
 }
 
+bool EditorSceneContext::RejectWhilePrefabEditing() {
+    if (!InPrefabEditMode()) {
+        return false;
+    }
+    console_.Warning("Prefabs", "Save or close the prefab being edited first.");
+    return true;
+}
+
+bool EditorSceneContext::InPrefabEditMode() const noexcept {
+    return prefabEdit_.IsValid();
+}
+
+std::string EditorSceneContext::PrefabEditModeName() const {
+    return prefabEditPath_.stem().string();
+}
+
+bool EditorSceneContext::OpenPrefabEditMode(const std::filesystem::path& prefabPath) {
+    if (playModeSceneSession_.Active() || RejectWhilePrefabEditing()) {
+        return false;
+    }
+    const kb::scene::ScenePrefabHandle prefab = documentScene_->Prefabs().Load(prefabPath);
+    kb::scene::ScenePrefabPrivateScene edit = prefab.IsValid() ? documentScene_->Prefabs().OpenPrivateScene(prefab) : kb::scene::ScenePrefabPrivateScene{};
+    if (!edit.IsValid()) {
+        console_.Error("Prefabs", "Prefab could not be opened: " + prefabPath.generic_string());
+        return false;
+    }
+    // The prefab's meshes and materials resolve through the project assets, like the scene's.
+    kb::scene::Scene& editScene = edit.EditScene();
+    static_cast<void>(editScene.Assets().MountProject(EditorProjectPaths::ProjectRoot()));
+    RegisterEditorSceneDocumentAssetLoaders(editScene);
+    static_cast<void>(editScene.Assets().Discover());
+
+    ReleaseRenderedSceneResources();
+    documentSelection_ = hierarchySelection_.SelectedEntities();
+    documentDirty_ = sceneDocumentDirty_;
+    std::swap(commandStack_, documentCommands_);
+    prefabEdit_ = std::move(edit);
+    prefabEditPath_ = prefabPath;
+    scene_ = &prefabEdit_.EditScene();
+    ResetSceneEditState();
+    InvalidateHierarchyRows();
+    hierarchySelection_.SelectEntity(prefabEdit_.RootObject().Entity());
+    console_.Info("Prefabs", "Editing prefab: " + prefabPath.generic_string());
+    return true;
+}
+
+// Writes the edited prefab to its asset and brings the scene document's instances to it.
+bool EditorSceneContext::SavePrefabEditMode() {
+    if (!InPrefabEditMode()) {
+        return false;
+    }
+    if (!prefabEdit_.Apply() || !documentScene_->Prefabs().Save(prefabEdit_.SourcePrefab(), prefabEditPath_)) {
+        console_.Error("Prefabs", "Prefab could not be saved: " + prefabEditPath_.generic_string());
+        return false;
+    }
+    documentDirty_ = true;
+    console_.Info("Prefabs", "Prefab saved: " + prefabEditPath_.generic_string());
+    return true;
+}
+
+bool EditorSceneContext::ClosePrefabEditMode() {
+    if (!InPrefabEditMode()) {
+        return false;
+    }
+    ReleaseRenderedSceneResources();
+    ResetSceneEditState();
+    scene_ = documentScene_.get();
+    prefabEdit_ = {};
+    prefabEditPath_.clear();
+    std::swap(commandStack_, documentCommands_);
+    sceneDocumentDirty_ = documentDirty_;
+    InvalidateHierarchyRows();
+    MarkSceneRenderDirty();
+    std::erase_if(documentSelection_, [this](kb::scene::SceneEntity entity) {
+        return !scene_->Entities().IsAlive(entity);
+    });
+    hierarchySelection_.SelectEntities(documentSelection_);
+    documentSelection_.clear();
+    return true;
+}
+
 void EditorSceneContext::AdvanceSceneDocumentGeneration() noexcept {
     sceneDocumentIdentity_.Advance();
 }
@@ -443,6 +529,9 @@ bool EditorSceneContext::SaveCurrentSceneAs(const std::filesystem::path& path) {
 }
 
 bool EditorSceneContext::SaveSceneToPath(const std::filesystem::path& path) {
+    if (RejectWhilePrefabEditing()) {
+        return false;
+    }
     const std::filesystem::path scenePath = EnsureSceneDocumentExtension(path.empty() ? EditorProjectPaths::DefaultScenePath() : path);
     ScopedSceneSaveTrace trace{
         "phase=total path=" + scenePath.generic_string() };

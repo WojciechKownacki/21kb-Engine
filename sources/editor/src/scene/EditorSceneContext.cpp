@@ -344,7 +344,8 @@ EditorSceneContext::EditorSceneContext()
     , project_(projectBootstrap_.succeeded ? projectBootstrap_.descriptor : kb::project::ProjectDescriptor{})
     , projectConfig_(projectBootstrap_.settings)
     , projectFile_(projectBootstrap_.succeeded ? projectBootstrap_.projectFile : EditorProjectPaths::ProjectFile())
-    , scene_(std::make_unique<kb::scene::Scene>(project_))
+    , documentScene_(std::make_unique<kb::scene::Scene>(project_))
+    , scene_(documentScene_.get())
     , inspectorMaterialPreviewScene_(std::make_unique<EditorMaterialPreviewScene>())
     , materialPreviewScene_(std::make_unique<EditorMaterialPreviewScene>())
     , animationPreviewScene_(std::make_unique<EditorAnimationPreviewScene>())
@@ -426,7 +427,9 @@ EditorSceneContext::~EditorSceneContext() {
     // Destroy the scene explicitly while console_ is still alive; the default
     // member order would otherwise destroy console_ before scene_ and leave the
     // registered Log callback pointing at released storage.
-    scene_.reset();
+    prefabEdit_ = {};
+    scene_ = nullptr;
+    documentScene_.reset();
     scriptModule_ = nullptr;
     scriptModuleHost_.reset();
 }

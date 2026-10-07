@@ -6,6 +6,7 @@
 
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneHistory.hpp"
+#include "engine/scene/ScenePrefabPrivateScene.hpp"
 #include "engine/scene/SceneAudioOcclusionAccess.hpp"
 #include "engine/scene/SceneRenderFeedback.hpp"
 #include "engine/scene/SceneEntity.hpp"
@@ -295,6 +296,12 @@ public:
     [[nodiscard]] bool OpenScene(const std::filesystem::path& path, EditorDirtySceneResolution dirtyResolution = EditorDirtySceneResolution::Save);
     [[nodiscard]] bool SaveCurrentScene();
     [[nodiscard]] bool SaveCurrentSceneAs(const std::filesystem::path& path);
+    // Prefab edit mode: Scene View and Hierarchy show a .kbprefab in a scene of its own until it is closed.
+    [[nodiscard]] bool OpenPrefabEditMode(const std::filesystem::path& prefabPath);
+    [[nodiscard]] bool SavePrefabEditMode();
+    [[nodiscard]] bool ClosePrefabEditMode();
+    [[nodiscard]] bool InPrefabEditMode() const noexcept;
+    [[nodiscard]] std::string PrefabEditModeName() const;
     [[nodiscard]] bool CanUndoSceneCommand() const noexcept;
     [[nodiscard]] bool CanRedoSceneCommand() const noexcept;
     [[nodiscard]] bool UndoSceneCommand();
@@ -1348,6 +1355,7 @@ private:
     void AdvanceSceneDocumentGeneration() noexcept;
     void SelectFirstSceneEntityOrClear() noexcept;
     [[nodiscard]] bool SaveSceneToPath(const std::filesystem::path& path);
+    [[nodiscard]] bool RejectWhilePrefabEditing();
     [[nodiscard]] std::filesystem::path ResolveProjectVirtualPath(const std::filesystem::path& virtualPath) const;
     [[nodiscard]] std::filesystem::path ResolveDefaultScenePath() const;
 
@@ -1358,7 +1366,12 @@ private:
     kb::project::ProjectDescriptor project_;
     kb::project::ProjectSettings projectConfig_;
     std::filesystem::path projectFile_;
-    std::unique_ptr<kb::scene::Scene> scene_;
+    // The open scene document, and the scene being edited: that document, or the private scene of
+    // a prefab in prefab edit mode.
+    std::unique_ptr<kb::scene::Scene> documentScene_;
+    kb::scene::Scene* scene_ = nullptr;
+    kb::scene::ScenePrefabPrivateScene prefabEdit_;
+    std::filesystem::path prefabEditPath_;
     std::function<void(const kb::scene::Scene&)> renderSceneReleaseHandler_;
     std::filesystem::path currentScenePath_;
     EditorSceneDocumentIdentity sceneDocumentIdentity_;
@@ -1423,6 +1436,10 @@ private:
     std::unique_ptr<EditorMaterialGraphCookService> materialGraphCookService_;
     bool sceneGraphCookPending_ = true;
     EditorCommandStack commandStack_;
+    // The scene document's undo history, selection and unsaved state, kept aside while a prefab is edited.
+    EditorCommandStack documentCommands_;
+    std::vector<kb::scene::SceneEntity> documentSelection_;
+    bool documentDirty_ = false;
     std::optional<TerrainStrokeState> terrainStroke_;
     mutable std::optional<TerrainReadCache> terrainReadCache_;
     EditorHierarchySelectionState hierarchySelection_;
