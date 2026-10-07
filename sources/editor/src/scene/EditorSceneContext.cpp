@@ -2519,9 +2519,11 @@ bool EditorSceneContext::ReparentEntities(std::span<const kb::scene::SceneEntity
 }
 
 bool EditorSceneContext::CreatePrefabAsset(kb::scene::SceneEntity entity, const std::filesystem::path& path) {
-    const bool created = EditorScenePrefabActions::CreateAsset(*scene_, entity, path);
+    // Undo unlinks the entity again; the written asset file stays in the project.
+    const bool created = ExecuteSceneCommand("Create Prefab", [this, entity, &path]() {
+        return EditorScenePrefabActions::CreateAsset(*scene_, entity, path);
+    });
     if (created) {
-        InvalidateHierarchyRows();
         static_cast<void>(scene_->Assets().Discover());
         if (const std::optional<std::filesystem::path> virtualPath = scene_->Assets().Manager().Mounts().ToVirtual(path)) {
             if (const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().FindByPath(*virtualPath); metadata != nullptr) {

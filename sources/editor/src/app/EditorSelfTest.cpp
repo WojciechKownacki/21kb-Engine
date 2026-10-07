@@ -5282,6 +5282,16 @@ void RunPrefabPlacementSuite(Report& report) {
         return row.entity == source;
     });
     report.Check(sourcePrefabRow != context.HierarchyRows().end() && sourcePrefabRow->prefabRoot, "Source entity becomes a visible prefab root after prefab asset creation");
+    report.Check(context.SceneDocumentDirty(), "Creating a prefab asset marks the scene as changed");
+    const auto findSource = [&context]() {
+        const auto row = std::ranges::find_if(context.HierarchyRows(), [](const EditorHierarchyRow& candidate) {
+            return candidate.name == "PlacedPrefabSource";
+        });
+        return row == context.HierarchyRows().end() ? kb::scene::SceneEntity{} : row->entity;
+    };
+    report.Check(context.UndoSceneCommand() && findSource().IsValid() && !showsPrefabRoot(findSource()), "Undo prefab asset creation unlinks the source entity");
+    report.Check(std::filesystem::exists(prefabPath), "Undo prefab asset creation keeps the written asset file");
+    report.Check(context.RedoSceneCommand() && showsPrefabRoot(findSource()), "Redo prefab asset creation links the source entity again");
     report.Check(context.InstantiatePrefabAssetAt(prefabPath, "/Game/Prefabs/PlacedPrefab.kbprefab", kb::scene::Vec3{ 7.0F, 0.5F, -3.0F }), "Instantiate prefab asset at scene position");
 
     const kb::scene::SceneEntity placed = context.SelectedEntity();
