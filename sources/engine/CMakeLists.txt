@@ -959,6 +959,7 @@ add_library(kb_engine STATIC
     src/scene/prefab/ScenePrefabInstanceSynchronizer.cpp
     src/scene/prefab/ScenePrefabInstanceTopology.cpp
     src/scene/prefab/ScenePrefabInstanceFacade.cpp
+    src/scene/prefab/ScenePrefabInstanceRelinker.cpp
     src/scene/prefab/ScenePrefabLightOverrideReporter.cpp
     src/scene/prefab/ScenePrefabMeshRendererOverrideReporter.cpp
     src/scene/prefab/ScenePrefabRegisteredInstantiationService.cpp
@@ -1282,6 +1283,7 @@ add_library(kb_engine STATIC
     src/private/scene/prefab/ScenePrefabInstanceSynchronizer.hpp
     src/private/scene/prefab/ScenePrefabInstanceTopology.hpp
     src/private/scene/prefab/ScenePrefabInstanceFacade.hpp
+    src/private/scene/prefab/ScenePrefabInstanceRelinker.hpp
     src/private/scene/prefab/ScenePrefabLightOverrideReporter.hpp
     src/private/scene/prefab/ScenePrefabMeshRendererOverrideReporter.hpp
     src/private/scene/prefab/ScenePrefabRegisteredInstantiationService.hpp

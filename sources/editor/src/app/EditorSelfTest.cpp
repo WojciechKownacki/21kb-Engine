@@ -55,6 +55,7 @@
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneObject.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
+#include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/script/ScriptAsset.hpp"
@@ -5261,6 +5262,12 @@ void RunInspectorLightComponentSuite(Report& report) {
 
 void RunPrefabPlacementSuite(Report& report) {
     EditorSceneContext context;
+    const auto showsPrefabRoot = [&context](kb::scene::SceneEntity entity) {
+        const auto row = std::ranges::find_if(context.HierarchyRows(), [entity](const EditorHierarchyRow& candidate) {
+            return candidate.entity == entity;
+        });
+        return context.Scene().Prefabs().RootInstance(entity).IsValid() && row != context.HierarchyRows().end() && row->prefabRoot;
+    };
 
     const kb::scene::SceneEntity source = context.CreateHierarchyObject();
     report.Check(source.IsValid(), "Create source entity for prefab placement");
@@ -5293,6 +5300,7 @@ void RunPrefabPlacementSuite(Report& report) {
     report.Check(std::abs(replacedTransform.localPosition.x - 7.0F) < 0.001F, "Redo restores prefab x position");
     report.Check(std::abs(replacedTransform.localPosition.y - 0.5F) < 0.001F, "Redo restores prefab y position");
     report.Check(std::abs(replacedTransform.localPosition.z + 3.0F) < 0.001F, "Redo restores prefab z position");
+    report.Check(showsPrefabRoot(replaced), "Redo keeps the placed prefab linked to its asset");
 
     const kb::scene::SceneEntity parent = context.CreateHierarchyObject();
     report.Check(parent.IsValid() && context.Scene().Entities().IsAlive(parent), "Create parent for prefab instantiation");
@@ -5310,6 +5318,76 @@ void RunPrefabPlacementSuite(Report& report) {
     const kb::scene::SceneEntity reparented = context.SelectedEntity();
     report.Check(reparented.IsValid() && context.Scene().Entities().IsAlive(reparented), "Redo selects recreated parented prefab root");
     report.Check(context.Scene().Hierarchy().Parent(reparented) == parent, "Redo restores parented prefab root parent");
+    report.Check(showsPrefabRoot(reparented), "Redo keeps the parented prefab linked to its asset");
+
+    // A prefab with a child, its root moved away from the asset: every flow below must keep the link,
+    // the child's node mapping and that override.
+    const kb::scene::SceneEntity crate = context.CreateHierarchyObject();
+    context.Scene().Entities().SetName(crate, "LinkedCrate");
+    static_cast<void>(context.Scene().Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "LinkedLid", .parent = context.Scene().Entities().Object(crate) }));
+    report.Check(context.CreatePrefabAsset(crate, EditorProjectPaths::PrefabsRoot() / "LinkedCrate.kbprefab"), "Create prefab asset with a child");
+    kb::scene::TransformComponent crateTransform = context.Scene().Transforms().Get(crate);
+    crateTransform.localPosition.x = 5.0F;
+    context.Scene().Transforms().Set(crate, crateTransform);
+    const auto findNamed = [&context](std::string_view name) {
+        for (const EditorHierarchyRow& row : context.HierarchyRows()) {
+            if (row.name == name) {
+                return row.entity;
+            }
+        }
+        return kb::scene::SceneEntity{};
+    };
+    const auto lidOf = [&context](kb::scene::SceneEntity root) {
+        for (const kb::scene::SceneEntity child : context.Scene().Hierarchy().ChildEntities(root)) {
+            if (context.Scene().Entities().Name(child) == "LinkedLid") {
+                return child;
+            }
+        }
+        return kb::scene::SceneEntity{};
+    };
+    const auto linkedCrate = [&](kb::scene::SceneEntity root) {
+        kb::scene::ScenePrefabs prefabs = context.Scene().Prefabs();
+        const kb::scene::ScenePrefabInstanceHandle instance = prefabs.RootInstance(root);
+        std::uint32_t lidNode = 0U;
+        const bool lidMapped = prefabs.ContainingInstance(lidOf(root), lidNode) == instance && lidNode == 1U;
+        const kb::scene::ScenePrefabOverrideReport overrides = prefabs.Overrides(instance);
+        const bool keepsOverride = std::ranges::any_of(overrides.nodes, [](const kb::scene::ScenePrefabNodeOverride& node) {
+            return node.nodeIndex == 0U && kb::scene::HasPrefabOverride(node.flags, kb::scene::ScenePrefabOverrideFlag::Transform);
+        });
+        return showsPrefabRoot(root) && lidMapped && keepsOverride;
+    };
+    report.Check(linkedCrate(crate), "Created prefab with a child is linked, mapped and overridden");
+
+    report.Check(context.ReparentEntity(crate, parent), "Reparent linked prefab instance");
+    report.Check(linkedCrate(findNamed("LinkedCrate")), "Reparent keeps the prefab link");
+    report.Check(context.UndoSceneCommand() && linkedCrate(findNamed("LinkedCrate")), "Undo reparent keeps the prefab link");
+    report.Check(context.RedoSceneCommand() && linkedCrate(findNamed("LinkedCrate")), "Redo reparent keeps the prefab link");
+
+    context.SelectEntity(lidOf(findNamed("LinkedCrate")));
+    report.Check(context.DeleteSelectedHierarchyEntity(), "Delete prefab instance child");
+    report.Check(!lidOf(findNamed("LinkedCrate")).IsValid() && showsPrefabRoot(findNamed("LinkedCrate")), "Deleting a child keeps the prefab root linked");
+    report.Check(context.UndoSceneCommand() && linkedCrate(findNamed("LinkedCrate")), "Undo child delete maps the child back to its prefab node");
+
+    context.SelectEntity(findNamed("LinkedCrate"));
+    report.Check(context.DeleteSelectedHierarchyEntity() && !findNamed("LinkedCrate").IsValid(), "Delete prefab instance");
+    report.Check(context.UndoSceneCommand() && linkedCrate(findNamed("LinkedCrate")), "Undo instance delete keeps the prefab link");
+
+    const kb::scene::SceneEntity original = findNamed("LinkedCrate");
+    context.SelectEntity(original);
+    report.Check(context.DuplicateSelectedHierarchyEntities(), "Duplicate prefab instance");
+    const kb::scene::SceneEntity duplicate = context.SelectedEntity();
+    report.Check(duplicate != original && linkedCrate(duplicate) && linkedCrate(original), "Duplicate is a separate linked prefab instance");
+    report.Check(context.Scene().Prefabs().RootInstance(duplicate) != context.Scene().Prefabs().RootInstance(original), "Duplicate gets its own prefab instance");
+    report.Check(context.UndoSceneCommand() && context.RedoSceneCommand() && linkedCrate(context.SelectedEntity()), "Redo duplicate keeps the prefab link");
+
+    const std::filesystem::path scenePath = EditorProjectPaths::ScenesRoot() / "LinkedPrefabs.21kbscene";
+    report.Check(context.SaveCurrentSceneAs(scenePath), "Save scene with linked prefab instances");
+    report.Check(context.OpenScene(scenePath), "Reopen scene with linked prefab instances");
+    report.Check(linkedCrate(findNamed("LinkedCrate")), "Reopened scene keeps the prefab link");
+
+    report.Check(context.BeginPlayModeSceneSession(), "Enter Play mode with linked prefab instances");
+    report.Check(context.RestorePlayModeSceneSession(), "Leave Play mode");
+    report.Check(linkedCrate(findNamed("LinkedCrate")), "Leaving Play mode keeps the prefab link");
 }
 
 void RunHierarchyCommandSuite(Report& report) {

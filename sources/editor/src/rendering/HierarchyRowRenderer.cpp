@@ -4,6 +4,7 @@
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/HeroIconPainter.hpp"
 #include "rendering/HierarchyRowLayout.hpp"
+#include "rendering/ProjectFilesAssetIconResolver.hpp"
 #include "rendering/components/DenseListRow.hpp"
 #include "rendering/gdi/ScopedBrush.hpp"
 #include "rendering/gdi/ScopedFont.hpp"
@@ -90,7 +91,7 @@ void HierarchyRowRenderer::Paint(HDC dc, const RECT& rowRect, const EditorTheme&
         DrawExpander(dc, layout.expanderIcon, theme, row.expanded);
     }
 
-    const COLORREF entityIcon = GdiDrawing::ToColorRef(row.prefabRoot ? theme.accent : theme.textSecondary);
+    const COLORREF entityIcon = row.prefabRoot ? ProjectFilesAssetIconResolver::kPrefabColor : GdiDrawing::ToColorRef(theme.textSecondary);
     HeroIconPainter::Draw(
         dc,
         layout.entityIcon,

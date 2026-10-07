@@ -202,6 +202,22 @@ bool ScenePrefabs::Reconnect(ScenePrefabInstanceHandle handle, ScenePrefabHandle
     return false;
 }
 
+void ScenePrefabs::RelinkRestoredObjects(std::span<const SceneEntity> destroyed, std::span<const SceneObject> restored) {
+    SceneState& state = SceneAccess::State(scene_);
+    for (std::size_t index = 0U; index < destroyed.size() && index < restored.size(); ++index) {
+        std::uint32_t nodeIndex = 0U;
+        const ScenePrefabInstanceHandle handle = state.prefabInstances.FindContainingEntity(destroyed[index], nodeIndex);
+        ScenePrefabInstanceRecord* instance = state.prefabInstances.FindMutable(handle);
+        if (instance == nullptr || scene_.Entities().IsAlive(destroyed[index]) || nodeIndex >= instance->Objects().size() ||
+            instance->Objects()[nodeIndex].Entity() != destroyed[index]) {
+            continue;
+        }
+        const SceneObject previous = instance->Objects()[nodeIndex];
+        instance->MutableObjects()[nodeIndex] = restored[index];
+        state.prefabInstances.ReindexObjects(handle, std::span<const SceneObject>{ &previous, 1U });
+    }
+}
+
 void ScenePrefabs::Clear() noexcept {
     SceneState& state = SceneAccess::State(scene_);
     state.prefabInstances.Clear();

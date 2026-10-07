@@ -1305,6 +1305,8 @@ if(BUILD_TESTING)
         src/private/scene/EditorMeshImportArtifacts.hpp
         src/scene/EditorMeshImportArtifacts.cpp
         src/scene/EditorSceneSelectionPivot.cpp
+        src/scene/EditorSceneHierarchyActions.cpp
+        src/scene/EditorHierarchyObjectFactory.cpp
         src/scene/EditorSceneAudioAssetActions.cpp
         src/scene/EditorSceneCommandController.cpp
         src/scene/EditorSceneViewportStateStore.cpp

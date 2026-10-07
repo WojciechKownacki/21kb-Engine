@@ -85,7 +85,7 @@ ProjectFilesAssetIcon ProjectFilesAssetIconResolver::Resolve(const kb::assets::A
         return ProjectFilesAssetIcon{ .kind = HeroIconKind::Skeleton, .color = selected ? RGB(255, 180, 116) : RGB(232, 116, 55), .strokeWidth = 2 };
     }
     if (IsPrefab(metadata)) {
-        return ProjectFilesAssetIcon{ .kind = HeroIconKind::Cube, .color = selected ? RGB(106, 177, 255) : RGB(68, 145, 236), .strokeWidth = 2 };
+        return ProjectFilesAssetIcon{ .kind = HeroIconKind::Cube, .color = selected ? kPrefabSelectedColor : kPrefabColor, .strokeWidth = 2 };
     }
     if (IsScript(metadata)) {
         return ProjectFilesAssetIcon{ .kind = HeroIconKind::DocumentText, .color = selected ? RGB(220, 235, 255) : RGB(142, 190, 255), .strokeWidth = 2 };
