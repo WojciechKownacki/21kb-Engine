@@ -809,6 +809,7 @@ void ScenePanelContentRenderer::Paint(
     const EditorViewportPreviewState& viewportState = sceneContext.ViewportPreview(panel.id);
     SceneViewportToolbarRenderer::Paint(dc, content, theme, viewportState);
     SceneViewportToolbarRenderer::PaintTerrainTools(dc, content, theme, sceneContext);
+    SceneViewportToolbarRenderer::PaintPrefabEditBar(dc, content, theme, sceneContext);
 
     if (sceneViewport == nullptr) {
         return;

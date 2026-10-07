@@ -142,6 +142,11 @@ EditorAssetBrowserDoubleClickResult EditorAssetBrowserDoubleClickHandler::OpenAs
             ? EditorAssetBrowserDoubleClickResult::ScriptEditorOpened
             : EditorAssetBrowserDoubleClickResult::None;
     }
+    if (metadata->type == "ScenePrefab") {
+        return sceneContext.OpenPrefabEditMode(ResolveAssetPath(*metadata, manager))
+            ? EditorAssetBrowserDoubleClickResult::PrefabEditorOpened
+            : EditorAssetBrowserDoubleClickResult::None;
+    }
     if (metadata->type == "RenderMaterial" || metadata->type == "RenderMaterialInstance" || metadata->type == kb::render::kRenderMaterialGraphAssetType) {
         if (!sceneContext.OpenMaterialEditorAsset(metadata->id)) {
             return EditorAssetBrowserDoubleClickResult::None;

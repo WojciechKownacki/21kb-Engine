@@ -2,6 +2,10 @@
 
 #if defined(_WIN32)
 #include "app/EditorAssetBrowserDoubleClickHandler.hpp"
+#include "rendering/SceneViewportToolbarRenderer.hpp"
+#include "rendering/EditorPanelContentResolver.hpp"
+#include "rendering/EditorSceneBgfxViewport.hpp"
+#include "app/scene_viewport/EditorSceneViewportToolbarPointerController.hpp"
 #include "app/EditorEditCommandPolicy.hpp"
 #include "app/EditorHeadlessAutomation.hpp"
 #include "app/EditorPlayModeState.hpp"
@@ -5513,6 +5517,65 @@ void RunPrefabInspectorSuite(Report& report) {
     report.Check(click(InspectorPropertyId::PrefabSelectRoot) && context.SelectedEntity() == lidOwner, "Select Root selects the instance root");
 }
 
+void RunPrefabEditModeSuite(Report& report) {
+    EditorSceneContext context;
+    const auto findNamed = [&context](std::string_view name) {
+        for (const EditorHierarchyRow& row : context.HierarchyRows()) {
+            if (row.name == name) {
+                return row.entity;
+            }
+        }
+        return kb::scene::SceneEntity{};
+    };
+    const auto positionX = [&context](kb::scene::SceneEntity entity) {
+        return context.Scene().Transforms().Get(entity).localPosition.x;
+    };
+
+    const kb::scene::SceneEntity crate = context.CreateHierarchyObject();
+    context.Scene().Entities().SetName(crate, "EditedCrate");
+    static_cast<void>(context.Scene().Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "EditedLid", .parent = context.Scene().Entities().Object(crate) }));
+    const std::filesystem::path prefabPath = EditorProjectPaths::PrefabsRoot() / "EditedCrate.kbprefab";
+    report.Check(context.CreatePrefabAsset(crate, prefabPath), "Create prefab asset to edit");
+    report.Check(context.InstantiatePrefabAsset(prefabPath, "/Game/Prefabs/EditedCrate.kbprefab", {}), "Place a second instance of the edited prefab");
+    context.Scene().Entities().SetName(context.SelectedEntity(), "OtherEditedCrate");
+    report.Check(context.ToggleEntityVisibility(findNamed("OtherEditedCrate")), "Record a scene command before editing the prefab");
+    const std::size_t documentRows = context.HierarchyRows().size();
+
+    const kb::assets::AssetMetadata* asset = context.Scene().Assets().Manager().Registry().FindByPath("/Game/Prefabs/EditedCrate.kbprefab");
+    report.Check(asset != nullptr && EditorAssetBrowserDoubleClickHandler::OpenAsset(nullptr, *asset, context) == EditorAssetBrowserDoubleClickResult::PrefabEditorOpened && context.InPrefabEditMode(),
+        "Double-clicking a prefab asset opens prefab edit mode");
+    report.Check(context.HierarchyRows().size() == 2U && context.HierarchyRows().front().name == "EditedCrate" && findNamed("EditedLid").IsValid() && !findNamed("OtherEditedCrate").IsValid(),
+        "Hierarchy shows only the prefab contents in prefab edit mode");
+    report.Check(context.Scene().Hierarchy().RootObjects().size() == 1U && context.Scene().Prefabs().RootInstance(context.Scene().Hierarchy().RootEntities().front()).IsValid(),
+        "Scene View scene is the prefab's own scene");
+    report.Check(!context.SaveCurrentScene(), "Saving the scene document is refused while a prefab is edited");
+
+    const EditorResolvedPanelContent panel{ .content = { 0, 0, 1200, 394 }, .panelId = 1U };
+    const SceneViewportToolbarRects toolbar = SceneViewportToolbarRenderer::Resolve(panel.content, context.ViewportPreview(1U));
+    report.Check(toolbar.prefabName.left > toolbar.twoDButton.right && toolbar.prefabSaveButton.left >= toolbar.prefabName.right && toolbar.prefabCloseButton.left >= toolbar.prefabSaveButton.right
+            && toolbar.prefabCloseButton.bottom <= toolbar.toolbar.bottom && context.PrefabEditModeName() == "EditedCrate",
+        "Prefab bar with the prefab name, Save and Close sits in the Scene View toolbar row");
+
+    kb::scene::TransformComponent transform = context.Scene().Transforms().Get(findNamed("EditedCrate"));
+    transform.localPosition.x = 2.0F;
+    context.Scene().Transforms().Set(findNamed("EditedCrate"), transform);
+    EditorSceneBgfxViewport viewport;
+    EditorSceneViewportToolbarPointerController pointer{ context, viewport };
+    const POINT save = Center(toolbar.prefabSaveButton);
+    report.Check(pointer.HandlePointerDown(panel, save.x, save.y), "Click Save in the prefab bar");
+    kb::scene::Scene reader;
+    const kb::scene::ScenePrefabHandle written = reader.Prefabs().Load(prefabPath);
+    report.Check(written.IsValid() && reader.Prefabs().Get(written).Nodes()[0].transform.localPosition.x == 2.0F, "Prefab edit mode Save writes the asset");
+
+    const POINT close = Center(toolbar.prefabCloseButton);
+    report.Check(pointer.HandlePointerDown(panel, close.x, close.y) && !context.InPrefabEditMode() && context.HierarchyRows().size() == documentRows,
+        "Click Close in the prefab bar returns to the scene");
+    report.Check(positionX(findNamed("EditedCrate")) == 2.0F && positionX(findNamed("OtherEditedCrate")) == 2.0F, "Saving the prefab refreshed its instances in the scene");
+    const auto otherRow = std::ranges::find_if(context.HierarchyRows(), [](const EditorHierarchyRow& row) { return row.name == "OtherEditedCrate"; });
+    report.Check(otherRow != context.HierarchyRows().end() && !otherRow->visible && context.UndoSceneCommand() && context.Scene().Components().Visibility().Get(findNamed("OtherEditedCrate")).mode != kb::scene::VisibilityMode::Hidden,
+        "Closing prefab edit mode keeps the scene's undo history");
+}
+
 void RunHierarchyCommandSuite(Report& report) {
     EditorSceneContext context;
     const auto findHierarchyEntityNamed = [&context](std::string_view name) {
@@ -6284,6 +6347,7 @@ int EditorSelfTest::Run(
     RunSuiteInScratch(report, "inspector_light_component", &RunInspectorLightComponentSuite);
     RunSuiteInScratch(report, "prefab_placement", &RunPrefabPlacementSuite);
     RunSuiteInScratch(report, "prefab_inspector", &RunPrefabInspectorSuite);
+    RunSuiteInScratch(report, "prefab_edit_mode", &RunPrefabEditModeSuite);
     RunSuiteInScratch(report, "script_log", &RunScriptLogSuite);
     RunSuiteInScratch(report, "plugins", &RunPluginsPanelSuite);
     gCurrentSuiteArtifactRoot.clear();

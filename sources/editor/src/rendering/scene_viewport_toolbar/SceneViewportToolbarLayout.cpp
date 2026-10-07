@@ -85,6 +85,10 @@ SceneViewportToolbarRects SceneViewportToolbarLayout::Resolve(
     rects.rotationSnapButton = ButtonRect(rects.row, cursor, SceneViewportToolbarMetrics::ValueButtonWidth);
 
     rects.twoDButton = ButtonRect(rects.row, cursor, 64);
+    AddGroupGap(cursor);
+    rects.prefabName = ButtonRect(rects.row, cursor, SceneViewportToolbarMetrics::ProfileButtonWidth + 36);
+    rects.prefabSaveButton = ButtonRect(rects.row, cursor, 56);
+    rects.prefabCloseButton = ButtonRect(rects.row, cursor, 56);
 
     const EditorViewportToolbarDropdown dropdown = state.ToolbarDropdown();
     const int optionCount = DropdownOptionCount(dropdown);
