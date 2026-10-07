@@ -3234,12 +3234,14 @@ struct PrefabSectionModel {
     }
 };
 
-[[nodiscard]] PrefabSectionModel BuildPrefabSection(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) {
+[[nodiscard]] PrefabSectionModel BuildPrefabSection(const EditorSceneContext& sceneContext, kb::scene::SceneEntity entity) {
     PrefabSectionModel model;
+    const kb::scene::Scene& scene = sceneContext.Scene();
     const kb::scene::ScenePrefabs prefabs = scene.Prefabs();
     std::uint32_t nodeIndex = 0U;
     const kb::scene::ScenePrefabInstanceHandle instance = prefabs.ContainingInstance(entity, nodeIndex);
-    if (!instance.IsValid()) {
+    // In prefab edit mode the scene holds the prefab itself, not an instance of it.
+    if (!instance.IsValid() || sceneContext.InPrefabEditMode()) {
         return model;
     }
     model.shown = true;
@@ -3324,7 +3326,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         y += h + kSectionGap;
     }
 
-    if (const PrefabSectionModel prefab = BuildPrefabSection(scene, selected); prefab.shown) {
+    if (const PrefabSectionModel prefab = BuildPrefabSection(sceneContext, selected); prefab.shown) {
         const int h = SectionHeight(inspector, InspectorSectionId::Prefab, prefab.Rows());
         if (sectionVisible(y, h)) {
             SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Prefab, HeroIconKind::Cube, "Prefab");
@@ -3689,7 +3691,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     height += SectionHeight(inspector, InspectorSectionId::General, 3) + kSectionGap;
     if (!scene.Components().UI().Has<kb::scene::UIRectTransform>(selected))
         height += SectionHeight(inspector, InspectorSectionId::Transform, 3) + kSectionGap;
-    if (const PrefabSectionModel prefab = BuildPrefabSection(scene, selected); prefab.shown) {
+    if (const PrefabSectionModel prefab = BuildPrefabSection(sceneContext, selected); prefab.shown) {
         height += SectionHeight(inspector, InspectorSectionId::Prefab, prefab.Rows()) + kSectionGap;
     }
     for (const kb::scene::UIComponentType component :
@@ -5124,7 +5126,7 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
 
     }
 
-    if (const PrefabSectionModel prefab = BuildPrefabSection(sceneContext.Scene(), selected); prefab.shown) {
+    if (const PrefabSectionModel prefab = BuildPrefabSection(sceneContext, selected); prefab.shown) {
         if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::Prefab, x, scrolledY); hit.kind != InspectorHitKind::None) {
             return hit;
         }
