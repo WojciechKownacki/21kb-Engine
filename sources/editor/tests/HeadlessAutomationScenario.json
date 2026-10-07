@@ -308,6 +308,7 @@
     { "op": "profile_idle_scene_frame", "steps": 60 },
     { "op": "assert_floating_window_frame" },
     { "op": "assert_saved_layout_roundtrip" },
-    { "op": "assert_workspace_layout_persistence" }
+    { "op": "assert_workspace_layout_persistence" },
+    { "op": "verify_prefab_round_trip" }
   ]
 }
