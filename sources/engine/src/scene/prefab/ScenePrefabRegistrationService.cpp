@@ -3,6 +3,7 @@
 #include "scene/prefab/ScenePrefabBakedData.hpp"
 #include "scene/prefab/ScenePrefabHasher.hpp"
 #include "scene/prefab/ScenePrefabRecordFactory.hpp"
+#include "scene/prefab/ScenePrefabValidator.hpp"
 #include "scene/prefab/ScenePrefabVariantOverrideList.hpp"
 #include "scene/prefab/ScenePrefabVariantRefreshService.hpp"
 
@@ -31,8 +32,9 @@ ScenePrefabHandle ScenePrefabRegistrationService::Register(ScenePrefabRecordStor
 
 ScenePrefabHandle ScenePrefabRegistrationService::RegisterLoaded(ScenePrefabRecordStore& records, std::string guid, std::string name, ScenePrefab prefab, std::string sourcePath) {
     if (const ScenePrefabHandle existing = records.FindByGuid(guid); existing.IsValid()) {
-        const ScenePrefabRecord* record = records.Find(existing);
-        if (record != nullptr && record->contentHash == ScenePrefabHasher::Hash(prefab)) {
+        ScenePrefabRecord* record = records.FindMutable(existing);
+        const std::uint64_t contentHash = ScenePrefabHasher::Hash(prefab);
+        if (record != nullptr && record->contentHash == contentHash) {
             return existing;
         }
 
@@ -45,8 +47,21 @@ ScenePrefabHandle ScenePrefabRegistrationService::RegisterLoaded(ScenePrefabReco
         // incumbent is moved off it here and the newcomer below never takes it, so
         // the reference fails to resolve, identically and on both sides, until the
         // duplicate file is given an identity of its own.
-        if (record != nullptr && !sourcePath.empty() && !record->sourcePath.empty() && record->sourcePath != sourcePath) {
+        const bool contested = record != nullptr && !sourcePath.empty() && !record->sourcePath.empty() && record->sourcePath != sourcePath;
+        if (contested) {
             static_cast<void>(records.RetireGuid(existing));
+        } else if (record != nullptr && record->kind == ScenePrefabRecordKind::Template && ScenePrefabValidator::IsValid(prefab) && !prefab.Empty()) {
+            // The same file changed on disk: the prefab keeps its identity and takes the new content.
+            // Its instances follow when RefreshInstances is called.
+            record->name = std::move(name);
+            record->prefab = std::move(prefab);
+            record->contentHash = contentHash;
+            RefreshBakedPrefabCache(*record);
+            if (record->sourcePath.empty()) {
+                record->sourcePath = std::move(sourcePath);
+            }
+            ScenePrefabVariantRefreshService::RefreshDerived(records, existing);
+            return existing;
         }
 
         std::optional<ScenePrefabRecord> uniqueRecord = ScenePrefabRecordFactory::CreateTemplate(std::move(name), std::move(prefab), records.NextId());
