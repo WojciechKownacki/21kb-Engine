@@ -2,6 +2,7 @@
 
 #include "engine/assets/AssetMountTable.hpp"
 #include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 
@@ -74,6 +75,27 @@ std::optional<kb::scene::SceneEntity> EditorScenePrefabActions::InstantiateAsset
         return std::nullopt;
     }
     return instance.RootObject().Entity();
+}
+
+std::vector<std::string> EditorScenePrefabActions::FindSceneInstances(kb::scene::Scene& scene, const std::filesystem::path& path) {
+    std::vector<std::string> instances;
+    const kb::scene::ScenePrefabHandle prefab = scene.Prefabs().Load(path);
+    if (!prefab.IsValid()) {
+        return instances;
+    }
+
+    std::vector<kb::scene::SceneEntity> pending = scene.Hierarchy().RootEntities();
+    while (!pending.empty()) {
+        const kb::scene::SceneEntity entity = pending.back();
+        pending.pop_back();
+        if (scene.Prefabs().SourcePrefab(scene.Prefabs().RootInstance(entity)) == prefab) {
+            instances.push_back(scene.Entities().Name(entity));
+        }
+        for (std::size_t index = 0U; index < scene.Hierarchy().ChildCount(entity); ++index) {
+            pending.push_back(scene.Hierarchy().ChildAt(entity, index));
+        }
+    }
+    return instances;
 }
 
 } // namespace kb::editor

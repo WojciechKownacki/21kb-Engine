@@ -2161,7 +2161,26 @@ bool EditorSceneContext::AdoptCreatedHierarchyEntities(std::string label, std::s
     return true;
 }
 
+// A prefab file is what its scene instances are linked to; it moves or goes only once no instance uses it.
+bool EditorSceneContext::PrefabAssetHasSceneInstances(kb::assets::AssetId id, std::string_view action) {
+    const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(id);
+    if (metadata == nullptr || metadata->type != "ScenePrefab") {
+        return false;
+    }
+    const std::vector<std::string> instances = EditorScenePrefabActions::FindSceneInstances(*scene_, metadata->physicalPath);
+    if (instances.empty()) {
+        return false;
+    }
+    console_.Warning(
+        "Prefabs",
+        "Prefab " + std::string{ action } + " blocked; " + std::to_string(instances.size()) + " instance(s) in the open scene. First: " + instances.front());
+    return true;
+}
+
 bool EditorSceneContext::DeleteAssetBrowserItem(kb::assets::AssetId id) {
+    if (PrefabAssetHasSceneInstances(id, "delete")) {
+        return false;
+    }
     const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(id);
     if (metadata != nullptr && EditorSceneMaterialAssetActions::IsMaterialAsset(*metadata)) {
         const std::vector<std::string> references = EditorMaterialReferenceFinder::FindSceneReferences(*scene_, id);
@@ -2193,6 +2212,9 @@ bool EditorSceneContext::DeleteAssetBrowserFolder(const std::filesystem::path& v
 }
 
 bool EditorSceneContext::MoveAssetToFolder(kb::assets::AssetId id, const std::filesystem::path& destinationVirtualFolder) {
+    if (PrefabAssetHasSceneInstances(id, "move")) {
+        return false;
+    }
     const bool moved = EditorSceneAssetBrowserCommands::MoveAssetToFolder(*scene_, assetBrowser_, id, destinationVirtualFolder);
     if (moved) {
         console_.Info("Assets", "Asset moved to " + destinationVirtualFolder.generic_string());

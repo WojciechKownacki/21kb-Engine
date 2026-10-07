@@ -1334,6 +1334,7 @@ private:
     void ClearSceneDocumentDirty() noexcept;
     void ReleaseRenderedSceneResources();
     void InvalidateHierarchyRows() noexcept;
+    [[nodiscard]] bool PrefabAssetHasSceneInstances(kb::assets::AssetId id, std::string_view action);
     void RebuildHierarchyRowsIfNeeded() const;
     void ResetSceneEditState();
     void AdvanceSceneDocumentGeneration() noexcept;
