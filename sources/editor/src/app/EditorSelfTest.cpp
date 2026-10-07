@@ -5549,6 +5549,11 @@ void RunPrefabEditModeSuite(Report& report) {
     report.Check(context.Scene().Hierarchy().RootObjects().size() == 1U && context.Scene().Prefabs().RootInstance(context.Scene().Hierarchy().RootEntities().front()).IsValid(),
         "Scene View scene is the prefab's own scene");
     report.Check(!context.SaveCurrentScene(), "Saving the scene document is refused while a prefab is edited");
+    bool prefabSectionShown = false;
+    for (int y = kContent.top; y < kContent.bottom; y += 4) {
+        prefabSectionShown = prefabSectionShown || InspectorPanelRenderer::HitTest(kContent, context, kContent.left + 40, y).section == InspectorSectionId::Prefab;
+    }
+    report.Check(!prefabSectionShown, "The edited prefab is not shown as an instance in the Inspector");
 
     const EditorResolvedPanelContent panel{ .content = { 0, 0, 1200, 394 }, .panelId = 1U };
     const SceneViewportToolbarRects toolbar = SceneViewportToolbarRenderer::Resolve(panel.content, context.ViewportPreview(1U));
