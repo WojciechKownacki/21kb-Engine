@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -21,6 +22,8 @@
 struct lua_State;
 
 namespace kb::script {
+
+struct PucLuaMemoryBudget;
 
 using PucLuaLoadResult = LuaScriptLoadResult;
 
@@ -120,6 +123,8 @@ public:
     [[nodiscard]] kb::core::BudgetExceededPolicy ExecutionBudgetPolicy() const noexcept;
     [[nodiscard]] bool IsExecutionBudgetEnabled() const noexcept;
     [[nodiscard]] bool HasActiveExecutionBudget() const noexcept;
+    // Bytes the Lua state currently holds, counted by its bounded allocator.
+    [[nodiscard]] std::size_t LuaMemoryUsedBytes() const noexcept;
     [[nodiscard]] const PucLuaDebugSettings& DebugSettings() const noexcept;
     void RequestBreakOnNextLine() noexcept;
     void RequestStepInto() noexcept;
@@ -207,6 +212,9 @@ private:
     void ClearEventSubscriptions(const InstanceKey& instanceKey, ScriptEventBus& events) noexcept;
     void ClearEventSubscriptionsForAsset(kb::assets::AssetId assetId, ScriptEventBus& events) noexcept;
 
+    // Declared before state_: the state's allocator writes into it from the
+    // first allocation lua_newstate makes until lua_close frees the last one.
+    std::unique_ptr<PucLuaMemoryBudget> memoryBudget_;
     lua_State* state_ = nullptr;
     std::unordered_map<std::uint64_t, ScriptRecord> scripts_;
     std::unordered_map<std::string, ModuleRecord> modules_;

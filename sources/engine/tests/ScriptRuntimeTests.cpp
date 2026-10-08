@@ -1012,6 +1012,105 @@ end
         "Lua Fail execution budget policy did not produce an explicit diagnostic");
 }
 
+// One Lua runtime runs every script of a host, so its allocations are capped:
+// a script that exhausts the cap fails as that script's error, and the other
+// scripts of the same runtime keep running on later ticks.
+void RunPucLuaMemoryLimitTest() {
+    constexpr std::size_t kLimit = std::size_t{ 16U } << 20U;
+    kb::script::PucLuaScriptRuntime luaRuntime;
+    luaRuntime.SetExecutionBudgetSettings({ .luaMemoryBytes = kLimit });
+    constexpr kb::assets::AssetId kHugeString{ 3210U };
+    constexpr kb::assets::AssetId kGrowingTable{ 3211U };
+    constexpr kb::assets::AssetId kHealthy{ 3212U };
+    kb::tests::Require(luaRuntime.LoadScript(kHugeString, R"(
+function Tick(self, dt)
+    local text = string.rep("x", 64 * 1024 * 1024)
+    SetShared("lua.memory.huge", #text)
+end
+)", "LuaMemoryHugeString.lua").succeeded, "Lua memory limit huge-string script did not load");
+    kb::tests::Require(luaRuntime.LoadScript(kGrowingTable, R"(
+function Tick(self, dt)
+    local items = {}
+    for index = 1, 100000000 do
+        items[index] = index
+    end
+    SetShared("lua.memory.table", #items)
+end
+)", "LuaMemoryGrowingTable.lua").succeeded, "Lua memory limit growing-table script did not load");
+    kb::tests::Require(luaRuntime.LoadScript(kHealthy, R"(
+local ticks = 0
+function Tick(self, dt)
+    ticks = ticks + 1
+    SetShared("lua.memory.healthy", ticks)
+end
+)", "LuaMemoryHealthy.lua").succeeded, "Lua memory limit healthy script did not load");
+
+    kb::scene::Scene scene;
+    for (const kb::assets::AssetId asset : { kHugeString, kGrowingTable, kHealthy }) {
+        const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Memory " + std::to_string(asset.value) });
+        scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+            .behaviourAssetId = asset.value,
+            .backend = kb::scene::BehaviourBackend::Lua,
+            .enabled = true,
+        });
+    }
+    kb::script::ScriptRuntime dispatcher;
+    kb::tests::Require(dispatcher.RegisterBackend(std::make_unique<kb::script::LuaScriptBackend>(luaRuntime)),
+        "Lua memory limit backend registration failed");
+    for (int tick = 1; tick <= 2; ++tick) {
+        const kb::script::ScriptRuntimeExecutionResult result = dispatcher.ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.016F);
+        std::vector<std::uint64_t> failedAssets;
+        for (const kb::script::ScriptDiagnostic& diagnostic : result.diagnostics) {
+            kb::tests::Require(diagnostic.message.find("memory limit of 16777216 bytes exceeded") != std::string::npos,
+                "A script past the Lua memory limit must fail with a memory-limit script error");
+            failedAssets.push_back(diagnostic.assetId.value);
+        }
+        std::ranges::sort(failedAssets);
+        kb::tests::Require(failedAssets == std::vector<std::uint64_t>{ kHugeString.value, kGrowingTable.value },
+            "Exactly the two scripts past the Lua memory limit must fail");
+        const std::optional<kb::script::ScriptValue> healthy = dispatcher.SharedState().Get("lua.memory.healthy");
+        kb::tests::Require(healthy.has_value() && healthy->AsInt() == tick,
+            "A script within the Lua memory limit must keep running beside scripts that exceeded it");
+        kb::tests::Require(!dispatcher.SharedState().Get("lua.memory.huge").has_value() &&
+                !dispatcher.SharedState().Get("lua.memory.table").has_value(),
+            "A script past the Lua memory limit must not complete");
+    }
+    kb::tests::Require(luaRuntime.LuaMemoryUsedBytes() != 0U && luaRuntime.LuaMemoryUsedBytes() < kLimit,
+        "The Lua memory limit must leave the runtime below its cap once the failing scripts unwound");
+
+    // The default cap applies without any configuration and also bounds a
+    // request far beyond it; the instruction budget still works beside it.
+    kb::script::PucLuaScriptRuntime defaultRuntime;
+    defaultRuntime.SetExecutionBudgetSettings({ .luaInstructionsPerBehaviour = 100U });
+    kb::tests::Require(kb::script::ScriptExecutionBudgetSettings{}.luaMemoryBytes == (std::size_t{ 256U } << 20U),
+        "The default Lua memory limit must be 256 MiB");
+    constexpr kb::assets::AssetId kDefaultHuge{ 3213U };
+    constexpr kb::assets::AssetId kLooping{ 3214U };
+    kb::tests::Require(defaultRuntime.LoadScript(kDefaultHuge, "function Tick(self, dt) local text = string.rep('x', 512 * 1024 * 1024) end\n", "LuaMemoryDefault.lua").succeeded &&
+            defaultRuntime.LoadScript(kLooping, "function Tick(self, dt) local total = 0 for index = 1, 10000 do total = total + index end end\n", "LuaMemoryLoop.lua").succeeded,
+        "Lua default memory limit scripts did not load");
+    kb::scene::Scene defaultScene;
+    for (const kb::assets::AssetId asset : { kDefaultHuge, kLooping }) {
+        defaultScene.Components().Behaviours().Set(defaultScene.Entities().CreateEntity(), kb::scene::BehaviourComponent{
+            .behaviourAssetId = asset.value,
+            .backend = kb::scene::BehaviourBackend::Lua,
+            .enabled = true,
+        });
+    }
+    kb::script::ScriptRuntime defaultDispatcher;
+    kb::tests::Require(defaultDispatcher.RegisterBackend(std::make_unique<kb::script::LuaScriptBackend>(defaultRuntime)),
+        "Lua default memory limit backend registration failed");
+    const kb::script::ScriptRuntimeExecutionResult defaultResult = defaultDispatcher.ExecuteLifecycle(defaultScene, kb::script::ScriptLifecycleEvent::Tick, 0.016F);
+    bool memoryFailure = false;
+    bool budgetFailure = false;
+    for (const kb::script::ScriptDiagnostic& diagnostic : defaultResult.diagnostics) {
+        memoryFailure = memoryFailure || (diagnostic.assetId == kDefaultHuge && diagnostic.message.find("memory limit of 268435456 bytes exceeded") != std::string::npos);
+        budgetFailure = budgetFailure || (diagnostic.assetId == kLooping && diagnostic.message.find("execution budget exceeded") != std::string::npos);
+    }
+    kb::tests::Require(memoryFailure && budgetFailure && defaultResult.diagnostics.size() == 2U,
+        "The default Lua memory limit and the instruction budget must each fail their own script");
+}
+
 void RunPucLuaScriptRuntimeModulesReloadAndDiagnosticsTest() {
     kb::scene::Scene scene;
     const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Runtime Advanced" });
@@ -16030,6 +16129,7 @@ void RunScriptRuntimeTests() {
     RunPucLuaCatalogModuleBindingTest();
     RunPucLuaCoroutineGeneratorTest();
     RunPucLuaExecutionBudgetPolicyTest();
+    RunPucLuaMemoryLimitTest();
     RunPucLuaDestroyedYieldCleanupTest();
     RunPucLuaScriptRuntimeModulesReloadAndDiagnosticsTest();
     RunLuaExposedVariablesRuntimeTest();
