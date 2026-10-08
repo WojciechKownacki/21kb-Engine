@@ -1553,6 +1553,8 @@ if(WIN32)
         include/engine/platform/CrashReporting.hpp
         src/platform/win32/Win32CrashReporter.cpp
         src/platform/win32/Win32CrashReportStore.cpp
+        src/platform/win32/Win32MinidumpPaths.cpp
+        src/platform/win32/Win32MinidumpPaths.hpp
     )
     target_include_directories(kb_crash_reporting PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
     target_link_libraries(kb_crash_reporting PRIVATE winhttp bcrypt shell32 ole32)
@@ -1860,7 +1862,7 @@ if(BUILD_TESTING)
             tests/CrashReportingTests.cpp
             tests/TestSupport.hpp
         )
-        target_link_libraries(kb_crash_reporting_tests PRIVATE kb_crash_reporting kb_engine ws2_32)
+        target_link_libraries(kb_crash_reporting_tests PRIVATE kb_crash_reporting kb_engine ws2_32 dbghelp)
         add_dependencies(kb_crash_reporting_tests kb_crash_reporting_test_helper)
         target_compile_definitions(kb_crash_reporting_tests PRIVATE
             "KB_CRASH_REPORTING_TEST_HELPER=\"$<TARGET_FILE:kb_crash_reporting_test_helper>\""

@@ -10,19 +10,19 @@ Each report is two files.
 The memory dump (.dmp) holds:
   - the state of each of the game's threads when it stopped: processor
     registers, the call stack and the memory that stack was using;
-  - the list of program files (modules) the game had loaded, with their
-    names, versions and folder locations, and those it had unloaded;
+  - the list of program files (modules) the game had loaded, and those it
+    had unloaded, by file name and version only: not the folders they were
+    loaded from, so not the folder the game is installed in;
   - basic system information: Windows version, processor type and count.
 Stack memory can contain small pieces of what the game was working on at
-that moment, such as a file name or a line of text. The folder locations of
-program files include your Windows user name when the game is installed
-inside your user folder.
+that moment, such as a file name or a line of text.
 
 The description (.json) holds the game's name and version, an identifier of
 the exact build, the time of the crash (UTC), the kind of error, the names of
 the loaded program files, and the last lines the game logged before it
 stopped. Inside the description, folders in your user profile are written as
-%USERPROFILE% instead of their real path.
+%USERPROFILE% instead of their real path, and your Windows user name, where
+it is part of a folder name, as %USERNAME%.
 
 Not collected: your name, e-mail address or account, saved games, settings,
 screenshots, other files, or the game's memory beyond the thread stacks.

@@ -1,5 +1,7 @@
 #include "engine/platform/CrashReporting.hpp"
 
+#include "Win32MinidumpPaths.hpp"
+
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
@@ -18,6 +20,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <span>
 #include <thread>
 
 // Nothing on the crash path may allocate, take a lock the crashed code could
@@ -68,8 +71,10 @@ struct ReporterState {
     wchar_t executableName[kTextCapacity]{};
     char product[kTextCapacity]{};
     char version[kTextCapacity]{};
-    // Paths in the description replace this prefix with %USERPROFILE%.
+    // Paths in the description replace this prefix with %USERPROFILE%, and any path
+    // component that is the account name with %USERNAME%.
     char profileUtf8[kPathCapacity]{};
+    char userNameUtf8[kTextCapacity]{};
     bool uploadPendingReports = false;
     CrashReportWrittenCallback callback = nullptr;
 
@@ -174,13 +179,22 @@ public:
         Append(digits, width);
     }
     // JSON string body (no quotes). The user profile prefix becomes
-    // %USERPROFILE% so a description never names the account it came from.
+    // %USERPROFILE%, and a path component that is the account name (a profile
+    // on another drive, a shared folder per user) becomes %USERNAME%, so a
+    // description never names the account it came from.
     void JsonText(const char* text, std::size_t length) noexcept {
         const std::size_t profileLength = std::strlen(g_state.profileUtf8);
+        const std::size_t userNameLength = std::strlen(g_state.userNameUtf8);
         for (std::size_t index = 0U; index < length;) {
             if (profileLength >= 4U && MatchesProfile(text + index, length - index, profileLength)) {
                 Append("%USERPROFILE%");
                 index += profileLength;
+                continue;
+            }
+            if (userNameLength != 0U && index != 0U && IsSeparator(text[index - 1U]) &&
+                MatchesComponent(text + index, length - index, g_state.userNameUtf8, userNameLength)) {
+                Append("%USERNAME%");
+                index += userNameLength;
                 continue;
             }
             const unsigned char character = static_cast<unsigned char>(text[index++]);
@@ -217,6 +231,27 @@ public:
     void Terminate() noexcept { buffer_[size_ < capacity_ ? size_ : capacity_ - 1U] = '\0'; }
 
 private:
+    [[nodiscard]] static bool IsSeparator(char character) noexcept {
+        return character == '\\' || character == '/';
+    }
+    [[nodiscard]] static char FoldAscii(char character) noexcept {
+        return character >= 'A' && character <= 'Z' ? static_cast<char>(character - 'A' + 'a') : character;
+    }
+    // `name` as a whole path component at the start of `text`: a separator, a quote,
+    // a space or the end follows it.
+    [[nodiscard]] static bool MatchesComponent(const char* text, std::size_t available, const char* name,
+        std::size_t nameLength) noexcept {
+        if (available < nameLength) {
+            return false;
+        }
+        for (std::size_t index = 0U; index < nameLength; ++index) {
+            if (FoldAscii(text[index]) != FoldAscii(name[index])) {
+                return false;
+            }
+        }
+        const char next = available > nameLength ? text[nameLength] : '\0';
+        return next == '\0' || IsSeparator(next) || next == '"' || next == ' ';
+    }
     [[nodiscard]] static bool MatchesProfile(const char* text, std::size_t available, std::size_t profileLength) noexcept {
         if (available < profileLength) {
             return false;
@@ -271,6 +306,12 @@ struct CodeViewRecord {
 };
 
 struct ModuleIdentity {
+    // The image's own identity: with its file name, what a symbol server files the
+    // executable under.
+    bool imageFound = false;
+    DWORD timeDateStamp = 0U;
+    DWORD sizeOfImage = 0U;
+    // The CodeView record: what it files the PDB under.
     bool found = false;
     GUID guid{};
     DWORD age = 0U;
@@ -289,8 +330,13 @@ ModuleIdentity ReadModuleIdentity(HMODULE module) noexcept {
             return identity;
         }
         const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
-        if (nt->Signature != IMAGE_NT_SIGNATURE ||
-            nt->OptionalHeader.NumberOfRvaAndSizes <= IMAGE_DIRECTORY_ENTRY_DEBUG) {
+        if (nt->Signature != IMAGE_NT_SIGNATURE) {
+            return identity;
+        }
+        identity.imageFound = true;
+        identity.timeDateStamp = nt->FileHeader.TimeDateStamp;
+        identity.sizeOfImage = nt->OptionalHeader.SizeOfImage;
+        if (nt->OptionalHeader.NumberOfRvaAndSizes <= IMAGE_DIRECTORY_ENTRY_DEBUG) {
             return identity;
         }
         const IMAGE_DATA_DIRECTORY& directory = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DEBUG];
@@ -318,9 +364,26 @@ ModuleIdentity ReadModuleIdentity(HMODULE module) noexcept {
             return identity;
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
+        identity.imageFound = false;
         identity.found = false;
     }
     return identity;
+}
+
+void WriteImageId(FixedWriter& writer, const ModuleIdentity& identity) noexcept {
+    // Symbol store layout for an executable: the time stamp as 8 upper-case hex
+    // digits, then the image size in hex.
+    char text[32];
+    FixedWriter id{ text, sizeof(text) };
+    id.Hex(identity.timeDateStamp, 8U);
+    id.Hex(identity.sizeOfImage);
+    id.Terminate();
+    for (char* cursor = text; *cursor != '\0'; ++cursor) {
+        if (*cursor >= 'a' && *cursor <= 'f') {
+            *cursor = static_cast<char>(*cursor - 'a' + 'A');
+        }
+    }
+    writer.JsonString(text);
 }
 
 void WriteIdentity(FixedWriter& writer, const ModuleIdentity& identity) noexcept {
@@ -501,6 +564,10 @@ std::size_t ComposeMetadata(const SYSTEMTIME& time, const wchar_t* dumpName) noe
         writer.Append("\",\"size\":");
         writer.Decimal(info.SizeOfImage);
         const ModuleIdentity identity = ReadModuleIdentity(g_state.modules[index]);
+        if (identity.imageFound) {
+            writer.Append(",\"imageId\":");
+            WriteImageId(writer, identity);
+        }
         if (identity.found) {
             writer.Append(",\"pdb\":");
             writer.JsonString(identity.pdbName);
@@ -546,6 +613,28 @@ std::size_t ComposeMetadata(const SYSTEMTIME& time, const wchar_t* dumpName) noe
     }
     writer.Terminate();
     return writer.Size();
+}
+
+// Strips the module paths of the dump just written, through a mapping of the
+// file: nothing here allocates from the heap.
+[[nodiscard]] bool StripModulePathsInFile(HANDLE file) noexcept {
+    LARGE_INTEGER size{};
+    if (GetFileSizeEx(file, &size) == FALSE || size.QuadPart <= 0) {
+        return false;
+    }
+    const HANDLE mapping = CreateFileMappingW(file, nullptr, PAGE_READWRITE, 0U, 0U, nullptr);
+    if (mapping == nullptr) {
+        return false;
+    }
+    bool stripped = false;
+    if (void* const view = MapViewOfFile(mapping, FILE_MAP_WRITE, 0U, 0U, 0U); view != nullptr) {
+        stripped = StripMinidumpModulePaths(
+            std::span<std::byte>{ static_cast<std::byte*>(view), static_cast<std::size_t>(size.QuadPart) });
+        stripped = FlushViewOfFile(view, 0U) != FALSE && stripped;
+        UnmapViewOfFile(view);
+    }
+    CloseHandle(mapping);
+    return stripped;
 }
 
 // Writes the dump and its description for the request in g_state. Runs on the
@@ -609,6 +698,9 @@ void WriteReport() noexcept {
                 MiniDumpNormal | MiniDumpWithThreadInfo | MiniDumpWithUnloadedModules);
             dumped = g_state.writeDump(GetCurrentProcess(), GetCurrentProcessId(), file, type,
                 g_state.pointers != nullptr ? &exception : nullptr, &streams, nullptr) != FALSE;
+            // The module lists name every folder a module was loaded from; a report
+            // keeps only file names, or it is not kept.
+            dumped = dumped && StripModulePathsInFile(file);
             CloseHandle(file);
             if (!dumped) {
                 DeleteFileW(dumpPath);
@@ -706,6 +798,12 @@ void ReadProfilePrefix() noexcept {
     const DWORD length = GetEnvironmentVariableW(L"USERPROFILE", profile, static_cast<DWORD>(kPathCapacity));
     if (length != 0U && length < kPathCapacity) {
         Utf8FromWide(profile, g_state.profileUtf8, sizeof(g_state.profileUtf8));
+    }
+    wchar_t userName[kTextCapacity];
+    const DWORD nameLength = GetEnvironmentVariableW(L"USERNAME", userName, static_cast<DWORD>(kTextCapacity));
+    // One- and two-letter names would rewrite ordinary folder names.
+    if (nameLength >= 3U && nameLength < kTextCapacity) {
+        Utf8FromWide(userName, g_state.userNameUtf8, sizeof(g_state.userNameUtf8));
     }
 }
 
