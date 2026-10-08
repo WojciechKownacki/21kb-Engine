@@ -24,6 +24,7 @@ enum class RuntimeAssetPackStatus : std::uint8_t;
 }
 
 namespace kb::security {
+struct InstalledRelease;
 struct TrustAnchor;
 struct TrustAnchorLookup;
 }
@@ -113,6 +114,26 @@ inline constexpr std::string_view kPackagedGameFileName = "Game.kbpack";
 [[nodiscard]] bool ResolvePackagedAssetPackTrust(
     const kb::security::TrustAnchorLookup& anchor,
     kb::assets::bake::AssetPackTrust& trust,
+    std::ostream& err);
+
+// Startup check of a packaged release installed in `root`: its signed manifest must verify
+// against the anchor's release key and product, every critical file must be listed, and the
+// running `executable` must hash to its listed digest. Applies the manifest's anti-rollback policy
+// with state in `securityRoot`, then installs the release for native module loading. Null, with a
+// diagnostic, when the release must not run.
+[[nodiscard]] std::shared_ptr<const kb::security::InstalledRelease> VerifyPackagedRelease(
+    const kb::security::TrustAnchor& anchor,
+    const std::filesystem::path& root,
+    const std::filesystem::path& executable,
+    const std::filesystem::path& securityRoot,
+    std::ostream& err);
+
+// True when the mounted pack is the very pack the release manifest lists at `packPath`, compared
+// by the digest its seal signs, so the pack is never hashed a second time.
+[[nodiscard]] bool PackBelongsToRelease(
+    const kb::security::InstalledRelease& release,
+    const std::filesystem::path& packPath,
+    const kb::assets::bake::RuntimeAssetPack& pack,
     std::ostream& err);
 
 // Authenticates this player's save files with the per-game secret of its trust anchor and the

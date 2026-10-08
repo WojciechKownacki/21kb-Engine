@@ -86,6 +86,14 @@ struct AssetPackTrust {
 [[nodiscard]] kb::security::AeadNonce AssetPackBlockNonce(
     const std::array<std::uint8_t, 16U>& salt, std::uint64_t blockOffset) noexcept;
 
+// The message the seal of the pack at `path` signs (AssetPackReader::SealDigest without mounting
+// the pack, so it works without the content key of an encrypted pack). The seal's signature is
+// checked against the key the seal names; false for an unsigned or damaged pack.
+[[nodiscard]] bool ReadAssetPackSealDigest(
+    const std::filesystem::path& path,
+    kb::security::Sha512Digest& digest,
+    std::string& error);
+
 // Seals the unsigned pack at `path`: verifies every block against its index digest, encrypts
 // the blocks when `contentKey` is given, appends the signed seal, and replaces the file only
 // once the sealed copy is complete. A pack that is already sealed is refused.

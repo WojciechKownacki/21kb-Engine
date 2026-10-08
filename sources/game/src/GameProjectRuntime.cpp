@@ -11,6 +11,7 @@
 #include "engine/project/ProjectSettings.hpp"
 #include "engine/save/SaveGameService.hpp"
 #include "engine/security/ReleaseKeys.hpp"
+#include "engine/security/ReleaseManifest.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
@@ -38,6 +39,7 @@
 #endif
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <limits>
 #include <memory>
@@ -132,6 +134,24 @@ namespace {
     if (!ResolvePackagedAssetPackTrust(anchor, trust, err)) {
         return false;
     }
+    std::shared_ptr<const kb::security::InstalledRelease> release;
+#if defined(_WIN32)
+    if (anchor.state == kb::security::TrustAnchorLookup::State::Present) {
+        std::filesystem::path executable;
+        std::filesystem::path executableDirectory = ExecutableDirectory();
+        {
+            std::wstring buffer(32768U, L'\0');
+            const DWORD length = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+            buffer.resize(length);
+            executable = std::filesystem::path{ buffer };
+        }
+        release = VerifyPackagedRelease(anchor.anchor, executableDirectory, executable,
+            kb::security::DefaultUserSecurityRoot(anchor.anchor.productId), err);
+        if (release == nullptr) {
+            return false;
+        }
+    }
+#endif
     auto pack = std::make_shared<kb::assets::bake::RuntimeAssetPack>();
     const kb::assets::bake::RuntimeAssetPackStatus status =
         pack->Mount(packPath, targetProfile, kb::assets::bake::AssetPackAccess::Ranged, trust);
@@ -141,6 +161,9 @@ namespace {
     }
     if (!trust.requiredSigner.has_value() && pack->Seal() == nullptr) {
         err << "runtime package is not signed; this development player loads it unverified\n";
+    }
+    if (release != nullptr && !PackBelongsToRelease(*release, packPath, *pack, err)) {
+        return false;
     }
     if (anchor.state == kb::security::TrustAnchorLookup::State::Present) {
         ConfigurePackagedSaveIntegrity(
@@ -168,6 +191,58 @@ bool ResolvePackagedAssetPackTrust(
     }
     trust.requiredSigner = anchor.anchor.releaseKey;
     trust.contentKey = anchor.anchor.packContentKey;
+    return true;
+}
+
+std::shared_ptr<const kb::security::InstalledRelease> VerifyPackagedRelease(
+    const kb::security::TrustAnchor& anchor,
+    const std::filesystem::path& root,
+    const std::filesystem::path& executable,
+    const std::filesystem::path& securityRoot,
+    std::ostream& err) {
+    const std::array<std::filesystem::path, 1U> hashNow{ executable };
+    kb::security::ReleaseVerification verification =
+        kb::security::VerifyInstalledRelease(root, anchor.releaseKey, anchor.productId, hashNow);
+    if (verification.status != kb::security::ReleaseManifestStatus::Success) {
+        err << "this game's files do not match its signed release manifest: "
+            << kb::security::ToString(verification.status);
+        if (!verification.detail.empty()) {
+            err << " (" << verification.detail << ')';
+        }
+        err << "; reinstall the game\n";
+        return nullptr;
+    }
+    if (verification.manifest.antiRollback) {
+        const kb::security::ReleaseManifestStatus rollback =
+            kb::security::EnforceReleaseAntiRollback(securityRoot, verification.manifest);
+        if (rollback == kb::security::ReleaseManifestStatus::RolledBack) {
+            err << "release " << verification.manifest.releaseNumber
+                << " is older than a release this computer has already run; install the current release\n";
+            return nullptr;
+        }
+        if (rollback != kb::security::ReleaseManifestStatus::Success) {
+            err << "the release history could not be recorded; downgrade protection is inactive\n";
+        }
+    }
+    auto release = std::make_shared<kb::security::InstalledRelease>();
+    release->root = root;
+    release->manifest = std::move(verification.manifest);
+    kb::security::InstallVerifiedRelease(release);
+    return release;
+}
+
+bool PackBelongsToRelease(
+    const kb::security::InstalledRelease& release,
+    const std::filesystem::path& packPath,
+    const kb::assets::bake::RuntimeAssetPack& pack,
+    std::ostream& err) {
+    const std::u8string relative = packPath.lexically_normal().lexically_relative(release.root.lexically_normal()).generic_u8string();
+    const kb::security::ReleaseManifestPackSeal* listed = release.manifest.FindPack(
+        std::string_view{ reinterpret_cast<const char*>(relative.data()), relative.size() });
+    if (listed == nullptr || !kb::security::ConstantTimeEqual(listed->sealDigest, pack.SealDigest())) {
+        err << "runtime package is not the one this release shipped; reinstall the game\n";
+        return false;
+    }
     return true;
 }
 

@@ -264,6 +264,31 @@ class PackageGameTests(unittest.TestCase):
                 with self.assertRaisesRegex(PackagingError, "broker refused"):
                     package_game._sign_pack(args, Path("cmake.exe"), job / "Game.kbpack", job)
 
+    def test_release_manifest_is_signed_over_the_finished_stage_and_verified(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_text:
+            root = Path(temporary_text)
+            job = root / "job"
+            stage = root / "stage"
+            signing = package_game.ReleaseSigning(root / "kb_cli.exe", root / "game.kbkey", None)
+            args = self._signing_args(
+                root, release_signing=signing, version="1.2.0 beta", release_number=1234, anti_rollback=True
+            )
+            with mock.patch.object(package_game, "run_checked") as run:
+                package_game._sign_release(args, stage, job)
+            commands = [[str(value) for value in call.args[0]] for call in run.call_args_list]
+            self.assertEqual(
+                [str(root / "kb_cli.exe"), "release", "sign", "--dir", str(stage), "--product", "Publisher.Game",
+                 "--content-version", "1.2.0-beta", "--release", "1234", "--anti-rollback",
+                 "--key", str(root / "game.kbkey")],
+                commands[0],
+            )
+            self.assertEqual([str(root / "kb_cli.exe"), "release", "verify", str(stage)], commands[1])
+
+            unsigned = self._signing_args(root)
+            with mock.patch.object(package_game, "run_checked") as run:
+                package_game._sign_release(unsigned, stage, job)
+            run.assert_not_called()
+
     def test_default_product_id_is_a_portable_name(self) -> None:
         self.assertEqual("Acme-Studio.My-Game", package_game._default_product_id("Acme Studio", "My Game!"))
         self.assertEqual("game", package_game._default_product_id("!!", "??"))

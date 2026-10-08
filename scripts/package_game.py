@@ -202,6 +202,10 @@ def _validate_arguments(args: argparse.Namespace) -> None:
         args.signing_broker = _existing_file(args.signing_broker, "release signing broker")
     if args.encrypt_pack and TARGETS[args.target].platform != "windows":
         raise PackagingError("asset pack encryption is available for Windows packages only")
+    if args.release_number is None:
+        args.release_number = int(time.time())
+    if not 0 <= args.release_number < 2**63:
+        raise PackagingError("release number must be a non-negative 63-bit integer")
     if args.target.startswith("Android."):
         if not _ANDROID_APPLICATION_ID.fullmatch(args.android_application_id):
             raise PackagingError("Android application ID is invalid")
@@ -429,6 +433,30 @@ def _release_tools(args: argparse.Namespace) -> tuple[Path, ...]:
     return (signing.kb_cli,) if signing.broker is None else (signing.kb_cli, signing.broker)
 
 
+def _content_version(version: str) -> str:
+    return re.sub(r"[^A-Za-z0-9._+-]", "-", version)[:64]
+
+
+def _sign_release(args: argparse.Namespace, stage: Path, job: Path) -> None:
+    """Writes the signed release manifest over the finished release directory and verifies it
+    against the trust anchor inside the staged player. Every file must be final by now: an
+    Authenticode signature changes the executable's bytes, so it has to come before this."""
+    signing: ReleaseSigning | None = getattr(args, "release_signing", None)
+    if signing is None:
+        return
+    command: list[Path | str] = [
+        "release", "sign",
+        "--dir", stage,
+        "--product", args.product_id,
+        "--content-version", _content_version(args.version),
+        "--release", str(args.release_number),
+    ]
+    if args.anti_rollback:
+        command.append("--anti-rollback")
+    _run_with_release_key(signing, job, command)
+    run_checked([signing.kb_cli, "release", "verify", stage], cwd=job, timeout_seconds=1800)
+
+
 def _stage_licenses(args: argparse.Namespace, stage: Path) -> None:
     """The license texts, notices and SBOM of every third-party component the target's player ships."""
     try:
@@ -486,6 +514,7 @@ def _stage_windows(args: argparse.Namespace, cmake: Path, pack: Path, stage: Pat
     _stage_licenses(args, stage)
     if destination.read_bytes()[:2] != b"MZ":
         raise PackagingError("Windows player does not contain a valid PE header")
+    _sign_release(args, stage, job)
     smoke = job / "windows-first-frame"
     copy_tree_exact(stage, smoke)
     try:
@@ -1613,6 +1642,8 @@ def _parse_arguments(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--signing-key", type=Path)
     parser.add_argument("--signing-broker", type=Path)
     parser.add_argument("--encrypt-pack", action="store_true")
+    parser.add_argument("--release-number", type=int)
+    parser.add_argument("--anti-rollback", action="store_true")
     parser.add_argument("--launch", action="store_true")
     parser.add_argument("--android-application-id", default="com.kbengine.game")
     parser.add_argument("--android-label")

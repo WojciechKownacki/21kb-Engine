@@ -3,6 +3,7 @@
 
 #include "engine/security/Crypto.hpp"
 #include "engine/security/ReleaseKeys.hpp"
+#include "engine/security/ReleaseManifest.hpp"
 
 #include <algorithm>
 #include <array>
@@ -306,6 +307,119 @@ void RunReleaseKeyMaterialTests() {
     std::filesystem::remove_all(root, fileError);
 }
 
+void WriteBytes(const std::filesystem::path& path, std::string_view text) {
+    std::filesystem::create_directories(path.parent_path());
+    std::ofstream output{ path, std::ios::binary | std::ios::trunc };
+    output << text;
+}
+
+[[nodiscard]] std::string SignedManifestFor(
+    const std::filesystem::path& root,
+    const kb::security::ReleaseSigningKey& key,
+    std::uint64_t release,
+    bool antiRollback) {
+    kb::security::ReleaseManifest manifest{};
+    manifest.productId = "Publisher.Game";
+    manifest.contentVersion = "1.2.0";
+    manifest.releaseNumber = release;
+    manifest.antiRollback = antiRollback;
+    std::string error;
+    Require(kb::security::BuildReleaseManifest(root, manifest, error), "a release manifest could not be built");
+    return kb::security::SignReleaseManifest(manifest, key);
+}
+
+// The release manifest is accepted only under its release key and only for its product; every
+// modified, missing or unlisted critical file is refused by name; anti-rollback refuses an older
+// release once a newer one has run.
+void RunReleaseManifestTests() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_engine_release_tests";
+    std::error_code fileError;
+    std::filesystem::remove_all(root, fileError);
+    const std::filesystem::path release = root / "Release";
+    WriteBytes(release / "Game.exe", "player bytes");
+    WriteBytes(release / "kb_plugin.dll", "plugin bytes");
+    WriteBytes(release / "Licenses" / "notice with spaces.txt", "license text");
+
+    kb::security::ReleaseSigningKey key;
+    kb::security::ReleaseSigningKey otherKey;
+    Require(kb::security::GenerateReleaseSigningKey(key) && kb::security::GenerateReleaseSigningKey(otherKey),
+        "release test keys could not be generated");
+    const std::string text = SignedManifestFor(release, key, 41U, false);
+    WriteBytes(release / "release.kbmanifest", text);
+
+    kb::security::ReleaseManifest parsed{};
+    Require(kb::security::ParseAndVerifyReleaseManifest(text, key.publicKey, parsed) == kb::security::ReleaseManifestStatus::Success &&
+            parsed.releaseNumber == 41U && parsed.files.size() == 3U &&
+            parsed.FindFile("Licenses/notice with spaces.txt") != nullptr,
+        "a signed release manifest must parse under its key");
+    Require(kb::security::ParseAndVerifyReleaseManifest(text, otherKey.publicKey, parsed) ==
+            kb::security::ReleaseManifestStatus::SignatureInvalid,
+        "a release manifest must be refused under another key");
+    std::string edited = text;
+    edited[edited.find("release 41") + 9U] = '9';
+    Require(kb::security::ParseAndVerifyReleaseManifest(edited, key.publicKey, parsed) ==
+            kb::security::ReleaseManifestStatus::SignatureInvalid,
+        "an edited release manifest must be refused");
+
+    Require(kb::security::VerifyReleaseDirectory(release, key.publicKey, "Publisher.Game").status ==
+            kb::security::ReleaseManifestStatus::Success,
+        "an intact release must verify");
+    Require(kb::security::VerifyReleaseDirectory(release, key.publicKey, "Publisher.Other").status ==
+            kb::security::ReleaseManifestStatus::ProductMismatch,
+        "a release of another product must be refused");
+    const std::array<std::filesystem::path, 1U> executable{ release / "Game.exe" };
+    Require(kb::security::VerifyInstalledRelease(release, key.publicKey, "Publisher.Game", executable).status ==
+            kb::security::ReleaseManifestStatus::Success,
+        "an intact installed release must pass the startup check");
+
+    // The same length, different bytes: only a hash notices.
+    WriteBytes(release / "Game.exe", "player bytez");
+    kb::security::ReleaseVerification modified =
+        kb::security::VerifyInstalledRelease(release, key.publicKey, "Publisher.Game", executable);
+    Require(modified.status == kb::security::ReleaseManifestStatus::FileModified && modified.detail == "Game.exe",
+        "a modified executable must be refused by name");
+    WriteBytes(release / "Game.exe", "player bytes");
+
+    WriteBytes(release / "version.dll", "planted");
+    modified = kb::security::VerifyInstalledRelease(release, key.publicKey, "Publisher.Game", executable);
+    Require(modified.status == kb::security::ReleaseManifestStatus::UnlistedFile && modified.detail == "version.dll",
+        "an unlisted native module beside the player must be refused");
+    std::filesystem::remove(release / "version.dll");
+
+    WriteBytes(release / "Licenses" / "notice with spaces.txt", "license text, edited");
+    Require(kb::security::VerifyInstalledRelease(release, key.publicKey, "Publisher.Game", executable).status ==
+                kb::security::ReleaseManifestStatus::Success &&
+            kb::security::VerifyReleaseDirectory(release, key.publicKey, "Publisher.Game").status ==
+                kb::security::ReleaseManifestStatus::FileModified,
+        "a modified non-critical file must pass the startup check and fail the full verification");
+    WriteBytes(release / "Licenses" / "notice with spaces.txt", "license text");
+    WriteBytes(release / "package.receipt.json", "{}");
+    const kb::security::ReleaseVerification extra = kb::security::VerifyReleaseDirectory(release, key.publicKey, "Publisher.Game");
+    Require(extra.status == kb::security::ReleaseManifestStatus::Success && extra.uncovered.size() == 1U &&
+            extra.uncovered.front() == "package.receipt.json",
+        "a non-critical file written after the manifest must be reported, not refused");
+    std::filesystem::remove(release / "kb_plugin.dll");
+    Require(kb::security::VerifyInstalledRelease(release, key.publicKey, "Publisher.Game", executable).status ==
+            kb::security::ReleaseManifestStatus::FileMissing,
+        "a missing native module must be refused");
+
+    kb::security::ReleaseManifest newer{};
+    newer.productId = "Publisher.Game";
+    newer.releaseNumber = 7U;
+    const std::filesystem::path state = root / "State";
+    Require(kb::security::EnforceReleaseAntiRollback(state, newer) == kb::security::ReleaseManifestStatus::Success,
+        "a first release must be recorded");
+    kb::security::ReleaseManifest older = newer;
+    older.releaseNumber = 6U;
+    Require(kb::security::EnforceReleaseAntiRollback(state, older) == kb::security::ReleaseManifestStatus::RolledBack,
+        "an older release must be refused after a newer one ran");
+    newer.releaseNumber = 8U;
+    Require(kb::security::EnforceReleaseAntiRollback(state, newer) == kb::security::ReleaseManifestStatus::Success &&
+            kb::security::EnforceReleaseAntiRollback(state, older) == kb::security::ReleaseManifestStatus::RolledBack,
+        "a newer release must raise the recorded floor");
+    std::filesystem::remove_all(root, fileError);
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -316,6 +430,7 @@ void RunSecurityTests() {
     RunAeadVectorTests();
     RunPrimitiveHelperTests();
     RunReleaseKeyMaterialTests();
+    RunReleaseManifestTests();
 }
 
 } // namespace kb::tests

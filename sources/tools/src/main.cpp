@@ -48,12 +48,18 @@ Commands:
                  sign --key <key file> [--content-key <file>] <pack.kbpack>
                  verify [--anchor <file> | --public-key <hex>
                         [--content-key <file>]] <pack.kbpack>
+  release      Sign the manifest of a finished release directory, or verify one
+               against the trust anchor of the player it ships.
+                 sign --key <key file> --dir <dir> --product <id>
+                      --content-version <version> --release <number>
+                      [--anti-rollback]
+                 verify [--anchor <file>] <dir>
 
 Scene paths may be physical (relative to the project root) or virtual
 ("/Game/Scenes/Main.21kbscene", requires --project).
 )";
 
-constexpr std::array<std::string_view, 3> kFlagNames{ "--disabled", "--quiet", "--update-baseline" };
+constexpr std::array<std::string_view, 4> kFlagNames{ "--anti-rollback", "--disabled", "--quiet", "--update-baseline" };
 
 } // namespace
 
@@ -111,6 +117,9 @@ int main(int argc, char** argv) {
     }
     if (command == "pack") {
         return kb::cli::RunPackCommand(arguments, io);
+    }
+    if (command == "release") {
+        return kb::cli::RunReleaseCommand(arguments, io);
     }
     if (command == "help" || command == "--help" || command == "-h") {
         std::cout << kUsage;

@@ -4,7 +4,9 @@
 #include "engine/assets/bake/AssetPackSeal.hpp"
 #include "engine/security/Crypto.hpp"
 #include "engine/security/ReleaseKeys.hpp"
+#include "engine/security/ReleaseManifest.hpp"
 
+#include <charconv>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -251,7 +253,104 @@ int RunPackVerify(const ArgumentList& arguments, CommandIo io) {
     return 0;
 }
 
+int RunReleaseSign(const ArgumentList& arguments, CommandIo io) {
+    const std::optional<std::string> directory = arguments.Option("--dir");
+    const std::optional<std::string> product = arguments.Option("--product");
+    const std::optional<std::string> version = arguments.Option("--content-version");
+    const std::optional<std::string> release = arguments.Option("--release");
+    if (!directory.has_value() || !product.has_value() || !version.has_value() || !release.has_value()) {
+        return Fail(io, "release sign expects --key <key file> --dir <release directory> --product <id> "
+                        "--content-version <version> --release <number> [--anti-rollback]");
+    }
+    kb::security::ReleaseManifest manifest{};
+    manifest.productId = *product;
+    manifest.contentVersion = *version;
+    manifest.antiRollback = arguments.Flag("--anti-rollback");
+    const auto [end, parseError] = std::from_chars(release->data(), release->data() + release->size(), manifest.releaseNumber);
+    if (parseError != std::errc{} || end != release->data() + release->size()) {
+        return Fail(io, "--release expects a non-negative whole number");
+    }
+    if (!kb::security::IsValidProductId(manifest.productId) || !kb::security::IsValidContentVersion(manifest.contentVersion)) {
+        return Fail(io, "product id or content version contains unsupported characters");
+    }
+    kb::security::ReleaseSigningKey key;
+    std::string error;
+    const std::filesystem::path root{ *directory };
+    if (!LoadSigningKey(arguments, key, error) || !kb::security::BuildReleaseManifest(root, manifest, error)) {
+        return Fail(io, error);
+    }
+    const std::string text = kb::security::SignReleaseManifest(manifest, key);
+    const std::filesystem::path out = root / std::filesystem::path{ kb::security::kReleaseManifestFileName };
+    if (!WriteNewTextFile(out, text, error)) {
+        return Fail(io, error);
+    }
+    io.out << "signed " << manifest.files.size() << " files of " << manifest.productId << ' ' << manifest.contentVersion
+           << " release " << manifest.releaseNumber << '\n';
+    return 0;
+}
+
+int RunReleaseVerify(const ArgumentList& arguments, CommandIo io) {
+    if (arguments.Positionals().size() != 2U) {
+        return Fail(io, "release verify expects [--anchor <file>] <release directory>");
+    }
+    const std::filesystem::path root{ arguments.Positionals()[1] };
+    kb::security::TrustAnchor anchor{};
+    std::string error;
+    if (const std::optional<std::string> anchorPath = arguments.Option("--anchor"); anchorPath.has_value()) {
+        std::string bytes;
+        if (!ReadSmallFile(*anchorPath, bytes, error) ||
+            !kb::security::DecodeTrustAnchor(
+                std::span{ reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size() }, anchor, error)) {
+            return Fail(io, error);
+        }
+    } else {
+        // The release key is the one the shipped player carries, not one the caller supplies.
+        bool found = false;
+        std::error_code iterationError;
+        for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator{ root, iterationError }) {
+            if (entry.path().extension() != ".exe") {
+                continue;
+            }
+            kb::security::TrustAnchorLookup lookup = kb::security::ReadTrustAnchorFromExecutable(entry.path());
+            if (lookup.state == kb::security::TrustAnchorLookup::State::Invalid) {
+                return Fail(io, entry.path().filename().string() + ": " + lookup.error);
+            }
+            if (lookup.state == kb::security::TrustAnchorLookup::State::Present) {
+                anchor = std::move(lookup.anchor);
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            return Fail(io, "no player in the release carries a trust anchor; pass --anchor <file>");
+        }
+    }
+    const kb::security::ReleaseVerification verification =
+        kb::security::VerifyReleaseDirectory(root, anchor.releaseKey, anchor.productId);
+    if (verification.status != kb::security::ReleaseManifestStatus::Success) {
+        return Fail(io, "release refused: " + std::string{ kb::security::ToString(verification.status) } +
+                (verification.detail.empty() ? std::string{} : " (" + verification.detail + ")"));
+    }
+    for (const std::string& file : verification.uncovered) {
+        io.out << "note: not covered by the release manifest: " << file << '\n';
+    }
+    io.out << "OK " << verification.manifest.productId << ' ' << verification.manifest.contentVersion << " release "
+           << verification.manifest.releaseNumber << ": " << verification.manifest.files.size() << " files verified\n";
+    return 0;
+}
+
 } // namespace
+
+int RunReleaseCommand(const ArgumentList& arguments, CommandIo io) {
+    const std::string action = arguments.Positionals().empty() ? std::string{} : arguments.Positionals().front();
+    if (action == "sign") {
+        return RunReleaseSign(arguments, io);
+    }
+    if (action == "verify") {
+        return RunReleaseVerify(arguments, io);
+    }
+    return Fail(io, "release expects sign or verify");
+}
 
 int RunKeysCommand(const ArgumentList& arguments, CommandIo io) {
     const std::string action = arguments.Positionals().empty() ? std::string{} : arguments.Positionals().front();

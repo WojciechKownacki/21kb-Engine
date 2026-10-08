@@ -117,7 +117,7 @@ void WriteProjectDescriptor(
     return text.substr(match, lineEnd == std::string::npos ? std::string::npos : lineEnd - match);
 }
 
-constexpr std::array<std::string_view, 3> kFlagNames{ "--disabled", "--quiet", "--update-baseline" };
+constexpr std::array<std::string_view, 4> kFlagNames{ "--anti-rollback", "--disabled", "--quiet", "--update-baseline" };
 
 struct CommandRun {
     int exitCode = 0;
@@ -2351,6 +2351,33 @@ void RunKeyAndPackCommandTests() {
     const CommandRun foreign = Run(&kb::cli::RunPackCommand, { "verify", "--anchor", otherAnchor, pack });
     Require(foreign.exitCode == 1 && Contains(foreign.output, "UntrustedSigner"),
         "pack verify accepted a pack signed by another key");
+
+    // release: the manifest of a finished directory verifies against the anchor, and a planted
+    // native module or a file of the wrong product is refused.
+    const std::filesystem::path release = root / "Release";
+    std::filesystem::create_directories(release / "Licenses", error);
+    std::filesystem::copy_file(pack, release / "Game.kbpack", error);
+    WriteTextFile(release / "Licenses" / "notice.txt", "notice");
+    const CommandRun signedRelease = Run(&kb::cli::RunReleaseCommand,
+        { "sign", "--key", key, "--dir", release.string(), "--product", "Example.Game", "--content-version", "1.0.0",
+          "--release", "3", "--anti-rollback" });
+    Require(signedRelease.exitCode == 0 && Contains(signedRelease.output, "signed 2 files"), "release sign failed");
+    const std::string manifestText = [&] {
+        std::ifstream input{ release / "release.kbmanifest", std::ios::binary };
+        return std::string{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+    }();
+    Require(Contains(manifestText, "anti-rollback 1") && Contains(manifestText, "seal ") &&
+            Contains(manifestText, "Licenses/notice.txt"),
+        "release sign did not record the policy, the pack seal and every file");
+    const CommandRun verifiedRelease = Run(&kb::cli::RunReleaseCommand, { "verify", "--anchor", anchor, release.string() });
+    Require(verifiedRelease.exitCode == 0 && Contains(verifiedRelease.output, "OK Example.Game 1.0.0 release 3"),
+        "release verify refused an intact release");
+    Require(Run(&kb::cli::RunReleaseCommand, { "verify", "--anchor", otherAnchor, release.string() }).exitCode == 1,
+        "release verify accepted a release under another key");
+    WriteTextFile(release / "evil.dll", "planted");
+    const CommandRun planted = Run(&kb::cli::RunReleaseCommand, { "verify", "--anchor", anchor, release.string() });
+    Require(planted.exitCode == 1 && Contains(planted.output, "UnlistedFile") && Contains(planted.output, "evil.dll"),
+        "release verify accepted a planted native module");
 
     std::filesystem::remove_all(root, error);
 }
