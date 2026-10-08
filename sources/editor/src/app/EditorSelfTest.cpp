@@ -55,6 +55,7 @@
 #include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneObject.hpp"
@@ -5575,6 +5576,100 @@ void RunPrefabInspectorSuite(Report& report) {
     report.Check(click(InspectorPropertyId::PrefabSelectRoot) && context.SelectedEntity() == lidOwner, "Select Root selects the instance root");
 }
 
+// A scene and prefab written by the engine from before prefab node ids (scene file version 40, kept in
+// tests/fixtures/prefab): its instances link to the prefab by name, it asks to be saved once, and saving
+// it writes the current format, which then opens clean and linked by node id.
+void RunLegacyPrefabSceneSuite(Report& report) {
+#if !defined(KB_EDITOR_ENGINE_ROOT)
+    report.Check(false, "Legacy prefab scene fixtures are reachable");
+#else
+    EditorSceneContext context;
+    const std::filesystem::path fixtures = std::filesystem::path{ KB_EDITOR_ENGINE_ROOT } / "sources/editor/tests/fixtures/prefab";
+    const std::filesystem::path scenePath = EditorProjectPaths::AssetsRoot() / "Scenes" / "LegacyPrefabs.21kbscene";
+    std::error_code error;
+    std::filesystem::create_directories(EditorProjectPaths::AssetsRoot() / "Prefabs", error);
+    std::filesystem::create_directories(scenePath.parent_path(), error);
+    bool copied = !error;
+    for (const auto& [file, folder] : { std::pair{ "LegacyCrate.kbprefab", "Prefabs" }, std::pair{ "LegacyPrefabs.21kbscene", "Scenes" }, std::pair{ "LegacyPrefabs.meta", "Scenes" } }) {
+        copied = std::filesystem::copy_file(fixtures / file, EditorProjectPaths::AssetsRoot() / folder / file, std::filesystem::copy_options::overwrite_existing, error) && copied;
+    }
+    report.Check(copied, "Copy the version 40 prefab scene fixture into the project");
+    const kb::scene::SceneDocumentLoadResult fixture = kb::scene::SceneDocumentService::Load(scenePath);
+    report.Check(fixture.succeeded && fixture.document.fileVersion == 40U && fixture.document.LinksPrefabInstancesByName(),
+        "The fixture is a version 40 scene that links its prefab instances by name");
+    static_cast<void>(context.Scene().Assets().Discover());
+
+    const auto childNamed = [&context](kb::scene::SceneEntity parent, std::string_view name) {
+        const kb::scene::Scene& scene = context.Scene();
+        if (!parent.IsValid()) {
+            for (const kb::scene::SceneEntity root : scene.Hierarchy().RootEntities()) {
+                if (scene.Entities().Name(root) == name) {
+                    return root;
+                }
+            }
+            return kb::scene::SceneEntity{};
+        }
+        for (std::size_t index = 0U; index < scene.Hierarchy().ChildCount(parent); ++index) {
+            const kb::scene::SceneEntity child = scene.Hierarchy().ChildAt(parent, index);
+            if (scene.Entities().Name(child) == name) {
+                return child;
+            }
+        }
+        return kb::scene::SceneEntity{};
+    };
+    const auto nodeOf = [&context](kb::scene::SceneEntity entity, kb::scene::ScenePrefabInstanceHandle instance) {
+        std::uint32_t nodeIndex = 0U;
+        return context.Scene().Prefabs().ContainingInstance(entity, nodeIndex) == instance ? static_cast<int>(nodeIndex) : -1;
+    };
+    const auto legacyWarnings = [&context]() {
+        return std::ranges::count_if(context.Console().Entries(), [](const EditorConsoleEntry& entry) {
+            return entry.level == EditorConsoleLevel::Warning && entry.message.find("saved by an older version") != std::string::npos;
+        });
+    };
+    // Both instances are linked, each object to its own prefab node, including the renamed Lid.
+    const auto requireLinked = [&](std::string_view when) {
+        const kb::scene::SceneEntity crateA = childNamed({}, "CrateA");
+        const kb::scene::SceneEntity crateB = childNamed({}, "CrateB");
+        const kb::scene::ScenePrefabInstanceHandle instanceA = context.Scene().Prefabs().RootInstance(crateA);
+        const kb::scene::ScenePrefabInstanceHandle instanceB = context.Scene().Prefabs().RootInstance(crateB);
+        report.Check(instanceA.IsValid() && instanceB.IsValid() &&
+                context.Scene().Prefabs().SourcePath(context.Scene().Prefabs().SourcePrefab(instanceB)).stem() == "LegacyCrate",
+            std::string{ when } + ": both crates are instances of LegacyCrate");
+        const kb::scene::SceneEntity lidB = childNamed(crateB, "BigLid");
+        report.Check(nodeOf(lidB, instanceB) == 1 && nodeOf(childNamed(lidB, "Hinge"), instanceB) == 2 && nodeOf(childNamed(crateB, "Handle"), instanceB) == 3,
+            std::string{ when } + ": the renamed BigLid and the other objects of CrateB link to their prefab nodes");
+        report.Check(nodeOf(childNamed(crateB, "Sticker"), instanceB) == -1, std::string{ when } + ": the child added to CrateB is not taken for a prefab node");
+        const kb::scene::ScenePrefabOverrideReport overridesB = context.Scene().Prefabs().Overrides(instanceB);
+        const bool renamed = std::ranges::any_of(overridesB.properties, [](const kb::scene::ScenePrefabPropertyOverride& property) {
+            return property.nodeIndex == 1U && property.propertyPath == "name" && property.value == "BigLid";
+        });
+        report.Check(renamed && context.Scene().Transforms().Get(lidB).localPosition.x == 2.0F,
+            std::string{ when } + ": CrateB keeps its rename and its moved Lid as overrides");
+        // CrateA differs from its prefab only by the name of its root.
+        report.Check(instanceA.IsValid() && std::ranges::all_of(context.Scene().Prefabs().Overrides(instanceA).properties, [](const kb::scene::ScenePrefabPropertyOverride& property) {
+                return property.nodeIndex == 0U && property.propertyPath == "name" && property.value == "CrateA";
+            }), std::string{ when } + ": CrateA has none of CrateB's changes");
+    };
+
+    report.Check(context.OpenScene(scenePath), "Open the version 40 prefab scene");
+    requireLinked("Opened version 40 scene");
+    report.Check(context.SceneDocumentDirty() && legacyWarnings() == 1, "A version 40 prefab scene asks to be saved once and says why");
+
+    report.Check(context.SaveCurrentScene() && !context.SceneDocumentDirty(), "Save the version 40 prefab scene");
+    const kb::scene::SceneDocumentLoadResult saved = kb::scene::SceneDocumentService::Load(scenePath);
+    const bool recordsNodeIds = saved.succeeded && std::ranges::any_of(saved.document.worldPrefab.Nodes(), [](const kb::scene::ScenePrefabNodeDesc& node) {
+        return node.name == "CrateB" && node.nestedPrefabNodeIds.size() == 5U;
+    });
+    report.Check(saved.succeeded && saved.document.fileVersion == kb::scene::SceneDocument::CurrentFileVersion &&
+            !saved.document.LinksPrefabInstancesByName() && recordsNodeIds,
+        "Saving writes the current format with each object's prefab node");
+
+    report.Check(context.OpenScene(scenePath), "Reopen the saved scene");
+    requireLinked("Reopened saved scene");
+    report.Check(!context.SceneDocumentDirty() && legacyWarnings() == 1, "The saved scene opens clean without asking again");
+#endif
+}
+
 void RunPrefabEditModeSuite(Report& report) {
     EditorSceneContext context;
     const auto findNamed = [&context](std::string_view name) {
@@ -6423,6 +6518,7 @@ int EditorSelfTest::Run(
     RunSuiteInScratch(report, "inspector_light_component", &RunInspectorLightComponentSuite);
     RunSuiteInScratch(report, "prefab_placement", &RunPrefabPlacementSuite);
     RunSuiteInScratch(report, "prefab_inspector", &RunPrefabInspectorSuite);
+    RunSuiteInScratch(report, "legacy_prefab_scene", &RunLegacyPrefabSceneSuite);
     RunSuiteInScratch(report, "prefab_edit_mode", &RunPrefabEditModeSuite);
     RunSuiteInScratch(report, "script_log", &RunScriptLogSuite);
     RunSuiteInScratch(report, "plugins", &RunPluginsPanelSuite);
