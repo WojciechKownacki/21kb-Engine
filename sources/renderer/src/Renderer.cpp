@@ -1100,7 +1100,6 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
             : RenderMaterialGraphShadingPath::Forward;
     sceneRenderer_->SetParticleVolumetricLowQuality(
         runtimeGraphContext.qualityLevel == RenderMaterialGraphQualityLevel::Low);
-    runtimeMaterialResolver_.SetGraphBuildContext(std::move(runtimeGraphContext));
     if (!lastRuntimeMaterialLightingPath_.has_value() ||
         *lastRuntimeMaterialLightingPath_ != effectiveLightingConfig.lightingPath ||
         !lastRuntimeMaterialDebugView_.has_value() ||
@@ -1122,6 +1121,7 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         lastRuntimeMaterialVariantUsage_ = runtimeGraphContext.variantUsage;
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport runtime material cache invalidated for lighting path/debug view change");
     }
+    runtimeMaterialResolver_.SetGraphBuildContext(std::move(runtimeGraphContext));
     WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport EnsureSceneResources begin");
     runtimeResourceCache_.EnsureSceneResources(RuntimeRenderResourceEnsureContext{
         .scene = const_cast<kb::scene::Scene&>(scene),
