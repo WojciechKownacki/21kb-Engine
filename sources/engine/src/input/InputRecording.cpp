@@ -236,8 +236,15 @@ InputAssetLoadResult<InputRecording> DecodeInputRecording(std::span<const std::u
         return InputAssetLoadResult<InputRecording>{.succeeded = false, .asset = {}, .error = "Unsupported input recording version"};
     }
 
+    // Every frame holds at least its delta, three counts, the pointer, focus and one flag
+    // per gamepad. A count the bytes after the header cannot hold is refused before a
+    // frame is made for it: the frames are large, and the count is only the file's claim.
+    constexpr std::size_t kHeaderBytes = 8U + sizeof(std::uint32_t) + sizeof(std::uint32_t);
+    constexpr std::size_t kMinimumFrameBytes =
+        sizeof(float) + (3U * sizeof(std::uint32_t)) + (2U * sizeof(float)) + 1U + InputDeviceState::kMaxGamepads;
     std::uint32_t frameCount = 0U;
-    if (!reader.ReadUInt32(frameCount) || frameCount > InputAssetFormat::MaxRecordingFrameCount) {
+    if (!reader.ReadUInt32(frameCount) || frameCount > InputAssetFormat::MaxRecordingFrameCount ||
+        frameCount > (bytes.size() - kHeaderBytes) / kMinimumFrameBytes) {
         return InputAssetLoadResult<InputRecording>{.succeeded = false, .asset = {}, .error = "Corrupt input recording payload"};
     }
 
