@@ -271,6 +271,8 @@ ScriptFunctionCallResult Write(const StoragePtr& storage, const ScriptFunctionCa
         return "TooLarge";
     case kb::save::SaveGameLoadStatus::IntegrityMismatch:
         return "IntegrityMismatch";
+    case kb::save::SaveGameLoadStatus::Tampered:
+        return "Tampered";
     }
     return "FileNotFound";
 }

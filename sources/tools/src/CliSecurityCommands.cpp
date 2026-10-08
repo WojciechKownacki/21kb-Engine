@@ -176,6 +176,7 @@ int RunKeysAnchor(const ArgumentList& arguments, CommandIo io) {
     kb::security::TrustAnchor anchor{};
     anchor.productId = *product;
     anchor.releaseKey = key.publicKey;
+    anchor.saveSecret = kb::security::DeriveGameSaveSecret(key, anchor.productId);
     if (!LoadContentKey(arguments, anchor.packContentKey, error)) {
         return Fail(io, error);
     }

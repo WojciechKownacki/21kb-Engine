@@ -9,6 +9,7 @@
 #include "engine/project/ParticleProjectPolicy.hpp"
 #include "engine/project/ProjectManager.hpp"
 #include "engine/project/ProjectSettings.hpp"
+#include "engine/save/SaveGameService.hpp"
 #include "engine/security/ReleaseKeys.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/Scene.hpp"
@@ -41,6 +42,7 @@
 #include <limits>
 #include <memory>
 #include <ostream>
+#include <span>
 #include <system_error>
 #include <utility>
 
@@ -126,7 +128,8 @@ namespace {
         return false;
     }
     kb::assets::bake::AssetPackTrust trust{};
-    if (!ResolvePackagedAssetPackTrust(kb::security::LoadExecutableTrustAnchor(), trust, err)) {
+    const kb::security::TrustAnchorLookup anchor = kb::security::LoadExecutableTrustAnchor();
+    if (!ResolvePackagedAssetPackTrust(anchor, trust, err)) {
         return false;
     }
     auto pack = std::make_shared<kb::assets::bake::RuntimeAssetPack>();
@@ -138,6 +141,10 @@ namespace {
     }
     if (!trust.requiredSigner.has_value() && pack->Seal() == nullptr) {
         err << "runtime package is not signed; this development player loads it unverified\n";
+    }
+    if (anchor.state == kb::security::TrustAnchorLookup::State::Present) {
+        ConfigurePackagedSaveIntegrity(
+            anchor.anchor, kb::security::DefaultUserSecurityRoot(anchor.anchor.productId), err);
     }
     return ReadMountedGameProjectRuntime(
         std::move(pack), packPath.parent_path(), sceneOverride, runtime, err);
@@ -162,6 +169,26 @@ bool ResolvePackagedAssetPackTrust(
     trust.requiredSigner = anchor.anchor.releaseKey;
     trust.contentKey = anchor.anchor.packContentKey;
     return true;
+}
+
+void ConfigurePackagedSaveIntegrity(
+    const kb::security::TrustAnchor& anchor,
+    const std::filesystem::path& securityRoot,
+    std::ostream& err) {
+    if (!anchor.saveSecret.has_value()) {
+        err << "this player's trust anchor carries no save secret; saves use the development key\n";
+        return;
+    }
+    kb::security::InstallationSecret installation;
+    std::string error;
+    std::span<const std::uint8_t> installationBytes;
+    if (kb::security::LoadOrCreateInstallationSecret(securityRoot, installation, error)) {
+        installationBytes = installation.Span();
+    } else {
+        err << "saves are not bound to this installation: " << error << '\n';
+    }
+    kb::save::SaveGameService::ConfigureIntegrity(
+        kb::save::DeriveSaveGameIntegrity(anchor.saveSecret->Span(), installationBytes));
 }
 
 void ReportRuntimePackageRefusal(

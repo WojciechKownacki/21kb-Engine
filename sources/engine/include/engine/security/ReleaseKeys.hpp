@@ -55,10 +55,19 @@ struct ReleaseSigningKey {
 [[nodiscard]] std::string EncodePackContentKey(const AeadKey& key);
 [[nodiscard]] bool DecodePackContentKey(std::string_view text, AeadKey& out, std::string& error);
 
+using GameSaveSecret = SecretBytes<32U>;
+using InstallationSecret = SecretBytes<32U>;
+
+// The per-game secret save files are authenticated with. Derived from the signing key and the
+// product id, so it stays the same for every release signed with the same key -- saves survive
+// updates -- and nobody without the key can compute it.
+[[nodiscard]] GameSaveSecret DeriveGameSaveSecret(const ReleaseSigningKey& key, std::string_view productId);
+
 struct TrustAnchor {
     std::string productId;
     Ed25519PublicKey releaseKey{};
     std::optional<AeadKey> packContentKey;
+    std::optional<GameSaveSecret> saveSecret;
 };
 
 [[nodiscard]] std::vector<std::uint8_t> EncodeTrustAnchor(const TrustAnchor& anchor);
@@ -85,6 +94,17 @@ struct TrustAnchorLookup {
 
 // The trust anchor embedded in another Windows executable on disk, for release tooling.
 [[nodiscard]] TrustAnchorLookup ReadTrustAnchorFromExecutable(const std::filesystem::path& executable);
+
+// Per-user directory a packaged player keeps its security state in (installation secret,
+// anti-rollback record): %LOCALAPPDATA%\21kb\<product> on Windows, $XDG_DATA_HOME/21kb/<product>
+// (or ~/.local/share/21kb/<product>) elsewhere. Empty when it cannot be determined.
+[[nodiscard]] std::filesystem::path DefaultUserSecurityRoot(std::string_view productId);
+
+// The random secret that binds saves to one installation, kept in `root`. Created on first use.
+[[nodiscard]] bool LoadOrCreateInstallationSecret(
+    const std::filesystem::path& root,
+    InstallationSecret& out,
+    std::string& error);
 
 // True when `path` lies inside a directory that holds a 21kb project or a version-control
 // working tree; private keys must never be written there.

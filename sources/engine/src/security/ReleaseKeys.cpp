@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <fstream>
+#include <iterator>
 #include <system_error>
 
 #if defined(_WIN32)
@@ -13,6 +15,8 @@
         #define NOMINMAX
     #endif
     #include <Windows.h>
+#else
+    #include <cstdlib>
 #endif
 
 namespace kb::security {
@@ -22,10 +26,17 @@ constexpr std::string_view kSigningKeyHeader = "21kb-release-signing-key 1";
 constexpr std::string_view kContentKeyHeader = "21kb-pack-content-key 1";
 constexpr std::array<std::uint8_t, 8U> kAnchorMagic{ '2', '1', 'K', 'B', 'T', 'R', 'S', 'T' };
 constexpr std::uint32_t kAnchorVersion = 1U;
+constexpr std::string_view kInstallationHeader = "21kb-installation-secret 1";
+constexpr std::string_view kSaveSecretSalt = "21KB-SAVE-SECRET-V1";
 constexpr std::uint32_t kAnchorHasContentKey = 1U << 0U;
-constexpr std::uint32_t kAnchorKnownFlags = kAnchorHasContentKey;
-// magic, version, flags, release key, content key, product id length
-constexpr std::size_t kAnchorFixedBytes = 8U + 4U + 4U + 32U + 32U + 2U;
+constexpr std::uint32_t kAnchorHasSaveSecret = 1U << 1U;
+constexpr std::uint32_t kAnchorKnownFlags = kAnchorHasContentKey | kAnchorHasSaveSecret;
+// magic, version, flags, release key, content key, save secret, product id length
+constexpr std::size_t kAnchorReleaseKeyOffset = 16U;
+constexpr std::size_t kAnchorContentKeyOffset = 48U;
+constexpr std::size_t kAnchorSaveSecretOffset = 80U;
+constexpr std::size_t kAnchorProductIdLengthOffset = 112U;
+constexpr std::size_t kAnchorFixedBytes = kAnchorProductIdLengthOffset + 2U;
 
 // Splits "line\nline\n" (or CRLF) into lines; a final newline is optional, blank lines are not.
 [[nodiscard]] std::vector<std::string_view> Lines(std::string_view text) {
@@ -138,6 +149,16 @@ bool DecodeReleaseSigningKey(std::string_view text, ReleaseSigningKey& out, std:
     return true;
 }
 
+GameSaveSecret DeriveGameSaveSecret(const ReleaseSigningKey& key, std::string_view productId) {
+    GameSaveSecret secret;
+    HkdfSha512(
+        secret.Span(),
+        key.seed.Span(),
+        std::span{ reinterpret_cast<const std::uint8_t*>(kSaveSecretSalt.data()), kSaveSecretSalt.size() },
+        std::span{ reinterpret_cast<const std::uint8_t*>(productId.data()), productId.size() });
+    return secret;
+}
+
 std::string EncodePackContentKey(const AeadKey& key) {
     std::string text{ kContentKeyHeader };
     text += "\nkey ";
@@ -158,12 +179,18 @@ bool DecodePackContentKey(std::string_view text, AeadKey& out, std::string& erro
 std::vector<std::uint8_t> EncodeTrustAnchor(const TrustAnchor& anchor) {
     std::vector<std::uint8_t> bytes(kAnchorMagic.begin(), kAnchorMagic.end());
     PutUInt32(bytes, kAnchorVersion);
-    PutUInt32(bytes, anchor.packContentKey.has_value() ? kAnchorHasContentKey : 0U);
+    PutUInt32(bytes, (anchor.packContentKey.has_value() ? kAnchorHasContentKey : 0U) |
+            (anchor.saveSecret.has_value() ? kAnchorHasSaveSecret : 0U));
     bytes.insert(bytes.end(), anchor.releaseKey.begin(), anchor.releaseKey.end());
     if (anchor.packContentKey.has_value()) {
         bytes.insert(bytes.end(), anchor.packContentKey->data(), anchor.packContentKey->data() + kAeadKeyBytes);
     } else {
         bytes.insert(bytes.end(), kAeadKeyBytes, 0U);
+    }
+    if (anchor.saveSecret.has_value()) {
+        bytes.insert(bytes.end(), anchor.saveSecret->data(), anchor.saveSecret->data() + GameSaveSecret::size());
+    } else {
+        bytes.insert(bytes.end(), GameSaveSecret::size(), 0U);
     }
     bytes.push_back(static_cast<std::uint8_t>(anchor.productId.size() & 0xFFU));
     bytes.push_back(static_cast<std::uint8_t>((anchor.productId.size() >> 8U) & 0xFFU));
@@ -181,7 +208,8 @@ bool DecodeTrustAnchor(std::span<const std::uint8_t> bytes, TrustAnchor& out, st
         return false;
     }
     const std::uint32_t flags = GetUInt32(bytes, 12U);
-    const std::size_t productIdBytes = static_cast<std::size_t>(bytes[80U]) | (static_cast<std::size_t>(bytes[81U]) << 8U);
+    const std::size_t productIdBytes = static_cast<std::size_t>(bytes[kAnchorProductIdLengthOffset]) |
+        (static_cast<std::size_t>(bytes[kAnchorProductIdLengthOffset + 1U]) << 8U);
     if ((flags & ~kAnchorKnownFlags) != 0U || bytes.size() != kAnchorFixedBytes + productIdBytes) {
         error = "embedded trust anchor is malformed";
         return false;
@@ -192,10 +220,14 @@ bool DecodeTrustAnchor(std::span<const std::uint8_t> bytes, TrustAnchor& out, st
         error = "embedded trust anchor names an invalid product id";
         return false;
     }
-    std::copy_n(bytes.begin() + 16, kEd25519PublicKeyBytes, anchor.releaseKey.begin());
+    std::copy_n(bytes.begin() + kAnchorReleaseKeyOffset, kEd25519PublicKeyBytes, anchor.releaseKey.begin());
     if ((flags & kAnchorHasContentKey) != 0U) {
         anchor.packContentKey.emplace();
-        std::copy_n(bytes.begin() + 48, kAeadKeyBytes, anchor.packContentKey->data());
+        std::copy_n(bytes.begin() + kAnchorContentKeyOffset, kAeadKeyBytes, anchor.packContentKey->data());
+    }
+    if ((flags & kAnchorHasSaveSecret) != 0U) {
+        anchor.saveSecret.emplace();
+        std::copy_n(bytes.begin() + kAnchorSaveSecretOffset, GameSaveSecret::size(), anchor.saveSecret->data());
     }
     out = std::move(anchor);
     return true;
@@ -226,6 +258,79 @@ TrustAnchorLookup ReadTrustAnchorFromExecutable(const std::filesystem::path& exe
     static_cast<void>(executable);
     return TrustAnchorLookup{};
 #endif
+}
+
+std::filesystem::path DefaultUserSecurityRoot(std::string_view productId) {
+    if (!IsValidProductId(productId)) {
+        return {};
+    }
+#if defined(_WIN32)
+    const DWORD required = GetEnvironmentVariableW(L"LOCALAPPDATA", nullptr, 0U);
+    if (required <= 1U) {
+        return {};
+    }
+    std::wstring buffer(required, L'\0');
+    const DWORD length = GetEnvironmentVariableW(L"LOCALAPPDATA", buffer.data(), required);
+    if (length == 0U || length >= required) {
+        return {};
+    }
+    buffer.resize(length);
+    return std::filesystem::path{ buffer } / "21kb" / std::filesystem::path{ productId };
+#else
+    if (const char* data = std::getenv("XDG_DATA_HOME"); data != nullptr && data[0] == '/') {
+        return std::filesystem::path{ data } / "21kb" / std::filesystem::path{ productId };
+    }
+    if (const char* home = std::getenv("HOME"); home != nullptr && home[0] == '/') {
+        return std::filesystem::path{ home } / ".local" / "share" / "21kb" / std::filesystem::path{ productId };
+    }
+    return {};
+#endif
+}
+
+bool LoadOrCreateInstallationSecret(const std::filesystem::path& root, InstallationSecret& out, std::string& error) {
+    if (root.empty()) {
+        error = "no per-user storage is available for the installation secret";
+        return false;
+    }
+    const std::filesystem::path path = root / "installation.secret";
+    std::error_code fileError;
+    if (std::filesystem::exists(path, fileError)) {
+        std::ifstream input{ path, std::ios::binary };
+        std::string text{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+        const std::vector<std::string_view> lines = Lines(text);
+        const bool decoded = lines.size() == 2U && lines[0] == kInstallationHeader && ReadHexField(lines[1], "secret", out.Span());
+        SecureWipe(std::span{ reinterpret_cast<std::uint8_t*>(text.data()), text.size() });
+        if (!decoded) {
+            error = "the installation secret is damaged: " + path.string();
+        }
+        return decoded;
+    }
+    if (!SecureRandom(out.Span())) {
+        error = "the system random number generator is unavailable";
+        return false;
+    }
+    std::filesystem::create_directories(root, fileError);
+    std::string text = std::string{ kInstallationHeader } + "\nsecret " + ToHex(out.Span()) + '\n';
+    const std::filesystem::path temporary = root / "installation.secret.tmp";
+    bool written = false;
+    {
+        std::ofstream output{ temporary, std::ios::binary | std::ios::trunc };
+        output << text;
+        written = output.good();
+    }
+    SecureWipe(std::span{ reinterpret_cast<std::uint8_t*>(text.data()), text.size() });
+#if !defined(_WIN32)
+    std::filesystem::permissions(temporary, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write,
+        std::filesystem::perm_options::replace, fileError);
+#endif
+    if (written) {
+        std::filesystem::rename(temporary, path, fileError);
+        written = !fileError;
+    }
+    if (!written) {
+        error = "the installation secret could not be written to " + root.string();
+    }
+    return written;
 }
 
 bool IsInsideProjectOrRepository(const std::filesystem::path& path) {

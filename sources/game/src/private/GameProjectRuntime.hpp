@@ -24,6 +24,7 @@ enum class RuntimeAssetPackStatus : std::uint8_t;
 }
 
 namespace kb::security {
+struct TrustAnchor;
 struct TrustAnchorLookup;
 }
 
@@ -112,6 +113,14 @@ inline constexpr std::string_view kPackagedGameFileName = "Game.kbpack";
 [[nodiscard]] bool ResolvePackagedAssetPackTrust(
     const kb::security::TrustAnchorLookup& anchor,
     kb::assets::bake::AssetPackTrust& trust,
+    std::ostream& err);
+
+// Authenticates this player's save files with the per-game secret of its trust anchor and the
+// per-installation secret kept in `securityRoot` (created on first run). Without a usable
+// installation secret saves are still bound to the game, and a warning says so.
+void ConfigurePackagedSaveIntegrity(
+    const kb::security::TrustAnchor& anchor,
+    const std::filesystem::path& securityRoot,
     std::ostream& err);
 
 // One line naming why a runtime asset pack was refused, in words a player can act on.

@@ -2,10 +2,13 @@
 #include "TestSuites.hpp"
 
 #include "engine/security/Crypto.hpp"
+#include "engine/security/ReleaseKeys.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <span>
 #include <string>
 #include <string_view>
@@ -234,6 +237,75 @@ void RunPrimitiveHelperTests() {
         "hex parsing must refuse a wrong length or a non-hex digit");
 }
 
+// Key files, trust anchors and the installation secret round-trip exactly, and a damaged one is
+// refused instead of being read as something else.
+void RunReleaseKeyMaterialTests() {
+    kb::security::ReleaseSigningKey key;
+    Require(kb::security::GenerateReleaseSigningKey(key), "a release signing key must be generated");
+    std::string error;
+    kb::security::ReleaseSigningKey decoded;
+    Require(kb::security::DecodeReleaseSigningKey(kb::security::EncodeReleaseSigningKey(key), decoded, error) &&
+            decoded.publicKey == key.publicKey,
+        "a release signing key file must round-trip");
+    std::string damaged = kb::security::EncodeReleaseSigningKey(key);
+    damaged[damaged.find("seed ") + 5U] = damaged[damaged.find("seed ") + 5U] == '0' ? '1' : '0';
+    Require(!kb::security::DecodeReleaseSigningKey(damaged, decoded, error) && error.find("damaged") != std::string::npos,
+        "a key file whose seed no longer matches its public key must be refused");
+
+    kb::security::TrustAnchor anchor{};
+    anchor.productId = "Publisher.Game";
+    anchor.releaseKey = key.publicKey;
+    anchor.saveSecret = kb::security::DeriveGameSaveSecret(key, anchor.productId);
+    anchor.packContentKey.emplace();
+    Require(kb::security::SecureRandom(anchor.packContentKey->Span()), "a content key must be generated");
+    const std::vector<std::uint8_t> bytes = kb::security::EncodeTrustAnchor(anchor);
+    kb::security::TrustAnchor read{};
+    Require(kb::security::DecodeTrustAnchor(bytes, read, error) && read.productId == anchor.productId &&
+            read.releaseKey == anchor.releaseKey && read.saveSecret.has_value() && read.packContentKey.has_value() &&
+            kb::security::ConstantTimeEqual(read.saveSecret->Span(), anchor.saveSecret->Span()) &&
+            kb::security::ConstantTimeEqual(read.packContentKey->Span(), anchor.packContentKey->Span()),
+        "a trust anchor must round-trip every field");
+    std::vector<std::uint8_t> truncated = bytes;
+    truncated.pop_back();
+    Require(!kb::security::DecodeTrustAnchor(truncated, read, error), "a truncated trust anchor must be refused");
+    std::vector<std::uint8_t> unknownFlag = bytes;
+    unknownFlag[12] |= 0x80U;
+    Require(!kb::security::DecodeTrustAnchor(unknownFlag, read, error), "a trust anchor with an unknown flag must be refused");
+
+    // The save secret is a stable function of key and product, and nothing else.
+    Require(kb::security::ConstantTimeEqual(kb::security::DeriveGameSaveSecret(key, "Publisher.Game").Span(),
+                anchor.saveSecret->Span()) &&
+            !kb::security::ConstantTimeEqual(kb::security::DeriveGameSaveSecret(key, "Publisher.Other").Span(),
+                anchor.saveSecret->Span()),
+        "the game save secret must be stable per key and product");
+    Require(kb::security::IsValidProductId("Publisher.Game-1_x") && !kb::security::IsValidProductId(".hidden") &&
+            !kb::security::IsValidProductId("a/b") && !kb::security::IsValidProductId(std::string(129U, 'a')),
+        "product ids must be portable file names");
+
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_engine_security_tests";
+    std::error_code fileError;
+    std::filesystem::remove_all(root, fileError);
+    kb::security::InstallationSecret first;
+    kb::security::InstallationSecret second;
+    Require(kb::security::LoadOrCreateInstallationSecret(root, first, error) &&
+            kb::security::LoadOrCreateInstallationSecret(root, second, error) &&
+            kb::security::ConstantTimeEqual(first.Span(), second.Span()),
+        "the installation secret must be created once and then read back");
+    {
+        std::ofstream output{ root / "installation.secret", std::ios::binary | std::ios::trunc };
+        output << "21kb-installation-secret 1\nsecret zz\n";
+    }
+    Require(!kb::security::LoadOrCreateInstallationSecret(root, second, error) && error.find("damaged") != std::string::npos,
+        "a damaged installation secret must be refused, not replaced");
+
+    std::filesystem::create_directories(root / "Project" / "Keys", fileError);
+    { std::ofstream project{ root / "Project" / "Project.21kbproject" }; }
+    Require(kb::security::IsInsideProjectOrRepository(root / "Project" / "Keys" / "game.kbkey") &&
+            !kb::security::IsInsideProjectOrRepository(root / "Keys" / "game.kbkey"),
+        "a key path inside a project must be recognised");
+    std::filesystem::remove_all(root, fileError);
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -243,6 +315,7 @@ void RunSecurityTests() {
     RunSha512VectorTests();
     RunAeadVectorTests();
     RunPrimitiveHelperTests();
+    RunReleaseKeyMaterialTests();
 }
 
 } // namespace kb::tests
