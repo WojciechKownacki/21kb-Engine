@@ -740,6 +740,7 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
 
     add_executable(kb_renderer_tests
         tests/RendererTests.cpp
+        tests/AssetImportCatalogCoverageTests.cpp
         tests/SceneLightGridTests.cpp
         tests/SceneLightGridGpuTests.cpp
         tests/RendererTestSupport.hpp
@@ -785,6 +786,7 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
     target_compile_definitions(kb_renderer_tests
         PRIVATE
             KB_TEST_AUDIO_ASSET_DIR="${CMAKE_SOURCE_DIR}/sources/plugins/audio_miniaudio/tests/assets"
+            KB_RENDERER_TEST_SOURCE_ROOT="${CMAKE_SOURCE_DIR}"
     )
 
     # The file-to-pixel particle test loads the real particle provider as a module.
