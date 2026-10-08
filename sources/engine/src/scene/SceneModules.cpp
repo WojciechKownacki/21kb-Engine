@@ -13,6 +13,7 @@
 #include "engine/scene/SceneLoadedContent.hpp"
 #include "engine/scene/SceneLocalization.hpp"
 #include "engine/scene/SceneMaterialInstances.hpp"
+#include "engine/scene/SceneNavigation.hpp"
 #include "engine/scene/SceneParticleSystems.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
@@ -90,6 +91,14 @@ SceneLocalization Scene::Localization() noexcept {
 
 SceneLocalization Scene::Localization() const noexcept {
     return SceneLocalization{ const_cast<Scene&>(*this) };
+}
+
+SceneNavigation Scene::Navigation() noexcept {
+    return SceneNavigation{ *this };
+}
+
+SceneNavigation Scene::Navigation() const noexcept {
+    return SceneNavigation{ const_cast<Scene&>(*this) };
 }
 
 SceneTimers Scene::Timers() noexcept {

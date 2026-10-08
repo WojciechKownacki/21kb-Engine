@@ -219,11 +219,19 @@ private:
     std::array<float, kNavAreaCount> areaCosts_{};
 };
 
+// Key of the directed edge from -> to in a blocked-edge list.
+[[nodiscard]] constexpr std::uint64_t NavEdgeKey(std::uint32_t from, std::uint32_t to) noexcept {
+    return (std::uint64_t{ from } << 32U) | std::uint64_t{ to };
+}
+
 // LIB-184 synchronous graph query. Start/goal are node indices rather than
 // arbitrary world positions because projection onto authored polygons belongs
 // to the NavMesh baking/import layer. Dijkstra (rather than an unchecked
-// heuristic) makes area-cost routing deterministic and exact.
-[[nodiscard]] inline NavPath FindNavPath(const NavMesh& mesh, std::uint32_t start, std::uint32_t goal, const NavQueryFilter& filter) {
+// heuristic) makes area-cost routing deterministic and exact. `blockedEdges`
+// holds NavEdgeKey values in ascending order; those edges are not walked (an
+// obstacle standing on them).
+[[nodiscard]] inline NavPath FindNavPath(const NavMesh& mesh, std::uint32_t start, std::uint32_t goal, const NavQueryFilter& filter,
+    std::span<const std::uint64_t> blockedEdges) {
     if (start >= mesh.nodes.size() || goal >= mesh.nodes.size() || !filter.Allows(mesh.nodes[start].area) || !filter.Allows(mesh.nodes[goal].area)) return {};
     const std::size_t count = mesh.nodes.size();
     const float infinity = std::numeric_limits<float>::infinity();
@@ -239,6 +247,7 @@ private:
         if (current == goal) break;
         for (const std::uint32_t next : mesh.nodes[current].neighbours) {
             if (next >= count || !filter.Allows(mesh.nodes[next].area)) continue;
+            if (!blockedEdges.empty() && std::binary_search(blockedEdges.begin(), blockedEdges.end(), NavEdgeKey(current, next))) continue;
             const float edge = kb::math::Distance(mesh.nodes[current].position, mesh.nodes[next].position) * filter.AreaCost(mesh.nodes[next].area);
             const float candidate = cost + edge;
             if (candidate < distances[next] || (candidate == distances[next] && current < previous[next])) {
@@ -251,6 +260,10 @@ private:
     for (std::uint32_t node = goal;; node = previous[node]) { result.corners.push_back(mesh.nodes[node].position); if (node == start) break; }
     std::reverse(result.corners.begin(), result.corners.end());
     return result;
+}
+
+[[nodiscard]] inline NavPath FindNavPath(const NavMesh& mesh, std::uint32_t start, std::uint32_t goal, const NavQueryFilter& filter) {
+    return FindNavPath(mesh, start, goal, filter, {});
 }
 
 // Owns one worker request. The worker receives value snapshots, never a Scene

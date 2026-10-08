@@ -30,5 +30,6 @@ void RunTimelineRuntimeTests();
 void RunLocalizationTests();
 void RunUITextLineBreakingTests();
 void RunCrashReportConsentTests();
+void RunNavigationRuntimeTests();
 
 } // namespace kb::tests
