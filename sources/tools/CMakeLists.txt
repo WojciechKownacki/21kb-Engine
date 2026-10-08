@@ -5,6 +5,7 @@ add_library(kb_cli_core STATIC
     src/CliMcpCommand.cpp
     src/CliRunCommand.cpp
     src/CliSceneCommands.cpp
+    src/CliSecurityCommands.cpp
     src/CliValidateCommand.cpp
     src/private/CliCommands.hpp
     src/private/CliCommon.hpp

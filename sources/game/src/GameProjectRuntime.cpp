@@ -9,6 +9,7 @@
 #include "engine/project/ParticleProjectPolicy.hpp"
 #include "engine/project/ProjectManager.hpp"
 #include "engine/project/ProjectSettings.hpp"
+#include "engine/security/ReleaseKeys.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
@@ -124,19 +125,66 @@ namespace {
         err << "runtime host has no valid package target identity\n";
         return false;
     }
+    kb::assets::bake::AssetPackTrust trust{};
+    if (!ResolvePackagedAssetPackTrust(kb::security::LoadExecutableTrustAnchor(), trust, err)) {
+        return false;
+    }
     auto pack = std::make_shared<kb::assets::bake::RuntimeAssetPack>();
     const kb::assets::bake::RuntimeAssetPackStatus status =
-        pack->Mount(packPath, targetProfile);
+        pack->Mount(packPath, targetProfile, kb::assets::bake::AssetPackAccess::Ranged, trust);
     if (status != kb::assets::bake::RuntimeAssetPackStatus::Success) {
-        err << "runtime package could not be mounted: "
-            << kb::assets::bake::ToString(status) << '\n';
+        ReportRuntimePackageRefusal(*pack, status, err);
         return false;
+    }
+    if (!trust.requiredSigner.has_value() && pack->Seal() == nullptr) {
+        err << "runtime package is not signed; this development player loads it unverified\n";
     }
     return ReadMountedGameProjectRuntime(
         std::move(pack), packPath.parent_path(), sceneOverride, runtime, err);
 }
 
 } // namespace
+
+bool ResolvePackagedAssetPackTrust(
+    const kb::security::TrustAnchorLookup& anchor,
+    kb::assets::bake::AssetPackTrust& trust,
+    std::ostream& err) {
+    trust = {};
+    switch (anchor.state) {
+    case kb::security::TrustAnchorLookup::State::Absent:
+        return true;
+    case kb::security::TrustAnchorLookup::State::Invalid:
+        err << "this player's embedded trust anchor is damaged: " << anchor.error << '\n';
+        return false;
+    case kb::security::TrustAnchorLookup::State::Present:
+        break;
+    }
+    trust.requiredSigner = anchor.anchor.releaseKey;
+    trust.contentKey = anchor.anchor.packContentKey;
+    return true;
+}
+
+void ReportRuntimePackageRefusal(
+    const kb::assets::bake::RuntimeAssetPack& pack,
+    kb::assets::bake::RuntimeAssetPackStatus status,
+    std::ostream& err) {
+    err << "runtime package could not be mounted: " << kb::assets::bake::ToString(status);
+    if (status == kb::assets::bake::RuntimeAssetPackStatus::ContainerRejected) {
+        using kb::assets::bake::AssetPackReadStatus;
+        const AssetPackReadStatus container = pack.ContainerStatus();
+        err << " (" << kb::assets::bake::ToString(container) << ')';
+        if (container == AssetPackReadStatus::Unsigned || container == AssetPackReadStatus::UntrustedSigner ||
+            container == AssetPackReadStatus::SignatureInvalid || container == AssetPackReadStatus::SealCorrupt) {
+            err << ": this game only loads content signed with its release key, and this package is "
+                << (container == AssetPackReadStatus::Unsigned ? "not signed" :
+                    container == AssetPackReadStatus::UntrustedSigner ? "signed by a different key" : "modified");
+        } else if (container == AssetPackReadStatus::ContentKeyMissing ||
+            container == AssetPackReadStatus::ContentKeyMismatch) {
+            err << ": the package is encrypted for a different build of this game";
+        }
+    }
+    err << '\n';
+}
 
 bool ReadMountedGameProjectRuntime(
     std::shared_ptr<kb::assets::bake::RuntimeAssetPack> pack,
@@ -313,6 +361,13 @@ bool ReadGameProjectRuntime(
         return ReadPackagedGameProjectRuntime(packageCandidate, sceneOverride, runtime, err);
     }
     pathError.clear();
+
+    // A packaged player runs only the signed package it shipped with; loose project content
+    // would bypass every check the package path makes.
+    if (kb::security::LoadExecutableTrustAnchor().state != kb::security::TrustAnchorLookup::State::Absent) {
+        err << "this packaged game only runs its signed package; loose project content is refused\n";
+        return false;
+    }
 
     std::filesystem::path projectFile = absoluteInput;
     if (std::filesystem::is_directory(absoluteInput, pathError) && !pathError) {

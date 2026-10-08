@@ -168,6 +168,18 @@ std::string_view ToString(AssetPackReadStatus status) noexcept {
         return "BlockNotFound";
     case AssetPackReadStatus::NotMounted:
         return "NotMounted";
+    case AssetPackReadStatus::SealCorrupt:
+        return "SealCorrupt";
+    case AssetPackReadStatus::SignatureInvalid:
+        return "SignatureInvalid";
+    case AssetPackReadStatus::Unsigned:
+        return "Unsigned";
+    case AssetPackReadStatus::UntrustedSigner:
+        return "UntrustedSigner";
+    case AssetPackReadStatus::ContentKeyMissing:
+        return "ContentKeyMissing";
+    case AssetPackReadStatus::ContentKeyMismatch:
+        return "ContentKeyMismatch";
     }
     return "Unknown";
 }

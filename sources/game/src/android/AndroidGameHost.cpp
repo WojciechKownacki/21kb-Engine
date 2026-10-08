@@ -14,6 +14,7 @@
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneUI.hpp"
+#include "engine/security/ReleaseKeys.hpp"
 #include "engine/script/ScriptModule.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 #include "kb/render/DisplayConfig.hpp"
@@ -120,6 +121,33 @@ void ResetAndroidTextInputState(GameActivity* activity) noexcept {
     GameActivity_setTextInputState(activity, &empty);
 }
 
+// The trust anchor packaging stores beside the pack inside the signed APK. A development APK
+// built without one runs as a development player.
+[[nodiscard]] kb::security::TrustAnchorLookup ReadAndroidTrustAnchor(AAssetManager* manager) {
+    kb::security::TrustAnchorLookup lookup{};
+    const std::string assetName{ kb::security::kTrustAnchorAssetName };
+    AAsset* const asset = AAssetManager_open(manager, assetName.c_str(), AASSET_MODE_BUFFER);
+    if (asset == nullptr) {
+        return lookup;
+    }
+    lookup.state = kb::security::TrustAnchorLookup::State::Invalid;
+    const off64_t length = AAsset_getLength64(asset);
+    std::vector<std::uint8_t> bytes;
+    if (length > 0 && length <= 4096) {
+        bytes.resize(static_cast<std::size_t>(length));
+        if (AAsset_read(asset, bytes.data(), bytes.size()) != static_cast<int>(bytes.size())) {
+            bytes.clear();
+        }
+    }
+    AAsset_close(asset);
+    if (kb::security::DecodeTrustAnchor(bytes, lookup.anchor, lookup.error)) {
+        lookup.state = kb::security::TrustAnchorLookup::State::Present;
+    } else if (lookup.error.empty()) {
+        lookup.error = "the trust anchor asset could not be read";
+    }
+    return lookup;
+}
+
 class AndroidAssetMapping {
 public:
     AndroidAssetMapping() = default;
@@ -157,7 +185,7 @@ public:
         const long pageSize = getpagesize();
         const bool validRange = pageSize > 0 && assetOffset >= 0 && assetLength > 0 &&
             static_cast<std::uint64_t>(assetLength) <=
-                kb::assets::bake::kMaxAssetPackBytes &&
+                kb::assets::bake::kMaxAssetPackBytes + kb::assets::bake::kMaxAssetPackSealBytes &&
             static_cast<std::uint64_t>(assetLength) <=
                 static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max());
         if (!validRange) {
@@ -336,16 +364,20 @@ public:
             return false;
         }
         targetProfileId_.assign(profile.identifier);
+        kb::assets::bake::AssetPackTrust trust{};
+        std::ostringstream trustError;
+        if (!kb::game::ResolvePackagedAssetPackTrust(
+                ReadAndroidTrustAnchor(app_.activity->assetManager), trust, trustError)) {
+            LogError(trustError.str());
+            return false;
+        }
         pack_ = std::make_shared<kb::assets::bake::RuntimeAssetPack>();
         const kb::assets::bake::RuntimeAssetPackStatus mountStatus =
-            pack_->MountMemory(packMapping_.Bytes(), profile);
+            pack_->MountMemory(packMapping_.Bytes(), profile, trust);
         if (mountStatus != kb::assets::bake::RuntimeAssetPackStatus::Success) {
-            __android_log_print(
-                ANDROID_LOG_ERROR,
-                kLogTag.data(),
-                "asset pack mount failed: %.*s",
-                static_cast<int>(kb::assets::bake::ToString(mountStatus).size()),
-                kb::assets::bake::ToString(mountStatus).data());
+            std::ostringstream refusal;
+            kb::game::ReportRuntimePackageRefusal(*pack_, mountStatus, refusal);
+            LogError(refusal.str());
             return false;
         }
         std::string providerError;

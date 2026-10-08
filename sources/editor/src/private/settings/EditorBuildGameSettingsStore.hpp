@@ -31,6 +31,9 @@ struct EditorBuildGameSettings {
     std::string linuxEngineRoot;
     std::string linuxDisplay = ":0";
     std::filesystem::path linuxIdentity;
+    // Release signing key file (kb_cli keys generate). Empty: packaging uses the per-product
+    // key it keeps in the user's profile. Never a path inside the project.
+    std::filesystem::path releaseSigningKey;
     std::array<EditorBuildGameTargetSettings, 6> targets{};
 
     [[nodiscard]] EditorBuildGameTargetSettings& For(kb::packaging::PackagingTarget target);

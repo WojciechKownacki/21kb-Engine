@@ -66,6 +66,7 @@ struct EditorPackageRequest {
     std::string version;
     std::string executableName;
     std::filesystem::path applicationIcon;
+    std::filesystem::path releaseSigningKey;
     std::string androidApplicationId;
     std::uint32_t androidVersionCode = 1U;
     std::string androidLabel;

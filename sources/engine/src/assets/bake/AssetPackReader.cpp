@@ -79,7 +79,7 @@ AssetPackReadStatus AssetPackReader::ReadRange(std::uint64_t offset, std::uint64
     return AssetPackReadStatus::Success;
 }
 
-AssetPackReadStatus AssetPackReader::Mount(const std::filesystem::path& path, AssetPackAccess access) {
+AssetPackReadStatus AssetPackReader::Mount(const std::filesystem::path& path, AssetPackAccess access, const AssetPackTrust& trust) {
     Unmount();
 
     path_ = store::Normalize(path);
@@ -90,7 +90,7 @@ AssetPackReadStatus AssetPackReader::Mount(const std::filesystem::path& path, As
     if (sizeError) {
         return AssetPackReadStatus::Unreadable;
     }
-    if (sizeOnDisk > kMaxAssetPackBytes) {
+    if (sizeOnDisk > kMaxAssetPackBytes + kMaxAssetPackSealBytes) {
         return AssetPackReadStatus::PackTooLarge;
     }
     if (sizeOnDisk < kAssetPackHeaderBytes) {
@@ -117,12 +117,12 @@ AssetPackReadStatus AssetPackReader::Mount(const std::filesystem::path& path, As
         }
     }
 
-    return ValidateAndFinishMount();
+    return ValidateAndFinishMount(trust);
 }
 
-AssetPackReadStatus AssetPackReader::MountMemory(std::span<const std::uint8_t> bytes) {
+AssetPackReadStatus AssetPackReader::MountMemory(std::span<const std::uint8_t> bytes, const AssetPackTrust& trust) {
     Unmount();
-    if (bytes.size() > kMaxAssetPackBytes) {
+    if (bytes.size() > kMaxAssetPackBytes + kMaxAssetPackSealBytes) {
         return AssetPackReadStatus::PackTooLarge;
     }
     if (bytes.size() < kAssetPackHeaderBytes) {
@@ -131,10 +131,41 @@ AssetPackReadStatus AssetPackReader::MountMemory(std::span<const std::uint8_t> b
 
     borrowedBytes_ = bytes;
     fileBytes_ = static_cast<std::uint64_t>(bytes.size());
-    return ValidateAndFinishMount();
+    return ValidateAndFinishMount(trust);
 }
 
-AssetPackReadStatus AssetPackReader::ValidateAndFinishMount() {
+AssetPackReadStatus AssetPackReader::VerifySeal(
+    std::span<const std::uint8_t> header,
+    std::span<const std::uint8_t> index,
+    std::span<const std::uint8_t> fragments,
+    std::span<const std::uint8_t> seal,
+    const AssetPackTrust& trust) {
+    AssetPackSeal decoded{};
+    if (const AssetPackReadStatus status = DecodeAssetPackSeal(seal, decoded); status != AssetPackReadStatus::Success) {
+        return status;
+    }
+    if (trust.requiredSigner.has_value() && *trust.requiredSigner != decoded.signer) {
+        return AssetPackReadStatus::UntrustedSigner;
+    }
+    sealDigest_ = AssetPackSealMessage(header, index, fragments, seal.first(seal.size() - kb::security::kEd25519SignatureBytes));
+    if (!kb::security::Ed25519Verify(decoded.signature, decoded.signer, sealDigest_)) {
+        return AssetPackReadStatus::SignatureInvalid;
+    }
+    if (decoded.encrypted) {
+        if (!trust.contentKey.has_value()) {
+            return AssetPackReadStatus::ContentKeyMissing;
+        }
+        if (!kb::security::ConstantTimeEqual(AssetPackContentKeyId(*trust.contentKey), decoded.contentKeyId)) {
+            return AssetPackReadStatus::ContentKeyMismatch;
+        }
+        contentKey_ = trust.contentKey;
+    }
+    sealTrusted_ = trust.requiredSigner.has_value();
+    seal_ = std::move(decoded);
+    return AssetPackReadStatus::Success;
+}
+
+AssetPackReadStatus AssetPackReader::ValidateAndFinishMount(const AssetPackTrust& trust) {
     std::vector<std::uint8_t> headerBytes;
     if (const AssetPackReadStatus status = ReadRange(0U, kAssetPackHeaderBytes, headerBytes);
         status != AssetPackReadStatus::Success) {
@@ -147,11 +178,34 @@ AssetPackReadStatus AssetPackReader::ValidateAndFinishMount() {
         return status;
     }
     // The pack says how long it is. A file that is shorter has been truncated; a file that is
-    // longer is not the file this header was written for, and either way every offset below
-    // was computed against a length that is not the one on disk.
-    if (header_.fileBytes != fileBytes_) {
+    // longer is not the file this header was written for -- unless what follows is a seal --
+    // and either way every offset below was computed against a length that is not the one on
+    // disk.
+    std::vector<std::uint8_t> sealBytes;
+    if (header_.fileBytes > fileBytes_) {
         Unmount();
         return AssetPackReadStatus::SizeMismatch;
+    }
+    if (header_.fileBytes < fileBytes_) {
+        const std::uint64_t sealLength = fileBytes_ - header_.fileBytes;
+        if (sealLength > kMaxAssetPackSealBytes || sealLength < kAssetPackSealMagic.size()) {
+            Unmount();
+            return AssetPackReadStatus::SizeMismatch;
+        }
+        if (const AssetPackReadStatus status = ReadRange(header_.fileBytes, sealLength, sealBytes);
+            status != AssetPackReadStatus::Success) {
+            Unmount();
+            return status;
+        }
+        if (!std::equal(kAssetPackSealMagic.begin(), kAssetPackSealMagic.end(), sealBytes.begin())) {
+            Unmount();
+            return AssetPackReadStatus::SizeMismatch;
+        }
+        // From here on the pack is what the header accounts for; the seal is not a block.
+        fileBytes_ = header_.fileBytes;
+    } else if (trust.requiredSigner.has_value()) {
+        Unmount();
+        return AssetPackReadStatus::Unsigned;
     }
 
     std::vector<std::uint8_t> indexBytes;
@@ -164,6 +218,14 @@ AssetPackReadStatus AssetPackReader::ValidateAndFinishMount() {
     if (header_.fragmentCount != 0U) {
         if (const AssetPackReadStatus status =
                 ReadRange(header_.fragmentIndexOffset, header_.fragmentIndexBytes, fragmentBytes);
+            status != AssetPackReadStatus::Success) {
+            Unmount();
+            return status;
+        }
+    }
+    // The signature is checked over the raw catalogue before a single index entry is decoded.
+    if (!sealBytes.empty()) {
+        if (const AssetPackReadStatus status = VerifySeal(headerBytes, indexBytes, fragmentBytes, sealBytes, trust);
             status != AssetPackReadStatus::Success) {
             Unmount();
             return status;
@@ -208,6 +270,16 @@ AssetPackReadStatus AssetPackReader::ValidateAndFinishMount() {
         if (ranges[index].first < ranges[index - 1U].second) {
             Unmount();
             return AssetPackReadStatus::IndexCorrupt;
+        }
+    }
+    // A seal names every block of the pack, in file order, and nothing else.
+    if (seal_.has_value()) {
+        const bool matches = seal_->entries.size() == ranges.size() &&
+            std::ranges::equal(seal_->entries, ranges, {}, &AssetPackSealEntry::offset,
+                &std::pair<std::uint64_t, std::uint64_t>::first);
+        if (!matches) {
+            Unmount();
+            return AssetPackReadStatus::SealCorrupt;
         }
     }
 
@@ -263,6 +335,10 @@ void AssetPackReader::Unmount() noexcept {
     borrowedBytes_ = {};
     artifacts_.clear();
     fragments_.clear();
+    seal_.reset();
+    sealDigest_ = {};
+    contentKey_.reset();
+    sealTrusted_ = false;
     header_ = AssetPackHeader{};
     path_.clear();
     fileBytes_ = 0U;
@@ -308,6 +384,23 @@ AssetPackReadStatus AssetPackReader::ReadBlock(const AssetPackArtifactEntry& art
     const AssetPackReadStatus readStatus = ReadRange(block->offset, block->storedBytes, out);
     if (readStatus != AssetPackReadStatus::Success) {
         return readStatus;
+    }
+    if (seal_.has_value()) {
+        // The stored bytes are checked before anything is decrypted.
+        const auto entry = std::ranges::lower_bound(seal_->entries, block->offset, {}, &AssetPackSealEntry::offset);
+        if (entry == seal_->entries.end() || entry->offset != block->offset ||
+            !kb::security::ConstantTimeEqual(kb::security::Sha512(out), entry->storedDigest)) {
+            out.clear();
+            return AssetPackReadStatus::PayloadCorrupt;
+        }
+        if (seal_->encrypted &&
+            !kb::security::AeadDecryptInPlace(out, entry->tag, *contentKey_, AssetPackBlockNonce(seal_->salt, block->offset), {})) {
+            out.clear();
+            return AssetPackReadStatus::PayloadCorrupt;
+        }
+        if (sealTrusted_) {
+            return AssetPackReadStatus::Success;
+        }
     }
     if (HashBakeDigest(out) != block->payloadDigest) {
         out.clear();

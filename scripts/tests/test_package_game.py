@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import re
+import shutil
 import stat
 import sys
 import tarfile
@@ -20,7 +22,12 @@ import package_linux_guest  # noqa: E402
 import package_contract  # noqa: E402
 from package_contract import PackagingError, seal_unit  # noqa: E402
 import third_party_notices  # noqa: E402
-from windows_pe_resources import _version_resource, _version_tuple  # noqa: E402
+from windows_pe_resources import (  # noqa: E402
+    TRUST_ANCHOR_RESOURCE_ID,
+    _version_resource,
+    _version_tuple,
+    apply_windows_resources,
+)
 
 
 def seal_with_first_frame(root: Path, fields: dict[str, object]) -> None:
@@ -157,6 +164,161 @@ class PackageGameTests(unittest.TestCase):
             output_option = command.index("--runtime-modules-output")
             self.assertEqual(job / "cook" / "RuntimeModules", command[output_option + 1])
             self.assertEqual(job / "cook" / "Game.kbpack", pack)
+
+    @staticmethod
+    def _signing_args(root: Path, **overrides: object) -> argparse.Namespace:
+        values: dict[str, object] = {
+            "build_root": root / "build",
+            "configuration": "Release",
+            "engine_root": root / "engine",
+            "target": "Windows.x64",
+            "product_id": "Publisher.Game",
+            "signing_key": None,
+            "signing_broker": None,
+            "encrypt_pack": False,
+        }
+        values.update(overrides)
+        return argparse.Namespace(**values)
+
+    def test_pack_is_sealed_with_a_default_key_kept_outside_the_project(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_text:
+            root = Path(temporary_text)
+            job = root / "job"
+            job.mkdir()
+            kb_cli = root / "kb_cli.exe"
+            args = self._signing_args(root, encrypt_pack=True)
+            with mock.patch.dict(package_game.os.environ, {"KB_RELEASE_KEY_ROOT": str(root / "keys")}), \
+                    mock.patch.object(package_game, "_build_targets") as build, \
+                    mock.patch.object(package_game, "_build_tool_path", return_value=kb_cli), \
+                    mock.patch.object(package_game, "emit_diagnostic") as diagnostic, \
+                    mock.patch.object(package_game, "run_checked") as run:
+                package_game._sign_pack(args, Path("cmake.exe"), job / "Game.kbpack", job)
+
+            key = root / "keys" / "Publisher.Game.kbkey"
+            self.assertEqual(("kb_cli",), build.call_args.args[3])
+            commands = [[str(value) for value in call.args[0]] for call in run.call_args_list]
+            self.assertEqual([str(kb_cli), "keys", "generate", "--out", str(key)], commands[0])
+            self.assertEqual("Warning", diagnostic.call_args.args[0])
+            self.assertIn("Back it up", diagnostic.call_args.args[1])
+            self.assertEqual(["keys", "content-key"], commands[1][1:3])
+            content_key = str(job / "pack-content.key")
+            self.assertEqual(
+                [str(kb_cli), "pack", "sign", "--content-key", content_key, str(job / "Game.kbpack"), "--key", str(key)],
+                commands[2],
+            )
+            self.assertEqual(
+                [str(kb_cli), "keys", "anchor", "--product", "Publisher.Game", "--content-key", content_key,
+                 "--out", str(job / "trust-anchor.bin"), "--key", str(key)],
+                commands[3],
+            )
+            self.assertEqual(
+                [str(kb_cli), "pack", "verify", "--anchor", str(job / "trust-anchor.bin"), str(job / "Game.kbpack")],
+                commands[4],
+            )
+            self.assertEqual(job / "trust-anchor.bin", args.trust_anchor)
+            self.assertEqual((kb_cli,), package_game._release_tools(args))
+
+    def test_release_signing_broker_runs_key_operations_without_exposing_the_key(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_text:
+            root = Path(temporary_text)
+            job = root / "job"
+            job.mkdir()
+            kb_cli = root / "kb_cli.exe"
+            broker = root / "broker.exe"
+            requests: list[dict[str, object]] = []
+
+            def run(arguments: list[object], **_kwargs: object) -> object:
+                argv = [str(value) for value in arguments]
+                if argv[0] == str(broker):
+                    request = json.loads(Path(argv[argv.index("--request") + 1]).read_text(encoding="utf-8"))
+                    requests.append(request)
+                    Path(argv[argv.index("--response") + 1]).write_text(
+                        json.dumps({"schema": 1, "session": request["session"], "succeeded": True}), encoding="utf-8"
+                    )
+                else:
+                    self.assertNotIn("--key", argv)
+                return mock.MagicMock()
+
+            args = self._signing_args(root, signing_broker=broker)
+            with mock.patch.object(package_game, "_build_targets"), \
+                    mock.patch.object(package_game, "_build_tool_path", return_value=kb_cli), \
+                    mock.patch.object(package_game, "run_checked", side_effect=run):
+                package_game._sign_pack(args, Path("cmake.exe"), job / "Game.kbpack", job)
+
+            self.assertEqual(2, len(requests))
+            self.assertEqual("kbReleaseSigning", requests[0]["kind"])
+            self.assertIsNone(requests[0]["key"])
+            self.assertEqual(["pack", "sign", str(job / "Game.kbpack")], requests[0]["arguments"])
+            self.assertEqual("keys", requests[1]["arguments"][0])
+            self.assertEqual((kb_cli, broker), package_game._release_tools(args))
+
+            def refuse(arguments: list[object], **_kwargs: object) -> object:
+                argv = [str(value) for value in arguments]
+                if argv[0] == str(broker):
+                    Path(argv[argv.index("--response") + 1]).write_text('{"schema": 1}', encoding="utf-8")
+                return mock.MagicMock()
+
+            with mock.patch.object(package_game, "_build_targets"), \
+                    mock.patch.object(package_game, "_build_tool_path", return_value=kb_cli), \
+                    mock.patch.object(package_game, "run_checked", side_effect=refuse):
+                with self.assertRaisesRegex(PackagingError, "broker refused"):
+                    package_game._sign_pack(args, Path("cmake.exe"), job / "Game.kbpack", job)
+
+    def test_default_product_id_is_a_portable_name(self) -> None:
+        self.assertEqual("Acme-Studio.My-Game", package_game._default_product_id("Acme Studio", "My Game!"))
+        self.assertEqual("game", package_game._default_product_id("!!", "??"))
+        self.assertTrue(package_game._PRODUCT_ID.fullmatch(package_game._default_product_id("x" * 100, "y" * 100)))
+
+    def test_trust_anchor_resource_id_matches_the_engine(self) -> None:
+        header = (SCRIPTS.parent / "sources/engine/include/engine/security/ReleaseKeys.hpp").read_text(encoding="utf-8")
+        match = re.search(r"kTrustAnchorResourceId = (\d+)U;", header)
+        self.assertIsNotNone(match)
+        self.assertEqual(int(match.group(1)), TRUST_ANCHOR_RESOURCE_ID)
+
+    @unittest.skipUnless(sys.platform == "win32", "PE resources are written with the Windows resource API")
+    def test_windows_player_carries_the_trust_anchor_resource(self) -> None:
+        import ctypes
+        from ctypes import wintypes
+
+        with tempfile.TemporaryDirectory() as temporary_text:
+            player = Path(temporary_text) / "Player.exe"
+            shutil.copy2(sys.executable, player)
+            anchor = b"21KBTRST" + bytes(range(90))
+            apply_windows_resources(
+                player,
+                product_name="Game",
+                publisher="Publisher",
+                version="1.0.0",
+                executable_name="Player",
+                development=False,
+                icon=None,
+                trust_anchor=anchor,
+            )
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.LoadLibraryExW.argtypes = [wintypes.LPCWSTR, wintypes.HANDLE, wintypes.DWORD]
+            kernel32.LoadLibraryExW.restype = wintypes.HMODULE
+            kernel32.FindResourceW.argtypes = [wintypes.HMODULE, wintypes.LPCWSTR, wintypes.LPCWSTR]
+            kernel32.FindResourceW.restype = wintypes.HANDLE
+            kernel32.SizeofResource.argtypes = [wintypes.HMODULE, wintypes.HANDLE]
+            kernel32.LoadResource.argtypes = [wintypes.HMODULE, wintypes.HANDLE]
+            kernel32.LoadResource.restype = wintypes.HANDLE
+            kernel32.LockResource.argtypes = [wintypes.HANDLE]
+            kernel32.LockResource.restype = ctypes.c_void_p
+            kernel32.FreeLibrary.argtypes = [wintypes.HMODULE]
+            module = kernel32.LoadLibraryExW(str(player), None, 0x00000002 | 0x00000020)
+            self.assertTrue(module)
+            try:
+                resource = kernel32.FindResourceW(
+                    module,
+                    ctypes.cast(ctypes.c_void_p(TRUST_ANCHOR_RESOURCE_ID), wintypes.LPCWSTR),
+                    ctypes.cast(ctypes.c_void_p(10), wintypes.LPCWSTR),
+                )
+                self.assertTrue(resource)
+                size = kernel32.SizeofResource(module, resource)
+                data = kernel32.LockResource(kernel32.LoadResource(module, resource))
+                self.assertEqual(anchor, ctypes.string_at(data, size))
+            finally:
+                kernel32.FreeLibrary(module)
 
     def test_linux_result_archive_rejects_parent_traversal(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_text:
@@ -777,6 +939,7 @@ class PackageGameTests(unittest.TestCase):
                     mock.patch.object(package_game, "_engine_fingerprint", return_value="e" * 64), \
                     mock.patch.object(package_game, "_ensure_host_tools", return_value=(Path("cooker"), Path("validator"))), \
                     mock.patch.object(package_game, "_cook", return_value=Path("Game.kbpack")), \
+                    mock.patch.object(package_game, "_sign_pack"), \
                     mock.patch.object(package_game, "_stage_target", return_value=stage_result), \
                     mock.patch.object(package_game, "_receipt", return_value={"target": args.target}), \
                     mock.patch.object(package_game, "seal_unit", side_effect=PackagingError("seal failed")), \
@@ -819,6 +982,7 @@ class PackageGameTests(unittest.TestCase):
                     mock.patch.object(package_game, "_engine_fingerprint", return_value="e" * 64), \
                     mock.patch.object(package_game, "_ensure_host_tools", return_value=(Path("cooker"), Path("validator"))), \
                     mock.patch.object(package_game, "_cook", return_value=Path("Game.kbpack")), \
+                    mock.patch.object(package_game, "_sign_pack"), \
                     mock.patch.object(package_game, "_stage_target", return_value=stage_result), \
                     mock.patch.object(package_game, "_receipt", return_value={"target": args.target}), \
                     mock.patch.object(package_game, "seal_unit"), \

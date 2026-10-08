@@ -1,0 +1,98 @@
+#pragma once
+
+#include "engine/assets/bake/AssetPack.hpp"
+#include "engine/security/Crypto.hpp"
+
+#include <array>
+#include <cstdint>
+#include <filesystem>
+#include <optional>
+#include <span>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace kb::security {
+struct ReleaseSigningKey;
+}
+
+// The SEAL of an asset pack: an Ed25519 signature over the pack's catalogue and over a SHA-512
+// of every block, appended after the bytes the pack header accounts for.
+//
+//     +0                    the unsigned pack, exactly header.fileBytes long, untouched
+//     +header.fileBytes     seal: fixed part, one entry per block (ascending offset), signature
+//
+// The signature covers the raw 256-byte header, the artifact index, the fragment index and the
+// seal itself, so a reader checks it at mount from bytes it reads anyway -- before it decodes a
+// single index entry. Each block's SHA-512 is checked whenever that block is read, so a mount
+// never has to stream the whole pack and a block is never hashed twice: a modified byte anywhere
+// a reader can reach is refused, at mount for the catalogue and at read for a payload.
+//
+// Sealing can also ENCRYPT every block in place with XChaCha20-Poly1305. The nonce is the seal's
+// random salt followed by the block's offset, so it is unique per block and per seal; the block's
+// Poly1305 tag is kept in its seal entry, which leaves every offset and length of the unsigned
+// layout unchanged. The digest in the entry is of the stored (encrypted) bytes, so tampering is
+// refused before anything is decrypted. The index stays readable: it carries only names, sizes
+// and digests, and the browser host fetches it with one range request.
+namespace kb::assets::bake {
+
+inline constexpr std::string_view kAssetPackSealMagic = "21KBSEAL";
+inline constexpr std::uint32_t kAssetPackSealVersion = 1U;
+inline constexpr std::uint64_t kAssetPackSealFixedBytes = 96U;
+inline constexpr std::uint64_t kAssetPackSealEntryBytes = 8U + kb::security::kSha512Bytes + kb::security::kAeadTagBytes;
+// Room for an entry per block of the largest index a reader accepts.
+inline constexpr std::uint64_t kMaxAssetPackSealBytes = 128ULL * 1024ULL * 1024ULL;
+
+struct AssetPackSealEntry {
+    std::uint64_t offset = 0U;
+    kb::security::Sha512Digest storedDigest{};
+    kb::security::AeadTag tag{};
+};
+
+struct AssetPackSeal {
+    bool encrypted = false;
+    kb::security::Ed25519PublicKey signer{};
+    std::array<std::uint8_t, 16U> salt{};
+    // Identifies the content key without revealing it, so a reader holding the wrong key says
+    // so at mount instead of failing on the first block.
+    std::array<std::uint8_t, 16U> contentKeyId{};
+    std::vector<AssetPackSealEntry> entries;
+    kb::security::Ed25519Signature signature{};
+};
+
+// What a reader demands of a pack at mount.
+struct AssetPackTrust {
+    // When set, the pack must be sealed by exactly this key: an unsigned pack is Unsigned, a
+    // pack sealed by any other key is UntrustedSigner. When unset, a seal is still verified
+    // against the key it names, which proves it intact but not who made it.
+    std::optional<kb::security::Ed25519PublicKey> requiredSigner;
+    // Decrypts the blocks of an encrypted pack.
+    std::optional<kb::security::AeadKey> contentKey;
+};
+
+[[nodiscard]] std::vector<std::uint8_t> EncodeAssetPackSeal(const AssetPackSeal& seal);
+// Refuses a seal whose length is not exactly what its entry count implies, whose entries are
+// not strictly ascending, or that carries a reserved bit.
+[[nodiscard]] AssetPackReadStatus DecodeAssetPackSeal(std::span<const std::uint8_t> bytes, AssetPackSeal& out);
+
+// The 64-byte message the seal's signature is made over.
+[[nodiscard]] kb::security::Sha512Digest AssetPackSealMessage(
+    std::span<const std::uint8_t> header,
+    std::span<const std::uint8_t> artifactIndex,
+    std::span<const std::uint8_t> fragmentIndex,
+    std::span<const std::uint8_t> sealWithoutSignature);
+
+[[nodiscard]] std::array<std::uint8_t, 16U> AssetPackContentKeyId(const kb::security::AeadKey& key);
+[[nodiscard]] kb::security::AeadNonce AssetPackBlockNonce(
+    const std::array<std::uint8_t, 16U>& salt, std::uint64_t blockOffset) noexcept;
+
+// Seals the unsigned pack at `path`: verifies every block against its index digest, encrypts
+// the blocks when `contentKey` is given, appends the signed seal, and replaces the file only
+// once the sealed copy is complete. A pack that is already sealed is refused.
+[[nodiscard]] bool SealAssetPack(
+    const std::filesystem::path& path,
+    const kb::security::ReleaseSigningKey& key,
+    const kb::security::AeadKey* contentKey,
+    std::string& error);
+
+} // namespace kb::assets::bake
