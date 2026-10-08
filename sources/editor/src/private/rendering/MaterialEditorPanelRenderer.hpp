@@ -2587,12 +2587,36 @@ inline MaterialGraphCanvasDocumentBuildResult MaterialEditorPanelBuildInteractiv
     return result;
 }
 
+// Tells apart graphs shown in one document view by what the canvas draws: each node's identity, kind and place
+// and each link's ends. A graph's address cannot: callers pass short-lived copies, and another graph can later
+// sit at the same address.
+[[nodiscard]] inline std::uint64_t MaterialEditorPanelGraphFingerprint(const kb::render::RenderMaterialGraphDocument& graph) noexcept {
+    std::uint64_t hash = 0xCBF29CE484222325ULL;
+    const auto fold = [&hash](std::uint64_t value) noexcept {
+        hash ^= value + 0x9E3779B97F4A7C15ULL + (hash << 6U) + (hash >> 2U);
+    };
+    for (const kb::render::RenderMaterialGraphNode& node : graph.nodes) {
+        fold(node.id);
+        fold(static_cast<std::uint64_t>(node.kind));
+        fold(static_cast<std::uint32_t>(node.positionX));
+        fold(static_cast<std::uint32_t>(node.positionY));
+    }
+    for (const kb::render::RenderMaterialGraphLink& link : graph.links) {
+        fold(link.fromNodeId);
+        fold(link.fromPinId);
+        fold(link.toNodeId);
+        fold(link.toPinId);
+    }
+    fold(graph.comments.size());
+    return hash;
+}
+
 struct MaterialEditorPanelGraphCanvasCacheEntry {
     bool valid = false;
     std::uint64_t signature = 0U;
     std::uint64_t assetId = 0U;
     RECT content{};
-    const void* graph = nullptr;
+    std::uint64_t graphFingerprint = 0U;
     std::size_t nodeCount = 0U;
     std::size_t linkCount = 0U;
     MaterialGraphCanvasDocumentBuildResult result;
@@ -2605,10 +2629,11 @@ inline const MaterialGraphCanvasDocumentBuildResult& MaterialEditorPanelBuildInt
     kb::assets::AssetId assetId) {
     thread_local MaterialEditorPanelGraphCanvasCacheEntry cache;
     const std::uint64_t signature = sceneContext.MaterialGraphViewSignature(assetId);
+    const std::uint64_t fingerprint = MaterialEditorPanelGraphFingerprint(graph);
     const bool hit = cache.valid &&
         cache.signature == signature &&
         cache.assetId == assetId.value &&
-        cache.graph == static_cast<const void*>(&graph) &&
+        cache.graphFingerprint == fingerprint &&
         cache.nodeCount == graph.nodes.size() &&
         cache.linkCount == graph.links.size() &&
         cache.content.left == content.left && cache.content.top == content.top &&
@@ -2620,7 +2645,7 @@ inline const MaterialGraphCanvasDocumentBuildResult& MaterialEditorPanelBuildInt
     cache.signature = signature;
     cache.assetId = assetId.value;
     cache.content = content;
-    cache.graph = static_cast<const void*>(&graph);
+    cache.graphFingerprint = fingerprint;
     cache.nodeCount = graph.nodes.size();
     cache.linkCount = graph.links.size();
     cache.valid = true;
