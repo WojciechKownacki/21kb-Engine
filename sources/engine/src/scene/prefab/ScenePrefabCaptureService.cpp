@@ -106,11 +106,20 @@ ScenePrefab ScenePrefabCaptureService::CaptureRoots(Scene& scene, std::span<cons
     ScenePrefab prefab;
     std::vector<SceneEntity> capturedEntities;
 
+    // Reserved once for every root: reserving per root grows the node list by exactly one root each time,
+    // which copies every node captured so far once per root.
+    std::vector<SceneObject> capturable;
+    capturable.reserve(roots.size());
+    std::size_t nodeCount = 0U;
     for (const SceneObject root : roots) {
-        if (!ScenePrefabCaptureValidator::CanCapture(scene, root)) {
-            continue;
+        if (ScenePrefabCaptureValidator::CanCapture(scene, root)) {
+            capturable.push_back(root);
+            nodeCount += ScenePrefabHierarchyCounter::Count(root, settings);
         }
-        prefab.Reserve(prefab.NodeCount() + ScenePrefabHierarchyCounter::Count(root, settings));
+    }
+    prefab.Reserve(nodeCount);
+    capturedEntities.reserve(nodeCount);
+    for (const SceneObject root : capturable) {
         ScenePrefabCaptureTraversal::Append(scene, root, settings, prefab, ScenePrefabNodeDesc::NoParent, capturedEntities);
     }
     ResolveEntityReferences(prefab, capturedEntities);
