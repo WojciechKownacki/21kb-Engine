@@ -69,6 +69,7 @@ add_library(kb_engine STATIC
     include/engine/platform/SettingsTransaction.hpp
     include/engine/platform/PlatformAdapters.hpp
     include/engine/platform/PlatformLocale.hpp
+    include/engine/security/Crypto.hpp
     include/engine/project/ProjectDescriptorMeta.hpp
     include/engine/project/ProjectDescriptorReader.hpp
     include/engine/project/ProjectDescriptorWriter.hpp
@@ -656,6 +657,7 @@ add_library(kb_engine STATIC
     src/network/NetworkObject.cpp
     src/platform/FileSystemPath.cpp
     src/platform/UserStorage.cpp
+    src/security/Crypto.cpp
     src/network/ReplicationSchema.cpp
     src/network/Rpc.cpp
     src/gameplay/GameFlow.cpp
@@ -1534,7 +1536,7 @@ if(WIN32)
         src/platform/win32/Win32InputKeyMap.cpp
         src/platform/win32/Win32XInputHapticsBackend.cpp
     )
-    target_link_libraries(kb_engine PRIVATE user32 xinput)
+    target_link_libraries(kb_engine PRIVATE user32 xinput bcrypt)
 endif()
 
 if(NOT WIN32)
@@ -1553,6 +1555,7 @@ target_link_libraries(kb_engine
     PRIVATE
         flecs::flecs_static
         kb_lua
+        kb_monocypher
         kb_ufbx
 )
 
@@ -1717,6 +1720,7 @@ if(BUILD_TESTING)
         tests/EngineModuleTests.cpp
         tests/EngineLibraryTests.cpp
         tests/EngineMathTests.cpp
+        tests/SecurityTests.cpp
     )
 
     target_link_libraries(kb_engine_tests

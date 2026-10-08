@@ -499,6 +499,7 @@ def main() -> int:
                 "jolt.txt": engine / "third_party/jolt/LICENSE",
                 "lua.txt": engine / "third_party/licenses/lua-5.4.8.txt",
                 "miniaudio.txt": engine / "third_party/miniaudio/LICENSE",
+                "monocypher.txt": engine / "third_party/licenses/monocypher-4.0.2.txt",
                 "ufbx.txt": engine / "third_party/ufbx/LICENSE",
             }
             for name, source in license_sources.items():
@@ -506,7 +507,7 @@ def main() -> int:
                     raise GuestError(f"required license is missing: {source}")
                 shutil.copy2(source, licenses / name)
             (stage / "THIRD_PARTY_NOTICES.txt").write_text(
-                "This product includes bgfx, bx, bimg, Flecs, Jolt Physics, Lua, miniaudio and ufbx.\n"
+                "This product includes bgfx, bx, bimg, Flecs, Jolt Physics, Lua, miniaudio, Monocypher and ufbx.\n"
                 "Their license texts are included in the Licenses directory.\n",
                 encoding="utf-8",
                 newline="\n",

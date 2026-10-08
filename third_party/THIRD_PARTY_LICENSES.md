@@ -80,6 +80,19 @@ substantial portions of the software.
 Jolt Physics copyright and permission notices must be included in all copies or
 substantial portions of the software.
 
+## Monocypher
+
+- Website: https://monocypher.org
+- Release: `4.0.2`, fetched by CMake from
+  `https://monocypher.org/download/monocypher-4.0.2.tar.gz` at a pinned SHA-256
+- Files used: `src/monocypher.c`, `src/optional/monocypher-ed25519.c`
+- License selected: BSD 2-Clause (dual licensed with CC0 1.0)
+- License file: `third_party/licenses/monocypher-4.0.2.txt`
+
+Monocypher provides the engine's signatures, hashes, message authentication and
+authenticated encryption. For binary distributions the BSD copyright notice,
+license conditions and disclaimer are reproduced with the shipped licenses.
+
 ## etcpak
 
 - Repository: https://github.com/wolfpld/etcpak
