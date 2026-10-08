@@ -1146,6 +1146,18 @@ void RunTextureLoaderRefusesOversizedImageHeaderTest() {
         "A buffer shorter than an image signature was decoded");
 }
 
+// TGA has no signature and its pixel data has no length: the decoder read past the end
+// of the file as zeros for every pixel the header declared. A 46-byte file (found by
+// fuzzing, fuzz/corpus/image) spent seconds filling a 3855 x 3855 image that way.
+void RunTextureLoaderRefusesTruncatedTgaTest() {
+    for (const std::uint8_t imageType : { std::uint8_t{ 2U }, std::uint8_t{ 10U } }) {
+        // Uncompressed and run-length truecolour, 4096 x 4096 x 24 bits, and no pixels.
+        const std::vector<std::uint8_t> tga{ 0x00U, 0x00U, imageType, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U,
+            0x00U, 0x00U, 0x00U, 0x10U, 0x00U, 0x10U, 0x18U, 0x00U };
+        Require(!DecodeTextureSource("Truncated.tga", tga).has_value(), "A TGA without its pixel data was decoded");
+    }
+}
+
 // A data URI's byteLength is only a claim about the text that follows it. This
 // buffer (found by fuzzing, fuzz/corpus/mesh_gltf) declares a gigabyte in four
 // base64 characters; the importer must refuse it without allocating the gigabyte.
@@ -3711,6 +3723,7 @@ void RunRenderResourceRegistryTests() {
     RunFbxImporterRefusesArrayLongerThanItsCompressedBytesTest();
     RunFbxImporterRefusesUnboundedMaterialSlotsTest();
     RunTextureLoaderRefusesOversizedImageHeaderTest();
+    RunTextureLoaderRefusesTruncatedTgaTest();
     RunGltfImporterRefusesBufferLongerThanItsDataTest();
     RunRenderMeshAssetLoaderDiscoversAndLoadsObjThroughAssetManagerTest();
     RunRenderMeshAssetLoaderLoadsImportedObjContainerTest();
