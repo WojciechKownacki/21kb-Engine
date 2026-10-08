@@ -1191,6 +1191,19 @@ class PackageGameTests(unittest.TestCase):
                 (stage / "CrashReports.ini").read_bytes(),
             )
 
+    def test_windows_package_ships_the_crash_report_privacy_notice(self) -> None:
+        engine_root = SCRIPTS.parent
+        with tempfile.TemporaryDirectory() as temporary_text:
+            stage = Path(temporary_text) / "stage"
+            stage.mkdir()
+            package_game._stage_crash_report_notice(engine_root, stage)
+            notice = (stage / "CRASH_REPORTS.txt").read_text(encoding="utf-8")
+            self.assertIn("off until you turn it on", notice)
+            self.assertEqual((engine_root / "platform" / "windows" / "CRASH_REPORTS.txt").read_bytes(),
+                             (stage / "CRASH_REPORTS.txt").read_bytes())
+            with self.assertRaisesRegex(PackagingError, "privacy notice is missing"):
+                package_game._stage_crash_report_notice(Path(temporary_text), stage)
+
     def test_launch_copy_is_exact_and_removes_direct_run_owner(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_text:
             args = self._windows_launch_package(Path(temporary_text))

@@ -518,6 +518,15 @@ def _stage_licenses(args: argparse.Namespace, stage: Path) -> None:
         raise PackagingError(f"third-party notices could not be staged: {error}") from error
 
 
+def _stage_crash_report_notice(engine_root: Path, stage: Path) -> None:
+    # What a crash report holds, in plain words, beside the player; the game shows it
+    # in its settings before anyone agrees to send a report.
+    source = engine_root / "platform" / "windows" / "CRASH_REPORTS.txt"
+    if not source.is_file():
+        raise PackagingError(f"crash report privacy notice is missing: {source}")
+    shutil.copy2(source, stage / "CRASH_REPORTS.txt")
+
+
 def _collect_windows_symbols(
     stage: Path,
     job: Path,
@@ -614,6 +623,7 @@ def _stage_windows(args: argparse.Namespace, cmake: Path, pack: Path, stage: Pat
         built[stage / expected] = plugin
         plugin_paths.append(plugin)
     _stage_licenses(args, stage)
+    _stage_crash_report_notice(args.engine_root, stage)
     symbols = _collect_windows_symbols(
         stage, job, built, {destination, *(stage / f"{target}.dll" for target in plugin_targets)}
     )

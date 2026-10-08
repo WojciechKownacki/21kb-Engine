@@ -1559,6 +1559,8 @@ if(WIN32)
         target_link_options(kb_crash_reporting INTERFACE /DELAYLOAD:winhttp.dll /DELAYLOAD:bcrypt.dll)
     endif()
     kb_apply_quality_gates(kb_crash_reporting)
+    # The player's crash report choices are script-visible settings (ScriptSaveApi).
+    target_link_libraries(kb_engine PRIVATE kb_crash_reporting)
 endif()
 
 if(NOT WIN32)
@@ -1861,6 +1863,7 @@ if(BUILD_TESTING)
         target_compile_definitions(kb_crash_reporting_tests PRIVATE
             "KB_CRASH_REPORTING_TEST_HELPER=\"$<TARGET_FILE:kb_crash_reporting_test_helper>\""
             "KB_CRASH_REPORTING_TEST_ROOT=\"${CMAKE_BINARY_DIR}/crash-reporting-test-scratch\""
+            "KB_CRASH_REPORTING_PRIVACY_NOTICE=\"${CMAKE_SOURCE_DIR}/platform/windows/CRASH_REPORTS.txt\""
         )
         add_test(NAME kb_crash_reporting_tests COMMAND $<TARGET_FILE:kb_crash_reporting_tests>)
         set_tests_properties(kb_crash_reporting_tests PROPERTIES

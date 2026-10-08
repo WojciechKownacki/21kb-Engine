@@ -48,6 +48,13 @@ public:
 // %LOCALAPPDATA%\21kb\CrashReports\<executable name without extension>.
 [[nodiscard]] std::filesystem::path DefaultCrashReportDirectory(std::wstring_view executableStem);
 
+// The plain-language description of what a report holds, shipped with the game
+// as CRASH_REPORTS.txt beside the executable; empty when it is not there. The
+// overload without a directory reads the running executable's.
+inline constexpr std::wstring_view kCrashReportPrivacyNoticeFile = L"CRASH_REPORTS.txt";
+[[nodiscard]] std::string ReadCrashReportPrivacyNotice(const std::filesystem::path& directory);
+[[nodiscard]] std::string ReadCrashReportPrivacyNotice();
+
 struct CrashReportFiles {
     std::filesystem::path minidump;
     std::filesystem::path metadata;

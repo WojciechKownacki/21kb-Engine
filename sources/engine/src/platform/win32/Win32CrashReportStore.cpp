@@ -268,6 +268,19 @@ void AppendFile(std::string& body, std::string_view boundary, std::string_view n
 
 } // namespace
 
+std::string ReadCrashReportPrivacyNotice(const std::filesystem::path& directory) {
+    return ReadSmallFile(directory / kCrashReportPrivacyNoticeFile, 64U * 1024U).value_or(std::string{});
+}
+
+std::string ReadCrashReportPrivacyNotice() {
+    std::vector<wchar_t> path(32768U, L'\0');
+    const DWORD length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
+    if (length == 0U || length >= path.size()) {
+        return {};
+    }
+    return ReadCrashReportPrivacyNotice(std::filesystem::path{ std::wstring_view{ path.data(), length } }.parent_path());
+}
+
 std::vector<CrashReportFiles> ListCrashReports(const std::filesystem::path& directory) {
     std::vector<CrashReportFiles> reports;
     std::error_code error;

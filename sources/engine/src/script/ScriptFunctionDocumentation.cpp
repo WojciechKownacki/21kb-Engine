@@ -393,6 +393,10 @@ constexpr auto kFunctionDocumentation = std::to_array<FunctionDocumentation>({
     { "Settings.Read", "Loads user settings from the named slot in the game's user storage. A slot is 1-64 letters, digits, '_' or '-'; paths are refused." },
     { "Settings.SetAsset", "Stores a stable asset reference in the user-settings document." },
     { "Settings.GetAsset", "Reads a stable asset reference from the user-settings document." },
+    { "Settings.CrashReportUploadConsent", "Returns whether the player agreed to send crash reports; off until they agree." },
+    { "Settings.SetCrashReportUploadConsent", "Records whether the player agrees to send crash reports to the game's crash report service." },
+    { "Settings.CrashReportPrivacyNotice", "Returns the plain-language description of what a crash report holds, shipped with the game." },
+    { "Settings.DeleteCrashReports", "Deletes the crash reports stored on this computer and returns how many files were removed." },
 
     { "Array.Create", "Creates an owned script array with a validated element type." },
     { "Array.Length", "Returns the number of elements in a script array." },

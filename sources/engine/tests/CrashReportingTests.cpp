@@ -4,6 +4,9 @@
 
 #include "engine/core/JsonValue.hpp"
 #include "engine/platform/CrashReporting.hpp"
+#include "engine/scene/Scene.hpp"
+#include "engine/script/ScriptFunctionRegistry.hpp"
+#include "engine/script/ScriptRuntimeHost.hpp"
 
 #include "TestSupport.hpp"
 
@@ -450,6 +453,97 @@ void RunUploadTest() {
     Require(kb::platform::HasCrashUploadConsent(directory), "uploading changed the consent choice");
 }
 
+void RunConsentGateTest() {
+    const std::filesystem::path directory = PrepareReportDirectory("upload-consent");
+    Require(!kb::platform::HasCrashUploadConsent(directory), "upload consent is not off by default");
+
+    LoopbackServer server{ 200 };
+    const kb::platform::CrashUploadSummary refused = kb::platform::UploadPendingCrashReports(directory, server.Url());
+    Require(!refused.attempted && refused.uploaded == 0U && !refused.error.empty(),
+        "reports were offered for upload without consent");
+    Require(server.Requests().empty(), "a report reached the network without consent");
+    Require(kb::platform::ListCrashReports(directory).size() == 1U, "a refused upload touched the local report");
+
+    Require(kb::platform::SetCrashUploadConsent(directory, true) && kb::platform::HasCrashUploadConsent(directory),
+        "upload consent could not be given");
+    Require(kb::platform::SetCrashUploadConsent(directory, false) && !kb::platform::HasCrashUploadConsent(directory),
+        "upload consent could not be withdrawn");
+    static_cast<void>(kb::platform::UploadPendingCrashReports(directory, server.Url()));
+    Require(server.Requests().empty(), "a report reached the network after consent was withdrawn");
+
+    // Anything but the exact consent record is no consent.
+    std::ofstream{ directory / "upload-consent" } << "upload=YES\n";
+    Require(!kb::platform::HasCrashUploadConsent(directory), "a malformed consent record counted as consent");
+}
+
+void RunDeleteReportsTest() {
+    const std::filesystem::path directory = PrepareReportDirectory("delete");
+    Require(kb::platform::SetCrashUploadConsent(directory, true), "upload consent could not be given");
+    // A dump whose description was never written is incomplete: not listed, still deleted.
+    std::ofstream{ directory / "crash-20260101-000000-1.dmp", std::ios::binary } << "MDMP";
+    std::ofstream{ directory / "notes.txt" } << "not a report";
+    Require(kb::platform::ListCrashReports(directory).size() == 1U, "an incomplete report was listed");
+    Require(kb::platform::DeleteCrashReports(directory) == 3U, "not every report file was deleted");
+    Require(kb::platform::ListCrashReports(directory).empty(), "reports survived deletion");
+    Require(std::filesystem::exists(directory / "notes.txt"), "deleting reports removed an unrelated file");
+    Require(kb::platform::HasCrashUploadConsent(directory), "deleting reports changed the consent choice");
+    Require(kb::platform::DeleteCrashReports(directory / "missing") == 0U, "deleting from a missing directory failed");
+}
+
+void RunPrivacyNoticeTest() {
+    const std::filesystem::path directory = FreshDirectory("notice");
+    Require(kb::platform::ReadCrashReportPrivacyNotice(directory).empty(), "a missing privacy notice read as text");
+    std::ofstream{ directory / "CRASH_REPORTS.txt", std::ios::binary } << "Crash reports\nWhat a report holds.\n";
+    Require(kb::platform::ReadCrashReportPrivacyNotice(directory) == "Crash reports\nWhat a report holds.\n",
+        "the shipped privacy notice was not read verbatim");
+    // The one that ships: the packager copies it beside every Windows player.
+    const std::filesystem::path shipped = std::filesystem::path{ KB_CRASH_REPORTING_PRIVACY_NOTICE };
+    const std::string notice = kb::platform::ReadCrashReportPrivacyNotice(shipped.parent_path());
+    for (const std::string_view promise : { "%LOCALAPPDATA%", ".dmp", ".json", "%USERPROFILE%", "HTTPS", "off until" }) {
+        Require(notice.find(promise) != std::string::npos, "the shipped privacy notice does not describe what is collected and sent");
+    }
+}
+
+// The player's choices reach the game through the Settings script surface, which
+// acts on the reporter this process installed.
+void RunSettingsScriptSurfaceTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    Require(host.Succeeded(), "script host did not initialize");
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene };
+    const auto call = [&](std::string_view name, std::vector<kb::script::ScriptFunctionArgument> arguments) {
+        return host.Functions().Call(name, arguments, context);
+    };
+    const auto consentArgument = [](bool consent) {
+        return kb::script::ScriptFunctionArgument{ .name = "consent", .value = kb::script::ScriptValue{ consent } };
+    };
+    Require(!call("Settings.CrashReportUploadConsent", {}).Output("consent")->AsBool() &&
+            !call("Settings.SetCrashReportUploadConsent", { consentArgument(true) }).Output("set")->AsBool() &&
+            call("Settings.DeleteCrashReports", {}).Output("deleted")->AsInt() == 0,
+        "crash report settings acted without an installed reporter");
+
+    const std::filesystem::path directory = PrepareReportDirectory("settings");
+    kb::platform::CrashReporterOptions options;
+    options.productName = "Crash Reporting Tests";
+    options.reportDirectory = directory;
+    options.uploadPendingReports = false;
+    Require(kb::platform::CrashReporter::Install(options), "the test process could not install its reporter");
+
+    Require(!call("Settings.CrashReportUploadConsent", {}).Output("consent")->AsBool(), "upload consent is not off by default");
+    Require(call("Settings.SetCrashReportUploadConsent", { consentArgument(true) }).Output("set")->AsBool() &&
+            call("Settings.CrashReportUploadConsent", {}).Output("consent")->AsBool() &&
+            kb::platform::HasCrashUploadConsent(directory),
+        "a script could not record the player's consent");
+    Require(call("Settings.SetCrashReportUploadConsent", { consentArgument(false) }).Output("set")->AsBool() &&
+            !kb::platform::HasCrashUploadConsent(directory),
+        "a script could not withdraw the player's consent");
+    Require(call("Settings.DeleteCrashReports", {}).Output("deleted")->AsInt() == 2 &&
+            kb::platform::ListCrashReports(directory).empty(),
+        "a script could not delete the stored reports");
+    const kb::script::ScriptFunctionCallResult notice = call("Settings.CrashReportPrivacyNotice", {});
+    Require(notice.Succeeded() && notice.Output("text").has_value(), "the privacy notice is not readable from a script");
+}
+
 void RunDefaultDirectoryTest() {
     const std::filesystem::path directory = kb::platform::DefaultCrashReportDirectory(L"My:Game");
     Require(!directory.empty() && directory.filename() == L"My_Game" &&
@@ -472,8 +566,13 @@ int main() {
     RunCrashKindsTest();
     RunInstallCostTest();
     RunEndpointPolicyTest();
+    RunConsentGateTest();
     RunUploadTest();
+    RunDeleteReportsTest();
+    RunPrivacyNoticeTest();
     RunDefaultDirectoryTest();
+    // Last: it installs the reporter in this process.
+    RunSettingsScriptSurfaceTest();
     std::cout << "crash reporting tests passed\n";
     return 0;
 }
