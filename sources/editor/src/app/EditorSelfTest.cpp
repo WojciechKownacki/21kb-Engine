@@ -5415,6 +5415,28 @@ void RunPrefabPlacementSuite(Report& report) {
     const kb::assets::AssetMetadata* unusedAsset = context.Scene().Assets().Manager().Registry().FindByPath("/Game/Prefabs/UnusedPrefab.kbprefab");
     report.Check(unusedAsset != nullptr && context.DeleteAssetBrowserItem(unusedAsset->id), "Deleting a prefab asset without scene instances is allowed");
 
+    // A prefab is also in use when an instance in the scene is a variant of it or nests it.
+    const kb::scene::SceneEntity baseSource = context.CreateHierarchyObject();
+    context.Scene().Entities().SetName(baseSource, "VariantBaseSource");
+    report.Check(context.CreatePrefabAsset(baseSource, EditorProjectPaths::PrefabsRoot() / "VariantBase.kbprefab"), "Create prefab asset used as a variant base");
+    const kb::scene::ScenePrefabHandle variantBase = context.Scene().Prefabs().SourcePrefab(findNamed("VariantBaseSource"));
+    context.SelectEntity(findNamed("VariantBaseSource"));
+    report.Check(context.DeleteSelectedHierarchyEntity(), "Delete the direct instance of the variant base");
+    const kb::scene::ScenePrefabHandle variant = context.Scene().Prefabs().RegisterVariant("VariantOfBase", variantBase, {});
+    static_cast<void>(context.Scene().Prefabs().Instantiate(variant));
+    const kb::assets::AssetMetadata* baseAsset = context.Scene().Assets().Manager().Registry().FindByPath("/Game/Prefabs/VariantBase.kbprefab");
+    report.Check(baseAsset != nullptr && !context.DeleteAssetBrowserItem(baseAsset->id), "Deleting the base of a variant used in the scene is blocked");
+
+    const kb::scene::SceneEntity innerSource = context.CreateHierarchyObject();
+    context.Scene().Entities().SetName(innerSource, "NestedInnerSource");
+    report.Check(context.CreatePrefabAsset(innerSource, EditorProjectPaths::PrefabsRoot() / "NestedInner.kbprefab"), "Create prefab asset to nest");
+    const kb::scene::SceneEntity outerSource = context.CreateHierarchyObject();
+    context.Scene().Entities().SetName(outerSource, "NestedOuterSource");
+    report.Check(context.ReparentEntity(findNamed("NestedInnerSource"), findNamed("NestedOuterSource")) &&
+        context.CreatePrefabAsset(findNamed("NestedOuterSource"), EditorProjectPaths::PrefabsRoot() / "NestedOuter.kbprefab"), "Create prefab asset that nests another");
+    const kb::assets::AssetMetadata* innerAsset = context.Scene().Assets().Manager().Registry().FindByPath("/Game/Prefabs/NestedInner.kbprefab");
+    report.Check(innerAsset != nullptr && !context.DeleteAssetBrowserItem(innerAsset->id), "Deleting a prefab nested by an instance in the scene is blocked");
+
     // A snapshot command recreates every object; the placement before it must still undo and redo.
     const std::size_t entitiesBeforePlacement = context.Scene().Entities().Count();
     report.Check(context.InstantiatePrefabAssetAt(prefabPath, "/Game/Prefabs/PlacedPrefab.kbprefab", kb::scene::Vec3{ 0.0F, 0.0F, 9.0F }), "Place prefab before a snapshot command");

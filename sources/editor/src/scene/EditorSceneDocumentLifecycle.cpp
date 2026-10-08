@@ -510,6 +510,8 @@ bool EditorSceneContext::ClosePrefabEditMode() {
     prefabEditPath_.clear();
     std::swap(commandStack_, documentCommands_);
     sceneDocumentDirty_ = documentDirty_;
+    // Project Files worked through the prefab's scene meanwhile; catch the scene's asset registry up.
+    static_cast<void>(scene_->Assets().Discover());
     InvalidateHierarchyRows();
     MarkSceneRenderDirty();
     std::erase_if(documentSelection_, [this](kb::scene::SceneEntity entity) {

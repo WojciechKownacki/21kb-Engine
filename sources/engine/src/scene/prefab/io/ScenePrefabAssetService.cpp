@@ -95,6 +95,10 @@ namespace {
 
 } // namespace
 
+std::string ScenePrefabAssetService::SourcePathOf(const std::filesystem::path& path) {
+    return CanonicalSourcePath(path);
+}
+
 bool ScenePrefabAssetService::Save(Scene& scene, ScenePrefabHandle handle, const std::filesystem::path& path) {
     ScenePrefabRecord* record = SceneAccess::State(scene).prefabs.FindMutableRecord(handle);
     if (record == nullptr) {

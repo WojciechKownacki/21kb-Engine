@@ -66,6 +66,10 @@ ScenePrefabHandle ScenePrefabRegistry::FindByGuid(std::string_view guid) const n
     return records_.FindByGuid(guid);
 }
 
+ScenePrefabHandle ScenePrefabRegistry::FindBySourcePath(std::string_view sourcePath) const noexcept {
+    return records_.FindBySourcePath(sourcePath);
+}
+
 std::vector<ScenePrefabHandle> ScenePrefabRegistry::VariantChildrenOf(ScenePrefabHandle baseHandle) const {
     return records_.VariantChildrenOf(baseHandle);
 }

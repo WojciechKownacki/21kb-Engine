@@ -2174,7 +2174,7 @@ bool EditorSceneContext::PrefabAssetHasSceneInstances(kb::assets::AssetId id, st
     if (metadata == nullptr || metadata->type != "ScenePrefab") {
         return false;
     }
-    const std::vector<std::string> instances = EditorScenePrefabActions::FindSceneInstances(*scene_, metadata->physicalPath);
+    const std::vector<std::string> instances = EditorScenePrefabActions::FindSceneInstances(*documentScene_, metadata->physicalPath);
     if (instances.empty()) {
         return false;
     }

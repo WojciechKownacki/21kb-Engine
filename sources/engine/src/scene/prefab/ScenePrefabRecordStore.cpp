@@ -43,6 +43,15 @@ ScenePrefabRecord* ScenePrefabRecordStore::FindMutable(ScenePrefabHandle handle)
     return iterator == records_.end() ? nullptr : &iterator->second;
 }
 
+ScenePrefabHandle ScenePrefabRecordStore::FindBySourcePath(std::string_view sourcePath) const noexcept {
+    for (const auto& [id, record] : records_) {
+        if (!sourcePath.empty() && record.sourcePath == sourcePath) {
+            return ScenePrefabHandle{ id };
+        }
+    }
+    return {};
+}
+
 ScenePrefabHandle ScenePrefabRecordStore::FindByGuid(std::string_view guid) const noexcept {
     if (guid.empty()) {
         return {};
