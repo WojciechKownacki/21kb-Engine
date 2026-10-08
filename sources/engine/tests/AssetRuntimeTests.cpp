@@ -2030,6 +2030,30 @@ void RunSceneAssetDeclaredNodeCountIsNotReservedTest() {
         "A scene's declared node count was reserved before its nodes were read");
 }
 
+// Older scenes kept dropdown options as child objects, and the readers convert them
+// before validating the hierarchy. A dropdown node naming itself as its parent (found
+// by fuzzing, fuzz/corpus/scene) became an option of its own dropdown: converting it
+// cleared the dropdown mid-loop and read past the list of options.
+void RunLegacyDropdownConversionIgnoresSelfParentTest() {
+    kb::scene::ScenePrefab prefab;
+    kb::scene::ScenePrefabNodeDesc owner{};
+    owner.stableId = 1U;
+    owner.components.ui.dropdown.emplace();
+    const std::uint32_t ownerIndex = prefab.AddNode(std::move(owner));
+    prefab.TryGetMutableNode(ownerIndex)->parentNode = ownerIndex;
+    kb::scene::ScenePrefabNodeDesc option{};
+    option.stableId = 2U;
+    option.parentNode = ownerIndex;
+    option.components.ui.text.emplace();
+    static_cast<void>(prefab.AddNode(std::move(option)));
+
+    kb::scene::SceneAssetReader::ConvertChildDropdownOptions(prefab);
+    const kb::scene::ScenePrefabNodeDesc* converted = prefab.TryGetNode(ownerIndex);
+    kb::tests::Require(converted != nullptr && converted->components.ui.dropdown.has_value() &&
+            converted->components.ui.dropdown->optionCount == 1U,
+        "A self-parented dropdown node was converted into an option of itself");
+}
+
 void RunSceneAssetDependencyStaleSidecarTest() {
     ResetTestRoot();
     const std::filesystem::path projectRoot = TestRoot() / "StaleSidecarProject";
@@ -2447,6 +2471,7 @@ void RunAssetRuntimeTests() {
     RunPackagedSceneDoesNotRequireLooseMetaTest();
     RunSceneAssetDependencyDamagedSidecarTest();
     RunSceneAssetDeclaredNodeCountIsNotReservedTest();
+    RunLegacyDropdownConversionIgnoresSelfParentTest();
     RunSceneAssetDependencyStaleSidecarTest();
     RunSceneAssetDependencyChangesAfterDiscoveryTest();
     RunSceneAssetDependencyIgnoresScanOrderTest();
