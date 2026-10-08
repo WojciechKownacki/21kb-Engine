@@ -89,12 +89,10 @@ inline void ResetRuntimeDeltaOrigin(
 // The name the packaging step stages the cooked package under, beside the player.
 inline constexpr std::string_view kPackagedGameFileName = "Game.kbpack";
 
-// True for a Windows player that the packaging step staged beside its own
-// kPackagedGameFileName: a shipped game, which runs only that package and
-// refuses the development switches that load other content.
-#if defined(_WIN32)
+// True for a shipped game, which runs only its own package and refuses the development switches and
+// loose project content that would load anything else: a player carrying a release trust anchor, or a
+// Windows player the packaging step staged beside its own kPackagedGameFileName.
 [[nodiscard]] bool IsShippedGamePlayer();
-#endif
 
 // Converts a native path for logs without changing the path used for I/O.
 [[nodiscard]] std::string NarrowForDiagnostics(const std::filesystem::path& path);

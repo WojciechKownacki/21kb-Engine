@@ -435,11 +435,19 @@ std::filesystem::path ExecutableDirectory() {
     }
 }
 
+#endif
+
 bool IsShippedGamePlayer() {
+    if (kb::security::LoadExecutableTrustAnchor().state != kb::security::TrustAnchorLookup::State::Absent) {
+        return true;
+    }
+#if defined(_WIN32)
     std::error_code error;
     return std::filesystem::is_regular_file(ExecutableDirectory() / kPackagedGameFileName, error) && !error;
-}
+#else
+    return false;
 #endif
+}
 
 bool ReadGameProjectRuntime(
     const std::filesystem::path& projectPath,
@@ -464,10 +472,10 @@ bool ReadGameProjectRuntime(
     }
     pathError.clear();
 
-    // A packaged player runs only the signed package it shipped with; loose project content
-    // would bypass every check the package path makes.
-    if (kb::security::LoadExecutableTrustAnchor().state != kb::security::TrustAnchorLookup::State::Absent) {
-        err << "this packaged game only runs its signed package; loose project content is refused\n";
+    // A packaged player runs only the package it shipped with; loose project content would bypass
+    // every check the package path makes.
+    if (IsShippedGamePlayer()) {
+        err << "this packaged game only runs its own package; loose project content is refused\n";
         return false;
     }
 
