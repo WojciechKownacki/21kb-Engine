@@ -6,6 +6,7 @@
 #include "engine/assets/bake/AssetPackReader.hpp"
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
 #include "kb/render/bake/TextureBaker.hpp"
+#include "resources/TextureContainerMagic.hpp"
 
 #include <bimg/decode.h>
 #include <bx/allocator.h>
@@ -232,8 +233,37 @@ template <typename T>
     return bytes;
 }
 
+// The widest or tallest texture any backend accepts. An image states its own size
+// and the decoders allocate for that size before reading a pixel, so a larger
+// statement is refused before decoding. The stb decoders inside bimg enforce the
+// same bound themselves (STBI_MAX_DIMENSIONS in the top-level CMakeLists.txt).
+constexpr std::uint32_t kMaximumDecodedTextureExtent = 16384U;
+
+[[nodiscard]] bool StatesOversizedImage(const void* data, std::uint32_t size) {
+    // Container formats (DDS, KTX, PVR): bimg reads their header without allocating.
+    bimg::ImageContainer header{};
+    bx::Error headerError;
+    if (TextureContainerKindOf(data, size) != TextureContainerKind::None && bimg::imageParse(header, data, size, &headerError)) {
+        return header.m_width > kMaximumDecodedTextureExtent || header.m_height > kMaximumDecodedTextureExtent ||
+            header.m_depth > kMaximumDecodedTextureExtent;
+    }
+    // PNG states its size in the IHDR chunk, which must come first; lodepng, which
+    // bimg decodes PNG with, does not bound it.
+    constexpr std::array<std::uint8_t, 8U> kPngSignature{ 0x89U, 0x50U, 0x4EU, 0x47U, 0x0DU, 0x0AU, 0x1AU, 0x0AU };
+    const auto* bytes = static_cast<const std::uint8_t*>(data);
+    if (size < 24U || !std::equal(kPngSignature.begin(), kPngSignature.end(), bytes)) {
+        return false;
+    }
+    const auto bigEndian = [bytes](std::size_t offset) {
+        return (static_cast<std::uint32_t>(bytes[offset]) << 24U) | (static_cast<std::uint32_t>(bytes[offset + 1U]) << 16U) |
+            (static_cast<std::uint32_t>(bytes[offset + 2U]) << 8U) | static_cast<std::uint32_t>(bytes[offset + 3U]);
+    };
+    return bigEndian(16U) > kMaximumDecodedTextureExtent || bigEndian(20U) > kMaximumDecodedTextureExtent;
+}
+
 [[nodiscard]] std::optional<RenderTextureAssetData> LoadImageBytes(const void* data, std::size_t size) {
-    if (data == nullptr || size == 0U || size > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
+    if (data == nullptr || size == 0U || size > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max()) ||
+        StatesOversizedImage(data, static_cast<std::uint32_t>(size))) {
         return std::nullopt;
     }
 
