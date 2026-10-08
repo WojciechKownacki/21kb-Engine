@@ -543,13 +543,21 @@ void AppendTriangle(RenderMeshAssetData& asset, Bounds3 bounds, Vec3 a, Vec3 b, 
     }
     const std::uint32_t controlPointCount = static_cast<std::uint32_t>(geometry.vertices.size() / 3U);
 
+    // A material index can name a slot the file never defines, and every slot up to
+    // the highest one is built, so a file listing index 65536 once asked for 65537
+    // slots. No mesh needs anywhere near this many.
+    constexpr std::uint32_t kMaximumMaterialSlots = 1024U;
     std::uint32_t slotCount = 1U;
     if (desc.importMaterialSlots) {
-        slotCount = std::max<std::uint32_t>(1U, static_cast<std::uint32_t>(geometry.materialNames.size()));
+        slotCount = std::max<std::uint32_t>(1U, static_cast<std::uint32_t>(
+            std::min<std::size_t>(geometry.materialNames.size(), kMaximumMaterialSlots + 1U)));
         for (const std::int32_t materialIndex : geometry.materialIndices) {
             if (materialIndex >= 0) {
-                slotCount = std::max(slotCount, static_cast<std::uint32_t>(materialIndex) + 1U);
+                slotCount = std::max(slotCount, std::min(static_cast<std::uint32_t>(materialIndex), kMaximumMaterialSlots) + 1U);
             }
+        }
+        if (slotCount > kMaximumMaterialSlots) {
+            return std::nullopt;
         }
     }
     std::vector<std::vector<std::array<Vec3, 3U>>> trianglesBySlot(slotCount);

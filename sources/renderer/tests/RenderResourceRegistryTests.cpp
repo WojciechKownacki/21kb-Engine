@@ -1021,7 +1021,7 @@ void AppendFbxFixtureNode(std::vector<std::byte>& output, const FbxFixtureNode& 
     return output;
 }
 
-[[nodiscard]] std::vector<std::byte> MakeMultiMaterialFbxFixture() {
+[[nodiscard]] std::vector<std::byte> MakeMultiMaterialFbxFixture(std::array<std::int32_t, 2U> materialIndices = { 0, 1 }) {
     std::vector<std::byte> geometryProperties;
     AppendFbxInt64Property(geometryProperties, 1U);
     AppendFbxStringProperty(geometryProperties, "Geometry::TwoMaterialQuad");
@@ -1038,7 +1038,6 @@ void AppendFbxFixtureNode(std::vector<std::byte>& output, const FbxFixtureNode& 
     const std::array<std::int32_t, 6U> polygonIndices{ 0, 1, -3, 0, 2, -4 };
     std::vector<std::byte> polygonProperties;
     AppendFbxArrayProperty(polygonProperties, 'i', std::span<const std::int32_t>{ polygonIndices });
-    const std::array<std::int32_t, 2U> materialIndices{ 0, 1 };
     std::vector<std::byte> materialIndexProperties;
     AppendFbxArrayProperty(materialIndexProperties, 'i', std::span<const std::int32_t>{ materialIndices });
     std::vector<std::byte> byPolygonProperties;
@@ -1098,6 +1097,18 @@ void RunFbxImporterRefusesArrayLongerThanItsCompressedBytesTest() {
     Require(!asset.has_value(), "FBX importer accepted an array its compressed bytes cannot produce");
     Require(PeakCommittedBytes() - peakBefore < 256U * 1024U * 1024U,
         "FBX importer allocated a compressed array's declared length before inflating it");
+}
+
+// Every material slot up to the highest index a polygon names is built. A file whose
+// second polygon names slot 65536 (found by fuzzing, fuzz/corpus/mesh_fbx) made the
+// importer build 65537 slots and their names for a two-triangle mesh.
+void RunFbxImporterRefusesUnboundedMaterialSlotsTest() {
+    Require(!RenderMeshAssetBuilder::LoadFbx(std::span<const std::byte>{ MakeMultiMaterialFbxFixture({ 0, 65536 }) }).has_value(),
+        "FBX importer built material slots up to an index the file only names");
+    const std::optional<RenderMeshAssetData> bounded =
+        RenderMeshAssetBuilder::LoadFbx(std::span<const std::byte>{ MakeMultiMaterialFbxFixture({ 0, 1023 }) });
+    Require(bounded.has_value() && bounded->materialSlots.size() == 1024U && bounded->sections.size() == 2U,
+        "FBX importer refused a material index within the slot limit");
 }
 
 
@@ -3649,6 +3660,7 @@ void RunRenderResourceRegistryTests() {
     RunFbxImporterBuildsSectionsForMaterialSlotsTest();
     RunFbxImporterStopsAtFooterAfterNullTerminatorTest();
     RunFbxImporterRefusesArrayLongerThanItsCompressedBytesTest();
+    RunFbxImporterRefusesUnboundedMaterialSlotsTest();
     RunRenderMeshAssetLoaderDiscoversAndLoadsObjThroughAssetManagerTest();
     RunRenderMeshAssetLoaderLoadsImportedObjContainerTest();
     RunRenderMeshAssetLoaderLoadsWorkspaceImportedFbxCubeWhenPresentTest();
