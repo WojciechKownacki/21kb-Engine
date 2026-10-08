@@ -4,6 +4,7 @@
 #include "engine/assets/TerrainAsset.hpp"
 #include "engine/audio/AudioMixerAsset.hpp"
 
+#include "commands/EditorSceneHistoryCommand.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneHistory.hpp"
 #include "engine/scene/ScenePrefabPrivateScene.hpp"
@@ -1298,7 +1299,7 @@ private:
     [[nodiscard]] bool FinalizeActiveTransformEditApply(
         bool changed,
         std::span<const kb::scene::SceneEntity> touched);
-    [[nodiscard]] bool ExecuteSceneCommand(std::string label, std::function<bool()> mutation);
+    [[nodiscard]] bool ExecuteSceneCommand(std::string label, std::function<bool()> mutation, EditorSceneHistoryCommand::AssetFile assetFile = {});
     [[nodiscard]] bool ExecuteMaterialAssetEdit(kb::assets::AssetId id, std::unique_ptr<IEditorMaterialAssetPropertyEdit> edit);
     [[nodiscard]] bool RecordMaterialGraphWorkingCopyEdit(
         kb::assets::AssetId id,
