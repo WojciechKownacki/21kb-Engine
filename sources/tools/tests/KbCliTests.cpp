@@ -3,6 +3,8 @@
 
 #include "engine/assets/AssetId.hpp"
 #include "engine/assets/AssetMetadata.hpp"
+#include "engine/assets/bake/AssetPackWriter.hpp"
+#include "engine/assets/bake/BakeTargetProfile.hpp"
 #include "engine/input/InputAssetIO.hpp"
 #include "engine/input/InputKey.hpp"
 #include "engine/project/ProjectSettings.hpp"
@@ -2268,6 +2270,91 @@ void RunApiCheckCommandTests() {
     }
 }
 
+[[nodiscard]] std::filesystem::path ReleaseTestRoot() {
+    return std::filesystem::temp_directory_path() / "21kb_engine_kb_cli_release_tests";
+}
+
+void WriteSamplePack(const std::filesystem::path& path) {
+    namespace bake = kb::assets::bake;
+    bake::BakedAssetDescriptor descriptor;
+    descriptor.key.sourceContentHash = 0x5EA1U;
+    descriptor.key.bakerId = "Texture";
+    descriptor.key.bakerVersion = "1";
+    descriptor.key.targetProfileId = "Windows.x64";
+    descriptor.key.targetProfileHash = bake::BakeTargetProfileFingerprint(bake::WindowsX64BakeTargetProfile());
+    descriptor.assetTypeId = "Texture2D";
+    std::vector<std::uint8_t> payload(5000U);
+    for (std::size_t index = 0U; index < payload.size(); ++index) {
+        payload[index] = static_cast<std::uint8_t>(index * 31U + 7U);
+    }
+    bake::AssetPackWriter writer{ path, bake::WindowsX64BakeTargetProfile() };
+    Require(writer.BeginAsset(descriptor) == bake::BakedAssetSinkStatus::Success &&
+            writer.WritePrimaryBlock(payload, 256U) == bake::BakedAssetSinkStatus::Success &&
+            writer.CommitAsset() == bake::BakedAssetSinkStatus::Success &&
+            writer.Finish() == bake::BakedAssetSinkStatus::Success,
+        "kb_cli release test pack could not be written");
+}
+
+// keys and pack: a key is never written into a project, a signed (and encrypted) pack verifies
+// against the anchor made from the same key, and a pack checked against another key or without
+// its content key is refused.
+void RunKeyAndPackCommandTests() {
+    const std::filesystem::path root = ReleaseTestRoot();
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    Require(!error, "kb_cli release test root could not be prepared");
+
+    WriteTextFile(root / "Project" / "Project.21kbproject", "{}");
+    const std::string projectKey = (root / "Project" / "Keys" / "game.kbkey").string();
+    const CommandRun refused = Run(&kb::cli::RunKeysCommand, { "generate", "--out", projectKey });
+    Require(refused.exitCode == 1 && Contains(refused.output, "inside a project") &&
+            !std::filesystem::exists(projectKey),
+        "keys generate wrote a private key inside a project");
+
+    const std::string key = (root / "Keys" / "game.kbkey").string();
+    const CommandRun generated = Run(&kb::cli::RunKeysCommand, { "generate", "--out", key });
+    Require(generated.exitCode == 0 && generated.output.size() == 65U, "keys generate did not report the new public key");
+    Require(Run(&kb::cli::RunKeysCommand, { "generate", "--out", key }).exitCode == 1,
+        "keys generate overwrote an existing key");
+    Require(Run(&kb::cli::RunKeysCommand, { "public", "--key", key }).output == generated.output,
+        "keys public did not report the key's public half");
+
+    const std::string pack = (root / "Game.kbpack").string();
+    WriteSamplePack(pack);
+    const CommandRun unsignedRun = Run(&kb::cli::RunPackCommand, { "verify", pack });
+    Require(unsignedRun.exitCode == 1 && Contains(unsignedRun.output, "not signed"), "pack verify accepted an unsigned pack");
+
+    const std::string contentKey = (root / "content.key").string();
+    Require(Run(&kb::cli::RunKeysCommand, { "content-key", "--out", contentKey }).exitCode == 0,
+        "keys content-key failed");
+    const CommandRun signedRun = Run(&kb::cli::RunPackCommand, { "sign", "--key", key, "--content-key", contentKey, pack });
+    Require(signedRun.exitCode == 0 && Contains(signedRun.output, "encrypted"), "pack sign failed");
+    const std::string anchor = (root / "anchor.bin").string();
+    Require(Run(&kb::cli::RunKeysCommand,
+                { "anchor", "--key", key, "--product", "Example.Game", "--content-key", contentKey, "--out", anchor })
+                .exitCode == 0,
+        "keys anchor failed");
+    const CommandRun verified = Run(&kb::cli::RunPackCommand, { "verify", "--anchor", anchor, pack });
+    Require(verified.exitCode == 0 && Contains(verified.output, "1 blocks") && Contains(verified.output, "encrypted"),
+        "pack verify refused a pack signed and encrypted with the anchor's keys");
+    Require(Contains(Run(&kb::cli::RunPackCommand, { "verify", pack }).output, "ContentKeyMissing"),
+        "pack verify read an encrypted pack without its content key");
+
+    const std::string otherKey = (root / "Keys" / "other.kbkey").string();
+    const std::string otherAnchor = (root / "other-anchor.bin").string();
+    Require(Run(&kb::cli::RunKeysCommand, { "generate", "--out", otherKey }).exitCode == 0 &&
+            Run(&kb::cli::RunKeysCommand,
+                { "anchor", "--key", otherKey, "--product", "Example.Game", "--content-key", contentKey, "--out", otherAnchor })
+                .exitCode == 0,
+        "the second release key could not be prepared");
+    const CommandRun foreign = Run(&kb::cli::RunPackCommand, { "verify", "--anchor", otherAnchor, pack });
+    Require(foreign.exitCode == 1 && Contains(foreign.output, "UntrustedSigner"),
+        "pack verify accepted a pack signed by another key");
+
+    std::filesystem::remove_all(root, error);
+}
+
 void RunMcpCommandTests() {
     PrepareProject();
     const std::string root = TestRoot().string();
@@ -2331,6 +2418,7 @@ int main() {
     RunApiCommandTests();
     RunApiCheckCommandTests();
     RunMcpCommandTests();
+    RunKeyAndPackCommandTests();
     // Keep the production physics fixture on disk after the test process so
     // the built kb_cli executable can be run against it as a separate-process
     // runtime verification.

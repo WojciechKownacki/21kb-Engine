@@ -108,6 +108,7 @@ EditorBuildGameSettingsLoadResult EditorBuildGameSettingsStore::Load(const std::
         result.settings.builderExecutable = builder;
     }
     result.settings.buildRoot = ReadPath(document, kGlobal, "BuildRoot");
+    result.settings.releaseSigningKey = ReadPath(document, kGlobal, "ReleaseSigningKey");
     result.settings.emsdkRoot = ReadPath(document, kWeb, "EmsdkRoot");
     if (const auto value = document.GetString(kLinux, "Host")) result.settings.linuxHost = std::string{ *value };
     if (const auto value = document.GetString(kLinux, "User")) result.settings.linuxUser = std::string{ *value };
@@ -152,6 +153,7 @@ bool EditorBuildGameSettingsStore::Save(
 
     document.SetString(kGlobal, "BuilderExecutable", settings.builderExecutable.generic_string());
     document.SetString(kGlobal, "BuildRoot", settings.buildRoot.generic_string());
+    document.SetString(kGlobal, "ReleaseSigningKey", settings.releaseSigningKey.generic_string());
     document.SetString(kWeb, "EmsdkRoot", settings.emsdkRoot.generic_string());
     document.SetString(kLinux, "Host", settings.linuxHost);
     document.SetString(kLinux, "User", settings.linuxUser);

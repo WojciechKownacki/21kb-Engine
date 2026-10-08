@@ -102,9 +102,11 @@ std::string_view ToString(RuntimeAssetPackStatus status) noexcept {
 RuntimeAssetPackStatus RuntimeAssetPack::Mount(
     const std::filesystem::path& path,
     const BakeTargetProfile& profile,
-    AssetPackAccess access) {
+    AssetPackAccess access,
+    const AssetPackTrust& trust) {
     Unmount();
-    if (reader_.Mount(path, access) != AssetPackReadStatus::Success) {
+    containerStatus_ = reader_.Mount(path, access, trust);
+    if (containerStatus_ != AssetPackReadStatus::Success) {
         return RuntimeAssetPackStatus::ContainerRejected;
     }
     return FinishMount(profile);
@@ -112,9 +114,11 @@ RuntimeAssetPackStatus RuntimeAssetPack::Mount(
 
 RuntimeAssetPackStatus RuntimeAssetPack::MountMemory(
     std::span<const std::uint8_t> bytes,
-    const BakeTargetProfile& profile) {
+    const BakeTargetProfile& profile,
+    const AssetPackTrust& trust) {
     Unmount();
-    if (reader_.MountMemory(bytes) != AssetPackReadStatus::Success) {
+    containerStatus_ = reader_.MountMemory(bytes, trust);
+    if (containerStatus_ != AssetPackReadStatus::Success) {
         return RuntimeAssetPackStatus::ContainerRejected;
     }
     return FinishMount(profile);
@@ -397,6 +401,18 @@ const AssetPackHeader& RuntimeAssetPack::Header() const noexcept {
 
 std::span<const AssetPackArtifactEntry> RuntimeAssetPack::Artifacts() const noexcept {
     return reader_.Artifacts();
+}
+
+AssetPackReadStatus RuntimeAssetPack::ContainerStatus() const noexcept {
+    return containerStatus_;
+}
+
+const AssetPackSeal* RuntimeAssetPack::Seal() const noexcept {
+    return reader_.Seal();
+}
+
+const kb::security::Sha512Digest& RuntimeAssetPack::SealDigest() const noexcept {
+    return reader_.SealDigest();
 }
 
 } // namespace kb::assets::bake

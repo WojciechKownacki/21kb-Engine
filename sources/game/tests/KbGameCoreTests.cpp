@@ -17,6 +17,7 @@
 #include "engine/assets/AssetRegistry.hpp"
 #include "engine/assets/bake/BakeTargetProfile.hpp"
 #include "engine/assets/bake/AssetPackReader.hpp"
+#include "engine/assets/bake/AssetPackSeal.hpp"
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
 #include "engine/input/InputAssetIO.hpp"
 #include "engine/input/InputMappingContextAsset.hpp"
@@ -32,6 +33,7 @@
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/SceneUI.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
+#include "engine/security/ReleaseKeys.hpp"
 #include "engine/script/ScriptAsset.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 #include "kb/render/RuntimeAssetShaderProvider.hpp"
@@ -606,6 +608,74 @@ void RunNativeBehaviourPackagingTests() {
     const auto rejected = kb::game::CookProject(request, diagnostics);
     Require(!rejected.succeeded && Mentions(rejected.error, "native behaviour DLL"),
         "Native package accepted a missing DLL after authoring content was removed");
+}
+
+// A player with a trust anchor (a packaged release) mounts only packs sealed by its release key
+// and names the reason when it refuses one; a player without an anchor accepts an unsigned pack;
+// a damaged anchor is an error, never a development player.
+void RunPackagedTrustTests() {
+    namespace bake = kb::assets::bake;
+    const Fixture fixture = BuildFixture(TestRoot() / "packaged_trust_project", "Project");
+    kb::project::ProjectSettings settings;
+    settings.defaultMap = fixture.sceneVirtualPath;
+    settings.physicsLayersAsset.clear();
+    settings.inputEnabled = false;
+    WriteSettings(fixture.root, settings);
+    const auto packPath = TestRoot() / "packaged_trust_package" / "Game.kbpack";
+    std::ostringstream diagnostics;
+    const auto cooked = kb::game::CookProject(
+        kb::game::ProjectCookRequest{ .projectPath = fixture.root, .targetProfileId = "Windows.x64", .outputPackPath = packPath },
+        diagnostics);
+    Require(cooked.succeeded, cooked.error.c_str());
+
+    kb::security::ReleaseSigningKey key;
+    Require(kb::security::GenerateReleaseSigningKey(key), "Packaged trust test key could not be generated");
+    kb::security::TrustAnchorLookup anchor{};
+    bake::AssetPackTrust trust{};
+    std::ostringstream err;
+    Require(kb::game::ResolvePackagedAssetPackTrust(anchor, trust, err) && !trust.requiredSigner.has_value(),
+        "A player without a trust anchor demanded a signed pack");
+    anchor.state = kb::security::TrustAnchorLookup::State::Invalid;
+    anchor.error = "damaged";
+    Require(!kb::game::ResolvePackagedAssetPackTrust(anchor, trust, err) && Mentions(err.str(), "damaged"),
+        "A damaged trust anchor was treated as a development player");
+    anchor.state = kb::security::TrustAnchorLookup::State::Present;
+    anchor.anchor.productId = "Publisher.Game";
+    anchor.anchor.releaseKey = key.publicKey;
+    Require(kb::game::ResolvePackagedAssetPackTrust(anchor, trust, err) && trust.requiredSigner == key.publicKey,
+        "A packaged player did not require its release key");
+
+    {
+        bake::RuntimeAssetPack pack;
+        const bake::RuntimeAssetPackStatus status = pack.Mount(
+            packPath, bake::WindowsX64BakeTargetProfile(), bake::AssetPackAccess::Ranged, trust);
+        Require(status == bake::RuntimeAssetPackStatus::ContainerRejected &&
+                pack.ContainerStatus() == bake::AssetPackReadStatus::Unsigned,
+            "A packaged player mounted an unsigned pack");
+        std::ostringstream refusal;
+        kb::game::ReportRuntimePackageRefusal(pack, status, refusal);
+        Require(Mentions(refusal.str(), "Unsigned") && Mentions(refusal.str(), "not signed"),
+            "The unsigned-pack refusal does not say why");
+    }
+    std::string error;
+    Require(bake::SealAssetPack(packPath, key, nullptr, error), error.c_str());
+    {
+        bake::RuntimeAssetPack pack;
+        Require(pack.Mount(packPath, bake::WindowsX64BakeTargetProfile(), bake::AssetPackAccess::Ranged, trust) ==
+                bake::RuntimeAssetPackStatus::Success,
+            "A packaged player refused a pack sealed by its release key");
+    }
+    kb::security::ReleaseSigningKey otherKey;
+    Require(kb::security::GenerateReleaseSigningKey(otherKey), "Second packaged trust test key could not be generated");
+    trust.requiredSigner = otherKey.publicKey;
+    bake::RuntimeAssetPack foreign;
+    const bake::RuntimeAssetPackStatus status = foreign.Mount(
+        packPath, bake::WindowsX64BakeTargetProfile(), bake::AssetPackAccess::Ranged, trust);
+    std::ostringstream refusal;
+    kb::game::ReportRuntimePackageRefusal(foreign, status, refusal);
+    Require(foreign.ContainerStatus() == bake::AssetPackReadStatus::UntrustedSigner &&
+            Mentions(refusal.str(), "signed by a different key"),
+        "A pack sealed by another key was not refused with its reason");
 }
 
 void RunWindowsRuntimeModulePackagingTests() {
@@ -1532,6 +1602,11 @@ int main(int argc, char** argv) {
         RunPackagedRuntimeModuleContractTests();
         RunWindowsRuntimeModulePackagingTests();
         std::fputs("kb_game_core Windows runtime-module tests passed\n", stdout);
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "--packaged-trust") {
+        RunPackagedTrustTests();
+        std::fputs("kb_game_core packaged trust tests passed\n", stdout);
         return EXIT_SUCCESS;
     }
     if (argc == 2 && std::string_view{ argv[1] } == "--native-behaviours") {

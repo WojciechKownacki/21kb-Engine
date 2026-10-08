@@ -46,16 +46,19 @@ enum class RuntimeAssetPackStatus : std::uint8_t {
 [[nodiscard]] std::string_view ToString(RuntimeAssetPackStatus status) noexcept;
 
 // Validated, multi-asset runtime view of a .kbpack. Mount is all-or-nothing: after any refusal
-// neither a manifest nor a partially validated reader remains observable.
+// neither a manifest nor a partially validated reader remains observable. `trust` is passed to
+// the container reader: a packaged player requires its release key there.
 class RuntimeAssetPack final {
 public:
     [[nodiscard]] RuntimeAssetPackStatus Mount(
         const std::filesystem::path& path,
         const BakeTargetProfile& profile,
-        AssetPackAccess access = AssetPackAccess::Ranged);
+        AssetPackAccess access = AssetPackAccess::Ranged,
+        const AssetPackTrust& trust = {});
     [[nodiscard]] RuntimeAssetPackStatus MountMemory(
         std::span<const std::uint8_t> bytes,
-        const BakeTargetProfile& profile);
+        const BakeTargetProfile& profile,
+        const AssetPackTrust& trust = {});
     void Unmount() noexcept;
 
     [[nodiscard]] bool IsMounted() const noexcept;
@@ -81,12 +84,17 @@ public:
 
     [[nodiscard]] const AssetPackHeader& Header() const noexcept;
     [[nodiscard]] std::span<const AssetPackArtifactEntry> Artifacts() const noexcept;
+    // Why the container reader refused the last mount (Success when it did not).
+    [[nodiscard]] AssetPackReadStatus ContainerStatus() const noexcept;
+    [[nodiscard]] const AssetPackSeal* Seal() const noexcept;
+    [[nodiscard]] const kb::security::Sha512Digest& SealDigest() const noexcept;
 
 private:
     [[nodiscard]] RuntimeAssetPackStatus FinishMount(const BakeTargetProfile& profile);
 
     AssetPackReader reader_;
     RuntimeAssetManifest manifest_{};
+    AssetPackReadStatus containerStatus_ = AssetPackReadStatus::NotMounted;
     // Ranged AssetPackReader owns one seekable stream. Runtime sync loads and the bounded async
     // worker may overlap, so every seek/read sequence is serialized here.
     mutable std::mutex readMutex_;

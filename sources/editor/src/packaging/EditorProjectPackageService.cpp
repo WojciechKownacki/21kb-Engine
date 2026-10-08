@@ -361,6 +361,9 @@ std::vector<std::wstring> EditorProjectPackageService::BuildArguments(const Edit
     if (!request.applicationIcon.empty()) {
         append(L"--application-icon", request.applicationIcon);
     }
+    if (!request.releaseSigningKey.empty()) {
+        append(L"--signing-key", request.releaseSigningKey);
+    }
     const kb::packaging::PackagingTargetSpec* targetSpec = kb::packaging::FindPackagingTarget(request.targetId);
     if (targetSpec != nullptr && targetSpec->needsAndroidMetadata) {
         appendText(L"--android-application-id", request.androidApplicationId);

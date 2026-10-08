@@ -374,6 +374,7 @@ void SettingsRoundTripTest() {
     local.linuxEngineRoot = "/opt/21kb";
     local.linuxDisplay = ":1";
     local.linuxIdentity = "C:/Keys/linux-builder";
+    local.releaseSigningKey = "C:/Keys/game.kbkey";
     local.For(kb::packaging::PackagingTarget::AndroidAstcArm64).outputDirectory = "C:/Output";
     local.For(kb::packaging::PackagingTarget::AndroidAstcArm64).launchAfterBuild = true;
     local.For(kb::packaging::PackagingTarget::AndroidAstcArm64).androidKeystore = "C:/Keys/release.jks";
@@ -434,6 +435,13 @@ void ProtocolAndArgumentsTest() {
         "Android Release argv misses packaging metadata");
     Require(!has(L"secret-store") && !has(L"secret-key"), "Signing secret leaked into argv");
     Require(!has(L"--application-icon"), "Empty application icon emitted a dangling argv option");
+    Require(!has(L"--signing-key"), "Empty release signing key emitted a dangling argv option");
+    request.releaseSigningKey = "C:/Keys/game.kbkey";
+    const auto signedArguments = kb::editor::EditorProjectPackageService::BuildArguments(request);
+    const auto signingKey = std::ranges::find(signedArguments, std::wstring_view{ L"--signing-key" });
+    Require(signingKey != signedArguments.end() && std::next(signingKey) != signedArguments.end() &&
+            std::filesystem::path{ *std::next(signingKey) } == request.releaseSigningKey,
+        "Release signing key path was not passed to packaging");
     Require(kb::editor::EditorProjectPackageService::ResultMatchesRequest(request, request.outputDirectory),
         "Exact RESULT directory was rejected");
     Require(!kb::editor::EditorProjectPackageService::ResultMatchesRequest(request, "C:/Output/Other"),

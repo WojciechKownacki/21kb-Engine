@@ -88,6 +88,8 @@ CONFIGURATIONS = {"Development": "Debug", "Release": "Release"}
 _SAFE_EXECUTABLE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_. -]{0,79}\Z")
 _ANDROID_APPLICATION_ID = re.compile(r"[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+\Z")
 _ANDROID_ALIAS = re.compile(r"[A-Za-z0-9_.-]{1,128}\Z")
+# Mirrors kb::security::IsValidProductId.
+_PRODUCT_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 _PROJECT_TRANSIENT_ROOTS = frozenset((".cache", "Saved", "Build", "Dist", "Packages", ".git"))
 
 
@@ -190,6 +192,16 @@ def _validate_arguments(args: argparse.Namespace) -> None:
         raise PackagingError("executable name contains unsupported characters")
     if args.application_icon is not None:
         args.application_icon = _project_png_icon(args.project, args.application_icon)
+    if args.product_id is None:
+        args.product_id = _default_product_id(args.publisher, args.product_name)
+    if not _PRODUCT_ID.fullmatch(args.product_id):
+        raise PackagingError("product ID must be 1 to 128 characters of A-Z, a-z, 0-9, '.', '_' or '-'")
+    if args.signing_key is not None:
+        args.signing_key = _existing_file(args.signing_key, "release signing key")
+    if args.signing_broker is not None:
+        args.signing_broker = _existing_file(args.signing_broker, "release signing broker")
+    if args.encrypt_pack and TARGETS[args.target].platform != "windows":
+        raise PackagingError("asset pack encryption is available for Windows packages only")
     if args.target.startswith("Android."):
         if not _ANDROID_APPLICATION_ID.fullmatch(args.android_application_id):
             raise PackagingError("Android application ID is invalid")
@@ -323,6 +335,100 @@ def _find_optional_build_tool(build_root: Path, configuration: str, name: str) -
     return next((path.resolve(strict=True) for path in matches if path.is_file()), None)
 
 
+def _default_product_id(publisher: str, product_name: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", f"{publisher}.{product_name}").strip("-._")
+    return slug[:128].rstrip("-._") or "game"
+
+
+def _default_signing_key(product_id: str) -> Path:
+    """Where the per-product release key lives when none is supplied: in the user's profile,
+    outside every project, so it is never packaged or committed."""
+    override = os.environ.get("KB_RELEASE_KEY_ROOT")
+    if override:
+        root = Path(override)
+    elif os.name == "nt" and os.environ.get("LOCALAPPDATA"):
+        root = Path(os.environ["LOCALAPPDATA"]) / "21kb" / "ReleaseKeys"
+    else:
+        root = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share") / "21kb" / "release-keys"
+    return root / f"{product_id}.kbkey"
+
+
+@dataclass(frozen=True)
+class ReleaseSigning:
+    """How this job reaches the release signing key: a key file kb_cli reads directly, or a
+    broker that runs kb_cli itself so the key (or its passphrase) never passes through here."""
+    kb_cli: Path
+    key: Path | None
+    broker: Path | None
+
+
+def _run_with_release_key(signing: ReleaseSigning, job: Path, arguments: Sequence[Path | str]) -> None:
+    if signing.broker is None:
+        assert signing.key is not None
+        run_checked([signing.kb_cli, *arguments, "--key", signing.key], cwd=job, timeout_seconds=3600)
+        return
+    session = secrets.token_hex(16)
+    request = job / f"release-signing-request-{session}.json"
+    response = job / f"release-signing-response-{session}.json"
+    request.write_bytes(canonical_json_bytes({
+        "schema": 1,
+        "session": session,
+        "kind": "kbReleaseSigning",
+        "kbCli": str(signing.kb_cli),
+        "key": None if signing.key is None else str(signing.key),
+        "arguments": [str(argument) for argument in arguments],
+    }))
+    run_checked([signing.broker, "--request", request, "--response", response], cwd=job, timeout_seconds=3600)
+    try:
+        value = json.loads(response.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise PackagingError("release signing broker returned an invalid response") from error
+    if value != {"schema": 1, "session": session, "succeeded": True}:
+        raise PackagingError("release signing broker refused the request")
+
+
+def _release_signing(args: argparse.Namespace, kb_cli: Path) -> ReleaseSigning:
+    if args.signing_broker is not None:
+        return ReleaseSigning(kb_cli, args.signing_key, args.signing_broker)
+    key = args.signing_key or _default_signing_key(args.product_id)
+    if not key.is_file():
+        key.parent.mkdir(parents=True, exist_ok=True)
+        run_checked([kb_cli, "keys", "generate", "--out", key], cwd=key.parent, timeout_seconds=60)
+        emit_diagnostic(
+            "Warning",
+            f"Created the release signing key for {args.product_id} at {key}. Back it up and keep it private: "
+            "every update of this game must be signed with the same key.",
+        )
+    return ReleaseSigning(kb_cli, key, None)
+
+
+def _sign_pack(args: argparse.Namespace, cmake: Path, pack: Path, job: Path) -> None:
+    """Seals the cooked pack with the release key (encrypting it when asked) and writes the trust
+    anchor the player embeds. The anchor is recorded on `args` for the platform stage."""
+    configuration = CONFIGURATIONS[args.configuration]
+    _build_targets(cmake, args.build_root, configuration, ("kb_cli",), args.engine_root)
+    kb_cli = _build_tool_path(args.build_root, configuration, "kb_cli")
+    signing = _release_signing(args, kb_cli)
+    content_key: list[Path | str] = []
+    if args.encrypt_pack:
+        key_file = job / "pack-content.key"
+        run_checked([kb_cli, "keys", "content-key", "--out", key_file], cwd=job, timeout_seconds=60)
+        content_key = ["--content-key", key_file]
+    _run_with_release_key(signing, job, ["pack", "sign", *content_key, pack])
+    anchor = job / "trust-anchor.bin"
+    _run_with_release_key(signing, job, ["keys", "anchor", "--product", args.product_id, *content_key, "--out", anchor])
+    run_checked([kb_cli, "pack", "verify", "--anchor", anchor, pack], cwd=job, timeout_seconds=1800)
+    args.release_signing = signing
+    args.trust_anchor = anchor
+
+
+def _release_tools(args: argparse.Namespace) -> tuple[Path, ...]:
+    signing: ReleaseSigning | None = getattr(args, "release_signing", None)
+    if signing is None:
+        return ()
+    return (signing.kb_cli,) if signing.broker is None else (signing.kb_cli, signing.broker)
+
+
 def _stage_licenses(args: argparse.Namespace, stage: Path) -> None:
     """The license texts, notices and SBOM of every third-party component the target's player ships."""
     try:
@@ -356,6 +462,7 @@ def _stage_windows(args: argparse.Namespace, cmake: Path, pack: Path, stage: Pat
             executable_name=args.executable_name,
             development=args.configuration == "Development",
             icon=args.application_icon,
+            trust_anchor=args.trust_anchor.read_bytes() if getattr(args, "trust_anchor", None) else None,
         )
     except WindowsResourceError as error:
         raise PackagingError(str(error)) from error
@@ -480,6 +587,7 @@ def _verify_android_apk(
                 "assets/Licenses/miniaudio.txt",
                 "assets/Licenses/ufbx.txt",
                 "assets/Licenses/androidx-apache-2.0.txt",
+                "assets/kb_trust_anchor.bin",
             })
             if not required.issubset(names):
                 raise PackagingError(f"Android APK is missing runtime entries: {sorted(required - set(names))}")
@@ -649,6 +757,8 @@ def _stage_android(args: argparse.Namespace, pack: Path, stage: Path, job: Path)
     ]
     if args.application_icon is not None:
         command.append(f"-PkbApplicationIcon={args.application_icon}")
+    if getattr(args, "trust_anchor", None):
+        command.append(f"-PkbTrustAnchor={args.trust_anchor}")
     run_checked(
         command,
         cwd=gradle_root,
@@ -1499,6 +1609,10 @@ def _parse_arguments(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--version", required=True)
     parser.add_argument("--executable-name", required=True)
     parser.add_argument("--application-icon", type=Path)
+    parser.add_argument("--product-id")
+    parser.add_argument("--signing-key", type=Path)
+    parser.add_argument("--signing-broker", type=Path)
+    parser.add_argument("--encrypt-pack", action="store_true")
     parser.add_argument("--launch", action="store_true")
     parser.add_argument("--android-application-id", default="com.kbengine.game")
     parser.add_argument("--android-label")
@@ -1543,7 +1657,9 @@ def package(args: argparse.Namespace) -> None:
 
             emit_stage("Cook", 25, f"Cooking {target.texture_family} assets and {target.shader_format} shaders")
             pack = _cook(args, snapshot_project, job, cooker, validator)
-            emit_stage("Cook", 50, "Runtime asset pack verified")
+            emit_stage("Cook", 45, "Signing the runtime asset pack")
+            _sign_pack(args, cmake, pack, job)
+            emit_stage("Cook", 50, "Runtime asset pack signed and verified")
 
             emit_stage("Stage", 55, f"Building and staging {args.target}")
             candidate.mkdir(mode=0o700)
@@ -1562,7 +1678,7 @@ def package(args: argparse.Namespace) -> None:
                     args,
                     project_fingerprint,
                     engine_fingerprint,
-                    (cmake, cooker, validator, *stage_result.tools),
+                    (cmake, cooker, validator, *_release_tools(args), *stage_result.tools),
                 ),
                 runtime_first_frame=(
                     stage_result.first_frame.receipt_fields()

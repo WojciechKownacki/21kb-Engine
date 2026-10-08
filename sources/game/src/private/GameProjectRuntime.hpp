@@ -3,6 +3,7 @@
 #include "engine/project/ProjectDescriptor.hpp"
 
 #include <chrono>
+#include <cstdint>
 #include <cstddef>
 #include <filesystem>
 #include <iosfwd>
@@ -18,6 +19,12 @@ class Scene;
 
 namespace kb::assets::bake {
 class RuntimeAssetPack;
+struct AssetPackTrust;
+enum class RuntimeAssetPackStatus : std::uint8_t;
+}
+
+namespace kb::security {
+struct TrustAnchorLookup;
 }
 
 
@@ -96,6 +103,21 @@ inline constexpr std::string_view kPackagedGameFileName = "Game.kbpack";
     const std::filesystem::path& projectPath,
     std::string_view sceneOverride,
     GameProjectRuntime& runtime,
+    std::ostream& err);
+
+// What a runtime asset pack must satisfy on this player. A player carrying a trust anchor (a
+// packaged release) requires packs sealed by its release key and decrypts them with its content
+// key; a player without one (a development player) accepts an unsigned pack. False, with a
+// diagnostic, for an anchor that is present but damaged -- never a silent downgrade.
+[[nodiscard]] bool ResolvePackagedAssetPackTrust(
+    const kb::security::TrustAnchorLookup& anchor,
+    kb::assets::bake::AssetPackTrust& trust,
+    std::ostream& err);
+
+// One line naming why a runtime asset pack was refused, in words a player can act on.
+void ReportRuntimePackageRefusal(
+    const kb::assets::bake::RuntimeAssetPack& pack,
+    kb::assets::bake::RuntimeAssetPackStatus status,
     std::ostream& err);
 
 // Platform package hosts may already own a zero-copy/memory-mapped pack (Android APK assets,

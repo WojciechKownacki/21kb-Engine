@@ -267,6 +267,9 @@ if(BUILD_TESTING)
     add_test(NAME kb_windows_runtime_module_package
         COMMAND $<TARGET_FILE:kb_game_core_tests> --windows-runtime-modules
     )
+    add_test(NAME kb_game_packaged_trust
+        COMMAND $<TARGET_FILE:kb_game_core_tests> --packaged-trust
+    )
     set_tests_properties(kb_game_core PROPERTIES
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
         LABELS "game;runtime"
@@ -276,6 +279,11 @@ if(BUILD_TESTING)
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
         LABELS "game;runtime;packaging"
         TIMEOUT 120
+    )
+    set_tests_properties(kb_game_packaged_trust PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        LABELS "game;runtime;packaging"
+        TIMEOUT 300
     )
 
     kb_apply_quality_gates(kb_game_core_tests)

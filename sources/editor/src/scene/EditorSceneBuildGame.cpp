@@ -396,6 +396,9 @@ bool EditorSceneContext::StartBuildGamePackage() {
             return false;
         }
     }
+    if (!buildGameSettings_.releaseSigningKey.empty()) {
+        request.releaseSigningKey = AbsoluteNormalized(buildGameSettings_.releaseSigningKey);
+    }
     if (targetSpec.needsAndroidMetadata) {
         request.androidApplicationId = Trimmed(projectConfig_.androidApplicationId);
         request.androidVersionCode = projectConfig_.androidVersionCode;

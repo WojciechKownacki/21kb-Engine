@@ -111,7 +111,8 @@ struct AssetPackBlockEntry {
     std::uint64_t storedBytes = 0U;
     std::uint64_t uncompressedBytes = 0U;
     // Digest of the uncompressed bytes the baker submitted. Checked whenever
-    // the block is read and by the release validator before packaging.
+    // the block is read and by the release validator before packaging. It detects
+    // corruption; a sealed pack (AssetPackSeal.hpp) authenticates the block instead.
     AssetBakeDigest payloadDigest{};
 };
 
@@ -201,6 +202,19 @@ enum class AssetPackReadStatus : std::uint8_t {
     BlockNotFound,
     // Nothing is mounted.
     NotMounted,
+    // The bytes after the pack claim to be a seal but are not a well-formed one, or the seal
+    // does not describe exactly the blocks of this pack.
+    SealCorrupt,
+    // The seal's signature does not verify: the catalogue or the seal was modified.
+    SignatureInvalid,
+    // The reader requires a signed pack and this one carries no seal.
+    Unsigned,
+    // The pack is sealed by a key other than the one the reader requires.
+    UntrustedSigner,
+    // The pack's blocks are encrypted and the reader holds no content key.
+    ContentKeyMissing,
+    // The pack's blocks are encrypted under a different content key.
+    ContentKeyMismatch,
 };
 
 [[nodiscard]] std::string_view ToString(AssetPackReadStatus status) noexcept;

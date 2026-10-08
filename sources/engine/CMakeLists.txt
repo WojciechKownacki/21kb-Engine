@@ -45,6 +45,7 @@ add_library(kb_engine STATIC
     include/engine/assets/bake/AssetBakeKey.hpp
     include/engine/assets/bake/AssetPack.hpp
     include/engine/assets/bake/AssetPackReader.hpp
+    include/engine/assets/bake/AssetPackSeal.hpp
     include/engine/assets/bake/AssetPackWriter.hpp
     include/engine/assets/bake/BakeTargetProfile.hpp
     include/engine/assets/bake/BakedAssetSink.hpp
@@ -70,6 +71,7 @@ add_library(kb_engine STATIC
     include/engine/platform/PlatformAdapters.hpp
     include/engine/platform/PlatformLocale.hpp
     include/engine/security/Crypto.hpp
+    include/engine/security/ReleaseKeys.hpp
     include/engine/project/ProjectDescriptorMeta.hpp
     include/engine/project/ProjectDescriptorReader.hpp
     include/engine/project/ProjectDescriptorWriter.hpp
@@ -551,6 +553,7 @@ add_library(kb_engine STATIC
     src/assets/bake/AssetBakeKey.cpp
     src/assets/bake/AssetPack.cpp
     src/assets/bake/AssetPackReader.cpp
+    src/assets/bake/AssetPackSeal.cpp
     src/assets/bake/AssetPackWriter.cpp
     src/assets/bake/BakeTargetProfile.cpp
     src/assets/bake/BakedAssetSink.cpp
@@ -658,6 +661,7 @@ add_library(kb_engine STATIC
     src/platform/FileSystemPath.cpp
     src/platform/UserStorage.cpp
     src/security/Crypto.cpp
+    src/security/ReleaseKeys.cpp
     src/network/ReplicationSchema.cpp
     src/network/Rpc.cpp
     src/gameplay/GameFlow.cpp

@@ -1,10 +1,12 @@
 #pragma once
 
 #include "engine/assets/bake/AssetPack.hpp"
+#include "engine/assets/bake/AssetPackSeal.hpp"
 
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <span>
 #include <string_view>
 #include <vector>
@@ -39,6 +41,11 @@ enum class AssetPackAccess : std::uint8_t {
 // memory allocations (maxMemoryAllocationCount), so anything that scales with the number of
 // assets is a wall a big project walks into; OpenCount() exists so that rule can be observed
 // rather than asserted.
+//
+// A SEALED pack (AssetPackSeal.hpp) has its signature checked at mount, before its index is
+// decoded, and every block's SHA-512 checked when the block is read. What the reader demands
+// beyond that is its AssetPackTrust: a packaged player requires the release key, so an unsigned
+// or foreign pack never mounts.
 class AssetPackReader {
 public:
     AssetPackReader() = default;
@@ -50,13 +57,15 @@ public:
 
     // Reads and validates the header and the index. A failure leaves nothing mounted.
     [[nodiscard]] AssetPackReadStatus Mount(const std::filesystem::path& path,
-                                            AssetPackAccess access = AssetPackAccess::Ranged);
+                                            AssetPackAccess access = AssetPackAccess::Ranged,
+                                            const AssetPackTrust& trust = {});
 
     // Mounts bytes owned by the caller without copying them. The span must remain valid until
     // Unmount() or destruction. This is the Android APK path: AAssetManager keeps one
     // uncompressed, zipaligned asset mapping alive and the reader validates and slices that
     // mapping instead of reopening the APK once per artifact.
-    [[nodiscard]] AssetPackReadStatus MountMemory(std::span<const std::uint8_t> bytes);
+    [[nodiscard]] AssetPackReadStatus MountMemory(std::span<const std::uint8_t> bytes,
+                                                  const AssetPackTrust& trust = {});
     void Unmount() noexcept;
 
     [[nodiscard]] bool IsMounted() const noexcept {
@@ -65,6 +74,17 @@ public:
 
     [[nodiscard]] const AssetPackHeader& Header() const noexcept {
         return header_;
+    }
+
+    // The verified seal of a sealed pack, or nullptr for an unsigned one.
+    [[nodiscard]] const AssetPackSeal* Seal() const noexcept {
+        return seal_.has_value() ? &*seal_ : nullptr;
+    }
+
+    // The 64-byte message the seal's signature covers. A release manifest records it to bind
+    // this exact pack to a release without hashing the pack a second time.
+    [[nodiscard]] const kb::security::Sha512Digest& SealDigest() const noexcept {
+        return sealDigest_;
     }
 
     // True only for a mounted pack whose recorded stable profile id and full
@@ -105,13 +125,25 @@ public:
 private:
     [[nodiscard]] AssetPackReadStatus ReadRange(std::uint64_t offset, std::uint64_t bytes, std::vector<std::uint8_t>& out);
     [[nodiscard]] AssetPackReadStatus ValidateBlockRange(const AssetPackBlockEntry& block) const noexcept;
-    [[nodiscard]] AssetPackReadStatus ValidateAndFinishMount();
+    [[nodiscard]] AssetPackReadStatus ValidateAndFinishMount(const AssetPackTrust& trust);
+    [[nodiscard]] AssetPackReadStatus VerifySeal(
+        std::span<const std::uint8_t> header,
+        std::span<const std::uint8_t> index,
+        std::span<const std::uint8_t> fragments,
+        std::span<const std::uint8_t> seal,
+        const AssetPackTrust& trust);
 
     std::filesystem::path path_;
     AssetPackAccess access_ = AssetPackAccess::Ranged;
     AssetPackHeader header_{};
     std::vector<AssetPackArtifactEntry> artifacts_;
     std::vector<AssetPackFragmentEntry> fragments_;
+    std::optional<AssetPackSeal> seal_;
+    kb::security::Sha512Digest sealDigest_{};
+    std::optional<kb::security::AeadKey> contentKey_;
+    // The seal was made by the key the trust required, so the signature already vouches for
+    // every index digest and a block's SHA-512 match is the whole check.
+    bool sealTrusted_ = false;
     // Ranged mode: the single handle. WholeFile mode: the single buffer. Exactly one of the
     // two is populated while a pack is mounted.
     std::ifstream stream_;

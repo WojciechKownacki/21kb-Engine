@@ -37,6 +37,17 @@ Commands:
   mcp          Serve the commands above as MCP tools over stdio (newline-
                delimited JSON-RPC), for use from MCP-compatible clients.
                  [--project <dir>]
+  keys         Manage release signing keys. Private keys are refused inside a
+               project or a repository; keep them out of version control.
+                 generate --out <key file>
+                 public --key <key file>
+                 content-key --out <file>
+                 anchor --key <key file> --product <id> [--content-key <file>]
+                        --out <file>
+  pack         Sign (and optionally encrypt) an asset pack, or verify one.
+                 sign --key <key file> [--content-key <file>] <pack.kbpack>
+                 verify [--anchor <file> | --public-key <hex>
+                        [--content-key <file>]] <pack.kbpack>
 
 Scene paths may be physical (relative to the project root) or virtual
 ("/Game/Scenes/Main.21kbscene", requires --project).
@@ -94,6 +105,12 @@ int main(int argc, char** argv) {
     }
     if (command == "mcp") {
         return kb::cli::RunMcpCommand(arguments, std::cin, io);
+    }
+    if (command == "keys") {
+        return kb::cli::RunKeysCommand(arguments, io);
+    }
+    if (command == "pack") {
+        return kb::cli::RunPackCommand(arguments, io);
     }
     if (command == "help" || command == "--help" || command == "-h") {
         std::cout << kUsage;

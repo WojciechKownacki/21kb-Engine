@@ -15,5 +15,7 @@ namespace kb::cli {
 [[nodiscard]] int RunSceneAttachCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunRunCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunMcpCommand(const ArgumentList& arguments, std::istream& in, CommandIo io);
+[[nodiscard]] int RunKeysCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunPackCommand(const ArgumentList& arguments, CommandIo io);
 
 } // namespace kb::cli

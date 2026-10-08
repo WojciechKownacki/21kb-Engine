@@ -1,4 +1,4 @@
-"""Apply package-selected icon and version metadata to a copied Windows player."""
+"""Apply package-selected icon, version metadata and trust anchor to a copied Windows player."""
 
 from __future__ import annotations
 
@@ -8,6 +8,13 @@ import os
 import re
 import struct
 from pathlib import Path
+
+
+# RT_RCDATA resource holding the player's trust anchor (release public key, product id, pack
+# content key). Must match kTrustAnchorResourceId in engine/security/ReleaseKeys.hpp, which
+# reads it. Written before any Authenticode signature, so replacing it breaks that signature.
+TRUST_ANCHOR_RESOURCE_ID = 2101
+_RT_RCDATA = 10
 
 
 class WindowsResourceError(RuntimeError):
@@ -140,6 +147,7 @@ def apply_windows_resources(
     executable_name: str,
     development: bool,
     icon: Path | None,
+    trust_anchor: bytes | None = None,
 ) -> None:
     if os.name != "nt":
         raise WindowsResourceError("Windows PE resources can only be written on Windows")
@@ -195,6 +203,10 @@ def apply_windows_resources(
             for index, image in enumerate(icon_images, start=1):
                 update(3, index, 0x0409, image)
             update(14, 1, 0x0409, icon_group)
+        if trust_anchor is not None:
+            if not trust_anchor or len(trust_anchor) > 4096:
+                raise WindowsResourceError("trust anchor must be 1 to 4096 bytes")
+            update(_RT_RCDATA, TRUST_ANCHOR_RESOURCE_ID, 0, trust_anchor)
         if not kernel32.EndUpdateResourceW(handle, False):
             raise WindowsResourceError(f"EndUpdateResourceW failed with error {ctypes.get_last_error()}")
         committed = True
