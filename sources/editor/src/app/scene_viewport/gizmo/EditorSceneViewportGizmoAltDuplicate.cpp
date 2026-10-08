@@ -1,4 +1,5 @@
 #include "app/scene_viewport/gizmo/EditorSceneViewportGizmoAltDuplicate.hpp"
+#include "app/EditorKeyState.hpp"
 
 #if defined(_WIN32)
 #include "app/scene_viewport/gizmo/EditorSceneViewportGizmoTargetResolver.hpp"
@@ -11,7 +12,7 @@ namespace kb::editor {
 namespace {
 
 [[nodiscard]] bool LeftAltDown() noexcept {
-    return (GetKeyState(VK_LMENU) & 0x8000) != 0;
+    return EditorKeyDown(VK_LMENU);
 }
 
 } // namespace

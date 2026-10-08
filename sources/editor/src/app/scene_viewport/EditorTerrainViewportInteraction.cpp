@@ -1,4 +1,5 @@
 #include "app/scene_viewport/EditorTerrainViewportInteraction.hpp"
+#include "app/EditorKeyState.hpp"
 
 #if defined(_WIN32)
 #include "app/scene_viewport/EditorSceneViewportHitResolver.hpp"
@@ -390,7 +391,7 @@ bool EditorTerrainViewportInteraction::Stamp(
                 .opacity = std::clamp(tool.brush.strength, 0.0F, 1.0F),
                 .falloff = tool.brush.falloff,
                 .noiseSeed = tool.brush.noiseSeed,
-                .erase = (GetKeyState(VK_CONTROL) & 0x8000) != 0,
+                .erase = EditorKeyDown(VK_CONTROL),
             },
             segmentStart, stamp,
             beginStroke, &error)
@@ -415,7 +416,7 @@ bool EditorTerrainViewportInteraction::TickActiveStroke(
         tool.heldSculptElapsedSeconds = 0.0F;
         return false;
     }
-    if ((GetAsyncKeyState(VK_LBUTTON) & 0x8000) == 0) {
+    if (!EditorAsyncKeyDown(VK_LBUTTON)) {
         tool.strokeActive = false;
         tool.heldSculptElapsedSeconds = 0.0F;
         std::string error;

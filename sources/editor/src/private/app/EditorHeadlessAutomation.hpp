@@ -1,5 +1,6 @@
 #pragma once
 
+#include "app/EditorKeyState.hpp"
 #include "engine/assets/AssetId.hpp"
 #include "engine/input/InputKey.hpp"
 #include "engine/input/InputTouchPoint.hpp"
@@ -188,6 +189,7 @@ public:
 private:
     struct Impl;
 
+    EditorScriptedInputScope scriptedInput_;
     EditorSceneContext& context_;
     std::filesystem::path artifactRoot_;
     std::filesystem::path tracePath_;

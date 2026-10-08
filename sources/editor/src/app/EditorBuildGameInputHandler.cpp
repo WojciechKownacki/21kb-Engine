@@ -1,4 +1,5 @@
 #include "app/EditorBuildGameInputHandler.hpp"
+#include "app/EditorKeyState.hpp"
 
 #include "app/EditorTextInputShortcuts.hpp"
 #include "rendering/BuildGamePanelModel.hpp"
@@ -51,7 +52,7 @@ bool EditorBuildGameInputHandler::HandleKeyDown(HWND owner, WPARAM key) const {
         return true;
     case VK_TAB:
         static_cast<void>(sceneContext_.FocusAdjacentBuildGameTextField(
-            (GetKeyState(VK_SHIFT) & 0x8000) != 0));
+            EditorKeyDown(VK_SHIFT)));
         return true;
     case VK_BACK:
         static_cast<void>(sceneContext_.BackspaceBuildGameText());

@@ -1,4 +1,5 @@
 #include "app/EditorWindowPointerHandler.hpp"
+#include "app/EditorKeyState.hpp"
 
 #if defined(_WIN32)
 #include "app/EditorMouseWheelRouter.hpp"
@@ -81,7 +82,7 @@ EditorWindowPointerHandler::EditorWindowPointerHandler(
 LRESULT EditorWindowPointerHandler::HandleLeftButtonDown(HWND messageWindow, LPARAM lparam) {
     const int x = GET_X_LPARAM(lparam);
     const int y = GET_Y_LPARAM(lparam);
-    if ((GetKeyState(VK_MENU) & 0x8000) != 0 &&
+    if (EditorKeyDown(VK_MENU) &&
         SkeletalPreviewViewportAt(messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_, sceneContext_, x, y).has_value()) {
         sceneContext_.AnimationPreviewCamera().BeginNavigation(EditorViewportCameraNavigationMode::Orbit, x, y);
         SetCapture(messageWindow);
@@ -123,7 +124,7 @@ LRESULT EditorWindowPointerHandler::HandleRightButtonDown(HWND messageWindow, LP
     const int x = GET_X_LPARAM(lparam);
     const int y = GET_Y_LPARAM(lparam);
     if (SkeletalPreviewViewportAt(messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_, sceneContext_, x, y).has_value()) {
-        const bool alt = (GetKeyState(VK_MENU) & 0x8000) != 0;
+        const bool alt = EditorKeyDown(VK_MENU);
         sceneContext_.AnimationPreviewCamera().BeginNavigation(
             ResolveEditorViewportCameraNavigationMode(false, true, false, alt), x, y);
         SetCapture(messageWindow);

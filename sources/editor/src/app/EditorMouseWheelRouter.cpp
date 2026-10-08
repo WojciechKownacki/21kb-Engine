@@ -1,4 +1,5 @@
 #include "app/EditorWindowInvalidator.hpp"
+#include "app/EditorKeyState.hpp"
 #include "app/EditorMouseWheelRouter.hpp"
 
 #if defined(_WIN32)
@@ -229,8 +230,8 @@ bool EditorMouseWheelRouter::HandleMouseWheel(int x, int y, int wheelDelta) {
             DockPanelKind::Scene, messageWindow_, mainWindow_, dockModel_,
             floatingWindows_, metrics_);
         EditorTerrainToolState& terrainTool = EditorTerrainService::ToolState();
-        const bool controlDown = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
-        const bool shiftDown = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+        const bool controlDown = EditorKeyDown(VK_CONTROL);
+        const bool shiftDown = EditorKeyDown(VK_SHIFT);
         if (sceneContent.has_value() && Contains(*sceneContent, x, y) &&
             terrainTool.editingEnabled &&
             EditorTerrainService::IsTerrainEntity(

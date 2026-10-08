@@ -1,4 +1,5 @@
 #include "rendering/script_editor/ScriptEditorInput.hpp"
+#include "app/EditorKeyState.hpp"
 
 #if defined(_WIN32)
 #include "rendering/script_editor/ScriptEditorClipboard.hpp"
@@ -17,7 +18,7 @@ namespace {
 }
 
 [[nodiscard]] bool KeyHeld(int virtualKey) noexcept {
-    return (GetKeyState(virtualKey) & 0x8000) != 0;
+    return EditorKeyDown(virtualKey);
 }
 
 ScriptEditorInputResult HandleControlKey(HWND window, ScriptEditorDocument& document, ScriptEditorViewport& viewport, const ScriptEditorMetrics& metrics, WPARAM key) {
