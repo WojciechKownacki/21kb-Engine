@@ -34,6 +34,7 @@
 #include "engine/scene/SceneUI.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/security/ReleaseKeys.hpp"
+#include "engine/save/SaveGameService.hpp"
 #include "engine/script/ScriptAsset.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 #include "kb/render/RuntimeAssetShaderProvider.hpp"
@@ -676,6 +677,27 @@ void RunPackagedTrustTests() {
     Require(foreign.ContainerStatus() == bake::AssetPackReadStatus::UntrustedSigner &&
             Mentions(refusal.str(), "signed by a different key"),
         "A pack sealed by another key was not refused with its reason");
+
+    // A packaged player binds saves to its game and to this installation: a save it writes does
+    // not load under the development key, and the installation secret it created is reused.
+    anchor.anchor.saveSecret = kb::security::DeriveGameSaveSecret(key, anchor.anchor.productId);
+    const std::filesystem::path securityRoot = TestRoot() / "packaged_trust_security";
+    std::ostringstream saveWarnings;
+    kb::game::ConfigurePackagedSaveIntegrity(anchor.anchor, securityRoot, saveWarnings);
+    Require(saveWarnings.str().empty() && std::filesystem::is_regular_file(securityRoot / "installation.secret"),
+        "A packaged player did not create its installation secret");
+    kb::save::SaveGame save;
+    save.SetInt("level", 3);
+    const std::filesystem::path savePath = TestRoot() / "packaged_trust_save.kbsave";
+    Require(kb::save::SaveGameService::Save(savePath, save), "A packaged save could not be written");
+    Require(kb::save::SaveGameService::Load(savePath).Succeeded(), "A packaged save did not load on its installation");
+    kb::save::SaveGameService::ConfigureIntegrity(kb::save::DevelopmentSaveGameIntegrity());
+    Require(kb::save::SaveGameService::Load(savePath).status == kb::save::SaveGameLoadStatus::Tampered,
+        "A packaged save loaded without its game and installation secrets");
+    kb::game::ConfigurePackagedSaveIntegrity(anchor.anchor, securityRoot, saveWarnings);
+    Require(kb::save::SaveGameService::Load(savePath).Succeeded(),
+        "The installation secret was not reused on the next start");
+    kb::save::SaveGameService::ConfigureIntegrity(kb::save::DevelopmentSaveGameIntegrity());
 }
 
 void RunWindowsRuntimeModulePackagingTests() {

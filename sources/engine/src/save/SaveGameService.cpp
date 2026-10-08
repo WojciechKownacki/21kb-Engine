@@ -5,8 +5,10 @@
 #include "save/SaveGameFormat.hpp"
 
 #include <cstdint>
+#include <mutex>
 #include <optional>
 #include <span>
+#include <string_view>
 #include <vector>
 
 namespace kb::save {
@@ -31,13 +33,58 @@ namespace {
     return true;
 }
 
+constexpr std::string_view kSaveKeySalt = "21KB-SAVE-KEY-V1";
+constexpr std::string_view kDevelopmentGameSecret = "21kb development save secret";
+
+std::mutex& IntegrityMutex() {
+    static std::mutex mutex;
+    return mutex;
+}
+
+SaveGameIntegrity& ConfiguredIntegrity() {
+    static SaveGameIntegrity integrity = DevelopmentSaveGameIntegrity();
+    return integrity;
+}
+
+[[nodiscard]] SaveGameIntegrity CurrentIntegrity() {
+    const std::scoped_lock lock{ IntegrityMutex() };
+    return ConfiguredIntegrity();
+}
+
 } // namespace
+
+SaveGameIntegrity DeriveSaveGameIntegrity(
+    std::span<const std::uint8_t> gameSecret,
+    std::span<const std::uint8_t> installationSecret) {
+    std::vector<std::uint8_t> material(gameSecret.begin(), gameSecret.end());
+    material.insert(material.end(), installationSecret.begin(), installationSecret.end());
+    SaveGameIntegrity integrity{};
+    kb::security::HkdfSha512(
+        integrity.key.Span(),
+        material,
+        std::span{ reinterpret_cast<const std::uint8_t*>(kSaveKeySalt.data()), kSaveKeySalt.size() },
+        {});
+    kb::security::SecureWipe(material);
+    return integrity;
+}
+
+SaveGameIntegrity DevelopmentSaveGameIntegrity() {
+    return DeriveSaveGameIntegrity(
+        std::span{ reinterpret_cast<const std::uint8_t*>(kDevelopmentGameSecret.data()), kDevelopmentGameSecret.size() },
+        {});
+}
+
+void SaveGameService::ConfigureIntegrity(const SaveGameIntegrity& integrity) {
+    const std::scoped_lock lock{ IntegrityMutex() };
+    ConfiguredIntegrity() = integrity;
+}
 
 std::optional<std::vector<std::uint8_t>> SaveGameService::Serialize(const SaveGame& save, SaveDomain domain) {
     if (!WithinFormatLimits(save)) {
         return std::nullopt;
     }
-    std::vector<std::uint8_t> bytes = SaveGameCodec::Encode(save, SaveGameFormat::kCurrentSchemaVersion, domain);
+    std::vector<std::uint8_t> bytes =
+        SaveGameCodec::Encode(save, SaveGameFormat::kCurrentSchemaVersion, domain, CurrentIntegrity());
     if (bytes.size() > SaveGameFormat::kMaxSerializedBytes) {
         return std::nullopt;
     }
@@ -57,7 +104,8 @@ SaveGameLoadResult SaveGameService::Deserialize(std::span<const std::uint8_t> by
             .diagnostic = "save file exceeds the 16 MiB serialized-size limit",
         };
     }
-    return SaveGameCodec::Decode(bytes, SaveGameFormat::kCurrentSchemaVersion, expectedDomain, BuiltInSaveGameMigrations());
+    return SaveGameCodec::Decode(
+        bytes, SaveGameFormat::kCurrentSchemaVersion, expectedDomain, BuiltInSaveGameMigrations(), CurrentIntegrity());
 }
 
 SaveGameLoadResult SaveGameService::Load(const std::filesystem::path& path, SaveDomain expectedDomain) {
@@ -91,7 +139,16 @@ SaveGameLoadResult SaveGameService::Load(const std::filesystem::path& path, Save
             .diagnostic = "save file changed while it was being read",
         };
     }
-    return Deserialize(bytes, expectedDomain);
+    SaveGameLoadResult result = Deserialize(bytes, expectedDomain);
+    // An accepted legacy save is rewritten authenticated straight away, so it is trusted on the
+    // strength of its old format exactly once.
+    if (result.Succeeded() && result.migrated) {
+        const std::optional<std::vector<std::uint8_t>> upgraded = Serialize(result.save, expectedDomain);
+        result.diagnostic = upgraded.has_value() && SaveGameBinaryIO::WriteBytesAtomically(path, *upgraded)
+            ? "save was written by an older version and has been upgraded to the authenticated format"
+            : "save was written by an older version and could not be rewritten in the authenticated format";
+    }
+    return result;
 }
 
 } // namespace kb::save

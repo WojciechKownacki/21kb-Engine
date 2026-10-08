@@ -366,8 +366,8 @@ public:
         targetProfileId_.assign(profile.identifier);
         kb::assets::bake::AssetPackTrust trust{};
         std::ostringstream trustError;
-        if (!kb::game::ResolvePackagedAssetPackTrust(
-                ReadAndroidTrustAnchor(app_.activity->assetManager), trust, trustError)) {
+        const kb::security::TrustAnchorLookup anchor = ReadAndroidTrustAnchor(app_.activity->assetManager);
+        if (!kb::game::ResolvePackagedAssetPackTrust(anchor, trust, trustError)) {
             LogError(trustError.str());
             return false;
         }
@@ -379,6 +379,14 @@ public:
             kb::game::ReportRuntimePackageRefusal(*pack_, mountStatus, refusal);
             LogError(refusal.str());
             return false;
+        }
+        if (anchor.state == kb::security::TrustAnchorLookup::State::Present) {
+            std::ostringstream saveWarning;
+            kb::game::ConfigurePackagedSaveIntegrity(
+                anchor.anchor, std::filesystem::path{ app_.activity->internalDataPath } / "21kb-security", saveWarning);
+            if (!saveWarning.str().empty()) {
+                LogError(saveWarning.str());
+            }
         }
         std::string providerError;
         shaderProvider_ = kb::render::RuntimeAssetShaderProvider::Create(pack_, providerError);

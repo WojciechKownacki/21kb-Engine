@@ -61,6 +61,32 @@ unchanged. The index stays readable. The content key has to ship inside the play
 so encryption keeps content away from ordinary extraction tools, not from a determined attacker;
 the signature, not the encryption, is what makes tampering detectable.
 
+## Save games
+
+Save files (schema 3) carry an HMAC-SHA512 over their header and payload next to the FNV-1a
+checksum of earlier schemas. A save whose checksum fails is `IntegrityMismatch` (damaged on
+disk); a save whose checksum passes but whose HMAC does not is `Tampered` (edited outside the
+game, or written by another installation). Neither is loaded; `Save.Read` reports the status.
+
+The key is HKDF-SHA512 over two secrets:
+
+- the **per-game secret** in the trust anchor, derived from the release signing key and the
+  product id, so every release signed with the same key reads the same saves;
+- a random **per-installation secret** created on first start in per-user storage
+  (`%LOCALAPPDATA%\21kb\<product>\installation.secret`; the app's internal storage on Android).
+
+Development players and the editor use a fixed development key: hand edits are caught, but
+anyone can forge a save. Both secrets live on the player's machine, so the HMAC makes editing a
+save deliberate reverse-engineering work, not something a hex editor or a copied save does by
+accident; it cannot stop someone who extracts both. Because saves are bound to an installation,
+a save copied to another machine (or kept after deleting the per-user state) reads as `Tampered`;
+a game that syncs saves between machines should sync them through its own service.
+
+Saves written before schema 3 (unauthenticated schema 1 and 2) load once, keep every value, and
+are rewritten authenticated in place (`migrated` in the load result). An unauthenticated file
+cannot be told apart from a forged one, so a game whose first release already wrote schema 3
+should set `SaveGameIntegrity::acceptUnauthenticatedLegacySaves` to `false`.
+
 ## Platform limits
 
 - **Windows**: full packaged mode. The trust anchor is a PE resource; sign the executable with

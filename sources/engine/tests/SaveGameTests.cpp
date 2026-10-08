@@ -6,11 +6,14 @@
 #include "engine/save/SaveGameService.hpp"
 #include "engine/library/EngineLibraryAssetRef.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <memory>
+#include <span>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -216,6 +219,149 @@ void RunSaveGameCorruptionTest() {
         "An oversized save must be rejected before allocation with a readable size-limit diagnostic");
 }
 
+[[nodiscard]] std::vector<std::uint8_t> ReadRawFile(const std::filesystem::path& path) {
+    std::ifstream input{ path, std::ios::binary };
+    return { std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+}
+
+void AppendUInt32(std::vector<std::uint8_t>& out, std::uint32_t value) {
+    for (int shift = 0; shift < 32; shift += 8) {
+        out.push_back(static_cast<std::uint8_t>((value >> shift) & 0xFFU));
+    }
+}
+
+void AppendUInt64(std::vector<std::uint8_t>& out, std::uint64_t value) {
+    for (int shift = 0; shift < 64; shift += 8) {
+        out.push_back(static_cast<std::uint8_t>((value >> shift) & 0xFFU));
+    }
+}
+
+// The schema 2 envelope checksum, written out here independently of the codec.
+[[nodiscard]] std::uint64_t Fnv1a(std::span<const std::uint8_t> bytes) {
+    std::uint64_t hash = 14695981039346656037ULL;
+    for (const std::uint8_t byte : bytes) {
+        hash ^= byte;
+        hash *= 1099511628211ULL;
+    }
+    return hash;
+}
+
+// Domain SaveGame, one Int "level" = 7 and one String "hero" = "Ada", in the entry encoding every
+// schema shares.
+[[nodiscard]] std::vector<std::uint8_t> LegacyPayload() {
+    std::vector<std::uint8_t> payload;
+    payload.push_back(0U);
+    AppendUInt32(payload, 2U);
+    AppendUInt32(payload, 4U);
+    payload.insert(payload.end(), { 'h', 'e', 'r', 'o' });
+    payload.push_back(3U);
+    AppendUInt32(payload, 3U);
+    payload.insert(payload.end(), { 'A', 'd', 'a' });
+    AppendUInt32(payload, 5U);
+    payload.insert(payload.end(), { 'l', 'e', 'v', 'e', 'l' });
+    payload.push_back(1U);
+    AppendUInt64(payload, 7U);
+    return payload;
+}
+
+[[nodiscard]] std::vector<std::uint8_t> LegacySave(std::uint32_t schemaVersion) {
+    std::vector<std::uint8_t> bytes{ '2', '1', 'K', 'B', 'S', 'A', 'V', 0 };
+    AppendUInt32(bytes, schemaVersion);
+    const std::vector<std::uint8_t> payload = LegacyPayload();
+    if (schemaVersion >= 2U) {
+        AppendUInt64(bytes, payload.size());
+        AppendUInt64(bytes, Fnv1a(payload));
+    }
+    bytes.insert(bytes.end(), payload.begin(), payload.end());
+    return bytes;
+}
+
+[[nodiscard]] kb::save::SaveGameIntegrity InstallationIntegrity(std::uint8_t installation) {
+    const std::array<std::uint8_t, 32U> gameSecret{ 0x21U, 0x4BU, 0x42U };
+    std::array<std::uint8_t, 32U> installationSecret{};
+    installationSecret.fill(installation);
+    return kb::save::DeriveSaveGameIntegrity(gameSecret, installationSecret);
+}
+
+// A save authenticated by one installation loads there; the same bytes edited (with the
+// corruption checksum recomputed, so only the MAC can notice) or carried to another
+// installation are refused as Tampered, never loaded.
+void RunSaveGameAuthenticationTest() {
+    ResetSaveTestRoot();
+    const std::filesystem::path path = SaveTestRoot() / "authenticated.kbsave";
+    kb::save::SaveGameService::ConfigureIntegrity(InstallationIntegrity(1U));
+
+    kb::save::SaveGame save;
+    save.SetInt("gold", 100);
+    save.SetString("hero", "Ada");
+    kb::tests::Require(kb::save::SaveGameService::Save(path, save), "Authenticated save could not be written");
+    const std::vector<std::uint8_t> written = ReadRawFile(path);
+    constexpr std::size_t kPayloadOffset = 8U + 4U + 8U + 8U + 64U;
+    kb::tests::Require(written.size() > kPayloadOffset && written[8] == 3U,
+        "A new save does not carry the authenticated schema 3 envelope");
+    const kb::save::SaveGameLoadResult loaded = kb::save::SaveGameService::Load(path);
+    std::int64_t gold = 0;
+    kb::tests::Require(loaded.Succeeded() && !loaded.migrated && loaded.save.GetInt("gold", gold) && gold == 100,
+        "An authenticated save did not load on the installation that wrote it");
+
+    // "gold" = 100 becomes 999 with the checksum fixed up: a deliberate edit.
+    std::vector<std::uint8_t> edited = written;
+    constexpr std::array<std::uint8_t, 4U> kGold{ 'g', 'o', 'l', 'd' };
+    const auto value = std::search(edited.begin() + kPayloadOffset, edited.end(), kGold.begin(), kGold.end());
+    kb::tests::Require(value != edited.end(), "The authenticated fixture does not contain its key");
+    const std::size_t valueOffset = static_cast<std::size_t>(value - edited.begin()) + 4U + 1U;
+    edited[valueOffset] = 0xE7U;
+    edited[valueOffset + 1U] = 0x03U;
+    const std::uint64_t checksum = Fnv1a(std::span{ edited }.subspan(kPayloadOffset));
+    for (std::size_t index = 0U; index < 8U; ++index) {
+        edited[20U + index] = static_cast<std::uint8_t>((checksum >> (index * 8U)) & 0xFFU);
+    }
+    WriteRawFile(path, edited);
+    const kb::save::SaveGameLoadResult tampered = kb::save::SaveGameService::Load(path);
+    kb::tests::Require(tampered.status == kb::save::SaveGameLoadStatus::Tampered && tampered.save.Count() == 0U &&
+            !tampered.diagnostic.empty(),
+        "An edited save with a recomputed checksum was loaded");
+
+    // The untouched save, on another installation of the same game.
+    WriteRawFile(path, written);
+    kb::save::SaveGameService::ConfigureIntegrity(InstallationIntegrity(2U));
+    kb::tests::Require(kb::save::SaveGameService::Load(path).status == kb::save::SaveGameLoadStatus::Tampered,
+        "A save from another installation was loaded");
+    kb::save::SaveGameService::ConfigureIntegrity(kb::save::DevelopmentSaveGameIntegrity());
+}
+
+// Saves from before authentication (schema 1 and 2) load once, keep every value, and are
+// rewritten authenticated in place; a game that refuses legacy saves refuses them.
+void RunSaveGameLegacyMigrationTest() {
+    ResetSaveTestRoot();
+    kb::save::SaveGameService::ConfigureIntegrity(InstallationIntegrity(1U));
+    for (const std::uint32_t schemaVersion : { 1U, 2U }) {
+        const std::filesystem::path path = SaveTestRoot() / ("legacy_v" + std::to_string(schemaVersion) + ".kbsave");
+        WriteRawFile(path, LegacySave(schemaVersion));
+        const kb::save::SaveGameLoadResult first = kb::save::SaveGameService::Load(path);
+        std::int64_t level = 0;
+        std::string hero;
+        kb::tests::Require(first.Succeeded() && first.migrated && first.save.Count() == 2U &&
+                first.save.GetInt("level", level) && level == 7 && first.save.GetString("hero", hero) && hero == "Ada",
+            "A legacy save did not load with all of its values");
+        const std::vector<std::uint8_t> rewritten = ReadRawFile(path);
+        kb::tests::Require(rewritten.size() > 12U && rewritten[8] == 3U, "A loaded legacy save was not rewritten as schema 3");
+        const kb::save::SaveGameLoadResult second = kb::save::SaveGameService::Load(path);
+        kb::tests::Require(second.Succeeded() && !second.migrated && second.save.GetInt("level", level) && level == 7,
+            "A migrated save did not load as an authenticated one");
+    }
+
+    kb::save::SaveGameIntegrity strict = InstallationIntegrity(1U);
+    strict.acceptUnauthenticatedLegacySaves = false;
+    kb::save::SaveGameService::ConfigureIntegrity(strict);
+    const std::filesystem::path refusedPath = SaveTestRoot() / "legacy_refused.kbsave";
+    WriteRawFile(refusedPath, LegacySave(2U));
+    kb::tests::Require(kb::save::SaveGameService::Load(refusedPath).status == kb::save::SaveGameLoadStatus::Tampered &&
+            ReadRawFile(refusedPath) == LegacySave(2U),
+        "A game that refuses legacy saves loaded or rewrote one");
+    kb::save::SaveGameService::ConfigureIntegrity(kb::save::DevelopmentSaveGameIntegrity());
+}
+
 // LIB-163: the persistence domains are separated — a file written for one
 // domain cannot be loaded as another (WrongDomain), so save games and user
 // settings never cross-contaminate even when they share the kb::save format.
@@ -363,6 +509,8 @@ void RunSaveGameTests() {
     RunSaveGameMigrationTest();
     RunSaveGameDomainSeparationTest();
     RunSaveGamePropertyFuzzTest();
+    RunSaveGameAuthenticationTest();
+    RunSaveGameLegacyMigrationTest();
 }
 
 } // namespace kb::tests
