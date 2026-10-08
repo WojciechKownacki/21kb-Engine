@@ -17,6 +17,8 @@
 #endif
 #include <windows.h>
 #else
+#include <cerrno>
+#include <csignal>
 #include <dlfcn.h>
 #include <unistd.h>
 #if defined(__APPLE__)
@@ -45,11 +47,44 @@ namespace {
 #endif
 }
 
+[[nodiscard]] bool ProcessAlive(unsigned long long processId) {
+#if defined(_WIN32)
+    HANDLE process = OpenProcess(SYNCHRONIZE, FALSE, static_cast<DWORD>(processId));
+    if (process == nullptr) {
+        // No such process; any other refusal means it exists.
+        return GetLastError() != ERROR_INVALID_PARAMETER;
+    }
+    const bool running = WaitForSingleObject(process, 0U) == WAIT_TIMEOUT;
+    CloseHandle(process);
+    return running;
+#else
+    return kill(static_cast<pid_t>(processId), 0) == 0 || errno == EPERM;
+#endif
+}
+
+// Whether another running process made the shadow copy `name` (<key>_p<pid>_<serial><extension>). Its copy is
+// unlocked from when it is written until that process maps it, so deleting it then makes that load fail.
+[[nodiscard]] bool OtherLiveProcessOwns(std::string_view name, std::string_view keyPrefix) {
+    std::string_view rest = name.substr(keyPrefix.size());
+    if (!rest.starts_with('p')) {
+        return false;
+    }
+    rest.remove_prefix(1U);
+    unsigned long long processId = 0U;
+    std::size_t digits = 0U;
+    while (digits < rest.size() && rest[digits] >= '0' && rest[digits] <= '9') {
+        processId = processId * 10U + static_cast<unsigned long long>(rest[digits] - '0');
+        ++digits;
+    }
+    return digits > 0U && processId != CurrentProcessId() && ProcessAlive(processId);
+}
+
 // Best-effort removal of leftover shadow copies for this key so per-process
 // naming does not leak temp files indefinitely. A file still mapped by a live
 // process stays locked and simply fails to delete (skipped); once its process
-// exits it becomes removable and the next load prunes it. `keep` is the file
-// we are about to (re)create and must not delete.
+// exits it becomes removable and the next load prunes it. Another live process's
+// copy is left alone even while unlocked, as that process may be about to load it.
+// `keep` is the file we are about to (re)create and must not delete.
 void PruneRemovableShadowCopies(const std::filesystem::path& directory, std::string_view keyPrefix, const std::filesystem::path& keep) {
     std::error_code error;
     for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator(directory, error)) {
@@ -60,7 +95,8 @@ void PruneRemovableShadowCopies(const std::filesystem::path& directory, std::str
             continue;
         }
         const std::string name = entry.path().filename().string();
-        if (name.size() < keyPrefix.size() || std::string_view{ name }.substr(0, keyPrefix.size()) != keyPrefix) {
+        if (name.size() < keyPrefix.size() || std::string_view{ name }.substr(0, keyPrefix.size()) != keyPrefix ||
+            OtherLiveProcessOwns(name, keyPrefix)) {
             continue;
         }
         std::error_code removeError;
