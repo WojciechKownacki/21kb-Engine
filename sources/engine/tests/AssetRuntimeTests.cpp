@@ -69,6 +69,22 @@
 
 namespace {
 
+// Waits on wall-clock time rather than an iteration count, so a machine loaded by
+// parallel test runs cannot starve the async worker past the check.
+template <typename Done, typename Step>
+void SpinUntil(Done&& done, Step&& step) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{ 10 };
+    while (!done() && std::chrono::steady_clock::now() < deadline) {
+        step();
+        std::this_thread::yield();
+    }
+}
+
+template <typename Done>
+void SpinUntil(Done&& done) {
+    SpinUntil(std::forward<Done>(done), [] {});
+}
+
 class TextAssetLoader final : public kb::assets::IAssetLoader {
 public:
     [[nodiscard]] std::string_view Type() const noexcept override {
@@ -505,9 +521,7 @@ void RunAssetManagerTrueAsyncLoadTest() {
         "Async load must remain pending while the loader is blocked");
     kb::tests::Require(!manager.IsLoaded(id), "Async request committed a payload before the worker completed");
 
-    for (std::size_t spin = 0; spin < 1000000U && !gate->entered.load(std::memory_order_acquire); ++spin) {
-        std::this_thread::yield();
-    }
+    SpinUntil([&] { return gate->entered.load(std::memory_order_acquire); });
     const bool workerEntered = gate->entered.load(std::memory_order_acquire);
     if (!workerEntered) {
         releasePromise.set_value();
@@ -520,18 +534,11 @@ void RunAssetManagerTrueAsyncLoadTest() {
         "Owner-thread pump blocked or fabricated completion while I/O was pending");
 
     releasePromise.set_value();
-    for (std::size_t spin = 0; spin < 1000000U && manager.AsyncLoadStatus(id) == kb::assets::AsyncAssetLoadStatus::Pending; ++spin) {
-        manager.PumpAsyncLoads();
-        std::this_thread::yield();
-    }
+    SpinUntil([&] { return !(manager.AsyncLoadStatus(id) == kb::assets::AsyncAssetLoadStatus::Pending); }, [&] { manager.PumpAsyncLoads(); });
     kb::tests::Require(manager.AsyncLoadStatus(id) == kb::assets::AsyncAssetLoadStatus::Completed,
         "Async worker result was not committed on the owner thread");
-    for (std::size_t spin = 0; spin < 1000000U &&
-            manager.AsyncLoadStatus(queuedMetadata->id) == kb::assets::AsyncAssetLoadStatus::Pending;
-         ++spin) {
-        manager.PumpAsyncLoads();
-        std::this_thread::yield();
-    }
+    SpinUntil([&] { return manager.AsyncLoadStatus(queuedMetadata->id) != kb::assets::AsyncAssetLoadStatus::Pending; },
+        [&] { manager.PumpAsyncLoads(); });
     kb::tests::Require(manager.AsyncLoadStatus(queuedMetadata->id) == kb::assets::AsyncAssetLoadStatus::Completed,
         "The bounded async queue did not execute its second request");
     const kb::assets::AssetHandle<std::string> typedOwner = manager.AcquireLoaded<std::string>(id);
@@ -553,17 +560,13 @@ void RunAssetManagerTrueAsyncLoadTest() {
     kb::tests::Require(cancelManager.DiscoverMountedAssets() == 3U, "Cancellation assets were not discovered");
     const kb::assets::AssetMetadata* cancelMetadata = cancelManager.Registry().FindByPath("/Game/Text/Cancelled.gated");
     kb::tests::Require(cancelMetadata != nullptr && cancelManager.RequestLoadAsync(cancelMetadata->id), "Cancellation request could not start");
-    for (std::size_t spin = 0; spin < 1000000U && !cancelGate->entered.load(std::memory_order_acquire); ++spin) {
-        std::this_thread::yield();
-    }
+    SpinUntil([&] { return cancelGate->entered.load(std::memory_order_acquire); });
     const bool cancellationWorkerEntered = cancelGate->entered.load(std::memory_order_acquire);
     static_cast<void>(cancelManager.Unload(cancelMetadata->id));
     cancelReleasePromise.set_value();
     kb::tests::Require(cancellationWorkerEntered, "Cancellation loader never entered its worker");
-    for (std::size_t spin = 0; spin < 1000000U && cancelManager.AsyncLoadStatus(cancelMetadata->id) == kb::assets::AsyncAssetLoadStatus::Pending; ++spin) {
-        cancelManager.PumpAsyncLoads();
-        std::this_thread::yield();
-    }
+    SpinUntil([&] { return cancelManager.AsyncLoadStatus(cancelMetadata->id) != kb::assets::AsyncAssetLoadStatus::Pending; },
+        [&] { cancelManager.PumpAsyncLoads(); });
     kb::tests::Require(cancelManager.AsyncLoadStatus(cancelMetadata->id) == kb::assets::AsyncAssetLoadStatus::NotRequested &&
             !cancelManager.IsLoaded(cancelMetadata->id),
         "Unload during an async request must invalidate the worker result before owner-thread commit");
@@ -587,8 +590,7 @@ void RunAssetManagerAsyncDependencyValidationTest() {
         .virtualPath = "/Game/Text/Dependency.txt", .physicalPath = "Dependency.txt"};
     kb::tests::Require(manager.RegisterAsset(dependency), "Validation dependency registration failed");
     const bool accepted = manager.RequestLoadAsync(id);
-    for (unsigned spin = 0U; spin < 1000000U && !gate->entered.load(std::memory_order_acquire); ++spin)
-        std::this_thread::yield();
+    SpinUntil([&] { return gate->entered.load(std::memory_order_acquire); });
     const bool workerEntered = gate->validatedOnWorker.load(std::memory_order_acquire);
     // Mutation while validation is blocked must not race its immutable view or
     // let an obsolete dependency closure publish into the canonical cache.
@@ -596,10 +598,7 @@ void RunAssetManagerAsyncDependencyValidationTest() {
     release.set_value();
     kb::tests::Require(accepted && workerEntered, "Async request performed dependency validation on its owner thread");
     const auto pump = [&] {
-        for (unsigned spin = 0U; spin < 1000000U && manager.AsyncLoadStatus(id) == kb::assets::AsyncAssetLoadStatus::Pending; ++spin) {
-            manager.PumpAsyncLoads();
-            std::this_thread::yield();
-        }
+        SpinUntil([&] { return !(manager.AsyncLoadStatus(id) == kb::assets::AsyncAssetLoadStatus::Pending); }, [&] { manager.PumpAsyncLoads(); });
     };
     pump();
     kb::tests::Require(manager.AsyncLoadStatus(id) == kb::assets::AsyncAssetLoadStatus::Failed &&
@@ -639,10 +638,7 @@ void RunAssetManagerAsyncLoaderReplacementTest() {
         "Replacement-test same-type loader registration failed");
     kb::tests::Require(manager.Revision() != revisionBeforeReplacement,
         "Replacing an asset loader must invalidate cached compatibility diagnostics");
-    for (std::size_t spin = 0; spin < 1000000U && manager.AsyncLoadStatus(id) == kb::assets::AsyncAssetLoadStatus::Pending; ++spin) {
-        manager.PumpAsyncLoads();
-        std::this_thread::yield();
-    }
+    SpinUntil([&] { return !(manager.AsyncLoadStatus(id) == kb::assets::AsyncAssetLoadStatus::Pending); }, [&] { manager.PumpAsyncLoads(); });
     kb::tests::Require(manager.AsyncLoadStatus(id) == kb::assets::AsyncAssetLoadStatus::Completed,
         "Replacing a loader discarded an active async request instead of restarting it");
     const kb::assets::AssetHandle<std::string> loaded = manager.AcquireLoaded<std::string>(id);
