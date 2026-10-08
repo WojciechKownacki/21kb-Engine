@@ -1,4 +1,5 @@
 #include "docking/EditorDockController.hpp"
+#include "app/EditorKeyState.hpp"
 
 #if defined(_WIN32)
 #include "docking/DockDragOperationHandler.hpp"
@@ -118,7 +119,7 @@ bool EditorDockController::Ready() const noexcept {
 }
 
 bool EditorDockController::LeftButtonPressed() const noexcept {
-    return (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+    return EditorAsyncKeyDown(VK_LBUTTON);
 }
 
 void EditorDockController::CaptureSourceWindow() const noexcept {

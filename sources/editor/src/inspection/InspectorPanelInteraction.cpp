@@ -1,4 +1,5 @@
 #include "inspection/InspectorPanelInteraction.hpp"
+#include "app/EditorKeyState.hpp"
 #include "rendering/EditorPanelStyle.hpp"
 #include "inspection/InspectorAudioMixerAssetInteraction.hpp"
 #include "inspection/InspectorSceneAudioInteraction.hpp"
@@ -3234,7 +3235,7 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
     if (hit.property == InspectorPropertyId::UIAnchorPreset) {
         sceneContext.Inspector().EndTextEdit();
         if (sceneContext.SetUIAnchorPreset(entity, hit.index,
-                (GetKeyState(VK_MENU) & 0x8000) != 0, (GetKeyState(VK_SHIFT) & 0x8000) != 0)) {
+                EditorKeyDown(VK_MENU), EditorKeyDown(VK_SHIFT))) {
             sceneContext.Inspector().ToggleDisclosure(InspectorDisclosureId::UIAnchorPresets);
         }
         return true;

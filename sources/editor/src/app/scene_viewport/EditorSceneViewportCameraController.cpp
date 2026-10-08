@@ -1,4 +1,5 @@
 #include "app/scene_viewport/EditorSceneViewportCameraController.hpp"
+#include "app/EditorKeyState.hpp"
 
 #if defined(_WIN32)
 #include "app/EditorWindowInvalidator.hpp"
@@ -23,7 +24,7 @@ constexpr DWORD kToolbarFpsRefreshMs = 250U;
 }
 
 [[nodiscard]] bool KeyDown(int virtualKey) noexcept {
-    return (GetKeyState(virtualKey) & 0x8000) != 0;
+    return EditorKeyDown(virtualKey);
 }
 
 [[nodiscard]] RECT ToRect(const DockRect& rect) noexcept {

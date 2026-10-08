@@ -1,4 +1,5 @@
 #include "app/pointer/EditorLeftButtonDownRouter.hpp"
+#include "app/EditorKeyState.hpp"
 
 #include "rendering/BuildGamePanelRenderer.hpp"
 #include "rendering/BuildGamePanelModel.hpp"
@@ -112,11 +113,11 @@ constexpr int kHierarchyScrollbarMinThumb = 24;
 }
 
 [[nodiscard]] bool LeftAltDown() noexcept {
-    return (GetKeyState(VK_LMENU) & 0x8000) != 0;
+    return EditorKeyDown(VK_LMENU);
 }
 
 [[nodiscard]] bool KeyDown(int virtualKey) noexcept {
-    return (GetKeyState(virtualKey) & 0x8000) != 0;
+    return EditorKeyDown(virtualKey);
 }
 
 [[nodiscard]] std::optional<kb::render::RenderMaterialGraphNodeKind> MaterialGraphShortcutNodeKind() noexcept {

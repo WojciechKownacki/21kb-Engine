@@ -39,6 +39,7 @@ add_executable(kb_editor WIN32
     src/app/EditorAssetBrowserThumbnailScaleDragHandler.cpp
     src/app/EditorAssetDropActionMenu.cpp
     src/app/EditorAssetProjectFilesDropActionExecutor.cpp
+    src/app/EditorKeyState.cpp
     src/app/EditorTextInputShortcuts.cpp
     src/app/console/EditorConsolePointerController.cpp
     src/app/cursor/EditorInternalSplitterCursorController.cpp
@@ -326,6 +327,7 @@ add_executable(kb_editor WIN32
     src/private/app/EditorAssetBrowserThumbnailScaleDragHandler.hpp
     src/private/app/EditorAssetDropActionMenu.hpp
     src/private/app/EditorAssetProjectFilesDropActionExecutor.hpp
+    src/private/app/EditorKeyState.hpp
     src/private/app/EditorTextInputShortcuts.hpp
     src/private/app/console/EditorConsolePointerController.hpp
     src/private/app/cursor/EditorInternalSplitterCursorController.hpp

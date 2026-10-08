@@ -1,4 +1,5 @@
 #include "app/EditorEditCommandInputHandler.hpp"
+#include "app/EditorKeyState.hpp"
 
 #if defined(_WIN32)
 
@@ -13,11 +14,11 @@ namespace kb::editor {
 namespace {
 
 [[nodiscard]] bool ControlDown() noexcept {
-    return (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+    return EditorKeyDown(VK_CONTROL);
 }
 
 [[nodiscard]] bool AltDown() noexcept {
-    return (GetKeyState(VK_MENU) & 0x8000) != 0;
+    return EditorKeyDown(VK_MENU);
 }
 
 [[nodiscard]] std::optional<EditorEditCommand> CommandForKey(WPARAM key) noexcept {

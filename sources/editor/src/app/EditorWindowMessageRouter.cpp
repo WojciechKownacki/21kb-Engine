@@ -1,4 +1,5 @@
 #include "app/EditorWindowMessageRouter.hpp"
+#include "app/EditorKeyState.hpp"
 
 #if defined(_WIN32)
 #include "app/EditorEditCommandInputHandler.hpp"
@@ -33,7 +34,7 @@ namespace kb::editor {
 namespace {
 
 [[nodiscard]] bool ModifierDown(int virtualKey) noexcept {
-    return (GetKeyState(virtualKey) & 0x8000) != 0;
+    return EditorKeyDown(virtualKey);
 }
 
 void FinishTerrainStroke(EditorWindowMessageContext& context) {

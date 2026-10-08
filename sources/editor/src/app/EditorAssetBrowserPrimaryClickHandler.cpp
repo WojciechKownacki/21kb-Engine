@@ -1,4 +1,5 @@
 #include "app/EditorAssetBrowserPrimaryClickHandler.hpp"
+#include "app/EditorKeyState.hpp"
 
 #if defined(_WIN32)
 #include "assets/EditorAssetBrowserHitPayloadResolver.hpp"
@@ -68,7 +69,7 @@ bool ExecuteDropAction(EditorSceneContext& sceneContext, EditorAssetDropAction a
 }
 
 [[nodiscard]] bool KeyDown(int virtualKey) noexcept {
-    return (GetKeyState(virtualKey) & 0x8000) != 0;
+    return EditorKeyDown(virtualKey);
 }
 
 } // namespace
