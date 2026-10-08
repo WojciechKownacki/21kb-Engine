@@ -679,30 +679,31 @@ void RunPackagedTrustTests() {
             Mentions(refusal.str(), "signed by a different key"),
         "A pack sealed by another key was not refused with its reason");
 
-    // A packaged player binds saves to its game and to this installation: a save it writes does
-    // not load under the development key, and the installation secret it created is reused.
+    // A packaged player binds saves to its game, not to one machine: a save it writes does not load
+    // under the development key, and loads in any other copy of the same game, as a cloud save or a
+    // save carried to another computer must.
     anchor.anchor.saveSecret = kb::security::DeriveGameSaveSecret(key, anchor.anchor.productId);
-    const std::filesystem::path securityRoot = TestRoot() / "packaged_trust_security";
     std::ostringstream saveWarnings;
-    kb::game::ConfigurePackagedSaveIntegrity(anchor.anchor, securityRoot, saveWarnings);
-    Require(saveWarnings.str().empty() && std::filesystem::is_regular_file(securityRoot / "installation.secret"),
-        "A packaged player did not create its installation secret");
+    kb::game::ConfigurePackagedSaveIntegrity(anchor.anchor, saveWarnings);
+    Require(saveWarnings.str().empty(), "A packaged player could not configure its save key");
     kb::save::SaveGame save;
     save.SetInt("level", 3);
     const std::filesystem::path savePath = TestRoot() / "packaged_trust_save.kbsave";
     Require(kb::save::SaveGameService::Save(savePath, save), "A packaged save could not be written");
-    Require(kb::save::SaveGameService::Load(savePath).Succeeded(), "A packaged save did not load on its installation");
+    Require(kb::save::SaveGameService::Load(savePath).Succeeded(), "A packaged save did not load in its game");
     kb::save::SaveGameService::ConfigureIntegrity(kb::save::DevelopmentSaveGameIntegrity());
     Require(kb::save::SaveGameService::Load(savePath).status == kb::save::SaveGameLoadStatus::Tampered,
-        "A packaged save loaded without its game and installation secrets");
-    kb::game::ConfigurePackagedSaveIntegrity(anchor.anchor, securityRoot, saveWarnings);
+        "A packaged save loaded without its game's secret");
+    kb::security::TrustAnchor otherCopy = anchor.anchor;
+    kb::game::ConfigurePackagedSaveIntegrity(otherCopy, saveWarnings);
     Require(kb::save::SaveGameService::Load(savePath).Succeeded(),
-        "The installation secret was not reused on the next start");
+        "A packaged save did not load in another copy of the same game");
     kb::save::SaveGameService::ConfigureIntegrity(kb::save::DevelopmentSaveGameIntegrity());
 
     // A packaged release starts only from the files its signed manifest lists, binds its pack by
     // the pack's own seal, and refuses to go back to an older release when it asks for that.
     const std::filesystem::path releaseRoot = TestRoot() / "packaged_trust_release";
+    const std::filesystem::path securityRoot = TestRoot() / "packaged_trust_security";
     std::filesystem::create_directories(releaseRoot);
     std::filesystem::copy_file(packPath, releaseRoot / "Game.kbpack");
     WriteTextFile(releaseRoot / "Game.exe", "player");

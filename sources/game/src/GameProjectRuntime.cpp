@@ -166,8 +166,7 @@ namespace {
         return false;
     }
     if (anchor.state == kb::security::TrustAnchorLookup::State::Present) {
-        ConfigurePackagedSaveIntegrity(
-            anchor.anchor, kb::security::DefaultUserSecurityRoot(anchor.anchor.productId), err);
+        ConfigurePackagedSaveIntegrity(anchor.anchor, err);
     }
     return ReadMountedGameProjectRuntime(
         std::move(pack), packPath.parent_path(), sceneOverride, runtime, err);
@@ -246,24 +245,12 @@ bool PackBelongsToRelease(
     return true;
 }
 
-void ConfigurePackagedSaveIntegrity(
-    const kb::security::TrustAnchor& anchor,
-    const std::filesystem::path& securityRoot,
-    std::ostream& err) {
+void ConfigurePackagedSaveIntegrity(const kb::security::TrustAnchor& anchor, std::ostream& err) {
     if (!anchor.saveSecret.has_value()) {
         err << "this player's trust anchor carries no save secret; saves use the development key\n";
         return;
     }
-    kb::security::InstallationSecret installation;
-    std::string error;
-    std::span<const std::uint8_t> installationBytes;
-    if (kb::security::LoadOrCreateInstallationSecret(securityRoot, installation, error)) {
-        installationBytes = installation.Span();
-    } else {
-        err << "saves are not bound to this installation: " << error << '\n';
-    }
-    kb::save::SaveGameService::ConfigureIntegrity(
-        kb::save::DeriveSaveGameIntegrity(anchor.saveSecret->Span(), installationBytes));
+    kb::save::SaveGameService::ConfigureIntegrity(kb::save::DeriveSaveGameIntegrity(anchor.saveSecret->Span(), {}));
 }
 
 void ReportRuntimePackageRefusal(

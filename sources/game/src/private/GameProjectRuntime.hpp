@@ -134,13 +134,10 @@ inline constexpr std::string_view kPackagedGameFileName = "Game.kbpack";
     const kb::assets::bake::RuntimeAssetPack& pack,
     std::ostream& err);
 
-// Authenticates this player's save files with the per-game secret of its trust anchor and the
-// per-installation secret kept in `securityRoot` (created on first run). Without a usable
-// installation secret saves are still bound to the game, and a warning says so.
-void ConfigurePackagedSaveIntegrity(
-    const kb::security::TrustAnchor& anchor,
-    const std::filesystem::path& securityRoot,
-    std::ostream& err);
+// Authenticates this player's save files with the per-game secret of its trust anchor. Saves are bound to
+// the game, not to one machine, so they move with the player between computers, through cloud saves and
+// across reinstalls.
+void ConfigurePackagedSaveIntegrity(const kb::security::TrustAnchor& anchor, std::ostream& err);
 
 // One line naming why a runtime asset pack was refused, in words a player can act on.
 void ReportRuntimePackageRefusal(

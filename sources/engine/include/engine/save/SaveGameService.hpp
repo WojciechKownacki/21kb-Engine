@@ -49,12 +49,14 @@ struct SaveGameLoadResult {
 // How saves are authenticated. Every save carries an HMAC-SHA512 under `key`; a save whose
 // code does not match is Tampered, never loaded.
 //
-// A packaged player derives the key from the per-game secret in its trust anchor and a random
-// per-installation secret kept in per-user storage (DeriveSaveGameIntegrity), so a save edited
-// by hand or copied from another installation is refused. The secrets live on the player's own
-// machine, so this makes editing a save deliberate work rather than a hex edit -- it cannot stop
-// someone who extracts both. Until a player configures one, saves use a fixed development key:
-// hand edits are still caught, but anyone can forge one.
+// A packaged player derives the key from the per-game secret in its trust anchor
+// (DeriveSaveGameIntegrity with no installation secret), so a save edited by hand is refused while
+// saves still move between the player's machines, cloud saves and reinstalls. A game that wants
+// saves bound to one installation passes an installation secret as well (LoadOrCreateInstallationSecret);
+// a save copied from elsewhere is then refused. The secret lives in the player's copy of the game, so
+// this makes editing a save deliberate work rather than a hex edit -- it cannot stop someone who
+// extracts it. Until a player configures one, saves use a fixed development key: hand edits are
+// still caught, but anyone can forge one.
 struct SaveGameIntegrity {
     kb::security::SecretBytes<kb::security::kSha512Bytes> key;
     // Saves written before saves were authenticated (schema 1 and 2) load once and are rewritten
