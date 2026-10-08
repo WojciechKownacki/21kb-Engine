@@ -51,11 +51,7 @@ constexpr auto kRequiredShaders = std::to_array<ShaderManifestEntry>({
     ShaderManifestEntry{.name = "fs_mesh.sc", .stage = ShaderStage::Fragment},
     ShaderManifestEntry{.name = "fs_mesh_gbuffer_instanced.sc", .stage = ShaderStage::Fragment},
     ShaderManifestEntry{.name = "fs_mesh_instanced.sc", .stage = ShaderStage::Fragment},
-    // Legacy developer prebuilt bundles contain these permutations only in DXBC, so they stay
-    // individually optional for ValidateShaderManifestProfile. Production packages compile
-    // them per target and RequiredPackagedShaderNames promotes every stage referenced by a
-    // required runtime program; the cooker/validator therefore cannot omit them.
-    ShaderManifestEntry{.name = "fs_mesh_motion_vectors.sc", .stage = ShaderStage::Fragment, .required = false},
+    ShaderManifestEntry{.name = "fs_mesh_motion_vectors.sc", .stage = ShaderStage::Fragment},
     ShaderManifestEntry{.name = "fs_mesh_selection_instanced.sc", .stage = ShaderStage::Fragment},
     ShaderManifestEntry{.name = "fs_mesh_shadow_instanced.sc", .stage = ShaderStage::Fragment},
     ShaderManifestEntry{.name = "fs_post_bloom_blur.sc", .stage = ShaderStage::Fragment},
@@ -82,11 +78,11 @@ constexpr auto kRequiredShaders = std::to_array<ShaderManifestEntry>({
     ShaderManifestEntry{.name = "vs_lit_trs_gpu_cull.sc", .stage = ShaderStage::Vertex, .required = false},
     ShaderManifestEntry{.name = "vs_mesh.sc", .stage = ShaderStage::Vertex},
     ShaderManifestEntry{.name = "vs_mesh_instanced.sc", .stage = ShaderStage::Vertex},
-    ShaderManifestEntry{.name = "vs_mesh_motion_vectors_instanced.sc", .stage = ShaderStage::Vertex, .required = false},
+    ShaderManifestEntry{.name = "vs_mesh_motion_vectors_instanced.sc", .stage = ShaderStage::Vertex},
     ShaderManifestEntry{.name = "vs_mesh_shadow_instanced.sc", .stage = ShaderStage::Vertex},
-    ShaderManifestEntry{.name = "vs_mesh_shadow_skinned_instanced.sc", .stage = ShaderStage::Vertex, .required = false},
-    ShaderManifestEntry{.name = "vs_mesh_skinned_instanced.sc", .stage = ShaderStage::Vertex, .required = false},
-    ShaderManifestEntry{.name = "vs_mesh_skinned_motion_vectors_instanced.sc", .stage = ShaderStage::Vertex, .required = false},
+    ShaderManifestEntry{.name = "vs_mesh_shadow_skinned_instanced.sc", .stage = ShaderStage::Vertex},
+    ShaderManifestEntry{.name = "vs_mesh_skinned_instanced.sc", .stage = ShaderStage::Vertex},
+    ShaderManifestEntry{.name = "vs_mesh_skinned_motion_vectors_instanced.sc", .stage = ShaderStage::Vertex},
     ShaderManifestEntry{.name = "vs_present.sc", .stage = ShaderStage::Vertex},
     ShaderManifestEntry{.name = "vs_particle_instanced.sc", .stage = ShaderStage::Vertex},
     ShaderManifestEntry{.name = "vs_screen_ui.sc", .stage = ShaderStage::Vertex},

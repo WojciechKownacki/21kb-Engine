@@ -119,10 +119,11 @@ struct ForwardRenderProbe {
 [[nodiscard]] bool CookShaderSource(
     const std::filesystem::path& source,
     const std::filesystem::path& output,
-    std::string_view type) {
+    std::string_view type,
+    std::string_view profile = "s_5_0") {
     std::ostringstream command;
     command << '"' << '"' << KB_TEST_GRAPH_SHADERC_PATH << '"'
-        << " --type " << type << " --platform windows --profile s_5_0"
+        << " --type " << type << " --platform windows --profile " << profile
         << " -f \"" << source.generic_string() << '"'
         << " -o \"" << output.generic_string() << '"'
         << " --varyingdef \"" << KB_TEST_GRAPH_SHADER_VARYING_DEF << '"'
@@ -376,12 +377,12 @@ struct ForwardRenderProbe {
 
 class ForwardRenderHarness {
 public:
-    [[nodiscard]] bool Init() {
+    [[nodiscard]] bool Init(bgfx::RendererType::Enum renderer = bgfx::RendererType::Direct3D11) {
 #if defined(_WIN32)
         window_ = CreateWindowExW(0, L"STATIC", L"mat08", WS_OVERLAPPEDWINDOW, 0, 0, 64, 64, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
 #endif
         bgfx::Init init;
-        init.type = bgfx::RendererType::Direct3D11;
+        init.type = renderer;
         init.resolution.width = 64U;
         init.resolution.height = 64U;
         init.resolution.reset = BGFX_RESET_NONE;
@@ -5089,9 +5090,116 @@ void RunGraphForwardGpuRenderTests() {
 #endif
 }
 
+#if defined(KB_TEST_GRAPH_SHADERC_PATH)
+// The committed Vulkan and OpenGL binaries of the skinned vertex stages, executed on those
+// backends: the same palette deformation readback as SMA-38, with the vertex shader under test
+// loaded from prebuilt_shaders/<profile> instead of cooked for Direct3D. A backend this machine
+// cannot create a device for is reported and skipped; a backend that runs must pass.
+void RunPrebuiltSkinnedShadersOnVulkanAndOpenGlTest() {
+    struct Backend {
+        bgfx::RendererType::Enum renderer;
+        const char* profileDirectory;
+        const char* shadercProfile;
+    };
+    constexpr std::array<Backend, 2U> backends{
+        Backend{ bgfx::RendererType::Vulkan, "spirv", "spirv" },
+        Backend{ bgfx::RendererType::OpenGL, "glsl", "120" },
+    };
+    const std::filesystem::path prebuilt =
+        std::filesystem::path{ KB_RENDERER_TEST_SOURCE_ROOT } / "sources" / "renderer" / "prebuilt_shaders";
+    const std::filesystem::path cacheDir = std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "prebuilt_skinned_backends";
+    std::error_code error;
+    std::filesystem::remove_all(cacheDir, error);
+    std::filesystem::create_directories(cacheDir, error);
+    const auto writeFragment = [&](std::string_view name, std::string_view input, std::string_view body) {
+        const std::filesystem::path source = cacheDir / (std::string{ name } + ".sc");
+        std::ofstream output{ source, std::ios::binary | std::ios::trunc };
+        output << "$input " << input << "\n#include <bgfx_shader.sh>\nvoid main() { " << body << " }\n";
+        return source;
+    };
+    const std::filesystem::path baseFragment = writeFragment("fs_skinned_probe",
+        "v_normal, v_color0, v_texcoord0, v_worldPos, v_shadowPos, v_shadowFlags, v_tangent, v_bitangent, v_objectLocalPos, v_objectWorldPos, v_objectOrientation, v_preSkinnedNormal",
+        "gl_FragColor = vec4((v_worldPos.x - v_objectLocalPos.x) * 0.5 + 0.5, 0.0, 0.0, 1.0);");
+    const std::filesystem::path shadowFragment = writeFragment("fs_skinned_shadow_probe", "v_color0, v_texcoord0", "gl_FragColor = vec4(v_texcoord0.x, 0.0, 0.0, 1.0);");
+    const std::filesystem::path motionFragment = writeFragment("fs_skinned_motion_probe", "v_currentClip, v_previousClip",
+        "float velocityX = v_currentClip.x / v_currentClip.w - v_previousClip.x / v_previousClip.w; gl_FragColor = vec4(velocityX * 0.5 + 0.5, 0.0, 0.0, 1.0);");
+    const std::array<std::tuple<const char*, const char*, std::filesystem::path, bool>, 4U> variants{{
+        { "base_gbuffer_selection", "vs_mesh_skinned_instanced.sc.bin", baseFragment, false },
+        { "depth_shadow", "vs_mesh_shadow_skinned_instanced.sc.bin", shadowFragment, false },
+        { "motion_vectors", "vs_mesh_skinned_motion_vectors_instanced.sc.bin", motionFragment, true },
+        { "static_motion_vectors", "vs_mesh_motion_vectors_instanced.sc.bin", motionFragment, true },
+    }};
+    for (const Backend& backend : backends) {
+        ForwardRenderHarness harness;
+        const bool initialized = harness.Init(backend.renderer);
+        if (!initialized || bgfx::getRendererType() != backend.renderer) {
+            std::fprintf(stderr, "prebuilt skinned shaders on %s: skipped, no %s device on this machine\n",
+                bgfx::getRendererName(backend.renderer), bgfx::getRendererName(backend.renderer));
+            if (initialized) {
+                harness.Shutdown();
+            }
+            continue;
+        }
+        const bgfx::UniformHandle paletteSampler = bgfx::createUniform("s_skinningPalette", bgfx::UniformType::Sampler);
+        const bgfx::UniformHandle paletteInfo = bgfx::createUniform("u_skinningPaletteInfo", bgfx::UniformType::Vec4);
+        const bgfx::UniformHandle previousPaletteSampler = bgfx::createUniform("s_previousSkinningPalette", bgfx::UniformType::Sampler);
+        const bgfx::UniformHandle previousPaletteInfo = bgfx::createUniform("u_previousSkinningPaletteInfo", bgfx::UniformType::Vec4);
+        const bgfx::UniformHandle previousViewProjection = bgfx::createUniform("u_motionPreviousViewProjection", bgfx::UniformType::Mat4);
+        const bgfx::UniformHandle shadowViewProjection = bgfx::createUniform("u_shadowViewProj", bgfx::UniformType::Mat4);
+        for (const auto& [name, vertexBinaryName, fragmentSource, motionVectors] : variants) {
+            const std::vector<std::uint8_t> vertexBytes = ReadAllBytes(prebuilt / backend.profileDirectory / vertexBinaryName);
+            const std::filesystem::path fragmentBinary =
+                cacheDir / (std::string{ name } + "." + backend.profileDirectory + ".fs.bin");
+            Require(!vertexBytes.empty(), "a prebuilt skinned vertex shader is missing for a backend under test");
+            Require(CookShaderSource(fragmentSource, fragmentBinary, "fragment", backend.shadercProfile),
+                "the skinned probe fragment shader must cook for the backend under test");
+            const std::vector<std::uint8_t> fragmentBytes = ReadAllBytes(fragmentBinary);
+            const bgfx::ShaderHandle vertex = bgfx::createShader(bgfx::copy(vertexBytes.data(), static_cast<std::uint32_t>(vertexBytes.size())));
+            const bgfx::ShaderHandle fragment = bgfx::createShader(bgfx::copy(fragmentBytes.data(), static_cast<std::uint32_t>(fragmentBytes.size())));
+            const bgfx::ProgramHandle program = bgfx::createProgram(vertex, fragment, true);
+            Require(bgfx::isValid(program),
+                (std::string{ "prebuilt skinned shader did not link on " } + bgfx::getRendererName(backend.renderer) + ": " + name).c_str());
+            const ForwardRenderProbe pixel = harness.RenderSkinnedProbe(program,
+                paletteSampler, paletteInfo, previousPaletteSampler, previousPaletteInfo,
+                previousViewProjection, shadowViewProjection, motionVectors);
+            // The palette halves x: at the probe pixel the deformed position (and, against the
+            // identity previous palette, the velocity) encodes to red 62 of 255. The static
+            // motion vector stage does not skin, so its velocity is zero: red 128. An undrawn
+            // black target is outside every band.
+            const std::string_view variant{ name };
+            const bool expected = variant == "depth_shadow"
+                ? pixel.r > 230U && pixel.g < 8U && pixel.b < 8U
+                : variant == "static_motion_vectors"
+                    ? pixel.r > 110U && pixel.r < 145U && pixel.g < 8U && pixel.b < 8U
+                    : pixel.r > 40U && pixel.r < 90U && pixel.g < 8U && pixel.b < 8U;
+            Require(expected,
+                (std::string{ "prebuilt skinned shader deformed wrongly on " } + bgfx::getRendererName(backend.renderer) +
+                 ": " + name + " rgb=" + std::to_string(pixel.r) + "," + std::to_string(pixel.g) + "," +
+                 std::to_string(pixel.b)).c_str());
+            bgfx::destroy(program);
+        }
+        bgfx::destroy(shadowViewProjection);
+        bgfx::destroy(previousViewProjection);
+        bgfx::destroy(previousPaletteInfo);
+        bgfx::destroy(previousPaletteSampler);
+        bgfx::destroy(paletteInfo);
+        bgfx::destroy(paletteSampler);
+        harness.Shutdown();
+        std::fprintf(stderr, "prebuilt skinned shaders on %s: palette deformation verified\n",
+            bgfx::getRendererName(backend.renderer));
+    }
+}
+#endif
+
 void RunSkinnedMeshGpuReadbackTests() {
 #if defined(KB_TEST_GRAPH_SHADERC_PATH)
     RunSkinnedMeshPassGpuReadbackTest();
+#endif
+}
+
+void RunPrebuiltBackendShaderGpuTests() {
+#if defined(KB_TEST_GRAPH_SHADERC_PATH)
+    RunPrebuiltSkinnedShadersOnVulkanAndOpenGlTest();
 #endif
 }
 
