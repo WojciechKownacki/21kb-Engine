@@ -6,6 +6,7 @@ void RunAssetRuntimeTests();
 void RunAssetBakeTests();
 void RunAssetPackTests();
 void RunSaveGameTests();
+void RunSecurityTests();
 void RunEcsRuntimeTests();
 void RunSceneHierarchyTests();
 void RunTransformWriteBenchmark();

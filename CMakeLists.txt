@@ -381,6 +381,29 @@ if(NOT TARGET kb_lua)
     endif()
 endif()
 
+# Every cryptographic primitive the engine uses (Ed25519, SHA-512, HMAC-SHA512,
+# XChaCha20-Poly1305) comes from this audited release. The engine reaches it only
+# through engine/security/Crypto.hpp and never implements a primitive itself.
+FetchContent_Declare(
+    kb_monocypher
+    URL https://monocypher.org/download/monocypher-4.0.2.tar.gz
+    URL_HASH SHA256=38d07179738c0c90677dba3ceb7a7b8496bcfea758ba1a53e803fed30ae0879c
+)
+FetchContent_MakeAvailable(kb_monocypher)
+if(NOT TARGET kb_monocypher)
+    add_library(kb_monocypher STATIC
+        ${kb_monocypher_SOURCE_DIR}/src/monocypher.c
+        ${kb_monocypher_SOURCE_DIR}/src/optional/monocypher-ed25519.c
+    )
+    target_include_directories(kb_monocypher PUBLIC
+        ${kb_monocypher_SOURCE_DIR}/src
+        ${kb_monocypher_SOURCE_DIR}/src/optional
+    )
+    if(NOT WIN32)
+        set_target_properties(kb_monocypher PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    endif()
+endif()
+
 add_subdirectory(sources/engine engine)
 add_subdirectory(sources/tools tools)
 add_subdirectory(sources/plugins/physics_jolt physics_jolt)

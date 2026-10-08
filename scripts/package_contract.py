@@ -43,6 +43,7 @@ ENGINE_BUILD_INPUTS = (
     "third_party/flecs",
     "third_party/jolt",
     "third_party/licenses/lua-5.4.8.txt",
+    "third_party/licenses/monocypher-4.0.2.txt",
     "third_party/miniaudio",
     "third_party/ufbx",
     "scripts/package_contract.py",
