@@ -19,9 +19,10 @@
 //
 // The TRUST ANCHOR is the public half plus the few values a shipped player needs to check what
 // it loads. Packaging embeds it into the player itself -- an RT_RCDATA resource on Windows
-// (written before any Authenticode signature, so replacing it breaks that signature), an asset
-// inside the signed APK on Android -- and a player that carries one runs in PACKAGED mode:
-// it refuses unsigned or foreign content instead of warning about it.
+// (written before any Authenticode signature, so replacing it breaks that signature), the
+// reserved section of a Linux ELF player, an asset inside the signed APK on Android -- and a
+// player that carries one runs in PACKAGED mode: it refuses unsigned or foreign content instead
+// of warning about it.
 namespace kb::security {
 
 // Resource id of the trust anchor inside a Windows player (resource type RT_RCDATA). Must match
@@ -29,6 +30,15 @@ namespace kb::security {
 inline constexpr std::uint16_t kTrustAnchorResourceId = 2101U;
 // Name of the trust anchor among the assets of an Android package.
 inline constexpr std::string_view kTrustAnchorAssetName = "kb_trust_anchor.bin";
+
+// A Linux player reserves its trust anchor slot at build time: an allocated, read-only ELF section
+// of this name and exactly kTrustAnchorSlotBytes, which packaging fills in place after the build
+// (scripts/elf_trust_anchor.py; its SECTION_NAME, SLOT_BYTES and SLOT_MAGIC must match these).
+// The slot is the 16-byte magic, the anchor's length as a little-endian u32 (0 while the slot is
+// empty), four zero bytes, the encoded anchor and zero padding.
+inline constexpr std::string_view kTrustAnchorElfSectionName = ".kb_trust_anchor";
+inline constexpr std::size_t kTrustAnchorSlotBytes = 1024U;
+inline constexpr std::string_view kTrustAnchorSlotMagic = "21KB-ANCHOR-SLOT";
 
 inline constexpr std::size_t kMaxProductIdBytes = 128U;
 
@@ -87,13 +97,22 @@ struct TrustAnchorLookup {
     std::string error;
 };
 
-// The trust anchor embedded in the running executable. Windows reads its RT_RCDATA resource;
-// other platforms have no executable resource and report Absent (Android hosts read their
-// anchor asset and decode it with DecodeTrustAnchor).
+// The trust anchor embedded in the running executable. Windows reads its RT_RCDATA resource and
+// Linux the slot section linked into the player; other platforms report Absent (Android hosts
+// read their anchor asset and decode it with DecodeTrustAnchor).
 [[nodiscard]] TrustAnchorLookup LoadExecutableTrustAnchor();
 
-// The trust anchor embedded in another Windows executable on disk, for release tooling.
+// The trust anchor embedded in another executable on disk, for release tooling: a Linux ELF
+// player on every host, a Windows PE player on Windows.
 [[nodiscard]] TrustAnchorLookup ReadTrustAnchorFromExecutable(const std::filesystem::path& executable);
+
+// A trust anchor slot (see kTrustAnchorElfSectionName): Absent while empty, Invalid when it is
+// not a well-formed slot or its anchor does not decode.
+[[nodiscard]] TrustAnchorLookup DecodeTrustAnchorSlot(std::span<const std::uint8_t> slot);
+
+// The trust anchor slot of a 64-bit little-endian ELF image. Absent when the image has no slot
+// section, Invalid when the image or the slot is malformed.
+[[nodiscard]] TrustAnchorLookup ReadTrustAnchorFromElf(std::span<const std::uint8_t> image);
 
 // Per-user directory a packaged player keeps its security state in (installation secret,
 // anti-rollback record): %LOCALAPPDATA%\21kb\<product> on Windows, $XDG_DATA_HOME/21kb/<product>

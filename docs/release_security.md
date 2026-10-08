@@ -33,8 +33,11 @@ calls a primitive directly.
 
 Packaging embeds the trust anchor into the player before anything else touches the executable:
 an `RT_RCDATA` resource (id 2101) written by `scripts/windows_pe_resources.py` on Windows, so a
-later Authenticode signature covers it and replacing it breaks that signature; the asset
-`kb_trust_anchor.bin` inside the signed APK on Android. A player that carries an anchor runs in
+later Authenticode signature covers it and replacing it breaks that signature; the 1024-byte
+`.kb_trust_anchor` section every Linux player is linked with, filled in place by
+`scripts/elf_trust_anchor.py` on the Linux build machine before the player's first-frame proof
+and build receipt (the host then checks the returned player carries exactly this release's
+anchor); the asset `kb_trust_anchor.bin` inside the signed APK on Android. A player that carries an anchor runs in
 **packaged mode** and refuses unsigned or foreign content, including a loose project passed with
 `--project`. A player without one (the editor, a
 development `kb_game`) accepts it and says so. A damaged anchor is an error, never a fallback to
@@ -135,11 +138,16 @@ should set `SaveGameIntegrity::acceptUnauthenticatedLegacySaves` to `false`.
   Authenticode after packaging embeds it so the anchor cannot be swapped.
 - **Android**: the anchor is an APK asset, protected by the APK signature. Encryption is not
   offered (the Gradle build validates the pack on the host without the content key).
-- **Linux and the browser**: an ELF binary and a WebAssembly module carry no resource section
-  packaging can write after the build, so these players have no trust anchor and run like
-  development players: a sealed pack is still checked for integrity against the key it names,
-  but nothing stops a replaced pack signed with another key. They get no release manifest and
-  no save secret either. Distribute them through a channel that signs the whole download.
+- **Linux**: the trust anchor is the player's `.kb_trust_anchor` ELF section, so a Linux player
+  runs in packaged mode: it refuses a pack its release key did not sign and authenticates saves
+  with the per-game secret. An ELF file carries no code signature, so anyone who can write the
+  player can also replace its anchor, and Linux packages get no release manifest: the startup
+  check of the installed file set is Windows only. Distribute through a channel that signs the
+  whole download.
+- **The browser**: a WebAssembly module carries no section packaging can write after the
+  build, so a web player has no trust anchor and runs like a development player: a sealed pack
+  is still checked for integrity against the key it names, but nothing stops a replaced pack
+  signed with another key. It gets no release manifest and no save secret either.
 - **DLLs the operating system loads before `main`** (search-order hijacking of system DLL names)
   run before any check of the player's. The startup check refuses to continue with one present,
   but cannot undo what its initialiser already did; install games into directories users cannot

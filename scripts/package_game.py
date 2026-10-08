@@ -52,6 +52,7 @@ from package_contract import (
     terminate_process_tree,
     verify_unit,
 )
+from elf_trust_anchor import ElfTrustAnchorError, embed_trust_anchor, read_trust_anchor
 from third_party_notices import NoticeError, load_components, select_components, stage_notices, write_sbom
 from windows_authenticode import (
     AuthenticodeError,
@@ -1446,6 +1447,18 @@ def _create_deterministic_tar(
                         archive.addfile(info, stream)
 
 
+def _embed_linux_trust_anchor(args: argparse.Namespace, player: Path) -> None:
+    """Fills the trust anchor slot of a Linux player, the counterpart of the Windows RT_RCDATA
+    resource: a player carrying it refuses content its release key did not sign."""
+    anchor: Path | None = getattr(args, "trust_anchor", None)
+    if anchor is None:
+        return
+    try:
+        embed_trust_anchor(player, anchor.read_bytes())
+    except (ElfTrustAnchorError, OSError) as error:
+        raise PackagingError(f"Linux player trust anchor could not be embedded: {error}") from error
+
+
 def _stage_linux_local(args: argparse.Namespace, cmake: Path, pack: Path, stage: Path) -> list[Path]:
     if sys.platform != "linux":
         raise PackagingError("local Linux packaging must run on Linux")
@@ -1474,6 +1487,8 @@ def _stage_linux_local(args: argparse.Namespace, cmake: Path, pack: Path, stage:
     destination = stage / args.executable_name
     shutil.copy2(game, destination)
     destination.chmod(destination.stat().st_mode | 0o111)
+    # Before the first-frame proof: the player runs in packaged mode from here on.
+    _embed_linux_trust_anchor(args, destination)
     shutil.copy2(pack, stage / "Game.kbpack")
     _stage_licenses(args, stage)
     if destination.read_bytes()[:4] != b"\x7fELF":
@@ -1524,10 +1539,16 @@ def _stage_linux_remote(args: argparse.Namespace, pack: Path, stage: Path, job: 
     transport = job / "linux-transport"
     transport.mkdir()
     shutil.copy2(pack, transport / "Game.kbpack")
+    if getattr(args, "trust_anchor", None) is not None:
+        # The guest fills the player's slot before its first-frame proof and build receipt.
+        shutil.copy2(args.trust_anchor, transport / "trust-anchor.bin")
     _create_deterministic_tar(transport, source_archive)
     helper = args.engine_root / "scripts/package_linux_guest.py"
     if not helper.is_file():
         raise PackagingError("Linux guest package helper is missing")
+    anchor_helper = args.engine_root / "scripts/elf_trust_anchor.py"
+    if not anchor_helper.is_file():
+        raise PackagingError("Linux trust anchor helper is missing")
     known_hosts = job / "linux-known-hosts"
     known_host_name = host if args.linux_port == 22 else f"[{host}]:{args.linux_port}"
     known_hosts.write_text(f"{known_host_name} {host_key}\n", encoding="ascii", newline="\n")
@@ -1549,7 +1570,11 @@ def _stage_linux_remote(args: argparse.Namespace, pack: Path, stage: Path, job: 
         contract = args.engine_root / "scripts/package_contract.py"
         if not contract.is_file():
             raise PackagingError("package contract helper is missing")
-        run_checked([*scp_base, source_archive, helper, contract, f"{destination}:{remote_job}/"], cwd=job, timeout_seconds=1800)
+        run_checked(
+            [*scp_base, source_archive, helper, contract, anchor_helper, f"{destination}:{remote_job}/"],
+            cwd=job,
+            timeout_seconds=1800,
+        )
         command = (
             f"python3 {shlex.quote(remote_job + '/package_linux_guest.py')} "
             f"--archive {shlex.quote(remote_job + '/' + source_archive.name)} "
@@ -1595,6 +1620,14 @@ def _verify_linux_stage(stage: Path, args: argparse.Namespace) -> None:
     }
     if receipt != expected:
         raise PackagingError("Linux build receipt does not match the returned artifact")
+    anchor: Path | None = getattr(args, "trust_anchor", None)
+    if anchor is not None:
+        try:
+            carried = read_trust_anchor(player)
+        except (ElfTrustAnchorError, OSError) as error:
+            raise PackagingError(f"Linux player trust anchor could not be read: {error}") from error
+        if carried != anchor.read_bytes():
+            raise PackagingError("Linux player does not carry this release's trust anchor")
 
 
 def _extract_linux_result(archive_path: Path, destination: Path) -> None:

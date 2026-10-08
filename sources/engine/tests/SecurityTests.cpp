@@ -7,12 +7,14 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -331,6 +333,181 @@ void WriteBytes(const std::filesystem::path& path, std::string_view text) {
 // The release manifest is accepted only under its release key and only for its product; every
 // modified, missing or unlisted critical file is refused by name; anti-rollback refuses an older
 // release once a newer one has run.
+// A trust anchor slot as a Linux player carries it, filled with `anchor` (empty: an unfilled slot).
+[[nodiscard]] std::vector<std::uint8_t> MakeTrustAnchorSlot(std::span<const std::uint8_t> anchor) {
+    std::vector<std::uint8_t> slot(kb::security::kTrustAnchorSlotBytes, 0U);
+    std::copy(kb::security::kTrustAnchorSlotMagic.begin(), kb::security::kTrustAnchorSlotMagic.end(), slot.begin());
+    for (std::uint32_t index = 0U; index < 4U; ++index) {
+        slot[16U + index] = static_cast<std::uint8_t>(anchor.size() >> (index * 8U));
+    }
+    std::copy(anchor.begin(), anchor.end(), slot.begin() + 24);
+    return slot;
+}
+
+struct ElfSection {
+    std::string name;
+    std::uint32_t type = 1U; // SHT_PROGBITS
+    std::vector<std::uint8_t> contents;
+};
+
+void PutLittleEndian(std::vector<std::uint8_t>& bytes, std::size_t offset, std::uint64_t value, std::size_t width) {
+    for (std::size_t index = 0U; index < width; ++index) {
+        bytes[offset + index] = static_cast<std::uint8_t>(value >> (index * 8U));
+    }
+}
+
+// A minimal 64-bit little-endian x86-64 ELF executable: header, the given sections' contents, a
+// section name table and the section header table, as a linker lays them out.
+[[nodiscard]] std::vector<std::uint8_t> MakeElfImage(const std::vector<ElfSection>& sections) {
+    std::vector<std::uint8_t> image(64U, 0U);
+    const std::array<std::uint8_t, 8U> ident{ 0x7FU, 'E', 'L', 'F', 2U, 1U, 1U, 0U };
+    std::copy(ident.begin(), ident.end(), image.begin());
+    PutLittleEndian(image, 0x10U, 2U, 2U);  // ET_EXEC
+    PutLittleEndian(image, 0x12U, 62U, 2U); // EM_X86_64
+    PutLittleEndian(image, 0x14U, 1U, 4U);
+    PutLittleEndian(image, 0x34U, 64U, 2U);
+    PutLittleEndian(image, 0x36U, 56U, 2U);
+    std::string names(1U, '\0');
+    std::vector<std::pair<std::uint64_t, std::uint32_t>> placed; // offset, name offset
+    for (const ElfSection& section : sections) {
+        while (image.size() % 16U != 0U) image.push_back(0U);
+        placed.emplace_back(image.size(), static_cast<std::uint32_t>(names.size()));
+        names += section.name;
+        names.push_back('\0');
+        image.insert(image.end(), section.contents.begin(), section.contents.end());
+    }
+    const auto namesName = static_cast<std::uint32_t>(names.size());
+    names += ".shstrtab";
+    names.push_back('\0');
+    const std::uint64_t namesOffset = image.size();
+    image.insert(image.end(), names.begin(), names.end());
+    while (image.size() % 8U != 0U) image.push_back(0U);
+    const std::uint64_t table = image.size();
+    const std::size_t count = sections.size() + 2U;
+    image.resize(image.size() + count * 64U, 0U);
+    for (std::size_t index = 0U; index < sections.size(); ++index) {
+        const std::size_t header = static_cast<std::size_t>(table) + (index + 1U) * 64U;
+        PutLittleEndian(image, header + 0x00U, placed[index].second, 4U);
+        PutLittleEndian(image, header + 0x04U, sections[index].type, 4U);
+        PutLittleEndian(image, header + 0x08U, 2U, 8U); // SHF_ALLOC
+        PutLittleEndian(image, header + 0x18U, placed[index].first, 8U);
+        PutLittleEndian(image, header + 0x20U, sections[index].contents.size(), 8U);
+        PutLittleEndian(image, header + 0x30U, 16U, 8U);
+    }
+    const std::size_t namesHeader = static_cast<std::size_t>(table) + (count - 1U) * 64U;
+    PutLittleEndian(image, namesHeader + 0x00U, namesName, 4U);
+    PutLittleEndian(image, namesHeader + 0x04U, 3U, 4U); // SHT_STRTAB
+    PutLittleEndian(image, namesHeader + 0x18U, namesOffset, 8U);
+    PutLittleEndian(image, namesHeader + 0x20U, names.size(), 8U);
+    PutLittleEndian(image, 0x28U, table, 8U);
+    PutLittleEndian(image, 0x3AU, 64U, 2U);
+    PutLittleEndian(image, 0x3CU, count, 2U);
+    PutLittleEndian(image, 0x3EU, count - 1U, 2U);
+    return image;
+}
+
+[[nodiscard]] std::vector<ElfSection> PlayerSections(std::vector<std::uint8_t> slot) {
+    return {
+        ElfSection{ .name = ".text", .contents = std::vector<std::uint8_t>(48U, 0xC3U) },
+        ElfSection{ .name = std::string{ kb::security::kTrustAnchorElfSectionName }, .contents = std::move(slot) },
+        ElfSection{ .name = ".data", .contents = std::vector<std::uint8_t>(32U, 0x11U) },
+    };
+}
+
+// A Linux player carries its trust anchor in a reserved ELF section that packaging fills after the
+// build. An empty slot is a development player; a filled one is read back exactly; anything
+// damaged is Invalid, never Absent.
+void RunElfTrustAnchorTests() {
+    using State = kb::security::TrustAnchorLookup::State;
+    kb::security::ReleaseSigningKey key;
+    Require(kb::security::GenerateReleaseSigningKey(key), "a release signing key must be generated");
+    kb::security::TrustAnchor anchor{};
+    anchor.productId = "Publisher.LinuxGame";
+    anchor.releaseKey = key.publicKey;
+    anchor.saveSecret = kb::security::DeriveGameSaveSecret(key, anchor.productId);
+    const std::vector<std::uint8_t> encoded = kb::security::EncodeTrustAnchor(anchor);
+
+    const std::vector<std::uint8_t> empty = MakeElfImage(PlayerSections(MakeTrustAnchorSlot({})));
+    Require(kb::security::ReadTrustAnchorFromElf(empty).state == State::Absent,
+        "an unfilled trust anchor slot must read as a development player");
+    Require(kb::security::ReadTrustAnchorFromElf(MakeElfImage({ ElfSection{ .name = ".text",
+                .contents = std::vector<std::uint8_t>(16U, 0x90U) } })).state == State::Absent,
+        "an ELF image without a slot section has no trust anchor");
+
+    const std::vector<std::uint8_t> filled = MakeElfImage(PlayerSections(MakeTrustAnchorSlot(encoded)));
+    const kb::security::TrustAnchorLookup present = kb::security::ReadTrustAnchorFromElf(filled);
+    Require(present.state == State::Present && present.anchor.productId == anchor.productId &&
+            present.anchor.releaseKey == anchor.releaseKey && present.anchor.saveSecret.has_value() &&
+            kb::security::ConstantTimeEqual(present.anchor.saveSecret->Span(), anchor.saveSecret->Span()) &&
+            !present.anchor.packContentKey.has_value(),
+        "a filled ELF trust anchor slot must read back every field");
+
+    const auto invalid = [](const std::vector<std::uint8_t>& image, const char* message) {
+        const kb::security::TrustAnchorLookup lookup = kb::security::ReadTrustAnchorFromElf(image);
+        Require(lookup.state == State::Invalid && !lookup.error.empty(), message);
+    };
+    std::vector<std::uint8_t> slot = MakeTrustAnchorSlot(encoded);
+    slot[0] = 'X';
+    invalid(MakeElfImage(PlayerSections(slot)), "a slot with the wrong magic must be Invalid");
+    slot = MakeTrustAnchorSlot(encoded);
+    slot.back() = 1U;
+    invalid(MakeElfImage(PlayerSections(slot)), "a slot with bytes after its anchor must be Invalid");
+    slot = MakeTrustAnchorSlot(encoded);
+    slot[16] = 0xFFU;
+    slot[17] = 0xFFU;
+    invalid(MakeElfImage(PlayerSections(slot)), "a slot that claims more than it holds must be Invalid");
+    slot = MakeTrustAnchorSlot(encoded);
+    slot[20] = 1U;
+    invalid(MakeElfImage(PlayerSections(slot)), "a slot with a non-zero reserved field must be Invalid");
+    slot = MakeTrustAnchorSlot(std::span<const std::uint8_t>{ encoded }.first(encoded.size() - 1U));
+    invalid(MakeElfImage(PlayerSections(slot)), "a slot whose anchor does not decode must be Invalid");
+    slot = MakeTrustAnchorSlot(encoded);
+    slot.pop_back();
+    invalid(MakeElfImage(PlayerSections(slot)), "a slot section of the wrong size must be Invalid");
+
+    std::vector<ElfSection> twice = PlayerSections(MakeTrustAnchorSlot(encoded));
+    twice.push_back(twice[1]);
+    invalid(MakeElfImage(twice), "an image with two slot sections must be Invalid");
+    std::vector<ElfSection> noBits = PlayerSections(MakeTrustAnchorSlot(encoded));
+    noBits[1].type = 8U; // SHT_NOBITS
+    invalid(MakeElfImage(noBits), "a slot section without file contents must be Invalid");
+
+    std::vector<std::uint8_t> truncated = filled;
+    truncated.resize(truncated.size() - 64U);
+    invalid(truncated, "an image whose section table runs past the file must be Invalid");
+    std::vector<std::uint8_t> outside = filled;
+    std::uint64_t table = 0U;
+    for (std::size_t index = 0U; index < 8U; ++index) {
+        table |= static_cast<std::uint64_t>(outside[0x28U + index]) << (index * 8U);
+    }
+    PutLittleEndian(outside, static_cast<std::size_t>(table) + 2U * 64U + 0x18U, outside.size(), 8U);
+    invalid(outside, "a slot section that points past the file must be Invalid");
+    std::vector<std::uint8_t> elf32 = filled;
+    elf32[4] = 1U;
+    invalid(elf32, "a 32-bit ELF image must be Invalid, not read as 64-bit");
+
+    // Release tooling reads a player on disk, whatever the host: the Linux player has no extension.
+    const std::filesystem::path root = std::filesystem::temp_directory_path() /
+        ("21kb_elf_trust_anchor_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::error_code fileError;
+    std::filesystem::create_directories(root, fileError);
+    Require(!fileError, "the ELF trust anchor test directory could not be created");
+    {
+        std::ofstream output{ root / "Game", std::ios::binary };
+        output.write(reinterpret_cast<const char*>(filled.data()), static_cast<std::streamsize>(filled.size()));
+    }
+    const kb::security::TrustAnchorLookup fromDisk = kb::security::ReadTrustAnchorFromExecutable(root / "Game");
+    Require(fromDisk.state == State::Present && fromDisk.anchor.productId == anchor.productId,
+        "release tooling did not read the trust anchor of a Linux player on disk");
+    std::filesystem::remove_all(root, fileError);
+
+#if defined(__linux__) && !defined(__ANDROID__)
+    // This test executable links the slot too; nothing filled it, so it is a development player.
+    Require(kb::security::LoadExecutableTrustAnchor().state == State::Absent,
+        "an unfilled slot linked into the running executable must read as Absent");
+#endif
+}
+
 void RunReleaseManifestTests() {
     const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_engine_release_tests";
     std::error_code fileError;
@@ -430,6 +607,7 @@ void RunSecurityTests() {
     RunAeadVectorTests();
     RunPrimitiveHelperTests();
     RunReleaseKeyMaterialTests();
+    RunElfTrustAnchorTests();
     RunReleaseManifestTests();
 }
 

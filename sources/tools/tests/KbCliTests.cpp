@@ -20,6 +20,7 @@
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneUIComponents.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstdio>
@@ -2295,6 +2296,48 @@ void WriteSamplePack(const std::filesystem::path& path) {
         "kb_cli release test pack could not be written");
 }
 
+// A Linux player as packaging leaves it: a 64-bit ELF image whose ".kb_trust_anchor" section is
+// the 1024-byte slot holding `anchor` (nothing for an unfilled slot).
+[[nodiscard]] std::vector<std::uint8_t> MakeLinuxPlayer(std::span<const std::uint8_t> anchor) {
+    const auto put = [](std::vector<std::uint8_t>& bytes, std::size_t offset, std::uint64_t value, std::size_t width) {
+        for (std::size_t index = 0U; index < width; ++index) {
+            bytes[offset + index] = static_cast<std::uint8_t>(value >> (index * 8U));
+        }
+    };
+    std::vector<std::uint8_t> image(64U, 0U);
+    const std::array<std::uint8_t, 8U> ident{ 0x7FU, 'E', 'L', 'F', 2U, 1U, 1U, 0U };
+    std::copy(ident.begin(), ident.end(), image.begin());
+    put(image, 0x10U, 2U, 2U);
+    put(image, 0x12U, 62U, 2U);
+    const std::size_t slotOffset = image.size();
+    image.resize(slotOffset + 1024U, 0U);
+    const std::string_view magic = "21KB-ANCHOR-SLOT";
+    std::copy(magic.begin(), magic.end(), image.begin() + static_cast<std::ptrdiff_t>(slotOffset));
+    put(image, slotOffset + 16U, anchor.size(), 4U);
+    std::copy(anchor.begin(), anchor.end(), image.begin() + static_cast<std::ptrdiff_t>(slotOffset + 24U));
+    const std::string names{ "\0.kb_trust_anchor\0.shstrtab\0", 28U };
+    const std::size_t namesOffset = image.size();
+    image.insert(image.end(), names.begin(), names.end());
+    while (image.size() % 8U != 0U) image.push_back(0U);
+    const std::size_t table = image.size();
+    image.resize(table + 3U * 64U, 0U);
+    put(image, table + 64U + 0x00U, 1U, 4U);
+    put(image, table + 64U + 0x04U, 1U, 4U);
+    put(image, table + 64U + 0x08U, 2U, 8U);
+    put(image, table + 64U + 0x18U, slotOffset, 8U);
+    put(image, table + 64U + 0x20U, 1024U, 8U);
+    put(image, table + 128U + 0x00U, 18U, 4U);
+    put(image, table + 128U + 0x04U, 3U, 4U);
+    put(image, table + 128U + 0x18U, namesOffset, 8U);
+    put(image, table + 128U + 0x20U, names.size(), 8U);
+    put(image, 0x28U, table, 8U);
+    put(image, 0x34U, 64U, 2U);
+    put(image, 0x3AU, 64U, 2U);
+    put(image, 0x3CU, 3U, 2U);
+    put(image, 0x3EU, 2U, 2U);
+    return image;
+}
+
 // keys and pack: a key is never written into a project, a signed (and encrypted) pack verifies
 // against the anchor made from the same key, and a pack checked against another key or without
 // its content key is refused.
@@ -2374,6 +2417,39 @@ void RunKeyAndPackCommandTests() {
         "release verify refused an intact release");
     Require(Run(&kb::cli::RunReleaseCommand, { "verify", "--anchor", otherAnchor, release.string() }).exitCode == 1,
         "release verify accepted a release under another key");
+
+    // A Linux release: the key comes from the anchor slot of its ELF player, as from a Windows
+    // player's resource; a player whose slot was never filled names no key.
+    const auto writeLinuxPlayer = [&](std::span<const std::uint8_t> anchorBytes) {
+        const std::vector<std::uint8_t> player = MakeLinuxPlayer(anchorBytes);
+        std::ofstream output{ release / "Game", std::ios::binary | std::ios::trunc };
+        output.write(reinterpret_cast<const char*>(player.data()), static_cast<std::streamsize>(player.size()));
+        Require(output.good(), "the Linux player fixture could not be written");
+        output.close();
+        std::filesystem::remove(release / "release.kbmanifest", error);
+        Require(Run(&kb::cli::RunReleaseCommand,
+                    { "sign", "--key", key, "--dir", release.string(), "--product", "Example.Game",
+                      "--content-version", "1.0.0", "--release", "3", "--anti-rollback" }).exitCode == 0,
+            "release sign failed for the Linux release");
+    };
+    writeLinuxPlayer({});
+    const CommandRun unanchored = Run(&kb::cli::RunReleaseCommand, { "verify", release.string() });
+    Require(unanchored.exitCode == 1 && Contains(unanchored.output, "carries a trust anchor"),
+        "release verify found a key in a Linux player whose anchor slot is empty");
+    const std::vector<std::uint8_t> anchorBytes = [&] {
+        std::ifstream input{ anchor, std::ios::binary };
+        return std::vector<std::uint8_t>{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+    }();
+    writeLinuxPlayer(anchorBytes);
+    const CommandRun linuxRelease = Run(&kb::cli::RunReleaseCommand, { "verify", release.string() });
+    Require(linuxRelease.exitCode == 0 && Contains(linuxRelease.output, "OK Example.Game 1.0.0 release 3"),
+        "release verify did not take the key from the Linux player's trust anchor");
+    std::filesystem::remove(release / "Game", error);
+    std::filesystem::remove(release / "release.kbmanifest", error);
+    Require(Run(&kb::cli::RunReleaseCommand,
+                { "sign", "--key", key, "--dir", release.string(), "--product", "Example.Game",
+                  "--content-version", "1.0.0", "--release", "3", "--anti-rollback" }).exitCode == 0,
+        "release sign failed after the Linux player was removed");
     WriteTextFile(release / "evil.dll", "planted");
     const CommandRun planted = Run(&kb::cli::RunReleaseCommand, { "verify", "--anchor", anchor, release.string() });
     Require(planted.exitCode == 1 && Contains(planted.output, "UnlistedFile") && Contains(planted.output, "evil.dll"),
