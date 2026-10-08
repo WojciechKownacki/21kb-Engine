@@ -1541,6 +1541,9 @@ class PackageGameTests(unittest.TestCase):
             })
             refs = {component["bom-ref"] for component in sbom["components"]}
             self.assertIn("meshoptimizer", refs)
+            patched = {c["bom-ref"] for c in sbom["components"] if "pedigree" in c}
+            self.assertTrue({"cgltf", "bimg", "stb"} <= patched)
+            self.assertIn("Modified by 21kb", notices)
             self.assertEqual(set(sbom["dependencies"][0]["dependsOn"]), refs)
             again = third_party_notices.build_sbom("Sample Game", "1.2.3", [])
             self.assertEqual(again["serialNumber"], sbom["serialNumber"])

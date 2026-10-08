@@ -155,6 +155,10 @@ Compiled into every player:
 - LodePNG (zlib)
 - stb (stb_image, stb_truetype) (MIT or Unlicense)
 - meshoptimizer (MIT), also compiled into the renderer's mesh baker
+- cgltf (with jsmn) (MIT), the glTF reader
+
+21kb patches cgltf, bimg and stb_image in place to harden them against malformed files; each change is
+marked with a `21kb:` comment and described under `modified` in `third_party_manifest.json`.
 - DirectX-Headers (MIT), Windows players
 - Khronos API headers (OpenGL, OpenGL ES, EGL, Vulkan) (MIT and Apache 2.0; text in `licenses/khronos.txt`)
 - RenderDoc in-application API header (MIT; text in `licenses/renderdoc.txt`)
