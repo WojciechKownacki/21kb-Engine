@@ -122,6 +122,7 @@ bool ScenePrefabInstanceRegistry::Restore(
         return false;
     }
 
+    NoteChange(handle);
     static_cast<void>(Remove(handle));
     EnsureRecordSlot(handle);
     const std::size_t slot = RecordSlotIndex(handle);
@@ -574,7 +575,36 @@ ScenePrefabInstanceRecord* ScenePrefabInstanceRegistry::FindMutable(ScenePrefabI
         return nullptr;
     }
 
+    NoteChange(handle);
     return &records_[RecordSlotIndex(handle)];
+}
+
+ScenePrefabInstanceRecord* ScenePrefabInstanceRegistry::MutableRecord(ScenePrefabInstanceHandle handle) noexcept {
+    return RecordSlotAlive(handle) ? &records_[RecordSlotIndex(handle)] : nullptr;
+}
+
+void ScenePrefabInstanceRegistry::NoteChange(ScenePrefabInstanceHandle handle) noexcept {
+    if (journal_ != nullptr) {
+        journal_->BeforeChange(handle, RecordSlotAlive(handle) ? &records_[RecordSlotIndex(handle)] : nullptr);
+    }
+}
+
+void ScenePrefabInstanceRegistry::SetJournal(ScenePrefabInstanceJournal* journal) noexcept {
+    journal_ = journal;
+}
+
+std::uint64_t ScenePrefabInstanceRegistry::NextHandleId() const noexcept {
+    return nextId_;
+}
+
+std::vector<ScenePrefabInstanceHandle> ScenePrefabInstanceRegistry::HandlesSince(std::uint64_t firstId) const {
+    std::vector<ScenePrefabInstanceHandle> handles;
+    for (std::size_t index = firstId == 0U ? 0U : static_cast<std::size_t>(firstId - 1U); index < recordAlive_.size(); ++index) {
+        if (recordAlive_[index] != 0U) {
+            handles.push_back(ScenePrefabInstanceHandle{ static_cast<std::uint64_t>(index) + 1U });
+        }
+    }
+    return handles;
 }
 
 ScenePrefabInstanceHandle ScenePrefabInstanceRegistry::FindRootInstance(SceneObject object) const noexcept {
@@ -682,7 +712,7 @@ bool ScenePrefabInstanceRegistry::ContainsExactlyPrefabHandles(ScenePrefabHandle
 }
 
 void ScenePrefabInstanceRegistry::MarkNodeDirty(ScenePrefabInstanceHandle handle, std::uint32_t nodeIndex) {
-    ScenePrefabInstanceRecord* record = FindMutable(handle);
+    ScenePrefabInstanceRecord* record = MutableRecord(handle);
     if (record == nullptr || nodeIndex >= record->Objects().size()) {
         return;
     }
@@ -694,7 +724,7 @@ void ScenePrefabInstanceRegistry::MarkNodeDirty(ScenePrefabInstanceHandle handle
 }
 
 void ScenePrefabInstanceRegistry::MarkTopologyDirty(ScenePrefabInstanceHandle handle) {
-    ScenePrefabInstanceRecord* record = FindMutable(handle);
+    ScenePrefabInstanceRecord* record = MutableRecord(handle);
     if (record != nullptr) {
         ++changeRevision_;
         record->topologyDirty = true;
@@ -716,7 +746,7 @@ bool ScenePrefabInstanceRegistry::TopologyDirty(ScenePrefabInstanceHandle handle
 }
 
 void ScenePrefabInstanceRegistry::ClearDirtyNodes(ScenePrefabInstanceHandle handle) noexcept {
-    ScenePrefabInstanceRecord* record = FindMutable(handle);
+    ScenePrefabInstanceRecord* record = MutableRecord(handle);
     if (record != nullptr) {
         record->dirtyNodeIndices.clear();
         record->topologyDirty = false;
@@ -747,6 +777,8 @@ void ScenePrefabInstanceRegistry::ForgetDestroyedObject(SceneEntity entity) noex
     if (record == nullptr || nodeIndex >= record->Objects().size() || record->Objects()[nodeIndex].Entity() != entity) {
         return;
     }
+    // The record keeps the destroyed object in its slot; history needs it to relink the object it recreates.
+    NoteChange(owner);
     const SceneObject tracked = record->Objects()[nodeIndex];
     UnindexObjects(owner, std::span<const SceneObject>{ &tracked, 1U });
 }
@@ -777,6 +809,7 @@ bool ScenePrefabInstanceRegistry::Remove(ScenePrefabInstanceHandle handle) noexc
         return false;
     }
 
+    NoteChange(handle);
     const std::size_t slot = RecordSlotIndex(handle);
     ScenePrefabInstanceRecord& record = records_[slot];
     RemoveFromPrefabIndex(record.prefab, handle);
@@ -794,6 +827,13 @@ bool ScenePrefabInstanceRegistry::Remove(ScenePrefabInstanceHandle handle) noexc
 }
 
 void ScenePrefabInstanceRegistry::Clear() noexcept {
+    if (journal_ != nullptr) {
+        for (std::size_t index = 0; index < recordAlive_.size(); ++index) {
+            if (recordAlive_[index] != 0U) {
+                journal_->BeforeChange(ScenePrefabInstanceHandle{ static_cast<std::uint64_t>(index) + 1U }, &records_[index]);
+            }
+        }
+    }
     records_.clear();
     recordAlive_.clear();
     liveRecordCount_ = 0;

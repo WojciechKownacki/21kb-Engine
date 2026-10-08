@@ -100,6 +100,7 @@ bool EditorSceneCommandController::CommitTransaction() {
         return false;
     }
 
+    scene_.History().Commit();
     commandStack_.PushExecuted(EditorSceneHistoryCommand::CreateRecorded(scene_, *pendingTransactionLabel_));
     pendingTransactionLabel_.reset();
     NotifySceneChanged(true);

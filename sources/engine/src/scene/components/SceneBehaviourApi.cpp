@@ -2,6 +2,7 @@
 #include "scene/SceneComponentMutationService.hpp"
 #include "scene/SceneComponentQueryService.hpp"
 #include "scene/SceneEntityService.hpp"
+#include "scene/SceneHistoryService.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/prefab/ScenePrefabDirtyTracker.hpp"
 
@@ -16,10 +17,12 @@ const BehaviourComponent* SceneComponentQueryService::TryGetBehaviour(const Scen
 }
 
 BehaviourComponent* SceneComponentMutationService::TryGetBehaviour(Scene& scene, SceneEntity entity) noexcept {
+    SceneHistoryService::NoteObjectChanging(scene, entity);
     return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.Behaviours().TryGet(entity) : nullptr;
 }
 
 void SceneComponentMutationService::SetBehaviour(Scene& scene, SceneEntity entity, const BehaviourComponent& behaviour) {
+    SceneHistoryService::NoteObjectChanging(scene, entity);
     if (SceneEntityService::IsAlive(scene, entity)) {
         SceneState& state = SceneAccess::State(scene);
         state.componentStorage.Behaviours().Set(entity, behaviour);
@@ -28,6 +31,7 @@ void SceneComponentMutationService::SetBehaviour(Scene& scene, SceneEntity entit
 }
 
 void SceneComponentMutationService::RemoveBehaviour(Scene& scene, SceneEntity entity) noexcept {
+    SceneHistoryService::NoteObjectChanging(scene, entity);
     if (SceneEntityService::IsAlive(scene, entity)) {
         SceneState& state = SceneAccess::State(scene);
         state.componentStorage.Behaviours().Remove(entity);

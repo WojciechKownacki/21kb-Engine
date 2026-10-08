@@ -6,6 +6,7 @@
 #include "scene/SceneComponentMutationService.hpp"
 #include "scene/SceneComponentQueryService.hpp"
 #include "scene/SceneEntityService.hpp"
+#include "scene/SceneHistoryService.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/prefab/ScenePrefabDirtyTracker.hpp"
 
@@ -13,9 +14,9 @@ namespace kb::scene {
 
 bool SceneComponentQueryService::HasHistoryRibbon(const Scene& scene, SceneEntity entity) noexcept { return SceneEntityService::IsAlive(scene, entity) && SceneAccess::State(scene).componentStorage.HistoryRibbons().Has(entity); }
 const HistoryRibbonComponent* SceneComponentQueryService::TryGetHistoryRibbon(const Scene& scene, SceneEntity entity) noexcept { return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.HistoryRibbons().TryGet(entity) : nullptr; }
-HistoryRibbonComponent* SceneComponentMutationService::TryGetHistoryRibbon(Scene& scene, SceneEntity entity) noexcept { return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.HistoryRibbons().TryGet(entity) : nullptr; }
-void SceneComponentMutationService::SetHistoryRibbon(Scene& scene, SceneEntity entity, const HistoryRibbonComponent& component) { if (SceneEntityService::IsAlive(scene, entity)) { SceneState& state = SceneAccess::State(scene); state.componentStorage.HistoryRibbons().Set(entity, component); MarkScenePrefabNodeDirty(state, entity); } }
-void SceneComponentMutationService::RemoveHistoryRibbon(Scene& scene, SceneEntity entity) noexcept { if (SceneEntityService::IsAlive(scene, entity)) { SceneState& state = SceneAccess::State(scene); state.componentStorage.HistoryRibbons().Remove(entity); MarkScenePrefabNodeDirty(state, entity); } }
+HistoryRibbonComponent* SceneComponentMutationService::TryGetHistoryRibbon(Scene& scene, SceneEntity entity) noexcept { SceneHistoryService::NoteObjectChanging(scene, entity); return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.HistoryRibbons().TryGet(entity) : nullptr; }
+void SceneComponentMutationService::SetHistoryRibbon(Scene& scene, SceneEntity entity, const HistoryRibbonComponent& component) { SceneHistoryService::NoteObjectChanging(scene, entity); if (SceneEntityService::IsAlive(scene, entity)) { SceneState& state = SceneAccess::State(scene); state.componentStorage.HistoryRibbons().Set(entity, component); MarkScenePrefabNodeDirty(state, entity); } }
+void SceneComponentMutationService::RemoveHistoryRibbon(Scene& scene, SceneEntity entity) noexcept { SceneHistoryService::NoteObjectChanging(scene, entity); if (SceneEntityService::IsAlive(scene, entity)) { SceneState& state = SceneAccess::State(scene); state.componentStorage.HistoryRibbons().Remove(entity); MarkScenePrefabNodeDirty(state, entity); } }
 void SceneComponentMutationService::MarkHistoryRibbonModified(Scene& scene, SceneEntity entity) noexcept { if (SceneEntityService::IsAlive(scene, entity)) { SceneState& state = SceneAccess::State(scene); state.componentStorage.HistoryRibbons().MarkModified(entity); MarkScenePrefabNodeDirty(state, entity); } }
 
 SceneHistoryRibbonComponentQueries::SceneHistoryRibbonComponentQueries(const Scene& scene) noexcept : scene_(scene) {}

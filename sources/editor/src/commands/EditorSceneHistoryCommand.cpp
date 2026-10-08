@@ -54,6 +54,7 @@ bool EditorSceneHistoryCommand::Execute() {
         assetBefore_ = ReadFileBytes(assetFile_.path);
     }
     if (mutation_()) {
+        scene_.History().Commit();
         if (!assetFile_.path.empty()) {
             assetAfter_ = ReadFileBytes(assetFile_.path);
         }

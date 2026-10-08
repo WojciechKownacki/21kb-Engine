@@ -90,6 +90,8 @@ struct ScenePrefabLensEchoComponent {
     bool enabled = false;
 };
 
+// Scene history compares these member by member to drop unchanged objects from a command; a new member is
+// compared there too (SameComponents in SceneHistoryService.cpp).
 struct ScenePrefabNodeComponents {
     UIComponentSet ui;
     std::optional<CameraComponent> camera;

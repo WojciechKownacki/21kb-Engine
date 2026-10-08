@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <span>
 #include <stdexcept>
+#include <unordered_set>
 #include <vector>
 
 namespace kb::scene {
@@ -354,6 +355,45 @@ public:
                 RefreshTransformLink(state, parents[index]);
             }
         }
+    }
+
+    // Puts the children of `parent` (the roots for an invalid parent) in the order of `ordered`, which lists the same
+    // entities. Only sibling order changes, which the transform pass does not depend on.
+    static void ReorderChildren(SceneState& state, SceneEntity parent, std::span<const SceneEntity> ordered) {
+        const auto previousVersion = state.hierarchyTopologyVersion;
+        const auto reorder = [ordered](std::vector<SceneEntity>& children) {
+            std::unordered_set<SceneEntity::IdType> members;
+            members.reserve(children.size());
+            for (const SceneEntity entity : children) {
+                members.insert(entity.Id());
+            }
+            std::vector<SceneEntity> reordered;
+            reordered.reserve(children.size());
+            for (const SceneEntity entity : ordered) {
+                if (members.contains(entity.Id())) {
+                    reordered.push_back(entity);
+                }
+            }
+            if (reordered.size() == children.size()) {
+                children = std::move(reordered);
+            }
+        };
+        if (!parent.IsValid()) {
+            reorder(state.hierarchyRoots);
+            for (const SceneEntity root : state.hierarchyRoots) {
+                NoteRootAppended(state, root);
+            }
+        } else {
+            if (const auto children = state.hierarchyChildren.find(parent.Id()); children != state.hierarchyChildren.end()) {
+                reorder(children->second);
+            }
+            const std::uint32_t index = DenseIndex(parent);
+            if (index != kb::ecs::kInvalidGeneratedEntityIndex && index < state.denseHierarchyChildren.size()) {
+                reorder(state.denseHierarchyChildren[index]);
+            }
+        }
+        MarkTopologyDirty(state);
+        state.transformTopology.MetadataChanged(previousVersion, state.hierarchyTopologyVersion);
     }
 
 private:

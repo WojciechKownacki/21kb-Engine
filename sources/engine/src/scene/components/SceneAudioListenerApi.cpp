@@ -2,6 +2,7 @@
 #include "scene/SceneComponentMutationService.hpp"
 #include "scene/SceneComponentQueryService.hpp"
 #include "scene/SceneEntityService.hpp"
+#include "scene/SceneHistoryService.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/prefab/ScenePrefabDirtyTracker.hpp"
 
@@ -16,10 +17,12 @@ const AudioListenerComponent* SceneComponentQueryService::TryGetAudioListener(co
 }
 
 AudioListenerComponent* SceneComponentMutationService::TryGetAudioListener(Scene& scene, SceneEntity entity) noexcept {
+    SceneHistoryService::NoteObjectChanging(scene, entity);
     return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.AudioListeners().TryGet(entity) : nullptr;
 }
 
 void SceneComponentMutationService::SetAudioListener(Scene& scene, SceneEntity entity, const AudioListenerComponent& audioListener) {
+    SceneHistoryService::NoteObjectChanging(scene, entity);
     if (SceneEntityService::IsAlive(scene, entity)) {
         SceneState& state = SceneAccess::State(scene);
         state.componentStorage.AudioListeners().Set(entity, audioListener);
@@ -28,6 +31,7 @@ void SceneComponentMutationService::SetAudioListener(Scene& scene, SceneEntity e
 }
 
 void SceneComponentMutationService::RemoveAudioListener(Scene& scene, SceneEntity entity) noexcept {
+    SceneHistoryService::NoteObjectChanging(scene, entity);
     if (SceneEntityService::IsAlive(scene, entity)) {
         SceneState& state = SceneAccess::State(scene);
         state.componentStorage.AudioListeners().Remove(entity);
