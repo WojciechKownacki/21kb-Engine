@@ -1,6 +1,7 @@
 #include "engine/script/ScriptSaveApi.hpp"
 
 #include "engine/platform/UserStorage.hpp"
+#include "engine/platform/CrashReporting.hpp"
 #include "engine/save/SaveDomain.hpp"
 #include "engine/save/SaveGame.hpp"
 #include "engine/save/SaveGameService.hpp"
@@ -8,6 +9,7 @@
 #include "engine/script/ScriptFunctionRegistry.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -356,6 +358,61 @@ bool RegisterDomain(ScriptRuntimeHost& host, std::string_view prefix) {
     return ok;
 }
 
+// Crash reports belong with the player's settings: whether they may leave the
+// machine, what they hold, and removing the ones already written. All of it acts
+// on the reporter the host installed; without one (a host that writes no
+// reports) consent reads as off and nothing is deleted.
+ScriptFunctionCallResult CrashReportUploadConsent(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument>) {
+    bool consent = false;
+#if defined(_WIN32)
+    const std::filesystem::path directory = kb::platform::CrashReporter::ReportDirectory();
+    consent = !directory.empty() && kb::platform::HasCrashUploadConsent(directory);
+#endif
+    return ScriptFunctionCallResult{ .executed = true, .outputs = { ScriptFunctionArgument{ "consent", ScriptValue{ consent } } }, .errors = {} };
+}
+
+ScriptFunctionCallResult SetCrashReportUploadConsent(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+    const ScriptValue* value = FindArg(arguments, "consent");
+    bool set = false;
+#if defined(_WIN32)
+    const std::filesystem::path directory = kb::platform::CrashReporter::ReportDirectory();
+    set = value != nullptr && !directory.empty() && kb::platform::SetCrashUploadConsent(directory, value->AsBool());
+#else
+    static_cast<void>(value);
+#endif
+    return ScriptFunctionCallResult{ .executed = true, .outputs = { ScriptFunctionArgument{ "set", ScriptValue{ set } } }, .errors = {} };
+}
+
+ScriptFunctionCallResult CrashReportPrivacyNotice(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument>) {
+    std::string text;
+#if defined(_WIN32)
+    text = kb::platform::ReadCrashReportPrivacyNotice();
+#endif
+    return ScriptFunctionCallResult{ .executed = true, .outputs = { ScriptFunctionArgument{ "text", ScriptValue{ std::move(text) } } }, .errors = {} };
+}
+
+ScriptFunctionCallResult DeleteCrashReports(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument>) {
+    std::size_t deleted = 0U;
+#if defined(_WIN32)
+    const std::filesystem::path directory = kb::platform::CrashReporter::ReportDirectory();
+    deleted = directory.empty() ? 0U : kb::platform::DeleteCrashReports(directory);
+#endif
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = { ScriptFunctionArgument{ "deleted", ScriptValue{ static_cast<int>(std::min<std::size_t>(deleted, 1'000'000U)) } } },
+        .errors = {},
+    };
+}
+
+bool RegisterCrashReportSettings(ScriptRuntimeHost& host) {
+    bool ok = true;
+    ok = RegisterFunction(host, "Settings.CrashReportUploadConsent", {}, { ScriptFunctionPin{ "consent", ScriptValueType::Bool, true } }, &CrashReportUploadConsent) && ok;
+    ok = RegisterFunction(host, "Settings.SetCrashReportUploadConsent", { ScriptFunctionPin{ "consent", ScriptValueType::Bool, true } }, { ScriptFunctionPin{ "set", ScriptValueType::Bool, true } }, &SetCrashReportUploadConsent) && ok;
+    ok = RegisterFunction(host, "Settings.CrashReportPrivacyNotice", {}, { ScriptFunctionPin{ "text", ScriptValueType::String, true } }, &CrashReportPrivacyNotice) && ok;
+    ok = RegisterFunction(host, "Settings.DeleteCrashReports", {}, { ScriptFunctionPin{ "deleted", ScriptValueType::Int, true } }, &DeleteCrashReports) && ok;
+    return ok;
+}
+
 } // namespace
 
 bool ScriptSaveApi::Register(ScriptRuntimeHost& host) {
@@ -364,6 +421,7 @@ bool ScriptSaveApi::Register(ScriptRuntimeHost& host) {
     // separate save domains.
     bool ok = RegisterDomain<kb::save::SaveDomain::SaveGame>(host, "Save");
     ok = RegisterDomain<kb::save::SaveDomain::UserSettings>(host, "Settings") && ok;
+    ok = RegisterCrashReportSettings(host) && ok;
     return ok;
 }
 

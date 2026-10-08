@@ -1,0 +1,41 @@
+Crash reports
+
+If this game stops because of an error, it saves a crash report on this
+computer so the cause can be found. Reports are kept in
+
+    %LOCALAPPDATA%\21kb\CrashReports\<name of the game's program file>
+
+Each report is two files.
+
+The memory dump (.dmp) holds:
+  - the state of each of the game's threads when it stopped: processor
+    registers, the call stack and the memory that stack was using;
+  - the list of program files (modules) the game had loaded, with their
+    names, versions and folder locations, and those it had unloaded;
+  - basic system information: Windows version, processor type and count.
+Stack memory can contain small pieces of what the game was working on at
+that moment, such as a file name or a line of text. The folder locations of
+program files include your Windows user name when the game is installed
+inside your user folder.
+
+The description (.json) holds the game's name and version, an identifier of
+the exact build, the time of the crash (UTC), the kind of error, the names of
+the loaded program files, and the last lines the game logged before it
+stopped. Inside the description, folders in your user profile are written as
+%USERPROFILE% instead of their real path.
+
+Not collected: your name, e-mail address or account, saved games, settings,
+screenshots, other files, or the game's memory beyond the thread stacks.
+
+Sending reports
+Nothing is sent unless you turn on sending crash reports in the game's
+settings, and only if the game's publisher runs a crash report service. It is
+off until you turn it on. When it is on, the game sends the reports left by
+earlier sessions the next time it starts, over an encrypted (HTTPS)
+connection, and deletes each one from this computer once the service has
+accepted it. The service sees your computer's internet address, as with any
+connection. You can turn sending off again at any time.
+
+Deleting reports
+Use the game's option to delete crash reports, or delete the folder above.
+Reports never leave this computer while sending is off.
