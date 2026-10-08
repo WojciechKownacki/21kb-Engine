@@ -1,6 +1,11 @@
 #include "engine/visual/VisualGraphRuntimeExecutor.hpp"
 
+#include <cstdint>
 #include <ranges>
+
+#if defined(_MSC_VER)
+#include <intrin.h>
+#endif
 
 namespace kb::visual {
 namespace {
@@ -29,6 +34,50 @@ constexpr std::size_t kMaxVisualGraphExecutionSteps = 4096U;
 // real graphs shallow) while sitting safely under the frame count that
 // would actually blow the stack.
 constexpr std::size_t kMaxVisualGraphInputDepth = 256U;
+
+// The depth alone does not bound the stack: how large a frame is depends on the build (an address-sanitised
+// or unoptimised build has frames several times larger), so the chain also stops once it has used this much
+// of the stack since the graph started executing, whichever comes first.
+constexpr std::uintptr_t kMaxVisualGraphInputStackBytes = 256U * 1024U;
+
+// An address inside the caller's real stack frame (a sanitiser may keep locals elsewhere).
+[[nodiscard]] std::uintptr_t StackAddress() noexcept {
+#if defined(_MSC_VER)
+    return reinterpret_cast<std::uintptr_t>(_AddressOfReturnAddress());
+#else
+    return reinterpret_cast<std::uintptr_t>(__builtin_frame_address(0));
+#endif
+}
+
+// Where the outermost graph execution on this thread began; a graph a binding runs from inside another
+// graph counts against the same stack.
+thread_local std::uintptr_t tExecutionStackOrigin = 0U;
+
+class ExecutionStackOrigin final {
+public:
+    ExecutionStackOrigin() noexcept
+        : owner_(tExecutionStackOrigin == 0U) {
+        if (owner_) {
+            tExecutionStackOrigin = StackAddress();
+        }
+    }
+    ~ExecutionStackOrigin() {
+        if (owner_) {
+            tExecutionStackOrigin = 0U;
+        }
+    }
+    ExecutionStackOrigin(const ExecutionStackOrigin&) = delete;
+    ExecutionStackOrigin& operator=(const ExecutionStackOrigin&) = delete;
+
+private:
+    bool owner_ = false;
+};
+
+// The stack grows down on every supported platform.
+[[nodiscard]] bool InputStackExhausted() noexcept {
+    const std::uintptr_t current = StackAddress();
+    return tExecutionStackOrigin != 0U && current < tExecutionStackOrigin && tExecutionStackOrigin - current > kMaxVisualGraphInputStackBytes;
+}
 
 void AppendErrors(VisualGraphRuntimeExecutionResult& target, VisualGraphRuntimeExecutionResult source) {
     target.errors.insert(target.errors.end(), source.errors.begin(), source.errors.end());
@@ -109,6 +158,7 @@ VisualGraphRuntimeExecutionResult VisualGraphRuntimeExecutor::ExecuteFunction(co
     }
 
     context.BeginExecutionPass();
+    const ExecutionStackOrigin stackOrigin;
     const InstructionMap instructions = BuildInstructionMap(*function);
     NodeSet executing;
     NodeSet evaluatedNodes;
@@ -139,8 +189,8 @@ VisualGraphRuntimeExecutionResult VisualGraphRuntimeExecutor::ExecuteNode(
     // rather than crashing the whole process with STATUS_STACK_OVERFLOW. The
     // iterative forward-flow walk never increases depth, so this only ever
     // trips on a genuinely deep data DAG, never on a long control-flow chain.
-    if (depth > kMaxVisualGraphInputDepth) {
-        AddRuntimeError(result, nodeId, "visual graph runtime exceeded its maximum data-input recursion depth (kMaxVisualGraphInputDepth=" + std::to_string(kMaxVisualGraphInputDepth) + ") — a pathologically deep chain of data-dependency nodes, refused before it can overflow the stack");
+    if (depth > kMaxVisualGraphInputDepth || InputStackExhausted()) {
+        AddRuntimeError(result, nodeId, "visual graph runtime exceeded its maximum data-input recursion depth (kMaxVisualGraphInputDepth=" + std::to_string(kMaxVisualGraphInputDepth) + ", kMaxVisualGraphInputStackBytes=" + std::to_string(kMaxVisualGraphInputStackBytes) + ") — a pathologically deep chain of data-dependency nodes, refused before it can overflow the stack");
         return result;
     }
 
