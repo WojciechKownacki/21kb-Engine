@@ -12,6 +12,7 @@ extern "C" {
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace kb::script {
 namespace {
@@ -68,31 +69,8 @@ namespace {
         .chunkName = PucLuaErrorReporter::ChunkFromDebug(const_cast<lua_Debug&>(currentDebug)),
         .line = currentDebug.currentline,
     };
-    if (!settings.collectCallStack) {
-        return snapshot;
-    }
-
-    lua_Debug frame{};
-    for (int level = 0; lua_getstack(state, level, &frame) != 0; ++level) {
-        lua_getinfo(state, "nSl", &frame);
-        PucLuaDebugFrameSnapshot frameSnapshot{
-            .name = frame.name == nullptr ? std::string{} : std::string{ frame.name },
-            .chunkName = PucLuaErrorReporter::ChunkFromDebug(frame),
-            .line = frame.currentline,
-        };
-        if (settings.collectLocals) {
-            for (int localIndex = 1;; ++localIndex) {
-                const char* localName = lua_getlocal(state, &frame, localIndex);
-                if (localName == nullptr) {
-                    break;
-                }
-                if (localName[0] != '(') {
-                    frameSnapshot.locals.push_back(DebugVariable(state, localName, -1));
-                }
-                lua_pop(state, 1);
-            }
-        }
-        snapshot.callStack.push_back(std::move(frameSnapshot));
+    if (settings.collectCallStack) {
+        snapshot.callStack = PucLuaDebugHook::CaptureCallStack(state, settings.collectLocals);
     }
     return snapshot;
 }
@@ -100,10 +78,8 @@ namespace {
 // The actual hook logic, split out from Hook() below so the latter can
 // wrap it in a try/catch. Builds std::string/std::vector snapshots
 // (CapturePause, ChunkFromDebug) that can in principle throw (std::
-// bad_alloc); the intentional luaL_error call at the end (a Lua-level
-// breakpoint stop, not a C++ exception) is unaffected by that catch —
-// luaL_error is a longjmp, which unwinds straight past a try block without
-// ever entering its catch handlers.
+// bad_alloc). A pause suspends the coroutine with lua_yield, which from a
+// hook only marks the thread and returns here; Lua unwinds after the hook.
 void HookImpl(lua_State* state, lua_Debug* debug) {
     auto* runtime = *static_cast<PucLuaScriptRuntime**>(lua_getextraspace(state));
     if (runtime == nullptr || debug == nullptr) {
@@ -118,12 +94,16 @@ void HookImpl(lua_State* state, lua_Debug* debug) {
         }
         luaL_error(state, "lua execution budget exceeded");
     }
+    // Breakpoints and steps act on line events only, and not while another script is suspended at a pause.
+    if (debug->event != LUA_HOOKLINE || runtime->IsDebugPaused()) {
+        return;
+    }
     lua_getinfo(state, "Sl", debug);
     const std::string chunk = PucLuaErrorReporter::ChunkFromDebug(*debug);
     const PucLuaDebugSettings& settings = runtime->DebugSettings();
     bool shouldPause = false;
     PucLuaDebugPauseReason reason = PucLuaDebugPauseReason::Breakpoint;
-    if (const std::optional<PucLuaDebugPauseReason> requested = runtime->ConsumeRequestedDebugPause(); requested.has_value()) {
+    if (const std::optional<PucLuaDebugPauseReason> requested = runtime->ConsumeRequestedDebugPause(state); requested.has_value()) {
         shouldPause = true;
         reason = *requested;
     }
@@ -140,15 +120,14 @@ void HookImpl(lua_State* state, lua_Debug* debug) {
     if (!shouldPause) {
         return;
     }
-    runtime->RecordDebugPause(CapturePause(state, reason, settings, *debug));
-    if (settings.stopOnBreakpoint) {
-        const char* label = "lua breakpoint hit";
-        if (reason == PucLuaDebugPauseReason::ManualBreak) {
-            label = "lua manual break";
-        } else if (reason == PucLuaDebugPauseReason::Step) {
-            label = "lua step break";
-        }
-        luaL_error(state, "%s at %s:%d", label, chunk.c_str(), debug->currentline);
+    // Only a coroutine can be suspended. Code Lua cannot yield from (a chunk's top-level code run by pcall, or
+    // Lua called back from C such as a sort comparator) records the pause and goes on instead of failing.
+    PucLuaDebugPauseSnapshot snapshot = CapturePause(state, reason, settings, *debug);
+    snapshot.suspended = settings.stopOnBreakpoint && lua_isyieldable(state) != 0 && runtime->BeginDebugSuspend(state);
+    const bool suspend = snapshot.suspended;
+    runtime->RecordDebugPause(std::move(snapshot));
+    if (suspend) {
+        static_cast<void>(lua_yield(state, 0));
     }
 }
 
@@ -173,6 +152,35 @@ void Hook(lua_State* state, lua_Debug* debug) {
 }
 
 } // namespace
+
+std::vector<PucLuaDebugFrameSnapshot> PucLuaDebugHook::CaptureCallStack(lua_State* state, bool collectLocals) {
+    std::vector<PucLuaDebugFrameSnapshot> callStack;
+    lua_Debug frame{};
+    for (int level = 0; lua_getstack(state, level, &frame) != 0; ++level) {
+        lua_getinfo(state, "nSl", &frame);
+        PucLuaDebugFrameSnapshot frameSnapshot{
+            .name = frame.name == nullptr ? std::string{} : std::string{ frame.name },
+            .chunkName = PucLuaErrorReporter::ChunkFromDebug(frame),
+            .line = frame.currentline,
+        };
+        // Reading a local pushes it; a suspended coroutine's frame may have no free slot left, as the debug
+        // library also accounts for.
+        if (collectLocals && lua_checkstack(state, 1) != 0) {
+            for (int localIndex = 1;; ++localIndex) {
+                const char* localName = lua_getlocal(state, &frame, localIndex);
+                if (localName == nullptr) {
+                    break;
+                }
+                if (localName[0] != '(') {
+                    frameSnapshot.locals.push_back(DebugVariable(state, localName, -1));
+                }
+                lua_pop(state, 1);
+            }
+        }
+        callStack.push_back(std::move(frameSnapshot));
+    }
+    return callStack;
+}
 
 void PucLuaDebugHook::Install(lua_State* state, const PucLuaScriptRuntime& runtime) {
     if (runtime.NeedsDebugLineHook()) {

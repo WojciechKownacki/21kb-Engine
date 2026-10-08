@@ -1201,10 +1201,9 @@ end
     const kb::script::PucLuaLoadResult debugLoaded = luaRuntime.LoadScript(kLuaAsset, "function Tick(self, dt)\n    SetShared(\"lua.debug.hit\", 1)\nend\n", "Debug.lua", 103U);
     kb::tests::Require(debugLoaded.succeeded, "PUC Lua debug test script did not load");
     tick = runtime.ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
-    kb::tests::Require(!tick.Succeeded() && !tick.diagnostics.empty() && tick.diagnostics.front().message.find("lua breakpoint hit") != std::string::npos,
-        "PUC Lua breakpoint did not produce a runtime diagnostic");
+    kb::tests::Require(tick.Succeeded() && luaRuntime.IsDebugPaused(), "PUC Lua breakpoint did not suspend the script without an error");
     const kb::script::PucLuaDebugPauseSnapshot& pause = luaRuntime.LastDebugPause();
-    kb::tests::Require(pause.valid && pause.reason == kb::script::PucLuaDebugPauseReason::Breakpoint && pause.chunkName.ends_with("Debug.lua") && pause.line == 2,
+    kb::tests::Require(pause.valid && pause.suspended && pause.reason == kb::script::PucLuaDebugPauseReason::Breakpoint && pause.chunkName.ends_with("Debug.lua") && pause.line == 2,
         "PUC Lua debugger did not record breakpoint pause metadata");
     kb::tests::Require(!pause.callStack.empty(), "PUC Lua debugger did not capture call stack");
 
@@ -1231,10 +1230,190 @@ end
     luaRuntime.ClearDebugPause();
     luaRuntime.RequestBreakOnNextLine();
     tick = runtime.ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
-    kb::tests::Require(!tick.Succeeded(), "PUC Lua manual break did not pause execution");
+    kb::tests::Require(tick.Succeeded() && luaRuntime.IsDebugPaused(), "PUC Lua manual break did not suspend execution");
     const kb::script::PucLuaDebugPauseSnapshot& manualPause = luaRuntime.LastDebugPause();
-    kb::tests::Require(manualPause.valid && manualPause.reason == kb::script::PucLuaDebugPauseReason::ManualBreak && manualPause.chunkName.ends_with("ManualBreak.lua"),
+    kb::tests::Require(manualPause.valid && manualPause.suspended && manualPause.reason == kb::script::PucLuaDebugPauseReason::ManualBreak && manualPause.chunkName.ends_with("ManualBreak.lua"),
         "PUC Lua debugger did not record manual break pause metadata");
+    luaRuntime.ResumeDebugExecution();
+    tick = runtime.ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
+    const std::optional<kb::script::ScriptValue> manualHit = runtime.SharedState().Get("lua.debug.manual");
+    kb::tests::Require(tick.Succeeded() && !luaRuntime.IsDebugPaused() && manualHit.has_value() && manualHit->AsInt() == 1,
+        "PUC Lua manual break did not resume the suspended script on continue");
+}
+
+[[nodiscard]] const kb::script::PucLuaDebugVariableSnapshot* FindDebugLocal(const kb::script::PucLuaDebugFrameSnapshot& frame, std::string_view name) {
+    for (const kb::script::PucLuaDebugVariableSnapshot& variable : frame.locals) {
+        if (variable.name == name) {
+            return &variable;
+        }
+    }
+    return nullptr;
+}
+
+// A breakpoint suspends the coroutine at its line instead of failing it: the game loop and the other scripts keep
+// running, the suspended locals stay inspectable, and Continue and the steps resume it on its next invocation.
+void RunPucLuaDebuggerSuspendsAtBreakpointTest() {
+    constexpr kb::assets::AssetId kDebuggedAsset{ 3301U };
+    constexpr kb::assets::AssetId kTickerAsset{ 3302U };
+    kb::script::PucLuaScriptRuntime luaRuntime;
+    kb::tests::Require(luaRuntime.LoadScript(kDebuggedAsset, R"(local function inner(v)
+    local doubled = v * 2
+    return doubled
+end
+function Tick(self, dt)
+    local a = 1
+    local b = inner(a)
+    SetShared("lua.pause.b", b)
+    SetShared("lua.pause.done", (GetShared("lua.pause.done") or 0) + 1)
+end
+)", "Debugged.lua").succeeded, "Lua debugger pause script did not load");
+    kb::tests::Require(luaRuntime.LoadScript(kTickerAsset, R"(function Tick(self, dt)
+    SetShared("lua.pause.ticker", (GetShared("lua.pause.ticker") or 0) + 1)
+end
+)", "Ticker.lua").succeeded, "Lua debugger ticker script did not load");
+
+    kb::scene::Scene scene;
+    for (const kb::assets::AssetId asset : { kDebuggedAsset, kTickerAsset }) {
+        const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Debugger" });
+        scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+            .behaviourAssetId = asset.value,
+            .backend = kb::scene::BehaviourBackend::Lua,
+            .enabled = true,
+        });
+    }
+    kb::script::ScriptRuntime runtime;
+    kb::tests::Require(runtime.RegisterBackend(std::make_unique<kb::script::LuaScriptBackend>(luaRuntime)), "Lua debugger backend registration failed");
+    const auto tick = [&runtime, &scene](const char* failure) {
+        const kb::script::ScriptRuntimeExecutionResult result = runtime.ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.25F);
+        kb::tests::Require(result.Succeeded(), failure);
+    };
+    const auto shared = [&runtime](const char* key) {
+        const std::optional<kb::script::ScriptValue> value = runtime.SharedState().Get(key);
+        return value.has_value() ? value->AsInt() : 0;
+    };
+
+    luaRuntime.SetDebugSettings(kb::script::PucLuaDebugSettings{
+        .breakpoints = { kb::script::PucLuaDebugBreakpoint{ .chunkName = "Debugged.lua", .line = 6 } },
+    });
+    tick("Lua breakpoint raised an error instead of suspending the script");
+    const kb::script::PucLuaDebugPauseSnapshot& pause = luaRuntime.LastDebugPause();
+    kb::tests::Require(luaRuntime.IsDebugPaused() && pause.valid && pause.suspended && pause.reason == kb::script::PucLuaDebugPauseReason::Breakpoint &&
+            pause.chunkName.ends_with("Debugged.lua") && pause.line == 6 && luaRuntime.SuspendedCoroutineCount() == 1U,
+        "Lua breakpoint did not suspend the script at its line");
+    kb::tests::Require(shared("lua.pause.ticker") == 1 && shared("lua.pause.done") == 0, "Lua breakpoint did not stop only the paused script");
+
+    tick("Lua game loop failed while a script was paused");
+    tick("Lua game loop failed while a script was paused");
+    kb::tests::Require(luaRuntime.IsDebugPaused() && shared("lua.pause.ticker") == 3 && shared("lua.pause.done") == 0,
+        "Lua paused script ran on, or the other scripts stopped, while the debugger held the pause");
+    kb::script::PucLuaDebugPauseSnapshot inspected = luaRuntime.InspectDebugPause();
+    kb::tests::Require(inspected.valid && inspected.callStack.size() == 1U && inspected.callStack.front().line == 6, "Lua paused script call stack is not inspectable");
+    const kb::script::PucLuaDebugVariableSnapshot* delta = FindDebugLocal(inspected.callStack.front(), "dt");
+    kb::tests::Require(delta != nullptr && delta->type == kb::script::ScriptValueType::Float && delta->value.starts_with("0.25"),
+        "Lua paused script locals are not inspectable");
+
+    luaRuntime.RequestStepOver();
+    kb::tests::Require(!luaRuntime.IsDebugPaused(), "Lua step over did not release the pause");
+    tick("Lua step over raised an error");
+    inspected = luaRuntime.InspectDebugPause();
+    const kb::script::PucLuaDebugVariableSnapshot* a = inspected.callStack.empty() ? nullptr : FindDebugLocal(inspected.callStack.front(), "a");
+    kb::tests::Require(luaRuntime.IsDebugPaused() && luaRuntime.LastDebugPause().reason == kb::script::PucLuaDebugPauseReason::Step &&
+            luaRuntime.LastDebugPause().line == 7 && a != nullptr && a->value == "1" && a->type == kb::script::ScriptValueType::Int,
+        "Lua step over did not stop on the next line with the updated locals");
+
+    luaRuntime.RequestStepInto();
+    tick("Lua step into raised an error");
+    inspected = luaRuntime.InspectDebugPause();
+    const kb::script::PucLuaDebugVariableSnapshot* v = inspected.callStack.empty() ? nullptr : FindDebugLocal(inspected.callStack.front(), "v");
+    kb::tests::Require(luaRuntime.IsDebugPaused() && luaRuntime.LastDebugPause().line == 2 && inspected.callStack.size() == 2U &&
+            inspected.callStack[1].line == 7 && v != nullptr && v->value == "1",
+        "Lua step into did not stop inside the called function");
+
+    luaRuntime.RequestStepOut();
+    tick("Lua step out raised an error");
+    inspected = luaRuntime.InspectDebugPause();
+    const kb::script::PucLuaDebugVariableSnapshot* b = inspected.callStack.empty() ? nullptr : FindDebugLocal(inspected.callStack.front(), "b");
+    kb::tests::Require(luaRuntime.IsDebugPaused() && luaRuntime.LastDebugPause().line == 8 && inspected.callStack.size() == 1U && b != nullptr && b->value == "2",
+        "Lua step out did not stop in the caller after the function returned");
+    kb::tests::Require(shared("lua.pause.done") == 0 && shared("lua.pause.ticker") == 6, "Lua stepping ran ahead of the paused line or held the other scripts");
+
+    luaRuntime.ResumeDebugExecution();
+    tick("Lua continue raised an error");
+    kb::tests::Require(!luaRuntime.IsDebugPaused() && shared("lua.pause.done") == 1 && shared("lua.pause.b") == 2 && luaRuntime.SuspendedCoroutineCount() == 0U,
+        "Lua continue did not run the paused script to completion");
+
+    // The next invocation starts the entry again and stops on the same breakpoint; step over then passes the call.
+    luaRuntime.SetDebugSettings(kb::script::PucLuaDebugSettings{
+        .breakpoints = { kb::script::PucLuaDebugBreakpoint{ .chunkName = "Debugged.lua", .line = 7 } },
+    });
+    tick("Lua breakpoint on a call line raised an error");
+    kb::tests::Require(luaRuntime.IsDebugPaused() && luaRuntime.LastDebugPause().line == 7, "Lua breakpoint on a call line did not suspend");
+    luaRuntime.RequestStepOver();
+    tick("Lua step over a call raised an error");
+    kb::tests::Require(luaRuntime.IsDebugPaused() && luaRuntime.LastDebugPause().line == 8 && luaRuntime.InspectDebugPause().callStack.size() == 1U,
+        "Lua step over stopped inside the called function");
+    luaRuntime.SetDebugSettings(kb::script::PucLuaDebugSettings{});
+    luaRuntime.ResumeDebugExecution();
+    tick("Lua continue after a step raised an error");
+    tick("Lua Tick without breakpoints raised an error");
+    kb::tests::Require(!luaRuntime.IsDebugPaused() && shared("lua.pause.done") == 3 && luaRuntime.SuspendedCoroutineCount() == 0U,
+        "Lua script did not run normally after the debugger released it");
+}
+
+// Lua cannot yield across a C call boundary or from a chunk's top-level code run by pcall, and a Destroyed entry is
+// never invoked again to resume. A breakpoint there is recorded as not suspended and the script goes on, without an
+// error.
+void RunPucLuaDebuggerPauseAcrossCBoundaryTest() {
+    constexpr kb::assets::AssetId kLuaAsset{ 3303U };
+    kb::script::PucLuaScriptRuntime luaRuntime;
+    luaRuntime.SetDebugSettings(kb::script::PucLuaDebugSettings{
+        .breakpoints = {
+            kb::script::PucLuaDebugBreakpoint{ .chunkName = "Boundary.lua", .line = 1 },
+            kb::script::PucLuaDebugBreakpoint{ .chunkName = "Boundary.lua", .line = 5 },
+            kb::script::PucLuaDebugBreakpoint{ .chunkName = "Boundary.lua", .line = 10 },
+        },
+    });
+    const kb::script::PucLuaLoadResult loaded = luaRuntime.LoadScript(kLuaAsset, R"(local firstValue = 3
+function Tick(self, dt)
+    local values = { firstValue, 1, 2 }
+    table.sort(values, function(left, right)
+        return left < right
+    end)
+    SetShared("lua.boundary.first", values[1])
+end
+function Destroyed(self, dt)
+    SetShared("lua.boundary.destroyed", 1)
+end
+)", "Boundary.lua");
+    kb::tests::Require(loaded.succeeded, "Lua breakpoint in top-level chunk code failed the load");
+    kb::tests::Require(!luaRuntime.IsDebugPaused() && luaRuntime.LastDebugPause().valid && !luaRuntime.LastDebugPause().suspended &&
+            luaRuntime.LastDebugPause().line == 1,
+        "Lua breakpoint in top-level chunk code was not recorded as a pause that could not suspend");
+
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Boundary" });
+    scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kLuaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    kb::script::ScriptRuntime runtime;
+    kb::tests::Require(runtime.RegisterBackend(std::make_unique<kb::script::LuaScriptBackend>(luaRuntime)), "Lua boundary backend registration failed");
+    luaRuntime.ClearDebugPause();
+    const kb::script::ScriptRuntimeExecutionResult tick = runtime.ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.016F);
+    kb::tests::Require(tick.Succeeded(), "Lua breakpoint in a sort comparator raised an error");
+    const kb::script::PucLuaDebugPauseSnapshot& pause = luaRuntime.LastDebugPause();
+    kb::tests::Require(!luaRuntime.IsDebugPaused() && pause.valid && !pause.suspended && pause.line == 5 && pause.callStack.size() >= 2U &&
+            luaRuntime.SuspendedCoroutineCount() == 0U,
+        "Lua breakpoint across a C call boundary was not recorded as a pause that could not suspend");
+    const std::optional<kb::script::ScriptValue> first = runtime.SharedState().Get("lua.boundary.first");
+    kb::tests::Require(first.has_value() && first->AsInt() == 1, "Lua script did not go on after a breakpoint it could not suspend at");
+
+    const kb::script::ScriptRuntimeExecutionResult destroyed = runtime.ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Destroyed, 0.016F);
+    const std::optional<kb::script::ScriptValue> destroyedHit = runtime.SharedState().Get("lua.boundary.destroyed");
+    kb::tests::Require(destroyed.Succeeded() && !luaRuntime.IsDebugPaused() && luaRuntime.LastDebugPause().valid && !luaRuntime.LastDebugPause().suspended &&
+            luaRuntime.LastDebugPause().line == 10 && destroyedHit.has_value() && destroyedHit->AsInt() == 1,
+        "Lua breakpoint in a Destroyed entry suspended a behaviour that is never resumed");
 }
 
 void RunLuaExposedVariablesRuntimeTest() {
@@ -16186,6 +16365,8 @@ void RunScriptRuntimeTests() {
     RunPucLuaMemoryLimitTest();
     RunPucLuaDestroyedYieldCleanupTest();
     RunPucLuaScriptRuntimeModulesReloadAndDiagnosticsTest();
+    RunPucLuaDebuggerSuspendsAtBreakpointTest();
+    RunPucLuaDebuggerPauseAcrossCBoundaryTest();
     RunLuaExposedVariablesRuntimeTest();
     RunCrossBackendEventDispatchTest();
     RunPendingCommandCancelledByDestroyTest();
