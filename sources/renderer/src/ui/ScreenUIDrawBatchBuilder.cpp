@@ -476,9 +476,17 @@ void ScreenUIDrawBatchBuilder::AppendImage(const kb::scene::SceneUIFrameElement&
         constexpr float kMaximumTilesPerAxis = 64.0F;
         const float tileWidth = std::max(sourceWidth * scale, Width(destination) / kMaximumTilesPerAxis);
         const float tileHeight = std::max(sourceHeight * scale, Height(destination) / kMaximumTilesPerAxis);
-        for (float top = destination.top; top < destination.bottom; top += tileHeight) {
+        if (!(tileWidth > 0.0F) || !(tileHeight > 0.0F)) {
+            return;
+        }
+        // Counted tiles: stepping a float coordinate stalls once the step is below its precision.
+        const int rows = static_cast<int>(std::ceil(std::min(Height(destination) / tileHeight, kMaximumTilesPerAxis)));
+        const int columns = static_cast<int>(std::ceil(std::min(Width(destination) / tileWidth, kMaximumTilesPerAxis)));
+        for (int row = 0; row < rows; ++row) {
+            const float top = destination.top + static_cast<float>(row) * tileHeight;
             const float bottom = std::min(destination.bottom, top + tileHeight);
-            for (float left = destination.left; left < destination.right; left += tileWidth) {
+            for (int column = 0; column < columns; ++column) {
+                const float left = destination.left + static_cast<float>(column) * tileWidth;
                 const float right = std::min(destination.right, left + tileWidth);
                 AppendQuad(element, destination, ScreenUIRect{left, top, right, bottom}, u0, v0,
                            std::lerp(u0, u1, (right - left) / tileWidth), std::lerp(v0, v1, (bottom - top) / tileHeight),
