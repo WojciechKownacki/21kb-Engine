@@ -16,6 +16,9 @@ namespace {
 
 constexpr std::array<char, 8> AssetMagic{ '2', '1', 'K', 'B', 'A', 'S', 'T', '\0' };
 constexpr std::uint32_t SupportedVersion = 1U;
+// Version 2 adds, after the names, the table of files the source referenced (AssetImportService).
+constexpr std::uint32_t ResourcesVersion = 2U;
+constexpr std::uint32_t MaximumResourceCount = 4096U;
 
 [[nodiscard]] bool ReadU16(std::istream& input, std::uint16_t& value) {
     value = 0;
@@ -63,6 +66,36 @@ constexpr std::uint32_t SupportedVersion = 1U;
     return input.good();
 }
 
+[[nodiscard]] bool ReadResources(
+    std::istream& input,
+    std::size_t streamSize,
+    std::vector<ImportedAssetResource>& resources) {
+    std::uint32_t count = 0;
+    if (!ReadU32(input, count) || count > MaximumResourceCount) {
+        return false;
+    }
+    resources.reserve(count);
+    for (std::uint32_t index = 0; index < count; ++index) {
+        ImportedAssetResource resource;
+        std::uint64_t size = 0;
+        if (!ReadString(input, resource.uri) || resource.uri.empty() || !ReadU64(input, size)) {
+            return false;
+        }
+        const std::streamoff position = input.tellg();
+        if (position < 0 || static_cast<std::uint64_t>(position) > streamSize ||
+            size > streamSize - static_cast<std::uint64_t>(position)) {
+            return false;
+        }
+        resource.bytes.resize(static_cast<std::size_t>(size));
+        input.read(reinterpret_cast<char*>(resource.bytes.data()), static_cast<std::streamsize>(size));
+        if (!input.good() && size != 0U) {
+            return false;
+        }
+        resources.push_back(std::move(resource));
+    }
+    return true;
+}
+
 } // namespace
 
 std::string_view ImportedAssetLoader::Type() const noexcept {
@@ -98,7 +131,7 @@ AssetLoadResult ImportedAssetLoader::Load(const AssetLoadRequest& request) {
     std::uint64_t sourceHash = 0;
     ImportedAsset imported;
     if (!ReadU32(input, version)
-        || version != SupportedVersion
+        || (version != SupportedVersion && version != ResourcesVersion)
         || !ReadU16(input, category)
         || !ReadU16(input, flags)
         || !ReadU64(input, sourceSize)
@@ -106,6 +139,9 @@ AssetLoadResult ImportedAssetLoader::Load(const AssetLoadRequest& request) {
         || !ReadString(input, imported.sourceName)
         || !ReadString(input, imported.sourceExtension)) {
         return AssetLoadResult{ .asset = {}, .error = "Imported asset header is invalid." };
+    }
+    if (version == ResourcesVersion && !ReadResources(input, sourceBytes.size(), imported.resources)) {
+        return AssetLoadResult{ .asset = {}, .error = "Imported asset resource table is invalid." };
     }
 
     imported.category = static_cast<AssetImportCategory>(category);

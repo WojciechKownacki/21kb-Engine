@@ -39,6 +39,7 @@ add_library(kb_engine STATIC
     include/engine/assets/AssetReference.hpp
     include/engine/assets/AssetRegistry.hpp
     include/engine/assets/ImportedAsset.hpp
+    include/engine/assets/GltfExternalResources.hpp
     include/engine/assets/ImportedAssetHeaderReader.hpp
     include/engine/assets/ImportedAssetLoader.hpp
     include/engine/assets/IAssetLoader.hpp
@@ -549,6 +550,7 @@ add_library(kb_engine STATIC
     src/assets/AssetPathUtilities.cpp
     src/assets/AssetRegistry.cpp
     src/assets/AssetRuntimeLoadService.cpp
+    src/assets/GltfExternalResources.cpp
     src/assets/ImportedAssetHeaderReader.cpp
     src/assets/ImportedAssetLoader.cpp
     src/assets/bake/AssetBakeKey.cpp

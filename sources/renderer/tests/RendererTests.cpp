@@ -37,6 +37,7 @@ void RunPostProcessChainTests();
 void RunRenderFramePipelineTests();
 void RunRenderResourceRegistryTests();
 void RunAssetImportCatalogCoverageTests();
+void RunGltfExternalResourceTests();
 void RunRuntimeAssetShaderProviderTests();
 void RunRuntimeAssetPackValidationTests();
 void RunPackagedMaterialRuntimeTests();
@@ -127,6 +128,10 @@ int main(int argc, char** argv) {
     }
     if (argc == 2 && std::string_view{ argv[1] } == "screen-ui-batch") {
         kb::render::tests::RunScreenUIDrawBatchTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "gltf-external") {
+        kb::render::tests::RunGltfExternalResourceTests();
         return EXIT_SUCCESS;
     }
     if (argc == 2 && std::string_view{ argv[1] } == "import-catalog") {
@@ -280,6 +285,7 @@ int main(int argc, char** argv) {
     kb::render::tests::RunRenderFramePipelineTests();
     kb::render::tests::RunRenderResourceRegistryTests();
     kb::render::tests::RunAssetImportCatalogCoverageTests();
+    kb::render::tests::RunGltfExternalResourceTests();
     kb::render::tests::RunRuntimeAssetShaderProviderTests();
     kb::render::tests::RunRuntimeAssetPackValidationTests();
     kb::render::tests::RunRenderMaterialTypeSchemaTests();
