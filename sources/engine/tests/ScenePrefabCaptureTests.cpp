@@ -10,6 +10,7 @@
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/ScenePrefab.hpp"
 #include "engine/scene/ScenePrefabCaptureSettings.hpp"
+#include "engine/scene/ScenePrefabPrivateScene.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
@@ -594,6 +595,34 @@ void RunReopenedInstanceFollowsChangedPrefabTest() {
     std::filesystem::remove_all(projectRoot, removeError);
 }
 
+// A prefab edited in its private scene and saved keeps the prefabs it nests; an edit made inside a nested
+// prefab becomes an override of it rather than a flattened copy.
+void RunPrivateSceneSaveKeepsNestedPrefabTest() {
+    kb::scene::Scene scene;
+    kb::scene::ScenePrefab wheel;
+    const std::uint32_t wheelRoot = wheel.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Wheel" });
+    static_cast<void>(wheel.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Hub", .parentNode = wheelRoot }));
+    const kb::scene::ScenePrefabHandle wheelHandle = scene.Prefabs().Register("Wheel", std::move(wheel));
+    const kb::scene::SceneObject car = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Car" });
+    static_cast<void>(scene.Prefabs().Instantiate(wheelHandle, kb::scene::ScenePrefabInstantiationSettings{ .parent = car }));
+    const kb::scene::ScenePrefabHandle carHandle = scene.Prefabs().CaptureRegistered(car, "Car");
+    const std::string wheelGuid = scene.Prefabs().Guid(wheelHandle);
+    kb::tests::Require(scene.Prefabs().Get(carHandle).Nodes()[1].nestedPrefabGuid == wheelGuid, "Nested save setup: Car does not nest Wheel");
+
+    kb::scene::ScenePrefabPrivateScene edit = scene.Prefabs().OpenPrivateScene(carHandle);
+    kb::tests::Require(edit.IsValid() && edit.ObjectCount() == 3U, "Nested save setup: Car did not open in a private scene");
+    edit.EditScene().Entities().SetName(edit.ObjectAt(2U), "BigHub");
+    kb::tests::Require(edit.Apply(), "Saving the edited Car failed");
+
+    const kb::scene::ScenePrefab saved = scene.Prefabs().Get(carHandle);
+    kb::tests::Require(saved.Nodes()[1].nestedPrefabGuid == wheelGuid, "Saving the edited Car dropped its nested Wheel");
+    kb::tests::Require(std::ranges::any_of(saved.Nodes()[1].nestedPrefabOverrides, [](const kb::scene::ScenePrefabPropertyOverride& property) {
+        return property.propertyPath == "name" && property.value == "BigHub";
+    }), "The edit inside the nested Wheel was not saved as its override");
+    const kb::scene::ScenePrefabInstance placed = scene.Prefabs().Instantiate(carHandle);
+    kb::tests::Require(placed.ObjectCount() == 3U && scene.Entities().Name(placed.ObjectAt(2U)) == "BigHub", "A new Car does not show the nested edit");
+}
+
 // A scene file keeps an instance only as the prefab guid on its root node. Reopening the file in a
 // fresh scene, and reloading the captured document in place (how Play mode stops), must link the
 // instance, its node mapping and its overrides again.
@@ -997,6 +1026,7 @@ void RunScenePrefabCaptureTests() {
     run("RunPrefabInstanceLinkSurvivesSceneReopenTest", RunPrefabInstanceLinkSurvivesSceneReopenTest);
     run("RunPrefabInstanceNodeIdentitySurvivesReopenTest", RunPrefabInstanceNodeIdentitySurvivesReopenTest);
     run("RunReopenedInstanceFollowsChangedPrefabTest", RunReopenedInstanceFollowsChangedPrefabTest);
+    run("RunPrivateSceneSaveKeepsNestedPrefabTest", RunPrivateSceneSaveKeepsNestedPrefabTest);
     run("RunRuntimeSpawnDoesNotLinkPrefabInstancesTest", RunRuntimeSpawnDoesNotLinkPrefabInstancesTest);
     run("RunDestroyedInstanceChildSlotReuseTest", RunDestroyedInstanceChildSlotReuseTest);
     run("RunPrefabVariantAssetRoundTripTest", RunPrefabVariantAssetRoundTripTest);

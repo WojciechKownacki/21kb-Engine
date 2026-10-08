@@ -42,6 +42,18 @@ namespace {
     return {};
 }
 
+// The prefabs a private scene's prefab nests, so saving it can tell what the edits change in them.
+void CopyNestedPrefabs(const ScenePrefabRegistry& source, ScenePrefabRegistry& target, const ScenePrefab& prefab) {
+    for (const ScenePrefabNodeDesc& node : prefab.Nodes()) {
+        const ScenePrefabRecord* record = node.nestedPrefabGuid.empty() || target.FindByGuid(node.nestedPrefabGuid).IsValid()
+            ? nullptr
+            : source.FindRecord(source.FindByGuid(node.nestedPrefabGuid));
+        if (record != nullptr && target.RegisterLoaded(record->guid, record->name, record->prefab, record->sourcePath).IsValid()) {
+            CopyNestedPrefabs(source, target, record->prefab);
+        }
+    }
+}
+
 void CollectSubtreeEntities(Scene& scene, SceneEntity entity, std::unordered_set<SceneEntity::IdType>& entities) {
     if (!entity.IsValid() || !scene.Entities().IsAlive(entity)) {
         return;
@@ -150,6 +162,8 @@ ScenePrefabPrivateScene ScenePrefabs::OpenPrivateScene(ScenePrefabHandle handle)
     if (!editInstance.Handle().IsValid()) {
         return {};
     }
+    // Registered after the edit instance exists, so it keeps the prefab's own copy of nested content.
+    CopyNestedPrefabs(state.prefabs, SceneAccess::State(*editScene).prefabs, *prefab);
 
     return ScenePrefabPrivateScene{ scene_, handle, std::move(editScene), editHandle, std::move(editInstance) };
 }
