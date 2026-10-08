@@ -481,8 +481,6 @@ if(BUILD_TESTING AND TARGET kb_21kb_particle_stage2_tests)
             "KB_21KB_PARTICLE_PLUGIN_PATH=\"$<TARGET_FILE:kb_21kb_particle_plugin>\"")
     endif()
 endif()
-add_subdirectory(sources/plugins/terrain_editor terrain_editor)
-
 if(TARGET kb_engine_tests)
     add_dependencies(kb_engine_tests kb_physics_jolt_plugin kb_audio_miniaudio_plugin kb_basic_lighting_plugin)
     if(KB_BUILD_PROVIDER_MODULES_AS_DLL)
@@ -554,6 +552,8 @@ if(KB_BUILD_RENDERER)
 
     include(CMake/KbBgfxRuntimeShaders.cmake)
     add_subdirectory(sources/renderer renderer)
+    # The terrain editor imports heightmaps through bimg_decode, which comes with the renderer.
+    add_subdirectory(sources/plugins/terrain_editor terrain_editor)
     add_subdirectory(sources/game game)
     add_subdirectory(samples/render_smoke render_smoke)
     add_subdirectory(samples/standalone_player standalone_player)
