@@ -6,6 +6,7 @@
 #include <bimg/decode.h>
 #include <bx/error.h>
 
+#include <cstdint>
 #include <limits>
 
 namespace kb::render::bake {
@@ -77,6 +78,14 @@ bool ReadBakedTexture(std::span<const std::uint8_t> primaryBlock, RenderTextureA
         if (!bimg::imageGetRawData(
                 container, 0U, lod, primaryBlock.data(), static_cast<std::uint32_t>(primaryBlock.size()), mip) ||
             mip.m_data == nullptr) {
+            return false;
+        }
+        // bimg walks the levels by sizes it derives from the header and does not check
+        // them against the block, so each level must be shown to lie inside it.
+        const auto blockBegin = reinterpret_cast<std::uintptr_t>(primaryBlock.data());
+        const auto mipBegin = reinterpret_cast<std::uintptr_t>(mip.m_data);
+        if (mipBegin < blockBegin || mipBegin - blockBegin > primaryBlock.size() ||
+            mip.m_size > primaryBlock.size() - (mipBegin - blockBegin)) {
             return false;
         }
         gpuBlocks.blocks.insert(gpuBlocks.blocks.end(), mip.m_data, mip.m_data + mip.m_size);
