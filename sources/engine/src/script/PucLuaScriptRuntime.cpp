@@ -13,6 +13,8 @@ extern "C" {
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdio>
+#include <memory>
 #include <optional>
 #include <ranges>
 #include <string>
@@ -25,11 +27,21 @@ namespace {
 
 constexpr int kNoReference = LUA_NOREF;
 
+// The message luaL_newstate's panic handler prints before Lua aborts.
+int Panic(lua_State* state) {
+    const char* message = lua_type(state, -1) == LUA_TSTRING ? lua_tostring(state, -1) : "error object is not a string";
+    std::fprintf(stderr, "PANIC: unprotected error in call to Lua API (%s)\n", message);
+    std::fflush(stderr);
+    return 0;
+}
+
 } // namespace
 
 PucLuaScriptRuntime::PucLuaScriptRuntime()
-    : state_(luaL_newstate()) {
+    : memoryBudget_(std::make_unique<PucLuaMemoryBudget>(PucLuaMemoryBudget{ .limitBytes = ScriptExecutionBudgetSettings{}.luaMemoryBytes }))
+    , state_(lua_newstate(&PucLuaMemoryBudget::Allocate, memoryBudget_.get())) {
     if (state_ != nullptr) {
+        lua_atpanic(state_, &Panic);
         *static_cast<PucLuaScriptRuntime**>(lua_getextraspace(state_)) = this;
         PucLuaSandboxEnvironment::OpenSafeLibraries(state_);
     }
@@ -76,7 +88,10 @@ PucLuaLoadResult PucLuaScriptRuntime::ReloadScript(kb::assets::AssetId assetId, 
     const int errorHandlerIndex = lua_gettop(state_) - 1;
     lua_insert(state_, errorHandlerIndex);
     PucLuaDebugHook::Install(state_, *this);
-    const int status = lua_pcall(state_, 0, 0, errorHandlerIndex);
+    const int status = [&] {
+        const PucLuaMemoryLimitScope memoryLimit{ state_ };
+        return lua_pcall(state_, 0, 0, errorHandlerIndex);
+    }();
     PucLuaDebugHook::Clear(state_);
     if (status != LUA_OK) {
         return PucLuaLoadResult{ .error = PucLuaErrorReporter::ErrorFromTop(state_) };
@@ -321,6 +336,7 @@ void PucLuaScriptRuntime::SetDebugSettings(PucLuaDebugSettings settings) {
 
 void PucLuaScriptRuntime::SetExecutionBudgetSettings(ScriptExecutionBudgetSettings settings) noexcept {
     executionBudgetSettings_ = settings;
+    memoryBudget_->limitBytes = settings.luaMemoryBytes;
 }
 
 void PucLuaScriptRuntime::BeginExecutionBudget() noexcept {
@@ -346,6 +362,10 @@ kb::core::BudgetExceededPolicy PucLuaScriptRuntime::ExecutionBudgetPolicy() cons
 
 bool PucLuaScriptRuntime::IsExecutionBudgetEnabled() const noexcept {
     return executionBudgetSettings_.luaInstructionsPerBehaviour != 0U;
+}
+
+std::size_t PucLuaScriptRuntime::LuaMemoryUsedBytes() const noexcept {
+    return memoryBudget_->usedBytes;
 }
 
 bool PucLuaScriptRuntime::HasActiveExecutionBudget() const noexcept {
@@ -442,7 +462,10 @@ bool PucLuaScriptRuntime::PushModuleForImport(std::string_view name, std::string
     const int errorHandlerIndex = lua_gettop(state_) - 1;
     lua_insert(state_, errorHandlerIndex);
     PucLuaDebugHook::Install(state_, *this);
-    const int status = lua_pcall(state_, 0, 1, errorHandlerIndex);
+    const int status = [&] {
+        const PucLuaMemoryLimitScope memoryLimit{ state_ };
+        return lua_pcall(state_, 0, 1, errorHandlerIndex);
+    }();
     PucLuaDebugHook::Clear(state_);
     if (status != LUA_OK) {
         error = PucLuaErrorReporter::ErrorFromTop(state_);
@@ -624,7 +647,10 @@ ScriptBackendExecutionResult PucLuaScriptRuntime::ExecuteFunction(
         BeginExecutionBudget();
     }
     PucLuaDebugHook::Install(coroutine, *this);
-    const int status = lua_resume(coroutine, state_, argumentCount, &resultCount);
+    const int status = [&] {
+        const PucLuaMemoryLimitScope memoryLimit{ coroutine };
+        return lua_resume(coroutine, state_, argumentCount, &resultCount);
+    }();
     std::string coroutineError =
         status == LUA_OK ? std::string{} : PucLuaErrorReporter::ErrorWithTracebackFromTop(coroutine);
     if (status != LUA_OK && coroutineError.find("stack traceback") == std::string::npos) {
