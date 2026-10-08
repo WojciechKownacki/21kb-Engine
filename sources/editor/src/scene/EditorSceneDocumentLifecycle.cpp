@@ -343,9 +343,13 @@ bool EditorSceneContext::ReloadSceneFromProject() {
         return false;
     }
 
-    if (!currentScenePath_.empty() && !kb::scene::SceneDocumentService::LoadFileIntoScene(*nextScene, currentScenePath_)) {
-        console_.Error("Project", "Scene could not be reloaded: " + currentScenePath_.generic_string());
-        return false;
+    kb::scene::SceneDocumentLoadResult loaded;
+    if (!currentScenePath_.empty()) {
+        loaded = kb::scene::SceneDocumentService::Load(currentScenePath_);
+        if (!loaded.succeeded || !kb::scene::SceneDocumentService::LoadIntoScene(*nextScene, loaded.document)) {
+            console_.Error("Project", "Scene could not be reloaded: " + currentScenePath_.generic_string());
+            return false;
+        }
     }
     EditorSceneAudioSettingsService::PrepareDocument(*nextScene);
 
@@ -358,6 +362,7 @@ bool EditorSceneContext::ReloadSceneFromProject() {
     ResetSceneEditState();
     ClearSceneDocumentDirty();
     console_.Info("Project", "Reloaded scene with current project plugin settings.");
+    UpgradePrefabLinksOnSave(loaded.document);
     CompleteLoadedUIComponents();
     return true;
 }
@@ -419,6 +424,7 @@ bool EditorSceneContext::OpenScene(const std::filesystem::path& path, EditorDirt
     ResetSceneEditState();
     ClearSceneDocumentDirty();
     console_.Info("Project", "Opened scene: " + currentScenePath_.generic_string());
+    UpgradePrefabLinksOnSave(loaded.document);
     CompleteLoadedUIComponents();
     return true;
 }

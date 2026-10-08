@@ -400,10 +400,15 @@ EditorSceneContext::EditorSceneContext()
     static_cast<void>(ActivateProjectPhysicsLayers(*scene_));
     currentScenePath_ = ResolveDefaultScenePath();
     std::error_code error;
-    if (!currentScenePath_.empty() && std::filesystem::is_regular_file(currentScenePath_, error) && !error && kb::scene::SceneDocumentService::LoadFileIntoScene(*scene_, currentScenePath_)) {
+    kb::scene::SceneDocumentLoadResult loaded;
+    if (!currentScenePath_.empty() && std::filesystem::is_regular_file(currentScenePath_, error) && !error) {
+        loaded = kb::scene::SceneDocumentService::Load(currentScenePath_);
+    }
+    if (loaded.succeeded && kb::scene::SceneDocumentService::LoadIntoScene(*scene_, loaded.document)) {
         EditorSceneAudioSettingsService::PrepareDocument(*scene_);
         SelectFirstSceneEntityOrClear();
         console_.Info("Project", "Opened default scene: " + currentScenePath_.generic_string());
+        UpgradePrefabLinksOnSave(loaded.document);
     } else {
         hierarchySelection_.SelectEntity(EditorDefaultSceneFactory::Seed(*scene_));
         if (SaveCurrentScene()) {
@@ -4005,6 +4010,15 @@ bool EditorSceneContext::CompleteUIComponentDependencies(kb::scene::SceneEntity 
         kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Canvas));
     if (parent.IsValid() && !scene_->Hierarchy().SetParent(canvas, parent)) return false;
     return scene_->Hierarchy().SetParent(root, canvas);
+}
+
+void EditorSceneContext::UpgradePrefabLinksOnSave(const kb::scene::SceneDocument& document) {
+    if (!document.LinksPrefabInstancesByName()) {
+        return;
+    }
+    MarkSceneDocumentDirty();
+    console_.Warning("Prefabs", "This scene was saved by an older version, which links prefab instances to their "
+        "prefabs by object name. Save it once to link each object to its prefab node instead.");
 }
 
 void EditorSceneContext::CompleteLoadedUIComponents() {
