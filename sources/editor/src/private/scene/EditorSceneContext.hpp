@@ -6,6 +6,7 @@
 
 #include "commands/EditorSceneHistoryCommand.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneDocument.hpp"
 #include "engine/scene/SceneHistory.hpp"
 #include "engine/scene/ScenePrefabPrivateScene.hpp"
 #include "engine/scene/SceneAudioOcclusionAccess.hpp"
@@ -1279,6 +1280,8 @@ public:
 private:
     [[nodiscard]] bool CompleteUIComponentDependencies(kb::scene::SceneEntity entity);
     void CompleteLoadedUIComponents();
+    // Marks a loaded scene that links its prefab instances by object name for saving, which records node ids.
+    void UpgradePrefabLinksOnSave(const kb::scene::SceneDocument& document);
     std::optional<EditorUIRectDragState> uiRectDrag_;
     mutable kb::math::Vec2 uiAuthoringViewportSize_{1920.0F, 1080.0F};
     [[nodiscard]] bool SpawnEditRequiresPreviewRestart(const kb::scene::ParticleSpawnAsset& spawn) const;

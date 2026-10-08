@@ -39,7 +39,7 @@ using SceneAssetBinaryIO::ReadAllBytes;
         !input.ReadUInt32(flag) ||
         !input.ReadString(output.propertyPath) ||
         !input.ReadString(output.value) ||
-        (fileVersion >= 41U && (!input.ReadUInt64(output.nodeId) || !input.ReadUInt64(output.objectReferenceNodeId)))) {
+        (fileVersion >= SceneDocument::PrefabNodeIdentityFileVersion && (!input.ReadUInt64(output.nodeId) || !input.ReadUInt64(output.objectReferenceNodeId)))) {
         return false;
     }
     output.flag = static_cast<ScenePrefabOverrideFlag>(flag);
@@ -68,7 +68,7 @@ using SceneAssetBinaryIO::ReadAllBytes;
         output.nestedPrefabOverrides.push_back(std::move(property));
     }
     std::uint32_t nestedNodeIdCount = 0U;
-    if (fileVersion >= 41U && (!input.ReadUInt32(nestedNodeIdCount) || nestedNodeIdCount > SceneAssetFormat::MaxNodeCount)) {
+    if (fileVersion >= SceneDocument::PrefabNodeIdentityFileVersion && (!input.ReadUInt32(nestedNodeIdCount) || nestedNodeIdCount > SceneAssetFormat::MaxNodeCount)) {
         return false;
     }
     output.nestedPrefabNodeIds.assign(nestedNodeIdCount, ScenePrefabNodeDesc::InvalidStableId);
@@ -77,7 +77,7 @@ using SceneAssetBinaryIO::ReadAllBytes;
             return false;
         }
     }
-    if (fileVersion >= 41U && !input.ReadUInt64(output.nestedPrefabContentHash)) {
+    if (fileVersion >= SceneDocument::PrefabNodeIdentityFileVersion && !input.ReadUInt64(output.nestedPrefabContentHash)) {
         return false;
     }
 

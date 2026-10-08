@@ -3,6 +3,7 @@
 #include "engine/scene/SceneAudioOcclusionAccess.hpp"
 #include "engine/scene/ScenePrefab.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -49,6 +50,7 @@ struct SceneDocument {
     //      content hash of its prefab, and its overrides persist the stable ids of the nodes they
     //      target and refer to.
     static constexpr std::uint32_t CurrentFileVersion = 41U;
+    static constexpr std::uint32_t PrefabNodeIdentityFileVersion = 41U;
 
     std::uint32_t fileVersion = CurrentFileVersion;
     std::string guid;
@@ -59,6 +61,13 @@ struct SceneDocument {
     std::string audioMixerSnapshot;
     AudioOcclusionSettings audioOcclusionSettings{};
     ScenePrefab worldPrefab;
+
+    // A document saved before PrefabNodeIdentityFileVersion links its prefab instances to their prefabs by
+    // object name, which a rename or a move inside an instance can defeat; saving it again records node ids.
+    [[nodiscard]] bool LinksPrefabInstancesByName() const {
+        return fileVersion < PrefabNodeIdentityFileVersion &&
+            std::ranges::any_of(worldPrefab.Nodes(), [](const ScenePrefabNodeDesc& node) { return !node.nestedPrefabGuid.empty(); });
+    }
 };
 
 } // namespace kb::scene

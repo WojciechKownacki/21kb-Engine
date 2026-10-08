@@ -697,6 +697,25 @@ void RunSceneCaptureScalesLinearlyTest() {
     kb::tests::Require(large < small * 9.0 + 5.0, "Scene capture grows faster than linearly with its prefab instances");
 }
 
+// A scene file older than prefab node ids links its instances by object name; one from now on does not,
+// and an older file without instances has nothing to link.
+void RunLegacyDocumentLinksByNameTest() {
+    kb::scene::Scene scene;
+    kb::scene::ScenePrefab crate;
+    static_cast<void>(crate.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Crate" }));
+    static_cast<void>(scene.Prefabs().Instantiate(scene.Prefabs().Register("Crate", std::move(crate))));
+    kb::scene::SceneDocument withInstance = kb::scene::SceneDocumentService::Capture(scene, "Legacy");
+    kb::tests::Require(!withInstance.LinksPrefabInstancesByName(), "A current scene document claims to link prefab instances by name");
+    withInstance.fileVersion = kb::scene::SceneDocument::PrefabNodeIdentityFileVersion - 1U;
+    kb::tests::Require(withInstance.LinksPrefabInstancesByName(), "An older scene document with a prefab instance is not flagged");
+
+    kb::scene::Scene plainScene;
+    static_cast<void>(plainScene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Plain" }));
+    kb::scene::SceneDocument plain = kb::scene::SceneDocumentService::Capture(plainScene, "Plain");
+    plain.fileVersion = kb::scene::SceneDocument::PrefabNodeIdentityFileVersion - 1U;
+    kb::tests::Require(!plain.LinksPrefabInstancesByName(), "An older scene document without prefab instances is flagged");
+}
+
 // A scene file keeps an instance only as the prefab guid on its root node. Reopening the file in a
 // fresh scene, and reloading the captured document in place (how Play mode stops), must link the
 // instance, its node mapping and its overrides again.
@@ -1106,6 +1125,7 @@ void RunScenePrefabCaptureTests() {
     run("RunDestroyedInstanceChildSlotReuseTest", RunDestroyedInstanceChildSlotReuseTest);
     run("RunInstanceChangeRevisionTest", RunInstanceChangeRevisionTest);
     run("RunSceneCaptureScalesLinearlyTest", RunSceneCaptureScalesLinearlyTest);
+    run("RunLegacyDocumentLinksByNameTest", RunLegacyDocumentLinksByNameTest);
     run("RunPrefabVariantAssetRoundTripTest", RunPrefabVariantAssetRoundTripTest);
     run("RunPrefabParentOverrideAssetRoundTripTest", RunPrefabParentOverrideAssetRoundTripTest);
     run("RunPrefabVariantAddedChildAssetRoundTripTest", RunPrefabVariantAddedChildAssetRoundTripTest);
