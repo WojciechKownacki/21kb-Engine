@@ -466,6 +466,9 @@ public:
     [[nodiscard]] bool DeleteSelectedHierarchyEntity() noexcept;
     [[nodiscard]] bool DuplicateSelectedHierarchyEntities();
     [[nodiscard]] bool SelectPrefabSourceAsset(kb::scene::SceneEntity entity);
+    // The Inspector asks for a selected instance's overrides on every paint, size and hit test; they
+    // change only with the scene, so they are worked out once per scene revision.
+    [[nodiscard]] const kb::scene::ScenePrefabOverrideReport& PrefabInstanceOverrides(kb::scene::ScenePrefabInstanceHandle instance) const;
     [[nodiscard]] bool SelectPrefabInstanceRoot(kb::scene::SceneEntity entity);
     [[nodiscard]] bool ApplyPrefabInstance(kb::scene::SceneEntity entity);
     [[nodiscard]] bool RevertPrefabInstance(kb::scene::SceneEntity entity);
@@ -1373,6 +1376,14 @@ private:
     std::unique_ptr<kb::scene::Scene> documentScene_;
     kb::scene::Scene* scene_ = nullptr;
     kb::scene::ScenePrefabPrivateScene prefabEdit_;
+    struct PrefabOverridesCache {
+        const kb::scene::Scene* scene = nullptr;
+        kb::scene::ScenePrefabInstanceHandle instance{};
+        std::uint64_t revision = 0U;
+        std::uint64_t instanceRevision = 0U;
+        kb::scene::ScenePrefabOverrideReport report;
+    };
+    mutable PrefabOverridesCache prefabOverridesCache_;
     std::filesystem::path prefabEditPath_;
     std::function<void(const kb::scene::Scene&)> renderSceneReleaseHandler_;
     std::filesystem::path currentScenePath_;
