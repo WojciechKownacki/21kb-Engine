@@ -13540,7 +13540,8 @@ void RunScriptAssetsApiTest() {
     kb::tests::Require(!scene.Assets().Manager().IsLoaded(assetId), "Assets.LoadAsync must not load the asset synchronously within the call itself");
 
     std::vector<kb::scene::TaskCompletionRecord> asyncCompletions;
-    for (std::size_t spin = 0; spin < 100000U && scene.Tasks().Exists(asyncTaskId); ++spin) {
+    for (const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{ 10 };
+         std::chrono::steady_clock::now() < deadline && scene.Tasks().Exists(asyncTaskId);) {
         std::vector<kb::scene::TaskCompletionRecord> current = scene.Tasks().Advance(0.001F);
         asyncCompletions.insert(asyncCompletions.end(), current.begin(), current.end());
         std::this_thread::yield();

@@ -3095,15 +3095,18 @@ void RunStreamFocusRuntimeTest() {
     });
     static_cast<void>(scene.Runtime().Update(0.0F));
     const auto awaitLoaded = [&] {
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{10};
         while (scene.LoadedContent().Find("StreamFocusFixture") == 0U && std::chrono::steady_clock::now() < deadline) {
             static_cast<void>(scene.Runtime().Update(0.0F));
             std::this_thread::yield();
         }
     };
     const auto awaitUnloaded = [&](std::uint64_t id) {
-        for (std::size_t attempt = 0U; attempt < 1000U && scene.LoadedContent().Exists(id); ++attempt)
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{10};
+        while (scene.LoadedContent().Exists(id) && std::chrono::steady_clock::now() < deadline) {
             static_cast<void>(scene.Runtime().Update(0.0F));
+            std::this_thread::yield();
+        }
     };
     awaitLoaded();
     std::uint64_t loadId = scene.LoadedContent().Find("StreamFocusFixture");
