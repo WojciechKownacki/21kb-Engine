@@ -76,6 +76,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <fstream>
 #include <iomanip>
@@ -95,6 +96,9 @@ namespace kb::editor {
 namespace {
 
 constexpr RECT kInspectorContent{ 0, 0, 900, 700 };
+// GPU readbacks complete on the driver's schedule, which stretches when other
+// processes load the machine, so captures wait on a clock deadline.
+constexpr std::chrono::seconds kCaptureDeadline{ 20 };
 constexpr std::uint64_t kParticlePickerAnimationTimerTicks = 2U;
 
 struct ScreenshotDimensions {
@@ -3417,7 +3421,8 @@ bool EditorHeadlessAutomation::CaptureRuntime(
             Trace("capture_runtime", false, "presented-capture-rejected");
             return false;
         }
-        for (std::size_t poll = 0U; poll < 240U; ++poll) {
+        for (const auto deadline = std::chrono::steady_clock::now() + kCaptureDeadline;
+             std::chrono::steady_clock::now() < deadline;) {
             if (!impl_->viewport.AdvanceAsyncReadbacks()) break;
             if (std::filesystem::exists(output, error) && !error) {
                 const bool valid = ValidateCapturedImage(output, requireNonUniform, impl_->runtimeWidth, impl_->runtimeHeight);
@@ -3440,7 +3445,8 @@ bool EditorHeadlessAutomation::CaptureRuntime(
         Trace("capture_runtime", false, "render-backend-failed");
         return false;
     }
-    for (std::size_t poll = 0U; poll < 240U; ++poll) {
+    for (const auto deadline = std::chrono::steady_clock::now() + kCaptureDeadline;
+         std::chrono::steady_clock::now() < deadline;) {
         // A capture already in flight elsewhere defers this request to the
         // scene's next submit (see CaptureEditorScene).
         const bool awaitingSubmit =
@@ -3507,7 +3513,8 @@ bool EditorHeadlessAutomation::CaptureEditorScene(std::string_view checkpoint, b
             "scene-present-failed");
         return false;
     }
-    for (std::size_t poll = 0U; poll < 240U; ++poll) {
+    for (const auto deadline = std::chrono::steady_clock::now() + kCaptureDeadline;
+         std::chrono::steady_clock::now() < deadline;) {
         // The renderer keeps one capture in flight; while another scene's
         // capture (e.g. a particle thumbnail) holds it, this request waits
         // for the scene's next submit, so keep presenting until it starts.
