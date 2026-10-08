@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import io
+import json
 import stat
 import sys
 import tarfile
@@ -18,6 +19,7 @@ import package_game  # noqa: E402
 import package_linux_guest  # noqa: E402
 import package_contract  # noqa: E402
 from package_contract import PackagingError, seal_unit  # noqa: E402
+import third_party_notices  # noqa: E402
 from windows_pe_resources import _version_resource, _version_tuple  # noqa: E402
 
 
@@ -997,6 +999,63 @@ class PackageGameTests(unittest.TestCase):
             thread.join.assert_called_once_with(timeout=5)
             self.assertFalse(any((args.build_root / "package-runs").iterdir()))
 
+    def test_third_party_inventory_is_complete_and_documented(self) -> None:
+        engine_root = SCRIPTS.parent
+        components = third_party_notices.load_components(engine_root)
+        documented = (engine_root / "third_party/THIRD_PARTY_LICENSES.md").read_text(encoding="utf-8")
+        for component in components:
+            self.assertIn(component.name, documented, component.id)
+        windows = {component.id for component in third_party_notices.select_components(components, "game", "windows")}
+        # meshoptimizer is compiled into the renderer, so every player ships its notice.
+        self.assertTrue({"bgfx", "bx", "bimg", "meshoptimizer", "lua", "jolt", "miniaudio", "directx-headers"} <= windows)
+        self.assertFalse({"glslang", "heroicons", "nvtt", "dawn", "androidx"} & windows)
+        self.assertIn("androidx", {c.id for c in third_party_notices.select_components(components, "game", "android")})
+        self.assertIn("dawn", {c.id for c in third_party_notices.select_components(components, "game", "webgpu")})
+        self.assertNotIn("directx-headers", {c.id for c in third_party_notices.select_components(components, "game", "linux")})
+        self.assertEqual(len(third_party_notices.select_components(components, "engine", None)), len(components))
+
+    def test_staged_licenses_carry_notices_texts_and_sbom(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_text:
+            stage = Path(temporary_text)
+            args = argparse.Namespace(
+                engine_root=SCRIPTS.parent, target="Windows.x64", product_name="Sample Game", version="1.2.3",
+            )
+            package_game._stage_licenses(args, stage)
+            notices = (stage / "THIRD_PARTY_NOTICES.txt").read_text(encoding="utf-8")
+            self.assertIn("meshoptimizer", notices)
+            self.assertIn("Arseny Kapoulkine", notices)
+            self.assertTrue((stage / "Licenses/meshoptimizer.txt").is_file())
+            # The Apache License text is shared by several components but staged once.
+            self.assertEqual(sum(1 for _ in (stage / "Licenses").glob("*.txt")),
+                             len({f for c in third_party_notices.select_components(
+                                 third_party_notices.load_components(SCRIPTS.parent), "game", "windows")
+                                  for f in c.license_files}))
+            sbom = json.loads((stage / "sbom.cdx.json").read_text(encoding="utf-8"))
+            self.assertEqual((sbom["bomFormat"], sbom["specVersion"]), ("CycloneDX", "1.5"))
+            self.assertEqual(sbom["metadata"]["component"], {
+                "type": "application", "bom-ref": "product", "name": "Sample Game", "version": "1.2.3",
+            })
+            refs = {component["bom-ref"] for component in sbom["components"]}
+            self.assertIn("meshoptimizer", refs)
+            self.assertEqual(set(sbom["dependencies"][0]["dependsOn"]), refs)
+            again = third_party_notices.build_sbom("Sample Game", "1.2.3", [])
+            self.assertEqual(again["serialNumber"], sbom["serialNumber"])
+
+    def test_missing_third_party_license_text_fails_packaging(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_text:
+            root = Path(temporary_text)
+            (root / "third_party").mkdir()
+            (root / "third_party/third_party_manifest.json").write_text(json.dumps({
+                "schema": "21kb.third-party/v1",
+                "components": [{
+                    "id": "gone", "name": "Gone", "version": "1", "license": "MIT", "copyright": "c",
+                    "url": "https://example.invalid", "path": "third_party/gone",
+                    "licenseFiles": ["third_party/gone/LICENSE"], "scope": "game",
+                }],
+            }), encoding="utf-8")
+            args = argparse.Namespace(engine_root=root, target="Windows.x64", product_name="G", version="1")
+            with self.assertRaisesRegex(PackagingError, "license file is missing"):
+                package_game._stage_licenses(args, root / "stage")
 
 if __name__ == "__main__":
     unittest.main()

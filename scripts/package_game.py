@@ -52,6 +52,7 @@ from package_contract import (
     terminate_process_tree,
     verify_unit,
 )
+from third_party_notices import NoticeError, load_components, select_components, stage_notices, write_sbom
 from windows_pe_resources import WindowsResourceError, apply_windows_resources
 
 
@@ -322,36 +323,16 @@ def _find_optional_build_tool(build_root: Path, configuration: str, name: str) -
     return next((path.resolve(strict=True) for path in matches if path.is_file()), None)
 
 
-def _stage_licenses(engine_root: Path, stage: Path, target: str) -> None:
-    sources = {
-        "bgfx.rst": engine_root / "third_party/bgfx.cmake/bgfx/docs/license.rst",
-        "bx.txt": engine_root / "third_party/bgfx.cmake/bx/LICENSE",
-        "bimg.txt": engine_root / "third_party/bgfx.cmake/bimg/LICENSE",
-        "flecs.txt": engine_root / "third_party/flecs/LICENSE",
-        "jolt.txt": engine_root / "third_party/jolt/LICENSE",
-        "lua.txt": engine_root / "third_party/licenses/lua-5.4.8.txt",
-        "miniaudio.txt": engine_root / "third_party/miniaudio/LICENSE",
-        "ufbx.txt": engine_root / "third_party/ufbx/LICENSE",
-    }
-    included = ["bgfx", "bx", "bimg", "Flecs", "Jolt Physics", "Lua", "miniaudio", "ufbx"]
-    if target.startswith("Android."):
-        sources["androidx-apache-2.0.txt"] = engine_root / "third_party/bgfx.cmake/bgfx/3rdparty/spirv-tools/LICENSE"
-        included.append("AndroidX AppCompat, Games Activity, and their AndroidX dependencies")
-    if target == "WebGPU.wasm32":
-        sources["dawn.txt"] = engine_root / "third_party/bgfx.cmake/bgfx/3rdparty/dawn/LICENSE"
-        included.append("Dawn WebGPU")
-    licenses = stage / "Licenses"
-    licenses.mkdir()
-    for name, source in sources.items():
-        if not source.is_file():
-            raise PackagingError(f"required third-party license is missing: {source}")
-        shutil.copy2(source, licenses / name)
-    (stage / "THIRD_PARTY_NOTICES.txt").write_text(
-        "This product includes " + ", ".join(included) + ".\n"
-        "Their license texts are included in the Licenses directory.\n",
-        encoding="utf-8",
-        newline="\n",
-    )
+def _stage_licenses(args: argparse.Namespace, stage: Path) -> None:
+    """The license texts, notices and SBOM of every third-party component the target's player ships."""
+    try:
+        components = select_components(
+            load_components(args.engine_root), "game", TARGETS[args.target].platform
+        )
+        stage_notices(args.engine_root, stage, components, args.product_name)
+        write_sbom(stage / "sbom.cdx.json", args.product_name, args.version, components)
+    except (NoticeError, OSError, KeyError, ValueError) as error:
+        raise PackagingError(f"third-party notices could not be staged: {error}") from error
 
 
 def _stage_windows(args: argparse.Namespace, cmake: Path, pack: Path, stage: Path, job: Path) -> StageResult:
@@ -395,7 +376,7 @@ def _stage_windows(args: argparse.Namespace, cmake: Path, pack: Path, stage: Pat
             raise PackagingError(f"Windows player provider was not produced: {expected}")
         shutil.copy2(plugin, stage / expected)
         plugin_paths.append(plugin)
-    _stage_licenses(args.engine_root, stage, args.target)
+    _stage_licenses(args, stage)
     if destination.read_bytes()[:2] != b"MZ":
         raise PackagingError("Windows player does not contain a valid PE header")
     smoke = job / "windows-first-frame"
@@ -650,7 +631,7 @@ def _stage_android(args: argparse.Namespace, pack: Path, stage: Path, job: Path)
     validator = _build_tool_path(args.build_root, CONFIGURATIONS[args.configuration], "kb_runtime_asset_pack_validator")
     legal_assets = job / "android-legal-assets"
     legal_assets.mkdir()
-    _stage_licenses(args.engine_root, legal_assets, args.target)
+    _stage_licenses(args, legal_assets)
     command: list[Path | str] = [
         _java(), "-classpath", gradle_wrapper, "org.gradle.wrapper.GradleWrapperMain",
         task,
@@ -951,7 +932,7 @@ def _stage_web(args: argparse.Namespace, cmake: Path, pack: Path, stage: Path, j
             raise PackagingError(f"{backend} build produced ambiguous {suffix} artifacts")
         shutil.copy2(files[0], stage / f"{args.executable_name}{suffix}")
     shutil.copy2(pack, stage / "Game.kbpack")
-    _stage_licenses(args.engine_root, stage, args.target)
+    _stage_licenses(args, stage)
     html_path = stage / f"{args.executable_name}.html"
     javascript_path = stage / f"{args.executable_name}.js"
     html_text = html_path.read_text(encoding="utf-8", errors="strict")
@@ -1076,7 +1057,7 @@ def _stage_linux_local(args: argparse.Namespace, cmake: Path, pack: Path, stage:
     shutil.copy2(game, destination)
     destination.chmod(destination.stat().st_mode | 0o111)
     shutil.copy2(pack, stage / "Game.kbpack")
-    _stage_licenses(args.engine_root, stage, args.target)
+    _stage_licenses(args, stage)
     if destination.read_bytes()[:4] != b"\x7fELF":
         raise PackagingError("Linux player does not contain a valid ELF header")
     ldd = _required_executable("ldd")
