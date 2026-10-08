@@ -5215,6 +5215,35 @@ void RunGameplayAbilityDurationAndCooldownTest() {
         "Gameplay ability accepted a NaN duration");
 }
 
+// Remove must clear every module store, not only the first one that held data for the entity.
+void RunGameplayModulesRemoveClearsEveryStoreTest() {
+    kb::gameplay::GameplayModules modules;
+    const kb::scene::SceneEntity entity{31U};
+    const kb::scene::SceneEntity pickup{32U};
+    const kb::scene::SceneEntity other{33U};
+    const kb::gameplay::GameplayTagId mana = kb::gameplay::GameplayTag("mana");
+    const kb::gameplay::GameplayTagId hand = kb::gameplay::GameplayTag("hand");
+    kb::tests::Require(
+        modules.AddHealth(entity, { .current = 5.0F, .maximum = 10.0F }) &&
+            modules.SetAttribute(entity, mana, { .current = 3.0F, .minimum = 0.0F, .maximum = 5.0F }) &&
+            modules.AddItems(entity, 7U, 2U) && modules.Equip(entity, hand, 7U) &&
+            modules.RegisterPickup(entity, { .item = 8U, .quantity = 1U }) &&
+            modules.AddHealth(other, { .current = 1.0F, .maximum = 1.0F }) && modules.AddItems(other, 7U, 1U),
+        "Gameplay module remove fixture could not populate every store");
+    kb::tests::Require(modules.Remove(entity), "Gameplay modules did not report removing a populated entity");
+    kb::tests::Require(
+        !modules.Health(entity).has_value() && !modules.Attribute(entity, mana).has_value() &&
+            modules.ItemCount(entity, 7U) == 0U && !modules.Equipped(entity, hand).has_value() &&
+            !modules.CollectPickup(entity, pickup),
+        "Gameplay modules Remove left stale attribute, inventory, equipment, or pickup data");
+    kb::tests::Require(modules.Health(other).has_value() && modules.ItemCount(other, 7U) == 1U,
+        "Gameplay modules Remove touched another entity");
+    kb::tests::Require(!modules.Remove(entity), "Gameplay modules reported removing an entity with no data");
+    kb::tests::Require(modules.SetAttribute(entity, mana, { .current = 1.0F, .minimum = 0.0F, .maximum = 5.0F }) && modules.Remove(entity) &&
+            !modules.Attribute(entity, mana).has_value(),
+        "Gameplay modules Remove did not report clearing an entity that only had attributes");
+}
+
 void RunLifecycleSoakTest() {
     constexpr std::size_t kSpawnDestroyCycles = 256U;
     constexpr std::size_t kLoadUnloadCycles = 64U;
@@ -5675,6 +5704,7 @@ void RunEngineLibraryTests() {
     RunMinimalGameplaySceneReplayTest();
     RunGameplayAbilityEndsAndNextActivatesTest();
     RunGameplayAbilityDurationAndCooldownTest();
+    RunGameplayModulesRemoveClearsEveryStoreTest();
     RunLifecycleSoakTest();
     RunGameInstanceLifetimeTest();
 }
