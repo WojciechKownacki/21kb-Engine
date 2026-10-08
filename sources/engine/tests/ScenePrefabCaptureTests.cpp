@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <filesystem>
 #include <string>
 #include <system_error>
@@ -672,6 +673,30 @@ void RunInstanceChangeRevisionTest() {
     kb::tests::Require(scene.Prefabs().InstanceChangeRevision() != moved, "A second change to an already changed object did not move the instance change revision");
 }
 
+// Capturing a scene grows linearly with its prefab instances: four times the instances take about four
+// times as long, where re-reserving the node list per root made it sixteen times.
+void RunSceneCaptureScalesLinearlyTest() {
+    const auto captureMs = [](std::size_t count) {
+        kb::scene::Scene scene;
+        kb::scene::ScenePrefab crate;
+        const std::uint32_t crateRoot = crate.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Crate" });
+        static_cast<void>(crate.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Lid", .parentNode = crateRoot }));
+        static_cast<void>(scene.Prefabs().InstantiateMany(scene.Prefabs().Register("Crate", std::move(crate)), count));
+        double best = 0.0;
+        for (int run = 0; run < 3; ++run) {
+            const auto start = std::chrono::steady_clock::now();
+            const kb::scene::SceneDocument document = kb::scene::SceneDocumentService::Capture(scene, "Scale");
+            const double elapsed = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+            kb::tests::Require(document.worldPrefab.NodeCount() == count * 2U, "Scene capture lost prefab instance nodes");
+            best = run == 0 ? elapsed : std::min(best, elapsed);
+        }
+        return best;
+    };
+    const double small = captureMs(2000U);
+    const double large = captureMs(8000U);
+    kb::tests::Require(large < small * 9.0 + 5.0, "Scene capture grows faster than linearly with its prefab instances");
+}
+
 // A scene file keeps an instance only as the prefab guid on its root node. Reopening the file in a
 // fresh scene, and reloading the captured document in place (how Play mode stops), must link the
 // instance, its node mapping and its overrides again.
@@ -1080,6 +1105,7 @@ void RunScenePrefabCaptureTests() {
     run("RunRuntimeSpawnDoesNotLinkPrefabInstancesTest", RunRuntimeSpawnDoesNotLinkPrefabInstancesTest);
     run("RunDestroyedInstanceChildSlotReuseTest", RunDestroyedInstanceChildSlotReuseTest);
     run("RunInstanceChangeRevisionTest", RunInstanceChangeRevisionTest);
+    run("RunSceneCaptureScalesLinearlyTest", RunSceneCaptureScalesLinearlyTest);
     run("RunPrefabVariantAssetRoundTripTest", RunPrefabVariantAssetRoundTripTest);
     run("RunPrefabParentOverrideAssetRoundTripTest", RunPrefabParentOverrideAssetRoundTripTest);
     run("RunPrefabVariantAddedChildAssetRoundTripTest", RunPrefabVariantAddedChildAssetRoundTripTest);
