@@ -192,7 +192,8 @@ struct LaunchedProcess {
 [[nodiscard]] LaunchedProcess LaunchGame(
     const std::wstring& arguments,
     const std::filesystem::path& logPath,
-    bool startMinimized = false) {
+    bool startMinimized = false,
+    const std::filesystem::path& executable = std::filesystem::path{ KB_GAME_EXECUTABLE_PATH }) {
     SECURITY_ATTRIBUTES inheritable{};
     inheritable.nLength = sizeof(inheritable);
     inheritable.bInheritHandle = TRUE;
@@ -222,10 +223,8 @@ struct LaunchedProcess {
 
     // kb_game is a windowed binary, so it is started directly rather than through
     // a shell: a command interpreter does not wait for a GUI subsystem process.
-    std::wstring commandLine =
-        L"\"" + std::filesystem::path{ KB_GAME_EXECUTABLE_PATH }.wstring() + L"\" " + arguments;
-    const std::filesystem::path executableDirectory =
-        std::filesystem::path{ KB_GAME_EXECUTABLE_PATH }.parent_path();
+    std::wstring commandLine = L"\"" + executable.wstring() + L"\" " + arguments;
+    const std::filesystem::path executableDirectory = executable.parent_path();
 
     PROCESS_INFORMATION process{};
     const BOOL started = CreateProcessW(
@@ -281,8 +280,10 @@ struct LaunchedProcess {
 // failure pinned by these used to be an abort() behind a modal dialog, which is
 // indistinguishable from a hang until the whole suite times out.
 [[nodiscard]] ProcessRun RunGameExpectingRefusal(
-    const std::wstring& arguments, const std::filesystem::path& logPath) {
-    return FinishGame(LaunchGame(arguments, logPath), logPath, kRefusalTimeoutMilliseconds);
+    const std::wstring& arguments,
+    const std::filesystem::path& logPath,
+    const std::filesystem::path& executable = std::filesystem::path{ KB_GAME_EXECUTABLE_PATH }) {
+    return FinishGame(LaunchGame(arguments, logPath, false, executable), logPath, kRefusalTimeoutMilliseconds);
 }
 
 struct WindowSearch {
@@ -568,6 +569,42 @@ end
     Require(
         Contains(degraded.output, "mesh=" + std::to_string(kMissingAssetId)),
         "kb_game did not name the missing mesh it skipped");
+
+    // A player staged beside its own Game.kbpack is a shipped game: it runs
+    // only that package, refuses every development switch by name, and never
+    // falls back to a loose project when its package cannot be mounted.
+    const std::filesystem::path shippedRoot = root / "Shipped";
+    std::filesystem::create_directories(shippedRoot, error);
+    const std::filesystem::path shippedPlayer = shippedRoot / "ShippedGame.exe";
+    std::filesystem::copy_file(KB_GAME_EXECUTABLE_PATH, shippedPlayer, std::filesystem::copy_options::overwrite_existing, error);
+    Require(!error, "kb_game shipped-player copy could not be staged");
+    WriteTextFile(shippedRoot / "Game.kbpack", "not a cooked package");
+    const ProcessRun shippedProject = RunGameExpectingRefusal(
+        projectArgument + L"--headless --frames=1", root / "shipped_project.log", shippedPlayer);
+    Report("shipped --project", shippedProject);
+    Require(
+        shippedProject.exitCode != 0U &&
+            Contains(shippedProject.output, "--project is a development option") &&
+            !Contains(shippedProject.output, "entities="),
+        "A shipped game accepted --project instead of refusing it by name");
+    const ProcessRun shippedProfile = RunGameExpectingRefusal(
+        L"--headless --frames=1 --profile-file=\"" + (root / "overwritten.csv").wstring() + L"\"",
+        root / "shipped_profile.log",
+        shippedPlayer);
+    Report("shipped --profile-file", shippedProfile);
+    Require(
+        shippedProfile.exitCode != 0U &&
+            Contains(shippedProfile.output, "--profile-file is a development option") &&
+            !std::filesystem::exists(root / "overwritten.csv"),
+        "A shipped game accepted a development output switch");
+    const ProcessRun shippedCorrupt = RunGameExpectingRefusal(
+        L"--headless --frames=1", root / "shipped_corrupt.log", shippedPlayer);
+    Report("shipped corrupt package", shippedCorrupt);
+    Require(
+        shippedCorrupt.exitCode != 0U &&
+            Contains(shippedCorrupt.output, "runtime package could not be mounted") &&
+            !Contains(shippedCorrupt.output, "entities="),
+        "A shipped game with an unreadable package did not stop with a package error");
 
     std::fputs("kb_game launch tests passed\n", stdout);
     return EXIT_SUCCESS;

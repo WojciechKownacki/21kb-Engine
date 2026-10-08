@@ -77,6 +77,16 @@ inline void ResetRuntimeDeltaOrigin(
 [[nodiscard]] std::filesystem::path ExecutableDirectory();
 #endif
 
+// The name the packaging step stages the cooked package under, beside the player.
+inline constexpr std::string_view kPackagedGameFileName = "Game.kbpack";
+
+// True for a Windows player that the packaging step staged beside its own
+// kPackagedGameFileName: a shipped game, which runs only that package and
+// refuses the development switches that load other content.
+#if defined(_WIN32)
+[[nodiscard]] bool IsShippedGamePlayer();
+#endif
+
 // Converts a native path for logs without changing the path used for I/O.
 [[nodiscard]] std::string NarrowForDiagnostics(const std::filesystem::path& path);
 

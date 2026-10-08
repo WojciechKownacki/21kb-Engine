@@ -284,6 +284,11 @@ std::filesystem::path ExecutableDirectory() {
         buffer.resize(buffer.size() * 2U);
     }
 }
+
+bool IsShippedGamePlayer() {
+    std::error_code error;
+    return std::filesystem::is_regular_file(ExecutableDirectory() / kPackagedGameFileName, error) && !error;
+}
 #endif
 
 bool ReadGameProjectRuntime(
@@ -301,7 +306,7 @@ bool ReadGameProjectRuntime(
 
     std::filesystem::path packageCandidate = absoluteInput;
     if (std::filesystem::is_directory(absoluteInput, pathError) && !pathError) {
-        packageCandidate /= "Game.kbpack";
+        packageCandidate /= kPackagedGameFileName;
     }
     if (!pathError && std::filesystem::is_regular_file(packageCandidate, pathError) && !pathError &&
         LowerExtension(packageCandidate) == kb::assets::bake::kAssetPackFileExtension) {
