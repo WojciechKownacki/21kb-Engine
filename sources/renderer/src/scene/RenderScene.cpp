@@ -582,6 +582,14 @@ const RenderScene::LightProxyMap& RenderScene::LightProxies() const noexcept {
     return lights_;
 }
 const RenderScene::VisibilityBlockerProxyMap& RenderScene::VisibilityBlockerProxies() const noexcept { return visibilityBlockers_; }
+
+void RenderScene::SetPortalVisibility(std::optional<kb::scene::ScenePortalVisibility> visibility) {
+    portalVisibility_ = std::move(visibility);
+}
+
+const kb::scene::ScenePortalVisibility* RenderScene::PortalVisibility() const noexcept {
+    return portalVisibility_.has_value() && portalVisibility_->Active() ? &*portalVisibility_ : nullptr;
+}
 const RenderScene::GeometrySwarmProxyMap& RenderScene::GeometrySwarmProxies() const noexcept { return geometrySwarms_; }
 const RenderScene::SurfaceCastProxyMap& RenderScene::SurfaceCastProxies() const noexcept { return surfaceCasts_; }
 const RenderScene::SpaceStrokeProxyMap& RenderScene::SpaceStrokeProxies() const noexcept { return spaceStrokes_; }

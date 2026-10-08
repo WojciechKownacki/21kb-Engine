@@ -13,6 +13,7 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAuxFrameComponents.hpp"
 #include "engine/scene/SceneComponentQueries.hpp"
+#include "engine/scene/ScenePortalVisibility.hpp"
 #include "engine/scene/ScenePostProcessAccess.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneRuntime.hpp"
@@ -34,6 +35,7 @@
 #include "renderer/RendererMeshPassSubmitter.hpp"
 #include "renderer/RendererMatrixMath.hpp"
 #include "scene/lighting/SceneLightingPacker.hpp"
+#include "scene/pipeline/MeshPipelineVisibility.hpp"
 #include "renderer/RendererPostProcessSubmitter.hpp"
 #include "renderer/RendererRuntimeResourceStatsBuilder.hpp"
 #include "renderer/RendererSceneLightingConfigResolver.hpp"
@@ -1298,6 +1300,13 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
     const SceneRenderCamera* overlayCamera = desc.cameraOverride.has_value()
         ? &(*desc.cameraOverride)
         : (primaryCamera.has_value() ? &(*primaryCamera) : nullptr);
+    // A playing scene with visibility cells culls what this camera cannot see through the portals; the
+    // mesh passes and the visibility feedback below read it from the render scene.
+    if (overlayCamera != nullptr && scene.Runtime().IsPlaying() && kb::scene::SceneHasVisibilityCells(scene)) {
+        renderScene.SetPortalVisibility(kb::scene::ComputeScenePortalVisibility(scene, MeshPipelineVisibility::PortalCamera(*overlayCamera)));
+    } else {
+        renderScene.SetPortalVisibility(std::nullopt);
+    }
     // LIB-144: publish the CPU-side per-entity visibility/bounds feedback frame
     // (Renderer.IsVisible/GetBounds/TestFrustum's backing data) into the scene, computed
     // unconditionally (mirrors lastResolvedPostProcessSettings_ above - observable even for

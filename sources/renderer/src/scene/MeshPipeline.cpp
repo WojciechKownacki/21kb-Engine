@@ -91,7 +91,7 @@ MeshPipelineBuildResult MeshPipelineProcessor::Build(const MeshPipelineBuildDesc
 
 void MeshPipelineProcessor::BuildInto(const MeshPipelineBuildDesc& desc, MeshPipelineBuildResult& result) noexcept {
     auto* batchCache = desc.pass != MeshPassType::BaseTransparent && desc.selectedEntityIds.empty() &&
-        desc.visibilityBlockers.empty() ? desc.batchCommandCache : nullptr;
+        desc.visibilityBlockers.empty() && desc.portalVisibility == nullptr ? desc.batchCommandCache : nullptr;
     if (batchCache == nullptr && desc.batchCommandCache != nullptr) desc.batchCommandCache->Reset();
     if (batchCache != nullptr) batchCache->BeginBuild(desc.pass, result);
     else for (MeshDrawCommand& command : result.commands) command.instances.clear();
@@ -132,6 +132,7 @@ void MeshPipelineProcessor::BuildInto(const MeshPipelineBuildDesc& desc, MeshPip
         .resolvedMaterialResource = desc.resolvedMaterialResource,
         .camera = desc.camera,
         .visibilityBlockers = desc.visibilityBlockers,
+        .portalVisibility = desc.portalVisibility,
         .diagnostics = desc.diagnostics,
         .maxDrawCommands = desc.maxDrawCommands,
         .maxVisibleInstances = desc.maxVisibleInstances,

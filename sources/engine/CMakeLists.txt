@@ -298,6 +298,7 @@ add_library(kb_engine STATIC
     include/engine/ui/visual/UITextLineBreaking.hpp
     include/engine/scene/SceneLocalization.hpp
     include/engine/scene/SceneNavigation.hpp
+    include/engine/scene/ScenePortalVisibility.hpp
     include/engine/scene/SceneCrashReportConsent.hpp
     include/engine/localization/LocalizationCatalog.hpp
     include/engine/localization/LocalizationCatalogIO.hpp
@@ -956,6 +957,7 @@ add_library(kb_engine STATIC
     src/scene/systems/AnimatorSceneSystem.cpp
     src/scene/systems/TimelineSceneSystem.cpp
     src/scene/navigation/SceneNavigationRuntime.cpp
+    src/scene/components/ScenePortalVisibility.cpp
     src/scene/systems/SceneSystemTransformAccess.cpp
     src/scene/prefab/ScenePrefab.cpp
     src/scene/prefab/ScenePrefabAppliedPropertyBuilder.cpp
@@ -1744,6 +1746,7 @@ if(BUILD_TESTING)
         tests/UITextLineBreakingTests.cpp
         tests/CrashReportConsentTests.cpp
         tests/NavigationRuntimeTests.cpp
+        tests/PortalVisibilityTests.cpp
         tests/ScenePrefabCaptureTests.cpp
         tests/ScenePrefabInstantiationTests.cpp
         tests/ScenePrefabTestSuites.hpp

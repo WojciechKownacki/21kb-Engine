@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/particles/ParticleRenderSnapshot.hpp"
+#include "engine/scene/ScenePortalVisibility.hpp"
 
 #include "kb/render/scene/RenderProxyId.hpp"
 #include "kb/render/scene/SceneRenderTypes.hpp"
@@ -378,6 +379,10 @@ public:
     [[nodiscard]] const CameraProxyMap& CameraProxies() const noexcept;
     [[nodiscard]] const LightProxyMap& LightProxies() const noexcept;
     [[nodiscard]] const VisibilityBlockerProxyMap& VisibilityBlockerProxies() const noexcept;
+    // Which visibility cells the camera of the current viewport submit sees. The renderer sets it before
+    // building the mesh passes; nothing (the default) culls nothing by cell.
+    void SetPortalVisibility(std::optional<kb::scene::ScenePortalVisibility> visibility);
+    [[nodiscard]] const kb::scene::ScenePortalVisibility* PortalVisibility() const noexcept;
     [[nodiscard]] const GeometrySwarmProxyMap& GeometrySwarmProxies() const noexcept;
     [[nodiscard]] const SurfaceCastProxyMap& SurfaceCastProxies() const noexcept;
     [[nodiscard]] const SpaceStrokeProxyMap& SpaceStrokeProxies() const noexcept;
@@ -463,6 +468,7 @@ private:
     CameraProxyMap cameras_;
     LightProxyMap lights_;
     VisibilityBlockerProxyMap visibilityBlockers_;
+    std::optional<kb::scene::ScenePortalVisibility> portalVisibility_;
     GeometrySwarmProxyMap geometrySwarms_;
     SurfaceCastProxyMap surfaceCasts_;
     SpaceStrokeProxyMap spaceStrokes_;
