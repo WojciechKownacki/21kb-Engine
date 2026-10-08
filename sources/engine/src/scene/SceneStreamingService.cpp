@@ -166,8 +166,6 @@ std::size_t Advance(Scene& scene, Streaming::Job& job, std::size_t remaining, bo
             for (std::size_t index = job.created; index < job.created + count; ++index) {
                 auto node = nodes[index];
                 node.parentNode = ScenePrefabNodeDesc::NoParent;
-                // Nodes are created detached and attached below; they stand in for scene nodes, not prefab instances.
-                node.nestedPrefabGuid.clear();
                 node.visibility.mode = VisibilityMode::Hidden;
                 DeferComponents(node.components);
                 static_cast<void>(batch.AddNode(std::move(node)));

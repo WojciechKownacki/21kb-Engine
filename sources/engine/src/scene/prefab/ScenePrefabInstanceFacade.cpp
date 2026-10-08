@@ -9,7 +9,9 @@ namespace kb::scene {
 
 ScenePrefabInstance ScenePrefabInstanceFacade::Instantiate(Scene& scene, const ScenePrefab& prefab, const ScenePrefabInstantiationSettings& settings) {
     ScenePrefabInstance instance = ScenePrefabInstantiationService::Instantiate(scene, prefab, settings);
-    ScenePrefabInstanceRelinker::Relink(scene, prefab, settings.parent, instance);
+    if (settings.linkPrefabInstances) {
+        ScenePrefabInstanceRelinker::Relink(scene, prefab, settings.parent, instance);
+    }
     return instance;
 }
 

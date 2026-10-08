@@ -259,7 +259,7 @@ bool EditorScenePrefabSpawnCommand::InstantiatePayloads() {
         kb::scene::SceneObject parent = AliveParentObject(scene, payload.parent);
         const kb::scene::ScenePrefabInstance instance = scene.Prefabs().Instantiate(
             payload.prefab,
-            kb::scene::ScenePrefabInstantiationSettings{ .parent = parent });
+            kb::scene::ScenePrefabInstantiationSettings{ .parent = parent, .linkPrefabInstances = true });
         if (!instance.Empty() && instance.RootObject().IsValid()) {
             createdEntities_.push_back(instance.RootObject().Entity());
         }
@@ -378,7 +378,7 @@ bool EditorScenePrefabRemoveCommand::RestorePayloads() {
         kb::scene::SceneObject parent = AliveParentObject(scene, payload.parent);
         const kb::scene::ScenePrefabInstance instance = scene.Prefabs().Instantiate(
             payload.prefab,
-            kb::scene::ScenePrefabInstantiationSettings{ .parent = parent });
+            kb::scene::ScenePrefabInstantiationSettings{ .parent = parent, .linkPrefabInstances = true });
         if (!instance.Empty() && instance.RootObject().IsValid()) {
             currentEntities_.push_back(instance.RootObject().Entity());
         }
