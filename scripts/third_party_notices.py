@@ -34,6 +34,8 @@ class Component:
     license_files: tuple[str, ...]
     scope: str
     platforms: tuple[str, ...]
+    # How 21kb changed its copy, for a component patched in place.
+    modified: str = ""
 
 
 def load_components(engine_root: Path) -> list[Component]:
@@ -54,6 +56,7 @@ def load_components(engine_root: Path) -> list[Component]:
             license_files=tuple(entry["licenseFiles"]),
             scope=entry["scope"],
             platforms=tuple(entry.get("platforms", ())),
+            modified=entry.get("modified", ""),
         )
         if component.id in seen:
             raise NoticeError(f"third-party component listed twice: {component.id}")
@@ -111,8 +114,10 @@ def stage_notices(engine_root: Path, destination: Path, components: Sequence[Com
             f"  {component.copyright}",
             f"  License: {component.license} (Licenses/{', Licenses/'.join(names)})",
             f"  {component.url}",
-            "",
         ]
+        if component.modified:
+            lines.append(f"  Modified by 21kb: {component.modified}")
+        lines.append("")
     (destination / "THIRD_PARTY_NOTICES.txt").write_text("\n".join(lines), encoding="utf-8", newline="\n")
 
 
@@ -142,6 +147,7 @@ def build_sbom(product_name: str, product_version: str, components: Sequence[Com
                 "copyright": component.copyright,
                 "externalReferences": [{"type": "website", "url": component.url}],
                 "properties": [{"name": "21kb:source-path", "value": component.path}],
+                **({"pedigree": {"notes": f"Modified by 21kb: {component.modified}"}} if component.modified else {}),
             }
             for component in components
         ],
