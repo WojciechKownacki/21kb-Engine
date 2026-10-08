@@ -72,6 +72,7 @@ add_library(kb_engine STATIC
     include/engine/platform/PlatformLocale.hpp
     include/engine/security/Crypto.hpp
     include/engine/security/ReleaseKeys.hpp
+    include/engine/security/ReleaseManifest.hpp
     include/engine/project/ProjectDescriptorMeta.hpp
     include/engine/project/ProjectDescriptorReader.hpp
     include/engine/project/ProjectDescriptorWriter.hpp
@@ -662,6 +663,7 @@ add_library(kb_engine STATIC
     src/platform/UserStorage.cpp
     src/security/Crypto.cpp
     src/security/ReleaseKeys.cpp
+    src/security/ReleaseManifest.cpp
     src/network/ReplicationSchema.cpp
     src/network/Rpc.cpp
     src/gameplay/GameFlow.cpp

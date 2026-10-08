@@ -61,6 +61,37 @@ unchanged. The index stays readable. The content key has to ship inside the play
 so encryption keeps content away from ordinary extraction tools, not from a determined attacker;
 the signature, not the encryption, is what makes tampering detectable.
 
+## Release manifest
+
+Once every file of a Windows release is final, packaging runs
+`kb_cli release sign --dir <stage> --product <id> --content-version <version> --release <n>` and
+then `kb_cli release verify <stage>`, which takes the release key from the trust anchor inside the
+staged player. `release.kbmanifest` lists every file with its size and SHA-512, records for each
+pack the digest its seal signs, and is signed with the release key. **Authenticode signing has to
+happen before this step**: it changes the executable's bytes.
+
+The release number (`--release-number`, default: the packaging time in seconds) only grows. At
+startup a packaged player:
+
+1. verifies the manifest against its trust anchor and product id;
+2. refuses an unlisted executable, native module or pack anywhere in its directory (a planted
+   `version.dll` is named in the error), and a listed one that is missing or has another size;
+3. hashes its own executable against the manifest;
+4. binds the mounted pack to the release through the pack's seal digest, so the pack is not
+   hashed a second time;
+5. applies anti-rollback when the release asks for it;
+6. installs the verified release for native module loading.
+
+Other files (licenses, notices) are checked by `kb_cli release verify`, which hashes everything
+and reports files that were added later and are outside the critical set (the packaging receipt,
+for example) without failing on them.
+
+**Anti-rollback** is off by default. With `--anti-rollback` the player keeps the highest release
+number it has run in `%LOCALAPPDATA%\21kb\<product>\release.state` and refuses an older release.
+It keeps a known-bad build from being reinstalled over a fixed one, and it also blocks a
+deliberate downgrade; deleting the per-user state resets it, so it is a policy aid, not a
+guarantee.
+
 ## Save games
 
 Save files (schema 3) carry an HMAC-SHA512 over their header and payload next to the FNV-1a
@@ -96,5 +127,9 @@ should set `SaveGameIntegrity::acceptUnauthenticatedLegacySaves` to `false`.
 - **Linux and the browser**: an ELF binary and a WebAssembly module carry no resource section
   packaging can write after the build, so these players have no trust anchor and run like
   development players: a sealed pack is still checked for integrity against the key it names,
-  but nothing stops a replaced pack signed with another key. Distribute them through a channel
-  that signs the whole download.
+  but nothing stops a replaced pack signed with another key. They get no release manifest and
+  no save secret either. Distribute them through a channel that signs the whole download.
+- **DLLs the operating system loads before `main`** (search-order hijacking of system DLL names)
+  run before any check of the player's. The startup check refuses to continue with one present,
+  but cannot undo what its initialiser already did; install games into directories users cannot
+  write to.

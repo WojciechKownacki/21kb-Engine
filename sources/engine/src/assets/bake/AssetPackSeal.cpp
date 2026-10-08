@@ -152,6 +152,41 @@ kb::security::AeadNonce AssetPackBlockNonce(const std::array<std::uint8_t, 16U>&
     return nonce;
 }
 
+bool ReadAssetPackSealDigest(const std::filesystem::path& path, kb::security::Sha512Digest& digest, std::string& error) {
+    std::ifstream raw{ path, std::ios::binary };
+    std::error_code sizeError;
+    const std::uintmax_t size = std::filesystem::file_size(path, sizeError);
+    std::vector<std::uint8_t> headerBytes;
+    AssetPackHeader header{};
+    if (!raw.is_open() || sizeError || !ReadExact(raw, 0U, kAssetPackHeaderBytes, headerBytes) ||
+        DecodeAssetPackHeader(headerBytes, header) != AssetPackReadStatus::Success) {
+        error = "not a readable asset pack";
+        return false;
+    }
+    if (size <= header.fileBytes || size - header.fileBytes > kMaxAssetPackSealBytes) {
+        error = "asset pack is not signed";
+        return false;
+    }
+    std::vector<std::uint8_t> indexBytes;
+    std::vector<std::uint8_t> fragmentBytes;
+    std::vector<std::uint8_t> sealBytes;
+    AssetPackSeal seal{};
+    if (!ReadExact(raw, header.indexOffset, header.indexBytes, indexBytes) ||
+        !ReadExact(raw, header.fragmentIndexOffset, header.fragmentIndexBytes, fragmentBytes) ||
+        !ReadExact(raw, header.fileBytes, size - header.fileBytes, sealBytes) ||
+        DecodeAssetPackSeal(sealBytes, seal) != AssetPackReadStatus::Success) {
+        error = "asset pack seal is damaged";
+        return false;
+    }
+    digest = AssetPackSealMessage(headerBytes, indexBytes, fragmentBytes,
+        std::span{ sealBytes }.first(sealBytes.size() - kb::security::kEd25519SignatureBytes));
+    if (!kb::security::Ed25519Verify(seal.signature, seal.signer, digest)) {
+        error = "asset pack seal does not verify";
+        return false;
+    }
+    return true;
+}
+
 bool SealAssetPack(
     const std::filesystem::path& path,
     const kb::security::ReleaseSigningKey& key,

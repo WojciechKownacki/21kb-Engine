@@ -34,6 +34,7 @@
 #include "engine/scene/SceneUI.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/security/ReleaseKeys.hpp"
+#include "engine/security/ReleaseManifest.hpp"
 #include "engine/save/SaveGameService.hpp"
 #include "engine/script/ScriptAsset.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
@@ -698,6 +699,55 @@ void RunPackagedTrustTests() {
     Require(kb::save::SaveGameService::Load(savePath).Succeeded(),
         "The installation secret was not reused on the next start");
     kb::save::SaveGameService::ConfigureIntegrity(kb::save::DevelopmentSaveGameIntegrity());
+
+    // A packaged release starts only from the files its signed manifest lists, binds its pack by
+    // the pack's own seal, and refuses to go back to an older release when it asks for that.
+    const std::filesystem::path releaseRoot = TestRoot() / "packaged_trust_release";
+    std::filesystem::create_directories(releaseRoot);
+    std::filesystem::copy_file(packPath, releaseRoot / "Game.kbpack");
+    WriteTextFile(releaseRoot / "Game.exe", "player");
+    const auto signRelease = [&](std::uint64_t number, bool antiRollback) {
+        std::filesystem::remove(releaseRoot / "release.kbmanifest");
+        kb::security::ReleaseManifest manifest{};
+        manifest.productId = anchor.anchor.productId;
+        manifest.contentVersion = "1.0.0";
+        manifest.releaseNumber = number;
+        manifest.antiRollback = antiRollback;
+        std::string manifestError;
+        Require(kb::security::BuildReleaseManifest(releaseRoot, manifest, manifestError), manifestError.c_str());
+        WriteTextFile(releaseRoot / "release.kbmanifest", kb::security::SignReleaseManifest(manifest, key));
+    };
+    signRelease(5U, true);
+    std::ostringstream releaseErrors;
+    const auto release = kb::game::VerifyPackagedRelease(
+        anchor.anchor, releaseRoot, releaseRoot / "Game.exe", securityRoot, releaseErrors);
+    Require(release != nullptr && kb::security::CurrentVerifiedRelease() == release, releaseErrors.str().c_str());
+    trust.requiredSigner = key.publicKey;
+    {
+        bake::RuntimeAssetPack pack;
+        Require(pack.Mount(releaseRoot / "Game.kbpack", bake::WindowsX64BakeTargetProfile(),
+                    bake::AssetPackAccess::Ranged, trust) == bake::RuntimeAssetPackStatus::Success &&
+                kb::game::PackBelongsToRelease(*release, releaseRoot / "Game.kbpack", pack, releaseErrors),
+            "The release's own pack was not bound to its manifest");
+        Require(!kb::game::PackBelongsToRelease(*release, TestRoot() / "Elsewhere.kbpack", pack, releaseErrors),
+            "A pack outside the release was bound to its manifest");
+    }
+    WriteTextFile(releaseRoot / "Game.exe", "playex");
+    std::ostringstream modified;
+    Require(kb::game::VerifyPackagedRelease(anchor.anchor, releaseRoot, releaseRoot / "Game.exe", securityRoot, modified) == nullptr &&
+            Mentions(modified.str(), "FileModified") && Mentions(modified.str(), "Game.exe"),
+        "A modified player executable was allowed to start");
+    WriteTextFile(releaseRoot / "Game.exe", "player");
+    signRelease(4U, true);
+    std::ostringstream rolledBack;
+    Require(kb::game::VerifyPackagedRelease(anchor.anchor, releaseRoot, releaseRoot / "Game.exe", securityRoot, rolledBack) == nullptr &&
+            Mentions(rolledBack.str(), "older than a release"),
+        "An older release started after a newer one had run");
+    signRelease(3U, false);
+    std::ostringstream unprotected;
+    Require(kb::game::VerifyPackagedRelease(anchor.anchor, releaseRoot, releaseRoot / "Game.exe", securityRoot, unprotected) != nullptr,
+        "A release without anti-rollback was refused for its release number");
+    kb::security::InstallVerifiedRelease(nullptr);
 }
 
 void RunWindowsRuntimeModulePackagingTests() {
