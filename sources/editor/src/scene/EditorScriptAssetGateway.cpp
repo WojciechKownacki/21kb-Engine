@@ -62,6 +62,14 @@ struct NativeSdk {
     std::filesystem::path root;
     std::filesystem::path buildTree;
     std::filesystem::path configFolder;
+    // A single-config tree also names the tools it was built with, so a script builds with the same
+    // compiler and does not need a Visual Studio installation: CMake, Ninja, the MSVC compiler, and the
+    // script that sets up that compiler's environment, with the toolset version to ask it for.
+    std::filesystem::path cmake;
+    std::filesystem::path ninja;
+    std::filesystem::path compiler;
+    std::filesystem::path compilerEnvironment;
+    std::string toolsetVersion;
 
     [[nodiscard]] std::array<std::filesystem::path, 4> Libraries() const {
         return {
@@ -90,6 +98,22 @@ struct NativeSdk {
     return NativeSdk{ .root = root, .buildTree = root / "build", .configFolder = "Release" };
 }
 
+// The vcvars64.bat of the MSVC installation `compiler` (.../VC/Tools/MSVC/<version>/bin/Hostx64/x64/cl.exe)
+// belongs to, and the toolset version (major.minor) that compiler is.
+void FindCompilerEnvironment(NativeSdk& sdk) {
+    for (std::filesystem::path folder = sdk.compiler.parent_path(); folder.has_relative_path(); folder = folder.parent_path()) {
+        if (folder.parent_path().filename() == "MSVC") {
+            const std::string version = folder.filename().string();
+            const std::size_t minorEnd = version.find('.', version.find('.') + 1U);
+            sdk.toolsetVersion = version.substr(0U, minorEnd);
+        }
+        if (const std::filesystem::path environment = folder / "Auxiliary/Build/vcvars64.bat"; std::filesystem::is_regular_file(environment)) {
+            sdk.compilerEnvironment = environment;
+            return;
+        }
+    }
+}
+
 // The single-config Release build tree the running editor came from, which holds the libraries it links.
 [[nodiscard]] std::optional<NativeSdk> EditorBuildTreeSdk() {
 #if defined(_WIN32)
@@ -102,19 +126,38 @@ struct NativeSdk {
     const std::filesystem::path buildTree = std::filesystem::path{ module }.parent_path().parent_path();
     std::ifstream cache{ buildTree / "CMakeCache.txt" };
     std::string line;
-    std::filesystem::path root;
+    NativeSdk sdk{ .buildTree = buildTree };
     bool release = false;
+    bool ninjaGenerator = false;
     while (std::getline(cache, line)) {
+        const std::string value = line.substr(line.find('=') + 1U);
         if (line.starts_with("CMAKE_HOME_DIRECTORY:INTERNAL=")) {
-            root = std::filesystem::path{ line.substr(line.find('=') + 1U) };
+            sdk.root = std::filesystem::path{ value };
         } else if (line.starts_with("CMAKE_BUILD_TYPE:")) {
-            const std::string type = line.substr(line.find('=') + 1U);
-            release = type == "Release" || type == "RelWithDebInfo";
+            release = value == "Release" || value == "RelWithDebInfo";
+        } else if (line.starts_with("CMAKE_GENERATOR:INTERNAL=")) {
+            ninjaGenerator = value == "Ninja";
+        } else if (line.starts_with("CMAKE_COMMAND:INTERNAL=")) {
+            sdk.cmake = std::filesystem::path{ value };
+        } else if (line.starts_with("CMAKE_MAKE_PROGRAM:")) {
+            sdk.ninja = std::filesystem::path{ value };
+        } else if (line.starts_with("CMAKE_CXX_COMPILER:")) {
+            sdk.compiler = std::filesystem::path{ value };
         }
     }
-    if (!root.empty() && release) {
-        return NativeSdk{ .root = root, .buildTree = buildTree };
+    if (sdk.root.empty() || !release) {
+        return std::nullopt;
     }
+    if (ninjaGenerator && std::filesystem::is_regular_file(sdk.cmake) && std::filesystem::is_regular_file(sdk.ninja) &&
+        sdk.compiler.filename() == "cl.exe" && std::filesystem::is_regular_file(sdk.compiler)) {
+        FindCompilerEnvironment(sdk);
+    }
+    if (sdk.compilerEnvironment.empty()) {
+        sdk.cmake.clear();
+        sdk.ninja.clear();
+        sdk.compiler.clear();
+    }
+    return sdk;
 #endif
     return std::nullopt;
 }
@@ -171,6 +214,26 @@ struct NativeSdk {
         source.replace(position, 6, name);
     }
     return source;
+}
+
+[[nodiscard]] std::string Quoted(const std::filesystem::path& path) {
+    return "\"" + std::filesystem::path{ path }.make_preferred().string() + "\"";
+}
+
+// Run by the engine through the command shell from the project root.
+[[nodiscard]] std::string NativeBuildCommand(std::string_view name, const NativeSdk& sdk) {
+    const std::string target{ name };
+    const std::string source = "\"Source/NativeScripts/" + target + "\"";
+    const std::string binary = "\"Saved/NativeScripts/" + target + "\"";
+    if (sdk.compilerEnvironment.empty()) {
+        return "cmake -S " + source + " -B " + binary + " -A x64 && cmake --build " + binary + " --config Release --target " + target;
+    }
+    const std::string cmake = Quoted(sdk.cmake);
+    const std::string toolset = sdk.toolsetVersion.empty() ? std::string{} : " -vcvars_ver=" + sdk.toolsetVersion;
+    return "call " + Quoted(sdk.compilerEnvironment) + toolset + " >nul && " +
+        cmake + " -S " + source + " -B " + binary + " -G Ninja -DCMAKE_BUILD_TYPE=Release " +
+        Quoted("-DCMAKE_MAKE_PROGRAM=" + sdk.ninja.generic_string()) + " " + Quoted("-DCMAKE_CXX_COMPILER=" + sdk.compiler.generic_string()) +
+        " && " + cmake + " --build " + binary + " --target " + target;
 }
 
 [[nodiscard]] std::string NativeCmake(std::string_view name, const NativeSdk& sdk) {
@@ -287,8 +350,7 @@ std::optional<std::filesystem::path> EditorScriptAssetGateway::CreateNativeScrip
             "module = " + relativeModule.generic_string() + "\n"
             "entry = kb_register_native_scripts\n"
             "build_working_directory = " + relativeRoot.generic_string() + "\n"
-            "build = cmake -S \"Source/NativeScripts/" + name + "\" -B \"Saved/NativeScripts/" + name +
-                "\" -A x64 && cmake --build \"Saved/NativeScripts/" + name + "\" --config Release --target " + name + "\n";
+            "build = " + NativeBuildCommand(name, *sdk) + "\n";
         if (WriteSource(sourcePath, NativeSource(name)) &&
             WriteSource(cmakePath, NativeCmake(name, *sdk)) &&
             WriteSource(descriptorPath, descriptor)) {
