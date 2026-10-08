@@ -1111,6 +1111,36 @@ void RunFbxImporterRefusesUnboundedMaterialSlotsTest() {
         "FBX importer refused a material index within the slot limit");
 }
 
+[[nodiscard]] std::optional<RenderTextureAssetData> DecodeTextureSource(
+    std::string_view resolvedName, const std::vector<std::uint8_t>& bytes) {
+    kb::assets::AssetMetadata metadata{};
+    metadata.type = "Texture";
+    RenderTextureAssetLoader loader{ bgfx::RendererType::Noop };
+    const kb::assets::AssetLoadResult result = loader.Load(kb::assets::AssetLoadRequest{
+        .metadata = metadata,
+        .resolvedPath = std::filesystem::path{ resolvedName },
+        .sourceBytes = std::span<const std::uint8_t>{ bytes },
+    });
+    if (!result.Succeeded()) {
+        return std::nullopt;
+    }
+    return *std::static_pointer_cast<RenderTextureAssetData>(result.asset);
+}
+
+// An image states its own size and the decoders allocate for it before reading a
+// pixel. This GIF header (found by fuzzing, fuzz/corpus/image) claims 36293 x 11040
+// pixels in thirteen bytes; it must be refused before gigabytes are set aside.
+void RunTextureLoaderRefusesOversizedImageHeaderTest() {
+    const std::vector<std::uint8_t> gif{ 'G', 'I', 'F', '8', '9', 'a', 0xC5U, 0x8DU, 0x20U, 0x2BU, 0x00U, 0x00U, 0x00U };
+    const std::size_t peakBefore = PeakCommittedBytes();
+    Require(!DecodeTextureSource("Hostile.gif", gif).has_value(), "A GIF larger than any texture was decoded");
+    Require(PeakCommittedBytes() - peakBefore < 256U * 1024U * 1024U,
+        "A GIF's stated size was allocated before the image was refused");
+    std::vector<std::uint8_t> png{ 0x89U, 'P', 'N', 'G', 0x0DU, 0x0AU, 0x1AU, 0x0AU, 0x00U, 0x00U, 0x00U, 0x0DU,
+        'I', 'H', 'D', 'R', 0x00U, 0x00U, 0x4EU, 0x20U, 0x00U, 0x00U, 0x4EU, 0x20U, 0x08U, 0x06U, 0x00U, 0x00U, 0x00U };
+    Require(!DecodeTextureSource("Hostile.png", png).has_value(), "A PNG larger than any texture was decoded");
+}
+
 
 void RunFbxImporterBuildsSectionsForMaterialSlotsTest() {
     const std::vector<std::byte> fixture = MakeMultiMaterialFbxFixture();
@@ -3661,6 +3691,7 @@ void RunRenderResourceRegistryTests() {
     RunFbxImporterStopsAtFooterAfterNullTerminatorTest();
     RunFbxImporterRefusesArrayLongerThanItsCompressedBytesTest();
     RunFbxImporterRefusesUnboundedMaterialSlotsTest();
+    RunTextureLoaderRefusesOversizedImageHeaderTest();
     RunRenderMeshAssetLoaderDiscoversAndLoadsObjThroughAssetManagerTest();
     RunRenderMeshAssetLoaderLoadsImportedObjContainerTest();
     RunRenderMeshAssetLoaderLoadsWorkspaceImportedFbxCubeWhenPresentTest();

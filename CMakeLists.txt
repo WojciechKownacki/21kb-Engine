@@ -223,6 +223,10 @@ function(kb_add_bgfx_subdirectory)
         if(MSVC)
             target_compile_options(bimg_decode PRIVATE /EHsc)
         endif()
+        # An image file states its own size and the decoders allocate for it before
+        # reading a pixel. Nothing wider or taller than the largest GPU texture is
+        # usable, so the stb decoders refuse such a header instead of allocating.
+        target_compile_definitions(bimg_decode PRIVATE STBI_MAX_DIMENSIONS=16384)
     endif()
     # The image decoders behind texture import are fuzzed with the engine code that calls them.
     foreach(_kb_bimg_target IN ITEMS bimg bimg_decode)
