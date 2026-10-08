@@ -19,6 +19,7 @@ import time
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO
 
+from elf_trust_anchor import ElfTrustAnchorError, embed_trust_anchor
 from package_contract import PackagingError, engine_source_fingerprint, verify_unit
 
 
@@ -172,6 +173,17 @@ def _build_linux_player(engine: Path, configuration: str, expected_hash: str, cm
         if _engine_hash(engine) != expected_hash:
             raise GuestError("Linux build machine engine inputs changed during the build")
         return _find_game(build, configuration)
+
+
+def _embed_trust_anchor(incoming: Path, player: Path) -> None:
+    """Fills the player's trust anchor slot when the packaging host sent an anchor."""
+    anchor = incoming / "trust-anchor.bin"
+    if not anchor.is_file():
+        return
+    try:
+        embed_trust_anchor(player, anchor.read_bytes())
+    except ElfTrustAnchorError as error:
+        raise GuestError(f"trust anchor could not be embedded: {error}") from error
 
 
 def _create_archive(source: Path, destination: Path) -> None:
@@ -488,6 +500,8 @@ def main() -> int:
             player = stage / args.executable_name
             shutil.copy2(game, player)
             player.chmod(player.stat().st_mode | 0o111)
+            # Before the first-frame proof and the receipt: both describe the player as shipped.
+            _embed_trust_anchor(incoming, player)
             shutil.copy2(pack, stage / "Game.kbpack")
             # The packaging host adds the third-party notices and SBOM to the returned player.
             if player.read_bytes()[:4] != b"\x7fELF":

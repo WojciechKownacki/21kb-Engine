@@ -20,6 +20,21 @@ namespace {
 
 constexpr std::uintmax_t kMaxKeyFileBytes = 64U * 1024U;
 
+// A player executable of a release: a Windows .exe, or a Linux ELF player (which has no extension).
+[[nodiscard]] bool IsPlayerExecutable(const std::filesystem::directory_entry& entry) {
+    if (entry.path().extension() == ".exe") {
+        return true;
+    }
+    std::error_code error;
+    if (!entry.is_regular_file(error) || error) {
+        return false;
+    }
+    std::ifstream input{ entry.path(), std::ios::binary };
+    char magic[4]{};
+    input.read(magic, sizeof(magic));
+    return input.gcount() == 4 && magic[0] == '\x7F' && magic[1] == 'E' && magic[2] == 'L' && magic[3] == 'F';
+}
+
 [[nodiscard]] bool ReadSmallFile(const std::filesystem::path& path, std::string& out, std::string& error) {
     std::error_code sizeError;
     const std::uintmax_t size = std::filesystem::file_size(path, sizeError);
@@ -308,7 +323,7 @@ int RunReleaseVerify(const ArgumentList& arguments, CommandIo io) {
         bool found = false;
         std::error_code iterationError;
         for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator{ root, iterationError }) {
-            if (entry.path().extension() != ".exe") {
+            if (!IsPlayerExecutable(entry)) {
                 continue;
             }
             kb::security::TrustAnchorLookup lookup = kb::security::ReadTrustAnchorFromExecutable(entry.path());

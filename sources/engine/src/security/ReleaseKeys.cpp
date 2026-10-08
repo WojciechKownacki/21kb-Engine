@@ -2,10 +2,15 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstring>
 #include <fstream>
 #include <iterator>
+#include <optional>
+#include <string_view>
 #include <system_error>
+#include <utility>
+#include <vector>
 
 #if defined(_WIN32)
     #ifndef WIN32_LEAN_AND_MEAN
@@ -37,6 +42,20 @@ constexpr std::size_t kAnchorContentKeyOffset = 48U;
 constexpr std::size_t kAnchorSaveSecretOffset = 80U;
 constexpr std::size_t kAnchorProductIdLengthOffset = 112U;
 constexpr std::size_t kAnchorFixedBytes = kAnchorProductIdLengthOffset + 2U;
+// Trust anchor slot: magic, anchor length, reserved, anchor.
+constexpr std::size_t kSlotLengthOffset = 16U;
+constexpr std::size_t kSlotReservedOffset = 20U;
+constexpr std::size_t kSlotAnchorOffset = 24U;
+static_assert(kTrustAnchorSlotMagic.size() == kSlotLengthOffset);
+
+#if defined(__linux__) && !defined(__ANDROID__)
+// The slot packaging fills in a Linux player. It is read through a volatile pointer: the compiler
+// must not fold the empty slot it sees here into the code that reads it.
+__attribute__((section(".kb_trust_anchor"), used, aligned(16)))
+const unsigned char kExecutableTrustAnchorSlot[kTrustAnchorSlotBytes] = {
+    '2', '1', 'K', 'B', '-', 'A', 'N', 'C', 'H', 'O', 'R', '-', 'S', 'L', 'O', 'T',
+};
+#endif
 
 // Splits "line\nline\n" (or CRLF) into lines; a final newline is optional, blank lines are not.
 [[nodiscard]] std::vector<std::string_view> Lines(std::string_view text) {
@@ -75,6 +94,26 @@ void PutUInt32(std::vector<std::uint8_t>& bytes, std::uint32_t value) {
         value |= static_cast<std::uint32_t>(bytes[offset + index]) << (index * 8U);
     }
     return value;
+}
+
+[[nodiscard]] std::uint16_t GetUInt16(std::span<const std::uint8_t> bytes, std::size_t offset) noexcept {
+    return static_cast<std::uint16_t>(bytes[offset] | (bytes[offset + 1U] << 8U));
+}
+
+[[nodiscard]] std::uint64_t GetUInt64(std::span<const std::uint8_t> bytes, std::size_t offset) noexcept {
+    return static_cast<std::uint64_t>(GetUInt32(bytes, offset)) |
+        (static_cast<std::uint64_t>(GetUInt32(bytes, offset + 4U)) << 32U);
+}
+
+[[nodiscard]] TrustAnchorLookup InvalidLookup(std::string error) {
+    TrustAnchorLookup lookup{};
+    lookup.state = TrustAnchorLookup::State::Invalid;
+    lookup.error = std::move(error);
+    return lookup;
+}
+
+[[nodiscard]] bool IsElfImage(std::span<const std::uint8_t> bytes) noexcept {
+    return bytes.size() >= 4U && bytes[0] == 0x7FU && bytes[1] == 'E' && bytes[2] == 'L' && bytes[3] == 'F';
 }
 
 #if defined(_WIN32)
@@ -233,15 +272,131 @@ bool DecodeTrustAnchor(std::span<const std::uint8_t> bytes, TrustAnchor& out, st
     return true;
 }
 
+TrustAnchorLookup DecodeTrustAnchorSlot(std::span<const std::uint8_t> slot) {
+    if (slot.size() != kTrustAnchorSlotBytes ||
+        !std::equal(kTrustAnchorSlotMagic.begin(), kTrustAnchorSlotMagic.end(), slot.begin(),
+            [](char expected, std::uint8_t actual) { return static_cast<std::uint8_t>(expected) == actual; })) {
+        return InvalidLookup("the trust anchor slot is not a 21kb trust anchor slot");
+    }
+    const std::uint32_t length = GetUInt32(slot, kSlotLengthOffset);
+    if (GetUInt32(slot, kSlotReservedOffset) != 0U || length > kTrustAnchorSlotBytes - kSlotAnchorOffset ||
+        std::any_of(slot.begin() + static_cast<std::ptrdiff_t>(kSlotAnchorOffset + length), slot.end(),
+            [](std::uint8_t value) { return value != 0U; })) {
+        return InvalidLookup("the trust anchor slot is malformed");
+    }
+    if (length == 0U) {
+        return TrustAnchorLookup{};
+    }
+    TrustAnchorLookup lookup{};
+    lookup.state = TrustAnchorLookup::State::Invalid;
+    if (DecodeTrustAnchor(slot.subspan(kSlotAnchorOffset, length), lookup.anchor, lookup.error)) {
+        lookup.state = TrustAnchorLookup::State::Present;
+    }
+    return lookup;
+}
+
+TrustAnchorLookup ReadTrustAnchorFromElf(std::span<const std::uint8_t> image) {
+    // ELF64 little-endian: e_shoff at 0x28, e_shentsize at 0x3A, e_shnum at 0x3C, e_shstrndx at 0x3E;
+    // a section header holds sh_name at 0x00, sh_type at 0x04, sh_offset at 0x18, sh_size at 0x20.
+    constexpr std::size_t kHeaderBytes = 64U;
+    constexpr std::size_t kSectionHeaderBytes = 64U;
+    constexpr std::uint32_t kSectionNoBits = 8U;
+    constexpr std::uint16_t kExtendedIndex = 0xFFFFU;
+    if (!IsElfImage(image) || image.size() < kHeaderBytes) {
+        return InvalidLookup("the executable is not an ELF image");
+    }
+    if (image[4] != 2U || image[5] != 1U) {
+        return InvalidLookup("the executable is not a 64-bit little-endian ELF image");
+    }
+    const std::uint64_t sectionTable = GetUInt64(image, 0x28U);
+    if (sectionTable == 0U) {
+        return TrustAnchorLookup{};
+    }
+    if (GetUInt16(image, 0x3AU) != kSectionHeaderBytes || sectionTable > image.size() ||
+        image.size() - sectionTable < kSectionHeaderBytes) {
+        return InvalidLookup("the executable's ELF section table is malformed");
+    }
+    const auto section = [&](std::uint64_t index) {
+        return image.subspan(static_cast<std::size_t>(sectionTable + index * kSectionHeaderBytes), kSectionHeaderBytes);
+    };
+    // Section 0 carries the real count and string table index when they do not fit the header.
+    std::uint64_t sectionCount = GetUInt16(image, 0x3CU);
+    if (sectionCount == 0U) {
+        sectionCount = GetUInt64(section(0U), 0x20U);
+    }
+    std::uint64_t namesIndex = GetUInt16(image, 0x3EU);
+    if (namesIndex == kExtendedIndex) {
+        namesIndex = GetUInt32(section(0U), 0x28U);
+    }
+    if (sectionCount > (image.size() - sectionTable) / kSectionHeaderBytes || namesIndex >= sectionCount) {
+        return InvalidLookup("the executable's ELF section table is malformed");
+    }
+    const std::span<const std::uint8_t> namesHeader = section(namesIndex);
+    const std::uint64_t namesOffset = GetUInt64(namesHeader, 0x18U);
+    const std::uint64_t namesSize = GetUInt64(namesHeader, 0x20U);
+    if (namesOffset > image.size() || namesSize > image.size() - namesOffset) {
+        return InvalidLookup("the executable's ELF section names are malformed");
+    }
+    const std::span<const std::uint8_t> names = image.subspan(static_cast<std::size_t>(namesOffset), static_cast<std::size_t>(namesSize));
+    std::optional<std::span<const std::uint8_t>> slot;
+    for (std::uint64_t index = 1U; index < sectionCount; ++index) {
+        const std::span<const std::uint8_t> header = section(index);
+        const std::uint32_t nameOffset = GetUInt32(header, 0x00U);
+        if (nameOffset >= names.size()) {
+            return InvalidLookup("the executable's ELF section names are malformed");
+        }
+        const auto* const nameBegin = reinterpret_cast<const char*>(names.data() + nameOffset);
+        const std::size_t nameLength = strnlen(nameBegin, names.size() - nameOffset);
+        if (std::string_view{ nameBegin, nameLength } != kTrustAnchorElfSectionName) {
+            continue;
+        }
+        const std::uint64_t offset = GetUInt64(header, 0x18U);
+        const std::uint64_t size = GetUInt64(header, 0x20U);
+        if (slot.has_value() || GetUInt32(header, 0x04U) == kSectionNoBits || offset > image.size() ||
+            size > image.size() - offset) {
+            return InvalidLookup("the executable's trust anchor section is malformed");
+        }
+        slot = image.subspan(static_cast<std::size_t>(offset), static_cast<std::size_t>(size));
+    }
+    return slot.has_value() ? DecodeTrustAnchorSlot(*slot) : TrustAnchorLookup{};
+}
+
 TrustAnchorLookup LoadExecutableTrustAnchor() {
 #if defined(_WIN32)
     return LookupResource(GetModuleHandleW(nullptr));
+#elif defined(__linux__) && !defined(__ANDROID__)
+    std::array<std::uint8_t, kTrustAnchorSlotBytes> slot{};
+    const volatile unsigned char* const source = kExecutableTrustAnchorSlot;
+    for (std::size_t index = 0U; index < slot.size(); ++index) {
+        slot[index] = source[index];
+    }
+    return DecodeTrustAnchorSlot(slot);
 #else
     return TrustAnchorLookup{};
 #endif
 }
 
 TrustAnchorLookup ReadTrustAnchorFromExecutable(const std::filesystem::path& executable) {
+    {
+        std::ifstream input{ executable, std::ios::binary };
+        std::array<char, 4U> magic{};
+        input.read(magic.data(), static_cast<std::streamsize>(magic.size()));
+        if (input.gcount() == 4 && magic[0] == '\x7F' && magic[1] == 'E' && magic[2] == 'L' && magic[3] == 'F') {
+            input.seekg(0, std::ios::end);
+            const std::streamoff size = input.tellg();
+            constexpr std::streamoff kMaximumImageBytes = std::streamoff{ 1 } << 32;
+            if (size <= 0 || size > kMaximumImageBytes) {
+                return InvalidLookup("executable could not be read to find its trust anchor");
+            }
+            std::vector<std::uint8_t> image(static_cast<std::size_t>(size));
+            input.seekg(0, std::ios::beg);
+            input.read(reinterpret_cast<char*>(image.data()), static_cast<std::streamsize>(image.size()));
+            if (!input) {
+                return InvalidLookup("executable could not be read to find its trust anchor");
+            }
+            return ReadTrustAnchorFromElf(image);
+        }
+    }
 #if defined(_WIN32)
     HMODULE module = LoadLibraryExW(
         executable.c_str(), nullptr, LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE);
