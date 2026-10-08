@@ -47,7 +47,7 @@ void DetectMigrationNeeds(const ScenePrefabAssetFieldMap& fields, bool* missingN
 } // namespace
 
 bool ScenePrefabAssetNodeListReader::Read(std::istream& input, std::size_t nodeCount, ScenePrefab& prefab, bool* missingNodeStableIds, bool* missingOverrideNodeIds) {
-    prefab.Reserve(nodeCount);
+    prefab.ReserveDeclared(nodeCount);
     ScenePrefabAssetFieldMap fields;
     std::string line;
     bool childObjectDropdownOptions = false;
