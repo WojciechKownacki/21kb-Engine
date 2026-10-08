@@ -1,5 +1,7 @@
 #include "app/EditorCrashBreadcrumbs.hpp"
 
+#include "engine/platform/CrashReporting.hpp"
+
 #include <chrono>
 #include <cstdlib>
 #include <cstdint>
@@ -103,11 +105,7 @@ std::vector<std::string> g_recentCategories;
     return stream;
 }
 
-void AppendLine(std::string_view line) {
-    // Single mutex covers both persistent stream handles below -- they're shared across calls (and
-    // threads) now instead of each call getting its own throwaway ofstream, so every read/write on
-    // them has to be serialized here, not just the main breadcrumb log's.
-    std::lock_guard lock{g_breadcrumbMutex};
+void AppendLineLocked(std::string_view line) {
     std::ofstream& output = BreadcrumbStream();
     if (!output.is_open()) {
         return;
@@ -116,76 +114,58 @@ void AppendLine(std::string_view line) {
     output.flush();
 }
 
+void AppendLine(std::string_view line) {
+    // Single mutex covers both persistent stream handles below -- they're shared across calls (and
+    // threads) now instead of each call getting its own throwaway ofstream, so every read/write on
+    // them has to be serialized here, not just the main breadcrumb log's.
+    std::lock_guard lock{g_breadcrumbMutex};
+    AppendLineLocked(line);
+}
+
 void AppendCategory(std::string_view category) {
     std::lock_guard lock{g_breadcrumbMutex};
     if (g_recentCategories.size() == 32U) g_recentCategories.erase(g_recentCategories.begin());
     g_recentCategories.emplace_back(category);
 }
 
+void WriteCrashReportLocked(std::string_view errorKind) {
+    std::error_code error;
+    std::filesystem::create_directories(CrashReportPath().parent_path(), error);
+    std::ofstream output{CrashReportPath(), std::ios::out | std::ios::trunc};
+    if (!output) return;
+    output << "{\"schema\":\"21kb.crash-report/v1\",\"error\":\"" << JsonEscape(errorKind)
+           << "\",\"api\":{\"version\":\"" << JsonEscape(g_apiVersion) << "\",\"hash\":\"" << JsonEscape(g_apiHash) << "\"},\"assets\":[";
+    for (std::size_t index = 0; index < g_assets.size(); ++index) {
+        if (index != 0U) output << ',';
+        output << "{\"id\":" << g_assets[index].first << ",\"type\":\"" << JsonEscape(g_assets[index].second) << "\"}";
+    }
+    output << "],\"recentEvents\":[";
+    for (std::size_t index = 0; index < g_recentCategories.size(); ++index) {
+        if (index != 0U) output << ',';
+        output << "\"" << JsonEscape(g_recentCategories[index]) << "\"";
+    }
+    output << "]}\n";
+}
+
 #if defined(_WIN32)
-[[nodiscard]] std::string SehErrorKind(
-    const EXCEPTION_POINTERS* exceptionPointers) {
-    if (exceptionPointers == nullptr ||
-        exceptionPointers->ExceptionRecord == nullptr) {
-        return "unhandled_exception";
-    }
-    std::ostringstream error;
-    error << "seh_0x" << std::hex
-          << exceptionPointers->ExceptionRecord->ExceptionCode;
-    return error.str();
-}
-
-LONG WINAPI BreadcrumbUnhandledExceptionFilter(EXCEPTION_POINTERS* exceptionPointers) {
-    std::ostringstream line;
-    line << NowMs()
-         << " tid=" << CurrentThreadIdValue()
-         << " [crash] unhandled_exception";
-    if (exceptionPointers != nullptr && exceptionPointers->ExceptionRecord != nullptr) {
-        const auto address = reinterpret_cast<std::uintptr_t>(exceptionPointers->ExceptionRecord->ExceptionAddress);
-        line << " code=0x" << std::hex << exceptionPointers->ExceptionRecord->ExceptionCode
-             << " address=0x" << address;
-        if (const HMODULE module = GetModuleHandleW(nullptr); module != nullptr) {
-            const auto base = reinterpret_cast<std::uintptr_t>(module);
-            line << " module_base=0x" << base;
-            if (address >= base) {
-                line << " rva=0x" << (address - base);
-            }
-        }
-    }
-    void* frames[32]{};
-    const USHORT frameCount = CaptureStackBackTrace(0, 32, frames, nullptr);
-    line << " stack=";
-    for (USHORT index = 0; index < frameCount; ++index) {
-        if (index != 0) {
-            line << ',';
-        }
-        line << "0x" << std::hex << reinterpret_cast<std::uintptr_t>(frames[index]);
-    }
-    AppendLine(line.str());
-    EditorCrashBreadcrumbs::WriteCrashReport(SehErrorKind(exceptionPointers));
-    return EXCEPTION_CONTINUE_SEARCH;
-}
-#endif
-
-[[noreturn]] void BreadcrumbTerminateHandler() noexcept {
-    std::string reason = "std_terminate";
+// Runs on the crash reporter's thread once the minidump is on disk, while the thread that
+// crashed is parked. That thread may hold the breadcrumb lock, so give up rather than wait.
+void OnCrashReportWritten(const char* reason) noexcept {
     try {
-        if (const std::exception_ptr exception = std::current_exception(); exception != nullptr) {
-            try {
-                std::rethrow_exception(exception);
-            } catch (const std::exception& error) {
-                reason += ": ";
-                reason += error.what();
-            } catch (...) {
-                reason += ": unknown exception";
-            }
+        std::unique_lock lock{g_breadcrumbMutex, std::defer_lock};
+        for (int attempt = 0; attempt < 50 && !lock.try_lock(); ++attempt) {
+            std::this_thread::sleep_for(std::chrono::milliseconds{10});
         }
-        EditorCrashBreadcrumbs::Write("crash", reason);
-        EditorCrashBreadcrumbs::WriteCrashReport(reason);
+        if (!lock.owns_lock()) return;
+        std::ostringstream line;
+        line << NowMs() << " tid=" << CurrentThreadIdValue() << " [crash] " << reason
+             << " minidump_directory=" << kb::platform::CrashReporter::ReportDirectory().string();
+        AppendLineLocked(line.str());
+        WriteCrashReportLocked(reason);
     } catch (...) {
     }
-    std::abort();
 }
+#endif
 
 } // namespace
 
@@ -213,8 +193,13 @@ void EditorCrashBreadcrumbs::Write(std::string_view category, std::string_view m
     line << NowMs()
          << " tid=" << CurrentThreadIdValue()
          << " [" << category << "] " << message;
-    AppendLine(line.str());
+    const std::string text = line.str();
+    AppendLine(text);
     AppendCategory(category);
+#if defined(_WIN32)
+    // The same trail travels inside the minidump's report, which survives a lost log file.
+    kb::platform::CrashReporter::Note(text);
+#endif
 }
 
 void EditorCrashBreadcrumbs::ConfigureCrashReport(
@@ -231,22 +216,7 @@ void EditorCrashBreadcrumbs::ConfigureCrashReport(
 void EditorCrashBreadcrumbs::WriteCrashReport(std::string_view errorKind) noexcept {
     try {
         std::lock_guard lock{g_breadcrumbMutex};
-        std::error_code error;
-        std::filesystem::create_directories(CrashReportPath().parent_path(), error);
-        std::ofstream output{CrashReportPath(), std::ios::out | std::ios::trunc};
-        if (!output) return;
-        output << "{\"schema\":\"21kb.crash-report/v1\",\"error\":\"" << JsonEscape(errorKind)
-               << "\",\"api\":{\"version\":\"" << JsonEscape(g_apiVersion) << "\",\"hash\":\"" << JsonEscape(g_apiHash) << "\"},\"assets\":[";
-        for (std::size_t index = 0; index < g_assets.size(); ++index) {
-            if (index != 0U) output << ',';
-            output << "{\"id\":" << g_assets[index].first << ",\"type\":\"" << JsonEscape(g_assets[index].second) << "\"}";
-        }
-        output << "],\"recentEvents\":[";
-        for (std::size_t index = 0; index < g_recentCategories.size(); ++index) {
-            if (index != 0U) output << ',';
-            output << "\"" << JsonEscape(g_recentCategories[index]) << "\"";
-        }
-        output << "]}\n";
+        WriteCrashReportLocked(errorKind);
     } catch (...) {
     }
 }
@@ -259,9 +229,14 @@ void EditorCrashBreadcrumbs::WriteValue(std::string_view category, std::string_v
 
 void EditorCrashBreadcrumbs::InstallUnhandledExceptionLogger() {
 #if defined(_WIN32)
-    SetUnhandledExceptionFilter(BreadcrumbUnhandledExceptionFilter);
+    // The shared reporter owns the process-wide handlers and writes the minidump; the editor
+    // adds its breadcrumb line and asset report once the dump is safe on disk.
+    kb::platform::CrashReporterOptions options;
+    options.productName = "21kb Editor";
+    options.onReportWritten = &OnCrashReportWritten;
+    options.uploadPendingReports = false;
+    static_cast<void>(kb::platform::CrashReporter::Install(options));
 #endif
-    std::set_terminate(BreadcrumbTerminateHandler);
     Write("app", "unhandled_exception_logger_installed");
 }
 

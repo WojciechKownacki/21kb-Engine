@@ -22,6 +22,17 @@ if(APPLE)
     add_compile_definitions(_LIBCPP_DISABLE_AVAILABILITY)
 endif()
 
+# Release objects carry debug information, so a shipped binary can be linked
+# with a PDB (see the shipped targets at the end of this file): a crash report
+# from a player is only readable with the PDB of that exact build. Embedded keeps
+# parallel compiles from sharing one compiler PDB. Sanitizer builds choose their
+# own format.
+if(MSVC AND NOT KB_ENABLE_SANITIZERS AND NOT DEFINED CMAKE_MSVC_DEBUG_INFORMATION_FORMAT)
+    set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "$<$<CONFIG:Debug,RelWithDebInfo>:ProgramDatabase>$<$<CONFIG:Release>:Embedded>")
+    # Jolt would otherwise add its own /Zi on top of the format chosen here.
+    set(GENERATE_DEBUG_SYMBOLS OFF CACHE BOOL "Jolt debug information follows CMAKE_MSVC_DEBUG_INFORMATION_FORMAT" FORCE)
+endif()
+
 include(CTest)
 include(FetchContent)
 
@@ -503,6 +514,24 @@ if(KB_BUILD_EDITOR)
 
     add_subdirectory(sources/editor editor)
     add_subdirectory(sources/hub hub)
+endif()
+
+# Everything packaging ships links with a full PDB in Release too, and so does the
+# crash test helper that stands in for it; the packager files each PDB into a
+# symbol store outside the shipped folder. /DEBUG turns off the Release reference
+# and folding optimisations, so they are named again.
+if(MSVC)
+    foreach(_kb_shipped_target IN ITEMS
+            kb_game kb_physics_jolt_plugin kb_audio_miniaudio_plugin kb_basic_lighting_plugin
+            kb_21kb_particle_plugin kb_crash_reporting_test_helper)
+        if(TARGET ${_kb_shipped_target})
+            get_target_property(_kb_shipped_type ${_kb_shipped_target} TYPE)
+            if(_kb_shipped_type MATCHES "^(EXECUTABLE|SHARED_LIBRARY|MODULE_LIBRARY)$")
+                target_link_options(${_kb_shipped_target} PRIVATE
+                    "$<$<CONFIG:Release>:/DEBUG:FULL;/OPT:REF;/OPT:ICF>")
+            endif()
+        endif()
+    endforeach()
 endif()
 
 # Optional performance harness; use benchmarks/openworld for the repository harness.

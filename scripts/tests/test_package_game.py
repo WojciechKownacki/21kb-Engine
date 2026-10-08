@@ -6,6 +6,7 @@ import json
 import re
 import shutil
 import stat
+import struct
 import sys
 import tarfile
 import tempfile
@@ -20,6 +21,7 @@ sys.path.insert(0, str(SCRIPTS))
 import package_game  # noqa: E402
 import package_linux_guest  # noqa: E402
 import package_contract  # noqa: E402
+import windows_pe_symbols  # noqa: E402
 from package_contract import PackagingError, seal_unit  # noqa: E402
 import third_party_notices  # noqa: E402
 from windows_pe_resources import (  # noqa: E402
@@ -28,6 +30,43 @@ from windows_pe_resources import (  # noqa: E402
     _version_tuple,
     apply_windows_resources,
 )
+
+
+def write_pe_with_pdb_reference(path: Path, pdb_name: str | None, guid: bytes, age: int) -> None:
+    """A minimal PE32+ image whose debug directory names a PDB the way the MSVC linker does."""
+    data = bytearray(0x400)
+    data[0:2] = b"MZ"
+    struct.pack_into("<I", data, 0x3C, 0x80)
+    data[0x80:0x84] = b"PE\0\0"
+    struct.pack_into("<HHIIIHH", data, 0x84, 0x8664, 1, 0, 0, 0, 0xF0, 0x22)
+    optional = 0x84 + 20
+    struct.pack_into("<H", data, optional, 0x20B)
+    struct.pack_into("<I", data, optional + 108, 16)
+    section = optional + 0xF0
+    data[section:section + 8] = b".rdata\0\0"
+    struct.pack_into("<IIII", data, section + 8, 0x200, 0x1000, 0x200, 0x200)
+    if pdb_name is not None:
+        struct.pack_into("<II", data, optional + 112 + 6 * 8, 0x1000, 28)
+        record = b"RSDS" + guid + struct.pack("<I", age) + b"C:\\Build\\bin\\" + pdb_name.encode() + b"\0"
+        struct.pack_into("<IIHHIIII", data, 0x200, 0, 0, 0, 0, 2, len(record), 0x1020, 0x220)
+        data[0x220:0x220 + len(record)] = record
+    path.write_bytes(bytes(data))
+
+
+def write_pdb(path: Path, guid: bytes) -> None:
+    """A minimal MSF 7 PDB: superblock, directory and the information stream carrying the GUID."""
+    block_size = 512
+    info = struct.pack("<III", 20000404, 0x5EED, 1) + guid
+    directory = struct.pack("<III", 2, 0, len(info)) + struct.pack("<I", 5)
+    blocks = [bytearray(block_size) for _ in range(6)]
+    superblock = b"Microsoft C/C++ MSF 7.00\r\n\x1aDS\0\0\0" + struct.pack(
+        "<6I", block_size, 1, len(blocks), len(directory), 0, 3
+    )
+    blocks[0][:len(superblock)] = superblock
+    blocks[3][:4] = struct.pack("<I", 4)
+    blocks[4][:len(directory)] = directory
+    blocks[5][:len(info)] = info
+    path.write_bytes(b"".join(blocks))
 
 
 def seal_with_first_frame(root: Path, fields: dict[str, object]) -> None:
@@ -1063,6 +1102,94 @@ class PackageGameTests(unittest.TestCase):
         self.assertIn("Selected Product".encode("utf-16le"), resource)
         self.assertIn("Selected Publisher".encode("utf-16le"), resource)
         self.assertIn("SelectedGame.exe".encode("utf-16le"), resource)
+
+    def test_pe_debug_identity_names_the_symbol_store_directory(self) -> None:
+        guid = bytes(range(16))
+        with tempfile.TemporaryDirectory() as temporary_text:
+            root = Path(temporary_text)
+            write_pe_with_pdb_reference(root / "Game.exe", "kb_game.pdb", guid, 3)
+            identity = windows_pe_symbols.pe_pdb_identity(root / "Game.exe")
+            assert identity is not None
+            self.assertEqual("kb_game.pdb", identity.name)
+            self.assertEqual("C:\\Build\\bin\\kb_game.pdb", identity.linked_path)
+            # GUID fields in their printed byte order, upper case, then the age in hex.
+            self.assertEqual("03020100050407060809" + "0A0B0C0D0E0F" + "3", identity.identifier)
+            write_pe_with_pdb_reference(root / "Plain.dll", None, guid, 1)
+            self.assertIsNone(windows_pe_symbols.pe_pdb_identity(root / "Plain.dll"))
+            write_pdb(root / "kb_game.pdb", guid)
+            self.assertEqual(guid, windows_pe_symbols.pdb_guid(root / "kb_game.pdb"))
+            (root / "text.pdb").write_bytes(b"not a program database")
+            self.assertIsNone(windows_pe_symbols.pdb_guid(root / "text.pdb"))
+
+    def test_symbol_store_uses_the_server_layout_outside_the_package(self) -> None:
+        guid = bytes(range(16, 32))
+        with tempfile.TemporaryDirectory() as temporary_text:
+            root = Path(temporary_text)
+            built = root / "build" / "bin"
+            built.mkdir(parents=True)
+            stage = root / "stage"
+            (stage / "RuntimeModules").mkdir(parents=True)
+            job = root / "job"
+            job.mkdir()
+            write_pe_with_pdb_reference(built / "kb_game.exe", "kb_game.pdb", guid, 1)
+            write_pdb(built / "kb_game.pdb", guid)
+            write_pe_with_pdb_reference(stage / "Game.exe", "kb_game.pdb", guid, 1)
+            module_guid = bytes(range(32, 48))
+            write_pe_with_pdb_reference(stage / "RuntimeModules" / "Gameplay.dll", "Gameplay.pdb", module_guid, 2)
+            write_pdb(stage / "RuntimeModules" / "Gameplay.pdb", module_guid)
+
+            symbols = package_game._collect_windows_symbols(
+                stage, job, {stage / "Game.exe": built / "kb_game.exe"}, {stage / "Game.exe"}
+            )
+            self.assertEqual([], [path for path in stage.rglob("*.pdb")], "a PDB was left in the shipped folder")
+            self.assertEqual(["kb_game.pdb", "Gameplay.pdb"], sorted((identity.name for identity, _ in symbols), reverse=True))
+
+            store = root / "Game.symbols"
+            stored = windows_pe_symbols.publish_to_symbol_store(store, symbols)
+            game_entry = store / "kb_game.pdb" / "131211101514171618191A1B1C1D1E1F1" / "kb_game.pdb"
+            self.assertIn(game_entry, stored)
+            self.assertEqual(guid, windows_pe_symbols.pdb_guid(game_entry))
+            self.assertTrue((store / "Gameplay.pdb" / "2322212025242726" "28292A2B2C2D2E2F2" / "Gameplay.pdb").is_file())
+            # Publishing the same build again is a no-op rather than a failure.
+            self.assertEqual(stored, windows_pe_symbols.publish_to_symbol_store(store, symbols))
+
+            with self.assertRaisesRegex(PackagingError, "symbol store must be outside the package output"):
+                project = root / "Project" / "Game.21kbproject"
+                project.parent.mkdir()
+                project.write_bytes(b"project")
+                package_game._validate_package_work_roots(project, root / "build", root / "output", root / "output" / "pdb")
+
+    def test_required_image_needs_the_pdb_of_its_exact_build(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_text:
+            root = Path(temporary_text)
+            (root / "stage").mkdir()
+            (root / "job").mkdir()
+            write_pe_with_pdb_reference(root / "kb_game.exe", "kb_game.pdb", bytes(range(16)), 1)
+            write_pdb(root / "kb_game.pdb", bytes(range(1, 17)))
+            write_pe_with_pdb_reference(root / "stage" / "Game.exe", "kb_game.pdb", bytes(range(16)), 1)
+            built = {root / "stage" / "Game.exe": root / "kb_game.exe"}
+            with self.assertRaisesRegex(PackagingError, "PDB of this exact build is missing"):
+                package_game._collect_windows_symbols(root / "stage", root / "job", built, {root / "stage" / "Game.exe"})
+            write_pe_with_pdb_reference(root / "stage" / "Game.exe", None, b"", 0)
+            with self.assertRaisesRegex(PackagingError, "linked without a PDB"):
+                package_game._collect_windows_symbols(root / "stage", root / "job", built, {root / "stage" / "Game.exe"})
+
+    def test_crash_report_endpoint_is_https_or_loopback_and_written_for_the_player(self) -> None:
+        for allowed in ("https://crash.example.com/api/1/minidump/?key=abc", "http://127.0.0.1:8080/submit", "http://[::1]:9/x"):
+            self.assertEqual(allowed, package_game._validate_crash_report_url(allowed))
+        for refused in ("http://crash.example.com/submit", "http://localhost/submit", "ftp://crash.example.com/",
+                        "https://user:secret@crash.example.com/", "https://crash.example.com/a b", "", "https://"):
+            with self.assertRaises(PackagingError):
+                package_game._validate_crash_report_url(refused)
+        with tempfile.TemporaryDirectory() as temporary_text:
+            stage = Path(temporary_text)
+            package_game._write_crash_report_config(stage, None)
+            self.assertFalse((stage / "CrashReports.ini").exists(), "a package without an endpoint must not offer upload")
+            package_game._write_crash_report_config(stage, "https://crash.example.com/submit")
+            self.assertEqual(
+                b"[CrashReports]\nUploadUrl=https://crash.example.com/submit\n",
+                (stage / "CrashReports.ini").read_bytes(),
+            )
 
     def test_launch_copy_is_exact_and_removes_direct_run_owner(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_text:

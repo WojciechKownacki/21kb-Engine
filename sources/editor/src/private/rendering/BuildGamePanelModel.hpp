@@ -20,6 +20,7 @@ enum class BuildGameField : std::uint8_t {
     EmsdkRoot, LinuxHost, LinuxUser, LinuxHostKey, LinuxPort, LinuxEngineRoot,
     LinuxDisplay, LinuxIdentity,
     OutputDirectory, LaunchAfterBuild, BuilderExecutable, BuildRoot,
+    CrashReportUrl,
 };
 enum class BuildGameRowKind : std::uint8_t { ReadOnly, Text, Password, FolderPicker, FilePicker, IconPicker, Checkbox };
 

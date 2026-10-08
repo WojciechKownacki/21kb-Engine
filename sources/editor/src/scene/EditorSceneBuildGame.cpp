@@ -105,6 +105,9 @@ bool EditorSceneContext::BeginBuildGameTextEdit(BuildGameField field) {
     if (field == BuildGameField::AndroidKeyAlias && buildGameEditBuffer_ == "Development only") {
         buildGameEditBuffer_.clear();
     }
+    if (field == BuildGameField::CrashReportUrl && projectConfig_.crashReportUploadUrl.empty()) {
+        buildGameEditBuffer_.clear();
+    }
     buildGameEditOriginal_ = buildGameEditBuffer_;
     buildGameEditSelectAll_ = true;
     return true;
@@ -398,6 +401,9 @@ bool EditorSceneContext::StartBuildGamePackage() {
     }
     if (!buildGameSettings_.releaseSigningKey.empty()) {
         request.releaseSigningKey = AbsoluteNormalized(buildGameSettings_.releaseSigningKey);
+    }
+    if (targetSpec.target == kb::packaging::PackagingTarget::WindowsX64) {
+        request.crashReportUploadUrl = Trimmed(projectConfig_.crashReportUploadUrl);
     }
     if (targetSpec.needsAndroidMetadata) {
         request.androidApplicationId = Trimmed(projectConfig_.androidApplicationId);

@@ -1073,6 +1073,7 @@ if(TARGET kb_terrain_editor_plugin)
 endif()
 
 target_link_libraries(kb_editor PRIVATE user32 gdi32 gdiplus ole32 dwmapi msimg32 comdlg32 shell32 xinput)
+target_link_libraries(kb_editor PRIVATE kb_crash_reporting)
 target_compile_definitions(kb_editor PRIVATE
     "KB_EDITOR_ENGINE_ROOT=\"${CMAKE_SOURCE_DIR}\""
     "KB_EDITOR_BUILD_ROOT=\"${CMAKE_BINARY_DIR}\""
@@ -1151,7 +1152,7 @@ if(BUILD_TESTING)
     target_compile_definitions(kb_editor_build_game_tests PRIVATE
         "KB_EDITOR_BUILD_GAME_TEST_ROOT=\"${CMAKE_BINARY_DIR}/editor-build-game-test-scratch\""
     )
-    target_link_libraries(kb_editor_build_game_tests PRIVATE kb_engine ole32 shell32)
+    target_link_libraries(kb_editor_build_game_tests PRIVATE kb_engine kb_crash_reporting ole32 shell32)
     add_test(NAME kb_editor_build_game_tests COMMAND $<TARGET_FILE:kb_editor_build_game_tests>)
     set_tests_properties(kb_editor_build_game_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
     kb_apply_quality_gates(kb_editor_build_game_tests)
