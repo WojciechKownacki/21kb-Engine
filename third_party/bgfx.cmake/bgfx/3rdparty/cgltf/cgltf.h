@@ -1327,6 +1327,12 @@ cgltf_result cgltf_load_buffer_base64(const cgltf_options* options, cgltf_size s
 	void* (*memory_alloc)(void*, cgltf_size) = options->memory.alloc_func ? options->memory.alloc_func : &cgltf_default_alloc;
 	void (*memory_free)(void*, void*) = options->memory.free_func ? options->memory.free_func : &cgltf_default_free;
 
+	/* 21kb: byteLength is only a claim; refuse one the encoded text cannot hold before allocating it. */
+	if (size > strlen(base64) / 4 * 3 + 2)
+	{
+		return cgltf_result_io_error;
+	}
+
 	unsigned char* data = (unsigned char*)memory_alloc(options->memory.user_data, size);
 	if (!data)
 	{
