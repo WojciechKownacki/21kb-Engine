@@ -1139,6 +1139,11 @@ void RunTextureLoaderRefusesOversizedImageHeaderTest() {
     std::vector<std::uint8_t> png{ 0x89U, 'P', 'N', 'G', 0x0DU, 0x0AU, 0x1AU, 0x0AU, 0x00U, 0x00U, 0x00U, 0x0DU,
         'I', 'H', 'D', 'R', 0x00U, 0x00U, 0x4EU, 0x20U, 0x00U, 0x00U, 0x4EU, 0x20U, 0x08U, 0x06U, 0x00U, 0x00U, 0x00U };
     Require(!DecodeTextureSource("Hostile.png", png).has_value(), "A PNG larger than any texture was decoded");
+    // Shorter than any image signature (found by fuzzing): the decoders compared their
+    // signatures without checking the length first.
+    Require(!DecodeTextureSource("Short.png", { 0xFFU, 0xD8U, 0xFFU }).has_value() &&
+            !DecodeTextureSource("Short.exr", { 0x76U }).has_value(),
+        "A buffer shorter than an image signature was decoded");
 }
 
 
