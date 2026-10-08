@@ -45,6 +45,10 @@ set_property(CACHE KB_ANDROID_TEXTURE_PROFILE PROPERTY STRINGS ASTC ETC2)
 set(KB_WEB_RENDERER "WEBGL" CACHE STRING "Browser package renderer: WEBGL or WEBGPU")
 set_property(CACHE KB_WEB_RENDERER PROPERTY STRINGS WEBGL WEBGPU)
 option(KB_ENABLE_SANITIZERS "Build project targets with AddressSanitizer and UndefinedBehaviorSanitizer where supported" OFF)
+option(KB_BUILD_FUZZERS "Build the libFuzzer harnesses in fuzz/ (requires KB_ENABLE_SANITIZERS; build the kb_fuzzers target)" OFF)
+if(KB_BUILD_FUZZERS AND NOT KB_ENABLE_SANITIZERS)
+    message(FATAL_ERROR "KB_BUILD_FUZZERS requires KB_ENABLE_SANITIZERS=ON")
+endif()
 option(KB_ENGINE_ENABLE_NATIVE_AVX2 "Opt in to AVX2 code generation for engine targets and consumers; produced binaries require AVX2-capable CPUs" OFF)
 if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
     option(KB_ENGINE_TRANSFORM_LTO "Opt in to transform-only MSVC Release LTO; requires matching-toolset consumers" OFF)
@@ -220,6 +224,10 @@ function(kb_add_bgfx_subdirectory)
             target_compile_options(bimg_decode PRIVATE /EHsc)
         endif()
     endif()
+    # The image decoders behind texture import are fuzzed with the engine code that calls them.
+    foreach(_kb_bimg_target IN ITEMS bimg bimg_decode)
+        kb_apply_fuzz_instrumentation(${_kb_bimg_target})
+    endforeach()
 
     if(MSVC)
         foreach(_kb_bgfx_exception_target IN ITEMS glslang spirv-opt spirv-cross tint shaderc)
@@ -284,6 +292,45 @@ function(kb_apply_quality_gates target_name)
             message(WARNING "KB_ENABLE_SANITIZERS is not configured for ${CMAKE_CXX_COMPILER_ID}; continuing without sanitizer flags.")
         endif()
     endif()
+
+    kb_apply_fuzz_coverage(${target_name})
+endfunction()
+
+# Coverage feedback for libFuzzer. Instrumented objects call back into the fuzzer
+# runtime, so a fuzzing tree builds the kb_fuzzers target rather than everything.
+function(kb_apply_fuzz_coverage target_name)
+    if(NOT KB_BUILD_FUZZERS)
+        return()
+    endif()
+    if(MSVC)
+        target_compile_options(${target_name} PRIVATE
+            /fsanitize-coverage=inline-8bit-counters
+            /fsanitize-coverage=edge
+            /fsanitize-coverage=trace-cmp
+            /fsanitize-coverage=trace-div)
+    else()
+        target_compile_options(${target_name} PRIVATE -fsanitize=fuzzer-no-link)
+    endif()
+endfunction()
+
+# Vendored parsers reached by the fuzz harnesses get the same address checking and
+# coverage as first-party code; their warnings stay unmanaged.
+function(kb_apply_fuzz_instrumentation target_name)
+    if(NOT KB_BUILD_FUZZERS OR NOT TARGET ${target_name})
+        return()
+    endif()
+    if(MSVC)
+        # /Zi so a report inside the vendored code names its lines.
+        target_compile_options(${target_name} PRIVATE /fsanitize=address /Zi)
+        target_compile_definitions(${target_name} PRIVATE
+            _DISABLE_STRING_ANNOTATION
+            _DISABLE_VECTOR_ANNOTATION
+            _DISABLE_OPTIONAL_ANNOTATION
+        )
+    else()
+        target_compile_options(${target_name} PRIVATE -fsanitize=address -fno-omit-frame-pointer)
+    endif()
+    kb_apply_fuzz_coverage(${target_name})
 endfunction()
 
 set(FLECS_STATIC ON CACHE BOOL "Build Flecs as a static library" FORCE)
@@ -342,6 +389,7 @@ target_include_directories(kb_ufbx PUBLIC
 if(NOT WIN32)
     set_target_properties(kb_ufbx PROPERTIES POSITION_INDEPENDENT_CODE ON)
 endif()
+kb_apply_fuzz_instrumentation(kb_ufbx)
 
 FetchContent_Declare(
     kb_lua
@@ -514,6 +562,13 @@ if(KB_BUILD_EDITOR)
 
     add_subdirectory(sources/editor editor)
     add_subdirectory(sources/hub hub)
+endif()
+
+if(KB_BUILD_FUZZERS)
+    if(NOT KB_BUILD_RENDERER)
+        message(FATAL_ERROR "KB_BUILD_FUZZERS needs KB_BUILD_RENDERER for the mesh, texture, font and material readers")
+    endif()
+    add_subdirectory(fuzz)
 endif()
 
 # Everything packaging ships links with a full PDB in Release too, and so does the

@@ -183,3 +183,74 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
           }
+
+  # libFuzzer harnesses for the readers of untrusted files (fuzz/). Replays every
+  # committed seed and regression input, then gives each harness a minute of fresh
+  # inputs; any crash, leak, hang or AddressSanitizer report fails the job.
+  fuzz:
+    name: Fuzz untrusted-input readers
+    runs-on: windows-2025-vs2026
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@v6
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: advice.defaultBranchName
+          GIT_CONFIG_VALUE_0: "false"
+        with:
+            submodules: recursive
+
+      - name: Configure
+        shell: pwsh
+        run: |
+          cmake -S . -B build/fuzz -G "Visual Studio 18 2026" `
+            -DKB_BUILD_FUZZERS=ON -DKB_ENABLE_SANITIZERS=ON -DKB_BUILD_EDITOR=OFF `
+            -DKB_BUILD_GRAPH_SHADERC=OFF -DKB_STRICT_OWN_WARNINGS=ON
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+      - name: Build fuzzers
+        shell: pwsh
+        run: |
+          cmake --build build/fuzz --config Release --parallel 4 --target kb_fuzzers
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+      - name: Replay corpora
+        shell: pwsh
+        run: |
+          ctest --test-dir build/fuzz -C Release -L fuzz --output-on-failure
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+      - name: Fuzz each reader for 60 seconds
+        shell: pwsh
+        run: |
+          $failed = @()
+          New-Item -ItemType Directory -Force build/fuzz/artifacts | Out-Null
+          foreach ($corpus in Get-ChildItem fuzz/corpus -Directory) {
+            $name = $corpus.Name
+            $work = "build/fuzz/work/$name"
+            New-Item -ItemType Directory -Force $work | Out-Null
+            & "build/fuzz/fuzz/Release/kb_fuzz_$name.exe" $work $corpus.FullName `
+              -max_total_time=60 -timeout=10 -rss_limit_mb=3072 -malloc_limit_mb=2048 `
+              "-artifact_prefix=build/fuzz/artifacts/$name-"
+            if ($LASTEXITCODE -ne 0) {
+              $failed += $name
+            }
+          }
+          if ($failed.Count -ne 0) {
+            Write-Error "Fuzzing found failures in: $($failed -join ', ')"
+            exit 1
+          }
+
+      - name: Keep failing inputs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts
+          path: build/fuzz/artifacts
+          if-no-files-found: ignore

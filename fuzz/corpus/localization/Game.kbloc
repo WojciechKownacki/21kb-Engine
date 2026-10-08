@@ -1,0 +1,8 @@
+schema 1
+fallback "en"
+language "en"
+plural "hud.coins" "one" "{count} coin"
+plural "hud.coins" "other" "{count} coins"
+text "menu.play" "Play"
+language "pl"
+text "menu.play" "Graj"
