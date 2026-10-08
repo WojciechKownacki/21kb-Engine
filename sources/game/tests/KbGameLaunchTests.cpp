@@ -9,6 +9,7 @@
 #include "engine/project/ProjectManager.hpp"
 #include "engine/project/ProjectSettings.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
+#include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -26,6 +27,7 @@
 #include <Windows.h>
 
 #include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -138,6 +140,43 @@ void WriteTextFile(const std::filesystem::path& path, const std::string& text) {
         kb::scene::SceneDocumentService::LoadFileIntoScene(reloaded, path),
         "kb_game test scene could not be read back");
     return reloaded.Entities().Count();
+}
+
+// Writes a scene whose content is partly broken: one entity runs the healthy
+// behaviour, one a behaviour that fails on every Tick, and one renders a mesh
+// and a material that do not exist in the project.
+void WriteDegradedScene(
+    const std::filesystem::path& projectRoot,
+    const std::filesystem::path& path,
+    std::uint64_t missingAssetId) {
+    kb::scene::Scene authored;
+    Require(
+        authored.Assets().MountProject(projectRoot),
+        "kb_game degraded test project could not be mounted for authoring");
+    static_cast<void>(authored.Assets().Discover());
+    const auto behaviour = [&](const char* name, const char* virtualPath) {
+        const kb::assets::AssetMetadata* script =
+            authored.Assets().Manager().Registry().FindByPath(virtualPath);
+        Require(script != nullptr, "kb_game degraded test behaviour asset was not discovered");
+        const kb::scene::SceneObject object =
+            authored.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = name });
+        authored.Components().Behaviours().Set(
+            object.Entity(),
+            kb::scene::BehaviourComponent{
+                .behaviourAssetId = script->id.value,
+                .backend = kb::scene::BehaviourBackend::Lua,
+            });
+    };
+    behaviour("Healthy", "/Game/Logic/Player.lua");
+    behaviour("Broken", "/Game/Logic/Broken.lua");
+    const kb::scene::SceneObject missing =
+        authored.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "MissingMesh" });
+    authored.Components().MeshRenderers().Set(
+        missing.Entity(),
+        kb::scene::MeshRendererComponent{ .meshAssetId = missingAssetId, .materialAssetId = missingAssetId + 1U });
+    Require(
+        kb::scene::SceneDocumentService::Save(authored, path, "Degraded"),
+        "kb_game degraded test scene could not be saved");
 }
 
 struct ProcessRun {
@@ -497,6 +536,38 @@ end
     Require(
         Contains(unspellableScene.output, "project scene asset was not found"),
         "kb_game did not name the missing scene asset of an unspellable reference");
+
+    // Broken content degrades the game instead of ending it: the failing
+    // behaviour is reported once with its identity and disabled, the missing
+    // mesh is reported once and skipped, and every requested frame still runs.
+    // The exit code reports that the run was not clean.
+    WriteTextFile(root / "Assets" / "Logic" / "Broken.lua", R"(
+function Tick(self, dt)
+    error("deliberate script failure")
+end
+)");
+    constexpr std::uint64_t kMissingAssetId = 0x5EED0001ULL;
+    WriteDegradedScene(root, root / "Assets" / "Scenes" / "Degraded.21kbscene", kMissingAssetId);
+    const ProcessRun degraded = RunGame(
+        projectArgument + L"--scene=/Game/Scenes/Degraded.21kbscene --headless --frames=4",
+        root / "degraded.log");
+    Report("degraded content", degraded);
+    Require(degraded.exitCode != 0U, "kb_game reported a clean run although its content failed");
+    Require(
+        Contains(degraded.output, "frames=4 shutdown=clean") &&
+            CountReported(degraded.output, "rendered=") == 4UL &&
+            CountReported(degraded.output, "ticks=") == 4UL,
+        "kb_game stopped instead of running every frame past a failing script and a missing mesh");
+    const std::size_t scriptError = degraded.output.find("deliberate script failure");
+    Require(
+        scriptError != std::string::npos &&
+            degraded.output.find("deliberate script failure", scriptError + 1U) == std::string::npos &&
+            Contains(degraded.output, "script error: behaviour error:") &&
+            Contains(degraded.output, "behaviour disabled after its error"),
+        "kb_game did not report the failing script once, with its identity, and disable it");
+    Require(
+        Contains(degraded.output, "mesh=" + std::to_string(kMissingAssetId)),
+        "kb_game did not name the missing mesh it skipped");
 
     std::fputs("kb_game launch tests passed\n", stdout);
     return EXIT_SUCCESS;

@@ -43,6 +43,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -361,6 +362,7 @@ int RunGame(const GameOptions& options) {
 
     kb::script::ScriptModuleOptions scriptOptions;
     scriptOptions.runtimeOptions.userStorageRoot = GameUserStorageRoot(projectRuntime);
+    scriptOptions.runtimeOptions.disableFailingBehaviours = true;
     auto scriptModuleOwner = std::make_unique<kb::script::ScriptModule>(std::move(scriptOptions));
     kb::script::ScriptModule* scriptModule = scriptModuleOwner.get();
     std::vector<std::unique_ptr<kb::modules::IEngineModule>> staticModules;
@@ -420,6 +422,21 @@ int RunGame(const GameOptions& options) {
     std::uint32_t renderedFrames = 0U;
     std::uint32_t submittedFrames = 0U;
     bool runtimeClean = true;
+    // A shipped game outlives faults in its content. Each distinct script,
+    // scene-system or render error is logged once with the entity and asset it
+    // concerns; the script host disables the failing behaviour, the renderer
+    // draws with its error material or skips a draw it has no mesh for, and the
+    // loop carries on. Only losing the graphics device ends the run early. The
+    // exit code still reports that the run was not clean.
+    std::unordered_set<std::string> reportedErrors;
+    std::size_t degradedErrors = 0U;
+    const auto reportError = [&](std::string message) {
+        runtimeClean = false;
+        if (reportedErrors.insert(message).second) {
+            ++degradedErrors;
+            std::cerr << "kb_game: " << message << '\n';
+        }
+    };
     kb::game::RuntimeSceneFrameSync renderSceneSync;
     auto previousTick = std::chrono::steady_clock::now();
     while (window.PumpMessages() && !scene.Runtime().ShouldQuit()) {
@@ -454,18 +471,13 @@ int RunGame(const GameOptions& options) {
             static_cast<float>(window.Height())));
         renderSceneSync.BeforeUpdate(scene);
         static_cast<void>(scene.Runtime().Update(deltaSeconds));
-        for (const std::string& error : scene.Runtime().DrainSceneSystemErrors()) {
-            std::cerr << "kb_game: scene runtime failed: " << error << '\n';
-            runtimeClean = false;
+        for (std::string& error : scene.Runtime().DrainSceneSystemErrors()) {
+            reportError("scene runtime error: " + std::move(error));
         }
         if (scriptActive) {
-            for (const std::string& error : scriptModule->Host()->DrainSceneSystemDiagnostics()) {
-                std::cerr << "kb_game: script runtime failed: " << error << '\n';
-                runtimeClean = false;
+            for (std::string& error : scriptModule->Host()->DrainSceneSystemDiagnostics()) {
+                reportError("script error: " + std::move(error));
             }
-        }
-        if (!runtimeClean) {
-            break;
         }
         const auto profileSimulationEnd = !options.profilePath.empty()
             ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
@@ -554,22 +566,27 @@ int RunGame(const GameOptions& options) {
                 .renderCameraValid = renderCamera.valid,
             });
         }
-        if (!submitted || renderErrors) {
-            std::cerr << "kb_game: renderer could not submit the scene cleanly; accepted=" << submitted
-                      << " missing-resources=" << renderStats.HasMissingResources()
-                      << " dropped-instances=" << renderStats.droppedInstanceCount << '\n';
+        if (!submitted) {
+            reportError("renderer did not accept the scene; the frame was not drawn");
+        }
+        if (renderStats.droppedInstanceCount != 0U) {
+            reportError("renderer dropped instances from the frame");
+        }
+        if (renderErrors) {
             for (const auto& event : renderer.LastSceneDiagnostics().events) {
-                if (event.severity == kb::render::SceneRenderDiagnosticSeverity::Error) {
-                    std::cerr << "kb_game: render error kind=" << static_cast<unsigned>(event.kind)
-                              << " entity=" << event.entityId << " mesh=" << event.meshAssetId
-                              << " material=" << event.materialAssetId << " texture=" << event.textureAssetId
-                              << " profile=" << event.postProcessProfileAssetId << '\n';
+                if (event.severity != kb::render::SceneRenderDiagnosticSeverity::Info) {
+                    reportError(std::string{ event.severity == kb::render::SceneRenderDiagnosticSeverity::Error ? "render error" : "render warning" }
+                        + " kind=" + std::to_string(static_cast<unsigned>(event.kind))
+                        + " entity=" + std::to_string(event.entityId) + " mesh=" + std::to_string(event.meshAssetId)
+                        + " material=" + std::to_string(event.materialAssetId) + " texture=" + std::to_string(event.textureAssetId)
+                        + " profile=" + std::to_string(event.postProcessProfileAssetId)
+                        + "; drawn with the fallback material or skipped");
                 }
             }
-            runtimeClean = false;
-            break;
         }
-        ++submittedFrames;
+        if (submitted) {
+            ++submittedFrames;
+        }
         ++renderedFrames;
         if (options.frameLimit != 0U && renderedFrames >= options.frameLimit) {
             break;
@@ -633,7 +650,8 @@ int RunGame(const GameOptions& options) {
               << " shutdown=" << (shutdownClean ? "clean" : "incomplete")
               << " rendered=" << submittedFrames
               << " ticks=" << scene.Runtime().FrameIndex()
-              << " simulated=" << scene.Runtime().ElapsedSeconds() << '\n';
+              << " simulated=" << scene.Runtime().ElapsedSeconds()
+              << " errors=" << degradedErrors << '\n';
     std::cout.flush();
     return shutdownClean && runtimeClean ? EXIT_SUCCESS : EXIT_FAILURE;
 }

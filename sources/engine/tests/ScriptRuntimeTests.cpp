@@ -3837,6 +3837,59 @@ private:
     bool queued_ = false;
 };
 
+// A shipped game host isolates a faulty script: the failing behaviour instance
+// is disabled after its first error while every other behaviour keeps ticking.
+// Without the option (the editor) the failing behaviour stays enabled.
+void RunScriptHostDisablesFailingBehaviourTest() {
+    for (const bool disableFailing : { true, false }) {
+        kb::scene::Scene scene;
+        const kb::scene::SceneEntity failing = scene.Entities().CreateEntity();
+        const kb::scene::SceneEntity healthy = scene.Entities().CreateEntity();
+        constexpr kb::assets::AssetId kFailing{ 88180U };
+        constexpr kb::assets::AssetId kHealthy{ 88181U };
+        scene.Components().Behaviours().Set(failing, { .behaviourAssetId = kFailing.value, .backend = kb::scene::BehaviourBackend::Native, .enabled = true });
+        scene.Components().Behaviours().Set(healthy, { .behaviourAssetId = kHealthy.value, .backend = kb::scene::BehaviourBackend::Native, .enabled = true });
+        kb::script::ScriptRuntimeHostOptions options;
+        options.disableFailingBehaviours = disableFailing;
+        options.installSceneSystem = true;
+        kb::script::ScriptRuntimeHost host{ scene, options };
+        kb::tests::Require(host.Succeeded(), "Failing-behaviour isolation host failed");
+        int failingTicks = 0;
+        int healthyTicks = 0;
+        kb::tests::Require(host.NativeBackend().RegisterLifecycle(kFailing, kb::script::ScriptLifecycleEvent::Tick,
+                               [&](kb::script::ScriptExecutionContext&) {
+                                   ++failingTicks;
+                                   throw std::runtime_error("deliberate behaviour failure");
+                               }) &&
+                host.NativeBackend().RegisterLifecycle(kHealthy, kb::script::ScriptLifecycleEvent::Tick,
+                    [&](kb::script::ScriptExecutionContext&) { ++healthyTicks; }),
+            "Failing-behaviour isolation callbacks could not be registered");
+        std::vector<std::string> diagnostics;
+        for (int frame = 0; frame < 3; ++frame) {
+            static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+            for (std::string& diagnostic : host.DrainSceneSystemDiagnostics()) {
+                diagnostics.push_back(std::move(diagnostic));
+            }
+        }
+        const kb::scene::BehaviourComponent* failingBehaviour = scene.Components().Behaviours().TryGet(failing);
+        const std::string identity = "entity #" + std::to_string(failing.Id()) + ", script asset #" + std::to_string(kFailing.value);
+        const auto reported = [&](std::string_view text) {
+            return std::ranges::any_of(diagnostics, [&](const std::string& line) {
+                return line.find(text) != std::string::npos && line.find(identity) != std::string::npos;
+            });
+        };
+        kb::tests::Require(healthyTicks >= 3 && reported("deliberate behaviour failure"),
+            "A failing behaviour must be reported with its entity and asset while the other behaviours keep ticking");
+        if (disableFailing) {
+            kb::tests::Require(failingTicks == 1 && failingBehaviour != nullptr && !failingBehaviour->enabled && reported("behaviour disabled"),
+                "A host that disables failing behaviours must stop only the failing instance after its first error");
+        } else {
+            kb::tests::Require(failingTicks >= 3 && failingBehaviour != nullptr && failingBehaviour->enabled && !reported("behaviour disabled"),
+                "A host that keeps failing behaviours must leave them enabled");
+        }
+    }
+}
+
 void RunParticleEventPostFixedDispatchTest() {
     kb::scene::Scene scene;
     ScriptParticleTestBackend backend;
@@ -16160,6 +16213,7 @@ void RunScriptRuntimeTests() {
     RunParticleEffectAssetIORoundTripTest();
     RunScriptParticleSystemApiTest();
     RunParticleEventPostFixedDispatchTest();
+    RunScriptHostDisablesFailingBehaviourTest();
     RunScriptMaterialInstanceApiTest();
     RunSceneMaterialInstancesParameterOverridesTest();
     RunScriptMaterialInstanceParameterApiTest();
