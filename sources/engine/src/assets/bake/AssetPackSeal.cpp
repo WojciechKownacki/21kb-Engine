@@ -13,7 +13,8 @@ namespace kb::assets::bake {
 namespace {
 
 constexpr std::uint32_t kSealEncrypted = 1U << 0U;
-constexpr std::string_view kSealSignatureDomain{ "21KB-PACK-SEAL-V1", 18U };
+// The domain includes its terminating NUL, which separates it from what follows it.
+constexpr std::string_view kSealSignatureDomain{ "21KB-PACK-SEAL-V1\0", 18U };
 constexpr std::string_view kContentKeyIdDomain = "21KB-PACK-CONTENT-KEY-ID";
 
 void PutUInt32(std::vector<std::uint8_t>& bytes, std::uint32_t value) {
