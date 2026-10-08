@@ -396,8 +396,9 @@ void RunAudioMixerInspectorTest() {
     rejectEdit(kb::editor::InspectorPropertyId::AudioMixerBusVolume, "Master", {}, {}, "number");
     rejectEdit(kb::editor::InspectorPropertyId::AudioMixerSnapshotName, {}, "Gameplay", {}, "bad name");
     rejectEdit(kb::editor::InspectorPropertyId::AudioMixerOverrideVolume, {}, "Gameplay", "Master", "-0.5");
-    rejectEdit(kb::editor::InspectorPropertyId::AudioMixerBusVolume, "Master", {}, {},
-        FindRow(model, kb::editor::InspectorPropertyId::AudioMixerBusVolume, "Master").value);
+    // rejectEdit refreshes the model first, so the unchanged text must outlive the row it came from.
+    const std::string unchangedVolume = FindRow(model, kb::editor::InspectorPropertyId::AudioMixerBusVolume, "Master").value;
+    rejectEdit(kb::editor::InspectorPropertyId::AudioMixerBusVolume, "Master", {}, {}, unchangedVolume);
 
     model = refresh();
     const kb::editor::InspectorAudioMixerRow stale = FindRow(
