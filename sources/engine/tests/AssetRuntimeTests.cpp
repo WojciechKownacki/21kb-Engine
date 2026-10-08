@@ -34,6 +34,7 @@
 #include "engine/script/ScriptBehaviourAsset.hpp"
 #include "engine/script/ScriptBehaviourBindingService.hpp"
 #include "engine/visual/VisualGraphTypes.hpp"
+#include "scene/asset/io/SceneAssetReader.hpp"
 #include "scene/assets/SceneAssetLoader.hpp"
 #include "scene/assets/ScenePrefabAssetLoader.hpp"
 #include "scene/prefab/io/ScenePrefabAssetWriter.hpp"
@@ -2011,6 +2012,24 @@ void RunSceneAssetDependencyDamagedSidecarTest() {
     }
 }
 
+// A scene file's node count is a claim the nodes have yet to back up. This header
+// promises 160305 nodes, several kilobytes each, and then ends; reading it must
+// fail without first making room for all of them. Found by fuzzing
+// (fuzz/corpus/scene).
+void RunSceneAssetDeclaredNodeCountIsNotReservedTest() {
+    const std::vector<std::uint8_t> bytes{
+        0x32, 0x31, 0x4B, 0x42, 0x53, 0x43, 0x4E, 0x00, 0x28, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x32, 0x31, 0x72, 0x02, 0x00,
+    };
+    kb::tests::BeginAllocationTally();
+    const kb::scene::SceneDocumentLoadResult result = kb::scene::SceneAssetReader::Read(bytes);
+    const kb::tests::AllocationTally tally = kb::tests::EndAllocationTally();
+    kb::tests::Require(!result.succeeded, "A scene that ends before its declared nodes was accepted");
+    kb::tests::Require(tally.bytes < 32U * 1024U * 1024U,
+        "A scene's declared node count was reserved before its nodes were read");
+}
+
 void RunSceneAssetDependencyStaleSidecarTest() {
     ResetTestRoot();
     const std::filesystem::path projectRoot = TestRoot() / "StaleSidecarProject";
@@ -2427,6 +2446,7 @@ void RunAssetRuntimeTests() {
     RunSceneAssetDependencyWithoutSidecarTest();
     RunPackagedSceneDoesNotRequireLooseMetaTest();
     RunSceneAssetDependencyDamagedSidecarTest();
+    RunSceneAssetDeclaredNodeCountIsNotReservedTest();
     RunSceneAssetDependencyStaleSidecarTest();
     RunSceneAssetDependencyChangesAfterDiscoveryTest();
     RunSceneAssetDependencyIgnoresScanOrderTest();

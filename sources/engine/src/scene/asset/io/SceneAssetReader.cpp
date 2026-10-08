@@ -213,7 +213,7 @@ SceneDocumentLoadResult SceneAssetReader::Read(std::vector<std::uint8_t> bytes) 
         return SceneDocumentLoadResult{ .succeeded = false, .document = {}, .error = "Scene asset descriptor fields are invalid." };
     }
     scene.fileVersion = fileVersion;
-    scene.worldPrefab.Reserve(nodeCount);
+    scene.worldPrefab.ReserveDeclared(nodeCount);
     for (std::uint32_t nodeIndex = 0U; nodeIndex < nodeCount; ++nodeIndex) {
         ScenePrefabNodeDesc node;
         if (!ReadNode(input, fileVersion, node)) {

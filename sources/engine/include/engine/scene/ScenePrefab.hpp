@@ -25,6 +25,10 @@ public:
 
     [[nodiscard]] std::uint32_t AddNode(ScenePrefabNodeDesc desc);
     void Reserve(std::size_t nodeCount);
+    // For readers: a node count read from a file is only a claim until the nodes
+    // themselves have been read, and each node takes kilobytes. Room is made for a
+    // bounded share of it; the rest grows as nodes actually arrive.
+    void ReserveDeclared(std::size_t declaredNodeCount);
     void Clear() noexcept;
 
 private:

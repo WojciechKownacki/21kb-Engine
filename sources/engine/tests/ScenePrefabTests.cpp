@@ -2,10 +2,30 @@
 #include "TestSuites.hpp"
 #include "TestSupport.hpp"
 #include "engine/scene/ScenePrefab.hpp"
+#include "scene/prefab/io/ScenePrefabAssetReader.hpp"
+
+#include <sstream>
 
 namespace kb::tests {
 
 void RunSceneStreamingTests();
+
+namespace {
+
+// A prefab file's node count is a claim the nodes have yet to back up. This one
+// promises nearly half a million nodes and then ends; reading it must fail without
+// first making room for all of them. Found by fuzzing (fuzz/corpus/prefab).
+void RunPrefabDeclaredNodeCountIsNotReservedTest() {
+    std::istringstream input{ "21kb.prefab.v1\nname=\nnodes=442949" };
+    kb::scene::ScenePrefabAssetReadResult result;
+    BeginAllocationTally();
+    const bool read = kb::scene::ScenePrefabAssetReader::Read(input, result);
+    const AllocationTally tally = EndAllocationTally();
+    Require(!read, "A prefab that ends before its declared nodes was accepted");
+    Require(tally.bytes < 32U * 1024U * 1024U, "A prefab's declared node count was reserved before its nodes were read");
+}
+
+} // namespace
 
 void RunScenePrefabTests() {
     RunSceneStreamingTests();
@@ -24,6 +44,7 @@ void RunScenePrefabTests() {
     prefab.Clear();
     static_cast<void>(prefab.AddNode({}));
     Require(prefab.Nodes().front().stableId == 1U, "Cleared prefab must restart id allocation");
+    RunPrefabDeclaredNodeCountIsNotReservedTest();
     RunScenePrefabInstantiationTests();
     RunScenePrefabCaptureTests();
 }

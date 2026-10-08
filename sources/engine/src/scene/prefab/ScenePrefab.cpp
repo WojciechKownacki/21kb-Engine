@@ -81,6 +81,11 @@ void ScenePrefab::Reserve(std::size_t nodeCount) {
     nodes_.reserve(nodeCount);
 }
 
+void ScenePrefab::ReserveDeclared(std::size_t declaredNodeCount) {
+    constexpr std::size_t kNodesReservedAhead = 1024U;
+    nodes_.reserve(std::min(declaredNodeCount, kNodesReservedAhead));
+}
+
 void ScenePrefab::Clear() noexcept {
     nodes_.clear();
     nextStableId_ = 1U;
