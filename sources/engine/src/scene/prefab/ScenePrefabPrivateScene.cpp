@@ -83,21 +83,29 @@ bool ScenePrefabPrivateScene::Apply() {
 
     SceneState& sourceState = SceneAccess::State(*sourceScene_);
     ScenePrefabRecord* sourceRecord = sourceState.prefabs.FindMutableRecord(sourcePrefab_);
-    if (sourceRecord == nullptr || sourceRecord->kind != ScenePrefabRecordKind::Template) {
-        return false;
-    }
-    if (!editScene_->Prefabs().ApplyOverrides(editInstance_.Handle())) {
+    if (sourceRecord == nullptr || !editScene_->Prefabs().ApplyOverrides(editInstance_.Handle())) {
         return false;
     }
 
-    ScenePrefab updatedPrefab = editScene_->Prefabs().Get(editPrefab_);
-    if (updatedPrefab.Empty()) {
-        return false;
+    if (sourceRecord->kind == ScenePrefabRecordKind::Variant) {
+        // The edit applied to the private copy of the variant; its overrides and added children are the edit.
+        const ScenePrefabRecord* edited = SceneAccess::State(*editScene_).prefabs.FindRecord(editPrefab_);
+        if (edited == nullptr) {
+            return false;
+        }
+        sourceRecord->variantOverrides = edited->variantOverrides;
+        if (!sourceState.prefabs.SetVariantAddedChildren(sourcePrefab_, edited->variantAddedChildren)) {
+            return false;
+        }
+    } else {
+        ScenePrefab updatedPrefab = editScene_->Prefabs().Get(editPrefab_);
+        if (updatedPrefab.Empty()) {
+            return false;
+        }
+        sourceRecord->prefab = std::move(updatedPrefab);
+        sourceState.prefabs.RefreshContentHash(sourcePrefab_);
+        sourceState.prefabs.RefreshDerivedPrefabs(sourcePrefab_);
     }
-
-    sourceRecord->prefab = std::move(updatedPrefab);
-    sourceState.prefabs.RefreshContentHash(sourcePrefab_);
-    sourceState.prefabs.RefreshDerivedPrefabs(sourcePrefab_);
     static_cast<void>(ScenePrefabInstanceSynchronizer::Refresh(*sourceScene_, sourcePrefab_));
     return true;
 }
