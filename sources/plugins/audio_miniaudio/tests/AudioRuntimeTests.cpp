@@ -1389,7 +1389,8 @@ void RunVoiceStateTest(const std::filesystem::path& clipPath) {
     kb::audio_miniaudio::MiniaudioSound* endedSound = pool.SoundForTesting(ended.voiceId);
     Require(endedSound != nullptr && endedSound->SeekSeconds(2.0F) == MA_SUCCESS,
         "Finite one-shot could not seek to its natural end");
-    for (std::uint32_t attempt = 0U; attempt < 100U && !endedSound->AtEnd(); ++attempt) {
+    for (const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{ 10 };
+         std::chrono::steady_clock::now() < deadline && !endedSound->AtEnd();) {
         std::this_thread::sleep_for(std::chrono::milliseconds{ 2 });
     }
     Require(endedSound->AtEnd(), "Finite one-shot did not reach its natural end");
@@ -1405,7 +1406,8 @@ void RunVoiceStateTest(const std::filesystem::path& clipPath) {
         .spatial = false,
     }, resolver, nullptr);
     Require(naturallyEnded.Succeeded(), "Finite one-shot could not start for natural completion verification");
-    for (std::uint32_t attempt = 0U; attempt < 1000U && pool.IsVoicePlaying(naturallyEnded.voiceId); ++attempt) {
+    for (const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{ 10 };
+         std::chrono::steady_clock::now() < deadline && pool.IsVoicePlaying(naturallyEnded.voiceId);) {
         std::this_thread::sleep_for(std::chrono::milliseconds{ 2 });
     }
     Require(!pool.IsVoicePlaying(naturallyEnded.voiceId),

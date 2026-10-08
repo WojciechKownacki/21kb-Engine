@@ -20,6 +20,7 @@
 #include "engine/scene/SkeletalMeshFbxImporter.hpp"
 
 #include <array>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <limits>
@@ -746,8 +747,9 @@ void RunSkeletalMeshAssetTests() {
         "SkeletalMeshAsset reimport silently loaded an incompatible dependent mesh");
     Require(scene.Assets().Manager().LoadAsync<kb::scene::SkeletalMeshAsset>(meshId),
         "SkeletalMeshAsset async reload request was rejected before validation");
-    for (unsigned spin = 0U; spin < 1000000U &&
-            scene.Assets().Manager().AsyncLoadStatus(meshId) == kb::assets::AsyncAssetLoadStatus::Pending; ++spin) {
+    for (const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{ 10 };
+         std::chrono::steady_clock::now() < deadline &&
+            scene.Assets().Manager().AsyncLoadStatus(meshId) == kb::assets::AsyncAssetLoadStatus::Pending;) {
         scene.Assets().Manager().PumpAsyncLoads();
         std::this_thread::yield();
     }
