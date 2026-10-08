@@ -148,6 +148,11 @@ private:
 // so the test follows any future geometry change automatically.
 constexpr RECT kContent{ 0, 0, 900, 560 };
 
+// The Inspector given room for all of its content, so a scan also finds the rows below the fold.
+[[nodiscard]] RECT WholeInspector(const EditorSceneContext& context) {
+    return RECT{ kContent.left, kContent.top, kContent.right, kContent.top + InspectorPanelRenderer::ContentHeight(kContent, context) };
+}
+
 [[nodiscard]] std::string ReadFileTextForTest(const std::filesystem::path& path) {
     std::ifstream input{ path, std::ios::binary };
     return std::string{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
@@ -755,12 +760,16 @@ void RunHeadlessAutomationWorkflowSuite(Report& report) {
     report.Check(
         context.RestorePlayModeSceneSession(),
         "Automation stops Play and restores authoring scene");
+    // Restoring the authoring scene recreates its objects; the selection must follow the restored Player.
+    const kb::scene::SceneEntity restoredActor = context.SelectedEntity();
     report.Check(
-        context.SelectedEntity() == actor &&
-            context.IsHierarchyEntitySelected(actor),
+        context.Scene().Entities().IsAlive(restoredActor) &&
+            context.Scene().Entities().Name(restoredActor) == "Player" &&
+            context.IsHierarchyEntitySelected(restoredActor),
         "Stop transport preserves the selected hierarchy entity");
     report.Check(
-        std::abs(ActorX(context, actor, authoredStartX) -
+        context.Scene().Transforms().TryGet(restoredActor) != nullptr &&
+            std::abs(ActorX(context, restoredActor, authoredStartX + 1.0F) -
                  authoredStartX) <= 0.001F,
         "Play Mode mutation does not leak into authoring scene");
     report.Check(
@@ -1380,7 +1389,16 @@ void RunSelectionTransformSuite(Report& report) {
     context.SelectHierarchyEntities(selected);
     context.Scene().Components().Colliders().Set(first, kb::scene::ColliderComponent{});
 
-    const InspectorPanelRenderer::Hit pivotXHit = InspectorPanelRenderer::HitTest(kContent, context, 360, 216);
+    InspectorPanelRenderer::Hit pivotXHit{};
+    for (int y = kContent.top; y < kContent.bottom && pivotXHit.kind == InspectorHitKind::None; y += 2) {
+        for (int x = kContent.left; x < kContent.right; x += 4) {
+            const InspectorPanelRenderer::Hit hit = InspectorPanelRenderer::HitTest(kContent, context, x, y);
+            if (hit.kind == InspectorHitKind::FloatField && hit.property == InspectorPropertyId::PositionX) {
+                pivotXHit = hit;
+                break;
+            }
+        }
+    }
     report.Check(
         pivotXHit.kind == InspectorHitKind::FloatField &&
             pivotXHit.section == InspectorSectionId::Transform &&
@@ -1606,9 +1624,10 @@ void RunInspectorMaterialDropTargetSuite(Report& report) {
     InspectorPanelRenderer::Hit slotHit{};
     InspectorPanelRenderer::Hit castsShadowHit{};
     InspectorPanelRenderer::Hit receivesShadowHit{};
-    for (int y = kContent.top; y < kContent.bottom; ++y) {
-        for (int x = kContent.left; x < kContent.right; ++x) {
-            const InspectorPanelRenderer::Hit hit = InspectorPanelRenderer::HitTest(kContent, context, x, y);
+    const RECT meshInspector = WholeInspector(context);
+    for (int y = meshInspector.top; y < meshInspector.bottom; ++y) {
+        for (int x = meshInspector.left; x < meshInspector.right; ++x) {
+            const InspectorPanelRenderer::Hit hit = InspectorPanelRenderer::HitTest(meshInspector, context, x, y);
             if (hit.section != InspectorSectionId::MeshRenderer) {
                 continue;
             }
@@ -5196,9 +5215,10 @@ void RunInspectorLightComponentSuite(Report& report) {
     InspectorPanelRenderer::Hit typeHit{};
     InspectorPanelRenderer::Hit intensityHit{};
     InspectorPanelRenderer::Hit castsShadowHit{};
-    for (int y = kContent.top; y < kContent.bottom; ++y) {
-        for (int x = kContent.left; x < kContent.right; ++x) {
-            const InspectorPanelRenderer::Hit hit = InspectorPanelRenderer::HitTest(kContent, context, x, y);
+    const RECT lightInspector = WholeInspector(context);
+    for (int y = lightInspector.top; y < lightInspector.bottom; ++y) {
+        for (int x = lightInspector.left; x < lightInspector.right; ++x) {
+            const InspectorPanelRenderer::Hit hit = InspectorPanelRenderer::HitTest(lightInspector, context, x, y);
             if (hit.section != InspectorSectionId::Light) {
                 continue;
             }
