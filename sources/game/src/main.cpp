@@ -10,6 +10,7 @@
 #include "engine/platform/win32/Win32InputCollector.hpp"
 #include "engine/platform/win32/Win32XInputHapticsBackend.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneCrashReportConsent.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneLoadedContent.hpp"
 #include "engine/scene/SceneRenderFeedback.hpp"
@@ -387,8 +388,9 @@ int RunGame(const GameOptions& options) {
         renderer.SetDefaultSceneLightingConfig(lighting);
     }
 
+    const std::filesystem::path userStorageRoot = GameUserStorageRoot(projectRuntime);
     kb::script::ScriptModuleOptions scriptOptions;
-    scriptOptions.runtimeOptions.userStorageRoot = GameUserStorageRoot(projectRuntime);
+    scriptOptions.runtimeOptions.userStorageRoot = userStorageRoot;
     scriptOptions.runtimeOptions.disableFailingBehaviours = true;
     auto scriptModuleOwner = std::make_unique<kb::script::ScriptModule>(std::move(scriptOptions));
     kb::script::ScriptModule* scriptModule = scriptModuleOwner.get();
@@ -429,6 +431,27 @@ int RunGame(const GameOptions& options) {
               << " gpu_vendor=" << renderer.CapabilityReport().vendorId
               << " gpu_device=" << renderer.CapabilityReport().deviceId << '\n';
     std::cout.flush();
+
+    // A packaged game that sends crash reports asks the player first, on the first launch, and keeps the
+    // answer with the player's settings; reports from earlier runs leave only after a yes. A development
+    // run of a loose project keeps whatever consent the report folder already holds.
+    std::optional<kb::platform::UserStorage> consentStorage;
+    std::unique_ptr<kb::scene::CrashReportConsentFlow> crashReportConsent;
+    if (projectRuntime.IsPackaged() && !userStorageRoot.empty()) {
+        consentStorage.emplace(userStorageRoot, kb::script::kDefaultScriptUserStorageQuotaBytes);
+        crashReportConsent = std::make_unique<kb::scene::CrashReportConsentFlow>(*consentStorage, kb::scene::CrashReportConsentHooks{
+            .applyConsent = [](bool granted) {
+                const std::filesystem::path directory = kb::platform::CrashReporter::ReportDirectory();
+                return !directory.empty() && kb::platform::SetCrashUploadConsent(directory, granted);
+            },
+            .startUpload = [started = false]() mutable {
+                if (!started) started = kb::platform::CrashReporter::StartPendingUpload();
+            },
+        });
+        static_cast<void>(crashReportConsent->Begin(scene, !kb::platform::ConfiguredCrashUploadEndpoint().empty()));
+    } else {
+        static_cast<void>(kb::platform::CrashReporter::StartPendingUpload());
+    }
 
     std::ofstream profileOutput;
     std::vector<GameFrameProfile> profileRows;
@@ -687,8 +710,11 @@ int RunGame(const GameOptions& options) {
 
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     // First, so any crash after this point leaves a minidump in the player's
-    // crash report folder instead of ending the game without a trace.
-    static_cast<void>(kb::platform::CrashReporter::Install());
+    // crash report folder instead of ending the game without a trace. Reports
+    // earlier runs left wait until RunGame knows the player's answer.
+    kb::platform::CrashReporterOptions crashReporterOptions;
+    crashReporterOptions.uploadPendingReports = false;
+    static_cast<void>(kb::platform::CrashReporter::Install(crashReporterOptions));
     // Nothing below may let an exception escape: this is a windowed process, so
     // an escaped exception ends in abort() behind a modal dialog that no player
     // and no automated run can dismiss.

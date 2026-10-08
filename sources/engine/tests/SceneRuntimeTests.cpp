@@ -91,6 +91,8 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunLocalizationTests();
     } else if (suite == "ui-text-layout") {
         kb::tests::RunUITextLineBreakingTests();
+    } else if (suite == "crash-consent") {
+        kb::tests::RunCrashReportConsentTests();
     } else {
         return false;
     }
@@ -121,6 +123,7 @@ void RunAllSuites() {
     kb::tests::RunSkeletalMeshAssetTests();
     kb::tests::RunTimelineRuntimeTests();
     kb::tests::RunLocalizationTests();
+    kb::tests::RunCrashReportConsentTests();
 }
 
 } // namespace

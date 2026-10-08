@@ -28,13 +28,14 @@ Not collected: your name, e-mail address or account, saved games, settings,
 screenshots, other files, or the game's memory beyond the thread stacks.
 
 Sending reports
-Nothing is sent unless you turn on sending crash reports in the game's
-settings, and only if the game's publisher runs a crash report service. It is
-off until you turn it on. When it is on, the game sends the reports left by
-earlier sessions the next time it starts, over an encrypted (HTTPS)
-connection, and deletes each one from this computer once the service has
-accepted it. The service sees your computer's internet address, as with any
-connection. You can turn sending off again at any time.
+Nothing is sent unless you agree, and only if the game's publisher runs a
+crash report service. Such a game asks the first time it starts whether to
+send crash reports; sending is off until you answer yes. When it is on, the
+game sends the reports left by earlier sessions when it starts, or right
+after you answer yes, over an encrypted (HTTPS) connection, and deletes each
+one from this computer once the service has accepted it. The service sees
+your computer's internet address, as with any connection. You can change
+your answer at any time in the game's settings.
 
 Deleting reports
 Use the game's option to delete crash reports, or delete the folder above.

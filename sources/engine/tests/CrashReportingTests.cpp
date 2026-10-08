@@ -3,7 +3,9 @@
 // Upload is checked against a loopback HTTP server owned by this test.
 
 #include "engine/core/JsonValue.hpp"
+#include "engine/platform/CrashReportConsent.hpp"
 #include "engine/platform/CrashReporting.hpp"
+#include "engine/platform/UserStorage.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/script/ScriptFunctionRegistry.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
@@ -919,6 +921,32 @@ void RunSettingsScriptSurfaceTest() {
         "a script could not delete the stored reports");
     const kb::script::ScriptFunctionCallResult notice = call("Settings.CrashReportPrivacyNotice", {});
     Require(notice.Succeeded() && notice.Output("text").has_value(), "the privacy notice is not readable from a script");
+
+    // A game with user storage keeps the answer with the player's settings, where its consent prompt reads it.
+    const std::filesystem::path storageRoot = kRoot / "settings-storage";
+    std::filesystem::remove_all(storageRoot);
+    kb::script::ScriptRuntimeHost storageHost{ scene, kb::script::ScriptRuntimeHostOptions{ .userStorageRoot = storageRoot } };
+    Require(storageHost.Succeeded(), "script host with user storage did not initialize");
+    const auto storageCall = [&](std::string_view name, std::vector<kb::script::ScriptFunctionArgument> arguments) {
+        return storageHost.Functions().Call(name, arguments, context);
+    };
+    kb::platform::UserStorage storage{ storageRoot, 1U << 20U };
+    Require(storageCall("Settings.SetCrashReportUploadConsent", { consentArgument(true) }).Output("set")->AsBool() &&
+            kb::platform::ReadCrashUploadConsentChoice(storage) == kb::platform::CrashUploadConsentChoice::Granted &&
+            kb::platform::HasCrashUploadConsent(directory) &&
+            storageCall("Settings.CrashReportUploadConsent", {}).Output("consent")->AsBool(),
+        "a script's yes was not kept in the game's user storage");
+    Require(kb::platform::WriteCrashUploadConsentChoice(storage, false) &&
+            !storageCall("Settings.CrashReportUploadConsent", {}).Output("consent")->AsBool(),
+        "consent read as given although the player's stored answer is no");
+    Require(storageCall("Settings.SetCrashReportUploadConsent", { consentArgument(false) }).Output("set")->AsBool() &&
+            kb::platform::ReadCrashUploadConsentChoice(storage) == kb::platform::CrashUploadConsentChoice::Declined &&
+            !kb::platform::HasCrashUploadConsent(directory),
+        "a script's no was not kept in the game's user storage");
+    Require(!kb::platform::CrashReporter::StartPendingUpload(),
+        "pending reports were sent although the player said no and no endpoint is configured");
+    Require(kb::platform::ConfiguredCrashUploadEndpoint().empty(),
+        "the test executable must not name a crash upload endpoint");
 }
 
 void RunDefaultDirectoryTest() {

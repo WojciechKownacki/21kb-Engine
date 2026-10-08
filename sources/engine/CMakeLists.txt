@@ -68,6 +68,7 @@ add_library(kb_engine STATIC
     include/engine/platform/PlatformCapabilities.hpp
     include/engine/platform/PlatformServices.hpp
     include/engine/platform/UserStorage.hpp
+    include/engine/platform/CrashReportConsent.hpp
     include/engine/platform/SettingsTransaction.hpp
     include/engine/platform/PlatformAdapters.hpp
     include/engine/platform/PlatformLocale.hpp
@@ -296,6 +297,7 @@ add_library(kb_engine STATIC
     include/engine/ui/visual/UIText.hpp
     include/engine/ui/visual/UITextLineBreaking.hpp
     include/engine/scene/SceneLocalization.hpp
+    include/engine/scene/SceneCrashReportConsent.hpp
     include/engine/localization/LocalizationCatalog.hpp
     include/engine/localization/LocalizationCatalogIO.hpp
     include/engine/localization/LocalizationCatalogAssetLoader.hpp
@@ -665,6 +667,7 @@ add_library(kb_engine STATIC
     src/network/NetworkObject.cpp
     src/platform/FileSystemPath.cpp
     src/platform/UserStorage.cpp
+    src/platform/CrashReportConsent.cpp
     src/security/Crypto.cpp
     src/security/ReleaseKeys.cpp
     src/security/ReleaseManifest.cpp
@@ -715,6 +718,7 @@ add_library(kb_engine STATIC
     src/scene/SceneTimelineService.cpp
     src/scene/SceneAnimatorService.cpp
     src/scene/SceneLocalizationService.cpp
+    src/scene/SceneCrashReportConsent.cpp
     src/scene/modules/SceneLocalization.cpp
     src/localization/LocalizationCatalogIO.cpp
     src/localization/LocalizationCatalogAssetLoader.cpp
@@ -1734,6 +1738,7 @@ if(BUILD_TESTING)
         tests/SceneHierarchyTests.cpp
         tests/SceneUITests.cpp
         tests/UITextLineBreakingTests.cpp
+        tests/CrashReportConsentTests.cpp
         tests/ScenePrefabCaptureTests.cpp
         tests/ScenePrefabInstantiationTests.cpp
         tests/ScenePrefabTestSuites.hpp
