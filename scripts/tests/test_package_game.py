@@ -1240,7 +1240,7 @@ class PackageGameTests(unittest.TestCase):
             stage.mkdir()
             package_game._stage_crash_report_notice(engine_root, stage)
             notice = (stage / "CRASH_REPORTS.txt").read_text(encoding="utf-8")
-            self.assertIn("off until you turn it on", notice)
+            self.assertIn("off until you answer yes", notice)
             self.assertEqual((engine_root / "platform" / "windows" / "CRASH_REPORTS.txt").read_bytes(),
                              (stage / "CRASH_REPORTS.txt").read_bytes())
             with self.assertRaisesRegex(PackagingError, "privacy notice is missing"):
