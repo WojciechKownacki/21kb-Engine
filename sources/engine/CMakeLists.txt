@@ -1735,12 +1735,14 @@ if(BUILD_TESTING)
     add_test(NAME kb_engine_tests COMMAND $<TARGET_FILE:kb_engine_tests>)
     set_tests_properties(kb_engine_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
-    # Machine-independent performance gates: each compares two measurements taken in the same run.
+    # Machine-independent performance gates: each compares two measurements taken in the same run. They
+    # run alone, as other tests competing for the CPU in between would skew one measurement and not the other.
     foreach(kb_perf_suite physics-step-spikes scene-transform-bench agents-frame)
         add_test(NAME kb_engine_${kb_perf_suite} COMMAND $<TARGET_FILE:kb_engine_tests> ${kb_perf_suite})
         set_tests_properties(kb_engine_${kb_perf_suite} PROPERTIES
             WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
             LABELS "performance"
+            RUN_SERIAL TRUE
             TIMEOUT 300
         )
     endforeach()
