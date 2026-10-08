@@ -205,6 +205,10 @@ cmake --build --preset dev --target kb_editor
 
 Requires Visual Studio 2022 and CMake. The editor is written to `build/bin/Debug/kb_editor.exe`.
 
+## Security
+
+Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md), not in public issues.
+
 ## License
 
 21kb Engine is released under the [MIT License](LICENSE). Third party components keep
