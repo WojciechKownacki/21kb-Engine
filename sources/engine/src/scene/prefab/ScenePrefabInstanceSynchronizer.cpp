@@ -350,6 +350,16 @@ std::size_t ScenePrefabInstanceSynchronizer::Refresh(Scene& scene, ScenePrefabHa
     return RefreshRecursive(scene, state.prefabs, state.prefabInstances, handle);
 }
 
+bool ScenePrefabInstanceSynchronizer::Rebase(Scene& scene, ScenePrefabInstanceRecord& instance, std::span<const ScenePrefabPropertyOverride> overrides) {
+    const ScenePrefab* baseline = instance.ResolvedPrefab();
+    if (baseline == nullptr || !RebuildTrackedObjects(scene, instance, *baseline, *baseline)) {
+        return false;
+    }
+    ScenePrefabOverrideReport stored;
+    stored.properties.assign(overrides.begin(), overrides.end());
+    return ApplyStoredProperties(scene, instance, *baseline, stored);
+}
+
 bool ScenePrefabInstanceSynchronizer::RefreshInstance(Scene& scene, ScenePrefabRegistry& registry, ScenePrefabInstanceRecord& instance) {
     const ScenePrefabRecord* record = registry.FindRecord(instance.prefab);
     if (record == nullptr) {

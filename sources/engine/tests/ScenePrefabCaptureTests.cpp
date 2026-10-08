@@ -14,6 +14,7 @@
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 
+#include <algorithm>
 #include <array>
 #include <filesystem>
 #include <string>
@@ -541,6 +542,58 @@ void RunPrefabInstanceNodeIdentitySurvivesReopenTest() {
     std::filesystem::remove_all(projectRoot, removeError);
 }
 
+// A scene keeps the prefab content of the day it was saved. Reopened after the prefab changed, its
+// instance shows the prefab as it is now plus only its own overrides, so Apply cannot undo the change.
+void RunReopenedInstanceFollowsChangedPrefabTest() {
+    const std::filesystem::path projectRoot = std::filesystem::temp_directory_path() / "21kb_engine_prefab_rebase_project";
+    std::error_code removeError;
+    std::filesystem::remove_all(projectRoot, removeError);
+    std::filesystem::create_directories(projectRoot / "Assets");
+    const std::filesystem::path prefabPath = projectRoot / "Assets" / "Crate.kbprefab";
+    const std::filesystem::path scenePath = projectRoot / "Assets" / "Rebase.21kbscene";
+    {
+        kb::scene::Scene scene;
+        kb::tests::Require(scene.Assets().MountProject(projectRoot), "Rebase project mount failed");
+        const kb::scene::SceneObject crate = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Crate" });
+        static_cast<void>(scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lid", .parent = crate }));
+        kb::tests::Require(scene.Prefabs().CreateAsset(crate, "Crate", prefabPath).IsValid(), "Rebase prefab was not created");
+        kb::scene::TransformComponent transform = scene.Transforms().Get(crate);
+        transform.localPosition.z = 5.0F;
+        scene.Transforms().Set(crate, transform);
+        kb::tests::Require(kb::scene::SceneDocumentService::Save(scene, scenePath, "Rebase"), "Rebase scene was not saved");
+    }
+    {
+        kb::scene::Scene editor;
+        const kb::scene::ScenePrefabInstance edited = editor.Prefabs().Instantiate(editor.Prefabs().Load(prefabPath));
+        kb::scene::TransformComponent lid = editor.Transforms().Get(edited.ObjectAt(1U));
+        lid.localPosition.x = 4.0F;
+        editor.Transforms().Set(edited.ObjectAt(1U), lid);
+        static_cast<void>(editor.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Handle", .parent = edited.RootObject() }));
+        kb::tests::Require(editor.Prefabs().ApplyOverrides(edited.Handle(), prefabPath), "Rebase setup could not change the prefab");
+    }
+    kb::scene::Scene reopened;
+    kb::tests::Require(reopened.Assets().MountProject(projectRoot), "Rebase reopen project mount failed");
+    static_cast<void>(reopened.Assets().Discover());
+    kb::tests::Require(kb::scene::SceneDocumentService::LoadFileIntoScene(reopened, scenePath), "Rebase scene did not reopen");
+    const kb::scene::SceneObject crate = reopened.Hierarchy().RootObjects().front();
+    const kb::scene::ScenePrefabInstanceHandle instance = reopened.Prefabs().RootInstance(crate);
+    std::vector<std::string> names;
+    float lidX = 0.0F;
+    for (const kb::scene::SceneObject child : reopened.Hierarchy().Children(crate)) {
+        names.push_back(reopened.Entities().Name(child));
+        if (names.back() == "Lid") {
+            lidX = reopened.Transforms().Get(child).localPosition.x;
+        }
+    }
+    kb::tests::Require(instance.IsValid() && lidX == 4.0F, "Reopened instance did not take the prefab's changed value");
+    kb::tests::Require(std::ranges::count(names, std::string{ "Handle" }) == 1, "Reopened instance did not get the node the prefab gained");
+    kb::tests::Require(reopened.Transforms().Get(crate).localPosition.z == 5.0F, "Reopened instance lost its own override");
+    const kb::scene::ScenePrefabOverrideReport overrides = reopened.Prefabs().Overrides(instance);
+    kb::tests::Require(overrides.properties.size() == 1U && overrides.properties.front().nodeIndex == 0U,
+        "Reopened instance reports the prefab's own change as an override");
+    std::filesystem::remove_all(projectRoot, removeError);
+}
+
 // A scene file keeps an instance only as the prefab guid on its root node. Reopening the file in a
 // fresh scene, and reloading the captured document in place (how Play mode stops), must link the
 // instance, its node mapping and its overrides again.
@@ -943,6 +996,7 @@ void RunScenePrefabCaptureTests() {
     run("RunPrefabReloadOfChangedFileKeepsGuidTest", RunPrefabReloadOfChangedFileKeepsGuidTest);
     run("RunPrefabInstanceLinkSurvivesSceneReopenTest", RunPrefabInstanceLinkSurvivesSceneReopenTest);
     run("RunPrefabInstanceNodeIdentitySurvivesReopenTest", RunPrefabInstanceNodeIdentitySurvivesReopenTest);
+    run("RunReopenedInstanceFollowsChangedPrefabTest", RunReopenedInstanceFollowsChangedPrefabTest);
     run("RunRuntimeSpawnDoesNotLinkPrefabInstancesTest", RunRuntimeSpawnDoesNotLinkPrefabInstancesTest);
     run("RunDestroyedInstanceChildSlotReuseTest", RunDestroyedInstanceChildSlotReuseTest);
     run("RunPrefabVariantAssetRoundTripTest", RunPrefabVariantAssetRoundTripTest);

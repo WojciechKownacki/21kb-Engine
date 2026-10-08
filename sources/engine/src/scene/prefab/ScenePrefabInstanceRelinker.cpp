@@ -7,6 +7,8 @@
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/assets/ScenePrefabGuidAssetIndex.hpp"
+#include "scene/prefab/ScenePrefabHasher.hpp"
+#include "scene/prefab/ScenePrefabInstanceSynchronizer.hpp"
 #include "scene/prefab/ScenePrefabNestedResolver.hpp"
 #include "scene/prefab/ScenePrefabRecord.hpp"
 #include "scene/prefab/io/ScenePrefabAssetService.hpp"
@@ -30,6 +32,7 @@ struct SharedResolvedPrefab {
     std::shared_ptr<const std::string> guid;
     std::shared_ptr<const ScenePrefab> resolved;
     std::shared_ptr<const std::vector<std::uint64_t>> nodeIds;
+    std::uint64_t contentHash = 0U;
     // (stable id, node index), sorted by id.
     std::vector<std::pair<std::uint64_t, std::uint32_t>> nodeIndexById;
 };
@@ -74,11 +77,13 @@ struct SharedResolvedPrefab {
         nodeIds->push_back(node.stableId);
     }
     std::ranges::sort(nodeIndexById);
+    const std::uint64_t contentHash = ScenePrefabHasher::Hash(*resolved);
     resolvedPrefabs.push_back(SharedResolvedPrefab{
         .prefab = handle,
         .guid = std::make_shared<const std::string>(record->guid),
         .resolved = std::move(resolved),
         .nodeIds = std::move(nodeIds),
+        .contentHash = contentHash,
         .nodeIndexById = std::move(nodeIndexById),
     });
     return &resolvedPrefabs.back();
@@ -216,6 +221,13 @@ void ScenePrefabInstanceRelinker::Relink(Scene& scene, const ScenePrefab& prefab
         if (ScenePrefabInstanceRecord* record = state.prefabInstances.FindMutable(linked)) {
             record->sharedPrefabGuid = shared->guid;
             record->SetSharedResolvedPrefab(shared->resolved, shared->nodeIds);
+            // A capture taken against an older version of the prefab follows the prefab as it is now.
+            if (overlay.nestedPrefabContentHash != shared->contentHash) {
+                const std::span<const SceneObject> captured = record->Objects();
+                const std::vector<SceneObject> capturedObjects{ captured.begin(), captured.end() };
+                static_cast<void>(ScenePrefabInstanceSynchronizer::Rebase(scene, *record, overlay.nestedPrefabOverrides));
+                state.prefabInstances.ReindexObjects(linked, capturedObjects);
+            }
         }
     }
 }

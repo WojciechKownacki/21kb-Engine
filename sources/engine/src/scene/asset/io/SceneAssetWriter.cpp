@@ -59,6 +59,7 @@ void WriteNode(std::vector<std::uint8_t>& output, const ScenePrefabNodeDesc& nod
     for (const std::uint64_t nodeId : node.nestedPrefabNodeIds) {
         WriteUInt64(output, nodeId);
     }
+    WriteUInt64(output, node.nestedPrefabContentHash);
     WriteUInt32(output, node.parentNode);
     SceneAssetPrimitiveCodec::WriteVec3(output, node.transform.localPosition);
     SceneAssetPrimitiveCodec::WriteQuat(output, node.transform.localRotation);

@@ -141,6 +141,9 @@ struct ScenePrefabNodeDesc {
     // On a node naming a nested prefab: for each node of its subtree, in node order, the stable id of
     // the nested prefab node it stands for, or InvalidStableId for an object added to that instance.
     std::vector<std::uint64_t> nestedPrefabNodeIds;
+    // On a node naming a nested prefab: the content hash of the prefab the overrides were recorded
+    // against, so instantiating it again only rebuilds the objects when that prefab has changed since.
+    std::uint64_t nestedPrefabContentHash = 0U;
     std::uint32_t parentNode = NoParent;
     TransformComponent transform{};
     VisibilityComponent visibility{};
