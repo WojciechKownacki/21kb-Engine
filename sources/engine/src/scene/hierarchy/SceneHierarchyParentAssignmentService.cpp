@@ -1,6 +1,7 @@
 #include "scene/hierarchy/SceneHierarchyParentAssignmentService.hpp"
 
 #include "scene/SceneAccess.hpp"
+#include "scene/SceneHistoryService.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/SceneRenderProxyComponentMask.hpp"
 #include "scene/SceneTransformService.hpp"
@@ -26,6 +27,7 @@ bool SceneHierarchyParentAssignmentService::SetParent(Scene& scene, SceneObject 
 }
 
 bool SceneHierarchyParentAssignmentService::SetParent(Scene& scene, SceneEntity child, SceneEntity parent) noexcept {
+    SceneHistoryService::NoteObjectMoving(scene, child, parent);
     SceneState& state = SceneAccess::State(scene);
     const SceneEntity oldParent = SceneHierarchyCache::Parent(state, child);
     const bool backendChildAlive = ecs_is_alive(state.world.NativeHandle(), kb::ecs::FlecsEntityId(child));

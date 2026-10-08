@@ -1,6 +1,7 @@
 #include "scene/SceneEntityService.hpp"
 
 #include "scene/SceneAccess.hpp"
+#include "scene/SceneHistoryService.hpp"
 #include "scene/SceneState.hpp"
 
 namespace kb::scene {
@@ -35,6 +36,7 @@ void SceneEntityService::SetActive(Scene& scene, SceneEntity entity, bool active
     if (!IsAlive(scene, entity)) {
         return;
     }
+    SceneHistoryService::NoteObjectChanging(scene, entity);
     SceneState& state = SceneAccess::State(scene);
     if (active) {
         state.inactiveEntities.erase(entity.Id());
@@ -61,6 +63,7 @@ void SceneEntityService::SetPersistent(Scene& scene, SceneEntity entity, bool pe
     if (!IsAlive(scene, entity)) {
         return;
     }
+    SceneHistoryService::NoteObjectChanging(scene, entity);
     SceneState& state = SceneAccess::State(scene);
     if (persistent) {
         state.persistentEntities.insert(entity.Id());

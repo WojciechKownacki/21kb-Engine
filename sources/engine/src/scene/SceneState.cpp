@@ -25,6 +25,8 @@ SceneState::~SceneState() {
         ecs_query_fini(physicsBodyIterationQuery);
         physicsBodyIterationQuery = nullptr;
     }
+    // The open history command is destroyed before the instance registry that reports to it.
+    prefabInstances.SetJournal(nullptr);
 }
 
 SceneComponentIterationQueries& SceneState::ComponentIterationQueries() const {

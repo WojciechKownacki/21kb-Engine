@@ -4,6 +4,7 @@
 #include "engine/ui/UIComponentValidation.hpp"
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneEntityService.hpp"
+#include "scene/SceneHistoryService.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/prefab/ScenePrefabDirtyTracker.hpp"
 
@@ -117,10 +118,12 @@ const void* SceneUIComponents::TryGetRaw(SceneEntity entity, UIComponentType typ
 }
 
 void* SceneUIComponents::TryGetMutableRaw(SceneEntity entity, UIComponentType type) noexcept {
+    SceneHistoryService::NoteObjectChanging(scene_, entity);
     return TryGetByType(scene_, entity, type);
 }
 
 void SceneUIComponents::SetRaw(SceneEntity entity, UIComponentType type, const void* component, std::size_t size) {
+    SceneHistoryService::NoteObjectChanging(scene_, entity);
     switch (type) {
 #define KB_UI_SET_CASE(Value, Component) case UIComponentType::Value: SetComponent<Component>(scene_, entity, component, size); return;
         KB_UI_COMPONENTS(KB_UI_SET_CASE)
@@ -129,6 +132,7 @@ void SceneUIComponents::SetRaw(SceneEntity entity, UIComponentType type, const v
 }
 
 void SceneUIComponents::RemoveRaw(SceneEntity entity, UIComponentType type) noexcept {
+    SceneHistoryService::NoteObjectChanging(scene_, entity);
     switch (type) {
 #define KB_UI_REMOVE_CASE(Value, Component) case UIComponentType::Value: RemoveComponent<Component>(scene_, entity); return;
         KB_UI_COMPONENTS(KB_UI_REMOVE_CASE)

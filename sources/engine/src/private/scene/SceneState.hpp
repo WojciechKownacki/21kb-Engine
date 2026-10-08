@@ -302,6 +302,8 @@ public:
     SceneHistoryStack undoHistory;
     SceneHistoryStack redoHistory;
     std::vector<SceneEntityRemap> recreatedEntities;
+    // The command Record opened, until it is committed; null while no command records.
+    std::unique_ptr<SceneHistoryRecording> historyRecording;
     kb::ecs::SystemScheduler systemScheduler;
     SceneSystemScheduler sceneSystemScheduler;
     SceneRuntimeFixedStepSettings fixedStepSettings;

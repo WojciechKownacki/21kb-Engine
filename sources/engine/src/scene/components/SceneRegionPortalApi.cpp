@@ -7,6 +7,7 @@
 #include "scene/SceneComponentMutationService.hpp"
 #include "scene/SceneComponentQueryService.hpp"
 #include "scene/SceneEntityService.hpp"
+#include "scene/SceneHistoryService.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/prefab/ScenePrefabDirtyTracker.hpp"
 
@@ -14,9 +15,9 @@ namespace kb::scene {
 
 bool SceneComponentQueryService::HasRegionPortal(const Scene& scene, SceneEntity entity) noexcept { return SceneEntityService::IsAlive(scene, entity) && SceneAccess::State(scene).componentStorage.RegionPortals().Has(entity); }
 const SceneRegionPortalComponent* SceneComponentQueryService::TryGetRegionPortal(const Scene& scene, SceneEntity entity) noexcept { return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.RegionPortals().TryGet(entity) : nullptr; }
-SceneRegionPortalComponent* SceneComponentMutationService::TryGetRegionPortal(Scene& scene, SceneEntity entity) noexcept { return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.RegionPortals().TryGet(entity) : nullptr; }
-void SceneComponentMutationService::SetRegionPortal(Scene& scene, SceneEntity entity, const SceneRegionPortalComponent& component) { if (SceneEntityService::IsAlive(scene, entity)) { SceneState& state = SceneAccess::State(scene); state.componentStorage.RegionPortals().Set(entity, component); MarkScenePrefabNodeDirty(state, entity); } }
-void SceneComponentMutationService::RemoveRegionPortal(Scene& scene, SceneEntity entity) noexcept { if (SceneEntityService::IsAlive(scene, entity)) { SceneState& state = SceneAccess::State(scene); state.componentStorage.RegionPortals().Remove(entity); MarkScenePrefabNodeDirty(state, entity); } }
+SceneRegionPortalComponent* SceneComponentMutationService::TryGetRegionPortal(Scene& scene, SceneEntity entity) noexcept { SceneHistoryService::NoteObjectChanging(scene, entity); return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.RegionPortals().TryGet(entity) : nullptr; }
+void SceneComponentMutationService::SetRegionPortal(Scene& scene, SceneEntity entity, const SceneRegionPortalComponent& component) { SceneHistoryService::NoteObjectChanging(scene, entity); if (SceneEntityService::IsAlive(scene, entity)) { SceneState& state = SceneAccess::State(scene); state.componentStorage.RegionPortals().Set(entity, component); MarkScenePrefabNodeDirty(state, entity); } }
+void SceneComponentMutationService::RemoveRegionPortal(Scene& scene, SceneEntity entity) noexcept { SceneHistoryService::NoteObjectChanging(scene, entity); if (SceneEntityService::IsAlive(scene, entity)) { SceneState& state = SceneAccess::State(scene); state.componentStorage.RegionPortals().Remove(entity); MarkScenePrefabNodeDirty(state, entity); } }
 void SceneComponentMutationService::MarkRegionPortalModified(Scene& scene, SceneEntity entity) noexcept { if (SceneEntityService::IsAlive(scene, entity)) { SceneState& state = SceneAccess::State(scene); state.componentStorage.RegionPortals().MarkModified(entity); MarkScenePrefabNodeDirty(state, entity); } }
 
 SceneRegionPortalComponentQueries::SceneRegionPortalComponentQueries(const Scene& scene) noexcept : scene_(scene) {}

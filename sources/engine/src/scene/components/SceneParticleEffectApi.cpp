@@ -4,6 +4,7 @@
 #include "scene/SceneComponentMutationService.hpp"
 #include "scene/SceneComponentQueryService.hpp"
 #include "scene/SceneEntityService.hpp"
+#include "scene/SceneHistoryService.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/prefab/ScenePrefabDirtyTracker.hpp"
 
@@ -20,12 +21,14 @@ const ParticleEffectComponent* SceneComponentQueryService::TryGetParticleEffect(
                : nullptr;
 }
 ParticleEffectComponent* SceneComponentMutationService::TryGetParticleEffect(Scene& scene, SceneEntity entity) noexcept {
+    SceneHistoryService::NoteObjectChanging(scene, entity);
     return SceneEntityService::IsAlive(scene, entity)
                ? SceneAccess::State(scene).componentStorage.ParticleEffects().TryGet(entity)
                : nullptr;
 }
 void SceneComponentMutationService::SetParticleEffect(Scene& scene, SceneEntity entity,
                                                       const ParticleEffectComponent& component) {
+    SceneHistoryService::NoteObjectChanging(scene, entity);
     if (SceneEntityService::IsAlive(scene, entity) && IsParticleEffectComponentPersistable(component)) {
         SceneState& state = SceneAccess::State(scene);
         state.componentStorage.ParticleEffects().Set(entity, component);
@@ -33,6 +36,7 @@ void SceneComponentMutationService::SetParticleEffect(Scene& scene, SceneEntity 
     }
 }
 void SceneComponentMutationService::RemoveParticleEffect(Scene& scene, SceneEntity entity) noexcept {
+    SceneHistoryService::NoteObjectChanging(scene, entity);
     if (SceneEntityService::IsAlive(scene, entity)) {
         SceneState& state = SceneAccess::State(scene);
         state.componentStorage.ParticleEffects().Remove(entity);

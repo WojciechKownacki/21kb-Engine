@@ -6,6 +6,7 @@
 #include "scene/SceneComponentMutationService.hpp"
 #include "scene/SceneComponentQueryService.hpp"
 #include "scene/SceneEntityService.hpp"
+#include "scene/SceneHistoryService.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/prefab/ScenePrefabDirtyTracker.hpp"
 
@@ -13,9 +14,9 @@ namespace kb::scene {
 
 bool SceneComponentQueryService::HasLensEcho(const Scene& scene, SceneEntity entity) noexcept { return SceneEntityService::IsAlive(scene, entity) && SceneAccess::State(scene).componentStorage.LensEchoes().Has(entity); }
 const LensEchoComponent* SceneComponentQueryService::TryGetLensEcho(const Scene& scene, SceneEntity entity) noexcept { return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.LensEchoes().TryGet(entity) : nullptr; }
-LensEchoComponent* SceneComponentMutationService::TryGetLensEcho(Scene& scene, SceneEntity entity) noexcept { return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.LensEchoes().TryGet(entity) : nullptr; }
-void SceneComponentMutationService::SetLensEcho(Scene& scene, SceneEntity entity, const LensEchoComponent& component) { if (SceneEntityService::IsAlive(scene, entity)) { SceneState& state = SceneAccess::State(scene); state.componentStorage.LensEchoes().Set(entity, component); MarkScenePrefabNodeDirty(state, entity); } }
-void SceneComponentMutationService::RemoveLensEcho(Scene& scene, SceneEntity entity) noexcept { if (SceneEntityService::IsAlive(scene, entity)) { SceneState& state = SceneAccess::State(scene); state.componentStorage.LensEchoes().Remove(entity); MarkScenePrefabNodeDirty(state, entity); } }
+LensEchoComponent* SceneComponentMutationService::TryGetLensEcho(Scene& scene, SceneEntity entity) noexcept { SceneHistoryService::NoteObjectChanging(scene, entity); return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.LensEchoes().TryGet(entity) : nullptr; }
+void SceneComponentMutationService::SetLensEcho(Scene& scene, SceneEntity entity, const LensEchoComponent& component) { SceneHistoryService::NoteObjectChanging(scene, entity); if (SceneEntityService::IsAlive(scene, entity)) { SceneState& state = SceneAccess::State(scene); state.componentStorage.LensEchoes().Set(entity, component); MarkScenePrefabNodeDirty(state, entity); } }
+void SceneComponentMutationService::RemoveLensEcho(Scene& scene, SceneEntity entity) noexcept { SceneHistoryService::NoteObjectChanging(scene, entity); if (SceneEntityService::IsAlive(scene, entity)) { SceneState& state = SceneAccess::State(scene); state.componentStorage.LensEchoes().Remove(entity); MarkScenePrefabNodeDirty(state, entity); } }
 void SceneComponentMutationService::MarkLensEchoModified(Scene& scene, SceneEntity entity) noexcept { if (SceneEntityService::IsAlive(scene, entity)) { SceneState& state = SceneAccess::State(scene); state.componentStorage.LensEchoes().MarkModified(entity); MarkScenePrefabNodeDirty(state, entity); } }
 
 SceneLensEchoComponentQueries::SceneLensEchoComponentQueries(const Scene& scene) noexcept : scene_(scene) {}

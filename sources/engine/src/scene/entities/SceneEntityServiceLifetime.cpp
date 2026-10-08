@@ -1,6 +1,7 @@
 #include "scene/SceneEntityService.hpp"
 
 #include "scene/SceneAccess.hpp"
+#include "scene/SceneHistoryService.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/entities/SceneEntityDestructionService.hpp"
 
@@ -53,6 +54,7 @@ std::span<const BehaviourVariableOverride> SceneEntityService::BehaviourVariable
 }
 
 void SceneEntityService::SetBehaviourVariableOverride(Scene& scene, SceneEntity entity, std::string name, kb::script::ScriptValue value) {
+    SceneHistoryService::NoteObjectChanging(scene, entity);
     if (!entity.IsValid() || name.empty()) {
         return;
     }
@@ -67,6 +69,7 @@ void SceneEntityService::SetBehaviourVariableOverride(Scene& scene, SceneEntity 
 }
 
 bool SceneEntityService::RemoveBehaviourVariableOverride(Scene& scene, SceneEntity entity, std::string_view name) noexcept {
+    SceneHistoryService::NoteObjectChanging(scene, entity);
     std::unordered_map<SceneEntity::IdType, std::vector<BehaviourVariableOverride>>& table =
         SceneAccess::State(scene).behaviourVariableOverrides;
     const auto iter = table.find(entity.Id());
@@ -88,6 +91,7 @@ bool SceneEntityService::RemoveBehaviourVariableOverride(Scene& scene, SceneEnti
 }
 
 void SceneEntityService::ReplaceBehaviourVariableOverrides(Scene& scene, SceneEntity entity, std::vector<BehaviourVariableOverride> overrides) {
+    SceneHistoryService::NoteObjectChanging(scene, entity);
     if (!entity.IsValid()) {
         return;
     }

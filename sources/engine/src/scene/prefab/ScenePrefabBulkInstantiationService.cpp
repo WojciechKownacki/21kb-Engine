@@ -6,6 +6,7 @@
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneUIComponentSet.hpp"
 #include "scene/SceneAccess.hpp"
+#include "scene/SceneHistoryService.hpp"
 #include "scene/SceneRenderProxyComponentMask.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/entities/SceneEntityNaming.hpp"
@@ -1019,6 +1020,7 @@ void ResolvePrefabReferences(Scene& scene, std::span<const ScenePrefabNodeDesc> 
         const auto createStart = PrefabStatsClock::now();
         const std::vector<SceneEntity> entities = CreateBakedEntitiesDirect(state.world, *baked, count, spawnPayloads, nativeOnlyBatch, createBreakdown);
         const std::uint64_t entityCreateNanoseconds = ElapsedNanoseconds(createStart, PrefabStatsClock::now());
+        SceneHistoryService::NoteObjectsCreated(scene, entities);
         ResolvePrefabReferences(scene, nodes, std::span<const SceneEntity>{ entities }, count);
 
         const kb::ecs::NativeEcsStorageStats afterStorage = state.world.NativeStorageStats();
@@ -1083,6 +1085,7 @@ void ResolvePrefabReferences(Scene& scene, std::span<const ScenePrefabNodeDesc> 
     for (std::size_t index = 0U; index < entities.size(); ++index) {
         resolvedEntities[index] = playback.Resolve(entities[index]);
     }
+    SceneHistoryService::NoteObjectsCreated(scene, resolvedEntities);
     ResolvePrefabReferences(scene, nodes, std::span<const SceneEntity>{ resolvedEntities }, count);
 
     std::uint64_t instanceObjectSlabNanoseconds = 0;

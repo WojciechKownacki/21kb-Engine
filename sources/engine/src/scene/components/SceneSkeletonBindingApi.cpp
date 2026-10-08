@@ -2,6 +2,7 @@
 #include "scene/SceneComponentMutationService.hpp"
 #include "scene/SceneComponentQueryService.hpp"
 #include "scene/SceneEntityService.hpp"
+#include "scene/SceneHistoryService.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/prefab/ScenePrefabDirtyTracker.hpp"
 
@@ -14,9 +15,11 @@ const SkeletonBindingComponent* SceneComponentQueryService::TryGetSkeletonBindin
     return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.SkeletonBindings().TryGet(entity) : nullptr;
 }
 SkeletonBindingComponent* SceneComponentMutationService::TryGetSkeletonBinding(Scene& scene, SceneEntity entity) noexcept {
+    SceneHistoryService::NoteObjectChanging(scene, entity);
     return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.SkeletonBindings().TryGet(entity) : nullptr;
 }
 bool SceneComponentMutationService::SetSkeletonBinding(Scene& scene, SceneEntity entity, const SkeletonBindingComponent& binding) {
+    SceneHistoryService::NoteObjectChanging(scene, entity);
     if (!SceneEntityService::IsAlive(scene, entity) || !IsSkeletonBindingComponentPersistable(binding)) return false;
     SceneState& state = SceneAccess::State(scene);
     state.componentStorage.SkeletonBindings().Set(entity, binding);
@@ -24,6 +27,7 @@ bool SceneComponentMutationService::SetSkeletonBinding(Scene& scene, SceneEntity
     return true;
 }
 void SceneComponentMutationService::RemoveSkeletonBinding(Scene& scene, SceneEntity entity) noexcept {
+    SceneHistoryService::NoteObjectChanging(scene, entity);
     if (!SceneEntityService::IsAlive(scene, entity)) return;
     SceneState& state = SceneAccess::State(scene);
     state.componentStorage.SkeletonBindings().Remove(entity);

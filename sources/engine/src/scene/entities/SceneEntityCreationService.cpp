@@ -1,6 +1,7 @@
 #include "scene/entities/SceneEntityCreationService.hpp"
 
 #include "scene/SceneAccess.hpp"
+#include "scene/SceneHistoryService.hpp"
 #include "scene/components/SceneTransformComponentStore.hpp"
 #include "scene/SceneHierarchyService.hpp"
 #include "scene/SceneState.hpp"
@@ -80,6 +81,7 @@ SceneEntity SceneEntityCreationService::CreateEntity(Scene& scene, SceneObjectDe
         kb::ecs::World::MakeBulkComponentView(std::span<const VisibilityComponent>{ &visibility, 1U }),
     };
     const SceneEntity entity = state.world.CreateEntity(components);
+    SceneHistoryService::NoteObjectsCreated(scene, std::span<const SceneEntity>{ &entity, 1U });
     try {
         RegisterCreatedEntities(scene, state, { &entity, 1U }, { &desc, 1U }, { &visibility, 1U });
     } catch (...) {
@@ -105,6 +107,7 @@ std::vector<SceneObject> SceneEntityCreationService::CreateObjects(Scene& scene,
     };
     views.insert(views.end(), components.begin(), components.end());
     const std::vector<SceneEntity> entities = state.world.CreateEntities(descs.size(), views);
+    SceneHistoryService::NoteObjectsCreated(scene, entities);
     try {
         RegisterCreatedEntities(scene, state, entities, descs, visibilities);
     } catch (...) {

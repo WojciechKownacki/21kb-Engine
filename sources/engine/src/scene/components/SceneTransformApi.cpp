@@ -1,5 +1,6 @@
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneEntityService.hpp"
+#include "scene/SceneHistoryService.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/SceneTransformService.hpp"
 #include "scene/hierarchy/SceneHierarchyCache.hpp"
@@ -90,6 +91,7 @@ const TransformComponent* SceneTransformService::TryGet(const Scene& scene, Scen
 }
 
 TransformComponent* SceneTransformService::TryGet(Scene& scene, SceneEntity entity) noexcept {
+    SceneHistoryService::NoteObjectChanging(scene, entity);
     return SceneAccess::State(scene).componentStorage.Transforms().TryGet(entity);
 }
 
@@ -100,6 +102,7 @@ void SceneTransformService::Set(Scene& scene, SceneObject object, const Transfor
 }
 
 void SceneTransformService::Set(Scene& scene, SceneEntity entity, const TransformComponent& transform) {
+    SceneHistoryService::NoteObjectChanging(scene, entity);
     SceneState& state = SceneAccess::State(scene);
     if (WriteTransform(state, entity, transform)) {
         // a row with parent or children is composed by the sync from the frontier
@@ -113,6 +116,9 @@ void SceneTransformService::Set(Scene& scene, SceneEntity entity, const Transfor
 void SceneTransformService::SetMany(Scene& scene, std::span<const SceneEntity> entities, std::span<const TransformComponent> transforms) {
     if (entities.size() != transforms.size()) {
         throw std::invalid_argument("Scene transform batch write requires one transform per entity");
+    }
+    for (const SceneEntity entity : entities) {
+        SceneHistoryService::NoteObjectChanging(scene, entity);
     }
     SceneState& state = SceneAccess::State(scene);
     const bool trackPrefab = !state.suppressPrefabDirtyTracking && state.prefabInstances.Count() > 0U;
