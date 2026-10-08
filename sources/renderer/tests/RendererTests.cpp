@@ -1,9 +1,33 @@
+#include "RendererTestSupport.hpp"
+
 #include <cstdlib>
 #include <cstdio>
 #include <exception>
 #include <string_view>
 
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <Windows.h>
+#include <psapi.h>
+#endif
+
 namespace kb::render::tests {
+
+std::size_t PeakCommittedBytes() noexcept {
+#if defined(_WIN32)
+    PROCESS_MEMORY_COUNTERS counters{};
+    counters.cb = sizeof(counters);
+    return GetProcessMemoryInfo(GetCurrentProcess(), &counters, sizeof(counters)) != FALSE ? counters.PeakPagefileUsage : 0U;
+#else
+    return 0U;
+#endif
+}
+
 void RunGraphForwardGpuRenderTests();
 void RunSceneLightGridTests();
 void RunSceneLightGridGpuTests();

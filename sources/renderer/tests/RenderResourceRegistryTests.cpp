@@ -1007,6 +1007,20 @@ void AppendFbxFixtureNode(std::vector<std::byte>& output, const FbxFixtureNode& 
     output[nodeOffset + 12U] = static_cast<std::byte>(node.name.size());
 }
 
+[[nodiscard]] std::vector<std::byte> MakeFbxFixture(const FbxFixtureNode& root) {
+    std::vector<std::byte> output;
+    constexpr std::array<std::byte, 23U> magic{
+        std::byte{ 'K' }, std::byte{ 'a' }, std::byte{ 'y' }, std::byte{ 'd' }, std::byte{ 'a' }, std::byte{ 'r' }, std::byte{ 'a' }, std::byte{ ' ' },
+        std::byte{ 'F' }, std::byte{ 'B' }, std::byte{ 'X' }, std::byte{ ' ' }, std::byte{ 'B' }, std::byte{ 'i' }, std::byte{ 'n' }, std::byte{ 'a' },
+        std::byte{ 'r' }, std::byte{ 'y' }, std::byte{ ' ' }, std::byte{ ' ' }, std::byte{}, std::byte{ 0x1A }, std::byte{},
+    };
+    output.insert(output.end(), magic.begin(), magic.end());
+    AppendFbxU32(output, 7400U);
+    AppendFbxFixtureNode(output, root);
+    output.insert(output.end(), 13U, std::byte{});
+    return output;
+}
+
 [[nodiscard]] std::vector<std::byte> MakeMultiMaterialFbxFixture() {
     std::vector<std::byte> geometryProperties;
     AppendFbxInt64Property(geometryProperties, 1U);
@@ -1063,18 +1077,29 @@ void AppendFbxFixtureNode(std::vector<std::byte>& output, const FbxFixtureNode& 
         },
     };
 
-    std::vector<std::byte> output;
-    constexpr std::array<std::byte, 23U> magic{
-        std::byte{ 'K' }, std::byte{ 'a' }, std::byte{ 'y' }, std::byte{ 'd' }, std::byte{ 'a' }, std::byte{ 'r' }, std::byte{ 'a' }, std::byte{ ' ' },
-        std::byte{ 'F' }, std::byte{ 'B' }, std::byte{ 'X' }, std::byte{ ' ' }, std::byte{ 'B' }, std::byte{ 'i' }, std::byte{ 'n' }, std::byte{ 'a' },
-        std::byte{ 'r' }, std::byte{ 'y' }, std::byte{ ' ' }, std::byte{ ' ' }, std::byte{}, std::byte{ 0x1A }, std::byte{},
-    };
-    output.insert(output.end(), magic.begin(), magic.end());
-    AppendFbxU32(output, 7400U);
-    AppendFbxFixtureNode(output, objects);
-    output.insert(output.end(), 13U, std::byte{});
-    return output;
+    return MakeFbxFixture(objects);
 }
+
+// A compressed FBX array states the length it inflates to, and that length is a
+// claim its compressed bytes may not be able to back. This array (found by fuzzing,
+// fuzz/corpus/mesh_fbx) declares 268 million coordinates in 20 bytes of deflate
+// data; the importer must refuse it without first making room for 2 GB.
+void RunFbxImporterRefusesArrayLongerThanItsCompressedBytesTest() {
+    std::vector<std::byte> verticesProperties{ std::byte{ 'd' } };
+    AppendFbxU32(verticesProperties, 0x1000000CU);
+    AppendFbxU32(verticesProperties, 1U);
+    AppendFbxU32(verticesProperties, 20U);
+    verticesProperties.insert(verticesProperties.end(), 20U, std::byte{});
+    const std::vector<std::byte> fixture = MakeFbxFixture(
+        FbxFixtureNode{ .name = "Vertices", .properties = std::move(verticesProperties), .propertyCount = 1U });
+
+    const std::size_t peakBefore = PeakCommittedBytes();
+    const std::optional<RenderMeshAssetData> asset = RenderMeshAssetBuilder::LoadFbx(std::span<const std::byte>{ fixture });
+    Require(!asset.has_value(), "FBX importer accepted an array its compressed bytes cannot produce");
+    Require(PeakCommittedBytes() - peakBefore < 256U * 1024U * 1024U,
+        "FBX importer allocated a compressed array's declared length before inflating it");
+}
+
 
 void RunFbxImporterBuildsSectionsForMaterialSlotsTest() {
     const std::vector<std::byte> fixture = MakeMultiMaterialFbxFixture();
@@ -3623,6 +3648,7 @@ void RunRenderResourceRegistryTests() {
     RunMeshBoundsBoxIsTighterThanSphereTest();
     RunFbxImporterBuildsSectionsForMaterialSlotsTest();
     RunFbxImporterStopsAtFooterAfterNullTerminatorTest();
+    RunFbxImporterRefusesArrayLongerThanItsCompressedBytesTest();
     RunRenderMeshAssetLoaderDiscoversAndLoadsObjThroughAssetManagerTest();
     RunRenderMeshAssetLoaderLoadsImportedObjContainerTest();
     RunRenderMeshAssetLoaderLoadsWorkspaceImportedFbxCubeWhenPresentTest();
