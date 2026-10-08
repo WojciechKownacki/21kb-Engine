@@ -3069,6 +3069,18 @@ int LuaLocalizationFormatPlural(lua_State* state) {
     return 1;
 }
 
+int LuaLocalizationFormatPluralNumber(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) return luaL_error(state, "lua script execution context is not available");
+    const ScriptFunctionCallResult result = CallLocalization(*context, "Localization.FormatPluralNumber", {
+        Arg("key", ScriptValue{ std::string{ luaL_checkstring(state, 1) } }),
+        Arg("number", ScriptValue{ std::string{ luaL_checkstring(state, 2) } }),
+    });
+    if (!result.Succeeded()) return PushCallError(state, result, "Localization plural formatting failed");
+    PucLuaValueBridge::Push(state, result.Output("text").value_or(ScriptValue{ std::string{} }));
+    return 1;
+}
+
 // LIB-010: SetClosure's `function` is a runtime value (123 call sites each
 // pass a different one), so it cannot become PucLuaSafeCall's compile-time
 // template parameter without touching every call site. Instead this
@@ -3094,7 +3106,7 @@ void SetClosure(lua_State* state, const char* name, lua_CFunction function, Scri
 // marshalling.  Their position follows ScriptApiCatalog::LuaBindingDefinitions
 // excluding Task and global bindings; table and Lua field names deliberately
 // live only in that catalog.
-constexpr std::array<lua_CFunction, 177> kCatalogBindingAdapters{ {
+constexpr std::array<lua_CFunction, 178> kCatalogBindingAdapters{ {
     &LuaAudioPlay,
     &LuaAudioSetMixer,
     &LuaAudioActiveMixer,
@@ -3267,6 +3279,7 @@ constexpr std::array<lua_CFunction, 177> kCatalogBindingAdapters{ {
     &LuaLocalizationLanguage,
     &LuaLocalizationTranslate,
     &LuaLocalizationFormatPlural,
+    &LuaLocalizationFormatPluralNumber,
     &LuaPointerPosition,
     &LuaPointerDelta,
     &LuaPointerButton,

@@ -2,12 +2,13 @@
 
 #include "engine/assets/AssetId.hpp"
 #include "engine/localization/LocalizationCatalog.hpp"
+#include "engine/localization/PluralRules.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneState.hpp"
 
-#include <algorithm>
+#include <optional>
 #include <string>
 
 namespace kb::scene {
@@ -21,30 +22,22 @@ namespace {
     return message == locale->second.end() ? nullptr : &message->second;
 }
 
-[[nodiscard]] const kb::localization::LocalizationMessage* FindWithFallback(
-    const SceneState& state, std::string_view key) {
-    if (!state.localizationCatalog.IsLoaded() || key.empty()) return nullptr;
+struct FoundMessage {
+    const kb::localization::LocalizationMessage* message = nullptr;
+    // The language whose entry supplied the message; its plural rules pick the category.
+    std::string_view language;
+};
+
+[[nodiscard]] FoundMessage FindWithFallback(const SceneState& state, std::string_view key) {
+    if (!state.localizationCatalog.IsLoaded() || key.empty()) return {};
     const kb::localization::LocalizationCatalog& catalog = *state.localizationCatalog;
-    if (const auto* selected = FindMessage(catalog, state.localizationLanguage, key); selected != nullptr) return selected;
-    return FindMessage(catalog, catalog.fallbackLanguage, key);
-}
-
-[[nodiscard]] std::string PluralCategory(std::string_view language, std::int64_t count) {
-    const std::uint64_t absolute = count < 0
-        ? static_cast<std::uint64_t>(-(count + 1)) + 1U
-        : static_cast<std::uint64_t>(count);
-    if (language.rfind("pl", 0U) == 0U) {
-        if (absolute == 1) return "one";
-        const std::uint64_t mod10 = absolute % 10U;
-        const std::uint64_t mod100 = absolute % 100U;
-        if (mod10 >= 2 && mod10 <= 4 && !(mod100 >= 12 && mod100 <= 14)) return "few";
-        return "many";
+    if (const auto* selected = FindMessage(catalog, state.localizationLanguage, key); selected != nullptr) {
+        return { selected, state.localizationLanguage };
     }
-    return absolute == 1 ? "one" : "other";
+    return { FindMessage(catalog, catalog.fallbackLanguage, key), catalog.fallbackLanguage };
 }
 
-[[nodiscard]] std::string ReplaceCount(std::string value, std::int64_t count) {
-    const std::string countText = std::to_string(count);
+[[nodiscard]] std::string ReplaceCount(std::string value, std::string_view countText) {
     constexpr std::string_view marker = "{count}";
     std::size_t position = 0U;
     while ((position = value.find(marker, position)) != std::string::npos) {
@@ -52,6 +45,17 @@ namespace {
         position += countText.size();
     }
     return value;
+}
+
+[[nodiscard]] std::string FormatPluralMessage(const SceneState& state, std::string_view key,
+    const kb::localization::PluralOperands& operands, std::string_view countText) {
+    const FoundMessage found = FindWithFallback(state, key);
+    if (found.message == nullptr || found.message->plurals.empty()) return std::string{ key };
+    const kb::localization::PluralCategory category = kb::localization::SelectPluralCategory(found.language, operands);
+    auto selected = found.message->plurals.find(kb::localization::PluralCategoryName(category));
+    if (selected == found.message->plurals.end()) selected = found.message->plurals.find("other");
+    if (selected == found.message->plurals.end()) return std::string{ key };
+    return ReplaceCount(selected->second, countText);
 }
 
 } // namespace
@@ -92,20 +96,19 @@ std::string SceneLocalizationService::FallbackLanguage(const Scene& scene) {
 
 std::string SceneLocalizationService::Translate(const Scene& scene, std::string_view key) {
     const SceneState& state = SceneAccess::State(scene);
-    const auto* message = FindWithFallback(state, key);
+    const auto* message = FindWithFallback(state, key).message;
     if (message == nullptr || message->text.empty()) return std::string{ key };
     return message->text;
 }
 
 std::string SceneLocalizationService::FormatPlural(const Scene& scene, std::string_view key, std::int64_t count) {
-    const SceneState& state = SceneAccess::State(scene);
-    const auto* message = FindWithFallback(state, key);
-    if (message == nullptr || message->plurals.empty()) return std::string{ key };
-    const std::string language = state.localizationCatalog->languages.contains(state.localizationLanguage)
-        ? state.localizationLanguage : state.localizationCatalog->fallbackLanguage;
-    const auto category = message->plurals.find(PluralCategory(language, count));
-    const auto other = message->plurals.find("other");
-    return ReplaceCount(category != message->plurals.end() ? category->second : other->second, count);
+    return FormatPluralMessage(SceneAccess::State(scene), key, kb::localization::PluralOperandsFromInteger(count), std::to_string(count));
+}
+
+std::string SceneLocalizationService::FormatPluralNumber(const Scene& scene, std::string_view key, std::string_view number) {
+    const std::optional<kb::localization::PluralOperands> operands = kb::localization::ParsePluralOperands(number);
+    if (!operands.has_value()) return std::string{ key };
+    return FormatPluralMessage(SceneAccess::State(scene), key, *operands, number);
 }
 
 } // namespace kb::scene

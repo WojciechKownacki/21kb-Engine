@@ -27,7 +27,7 @@ constexpr std::array kLifecycleEvents{
 // PucLuaFunctionApi and PucLuaTaskApi install module tables directly from this
 // list.  The names and each wrapper's return shape therefore stay true to the
 // callable sandbox and generated stubs cannot drift from it.
-constexpr std::array<ScriptApiCatalogLuaBindingDefinition, 185> kLuaBindings{ {
+constexpr std::array<ScriptApiCatalogLuaBindingDefinition, 186> kLuaBindings{ {
     { "Audio", "Play", "Audio.Play", ScriptApiCatalogLuaReturnKind::SingleOutput, "voice" },
     { "Audio", "SetMixer", "Audio.SetMixer", ScriptApiCatalogLuaReturnKind::SingleOutput, "assigned" },
     { "Audio", "ActiveMixer", "Audio.ActiveMixer", ScriptApiCatalogLuaReturnKind::Default, "" },
@@ -200,6 +200,7 @@ constexpr std::array<ScriptApiCatalogLuaBindingDefinition, 185> kLuaBindings{ {
     { "Localization", "Language", "Localization.Language", ScriptApiCatalogLuaReturnKind::SingleOutput, "language" },
     { "Localization", "Translate", "Localization.Translate", ScriptApiCatalogLuaReturnKind::SingleOutput, "text" },
     { "Localization", "FormatPlural", "Localization.FormatPlural", ScriptApiCatalogLuaReturnKind::SingleOutput, "text" },
+    { "Localization", "FormatPluralNumber", "Localization.FormatPluralNumber", ScriptApiCatalogLuaReturnKind::SingleOutput, "text" },
     { "Pointer", "Position", "Pointer.Position", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
     { "Pointer", "Delta", "Pointer.Delta", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
     { "Pointer", "Button", "Pointer.Button", ScriptApiCatalogLuaReturnKind::Default, "" },
