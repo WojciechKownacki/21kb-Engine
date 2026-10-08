@@ -77,6 +77,9 @@ using SceneAssetBinaryIO::ReadAllBytes;
             return false;
         }
     }
+    if (fileVersion >= 41U && !input.ReadUInt64(output.nestedPrefabContentHash)) {
+        return false;
+    }
 
     if (!input.ReadUInt32(output.parentNode) ||
         !SceneAssetPrimitiveCodec::ReadVec3(input, output.transform.localPosition) ||
