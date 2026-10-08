@@ -401,7 +401,8 @@ EditorSceneContext::EditorSceneContext()
     currentScenePath_ = ResolveDefaultScenePath();
     std::error_code error;
     kb::scene::SceneDocumentLoadResult loaded;
-    if (!currentScenePath_.empty() && std::filesystem::is_regular_file(currentScenePath_, error) && !error) {
+    const bool sceneFileExists = !currentScenePath_.empty() && std::filesystem::is_regular_file(currentScenePath_, error) && !error;
+    if (sceneFileExists) {
         loaded = kb::scene::SceneDocumentService::Load(currentScenePath_);
     }
     if (loaded.succeeded && kb::scene::SceneDocumentService::LoadIntoScene(*scene_, loaded.document)) {
@@ -409,6 +410,18 @@ EditorSceneContext::EditorSceneContext()
         SelectFirstSceneEntityOrClear();
         console_.Info("Project", "Opened default scene: " + currentScenePath_.generic_string());
         UpgradePrefabLinksOnSave(loaded.document);
+    } else if (sceneFileExists) {
+        // A scene that cannot be read is still the project's work: leave the file alone and start on a new
+        // scene of its own name, so no save can write over it.
+        console_.Error("Project", "Scene could not be opened: " + currentScenePath_.generic_string() + ": " +
+            (loaded.succeeded ? std::string{ "its objects could not be created." } : loaded.error) +
+            " The file was left as it is; the editor started on a new scene.");
+        for (const kb::scene::SceneEntity root : scene_->Hierarchy().RootEntities()) {
+            scene_->Entities().Destroy(root);
+        }
+        hierarchySelection_.SelectEntity(EditorDefaultSceneFactory::Seed(*scene_));
+        currentScenePath_ = EditorProjectPaths::UniqueScenePath("Untitled");
+        MarkSceneDocumentDirty();
     } else {
         hierarchySelection_.SelectEntity(EditorDefaultSceneFactory::Seed(*scene_));
         if (SaveCurrentScene()) {

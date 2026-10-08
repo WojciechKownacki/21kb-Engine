@@ -5617,21 +5617,46 @@ void RunLegacyPrefabSceneSuite(Report& report) {
 #if !defined(KB_EDITOR_ENGINE_ROOT)
     report.Check(false, "Legacy prefab scene fixtures are reachable");
 #else
-    EditorSceneContext context;
+    // The fixture is both the scene the editor starts on (the project's Main scene) and one opened later.
     const std::filesystem::path fixtures = std::filesystem::path{ KB_EDITOR_ENGINE_ROOT } / "sources/editor/tests/fixtures/prefab";
     const std::filesystem::path scenePath = EditorProjectPaths::AssetsRoot() / "Scenes" / "LegacyPrefabs.21kbscene";
+    const std::filesystem::path startupPath = EditorProjectPaths::AssetsRoot() / "Scenes" / "Main.21kbscene";
     std::error_code error;
     std::filesystem::create_directories(EditorProjectPaths::AssetsRoot() / "Prefabs", error);
     std::filesystem::create_directories(scenePath.parent_path(), error);
     bool copied = !error;
-    for (const auto& [file, folder] : { std::pair{ "LegacyCrate.kbprefab", "Prefabs" }, std::pair{ "LegacyPrefabs.21kbscene", "Scenes" }, std::pair{ "LegacyPrefabs.meta", "Scenes" } }) {
-        copied = std::filesystem::copy_file(fixtures / file, EditorProjectPaths::AssetsRoot() / folder / file, std::filesystem::copy_options::overwrite_existing, error) && copied;
+    for (const auto& [file, target] : {
+             std::pair{ "LegacyCrate.kbprefab", EditorProjectPaths::AssetsRoot() / "Prefabs" / "LegacyCrate.kbprefab" },
+             std::pair{ "LegacyPrefabs.21kbscene", scenePath },
+             std::pair{ "LegacyPrefabs.meta", scenePath.parent_path() / "LegacyPrefabs.meta" },
+             std::pair{ "LegacyPrefabs.21kbscene", startupPath } }) {
+        copied = std::filesystem::copy_file(fixtures / file, target, std::filesystem::copy_options::overwrite_existing, error) && copied;
     }
     report.Check(copied, "Copy the version 40 prefab scene fixture into the project");
     const kb::scene::SceneDocumentLoadResult fixture = kb::scene::SceneDocumentService::Load(scenePath);
     report.Check(fixture.succeeded && fixture.document.fileVersion == 40U && fixture.document.LinksPrefabInstancesByName(),
         "The fixture is a version 40 scene that links its prefab instances by name");
-    static_cast<void>(context.Scene().Assets().Discover());
+
+    // Main.21kbscene has no .meta yet, so it cannot be read: the editor must start without writing over it.
+    const auto readBytes = [](const std::filesystem::path& path) {
+        std::ifstream input{ path, std::ios::binary };
+        return std::string{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+    };
+    const std::string startupBytes = readBytes(startupPath);
+    {
+        EditorSceneContext unreadable;
+        const bool reported = std::ranges::any_of(unreadable.Console().Entries(), [](const EditorConsoleEntry& entry) {
+            return entry.level == EditorConsoleLevel::Error && entry.message.find("The file was left as it is") != std::string::npos;
+        });
+        report.Check(reported && unreadable.CurrentScenePath() != startupPath && unreadable.SceneDocumentDirty(),
+            "Starting on a scene that cannot be read reports it and starts on a new scene");
+        report.Check(unreadable.SaveCurrentScene() && unreadable.CurrentScenePath() != startupPath,
+            "Saving after starting on an unreadable scene writes a scene of its own");
+    }
+    report.Check(!startupBytes.empty() && readBytes(startupPath) == startupBytes, "The scene that could not be read is left byte for byte as it was");
+    copied = std::filesystem::copy_file(fixtures / "LegacyPrefabs.meta", startupPath.parent_path() / "Main.meta", std::filesystem::copy_options::overwrite_existing, error);
+    report.Check(copied, "Give the startup scene its .meta");
+    EditorSceneContext context;
 
     const auto childNamed = [&context](kb::scene::SceneEntity parent, std::string_view name) {
         const kb::scene::Scene& scene = context.Scene();
@@ -5685,9 +5710,19 @@ void RunLegacyPrefabSceneSuite(Report& report) {
             }), std::string{ when } + ": CrateA has none of CrateB's changes");
     };
 
+    // The editor starts on the version 40 scene, and reloading it unsaved (as a plugin change does) asks again.
+    requireLinked("Started on version 40 scene");
+    report.Check(context.CurrentScenePath() == startupPath && context.SceneDocumentDirty() && legacyWarnings() == 1,
+        "Starting on a version 40 prefab scene asks to save it and says why");
+    context.DiscardDirtySceneDocument("reloading the scene");
+    report.Check(context.ReloadSceneFromProject(), "Reload the unsaved version 40 scene");
+    requireLinked("Reloaded version 40 scene");
+    report.Check(context.SceneDocumentDirty() && legacyWarnings() == 2, "Reloading a version 40 prefab scene asks to save it again");
+    context.DiscardDirtySceneDocument("opening another scene");
+
     report.Check(context.OpenScene(scenePath), "Open the version 40 prefab scene");
     requireLinked("Opened version 40 scene");
-    report.Check(context.SceneDocumentDirty() && legacyWarnings() == 1, "A version 40 prefab scene asks to be saved once and says why");
+    report.Check(context.SceneDocumentDirty() && legacyWarnings() == 3, "A version 40 prefab scene asks to be saved once and says why");
 
     report.Check(context.SaveCurrentScene() && !context.SceneDocumentDirty(), "Save the version 40 prefab scene");
     const kb::scene::SceneDocumentLoadResult saved = kb::scene::SceneDocumentService::Load(scenePath);
@@ -5700,7 +5735,7 @@ void RunLegacyPrefabSceneSuite(Report& report) {
 
     report.Check(context.OpenScene(scenePath), "Reopen the saved scene");
     requireLinked("Reopened saved scene");
-    report.Check(!context.SceneDocumentDirty() && legacyWarnings() == 1, "The saved scene opens clean without asking again");
+    report.Check(!context.SceneDocumentDirty() && legacyWarnings() == 3, "The saved scene opens clean without asking again");
 #endif
 }
 
