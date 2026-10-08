@@ -489,29 +489,7 @@ def main() -> int:
             shutil.copy2(game, player)
             player.chmod(player.stat().st_mode | 0o111)
             shutil.copy2(pack, stage / "Game.kbpack")
-            licenses = stage / "Licenses"
-            licenses.mkdir()
-            license_sources = {
-                "bgfx.rst": engine / "third_party/bgfx.cmake/bgfx/docs/license.rst",
-                "bx.txt": engine / "third_party/bgfx.cmake/bx/LICENSE",
-                "bimg.txt": engine / "third_party/bgfx.cmake/bimg/LICENSE",
-                "flecs.txt": engine / "third_party/flecs/LICENSE",
-                "jolt.txt": engine / "third_party/jolt/LICENSE",
-                "lua.txt": engine / "third_party/licenses/lua-5.4.8.txt",
-                "miniaudio.txt": engine / "third_party/miniaudio/LICENSE",
-                "monocypher.txt": engine / "third_party/licenses/monocypher-4.0.2.txt",
-                "ufbx.txt": engine / "third_party/ufbx/LICENSE",
-            }
-            for name, source in license_sources.items():
-                if not source.is_file():
-                    raise GuestError(f"required license is missing: {source}")
-                shutil.copy2(source, licenses / name)
-            (stage / "THIRD_PARTY_NOTICES.txt").write_text(
-                "This product includes bgfx, bx, bimg, Flecs, Jolt Physics, Lua, miniaudio, Monocypher and ufbx.\n"
-                "Their license texts are included in the Licenses directory.\n",
-                encoding="utf-8",
-                newline="\n",
-            )
+            # The packaging host adds the third-party notices and SBOM to the returned player.
             if player.read_bytes()[:4] != b"\x7fELF":
                 raise GuestError("built Linux player does not contain an ELF header")
             dependencies = _run(["ldd", player], stage, 120)

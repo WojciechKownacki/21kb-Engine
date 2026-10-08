@@ -42,13 +42,14 @@ ENGINE_BUILD_INPUTS = (
     "third_party/bgfx.cmake",
     "third_party/flecs",
     "third_party/jolt",
-    "third_party/licenses/lua-5.4.8.txt",
-    "third_party/licenses/monocypher-4.0.2.txt",
+    "third_party/licenses",
     "third_party/miniaudio",
+    "third_party/third_party_manifest.json",
     "third_party/ufbx",
     "scripts/package_contract.py",
     "scripts/package_game.py",
     "scripts/package_linux_guest.py",
+    "scripts/third_party_notices.py",
     "scripts/windows_pe_resources.py",
 )
 _SOURCE_TEXT_SUFFIXES = frozenset((
