@@ -5558,6 +5558,14 @@ void RunPrefabEditModeSuite(Report& report) {
     report.Check(context.Scene().Hierarchy().RootObjects().size() == 1U && context.Scene().Prefabs().RootInstance(context.Scene().Hierarchy().RootEntities().front()).IsValid(),
         "Scene View scene is the prefab's own scene");
     report.Check(!context.SaveCurrentScene(), "Saving the scene document is refused while a prefab is edited");
+    report.Check(!context.HasUnsavedPrefabEdit(), "A prefab opens without unsaved prefab edits");
+    context.SelectEntity({});
+    const kb::scene::SceneEntity stray = context.CreateHierarchyObject();
+    report.Check(context.Scene().Hierarchy().Parent(stray) == kb::scene::SceneEntity{} && context.HasUnsavedPrefabEdit() && !context.SavePrefabEditMode(),
+        "Saving a prefab with an object beside its root is refused instead of dropping the object");
+    context.SelectEntity(stray);
+    report.Check(context.DeleteSelectedHierarchyEntity() && context.SaveOpenDocuments() && !context.HasUnsavedPrefabEdit(),
+        "Ctrl+S saves the prefab being edited");
     bool prefabSectionShown = false;
     for (int y = kContent.top; y < kContent.bottom; y += 4) {
         prefabSectionShown = prefabSectionShown || InspectorPanelRenderer::HitTest(kContent, context, kContent.left + 40, y).section == InspectorSectionId::Prefab;

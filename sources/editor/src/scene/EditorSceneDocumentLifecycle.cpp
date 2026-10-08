@@ -435,6 +435,11 @@ bool EditorSceneContext::InPrefabEditMode() const noexcept {
     return prefabEdit_.IsValid();
 }
 
+// While a prefab is edited the dirty flag tracks the prefab; the scene document's is kept aside.
+bool EditorSceneContext::HasUnsavedPrefabEdit() const noexcept {
+    return InPrefabEditMode() && sceneDocumentDirty_;
+}
+
 std::string EditorSceneContext::PrefabEditModeName() const {
     return prefabEditPath_.stem().string();
 }
@@ -458,6 +463,7 @@ bool EditorSceneContext::OpenPrefabEditMode(const std::filesystem::path& prefabP
     ReleaseRenderedSceneResources();
     documentSelection_ = hierarchySelection_.SelectedEntities();
     documentDirty_ = sceneDocumentDirty_;
+    sceneDocumentDirty_ = false;
     std::swap(commandStack_, documentCommands_);
     prefabEdit_ = std::move(edit);
     prefabEditPath_ = prefabPath;
@@ -474,10 +480,20 @@ bool EditorSceneContext::SavePrefabEditMode() {
     if (!InPrefabEditMode()) {
         return false;
     }
+    // Only what is under the prefab root is the prefab; an object beside it would be dropped unseen.
+    const kb::scene::SceneEntity prefabRoot = prefabEdit_.RootObject().Entity();
+    for (const kb::scene::SceneEntity root : scene_->Hierarchy().RootEntities()) {
+        if (root != prefabRoot) {
+            console_.Warning("Prefabs", "Prefab not saved: move " + scene_->Entities().Name(root) + " under " +
+                scene_->Entities().Name(prefabRoot) + " or delete it.");
+            return false;
+        }
+    }
     if (!prefabEdit_.Apply() || !documentScene_->Prefabs().Save(prefabEdit_.SourcePrefab(), prefabEditPath_)) {
         console_.Error("Prefabs", "Prefab could not be saved: " + prefabEditPath_.generic_string());
         return false;
     }
+    sceneDocumentDirty_ = false;
     documentDirty_ = true;
     console_.Info("Prefabs", "Prefab saved: " + prefabEditPath_.generic_string());
     return true;
