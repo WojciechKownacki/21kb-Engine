@@ -44,6 +44,39 @@ option(KB_STRICT_OWN_WARNINGS "Treat warnings from first-party targets as build 
 set(KB_DXCOMPILER_RUNTIME "" CACHE FILEPATH "Path to dxcompiler.dll copied next to shaderc for DXIL graph cooking")
 option(KB_BUILD_PROVIDER_MODULES_AS_DLL "Build provider engine modules as hot-reloadable DLL/shared libraries instead of static libraries" ON)
 
+option(KB_HARDENING "Build with exploit mitigations" ON)
+
+# Exploit mitigations for everything the build produces, third-party code included, so they cover a whole
+# player: Control Flow Guard and shadow-stack compatibility on MSVC; stack protector, fortified libc calls,
+# position-independent executables and read-only relocations with GCC and Clang. AddressSanitizer builds
+# leave out the ones it cannot be combined with.
+if(KB_HARDENING AND NOT EMSCRIPTEN)
+    if(MSVC)
+        if(NOT KB_ENABLE_SANITIZERS)
+            add_compile_options(/guard:cf)
+            add_link_options(/GUARD:CF)
+        endif()
+        add_link_options(/DYNAMICBASE /NXCOMPAT)
+        if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+            add_link_options(/HIGHENTROPYVA)
+        endif()
+        if(CMAKE_CXX_COMPILER_ARCHITECTURE_ID MATCHES "^(x64|X86)$")
+            add_link_options(/CETCOMPAT)
+        endif()
+    elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        add_compile_options(-fstack-protector-strong)
+        if(NOT KB_ENABLE_SANITIZERS)
+            add_compile_definitions($<$<NOT:$<CONFIG:Debug>>:_FORTIFY_SOURCE=2>)
+        endif()
+        set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+        include(CheckPIESupported)
+        check_pie_supported()
+        if(NOT APPLE)
+            add_link_options(LINKER:-z,relro LINKER:-z,now LINKER:-z,noexecstack)
+        endif()
+    endif()
+endif()
+
 if((ANDROID AND KB_BUILD_ANDROID_HOST) OR
    ((EMSCRIPTEN OR CMAKE_SYSTEM_NAME STREQUAL "Linux") AND KB_BUILD_PACKAGED_GAME_HOST))
     # Packaged hosts construct their four supported providers directly. A DLL
