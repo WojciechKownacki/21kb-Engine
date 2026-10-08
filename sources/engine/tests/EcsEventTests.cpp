@@ -73,8 +73,8 @@ void RunUnobservedValueWriteTest() {
     const kb::ecs::Entity second = world.CreateEntity("Second");
     world.Set(first, EcsPosition{ .x = 1.0F });
     world.Set(second, EcsPosition{ .x = 2.0F });
-    for (float x = 10.0F; x < 13.0F; x += 1.0F) {
-        world.TryGetMutable<EcsPosition>(first)->x = x;
+    for (int step = 0; step < 3; ++step) {
+        world.TryGetMutable<EcsPosition>(first)->x = 10.0F + static_cast<float>(step);
         world.MarkModified<EcsPosition>(first);
     }
     world.TryGetMutable<EcsPosition>(second)->x = 20.0F; // never marked: only the native value changes

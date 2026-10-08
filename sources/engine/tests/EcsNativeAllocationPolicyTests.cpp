@@ -355,6 +355,7 @@ void RunMovedSkippedSlots() {
     World moved{ std::move(original) };
     World assigned;
     assigned = std::move(moved);
+    // NOLINTNEXTLINE(bugprone-use-after-move): the moved-from worlds are what this checks.
     Require(original.NativeHandle() == nullptr && moved.NativeHandle() == nullptr,
         "Moved-from World retained a backend pointer");
     Require(assigned.CreateEntity() == Full(2U), "Availability policy context did not follow the moved heap world");

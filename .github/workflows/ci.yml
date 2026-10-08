@@ -5,6 +5,9 @@ on:
     branches: [Release, main, master, "1.0"]
   pull_request:
   workflow_dispatch:
+  schedule:
+    # Weekly: the clang-tidy gate over every first-party source.
+    - cron: '0 3 * * 1'
 
 permissions:
   contents: read
@@ -138,6 +141,45 @@ jobs:
         shell: pwsh
         run: |
           python -m unittest discover -s scripts/tests
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+  clang-tidy:
+    name: clang-tidy gate
+    runs-on: windows-2025-vs2026
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@v6
+        with:
+            submodules: recursive
+            fetch-depth: 0
+
+      # Ninja with the MSVC environment gives the compile database the gate reads.
+      - name: Configure with a compile database
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath
+          cmd /c "call `"$vs\VC\Auxiliary\Build\vcvars64.bat`" >nul && cmake -S . -B build/tidy -G Ninja -DCMAKE_BUILD_TYPE=Release -DKB_BUILD_EDITOR=ON -DKB_BUILD_GRAPH_SHADERC=OFF -DCMAKE_EXPORT_COMPILE_COMMANDS=ON"
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+      # Pushes and pull requests check what they change; the weekly run checks every source.
+      - name: clang-tidy
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath
+          $base = "${{ github.event.before }}"
+          if ("${{ github.event_name }}" -eq "pull_request") {
+            $base = "${{ github.event.pull_request.base.sha }}"
+          }
+          $scope = ""
+          if ("${{ github.event_name }}" -ne "schedule" -and "${{ github.event_name }}" -ne "workflow_dispatch" -and
+              $base -and $base -ne "0000000000000000000000000000000000000000" -and (git cat-file -e "$base^{commit}" 2>$null)) {
+            $scope = "--changed-since $base"
+          }
+          cmd /c "call `"$vs\VC\Auxiliary\Build\vcvars64.bat`" >nul && python scripts/clang_tidy_gate.py --build-dir build/tidy --jobs 4 $scope"
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
           }

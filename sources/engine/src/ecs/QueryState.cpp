@@ -1069,7 +1069,8 @@ void QueryState::operator delete(void* pointer, std::size_t size) noexcept {
             return;
         }
     }
-    ::operator delete(pointer);
+    // The analyzer reaches here on a path from a null QueryState; a real pointer came from operator new above.
+    ::operator delete(pointer); // NOLINT(clang-analyzer-cplusplus.NewDelete)
 }
 
 void DestroyQueryState(QueryState* state) noexcept {

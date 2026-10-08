@@ -78,15 +78,14 @@ struct SharedResolvedPrefab {
     }
     std::ranges::sort(nodeIndexById);
     const std::uint64_t contentHash = ScenePrefabHasher::Hash(*resolved);
-    resolvedPrefabs.push_back(SharedResolvedPrefab{
-        .prefab = handle,
-        .guid = std::make_shared<const std::string>(record->guid),
-        .resolved = std::move(resolved),
-        .nodeIds = std::move(nodeIds),
-        .contentHash = contentHash,
-        .nodeIndexById = std::move(nodeIndexById),
-    });
-    return &resolvedPrefabs.back();
+    SharedResolvedPrefab& shared = resolvedPrefabs.emplace_back();
+    shared.prefab = handle;
+    shared.guid = std::make_shared<const std::string>(record->guid);
+    shared.resolved = std::move(resolved);
+    shared.nodeIds = std::move(nodeIds);
+    shared.contentHash = contentHash;
+    shared.nodeIndexById = std::move(nodeIndexById);
+    return &shared;
 }
 
 // The overlay's overrides tell how the captured instance differed from its prefab: a renamed node
