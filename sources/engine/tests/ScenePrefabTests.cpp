@@ -25,6 +25,19 @@ void RunPrefabDeclaredNodeCountIsNotReservedTest() {
     Require(tally.bytes < 32U * 1024U * 1024U, "A prefab's declared node count was reserved before its nodes were read");
 }
 
+// The same claim one level down: a node announcing 29 million nested overrides it
+// never spells out (found by fuzzing, fuzz/corpus/prefab).
+void RunPrefabDeclaredOverrideCountIsNotReservedTest() {
+    std::istringstream input{ "21kb.prefab.v2\nkind=template\nguid=\nname=\nnodes=4\nnode\nname=\n"
+                              "nestedOverrideCount=29467295\nendnode\n" };
+    kb::scene::ScenePrefabAssetReadResult result;
+    BeginAllocationTally();
+    const bool read = kb::scene::ScenePrefabAssetReader::Read(input, result);
+    const AllocationTally tally = EndAllocationTally();
+    Require(!read, "A prefab node with undeclared overrides was accepted");
+    Require(tally.bytes < 32U * 1024U * 1024U, "A prefab node's declared override count was reserved before its overrides were read");
+}
+
 } // namespace
 
 void RunScenePrefabTests() {
@@ -45,6 +58,7 @@ void RunScenePrefabTests() {
     static_cast<void>(prefab.AddNode({}));
     Require(prefab.Nodes().front().stableId == 1U, "Cleared prefab must restart id allocation");
     RunPrefabDeclaredNodeCountIsNotReservedTest();
+    RunPrefabDeclaredOverrideCountIsNotReservedTest();
     RunScenePrefabInstantiationTests();
     RunScenePrefabCaptureTests();
 }
