@@ -211,6 +211,7 @@ add_executable(kb_game WIN32
 target_link_libraries(kb_game
     PRIVATE
         kb_game_core
+        kb_crash_reporting
         user32
         gdi32
         shell32

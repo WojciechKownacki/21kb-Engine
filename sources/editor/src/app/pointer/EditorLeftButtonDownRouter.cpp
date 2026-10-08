@@ -2064,6 +2064,7 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             case BuildGameField::LinuxPort:
             case BuildGameField::LinuxEngineRoot:
             case BuildGameField::LinuxDisplay:
+            case BuildGameField::CrashReportUrl:
                 changed = sceneContext_.BeginBuildGameTextEdit(field);
                 break;
             case BuildGameField::None:

@@ -54,6 +54,14 @@ from package_contract import (
 )
 from third_party_notices import NoticeError, load_components, select_components, stage_notices, write_sbom
 from windows_pe_resources import WindowsResourceError, apply_windows_resources
+from windows_pe_symbols import (
+    PdbIdentity,
+    WindowsSymbolError,
+    find_matching_pdb,
+    is_windows_pe,
+    pe_pdb_identity,
+    publish_to_symbol_store,
+)
 
 
 @dataclass(frozen=True)
@@ -76,6 +84,8 @@ class StageResult:
     tools: tuple[Path, ...]
     first_frame: FirstFrameResult | None = None
     running_android_adb: Path | None = None
+    # Each shipped Windows image's PDB, filed in the symbol store when the package publishes.
+    symbols: tuple[tuple[PdbIdentity, Path], ...] = ()
 
 
 def _first_frame_result(target: str, stage: Path) -> FirstFrameResult:
@@ -162,9 +172,20 @@ def _project_png_icon(project_file: Path, value: Path) -> Path:
     return icon
 
 
-def _validate_package_work_roots(project_file: Path, build_root: Path, output: Path) -> None:
+def _validate_package_work_roots(
+    project_file: Path, build_root: Path, output: Path, symbols: Path | None = None
+) -> None:
     project_root = project_file.parent.resolve(strict=True)
-    for label, candidate in (("build directory", build_root), ("package output", output)):
+    roots = [("build directory", build_root), ("package output", output)]
+    if symbols is not None:
+        roots.append(("symbol store", symbols))
+        try:
+            symbols.resolve(strict=False).relative_to(output.resolve(strict=False))
+        except ValueError:
+            pass
+        else:
+            raise PackagingError("symbol store must be outside the package output")
+    for label, candidate in roots:
         resolved = candidate.resolve(strict=False)
         try:
             resolved.relative_to(project_root)
@@ -180,7 +201,11 @@ def _validate_arguments(args: argparse.Namespace) -> None:
         raise PackagingError(f"engine root is incomplete: {args.engine_root}")
     args.build_root = args.build_root.expanduser().absolute()
     args.output = args.output.expanduser().absolute()
-    _validate_package_work_roots(args.project, args.build_root, args.output)
+    # PDBs never ship with the game; they are filed beside the package by default.
+    if args.symbols_output is None:
+        args.symbols_output = args.output.parent / f"{args.output.name}.symbols"
+    args.symbols_output = args.symbols_output.expanduser().absolute()
+    _validate_package_work_roots(args.project, args.build_root, args.output, args.symbols_output)
     args.build_root.mkdir(parents=True, exist_ok=True)
     if args.output.name in ("", ".", ".."):
         raise PackagingError("output must name a package directory")
@@ -206,6 +231,10 @@ def _validate_arguments(args: argparse.Namespace) -> None:
         args.release_number = int(time.time())
     if not 0 <= args.release_number < 2**63:
         raise PackagingError("release number must be a non-negative 63-bit integer")
+    if args.crash_report_url is not None:
+        if args.target != "Windows.x64":
+            raise PackagingError("crash report upload is available only for Windows packages")
+        args.crash_report_url = _validate_crash_report_url(args.crash_report_url)
     if args.target.startswith("Android."):
         if not _ANDROID_APPLICATION_ID.fullmatch(args.android_application_id):
             raise PackagingError("Android application ID is invalid")
@@ -223,6 +252,26 @@ def _validate_arguments(args: argparse.Namespace) -> None:
                 args.android_signing_broker = _existing_file(args.android_signing_broker, "Android signing broker")
             if not _ANDROID_ALIAS.fullmatch(args.android_key_alias):
                 raise PackagingError("Android signing key alias is invalid")
+
+
+def _validate_crash_report_url(url: str) -> str:
+    """The same rule the game applies before it sends anything: HTTPS, or HTTP to this machine."""
+    if not url or len(url) > 2048 or any(ord(character) <= 0x20 or ord(character) >= 0x7F for character in url):
+        raise PackagingError("crash report URL must be printable ASCII without spaces")
+    parts = urllib.parse.urlsplit(url)
+    if parts.username is not None or parts.password is not None or not parts.hostname:
+        raise PackagingError("crash report URL must name a host and carry no credentials")
+    if parts.scheme == "https" or (parts.scheme == "http" and parts.hostname in ("127.0.0.1", "::1")):
+        return url
+    raise PackagingError("crash report URL must use HTTPS, or HTTP to 127.0.0.1 or ::1")
+
+
+def _write_crash_report_config(stage: Path, url: str | None) -> None:
+    # Read by the player's crash reporter at start; without it reports stay on the player's machine.
+    if url is not None:
+        (stage / "CrashReports.ini").write_text(
+            f"[CrashReports]\nUploadUrl={url}\n", encoding="utf-8", newline="\n"
+        )
 
 
 def _copy_project_snapshot(project_file: Path, destination: Path) -> Path:
@@ -469,6 +518,54 @@ def _stage_licenses(args: argparse.Namespace, stage: Path) -> None:
         raise PackagingError(f"third-party notices could not be staged: {error}") from error
 
 
+def _collect_windows_symbols(
+    stage: Path,
+    job: Path,
+    built: dict[Path, Path],
+    required: set[Path],
+) -> tuple[tuple[PdbIdentity, Path], ...]:
+    """Pair every shipped image with the PDB of the exact build it came from.
+
+    A crash dump from a player names its modules by PDB GUID and age, so only that
+    PDB can read it. Required images must have one; a PDB copied into the stage with
+    runtime modules is taken out, since symbols never ship with the game.
+    """
+    staged_pdbs = job / "staged-pdbs"
+    for pdb in sorted(path for path in stage.rglob("*") if path.is_file() and path.suffix.lower() == ".pdb"):
+        destination = staged_pdbs / pdb.relative_to(stage)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(pdb, destination)
+    symbols: list[tuple[PdbIdentity, Path]] = []
+    for image in sorted(path for path in stage.rglob("*") if is_windows_pe(path)):
+        relative = image.relative_to(stage)
+        try:
+            identity = pe_pdb_identity(image)
+        except (OSError, WindowsSymbolError) as error:
+            raise PackagingError(str(error)) from error
+        if identity is None:
+            if image in required:
+                raise PackagingError(f"{relative.as_posix()} was linked without a PDB; its crash reports could not be read")
+            emit_diagnostic("Warning", f"{relative.as_posix()} has no PDB identity; its crashes cannot be symbolized")
+            continue
+        candidates = [staged_pdbs / relative.parent / identity.name]
+        if image in built:
+            candidates.insert(0, built[image].parent / identity.name)
+        linked = Path(identity.linked_path)
+        if linked.is_absolute():
+            candidates.append(linked)
+        try:
+            pdb = find_matching_pdb(identity, candidates)
+        except (OSError, WindowsSymbolError) as error:
+            raise PackagingError(str(error)) from error
+        if pdb is None:
+            if image in required:
+                raise PackagingError(f"the PDB of this exact build is missing for {relative.as_posix()} ({identity.name})")
+            emit_diagnostic("Warning", f"no matching PDB for {relative.as_posix()}; its crashes cannot be symbolized")
+            continue
+        symbols.append((identity, pdb))
+    return tuple(symbols)
+
+
 def _stage_windows(args: argparse.Namespace, cmake: Path, pack: Path, stage: Path, job: Path) -> StageResult:
     configuration = CONFIGURATIONS[args.configuration]
     plugin_targets = (
@@ -495,9 +592,13 @@ def _stage_windows(args: argparse.Namespace, cmake: Path, pack: Path, stage: Pat
     except WindowsResourceError as error:
         raise PackagingError(str(error)) from error
     shutil.copy2(pack, stage / "Game.kbpack")
+    _write_crash_report_config(stage, args.crash_report_url)
     custom_modules = pack.parent / "RuntimeModules"
+    built = {destination: game}
     if custom_modules.is_dir():
         copy_tree_exact(custom_modules, stage / "RuntimeModules")
+        for module in custom_modules.rglob("*"):
+            built[stage / "RuntimeModules" / module.relative_to(custom_modules)] = module
     plugin_paths: list[Path] = []
     for target in plugin_targets:
         expected = f"{target}.dll"
@@ -510,8 +611,12 @@ def _stage_windows(args: argparse.Namespace, cmake: Path, pack: Path, stage: Pat
         if plugin is None:
             raise PackagingError(f"Windows player provider was not produced: {expected}")
         shutil.copy2(plugin, stage / expected)
+        built[stage / expected] = plugin
         plugin_paths.append(plugin)
     _stage_licenses(args, stage)
+    symbols = _collect_windows_symbols(
+        stage, job, built, {destination, *(stage / f"{target}.dll" for target in plugin_targets)}
+    )
     if destination.read_bytes()[:2] != b"MZ":
         raise PackagingError("Windows player does not contain a valid PE header")
     _sign_release(args, stage, job)
@@ -526,7 +631,7 @@ def _stage_windows(args: argparse.Namespace, cmake: Path, pack: Path, stage: Pat
     finally:
         if smoke.exists():
             remove_tree(smoke, allowed_parent=job)
-    return StageResult((game, *plugin_paths), _first_frame_result(args.target, stage))
+    return StageResult((game, *plugin_paths), _first_frame_result(args.target, stage), symbols=symbols)
 
 
 def _android_sdk() -> Path:
@@ -1645,6 +1750,8 @@ def _parse_arguments(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--encrypt-pack", action="store_true")
     parser.add_argument("--release-number", type=int)
     parser.add_argument("--anti-rollback", action="store_true")
+    parser.add_argument("--symbols-output", type=Path)
+    parser.add_argument("--crash-report-url")
     parser.add_argument("--launch", action="store_true")
     parser.add_argument("--android-application-id", default="com.kbengine.game")
     parser.add_argument("--android-label")
@@ -1719,6 +1826,12 @@ def package(args: argparse.Namespace) -> None:
                 ),
             )
             verify_unit(candidate)
+            if stage_result.symbols:
+                try:
+                    stored = publish_to_symbol_store(args.symbols_output, stage_result.symbols)
+                except (OSError, WindowsSymbolError) as error:
+                    raise PackagingError(f"symbol store could not be written: {error}") from error
+                emit_diagnostic("Info", f"Filed {len(stored)} PDB(s) under {args.symbols_output}")
             atomic_publish(candidate, args.output)
             verify_unit(args.output)
             published = True

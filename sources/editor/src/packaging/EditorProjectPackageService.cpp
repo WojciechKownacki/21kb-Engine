@@ -3,6 +3,7 @@
 #include "packaging/EditorPackageInputValidation.hpp"
 #include "packaging/EditorPackageProcessEnvironment.hpp"
 #include "engine/packaging/PackagingTargetCatalog.hpp"
+#include "engine/platform/CrashReporting.hpp"
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -197,6 +198,12 @@ bool EditorProjectPackageService::Start(EditorPackageRequest request, std::strin
             error = "The application icon must be an existing PNG inside the project.";
             return false;
         }
+        if (!request.crashReportUploadUrl.empty() &&
+            (targetSpec->target != kb::packaging::PackagingTarget::WindowsX64 ||
+             !kb::platform::IsAllowedCrashUploadEndpoint(request.crashReportUploadUrl))) {
+            error = "Crash reports upload only from Windows packages, over HTTPS or to this machine.";
+            return false;
+        }
         if (targetSpec->needsAndroidMetadata &&
             (request.androidApplicationId.empty() || request.androidLabel.empty() || request.androidVersionCode == 0U)) {
             error = "The Android package request is missing application metadata.";
@@ -365,6 +372,10 @@ std::vector<std::wstring> EditorProjectPackageService::BuildArguments(const Edit
         append(L"--signing-key", request.releaseSigningKey);
     }
     const kb::packaging::PackagingTargetSpec* targetSpec = kb::packaging::FindPackagingTarget(request.targetId);
+    if (targetSpec != nullptr && targetSpec->target == kb::packaging::PackagingTarget::WindowsX64 &&
+        !request.crashReportUploadUrl.empty()) {
+        appendText(L"--crash-report-url", request.crashReportUploadUrl);
+    }
     if (targetSpec != nullptr && targetSpec->needsAndroidMetadata) {
         appendText(L"--android-application-id", request.androidApplicationId);
         appendText(L"--android-version-code", std::to_string(request.androidVersionCode));

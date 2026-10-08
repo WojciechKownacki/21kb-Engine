@@ -6,6 +6,7 @@
 #include "engine/input/InputSubsystem.hpp"
 #include "engine/modules/IEngineModule.hpp"
 #include "engine/platform/UserStorage.hpp"
+#include "engine/platform/CrashReporting.hpp"
 #include "engine/platform/win32/Win32InputCollector.hpp"
 #include "engine/platform/win32/Win32XInputHapticsBackend.hpp"
 #include "engine/scene/Scene.hpp"
@@ -685,6 +686,9 @@ int RunGame(const GameOptions& options) {
 } // namespace
 
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
+    // First, so any crash after this point leaves a minidump in the player's
+    // crash report folder instead of ending the game without a trace.
+    static_cast<void>(kb::platform::CrashReporter::Install());
     // Nothing below may let an exception escape: this is a windowed process, so
     // an escaped exception ends in abort() behind a modal dialog that no player
     // and no automated run can dismiss.

@@ -1,5 +1,6 @@
 #include "rendering/BuildGamePanelModel.hpp"
 #include "packaging/EditorPackageInputValidation.hpp"
+#include "engine/platform/CrashReporting.hpp"
 
 #include <algorithm>
 #include <array>
@@ -18,6 +19,13 @@ constexpr std::array<BuildGameRowSpec, 3> kDesktopApplicationRows{{
     { BuildGameField::ProductName, "Product name", BuildGameRowKind::Text, true },
     { BuildGameField::ExecutableName, "Executable name", BuildGameRowKind::Text, true },
     { BuildGameField::ApplicationIcon, "Application icon", BuildGameRowKind::IconPicker, false },
+}};
+// The Windows player is the one host with crash reports, so only it offers an endpoint.
+constexpr std::array<BuildGameRowSpec, 4> kWindowsApplicationRows{{
+    { BuildGameField::ProductName, "Product name", BuildGameRowKind::Text, true },
+    { BuildGameField::ExecutableName, "Executable name", BuildGameRowKind::Text, true },
+    { BuildGameField::ApplicationIcon, "Application icon", BuildGameRowKind::IconPicker, false },
+    { BuildGameField::CrashReportUrl, "Crash report URL", BuildGameRowKind::Text, false },
 }};
 constexpr std::array<BuildGameRowSpec, 3> kWebApplicationRows{{
     { BuildGameField::ProductName, "Product name", BuildGameRowKind::Text, true },
@@ -149,7 +157,9 @@ std::vector<BuildGameSectionSpec> BuildGamePanelModel::Sections(kb::packaging::P
         ? std::span<const BuildGameRowSpec>{ kAndroidApplicationRows }
         : targetSpec->family == kb::packaging::PackagingTargetFamily::Web
             ? std::span<const BuildGameRowSpec>{ kWebApplicationRows }
-            : std::span<const BuildGameRowSpec>{ kDesktopApplicationRows };
+            : target == kb::packaging::PackagingTarget::WindowsX64
+                ? std::span<const BuildGameRowSpec>{ kWindowsApplicationRows }
+                : std::span<const BuildGameRowSpec>{ kDesktopApplicationRows };
     std::vector<BuildGameSectionSpec> sections{
         { BuildGameSection::Project, "PROJECT", kProjectRows },
         { BuildGameSection::Application, targetSpec->needsAndroidMetadata ? "ANDROID APPLICATION" :
@@ -197,6 +207,8 @@ std::string BuildGamePanelModel::Value(BuildGameField field, kb::packaging::Pack
     case BuildGameField::LinuxEngineRoot: return local.linuxEngineRoot;
     case BuildGameField::LinuxDisplay: return local.linuxDisplay;
     case BuildGameField::LinuxIdentity: return local.linuxIdentity.empty() ? "Optional - select private key..." : local.linuxIdentity.generic_string();
+    case BuildGameField::CrashReportUrl:
+        return project.crashReportUploadUrl.empty() ? "Optional - players' crash reports stay local" : project.crashReportUploadUrl;
     case BuildGameField::None: break;
     }
     return {};
@@ -229,6 +241,9 @@ BuildGameValidation BuildGamePanelModel::Validate(kb::packaging::PackagingTarget
         if (!ValidText(Trimmed(project.androidLabel), 128U))
             return { false, "Android application label must contain 1-128 printable characters." };
     }
+    if (spec->target == kb::packaging::PackagingTarget::WindowsX64 && !Trimmed(project.crashReportUploadUrl).empty() &&
+        !kb::platform::IsAllowedCrashUploadEndpoint(Trimmed(project.crashReportUploadUrl)))
+        return { false, "Crash report URL must use HTTPS, or HTTP to 127.0.0.1 or ::1." };
     const EditorBuildGameTargetSettings& targetSettings = local.For(target);
     if (release && spec->needsAndroidMetadata) {
         if (targetSettings.androidKeystore.empty()) return { false, Missing("Android keystore") };
@@ -308,6 +323,13 @@ bool BuildGamePanelModel::ApplyText(BuildGameField field, std::string_view value
     case BuildGameField::LinuxEngineRoot: local.linuxEngineRoot = text; return true;
     case BuildGameField::LinuxDisplay: local.linuxDisplay = text; return true;
     case BuildGameField::OutputDirectory: local.For(target).outputDirectory = text; return true;
+    case BuildGameField::CrashReportUrl:
+        if (!text.empty() && !kb::platform::IsAllowedCrashUploadEndpoint(text)) {
+            error = "Crash report URL must use HTTPS, or HTTP to 127.0.0.1 or ::1.";
+            return false;
+        }
+        project.crashReportUploadUrl = text;
+        return true;
     case BuildGameField::None:
     case BuildGameField::ProjectName:
     case BuildGameField::ApplicationIcon:

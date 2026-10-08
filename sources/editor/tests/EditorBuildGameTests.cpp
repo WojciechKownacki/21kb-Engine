@@ -134,6 +134,8 @@ void SchemaAndValidationTest() {
     const auto linux = kb::editor::BuildGamePanelModel::Sections(LinuxX64, false);
     Require(HasField(linux, BuildGameField::LinuxHost) && HasField(linux, BuildGameField::LinuxHostKey) &&
         HasField(linux, BuildGameField::LinuxIdentity), "Linux schema misses SSH build-host configuration");
+    Require(HasField(windows, BuildGameField::CrashReportUrl) && !HasField(linux, BuildGameField::CrashReportUrl) &&
+        !HasField(webGpu, BuildGameField::CrashReportUrl), "Only the Windows player may offer a crash report endpoint");
     Require(kb::editor::BuildGamePanelModel::Sections(static_cast<kb::packaging::PackagingTarget>(255), false).empty(),
         "Invalid target silently used another target schema");
 
@@ -243,6 +245,21 @@ void SchemaAndValidationTest() {
     }
     Require(!kb::editor::BuildGamePanelModel::Validate(WindowsX64, project, local, false, true).canBuild,
         "BUILD remained enabled during an active job");
+    std::string urlError;
+    Require(!kb::editor::BuildGamePanelModel::ApplyText(BuildGameField::CrashReportUrl, "http://crash.example.com/submit",
+                WindowsX64, project, local, urlError) && project.crashReportUploadUrl.empty(),
+        "A plain HTTP crash report endpoint was accepted");
+    Require(kb::editor::BuildGamePanelModel::ApplyText(BuildGameField::CrashReportUrl, " https://crash.example.com/submit ",
+                WindowsX64, project, local, urlError) &&
+            project.crashReportUploadUrl == "https://crash.example.com/submit" &&
+            kb::editor::BuildGamePanelModel::Validate(WindowsX64, project, local, false, false).canBuild,
+        "An HTTPS crash report endpoint was not accepted");
+    project.crashReportUploadUrl = "http://192.168.1.2/submit";
+    Require(!kb::editor::BuildGamePanelModel::Validate(WindowsX64, project, local, false, false).canBuild,
+        "BUILD accepted a crash report endpoint the game would refuse");
+    Require(kb::editor::BuildGamePanelModel::ApplyText(BuildGameField::CrashReportUrl, "", WindowsX64, project, local, urlError) &&
+            project.crashReportUploadUrl.empty(),
+        "Clearing the crash report endpoint failed");
 
     std::string pasted = "old";
     bool selectAll = true;
@@ -275,6 +292,7 @@ void SettingsRoundTripTest() {
     project.androidApplicationId = "com.publisher.product";
     project.androidVersionCode = 42U;
     project.androidLabel = "Product Android";
+    project.crashReportUploadUrl = "https://crash.example.com/api/minidump";
     std::string saveError;
     const auto projectPath = kb::project::ProjectSettingsStore::FilePath(root);
     Require(kb::project::ProjectSettingsStore::Save(projectPath, project, saveError), "Project packaging settings save failed");
@@ -478,6 +496,17 @@ void ProtocolAndArgumentsTest() {
     linux.linuxDisplay = ":1";
     linux.linuxIdentity = "C:/Keys/linux-builder";
     const auto linuxArguments = kb::editor::EditorProjectPackageService::BuildArguments(linux);
+    Require(std::ranges::find(linuxArguments, L"--crash-report-url") == linuxArguments.end(),
+        "A non-Windows package was given a crash report endpoint");
+    kb::editor::EditorPackageRequest windows = request;
+    windows.targetId = "Windows.x64";
+    windows.configuration = "Development";
+    windows.crashReportUploadUrl = "https://crash.example.com/submit";
+    const auto windowsArguments = kb::editor::EditorProjectPackageService::BuildArguments(windows);
+    const auto endpoint = std::ranges::find(windowsArguments, L"--crash-report-url");
+    Require(endpoint != windowsArguments.end() && std::next(endpoint) != windowsArguments.end() &&
+            *std::next(endpoint) == L"https://crash.example.com/submit",
+        "Windows argv misses the project's crash report endpoint");
     for (const std::wstring_view option : { L"--linux-host", L"--linux-user", L"--linux-host-key", L"--linux-port",
              L"--linux-engine-root", L"--linux-display", L"--linux-identity" }) {
         Require(std::ranges::find(linuxArguments, option) != linuxArguments.end(), "Linux argv misses an SSH option");

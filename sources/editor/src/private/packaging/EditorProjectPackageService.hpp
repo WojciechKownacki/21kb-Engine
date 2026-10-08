@@ -67,6 +67,8 @@ struct EditorPackageRequest {
     std::string executableName;
     std::filesystem::path applicationIcon;
     std::filesystem::path releaseSigningKey;
+    // Windows only: written into the package for the game's crash report upload.
+    std::string crashReportUploadUrl;
     std::string androidApplicationId;
     std::uint32_t androidVersionCode = 1U;
     std::string androidLabel;

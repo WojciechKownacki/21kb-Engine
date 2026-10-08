@@ -1543,6 +1543,22 @@ if(WIN32)
         src/platform/win32/Win32XInputHapticsBackend.cpp
     )
     target_link_libraries(kb_engine PRIVATE user32 xinput bcrypt)
+
+    # Crash capture shared by the game and the editor. dbghelp and version are
+    # loaded from System32 by the reporter's own thread, and WinHTTP is delay-loaded,
+    # so installing the reporter maps no extra library on the starting thread.
+    add_library(kb_crash_reporting STATIC
+        include/engine/platform/CrashReporting.hpp
+        src/platform/win32/Win32CrashReporter.cpp
+        src/platform/win32/Win32CrashReportStore.cpp
+    )
+    target_include_directories(kb_crash_reporting PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    target_link_libraries(kb_crash_reporting PRIVATE winhttp bcrypt shell32 ole32)
+    if(MSVC)
+        target_link_libraries(kb_crash_reporting INTERFACE delayimp)
+        target_link_options(kb_crash_reporting INTERFACE /DELAYLOAD:winhttp.dll /DELAYLOAD:bcrypt.dll)
+    endif()
+    kb_apply_quality_gates(kb_crash_reporting)
 endif()
 
 if(NOT WIN32)
@@ -1828,6 +1844,32 @@ if(BUILD_TESTING)
     )
 
     kb_apply_quality_gates(kb_library_safety_tests)
+
+    if(WIN32)
+        # The helper is the process that crashes: a console program, so the test
+        # never opens a window, and one that links nothing but the reporter.
+        add_executable(kb_crash_reporting_test_helper tests/CrashReportingTestHelper.cpp)
+        target_link_libraries(kb_crash_reporting_test_helper PRIVATE kb_crash_reporting)
+        kb_apply_quality_gates(kb_crash_reporting_test_helper)
+
+        add_executable(kb_crash_reporting_tests
+            tests/CrashReportingTests.cpp
+            tests/TestSupport.hpp
+        )
+        target_link_libraries(kb_crash_reporting_tests PRIVATE kb_crash_reporting kb_engine ws2_32)
+        add_dependencies(kb_crash_reporting_tests kb_crash_reporting_test_helper)
+        target_compile_definitions(kb_crash_reporting_tests PRIVATE
+            "KB_CRASH_REPORTING_TEST_HELPER=\"$<TARGET_FILE:kb_crash_reporting_test_helper>\""
+            "KB_CRASH_REPORTING_TEST_ROOT=\"${CMAKE_BINARY_DIR}/crash-reporting-test-scratch\""
+        )
+        add_test(NAME kb_crash_reporting_tests COMMAND $<TARGET_FILE:kb_crash_reporting_tests>)
+        set_tests_properties(kb_crash_reporting_tests PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+            LABELS "platform;safety"
+            TIMEOUT 300
+        )
+        kb_apply_quality_gates(kb_crash_reporting_tests)
+    endif()
 
     function(kb_add_ecs_test_target target_name)
         add_executable(${target_name}
