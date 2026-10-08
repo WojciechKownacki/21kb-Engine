@@ -13,7 +13,8 @@
 namespace kb::save {
 namespace {
 
-constexpr std::string_view kMacDomain{ "21KB-SAVE-V3", 13U };
+// The domain includes its terminating NUL, which separates it from what follows it.
+constexpr std::string_view kMacDomain{ "21KB-SAVE-V3\0", 13U };
 
 // HMAC over everything in the file but the HMAC field: the header in front of it and the
 // payload behind it, so neither the version, the size, the hash nor a payload byte can change.

@@ -16,7 +16,8 @@ namespace kb::security {
 namespace {
 
 constexpr std::string_view kManifestHeader = "21kb-release-manifest 1";
-constexpr std::string_view kSignatureDomain{ "21KB-RELEASE-MANIFEST-V1", 25U };
+// The domain includes its terminating NUL, which separates it from what follows it.
+constexpr std::string_view kSignatureDomain{ "21KB-RELEASE-MANIFEST-V1\0", 25U };
 constexpr std::string_view kStateHeader = "21kb-release-state 1";
 constexpr std::size_t kMaxManifestPathBytes = 1024U;
 
