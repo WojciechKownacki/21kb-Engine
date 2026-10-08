@@ -482,6 +482,65 @@ void RunDestroyedInstanceChildSlotReuseTest() {
         "An undone delete was not put back into its instance after the slot was reused");
 }
 
+// Objects keep their prefab node through a save and reopen by identity, not by name or place: an
+// added child named like a prefab node stays added, and a node moved inside the instance stays its node.
+void RequireCrateNodeIdentity(kb::scene::Scene& scene, const char* phase) {
+    const std::string prefix = std::string{ phase } + ": ";
+    const kb::scene::SceneObject crate = scene.Hierarchy().RootObjects().front();
+    const kb::scene::ScenePrefabInstanceHandle instance = scene.Prefabs().RootInstance(crate);
+    kb::tests::Require(instance.IsValid(), (prefix + "crate lost its prefab link").c_str());
+    bool originalLid = false;
+    bool addedLid = false;
+    bool movedHinge = false;
+    for (const kb::scene::SceneObject child : scene.Hierarchy().Children(crate)) {
+        std::uint32_t node = 99U;
+        const kb::scene::ScenePrefabInstanceHandle owner = scene.Prefabs().ContainingInstance(child, node);
+        const float x = scene.Transforms().Get(child).localPosition.x;
+        originalLid = originalLid || (scene.Entities().Name(child) == "Lid" && x == 1.0F && owner == instance && node == 1U);
+        addedLid = addedLid || (scene.Entities().Name(child) == "Lid" && x == 9.0F && !owner.IsValid());
+        movedHinge = movedHinge || (scene.Entities().Name(child) == "Hinge" && owner == instance && node == 2U);
+    }
+    kb::tests::Require(originalLid, (prefix + "the original Lid is not prefab node 1").c_str());
+    kb::tests::Require(addedLid, (prefix + "the added child named Lid was taken for a prefab node").c_str());
+    kb::tests::Require(movedHinge, (prefix + "the Hinge moved inside the instance fell out of it").c_str());
+}
+
+void RunPrefabInstanceNodeIdentitySurvivesReopenTest() {
+    const std::filesystem::path projectRoot = std::filesystem::temp_directory_path() / "21kb_engine_prefab_identity_project";
+    std::error_code removeError;
+    std::filesystem::remove_all(projectRoot, removeError);
+    std::filesystem::create_directories(projectRoot / "Assets");
+    const std::filesystem::path scenePath = projectRoot / "Assets" / "Identity.21kbscene";
+    {
+        kb::scene::Scene scene;
+        kb::tests::Require(scene.Assets().MountProject(projectRoot), "Identity project mount failed");
+        const kb::scene::SceneObject crate = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Crate" });
+        const kb::scene::SceneObject lid = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+            .name = "Lid", .parent = crate, .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 1.0F, 0.0F, 0.0F } } });
+        const kb::scene::SceneObject hinge = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Hinge", .parent = lid });
+        kb::tests::Require(scene.Prefabs().CreateAsset(crate, "Crate", projectRoot / "Assets" / "Crate.kbprefab").IsValid(), "Identity prefab was not created");
+
+        static_cast<void>(scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+            .name = "Lid", .parent = crate, .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 9.0F, 0.0F, 0.0F } } }));
+        kb::tests::Require(scene.Hierarchy().SetParent(lid, kb::scene::SceneObject{}) && scene.Hierarchy().SetParent(lid, crate) &&
+            scene.Hierarchy().SetParent(hinge, crate), "Identity setup could not move the instance nodes");
+        RequireCrateNodeIdentity(scene, "before save");
+        kb::tests::Require(kb::scene::SceneDocumentService::Save(scene, scenePath, "Identity"), "Identity scene was not saved");
+
+        const kb::scene::SceneDocument document = kb::scene::SceneDocumentService::Capture(scene, "Identity");
+        kb::tests::Require(kb::scene::SceneDocumentService::LoadIntoScene(scene, document), "Identity document did not reload in place");
+        RequireCrateNodeIdentity(scene, "in-place reload");
+    }
+    {
+        kb::scene::Scene reopened;
+        kb::tests::Require(reopened.Assets().MountProject(projectRoot), "Identity reopen project mount failed");
+        static_cast<void>(reopened.Assets().Discover());
+        kb::tests::Require(kb::scene::SceneDocumentService::LoadFileIntoScene(reopened, scenePath), "Identity scene did not reopen");
+        RequireCrateNodeIdentity(reopened, "reopen");
+    }
+    std::filesystem::remove_all(projectRoot, removeError);
+}
+
 // A scene file keeps an instance only as the prefab guid on its root node. Reopening the file in a
 // fresh scene, and reloading the captured document in place (how Play mode stops), must link the
 // instance, its node mapping and its overrides again.
@@ -883,6 +942,7 @@ void RunScenePrefabCaptureTests() {
     run("RunPrefabCreateAssetFromInstanceKeepsOneOwnerTest", RunPrefabCreateAssetFromInstanceKeepsOneOwnerTest);
     run("RunPrefabReloadOfChangedFileKeepsGuidTest", RunPrefabReloadOfChangedFileKeepsGuidTest);
     run("RunPrefabInstanceLinkSurvivesSceneReopenTest", RunPrefabInstanceLinkSurvivesSceneReopenTest);
+    run("RunPrefabInstanceNodeIdentitySurvivesReopenTest", RunPrefabInstanceNodeIdentitySurvivesReopenTest);
     run("RunRuntimeSpawnDoesNotLinkPrefabInstancesTest", RunRuntimeSpawnDoesNotLinkPrefabInstancesTest);
     run("RunDestroyedInstanceChildSlotReuseTest", RunDestroyedInstanceChildSlotReuseTest);
     run("RunPrefabVariantAssetRoundTripTest", RunPrefabVariantAssetRoundTripTest);

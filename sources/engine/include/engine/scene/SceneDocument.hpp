@@ -45,7 +45,9 @@ struct SceneDocument {
     //      animation, image fill, localized and fitted text, soft masks, radio groups, sprite-swap
     //      states, tooltips, drag and drop, event targets, slider and progress widgets, elastic and
     //      snapping scroll views, and input content types with placeholders.
-    static constexpr std::uint32_t CurrentFileVersion = 40U;
+    // v41: a prefab instance root persists which prefab node each object below it stands for, and its
+    //      overrides persist the stable ids of the nodes they target and refer to.
+    static constexpr std::uint32_t CurrentFileVersion = 41U;
 
     std::uint32_t fileVersion = CurrentFileVersion;
     std::string guid;

@@ -138,6 +138,9 @@ struct ScenePrefabNodeDesc {
     std::string name;
     std::string nestedPrefabGuid;
     std::vector<ScenePrefabPropertyOverride> nestedPrefabOverrides;
+    // On a node naming a nested prefab: for each node of its subtree, in node order, the stable id of
+    // the nested prefab node it stands for, or InvalidStableId for an object added to that instance.
+    std::vector<std::uint64_t> nestedPrefabNodeIds;
     std::uint32_t parentNode = NoParent;
     TransformComponent transform{};
     VisibilityComponent visibility{};

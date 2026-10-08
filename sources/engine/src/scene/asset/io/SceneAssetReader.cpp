@@ -33,12 +33,13 @@ using SceneAssetBinaryIO::ReadAllBytes;
     return count;
 }
 
-[[nodiscard]] bool ReadNestedOverride(ByteReader& input, ScenePrefabPropertyOverride& output) {
+[[nodiscard]] bool ReadNestedOverride(ByteReader& input, std::uint32_t fileVersion, ScenePrefabPropertyOverride& output) {
     std::uint32_t flag = 0;
     if (!input.ReadUInt32(output.nodeIndex) ||
         !input.ReadUInt32(flag) ||
         !input.ReadString(output.propertyPath) ||
-        !input.ReadString(output.value)) {
+        !input.ReadString(output.value) ||
+        (fileVersion >= 41U && (!input.ReadUInt64(output.nodeId) || !input.ReadUInt64(output.objectReferenceNodeId)))) {
         return false;
     }
     output.flag = static_cast<ScenePrefabOverrideFlag>(flag);
@@ -61,10 +62,20 @@ using SceneAssetBinaryIO::ReadAllBytes;
     output.nestedPrefabOverrides.reserve(nestedOverrideCount);
     for (std::uint32_t index = 0U; index < nestedOverrideCount; ++index) {
         ScenePrefabPropertyOverride property;
-        if (!ReadNestedOverride(input, property)) {
+        if (!ReadNestedOverride(input, fileVersion, property)) {
             return false;
         }
         output.nestedPrefabOverrides.push_back(std::move(property));
+    }
+    std::uint32_t nestedNodeIdCount = 0U;
+    if (fileVersion >= 41U && (!input.ReadUInt32(nestedNodeIdCount) || nestedNodeIdCount > SceneAssetFormat::MaxNodeCount)) {
+        return false;
+    }
+    output.nestedPrefabNodeIds.assign(nestedNodeIdCount, ScenePrefabNodeDesc::InvalidStableId);
+    for (std::uint64_t& nodeId : output.nestedPrefabNodeIds) {
+        if (!input.ReadUInt64(nodeId)) {
+            return false;
+        }
     }
 
     if (!input.ReadUInt32(output.parentNode) ||

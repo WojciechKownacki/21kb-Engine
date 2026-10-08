@@ -30,6 +30,8 @@ struct SharedResolvedPrefab {
     std::shared_ptr<const std::string> guid;
     std::shared_ptr<const ScenePrefab> resolved;
     std::shared_ptr<const std::vector<std::uint64_t>> nodeIds;
+    // (stable id, node index), sorted by id.
+    std::vector<std::pair<std::uint64_t, std::uint32_t>> nodeIndexById;
 };
 
 [[nodiscard]] ScenePrefabHandle FindOrLoadPrefab(Scene& scene, const std::string& guid, std::optional<ScenePrefabGuidAssetIndex>& assetIndex) {
@@ -65,14 +67,19 @@ struct SharedResolvedPrefab {
     auto resolved = std::make_shared<const ScenePrefab>(ScenePrefabNestedResolver::Resolve(state.prefabs, record->prefab));
     auto nodeIds = std::make_shared<std::vector<std::uint64_t>>();
     nodeIds->reserve(resolved->NodeCount());
+    std::vector<std::pair<std::uint64_t, std::uint32_t>> nodeIndexById;
+    nodeIndexById.reserve(resolved->NodeCount());
     for (const ScenePrefabNodeDesc& node : resolved->Nodes()) {
+        nodeIndexById.emplace_back(node.stableId, static_cast<std::uint32_t>(nodeIds->size()));
         nodeIds->push_back(node.stableId);
     }
+    std::ranges::sort(nodeIndexById);
     resolvedPrefabs.push_back(SharedResolvedPrefab{
         .prefab = handle,
         .guid = std::make_shared<const std::string>(record->guid),
         .resolved = std::move(resolved),
         .nodeIds = std::move(nodeIds),
+        .nodeIndexById = std::move(nodeIndexById),
     });
     return &resolvedPrefabs.back();
 }
@@ -131,6 +138,7 @@ void ScenePrefabInstanceRelinker::Relink(Scene& scene, const ScenePrefab& prefab
     std::vector<SharedResolvedPrefab> resolvedPrefabs;
     std::vector<std::uint32_t> sourceNodes;
     std::vector<std::uint32_t> overrideNodes;
+    std::vector<std::uint32_t> subtree;
     for (std::uint32_t root = static_cast<std::uint32_t>(firstLinked - nodes.begin()); root < nodeCount; ++root) {
         const ScenePrefabNodeDesc& overlay = nodes[root];
         if (overlay.nestedPrefabGuid.empty()) {
@@ -144,25 +152,55 @@ void ScenePrefabInstanceRelinker::Relink(Scene& scene, const ScenePrefab& prefab
 
         const ScenePrefab& resolved = *shared->resolved;
         const std::span<const ScenePrefabNodeDesc> resolvedNodes = resolved.Nodes();
-        overrideNodes.clear();
-        for (const ScenePrefabPropertyOverride& property : overlay.nestedPrefabOverrides) {
-            overrideNodes.push_back(resolved.ResolveNodeIndex(property));
-        }
         sourceNodes.assign(resolvedNodes.size(), kNoNode);
         sourceNodes[0] = root;
-        for (std::uint32_t node = 1U; node < static_cast<std::uint32_t>(resolvedNodes.size()); ++node) {
-            const std::uint32_t parentNode = resolvedNodes[node].parentNode;
-            const std::uint32_t sourceParent = parentNode < node ? sourceNodes[parentNode] : kNoNode;
-            const std::string* name = sourceParent == kNoNode ? nullptr : ExpectedName(resolved, overlay, overrideNodes, node);
-            if (name == nullptr) {
+
+        // Depth first through the subtree, which is the order the capture recorded node ids in.
+        subtree.clear();
+        for (std::uint32_t node = root;;) {
+            subtree.push_back(node);
+            if (firstChild[node] != kNoNode) {
+                node = firstChild[node];
                 continue;
             }
-            // A child that names its own prefab is a separate instance placed under this one.
-            for (std::uint32_t child = firstChild[sourceParent]; child != kNoNode; child = nextSibling[child]) {
-                if (claimed[child] == 0U && nodes[child].nestedPrefabGuid.empty() && nodes[child].name == *name) {
-                    sourceNodes[node] = child;
-                    claimed[child] = 1U;
-                    break;
+            while (node != root && nextSibling[node] == kNoNode) {
+                node = nodes[node].parentNode;
+            }
+            if (node == root) {
+                break;
+            }
+            node = nextSibling[node];
+        }
+
+        if (subtree.size() == overlay.nestedPrefabNodeIds.size()) {
+            for (std::size_t index = 1U; index < subtree.size(); ++index) {
+                const std::uint64_t nodeId = overlay.nestedPrefabNodeIds[index];
+                const auto found = std::ranges::lower_bound(shared->nodeIndexById, nodeId, {}, &std::pair<std::uint64_t, std::uint32_t>::first);
+                if (nodeId != ScenePrefabNodeDesc::InvalidStableId && found != shared->nodeIndexById.end() && found->first == nodeId &&
+                    sourceNodes[found->second] == kNoNode) {
+                    sourceNodes[found->second] = subtree[index];
+                }
+            }
+        } else {
+            // A scene saved before objects recorded their prefab node: the first unclaimed child with the node's name.
+            overrideNodes.clear();
+            for (const ScenePrefabPropertyOverride& property : overlay.nestedPrefabOverrides) {
+                overrideNodes.push_back(resolved.ResolveNodeIndex(property));
+            }
+            for (std::uint32_t node = 1U; node < static_cast<std::uint32_t>(resolvedNodes.size()); ++node) {
+                const std::uint32_t parentNode = resolvedNodes[node].parentNode;
+                const std::uint32_t sourceParent = parentNode < node ? sourceNodes[parentNode] : kNoNode;
+                const std::string* name = sourceParent == kNoNode ? nullptr : ExpectedName(resolved, overlay, overrideNodes, node);
+                if (name == nullptr) {
+                    continue;
+                }
+                // A child that names its own prefab is a separate instance placed under this one.
+                for (std::uint32_t child = firstChild[sourceParent]; child != kNoNode; child = nextSibling[child]) {
+                    if (claimed[child] == 0U && nodes[child].nestedPrefabGuid.empty() && nodes[child].name == *name) {
+                        sourceNodes[node] = child;
+                        claimed[child] = 1U;
+                        break;
+                    }
                 }
             }
         }

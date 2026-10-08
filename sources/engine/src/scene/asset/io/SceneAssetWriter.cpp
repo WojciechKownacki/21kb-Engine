@@ -43,6 +43,8 @@ void WriteNestedOverride(std::vector<std::uint8_t>& output, const ScenePrefabPro
     WriteUInt32(output, static_cast<std::uint32_t>(property.flag));
     WriteString(output, property.propertyPath);
     WriteString(output, property.value);
+    WriteUInt64(output, property.nodeId);
+    WriteUInt64(output, property.objectReferenceNodeId);
 }
 
 void WriteNode(std::vector<std::uint8_t>& output, const ScenePrefabNodeDesc& node) {
@@ -52,6 +54,10 @@ void WriteNode(std::vector<std::uint8_t>& output, const ScenePrefabNodeDesc& nod
     WriteUInt32(output, static_cast<std::uint32_t>(node.nestedPrefabOverrides.size()));
     for (const ScenePrefabPropertyOverride& property : node.nestedPrefabOverrides) {
         WriteNestedOverride(output, property);
+    }
+    WriteUInt32(output, static_cast<std::uint32_t>(node.nestedPrefabNodeIds.size()));
+    for (const std::uint64_t nodeId : node.nestedPrefabNodeIds) {
+        WriteUInt64(output, nodeId);
     }
     WriteUInt32(output, node.parentNode);
     SceneAssetPrimitiveCodec::WriteVec3(output, node.transform.localPosition);
