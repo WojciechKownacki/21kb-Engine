@@ -31,6 +31,7 @@
 #include <ShlObj.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -115,6 +116,31 @@ struct GameFrameProfile {
 
 [[nodiscard]] bool HasPrefix(std::wstring_view value, std::wstring_view prefix) noexcept {
     return value.size() >= prefix.size() && value.substr(0U, prefix.size()) == prefix;
+}
+
+// Switches that load content other than the game's own package, pick a scene
+// the game did not start in, or write files where the command line says. Only
+// a development player accepts them; a shipped game refuses them.
+constexpr std::array<std::wstring_view, 7U> kDevelopmentSwitches{
+    L"--project=",
+    L"--scene=",
+    L"--profile-fixed-step",
+    L"--profile-lighting=",
+    L"--profile-file=",
+    L"--screenshot-file=",
+    L"--screenshot-frame=",
+};
+
+// Names the first development switch on the command line, or returns nothing.
+[[nodiscard]] std::wstring_view FirstDevelopmentSwitch(int argc, wchar_t** argv) noexcept {
+    for (int index = 1; index < argc; ++index) {
+        for (const std::wstring_view option : kDevelopmentSwitches) {
+            if (HasPrefix(argv[index], option)) {
+                return option.substr(0U, option.find(L'='));
+            }
+        }
+    }
+    return {};
 }
 
 // Read straight off the wide argument. Converting it to a narrow string first
@@ -670,6 +696,16 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
             std::cerr << "kb_game: command line could not be read\n";
             return EXIT_FAILURE;
         }
+        const bool shipped = kb::game::IsShippedGamePlayer();
+        const std::wstring_view developmentSwitch =
+            shipped ? FirstDevelopmentSwitch(argc, argv) : std::wstring_view{};
+        if (!developmentSwitch.empty()) {
+            std::cerr << "kb_game: " << kb::game::NarrowForDiagnostics(developmentSwitch)
+                      << " is a development option; a packaged game runs only its own "
+                      << kb::game::kPackagedGameFileName << '\n';
+            LocalFree(argv);
+            return EXIT_FAILURE;
+        }
         const bool parsed = ParseArguments(argc, argv, options);
         LocalFree(argv);
         if (!parsed) {
@@ -677,6 +713,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         }
         // A packaged game keeps its project beside the executable, so an
         // argument-less launch starts the project's own ProjectSettings::defaultMap.
+        // A shipped game never names any other project.
         if (options.projectPath.empty()) {
             options.projectPath = kb::game::ExecutableDirectory();
         }
