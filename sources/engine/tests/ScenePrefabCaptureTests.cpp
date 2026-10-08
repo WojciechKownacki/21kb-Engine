@@ -7,12 +7,14 @@
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
+#include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/ScenePrefab.hpp"
 #include "engine/scene/ScenePrefabCaptureSettings.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 
+#include <array>
 #include <filesystem>
 #include <string>
 #include <system_error>
@@ -453,6 +455,33 @@ void RunRuntimeSpawnDoesNotLinkPrefabInstancesTest() {
         "A linked instantiation did not link the nested prefab instance");
 }
 
+// A destroyed instance child leaves a missing node behind. The entity that reuses its slot is not that
+// node, and an undone delete still finds its node after the slot was reused in between.
+void RunDestroyedInstanceChildSlotReuseTest() {
+    kb::scene::Scene scene;
+    kb::scene::ScenePrefab prefab;
+    const std::uint32_t rootNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Crate" });
+    const std::uint32_t lidNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Lid", .parentNode = rootNode });
+    const kb::scene::ScenePrefabHandle handle = scene.Prefabs().Register("Crate", std::move(prefab));
+    const kb::scene::ScenePrefabInstance crate = scene.Prefabs().Instantiate(handle);
+    const kb::scene::SceneEntity lid = crate.ObjectAt(lidNode).Entity();
+
+    scene.Entities().Destroy(lid);
+    const kb::scene::SceneObject plain = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Plain" });
+    kb::tests::Require((plain.Entity().Id() & 0xFFFFFFFFULL) == (lid.Id() & 0xFFFFFFFFULL), "Slot reuse setup: the new object did not reuse the destroyed child's slot");
+    std::uint32_t node = 99U;
+    kb::tests::Require(!scene.Prefabs().ContainingInstance(plain, node).IsValid(), "An entity reusing a destroyed instance child's slot was taken for the prefab node");
+
+    const kb::scene::ScenePrefabInstance other = scene.Prefabs().Instantiate(handle);
+    scene.Entities().Destroy(other.RootObject());
+    const kb::scene::SceneObject restored = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lid", .parent = crate.RootObject() });
+    const std::array<kb::scene::SceneEntity, 1> destroyed{ lid };
+    const std::array<kb::scene::SceneObject, 1> recreated{ restored };
+    scene.Prefabs().RelinkRestoredObjects(destroyed, recreated);
+    kb::tests::Require(scene.Prefabs().ContainingInstance(restored, node) == crate.Handle() && node == lidNode,
+        "An undone delete was not put back into its instance after the slot was reused");
+}
+
 // A scene file keeps an instance only as the prefab guid on its root node. Reopening the file in a
 // fresh scene, and reloading the captured document in place (how Play mode stops), must link the
 // instance, its node mapping and its overrides again.
@@ -855,6 +884,7 @@ void RunScenePrefabCaptureTests() {
     run("RunPrefabReloadOfChangedFileKeepsGuidTest", RunPrefabReloadOfChangedFileKeepsGuidTest);
     run("RunPrefabInstanceLinkSurvivesSceneReopenTest", RunPrefabInstanceLinkSurvivesSceneReopenTest);
     run("RunRuntimeSpawnDoesNotLinkPrefabInstancesTest", RunRuntimeSpawnDoesNotLinkPrefabInstancesTest);
+    run("RunDestroyedInstanceChildSlotReuseTest", RunDestroyedInstanceChildSlotReuseTest);
     run("RunPrefabVariantAssetRoundTripTest", RunPrefabVariantAssetRoundTripTest);
     run("RunPrefabParentOverrideAssetRoundTripTest", RunPrefabParentOverrideAssetRoundTripTest);
     run("RunPrefabVariantAddedChildAssetRoundTripTest", RunPrefabVariantAddedChildAssetRoundTripTest);
