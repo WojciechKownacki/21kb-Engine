@@ -626,7 +626,7 @@ void AssetManager::StopAsyncWorker() noexcept {
 }
 
 void AssetManager::RestartAsyncLoads() {
-    auto pendingLoads = std::move(asyncLoads_);
+    auto pendingLoads = std::exchange(asyncLoads_, {});
     if (!dependencySnapshots_) dependencySnapshots_ = std::make_unique<AssetRegistrySnapshotCache>();
     const auto registrySnapshot = dependencySnapshots_->Acquire(registry_);
     for (auto& [assetValue, record] : pendingLoads) {
