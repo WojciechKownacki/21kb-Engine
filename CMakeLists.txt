@@ -60,9 +60,10 @@ set(KB_DXCOMPILER_RUNTIME "" CACHE FILEPATH "Path to dxcompiler.dll copied next 
 option(KB_BUILD_PROVIDER_MODULES_AS_DLL "Build provider engine modules as hot-reloadable DLL/shared libraries instead of static libraries" ON)
 
 option(KB_HARDENING "Build with exploit mitigations" ON)
+option(KB_HARDENING_SHADOW_STACK "Mark Windows images compatible with hardware-enforced shadow stacks (CET); costs CPU time in call-heavy engine code" OFF)
 
 # Exploit mitigations for everything the build produces, third-party code included, so they cover a whole
-# player: Control Flow Guard and shadow-stack compatibility on MSVC; stack protector, fortified libc calls,
+# player: Control Flow Guard, ASLR and DEP on MSVC (shadow stacks on request); stack protector, fortified libc calls,
 # position-independent executables and read-only relocations with GCC and Clang. AddressSanitizer builds
 # leave out the ones it cannot be combined with.
 if(KB_HARDENING AND NOT EMSCRIPTEN)
@@ -75,7 +76,9 @@ if(KB_HARDENING AND NOT EMSCRIPTEN)
         if(CMAKE_SIZEOF_VOID_P EQUAL 8)
             add_link_options(/HIGHENTROPYVA)
         endif()
-        if(CMAKE_CXX_COMPILER_ARCHITECTURE_ID MATCHES "^(x64|X86)$")
+        # Shadow stacks check every return; in the engine's call-heavy loops that measured 10-20% slower,
+        # so a game opts in with KB_HARDENING_SHADOW_STACK when it can afford that.
+        if(KB_HARDENING_SHADOW_STACK AND CMAKE_CXX_COMPILER_ARCHITECTURE_ID MATCHES "^(x64|X86)$")
             add_link_options(/CETCOMPAT)
         endif()
     elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
