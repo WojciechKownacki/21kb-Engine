@@ -1,5 +1,7 @@
 #include "engine/platform/CrashReporting.hpp"
 
+#include "Win32MinidumpPaths.hpp"
+
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
@@ -17,6 +19,7 @@
 #include <fstream>
 #include <iterator>
 #include <optional>
+#include <span>
 #include <system_error>
 
 namespace kb::platform {
@@ -392,11 +395,18 @@ CrashUploadSummary UploadPendingCrashReports(const std::filesystem::path& direct
     }
     for (const CrashReportFiles& report : reports) {
         summary.attempted = true;
-        const std::optional<std::string> dump = ReadSmallFile(report.minidump, kMaximumUploadBytes);
+        std::optional<std::string> dump = ReadSmallFile(report.minidump, kMaximumUploadBytes);
         const std::optional<std::string> metadata = ReadSmallFile(report.metadata, kMaximumMetadataBytes);
         if (!dump.has_value() || !metadata.has_value() || dump->size() < 4U || dump->compare(0U, 4U, "MDMP") != 0) {
             ++summary.failed;
             summary.error = "crash report could not be read";
+            continue;
+        }
+        // Reports written before module paths were stripped on disk still carry the
+        // folders their modules came from; nothing leaves with a path in it.
+        if (!StripMinidumpModulePaths(std::span<std::byte>{ reinterpret_cast<std::byte*>(dump->data()), dump->size() })) {
+            ++summary.failed;
+            summary.error = "crash report minidump is malformed";
             continue;
         }
         std::string boundary = Boundary();

@@ -24,10 +24,14 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
+#include <cwchar>
 #include <filesystem>
 #include <fstream>
+#include <initializer_list>
 #include <iostream>
 #include <iterator>
 #include <mutex>
@@ -35,6 +39,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -68,14 +73,17 @@ struct HelperRun {
     std::string output;
 };
 
-[[nodiscard]] HelperRun RunHelper(const std::filesystem::path& directory, std::wstring_view mode) {
+// Runs the helper at `helper` (the built one by default) with `environment` (a
+// double-NUL-terminated block; empty inherits this process's environment).
+[[nodiscard]] HelperRun RunHelper(const std::filesystem::path& directory, std::wstring_view mode,
+    const std::filesystem::path& helper = std::filesystem::path{ KB_CRASH_REPORTING_TEST_HELPER },
+    std::wstring environment = {}) {
     SECURITY_ATTRIBUTES inheritable{ sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE };
     HANDLE readPipe = nullptr;
     HANDLE writePipe = nullptr;
     Require(CreatePipe(&readPipe, &writePipe, &inheritable, 0U) != FALSE &&
         SetHandleInformation(readPipe, HANDLE_FLAG_INHERIT, 0U) != FALSE, "helper output pipe could not be created");
-    std::wstring command = L"\"" + std::filesystem::path{ KB_CRASH_REPORTING_TEST_HELPER }.wstring() + L"\" \"" +
-        directory.wstring() + L"\" " + std::wstring{ mode };
+    std::wstring command = L"\"" + helper.wstring() + L"\" \"" + directory.wstring() + L"\" " + std::wstring{ mode };
     STARTUPINFOW startup{};
     startup.cb = sizeof(startup);
     startup.dwFlags = STARTF_USESTDHANDLES;
@@ -83,8 +91,9 @@ struct HelperRun {
     startup.hStdError = writePipe;
     startup.hStdInput = nullptr;
     PROCESS_INFORMATION process{};
-    const BOOL created = CreateProcessW(nullptr, command.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW,
-        nullptr, nullptr, &startup, &process);
+    const BOOL created = CreateProcessW(nullptr, command.data(), nullptr, nullptr, TRUE,
+        CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT, environment.empty() ? nullptr : environment.data(), nullptr,
+        &startup, &process);
     CloseHandle(writePipe);
     Require(created != FALSE, "crash helper could not be started");
     HelperRun run;
@@ -105,7 +114,21 @@ struct HelperRun {
     return run;
 }
 
+struct DumpModule {
+    std::wstring name;
+    std::uint32_t timeDateStamp = 0U;
+    std::uint32_t sizeOfImage = 0U;
+    bool hasPdb = false;
+    GUID pdbGuid{};
+    std::uint32_t pdbAge = 0U;
+    std::string pdbName;
+};
+
 struct DumpSummary {
+    std::vector<DumpModule> modules;
+    std::vector<std::wstring> unloadedModules;
+    // Every byte range of process memory the dump carries: thread stacks and memory lists.
+    std::vector<std::pair<std::uint64_t, std::uint64_t>> memoryRanges;
     std::set<std::uint32_t> streams;
     std::uint32_t threadCount = 0U;
     std::uint32_t exceptionThread = 0U;
@@ -114,10 +137,26 @@ struct DumpSummary {
     std::string comment;
 };
 
+[[nodiscard]] std::wstring ReadDumpString(const std::string& bytes, RVA rva) {
+    ULONG32 length = 0U;
+    Require(static_cast<std::uint64_t>(rva) + sizeof(length) <= bytes.size(), "minidump string runs past the file");
+    std::memcpy(&length, bytes.data() + rva, sizeof(length));
+    Require(length % 2U == 0U && static_cast<std::uint64_t>(rva) + sizeof(length) + length <= bytes.size(),
+        "minidump string is malformed");
+    std::wstring text(length / 2U, L'\0');
+    std::memcpy(text.data(), bytes.data() + rva + sizeof(length), length);
+    return text;
+}
+
+[[nodiscard]] DumpSummary ReadMinidumpBytes(const std::string& bytes);
+
 // Validates the container by hand rather than through dbghelp, so the test
 // checks the bytes a symbol server or crash backend would receive.
 [[nodiscard]] DumpSummary ReadMinidump(const std::filesystem::path& path) {
-    const std::string bytes = ReadBytes(path);
+    return ReadMinidumpBytes(ReadBytes(path));
+}
+
+[[nodiscard]] DumpSummary ReadMinidumpBytes(const std::string& bytes) {
     Require(bytes.size() >= sizeof(MINIDUMP_HEADER), "minidump is shorter than its header");
     MINIDUMP_HEADER header{};
     std::memcpy(&header, bytes.data(), sizeof(header));
@@ -146,6 +185,52 @@ struct DumpSummary {
             summary.exceptionCode = exception.ExceptionRecord.ExceptionCode;
         } else if (entry.StreamType == CommentStreamA) {
             summary.comment.assign(data, entry.Location.DataSize);
+        } else if (entry.StreamType == ModuleListStream) {
+            ULONG32 count = 0U;
+            std::memcpy(&count, data, sizeof(count));
+            Require(sizeof(ULONG32) + static_cast<std::uint64_t>(count) * sizeof(MINIDUMP_MODULE) <= entry.Location.DataSize,
+                "module list stream is truncated");
+            for (ULONG32 item = 0U; item < count; ++item) {
+                MINIDUMP_MODULE module{};
+                std::memcpy(&module, data + sizeof(ULONG32) + item * sizeof(MINIDUMP_MODULE), sizeof(module));
+                DumpModule parsed;
+                parsed.name = ReadDumpString(bytes, module.ModuleNameRva);
+                parsed.timeDateStamp = module.TimeDateStamp;
+                parsed.sizeOfImage = module.SizeOfImage;
+                if (module.CvRecord.DataSize > 24U) {
+                    Require(static_cast<std::uint64_t>(module.CvRecord.Rva) + module.CvRecord.DataSize <= bytes.size(),
+                        "CodeView record runs past the file");
+                    const char* record = bytes.data() + module.CvRecord.Rva;
+                    if (std::memcmp(record, "RSDS", 4U) == 0) {
+                        parsed.hasPdb = true;
+                        std::memcpy(&parsed.pdbGuid, record + 4, sizeof(GUID));
+                        std::memcpy(&parsed.pdbAge, record + 20, sizeof(std::uint32_t));
+                        parsed.pdbName.assign(record + 24, strnlen(record + 24, module.CvRecord.DataSize - 24U));
+                    }
+                }
+                summary.modules.push_back(std::move(parsed));
+            }
+        } else if (entry.StreamType == UnloadedModuleListStream) {
+            MINIDUMP_UNLOADED_MODULE_LIST list{};
+            std::memcpy(&list, data, sizeof(list));
+            Require(static_cast<std::uint64_t>(list.SizeOfHeader) + static_cast<std::uint64_t>(list.SizeOfEntry) *
+                    list.NumberOfEntries <= entry.Location.DataSize && list.SizeOfEntry >= sizeof(MINIDUMP_UNLOADED_MODULE),
+                "unloaded module list stream is truncated");
+            for (ULONG32 item = 0U; item < list.NumberOfEntries; ++item) {
+                MINIDUMP_UNLOADED_MODULE module{};
+                std::memcpy(&module, data + list.SizeOfHeader + item * list.SizeOfEntry, sizeof(module));
+                summary.unloadedModules.push_back(ReadDumpString(bytes, module.ModuleNameRva));
+            }
+        } else if (entry.StreamType == MemoryListStream) {
+            ULONG32 count = 0U;
+            std::memcpy(&count, data, sizeof(count));
+            Require(sizeof(ULONG32) + static_cast<std::uint64_t>(count) * sizeof(MINIDUMP_MEMORY_DESCRIPTOR) <=
+                    entry.Location.DataSize, "memory list stream is truncated");
+            for (ULONG32 item = 0U; item < count; ++item) {
+                MINIDUMP_MEMORY_DESCRIPTOR range{};
+                std::memcpy(&range, data + sizeof(ULONG32) + item * sizeof(MINIDUMP_MEMORY_DESCRIPTOR), sizeof(range));
+                summary.memoryRanges.emplace_back(range.Memory.Rva, range.Memory.DataSize);
+            }
         }
     }
     for (std::uint32_t index = 0U; index < header.NumberOfStreams; ++index) {
@@ -168,9 +253,70 @@ struct DumpSummary {
             if (record.ThreadId == summary.exceptionThread && record.Stack.Memory.DataSize > 0U) {
                 summary.crashedThreadHasStack = true;
             }
+            summary.memoryRanges.emplace_back(record.Stack.Memory.Rva, record.Stack.Memory.DataSize);
         }
     }
     return summary;
+}
+
+[[nodiscard]] bool HasSeparator(std::wstring_view text) {
+    return text.find_first_of(L"\\/") != std::wstring_view::npos;
+}
+
+[[nodiscard]] std::string Narrow(std::wstring_view text) {
+    return std::filesystem::path{ text }.string();
+}
+
+// The symbol store key of an executable: time stamp (8 hex digits) and image size, upper case.
+[[nodiscard]] std::string ImageId(std::uint32_t timeDateStamp, std::uint32_t sizeOfImage) {
+    char text[32];
+    std::snprintf(text, sizeof(text), "%08X%X", timeDateStamp, sizeOfImage);
+    return text;
+}
+
+// The symbol store key of a PDB: GUID (32 hex digits) and age, upper case.
+[[nodiscard]] std::string PdbId(const GUID& guid, std::uint32_t age) {
+    char text[64];
+    std::snprintf(text, sizeof(text), "%08X%04X%04X%02X%02X%02X%02X%02X%02X%02X%02X%X", guid.Data1, guid.Data2,
+        guid.Data3, guid.Data4[0], guid.Data4[1], guid.Data4[2], guid.Data4[3], guid.Data4[4], guid.Data4[5],
+        guid.Data4[6], guid.Data4[7], age);
+    return text;
+}
+
+// Module paths name the folders a game was installed in, often under the player's profile.
+// The names alone, with the image and PDB identities, are what symbol lookup uses.
+void RequireModulesWithoutPaths(const DumpSummary& dump) {
+    Require(!dump.modules.empty(), "minidump has no module list");
+    for (const DumpModule& module : dump.modules) {
+        Require(!module.name.empty() && !HasSeparator(module.name), "minidump names a module by its path");
+        Require(module.pdbName.find_first_of("\\/") == std::string::npos, "minidump names a PDB by its path");
+    }
+    for (const std::wstring& module : dump.unloadedModules) {
+        Require(!module.empty() && !HasSeparator(module), "minidump names an unloaded module by its path");
+    }
+}
+
+// The bytes of a dump that are not copies of process memory: module lists, CodeView records,
+// the description, system information. Thread stacks and memory lists are blanked.
+[[nodiscard]] std::string DumpMetadataBytes(const std::string& bytes, const DumpSummary& dump) {
+    std::string metadata = bytes;
+    for (const auto& [rva, size] : dump.memoryRanges) {
+        Require(rva + size <= metadata.size(), "minidump memory range runs past the file");
+        std::fill_n(metadata.begin() + static_cast<std::ptrdiff_t>(rva), static_cast<std::ptrdiff_t>(size), '\0');
+    }
+    return metadata;
+}
+
+// `needle` in `haystack` as UTF-8 or UTF-16LE, ignoring ASCII case.
+[[nodiscard]] bool ContainsText(const std::string& haystack, std::string_view needle) {
+    const std::string lowered = Lower(haystack);
+    std::string narrow = Lower(std::string{ needle });
+    std::string wide;
+    for (const char character : narrow) {
+        wide.push_back(character);
+        wide.push_back('\0');
+    }
+    return lowered.find(narrow) != std::string::npos || lowered.find(wide) != std::string::npos;
 }
 
 struct CrashCase {
@@ -243,11 +389,36 @@ void CheckCrashReport(const CrashCase& crash) {
     }
     Require(sawHelper && sawIdentifiedSystemModule, "crash description misses modules or their symbol identities");
 
+    // The dump identifies every module the way the description does, by name and symbol keys.
+    RequireModulesWithoutPaths(dump);
+    for (std::size_t index = 0U; index < modules->Size(); ++index) {
+        const kb::core::JsonValue& entry = *modules->At(index);
+        const std::string name = entry.Find("name")->AsString();
+        const auto inDump = std::ranges::find_if(dump.modules, [&](const DumpModule& module) {
+            return Lower(Narrow(module.name)) == Lower(name);
+        });
+        Require(inDump != dump.modules.end(), "a described module is missing from the dump");
+        const kb::core::JsonValue* imageId = entry.Find("imageId");
+        Require(imageId != nullptr && imageId->AsString() == ImageId(inDump->timeDateStamp, inDump->sizeOfImage),
+            "crash description and dump disagree on a module's image identity");
+        if (const kb::core::JsonValue* pdbId = entry.Find("pdbId"); pdbId != nullptr) {
+            Require(inDump->hasPdb && pdbId->AsString() == PdbId(inDump->pdbGuid, inDump->pdbAge) &&
+                    entry.Find("pdb")->AsString() == inDump->pdbName,
+                "crash description and dump disagree on a module's PDB identity");
+        }
+    }
+
     const kb::core::JsonValue* log = metadata.Find("log");
     Require(log != nullptr && log->Size() >= 2U && log->At(0)->AsString() == "helper: before the crash",
         "crash description does not carry the recent log");
     Require(log->At(1)->AsString() == "helper: opened %USERPROFILE%\\Documents\\save.dat",
         "crash description does not replace the user profile in logged paths");
+    wchar_t userName[256];
+    const DWORD userNameLength = GetEnvironmentVariableW(L"USERNAME", userName, 256U);
+    if (userNameLength >= 3U && userNameLength < 256U) {
+        Require(log->Size() >= 3U && log->At(2)->AsString() == "helper: cache in D:\\Shared\\%USERNAME%\\cache.bin",
+            "crash description does not replace the account name in logged paths");
+    }
     wchar_t profile[1024];
     const DWORD length = GetEnvironmentVariableW(L"USERPROFILE", profile, 1024U);
     if (length != 0U && length < 1024U) {
@@ -375,12 +546,217 @@ private:
     std::vector<std::string> requests_;
 };
 
+// The content of the multipart part called `name` in a captured upload request.
+[[nodiscard]] std::string UploadedPart(const std::string& request, std::string_view name) {
+    const std::string lowered = Lower(request.substr(0U, request.find("\r\n\r\n")));
+    const std::string marker = "content-type: multipart/form-data; boundary=";
+    const std::size_t boundaryAt = lowered.find(marker);
+    Require(boundaryAt != std::string::npos, "the upload is not multipart/form-data");
+    const std::size_t boundaryStart = boundaryAt + marker.size();
+    const std::string boundary = request.substr(boundaryStart, request.find("\r\n", boundaryStart) - boundaryStart);
+    const std::string header = "Content-Disposition: form-data; name=\"" + std::string{ name } + "\"";
+    const std::size_t partAt = request.find(header);
+    Require(partAt != std::string::npos, "the upload lacks a part");
+    const std::size_t contentAt = request.find("\r\n\r\n", partAt) + 4U;
+    const std::size_t contentEnd = request.find("\r\n--" + boundary, contentAt);
+    Require(contentEnd != std::string::npos, "an upload part is not terminated");
+    return request.substr(contentAt, contentEnd - contentAt);
+}
+
 [[nodiscard]] std::filesystem::path PrepareReportDirectory(std::string_view name) {
     // One real report, written by a crashing helper, to send.
     const std::filesystem::path directory = FreshDirectory(name);
     static_cast<void>(RunHelper(directory, L"access-violation"));
     Require(kb::platform::ListCrashReports(directory).size() == 1U, "upload fixture report was not written");
     return directory;
+}
+
+[[nodiscard]] std::wstring EnvironmentWith(std::initializer_list<std::pair<std::wstring_view, std::wstring>> overrides) {
+    std::wstring block;
+    const LPWCH current = GetEnvironmentStringsW();
+    Require(current != nullptr, "the environment could not be read");
+    for (const wchar_t* entry = current; *entry != L'\0'; entry += std::wcslen(entry) + 1U) {
+        const std::wstring_view text{ entry };
+        const bool replaced = std::ranges::any_of(overrides, [&](const auto& item) {
+            return text.size() > item.first.size() && text[item.first.size()] == L'=' &&
+                _wcsnicmp(text.data(), item.first.data(), item.first.size()) == 0;
+        });
+        if (!replaced) {
+            block.append(text);
+            block.push_back(L'\0');
+        }
+    }
+    FreeEnvironmentStringsW(current);
+    for (const auto& [name, value] : overrides) {
+        block.append(name);
+        block.push_back(L'=');
+        block.append(value);
+        block.push_back(L'\0');
+    }
+    block.push_back(L'\0');
+    return block;
+}
+
+// A game installed inside the player's profile: neither the profile, nor the account name, nor
+// the install folder may reach the description or the uploaded dump's metadata.
+void RunInstalledUnderProfilePrivacyTest() {
+    constexpr std::wstring_view kAccount = L"KbPrivacyAccount";
+    const std::filesystem::path profile = FreshDirectory("privacy") / L"Users" / kAccount;
+    const std::filesystem::path install = profile / L"Games" / L"Crash Test";
+    std::filesystem::create_directories(install);
+    const std::filesystem::path helper = install / std::filesystem::path{ KB_CRASH_REPORTING_TEST_HELPER }.filename();
+    std::filesystem::copy_file(KB_CRASH_REPORTING_TEST_HELPER, helper, std::filesystem::copy_options::overwrite_existing);
+    const std::filesystem::path reports = profile / L"AppData" / L"Local" / L"21kb" / L"CrashReports" / L"Helper";
+    const HelperRun run = RunHelper(reports, L"access-violation", helper,
+        EnvironmentWith({ { L"USERPROFILE", profile.wstring() }, { L"USERNAME", std::wstring{ kAccount } } }));
+    Require(run.exitCode != 0U, "the crashing helper copy reported success");
+    const std::vector<kb::platform::CrashReportFiles> written = kb::platform::ListCrashReports(reports);
+    Require(written.size() == 1U, "the helper installed under a profile did not leave a report");
+
+    const std::string account = Narrow(kAccount);
+    const std::string metadataText = ReadBytes(written.front().metadata);
+    Require(!ContainsText(metadataText, account), "the crash description names the player's account");
+    kb::core::JsonValue metadata;
+    std::string error;
+    Require(kb::core::JsonValue::Parse(metadataText, metadata, error), "crash description is not JSON");
+    const kb::core::JsonValue* log = metadata.Find("log");
+    Require(log != nullptr && log->Size() >= 3U &&
+            log->At(1)->AsString() == "helper: opened %USERPROFILE%\\Documents\\save.dat" &&
+            log->At(2)->AsString() == "helper: cache in D:\\Shared\\%USERNAME%\\cache.bin",
+        "the crash description does not stand in for the profile and the account name");
+
+    const std::string dumpBytes = ReadBytes(written.front().minidump);
+    const DumpSummary dump = ReadMinidumpBytes(dumpBytes);
+    RequireModulesWithoutPaths(dump);
+    Require(!ContainsText(DumpMetadataBytes(dumpBytes, dump), account),
+        "the minidump names the player's account outside of process memory");
+
+    Require(kb::platform::SetCrashUploadConsent(reports, true), "upload consent could not be given");
+    LoopbackServer server{ 200 };
+    const kb::platform::CrashUploadSummary summary = kb::platform::UploadPendingCrashReports(reports, server.Url());
+    Require(summary.uploaded == 1U && server.Requests().size() == 1U, "the report was not uploaded");
+    const std::string uploadedDump = UploadedPart(server.Requests().front(), "upload_file_minidump");
+    const std::string uploadedMetadata = UploadedPart(server.Requests().front(), "metadata");
+    const DumpSummary uploaded = ReadMinidumpBytes(uploadedDump);
+    RequireModulesWithoutPaths(uploaded);
+    Require(!ContainsText(DumpMetadataBytes(uploadedDump, uploaded), account) && !ContainsText(uploadedMetadata, account),
+        "the upload names the player's account outside of process memory");
+}
+
+// A report written before module paths were stripped on disk: the upload strips them and keeps
+// every module's identity.
+void RunLegacyDumpUploadTest() {
+    const std::filesystem::path directory = FreshDirectory("legacy-upload");
+    const std::filesystem::path dumpPath = directory / "crash-20260101-000000-1.dmp";
+    {
+        const HANDLE file = CreateFileW(dumpPath.c_str(), GENERIC_READ | GENERIC_WRITE, 0U, nullptr, CREATE_ALWAYS,
+            FILE_ATTRIBUTE_NORMAL, nullptr);
+        Require(file != INVALID_HANDLE_VALUE, "legacy dump file could not be created");
+        const BOOL written = MiniDumpWriteDump(GetCurrentProcess(), GetCurrentProcessId(), file,
+            static_cast<MINIDUMP_TYPE>(MiniDumpNormal | MiniDumpWithUnloadedModules), nullptr, nullptr, nullptr);
+        CloseHandle(file);
+        Require(written != FALSE, "legacy dump could not be written");
+    }
+    std::ofstream{ directory / "crash-20260101-000000-1.json", std::ios::binary }
+        << "{\"schema\":\"21kb.crash-report/2\",\"product\":\"Legacy\",\"version\":\"1\",\"buildId\":null}\n";
+    const std::string original = ReadBytes(dumpPath);
+    const DumpSummary before = ReadMinidumpBytes(original);
+    Require(std::ranges::any_of(before.modules, [](const DumpModule& module) { return HasSeparator(module.name); }),
+        "the legacy fixture does not carry module paths");
+
+    Require(kb::platform::SetCrashUploadConsent(directory, true), "upload consent could not be given");
+    LoopbackServer server{ 200 };
+    const kb::platform::CrashUploadSummary summary = kb::platform::UploadPendingCrashReports(directory, server.Url());
+    Require(summary.uploaded == 1U && server.Requests().size() == 1U, "the legacy report was not uploaded");
+    const std::string uploadedDump = UploadedPart(server.Requests().front(), "upload_file_minidump");
+    Require(uploadedDump.size() == original.size(), "stripping module paths changed the dump's size");
+    const DumpSummary after = ReadMinidumpBytes(uploadedDump);
+    RequireModulesWithoutPaths(after);
+    Require(after.modules.size() == before.modules.size(), "the upload lost modules");
+    for (std::size_t index = 0U; index < before.modules.size(); ++index) {
+        const DumpModule& left = before.modules[index];
+        const DumpModule& right = after.modules[index];
+        Require(right.name == std::filesystem::path{ left.name }.filename().wstring() &&
+                right.timeDateStamp == left.timeDateStamp && right.sizeOfImage == left.sizeOfImage &&
+                right.hasPdb == left.hasPdb && std::memcmp(&right.pdbGuid, &left.pdbGuid, sizeof(GUID)) == 0 &&
+                right.pdbAge == left.pdbAge && right.pdbName == std::filesystem::path{ left.pdbName }.filename().string(),
+            "the upload changed a module's identity");
+    }
+}
+
+// A crash is symbolized from the description alone: the module's file name, image identity
+// and PDB identity find the exact build in a symbol folder, whatever folder the game ran from.
+void RunSymbolizationFromDescriptionTest() {
+    const std::filesystem::path directory = FreshDirectory("symbolize");
+    const std::filesystem::path install = directory / "install";
+    std::filesystem::create_directories(install);
+    const std::filesystem::path built{ KB_CRASH_REPORTING_TEST_HELPER };
+    const std::filesystem::path helper = install / built.filename();
+    std::filesystem::copy_file(built, helper);
+    const std::filesystem::path reports = directory / "reports";
+    static_cast<void>(RunHelper(reports, L"access-violation", helper));
+    const std::vector<kb::platform::CrashReportFiles> written = kb::platform::ListCrashReports(reports);
+    Require(written.size() == 1U, "the symbolization fixture report was not written");
+
+    kb::core::JsonValue metadata;
+    std::string error;
+    Require(kb::core::JsonValue::Parse(ReadBytes(written.front().metadata), metadata, error), "crash description is not JSON");
+    const kb::core::JsonValue* exception = metadata.Find("exception");
+    Require(exception != nullptr && exception->Find("module") != nullptr && exception->Find("offset") != nullptr,
+        "crash description does not locate the fault");
+    const std::string faultModule = exception->Find("module")->AsString();
+    const std::uint64_t faultOffset = std::stoull(exception->Find("offset")->AsString(), nullptr, 16);
+    const kb::core::JsonValue* modules = metadata.Find("modules");
+    const kb::core::JsonValue* entry = nullptr;
+    for (std::size_t index = 0U; modules != nullptr && index < modules->Size(); ++index) {
+        if (modules->At(index)->Find("name")->AsString() == faultModule) {
+            entry = modules->At(index);
+        }
+    }
+    Require(faultModule == built.filename().string() && entry != nullptr && entry->Find("pdbId") != nullptr,
+        "the fault is not described in the helper's own module");
+    const std::uint64_t base = std::stoull(entry->Find("base")->AsString(), nullptr, 16);
+    const auto size = static_cast<DWORD>(entry->Find("size")->AsNumber());
+
+    // The symbol folder holds the build's image and PDB; nothing points at where it was built.
+    const std::filesystem::path symbols = directory / "symbols";
+    std::filesystem::create_directories(symbols);
+    std::filesystem::copy_file(built, symbols / built.filename());
+    std::filesystem::path pdb = built;
+    pdb.replace_extension(".pdb");
+    Require(std::filesystem::is_regular_file(pdb), "the helper was linked without a PDB");
+    std::filesystem::copy_file(pdb, symbols / entry->Find("pdb")->AsString());
+
+    // The image identity in the description is the one of the build in the symbol folder.
+    const std::string image = ReadBytes(symbols / built.filename());
+    IMAGE_DOS_HEADER dos{};
+    std::memcpy(&dos, image.data(), sizeof(dos));
+    IMAGE_NT_HEADERS nt{};
+    std::memcpy(&nt, image.data() + dos.e_lfanew, sizeof(nt));
+    Require(entry->Find("imageId")->AsString() == ImageId(nt.FileHeader.TimeDateStamp, nt.OptionalHeader.SizeOfImage),
+        "the described image identity does not match the build");
+
+    const HANDLE session = reinterpret_cast<HANDLE>(static_cast<std::uintptr_t>(0x21CBU));
+    SymSetOptions(SYMOPT_IGNORE_CVREC | SYMOPT_EXACT_SYMBOLS | SYMOPT_UNDNAME | SYMOPT_FAIL_CRITICAL_ERRORS |
+        SYMOPT_NO_PROMPTS);
+    Require(SymInitializeW(session, symbols.c_str(), FALSE) != FALSE, "dbghelp could not start a symbol session");
+    const DWORD64 loaded = SymLoadModuleExW(session, nullptr, (symbols / built.filename()).c_str(), nullptr, base, size,
+        nullptr, 0U);
+    IMAGEHLP_MODULEW64 info{};
+    info.SizeOfStruct = sizeof(info);
+    const bool haveInfo = loaded != 0U && SymGetModuleInfoW64(session, base, &info) != FALSE;
+    alignas(SYMBOL_INFOW) std::byte storage[sizeof(SYMBOL_INFOW) + 256U * sizeof(wchar_t)]{};
+    auto* symbol = reinterpret_cast<SYMBOL_INFOW*>(storage);
+    symbol->SizeOfStruct = sizeof(SYMBOL_INFOW);
+    symbol->MaxNameLen = 256U;
+    DWORD64 displacement = 0U;
+    const bool resolved = haveInfo && SymFromAddrW(session, base + faultOffset, &displacement, symbol) != FALSE;
+    const std::wstring function = resolved ? std::wstring{ symbol->Name, symbol->NameLen } : std::wstring{};
+    SymCleanup(session);
+    Require(haveInfo && info.SymType == SymPdb, "the described PDB identity did not load the build's symbols");
+    Require(PdbId(info.PdbSig70, info.PdbAge) == entry->Find("pdbId")->AsString(),
+        "the loaded symbols are not the ones the description names");
+    Require(resolved && function == L"wmain", "the fault address did not symbolize to the crashing function");
 }
 
 void RunEndpointPolicyTest() {
@@ -499,7 +875,8 @@ void RunPrivacyNoticeTest() {
     // The one that ships: the packager copies it beside every Windows player.
     const std::filesystem::path shipped = std::filesystem::path{ KB_CRASH_REPORTING_PRIVACY_NOTICE };
     const std::string notice = kb::platform::ReadCrashReportPrivacyNotice(shipped.parent_path());
-    for (const std::string_view promise : { "%LOCALAPPDATA%", ".dmp", ".json", "%USERPROFILE%", "HTTPS", "off until" }) {
+    for (const std::string_view promise : { "%LOCALAPPDATA%", ".dmp", ".json", "%USERPROFILE%", "%USERNAME%",
+             "by file name and version only", "HTTPS", "off until" }) {
         Require(notice.find(promise) != std::string::npos, "the shipped privacy notice does not describe what is collected and sent");
     }
 }
@@ -569,6 +946,9 @@ int main() {
     RunConsentGateTest();
     RunUploadTest();
     RunDeleteReportsTest();
+    RunInstalledUnderProfilePrivacyTest();
+    RunLegacyDumpUploadTest();
+    RunSymbolizationFromDescriptionTest();
     RunPrivacyNoticeTest();
     RunDefaultDirectoryTest();
     // Last: it installs the reporter in this process.

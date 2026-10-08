@@ -88,6 +88,17 @@ int wmain(int argc, wchar_t** argv) {
             kb::platform::CrashReporter::Note(line);
         }
     }
+    // A per-user folder outside the profile: only the account name gives it away.
+    wchar_t userName[256];
+    const DWORD userNameLength = GetEnvironmentVariableW(L"USERNAME", userName, 256U);
+    if (userNameLength != 0U && userNameLength < 256U) {
+        char narrow[1024];
+        const int written = WideCharToMultiByte(CP_UTF8, 0, userName, -1, narrow, sizeof(narrow), nullptr, nullptr);
+        if (written > 0) {
+            const std::string line = std::string{ "helper: cache in D:\\Shared\\" } + narrow + "\\cache.bin";
+            kb::platform::CrashReporter::Note(line);
+        }
+    }
 
     if (mode == L"timing") {
         // Install cost on the starting thread and the cost of one Note, which
