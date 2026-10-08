@@ -1146,6 +1146,20 @@ void RunTextureLoaderRefusesOversizedImageHeaderTest() {
         "A buffer shorter than an image signature was decoded");
 }
 
+// A data URI's byteLength is only a claim about the text that follows it. This
+// buffer (found by fuzzing, fuzz/corpus/mesh_gltf) declares a gigabyte in four
+// base64 characters; the importer must refuse it without allocating the gigabyte.
+void RunGltfImporterRefusesBufferLongerThanItsDataTest() {
+    const std::string gltf =
+        R"({"asset":{"version":"2.0"},"buffers":[{"byteLength":1073741824,"uri":"data:application/octet-stream;base64,AAAA"}]})";
+    const std::size_t peakBefore = PeakCommittedBytes();
+    Require(!RenderMeshAssetBuilder::LoadGltf(
+                std::span<const std::uint8_t>{ reinterpret_cast<const std::uint8_t*>(gltf.data()), gltf.size() }, {})
+                 .has_value(),
+        "glTF importer accepted a buffer longer than its data");
+    Require(PeakCommittedBytes() - peakBefore < 256U * 1024U * 1024U,
+        "glTF importer allocated a buffer's declared length before decoding its data");
+}
 
 void RunFbxImporterBuildsSectionsForMaterialSlotsTest() {
     const std::vector<std::byte> fixture = MakeMultiMaterialFbxFixture();
@@ -3697,6 +3711,7 @@ void RunRenderResourceRegistryTests() {
     RunFbxImporterRefusesArrayLongerThanItsCompressedBytesTest();
     RunFbxImporterRefusesUnboundedMaterialSlotsTest();
     RunTextureLoaderRefusesOversizedImageHeaderTest();
+    RunGltfImporterRefusesBufferLongerThanItsDataTest();
     RunRenderMeshAssetLoaderDiscoversAndLoadsObjThroughAssetManagerTest();
     RunRenderMeshAssetLoaderLoadsImportedObjContainerTest();
     RunRenderMeshAssetLoaderLoadsWorkspaceImportedFbxCubeWhenPresentTest();
