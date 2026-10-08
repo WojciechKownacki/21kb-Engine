@@ -798,6 +798,40 @@ void RunScriptEditorSuite(Report& report) {
                 "C++ script defines a class");
             const kb::scene::SceneEntity actor = context.CreateHierarchyObject();
             report.Check(actor.IsValid() && context.AttachScriptToEntity(actor, nativeScript), "C++ script attaches to actor");
+
+            // The whole way a game developer goes: Play builds the script with the command written into its
+            // descriptor, loads the module, and the script's Ready logs to the Console.
+            report.Check(context.BeginPlayModeSceneSession(), "Enter Play with the C++ script attached");
+            for (int frame = 0; frame < 3; ++frame) {
+                static_cast<void>(context.Scene().Runtime().Update(0.016F));
+            }
+            const bool ready = std::ranges::any_of(context.Console().Entries(), [](const EditorConsoleEntry& entry) {
+                return entry.message.find("NewScript ready") != std::string::npos;
+            });
+            const std::filesystem::path module = EditorProjectPaths::ProjectRoot() / "Binaries/NativeScripts/NewScript.dll";
+            report.Check(ready && std::filesystem::is_regular_file(module), "Play builds the C++ script, loads it and runs its Ready");
+            if (!ready) {
+                for (const EditorConsoleEntry& entry : context.Console().Entries()) {
+                    if (entry.level != EditorConsoleLevel::Info) {
+                        report.Note(entry.category + ": " + entry.message);
+                    }
+                }
+            }
+            report.Check(context.RestorePlayModeSceneSession(), "Stop Play after the C++ script ran");
+
+            // An edited script is rebuilt and reloaded on the next Play.
+            std::string edited = EditorScriptAssetGateway::ReadSource(source);
+            const std::size_t message = edited.find(" ready\"");
+            report.Check(message != std::string::npos && EditorScriptAssetGateway::WriteSource(source, edited.replace(message, 6U, " ready again")),
+                "Edit the C++ script's Ready message");
+            report.Check(context.BeginPlayModeSceneSession(), "Enter Play with the edited C++ script");
+            for (int frame = 0; frame < 3; ++frame) {
+                static_cast<void>(context.Scene().Runtime().Update(0.016F));
+            }
+            report.Check(std::ranges::any_of(context.Console().Entries(), [](const EditorConsoleEntry& entry) {
+                    return entry.message.find("NewScript ready again") != std::string::npos;
+                }), "Play rebuilds and reloads the edited C++ script");
+            report.Check(context.RestorePlayModeSceneSession(), "Stop Play after the edited C++ script ran");
         }
     }
 
