@@ -32,6 +32,7 @@ void RunGraphForwardGpuRenderTests();
 void RunSceneLightGridTests();
 void RunSceneLightGridGpuTests();
 void RunSkinnedMeshGpuReadbackTests();
+void RunPrebuiltBackendShaderGpuTests();
 void RunFinalCompositePassTests();
 void RunPostProcessChainTests();
 void RunRenderFramePipelineTests();
@@ -168,6 +169,10 @@ int main(int argc, char** argv) {
     }
     if (argc == 2 && std::string_view{ argv[1] } == "graph-forward-gpu") {
         kb::render::tests::RunGraphForwardGpuRenderTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "backend-shader-gpu") {
+        kb::render::tests::RunPrebuiltBackendShaderGpuTests();
         return EXIT_SUCCESS;
     }
     if (argc == 2 && std::string_view{ argv[1] } == "skinned-gpu-readback") {

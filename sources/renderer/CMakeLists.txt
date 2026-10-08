@@ -460,6 +460,7 @@ set(KB_RENDERER_SHADER_MANIFEST
     fs_mesh.sc
     fs_mesh_gbuffer_instanced.sc
     fs_mesh_instanced.sc
+    fs_mesh_motion_vectors.sc
     fs_mesh_selection_instanced.sc
     fs_mesh_shadow_instanced.sc
     fs_post_bloom_blur.sc
@@ -482,7 +483,11 @@ set(KB_RENDERER_SHADER_MANIFEST
     vs_lit_trs_gpu_cull.sc
     vs_mesh.sc
     vs_mesh_instanced.sc
+    vs_mesh_motion_vectors_instanced.sc
     vs_mesh_shadow_instanced.sc
+    vs_mesh_shadow_skinned_instanced.sc
+    vs_mesh_skinned_instanced.sc
+    vs_mesh_skinned_motion_vectors_instanced.sc
     vs_present.sc
     vs_particle_instanced.sc
     vs_screen_ui.sc
@@ -799,6 +804,10 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
 
     add_test(NAME kb_renderer_tests COMMAND $<TARGET_FILE:kb_renderer_tests>)
     add_test(NAME kb_renderer_editor_ui_view COMMAND $<TARGET_FILE:kb_renderer_tests> editor-ui-view)
+    # The committed Vulkan and OpenGL shader binaries, executed on those backends where this
+    # machine has a device for them (skipped, with the reason printed, where it has none).
+    add_test(NAME kb_renderer_backend_shader_gpu COMMAND $<TARGET_FILE:kb_renderer_tests> backend-shader-gpu)
+    set_tests_properties(kb_renderer_backend_shader_gpu PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu")
     set_tests_properties(kb_renderer_editor_ui_view PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;headless;ui")
     set_tests_properties(kb_renderer_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
