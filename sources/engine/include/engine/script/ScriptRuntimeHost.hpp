@@ -47,6 +47,12 @@ struct ScriptRuntimeHostOptions {
     // report that persistent storage is not configured.
     std::filesystem::path userStorageRoot;
     std::uintmax_t userStorageQuotaBytes = kDefaultScriptUserStorageQuotaBytes;
+    // A behaviour whose script reports an error is disabled (its
+    // BehaviourComponent::enabled is cleared) so one faulty script instance
+    // stops instead of failing every frame while the rest of the scene runs.
+    // Shipped game hosts enable it; the editor keeps the behaviour enabled so
+    // a fixed script hot-reloads into it.
+    bool disableFailingBehaviours = false;
     bool installSceneSystem = false;
 };
 

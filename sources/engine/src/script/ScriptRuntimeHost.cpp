@@ -5,6 +5,8 @@
 #include "engine/library/EngineLibraryModule.hpp"
 #include "engine/platform/UserStorage.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SceneBehaviourComponents.hpp"
+#include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneSystem.hpp"
 #include "engine/scene/SceneSystemContext.hpp"
@@ -53,6 +55,7 @@ public:
 
 private:
     void CollectDiagnostics();
+    void DisableFailingBehaviour(const ScriptDiagnostic& diagnostic);
 
     std::shared_ptr<ScriptRuntimeHostState> state_;
     ScriptRuntimeSceneSystem system_;
@@ -79,6 +82,7 @@ struct ScriptRuntimeHostState final {
     ScriptRuntimeFrameSettings frameSettings;
     ScriptExecutionBudgetSettings executionBudgetSettings;
     std::shared_ptr<kb::platform::UserStorage> userStorage;
+    bool disableFailingBehaviours = false;
     NativeScriptBackend* nativeBackend = nullptr;
     LuaScriptBackend* luaBackend = nullptr;
     VisualGraphScriptBackend* visualGraphBackend = nullptr;
@@ -150,11 +154,27 @@ void ScriptRuntimeHostSceneSystem::CollectDiagnostics() {
             + ", script asset #" + std::to_string(diagnostic.assetId.value) + ")"
             + (diagnostic.stackTrace.empty() ? std::string{}
                 : "\n" + diagnostic.stackTrace));
+        if (state_->disableFailingBehaviours) {
+            DisableFailingBehaviour(diagnostic);
+        }
     }
     for (const ScriptRuntimeAssetPrepareDiagnostic& diagnostic : system_.LastPrepareResult().diagnostics) {
         push("behaviour could not load/compile: " + diagnostic.message
             + " (script asset #" + std::to_string(diagnostic.assetId.value) + ")");
     }
+}
+
+void ScriptRuntimeHostSceneSystem::DisableFailingBehaviour(const ScriptDiagnostic& diagnostic) {
+    kb::scene::SceneBehaviourComponents behaviours = state_->scene.Components().Behaviours();
+    const kb::scene::BehaviourComponent* current = behaviours.TryGet(diagnostic.entity);
+    if (current == nullptr || !current->enabled || current->behaviourAssetId != diagnostic.assetId.value) {
+        return;
+    }
+    kb::scene::BehaviourComponent disabled = *current;
+    disabled.enabled = false;
+    behaviours.Set(diagnostic.entity, disabled);
+    state_->pendingSceneSystemDiagnostics.push_back("behaviour disabled after its error (entity #"
+        + std::to_string(diagnostic.entity.Id()) + ", script asset #" + std::to_string(diagnostic.assetId.value) + ")");
 }
 
 } // namespace
@@ -166,6 +186,7 @@ ScriptRuntimeHost::ScriptRuntimeHost(kb::scene::Scene& scene, ScriptRuntimeHostO
     }
     state_->frameSettings = options.frameSettings;
     state_->executionBudgetSettings = options.executionBudgetSettings;
+    state_->disableFailingBehaviours = options.disableFailingBehaviours;
     state_->luaRuntime.SetExecutionBudgetSettings(options.executionBudgetSettings);
     if (!options.userStorageRoot.empty()) {
         state_->userStorage = std::make_shared<kb::platform::UserStorage>(
