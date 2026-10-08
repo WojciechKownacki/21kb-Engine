@@ -404,6 +404,7 @@ public:
     [[nodiscard]] std::string_view BuildGameEditBuffer() const noexcept;
     [[nodiscard]] bool HasBuildGameStorePassword() const noexcept;
     [[nodiscard]] bool HasBuildGameKeyPassword() const noexcept;
+    [[nodiscard]] bool HasBuildGameSecret(BuildGameField field) const noexcept;
     void ClearBuildGameSigningPasswords() noexcept;
     [[nodiscard]] bool BeginBuildGameTextEdit(BuildGameField field);
     [[nodiscard]] bool AppendBuildGameText(wchar_t character);
@@ -1535,6 +1536,7 @@ private:
     bool buildGameEditSelectAll_ = false;
     std::string buildGameStorePassword_;
     std::string buildGameKeyPassword_;
+    std::string buildGameCertificatePassword_;
     int hierarchyScrollbarDragY_ = 0;
     int hierarchyScrollbarDragStartOffset_ = 0;
     bool hierarchyScrollbarDragging_ = false;

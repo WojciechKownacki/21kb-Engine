@@ -127,6 +127,13 @@ EditorBuildGameSettingsLoadResult EditorBuildGameSettingsStore::Load(const std::
         if (const std::optional<std::string_view> alias = document.GetString(section, "AndroidKeyAlias")) {
             targetSettings.androidKeyAlias = std::string{ *alias };
         }
+        if (const std::optional<std::string_view> thumbprint = document.GetString(section, "WindowsCertificateThumbprint")) {
+            targetSettings.windowsCertificateThumbprint = std::string{ *thumbprint };
+        }
+        targetSettings.windowsCertificateFile = ReadPath(document, section, "WindowsCertificateFile");
+        if (const std::optional<std::string_view> url = document.GetString(section, "WindowsTimestampUrl")) {
+            targetSettings.windowsTimestampUrl = std::string{ *url };
+        }
     }
     return result;
 }
@@ -169,6 +176,11 @@ bool EditorBuildGameSettingsStore::Save(
         document.SetBool(section, "LaunchAfterBuild", targetSettings.launchAfterBuild);
         document.SetString(section, "AndroidKeystore", targetSettings.androidKeystore.generic_string());
         document.SetString(section, "AndroidKeyAlias", targetSettings.androidKeyAlias);
+        if (target.target == kb::packaging::PackagingTarget::WindowsX64) {
+            document.SetString(section, "WindowsCertificateThumbprint", targetSettings.windowsCertificateThumbprint);
+            document.SetString(section, "WindowsCertificateFile", targetSettings.windowsCertificateFile.generic_string());
+            document.SetString(section, "WindowsTimestampUrl", targetSettings.windowsTimestampUrl);
+        }
     }
     return document.Save(path, error);
 }

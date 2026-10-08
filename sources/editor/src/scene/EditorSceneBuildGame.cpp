@@ -89,9 +89,18 @@ std::string_view EditorSceneContext::BuildGameEditBuffer() const noexcept {
 
 bool EditorSceneContext::HasBuildGameStorePassword() const noexcept { return !buildGameStorePassword_.empty(); }
 bool EditorSceneContext::HasBuildGameKeyPassword() const noexcept { return !buildGameKeyPassword_.empty(); }
+bool EditorSceneContext::HasBuildGameSecret(BuildGameField field) const noexcept {
+    switch (field) {
+    case BuildGameField::AndroidStorePassword: return !buildGameStorePassword_.empty();
+    case BuildGameField::AndroidKeyPassword: return !buildGameKeyPassword_.empty();
+    case BuildGameField::WindowsCertificatePassword: return !buildGameCertificatePassword_.empty();
+    default: return false;
+    }
+}
 void EditorSceneContext::ClearBuildGameSigningPasswords() noexcept {
     SecureClear(buildGameStorePassword_);
     SecureClear(buildGameKeyPassword_);
+    SecureClear(buildGameCertificatePassword_);
 }
 
 bool EditorSceneContext::BeginBuildGameTextEdit(BuildGameField field) {
@@ -101,11 +110,17 @@ bool EditorSceneContext::BeginBuildGameTextEdit(BuildGameField field) {
     buildGameEditingField_ = field;
     if (field == BuildGameField::AndroidStorePassword) buildGameEditBuffer_ = buildGameStorePassword_;
     else if (field == BuildGameField::AndroidKeyPassword) buildGameEditBuffer_ = buildGameKeyPassword_;
+    else if (field == BuildGameField::WindowsCertificatePassword) buildGameEditBuffer_ = buildGameCertificatePassword_;
     else buildGameEditBuffer_ = BuildGamePanelModel::Value(field, BuildGameTarget(), projectConfig_, buildGameSettings_);
     if (field == BuildGameField::AndroidKeyAlias && buildGameEditBuffer_ == "Development only") {
         buildGameEditBuffer_.clear();
     }
     if (field == BuildGameField::CrashReportUrl && projectConfig_.crashReportUploadUrl.empty()) {
+        buildGameEditBuffer_.clear();
+    }
+    const EditorBuildGameTargetSettings& targetSettings = buildGameSettings_.For(BuildGameTarget());
+    if ((field == BuildGameField::WindowsCertificateThumbprint && targetSettings.windowsCertificateThumbprint.empty()) ||
+        (field == BuildGameField::WindowsTimestampUrl && targetSettings.windowsTimestampUrl.empty())) {
         buildGameEditBuffer_.clear();
     }
     buildGameEditOriginal_ = buildGameEditBuffer_;
@@ -120,8 +135,7 @@ bool EditorSceneContext::AppendBuildGameText(wchar_t character) {
 }
 
 bool EditorSceneContext::InsertBuildGameText(std::string_view text) {
-    const bool sensitive = buildGameEditingField_ == BuildGameField::AndroidStorePassword ||
-        buildGameEditingField_ == BuildGameField::AndroidKeyPassword;
+    const bool sensitive = BuildGamePanelModel::IsSecret(buildGameEditingField_);
     const std::size_t maximumLength = sensitive ? 512U : 4096U;
     return IsBuildGameTextEditing() && BuildGamePanelModel::InsertPrintableText(
         buildGameEditBuffer_, buildGameEditSelectAll_, text, maximumLength);
@@ -155,8 +169,7 @@ bool EditorSceneContext::CommitBuildGameTextEdit() {
     kb::project::ProjectSettings projectCandidate = projectConfig_;
     EditorBuildGameSettings localCandidate = buildGameSettings_;
     std::string error;
-    const bool passwordField = buildGameEditingField_ == BuildGameField::AndroidStorePassword ||
-        buildGameEditingField_ == BuildGameField::AndroidKeyPassword;
+    const bool passwordField = BuildGamePanelModel::IsSecret(buildGameEditingField_);
     if (passwordField) {
         if (buildGameEditBuffer_.empty() || buildGameEditBuffer_.size() > 512U ||
             std::ranges::any_of(buildGameEditBuffer_, [](char character) {
@@ -167,7 +180,8 @@ bool EditorSceneContext::CommitBuildGameTextEdit() {
             return false;
         }
         std::string& destination = buildGameEditingField_ == BuildGameField::AndroidStorePassword
-            ? buildGameStorePassword_ : buildGameKeyPassword_;
+            ? buildGameStorePassword_
+            : buildGameEditingField_ == BuildGameField::AndroidKeyPassword ? buildGameKeyPassword_ : buildGameCertificatePassword_;
         SecureClear(destination);
         destination = buildGameEditBuffer_;
     } else if (!BuildGamePanelModel::ApplyText(buildGameEditingField_, buildGameEditBuffer_, BuildGameTarget(),
@@ -199,8 +213,7 @@ bool EditorSceneContext::CommitBuildGameTextEdit() {
 }
 
 void EditorSceneContext::CancelBuildGameTextEdit() noexcept {
-    const bool sensitive = buildGameEditingField_ == BuildGameField::AndroidStorePassword ||
-        buildGameEditingField_ == BuildGameField::AndroidKeyPassword;
+    const bool sensitive = BuildGamePanelModel::IsSecret(buildGameEditingField_);
     buildGameEditingField_ = BuildGameField::None;
     if (sensitive) {
         SecureClear(buildGameEditBuffer_);
@@ -270,7 +283,8 @@ bool EditorSceneContext::SetBuildGameToolchainDirectory(BuildGameField field, co
 }
 
 bool EditorSceneContext::SetBuildGameLocalFile(BuildGameField field, const std::filesystem::path& path) {
-    if (path.empty() || (field != BuildGameField::AndroidKeystore && field != BuildGameField::LinuxIdentity)) return false;
+    if (path.empty() || (field != BuildGameField::AndroidKeystore && field != BuildGameField::LinuxIdentity &&
+            field != BuildGameField::WindowsCertificateFile)) return false;
     std::error_code filesystemError;
     if (!std::filesystem::is_regular_file(path, filesystemError) || filesystemError) {
         console_.Error("Packaging", "The selected file does not exist.");
@@ -279,6 +293,8 @@ bool EditorSceneContext::SetBuildGameLocalFile(BuildGameField field, const std::
     EditorBuildGameSettings candidate = buildGameSettings_;
     if (field == BuildGameField::AndroidKeystore) {
         candidate.For(BuildGameTarget()).androidKeystore = AbsoluteNormalized(path);
+    } else if (field == BuildGameField::WindowsCertificateFile) {
+        candidate.For(BuildGameTarget()).windowsCertificateFile = AbsoluteNormalized(path);
     } else {
         candidate.linuxIdentity = AbsoluteNormalized(path);
     }
@@ -331,7 +347,7 @@ bool EditorSceneContext::StartBuildGamePackage() {
     const bool release = buildGameSelectedProfile_ == 1;
     const BuildGameValidation validation = BuildGamePanelModel::Validate(
         BuildGameTarget(), projectConfig_, buildGameSettings_, release, buildGamePackageService_->IsRunning(),
-        HasBuildGameStorePassword(), HasBuildGameKeyPassword());
+        HasBuildGameStorePassword(), HasBuildGameKeyPassword(), HasBuildGameSecret(BuildGameField::WindowsCertificatePassword));
     if (!validation.canBuild) {
         console_.Error("Packaging", validation.reason);
         return false;
@@ -404,6 +420,12 @@ bool EditorSceneContext::StartBuildGamePackage() {
     }
     if (targetSpec.target == kb::packaging::PackagingTarget::WindowsX64) {
         request.crashReportUploadUrl = Trimmed(projectConfig_.crashReportUploadUrl);
+        if (release) {
+            request.windowsCertificateThumbprint = targetSettings.windowsCertificateThumbprint;
+            request.windowsCertificateFile = targetSettings.windowsCertificateFile;
+            request.windowsTimestampUrl = targetSettings.windowsTimestampUrl;
+            if (!request.windowsCertificateFile.empty()) request.windowsCertificatePassword = buildGameCertificatePassword_;
+        }
     }
     if (targetSpec.needsAndroidMetadata) {
         request.androidApplicationId = Trimmed(projectConfig_.androidApplicationId);

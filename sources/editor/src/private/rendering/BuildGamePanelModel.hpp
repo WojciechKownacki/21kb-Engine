@@ -21,6 +21,7 @@ enum class BuildGameField : std::uint8_t {
     LinuxDisplay, LinuxIdentity,
     OutputDirectory, LaunchAfterBuild, BuilderExecutable, BuildRoot,
     CrashReportUrl,
+    WindowsCertificateThumbprint, WindowsCertificateFile, WindowsCertificatePassword, WindowsTimestampUrl,
 };
 enum class BuildGameRowKind : std::uint8_t { ReadOnly, Text, Password, FolderPicker, FilePicker, IconPicker, Checkbox };
 
@@ -50,13 +51,19 @@ public:
         const kb::project::ProjectSettings& project, const EditorBuildGameSettings& local);
     [[nodiscard]] static BuildGameValidation Validate(kb::packaging::PackagingTarget target,
         const kb::project::ProjectSettings& project, const EditorBuildGameSettings& local,
-        bool release, bool jobRunning, bool hasStorePassword = true, bool hasKeyPassword = true);
+        bool release, bool jobRunning, bool hasStorePassword = true, bool hasKeyPassword = true,
+        bool hasCertificatePassword = true);
     [[nodiscard]] static bool ApplyText(BuildGameField field, std::string_view value,
         kb::packaging::PackagingTarget target, kb::project::ProjectSettings& project,
         EditorBuildGameSettings& local, std::string& error);
     [[nodiscard]] static bool InsertPrintableText(std::string& buffer, bool& selectAll,
         std::string_view text, std::size_t maximumLength);
     [[nodiscard]] static std::vector<BuildGameField> TextFocusOrder(kb::packaging::PackagingTarget target, bool release);
+    // Signing passwords: held in memory for one build, never shown, copied or saved.
+    [[nodiscard]] static constexpr bool IsSecret(BuildGameField field) noexcept {
+        return field == BuildGameField::AndroidStorePassword || field == BuildGameField::AndroidKeyPassword ||
+            field == BuildGameField::WindowsCertificatePassword;
+    }
 };
 
 } // namespace kb::editor

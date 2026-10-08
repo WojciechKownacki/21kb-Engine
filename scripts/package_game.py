@@ -53,6 +53,13 @@ from package_contract import (
     verify_unit,
 )
 from third_party_notices import NoticeError, load_components, select_components, stage_notices, write_sbom
+from windows_authenticode import (
+    AuthenticodeError,
+    find_signtool,
+    normalize_thumbprint,
+    signtool_sign_command,
+    verify_signed,
+)
 from windows_pe_resources import WindowsResourceError, apply_windows_resources
 from windows_pe_symbols import (
     PdbIdentity,
@@ -235,6 +242,7 @@ def _validate_arguments(args: argparse.Namespace) -> None:
         if args.target != "Windows.x64":
             raise PackagingError("crash report upload is available only for Windows packages")
         args.crash_report_url = _validate_crash_report_url(args.crash_report_url)
+    _validate_windows_signing(args)
     if args.target.startswith("Android."):
         if not _ANDROID_APPLICATION_ID.fullmatch(args.android_application_id):
             raise PackagingError("Android application ID is invalid")
@@ -264,6 +272,159 @@ def _validate_crash_report_url(url: str) -> str:
     if parts.scheme == "https" or (parts.scheme == "http" and parts.hostname in ("127.0.0.1", "::1")):
         return url
     raise PackagingError("crash report URL must use HTTPS, or HTTP to 127.0.0.1 or ::1")
+
+
+_TIMESTAMP_URL = re.compile(r"https?://[^/\s\"]+[^\s\"]*\Z")
+
+
+def _validate_windows_signing(args: argparse.Namespace) -> None:
+    """One certificate source: the user's store by thumbprint, or a PFX file.
+
+    A PFX password never appears in arguments or the environment: the editor's signing
+    broker holds it, a broker program supplies it, or it is read from standard input.
+    """
+    signing = args.windows_sign_thumbprint is not None or args.windows_sign_pfx is not None
+    if not signing:
+        if args.windows_require_signing:
+            raise PackagingError("Windows signing is required but no certificate was given")
+        if args.windows_timestamp_url or args.windows_sign_password_stdin or args.windows_signing_broker:
+            raise PackagingError("Windows signing options need a certificate thumbprint or PFX file")
+        return
+    if args.target != "Windows.x64":
+        raise PackagingError("Authenticode signing applies only to Windows packages")
+    if args.windows_sign_thumbprint is not None and args.windows_sign_pfx is not None:
+        raise PackagingError("sign with a certificate thumbprint or a PFX file, not both")
+    if args.windows_sign_thumbprint is not None:
+        try:
+            args.windows_sign_thumbprint = normalize_thumbprint(args.windows_sign_thumbprint)
+        except AuthenticodeError as error:
+            raise PackagingError(str(error)) from error
+        if args.windows_sign_password_stdin or args.windows_signing_broker:
+            raise PackagingError("a store certificate needs no password or signing broker")
+    else:
+        args.windows_sign_pfx = _existing_file(args.windows_sign_pfx, "Windows signing certificate")
+        if args.windows_sign_password_stdin and args.windows_signing_broker is not None:
+            raise PackagingError("read the PFX password from standard input or from a broker, not both")
+        if args.windows_signing_broker is not None:
+            args.windows_signing_broker = _existing_file(args.windows_signing_broker, "Windows signing broker")
+    if args.windows_timestamp_url and not _TIMESTAMP_URL.fullmatch(args.windows_timestamp_url):
+        raise PackagingError("timestamp URL must be an http:// or https:// RFC 3161 service")
+
+
+def _request_windows_signature(
+    args: argparse.Namespace, images: Sequence[Path], job: Path
+) -> str:
+    """Has the editor (or a broker program) sign copies of the images with the PFX.
+
+    The copies sit in the job's own authenticode folder, the only place the broker
+    accepts files from. Returns the signer's thumbprint the broker reported.
+    """
+    request = job / "windows-signing-request.json"
+    response = job / "windows-signing-response.json"
+    session = secrets.token_hex(16)
+    request.write_bytes(canonical_json_bytes({
+        "schema": 1,
+        "kind": "windows-authenticode",
+        "session": session,
+        "certificate": str(args.windows_sign_pfx),
+        "timestampUrl": args.windows_timestamp_url or "",
+        "files": [str(image) for image in images],
+    }))
+    if args.windows_signing_broker is not None:
+        run_checked([args.windows_signing_broker, "--request", request, "--response", response], cwd=job,
+                    timeout_seconds=900)
+    else:
+        print(f"SIGNING_REQUEST|{request.resolve(strict=True)}|{response.absolute()}", flush=True)
+        deadline = time.monotonic() + 900.0
+        while not response.is_file():
+            if time.monotonic() >= deadline:
+                raise PackagingError("Windows signing broker did not answer within 900 seconds")
+            time.sleep(0.05)
+    try:
+        value = json.loads(response.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise PackagingError("Windows signing broker returned an invalid response") from error
+    if not isinstance(value, dict) or set(value) != {"schema", "session", "succeeded", "signerThumbprint"} or \
+            value["schema"] != 1 or value["session"] != session or value["succeeded"] is not True:
+        raise PackagingError("Windows signing broker refused or did not sign the images")
+    try:
+        return normalize_thumbprint(str(value["signerThumbprint"]))
+    except AuthenticodeError as error:
+        raise PackagingError("Windows signing broker reported no signer") from error
+
+
+def _sign_with_pfx_signer(
+    signer: Path, pfx: Path, password: str, images: Sequence[Path], timestamp_url: str | None, job: Path
+) -> str:
+    """Runs kb_authenticode_signer with the PFX password on its standard input."""
+    command: list[Path | str] = [signer, "--pfx", pfx]
+    if timestamp_url:
+        command.extend(("--timestamp-url", timestamp_url))
+    command.append("--")
+    command.extend(images)
+    output = run_checked(command, cwd=job, timeout_seconds=120 + 30 * len(images), input_text=password + "\n").output
+    match = re.search(r"(?m)^SIGNER\|([0-9A-F]{40})\|", output)
+    if match is None:
+        raise PackagingError("the Authenticode signer did not report its certificate")
+    return match.group(1)
+
+
+def _sign_windows_images(args: argparse.Namespace, cmake: Path, stage: Path, job: Path) -> tuple[Path, ...]:
+    """Authenticode-signs every image the package ships and proves each signature.
+
+    Runs after every step that changes a binary, so what is signed is what ships.
+    With a certificate, an image that is unsigned, altered after signing, signed by
+    another certificate or chained to an untrusted root fails the package.
+    """
+    images = sorted(path for path in stage.rglob("*") if is_windows_pe(path))
+    tools: list[Path] = []
+    if args.windows_sign_thumbprint is not None:
+        try:
+            signtool = find_signtool()
+        except AuthenticodeError as error:
+            raise PackagingError(str(error)) from error
+        tools.append(signtool)
+        run_checked(
+            signtool_sign_command(signtool, images, args.windows_sign_thumbprint, args.windows_timestamp_url),
+            cwd=job,
+            timeout_seconds=120 + 30 * len(images),
+            on_line=lambda line: emit_diagnostic("Info", line),
+        )
+        signer = args.windows_sign_thumbprint
+    elif args.windows_sign_pfx is not None:
+        work = job / "authenticode"
+        work.mkdir()
+        copies = [work / f"{index:04d}-{image.name}" for index, image in enumerate(images)]
+        for image, copy in zip(images, copies):
+            shutil.copy2(image, copy)
+        if args.windows_sign_password_stdin:
+            configuration = CONFIGURATIONS[args.configuration]
+            _build_targets(cmake, args.build_root, configuration, ("kb_authenticode_signer",), args.engine_root)
+            signer_tool = _build_tool_path(args.build_root, configuration, "kb_authenticode_signer")
+            tools.append(signer_tool)
+            password = sys.stdin.readline().rstrip("\r\n")
+            if not password:
+                raise PackagingError("no PFX password arrived on standard input")
+            try:
+                signer = _sign_with_pfx_signer(
+                    signer_tool, args.windows_sign_pfx, password, copies, args.windows_timestamp_url, job
+                )
+            finally:
+                del password
+        else:
+            signer = _request_windows_signature(args, copies, job)
+        for image, copy in zip(images, copies):
+            os.replace(copy, image)
+    else:
+        return ()
+    if not args.windows_timestamp_url:
+        emit_diagnostic("Warning", "Windows images are signed without a timestamp; their signatures end with the certificate")
+    try:
+        verify_signed(images, expected_thumbprint=signer)
+    except AuthenticodeError as error:
+        raise PackagingError(str(error)) from error
+    emit_diagnostic("Info", f"Signed and verified {len(images)} Windows image(s) with certificate {signer}")
+    return tuple(tools)
 
 
 def _write_crash_report_config(stage: Path, url: str | None) -> None:
@@ -627,6 +788,7 @@ def _stage_windows(args: argparse.Namespace, cmake: Path, pack: Path, stage: Pat
     symbols = _collect_windows_symbols(
         stage, job, built, {destination, *(stage / f"{target}.dll" for target in plugin_targets)}
     )
+    signing_tools = _sign_windows_images(args, cmake, stage, job)
     if destination.read_bytes()[:2] != b"MZ":
         raise PackagingError("Windows player does not contain a valid PE header")
     _sign_release(args, stage, job)
@@ -641,7 +803,9 @@ def _stage_windows(args: argparse.Namespace, cmake: Path, pack: Path, stage: Pat
     finally:
         if smoke.exists():
             remove_tree(smoke, allowed_parent=job)
-    return StageResult((game, *plugin_paths), _first_frame_result(args.target, stage), symbols=symbols)
+    return StageResult(
+        (game, *plugin_paths, *signing_tools), _first_frame_result(args.target, stage), symbols=symbols
+    )
 
 
 def _android_sdk() -> Path:
@@ -1762,6 +1926,12 @@ def _parse_arguments(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--anti-rollback", action="store_true")
     parser.add_argument("--symbols-output", type=Path)
     parser.add_argument("--crash-report-url")
+    parser.add_argument("--windows-sign-thumbprint")
+    parser.add_argument("--windows-sign-pfx", type=Path)
+    parser.add_argument("--windows-sign-password-stdin", action="store_true")
+    parser.add_argument("--windows-signing-broker", type=Path)
+    parser.add_argument("--windows-timestamp-url")
+    parser.add_argument("--windows-require-signing", action="store_true")
     parser.add_argument("--launch", action="store_true")
     parser.add_argument("--android-application-id", default="com.kbengine.game")
     parser.add_argument("--android-label")

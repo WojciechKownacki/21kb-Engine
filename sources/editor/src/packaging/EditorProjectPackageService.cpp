@@ -2,6 +2,7 @@
 #include "packaging/EditorAndroidSigningBroker.hpp"
 #include "packaging/EditorPackageInputValidation.hpp"
 #include "packaging/EditorPackageProcessEnvironment.hpp"
+#include "packaging/EditorWindowsSigningBroker.hpp"
 #include "engine/packaging/PackagingTargetCatalog.hpp"
 #include "engine/platform/CrashReporting.hpp"
 
@@ -32,6 +33,7 @@ struct RequestSecretsGuard {
     ~RequestSecretsGuard() {
         EditorAndroidSigningBroker::SecureClear(request.androidStorePassword);
         EditorAndroidSigningBroker::SecureClear(request.androidKeyPassword);
+        EditorAndroidSigningBroker::SecureClear(request.windowsCertificatePassword);
     }
 };
 
@@ -196,6 +198,23 @@ bool EditorProjectPackageService::Start(EditorPackageRequest request, std::strin
         if (!request.applicationIcon.empty() &&
             !package_input::IsValidProjectPngIcon(request.projectFile, request.applicationIcon)) {
             error = "The application icon must be an existing PNG inside the project.";
+            return false;
+        }
+        const bool windowsSigning = !request.windowsCertificateThumbprint.empty() || !request.windowsCertificateFile.empty();
+        if (windowsSigning &&
+            (targetSpec->target != kb::packaging::PackagingTarget::WindowsX64 || request.configuration != "Release" ||
+             (!request.windowsCertificateThumbprint.empty() && !request.windowsCertificateFile.empty()) ||
+             (!request.windowsCertificateThumbprint.empty() &&
+              !package_input::IsValidCertificateThumbprint(request.windowsCertificateThumbprint)) ||
+             (!request.windowsCertificateFile.empty() &&
+              (!request.windowsCertificateFile.is_absolute() || request.windowsCertificatePassword.empty() ||
+               !std::filesystem::is_regular_file(request.windowsCertificateFile, filesystemError) || filesystemError)))) {
+            error = "Windows Release signing needs either a certificate thumbprint or an existing PFX file and its password.";
+            return false;
+        }
+        if (!request.windowsTimestampUrl.empty() &&
+            (!windowsSigning || !package_input::IsValidTimestampUrl(request.windowsTimestampUrl))) {
+            error = "The timestamp URL must be an http:// or https:// address used with a signing certificate.";
             return false;
         }
         if (!request.crashReportUploadUrl.empty() &&
@@ -376,6 +395,18 @@ std::vector<std::wstring> EditorProjectPackageService::BuildArguments(const Edit
         !request.crashReportUploadUrl.empty()) {
         appendText(L"--crash-report-url", request.crashReportUploadUrl);
     }
+    if (targetSpec != nullptr && targetSpec->target == kb::packaging::PackagingTarget::WindowsX64) {
+        // The certificate is named; its password never is. A PFX is signed through the
+        // SIGNING_REQUEST the package script sends back to this process.
+        if (!request.windowsCertificateThumbprint.empty()) {
+            appendText(L"--windows-sign-thumbprint", request.windowsCertificateThumbprint);
+        } else if (!request.windowsCertificateFile.empty()) {
+            append(L"--windows-sign-pfx", request.windowsCertificateFile);
+        }
+        if (!request.windowsTimestampUrl.empty()) {
+            appendText(L"--windows-timestamp-url", request.windowsTimestampUrl);
+        }
+    }
     if (targetSpec != nullptr && targetSpec->needsAndroidMetadata) {
         appendText(L"--android-application-id", request.androidApplicationId);
         appendText(L"--android-version-code", std::to_string(request.androidVersionCode));
@@ -548,6 +579,28 @@ void EditorProjectPackageService::Run(EditorPackageRequest request) {
             pending.erase(0U, newline + 1U);
             if (!line.empty() && line.back() == '\r') line.pop_back();
             const EditorPackageProtocolEvent protocol = ParseProtocolLine(line);
+            if (protocol.kind == EditorPackageProtocolEvent::Kind::SigningRequest && targetSpec != nullptr &&
+                targetSpec->target == kb::packaging::PackagingTarget::WindowsX64) {
+                if (request.configuration != "Release" || request.windowsCertificateFile.empty() || signingRequestSeen) {
+                    ApplyProtocolLine("DIAGNOSTIC|Error|Unexpected or duplicate Windows signing request.");
+                    static_cast<void>(TerminateJobObject(job, ERROR_ACCESS_DENIED));
+                    continue;
+                }
+                signingRequestSeen = true;
+                EditorWindowsSigningResult signing;
+                try {
+                    signing = EditorWindowsSigningBroker::Execute(
+                        protocol.signingRequestFile, protocol.signingResponseFile,
+                        request.buildRoot / "package-jobs", request.windowsCertificateFile, request.windowsTimestampUrl,
+                        EditorWindowsSigningBroker::DefaultSigner(), request.windowsCertificatePassword, job);
+                } catch (const std::exception&) {
+                    EditorAndroidSigningBroker::SecureClear(request.windowsCertificatePassword);
+                    signing.message = "Windows signing failed while validating the isolated request.";
+                }
+                ApplyProtocolLine(std::string{ "DIAGNOSTIC|" } + (signing.succeeded ? "Info|" : "Error|") + signing.message);
+                if (!signing.succeeded) static_cast<void>(TerminateJobObject(job, ERROR_ACCESS_DENIED));
+                continue;
+            }
             if (protocol.kind == EditorPackageProtocolEvent::Kind::SigningRequest) {
                 if (request.configuration != "Release" || targetSpec == nullptr ||
                     !targetSpec->needsAndroidMetadata || signingRequestSeen) {
@@ -602,6 +655,8 @@ void EditorProjectPackageService::Run(EditorPackageRequest request) {
     } else if (targetSpec != nullptr && targetSpec->needsAndroidMetadata &&
         request.configuration == "Release" && !signingRequestSeen) {
         Finish(EditorPackageJobState::Failed, "Android Release completed without a signing request.");
+    } else if (!request.windowsCertificateFile.empty() && !signingRequestSeen) {
+        Finish(EditorPackageJobState::Failed, "Windows Release completed without asking for its certificate.");
     } else if (!hasResult) {
         Finish(EditorPackageJobState::Failed, "Package process completed without a RESULT directory.");
     } else if (!ResultMatchesRequest(request, resultDirectory)) {

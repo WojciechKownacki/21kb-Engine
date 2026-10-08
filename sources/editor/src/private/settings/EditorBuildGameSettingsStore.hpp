@@ -16,6 +16,11 @@ struct EditorBuildGameTargetSettings {
     // active editor build and are never written to this store.
     std::filesystem::path androidKeystore;
     std::string androidKeyAlias;
+    // Windows Authenticode: a certificate in the user's personal store by SHA-1
+    // thumbprint, or a PFX file whose password is entered for one build only.
+    std::string windowsCertificateThumbprint;
+    std::filesystem::path windowsCertificateFile;
+    std::string windowsTimestampUrl;
 
     [[nodiscard]] bool operator==(const EditorBuildGameTargetSettings&) const noexcept = default;
 };
