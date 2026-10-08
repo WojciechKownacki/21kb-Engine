@@ -434,6 +434,25 @@ void RunPrefabReloadOfChangedFileKeepsGuidTest() {
     std::filesystem::remove(prefabPath, removeError);
 }
 
+// Spawning a captured prefab at runtime makes plain objects; only document loads and editor restores
+// ask for the instances named in it to be linked to their prefabs again.
+void RunRuntimeSpawnDoesNotLinkPrefabInstancesTest() {
+    kb::scene::Scene scene;
+    kb::scene::ScenePrefab fx;
+    static_cast<void>(fx.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Fx" }));
+    const kb::scene::ScenePrefabHandle fxHandle = scene.Prefabs().Register("Fx", std::move(fx));
+    kb::scene::ScenePrefab bullet;
+    const std::uint32_t bulletRoot = bullet.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Bullet" });
+    const std::uint32_t bulletFx = bullet.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Fx", .nestedPrefabGuid = scene.Prefabs().Guid(fxHandle), .parentNode = bulletRoot });
+
+    const kb::scene::ScenePrefabInstance spawned = scene.Prefabs().Instantiate(bullet);
+    kb::tests::Require(spawned.ObjectCount() == 2U && !scene.Prefabs().RootInstance(spawned.ObjectAt(bulletFx)).IsValid(),
+        "A runtime spawn created a prefab instance record");
+    const kb::scene::ScenePrefabInstance restored = scene.Prefabs().Instantiate(bullet, kb::scene::ScenePrefabInstantiationSettings{ .linkPrefabInstances = true });
+    kb::tests::Require(scene.Prefabs().SourcePrefab(scene.Prefabs().RootInstance(restored.ObjectAt(bulletFx))) == fxHandle,
+        "A linked instantiation did not link the nested prefab instance");
+}
+
 // A scene file keeps an instance only as the prefab guid on its root node. Reopening the file in a
 // fresh scene, and reloading the captured document in place (how Play mode stops), must link the
 // instance, its node mapping and its overrides again.
@@ -835,6 +854,7 @@ void RunScenePrefabCaptureTests() {
     run("RunPrefabCreateAssetFromInstanceKeepsOneOwnerTest", RunPrefabCreateAssetFromInstanceKeepsOneOwnerTest);
     run("RunPrefabReloadOfChangedFileKeepsGuidTest", RunPrefabReloadOfChangedFileKeepsGuidTest);
     run("RunPrefabInstanceLinkSurvivesSceneReopenTest", RunPrefabInstanceLinkSurvivesSceneReopenTest);
+    run("RunRuntimeSpawnDoesNotLinkPrefabInstancesTest", RunRuntimeSpawnDoesNotLinkPrefabInstancesTest);
     run("RunPrefabVariantAssetRoundTripTest", RunPrefabVariantAssetRoundTripTest);
     run("RunPrefabParentOverrideAssetRoundTripTest", RunPrefabParentOverrideAssetRoundTripTest);
     run("RunPrefabVariantAddedChildAssetRoundTripTest", RunPrefabVariantAddedChildAssetRoundTripTest);
