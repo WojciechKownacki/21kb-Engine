@@ -1158,6 +1158,14 @@ void RunBakedTextureReadBackTest() {
     }
     RenderTextureAssetData empty{};
     Require(!kb::render::bake::ReadBakedTexture({}, empty), "An empty block was read as a texture");
+    // bimg also parses its own in-memory texture chunk, which holds a raw pointer and is only
+    // for bgfx's buffers. Read from package bytes (found by fuzzing, fuzz/corpus/baked_payload)
+    // it sent the parse to whatever address those bytes named.
+    std::vector<std::uint8_t> pointerChunk{ 'T', 'E', 'X', 0x00U };
+    pointerChunk.resize(128U, 0xB1U);
+    RenderTextureAssetData pointer{};
+    Require(!kb::render::bake::ReadBakedTexture(pointerChunk, pointer),
+        "A texture chunk carrying a pointer was parsed from package bytes");
 
     // An uncompressed container is not a bake: the whole point is that nothing decodes it. It
     // carries a complete chain, so the only rule left to refuse it is the one being tested.

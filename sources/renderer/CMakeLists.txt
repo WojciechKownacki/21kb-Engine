@@ -235,6 +235,7 @@ add_library(kb_renderer STATIC
     src/resources/RenderMeshGltfImporter.hpp
     src/resources/RenderMeshGltfMaterialImporter.cpp
     src/resources/RenderMeshGltfMaterialImporter.hpp
+    src/resources/TextureContainerMagic.hpp
     src/resources/RenderMeshSourceImport.cpp
     src/resources/RenderMeshGltfTransforms.cpp
     src/resources/RenderMeshGltfTransforms.hpp

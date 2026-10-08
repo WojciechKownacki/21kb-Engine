@@ -1,5 +1,7 @@
 #include "kb/render/bake/TextureBaker.hpp"
 
+#include "resources/TextureContainerMagic.hpp"
+
 #include <bimg/bimg.h>
 #include <bimg/decode.h>
 #include <bx/error.h>
@@ -28,7 +30,8 @@ bool BakedTextureFormatMatchesFamily(
 
 bool ReadBakedTexture(std::span<const std::uint8_t> primaryBlock, RenderTextureAssetData& out) {
     if (primaryBlock.empty() ||
-        primaryBlock.size() > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
+        primaryBlock.size() > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max()) ||
+        TextureContainerKindOf(primaryBlock.data(), primaryBlock.size()) != TextureContainerKind::Ktx) {
         return false;
     }
 
