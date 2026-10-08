@@ -40,7 +40,8 @@ struct Base {
     virtual ~Base() = default;
     Base(const Base&) = delete;
     Base& operator=(const Base&) = delete;
-    __declspec(noinline) void CallFromConstructor() { Pure(); }
+    // The pure call during construction is the crash this helper exists to produce.
+    __declspec(noinline) void CallFromConstructor() { Pure(); } // NOLINT(clang-analyzer-cplusplus.PureVirtualCall)
     virtual void Pure() = 0;
 };
 
