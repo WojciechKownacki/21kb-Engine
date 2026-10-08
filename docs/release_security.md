@@ -110,21 +110,19 @@ loaded by path; packaged Linux players are monolithic and load no modules.
 Save files (schema 3) carry an HMAC-SHA512 over their header and payload next to the FNV-1a
 checksum of earlier schemas. A save whose checksum fails is `IntegrityMismatch` (damaged on
 disk); a save whose checksum passes but whose HMAC does not is `Tampered` (edited outside the
-game, or written by another installation). Neither is loaded; `Save.Read` reports the status.
+game, or written by another game). Neither is loaded; `Save.Read` reports the status.
 
-The key is HKDF-SHA512 over two secrets:
-
-- the **per-game secret** in the trust anchor, derived from the release signing key and the
-  product id, so every release signed with the same key reads the same saves;
-- a random **per-installation secret** created on first start in per-user storage
-  (`%LOCALAPPDATA%\21kb\<product>\installation.secret`; the app's internal storage on Android).
+A packaged player's key is HKDF-SHA512 over the **per-game secret** in its trust anchor, derived
+from the release signing key and the product id, so every release signed with the same key reads
+the same saves, on any of the player's machines: saves move through cloud saves, between
+computers and across reinstalls. A game that wants saves bound to one installation can add a
+random per-installation secret (`LoadOrCreateInstallationSecret`, passed to
+`DeriveSaveGameIntegrity`); a save copied from another machine then reads as `Tampered`.
 
 Development players and the editor use a fixed development key: hand edits are caught, but
-anyone can forge a save. Both secrets live on the player's machine, so the HMAC makes editing a
-save deliberate reverse-engineering work, not something a hex editor or a copied save does by
-accident; it cannot stop someone who extracts both. Because saves are bound to an installation,
-a save copied to another machine (or kept after deleting the per-user state) reads as `Tampered`;
-a game that syncs saves between machines should sync them through its own service.
+anyone can forge a save. The per-game secret lives in the player's copy of the game, so the HMAC
+makes editing a save deliberate reverse-engineering work, not something a hex editor does by
+accident; it cannot stop someone who extracts the secret.
 
 Saves written before schema 3 (unauthenticated schema 1 and 2) load once, keep every value, and
 are rewritten authenticated in place (`migrated` in the load result). An unauthenticated file

@@ -382,8 +382,7 @@ public:
         }
         if (anchor.state == kb::security::TrustAnchorLookup::State::Present) {
             std::ostringstream saveWarning;
-            kb::game::ConfigurePackagedSaveIntegrity(
-                anchor.anchor, std::filesystem::path{ app_.activity->internalDataPath } / "21kb-security", saveWarning);
+            kb::game::ConfigurePackagedSaveIntegrity(anchor.anchor, saveWarning);
             if (!saveWarning.str().empty()) {
                 LogError(saveWarning.str());
             }
