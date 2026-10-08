@@ -32,5 +32,6 @@ void RunUITextLineBreakingTests();
 void RunCrashReportConsentTests();
 void RunNavigationRuntimeTests();
 void RunPortalVisibilityTests();
+void RunMotionSkeletonRuleTests();
 
 } // namespace kb::tests
