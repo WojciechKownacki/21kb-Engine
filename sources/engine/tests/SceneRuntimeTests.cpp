@@ -93,6 +93,8 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunUITextLineBreakingTests();
     } else if (suite == "crash-consent") {
         kb::tests::RunCrashReportConsentTests();
+    } else if (suite == "navigation-runtime") {
+        kb::tests::RunNavigationRuntimeTests();
     } else {
         return false;
     }
@@ -124,6 +126,7 @@ void RunAllSuites() {
     kb::tests::RunTimelineRuntimeTests();
     kb::tests::RunLocalizationTests();
     kb::tests::RunCrashReportConsentTests();
+    kb::tests::RunNavigationRuntimeTests();
 }
 
 } // namespace

@@ -38,6 +38,7 @@
 #include "scene/components/SceneComponentRegistry.hpp"
 #include "scene/components/SceneComponentStorage.hpp"
 #include "scene/history/SceneHistoryStack.hpp"
+#include "scene/navigation/SceneNavigationState.hpp"
 #include "scene/prefab/ScenePrefabInstanceRegistry.hpp"
 #include "scene/prefab/ScenePrefabRegistry.hpp"
 #include "scene/systems/SceneSystemScheduler.hpp"
@@ -281,6 +282,7 @@ public:
     std::uint64_t localizationCatalogGeneration = 0U;
     std::string localizationLanguage;
     std::map<std::uint64_t, AnimatorInstance> animators;
+    SceneNavigationState navigation;
     std::map<std::uint64_t, SkeletonBindingRuntimePose> skeletonBindingPoses;
     std::vector<AnimationEventRecord> pendingAnimationEvents;
     std::unique_ptr<kb::ecs::WorkerPool> animatorWorkerPool;

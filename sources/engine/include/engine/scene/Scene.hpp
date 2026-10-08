@@ -54,6 +54,7 @@ class SceneLoadedContentQueries;
 class SceneLocalization;
 class SceneMaterialInstanceQueries;
 class SceneMaterialInstances;
+class SceneNavigation;
 class SceneParticleSystemQueries;
 class SceneParticleSystems;
 class ScenePrefabs;
@@ -117,6 +118,8 @@ public:
     [[nodiscard]] SceneLoadedContentQueries LoadedContent() const noexcept;
     [[nodiscard]] SceneLocalization Localization() noexcept;
     [[nodiscard]] SceneLocalization Localization() const noexcept;
+    [[nodiscard]] SceneNavigation Navigation() noexcept;
+    [[nodiscard]] SceneNavigation Navigation() const noexcept;
     [[nodiscard]] SceneTimers Timers() noexcept;
     [[nodiscard]] SceneTasks Tasks() noexcept;
     [[nodiscard]] SceneTagCatalog Tags() noexcept;

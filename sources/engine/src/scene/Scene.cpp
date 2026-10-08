@@ -38,6 +38,7 @@
 
 #include "scene/systems/AnimatorSceneSystem.hpp"
 #include "scene/systems/TimelineSceneSystem.hpp"
+#include "scene/systems/NavigationSceneSystem.hpp"
 #include "scene/systems/ContentInstanceSceneSystem.hpp"
 #include "scene/ui/SceneUISystem.hpp"
 
@@ -166,6 +167,7 @@ Scene::Scene(
     state_->sceneSystemScheduler.Add(std::make_unique<AnimatorSceneSystem>(), *this);
     state_->sceneSystemScheduler.Add(std::make_unique<TimelineSceneSystem>(), *this);
     state_->sceneSystemScheduler.Add(std::make_unique<ContentInstanceSceneSystem>(), *this);
+    state_->sceneSystemScheduler.Add(std::make_unique<NavigationSceneSystem>(), *this);
 }
 
 Scene::~Scene() {

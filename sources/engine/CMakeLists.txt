@@ -297,6 +297,7 @@ add_library(kb_engine STATIC
     include/engine/ui/visual/UIText.hpp
     include/engine/ui/visual/UITextLineBreaking.hpp
     include/engine/scene/SceneLocalization.hpp
+    include/engine/scene/SceneNavigation.hpp
     include/engine/scene/SceneCrashReportConsent.hpp
     include/engine/localization/LocalizationCatalog.hpp
     include/engine/localization/LocalizationCatalogIO.hpp
@@ -954,6 +955,7 @@ add_library(kb_engine STATIC
     src/scene/systems/SceneSystemScheduler.cpp
     src/scene/systems/AnimatorSceneSystem.cpp
     src/scene/systems/TimelineSceneSystem.cpp
+    src/scene/navigation/SceneNavigationRuntime.cpp
     src/scene/systems/SceneSystemTransformAccess.cpp
     src/scene/prefab/ScenePrefab.cpp
     src/scene/prefab/ScenePrefabAppliedPropertyBuilder.cpp
@@ -1381,6 +1383,8 @@ add_library(kb_engine STATIC
     src/private/scene/systems/SceneSystemScheduler.hpp
     src/private/scene/systems/AnimatorSceneSystem.hpp
     src/private/scene/systems/TimelineSceneSystem.hpp
+    src/private/scene/systems/NavigationSceneSystem.hpp
+    src/private/scene/navigation/SceneNavigationState.hpp
     src/private/scene/SceneTimelineService.hpp
     src/private/scene/systems/SceneSystemMutableTransformIteration.hpp
     src/private/scene/transform/QuatMath.hpp
@@ -1739,6 +1743,7 @@ if(BUILD_TESTING)
         tests/SceneUITests.cpp
         tests/UITextLineBreakingTests.cpp
         tests/CrashReportConsentTests.cpp
+        tests/NavigationRuntimeTests.cpp
         tests/ScenePrefabCaptureTests.cpp
         tests/ScenePrefabInstantiationTests.cpp
         tests/ScenePrefabTestSuites.hpp
