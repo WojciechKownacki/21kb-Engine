@@ -3107,7 +3107,12 @@ bool EditorSceneContext::ActivateProjectPhysicsLayers(kb::scene::Scene& scene) {
     if (projectConfig_.physicsLayersAsset.empty()) {
         return true;
     }
-    if (kb::scene::PhysicsBackend::LoadAndConfigureLayers(scene, projectConfig_.physicsLayersAsset)) {
+    // Play no longer rescans the project, so the one file this needs is re-read here: an edit made outside
+    // the editor applies, and a deleted file stops Play instead of leaving the cached layers in force.
+    kb::assets::AssetManager& assets = scene.Assets().Manager();
+    const kb::assets::AssetMetadata* layers = assets.Registry().FindByPath(projectConfig_.physicsLayersAsset);
+    if ((layers == nullptr || assets.RefreshAsset(layers->id)) &&
+        kb::scene::PhysicsBackend::LoadAndConfigureLayers(scene, projectConfig_.physicsLayersAsset)) {
         return true;
     }
     std::string error = "Project physics layers could not be loaded and applied: " + projectConfig_.physicsLayersAsset;
