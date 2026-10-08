@@ -731,6 +731,20 @@ void ScenePrefabInstanceRegistry::ReindexObjects(ScenePrefabInstanceHandle handl
     IndexObjects(handle, *record);
 }
 
+void ScenePrefabInstanceRegistry::ForgetDestroyedObject(SceneEntity entity) noexcept {
+    if (liveRecordCount_ == 0U) {
+        return;
+    }
+    std::uint32_t nodeIndex = 0U;
+    const ScenePrefabInstanceHandle owner = FindContainingEntity(entity, nodeIndex);
+    const ScenePrefabInstanceRecord* record = Find(owner);
+    if (record == nullptr || nodeIndex >= record->Objects().size() || record->Objects()[nodeIndex].Entity() != entity) {
+        return;
+    }
+    const SceneObject tracked = record->Objects()[nodeIndex];
+    UnindexObjects(owner, std::span<const SceneObject>{ &tracked, 1U });
+}
+
 bool ScenePrefabInstanceRegistry::UpdateSource(ScenePrefabInstanceHandle handle, ScenePrefabHandle prefab, std::string prefabGuid) {
     if (!handle.IsValid() || !prefab.IsValid()) {
         return false;

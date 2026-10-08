@@ -9,6 +9,7 @@
 #include "scene/prefab/ScenePrefabInstanceSynchronizer.hpp"
 #include "scene/prefab/ScenePrefabRecord.hpp"
 
+#include <algorithm>
 #include <memory>
 #include <span>
 #include <string>
@@ -204,15 +205,23 @@ bool ScenePrefabs::Reconnect(ScenePrefabInstanceHandle handle, ScenePrefabHandle
 
 void ScenePrefabs::RelinkRestoredObjects(std::span<const SceneEntity> destroyed, std::span<const SceneObject> restored) {
     SceneState& state = SceneAccess::State(scene_);
+    // A restored object belongs to the instance that tracks its parent; objects come parent first.
     for (std::size_t index = 0U; index < destroyed.size() && index < restored.size(); ++index) {
-        std::uint32_t nodeIndex = 0U;
-        const ScenePrefabInstanceHandle handle = state.prefabInstances.FindContainingEntity(destroyed[index], nodeIndex);
+        std::uint32_t parentNode = 0U;
+        const ScenePrefabInstanceHandle handle = state.prefabInstances.FindContainingEntity(scene_.Hierarchy().Parent(restored[index].Entity()), parentNode);
         ScenePrefabInstanceRecord* instance = state.prefabInstances.FindMutable(handle);
-        if (instance == nullptr || scene_.Entities().IsAlive(destroyed[index]) || nodeIndex >= instance->Objects().size() ||
-            instance->Objects()[nodeIndex].Entity() != destroyed[index]) {
+        if (instance == nullptr || scene_.Entities().IsAlive(destroyed[index])) {
             continue;
         }
-        const SceneObject previous = instance->Objects()[nodeIndex];
+        const std::span<const SceneObject> objects = instance->Objects();
+        const auto slot = std::ranges::find_if(objects, [entity = destroyed[index]](SceneObject object) noexcept {
+            return object.Entity() == entity;
+        });
+        if (slot == objects.end()) {
+            continue;
+        }
+        const SceneObject previous = *slot;
+        const std::size_t nodeIndex = static_cast<std::size_t>(slot - objects.begin());
         instance->MutableObjects()[nodeIndex] = restored[index];
         state.prefabInstances.ReindexObjects(handle, std::span<const SceneObject>{ &previous, 1U });
     }

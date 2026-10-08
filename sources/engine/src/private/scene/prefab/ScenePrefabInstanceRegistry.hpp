@@ -215,6 +215,9 @@ public:
     void ClearDirtyNodes(ScenePrefabInstanceHandle handle) noexcept;
     [[nodiscard]] std::size_t Count() const noexcept;
     void ReindexObjects(ScenePrefabInstanceHandle handle, std::span<const SceneObject> oldObjects) noexcept;
+    // An instance keeps a destroyed object in its node slot (a missing node), but the lookup
+    // index must not, or the next entity to reuse that slot would be taken for the prefab node.
+    void ForgetDestroyedObject(SceneEntity entity) noexcept;
     [[nodiscard]] bool UpdateSource(ScenePrefabInstanceHandle handle, ScenePrefabHandle prefab, std::string prefabGuid);
     [[nodiscard]] bool Remove(ScenePrefabInstanceHandle handle) noexcept;
     void Clear() noexcept;
