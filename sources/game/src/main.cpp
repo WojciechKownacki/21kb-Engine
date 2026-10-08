@@ -5,6 +5,7 @@
 #include "engine/input/InputHaptics.hpp"
 #include "engine/input/InputSubsystem.hpp"
 #include "engine/modules/IEngineModule.hpp"
+#include "engine/platform/UserStorage.hpp"
 #include "engine/platform/win32/Win32InputCollector.hpp"
 #include "engine/platform/win32/Win32XInputHapticsBackend.hpp"
 #include "engine/scene/Scene.hpp"
@@ -27,6 +28,7 @@
 #endif
 #include <Windows.h>
 #include <shellapi.h>
+#include <ShlObj.h>
 
 #include <algorithm>
 #include <chrono>
@@ -256,6 +258,33 @@ struct GameFrameProfile {
     return std::filesystem::path{ runtime.gameName }.wstring();
 }
 
+// Where scripts persist saves and settings. A loose project keeps them beside
+// itself, like the editor's play mode; a packaged game may be installed where
+// the player cannot write, so it uses its own directory under the per-user
+// local application data folder, named after the game.
+[[nodiscard]] std::filesystem::path GameUserStorageRoot(const kb::game::GameProjectRuntime& runtime) {
+    if (!runtime.IsPackaged()) {
+        return runtime.projectRoot / "Saves";
+    }
+    std::string directory = runtime.gameName.substr(0U, kb::platform::kMaxUserStorageSlotNameBytes);
+    for (char& character : directory) {
+        if (!kb::platform::IsUserStorageSlotName(std::string_view{ &character, 1U })) {
+            character = '_';
+        }
+    }
+    if (!kb::platform::IsUserStorageSlotName(directory)) {
+        directory = "21kbGame";
+    }
+    PWSTR localData = nullptr;
+    if (FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData, KF_FLAG_CREATE, nullptr, &localData)) || localData == nullptr) {
+        CoTaskMemFree(localData);
+        return {};
+    }
+    std::filesystem::path root{ localData };
+    CoTaskMemFree(localData);
+    return root / directory / "Saves";
+}
+
 int RunGame(const GameOptions& options) {
     if (options.fullscreen &&
         SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) == 0 &&
@@ -330,7 +359,9 @@ int RunGame(const GameOptions& options) {
         renderer.SetDefaultSceneLightingConfig(lighting);
     }
 
-    auto scriptModuleOwner = std::make_unique<kb::script::ScriptModule>();
+    kb::script::ScriptModuleOptions scriptOptions;
+    scriptOptions.runtimeOptions.userStorageRoot = GameUserStorageRoot(projectRuntime);
+    auto scriptModuleOwner = std::make_unique<kb::script::ScriptModule>(std::move(scriptOptions));
     kb::script::ScriptModule* scriptModule = scriptModuleOwner.get();
     std::vector<std::unique_ptr<kb::modules::IEngineModule>> staticModules;
     staticModules.push_back(std::move(scriptModuleOwner));

@@ -53,6 +53,9 @@ bool PackagedGameRuntime::Initialize(
         return false;
     }
 
+    // The platform's writable per-game storage also holds script save slots.
+    std::filesystem::path scriptUserStorageRoot =
+        storageRoot.empty() ? std::filesystem::path{} : storageRoot / "Saves";
     GameProjectRuntime project{};
     if (!ReadMountedGameProjectRuntime(
             std::move(pack), std::move(storageRoot), {}, project, diagnostics)) {
@@ -61,7 +64,8 @@ bool PackagedGameRuntime::Initialize(
 
     PackagedRuntimeModules staticModules{};
     std::string moduleError;
-    if (!CreatePackagedRuntimeModules(project.descriptor, staticModules, moduleError)) {
+    if (!CreatePackagedRuntimeModules(
+            project.descriptor, staticModules, moduleError, std::move(scriptUserStorageRoot))) {
         diagnostics << moduleError << '\n';
         return false;
     }
