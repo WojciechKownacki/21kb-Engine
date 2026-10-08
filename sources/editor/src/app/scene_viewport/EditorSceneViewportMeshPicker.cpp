@@ -532,7 +532,7 @@ void ConsiderRectTransform(
     kb::scene::SceneEntity entity,
     const kb::scene::TransformComponent& transform,
     RectPickContext& pick) {
-    if (pick.scene == nullptr || !kb::scene::ResolveVisibility(*pick.scene, entity).visible) {
+    if (pick.scene == nullptr || pick.camera == nullptr || !kb::scene::ResolveVisibility(*pick.scene, entity).visible) {
         return;
     }
     float screenX = 0.0F;
