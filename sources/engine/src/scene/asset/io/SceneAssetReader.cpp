@@ -144,8 +144,11 @@ void SceneAssetReader::ConvertChildDropdownOptions(ScenePrefab& prefab) {
     const std::span<const ScenePrefabNodeDesc> nodes = prefab.Nodes();
     for (std::uint32_t owner = 0U; owner < static_cast<std::uint32_t>(nodes.size()); ++owner) {
         if (!nodes[owner].components.ui.dropdown.has_value()) continue;
+        // Readers convert before they validate the hierarchy, so only nodes after the
+        // owner count: a child always follows its parent, and a node naming itself or a
+        // later node as parent must not become an option of its own dropdown.
         std::vector<std::uint32_t> children;
-        for (std::uint32_t index = 0U; index < static_cast<std::uint32_t>(nodes.size()); ++index) {
+        for (std::uint32_t index = owner + 1U; index < static_cast<std::uint32_t>(nodes.size()); ++index) {
             if (nodes[index].parentNode == owner) children.push_back(index);
         }
         ScenePrefabNodeDesc* dropdownNode = prefab.TryGetMutableNode(owner);
