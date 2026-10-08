@@ -1364,6 +1364,7 @@ def _stage_target(args: argparse.Namespace, cmake: Path, pack: Path, stage: Path
     else:
         tools = _stage_linux_remote(args, pack, linux_stage, job)
     _verify_linux_stage(linux_stage, args)
+    _stage_licenses(args, linux_stage)
     if args.configuration == "Release":
         archive = stage / f"{args.executable_name}-linux-x64.tar.gz"
         _create_deterministic_tar(
