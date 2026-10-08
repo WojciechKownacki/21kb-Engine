@@ -21,7 +21,23 @@
 #define KB_TEST_SUPPRESS_DEPRECATED_POP
 #endif
 
+#if defined(__SANITIZE_ADDRESS__)
+#define KB_TEST_ADDRESS_SANITIZER 1
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define KB_TEST_ADDRESS_SANITIZER 1
+#endif
+#endif
+
 namespace kb::tests {
+
+// Absolute time budgets are set for optimised builds. An address-sanitised build checks every memory access
+// and runs several times slower, so such a budget is scaled by this.
+#if defined(KB_TEST_ADDRESS_SANITIZER)
+inline constexpr double kSanitizerTimeScale = 4.0;
+#else
+inline constexpr double kSanitizerTimeScale = 1.0;
+#endif
 
 [[nodiscard]] inline bool NearlyEqual(float lhs, float rhs) noexcept {
     return std::fabs(lhs - rhs) <= 0.0001F;
