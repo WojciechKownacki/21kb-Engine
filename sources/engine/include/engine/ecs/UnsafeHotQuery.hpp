@@ -276,7 +276,7 @@ public:
             for (std::size_t offset = 0U; offset < record.entityCount; offset += resolvedRangeSize) {
                 const std::size_t count = record.entityCount - offset < resolvedRangeSize ? record.entityCount - offset : resolvedRangeSize;
                 Chunk chunk{ record.entityIds + offset, count, MakeComponentPointers(record, offset), rangeIndex++, MakeComponentDirtyCounts(record) };
-                std::forward<Kernel>(kernel)(chunk);
+                kernel(chunk);
                 ++stats.ranges;
                 stats.entities += count;
                 stats.maxRangeSize = count > stats.maxRangeSize ? count : stats.maxRangeSize;
@@ -785,7 +785,7 @@ public:
                 continue;
             }
             MutableChunk chunk{ record.entityIds, record.entityCount, MakeComponentPointers(record, 0U), rangeIndex++, MakeComponentDirtyCounts(record) };
-            std::forward<Kernel>(kernel)(chunk);
+            kernel(chunk);
         }
     }
 
@@ -802,7 +802,7 @@ public:
             }
             MutableChunk chunk{ record.entityIds, record.entityCount, MakeComponentPointers(record, 0U),
                 rangeIndex++, MakeCurrentComponentDirtyCounts(storage, record) };
-            std::forward<Kernel>(kernel)(chunk);
+            kernel(chunk);
         }
     }
 
@@ -822,7 +822,7 @@ public:
             for (std::size_t offset = 0U; offset < record.entityCount; offset += resolvedRangeSize) {
                 const std::size_t count = record.entityCount - offset < resolvedRangeSize ? record.entityCount - offset : resolvedRangeSize;
                 MutableChunk chunk{ record.entityIds + offset, count, MakeComponentPointers(record, offset), rangeIndex++, MakeComponentDirtyCounts(record) };
-                std::forward<Kernel>(kernel)(chunk);
+                kernel(chunk);
                 ++stats.ranges;
                 stats.entities += count;
                 stats.maxRangeSize = count > stats.maxRangeSize ? count : stats.maxRangeSize;
@@ -977,7 +977,7 @@ public:
                         rangeIndex++,
                         MakeCurrentComponentDirtyCounts(storage, record),
                     };
-                    std::forward<Kernel>(kernel)(chunk, range.dirtyCount);
+                    kernel(chunk, range.dirtyCount);
                     ++stats.ranges;
                     stats.entities += range.count;
                     stats.dirtyRows += range.dirtyCount;
