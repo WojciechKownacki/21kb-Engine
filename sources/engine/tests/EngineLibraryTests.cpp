@@ -130,6 +130,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
@@ -5130,6 +5131,90 @@ void RunMinimalGameplaySceneReplayTest() {
         "Minimal gameplay scene replay fixture did not execute its recorded gameplay inputs");
 }
 
+// An ability without a duration ends on the next Advance, so the caster can activate a different ability afterwards.
+void RunGameplayAbilityEndsAndNextActivatesTest() {
+    kb::gameplay::GameplayAbilities abilities;
+    kb::gameplay::GameplayModules modules;
+    const kb::scene::SceneEntity caster{11U};
+    const kb::gameplay::GameplayAbilityDefinition shout{ .id = kb::gameplay::GameplayTag("shout"), .cooldownSeconds = 1.0F, .targetRule = kb::gameplay::AbilityTargetRule::Self };
+    const kb::gameplay::GameplayAbilityDefinition taunt{ .id = kb::gameplay::GameplayTag("taunt"), .targetRule = kb::gameplay::AbilityTargetRule::Self };
+    kb::tests::Require(abilities.Activate(shout, caster, {}, caster, {}, modules) && abilities.IsActive(caster) &&
+            !abilities.Activate(taunt, caster, {}, caster, {}, modules),
+        "Gameplay ability did not stay active until the next Advance");
+    abilities.Advance(0.25F);
+    kb::tests::Require(!abilities.IsActive(caster), "Gameplay ability without a duration never ended");
+    kb::tests::Require(abilities.Activate(taunt, caster, {}, caster, {}, modules) && abilities.IsActive(caster),
+        "Caster could not activate a second ability after the first one ended");
+    abilities.Advance(0.0F);
+    kb::tests::Require(!abilities.IsActive(caster) && !abilities.Activate(shout, caster, {}, caster, {}, modules),
+        "Ended gameplay ability did not keep its cooldown");
+    abilities.Advance(1.0F);
+    kb::tests::Require(abilities.Activate(shout, caster, {}, caster, {}, modules), "Gameplay ability cooldown never expired");
+}
+
+void RunGameplayAbilityDurationAndCooldownTest() {
+    kb::gameplay::GameplayAbilities abilities;
+    kb::gameplay::GameplayModules modules;
+    const kb::scene::SceneEntity caster{21U};
+    const kb::gameplay::GameplayTagId stamina = kb::gameplay::GameplayTag("stamina");
+    kb::tests::Require(modules.SetAttribute(caster, stamina, { .current = 10.0F, .minimum = 0.0F, .maximum = 10.0F }),
+        "Ability lifetime fixture could not set its cost attribute");
+    const kb::gameplay::GameplayAbilityDefinition dash{ .id = kb::gameplay::GameplayTag("dash"), .cooldownSeconds = 2.0F, .costAttribute = stamina, .cost = 3.0F, .targetRule = kb::gameplay::AbilityTargetRule::Self, .durationSeconds = 1.0F };
+    const kb::gameplay::GameplayAbilityDefinition blink{ .id = kb::gameplay::GameplayTag("blink"), .targetRule = kb::gameplay::AbilityTargetRule::Self };
+
+    // The ability runs for its duration; its cost is committed once, at activation.
+    kb::tests::Require(abilities.Activate(dash, caster, {}, caster, {}, modules) && modules.Attribute(caster, stamina)->current == 7.0F &&
+            abilities.Active(caster).has_value() && abilities.Active(caster)->id == dash.id && abilities.Active(caster)->remainingSeconds == 1.0F &&
+            abilities.CooldownRemaining(caster, dash.id) == 0.0F && !abilities.Activate(blink, caster, {}, caster, {}, modules),
+        "Timed gameplay ability did not activate exclusively with its committed cost");
+    abilities.Advance(0.5F);
+    kb::tests::Require(abilities.IsActive(caster) && abilities.Active(caster)->remainingSeconds == 0.5F &&
+            abilities.CooldownRemaining(caster, dash.id) == 0.0F && modules.Attribute(caster, stamina)->current == 7.0F,
+        "Timed gameplay ability ended early or started its cooldown while still active");
+    abilities.Advance(0.5F);
+    kb::tests::Require(!abilities.IsActive(caster) && !abilities.Active(caster).has_value() && abilities.CooldownRemaining(caster, dash.id) == 2.0F,
+        "Timed gameplay ability did not end when its duration elapsed or did not start its cooldown");
+    kb::tests::Require(abilities.Activate(blink, caster, {}, caster, {}, modules), "Caster could not activate another ability after the timed one ended");
+    abilities.Advance(1.0F);
+    kb::tests::Require(!abilities.IsActive(caster) && abilities.CooldownRemaining(caster, dash.id) == 1.0F && !abilities.Activate(dash, caster, {}, caster, {}, modules),
+        "Gameplay ability cooldown did not tick after the ability ended");
+    abilities.Advance(1.0F);
+    kb::tests::Require(abilities.CooldownRemaining(caster, dash.id) == 0.0F && abilities.Activate(dash, caster, {}, caster, {}, modules) &&
+            modules.Attribute(caster, stamina)->current == 4.0F,
+        "Gameplay ability did not become available again when its cooldown expired");
+
+    // A step longer than the remaining duration ends the ability and spends the leftover time on its cooldown.
+    abilities.Advance(2.5F);
+    kb::tests::Require(!abilities.IsActive(caster) && abilities.CooldownRemaining(caster, dash.id) == 0.5F,
+        "Gameplay ability did not carry the leftover step time into its cooldown");
+    abilities.Advance(0.5F);
+
+    // Cancel ends early and starts the full cooldown from the moment of cancellation.
+    kb::tests::Require(abilities.Activate(dash, caster, {}, caster, {}, modules), "Gameplay ability could not be reactivated for the cancel case");
+    abilities.Advance(0.75F);
+    kb::tests::Require(abilities.Cancel(caster) && !abilities.IsActive(caster) && abilities.CooldownRemaining(caster, dash.id) == 2.0F &&
+            !abilities.Cancel(caster) && !abilities.Complete(caster),
+        "Cancelled gameplay ability did not start its cooldown when it was cancelled");
+
+    // An ability without a fixed duration runs until it reports completion.
+    const kb::gameplay::GameplayAbilityDefinition channel{ .id = kb::gameplay::GameplayTag("channel"), .cooldownSeconds = 1.0F, .targetRule = kb::gameplay::AbilityTargetRule::Self, .durationSeconds = kb::gameplay::kGameplayAbilityUntilCompleted };
+    kb::tests::Require(abilities.Activate(channel, caster, {}, caster, {}, modules), "Open-ended gameplay ability did not activate");
+    abilities.Advance(1000.0F);
+    kb::tests::Require(abilities.IsActive(caster) && abilities.CooldownRemaining(caster, channel.id) == 0.0F,
+        "Open-ended gameplay ability ended without reporting completion");
+    kb::tests::Require(abilities.Complete(caster) && !abilities.IsActive(caster) && abilities.CooldownRemaining(caster, channel.id) == 1.0F &&
+            !abilities.Activate(channel, caster, {}, caster, {}, modules),
+        "Completed gameplay ability did not end or did not start its cooldown");
+
+    // Durations must be zero, positive, or explicitly open-ended.
+    kb::gameplay::GameplayAbilityDefinition invalid = blink;
+    invalid.durationSeconds = -1.0F;
+    kb::tests::Require(!abilities.Activate(invalid, caster, {}, caster, {}, modules), "Gameplay ability accepted a negative duration");
+    invalid.durationSeconds = std::numeric_limits<float>::quiet_NaN();
+    kb::tests::Require(!abilities.Activate(invalid, caster, {}, caster, {}, modules) && abilities.Activate(blink, caster, {}, caster, {}, modules),
+        "Gameplay ability accepted a NaN duration");
+}
+
 void RunLifecycleSoakTest() {
     constexpr std::size_t kSpawnDestroyCycles = 256U;
     constexpr std::size_t kLoadUnloadCycles = 64U;
@@ -5588,6 +5673,8 @@ void RunEngineLibraryTests() {
     RunAiBlackboardTest();
     RunGoapBenchmarkDecisionTest();
     RunMinimalGameplaySceneReplayTest();
+    RunGameplayAbilityEndsAndNextActivatesTest();
+    RunGameplayAbilityDurationAndCooldownTest();
     RunLifecycleSoakTest();
     RunGameInstanceLifetimeTest();
 }
