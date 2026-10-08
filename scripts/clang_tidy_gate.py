@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Sequence
 
 ENGINE_ROOT = Path(__file__).resolve().parents[1]
-FIRST_PARTY = re.compile(r"[\\/]sources[\\/]")
+FIRST_PARTY = re.compile(r"(^|[\\/])sources[\\/]")
 EXCLUDED = re.compile(r"[\\/](third_party|_deps|build)[\\/]")
 
 
