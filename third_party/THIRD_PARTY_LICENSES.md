@@ -2,6 +2,12 @@
 
 This directory contains external dependencies used by 21kb-Engine.
 
+`third_party_manifest.json` is the complete, machine-readable inventory of every third-party
+component compiled into, linked into or shipped with a 21kb product, with its license, copyright
+and license text. Packaging builds each player's `THIRD_PARTY_NOTICES.txt`, `Licenses/` directory
+and CycloneDX SBOM (`sbom.cdx.json`) from it; `scripts/third_party_notices.py --product engine`
+builds the same for the editor and tools. Add a dependency there before it is built into a product.
+
 ## bgfx
 
 - Repository: https://github.com/bkaradzic/bgfx
@@ -124,6 +130,53 @@ Lucide copyright and permission notices must be included in all copies.
 - License file: `sources/editor/content/EditorShell/Fonts/DejaVu-LICENSE.txt`
 
 DejaVu font copyright and license notices must be retained with the font files.
+
+## Components bundled with bgfx, bx and bimg
+
+Compiled into every player:
+
+- TinySTL (BSD 2-Clause), inside bx
+- Arm ASTC Encoder (Apache 2.0)
+- TinyEXR (with OpenEXR code) (BSD 3-Clause; text in `licenses/tinyexr.txt`)
+- miniz (MIT)
+- LodePNG (zlib)
+- stb (stb_image, stb_truetype) (MIT or Unlicense)
+- meshoptimizer (MIT), also compiled into the renderer's mesh baker
+- DirectX-Headers (MIT), Windows players
+- Khronos API headers (OpenGL, OpenGL ES, EGL, Vulkan) (MIT and Apache 2.0; text in `licenses/khronos.txt`)
+- RenderDoc in-application API header (MIT; text in `licenses/renderdoc.txt`)
+- Dawn and Tint (WebGPU) (BSD 3-Clause), WebGPU players
+- AndroidX AppCompat, Games Activity and their AndroidX dependencies (Apache 2.0), Android players
+
+Compiled only into the editor, the cooker and the shader compiler:
+
+- edtaa3 (MIT)
+- Android ETC1 encoder (Apache 2.0)
+- Image Quality Assessment (IQA) (BSD 2-Clause)
+- libsquish (MIT)
+- NVIDIA Texture Tools (BC6H/BC7 codecs) (MIT and Apache 2.0)
+- PVRTC codec (BSD 2-Clause)
+- fcpp (BSD 2-Clause)
+- GLSL Optimizer (MIT)
+- glslang (BSD 3-Clause, BSD 2-Clause, MIT and Apache 2.0)
+- SPIRV-Cross (Apache 2.0)
+- SPIRV-Tools (Apache 2.0)
+- Tint (WGSL shader compiler) (BSD 3-Clause)
+
+## Lua
+
+- Website: https://www.lua.org
+- Version: 5.4.8, fetched at configure time with a pinned SHA-256 (root `CMakeLists.txt`)
+- License: MIT
+- License file: `third_party/licenses/lua-5.4.8.txt`
+
+## Editor icons
+
+- Fluent UI System Icons (MIT), `third_party/fluentui-system-icons`
+- Fluent UI toolbar icons (MIT), `third_party/luizengine-fluentui-toolbar`
+- Devicon (MIT), `third_party/devicon`
+
+Box2D is vendored but not built into any product.
 
 ## Notes
 
