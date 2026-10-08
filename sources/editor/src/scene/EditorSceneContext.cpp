@@ -948,7 +948,7 @@ bool EditorSceneContext::TickAutosave(
         HasDirtyMaterialAssetEdit() || ParticleEditorDirty();
     const EditorAutosaveTickResult tick = autosave_.Tick(
         elapsedSeconds,
-        saveEligible && !playModeSceneSession_.Active(),
+        saveEligible && !playModeSceneSession_.Active() && !InPrefabEditMode(),
         dirty);
     if (!tick.saveRequested) {
         return tick.visualChanged;
@@ -1075,6 +1075,9 @@ bool EditorSceneContext::SaveOpenDocuments() {
     if (ParticleEditorDirty() && !SaveParticleEditorAsset()) {
         console_.Error("Particles", "Global Save could not persist the open particle effect.");
         return false;
+    }
+    if (InPrefabEditMode()) {
+        return !HasUnsavedPrefabEdit() || SavePrefabEditMode();
     }
     if (!sceneDocumentDirty_) {
         LogMaterialGraphDebug(console_, "save-open-documents-ok no dirty scene");

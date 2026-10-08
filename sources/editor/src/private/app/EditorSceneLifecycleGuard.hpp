@@ -23,6 +23,11 @@ public:
         HWND owner,
         EditorSceneContext& sceneContext,
         std::wstring_view action);
+    // Leaves prefab edit mode, first asking what to do with unsaved prefab edits. False when cancelled.
+    [[nodiscard]] static bool LeavePrefabEditMode(
+        HWND owner,
+        EditorSceneContext& sceneContext,
+        std::wstring_view action);
 };
 
 #endif

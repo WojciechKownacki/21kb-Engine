@@ -302,6 +302,7 @@ public:
     [[nodiscard]] bool SavePrefabEditMode();
     [[nodiscard]] bool ClosePrefabEditMode();
     [[nodiscard]] bool InPrefabEditMode() const noexcept;
+    [[nodiscard]] bool HasUnsavedPrefabEdit() const noexcept;
     [[nodiscard]] std::string PrefabEditModeName() const;
     [[nodiscard]] bool CanUndoSceneCommand() const noexcept;
     [[nodiscard]] bool CanRedoSceneCommand() const noexcept;

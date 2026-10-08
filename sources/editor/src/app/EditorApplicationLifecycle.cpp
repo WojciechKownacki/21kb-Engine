@@ -147,6 +147,8 @@ bool EditorApplicationLifecycle::Initialize(EditorApplicationState& state) {
 
 void EditorApplicationLifecycle::Shutdown(EditorApplicationState& state) {
     static_cast<void>(state.sceneContext.RestorePlayModeSceneSession());
+    // Closing the window already asked about an open prefab; leave it so the scene document is saved.
+    static_cast<void>(state.sceneContext.ClosePrefabEditMode());
     static_cast<void>(state.sceneContext.SaveDirtySceneDocument("application shutdown"));
     EditorWorkspaceSession::Save(state.dockModel, state.sceneContext);
     if (state.sceneContext.HasParticleEditorAsset()) state.sceneContext.CloseParticleEditorAsset();

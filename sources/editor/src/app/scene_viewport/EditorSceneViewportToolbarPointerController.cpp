@@ -1,5 +1,6 @@
 #include "app/scene_viewport/EditorSceneViewportToolbarPointerController.hpp"
 
+#include "app/EditorSceneLifecycleGuard.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
 #include "rendering/EditorSceneBgfxViewport.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
@@ -231,7 +232,7 @@ bool EditorSceneViewportToolbarPointerController::HandlePointerDown(const Editor
     }
     if (sceneContext_.InPrefabEditMode() && PointInRect(toolbar.prefabCloseButton, x, y)) {
         preview.CloseToolbarDropdown();
-        static_cast<void>(sceneContext_.ClosePrefabEditMode());
+        static_cast<void>(EditorSceneLifecycleGuard::LeavePrefabEditMode(GetActiveWindow(), sceneContext_, L"closing it"));
         sceneViewport_.RequestPresent();
         return true;
     }
