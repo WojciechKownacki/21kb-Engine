@@ -598,3 +598,34 @@ set(KB_PERFORMANCE_SOURCE_DIR "" CACHE PATH "Directory containing the performanc
 if(KB_PERFORMANCE_SOURCE_DIR)
     add_subdirectory("${KB_PERFORMANCE_SOURCE_DIR}" performance)
 endif()
+
+# Each test gets its own temporary directory, so tests that ctest runs in parallel never share a file in the
+# system temporary directory. The directories stay in the system temporary directory, outside any source
+# tree, because some tests check that what they write is not inside a project or a repository. Setting a
+# property on another directory's test needs CMake 3.28.
+function(kb_isolate_test_temp_directories directory root)
+    get_property(tests DIRECTORY "${directory}" PROPERTY TESTS)
+    foreach(test IN LISTS tests)
+        set(temp "${root}/${test}")
+        file(MAKE_DIRECTORY "${temp}")
+        set_property(TEST "${test}" DIRECTORY "${directory}" APPEND PROPERTY ENVIRONMENT
+            "TMP=${temp}" "TEMP=${temp}" "TMPDIR=${temp}")
+    endforeach()
+    get_property(subdirectories DIRECTORY "${directory}" PROPERTY SUBDIRECTORIES)
+    foreach(subdirectory IN LISTS subdirectories)
+        kb_isolate_test_temp_directories("${subdirectory}" "${root}")
+    endforeach()
+endfunction()
+if(BUILD_TESTING AND CMAKE_VERSION VERSION_GREATER_EQUAL 3.28)
+    if(DEFINED ENV{TEMP})
+        file(TO_CMAKE_PATH "$ENV{TEMP}" _kb_system_temp)
+    elseif(DEFINED ENV{TMPDIR})
+        file(TO_CMAKE_PATH "$ENV{TMPDIR}" _kb_system_temp)
+    else()
+        set(_kb_system_temp "/tmp")
+    endif()
+    # One root per build tree, so two trees testing at once do not share one either.
+    string(SHA1 _kb_tree_tag "${CMAKE_BINARY_DIR}")
+    string(SUBSTRING "${_kb_tree_tag}" 0 12 _kb_tree_tag)
+    kb_isolate_test_temp_directories("${CMAKE_CURRENT_SOURCE_DIR}" "${_kb_system_temp}/21kb-tests-${_kb_tree_tag}")
+endif()
