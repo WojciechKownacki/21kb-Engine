@@ -2,6 +2,8 @@
 
 #include "kb/render/resources/RenderResources.hpp"
 
+#include "engine/assets/ImportedAsset.hpp"
+
 #include <cstdint>
 #include <cstddef>
 #include <filesystem>
@@ -28,6 +30,10 @@ struct RenderMeshGltfImportDesc {
     const RenderMeshAssetMaterialBinding* materialBindings = nullptr;
     std::uint32_t materialBindingCount = 0;
     bool flipV = false;
+    // Buffer files an import carried with the document (ImportedAsset::resources); a buffer URI
+    // they do not hold is read relative to the source path, when there is one.
+    const kb::assets::ImportedAssetResource* externalResources = nullptr;
+    std::uint32_t externalResourceCount = 0;
 };
 
 struct RenderMeshFbxImportDesc {

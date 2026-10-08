@@ -4,6 +4,8 @@
 #include "resources/RenderMeshGltfMaterialImporter.hpp"
 #include "resources/RenderMeshGltfTransforms.hpp"
 
+#include "engine/assets/GltfExternalResources.hpp"
+
 #include <cgltf/cgltf.h>
 
 #include <array>
@@ -131,15 +133,11 @@ void AppendGltfIndex(RenderMeshAssetData& asset, std::uint32_t index) {
         RenderMeshAssetFinalizer::EnsureTangentVertexStorage(asset);
     }
 
-    // Unnamed materials get the same "Material_<index>" name the material import step
-    // assigns; keying them by an empty name would collapse them all into one slot.
-    std::string unnamedMaterial;
-    if (primitive.material != nullptr && (primitive.material->name == nullptr || primitive.material->name[0] == 0)) {
-        unnamedMaterial = "Material_" + std::to_string(static_cast<std::size_t>(primitive.material - data.materials));
-    }
-    const std::string_view materialName = !unnamedMaterial.empty()
-        ? std::string_view{ unnamedMaterial }
-        : primitive.material != nullptr ? std::string_view{ primitive.material->name } : std::string_view{};
+    // Every material keeps its own slot, named as the material import step names it: an unnamed
+    // one gets a "Material_<index>" name no other material of the document uses.
+    const std::string materialName = primitive.material != nullptr
+        ? kb::assets::GltfMaterialSlotName(data, static_cast<std::size_t>(primitive.material - data.materials))
+        : std::string{};
     const std::uint32_t materialSlot = RenderMeshGltfMaterialImporter::EnsureMaterialSlot(asset, materialName, primitive.material, desc);
     const std::uint32_t sectionStart = static_cast<std::uint32_t>(asset.indices32.size());
     const bool useTangentFormat = tangentData.has_value() || !asset.tangentVertices.empty();
@@ -313,6 +311,17 @@ void AppendGltfIndex(RenderMeshAssetData& asset, std::uint32_t index) {
     return asset;
 }
 
+[[nodiscard]] std::span<const kb::assets::ImportedAssetResource> ExternalResources(const RenderMeshGltfImportDesc& desc) noexcept {
+    return desc.externalResources == nullptr
+        ? std::span<const kb::assets::ImportedAssetResource>{}
+        : std::span<const kb::assets::ImportedAssetResource>{ desc.externalResources, desc.externalResourceCount };
+}
+
+// External files resolve next to the document; a bare file name sits in the working directory.
+[[nodiscard]] std::filesystem::path DocumentDirectory(const std::filesystem::path& documentPath) {
+    return documentPath.has_parent_path() ? documentPath.parent_path() : std::filesystem::path{ "." };
+}
+
 } // namespace
 
 std::optional<RenderMeshAssetData> RenderMeshGltfImporter::Load(const std::filesystem::path& path, const RenderMeshGltfImportDesc& desc) {
@@ -323,7 +332,7 @@ std::optional<RenderMeshAssetData> RenderMeshGltfImporter::Load(const std::files
         return std::nullopt;
     }
     const std::unique_ptr<cgltf_data, decltype(&cgltf_free)> data(rawData, &cgltf_free);
-    if (cgltf_load_buffers(&options, data.get(), pathString.c_str()) != cgltf_result_success) {
+    if (!kb::assets::LoadGltfBuffers(options, *data, DocumentDirectory(path), ExternalResources(desc), nullptr)) {
         return std::nullopt;
     }
     return BuildGltfMesh(data.get(), desc);
@@ -336,15 +345,14 @@ std::optional<RenderMeshAssetData> RenderMeshGltfImporter::Load(
     if (bytes.empty()) {
         return std::nullopt;
     }
-    const std::string pathString = sourcePath.string();
     cgltf_options options{};
     cgltf_data* rawData = nullptr;
     if (cgltf_parse(&options, bytes.data(), bytes.size(), &rawData) != cgltf_result_success || rawData == nullptr) {
         return std::nullopt;
     }
     const std::unique_ptr<cgltf_data, decltype(&cgltf_free)> data(rawData, &cgltf_free);
-    const char* const bufferBasePath = sourcePath.empty() ? nullptr : pathString.c_str();
-    if (cgltf_load_buffers(&options, data.get(), bufferBasePath) != cgltf_result_success) {
+    const std::filesystem::path sourceDirectory = sourcePath.empty() ? std::filesystem::path{} : DocumentDirectory(sourcePath);
+    if (!kb::assets::LoadGltfBuffers(options, *data, sourceDirectory, ExternalResources(desc), nullptr)) {
         return std::nullopt;
     }
     return BuildGltfMesh(data.get(), desc);
@@ -364,15 +372,10 @@ std::optional<std::vector<std::filesystem::path>> RenderMeshGltfImporter::Extern
     for (cgltf_size index = 0U; index < data->buffers_count; ++index) {
         const char* const uri = data->buffers[index].uri;
         if (uri == nullptr || std::strncmp(uri, "data:", 5U) == 0) continue;
-        if (std::strstr(uri, "://") != nullptr) return std::nullopt;
-        std::string decoded{ uri };
-        static_cast<void>(cgltf_decode_uri(decoded.data()));
-        decoded.resize(std::strlen(decoded.c_str()));
-        const std::filesystem::path path{ decoded };
-        if (path.empty() || path.is_absolute()) return std::nullopt;
-        const std::filesystem::path normalized = path.lexically_normal();
-        if (std::ranges::find(uris, normalized) == uris.end()) {
-            uris.push_back(normalized);
+        const std::optional<std::filesystem::path> relative = kb::assets::GltfRelativeResourcePath(uri);
+        if (!relative) return std::nullopt;
+        if (std::ranges::find(uris, *relative) == uris.end()) {
+            uris.push_back(*relative);
         }
     }
     return uris;

@@ -8,6 +8,8 @@ namespace {
 
 constexpr std::array<char, 8> AssetMagic{ '2', '1', 'K', 'B', 'A', 'S', 'T', '\0' };
 constexpr std::uint32_t SupportedVersion = 1U;
+// Version 2 only appends a resource table after the names; the fields read here are unchanged.
+constexpr std::uint32_t ResourcesVersion = 2U;
 
 [[nodiscard]] bool ReadU16(std::istream& input, std::uint16_t& value) {
     value = 0;
@@ -48,7 +50,7 @@ std::optional<AssetImportCategory> ImportedAssetHeaderReader::ReadCategory(const
     std::uint16_t flags = 0;
     if (magic != AssetMagic
         || !ReadU32(input, version)
-        || version != SupportedVersion
+        || (version != SupportedVersion && version != ResourcesVersion)
         || !ReadU16(input, category)
         || !ReadU16(input, flags)) {
         return std::nullopt;

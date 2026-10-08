@@ -741,6 +741,7 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
     add_executable(kb_renderer_tests
         tests/RendererTests.cpp
         tests/AssetImportCatalogCoverageTests.cpp
+        tests/GltfExternalResourceTests.cpp
         tests/SceneLightGridTests.cpp
         tests/SceneLightGridGpuTests.cpp
         tests/RendererTestSupport.hpp

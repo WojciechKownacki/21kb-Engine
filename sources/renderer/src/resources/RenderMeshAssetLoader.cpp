@@ -54,8 +54,13 @@ namespace {
         reinterpret_cast<const std::uint8_t*>(imported.payload.data()),
         imported.payload.size(),
     };
-    std::optional<RenderMeshAssetData> mesh =
-        RenderMeshAssetBuilder::LoadGltf(payload, {});
+    // A .gltf import carries its external buffers; the source folder is not consulted.
+    const auto* const resources = imported.resources.empty() ? nullptr : imported.resources.data();
+    const auto resourceCount = static_cast<std::uint32_t>(imported.resources.size());
+    std::optional<RenderMeshAssetData> mesh = RenderMeshAssetBuilder::LoadGltf(payload, {}, RenderMeshGltfImportDesc{
+        .externalResources = resources,
+        .externalResourceCount = resourceCount,
+    });
     if (mesh.has_value() &&
         (imported.importOptions & kb::assets::kAssetImportOptionMeshImportMaterials) != 0U) {
         std::vector<RenderMeshAssetMaterialBinding> bindings;
@@ -72,6 +77,8 @@ namespace {
         mesh = RenderMeshAssetBuilder::LoadGltf(payload, {}, RenderMeshGltfImportDesc{
             .materialBindings = bindings.data(),
             .materialBindingCount = static_cast<std::uint32_t>(bindings.size()),
+            .externalResources = resources,
+            .externalResourceCount = resourceCount,
         });
     }
     return mesh;
