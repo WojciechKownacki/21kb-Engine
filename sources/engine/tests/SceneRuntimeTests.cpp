@@ -97,6 +97,8 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunNavigationRuntimeTests();
     } else if (suite == "portal-visibility") {
         kb::tests::RunPortalVisibilityTests();
+    } else if (suite == "motion-skeleton-rule") {
+        kb::tests::RunMotionSkeletonRuleTests();
     } else {
         return false;
     }
@@ -130,6 +132,7 @@ void RunAllSuites() {
     kb::tests::RunCrashReportConsentTests();
     kb::tests::RunNavigationRuntimeTests();
     kb::tests::RunPortalVisibilityTests();
+    kb::tests::RunMotionSkeletonRuleTests();
 }
 
 } // namespace

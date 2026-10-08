@@ -1747,6 +1747,7 @@ if(BUILD_TESTING)
         tests/CrashReportConsentTests.cpp
         tests/NavigationRuntimeTests.cpp
         tests/PortalVisibilityTests.cpp
+        tests/MotionSkeletonRuleTests.cpp
         tests/ScenePrefabCaptureTests.cpp
         tests/ScenePrefabInstantiationTests.cpp
         tests/ScenePrefabTestSuites.hpp

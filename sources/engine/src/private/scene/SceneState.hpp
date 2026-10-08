@@ -17,6 +17,7 @@
 #include "engine/localization/LocalizationCatalog.hpp"
 #include "engine/scene/BehaviourVariableOverride.hpp"
 #include "engine/scene/ContentInstanceComponent.hpp"
+#include "engine/scene/MotionSkeletonRuleComponent.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/PhysicsDebugDraw.hpp"
 #include "engine/scene/SceneEntity.hpp"
@@ -201,6 +202,13 @@ struct AnimatorInstance {
     float lastAppliedComponentPoseUpdateRateHz = 0.0F;
     double poseUpdateAccumulatorSeconds = 0.0;
     bool hasEvaluatedPose = false;
+    // The entity's enabled, valid MotionSkeletonRule as read for this update, applied to the skeletal pose
+    // after the controller's rig constraints, and the update's delta for its Spring kind.
+    std::optional<MotionSkeletonRuleComponent> motionSkeletonRule;
+    float motionSkeletonRuleDeltaSeconds = 0.0F;
+    // Spring kind: the lagging animator-space rotation of the bone it last drove.
+    std::optional<Quat> motionSkeletonRuleSpringRotation;
+    SkeletonBoneId motionSkeletonRuleSpringBone = 0U;
 };
 
 using AnimatorRuntimeRecord = AnimatorInstance;
