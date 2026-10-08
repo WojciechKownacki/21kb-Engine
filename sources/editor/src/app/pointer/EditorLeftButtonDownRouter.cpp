@@ -2043,6 +2043,11 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                     changed = sceneContext_.SetBuildGameLocalFile(field, *selected);
                 }
                 break;
+            case BuildGameField::WindowsCertificateFile:
+                if (const auto selected = EditorBuildGameFileDialog::SelectCertificate(mainWindow_)) {
+                    changed = sceneContext_.SetBuildGameLocalFile(field, *selected);
+                }
+                break;
             case BuildGameField::LaunchAfterBuild:
                 changed = sceneContext_.ToggleBuildGameLaunchAfterBuild();
                 break;
@@ -2065,6 +2070,9 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             case BuildGameField::LinuxEngineRoot:
             case BuildGameField::LinuxDisplay:
             case BuildGameField::CrashReportUrl:
+            case BuildGameField::WindowsCertificateThumbprint:
+            case BuildGameField::WindowsCertificatePassword:
+            case BuildGameField::WindowsTimestampUrl:
                 changed = sceneContext_.BeginBuildGameTextEdit(field);
                 break;
             case BuildGameField::None:

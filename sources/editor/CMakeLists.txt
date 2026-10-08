@@ -64,6 +64,8 @@ add_executable(kb_editor WIN32
     src/packaging/EditorAndroidSigningBroker.cpp
     src/packaging/EditorPackageProcessEnvironment.cpp
     src/packaging/EditorProjectIconTransaction.cpp
+    src/packaging/EditorSigningProcess.cpp
+    src/packaging/EditorWindowsSigningBroker.cpp
     src/app/inspector/EditorInspectorPointerController.cpp
     src/app/plugins/EditorPluginsPointerController.cpp
     src/app/EditorWindowLifecycleHandler.cpp
@@ -615,6 +617,8 @@ add_executable(kb_editor WIN32
     src/private/packaging/EditorPackageProcessEnvironment.hpp
     src/private/packaging/EditorProjectIconTransaction.hpp
     src/private/packaging/EditorProjectPackageService.hpp
+    src/private/packaging/EditorSigningProcess.hpp
+    src/private/packaging/EditorWindowsSigningBroker.hpp
     src/private/platform/win32/EditorBuildGameFileDialog.hpp
     src/private/rendering/BuildGamePanelLayout.hpp
     src/private/rendering/BuildGamePanelModel.hpp
@@ -1074,6 +1078,8 @@ endif()
 
 target_link_libraries(kb_editor PRIVATE user32 gdi32 gdiplus ole32 dwmapi msimg32 comdlg32 shell32 xinput)
 target_link_libraries(kb_editor PRIVATE kb_crash_reporting)
+# Build Game signs Windows packages with the signer shipped beside the editor.
+add_dependencies(kb_editor kb_authenticode_signer)
 target_compile_definitions(kb_editor PRIVATE
     "KB_EDITOR_ENGINE_ROOT=\"${CMAKE_SOURCE_DIR}\""
     "KB_EDITOR_BUILD_ROOT=\"${CMAKE_BINARY_DIR}\""
@@ -1147,12 +1153,16 @@ if(BUILD_TESTING)
         src/packaging/EditorAndroidSigningBroker.cpp
         src/packaging/EditorPackageProcessEnvironment.cpp
         src/packaging/EditorProjectIconTransaction.cpp
+        src/packaging/EditorSigningProcess.cpp
+        src/packaging/EditorWindowsSigningBroker.cpp
     )
     target_include_directories(kb_editor_build_game_tests PRIVATE include src/private)
+    add_dependencies(kb_editor_build_game_tests kb_authenticode_signer)
     target_compile_definitions(kb_editor_build_game_tests PRIVATE
         "KB_EDITOR_BUILD_GAME_TEST_ROOT=\"${CMAKE_BINARY_DIR}/editor-build-game-test-scratch\""
+        "KB_AUTHENTICODE_SIGNER=\"$<TARGET_FILE:kb_authenticode_signer>\""
     )
-    target_link_libraries(kb_editor_build_game_tests PRIVATE kb_engine kb_crash_reporting ole32 shell32)
+    target_link_libraries(kb_editor_build_game_tests PRIVATE kb_engine kb_crash_reporting ole32 shell32 wintrust crypt32)
     add_test(NAME kb_editor_build_game_tests COMMAND $<TARGET_FILE:kb_editor_build_game_tests>)
     set_tests_properties(kb_editor_build_game_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
     kb_apply_quality_gates(kb_editor_build_game_tests)

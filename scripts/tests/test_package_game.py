@@ -3,10 +3,13 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import os
 import re
+import secrets
 import shutil
 import stat
 import struct
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -21,6 +24,7 @@ sys.path.insert(0, str(SCRIPTS))
 import package_game  # noqa: E402
 import package_linux_guest  # noqa: E402
 import package_contract  # noqa: E402
+import windows_authenticode  # noqa: E402
 import windows_pe_symbols  # noqa: E402
 from package_contract import PackagingError, seal_unit  # noqa: E402
 import third_party_notices  # noqa: E402
@@ -67,6 +71,44 @@ def write_pdb(path: Path, guid: bytes) -> None:
     blocks[4][:len(directory)] = directory
     blocks[5][:len(info)] = info
     path.write_bytes(b"".join(blocks))
+
+
+def built_authenticode_signer() -> Path | None:
+    """kb_authenticode_signer from a build tree of this checkout, if one was built."""
+    configured = os.environ.get("KB_AUTHENTICODE_SIGNER")
+    if configured:
+        return Path(configured) if Path(configured).is_file() else None
+    return next(iter(sorted(SCRIPTS.parent.glob("build/*/bin/kb_authenticode_signer.exe"))), None)
+
+
+def create_throwaway_certificate(directory: Path, password: str) -> tuple[Path, str]:
+    """A self-signed code-signing certificate made in memory by .NET and exported to a PFX.
+
+    Nothing is added to a certificate store and no trust changes; the password reaches
+    PowerShell on standard input.
+    """
+    pfx = directory / "throwaway.pfx"
+    script = (
+        "$ErrorActionPreference='Stop';"
+        "$password=[Console]::In.ReadLine();"
+        "$key=[System.Security.Cryptography.RSACng]::new(2048);"
+        "$request=[System.Security.Cryptography.X509Certificates.CertificateRequest]::new('CN=21kb Packaging Test',$key,"
+        "[System.Security.Cryptography.HashAlgorithmName]::SHA256,[System.Security.Cryptography.RSASignaturePadding]::Pkcs1);"
+        "$usage=[System.Security.Cryptography.OidCollection]::new();"
+        "[void]$usage.Add([System.Security.Cryptography.Oid]::new('1.3.6.1.5.5.7.3.3'));"
+        "$request.CertificateExtensions.Add("
+        "[System.Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension]::new($usage,$false));"
+        "$certificate=$request.CreateSelfSigned([DateTimeOffset]::UtcNow.AddMinutes(-5),[DateTimeOffset]::UtcNow.AddDays(1));"
+        f"[System.IO.File]::WriteAllBytes('{pfx}',"
+        "$certificate.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Pfx,$password));"
+        "Write-Output $certificate.Thumbprint"
+    )
+    powershell = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+    result = subprocess.run(
+        [str(powershell), "-NoProfile", "-NonInteractive", "-Command", script],
+        input=password + "\n", capture_output=True, text=True, timeout=120, check=True,
+    )
+    return pfx, result.stdout.strip().splitlines()[-1]
 
 
 def seal_with_first_frame(root: Path, fields: dict[str, object]) -> None:
@@ -1203,6 +1245,139 @@ class PackageGameTests(unittest.TestCase):
                              (stage / "CRASH_REPORTS.txt").read_bytes())
             with self.assertRaisesRegex(PackagingError, "privacy notice is missing"):
                 package_game._stage_crash_report_notice(Path(temporary_text), stage)
+
+    @staticmethod
+    def _signing_arguments(**overrides: object) -> argparse.Namespace:
+        values: dict[str, object] = {
+            "target": "Windows.x64",
+            "windows_sign_thumbprint": None,
+            "windows_sign_pfx": None,
+            "windows_sign_password_stdin": False,
+            "windows_signing_broker": None,
+            "windows_timestamp_url": None,
+            "windows_require_signing": False,
+        }
+        values.update(overrides)
+        return argparse.Namespace(**values)
+
+    def test_windows_signing_options_are_validated(self) -> None:
+        package_game._validate_windows_signing(self._signing_arguments())
+        with self.assertRaisesRegex(PackagingError, "required but no certificate"):
+            package_game._validate_windows_signing(self._signing_arguments(windows_require_signing=True))
+        store = self._signing_arguments(windows_sign_thumbprint="ab:cd:ef:01:23:45:67:89:ab:cd:ef:01:23:45:67:89:ab:cd:ef:01",
+                                        windows_timestamp_url="http://timestamp.example.com/rfc3161")
+        package_game._validate_windows_signing(store)
+        self.assertEqual("ABCDEF0123456789ABCDEF0123456789ABCDEF01", store.windows_sign_thumbprint)
+        with tempfile.TemporaryDirectory() as temporary_text:
+            pfx = Path(temporary_text) / "release.pfx"
+            pfx.write_bytes(b"pfx")
+            for refused, message in (
+                ({"windows_sign_thumbprint": "1234"}, "40 hexadecimal"),
+                ({"windows_sign_thumbprint": "A" * 40, "windows_sign_pfx": pfx}, "not both"),
+                ({"windows_sign_thumbprint": "A" * 40, "windows_sign_password_stdin": True}, "needs no password"),
+                ({"windows_sign_pfx": pfx, "windows_sign_password_stdin": True, "windows_signing_broker": pfx}, "not both"),
+                ({"windows_sign_pfx": pfx, "windows_timestamp_url": "ftp://timestamp.example.com"}, "RFC 3161"),
+                ({"windows_sign_pfx": pfx, "target": "Linux.x64"}, "only to Windows"),
+                ({"windows_timestamp_url": "http://timestamp.example.com"}, "need a certificate"),
+            ):
+                with self.assertRaisesRegex(PackagingError, message):
+                    package_game._validate_windows_signing(self._signing_arguments(**refused))
+            with self.assertRaises(OSError):
+                package_game._validate_windows_signing(self._signing_arguments(windows_sign_pfx=Path(temporary_text) / "missing.pfx"))
+
+    def test_store_signing_names_the_certificate_and_never_a_secret(self) -> None:
+        command = windows_authenticode.signtool_sign_command(
+            Path("signtool.exe"), [Path("Game.exe"), Path("plugin.dll")],
+            "abcdef0123456789abcdef0123456789abcdef01", "http://timestamp.example.com/rfc3161")
+        self.assertEqual(
+            ["sign", "/fd", "SHA256", "/s", "My", "/sha1", "ABCDEF0123456789ABCDEF0123456789ABCDEF01",
+             "/tr", "http://timestamp.example.com/rfc3161", "/td", "SHA256"],
+            [str(part) for part in command[1:12]],
+        )
+        self.assertNotIn("/p", [str(part) for part in command])
+        self.assertNotIn("/f", [str(part) for part in command])
+        if os.name == "nt" and (Path(os.environ.get("ProgramFiles(x86)", "")) / "Windows Kits").is_dir():
+            signtool = windows_authenticode.find_signtool()
+            self.assertEqual("signtool.exe", signtool.name.lower())
+            self.assertEqual("x64", signtool.parent.name.lower())
+
+    @unittest.skipUnless(os.name == "nt" and built_authenticode_signer() is not None,
+                         "needs Windows and a built kb_authenticode_signer")
+    def test_pfx_signing_is_verified_against_the_certificate(self) -> None:
+        signer = built_authenticode_signer()
+        assert signer is not None
+        with tempfile.TemporaryDirectory() as temporary_text:
+            root = Path(temporary_text)
+            password = secrets.token_urlsafe(18)
+            pfx, thumbprint = create_throwaway_certificate(root, password)
+            images = [root / "Game.exe", root / "plugin.dll"]
+            for image in images:
+                shutil.copy2(signer, image)
+            unsigned = root / "Unsigned.exe"
+            shutil.copy2(signer, unsigned)
+            reported = package_game._sign_with_pfx_signer(signer, pfx, password, images, None, root)
+            self.assertEqual(thumbprint, reported)
+            signatures = windows_authenticode.verify_signed(images, expected_thumbprint=thumbprint, allow_untrusted_root=True)
+            self.assertEqual(["21kb Packaging Test"] * 2, [signature.subject for signature in signatures])
+            # A throwaway root is not trusted, which a release must refuse.
+            with self.assertRaisesRegex(windows_authenticode.AuthenticodeError, "does not trust"):
+                windows_authenticode.verify_signed(images[:1], expected_thumbprint=thumbprint)
+            with self.assertRaisesRegex(windows_authenticode.AuthenticodeError, "not signed"):
+                windows_authenticode.verify_signed([unsigned], expected_thumbprint=thumbprint, allow_untrusted_root=True)
+            with self.assertRaisesRegex(windows_authenticode.AuthenticodeError, "not by"):
+                windows_authenticode.verify_signed(images[:1], expected_thumbprint="0" * 40, allow_untrusted_root=True)
+            tampered = bytearray(images[0].read_bytes())
+            tampered[len(tampered) // 3] ^= 0xFF
+            images[0].write_bytes(bytes(tampered))
+            with self.assertRaisesRegex(windows_authenticode.AuthenticodeError, "invalid signature"):
+                windows_authenticode.verify_signed(images[:1], expected_thumbprint=thumbprint, allow_untrusted_root=True)
+            with self.assertRaises(PackagingError):
+                package_game._sign_with_pfx_signer(signer, pfx, "wrong-" + password, [unsigned], None, root)
+
+    def test_windows_images_are_signed_after_every_binary_edit(self) -> None:
+        plugins = ("kb_physics_jolt_plugin", "kb_audio_miniaudio_plugin", "kb_basic_lighting_plugin", "kb_21kb_particle_plugin")
+        with tempfile.TemporaryDirectory() as temporary_text:
+            root = Path(temporary_text)
+            built = root / "build" / "bin"
+            built.mkdir(parents=True)
+            for index, name in enumerate(("kb_game.exe", *(f"{plugin}.dll" for plugin in plugins))):
+                guid = bytes([index] * 16)
+                stem = Path(name).stem
+                write_pe_with_pdb_reference(built / name, f"{stem}.pdb", guid, 1)
+                write_pdb(built / f"{stem}.pdb", guid)
+            pack = root / "cook" / "Game.kbpack"
+            pack.parent.mkdir()
+            pack.write_bytes(b"pack")
+            stage = root / "stage"
+            stage.mkdir()
+            job = root / "job"
+            job.mkdir()
+            args = self._signing_arguments(
+                configuration="Release", build_root=root / "build", engine_root=SCRIPTS.parent, executable_name="Game",
+                product_name="Game", publisher="Publisher", version="1.0.0", application_icon=None, crash_report_url=None,
+                windows_sign_thumbprint="A" * 40, windows_timestamp_url="http://timestamp.example.com/rfc3161",
+            )
+            events: list[str] = []
+            signed: list[Path] = []
+
+            def run(arguments: list[object], **_: object) -> package_contract.ProcessResult:
+                if str(arguments[1]) == "sign":
+                    events.append("sign")
+                    signed.extend(Path(str(argument)) for argument in arguments[12:])
+                    return package_contract.ProcessResult("", 0.0)
+                events.append("first frame")
+                return package_contract.ProcessResult("frames=1 shutdown=clean rendered=1", 0.0)
+
+            with mock.patch.object(package_game, "_build_targets"), \
+                    mock.patch.object(package_game, "apply_windows_resources", side_effect=lambda *_, **__: events.append("resources")), \
+                    mock.patch.object(package_game, "find_signtool", return_value=Path("signtool.exe")), \
+                    mock.patch.object(package_game, "verify_signed", side_effect=lambda *_, **__: events.append("verify")), \
+                    mock.patch.object(package_game, "run_checked", side_effect=run):
+                result = package_game._stage_windows(args, Path("cmake"), pack, stage, job)
+            self.assertEqual(["resources", "sign", "verify", "first frame"], events)
+            self.assertEqual(sorted(path.name for path in stage.rglob("*") if path.suffix in (".exe", ".dll")),
+                             sorted(path.name for path in signed))
+            self.assertIn(Path("signtool.exe"), result.tools)
 
     def test_launch_copy_is_exact_and_removes_direct_run_owner(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_text:

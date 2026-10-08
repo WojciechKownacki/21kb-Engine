@@ -17,7 +17,7 @@ bool EditorBuildGameInputHandler::HandleCharacter(wchar_t character) const {
 bool EditorBuildGameInputHandler::HandleKeyDown(HWND owner, WPARAM key) const {
     if (!sceneContext_.IsBuildGameTextEditing()) return false;
     const BuildGameField field = sceneContext_.BuildGameEditingField();
-    const bool sensitive = field == BuildGameField::AndroidStorePassword || field == BuildGameField::AndroidKeyPassword;
+    const bool sensitive = BuildGamePanelModel::IsSecret(field);
     switch (EditorTextInputShortcuts::Resolve(key)) {
     case EditorTextInputShortcut::SelectAll:
         static_cast<void>(sceneContext_.SelectAllBuildGameText());

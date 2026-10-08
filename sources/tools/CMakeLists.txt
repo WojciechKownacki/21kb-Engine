@@ -21,6 +21,15 @@ add_executable(kb_cli
     src/main.cpp
 )
 
+if(WIN32)
+    # Authenticode-signs shipped Windows images with a PFX whose password arrives on
+    # standard input. The editor's signing broker and the package script run it.
+    add_executable(kb_authenticode_signer src/AuthenticodeSignerMain.cpp)
+    set_target_properties(kb_authenticode_signer PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+    target_link_libraries(kb_authenticode_signer PRIVATE crypt32 ncrypt)
+    kb_apply_quality_gates(kb_authenticode_signer)
+endif()
+
 set_target_properties(kb_cli PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 target_link_libraries(kb_cli PRIVATE kb_cli_core)

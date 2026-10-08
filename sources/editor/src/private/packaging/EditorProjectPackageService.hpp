@@ -76,6 +76,12 @@ struct EditorPackageRequest {
     std::string androidKeyAlias;
     std::string androidStorePassword;
     std::string androidKeyPassword;
+    // Windows Authenticode, Release only: a store certificate by thumbprint, or a PFX
+    // file whose password reaches the signer through EditorWindowsSigningBroker.
+    std::string windowsCertificateThumbprint;
+    std::filesystem::path windowsCertificateFile;
+    std::string windowsCertificatePassword;
+    std::string windowsTimestampUrl;
     std::filesystem::path emsdkRoot;
     std::string linuxHost;
     std::string linuxUser;
