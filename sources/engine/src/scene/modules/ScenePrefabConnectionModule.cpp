@@ -42,13 +42,28 @@ namespace {
     return {};
 }
 
+// A prefab and the prefabs it is a variant of, under their own guids.
+ScenePrefabHandle CopyPrefabRecord(const ScenePrefabRegistry& source, ScenePrefabRegistry& target, const ScenePrefabRecord& record) {
+    if (const ScenePrefabHandle copied = target.FindByGuid(record.guid); copied.IsValid()) {
+        return copied;
+    }
+    if (record.kind != ScenePrefabRecordKind::Variant) {
+        return target.RegisterLoaded(record.guid, record.name, record.prefab, record.sourcePath);
+    }
+    const ScenePrefabRecord* base = source.FindRecord(record.basePrefab);
+    if (base == nullptr || !CopyPrefabRecord(source, target, *base).IsValid()) {
+        return {};
+    }
+    return target.RegisterLoadedVariant(record.guid, record.name, record.basePrefabGuid, record.variantOverrides, record.variantAddedChildren);
+}
+
 // The prefabs a private scene's prefab nests, so saving it can tell what the edits change in them.
 void CopyNestedPrefabs(const ScenePrefabRegistry& source, ScenePrefabRegistry& target, const ScenePrefab& prefab) {
     for (const ScenePrefabNodeDesc& node : prefab.Nodes()) {
         const ScenePrefabRecord* record = node.nestedPrefabGuid.empty() || target.FindByGuid(node.nestedPrefabGuid).IsValid()
             ? nullptr
             : source.FindRecord(source.FindByGuid(node.nestedPrefabGuid));
-        if (record != nullptr && target.RegisterLoaded(record->guid, record->name, record->prefab, record->sourcePath).IsValid()) {
+        if (record != nullptr && CopyPrefabRecord(source, target, *record).IsValid()) {
             CopyNestedPrefabs(source, target, record->prefab);
         }
     }
@@ -153,7 +168,11 @@ ScenePrefabPrivateScene ScenePrefabs::OpenPrivateScene(ScenePrefabHandle handle)
     }
 
     auto editScene = std::make_unique<Scene>(SceneMode::PrefabPrivate);
-    const ScenePrefabHandle editHandle = editScene->Prefabs().Register("PrivatePrefabEdit", *prefab);
+    // A variant is edited as that variant, so saving records the edits as its overrides.
+    const ScenePrefabRecord* record = state.prefabs.FindRecord(handle);
+    const ScenePrefabHandle editHandle = record->kind == ScenePrefabRecordKind::Variant
+        ? CopyPrefabRecord(state.prefabs, SceneAccess::State(*editScene).prefabs, *record)
+        : editScene->Prefabs().Register("PrivatePrefabEdit", *prefab);
     if (!editHandle.IsValid()) {
         return {};
     }

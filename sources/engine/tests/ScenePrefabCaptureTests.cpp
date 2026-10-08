@@ -623,6 +623,29 @@ void RunPrivateSceneSaveKeepsNestedPrefabTest() {
     kb::tests::Require(placed.ObjectCount() == 3U && scene.Entities().Name(placed.ObjectAt(2U)) == "BigHub", "A new Car does not show the nested edit");
 }
 
+// A variant edited in its private scene saves the edit as its own overrides and leaves its base alone.
+void RunPrivateSceneSaveOfVariantTest() {
+    kb::scene::Scene scene;
+    kb::scene::ScenePrefab crate;
+    const std::uint32_t crateRoot = crate.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Crate" });
+    static_cast<void>(crate.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Lid", .parentNode = crateRoot }));
+    const kb::scene::ScenePrefabHandle base = scene.Prefabs().Register("Crate", std::move(crate));
+    const kb::scene::ScenePrefabHandle red = scene.Prefabs().RegisterVariant("RedCrate", base, {
+        kb::scene::ScenePrefabPropertyOverride{ .nodeIndex = 0U, .propertyPath = "name", .value = "RedCrate", .flag = kb::scene::ScenePrefabOverrideFlag::Name },
+    });
+    kb::scene::ScenePrefabPrivateScene edit = scene.Prefabs().OpenPrivateScene(red);
+    kb::tests::Require(edit.IsValid() && edit.EditScene().Entities().Name(edit.RootObject()) == "RedCrate", "The variant did not open in a private scene");
+    kb::scene::TransformComponent transform = edit.EditScene().Transforms().Get(edit.RootObject());
+    transform.localPosition.x = 7.0F;
+    edit.EditScene().Transforms().Set(edit.RootObject(), transform);
+    kb::tests::Require(edit.Apply(), "Saving the edited variant failed");
+
+    const kb::scene::ScenePrefab saved = scene.Prefabs().Get(red);
+    kb::tests::Require(scene.Prefabs().AssetType(red) == kb::scene::ScenePrefabAssetType::Variant &&
+        saved.Nodes()[0].name == "RedCrate" && saved.Nodes()[0].transform.localPosition.x == 7.0F, "The variant did not take the edit");
+    kb::tests::Require(scene.Prefabs().Get(base).Nodes()[0].transform.localPosition.x == 0.0F, "Saving the variant changed its base");
+}
+
 // A scene file keeps an instance only as the prefab guid on its root node. Reopening the file in a
 // fresh scene, and reloading the captured document in place (how Play mode stops), must link the
 // instance, its node mapping and its overrides again.
@@ -1027,6 +1050,7 @@ void RunScenePrefabCaptureTests() {
     run("RunPrefabInstanceNodeIdentitySurvivesReopenTest", RunPrefabInstanceNodeIdentitySurvivesReopenTest);
     run("RunReopenedInstanceFollowsChangedPrefabTest", RunReopenedInstanceFollowsChangedPrefabTest);
     run("RunPrivateSceneSaveKeepsNestedPrefabTest", RunPrivateSceneSaveKeepsNestedPrefabTest);
+    run("RunPrivateSceneSaveOfVariantTest", RunPrivateSceneSaveOfVariantTest);
     run("RunRuntimeSpawnDoesNotLinkPrefabInstancesTest", RunRuntimeSpawnDoesNotLinkPrefabInstancesTest);
     run("RunDestroyedInstanceChildSlotReuseTest", RunDestroyedInstanceChildSlotReuseTest);
     run("RunPrefabVariantAssetRoundTripTest", RunPrefabVariantAssetRoundTripTest);
