@@ -2578,6 +2578,23 @@ bool EditorSceneContext::SelectPrefabSourceAsset(kb::scene::SceneEntity entity) 
     return true;
 }
 
+const kb::scene::ScenePrefabOverrideReport& EditorSceneContext::PrefabInstanceOverrides(kb::scene::ScenePrefabInstanceHandle instance) const {
+    PrefabOverridesCache& cache = prefabOverridesCache_;
+    // Editor commands move the editor's revision; a change made to an instance's objects any other way moves the scene's.
+    const std::uint64_t instanceRevision = scene_->Prefabs().InstanceChangeRevision();
+    if (cache.scene != scene_ || cache.instance != instance || cache.revision != sceneRenderRevision_ ||
+        cache.instanceRevision != instanceRevision) {
+        cache = PrefabOverridesCache{
+            .scene = scene_,
+            .instance = instance,
+            .revision = sceneRenderRevision_,
+            .instanceRevision = instanceRevision,
+            .report = scene_->Prefabs().Overrides(instance),
+        };
+    }
+    return cache.report;
+}
+
 bool EditorSceneContext::SelectPrefabInstanceRoot(kb::scene::SceneEntity entity) {
     std::uint32_t nodeIndex = 0U;
     const kb::scene::ScenePrefabInstanceHandle instance = scene_->Prefabs().ContainingInstance(entity, nodeIndex);

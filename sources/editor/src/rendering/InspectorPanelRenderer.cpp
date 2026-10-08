@@ -3249,7 +3249,7 @@ struct PrefabSectionModel {
     const std::filesystem::path source = prefabs.SourcePath(prefabs.SourcePrefab(instance));
     model.prefabName = source.empty() ? std::string{ "Unsaved prefab" } : source.stem().string();
     if (model.root) {
-        for (const kb::scene::ScenePrefabPropertyOverride& property : prefabs.Overrides(instance).properties) {
+        for (const kb::scene::ScenePrefabPropertyOverride& property : sceneContext.PrefabInstanceOverrides(instance).properties) {
             model.overrides.push_back(PrefabSectionModel::OverrideRow{
                 .node = property.target.IsValid() && scene.Entities().IsAlive(property.target)
                     ? scene.Entities().Name(property.target)

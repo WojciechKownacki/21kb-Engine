@@ -646,6 +646,32 @@ void RunPrivateSceneSaveOfVariantTest() {
     kb::tests::Require(scene.Prefabs().Get(base).Nodes()[0].transform.localPosition.x == 0.0F, "Saving the variant changed its base");
 }
 
+// The instance change revision moves with every change to an instance's objects, and only then.
+void RunInstanceChangeRevisionTest() {
+    kb::scene::Scene scene;
+    kb::scene::ScenePrefab crate;
+    const std::uint32_t crateRoot = crate.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Crate" });
+    static_cast<void>(crate.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Lid", .parentNode = crateRoot }));
+    const kb::scene::ScenePrefabInstance placed = scene.Prefabs().Instantiate(scene.Prefabs().Register("Crate", std::move(crate)));
+    const kb::scene::SceneObject loose = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Loose" });
+
+    const std::uint64_t before = scene.Prefabs().InstanceChangeRevision();
+    kb::scene::TransformComponent transform = scene.Transforms().Get(loose);
+    transform.localPosition.x = 1.0F;
+    scene.Transforms().Set(loose, transform);
+    kb::tests::Require(scene.Prefabs().InstanceChangeRevision() == before, "Moving an object outside any instance moved the instance change revision");
+    static_cast<void>(scene.Prefabs().Overrides(placed.Handle()));
+    kb::tests::Require(scene.Prefabs().InstanceChangeRevision() == before, "Reading overrides moved the instance change revision");
+
+    transform = scene.Transforms().Get(placed.ObjectAt(1U));
+    transform.localPosition.x = 2.0F;
+    scene.Transforms().Set(placed.ObjectAt(1U), transform);
+    const std::uint64_t moved = scene.Prefabs().InstanceChangeRevision();
+    kb::tests::Require(moved != before, "Moving an instance's object did not move the instance change revision");
+    scene.Transforms().Set(placed.ObjectAt(1U), transform);
+    kb::tests::Require(scene.Prefabs().InstanceChangeRevision() != moved, "A second change to an already changed object did not move the instance change revision");
+}
+
 // A scene file keeps an instance only as the prefab guid on its root node. Reopening the file in a
 // fresh scene, and reloading the captured document in place (how Play mode stops), must link the
 // instance, its node mapping and its overrides again.
@@ -1053,6 +1079,7 @@ void RunScenePrefabCaptureTests() {
     run("RunPrivateSceneSaveOfVariantTest", RunPrivateSceneSaveOfVariantTest);
     run("RunRuntimeSpawnDoesNotLinkPrefabInstancesTest", RunRuntimeSpawnDoesNotLinkPrefabInstancesTest);
     run("RunDestroyedInstanceChildSlotReuseTest", RunDestroyedInstanceChildSlotReuseTest);
+    run("RunInstanceChangeRevisionTest", RunInstanceChangeRevisionTest);
     run("RunPrefabVariantAssetRoundTripTest", RunPrefabVariantAssetRoundTripTest);
     run("RunPrefabParentOverrideAssetRoundTripTest", RunPrefabParentOverrideAssetRoundTripTest);
     run("RunPrefabVariantAddedChildAssetRoundTripTest", RunPrefabVariantAddedChildAssetRoundTripTest);

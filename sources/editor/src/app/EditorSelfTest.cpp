@@ -5535,6 +5535,13 @@ void RunPrefabInspectorSuite(Report& report) {
     report.Check(click(InspectorPropertyId::PrefabRevert) && overrideCount(findNamed("InspectedCrate")) == 0U && positionX(findNamed("InspectedCrate")) == 0.0F,
         "Revert prefab overrides from the Inspector");
     report.Check(context.UndoSceneCommand() && positionX(findNamed("InspectedCrate")) == 3.0F, "Undo Revert brings the override back");
+    const kb::scene::ScenePrefabInstanceHandle inspected = context.Scene().Prefabs().RootInstance(findNamed("InspectedCrate"));
+    const kb::scene::ScenePrefabOverrideReport* listed = &context.PrefabInstanceOverrides(inspected);
+    report.Check(listed->properties.size() == overrides && &context.PrefabInstanceOverrides(inspected) == listed,
+        "The Inspector keeps an instance's overrides until the scene changes");
+    report.Check(click(InspectorPropertyId::PrefabRevert) && context.PrefabInstanceOverrides(inspected).properties.empty() &&
+        context.UndoSceneCommand() && context.PrefabInstanceOverrides(inspected).properties.size() == overrides,
+        "The Inspector's overrides follow Revert and its undo");
 
     context.SelectEntity(findNamed("InspectedCrate"));
     report.Check(click(InspectorPropertyId::PrefabUnpack) && !context.Scene().Prefabs().RootInstance(findNamed("InspectedCrate")).IsValid(),

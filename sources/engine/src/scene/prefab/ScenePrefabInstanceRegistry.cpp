@@ -687,6 +687,7 @@ void ScenePrefabInstanceRegistry::MarkNodeDirty(ScenePrefabInstanceHandle handle
         return;
     }
 
+    ++changeRevision_;
     if (std::ranges::find(record->dirtyNodeIndices, nodeIndex) == record->dirtyNodeIndices.end()) {
         record->dirtyNodeIndices.push_back(nodeIndex);
     }
@@ -695,8 +696,13 @@ void ScenePrefabInstanceRegistry::MarkNodeDirty(ScenePrefabInstanceHandle handle
 void ScenePrefabInstanceRegistry::MarkTopologyDirty(ScenePrefabInstanceHandle handle) {
     ScenePrefabInstanceRecord* record = FindMutable(handle);
     if (record != nullptr) {
+        ++changeRevision_;
         record->topologyDirty = true;
     }
+}
+
+std::uint64_t ScenePrefabInstanceRegistry::ChangeRevision() const noexcept {
+    return changeRevision_;
 }
 
 std::span<const std::uint32_t> ScenePrefabInstanceRegistry::DirtyNodes(ScenePrefabInstanceHandle handle) const noexcept {

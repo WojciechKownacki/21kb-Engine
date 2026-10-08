@@ -61,6 +61,10 @@ ScenePrefabOverrideReport ScenePrefabs::Overrides(ScenePrefabInstanceHandle hand
     return ScenePrefabOverrideFacade::Overrides(scene_, handle);
 }
 
+std::uint64_t ScenePrefabs::InstanceChangeRevision() const noexcept {
+    return SceneAccess::State(scene_).prefabInstances.ChangeRevision();
+}
+
 bool ScenePrefabs::RevertOverrides(ScenePrefabInstanceHandle handle) {
     return ScenePrefabOverrideFacade::Revert(scene_, handle);
 }

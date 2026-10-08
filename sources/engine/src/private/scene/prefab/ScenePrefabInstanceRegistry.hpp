@@ -213,6 +213,8 @@ public:
     [[nodiscard]] std::span<const std::uint32_t> DirtyNodes(ScenePrefabInstanceHandle handle) const noexcept;
     [[nodiscard]] bool TopologyDirty(ScenePrefabInstanceHandle handle) const noexcept;
     void ClearDirtyNodes(ScenePrefabInstanceHandle handle) noexcept;
+    // Moves on every change marked on an instance's objects, so a reader can tell whether to look again.
+    [[nodiscard]] std::uint64_t ChangeRevision() const noexcept;
     [[nodiscard]] std::size_t Count() const noexcept;
     void ReindexObjects(ScenePrefabInstanceHandle handle, std::span<const SceneObject> oldObjects) noexcept;
     // An instance keeps a destroyed object in its node slot (a missing node), but the lookup
@@ -248,6 +250,7 @@ private:
     std::vector<ScenePrefabInstanceRecord> records_;
     std::vector<std::uint8_t> recordAlive_;
     std::size_t liveRecordCount_ = 0;
+    std::uint64_t changeRevision_ = 0U;
     std::map<ScenePrefabHandle, std::vector<ScenePrefabInstanceHandle>> prefabIndex_;
     std::vector<ScenePrefabInstanceHandle> denseRootIndex_;
     std::vector<ObjectIndexEntry> denseObjectIndex_;

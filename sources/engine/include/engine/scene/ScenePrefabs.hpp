@@ -157,6 +157,8 @@ public:
     void RelinkRestoredObjects(std::span<const SceneEntity> destroyed, std::span<const SceneObject> restored);
     [[nodiscard]] bool Unpack(ScenePrefabInstanceHandle handle, ScenePrefabUnpackMode mode = ScenePrefabUnpackMode::RootOnly);
     [[nodiscard]] ScenePrefabOverrideReport Overrides(ScenePrefabInstanceHandle handle) const;
+    // Moves whenever an object of any prefab instance changes; unchanged, Overrides reports the same.
+    [[nodiscard]] std::uint64_t InstanceChangeRevision() const noexcept;
     [[nodiscard]] bool RevertOverrides(ScenePrefabInstanceHandle handle);
     [[nodiscard]] bool RevertOverrides(std::span<const ScenePrefabInstanceHandle> handles);
     [[nodiscard]] bool ApplyOverrides(ScenePrefabInstanceHandle handle);
