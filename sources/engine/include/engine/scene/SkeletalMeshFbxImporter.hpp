@@ -3,6 +3,7 @@
 #include "engine/scene/AnimationAssets.hpp"
 #include "engine/scene/SkeletalMeshAsset.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -28,6 +29,12 @@ struct SkeletalMeshFbxImportOptions {
     void* materialResolverUserData = nullptr;
     bool combineMeshes = true;
 };
+
+// The memory ufbx may use, for its temporary and for its result allocations each,
+// to load an FBX file of `fileBytes`. A file declares array lengths and counts it
+// need not back up, and ufbx allocates for them before reading the data, so every
+// load of an FBX source is given this ceiling.
+[[nodiscard]] std::size_t FbxLoadMemoryLimit(std::uintmax_t fileBytes) noexcept;
 
 // Imports compatible skinned FBX mesh nodes into the canonical Skeleton, SkeletalMesh and
 // AnimationClip runtime assets. Coordinates and units are normalized by ufbx
