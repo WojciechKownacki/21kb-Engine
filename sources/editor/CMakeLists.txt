@@ -1475,6 +1475,8 @@ if(BUILD_TESTING)
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
             LABELS "editor;particle;headless"
             TIMEOUT 180
+            # The scenario asserts save and play-transition time budgets, so it runs alone like the other performance gates.
+            RUN_SERIAL TRUE
     )
 
     kb_apply_quality_gates(kb_editor_tests)
