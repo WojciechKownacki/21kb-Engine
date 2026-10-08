@@ -148,6 +148,7 @@ public:
     [[nodiscard]] bool IsModuleActive(std::string_view name) const noexcept;
     [[nodiscard]] std::size_t ActiveModuleCount() const noexcept;
     [[nodiscard]] std::span<const std::string> ModuleDiagnostics() const noexcept;
+    [[nodiscard]] std::span<const std::string> ModuleWarnings() const noexcept;
     [[nodiscard]] kb::input::InputSubsystem& Input() noexcept;
     [[nodiscard]] const kb::input::InputSubsystem& Input() const noexcept;
     // Independent input state for a specific local user (LIB-115). Lazily creates

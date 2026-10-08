@@ -92,6 +92,19 @@ It keeps a known-bad build from being reinstalled over a fixed one, and it also 
 deliberate downgrade; deleting the per-user state resets it, so it is a policy aid, not a
 guarantee.
 
+## Native modules
+
+Every native module (engine plugins and native script plugins) is loaded by
+`EngineModuleLoader`. In a packaged player that installed its verified release, a module loads
+only when the release manifest lists it (by its path inside the release) and the SHA-512 of the
+exact bytes about to be mapped matches: the shadow copy in `%TEMP%` (or the module itself) is
+opened without write or delete sharing, hashed through that handle, and kept locked until
+`LoadLibraryW` has mapped it, so it cannot be swapped between the check and the load. An
+unlisted, modified or out-of-release module is an error and the player does not start. The
+editor and development players load modules with a warning (`module warning:` in the player's
+log) that they are not verified. On Linux the module is hashed through an open descriptor but
+loaded by path; packaged Linux players are monolithic and load no modules.
+
 ## Save games
 
 Save files (schema 3) carry an HMAC-SHA512 over their header and payload next to the FNV-1a

@@ -53,12 +53,23 @@ struct EngineModuleLoadResult {
     std::uint64_t reloadSerial = 0U;
     EngineModuleLibrary library;
     std::vector<std::string> errors;
+    // Loaded, but not verified: a development process has no signed release to check against.
+    std::vector<std::string> warnings;
 
     [[nodiscard]] bool Succeeded() const noexcept {
         return loaded && library.IsLoaded() && errors.empty();
     }
 };
 
+// Loads native modules (engine plugins, native script plugins) through one door.
+//
+// In a process that installed a verified release (kb::security::InstallVerifiedRelease, done by
+// a packaged player at startup) a module loads only when the release manifest lists it with the
+// SHA-512 of the exact bytes about to be mapped: the shadow copy (or the file itself) is opened
+// so nothing can write, rename or delete it, hashed through that handle, and kept locked until
+// the operating system has mapped it, so the bytes checked are the bytes loaded. An unlisted or
+// modified module is an error. Without a release (editor, development player) a module loads
+// with a warning that it was not verified.
 class EngineModuleLoader final {
 public:
     EngineModuleLoader() = default;

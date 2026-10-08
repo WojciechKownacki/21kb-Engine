@@ -602,6 +602,9 @@ bool LoadGameProjectScene(
     std::filesystem::path& loadedScenePath,
     std::size_t& discoveredAssets,
     std::ostream& err) {
+    for (const std::string& warning : scene.ModuleWarnings()) {
+        err << "module warning: " << warning << '\n';
+    }
     if (!scene.ModuleDiagnostics().empty()) {
         for (const std::string& diagnostic : scene.ModuleDiagnostics()) {
             err << "module diagnostic: " << diagnostic << '\n';

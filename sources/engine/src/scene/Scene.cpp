@@ -254,6 +254,12 @@ std::span<const std::string> Scene::ModuleDiagnostics() const noexcept {
         : std::span<const std::string>{};
 }
 
+std::span<const std::string> Scene::ModuleWarnings() const noexcept {
+    return moduleHost_ != nullptr
+        ? std::span<const std::string>{ moduleHost_->Warnings() }
+        : std::span<const std::string>{};
+}
+
 SceneState& SceneAccess::State(Scene& scene) noexcept {
     return *scene.state_;
 }
