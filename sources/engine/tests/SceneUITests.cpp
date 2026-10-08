@@ -1770,6 +1770,7 @@ void RunSceneUITests() {
     TestWidgetSettingsPersistence();
     TestFrameAmongManyRootsMatchesRecordedFrame();
     TestFrameNextToMillionRootsIsCheap();
+    RunUITextLineBreakingTests();
 }
 
 void RunSceneUIBuildFrameBenchmark() {

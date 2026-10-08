@@ -294,10 +294,12 @@ add_library(kb_engine STATIC
     include/engine/ui/visual/UIRawImage.hpp
     include/engine/ui/visual/UISprite.hpp
     include/engine/ui/visual/UIText.hpp
+    include/engine/ui/visual/UITextLineBreaking.hpp
     include/engine/scene/SceneLocalization.hpp
     include/engine/localization/LocalizationCatalog.hpp
     include/engine/localization/LocalizationCatalogIO.hpp
     include/engine/localization/LocalizationCatalogAssetLoader.hpp
+    include/engine/localization/PluralRules.hpp
     include/engine/scene/SceneAnimators.hpp
     include/engine/scene/TimelineAsset.hpp
     include/engine/scene/TimelineAssetIO.hpp
@@ -716,6 +718,7 @@ add_library(kb_engine STATIC
     src/scene/modules/SceneLocalization.cpp
     src/localization/LocalizationCatalogIO.cpp
     src/localization/LocalizationCatalogAssetLoader.cpp
+    src/localization/PluralRules.cpp
     src/scene/ParticleEffectAssetIO.cpp
     src/scene/ParticleEffectAssetLoader.cpp
     src/scene/ParticleEffectAssetMigration.cpp
@@ -777,6 +780,7 @@ add_library(kb_engine STATIC
     src/scene/SceneUI.cpp
     src/scene/ui/SceneUIHierarchyPresets.cpp
     src/ui/UIComponentValidation.cpp
+    src/ui/UITextLineBreaking.cpp
     src/ui/UIComponentCatalog.cpp
     src/ui/UIComponentPropertyCatalog.cpp
     src/scene/asset/io/components/SceneAssetUIComponentCodec.cpp
@@ -1729,6 +1733,7 @@ if(BUILD_TESTING)
         tests/LocalizationTests.cpp
         tests/SceneHierarchyTests.cpp
         tests/SceneUITests.cpp
+        tests/UITextLineBreakingTests.cpp
         tests/ScenePrefabCaptureTests.cpp
         tests/ScenePrefabInstantiationTests.cpp
         tests/ScenePrefabTestSuites.hpp

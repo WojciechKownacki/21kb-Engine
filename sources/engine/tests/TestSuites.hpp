@@ -28,5 +28,6 @@ void RunSkeletonAssetTests();
 void RunSkeletalMeshAssetTests();
 void RunTimelineRuntimeTests();
 void RunLocalizationTests();
+void RunUITextLineBreakingTests();
 
 } // namespace kb::tests

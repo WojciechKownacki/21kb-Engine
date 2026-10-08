@@ -329,6 +329,7 @@ constexpr auto kFunctionDocumentation = std::to_array<FunctionDocumentation>({
     { "Localization.Language", "Returns the active localization language." },
     { "Localization.Translate", "Resolves an authored localization key, falling back to the catalog fallback language." },
     { "Localization.FormatPlural", "Formats an authored plural localization key with the supplied count." },
+    { "Localization.FormatPluralNumber", "Formats an authored plural localization key with a decimal number written as text; visible fraction digits select the plural form." },
     { "Timeline.Release", "Releases a timeline instance and its resolved bindings." },
     { "Timeline.Play", "Starts or resumes a timeline before its authored end." },
     { "Timeline.Pause", "Pauses a timeline without changing its playhead." },

@@ -4,6 +4,7 @@
 #include "engine/assets/AssetId.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/scene/SceneUI.hpp"
+#include "engine/ui/visual/UITextLineBreaking.hpp"
 #include "kb/render/resources/RenderResourceRegistry.hpp"
 #include "kb/render/resources/RenderResources.hpp"
 
@@ -54,64 +55,48 @@ struct TextLine {
     return width;
 }
 
-// Breaks text into lines no wider than `availableWidth`, by word or by character as the wrap mode asks.
+// Breaks text into lines no wider than `availableWidth` with the shared UI line breaking rules: authored
+// line breaks always end a line, Word wraps after spaces and between ideographic characters, Character
+// wraps anywhere, and both keep the kinsoku rules. Glyphs the font cannot draw take no part in layout.
 // The lines of every text are broken into one list, whose lines keep their glyph capacity for the next text.
 thread_local std::vector<TextLine> tTextLines;
+thread_local std::vector<ScreenUITextMarkupGlyph> tBreakGlyphs;
+thread_local std::vector<std::uint32_t> tBreakCodepoints;
+thread_local std::vector<float> tBreakAdvances;
+thread_local std::vector<kb::scene::UITextLineSpan> tLineSpans;
 
 [[nodiscard]] std::vector<TextLine>& BreakLines(const ScreenUIFontAtlasCache::FontEntry& entry,
                                                 std::span<const ScreenUITextMarkupGlyph> text,
                                                 kb::scene::UITextWrapMode wrapMode, float availableWidth, float spacing) {
-    std::vector<TextLine>& lines = tTextLines;
-    std::size_t used = 0U;
-    const auto startLine = [&lines, &used] {
-        if (used == lines.size()) {
-            lines.emplace_back();
-        }
-        lines[used].glyphs.clear();
-        lines[used].width = 0.0F;
-        ++used;
-    };
-    startLine();
+    tBreakGlyphs.clear();
+    tBreakCodepoints.clear();
+    tBreakAdvances.clear();
     for (const ScreenUITextMarkupGlyph& styledGlyph : text) {
-        if (styledGlyph.codepoint == '\n') {
-            startLine();
-            continue;
-        }
-        const ScreenUIFontAtlasCache::Glyph* glyph = FindGlyph(entry, styledGlyph.codepoint);
-        if (glyph == nullptr) {
-            continue;
-        }
-        const bool canWrap = wrapMode != kb::scene::UITextWrapMode::NoWrap;
-        if (canWrap && !lines[used - 1U].glyphs.empty() && lines[used - 1U].width + glyph->advance > availableWidth) {
-            startLine();
-        }
-        lines[used - 1U].glyphs.push_back(styledGlyph);
-        lines[used - 1U].width += glyph->advance + spacing;
-    }
-    lines.resize(used);
-    if (wrapMode == kb::scene::UITextWrapMode::Word && lines.size() > 1U) {
-        for (std::size_t lineIndex = 0U; lineIndex + 1U < lines.size(); ++lineIndex) {
-            TextLine& line = lines[lineIndex];
-            const auto boundary =
-                std::find_if(line.glyphs.rbegin(), line.glyphs.rend(), [](const ScreenUITextMarkupGlyph& glyph) {
-                    return glyph.codepoint == static_cast<std::uint32_t>(' ');
-                });
-            if (boundary == line.glyphs.rend()) {
+        float advance = 0.0F;
+        if (styledGlyph.codepoint != static_cast<std::uint32_t>('\n')) {
+            const ScreenUIFontAtlasCache::Glyph* glyph = FindGlyph(entry, styledGlyph.codepoint);
+            if (glyph == nullptr) {
                 continue;
             }
-            const std::size_t split = static_cast<std::size_t>(std::distance(line.glyphs.begin(), boundary.base()));
-            std::vector<ScreenUITextMarkupGlyph> suffix(line.glyphs.begin() + static_cast<std::ptrdiff_t>(split),
-                                                        line.glyphs.end());
-            line.glyphs.erase(line.glyphs.begin() + static_cast<std::ptrdiff_t>(split), line.glyphs.end());
-            while (!suffix.empty() && suffix.front().codepoint == static_cast<std::uint32_t>(' ')) {
-                suffix.erase(suffix.begin());
-            }
-            suffix.insert(suffix.end(), lines[lineIndex + 1U].glyphs.begin(), lines[lineIndex + 1U].glyphs.end());
-            lines[lineIndex + 1U].glyphs = std::move(suffix);
-            line.width = MeasureCodepoints(entry, line.glyphs, spacing);
-            lines[lineIndex + 1U].width = MeasureCodepoints(entry, lines[lineIndex + 1U].glyphs, spacing);
+            advance = glyph->advance;
         }
+        tBreakGlyphs.push_back(styledGlyph);
+        tBreakCodepoints.push_back(styledGlyph.codepoint);
+        tBreakAdvances.push_back(advance);
     }
+    kb::scene::BreakUITextLines(tBreakCodepoints, tBreakAdvances, wrapMode, availableWidth, spacing, tLineSpans);
+
+    std::vector<TextLine>& lines = tTextLines;
+    if (lines.size() < tLineSpans.size()) {
+        lines.resize(tLineSpans.size());
+    }
+    for (std::size_t lineIndex = 0U; lineIndex < tLineSpans.size(); ++lineIndex) {
+        const kb::scene::UITextLineSpan& span = tLineSpans[lineIndex];
+        lines[lineIndex].glyphs.assign(tBreakGlyphs.begin() + static_cast<std::ptrdiff_t>(span.begin),
+                                       tBreakGlyphs.begin() + static_cast<std::ptrdiff_t>(span.end));
+        lines[lineIndex].width = span.width;
+    }
+    lines.resize(tLineSpans.size());
     return lines;
 }
 

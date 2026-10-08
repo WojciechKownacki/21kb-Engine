@@ -89,6 +89,8 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunTimelineRuntimeTests();
     } else if (suite == "localization") {
         kb::tests::RunLocalizationTests();
+    } else if (suite == "ui-text-layout") {
+        kb::tests::RunUITextLineBreakingTests();
     } else {
         return false;
     }
