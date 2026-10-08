@@ -3,6 +3,7 @@
 #include "script/ScriptFunctionDocumentation.hpp"
 
 #include "engine/library/EngineLibraryModule.hpp"
+#include "engine/platform/UserStorage.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneSystem.hpp"
@@ -77,6 +78,7 @@ struct ScriptRuntimeHostState final {
     ScriptRuntimeAssetPreparer assetPreparer;
     ScriptRuntimeFrameSettings frameSettings;
     ScriptExecutionBudgetSettings executionBudgetSettings;
+    std::shared_ptr<kb::platform::UserStorage> userStorage;
     NativeScriptBackend* nativeBackend = nullptr;
     LuaScriptBackend* luaBackend = nullptr;
     VisualGraphScriptBackend* visualGraphBackend = nullptr;
@@ -165,6 +167,10 @@ ScriptRuntimeHost::ScriptRuntimeHost(kb::scene::Scene& scene, ScriptRuntimeHostO
     state_->frameSettings = options.frameSettings;
     state_->executionBudgetSettings = options.executionBudgetSettings;
     state_->luaRuntime.SetExecutionBudgetSettings(options.executionBudgetSettings);
+    if (!options.userStorageRoot.empty()) {
+        state_->userStorage = std::make_shared<kb::platform::UserStorage>(
+            std::move(options.userStorageRoot), options.userStorageQuotaBytes);
+    }
     state_->assetPreparer.SetVisualGraphSettings(std::move(options.visualGraphPrepareSettings));
     state_->assetPreparer.SetNativeSettings(std::move(options.nativePrepareSettings));
     RegisterDefaultBackends();
@@ -293,6 +299,10 @@ bool ScriptRuntimeHost::RegisterFunction(ScriptFunctionDesc function) {
         state_->runtime.Functions(),
         *signature,
         state_->scene);
+}
+
+std::shared_ptr<kb::platform::UserStorage> ScriptRuntimeHost::UserStorage() const noexcept {
+    return state_->userStorage;
 }
 
 ScriptRuntimeAssetPreparer& ScriptRuntimeHost::AssetPreparer() noexcept {

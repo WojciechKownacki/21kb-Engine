@@ -6,7 +6,10 @@
 #include <cstdint>
 #include <cstddef>
 #include <filesystem>
+#include <optional>
+#include <span>
 #include <string>
+#include <vector>
 
 namespace kb::save {
 
@@ -56,6 +59,14 @@ public:
     // result's status names any failure precisely; on failure the save is
     // empty.
     [[nodiscard]] static SaveGameLoadResult Load(const std::filesystem::path& path, SaveDomain expectedDomain = SaveDomain::SaveGame);
+
+    // The byte form Save writes and Load reads, for callers that persist a
+    // save through their own storage (e.g. kb::platform::UserStorage) rather
+    // than a caller-chosen path. Serialize returns nothing when `save`
+    // exceeds the format limits; Deserialize applies the same size, domain,
+    // integrity and migration checks as Load.
+    [[nodiscard]] static std::optional<std::vector<std::uint8_t>> Serialize(const SaveGame& save, SaveDomain domain = SaveDomain::SaveGame);
+    [[nodiscard]] static SaveGameLoadResult Deserialize(std::span<const std::uint8_t> bytes, SaveDomain expectedDomain = SaveDomain::SaveGame);
 };
 
 } // namespace kb::save

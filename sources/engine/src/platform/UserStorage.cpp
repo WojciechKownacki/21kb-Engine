@@ -10,7 +10,9 @@ namespace kb::platform {
 
 UserStorage::UserStorage(std::filesystem::path root, std::uintmax_t quotaBytes)
     : root_(std::move(root)), quotaBytes_(quotaBytes) {
-    std::filesystem::create_directories(root_);
+    // The root is created by the first Write: a host that never persists
+    // anything leaves no directory behind, and an unwritable root fails that
+    // Write instead of throwing out of the host's start-up.
 }
 
 std::filesystem::path UserStorage::PathFor(std::string_view key) const {

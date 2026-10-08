@@ -365,7 +365,8 @@ public:
         kb::game::PackagedRuntimeModules staticModules{};
         std::string moduleError;
         if (!kb::game::CreatePackagedRuntimeModules(
-                projectRuntime_.descriptor, staticModules, moduleError)) {
+                projectRuntime_.descriptor, staticModules, moduleError,
+                std::filesystem::path{ storageRoot_ } / "Saves")) {
             LogError(moduleError);
             return false;
         }

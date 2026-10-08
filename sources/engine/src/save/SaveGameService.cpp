@@ -5,6 +5,8 @@
 #include "save/SaveGameFormat.hpp"
 
 #include <cstdint>
+#include <optional>
+#include <span>
 #include <vector>
 
 namespace kb::save {
@@ -31,15 +33,31 @@ namespace {
 
 } // namespace
 
-bool SaveGameService::Save(const std::filesystem::path& path, const SaveGame& save, SaveDomain domain) {
+std::optional<std::vector<std::uint8_t>> SaveGameService::Serialize(const SaveGame& save, SaveDomain domain) {
     if (!WithinFormatLimits(save)) {
-        return false;
+        return std::nullopt;
     }
-    const std::vector<std::uint8_t> bytes = SaveGameCodec::Encode(save, SaveGameFormat::kCurrentSchemaVersion, domain);
+    std::vector<std::uint8_t> bytes = SaveGameCodec::Encode(save, SaveGameFormat::kCurrentSchemaVersion, domain);
     if (bytes.size() > SaveGameFormat::kMaxSerializedBytes) {
-        return false;
+        return std::nullopt;
     }
-    return SaveGameBinaryIO::WriteBytesAtomically(path, bytes);
+    return bytes;
+}
+
+bool SaveGameService::Save(const std::filesystem::path& path, const SaveGame& save, SaveDomain domain) {
+    const std::optional<std::vector<std::uint8_t>> bytes = Serialize(save, domain);
+    return bytes.has_value() && SaveGameBinaryIO::WriteBytesAtomically(path, *bytes);
+}
+
+SaveGameLoadResult SaveGameService::Deserialize(std::span<const std::uint8_t> bytes, SaveDomain expectedDomain) {
+    if (bytes.size() > SaveGameFormat::kMaxSerializedBytes) {
+        return SaveGameLoadResult{
+            .status = SaveGameLoadStatus::TooLarge,
+            .save = {},
+            .diagnostic = "save file exceeds the 16 MiB serialized-size limit",
+        };
+    }
+    return SaveGameCodec::Decode(bytes, SaveGameFormat::kCurrentSchemaVersion, expectedDomain, BuiltInSaveGameMigrations());
 }
 
 SaveGameLoadResult SaveGameService::Load(const std::filesystem::path& path, SaveDomain expectedDomain) {
@@ -64,13 +82,6 @@ SaveGameLoadResult SaveGameService::Load(const std::filesystem::path& path, Save
         }
         return SaveGameLoadResult{ .status = SaveGameLoadStatus::FileNotFound, .save = {}, .diagnostic = "save file could not be opened" };
     }
-    if (bytes.size() > SaveGameFormat::kMaxSerializedBytes) {
-        return SaveGameLoadResult{
-            .status = SaveGameLoadStatus::TooLarge,
-            .save = {},
-            .diagnostic = "save file exceeds the 16 MiB serialized-size limit",
-        };
-    }
     std::error_code finalSizeError;
     const std::uintmax_t finalFileSize = std::filesystem::file_size(path, finalSizeError);
     if (!finalSizeError && finalFileSize != bytes.size()) {
@@ -80,7 +91,7 @@ SaveGameLoadResult SaveGameService::Load(const std::filesystem::path& path, Save
             .diagnostic = "save file changed while it was being read",
         };
     }
-    return SaveGameCodec::Decode(bytes, SaveGameFormat::kCurrentSchemaVersion, expectedDomain, BuiltInSaveGameMigrations());
+    return Deserialize(bytes, expectedDomain);
 }
 
 } // namespace kb::save

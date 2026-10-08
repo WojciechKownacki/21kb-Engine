@@ -13437,10 +13437,13 @@ void RunScriptAssetsApiTest() {
 // Proves registration (Native + VisualGraph parity), every scalar type round-
 // tripping through the script boundary, the honest typed-miss / empty-key
 // contracts, Has/Remove/Clear, and a real Write-to-disk / Clear / Read-back
-// cycle driven entirely through script calls.
+// cycle driven entirely through script calls into a named slot of the host's
+// user storage, which refuses every path-shaped slot.
 void RunScriptSaveApiTest() {
+    ResetTestRoot();
+    const std::filesystem::path storageRoot = TestRoot() / "ScriptSave";
     kb::scene::Scene scene;
-    kb::script::ScriptRuntimeHost host{ scene };
+    kb::script::ScriptRuntimeHost host{ scene, kb::script::ScriptRuntimeHostOptions{ .userStorageRoot = storageRoot } };
     kb::tests::Require(host.Succeeded(), "Script save API host did not initialize");
     kb::tests::Require(host.Functions().FindSignature("Save.SetInt") != nullptr, "Save.SetInt was not registered");
     kb::tests::Require(host.Functions().FindSignature("Save.GetInt") != nullptr, "Save.GetInt was not registered");
@@ -13498,23 +13501,53 @@ void RunScriptSaveApiTest() {
     kb::tests::Require(!call("Save.Has", { keyArg("score") }).Output("has")->AsBool(), "Save.Has must report false after removal");
 
     // Write to disk, clear the buffer, read it back — all through script.
-    const std::filesystem::path savePath = TestRoot() / "ScriptSave" / "slot.kbsave";
-    ResetTestRoot();
-    const kb::script::ScriptFunctionCallResult written = call("Save.Write", { kb::script::ScriptFunctionArgument{ .name = "path", .value = kb::script::ScriptValue{ savePath.string() } } });
+    const auto slotArg = [](std::string slot) {
+        return kb::script::ScriptFunctionArgument{ .name = "slot", .value = kb::script::ScriptValue{ std::move(slot) } };
+    };
+    const kb::script::ScriptFunctionCallResult written = call("Save.Write", { slotArg("slot_1") });
     kb::tests::Require(written.Output("written")->AsBool(), "Save.Write must write the ambient save to disk");
+    kb::tests::Require(std::filesystem::is_regular_file(storageRoot / "slot_1.kbsave"), "Save.Write must store the slot inside the host's user storage root");
     kb::tests::Require(call("Save.Clear", {}).Output("cleared")->AsBool(), "Save.Clear must clear the ambient buffer");
     kb::tests::Require(!call("Save.Has", { keyArg("flag") }).Output("has")->AsBool(), "Save.Clear must have emptied the buffer");
-    const kb::script::ScriptFunctionCallResult read = call("Save.Read", { kb::script::ScriptFunctionArgument{ .name = "path", .value = kb::script::ScriptValue{ savePath.string() } } });
+    const kb::script::ScriptFunctionCallResult read = call("Save.Read", { slotArg("slot_1") });
     kb::tests::Require(read.Output("loaded")->AsBool() && read.Output("status")->AsString() == "Ok", "Save.Read must load the previously written save");
     kb::tests::Require(call("Save.GetString", { keyArg("name") }).Output("value")->AsString() == "Ada", "Save.Read must restore the entries the script wrote earlier");
     kb::tests::Require(call("Save.GetAsset", { keyArg("prefab") }).Output("value")->AsUInt64() == kSavedAssetId,
         "Save.Read must restore a stable asset reference");
 
     // Reading a missing file is an honest, non-crashing failure with status.
-    const kb::script::ScriptFunctionCallResult readMissing = call("Save.Read", { kb::script::ScriptFunctionArgument{ .name = "path", .value = kb::script::ScriptValue{ (TestRoot() / "nope.kbsave").string() } } });
+    const kb::script::ScriptFunctionCallResult readMissing = call("Save.Read", { slotArg("nope") });
     kb::tests::Require(!readMissing.Output("loaded")->AsBool() && readMissing.Output("status")->AsString() == "FileNotFound" &&
             !readMissing.Output("diagnostic")->AsString().empty(),
         "Save.Read of a missing file must report status and a readable diagnostic");
+
+    // A slot is a name, never a path: every escape is a script error that
+    // touches no file, for both directions and both domains.
+    const std::filesystem::path outsideFile = TestRoot() / "outside.kbsave";
+    for (const std::string& escape : { outsideFile.string(), std::string{ "..\\outside" }, std::string{ "../outside" }, std::string{ "C:\\x" },
+             std::string{ "C:x" }, std::string{ "/etc/x" }, std::string{ "a/b" }, std::string{ "a\\b" }, std::string{ ".." }, std::string{ "slot.kbsave" },
+             std::string{ "CON" }, std::string{ "lpt1" }, std::string{ "" }, std::string(65U, 'a') }) {
+        for (const std::string_view function : { "Save.Write", "Save.Read", "Settings.Write", "Settings.Read" }) {
+            const kb::script::ScriptFunctionCallResult refused = call(function, { slotArg(escape) });
+            kb::tests::Require(!refused.Succeeded() && refused.errors.front().find("is not a slot name") != std::string::npos,
+                (std::string{ function } + " must refuse the path-shaped slot '" + escape + "' with a script error").c_str());
+        }
+    }
+    kb::tests::Require(!std::filesystem::exists(outsideFile) && !std::filesystem::exists(TestRoot() / "outside") &&
+            !std::filesystem::exists(TestRoot() / "outside.kbsave"),
+        "A refused slot must not write anything outside the user storage root");
+    kb::tests::Require(call("Save.Write", { slotArg(std::string(64U, 'a')) }).Output("written")->AsBool(),
+        "Save.Write must accept a slot name at the documented length limit");
+
+    // A host that configured no user storage refuses persistence with a reason.
+    {
+        kb::scene::Scene unconfiguredScene;
+        kb::script::ScriptRuntimeHost unconfiguredHost{ unconfiguredScene };
+        const kb::script::ScriptFunctionCallResult unconfigured = unconfiguredHost.Functions().Call(
+            "Save.Write", std::vector<kb::script::ScriptFunctionArgument>{ slotArg("slot_1") }, kb::script::ScriptFunctionCallContext{ .scene = &unconfiguredScene });
+        kb::tests::Require(!unconfigured.Succeeded() && unconfigured.errors.front().find("not configured") != std::string::npos,
+            "Save.Write without a configured user storage root must report a script error");
+    }
 
     // LIB-163: Settings.* is a SEPARATE surface over a SEPARATE buffer.
     kb::tests::Require(host.Functions().FindSignature("Settings.SetInt") != nullptr, "Settings.SetInt was not registered");
@@ -13527,13 +13560,17 @@ void RunScriptSaveApiTest() {
     kb::tests::Require(call("Save.GetInt", { keyArg("shared") }).Output("value")->AsInt() == 111, "The save buffer must keep its own value for a key the settings buffer also uses");
     kb::tests::Require(call("Settings.GetInt", { keyArg("shared") }).Output("value")->AsInt() == 222, "The settings buffer must keep its own independent value");
 
-    // A Settings file and a Save file are separated on disk: reading one as the
-    // other reports WrongDomain, never loads the wrong category.
-    const std::filesystem::path settingsPath = TestRoot() / "ScriptSave" / "settings.kbsave";
-    kb::tests::Require(call("Settings.Write", { kb::script::ScriptFunctionArgument{ .name = "path", .value = kb::script::ScriptValue{ settingsPath.string() } } }).Output("written")->AsBool(), "Settings.Write must write the settings buffer");
-    const kb::script::ScriptFunctionCallResult crossRead = call("Save.Read", { kb::script::ScriptFunctionArgument{ .name = "path", .value = kb::script::ScriptValue{ settingsPath.string() } } });
+    // A Settings slot and a Save slot are separate files: the same slot name
+    // in each domain never aliases, and a Settings file placed where a save
+    // slot lives reports WrongDomain, never loads the wrong category.
+    kb::tests::Require(call("Settings.Write", { slotArg("profile") }).Output("written")->AsBool(), "Settings.Write must write the settings buffer");
+    kb::tests::Require(std::filesystem::is_regular_file(storageRoot / "profile.kbsettings"), "Settings.Write must store the slot inside the host's user storage root");
+    kb::tests::Require(call("Save.Read", { slotArg("profile") }).Output("status")->AsString() == "FileNotFound",
+        "Save.Read must not see a Settings slot of the same name");
+    std::filesystem::copy_file(storageRoot / "profile.kbsettings", storageRoot / "profile.kbsave");
+    const kb::script::ScriptFunctionCallResult crossRead = call("Save.Read", { slotArg("profile") });
     kb::tests::Require(!crossRead.Output("loaded")->AsBool() && crossRead.Output("status")->AsString() == "WrongDomain", "Save.Read of a Settings file must be rejected as WrongDomain, keeping the domains separated");
-    const kb::script::ScriptFunctionCallResult settingsRead = call("Settings.Read", { kb::script::ScriptFunctionArgument{ .name = "path", .value = kb::script::ScriptValue{ settingsPath.string() } } });
+    const kb::script::ScriptFunctionCallResult settingsRead = call("Settings.Read", { slotArg("profile") });
     kb::tests::Require(settingsRead.Output("loaded")->AsBool() && settingsRead.Output("status")->AsString() == "Ok", "Settings.Read of a Settings file must succeed");
 }
 

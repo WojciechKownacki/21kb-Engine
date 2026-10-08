@@ -459,6 +459,9 @@ void EditorSceneContext::EnsureScriptRuntime() {
     EditorConsoleState* console = &console_;
 
     kb::script::ScriptModuleOptions scriptOptions;
+    // Play mode persists script saves and settings beside the project, in the
+    // same per-game layout a packaged game uses under the player's profile.
+    scriptOptions.runtimeOptions.userStorageRoot = EditorProjectPaths::ProjectRoot() / "Saves";
     scriptOptions.configureHost = [console](kb::script::ScriptRuntimeHost& host) {
         // Log("...") in any script prints to the editor Console. console_ outlives
         // scriptModuleHost_ (declared last, destroyed first), so capturing it is safe.

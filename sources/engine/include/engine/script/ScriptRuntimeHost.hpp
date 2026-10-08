@@ -19,11 +19,21 @@
 #include "engine/visual/VisualGraphRuntimeBindingRegistry.hpp"
 #include "engine/visual/VisualGraphRuntimeRegistry.hpp"
 
+#include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <vector>
 
+namespace kb::platform {
+class UserStorage;
+}
+
 namespace kb::script {
+
+// Default size cap for everything scripts persist through Save.Write and
+// Settings.Write under one runtime's user storage root.
+inline constexpr std::uintmax_t kDefaultScriptUserStorageQuotaBytes = 64ULL << 20U;
 
 struct ScriptRuntimeHostState;
 
@@ -32,6 +42,11 @@ struct ScriptRuntimeHostOptions {
     ScriptRuntimeNativePrepareSettings nativePrepareSettings{};
     ScriptRuntimeFrameSettings frameSettings{};
     ScriptExecutionBudgetSettings executionBudgetSettings{};
+    // The per-game user directory scripts persist into. Save.Write/Read and
+    // Settings.Write/Read address it only by slot name; when it is empty they
+    // report that persistent storage is not configured.
+    std::filesystem::path userStorageRoot;
+    std::uintmax_t userStorageQuotaBytes = kDefaultScriptUserStorageQuotaBytes;
     bool installSceneSystem = false;
 };
 
@@ -79,6 +94,9 @@ public:
     [[nodiscard]] ScriptApiNameRegistry& ApiNames() noexcept;
     [[nodiscard]] const ScriptApiNameRegistry& ApiNames() const noexcept;
     [[nodiscard]] bool RegisterFunction(ScriptFunctionDesc function);
+    // The sandboxed storage built from ScriptRuntimeHostOptions::userStorageRoot,
+    // or null when the host configured none.
+    [[nodiscard]] std::shared_ptr<kb::platform::UserStorage> UserStorage() const noexcept;
     [[nodiscard]] ScriptRuntimeAssetPreparer& AssetPreparer() noexcept;
     [[nodiscard]] const ScriptRuntimeAssetPreparer& AssetPreparer() const noexcept;
     [[nodiscard]] PucLuaScriptRuntime& LuaRuntime() noexcept;

@@ -262,9 +262,11 @@ const std::vector<LibraryModuleDesc>& EngineLibraryModule::Catalog() {
         // Settings.* (user preferences, SaveDomain::UserSettings, Scene::
         // AmbientSettings). Each exposes SetInt/SetFloat/SetString/SetBool/
         // GetInt/.../Has/Remove/Clear/Write/Read; Write/Read serialize through
-        // kb::save::SaveGameService (versioned schema, migration on load,
-        // atomic write) stamping the matching domain, so a save-game file can
-        // never be loaded as settings or vice versa (WrongDomain). Scene state
+        // kb::save::SaveGameService (versioned schema, migration on load)
+        // into a named slot of the host's kb::platform::UserStorage (atomic,
+        // quota-bound, never a script-chosen path), stamping the matching
+        // domain, so a save-game file can never be loaded as settings or vice
+        // versa (WrongDomain). Scene state
         // (kb::scene::SceneDocumentService) and network data (section 18) are
         // already separate subsystems, not kb::save domains. No Lua sugar
         // table (mirrors Assets/Task/Timer — generic CallFunction).
