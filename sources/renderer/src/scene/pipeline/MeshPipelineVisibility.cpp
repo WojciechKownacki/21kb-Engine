@@ -100,6 +100,20 @@ float MeshPipelineVisibility::ScreenCoverage(const SceneRenderCamera* camera, co
     return std::clamp(worldBounds.radius * std::abs(camera->projection[5]) / std::max(divisor, 0.0001F), 0.0F, 1.0F);
 }
 
+kb::scene::ScenePortalCamera MeshPipelineVisibility::PortalCamera(const SceneRenderCamera& camera) noexcept {
+    const std::array<float, 16>& view = camera.view;
+    // The view is a rigid transform, so the camera sits at -R^T t.
+    return kb::scene::ScenePortalCamera{
+        .position = kb::math::Vec3{
+            -(view[0] * view[12] + view[1] * view[13] + view[2] * view[14]),
+            -(view[4] * view[12] + view[5] * view[13] + view[6] * view[14]),
+            -(view[8] * view[12] + view[9] * view[13] + view[10] * view[14]),
+        },
+        .viewProjection = MultiplyColumnMajor(camera.CullingProjection(), view),
+        .membershipMask = camera.cullingMask,
+    };
+}
+
 MeshPipelineFrustum MeshPipelineVisibility::BuildFrustum(const SceneRenderCamera* camera) noexcept {
     return BuildFrustum(camera, SceneDepthPolicy::HomogeneousDepth());
 }

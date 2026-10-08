@@ -16,6 +16,10 @@
 #include <unordered_map>
 #include <vector>
 
+namespace kb::scene {
+class ScenePortalVisibility;
+}
+
 namespace kb::render {
 
 class SceneMeshBatchCommandCache;
@@ -76,6 +80,9 @@ struct MeshPipelineBuildDesc {
     const RenderMaterialResource* resolvedMaterialResource = nullptr;
     const SceneRenderCamera* camera = nullptr;
     std::span<const SceneRenderVisibilityBlocker> visibilityBlockers{};
+    // Instances whose bounds centre lies only in visibility cells the camera cannot see are culled
+    // (shadow and gizmo passes excepted). Null culls nothing by cell.
+    const kb::scene::ScenePortalVisibility* portalVisibility = nullptr;
     SceneRenderDiagnostics* diagnostics = nullptr;
     std::uint32_t maxDrawCommands = 0;
     std::uint32_t maxVisibleInstances = 0;

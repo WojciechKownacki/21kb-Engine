@@ -95,6 +95,8 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunCrashReportConsentTests();
     } else if (suite == "navigation-runtime") {
         kb::tests::RunNavigationRuntimeTests();
+    } else if (suite == "portal-visibility") {
+        kb::tests::RunPortalVisibilityTests();
     } else {
         return false;
     }
@@ -127,6 +129,7 @@ void RunAllSuites() {
     kb::tests::RunLocalizationTests();
     kb::tests::RunCrashReportConsentTests();
     kb::tests::RunNavigationRuntimeTests();
+    kb::tests::RunPortalVisibilityTests();
 }
 
 } // namespace

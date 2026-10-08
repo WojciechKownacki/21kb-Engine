@@ -1,6 +1,7 @@
 #include "scene/pass/MeshPassProcessor.hpp"
 #include "scene/cache/SceneMeshBatchCommandCache.hpp"
 
+#include "engine/scene/ScenePortalVisibility.hpp"
 #include "kb/render/scene/cache/SceneCachedDrawCommand.hpp"
 #include "scene/cache/SceneCachedDrawCommandMaterializer.hpp"
 #include "scene/cache/SceneMaterialTextureDependencySignature.hpp"
@@ -351,6 +352,11 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                 }
                 if (desc.pass != MeshPassType::ShadowDepth && desc.pass != MeshPassType::Gizmo &&
                     MeshPipelineVisibility::IsOccludedByVisibilityBlockers(desc.camera, worldBounds, desc.visibilityBlockers)) {
+                    ++culledForSection;
+                    continue;
+                }
+                if (desc.portalVisibility != nullptr && desc.pass != MeshPassType::ShadowDepth && desc.pass != MeshPassType::Gizmo &&
+                    desc.portalVisibility->Hides(kb::math::Vec3{ worldBounds.center[0], worldBounds.center[1], worldBounds.center[2] }, instance.layer)) {
                     ++culledForSection;
                     continue;
                 }

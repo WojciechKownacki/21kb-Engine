@@ -122,6 +122,7 @@ SceneRenderSubmitStats SceneMeshSubmitter::ValidateResourcesInto(
         .resourceMap = &resourceMap,
         .camera = camera,
         .visibilityBlockers = visibilityBlockers,
+        .portalVisibility = renderScene.PortalVisibility(),
         .diagnostics = diagnostics,
         .maxDrawCommands = drawBudget.maxDrawCommands,
         .maxVisibleInstances = drawBudget.maxVisibleInstances,
@@ -237,7 +238,7 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
     auto& reuse = passCommandReuse_.at(static_cast<std::size_t>(pass));
     auto& batchReuse = passBatchCommandReuse_.at(static_cast<std::size_t>(pass));
     const bool reuseAllowed = pass != MeshPassType::BaseTransparent && selectedEntityIds.empty() &&
-        renderScene.VisibilityBlockerProxyCount() == 0U &&
+        renderScene.VisibilityBlockerProxyCount() == 0U && renderScene.PortalVisibility() == nullptr &&
         (particleSnapshot == nullptr || particleSnapshot->Emitters().empty());
     const SceneMeshCommandReuseKey reuseKey{
         .sceneRevision = renderScene.MeshContentRevision(),
@@ -265,6 +266,7 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
         .resourceMap = &resourceMap,
         .camera = camera,
         .visibilityBlockers = visibilityBlockers,
+        .portalVisibility = renderScene.PortalVisibility(),
         .diagnostics = diagnostics,
         .maxDrawCommands = drawBudget.maxDrawCommands,
         .maxVisibleInstances = drawBudget.maxVisibleInstances,
