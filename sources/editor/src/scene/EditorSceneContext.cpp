@@ -2590,8 +2590,7 @@ bool EditorSceneContext::SelectPrefabInstanceRoot(kb::scene::SceneEntity entity)
     return false;
 }
 
-// Apply writes the prefab asset and refreshes the other instances. Undo restores the scene; the
-// written asset keeps the applied content, as creating a prefab keeps its file.
+// Apply writes the prefab asset and refreshes the other instances; undo restores both.
 bool EditorSceneContext::ApplyPrefabInstance(kb::scene::SceneEntity entity) {
     const kb::scene::ScenePrefabInstanceHandle instance = scene_->Prefabs().RootInstance(entity);
     if (!instance.IsValid()) {
@@ -2602,6 +2601,9 @@ bool EditorSceneContext::ApplyPrefabInstance(kb::scene::SceneEntity entity) {
         return assetPath.empty()
             ? scene_->Prefabs().ApplyOverrides(instance)
             : scene_->Prefabs().ApplyOverrides(instance, assetPath);
+    }, EditorSceneHistoryCommand::AssetFile{
+        .path = assetPath,
+        .reload = [this, assetPath]() { static_cast<void>(scene_->Prefabs().Load(assetPath)); },
     });
     if (applied) {
         console_.Info("Prefabs", "Prefab overrides applied.");
@@ -5722,8 +5724,8 @@ EditorSceneCommandController EditorSceneContext::SceneCommands() noexcept {
     };
 }
 
-bool EditorSceneContext::ExecuteSceneCommand(std::string label, std::function<bool()> mutation) {
-    return SceneCommands().Execute(std::move(label), std::move(mutation));
+bool EditorSceneContext::ExecuteSceneCommand(std::string label, std::function<bool()> mutation, EditorSceneHistoryCommand::AssetFile assetFile) {
+    return SceneCommands().Execute(std::move(label), std::move(mutation), std::move(assetFile));
 }
 
 void EditorSceneContext::RemapRecreatedEntities(std::span<const kb::scene::SceneEntityRemap> recreated) {

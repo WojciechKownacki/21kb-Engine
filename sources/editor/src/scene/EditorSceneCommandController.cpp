@@ -116,14 +116,14 @@ void EditorSceneCommandController::CancelTransaction() {
     pendingTransactionLabel_.reset();
 }
 
-bool EditorSceneCommandController::Execute(std::string label, Mutation mutation) {
+bool EditorSceneCommandController::Execute(std::string label, Mutation mutation, EditorSceneHistoryCommand::AssetFile assetFile) {
     if (pendingTransactionLabel_.has_value()) {
         console_.Warning("Edit", "Scene command ignored while another scene transaction is active.");
         return false;
     }
 
     const std::string labelCopy = label;
-    const bool executed = commandStack_.Execute(EditorSceneHistoryCommand::Create(scene_, std::move(label), std::move(mutation)));
+    const bool executed = commandStack_.Execute(EditorSceneHistoryCommand::Create(scene_, std::move(label), std::move(mutation), std::move(assetFile)));
     RemapRecreatedEntities();
     if (!executed) {
         console_.Warning("Edit", "Scene command failed: " + labelCopy);

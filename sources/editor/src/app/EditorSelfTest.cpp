@@ -5499,6 +5499,15 @@ void RunPrefabInspectorSuite(Report& report) {
     report.Check(positionX(findNamed("OtherCrate")) == 3.0F && overrideCount(findNamed("InspectedCrate")) == 0U, "Apply refreshes the other instance and clears the overrides");
     report.Check(context.UndoSceneCommand() && positionX(findNamed("OtherCrate")) == 0.0F && overrideCount(findNamed("InspectedCrate")) == overrides,
         "Undo Apply restores the other instance and the overrides");
+    const auto assetRootX = [&prefabPath]() {
+        kb::scene::Scene check;
+        const kb::scene::ScenePrefabHandle loaded = check.Prefabs().Load(prefabPath);
+        return loaded.IsValid() ? check.Prefabs().Get(loaded).Nodes()[0].transform.localPosition.x : -1.0F;
+    };
+    report.Check(assetRootX() == 0.0F && context.Scene().Prefabs().Get(context.Scene().Prefabs().SourcePrefab(findNamed("InspectedCrate"))).Nodes()[0].transform.localPosition.x == 0.0F,
+        "Undo Apply restores the prefab asset");
+    report.Check(context.RedoSceneCommand() && assetRootX() == 3.0F && positionX(findNamed("OtherCrate")) == 3.0F, "Redo Apply writes the prefab asset again");
+    report.Check(context.UndoSceneCommand() && assetRootX() == 0.0F, "Undo Apply again");
 
     context.SelectEntity(findNamed("InspectedCrate"));
     report.Check(click(InspectorPropertyId::PrefabRevert) && overrideCount(findNamed("InspectedCrate")) == 0U && positionX(findNamed("InspectedCrate")) == 0.0F,
