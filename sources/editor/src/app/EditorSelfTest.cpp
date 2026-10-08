@@ -6282,6 +6282,11 @@ void RunSuiteInScratch(Report& report, const std::string& leaf, void (*suite)(Re
         gCurrentSuiteArtifactRoot / "screenshots", artifactError);
     const std::size_t firstLine = report.Size();
     const std::filesystem::path scratch = PrepareScratchProjectDir(leaf);
+    // The engine refuses a project whose path is too long, which would fail the suite for an unrelated reason.
+    if (const std::string pathError = kb::project::ProjectManager::PathBudgetError(scratch / "Project.21kbproject"); !pathError.empty()) {
+        report.Check(false, "Scratch project for " + leaf + " fits the project path limit: " + pathError);
+        return;
+    }
     const std::filesystem::path previous = std::filesystem::current_path();
     std::error_code error;
     std::filesystem::current_path(scratch, error);
