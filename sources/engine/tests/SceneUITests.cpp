@@ -1741,7 +1741,7 @@ void TestFrameNextToMillionRootsIsCheap() {
     }
     std::ranges::sort(samples);
     std::cout << "ui_buildframe_million_roots median_ms=" << samples[2] << " large_allocations=" << largeAllocations << '\n';
-    kb::tests::Require(samples[2] < 0.5 && largeAllocations == 0U,
+    kb::tests::Require(samples[2] < 0.5 * kb::tests::kSanitizerTimeScale && largeAllocations == 0U,
         "A small overlay next to a million plain roots must build in under 0.5 ms without allocations of 16 KB or more");
 }
 
