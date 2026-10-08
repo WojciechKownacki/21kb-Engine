@@ -807,7 +807,7 @@ void ReadProfilePrefix() noexcept {
     }
 }
 
-void StartPendingUpload() noexcept {
+bool StartPendingUploadInBackground() noexcept {
     wchar_t executableDirectory[kPathCapacity];
     CopyWide(executableDirectory, kPathCapacity, g_state.executablePath);
     wchar_t* name = const_cast<wchar_t*>(FileNamePart(executableDirectory));
@@ -817,19 +817,21 @@ void StartPendingUpload() noexcept {
             std::filesystem::path{ executableDirectory } / kCrashUploadConfigFile;
         std::error_code error;
         if (!std::filesystem::is_regular_file(config, error)) {
-            return;
+            return false;
         }
         std::string endpoint = ReadCrashUploadEndpoint(config);
         const std::filesystem::path directory{ g_state.directory };
         if (endpoint.empty() || !HasCrashUploadConsent(directory) || ListCrashReports(directory).empty()) {
-            return;
+            return false;
         }
         // A separate, short-lived thread: the reporter thread must stay free to
         // write a dump should this run crash while an old report is being sent.
         std::thread{ [directory, endpoint = std::move(endpoint)] {
             static_cast<void>(UploadPendingCrashReports(directory, endpoint));
         } }.detach();
+        return true;
     } catch (...) {
+        return false;
     }
 }
 
@@ -839,7 +841,7 @@ DWORD WINAPI ReporterThread(void*) {
     ReadProfilePrefix();
     g_state.ready.store(true, std::memory_order_release);
     if (g_state.uploadPendingReports) {
-        StartPendingUpload();
+        static_cast<void>(StartPendingUploadInBackground());
     }
     for (;;) {
         if (WaitForSingleObject(g_state.requestEvent, INFINITE) != WAIT_OBJECT_0) {
@@ -1036,6 +1038,26 @@ bool CrashReporter::IsInstalled() noexcept {
 
 std::filesystem::path CrashReporter::ReportDirectory() {
     return IsInstalled() ? std::filesystem::path{ g_state.directory } : std::filesystem::path{};
+}
+
+bool CrashReporter::StartPendingUpload() {
+    return IsInstalled() && StartPendingUploadInBackground();
+}
+
+std::string ConfiguredCrashUploadEndpoint() {
+    wchar_t executablePath[kPathCapacity];
+    const DWORD length = GetModuleFileNameW(nullptr, executablePath, static_cast<DWORD>(kPathCapacity));
+    if (length == 0U || length >= kPathCapacity) {
+        return {};
+    }
+    try {
+        const std::filesystem::path config =
+            std::filesystem::path{ executablePath }.parent_path() / kCrashUploadConfigFile;
+        std::error_code error;
+        return std::filesystem::is_regular_file(config, error) ? ReadCrashUploadEndpoint(config) : std::string{};
+    } catch (...) {
+        return {};
+    }
 }
 
 void CrashReporter::Note(std::string_view line) noexcept {

@@ -1,6 +1,7 @@
 #include "engine/script/ScriptSaveApi.hpp"
 
 #include "engine/platform/UserStorage.hpp"
+#include "engine/platform/CrashReportConsent.hpp"
 #include "engine/platform/CrashReporting.hpp"
 #include "engine/save/SaveDomain.hpp"
 #include "engine/save/SaveGame.hpp"
@@ -361,23 +362,36 @@ bool RegisterDomain(ScriptRuntimeHost& host, std::string_view prefix) {
 // Crash reports belong with the player's settings: whether they may leave the
 // machine, what they hold, and removing the ones already written. All of it acts
 // on the reporter the host installed; without one (a host that writes no
-// reports) consent reads as off and nothing is deleted.
-ScriptFunctionCallResult CrashReportUploadConsent(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument>) {
+// reports) consent reads as off and nothing is deleted. With user storage the
+// answer is kept there too, where the game's own consent prompt reads it, and
+// it counts only while both agree.
+ScriptFunctionCallResult CrashReportUploadConsent(const std::shared_ptr<kb::platform::UserStorage>& storage) {
     bool consent = false;
 #if defined(_WIN32)
     const std::filesystem::path directory = kb::platform::CrashReporter::ReportDirectory();
-    consent = !directory.empty() && kb::platform::HasCrashUploadConsent(directory);
+    consent = !directory.empty() && kb::platform::HasCrashUploadConsent(directory) &&
+        (storage == nullptr ||
+            kb::platform::ReadCrashUploadConsentChoice(*storage) == kb::platform::CrashUploadConsentChoice::Granted);
+#else
+    static_cast<void>(storage);
 #endif
     return ScriptFunctionCallResult{ .executed = true, .outputs = { ScriptFunctionArgument{ "consent", ScriptValue{ consent } } }, .errors = {} };
 }
 
-ScriptFunctionCallResult SetCrashReportUploadConsent(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+// The answer takes effect for reports sent from the next launch on; this call never sends anything.
+ScriptFunctionCallResult SetCrashReportUploadConsent(const std::shared_ptr<kb::platform::UserStorage>& storage,
+    std::span<const ScriptFunctionArgument> arguments) {
     const ScriptValue* value = FindArg(arguments, "consent");
     bool set = false;
 #if defined(_WIN32)
     const std::filesystem::path directory = kb::platform::CrashReporter::ReportDirectory();
-    set = value != nullptr && !directory.empty() && kb::platform::SetCrashUploadConsent(directory, value->AsBool());
+    if (value != nullptr && !directory.empty()) {
+        const bool consent = value->AsBool();
+        set = (storage == nullptr || kb::platform::WriteCrashUploadConsentChoice(*storage, consent)) &&
+            kb::platform::SetCrashUploadConsent(directory, consent);
+    }
 #else
+    static_cast<void>(storage);
     static_cast<void>(value);
 #endif
     return ScriptFunctionCallResult{ .executed = true, .outputs = { ScriptFunctionArgument{ "set", ScriptValue{ set } } }, .errors = {} };
@@ -406,8 +420,11 @@ ScriptFunctionCallResult DeleteCrashReports(const ScriptFunctionCallContext&, st
 
 bool RegisterCrashReportSettings(ScriptRuntimeHost& host) {
     bool ok = true;
-    ok = RegisterFunction(host, "Settings.CrashReportUploadConsent", {}, { ScriptFunctionPin{ "consent", ScriptValueType::Bool, true } }, &CrashReportUploadConsent) && ok;
-    ok = RegisterFunction(host, "Settings.SetCrashReportUploadConsent", { ScriptFunctionPin{ "consent", ScriptValueType::Bool, true } }, { ScriptFunctionPin{ "set", ScriptValueType::Bool, true } }, &SetCrashReportUploadConsent) && ok;
+    const std::shared_ptr<kb::platform::UserStorage> storage = host.UserStorage();
+    ok = RegisterFunction(host, "Settings.CrashReportUploadConsent", {}, { ScriptFunctionPin{ "consent", ScriptValueType::Bool, true } },
+        [storage](const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument>) { return CrashReportUploadConsent(storage); }) && ok;
+    ok = RegisterFunction(host, "Settings.SetCrashReportUploadConsent", { ScriptFunctionPin{ "consent", ScriptValueType::Bool, true } }, { ScriptFunctionPin{ "set", ScriptValueType::Bool, true } },
+        [storage](const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) { return SetCrashReportUploadConsent(storage, arguments); }) && ok;
     ok = RegisterFunction(host, "Settings.CrashReportPrivacyNotice", {}, { ScriptFunctionPin{ "text", ScriptValueType::String, true } }, &CrashReportPrivacyNotice) && ok;
     ok = RegisterFunction(host, "Settings.DeleteCrashReports", {}, { ScriptFunctionPin{ "deleted", ScriptValueType::Int, true } }, &DeleteCrashReports) && ok;
     return ok;

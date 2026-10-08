@@ -132,6 +132,24 @@ are rewritten authenticated in place (`migrated` in the load result). An unauthe
 cannot be told apart from a forged one, so a game whose first release already wrote schema 3
 should set `SaveGameIntegrity::acceptUnauthenticatedLegacySaves` to `false`.
 
+## Crash reports
+
+A Windows player writes a crash report to `%LOCALAPPDATA%\21kb\CrashReports\<executable name>` and
+never sends one without the player's yes. Packaging writes `CrashReports.ini` beside the executable
+only when the project names an upload URL (HTTPS, or HTTP to this machine). On the first launch of
+such a packaged game the player sees a question built from the game's own screen UI, above every
+canvas the game authors, with the decline button focused for keyboard and controller; its text uses
+the game's font asset with the first path, so a game that ships no font shows it without lettering. The answer
+is kept in the game's user storage (`crash-report-upload.consent`, beside the player's saves and
+settings) and mirrored into the reporter's own gate in the report folder; later launches use it
+without asking. Reports left by earlier runs are sent only after a yes: at launch when the stored
+answer is yes, or straight after the player answers yes. A stored no, no answer yet, or a game
+without an upload URL sends nothing, and a consent file left in the report folder without a stored
+yes is removed at launch. Scripts change the answer later with
+`Settings.SetCrashReportUploadConsent` and read it with `Settings.CrashReportUploadConsent`; a change
+applies from the next launch on, or at once while the question is still on screen. Development
+players of a loose project do not ask.
+
 ## Platform limits
 
 - **Windows**: full packaged mode. The trust anchor is a PE resource; sign the executable with

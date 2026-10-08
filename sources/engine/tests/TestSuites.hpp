@@ -29,5 +29,6 @@ void RunSkeletalMeshAssetTests();
 void RunTimelineRuntimeTests();
 void RunLocalizationTests();
 void RunUITextLineBreakingTests();
+void RunCrashReportConsentTests();
 
 } // namespace kb::tests

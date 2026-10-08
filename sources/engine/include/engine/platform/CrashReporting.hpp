@@ -23,7 +23,8 @@ struct CrashReporterOptions {
     CrashReportWrittenCallback onReportWritten = nullptr;
     // Send reports left by earlier runs, in the background, when
     // <executable directory>/CrashReports.ini names an endpoint and the user
-    // has consented. Nothing is sent otherwise.
+    // has consented. Nothing is sent otherwise. A host that asks the player
+    // first turns this off and calls StartPendingUpload once the answer is in.
     bool uploadPendingReports = true;
 };
 
@@ -40,6 +41,10 @@ public:
     static bool Install(const CrashReporterOptions& options = {});
     [[nodiscard]] static bool IsInstalled() noexcept;
     [[nodiscard]] static std::filesystem::path ReportDirectory();
+    // Starts sending reports left by earlier runs in the background, on the
+    // same terms as uploadPendingReports: an endpoint in CrashReports.ini,
+    // consent and at least one report. Returns whether a send was started.
+    static bool StartPendingUpload();
     // Copies the line into a fixed ring the next report carries as its recent
     // log. Never allocates and never blocks; callable from any thread.
     static void Note(std::string_view line) noexcept;
@@ -77,6 +82,9 @@ std::size_t DeleteCrashReports(const std::filesystem::path& directory);
 // [CrashReports] UploadUrl from the given ini file; empty when absent or not allowed.
 [[nodiscard]] std::string ReadCrashUploadEndpoint(const std::filesystem::path& configFile);
 inline constexpr std::wstring_view kCrashUploadConfigFile = L"CrashReports.ini";
+// The endpoint the running executable's CrashReports.ini names; empty when the
+// game ships without crash upload or names an endpoint that is not allowed.
+[[nodiscard]] std::string ConfiguredCrashUploadEndpoint();
 
 struct CrashUploadSummary {
     bool attempted = false;
