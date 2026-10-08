@@ -1,5 +1,7 @@
 #include "kb/render/resources/RenderMeshSourceImport.hpp"
 
+#include "engine/scene/SkeletalMeshFbxImporter.hpp"
+
 #include "resources/RenderMeshGltfMaterialImporter.hpp"
 
 #include <cgltf/cgltf.h>
@@ -11,6 +13,7 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <system_error>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -330,6 +333,10 @@ using FbxScene = std::unique_ptr<ufbx_scene, FbxDeleter>;
     ufbx_load_opts options{};
     options.load_external_files = false;
     options.use_blender_pbr_material = true;
+    std::error_code sizeError;
+    const std::size_t memoryLimit = kb::scene::FbxLoadMemoryLimit(std::filesystem::file_size(sourcePath, sizeError));
+    options.temp_allocator.memory_limit = memoryLimit;
+    options.result_allocator.memory_limit = memoryLimit;
     ufbx_error loadError{};
     FbxScene scene{ ufbx_load_file(sourcePath.string().c_str(), &options, &loadError) };
     if (!scene) return Fail<RenderMeshSourceImportManifest>(error,
