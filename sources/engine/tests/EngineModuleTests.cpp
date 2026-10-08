@@ -19,9 +19,13 @@
 #include "engine/scene/SceneInputActivation.hpp"
 #include "engine/scene/SceneLightingAccess.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/security/ReleaseKeys.hpp"
+#include "engine/security/ReleaseManifest.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <system_error>
@@ -351,6 +355,78 @@ void RunEngineModuleLoaderShadowCopyTest() {
 #endif
 }
 
+// With a verified release installed, a native module loads only when the release manifest lists
+// it with the SHA-512 of the very bytes mapped; modified, unlisted and out-of-release modules are
+// refused. Without a release it loads with a warning. While the loader holds the shadow copy for
+// verification nothing can rewrite it.
+void RunEngineModuleReleaseTrustTest() {
+#if KB_SKIP_DYNAMIC_ENGINE_MODULE_ASAN_TESTS
+    return;
+#else
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_engine_module_trust_tests";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    const std::filesystem::path release = root / "Release";
+    std::filesystem::create_directories(release / "Modules", error);
+    const std::filesystem::path pluginPath = KB_NATIVE_SCRIPT_TEST_PLUGIN_PATH;
+    kb::tests::Require(!pluginPath.empty() && std::filesystem::is_regular_file(pluginPath), "module trust test DLL is missing");
+    std::filesystem::copy_file(pluginPath, release / "Modules" / "listed.dll", error);
+    kb::tests::Require(!error, "module trust test DLL could not be staged");
+
+    kb::security::ReleaseSigningKey key;
+    kb::tests::Require(kb::security::GenerateReleaseSigningKey(key), "module trust test key could not be generated");
+    auto installed = std::make_shared<kb::security::InstalledRelease>();
+    installed->root = release;
+    installed->manifest.productId = "Publisher.Game";
+    installed->manifest.contentVersion = "1.0.0";
+    std::string manifestError;
+    kb::tests::Require(kb::security::BuildReleaseManifest(release, installed->manifest, manifestError), manifestError.c_str());
+    std::filesystem::copy_file(pluginPath, release / "Modules" / "unlisted.dll", error);
+
+    const auto load = [&root](const std::filesystem::path& path, bool shadowCopy) {
+        kb::modules::EngineModuleLoader loader;
+        return loader.Load(kb::modules::EngineModuleLoadDesc{
+            .key = "module-trust-" + path.stem().string(),
+            .modulePath = path,
+            .shadowCopy = shadowCopy,
+            .shadowCopyDirectory = root / "Shadow",
+            .diagnosticLabel = "module trust test",
+        });
+    };
+    const auto mentions = [](const kb::modules::EngineModuleLoadResult& result, std::string_view text) {
+        return std::ranges::any_of(result.errors, [text](const std::string& message) {
+            return message.find(text) != std::string::npos;
+        });
+    };
+
+    kb::security::InstallVerifiedRelease(installed);
+    {
+        kb::modules::EngineModuleLoadResult listed = load(release / "Modules" / "listed.dll", true);
+        kb::tests::Require(listed.Succeeded() && listed.warnings.empty(), "a module listed in the release was refused");
+        listed.library.Reset();
+        kb::modules::EngineModuleLoadResult direct = load(release / "Modules" / "listed.dll", false);
+        kb::tests::Require(direct.Succeeded(), "a listed module loaded without a shadow copy was refused");
+    }
+    kb::tests::Require(mentions(load(release / "Modules" / "unlisted.dll", true), "not listed"),
+        "a module the release does not list was loaded");
+    kb::tests::Require(mentions(load(pluginPath, true), "not listed"), "a module outside the release root was loaded");
+    {
+        std::ofstream append{ release / "Modules" / "listed.dll", std::ios::binary | std::ios::app };
+        append.put('\0');
+    }
+    kb::tests::Require(mentions(load(release / "Modules" / "listed.dll", true), "does not match"),
+        "a modified module was loaded");
+
+    kb::security::InstallVerifiedRelease(nullptr);
+    kb::modules::EngineModuleLoadResult development = load(release / "Modules" / "unlisted.dll", true);
+    kb::tests::Require(development.Succeeded() && development.warnings.size() == 1U &&
+            development.warnings.front().find("not verified") != std::string::npos,
+        "a development build did not load an unverified module with a warning");
+    development.library.Reset();
+    std::filesystem::remove_all(root, error);
+#endif
+}
+
 // End-to-end through the production Scene(ProjectDescriptor) path: the built-in
 // Input module is what installs the polling system, so disabling it in the project
 // descriptor must stop the scene tick from evaluating input. Proves 1.4b: the
@@ -552,6 +628,7 @@ void RunEngineModuleTests() {
     RunDependencyOrderTest();
     RunPhaseOrderTest();
     RunEngineModuleLoaderShadowCopyTest();
+    RunEngineModuleReleaseTrustTest();
     RunSceneInputToggleTest();
     RunSceneInputActivationUsesUnsafeHotQueryTest();
     RunSceneInputActivationPerLocalUserTest();

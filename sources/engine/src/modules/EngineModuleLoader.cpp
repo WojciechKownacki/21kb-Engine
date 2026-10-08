@@ -1,6 +1,8 @@
 #include "engine/modules/EngineModuleLoader.hpp"
 
 #include "ecs/component/ComponentTypeCache.hpp"
+#include "engine/security/Crypto.hpp"
+#include "engine/security/ReleaseManifest.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -20,6 +22,7 @@
 #include <cerrno>
 #include <csignal>
 #include <dlfcn.h>
+#include <fcntl.h>
 #include <unistd.h>
 #if defined(__APPLE__)
 #include <mach-o/dyld.h>
@@ -152,6 +155,121 @@ void CloseNativeLibrary(void* library) noexcept {
     return !path.empty() && std::filesystem::is_regular_file(path, error) && !error;
 }
 
+// An open, write-locked handle on the module file being verified. Windows: no share-write or
+// share-delete, so the file cannot change, be renamed or be replaced until it is closed, while
+// LoadLibrary (which only reads) still opens it. Elsewhere: a descriptor the hash is read from.
+class ModuleFileHold final {
+public:
+    ModuleFileHold() = default;
+    ModuleFileHold(const ModuleFileHold&) = delete;
+    ModuleFileHold& operator=(const ModuleFileHold&) = delete;
+    ~ModuleFileHold() {
+        Close();
+    }
+
+    [[nodiscard]] bool Open(const std::filesystem::path& path) {
+#if defined(_WIN32)
+        handle_ = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+        return handle_ != INVALID_HANDLE_VALUE;
+#else
+        descriptor_ = open(path.c_str(), O_RDONLY | O_CLOEXEC);
+        return descriptor_ >= 0;
+#endif
+    }
+
+    // Streams the held file through SHA-512.
+    [[nodiscard]] bool Hash(kb::security::Sha512Digest& digest, std::uint64_t& size) {
+        kb::security::Sha512Hasher hasher;
+        std::vector<std::uint8_t> buffer(1U << 20U);
+        size = 0U;
+        for (;;) {
+#if defined(_WIN32)
+            DWORD read = 0U;
+            if (ReadFile(handle_, buffer.data(), static_cast<DWORD>(buffer.size()), &read, nullptr) == FALSE) {
+                return false;
+            }
+#else
+            const ssize_t read = ::read(descriptor_, buffer.data(), buffer.size());
+            if (read < 0) {
+                if (errno == EINTR) {
+                    continue;
+                }
+                return false;
+            }
+#endif
+            if (read == 0) {
+                break;
+            }
+            hasher.Update(std::span{ buffer.data(), static_cast<std::size_t>(read) });
+            size += static_cast<std::uint64_t>(read);
+        }
+        digest = hasher.Finish();
+        return true;
+    }
+
+    void Close() noexcept {
+#if defined(_WIN32)
+        if (handle_ != INVALID_HANDLE_VALUE) {
+            CloseHandle(handle_);
+            handle_ = INVALID_HANDLE_VALUE;
+        }
+#else
+        if (descriptor_ >= 0) {
+            close(descriptor_);
+            descriptor_ = -1;
+        }
+#endif
+    }
+
+private:
+#if defined(_WIN32)
+    HANDLE handle_ = INVALID_HANDLE_VALUE;
+#else
+    int descriptor_ = -1;
+#endif
+};
+
+// Checks the bytes at `loadPath` -- a shadow copy of `sourcePath`, or the file itself -- against
+// the verified release. `hold` keeps them locked for the caller to load.
+[[nodiscard]] bool VerifyModuleAgainstRelease(
+    const kb::security::InstalledRelease* release,
+    const std::filesystem::path& sourcePath,
+    const std::filesystem::path& loadPath,
+    std::string_view diagnosticLabel,
+    ModuleFileHold& hold,
+    EngineModuleLoadResult& result) {
+    const std::string label{ diagnosticLabel };
+    if (release == nullptr) {
+        result.warnings.push_back(label + " '" + sourcePath.string() +
+            "' is not verified: this process runs no signed release (development build)");
+        return true;
+    }
+    std::error_code error;
+    const std::filesystem::path root = std::filesystem::weakly_canonical(release->root, error);
+    const std::filesystem::path source = std::filesystem::weakly_canonical(sourcePath, error);
+    const std::filesystem::path relative = source.lexically_relative(root);
+    const std::u8string portable = relative.generic_u8string();
+    const kb::security::ReleaseManifestFile* listed = error || relative.empty() || *relative.begin() == ".."
+        ? nullptr
+        : release->manifest.FindFile(std::string_view{ reinterpret_cast<const char*>(portable.data()), portable.size() });
+    if (listed == nullptr || !kb::security::IsCriticalReleaseFile(relative)) {
+        result.errors.push_back(label + " '" + sourcePath.string() + "' is not listed in the signed release manifest");
+        return false;
+    }
+    kb::security::Sha512Digest digest{};
+    std::uint64_t size = 0U;
+    if (!hold.Open(loadPath) || !hold.Hash(digest, size)) {
+        result.errors.push_back(label + " '" + sourcePath.string() + "' could not be locked and read for verification");
+        return false;
+    }
+    if (size != listed->size || !kb::security::ConstantTimeEqual(digest, listed->sha512)) {
+        result.errors.push_back(label + " '" + sourcePath.string() + "' does not match the signed release manifest");
+        return false;
+    }
+    return true;
+}
+
 void AppendCandidate(std::vector<std::filesystem::path>& candidates, const std::filesystem::path& candidate) {
     if (candidate.empty()) {
         return;
@@ -248,7 +366,14 @@ EngineModuleLoadResult EngineModuleLoader::Load(EngineModuleLoadDesc desc) {
         }
     }
 
+    // Hashed and loaded under one lock: what is verified is what gets mapped.
+    ModuleFileHold hold;
+    if (!VerifyModuleAgainstRelease(kb::security::CurrentVerifiedRelease().get(), sourcePath, loadPath,
+            desc.diagnosticLabel, hold, result)) {
+        return result;
+    }
     void* library = LoadNativeLibrary(loadPath, desc.diagnosticLabel, result.errors);
+    hold.Close();
     if (library == nullptr) {
         return result;
     }

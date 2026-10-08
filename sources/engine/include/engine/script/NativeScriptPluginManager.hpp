@@ -23,6 +23,8 @@ struct NativeScriptPluginLoadResult {
     std::filesystem::path loadedPath;
     std::vector<std::string> registeredSymbols;
     std::vector<std::string> errors;
+    // The module loaded without a signed release to verify it against (development build).
+    std::vector<std::string> warnings;
 
     [[nodiscard]] bool Succeeded() const noexcept {
         return loaded && errors.empty();
