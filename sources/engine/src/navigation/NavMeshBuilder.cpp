@@ -1,5 +1,7 @@
 #include "engine/navigation/NavMeshBuild.hpp"
 
+#include "engine/ecs/WorkerPool.hpp"
+
 #include <Recast.h>
 
 #include <algorithm>
@@ -9,7 +11,6 @@
 #include <limits>
 #include <map>
 #include <memory>
-#include <thread>
 #include <utility>
 
 namespace kb::navigation {
@@ -349,7 +350,7 @@ bool NavMeshBuilder::BuildTile(const NavMeshBuildSettings& settings, std::uint32
     return BuildTileFromTriangles(settings, profile, coord, geometry, triangles, tile, error);
 }
 
-NavMeshBakeResult NavMeshBuilder::Bake(const NavMeshBuildSettings& settings, const NavGeometry& geometry, std::uint32_t workerThreads) {
+NavMeshBakeResult NavMeshBuilder::Bake(const NavMeshBuildSettings& settings, const NavGeometry& geometry, kb::ecs::WorkerPool* workers) {
     const auto start = std::chrono::steady_clock::now();
     NavMeshBakeResult result;
     if (std::string invalid = ValidateNavMeshBuildSettings(settings); !invalid.empty()) {
@@ -378,23 +379,20 @@ NavMeshBakeResult NavMeshBuilder::Bake(const NavMeshBuildSettings& settings, con
     }
     std::vector<NavTile> built(jobs.size());
     std::vector<std::string> errors(jobs.size());
-    std::atomic<std::size_t> next{ 0U };
     std::atomic<bool> failed{ false };
-    const auto work = [&] {
-        for (std::size_t job = next.fetch_add(1U); job < jobs.size() && !failed.load(); job = next.fetch_add(1U)) {
-            if (!BuildTileFromTriangles(settings, jobs[job].profile, *jobs[job].coord, geometry, *jobs[job].triangles, built[job], errors[job])) {
-                failed.store(true);
-            }
+    const auto build = [&](std::size_t job) {
+        if (!failed.load() &&
+            !BuildTileFromTriangles(settings, jobs[job].profile, *jobs[job].coord, geometry, *jobs[job].triangles, built[job], errors[job])) {
+            failed.store(true);
         }
     };
-    std::uint32_t threads = workerThreads != 0U ? workerThreads : std::min(8U, std::max(1U, std::thread::hardware_concurrency()));
-    threads = static_cast<std::uint32_t>(std::min<std::size_t>(threads, std::max<std::size_t>(1U, jobs.size())));
-    {
-        std::vector<std::jthread> pool;
-        for (std::uint32_t thread = 1U; thread < threads; ++thread) {
-            pool.emplace_back(work);
-        }
-        work();
+    if (workers != nullptr && workers->Running() && workers->WorkerCount() > 1U && jobs.size() > 1U) {
+        // One tile per chunk: tiles differ widely in cost, so the pool balances them one by one.
+        workers->ParallelForChunks(jobs.size(), 1U, [&build](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk& chunk) {
+            for (std::size_t job = chunk.begin; job < chunk.begin + chunk.count; ++job) build(job);
+        });
+    } else {
+        for (std::size_t job = 0U; job < jobs.size(); ++job) build(job);
     }
     for (std::size_t job = 0U; job < jobs.size(); ++job) {
         if (!errors[job].empty()) {

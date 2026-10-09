@@ -1,5 +1,6 @@
 #include "engine/world/WorldCellBuilder.hpp"
 
+#include "engine/ecs/WorkerPool.hpp"
 #include "engine/navigation/NavGeometryCollector.hpp"
 #include "engine/navigation/NavMeshAsset.hpp"
 #include "engine/scene/SceneDocument.hpp"
@@ -168,7 +169,9 @@ void CollectHlodInstances(const WorldObjectFile& object, const WorldPartitionGri
     if (stats.unresolved != 0U) {
         report.warnings.push_back("navigation: " + std::to_string(stats.unresolved) + " mesh(es) could not be read and were left out");
     }
-    kb::navigation::NavMeshBakeResult baked = kb::navigation::NavMeshBuilder::Bake(settings, geometry);
+    // Tiles are built on the engine's workers (at most 8: each holds a tile's voxels while it runs).
+    kb::ecs::WorkerPool workers{ kb::ecs::WorkerPoolConfig{ .workerCount = std::min<std::size_t>(8U, kb::ecs::WorkerPool::DefaultWorkerCount()) } };
+    kb::navigation::NavMeshBakeResult baked = kb::navigation::NavMeshBuilder::Bake(settings, geometry, &workers);
     if (!baked.succeeded) {
         return "navigation bake failed: " + baked.error;
     }
