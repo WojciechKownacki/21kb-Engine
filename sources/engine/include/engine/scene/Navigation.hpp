@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/math/DVec3.hpp"
 #include "engine/math/EngineMath.hpp"
 
 #include <array>
@@ -55,6 +56,10 @@ struct NavMesh {
     float agentMaxSlopeDegrees = 45.0F;
     float cellSize = 0.2F;
     float cellHeight = 0.1F;
+    // The world position the graph's space is centred on: node positions, agent destinations and path corners
+    // are world positions minus this origin. Zero keeps them in world space; a graph far from the world origin
+    // keeps them small so agents move with float precision there (docs/large_worlds.md).
+    kb::math::DVec3 origin{};
     std::vector<NavMeshNode> nodes;
 };
 
