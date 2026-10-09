@@ -11,7 +11,7 @@
 #include "engine/assets/bake/BakeTargetProfile.hpp"
 #include "engine/assets/bake/RuntimeAssetManifest.hpp"
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
-#include "engine/assets/streaming/AsyncFileReader.hpp"
+#include "engine/assets/streaming/BackgroundLoadService.hpp"
 #include "engine/assets/streaming/PackBlockStream.hpp"
 #include "engine/assets/streaming/StreamingResidency.hpp"
 #include "engine/security/ReleaseKeys.hpp"
@@ -33,6 +33,7 @@
 #include <mutex>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -448,16 +449,16 @@ void TamperedCompressedBlocksAreRefused() {
         Require(located.Mount(tampered, bake::AssetPackAccess::Ranged, TrustOnly(key)) == bake::AssetPackReadStatus::Success,
             "The tampered sealed pack did not mount for the asynchronous check");
         const bake::AssetPackBlockEntry& block = BlockOf(located, "mip0");
-        streaming::AsyncFileReader io{ {} };
-        const streaming::AsyncReadHandle request = io.Read(tampered, block.offset, block.storedBytes, 1,
+        streaming::BackgroundLoadService io{ {} };
+        const streaming::BackgroundRequestHandle request = io.Read(tampered, block.offset, block.storedBytes, 1,
             [&located, &block](std::vector<std::uint8_t>& stored, std::string& error) {
                 const bake::AssetPackReadStatus status = located.DecodeStoredBlock(block, stored);
                 error = std::string{ bake::ToString(status) };
                 return status == bake::AssetPackReadStatus::Success;
             });
-        Require(streaming::AsyncFileReader::WaitUntilDone(request, Clock::now() + std::chrono::seconds{ 30 }),
+        Require(streaming::BackgroundLoadService::WaitUntilDone(request, Clock::now() + std::chrono::seconds{ 30 }),
             "An asynchronous read of a tampered block never finished");
-        Require(request->State() == streaming::AsyncReadState::Failed && request->Bytes().empty() &&
+        Require(request->State() == streaming::BackgroundRequestState::Failed && request->Bytes().empty() &&
                 request->Error() == "PayloadCorrupt",
             "An asynchronous read handed out a tampered compressed block");
     }
@@ -621,16 +622,16 @@ void BlocksBeyondFourGigabytesAreAddressed() {
         Require(ReadNamed(reader, "far") == distant, "A block past 4 GiB was read from the wrong place");
         Require(ReadNamed(reader, bake::kBakedAssetPrimaryBlockName) == primary, "The front of a large pack was misread");
 
-        streaming::AsyncFileReader io{ {} };
+        streaming::BackgroundLoadService io{ {} };
         const bake::AssetPackBlockEntry& block = BlockOf(reader, "far");
-        const streaming::AsyncReadHandle request = io.Read(path, block.offset, block.storedBytes, 0,
+        const streaming::BackgroundRequestHandle request = io.Read(path, block.offset, block.storedBytes, 0,
             [&reader, &block](std::vector<std::uint8_t>& bytes, std::string& error) {
                 const bake::AssetPackReadStatus status = reader.DecodeStoredBlock(block, bytes);
                 error = std::string{ bake::ToString(status) };
                 return status == bake::AssetPackReadStatus::Success;
             });
-        Require(streaming::AsyncFileReader::WaitUntilDone(request, Clock::now() + std::chrono::seconds{ 60 }) &&
-                request->State() == streaming::AsyncReadState::Completed && request->Bytes() == distant,
+        Require(streaming::BackgroundLoadService::WaitUntilDone(request, Clock::now() + std::chrono::seconds{ 60 }) &&
+                request->State() == streaming::BackgroundRequestState::Completed && request->Bytes() == distant,
             ("The asynchronous reader misread a block past 4 GiB: " + request->Error()).c_str());
     }
     {
@@ -1579,12 +1580,12 @@ void AsyncReadsFollowPriorityAndReturnExactRanges() {
     const std::vector<std::uint8_t> content = Noise(41U, 3U * 1024U * 1024U + 777U);
     WriteFileBytes(path, content);
 
-    streaming::AsyncFileReader io{ streaming::AsyncFileReaderOptions{ .workerCount = 1U, .requestsInFlightPerWorker = 4U } };
+    streaming::BackgroundLoadService io{ streaming::BackgroundLoadServiceOptions{ .workerCount = 1U, .requestsInFlightPerWorker = 4U } };
     std::mutex orderMutex;
     std::vector<int> order;
     std::atomic<bool> gateOpen{ false };
     std::atomic<bool> gateEntered{ false };
-    const streaming::AsyncReadHandle gate = io.Read(path, 0U, 16U, 1000,
+    const streaming::BackgroundRequestHandle gate = io.Read(path, 0U, 16U, 1000,
         [&](std::vector<std::uint8_t>&, std::string&) {
             gateEntered = true;
             const Clock::time_point deadline = Clock::now() + std::chrono::seconds{ 30 };
@@ -1606,7 +1607,7 @@ void AsyncReadsFollowPriorityAndReturnExactRanges() {
             return true;
         };
     };
-    std::vector<streaming::AsyncReadHandle> requests;
+    std::vector<streaming::BackgroundRequestHandle> requests;
     const std::array<int, 6U> priorities{ 1, 5, 3, 10, 2, 4 };
     for (std::size_t index = 0U; index < priorities.size(); ++index) {
         requests.push_back(io.Read(path, index * 4096U, 4096U, priorities[index], tagged(priorities[index])));
@@ -1616,16 +1617,16 @@ void AsyncReadsFollowPriorityAndReturnExactRanges() {
     Require(io.Cancel(requests[4]), "A queued read could not be cancelled");                  // 2 never runs
     Require(!io.Cancel(gate), "A read already in flight was cancelled");
     gateOpen = true;
-    for (const streaming::AsyncReadHandle& request : requests) {
-        Require(streaming::AsyncFileReader::WaitUntilDone(request, Clock::now() + std::chrono::seconds{ 30 }),
+    for (const streaming::BackgroundRequestHandle& request : requests) {
+        Require(streaming::BackgroundLoadService::WaitUntilDone(request, Clock::now() + std::chrono::seconds{ 30 }),
             "A queued read never finished");
     }
     Require(order == std::vector<int>{ 1, 10, 5, 4, 3 }, "Queued reads were not served by priority");
-    Require(requests[4]->State() == streaming::AsyncReadState::Cancelled, "A cancelled read did not stay cancelled");
+    Require(requests[4]->State() == streaming::BackgroundRequestState::Cancelled, "A cancelled read did not stay cancelled");
     Require(io.Stats().peakInFlight >= 4U, "The worker did not keep several reads in flight");
 
     // Exact ranges at awkward offsets, through the unbuffered path where the platform has one.
-    std::vector<streaming::AsyncReadHandle> ranges;
+    std::vector<streaming::BackgroundRequestHandle> ranges;
     const std::array<std::pair<std::uint64_t, std::uint64_t>, 6U> windows{ {
         { 0U, 1U }, { 1U, 511U }, { 4095U, 2U }, { 12345U, 99999U }, { content.size() - 3U, 3U }, { 700000U, 1500000U },
     } };
@@ -1633,8 +1634,8 @@ void AsyncReadsFollowPriorityAndReturnExactRanges() {
         ranges.push_back(io.Read(path, offset, length, 0));
     }
     for (std::size_t index = 0U; index < windows.size(); ++index) {
-        Require(streaming::AsyncFileReader::WaitUntilDone(ranges[index], Clock::now() + std::chrono::seconds{ 30 }) &&
-                ranges[index]->State() == streaming::AsyncReadState::Completed,
+        Require(streaming::BackgroundLoadService::WaitUntilDone(ranges[index], Clock::now() + std::chrono::seconds{ 30 }) &&
+                ranges[index]->State() == streaming::BackgroundRequestState::Completed,
             ("An exact-range read failed: " + ranges[index]->Error()).c_str());
         const auto [offset, length] = windows[index];
         Require(std::equal(ranges[index]->Bytes().begin(), ranges[index]->Bytes().end(),
@@ -1642,18 +1643,190 @@ void AsyncReadsFollowPriorityAndReturnExactRanges() {
                 ranges[index]->Bytes().size() == length,
             "An asynchronous read returned the wrong bytes");
     }
-    const streaming::AsyncReadHandle pastEnd = io.Read(path, content.size() - 10U, 20U, 0);
-    Require(streaming::AsyncFileReader::WaitUntilDone(pastEnd, Clock::now() + std::chrono::seconds{ 30 }) &&
-            pastEnd->State() == streaming::AsyncReadState::Failed && pastEnd->Bytes().empty(),
+    const streaming::BackgroundRequestHandle pastEnd = io.Read(path, content.size() - 10U, 20U, 0);
+    Require(streaming::BackgroundLoadService::WaitUntilDone(pastEnd, Clock::now() + std::chrono::seconds{ 30 }) &&
+            pastEnd->State() == streaming::BackgroundRequestState::Failed && pastEnd->Bytes().empty(),
         "A read past the end of the file succeeded");
-    const streaming::AsyncReadHandle missing = io.Read(root / "missing.bin", 0U, 1U, 0);
-    Require(streaming::AsyncFileReader::WaitUntilDone(missing, Clock::now() + std::chrono::seconds{ 30 }) &&
-            missing->State() == streaming::AsyncReadState::Failed,
+    const streaming::BackgroundRequestHandle missing = io.Read(root / "missing.bin", 0U, 1U, 0);
+    Require(streaming::BackgroundLoadService::WaitUntilDone(missing, Clock::now() + std::chrono::seconds{ 30 }) &&
+            missing->State() == streaming::BackgroundRequestState::Failed,
         "A read of a missing file succeeded");
 #if defined(_WIN32)
     Require(io.Stats().unbufferedReads > 0U, "No read took the unbuffered path on Windows");
 #endif
     io.Forget(path);
+    Purge(root);
+}
+
+// Red when: jobs of a lane overlap or ignore their priority, a blocked job starves reads, more
+// jobs run than the job limit allows, a lane's queued jobs survive CancelLane, WaitForLane returns
+// while its job still runs, a closed lane accepts work, a failing job reads as completed, or the
+// shared service is not one instance that goes away with its last user.
+void BackgroundJobsShareThePoolWithReads() {
+    const std::filesystem::path root = Root() / "jobs";
+    Purge(root);
+    std::filesystem::create_directories(root);
+    const std::filesystem::path path = root / "data.bin";
+    const std::vector<std::uint8_t> content = Noise(43U, 64U * 1024U);
+    WriteFileBytes(path, content);
+    const auto spinUntil = [](const std::function<bool()>& done) {
+        const Clock::time_point deadline = Clock::now() + std::chrono::seconds{ 30 };
+        while (!done() && Clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds{ 1 });
+        }
+        return done();
+    };
+
+    {
+        // Two workers: one may run jobs, the other is kept for reads.
+        streaming::BackgroundLoadService service{ streaming::BackgroundLoadServiceOptions{ .workerCount = 2U, .jobWorkers = 2U } };
+        Require(service.WorkerCount() == 2U && service.JobWorkerLimit() == 1U,
+            "The job limit did not keep a worker for reads");
+        std::atomic<bool> blockedEntered{ false };
+        std::atomic<bool> release{ false };
+        std::atomic<bool> secondRan{ false };
+        const streaming::BackgroundRequestHandle blocked = service.Run([&](std::string&) {
+            blockedEntered = true;
+            return spinUntil([&] { return release.load(); });
+        }, 0);
+        Require(spinUntil([&] { return blockedEntered.load(); }), "A job never started");
+        const streaming::BackgroundRequestHandle second = service.Run([&](std::string&) {
+            secondRan = true;
+            return true;
+        }, 100);
+        const streaming::BackgroundRequestHandle read = service.Read(path, 100U, 4000U, 0);
+        Require(streaming::BackgroundLoadService::WaitUntilDone(read, Clock::now() + std::chrono::seconds{ 30 }) &&
+                read->State() == streaming::BackgroundRequestState::Completed &&
+                std::equal(read->Bytes().begin(), read->Bytes().end(), content.begin() + 100) && read->Bytes().size() == 4000U,
+            "A read waited behind a blocked job");
+        Require(!secondRan && second->State() == streaming::BackgroundRequestState::Queued,
+            "A job ran past the job limit");
+        release = true;
+        Require(streaming::BackgroundLoadService::WaitUntilDone(second, Clock::now() + std::chrono::seconds{ 30 }) && secondRan &&
+                blocked->State() == streaming::BackgroundRequestState::Completed,
+            "A queued job did not run once the limit freed");
+        Require(service.Stats().peakJobsRunning == 1U && service.Stats().jobsRun == 2U,
+            "The job counters do not match the jobs run");
+
+        const streaming::BackgroundRequestHandle failing = service.Run([](std::string& error) {
+            error = "decoder refused";
+            return false;
+        }, 0);
+        const streaming::BackgroundRequestHandle throwing = service.Run([](std::string&) -> bool {
+            throw std::runtime_error{ "loader threw" };
+        }, 0);
+        Require(streaming::BackgroundLoadService::WaitUntilDone(failing, Clock::now() + std::chrono::seconds{ 30 }) &&
+                failing->State() == streaming::BackgroundRequestState::Failed && failing->Error() == "decoder refused" &&
+                streaming::BackgroundLoadService::WaitUntilDone(throwing, Clock::now() + std::chrono::seconds{ 30 }) &&
+                throwing->State() == streaming::BackgroundRequestState::Failed && throwing->Error() == "loader threw",
+            "A failing job did not report its failure");
+    }
+
+    {
+        // Four workers, three of which may run jobs: lanes keep their own jobs serial and in
+        // priority order while another lane runs beside them.
+        const auto service = std::make_shared<streaming::BackgroundLoadService>(
+            streaming::BackgroundLoadServiceOptions{ .workerCount = 4U, .jobWorkers = 3U });
+        std::mutex orderMutex;
+        std::vector<int> order;
+        std::atomic<int> laneRunning{ 0 };
+        std::atomic<bool> overlapped{ false };
+        std::atomic<bool> gateEntered{ false };
+        std::atomic<bool> gateOpen{ false };
+        auto lane = std::make_unique<streaming::BackgroundLane>(service);
+        const auto laneJob = [&](int tag) {
+            return [&, tag](std::string&) {
+                if (laneRunning.fetch_add(1) != 0) {
+                    overlapped = true;
+                }
+                {
+                    std::scoped_lock lock{ orderMutex };
+                    order.push_back(tag);
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds{ 2 });
+                laneRunning.fetch_sub(1);
+                return true;
+            };
+        };
+        const streaming::BackgroundRequestHandle gate = lane->Run([&](std::string&) {
+            gateEntered = true;
+            return spinUntil([&] { return gateOpen.load(); });
+        });
+        Require(spinUntil([&] { return gateEntered.load(); }), "The lane's first job never started");
+        std::vector<streaming::BackgroundRequestHandle> queued;
+        for (const int priority : { 1, 7, 3, 9, 5 }) {
+            queued.push_back(lane->Run(laneJob(priority), priority));
+        }
+        // The lane is busy, so another lane's job, and a job of no lane, run right away.
+        streaming::BackgroundLane other{ service };
+        const streaming::BackgroundRequestHandle beside = other.Run([](std::string&) { return true; });
+        const streaming::BackgroundRequestHandle loose = service->Run([](std::string&) { return true; }, 0);
+        Require(streaming::BackgroundLoadService::WaitUntilDone(beside, Clock::now() + std::chrono::seconds{ 30 }) &&
+                streaming::BackgroundLoadService::WaitUntilDone(loose, Clock::now() + std::chrono::seconds{ 30 }),
+            "A busy lane held up jobs of other lanes");
+        Require(std::ranges::all_of(queued, [](const auto& job) { return job->State() == streaming::BackgroundRequestState::Queued; }),
+            "A lane started a second job while its first was running");
+        Require(service->Reprioritize(queued[0], 20), "A queued lane job could not be re-prioritised");   // 1 -> first
+        Require(service->Cancel(queued[2]), "A queued lane job could not be cancelled");                     // 3 never runs
+        gateOpen = true;
+        for (const streaming::BackgroundRequestHandle& job : queued) {
+            Require(streaming::BackgroundLoadService::WaitUntilDone(job, Clock::now() + std::chrono::seconds{ 30 }),
+                "A lane job never finished");
+        }
+        Require(!overlapped && order == std::vector<int>{ 1, 9, 7, 5 }, "A lane did not run its jobs one at a time by priority");
+
+        // CancelAndWait: the running job finishes before it returns, queued jobs never run.
+        gateEntered = false;
+        gateOpen = false;
+        std::atomic<bool> gateFinished{ false };
+        const streaming::BackgroundRequestHandle running = lane->Run([&](std::string&) {
+            gateEntered = true;
+            const bool opened = spinUntil([&] { return gateOpen.load(); });
+            gateFinished = true;
+            return opened;
+        });
+        Require(spinUntil([&] { return gateEntered.load(); }), "The lane's job never started");
+        std::atomic<bool> cancelledRan{ false };
+        const streaming::BackgroundRequestHandle cancelled = lane->Run([&](std::string&) {
+            cancelledRan = true;
+            return true;
+        });
+        std::atomic<bool> waited{ false };
+        std::thread owner{ [&] {
+            lane->CancelAndWait();
+            waited = true;
+        } };
+        Require(spinUntil([&] { return cancelled->State() == streaming::BackgroundRequestState::Cancelled; }),
+            "CancelAndWait did not cancel the lane's queued job");
+        std::this_thread::sleep_for(std::chrono::milliseconds{ 20 });
+        const bool returnedEarly = waited.load();
+        gateOpen = true;
+        owner.join();
+        Require(!returnedEarly && gateFinished && !cancelledRan && running->State() == streaming::BackgroundRequestState::Completed,
+            "CancelAndWait returned while the lane's job was running, or ran a cancelled job");
+        Require(lane->Run([](std::string&) { return true; }) != nullptr, "A lane was not usable after CancelAndWait");
+        lane.reset();
+        Require(service->QueuedCount() == 0U, "A closed lane left jobs queued");
+        const streaming::BackgroundLaneId closed = service->OpenLane();
+        service->CloseLane(closed);
+        std::atomic<bool> lateRan{ false };
+        const streaming::BackgroundRequestHandle late = service->Run([&](std::string&) {
+            lateRan = true;
+            return true;
+        }, 0, closed);
+        Require(late->State() == streaming::BackgroundRequestState::Cancelled && !lateRan,
+            "A closed lane accepted a job");
+    }
+
+    {
+        std::shared_ptr<streaming::BackgroundLoadService> first = streaming::BackgroundLoadService::Shared();
+        std::shared_ptr<streaming::BackgroundLoadService> second = streaming::BackgroundLoadService::Shared();
+        Require(first != nullptr && first == second, "The shared background load service is not one instance");
+        const std::weak_ptr<streaming::BackgroundLoadService> watched = first;
+        first.reset();
+        second.reset();
+        Require(watched.expired(), "The shared background load service outlived its last user");
+    }
     Purge(root);
 }
 
@@ -1841,18 +2014,18 @@ void PackBlocksStreamAsynchronously() {
     const kb::security::ReleaseSigningKey key = NewKey();
     Seal(path, key);
 
-    streaming::AsyncFileReader io{ {} };
+    streaming::BackgroundLoadService io{ {} };
     for (const bake::AssetPackAccess access : { bake::AssetPackAccess::Ranged, bake::AssetPackAccess::WholeFile }) {
         auto pack = std::make_shared<bake::RuntimeAssetPack>();
         Require(pack->Mount(path, profile, access, TrustOnly(key)) == bake::RuntimeAssetPackStatus::Success,
             "The streaming pack did not mount");
         bake::AssetPackReadStatus status = bake::AssetPackReadStatus::NotMounted;
         const Clock::time_point started = Clock::now();
-        const streaming::AsyncReadHandle request =
+        const streaming::BackgroundRequestHandle request =
             streaming::ReadPackBlockAsync(io, pack, mipArtifact, "mip0", 10, status);
         Require(status == bake::AssetPackReadStatus::Success && request != nullptr, "A streamed block could not be requested");
-        Require(streaming::AsyncFileReader::WaitUntilDone(request, started + std::chrono::seconds{ 30 }) &&
-                request->State() == streaming::AsyncReadState::Completed && request->Bytes() == mip,
+        Require(streaming::BackgroundLoadService::WaitUntilDone(request, started + std::chrono::seconds{ 30 }) &&
+                request->State() == streaming::BackgroundRequestState::Completed && request->Bytes() == mip,
             ("A streamed block did not arrive decoded: " + request->Error()).c_str());
         const double milliseconds =
             std::chrono::duration<double, std::milli>(request->FinishedAt() - request->SubmittedAt()).count();
@@ -1879,9 +2052,9 @@ void PackBlocksStreamAsynchronously() {
     Require(pack->Mount(tampered, profile, bake::AssetPackAccess::Ranged, TrustOnly(key)) == bake::RuntimeAssetPackStatus::Success,
         "A tampered streamed block damaged the catalogue");
     bake::AssetPackReadStatus status = bake::AssetPackReadStatus::NotMounted;
-    const streaming::AsyncReadHandle request = streaming::ReadPackBlockAsync(io, pack, mipArtifact, "mip0", 10, status);
-    Require(request != nullptr && streaming::AsyncFileReader::WaitUntilDone(request, Clock::now() + std::chrono::seconds{ 30 }) &&
-            request->State() == streaming::AsyncReadState::Failed && request->Bytes().empty() &&
+    const streaming::BackgroundRequestHandle request = streaming::ReadPackBlockAsync(io, pack, mipArtifact, "mip0", 10, status);
+    Require(request != nullptr && streaming::BackgroundLoadService::WaitUntilDone(request, Clock::now() + std::chrono::seconds{ 30 }) &&
+            request->State() == streaming::BackgroundRequestState::Failed && request->Bytes().empty() &&
             request->Error().find("PayloadCorrupt") != std::string::npos,
         "A tampered streamed block was handed out");
     pack->Unmount();
@@ -1904,6 +2077,7 @@ void RunContentStreamingTests() {
     EncryptedPackSetsKeepEachPacksKey();
     WorldRegionsParseForChunkRules();
     AsyncReadsFollowPriorityAndReturnExactRanges();
+    BackgroundJobsShareThePoolWithReads();
     StreamingStaysWithinItsBudget();
     PackBlocksStreamAsynchronously();
     Purge(Root());

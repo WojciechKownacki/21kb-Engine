@@ -1,9 +1,10 @@
-#include "engine/assets/streaming/AsyncFileReader.hpp"
+#include "engine/assets/streaming/BackgroundLoadService.hpp"
 
 #include "engine/platform/FileSystemPath.hpp"
 
 #include <algorithm>
 #include <cstring>
+#include <exception>
 #include <limits>
 #include <utility>
 
@@ -50,7 +51,7 @@ using AlignedBuffer = std::unique_ptr<std::uint8_t, AlignedBufferDeleter>;
 
 } // namespace
 
-class AsyncFileReader::FileHandle {
+class BackgroundLoadService::FileHandle {
 public:
     FileHandle() = default;
     FileHandle(const FileHandle&) = delete;
@@ -77,10 +78,12 @@ public:
     bool unbuffered = false;
 };
 
-AsyncFileReader::AsyncFileReader(AsyncFileReaderOptions options)
+BackgroundLoadService::BackgroundLoadService(BackgroundLoadServiceOptions options)
     : options_{ options } {
     options_.workerCount = std::clamp<std::uint32_t>(options_.workerCount, 1U, 16U);
     options_.requestsInFlightPerWorker = std::clamp<std::uint32_t>(options_.requestsInFlightPerWorker, 1U, 32U);
+    options_.jobWorkers = std::clamp<std::uint32_t>(
+        options_.jobWorkers, 1U, std::max<std::uint32_t>(1U, options_.workerCount - 1U));
 #if !defined(_WIN32)
     options_.requestsInFlightPerWorker = 1U;
 #endif
@@ -90,18 +93,28 @@ AsyncFileReader::AsyncFileReader(AsyncFileReaderOptions options)
     }
 }
 
-AsyncFileReader::~AsyncFileReader() {
+BackgroundLoadService::~BackgroundLoadService() {
     std::vector<QueueEntry> abandoned;
     {
         std::scoped_lock lock{ mutex_ };
         stopping_ = true;
-        abandoned = std::move(queue_);
-        queue_.clear();
+        abandoned = std::move(reads_);
+        reads_.clear();
+        abandoned.insert(abandoned.end(), std::make_move_iterator(jobs_.begin()), std::make_move_iterator(jobs_.end()));
+        jobs_.clear();
+        for (auto& [id, lane] : lanes_) {
+            static_cast<void>(id);
+            abandoned.insert(abandoned.end(), std::make_move_iterator(lane.parked.begin()),
+                std::make_move_iterator(lane.parked.end()));
+            lane.parked.clear();
+        }
     }
     wake_.notify_all();
     for (QueueEntry& entry : abandoned) {
-        AsyncReadState expected = AsyncReadState::Queued;
-        if (entry.request->state_.compare_exchange_strong(expected, AsyncReadState::Cancelled)) {
+        BackgroundRequestState expected = BackgroundRequestState::Queued;
+        if (entry.request->state_.compare_exchange_strong(expected, BackgroundRequestState::Cancelled)) {
+            entry.request->job_ = {};
+            entry.request->transform_ = {};
             entry.request->finishedAt_ = std::chrono::steady_clock::now();
         }
     }
@@ -110,13 +123,30 @@ AsyncFileReader::~AsyncFileReader() {
     }
 }
 
-AsyncReadHandle AsyncFileReader::Read(
+std::shared_ptr<BackgroundLoadService> BackgroundLoadService::Shared() {
+    // Never destroyed: a user releasing its handle during static destruction must still find
+    // the mutex. The service itself goes with its last handle.
+    struct Instance {
+        std::mutex mutex;
+        std::weak_ptr<BackgroundLoadService> service;
+    };
+    static Instance* const instance = new Instance{};
+    std::scoped_lock lock{ instance->mutex };
+    std::shared_ptr<BackgroundLoadService> service = instance->service.lock();
+    if (service == nullptr) {
+        service = std::make_shared<BackgroundLoadService>();
+        instance->service = service;
+    }
+    return service;
+}
+
+BackgroundRequestHandle BackgroundLoadService::Read(
     const std::filesystem::path& path,
     std::uint64_t offset,
     std::uint64_t length,
-    AsyncReadPriority priority,
-    AsyncReadTransform transform) {
-    auto request = std::make_shared<AsyncReadRequest>();
+    BackgroundPriority priority,
+    BackgroundReadTransform transform) {
+    auto request = std::make_shared<BackgroundRequest>();
     request->path_ = path;
     request->offset_ = offset;
     request->length_ = length;
@@ -124,13 +154,13 @@ AsyncReadHandle AsyncFileReader::Read(
     return Submit(std::move(request), priority);
 }
 
-AsyncReadHandle AsyncFileReader::ReadMemory(
+BackgroundRequestHandle BackgroundLoadService::ReadMemory(
     std::span<const std::uint8_t> memory,
     std::uint64_t offset,
     std::uint64_t length,
-    AsyncReadPriority priority,
-    AsyncReadTransform transform) {
-    auto request = std::make_shared<AsyncReadRequest>();
+    BackgroundPriority priority,
+    BackgroundReadTransform transform) {
+    auto request = std::make_shared<BackgroundRequest>();
     request->memory_ = memory;
     request->fromMemory_ = true;
     request->offset_ = offset;
@@ -139,76 +169,164 @@ AsyncReadHandle AsyncFileReader::ReadMemory(
     return Submit(std::move(request), priority);
 }
 
-AsyncReadHandle AsyncFileReader::Submit(AsyncReadHandle request, AsyncReadPriority priority) {
+BackgroundRequestHandle BackgroundLoadService::Run(BackgroundJob job, BackgroundPriority priority, BackgroundLaneId lane) {
+    auto request = std::make_shared<BackgroundRequest>();
+    request->job_ = std::move(job);
+    request->isJob_ = true;
+    request->lane_ = lane;
+    return Submit(std::move(request), priority);
+}
+
+BackgroundRequestHandle BackgroundLoadService::Submit(BackgroundRequestHandle request, BackgroundPriority priority) {
     request->priority_.store(priority, std::memory_order_relaxed);
     request->submittedAt_ = std::chrono::steady_clock::now();
     {
         std::scoped_lock lock{ mutex_ };
-        if (stopping_) {
-            request->error_ = "the reader is shutting down";
+        const bool laneClosed = request->lane_ != kNoBackgroundLane && !lanes_.contains(request->lane_);
+        if (stopping_ || laneClosed) {
+            request->error_ = stopping_ ? "the background load service is shutting down" : "the lane is closed";
+            request->job_ = {};
+            request->transform_ = {};
             request->finishedAt_ = request->submittedAt_;
-            request->state_.store(AsyncReadState::Cancelled, std::memory_order_release);
+            request->state_.store(BackgroundRequestState::Cancelled, std::memory_order_release);
             ++stats_.cancelled;
             return request;
         }
         request->sequence_ = nextSequence_++;
-        queue_.push_back(QueueEntry{ priority, request->sequence_, 0U, request });
-        std::push_heap(queue_.begin(), queue_.end(), QueueOrder{});
+        std::vector<QueueEntry>& queue = request->isJob_ ? jobs_ : reads_;
+        queue.push_back(QueueEntry{ priority, request->sequence_, 0U, request });
+        std::push_heap(queue.begin(), queue.end(), QueueOrder{});
     }
     wake_.notify_one();
     return request;
 }
 
-bool AsyncFileReader::Reprioritize(const AsyncReadHandle& request, AsyncReadPriority priority) {
+bool BackgroundLoadService::Reprioritize(const BackgroundRequestHandle& request, BackgroundPriority priority) {
     if (request == nullptr) {
         return false;
     }
-    std::scoped_lock lock{ mutex_ };
-    if (request->State() != AsyncReadState::Queued) {
-        return false;
+    {
+        std::scoped_lock lock{ mutex_ };
+        if (request->State() != BackgroundRequestState::Queued) {
+            return false;
+        }
+        // The old queue entry stays behind and is skipped by its stale generation: re-heaping a
+        // random element costs more than ignoring it once.
+        const std::uint64_t generation = request->generation_.fetch_add(1U, std::memory_order_relaxed) + 1U;
+        request->priority_.store(priority, std::memory_order_relaxed);
+        std::vector<QueueEntry>& queue = request->isJob_ ? jobs_ : reads_;
+        queue.push_back(QueueEntry{ priority, request->sequence_, generation, request });
+        std::push_heap(queue.begin(), queue.end(), QueueOrder{});
     }
-    // The old queue entry stays behind and is skipped by its stale generation: re-heaping a
-    // random element costs more than ignoring it once.
-    const std::uint64_t generation = request->generation_.fetch_add(1U, std::memory_order_relaxed) + 1U;
-    request->priority_.store(priority, std::memory_order_relaxed);
-    queue_.push_back(QueueEntry{ priority, request->sequence_, generation, request });
-    std::push_heap(queue_.begin(), queue_.end(), QueueOrder{});
+    // A job parked behind its lane is back in the queue; let a worker look at it.
+    wake_.notify_one();
     return true;
 }
 
-bool AsyncFileReader::Cancel(const AsyncReadHandle& request) {
+bool BackgroundLoadService::Cancel(const BackgroundRequestHandle& request) {
     if (request == nullptr) {
         return false;
     }
     std::scoped_lock lock{ mutex_ };
-    AsyncReadState expected = AsyncReadState::Queued;
-    if (!request->state_.compare_exchange_strong(expected, AsyncReadState::Cancelled, std::memory_order_acq_rel)) {
+    BackgroundRequestState expected = BackgroundRequestState::Queued;
+    if (!request->state_.compare_exchange_strong(expected, BackgroundRequestState::Cancelled, std::memory_order_acq_rel)) {
         return false;
     }
+    // No worker touches a request it did not take; drop what the work captured right away.
+    request->job_ = {};
+    request->transform_ = {};
     request->finishedAt_ = std::chrono::steady_clock::now();
     ++stats_.cancelled;
     return true;
 }
 
-void AsyncFileReader::Forget(const std::filesystem::path& path) {
+BackgroundLaneId BackgroundLoadService::OpenLane() {
+    std::scoped_lock lock{ mutex_ };
+    const BackgroundLaneId id = nextLane_++;
+    lanes_.emplace(id, Lane{});
+    return id;
+}
+
+void BackgroundLoadService::CloseLane(BackgroundLaneId lane) noexcept {
+    static_cast<void>(CancelLane(lane));
+    WaitForLane(lane);
+    std::scoped_lock lock{ mutex_ };
+    lanes_.erase(lane);
+}
+
+std::size_t BackgroundLoadService::CancelLane(BackgroundLaneId lane) noexcept {
+    if (lane == kNoBackgroundLane) {
+        return 0U;
+    }
+    std::scoped_lock lock{ mutex_ };
+    std::size_t cancelled = 0U;
+    const auto cancel = [&](QueueEntry& entry) {
+        BackgroundRequestState expected = BackgroundRequestState::Queued;
+        if (entry.request->state_.compare_exchange_strong(expected, BackgroundRequestState::Cancelled, std::memory_order_acq_rel)) {
+            entry.request->job_ = {};
+            entry.request->finishedAt_ = std::chrono::steady_clock::now();
+            ++stats_.cancelled;
+            ++cancelled;
+        }
+    };
+    const auto ofLane = [lane](const QueueEntry& entry) {
+        return entry.request->lane_ == lane;
+    };
+    for (QueueEntry& entry : jobs_) {
+        if (ofLane(entry)) {
+            cancel(entry);
+        }
+    }
+    if (std::erase_if(jobs_, ofLane) > 0U) {
+        std::make_heap(jobs_.begin(), jobs_.end(), QueueOrder{});
+    }
+    if (const auto found = lanes_.find(lane); found != lanes_.end()) {
+        for (QueueEntry& entry : found->second.parked) {
+            cancel(entry);
+        }
+        found->second.parked.clear();
+    }
+    return cancelled;
+}
+
+void BackgroundLoadService::WaitForLane(BackgroundLaneId lane) noexcept {
+    if (lane == kNoBackgroundLane) {
+        return;
+    }
+    std::unique_lock lock{ mutex_ };
+    laneIdle_.wait(lock, [this, lane] {
+        const auto found = lanes_.find(lane);
+        return found == lanes_.end() || !found->second.running;
+    });
+}
+
+void BackgroundLoadService::Forget(const std::filesystem::path& path) {
     std::scoped_lock lock{ filesMutex_ };
     files_.erase(path.native());
 }
 
-AsyncFileReaderStats AsyncFileReader::Stats() const {
+BackgroundLoadServiceStats BackgroundLoadService::Stats() const {
     std::scoped_lock lock{ mutex_ };
     return stats_;
 }
 
-std::size_t AsyncFileReader::QueuedCount() const {
-    std::scoped_lock lock{ mutex_ };
-    return static_cast<std::size_t>(std::ranges::count_if(queue_, [](const QueueEntry& entry) {
-        return entry.request->State() == AsyncReadState::Queued &&
-            entry.generation == entry.request->generation_.load(std::memory_order_relaxed);
-    }));
+bool BackgroundLoadService::IsLive(const QueueEntry& entry) noexcept {
+    return entry.request->State() == BackgroundRequestState::Queued &&
+        entry.generation == entry.request->generation_.load(std::memory_order_relaxed);
 }
 
-bool AsyncFileReader::WaitUntilDone(const AsyncReadHandle& request, std::chrono::steady_clock::time_point deadline) {
+std::size_t BackgroundLoadService::QueuedCount() const {
+    std::scoped_lock lock{ mutex_ };
+    std::size_t count = static_cast<std::size_t>(std::ranges::count_if(reads_, IsLive)) +
+        static_cast<std::size_t>(std::ranges::count_if(jobs_, IsLive));
+    for (const auto& [id, lane] : lanes_) {
+        static_cast<void>(id);
+        count += static_cast<std::size_t>(std::ranges::count_if(lane.parked, IsLive));
+    }
+    return count;
+}
+
+bool BackgroundLoadService::WaitUntilDone(const BackgroundRequestHandle& request, std::chrono::steady_clock::time_point deadline) {
     while (request != nullptr && !request->IsDone()) {
         if (std::chrono::steady_clock::now() >= deadline) {
             return false;
@@ -218,34 +336,73 @@ bool AsyncFileReader::WaitUntilDone(const AsyncReadHandle& request, std::chrono:
     return request != nullptr;
 }
 
-std::vector<AsyncReadHandle> AsyncFileReader::TakeBatch(std::size_t count) {
-    std::vector<AsyncReadHandle> batch;
+std::vector<BackgroundRequestHandle> BackgroundLoadService::TakeBatch(std::size_t count) {
+    std::vector<BackgroundRequestHandle> batch;
     std::unique_lock lock{ mutex_ };
     for (;;) {
-        while (!queue_.empty() && batch.size() < count) {
-            std::pop_heap(queue_.begin(), queue_.end(), QueueOrder{});
-            QueueEntry entry = std::move(queue_.back());
-            queue_.pop_back();
+        if (stopping_) {
+            return batch;
+        }
+        // A runnable job first while under the job limit: reads keep the other workers, and a
+        // steady stream of reads cannot starve the jobs.
+        while (jobsRunning_ < options_.jobWorkers && !jobs_.empty()) {
+            std::pop_heap(jobs_.begin(), jobs_.end(), QueueOrder{});
+            QueueEntry entry = std::move(jobs_.back());
+            jobs_.pop_back();
+            if (!IsLive(entry)) {
+                continue;
+            }
+            Lane* lane = nullptr;
+            if (entry.request->lane_ != kNoBackgroundLane) {
+                const auto found = lanes_.find(entry.request->lane_);
+                lane = found == lanes_.end() ? nullptr : &found->second;
+                if (lane != nullptr && lane->running) {
+                    lane->parked.push_back(std::move(entry));
+                    continue;
+                }
+            }
+            BackgroundRequestState expected = BackgroundRequestState::Queued;
+            if (!entry.request->state_.compare_exchange_strong(expected, BackgroundRequestState::InFlight, std::memory_order_acq_rel)) {
+                continue;
+            }
+            if (lane != nullptr) {
+                lane->running = true;
+            }
+            ++jobsRunning_;
+            stats_.peakJobsRunning = std::max(stats_.peakJobsRunning, jobsRunning_);
+            batch.push_back(std::move(entry.request));
+            return batch;
+        }
+        while (!reads_.empty() && batch.size() < count) {
+            std::pop_heap(reads_.begin(), reads_.end(), QueueOrder{});
+            QueueEntry entry = std::move(reads_.back());
+            reads_.pop_back();
             if (entry.generation != entry.request->generation_.load(std::memory_order_relaxed)) {
                 continue;
             }
-            AsyncReadState expected = AsyncReadState::Queued;
-            if (entry.request->state_.compare_exchange_strong(expected, AsyncReadState::InFlight, std::memory_order_acq_rel)) {
+            BackgroundRequestState expected = BackgroundRequestState::Queued;
+            if (entry.request->state_.compare_exchange_strong(expected, BackgroundRequestState::InFlight, std::memory_order_acq_rel)) {
                 batch.push_back(std::move(entry.request));
             }
         }
-        if (!batch.empty() || stopping_) {
+        if (!batch.empty()) {
             return batch;
         }
-        wake_.wait(lock, [this] { return stopping_ || !queue_.empty(); });
+        wake_.wait(lock, [this] {
+            return stopping_ || !reads_.empty() || (!jobs_.empty() && jobsRunning_ < options_.jobWorkers);
+        });
     }
 }
 
-void AsyncFileReader::WorkerLoop() {
+void BackgroundLoadService::WorkerLoop() {
     for (;;) {
-        std::vector<AsyncReadHandle> batch = TakeBatch(options_.requestsInFlightPerWorker);
+        std::vector<BackgroundRequestHandle> batch = TakeBatch(options_.requestsInFlightPerWorker);
         if (batch.empty()) {
             return;
+        }
+        if (batch.front()->isJob_) {
+            RunJob(batch.front());
+            continue;
         }
         const std::uint32_t inFlight =
             inFlight_.fetch_add(static_cast<std::uint32_t>(batch.size()), std::memory_order_acq_rel) +
@@ -259,7 +416,53 @@ void AsyncFileReader::WorkerLoop() {
     }
 }
 
-std::shared_ptr<AsyncFileReader::FileHandle> AsyncFileReader::AcquireFile(
+void BackgroundLoadService::RunJob(const BackgroundRequestHandle& request) {
+    bool succeeded = false;
+    std::string error;
+    try {
+        succeeded = request->job_(error);
+    } catch (const std::exception& exception) {
+        error = exception.what();
+        succeeded = false;
+    } catch (...) {
+        error = "the job threw a non-standard exception";
+        succeeded = false;
+    }
+    if (!succeeded) {
+        request->error_ = error.empty() ? "the job failed" : std::move(error);
+    }
+    // What the job captured goes before its lane reads as idle: an owner waiting on the lane may
+    // tear down what the captures refer to as soon as it wakes.
+    request->job_ = {};
+    request->finishedAt_ = std::chrono::steady_clock::now();
+    {
+        std::scoped_lock lock{ mutex_ };
+        if (succeeded) {
+            ++stats_.completed;
+        } else {
+            ++stats_.failed;
+        }
+        ++stats_.jobsRun;
+        --jobsRunning_;
+        if (request->lane_ != kNoBackgroundLane) {
+            if (const auto found = lanes_.find(request->lane_); found != lanes_.end()) {
+                Lane& lane = found->second;
+                lane.running = false;
+                for (QueueEntry& parked : lane.parked) {
+                    jobs_.push_back(std::move(parked));
+                    std::push_heap(jobs_.begin(), jobs_.end(), QueueOrder{});
+                }
+                lane.parked.clear();
+            }
+        }
+        request->state_.store(succeeded ? BackgroundRequestState::Completed : BackgroundRequestState::Failed,
+            std::memory_order_release);
+    }
+    wake_.notify_all();
+    laneIdle_.notify_all();
+}
+
+std::shared_ptr<BackgroundLoadService::FileHandle> BackgroundLoadService::AcquireFile(
     const std::filesystem::path& path,
     std::string& error) {
     std::scoped_lock lock{ filesMutex_ };
@@ -312,9 +515,9 @@ std::shared_ptr<AsyncFileReader::FileHandle> AsyncFileReader::AcquireFile(
     return file;
 }
 
-void AsyncFileReader::ServeBatch(std::vector<AsyncReadHandle>& batch) {
+void BackgroundLoadService::ServeBatch(std::vector<BackgroundRequestHandle>& batch) {
     struct Pending {
-        AsyncReadHandle request;
+        BackgroundRequestHandle request;
         std::shared_ptr<FileHandle> file;
         std::uint64_t alignedOffset = 0U;
         std::uint64_t alignedLength = 0U;
@@ -326,7 +529,7 @@ void AsyncFileReader::ServeBatch(std::vector<AsyncReadHandle>& batch) {
     };
     std::vector<Pending> pending;
     pending.reserve(batch.size());
-    for (AsyncReadHandle& request : batch) {
+    for (BackgroundRequestHandle& request : batch) {
         if (request->length_ > kMaxRequestBytes ||
             request->offset_ > std::numeric_limits<std::uint64_t>::max() - request->length_) {
             request->error_ = "the requested range is too large";
@@ -426,7 +629,7 @@ void AsyncFileReader::ServeBatch(std::vector<AsyncReadHandle>& batch) {
     }
 #else
     for (Pending& read : pending) {
-        AsyncReadRequest& request = *read.request;
+        BackgroundRequest& request = *read.request;
         request.bytes_.assign(static_cast<std::size_t>(request.length_), 0U);
         std::uint64_t done = 0U;
         bool succeeded = true;
@@ -455,7 +658,7 @@ void AsyncFileReader::ServeBatch(std::vector<AsyncReadHandle>& batch) {
 #endif
 }
 
-void AsyncFileReader::Finish(const AsyncReadHandle& request, bool succeeded) {
+void BackgroundLoadService::Finish(const BackgroundRequestHandle& request, bool succeeded) {
     if (succeeded && request->transform_) {
         std::string error;
         try {
@@ -482,7 +685,24 @@ void AsyncFileReader::Finish(const AsyncReadHandle& request, bool succeeded) {
             ++stats_.failed;
         }
     }
-    request->state_.store(succeeded ? AsyncReadState::Completed : AsyncReadState::Failed, std::memory_order_release);
+    request->state_.store(succeeded ? BackgroundRequestState::Completed : BackgroundRequestState::Failed, std::memory_order_release);
+}
+
+BackgroundLane::BackgroundLane(std::shared_ptr<BackgroundLoadService> service)
+    : service_{ std::move(service) },
+      id_{ service_->OpenLane() } {}
+
+BackgroundLane::~BackgroundLane() {
+    service_->CloseLane(id_);
+}
+
+BackgroundRequestHandle BackgroundLane::Run(BackgroundJob job, BackgroundPriority priority) {
+    return service_->Run(std::move(job), priority, id_);
+}
+
+void BackgroundLane::CancelAndWait() noexcept {
+    static_cast<void>(service_->CancelLane(id_));
+    service_->WaitForLane(id_);
 }
 
 } // namespace kb::assets::streaming

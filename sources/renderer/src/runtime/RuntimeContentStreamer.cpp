@@ -1,7 +1,7 @@
 #include "kb/render/runtime/RuntimeContentStreamer.hpp"
 
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
-#include "engine/assets/streaming/AsyncFileReader.hpp"
+#include "engine/assets/streaming/BackgroundLoadService.hpp"
 #include "engine/assets/streaming/PackBlockStream.hpp"
 #include "kb/render/bake/MeshBaker.hpp"
 #include "kb/render/bake/TextureBaker.hpp"
@@ -29,9 +29,9 @@ namespace streaming = kb::assets::streaming;
 
 // Async read priorities are integers; a priority in [0, 1] keeps six digits, and coarser levels
 // of one resource go first.
-[[nodiscard]] streaming::AsyncReadPriority ReadPriority(float priority, std::uint32_t level) noexcept {
-    return static_cast<streaming::AsyncReadPriority>(std::clamp(priority, 0.0F, 1.0F) * 1'000'000.0F) * 64 +
-        static_cast<streaming::AsyncReadPriority>(level);
+[[nodiscard]] streaming::BackgroundPriority ReadPriority(float priority, std::uint32_t level) noexcept {
+    return static_cast<streaming::BackgroundPriority>(std::clamp(priority, 0.0F, 1.0F) * 1'000'000.0F) * 64 +
+        static_cast<streaming::BackgroundPriority>(level);
 }
 
 } // namespace
@@ -61,7 +61,7 @@ struct RuntimeContentStreamer::Record {
 struct RuntimeContentStreamer::PendingLoad {
     std::uint64_t id = 0U;
     std::uint32_t level = 0U;
-    std::vector<streaming::AsyncReadHandle> reads;
+    std::vector<streaming::BackgroundRequestHandle> reads;
     std::chrono::steady_clock::time_point started{};
 };
 
@@ -69,29 +69,46 @@ RuntimeContentStreamer::RuntimeContentStreamer()
     : residency_{ RuntimeContentStreamingSettings{}.budgetBytes } {}
 
 RuntimeContentStreamer::~RuntimeContentStreamer() {
-    // The reader's destructor cancels what is queued and waits for what is in flight; the
-    // requests keep their packs alive until then.
+    // The service is shared: cancel what this streamer still has queued. A read already in
+    // flight finishes into its own handle, which keeps its pack alive until then.
+    if (reader_ != nullptr) {
+        for (const std::unique_ptr<PendingLoad>& load : pending_) {
+            for (const streaming::BackgroundRequestHandle& read : load->reads) {
+                static_cast<void>(reader_->Cancel(read));
+            }
+        }
+    }
     pending_.clear();
+    ForgetFiles();
     reader_.reset();
 }
 
 void RuntimeContentStreamer::Configure(const RuntimeContentStreamingSettings& settings) {
-    const bool readerChanged = settings.ioWorkers != settings_.ioWorkers ||
-        settings.readsInFlightPerWorker != settings_.readsInFlightPerWorker;
     settings_ = settings;
     residency_.SetBudget(settings.budgetBytes);
-    if (readerChanged && reader_ != nullptr && pending_.empty()) {
-        reader_.reset();
+}
+
+void RuntimeContentStreamer::EnsureReader(const kb::assets::bake::RuntimeAssetPack& pack) {
+    if (reader_ == nullptr) {
+        reader_ = streaming::BackgroundLoadService::Shared();
+    }
+    // The service keeps a file open once read; the files of every pack streamed from are let go
+    // when the streamer releases its resources, so a pack is never held open past its use.
+    for (std::uint32_t container = 0U; container < pack.ContainerCount(); ++container) {
+        const std::filesystem::path& path = pack.ContainerPath(container);
+        if (!path.empty() && std::ranges::find(files_, path) == files_.end()) {
+            files_.push_back(path);
+        }
     }
 }
 
-void RuntimeContentStreamer::EnsureReader() {
-    if (reader_ == nullptr) {
-        reader_ = std::make_unique<streaming::AsyncFileReader>(streaming::AsyncFileReaderOptions{
-            .workerCount = settings_.ioWorkers,
-            .requestsInFlightPerWorker = settings_.readsInFlightPerWorker,
-        });
+void RuntimeContentStreamer::ForgetFiles() noexcept {
+    if (reader_ != nullptr) {
+        for (const std::filesystem::path& path : files_) {
+            reader_->Forget(path);
+        }
     }
+    files_.clear();
 }
 
 void RuntimeContentStreamer::TrackTexture(
@@ -127,8 +144,8 @@ void RuntimeContentStreamer::TrackTexture(
     record->uploadedLevel = layout.streamedMipCount;
     record->levelData.resize(layout.streamedMipCount + 1U);
     textureIds_.emplace(key, id);
+    EnsureReader(*record->pack);
     records_.emplace(id, std::move(record));
-    EnsureReader();
 }
 
 void RuntimeContentStreamer::TrackMesh(
@@ -169,8 +186,8 @@ void RuntimeContentStreamer::TrackMesh(
     record->materialSlots = std::move(materialSlots);
     record->coarse = std::move(asset);
     meshIds_.emplace(key, id);
+    EnsureReader(*record->pack);
     records_.emplace(id, std::move(record));
-    EnsureReader();
 }
 
 bool RuntimeContentStreamer::IsTracking(RuntimeTextureAssetKey key) const noexcept {
@@ -207,7 +224,7 @@ void RuntimeContentStreamer::Forget(std::uint64_t id) noexcept {
     // is gone, and cancelling here keeps queued reads from being started at all.
     for (const std::unique_ptr<PendingLoad>& load : pending_) {
         if (load->id == id && reader_ != nullptr) {
-            for (const streaming::AsyncReadHandle& read : load->reads) {
+            for (const streaming::BackgroundRequestHandle& read : load->reads) {
                 static_cast<void>(reader_->Cancel(read));
             }
         }
@@ -329,7 +346,7 @@ void RuntimeContentStreamer::GatherFeedback(const RuntimeContentStreamingFrame& 
 
 void RuntimeContentStreamer::CollectLoads(std::uint64_t frame) {
     for (auto load = pending_.begin(); load != pending_.end();) {
-        const bool done = std::ranges::all_of((*load)->reads, [](const streaming::AsyncReadHandle& read) {
+        const bool done = std::ranges::all_of((*load)->reads, [](const streaming::BackgroundRequestHandle& read) {
             return read->IsDone();
         });
         if (!done) {
@@ -338,13 +355,13 @@ void RuntimeContentStreamer::CollectLoads(std::uint64_t frame) {
         }
         const auto record = records_.find((*load)->id);
         if (record != records_.end()) {
-            const bool succeeded = std::ranges::all_of((*load)->reads, [](const streaming::AsyncReadHandle& read) {
-                return read->State() == streaming::AsyncReadState::Completed;
+            const bool succeeded = std::ranges::all_of((*load)->reads, [](const streaming::BackgroundRequestHandle& read) {
+                return read->State() == streaming::BackgroundRequestState::Completed;
             });
             if (succeeded) {
                 std::vector<std::vector<std::uint8_t>> pieces;
                 pieces.reserve((*load)->reads.size());
-                for (const streaming::AsyncReadHandle& read : (*load)->reads) {
+                for (const streaming::BackgroundRequestHandle& read : (*load)->reads) {
                     pieces.push_back(std::move(read->Bytes()));
                 }
                 record->second->levelData[(*load)->level] = std::move(pieces);
@@ -386,10 +403,10 @@ void RuntimeContentStreamer::StartLoads(const kb::assets::streaming::StreamingPl
         load->level = planned.level;
         load->started = std::chrono::steady_clock::now();
         bool issued = true;
-        const streaming::AsyncReadPriority priority = ReadPriority(planned.priority, planned.level);
+        const streaming::BackgroundPriority priority = ReadPriority(planned.priority, planned.level);
         const auto read = [&](const kb::assets::bake::AssetBakeDigest& artifact, const std::string& block) {
             kb::assets::bake::AssetPackReadStatus status = kb::assets::bake::AssetPackReadStatus::NotMounted;
-            streaming::AsyncReadHandle handle =
+            streaming::BackgroundRequestHandle handle =
                 streaming::ReadPackBlockAsync(*reader_, record.pack, artifact, block, priority, status);
             if (handle == nullptr) {
                 issued = false;
@@ -406,7 +423,7 @@ void RuntimeContentStreamer::StartLoads(const kb::assets::streaming::StreamingPl
             }
         }
         if (!issued || load->reads.empty()) {
-            for (const streaming::AsyncReadHandle& handle : load->reads) {
+            for (const streaming::BackgroundRequestHandle& handle : load->reads) {
                 static_cast<void>(reader_->Cancel(handle));
             }
             ++counters_.failedLoads;
@@ -591,6 +608,7 @@ void RuntimeContentStreamer::ReleaseAll() noexcept {
     for (const std::uint64_t id : ids) {
         Forget(id);
     }
+    ForgetFiles();
 }
 
 std::int32_t RuntimeContentStreamer::UploadedLevel(RuntimeTextureAssetKey key) const noexcept {

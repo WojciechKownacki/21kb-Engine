@@ -5,12 +5,12 @@
 
 namespace kb::assets::streaming {
 
-AsyncReadHandle ReadPackBlockAsync(
-    AsyncFileReader& reader,
+BackgroundRequestHandle ReadPackBlockAsync(
+    BackgroundLoadService& reader,
     std::shared_ptr<const kb::assets::bake::RuntimeAssetPack> pack,
     const kb::assets::bake::AssetBakeDigest& artifact,
     std::string_view blockName,
-    AsyncReadPriority priority,
+    BackgroundPriority priority,
     kb::assets::bake::AssetPackReadStatus& status) {
     using kb::assets::bake::AssetPackReadStatus;
     if (pack == nullptr || !pack->IsMounted()) {
@@ -26,7 +26,7 @@ AsyncReadHandle ReadPackBlockAsync(
     const std::uint64_t length = location.block->storedBytes;
     const std::span<const std::uint8_t> resident = pack->ContainerResidentBytes(location.container);
     const std::filesystem::path path = pack->ContainerPath(location.container);
-    AsyncReadTransform decode = [pack, location](std::vector<std::uint8_t>& bytes, std::string& error) {
+    BackgroundReadTransform decode = [pack, location](std::vector<std::uint8_t>& bytes, std::string& error) {
         const AssetPackReadStatus decoded = pack->DecodeStoredArtifactBlock(location, bytes);
         if (decoded != AssetPackReadStatus::Success) {
             error = "pack block refused: " + std::string{ kb::assets::bake::ToString(decoded) };
