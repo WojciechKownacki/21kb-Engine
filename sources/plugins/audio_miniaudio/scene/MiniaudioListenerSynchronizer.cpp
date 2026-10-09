@@ -1,5 +1,7 @@
 #include "scene/MiniaudioListenerSynchronizer.hpp"
 
+#include "scene/MiniaudioAudioSpace.hpp"
+
 #include "engine/math/EngineMath.hpp"
 #include "engine/scene/AudioListenerComponent.hpp"
 #include "engine/scene/Scene.hpp"
@@ -77,7 +79,7 @@ void ScanListener(kb::scene::SceneEntity entity, const kb::scene::TransformCompo
 
 } // namespace
 
-MiniaudioListenerSynchronizer::State MiniaudioListenerSynchronizer::Sync(ma_engine& engine, kb::scene::SceneSystemContext& context) {
+MiniaudioListenerSynchronizer::State MiniaudioListenerSynchronizer::Sync(ma_engine& engine, kb::scene::SceneSystemContext& context, MiniaudioAudioSpace* space) {
     ListenerScan scan{
         .scene = &context.GetScene(),
         .localUser = kb::scene::SceneAudioListenerAccess::LocalUser(context.GetScene()),
@@ -89,7 +91,14 @@ MiniaudioListenerSynchronizer::State MiniaudioListenerSynchronizer::Sync(ma_engi
         return {};
     }
 
-    const kb::scene::Vec3 position = FiniteOrZero(scan.transform.worldPosition);
+    kb::scene::Vec3 shift{};
+    kb::scene::Vec3 position = FiniteOrZero(scan.transform.worldPosition);
+    if (space != nullptr) {
+        const kb::math::DVec3 world = context.Transforms().WorldTranslation(scan.entity, scan.transform);
+        shift = space->Follow(world);
+        previousPosition_ = previousPosition_ + shift;
+        position = FiniteOrZero(space->ToAudio(world));
+    }
     const kb::scene::Vec3 direction = NormalizeOr(
         Rotate(scan.transform.worldRotation, kb::scene::Vec3{ 0.0F, 0.0F, 1.0F }),
         kb::scene::Vec3{ 0.0F, 0.0F, 1.0F });
@@ -116,7 +125,7 @@ MiniaudioListenerSynchronizer::State MiniaudioListenerSynchronizer::Sync(ma_engi
     previousLocalUser_ = scan.localUser;
     previousPosition_ = position;
     hasPreviousPosition_ = true;
-    return State{ .active = true, .position = position };
+    return State{ .active = true, .position = position, .shift = shift };
 }
 
 void MiniaudioListenerSynchronizer::Disable(ma_engine& engine) noexcept {

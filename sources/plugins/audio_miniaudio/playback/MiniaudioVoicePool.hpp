@@ -14,6 +14,7 @@
 
 namespace kb::audio_miniaudio {
 
+class MiniaudioAudioSpace;
 class MiniaudioClipResolver;
 class MiniaudioOcclusionSampler;
 
@@ -31,6 +32,10 @@ public:
 
     void RemoveFinishedVoices() noexcept;
     void StopAll() noexcept;
+    // Positions go to the mixer relative to this audio space (world space without one).
+    void SetAudioSpace(const MiniaudioAudioSpace* space) noexcept { audioSpace_ = space; }
+    // Moves free-standing voices and the positions kept from earlier ticks with an audio origin move.
+    void ShiftPositions(kb::scene::Vec3 shift) noexcept;
     // LIB-149: per-tick sync for owner-attached voices (AudioPlayDesc::ownerEntityId != 0):
     // a live, active owner drives the voice's position from its world transform; a
     // destroyed/deactivated owner releases the voice immediately - even a looping or
@@ -68,6 +73,7 @@ public:
     void DispatchMarkers(kb::scene::Scene& scene);
 
 private:
+    const MiniaudioAudioSpace* audioSpace_ = nullptr;
     struct VoiceMarker {
         std::string name;
         float positionSeconds = 0.0F;
@@ -92,6 +98,8 @@ private:
         bool spatial = true;
         kb::scene::Vec3 previousOwnerPosition{};
         bool hasPreviousOwnerPosition = false;
+        // The audio-space position of a free-standing voice.
+        kb::scene::Vec3 position{};
         // LIB-152: named playback markers (see AddVoiceMarker/DispatchMarkers).
         std::vector<VoiceMarker> markers;
         std::unique_ptr<MiniaudioSound> sound;
