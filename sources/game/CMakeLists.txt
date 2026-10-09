@@ -271,6 +271,11 @@ if(BUILD_TESTING)
     add_test(NAME kb_game_packaged_trust
         COMMAND $<TARGET_FILE:kb_game_core_tests> --packaged-trust
     )
+    # Partitioned worlds: one build for kb_cli and kb_cooker, single-pack and region-chunk
+    # packaging, streaming from the packages. Three cooks; kept out of kb_game_core's budget.
+    add_test(NAME kb_game_partitioned_world
+        COMMAND $<TARGET_FILE:kb_game_core_tests> --partitioned-world
+    )
     set_tests_properties(kb_game_core PROPERTIES
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
         LABELS "game;runtime"
@@ -284,6 +289,11 @@ if(BUILD_TESTING)
     set_tests_properties(kb_game_packaged_trust PROPERTIES
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
         LABELS "game;runtime;packaging"
+        TIMEOUT 300
+    )
+    set_tests_properties(kb_game_partitioned_world PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        LABELS "game;runtime;packaging;world"
         TIMEOUT 300
     )
 

@@ -2111,9 +2111,6 @@ int main(int argc, char** argv) {
     RunWindowsRuntimeModulePackagingTests();
     RunNativeBehaviourPackagingTests();
     RunSceneMetaCookValidationTests();
-    RunWorldBuildAgreementTest();
-    RunPartitionedWorldCookTest();
-    RunChunkedWorldPackageTest();
     RunAuthoritativeMaterialGraphCookTest();
     RunNarrowingTests();
     RunSettingsTests();
