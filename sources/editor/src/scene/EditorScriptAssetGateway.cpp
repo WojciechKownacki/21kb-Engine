@@ -71,13 +71,14 @@ struct NativeSdk {
     std::filesystem::path compilerEnvironment;
     std::string toolsetVersion;
 
-    [[nodiscard]] std::array<std::filesystem::path, 5> Libraries() const {
+    [[nodiscard]] std::array<std::filesystem::path, 6> Libraries() const {
         return {
             (buildTree / "engine" / configFolder / "kb_engine.lib").lexically_normal(),
             (buildTree / "third_party/flecs" / configFolder / "flecs_static.lib").lexically_normal(),
             (buildTree / configFolder / "kb_lua.lib").lexically_normal(),
             (buildTree / configFolder / "kb_ufbx.lib").lexically_normal(),
             (buildTree / configFolder / "kb_monocypher.lib").lexically_normal(),
+            (buildTree / configFolder / "kb_zstd.lib").lexically_normal(),
         };
     }
 };
@@ -238,7 +239,7 @@ void FindCompilerEnvironment(NativeSdk& sdk) {
 }
 
 [[nodiscard]] std::string NativeCmake(std::string_view name, const NativeSdk& sdk) {
-    const std::array<std::filesystem::path, 5> libraries = sdk.Libraries();
+    const std::array<std::filesystem::path, 6> libraries = sdk.Libraries();
     const std::string target{ name };
     // KB_ENGINE_SDK_ROOT, when set at configure time, names an engine checkout with a multi-config build.
     return "cmake_minimum_required(VERSION 3.25)\n"
@@ -250,7 +251,8 @@ void FindCompilerEnvironment(NativeSdk& sdk) {
         "        \"${KB_NATIVE_SDK}/build/third_party/flecs/Release/flecs_static.lib\"\n"
         "        \"${KB_NATIVE_SDK}/build/Release/kb_lua.lib\"\n"
         "        \"${KB_NATIVE_SDK}/build/Release/kb_ufbx.lib\"\n"
-        "        \"${KB_NATIVE_SDK}/build/Release/kb_monocypher.lib\")\n"
+        "        \"${KB_NATIVE_SDK}/build/Release/kb_monocypher.lib\"\n"
+        "        \"${KB_NATIVE_SDK}/build/Release/kb_zstd.lib\")\n"
         "else()\n"
         "    set(KB_NATIVE_SDK \"" + sdk.root.generic_string() + "\")\n"
         "    set(KB_NATIVE_LIBRARIES\n"
@@ -258,7 +260,8 @@ void FindCompilerEnvironment(NativeSdk& sdk) {
         "        \"" + libraries[1].generic_string() + "\"\n"
         "        \"" + libraries[2].generic_string() + "\"\n"
         "        \"" + libraries[3].generic_string() + "\"\n"
-        "        \"" + libraries[4].generic_string() + "\")\n"
+        "        \"" + libraries[4].generic_string() + "\"\n"
+        "        \"" + libraries[5].generic_string() + "\")\n"
         "endif()\n"
         "foreach(library IN LISTS KB_NATIVE_LIBRARIES)\n"
         "    if(NOT EXISTS \"${library}\")\n"
