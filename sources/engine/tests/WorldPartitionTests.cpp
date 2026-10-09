@@ -18,6 +18,7 @@
 #include "engine/world/WorldDescriptor.hpp"
 #include "engine/world/WorldEditSession.hpp"
 #include "engine/world/WorldObjectFile.hpp"
+#include "engine/world/WorldPackChunks.hpp"
 #include "engine/world/WorldPartitionGrid.hpp"
 #include "engine/world/WorldPartitionRuntime.hpp"
 #include "scene/asset/io/SceneAssetBinaryIO.hpp"
@@ -207,13 +208,16 @@ void RunFormatTests() {
     descriptor.guid = "g";
     descriptor.name = "World";
     descriptor.cellSize = 256.0;
+    descriptor.regionCells = 4U;
     descriptor.objectsDirectory = "World.objects";
     descriptor.dataLayers = { { .name = "night", .initiallyActive = false } };
     descriptor.tagDefinitions = { "Player", "Tree" };
     const std::string text = WorldDescriptorIO::Serialize(descriptor);
     const WorldDescriptorReadResult parsed = WorldDescriptorIO::Parse(text);
     Check(parsed.succeeded && WorldDescriptorIO::Serialize(parsed.descriptor) == text, "world descriptor round trips byte for byte");
-    Check(parsed.descriptor.dataLayers.size() == 1U && !parsed.descriptor.dataLayers[0].initiallyActive && parsed.descriptor.tagDefinitions[1] == "Tree",
+    Check(parsed.descriptor.dataLayers.size() == 1U && !parsed.descriptor.dataLayers[0].initiallyActive && parsed.descriptor.tagDefinitions[1] == "Tree" &&
+        parsed.descriptor.regionCells == 4U && WorldDescriptorIO::Parse("{\"schema\":\"21kb.world/v1\",\"guid\":\"g\",\"name\":\"n\","
+            "\"objects\":\"o\",\"cellSize\":64}").descriptor.regionCells == 16U,
         "world descriptor keeps layers and tags");
     WorldDescriptor invalid = descriptor;
     invalid.dataLayers.push_back({ .name = "night", .initiallyActive = true });
@@ -430,11 +434,11 @@ void RunBuildTests() {
     std::map<std::string, const WorldCellUnit*> units;
     for (const WorldCellUnit& unit : index.index.units) units[unit.scene] = &unit;
     Check(index.index.units.size() == 27U, "one unit per cell and layer: " + std::to_string(index.index.units.size()));
-    Check(units.contains("layer.night/c_0_0.21kbscene") && units.contains("base/persistent.21kbscene") &&
+    Check(units.contains("layer.night/r_0_0/c_0_0.21kbscene") && units.contains("base/persistent.21kbscene") &&
         units.at("base/persistent.21kbscene")->persistent, "layers and always-loaded objects get their own units");
     const WorldObjectFile* anchor = nullptr;
     for (const WorldObjectFile& object : fixture.placed) if (object.header.name == "Anchor") anchor = &object;
-    const std::string linkedScene = anchor->header.guid < MakeDeterministicWorldObjectGuid("swing") ? "base/c_1_0.21kbscene" : "base/c_2_0.21kbscene";
+    const std::string linkedScene = anchor->header.guid < MakeDeterministicWorldObjectGuid("swing") ? "base/r_0_0/c_1_0.21kbscene" : "base/r_0_0/c_2_0.21kbscene";
     Check(units.contains(linkedScene) && units.at(linkedScene)->objectCount >= 2U, "linked objects share their lead object's cell");
     for (const WorldCellUnit& unit : index.index.units) {
         const scene::SceneDocumentLoadResult cell = scene::SceneDocumentService::Load(WorldPaths::CellsDirectory(fixture.descriptor) / unit.scene);
@@ -447,13 +451,36 @@ void RunBuildTests() {
         std::abs(centre->instances[1].transform[9] - 51.0) < 1e-9 && centre->instances[1].rendererMaterial == 9U,
         "HLOD instances carry cell-local transforms and their materials");
     Check(index.index.hlods.front().materials.front() == 0xF00DF00DF00DF00DULL, "HLOD materials reach the index");
+    Check(index.index.regionCells == 16U && std::ranges::all_of(index.index.hlods, [](const WorldCellHlod& hlod) {
+        return hlod.mesh.starts_with(hlod.coord.x < 0 ? (hlod.coord.z < 0 ? "hlod/r_-1_-1/" : "hlod/r_-1_0/") : (hlod.coord.z < 0 ? "hlod/r_0_-1/" : "hlod/r_0_0/"));
+    }), "cells and proxies are grouped in 16 x 16 cell region folders");
+
+    // One pack chunk per region, every layer of the region together; the always-loaded unit
+    // stays in the base pack; files an explicit rule claims are left to it.
+    const WorldRegionChunksResult regions = CollectWorldRegionChunks(fixture.root, {});
+    Check(regions.succeeded && regions.chunks.size() == 4U, "every region of the world gets a chunk: " + regions.error);
+    const auto centreChunk = std::ranges::find(regions.chunks, std::string{ "Forest.r_0_0" }, &WorldRegionChunk::label);
+    Check(centreChunk != regions.chunks.end() && centreChunk->prefixes == std::vector<std::string>{ "/Game/Worlds/Forest.cells/base/r_0_0/",
+        "/Game/Worlds/Forest.cells/hlod/r_0_0/", "/Game/Worlds/Forest.cells/layer.night/r_0_0/" }, "a region chunk names each of its folders");
+    for (const WorldRegionChunk& chunk : regions.chunks) {
+        for (const std::string& prefix : chunk.prefixes) {
+            Check(prefix.find("persistent") == std::string::npos, "always-loaded units ship in the base pack");
+        }
+    }
+    const std::vector<std::string> excluded{ "/Game/Worlds/Forest.cells/layer.night/", "/Game/Worlds/Forest.cells/base/r_-1_-1/",
+        "/Game/Worlds/Forest.cells/hlod/r_-1_-1/" };
+    const WorldRegionChunksResult rest = CollectWorldRegionChunks(fixture.root, excluded);
+    Check(rest.succeeded && rest.chunks.size() == 3U &&
+        std::ranges::none_of(rest.chunks, [](const WorldRegionChunk& chunk) { return chunk.label == "Forest.r_-1_-1"; }) &&
+        std::ranges::find(rest.chunks, std::string{ "Forest.r_0_0" }, &WorldRegionChunk::label)->prefixes.size() == 2U,
+        "files claimed by other rules leave the region chunks");
 
     // A rebuild replaces the output: removed objects leave no stale cells.
     std::filesystem::remove(fixture.objects / (fixture.placed.front().header.guid + ".21kbobject"));
     Check(WorldCellBuilder::Build(fixture.descriptor, nullptr).succeeded, "rebuild without HLOD");
     const WorldCellIndexReadResult rebuilt = WorldCellIndexIO::Read(WorldPaths::CellIndexPath(fixture.descriptor));
     Check(rebuilt.succeeded && rebuilt.index.units.size() == 26U && rebuilt.index.hlods.empty() &&
-        !std::filesystem::exists(WorldPaths::CellsDirectory(fixture.descriptor) / "base/c_-2_-2.21kbscene") &&
+        !std::filesystem::exists(WorldPaths::CellsDirectory(fixture.descriptor) / "base/r_-1_-1/c_-2_-2.21kbscene") &&
         !std::filesystem::exists(WorldPaths::CellsDirectory(fixture.descriptor) / "hlod"), "stale cells and proxies are removed");
 
     // Broken links and undeclared layers fail the build with a clear message.

@@ -348,7 +348,8 @@ def _validate_content_packaging(args: argparse.Namespace) -> None:
     if len(set(labels)) != len(labels):
         raise PackagingError("every --pack-chunk needs its own label")
     windows = TARGETS[args.target].platform == "windows"
-    if args.pack_chunk_rules and not windows:
+    world_regions = getattr(args, "pack_chunk_world_regions", False)
+    if (args.pack_chunk_rules or world_regions) and not windows:
         raise PackagingError("chunked pack sets are packaged for Windows players only")
     args.patch_base_entries = None
     if args.patch_from is None:
@@ -357,7 +358,7 @@ def _validate_content_packaging(args: argparse.Namespace) -> None:
         return
     if not windows:
         raise PackagingError("patch packs are packaged for Windows players only")
-    if args.pack_chunk_rules:
+    if args.pack_chunk_rules or world_regions:
         raise PackagingError("a patch keeps the chunks of the release it patches; --pack-chunk does not apply")
     if args.encrypt_pack:
         raise PackagingError(
@@ -755,12 +756,32 @@ def _kb_cli(args: argparse.Namespace, cmake: Path) -> Path:
     return _build_tool_path(args.build_root, configuration, "kb_cli")
 
 
+def _world_region_chunk_rules(
+    args: argparse.Namespace, kb_cli: Path, job: Path, explicit: Sequence[tuple[str, tuple[str, ...]]]
+) -> list[tuple[str, tuple[str, ...]]]:
+    """One chunk per region of every partitioned world the cook built into the project snapshot
+    (--pack-chunk-world-regions). Files an explicit --pack-chunk already claims stay with it."""
+    command: list[Path | str] = [kb_cli, "world", "chunks", "--project", Path(args.snapshot_project).parent]
+    excluded = [prefix for _, prefixes in explicit for prefix in prefixes]
+    if excluded:
+        command.extend(("--exclude", ",".join(excluded)))
+    result = run_checked(command, cwd=job, timeout_seconds=600)
+    rules = [_parse_chunk_rule(line[len("chunk "):]) for line in result.output.splitlines() if line.startswith("chunk ")]
+    labels = {label for label, _ in explicit}
+    for label, _ in rules:
+        if label in labels:
+            raise PackagingError(f"--pack-chunk label {label} is also the label of a world region chunk")
+    return rules
+
+
 def _build_pack_set(args: argparse.Namespace, cmake: Path, pack: Path, job: Path) -> PackSet:
     """Turns the cooked pack into what the package ships: the pack itself; a base pack and chunk
     packs split off by world cell or data layer (--pack-chunk); or, for a patch release
     (--patch-from), the packs of the release being patched plus one patch pack carrying what the
     new cook changed. The new pack set is recorded on `args` for the Windows stage."""
-    chunk_rules = getattr(args, "pack_chunk_rules", None) or []
+    chunk_rules = list(getattr(args, "pack_chunk_rules", None) or [])
+    if getattr(args, "pack_chunk_world_regions", False):
+        chunk_rules.extend(_world_region_chunk_rules(args, _kb_cli(args, cmake), job, chunk_rules))
     if not chunk_rules and getattr(args, "patch_base_entries", None) is None:
         pack_set = PackSet((pack,), ((pack, "Game.kbpack"),), None)
         args.pack_set = pack_set
@@ -2173,6 +2194,8 @@ def _parse_arguments(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--encrypt-pack", action="store_true")
     parser.add_argument("--pack-compression-level", type=int, default=DEFAULT_PACK_COMPRESSION_LEVEL)
     parser.add_argument("--pack-chunk", action="append", default=[], metavar="LABEL=/Game/PREFIX[,...]")
+    parser.add_argument("--pack-chunk-world-regions", action="store_true",
+                        help="put every region of every partitioned world into a chunk pack of its own")
     parser.add_argument("--patch-from", type=Path)
     parser.add_argument("--patch-level", type=int)
     parser.add_argument("--release-number", type=int)
@@ -2222,6 +2245,7 @@ def package(args: argparse.Namespace) -> None:
             emit_stage("Validate", 5, f"Validating {args.target} {args.configuration}")
             project_fingerprint = _project_source_fingerprint(args.project)
             snapshot_project = _copy_project_snapshot(args.project, job / "project")
+            args.snapshot_project = snapshot_project
             engine_fingerprint = _engine_fingerprint(args.engine_root)
             args.engine_fingerprint = engine_fingerprint
             cooker, validator = _ensure_host_tools(args, cmake)

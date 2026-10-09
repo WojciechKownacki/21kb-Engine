@@ -72,6 +72,8 @@ Commands:
                  build --world <file.21kbworld> [--project <dir>]
                build writes the cells, the cell index and the HLOD proxies,
                exactly as the editor and kb_cooker do.
+                 chunks --project <dir> [--exclude <prefix>[,<prefix>...]]
+               chunks prints one pack chunk rule per region of every built world.
 
 Scene paths may be physical (relative to the project root) or virtual
 ("/Game/Scenes/Main.21kbscene", requires --project).

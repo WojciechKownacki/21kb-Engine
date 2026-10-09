@@ -253,6 +253,62 @@ class PackageGameTests(unittest.TestCase):
             self.assertEqual(snapshot, command[command.index("--project") + 1])
             self.assertTrue(snapshot.is_relative_to(job))
 
+    def test_world_regions_become_chunk_packs_after_explicit_chunks(self) -> None:
+        # --pack-chunk-world-regions asks kb_cli for one rule per region of every world the cook
+        # built into the snapshot, passing the explicit rules' prefixes so their files stay with
+        # them, and splits the cooked pack with the explicit rules first.
+        with tempfile.TemporaryDirectory() as temporary_text:
+            root = Path(temporary_text)
+            job = root / "job"
+            (job / "cook").mkdir(parents=True)
+            pack = job / "cook" / "Game.kbpack"
+            pack.write_bytes(b"cooked")
+            args = argparse.Namespace(
+                target="Windows.x64",
+                pack_compression_level=9,
+                pack_chunk=["night=/Game/Worlds/Forest.cells/layer.night/"],
+                pack_chunk_world_regions=True,
+                patch_from=None,
+                patch_level=None,
+                encrypt_pack=False,
+                snapshot_project=job / "project" / "Project.21kbproject",
+            )
+            package_game._validate_content_packaging(args)
+            calls: list[list[str]] = []
+
+            def fake_run(command, **_kwargs):
+                argv = [os.fspath(value) for value in command]
+                calls.append(argv)
+                if argv[1:3] == ["world", "chunks"]:
+                    return package_contract.ProcessResult(
+                        "chunk Forest.r_0_0=/Game/Worlds/Forest.cells/base/r_0_0/,/Game/Worlds/Forest.cells/hlod/r_0_0/\n"
+                        "chunk Forest.r_-1_2=/Game/Worlds/Forest.cells/base/r_-1_2/\n", 0.0)
+                for name in ("Game.kbpack", "Game.night.kbpack", "Game.Forest.r_0_0.kbpack", "Game.Forest.r_-1_2.kbpack"):
+                    (job / "cook" / name).write_bytes(b"pack")
+                (job / "cook" / package_game.PACK_SET_INDEX).write_text("21kb-pack-set 1\n", encoding="utf-8")
+                return package_contract.ProcessResult("", 0.0)
+
+            with mock.patch.object(package_game, "_kb_cli", return_value=root / "kb_cli.exe"), \
+                    mock.patch.object(package_game, "run_checked", side_effect=fake_run):
+                pack_set = package_game._build_pack_set(args, root / "cmake", pack, job)
+
+            chunks_call, split_call = calls
+            self.assertEqual(job / "project", Path(chunks_call[chunks_call.index("--project") + 1]))
+            self.assertEqual("/Game/Worlds/Forest.cells/layer.night/", chunks_call[chunks_call.index("--exclude") + 1])
+            rules = [split_call[index + 1] for index, value in enumerate(split_call) if value == "--chunk"]
+            self.assertEqual([
+                "night=/Game/Worlds/Forest.cells/layer.night/",
+                "Forest.r_0_0=/Game/Worlds/Forest.cells/base/r_0_0/,/Game/Worlds/Forest.cells/hlod/r_0_0/",
+                "Forest.r_-1_2=/Game/Worlds/Forest.cells/base/r_-1_2/",
+            ], rules)
+            self.assertEqual(4, len(pack_set.new_packs))
+
+    def test_world_region_chunks_are_windows_only_and_not_patches(self) -> None:
+        base = dict(pack_compression_level=9, pack_chunk=[], pack_chunk_world_regions=True, patch_from=None,
+                    patch_level=None, encrypt_pack=False)
+        with self.assertRaises(package_game.PackagingError):
+            package_game._validate_content_packaging(argparse.Namespace(target="Linux.x64", **base))
+
     def test_windows_cook_requests_custom_module_staging(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_text:
             root = Path(temporary_text)

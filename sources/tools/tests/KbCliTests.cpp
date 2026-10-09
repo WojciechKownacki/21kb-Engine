@@ -2717,6 +2717,11 @@ void RunWorldCommandTests() {
     const CommandRun orphan = Run(&kb::cli::RunWorldCommand, { "build", "--project", (TestRoot() / "world_without_project").string(),
         "--world", (TestRoot() / "world_without_project" / "Level.21kbworld").string() });
     Require(orphan.exitCode == 1 && Contains(orphan.output, "--project"), "a folder without a project file is not a project");
+    const CommandRun chunks = Run(&kb::cli::RunWorldCommand, { "chunks", "--project", rootText });
+    Require(chunks.exitCode == 0 && Contains(chunks.output, "chunk Level.r_0_0=/Game/Level.cells/base/r_0_0/,/Game/Level.cells/hlod/r_0_0/"),
+        chunks.output.c_str());
+    const CommandRun claimed = Run(&kb::cli::RunWorldCommand, { "chunks", "--project", rootText, "--exclude", "/Game/Level.cells/" });
+    Require(claimed.exitCode == 0 && !Contains(claimed.output, "chunk "), "excluded world files must not form chunks");
     const CommandRun unknown = Run(&kb::cli::RunWorldCommand, { "explode" });
     Require(unknown.exitCode == 1, "world accepted an unknown subcommand");
 }

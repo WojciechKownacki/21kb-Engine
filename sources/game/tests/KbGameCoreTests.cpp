@@ -38,6 +38,7 @@
 #include "engine/world/WorldCellIndex.hpp"
 #include "engine/world/WorldDescriptor.hpp"
 #include "engine/world/WorldObjectFile.hpp"
+#include "engine/world/WorldPackChunks.hpp"
 #include "engine/world/WorldPartitionRuntime.hpp"
 #include "CliCommands.hpp"
 #include "engine/security/ReleaseKeys.hpp"
@@ -1101,7 +1102,7 @@ struct PartitionedWorldFixture {
 
 // A project whose default map places Forest.21kbworld: 64 m cells, three rocks with a mesh along
 // X, a night-only lamp, HLOD proxies enabled.
-[[nodiscard]] PartitionedWorldFixture BuildPartitionedWorldFixture(std::string_view name) {
+[[nodiscard]] PartitionedWorldFixture BuildPartitionedWorldFixture(std::string_view name, std::uint32_t regionCells = 16U) {
     const Fixture fixture = BuildFixture(TestRoot() / name, "Project");
     WriteTextFile(fixture.root / "Assets" / "Meshes" / "Rock.obj",
         "v 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\nvt 0 0\nvt 1 0\nvt 1 1\nvt 0 1\nvn 0 0 1\n"
@@ -1115,6 +1116,7 @@ struct PartitionedWorldFixture {
     descriptor.objectsDirectory = "Forest.objects";
     descriptor.dataLayers = { { .name = "night", .initiallyActive = false } };
     descriptor.hlod = { .enabled = true, .range = 512.0, .triangleRatio = 0.5 };
+    descriptor.regionCells = regionCells;
     std::string error;
     Require(kb::world::WorldDescriptorIO::Write(descriptorPath, descriptor, error), "World fixture descriptor could not be written");
     const auto writeObject = [&](const std::string& name, double x, const std::string& layer) {
@@ -1229,11 +1231,11 @@ void RunPartitionedWorldCookTest() {
         kb::assets::AssetManager& manager = runtime.Assets().Manager();
         Require(manager.MountRuntimePack(pack), "Partitioned world package registry mount failed");
         for (const char* path : { "/Game/Worlds/Forest.21kbworld", "/Game/Worlds/Forest.cells/Forest.21kbcells",
-                 "/Game/Worlds/Forest.cells/base/c_0_0.21kbscene", "/Game/Worlds/Forest.cells/base/c_2_0.21kbscene",
-                 "/Game/Worlds/Forest.cells/layer.night/c_0_0.21kbscene", "/Game/Worlds/Forest.cells/hlod/h_1_0.obj" }) {
+                 "/Game/Worlds/Forest.cells/base/r_0_0/c_0_0.21kbscene", "/Game/Worlds/Forest.cells/base/r_0_0/c_2_0.21kbscene",
+                 "/Game/Worlds/Forest.cells/layer.night/r_0_0/c_0_0.21kbscene", "/Game/Worlds/Forest.cells/hlod/r_0_0/h_1_0.obj" }) {
             Require(manager.Registry().FindByPath(path) != nullptr, (std::string{ "The package is missing " } + path).c_str());
         }
-        Require(manager.Registry().FindByPath("/Game/Worlds/Forest.cells/hlod/h_1_0.obj")->type == "RenderMesh",
+        Require(manager.Registry().FindByPath("/Game/Worlds/Forest.cells/hlod/r_0_0/h_1_0.obj")->type == "RenderMesh",
             "The HLOD proxy was not packaged as a mesh");
         const kb::scene::SceneObject owner = runtime.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Forest" });
         runtime.Components().ContentInstances().Set(owner.Entity(), kb::scene::ContentInstanceComponent{
@@ -1250,6 +1252,79 @@ void RunPartitionedWorldCookTest() {
         Require(world.CellState(owner.Entity(), { 2, 0 }) == kb::world::WorldCellState::Unloaded &&
                 world.CellState(owner.Entity(), { 0, 0 }, "night") == kb::world::WorldCellState::Unloaded,
             "The packaged world streamed cells outside the source or an inactive layer");
+    }
+    pack->Unmount();
+}
+
+// A big world need not ship as one pack: every region goes to a chunk pack of its own (the rules
+// kb_cli world chunks prints and package_game.py --pack-chunk-world-regions applies), and the
+// packaged runtime mounts the pack set and streams each cell out of its region's chunk.
+void RunChunkedWorldPackageTest() {
+    namespace bake = kb::assets::bake;
+    const PartitionedWorldFixture world = BuildPartitionedWorldFixture("chunked_world", 1U);
+    const std::filesystem::path work = TestRoot() / "chunked_world_work";
+    std::ostringstream diagnostics;
+    const kb::game::ProjectCookResult cooked = kb::game::CookProject(
+        kb::game::ProjectCookRequest{ .projectPath = world.fixture.root, .targetProfileId = "Windows.x64",
+            .outputPackPath = work / "Game.kbpack", .packCompressionLevel = 9 },
+        diagnostics);
+    Require(cooked.succeeded, cooked.error.c_str());
+
+    const kb::world::WorldRegionChunksResult regions = kb::world::CollectWorldRegionChunks(world.fixture.root / "Assets", {});
+    Require(regions.succeeded && regions.chunks.size() == 3U, "every region of the world must become a chunk");
+    const std::filesystem::path release = TestRoot() / "chunked_world_release";
+    std::filesystem::create_directories(release);
+    std::vector<bake::AssetPackChunkRule> rules;
+    std::string index = "21kb-pack-set 1\nbase Game.kbpack\n";
+    for (const kb::world::WorldRegionChunk& chunk : regions.chunks) {
+        const std::string file = "Game." + chunk.label + ".kbpack";
+        rules.push_back({ .label = chunk.label, .virtualPathPrefixes = chunk.prefixes, .output = release / file });
+        index += "chunk " + chunk.label + " " + file + "\n";
+    }
+    bake::AssetPackSplitReport split{};
+    std::string error;
+    const bool splitOk = bake::SplitRuntimeAssetPack(
+        work / "Game.kbpack", release / "Game.kbpack", rules, bake::AssetPackBlockCompression::Zstd, 9, split, error);
+    Require(splitOk, error.c_str());
+    WriteTextFile(release / "Game.kbpackset", index);
+
+    auto pack = std::make_shared<bake::RuntimeAssetPack>();
+    Require(pack->MountSetIndex(release / "Game.kbpackset", bake::WindowsX64BakeTargetProfile()) == bake::RuntimeAssetPackStatus::Success &&
+            pack->ContainerCount() == 4U,
+        "The chunked world pack set does not mount");
+    const auto containerOf = [&](const char* path) {
+        const bake::RuntimeAssetManifestEntry* entry = pack->FindAsset(std::string_view{ path });
+        return entry == nullptr ? std::optional<std::uint32_t>{} : pack->AssetContainer(entry->id);
+    };
+    const std::optional<std::uint32_t> first = containerOf("/Game/Worlds/Forest.cells/base/r_0_0/c_0_0.21kbscene");
+    const std::optional<std::uint32_t> last = containerOf("/Game/Worlds/Forest.cells/base/r_2_0/c_2_0.21kbscene");
+    Require(first.has_value() && last.has_value() && *first != 0U && *last != 0U && *first != *last &&
+            containerOf("/Game/Worlds/Forest.cells/hlod/r_2_0/h_2_0.obj") == last &&
+            containerOf("/Game/Worlds/Forest.cells/layer.night/r_0_0/c_0_0.21kbscene") == first &&
+            containerOf("/Game/Worlds/Forest.cells/Forest.21kbcells") == std::optional<std::uint32_t>{ 0U },
+        "Each region's cells and proxy must live in that region's chunk, the index in the base");
+    {
+        kb::scene::Scene runtime;
+        Require(runtime.Assets().Manager().MountRuntimePack(pack), "The chunked world registry mount failed");
+        const kb::scene::SceneObject owner = runtime.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Forest" });
+        runtime.Components().ContentInstances().Set(owner.Entity(), kb::scene::ContentInstanceComponent{
+            .assetId = world.worldId, .kind = kb::scene::ContentInstanceKind::PartitionedWorld });
+        kb::world::WorldPartitionRuntime partition{ runtime };
+        const std::uint64_t source = partition.AddSource({ .position = { 10.0, 0.0, 10.0 }, .loadRadius = 30.0, .unloadRadius = 40.0, .priority = 0 });
+        const auto streamUntil = [&](kb::world::WorldCellCoord cell, kb::world::WorldCellState state) {
+            const auto deadline = Clock::now() + std::chrono::seconds{ 30 };
+            while (partition.CellState(owner.Entity(), cell) != state && Clock::now() < deadline) {
+                static_cast<void>(runtime.Runtime().Update(1.0F / 60.0F));
+                std::this_thread::yield();
+            }
+            return partition.CellState(owner.Entity(), cell) == state;
+        };
+        Require(streamUntil({ 0, 0 }, kb::world::WorldCellState::Loaded), "A cell did not stream from its region's chunk pack");
+        Require(partition.UpdateSource(source, { .position = { 140.0, 0.0, 10.0 }, .loadRadius = 30.0, .unloadRadius = 40.0, .priority = 0 }),
+            "The source could not move");
+        Require(streamUntil({ 2, 0 }, kb::world::WorldCellState::Loaded) && streamUntil({ 0, 0 }, kb::world::WorldCellState::Unloaded),
+            "Cells of another region's chunk did not stream in and out");
+        Require(partition.Worlds().front().lastFailure.empty(), "A chunked cell failed to load");
     }
     pack->Unmount();
 }
@@ -2017,6 +2092,7 @@ int main(int argc, char** argv) {
     if (argc == 2 && std::string_view{ argv[1] } == "--partitioned-world") {
         RunWorldBuildAgreementTest();
         RunPartitionedWorldCookTest();
+        RunChunkedWorldPackageTest();
         std::fputs("kb_game_core partitioned world package tests passed\n", stdout);
         return EXIT_SUCCESS;
     }
@@ -2037,6 +2113,7 @@ int main(int argc, char** argv) {
     RunSceneMetaCookValidationTests();
     RunWorldBuildAgreementTest();
     RunPartitionedWorldCookTest();
+    RunChunkedWorldPackageTest();
     RunAuthoritativeMaterialGraphCookTest();
     RunNarrowingTests();
     RunSettingsTests();

@@ -88,6 +88,9 @@ std::string WorldDescriptorIO::Validate(const WorldDescriptor& descriptor) {
     if (!IsValidCellSize(descriptor.cellSize)) {
         return "world cell size must be between 1 and 1000000 metres";
     }
+    if (descriptor.regionCells == 0U || descriptor.regionCells > WorldDescriptor::MaxRegionCells) {
+        return "world region size must be between 1 and 1048576 cells";
+    }
     if (!IsSafeRelativeDirectory(descriptor.objectsDirectory)) {
         return "world object directory must be a relative path inside the world's folder";
     }
@@ -145,6 +148,13 @@ WorldDescriptorReadResult WorldDescriptorIO::Parse(std::string_view source) {
     descriptor.name = *name;
     descriptor.objectsDirectory = *objects;
     descriptor.cellSize = *cellSize;
+    if (root.Find("regionCells") != nullptr) {
+        const std::optional<std::int64_t> regionCells = text::Int(root, "regionCells", 1, WorldDescriptor::MaxRegionCells);
+        if (!regionCells.has_value()) {
+            return { .succeeded = false, .descriptor = {}, .error = "world regionCells must be a whole number of cells from 1 to 1048576" };
+        }
+        descriptor.regionCells = static_cast<std::uint32_t>(*regionCells);
+    }
     if (const kb::core::JsonValue* layers = root.Find("dataLayers"); layers != nullptr) {
         if (layers->GetKind() != kb::core::JsonValue::Kind::Array) {
             return { .succeeded = false, .descriptor = {}, .error = "world dataLayers must be an array" };
@@ -224,6 +234,7 @@ std::string WorldDescriptorIO::Serialize(const WorldDescriptor& descriptor) {
     out += ",\n  \"name\": ";
     text::AppendQuoted(out, descriptor.name);
     out += ",\n  \"cellSize\": " + text::Number(descriptor.cellSize);
+    out += ",\n  \"regionCells\": " + std::to_string(descriptor.regionCells);
     out += ",\n  \"objects\": ";
     text::AppendQuoted(out, descriptor.objectsDirectory);
     out += ",\n  \"dataLayers\": [";
