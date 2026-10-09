@@ -5,6 +5,7 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneNavigation.hpp"
 #include "engine/scene/SceneNavigationComponents.hpp"
 #include "engine/scene/SceneObject.hpp"
@@ -247,6 +248,39 @@ void TestWithoutGraphAgentsFail() {
     Require(scene.Navigation().Mesh().revision >= 2U, "Setting a graph must raise its revision so agents re-plan");
 }
 
+// Where an agent walking one second along a graph centred on `origin` ends up, relative to that origin; the agent
+// is a root, or the child of a parent standing at the origin.
+[[nodiscard]] kb::math::DVec3 WalkOneSecond(const kb::math::DVec3& origin, bool parented) {
+    kb::scene::Scene scene;
+    kb::scene::NavMesh mesh = Line(0, 10);
+    mesh.origin = origin;
+    scene.Navigation().SetMesh(std::move(mesh));
+    const kb::scene::SceneEntity agent = AddAgent(scene, {}, { 10.0F, 0.0F, 0.0F });
+    if (parented) {
+        const kb::scene::SceneObject parent = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Group" });
+        scene.Transforms().SetLocalTranslation(parent.Entity(), origin);
+        Require(scene.Hierarchy().SetParent(agent, parent.Entity()), "The far agent could not be parented");
+    } else {
+        scene.Transforms().SetLocalTranslation(agent, origin);
+    }
+    scene.Runtime().SynchronizeTransforms();
+    for (int frame = 0; frame < 60; ++frame) static_cast<void>(scene.Runtime().Update(kFrame));
+    return scene.Transforms().WorldTranslation(agent) - origin;
+}
+
+void TestAgentsWalkFarFromTheWorldOrigin() {
+    // Ten thousand kilometres out a float holds whole metres only, so an agent stepping centimetres per frame could
+    // not move at all; on a graph centred there it walks exactly as it does at the world origin.
+    const kb::math::DVec3 farOrigin{ 10'000'000.0, 0.0, 10'000'000.0 };
+    for (const bool parented : { false, true }) {
+        const kb::math::DVec3 nearWalk = WalkOneSecond({}, parented);
+        const kb::math::DVec3 farWalk = WalkOneSecond(farOrigin, parented);
+        Require(nearWalk.x > 1.5 && nearWalk.x < 2.0, "An agent must walk along the graph near the world origin");
+        Require(kb::math::Length(farWalk - nearWalk) <= 1.0e-3,
+            "An agent on a far graph must walk as it does near the world origin, to the millimetre");
+    }
+}
+
 } // namespace
 
 void RunNavigationRuntimeTests() {
@@ -256,6 +290,7 @@ void RunNavigationRuntimeTests() {
     TestNonCarvingObstacleIsSteeredAround();
     TestAgentsAvoidEachOtherDeterministically();
     TestWithoutGraphAgentsFail();
+    TestAgentsWalkFarFromTheWorldOrigin();
 }
 
 } // namespace kb::tests

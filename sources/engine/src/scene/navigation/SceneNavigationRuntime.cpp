@@ -13,6 +13,8 @@
 #include "scene/entities/SceneEntityCounter.hpp"
 #include "scene/navigation/SceneNavigationState.hpp"
 #include "scene/systems/NavigationSceneSystem.hpp"
+#include "scene/transform/SceneTransformPrecision.hpp"
+#include "scene/transform/SceneTransformResiduals.hpp"
 
 #include <algorithm>
 #include <array>
@@ -126,7 +128,8 @@ struct AgentState {
         : std::sqrt(volume.halfX * volume.halfX + volume.halfZ * volume.halfZ);
 }
 
-[[nodiscard]] std::vector<ObstacleVolume> CollectObstacles(Scene& scene, SceneState& state) {
+// Obstacles and agents are placed in the graph's space (world space minus `origin`).
+[[nodiscard]] std::vector<ObstacleVolume> CollectObstacles(Scene& scene, SceneState& state, const kb::math::DVec3& origin) {
     std::vector<std::pair<SceneEntity, NavObstacle>> authored;
     state.world.CreateQuery<NavObstacle>().ForEach(
         [](SceneEntity entity, const NavObstacle& obstacle, void* context) {
@@ -142,7 +145,7 @@ struct AgentState {
         ObstacleVolume volume{
             .entity = entity.Id(),
             .obstacle = obstacle,
-            .center = transform->worldPosition +
+            .center = kb::math::RelativeTo(scene.Transforms().WorldTranslation(entity, *transform), origin) +
                 kb::math::Rotate(transform->worldRotation, Vec3{ obstacle.center.x * transform->worldScale.x,
                     obstacle.center.y * transform->worldScale.y, obstacle.center.z * transform->worldScale.z }),
             .rotation = transform->worldRotation,
@@ -435,27 +438,39 @@ struct Neighbour {
     return result;
 }
 
-void WriteAgentTransform(Scene& scene, const AgentState& agent) {
+void WriteAgentTransform(Scene& scene, SceneState& state, const AgentState& agent, const kb::math::DVec3& origin) {
     TransformComponent* transform = scene.Transforms().TryGet(agent.entity);
     if (transform == nullptr) return;
     TransformComponent updated = *transform;
-    Vec3 local = agent.position;
+    // The agent's world position, in double precision.
+    kb::math::DVec3 local = origin + agent.position;
     Quat localRotation = agent.rotation;
     const SceneEntity parent = scene.Hierarchy().Parent(agent.entity);
     if (parent.IsValid()) {
         if (const TransformComponent* parentTransform = scene.Transforms().TryGet(parent); parentTransform != nullptr) {
             const Quat inverse = kb::math::Inverse(parentTransform->worldRotation);
-            const Vec3 relative = kb::math::Rotate(inverse, agent.position - parentTransform->worldPosition);
             const Vec3 scale = parentTransform->worldScale;
-            local = Vec3{ std::fabs(scale.x) > kEpsilon ? relative.x / scale.x : relative.x,
-                std::fabs(scale.y) > kEpsilon ? relative.y / scale.y : relative.y,
-                std::fabs(scale.z) > kEpsilon ? relative.z / scale.z : relative.z };
+            const kb::math::DVec3 parentWorld = scene.Transforms().WorldTranslation(parent, *parentTransform);
+            if (origin == kb::math::DVec3{} && parentWorld == kb::math::ToDVec3(parentTransform->worldPosition)) {
+                // Everything is in float world space: the float result agents always had.
+                const Vec3 relative = kb::math::Rotate(inverse, agent.position - parentTransform->worldPosition);
+                local = kb::math::ToDVec3(Vec3{ std::fabs(scale.x) > kEpsilon ? relative.x / scale.x : relative.x,
+                    std::fabs(scale.y) > kEpsilon ? relative.y / scale.y : relative.y,
+                    std::fabs(scale.z) > kEpsilon ? relative.z / scale.z : relative.z });
+            } else {
+                const kb::math::DVec3 relative = kb::math::RotateDouble(inverse, local - parentWorld);
+                local = kb::math::DVec3{ std::fabs(scale.x) > kEpsilon ? relative.x / scale.x : relative.x,
+                    std::fabs(scale.y) > kEpsilon ? relative.y / scale.y : relative.y,
+                    std::fabs(scale.z) > kEpsilon ? relative.z / scale.z : relative.z };
+            }
             localRotation = inverse * agent.rotation;
         }
     }
-    updated.localPosition = local;
+    Vec3 residual{};
+    SplitTranslation(local, updated.localPosition, residual);
     updated.localRotation = localRotation;
     scene.Transforms().Set(agent.entity, updated);
+    SceneTransformPrecision::StoreLocalResidual(state, agent.entity, residual);
 }
 
 } // namespace
@@ -485,12 +500,12 @@ void StepSceneNavigation(Scene& scene, float deltaSeconds, std::uint32_t steps) 
         agents.push_back(AgentState{
             .entity = entity,
             .agent = agent,
-            .position = transform->worldPosition,
+            .position = kb::math::RelativeTo(scene.Transforms().WorldTranslation(entity, *transform), navigation.mesh.origin),
             .rotation = transform->worldRotation,
             .character = scene.Components().CharacterControllers().Has(entity),
         });
     }
-    const std::vector<ObstacleVolume> volumes = CollectObstacles(scene, state);
+    const std::vector<ObstacleVolume> volumes = CollectObstacles(scene, state, navigation.mesh.origin);
     const std::uint64_t signature = ObstacleSignature(volumes);
 
     std::vector<Neighbour> neighbours;
@@ -581,7 +596,7 @@ void StepSceneNavigation(Scene& scene, float deltaSeconds, std::uint32_t steps) 
         if (!agent.agent.enabled) continue;
         // A character's own physics moves it; everything else is placed directly.
         if (agent.character && PhysicsBackend::CharacterMove(scene, agent.entity, agent.agent.velocity)) continue;
-        WriteAgentTransform(scene, agent);
+        WriteAgentTransform(scene, state, agent, navigation.mesh.origin);
     }
 }
 

@@ -18,7 +18,8 @@ class Scene;
 // other agents are avoided by choosing velocities that do not collide (reciprocal velocity obstacles).
 // The system steps at the scene's fixed step rate in entity id order, so equal input replays exactly.
 // An agent with a CharacterController hands its velocity to the physics character; others move their
-// Transform. Without a graph agents stay where they are and report a failed path.
+// Transform. Without a graph agents stay where they are and report a failed path. Destinations, node
+// positions and path corners are in the graph's space: world positions minus NavMesh::origin.
 class SceneNavigation final {
 public:
     explicit SceneNavigation(Scene& scene) noexcept;
@@ -29,7 +30,7 @@ public:
     [[nodiscard]] const NavMesh& Mesh() const noexcept;
     // The closest node an agent with these areas may stand on; nothing for an empty graph.
     [[nodiscard]] std::optional<std::uint32_t> NearestNode(kb::math::Vec3 position, NavAreaMask areas = kAllNavAreas) const;
-    // The world-space corners the agent is following, starting with the next one; empty without a path.
+    // The corners the agent is following (in the graph's space), starting with the next one; empty without a path.
     [[nodiscard]] std::vector<kb::math::Vec3> AgentPath(SceneEntity agent) const;
 
 private:
