@@ -1778,7 +1778,8 @@ void PaintGuideCurveSection(HDC dc, RECT content, int& y, const EditorTheme& the
 
 void PaintContentInstanceSection(HDC dc, RECT content, int& y, const EditorTheme& theme, const InspectorPanelState& inspector, const kb::scene::ContentInstanceComponent& instance) {
     const char* kind = instance.kind == kb::scene::ContentInstanceKind::Prefab ? "Prefab" : instance.kind == kb::scene::ContentInstanceKind::Subscene ? "Subscene"
-        : instance.kind == kb::scene::ContentInstanceKind::WorldFragment ? "World Fragment" : "Partitioned World";
+        : instance.kind == kb::scene::ContentInstanceKind::WorldFragment ? "World Fragment"
+        : instance.kind == kb::scene::ContentInstanceKind::PartitionedWorld ? "Partitioned World" : "Navigation Mesh";
     const char* lifetime = instance.lifetime == kb::scene::ContentInstanceLifetime::Owner ? "Owner" : "Persistent";
     SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::ContentInstance, HeroIconKind::Cube, "Content Instance", true);
     section.Field("Asset ID", std::to_string(instance.assetId), InspectorPropertyId::ContentInstanceAssetId);

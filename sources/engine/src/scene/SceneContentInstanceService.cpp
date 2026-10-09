@@ -42,6 +42,7 @@ struct ActiveStreamFocus {
     case ContentInstanceKind::Subscene: return StreamLoadMask::Subscene;
     case ContentInstanceKind::WorldFragment: return StreamLoadMask::WorldFragment;
     case ContentInstanceKind::PartitionedWorld: return StreamLoadMask::WorldFragment;
+    case ContentInstanceKind::NavigationMesh: return StreamLoadMask::None;
     }
     return StreamLoadMask::None;
 }
@@ -166,6 +167,8 @@ void Release(Scene& scene, ContentInstanceRuntimeRecord& runtime, bool preserve)
                 worlds.push_back({ .owner = entity, .worldAssetId = component.assetId });
                 continue;
             }
+            // Navigation meshes are placed by the navigation system, not loaded as content.
+            if (component.kind == ContentInstanceKind::NavigationMesh) continue;
             const TransformComponent* transform = scene.Transforms().TryGet(entity);
             if (transform == nullptr) continue;
             const bool retain = state.contentInstances.contains(entity.Id());

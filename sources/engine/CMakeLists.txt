@@ -210,6 +210,9 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneHierarchyAccess.hpp
     include/engine/scene/SceneHistory.hpp
     include/engine/scene/SceneLoadedContent.hpp
+    include/engine/navigation/NavGeometryCollector.hpp
+    include/engine/navigation/NavMeshAsset.hpp
+    include/engine/navigation/NavMeshBuild.hpp
     include/engine/world/WorldCellBuilder.hpp
     include/engine/world/WorldCellIndex.hpp
     include/engine/world/WorldDescriptor.hpp
@@ -882,6 +885,11 @@ add_library(kb_engine STATIC
         src/scene/components/SceneLensEchoApi.cpp
         src/scene/components/SceneLensEchoStorage.cpp
       src/scene/SceneContentInstanceService.cpp
+    src/navigation/NavCrowd.cpp
+    src/navigation/NavGeometryCollector.cpp
+    src/navigation/NavMeshAsset.cpp
+    src/navigation/NavMeshBuilder.cpp
+    src/navigation/NavMeshRuntime.cpp
     src/world/WorldAssetLoaders.cpp
     src/world/WorldCellBuilder.cpp
     src/world/WorldCellIndex.cpp
@@ -1256,6 +1264,8 @@ add_library(kb_engine STATIC
         src/private/scene/components/SceneLensEchoComponentStore.hpp
       src/private/scene/SceneContentInstanceService.hpp
       src/private/scene/systems/ContentInstanceSceneSystem.hpp
+    src/private/navigation/NavCrowd.hpp
+    src/private/navigation/NavMeshRuntime.hpp
     src/private/world/WorldAssetLoaders.hpp
     src/private/world/WorldObjectSplit.hpp
     src/private/world/WorldPartitionState.hpp
@@ -1785,6 +1795,7 @@ if(BUILD_TESTING)
         tests/SceneUITests.cpp
         tests/UITextLineBreakingTests.cpp
         tests/CrashReportConsentTests.cpp
+        tests/NavigationMeshTests.cpp
         tests/NavigationRuntimeTests.cpp
         tests/PortalVisibilityTests.cpp
         tests/MotionSkeletonRuleTests.cpp
@@ -1840,6 +1851,15 @@ if(BUILD_TESTING)
     endforeach()
     # The step-spike gate lengthens its frames while other load slows the physics step down.
     set_tests_properties(kb_engine_physics-step-spikes PROPERTIES TIMEOUT 600)
+    # The crowd budget is absolute (1000 agents within 8 ms per navigation step in an optimised
+    # build), with headroom for a slower machine; it also requires level of detail to pay off.
+    add_test(NAME kb_engine_navigation-crowd-bench COMMAND $<TARGET_FILE:kb_engine_tests> navigation-crowd-bench)
+    set_tests_properties(kb_engine_navigation-crowd-bench PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        LABELS "performance"
+        RUN_SERIAL TRUE
+        TIMEOUT 300
+    )
 
     kb_apply_quality_gates(kb_engine_tests)
 
