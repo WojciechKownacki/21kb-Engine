@@ -7,6 +7,8 @@
 #include "engine/scene/SceneLoadedContent.hpp"
 #include "engine/script/ScriptFunctionRegistry.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
+#include "engine/world/WorldDescriptor.hpp"
+#include "engine/world/WorldPartitionRuntime.hpp"
 
 #include <filesystem>
 #include <span>
@@ -132,6 +134,28 @@ ScriptFunctionCallResult LoadProgress(const ScriptFunctionCallContext& context, 
     };
 }
 
+// Data layers of partitioned worlds ("night", "quest_x_done") are switched for the
+// whole scene; their cells stream in or out on the next update.
+ScriptFunctionCallResult SetDataLayerActive(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return NoScene();
+    }
+    const std::string layer = StringArg(arguments, "layer");
+    if (!kb::world::IsValidDataLayerName(layer)) {
+        return Error("data layer name must be 1..64 letters, digits, '_', '-' or '.'");
+    }
+    const ScriptValue* active = FindArg(arguments, "active");
+    kb::world::WorldPartitionRuntime{ *context.scene }.SetDataLayerActive(layer, active == nullptr || active->AsBool(true));
+    return BoolResult("set", true);
+}
+
+ScriptFunctionCallResult IsDataLayerActive(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return NoScene();
+    }
+    return BoolResult("active", kb::world::WorldPartitionRuntime{ *context.scene }.IsDataLayerActive(StringArg(arguments, "layer")));
+}
+
 bool RegisterFunction(
     ScriptRuntimeHost& host,
     std::string name,
@@ -174,6 +198,14 @@ bool ScriptSceneApi::Register(ScriptRuntimeHost& host) {
         { ScriptFunctionPin{ "id", ScriptValueType::Hash, true } },
         { ScriptFunctionPin{ "progress", ScriptValueType::Float, true } },
         &LoadProgress) && ok;
+    ok = RegisterFunction(host, "Scene.SetDataLayerActive",
+        { ScriptFunctionPin{ "layer", ScriptValueType::String, true }, ScriptFunctionPin{ "active", ScriptValueType::Bool, true } },
+        { ScriptFunctionPin{ "set", ScriptValueType::Bool, true } },
+        &SetDataLayerActive) && ok;
+    ok = RegisterFunction(host, "Scene.IsDataLayerActive",
+        { ScriptFunctionPin{ "layer", ScriptValueType::String, true } },
+        { ScriptFunctionPin{ "active", ScriptValueType::Bool, true } },
+        &IsDataLayerActive) && ok;
     return ok;
 }
 
