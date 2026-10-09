@@ -16,6 +16,7 @@
 #include "engine/assets/ImportedAsset.hpp"
 #include "engine/assets/ImportedAssetLoader.hpp"
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
+#include "engine/assets/streaming/BackgroundLoadService.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssetMeta.hpp"
 #include "engine/scene/SceneAssets.hpp"
@@ -570,6 +571,60 @@ void RunAssetManagerTrueAsyncLoadTest() {
     kb::tests::Require(cancelManager.AsyncLoadStatus(cancelMetadata->id) == kb::assets::AsyncAssetLoadStatus::NotRequested &&
             !cancelManager.IsLoaded(cancelMetadata->id),
         "Unload during an async request must invalidate the worker result before owner-thread commit");
+}
+
+// Asynchronous loads are jobs of the engine's one background load service: a blocked loader
+// holds one worker, while streaming reads and other users' jobs keep running, and destroying the
+// manager drops its queued loads and waits for the running one without a thread of its own.
+void RunAssetManagerAsyncLoadsShareBackgroundServiceTest() {
+    ResetTestRoot();
+    const std::filesystem::path assetsRoot = TestRoot() / "SharedServiceProject" / "Assets";
+    WriteTextFile(assetsRoot / "Text" / "Blocked.gated", "blocked payload");
+    WriteTextFile(assetsRoot / "Text" / "Dropped.gated", "dropped payload");
+
+    const std::shared_ptr<kb::assets::streaming::BackgroundLoadService> service =
+        kb::assets::streaming::BackgroundLoadService::Shared();
+    const kb::assets::streaming::BackgroundLoadServiceStats before = service->Stats();
+    std::promise<void> releasePromise;
+    auto gate = std::make_shared<AsyncLoaderGate>();
+    gate->release = releasePromise.get_future().share();
+    auto manager = std::make_unique<kb::assets::AssetManager>();
+    kb::tests::Require(manager->RegisterLoader(std::make_unique<GatedTextAssetLoader>(gate)) &&
+            manager->Mounts().Mount("Game", assetsRoot) && manager->DiscoverMountedAssets() == 2U,
+        "Shared-service fixture could not be registered");
+    const kb::assets::AssetId blocked = manager->Registry().FindByPath("/Game/Text/Blocked.gated")->id;
+    const kb::assets::AssetId dropped = manager->Registry().FindByPath("/Game/Text/Dropped.gated")->id;
+    kb::tests::Require(manager->RequestLoadAsync(blocked), "Shared-service async request was rejected");
+    SpinUntil([&] { return gate->entered.load(std::memory_order_acquire); });
+    const bool entered = gate->entered.load(std::memory_order_acquire);
+    if (!entered) {
+        releasePromise.set_value();
+    }
+    kb::tests::Require(entered, "The async loader never ran on the background load service");
+    kb::tests::Require(service->Stats().peakJobsRunning >= 1U, "The async loader did not run as a background job");
+    kb::tests::Require(manager->RequestLoadAsync(dropped), "A second async request was rejected");
+
+    // Other users of the service are not held up by the blocked loader.
+    const kb::assets::streaming::BackgroundRequestHandle read =
+        service->Read(assetsRoot / "Text" / "Blocked.gated", 0U, 7U, 0);
+    const kb::assets::streaming::BackgroundRequestHandle job = service->Run([](std::string&) { return true; }, 0);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{ 30 };
+    const bool readDone = kb::assets::streaming::BackgroundLoadService::WaitUntilDone(read, deadline);
+    const bool jobDone = kb::assets::streaming::BackgroundLoadService::WaitUntilDone(job, deadline);
+    const bool readMatches = readDone && read->State() == kb::assets::streaming::BackgroundRequestState::Completed &&
+        std::string(read->Bytes().begin(), read->Bytes().end()) == "blocked";
+
+    // Destroying the manager cancels the queued load before waiting for the blocked one.
+    std::thread owner{ [&manager] { manager.reset(); } };
+    SpinUntil([&] { return service->Stats().cancelled > before.cancelled; });
+    const bool queuedCancelled = service->Stats().cancelled > before.cancelled;
+    releasePromise.set_value();
+    owner.join();
+    kb::tests::Require(readMatches && jobDone, "A blocked asset loader held up other users of the background load service");
+    kb::tests::Require(queuedCancelled && gate->loadCount == 1U,
+        "Destroying the manager ran a queued load instead of cancelling it");
+    kb::tests::Require(service->Stats().jobsRun >= before.jobsRun + 2U,
+        "The async load did not complete as a job of the shared service");
 }
 
 void RunAssetManagerAsyncDependencyValidationTest() {
@@ -2451,6 +2506,7 @@ void RunAssetRuntimeTests() {
     RunAssetManagerRuntimePublicationTest();
     RunAssetManagerLoadOpaqueTest();
     RunAssetManagerTrueAsyncLoadTest();
+    RunAssetManagerAsyncLoadsShareBackgroundServiceTest();
     RunAssetManagerAsyncDependencyValidationTest();
     RunAssetManagerAsyncLoaderReplacementTest();
     RunAssetManagerNewLoaderPreservesRetainedAssetsTest();
