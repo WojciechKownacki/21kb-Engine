@@ -27,7 +27,7 @@ constexpr std::array kLifecycleEvents{
 // PucLuaFunctionApi and PucLuaTaskApi install module tables directly from this
 // list.  The names and each wrapper's return shape therefore stay true to the
 // callable sandbox and generated stubs cannot drift from it.
-constexpr std::array<ScriptApiCatalogLuaBindingDefinition, 188> kLuaBindings{ {
+constexpr std::array<ScriptApiCatalogLuaBindingDefinition, 193> kLuaBindings{ {
     { "Audio", "Play", "Audio.Play", ScriptApiCatalogLuaReturnKind::SingleOutput, "voice" },
     { "Audio", "SetMixer", "Audio.SetMixer", ScriptApiCatalogLuaReturnKind::SingleOutput, "assigned" },
     { "Audio", "ActiveMixer", "Audio.ActiveMixer", ScriptApiCatalogLuaReturnKind::Default, "" },
@@ -133,6 +133,11 @@ constexpr std::array<ScriptApiCatalogLuaBindingDefinition, 188> kLuaBindings{ {
     { "Transform", "GetPosition", "Transform.GetPosition", ScriptApiCatalogLuaReturnKind::GuardedTable, "found" },
     { "Transform", "SetPosition", "Transform.SetPosition", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Transform", "Translate", "Transform.Translate", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "Transform", "GetPrecisePosition", "Transform.GetPrecisePosition", ScriptApiCatalogLuaReturnKind::GuardedTable, "found" },
+    { "Transform", "SetPrecisePosition", "Transform.SetPrecisePosition", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "Transform", "TranslatePrecise", "Transform.TranslatePrecise", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "Transform", "GetPreciseWorldPosition", "Transform.GetPreciseWorldPosition", ScriptApiCatalogLuaReturnKind::GuardedTable, "found" },
+    { "Transform", "SetPreciseWorldPosition", "Transform.SetPreciseWorldPosition", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Physics", "Raycast", "Physics.Raycast", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
     { "Physics", "AddForce", "Physics.AddForce", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Physics", "AddImpulse", "Physics.AddImpulse", ScriptApiCatalogLuaReturnKind::Default, "" },
