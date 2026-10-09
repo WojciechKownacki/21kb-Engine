@@ -2494,31 +2494,62 @@ private:
     kb::scene::SceneEntity body_{};
 };
 
-[[nodiscard]] StepTimes MeasurePhysicsSteps(int bodyCount, bool pipelined, int steps, double frameWorkMilliseconds,
-    bool scriptsTouchPhysics = false) {
-    PhysicsPile pile(bodyCount, pipelined);
-    if (scriptsTouchPhysics) {
-        static_cast<void>(pile.scene->Runtime().AddSceneSystem(std::make_unique<PhysicsTouchingScript>(pile.bodies.front().Entity())));
-    }
-    std::vector<double> milliseconds;
-    milliseconds.reserve(static_cast<std::size_t>(steps));
-    for (int step = 0; step < steps; ++step) {
-        const auto start = std::chrono::steady_clock::now();
-        [[maybe_unused]] const bool progressed = pile.scene->Runtime().Update(1.0F / 60.0F);
-        milliseconds.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
-        const auto frameEnd = std::chrono::steady_clock::now() + std::chrono::duration<double, std::milli>(frameWorkMilliseconds);
-        while (std::chrono::steady_clock::now() < frameEnd) {
+[[nodiscard]] StepTimes SummarizeStepTimes(std::vector<double> milliseconds) {
+    std::ranges::sort(milliseconds);
+    StepTimes times;
+    for (const double value : milliseconds) times.mean += value;
+    times.mean /= static_cast<double>(milliseconds.size());
+    times.p50 = milliseconds[milliseconds.size() / 2U];
+    times.p99 = milliseconds[std::min(milliseconds.size() - 1U, milliseconds.size() * 99U / 100U)];
+    times.max = milliseconds.back();
+    return times;
+}
+
+// One pile of the step-time benchmark: synchronous or pipelined, with or without a script touching physics.
+struct MeasuredPile {
+    MeasuredPile(int bodyCount, bool pipelined, bool scriptsTouchPhysics) : pile(bodyCount, pipelined) {
+        if (scriptsTouchPhysics) {
+            static_cast<void>(pile.scene->Runtime().AddSceneSystem(std::make_unique<PhysicsTouchingScript>(pile.bodies.front().Entity())));
         }
     }
-    std::vector<double> sorted(milliseconds.begin() + kStartupSteps, milliseconds.end());
-    std::ranges::sort(sorted);
-    StepTimes times;
-    for (const double value : sorted) times.mean += value;
-    times.mean /= static_cast<double>(sorted.size());
-    times.p50 = sorted[sorted.size() / 2U];
-    times.p99 = sorted[std::min(sorted.size() - 1U, sorted.size() * 99U / 100U)];
-    times.max = sorted.back();
-    return times;
+
+    PhysicsPile pile;
+    int steps = 0;
+    std::vector<double> milliseconds;
+};
+
+// Steps every pile `steps` times, in turns of `blockSteps` updates, so that the piles being compared share whatever
+// else the machine is doing at the time (a pile measured a minute after another can meet a different load). After
+// each update a busy loop stands in for the rest of a frame (scripts, render submission), which a pipelined
+// physics step can overlap with. It lasts half again the median step of the reference (first) pile's latest turn,
+// within one to five times `frameWorkMilliseconds`: a step that the machine's load slows down then still gets the
+// time to finish behind the frame, so what is compared is whether the step is overlapped, not how busy the
+// machine is. The first update of a turn is not counted: it can still meet the end of the previous pile's
+// background step, or find its own long finished.
+void MeasureInterleavedPhysicsSteps(std::span<MeasuredPile* const> piles, int steps, int blockSteps, double frameWorkMilliseconds) {
+    double frameWork = frameWorkMilliseconds;
+    std::vector<double> referenceTurn;
+    for (int first = 0; first < steps; first += blockSteps) {
+        for (MeasuredPile* const measured : piles) {
+            const bool reference = measured == piles.front();
+            if (reference) referenceTurn.clear();
+            for (int step = first; step < std::min(steps, first + blockSteps); ++step) {
+                const auto start = std::chrono::steady_clock::now();
+                [[maybe_unused]] const bool progressed = measured->pile.scene->Runtime().Update(1.0F / 60.0F);
+                const double elapsed = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+                if (measured->steps >= kStartupSteps && step != first) measured->milliseconds.push_back(elapsed);
+                if (reference && step != first) referenceTurn.push_back(elapsed);
+                ++measured->steps;
+                const auto frameEnd = std::chrono::steady_clock::now() + std::chrono::duration<double, std::milli>(frameWork);
+                while (std::chrono::steady_clock::now() < frameEnd) {
+                }
+            }
+            if (reference && !referenceTurn.empty()) {
+                std::ranges::nth_element(referenceTurn, referenceTurn.begin() + static_cast<std::ptrdiff_t>(referenceTurn.size() / 2U));
+                frameWork = std::clamp(1.5 * referenceTurn[referenceTurn.size() / 2U], frameWorkMilliseconds, 5.0 * frameWorkMilliseconds);
+            }
+        }
+    }
 }
 
 // The engine's share of a crowd frame (the "agents" benchmark scenario): 30000 agents that are plain entities with a
@@ -2643,26 +2674,35 @@ void RunAgentsFrameBenchmark() {
 // The step of a large pile, as a frame sees it. The mean hides the occasional long step a frame budget cannot
 // absorb, so the tail (p99, max) is reported too. The same 4000-box pile runs synchronously and pipelined; the
 // pipelined step overlaps the Jolt update with the rest of the frame (modelled by a busy loop), so only the
-// part that is not hidden remains in the update time. Other load on the machine moves single trials a lot, so
-// the verdict is the median of three trials: the pipelined p99 must be below 60 % of the synchronous one (about
-// 45 % on the machine this was written on).
+// part that is not hidden remains in the update time. The piles compared are stepped in alternating turns of a
+// few updates, so load from other processes falls on both alike instead of on whichever ran at the time, and the
+// frame lasts long enough for a step that load slows down to finish behind it; the verdict is the median of three
+// trials: the pipelined p99 must be below 60 % of the synchronous one (about 45 % on the machine this was written
+// on).
 void RunPhysicsStepSpikeBenchmark() {
     if (std::filesystem::path{ KB_PHYSICS_JOLT_PLUGIN_PATH }.empty()) {
         return;
     }
     constexpr int kBodies = 4000;
     constexpr int kSteps = 300;
+    constexpr int kBlockSteps = 10;
     constexpr int kTrials = 3;
     constexpr double kFrameWorkMilliseconds = 8.0;
     std::array<double, kTrials> ratios{};
     std::array<double, kTrials> touchingRatios{};
     for (int trial = 0; trial < kTrials; ++trial) {
-        const StepTimes synchronous = MeasurePhysicsSteps(kBodies, false, kSteps, kFrameWorkMilliseconds);
-        const StepTimes pipelined = MeasurePhysicsSteps(kBodies, true, kSteps, kFrameWorkMilliseconds);
-        ratios[trial] = pipelined.p99 / synchronous.p99;
         // Scripts that read and steer physics every frame must not give the overlap back.
-        const StepTimes syncTouching = MeasurePhysicsSteps(kBodies, false, kSteps, kFrameWorkMilliseconds, true);
-        const StepTimes pipelinedTouching = MeasurePhysicsSteps(kBodies, true, kSteps, kFrameWorkMilliseconds, true);
+        MeasuredPile synchronousPile(kBodies, false, false);
+        MeasuredPile pipelinedPile(kBodies, true, false);
+        MeasuredPile synchronousTouchingPile(kBodies, false, true);
+        MeasuredPile pipelinedTouchingPile(kBodies, true, true);
+        const std::array<MeasuredPile*, 4> piles{ &synchronousPile, &pipelinedPile, &synchronousTouchingPile, &pipelinedTouchingPile };
+        MeasureInterleavedPhysicsSteps(piles, kSteps, kBlockSteps, kFrameWorkMilliseconds);
+        const StepTimes synchronous = SummarizeStepTimes(std::move(synchronousPile.milliseconds));
+        const StepTimes pipelined = SummarizeStepTimes(std::move(pipelinedPile.milliseconds));
+        ratios[trial] = pipelined.p99 / synchronous.p99;
+        const StepTimes syncTouching = SummarizeStepTimes(std::move(synchronousTouchingPile.milliseconds));
+        const StepTimes pipelinedTouching = SummarizeStepTimes(std::move(pipelinedTouchingPile.milliseconds));
         touchingRatios[trial] = pipelinedTouching.p99 / syncTouching.p99;
         std::cout << "physics_step_spikes bodies=" << kBodies << " steps=" << kSteps
                   << " sync_mean_ms=" << synchronous.mean << " sync_p99_ms=" << synchronous.p99 << " sync_max_ms=" << synchronous.max

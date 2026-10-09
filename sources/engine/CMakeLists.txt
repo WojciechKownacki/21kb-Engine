@@ -1837,6 +1837,8 @@ if(BUILD_TESTING)
             TIMEOUT 300
         )
     endforeach()
+    # The step-spike gate lengthens its frames while other load slows the physics step down.
+    set_tests_properties(kb_engine_physics-step-spikes PROPERTIES TIMEOUT 600)
 
     kb_apply_quality_gates(kb_engine_tests)
 
