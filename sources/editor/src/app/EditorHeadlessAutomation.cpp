@@ -687,6 +687,19 @@ struct EditorHeadlessAutomation::Impl {
         return RenderScene(context, 1U, false);
     }
 
+    // The Scene panel's own present settings (ScenePanelContentRenderer::BuildSettings), so a
+    // capture shows what the panel shows; the readback consumes the offscreen scene target.
+    [[nodiscard]] bool RenderSceneViewport(EditorSceneContext& context, std::uint64_t viewportKey) {
+        if (window == nullptr) return false;
+        const DockPanel panel{ .id = static_cast<std::uint32_t>(viewportKey), .kind = DockPanelKind::Scene };
+        auto settings = ScenePanelContentRenderer::BuildSettings(RECT{ 0, -34, 640, 360 }, panel, context, backendSettings);
+        settings.presentToHost = false;
+        viewport.BeginPaintLayout(window);
+        viewport.Present(window, RECT{ 0, 0, 640, 360 }, context.Scene(), settings);
+        viewport.EndPaintLayout();
+        return std::string_view{ viewport.ActiveBackendLabel() } != "Not initialized";
+    }
+
     // Renders the scene viewport and, when an Animator Controller asset is
     // open, the Animator Editor preview in a single paint. The preview mirrors
     // AnimatorEditorPanelRenderer: animation editor previews share the
@@ -3493,6 +3506,20 @@ bool EditorHeadlessAutomation::VerifySceneRenderTargetAfterSecondary(
 
 bool EditorHeadlessAutomation::CaptureEditorScene(std::string_view checkpoint, bool editorOverlaysEnabled) {
     constexpr std::uint64_t sceneViewportKey = 1U;
+    return CaptureScene("capture_editor_scene", checkpoint, [this, editorOverlaysEnabled] {
+        return impl_->RenderScene(context_, sceneViewportKey, editorOverlaysEnabled);
+    });
+}
+
+bool EditorHeadlessAutomation::CaptureSceneViewport(std::string_view checkpoint) {
+    constexpr std::uint64_t sceneViewportKey = 1U;
+    return CaptureScene("capture_scene_viewport", checkpoint, [this] {
+        return impl_->RenderSceneViewport(context_, sceneViewportKey);
+    });
+}
+
+bool EditorHeadlessAutomation::CaptureScene(
+    std::string_view operation, std::string_view checkpoint, const std::function<bool()>& render) {
 
     const std::filesystem::path output =
         artifactRoot_ / "screenshots" /
@@ -3502,14 +3529,14 @@ bool EditorHeadlessAutomation::CaptureEditorScene(std::string_view checkpoint, b
             context_.Scene(), output.string());
     if (capture == 0U) {
         Trace(
-            "capture_editor_scene", false,
+            operation, false,
             "request-rejected");
         return false;
     }
 
-    if (!impl_->RenderScene(context_, sceneViewportKey, editorOverlaysEnabled)) {
+    if (!render()) {
         Trace(
-            "capture_editor_scene", false,
+            operation, false,
             "scene-present-failed");
         return false;
     }
@@ -3522,12 +3549,11 @@ bool EditorHeadlessAutomation::CaptureEditorScene(std::string_view checkpoint, b
             kb::scene::SceneRenderFeedback::PeekScreenCaptureRequest(
                 context_.Scene()).id == capture;
         const bool advanced = awaitingSubmit
-            ? impl_->RenderScene(
-                  context_, sceneViewportKey, editorOverlaysEnabled)
+            ? render()
             : impl_->viewport.AdvanceAsyncReadbacks();
         if (!advanced) {
             Trace(
-                "capture_editor_scene", false,
+                operation, false,
                 "scene-present-failed");
             return false;
         }
@@ -3537,20 +3563,20 @@ bool EditorHeadlessAutomation::CaptureEditorScene(std::string_view checkpoint, b
         if (status == kb::scene::SceneScreenCaptureStatus::Completed) {
             const bool valid = ValidateCapturedImage(output, true);
             Trace(
-                "capture_editor_scene", valid,
+                operation, valid,
                 output.filename().string());
             return valid;
         }
         if (status == kb::scene::SceneScreenCaptureStatus::Failed) {
             Trace(
-                "capture_editor_scene", false,
+                operation, false,
                 "capture-failed");
             return false;
         }
         Sleep(5U);
     }
     Trace(
-        "capture_editor_scene", false,
+        operation, false,
         "capture-timeout");
     return false;
 }

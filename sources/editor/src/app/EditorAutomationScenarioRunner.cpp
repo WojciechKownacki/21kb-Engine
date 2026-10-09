@@ -4379,6 +4379,55 @@ ReadScriptValue(
         return {changed >= 100U, "changed pixels: " + std::to_string(changed) + " (minimum 100)"};
     }
 
+    if (*operation == "capture_scene_viewport") {
+        // The Scene panel's viewport as the GPU renders it in edit mode (its camera, its
+        // overlays such as the world cell grid), read back to a PNG.
+        const auto checkpoint = StringMember(step, "checkpoint", error);
+        if (!checkpoint) return { false, error };
+        return { state.automation.CaptureSceneViewport(*checkpoint), "scene:" + *checkpoint };
+    }
+
+    if (*operation == "assert_capture_color_difference") {
+        // Pixels that differ between two captures and show `color` in `with`: what drawing one
+        // thing (such as the cell grid) added to an otherwise identical frame.
+        const auto with = StringMember(step, "with", error);
+        const auto without = StringMember(step, "without", error);
+        const JsonValue* color = Member(step, "color", JsonValue::Kind::Array, error);
+        const std::uint32_t minimum = UInt32Member(step, "min_pixels", error, false).value_or(100U);
+        const double tolerance = NumberMember(step, "tolerance", error, false).value_or(48.0);
+        if (!with || !without || color == nullptr || color->Size() != 3U || !error.empty()) {
+            return { false, error.empty() ? "color must be [r, g, b] in 0..255" : error };
+        }
+        const double red = color->At(0)->AsNumber();
+        const double green = color->At(1)->AsNumber();
+        const double blue = color->At(2)->AsNumber();
+        const auto root = state.automation.ArtifactRoot() / "screenshots";
+        HeroIconGdiplusRuntime::EnsureStarted();
+        Gdiplus::Bitmap first((root / (*with + ".png")).wstring().c_str());
+        Gdiplus::Bitmap second((root / (*without + ".png")).wstring().c_str());
+        if (first.GetLastStatus() != Gdiplus::Ok || second.GetLastStatus() != Gdiplus::Ok ||
+            first.GetWidth() != second.GetWidth() || first.GetHeight() != second.GetHeight()) {
+            return { false, "capture images must be readable and have equal dimensions" };
+        }
+        std::size_t changed = 0U;
+        std::size_t matching = 0U;
+        for (UINT y = 0U; y < first.GetHeight(); ++y) {
+            for (UINT x = 0U; x < first.GetWidth(); ++x) {
+                Gdiplus::Color lhs{}, rhs{};
+                if (first.GetPixel(x, y, &lhs) != Gdiplus::Ok || second.GetPixel(x, y, &rhs) != Gdiplus::Ok)
+                    return { false, "capture pixel read failed" };
+                if (lhs.GetValue() == rhs.GetValue()) continue;
+                ++changed;
+                if (std::fabs(lhs.GetR() - red) <= tolerance && std::fabs(lhs.GetG() - green) <= tolerance &&
+                    std::fabs(lhs.GetB() - blue) <= tolerance) {
+                    ++matching;
+                }
+            }
+        }
+        return { matching >= minimum, "changed pixels: " + std::to_string(changed) + ", in the color: " + std::to_string(matching) +
+            " (minimum " + std::to_string(minimum) + ")" };
+    }
+
     if (*operation == "capture_runtime") {
         const auto checkpoint =
             StringMember(step, "checkpoint", error);
