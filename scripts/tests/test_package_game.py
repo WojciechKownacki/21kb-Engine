@@ -243,6 +243,7 @@ class PackageGameTests(unittest.TestCase):
                 configuration="Development",
                 engine_root=root / "engine",
                 target="Linux.x64",
+                pack_compression_level=9,
             )
             with mock.patch.object(package_game, "_find_optional_build_tool", return_value=None), \
                     mock.patch.object(package_game, "run_checked") as run:
