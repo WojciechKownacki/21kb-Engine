@@ -186,8 +186,9 @@ ParticleGpuSubmitResult ParticleGpuRenderer::Submit(
 
 const ParticleRenderBatchBuildResult& ParticleGpuRenderer::Build(
     const kb::particles::ParticleRenderSnapshot& snapshot,
-    const SceneRenderCamera& camera) noexcept {
-    lastBuild_ = batcher_.Build(snapshot, camera);
+    const SceneRenderCamera& camera,
+    kb::math::Vec3 renderOffset) noexcept {
+    lastBuild_ = batcher_.Build(snapshot, camera, renderOffset);
     return lastBuild_;
 }
 
@@ -336,7 +337,8 @@ bool ParticleGpuRenderer::HasGpuEmitters(std::uint64_t sceneId) const noexcept {
     return gpuEmitters_.HasEmitters(sceneId);
 }
 
-void ParticleGpuRenderer::SyncGpuEmitters(kb::scene::Scene& scene, float frameDeltaSeconds, std::uint64_t frameIndex) {
+void ParticleGpuRenderer::SyncGpuEmitters(
+    kb::scene::Scene& scene, float frameDeltaSeconds, std::uint64_t frameIndex, const kb::math::DVec3& renderOrigin) {
     if (!GpuEmittersReady()) return;
     kb::particles::ParticlePlayback::SetGpuEmitterConsumer(scene, true);
     const std::uint64_t sceneId = scene.Id();
@@ -344,6 +346,7 @@ void ParticleGpuRenderer::SyncGpuEmitters(kb::scene::Scene& scene, float frameDe
     if (synced != gpuEmitterSyncedFrame_.end() && synced->second == frameIndex) return;
     gpuEmitterSyncedFrame_[sceneId] = frameIndex;
     kb::particles::ParticlePlayback::DrainGpuEmitterCommands(scene, gpuEmitterCommandScratch_);
+    gpuEmitters_.SetRenderOrigin(sceneId, renderOrigin);
     gpuEmitters_.Apply(sceneId, gpuEmitterCommandScratch_);
     gpuEmitters_.Advance(sceneId, frameDeltaSeconds);
     gpuEmitterDispatchPending_[sceneId] = true;
@@ -453,8 +456,9 @@ ParticleGpuSubmitResult ParticleGpuRenderer::SubmitGpuEmitters(
 
 const ParticleStripBuildResult& ParticleGpuRenderer::BuildStrips(
     const kb::particles::ParticleRenderSnapshot& snapshot,
-    const SceneRenderCamera& camera) noexcept {
-    return stripRenderer_.Build(snapshot, camera);
+    const SceneRenderCamera& camera,
+    kb::math::Vec3 renderOffset) noexcept {
+    return stripRenderer_.Build(snapshot, camera, renderOffset);
 }
 
 ParticleStripSubmitResult ParticleGpuRenderer::SubmitStripDraw(bgfx::ViewId viewId, std::uint32_t drawIndex) noexcept {

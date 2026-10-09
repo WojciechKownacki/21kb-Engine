@@ -44,6 +44,12 @@ public:
         kb::scene::Scene& scene,
         std::uint64_t consumerId) noexcept;
     [[nodiscard]] static ParticleRenderCapabilities RenderCapabilities(const kb::scene::Scene& scene) noexcept;
+    // Particles simulate in float relative to the scene's simulation origin (docs/large_worlds.md): positions in
+    // render snapshots, GPU emitter commands, live particle states and the owner transforms given to
+    // ConfigureComponent are world positions minus this origin. It starts at the world origin; a renderer moves
+    // it with its render origin, and the backend moves live particles with it at its next step.
+    static void SetSimulationOrigin(kb::scene::Scene& scene, const kb::math::DVec3& origin) noexcept;
+    [[nodiscard]] static const kb::math::DVec3& SimulationOrigin(const kb::scene::Scene& scene) noexcept;
     [[nodiscard]] static std::span<const ParticleGpuVisualStep> PendingGpuVisualSteps(
         const kb::scene::Scene& scene,
         std::uint64_t consumerId) noexcept;

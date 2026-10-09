@@ -1084,8 +1084,8 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
     WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport particle sync begin");
     particleRenderSynchronizer_->SetGpuVisualAvailability(sceneRenderer_->ParticleGpuVisualAvailability());
     particleRenderSynchronizer_->Sync(scene, renderScene);
-    sceneRenderer_->SyncGpuParticleEmitters(
-        const_cast<kb::scene::Scene&>(scene), frameDeltaSeconds_, static_cast<std::uint64_t>(lastCompletedFrame_) + 1ULL);
+    sceneRenderer_->SyncGpuParticleEmitters(const_cast<kb::scene::Scene&>(scene), frameDeltaSeconds_,
+        static_cast<std::uint64_t>(lastCompletedFrame_) + 1ULL, renderScene.RenderOrigin());
     if (const auto& particleSnapshot = renderScene.ParticleRenderSnapshot(); particleSnapshot != nullptr) {
         if (RendererDebugLogEnabled("renderer")) {
             std::ostringstream message;

@@ -1,5 +1,6 @@
 #include "kb/render/particles/ParticleStripGeometryBuilder.hpp"
 
+#include "kb/render/particles/ParticleRenderSpace.hpp"
 #include "kb/render/scene/TransparentDepthKey.hpp"
 
 #include <algorithm>
@@ -60,7 +61,10 @@ void ParticleStripGeometryBuilder::ReleaseAllScenes() noexcept {
 
 ParticleStripBuildResult ParticleStripGeometryBuilder::Build(
     const kb::particles::ParticleRenderSnapshot& snapshot,
-    const SceneRenderCamera& camera) noexcept {
+    const SceneRenderCamera& renderCamera,
+    kb::math::Vec3 renderOffset) noexcept {
+    // Strips are built in particle space and offset into render space as their vertices are written.
+    const SceneRenderCamera camera = ParticleSpaceCamera(renderCamera, renderOffset);
     vertexScratch_.clear();
     indexScratch_.clear();
     drawScratch_.clear();
@@ -92,10 +96,10 @@ ParticleStripBuildResult ParticleStripGeometryBuilder::Build(
         const kb::math::Vec3 cameraRight = NormalizeOr({camera.view[0], camera.view[4], camera.view[8]}, {1.0F, 0.0F, 0.0F});
         const kb::math::Vec3 side = Multiply(NormalizeOr(kb::math::Cross(cameraForward, direction), cameraRight), width * 0.5F);
         const std::uint16_t base = static_cast<std::uint16_t>(vertexScratch_.size());
-        vertexScratch_.push_back(Vertex(Subtract(start, side), color));
-        vertexScratch_.push_back(Vertex(Add(start, side), color));
-        vertexScratch_.push_back(Vertex(Add(end, side), color));
-        vertexScratch_.push_back(Vertex(Subtract(end, side), color));
+        vertexScratch_.push_back(Vertex(Add(Subtract(start, side), renderOffset), color));
+        vertexScratch_.push_back(Vertex(Add(Add(start, side), renderOffset), color));
+        vertexScratch_.push_back(Vertex(Add(Add(end, side), renderOffset), color));
+        vertexScratch_.push_back(Vertex(Add(Subtract(end, side), renderOffset), color));
         indexScratch_.insert(indexScratch_.end(), {base, static_cast<std::uint16_t>(base + 1U), static_cast<std::uint16_t>(base + 2U),
             base, static_cast<std::uint16_t>(base + 2U), static_cast<std::uint16_t>(base + 3U)});
     };
@@ -125,7 +129,13 @@ ParticleStripBuildResult ParticleStripGeometryBuilder::Build(
                 TrailHistory& history = trailHistories_[slot];
                 if (history.particleId == 0U) history = {.sceneId = snapshot.SceneId(),
                     .backendEpoch = snapshot.BackendEpoch(), .particleId = particle.particleId,
-                    .emitterRecordIndex = emitterIndex};
+                    .emitterRecordIndex = emitterIndex, .origin = snapshot.Origin()};
+                if (history.origin != snapshot.Origin()) {
+                    // The simulation origin moved: keep the samples where they were in the world.
+                    const kb::math::Vec3 shift = kb::math::RelativeTo(history.origin, snapshot.Origin());
+                    for (kb::math::Vec3& sample : history.samples) sample = Add(sample, shift);
+                    history.origin = snapshot.Origin();
+                }
                 history.lastSeenRevision = snapshot.Revision();
                 history.emitterRecordIndex = emitterIndex;
                 if (history.sampleCount == 0U || snapshot.FixedStepIndex() >= history.lastSampleStep + cadence) {

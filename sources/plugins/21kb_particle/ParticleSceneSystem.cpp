@@ -31,6 +31,14 @@ namespace {
     }
 }
 
+// The owner's world transform in the backend's simulation space (world space minus its simulation origin).
+[[nodiscard]] kb::scene::WorldTransform OwnerPayload(const kb::scene::Scene& scene, kb::scene::SceneEntity owner,
+    const kb::scene::TransformComponent& transform, const kb::math::DVec3& origin) noexcept {
+    kb::scene::WorldTransform payload = transform.WorldPayload();
+    payload.position = kb::math::RelativeTo(scene.Transforms().WorldTranslation(owner, transform), origin);
+    return payload;
+}
+
 [[noreturn]] void ThrowTerminalSnapshotFailure(kb::particles::ParticleRenderSnapshotStatus status) {
     switch (status) {
     case kb::particles::ParticleRenderSnapshotStatus::NotWarmed:
@@ -106,6 +114,8 @@ void ParticleSceneSystem::OnDestroy(kb::scene::SceneSystemContext& context) {
 }
 
 void ParticleSceneSystem::OnFixedUpdate(kb::scene::SceneSystemContext& context) {
+    // Owner transforms below are taken relative to the origin the backend simulates around this step.
+    backend_.FollowSimulationOrigin(kb::particles::ParticlePlayback::SimulationOrigin(context.GetScene()));
     backend_.CapturePreviousParticlePositions();
     backend_.ProcessOwnerLifecycle(context.GetScene());
     ReconcileComponents(context.GetScene());
@@ -149,7 +159,7 @@ void ParticleSceneSystem::CreateComponentInstance(
     const kb::scene::TransformComponent* transform = scene.Transforms().TryGet(binding.owner);
     if (transform == nullptr || !backend_.ConfigureComponent(scene, binding.instanceId,
             binding.component.rateMultiplier, binding.component.maxParticlesOverride,
-            binding.component.followTransform, transform->WorldPayload()).Succeeded()) {
+            binding.component.followTransform, OwnerPayload(scene, binding.owner, *transform, backend_.SimulationOrigin())).Succeeded()) {
         static_cast<void>(backend_.Release(scene, binding.instanceId));
         binding.instanceId = 0U;
         throw std::logic_error("particle component runtime configuration is invalid");
@@ -239,7 +249,8 @@ void ParticleSceneSystem::ReconcileComponents(kb::scene::Scene& scene) {
                 const kb::scene::TransformComponent* transform = visit.scene->Transforms().TryGet(owner);
                 if (transform == nullptr || !system.backend_.ConfigureComponent(*visit.scene, binding.instanceId,
                         component.rateMultiplier, component.maxParticlesOverride,
-                        component.followTransform, transform->WorldPayload()).Succeeded()) {
+                        component.followTransform,
+                        OwnerPayload(*visit.scene, owner, *transform, system.backend_.SimulationOrigin())).Succeeded()) {
                     throw std::logic_error("particle component runtime configuration is invalid");
                 }
                 if (seedChanged && component.deterministicSeed != 0U) {

@@ -294,6 +294,23 @@ void ParticleGpuEmitterSimulation::Clear(Emitter& emitter) noexcept {
     bgfx::update(emitter.spawns, 0U, zero);
 }
 
+void ParticleGpuEmitterSimulation::SetRenderOrigin(std::uint64_t sceneId, const kb::math::DVec3& renderOrigin) noexcept {
+    SceneClock& clock = scenes_[sceneId];
+    if (clock.renderOrigin == renderOrigin) return;
+    const kb::math::Vec3 shift = kb::math::RelativeTo(clock.renderOrigin, renderOrigin);
+    clock.renderOrigin = renderOrigin;
+    for (auto& [key, emitter] : emitters_) {
+        if (key.sceneId != sceneId) continue;
+        if (!emitter.params.localSpace) Clear(emitter);
+        emitter.world[12] += shift.x;
+        emitter.world[13] += shift.y;
+        emitter.world[14] += shift.z;
+        bx::mtxInverse(emitter.worldInverse.data(), emitter.world.data());
+        emitter.origin = { emitter.origin[0] + shift.x, emitter.origin[1] + shift.y, emitter.origin[2] + shift.z };
+        emitter.params.plane.distance += kb::math::Dot(emitter.params.plane.normal, shift);
+    }
+}
+
 void ParticleGpuEmitterSimulation::Apply(
     std::uint64_t sceneId, std::span<const kb::particles::ParticleGpuEmitterCommand> commands) noexcept {
     if (!IsReady()) return;
@@ -301,6 +318,8 @@ void ParticleGpuEmitterSimulation::Apply(
     for (const kb::particles::ParticleGpuEmitterCommand& command : commands) {
         const Key key{ sceneId, command.key.instanceId, command.key.emitterId };
         clock.latest = std::max(clock.latest, command.simTime);
+        // From the command's simulation space to render space (zero while the simulation follows the render origin).
+        const kb::math::Vec3 offset = kb::math::RelativeTo(command.simulationOrigin, clock.renderOrigin);
         auto found = emitters_.find(key);
         if (command.release) {
             if (found != emitters_.end()) {
@@ -311,21 +330,23 @@ void ParticleGpuEmitterSimulation::Apply(
             continue;
         }
         if (command.hasParams) {
-            const std::uint32_t capacity = std::clamp(command.params.capacity, 1U, kb::particles::kParticleGpuMaxCapacity);
-            if (found != emitters_.end() && (found->second.capacity != capacity || found->second.perSlot != InstancesPerSlot(command.params))) {
+            kb::particles::ParticleGpuEmitterParams params = command.params;
+            params.plane.distance += kb::math::Dot(params.plane.normal, offset);
+            const std::uint32_t capacity = std::clamp(params.capacity, 1U, kb::particles::kParticleGpuMaxCapacity);
+            if (found != emitters_.end() && (found->second.capacity != capacity || found->second.perSlot != InstancesPerSlot(params))) {
                 allocatedBytes_ -= found->second.bytes;
                 Destroy(found->second);
                 emitters_.erase(found);
                 found = emitters_.end();
             }
             if (found == emitters_.end()) {
-                if (!Create(key, command.params)) continue;
+                if (!Create(key, params)) continue;
                 found = emitters_.find(key);
             } else {
-                found->second.params = command.params;
+                found->second.params = params;
                 found->second.params.capacity = capacity;
-                if (NeedsSort(command.params, false)) static_cast<void>(EnsureSort(found->second));
-                if (command.params.HasCollision() && !EnsureState(found->second)) {
+                if (NeedsSort(params, false)) static_cast<void>(EnsureSort(found->second));
+                if (params.HasCollision() && !EnsureState(found->second)) {
                     // No budget left for the state: the emitter keeps simulating without collisions.
                     found->second.params.hasPlane = false;
                     found->second.params.sceneDepthCollision = false;
@@ -335,14 +356,24 @@ void ParticleGpuEmitterSimulation::Apply(
         if (found == emitters_.end()) continue;
         if (command.hasWorldMatrix) {
             found->second.world = command.worldMatrix;
-            bx::mtxInverse(found->second.worldInverse.data(), command.worldMatrix.data());
+            found->second.world[12] += offset.x;
+            found->second.world[13] += offset.y;
+            found->second.world[14] += offset.z;
+            bx::mtxInverse(found->second.worldInverse.data(), found->second.world.data());
         }
         if (command.hasOrientation) {
             found->second.basis = BasisColumns(command.orientation);
-            found->second.origin = command.origin;
+            found->second.origin = { command.origin[0] + offset.x, command.origin[1] + offset.y, command.origin[2] + offset.z };
         }
         if (command.clear) Clear(found->second);
-        Upload(found->second, command.spawns);
+        if (found->second.params.localSpace || (offset.x == 0.0F && offset.y == 0.0F && offset.z == 0.0F)) {
+            // Local-space records are in the owner's frame, which the world matrix places.
+            Upload(found->second, command.spawns);
+        } else {
+            spawnScratch_.assign(command.spawns.begin(), command.spawns.end());
+            for (kb::particles::ParticleGpuSpawn& spawn : spawnScratch_) spawn.position = spawn.position + offset;
+            Upload(found->second, spawnScratch_);
+        }
     }
     clock.now = std::max(clock.now, clock.latest - kFixedStepSeconds);
 }

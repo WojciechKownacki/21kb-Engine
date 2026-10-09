@@ -23,8 +23,10 @@ public:
     // With a camera and the resources, the particles of an emitter whose sort mode asks for it and whose material
     // is translucent are put in the emitter's draw order (back to front, front to back, by distance or by age);
     // opaque meshes are depth-tested and keep the snapshot order.
+    // `renderOffset` (ParticleRenderOffset) is added to every particle position.
     void Build(const kb::particles::ParticleRenderSnapshot& snapshot, const SceneRenderCamera* camera = nullptr,
-        const RenderResourceRegistry* resources = nullptr, const SceneRenderResourceMap* resourceMap = nullptr) noexcept;
+        const RenderResourceRegistry* resources = nullptr, const SceneRenderResourceMap* resourceMap = nullptr,
+        kb::math::Vec3 renderOffset = {}) noexcept;
 
     [[nodiscard]] const std::vector<SceneMeshBatch>& Batches() const noexcept { return batches_; }
 

@@ -23,7 +23,8 @@ public:
     [[nodiscard]] bool IsInitialized() const noexcept;
     [[nodiscard]] const ParticleStripBuildResult& Build(
         const kb::particles::ParticleRenderSnapshot& snapshot,
-        const SceneRenderCamera& camera) noexcept;
+        const SceneRenderCamera& camera,
+        kb::math::Vec3 renderOffset = {}) noexcept;
     [[nodiscard]] ParticleStripSubmitResult SubmitDraw(bgfx::ViewId viewId, std::uint32_t drawIndex) noexcept;
 
 private:

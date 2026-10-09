@@ -813,6 +813,7 @@ public:
     std::vector<kb::particles::PendingParticleRuntimeEvent> pendingParticleRuntimeEvents;
     std::vector<kb::particles::ParticleGpuEmitterCommand> pendingParticleGpuEmitterCommands;
     bool particleGpuEmitterConsumer = false;
+    kb::math::DVec3 particleSimulationOrigin{};
     mutable std::vector<kb::particles::ParticleRuntimeState> particleRuntimeStateScratch;
     SceneUIFrame uiFrame;
     std::vector<SceneUIEvent> uiEvents;

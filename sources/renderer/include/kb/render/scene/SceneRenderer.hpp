@@ -39,7 +39,8 @@ public:
     void Shutdown();
     // Drains the GPU-simulated particle emitter commands of the scene once per rendered frame.
     [[nodiscard]] bool HasGpuParticleEmitters(std::uint64_t sceneId) const noexcept;
-    void SyncGpuParticleEmitters(kb::scene::Scene& scene, float frameDeltaSeconds, std::uint64_t frameIndex);
+    void SyncGpuParticleEmitters(kb::scene::Scene& scene, float frameDeltaSeconds, std::uint64_t frameIndex,
+        const kb::math::DVec3& renderOrigin = {});
     // Runs the emitter simulation for the frame in `viewId`, which must not bind the scene depth as a render target.
     void DispatchGpuParticleEmitters(bgfx::ViewId viewId, const SceneRenderCamera& camera, std::uint32_t viewportWidth, std::uint32_t viewportHeight);
     void ReleaseParticleScene(std::uint64_t sceneId) noexcept;

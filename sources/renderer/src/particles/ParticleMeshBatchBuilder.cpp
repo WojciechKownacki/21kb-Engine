@@ -87,7 +87,7 @@ void ParticleMeshBatchBuilder::Warmup(std::uint32_t particleCapacity) {
 }
 
 void ParticleMeshBatchBuilder::Build(const kb::particles::ParticleRenderSnapshot& snapshot, const SceneRenderCamera* camera,
-    const RenderResourceRegistry* resources, const SceneRenderResourceMap* resourceMap) noexcept {
+    const RenderResourceRegistry* resources, const SceneRenderResourceMap* resourceMap, kb::math::Vec3 renderOffset) noexcept {
     instances_.clear();
     batches_.clear();
     if (snapshot.IsTombstone()) return;
@@ -130,15 +130,16 @@ void ParticleMeshBatchBuilder::Build(const kb::particles::ParticleRenderSnapshot
             const std::array<float, 4> cameraPosition = SceneLightingPacker::CameraPosition(camera);
             const auto key = [&](std::uint32_t local) noexcept {
                 const auto& particle = particles[emitter.firstParticle + local];
+                const kb::math::Vec3 position = particle.position + renderOffset;
                 switch (emitter.sort) {
                 case kb::particles::ParticleRenderSortMode::BackToFront:
                 case kb::particles::ParticleRenderSortMode::FrontToBack:
-                    return camera->view[2] * particle.position.x + camera->view[6] * particle.position.y +
-                        camera->view[10] * particle.position.z + camera->view[14];
+                    return camera->view[2] * position.x + camera->view[6] * position.y +
+                        camera->view[10] * position.z + camera->view[14];
                 case kb::particles::ParticleRenderSortMode::Distance: {
-                    const float dx = particle.position.x - cameraPosition[0];
-                    const float dy = particle.position.y - cameraPosition[1];
-                    const float dz = particle.position.z - cameraPosition[2];
+                    const float dx = position.x - cameraPosition[0];
+                    const float dy = position.y - cameraPosition[1];
+                    const float dz = position.z - cameraPosition[2];
                     return dx * dx + dy * dy + dz * dz;
                 }
                 case kb::particles::ParticleRenderSortMode::Age: return static_cast<float>(particle.normalizedAgeUnorm);
@@ -171,7 +172,7 @@ void ParticleMeshBatchBuilder::Build(const kb::particles::ParticleRenderSnapshot
             instance.entityId = particle.particleId;
             instance.meshAssetId = emitter.meshAssetId;
             instance.materialAssetId = emitter.materialAssetId;
-            instance.model = FlattenModel(kb::math::FromTRS(particle.position, orientation, scale));
+            instance.model = FlattenModel(kb::math::FromTRS(particle.position + renderOffset, orientation, scale));
             instance.color = UnpackColor(particle.packedColor);
             instance.castsShadow = castsShadow;
             instance.receivesShadow = receivesShadow;

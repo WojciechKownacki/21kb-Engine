@@ -48,9 +48,11 @@ public:
         const RenderResourceRegistry& resources,
         const SceneRenderResourceMap& resourceMap,
         bgfx::TextureHandle sceneDepthTexture) noexcept;
+    // `renderOffset` (ParticleRenderOffset) is added to every particle position.
     [[nodiscard]] const ParticleRenderBatchBuildResult& Build(
         const kb::particles::ParticleRenderSnapshot& snapshot,
-        const SceneRenderCamera& camera) noexcept;
+        const SceneRenderCamera& camera,
+        kb::math::Vec3 renderOffset = {}) noexcept;
     [[nodiscard]] ParticleGpuSubmitResult SubmitBatch(
         bgfx::ViewId viewId,
         std::uint32_t batchIndex,
@@ -61,7 +63,8 @@ public:
         bgfx::TextureHandle sceneDepthTexture) noexcept;
     [[nodiscard]] const ParticleStripBuildResult& BuildStrips(
         const kb::particles::ParticleRenderSnapshot& snapshot,
-        const SceneRenderCamera& camera) noexcept;
+        const SceneRenderCamera& camera,
+        kb::math::Vec3 renderOffset = {}) noexcept;
     [[nodiscard]] bool PrepareVisualSimulation(
         bgfx::ViewId viewId,
         const kb::particles::ParticleRenderSnapshot& snapshot) noexcept;
@@ -72,7 +75,9 @@ public:
     // colliding emitters sample it; SubmitGpuEmitters draws every emitter of the scene into the given view.
     [[nodiscard]] bool GpuEmittersReady() const noexcept;
     [[nodiscard]] bool HasGpuEmitters(std::uint64_t sceneId) const noexcept;
-    void SyncGpuEmitters(kb::scene::Scene& scene, float frameDeltaSeconds, std::uint64_t frameIndex);
+    // `renderOrigin` is the render origin of the scene's frame (GPU particle positions are drawn relative to it).
+    void SyncGpuEmitters(kb::scene::Scene& scene, float frameDeltaSeconds, std::uint64_t frameIndex,
+        const kb::math::DVec3& renderOrigin = {});
     void DispatchGpuEmitters(
         bgfx::ViewId viewId,
         std::uint64_t sceneId,

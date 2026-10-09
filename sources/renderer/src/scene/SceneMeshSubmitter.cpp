@@ -3,6 +3,7 @@
 #include "engine/scene/ParticleEffectAssetSchema.hpp"
 #include "kb/render/ViewIdPolicy.hpp"
 #include "kb/render/particles/ParticleGpuRenderer.hpp"
+#include "kb/render/particles/ParticleRenderSpace.hpp"
 #include "scene/lighting/SceneLightingPacker.hpp"
 #include "scene/submit/SceneMeshDrawCommandSubmitter.hpp"
 
@@ -206,8 +207,10 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
     std::vector<SceneRenderVisibilityBlocker> visibilityBlockers;
     BuildVisibilityBlockerInputs(renderScene, visibilityBlockers);
     SceneMeshBatchBuilder::BuildInto(drawGroups, meshBatchSubmissionScratch_);
+    const kb::math::Vec3 particleOffset = particleSnapshot != nullptr
+        ? ParticleRenderOffset(particleSnapshot->Origin(), renderScene.RenderOrigin()) : kb::math::Vec3{};
     if (particleSnapshot != nullptr) {
-        particleMeshBatchBuilder_.Build(*particleSnapshot, camera, &resources, &resourceMap);
+        particleMeshBatchBuilder_.Build(*particleSnapshot, camera, &resources, &resourceMap, particleOffset);
         const auto& particleMeshBatches = particleMeshBatchBuilder_.Batches();
         meshBatchSubmissionScratch_.insert(
             meshBatchSubmissionScratch_.end(), particleMeshBatches.begin(), particleMeshBatches.end());
@@ -447,9 +450,9 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
     };
 
     if (pass == MeshPassType::BaseTransparent && particleRenderer != nullptr && particleSnapshot != nullptr) {
-        const ParticleRenderBatchBuildResult& particleBuild = particleRenderer->Build(*particleSnapshot, *camera);
+        const ParticleRenderBatchBuildResult& particleBuild = particleRenderer->Build(*particleSnapshot, *camera, particleOffset);
         static_cast<void>(particleRenderer->PrepareVisualSimulation(viewId, *particleSnapshot));
-        const ParticleStripBuildResult& stripBuild = particleRenderer->BuildStrips(*particleSnapshot, *camera);
+        const ParticleStripBuildResult& stripBuild = particleRenderer->BuildStrips(*particleSnapshot, *camera, particleOffset);
         transparentSubmissionScratch_.clear();
         for (std::uint32_t index = 0U; index < submitCommands->size(); ++index) {
             const MeshDrawCommand& command = (*submitCommands)[index];
