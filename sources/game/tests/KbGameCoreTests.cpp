@@ -33,6 +33,11 @@
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/SceneUI.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
+#include "engine/scene/SceneRuntime.hpp"
+#include "engine/world/WorldCellIndex.hpp"
+#include "engine/world/WorldDescriptor.hpp"
+#include "engine/world/WorldObjectFile.hpp"
+#include "engine/world/WorldPartitionRuntime.hpp"
 #include "engine/security/ReleaseKeys.hpp"
 #include "engine/security/ReleaseManifest.hpp"
 #include "engine/save/SaveGameService.hpp"
@@ -58,6 +63,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <thread>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -923,6 +929,109 @@ void RunWindowsRuntimeModulePackagingTests() {
         "Windows cooker accepted a missing custom module DLL");
 }
 
+// A partitioned world placed in the default map ships as its built cells: the cooker builds
+// the world from its object files, follows world -> cell index -> cells and HLOD proxies,
+// and the packaged runtime streams the cells without any loose file.
+void RunPartitionedWorldCookTest() {
+    namespace bake = kb::assets::bake;
+    const Fixture fixture = BuildFixture(TestRoot() / "partitioned_world", "Project");
+    WriteTextFile(fixture.root / "Assets" / "Meshes" / "Rock.obj",
+        "v 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\nvt 0 0\nvt 1 0\nvt 1 1\nvt 0 1\nvn 0 0 1\n"
+        "usemtl stone\nf 1/1/1 2/2/1 3/3/1\nf 1/1/1 3/3/1 4/4/1\n");
+    const std::uint64_t meshId = kb::assets::MakeAssetId(kb::assets::NormalizeAssetPath("/Game/Meshes/Rock.obj") + ":RenderMesh").value;
+    const std::filesystem::path descriptorPath = fixture.root / "Assets" / "Worlds" / "Forest.21kbworld";
+    kb::world::WorldDescriptor descriptor;
+    descriptor.guid = "forest";
+    descriptor.name = "Forest";
+    descriptor.cellSize = 64.0;
+    descriptor.objectsDirectory = "Forest.objects";
+    descriptor.dataLayers = { { .name = "night", .initiallyActive = false } };
+    descriptor.hlod = { .enabled = true, .range = 512.0, .triangleRatio = 0.5 };
+    std::string error;
+    Require(kb::world::WorldDescriptorIO::Write(descriptorPath, descriptor, error), "World fixture descriptor could not be written");
+    const auto writeObject = [&](const std::string& name, double x, const std::string& layer) {
+        kb::world::WorldObjectFile object;
+        object.header.guid = kb::world::MakeDeterministicWorldObjectGuid(name);
+        object.header.name = name;
+        object.header.position = { x, 0.0, 10.0 };
+        object.header.dataLayer = layer;
+        object.header.nodeCount = 1U;
+        kb::scene::ScenePrefabNodeDesc node;
+        node.stableId = kb::world::WorldObjectStableId(object.header.guid, 0U);
+        node.name = name;
+        node.transform.localPosition = { static_cast<float>(x), 0.0F, 10.0F };
+        node.components.meshRenderer = kb::scene::MeshRendererComponent{ .meshAssetId = meshId };
+        static_cast<void>(object.prefab.AddNode(node));
+        const std::vector<std::uint8_t> bytes = kb::world::WorldObjectFileIO::Serialize(object, error);
+        Require(!bytes.empty() && kb::world::WorldObjectFileIO::WriteBytes(
+            descriptorPath.parent_path() / "Forest.objects" / (object.header.guid + ".21kbobject"), bytes, error),
+            "World fixture object could not be written");
+    };
+    for (int index = 0; index < 3; ++index) {
+        writeObject("Rock" + std::to_string(index), index * 64.0 + 10.0, {});
+    }
+    writeObject("Lamp", 12.0, "night");
+    std::uint64_t worldId = 0U;
+    {
+        kb::scene::Scene authored;
+        Require(authored.Assets().MountProject(fixture.root), "World fixture project could not be mounted");
+        static_cast<void>(authored.Assets().Discover());
+        const kb::assets::AssetMetadata* world = authored.Assets().Manager().Registry().FindByPath("/Game/Worlds/Forest.21kbworld");
+        Require(world != nullptr && world->type == "World", "World fixture descriptor was not discovered as a world");
+        worldId = world->id.value;
+        const kb::scene::SceneObject owner = authored.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Forest" });
+        authored.Components().ContentInstances().Set(owner.Entity(), kb::scene::ContentInstanceComponent{
+            .assetId = worldId, .kind = kb::scene::ContentInstanceKind::PartitionedWorld });
+        Require(kb::scene::SceneDocumentService::Save(authored, fixture.root / "Assets" / "Scenes" / "Main.21kbscene", "Main"),
+            "World fixture scene could not be saved");
+    }
+    kb::project::ProjectSettings settings;
+    settings.defaultMap = fixture.sceneVirtualPath;
+    settings.physicsLayersAsset.clear();
+    settings.inputEnabled = false;
+    WriteSettings(fixture.root, settings);
+    const std::filesystem::path packPath = TestRoot() / "partitioned_world_package" / "Game.kbpack";
+    std::ostringstream diagnostics;
+    const kb::game::ProjectCookResult cooked = kb::game::CookProject(
+        kb::game::ProjectCookRequest{ .projectPath = fixture.root, .targetProfileId = "Windows.x64", .outputPackPath = packPath },
+        diagnostics);
+    Require(cooked.succeeded, cooked.error.c_str());
+    Require(Mentions(diagnostics.str(), "built 1 partitioned world(s): 4 cells, 3 HLOD proxies"),
+        "The cooker did not build the partitioned world before collecting assets");
+
+    auto pack = std::make_shared<bake::RuntimeAssetPack>();
+    Require(pack->Mount(packPath, bake::WindowsX64BakeTargetProfile()) == bake::RuntimeAssetPackStatus::Success,
+        "Partitioned world package could not be mounted");
+    {
+        kb::scene::Scene runtime;
+        kb::assets::AssetManager& manager = runtime.Assets().Manager();
+        Require(manager.MountRuntimePack(pack), "Partitioned world package registry mount failed");
+        for (const char* path : { "/Game/Worlds/Forest.21kbworld", "/Game/Worlds/Forest.cells/Forest.21kbcells",
+                 "/Game/Worlds/Forest.cells/base/c_0_0.21kbscene", "/Game/Worlds/Forest.cells/base/c_2_0.21kbscene",
+                 "/Game/Worlds/Forest.cells/layer.night/c_0_0.21kbscene", "/Game/Worlds/Forest.cells/hlod/h_1_0.obj" }) {
+            Require(manager.Registry().FindByPath(path) != nullptr, (std::string{ "The package is missing " } + path).c_str());
+        }
+        Require(manager.Registry().FindByPath("/Game/Worlds/Forest.cells/hlod/h_1_0.obj")->type == "RenderMesh",
+            "The HLOD proxy was not packaged as a mesh");
+        const kb::scene::SceneObject owner = runtime.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Forest" });
+        runtime.Components().ContentInstances().Set(owner.Entity(), kb::scene::ContentInstanceComponent{
+            .assetId = worldId, .kind = kb::scene::ContentInstanceKind::PartitionedWorld });
+        kb::world::WorldPartitionRuntime world{ runtime };
+        static_cast<void>(world.AddSource({ .position = { 10.0, 0.0, 10.0 }, .loadRadius = 30.0, .unloadRadius = 40.0, .priority = 0 }));
+        const auto deadline = Clock::now() + std::chrono::seconds{ 30 };
+        while (world.CellState(owner.Entity(), { 0, 0 }) != kb::world::WorldCellState::Loaded && Clock::now() < deadline) {
+            static_cast<void>(runtime.Runtime().Update(1.0F / 60.0F));
+            std::this_thread::yield();
+        }
+        Require(world.CellState(owner.Entity(), { 0, 0 }) == kb::world::WorldCellState::Loaded,
+            "The packaged world did not stream its first cell");
+        Require(world.CellState(owner.Entity(), { 2, 0 }) == kb::world::WorldCellState::Unloaded &&
+                world.CellState(owner.Entity(), { 0, 0 }, "night") == kb::world::WorldCellState::Unloaded,
+            "The packaged world streamed cells outside the source or an inactive layer");
+    }
+    pack->Unmount();
+}
+
 void RunSceneMetaCookValidationTests() {
     const auto requireRejectedCook = [](
         const Fixture& fixture,
@@ -1682,6 +1791,11 @@ int main(int argc, char** argv) {
         std::fputs("kb_game_core packaged trust tests passed\n", stdout);
         return EXIT_SUCCESS;
     }
+    if (argc == 2 && std::string_view{ argv[1] } == "--partitioned-world") {
+        RunPartitionedWorldCookTest();
+        std::fputs("kb_game_core partitioned world package tests passed\n", stdout);
+        return EXIT_SUCCESS;
+    }
     if (argc == 2 && std::string_view{ argv[1] } == "--native-behaviours") {
         RunNativeBehaviourPackagingTests();
         std::fputs("kb_game_core native-behaviour package tests passed\n", stdout);
@@ -1697,6 +1811,7 @@ int main(int argc, char** argv) {
     RunWindowsRuntimeModulePackagingTests();
     RunNativeBehaviourPackagingTests();
     RunSceneMetaCookValidationTests();
+    RunPartitionedWorldCookTest();
     RunAuthoritativeMaterialGraphCookTest();
     RunNarrowingTests();
     RunSettingsTests();
