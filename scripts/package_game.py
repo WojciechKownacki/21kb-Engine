@@ -299,13 +299,17 @@ def _parse_chunk_rule(text: str) -> tuple[str, tuple[str, ...]]:
 
 
 def _parse_pack_set_index(text: str) -> list[tuple[str, str, int, str]]:
-    """(role, label, patch level, path) per line of a pack set index, in mount order."""
+    """(role, label, patch level, path) per pack line of a pack set index, in mount order. Key
+    lines -- pack content keys wrapped under that release's anchor key -- are left out: the new
+    release wraps the keys again under its own key (`kb_cli pack set-keys`)."""
     lines = text.split("\n")
     if not lines or lines[0] != "21kb-pack-set 1" or lines[-1] != "":
         raise PackagingError("the previous release's pack set index is malformed")
     entries: list[tuple[str, str, int, str]] = []
     for line in lines[1:-1]:
         kind, _, rest = line.partition(" ")
+        if kind == "key":
+            continue
         if kind == "base":
             entries.append(("base", "", 0, rest))
         elif kind == "chunk":
@@ -360,11 +364,6 @@ def _validate_content_packaging(args: argparse.Namespace) -> None:
         raise PackagingError("patch packs are packaged for Windows players only")
     if args.pack_chunk_rules or world_regions:
         raise PackagingError("a patch keeps the chunks of the release it patches; --pack-chunk does not apply")
-    if args.encrypt_pack:
-        raise PackagingError(
-            "a patch cannot be packaged with --encrypt-pack: every release gets a fresh content key, "
-            "and the packs of the release being patched are encrypted with the previous one"
-        )
     previous = args.patch_from.expanduser().resolve(strict=True)
     manifest = previous / "release.kbmanifest"
     if not (previous / "Game.kbpack").is_file() or not manifest.is_file():
@@ -813,9 +812,11 @@ def _build_pack_set(args: argparse.Namespace, cmake: Path, pack: Path, job: Path
     label = f"patch-{args.patch_level:04d}"
     patch = pack.with_name(f"Game.{label}.kbpack")
     current = previous / PACK_SET_INDEX if (previous / PACK_SET_INDEX).is_file() else previous / "Game.kbpack"
+    # The current content is read with the key of the player that shipped it, so an encrypted
+    # release can be patched.
     run_checked(
-        [kb_cli, "pack", "patch", "--current", current, "--patch-level", str(args.patch_level), "--label", label,
-         "--level", level, "--output", patch, pack],
+        [kb_cli, "pack", "patch", "--current", current, "--current-release", previous,
+         "--patch-level", str(args.patch_level), "--label", label, "--level", level, "--output", patch, pack],
         cwd=job,
         timeout_seconds=3600,
         on_line=lambda line: emit_diagnostic("Info", line),
@@ -845,6 +846,7 @@ def _sign_pack(args: argparse.Namespace, cmake: Path, pack_set: PackSet | Path, 
         key_file = job / "pack-content.key"
         run_checked([kb_cli, "keys", "content-key", "--out", key_file], cwd=job, timeout_seconds=60)
         content_key = ["--content-key", key_file]
+        args.pack_content_key = key_file
     for pack in pack_set.new_packs:
         _run_with_release_key(signing, job, ["pack", "sign", *content_key, pack])
     anchor = job / "trust-anchor.bin"
@@ -870,8 +872,20 @@ def _stage_pack_set(args: argparse.Namespace, pack: Path, stage: Path, job: Path
     index.write_bytes(pack_set.index_text.encode("utf-8"))
     signing: ReleaseSigning | None = getattr(args, "release_signing", None)
     anchor: Path | None = getattr(args, "trust_anchor", None)
-    if signing is not None and anchor is not None:
-        run_checked([signing.kb_cli, "pack", "set-verify", "--anchor", anchor, index], cwd=job, timeout_seconds=3600)
+    if signing is None or anchor is None:
+        return
+    previous: Path | None = getattr(args, "patch_from", None)
+    if previous is not None:
+        # The packs of the release being patched stay encrypted under the keys they were sealed
+        # with; the index carries those keys wrapped under this release's key.
+        content_key: Path | None = getattr(args, "pack_content_key", None)
+        run_checked(
+            [signing.kb_cli, "pack", "set-keys", *(("--content-key", content_key) if content_key else ()),
+             "--previous-release", previous, index],
+            cwd=job,
+            timeout_seconds=600,
+        )
+    run_checked([signing.kb_cli, "pack", "set-verify", "--anchor", anchor, index], cwd=job, timeout_seconds=3600)
 
 
 def _release_tools(args: argparse.Namespace) -> tuple[Path, ...]:

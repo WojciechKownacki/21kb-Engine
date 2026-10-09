@@ -67,7 +67,9 @@ XChaCha20-Poly1305 under a fresh content key; the nonce is the seal's random sal
 block offset and the tag sits in the block's seal entry, so the layout and every offset are
 unchanged. The index stays readable. The content key has to ship inside the player to be usable,
 so encryption keeps content away from ordinary extraction tools, not from a determined attacker;
-the signature, not the encryption, is what makes tampering detectable.
+the signature, not the encryption, is what makes tampering detectable. A patch release ships the
+packs of the release it patches unchanged; their own content keys travel in its pack set index,
+wrapped under the new release's content key (see [content_streaming.md](content_streaming.md)).
 
 ## Release manifest
 

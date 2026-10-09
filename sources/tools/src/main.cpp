@@ -56,7 +56,10 @@ Commands:
                        <cooked.kbpack>
                  patch --current <Game.kbpackset | Game.kbpack>
                        --patch-level <n> --output <patch.kbpack>
-                       [--label <label>] [--level <0-19>] <new-cook.kbpack>
+                       [--label <label>] [--level <0-19>]
+                       [--current-release <dir>] <new-cook.kbpack>
+                 set-keys [--content-key <file>]
+                          [--previous-release <dir> ...] <Game.kbpackset>
                  set-verify [--anchor <file> | --public-key <hex>]
                             <Game.kbpackset>
   release      Sign the manifest of a finished release directory, or verify one

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/assets/bake/AssetPack.hpp"
+#include "engine/assets/bake/AssetPackSeal.hpp"
 #include "engine/assets/bake/AssetPackWriter.hpp"
 
 #include <cstdint>
@@ -76,6 +77,9 @@ struct AssetPackPatchRequest {
     std::uint32_t patchLevel = 0U;
     AssetPackBlockCompression compression = AssetPackBlockCompression::Zstd;
     int compressionLevel = 9;
+    // How `current` is read: the content key of the release it belongs to decrypts its packs
+    // (and unwraps the keys its pack set index carries).
+    AssetPackTrust currentTrust{};
 };
 
 struct AssetPackPatchReport {
@@ -98,6 +102,27 @@ struct AssetPackPatchReport {
 [[nodiscard]] bool BuildAssetPackPatch(
     const AssetPackPatchRequest& request,
     AssetPackPatchReport& report,
+    std::string& error);
+
+struct AssetPackSetKeyReport {
+    std::uint64_t packs = 0U;
+    std::uint64_t encryptedPacks = 0U;
+    // Packs that now carry a key line: encrypted under a key other than the release's.
+    std::uint64_t wrappedKeys = 0U;
+};
+
+// Gives the pack set index at `indexPath` exactly the key lines its packs need under a release
+// whose anchor carries `releaseKey` (nullptr for a release without one): a pack sealed without
+// encryption, or encrypted under `releaseKey`, gets none; a pack encrypted under any other key
+// gets that key -- found among `knownKeys` by the id its seal records -- wrapped under
+// `releaseKey`. Fails, leaving the index as it was, when a pack is unsealed or unreadable, when an
+// encrypted pack's key is not among `knownKeys`, or when an encrypted pack would need a key line
+// and there is no `releaseKey` to wrap it under.
+[[nodiscard]] bool RewrapAssetPackSetKeys(
+    const std::filesystem::path& indexPath,
+    const kb::security::AeadKey* releaseKey,
+    std::span<const kb::security::AeadKey> knownKeys,
+    AssetPackSetKeyReport& report,
     std::string& error);
 
 } // namespace kb::assets::bake

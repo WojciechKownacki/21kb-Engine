@@ -106,6 +106,11 @@ struct TrustAnchorLookup {
 // player on every host, a Windows PE player on Windows.
 [[nodiscard]] TrustAnchorLookup ReadTrustAnchorFromExecutable(const std::filesystem::path& executable);
 
+// The trust anchor of the player a release directory ships: the first file directly in the
+// directory that is a player (a .exe, or an ELF image) and carries one. Absent when no player
+// does, Invalid when a player's anchor is damaged.
+[[nodiscard]] TrustAnchorLookup FindReleaseTrustAnchor(const std::filesystem::path& releaseDirectory);
+
 // A trust anchor slot (see kTrustAnchorElfSectionName): Absent while empty, Invalid when it is
 // not a well-formed slot or its anchor does not decode.
 [[nodiscard]] TrustAnchorLookup DecodeTrustAnchorSlot(std::span<const std::uint8_t> slot);

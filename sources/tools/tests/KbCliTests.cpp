@@ -21,6 +21,7 @@
 #include "engine/scene/PhysicsLayersAssetIO.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneUIComponents.hpp"
+#include "engine/security/ReleaseKeys.hpp"
 #include "engine/world/WorldCellIndex.hpp"
 #include "engine/world/WorldDescriptor.hpp"
 #include "engine/world/WorldObjectFile.hpp"
@@ -2497,6 +2498,175 @@ void RunPackSetCommandTests() {
     return image;
 }
 
+// pack patch --current-release and pack set-keys: an encrypted release is patched by a release
+// with a fresh content key, the packs it ships again keep the keys they were sealed with, wrapped
+// under the new release's key in its pack set index, and a second patch release carries all of
+// them forward. A release whose index lacks those keys does not verify.
+void RunEncryptedPatchCommandTests() {
+    const std::filesystem::path root = ReleaseTestRoot() / "EncryptedPatch";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    for (const char* folder : { "R1", "R2", "R3", "Keys" }) {
+        std::filesystem::create_directories(root / folder, error);
+    }
+    Require(!error, "kb_cli encrypted patch test root could not be prepared");
+    const std::string key = (root / "Keys" / "game.kbkey").string();
+    Require(Run(&kb::cli::RunKeysCommand, { "generate", "--out", key }).exitCode == 0, "the release key could not be generated");
+    const auto contentKey = [&](const char* name) {
+        const std::string path = (root / "Keys" / name).string();
+        Require(Run(&kb::cli::RunKeysCommand, { "content-key", "--out", path }).exitCode == 0, "a content key could not be made");
+        return path;
+    };
+    const auto anchorWith = [&](const std::string& content, const std::filesystem::path& release) {
+        const std::string anchor = (release / "anchor.bin").string();
+        Require(Run(&kb::cli::RunKeysCommand,
+                    { "anchor", "--key", key, "--product", "Example.Patch", "--content-key", content, "--out", anchor })
+                    .exitCode == 0,
+            "a release anchor could not be made");
+        std::ifstream input{ anchor, std::ios::binary };
+        const std::vector<std::uint8_t> bytes{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+        const std::vector<std::uint8_t> player = MakeLinuxPlayer(bytes);
+        std::ofstream output{ release / "Game", std::ios::binary | std::ios::trunc };
+        output.write(reinterpret_cast<const char*>(player.data()), static_cast<std::streamsize>(player.size()));
+        Require(output.good(), "a release player could not be written");
+        return anchor;
+    };
+    const auto copyRelease = [&](const std::filesystem::path& from, const std::filesystem::path& to) {
+        for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator{ from }) {
+            const std::string extension = entry.path().extension().string();
+            if (extension == ".kbpack" || extension == ".kbpackset") {
+                std::filesystem::copy_file(entry.path(), to / entry.path().filename(),
+                    std::filesystem::copy_options::overwrite_existing, error);
+            }
+        }
+        Require(!error, "a release could not be copied");
+    };
+
+    // Release 1: a base and a chunk, encrypted under K1.
+    const std::string cook = (root / "cook.kbpack").string();
+    WriteRuntimeCook(cook, "rock", false);
+    const std::string index1 = (root / "R1" / "Game.kbpackset").string();
+    Require(Run(&kb::cli::RunPackCommand, { "split", "--base", (root / "R1" / "Game.kbpack").string(), "--chunk",
+                "cell_0_0=/Game/Cells/0_0/", "--index", index1, cook }).exitCode == 0,
+        "the first release could not be split");
+    const std::string k1 = contentKey("k1.key");
+    for (const char* member : { "Game.kbpack", "Game.cell_0_0.kbpack" }) {
+        Require(Run(&kb::cli::RunPackCommand, { "sign", "--key", key, "--content-key", k1, (root / "R1" / member).string() })
+                    .exitCode == 0,
+            "a first-release pack could not be sealed");
+    }
+    const std::string anchor1 = anchorWith(k1, root / "R1");
+    Require(Run(&kb::cli::RunPackCommand, { "set-verify", "--anchor", anchor1, index1 }).exitCode == 0,
+        "the encrypted first release does not verify");
+
+    // Release 2: patch 1 under a fresh K2. The patch tool reads release 1 with its player's key.
+    const std::string next = (root / "next.kbpack").string();
+    WriteRuntimeCook(next, "rock, fixed", true);
+    const std::string patch1 = (root / "R2" / "Game.patch-0001.kbpack").string();
+    const CommandRun unreadable = Run(&kb::cli::RunPackCommand,
+        { "patch", "--current", index1, "--patch-level", "1", "--label", "patch-0001", "--output", patch1, next });
+    Require(unreadable.exitCode == 1 && Contains(unreadable.output, "ContentKeyMissing"),
+        ("pack patch read encrypted content without its release's key: " + unreadable.output).c_str());
+    const CommandRun patched = Run(&kb::cli::RunPackCommand, { "patch", "--current", index1, "--current-release",
+        (root / "R1").string(), "--patch-level", "1", "--label", "patch-0001", "--output", patch1, next });
+    Require(patched.exitCode == 0 && Contains(patched.output, "1 changed, 1 added"),
+        ("pack patch did not read the encrypted release it patches: " + patched.output).c_str());
+    const std::string k2 = contentKey("k2.key");
+    Require(Run(&kb::cli::RunPackCommand, { "sign", "--key", key, "--content-key", k2, patch1 }).exitCode == 0,
+        "the patch could not be sealed");
+    copyRelease(root / "R1", root / "R2");
+    const std::string index2 = (root / "R2" / "Game.kbpackset").string();
+    {
+        std::ofstream output{ index2, std::ios::binary | std::ios::app };
+        output << "patch 1 patch-0001 Game.patch-0001.kbpack\n";
+    }
+    const std::string anchor2 = anchorWith(k2, root / "R2");
+    const CommandRun keyless = Run(&kb::cli::RunPackCommand, { "set-verify", "--anchor", anchor2, index2 });
+    Require(keyless.exitCode == 1 && Contains(keyless.output, "ContentKeyMismatch"),
+        "a patch release verified without the keys of the packs it ships again");
+    Require(Run(&kb::cli::RunPackCommand, { "set-keys", "--content-key", k2, index2 }).exitCode == 1,
+        "set-keys wrapped keys it was never given");
+    const CommandRun keyed = Run(&kb::cli::RunPackCommand,
+        { "set-keys", "--content-key", k2, "--previous-release", (root / "R1").string(), index2 });
+    Require(keyed.exitCode == 0 && Contains(keyed.output, "3 packs, 3 encrypted, 2 with their own key"),
+        ("set-keys did not wrap the earlier packs' keys: " + keyed.output).c_str());
+    const CommandRun verified2 = Run(&kb::cli::RunPackCommand, { "set-verify", "--anchor", anchor2, index2 });
+    Require(verified2.exitCode == 0 && Contains(verified2.output, "3 packs"),
+        ("the encrypted patch release does not verify: " + verified2.output).c_str());
+    Require(Run(&kb::cli::RunPackCommand, { "set-verify", "--anchor", anchor1, index2 }).exitCode == 1,
+        "a patch release verified under the previous release's key");
+
+    // Release 3: patch 2 under K3 carries every earlier key forward.
+    const std::string next2 = (root / "next2.kbpack").string();
+    WriteRuntimeCook(next2, "rock, fixed twice", true);
+    const std::string patch2 = (root / "R3" / "Game.patch-0002.kbpack").string();
+    Require(Run(&kb::cli::RunPackCommand, { "patch", "--current", index2, "--current-release", (root / "R2").string(),
+                "--patch-level", "2", "--label", "patch-0002", "--output", patch2, next2 }).exitCode == 0,
+        "the second patch could not read the first patch release");
+    const std::string k3 = contentKey("k3.key");
+    Require(Run(&kb::cli::RunPackCommand, { "sign", "--key", key, "--content-key", k3, patch2 }).exitCode == 0,
+        "the second patch could not be sealed");
+    copyRelease(root / "R2", root / "R3");
+    const std::string index3 = (root / "R3" / "Game.kbpackset").string();
+    // The index R2 shipped, with patch 2 among its packs (key lines come after every pack line).
+    {
+        std::string text;
+        {
+            std::ifstream input{ index3, std::ios::binary };
+            text.assign(std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{});
+        }
+        const std::size_t keys = text.find("key ");
+        Require(keys != std::string::npos, "the first patch release's index carries no key lines");
+        text.insert(keys, "patch 2 patch-0002 Game.patch-0002.kbpack\n");
+        std::ofstream output{ index3, std::ios::binary | std::ios::trunc };
+        output << text;
+    }
+    const std::string anchor3 = anchorWith(k3, root / "R3");
+    const CommandRun keyed3 = Run(&kb::cli::RunPackCommand,
+        { "set-keys", "--content-key", k3, "--previous-release", (root / "R2").string(), index3 });
+    Require(keyed3.exitCode == 0 && Contains(keyed3.output, "4 packs, 4 encrypted, 3 with their own key"),
+        ("set-keys did not carry the earlier keys forward: " + keyed3.output).c_str());
+    const CommandRun verified3 = Run(&kb::cli::RunPackCommand, { "set-verify", "--anchor", anchor3, index3 });
+    Require(verified3.exitCode == 0 && Contains(verified3.output, "4 packs"),
+        ("the second encrypted patch release does not verify: " + verified3.output).c_str());
+
+    // A tampered block of a pack shipped again is still refused under its wrapped key.
+    std::vector<std::uint8_t> bytes;
+    const std::filesystem::path base3 = root / "R3" / "Game.kbpack";
+    {
+        std::ifstream input{ base3, std::ios::binary };
+        bytes.assign(std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{});
+    }
+    {
+        kb::assets::bake::AssetPackReader reader;
+        Require(reader.Mount(base3, kb::assets::bake::AssetPackAccess::Ranged, {}) ==
+                    kb::assets::bake::AssetPackReadStatus::ContentKeyMissing,
+            "an encrypted base mounted without a content key");
+    }
+    {
+        // A byte inside a block, located with the key the base was sealed under.
+        std::ifstream input{ k1, std::ios::binary };
+        const std::string text{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+        kb::assets::bake::AssetPackTrust trust{};
+        trust.contentKey.emplace();
+        std::string keyError;
+        Require(kb::security::DecodePackContentKey(text, *trust.contentKey, keyError), "the first content key did not decode");
+        kb::assets::bake::AssetPackReader reader;
+        Require(reader.Mount(base3, kb::assets::bake::AssetPackAccess::Ranged, trust) ==
+                    kb::assets::bake::AssetPackReadStatus::Success,
+            "the encrypted base did not mount with its own key");
+        const kb::assets::bake::AssetPackBlockEntry& block = reader.Artifacts().front().blocks.front();
+        bytes[static_cast<std::size_t>(block.offset + block.storedBytes / 2U)] ^= 0x01U;
+    }
+    {
+        std::ofstream output{ base3, std::ios::binary | std::ios::trunc };
+        output.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    }
+    Require(Run(&kb::cli::RunPackCommand, { "set-verify", "--anchor", anchor3, index3 }).exitCode == 1,
+        "a tampered encrypted pack shipped again verified");
+    std::filesystem::remove_all(root, error);
+}
+
 // keys and pack: a key is never written into a project, a signed (and encrypted) pack verifies
 // against the anchor made from the same key, and a pack checked against another key or without
 // its content key is refused.
@@ -2740,6 +2910,7 @@ int main() {
     RunKeyAndPackCommandTests();
     RunWorldCommandTests();
     RunPackSetCommandTests();
+    RunEncryptedPatchCommandTests();
     // Keep the production physics fixture on disk after the test process so
     // the built kb_cli executable can be run against it as a separate-process
     // runtime verification.

@@ -87,6 +87,28 @@ struct AssetPackTrust {
     std::span<const std::uint8_t> sealWithoutSignature);
 
 [[nodiscard]] std::array<std::uint8_t, 16U> AssetPackContentKeyId(const kb::security::AeadKey& key);
+
+// A pack's content key, wrapped under the content key of the release that ships it: a random
+// nonce, the encrypted key and its Poly1305 tag. A release's trust anchor carries one content
+// key; packs encrypted under another key -- the packs of an earlier release that a patch release
+// ships again -- reach the player as wrapped keys in the pack set index, so every release keeps
+// a fresh anchor key and every pack keeps the key it was sealed with. The wrapped key says
+// nothing about which pack it belongs to: the reader compares the unwrapped key's id with the
+// one the pack's signed seal records.
+inline constexpr std::size_t kWrappedAssetPackKeyBytes =
+    kb::security::kAeadNonceBytes + kb::security::kAeadKeyBytes + kb::security::kAeadTagBytes;
+using WrappedAssetPackKey = std::array<std::uint8_t, kWrappedAssetPackKeyBytes>;
+
+// False only when the system random number generator is unavailable.
+[[nodiscard]] bool WrapAssetPackContentKey(
+    const kb::security::AeadKey& releaseKey,
+    const kb::security::AeadKey& packKey,
+    WrappedAssetPackKey& out);
+// False when `wrapped` was not made under `releaseKey` or was altered.
+[[nodiscard]] bool UnwrapAssetPackContentKey(
+    const kb::security::AeadKey& releaseKey,
+    const WrappedAssetPackKey& wrapped,
+    kb::security::AeadKey& out);
 [[nodiscard]] kb::security::AeadNonce AssetPackBlockNonce(
     const std::array<std::uint8_t, 16U>& salt, std::uint64_t blockOffset) noexcept;
 
@@ -95,6 +117,12 @@ struct AssetPackTrust {
 // checked against the key the seal names; false for an unsigned or damaged pack.
 [[nodiscard]] bool ReadAssetPackSealDigest(
     const std::filesystem::path& path,
+    kb::security::Sha512Digest& digest,
+    std::string& error);
+// The same, with the decoded seal: whether the pack is encrypted and the id of its content key.
+[[nodiscard]] bool ReadAssetPackSeal(
+    const std::filesystem::path& path,
+    AssetPackSeal& seal,
     kb::security::Sha512Digest& digest,
     std::string& error);
 

@@ -148,7 +148,22 @@ RuntimeAssetPackStatus RuntimeAssetPack::MountSet(
             .reader = std::make_unique<AssetPackReader>(),
             .readMutex = std::make_unique<std::mutex>(),
         };
-        containerStatus_ = container.reader->Mount(packs[index].path, access, trust);
+        // A pack with its own content key gets it unwrapped with the release's key; one that
+        // does not unwrap is a key for another release (or an altered one).
+        AssetPackTrust packTrust = trust;
+        if (packs[index].wrappedContentKey.has_value()) {
+            kb::security::AeadKey packKey{};
+            if (!trust.contentKey.has_value() ||
+                !UnwrapAssetPackContentKey(*trust.contentKey, *packs[index].wrappedContentKey, packKey)) {
+                Unmount();
+                containerStatus_ = trust.contentKey.has_value() ? AssetPackReadStatus::ContentKeyMismatch
+                                                                : AssetPackReadStatus::ContentKeyMissing;
+                refusedContainer_ = static_cast<std::uint32_t>(index);
+                return RuntimeAssetPackStatus::ContainerRejected;
+            }
+            packTrust.contentKey = packKey;
+        }
+        containerStatus_ = container.reader->Mount(packs[index].path, access, packTrust);
         if (containerStatus_ != AssetPackReadStatus::Success) {
             Unmount();
             refusedContainer_ = static_cast<std::uint32_t>(index);
@@ -178,6 +193,7 @@ RuntimeAssetPackStatus RuntimeAssetPack::MountSetIndex(
             .role = entry.role,
             .label = entry.label,
             .patchLevel = entry.patchLevel,
+            .wrappedContentKey = entry.wrappedContentKey,
         });
     }
     return MountSet(packs, profile, access, trust);

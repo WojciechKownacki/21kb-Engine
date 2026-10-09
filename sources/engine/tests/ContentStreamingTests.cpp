@@ -1390,6 +1390,163 @@ void PatchesRemoveAssetsThroughSignedTombstones() {
     Purge(root);
 }
 
+[[nodiscard]] kb::security::AeadKey NewContentKey() {
+    kb::security::AeadKey key{};
+    Require(kb::security::SecureRandom(key.Span()), "A test content key could not be generated");
+    return key;
+}
+
+// Red when: the packs an earlier release encrypted under its own content key cannot be read in a
+// patch release whose anchor carries a fresh key -- the index's wrapped keys must open exactly
+// their own packs, and the key tool must write them -- or when a key line that was altered, made
+// under another release's key, or belongs to another pack is accepted, or a tampered block of a
+// re-shipped encrypted pack reads.
+void EncryptedPackSetsKeepEachPacksKey() {
+    const std::filesystem::path root = Root() / "set-keys";
+    Purge(root);
+    const PackSetFixture fixture = BuildPackSet(root);
+    const bake::BakeTargetProfile profile = bake::WindowsX64BakeTargetProfile();
+    const kb::security::ReleaseSigningKey signer = NewKey();
+    const kb::security::AeadKey oldKey = NewContentKey();
+    const kb::security::AeadKey newKey = NewContentKey();
+    const kb::security::AeadKey strangerKey = NewContentKey();
+
+    // Wrapping: only the release key that wrapped a pack key unwraps it, and only unaltered.
+    bake::WrappedAssetPackKey wrapped{};
+    Require(bake::WrapAssetPackContentKey(newKey, oldKey, wrapped), "A pack key could not be wrapped");
+    kb::security::AeadKey unwrapped{};
+    Require(bake::UnwrapAssetPackContentKey(newKey, wrapped, unwrapped) &&
+            bake::AssetPackContentKeyId(unwrapped) == bake::AssetPackContentKeyId(oldKey),
+        "A wrapped pack key did not unwrap to itself");
+    Require(!bake::UnwrapAssetPackContentKey(strangerKey, wrapped, unwrapped), "A pack key unwrapped under another key");
+    bake::WrappedAssetPackKey altered = wrapped;
+    altered[30] ^= 0x01U;
+    Require(!bake::UnwrapAssetPackContentKey(newKey, altered, unwrapped), "An altered wrapped key unwrapped");
+
+    // Release 1 sealed the base, the chunk and patch 1 under its key; release 2 adds patch 2 under
+    // a fresh one.
+    for (const std::filesystem::path& member : { fixture.base, fixture.chunk, fixture.patch1 }) {
+        Seal(member, signer, &oldKey);
+    }
+    Seal(fixture.patch2, signer, &newKey);
+    const std::filesystem::path index = root / bake::kAssetPackSetFileName;
+    const std::string packLines = "21kb-pack-set 1\nbase Game.kbpack\nchunk cell_0_0 Game.cell_0_0.kbpack\n"
+                                  "patch 1 patch-0001 Game.patch-0001.kbpack\npatch 2 patch-0002 Game.patch-0002.kbpack\n";
+    WriteText(index, packLines);
+    bake::AssetPackTrust trust = TrustOnly(signer);
+    trust.contentKey = newKey;
+    bake::RuntimeAssetPack pack;
+    Require(pack.MountSetIndex(index, profile, bake::AssetPackAccess::Ranged, trust) ==
+                bake::RuntimeAssetPackStatus::ContainerRejected &&
+            pack.ContainerStatus() == bake::AssetPackReadStatus::ContentKeyMismatch && pack.RefusedContainer() == 0U,
+        "Packs of an earlier release opened without their keys");
+
+    // The key tool: nothing to wrap with, nothing known, then the earlier release's key.
+    bake::AssetPackSetKeyReport report{};
+    std::string error;
+    Require(!bake::RewrapAssetPackSetKeys(index, &newKey, {}, report, error) && std::ranges::equal(ReadFileBytes(index), Bytes(packLines)),
+        "Keys were written without the key that opens the packs");
+    const std::array<kb::security::AeadKey, 1U> known{ oldKey };
+    Require(!bake::RewrapAssetPackSetKeys(index, nullptr, known, report, error),
+        "Keys were written for a release without a content key");
+    {
+        const bool succeeded = bake::RewrapAssetPackSetKeys(index, &newKey, known, report, error);
+        Require(succeeded, error.c_str());
+    }
+    Require(report.packs == 4U && report.encryptedPacks == 4U && report.wrappedKeys == 3U,
+        "The key tool did not wrap exactly the earlier release's packs");
+    bake::AssetPackSetIndex parsed{};
+    Require(bake::ReadAssetPackSetIndex(index, parsed) == bake::AssetPackSetStatus::Success &&
+            parsed.packs[0].wrappedContentKey.has_value() && parsed.packs[2].wrappedContentKey.has_value() &&
+            !parsed.packs[3].wrappedContentKey.has_value() &&
+            std::ranges::equal(Bytes(bake::EncodeAssetPackSetIndex(parsed)), ReadFileBytes(index)),
+        "The index with key lines does not round-trip");
+    Require(pack.MountSetIndex(index, profile, bake::AssetPackAccess::Ranged, trust) == bake::RuntimeAssetPackStatus::Success &&
+            ReadAssetText(pack, kTree) == kTree.content && ReadAssetText(pack, kCellProp) == kCellProp.content &&
+            ReadAssetText(pack, kNewInPatch) == kNewInPatch.content &&
+            ReadAssetText(pack, kRockPatchedAgain) == kRockPatchedAgain.content,
+        "A patch release did not read the packs it ships again under their own keys");
+    pack.Unmount();
+    bake::AssetPackTrust keyless = TrustOnly(signer);
+    Require(pack.MountSetIndex(index, profile, bake::AssetPackAccess::Ranged, keyless) ==
+                bake::RuntimeAssetPackStatus::ContainerRejected &&
+            pack.ContainerStatus() == bake::AssetPackReadStatus::ContentKeyMissing,
+        "Wrapped keys were used without the release's key");
+
+    // Key lines that are not the release's own, or not their pack's.
+    const auto mountWith = [&](const bake::AssetPackSetIndex& edited) {
+        WriteText(index, bake::EncodeAssetPackSetIndex(edited));
+        return pack.MountSetIndex(index, profile, bake::AssetPackAccess::Ranged, trust);
+    };
+    bake::AssetPackSetIndex edited = parsed;
+    (*edited.packs[0].wrappedContentKey)[40] ^= 0x01U;
+    Require(mountWith(edited) == bake::RuntimeAssetPackStatus::ContainerRejected &&
+            pack.ContainerStatus() == bake::AssetPackReadStatus::ContentKeyMismatch && pack.RefusedContainer() == 0U,
+        "An altered key line opened its pack");
+    edited = parsed;
+    Require(bake::WrapAssetPackContentKey(strangerKey, oldKey, *edited.packs[0].wrappedContentKey), "A stranger wrap failed");
+    Require(mountWith(edited) == bake::RuntimeAssetPackStatus::ContainerRejected &&
+            pack.ContainerStatus() == bake::AssetPackReadStatus::ContentKeyMismatch,
+        "A key wrapped under another release's key opened a pack");
+    edited = parsed;
+    Require(bake::WrapAssetPackContentKey(newKey, strangerKey, *edited.packs[1].wrappedContentKey), "A wrap failed");
+    Require(mountWith(edited) == bake::RuntimeAssetPackStatus::ContainerRejected &&
+            pack.ContainerStatus() == bake::AssetPackReadStatus::ContentKeyMismatch && pack.RefusedContainer() == 1U,
+        "A key that is not its pack's opened the pack");
+    edited = parsed;
+    edited.packs[3].wrappedContentKey = parsed.packs[0].wrappedContentKey;
+    Require(mountWith(edited) == bake::RuntimeAssetPackStatus::ContainerRejected && pack.RefusedContainer() == 3U,
+        "Another pack's key line opened the newest patch");
+
+    // The index's own rules for key lines.
+    const auto parseStatus = [](std::string_view text) {
+        bake::AssetPackSetIndex ignored{};
+        return bake::ParseAssetPackSetIndex(text, ignored);
+    };
+    const std::string keyHex = kb::security::ToHex(*parsed.packs[0].wrappedContentKey);
+    Require(parseStatus("21kb-pack-set 1\nbase Game.kbpack\nkey " + keyHex + " Game.kbpack\n") == bake::AssetPackSetStatus::Success,
+        "A key line for the base did not parse");
+    Require(parseStatus("21kb-pack-set 1\nkey " + keyHex + " Game.kbpack\nbase Game.kbpack\n") == bake::AssetPackSetStatus::Malformed,
+        "A key line before its pack parsed");
+    Require(parseStatus("21kb-pack-set 1\nbase Game.kbpack\nkey " + keyHex + " Other.kbpack\n") == bake::AssetPackSetStatus::Malformed,
+        "A key line for an unlisted pack parsed");
+    Require(parseStatus("21kb-pack-set 1\nbase Game.kbpack\nkey " + keyHex + " Game.kbpack\nkey " + keyHex + " Game.kbpack\n") ==
+                bake::AssetPackSetStatus::Duplicate,
+        "Two key lines for one pack parsed");
+    Require(parseStatus("21kb-pack-set 1\nbase Game.kbpack\nkey " + keyHex.substr(2U) + " Game.kbpack\n") ==
+                bake::AssetPackSetStatus::Malformed,
+        "A short key parsed");
+    Require(parseStatus("21kb-pack-set 1\nbase Game.kbpack\nkey " + keyHex + " Game.kbpack\nchunk a Game.a.kbpack\n") ==
+                bake::AssetPackSetStatus::Malformed,
+        "A pack line after a key line parsed");
+
+    // A tampered block of a pack shipped again is refused when it is read.
+    WriteText(index, bake::EncodeAssetPackSetIndex(parsed));
+    std::vector<std::uint8_t> base = ReadFileBytes(fixture.base);
+    {
+        bake::AssetPackTrust own = TrustOnly(signer);
+        own.contentKey = oldKey;
+        bake::AssetPackReader reader;
+        Require(reader.Mount(fixture.base, bake::AssetPackAccess::Ranged, own) == bake::AssetPackReadStatus::Success,
+            "The encrypted base did not mount under its own key");
+        for (const bake::AssetPackArtifactEntry& artifact : reader.Artifacts()) {
+            if (artifact.assetTypeId != bake::kRuntimeManifestAssetTypeId) {
+                const bake::AssetPackBlockEntry& block = artifact.blocks.front();
+                base[static_cast<std::size_t>(block.offset)] ^= 0x01U;
+            }
+        }
+    }
+    WriteFileBytes(fixture.base, base);
+    Require(pack.MountSetIndex(index, profile, bake::AssetPackAccess::Ranged, trust) == bake::RuntimeAssetPackStatus::Success,
+        "Payload damage stopped the catalogue from mounting");
+    bake::RuntimeAssetPayload payload{};
+    Require(pack.ReadAssetPayload(SetAssetId(kTree), bake::RuntimeArtifactEncoding::SourceBytes, {}, payload) !=
+                bake::RuntimeAssetPackStatus::Success,
+        "A tampered encrypted block of a re-shipped pack was read");
+    pack.Unmount();
+    Purge(root);
+}
+
 // ---- Asynchronous I/O -------------------------------------------------------------------------
 
 // Red when: queued reads are not served highest priority first, a re-prioritised read keeps its
@@ -1725,6 +1882,7 @@ void RunContentStreamingTests() {
     ReleaseManifestBindsEveryPackOfASet();
     PackToolsSplitRepackAndPatch();
     PatchesRemoveAssetsThroughSignedTombstones();
+    EncryptedPackSetsKeepEachPacksKey();
     AsyncReadsFollowPriorityAndReturnExactRanges();
     StreamingStaysWithinItsBudget();
     PackBlocksStreamAsynchronously();

@@ -20,21 +20,6 @@ namespace {
 
 constexpr std::uintmax_t kMaxKeyFileBytes = 64U * 1024U;
 
-// A player executable of a release: a Windows .exe, or a Linux ELF player (which has no extension).
-[[nodiscard]] bool IsPlayerExecutable(const std::filesystem::directory_entry& entry) {
-    if (entry.path().extension() == ".exe") {
-        return true;
-    }
-    std::error_code error;
-    if (!entry.is_regular_file(error) || error) {
-        return false;
-    }
-    std::ifstream input{ entry.path(), std::ios::binary };
-    char magic[4]{};
-    input.read(magic, sizeof(magic));
-    return input.gcount() == 4 && magic[0] == '\x7F' && magic[1] == 'E' && magic[2] == 'L' && magic[3] == 'F';
-}
-
 [[nodiscard]] bool ReadSmallFile(const std::filesystem::path& path, std::string& out, std::string& error) {
     std::error_code sizeError;
     const std::uintmax_t size = std::filesystem::file_size(path, sizeError);
@@ -320,25 +305,14 @@ int RunReleaseVerify(const ArgumentList& arguments, CommandIo io) {
         }
     } else {
         // The release key is the one the shipped player carries, not one the caller supplies.
-        bool found = false;
-        std::error_code iterationError;
-        for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator{ root, iterationError }) {
-            if (!IsPlayerExecutable(entry)) {
-                continue;
-            }
-            kb::security::TrustAnchorLookup lookup = kb::security::ReadTrustAnchorFromExecutable(entry.path());
-            if (lookup.state == kb::security::TrustAnchorLookup::State::Invalid) {
-                return Fail(io, entry.path().filename().string() + ": " + lookup.error);
-            }
-            if (lookup.state == kb::security::TrustAnchorLookup::State::Present) {
-                anchor = std::move(lookup.anchor);
-                found = true;
-                break;
-            }
+        kb::security::TrustAnchorLookup lookup = kb::security::FindReleaseTrustAnchor(root);
+        if (lookup.state == kb::security::TrustAnchorLookup::State::Invalid) {
+            return Fail(io, lookup.error);
         }
-        if (!found) {
+        if (lookup.state != kb::security::TrustAnchorLookup::State::Present) {
             return Fail(io, "no player in the release carries a trust anchor; pass --anchor <file>");
         }
+        anchor = std::move(lookup.anchor);
     }
     const kb::security::ReleaseVerification verification =
         kb::security::VerifyReleaseDirectory(root, anchor.releaseKey, anchor.productId);
@@ -404,10 +378,13 @@ int RunPackCommand(const ArgumentList& arguments, CommandIo io) {
     if (action == "patch") {
         return RunPackPatchCommand(arguments, io);
     }
+    if (action == "set-keys") {
+        return RunPackSetKeysCommand(arguments, io);
+    }
     if (action == "set-verify") {
         return RunPackSetVerifyCommand(arguments, io);
     }
-    return Fail(io, "pack expects sign, verify, info, compress, split, patch or set-verify");
+    return Fail(io, "pack expects sign, verify, info, compress, split, patch, set-keys or set-verify");
 }
 
 } // namespace kb::cli
