@@ -1830,6 +1830,109 @@ void BackgroundJobsShareThePoolWithReads() {
     Purge(root);
 }
 
+// Red when: a long job runs on a load worker (so reads or load jobs wait behind it), a blocked
+// load job holds up long work, a long lane runs more jobs than its concurrency, long workers
+// start before long work needs them or past their limit, or a long lane's queued jobs survive
+// its end.
+void LongJobsNeverTakeLoadCapacity() {
+    const std::filesystem::path root = Root() / "long-jobs";
+    Purge(root);
+    std::filesystem::create_directories(root);
+    const std::filesystem::path path = root / "data.bin";
+    const std::vector<std::uint8_t> content = Noise(47U, 16U * 1024U);
+    WriteFileBytes(path, content);
+    const auto spinUntil = [](const std::function<bool()>& done) {
+        const Clock::time_point deadline = Clock::now() + std::chrono::seconds{ 30 };
+        while (!done() && Clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds{ 1 });
+        }
+        return done();
+    };
+    const auto wait = [](const streaming::BackgroundRequestHandle& request) {
+        return streaming::BackgroundLoadService::WaitUntilDone(request, Clock::now() + std::chrono::seconds{ 30 });
+    };
+
+    const auto service = std::make_shared<streaming::BackgroundLoadService>(streaming::BackgroundLoadServiceOptions{
+        .workerCount = 2U, .jobWorkers = 1U, .longJobWorkers = 2U });
+    Require(service->LongWorkerCount() == 0U && service->LongWorkerLimit() == 2U,
+        "Long workers started before any long work");
+
+    // Three blocking jobs in a long lane of concurrency two, and one long job of no lane.
+    std::atomic<int> longEntered{ 0 };
+    std::atomic<int> longRunning{ 0 };
+    std::atomic<int> longPeak{ 0 };
+    std::atomic<bool> releaseLong{ false };
+    const auto blockingLong = [&](std::string&) {
+        const int running = longRunning.fetch_add(1) + 1;
+        int peak = longPeak.load();
+        while (running > peak && !longPeak.compare_exchange_weak(peak, running)) {
+        }
+        ++longEntered;
+        const bool released = spinUntil([&] { return releaseLong.load(); });
+        longRunning.fetch_sub(1);
+        return released;
+    };
+    auto longLane = std::make_unique<streaming::BackgroundLane>(service, streaming::BackgroundJobClass::Long, 2U);
+    std::vector<streaming::BackgroundRequestHandle> longJobs;
+    for (int index = 0; index < 3; ++index) {
+        longJobs.push_back(longLane->Run(blockingLong));
+    }
+    Require(spinUntil([&] { return longEntered.load() == 2; }), "A long lane did not run two jobs at once");
+    std::atomic<bool> looseRan{ false };
+    const streaming::BackgroundRequestHandle looseLong = service->Run([&](std::string&) {
+        looseRan = true;
+        return true;
+    }, 0, streaming::BackgroundJobClass::Long);
+
+    // Every long worker is blocked; reads and load jobs still run at once.
+    const streaming::BackgroundRequestHandle read = service->Read(path, 10U, 1000U, 0);
+    const streaming::BackgroundRequestHandle loadJob = service->Run([](std::string&) { return true; }, 0);
+    Require(wait(read) && read->State() == streaming::BackgroundRequestState::Completed &&
+            std::equal(read->Bytes().begin(), read->Bytes().end(), content.begin() + 10) && wait(loadJob) &&
+            loadJob->State() == streaming::BackgroundRequestState::Completed,
+        "Blocked long jobs held up reads or load jobs");
+    Require(service->LongWorkerCount() == 2U && longEntered.load() == 2 && !looseRan &&
+            longJobs[2]->State() == streaming::BackgroundRequestState::Queued,
+        "Long work ran past its worker limit or its lane's concurrency");
+
+    // A blocked load job does not hold up long work either.
+    std::atomic<bool> releaseLoad{ false };
+    std::atomic<bool> loadEntered{ false };
+    const streaming::BackgroundRequestHandle blockedLoad = service->Run([&](std::string&) {
+        loadEntered = true;
+        return spinUntil([&] { return releaseLoad.load(); });
+    }, 0);
+    Require(spinUntil([&] { return loadEntered.load(); }), "A load job never started");
+    releaseLong = true;
+    Require(wait(looseLong) && looseRan && wait(longJobs[2]) &&
+            std::ranges::all_of(longJobs, [](const auto& job) { return job->State() == streaming::BackgroundRequestState::Completed; }),
+        "Long work waited for a blocked load job");
+    Require(longPeak.load() == 2, "A long lane ran more jobs than its concurrency");
+    releaseLoad = true;
+    Require(wait(blockedLoad), "The blocked load job never finished");
+
+    // Closing a long lane drops its queued jobs and waits for the running ones.
+    releaseLong = false;
+    longEntered = 0;
+    std::vector<streaming::BackgroundRequestHandle> closing;
+    for (int index = 0; index < 3; ++index) {
+        closing.push_back(longLane->Run(blockingLong));
+    }
+    Require(spinUntil([&] { return longEntered.load() == 2; }), "A long lane did not restart");
+    std::thread owner{ [&] { longLane.reset(); } };
+    Require(spinUntil([&] { return closing[2]->State() == streaming::BackgroundRequestState::Cancelled; }),
+        "Closing a long lane did not cancel its queued job");
+    releaseLong = true;
+    owner.join();
+    Require(closing[0]->IsDone() && closing[1]->IsDone() && longEntered.load() == 2,
+        "Closing a long lane returned before its running jobs or ran a cancelled one");
+    const streaming::BackgroundLoadServiceStats stats = service->Stats();
+    Require(stats.longJobsRun == 6U && stats.peakLongJobsRunning == 2U && stats.jobsRun == 2U,
+        "Long and load jobs were counted in the wrong class");
+    service->Forget(path);
+    Purge(root);
+}
+
 // ---- Residency under a budget -----------------------------------------------------------------
 
 // Red when: resident plus in-flight bytes ever exceed the budget; when loads do not go highest
@@ -2078,6 +2181,7 @@ void RunContentStreamingTests() {
     WorldRegionsParseForChunkRules();
     AsyncReadsFollowPriorityAndReturnExactRanges();
     BackgroundJobsShareThePoolWithReads();
+    LongJobsNeverTakeLoadCapacity();
     StreamingStaysWithinItsBudget();
     PackBlocksStreamAsynchronously();
     Purge(Root());
