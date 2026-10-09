@@ -2,6 +2,7 @@
 
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/assets/AssetId.hpp"
+#include "engine/assets/streaming/BackgroundLoadService.hpp"
 #include "engine/scene/SceneLoadedContent.hpp"
 #include "scene/prefab/ScenePrefabReferenceResolver.hpp"
 #include <future>
@@ -39,6 +40,9 @@ struct SceneStreamingState {
     SceneStreamingStats stats;
     std::vector<Job> jobs;
     std::size_t nextJob = 0U;
+    // Preparation and retirement run as jobs of the engine's background service, taken by the
+    // first job that needs it. A job owns what it captured, so the scene may go first.
+    std::shared_ptr<kb::assets::streaming::BackgroundLoadService> background;
 };
 
 class SceneStreamingService {
