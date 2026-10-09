@@ -27,6 +27,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <future>
 #include <iostream>
 #include <iterator>
 #include <memory>
@@ -1929,6 +1930,36 @@ void LongJobsNeverTakeLoadCapacity() {
     const streaming::BackgroundLoadServiceStats stats = service->Stats();
     Require(stats.longJobsRun == 6U && stats.peakLongJobsRunning == 2U && stats.jobsRun == 2U,
         "Long and load jobs were counted in the wrong class");
+
+    // A lane drains: every job queued so far runs before Drain returns.
+    auto drained = std::make_unique<streaming::BackgroundLane>(service, streaming::BackgroundJobClass::Long);
+    std::atomic<int> drainedRan{ 0 };
+    for (int index = 0; index < 4; ++index) {
+        static_cast<void>(drained->Run([&](std::string&) {
+            std::this_thread::sleep_for(std::chrono::milliseconds{ 2 });
+            ++drainedRan;
+            return true;
+        }));
+    }
+    drained->Drain();
+    Require(drainedRan.load() == 4, "Drain returned before the lane's queued jobs ran");
+    drained.reset();
+
+    // Results through a future, from either class; exceptions arrive as exceptions.
+    std::future<int> loadResult = streaming::RunForFuture(*service, streaming::BackgroundJobClass::Load, [] { return 41 + 1; });
+    std::future<std::string> longResult = streaming::RunForFuture(
+        *service, streaming::BackgroundJobClass::Long, [text = std::string{ "long" }] { return text + " result"; });
+    std::future<int> thrown = streaming::RunForFuture(*service, streaming::BackgroundJobClass::Long, []() -> int {
+        throw std::runtime_error{ "job threw" };
+    });
+    bool threw = false;
+    try {
+        static_cast<void>(thrown.get());
+    } catch (const std::runtime_error& error) {
+        threw = std::string_view{ error.what() } == "job threw";
+    }
+    Require(loadResult.get() == 42 && longResult.get() == "long result" && threw,
+        "A job's result or exception did not arrive through its future");
     service->Forget(path);
     Purge(root);
 }

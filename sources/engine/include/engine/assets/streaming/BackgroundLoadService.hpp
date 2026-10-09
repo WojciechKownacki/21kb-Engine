@@ -6,11 +6,13 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <span>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <unordered_map>
 #include <vector>
 
@@ -226,6 +228,9 @@ public:
     std::size_t CancelLane(BackgroundLaneId lane) noexcept;
     // Blocks until no job of the lane is running. Must not be called from a job of that lane.
     void WaitForLane(BackgroundLaneId lane) noexcept;
+    // Blocks until the lane has nothing queued and nothing running. Must not be called from a
+    // job of that lane.
+    void DrainLane(BackgroundLaneId lane) noexcept;
 
     // Closes the cached handle of a file once no request needs it any more.
     void Forget(const std::filesystem::path& path);
@@ -332,6 +337,8 @@ public:
     [[nodiscard]] BackgroundRequestHandle Run(BackgroundJob job, BackgroundPriority priority = 0);
     // Cancels every job not yet started and waits for the running ones; the lane stays usable.
     void CancelAndWait() noexcept;
+    // Waits until every job queued so far has run.
+    void Drain() noexcept;
 
     [[nodiscard]] BackgroundLoadService& Service() const noexcept {
         return *service_;
@@ -341,5 +348,23 @@ private:
     std::shared_ptr<BackgroundLoadService> service_;
     BackgroundLaneId id_ = kNoBackgroundLane;
 };
+
+// Runs `work` as a job of `jobClass` and hands its result, or the exception it threw, through a
+// std::future. Unlike std::async the future does not wait when destroyed: the job owns what
+// `work` captured. A job the service drops because it shut down first leaves the future broken.
+template <typename Work>
+[[nodiscard]] std::future<std::invoke_result_t<Work&>> RunForFuture(
+    BackgroundLoadService& service,
+    BackgroundJobClass jobClass,
+    Work work) {
+    using Result = std::invoke_result_t<Work&>;
+    auto task = std::make_shared<std::packaged_task<Result()>>(std::move(work));
+    std::future<Result> future = task->get_future();
+    static_cast<void>(service.Run([task](std::string&) {
+        (*task)();
+        return true;
+    }, 0, jobClass));
+    return future;
+}
 
 } // namespace kb::assets::streaming
