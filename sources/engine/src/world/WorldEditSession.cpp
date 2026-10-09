@@ -45,8 +45,10 @@ struct CapturedObject {
     return cell.x >= min.x && cell.x <= max.x && cell.z >= min.z && cell.z <= max.z;
 }
 
-[[nodiscard]] WorldPoint ToPoint(const kb::scene::TransformComponent& transform) {
-    return { static_cast<double>(transform.worldPosition.x), static_cast<double>(transform.worldPosition.y), static_cast<double>(transform.worldPosition.z) };
+// The world position of an object's root in double precision (docs/large_worlds.md): it decides the object's cell.
+[[nodiscard]] WorldPoint ToPoint(const kb::scene::Scene& scene, kb::scene::SceneEntity root) {
+    const kb::math::DVec3 position = scene.Transforms().WorldTranslation(root);
+    return { position.x, position.y, position.z };
 }
 
 } // namespace
@@ -169,7 +171,7 @@ struct WorldEditSession::Impl {
             file.header.name = split[index].prefab.Nodes().front().name;
             file.header.dataLayer = record.header.dataLayer;
             file.header.alwaysLoaded = record.header.alwaysLoaded;
-            file.header.position = ToPoint(scene->Transforms().Get(roots[index].Entity()));
+            file.header.position = ToPoint(*scene, roots[index].Entity());
             file.header.references = split[index].references;
             file.header.nodeCount = static_cast<std::uint32_t>(split[index].prefab.NodeCount());
             file.prefab = std::move(split[index].prefab);
@@ -440,7 +442,7 @@ std::vector<WorldEditObjectInfo> WorldEditSession::Objects() const {
         info.loaded = record.loaded;
         info.root = record.root;
         if (record.loaded && impl_->scene->Entities().IsAlive(record.root)) {
-            info.position = ToPoint(impl_->scene->Transforms().Get(record.root));
+            info.position = ToPoint(*impl_->scene, record.root);
             info.name = impl_->scene->Entities().Name(record.root);
         }
         info.cell = grid.CellOf(info.position.x, info.position.z);
@@ -672,8 +674,8 @@ WorldMigrationResult WorldMigration::ConvertScene(const std::filesystem::path& s
         const kb::scene::ScenePrefabNodeDesc& root = object.prefab.Nodes().front();
         file.header.guid = object.guid;
         file.header.name = root.name;
-        file.header.position = { static_cast<double>(root.transform.localPosition.x), static_cast<double>(root.transform.localPosition.y),
-            static_cast<double>(root.transform.localPosition.z) };
+        const kb::math::DVec3 rootPosition = root.LocalTranslation();
+        file.header.position = { rootPosition.x, rootPosition.y, rootPosition.z };
         file.header.references = object.references;
         file.header.nodeCount = static_cast<std::uint32_t>(object.prefab.NodeCount());
         // Scene-wide lighting and backdrops have no place of their own: keep them loaded.

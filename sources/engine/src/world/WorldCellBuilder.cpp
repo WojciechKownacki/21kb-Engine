@@ -65,7 +65,9 @@ private:
     return out;
 }
 
-[[nodiscard]] Affine LocalMatrix(const kb::scene::TransformComponent& transform) {
+[[nodiscard]] Affine LocalMatrix(const kb::scene::ScenePrefabNodeDesc& node) {
+    const kb::scene::TransformComponent& transform = node.transform;
+    const kb::math::DVec3 translation = node.LocalTranslation();
     double x = transform.localRotation.x;
     double y = transform.localRotation.y;
     double z = transform.localRotation.z;
@@ -83,7 +85,7 @@ private:
         (1.0 - 2.0 * (y * y + z * z)) * sx, (2.0 * (x * y + z * w)) * sx, (2.0 * (x * z - y * w)) * sx,
         (2.0 * (x * y - z * w)) * sy, (1.0 - 2.0 * (x * x + z * z)) * sy, (2.0 * (y * z + x * w)) * sy,
         (2.0 * (x * z + y * w)) * sz, (2.0 * (y * z - x * w)) * sz, (1.0 - 2.0 * (x * x + y * y)) * sz,
-        static_cast<double>(transform.localPosition.x), static_cast<double>(transform.localPosition.y), static_cast<double>(transform.localPosition.z),
+        translation.x, translation.y, translation.z,
     };
 }
 
@@ -121,7 +123,7 @@ void CollectHlodInstances(const WorldObjectFile& object, const WorldPartitionGri
     std::vector<bool> visible(nodes.size(), true);
     for (std::size_t index = 0U; index < nodes.size(); ++index) {
         const kb::scene::ScenePrefabNodeDesc& node = nodes[index];
-        const Affine local = LocalMatrix(node.transform);
+        const Affine local = LocalMatrix(node);
         const bool hidden = node.visibility.mode == kb::scene::VisibilityMode::Hidden || !node.visibility.visible;
         if (node.parentNode == kb::scene::ScenePrefabNodeDesc::NoParent) {
             world[index] = local;

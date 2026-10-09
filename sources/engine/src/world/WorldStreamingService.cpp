@@ -10,6 +10,7 @@
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneLoadedContent.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/StreamFocusComponent.hpp"
 #include "engine/scene/TransformComponent.hpp"
 #include "engine/world/WorldDescriptor.hpp"
@@ -51,7 +52,7 @@ struct Source {
     kb::ecs::QueryExecutionSettings settings{};
     settings.policy = kb::ecs::QueryExecutionPolicy::SingleThread;
     if (query.IsValid() && hot.Rebuild(query, settings)) {
-        hot.ForEachRange(settings.maxBatchSize, [&sources](const auto& batch) {
+        hot.ForEachRange(settings.maxBatchSize, [&sources, &scene](const auto& batch) {
             const scene::StreamFocusComponent* focuses = batch.template Components<0>();
             const scene::TransformComponent* transforms = batch.template Components<1>();
             for (std::size_t index = 0U; index < batch.Count(); ++index) {
@@ -60,9 +61,9 @@ struct Source {
                     !scene::ContainsStreamLoadMask(focus.loadMask, scene::StreamLoadMask::WorldFragment)) {
                     continue;
                 }
-                const auto& position = transforms[index].worldPosition;
+                const kb::math::DVec3 position = scene.Transforms().WorldTranslation(batch.EntityAt(index), transforms[index]);
                 sources.push_back({
-                    .position = { static_cast<double>(position.x), static_cast<double>(position.y), static_cast<double>(position.z) },
+                    .position = { position.x, position.y, position.z },
                     .loadRadius = static_cast<double>(focus.innerRadius),
                     .unloadRadius = static_cast<double>(focus.outerRadius),
                     .priority = focus.priority,
@@ -460,11 +461,12 @@ void StreamHlods(scene::Scene& scene, WorldPartitionState& state, WorldRuntimeIn
         }
         scene::SceneObjectDesc desc;
         desc.name = "HLOD " + std::to_string(coord.x) + "," + std::to_string(coord.z);
-        desc.transform.localPosition = { static_cast<float>(grid.MinX(coord)), 0.0F, static_cast<float>(grid.MinZ(coord)) };
         const scene::SceneObject object = scene.Entities().CreateObject(desc);
         if (!object.IsValid()) {
             continue;
         }
+        // The proxy mesh is relative to the cell corner, which is placed in double precision.
+        scene.Transforms().SetLocalTranslation(object.Entity(), kb::math::DVec3{ grid.MinX(coord), 0.0, grid.MinZ(coord) });
         scene::MeshRendererComponent renderer{};
         renderer.meshAssetId = mesh->id.value;
         renderer.castsShadow = false;
