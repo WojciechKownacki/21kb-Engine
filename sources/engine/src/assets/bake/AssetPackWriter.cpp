@@ -465,6 +465,81 @@ BakedAssetSinkStatus AssetPackWriter::OpenArtifact(const AssetBakeDigest& key, s
     return BakedAssetSinkStatus::Success;
 }
 
+BakedAssetSinkStatus AssetPackWriter::CopyArtifact(AssetPackReader& source, const AssetPackArtifactEntry& artifact) {
+    if (finished_) {
+        return BakedAssetSinkStatus::PackAlreadyFinished;
+    }
+    if (open_) {
+        return BakedAssetSinkStatus::AssetAlreadyOpen;
+    }
+    if (!profileIsValid_) {
+        return BakedAssetSinkStatus::InvalidProfile;
+    }
+    if (!optionsAreValid_) {
+        return BakedAssetSinkStatus::InvalidPackOptions;
+    }
+    // The key's digest is all that survives in a pack, and it already folds the profile in; the
+    // pack the artifact comes from has to have been baked for the same one.
+    if (!source.IsMounted() || source.Header().targetProfileId != targetProfileId_ ||
+        source.Header().targetProfileHash != targetProfileHash_) {
+        return BakedAssetSinkStatus::InvalidProfile;
+    }
+    if (artifact.key.high == 0U && artifact.key.low == 0U) {
+        return BakedAssetSinkStatus::InvalidKey;
+    }
+    if (const BakedAssetSinkStatus opened = OpenArtifact(artifact.key, artifact.assetTypeId);
+        opened != BakedAssetSinkStatus::Success) {
+        return opened;
+    }
+    const auto abandon = [this](BakedAssetSinkStatus status) {
+        AbortAsset();
+        return status;
+    };
+    std::vector<std::uint8_t> bytes;
+    // The primary block first, as every baker writes it; the auxiliary blocks keep their order,
+    // which is semantic for streaming fragments.
+    for (const bool primaryPass : { true, false }) {
+        for (const AssetPackBlockEntry& block : artifact.blocks) {
+            const bool primary = store::EqualsIgnoreAsciiCase(block.name, kBakedAssetPrimaryBlockName);
+            if (primary != primaryPass) {
+                continue;
+            }
+            if (source.ReadBlock(artifact, block.name, bytes) != AssetPackReadStatus::Success) {
+                return abandon(BakedAssetSinkStatus::WriteFailed);
+            }
+            if (primary) {
+                if (const BakedAssetSinkStatus status = WritePrimaryBlock(bytes, block.alignmentBytes);
+                    status != BakedAssetSinkStatus::Success) {
+                    return abandon(status);
+                }
+                continue;
+            }
+            BakedAssetBlock description{};
+            description.name = block.name;
+            description.residency = block.residency;
+            description.alignmentBytes = block.alignmentBytes;
+            for (const AssetPackFragmentEntry& fragment : source.Fragments()) {
+                if (fragment.offset == block.offset && fragment.bytes == block.storedBytes) {
+                    description.fragment = BakedAssetBlockFragment{
+                        .boundsMin = fragment.boundsMin,
+                        .boundsMax = fragment.boundsMax,
+                        .clusterCount = fragment.clusterCount,
+                    };
+                    break;
+                }
+            }
+            if (const BakedAssetSinkStatus status = WriteAuxiliaryBlock(description, bytes);
+                status != BakedAssetSinkStatus::Success) {
+                return abandon(status);
+            }
+        }
+    }
+    if (const BakedAssetSinkStatus committed = CommitAsset(); committed != BakedAssetSinkStatus::Success) {
+        return abandon(committed);
+    }
+    return BakedAssetSinkStatus::Success;
+}
+
 BakedAssetSinkStatus AssetPackWriter::WritePrimaryBlock(std::span<const std::uint8_t> bytes,
                                                         std::uint32_t alignmentBytes) {
     if (!open_) {

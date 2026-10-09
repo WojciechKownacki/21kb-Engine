@@ -18,6 +18,7 @@
 #include "engine/assets/bake/BakeTargetProfile.hpp"
 #include "engine/assets/bake/AssetPackReader.hpp"
 #include "engine/assets/bake/AssetPackSeal.hpp"
+#include "engine/assets/bake/AssetPackTools.hpp"
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
 #include "engine/input/InputAssetIO.hpp"
 #include "engine/input/InputMappingContextAsset.hpp"
@@ -754,6 +755,169 @@ void RunPackagedTrustTests() {
     std::ostringstream unprotected;
     Require(kb::game::VerifyPackagedRelease(anchor.anchor, releaseRoot, releaseRoot / "Game.exe", securityRoot, unprotected) != nullptr,
         "A release without anti-rollback was refused for its release number");
+    kb::security::InstallVerifiedRelease(nullptr);
+}
+
+// A game cooked with compressed blocks, split into a base and a chunk and patched, mounts as one
+// pack set in the player, and its packaged release binds every pack and the pack set index: an
+// older but correctly sealed patch in place of the shipped one, or an edited index, stops it.
+void RunPackSetPackagingTests() {
+    namespace bake = kb::assets::bake;
+    const Fixture fixture = BuildFixture(TestRoot() / "pack_set_project", "Project");
+    kb::project::ProjectSettings settings;
+    settings.defaultMap = fixture.sceneVirtualPath;
+    settings.physicsLayersAsset.clear();
+    settings.inputEnabled = false;
+    WriteSettings(fixture.root, settings);
+    // A texture of world cell 0_0 the scene shows, so the cook carries it.
+    const std::filesystem::path texturePath = fixture.root / "Assets/Cells/0_0/Ground.tga";
+    std::string texture(18U + 4U * 4U * 3U, '\0');
+    texture[2] = 2; texture[12] = 4; texture[14] = 4; texture[16] = 24;
+    WriteTextFile(texturePath, texture);
+    {
+        kb::scene::Scene scene;
+        Require(scene.Assets().Manager().RegisterLoader(std::make_unique<kb::render::RenderTextureAssetLoader>()),
+            "Pack set fixture loader registration failed");
+        Require(scene.Assets().MountProject(fixture.root), "Pack set fixture mount failed");
+        static_cast<void>(scene.Assets().Discover());
+        const auto* metadata = scene.Assets().Manager().Registry().FindByPath("/Game/Cells/0_0/Ground.tga");
+        Require(metadata != nullptr, "Pack set fixture texture was not discovered");
+        const auto object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Ground" });
+        scene.Components().UI().Set(object.Entity(), kb::scene::UIRawImage{ .imageAssetId = metadata->id.value });
+        Require(kb::scene::SceneDocumentService::Save(scene, fixture.root / "Assets/Scenes/Main.21kbscene", "Main"),
+            "Pack set fixture scene save failed");
+    }
+    const std::filesystem::path work = TestRoot() / "pack_set_work";
+    const auto cook = [&](const std::filesystem::path& output) {
+        std::ostringstream diagnostics;
+        const auto cooked = kb::game::CookProject(
+            kb::game::ProjectCookRequest{ .projectPath = fixture.root, .targetProfileId = "Windows.x64",
+                .outputPackPath = output, .packCompressionLevel = 9 },
+            diagnostics);
+        Require(cooked.succeeded, cooked.error.c_str());
+    };
+    const std::filesystem::path firstCook = work / "first.kbpack";
+    cook(firstCook);
+    {
+        bake::AssetPackReader reader;
+        Require(reader.Mount(firstCook) == bake::AssetPackReadStatus::Success, "A compressed cook does not mount");
+        bool compressed = false;
+        for (const bake::AssetPackArtifactEntry& artifact : reader.Artifacts()) {
+            for (const bake::AssetPackBlockEntry& block : artifact.blocks) {
+                compressed = compressed || block.compression == bake::AssetPackBlockCompression::Zstd;
+            }
+        }
+        Require(compressed, "A cook asked to compress stored no block compressed");
+    }
+
+    // Version 1 of the game: a base and world cell 0_0 split into a chunk.
+    const std::filesystem::path release = TestRoot() / "pack_set_release";
+    std::filesystem::create_directories(release);
+    const std::vector<bake::AssetPackChunkRule> rules{
+        { .label = "cell_0_0", .virtualPathPrefixes = { "/Game/Cells/0_0/" }, .output = release / "Game.cell_0_0.kbpack" } };
+    bake::AssetPackSplitReport split{};
+    std::string error;
+    const bool splitOk = bake::SplitRuntimeAssetPack(
+        firstCook, release / "Game.kbpack", rules, bake::AssetPackBlockCompression::Zstd, 9, split, error);
+    Require(splitOk, error.c_str());
+    // Version 2: the texture changed; the patch carries it.
+    texture[18] = 127;
+    WriteTextFile(texturePath, texture);
+    const std::filesystem::path secondCook = work / "second.kbpack";
+    cook(secondCook);
+    WriteTextFile(release / "Game.kbpackset", "21kb-pack-set 1\nbase Game.kbpack\nchunk cell_0_0 Game.cell_0_0.kbpack\n");
+    bake::AssetPackPatchReport patch{};
+    const bool patched = bake::BuildAssetPackPatch(bake::AssetPackPatchRequest{ .current = release / "Game.kbpackset",
+        .next = secondCook, .output = release / "Game.patch-0001.kbpack", .label = "patch-0001", .patchLevel = 1U },
+        patch, error);
+    Require(patched, error.c_str());
+    Require(patch.changedAssets == 1U, "The patch does not carry exactly the changed texture");
+    // An older build of the same patch, as an attacker would plant it.
+    texture[18] = 64;
+    WriteTextFile(texturePath, texture);
+    const std::filesystem::path olderCook = work / "older.kbpack";
+    cook(olderCook);
+    const bool olderPatched = bake::BuildAssetPackPatch(bake::AssetPackPatchRequest{ .current = release / "Game.kbpackset",
+        .next = olderCook, .output = work / "Game.patch-0001.kbpack", .label = "patch-0001", .patchLevel = 1U },
+        patch, error);
+    Require(olderPatched, error.c_str());
+    const std::string index =
+        "21kb-pack-set 1\nbase Game.kbpack\nchunk cell_0_0 Game.cell_0_0.kbpack\npatch 1 patch-0001 Game.patch-0001.kbpack\n";
+    WriteTextFile(release / "Game.kbpackset", index);
+
+    // A development player mounts the set beside the base pack.
+    {
+        kb::game::GameProjectRuntime runtime{};
+        std::ostringstream diagnostics;
+        Require(kb::game::ReadGameProjectRuntime(release, {}, runtime, diagnostics) && runtime.assetPack != nullptr,
+            diagnostics.str().c_str());
+        Require(runtime.assetPack->ContainerCount() == 3U, "The player did not mount the whole pack set");
+        const bake::RuntimeAssetManifestEntry* ground = runtime.assetPack->FindAsset("/Game/Cells/0_0/Ground.tga");
+        Require(ground != nullptr && runtime.assetPack->AssetContainer(ground->id) == 2U,
+            "The patched texture is not answered by the patch");
+    }
+
+    // Sealed and signed into a release.
+    kb::security::ReleaseSigningKey key;
+    Require(kb::security::GenerateReleaseSigningKey(key), "Pack set release key could not be generated");
+    for (const char* member : { "Game.kbpack", "Game.cell_0_0.kbpack", "Game.patch-0001.kbpack" }) {
+        {
+            const bool succeeded = bake::SealAssetPack(release / member, key, nullptr, error);
+            Require(succeeded, error.c_str());
+        }
+    }
+    {
+        const bool succeeded = bake::SealAssetPack(work / "Game.patch-0001.kbpack", key, nullptr, error);
+        Require(succeeded, error.c_str());
+    }
+    WriteTextFile(release / "Game.exe", "player");
+    kb::security::TrustAnchor anchor{};
+    anchor.productId = "Publisher.PackSet";
+    anchor.releaseKey = key.publicKey;
+    {
+        kb::security::ReleaseManifest manifest{};
+        manifest.productId = anchor.productId;
+        manifest.contentVersion = "2.0.0";
+        manifest.releaseNumber = 2U;
+        {
+            const bool succeeded = kb::security::BuildReleaseManifest(release, manifest, error);
+            Require(succeeded, error.c_str());
+        }
+        WriteTextFile(release / "release.kbmanifest", kb::security::SignReleaseManifest(manifest, key));
+    }
+    const std::filesystem::path securityRoot = TestRoot() / "pack_set_security";
+    std::ostringstream releaseErrors;
+    const auto installed = kb::game::VerifyPackagedRelease(anchor, release, release / "Game.exe", securityRoot, releaseErrors);
+    Require(installed != nullptr, releaseErrors.str().c_str());
+    bake::AssetPackTrust trust{};
+    trust.requiredSigner = key.publicKey;
+    const auto mountSet = [&](bake::RuntimeAssetPack& pack) {
+        return pack.MountSetIndex(release / "Game.kbpackset", bake::WindowsX64BakeTargetProfile(), bake::AssetPackAccess::Ranged,
+            trust);
+    };
+    {
+        bake::RuntimeAssetPack pack;
+        Require(mountSet(pack) == bake::RuntimeAssetPackStatus::Success &&
+                kb::game::PackBelongsToRelease(*installed, release / "Game.kbpack", pack, releaseErrors),
+            "The release's own pack set was not bound to its manifest");
+    }
+    // The older patch is sealed by the same key and mounts -- and is not this release's.
+    std::filesystem::copy_file(work / "Game.patch-0001.kbpack", release / "Game.patch-0001.kbpack",
+        std::filesystem::copy_options::overwrite_existing);
+    {
+        bake::RuntimeAssetPack pack;
+        std::ostringstream refusal;
+        Require(mountSet(pack) == bake::RuntimeAssetPackStatus::Success &&
+                !kb::game::PackBelongsToRelease(*installed, release / "Game.kbpack", pack, refusal) &&
+                Mentions(refusal.str(), "not the one this release shipped"),
+            "A patch swapped for an older sealed build was bound to the release");
+    }
+    // The index is hashed at startup: dropping the patch from it stops the game.
+    WriteTextFile(release / "Game.kbpackset", "21kb-pack-set 1\nbase Game.kbpack\nchunk cell_0_0 Game.cell_0_0.kbpack\n");
+    std::ostringstream edited;
+    Require(kb::game::VerifyPackagedRelease(anchor, release, release / "Game.exe", securityRoot, edited) == nullptr &&
+            Mentions(edited.str(), "FileModified") && Mentions(edited.str(), "Game.kbpackset"),
+        "An edited pack set index was allowed to start");
     kb::security::InstallVerifiedRelease(nullptr);
 }
 
@@ -1788,6 +1952,7 @@ int main(int argc, char** argv) {
     }
     if (argc == 2 && std::string_view{ argv[1] } == "--packaged-trust") {
         RunPackagedTrustTests();
+        RunPackSetPackagingTests();
         std::fputs("kb_game_core packaged trust tests passed\n", stdout);
         return EXIT_SUCCESS;
     }

@@ -17,6 +17,12 @@ namespace kb::cli {
 [[nodiscard]] int RunMcpCommand(const ArgumentList& arguments, std::istream& in, CommandIo io);
 [[nodiscard]] int RunKeysCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunPackCommand(const ArgumentList& arguments, CommandIo io);
+// The pack subcommands that work on pack contents and pack sets (CliPackSetCommands.cpp).
+[[nodiscard]] int RunPackInfoCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunPackCompressCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunPackSplitCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunPackPatchCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunPackSetVerifyCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunReleaseCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunWorldCommand(const ArgumentList& arguments, CommandIo io);
 
