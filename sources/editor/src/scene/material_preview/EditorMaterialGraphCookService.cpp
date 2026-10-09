@@ -488,8 +488,9 @@ EditorMaterialGraphCookService::EditorMaterialGraphCookService()
 }
 
 EditorMaterialGraphCookService::EditorMaterialGraphCookService(EditorMaterialGraphCookConfig config)
-    : config_(std::move(config)) {
-    StartWorker();
+    : config_(std::move(config)),
+      lane_{ std::make_unique<kb::assets::streaming::BackgroundLane>(
+          kb::assets::streaming::BackgroundLoadService::Shared(), kb::assets::streaming::BackgroundJobClass::Long) } {
 }
 
 EditorMaterialGraphCookService::~EditorMaterialGraphCookService() {
@@ -533,6 +534,7 @@ std::uint64_t EditorMaterialGraphCookService::RequestCook(
             ? EditorMaterialGraphCookStatus::CookUnavailable
             : EditorMaterialGraphCookStatus::Pending;
         latest_[variantKey] = std::move(pendingResult);
+        ScheduleDrainLocked();
     }
     wakeCv_.notify_all();
     return generation;
@@ -624,8 +626,16 @@ void EditorMaterialGraphCookService::WaitForIdle() {
     idleCv_.wait(lock, [this] { return pending_.empty() && inFlight_ == 0U; });
 }
 
-void EditorMaterialGraphCookService::StartWorker() {
-    worker_ = std::thread{ [this] { WorkerLoop(); } };
+void EditorMaterialGraphCookService::ScheduleDrainLocked() {
+    if (drainScheduled_ || stop_) {
+        return;
+    }
+    // The lane runs one drain at a time and never needs this mutex to queue it.
+    static_cast<void>(lane_->Run([this](std::string&) {
+        DrainPending();
+        return true;
+    }));
+    drainScheduled_ = true;
 }
 
 void EditorMaterialGraphCookService::StopWorker() {
@@ -635,16 +645,15 @@ void EditorMaterialGraphCookService::StopWorker() {
         pending_.clear();
     }
     wakeCv_.notify_all();
-    if (worker_.joinable()) {
-        worker_.join();
-    }
+    // Drops a drain that has not started and waits for a running one, which sees stop_.
+    lane_.reset();
 }
 
-void EditorMaterialGraphCookService::WorkerLoop() {
+void EditorMaterialGraphCookService::DrainPending() {
     std::unique_lock<std::mutex> lock{ mutex_ };
     while (true) {
-        wakeCv_.wait(lock, [this] { return stop_ || !pending_.empty(); });
-        if (stop_) {
+        if (stop_ || pending_.empty()) {
+            drainScheduled_ = false;
             return;
         }
 

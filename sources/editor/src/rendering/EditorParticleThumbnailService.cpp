@@ -6,6 +6,7 @@
 #include "editor/ParticlePreviewSession.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/AssetMetadata.hpp"
+#include "engine/assets/streaming/BackgroundLoadService.hpp"
 #include "engine/particles/ParticlePlayback.hpp"
 #include "engine/scene/ParticleEffectAsset.hpp"
 #include "engine/scene/ParticleEffectAssetIO.hpp"
@@ -24,7 +25,6 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
-#include <condition_variable>
 #include <deque>
 #include <filesystem>
 #include <fstream>
@@ -33,7 +33,6 @@
 #include <optional>
 #include <sstream>
 #include <system_error>
-#include <thread>
 #include <unordered_map>
 #include <utility>
 
@@ -484,10 +483,15 @@ struct EditorParticleThumbnailService::Impl {
     std::deque<kb::assets::AssetId> posterQueue;
     std::deque<kb::assets::AssetId> queue;
     std::mutex imageMutex;
-    std::condition_variable imageWake;
     std::deque<ImageWorkItem> imageWork;
     std::deque<ImageWorkResult> imageResults;
-    std::array<std::thread, kImageWorkerCount> imageWorkers;
+    // Image work runs as long jobs of the engine's background service, kImageWorkerCount at a
+    // time; each job takes the front item of imageWork, so urgent work still goes first.
+    std::unique_ptr<kb::assets::streaming::BackgroundLane> imageLane =
+        std::make_unique<kb::assets::streaming::BackgroundLane>(
+            kb::assets::streaming::BackgroundLoadService::Shared(),
+            kb::assets::streaming::BackgroundJobClass::Long,
+            static_cast<std::uint32_t>(kImageWorkerCount));
     std::atomic<std::uint32_t> pendingImageWork{0U};
     bool stopImageWorkers = false;
     std::unique_ptr<kb::particle_editor::ParticlePreviewSession> session;
@@ -504,12 +508,6 @@ struct EditorParticleThumbnailService::Impl {
     std::uint64_t revision = 1U;
     std::uint64_t nextGeneration = 1U;
 
-    Impl() {
-        for (std::thread& worker : imageWorkers) {
-            worker = std::thread{[this] { ImageWorkerLoop(); }};
-        }
-    }
-
     ~Impl() { StopImageWorkers(); }
 
     void EnqueueImageWork(ImageWorkItem work) {
@@ -525,18 +523,20 @@ struct EditorParticleThumbnailService::Impl {
             }
             pendingImageWork.fetch_add(1U, std::memory_order_release);
         }
-        imageWake.notify_one();
+        static_cast<void>(imageLane->Run([this](std::string&) {
+            ProcessImageWork();
+            return true;
+        }));
     }
 
-    void ImageWorkerLoop() {
+    // Runs as one job of the lane: takes work from the front until none is left, so a job
+    // whose item was taken by another job, or cancelled, ends at once.
+    void ProcessImageWork() {
         while (true) {
             ImageWorkItem work;
             {
-                std::unique_lock lock{imageMutex};
-                imageWake.wait(lock, [this] {
-                    return stopImageWorkers || !imageWork.empty();
-                });
-                if (stopImageWorkers) return;
+                std::scoped_lock lock{imageMutex};
+                if (stopImageWorkers || imageWork.empty()) return;
                 work = std::move(imageWork.front());
                 imageWork.pop_front();
             }
@@ -714,10 +714,8 @@ struct EditorParticleThumbnailService::Impl {
             stopImageWorkers = true;
             imageWork.clear();
         }
-        imageWake.notify_all();
-        for (std::thread& worker : imageWorkers) {
-            if (worker.joinable()) worker.join();
-        }
+        // Drops the jobs no worker took and waits for the running ones.
+        imageLane->CancelAndWait();
         {
             std::scoped_lock lock{imageMutex};
             imageResults.clear();
