@@ -105,6 +105,27 @@ struct NavObstacle {
     bool enabled = true;
 };
 
+// How an agent crosses an off-mesh link: a jump arcs from start to end, a ladder climbs vertically
+// before (going up) or after (going down) stepping across, a walk moves straight between the points.
+enum class NavLinkKind : std::uint8_t {
+    Jump,
+    Ladder,
+    Walk,
+};
+
+// An off-mesh link: a connection between two points the navigation mesh does not join (a jump down
+// a ledge, a ladder, a gap). Start and end are offsets in the owner's space; each joins the mesh
+// within `radius` of it. Links take part in polygon navigation meshes only.
+struct NavLink {
+    kb::math::Vec3 start{};
+    kb::math::Vec3 end{ 0.0F, 0.0F, 2.0F };
+    float radius = 0.5F;
+    NavLinkKind kind = NavLinkKind::Jump;
+    NavAreaId area = kDefaultNavArea;
+    bool bidirectional = true;
+    bool enabled = true;
+};
+
 struct NavSteeringResult {
     kb::math::Vec3 desiredVelocity{};
     bool arrived = false;

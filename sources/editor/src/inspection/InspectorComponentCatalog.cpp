@@ -42,6 +42,7 @@ namespace {
         InspectorComponentTile{ .id = "Joint", .category = "Physics", .label = "Joint", .icon = HeroIconKind::RotationSnap },
         InspectorComponentTile{ .id = "NavAgent", .category = "Navigation", .label = "Nav Agent", .icon = HeroIconKind::Gamepad2 },
         InspectorComponentTile{ .id = "NavObstacle", .category = "Navigation", .label = "Nav Obstacle", .icon = HeroIconKind::Cube },
+        InspectorComponentTile{ .id = "NavLink", .category = "Navigation", .label = "Nav Link", .icon = HeroIconKind::RotationSnap },
     };
     for (const kb::scene::UIComponentDescriptor& definition : kb::scene::UIComponentCatalog()) {
         tiles.push_back(InspectorComponentTile{

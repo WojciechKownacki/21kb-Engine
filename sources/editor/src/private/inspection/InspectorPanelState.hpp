@@ -95,6 +95,7 @@ enum class InspectorSectionId : std::uint8_t {
     UIProgressBar,
     UIWidgetSwitcher,
     Prefab,
+    NavLink,
 };
 
 enum class InspectorHitKind : std::uint8_t {
@@ -560,6 +561,17 @@ enum class InspectorPropertyId : std::uint16_t {
     PrefabRevert,
     PrefabUnpack,
     PrefabSelectRoot,
+    NavLinkKind,
+    NavLinkStartX,
+    NavLinkStartY,
+    NavLinkStartZ,
+    NavLinkEndX,
+    NavLinkEndY,
+    NavLinkEndZ,
+    NavLinkRadius,
+    NavLinkArea,
+    NavLinkBidirectional,
+    NavLinkEnabled,
 };
 
 struct InspectorDynamicRowIdentity {

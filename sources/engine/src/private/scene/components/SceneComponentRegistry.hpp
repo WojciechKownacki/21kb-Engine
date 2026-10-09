@@ -52,6 +52,7 @@ public:
     [[nodiscard]] std::uint64_t DeformedGeometryComponentId() const noexcept;
     [[nodiscard]] std::uint64_t NavAgentComponentId() const noexcept;
     [[nodiscard]] std::uint64_t NavObstacleComponentId() const noexcept;
+    [[nodiscard]] std::uint64_t NavLinkComponentId() const noexcept;
 
 private:
     std::uint64_t transformComponentId_ = 0;
@@ -92,6 +93,7 @@ private:
     std::uint64_t deformedGeometryComponentId_ = 0;
     std::uint64_t navAgentComponentId_ = 0;
     std::uint64_t navObstacleComponentId_ = 0;
+    std::uint64_t navLinkComponentId_ = 0;
 };
 
 } // namespace kb::scene

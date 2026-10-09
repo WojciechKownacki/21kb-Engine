@@ -137,7 +137,8 @@ template <typename T>
         && SameValue(lhs.motionSkeletonRule, rhs.motionSkeletonRule)
         && SameValue(lhs.deformedGeometry, rhs.deformedGeometry)
         && SameValue(lhs.navAgent, rhs.navAgent)
-        && SameValue(lhs.navObstacle, rhs.navObstacle);
+        && SameValue(lhs.navObstacle, rhs.navObstacle)
+        && SameValue(lhs.navLink, rhs.navLink);
 }
 
 [[nodiscard]] bool SameVec3(const Vec3& lhs, const Vec3& rhs) noexcept {

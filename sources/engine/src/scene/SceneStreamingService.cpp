@@ -68,7 +68,7 @@ void DeferComponents(ScenePrefabNodeComponents& components) {
     components.rigidbody.reset(); components.collider.reset(); components.characterController.reset();
     components.behaviour.reset(); components.audioSource.reset(); components.audioListener.reset();
     components.contentInstance.reset(); components.streamFocus.reset();
-    components.input.reset(); components.navAgent.reset(); components.navObstacle.reset();
+    components.input.reset(); components.navAgent.reset(); components.navObstacle.reset(); components.navLink.reset();
 }
 
 void BeginUnload(Scene& scene, Streaming::Job& job, bool cancelled) {

@@ -319,6 +319,18 @@ struct ScriptComponentAccess<kb::scene::NavObstacle> {
 };
 
 template <>
+struct ScriptComponentAccess<kb::scene::NavLink> {
+    [[nodiscard]] static const kb::scene::NavLink* TryGet(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().NavLinks().TryGet(entity); }
+    [[nodiscard]] static kb::scene::NavLink* TryGet(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().NavLinks().TryGet(entity); }
+    static void Set(kb::scene::Scene& scene, kb::scene::SceneEntity entity, const kb::scene::NavLink& value) { scene.Components().NavLinks().Set(entity, value); }
+    [[nodiscard]] static bool Remove(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept {
+        if (!scene.Components().NavLinks().Has(entity)) return false;
+        scene.Components().NavLinks().Remove(entity);
+        return true;
+    }
+};
+
+template <>
 struct ScriptComponentAccess<kb::scene::TagsComponent> {
     [[nodiscard]] static const kb::scene::TagsComponent* TryGet(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().Tags().TryGet(entity); }
     [[nodiscard]] static kb::scene::TagsComponent* TryGet(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().Tags().TryGet(entity); }

@@ -1711,6 +1711,26 @@ void PaintNavObstacleSection(
     y = section.Bottom() + kSectionGap;
 }
 
+void PaintNavLinkSection(
+    HDC dc,
+    RECT content,
+    int& y,
+    const EditorTheme& theme,
+    const InspectorPanelState& inspector,
+    const kb::scene::NavLink& link) {
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector,
+        InspectorSectionId::NavLink, HeroIconKind::RotationSnap, "Nav Link", true);
+    section.Field("Kind", link.kind == kb::scene::NavLinkKind::Jump ? "Jump" : link.kind == kb::scene::NavLinkKind::Ladder ? "Ladder" : "Walk",
+        InspectorPropertyId::NavLinkKind);
+    section.Vec3("Start", link.start, InspectorPropertyId::NavLinkStartX, InspectorPropertyId::NavLinkStartY, InspectorPropertyId::NavLinkStartZ);
+    section.Vec3("End", link.end, InspectorPropertyId::NavLinkEndX, InspectorPropertyId::NavLinkEndY, InspectorPropertyId::NavLinkEndZ);
+    section.Field("Radius", FormatFloat(link.radius, 3), InspectorPropertyId::NavLinkRadius);
+    section.Field("Area", std::to_string(link.area), InspectorPropertyId::NavLinkArea);
+    section.Bool("Both Ways", link.bidirectional, InspectorPropertyId::NavLinkBidirectional);
+    section.Bool("Enabled", link.enabled, InspectorPropertyId::NavLinkEnabled);
+    y = section.Bottom() + kSectionGap;
+}
+
 [[nodiscard]] const char* RegionShapeKindLabel(kb::scene::RegionShapeKind kind) noexcept {
     switch (kind) {
     case kb::scene::RegionShapeKind::Circle2D: return "Circle 2D";
@@ -3541,6 +3561,14 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
             y += h + kSectionGap;
         }
     }
+    if (const kb::scene::NavLink* link = scene.Components().NavLinks().TryGet(selected); link != nullptr) {
+        const int h = SectionHeight(inspector, InspectorSectionId::NavLink, 7);
+        if (sectionVisible(y, h)) {
+            PaintNavLinkSection(dc, content, y, theme, inspector, *link);
+        } else {
+            y += h + kSectionGap;
+        }
+    }
     if (const kb::scene::RigidbodyComponent* rigidbody = scene.Components().Rigidbodies().TryGet(selected); rigidbody != nullptr) {
         const int h = SectionHeight(inspector, InspectorSectionId::Rigidbody, InspectorPhysicsModel::FieldCount(PhysicsComponentKind::Rigidbody));
         if (sectionVisible(y, h)) {
@@ -3766,6 +3794,9 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     }
     if (scene.Components().NavObstacles().TryGet(selected) != nullptr) {
         height += SectionHeight(inspector, InspectorSectionId::NavObstacle, 8) + kSectionGap;
+    }
+    if (scene.Components().NavLinks().TryGet(selected) != nullptr) {
+        height += SectionHeight(inspector, InspectorSectionId::NavLink, 7) + kSectionGap;
     }
     if (const kb::scene::RigidbodyComponent* rigidbody = scene.Components().Rigidbodies().TryGet(selected); rigidbody != nullptr) {
         height += SectionHeight(inspector, InspectorSectionId::Rigidbody, InspectorPhysicsModel::FieldCount(PhysicsComponentKind::Rigidbody)) + kSectionGap;
@@ -5659,6 +5690,30 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
             if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(viewport, y), InspectorSectionId::NavObstacle, InspectorPropertyId::NavObstacleCarve, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
             AdvanceRow(y);
             if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(viewport, y), InspectorSectionId::NavObstacle, InspectorPropertyId::NavObstacleEnabled, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+            AdvanceRow(y);
+        }
+        y += kSectionGap;
+    }
+
+    if (sceneContext.Scene().Components().NavLinks().Has(selected)) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::NavLink, x, scrolledY, true); hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+        if (!state.IsCollapsed(InspectorSectionId::NavLink)) {
+            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::NavLink, InspectorPropertyId::NavLinkKind, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+            AdvanceRow(y);
+            if (InspectorPanelRenderer::Hit hit = HitVec3(RowRect(viewport, y), InspectorSectionId::NavLink, InspectorPropertyId::NavLinkStartX, InspectorPropertyId::NavLinkStartY, InspectorPropertyId::NavLinkStartZ, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+            AdvanceRow(y);
+            if (InspectorPanelRenderer::Hit hit = HitVec3(RowRect(viewport, y), InspectorSectionId::NavLink, InspectorPropertyId::NavLinkEndX, InspectorPropertyId::NavLinkEndY, InspectorPropertyId::NavLinkEndZ, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+            AdvanceRow(y);
+            const std::array<InspectorPropertyId, 2> scalarRows{ { InspectorPropertyId::NavLinkRadius, InspectorPropertyId::NavLinkArea } };
+            for (const InspectorPropertyId property : scalarRows) {
+                if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::NavLink, property, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+                AdvanceRow(y);
+            }
+            if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(viewport, y), InspectorSectionId::NavLink, InspectorPropertyId::NavLinkBidirectional, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+            AdvanceRow(y);
+            if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(viewport, y), InspectorSectionId::NavLink, InspectorPropertyId::NavLinkEnabled, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
             AdvanceRow(y);
         }
         y += kSectionGap;
