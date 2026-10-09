@@ -446,6 +446,34 @@ void RunFarPhysicsTest() {
             std::abs(hits.GetAt(0U)->worldPoint.z - floorRayOrigin.z) <= 1e-6 && std::abs(hits.GetAt(0U)->worldPoint.y) <= 1e-4,
         "A ray hit on the far floor lost precision");
 }
+
+// Without a physics backend rays test colliders directly: far from the origin relative to the ray origin, near it in
+// float world space as before.
+void RunFarColliderRaycastWithoutBackendTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject farBox = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Far Collider" });
+    const DVec3 farCenter{ kFar + 0.3, 0.0, kFar - 0.2 };
+    scene.Transforms().SetLocalTranslation(farBox.Entity(), farCenter);
+    scene.Components().Colliders().Set(farBox.Entity(), kb::scene::ColliderComponent{
+        .shape = kb::scene::ColliderShape::Box, .boxSize = kb::scene::Vec3{ 1.0F, 1.0F, 1.0F }, .layer = 0x1U });
+    const kb::scene::SceneObject nearBox = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "Near Collider", .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 3.0F, 0.0F, 0.0F } } });
+    scene.Components().Colliders().Set(nearBox.Entity(), kb::scene::ColliderComponent{
+        .shape = kb::scene::ColliderShape::Box, .boxSize = kb::scene::Vec3{ 1.0F, 1.0F, 1.0F }, .layer = 0x1U });
+
+    std::array<kb::scene::PhysicsCastResult, 2U> storage{};
+    kb::library::ArrayNonAlloc<kb::scene::PhysicsCastResult> hits{ std::span<kb::scene::PhysicsCastResult>(storage) };
+    const DVec3 farRay{ farCenter.x + 0.2501, 5.0, farCenter.z - 0.1999 };
+    kb::scene::RaycastAllNonAllocPrecise(scene, farRay, kb::scene::Vec3{ 0.0F, -1.0F, 0.0F }, 10.0F, 0x1U, hits);
+    Require(hits.Count() == 1U && hits.GetAt(0U)->entity == farBox.Entity() &&
+            std::abs(hits.GetAt(0U)->worldPoint.x - farRay.x) <= 1e-6 && std::abs(hits.GetAt(0U)->worldPoint.z - farRay.z) <= 1e-6 &&
+            std::abs(hits.GetAt(0U)->worldPoint.y - 0.5) <= 1e-5,
+        "A ray at a far collider without a physics backend lost precision");
+    kb::scene::RaycastAllNonAlloc(scene, kb::scene::Vec3{ 3.25F, 5.0F, 0.0F }, kb::scene::Vec3{ 0.0F, -1.0F, 0.0F }, 10.0F, 0x1U, hits);
+    Require(hits.Count() == 1U && hits.GetAt(0U)->entity == nearBox.Entity() && hits.GetAt(0U)->distance == 4.5F &&
+            hits.GetAt(0U)->point.x == 3.25F && hits.GetAt(0U)->point.y == 0.5F,
+        "A ray at a near collider without a physics backend missed it");
+}
 } // namespace
 
 namespace kb::tests {
@@ -460,6 +488,7 @@ void RunLargeWorldTests() {
     RunFarSceneDocumentRoundTripTest();
     RunVersion41SceneMigrationTest();
     RunFarPhysicsTest();
+    RunFarColliderRaycastWithoutBackendTest();
 }
 
 } // namespace kb::tests
