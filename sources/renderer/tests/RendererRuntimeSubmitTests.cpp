@@ -7319,6 +7319,82 @@ void RunVoxelGridFollowsMeshGeometryTest() {
     return MeanBrightness(pixels, kSize, 28, 28, 36, 36);
 }
 
+// A GPU particle born at (0, 0, 5) is drawn by a camera that backs away from it a metre per frame. With a render
+// origin that follows the camera metre by metre, every frame moves the origin under the live particle, whose
+// records are then moved on the GPU (cs_particle_gpu_rebase): it must be drawn exactly as with an origin that
+// never moves, not cleared and not displaced. A colliding emitter keeps per-particle state, which moves too.
+[[nodiscard]] std::array<double, 2> GpuParticleCentreAfterOriginMoves(bool movingOrigin, bool colliding) {
+    constexpr std::uint16_t kSize = 64U;
+    kb::scene::Scene scene;
+    NativeTestSurface surface;
+    Require(surface.IsValid(), "Origin-move particle test could not create a hidden D3D11 surface");
+    DisplayConfig config{};
+    config.syncMode = DisplaySyncMode::Uncapped;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "Origin-move particle test could not initialize the renderer");
+    renderer.SetRuntimeAssetDiscoveryEnabled(false);
+    if (movingOrigin) renderer.SetRenderOriginPolicy(RenderOriginPolicy{ .rebaseDistance = 0.5, .gridStep = 1.0 });
+    std::array<double, 2> brightness{};
+    {
+        ParticleMeshReadbackTarget readback;
+        Require(readback.Initialize(kSize, kSize), "Origin-move particle test could not create its readback target");
+        for (int frame = 0; frame < 8; ++frame) {
+            if (frame >= 1) {
+                kb::particles::ParticleGpuEmitterCommand command{};
+                command.key = { 1U, 1U };
+                command.simTime = static_cast<double>(frame - 1) / 60.0;
+                if (frame == 1) {
+                    command.hasParams = true;
+                    command.params.capacity = 16U;
+                    command.params.blend = kb::particles::ParticleRenderBlendMode::Add;
+                    command.params.depth = kb::particles::ParticleRenderDepthMode::Disabled;
+                    command.params.color.fill({ 1.0F, 1.0F, 1.0F, 1.0F });
+                    command.params.size.fill(1.2F);
+                    if (colliding) {
+                        command.params.plane = { .normal = { 0.0F, 1.0F, 0.0F }, .distance = -20.0F, .restitution = 0.5F, .friction = 0.0F };
+                        command.params.hasPlane = true;
+                    }
+                    command.spawns.push_back(kb::particles::ParticleGpuSpawn{
+                        .position = { 0.0F, 0.0F, 5.0F }, .birthTime = 0.0F, .velocity = { 0.0F, 0.0F, 0.0F }, .lifetime = 20.0F });
+                }
+                kb::particles::ParticlePlayback::QueueGpuEmitterCommand(scene, command);
+            }
+            SceneRenderCamera camera{};
+            bx::mtxLookAt(camera.view.data(), bx::Vec3{ 0.0F, 0.0F, -10.0F - static_cast<float>(frame) }, bx::Vec3{ 0.0F, 0.0F, 5.0F });
+            SceneDepthPolicy::MakePerspective(camera.projection.data(), 30.0F, 1.0F, 0.1F, 100.0F, SceneDepthPolicy::HomogeneousDepth());
+            const RenderSceneSubmitDesc desc{
+                .target = readback.Binding(),
+                .cameraOverride = camera,
+                .meshPassMode = SceneRenderMeshPassMode::OpaqueAndTransparent,
+                .clearRgba = 0x000000FFU,
+                .editorSceneOverlaysEnabled = false,
+                .shadowPassEnabled = false,
+                .postProcessEnabled = false,
+                .selectionMaskEnabled = false,
+                .selectionOutlineEnabled = false,
+            };
+            SubmitLifecycleFrame(renderer, scene, desc, "Origin-move particle test did not submit a frame");
+        }
+        const std::vector<std::uint8_t> pixels = readback.ReadPixels();
+        brightness = { MeanBrightness(pixels, kSize, 30, 30, 34, 34), MeanBrightness(pixels, kSize, 20, 20, 44, 44) };
+    }
+    renderer.Shutdown();
+    return brightness;
+}
+
+void RunRendererKeepsGpuParticlesAcrossRenderOriginMovesTest() {
+    for (const bool colliding : { false, true }) {
+        const std::array<double, 2> fixed = GpuParticleCentreAfterOriginMoves(false, colliding);
+        const std::array<double, 2> moving = GpuParticleCentreAfterOriginMoves(true, colliding);
+        std::fprintf(stderr, "gpu_particle_origin_moves colliding=%d fixed=%.1f/%.1f moving=%.1f/%.1f%c", colliding ? 1 : 0,
+            fixed[0], fixed[1], moving[0], moving[1], 10);
+        Require(fixed[0] > 150.0, "Origin-move particle test: the particle must be drawn at the screen centre");
+        Require(std::abs(moving[0] - fixed[0]) <= 2.0 && std::abs(moving[1] - fixed[1]) <= 2.0,
+            "Origin-move particle test: moving the render origin under a live GPU particle must not clear or move it");
+    }
+}
+
 void RunRendererFollowsLocalSpaceGpuParticlesTest() {
     const double local = LocalSpaceParticleCentreBrightness(true);
     const double world = LocalSpaceParticleCentreBrightness(false);
@@ -8089,6 +8165,7 @@ void RunRendererParticleMeshSnapshotSubmitTest() {
     RunRendererOrdersGpuMeshParticlesAmongSceneMeshesTest();
     RunRendererDrawsGpuTrailParticlesTest();
     RunRendererFollowsLocalSpaceGpuParticlesTest();
+    RunRendererKeepsGpuParticlesAcrossRenderOriginMovesTest();
 #if defined(KB_21KB_PARTICLE_PLUGIN_PATH)
     RunRendererDrawsAuthoredParticleFileTest();
     RunRendererMillionParticleFileTest();

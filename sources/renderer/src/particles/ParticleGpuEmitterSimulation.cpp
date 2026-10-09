@@ -96,6 +96,8 @@ bool ParticleGpuEmitterSimulation::Initialize() {
     spinUniform_ = bgfx::createUniform("u_gpuParticleSpin", bgfx::UniformType::Vec4, 4U);
     basisUniform_ = bgfx::createUniform("u_gpuParticleBasis", bgfx::UniformType::Vec4, 3U);
     collideProgram_ = ShaderLoader::LoadComputeProgram("cs_particle_gpu_collide.sc");
+    rebaseProgram_ = ShaderLoader::LoadComputeProgram("cs_particle_gpu_rebase.sc");
+    rebaseUniform_ = bgfx::createUniform("u_gpuParticleRebase", bgfx::UniformType::Vec4);
     worldUniform_ = bgfx::createUniform("u_gpuParticleWorld", bgfx::UniformType::Mat4);
     worldInverseUniform_ = bgfx::createUniform("u_gpuParticleWorldInverse", bgfx::UniformType::Mat4);
     localUniform_ = bgfx::createUniform("u_gpuParticleLocal", bgfx::UniformType::Vec4);
@@ -132,11 +134,11 @@ void ParticleGpuEmitterSimulation::Shutdown() noexcept {
     for (bgfx::UniformHandle* handle : { &motionUniform_, &timeUniform_, &colorUniform_, &sizeUniform_, &worldUniform_, &worldInverseUniform_, &localUniform_, &planeUniform_,
              &collisionUniform_, &depthBounceUniform_, &texelUniform_, &viewProjectionUniform_, &depthSampler_,
              &inverseViewProjectionUniform_, &depthParamsUniform_, &cameraPositionUniform_, &sortCameraUniform_,
-             &sortParamsUniform_, &outputUniform_, &spinUniform_, &basisUniform_ }) {
+             &sortParamsUniform_, &outputUniform_, &spinUniform_, &basisUniform_, &rebaseUniform_ }) {
         if (bgfx::isValid(*handle)) bgfx::destroy(*handle);
         *handle = BGFX_INVALID_HANDLE;
     }
-    for (bgfx::ProgramHandle* handle : { &sortKeysProgram_, &sortStepProgram_, &sortGatherProgram_ }) {
+    for (bgfx::ProgramHandle* handle : { &sortKeysProgram_, &sortStepProgram_, &sortGatherProgram_, &rebaseProgram_ }) {
         if (bgfx::isValid(*handle)) bgfx::destroy(*handle);
         *handle = BGFX_INVALID_HANDLE;
     }
@@ -167,7 +169,8 @@ bool ParticleGpuEmitterSimulation::Create(const Key& key, const kb::particles::P
     const bgfx::Memory* zero = bgfx::alloc(spawnBytes);
     if (zero == nullptr || zero->data == nullptr) return false;
     std::memset(zero->data, 0, spawnBytes);
-    emitter.spawns = bgfx::createDynamicVertexBuffer(zero, SpawnLayout(), BGFX_BUFFER_COMPUTE_READ);
+    // Written by the rebase kernel when the render origin moves.
+    emitter.spawns = bgfx::createDynamicVertexBuffer(zero, SpawnLayout(), BGFX_BUFFER_COMPUTE_READ_WRITE);
     emitter.instances = bgfx::createDynamicVertexBuffer(capacity * perSlot, InstanceLayout(), BGFX_BUFFER_COMPUTE_READ_WRITE);
     if (!bgfx::isValid(emitter.spawns) || !bgfx::isValid(emitter.instances)) {
         Destroy(emitter);
@@ -301,13 +304,33 @@ void ParticleGpuEmitterSimulation::SetRenderOrigin(std::uint64_t sceneId, const 
     clock.renderOrigin = renderOrigin;
     for (auto& [key, emitter] : emitters_) {
         if (key.sceneId != sceneId) continue;
-        if (!emitter.params.localSpace) Clear(emitter);
         emitter.world[12] += shift.x;
         emitter.world[13] += shift.y;
         emitter.world[14] += shift.z;
         bx::mtxInverse(emitter.worldInverse.data(), emitter.world.data());
         emitter.origin = { emitter.origin[0] + shift.x, emitter.origin[1] + shift.y, emitter.origin[2] + shift.z };
+    }
+}
+
+void ParticleGpuEmitterSimulation::Rebase(bgfx::ViewId viewId, std::uint64_t sceneId, SceneClock& clock) noexcept {
+    if (clock.recordOrigin == clock.renderOrigin) return;
+    // The origin moves by whole grid steps, so the move is exact for records near it.
+    const kb::math::Vec3 shift = kb::math::RelativeTo(clock.recordOrigin, clock.renderOrigin);
+    clock.recordOrigin = clock.renderOrigin;
+    for (auto& [key, emitter] : emitters_) {
+        if (key.sceneId != sceneId || emitter.params.localSpace) continue;
         emitter.params.plane.distance += kb::math::Dot(emitter.params.plane.normal, shift);
+        if (!bgfx::isValid(rebaseProgram_)) {
+            Clear(emitter);
+            continue;
+        }
+        const std::array<float, 4> rebase{ shift.x, shift.y, shift.z, static_cast<float>(emitter.capacity) };
+        for (const bgfx::DynamicVertexBufferHandle records : { emitter.spawns, emitter.state }) {
+            if (!bgfx::isValid(records)) continue;
+            bgfx::setBuffer(0U, records, bgfx::Access::ReadWrite);
+            bgfx::setUniform(rebaseUniform_, rebase.data());
+            bgfx::dispatch(viewId, rebaseProgram_, (emitter.capacity + kThreadGroupSize - 1U) / kThreadGroupSize, 1U, 1U);
+        }
     }
 }
 
@@ -318,8 +341,10 @@ void ParticleGpuEmitterSimulation::Apply(
     for (const kb::particles::ParticleGpuEmitterCommand& command : commands) {
         const Key key{ sceneId, command.key.instanceId, command.key.emitterId };
         clock.latest = std::max(clock.latest, command.simTime);
-        // From the command's simulation space to render space (zero while the simulation follows the render origin).
+        // From the command's simulation space to render space (zero while the simulation follows the render origin),
+        // and to the space of the GPU records, which the next Dispatch moves to the render origin.
         const kb::math::Vec3 offset = kb::math::RelativeTo(command.simulationOrigin, clock.renderOrigin);
+        const kb::math::Vec3 recordOffset = kb::math::RelativeTo(command.simulationOrigin, clock.recordOrigin);
         auto found = emitters_.find(key);
         if (command.release) {
             if (found != emitters_.end()) {
@@ -331,7 +356,7 @@ void ParticleGpuEmitterSimulation::Apply(
         }
         if (command.hasParams) {
             kb::particles::ParticleGpuEmitterParams params = command.params;
-            params.plane.distance += kb::math::Dot(params.plane.normal, offset);
+            params.plane.distance += kb::math::Dot(params.plane.normal, recordOffset);
             const std::uint32_t capacity = std::clamp(params.capacity, 1U, kb::particles::kParticleGpuMaxCapacity);
             if (found != emitters_.end() && (found->second.capacity != capacity || found->second.perSlot != InstancesPerSlot(params))) {
                 allocatedBytes_ -= found->second.bytes;
@@ -366,12 +391,12 @@ void ParticleGpuEmitterSimulation::Apply(
             found->second.origin = { command.origin[0] + offset.x, command.origin[1] + offset.y, command.origin[2] + offset.z };
         }
         if (command.clear) Clear(found->second);
-        if (found->second.params.localSpace || (offset.x == 0.0F && offset.y == 0.0F && offset.z == 0.0F)) {
+        if (found->second.params.localSpace || (recordOffset.x == 0.0F && recordOffset.y == 0.0F && recordOffset.z == 0.0F)) {
             // Local-space records are in the owner's frame, which the world matrix places.
             Upload(found->second, command.spawns);
         } else {
             spawnScratch_.assign(command.spawns.begin(), command.spawns.end());
-            for (kb::particles::ParticleGpuSpawn& spawn : spawnScratch_) spawn.position = spawn.position + offset;
+            for (kb::particles::ParticleGpuSpawn& spawn : spawnScratch_) spawn.position = spawn.position + recordOffset;
             Upload(found->second, spawnScratch_);
         }
     }
@@ -391,6 +416,7 @@ void ParticleGpuEmitterSimulation::Dispatch(bgfx::ViewId viewId, std::uint64_t s
     if (!IsReady() || sceneIt == scenes_.end()) return;
     SceneClock& clock = sceneIt->second;
     clock.draws.clear();
+    Rebase(viewId, sceneId, clock);
     for (auto& [key, emitter] : emitters_) {
         if (key.sceneId != sceneId) continue;
         const kb::particles::ParticleGpuEmitterParams& params = emitter.params;
