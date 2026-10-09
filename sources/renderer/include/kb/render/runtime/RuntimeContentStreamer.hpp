@@ -7,6 +7,7 @@
 #include "engine/assets/streaming/StreamingResidency.hpp"
 
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <unordered_map>
 #include <vector>
@@ -16,7 +17,7 @@ class RuntimeAssetPack;
 }
 
 namespace kb::assets::streaming {
-class AsyncFileReader;
+class BackgroundLoadService;
 }
 
 namespace kb::render {
@@ -36,9 +37,6 @@ struct RuntimeContentStreamingSettings {
     // GPU memory the streamed levels of textures and meshes may occupy together, tails and
     // coarsest levels included.
     std::uint64_t budgetBytes = 512ULL * 1024ULL * 1024ULL;
-    // Dedicated I/O threads, and reads each keeps in flight.
-    std::uint32_t ioWorkers = 2U;
-    std::uint32_t readsInFlightPerWorker = 4U;
     // Level loads in flight at once across all resources.
     std::uint32_t maxLoadsInFlight = 32U;
     // GPU resources rebuilt with new levels per frame, and the bytes they may upload per frame,
@@ -84,8 +82,9 @@ struct RuntimeContentStreamingFrame {
 //      each material's textures are on screen, and asks the residency manager for the levels
 //      that size needs (a texture mip per halving of its on-screen size, a mesh level whose
 //      error projects under meshMaxScreenErrorPixels), most important first;
-//   2. starts the level loads the manager plans on the I/O pool -- the pool reads, verifies,
-//      decrypts and decompresses each pack block -- and applies its evictions;
+//   2. starts the level loads the manager plans on the engine's background load service -- its
+//      workers read, verify, decrypt and decompress each pack block -- and applies its
+//      evictions;
 //   3. collects finished loads without waiting for any, and rebuilds at most
 //      maxRebuildsPerFrame GPU resources with the levels now resident, swapping the new handle
 //      into the runtime cache and the scene's resource map.
@@ -163,11 +162,14 @@ private:
         std::uint32_t level, std::uint64_t& uploaded);
     [[nodiscard]] bool RebuildMesh(Record& record, SceneRenderer& sceneRenderer, RuntimeStreamedMeshMap& meshes,
         std::uint32_t level, std::uint64_t& uploaded);
-    void EnsureReader();
+    void EnsureReader(const kb::assets::bake::RuntimeAssetPack& pack);
+    void ForgetFiles() noexcept;
 
     RuntimeContentStreamingSettings settings_{};
     kb::assets::streaming::StreamingResidencyManager residency_;
-    std::unique_ptr<kb::assets::streaming::AsyncFileReader> reader_;
+    std::shared_ptr<kb::assets::streaming::BackgroundLoadService> reader_;
+    // Files of the packs streamed from, which the shared service keeps open until forgotten.
+    std::vector<std::filesystem::path> files_;
     std::unordered_map<std::uint64_t, std::unique_ptr<Record>> records_;
     std::unordered_map<RuntimeTextureAssetKey, std::uint64_t, RuntimeTextureAssetKeyHash> textureIds_;
     std::unordered_map<RuntimeAssetKey, std::uint64_t, RuntimeAssetKeyHash> meshIds_;

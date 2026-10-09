@@ -7,6 +7,7 @@
 #include "engine/assets/bake/BakeTargetProfile.hpp"
 #include "engine/assets/bake/RuntimeAssetManifest.hpp"
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
+#include "engine/assets/streaming/BackgroundLoadService.hpp"
 #include "kb/render/DisplayConfig.hpp"
 #include "kb/render/RenderSurface.hpp"
 #include "kb/render/Renderer.hpp"
@@ -468,6 +469,9 @@ void PackagedTexturesAndMeshesStreamUnderTheBudget() {
         sceneRenderer.ResourceMap().BindTexture(textureKey.assetId, textureKey.colorSpace, textureHandle);
         sceneRenderer.ResourceMap().BindMesh(meshKey.assetId, meshHandle);
 
+        const std::shared_ptr<kb::assets::streaming::BackgroundLoadService> background =
+            kb::assets::streaming::BackgroundLoadService::Shared();
+        const std::uint64_t bytesBefore = background->Stats().bytesRead;
         RuntimeContentStreamer streamer;
         // A sphere this smooth looks right at a coarse level even up close; a strict error bound
         // makes the close camera ask for every level.
@@ -518,6 +522,8 @@ void PackagedTexturesAndMeshesStreamUnderTheBudget() {
         const bool streamedIn =
             run(closeCamera, [&] { return streamer.UploadedLevel(textureKey) == 0 && streamer.UploadedLevel(meshKey) == 0; });
         Require(streamedIn, ("A close camera did not stream every level in" + describe()).c_str());
+        Require(background->Stats().bytesRead > bytesBefore,
+            "The streamer did not read through the engine's background load service");
         const double milliseconds = std::chrono::duration<double, std::milli>(Clock::now() - started).count();
         const RenderTextureResource* sharp = sceneRenderer.Resources().FindTexture(textures.at(textureKey).handle);
         const RenderMeshResource* detailed = sceneRenderer.Resources().FindMesh(meshes.at(meshKey).handle);

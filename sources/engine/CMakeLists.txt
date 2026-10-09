@@ -54,7 +54,7 @@ add_library(kb_engine STATIC
     include/engine/assets/bake/BakedAssetSink.hpp
     include/engine/assets/bake/RuntimeAssetManifest.hpp
     include/engine/assets/bake/RuntimeAssetPack.hpp
-    include/engine/assets/streaming/AsyncFileReader.hpp
+    include/engine/assets/streaming/BackgroundLoadService.hpp
     include/engine/assets/streaming/PackBlockStream.hpp
     include/engine/assets/streaming/StreamingResidency.hpp
     include/engine/math/EngineMath.hpp
@@ -588,7 +588,7 @@ add_library(kb_engine STATIC
     src/assets/bake/BakedAssetSink.cpp
     src/assets/bake/RuntimeAssetManifest.cpp
     src/assets/bake/RuntimeAssetPack.cpp
-    src/assets/streaming/AsyncFileReader.cpp
+    src/assets/streaming/BackgroundLoadService.cpp
     src/assets/streaming/PackBlockStream.cpp
     src/assets/streaming/StreamingResidency.cpp
     src/private/assets/bake/AssetPackCompression.hpp
