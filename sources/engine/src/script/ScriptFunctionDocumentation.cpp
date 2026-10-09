@@ -328,6 +328,7 @@ constexpr auto kFunctionDocumentation = std::to_array<FunctionDocumentation>({
     { "Animator.SetTrigger", "Sets a trigger parameter declared by the attached animator controller." },
     { "Animator.ResetTrigger", "Clears a trigger parameter declared by the attached animator controller." },
     { "Animator.SetIKTarget", "Sets a named world-space IK/rig target consumed by constraints in the attached controller." },
+    { "Animator.SetPreciseIKTarget", "Sets a named world-space IK/rig target with its position in double precision." },
     { "Animator.ClearIKTarget", "Clears a named IK/rig target from the attached animator runtime." },
     { "Animator.State", "Returns the active state, normalized time, and transition state of an animator layer." },
     { "Timeline.Create", "Creates a scene-owned timeline instance from a typed timeline asset and owner." },

@@ -12,6 +12,7 @@ extern "C" {
 #include <lua.h>
 }
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -60,6 +61,20 @@ int LuaCallFunction(lua_State* state) {
     std::vector<ScriptFunctionArgument> arguments;
     if (lua_gettop(state) >= 2 && lua_istable(state, 2) != 0) {
         arguments = ArgumentsFromTable(state, 2);
+        // A Double input keeps the Lua number whole (ArgumentsFromTable narrows numbers to float).
+        const ScriptFunctionSignature* signature =
+            context->Functions() != nullptr ? context->Functions()->FindSignature(functionName) : nullptr;
+        if (signature != nullptr) {
+            for (ScriptFunctionArgument& argument : arguments) {
+                const auto pin = std::ranges::find_if(signature->inputs, [&argument](const ScriptFunctionPin& input) {
+                    return input.name == argument.name;
+                });
+                if (pin == signature->inputs.end() || pin->type != ScriptValueType::Double) continue;
+                lua_getfield(state, 2, argument.name.c_str());
+                if (lua_type(state, -1) == LUA_TNUMBER) argument.value = ScriptValue{ static_cast<double>(lua_tonumber(state, -1)) };
+                lua_pop(state, 1);
+            }
+        }
     }
     const ScriptFunctionCallResult result = context->CallFunction(functionName, arguments);
     if (!result.Succeeded()) {
