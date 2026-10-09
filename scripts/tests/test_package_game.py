@@ -220,6 +220,38 @@ class PackageGameTests(unittest.TestCase):
             self.assertFalse((destination / "Saved").exists())
             self.assertEqual(64, len(fingerprint))
 
+    def test_partitioned_world_sources_are_cooked_from_the_snapshot(self) -> None:
+        # kb_cooker builds every partitioned world's cells inside the project it is given
+        # before collecting assets. The package job must hand it the snapshot, carrying
+        # the world file and its per-object files, so the build never touches the project.
+        with tempfile.TemporaryDirectory() as temporary_text:
+            root = Path(temporary_text)
+            project = root / "project"
+            objects = project / "Assets" / "Worlds" / "Forest.objects"
+            objects.mkdir(parents=True)
+            descriptor = project / "Project.21kbproject"
+            descriptor.write_bytes(b"descriptor")
+            (project / "Assets" / "Worlds" / "Forest.21kbworld").write_bytes(b"world")
+            (objects / ("0" * 32 + ".21kbobject")).write_bytes(b"object")
+            job = root / "job"
+            job.mkdir()
+            snapshot = package_game._copy_project_snapshot(descriptor, job / "project")
+            self.assertEqual(b"world", (job / "project" / "Assets" / "Worlds" / "Forest.21kbworld").read_bytes())
+            self.assertEqual(b"object", (job / "project" / "Assets" / "Worlds" / "Forest.objects" / ("0" * 32 + ".21kbobject")).read_bytes())
+            args = argparse.Namespace(
+                build_root=root / "build",
+                configuration="Development",
+                engine_root=root / "engine",
+                target="Linux.x64",
+            )
+            with mock.patch.object(package_game, "_find_optional_build_tool", return_value=None), \
+                    mock.patch.object(package_game, "run_checked") as run:
+                package_game._cook(args, snapshot, job, root / "kb_cooker", root / "kb_runtime_asset_pack_validator")
+
+            command = run.call_args_list[0].args[0]
+            self.assertEqual(snapshot, command[command.index("--project") + 1])
+            self.assertTrue(snapshot.is_relative_to(job))
+
     def test_windows_cook_requests_custom_module_staging(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_text:
             root = Path(temporary_text)

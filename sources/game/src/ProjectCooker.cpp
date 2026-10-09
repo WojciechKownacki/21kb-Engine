@@ -21,6 +21,7 @@
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/script/ScriptAsset.hpp"
 #include "engine/script/ScriptAssetLoader.hpp"
+#include "engine/world/WorldCellBuilder.hpp"
 #include "kb/render/ShaderManifest.hpp"
 #include "kb/render/bake/MeshBaker.hpp"
 #include "kb/render/bake/RuntimeAssetPackValidation.hpp"
@@ -34,6 +35,7 @@
 #include "kb/render/resources/RenderMeshAssetLoader.hpp"
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
 #include "kb/render/runtime/RuntimeRenderAssetDiscovery.hpp"
+#include "kb/render/world/WorldHlodMeshBaker.hpp"
 
 #include <bimg/encode.h>
 #include <bx/error.h>
@@ -2210,7 +2212,26 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
     if (!manager.Mounts().Mount("Game", contentRoot)) {
         return Failure("project content root could not be mounted");
     }
-    const std::size_t discovered = manager.DiscoverMountedAssets();
+    std::size_t discovered = manager.DiscoverMountedAssets();
+    // A partitioned world ships as the cells built from its per-object files. Build
+    // every world now, from the sources being cooked, so the dependency closure below
+    // reaches each cell scene and HLOD proxy through the world's cell index.
+    {
+        kb::render::WorldHlodMeshBaker hlodBaker{ manager };
+        std::size_t builtWorlds = 0U;
+        const kb::world::WorldBuildResult worlds = kb::world::WorldCellBuilder::BuildAll(contentRoot, &hlodBaker, builtWorlds);
+        if (!worlds.succeeded) {
+            return Failure("partitioned world build failed: " + worlds.error);
+        }
+        if (builtWorlds != 0U) {
+            diagnostics << "built " << builtWorlds << " partitioned world(s): " << worlds.report.unitCount << " cells, "
+                        << worlds.report.hlodCount << " HLOD proxies\n";
+            for (const std::string& warning : worlds.report.warnings) {
+                diagnostics << "warning: " << warning << '\n';
+            }
+            discovered = manager.DiscoverMountedAssets();
+        }
+    }
     diagnostics << "discovered " << discovered << " project assets\n";
     std::vector<kb::assets::AssetMetadata> assets;
     if (!CollectRuntimeAssetClosure(manager, settings, assets, error)) {
