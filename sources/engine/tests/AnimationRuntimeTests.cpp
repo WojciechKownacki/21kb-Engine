@@ -24,6 +24,7 @@
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SkeletonAssetIO.hpp"
 #include "engine/scene/SkeletonBindingComponent.hpp"
+#include "engine/script/PucLuaScriptRuntime.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 
 #include <algorithm>
@@ -809,17 +810,44 @@ end
                 .speed = 1.0F,
                 .enabled = true,
             });
+            // A Lua script gives the far rig its targets through Animator.SetPreciseIKTarget; Lua numbers are
+            // doubles and CallFunction keeps them whole for Double inputs.
+            const kb::assets::AssetId farRigScript{ 0x7A2F1E00U };
+            const kb::script::PucLuaLoadResult farRigLoaded = rigScriptHost.LuaRuntime().LoadScript(farRigScript, R"(function Tick(self)
+    if GetShared("farRigConfigured") then return end
+    local hand, handError = CallFunction("Animator.SetPreciseIKTarget", {
+        name = "HandTarget", x = 10000001.25, y = 1.0, z = 9999999.875, rotationWeight = 0.0
+    })
+    local pole, poleError = CallFunction("Animator.SetPreciseIKTarget", {
+        name = "ElbowPole", x = 10000000.25, y = 0.0, z = 10000000.875
+    })
+    local look, lookError = CallFunction("Animator.SetPreciseIKTarget", {
+        name = "LookTarget", x = 10000000.25, y = 0.0, z = 10000004.875
+    })
+    local copy, copyError = CallFunction("Animator.SetPreciseIKTarget", {
+        name = "CopyTarget", x = 10000003.25, y = 2.0, z = 10000000.875,
+        rotationY = 0.70710678, rotationW = 0.70710678
+    })
+    if handError or poleError or lookError or copyError then
+        SetShared("farRigError", handError or poleError or lookError or copyError)
+        return
+    end
+    SetShared("farRigConfigured", hand and pole and look and copy)
+end
+)", "FarRig.lua");
+            Require(farRigLoaded.succeeded && rigScriptHost.Functions().FindSignature("Animator.SetPreciseIKTarget") != nullptr,
+                "The far rig script did not load");
+            scene.Components().Behaviours().Set(farOwner.Entity(), kb::scene::BehaviourComponent{
+                .behaviourAssetId = farRigScript.value,
+                .backend = kb::scene::BehaviourBackend::Lua,
+                .enabled = true,
+            });
             static_cast<void>(scene.Runtime().Update(0.0F));
-            Require(scene.Animators().SetIkTarget(farOwner.Entity(), "HandTarget", kb::scene::AnimatorIkTarget{
-                        .rotationWeight = 0.0F, .preciseWorldPosition = far + kb::math::DVec3{ 1.0, 1.0, 0.0 } }) &&
-                    scene.Animators().SetIkTarget(farOwner.Entity(), "ElbowPole", kb::scene::AnimatorIkTarget{
-                        .preciseWorldPosition = far + kb::math::DVec3{ 0.0, 0.0, 1.0 } }) &&
-                    scene.Animators().SetIkTarget(farOwner.Entity(), "LookTarget", kb::scene::AnimatorIkTarget{
-                        .preciseWorldPosition = far + kb::math::DVec3{ 0.0, 0.0, 5.0 } }) &&
-                    scene.Animators().SetIkTarget(farOwner.Entity(), "CopyTarget", kb::scene::AnimatorIkTarget{
-                        .worldRotation = { 0.0F, 0.70710678F, 0.0F, 0.70710678F },
-                        .preciseWorldPosition = far + kb::math::DVec3{ 3.0, 2.0, 1.0 } }),
-                "Double-precision IK targets were not accepted");
+            static_cast<void>(scene.Runtime().Update(0.0F));
+            Require(rigScriptHost.SharedState().Get("farRigConfigured").has_value() &&
+                    rigScriptHost.SharedState().Get("farRigConfigured")->AsBool() &&
+                    !rigScriptHost.SharedState().Get("farRigError").has_value(),
+                "Double-precision IK targets set from Lua were not accepted");
             static_cast<void>(scene.Runtime().Update(0.0F));
             scene.Runtime().SynchronizeTransforms();
             Require(kb::math::Length(scene.Transforms().WorldTranslation(farHand.Entity()) - (far + kb::math::DVec3{ 1.0, 1.0, 0.0 })) <= 0.01,
