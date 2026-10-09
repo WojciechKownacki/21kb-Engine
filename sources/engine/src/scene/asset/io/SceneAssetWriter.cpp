@@ -167,6 +167,10 @@ void AddDependency(std::vector<SceneAssetDependency>& dependencies, std::set<std
 
 } // namespace
 
+std::vector<std::uint8_t> SceneAssetWriter::Encode(const SceneDocument& scene) {
+    return CanWrite(scene) ? Serialize(scene) : std::vector<std::uint8_t>{};
+}
+
 bool SceneAssetWriter::Write(const std::filesystem::path& path, const SceneDocument& scene) {
     if (path.extension() != SceneAssetFormat::Extension || !CanWrite(scene)) {
         return false;

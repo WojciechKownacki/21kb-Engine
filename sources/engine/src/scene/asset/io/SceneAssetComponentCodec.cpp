@@ -346,7 +346,7 @@ bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::
         std::uint32_t kind = 0U;
         std::uint32_t lifetime = 0U;
         if (!input.ReadUInt64(content.assetId) || !input.ReadUInt32(kind) || !input.ReadUInt32(lifetime) || !input.ReadBool(content.active) ||
-            kind > static_cast<std::uint32_t>(ContentInstanceKind::WorldFragment) || lifetime > static_cast<std::uint32_t>(ContentInstanceLifetime::Persistent)) return false;
+            kind > static_cast<std::uint32_t>(ContentInstanceKind::PartitionedWorld) || lifetime > static_cast<std::uint32_t>(ContentInstanceLifetime::Persistent)) return false;
         content.kind = static_cast<ContentInstanceKind>(kind);
         content.lifetime = static_cast<ContentInstanceLifetime>(lifetime);
         output.contentInstance = content;

@@ -2,6 +2,7 @@
 #include "scene/SceneStreamingService.hpp"
 #include "scene/components/SceneComponentIteration.hpp"
 #include "scene/transform/SceneTransformRootQueryCache.hpp"
+#include "world/WorldPartitionState.hpp"
 
 #include <flecs.h>
 

@@ -41,6 +41,7 @@
 #include "scene/systems/NavigationSceneSystem.hpp"
 #include "scene/systems/ContentInstanceSceneSystem.hpp"
 #include "scene/ui/SceneUISystem.hpp"
+#include "world/WorldAssetLoaders.hpp"
 
 #include <array>
 #include <atomic>
@@ -112,6 +113,8 @@ Scene::Scene(
     const bool registeredAnimatorControllerLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::AnimatorControllerAssetLoader>());
     const bool registeredTimelineLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::TimelineAssetLoader>());
     const bool registeredLocalizationLoader = state_->assets.RegisterLoader(std::make_unique<kb::localization::LocalizationCatalogAssetLoader>());
+    const bool registeredWorldLoader = state_->assets.RegisterLoader(std::make_unique<kb::world::WorldDescriptorAssetLoader>());
+    const bool registeredWorldCellsLoader = state_->assets.RegisterLoader(std::make_unique<kb::world::WorldCellIndexAssetLoader>());
     static_cast<void>(registeredPrefabLoader);
     static_cast<void>(registeredSceneLoader);
     static_cast<void>(registeredLuaScriptLoader);
@@ -132,6 +135,8 @@ Scene::Scene(
     static_cast<void>(registeredAnimatorControllerLoader);
     static_cast<void>(registeredTimelineLoader);
     static_cast<void>(registeredLocalizationLoader);
+    static_cast<void>(registeredWorldLoader);
+    static_cast<void>(registeredWorldCellsLoader);
 
     if (mode == SceneMode::PrefabPrivate) {
         return;

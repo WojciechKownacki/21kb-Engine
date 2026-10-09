@@ -14,6 +14,7 @@
 #include "engine/scene/TransformComponent.hpp"
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneState.hpp"
+#include "world/WorldPartitionState.hpp"
 
 #include <algorithm>
 #include <optional>
@@ -40,6 +41,7 @@ struct ActiveStreamFocus {
     case ContentInstanceKind::Prefab: return StreamLoadMask::Prefab;
     case ContentInstanceKind::Subscene: return StreamLoadMask::Subscene;
     case ContentInstanceKind::WorldFragment: return StreamLoadMask::WorldFragment;
+    case ContentInstanceKind::PartitionedWorld: return StreamLoadMask::WorldFragment;
     }
     return StreamLoadMask::None;
 }
@@ -143,7 +145,7 @@ void Release(Scene& scene, ContentInstanceRuntimeRecord& runtime, bool preserve)
     return ActivateScene(scene, owner, component, runtime);
 }
 
-[[nodiscard]] std::vector<AuthoredContentInstance> Collect(const Scene& scene, const SceneState& state) {
+[[nodiscard]] std::vector<AuthoredContentInstance> Collect(const Scene& scene, const SceneState& state, std::vector<kb::world::WorldOwnerRef>& worlds) {
     std::vector<AuthoredContentInstance> output;
     const std::vector<ActiveStreamFocus> focuses = CollectStreamFocuses(scene);
     kb::ecs::Query<ContentInstanceComponent> query = const_cast<Scene&>(scene).Runtime().EcsWorld().CreateQuery<ContentInstanceComponent>();
@@ -152,12 +154,18 @@ void Release(Scene& scene, ContentInstanceRuntimeRecord& runtime, bool preserve)
     settings.policy = kb::ecs::QueryExecutionPolicy::SingleThread;
     kb::ecs::UnsafeHotReadQuery<ContentInstanceComponent> hot;
     if (!hot.Rebuild(query, settings)) return output;
-    hot.ForEachRange(settings.maxBatchSize, [&output, &scene, &state, &focuses](const auto& batch) {
+    hot.ForEachRange(settings.maxBatchSize, [&output, &scene, &state, &focuses, &worlds](const auto& batch) {
         const ContentInstanceComponent* components = batch.template Components<0>();
         for (std::size_t index = 0U; index < batch.Count(); ++index) {
             const SceneEntity entity = batch.EntityAt(index);
             const ContentInstanceComponent& component = components[index];
             if (!entity.IsValid() || !component.active || component.assetId == 0U || !IsContentInstanceKindValid(component.kind) || !IsContentInstanceLifetimeValid(component.lifetime)) continue;
+            // A partitioned world has no single position to stream around: its cells
+            // stream individually, so the world itself is always active.
+            if (component.kind == ContentInstanceKind::PartitionedWorld) {
+                worlds.push_back({ .owner = entity, .worldAssetId = component.assetId });
+                continue;
+            }
             const TransformComponent* transform = scene.Transforms().TryGet(entity);
             if (transform == nullptr) continue;
             const bool retain = state.contentInstances.contains(entity.Id());
@@ -165,6 +173,7 @@ void Release(Scene& scene, ContentInstanceRuntimeRecord& runtime, bool preserve)
             if (priority.has_value()) output.push_back({ entity, component, *priority, !focuses.empty() });
         }
     });
+    std::ranges::sort(worlds, [](const kb::world::WorldOwnerRef& left, const kb::world::WorldOwnerRef& right) { return left.owner.Id() < right.owner.Id(); });
     std::ranges::sort(output, [](const AuthoredContentInstance& left, const AuthoredContentInstance& right) {
         return left.streamPriority != right.streamPriority ? left.streamPriority > right.streamPriority : left.entity.Id() < right.entity.Id();
     });
@@ -179,7 +188,8 @@ void SceneContentInstanceService::Synchronize(Scene& scene) {
         Shutdown(scene);
         return;
     }
-    const std::vector<AuthoredContentInstance> authored = Collect(scene, state);
+    std::vector<kb::world::WorldOwnerRef> worlds;
+    const std::vector<AuthoredContentInstance> authored = Collect(scene, state, worlds);
     std::unordered_map<std::uint64_t, const AuthoredContentInstance*> byEntity;
     byEntity.reserve(authored.size());
     for (const auto& item : authored) byEntity.emplace(item.entity.Id(), &item);
@@ -208,6 +218,7 @@ void SceneContentInstanceService::Synchronize(Scene& scene) {
             if (runtime.loadedSceneId != 0U) state.contentInstances.emplace(item.entity.Id(), std::move(runtime));
         } else if (Activate(scene, item.entity, item.component, runtime)) state.contentInstances.emplace(item.entity.Id(), std::move(runtime));
     }
+    kb::world::WorldStreamingService::Synchronize(scene, worlds);
 }
 
 void SceneContentInstanceService::Shutdown(Scene& scene) noexcept {
@@ -217,6 +228,7 @@ void SceneContentInstanceService::Shutdown(Scene& scene) noexcept {
         Release(scene, runtime, false);
     }
     state.contentInstances.clear();
+    kb::world::WorldStreamingService::Shutdown(scene);
 }
 
 } // namespace kb::scene

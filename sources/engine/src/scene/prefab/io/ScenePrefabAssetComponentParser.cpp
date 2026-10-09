@@ -181,7 +181,7 @@ template <typename T>
         !ParseField(fields, "contentInstance.kind", kind) ||
         !ParseField(fields, "contentInstance.lifetime", lifetime) ||
         !ParseOptionalBool(fields, "contentInstance.active", content.active) ||
-        kind < static_cast<int>(ContentInstanceKind::Prefab) || kind > static_cast<int>(ContentInstanceKind::WorldFragment) ||
+        kind < static_cast<int>(ContentInstanceKind::Prefab) || kind > static_cast<int>(ContentInstanceKind::PartitionedWorld) ||
         lifetime < static_cast<int>(ContentInstanceLifetime::Owner) || lifetime > static_cast<int>(ContentInstanceLifetime::Persistent)) return false;
     content.kind = static_cast<ContentInstanceKind>(kind);
     content.lifetime = static_cast<ContentInstanceLifetime>(lifetime);
