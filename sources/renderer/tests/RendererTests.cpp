@@ -73,6 +73,7 @@ void RunSceneRenderExtractorTests();
 void RunShaderManifestTests();
 void RunShaderPrewarmParseTests();
 void RunMeshBakeTests();
+void RunWorldHlodMeshBakerTests();
 void RunTextureBakeTests();
 void RunPackagedWebGpuTextureFallbackTestOnly();
 void RunScreenUIDrawBatchTests();
@@ -105,6 +106,10 @@ int main(int argc, char** argv) {
     }
     if (argc == 2 && std::string_view{ argv[1] } == "mesh-bake") {
         kb::render::tests::RunMeshBakeTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "world-hlod") {
+        kb::render::tests::RunWorldHlodMeshBakerTests();
         return EXIT_SUCCESS;
     }
     if (argc == 2 && std::string_view{ argv[1] } == "texture-bake") {
@@ -311,6 +316,7 @@ int main(int argc, char** argv) {
     kb::render::tests::RunShaderPrewarmParseTests();
     kb::render::tests::RunScreenUIDrawBatchTests();
     kb::render::tests::RunMeshBakeTests();
+    kb::render::tests::RunWorldHlodMeshBakerTests();
     kb::render::tests::RunTextureBakeTests();
     return EXIT_SUCCESS;
 }
