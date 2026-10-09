@@ -5,6 +5,7 @@ add_library(kb_renderer STATIC
     include/kb/render/RendererCapabilityReport.hpp
     include/kb/render/RenderSurface.hpp
     include/kb/render/bake/MeshBaker.hpp
+    include/kb/render/world/WorldBuildTool.hpp
     include/kb/render/world/WorldHlodMeshBaker.hpp
     include/kb/render/bake/TextureBaker.hpp
     include/kb/render/SceneDeferredLightingPass.hpp
@@ -115,6 +116,7 @@ add_library(kb_renderer STATIC
     include/kb/render/ViewIdPolicy.hpp
     src/BgfxContext.cpp
     src/bake/MeshBaker.cpp
+    src/world/WorldBuildTool.cpp
     src/world/WorldHlodMeshBaker.cpp
     src/bake/TextureBakedPayload.cpp
     src/DisplayConfig.cpp

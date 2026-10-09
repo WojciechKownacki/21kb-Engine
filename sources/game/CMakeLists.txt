@@ -253,7 +253,7 @@ if(BUILD_TESTING)
         tests/KbGameCoreTests.cpp
     )
 
-    target_link_libraries(kb_game_core_tests PRIVATE kb_game_core kb_cooker_core)
+    target_link_libraries(kb_game_core_tests PRIVATE kb_game_core kb_cooker_core kb_cli_core)
     add_dependencies(kb_game_core_tests
         kb_windows_runtime_module_test_plugin
         kb_physics_jolt_plugin

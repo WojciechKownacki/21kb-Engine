@@ -70,7 +70,8 @@ Commands:
                  migrate --scene <file.21kbscene> --out <file.21kbworld>
                          [--cell-size <metres>] [--project <dir>]
                  build --world <file.21kbworld> [--project <dir>]
-               (HLOD proxies are built by the editor and by kb_cooker.)
+               build writes the cells, the cell index and the HLOD proxies,
+               exactly as the editor and kb_cooker do.
 
 Scene paths may be physical (relative to the project root) or virtual
 ("/Game/Scenes/Main.21kbscene", requires --project).

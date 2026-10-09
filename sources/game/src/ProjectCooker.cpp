@@ -35,7 +35,7 @@
 #include "kb/render/resources/RenderMeshAssetLoader.hpp"
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
 #include "kb/render/runtime/RuntimeRenderAssetDiscovery.hpp"
-#include "kb/render/world/WorldHlodMeshBaker.hpp"
+#include "kb/render/world/WorldBuildTool.hpp"
 
 #include <bimg/encode.h>
 #include <bx/error.h>
@@ -2217,9 +2217,8 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
     // every world now, from the sources being cooked, so the dependency closure below
     // reaches each cell scene and HLOD proxy through the world's cell index.
     {
-        kb::render::WorldHlodMeshBaker hlodBaker{ manager };
         std::size_t builtWorlds = 0U;
-        const kb::world::WorldBuildResult worlds = kb::world::WorldCellBuilder::BuildAll(contentRoot, &hlodBaker, builtWorlds);
+        const kb::world::WorldBuildResult worlds = kb::render::BuildAllWorldsWithHlod(manager, contentRoot, builtWorlds);
         if (!worlds.succeeded) {
             return Failure("partitioned world build failed: " + worlds.error);
         }
