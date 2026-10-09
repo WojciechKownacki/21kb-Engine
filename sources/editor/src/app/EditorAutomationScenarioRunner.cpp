@@ -4547,6 +4547,12 @@ ReadScriptValue(
             *checkpoint };
     }
 
+    if (*operation == "verify_toolbar_menu_overlay") {
+        return {
+            state.automation.VerifyToolbarMenuOverlay(),
+            "world,layout" };
+    }
+
     if (*operation == "verify_viewport_host_lifecycle") {
         return {
             state.automation.VerifyViewportHostLifecycle(),

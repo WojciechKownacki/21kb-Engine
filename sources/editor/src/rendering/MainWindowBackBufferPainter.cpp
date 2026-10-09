@@ -8,6 +8,7 @@
 #include "rendering/EditorHostSurfaceLayoutResolver.hpp"
 #include "rendering/EditorScriptEditorOverlay.hpp"
 #include "rendering/EditorSurfacePainter.hpp"
+#include "rendering/EditorToolbarMenuOverlayWindow.hpp"
 #include "rendering/GdiBackBufferRenderer.hpp"
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/HeroIconKind.hpp"
@@ -250,6 +251,11 @@ void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
     return overlay;
 }
 
+[[nodiscard]] EditorToolbarMenuOverlayWindow& MainToolbarMenuOverlay() {
+    static EditorToolbarMenuOverlayWindow overlay;
+    return overlay;
+}
+
 } // namespace
 
 void MainWindowBackBufferPainter::HideAllOverlays() noexcept {
@@ -258,6 +264,7 @@ void MainWindowBackBufferPainter::HideAllOverlays() noexcept {
     MainFilterMenuOverlay().Hide();
     MainSceneToolbarDropdownOverlay().Hide();
     MainAddComponentOverlay().Hide();
+    MainToolbarMenuOverlay().Hide();
 }
 
 void MainWindowBackBufferPainter::Paint(HWND window, const EditorDockModel& dockModel, const EditorTheme& theme, const EditorMetrics& metrics, EditorSceneContext& sceneContext, const DockDropPreview* preview, const DockPointerDrag* dockDrag, const EditorPointerDragState& drag, const EditorRenderBackendSettings& renderBackendSettings, const EditorPlayModeState& playMode, const EditorShellInteractionState& shellInteraction, EditorSceneBgfxViewport& sceneViewport) {
@@ -325,6 +332,12 @@ void MainWindowBackBufferPainter::Paint(HWND window, const EditorDockModel& dock
         }
     } else {
         MainAddComponentOverlay().Hide();
+    }
+    // Shown last so that, of the popups, the open menu is the one on top.
+    if (shellInteraction.OpenMenu() != EditorMenuCommand::None) {
+        MainToolbarMenuOverlay().Show(window, ToRect(layout.menu), theme, shellInteraction);
+    } else {
+        MainToolbarMenuOverlay().Hide();
     }
 }
 

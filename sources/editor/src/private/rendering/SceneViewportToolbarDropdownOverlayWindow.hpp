@@ -1,6 +1,7 @@
 #pragma once
 
 #include "kb/editor/theme/EditorTheme.hpp"
+#include "rendering/EditorOverlayPopupWindow.hpp"
 #include "scene/EditorSceneContext.hpp"
 
 #include <cstdint>
@@ -13,11 +14,15 @@
 
 namespace kb::editor {
 
-class SceneViewportToolbarDropdownOverlayWindow {
+class SceneViewportToolbarDropdownOverlayWindow final
+#if defined(_WIN32)
+    : private EditorOverlayPopupWindow::Client
+#endif
+{
 public:
 #if defined(_WIN32)
-    SceneViewportToolbarDropdownOverlayWindow() = default;
-    ~SceneViewportToolbarDropdownOverlayWindow();
+    SceneViewportToolbarDropdownOverlayWindow() noexcept;
+    ~SceneViewportToolbarDropdownOverlayWindow() = default;
 
     SceneViewportToolbarDropdownOverlayWindow(const SceneViewportToolbarDropdownOverlayWindow&) = delete;
     SceneViewportToolbarDropdownOverlayWindow& operator=(const SceneViewportToolbarDropdownOverlayWindow&) = delete;
@@ -28,21 +33,14 @@ public:
 
 private:
 #if defined(_WIN32)
-    [[nodiscard]] bool EnsureWindow(HWND parent);
     [[nodiscard]] RECT ResolveScreenBounds() const noexcept;
-    [[nodiscard]] bool MoveToCurrentBounds(bool showWindow) noexcept;
-    void Paint(HDC dc) const;
+    void PaintOverlay(HDC dc, const RECT& client) override;
+    bool HandleOverlayMessage(UINT message, WPARAM wparam, LPARAM lparam) override;
     [[nodiscard]] int ItemIndexAt(int clientX, int clientY) const noexcept;
-    void ForwardMouseMessage(UINT message, WPARAM wparam, LPARAM lparam) const;
 
-    static LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
-
-    HWND window_ = nullptr;
-    HWND parent_ = nullptr;
+    EditorOverlayPopupWindow popup_;
     RECT sceneContent_{};
-    RECT screenBounds_{};
     std::uint64_t panelId_ = 0U;
-    bool shown_ = false;
     int hoveredItem_ = -1;
     EditorTheme theme_{};
     const EditorSceneContext* sceneContext_ = nullptr;
