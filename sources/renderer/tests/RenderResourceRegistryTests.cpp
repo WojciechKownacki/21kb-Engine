@@ -7,6 +7,7 @@
 #include "engine/assets/bake/BakeTargetProfile.hpp"
 #include "engine/assets/bake/RuntimeAssetManifest.hpp"
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
+#include "engine/assets/streaming/BackgroundLoadService.hpp"
 #include "engine/save/SaveGameService.hpp"
 #include "kb/render/RuntimeAssetShaderProvider.hpp"
 #include "kb/render/resources/RenderAssetRefs.hpp"
@@ -3604,6 +3605,9 @@ void RunRenderTextureAsyncDecodeStreamsInTest() {
 
     Require(RenderTextureAssetLoader::TryAcquireDecodedTexture(texturePath) == nullptr,
         "Async decode: an unseen texture is NOT available synchronously (the render thread does not block-decode it)");
+    const std::shared_ptr<kb::assets::streaming::BackgroundLoadService> background =
+        kb::assets::streaming::BackgroundLoadService::Shared();
+    const std::uint64_t jobsBefore = background->Stats().jobsRun;
     RenderTextureAssetLoader::RequestAsyncTextureDecode(texturePath);
     std::shared_ptr<const RenderTextureAssetData> streamed;
     for (int attempt = 0; attempt < 500 && streamed == nullptr; ++attempt) {
@@ -3614,6 +3618,12 @@ void RunRenderTextureAsyncDecodeStreamsInTest() {
     }
     Require(streamed != nullptr && streamed->width > 0U && !streamed->rgba8.empty(),
         "Async decode: the background worker streams the texture into the cache so a later frame can bind it");
+    const auto jobDeadline = std::chrono::steady_clock::now() + std::chrono::seconds{ 30 };
+    while (background->Stats().jobsRun == jobsBefore && std::chrono::steady_clock::now() < jobDeadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    Require(background->Stats().jobsRun > jobsBefore,
+        "Async decode: the texture was decoded as a job of the engine's background load service");
     std::filesystem::remove_all(root, error);
 }
 

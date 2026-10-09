@@ -5,6 +5,7 @@
 #include "engine/assets/AssetMemoryInputStream.hpp"
 #include "engine/assets/bake/AssetPackReader.hpp"
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
+#include "engine/assets/streaming/BackgroundLoadService.hpp"
 #include "kb/render/bake/TextureBaker.hpp"
 #include "resources/TextureContainerMagic.hpp"
 
@@ -18,9 +19,7 @@
 #include <cstddef>
 #include <charconv>
 #include <cctype>
-#include <condition_variable>
 #include <cstdlib>
-#include <deque>
 #include <fstream>
 #include <istream>
 #include <limits>
@@ -31,7 +30,6 @@
 #include <string>
 #include <string_view>
 #include <system_error>
-#include <thread>
 #include <unordered_set>
 
 namespace kb::render {
@@ -693,75 +691,58 @@ void StoreDecodedTexture(
     return RenderTextureAssetLoader::LoadTexture(input);
 }
 
-// ---- Async decode worker -------------------------------------------------------------------------------
+// ---- Async decode --------------------------------------------------------------------------------------
 // Decoding a large image is ~1s in a Debug build, and it used to happen synchronously on the render thread the
 // first time a texture was referenced (opening a material, or picking a texture in the Image Texture node) -
-// that was the 1-2s freeze. The decode now runs on a single background worker that just populates the cache
-// above; the render thread asks TryAcquireDecodedTexture and, on a miss, queues the decode and carries on, so
-// the texture streams in a frame or two later instead of stalling. One worker keeps decodes serialized (they are
-// bimg-bound, not parallelism-bound) and the cache mutex already makes the hand-off safe.
+// that was the 1-2s freeze. The decode now runs as a job of the engine's background load service that just
+// populates the cache above; the render thread asks TryAcquireDecodedTexture and, on a miss, queues the decode
+// and carries on, so the texture streams in a frame or two later instead of stalling. The decodes share one
+// lane, so they stay serialized (they are bimg-bound, not parallelism-bound), and the cache mutex already makes
+// the hand-off safe.
 struct AsyncTextureDecodeState {
     std::mutex mutex;
-    std::condition_variable wake;
-    std::deque<std::string> queue;
     std::unordered_set<std::string> pending;
-    std::thread worker;
-    bool stop = false;
+    std::unique_ptr<kb::assets::streaming::BackgroundLane> lane;
+    bool closed = false;
 };
 
-void AsyncTextureDecodeWork(AsyncTextureDecodeState* state) {
-    for (;;) {
-        std::string path;
-        {
-            std::unique_lock<std::mutex> lock{ state->mutex };
-            state->wake.wait(lock, [state] { return state->stop || !state->queue.empty(); });
-            if (state->stop) {
-                return;
+void DecodeTextureInBackground(AsyncTextureDecodeState* state, const std::string& path) {
+    std::error_code writeTimeError;
+    const std::filesystem::path fsPath{ path };
+    const std::filesystem::file_time_type writeTime = std::filesystem::last_write_time(fsPath, writeTimeError);
+    std::error_code sizeError;
+    const std::uintmax_t fileSize = std::filesystem::file_size(fsPath, sizeError);
+    if (!writeTimeError && !sizeError && fileSize > 0U && !LookupDecodedTexture(path, writeTime, fileSize)) {
+        if (std::optional<RenderTextureAssetData> decoded = DecodeTextureFile(fsPath); decoded.has_value()) {
+            {
+                std::lock_guard<std::mutex> lock{ DecodedTextureCacheMutex() };
+                ++DecodedTextureDecodeCounter();
             }
-            path = std::move(state->queue.front());
-            state->queue.pop_front();
-        }
-        std::error_code writeTimeError;
-        const std::filesystem::path fsPath{ path };
-        const std::filesystem::file_time_type writeTime = std::filesystem::last_write_time(fsPath, writeTimeError);
-        std::error_code sizeError;
-        const std::uintmax_t fileSize = std::filesystem::file_size(fsPath, sizeError);
-        if (!writeTimeError && !sizeError && fileSize > 0U && !LookupDecodedTexture(path, writeTime, fileSize)) {
-            if (std::optional<RenderTextureAssetData> decoded = DecodeTextureFile(fsPath); decoded.has_value()) {
-                {
-                    std::lock_guard<std::mutex> lock{ DecodedTextureCacheMutex() };
-                    ++DecodedTextureDecodeCounter();
-                }
-                StoreDecodedTexture(
-                    path, writeTime, fileSize, std::make_shared<const RenderTextureAssetData>(*decoded),
-                    RetainedTextureBytes(*decoded));
-            }
-        }
-        {
-            std::lock_guard<std::mutex> lock{ state->mutex };
-            state->pending.erase(path);
+            StoreDecodedTexture(
+                path, writeTime, fileSize, std::make_shared<const RenderTextureAssetData>(*decoded),
+                RetainedTextureBytes(*decoded));
         }
     }
+    std::lock_guard<std::mutex> lock{ state->mutex };
+    state->pending.erase(path);
 }
 
 AsyncTextureDecodeState& AsyncTextureDecode() {
     static AsyncTextureDecodeState* state = [] {
         // Force the decoded-texture cache singletons to exist BEFORE this atexit is registered, so at process
-        // exit the handler (which stops+joins the worker) runs before those cache singletons are torn down -
-        // the worker touches the cache, so it must be stopped first.
+        // exit the handler (which closes the lane: queued decodes are dropped, a running one is waited for) runs
+        // before those cache singletons are torn down - a decode touches the cache, so it must be done first.
         static_cast<void>(DecodedTextureCacheMutex());
-        auto* created = new AsyncTextureDecodeState(); // process-lifetime; the worker is joined by the atexit below
-        created->worker = std::thread(AsyncTextureDecodeWork, created);
+        auto* created = new AsyncTextureDecodeState(); // process-lifetime; the lane is closed by the atexit below
         static_cast<void>(std::atexit([] {
             AsyncTextureDecodeState& live = AsyncTextureDecode();
+            std::unique_ptr<kb::assets::streaming::BackgroundLane> lane;
             {
                 std::lock_guard<std::mutex> lock{ live.mutex };
-                live.stop = true;
+                live.closed = true;
+                lane = std::move(live.lane);
             }
-            live.wake.notify_all();
-            if (live.worker.joinable()) {
-                live.worker.join();
-            }
+            lane.reset();
         }));
         return created;
     }();
@@ -771,10 +752,19 @@ AsyncTextureDecodeState& AsyncTextureDecode() {
 void QueueAsyncTextureDecode(const std::string& key) {
     AsyncTextureDecodeState& state = AsyncTextureDecode();
     std::lock_guard<std::mutex> lock{ state.mutex };
-    if (state.pending.insert(key).second) {
-        state.queue.push_back(key);
-        state.wake.notify_one();
+    if (state.closed || !state.pending.insert(key).second) {
+        return;
     }
+    // The lane, and with it the shared service, is opened by the first decode; until then a process that never
+    // streams a texture starts no thread for it.
+    if (state.lane == nullptr) {
+        state.lane = std::make_unique<kb::assets::streaming::BackgroundLane>(
+            kb::assets::streaming::BackgroundLoadService::Shared());
+    }
+    static_cast<void>(state.lane->Run([statePointer = &state, key](std::string&) {
+        DecodeTextureInBackground(statePointer, key);
+        return true;
+    }));
 }
 
 // Opt-in, off by default. The runtime texture ensurer only streams (async) when this is set - which the editor
