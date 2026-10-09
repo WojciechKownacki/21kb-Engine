@@ -84,6 +84,7 @@ BackgroundLoadService::BackgroundLoadService(BackgroundLoadServiceOptions option
     options_.requestsInFlightPerWorker = std::clamp<std::uint32_t>(options_.requestsInFlightPerWorker, 1U, 32U);
     options_.jobWorkers = std::clamp<std::uint32_t>(
         options_.jobWorkers, 1U, std::max<std::uint32_t>(1U, options_.workerCount - 1U));
+    options_.longJobWorkers = std::clamp<std::uint32_t>(options_.longJobWorkers, 1U, 64U);
 #if !defined(_WIN32)
     options_.requestsInFlightPerWorker = 1U;
 #endif
@@ -102,6 +103,9 @@ BackgroundLoadService::~BackgroundLoadService() {
         reads_.clear();
         abandoned.insert(abandoned.end(), std::make_move_iterator(jobs_.begin()), std::make_move_iterator(jobs_.end()));
         jobs_.clear();
+        abandoned.insert(abandoned.end(), std::make_move_iterator(longJobs_.begin()),
+            std::make_move_iterator(longJobs_.end()));
+        longJobs_.clear();
         for (auto& [id, lane] : lanes_) {
             static_cast<void>(id);
             abandoned.insert(abandoned.end(), std::make_move_iterator(lane.parked.begin()),
@@ -110,6 +114,7 @@ BackgroundLoadService::~BackgroundLoadService() {
         }
     }
     wake_.notify_all();
+    longWake_.notify_all();
     for (QueueEntry& entry : abandoned) {
         BackgroundRequestState expected = BackgroundRequestState::Queued;
         if (entry.request->state_.compare_exchange_strong(expected, BackgroundRequestState::Cancelled)) {
@@ -119,6 +124,10 @@ BackgroundLoadService::~BackgroundLoadService() {
         }
     }
     for (std::thread& worker : workers_) {
+        worker.join();
+    }
+    // stopping_ is set, so no long worker starts any more.
+    for (std::thread& worker : longWorkers_) {
         worker.join();
     }
 }
@@ -177,12 +186,21 @@ BackgroundRequestHandle BackgroundLoadService::Run(BackgroundJob job, Background
     return Submit(std::move(request), priority);
 }
 
+BackgroundRequestHandle BackgroundLoadService::Run(BackgroundJob job, BackgroundPriority priority, BackgroundJobClass jobClass) {
+    auto request = std::make_shared<BackgroundRequest>();
+    request->job_ = std::move(job);
+    request->isJob_ = true;
+    request->jobClass_ = jobClass;
+    return Submit(std::move(request), priority);
+}
+
 BackgroundRequestHandle BackgroundLoadService::Submit(BackgroundRequestHandle request, BackgroundPriority priority) {
     request->priority_.store(priority, std::memory_order_relaxed);
     request->submittedAt_ = std::chrono::steady_clock::now();
     {
         std::scoped_lock lock{ mutex_ };
-        const bool laneClosed = request->lane_ != kNoBackgroundLane && !lanes_.contains(request->lane_);
+        const auto lane = request->lane_ == kNoBackgroundLane ? lanes_.end() : lanes_.find(request->lane_);
+        const bool laneClosed = request->lane_ != kNoBackgroundLane && lane == lanes_.end();
         if (stopping_ || laneClosed) {
             request->error_ = stopping_ ? "the background load service is shutting down" : "the lane is closed";
             request->job_ = {};
@@ -192,10 +210,27 @@ BackgroundRequestHandle BackgroundLoadService::Submit(BackgroundRequestHandle re
             ++stats_.cancelled;
             return request;
         }
+        if (lane != lanes_.end()) {
+            request->jobClass_ = lane->second.jobClass;
+        }
+        const bool longJob = request->isJob_ && request->jobClass_ == BackgroundJobClass::Long;
+        if (longJob) {
+            // One long worker for every long job that could run now, up to the limit. A thread
+            // that cannot start throws before anything is queued.
+            const std::size_t demand = static_cast<std::size_t>(longJobsRunning_) + 1U +
+                static_cast<std::size_t>(std::ranges::count_if(longJobs_, IsLive));
+            if (longWorkers_.size() < std::min<std::size_t>(demand, options_.longJobWorkers)) {
+                longWorkers_.emplace_back([this] { LongWorkerLoop(); });
+            }
+        }
         request->sequence_ = nextSequence_++;
-        std::vector<QueueEntry>& queue = request->isJob_ ? jobs_ : reads_;
+        std::vector<QueueEntry>& queue = request->isJob_ ? JobQueue(request->jobClass_) : reads_;
         queue.push_back(QueueEntry{ priority, request->sequence_, 0U, request });
         std::push_heap(queue.begin(), queue.end(), QueueOrder{});
+        if (longJob) {
+            longWake_.notify_all();
+            return request;
+        }
     }
     wake_.notify_one();
     return request;
@@ -214,12 +249,13 @@ bool BackgroundLoadService::Reprioritize(const BackgroundRequestHandle& request,
         // random element costs more than ignoring it once.
         const std::uint64_t generation = request->generation_.fetch_add(1U, std::memory_order_relaxed) + 1U;
         request->priority_.store(priority, std::memory_order_relaxed);
-        std::vector<QueueEntry>& queue = request->isJob_ ? jobs_ : reads_;
+        std::vector<QueueEntry>& queue = request->isJob_ ? JobQueue(request->jobClass_) : reads_;
         queue.push_back(QueueEntry{ priority, request->sequence_, generation, request });
         std::push_heap(queue.begin(), queue.end(), QueueOrder{});
     }
     // A job parked behind its lane is back in the queue; let a worker look at it.
     wake_.notify_one();
+    longWake_.notify_all();
     return true;
 }
 
@@ -240,10 +276,10 @@ bool BackgroundLoadService::Cancel(const BackgroundRequestHandle& request) {
     return true;
 }
 
-BackgroundLaneId BackgroundLoadService::OpenLane() {
+BackgroundLaneId BackgroundLoadService::OpenLane(BackgroundJobClass jobClass, std::uint32_t concurrency) {
     std::scoped_lock lock{ mutex_ };
     const BackgroundLaneId id = nextLane_++;
-    lanes_.emplace(id, Lane{});
+    lanes_.emplace(id, Lane{ .jobClass = jobClass, .concurrency = std::max(concurrency, 1U) });
     return id;
 }
 
@@ -272,13 +308,15 @@ std::size_t BackgroundLoadService::CancelLane(BackgroundLaneId lane) noexcept {
     const auto ofLane = [lane](const QueueEntry& entry) {
         return entry.request->lane_ == lane;
     };
-    for (QueueEntry& entry : jobs_) {
-        if (ofLane(entry)) {
-            cancel(entry);
+    for (std::vector<QueueEntry>* queue : { &jobs_, &longJobs_ }) {
+        for (QueueEntry& entry : *queue) {
+            if (ofLane(entry)) {
+                cancel(entry);
+            }
         }
-    }
-    if (std::erase_if(jobs_, ofLane) > 0U) {
-        std::make_heap(jobs_.begin(), jobs_.end(), QueueOrder{});
+        if (std::erase_if(*queue, ofLane) > 0U) {
+            std::make_heap(queue->begin(), queue->end(), QueueOrder{});
+        }
     }
     if (const auto found = lanes_.find(lane); found != lanes_.end()) {
         for (QueueEntry& entry : found->second.parked) {
@@ -296,7 +334,7 @@ void BackgroundLoadService::WaitForLane(BackgroundLaneId lane) noexcept {
     std::unique_lock lock{ mutex_ };
     laneIdle_.wait(lock, [this, lane] {
         const auto found = lanes_.find(lane);
-        return found == lanes_.end() || !found->second.running;
+        return found == lanes_.end() || found->second.running == 0U;
     });
 }
 
@@ -318,12 +356,18 @@ bool BackgroundLoadService::IsLive(const QueueEntry& entry) noexcept {
 std::size_t BackgroundLoadService::QueuedCount() const {
     std::scoped_lock lock{ mutex_ };
     std::size_t count = static_cast<std::size_t>(std::ranges::count_if(reads_, IsLive)) +
-        static_cast<std::size_t>(std::ranges::count_if(jobs_, IsLive));
+        static_cast<std::size_t>(std::ranges::count_if(jobs_, IsLive)) +
+        static_cast<std::size_t>(std::ranges::count_if(longJobs_, IsLive));
     for (const auto& [id, lane] : lanes_) {
         static_cast<void>(id);
         count += static_cast<std::size_t>(std::ranges::count_if(lane.parked, IsLive));
     }
     return count;
+}
+
+std::uint32_t BackgroundLoadService::LongWorkerCount() const {
+    std::scoped_lock lock{ mutex_ };
+    return static_cast<std::uint32_t>(longWorkers_.size());
 }
 
 bool BackgroundLoadService::WaitUntilDone(const BackgroundRequestHandle& request, std::chrono::steady_clock::time_point deadline) {
@@ -345,33 +389,13 @@ std::vector<BackgroundRequestHandle> BackgroundLoadService::TakeBatch(std::size_
         }
         // A runnable job first while under the job limit: reads keep the other workers, and a
         // steady stream of reads cannot starve the jobs.
-        while (jobsRunning_ < options_.jobWorkers && !jobs_.empty()) {
-            std::pop_heap(jobs_.begin(), jobs_.end(), QueueOrder{});
-            QueueEntry entry = std::move(jobs_.back());
-            jobs_.pop_back();
-            if (!IsLive(entry)) {
-                continue;
+        if (jobsRunning_ < options_.jobWorkers) {
+            if (BackgroundRequestHandle job = TakeJob(jobs_)) {
+                ++jobsRunning_;
+                stats_.peakJobsRunning = std::max(stats_.peakJobsRunning, jobsRunning_);
+                batch.push_back(std::move(job));
+                return batch;
             }
-            Lane* lane = nullptr;
-            if (entry.request->lane_ != kNoBackgroundLane) {
-                const auto found = lanes_.find(entry.request->lane_);
-                lane = found == lanes_.end() ? nullptr : &found->second;
-                if (lane != nullptr && lane->running) {
-                    lane->parked.push_back(std::move(entry));
-                    continue;
-                }
-            }
-            BackgroundRequestState expected = BackgroundRequestState::Queued;
-            if (!entry.request->state_.compare_exchange_strong(expected, BackgroundRequestState::InFlight, std::memory_order_acq_rel)) {
-                continue;
-            }
-            if (lane != nullptr) {
-                lane->running = true;
-            }
-            ++jobsRunning_;
-            stats_.peakJobsRunning = std::max(stats_.peakJobsRunning, jobsRunning_);
-            batch.push_back(std::move(entry.request));
-            return batch;
         }
         while (!reads_.empty() && batch.size() < count) {
             std::pop_heap(reads_.begin(), reads_.end(), QueueOrder{});
@@ -391,6 +415,54 @@ std::vector<BackgroundRequestHandle> BackgroundLoadService::TakeBatch(std::size_
         wake_.wait(lock, [this] {
             return stopping_ || !reads_.empty() || (!jobs_.empty() && jobsRunning_ < options_.jobWorkers);
         });
+    }
+}
+
+BackgroundRequestHandle BackgroundLoadService::TakeJob(std::vector<QueueEntry>& queue) {
+    while (!queue.empty()) {
+        std::pop_heap(queue.begin(), queue.end(), QueueOrder{});
+        QueueEntry entry = std::move(queue.back());
+        queue.pop_back();
+        if (!IsLive(entry)) {
+            continue;
+        }
+        Lane* lane = nullptr;
+        if (entry.request->lane_ != kNoBackgroundLane) {
+            const auto found = lanes_.find(entry.request->lane_);
+            lane = found == lanes_.end() ? nullptr : &found->second;
+            if (lane != nullptr && lane->running >= lane->concurrency) {
+                lane->parked.push_back(std::move(entry));
+                continue;
+            }
+        }
+        BackgroundRequestState expected = BackgroundRequestState::Queued;
+        if (!entry.request->state_.compare_exchange_strong(expected, BackgroundRequestState::InFlight, std::memory_order_acq_rel)) {
+            continue;
+        }
+        if (lane != nullptr) {
+            ++lane->running;
+        }
+        return std::move(entry.request);
+    }
+    return nullptr;
+}
+
+void BackgroundLoadService::LongWorkerLoop() {
+    std::unique_lock lock{ mutex_ };
+    for (;;) {
+        if (stopping_) {
+            return;
+        }
+        if (BackgroundRequestHandle job = TakeJob(longJobs_)) {
+            ++longJobsRunning_;
+            stats_.peakLongJobsRunning = std::max(stats_.peakLongJobsRunning, longJobsRunning_);
+            lock.unlock();
+            RunJob(job);
+            job.reset();
+            lock.lock();
+            continue;
+        }
+        longWake_.wait(lock, [this] { return stopping_ || !longJobs_.empty(); });
     }
 }
 
@@ -442,15 +514,21 @@ void BackgroundLoadService::RunJob(const BackgroundRequestHandle& request) {
         } else {
             ++stats_.failed;
         }
-        ++stats_.jobsRun;
-        --jobsRunning_;
+        if (request->jobClass_ == BackgroundJobClass::Long) {
+            ++stats_.longJobsRun;
+            --longJobsRunning_;
+        } else {
+            ++stats_.jobsRun;
+            --jobsRunning_;
+        }
         if (request->lane_ != kNoBackgroundLane) {
             if (const auto found = lanes_.find(request->lane_); found != lanes_.end()) {
                 Lane& lane = found->second;
-                lane.running = false;
+                --lane.running;
+                std::vector<QueueEntry>& queue = JobQueue(lane.jobClass);
                 for (QueueEntry& parked : lane.parked) {
-                    jobs_.push_back(std::move(parked));
-                    std::push_heap(jobs_.begin(), jobs_.end(), QueueOrder{});
+                    queue.push_back(std::move(parked));
+                    std::push_heap(queue.begin(), queue.end(), QueueOrder{});
                 }
                 lane.parked.clear();
             }
@@ -459,6 +537,7 @@ void BackgroundLoadService::RunJob(const BackgroundRequestHandle& request) {
             std::memory_order_release);
     }
     wake_.notify_all();
+    longWake_.notify_all();
     laneIdle_.notify_all();
 }
 
@@ -688,9 +767,12 @@ void BackgroundLoadService::Finish(const BackgroundRequestHandle& request, bool 
     request->state_.store(succeeded ? BackgroundRequestState::Completed : BackgroundRequestState::Failed, std::memory_order_release);
 }
 
-BackgroundLane::BackgroundLane(std::shared_ptr<BackgroundLoadService> service)
+BackgroundLane::BackgroundLane(
+    std::shared_ptr<BackgroundLoadService> service,
+    BackgroundJobClass jobClass,
+    std::uint32_t concurrency)
     : service_{ std::move(service) },
-      id_{ service_->OpenLane() } {}
+      id_{ service_->OpenLane(jobClass, concurrency) } {}
 
 BackgroundLane::~BackgroundLane() {
     service_->CloseLane(id_);
