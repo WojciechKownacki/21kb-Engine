@@ -519,6 +519,58 @@ if(NOT TARGET kb_zstd)
     kb_apply_fuzz_instrumentation(kb_zstd)
 endif()
 
+# Navigation mesh generation (Recast), tiled navigation meshes and path queries (Detour), path
+# corridors and local avoidance (DetourCrowd) and the compact layers a tile is rebuilt from when
+# obstacles change (DetourTileCache builder). Only the libraries of the official release tarball
+# are compiled; its own CMake project (demo, tests) is never added. Polygon references are 64-bit
+# so a streamed world can hold millions of tiles, and query filters are virtual so the engine's
+# 32 area types filter paths exactly.
+FetchContent_Declare(
+    kb_recast
+    URL https://github.com/recastnavigation/recastnavigation/archive/refs/tags/v1.6.0.tar.gz
+    URL_HASH SHA256=d48ca0121962fa0639502c0f56c4e3ae72f98e55d88727225444f500775c0074
+    SOURCE_SUBDIR kb-libraries-only
+)
+FetchContent_MakeAvailable(kb_recast)
+if(NOT TARGET kb_recast)
+    add_library(kb_recast STATIC
+        ${kb_recast_SOURCE_DIR}/Recast/Source/Recast.cpp
+        ${kb_recast_SOURCE_DIR}/Recast/Source/RecastAlloc.cpp
+        ${kb_recast_SOURCE_DIR}/Recast/Source/RecastArea.cpp
+        ${kb_recast_SOURCE_DIR}/Recast/Source/RecastAssert.cpp
+        ${kb_recast_SOURCE_DIR}/Recast/Source/RecastContour.cpp
+        ${kb_recast_SOURCE_DIR}/Recast/Source/RecastFilter.cpp
+        ${kb_recast_SOURCE_DIR}/Recast/Source/RecastLayers.cpp
+        ${kb_recast_SOURCE_DIR}/Recast/Source/RecastMesh.cpp
+        ${kb_recast_SOURCE_DIR}/Recast/Source/RecastMeshDetail.cpp
+        ${kb_recast_SOURCE_DIR}/Recast/Source/RecastRasterization.cpp
+        ${kb_recast_SOURCE_DIR}/Recast/Source/RecastRegion.cpp
+        ${kb_recast_SOURCE_DIR}/Detour/Source/DetourAlloc.cpp
+        ${kb_recast_SOURCE_DIR}/Detour/Source/DetourAssert.cpp
+        ${kb_recast_SOURCE_DIR}/Detour/Source/DetourCommon.cpp
+        ${kb_recast_SOURCE_DIR}/Detour/Source/DetourNavMesh.cpp
+        ${kb_recast_SOURCE_DIR}/Detour/Source/DetourNavMeshBuilder.cpp
+        ${kb_recast_SOURCE_DIR}/Detour/Source/DetourNavMeshQuery.cpp
+        ${kb_recast_SOURCE_DIR}/Detour/Source/DetourNode.cpp
+        ${kb_recast_SOURCE_DIR}/DetourCrowd/Source/DetourLocalBoundary.cpp
+        ${kb_recast_SOURCE_DIR}/DetourCrowd/Source/DetourObstacleAvoidance.cpp
+        ${kb_recast_SOURCE_DIR}/DetourCrowd/Source/DetourPathCorridor.cpp
+        ${kb_recast_SOURCE_DIR}/DetourCrowd/Source/DetourProximityGrid.cpp
+        ${kb_recast_SOURCE_DIR}/DetourTileCache/Source/DetourTileCacheBuilder.cpp
+    )
+    target_include_directories(kb_recast PUBLIC
+        ${kb_recast_SOURCE_DIR}/Recast/Include
+        ${kb_recast_SOURCE_DIR}/Detour/Include
+        ${kb_recast_SOURCE_DIR}/DetourCrowd/Include
+        ${kb_recast_SOURCE_DIR}/DetourTileCache/Include
+    )
+    target_compile_definitions(kb_recast PUBLIC DT_POLYREF64=1 DT_VIRTUAL_QUERYFILTER=1)
+    if(NOT WIN32)
+        set_target_properties(kb_recast PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    endif()
+    kb_apply_fuzz_instrumentation(kb_recast)
+endif()
+
 add_subdirectory(sources/engine engine)
 add_subdirectory(sources/tools tools)
 add_subdirectory(sources/plugins/physics_jolt physics_jolt)
