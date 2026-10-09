@@ -1,16 +1,17 @@
 #pragma once
 
 #include "engine/assets/AssetId.hpp"
+#include "engine/assets/streaming/BackgroundLoadService.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialGraphShaderArtifact.hpp"
 
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <string_view>
-#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -159,9 +160,12 @@ private:
         std::chrono::steady_clock::time_point readyAt{};
     };
 
-    void StartWorker();
+    // Starts a drain job unless one is already scheduled. Needs mutex_ held by the caller.
+    void ScheduleDrainLocked();
     void StopWorker();
-    void WorkerLoop();
+    // A long job of the background service: cooks pending entries as their debounce window
+    // passes and ends once nothing is pending.
+    void DrainPending();
 
     EditorMaterialGraphCookConfig config_;
 
@@ -182,7 +186,8 @@ private:
     std::uint64_t generationCounter_ = 0U;
     std::uint32_t inFlight_ = 0U;
     bool stop_ = false;
-    std::thread worker_;
+    bool drainScheduled_ = false;
+    std::unique_ptr<kb::assets::streaming::BackgroundLane> lane_;
 };
 
 } // namespace kb::editor
