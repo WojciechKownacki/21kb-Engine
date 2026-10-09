@@ -1319,6 +1319,7 @@ void RunPartitionedWorldCookTest() {
     std::error_code removeError;
     std::filesystem::remove_all(chunks, removeError);
     std::filesystem::create_directories(chunks);
+    std::string error;
     bake::AssetPackWorldRegion east{};
     bake::AssetPackWorldRegion night{};
     Require(bake::ParseAssetPackWorldRegion("/Game/Worlds/Forest.21kbworld@1:0..2:0", east, error) &&
@@ -1349,12 +1350,12 @@ void RunPartitionedWorldCookTest() {
         Require(entry != nullptr, (std::string{ "The split world lost " } + std::string{ path }).c_str());
         return set->AssetContainer(entry->id).value_or(99U);
     };
-    Require(containerOf("/Game/Worlds/Forest.cells/base/c_0_0.21kbscene") == 0U &&
-            containerOf("/Game/Worlds/Forest.cells/base/c_1_0.21kbscene") == 1U &&
-            containerOf("/Game/Worlds/Forest.cells/base/c_2_0.21kbscene") == 1U &&
-            containerOf("/Game/Worlds/Forest.cells/hlod/h_1_0.obj") == 1U &&
-            containerOf("/Game/Worlds/Forest.cells/hlod/h_0_0.obj") == 0U &&
-            containerOf("/Game/Worlds/Forest.cells/layer.night/c_0_0.21kbscene") == 2U &&
+    Require(containerOf("/Game/Worlds/Forest.cells/base/r_0_0/c_0_0.21kbscene") == 0U &&
+            containerOf("/Game/Worlds/Forest.cells/base/r_0_0/c_1_0.21kbscene") == 1U &&
+            containerOf("/Game/Worlds/Forest.cells/base/r_0_0/c_2_0.21kbscene") == 1U &&
+            containerOf("/Game/Worlds/Forest.cells/hlod/r_0_0/h_1_0.obj") == 1U &&
+            containerOf("/Game/Worlds/Forest.cells/hlod/r_0_0/h_0_0.obj") == 0U &&
+            containerOf("/Game/Worlds/Forest.cells/layer.night/r_0_0/c_0_0.21kbscene") == 2U &&
             containerOf("/Game/Worlds/Forest.cells/Forest.21kbcells") == 0U &&
             containerOf("/Game/Meshes/Rock.obj") == 0U,
         "The split put a world asset into the wrong pack");
