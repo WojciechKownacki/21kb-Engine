@@ -33,5 +33,6 @@ void RunCrashReportConsentTests();
 void RunNavigationRuntimeTests();
 void RunPortalVisibilityTests();
 void RunMotionSkeletonRuleTests();
+void RunWorldPartitionTests();
 
 } // namespace kb::tests

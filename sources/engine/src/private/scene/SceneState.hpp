@@ -81,6 +81,12 @@ class IParticleSimulationBackend;
 
 } // namespace kb::particles
 
+namespace kb::world {
+
+struct WorldPartitionState;
+
+} // namespace kb::world
+
 namespace kb::scene {
 
 class IPhysicsBackend;
@@ -300,6 +306,8 @@ public:
     std::size_t lastAnimatorUpdateRateSkippedPoseCount = 0U;
     std::map<std::uint64_t, TimelineRuntimeRecord> timelines;
     std::map<std::uint64_t, ContentInstanceRuntimeRecord> contentInstances;
+    // Streaming state of partitioned worlds placed through ContentInstanceComponent.
+    std::unique_ptr<kb::world::WorldPartitionState> worldPartition;
     std::vector<TimelineMarkerEvent> pendingTimelineMarkerEvents;
     std::uint64_t nextTimelineInstanceId = 1U;
     kb::input::InputSubsystem inputSubsystem;

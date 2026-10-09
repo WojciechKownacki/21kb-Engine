@@ -205,6 +205,13 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneHierarchyAccess.hpp
     include/engine/scene/SceneHistory.hpp
     include/engine/scene/SceneLoadedContent.hpp
+    include/engine/world/WorldCellBuilder.hpp
+    include/engine/world/WorldCellIndex.hpp
+    include/engine/world/WorldDescriptor.hpp
+    include/engine/world/WorldEditSession.hpp
+    include/engine/world/WorldObjectFile.hpp
+    include/engine/world/WorldPartitionGrid.hpp
+    include/engine/world/WorldPartitionRuntime.hpp
     include/engine/scene/InputComponent.hpp
     include/engine/scene/SceneInputActivation.hpp
     include/engine/scene/SceneInputComponents.hpp
@@ -862,6 +869,14 @@ add_library(kb_engine STATIC
         src/scene/components/SceneLensEchoApi.cpp
         src/scene/components/SceneLensEchoStorage.cpp
       src/scene/SceneContentInstanceService.cpp
+    src/world/WorldAssetLoaders.cpp
+    src/world/WorldCellBuilder.cpp
+    src/world/WorldCellIndex.cpp
+    src/world/WorldDescriptor.cpp
+    src/world/WorldEditSession.cpp
+    src/world/WorldObjectFile.cpp
+    src/world/WorldObjectSplit.cpp
+    src/world/WorldStreamingService.cpp
     src/scene/components/SceneTransformApi.cpp
     src/scene/components/SceneTransformStorage.cpp
     src/scene/components/SceneTransformIteration.cpp
@@ -1224,6 +1239,10 @@ add_library(kb_engine STATIC
         src/private/scene/components/SceneLensEchoComponentStore.hpp
       src/private/scene/SceneContentInstanceService.hpp
       src/private/scene/systems/ContentInstanceSceneSystem.hpp
+    src/private/world/WorldAssetLoaders.hpp
+    src/private/world/WorldObjectSplit.hpp
+    src/private/world/WorldPartitionState.hpp
+    src/private/world/WorldTextFormat.hpp
     src/private/scene/components/SceneTransformComponentStore.hpp
     src/private/scene/components/SceneVisibilityComponentStore.hpp
     src/private/scene/entities/SceneEntityCounter.hpp
@@ -1763,6 +1782,7 @@ if(BUILD_TESTING)
         tests/TestSuites.hpp
         tests/TestSupport.hpp
         tests/VisualGraphTests.cpp
+        tests/WorldPartitionTests.cpp
         tests/InputTests.cpp
         tests/EngineModuleTests.cpp
         tests/EngineLibraryTests.cpp
