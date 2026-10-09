@@ -71,7 +71,8 @@ authored. Data layer objects of a world are not baked: switch them with obstacle
 Both resolve meshes with the cooker's runtime loaders over the project's content root mounted as
 `/Game`, so the editor and kb_cli write identical bytes (checked by the editor's headless
 navigation scenario). Tiles are built in parallel on the engine's worker pool
-(`kb::ecs::WorkerPool`, at most 8 workers); the result is the same as a serial bake.
+(`kb::ecs::WorkerPool`): the caller's when it passes a running one, else one the bake starts with
+one worker per core, at most 8. The tiles are the same bytes whatever the number of workers.
 
 A scene uses its mesh through the ContentInstance: while the scene plays, the navigation system
 loads the asset on the asset worker and adds its tiles. The ContentInstance's transform does not
@@ -132,8 +133,8 @@ navigation.SetOrigin(farAwayPlace);                                  // Detour's
 - **Links** (`NavLink`: start and end offsets in the owner's space, radius, kind, area,
   bidirectional) belong to the tile their start lies in, which is rebuilt when a link changes.
 - **Geometry built, moved or destroyed while the game runs**: `RebakeTiles(min, max)` rasterises
-  the tiles over that box again from the scene's current static geometry and uses them in place of
-  the baked ones; `RestoreBakedTiles()` goes back.
+  the tiles over that box again from the scene's current static geometry, on the scene's worker
+  pool, and uses them in place of the baked ones; `RestoreBakedTiles()` goes back.
 - `SetOrigin(position)` sets the navigation origin: Detour works in floats relative to it, and agent
   destinations and `AgentPath` corners are in its space (world position minus the origin). Set it
   near where a far-away world is played (docs/large_worlds.md); the default is the world origin.
@@ -197,8 +198,8 @@ components.
 
 On the development machine (Release, one thread for the crowd):
 
-- Baking a 200 x 200 m arena with 25 pillars (cell 0.3 m, 96-cell tiles, 64 tiles) without a
-  worker pool: about 73 ms.
+- Baking a 200 x 200 m arena with 25 pillars (cell 0.3 m, 96-cell tiles, 64 tiles) on the
+  pool the bake starts: about 16 ms (about 73 ms on one thread).
 - Crowd step, agents walking across that arena through each other: 1000 agents about 2.6 ms,
   5000 agents about 21 ms, 5000 agents with level of detail around one focus about 16 ms.
   Under load from other builds on the same machine the figures doubled.
@@ -228,7 +229,7 @@ detail makes a large crowd cheaper.
 
 | Test | Covers |
 | --- | --- |
-| `kb_engine_tests navigation-mesh` | Settings validation; the asset format (round trip, truncation, refusal of escaping connections and unknown areas); bakes on the worker pool identical to serial ones; walkable area of a floor; slopes (30 vs 60 degrees) and steps (0.3 vs 0.6 m); carving obstacles (blocked, around, rotated, removed) with an agent walking around; geometry rebuilt at runtime; area costs and masks; two agent sizes through a doorway; jump and ladder links (one-way, disabled) crossed by agents; far from the world origin; a 1200-agent crowd replaying exactly; crowd level of detail; NavAgent, NavObstacle and NavLink save/load; scripts; a scene's ContentInstance placing its mesh; a world's tiles streaming in and out with its cells. |
+| `kb_engine_tests navigation-mesh` | Settings validation; the asset format (round trip, truncation, refusal of escaping connections and unknown areas); bakes on one worker, four and a bake-owned pool byte-identical; walkable area of a floor; slopes (30 vs 60 degrees) and steps (0.3 vs 0.6 m); carving obstacles (blocked, around, rotated, removed) with an agent walking around; geometry rebuilt at runtime; area costs and masks; two agent sizes through a doorway; jump and ladder links (one-way, disabled) crossed by agents; far from the world origin; a 1200-agent crowd replaying exactly; crowd level of detail; NavAgent, NavObstacle and NavLink save/load; scripts; a scene's ContentInstance placing its mesh; a world's tiles streaming in and out with its cells. |
 | `kb_engine_tests navigation-runtime` | Agents on baked meshes: accelerating within their speed, stopping at their stopping distance, re-planning for a new destination, standing still while the scene is paused; turning corners without leaving the mesh; going around a carving obstacle and walking straight again once it is disabled; a partial path to the closest point when an obstacle closes the way; steering around a non-carving obstacle; two agents passing each other and replaying exactly, and still passing when created in the other order; no mesh means a failed path until one is added; walking a mesh 10 000 km out as precisely as at the origin, as a root and as a child. |
 | `kb_engine_navigation-crowd-bench` | Crowd step budget for 1000 agents and the level-of-detail gain at 5000. |
 | `kb_cli_tests` | `kb_cli navmesh bake` and `info` (colliders, imported meshes, profiles, kept settings) and `world build` with navigation and region chunks. |

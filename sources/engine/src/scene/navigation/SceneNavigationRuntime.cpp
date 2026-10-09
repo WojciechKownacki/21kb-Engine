@@ -1,6 +1,7 @@
 #include "engine/scene/SceneNavigation.hpp"
 
 #include "engine/assets/AssetManager.hpp"
+#include "engine/ecs/WorkerPool.hpp"
 #include "engine/navigation/NavGeometryCollector.hpp"
 #include "engine/navigation/NavMeshAsset.hpp"
 #include "engine/scene/CharacterControllerComponent.hpp"
@@ -20,6 +21,7 @@
 #include "scene/entities/SceneEntityCounter.hpp"
 #include "scene/navigation/SceneNavigationState.hpp"
 #include "scene/systems/NavigationSceneSystem.hpp"
+#include "scene/transform/SceneTransformHierarchySystem.hpp"
 #include "scene/transform/SceneTransformPrecision.hpp"
 #include "scene/transform/SceneTransformResiduals.hpp"
 #include "navigation/NavMeshCrowd.hpp"
@@ -473,18 +475,31 @@ std::size_t SceneNavigation::RebakeTiles(const kb::math::DVec3& min, const kb::m
     if (lastX - firstX > 1024 || lastZ - firstZ > 1024) {
         throw std::invalid_argument("RebakeTiles covers more than 1024 tiles along an axis");
     }
-    std::size_t rebuilt = 0U;
+    struct TileJob {
+        std::uint32_t profile = 0U;
+        nav::NavTileCoord coord{};
+        nav::NavTile tile{};
+        bool built = false;
+    };
+    std::vector<TileJob> jobs;
     for (std::uint32_t profile = 0U; profile < settings.profiles.size(); ++profile) {
         for (std::int64_t z = firstZ; z <= lastZ; ++z) {
-            for (std::int64_t x = firstX; x <= lastX; ++x) {
-                nav::NavTile built;
-                std::string error;
-                if (nav::NavMeshBuilder::BuildTile(settings, profile, nav::NavTileCoord{ x, z }, collected, built, error) &&
-                    navigation.polygons->UseRebuiltTile(std::move(built))) {
-                    ++rebuilt;
-                }
-            }
+            for (std::int64_t x = firstX; x <= lastX; ++x) jobs.push_back(TileJob{ .profile = profile, .coord = nav::NavTileCoord{ x, z } });
         }
+    }
+    // The tiles are rasterised on the scene's worker pool, then used in order.
+    SceneState& state = SceneAccess::State(scene_);
+    EnsureSceneTransformWorkerPool(state);
+    state.transformWorkerPool->ParallelForChunks(jobs.size(), 1U, [&jobs, &settings, &collected](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk& chunk) {
+        for (std::size_t index = chunk.begin; index < chunk.begin + chunk.count; ++index) {
+            TileJob& job = jobs[index];
+            std::string error;
+            job.built = nav::NavMeshBuilder::BuildTile(settings, job.profile, job.coord, collected, job.tile, error);
+        }
+    });
+    std::size_t rebuilt = 0U;
+    for (TileJob& job : jobs) {
+        if (job.built && navigation.polygons->UseRebuiltTile(std::move(job.tile))) ++rebuilt;
     }
     return rebuilt;
 }

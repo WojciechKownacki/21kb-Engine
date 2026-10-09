@@ -153,8 +153,11 @@ public:
     [[nodiscard]] static bool BuildTile(const NavMeshBuildSettings& settings, std::uint32_t profile, NavTileCoord coord,
         const NavGeometry& geometry, NavTile& tile, std::string& error);
 
-    // Every tile of every profile the geometry touches. Tiles are built in parallel on the workers of
-    // `workers` when it is running, else one after another; the result does not depend on it.
+    // Every tile of every profile the geometry touches. Tiles are built in parallel on `workers` when it
+    // is running, else on an engine worker pool of DefaultBakeWorkerCount() workers started for the
+    // bake. The tiles are the same bytes whatever the number of workers.
+    // Workers of a pool started for a bake: one per core, at most 8 (each holds a tile's voxels).
+    [[nodiscard]] static std::size_t DefaultBakeWorkerCount() noexcept;
     [[nodiscard]] static NavMeshBakeResult Bake(const NavMeshBuildSettings& settings, const NavGeometry& geometry, kb::ecs::WorkerPool* workers = nullptr);
 };
 

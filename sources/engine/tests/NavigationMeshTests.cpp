@@ -225,12 +225,16 @@ void TestBakeIsDeterministic() {
     nav::NavGeometry geometry;
     nav::NavGeometryCollectStats stats;
     nav::CollectNavGeometry(nodes, Settings(), nullptr, geometry, stats);
-    const std::vector<std::uint8_t> serial = nav::NavMeshAssetIO::Serialize(BakeGeometry(geometry, Settings()));
-    kb::ecs::WorkerPool workers{ kb::ecs::WorkerPoolConfig{ .workerCount = 4U, .collectDispatchTelemetry = true } };
-    const std::vector<std::uint8_t> parallel = nav::NavMeshAssetIO::Serialize(BakeGeometry(geometry, Settings(), &workers));
-    const kb::ecs::WorkerPoolDispatchTelemetry telemetry = workers.DispatchTelemetry();
-    Check(telemetry.dispatchCount == 1U && telemetry.lastWorkItemCount > 1U, "a bake given the engine's worker pool builds its tiles on it");
-    Check(!serial.empty() && serial == parallel, "a bake gives the same bytes on the worker pool as without one");
+    // One worker, several, and the pool a bake starts without one, all give the same bytes.
+    kb::ecs::WorkerPool one{ kb::ecs::WorkerPoolConfig{ .workerCount = 1U, .collectDispatchTelemetry = true } };
+    kb::ecs::WorkerPool four{ kb::ecs::WorkerPoolConfig{ .workerCount = 4U, .collectDispatchTelemetry = true } };
+    const std::vector<std::uint8_t> single = nav::NavMeshAssetIO::Serialize(BakeGeometry(geometry, Settings(), &one));
+    const std::vector<std::uint8_t> parallel = nav::NavMeshAssetIO::Serialize(BakeGeometry(geometry, Settings(), &four));
+    const std::vector<std::uint8_t> owned = nav::NavMeshAssetIO::Serialize(BakeGeometry(geometry, Settings()));
+    Check(one.DispatchTelemetry().dispatchCount == 1U && four.DispatchTelemetry().dispatchCount == 1U &&
+        four.DispatchTelemetry().lastWorkItemCount > 1U && four.DispatchTelemetry().lastActiveWorkerCount > 1U,
+        "a bake given the engine's worker pool builds its tiles on it");
+    Check(!single.empty() && single == parallel && single == owned, "a bake gives the same bytes on one worker as on several");
 }
 
 void TestWalkableAreaOfAFloor() {
