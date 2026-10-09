@@ -61,7 +61,8 @@ void WriteNode(std::vector<std::uint8_t>& output, const ScenePrefabNodeDesc& nod
     }
     WriteUInt64(output, node.nestedPrefabContentHash);
     WriteUInt32(output, node.parentNode);
-    SceneAssetPrimitiveCodec::WriteVec3(output, node.transform.localPosition);
+    // From SceneDocument::DoubleTranslationFileVersion the local translation is stored in double precision.
+    SceneAssetPrimitiveCodec::WriteDVec3(output, node.LocalTranslation());
     SceneAssetPrimitiveCodec::WriteQuat(output, node.transform.localRotation);
     SceneAssetPrimitiveCodec::WriteVec3(output, node.transform.localScale);
     // Prefab descriptors authored against the pre-v2 visibility API can

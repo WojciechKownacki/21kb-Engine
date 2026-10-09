@@ -39,7 +39,7 @@ ScenePrefabOverrideFlag ScenePrefabNodeComparator::Compare(Scene& scene, SceneOb
     if (scene.Hierarchy().Parent(entity) != expectedParent.Entity()) {
         flags |= ScenePrefabOverrideFlag::Parent;
     }
-    if (!EqualLocalTransform(scene.Transforms().Get(entity), node.transform)) {
+    if (!EqualLocalTransform(scene.Transforms().Get(entity), node.transform) || scene.Transforms().LocalTranslation(entity) != node.LocalTranslation()) {
         flags |= ScenePrefabOverrideFlag::Transform;
     }
     const VisibilityComponent visibility = scene.Components().Visibility().Get(entity);

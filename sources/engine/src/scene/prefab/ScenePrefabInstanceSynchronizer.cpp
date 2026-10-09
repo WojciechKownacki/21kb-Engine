@@ -38,7 +38,7 @@ namespace {
 }
 
 [[nodiscard]] ScenePrefabNodeDesc SnapshotNode(Scene& scene, SceneObject object, const ScenePrefabNodeDesc& baseline) {
-    return ScenePrefabNodeDesc{
+    ScenePrefabNodeDesc node{
         .name = scene.Entities().Name(object),
         .nestedPrefabGuid = baseline.nestedPrefabGuid,
         .nestedPrefabOverrides = baseline.nestedPrefabOverrides,
@@ -47,6 +47,8 @@ namespace {
         .visibility = scene.Components().Visibility().Get(object.Entity()),
         .components = ScenePrefabComponentSnapshot::Capture(scene, object),
     };
+    node.SetLocalTranslation(scene.Transforms().LocalTranslation(object.Entity()));
+    return node;
 }
 
 [[nodiscard]] bool ApplyStoredProperty(Scene& scene, ScenePrefabInstanceRecord& instance, const ScenePrefab& baseline, const ScenePrefabPropertyOverride& property) {

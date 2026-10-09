@@ -103,6 +103,8 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunMotionSkeletonRuleTests();
     } else if (suite == "world-partition") {
         kb::tests::RunWorldPartitionTests();
+    } else if (suite == "large-world") {
+        kb::tests::RunLargeWorldTests();
     } else {
         return false;
     }
@@ -139,6 +141,7 @@ void RunAllSuites() {
     kb::tests::RunPortalVisibilityTests();
     kb::tests::RunMotionSkeletonRuleTests();
     kb::tests::RunWorldPartitionTests();
+    kb::tests::RunLargeWorldTests();
 }
 
 } // namespace

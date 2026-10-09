@@ -27,6 +27,11 @@ std::uint64_t ScenePrefabHasher::Hash(const ScenePrefab& prefab) noexcept {
         }
         ScenePrefabHashBuilder::Mix(hash, node.parentNode);
         ScenePrefabHashBuilder::MixTransform(hash, node.transform);
+        // The translation below float precision counts only where a node has one, so the hash of content without it
+        // (everything saved before double-precision translations) is unchanged.
+        if (node.LocalTranslation() != kb::math::ToDVec3(node.transform.localPosition)) {
+            ScenePrefabHashBuilder::MixVec3(hash, node.localPositionResidual);
+        }
         ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint32_t>(node.visibility.mode));
         ScenePrefabHashBuilder::Mix(hash, node.visibility.mask);
         ScenePrefabComponentHasher::Mix(hash, node.components);

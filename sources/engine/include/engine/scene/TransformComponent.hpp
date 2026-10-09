@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/math/DVec3.hpp"
 #include "engine/math/EngineMath.hpp"
 
 #include <cstdint>
@@ -97,9 +98,8 @@ struct TransformComponent {
 
 static_assert(sizeof(TransformComponent) == 96U, "The stored transform row is 96 bytes");
 
-// The world transform as the column-major affine the renderer consumes. The scene's render-proxy lists and the
-// renderer's transform pull both build it here, so the two agree bit for bit.
-[[nodiscard]] inline WorldTransformAffine3x4 BuildWorldAffine3x4(const TransformComponent& transform) noexcept {
+// The world transform as a column-major affine with the given translation column.
+[[nodiscard]] inline WorldTransformAffine3x4 BuildWorldAffine3x4WithTranslation(const TransformComponent& transform, Vec3 translation) noexcept {
     if (transform.worldRotation.x == 0.0F &&
         transform.worldRotation.y == 0.0F &&
         transform.worldRotation.z == 0.0F &&
@@ -114,9 +114,9 @@ static_assert(sizeof(TransformComponent) == 96U, "The stored transform row is 96
         affine.values[6] = 0.0F;
         affine.values[7] = 0.0F;
         affine.values[8] = transform.worldScale.z;
-        affine.values[9] = transform.worldPosition.x;
-        affine.values[10] = transform.worldPosition.y;
-        affine.values[11] = transform.worldPosition.z;
+        affine.values[9] = translation.x;
+        affine.values[10] = translation.y;
+        affine.values[11] = translation.z;
         return affine;
     }
 
@@ -147,10 +147,24 @@ static_assert(sizeof(TransformComponent) == 96U, "The stored transform row is 96
     affine.values[6] = (2.0F * (xz + wy)) * sz;
     affine.values[7] = (2.0F * (yz - wx)) * sz;
     affine.values[8] = (1.0F - 2.0F * (xx + yy)) * sz;
-    affine.values[9] = transform.worldPosition.x;
-    affine.values[10] = transform.worldPosition.y;
-    affine.values[11] = transform.worldPosition.z;
+    affine.values[9] = translation.x;
+    affine.values[10] = translation.y;
+    affine.values[11] = translation.z;
     return affine;
+}
+
+// The world transform as the column-major affine the renderer consumes. The scene's render-proxy lists and the
+// renderer's transform pull both build it here, so the two agree bit for bit.
+[[nodiscard]] inline WorldTransformAffine3x4 BuildWorldAffine3x4(const TransformComponent& transform) noexcept {
+    return BuildWorldAffine3x4WithTranslation(transform, transform.worldPosition);
+}
+
+// The same affine relative to `origin` (a render origin near the camera): the translation column is the entity's
+// double-precision world translation (SceneTransforms::WorldTranslation) minus the origin, rounded to float, so it
+// stays exact to float precision of the offset however far both lie from the world origin.
+[[nodiscard]] inline WorldTransformAffine3x4 BuildWorldAffine3x4(const TransformComponent& transform, const kb::math::DVec3& worldTranslation,
+    const kb::math::DVec3& origin) noexcept {
+    return BuildWorldAffine3x4WithTranslation(transform, kb::math::RelativeTo(worldTranslation, origin));
 }
 
 } // namespace kb::scene

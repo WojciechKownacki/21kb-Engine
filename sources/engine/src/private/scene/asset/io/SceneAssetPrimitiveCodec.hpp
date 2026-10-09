@@ -20,6 +20,16 @@ public:
         return input.ReadFloat(output.x) && input.ReadFloat(output.y) && input.ReadFloat(output.z) && input.ReadFloat(output.w);
     }
 
+    [[nodiscard]] static bool ReadDVec3(SceneAssetBinaryIO::ByteReader& input, kb::math::DVec3& output) {
+        return input.ReadDouble(output.x) && input.ReadDouble(output.y) && input.ReadDouble(output.z);
+    }
+
+    static void WriteDVec3(std::vector<std::uint8_t>& output, const kb::math::DVec3& value) {
+        SceneAssetBinaryIO::WriteDouble(output, value.x);
+        SceneAssetBinaryIO::WriteDouble(output, value.y);
+        SceneAssetBinaryIO::WriteDouble(output, value.z);
+    }
+
     static void WriteVec3(std::vector<std::uint8_t>& output, Vec3 value) {
         SceneAssetBinaryIO::WriteFloat(output, value.x);
         SceneAssetBinaryIO::WriteFloat(output, value.y);

@@ -890,6 +890,7 @@ add_library(kb_engine STATIC
     src/world/WorldObjectSplit.cpp
     src/world/WorldStreamingService.cpp
     src/scene/components/SceneTransformApi.cpp
+    src/scene/components/SceneTransformPrecisionApi.cpp
     src/scene/components/SceneTransformStorage.cpp
     src/scene/components/SceneTransformIteration.cpp
     src/scene/components/SceneVisibilityApi.cpp
@@ -1087,6 +1088,8 @@ add_library(kb_engine STATIC
     src/scene/transform/SceneTransformTopologyCache.cpp
     src/scene/transform/SceneTransformLeafBatchUpdater.cpp
     src/scene/transform/SceneTransformRootCollector.cpp
+    src/scene/transform/SceneTransformResiduals.cpp
+    src/scene/transform/SceneTransformPrecision.cpp
     src/math/EngineMath.cpp
     src/scene/transform/QuatMath.cpp
     src/scene/transform/TransformMath.cpp
@@ -1774,6 +1777,7 @@ if(BUILD_TESTING)
         tests/SkeletalMeshAssetTests.cpp
         tests/TimelineRuntimeTests.cpp
         tests/LocalizationTests.cpp
+        tests/LargeWorldTests.cpp
         tests/SceneHierarchyTests.cpp
         tests/SceneUITests.cpp
         tests/UITextLineBreakingTests.cpp

@@ -9,10 +9,16 @@
 
 namespace kb::scene {
 
+class SceneState;
+
 struct SceneTransformBatchEntry {
     SceneEntity entity{};
     TransformComponent* transform = nullptr;
     TransformComponent parentTransform{};
+    // The scene and the parent entity, for the double-precision part of a child's world translation
+    // (SceneTransformResiduals). Without a scene the entry composes in float only.
+    const SceneState* state = nullptr;
+    SceneEntity parentEntity{};
     bool hasParent = false;
     bool parentDirty = false;
     std::uint64_t parentWorldVersion = 0;

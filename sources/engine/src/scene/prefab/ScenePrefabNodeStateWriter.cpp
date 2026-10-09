@@ -19,6 +19,7 @@
 #include "scene/SceneState.hpp"
 #include "scene/hierarchy/SceneHierarchyCache.hpp"
 #include "scene/prefab/ScenePrefabOptionalComponentMask.hpp"
+#include "scene/transform/SceneTransformPrecision.hpp"
 
 #include <optional>
 #include <string_view>
@@ -327,8 +328,10 @@ void ScenePrefabNodeStateWriter::Write(ScenePrefabNodeStateWriterContext& contex
         static_cast<void>(context.hierarchy.SetParent(entity, parent.Entity()));
     }
 
-    if (const TransformComponent* currentTransform = context.transforms.TryGet(entity); currentTransform == nullptr || !HasSameLocalTransform(*currentTransform, node.transform)) {
+    if (const TransformComponent* currentTransform = context.transforms.TryGet(entity); currentTransform == nullptr || !HasSameLocalTransform(*currentTransform, node.transform) ||
+        context.transforms.LocalTranslation(entity, *currentTransform) != node.LocalTranslation()) {
         context.transforms.Set(entity, node.transform);
+        SceneTransformPrecision::StoreLocalResidual(context.state, entity, FittingResidual(node.transform.localPosition, node.localPositionResidual));
     }
 
     if (const VisibilityComponent* currentVisibility = context.visibility.TryGet(entity); currentVisibility == nullptr || !Equals(*currentVisibility, node.visibility)) {

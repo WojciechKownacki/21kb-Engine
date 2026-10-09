@@ -29,6 +29,11 @@ bool ScenePrefabAssetNodeParser::Parse(const ScenePrefabAssetFieldMap& fields, S
         || !ScenePrefabAssetComponentParser::Parse(fields, node.components)) {
         return false;
     }
+    node.localPositionResidual = Vec3{};
+    if (fields.contains(std::string{ ScenePrefabAssetFormat::LocalPositionResidualKey }) &&
+        !ScenePrefabAssetFieldParser::ParseVec3(fields, ScenePrefabAssetFormat::LocalPositionResidualKey, node.localPositionResidual)) {
+        return false;
+    }
 
     node.stableId = stableId;
     node.parentNode = parent < 0 ? ScenePrefabNodeDesc::NoParent : static_cast<std::uint32_t>(parent);

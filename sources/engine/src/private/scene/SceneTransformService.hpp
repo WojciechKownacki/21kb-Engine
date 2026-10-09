@@ -36,6 +36,9 @@ public:
         SceneTransforms::TransformRangeBody body, void* context, bool declaredAccess = false);
     [[nodiscard]] static bool IsInterpolated(const Scene& scene, SceneEntity entity) noexcept;
     static void ForEach(const Scene& scene, ConstTransformVisitor visitor, void* context = nullptr);
+    [[nodiscard]] static kb::math::DVec3 LocalTranslation(const Scene& scene, SceneEntity entity, const TransformComponent* transform) noexcept;
+    [[nodiscard]] static kb::math::DVec3 WorldTranslation(const Scene& scene, SceneEntity entity, const TransformComponent* transform) noexcept;
+    static void SetLocalTranslation(Scene& scene, SceneEntity entity, const kb::math::DVec3& translation);
     static void ForEachMutable(Scene& scene, MutableTransformVisitor visitor, void* context = nullptr);
 };
 

@@ -78,6 +78,7 @@ constexpr std::uint32_t kNoSiblingIndex = SceneHistoryObjectChange::NoSiblingInd
     state.parent = SceneHierarchyService::Parent(scene, entity);
     state.node.name = SceneEntityService::Name(scene, entity);
     state.node.transform = SceneTransformService::Get(scene, entity);
+    state.node.SetLocalTranslation(scene.Transforms().LocalTranslation(entity));
     state.node.visibility = SceneComponentQueryService::Visibility(scene, entity);
     state.node.components = ScenePrefabComponentSnapshot::Capture(scene, object);
     state.active = SceneEntityService::IsActive(scene, entity);
@@ -157,7 +158,7 @@ template <typename T>
             return a.name == b.name && a.value == b.value;
         });
     return lhs.parent == rhs.parent && lhs.node.name == rhs.node.name
-        && SameVec3(left.localPosition, right.localPosition) && SameVec3(left.localScale, right.localScale)
+        && lhs.node.LocalTranslation() == rhs.node.LocalTranslation() && SameVec3(left.localScale, right.localScale)
         && left.localRotation.x == right.localRotation.x && left.localRotation.y == right.localRotation.y
         && left.localRotation.z == right.localRotation.z && left.localRotation.w == right.localRotation.w
         && lhs.node.visibility.mode == rhs.node.visibility.mode && lhs.node.visibility.mask == rhs.node.visibility.mask

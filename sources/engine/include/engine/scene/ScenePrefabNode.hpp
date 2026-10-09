@@ -150,6 +150,26 @@ struct ScenePrefabNodeDesc {
     TransformComponent transform{};
     VisibilityComponent visibility{};
     ScenePrefabNodeComponents components{};
+    // The part of transform's local translation below float precision (docs/large_worlds.md): the node's
+    // translation is double(transform.localPosition) + double(localPositionResidual) while the residual fits
+    // the float view (kb::math::FittingResidual).
+    Vec3 localPositionResidual{};
+
+    [[nodiscard]] constexpr kb::math::DVec3 LocalTranslation() const noexcept {
+        return kb::math::DVec3{
+            kb::math::JoinFloat(transform.localPosition.x, localPositionResidual.x),
+            kb::math::JoinFloat(transform.localPosition.y, localPositionResidual.y),
+            kb::math::JoinFloat(transform.localPosition.z, localPositionResidual.z),
+        };
+    }
+
+    constexpr void SetLocalTranslation(const kb::math::DVec3& translation) noexcept {
+        const kb::math::SplitFloat x = kb::math::SplitDouble(translation.x);
+        const kb::math::SplitFloat y = kb::math::SplitDouble(translation.y);
+        const kb::math::SplitFloat z = kb::math::SplitDouble(translation.z);
+        transform.localPosition = Vec3{ x.view, y.view, z.view };
+        localPositionResidual = Vec3{ x.residual, y.residual, z.residual };
+    }
 };
 
 } // namespace kb::scene

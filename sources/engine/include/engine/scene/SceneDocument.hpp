@@ -49,8 +49,11 @@ struct SceneDocument {
     // v41: a prefab instance root persists which prefab node each object below it stands for and the
     //      content hash of its prefab, and its overrides persist the stable ids of the nodes they
     //      target and refer to.
-    static constexpr std::uint32_t CurrentFileVersion = 41U;
+    // v42: node local translations persist as float64 (large world coordinates); older files store float32
+    //      and load unchanged.
+    static constexpr std::uint32_t CurrentFileVersion = 42U;
     static constexpr std::uint32_t PrefabNodeIdentityFileVersion = 41U;
+    static constexpr std::uint32_t DoubleTranslationFileVersion = 42U;
 
     std::uint32_t fileVersion = CurrentFileVersion;
     std::string guid;

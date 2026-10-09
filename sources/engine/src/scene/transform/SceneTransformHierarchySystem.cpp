@@ -848,6 +848,8 @@ void AppendTransformEntryIfDirty(
         .entity = entity,
         .transform = transform,
         .parentTransform = ParentTransformOf(state, transformValues, parent, identity),
+        .state = &state,
+        .parentEntity = parent,
         .hasParent = parent.IsValid(),
         .parentDirty = parentDirty,
         .parentWorldVersion = parentWorldVersion,
@@ -1488,6 +1490,18 @@ public:
         task.updatedBits.Record(entity, transform);
     }
 
+    static void SetLocalPrecise(TransformRowRange& range, std::size_t row, const kb::math::DVec3& translation, const Quat& rotation, const Vec3& scale) {
+        Vec3 view{};
+        Vec3 residual{};
+        SplitTranslation(translation, view, residual);
+        auto& task = *static_cast<TransformPassTask*>(range.pass_);
+        const SceneEntity entity{ range.entityIds_[row] };
+        SceneTransformResiduals& residuals = task.state.transformResiduals;
+        // Entries of different rows are independent: workers store them concurrently.
+        if (!IsZero(residual) || residuals.Find(entity) != nullptr) residuals.Acquire(entity).local = residual;
+        SetLocal(range, row, view, rotation, scale);
+    }
+
     static void SetLocalBatch(TransformRowRange& range, std::size_t firstRow, std::span<const RowLocalTRS> supplied) {
         if (firstRow > range.count_ || supplied.size() > range.count_ - firstRow) {
             throw std::out_of_range("A local TRS batch is outside its transform range");
@@ -1580,6 +1594,10 @@ void TransformRowRange::SetLocal(std::size_t row, const Vec3& position, const Qu
     TransformPassAccess::SetLocal(*this, row, position, rotation, scale);
 }
 
+void TransformRowRange::SetLocal(std::size_t row, const kb::math::DVec3& translation, const Quat& rotation, const Vec3& scale) {
+    TransformPassAccess::SetLocalPrecise(*this, row, translation, rotation, scale);
+}
+
 void TransformRowRange::SetLocalBatch(std::size_t firstRow, std::span<const RowLocalTRS> values) {
     TransformPassAccess::SetLocalBatch(*this, firstRow, values);
 }
@@ -1602,6 +1620,8 @@ TransformPassStats RunSceneTransformPass(SceneState& state, std::size_t grainRow
     if (state.transformPassRunning) {
         throw std::logic_error("A transform pass cannot run inside another one");
     }
+    // Rows written with a double-precision translation store residuals from the workers.
+    if (!state.transformResiduals.Empty()) state.transformResiduals.Reserve(state.denseHierarchyParents.size());
     const kb::ecs::ComponentId transformId = state.components.TransformComponentId();
     auto& storage = const_cast<kb::ecs::NativeArchetypeStorage&>(state.world.NativeStorage());
     std::array<kb::ecs::ComponentId, 5U> ids{ transformId };
@@ -1988,6 +2008,9 @@ void SceneTransformHierarchySystem::Update(SceneState& state) const {
 
     state.transformDirtyScratch.clear();
     state.transformWorldScratch.clear();
+    // The composition below may write world residuals from worker threads: size their table first. A scene that
+    // has none (everything near the origin) never allocates it.
+    if (!state.transformResiduals.Empty()) state.transformResiduals.Reserve(state.denseHierarchyParents.size());
     const std::size_t trackedSlotCount = HierarchyTrackedSlotCount(state);
     state.transformDirtyScratch.reserve(state.hierarchyOrder.size());
     state.transformWorldScratch.reserve(state.hierarchyOrder.size());

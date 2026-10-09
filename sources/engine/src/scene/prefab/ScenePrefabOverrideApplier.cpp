@@ -50,7 +50,7 @@ void AppendNode(
         stableId = sourceNode->stableId;
     }
 
-    const std::uint32_t nodeIndex = output.AddNode(ScenePrefabNodeDesc{
+    ScenePrefabNodeDesc node{
         .stableId = stableId,
         .name = scene.Entities().Name(object),
         .nestedPrefabGuid = sourceNode != nullptr ? sourceNode->nestedPrefabGuid : std::string{},
@@ -59,7 +59,9 @@ void AppendNode(
         .transform = scene.Transforms().Get(object),
         .visibility = scene.Components().Visibility().Get(object.Entity()),
         .components = ScenePrefabComponentSnapshot::Capture(scene, object),
-    });
+    };
+    node.SetLocalTranslation(scene.Transforms().LocalTranslation(object.Entity()));
+    const std::uint32_t nodeIndex = output.AddNode(std::move(node));
     outputObjects.push_back(object);
 
     for (const SceneEntity child : scene.Hierarchy().ChildEntities(object.Entity())) {

@@ -38,6 +38,7 @@
 #include "engine/scene/TimelineAsset.hpp"
 #include "scene/components/SceneComponentRegistry.hpp"
 #include "scene/components/SceneComponentStorage.hpp"
+#include "scene/transform/SceneTransformResiduals.hpp"
 #include "scene/history/SceneHistoryStack.hpp"
 #include "scene/navigation/SceneNavigationState.hpp"
 #include "scene/prefab/ScenePrefabInstanceRegistry.hpp"
@@ -478,6 +479,9 @@ public:
         TransformComponent current;
         bool touched = false;
         SceneEntity entity{};
+        // The double-precision world translations of the two poses (SceneTransformPrecision::WorldTranslation).
+        kb::math::DVec3 previousWorld{};
+        kb::math::DVec3 currentWorld{};
     };
     std::vector<FixedTransformSample> fixedTransformSamples;
     std::vector<FixedTransformValues> fixedTransformValues;
@@ -620,6 +624,9 @@ public:
     // (entities without a dense index are listed). The render-proxy lists below are derived from them and from the
     // transform store when somebody reads them, and are not kept up to date otherwise.
     std::vector<std::uint64_t> transformUpdatedBits;
+    // Translations finer than float precision (large worlds): see SceneTransformResiduals. Mutable: the
+    // transform sync composes world residuals from paths that hold the state as const (leaf batches).
+    mutable SceneTransformResiduals transformResiduals;
     // A parallel Transforms().SetMany: one bit per dense entity index to find entities listed twice, and what each
     // worker range leaves to the serial step after the join.
     struct TransformSetManyRange {
