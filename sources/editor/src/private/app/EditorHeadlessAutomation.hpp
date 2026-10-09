@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <span>
 #include <string>
@@ -171,6 +172,9 @@ public:
         std::string_view panel, std::string_view checkpoint);
     [[nodiscard]] bool VerifyViewportHostLifecycle();
     [[nodiscard]] bool CaptureEditorScene(std::string_view checkpoint, bool editorOverlaysEnabled = true);
+    // The Scene panel's viewport exactly as the editor presents it: its own camera and the
+    // production present settings, editor overlays included (grid lines, the world cell grid).
+    [[nodiscard]] bool CaptureSceneViewport(std::string_view checkpoint);
     [[nodiscard]] bool VerifySceneRenderTargetAfterSecondary(
         std::string_view checkpoint);
     [[nodiscard]] bool CaptureRuntime(
@@ -187,6 +191,9 @@ public:
         const noexcept;
 
 private:
+    // Requests a screen capture, renders with `render` until it completes, validates the PNG.
+    [[nodiscard]] bool CaptureScene(std::string_view operation, std::string_view checkpoint, const std::function<bool()>& render);
+
     struct Impl;
 
     EditorScriptedInputScope scriptedInput_;

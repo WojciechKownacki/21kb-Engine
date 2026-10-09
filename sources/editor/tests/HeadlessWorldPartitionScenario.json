@@ -49,8 +49,11 @@
     { "op": "world_load_all" },
     { "op": "assert_world", "loaded_objects": 4 },
     { "op": "assert_world_object", "name": "RockA", "loaded": true, "x": 40, "z": 20 },
+    { "op": "capture_scene_viewport", "checkpoint": "world-grid-shown" },
     { "op": "world_set_grid_visible", "visible": false },
     { "op": "assert_world", "grid_lines": 0 },
+    { "op": "capture_scene_viewport", "checkpoint": "world-grid-hidden" },
+    { "op": "assert_capture_color_difference", "with": "world-grid-shown", "without": "world-grid-hidden", "color": [53, 150, 79], "tolerance": 32, "min_pixels": 200 },
     { "op": "world_set_grid_visible", "visible": true },
     { "op": "assert_world", "grid_lines": 8 },
 

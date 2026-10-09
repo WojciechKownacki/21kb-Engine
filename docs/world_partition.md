@@ -248,5 +248,5 @@ coordinates exactly up to 2^53.
 | `kb_renderer_tests world-hlod` | HLOD merging, material slots, simplification and cell-local placement; the proxy loads as a regular mesh asset after a world build. |
 | `kb_game_core_tests --partitioned-world` | kb_cli and kb_cooker build a world byte-identically; kb_cooker packages its cells, index and proxies, and the packaged runtime streams the cells. |
 | `kb_cli_tests` | `kb_cli world migrate` and `kb_cli world build`, including HLOD proxies and finding the project. |
-| `kb_editor_world_partition_headless` | Editor conversion, region load and unload, layer and always-loaded edits, save, build (byte-identical to the kb_cli/kb_cooker build), grid display and streaming of a placed world in Play mode. |
+| `kb_editor_world_partition_headless` | Editor conversion, region load and unload, layer and always-loaded edits, save, build (byte-identical to the kb_cli/kb_cooker build), the cell grid as the GPU draws it (the viewport read back with and without the grid, the added pixels checked for the grid's colour) and streaming of a placed world in Play mode. |
 | `scripts/tests/test_package_game.py` | The package job cooks a snapshot carrying the world and its object files. |
