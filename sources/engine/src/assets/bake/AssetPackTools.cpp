@@ -359,23 +359,35 @@ bool BuildAssetPackPatch(const AssetPackPatchRequest& request, AssetPackPatchRep
         }
     }
     for (const RuntimeAssetManifestEntry& asset : current.Manifest().assets) {
-        if (next.FindAsset(asset.id) == nullptr) {
+        if (next.FindAsset(asset.id) == nullptr && next.FindAsset(asset.virtualPath) == nullptr) {
             ++report.removedAssets;
+            patch.removedAssets.push_back(asset.id);
         }
     }
     std::unordered_map<std::string, const RuntimeAuxiliaryFileEntry*> currentFiles;
     for (const RuntimeAuxiliaryFileEntry& file : current.Manifest().auxiliaryFiles) {
         currentFiles.emplace(file.virtualPath, &file);
     }
+    std::set<std::string> nextFiles;
     for (const RuntimeAuxiliaryFileEntry& file : next.Manifest().auxiliaryFiles) {
+        nextFiles.insert(file.virtualPath);
         const auto existing = currentFiles.find(file.virtualPath);
         if (existing == currentFiles.end() || !(*existing->second == file)) {
             ++report.changedFiles;
             patch.auxiliaryFiles.push_back(file);
         }
     }
+    for (const RuntimeAuxiliaryFileEntry& file : current.Manifest().auxiliaryFiles) {
+        // A file that became an asset of the same path is replaced by that asset's entry; the
+        // file still has to go first, or the set would hold the path twice.
+        if (!nextFiles.contains(file.virtualPath)) {
+            ++report.removedFiles;
+            patch.removedAuxiliaryFiles.push_back(file.virtualPath);
+        }
+    }
     report.settingsChanged = !SameProject(current.Manifest(), next.Manifest());
-    if (patch.assets.empty() && patch.auxiliaryFiles.empty() && !report.settingsChanged) {
+    if (patch.assets.empty() && patch.auxiliaryFiles.empty() && patch.removedAssets.empty() &&
+        patch.removedAuxiliaryFiles.empty() && !report.settingsChanged) {
         error = "the new cook changes nothing the current content does not already have";
         return false;
     }

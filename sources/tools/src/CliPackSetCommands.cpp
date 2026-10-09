@@ -224,12 +224,9 @@ int RunPackPatchCommand(const ArgumentList& arguments, CommandIo io) {
         return Fail(io, error);
     }
     io.out << "patch " << request.patchLevel << " (" << request.label << "): " << report.changedAssets << " changed, "
-           << report.addedAssets << " added, " << report.changedFiles << " files"
+           << report.addedAssets << " added, " << report.removedAssets << " removed, " << report.changedFiles
+           << " files changed, " << report.removedFiles << " files removed"
            << (report.settingsChanged ? ", project settings" : "") << '\n';
-    if (report.removedAssets != 0U) {
-        io.out << "note: " << report.removedAssets
-               << " assets of the current content are gone from the new cook; a patch cannot remove them\n";
-    }
     PrintReport(io, request.output, report.pack);
     return 0;
 }
