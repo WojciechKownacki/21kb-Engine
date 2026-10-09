@@ -27,7 +27,7 @@ constexpr std::array kLifecycleEvents{
 // PucLuaFunctionApi and PucLuaTaskApi install module tables directly from this
 // list.  The names and each wrapper's return shape therefore stay true to the
 // callable sandbox and generated stubs cannot drift from it.
-constexpr std::array<ScriptApiCatalogLuaBindingDefinition, 186> kLuaBindings{ {
+constexpr std::array<ScriptApiCatalogLuaBindingDefinition, 188> kLuaBindings{ {
     { "Audio", "Play", "Audio.Play", ScriptApiCatalogLuaReturnKind::SingleOutput, "voice" },
     { "Audio", "SetMixer", "Audio.SetMixer", ScriptApiCatalogLuaReturnKind::SingleOutput, "assigned" },
     { "Audio", "ActiveMixer", "Audio.ActiveMixer", ScriptApiCatalogLuaReturnKind::Default, "" },
@@ -117,6 +117,8 @@ constexpr std::array<ScriptApiCatalogLuaBindingDefinition, 186> kLuaBindings{ {
     { "Scene", "GetActive", "Scene.GetActive", ScriptApiCatalogLuaReturnKind::SingleOutput, "id" },
     { "Scene", "Find", "Scene.Find", ScriptApiCatalogLuaReturnKind::SingleOutput, "id" },
     { "Scene", "LoadProgress", "Scene.LoadProgress", ScriptApiCatalogLuaReturnKind::SingleOutput, "progress" },
+    { "Scene", "SetDataLayerActive", "Scene.SetDataLayerActive", ScriptApiCatalogLuaReturnKind::SingleOutput, "set" },
+    { "Scene", "IsDataLayerActive", "Scene.IsDataLayerActive", ScriptApiCatalogLuaReturnKind::SingleOutput, "active" },
     { "UI", "Create", "UI.Create", ScriptApiCatalogLuaReturnKind::SingleOutput, "entity" },
     { "UI", "AddComponent", "UI.AddComponent", ScriptApiCatalogLuaReturnKind::SingleOutput, "added" },
     { "UI", "RemoveComponent", "UI.RemoveComponent", ScriptApiCatalogLuaReturnKind::SingleOutput, "removed" },

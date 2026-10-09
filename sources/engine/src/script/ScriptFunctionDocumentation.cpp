@@ -282,6 +282,8 @@ constexpr auto kFunctionDocumentation = std::to_array<FunctionDocumentation>({
     { "Scene.GetActive", "Returns the runtime identifier of the active gameplay scene." },
     { "Scene.Find", "Resolves a registered scene name to its runtime scene identifier." },
     { "Scene.LoadProgress", "Returns the current load state and normalized progress of a scene." },
+    { "Scene.SetDataLayerActive", "Activates or deactivates a partitioned world data layer; its cells stream in or out." },
+    { "Scene.IsDataLayerActive", "Returns whether a partitioned world data layer is active." },
 
     { "MeshRenderer.SetMesh", "Assigns a registered mesh asset to an entity mesh renderer." },
     { "MeshRenderer.SetMaterial", "Assigns a registered material asset to every mesh section on an entity." },

@@ -1590,6 +1590,38 @@ int LuaSceneLoadProgress(lua_State* state) {
     return 1;
 }
 
+int LuaSceneSetDataLayerActive(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const char* layer = luaL_checkstring(state, 1);
+    const bool active = lua_toboolean(state, 2) != 0;
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("layer", ScriptValue{ std::string{ layer } }),
+        Arg("active", ScriptValue{ active }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("Scene.SetDataLayerActive", arguments);
+    lua_pushboolean(state, result.Output("set").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaSceneIsDataLayerActive(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const char* layer = luaL_checkstring(state, 1);
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("layer", ScriptValue{ std::string{ layer } }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("Scene.IsDataLayerActive", arguments);
+    lua_pushboolean(state, result.Output("active").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
 int LuaUICreate(lua_State* state) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
     if (context == nullptr) {
@@ -3106,7 +3138,7 @@ void SetClosure(lua_State* state, const char* name, lua_CFunction function, Scri
 // marshalling.  Their position follows ScriptApiCatalog::LuaBindingDefinitions
 // excluding Task and global bindings; table and Lua field names deliberately
 // live only in that catalog.
-constexpr std::array<lua_CFunction, 178> kCatalogBindingAdapters{ {
+constexpr std::array<lua_CFunction, 180> kCatalogBindingAdapters{ {
     &LuaAudioPlay,
     &LuaAudioSetMixer,
     &LuaAudioActiveMixer,
@@ -3196,6 +3228,8 @@ constexpr std::array<lua_CFunction, 178> kCatalogBindingAdapters{ {
     &LuaSceneGetActive,
     &LuaSceneFind,
     &LuaSceneLoadProgress,
+    &LuaSceneSetDataLayerActive,
+    &LuaSceneIsDataLayerActive,
     &LuaUICreate,
     &LuaUIAddComponent,
     &LuaUIRemoveComponent,

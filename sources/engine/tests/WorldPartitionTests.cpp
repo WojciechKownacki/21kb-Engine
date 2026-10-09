@@ -12,6 +12,7 @@
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTagCatalog.hpp"
 #include "engine/scene/SceneTransforms.hpp"
+#include "engine/script/ScriptRuntimeHost.hpp"
 #include "engine/world/WorldCellBuilder.hpp"
 #include "engine/world/WorldCellIndex.hpp"
 #include "engine/world/WorldDescriptor.hpp"
@@ -575,8 +576,22 @@ void RunStreamingTests() {
     Check(!HasEntityNamed(*harness.scene, "Tree -1,0") && runtime.IsHlodVisible(harness.world, { -1, 0 }) &&
         !runtime.IsHlodVisible(harness.world, { 2, 0 }), "an unloaded cell swaps back to its proxy");
 
-    // Data layers switch at runtime.
-    runtime.SetDataLayerActive("night", true);
+    // Data layers switch at runtime, here through the gameplay script API.
+    kb::script::ScriptRuntimeHost host{ *harness.scene };
+    const kb::script::ScriptFunctionCallContext call{ .scene = harness.scene.get() };
+    const kb::script::ScriptFunctionCallResult activated = host.Functions().Call("Scene.SetDataLayerActive",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "layer", .value = kb::script::ScriptValue{ std::string{ "night" } } },
+            { .name = "active", .value = kb::script::ScriptValue{ true } } }, call);
+    Check(activated.Succeeded() && runtime.IsDataLayerActive("night"), "Scene.SetDataLayerActive switches a data layer");
+    const kb::script::ScriptFunctionCallResult queried = host.Functions().Call("Scene.IsDataLayerActive",
+        std::vector<kb::script::ScriptFunctionArgument>{ { .name = "layer", .value = kb::script::ScriptValue{ std::string{ "night" } } } }, call);
+    Check(queried.Succeeded() && queried.Output("active").has_value() && queried.Output("active")->AsBool(), "Scene.IsDataLayerActive reports the layer");
+    const kb::script::ScriptFunctionCallResult rejected = host.Functions().Call("Scene.SetDataLayerActive",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "layer", .value = kb::script::ScriptValue{ std::string{ "not a layer" } } },
+            { .name = "active", .value = kb::script::ScriptValue{ true } } }, call);
+    Check(!rejected.Succeeded(), "invalid data layer names are rejected");
     Check(runtime.UpdateSource(source, { .position = { 50.0, 0.0, 50.0 }, .loadRadius = 120.0, .unloadRadius = 180.0, .priority = 0 }), "move back");
     Settle(harness);
     Check(runtime.CellState(harness.world, { 0, 0 }, "night") == WorldCellState::Loaded && HasEntityNamed(*harness.scene, "Lantern"),
