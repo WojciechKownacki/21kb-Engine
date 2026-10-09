@@ -52,6 +52,8 @@ struct SceneNavigationState {
     bool crowdFocusesSet = false;
     // Keyed by the ContentInstance owner's entity id.
     std::map<std::uint64_t, PlacedNavMeshRecord> placedMeshes;
+    // Corners of the last path Navigation.FindPath found from a script, for Navigation.PathCorner.
+    std::vector<kb::math::DVec3> scriptPath;
 };
 
 } // namespace kb::scene

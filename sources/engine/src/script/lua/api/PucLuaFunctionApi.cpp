@@ -14,6 +14,7 @@ extern "C" {
 
 #include <algorithm>
 #include <array>
+#include <initializer_list>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -2854,6 +2855,74 @@ int LuaPointerRay(lua_State* state) {
     return 1;
 }
 
+// Navigation.* take either one table of named arguments or positional numbers, and return a
+// table of the function's outputs (SetAreaCost: whether the cost was applied).
+int LuaNavigationCall(lua_State* state, const char* function, std::initializer_list<const char*> positional, int required) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+    std::vector<ScriptFunctionArgument> arguments;
+    if (lua_istable(state, 1) != 0) {
+        arguments = ArgumentsFromTable(state, 1);
+    } else {
+        int index = 1;
+        for (const char* name : positional) {
+            if (index > required && lua_isnoneornil(state, index)) break;
+            const std::string_view pin{ name };
+            if (pin == "profile" || pin == "areaMask" || pin == "index" || pin == "area") {
+                arguments.push_back(Arg(name, ScriptValue{ static_cast<int>(luaL_checkinteger(state, index)) }));
+            } else {
+                arguments.push_back(Arg(name, ScriptValue{ static_cast<float>(luaL_checknumber(state, index)) }));
+            }
+            ++index;
+        }
+    }
+    const ScriptFunctionCallResult result = context->CallFunction(function, arguments);
+    if (!result.Succeeded()) {
+        return PushCallError(state, result, "navigation query failed");
+    }
+    lua_createtable(state, 0, static_cast<int>(result.outputs.size()));
+    for (const ScriptFunctionArgument& output : result.outputs) {
+        PucLuaValueBridge::Push(state, output.value);
+        lua_setfield(state, -2, output.name.c_str());
+    }
+    return 1;
+}
+
+int LuaNavigationFindPath(lua_State* state) {
+    return LuaNavigationCall(state, "Navigation.FindPath", { "startX", "startY", "startZ", "endX", "endY", "endZ", "profile", "areaMask" }, 6);
+}
+
+int LuaNavigationPathCorner(lua_State* state) {
+    return LuaNavigationCall(state, "Navigation.PathCorner", { "index" }, 1);
+}
+
+int LuaNavigationRaycast(lua_State* state) {
+    return LuaNavigationCall(state, "Navigation.Raycast", { "startX", "startY", "startZ", "endX", "endY", "endZ", "profile", "areaMask" }, 6);
+}
+
+int LuaNavigationNearestPoint(lua_State* state) {
+    return LuaNavigationCall(state, "Navigation.NearestPoint", { "x", "y", "z", "profile", "areaMask" }, 3);
+}
+
+int LuaNavigationSetAreaCost(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("area", ScriptValue{ static_cast<int>(luaL_checkinteger(state, 1)) }),
+        Arg("cost", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("Navigation.SetAreaCost", arguments);
+    lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
 int LuaInputPriorityConstant(lua_State* state, std::string_view functionName) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
     if (context == nullptr) {
@@ -3421,6 +3490,11 @@ constexpr std::array<lua_CFunction, 185> kCatalogBindingAdapters{ {
     &LuaPointerButton,
     &LuaPointerScroll,
     &LuaPointerRay,
+    &LuaNavigationFindPath,
+    &LuaNavigationPathCorner,
+    &LuaNavigationRaycast,
+    &LuaNavigationNearestPoint,
+    &LuaNavigationSetAreaCost,
 } };
 
 [[nodiscard]] std::size_t CountCatalogTableBindings(std::string_view tableName) noexcept {
