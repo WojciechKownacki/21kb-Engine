@@ -138,7 +138,7 @@ A world streams inside a scene:
    a few cells. Several sources may be active; a cell is loaded when any source wants it.
 
 While the scene plays, the cells stream through the scene's asynchronous loader: decoding runs on
-worker threads and entities are created and activated in bounded batches during the update, so
+the engine's background load service (see [content_streaming.md](content_streaming.md#background-loading)) and entities are created and activated in bounded batches during the update, so
 the cost of loading a cell is spread over frames instead of landing in one. Without any streaming source only the always-loaded objects
 are loaded. Cell content is created at the root of the scene in world coordinates, independent of
 the transform of the object that places the world.

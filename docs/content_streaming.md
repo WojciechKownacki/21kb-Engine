@@ -11,7 +11,7 @@ The pieces, bottom up:
 | Pack format, block compression | `engine/assets/bake/AssetPack.hpp`, `AssetPackWriter.hpp`, `AssetPackReader.hpp`, `src/private/assets/bake/AssetPackCompression.hpp` |
 | Pack sets (base, chunks, patches) | `engine/assets/bake/AssetPackSet.hpp`, `RuntimeAssetPack.hpp` |
 | Pack tools | `engine/assets/bake/AssetPackTools.hpp`, `kb_cli pack …` |
-| Asynchronous reads | `engine/assets/streaming/AsyncFileReader.hpp`, `PackBlockStream.hpp` |
+| Background loading (reads, asset loads, texture decodes) | `engine/assets/streaming/BackgroundLoadService.hpp`, `PackBlockStream.hpp` |
 | Residency under a budget | `engine/assets/streaming/StreamingResidency.hpp` |
 | Texture and mesh streaming | `kb/render/runtime/RuntimeContentStreamer.hpp` and the texture and mesh bakers and loaders |
 | Packaging | `scripts/package_game.py` |
@@ -172,20 +172,53 @@ sealed under the new key, or not encrypted, gets no line. `kb_cli pack patch --c
 every `--patch-from` release, so patches and `--encrypt-pack` combine, and chains of patch
 releases carry every earlier key forward.
 
-## Asynchronous reads
+## Background loading
 
-`AsyncFileReader` is a pool of dedicated I/O threads (2 by default) that serves read requests
-highest priority first, ties in submission order. On Windows every file is opened with
-`FILE_FLAG_OVERLAPPED | FILE_FLAG_NO_BUFFERING`: a request is widened to the volume's sector
-alignment and read into a sector-aligned buffer, bypassing the system cache, and each worker
-keeps several reads in flight (4 by default). Elsewhere workers use `pread`. A file that refuses
-unbuffered access is read buffered instead.
+Everything the engine loads in the background goes through one service,
+`BackgroundLoadService`: one pool of threads in the process (3 by default) serves the content
+streamer's pack block reads, the asset manager's asynchronous loads (`RequestLoadAsync`,
+`LoadAsync<T>`) and the renderer's texture decodes (`RequestAsyncTextureDecode`). Each user takes
+the instance `BackgroundLoadService::Shared()` hands out; the threads start with the first user
+and are joined when the last one lets it go. Frame compute stays on the ECS worker pool, which
+never waits for a disk.
 
-A request carries a transform that runs on the I/O thread: `ReadPackBlockAsync` verifies the
-block's seal hash, decrypts and decompresses it there. Requests can be re-prioritised or cancelled
-until a worker takes them. The render thread only polls handles; it never waits for a disk or a
-decoder. On the suite's machine a 2 MiB compressed, sealed block streams in about 1 ms from a
-file and 0.4 ms from a pack mounted in memory.
+The service runs two kinds of request.
+
+**Reads** are served highest priority first, ties in submission order. On Windows every file is
+opened with `FILE_FLAG_OVERLAPPED | FILE_FLAG_NO_BUFFERING`: a request is widened to the volume's
+sector alignment and read into a sector-aligned buffer, bypassing the system cache, and each
+worker keeps several reads in flight (4 by default). Elsewhere workers use `pread`. A file that
+refuses unbuffered access is read buffered instead. A read carries a transform that runs on the
+worker: `ReadPackBlockAsync` verifies the block's seal hash, decrypts and decompresses it there.
+The service keeps a file open once read; the streamer lets go of its packs' files when it
+releases its resources.
+
+**Jobs** are callables that load or decode something: an asset loader with its dependency
+validation, an image decoder. A job may take long or block on its own I/O, so at most two run
+at once (`jobWorkers`) and, with more than one worker, never on every worker: one worker always
+stays free for reads, so a slow or blocked loader cannot starve streaming. Under that limit a
+free worker takes a waiting job before reads, so a busy stream cannot starve the jobs either.
+Jobs submitted to a **lane** run one at a time, highest priority first. Each `AssetManager`
+opens a lane on its first asynchronous request (its loaders run one at a time, as they always
+have), and texture decodes share one. A lane's owner cancels what it queued and waits for its
+one running job: the asset manager does so before it changes its loaders or its registry and
+when it is destroyed, the texture decoder at process exit. No job outlives what it uses, and no
+thread outlives the last user of the service.
+
+Requests of either kind can be re-prioritised or cancelled until a worker takes them. Nothing
+waits for a result: the render thread polls read handles, `AssetManager::PumpAsyncLoads` commits
+finished asset loads on the owner thread, and a decoded texture lands in the cache that
+`TryAcquireDecodedTexture` reads. On the suite's machine a 2 MiB compressed, sealed block streams
+in about 1 ms from a file and 0.4 ms from a pack mounted in memory.
+
+Why one service, grown from the streaming I/O pool: the engine used to run three background
+loaders, a thread per asset manager, a texture decode thread and the streaming I/O pool. The I/O
+pool already had what the other two either lacked or repeated: priorities, cancellation,
+re-prioritisation, completion handles and the platform read path. Adding jobs and lanes to it
+removed the two single-thread queues and left the read path, which the streaming priority and
+budget tests pin down, as it was. Moving the loaders onto the ECS worker pool instead was
+rejected: that pool runs each frame's systems, and a loader blocked on a disk or a lock would
+stall the frame.
 
 ## Residency and budgets
 
@@ -233,7 +266,6 @@ chunks of the missing levels; the mesh keeps its full bounds as levels arrive.
 | Setting | Default | Meaning |
 | --- | --- | --- |
 | `budgetBytes` | 512 MiB | GPU memory for streamed textures and meshes, floors included |
-| `ioWorkers`, `readsInFlightPerWorker` | 2, 4 | The I/O pool |
 | `maxLoadsInFlight` | 32 | Level loads in flight across all resources |
 | `maxRebuildsPerFrame`, `maxUploadBytesPerFrame` | 8, 64 MiB | Spreads a burst of arrivals over frames |
 | `meshMaxScreenErrorPixels` | 1 | Mesh detail target |
@@ -242,7 +274,7 @@ chunks of the missing levels; the mesh keeps its full bounds as levels arrive.
 `Renderer::ContentStreamingStats()` reports the residency counters, loads in flight, rebuilds,
 uploaded bytes and the last and slowest load latency. In the renderer suite a 512×512 texture
 (two streamed mips) and a four-level mesh stream fully in within three frames (about 50 ms in
-total; the slowest single level, read, verified and decoded on the I/O pool, about 20 ms), and a
+total; the slowest single level, read, verified and decoded on the background load service, about 20 ms), and a
 far camera with a small budget evicts both back to their floors.
 
 ## Tools
