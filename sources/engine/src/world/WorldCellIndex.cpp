@@ -64,6 +64,9 @@ std::string WorldCellIndexIO::Validate(const WorldCellIndex& index) {
     if (!IsValidCellSize(index.cellSize)) {
         return "cell index cell size is invalid";
     }
+    if (index.regionCells == 0U || index.regionCells > WorldDescriptor::MaxRegionCells) {
+        return "cell index region size is invalid";
+    }
     if (!std::isfinite(index.hlodRange) || index.hlodRange < 0.0) {
         return "cell index HLOD range is invalid";
     }
@@ -126,6 +129,13 @@ WorldCellIndexReadResult WorldCellIndexIO::Parse(std::string_view source) {
     index.worldGuid = *guid;
     index.worldName = *name;
     index.cellSize = *cellSize;
+    if (root.Find("regionCells") != nullptr) {
+        const std::optional<std::int64_t> regionCells = text::Int(root, "regionCells", 1, WorldDescriptor::MaxRegionCells);
+        if (!regionCells.has_value()) {
+            return { .succeeded = false, .index = {}, .error = "cell index region size is invalid" };
+        }
+        index.regionCells = static_cast<std::uint32_t>(*regionCells);
+    }
     index.hlodRange = *hlodRange;
     for (std::size_t item = 0U; item < layers->Size(); ++item) {
         const JsonValue& layer = *layers->At(item);
@@ -211,6 +221,7 @@ std::string WorldCellIndexIO::Serialize(const WorldCellIndex& index) {
     out += ",\n  \"worldName\": ";
     text::AppendQuoted(out, index.worldName);
     out += ",\n  \"cellSize\": " + text::Number(index.cellSize);
+    out += ",\n  \"regionCells\": " + std::to_string(index.regionCells);
     out += ",\n  \"hlodRange\": " + text::Number(index.hlodRange);
     out += ",\n  \"dataLayers\": [";
     for (std::size_t item = 0U; item < index.dataLayers.size(); ++item) {

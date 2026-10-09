@@ -50,6 +50,8 @@ struct WorldCellIndex {
     std::string worldGuid;
     std::string worldName;
     double cellSize = 128.0;
+    // Side of a region in cells: unit and proxy paths are grouped into r_<x>_<z> folders by it.
+    std::uint32_t regionCells = 16U;
     double hlodRange = 0.0;
     std::vector<WorldDataLayerDesc> dataLayers;
     std::vector<WorldCellUnit> units;

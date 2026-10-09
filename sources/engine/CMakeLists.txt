@@ -215,6 +215,7 @@ add_library(kb_engine STATIC
     include/engine/world/WorldDescriptor.hpp
     include/engine/world/WorldEditSession.hpp
     include/engine/world/WorldObjectFile.hpp
+    include/engine/world/WorldPackChunks.hpp
     include/engine/world/WorldPartitionGrid.hpp
     include/engine/world/WorldPartitionRuntime.hpp
     include/engine/scene/InputComponent.hpp
@@ -888,6 +889,7 @@ add_library(kb_engine STATIC
     src/world/WorldEditSession.cpp
     src/world/WorldObjectFile.cpp
     src/world/WorldObjectSplit.cpp
+    src/world/WorldPackChunks.cpp
     src/world/WorldStreamingService.cpp
     src/scene/components/SceneTransformApi.cpp
     src/scene/components/SceneTransformPrecisionApi.cpp

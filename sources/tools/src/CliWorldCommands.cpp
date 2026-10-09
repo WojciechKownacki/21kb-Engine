@@ -4,6 +4,7 @@
 #include "engine/world/WorldCellBuilder.hpp"
 #include "engine/world/WorldDescriptor.hpp"
 #include "engine/world/WorldEditSession.hpp"
+#include "engine/world/WorldPackChunks.hpp"
 #if defined(KB_CLI_WORLD_HLOD)
 #include "kb/render/world/WorldBuildTool.hpp"
 #endif
@@ -132,12 +133,48 @@ namespace {
     return 0;
 }
 
+// One "chunk LABEL=PREFIX,..." line per region of every world built in the project: the
+// --chunk rules of kb_cli pack split and the --pack-chunk rules of package_game.py.
+[[nodiscard]] int Chunks(const ArgumentList& arguments, CommandIo io) {
+    const std::optional<std::string> project = arguments.Option("--project");
+    if (!project.has_value()) {
+        io.err << "error: world chunks needs --project <dir>\n";
+        return 1;
+    }
+    std::string error;
+    const std::optional<std::filesystem::path> contentRoot = ContentRoot(project, *project, error);
+    if (!contentRoot.has_value()) {
+        io.err << "error: " << error << '\n';
+        return 1;
+    }
+    std::vector<std::string> excluded;
+    const std::string excludeText = arguments.Option("--exclude").value_or("");
+    for (std::size_t start = 0U; start < excludeText.size();) {
+        const std::size_t comma = std::min(excludeText.find(',', start), excludeText.size());
+        if (comma > start) excluded.push_back(excludeText.substr(start, comma - start));
+        start = comma + 1U;
+    }
+    const kb::world::WorldRegionChunksResult chunks = kb::world::CollectWorldRegionChunks(*contentRoot, excluded);
+    if (!chunks.succeeded) {
+        io.err << "error: " << chunks.error << '\n';
+        return 1;
+    }
+    for (const kb::world::WorldRegionChunk& chunk : chunks.chunks) {
+        io.out << "chunk " << chunk.label << '=';
+        for (std::size_t prefix = 0U; prefix < chunk.prefixes.size(); ++prefix) {
+            io.out << (prefix == 0U ? "" : ",") << chunk.prefixes[prefix];
+        }
+        io.out << '\n';
+    }
+    return 0;
+}
+
 } // namespace
 
 int RunWorldCommand(const ArgumentList& arguments, CommandIo io) {
     const std::vector<std::string>& positionals = arguments.Positionals();
     if (positionals.size() != 1U) {
-        io.err << "error: world needs one subcommand: migrate or build\n";
+        io.err << "error: world needs one subcommand: migrate, build or chunks\n";
         return 1;
     }
     if (positionals.front() == "migrate") {
@@ -145,6 +182,9 @@ int RunWorldCommand(const ArgumentList& arguments, CommandIo io) {
     }
     if (positionals.front() == "build") {
         return Build(arguments, io);
+    }
+    if (positionals.front() == "chunks") {
+        return Chunks(arguments, io);
     }
     io.err << "error: unknown world subcommand '" << positionals.front() << "'\n";
     return 1;

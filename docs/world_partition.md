@@ -37,10 +37,10 @@ Assets/Worlds/
     ...
   Forest.cells/                     build output (rebuilt by the editor and by kb_cooker)
     Forest.21kbcells                cell index
-    base/c_0_0.21kbscene            base layer of cell (0, 0), with its .meta
+    base/r_0_0/c_0_0.21kbscene      base layer of cell (0, 0), in region (0, 0), with its .meta
     base/persistent.21kbscene       always-loaded objects of the base layer
-    layer.night/c_3_-1.21kbscene    "night" layer of cell (3, -1)
-    hlod/h_0_0.obj                  HLOD proxy of cell (0, 0)
+    layer.night/r_0_-1/c_3_-1.21kbscene   "night" layer of cell (3, -1)
+    hlod/r_0_0/h_0_0.obj            HLOD proxy of cell (0, 0)
 ```
 
 The world file is plain text with one entry per line, for example:
@@ -64,6 +64,7 @@ The world file is plain text with one entry per line, for example:
 | Field | Rule |
 | --- | --- |
 | `cellSize` | Metres per cell side, 1 to 1,000,000. |
+| `regionCells` | Side of a region in cells, 1 to 1,048,576 (default 16). The build puts the cells and proxies of each region in `r_<x>_<z>` folders, so a region can ship in a pack chunk of its own. |
 | `objects` | Directory of the object files, relative to the world file; it may not leave the world's folder. |
 | `dataLayers` | Up to 64 layers. Names are 1 to 64 letters, digits, `_`, `-` or `.`. `initiallyActive` is the state a layer starts in when the world first streams. |
 | `hlod.enabled` | Build HLOD proxies and show them at runtime. |
@@ -225,6 +226,21 @@ contains a world's cells because the dependency chain is followed from the defau
 places the world, the world depends on its cell index, and the cell index depends on every cell
 scene, every HLOD proxy and the proxies' materials.
 
+### Region chunk packs
+
+A large world need not ship as one pack. `package_game.py --pack-chunk-world-regions` puts every
+region of every world into a chunk pack of its own (`Game.Forest.r_0_0.kbpack`, ...) next to the
+base pack, listed in the pack set index (see [content_streaming.md](content_streaming.md)). A
+region chunk holds that region's cell scenes in every data layer and its HLOD proxies; the world
+file, the cell index and the always-loaded units stay in the base pack. Explicit `--pack-chunk`
+rules go first: files they claim (a data layer's folder, `/Game/Worlds/Forest.cells/layer.night/`,
+for example) stay in their chunk and the region chunks take the rest.
+
+The rules come from `kb_cli world chunks --project <dir> [--exclude <prefix>,...]`, which prints
+one `chunk LABEL=PREFIX,...` line per region with built content; the same lines work as
+`kb_cli pack split --chunk` and `--pack-chunk` arguments. The player mounts the whole set, and a
+cell streams from its region's chunk exactly as from a single pack.
+
 ## Large worlds
 
 Cell coordinates are 64-bit integers, and all partition math (cell membership, distances, radii)
@@ -246,7 +262,7 @@ coordinates exactly up to 2^53.
 | --- | --- |
 | `kb_engine_tests world-partition` | Grid math with 64-bit cells, world/index/object file round trips and validation, scene migration (deterministic, scene untouched), region editing with unsaved edits across unloads, save of only changed files, reload rebinding, the build (units, layers, persistent objects, linked objects, stale output removal, error cases), streaming with hysteresis, stream focus sources, data layers (also through the script API), HLOD swapping, memory and request budgets, eviction, determinism of the decisions. |
 | `kb_renderer_tests world-hlod` | HLOD merging, material slots, simplification and cell-local placement; the proxy loads as a regular mesh asset after a world build. |
-| `kb_game_core_tests --partitioned-world` | kb_cli and kb_cooker build a world byte-identically; kb_cooker packages its cells, index and proxies, and the packaged runtime streams the cells. |
+| `kb_game_core_tests --partitioned-world` | kb_cli and kb_cooker build a world byte-identically; kb_cooker packages its cells, index and proxies, and the packaged runtime streams the cells, also from a pack set with one chunk per region. |
 | `kb_cli_tests` | `kb_cli world migrate` and `kb_cli world build`, including HLOD proxies and finding the project. |
 | `kb_editor_world_partition_headless` | Editor conversion, region load and unload, layer and always-loaded edits, save, build (byte-identical to the kb_cli/kb_cooker build), the cell grid as the GPU draws it (the viewport read back with and without the grid, the added pixels checked for the grid's colour) and streaming of a placed world in Play mode. |
-| `scripts/tests/test_package_game.py` | The package job cooks a snapshot carrying the world and its object files. |
+| `scripts/tests/test_package_game.py` | The package job cooks a snapshot carrying the world and its object files, and splits region chunks after explicit chunks. |

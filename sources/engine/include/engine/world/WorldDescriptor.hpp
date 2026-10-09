@@ -35,10 +35,14 @@ struct WorldDescriptor {
     static constexpr std::string_view AssetType = "World";
     static constexpr std::size_t MaxDataLayers = 64U;
     static constexpr std::size_t MaxDataLayerNameBytes = 64U;
+    static constexpr std::uint32_t MaxRegionCells = 1U << 20U;
 
     std::string guid;
     std::string name;
     double cellSize = 128.0;
+    // Side, in cells, of the square regions the build groups its output by. Each region's cells
+    // and proxies share a folder, so one region can ship in a pack chunk of its own.
+    std::uint32_t regionCells = 16U;
     // Directory holding one .21kbobject file per placed object, relative to the
     // descriptor's own directory.
     std::string objectsDirectory;

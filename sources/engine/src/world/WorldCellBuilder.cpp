@@ -91,9 +91,23 @@ private:
     return key.layer.empty() ? std::string{ "base" } : "layer." + key.layer;
 }
 
-[[nodiscard]] std::string UnitFile(const UnitKey& key) {
+[[nodiscard]] std::int64_t FloorDivide(std::int64_t value, std::int64_t divisor) noexcept {
+    std::int64_t quotient = value / divisor;
+    if (value % divisor != 0 && ((value < 0) != (divisor < 0))) {
+        --quotient;
+    }
+    return quotient;
+}
+
+// Cells and proxies are grouped by region so a region's output shares a folder prefix.
+[[nodiscard]] std::string RegionDirectory(const WorldCellCoord& coord, std::int64_t regionCells) {
+    return "r_" + std::to_string(FloorDivide(coord.x, regionCells)) + "_" + std::to_string(FloorDivide(coord.z, regionCells));
+}
+
+[[nodiscard]] std::string UnitFile(const UnitKey& key, std::int64_t regionCells) {
     return key.persistent ? std::string{ "persistent.21kbscene" }
-                          : "c_" + std::to_string(key.coord.x) + "_" + std::to_string(key.coord.z) + ".21kbscene";
+                          : RegionDirectory(key.coord, regionCells) + "/c_" + std::to_string(key.coord.x) + "_" +
+            std::to_string(key.coord.z) + ".21kbscene";
 }
 
 [[nodiscard]] std::string UnitLabel(const UnitKey& key) {
@@ -250,9 +264,11 @@ WorldBuildResult WorldCellBuilder::Build(const std::filesystem::path& descriptor
     index.cellSize = descriptor.cellSize;
     index.hlodRange = descriptor.hlod.enabled ? descriptor.hlod.range : 0.0;
     index.dataLayers = descriptor.dataLayers;
+    index.regionCells = descriptor.regionCells;
+    const std::int64_t regionCells = descriptor.regionCells;
     for (const auto& [key, members] : units) {
         kb::scene::SceneDocument document;
-        document.guid = "worldcell:" + descriptor.guid + ":" + UnitDirectory(key) + ":" + UnitFile(key);
+        document.guid = "worldcell:" + descriptor.guid + ":" + UnitDirectory(key) + ":" + UnitFile(key, regionCells);
         document.name = descriptor.name + " " + UnitLabel(key);
         document.worldType = "WorldCell";
         document.tagDefinitions = descriptor.tagDefinitions;
@@ -267,8 +283,8 @@ WorldBuildResult WorldCellBuilder::Build(const std::filesystem::path& descriptor
             }
         }
         nodeCount = static_cast<std::uint32_t>(document.worldPrefab.NodeCount());
-        const std::string relative = UnitDirectory(key) + "/" + UnitFile(key);
-        const std::filesystem::path scenePath = staging / UnitDirectory(key) / UnitFile(key);
+        const std::string relative = UnitDirectory(key) + "/" + UnitFile(key, regionCells);
+        const std::filesystem::path scenePath = staging / std::filesystem::path{ relative };
         std::filesystem::create_directories(scenePath.parent_path(), code);
         if (code || !kb::scene::SceneDocumentService::Save(document, scenePath)) {
             return Failure("could not write " + UnitLabel(key) + " of world " + descriptor.name + " to " + scenePath.generic_string());
@@ -302,9 +318,10 @@ WorldBuildResult WorldCellBuilder::Build(const std::filesystem::path& descriptor
             }
             continue;
         }
-        const std::string meshRelative = "hlod/h_" + std::to_string(key.coord.x) + "_" + std::to_string(key.coord.z) + ".obj";
+        const std::string meshRelative = "hlod/" + RegionDirectory(key.coord, regionCells) + "/h_" + std::to_string(key.coord.x) + "_" +
+            std::to_string(key.coord.z) + ".obj";
         std::string error;
-        if (!text::WriteTextFileAtomically(staging / meshRelative, hlod.objText, error)) {
+        if (!text::WriteTextFileAtomically(staging / std::filesystem::path{ meshRelative }, hlod.objText, error)) {
             return Failure(error);
         }
         report.writtenBytes += hlod.objText.size();
