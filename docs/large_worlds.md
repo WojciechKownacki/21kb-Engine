@@ -20,8 +20,12 @@ an absolute world position far from the origin:
 | GPU positions, view matrix, lights | float, relative to the render origin | float precision within the 1 km around the camera |
 | Audio listener, sources, voices | float, relative to the audio origin | idem, around the listener |
 | Navigation graph and agents | float, relative to `NavMesh::origin` | idem, around the graph origin |
-| Particles | float, relative to the particle simulation origin | idem, around the camera |
+| Particles (CPU and GPU) | float, relative to the particle simulation origin | idem, around the camera |
 | Scene files (version 42 and newer) | float64 local translations | double |
+| World partition object files, cells and HLOD proxies | float64 translations | double |
+| Script `Transform.*Precise*` functions, `Animator.SetPreciseIKTarget` | double arguments and results | double |
+| Editor camera, picking, gizmos, overlays | double camera position, float relative to a viewport origin | float precision within the 1 km around the camera |
+| IK targets, region, portal, visibility cell and guide curve queries | `DVec3` targets and query points | double |
 
 Scenes that stay within a kilometre or two of the world origin behave and render exactly as
 before: none of the mechanisms below changes a value there.
@@ -158,17 +162,84 @@ render origin while the two disagree (`ParticleRenderOffset`). Positions returne
 `ParticlePlayback::ConfigureComponent` are in the simulation space as well.
 
 GPU-simulated emitters keep their birth records on the GPU, relative to the render origin.
-When the render origin moves, the live particles of world-space GPU emitters are cleared
-(their emitters keep emitting); local-space GPU emitters follow their owner and keep theirs.
+When the render origin moves, the `cs_particle_gpu_rebase` compute kernel adds the origin
+difference to the position of every record of a world-space emitter (pending spawns and the
+live state), and the emitter's collision plane moves with them, so live particles neither
+disappear nor jump. Local-space GPU emitters follow their owner and need no rebase. A
+shader set built without the kernel falls back to clearing the live particles of
+world-space emitters.
 
-## Limits
+## Scripts
 
-- One render origin per scene: viewports looking at places kilometres apart share it, and
-  the ones far from it render with reduced precision.
-- Positions exposed as floats keep float precision: the float `Vec3` accessors
-  (`worldPosition`), the script API, the editor's fly camera and gizmos, and the systems
-  that still work on float world positions (animation constraints and IK, region shape and
-  guide curve queries, physics debug drawing). Use the `DVec3` accessors and the
-  `...Precise` queries for positions far from the origin.
-- Rotations, scales and local offsets between parent and child are floats; a child placed
-  thousands of kilometres from its parent has float precision relative to the parent.
+The float functions (`Transform.GetPosition`, `Transform.SetPosition`, ...) keep their
+signatures and return the float view. Additive functions take and return doubles:
+
+| Function | Purpose |
+|---|---|
+| `Transform.GetPrecisePosition`, `Transform.SetPrecisePosition` | local translation |
+| `Transform.TranslatePrecise` | move by a local offset |
+| `Transform.GetPreciseWorldPosition`, `Transform.SetPreciseWorldPosition` | world translation (the local one is solved through the parent in double precision) |
+| `Animator.SetPreciseIKTarget` | `Animator.SetIKTarget` with a double-precision target position |
+
+Lua numbers are doubles. `CallFunction` passes every input declared as `Double` to the
+function without rounding it to float, and the dedicated Lua bindings
+(`Transform.SetPrecisePosition(entity, x, y, z)`, ...) read their numbers as doubles:
+
+```lua
+Transform.SetPrecisePosition(entity, 10000000.25, 1.5, 10000000.125)
+local world = Transform.GetPreciseWorldPosition(entity)   -- world.x == 10000000.25
+CallFunction("Animator.SetPreciseIKTarget", { name = "HandTarget", x = 10000001.25, y = 1.0, z = 9999999.875 })
+```
+
+## Animation and scene queries
+
+- IK and rig targets: `AnimatorIkTarget::preciseWorldPosition`, when set, replaces
+  `worldPosition`. Two-bone IK, aim, copy-transform and the skeletal constraints of an
+  animator whose owner carries double-precision translations (or that has a precise
+  target) solve relative to the owner's precise world position and write the solved
+  bones back with `SetLocalTranslation`. Rigs near the origin use the float path as before.
+- `SceneRegionShapeContains`, `SceneRegionPortalContains` and `SceneVisibilityCellContains`
+  have overloads taking a `DVec3` point, and `SceneGuideCurveEvaluate` one returning a
+  `DVec3` position; they evaluate relative to the shape's or curve's precise world
+  translation.
+- `PhysicsDebugDraw::CollectLines(scene, origin)` returns the debug lines relative to
+  `origin`, placed from the precise translations.
+
+## Editor
+
+The scene view camera (`EditorViewportCameraState`) keeps its position in double
+precision (`PrecisePosition`) and works relative to a viewport origin
+(`ViewportOrigin`) that follows it with the same 1024 m policy as the render origin. The
+camera axes, picking rays, hit points, gizmo positions and drags, the grid, wireframes,
+icons, terrain brushes and physics debug lines are all expressed relative to that origin:
+
+- `EditorSceneViewportHit::origin` is the origin of the hit's ray; a drop or placement at
+  `hit.origin + groundPosition` lands at the exact world position.
+- The picker compares entities through `EditorSceneViewportMath::ViewportPosition` and
+  `SceneRenderFeedback::BoundsRelativeTo`, so neighbours centimetres apart stay distinct.
+- A gizmo drag remembers its origin (`EditorSceneGizmoState::dragOrigin`) and applies its
+  delta to the target's precise start translation; the transform edit, its undo and redo
+  store double-precision translations.
+- The scene panel hands the renderer the precise eye (`cameraOverrideEye`) and the
+  viewport origin of its overlays (`RenderSceneSubmitDesc::overlayOrigin`).
+
+## World partition
+
+An object's cell is decided by its root's precise world translation. `.21kbobject` files
+store the header position and the payload translations as float64 (the payload uses the
+scene format), so an object keeps its exact translation through the edit session, the
+cell builder (cells, cell scenes, HLOD input relative to the cell corner) and streaming
+(stream sources, HLOD proxies placed at their cell corner in double precision). Object
+files whose payloads were written with float32 translations still load.
+
+## Things to know
+
+- Each scene has one render origin. When several viewports render the same scene far
+  apart (more than 1024 m), each submit moves the origin next to its own viewer: precision
+  holds, but such a submit re-synchronizes every proxy and rebases world-space GPU
+  particles.
+- The float `Vec3` fields (`worldPosition`, `localPosition`) and the float script
+  functions are float views; read the `DVec3` accessors, the `...Precise` queries and the
+  precise script functions for exact positions far from the origin.
+- Rotations and scales are stored as floats. They are applied in double precision, so a
+  child far from its parent lands exactly where the stored rotation and scale place it.
