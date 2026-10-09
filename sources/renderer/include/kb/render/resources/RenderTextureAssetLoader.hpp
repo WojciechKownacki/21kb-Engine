@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/assets/IAssetLoader.hpp"
+#include "engine/assets/bake/AssetBakeKey.hpp"
 #include "kb/render/resources/RenderResources.hpp"
 
 #include <cstdint>
@@ -40,6 +41,23 @@ struct RenderTextureGpuBlocks {
     std::vector<std::uint8_t> blocks;
 };
 
+// A baked texture whose largest mip levels stream. Levels 0..streamedMipCount-1 of the full chain
+// each live in a streaming block of their own; the loaded data (RenderTextureAssetData's width,
+// height, mipCount and gpuBlocks) starts at full-chain level `firstLevel` and runs to the end of
+// the chain. A texture loaded from its pack starts at the tail (firstLevel == streamedMipCount)
+// and gains finer levels as they are streamed in.
+struct RenderTextureStreamingLayout {
+    std::uint16_t width = 0U;
+    std::uint16_t height = 0U;
+    std::uint8_t mipCount = 0U;
+    std::uint8_t streamedMipCount = 0U;
+    std::uint8_t firstLevel = 0U;
+    // Bytes of each streamed level, level 0 first.
+    std::vector<std::uint32_t> streamedLevelBytes;
+    // The packaged artifact the streamed levels are read from; set by the packaged loader.
+    kb::assets::bake::AssetBakeDigest artifact{};
+};
+
 struct RenderTextureAssetData {
     std::uint16_t width = 0;
     std::uint16_t height = 0;
@@ -57,6 +75,8 @@ struct RenderTextureAssetData {
     // this holds a value `rgba8` is empty and `mipCount` counts the levels inside it, and when
     // it is empty the asset is exactly what it has always been - `rgba8` holding LOD0.
     std::optional<RenderTextureGpuBlocks> gpuBlocks;
+    // Set for a baked texture whose largest mips stream; see RenderTextureStreamingLayout.
+    std::optional<RenderTextureStreamingLayout> streaming;
 
     [[nodiscard]] RenderTextureDesc MakeDesc(const bgfx::Memory* memory, RenderTextureColorSpace runtimeColorSpace = RenderTextureColorSpace::Linear) const noexcept;
 };

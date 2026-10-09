@@ -230,6 +230,10 @@ public:
     [[nodiscard]] const std::optional<ScenePostProcessSettings>& LastResolvedPostProcessSettings() const noexcept;
     [[nodiscard]] RuntimeSceneResourceStats RuntimeResourceStats() const noexcept;
     [[nodiscard]] MaterialProgramRegistryStats MaterialProgramStats() const noexcept;
+    // Streaming of the finer mip levels and levels of detail of packaged textures and meshes:
+    // the GPU memory budget, I/O and per-frame upload limits, and what it is doing.
+    void ConfigureContentStreaming(const RuntimeContentStreamingSettings& settings);
+    [[nodiscard]] RuntimeContentStreamingStats ContentStreamingStats() const;
     void ReserveRuntimeSceneResources(const RuntimeSceneResourceReserveDesc& desc);
     void SetDefaultSceneDrawBudget(SceneRenderDrawBudget drawBudget) noexcept;
     [[nodiscard]] SceneRenderDrawBudget DefaultSceneDrawBudget() const noexcept;

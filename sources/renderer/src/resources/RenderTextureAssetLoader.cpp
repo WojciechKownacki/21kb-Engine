@@ -552,7 +552,25 @@ void StoreDecodedTexture(
     if (!kb::render::bake::ReadBakedTexture(primaryBlock, asset)) {
         return std::nullopt;
     }
-    return asset;
+    if (!asset.streaming.has_value()) {
+        return asset;
+    }
+    // A pack opened as a file is read whole: the streamed levels join the tail here.
+    std::vector<std::vector<std::uint8_t>> levelBytes(asset.streaming->streamedMipCount);
+    std::vector<std::span<const std::uint8_t>> levels;
+    for (std::uint32_t level = 0U; level < asset.streaming->streamedMipCount; ++level) {
+        if (pack.ReadBlock(*texture, kb::render::bake::BakedTextureMipBlockName(level), levelBytes[level]) !=
+            kb::assets::bake::AssetPackReadStatus::Success) {
+            return std::nullopt;
+        }
+        levels.emplace_back(levelBytes[level]);
+    }
+    RenderTextureAssetData full{};
+    if (!kb::render::bake::ComposeBakedTextureLevels(asset, levels, full)) {
+        return std::nullopt;
+    }
+    full.streaming.reset();
+    return full;
 }
 
 [[nodiscard]] std::optional<RenderTextureAssetData> LoadBakedTexturePayload(
@@ -581,12 +599,15 @@ void StoreDecodedTexture(
             continue;
         }
         foundVariant = true;
+        // The primary block only: a texture with streamed mips loads with its tail, and content
+        // streaming brings the larger levels in when they are on screen.
         kb::assets::bake::RuntimeAssetPayload payload{};
-        if (!request.ReadPackagedPayload(
+        if (!request.ReadPackagedPayloadBlocks(
                 kb::assets::bake::RuntimeArtifactEncoding::BakedTexture,
                 qualifier,
+                [](const kb::assets::bake::AssetPackBlockEntry&) { return false; },
                 payload,
-                error) || payload.blocks.size() != 1U ||
+                error) || payload.blocks.empty() ||
             payload.blocks.front().name != kb::assets::bake::kBakedAssetPrimaryBlockName) {
             if (error.empty()) {
                 error = "Packaged texture payload shape is invalid";
@@ -600,6 +621,14 @@ void StoreDecodedTexture(
             error = "Packaged texture encoding does not match its manifest qualifier";
             return std::nullopt;
         }
+        const std::uint32_t streamedLevels = texture.streaming.has_value() ? texture.streaming->streamedMipCount : 0U;
+        if (payload.blocks.size() != 1U + streamedLevels) {
+            error = "Packaged texture payload shape is invalid";
+            return std::nullopt;
+        }
+        if (texture.streaming.has_value()) {
+            texture.streaming->artifact = payload.digest;
+        }
         const RenderTextureColorSpace requiredColorSpace =
             texture.colorSpace == RenderTextureAssetColorSpace::Linear
                 ? RenderTextureColorSpace::Linear
@@ -612,6 +641,28 @@ void StoreDecodedTexture(
         }
     }
     if (decodeFallback.has_value()) {
+        // The CPU decode needs the real level 0, so a texture with streamed mips is completed
+        // from its pack first.
+        if (decodeFallback->streaming.has_value()) {
+            std::vector<std::vector<std::uint8_t>> levelBytes(decodeFallback->streaming->streamedMipCount);
+            std::vector<std::span<const std::uint8_t>> levels;
+            for (std::uint32_t level = 0U; level < decodeFallback->streaming->streamedMipCount; ++level) {
+                if (request.runtimePack->ReadArtifactBlock(decodeFallback->streaming->artifact,
+                        kb::render::bake::BakedTextureMipBlockName(level), levelBytes[level]) !=
+                    kb::assets::bake::AssetPackReadStatus::Success) {
+                    error = "Packaged texture fallback could not read its streamed mips";
+                    return std::nullopt;
+                }
+                levels.emplace_back(levelBytes[level]);
+            }
+            RenderTextureAssetData full{};
+            if (!kb::render::bake::ComposeBakedTextureLevels(*decodeFallback, levels, full)) {
+                error = "Packaged texture fallback mips do not compose";
+                return std::nullopt;
+            }
+            full.streaming.reset();
+            decodeFallback = std::move(full);
+        }
         std::optional<RenderTextureAssetData> decoded = DecodeRenderTextureToRgba8(*decodeFallback);
         if (decoded.has_value()) {
             return decoded;
@@ -813,6 +864,8 @@ std::optional<RenderTextureAssetData> DecodeRenderTextureToRgba8(const RenderTex
 
     RenderTextureAssetData decoded = asset;
     decoded.gpuBlocks.reset();
+    // Decoded pixels are no longer the baked levels a streamed mip would be appended to.
+    decoded.streaming.reset();
     decoded.mipCount = 1U;
     decoded.rgba8.assign(static_cast<std::size_t>(asset.width) * asset.height * 4U, 0U);
 

@@ -1403,6 +1403,16 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         WriteRendererBreadcrumb("renderer", message.str());
     }
 
+    // Content streaming sizes what this view sees and swaps in the levels that arrived, before
+    // the passes below draw with them.
+    runtimeResourceCache_.UpdateStreaming(RuntimeContentStreamingFrame{
+        .sceneId = scene.Id(),
+        .renderScene = &renderScene,
+        .camera = sceneCamera,
+        .viewportHeight = desc.target.viewport.extent.height,
+        .frame = static_cast<std::uint64_t>(lastCompletedFrame_) + 1ULL,
+    }, *sceneRenderer_);
+
     const RendererMeshPassSubmitDesc meshPassSubmitDesc{
         .sceneRenderer = *sceneRenderer_,
         .renderScene = renderScene,
@@ -2048,6 +2058,14 @@ const std::optional<ScenePostProcessSettings>& Renderer::LastResolvedPostProcess
 
 MaterialProgramRegistryStats Renderer::MaterialProgramStats() const noexcept {
     return sceneRenderer_ != nullptr ? sceneRenderer_->MaterialProgramStats() : MaterialProgramRegistryStats{};
+}
+
+void Renderer::ConfigureContentStreaming(const RuntimeContentStreamingSettings& settings) {
+    runtimeResourceCache_.Streamer().Configure(settings);
+}
+
+RuntimeContentStreamingStats Renderer::ContentStreamingStats() const {
+    return runtimeResourceCache_.Streamer().Stats();
 }
 
 Renderer::RuntimeSceneResourceStats Renderer::RuntimeResourceStats() const noexcept {

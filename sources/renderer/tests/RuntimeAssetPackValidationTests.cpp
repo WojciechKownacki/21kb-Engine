@@ -12,6 +12,7 @@
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
 #include "kb/render/bake/RuntimeAssetPackValidation.hpp"
+#include "kb/render/bake/TextureBaker.hpp"
 #include "kb/render/ShaderManifest.hpp"
 #include "kb/render/resources/RenderMaterialAssetWriter.hpp"
 #include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
@@ -648,6 +649,124 @@ void VertexDomainGraphMustContainCompleteVertexShaderMatrix() {
     std::filesystem::remove_all(root, error);
 }
 
+// An uncompressed 32-bit TGA gradient.
+[[nodiscard]] std::vector<std::uint8_t> GradientTga(std::uint16_t width, std::uint16_t height) {
+    std::vector<std::uint8_t> bytes(18U, 0U);
+    bytes[2] = 2U;
+    bytes[12] = static_cast<std::uint8_t>(width & 0xFFU);
+    bytes[13] = static_cast<std::uint8_t>(width >> 8U);
+    bytes[14] = static_cast<std::uint8_t>(height & 0xFFU);
+    bytes[15] = static_cast<std::uint8_t>(height >> 8U);
+    bytes[16] = 32U;
+    bytes[17] = 0x28U;
+    for (std::uint32_t y = 0U; y < height; ++y) {
+        for (std::uint32_t x = 0U; x < width; ++x) {
+            bytes.insert(bytes.end(), { static_cast<std::uint8_t>(y), static_cast<std::uint8_t>(x + y),
+                static_cast<std::uint8_t>(x), 255U });
+        }
+    }
+    return bytes;
+}
+
+// Records the blocks a baker hands over, to be written into a pack as they are or damaged.
+class TextureCapture final : public asset_bake::IBakedAssetSink {
+public:
+    asset_bake::BakedAssetSinkStatus BeginAsset(const asset_bake::BakedAssetDescriptor&) override {
+        return asset_bake::BakedAssetSinkStatus::Success;
+    }
+    asset_bake::BakedAssetSinkStatus WritePrimaryBlock(std::span<const std::uint8_t> bytes, std::uint32_t) override {
+        primary.assign(bytes.begin(), bytes.end());
+        return asset_bake::BakedAssetSinkStatus::Success;
+    }
+    asset_bake::BakedAssetSinkStatus WriteAuxiliaryBlock(
+        const asset_bake::BakedAssetBlock&,
+        std::span<const std::uint8_t> bytes) override {
+        mips.emplace_back(bytes.begin(), bytes.end());
+        return asset_bake::BakedAssetSinkStatus::Success;
+    }
+    asset_bake::BakedAssetSinkStatus CommitAsset() override {
+        return asset_bake::BakedAssetSinkStatus::Success;
+    }
+    void AbortAsset() noexcept override {}
+
+    std::vector<std::uint8_t> primary;
+    std::vector<std::vector<std::uint8_t>> mips;
+};
+
+// Red when: a runtime pack whose texture streams its larger mips is refused, or one whose
+// streaming blocks are missing or out of order is accepted -- the package validator and the
+// runtime loader have to agree on what a streamed texture is.
+void StreamedTextureMipsAreValidatedAsOneChain() {
+    const asset_bake::BakeTargetProfile profile = asset_bake::AndroidEtc2Arm64BakeTargetProfile();
+    const std::filesystem::path root =
+        std::filesystem::temp_directory_path() / "21kb_runtime_pack_streamed_texture_validation";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    Require(!error, "Streamed texture validation fixture directory could not be created");
+
+    const std::vector<std::uint8_t> source = GradientTga(512U, 256U);
+    const bake::TextureBakeSettings settings{ RenderTextureAssetSemantic::BaseColor, RenderTextureAssetColorSpace::Linear };
+    TextureCapture capture;
+    const bake::TextureBakeOutput baked =
+        bake::BakeTextureBytes(source, settings, profile, asset_bake::TextureCompressionFamily::Ericsson2, capture);
+    Require(baked.status == bake::TextureBakeStatus::Success && capture.mips.size() == 2U,
+        "The streamed texture fixture did not bake with two streamed mips");
+
+    // `mips` lists the streaming blocks to write, by the baked level they carry.
+    const auto validate = [&](std::string_view name, const std::vector<std::uint32_t>& mips) {
+        const std::filesystem::path packPath = root / (std::string{ name } + ".kbpack");
+        const std::string scenePath = "/Game/Scenes/Main.21kbscene";
+        const std::string texturePath = "/Game/Textures/Wide.tga";
+        asset_bake::RuntimeAssetManifest manifest = BaseManifest(profile, scenePath, "StreamedTexture");
+        asset_bake::AssetPackWriter writer{ packPath, profile };
+        AppendSourceAsset(manifest, writer, profile, kb::assets::MakeAssetId(scenePath + ":Scene"), "Scene", scenePath,
+            ".21kbscene", SceneBytes(root, "Main"));
+        Require(writer.BeginAsset({ .key = baked.key, .assetTypeId = std::string{ bake::kTextureBakedAssetTypeId } }) ==
+                    asset_bake::BakedAssetSinkStatus::Success &&
+                writer.WritePrimaryBlock(capture.primary, profile.packageBlockAlignmentBytes) ==
+                    asset_bake::BakedAssetSinkStatus::Success,
+            "The streamed texture fixture could not be stored");
+        for (std::size_t slot = 0U; slot < mips.size(); ++slot) {
+            const std::string blockName = bake::BakedTextureMipBlockName(static_cast<std::uint32_t>(slot));
+            asset_bake::BakedAssetBlock block{};
+            block.name = blockName;
+            block.residency = asset_bake::BakedAssetBlockResidency::Streaming;
+            block.alignmentBytes = profile.packageBlockAlignmentBytes;
+            Require(writer.WriteAuxiliaryBlock(block, capture.mips[mips[slot]]) == asset_bake::BakedAssetSinkStatus::Success,
+                "A streamed mip could not be stored");
+        }
+        Require(writer.CommitAsset() == asset_bake::BakedAssetSinkStatus::Success, "The streamed texture could not be committed");
+        manifest.assets.push_back(asset_bake::RuntimeAssetManifestEntry{
+            .id = kb::assets::MakeAssetId(texturePath + ":RenderTexture"),
+            .type = "RenderTexture",
+            .name = "Wide",
+            .virtualPath = texturePath,
+            .sourceExtension = ".tga",
+            .contentHash = asset_bake::HashBakeBytes(source),
+            .artifacts = { asset_bake::RuntimeArtifactReference{
+                .digest = baked.key.Digest(),
+                .encoding = asset_bake::RuntimeArtifactEncoding::BakedTexture,
+                .qualifier = "etc2",
+            } },
+        });
+        AppendRequiredFixedShaders(manifest, writer, profile);
+        const std::shared_ptr<asset_bake::RuntimeAssetPack> pack = FinishAndMount(std::move(manifest), writer, profile, packPath);
+        const RuntimeAssetPackValidationResult validation = ValidateRuntimeAssetPack(pack, profile);
+        pack->Unmount();
+        return validation;
+    };
+    const RuntimeAssetPackValidationResult intact = validate("intact", { 0U, 1U });
+    Require(intact.Succeeded(), ("A pack with a streamed texture was refused: " + intact.error).c_str());
+    const RuntimeAssetPackValidationResult missing = validate("missing", { 0U });
+    Require(!missing.Succeeded() && missing.error.find("block layout") != std::string::npos,
+        "A streamed texture missing a mip block was accepted");
+    const RuntimeAssetPackValidationResult swapped = validate("swapped", { 1U, 0U });
+    Require(!swapped.Succeeded() && swapped.error.find("do not compose") != std::string::npos,
+        "A streamed texture whose mip blocks are swapped was accepted");
+    std::filesystem::remove_all(root, error);
+}
+
 } // namespace
 
 void RunRuntimeAssetPackValidationTests() {
@@ -655,6 +774,7 @@ void RunRuntimeAssetPackValidationTests() {
     RuntimeLoadableSourceMustDecodeSemantically();
     RuntimeAudioSourceMustBeDecodeReady();
     VertexDomainGraphMustContainCompleteVertexShaderMatrix();
+    StreamedTextureMipsAreValidatedAsOneChain();
 }
 
 } // namespace kb::render::tests

@@ -1589,6 +1589,7 @@ bool BakedMeshMatchesTargetProfile(
 [[nodiscard]] static bool ReadBakedMeshImpl(
     std::span<const std::uint8_t> primaryBlock,
     std::span<const std::vector<std::uint8_t>> chunks,
+    std::uint32_t firstLod,
     RenderMeshAssetData& out) {
     if (primaryBlock.size() < kPrimaryHeaderBytes ||
         primaryBlock.size() > kb::assets::bake::kMaxAssetPackBlockBytes) {
@@ -1624,7 +1625,7 @@ bool BakedMeshMatchesTargetProfile(
     if (vertexCount == 0U || indexCount == 0U || indexCount % 3U != 0U || lodCount == 0U ||
         lodCount > kMaxLodCount || sectionCount == 0U || materialSlotCount > kMaxMaterialEntries ||
         materialMetadataBytes > kMaxMaterialMetadataBytes ||
-        meshletCount == 0U || chunkCount == 0U || chunks.size() != chunkCount) {
+        meshletCount == 0U || chunkCount == 0U || chunks.size() > chunkCount || firstLod >= lodCount) {
         return false;
     }
 
@@ -1825,11 +1826,21 @@ bool BakedMeshMatchesTargetProfile(
         }
     }
 
+    // The levels from `firstLod` on are a suffix of the cluster table and, because the clusters
+    // lie end to end, a suffix of both buffers: reading only them is reading that suffix.
+    const std::uint32_t keptFirstSection = lods[firstLod].firstSection;
+    const std::uint32_t keptFirstMeshlet = lods[firstLod].firstMeshlet;
+    const std::uint32_t vertexBase = meshlets[keptFirstMeshlet].vertexStart;
+    const std::uint32_t indexBase = meshlets[keptFirstMeshlet].indexStart;
+    const std::uint32_t keptVertexCount = vertexCount - vertexBase;
+    const std::uint32_t keptIndexCount = indexCount - indexBase;
+
     // Validate every chunk and its real payload before allocating from the aggregate counts in
     // the primary header. A hostile 160-byte primary block must not be able to ask for hundreds
     // of gigabytes merely by setting vertexCount to UINT32_MAX.
     std::vector<GeometryChunk> decodedChunks;
-    decodedChunks.reserve(chunkCount);
+    decodedChunks.reserve(chunks.size());
+    std::uint32_t skippedChunks = 0U;
     std::uint64_t expectedChunkMeshlet = 0U;
     std::uint64_t expectedChunkVertex = 0U;
     std::uint64_t expectedChunkIndex = 0U;
@@ -1853,7 +1864,22 @@ bool BakedMeshMatchesTargetProfile(
         if (indexWidthBytes == 2U && chunkVertexCount > 65536U) {
             return false;
         }
-        const std::vector<std::uint8_t>& payload = chunks[chunkIndex];
+        if (firstMeshlet < keptFirstMeshlet) {
+            // A chunk of a level that is not read: its table entry is checked, its payload is
+            // not needed. No chunk may straddle the first level that is read.
+            if (chunkMeshlets > keptFirstMeshlet - firstMeshlet) {
+                return false;
+            }
+            expectedChunkMeshlet += chunkMeshlets;
+            expectedChunkVertex += chunkVertexCount;
+            expectedChunkIndex += chunkIndexCount;
+            ++skippedChunks;
+            continue;
+        }
+        if (chunkIndex - skippedChunks >= chunks.size()) {
+            return false;
+        }
+        const std::vector<std::uint8_t>& payload = chunks[chunkIndex - skippedChunks];
         if (byteLength != payload.size() || payload.size() < kChunkHeaderBytes ||
             payload.size() > kb::assets::bake::kMaxAssetPackBlockBytes) {
             return false;
@@ -1925,7 +1951,7 @@ bool BakedMeshMatchesTargetProfile(
         expectedChunkIndex += chunkIndexCount;
     }
     if (expectedChunkMeshlet != meshletCount || expectedChunkVertex != vertexCount ||
-        expectedChunkIndex != indexCount) {
+        expectedChunkIndex != indexCount || chunks.size() != chunkCount - skippedChunks) {
         return false;
     }
 
@@ -1948,32 +1974,33 @@ bool BakedMeshMatchesTargetProfile(
     // wasm32's heap even though each individual buffer stayed below the pack ceiling.
     RenderMeshAssetData asset{};
     std::span<std::uint8_t> vertices;
+    const std::size_t keptVertexStorageBytes = static_cast<std::size_t>(keptVertexCount) * vertexStride;
     if (tangents) {
-        asset.tangentVertices.resize(vertexCount);
+        asset.tangentVertices.resize(keptVertexCount);
         vertices = std::span<std::uint8_t>{
             reinterpret_cast<std::uint8_t*>(asset.tangentVertices.data()),
-            static_cast<std::size_t>(vertexStorageBytes),
+            keptVertexStorageBytes,
         };
     } else {
-        asset.vertices.resize(vertexCount);
+        asset.vertices.resize(keptVertexCount);
         vertices = std::span<std::uint8_t>{
             reinterpret_cast<std::uint8_t*>(asset.vertices.data()),
-            static_cast<std::size_t>(vertexStorageBytes),
+            keptVertexStorageBytes,
         };
     }
     if (indexWidthBytes == 2U) {
-        asset.indices16.resize(indexCount);
+        asset.indices16.resize(keptIndexCount);
     } else {
-        asset.indices32.resize(indexCount);
+        asset.indices32.resize(keptIndexCount);
     }
-    for (std::uint32_t chunkIndex = 0U; chunkIndex < chunkCount; ++chunkIndex) {
+    for (std::size_t chunkIndex = 0U; chunkIndex < decodedChunks.size(); ++chunkIndex) {
         const GeometryChunk& chunk = decodedChunks[chunkIndex];
         const std::vector<std::uint8_t>& payload = chunks[chunkIndex];
         const std::size_t vertexDataOffset =
             kChunkHeaderBytes + static_cast<std::size_t>(chunk.meshletCount) * kChunkClusterEntryBytes;
         const std::size_t indexDataOffset = PeekUInt32(payload, 20U);
         if (meshopt_decodeVertexBuffer(
-                vertices.data() + static_cast<std::size_t>(chunk.vertexStart) * vertexStride,
+                vertices.data() + static_cast<std::size_t>(chunk.vertexStart - vertexBase) * vertexStride,
                 chunk.vertexCount,
                 vertexStride,
                 payload.data() + vertexDataOffset,
@@ -1981,8 +2008,8 @@ bool BakedMeshMatchesTargetProfile(
             return false;
         }
         void* const decodedIndexDestination = indexWidthBytes == 2U
-            ? static_cast<void*>(asset.indices16.data() + chunk.indexStart)
-            : static_cast<void*>(asset.indices32.data() + chunk.indexStart);
+            ? static_cast<void*>(asset.indices16.data() + (chunk.indexStart - indexBase))
+            : static_cast<void*>(asset.indices32.data() + (chunk.indexStart - indexBase));
         if (meshopt_decodeIndexBuffer(
                 decodedIndexDestination,
                 chunk.indexCount,
@@ -1998,8 +2025,8 @@ bool BakedMeshMatchesTargetProfile(
             const std::uint32_t localIndexStart = meshlet.indexStart - chunk.indexStart;
             for (std::uint32_t indexOffset = 0U; indexOffset < meshlet.indexCount; ++indexOffset) {
                 const std::uint32_t relative = indexWidthBytes == 2U
-                    ? asset.indices16[chunk.indexStart + localIndexStart + indexOffset]
-                    : asset.indices32[chunk.indexStart + localIndexStart + indexOffset];
+                    ? asset.indices16[chunk.indexStart - indexBase + localIndexStart + indexOffset]
+                    : asset.indices32[chunk.indexStart - indexBase + localIndexStart + indexOffset];
                 // A chunk-local index is not enough: each cluster is independently cullable,
                 // so none of its triangles may reach into another cluster in the same fragment.
                 if (relative < localVertexStart || relative >= localVertexStart + meshlet.vertexCount) {
@@ -2015,9 +2042,9 @@ bool BakedMeshMatchesTargetProfile(
                     if (sectionLocal > std::numeric_limits<std::uint16_t>::max()) {
                         return false;
                     }
-                    asset.indices16[meshlet.indexStart + indexOffset] = static_cast<std::uint16_t>(sectionLocal);
+                    asset.indices16[meshlet.indexStart - indexBase + indexOffset] = static_cast<std::uint16_t>(sectionLocal);
                 } else {
-                    asset.indices32[meshlet.indexStart + indexOffset] = sectionLocal;
+                    asset.indices32[meshlet.indexStart - indexBase + indexOffset] = sectionLocal;
                 }
             }
         }
@@ -2029,23 +2056,24 @@ bool BakedMeshMatchesTargetProfile(
     }
 
     const float* const decodedPositions = reinterpret_cast<const float*>(vertices.data());
-    for (RenderMeshletDesc& meshlet : meshlets) {
+    for (std::uint32_t meshletIndex = keptFirstMeshlet; meshletIndex < meshletCount; ++meshletIndex) {
+        RenderMeshletDesc& meshlet = meshlets[meshletIndex];
         std::array<std::uint32_t, kMaxClusterTriangles * 3U> widenedIndices{};
         const RenderMeshSectionDesc& section = sections[meshlet.sectionIndex];
         for (std::uint32_t offset = 0U; offset < meshlet.indexCount; ++offset) {
             const std::uint32_t local = indexWidthBytes == 2U
-                ? asset.indices16[meshlet.indexStart + offset]
-                : asset.indices32[meshlet.indexStart + offset];
+                ? asset.indices16[meshlet.indexStart - indexBase + offset]
+                : asset.indices32[meshlet.indexStart - indexBase + offset];
             if (local >= section.vertexCount) {
                 return false;
             }
-            widenedIndices[offset] = section.vertexStart + local;
+            widenedIndices[offset] = section.vertexStart - vertexBase + local;
         }
         const meshopt_Bounds expected = meshopt_computeClusterBounds(
             widenedIndices.data(),
             meshlet.indexCount,
             decodedPositions,
-            vertexCount,
+            keptVertexCount,
             vertexStride);
         const RenderBoundsSphere expectedBounds{
             .center = { expected.center[0], expected.center[1], expected.center[2] },
@@ -2061,10 +2089,10 @@ bool BakedMeshMatchesTargetProfile(
         meshlet.bounds = expectedBounds;
         meshlet.cone = { expected.cone_axis[0], expected.cone_axis[1], expected.cone_axis[2], expected.cone_cutoff };
     }
-    for (std::uint32_t sectionIndex = 0U; sectionIndex < sectionCount; ++sectionIndex) {
+    for (std::uint32_t sectionIndex = keptFirstSection; sectionIndex < sectionCount; ++sectionIndex) {
         const RenderMeshSectionDesc& section = sections[sectionIndex];
         const RenderBoundsSphere expectedSectionBounds =
-            BoundsOfVertices(vertices.data(), vertexStride, section.vertexStart, section.vertexCount);
+            BoundsOfVertices(vertices.data(), vertexStride, section.vertexStart - vertexBase, section.vertexCount);
         if (!IsFiniteBounds(expectedSectionBounds) ||
             !BoundsMatch(sections[sectionIndex].bounds, expectedSectionBounds)) {
             return false;
@@ -2077,19 +2105,59 @@ bool BakedMeshMatchesTargetProfile(
         .radius = PeekFloat(primaryBlock, 60U),
     };
     const RenderBoundsSphere expectedAssetBounds =
-        BoundsOfVertices(vertices.data(), vertexStride, 0U, vertexCount);
-    if (!IsFiniteBounds(recordedAssetBounds) || !IsFiniteBounds(expectedAssetBounds) ||
-        !BoundsMatch(recordedAssetBounds, expectedAssetBounds)) {
+        BoundsOfVertices(vertices.data(), vertexStride, 0U, keptVertexCount);
+    if (!IsFiniteBounds(recordedAssetBounds) || !IsFiniteBounds(expectedAssetBounds)) {
         return false;
     }
+    if (firstLod == 0U) {
+        if (!BoundsMatch(recordedAssetBounds, expectedAssetBounds)) {
+            return false;
+        }
+    } else {
+        // Coarser levels keep vertices of the finer ones and stay inside the full mesh's
+        // sphere; the recorded sphere is published so the bounds do not change as levels arrive,
+        // and only after it is shown to hold every vertex that was read.
+        const float limit = recordedAssetBounds.radius * 1.001F + 0.0001F;
+        for (std::size_t offset = 0U; offset < vertices.size(); offset += vertexStride) {
+            const float dx = PeekFloat(vertices, offset) - recordedAssetBounds.center[0];
+            const float dy = PeekFloat(vertices, offset + 4U) - recordedAssetBounds.center[1];
+            const float dz = PeekFloat(vertices, offset + 8U) - recordedAssetBounds.center[2];
+            if (dx * dx + dy * dy + dz * dz > limit * limit) {
+                return false;
+            }
+        }
+    }
 
-    asset.sections = std::move(sections);
-    asset.meshlets = std::move(meshlets);
-    asset.lods = std::move(lods);
+    // Rebase everything onto the levels that were read: their first level becomes level 0 and
+    // their first cluster, section, vertex and index become the first of the mesh.
+    std::vector<RenderMeshSectionDesc> keptSections(
+        sections.begin() + static_cast<std::ptrdiff_t>(keptFirstSection), sections.end());
+    for (RenderMeshSectionDesc& section : keptSections) {
+        section.indexStart -= indexBase;
+        section.vertexStart -= vertexBase;
+        section.lodLevel = static_cast<std::uint8_t>(section.lodLevel - firstLod);
+    }
+    std::vector<RenderMeshletDesc> keptMeshlets(
+        meshlets.begin() + static_cast<std::ptrdiff_t>(keptFirstMeshlet), meshlets.end());
+    for (RenderMeshletDesc& meshlet : keptMeshlets) {
+        meshlet.indexStart -= indexBase;
+        meshlet.vertexStart -= vertexBase;
+        meshlet.sectionIndex -= keptFirstSection;
+        meshlet.lodLevel = static_cast<std::uint8_t>(meshlet.lodLevel - firstLod);
+    }
+    std::vector<RenderMeshLodDesc> keptLods(lods.begin() + static_cast<std::ptrdiff_t>(firstLod), lods.end());
+    for (RenderMeshLodDesc& lod : keptLods) {
+        lod.firstSection -= keptFirstSection;
+        lod.firstMeshlet -= keptFirstMeshlet;
+    }
+
+    asset.sections = std::move(keptSections);
+    asset.meshlets = std::move(keptMeshlets);
+    asset.lods = std::move(keptLods);
     asset.materialSlots = std::move(materialSlots);
     asset.materialNames = std::move(materialNames);
     asset.embeddedMaterials = std::move(embeddedMaterials);
-    asset.bounds = expectedAssetBounds;
+    asset.bounds = firstLod == 0U ? expectedAssetBounds : recordedAssetBounds;
     out = std::move(asset);
     return true;
 }
@@ -2099,12 +2167,120 @@ bool ReadBakedMesh(
     std::span<const std::vector<std::uint8_t>> chunks,
     RenderMeshAssetData& out) {
     try {
-        return ReadBakedMeshImpl(primaryBlock, chunks, out);
+        return ReadBakedMeshImpl(primaryBlock, chunks, 0U, out);
     } catch (const std::bad_alloc&) {
         return false;
     } catch (const std::length_error&) {
         return false;
     }
+}
+
+bool ReadBakedMeshLods(
+    std::span<const std::uint8_t> primaryBlock,
+    std::uint32_t firstLod,
+    std::span<const std::vector<std::uint8_t>> chunks,
+    RenderMeshAssetData& out) {
+    try {
+        return ReadBakedMeshImpl(primaryBlock, chunks, firstLod, out);
+    } catch (const std::bad_alloc&) {
+        return false;
+    } catch (const std::length_error&) {
+        return false;
+    }
+}
+
+bool ReadBakedMeshLayout(std::span<const std::uint8_t> primaryBlock, BakedMeshLayout& out) {
+    if (primaryBlock.size() < kPrimaryHeaderBytes || primaryBlock.size() > kb::assets::bake::kMaxAssetPackBlockBytes ||
+        std::memcmp(primaryBlock.data(), kBakedMeshMagic.data(), kBakedMeshMagic.size()) != 0 ||
+        PeekUInt32(primaryBlock, 8U) != kBakedMeshFormatVersion) {
+        return false;
+    }
+    const std::uint32_t vertexStride = PeekUInt32(primaryBlock, 16U);
+    const std::uint32_t indexWidthBytes = PeekUInt32(primaryBlock, 20U);
+    const std::uint32_t lodCount = PeekUInt32(primaryBlock, 32U);
+    const std::uint32_t sectionCount = PeekUInt32(primaryBlock, 36U);
+    const std::uint32_t meshletCount = PeekUInt32(primaryBlock, 40U);
+    const std::uint32_t chunkCount = PeekUInt32(primaryBlock, 44U);
+    const std::uint32_t materialSlotCount = PeekUInt32(primaryBlock, 64U);
+    const std::uint32_t materialMetadataBytes = PeekUInt32(primaryBlock, 68U);
+    if (lodCount == 0U || lodCount > kMaxLodCount || sectionCount == 0U || meshletCount == 0U || chunkCount == 0U ||
+        (indexWidthBytes != 2U && indexWidthBytes != 4U) || vertexStride == 0U ||
+        materialSlotCount > kMaxMaterialEntries || materialMetadataBytes > kMaxMaterialMetadataBytes) {
+        return false;
+    }
+    const std::uint64_t tablesBytes = static_cast<std::uint64_t>(materialSlotCount) * kMaterialSlotEntryBytes +
+        materialMetadataBytes + static_cast<std::uint64_t>(lodCount) * kLodEntryBytes +
+        static_cast<std::uint64_t>(sectionCount) * kSectionEntryBytes +
+        static_cast<std::uint64_t>(meshletCount) * kMeshletEntryBytes +
+        static_cast<std::uint64_t>(chunkCount) * kChunkEntryBytes;
+    if (static_cast<std::uint64_t>(primaryBlock.size()) != kPrimaryHeaderBytes + tablesBytes) {
+        return false;
+    }
+    std::size_t cursor = kPrimaryHeaderBytes + static_cast<std::size_t>(materialSlotCount) * kMaterialSlotEntryBytes +
+        materialMetadataBytes;
+    BakedMeshLayout layout{};
+    layout.bounds = RenderBoundsSphere{
+        .center = { PeekFloat(primaryBlock, 48U), PeekFloat(primaryBlock, 52U), PeekFloat(primaryBlock, 56U) },
+        .radius = PeekFloat(primaryBlock, 60U),
+    };
+    if (!IsFiniteBounds(layout.bounds)) {
+        return false;
+    }
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> lodMeshlets;
+    std::uint32_t expectedFirstMeshlet = 0U;
+    for (std::uint32_t lodIndex = 0U; lodIndex < lodCount; ++lodIndex) {
+        const std::uint32_t firstMeshlet = PeekUInt32(primaryBlock, cursor + 8U);
+        const std::uint32_t lodMeshletCount = PeekUInt32(primaryBlock, cursor + 12U);
+        const float error = PeekFloat(primaryBlock, cursor + 20U);
+        cursor += kLodEntryBytes;
+        if (firstMeshlet != expectedFirstMeshlet || lodMeshletCount == 0U ||
+            lodMeshletCount > meshletCount - firstMeshlet || !std::isfinite(error) || error < 0.0F) {
+            return false;
+        }
+        expectedFirstMeshlet += lodMeshletCount;
+        lodMeshlets.emplace_back(firstMeshlet, lodMeshletCount);
+        layout.lods.push_back(BakedMeshLodLayout{ .error = error });
+    }
+    if (expectedFirstMeshlet != meshletCount) {
+        return false;
+    }
+    for (std::uint32_t sectionIndex = 0U; sectionIndex < sectionCount; ++sectionIndex) {
+        const std::uint32_t sectionIndexCount = PeekUInt32(primaryBlock, cursor + 4U);
+        const std::uint32_t lodLevel = PeekUInt32(primaryBlock, cursor + 12U);
+        const std::uint32_t sectionVertexCount = PeekUInt32(primaryBlock, cursor + 36U);
+        cursor += kSectionEntryBytes;
+        if (lodLevel >= lodCount) {
+            return false;
+        }
+        layout.lods[lodLevel].geometryBytes += static_cast<std::uint64_t>(sectionVertexCount) * vertexStride +
+            static_cast<std::uint64_t>(sectionIndexCount) * indexWidthBytes;
+    }
+    cursor += static_cast<std::size_t>(meshletCount) * kMeshletEntryBytes;
+    std::uint32_t lod = 0U;
+    for (std::uint32_t chunkIndex = 0U; chunkIndex < chunkCount; ++chunkIndex) {
+        const std::uint32_t firstMeshlet = PeekUInt32(primaryBlock, cursor + 0U);
+        const std::uint32_t chunkMeshlets = PeekUInt32(primaryBlock, cursor + 4U);
+        cursor += kChunkEntryBytes;
+        while (lod < lodCount && firstMeshlet >= lodMeshlets[lod].first + lodMeshlets[lod].second) {
+            ++lod;
+        }
+        // Chunks follow the clusters in order and never straddle a level.
+        if (lod == lodCount || firstMeshlet < lodMeshlets[lod].first || chunkMeshlets == 0U ||
+            chunkMeshlets > lodMeshlets[lod].first + lodMeshlets[lod].second - firstMeshlet) {
+            return false;
+        }
+        BakedMeshLodLayout& level = layout.lods[lod];
+        if (level.chunkCount == 0U) {
+            level.firstChunk = chunkIndex;
+        }
+        ++level.chunkCount;
+    }
+    if (std::ranges::any_of(layout.lods, [](const BakedMeshLodLayout& level) { return level.chunkCount == 0U; })) {
+        return false;
+    }
+    layout.chunkCount = chunkCount;
+    out = std::move(layout);
+    return true;
 }
 
 } // namespace kb::render::bake
