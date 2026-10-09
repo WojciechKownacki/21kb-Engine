@@ -1,12 +1,14 @@
 #include "engine/scene/SceneNavigation.hpp"
 
 #include "engine/assets/AssetManager.hpp"
+#include "engine/navigation/NavGeometryCollector.hpp"
 #include "engine/navigation/NavMeshAsset.hpp"
 #include "engine/scene/CharacterControllerComponent.hpp"
 #include "engine/scene/ContentInstanceComponent.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/StreamFocusComponent.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
@@ -922,6 +924,46 @@ bool SceneNavigation::HasNavMeshTile(std::uint32_t profile, kb::navigation::NavT
 std::size_t SceneNavigation::NavMeshTileRebuilds() const noexcept {
     const SceneNavigationState& navigation = SceneAccess::State(scene_).navigation;
     return navigation.polygons ? navigation.polygons->TileRebuilds() : 0U;
+}
+
+std::size_t SceneNavigation::RebakeTiles(const kb::math::DVec3& min, const kb::math::DVec3& max, kb::navigation::INavGeometrySource* geometry) {
+    SceneNavigationState& navigation = SceneAccess::State(scene_).navigation;
+    if (!HasPolygons(navigation) || navigation.polygons->Layout() == nullptr) return 0U;
+    const nav::NavMeshBuildSettings settings = *navigation.polygons->Layout();
+    // The scene's objects as they stand now, read the way a bake reads a saved scene.
+    const SceneDocument document = SceneDocumentService::Capture(scene_, "navigation");
+    nav::AssetNavGeometrySource assets{ scene_.Assets().Manager() };
+    nav::NavGeometry collected;
+    nav::NavGeometryCollectStats stats;
+    nav::CollectNavGeometry(document.worldPrefab.Nodes(), settings, geometry != nullptr ? geometry : &assets, collected, stats);
+    const double tileSize = settings.TileWorldSize();
+    const auto tile = [tileSize](double value) { return static_cast<std::int64_t>(std::floor(value / tileSize)); };
+    const std::int64_t firstX = tile(std::min(min.x, max.x));
+    const std::int64_t lastX = tile(std::max(min.x, max.x));
+    const std::int64_t firstZ = tile(std::min(min.z, max.z));
+    const std::int64_t lastZ = tile(std::max(min.z, max.z));
+    if (lastX - firstX > 1024 || lastZ - firstZ > 1024) {
+        throw std::invalid_argument("RebakeTiles covers more than 1024 tiles along an axis");
+    }
+    std::size_t rebuilt = 0U;
+    for (std::uint32_t profile = 0U; profile < settings.profiles.size(); ++profile) {
+        for (std::int64_t z = firstZ; z <= lastZ; ++z) {
+            for (std::int64_t x = firstX; x <= lastX; ++x) {
+                nav::NavTile built;
+                std::string error;
+                if (nav::NavMeshBuilder::BuildTile(settings, profile, nav::NavTileCoord{ x, z }, collected, built, error) &&
+                    navigation.polygons->UseRebuiltTile(std::move(built))) {
+                    ++rebuilt;
+                }
+            }
+        }
+    }
+    return rebuilt;
+}
+
+void SceneNavigation::RestoreBakedTiles() {
+    SceneNavigationState& navigation = SceneAccess::State(scene_).navigation;
+    if (navigation.polygons) static_cast<void>(navigation.polygons->DropRebuiltTiles());
 }
 
 NavPathResult SceneNavigation::FindPath(const kb::math::DVec3& start, const kb::math::DVec3& end, const NavQueryOptions& options) {

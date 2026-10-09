@@ -14,6 +14,7 @@
 #include <vector>
 
 namespace kb::navigation {
+class INavGeometrySource;
 struct NavMeshAsset;
 }
 
@@ -112,8 +113,15 @@ public:
     // Tiles (one per profile and tile coordinate) currently in use.
     [[nodiscard]] std::size_t NavMeshTileCount(std::uint32_t profile = 0U) const noexcept;
     [[nodiscard]] bool HasNavMeshTile(std::uint32_t profile, kb::navigation::NavTileCoord coord) const noexcept;
-    // Tiles rebuilt so far because obstacles or links changed.
+    // Tiles rebuilt so far because obstacles, links or geometry changed.
     [[nodiscard]] std::size_t NavMeshTileRebuilds() const noexcept;
+    // Rasterises the tiles of every profile overlapping [min, max] on X and Z again, from the
+    // scene's static geometry as it is now (colliders, terrain and, with a source that reads them,
+    // meshes), and uses them in place of the baked tiles: for geometry built, moved or destroyed
+    // while the scene runs. Returns the number of tiles rebuilt.
+    std::size_t RebakeTiles(const kb::math::DVec3& min, const kb::math::DVec3& max, kb::navigation::INavGeometrySource* geometry = nullptr);
+    // Returns every rebuilt tile to its baked version.
+    void RestoreBakedTiles();
 
     // Queries on the polygon meshes, in world positions. They see the obstacles and links as they
     // are now.

@@ -116,6 +116,12 @@ public:
     void SetLinks(std::vector<NavRuntimeLink> links);
     [[nodiscard]] const std::vector<NavRuntimeObstacle>& Obstacles() const noexcept { return obstacles_; }
 
+    // Uses `tile`, rebuilt from the scene's current geometry, in place of the baked tile at its
+    // coordinate (a tile without layers leaves the coordinate empty). Needs a layout.
+    [[nodiscard]] bool UseRebuiltTile(NavTile tile);
+    // Returns every coordinate to its baked tile; the number of rebuilt tiles dropped.
+    std::size_t DropRebuiltTiles();
+
     // Raised whenever a polygon tile is added, removed or rebuilt.
     [[nodiscard]] std::uint64_t Revision() const noexcept { return revision_; }
     [[nodiscard]] std::size_t TileRebuilds() const noexcept { return rebuilds_; }
@@ -159,7 +165,10 @@ private:
     };
     struct TileSlot {
         std::vector<TileOwner> owners;
+        // A tile rebuilt from the scene's current geometry, used instead of the owners' baked one.
+        std::optional<NavTile> rebuilt;
         std::vector<dtTileRef> placed;
+        [[nodiscard]] bool Used() const noexcept { return rebuilt.has_value() || !owners.empty(); }
     };
     struct MeshDeleter {
         void operator()(dtNavMesh* mesh) const noexcept;
