@@ -26,13 +26,17 @@ bool EditorAssetOpenPolicy::IsSceneDocument(const kb::assets::AssetMetadata& met
     return metadata.type == "Scene" && Lower(metadata.virtualPath.extension().string()) == ".21kbscene";
 }
 
+bool EditorAssetOpenPolicy::IsWorldDocument(const kb::assets::AssetMetadata& metadata) {
+    return metadata.type == "World" && Lower(metadata.virtualPath.extension().string()) == ".21kbworld";
+}
+
 bool EditorAssetOpenPolicy::CanOpen(const kb::assets::AssetMetadata& metadata) {
     return metadata.type == "LuaScript" || metadata.type == "NativeBehaviour" || ProjectFilesAssetIconResolver::IsSkeletalMesh(metadata) ||
         ProjectFilesAssetIconResolver::IsSkeleton(metadata) || metadata.type == kb::scene::kAnimationClipAssetType ||
         metadata.type == kb::scene::kAnimatorControllerAssetType ||
         metadata.type == kb::scene::kParticleEffectAssetType || metadata.type == kb::scene::kTimelineAssetType ||
         metadata.type == "RenderMaterial" || metadata.type == "RenderMaterialInstance" ||
-        metadata.type == kb::render::kRenderMaterialGraphAssetType || IsSceneDocument(metadata);
+        metadata.type == kb::render::kRenderMaterialGraphAssetType || IsSceneDocument(metadata) || IsWorldDocument(metadata);
 }
 
 } // namespace kb::editor

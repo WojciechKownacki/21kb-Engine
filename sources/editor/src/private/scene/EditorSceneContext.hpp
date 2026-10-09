@@ -38,6 +38,7 @@
 #include "scene/EditorPlayModeSelectionSnapshot.hpp"
 #include "scene/EditorSceneViewportStateStore.hpp"
 #include "scene/EditorUIRectDragState.hpp"
+#include "scene/EditorWorldPartition.hpp"
 #include "scene/AnimationPreviewContext.hpp"
 #include "scene/AnimationClipTimelineState.hpp"
 #include "scene/AnimationClipEditorDocumentState.hpp"
@@ -298,6 +299,25 @@ public:
     [[nodiscard]] bool OpenScene(const std::filesystem::path& path, EditorDirtySceneResolution dirtyResolution = EditorDirtySceneResolution::Save);
     [[nodiscard]] bool SaveCurrentScene();
     [[nodiscard]] bool SaveCurrentSceneAs(const std::filesystem::path& path);
+    // Partitioned worlds (.21kbworld): the open world is edited one region of cells
+    // at a time and saved one file per object. OpenScene routes world files here.
+    [[nodiscard]] bool OpenWorld(const std::filesystem::path& path, EditorDirtySceneResolution dirtyResolution = EditorDirtySceneResolution::Save);
+    [[nodiscard]] bool IsWorldOpen() const noexcept;
+    [[nodiscard]] EditorWorldPartition& WorldPartition() noexcept;
+    [[nodiscard]] const EditorWorldPartition& WorldPartition() const noexcept;
+    [[nodiscard]] bool LoadWorldCellsNearCamera();
+    [[nodiscard]] bool LoadWorldRegion(kb::world::WorldCellCoord min, kb::world::WorldCellCoord max);
+    [[nodiscard]] bool UnloadWorldRegion(kb::world::WorldCellCoord min, kb::world::WorldCellCoord max);
+    [[nodiscard]] bool LoadAllWorldCells();
+    [[nodiscard]] bool UnloadAllWorldCells();
+    // Saves pending edits, then builds the cells and HLOD proxies of the open world.
+    [[nodiscard]] bool BuildOpenWorld();
+    // Converts the saved scene being edited into <scene>.21kbworld next to it and opens it.
+    [[nodiscard]] bool ConvertCurrentSceneToWorld(
+        double cellSize = 128.0, EditorDirtySceneResolution dirtyResolution = EditorDirtySceneResolution::Save);
+    [[nodiscard]] bool DeclareWorldDataLayer(std::string_view name, bool initiallyActive = true);
+    [[nodiscard]] bool CycleSelectedObjectDataLayer();
+    [[nodiscard]] bool ToggleSelectedObjectAlwaysLoaded();
     // Prefab edit mode: Scene View and Hierarchy show a .kbprefab in a scene of its own until it is closed.
     [[nodiscard]] bool OpenPrefabEditMode(const std::filesystem::path& prefabPath);
     [[nodiscard]] bool SavePrefabEditMode();
@@ -1513,6 +1533,7 @@ private:
     bool sceneDocumentDirty_ = false;
     EditorAutosaveState autosave_;
     EditorPlayModeSceneSession playModeSceneSession_;
+    EditorWorldPartition worldPartition_;
     std::uint64_t playModeRenderTopologyVersion_ = 0U;
     std::size_t playModeRootCount_ = 0U;
     std::uint64_t playModeRootAppendEpoch_ = 0U;

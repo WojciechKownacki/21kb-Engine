@@ -416,6 +416,31 @@ void RunClosedMaterialEditorReopensInCenterDockTest() {
     kb::editor::tests::Require(scene != nullptr && reopened->leafId == scene->leafId, "Reopened Material Editor should return to the center workspace group");
 }
 
+void RunWorldMenuTest() {
+    // The pointer handler acts on World rows by index; the labels must stay in that order.
+    using kb::editor::EditorMenuCommand;
+    using kb::editor::EditorToolbarLayout;
+    kb::editor::tests::Require(EditorToolbarLayout::FixedRowCount(EditorMenuCommand::World) == 9,
+        "The World menu lists its nine region, build and selection commands");
+    kb::editor::tests::Require(EditorToolbarLayout::DropdownLabel(EditorMenuCommand::World, 0) == "Load Cells Near Camera" &&
+            EditorToolbarLayout::DropdownLabel(EditorMenuCommand::World, 3) == "Build World and HLODs" &&
+            EditorToolbarLayout::DropdownLabel(EditorMenuCommand::World, 4) == "Show or Hide Cell Grid" &&
+            EditorToolbarLayout::DropdownLabel(EditorMenuCommand::World, 6) == "Add Data Layer..." &&
+            EditorToolbarLayout::DropdownLabel(EditorMenuCommand::World, 8) == "Toggle Selection Always Loaded",
+        "World menu rows must match the rows the pointer handler executes");
+    kb::editor::tests::Require(EditorToolbarLayout::FixedRowCount(EditorMenuCommand::Help) == 4 &&
+            EditorToolbarLayout::DropdownLabel(EditorMenuCommand::Help, 3) == "About",
+        "Adding the World menu must not move the Help rows");
+    const RECT bar{ 0, 0, 1200, 28 };
+    const kb::editor::EditorMenuRects menus = EditorToolbarLayout::ResolveMenu(bar, EditorMenuCommand::World, 9);
+    const int worldX = (menus.world.left + menus.world.right) / 2;
+    const int worldY = (menus.world.top + menus.world.bottom) / 2;
+    kb::editor::tests::Require(menus.world.left >= menus.options.right && menus.help.left >= menus.world.right &&
+            EditorToolbarLayout::HitTestMenu(menus, worldX, worldY) == EditorMenuCommand::World &&
+            menus.dropdownRowCount == 9,
+        "The World menu sits between Options and Help and opens its nine rows");
+}
+
 void RunBuildGameMenuAndWorkspaceActivationTest() {
     // The panel is only ever reached through File > Build Game, so the row has to be
     // there and has to be the one the handler acts on.
@@ -1414,6 +1439,7 @@ void RunEditorDockingTests() {
     RunClosedMaterialEditorReopensInCenterDockTest();
     RunClosedUtilityPanelsReopenInRightDockTest();
     RunBuildGameMenuAndWorkspaceActivationTest();
+    RunWorldMenuTest();
     RunSkeletalMeshEditorWorkspaceActivationTest();
     RunAnimationClipEditorWorkspaceActivationTest();
     RunAnimatorEditorWorkspaceActivationTest();

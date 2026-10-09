@@ -1848,7 +1848,7 @@ template <typename Mutator>
     if (hit.property == InspectorPropertyId::ContentInstanceKind) {
         return EditContentInstance(sceneContext, entity, "Change Content Instance Source Type", [](kb::scene::ContentInstanceComponent& value) {
             const auto next = static_cast<std::uint8_t>(value.kind) + 1U;
-            value.kind = next > static_cast<std::uint8_t>(kb::scene::ContentInstanceKind::WorldFragment)
+            value.kind = next > static_cast<std::uint8_t>(kb::scene::ContentInstanceKind::PartitionedWorld)
                 ? kb::scene::ContentInstanceKind::Prefab : static_cast<kb::scene::ContentInstanceKind>(next);
             return true;
         });
