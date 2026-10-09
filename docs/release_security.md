@@ -47,15 +47,20 @@ development behaviour.
 
 `kb_cli pack sign --key <key> [--content-key <file>] <pack>` appends a seal to the pack: an Ed25519
 signature over the raw header, the artifact index, the fragment index and one SHA-512 per block.
-Packaging seals the cooked pack right after the cook (`_sign_pack`) and verifies it with
-`kb_cli pack verify --anchor <anchor> <pack>`, which reads every block.
+The block hashes cover the bytes as stored -- zstd-compressed and, with a content key, encrypted
+-- so a block is authenticated before it is decrypted or decompressed. Packaging seals every
+pack it creates right after the cook (`_sign_pack`): the cooked pack, or the base and chunk packs
+split from it, or a patch pack; and verifies each with `kb_cli pack verify --anchor <anchor>
+<pack>`, which reads every block. A game made of several packs is described in
+[content_streaming.md](content_streaming.md).
 
 At mount the reader checks the signature before it decodes a single index entry; each block's
 SHA-512 is checked when that block is read. A pack is never hashed as a whole at startup and no
 block is hashed twice. In packaged mode a pack that is unsigned (`Unsigned`), signed by another
 key (`UntrustedSigner`), modified anywhere in its catalogue or seal (`SignatureInvalid`,
 `SealCorrupt`) is refused at mount with a message naming the reason; a modified block is refused
-when it is read (`PayloadCorrupt`).
+when it is read (`PayloadCorrupt`). The same holds for every chunk and patch pack of a pack set:
+the player passes its trust anchor to each pack it mounts.
 
 `--encrypt-pack` (Windows packages) additionally encrypts every block in place with
 XChaCha20-Poly1305 under a fresh content key; the nonce is the seal's random salt followed by the
@@ -80,8 +85,11 @@ startup a packaged player:
 2. refuses an unlisted executable, native module or pack anywhere in its directory (a planted
    `version.dll` is named in the error), and a listed one that is missing or has another size;
 3. hashes its own executable against the manifest;
-4. binds the mounted pack to the release through the pack's seal digest, so the pack is not
-   hashed a second time;
+4. binds every mounted pack to the release through the pack's seal digest, so no pack is hashed
+   a second time. A game made of several packs also ships `Game.kbpackset`, a critical file the
+   player hashes at startup; every pack it names -- base, chunks and patches -- must be bound, so
+   the set of packs, their mount order and their patch levels are part of what the release key
+   signs;
 5. applies anti-rollback when the release asks for it;
 6. installs the verified release for native module loading.
 
@@ -91,8 +99,9 @@ for example) without failing on them.
 
 **Anti-rollback** is off by default. With `--anti-rollback` the player keeps the highest release
 number it has run in `%LOCALAPPDATA%\21kb\<product>\release.state` and refuses an older release.
-It keeps a known-bad build from being reinstalled over a fixed one, and it also blocks a
-deliberate downgrade; deleting the per-user state resets it, so it is a policy aid, not a
+It keeps a known-bad build from being reinstalled over a fixed one -- an older patch put back
+over a newer one included, since a patch release always carries a higher release number than the
+release it patches -- and it also blocks a deliberate downgrade; deleting the per-user state resets it, so it is a policy aid, not a
 guarantee.
 
 ## Native modules
