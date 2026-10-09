@@ -5,8 +5,11 @@
 #include "engine/assets/bake/BakeTargetProfile.hpp"
 #include "engine/assets/bake/RuntimeAssetManifest.hpp"
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
+#include "engine/world/WorldCellIndex.hpp"
+#include "engine/world/WorldDescriptor.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <fstream>
 #include <map>
 #include <set>
@@ -18,6 +21,8 @@ namespace kb::assets::bake {
 namespace {
 
 constexpr std::string_view kRuntimeManifestBakerId = "RuntimeManifest";
+// How a world region names the base layer, which has no name of its own.
+constexpr std::string_view kBaseLayerToken = "(base)";
 
 [[nodiscard]] std::uint64_t NonZeroHash(std::span<const std::uint8_t> bytes) noexcept {
     const std::uint64_t hash = HashBakeBytes(bytes);
@@ -129,7 +134,114 @@ constexpr std::string_view kRuntimeManifestBakerId = "RuntimeManifest";
     return text.size() >= prefix.size() && text.substr(0U, prefix.size()) == prefix;
 }
 
+[[nodiscard]] bool ParseCellCoordinate(std::string_view text, kb::world::WorldCellCoord& out) noexcept {
+    const std::size_t colon = text.find(':');
+    if (colon == std::string_view::npos) {
+        return false;
+    }
+    const auto parse = [](std::string_view part, std::int64_t& value) {
+        const auto [end, error] = std::from_chars(part.data(), part.data() + part.size(), value);
+        return !part.empty() && error == std::errc{} && end == part.data() + part.size();
+    };
+    return parse(text.substr(0U, colon), out.x) && parse(text.substr(colon + 1U), out.z);
+}
+
+[[nodiscard]] bool InRegion(const AssetPackWorldRegion& region, const kb::world::WorldCellCoord& coord) noexcept {
+    return coord.x >= region.min.x && coord.x <= region.max.x && coord.z >= region.min.z && coord.z <= region.max.z;
+}
+
+[[nodiscard]] bool WholeWorld(const AssetPackWorldRegion& region) noexcept {
+    return region == AssetPackWorldRegion{ .world = region.world, .dataLayers = region.dataLayers };
+}
+
+[[nodiscard]] bool TakesLayer(const AssetPackWorldRegion& region, std::string_view layer) {
+    return region.dataLayers.empty() || std::ranges::find(region.dataLayers, layer) != region.dataLayers.end();
+}
+
+// The virtual paths of every cell scene and proxy a region takes, read from the world's built
+// cell index in `pack`.
+[[nodiscard]] bool CollectWorldRegion(
+    RuntimeAssetPack& pack,
+    const AssetPackWorldRegion& region,
+    std::set<std::string>& paths,
+    std::string& error) {
+    const std::string indexPath = kb::world::WorldPaths::CellIndexVirtualPath(region.world);
+    const RuntimeAssetManifestEntry* index = pack.FindAsset(indexPath);
+    if (pack.FindAsset(region.world) == nullptr || index == nullptr) {
+        error = "the pack has no built partitioned world " + region.world;
+        return false;
+    }
+    RuntimeAssetPayload payload{};
+    if (const RuntimeAssetPackStatus status = pack.ReadAssetPayload(index->id, RuntimeArtifactEncoding::SourceBytes, {}, payload);
+        status != RuntimeAssetPackStatus::Success || payload.blocks.size() != 1U) {
+        error = "the cell index of " + region.world + " could not be read: " + std::string{ ToString(status) };
+        return false;
+    }
+    const std::vector<std::uint8_t>& bytes = payload.blocks.front().bytes;
+    const kb::world::WorldCellIndexReadResult read =
+        kb::world::WorldCellIndexIO::Parse(std::string_view{ reinterpret_cast<const char*>(bytes.data()), bytes.size() });
+    if (!read.succeeded) {
+        error = "the cell index of " + region.world + " is malformed: " + read.error;
+        return false;
+    }
+    const bool wholeWorld = WholeWorld(region);
+    for (const kb::world::WorldCellUnit& unit : read.index.units) {
+        if (TakesLayer(region, unit.dataLayer) && (unit.persistent ? wholeWorld : InRegion(region, unit.coord))) {
+            paths.insert(kb::world::ResolveWorldCellPath(indexPath, unit.scene));
+        }
+    }
+    if (TakesLayer(region, "")) {
+        for (const kb::world::WorldCellHlod& hlod : read.index.hlods) {
+            if (InRegion(region, hlod.coord)) {
+                paths.insert(kb::world::ResolveWorldCellPath(indexPath, hlod.mesh));
+            }
+        }
+    }
+    return true;
+}
+
 } // namespace
+
+bool ParseAssetPackWorldRegion(std::string_view text, AssetPackWorldRegion& out, std::string& error) {
+    AssetPackWorldRegion region{};
+    std::string_view rest = text;
+    if (const std::size_t hash = rest.find('#'); hash != std::string_view::npos) {
+        for (std::string_view layers = rest.substr(hash + 1U); ;) {
+            const std::size_t comma = layers.find(',');
+            const std::string_view layer = layers.substr(0U, comma);
+            if (layer != kBaseLayerToken && !kb::world::IsValidDataLayerName(layer)) {
+                error = "a world region names an invalid data layer: " + std::string{ text };
+                return false;
+            }
+            region.dataLayers.emplace_back(layer == kBaseLayerToken ? std::string_view{} : layer);
+            if (comma == std::string_view::npos) {
+                break;
+            }
+            layers.remove_prefix(comma + 1U);
+        }
+        rest = rest.substr(0U, hash);
+    }
+    if (const std::size_t at = rest.find('@'); at != std::string_view::npos) {
+        const std::string_view range = rest.substr(at + 1U);
+        const std::size_t dots = range.find("..");
+        if (dots == std::string_view::npos || !ParseCellCoordinate(range.substr(0U, dots), region.min) ||
+            !ParseCellCoordinate(range.substr(dots + 2U), region.max) || region.min.x > region.max.x ||
+            region.min.z > region.max.z) {
+            error = "a world region expects <minX>:<minZ>..<maxX>:<maxZ> after '@': " + std::string{ text };
+            return false;
+        }
+        rest = rest.substr(0U, at);
+    }
+    if (rest.size() < 2U || rest.front() != '/' || !rest.ends_with(kb::world::WorldDescriptor::Extension)) {
+        error = "a world region must name a world's virtual path (/Game/....21kbworld): " + std::string{ text };
+        return false;
+    }
+    region.world = rest;
+    std::ranges::sort(region.dataLayers);
+    region.dataLayers.erase(std::unique(region.dataLayers.begin(), region.dataLayers.end()), region.dataLayers.end());
+    out = std::move(region);
+    return true;
+}
 
 AssetPackToolReport DescribeAssetPack(const AssetPackReader& reader) {
     AssetPackToolReport report{};
@@ -217,11 +329,19 @@ bool SplitRuntimeAssetPack(
     }
     const RuntimeAssetManifest& full = runtime.Manifest();
     std::set<std::string> labels;
-    for (const AssetPackChunkRule& rule : rules) {
-        if (!IsValidBakeCacheName(rule.label) || !labels.insert(rule.label).second || rule.virtualPathPrefixes.empty() ||
-            rule.output.empty()) {
-            error = "chunk rules need distinct valid labels, at least one prefix and an output: " + rule.label;
+    std::vector<std::set<std::string>> regionPaths(rules.size());
+    for (std::size_t index = 0U; index < rules.size(); ++index) {
+        const AssetPackChunkRule& rule = rules[index];
+        if (!IsValidBakeCacheName(rule.label) || !labels.insert(rule.label).second ||
+            (rule.virtualPathPrefixes.empty() && rule.worldRegions.empty()) || rule.output.empty()) {
+            error = "chunk rules need distinct valid labels, at least one prefix or world region and an output: " +
+                rule.label;
             return false;
+        }
+        for (const AssetPackWorldRegion& region : rule.worldRegions) {
+            if (!CollectWorldRegion(runtime, region, regionPaths[index], error)) {
+                return false;
+            }
         }
     }
 
@@ -237,6 +357,10 @@ bool SplitRuntimeAssetPack(
     for (const RuntimeAssetManifestEntry& asset : full.assets) {
         std::size_t target = rules.size();
         for (std::size_t index = 0U; index < rules.size() && target == rules.size(); ++index) {
+            if (regionPaths[index].contains(asset.virtualPath)) {
+                target = index;
+                break;
+            }
             for (const std::string& prefix : rules[index].virtualPathPrefixes) {
                 if (!prefix.empty() && StartsWith(asset.virtualPath, prefix)) {
                     target = index;

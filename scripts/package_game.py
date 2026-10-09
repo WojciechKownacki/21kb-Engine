@@ -79,6 +79,13 @@ DEFAULT_PACK_COMPRESSION_LEVEL = 9
 PACK_SET_INDEX = "Game.kbpackset"
 _PACK_LABEL = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._-]{0,63}")
 _RELEASE_NUMBER_LINE = re.compile(r"^release (0|[1-9][0-9]*)$", re.MULTILINE)
+# A world region a chunk takes, as kb_cli pack split --chunk-cells reads it (ParseAssetPackWorldRegion):
+# <world virtual path>[@<minX>:<minZ>..<maxX>:<maxZ>][#<layer>[,<layer>...]], "(base)" naming the base layer.
+_WORLD_LAYER = r"(?:\(base\)|[A-Za-z0-9_.-]{1,64})"
+_WORLD_REGION = re.compile(
+    r"(/[^@#\\]+\.21kbworld)(?:@(-?[0-9]{1,19}):(-?[0-9]{1,19})\.\.(-?[0-9]{1,19}):(-?[0-9]{1,19}))?"
+    rf"(?:#{_WORLD_LAYER}(?:,{_WORLD_LAYER})*)?"
+)
 
 
 @dataclass(frozen=True)
@@ -298,6 +305,30 @@ def _parse_chunk_rule(text: str) -> tuple[str, tuple[str, ...]]:
     return label, paths
 
 
+def _parse_chunk_cells_rule(text: str) -> tuple[str, str]:
+    label, separator, region = text.partition("=")
+    match = _WORLD_REGION.fullmatch(region)
+    if not separator or not _is_pack_label(label) or match is None:
+        raise PackagingError(
+            "--pack-chunk-cells expects LABEL=/Game/WORLD.21kbworld[@MINX:MINZ..MAXX:MAXZ][#LAYER[,LAYER...]]: " + text
+        )
+    if match.group(2) is not None and (
+        int(match.group(2)) > int(match.group(4)) or int(match.group(3)) > int(match.group(5))
+    ):
+        raise PackagingError(f"--pack-chunk-cells region corners are out of order: {text}")
+    return label, region
+
+
+def _chunk_labels(args: argparse.Namespace) -> list[str]:
+    """Chunk labels in the order kb_cli pack split writes them: --pack-chunk first, then the labels
+    only --pack-chunk-cells names. A label both name is one chunk."""
+    labels = [label for label, _ in getattr(args, "pack_chunk_rules", None) or []]
+    for label, _ in getattr(args, "pack_chunk_cell_rules", None) or []:
+        if label not in labels:
+            labels.append(label)
+    return labels
+
+
 def _parse_pack_set_index(text: str) -> list[tuple[str, str, int, str]]:
     """(role, label, patch level, path) per pack line of a pack set index, in mount order. Key
     lines -- pack content keys wrapped under that release's anchor key -- are left out: the new
@@ -348,12 +379,13 @@ def _validate_content_packaging(args: argparse.Namespace) -> None:
     if not 0 <= args.pack_compression_level <= 19:
         raise PackagingError("pack compression level must be 0 (off) to 19")
     args.pack_chunk_rules = [_parse_chunk_rule(text) for text in args.pack_chunk]
+    args.pack_chunk_cell_rules = [_parse_chunk_cells_rule(text) for text in getattr(args, "pack_chunk_cells", None) or []]
     labels = [label for label, _ in args.pack_chunk_rules]
     if len(set(labels)) != len(labels):
         raise PackagingError("every --pack-chunk needs its own label")
     windows = TARGETS[args.target].platform == "windows"
     world_regions = getattr(args, "pack_chunk_world_regions", False)
-    if (args.pack_chunk_rules or world_regions) and not windows:
+    if (args.pack_chunk_rules or args.pack_chunk_cell_rules or world_regions) and not windows:
         raise PackagingError("chunked pack sets are packaged for Windows players only")
     args.patch_base_entries = None
     if args.patch_from is None:
@@ -362,7 +394,7 @@ def _validate_content_packaging(args: argparse.Namespace) -> None:
         return
     if not windows:
         raise PackagingError("patch packs are packaged for Windows players only")
-    if args.pack_chunk_rules or world_regions:
+    if args.pack_chunk_rules or args.pack_chunk_cell_rules or world_regions:
         raise PackagingError("a patch keeps the chunks of the release it patches; --pack-chunk does not apply")
     previous = args.patch_from.expanduser().resolve(strict=True)
     manifest = previous / "release.kbmanifest"
@@ -779,15 +811,20 @@ def _build_pack_set(args: argparse.Namespace, cmake: Path, pack: Path, job: Path
     (--patch-from), the packs of the release being patched plus one patch pack carrying what the
     new cook changed. The new pack set is recorded on `args` for the Windows stage."""
     chunk_rules = list(getattr(args, "pack_chunk_rules", None) or [])
+    cell_rules = getattr(args, "pack_chunk_cell_rules", None) or []
     if getattr(args, "pack_chunk_world_regions", False):
+        if cell_rules:
+            raise PackagingError("--pack-chunk-world-regions and --pack-chunk-cells both place world cells; use one")
         chunk_rules.extend(_world_region_chunk_rules(args, _kb_cli(args, cmake), job, chunk_rules))
-    if not chunk_rules and getattr(args, "patch_base_entries", None) is None:
+        # Region chunks then count as --pack-chunk rules, so later stages find their packs by label.
+        args.pack_chunk_rules = chunk_rules
+    if not chunk_rules and not cell_rules and getattr(args, "patch_base_entries", None) is None:
         pack_set = PackSet((pack,), ((pack, "Game.kbpack"),), None)
         args.pack_set = pack_set
         return pack_set
     kb_cli = _kb_cli(args, cmake)
     level = str(args.pack_compression_level)
-    if chunk_rules:
+    if chunk_rules or cell_rules:
         cooked = pack.parent / "unsplit" / pack.name
         cooked.parent.mkdir(exist_ok=True)
         pack.replace(cooked)
@@ -795,9 +832,11 @@ def _build_pack_set(args: argparse.Namespace, cmake: Path, pack: Path, job: Path
         command: list[Path | str] = [kb_cli, "pack", "split", "--base", pack, "--level", level, "--index", index]
         for label, prefixes in chunk_rules:
             command.extend(("--chunk", f"{label}={','.join(prefixes)}"))
+        for label, region in cell_rules:
+            command.extend(("--chunk-cells", f"{label}={region}"))
         command.append(cooked)
         run_checked(command, cwd=job, timeout_seconds=3600, on_line=lambda line: emit_diagnostic("Info", line))
-        chunks = [pack.with_name(f"Game.{label}.kbpack") for label, _ in chunk_rules]
+        chunks = [pack.with_name(f"Game.{label}.kbpack") for label in _chunk_labels(args)]
         for path in (pack, *chunks, index):
             if not path.is_file():
                 raise PackagingError(f"pack split did not produce {path.name}")
@@ -2210,6 +2249,10 @@ def _parse_arguments(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--pack-chunk", action="append", default=[], metavar="LABEL=/Game/PREFIX[,...]")
     parser.add_argument("--pack-chunk-world-regions", action="store_true",
                         help="put every region of every partitioned world into a chunk pack of its own")
+    parser.add_argument(
+        "--pack-chunk-cells", action="append", default=[],
+        metavar="LABEL=/Game/WORLD.21kbworld[@MINX:MINZ..MAXX:MAXZ][#LAYER,...]",
+    )
     parser.add_argument("--patch-from", type=Path)
     parser.add_argument("--patch-level", type=int)
     parser.add_argument("--release-number", type=int)

@@ -52,7 +52,9 @@ Commands:
                  info <pack.kbpack>
                  compress [--level <0-19>] <input.kbpack> <output.kbpack>
                  split --base <base.kbpack> --chunk <label>=<prefix>[,...]
-                       [--chunk ...] [--level <0-19>] [--index <file>]
+                       [--chunk ...] [--chunk-cells <label>=<world.21kbworld>
+                       [@<x0>:<z0>..<x1>:<z1>][#<layer>,...] ...]
+                       [--level <0-19>] [--index <file>]
                        <cooked.kbpack>
                  patch --current <Game.kbpackset | Game.kbpack>
                        --patch-level <n> --output <patch.kbpack>
