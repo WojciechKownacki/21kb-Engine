@@ -18,5 +18,6 @@ namespace kb::cli {
 [[nodiscard]] int RunKeysCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunPackCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunReleaseCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunWorldCommand(const ArgumentList& arguments, CommandIo io);
 
 } // namespace kb::cli
