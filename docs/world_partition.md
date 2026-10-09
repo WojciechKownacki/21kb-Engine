@@ -197,10 +197,17 @@ The build turns the object files into cell scenes (`.21kbscene` with `.meta`), H
 cell index:
 
 - **Editor:** World > Build World and HLODs.
-- **kb_cli:** `kb_cli world build --project <dir> --world Assets/Worlds/Forest.21kbworld` builds the
-  cells and the index; it has no mesh loaders, so it writes no HLOD proxies.
-- **kb_cooker:** builds every world under the content root, with HLOD proxies, before it collects
-  the assets to package.
+- **kb_cli:** `kb_cli world build --project <dir> --world Assets/Worlds/Forest.21kbworld`. Without
+  `--project` the project is found in the nearest folder above the world that holds a
+  `.21kbproject` file.
+- **kb_cooker:** builds every world under the content root before it collects the assets to
+  package.
+
+All three run one build, `kb::render::BuildWorldWithHlod` (the world's `WorldCellBuilder` with the
+renderer's mesh loaders and HLOD baker), over the project's content root mounted as `/Game`, so a
+world built from the editor, the command line or a cook is byte-identical: cell scenes, cell index
+and HLOD proxies. A kb_cli configured without the renderer (`KB_BUILD_RENDERER=OFF`) has no mesh
+geometry and builds the cells and the index only, and says so.
 
 The build fails with a message naming the object when an object uses an undeclared data layer,
 links to a node no object of the world contains, is linked to an object in another layer, or lies
@@ -239,7 +246,7 @@ coordinates exactly up to 2^53.
 | --- | --- |
 | `kb_engine_tests world-partition` | Grid math with 64-bit cells, world/index/object file round trips and validation, scene migration (deterministic, scene untouched), region editing with unsaved edits across unloads, save of only changed files, reload rebinding, the build (units, layers, persistent objects, linked objects, stale output removal, error cases), streaming with hysteresis, stream focus sources, data layers (also through the script API), HLOD swapping, memory and request budgets, eviction, determinism of the decisions. |
 | `kb_renderer_tests world-hlod` | HLOD merging, material slots, simplification and cell-local placement; the proxy loads as a regular mesh asset after a world build. |
-| `kb_game_core_tests --partitioned-world` | kb_cooker builds the world, packages its cells, index and proxies, and the packaged runtime streams the cells. |
-| `kb_cli_tests` | `kb_cli world migrate` and `kb_cli world build`. |
-| `kb_editor_world_partition_headless` | Editor conversion, region load and unload, layer and always-loaded edits, save, build, grid display and streaming of a placed world in Play mode. |
+| `kb_game_core_tests --partitioned-world` | kb_cli and kb_cooker build a world byte-identically; kb_cooker packages its cells, index and proxies, and the packaged runtime streams the cells. |
+| `kb_cli_tests` | `kb_cli world migrate` and `kb_cli world build`, including HLOD proxies and finding the project. |
+| `kb_editor_world_partition_headless` | Editor conversion, region load and unload, layer and always-loaded edits, save, build (byte-identical to the kb_cli/kb_cooker build), grid display and streaming of a placed world in Play mode. |
 | `scripts/tests/test_package_game.py` | The package job cooks a snapshot carrying the world and its object files. |

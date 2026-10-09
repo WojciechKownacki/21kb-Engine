@@ -2,7 +2,7 @@
 
 #include "engine/assets/AssetManager.hpp"
 #include "engine/world/WorldPartitionGrid.hpp"
-#include "kb/render/world/WorldHlodMeshBaker.hpp"
+#include "kb/render/world/WorldBuildTool.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -121,8 +121,7 @@ kb::world::WorldBuildResult EditorWorldPartition::Build(kb::assets::AssetManager
     if (!session_.IsOpen()) {
         return { .succeeded = false, .report = {}, .error = "no world is open" };
     }
-    kb::render::WorldHlodMeshBaker baker{ assets };
-    return kb::world::WorldCellBuilder::Build(session_.DescriptorPath(), &baker);
+    return kb::render::BuildWorldWithHlod(assets, session_.DescriptorPath());
 }
 
 bool EditorWorldPartition::CycleDataLayer(kb::scene::SceneEntity root, std::string& layer, std::string& error) {

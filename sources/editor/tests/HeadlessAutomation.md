@@ -167,6 +167,7 @@ scenario-local aliases.
 | `assert_world` | optional `open` (default `true`), `loaded_objects`, `loaded_cells`, `occupied_cells`, `grid_lines`, `object_files` |
 | `assert_world_object` | `entity` or `name`; optional `layer`, `always_loaded`, `loaded`, `x`, `z` |
 | `assert_world_build` | project-relative world `path`; optional `cells`, `hlods`, `persistent`, `layered` counts read from the built cell index |
+| `assert_world_build_matches_tools` | project-relative world `path`; rebuilds it from a copy of the project's content with the build kb_cli and kb_cooker run and requires byte-identical cells, index and HLOD proxies |
 | `assign_world` | `entity` with a Content Instance, `world` alias or virtual path; places the partitioned world through that component |
 | `assert_world_cell` | world owner `entity`, `state` (`unloaded`, `loading`, `loaded`, `unloading`, `failed`), integer `x`,`z` or `persistent`; optional `layer`, `hlod_visible`, `timeout_ms` (keeps Play mode ticking until the state arrives) |
 | `save_scene`, `open_scene` | optional `path`; `save_scene` also accepts a positive `max_ms` budget |

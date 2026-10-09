@@ -81,6 +81,7 @@
 #include "engine/visual/VisualGraphDebugSession.hpp"
 #include "engine/world/WorldCellIndex.hpp"
 #include "engine/world/WorldPartitionRuntime.hpp"
+#include "kb/render/world/WorldBuildTool.hpp"
 #include "project/EditorProjectPaths.hpp"
 #include "scene/EditorPluginCatalog.hpp"
 #include "scene/EditorSceneContext.hpp"
@@ -872,6 +873,41 @@ ReadScriptValue(
         const bool matched = expect("cells", index.index.units.size()) && expect("hlods", index.index.hlods.size()) &&
             expect("persistent", persistent) && expect("layered", layered);
         return StepOutcome{ matched && error.empty(), error.empty() ? detail : error };
+    }
+    if (operation == "assert_world_build_matches_tools") {
+        // Rebuilds the world from a copy of the project's content with the build kb_cli and
+        // kb_cooker run, and requires every file of the editor's build to match it byte for byte.
+        const auto path = StringMember(step, "path", error);
+        if (!path) return StepOutcome{ false, error };
+        const auto resolved = ResolveProjectPath(*path, error);
+        if (!resolved) return StepOutcome{ false, error };
+        const std::filesystem::path assets = EditorProjectPaths::AssetsRoot();
+        const std::filesystem::path relative = resolved->lexically_relative(assets);
+        if (relative.empty() || *relative.begin() == "..") return StepOutcome{ false, "the world is not inside the project's content" };
+        const std::filesystem::path copy = state.automation.ArtifactRoot() / "world-build-tools";
+        std::error_code code;
+        std::filesystem::remove_all(copy, code);
+        std::filesystem::copy(assets, copy, std::filesystem::copy_options::recursive, code);
+        if (code) return StepOutcome{ false, "project content could not be copied: " + code.message() };
+        const kb::world::WorldBuildResult built = kb::render::BuildWorldFromContentRoot(copy, copy / relative);
+        if (!built.succeeded) return StepOutcome{ false, built.error };
+        const auto tree = [](const std::filesystem::path& root) {
+            std::map<std::string, std::vector<std::uint8_t>> files;
+            for (const std::filesystem::directory_entry& entry : std::filesystem::recursive_directory_iterator{ root }) {
+                if (!entry.is_regular_file()) continue;
+                std::ifstream input{ entry.path(), std::ios::binary };
+                files.emplace(entry.path().lexically_relative(root).generic_string(),
+                    std::vector<std::uint8_t>{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} });
+            }
+            return files;
+        };
+        const auto editorFiles = tree(kb::world::WorldPaths::CellsDirectory(*resolved));
+        const auto toolFiles = tree(kb::world::WorldPaths::CellsDirectory(copy / relative));
+        std::size_t proxies = 0U;
+        for (const auto& [name, bytes] : editorFiles) proxies += name.ends_with(".obj") ? 1U : 0U;
+        return StepOutcome{ !editorFiles.empty() && editorFiles == toolFiles,
+            std::to_string(editorFiles.size()) + " file(s), " + std::to_string(proxies) + " HLOD proxies, " +
+                (editorFiles == toolFiles ? "identical" : "different") };
     }
     if (operation == "assign_world") {
         const auto alias = StringMember(step, "entity", error);

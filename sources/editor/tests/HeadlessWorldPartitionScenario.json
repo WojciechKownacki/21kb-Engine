@@ -56,6 +56,7 @@
 
     { "op": "world_build" },
     { "op": "assert_world_build", "path": "Assets/Scenes/Level.21kbworld", "cells": 3, "hlods": 1, "persistent": 1, "layered": 1 },
+    { "op": "assert_world_build_matches_tools", "path": "Assets/Scenes/Level.21kbworld" },
     { "op": "assert_file", "path": "Assets/Scenes/Level.cells/Level.21kbcells", "contains": "21kb.world-cells/v1" },
     { "op": "assert_file", "path": "Assets/Scenes/Level.cells/hlod/h_0_0.obj", "contains": "usemtl slot0" },
 

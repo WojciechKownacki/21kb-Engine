@@ -2675,32 +2675,48 @@ void RunWorldCommandTests() {
     std::filesystem::remove_all(root, error);
     std::filesystem::create_directories(root, error);
     Require(!error, "kb_cli world test root could not be prepared");
+    WriteProjectDescriptor(root, false);
+    WriteTextFile(root / "Assets" / "Meshes" / "Rock.obj",
+        "v 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\nvn 0 0 1\nusemtl stone\nf 1//1 2//1 3//1\nf 1//1 3//1 4//1\n");
     {
         kb::scene::Scene scene;
         for (int index = 0; index < 3; ++index) {
             kb::scene::SceneObjectDesc desc{ .name = "Rock" + std::to_string(index) };
             desc.transform.localPosition = { static_cast<float>(index) * 100.0F, 0.0F, 0.0F };
-            static_cast<void>(scene.Entities().CreateObject(desc));
+            const kb::scene::SceneObject rock = scene.Entities().CreateObject(desc);
+            if (index == 0) {
+                // The proxy of this rock's cell is built from the project's mesh.
+                scene.Components().MeshRenderers().Set(rock.Entity(), kb::scene::MeshRendererComponent{
+                    .meshAssetId = kb::assets::MakeAssetId(kb::assets::NormalizeAssetPath("/Game/Meshes/Rock.obj") + ":RenderMesh").value });
+            }
         }
-        Require(kb::scene::SceneDocumentService::Save(scene, root / "Level.21kbscene", "Level"), "kb_cli world test scene could not be saved");
+        Require(kb::scene::SceneDocumentService::Save(scene, root / "Assets" / "Level.21kbscene", "Level"),
+            "kb_cli world test scene could not be saved");
     }
     const std::string rootText = root.string();
     const CommandRun usage = Run(&kb::cli::RunWorldCommand, { "migrate", "--scene", "Level.21kbscene" });
     Require(usage.exitCode == 1 && Contains(usage.output, "--out"), "world migrate accepted a missing --out");
     const CommandRun migrate = Run(&kb::cli::RunWorldCommand, {
-        "migrate", "--project", rootText, "--scene", "Level.21kbscene", "--out", "Level.21kbworld", "--cell-size", "64" });
+        "migrate", "--project", rootText, "--scene", "Assets/Level.21kbscene", "--out", "Assets/Level.21kbworld", "--cell-size", "64" });
     Require(migrate.exitCode == 0 && Contains(migrate.output, "migrated 3 objects"), "world migrate failed");
-    Require(kb::world::WorldObjectFileIO::List(root / "Level.objects").size() == 3U, "world migrate did not write one file per object");
-    const kb::world::WorldDescriptorReadResult descriptor = kb::world::WorldDescriptorIO::Read(root / "Level.21kbworld");
+    Require(kb::world::WorldObjectFileIO::List(root / "Assets" / "Level.objects").size() == 3U, "world migrate did not write one file per object");
+    const kb::world::WorldDescriptorReadResult descriptor = kb::world::WorldDescriptorIO::Read(root / "Assets" / "Level.21kbworld");
     Require(descriptor.succeeded && descriptor.descriptor.cellSize == 64.0, "world migrate did not apply the cell size");
     const CommandRun again = Run(&kb::cli::RunWorldCommand, {
-        "migrate", "--project", rootText, "--scene", "Level.21kbscene", "--out", "Level.21kbworld" });
+        "migrate", "--project", rootText, "--scene", "Assets/Level.21kbscene", "--out", "Assets/Level.21kbworld" });
     Require(again.exitCode == 1 && Contains(again.output, "already exists"), "world migrate overwrote an existing world");
-    const CommandRun build = Run(&kb::cli::RunWorldCommand, { "build", "--project", rootText, "--world", "Level.21kbworld" });
-    Require(build.exitCode == 0 && Contains(build.output, "built 3 cells from 3 objects"), "world build failed");
+    // Without --project the build finds the project above the world.
+    const CommandRun build = Run(&kb::cli::RunWorldCommand, { "build", "--world", (root / "Assets" / "Level.21kbworld").string() });
+    Require(build.exitCode == 0 && Contains(build.output, "built 3 cells and 1 HLOD proxies from 3 objects"), build.output.c_str());
     const kb::world::WorldCellIndexReadResult index =
-        kb::world::WorldCellIndexIO::Read(kb::world::WorldPaths::CellIndexPath(root / "Level.21kbworld"));
-    Require(index.succeeded && index.index.units.size() == 3U, "world build did not write the cell index");
+        kb::world::WorldCellIndexIO::Read(kb::world::WorldPaths::CellIndexPath(root / "Assets" / "Level.21kbworld"));
+    Require(index.succeeded && index.index.units.size() == 3U && index.index.hlods.size() == 1U, "world build did not write cells and the proxy");
+    std::filesystem::create_directories(TestRoot() / "world_without_project", error);
+    std::filesystem::copy(root / "Assets" / "Level.21kbworld", TestRoot() / "world_without_project" / "Level.21kbworld",
+        std::filesystem::copy_options::overwrite_existing, error);
+    const CommandRun orphan = Run(&kb::cli::RunWorldCommand, { "build", "--project", (TestRoot() / "world_without_project").string(),
+        "--world", (TestRoot() / "world_without_project" / "Level.21kbworld").string() });
+    Require(orphan.exitCode == 1 && Contains(orphan.output, "--project"), "a folder without a project file is not a project");
     const CommandRun unknown = Run(&kb::cli::RunWorldCommand, { "explode" });
     Require(unknown.exitCode == 1, "world accepted an unknown subcommand");
 }

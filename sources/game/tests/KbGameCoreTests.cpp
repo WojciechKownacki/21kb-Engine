@@ -39,6 +39,7 @@
 #include "engine/world/WorldDescriptor.hpp"
 #include "engine/world/WorldObjectFile.hpp"
 #include "engine/world/WorldPartitionRuntime.hpp"
+#include "CliCommands.hpp"
 #include "engine/security/ReleaseKeys.hpp"
 #include "engine/security/ReleaseManifest.hpp"
 #include "engine/save/SaveGameService.hpp"
@@ -1093,12 +1094,15 @@ void RunWindowsRuntimeModulePackagingTests() {
         "Windows cooker accepted a missing custom module DLL");
 }
 
-// A partitioned world placed in the default map ships as its built cells: the cooker builds
-// the world from its object files, follows world -> cell index -> cells and HLOD proxies,
-// and the packaged runtime streams the cells without any loose file.
-void RunPartitionedWorldCookTest() {
-    namespace bake = kb::assets::bake;
-    const Fixture fixture = BuildFixture(TestRoot() / "partitioned_world", "Project");
+struct PartitionedWorldFixture {
+    Fixture fixture;
+    std::uint64_t worldId = 0U;
+};
+
+// A project whose default map places Forest.21kbworld: 64 m cells, three rocks with a mesh along
+// X, a night-only lamp, HLOD proxies enabled.
+[[nodiscard]] PartitionedWorldFixture BuildPartitionedWorldFixture(std::string_view name) {
+    const Fixture fixture = BuildFixture(TestRoot() / name, "Project");
     WriteTextFile(fixture.root / "Assets" / "Meshes" / "Rock.obj",
         "v 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\nvt 0 0\nvt 1 0\nvt 1 1\nvt 0 1\nvn 0 0 1\n"
         "usemtl stone\nf 1/1/1 2/2/1 3/3/1\nf 1/1/1 3/3/1 4/4/1\n");
@@ -1154,6 +1158,60 @@ void RunPartitionedWorldCookTest() {
     settings.physicsLayersAsset.clear();
     settings.inputEnabled = false;
     WriteSettings(fixture.root, settings);
+    return { .fixture = fixture, .worldId = worldId };
+}
+
+// Relative path -> bytes of every file below `root`.
+[[nodiscard]] std::map<std::string, std::string> FileTree(const std::filesystem::path& root) {
+    std::map<std::string, std::string> files;
+    for (const std::filesystem::directory_entry& entry : std::filesystem::recursive_directory_iterator{ root }) {
+        if (!entry.is_regular_file()) continue;
+        std::ifstream input{ entry.path(), std::ios::binary };
+        files.emplace(entry.path().lexically_relative(root).generic_string(),
+            std::string{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} });
+    }
+    return files;
+}
+
+// kb_cli, kb_cooker and the editor run one world build (kb::render::BuildWorldWithHlod): the
+// same project yields byte-identical cells, cell index and HLOD proxies from the command line
+// and from a cook. The editor side is compared by the world partition headless scenario.
+void RunWorldBuildAgreementTest() {
+    const PartitionedWorldFixture world = BuildPartitionedWorldFixture("world_build_cli");
+    const std::filesystem::path cookedProject = TestRoot() / "world_build_cook";
+    std::filesystem::copy(world.fixture.root, cookedProject, std::filesystem::copy_options::recursive);
+
+    const std::vector<std::string> arguments{ "build", "--project", world.fixture.root.string(),
+        "--world", (world.fixture.root / "Assets" / "Worlds" / "Forest.21kbworld").string() };
+    const kb::cli::ArgumentList parsed{ arguments };
+    std::ostringstream output;
+    Require(kb::cli::RunWorldCommand(parsed, kb::cli::CommandIo{ .out = output, .err = output }) == 0, output.str().c_str());
+    Require(Mentions(output.str(), "built 4 cells and 3 HLOD proxies"), "kb_cli world build did not build the proxies");
+
+    std::ostringstream diagnostics;
+    const kb::game::ProjectCookResult cooked = kb::game::CookProject(
+        kb::game::ProjectCookRequest{ .projectPath = cookedProject, .targetProfileId = "Windows.x64",
+            .outputPackPath = TestRoot() / "world_build_package" / "Game.kbpack" },
+        diagnostics);
+    Require(cooked.succeeded, cooked.error.c_str());
+
+    const std::map<std::string, std::string> fromCli = FileTree(world.fixture.root / "Assets" / "Worlds" / "Forest.cells");
+    const std::map<std::string, std::string> fromCook = FileTree(cookedProject / "Assets" / "Worlds" / "Forest.cells");
+    const std::size_t proxies = static_cast<std::size_t>(std::ranges::count_if(fromCli, [](const auto& file) {
+        return file.first.ends_with(".obj") && Mentions(file.second, "usemtl slot0");
+    }));
+    Require(proxies == 3U, "kb_cli did not write the three HLOD proxies");
+    Require(fromCli == fromCook, "kb_cli and kb_cooker built the same world differently");
+}
+
+// A partitioned world placed in the default map ships as its built cells: the cooker builds
+// the world from its object files, follows world -> cell index -> cells and HLOD proxies,
+// and the packaged runtime streams the cells without any loose file.
+void RunPartitionedWorldCookTest() {
+    namespace bake = kb::assets::bake;
+    const PartitionedWorldFixture placed = BuildPartitionedWorldFixture("partitioned_world");
+    const Fixture& fixture = placed.fixture;
+    const std::uint64_t worldId = placed.worldId;
     const std::filesystem::path packPath = TestRoot() / "partitioned_world_package" / "Game.kbpack";
     std::ostringstream diagnostics;
     const kb::game::ProjectCookResult cooked = kb::game::CookProject(
@@ -1957,6 +2015,7 @@ int main(int argc, char** argv) {
         return EXIT_SUCCESS;
     }
     if (argc == 2 && std::string_view{ argv[1] } == "--partitioned-world") {
+        RunWorldBuildAgreementTest();
         RunPartitionedWorldCookTest();
         std::fputs("kb_game_core partitioned world package tests passed\n", stdout);
         return EXIT_SUCCESS;
@@ -1976,6 +2035,7 @@ int main(int argc, char** argv) {
     RunWindowsRuntimeModulePackagingTests();
     RunNativeBehaviourPackagingTests();
     RunSceneMetaCookValidationTests();
+    RunWorldBuildAgreementTest();
     RunPartitionedWorldCookTest();
     RunAuthoritativeMaterialGraphCookTest();
     RunNarrowingTests();
