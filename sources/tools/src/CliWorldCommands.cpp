@@ -130,6 +130,10 @@ namespace {
     }
     io.out << "built " << built.report.unitCount << " cells and " << built.report.hlodCount << " HLOD proxies from "
            << built.report.objectCount << " objects into " << kb::world::WorldPaths::CellsDirectory(world).generic_string() << '\n';
+    if (built.report.navMeshCount != 0U) {
+        io.out << "baked " << built.report.navTileCount << " navigation tiles into " << built.report.navMeshCount << " cell navigation meshes in "
+               << static_cast<long long>(built.report.navBakeMilliseconds) << " ms\n";
+    }
     return 0;
 }
 
@@ -170,6 +174,11 @@ namespace {
 }
 
 } // namespace
+
+std::optional<std::filesystem::path> FindProjectContentRoot(
+    const std::optional<std::string>& project, const std::filesystem::path& path, std::string& error) {
+    return ContentRoot(project, path, error);
+}
 
 int RunWorldCommand(const ArgumentList& arguments, CommandIo io) {
     const std::vector<std::string>& positionals = arguments.Positionals();

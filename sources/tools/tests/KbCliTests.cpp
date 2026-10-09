@@ -9,6 +9,7 @@
 #include "engine/assets/bake/BakeTargetProfile.hpp"
 #include "engine/input/InputAssetIO.hpp"
 #include "engine/input/InputKey.hpp"
+#include "engine/navigation/NavMeshAsset.hpp"
 #include "engine/project/ProjectSettings.hpp"
 #include "engine/project/ProjectManager.hpp"
 #include "engine/scene/Scene.hpp"
@@ -2906,6 +2907,78 @@ void RunWorldCommandTests() {
     Require(unknown.exitCode == 1, "world accepted an unknown subcommand");
 }
 
+void RunNavMeshCommandTests() {
+    const std::filesystem::path root = TestRoot() / "navmesh";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    Require(!error, "kb_cli navmesh test root could not be prepared");
+    WriteProjectDescriptor(root, false);
+    // A horizontal 10 x 10 m plate as an imported mesh.
+    WriteTextFile(root / "Assets" / "Meshes" / "Plate.obj",
+        "v -5 0 -5\nv 5 0 -5\nv 5 0 5\nv -5 0 5\nvn 0 1 0\nusemtl stone\nf 1//1 4//1 3//1\nf 1//1 3//1 2//1\n");
+    {
+        kb::scene::Scene scene;
+        const kb::scene::SceneObject floor = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+            .name = "Floor", .transform = kb::scene::TransformComponent{ .localPosition = { 0.0F, -0.5F, 0.0F } } });
+        scene.Components().Colliders().Set(floor.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Box, .boxSize = { 20.0F, 1.0F, 20.0F } });
+        const kb::scene::SceneObject plate = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+            .name = "Plate", .transform = kb::scene::TransformComponent{ .localPosition = { 60.0F, 2.0F, 0.0F } } });
+        scene.Components().MeshRenderers().Set(plate.Entity(), kb::scene::MeshRendererComponent{
+            .meshAssetId = kb::assets::MakeAssetId(kb::assets::NormalizeAssetPath("/Game/Meshes/Plate.obj") + ":RenderMesh").value });
+        Require(kb::scene::SceneDocumentService::Save(scene, root / "Assets" / "Level.21kbscene", "Level"),
+            "kb_cli navmesh test scene could not be saved");
+    }
+    const std::string rootText = root.string();
+    const CommandRun missing = Run(&kb::cli::RunNavMeshCommand, { "bake" });
+    Require(missing.exitCode == 1 && Contains(missing.output, "--scene"), "navmesh bake accepted a missing --scene");
+    const CommandRun bake = Run(&kb::cli::RunNavMeshCommand, { "bake", "--project", rootText, "--scene", "Assets/Level.21kbscene" });
+    Require(bake.exitCode == 0 && Contains(bake.output, "baked ") && Contains(bake.output, "1 colliders"), bake.output.c_str());
+    const kb::navigation::NavMeshAssetReadResult baked = kb::navigation::NavMeshAssetIO::Read(root / "Assets" / "Level.21kbnavmesh");
+    Require(baked.succeeded && !baked.asset.tiles.empty(), "navmesh bake did not write <scene>.21kbnavmesh");
+    const double tileSize = baked.asset.settings.TileWorldSize();
+    const bool floorTiles = std::ranges::any_of(baked.asset.tiles, [&](const kb::navigation::NavTile& tile) { return tile.coord.x * tileSize < 5.0; });
+    const bool plateTiles = std::ranges::any_of(baked.asset.tiles, [&](const kb::navigation::NavTile& tile) { return tile.coord.x * tileSize > 50.0; });
+    Require(floorTiles, "navmesh bake left out the collider floor");
+#if defined(KB_CLI_WORLD_HLOD)
+    Require(plateTiles && Contains(bake.output, "from 1 meshes"), "navmesh bake left out the imported mesh");
+#else
+    Require(!plateTiles, "a kb_cli without the renderer cannot read imported meshes");
+#endif
+    const CommandRun profiles = Run(&kb::cli::RunNavMeshCommand, { "bake", "--project", rootText, "--scene", "Assets/Level.21kbscene",
+        "--cell-size", "0.3", "--agent", "Small:0.3:1.6:0.3:40", "--agent", "Large:1:2.5:0.5:30" });
+    Require(profiles.exitCode == 0, profiles.output.c_str());
+    const CommandRun info = Run(&kb::cli::RunNavMeshCommand, { "info", (root / "Assets" / "Level.21kbnavmesh").string() });
+    Require(info.exitCode == 0 && Contains(info.output, "cell size 0.3") && Contains(info.output, "agent Small") && Contains(info.output, "agent Large"),
+        info.output.c_str());
+    // Settings not given are kept from the mesh being replaced.
+    const CommandRun kept = Run(&kb::cli::RunNavMeshCommand, { "bake", "--project", rootText, "--scene", "Assets/Level.21kbscene" });
+    const kb::navigation::NavMeshAssetReadResult rebaked = kb::navigation::NavMeshAssetIO::Read(root / "Assets" / "Level.21kbnavmesh");
+    Require(kept.exitCode == 0 && rebaked.succeeded && rebaked.asset.settings.profiles.size() == 2U && rebaked.asset.settings.cellSize == 0.3F,
+        "navmesh bake must keep the settings of the mesh it replaces");
+    const CommandRun badAgent = Run(&kb::cli::RunNavMeshCommand, { "bake", "--project", rootText, "--scene", "Assets/Level.21kbscene", "--agent", "Tiny:x" });
+    Require(badAgent.exitCode == 1 && Contains(badAgent.output, "--agent"), "navmesh bake accepted a malformed agent");
+    const CommandRun unknown = Run(&kb::cli::RunNavMeshCommand, { "explode" });
+    Require(unknown.exitCode == 1, "navmesh accepted an unknown subcommand");
+
+    // A world that enables navigation gets cell navigation meshes from world build.
+    const CommandRun migrate = Run(&kb::cli::RunWorldCommand, {
+        "migrate", "--project", rootText, "--scene", "Assets/Level.21kbscene", "--out", "Assets/Level.21kbworld", "--cell-size", "64" });
+    Require(migrate.exitCode == 0, migrate.output.c_str());
+    kb::world::WorldDescriptorReadResult descriptor = kb::world::WorldDescriptorIO::Read(root / "Assets" / "Level.21kbworld");
+    Require(descriptor.succeeded, "the migrated world could not be read");
+    descriptor.descriptor.navigation.enabled = true;
+    std::string writeError;
+    Require(kb::world::WorldDescriptorIO::Write(root / "Assets" / "Level.21kbworld", descriptor.descriptor, writeError), writeError.c_str());
+    const CommandRun build = Run(&kb::cli::RunWorldCommand, { "build", "--world", (root / "Assets" / "Level.21kbworld").string() });
+    Require(build.exitCode == 0 && Contains(build.output, "navigation tiles into"), build.output.c_str());
+    const kb::world::WorldCellIndexReadResult index =
+        kb::world::WorldCellIndexIO::Read(kb::world::WorldPaths::CellIndexPath(root / "Assets" / "Level.21kbworld"));
+    Require(index.succeeded && !index.index.navMeshes.empty(), "world build did not write the cells' navigation meshes");
+    const CommandRun chunks = Run(&kb::cli::RunWorldCommand, { "chunks", "--project", rootText });
+    Require(chunks.exitCode == 0 && Contains(chunks.output, "/Game/Level.cells/nav/r_0_0/"), chunks.output.c_str());
+}
+
 int main() {
     RunMiniJsonTests();
     RunArgumentListTests();
@@ -2919,6 +2992,7 @@ int main() {
     RunMcpCommandTests();
     RunKeyAndPackCommandTests();
     RunWorldCommandTests();
+    RunNavMeshCommandTests();
     RunPackSetCommandTests();
     RunEncryptedPatchCommandTests();
     // Keep the production physics fixture on disk after the test process so

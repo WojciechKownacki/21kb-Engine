@@ -79,6 +79,17 @@ Commands:
                exactly as the editor and kb_cooker do.
                  chunks --project <dir> [--exclude <prefix>[,<prefix>...]]
                chunks prints one pack chunk rule per region of every built world.
+               A world whose file enables navigation also gets one navigation
+               mesh per cell from build.
+  navmesh      Bake a scene's navigation mesh, or describe a baked one.
+                 bake --scene <file.21kbscene> [--project <dir>]
+                      [--out <file.21kbnavmesh>] [--cell-size <metres>]
+                      [--cell-height <metres>] [--tile-cells <n>]
+                      [--agent <name>:<radius>:<height>:<climb>:<slope>]...
+               bake writes <scene>.21kbnavmesh by default, exactly as the
+               editor's Bake Navigation Mesh does; settings not given are
+               those of the mesh it replaces, else the defaults.
+                 info <file.21kbnavmesh>
 
 Scene paths may be physical (relative to the project root) or virtual
 ("/Game/Scenes/Main.21kbscene", requires --project).
@@ -148,6 +159,9 @@ int main(int argc, char** argv) {
     }
     if (command == "world") {
         return kb::cli::RunWorldCommand(arguments, io);
+    }
+    if (command == "navmesh") {
+        return kb::cli::RunNavMeshCommand(arguments, io);
     }
     if (command == "help" || command == "--help" || command == "-h") {
         std::cout << kUsage;
