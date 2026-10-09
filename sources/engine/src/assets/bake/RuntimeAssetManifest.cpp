@@ -19,6 +19,8 @@ namespace {
 
 constexpr std::array<std::uint8_t, 8U> kMagic{ '2', '1', 'K', 'B', 'R', 'M', 'F', 0U };
 constexpr std::array<std::uint8_t, 8U> kSourceMagic{ '2', '1', 'K', 'B', 'S', 'R', 'C', 0U };
+// The word after the version: once reserved and zero, now flags. Bit 0 marks a partial manifest.
+constexpr std::uint32_t kPartialManifestFlag = 1U;
 constexpr std::uint64_t kMaxManifestBytes = 64ULL * 1024ULL * 1024ULL;
 constexpr std::uint32_t kMaxDescriptorTargetPlatforms =
     kb::project::ProjectDescriptorFormat::MaxTargetPlatformCount;
@@ -278,8 +280,8 @@ private:
 
     const auto defaultMap = std::ranges::find(
         manifest.assets, manifest.settings.defaultMap, &RuntimeAssetManifestEntry::virtualPath);
-    if (defaultMap == manifest.assets.end() || defaultMap->type != "Scene" ||
-        !defaultMap->runtimeLoadable) {
+    if (defaultMap == manifest.assets.end() ? !manifest.partial
+                                            : (defaultMap->type != "Scene" || !defaultMap->runtimeLoadable)) {
         return RuntimeAssetManifestStatus::InvalidProject;
     }
 
@@ -432,7 +434,8 @@ RuntimeAssetManifestStatus EncodeRuntimeAssetManifest(
     std::vector<std::uint8_t> bytes;
     bytes.insert(bytes.end(), kMagic.begin(), kMagic.end());
     PutUInt32(bytes, kRuntimeAssetManifestVersion);
-    PutUInt32(bytes, 0U);
+    // Flags. Zero for a complete manifest, which keeps its bytes what they always were.
+    PutUInt32(bytes, canonical.partial ? kPartialManifestFlag : 0U);
     PutString(bytes, canonical.targetProfileId);
     PutUInt64(bytes, canonical.targetProfileHash);
     EncodeDescriptor(bytes, canonical.descriptor);
@@ -497,11 +500,12 @@ RuntimeAssetManifestStatus DecodeRuntimeAssetManifest(
     if (version != kRuntimeAssetManifestVersion) {
         return RuntimeAssetManifestStatus::UnsupportedVersion;
     }
-    if (!reader.ReadUInt32(reserved) || reserved != 0U ||
+    if (!reader.ReadUInt32(reserved) || (reserved & ~kPartialManifestFlag) != 0U ||
         !reader.ReadString(manifest.targetProfileId, kMaxShortStringBytes) ||
         !reader.ReadUInt64(manifest.targetProfileHash)) {
         return RuntimeAssetManifestStatus::Malformed;
     }
+    manifest.partial = (reserved & kPartialManifestFlag) != 0U;
     const RuntimeAssetManifestStatus descriptorStatus = DecodeDescriptor(reader, manifest.descriptor);
     if (descriptorStatus != RuntimeAssetManifestStatus::Success) {
         return descriptorStatus;

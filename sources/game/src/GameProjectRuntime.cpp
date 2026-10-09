@@ -47,6 +47,7 @@
 #include <span>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 namespace kb::game {
 
@@ -153,10 +154,21 @@ namespace {
     }
 #endif
     auto pack = std::make_shared<kb::assets::bake::RuntimeAssetPack>();
-    const kb::assets::bake::RuntimeAssetPackStatus status =
-        pack->Mount(packPath, targetProfile, kb::assets::bake::AssetPackAccess::Ranged, trust);
+    // A game whose content is more than one pack ships a pack set index beside its base pack;
+    // the index names the base, the chunks and the patches in mount order.
+    const std::filesystem::path setIndex =
+        packPath.parent_path() / std::filesystem::path{ kb::assets::bake::kAssetPackSetFileName };
+    std::error_code setError;
+    const bool packSet = std::filesystem::is_regular_file(setIndex, setError) && !setError;
+    const kb::assets::bake::RuntimeAssetPackStatus status = packSet
+        ? pack->MountSetIndex(setIndex, targetProfile, kb::assets::bake::AssetPackAccess::Ranged, trust)
+        : pack->Mount(packPath, targetProfile, kb::assets::bake::AssetPackAccess::Ranged, trust);
     if (status != kb::assets::bake::RuntimeAssetPackStatus::Success) {
         ReportRuntimePackageRefusal(*pack, status, err);
+        return false;
+    }
+    if (packSet && pack->ContainerPath(0U).lexically_normal() != packPath.lexically_normal()) {
+        err << "the pack set index does not name this game's base pack\n";
         return false;
     }
     if (!trust.requiredSigner.has_value() && pack->Seal() == nullptr) {
@@ -199,7 +211,14 @@ std::shared_ptr<const kb::security::InstalledRelease> VerifyPackagedRelease(
     const std::filesystem::path& executable,
     const std::filesystem::path& securityRoot,
     std::ostream& err) {
-    const std::array<std::filesystem::path, 1U> hashNow{ executable };
+    // The pack set index decides which packs mount and in what order, so it is hashed now like the
+    // executable; the packs themselves are bound through their seals when they mount.
+    std::vector<std::filesystem::path> hashNow{ executable };
+    const std::filesystem::path setIndex = root / std::filesystem::path{ kb::assets::bake::kAssetPackSetFileName };
+    std::error_code setError;
+    if (std::filesystem::is_regular_file(setIndex, setError) && !setError) {
+        hashNow.push_back(setIndex);
+    }
     kb::security::ReleaseVerification verification =
         kb::security::VerifyInstalledRelease(root, anchor.releaseKey, anchor.productId, hashNow);
     if (verification.status != kb::security::ReleaseManifestStatus::Success) {
@@ -235,12 +254,21 @@ bool PackBelongsToRelease(
     const std::filesystem::path& packPath,
     const kb::assets::bake::RuntimeAssetPack& pack,
     std::ostream& err) {
-    const std::u8string relative = packPath.lexically_normal().lexically_relative(release.root.lexically_normal()).generic_u8string();
-    const kb::security::ReleaseManifestPackSeal* listed = release.manifest.FindPack(
-        std::string_view{ reinterpret_cast<const char*>(relative.data()), relative.size() });
-    if (listed == nullptr || !kb::security::ConstantTimeEqual(listed->sealDigest, pack.SealDigest())) {
-        err << "runtime package is not the one this release shipped; reinstall the game\n";
-        return false;
+    // Every pack of the set -- the base at `packPath`, its chunks and its patches -- must be the
+    // one the signed manifest lists at its path, compared by the digest its seal signs. A patch
+    // swapped for an older, equally well-signed one fails here.
+    const std::uint32_t containers = std::max<std::uint32_t>(pack.ContainerCount(), 1U);
+    for (std::uint32_t container = 0U; container < containers; ++container) {
+        const std::filesystem::path& path = container == 0U ? packPath : pack.ContainerPath(container);
+        const std::u8string relative =
+            path.lexically_normal().lexically_relative(release.root.lexically_normal()).generic_u8string();
+        const kb::security::ReleaseManifestPackSeal* listed = release.manifest.FindPack(
+            std::string_view{ reinterpret_cast<const char*>(relative.data()), relative.size() });
+        if (listed == nullptr ||
+            !kb::security::ConstantTimeEqual(listed->sealDigest, pack.ContainerSealDigest(container))) {
+            err << "runtime package is not the one this release shipped; reinstall the game\n";
+            return false;
+        }
     }
     return true;
 }
@@ -258,6 +286,9 @@ void ReportRuntimePackageRefusal(
     kb::assets::bake::RuntimeAssetPackStatus status,
     std::ostream& err) {
     err << "runtime package could not be mounted: " << kb::assets::bake::ToString(status);
+    if (pack.RefusedContainer() != 0U) {
+        err << " (pack " << pack.RefusedContainer() << " of the pack set)";
+    }
     if (status == kb::assets::bake::RuntimeAssetPackStatus::ContainerRejected) {
         using kb::assets::bake::AssetPackReadStatus;
         const AssetPackReadStatus container = pack.ContainerStatus();

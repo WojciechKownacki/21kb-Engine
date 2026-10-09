@@ -1,5 +1,6 @@
 #include "engine/assets/bake/AssetPackReader.hpp"
 
+#include "assets/bake/AssetPackCompression.hpp"
 #include "assets/bake/BakeStorePath.hpp"
 #include "engine/assets/bake/BakeTargetProfile.hpp"
 
@@ -90,7 +91,10 @@ AssetPackReadStatus AssetPackReader::Mount(const std::filesystem::path& path, As
     if (sizeError) {
         return AssetPackReadStatus::Unreadable;
     }
-    if (sizeOnDisk > kMaxAssetPackBytes + kMaxAssetPackSealBytes) {
+    // A pack read by ranges is bounded by the format; one read whole is bounded by memory.
+    const std::uint64_t ceiling =
+        access_ == AssetPackAccess::WholeFile ? kMaxWholeFileAssetPackBytes : kMaxAssetPackBytes;
+    if (sizeOnDisk > ceiling + kMaxAssetPackSealBytes) {
         return AssetPackReadStatus::PackTooLarge;
     }
     if (sizeOnDisk < kAssetPackHeaderBytes) {
@@ -122,7 +126,7 @@ AssetPackReadStatus AssetPackReader::Mount(const std::filesystem::path& path, As
 
 AssetPackReadStatus AssetPackReader::MountMemory(std::span<const std::uint8_t> bytes, const AssetPackTrust& trust) {
     Unmount();
-    if (bytes.size() > kMaxAssetPackBytes + kMaxAssetPackSealBytes) {
+    if (bytes.size() > kMaxWholeFileAssetPackBytes + kMaxAssetPackSealBytes) {
         return AssetPackReadStatus::PackTooLarge;
     }
     if (bytes.size() < kAssetPackHeaderBytes) {
@@ -235,6 +239,7 @@ AssetPackReadStatus AssetPackReader::ValidateAndFinishMount(const AssetPackTrust
         Unmount();
         return AssetPackReadStatus::IndexCorrupt;
     }
+    catalogIdentity_ = AssetPackCatalogIdentity(headerBytes, indexBytes, fragmentBytes);
     if (const AssetPackReadStatus status = DecodeAssetPackIndex(indexBytes, header_.artifactCount, artifacts_);
         status != AssetPackReadStatus::Success) {
         Unmount();
@@ -340,6 +345,7 @@ void AssetPackReader::Unmount() noexcept {
     contentKey_.reset();
     sealTrusted_ = false;
     header_ = AssetPackHeader{};
+    catalogIdentity_ = {};
     path_.clear();
     fileBytes_ = 0U;
     mounted_ = false;
@@ -354,10 +360,20 @@ const AssetPackArtifactEntry* AssetPackReader::FindArtifact(const AssetBakeDiges
     return nullptr;
 }
 
-AssetPackReadStatus AssetPackReader::ReadBlock(const AssetPackArtifactEntry& artifact,
-                                               std::string_view blockName,
-                                               std::vector<std::uint8_t>& out) {
-    out.clear();
+const AssetPackBlockEntry* AssetPackReader::FindBlock(
+    const AssetPackArtifactEntry& artifact,
+    std::string_view blockName) const noexcept {
+    const auto block = std::ranges::find_if(artifact.blocks, [blockName](const AssetPackBlockEntry& candidate) {
+        return store::EqualsIgnoreAsciiCase(candidate.name, blockName);
+    });
+    return block == artifact.blocks.end() ? nullptr : &*block;
+}
+
+AssetPackReadStatus AssetPackReader::LocateBlock(
+    const AssetPackArtifactEntry& artifact,
+    std::string_view blockName,
+    const AssetPackBlockEntry*& out) const noexcept {
+    out = nullptr;
     if (!mounted_) {
         return AssetPackReadStatus::NotMounted;
     }
@@ -369,11 +385,8 @@ AssetPackReadStatus AssetPackReader::ReadBlock(const AssetPackArtifactEntry& art
     if (!belongsToThisPack) {
         return AssetPackReadStatus::ArtifactNotFound;
     }
-
-    const auto block = std::ranges::find_if(artifact.blocks, [blockName](const AssetPackBlockEntry& candidate) {
-        return store::EqualsIgnoreAsciiCase(candidate.name, blockName);
-    });
-    if (block == artifact.blocks.end()) {
+    const AssetPackBlockEntry* block = FindBlock(artifact, blockName);
+    if (block == nullptr) {
         return AssetPackReadStatus::BlockNotFound;
     }
     // Re-checked on the way out as well: the cost is three comparisons, and it means a future
@@ -381,31 +394,93 @@ AssetPackReadStatus AssetPackReader::ReadBlock(const AssetPackArtifactEntry& art
     if (const AssetPackReadStatus status = ValidateBlockRange(*block); status != AssetPackReadStatus::Success) {
         return status;
     }
+    out = block;
+    return AssetPackReadStatus::Success;
+}
+
+AssetPackReadStatus AssetPackReader::DecodeStoredBlock(
+    const AssetPackBlockEntry& block,
+    std::vector<std::uint8_t>& bytes) const {
+    const auto refuse = [&bytes](AssetPackReadStatus status) {
+        bytes.clear();
+        return status;
+    };
+    if (!mounted_) {
+        return refuse(AssetPackReadStatus::NotMounted);
+    }
+    if (const AssetPackReadStatus status = ValidateBlockRange(block); status != AssetPackReadStatus::Success) {
+        return refuse(status);
+    }
+    if (bytes.size() != block.storedBytes) {
+        return refuse(AssetPackReadStatus::Unreadable);
+    }
+    if (seal_.has_value()) {
+        // The stored bytes are checked before anything is decrypted or decoded.
+        const auto entry = std::ranges::lower_bound(seal_->entries, block.offset, {}, &AssetPackSealEntry::offset);
+        if (entry == seal_->entries.end() || entry->offset != block.offset ||
+            !kb::security::ConstantTimeEqual(kb::security::Sha512(bytes), entry->storedDigest)) {
+            return refuse(AssetPackReadStatus::PayloadCorrupt);
+        }
+        if (seal_->encrypted &&
+            !kb::security::AeadDecryptInPlace(bytes, entry->tag, *contentKey_, AssetPackBlockNonce(seal_->salt, block.offset), {})) {
+            return refuse(AssetPackReadStatus::PayloadCorrupt);
+        }
+    }
+    if (block.compression == AssetPackBlockCompression::Zstd) {
+        std::vector<std::uint8_t> decoded;
+        if (!DecompressAssetPackBlock(bytes, block.uncompressedBytes, decoded)) {
+            return refuse(AssetPackReadStatus::PayloadCorrupt);
+        }
+        bytes = std::move(decoded);
+    }
+    // A seal made by the key the trust required already vouches for the index digest, so the
+    // SHA-512 match above is the whole check.
+    if (seal_.has_value() && sealTrusted_) {
+        return AssetPackReadStatus::Success;
+    }
+    if (HashBakeDigest(bytes) != block.payloadDigest) {
+        return refuse(AssetPackReadStatus::PayloadCorrupt);
+    }
+    return AssetPackReadStatus::Success;
+}
+
+AssetPackReadStatus AssetPackReader::ReadBlock(const AssetPackArtifactEntry& artifact,
+                                               std::string_view blockName,
+                                               std::vector<std::uint8_t>& out) {
+    out.clear();
+    const AssetPackBlockEntry* block = nullptr;
+    if (const AssetPackReadStatus status = LocateBlock(artifact, blockName, block);
+        status != AssetPackReadStatus::Success) {
+        return status;
+    }
     const AssetPackReadStatus readStatus = ReadRange(block->offset, block->storedBytes, out);
     if (readStatus != AssetPackReadStatus::Success) {
         return readStatus;
     }
-    if (seal_.has_value()) {
-        // The stored bytes are checked before anything is decrypted.
-        const auto entry = std::ranges::lower_bound(seal_->entries, block->offset, {}, &AssetPackSealEntry::offset);
-        if (entry == seal_->entries.end() || entry->offset != block->offset ||
-            !kb::security::ConstantTimeEqual(kb::security::Sha512(out), entry->storedDigest)) {
-            out.clear();
-            return AssetPackReadStatus::PayloadCorrupt;
-        }
-        if (seal_->encrypted &&
-            !kb::security::AeadDecryptInPlace(out, entry->tag, *contentKey_, AssetPackBlockNonce(seal_->salt, block->offset), {})) {
-            out.clear();
-            return AssetPackReadStatus::PayloadCorrupt;
-        }
-        if (sealTrusted_) {
-            return AssetPackReadStatus::Success;
-        }
+    return DecodeStoredBlock(*block, out);
+}
+
+AssetPackReadStatus AssetPackReader::ReadStoredBlock(const AssetPackArtifactEntry& artifact,
+                                                     std::string_view blockName,
+                                                     std::vector<std::uint8_t>& out) {
+    out.clear();
+    const AssetPackBlockEntry* block = nullptr;
+    if (const AssetPackReadStatus status = LocateBlock(artifact, blockName, block);
+        status != AssetPackReadStatus::Success) {
+        return status;
     }
-    if (HashBakeDigest(out) != block->payloadDigest) {
-        out.clear();
-        return AssetPackReadStatus::PayloadCorrupt;
+    std::vector<std::uint8_t> stored;
+    if (const AssetPackReadStatus status = ReadRange(block->offset, block->storedBytes, stored);
+        status != AssetPackReadStatus::Success) {
+        return status;
     }
+    // The payload is decoded and checked too, so only content the baker vouched for is handed
+    // out in stored form.
+    std::vector<std::uint8_t> payload = stored;
+    if (const AssetPackReadStatus status = DecodeStoredBlock(*block, payload); status != AssetPackReadStatus::Success) {
+        return status;
+    }
+    out = std::move(stored);
     return AssetPackReadStatus::Success;
 }
 

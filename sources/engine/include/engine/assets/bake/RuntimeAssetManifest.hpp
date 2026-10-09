@@ -69,6 +69,10 @@ struct RuntimeAuxiliaryFileEntry {
 struct RuntimeAssetManifest {
     std::string targetProfileId;
     std::uint64_t targetProfileHash = 0U;
+    // The manifest of a chunk or patch pack: it lists only the assets of its own pack, so its
+    // default map and the dependencies of its assets may live in another pack of the set, and
+    // the set checks them once every pack is mounted. A base pack's manifest is complete.
+    bool partial = false;
     kb::project::ProjectDescriptor descriptor{};
     kb::project::ProjectSettings settings{};
     std::vector<RuntimeAssetManifestEntry> assets;

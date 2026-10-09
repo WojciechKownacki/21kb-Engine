@@ -15,6 +15,34 @@
 
 namespace kb::assets::bake {
 
+class AssetPackReader;
+
+// How a pack is written beyond what its target profile fixes.
+struct AssetPackWriterOptions {
+    // Zstd compresses every block that is not Mapped and keeps the compressed frame only when it
+    // saves at least kMinimumCompressionSavingsDivisor-th of the block; any other block is
+    // stored as written. The method is recorded per block, so a reader decodes exactly the
+    // blocks that were compressed.
+    AssetPackBlockCompression compression = AssetPackBlockCompression::None;
+    // 1..19. Ignored without compression.
+    int compressionLevel = 9;
+    // The pack's place in a pack set; see AssetPackRole. A chunk and a patch need a label and
+    // the catalogue identity of the base they belong to, a patch also a patch level >= 1.
+    AssetPackRole role = AssetPackRole::Base;
+    std::string label;
+    std::uint32_t patchLevel = 0U;
+    AssetBakeDigest baseIdentity{};
+};
+
+// A compressed block is kept only when it is at least 1/32 smaller than the block itself: a
+// smaller saving does not pay for decoding it on every read.
+inline constexpr std::uint64_t kMinimumCompressionSavingsDivisor = 32U;
+// Blocks below this size are never compressed; a zstd frame header alone eats what they could
+// save.
+inline constexpr std::uint64_t kMinimumCompressibleBlockBytes = 64U;
+
+[[nodiscard]] bool IsValidAssetPackWriterOptions(const AssetPackWriterOptions& options) noexcept;
+
 // Release-mode sink: the SAME contract as LooseBakedAssetSink, a different output. Every
 // artifact a baker hands over lands in one container file laid out by AssetPack.hpp instead of
 // in a directory of its own. No baker changes to use it -- that is the entire point of the
@@ -53,6 +81,7 @@ public:
     // fingerprint and its two alignments, and BakeTargetProfile::identifier is a non-owning
     // view that must not outlive the call.
     AssetPackWriter(std::filesystem::path packPath, const BakeTargetProfile& profile);
+    AssetPackWriter(std::filesystem::path packPath, const BakeTargetProfile& profile, AssetPackWriterOptions options);
     ~AssetPackWriter() override;
 
     [[nodiscard]] BakedAssetSinkStatus BeginAsset(const BakedAssetDescriptor& descriptor) override;
@@ -87,7 +116,10 @@ private:
         BakedAssetBlockResidency residency = BakedAssetBlockResidency::Resident;
         std::uint32_t alignmentBytes = 1U;
         std::uint64_t payloadOffset = 0U;
+        // Stored length, which is the compressed length of a compressed block.
         std::uint64_t bytes = 0U;
+        std::uint64_t uncompressedBytes = 0U;
+        AssetPackBlockCompression compression = AssetPackBlockCompression::None;
         AssetBakeDigest payloadDigest{};
         std::optional<BakedAssetBlockFragment> fragment{};
     };
@@ -98,6 +130,7 @@ private:
         std::vector<PendingBlock> blocks;
     };
 
+    [[nodiscard]] BakedAssetSinkStatus OpenArtifact(const AssetBakeDigest& key, std::string_view assetTypeId);
     [[nodiscard]] BakedAssetSinkStatus EnsureStagingOpen();
     [[nodiscard]] BakedAssetSinkStatus CreatePrivateStagingDirectory();
     [[nodiscard]] bool AcquireDestinationLock();
@@ -107,6 +140,12 @@ private:
     // detects replacement of the private payload after it was opened.
     [[nodiscard]] BakedAssetSinkStatus VerifyPayloadStamp();
     [[nodiscard]] BakedAssetSinkStatus AppendPayload(std::span<const std::uint8_t> bytes, std::uint64_t& offsetOut);
+    // Appends a block in the form it will be stored in and fills in where it went, how long it
+    // is stored, and how.
+    [[nodiscard]] BakedAssetSinkStatus AppendBlock(
+        std::span<const std::uint8_t> bytes,
+        BakedAssetBlockResidency residency,
+        PendingBlock& block);
     [[nodiscard]] BakedAssetSinkStatus AssembleStagingPack();
     [[nodiscard]] bool ArtifactLayoutsMatch(
         const PendingArtifact& lhs,
@@ -123,6 +162,8 @@ private:
     std::uint32_t packageAlignmentBytes_ = 0U;
     std::uint32_t mappedAlignmentBytes_ = 0U;
     bool profileIsValid_ = false;
+    AssetPackWriterOptions options_{};
+    bool optionsAreValid_ = true;
 
     std::fstream payload_;
     std::vector<PendingArtifact> artifacts_;

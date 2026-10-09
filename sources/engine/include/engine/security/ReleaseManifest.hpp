@@ -84,8 +84,8 @@ enum class ReleaseManifestStatus : std::uint8_t {
 // A content version is 1..64 characters of [A-Za-z0-9._+-].
 [[nodiscard]] bool IsValidContentVersion(std::string_view version) noexcept;
 
-// Executables, native modules and asset packs: the files a player refuses to run with unless
-// the manifest lists them with matching contents.
+// Executables, native modules, asset packs and the pack set index that orders them: the files a
+// player refuses to run with unless the manifest lists them with matching contents.
 [[nodiscard]] bool IsCriticalReleaseFile(const std::filesystem::path& relativePath);
 
 // Streams a file through SHA-512. False if it cannot be read.

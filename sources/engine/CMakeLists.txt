@@ -47,12 +47,14 @@ add_library(kb_engine STATIC
     include/engine/assets/bake/AssetPack.hpp
     include/engine/assets/bake/AssetPackReader.hpp
     include/engine/assets/bake/AssetPackSeal.hpp
+    include/engine/assets/bake/AssetPackSet.hpp
     include/engine/assets/bake/AssetPackWriter.hpp
     include/engine/assets/bake/BakeTargetProfile.hpp
     include/engine/assets/bake/BakedAssetSink.hpp
     include/engine/assets/bake/RuntimeAssetManifest.hpp
     include/engine/assets/bake/RuntimeAssetPack.hpp
     include/engine/assets/streaming/AsyncFileReader.hpp
+    include/engine/assets/streaming/PackBlockStream.hpp
     include/engine/assets/streaming/StreamingResidency.hpp
     include/engine/math/EngineMath.hpp
     include/engine/network/NetworkModel.hpp
@@ -570,15 +572,19 @@ add_library(kb_engine STATIC
     src/assets/ImportedAssetLoader.cpp
     src/assets/bake/AssetBakeKey.cpp
     src/assets/bake/AssetPack.cpp
+    src/assets/bake/AssetPackCompression.cpp
     src/assets/bake/AssetPackReader.cpp
     src/assets/bake/AssetPackSeal.cpp
+    src/assets/bake/AssetPackSet.cpp
     src/assets/bake/AssetPackWriter.cpp
     src/assets/bake/BakeTargetProfile.cpp
     src/assets/bake/BakedAssetSink.cpp
     src/assets/bake/RuntimeAssetManifest.cpp
     src/assets/bake/RuntimeAssetPack.cpp
     src/assets/streaming/AsyncFileReader.cpp
+    src/assets/streaming/PackBlockStream.cpp
     src/assets/streaming/StreamingResidency.cpp
+    src/private/assets/bake/AssetPackCompression.hpp
     src/private/assets/bake/BakeStorePath.hpp
     src/project/ProjectDescriptorBinaryIO.cpp
     src/project/ProjectDescriptorIntegrity.cpp

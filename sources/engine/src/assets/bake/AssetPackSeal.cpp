@@ -263,8 +263,10 @@ bool SealAssetPack(
         seal.entries.reserve(blocks.size());
         std::vector<std::uint8_t> bytes;
         for (const Located& located : blocks) {
-            // ReadBlock checks the index digest, so only content the baker vouched for is signed.
-            if (const AssetPackReadStatus status = reader.ReadBlock(*located.artifact, located.block->name, bytes);
+            // ReadStoredBlock decodes the block and checks the index digest, so only content the
+            // baker vouched for is signed -- and what is signed is the block as stored, which for
+            // a compressed block is the compressed frame.
+            if (const AssetPackReadStatus status = reader.ReadStoredBlock(*located.artifact, located.block->name, bytes);
                 status != AssetPackReadStatus::Success) {
                 return abandon(error, "asset pack block failed verification before sealing: " + std::string{ ToString(status) });
             }

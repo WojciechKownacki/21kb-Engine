@@ -397,13 +397,17 @@ struct MaterialShaderQualifier final {
         }
     }
 
-    for (const kb::assets::bake::AssetPackArtifactEntry& artifact : pack->Artifacts()) {
-        for (const kb::assets::bake::AssetPackBlockEntry& block : artifact.blocks) {
-            const kb::assets::bake::AssetPackReadStatus status =
-                pack->ReadArtifactBlock(artifact.key, block.name, bytes);
-            if (status != kb::assets::bake::AssetPackReadStatus::Success) {
-                return Failure("runtime asset payload validation failed: " +
-                    std::string{ kb::assets::bake::ToString(status) });
+    // Every block of every pack of the set, including blocks a later patch replaced: a pack that
+    // ships a damaged block is a damaged pack whether or not the block is still answered.
+    for (std::uint32_t container = 0U; container < pack->ContainerCount(); ++container) {
+        for (const kb::assets::bake::AssetPackArtifactEntry& artifact : pack->ContainerArtifacts(container)) {
+            for (const kb::assets::bake::AssetPackBlockEntry& block : artifact.blocks) {
+                const kb::assets::bake::AssetPackReadStatus status =
+                    pack->ReadContainerBlock(container, artifact, block.name, bytes);
+                if (status != kb::assets::bake::AssetPackReadStatus::Success) {
+                    return Failure("runtime asset payload validation failed: " +
+                        std::string{ kb::assets::bake::ToString(status) });
+                }
             }
         }
     }

@@ -133,6 +133,10 @@ enum class BakedAssetSinkStatus : std::uint8_t {
     // it, or with a box that is not finite or is inside out. A fragment index
     // built from that describes a page nothing can be prioritised against.
     InvalidFragment,
+    // A container sink was configured with pack options the format cannot record: an unknown
+    // compression method or level, or a pack role whose label, patch level or base identity
+    // does not fit that role. Reported before anything is written.
+    InvalidPackOptions,
 };
 
 [[nodiscard]] std::string_view ToString(BakedAssetSinkStatus status) noexcept;
