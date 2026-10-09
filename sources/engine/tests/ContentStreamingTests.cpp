@@ -1547,6 +1547,25 @@ void EncryptedPackSetsKeepEachPacksKey() {
     Purge(root);
 }
 
+// Red when: the text form of a world region a chunk takes does not read back as written -- corners,
+// layers, the base layer's token, the whole-world default -- or a malformed one is accepted.
+void WorldRegionsParseForChunkRules() {
+    bake::AssetPackWorldRegion region{};
+    std::string error;
+    Require(bake::ParseAssetPackWorldRegion("/Game/Worlds/Forest.21kbworld@-2:-3..1:4#night,(base),night", region, error) &&
+            region.world == "/Game/Worlds/Forest.21kbworld" && region.min == kb::world::WorldCellCoord{ -2, -3 } &&
+            region.max == kb::world::WorldCellCoord{ 1, 4 } && region.dataLayers == std::vector<std::string>{ "", "night" },
+        "A world region did not parse as written");
+    Require(bake::ParseAssetPackWorldRegion("/Game/Worlds/Forest.21kbworld", region, error) && region.dataLayers.empty() &&
+            region.min.x == std::numeric_limits<std::int64_t>::min() && region.max.z == std::numeric_limits<std::int64_t>::max(),
+        "A bare world did not name the whole world");
+    for (const char* refused : { "Game/Worlds/Forest.21kbworld", "/Game/Worlds/Forest.21kbscene", "/Game/Worlds/Forest.21kbworld@2:0..1:0",
+             "/Game/Worlds/Forest.21kbworld@1:0", "/Game/Worlds/Forest.21kbworld@a:0..1:0", "/Game/Worlds/Forest.21kbworld#",
+             "/Game/Worlds/Forest.21kbworld#bad layer" }) {
+        Require(!bake::ParseAssetPackWorldRegion(refused, region, error), (std::string{ "A malformed world region parsed: " } + refused).c_str());
+    }
+}
+
 // ---- Asynchronous I/O -------------------------------------------------------------------------
 
 // Red when: queued reads are not served highest priority first, a re-prioritised read keeps its
@@ -1883,6 +1902,7 @@ void RunContentStreamingTests() {
     PackToolsSplitRepackAndPatch();
     PatchesRemoveAssetsThroughSignedTombstones();
     EncryptedPackSetsKeepEachPacksKey();
+    WorldRegionsParseForChunkRules();
     AsyncReadsFollowPriorityAndReturnExactRanges();
     StreamingStaysWithinItsBudget();
     PackBlocksStreamAsynchronously();

@@ -2403,6 +2403,16 @@ void RunPackSetCommandTests() {
     Require(Contains(Run(&kb::cli::RunPackCommand, { "info", (root / "Out" / "Game.cell_0_1.kbpack").string() }).output,
                 "role chunk"),
         "a split chunk is not a chunk pack");
+    // World regions: the text is checked before anything is read, and a world the cook does not
+    // hold is named.
+    const CommandRun badRegion = Run(&kb::cli::RunPackCommand, { "split", "--base", (root / "Region" / "Game.kbpack").string(),
+        "--chunk-cells", "east=/Game/Worlds/Forest.21kbworld@2:0..1:0", cook });
+    Require(badRegion.exitCode == 1 && Contains(badRegion.output, "<minX>:<minZ>..<maxX>:<maxZ>"),
+        "pack split accepted a world region whose corners are out of order");
+    const CommandRun noWorld = Run(&kb::cli::RunPackCommand, { "split", "--base", (root / "Region" / "Game.kbpack").string(),
+        "--chunk-cells", "east=/Game/Worlds/Forest.21kbworld@0:0..1:1#(base)", cook });
+    Require(noWorld.exitCode == 1 && Contains(noWorld.output, "no built partitioned world /Game/Worlds/Forest.21kbworld"),
+        "pack split did not name the world a region rule could not find");
 
     const std::string next = (root / "next.kbpack").string();
     WriteRuntimeCook(next, "rock, fixed", true);

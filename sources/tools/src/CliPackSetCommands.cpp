@@ -196,8 +196,10 @@ int RunPackCompressCommand(const ArgumentList& arguments, CommandIo io) {
 int RunPackSplitCommand(const ArgumentList& arguments, CommandIo io) {
     const std::optional<std::string> base = arguments.Option("--base");
     const std::vector<std::string> chunkSpecs = arguments.Options("--chunk");
-    if (arguments.Positionals().size() != 2U || !base.has_value() || chunkSpecs.empty()) {
+    const std::vector<std::string> cellSpecs = arguments.Options("--chunk-cells");
+    if (arguments.Positionals().size() != 2U || !base.has_value() || (chunkSpecs.empty() && cellSpecs.empty())) {
         return Fail(io, "pack split expects --base <base.kbpack> --chunk <label>=<prefix>[,<prefix>...] [--chunk ...] "
+                        "[--chunk-cells <label>=<world>[@<x0>:<z0>..<x1>:<z1>][#<layer>,...] ...] "
                         "[--level <0-19>] [--index <Game.kbpackset>] <cooked.kbpack>");
     }
     std::string error;
@@ -207,13 +209,25 @@ int RunPackSplitCommand(const ArgumentList& arguments, CommandIo io) {
     }
     const std::filesystem::path basePath{ *base };
     std::vector<bake::AssetPackChunkRule> rules;
+    // A label used by several --chunk and --chunk-cells options is one chunk; chunks keep the
+    // order their labels first appear in.
+    const auto ruleFor = [&](const std::string& label) -> bake::AssetPackChunkRule& {
+        const auto found = std::ranges::find(rules, label, &bake::AssetPackChunkRule::label);
+        if (found != rules.end()) {
+            return *found;
+        }
+        bake::AssetPackChunkRule rule{};
+        rule.label = label;
+        rule.output = basePath.parent_path() / (basePath.stem().string() + "." + label + ".kbpack");
+        rules.push_back(std::move(rule));
+        return rules.back();
+    };
     for (const std::string& spec : chunkSpecs) {
         const std::size_t equals = spec.find('=');
         if (equals == std::string::npos || equals == 0U || equals + 1U >= spec.size()) {
             return Fail(io, "--chunk expects <label>=<prefix>[,<prefix>...]: " + spec);
         }
-        bake::AssetPackChunkRule rule{};
-        rule.label = spec.substr(0U, equals);
+        bake::AssetPackChunkRule& rule = ruleFor(spec.substr(0U, equals));
         for (std::size_t start = equals + 1U; start <= spec.size();) {
             const std::size_t comma = std::min(spec.find(',', start), spec.size());
             if (comma > start) {
@@ -221,8 +235,17 @@ int RunPackSplitCommand(const ArgumentList& arguments, CommandIo io) {
             }
             start = comma + 1U;
         }
-        rule.output = basePath.parent_path() / (basePath.stem().string() + "." + rule.label + ".kbpack");
-        rules.push_back(std::move(rule));
+    }
+    for (const std::string& spec : cellSpecs) {
+        const std::size_t equals = spec.find('=');
+        bake::AssetPackWorldRegion region{};
+        if (equals == std::string::npos || equals == 0U) {
+            return Fail(io, "--chunk-cells expects <label>=<world>[@<x0>:<z0>..<x1>:<z1>][#<layer>,...]: " + spec);
+        }
+        if (!bake::ParseAssetPackWorldRegion(std::string_view{ spec }.substr(equals + 1U), region, error)) {
+            return Fail(io, error);
+        }
+        ruleFor(spec.substr(0U, equals)).worldRegions.push_back(std::move(region));
     }
     bake::AssetPackSplitReport report{};
     if (!bake::SplitRuntimeAssetPack(std::filesystem::path{ arguments.Positionals()[1] }, basePath, rules,

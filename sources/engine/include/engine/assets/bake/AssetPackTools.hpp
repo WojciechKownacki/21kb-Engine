@@ -3,9 +3,11 @@
 #include "engine/assets/bake/AssetPack.hpp"
 #include "engine/assets/bake/AssetPackSeal.hpp"
 #include "engine/assets/bake/AssetPackWriter.hpp"
+#include "engine/world/WorldPartitionGrid.hpp"
 
 #include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <span>
 #include <string>
 #include <vector>
@@ -39,11 +41,35 @@ struct AssetPackToolReport {
     AssetPackToolReport& report,
     std::string& error);
 
-// One chunk of a split: every asset whose virtual path starts with one of the prefixes (a world
-// cell's or a data layer's folder, say) moves, with its artifacts, into the chunk pack.
+// The cells of a built partitioned world that a chunk takes: every cell scene of the region's
+// cells (both corners included) in the listed data layers, and the HLOD proxy mesh of each of
+// those cells when the base layer is among them. The world is named by its descriptor's virtual
+// path; its built cell index (WorldPaths::CellIndexVirtualPath) says which cell scene and proxy
+// belong to which cell. The default region is the whole world, and only a whole-world region
+// also takes the persistent (always-loaded) units of its layers.
+struct AssetPackWorldRegion {
+    std::string world;
+    kb::world::WorldCellCoord min{ std::numeric_limits<std::int64_t>::min(), std::numeric_limits<std::int64_t>::min() };
+    kb::world::WorldCellCoord max{ std::numeric_limits<std::int64_t>::max(), std::numeric_limits<std::int64_t>::max() };
+    // Empty for every layer; "" names the base layer.
+    std::vector<std::string> dataLayers;
+
+    [[nodiscard]] bool operator==(const AssetPackWorldRegion&) const noexcept = default;
+};
+
+// Parses the text form shared by `kb_cli pack split --chunk-cells` and packaging:
+//   <world virtual path>[@<minX>:<minZ>..<maxX>:<maxZ>][#<layer>[,<layer>...]]
+// e.g. /Game/Worlds/Forest.21kbworld@-2:-2..1:1#(base),night. "(base)" names the base layer, which
+// has no name of its own.
+[[nodiscard]] bool ParseAssetPackWorldRegion(std::string_view text, AssetPackWorldRegion& out, std::string& error);
+
+// One chunk of a split: every asset whose virtual path starts with one of the prefixes (a data
+// layer's folder, say), and every cell scene and proxy of the world regions, moves with its
+// artifacts into the chunk pack. Assets those depend on stay where their own rules put them.
 struct AssetPackChunkRule {
     std::string label;
     std::vector<std::string> virtualPathPrefixes;
+    std::vector<AssetPackWorldRegion> worldRegions;
     std::filesystem::path output;
 };
 

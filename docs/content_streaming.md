@@ -97,6 +97,34 @@ patch 1 patch-0001 Game.patch-0001.kbpack
 - A packaged player mounts the set when `Game.kbpackset` sits beside `Game.kbpack`, and the
   single pack otherwise. Mounting is all or nothing.
 
+### Chunks of a partitioned world
+
+A chunk rule (`AssetPackChunkRule`) takes assets by virtual path prefix, by world region, or both.
+A world region (`AssetPackWorldRegion`) names a partitioned world by its descriptor's virtual path,
+an inclusive range of cells and, optionally, data layers. The split reads the world's built cell
+index from the cooked pack and moves:
+
+- the cell scene of every unit whose cell lies in the range and whose layer is listed (every layer
+  when none is);
+- the HLOD proxy mesh of every cell in the range, when the base layer is among the layers;
+- the persistent (always-loaded) units of the listed layers, only when the region is the whole
+  world (no range given).
+
+Everything those depend on -- meshes, materials, the cell index itself -- stays where its own
+rule puts it, by default in the base, so the cell index in the base names cells that live in the
+chunk and the set's cross-pack dependency check holds. The text form, shared by `kb_cli pack
+split --chunk-cells` and packaging, is
+
+```
+<label>=<world virtual path>[@<minX>:<minZ>..<maxX>:<maxZ>][#<layer>[,<layer>...]]
+```
+
+with `(base)` naming the base layer, for example
+`forest_east=/Game/Worlds/Forest.21kbworld@0:-8..7:7` (a region's cells in every layer) or
+`night=/Game/Worlds/Forest.21kbworld#night` (one layer of the whole world). Several rules may use
+one label; they make one chunk. A cell or proxy goes to the first rule that takes it, prefix and
+region rules alike. `ParseAssetPackWorldRegion` reads the same text in C++.
+
 ## Signing, release binding and rollback
 
 Every pack of a set is sealed with the release key, and a packaged player passes its trust
@@ -223,7 +251,7 @@ far camera with a small budget evicts both back to their floors.
 | --- | --- |
 | `kb_cli pack info <pack>` | Format, role, label, patch level, identities, compressed blocks, sizes, seal |
 | `kb_cli pack compress [--level n] <in> <out>` | Rewrites a pack with another compression level |
-| `kb_cli pack split --base <base> --chunk <label>=<prefix>[,…] [--index <set>] <cooked>` | Splits a cooked pack into a base and chunk packs by virtual path prefix |
+| `kb_cli pack split --base <base> --chunk <label>=<prefix>[,…] [--chunk-cells <label>=<region>] [--index <set>] <cooked>` | Splits a cooked pack into a base and chunk packs by virtual path prefix and world region |
 | `kb_cli pack patch --current <set or pack> [--current-release <dir>] --patch-level n --output <patch> <new cook>` | Builds a patch pack with what the new cook changed, added and dropped (tombstones) |
 | `kb_cli pack set-keys [--content-key <file>] --previous-release <dir> <Game.kbpackset>` | Writes the key lines of packs encrypted under an earlier release's keys |
 | `kb_cli pack set-verify [--anchor <file>] <Game.kbpackset>` | Mounts a set as the player does and reads every block |
@@ -237,6 +265,8 @@ Split and patch output is unsealed; sign each pack with `kb_cli pack sign` after
 - `--pack-compression-level <0-19>` (default 9) is passed to the cooker.
 - `--pack-chunk LABEL=/Game/PREFIX[,/Game/PREFIX…]`, repeatable, splits the cooked pack into
   `Game.kbpack` and `Game.<label>.kbpack` and writes `Game.kbpackset`.
+- `--pack-chunk-cells LABEL=/Game/WORLD.21kbworld[@MINX:MINZ..MAXX:MAXZ][#LAYER,…]`, repeatable,
+  puts a world region's or data layer's cells into chunk `LABEL` the same way.
 - `--patch-from <previous release directory>` ships the packs of that release byte for byte plus
   one new patch pack `Game.patch-<level>.kbpack`, and an index that adds it. `--patch-level`
   defaults to one above the release's highest patch. The release number must be higher than the

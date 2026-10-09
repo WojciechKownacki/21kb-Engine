@@ -224,7 +224,8 @@ proxy has at most eight material slots; the triangles of further materials join 
 the project, so the cooker's world build never modifies the project itself. The packaged game
 contains a world's cells because the dependency chain is followed from the default map: the scene
 places the world, the world depends on its cell index, and the cell index depends on every cell
-scene, every HLOD proxy and the proxies' materials.
+scene, every HLOD proxy and the proxies' materials. A world region's or data layer's cells can ship in a
+chunk pack of their own (`--pack-chunk-cells`, see [content_streaming.md](content_streaming.md)).
 
 ### Region chunk packs
 

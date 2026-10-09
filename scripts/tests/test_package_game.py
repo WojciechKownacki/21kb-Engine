@@ -475,6 +475,7 @@ class PackageGameTests(unittest.TestCase):
             "release_number": 20,
             "pack_compression_level": package_game.DEFAULT_PACK_COMPRESSION_LEVEL,
             "pack_chunk": [],
+            "pack_chunk_cells": [],
             "patch_from": None,
             "patch_level": None,
         }
@@ -517,6 +518,10 @@ class PackageGameTests(unittest.TestCase):
                 ({"pack_chunk": ["cell=/Game/../Secrets/"]}, "virtual path"),
                 ({"pack_chunk": ["cell=/Game/A/", "cell=/Game/B/"]}, "its own label"),
                 ({"pack_chunk": ["cell=/Game/A/"], "target": "Linux.x64"}, "Windows players only"),
+                ({"pack_chunk_cells": ["east=/Game/Worlds/Forest.21kbworld@2:0..1:0"]}, "out of order"),
+                ({"pack_chunk_cells": ["east=Game/Worlds/Forest.21kbworld"]}, "LABEL=/Game/WORLD"),
+                ({"pack_chunk_cells": ["east=/Game/Worlds/Forest.21kbworld#bad layer"]}, "LABEL=/Game/WORLD"),
+                ({"pack_chunk_cells": ["east=/Game/Worlds/Forest.21kbscene"]}, "LABEL=/Game/WORLD"),
                 ({"patch_level": 4}, "needs --patch-from"),
                 ({"patch_from": previous, "target": "Linux.x64"}, "Windows players only"),
                 ({"patch_from": previous, "pack_chunk": ["cell=/Game/A/"]}, "keeps the chunks"),
@@ -609,6 +614,54 @@ class PackageGameTests(unittest.TestCase):
                 sorted(path.name for path in stage.iterdir()),
             )
             self.assertEqual(b"base", (stage / "Game.kbpack").read_bytes())
+
+    def test_world_regions_are_split_into_chunk_packs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_text:
+            root = Path(temporary_text)
+            job = root / "job"
+            cook = job / "cook"
+            cook.mkdir(parents=True)
+            pack = cook / "Game.kbpack"
+            pack.write_bytes(b"cooked")
+            kb_cli = root / "kb_cli.exe"
+            args = self._content_args(
+                root,
+                pack_chunk=["night=/Game/Layers/Night/"],
+                pack_chunk_cells=[
+                    "forest_east=/Game/Worlds/Forest.21kbworld@1:-4..8:4",
+                    "night=/Game/Worlds/Forest.21kbworld#night",
+                    "forest_west=/Game/Worlds/Forest.21kbworld@-8:-4..0:4#(base),props",
+                ],
+            )
+            package_game._validate_content_packaging(args)
+
+            def run(arguments: list[object], **_kwargs: object) -> object:
+                argv = [str(value) for value in arguments]
+                base = Path(argv[argv.index("--base") + 1])
+                base.write_bytes(b"base")
+                for label in ("night", "forest_east", "forest_west"):
+                    base.with_name(f"Game.{label}.kbpack").write_bytes(label.encode("utf-8"))
+                Path(argv[argv.index("--index") + 1]).write_text("21kb-pack-set 1\nbase Game.kbpack\n", encoding="utf-8")
+                return mock.MagicMock()
+
+            with mock.patch.object(package_game, "_build_targets"), \
+                    mock.patch.object(package_game, "_build_tool_path", return_value=kb_cli), \
+                    mock.patch.object(package_game, "emit_diagnostic"), \
+                    mock.patch.object(package_game, "run_checked", side_effect=run) as checked:
+                pack_set = package_game._build_pack_set(args, Path("cmake.exe"), pack, job)
+
+            command = [str(value) for value in checked.call_args.args[0]]
+            self.assertEqual(
+                ["--chunk", "night=/Game/Layers/Night/",
+                 "--chunk-cells", "forest_east=/Game/Worlds/Forest.21kbworld@1:-4..8:4",
+                 "--chunk-cells", "night=/Game/Worlds/Forest.21kbworld#night",
+                 "--chunk-cells", "forest_west=/Game/Worlds/Forest.21kbworld@-8:-4..0:4#(base),props"],
+                command[command.index("--index") + 2:-1],
+            )
+            self.assertEqual(
+                ["Game.kbpack", "Game.night.kbpack", "Game.forest_east.kbpack", "Game.forest_west.kbpack"],
+                [path.name for path in pack_set.new_packs],
+            )
 
     def test_patch_release_ships_the_patched_packs_unchanged_and_seals_only_the_patch(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_text:

@@ -1254,6 +1254,82 @@ void RunPartitionedWorldCookTest() {
             "The packaged world streamed cells outside the source or an inactive layer");
     }
     pack->Unmount();
+
+    // A world region's cells and proxies, and a data layer's cells, split into chunk packs of
+    // their own; the set streams them from there.
+    const std::filesystem::path chunks = TestRoot() / "partitioned_world_chunks";
+    std::error_code removeError;
+    std::filesystem::remove_all(chunks, removeError);
+    std::filesystem::create_directories(chunks);
+    bake::AssetPackWorldRegion east{};
+    bake::AssetPackWorldRegion night{};
+    Require(bake::ParseAssetPackWorldRegion("/Game/Worlds/Forest.21kbworld@1:0..2:0", east, error) &&
+            bake::ParseAssetPackWorldRegion("/Game/Worlds/Forest.21kbworld#night", night, error),
+        error.c_str());
+    const std::vector<bake::AssetPackChunkRule> rules{
+        { .label = "forest_east", .worldRegions = { east }, .output = chunks / "Game.forest_east.kbpack" },
+        { .label = "forest_night", .worldRegions = { night }, .output = chunks / "Game.forest_night.kbpack" },
+    };
+    bake::AssetPackSplitReport split{};
+    {
+        const bool succeeded = bake::SplitRuntimeAssetPack(
+            packPath, chunks / "Game.kbpack", rules, bake::AssetPackBlockCompression::Zstd, 9, split, error);
+        Require(succeeded, error.c_str());
+    }
+    Require(split.chunkAssets == std::vector<std::uint64_t>{ 4U, 1U },
+        "A world region did not take exactly its cells' scenes and proxies, or a layer its cells");
+    const std::vector<bake::RuntimeAssetPackMount> mounts{
+        { .path = chunks / "Game.kbpack" },
+        { .path = rules[0].output, .role = bake::AssetPackRole::Chunk, .label = "forest_east" },
+        { .path = rules[1].output, .role = bake::AssetPackRole::Chunk, .label = "forest_night" },
+    };
+    auto set = std::make_shared<bake::RuntimeAssetPack>();
+    Require(set->MountSet(mounts, bake::WindowsX64BakeTargetProfile()) == bake::RuntimeAssetPackStatus::Success,
+        "The split world did not mount as a pack set");
+    const auto containerOf = [&](std::string_view path) {
+        const bake::RuntimeAssetManifestEntry* entry = set->FindAsset(path);
+        Require(entry != nullptr, (std::string{ "The split world lost " } + std::string{ path }).c_str());
+        return set->AssetContainer(entry->id).value_or(99U);
+    };
+    Require(containerOf("/Game/Worlds/Forest.cells/base/c_0_0.21kbscene") == 0U &&
+            containerOf("/Game/Worlds/Forest.cells/base/c_1_0.21kbscene") == 1U &&
+            containerOf("/Game/Worlds/Forest.cells/base/c_2_0.21kbscene") == 1U &&
+            containerOf("/Game/Worlds/Forest.cells/hlod/h_1_0.obj") == 1U &&
+            containerOf("/Game/Worlds/Forest.cells/hlod/h_0_0.obj") == 0U &&
+            containerOf("/Game/Worlds/Forest.cells/layer.night/c_0_0.21kbscene") == 2U &&
+            containerOf("/Game/Worlds/Forest.cells/Forest.21kbcells") == 0U &&
+            containerOf("/Game/Meshes/Rock.obj") == 0U,
+        "The split put a world asset into the wrong pack");
+    {
+        kb::scene::Scene runtime;
+        Require(runtime.Assets().Manager().MountRuntimePack(set), "The split world registry mount failed");
+        const kb::scene::SceneObject owner = runtime.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Forest" });
+        runtime.Components().ContentInstances().Set(owner.Entity(), kb::scene::ContentInstanceComponent{
+            .assetId = worldId, .kind = kb::scene::ContentInstanceKind::PartitionedWorld });
+        kb::world::WorldPartitionRuntime world{ runtime };
+        world.SetDataLayerActive("night", true);
+        static_cast<void>(world.AddSource({ .position = { 140.0, 0.0, 10.0 }, .loadRadius = 30.0, .unloadRadius = 40.0, .priority = 0 }));
+        static_cast<void>(world.AddSource({ .position = { 10.0, 0.0, 10.0 }, .loadRadius = 30.0, .unloadRadius = 40.0, .priority = 0 }));
+        const auto loaded = [&] {
+            return world.CellState(owner.Entity(), { 2, 0 }) == kb::world::WorldCellState::Loaded &&
+                world.CellState(owner.Entity(), { 0, 0 }, "night") == kb::world::WorldCellState::Loaded;
+        };
+        const auto deadline = Clock::now() + std::chrono::seconds{ 30 };
+        while (!loaded() && Clock::now() < deadline) {
+            static_cast<void>(runtime.Runtime().Update(1.0F / 60.0F));
+            std::this_thread::yield();
+        }
+        Require(loaded(), "The pack set did not stream world cells from their chunk packs");
+    }
+    set->Unmount();
+    bake::AssetPackWorldRegion missing{};
+    Require(bake::ParseAssetPackWorldRegion("/Game/Worlds/Nowhere.21kbworld", missing, error), error.c_str());
+    const std::vector<bake::AssetPackChunkRule> nowhere{
+        { .label = "nowhere", .worldRegions = { missing }, .output = chunks / "Game.nowhere.kbpack" } };
+    Require(!bake::SplitRuntimeAssetPack(packPath, chunks / "Other.kbpack", nowhere, bake::AssetPackBlockCompression::None, 9,
+                split, error) &&
+            Mentions(error, "no built partitioned world"),
+        "A region of a world the pack does not hold was split");
 }
 
 // A big world need not ship as one pack: every region goes to a chunk pack of its own (the rules
