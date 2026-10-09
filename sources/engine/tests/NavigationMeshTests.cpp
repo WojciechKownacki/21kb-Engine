@@ -847,8 +847,18 @@ void RunNavigationCrowdBenchmark() {
     static_cast<void>(CrowdArena(kHalf));
     const double bakeMilliseconds = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - bakeStart).count();
     const CrowdRun thousand = RunCrowd(arena, kHalf, 1000, 240);
-    const CrowdRun fiveThousand = RunCrowd(arena, kHalf, 5000, 240);
-    const CrowdRun fiveThousandLod = RunCrowd(arena, kHalf, 5000, 240, { DVec3{ -50.0, 0.0, -50.0 } });
+    // The two 5000-agent runs alternate and their medians are compared: one run of each swings
+    // by more than the level of detail saves.
+    std::vector<double> fullRuns;
+    std::vector<double> lodRuns;
+    for (int round = 0; round < 3; ++round) {
+        fullRuns.push_back(RunCrowd(arena, kHalf, 5000, 240).milliseconds);
+        lodRuns.push_back(RunCrowd(arena, kHalf, 5000, 240, { DVec3{ -50.0, 0.0, -50.0 } }).milliseconds);
+    }
+    std::ranges::sort(fullRuns);
+    std::ranges::sort(lodRuns);
+    const CrowdRun fiveThousand{ .milliseconds = fullRuns[1] };
+    const CrowdRun fiveThousandLod{ .milliseconds = lodRuns[1] };
     std::cout << "navigation: bake of a 200 x 200 m arena with 25 pillars " << bakeMilliseconds << " ms ("
               << arena->tiles.size() << " tiles)\n";
     std::cout << "navigation: crowd step, 1000 agents " << thousand.milliseconds << " ms, 5000 agents " << fiveThousand.milliseconds
