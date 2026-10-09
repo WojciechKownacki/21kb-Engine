@@ -25,6 +25,8 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunAssetBakeTests();
     } else if (suite == "asset-pack") {
         kb::tests::RunAssetPackTests();
+    } else if (suite == "content-streaming") {
+        kb::tests::RunContentStreamingTests();
     } else if (suite == "save") {
         kb::tests::RunSaveGameTests();
     } else if (suite == "security") {
@@ -111,6 +113,7 @@ void RunAllSuites() {
     kb::tests::RunAssetRuntimeTests();
     kb::tests::RunAssetBakeTests();
     kb::tests::RunAssetPackTests();
+    kb::tests::RunContentStreamingTests();
     kb::tests::RunSaveGameTests();
     kb::tests::RunSecurityTests();
     kb::tests::RunEcsRuntimeTests();

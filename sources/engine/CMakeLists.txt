@@ -52,6 +52,8 @@ add_library(kb_engine STATIC
     include/engine/assets/bake/BakedAssetSink.hpp
     include/engine/assets/bake/RuntimeAssetManifest.hpp
     include/engine/assets/bake/RuntimeAssetPack.hpp
+    include/engine/assets/streaming/AsyncFileReader.hpp
+    include/engine/assets/streaming/StreamingResidency.hpp
     include/engine/math/EngineMath.hpp
     include/engine/network/NetworkModel.hpp
     include/engine/network/NetworkObject.hpp
@@ -575,6 +577,8 @@ add_library(kb_engine STATIC
     src/assets/bake/BakedAssetSink.cpp
     src/assets/bake/RuntimeAssetManifest.cpp
     src/assets/bake/RuntimeAssetPack.cpp
+    src/assets/streaming/AsyncFileReader.cpp
+    src/assets/streaming/StreamingResidency.cpp
     src/private/assets/bake/BakeStorePath.hpp
     src/project/ProjectDescriptorBinaryIO.cpp
     src/project/ProjectDescriptorIntegrity.cpp
@@ -1735,6 +1739,7 @@ if(BUILD_TESTING)
         tests/AssetRuntimeTests.cpp
         tests/AssetBakeTests.cpp
         tests/AssetPackTests.cpp
+        tests/ContentStreamingTests.cpp
         tests/SaveGameTests.cpp
         tests/EcsConfigTests.cpp
         tests/EcsEventTests.cpp

@@ -5,6 +5,7 @@ namespace kb::tests {
 void RunAssetRuntimeTests();
 void RunAssetBakeTests();
 void RunAssetPackTests();
+void RunContentStreamingTests();
 void RunSaveGameTests();
 void RunSecurityTests();
 void RunEcsRuntimeTests();
