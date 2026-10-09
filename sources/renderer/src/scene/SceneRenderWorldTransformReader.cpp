@@ -2,6 +2,9 @@
 
 #include "scene/EcsRenderTransformResolver.hpp"
 
+#include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneTransforms.hpp"
+
 namespace kb::render {
 
 SceneRenderWorldTransformReader::SceneRenderWorldTransformReader(EcsRenderTransformResolver& fallbackResolver) noexcept
@@ -22,6 +25,15 @@ kb::scene::TransformComponent SceneRenderWorldTransformReader::Read(
     // edit before the system ran). Resolve it on demand to preserve correctness.
     ++resolvedFallbackCount_;
     return fallbackResolver_.Resolve(entity);
+}
+
+kb::math::DVec3 SceneRenderWorldTransformReader::ReadWorldTranslation(
+    kb::scene::SceneEntity entity,
+    const kb::scene::TransformComponent& computed) const {
+    if (!computed.worldDirty) {
+        return fallbackResolver_.Scene().Transforms().WorldTranslation(entity, computed);
+    }
+    return fallbackResolver_.ResolveWorldTranslation(entity);
 }
 
 } // namespace kb::render

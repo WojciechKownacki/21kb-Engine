@@ -139,6 +139,7 @@ void EditorRenderPassSubmitter::SubmitSceneOverlays(const RenderViewportPlan& vi
                 .minorSpacingMeters = desc.editorGrid.minorSpacingMeters,
                 .majorEvery = desc.editorGrid.majorEvery,
                 .buildDepthFrameBuffer = buildDepthFrameBuffer,
+                .worldOffset = desc.editorGrid.worldOffset,
             };
             static_cast<void>(gridPass_.Submit(gridDesc));
         } else {

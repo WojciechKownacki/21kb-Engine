@@ -129,13 +129,13 @@ struct Portal {
     return rect;
 }
 
-[[nodiscard]] bool ReadVolume(const Scene& scene, SceneEntity entity, ScenePortalVisibilityCell& volume) {
+[[nodiscard]] bool ReadVolume(const Scene& scene, SceneEntity entity, ScenePortalVisibilityCell& volume, const kb::math::DVec3& origin) {
     const RegionShapeComponent* shape = scene.Components().RegionShapes().TryGet(entity);
     const TransformComponent* transform = scene.Transforms().TryGet(entity);
     if (shape == nullptr || transform == nullptr || !shape->enabled || !IsRegionShapeKindValid(shape->kind)) return false;
     volume.cell = entity;
     volume.shape = *shape;
-    volume.position = transform->worldPosition;
+    volume.position = kb::math::RelativeTo(scene.Transforms().WorldTranslation(entity, *transform), origin);
     volume.rotation = transform->worldRotation;
     volume.scale = transform->worldScale;
     return true;
@@ -178,7 +178,7 @@ ScenePortalVisibility ComputeScenePortalVisibility(const Scene& scene, const Sce
     for (const auto& [entity, cell] : authoredCells) {
         if (!cell.enabled || !IsVisibilityCellComponentValid(cell) || (cell.membershipMask & camera.membershipMask) == 0U) continue;
         ScenePortalVisibilityCell volume;
-        if (!ReadVolume(scene, entity, volume)) continue;
+        if (!ReadVolume(scene, entity, volume, camera.origin)) continue;
         volume.membershipMask = cell.membershipMask;
         volume.membership = cell.membership;
         result.cells_.push_back(volume);
@@ -224,7 +224,7 @@ ScenePortalVisibility ComputeScenePortalVisibility(const Scene& scene, const Sce
         const std::optional<std::size_t> target = indexOf(portal.targetCell);
         if (!source.has_value() || !target.has_value()) continue;
         Portal entry{ .entity = entity, .source = *source, .target = *target };
-        if (!ReadVolume(scene, entity, entry.volume)) continue;
+        if (!ReadVolume(scene, entity, entry.volume, camera.origin)) continue;
         portals.push_back(entry);
     }
 

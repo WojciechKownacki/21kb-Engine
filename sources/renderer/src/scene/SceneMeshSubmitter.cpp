@@ -229,6 +229,14 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
         SceneLightingPacker::AssignPointShadowSlots(lighting, shadowMap->point);
     }
     const std::array<float, 4> cameraPosition = SceneLightingPacker::CameraPosition(camera);
+    // Material graphs read world positions as render-space positions plus the render origin wrapped to
+    // kMaterialWorldPeriodMeters: exact world coordinates near the world origin, and seamless for any world-aligned
+    // pattern whose period divides it farther out, where a float could not hold the full coordinate.
+    constexpr double kMaterialWorldPeriodMeters = 8192.0;
+    const kb::math::DVec3& renderOrigin = renderScene.RenderOrigin();
+    const std::array<float, 4> renderOriginOffset{ static_cast<float>(std::fmod(renderOrigin.x, kMaterialWorldPeriodMeters)),
+        static_cast<float>(std::fmod(renderOrigin.y, kMaterialWorldPeriodMeters)),
+        static_cast<float>(std::fmod(renderOrigin.z, kMaterialWorldPeriodMeters)), 0.0F };
     if (detailSwitchScene_ != &renderScene) {
         pipelineScratch_.detailSwitchLevels.clear();
         pipelineScratch_.detailSwitchPreviousLevels.clear();
@@ -430,6 +438,7 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
         .sceneColorTexture = sceneColorTexture,
         .motionVectorPreviousViewProjection = motionVectorPreviousViewProjection,
         .skinningPaletteAllocator = skinningPaletteAllocator_,
+        .renderOriginOffset = renderOriginOffset,
         .passResources = passResources_,
         .instanceBufferPool = &instanceBuffers_,
         .diagnostics = diagnostics,

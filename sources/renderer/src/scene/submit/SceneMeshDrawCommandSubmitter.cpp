@@ -273,6 +273,7 @@ void SceneMeshDrawCommandSubmitter::Submit(const SceneMeshDrawCommandSubmitDesc&
             .sceneColorTexture = desc.sceneColorTexture,
             .motionVectorPreviousViewProjection = desc.motionVectorPreviousViewProjection,
             .skinningPaletteAllocator = desc.skinningPaletteAllocator,
+            .renderOriginOffset = desc.renderOriginOffset,
         });
         const SceneMeshPassProgramResolution resolution = desc.passResources.LastProgramResolution();
         if (command.materialResource != nullptr && command.materialResource->graphProgram.active) {

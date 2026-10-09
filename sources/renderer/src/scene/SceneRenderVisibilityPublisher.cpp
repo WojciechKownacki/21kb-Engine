@@ -52,6 +52,7 @@ void SceneRenderVisibilityPublisher::BuildFrame(
     outFrame.viewportHeight = viewportHeight;
     outFrame.cameraValid = camera != nullptr;
     outFrame.view = camera != nullptr ? camera->view : std::array<float, 16>{};
+    outFrame.renderOrigin = renderScene.RenderOrigin();
     outFrame.projection = camera != nullptr ? camera->projection : std::array<float, 16>{};
     for (std::size_t planeIndex = 0U; planeIndex < outFrame.frustumPlanes.size(); ++planeIndex) {
         const MeshPipelineFrustumPlane& plane = frustum.planes[planeIndex];

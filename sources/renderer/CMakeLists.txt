@@ -129,6 +129,7 @@ add_library(kb_renderer STATIC
     src/renderer/RendererMeshPassSubmitter.cpp
     src/renderer/RendererMeshPassSubmitter.hpp
     src/renderer/RendererMatrixMath.cpp
+    src/renderer/RendererRenderOrigin.cpp
     src/renderer/RendererMatrixMath.hpp
     src/renderer/RendererPostProcessSubmitter.cpp
     src/renderer/RendererPostProcessSubmitter.hpp
@@ -771,6 +772,7 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
         tests/SceneExposureMeterTests.cpp
         tests/SceneDepthPolicyTests.cpp
         tests/RenderSceneSyncTests.cpp
+        tests/LargeWorldRenderTests.cpp
         tests/SceneRenderTargetFormatTests.cpp
         tests/SceneRenderExtractorTests.cpp
         tests/ShaderManifestTests.cpp

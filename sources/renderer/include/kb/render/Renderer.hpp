@@ -47,6 +47,7 @@ class BgfxContext;
 class EcsRenderSceneSynchronizer;
 class RenderScene;
 class RenderSurface;
+class RendererRelativeOverlays;
 class RendererScreenCapture;
 class ScreenUIRenderer;
 class SceneParticleRenderSynchronizer;
@@ -265,9 +266,17 @@ public:
     [[nodiscard]] bool RuntimeAssetDiscoveryEnabled() const noexcept;
     void ReleaseScene(const kb::scene::Scene& scene) noexcept;
     void ReleaseAllScenes() noexcept;
+    // When the render origin of a scene follows its viewing camera (docs/large_worlds.md).
+    void SetRenderOriginPolicy(const RenderOriginPolicy& policy) noexcept;
+    [[nodiscard]] const RenderOriginPolicy& CurrentRenderOriginPolicy() const noexcept;
 
 private:
+    // Moves the scene's render origin to the viewing camera when it went too far, re-expresses the submit's
+    // world-space camera and overlays in render space, then submits.
     [[nodiscard]] bool SubmitSceneToViewport(const kb::scene::Scene& scene, const RenderSceneSubmitDesc& desc, const RenderViewportPlan& viewportPlan);
+    [[nodiscard]] bool SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene, const RenderSceneSubmitDesc& desc, const RenderViewportPlan& viewportPlan);
+    // True when the render origin moved.
+    [[nodiscard]] bool UpdateRenderOrigin(const kb::scene::Scene& scene, RenderScene& renderScene, const RenderSceneSubmitDesc& desc);
     [[nodiscard]] RenderScene& RenderSceneFor(const kb::scene::Scene& scene);
     void ApplyRuntimeSceneResourceReserve();
     struct TemporalViewportState {
@@ -277,6 +286,8 @@ private:
         std::array<float, 16> previousViewProjection{};
         std::array<float, 2> previousJitter{};
         bool hasHistory = false;
+        // The render origin previousViewProjection works relative to.
+        kb::math::DVec3 renderOrigin{};
     };
     [[nodiscard]] TemporalViewportState& TemporalStateFor(RenderViewportId viewportId, std::uint32_t viewportIndex);
     std::unique_ptr<BgfxContext> context_;
@@ -286,6 +297,9 @@ private:
     // Lazily created worker pool that parallelizes the columnar render-sync (H6).
     std::unique_ptr<kb::ecs::WorkerPool> renderSyncWorkerPool_;
     RenderSceneStore renderSceneStore_;
+    RenderOriginPolicy renderOriginPolicy_{};
+    // Render-space copies of the editor overlays of a camera-relative submit (created on first use).
+    std::unique_ptr<RendererRelativeOverlays> relativeOverlays_;
     std::unique_ptr<SceneRenderer> sceneRenderer_;
     std::unique_ptr<ScenePostProcessRenderer> scenePostProcessRenderer_;
     std::unique_ptr<FinalCompositePass> finalCompositePass_;

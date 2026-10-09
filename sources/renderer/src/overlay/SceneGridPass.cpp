@@ -162,6 +162,28 @@ constexpr float kAxisAlpha = 0.46F;
     };
 }
 
+// Within this distance of the world origin the grid is drawn in world coordinates along an axis, which keeps the world
+// axis line where it is. Further out the axis is out of sight (beyond the far fade) and the grid space only keeps the
+// lines on whole multiples of the anchor spacing, placed so no axis line can appear near the camera.
+constexpr double kWorldAlignedGridLimit = 8192.0;
+
+[[nodiscard]] double GridSpaceShift(double worldOffset, double anchorSpacing) noexcept {
+    if (std::abs(worldOffset) <= kWorldAlignedGridLimit) return worldOffset;
+    const double anchors = std::ceil(kWorldAlignedGridLimit / anchorSpacing);
+    return std::fmod(worldOffset, anchorSpacing) + anchors * anchorSpacing;
+}
+
+// The camera of a render-space submit moved into grid space: render space shifted by `shift`.
+[[nodiscard]] SceneRenderCamera GridSpaceCamera(const SceneRenderCamera& camera, const kb::math::DVec3& shift) noexcept {
+    SceneRenderCamera shifted = camera;
+    for (std::size_t row = 0U; row < 3U; ++row) {
+        // view * (p - shift): the translation loses R * shift.
+        shifted.view[12U + row] = static_cast<float>(static_cast<double>(camera.view[12U + row]) -
+            (camera.view[row] * shift.x + camera.view[4U + row] * shift.y + camera.view[8U + row] * shift.z));
+    }
+    return shifted;
+}
+
 void DestroyUniform(bgfx::UniformHandle& uniform) noexcept {
     if (bgfx::isValid(uniform)) {
         bgfx::destroy(uniform);
@@ -303,7 +325,13 @@ bool SceneGridPass::Submit(const SceneGridPassDesc& desc) const {
 
     const float minorSpacing = std::clamp(desc.minorSpacingMeters, 0.01F, 1000.0F);
     const float majorSpacing = minorSpacing * static_cast<float>(std::clamp(desc.majorEvery, 2U, 1000U));
-    const GridCamera camera = CameraFromMatrices(*desc.camera, minorSpacing, desc.majorEvery);
+    // The grid plane and lines are anchored to the world: grid space is render space shifted by the render origin (or by
+    // the part of it that keeps the lines on world multiples, far from the world origin).
+    const double anchorSpacing = static_cast<double>(majorSpacing) * 10.0;
+    const kb::math::DVec3 shift{ GridSpaceShift(desc.worldOffset.x, anchorSpacing), desc.worldOffset.y, GridSpaceShift(desc.worldOffset.z, anchorSpacing) };
+    const GridCamera camera = shift == kb::math::DVec3{}
+        ? CameraFromMatrices(*desc.camera, minorSpacing, desc.majorEvery)
+        : CameraFromMatrices(GridSpaceCamera(*desc.camera, shift), minorSpacing, desc.majorEvery);
     const std::array<float, 4> gridParams{ minorSpacing, majorSpacing, kFarFadeStartMeters, kFarFadeEndMeters };
     const std::array<float, 4> gridWidths{ kMinorLineWidthPixels, kMajorLineWidthPixels, kAxisLineWidthPixels, 0.0F };
     const std::array<float, 4> gridStyle{ kMinorAlpha, kMajorAlpha, kAxisAlpha, 0.0F };

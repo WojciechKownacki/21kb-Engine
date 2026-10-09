@@ -16,7 +16,9 @@
 #include "engine/scene/ScenePortalVisibility.hpp"
 #include "engine/scene/ScenePostProcessAccess.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneUI.hpp"
 #include "kb/render/resources/PostProcessProfileAssetLoader.hpp"
 #include "kb/render/scene/EcsRenderSceneSynchronizer.hpp"
@@ -37,6 +39,7 @@
 #include "scene/lighting/SceneLightingPacker.hpp"
 #include "scene/pipeline/MeshPipelineVisibility.hpp"
 #include "renderer/RendererPostProcessSubmitter.hpp"
+#include "renderer/RendererRenderOrigin.hpp"
 #include "renderer/RendererRuntimeResourceStatsBuilder.hpp"
 #include "renderer/RendererSceneLightingConfigResolver.hpp"
 #include "renderer/RendererShadowSubmitter.hpp"
@@ -827,7 +830,54 @@ bool Renderer::SubmitScenes(std::span<const SceneFrameSubmission> submissions) {
     return true;
 }
 
+void Renderer::SetRenderOriginPolicy(const RenderOriginPolicy& policy) noexcept {
+    renderOriginPolicy_ = policy;
+}
+
+const RenderOriginPolicy& Renderer::CurrentRenderOriginPolicy() const noexcept {
+    return renderOriginPolicy_;
+}
+
+bool Renderer::UpdateRenderOrigin(const kb::scene::Scene& scene, RenderScene& renderScene, const RenderSceneSubmitDesc& desc) {
+    std::optional<kb::math::DVec3> eye = desc.cameraOverrideEye;
+    if (!eye.has_value() && desc.cameraOverride.has_value()) {
+        eye = RendererRenderOrigin::ViewEye(desc.cameraOverride->view);
+    }
+    if (!eye.has_value()) {
+        // The camera this viewport rendered with last time: its proxies are synchronized below.
+        if (const CameraRenderProxyDesc* camera = renderScene.FindPrimaryCameraProxy(desc.target.viewport.id.value); camera != nullptr) {
+            const kb::scene::SceneEntity entity{ camera->entityId };
+            if (scene.Entities().IsAlive(entity)) eye = scene.Transforms().WorldTranslation(entity);
+        }
+    }
+    return eye.has_value() && renderScene.SetRenderOrigin(renderScene.RenderOriginFor(*eye, renderOriginPolicy_));
+}
+
 bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const RenderSceneSubmitDesc& desc, const RenderViewportPlan& viewportPlan) {
+    RenderScene& renderScene = RenderSceneFor(scene);
+    const bool originMoved = UpdateRenderOrigin(scene, renderScene, desc);
+    const kb::math::DVec3 origin = renderScene.RenderOrigin();
+    // The motion vectors of the next frame compare against the previous view-projection: keep it in this origin's space.
+    TemporalViewportState& temporalState = TemporalStateFor(desc.target.viewport.id, desc.target.viewport.viewportIndex);
+    if (temporalState.renderOrigin != origin) {
+        temporalState.previousViewProjection = RendererRenderOrigin::RebaseViewProjection(temporalState.previousViewProjection, origin - temporalState.renderOrigin);
+        temporalState.renderOrigin = origin;
+    }
+    if (origin == kb::math::DVec3{} && !originMoved) {
+        return SubmitSceneToViewportInRenderSpace(scene, desc, viewportPlan);
+    }
+    RenderSceneSubmitDesc relative = desc;
+    // A moved origin changes every proxy: the full synchronization re-derives them all.
+    relative.synchronizeScene = desc.synchronizeScene || originMoved;
+    if (relative.cameraOverride.has_value()) {
+        relative.cameraOverride->view = RendererRenderOrigin::RelativeView(desc.cameraOverride->view, origin, desc.cameraOverrideEye);
+    }
+    if (relativeOverlays_ == nullptr) relativeOverlays_ = std::make_unique<RendererRelativeOverlays>();
+    relativeOverlays_->Apply(relative, origin);
+    return SubmitSceneToViewportInRenderSpace(scene, relative, viewportPlan);
+}
+
+bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene, const RenderSceneSubmitDesc& desc, const RenderViewportPlan& viewportPlan) {
     lastSceneSynchronizationMilliseconds_ = 0.0;
     lastSceneVisibilityBuildMilliseconds_ = 0.0;
     lastSceneVisibilitySortMilliseconds_ = 0.0;
@@ -1303,7 +1353,9 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
     // A playing scene with visibility cells culls what this camera cannot see through the portals; the
     // mesh passes and the visibility feedback below read it from the render scene.
     if (overlayCamera != nullptr && scene.Runtime().IsPlaying() && kb::scene::SceneHasVisibilityCells(scene)) {
-        renderScene.SetPortalVisibility(kb::scene::ComputeScenePortalVisibility(scene, MeshPipelineVisibility::PortalCamera(*overlayCamera)));
+        kb::scene::ScenePortalCamera portalCamera = MeshPipelineVisibility::PortalCamera(*overlayCamera);
+        portalCamera.origin = renderScene.RenderOrigin();
+        renderScene.SetPortalVisibility(kb::scene::ComputeScenePortalVisibility(scene, portalCamera));
     } else {
         renderScene.SetPortalVisibility(std::nullopt);
     }

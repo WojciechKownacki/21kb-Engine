@@ -37,6 +37,8 @@ struct SceneMeshPassBindDesc {
     bgfx::TextureHandle sceneColorTexture = BGFX_INVALID_HANDLE;
     std::array<float, 16> motionVectorPreviousViewProjection{};
     const RenderSkinningPaletteAllocator* skinningPaletteAllocator = nullptr;
+    // What material graphs add to render-space positions to read world positions (SceneMeshSubmitter).
+    std::array<float, 4> renderOriginOffset{};
 };
 
 struct SceneMeshProgramBindStats {
@@ -152,6 +154,7 @@ private:
     bgfx::UniformHandle materialFlagsUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle materialUvTransformUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle cameraPositionUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle renderOriginOffsetUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle timeUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle dynamicParameterUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle lightDirKindUniform_ = BGFX_INVALID_HANDLE;

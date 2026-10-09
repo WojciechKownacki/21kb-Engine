@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/math/DVec3.hpp"
 #include "kb/render/frame/RenderTargetDesc.hpp"
 #include "kb/render/scene/SceneRenderTypes.hpp"
 #include "kb/render/ViewIdPolicy.hpp"
@@ -21,6 +22,8 @@ struct SceneGridPassDesc {
     float minorSpacingMeters = 1.0F;
     std::uint32_t majorEvery = 10U;
     bool buildDepthFrameBuffer = false;
+    // The world position of the camera's space origin (RenderSceneSubmitDesc::EditorGridDesc::worldOffset).
+    kb::math::DVec3 worldOffset{};
 
     [[nodiscard]] bool IsValid() const noexcept;
 };

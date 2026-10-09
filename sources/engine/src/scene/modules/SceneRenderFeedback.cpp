@@ -78,6 +78,7 @@ void SceneRenderFeedback::Publish(Scene& scene, SceneRenderVisibilityFrame& fram
     destination.frustumPlanes = frame.frustumPlanes;
     destination.view = frame.view;
     destination.projection = frame.projection;
+    destination.renderOrigin = frame.renderOrigin;
     state.lastRenderVisibilityLocalUserId = frame.localUser.value;
     ++state.renderVisibilityPublishCount;
 }
@@ -102,6 +103,12 @@ std::uint64_t SceneRenderFeedback::PublishCount(const Scene& scene) noexcept {
     return SceneAccess::State(scene).renderVisibilityPublishCount;
 }
 
+kb::math::DVec3 SceneRenderFeedback::RenderOrigin(const Scene& scene) noexcept {
+    const SceneState& state = SceneAccess::State(scene);
+    const auto frameIt = state.renderVisibilityFrames.find(state.lastRenderVisibilityLocalUserId);
+    return state.renderVisibilityPublishCount == 0U || frameIt == state.renderVisibilityFrames.end() ? kb::math::DVec3{} : frameIt->second.renderOrigin;
+}
+
 bool SceneRenderFeedback::IsVisible(const Scene& scene, SceneEntity entity) noexcept {
     const SceneRenderVisibilityEntry* entry = FindEntry(scene, entity);
     return entry != nullptr && entry->visible;
@@ -109,7 +116,16 @@ bool SceneRenderFeedback::IsVisible(const Scene& scene, SceneEntity entity) noex
 
 SceneRenderBounds SceneRenderFeedback::WorldBounds(const Scene& scene, SceneEntity entity) noexcept {
     const SceneRenderVisibilityEntry* entry = FindEntry(scene, entity);
-    return entry == nullptr ? SceneRenderBounds{} : entry->worldBounds;
+    if (entry == nullptr) {
+        return SceneRenderBounds{};
+    }
+    SceneRenderBounds bounds = entry->worldBounds;
+    const SceneState& state = SceneAccess::State(scene);
+    const auto frameIt = state.renderVisibilityFrames.find(state.lastRenderVisibilityLocalUserId);
+    if (frameIt != state.renderVisibilityFrames.end()) {
+        bounds.center = kb::math::ToVec3(frameIt->second.renderOrigin + bounds.center);
+    }
+    return bounds;
 }
 
 bool SceneRenderFeedback::TestFrustum(const Scene& scene, const kb::math::Vec3& center, float radius) noexcept {
@@ -121,8 +137,9 @@ bool SceneRenderFeedback::TestFrustum(const Scene& scene, const kb::math::Vec3& 
         !frameIt->second.frustumValid) {
         return false;
     }
+    const kb::math::Vec3 relative = kb::math::RelativeTo(kb::math::ToDVec3(center), frameIt->second.renderOrigin);
     for (const SceneRenderFrustumPlane& plane : frameIt->second.frustumPlanes) {
-        const float distance = plane.x * center.x + plane.y * center.y + plane.z * center.z + plane.w;
+        const float distance = plane.x * relative.x + plane.y * relative.y + plane.z * relative.z + plane.w;
         if (distance < -radius) {
             return false;
         }
@@ -131,6 +148,10 @@ bool SceneRenderFeedback::TestFrustum(const Scene& scene, const kb::math::Vec3& 
 }
 
 SceneRenderScreenPoint SceneRenderFeedback::WorldToScreen(const Scene& scene, const kb::math::Vec3& worldPoint) noexcept {
+    return WorldToScreen(scene, kb::math::ToDVec3(worldPoint));
+}
+
+SceneRenderScreenPoint SceneRenderFeedback::WorldToScreen(const Scene& scene, const kb::math::DVec3& worldPoint) noexcept {
     const SceneState& state = SceneAccess::State(scene);
     const auto frameIt =
         state.renderVisibilityFrames.find(state.lastRenderVisibilityLocalUserId);
@@ -143,7 +164,7 @@ SceneRenderScreenPoint SceneRenderFeedback::WorldToScreen(const Scene& scene, co
         return {};
     }
 
-    const kb::math::Vec4 viewPoint = TransformPoint(frame.view, worldPoint);
+    const kb::math::Vec4 viewPoint = TransformPoint(frame.view, kb::math::RelativeTo(worldPoint, frame.renderOrigin));
     const kb::math::Vec4 clip = TransformPoint(frame.projection, kb::math::Vec3{ viewPoint.x, viewPoint.y, viewPoint.z });
     SceneRenderScreenPoint result{};
     result.valid = true;
@@ -209,14 +230,17 @@ SceneRenderCameraRay SceneRenderFeedback::ScreenPointToRay(
         // origin laterally by the half-extents encoded in the projection's x/y scales.
         const float halfWidth = 1.0F / xScale;
         const float halfHeight = 1.0F / yScale;
-        result.ray.origin = position + (right * (ndcX * halfWidth)) + (up * (ndcY * halfHeight));
+        const kb::math::Vec3 relativeOrigin = position + (right * (ndcX * halfWidth)) + (up * (ndcY * halfHeight));
+        result.worldOrigin = frame.renderOrigin + relativeOrigin;
+        result.ray.origin = kb::math::ToVec3(result.worldOrigin);
         result.ray.direction = kb::math::Normalize(forward);
         return result;
     }
     // Perspective: mirror the editor's EditorSceneViewportHitResolver::BuildRay math -
     // tan(fovY/2) = 1/projection[5], aspect-scaled x. ndcX*aspect*tanHalfFov collapses to
     // ndcX/projection[0].
-    result.ray.origin = position;
+    result.worldOrigin = frame.renderOrigin + position;
+    result.ray.origin = kb::math::ToVec3(result.worldOrigin);
     result.ray.direction = kb::math::Normalize(forward + (right * (ndcX / xScale)) + (up * (ndcY / yScale)));
     return result;
 }
