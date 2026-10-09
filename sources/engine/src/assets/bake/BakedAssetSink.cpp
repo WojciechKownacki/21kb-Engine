@@ -174,6 +174,8 @@ std::string_view ToString(BakedAssetSinkStatus status) noexcept {
         return "StagingConflict";
     case BakedAssetSinkStatus::InvalidFragment:
         return "InvalidFragment";
+    case BakedAssetSinkStatus::InvalidPackOptions:
+        return "InvalidPackOptions";
     }
     return "Unknown";
 }

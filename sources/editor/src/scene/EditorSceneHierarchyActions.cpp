@@ -17,6 +17,8 @@ bool EditorSceneHierarchyActions::ToggleVisibility(kb::scene::Scene& scene, kb::
     visibility.mode = visibility.mode == kb::scene::VisibilityMode::Hidden
         ? kb::scene::VisibilityMode::Visible
         : kb::scene::VisibilityMode::Hidden;
+    // A stale legacy `visible = false` would make Set keep the entity hidden.
+    visibility.visible = visibility.mode != kb::scene::VisibilityMode::Hidden;
     scene.Components().Visibility().Set(entity, visibility);
     return true;
 }

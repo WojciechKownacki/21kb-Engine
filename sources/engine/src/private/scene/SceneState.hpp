@@ -7,6 +7,7 @@
 #include "engine/ecs/SystemScheduler.hpp"
 #include "engine/ecs/WorkerPool.hpp"
 #include "engine/ecs/World.hpp"
+#include "ecs/NoInitAllocator.hpp"
 #include "engine/input/InputLocalUser.hpp"
 #include "engine/input/InputSubsystem.hpp"
 #include "engine/particles/ParticleRuntimeResult.hpp"
@@ -16,9 +17,11 @@
 #include "engine/localization/LocalizationCatalog.hpp"
 #include "engine/scene/BehaviourVariableOverride.hpp"
 #include "engine/scene/ContentInstanceComponent.hpp"
+#include "engine/scene/MotionSkeletonRuleComponent.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/PhysicsDebugDraw.hpp"
 #include "engine/scene/SceneEntity.hpp"
+#include "engine/scene/SceneHistory.hpp"
 #include "engine/scene/SceneMaterialInstances.hpp"
 #include "engine/save/SaveGame.hpp"
 #include "engine/scene/SceneMode.hpp"
@@ -35,7 +38,9 @@
 #include "engine/scene/TimelineAsset.hpp"
 #include "scene/components/SceneComponentRegistry.hpp"
 #include "scene/components/SceneComponentStorage.hpp"
+#include "scene/transform/SceneTransformResiduals.hpp"
 #include "scene/history/SceneHistoryStack.hpp"
+#include "scene/navigation/SceneNavigationState.hpp"
 #include "scene/prefab/ScenePrefabInstanceRegistry.hpp"
 #include "scene/prefab/ScenePrefabRegistry.hpp"
 #include "scene/systems/SceneSystemScheduler.hpp"
@@ -77,10 +82,18 @@ class IParticleSimulationBackend;
 
 } // namespace kb::particles
 
+namespace kb::world {
+
+struct WorldPartitionState;
+
+} // namespace kb::world
+
 namespace kb::scene {
 
 class IPhysicsBackend;
 struct SceneTransformRootQueryCache;
+struct SceneTransformPassArena;
+struct SceneComponentIterationQueries;
 
 struct AnimatorRuntimeState {
     struct Motion {
@@ -196,6 +209,13 @@ struct AnimatorInstance {
     float lastAppliedComponentPoseUpdateRateHz = 0.0F;
     double poseUpdateAccumulatorSeconds = 0.0;
     bool hasEvaluatedPose = false;
+    // The entity's enabled, valid MotionSkeletonRule as read for this update, applied to the skeletal pose
+    // after the controller's rig constraints, and the update's delta for its Spring kind.
+    std::optional<MotionSkeletonRuleComponent> motionSkeletonRule;
+    float motionSkeletonRuleDeltaSeconds = 0.0F;
+    // Spring kind: the lagging animator-space rotation of the bone it last drove.
+    std::optional<Quat> motionSkeletonRuleSpringRotation;
+    SkeletonBoneId motionSkeletonRuleSpringBone = 0U;
 };
 
 using AnimatorRuntimeRecord = AnimatorInstance;
@@ -277,6 +297,7 @@ public:
     std::uint64_t localizationCatalogGeneration = 0U;
     std::string localizationLanguage;
     std::map<std::uint64_t, AnimatorInstance> animators;
+    SceneNavigationState navigation;
     std::map<std::uint64_t, SkeletonBindingRuntimePose> skeletonBindingPoses;
     std::vector<AnimationEventRecord> pendingAnimationEvents;
     std::unique_ptr<kb::ecs::WorkerPool> animatorWorkerPool;
@@ -286,6 +307,8 @@ public:
     std::size_t lastAnimatorUpdateRateSkippedPoseCount = 0U;
     std::map<std::uint64_t, TimelineRuntimeRecord> timelines;
     std::map<std::uint64_t, ContentInstanceRuntimeRecord> contentInstances;
+    // Streaming state of partitioned worlds placed through ContentInstanceComponent.
+    std::unique_ptr<kb::world::WorldPartitionState> worldPartition;
     std::vector<TimelineMarkerEvent> pendingTimelineMarkerEvents;
     std::uint64_t nextTimelineInstanceId = 1U;
     kb::input::InputSubsystem inputSubsystem;
@@ -297,6 +320,9 @@ public:
     std::unordered_map<std::uint32_t, kb::input::InputSubsystem> secondaryInputSubsystems;
     SceneHistoryStack undoHistory;
     SceneHistoryStack redoHistory;
+    std::vector<SceneEntityRemap> recreatedEntities;
+    // The command Record opened, until it is committed; null while no command records.
+    std::unique_ptr<SceneHistoryRecording> historyRecording;
     kb::ecs::SystemScheduler systemScheduler;
     SceneSystemScheduler sceneSystemScheduler;
     SceneRuntimeFixedStepSettings fixedStepSettings;
@@ -452,12 +478,26 @@ public:
         TransformComponent previous;
         TransformComponent current;
         bool touched = false;
+        SceneEntity entity{};
+        // The double-precision world translations of the two poses (SceneTransformPrecision::WorldTranslation).
+        kb::math::DVec3 previousWorld{};
+        kb::math::DVec3 currentWorld{};
     };
     std::vector<FixedTransformSample> fixedTransformSamples;
     std::vector<FixedTransformValues> fixedTransformValues;
+    // Index into fixedTransformValues by the dense index of the entity (kNoFixedTransformValue where none), so that
+    // a moved entity finds its pose record without a binary search over the sorted samples.
+    static constexpr std::uint32_t kNoFixedTransformValue = 0xFFFFFFFFU;
+    std::vector<std::uint32_t> fixedTransformDenseValueIndex;
     std::vector<std::size_t> fixedTransformTouched;
-    std::uint64_t fixedTransformTopologyVersion = 0U;
-    std::uint64_t fixedTransformRootAppendEpoch = 0U;
+    // The pose records exist only for interpolated entities (Transforms().SetInterpolated, and every entity with a
+    // Rigidbody, CharacterController or Joint); they are rebuilt after a structural change or a change of that set.
+    std::unordered_set<SceneEntity::IdType> interpolatedEntities;
+    std::uint64_t interpolatedEntitiesVersion = 0U;
+    std::vector<SceneEntity> fixedTransformCandidatesScratch;
+    bool fixedTransformRecordsBuilt = false;
+    std::uint64_t fixedTransformStructuralVersion = 0U;
+    std::uint64_t fixedTransformInterpolationVersion = 0U;
     bool fixedTransformCapturing = false;
     std::vector<std::string> denseEntityNames;
     std::unordered_map<SceneEntity::IdType, std::string> entityNames;
@@ -530,10 +570,18 @@ public:
     std::unordered_map<SceneEntity::IdType, std::uint64_t> hierarchyOrder;
     std::vector<std::uint64_t> denseHierarchyOrder;
     std::vector<SceneEntity> hierarchyRoots;
+    // When each root was last appended to hierarchyRoots (0: not a root since its slot was cleared): their order
+    // there, for a walk over a few roots that must not scan all of them.
+    std::vector<std::uint64_t> denseHierarchyRootSequence;
+    std::unordered_map<SceneEntity::IdType, std::uint64_t> hierarchyRootSequence;
+    std::uint64_t nextHierarchyRootSequence = 1U;
     std::unordered_map<SceneEntity::IdType, SceneEntity> hierarchyParents;
     std::unordered_map<SceneEntity::IdType, std::vector<SceneEntity>> hierarchyChildren;
     std::vector<SceneEntity> denseHierarchyParents;
     std::vector<std::vector<SceneEntity>> denseHierarchyChildren;
+    // One bit per dense entity index: the entity has a parent or children. Derived from the tables above by
+    // SceneHierarchyCache; the transform sync composes an unlinked row with the root kernel without the frontier.
+    std::vector<std::uint64_t> transformLinkBits;
     std::vector<std::size_t> prefabHierarchyChildrenPerNodeScratch;
     SceneTransformTopologyCache transformTopology;
     std::uint64_t hierarchyTopologyVersion = 1;
@@ -559,7 +607,7 @@ public:
     std::uint32_t transformValueCacheLoadMarkEpoch = 1U;
     std::vector<SceneTransformBatchEntry> transformHierarchyEntriesScratch;
     std::vector<SceneEntity> transformHierarchyUpdatedEntitiesScratch;
-    std::vector<TransformComponent> transformHierarchyUpdatedTransformsScratch;
+    std::vector<TransformComponent, kb::ecs::NoInitAllocator<TransformComponent>> transformHierarchyUpdatedTransformsScratch;
     std::vector<TransformComponent> transformHierarchyFlushComponentsScratch;
     std::vector<SceneTransformApplyChunkStats> transformHierarchyApplyChunkStatsScratch;
     std::vector<kb::ecs::NativeComponentDirtyRange> transformNativeDirtyRangesScratch;
@@ -572,6 +620,36 @@ public:
     std::vector<SceneEntity> transformDirtyFrontierNextScratch;
     std::vector<std::uint8_t> renderProxyDenseComponentMasks;
     std::unordered_map<SceneEntity::IdType, std::uint8_t> renderProxySparseComponentMasks;
+    // One bit per dense entity index: the transform sync composed the entity's world transform during this frame
+    // (entities without a dense index are listed). The render-proxy lists below are derived from them and from the
+    // transform store when somebody reads them, and are not kept up to date otherwise.
+    std::vector<std::uint64_t> transformUpdatedBits;
+    // Translations finer than float precision (large worlds): see SceneTransformResiduals. Mutable: the
+    // transform sync composes world residuals from paths that hold the state as const (leaf batches).
+    mutable SceneTransformResiduals transformResiduals;
+    // A parallel Transforms().SetMany: one bit per dense entity index to find entities listed twice, and what each
+    // worker range leaves to the serial step after the join.
+    struct TransformSetManyRange {
+        std::vector<kb::ecs::NativeComponentRows> writtenRows;
+        std::vector<std::size_t> composedArchetypes;
+        std::vector<SceneEntity> linked;
+        std::vector<SceneEntity> prefabNodes;
+        std::vector<std::size_t> unstored;
+    };
+    std::vector<std::uint64_t> transformSetManyMarksScratch;
+    std::vector<TransformSetManyRange> transformSetManyRangesScratch;
+    std::vector<kb::ecs::NativeComponentRows> transformSetManyRowsScratch;
+    std::vector<SceneEntity> transformUpdatedSparseEntities;
+    // The update bits are cleared by the first writer after an Update (a transform pass or the next Update), so the
+    // rows a pass composes before Update count for that Update.
+    bool transformUpdatesResetPending = true;
+    // ParallelForEachRoot: its chunk records, kept while the storage structure and the extra components are unchanged.
+    std::vector<kb::ecs::MutableQueryTableDispatchRecord> transformPassRecords;
+    std::array<kb::ecs::ComponentId, 5U> transformPassRecordIds{};
+    std::vector<bool> transformPassDeferredArchetypes;
+    std::uint64_t transformPassRecordsVersion = 0U;
+    bool transformPassRunning = false;
+    bool transformRenderProxyListsStale = false;
     std::vector<SceneEntity> transformRenderProxyUpdateEntities;
     std::vector<WorldTransformAffine3x4> transformRenderProxyWorldAffine3x4;
     std::vector<std::size_t> transformRenderProxyMeshRendererIndices;
@@ -583,7 +661,6 @@ public:
     std::vector<SceneEntity> renderProxyDirtyTraversalScratch;
     std::uint64_t renderProxyUpdateRevision = 1U;
     std::uint64_t renderTopologyVersion = 1U;
-    std::vector<std::size_t> transformRenderProxyIdentityAffineChunkCountsScratch;
     std::size_t lastTransformRenderProxyIdentityAffineFastPathCount = 0U;
     std::unique_ptr<kb::ecs::WorkerPool> transformWorkerPool;
     std::size_t lastTransformHierarchyInspectedCount = 0U;
@@ -618,10 +695,9 @@ public:
     std::uint64_t lastTransformHierarchyUpdateNanoseconds = 0U;
     std::uint64_t lastTransformHierarchyFlushNanoseconds = 0U;
     bool lastTransformHierarchyBudgetExhausted = false;
-    mutable ecs_query_t* cameraIterationQuery = nullptr;
-    mutable ecs_query_t* lightIterationQuery = nullptr;
-    mutable ecs_query_t* meshRendererIterationQuery = nullptr;
-    mutable ecs_query_t* visibleMeshRendererIterationQuery = nullptr;
+    // The queries of the camera, light and mesh-renderer iterators, created on their first use.
+    mutable std::unique_ptr<SceneComponentIterationQueries> componentIterationQueries;
+    [[nodiscard]] SceneComponentIterationQueries& ComponentIterationQueries() const;
     mutable ecs_query_t* physicsBodyIterationQuery = nullptr;
     std::uint64_t nextHierarchyOrder = 1;
     kb::audio::IAudioPlaybackBackend* audioPlaybackBackend = nullptr;
@@ -684,6 +760,7 @@ public:
     // True while something drains pendingCollisionEvents (the script runtime). Physics plugins skip
     // contact-event bookkeeping otherwise, so an unconsumed queue cannot grow without bound.
     bool collisionEventConsumer = false;
+    bool physicsStepPipelining = true;
     // LIB-160: prefab-instantiation completion notifications. World.
     // InstantiatePrefab queues one per instantiation whose caller is a live
     // entity; ScriptRuntimeSceneSystem drains them each frame into an
@@ -736,6 +813,7 @@ public:
     std::vector<kb::particles::PendingParticleRuntimeEvent> pendingParticleRuntimeEvents;
     std::vector<kb::particles::ParticleGpuEmitterCommand> pendingParticleGpuEmitterCommands;
     bool particleGpuEmitterConsumer = false;
+    kb::math::DVec3 particleSimulationOrigin{};
     mutable std::vector<kb::particles::ParticleRuntimeState> particleRuntimeStateScratch;
     SceneUIFrame uiFrame;
     std::vector<SceneUIEvent> uiEvents;
@@ -818,6 +896,12 @@ public:
     std::uint64_t lastScreenCaptureId = 0U;
     bool lastScreenCaptureSucceeded = false;
     std::optional<SceneScreenCapturePixels> lastScreenCapturePixels;
+
+    // Private additions stay after the historical SceneState prefix. Frozen provider
+    // DLLs which contain a static engine copy can embed offsets of existing fields.
+    // This placement preserves those offsets; it does not certify every old DLL path.
+    // Passive pass outputs keep capacity; a lease also covers serial observer publication.
+    std::shared_ptr<SceneTransformPassArena> transformPassArena;
 };
 
 } // namespace kb::scene

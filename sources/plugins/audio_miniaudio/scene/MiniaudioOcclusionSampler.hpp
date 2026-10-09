@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/scene/SceneAudioOcclusionAccess.hpp"
+#include "engine/math/DVec3.hpp"
 #include "engine/scene/TransformComponent.hpp"
 
 #include <cstdint>
@@ -46,7 +47,9 @@ class MiniaudioOcclusionSampler final {
 public:
     // Resets the tick budget and advances the rotating skip offset (fairness: sources
     // past last tick's budget get sampled on later ticks).
-    void BeginTick(const kb::scene::AudioOcclusionSettings& settings) noexcept;
+    // `origin` is the world position the listener and source positions given to Sample are relative to (the audio
+    // origin, MiniaudioAudioSpace): the rays are cast in double precision from there.
+    void BeginTick(const kb::scene::AudioOcclusionSettings& settings, const kb::math::DVec3& origin = {}) noexcept;
     void EndTick() noexcept;
     // Volume scale in {occludedVolumeScale, 1} for a source at `sourcePosition`.
     // `excludeEntityId` ignores the source's own collider (0 = exclude nothing).
@@ -65,6 +68,7 @@ private:
     [[nodiscard]] float CachedOr(MiniaudioOcclusionKey key, float fallback) const noexcept;
 
     std::unordered_map<MiniaudioOcclusionKey, float, MiniaudioOcclusionKeyHash> lastScale_;
+    kb::math::DVec3 origin_{};
     std::unordered_set<MiniaudioOcclusionKey, MiniaudioOcclusionKeyHash> seenThisTick_;
     std::uint32_t budgetLeft_ = 0U;
     std::uint32_t skipLeft_ = 0U;

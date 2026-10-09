@@ -8,6 +8,7 @@
 #include <array>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <span>
 #include <string>
 #include <string_view>
@@ -107,11 +108,15 @@ void PackagedShaderManifestRequiresEveryRequiredProgramStage() {
             });
         return found == RequiredShaderManifest().end() ? nullptr : &*found;
     };
-    const ShaderManifestEntry* skinned = manifestEntry("vs_mesh_skinned_instanced.sc");
-    const ShaderManifestEntry* motionFragment = manifestEntry("fs_mesh_motion_vectors.sc");
-    Require(skinned != nullptr && !skinned->required &&
-            motionFragment != nullptr && !motionFragment->required,
-        "Negative fixture no longer exercises program-required shaders declared optional individually");
+    // Skinned characters and the motion vectors TAA reprojects with ship on every backend, so
+    // their stages are required in their own right, not only through the program closure.
+    for (const std::string_view shader : { "vs_mesh_skinned_instanced.sc", "vs_mesh_shadow_skinned_instanced.sc",
+             "vs_mesh_skinned_motion_vectors_instanced.sc", "vs_mesh_motion_vectors_instanced.sc",
+             "fs_mesh_motion_vectors.sc" }) {
+        const ShaderManifestEntry* entry = manifestEntry(shader);
+        Require(entry != nullptr && entry->required && entry->requiredFeature == 0U,
+            "A skinned or motion vector stage is optional in the shader manifest");
+    }
 
     const std::filesystem::path root =
         std::filesystem::temp_directory_path() / "21kb_packaged_shader_program_closure";
@@ -179,10 +184,71 @@ void PrebuiltShaderProfilesContainRequiredManifest() {
             }));
         Require(result.checkedRequiredShaderCount == requiredShaderCount, "Shader manifest validation checked the wrong number of required shaders");
         Require(result.Succeeded(), "Prebuilt shader profile is missing a required runtime shader");
-        if (profile == "dxbc" || profile == "dxil") {
-            Require(ValidatePackagedShaderManifestProfile(root / profile).Succeeded(),
-                "Desktop shader bundle is missing a required runtime program stage");
+        Require(ValidatePackagedShaderManifestProfile(root / profile).Succeeded(),
+            "Prebuilt shader profile is missing a required runtime program stage");
+    }
+}
+
+[[nodiscard]] std::filesystem::path PrebuiltShaderRoot() {
+    const std::filesystem::path root =
+        std::filesystem::path{ KB_RENDERER_TEST_SOURCE_ROOT } / "sources" / "renderer" / "prebuilt_shaders";
+    Require(std::filesystem::is_directory(root), "Prebuilt shader root was not found");
+    return root;
+}
+
+// The bgfx shader binary header: "VSH", "FSH" or "CSH" and a format version byte.
+[[nodiscard]] bool HasShaderHeader(const std::filesystem::path& path, char stage) {
+    std::ifstream input{ path, std::ios::binary };
+    std::array<char, 4U> magic{};
+    input.read(magic.data(), static_cast<std::streamsize>(magic.size()));
+    return input.gcount() == 4 && magic[0] == stage && magic[1] == 'S' && magic[2] == 'H' && magic[3] != '\0';
+}
+
+// Red when: a runtime program has a stage some backend the engine ships prebuilt shaders for
+// has no binary of -- skinned meshes and TAA motion vectors once existed only for Direct3D, so
+// Vulkan and OpenGL loaded the programs, got invalid handles, and drew nothing for them.
+void EveryRuntimeProgramExistsForEveryClaimedBackend() {
+    struct ClaimedBackend {
+        bgfx::RendererType::Enum renderer;
+        kb::assets::bake::ShaderBakeBackend bake;
+    };
+    // The backends README's Shaders row promises prebuilt shaders for.
+    constexpr std::array<ClaimedBackend, 6U> claimed{
+        ClaimedBackend{ bgfx::RendererType::Direct3D11, kb::assets::bake::ShaderBakeBackend::Dxbc },
+        ClaimedBackend{ bgfx::RendererType::Direct3D12, kb::assets::bake::ShaderBakeBackend::Dxil },
+        ClaimedBackend{ bgfx::RendererType::Vulkan, kb::assets::bake::ShaderBakeBackend::Spirv },
+        ClaimedBackend{ bgfx::RendererType::OpenGL, kb::assets::bake::ShaderBakeBackend::Glsl },
+        ClaimedBackend{ bgfx::RendererType::OpenGLES, kb::assets::bake::ShaderBakeBackend::Essl },
+        ClaimedBackend{ bgfx::RendererType::Metal, kb::assets::bake::ShaderBakeBackend::Metal },
+    };
+    const std::filesystem::path root = PrebuiltShaderRoot();
+    for (const ClaimedBackend& backend : claimed) {
+        const char* const directory = ShaderProfileDirectoryForRenderer(backend.renderer);
+        Require(directory != nullptr && std::string_view{ directory }.starts_with("shaders/"),
+            "A claimed backend has no shader profile directory");
+        const std::filesystem::path profile = root / std::string_view{ directory }.substr(8U);
+        for (const ShaderProgramManifestEntry& program : RequiredShaderProgramManifest()) {
+            const std::filesystem::path vertex = profile / (std::string{ program.vertexShader } + ".bin");
+            const std::filesystem::path fragment = profile / (std::string{ program.fragmentShader } + ".bin");
+            if (!HasShaderHeader(vertex, 'V') || !HasShaderHeader(fragment, 'F')) {
+                std::cerr << "missing or invalid " << profile.filename().string() << " stage of program "
+                          << program.name << '\n';
+            }
+            Require(HasShaderHeader(vertex, 'V') && HasShaderHeader(fragment, 'F'),
+                "A runtime shader program is missing a stage on a backend the engine ships shaders for");
         }
+        // Compute kernels a packaged game requires on this backend (none where it has no compute).
+        const ShaderRuntimeFeatureMask features = PackagedGameShaderFeatures(backend.bake);
+        for (const ShaderManifestEntry& shader : RequiredShaderManifest()) {
+            if (shader.stage != ShaderStage::Compute || !shader.required ||
+                (shader.requiredFeature != 0U && (features & shader.requiredFeature) == 0U)) {
+                continue;
+            }
+            Require(HasShaderHeader(profile / (std::string{ shader.name } + ".bin"), 'C'),
+                "A required compute shader is missing on a backend the engine ships shaders for");
+        }
+        Require(ValidatePackagedShaderManifestProfile(profile, features).Succeeded(),
+            "A claimed backend's shader profile fails packaged manifest validation");
     }
 }
 
@@ -300,6 +366,7 @@ void RunShaderManifestTests() {
     ShaderManifestDeclaresRuntimePrograms();
     PackagedShaderManifestRequiresEveryRequiredProgramStage();
     PrebuiltShaderProfilesContainRequiredManifest();
+    EveryRuntimeProgramExistsForEveryClaimedBackend();
     ShaderManifestFeatureRequirementsAreTargetSelectable();
     ShaderManifestCoversEveryPrebuiltShaderVariant();
     MotionVectorShaderUsesTopLeftUvToNdcMapping();

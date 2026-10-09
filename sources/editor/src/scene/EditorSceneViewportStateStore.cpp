@@ -35,6 +35,10 @@ const EditorViewportCameraState& EditorSceneViewportStateStore::Camera(std::uint
 }
 
 bool EditorSceneViewportStateStore::FocusAllCamerasOn(const kb::scene::Vec3& target, float radius, float durationSeconds) noexcept {
+    return FocusAllCamerasOn(kb::math::ToDVec3(target), radius, durationSeconds);
+}
+
+bool EditorSceneViewportStateStore::FocusAllCamerasOn(const kb::math::DVec3& target, float radius, float durationSeconds) noexcept {
     if (cameras_.empty()) {
         // No panel has rendered a camera yet — frame the default so a viewport
         // that first appears afterwards still starts framed on the selection.

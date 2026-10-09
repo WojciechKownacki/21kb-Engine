@@ -3,8 +3,13 @@
 
 #include "engine/assets/AssetId.hpp"
 #include "engine/assets/AssetMetadata.hpp"
+#include "engine/assets/bake/AssetPackReader.hpp"
+#include "engine/assets/bake/AssetPackWriter.hpp"
+#include "engine/assets/bake/RuntimeAssetManifest.hpp"
+#include "engine/assets/bake/BakeTargetProfile.hpp"
 #include "engine/input/InputAssetIO.hpp"
 #include "engine/input/InputKey.hpp"
+#include "engine/navigation/NavMeshAsset.hpp"
 #include "engine/project/ProjectSettings.hpp"
 #include "engine/project/ProjectManager.hpp"
 #include "engine/scene/Scene.hpp"
@@ -17,7 +22,12 @@
 #include "engine/scene/PhysicsLayersAssetIO.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneUIComponents.hpp"
+#include "engine/security/ReleaseKeys.hpp"
+#include "engine/world/WorldCellIndex.hpp"
+#include "engine/world/WorldDescriptor.hpp"
+#include "engine/world/WorldObjectFile.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstdio>
@@ -115,7 +125,7 @@ void WriteProjectDescriptor(
     return text.substr(match, lineEnd == std::string::npos ? std::string::npos : lineEnd - match);
 }
 
-constexpr std::array<std::string_view, 3> kFlagNames{ "--disabled", "--quiet", "--update-baseline" };
+constexpr std::array<std::string_view, 4> kFlagNames{ "--anti-rollback", "--disabled", "--quiet", "--update-baseline" };
 
 struct CommandRun {
     int exitCode = 0;
@@ -2268,6 +2278,526 @@ void RunApiCheckCommandTests() {
     }
 }
 
+[[nodiscard]] std::filesystem::path ReleaseTestRoot() {
+    return std::filesystem::temp_directory_path() / "21kb_engine_kb_cli_release_tests";
+}
+
+void WriteSamplePack(const std::filesystem::path& path) {
+    namespace bake = kb::assets::bake;
+    bake::BakedAssetDescriptor descriptor;
+    descriptor.key.sourceContentHash = 0x5EA1U;
+    descriptor.key.bakerId = "Texture";
+    descriptor.key.bakerVersion = "1";
+    descriptor.key.targetProfileId = "Windows.x64";
+    descriptor.key.targetProfileHash = bake::BakeTargetProfileFingerprint(bake::WindowsX64BakeTargetProfile());
+    descriptor.assetTypeId = "Texture2D";
+    std::vector<std::uint8_t> payload(5000U);
+    for (std::size_t index = 0U; index < payload.size(); ++index) {
+        payload[index] = static_cast<std::uint8_t>(index * 31U + 7U);
+    }
+    bake::AssetPackWriter writer{ path, bake::WindowsX64BakeTargetProfile() };
+    Require(writer.BeginAsset(descriptor) == bake::BakedAssetSinkStatus::Success &&
+            writer.WritePrimaryBlock(payload, 256U) == bake::BakedAssetSinkStatus::Success &&
+            writer.CommitAsset() == bake::BakedAssetSinkStatus::Success &&
+            writer.Finish() == bake::BakedAssetSinkStatus::Success,
+        "kb_cli release test pack could not be written");
+}
+
+// A complete runtime pack: a start map, a shared prop and one prop per world cell, each a source
+// file, plus the runtime manifest naming them.
+void WriteRuntimeCook(const std::filesystem::path& path, std::string_view propText, bool withLamp) {
+    namespace bake = kb::assets::bake;
+    const bake::BakeTargetProfile profile = bake::WindowsX64BakeTargetProfile();
+    bake::AssetPackWriter writer{ path, profile };
+    const auto store = [&](std::string_view bytes, std::string_view type, std::string_view salt) {
+        std::vector<std::uint8_t> payload;
+        if (type == bake::kSourceAssetTypeId) {
+            Require(bake::EncodeRuntimeSourceBlob(
+                        std::span{ reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size() }, payload),
+                "kb_cli pack set source could not be encoded");
+        } else {
+            payload.assign(bytes.begin(), bytes.end());
+        }
+        bake::AssetBakeKey key{};
+        key.sourceContentHash = bake::HashBakeBytes(payload) | 1U;
+        key.bakerId = "CliPackSet";
+        key.bakerVersion = "1";
+        key.targetProfileId = std::string{ profile.identifier };
+        key.targetProfileHash = bake::BakeTargetProfileFingerprint(profile);
+        key.settingsHash = bake::HashBakeBytes(std::span{ reinterpret_cast<const std::uint8_t*>(salt.data()), salt.size() }) | 1U;
+        Require(writer.BeginAsset({ .key = key, .assetTypeId = std::string{ type } }) == bake::BakedAssetSinkStatus::Success &&
+                writer.WritePrimaryBlock(payload, profile.packageBlockAlignmentBytes) == bake::BakedAssetSinkStatus::Success &&
+                writer.CommitAsset() == bake::BakedAssetSinkStatus::Success,
+            "kb_cli pack set artifact could not be stored");
+        return key.Digest();
+    };
+    bake::RuntimeAssetManifest manifest{};
+    manifest.targetProfileId = std::string{ profile.identifier };
+    manifest.targetProfileHash = bake::BakeTargetProfileFingerprint(profile);
+    manifest.descriptor.targetPlatforms = { "Windows" };
+    manifest.settings.name = "CliPackSet";
+    manifest.settings.defaultMap = "/Game/Maps/Start.21kbscene";
+    const auto addAsset = [&](std::string virtualPath, std::string type, std::string text) {
+        // Text that compresses, as real content does.
+        std::string content;
+        while (content.size() < 4096U) {
+            content += text + '\n';
+        }
+        bake::RuntimeAssetManifestEntry entry{};
+        entry.id = kb::assets::MakeAssetId(virtualPath + ":" + type);
+        entry.type = type;
+        entry.name = std::filesystem::path{ virtualPath }.stem().string();
+        entry.virtualPath = virtualPath;
+        entry.sourceExtension = std::filesystem::path{ virtualPath }.extension().string();
+        entry.contentHash = bake::HashBakeBytes(std::span{ reinterpret_cast<const std::uint8_t*>(content.data()), content.size() });
+        entry.artifacts.push_back({ .digest = store(content, bake::kSourceAssetTypeId, virtualPath),
+            .encoding = bake::RuntimeArtifactEncoding::SourceBytes });
+        manifest.assets.push_back(std::move(entry));
+    };
+    addAsset("/Game/Maps/Start.21kbscene", "Scene", "start map");
+    addAsset("/Game/Props/Rock.kbdata", "DataTable", std::string{ propText });
+    addAsset("/Game/Cells/0_0/Tree.kbdata", "DataTable", "tree in cell 0 0");
+    addAsset("/Game/Cells/0_1/Bush.kbdata", "DataTable", "bush in cell 0 1");
+    if (withLamp) {
+        addAsset("/Game/Props/Lamp.kbdata", "DataTable", "lamp");
+    }
+    std::vector<std::uint8_t> manifestBytes;
+    Require(bake::EncodeRuntimeAssetManifest(manifest, manifestBytes) == bake::RuntimeAssetManifestStatus::Success,
+        "kb_cli pack set manifest could not be encoded");
+    static_cast<void>(store(std::string_view{ reinterpret_cast<const char*>(manifestBytes.data()), manifestBytes.size() },
+        bake::kRuntimeManifestAssetTypeId, "manifest"));
+    Require(writer.Finish() == bake::BakedAssetSinkStatus::Success, "kb_cli pack set cook could not be published");
+}
+
+// pack info, compress, split, patch and set-verify: a cooked pack splits into a base and cell
+// chunks with an index, a patch cut from the next cook carries the change, and the whole sealed
+// set verifies against the anchor while a set with an unsigned or tampered member does not.
+void RunPackSetCommandTests() {
+    const std::filesystem::path root = ReleaseTestRoot() / "PackSet";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root / "Out", error);
+    Require(!error, "kb_cli pack set test root could not be prepared");
+    const std::string cook = (root / "cook.kbpack").string();
+    WriteRuntimeCook(cook, "rock", false);
+
+    const CommandRun info = Run(&kb::cli::RunPackCommand, { "info", cook });
+    Require(info.exitCode == 0 && Contains(info.output, "format 3") && Contains(info.output, "role base") &&
+            Contains(info.output, "compressed-blocks 0"),
+        "pack info did not describe an uncompressed base pack");
+    const std::string compressed = (root / "cook.zstd.kbpack").string();
+    const CommandRun compressRun = Run(&kb::cli::RunPackCommand, { "compress", "--level", "5", cook, compressed });
+    Require(compressRun.exitCode == 0 && Contains(Run(&kb::cli::RunPackCommand, { "info", compressed }).output, "role base") &&
+            !Contains(Run(&kb::cli::RunPackCommand, { "info", compressed }).output, "compressed-blocks 0"),
+        "pack compress did not compress the pack");
+    Require(Run(&kb::cli::RunPackCommand, { "compress", "--level", "40", cook, compressed + ".x" }).exitCode == 1,
+        "pack compress accepted an impossible level");
+
+    const std::string base = (root / "Out" / "Game.kbpack").string();
+    const std::string index = (root / "Out" / "Game.kbpackset").string();
+    const CommandRun split = Run(&kb::cli::RunPackCommand,
+        { "split", "--base", base, "--chunk", "cell_0_0=/Game/Cells/0_0/", "--chunk", "cell_0_1=/Game/Cells/0_1/",
+          "--index", index, cook });
+    Require(split.exitCode == 0 && std::filesystem::exists(root / "Out" / "Game.cell_0_0.kbpack") &&
+            std::filesystem::exists(root / "Out" / "Game.cell_0_1.kbpack"),
+        ("pack split did not write the base and the chunks: " + split.output).c_str());
+    Require(Contains(Run(&kb::cli::RunPackCommand, { "info", (root / "Out" / "Game.cell_0_1.kbpack").string() }).output,
+                "role chunk"),
+        "a split chunk is not a chunk pack");
+    // World regions: the text is checked before anything is read, and a world the cook does not
+    // hold is named.
+    const CommandRun badRegion = Run(&kb::cli::RunPackCommand, { "split", "--base", (root / "Region" / "Game.kbpack").string(),
+        "--chunk-cells", "east=/Game/Worlds/Forest.21kbworld@2:0..1:0", cook });
+    Require(badRegion.exitCode == 1 && Contains(badRegion.output, "<minX>:<minZ>..<maxX>:<maxZ>"),
+        "pack split accepted a world region whose corners are out of order");
+    const CommandRun noWorld = Run(&kb::cli::RunPackCommand, { "split", "--base", (root / "Region" / "Game.kbpack").string(),
+        "--chunk-cells", "east=/Game/Worlds/Forest.21kbworld@0:0..1:1#(base)", cook });
+    Require(noWorld.exitCode == 1 && Contains(noWorld.output, "no built partitioned world /Game/Worlds/Forest.21kbworld"),
+        "pack split did not name the world a region rule could not find");
+
+    const std::string next = (root / "next.kbpack").string();
+    WriteRuntimeCook(next, "rock, fixed", true);
+    const std::string patch = (root / "Out" / "Game.patch-0001.kbpack").string();
+    const CommandRun patchRun = Run(&kb::cli::RunPackCommand,
+        { "patch", "--current", index, "--patch-level", "1", "--label", "patch-0001", "--output", patch, next });
+    Require(patchRun.exitCode == 0 && Contains(patchRun.output, "1 changed, 1 added"),
+        ("pack patch did not carry exactly the change: " + patchRun.output).c_str());
+    Require(Run(&kb::cli::RunPackCommand,
+                { "patch", "--current", index, "--patch-level", "1", "--output", patch + ".again", cook }).exitCode == 1,
+        "pack patch wrote a patch that changes nothing");
+    {
+        std::ofstream output{ index, std::ios::binary | std::ios::app };
+        output << "patch 1 patch-0001 Game.patch-0001.kbpack\n";
+    }
+
+    const std::string key = (root / "Keys" / "set.kbkey").string();
+    const std::string anchor = (root / "anchor.bin").string();
+    Require(Run(&kb::cli::RunKeysCommand, { "generate", "--out", key }).exitCode == 0 &&
+            Run(&kb::cli::RunKeysCommand, { "anchor", "--key", key, "--product", "Example.Set", "--out", anchor }).exitCode == 0,
+        "the pack set release key could not be prepared");
+    const CommandRun unsignedSet = Run(&kb::cli::RunPackCommand, { "set-verify", "--anchor", anchor, index });
+    Require(unsignedSet.exitCode == 1 && Contains(unsignedSet.output, "Unsigned"), "set-verify accepted unsigned packs");
+    for (const char* member : { "Game.kbpack", "Game.cell_0_0.kbpack", "Game.cell_0_1.kbpack", "Game.patch-0001.kbpack" }) {
+        Require(Run(&kb::cli::RunPackCommand, { "sign", "--key", key, (root / "Out" / member).string() }).exitCode == 0,
+            "a pack set member could not be sealed");
+    }
+    const CommandRun verified = Run(&kb::cli::RunPackCommand, { "set-verify", "--anchor", anchor, index });
+    Require(verified.exitCode == 0 && Contains(verified.output, "4 packs") && Contains(verified.output, "5 assets"),
+        ("set-verify refused an intact sealed pack set: " + verified.output).c_str());
+
+    std::vector<std::uint8_t> bytes;
+    {
+        std::ifstream input{ patch, std::ios::binary };
+        bytes.assign(std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{});
+    }
+    {
+        // A byte inside a block: padding between blocks is covered by the release manifest's file
+        // hash, not by the pack seal.
+        kb::assets::bake::AssetPackReader reader;
+        Require(reader.Mount(patch) == kb::assets::bake::AssetPackReadStatus::Success, "the sealed patch did not mount");
+        const kb::assets::bake::AssetPackBlockEntry& block = reader.Artifacts().front().blocks.front();
+        bytes[static_cast<std::size_t>(block.offset + block.storedBytes / 2U)] ^= 0x01U;
+    }
+    {
+        std::ofstream output{ patch, std::ios::binary | std::ios::trunc };
+        output.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    }
+    Require(Run(&kb::cli::RunPackCommand, { "set-verify", "--anchor", anchor, index }).exitCode == 1,
+        "set-verify accepted a tampered patch");
+    std::filesystem::remove_all(root, error);
+}
+
+// A Linux player as packaging leaves it: a 64-bit ELF image whose ".kb_trust_anchor" section is
+// the 1024-byte slot holding `anchor` (nothing for an unfilled slot).
+[[nodiscard]] std::vector<std::uint8_t> MakeLinuxPlayer(std::span<const std::uint8_t> anchor) {
+    const auto put = [](std::vector<std::uint8_t>& bytes, std::size_t offset, std::uint64_t value, std::size_t width) {
+        for (std::size_t index = 0U; index < width; ++index) {
+            bytes[offset + index] = static_cast<std::uint8_t>(value >> (index * 8U));
+        }
+    };
+    std::vector<std::uint8_t> image(64U, 0U);
+    const std::array<std::uint8_t, 8U> ident{ 0x7FU, 'E', 'L', 'F', 2U, 1U, 1U, 0U };
+    std::copy(ident.begin(), ident.end(), image.begin());
+    put(image, 0x10U, 2U, 2U);
+    put(image, 0x12U, 62U, 2U);
+    const std::size_t slotOffset = image.size();
+    image.resize(slotOffset + 1024U, 0U);
+    const std::string_view magic = "21KB-ANCHOR-SLOT";
+    std::copy(magic.begin(), magic.end(), image.begin() + static_cast<std::ptrdiff_t>(slotOffset));
+    put(image, slotOffset + 16U, anchor.size(), 4U);
+    std::copy(anchor.begin(), anchor.end(), image.begin() + static_cast<std::ptrdiff_t>(slotOffset + 24U));
+    const std::string names{ "\0.kb_trust_anchor\0.shstrtab\0", 28U };
+    const std::size_t namesOffset = image.size();
+    image.insert(image.end(), names.begin(), names.end());
+    while (image.size() % 8U != 0U) image.push_back(0U);
+    const std::size_t table = image.size();
+    image.resize(table + 3U * 64U, 0U);
+    put(image, table + 64U + 0x00U, 1U, 4U);
+    put(image, table + 64U + 0x04U, 1U, 4U);
+    put(image, table + 64U + 0x08U, 2U, 8U);
+    put(image, table + 64U + 0x18U, slotOffset, 8U);
+    put(image, table + 64U + 0x20U, 1024U, 8U);
+    put(image, table + 128U + 0x00U, 18U, 4U);
+    put(image, table + 128U + 0x04U, 3U, 4U);
+    put(image, table + 128U + 0x18U, namesOffset, 8U);
+    put(image, table + 128U + 0x20U, names.size(), 8U);
+    put(image, 0x28U, table, 8U);
+    put(image, 0x34U, 64U, 2U);
+    put(image, 0x3AU, 64U, 2U);
+    put(image, 0x3CU, 3U, 2U);
+    put(image, 0x3EU, 2U, 2U);
+    return image;
+}
+
+// pack patch --current-release and pack set-keys: an encrypted release is patched by a release
+// with a fresh content key, the packs it ships again keep the keys they were sealed with, wrapped
+// under the new release's key in its pack set index, and a second patch release carries all of
+// them forward. A release whose index lacks those keys does not verify.
+void RunEncryptedPatchCommandTests() {
+    const std::filesystem::path root = ReleaseTestRoot() / "EncryptedPatch";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    for (const char* folder : { "R1", "R2", "R3", "Keys" }) {
+        std::filesystem::create_directories(root / folder, error);
+    }
+    Require(!error, "kb_cli encrypted patch test root could not be prepared");
+    const std::string key = (root / "Keys" / "game.kbkey").string();
+    Require(Run(&kb::cli::RunKeysCommand, { "generate", "--out", key }).exitCode == 0, "the release key could not be generated");
+    const auto contentKey = [&](const char* name) {
+        const std::string path = (root / "Keys" / name).string();
+        Require(Run(&kb::cli::RunKeysCommand, { "content-key", "--out", path }).exitCode == 0, "a content key could not be made");
+        return path;
+    };
+    const auto anchorWith = [&](const std::string& content, const std::filesystem::path& release) {
+        const std::string anchor = (release / "anchor.bin").string();
+        Require(Run(&kb::cli::RunKeysCommand,
+                    { "anchor", "--key", key, "--product", "Example.Patch", "--content-key", content, "--out", anchor })
+                    .exitCode == 0,
+            "a release anchor could not be made");
+        std::ifstream input{ anchor, std::ios::binary };
+        const std::vector<std::uint8_t> bytes{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+        const std::vector<std::uint8_t> player = MakeLinuxPlayer(bytes);
+        std::ofstream output{ release / "Game", std::ios::binary | std::ios::trunc };
+        output.write(reinterpret_cast<const char*>(player.data()), static_cast<std::streamsize>(player.size()));
+        Require(output.good(), "a release player could not be written");
+        return anchor;
+    };
+    const auto copyRelease = [&](const std::filesystem::path& from, const std::filesystem::path& to) {
+        for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator{ from }) {
+            const std::string extension = entry.path().extension().string();
+            if (extension == ".kbpack" || extension == ".kbpackset") {
+                std::filesystem::copy_file(entry.path(), to / entry.path().filename(),
+                    std::filesystem::copy_options::overwrite_existing, error);
+            }
+        }
+        Require(!error, "a release could not be copied");
+    };
+
+    // Release 1: a base and a chunk, encrypted under K1.
+    const std::string cook = (root / "cook.kbpack").string();
+    WriteRuntimeCook(cook, "rock", false);
+    const std::string index1 = (root / "R1" / "Game.kbpackset").string();
+    Require(Run(&kb::cli::RunPackCommand, { "split", "--base", (root / "R1" / "Game.kbpack").string(), "--chunk",
+                "cell_0_0=/Game/Cells/0_0/", "--index", index1, cook }).exitCode == 0,
+        "the first release could not be split");
+    const std::string k1 = contentKey("k1.key");
+    for (const char* member : { "Game.kbpack", "Game.cell_0_0.kbpack" }) {
+        Require(Run(&kb::cli::RunPackCommand, { "sign", "--key", key, "--content-key", k1, (root / "R1" / member).string() })
+                    .exitCode == 0,
+            "a first-release pack could not be sealed");
+    }
+    const std::string anchor1 = anchorWith(k1, root / "R1");
+    Require(Run(&kb::cli::RunPackCommand, { "set-verify", "--anchor", anchor1, index1 }).exitCode == 0,
+        "the encrypted first release does not verify");
+
+    // Release 2: patch 1 under a fresh K2. The patch tool reads release 1 with its player's key.
+    const std::string next = (root / "next.kbpack").string();
+    WriteRuntimeCook(next, "rock, fixed", true);
+    const std::string patch1 = (root / "R2" / "Game.patch-0001.kbpack").string();
+    const CommandRun unreadable = Run(&kb::cli::RunPackCommand,
+        { "patch", "--current", index1, "--patch-level", "1", "--label", "patch-0001", "--output", patch1, next });
+    Require(unreadable.exitCode == 1 && Contains(unreadable.output, "ContentKeyMissing"),
+        ("pack patch read encrypted content without its release's key: " + unreadable.output).c_str());
+    const CommandRun patched = Run(&kb::cli::RunPackCommand, { "patch", "--current", index1, "--current-release",
+        (root / "R1").string(), "--patch-level", "1", "--label", "patch-0001", "--output", patch1, next });
+    Require(patched.exitCode == 0 && Contains(patched.output, "1 changed, 1 added"),
+        ("pack patch did not read the encrypted release it patches: " + patched.output).c_str());
+    const std::string k2 = contentKey("k2.key");
+    Require(Run(&kb::cli::RunPackCommand, { "sign", "--key", key, "--content-key", k2, patch1 }).exitCode == 0,
+        "the patch could not be sealed");
+    copyRelease(root / "R1", root / "R2");
+    const std::string index2 = (root / "R2" / "Game.kbpackset").string();
+    {
+        std::ofstream output{ index2, std::ios::binary | std::ios::app };
+        output << "patch 1 patch-0001 Game.patch-0001.kbpack\n";
+    }
+    const std::string anchor2 = anchorWith(k2, root / "R2");
+    const CommandRun keyless = Run(&kb::cli::RunPackCommand, { "set-verify", "--anchor", anchor2, index2 });
+    Require(keyless.exitCode == 1 && Contains(keyless.output, "ContentKeyMismatch"),
+        "a patch release verified without the keys of the packs it ships again");
+    Require(Run(&kb::cli::RunPackCommand, { "set-keys", "--content-key", k2, index2 }).exitCode == 1,
+        "set-keys wrapped keys it was never given");
+    const CommandRun keyed = Run(&kb::cli::RunPackCommand,
+        { "set-keys", "--content-key", k2, "--previous-release", (root / "R1").string(), index2 });
+    Require(keyed.exitCode == 0 && Contains(keyed.output, "3 packs, 3 encrypted, 2 with their own key"),
+        ("set-keys did not wrap the earlier packs' keys: " + keyed.output).c_str());
+    const CommandRun verified2 = Run(&kb::cli::RunPackCommand, { "set-verify", "--anchor", anchor2, index2 });
+    Require(verified2.exitCode == 0 && Contains(verified2.output, "3 packs"),
+        ("the encrypted patch release does not verify: " + verified2.output).c_str());
+    Require(Run(&kb::cli::RunPackCommand, { "set-verify", "--anchor", anchor1, index2 }).exitCode == 1,
+        "a patch release verified under the previous release's key");
+
+    // Release 3: patch 2 under K3 carries every earlier key forward.
+    const std::string next2 = (root / "next2.kbpack").string();
+    WriteRuntimeCook(next2, "rock, fixed twice", true);
+    const std::string patch2 = (root / "R3" / "Game.patch-0002.kbpack").string();
+    Require(Run(&kb::cli::RunPackCommand, { "patch", "--current", index2, "--current-release", (root / "R2").string(),
+                "--patch-level", "2", "--label", "patch-0002", "--output", patch2, next2 }).exitCode == 0,
+        "the second patch could not read the first patch release");
+    const std::string k3 = contentKey("k3.key");
+    Require(Run(&kb::cli::RunPackCommand, { "sign", "--key", key, "--content-key", k3, patch2 }).exitCode == 0,
+        "the second patch could not be sealed");
+    copyRelease(root / "R2", root / "R3");
+    const std::string index3 = (root / "R3" / "Game.kbpackset").string();
+    // The index R2 shipped, with patch 2 among its packs (key lines come after every pack line).
+    {
+        std::string text;
+        {
+            std::ifstream input{ index3, std::ios::binary };
+            text.assign(std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{});
+        }
+        const std::size_t keys = text.find("key ");
+        Require(keys != std::string::npos, "the first patch release's index carries no key lines");
+        text.insert(keys, "patch 2 patch-0002 Game.patch-0002.kbpack\n");
+        std::ofstream output{ index3, std::ios::binary | std::ios::trunc };
+        output << text;
+    }
+    const std::string anchor3 = anchorWith(k3, root / "R3");
+    const CommandRun keyed3 = Run(&kb::cli::RunPackCommand,
+        { "set-keys", "--content-key", k3, "--previous-release", (root / "R2").string(), index3 });
+    Require(keyed3.exitCode == 0 && Contains(keyed3.output, "4 packs, 4 encrypted, 3 with their own key"),
+        ("set-keys did not carry the earlier keys forward: " + keyed3.output).c_str());
+    const CommandRun verified3 = Run(&kb::cli::RunPackCommand, { "set-verify", "--anchor", anchor3, index3 });
+    Require(verified3.exitCode == 0 && Contains(verified3.output, "4 packs"),
+        ("the second encrypted patch release does not verify: " + verified3.output).c_str());
+
+    // A tampered block of a pack shipped again is still refused under its wrapped key.
+    std::vector<std::uint8_t> bytes;
+    const std::filesystem::path base3 = root / "R3" / "Game.kbpack";
+    {
+        std::ifstream input{ base3, std::ios::binary };
+        bytes.assign(std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{});
+    }
+    {
+        kb::assets::bake::AssetPackReader reader;
+        Require(reader.Mount(base3, kb::assets::bake::AssetPackAccess::Ranged, {}) ==
+                    kb::assets::bake::AssetPackReadStatus::ContentKeyMissing,
+            "an encrypted base mounted without a content key");
+    }
+    {
+        // A byte inside a block, located with the key the base was sealed under.
+        std::ifstream input{ k1, std::ios::binary };
+        const std::string text{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+        kb::assets::bake::AssetPackTrust trust{};
+        trust.contentKey.emplace();
+        std::string keyError;
+        Require(kb::security::DecodePackContentKey(text, *trust.contentKey, keyError), "the first content key did not decode");
+        kb::assets::bake::AssetPackReader reader;
+        Require(reader.Mount(base3, kb::assets::bake::AssetPackAccess::Ranged, trust) ==
+                    kb::assets::bake::AssetPackReadStatus::Success,
+            "the encrypted base did not mount with its own key");
+        const kb::assets::bake::AssetPackBlockEntry& block = reader.Artifacts().front().blocks.front();
+        bytes[static_cast<std::size_t>(block.offset + block.storedBytes / 2U)] ^= 0x01U;
+    }
+    {
+        std::ofstream output{ base3, std::ios::binary | std::ios::trunc };
+        output.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    }
+    Require(Run(&kb::cli::RunPackCommand, { "set-verify", "--anchor", anchor3, index3 }).exitCode == 1,
+        "a tampered encrypted pack shipped again verified");
+    std::filesystem::remove_all(root, error);
+}
+
+// keys and pack: a key is never written into a project, a signed (and encrypted) pack verifies
+// against the anchor made from the same key, and a pack checked against another key or without
+// its content key is refused.
+void RunKeyAndPackCommandTests() {
+    const std::filesystem::path root = ReleaseTestRoot();
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    Require(!error, "kb_cli release test root could not be prepared");
+
+    WriteTextFile(root / "Project" / "Project.21kbproject", "{}");
+    const std::string projectKey = (root / "Project" / "Keys" / "game.kbkey").string();
+    const CommandRun refused = Run(&kb::cli::RunKeysCommand, { "generate", "--out", projectKey });
+    Require(refused.exitCode == 1 && Contains(refused.output, "inside a project") &&
+            !std::filesystem::exists(projectKey),
+        "keys generate wrote a private key inside a project");
+
+    const std::string key = (root / "Keys" / "game.kbkey").string();
+    const CommandRun generated = Run(&kb::cli::RunKeysCommand, { "generate", "--out", key });
+    Require(generated.exitCode == 0 && generated.output.size() == 65U, "keys generate did not report the new public key");
+    Require(Run(&kb::cli::RunKeysCommand, { "generate", "--out", key }).exitCode == 1,
+        "keys generate overwrote an existing key");
+    Require(Run(&kb::cli::RunKeysCommand, { "public", "--key", key }).output == generated.output,
+        "keys public did not report the key's public half");
+
+    const std::string pack = (root / "Game.kbpack").string();
+    WriteSamplePack(pack);
+    const CommandRun unsignedRun = Run(&kb::cli::RunPackCommand, { "verify", pack });
+    Require(unsignedRun.exitCode == 1 && Contains(unsignedRun.output, "not signed"), "pack verify accepted an unsigned pack");
+
+    const std::string contentKey = (root / "content.key").string();
+    Require(Run(&kb::cli::RunKeysCommand, { "content-key", "--out", contentKey }).exitCode == 0,
+        "keys content-key failed");
+    const CommandRun signedRun = Run(&kb::cli::RunPackCommand, { "sign", "--key", key, "--content-key", contentKey, pack });
+    Require(signedRun.exitCode == 0 && Contains(signedRun.output, "encrypted"), "pack sign failed");
+    const std::string anchor = (root / "anchor.bin").string();
+    Require(Run(&kb::cli::RunKeysCommand,
+                { "anchor", "--key", key, "--product", "Example.Game", "--content-key", contentKey, "--out", anchor })
+                .exitCode == 0,
+        "keys anchor failed");
+    const CommandRun verified = Run(&kb::cli::RunPackCommand, { "verify", "--anchor", anchor, pack });
+    Require(verified.exitCode == 0 && Contains(verified.output, "1 blocks") && Contains(verified.output, "encrypted"),
+        "pack verify refused a pack signed and encrypted with the anchor's keys");
+    Require(Contains(Run(&kb::cli::RunPackCommand, { "verify", pack }).output, "ContentKeyMissing"),
+        "pack verify read an encrypted pack without its content key");
+
+    const std::string otherKey = (root / "Keys" / "other.kbkey").string();
+    const std::string otherAnchor = (root / "other-anchor.bin").string();
+    Require(Run(&kb::cli::RunKeysCommand, { "generate", "--out", otherKey }).exitCode == 0 &&
+            Run(&kb::cli::RunKeysCommand,
+                { "anchor", "--key", otherKey, "--product", "Example.Game", "--content-key", contentKey, "--out", otherAnchor })
+                .exitCode == 0,
+        "the second release key could not be prepared");
+    const CommandRun foreign = Run(&kb::cli::RunPackCommand, { "verify", "--anchor", otherAnchor, pack });
+    Require(foreign.exitCode == 1 && Contains(foreign.output, "UntrustedSigner"),
+        "pack verify accepted a pack signed by another key");
+
+    // release: the manifest of a finished directory verifies against the anchor, and a planted
+    // native module or a file of the wrong product is refused.
+    const std::filesystem::path release = root / "Release";
+    std::filesystem::create_directories(release / "Licenses", error);
+    std::filesystem::copy_file(pack, release / "Game.kbpack", error);
+    WriteTextFile(release / "Licenses" / "notice.txt", "notice");
+    const CommandRun signedRelease = Run(&kb::cli::RunReleaseCommand,
+        { "sign", "--key", key, "--dir", release.string(), "--product", "Example.Game", "--content-version", "1.0.0",
+          "--release", "3", "--anti-rollback" });
+    Require(signedRelease.exitCode == 0 && Contains(signedRelease.output, "signed 2 files"), "release sign failed");
+    const std::string manifestText = [&] {
+        std::ifstream input{ release / "release.kbmanifest", std::ios::binary };
+        return std::string{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+    }();
+    Require(Contains(manifestText, "anti-rollback 1") && Contains(manifestText, "seal ") &&
+            Contains(manifestText, "Licenses/notice.txt"),
+        "release sign did not record the policy, the pack seal and every file");
+    const CommandRun verifiedRelease = Run(&kb::cli::RunReleaseCommand, { "verify", "--anchor", anchor, release.string() });
+    Require(verifiedRelease.exitCode == 0 && Contains(verifiedRelease.output, "OK Example.Game 1.0.0 release 3"),
+        "release verify refused an intact release");
+    Require(Run(&kb::cli::RunReleaseCommand, { "verify", "--anchor", otherAnchor, release.string() }).exitCode == 1,
+        "release verify accepted a release under another key");
+
+    // A Linux release: the key comes from the anchor slot of its ELF player, as from a Windows
+    // player's resource; a player whose slot was never filled names no key.
+    const auto writeLinuxPlayer = [&](std::span<const std::uint8_t> anchorBytes) {
+        const std::vector<std::uint8_t> player = MakeLinuxPlayer(anchorBytes);
+        std::ofstream output{ release / "Game", std::ios::binary | std::ios::trunc };
+        output.write(reinterpret_cast<const char*>(player.data()), static_cast<std::streamsize>(player.size()));
+        Require(output.good(), "the Linux player fixture could not be written");
+        output.close();
+        std::filesystem::remove(release / "release.kbmanifest", error);
+        Require(Run(&kb::cli::RunReleaseCommand,
+                    { "sign", "--key", key, "--dir", release.string(), "--product", "Example.Game",
+                      "--content-version", "1.0.0", "--release", "3", "--anti-rollback" }).exitCode == 0,
+            "release sign failed for the Linux release");
+    };
+    writeLinuxPlayer({});
+    const CommandRun unanchored = Run(&kb::cli::RunReleaseCommand, { "verify", release.string() });
+    Require(unanchored.exitCode == 1 && Contains(unanchored.output, "carries a trust anchor"),
+        "release verify found a key in a Linux player whose anchor slot is empty");
+    const std::vector<std::uint8_t> anchorBytes = [&] {
+        std::ifstream input{ anchor, std::ios::binary };
+        return std::vector<std::uint8_t>{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+    }();
+    writeLinuxPlayer(anchorBytes);
+    const CommandRun linuxRelease = Run(&kb::cli::RunReleaseCommand, { "verify", release.string() });
+    Require(linuxRelease.exitCode == 0 && Contains(linuxRelease.output, "OK Example.Game 1.0.0 release 3"),
+        "release verify did not take the key from the Linux player's trust anchor");
+    std::filesystem::remove(release / "Game", error);
+    std::filesystem::remove(release / "release.kbmanifest", error);
+    Require(Run(&kb::cli::RunReleaseCommand,
+                { "sign", "--key", key, "--dir", release.string(), "--product", "Example.Game",
+                  "--content-version", "1.0.0", "--release", "3", "--anti-rollback" }).exitCode == 0,
+        "release sign failed after the Linux player was removed");
+    WriteTextFile(release / "evil.dll", "planted");
+    const CommandRun planted = Run(&kb::cli::RunReleaseCommand, { "verify", "--anchor", anchor, release.string() });
+    Require(planted.exitCode == 1 && Contains(planted.output, "UnlistedFile") && Contains(planted.output, "evil.dll"),
+        "release verify accepted a planted native module");
+
+    std::filesystem::remove_all(root, error);
+}
+
 void RunMcpCommandTests() {
     PrepareProject();
     const std::string root = TestRoot().string();
@@ -2320,6 +2850,135 @@ void RunMcpCommandTests() {
 
 } // namespace
 
+void RunWorldCommandTests() {
+    const std::filesystem::path root = TestRoot() / "world";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    Require(!error, "kb_cli world test root could not be prepared");
+    WriteProjectDescriptor(root, false);
+    WriteTextFile(root / "Assets" / "Meshes" / "Rock.obj",
+        "v 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\nvn 0 0 1\nusemtl stone\nf 1//1 2//1 3//1\nf 1//1 3//1 4//1\n");
+    {
+        kb::scene::Scene scene;
+        for (int index = 0; index < 3; ++index) {
+            kb::scene::SceneObjectDesc desc{ .name = "Rock" + std::to_string(index) };
+            desc.transform.localPosition = { static_cast<float>(index) * 100.0F, 0.0F, 0.0F };
+            const kb::scene::SceneObject rock = scene.Entities().CreateObject(desc);
+            if (index == 0) {
+                // The proxy of this rock's cell is built from the project's mesh.
+                scene.Components().MeshRenderers().Set(rock.Entity(), kb::scene::MeshRendererComponent{
+                    .meshAssetId = kb::assets::MakeAssetId(kb::assets::NormalizeAssetPath("/Game/Meshes/Rock.obj") + ":RenderMesh").value });
+            }
+        }
+        Require(kb::scene::SceneDocumentService::Save(scene, root / "Assets" / "Level.21kbscene", "Level"),
+            "kb_cli world test scene could not be saved");
+    }
+    const std::string rootText = root.string();
+    const CommandRun usage = Run(&kb::cli::RunWorldCommand, { "migrate", "--scene", "Level.21kbscene" });
+    Require(usage.exitCode == 1 && Contains(usage.output, "--out"), "world migrate accepted a missing --out");
+    const CommandRun migrate = Run(&kb::cli::RunWorldCommand, {
+        "migrate", "--project", rootText, "--scene", "Assets/Level.21kbscene", "--out", "Assets/Level.21kbworld", "--cell-size", "64" });
+    Require(migrate.exitCode == 0 && Contains(migrate.output, "migrated 3 objects"), "world migrate failed");
+    Require(kb::world::WorldObjectFileIO::List(root / "Assets" / "Level.objects").size() == 3U, "world migrate did not write one file per object");
+    const kb::world::WorldDescriptorReadResult descriptor = kb::world::WorldDescriptorIO::Read(root / "Assets" / "Level.21kbworld");
+    Require(descriptor.succeeded && descriptor.descriptor.cellSize == 64.0, "world migrate did not apply the cell size");
+    const CommandRun again = Run(&kb::cli::RunWorldCommand, {
+        "migrate", "--project", rootText, "--scene", "Assets/Level.21kbscene", "--out", "Assets/Level.21kbworld" });
+    Require(again.exitCode == 1 && Contains(again.output, "already exists"), "world migrate overwrote an existing world");
+    // Without --project the build finds the project above the world.
+    const CommandRun build = Run(&kb::cli::RunWorldCommand, { "build", "--world", (root / "Assets" / "Level.21kbworld").string() });
+    Require(build.exitCode == 0 && Contains(build.output, "built 3 cells and 1 HLOD proxies from 3 objects"), build.output.c_str());
+    const kb::world::WorldCellIndexReadResult index =
+        kb::world::WorldCellIndexIO::Read(kb::world::WorldPaths::CellIndexPath(root / "Assets" / "Level.21kbworld"));
+    Require(index.succeeded && index.index.units.size() == 3U && index.index.hlods.size() == 1U, "world build did not write cells and the proxy");
+    std::filesystem::create_directories(TestRoot() / "world_without_project", error);
+    std::filesystem::copy(root / "Assets" / "Level.21kbworld", TestRoot() / "world_without_project" / "Level.21kbworld",
+        std::filesystem::copy_options::overwrite_existing, error);
+    const CommandRun orphan = Run(&kb::cli::RunWorldCommand, { "build", "--project", (TestRoot() / "world_without_project").string(),
+        "--world", (TestRoot() / "world_without_project" / "Level.21kbworld").string() });
+    Require(orphan.exitCode == 1 && Contains(orphan.output, "--project"), "a folder without a project file is not a project");
+    const CommandRun chunks = Run(&kb::cli::RunWorldCommand, { "chunks", "--project", rootText });
+    Require(chunks.exitCode == 0 && Contains(chunks.output, "chunk Level.r_0_0=/Game/Level.cells/base/r_0_0/,/Game/Level.cells/hlod/r_0_0/"),
+        chunks.output.c_str());
+    const CommandRun claimed = Run(&kb::cli::RunWorldCommand, { "chunks", "--project", rootText, "--exclude", "/Game/Level.cells/" });
+    Require(claimed.exitCode == 0 && !Contains(claimed.output, "chunk "), "excluded world files must not form chunks");
+    const CommandRun unknown = Run(&kb::cli::RunWorldCommand, { "explode" });
+    Require(unknown.exitCode == 1, "world accepted an unknown subcommand");
+}
+
+void RunNavMeshCommandTests() {
+    const std::filesystem::path root = TestRoot() / "navmesh";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    Require(!error, "kb_cli navmesh test root could not be prepared");
+    WriteProjectDescriptor(root, false);
+    // A horizontal 10 x 10 m plate as an imported mesh.
+    WriteTextFile(root / "Assets" / "Meshes" / "Plate.obj",
+        "v -5 0 -5\nv 5 0 -5\nv 5 0 5\nv -5 0 5\nvn 0 1 0\nusemtl stone\nf 1//1 4//1 3//1\nf 1//1 3//1 2//1\n");
+    {
+        kb::scene::Scene scene;
+        const kb::scene::SceneObject floor = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+            .name = "Floor", .transform = kb::scene::TransformComponent{ .localPosition = { 0.0F, -0.5F, 0.0F } } });
+        scene.Components().Colliders().Set(floor.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Box, .boxSize = { 20.0F, 1.0F, 20.0F } });
+        const kb::scene::SceneObject plate = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+            .name = "Plate", .transform = kb::scene::TransformComponent{ .localPosition = { 60.0F, 2.0F, 0.0F } } });
+        scene.Components().MeshRenderers().Set(plate.Entity(), kb::scene::MeshRendererComponent{
+            .meshAssetId = kb::assets::MakeAssetId(kb::assets::NormalizeAssetPath("/Game/Meshes/Plate.obj") + ":RenderMesh").value });
+        Require(kb::scene::SceneDocumentService::Save(scene, root / "Assets" / "Level.21kbscene", "Level"),
+            "kb_cli navmesh test scene could not be saved");
+    }
+    const std::string rootText = root.string();
+    const CommandRun missing = Run(&kb::cli::RunNavMeshCommand, { "bake" });
+    Require(missing.exitCode == 1 && Contains(missing.output, "--scene"), "navmesh bake accepted a missing --scene");
+    const CommandRun bake = Run(&kb::cli::RunNavMeshCommand, { "bake", "--project", rootText, "--scene", "Assets/Level.21kbscene" });
+    Require(bake.exitCode == 0 && Contains(bake.output, "baked ") && Contains(bake.output, "1 colliders"), bake.output.c_str());
+    const kb::navigation::NavMeshAssetReadResult baked = kb::navigation::NavMeshAssetIO::Read(root / "Assets" / "Level.21kbnavmesh");
+    Require(baked.succeeded && !baked.asset.tiles.empty(), "navmesh bake did not write <scene>.21kbnavmesh");
+    const double tileSize = baked.asset.settings.TileWorldSize();
+    const bool floorTiles = std::ranges::any_of(baked.asset.tiles, [&](const kb::navigation::NavTile& tile) { return tile.coord.x * tileSize < 5.0; });
+    const bool plateTiles = std::ranges::any_of(baked.asset.tiles, [&](const kb::navigation::NavTile& tile) { return tile.coord.x * tileSize > 50.0; });
+    Require(floorTiles, "navmesh bake left out the collider floor");
+#if defined(KB_CLI_WORLD_HLOD)
+    Require(plateTiles && Contains(bake.output, "from 1 meshes"), "navmesh bake left out the imported mesh");
+#else
+    Require(!plateTiles, "a kb_cli without the renderer cannot read imported meshes");
+#endif
+    const CommandRun profiles = Run(&kb::cli::RunNavMeshCommand, { "bake", "--project", rootText, "--scene", "Assets/Level.21kbscene",
+        "--cell-size", "0.3", "--agent", "Small:0.3:1.6:0.3:40", "--agent", "Large:1:2.5:0.5:30" });
+    Require(profiles.exitCode == 0, profiles.output.c_str());
+    const CommandRun info = Run(&kb::cli::RunNavMeshCommand, { "info", (root / "Assets" / "Level.21kbnavmesh").string() });
+    Require(info.exitCode == 0 && Contains(info.output, "cell size 0.3") && Contains(info.output, "agent Small") && Contains(info.output, "agent Large"),
+        info.output.c_str());
+    // Settings not given are kept from the mesh being replaced.
+    const CommandRun kept = Run(&kb::cli::RunNavMeshCommand, { "bake", "--project", rootText, "--scene", "Assets/Level.21kbscene" });
+    const kb::navigation::NavMeshAssetReadResult rebaked = kb::navigation::NavMeshAssetIO::Read(root / "Assets" / "Level.21kbnavmesh");
+    Require(kept.exitCode == 0 && rebaked.succeeded && rebaked.asset.settings.profiles.size() == 2U && rebaked.asset.settings.cellSize == 0.3F,
+        "navmesh bake must keep the settings of the mesh it replaces");
+    const CommandRun badAgent = Run(&kb::cli::RunNavMeshCommand, { "bake", "--project", rootText, "--scene", "Assets/Level.21kbscene", "--agent", "Tiny:x" });
+    Require(badAgent.exitCode == 1 && Contains(badAgent.output, "--agent"), "navmesh bake accepted a malformed agent");
+    const CommandRun unknown = Run(&kb::cli::RunNavMeshCommand, { "explode" });
+    Require(unknown.exitCode == 1, "navmesh accepted an unknown subcommand");
+
+    // A world that enables navigation gets cell navigation meshes from world build.
+    const CommandRun migrate = Run(&kb::cli::RunWorldCommand, {
+        "migrate", "--project", rootText, "--scene", "Assets/Level.21kbscene", "--out", "Assets/Level.21kbworld", "--cell-size", "64" });
+    Require(migrate.exitCode == 0, migrate.output.c_str());
+    kb::world::WorldDescriptorReadResult descriptor = kb::world::WorldDescriptorIO::Read(root / "Assets" / "Level.21kbworld");
+    Require(descriptor.succeeded, "the migrated world could not be read");
+    descriptor.descriptor.navigation.enabled = true;
+    std::string writeError;
+    Require(kb::world::WorldDescriptorIO::Write(root / "Assets" / "Level.21kbworld", descriptor.descriptor, writeError), writeError.c_str());
+    const CommandRun build = Run(&kb::cli::RunWorldCommand, { "build", "--world", (root / "Assets" / "Level.21kbworld").string() });
+    Require(build.exitCode == 0 && Contains(build.output, "navigation tiles into"), build.output.c_str());
+    const kb::world::WorldCellIndexReadResult index =
+        kb::world::WorldCellIndexIO::Read(kb::world::WorldPaths::CellIndexPath(root / "Assets" / "Level.21kbworld"));
+    Require(index.succeeded && !index.index.navMeshes.empty(), "world build did not write the cells' navigation meshes");
+    const CommandRun chunks = Run(&kb::cli::RunWorldCommand, { "chunks", "--project", rootText });
+    Require(chunks.exitCode == 0 && Contains(chunks.output, "/Game/Level.cells/nav/r_0_0/"), chunks.output.c_str());
+}
+
 int main() {
     RunMiniJsonTests();
     RunArgumentListTests();
@@ -2331,6 +2990,11 @@ int main() {
     RunApiCommandTests();
     RunApiCheckCommandTests();
     RunMcpCommandTests();
+    RunKeyAndPackCommandTests();
+    RunWorldCommandTests();
+    RunNavMeshCommandTests();
+    RunPackSetCommandTests();
+    RunEncryptedPatchCommandTests();
     // Keep the production physics fixture on disk after the test process so
     // the built kb_cli executable can be run against it as a separate-process
     // runtime verification.

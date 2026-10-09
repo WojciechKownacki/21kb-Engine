@@ -42,12 +42,14 @@ ENGINE_BUILD_INPUTS = (
     "third_party/bgfx.cmake",
     "third_party/flecs",
     "third_party/jolt",
-    "third_party/licenses/lua-5.4.8.txt",
+    "third_party/licenses",
     "third_party/miniaudio",
+    "third_party/third_party_manifest.json",
     "third_party/ufbx",
     "scripts/package_contract.py",
     "scripts/package_game.py",
     "scripts/package_linux_guest.py",
+    "scripts/third_party_notices.py",
     "scripts/windows_pe_resources.py",
 )
 _SOURCE_TEXT_SUFFIXES = frozenset((
@@ -561,6 +563,7 @@ def run_checked(
     env: Mapping[str, str] | None = None,
     timeout_seconds: float,
     on_line: Callable[[str], None] | None = None,
+    input_text: str | None = None,
 ) -> ProcessResult:
     argv = [os.fspath(value) for value in arguments]
     if not argv or not Path(argv[0]).is_file():
@@ -573,7 +576,7 @@ def run_checked(
         argv,
         cwd=cwd,
         env=dict(env) if env is not None else None,
-        stdin=subprocess.DEVNULL,
+        stdin=subprocess.PIPE if input_text is not None else subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -584,6 +587,13 @@ def run_checked(
         creationflags=creation_flags,
         start_new_session=os.name != "nt",
     )
+    if input_text is not None:
+        # Secrets travel this way, never as arguments: written once, then the pipe closes.
+        assert process.stdin is not None
+        try:
+            process.stdin.write(input_text)
+        finally:
+            process.stdin.close()
     output: list[str] = []
     total = 0
     lines: queue.Queue[str | None] = queue.Queue()

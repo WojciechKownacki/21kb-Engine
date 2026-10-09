@@ -18,6 +18,8 @@ namespace kb::particles {
 // scale with the CPU particle pipeline.
 inline constexpr std::size_t kParticleGpuCurveSamples = 8U;
 inline constexpr std::uint32_t kParticleGpuMaxCapacity = 1'048'576U;
+// A trail emitter draws one stretched quad per trail segment of every slot; this bounds capacity x segments.
+inline constexpr std::uint32_t kParticleGpuMaxTrailSegments = 1'048'576U;
 
 struct ParticleGpuSpawn {
     kb::math::Vec3 position{};
@@ -28,6 +30,14 @@ struct ParticleGpuSpawn {
 
 static_assert(sizeof(ParticleGpuSpawn) == 32U);
 static_assert(std::is_trivially_copyable_v<ParticleGpuSpawn>);
+
+// A world-space plane (normal . p = distance) that particles bounce off, like the CPU collision module.
+struct ParticleGpuCollisionPlane {
+    kb::math::Vec3 normal{ 0.0F, 1.0F, 0.0F };
+    float distance = 0.0F;
+    float restitution = 0.5F;
+    float friction = 0.0F;
+};
 
 // Appearance and motion constants of one GPU emitter. Colour and size over normalized age are
 // sampled at kParticleGpuCurveSamples evenly spaced ages and interpolated linearly by the GPU.
@@ -45,6 +55,36 @@ struct ParticleGpuEmitterParams {
     bool softParticles = false;
     float stretchVelocityScale = 0.0F;
     float stretchMinimumLength = 1.0F;
+    // Collisions make the motion stateful: the renderer integrates each particle frame by frame instead of
+    // evaluating the closed form. The plane is exact; scene depth collision bounces off whatever surface
+    // the depth buffer of the frame shows (with the restitution and friction of the plane, or defaults).
+    ParticleGpuCollisionPlane plane{};
+    bool hasPlane = false;
+    bool sceneDepthCollision = false;
+    // Local-space emitters keep their birth records in the owner's frame; the world matrix sent with the
+    // commands carries the particles along with the owner (acceleration is still a world-space vector).
+    bool localSpace = false;
+    // Mesh output: every particle is an instance of the mesh drawn through the ordinary mesh pipeline with the
+    // material (so lighting and shadows apply); the instance uses the size curve as a uniform scale.
+    std::uint64_t meshAssetId = 0U;
+    std::uint64_t materialAssetId = 0U;
+    bool castsShadow = false;
+    bool receivesShadow = true;
+    // Trail output: the path of a free-flying particle is known in closed form, so each slot draws
+    // `trailSegments` camera-facing quads along its last trailSegments x trailSegmentSeconds of travel.
+    std::uint32_t trailSegments = 0U;
+    float trailSegmentSeconds = 0.0F;
+    float trailWidth = 0.1F;
+    // Spin: every slot draws, per axis, an angle in [spinMin, spinMax] (radians) and an angular velocity in
+    // [spinRateMin, spinRateMax] (radians per second) from a hash of its slot and birth time; its angle is
+    // angle + velocity x age. Equal bounds mean a fixed value. Z turns a billboard about the view axis; a mesh
+    // is turned by all three as Euler angles (Z after Y after X).
+    kb::math::Vec3 spinMin{};
+    kb::math::Vec3 spinMax{};
+    kb::math::Vec3 spinRateMin{};
+    kb::math::Vec3 spinRateMax{};
+
+    [[nodiscard]] constexpr bool HasCollision() const noexcept { return hasPlane || sceneDepthCollision; }
 };
 
 struct ParticleGpuEmitterKey {
@@ -63,7 +103,19 @@ struct ParticleGpuEmitterCommand {
     bool clear = false;         // drop all live particles (restart/stop with clear)
     bool hasParams = false;     // params below are valid (sent on creation and whenever they change)
     ParticleGpuEmitterParams params{};
+    // Column-major world matrix of the owner, sent every step for local-space emitters.
+    bool hasWorldMatrix = false;
+    std::array<float, 16> worldMatrix{ 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F };
+    // Pose of a mesh emitter, sent every step: the orientation (x, y, z, w) of its particles (the owner's rotation
+    // times the emitter's own, as the CPU path publishes it with every snapshot) and the emitter's origin in the
+    // world, by which the whole emitter is placed among the other translucent draws of the frame.
+    bool hasOrientation = false;
+    std::array<float, 4> orientation{ 0.0F, 0.0F, 0.0F, 1.0F };
+    std::array<float, 3> origin{ 0.0F, 0.0F, 0.0F };
     std::vector<ParticleGpuSpawn> spawns;
+    // The simulation origin (ParticlePlayback::SimulationOrigin) the positions, world matrix and collision plane
+    // of this command are relative to.
+    kb::math::DVec3 simulationOrigin{};
 };
 
 } // namespace kb::particles

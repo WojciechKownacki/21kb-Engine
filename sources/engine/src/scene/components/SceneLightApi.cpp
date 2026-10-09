@@ -2,6 +2,7 @@
 #include "scene/SceneComponentMutationService.hpp"
 #include "scene/SceneComponentQueryService.hpp"
 #include "scene/SceneEntityService.hpp"
+#include "scene/SceneHistoryService.hpp"
 #include "scene/SceneRenderProxyComponentMask.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/prefab/ScenePrefabDirtyTracker.hpp"
@@ -17,10 +18,12 @@ const LightComponent* SceneComponentQueryService::TryGetLight(const Scene& scene
 }
 
 LightComponent* SceneComponentMutationService::TryGetLight(Scene& scene, SceneEntity entity) noexcept {
+    SceneHistoryService::NoteObjectChanging(scene, entity);
     return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.Lights().TryGet(entity) : nullptr;
 }
 
 void SceneComponentMutationService::SetLight(Scene& scene, SceneEntity entity, const LightComponent& light) {
+    SceneHistoryService::NoteObjectChanging(scene, entity);
     if (SceneEntityService::IsAlive(scene, entity)) {
         SceneState& state = SceneAccess::State(scene);
         state.componentStorage.Lights().Set(entity, light);
@@ -31,6 +34,7 @@ void SceneComponentMutationService::SetLight(Scene& scene, SceneEntity entity, c
 }
 
 void SceneComponentMutationService::RemoveLight(Scene& scene, SceneEntity entity) noexcept {
+    SceneHistoryService::NoteObjectChanging(scene, entity);
     if (SceneEntityService::IsAlive(scene, entity)) {
         SceneState& state = SceneAccess::State(scene);
         state.componentStorage.Lights().Remove(entity);

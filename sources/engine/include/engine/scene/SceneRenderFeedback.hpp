@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/math/DVec3.hpp"
 #include "engine/math/EngineMath.hpp"
 #include "engine/input/InputLocalUser.hpp"
 #include "engine/scene/SceneEntity.hpp"
@@ -82,6 +83,9 @@ struct SceneRenderVisibilityFrame {
     std::array<float, 16> view{};
     std::array<float, 16> projection{};
     std::vector<SceneRenderVisibilityEntry> entries;
+    // The renderer works relative to a render origin near the camera (docs/large_worlds.md): `view`, the frustum
+    // planes and the entries' bounds are relative to it. The queries below take and return world positions.
+    kb::math::DVec3 renderOrigin{};
 };
 
 // LIB-145: WorldToScreen's result. `valid` is false when no frame/camera was published;
@@ -104,6 +108,8 @@ struct SceneRenderScreenPoint {
 struct SceneRenderCameraRay {
     kb::math::Ray ray{};
     bool valid = false;
+    // The ray origin in double precision; ray.origin is it rounded to float.
+    kb::math::DVec3 worldOrigin{};
 };
 
 // LIB-145: one async screen capture's observable lifecycle. Unknown = the id never named a
@@ -172,12 +178,18 @@ public:
     [[nodiscard]] static bool HasFrame(const Scene& scene) noexcept;
     [[nodiscard]] static bool HasFrame(const Scene& scene, kb::input::LocalUserId localUser) noexcept;
     [[nodiscard]] static std::uint64_t PublishCount(const Scene& scene) noexcept;
+    // The render origin of the last published frame ((0, 0, 0) before the first): the renderer's positions are
+    // relative to it (docs/large_worlds.md).
+    [[nodiscard]] static kb::math::DVec3 RenderOrigin(const Scene& scene) noexcept;
     // False for an entity with no entry in the last published frame (no MeshRenderer proxy,
     // destroyed after the submit, or no frame published yet) - never an error.
     [[nodiscard]] static bool IsVisible(const Scene& scene, SceneEntity entity) noexcept;
     // Invalid (radius 0) bounds for an untracked entity, an entity whose mesh resource had
     // no valid bounds at submit time, or when no frame was published yet.
     [[nodiscard]] static SceneRenderBounds WorldBounds(const Scene& scene, SceneEntity entity) noexcept;
+    // WorldBounds with the center relative to `origin`, computed in double precision (a host working relative to
+    // its own origin far from the world origin keeps the bounds exact).
+    [[nodiscard]] static SceneRenderBounds BoundsRelativeTo(const Scene& scene, SceneEntity entity, const kb::math::DVec3& origin) noexcept;
     // Sphere-vs-frustum test against the last published camera frustum (radius 0 = point
     // test). False when no frame was published yet or the last submit had no camera.
     [[nodiscard]] static bool TestFrustum(const Scene& scene, const kb::math::Vec3& center, float radius) noexcept;
@@ -186,6 +198,8 @@ public:
     // (works for perspective and orthographic alike - no matrix decomposition involved).
     // `valid=false` (all-default result) when no frame/camera was published.
     [[nodiscard]] static SceneRenderScreenPoint WorldToScreen(const Scene& scene, const kb::math::Vec3& worldPoint) noexcept;
+    // WorldToScreen of a double-precision world point (an anchor far from the origin keeps sub-pixel stability).
+    [[nodiscard]] static SceneRenderScreenPoint WorldToScreen(const Scene& scene, const kb::math::DVec3& worldPoint) noexcept;
     // LIB-145: builds the world-space ray through a viewport-local pixel (top-left origin),
     // mirroring the editor's own EditorSceneViewportHitResolver ray math: camera basis axes
     // extracted from the view matrix plus tan(fov/2)/aspect extracted from the projection

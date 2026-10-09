@@ -18,8 +18,9 @@ std::vector<EditorSceneObjectTransformChange> EditorSceneTransformCommitBuilder:
         }
         if (const kb::scene::TransformComponent* current = scene.Transforms().TryGet(change.entity); current != nullptr) {
             change.after = *current;
+            change.afterTranslation = scene.Transforms().LocalTranslation(change.entity, *current);
         }
-        if (!EditorSceneTransformEquality::Same(change.before, change.after)) {
+        if (!EditorSceneTransformEquality::Same(change.before, change.beforeTranslation, change.after, change.afterTranslation)) {
             committed.push_back(change);
         }
     }

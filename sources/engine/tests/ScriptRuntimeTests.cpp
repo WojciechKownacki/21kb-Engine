@@ -1012,6 +1012,105 @@ end
         "Lua Fail execution budget policy did not produce an explicit diagnostic");
 }
 
+// One Lua runtime runs every script of a host, so its allocations are capped:
+// a script that exhausts the cap fails as that script's error, and the other
+// scripts of the same runtime keep running on later ticks.
+void RunPucLuaMemoryLimitTest() {
+    constexpr std::size_t kLimit = std::size_t{ 16U } << 20U;
+    kb::script::PucLuaScriptRuntime luaRuntime;
+    luaRuntime.SetExecutionBudgetSettings({ .luaMemoryBytes = kLimit });
+    constexpr kb::assets::AssetId kHugeString{ 3210U };
+    constexpr kb::assets::AssetId kGrowingTable{ 3211U };
+    constexpr kb::assets::AssetId kHealthy{ 3212U };
+    kb::tests::Require(luaRuntime.LoadScript(kHugeString, R"(
+function Tick(self, dt)
+    local text = string.rep("x", 64 * 1024 * 1024)
+    SetShared("lua.memory.huge", #text)
+end
+)", "LuaMemoryHugeString.lua").succeeded, "Lua memory limit huge-string script did not load");
+    kb::tests::Require(luaRuntime.LoadScript(kGrowingTable, R"(
+function Tick(self, dt)
+    local items = {}
+    for index = 1, 100000000 do
+        items[index] = index
+    end
+    SetShared("lua.memory.table", #items)
+end
+)", "LuaMemoryGrowingTable.lua").succeeded, "Lua memory limit growing-table script did not load");
+    kb::tests::Require(luaRuntime.LoadScript(kHealthy, R"(
+local ticks = 0
+function Tick(self, dt)
+    ticks = ticks + 1
+    SetShared("lua.memory.healthy", ticks)
+end
+)", "LuaMemoryHealthy.lua").succeeded, "Lua memory limit healthy script did not load");
+
+    kb::scene::Scene scene;
+    for (const kb::assets::AssetId asset : { kHugeString, kGrowingTable, kHealthy }) {
+        const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Memory " + std::to_string(asset.value) });
+        scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+            .behaviourAssetId = asset.value,
+            .backend = kb::scene::BehaviourBackend::Lua,
+            .enabled = true,
+        });
+    }
+    kb::script::ScriptRuntime dispatcher;
+    kb::tests::Require(dispatcher.RegisterBackend(std::make_unique<kb::script::LuaScriptBackend>(luaRuntime)),
+        "Lua memory limit backend registration failed");
+    for (int tick = 1; tick <= 2; ++tick) {
+        const kb::script::ScriptRuntimeExecutionResult result = dispatcher.ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.016F);
+        std::vector<std::uint64_t> failedAssets;
+        for (const kb::script::ScriptDiagnostic& diagnostic : result.diagnostics) {
+            kb::tests::Require(diagnostic.message.find("memory limit of 16777216 bytes exceeded") != std::string::npos,
+                "A script past the Lua memory limit must fail with a memory-limit script error");
+            failedAssets.push_back(diagnostic.assetId.value);
+        }
+        std::ranges::sort(failedAssets);
+        kb::tests::Require(failedAssets == std::vector<std::uint64_t>{ kHugeString.value, kGrowingTable.value },
+            "Exactly the two scripts past the Lua memory limit must fail");
+        const std::optional<kb::script::ScriptValue> healthy = dispatcher.SharedState().Get("lua.memory.healthy");
+        kb::tests::Require(healthy.has_value() && healthy->AsInt() == tick,
+            "A script within the Lua memory limit must keep running beside scripts that exceeded it");
+        kb::tests::Require(!dispatcher.SharedState().Get("lua.memory.huge").has_value() &&
+                !dispatcher.SharedState().Get("lua.memory.table").has_value(),
+            "A script past the Lua memory limit must not complete");
+    }
+    kb::tests::Require(luaRuntime.LuaMemoryUsedBytes() != 0U && luaRuntime.LuaMemoryUsedBytes() < kLimit,
+        "The Lua memory limit must leave the runtime below its cap once the failing scripts unwound");
+
+    // The default cap applies without any configuration and also bounds a
+    // request far beyond it; the instruction budget still works beside it.
+    kb::script::PucLuaScriptRuntime defaultRuntime;
+    defaultRuntime.SetExecutionBudgetSettings({ .luaInstructionsPerBehaviour = 100U });
+    kb::tests::Require(kb::script::ScriptExecutionBudgetSettings{}.luaMemoryBytes == (std::size_t{ 256U } << 20U),
+        "The default Lua memory limit must be 256 MiB");
+    constexpr kb::assets::AssetId kDefaultHuge{ 3213U };
+    constexpr kb::assets::AssetId kLooping{ 3214U };
+    kb::tests::Require(defaultRuntime.LoadScript(kDefaultHuge, "function Tick(self, dt) local text = string.rep('x', 512 * 1024 * 1024) end\n", "LuaMemoryDefault.lua").succeeded &&
+            defaultRuntime.LoadScript(kLooping, "function Tick(self, dt) local total = 0 for index = 1, 10000 do total = total + index end end\n", "LuaMemoryLoop.lua").succeeded,
+        "Lua default memory limit scripts did not load");
+    kb::scene::Scene defaultScene;
+    for (const kb::assets::AssetId asset : { kDefaultHuge, kLooping }) {
+        defaultScene.Components().Behaviours().Set(defaultScene.Entities().CreateEntity(), kb::scene::BehaviourComponent{
+            .behaviourAssetId = asset.value,
+            .backend = kb::scene::BehaviourBackend::Lua,
+            .enabled = true,
+        });
+    }
+    kb::script::ScriptRuntime defaultDispatcher;
+    kb::tests::Require(defaultDispatcher.RegisterBackend(std::make_unique<kb::script::LuaScriptBackend>(defaultRuntime)),
+        "Lua default memory limit backend registration failed");
+    const kb::script::ScriptRuntimeExecutionResult defaultResult = defaultDispatcher.ExecuteLifecycle(defaultScene, kb::script::ScriptLifecycleEvent::Tick, 0.016F);
+    bool memoryFailure = false;
+    bool budgetFailure = false;
+    for (const kb::script::ScriptDiagnostic& diagnostic : defaultResult.diagnostics) {
+        memoryFailure = memoryFailure || (diagnostic.assetId == kDefaultHuge && diagnostic.message.find("memory limit of 268435456 bytes exceeded") != std::string::npos);
+        budgetFailure = budgetFailure || (diagnostic.assetId == kLooping && diagnostic.message.find("execution budget exceeded") != std::string::npos);
+    }
+    kb::tests::Require(memoryFailure && budgetFailure && defaultResult.diagnostics.size() == 2U,
+        "The default Lua memory limit and the instruction budget must each fail their own script");
+}
+
 void RunPucLuaScriptRuntimeModulesReloadAndDiagnosticsTest() {
     kb::scene::Scene scene;
     const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Runtime Advanced" });
@@ -1102,10 +1201,9 @@ end
     const kb::script::PucLuaLoadResult debugLoaded = luaRuntime.LoadScript(kLuaAsset, "function Tick(self, dt)\n    SetShared(\"lua.debug.hit\", 1)\nend\n", "Debug.lua", 103U);
     kb::tests::Require(debugLoaded.succeeded, "PUC Lua debug test script did not load");
     tick = runtime.ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
-    kb::tests::Require(!tick.Succeeded() && !tick.diagnostics.empty() && tick.diagnostics.front().message.find("lua breakpoint hit") != std::string::npos,
-        "PUC Lua breakpoint did not produce a runtime diagnostic");
+    kb::tests::Require(tick.Succeeded() && luaRuntime.IsDebugPaused(), "PUC Lua breakpoint did not suspend the script without an error");
     const kb::script::PucLuaDebugPauseSnapshot& pause = luaRuntime.LastDebugPause();
-    kb::tests::Require(pause.valid && pause.reason == kb::script::PucLuaDebugPauseReason::Breakpoint && pause.chunkName.ends_with("Debug.lua") && pause.line == 2,
+    kb::tests::Require(pause.valid && pause.suspended && pause.reason == kb::script::PucLuaDebugPauseReason::Breakpoint && pause.chunkName.ends_with("Debug.lua") && pause.line == 2,
         "PUC Lua debugger did not record breakpoint pause metadata");
     kb::tests::Require(!pause.callStack.empty(), "PUC Lua debugger did not capture call stack");
 
@@ -1132,10 +1230,190 @@ end
     luaRuntime.ClearDebugPause();
     luaRuntime.RequestBreakOnNextLine();
     tick = runtime.ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
-    kb::tests::Require(!tick.Succeeded(), "PUC Lua manual break did not pause execution");
+    kb::tests::Require(tick.Succeeded() && luaRuntime.IsDebugPaused(), "PUC Lua manual break did not suspend execution");
     const kb::script::PucLuaDebugPauseSnapshot& manualPause = luaRuntime.LastDebugPause();
-    kb::tests::Require(manualPause.valid && manualPause.reason == kb::script::PucLuaDebugPauseReason::ManualBreak && manualPause.chunkName.ends_with("ManualBreak.lua"),
+    kb::tests::Require(manualPause.valid && manualPause.suspended && manualPause.reason == kb::script::PucLuaDebugPauseReason::ManualBreak && manualPause.chunkName.ends_with("ManualBreak.lua"),
         "PUC Lua debugger did not record manual break pause metadata");
+    luaRuntime.ResumeDebugExecution();
+    tick = runtime.ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
+    const std::optional<kb::script::ScriptValue> manualHit = runtime.SharedState().Get("lua.debug.manual");
+    kb::tests::Require(tick.Succeeded() && !luaRuntime.IsDebugPaused() && manualHit.has_value() && manualHit->AsInt() == 1,
+        "PUC Lua manual break did not resume the suspended script on continue");
+}
+
+[[nodiscard]] const kb::script::PucLuaDebugVariableSnapshot* FindDebugLocal(const kb::script::PucLuaDebugFrameSnapshot& frame, std::string_view name) {
+    for (const kb::script::PucLuaDebugVariableSnapshot& variable : frame.locals) {
+        if (variable.name == name) {
+            return &variable;
+        }
+    }
+    return nullptr;
+}
+
+// A breakpoint suspends the coroutine at its line instead of failing it: the game loop and the other scripts keep
+// running, the suspended locals stay inspectable, and Continue and the steps resume it on its next invocation.
+void RunPucLuaDebuggerSuspendsAtBreakpointTest() {
+    constexpr kb::assets::AssetId kDebuggedAsset{ 3301U };
+    constexpr kb::assets::AssetId kTickerAsset{ 3302U };
+    kb::script::PucLuaScriptRuntime luaRuntime;
+    kb::tests::Require(luaRuntime.LoadScript(kDebuggedAsset, R"(local function inner(v)
+    local doubled = v * 2
+    return doubled
+end
+function Tick(self, dt)
+    local a = 1
+    local b = inner(a)
+    SetShared("lua.pause.b", b)
+    SetShared("lua.pause.done", (GetShared("lua.pause.done") or 0) + 1)
+end
+)", "Debugged.lua").succeeded, "Lua debugger pause script did not load");
+    kb::tests::Require(luaRuntime.LoadScript(kTickerAsset, R"(function Tick(self, dt)
+    SetShared("lua.pause.ticker", (GetShared("lua.pause.ticker") or 0) + 1)
+end
+)", "Ticker.lua").succeeded, "Lua debugger ticker script did not load");
+
+    kb::scene::Scene scene;
+    for (const kb::assets::AssetId asset : { kDebuggedAsset, kTickerAsset }) {
+        const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Debugger" });
+        scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+            .behaviourAssetId = asset.value,
+            .backend = kb::scene::BehaviourBackend::Lua,
+            .enabled = true,
+        });
+    }
+    kb::script::ScriptRuntime runtime;
+    kb::tests::Require(runtime.RegisterBackend(std::make_unique<kb::script::LuaScriptBackend>(luaRuntime)), "Lua debugger backend registration failed");
+    const auto tick = [&runtime, &scene](const char* failure) {
+        const kb::script::ScriptRuntimeExecutionResult result = runtime.ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.25F);
+        kb::tests::Require(result.Succeeded(), failure);
+    };
+    const auto shared = [&runtime](const char* key) {
+        const std::optional<kb::script::ScriptValue> value = runtime.SharedState().Get(key);
+        return value.has_value() ? value->AsInt() : 0;
+    };
+
+    luaRuntime.SetDebugSettings(kb::script::PucLuaDebugSettings{
+        .breakpoints = { kb::script::PucLuaDebugBreakpoint{ .chunkName = "Debugged.lua", .line = 6 } },
+    });
+    tick("Lua breakpoint raised an error instead of suspending the script");
+    const kb::script::PucLuaDebugPauseSnapshot& pause = luaRuntime.LastDebugPause();
+    kb::tests::Require(luaRuntime.IsDebugPaused() && pause.valid && pause.suspended && pause.reason == kb::script::PucLuaDebugPauseReason::Breakpoint &&
+            pause.chunkName.ends_with("Debugged.lua") && pause.line == 6 && luaRuntime.SuspendedCoroutineCount() == 1U,
+        "Lua breakpoint did not suspend the script at its line");
+    kb::tests::Require(shared("lua.pause.ticker") == 1 && shared("lua.pause.done") == 0, "Lua breakpoint did not stop only the paused script");
+
+    tick("Lua game loop failed while a script was paused");
+    tick("Lua game loop failed while a script was paused");
+    kb::tests::Require(luaRuntime.IsDebugPaused() && shared("lua.pause.ticker") == 3 && shared("lua.pause.done") == 0,
+        "Lua paused script ran on, or the other scripts stopped, while the debugger held the pause");
+    kb::script::PucLuaDebugPauseSnapshot inspected = luaRuntime.InspectDebugPause();
+    kb::tests::Require(inspected.valid && inspected.callStack.size() == 1U && inspected.callStack.front().line == 6, "Lua paused script call stack is not inspectable");
+    const kb::script::PucLuaDebugVariableSnapshot* delta = FindDebugLocal(inspected.callStack.front(), "dt");
+    kb::tests::Require(delta != nullptr && delta->type == kb::script::ScriptValueType::Float && delta->value.starts_with("0.25"),
+        "Lua paused script locals are not inspectable");
+
+    luaRuntime.RequestStepOver();
+    kb::tests::Require(!luaRuntime.IsDebugPaused(), "Lua step over did not release the pause");
+    tick("Lua step over raised an error");
+    inspected = luaRuntime.InspectDebugPause();
+    const kb::script::PucLuaDebugVariableSnapshot* a = inspected.callStack.empty() ? nullptr : FindDebugLocal(inspected.callStack.front(), "a");
+    kb::tests::Require(luaRuntime.IsDebugPaused() && luaRuntime.LastDebugPause().reason == kb::script::PucLuaDebugPauseReason::Step &&
+            luaRuntime.LastDebugPause().line == 7 && a != nullptr && a->value == "1" && a->type == kb::script::ScriptValueType::Int,
+        "Lua step over did not stop on the next line with the updated locals");
+
+    luaRuntime.RequestStepInto();
+    tick("Lua step into raised an error");
+    inspected = luaRuntime.InspectDebugPause();
+    const kb::script::PucLuaDebugVariableSnapshot* v = inspected.callStack.empty() ? nullptr : FindDebugLocal(inspected.callStack.front(), "v");
+    kb::tests::Require(luaRuntime.IsDebugPaused() && luaRuntime.LastDebugPause().line == 2 && inspected.callStack.size() == 2U &&
+            inspected.callStack[1].line == 7 && v != nullptr && v->value == "1",
+        "Lua step into did not stop inside the called function");
+
+    luaRuntime.RequestStepOut();
+    tick("Lua step out raised an error");
+    inspected = luaRuntime.InspectDebugPause();
+    const kb::script::PucLuaDebugVariableSnapshot* b = inspected.callStack.empty() ? nullptr : FindDebugLocal(inspected.callStack.front(), "b");
+    kb::tests::Require(luaRuntime.IsDebugPaused() && luaRuntime.LastDebugPause().line == 8 && inspected.callStack.size() == 1U && b != nullptr && b->value == "2",
+        "Lua step out did not stop in the caller after the function returned");
+    kb::tests::Require(shared("lua.pause.done") == 0 && shared("lua.pause.ticker") == 6, "Lua stepping ran ahead of the paused line or held the other scripts");
+
+    luaRuntime.ResumeDebugExecution();
+    tick("Lua continue raised an error");
+    kb::tests::Require(!luaRuntime.IsDebugPaused() && shared("lua.pause.done") == 1 && shared("lua.pause.b") == 2 && luaRuntime.SuspendedCoroutineCount() == 0U,
+        "Lua continue did not run the paused script to completion");
+
+    // The next invocation starts the entry again and stops on the same breakpoint; step over then passes the call.
+    luaRuntime.SetDebugSettings(kb::script::PucLuaDebugSettings{
+        .breakpoints = { kb::script::PucLuaDebugBreakpoint{ .chunkName = "Debugged.lua", .line = 7 } },
+    });
+    tick("Lua breakpoint on a call line raised an error");
+    kb::tests::Require(luaRuntime.IsDebugPaused() && luaRuntime.LastDebugPause().line == 7, "Lua breakpoint on a call line did not suspend");
+    luaRuntime.RequestStepOver();
+    tick("Lua step over a call raised an error");
+    kb::tests::Require(luaRuntime.IsDebugPaused() && luaRuntime.LastDebugPause().line == 8 && luaRuntime.InspectDebugPause().callStack.size() == 1U,
+        "Lua step over stopped inside the called function");
+    luaRuntime.SetDebugSettings(kb::script::PucLuaDebugSettings{});
+    luaRuntime.ResumeDebugExecution();
+    tick("Lua continue after a step raised an error");
+    tick("Lua Tick without breakpoints raised an error");
+    kb::tests::Require(!luaRuntime.IsDebugPaused() && shared("lua.pause.done") == 3 && luaRuntime.SuspendedCoroutineCount() == 0U,
+        "Lua script did not run normally after the debugger released it");
+}
+
+// Lua cannot yield across a C call boundary or from a chunk's top-level code run by pcall, and a Destroyed entry is
+// never invoked again to resume. A breakpoint there is recorded as not suspended and the script goes on, without an
+// error.
+void RunPucLuaDebuggerPauseAcrossCBoundaryTest() {
+    constexpr kb::assets::AssetId kLuaAsset{ 3303U };
+    kb::script::PucLuaScriptRuntime luaRuntime;
+    luaRuntime.SetDebugSettings(kb::script::PucLuaDebugSettings{
+        .breakpoints = {
+            kb::script::PucLuaDebugBreakpoint{ .chunkName = "Boundary.lua", .line = 1 },
+            kb::script::PucLuaDebugBreakpoint{ .chunkName = "Boundary.lua", .line = 5 },
+            kb::script::PucLuaDebugBreakpoint{ .chunkName = "Boundary.lua", .line = 10 },
+        },
+    });
+    const kb::script::PucLuaLoadResult loaded = luaRuntime.LoadScript(kLuaAsset, R"(local firstValue = 3
+function Tick(self, dt)
+    local values = { firstValue, 1, 2 }
+    table.sort(values, function(left, right)
+        return left < right
+    end)
+    SetShared("lua.boundary.first", values[1])
+end
+function Destroyed(self, dt)
+    SetShared("lua.boundary.destroyed", 1)
+end
+)", "Boundary.lua");
+    kb::tests::Require(loaded.succeeded, "Lua breakpoint in top-level chunk code failed the load");
+    kb::tests::Require(!luaRuntime.IsDebugPaused() && luaRuntime.LastDebugPause().valid && !luaRuntime.LastDebugPause().suspended &&
+            luaRuntime.LastDebugPause().line == 1,
+        "Lua breakpoint in top-level chunk code was not recorded as a pause that could not suspend");
+
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Boundary" });
+    scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kLuaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    kb::script::ScriptRuntime runtime;
+    kb::tests::Require(runtime.RegisterBackend(std::make_unique<kb::script::LuaScriptBackend>(luaRuntime)), "Lua boundary backend registration failed");
+    luaRuntime.ClearDebugPause();
+    const kb::script::ScriptRuntimeExecutionResult tick = runtime.ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.016F);
+    kb::tests::Require(tick.Succeeded(), "Lua breakpoint in a sort comparator raised an error");
+    const kb::script::PucLuaDebugPauseSnapshot& pause = luaRuntime.LastDebugPause();
+    kb::tests::Require(!luaRuntime.IsDebugPaused() && pause.valid && !pause.suspended && pause.line == 5 && pause.callStack.size() >= 2U &&
+            luaRuntime.SuspendedCoroutineCount() == 0U,
+        "Lua breakpoint across a C call boundary was not recorded as a pause that could not suspend");
+    const std::optional<kb::script::ScriptValue> first = runtime.SharedState().Get("lua.boundary.first");
+    kb::tests::Require(first.has_value() && first->AsInt() == 1, "Lua script did not go on after a breakpoint it could not suspend at");
+
+    const kb::script::ScriptRuntimeExecutionResult destroyed = runtime.ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Destroyed, 0.016F);
+    const std::optional<kb::script::ScriptValue> destroyedHit = runtime.SharedState().Get("lua.boundary.destroyed");
+    kb::tests::Require(destroyed.Succeeded() && !luaRuntime.IsDebugPaused() && luaRuntime.LastDebugPause().valid && !luaRuntime.LastDebugPause().suspended &&
+            luaRuntime.LastDebugPause().line == 10 && destroyedHit.has_value() && destroyedHit->AsInt() == 1,
+        "Lua breakpoint in a Destroyed entry suspended a behaviour that is never resumed");
 }
 
 void RunLuaExposedVariablesRuntimeTest() {
@@ -3737,6 +4015,59 @@ private:
     kb::scene::SceneEntity target_{};
     bool queued_ = false;
 };
+
+// A shipped game host isolates a faulty script: the failing behaviour instance
+// is disabled after its first error while every other behaviour keeps ticking.
+// Without the option (the editor) the failing behaviour stays enabled.
+void RunScriptHostDisablesFailingBehaviourTest() {
+    for (const bool disableFailing : { true, false }) {
+        kb::scene::Scene scene;
+        const kb::scene::SceneEntity failing = scene.Entities().CreateEntity();
+        const kb::scene::SceneEntity healthy = scene.Entities().CreateEntity();
+        constexpr kb::assets::AssetId kFailing{ 88180U };
+        constexpr kb::assets::AssetId kHealthy{ 88181U };
+        scene.Components().Behaviours().Set(failing, { .behaviourAssetId = kFailing.value, .backend = kb::scene::BehaviourBackend::Native, .enabled = true });
+        scene.Components().Behaviours().Set(healthy, { .behaviourAssetId = kHealthy.value, .backend = kb::scene::BehaviourBackend::Native, .enabled = true });
+        kb::script::ScriptRuntimeHostOptions options;
+        options.disableFailingBehaviours = disableFailing;
+        options.installSceneSystem = true;
+        kb::script::ScriptRuntimeHost host{ scene, options };
+        kb::tests::Require(host.Succeeded(), "Failing-behaviour isolation host failed");
+        int failingTicks = 0;
+        int healthyTicks = 0;
+        kb::tests::Require(host.NativeBackend().RegisterLifecycle(kFailing, kb::script::ScriptLifecycleEvent::Tick,
+                               [&](kb::script::ScriptExecutionContext&) {
+                                   ++failingTicks;
+                                   throw std::runtime_error("deliberate behaviour failure");
+                               }) &&
+                host.NativeBackend().RegisterLifecycle(kHealthy, kb::script::ScriptLifecycleEvent::Tick,
+                    [&](kb::script::ScriptExecutionContext&) { ++healthyTicks; }),
+            "Failing-behaviour isolation callbacks could not be registered");
+        std::vector<std::string> diagnostics;
+        for (int frame = 0; frame < 3; ++frame) {
+            static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+            for (std::string& diagnostic : host.DrainSceneSystemDiagnostics()) {
+                diagnostics.push_back(std::move(diagnostic));
+            }
+        }
+        const kb::scene::BehaviourComponent* failingBehaviour = scene.Components().Behaviours().TryGet(failing);
+        const std::string identity = "entity #" + std::to_string(failing.Id()) + ", script asset #" + std::to_string(kFailing.value);
+        const auto reported = [&](std::string_view text) {
+            return std::ranges::any_of(diagnostics, [&](const std::string& line) {
+                return line.find(text) != std::string::npos && line.find(identity) != std::string::npos;
+            });
+        };
+        kb::tests::Require(healthyTicks >= 3 && reported("deliberate behaviour failure"),
+            "A failing behaviour must be reported with its entity and asset while the other behaviours keep ticking");
+        if (disableFailing) {
+            kb::tests::Require(failingTicks == 1 && failingBehaviour != nullptr && !failingBehaviour->enabled && reported("behaviour disabled"),
+                "A host that disables failing behaviours must stop only the failing instance after its first error");
+        } else {
+            kb::tests::Require(failingTicks >= 3 && failingBehaviour != nullptr && failingBehaviour->enabled && !reported("behaviour disabled"),
+                "A host that keeps failing behaviours must leave them enabled");
+        }
+    }
+}
 
 void RunParticleEventPostFixedDispatchTest() {
     kb::scene::Scene scene;
@@ -6908,6 +7239,77 @@ void RunScriptPhysicsCollisionTriggerEventDispatchTest() {
 // the exact pose that was requested — a round-trip through the real
 // inverse math (kb::math::Inverse, ScriptTransformApi::SetWorldPose), not
 // just "it compiles".
+// Ten thousand kilometres out a float holds whole metres only; the precise Transform functions read and write
+// translations there to the micrometre, from Lua (whose numbers are doubles) and directly, while the float
+// functions keep working.
+void RunTransformApiPreciseTranslationTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Precise transform API test host did not initialize");
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene, .deltaSeconds = 0.016F };
+
+    // A child of a turned parent far out: its world position is back-solved in double precision.
+    const kb::scene::SceneObject parent = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Far Parent" });
+    scene.Transforms().SetLocalTranslation(parent.Entity(), kb::math::DVec3{ 1.0e7, 0.0, 1.0e7 });
+    kb::scene::TransformComponent parentTransform = scene.Transforms().Get(parent.Entity());
+    parentTransform.localRotation = kb::math::Quat{ 0.0F, 0.7071068F, 0.0F, 0.7071068F };
+    scene.Transforms().Set(parent.Entity(), parentTransform);
+    const kb::scene::SceneObject child = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Far Child" });
+    kb::tests::Require(scene.Hierarchy().SetParent(child.Entity(), parent.Entity()), "Precise transform API test could not parent its child");
+    const std::vector<kb::script::ScriptFunctionArgument> setChildWorld{
+        kb::script::ScriptFunctionArgument{ "entity", kb::script::ScriptValue{ child.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ "x", kb::script::ScriptValue{ 1.0e7 + 1.25 } },
+        kb::script::ScriptFunctionArgument{ "y", kb::script::ScriptValue{ 0.5 } },
+        kb::script::ScriptFunctionArgument{ "z", kb::script::ScriptValue{ 1.0e7 + 0.375 } },
+    };
+    kb::tests::Require(host.Functions().Call("Transform.SetPreciseWorldPosition", setChildWorld, context).Output("moved")->AsBool(),
+        "Transform.SetPreciseWorldPosition direct call failed");
+    const std::span<const kb::script::ScriptFunctionArgument> childOnly{ setChildWorld.data(), 1U };
+    const kb::script::ScriptFunctionCallResult childWorld = host.Functions().Call("Transform.GetPreciseWorldPosition", childOnly, context);
+    kb::tests::Require(childWorld.Output("found")->AsBool() && std::abs(childWorld.Output("x")->AsDouble() - (1.0e7 + 1.25)) <= 1.0e-6 &&
+            std::abs(childWorld.Output("y")->AsDouble() - 0.5) <= 1.0e-6 && std::abs(childWorld.Output("z")->AsDouble() - (1.0e7 + 0.375)) <= 1.0e-6,
+        "A child placed far out by Transform.SetPreciseWorldPosition is not where it was put");
+
+    const kb::assets::AssetId luaAsset{ 8811U };
+    const kb::scene::SceneObject caller = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Far Caller" });
+    scene.Components().Behaviours().Set(caller.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = luaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const kb::script::PucLuaLoadResult loaded = host.LuaRuntime().LoadScript(luaAsset, R"(
+function Tick(self, dt)
+    local entity = World.Spawn({ name = "LuaFar", x = 0.0, y = 0.0, z = 0.0 })
+    Transform.SetPrecisePosition(entity, 10000000.25, 1.5, 10000000.125)
+    Transform.TranslatePrecise(entity, 0.001, 0.0, -0.002)
+    local position = Transform.GetPrecisePosition(entity)
+    local world = Transform.GetPreciseWorldPosition(entity)
+    SetShared("far.entity", entity)
+    SetShared("far.dx", position.x - 10000000.0)
+    SetShared("far.dz", position.z - 10000000.0)
+    SetShared("far.worldDx", world.x - 10000000.0)
+    Transform.SetPreciseWorldPosition({ entity = entity, x = 10000000.5, y = 2.0, z = 9999999.75 })
+    local moved = Transform.GetPreciseWorldPosition(entity)
+    SetShared("far.movedDx", moved.x - 10000000.0)
+    SetShared("far.movedDz", moved.z - 10000000.0)
+    SetShared("far.floatX", Transform.GetPosition(entity).x)
+end
+)", "FarTransform.lua");
+    kb::tests::Require(loaded.succeeded, "Precise transform Lua script did not load");
+    const kb::script::ScriptRuntimeExecutionResult tick = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.016F);
+    kb::tests::Require(tick.Succeeded(), "Precise transform Lua script failed");
+    const auto shared = [&host](const char* key) { return static_cast<double>(host.SharedState().Get(key)->AsFloat()); };
+    kb::tests::Require(std::abs(shared("far.dx") - 0.251) <= 1.0e-6 && std::abs(shared("far.dz") - 0.123) <= 1.0e-6 &&
+            std::abs(shared("far.worldDx") - 0.251) <= 1.0e-6,
+        "Lua lost precision setting, moving or reading a far translation");
+    kb::tests::Require(std::abs(shared("far.movedDx") - 0.5) <= 1.0e-6 && std::abs(shared("far.movedDz") + 0.25) <= 1.0e-6,
+        "Lua Transform.SetPreciseWorldPosition did not put the entity where it asked");
+    const kb::scene::SceneEntity luaEntity{ static_cast<std::uint64_t>(host.SharedState().Get("far.entity")->AsInt()) };
+    kb::tests::Require(scene.Transforms().LocalTranslation(luaEntity) == kb::math::DVec3{ 10000000.5, 2.0, 9999999.75 },
+        "The far translation Lua set is not the scene's translation");
+    kb::tests::Require(shared("far.floatX") == 10000000.0, "Transform.GetPosition must keep returning the float view");
+}
+
 void RunTransformApiLocalAndWorldPoseTest() {
     kb::scene::Scene scene;
     kb::script::ScriptRuntimeHost host{ scene };
@@ -12041,6 +12443,7 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
     scene.Components().Joints().Set(object.Entity(), kb::scene::JointComponent{});
     scene.Components().NavAgents().Set(object.Entity(), kb::scene::NavAgent{});
     scene.Components().NavObstacles().Set(object.Entity(), kb::scene::NavObstacle{});
+    scene.Components().NavLinks().Set(object.Entity(), kb::scene::NavLink{});
     scene.Components().Tags().Set(object.Entity(), kb::scene::TagsComponent{});
     scene.Components().RegionShapes().Set(object.Entity(), kb::scene::RegionShapeComponent{});
     scene.Components().GuideCurves().Set(object.Entity(), kb::scene::GuideCurveComponent{});
@@ -12173,7 +12576,8 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
     // task components and the complete Lens Echo schema.
     // Light is a public compatibility alias for 3D Radiance Emitter and
     // deliberately exercises the same 16 generated accessors.
-    kb::tests::Require(fieldsChecked == 617U, "Script component API generated accessor coverage test did not exercise the expected total field count (617, including collision mesh assets and the Light compatibility alias)");
+    // NavLink adds eleven fields.
+    kb::tests::Require(fieldsChecked == 628U, "Script component API generated accessor coverage test did not exercise the expected total field count (628, including collision mesh assets and the Light compatibility alias)");
 }
 
 // LIB-082: defensive regression guard — the KB_ASSERT_NOT_POINTER
@@ -12205,6 +12609,7 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
     scene.Components().Joints().Set(object.Entity(), kb::scene::JointComponent{});
     scene.Components().NavAgents().Set(object.Entity(), kb::scene::NavAgent{});
     scene.Components().NavObstacles().Set(object.Entity(), kb::scene::NavObstacle{});
+    scene.Components().NavLinks().Set(object.Entity(), kb::scene::NavLink{});
     scene.Components().Tags().Set(object.Entity(), kb::scene::TagsComponent{});
     scene.Components().RegionShapes().Set(object.Entity(), kb::scene::RegionShapeComponent{});
     scene.Components().GuideCurves().Set(object.Entity(), kb::scene::GuideCurveComponent{});
@@ -12254,7 +12659,7 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
     // LIB-136: Camera grew three more fields (cullingMask/clearMode/clearColor, the latter
     // decomposed into x/y/z), and MeshRenderer grew one (layer), so the total climbs from
     // 86 to 92.
-    kb::tests::Require(propertiesChecked == 617U, "LIB-082 raw-pointer audit did not exercise the expected total field count (617, including collision mesh assets and the Light compatibility alias)");
+    kb::tests::Require(propertiesChecked == 628U, "LIB-082 raw-pointer audit did not exercise the expected total field count (628, including collision mesh assets and the Light compatibility alias)");
 }
 
 void RunVisualGraphSceneComponentBindingTest() {
@@ -13388,7 +13793,8 @@ void RunScriptAssetsApiTest() {
     kb::tests::Require(!scene.Assets().Manager().IsLoaded(assetId), "Assets.LoadAsync must not load the asset synchronously within the call itself");
 
     std::vector<kb::scene::TaskCompletionRecord> asyncCompletions;
-    for (std::size_t spin = 0; spin < 100000U && scene.Tasks().Exists(asyncTaskId); ++spin) {
+    for (const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{ 10 };
+         std::chrono::steady_clock::now() < deadline && scene.Tasks().Exists(asyncTaskId);) {
         std::vector<kb::scene::TaskCompletionRecord> current = scene.Tasks().Advance(0.001F);
         asyncCompletions.insert(asyncCompletions.end(), current.begin(), current.end());
         std::this_thread::yield();
@@ -13437,10 +13843,13 @@ void RunScriptAssetsApiTest() {
 // Proves registration (Native + VisualGraph parity), every scalar type round-
 // tripping through the script boundary, the honest typed-miss / empty-key
 // contracts, Has/Remove/Clear, and a real Write-to-disk / Clear / Read-back
-// cycle driven entirely through script calls.
+// cycle driven entirely through script calls into a named slot of the host's
+// user storage, which refuses every path-shaped slot.
 void RunScriptSaveApiTest() {
+    ResetTestRoot();
+    const std::filesystem::path storageRoot = TestRoot() / "ScriptSave";
     kb::scene::Scene scene;
-    kb::script::ScriptRuntimeHost host{ scene };
+    kb::script::ScriptRuntimeHost host{ scene, kb::script::ScriptRuntimeHostOptions{ .userStorageRoot = storageRoot } };
     kb::tests::Require(host.Succeeded(), "Script save API host did not initialize");
     kb::tests::Require(host.Functions().FindSignature("Save.SetInt") != nullptr, "Save.SetInt was not registered");
     kb::tests::Require(host.Functions().FindSignature("Save.GetInt") != nullptr, "Save.GetInt was not registered");
@@ -13498,23 +13907,53 @@ void RunScriptSaveApiTest() {
     kb::tests::Require(!call("Save.Has", { keyArg("score") }).Output("has")->AsBool(), "Save.Has must report false after removal");
 
     // Write to disk, clear the buffer, read it back — all through script.
-    const std::filesystem::path savePath = TestRoot() / "ScriptSave" / "slot.kbsave";
-    ResetTestRoot();
-    const kb::script::ScriptFunctionCallResult written = call("Save.Write", { kb::script::ScriptFunctionArgument{ .name = "path", .value = kb::script::ScriptValue{ savePath.string() } } });
+    const auto slotArg = [](std::string slot) {
+        return kb::script::ScriptFunctionArgument{ .name = "slot", .value = kb::script::ScriptValue{ std::move(slot) } };
+    };
+    const kb::script::ScriptFunctionCallResult written = call("Save.Write", { slotArg("slot_1") });
     kb::tests::Require(written.Output("written")->AsBool(), "Save.Write must write the ambient save to disk");
+    kb::tests::Require(std::filesystem::is_regular_file(storageRoot / "slot_1.kbsave"), "Save.Write must store the slot inside the host's user storage root");
     kb::tests::Require(call("Save.Clear", {}).Output("cleared")->AsBool(), "Save.Clear must clear the ambient buffer");
     kb::tests::Require(!call("Save.Has", { keyArg("flag") }).Output("has")->AsBool(), "Save.Clear must have emptied the buffer");
-    const kb::script::ScriptFunctionCallResult read = call("Save.Read", { kb::script::ScriptFunctionArgument{ .name = "path", .value = kb::script::ScriptValue{ savePath.string() } } });
+    const kb::script::ScriptFunctionCallResult read = call("Save.Read", { slotArg("slot_1") });
     kb::tests::Require(read.Output("loaded")->AsBool() && read.Output("status")->AsString() == "Ok", "Save.Read must load the previously written save");
     kb::tests::Require(call("Save.GetString", { keyArg("name") }).Output("value")->AsString() == "Ada", "Save.Read must restore the entries the script wrote earlier");
     kb::tests::Require(call("Save.GetAsset", { keyArg("prefab") }).Output("value")->AsUInt64() == kSavedAssetId,
         "Save.Read must restore a stable asset reference");
 
     // Reading a missing file is an honest, non-crashing failure with status.
-    const kb::script::ScriptFunctionCallResult readMissing = call("Save.Read", { kb::script::ScriptFunctionArgument{ .name = "path", .value = kb::script::ScriptValue{ (TestRoot() / "nope.kbsave").string() } } });
+    const kb::script::ScriptFunctionCallResult readMissing = call("Save.Read", { slotArg("nope") });
     kb::tests::Require(!readMissing.Output("loaded")->AsBool() && readMissing.Output("status")->AsString() == "FileNotFound" &&
             !readMissing.Output("diagnostic")->AsString().empty(),
         "Save.Read of a missing file must report status and a readable diagnostic");
+
+    // A slot is a name, never a path: every escape is a script error that
+    // touches no file, for both directions and both domains.
+    const std::filesystem::path outsideFile = TestRoot() / "outside.kbsave";
+    for (const std::string& escape : { outsideFile.string(), std::string{ "..\\outside" }, std::string{ "../outside" }, std::string{ "C:\\x" },
+             std::string{ "C:x" }, std::string{ "/etc/x" }, std::string{ "a/b" }, std::string{ "a\\b" }, std::string{ ".." }, std::string{ "slot.kbsave" },
+             std::string{ "CON" }, std::string{ "lpt1" }, std::string{ "" }, std::string(65U, 'a') }) {
+        for (const std::string_view function : { "Save.Write", "Save.Read", "Settings.Write", "Settings.Read" }) {
+            const kb::script::ScriptFunctionCallResult refused = call(function, { slotArg(escape) });
+            kb::tests::Require(!refused.Succeeded() && refused.errors.front().find("is not a slot name") != std::string::npos,
+                (std::string{ function } + " must refuse the path-shaped slot '" + escape + "' with a script error").c_str());
+        }
+    }
+    kb::tests::Require(!std::filesystem::exists(outsideFile) && !std::filesystem::exists(TestRoot() / "outside") &&
+            !std::filesystem::exists(TestRoot() / "outside.kbsave"),
+        "A refused slot must not write anything outside the user storage root");
+    kb::tests::Require(call("Save.Write", { slotArg(std::string(64U, 'a')) }).Output("written")->AsBool(),
+        "Save.Write must accept a slot name at the documented length limit");
+
+    // A host that configured no user storage refuses persistence with a reason.
+    {
+        kb::scene::Scene unconfiguredScene;
+        kb::script::ScriptRuntimeHost unconfiguredHost{ unconfiguredScene };
+        const kb::script::ScriptFunctionCallResult unconfigured = unconfiguredHost.Functions().Call(
+            "Save.Write", std::vector<kb::script::ScriptFunctionArgument>{ slotArg("slot_1") }, kb::script::ScriptFunctionCallContext{ .scene = &unconfiguredScene });
+        kb::tests::Require(!unconfigured.Succeeded() && unconfigured.errors.front().find("not configured") != std::string::npos,
+            "Save.Write without a configured user storage root must report a script error");
+    }
 
     // LIB-163: Settings.* is a SEPARATE surface over a SEPARATE buffer.
     kb::tests::Require(host.Functions().FindSignature("Settings.SetInt") != nullptr, "Settings.SetInt was not registered");
@@ -13527,13 +13966,17 @@ void RunScriptSaveApiTest() {
     kb::tests::Require(call("Save.GetInt", { keyArg("shared") }).Output("value")->AsInt() == 111, "The save buffer must keep its own value for a key the settings buffer also uses");
     kb::tests::Require(call("Settings.GetInt", { keyArg("shared") }).Output("value")->AsInt() == 222, "The settings buffer must keep its own independent value");
 
-    // A Settings file and a Save file are separated on disk: reading one as the
-    // other reports WrongDomain, never loads the wrong category.
-    const std::filesystem::path settingsPath = TestRoot() / "ScriptSave" / "settings.kbsave";
-    kb::tests::Require(call("Settings.Write", { kb::script::ScriptFunctionArgument{ .name = "path", .value = kb::script::ScriptValue{ settingsPath.string() } } }).Output("written")->AsBool(), "Settings.Write must write the settings buffer");
-    const kb::script::ScriptFunctionCallResult crossRead = call("Save.Read", { kb::script::ScriptFunctionArgument{ .name = "path", .value = kb::script::ScriptValue{ settingsPath.string() } } });
+    // A Settings slot and a Save slot are separate files: the same slot name
+    // in each domain never aliases, and a Settings file placed where a save
+    // slot lives reports WrongDomain, never loads the wrong category.
+    kb::tests::Require(call("Settings.Write", { slotArg("profile") }).Output("written")->AsBool(), "Settings.Write must write the settings buffer");
+    kb::tests::Require(std::filesystem::is_regular_file(storageRoot / "profile.kbsettings"), "Settings.Write must store the slot inside the host's user storage root");
+    kb::tests::Require(call("Save.Read", { slotArg("profile") }).Output("status")->AsString() == "FileNotFound",
+        "Save.Read must not see a Settings slot of the same name");
+    std::filesystem::copy_file(storageRoot / "profile.kbsettings", storageRoot / "profile.kbsave");
+    const kb::script::ScriptFunctionCallResult crossRead = call("Save.Read", { slotArg("profile") });
     kb::tests::Require(!crossRead.Output("loaded")->AsBool() && crossRead.Output("status")->AsString() == "WrongDomain", "Save.Read of a Settings file must be rejected as WrongDomain, keeping the domains separated");
-    const kb::script::ScriptFunctionCallResult settingsRead = call("Settings.Read", { kb::script::ScriptFunctionArgument{ .name = "path", .value = kb::script::ScriptValue{ settingsPath.string() } } });
+    const kb::script::ScriptFunctionCallResult settingsRead = call("Settings.Read", { slotArg("profile") });
     kb::tests::Require(settingsRead.Output("loaded")->AsBool() && settingsRead.Output("status")->AsString() == "Ok", "Settings.Read of a Settings file must succeed");
 }
 
@@ -15993,8 +16436,11 @@ void RunScriptRuntimeTests() {
     RunPucLuaCatalogModuleBindingTest();
     RunPucLuaCoroutineGeneratorTest();
     RunPucLuaExecutionBudgetPolicyTest();
+    RunPucLuaMemoryLimitTest();
     RunPucLuaDestroyedYieldCleanupTest();
     RunPucLuaScriptRuntimeModulesReloadAndDiagnosticsTest();
+    RunPucLuaDebuggerSuspendsAtBreakpointTest();
+    RunPucLuaDebuggerPauseAcrossCBoundaryTest();
     RunLuaExposedVariablesRuntimeTest();
     RunCrossBackendEventDispatchTest();
     RunPendingCommandCancelledByDestroyTest();
@@ -16023,6 +16469,7 @@ void RunScriptRuntimeTests() {
     RunParticleEffectAssetIORoundTripTest();
     RunScriptParticleSystemApiTest();
     RunParticleEventPostFixedDispatchTest();
+    RunScriptHostDisablesFailingBehaviourTest();
     RunScriptMaterialInstanceApiTest();
     RunSceneMaterialInstancesParameterOverridesTest();
     RunScriptMaterialInstanceParameterApiTest();
@@ -16082,6 +16529,7 @@ void RunScriptRuntimeTests() {
     RunScriptEventBusReachesVisualGraphCustomEventTest();
     RunVisualGraphFilteredEventRuntimeTest();
     RunTransformApiLocalAndWorldPoseTest();
+    RunTransformApiPreciseTranslationTest();
     RunTransformApiParentAndHierarchyTest();
     RunTransformApiChildIterationTest();
     RunTransformApiRotateLookAtAndPointConversionTest();

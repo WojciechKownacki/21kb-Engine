@@ -57,6 +57,9 @@ public:
     // the last recorded query trace (if any) - pure ECS-side geometry, matches whatever the
     // real physics backend (if any) actually simulates from those same components' fields.
     [[nodiscard]] static std::vector<PhysicsDebugLineDesc> CollectLines(const Scene& scene);
+    // The same lines relative to `origin`, placed from the components' double-precision translations, so a host
+    // working relative to its own origin far from the world origin draws them exactly (docs/large_worlds.md).
+    [[nodiscard]] static std::vector<PhysicsDebugLineDesc> CollectLines(const Scene& scene, const kb::math::DVec3& origin);
 };
 
 } // namespace kb::scene

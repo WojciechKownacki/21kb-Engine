@@ -128,7 +128,11 @@ using kb::math::Rotate;
 
 struct RaycastAllVisitorContext {
     Scene* scene = nullptr;
-    Vec3 origin{};
+    kb::math::DVec3 origin{};
+    // Set when the ray starts near the world origin in a scene without double-precision translations: colliders
+    // are then tested in float world space, as they always were.
+    bool floatWorld = false;
+    Vec3 floatOrigin{};
     Vec3 direction{};
     float maxDistance = 0.0F;
     std::uint32_t layerMask = kPhysicsAllLayers;
@@ -181,9 +185,19 @@ void RaycastAllVisitor(SceneEntity entity, const TransformComponent& transform, 
     }
     float distance = 0.0F;
     Vec3 normal{};
-    if (!IntersectRayCollider(context->origin, context->direction, context->maxDistance, *collider, transform, distance, normal)) {
-        return;
+    if (context->floatWorld) {
+        if (!IntersectRayCollider(context->floatOrigin, context->direction, context->maxDistance, *collider, transform, distance, normal)) {
+            return;
+        }
+    } else {
+        // The collider is tested relative to the ray origin, so the test keeps float precision far from the world origin.
+        TransformComponent relative = transform;
+        relative.worldPosition = kb::math::RelativeTo(context->scene->Transforms().WorldTranslation(entity, transform), context->origin);
+        if (!IntersectRayCollider(Vec3{}, context->direction, context->maxDistance, *collider, relative, distance, normal)) {
+            return;
+        }
     }
+    const kb::math::DVec3 point = context->origin + context->direction * distance;
     // Maintain the closest Capacity() hits while visiting. Transform
     // iteration order is not a distance order, so merely ignoring PushBack
     // failures would retain whichever bodies happened to be visited first.
@@ -191,8 +205,9 @@ void RaycastAllVisitor(SceneEntity entity, const TransformComponent& transform, 
         .hit = true,
         .entity = entity,
         .distance = distance,
-        .point = context->origin + context->direction * distance,
+        .point = context->floatWorld ? context->floatOrigin + context->direction * distance : kb::math::ToVec3(point),
         .normal = normal,
+        .worldPoint = point,
     });
 }
 
@@ -258,6 +273,14 @@ void RaycastAllNonAlloc(Scene& scene, Vec3 origin, Vec3 direction, float maxDist
         PhysicsBackend::RaycastAll(scene, origin, direction, maxDistance, layerMask, results);
         return;
     }
+    RaycastAllNonAllocPrecise(scene, kb::math::ToDVec3(origin), direction, maxDistance, layerMask, results);
+}
+
+void RaycastAllNonAllocPrecise(Scene& scene, const kb::math::DVec3& origin, Vec3 direction, float maxDistance, std::uint32_t layerMask, kb::library::ArrayNonAlloc<PhysicsCastResult>& results) {
+    if (PhysicsBackend::HasBackend(scene)) {
+        PhysicsBackend::RaycastAllPrecise(scene, origin, direction, maxDistance, layerMask, results);
+        return;
+    }
     results.Clear();
     if (!std::isfinite(origin.x) || !std::isfinite(origin.y) || !std::isfinite(origin.z) ||
         !std::isfinite(direction.x) || !std::isfinite(direction.y) || !std::isfinite(direction.z) ||
@@ -268,15 +291,23 @@ void RaycastAllNonAlloc(Scene& scene, Vec3 origin, Vec3 direction, float maxDist
     if (kb::math::Length(normalizedDirection) <= 0.000001F || maxDistance <= 0.0F) {
         return;
     }
+    scene.Runtime().SynchronizeTransforms();
+    // Below this distance from the world origin a float ray origin is finer than a quarter of a millimetre.
+    constexpr double kFloatWorldLimit = 2048.0;
+    const Vec3 floatOrigin = kb::math::ToVec3(origin);
+    const bool floatWorld = kb::math::ToDVec3(floatOrigin) == origin && std::abs(origin.x) < kFloatWorldLimit &&
+        std::abs(origin.y) < kFloatWorldLimit && std::abs(origin.z) < kFloatWorldLimit &&
+        !scene.Transforms().HasDoublePrecisionTranslations();
     RaycastAllVisitorContext context{
         .scene = &scene,
         .origin = origin,
+        .floatWorld = floatWorld,
+        .floatOrigin = floatOrigin,
         .direction = normalizedDirection,
         .maxDistance = maxDistance,
         .layerMask = layerMask,
         .results = &results,
     };
-    scene.Runtime().SynchronizeTransforms();
     scene.Transforms().ForEach(&RaycastAllVisitor, &context);
     // InsertBoundedCastResult keeps the caller-owned buffer sorted without
     // temporary storage or a post-query allocation.

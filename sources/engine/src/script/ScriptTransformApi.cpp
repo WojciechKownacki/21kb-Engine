@@ -1,5 +1,6 @@
 #include "engine/script/ScriptTransformApi.hpp"
 
+#include "engine/math/DVec3.hpp"
 #include "engine/math/EngineMath.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneEntities.hpp"
@@ -39,6 +40,11 @@ const ScriptValue* FindArg(std::span<const ScriptFunctionArgument> arguments, st
     return value == nullptr ? fallback : value->AsFloat(fallback);
 }
 
+[[nodiscard]] double DoubleArg(std::span<const ScriptFunctionArgument> arguments, std::string_view name, double fallback = 0.0) noexcept {
+    const ScriptValue* value = FindArg(arguments, name);
+    return value == nullptr ? fallback : value->AsDouble(fallback);
+}
+
 [[nodiscard]] bool BoolArg(std::span<const ScriptFunctionArgument> arguments, std::string_view name, bool fallback = false) noexcept {
     const ScriptValue* value = FindArg(arguments, name);
     return value == nullptr ? fallback : value->AsBool(fallback);
@@ -59,6 +65,21 @@ const ScriptValue* FindArg(std::span<const ScriptFunctionArgument> arguments, st
 }
 
 ScriptFunctionCallResult PositionResult(bool found, kb::scene::Vec3 position) {
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = {
+            ScriptFunctionArgument{ "found", ScriptValue{ found } },
+            ScriptFunctionArgument{ "x", ScriptValue{ position.x } },
+            ScriptFunctionArgument{ "y", ScriptValue{ position.y } },
+            ScriptFunctionArgument{ "z", ScriptValue{ position.z } },
+        },
+        .errors = {},
+    };
+}
+
+// A translation in double precision (docs/large_worlds.md): Lua numbers are doubles, so a script far from the
+// origin reads and writes positions exactly.
+ScriptFunctionCallResult PrecisePositionResult(bool found, const kb::math::DVec3& position) {
     return ScriptFunctionCallResult{
         .executed = true,
         .outputs = {
@@ -184,6 +205,72 @@ ScriptFunctionCallResult Translate(const ScriptFunctionCallContext& context, std
     transform.localPosition.y += FloatArg(arguments, "y");
     transform.localPosition.z += FloatArg(arguments, "z");
     context.scene->Transforms().Set(entity, transform);
+    return BoolResult("moved", true);
+}
+
+ScriptFunctionCallResult GetPrecisePosition(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    const kb::scene::SceneEntity entity = EntityArg(arguments, "entity");
+    if (!Alive(context, entity)) {
+        return PrecisePositionResult(false, {});
+    }
+    return PrecisePositionResult(true, context.scene->Transforms().LocalTranslation(entity));
+}
+
+ScriptFunctionCallResult SetPrecisePosition(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    const kb::scene::SceneEntity entity = EntityArg(arguments, "entity");
+    if (!Alive(context, entity)) {
+        return BoolResult("moved", false);
+    }
+    const kb::math::DVec3 current = context.scene->Transforms().LocalTranslation(entity);
+    context.scene->Transforms().SetLocalTranslation(entity, kb::math::DVec3{
+        DoubleArg(arguments, "x", current.x), DoubleArg(arguments, "y", current.y), DoubleArg(arguments, "z", current.z) });
+    return BoolResult("moved", true);
+}
+
+ScriptFunctionCallResult TranslatePrecise(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    const kb::scene::SceneEntity entity = EntityArg(arguments, "entity");
+    if (!Alive(context, entity)) {
+        return BoolResult("moved", false);
+    }
+    context.scene->Transforms().SetLocalTranslation(entity, context.scene->Transforms().LocalTranslation(entity) +
+        kb::math::DVec3{ DoubleArg(arguments, "x"), DoubleArg(arguments, "y"), DoubleArg(arguments, "z") });
+    return BoolResult("moved", true);
+}
+
+ScriptFunctionCallResult GetPreciseWorldPosition(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    const kb::scene::SceneEntity entity = EntityArg(arguments, "entity");
+    if (!Alive(context, entity)) {
+        return PrecisePositionResult(false, {});
+    }
+    context.scene->Runtime().SynchronizeTransforms();
+    return PrecisePositionResult(true, context.scene->Transforms().WorldTranslation(entity));
+}
+
+// The world-space counterpart of SetPrecisePosition: the local translation is back-solved against the parent's
+// current world transform in double precision (the same inverse as WorldPoseToLocal).
+ScriptFunctionCallResult SetPreciseWorldPosition(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    const kb::scene::SceneEntity entity = EntityArg(arguments, "entity");
+    if (!Alive(context, entity)) {
+        return BoolResult("moved", false);
+    }
+    context.scene->Runtime().SynchronizeTransforms();
+    const kb::math::DVec3 current = context.scene->Transforms().WorldTranslation(entity);
+    const kb::math::DVec3 desired{
+        DoubleArg(arguments, "x", current.x), DoubleArg(arguments, "y", current.y), DoubleArg(arguments, "z", current.z) };
+    kb::math::DVec3 local = desired;
+    const kb::scene::SceneEntity parent = context.scene->Hierarchy().Parent(entity);
+    if (parent.IsValid()) {
+        const kb::scene::TransformComponent parentTransform = context.scene->Transforms().Get(parent);
+        const kb::math::DVec3 unrotated = kb::math::RotateDouble(kb::math::Inverse(parentTransform.worldRotation),
+            desired - context.scene->Transforms().WorldTranslation(parent, parentTransform));
+        const auto divide = [](double numerator, float denominator) noexcept {
+            return std::fabs(denominator) <= 0.000001F ? numerator : numerator / static_cast<double>(denominator);
+        };
+        local = kb::math::DVec3{ divide(unrotated.x, parentTransform.worldScale.x), divide(unrotated.y, parentTransform.worldScale.y),
+            divide(unrotated.z, parentTransform.worldScale.z) };
+    }
+    context.scene->Transforms().SetLocalTranslation(entity, local);
+    context.scene->Runtime().SynchronizeTransforms();
     return BoolResult("moved", true);
 }
 
@@ -686,6 +773,53 @@ bool ScriptTransformApi::Register(ScriptRuntimeHost& host) {
         },
         { ScriptFunctionPin{ "moved", ScriptValueType::Bool, true } },
         &Translate) && ok;
+    // Double-precision translations for positions far from the world origin (docs/large_worlds.md); the Float
+    // functions above keep float precision.
+    ok = RegisterFunction(host, "Transform.GetPrecisePosition",
+        { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true } },
+        {
+            ScriptFunctionPin{ "found", ScriptValueType::Bool, true },
+            ScriptFunctionPin{ "x", ScriptValueType::Double, true },
+            ScriptFunctionPin{ "y", ScriptValueType::Double, true },
+            ScriptFunctionPin{ "z", ScriptValueType::Double, true },
+        },
+        &GetPrecisePosition) && ok;
+    ok = RegisterFunction(host, "Transform.SetPrecisePosition",
+        {
+            ScriptFunctionPin{ "entity", ScriptValueType::Entity, true },
+            ScriptFunctionPin{ "x", ScriptValueType::Double, true },
+            ScriptFunctionPin{ "y", ScriptValueType::Double, true },
+            ScriptFunctionPin{ "z", ScriptValueType::Double, true },
+        },
+        { ScriptFunctionPin{ "moved", ScriptValueType::Bool, true } },
+        &SetPrecisePosition) && ok;
+    ok = RegisterFunction(host, "Transform.TranslatePrecise",
+        {
+            ScriptFunctionPin{ "entity", ScriptValueType::Entity, true },
+            ScriptFunctionPin{ "x", ScriptValueType::Double, true },
+            ScriptFunctionPin{ "y", ScriptValueType::Double, true },
+            ScriptFunctionPin{ "z", ScriptValueType::Double, true },
+        },
+        { ScriptFunctionPin{ "moved", ScriptValueType::Bool, true } },
+        &TranslatePrecise) && ok;
+    ok = RegisterFunction(host, "Transform.GetPreciseWorldPosition",
+        { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true } },
+        {
+            ScriptFunctionPin{ "found", ScriptValueType::Bool, true },
+            ScriptFunctionPin{ "x", ScriptValueType::Double, true },
+            ScriptFunctionPin{ "y", ScriptValueType::Double, true },
+            ScriptFunctionPin{ "z", ScriptValueType::Double, true },
+        },
+        &GetPreciseWorldPosition) && ok;
+    ok = RegisterFunction(host, "Transform.SetPreciseWorldPosition",
+        {
+            ScriptFunctionPin{ "entity", ScriptValueType::Entity, true },
+            ScriptFunctionPin{ "x", ScriptValueType::Double, true },
+            ScriptFunctionPin{ "y", ScriptValueType::Double, true },
+            ScriptFunctionPin{ "z", ScriptValueType::Double, true },
+        },
+        { ScriptFunctionPin{ "moved", ScriptValueType::Bool, true } },
+        &SetPreciseWorldPosition) && ok;
     // LIB-085: LocalPosition/SetLocalPosition are the exact same operation
     // as the pre-existing GetPosition/SetPosition above (both already only
     // ever touched localPosition) — reused directly, not reimplemented

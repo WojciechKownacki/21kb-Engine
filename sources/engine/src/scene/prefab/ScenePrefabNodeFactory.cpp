@@ -5,6 +5,9 @@
 #include "scene/prefab/ScenePrefabComponentApplier.hpp"
 #include "scene/prefab/ScenePrefabNameResolver.hpp"
 #include "scene/prefab/ScenePrefabParentResolver.hpp"
+#include "scene/SceneAccess.hpp"
+#include "scene/SceneState.hpp"
+#include "scene/transform/SceneTransformPrecision.hpp"
 
 namespace kb::scene {
 
@@ -15,6 +18,8 @@ SceneObject ScenePrefabNodeFactory::Create(Scene& scene, const ScenePrefabNodeDe
         .transform = node.transform,
         .visibility = node.visibility,
     });
+    SceneTransformPrecision::StoreLocalResidual(SceneAccess::State(scene), object.Entity(),
+        FittingResidual(node.transform.localPosition, node.localPositionResidual));
     ScenePrefabComponentApplier::Apply(scene, object, node.components);
     return object;
 }

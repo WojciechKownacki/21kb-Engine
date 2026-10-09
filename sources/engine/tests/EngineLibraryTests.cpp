@@ -104,6 +104,7 @@
 #include "engine/scene/AiBehaviourRuntime.hpp"
 #include "engine/scene/AiBlackboard.hpp"
 #include "engine/scene/Navigation.hpp"
+#include "engine/scene/SceneNavigation.hpp"
 #include "engine/scene/Perception.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/visual/VisualGraphNodeCatalog.hpp"
@@ -130,6 +131,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
@@ -245,6 +247,7 @@ void RunModuleInstallCoversAllDomainsTest() {
         "Assets.Load",
         "Save.SetInt",
         "Timeline.Create",
+        "Navigation.FindPath",
     };
     for (const char* const name : kExpectedFunctions) {
         kb::tests::Require(
@@ -264,7 +267,7 @@ void RunModuleInstallReportsDuplicateDiagnosticsTest() {
 
     const kb::library::EngineLibraryModuleResult second = kb::library::EngineLibraryModule::Install(host);
     kb::tests::Require(!second.succeeded, "Engine21kbLibrary module install must fail when every function name already exists");
-    kb::tests::Require(second.diagnostics.size() == 24U, "Engine21kbLibrary module install must report one diagnostic per failed domain module");
+    kb::tests::Require(second.diagnostics.size() == 25U, "Engine21kbLibrary module install must report one diagnostic per failed domain module");
 }
 
 // LIB-016: the module catalog EngineLibraryModule::Install() walks must
@@ -276,8 +279,8 @@ void RunModuleInstallReportsDuplicateDiagnosticsTest() {
 // into this build).
 void RunModuleCatalogTest() {
     const std::vector<kb::library::LibraryModuleDesc>& catalog = kb::library::EngineLibraryModule::Catalog();
-    const std::vector<std::string> expectedNames{ "Input", "Audio", "World", "Time", "Timer", "Task", "Events", "Physics", "Transform", "Math", "Scene", "UI", "MeshRenderer", "MaterialInstance", "PostProcess", "Particles", "Animator", "Timeline", "Localization", "Renderer", "Assets", "Save", "Collections", "Text" };
-    kb::tests::Require(catalog.size() == expectedNames.size(), "Engine21kbLibrary module catalog must have exactly twenty-three domain modules");
+    const std::vector<std::string> expectedNames{ "Input", "Audio", "World", "Time", "Timer", "Task", "Events", "Physics", "Transform", "Math", "Scene", "UI", "MeshRenderer", "MaterialInstance", "PostProcess", "Particles", "Animator", "Timeline", "Localization", "Renderer", "Assets", "Save", "Collections", "Text", "Navigation" };
+    kb::tests::Require(catalog.size() == expectedNames.size(), "Engine21kbLibrary module catalog must list every domain module");
     for (std::size_t index = 0; index < catalog.size(); ++index) {
         kb::tests::Require(catalog[index].name == expectedNames[index], "Engine21kbLibrary module catalog order/name drifted from the historical registration order");
         kb::tests::Require(catalog[index].Register != nullptr, "Engine21kbLibrary module catalog entry is missing its Register function");
@@ -3095,15 +3098,18 @@ void RunStreamFocusRuntimeTest() {
     });
     static_cast<void>(scene.Runtime().Update(0.0F));
     const auto awaitLoaded = [&] {
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{10};
         while (scene.LoadedContent().Find("StreamFocusFixture") == 0U && std::chrono::steady_clock::now() < deadline) {
             static_cast<void>(scene.Runtime().Update(0.0F));
             std::this_thread::yield();
         }
     };
     const auto awaitUnloaded = [&](std::uint64_t id) {
-        for (std::size_t attempt = 0U; attempt < 1000U && scene.LoadedContent().Exists(id); ++attempt)
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{10};
+        while (scene.LoadedContent().Exists(id) && std::chrono::steady_clock::now() < deadline) {
             static_cast<void>(scene.Runtime().Update(0.0F));
+            std::this_thread::yield();
+        }
     };
     awaitLoaded();
     std::uint64_t loadId = scene.LoadedContent().Find("StreamFocusFixture");
@@ -3322,7 +3328,8 @@ void RunComponentInspectorDescCatalogTest() {
     // Light remains a public compatibility alias for 3D Radiance Emitter and
     // intentionally reuses the canonical inspector metadata for its 16 fields.
     // Particle Effect contributes nine authoring and playback fields.
-    kb::tests::Require(fieldsChecked == 617U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (617, including the collision mesh and Light compatibility alias) across all components");
+    // NavLink adds eleven (start, end, radius, kind, area, bidirectional, enabled).
+    kb::tests::Require(fieldsChecked == 628U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (628, including the collision mesh and Light compatibility alias) across all components");
 
     for (const kb::library::LibraryComponentInspectorDesc& desc : catalog) {
         const bool foundInScriptNames = std::ranges::find(scriptComponentNames, desc.componentName) != scriptComponentNames.end();
@@ -4646,29 +4653,28 @@ void RunEngineLibrarySignalTest() {
 }
 
 void RunNavigationFoundationContractTest() {
-    kb::scene::NavQueryFilter filter;
-    kb::tests::Require(filter.Allows(kb::scene::kDefaultNavArea) && filter.AreaCost(kb::scene::kDefaultNavArea) == 1.0F,
-        "Navigation filter must admit the default area at unit cost");
+    // Area costs live with the scene's navigation meshes: invalid areas and costs are refused.
+    kb::scene::Scene costScene;
     constexpr kb::scene::NavAreaId kMudArea = 3U;
-    filter.SetIncludedAreas(kb::scene::NavAreaBit(kMudArea));
-    kb::tests::Require(!filter.Allows(kb::scene::kDefaultNavArea) && filter.Allows(kMudArea),
-        "Navigation filter included-area mask did not constrain traversal");
-    kb::tests::Require(filter.SetAreaCost(kMudArea, 2.5F) && filter.AreaCost(kMudArea) == 2.5F,
-        "Navigation filter did not retain a positive area cost");
-    filter.SetExcludedAreas(kb::scene::NavAreaBit(kMudArea));
-    kb::tests::Require(!filter.Allows(kMudArea), "Navigation filter exclusion must override inclusion");
-    kb::tests::Require(!filter.SetAreaCost(kb::scene::NavAreaId{ 32U }, 1.0F) &&
-            !filter.SetAreaCost(kMudArea, 0.0F) && !filter.SetAreaCost(kMudArea, std::numeric_limits<float>::infinity()),
-        "Navigation filter accepted an invalid area id or invalid traversal cost");
+    kb::tests::Require(costScene.Navigation().AreaCost(kb::scene::kDefaultNavArea) == 1.0F && costScene.Navigation().AreaCost(kMudArea) == 1.0F,
+        "Navigation areas must cost one by default");
+    costScene.Navigation().SetAreaCost(kMudArea, 2.5F);
+    kb::tests::Require(costScene.Navigation().AreaCost(kMudArea) == 2.5F, "Navigation did not retain a positive area cost");
+    costScene.Navigation().SetAreaCost(kMudArea, 0.0F);
+    costScene.Navigation().SetAreaCost(kMudArea, std::numeric_limits<float>::infinity());
+    costScene.Navigation().SetAreaCost(kb::scene::NavAreaId{ 32U }, 1.0F);
+    kb::tests::Require(costScene.Navigation().AreaCost(kMudArea) == 2.5F && costScene.Navigation().AreaCost(kb::scene::NavAreaId{ 32U }) == 0.0F,
+        "Navigation accepted an invalid area id or invalid traversal cost");
+    kb::tests::Require(kb::scene::NavAreaBit(kMudArea) == 8U && kb::scene::NavAreaBit(kb::scene::NavAreaId{ 32U }) == 0U,
+        "Navigation area masks must hold one bit per valid area");
 
-    const kb::scene::NavMesh mesh{};
     const kb::scene::NavAgent agent{};
     const kb::scene::NavObstacle obstacle{};
-    kb::tests::Require(mesh.agentRadius > 0.0F && agent.radius > 0.0F && agent.maxSpeed > 0.0F &&
+    kb::tests::Require(agent.radius > 0.0F && agent.maxSpeed > 0.0F &&
             agent.velocity.x == 0.0F && agent.velocity.y == 0.0F && agent.velocity.z == 0.0F &&
             agent.remainingDistance == 0.0F && agent.pathStatus == kb::scene::NavPathStatus::Invalid &&
             obstacle.area == kb::scene::kDefaultNavArea && obstacle.carve,
-        "Navigation foundation defaults must define a usable walkable mesh, agent and obstacle");
+        "Navigation foundation defaults must define a usable agent and obstacle");
 
     kb::scene::Scene authoredNavigationScene;
     const kb::scene::SceneObject authoredAgent = authoredNavigationScene.Entities().CreateObject({ .name = "NavigationAgent" });
@@ -4691,93 +4697,13 @@ void RunNavigationFoundationContractTest() {
             authoredObstacleComponent->size.x == 3.0F,
         "Navigation ECS components must be readable through the const scene query facade");
 
-    kb::scene::NavMesh graph;
-    graph.nodes = {
-        { .position = { 0.0F, 0.0F, 0.0F }, .area = kb::scene::kDefaultNavArea, .neighbours = { 1U, 2U } },
-        { .position = { 1.0F, 0.0F, 0.0F }, .area = kMudArea, .neighbours = { 3U } },
-        { .position = { 0.0F, 0.0F, 3.0F }, .area = kb::scene::kDefaultNavArea, .neighbours = { 3U } },
-        { .position = { 2.0F, 0.0F, 0.0F }, .area = kb::scene::kDefaultNavArea, .neighbours = {} },
-    };
-    kb::scene::NavQueryFilter routing;
-    kb::tests::Require(routing.SetAreaCost(kMudArea, 10.0F), "Navigation routing fixture could not configure mud cost");
-    const kb::scene::NavPath path = kb::scene::FindNavPath(graph, 0U, 3U, routing);
-    kb::tests::Require(path.status == kb::scene::NavPathStatus::Complete && path.corners.size() == 3U &&
-            path.corners[1].z == 3.0F, "Navigation path query did not choose the lower-cost area route");
-    routing.SetExcludedAreas(kb::scene::NavAreaBit(kMudArea));
-    const kb::scene::NavPath excludedPath = kb::scene::FindNavPath(graph, 0U, 3U, routing);
-    kb::tests::Require(excludedPath.Succeeded() && excludedPath.corners[1].z == 3.0F,
-        "Navigation path query did not respect excluded areas");
-    kb::scene::NavPathAsyncRequest asynchronous;
-    kb::tests::Require(asynchronous.Start(graph, 0U, 3U, routing), "Navigation async path request did not start");
-    kb::scene::NavPath asynchronousPath;
-    // Wait on a clock, not on a fixed number of yields. A yield budget measures how
-    // often this thread was scheduled, not how long the worker was given, so on a busy
-    // machine the budget ran out while the request was still perfectly healthy and the
-    // assertion below failed for a reason no code change caused. The deadline is far
-    // longer than the work (a four-node path) so it still catches a request that never
-    // completes, and sleeping rather than spinning stops this thread starving the
-    // worker it is waiting for.
-    const auto navigationDeadline = std::chrono::steady_clock::now() + std::chrono::seconds{ 30 };
-    while (std::chrono::steady_clock::now() < navigationDeadline) {
-        asynchronousPath = asynchronous.Poll();
-        if (asynchronousPath.status != kb::scene::NavPathStatus::Pending) break;
-        std::this_thread::sleep_for(std::chrono::milliseconds{ 1 });
-    }
-    kb::tests::Require(asynchronousPath.Succeeded() && asynchronousPath.corners.size() == excludedPath.corners.size() &&
-            asynchronousPath.corners.size() == 3U && asynchronousPath.corners[1].z == excludedPath.corners[1].z,
-        "Navigation async path request did not publish the same filtered result as synchronous pathfinding");
-    kb::tests::Require(path.IsCurrent(graph), "Navigation path was not current for the graph revision that produced it");
-    ++graph.revision;
-    kb::tests::Require(!path.IsCurrent(graph), "Navigation path was not invalidated after navmesh topology revision changed");
-    kb::scene::NavPathAsyncRequest targetDestroyedRequest;
-    kb::tests::Require(targetDestroyedRequest.Start(graph, 0U, 3U, routing) && targetDestroyedRequest.Cancel() &&
-            targetDestroyedRequest.Poll().status == kb::scene::NavPathStatus::Cancelled,
-        "Navigation request was not cancelled when its owner reports target destruction");
-    kb::scene::NavMesh unloadMesh = graph;
-    kb::scene::NavPathAsyncRequest unloadRequest;
-    kb::tests::Require(unloadRequest.Start(unloadMesh, 0U, 3U, routing), "Navigation request could not start before scene unload");
-    unloadMesh = {};
-    kb::scene::NavPath unloadedPath;
-    const auto unloadDeadline = std::chrono::steady_clock::now() + std::chrono::seconds{ 30 };
-    while (std::chrono::steady_clock::now() < unloadDeadline) {
-        unloadedPath = unloadRequest.Poll();
-        if (unloadedPath.status != kb::scene::NavPathStatus::Pending) break;
-        std::this_thread::sleep_for(std::chrono::milliseconds{ 1 });
-    }
-    kb::tests::Require(unloadedPath.Succeeded(), "Navigation request did not retain a safe navmesh snapshot across scene unload");
-    kb::scene::NavAgent steeringAgent;
-    steeringAgent.destination = { 10.0F, 5.0F, 0.0F };
-    steeringAgent.maxSpeed = 4.0F;
-    steeringAgent.acceleration = 2.0F;
-    steeringAgent.stoppingDistance = 0.5F;
-    const kb::scene::NavSteeringResult steering = kb::scene::ComputeNavSteering(
-        steeringAgent, {}, { 0.0F, 7.0F, 0.0F }, 0.25F);
-    kb::tests::Require(!steering.arrived && steering.desiredVelocity.x == 0.5F && steering.desiredVelocity.y == 0.0F,
-        "Navigation steering must accelerate horizontally without injecting vertical physics velocity");
-    const std::array avoidanceNeighbours{
-        kb::scene::NavAvoidanceNeighbor{ .position = { 0.5F, 20.0F, 0.0F }, .radius = 0.5F },
-        kb::scene::NavAvoidanceNeighbor{ .position = { 8.0F, 0.0F, 0.0F }, .radius = 0.5F },
-    };
-    const kb::math::Vec3 avoidedVelocity = kb::scene::ComputeNavAvoidance(
-        steeringAgent, {}, steering.desiredVelocity, avoidanceNeighbours);
-    kb::tests::Require(avoidedVelocity.x < steering.desiredVelocity.x && avoidedVelocity.y == 0.0F &&
-            std::sqrt(avoidedVelocity.x * avoidedVelocity.x + avoidedVelocity.z * avoidedVelocity.z) <= steeringAgent.maxSpeed,
-        "Navigation avoidance must apply deterministic horizontal separation without exceeding agent speed");
-    const std::array coincidentNeighbours{
-        kb::scene::NavAvoidanceNeighbor{ .position = {}, .radius = 0.5F },
-    };
-    const kb::math::Vec3 coincidentVelocity = kb::scene::ComputeNavAvoidance(
-        steeringAgent, {}, steering.desiredVelocity, coincidentNeighbours);
-    kb::tests::Require(coincidentVelocity.x < 0.0F && coincidentVelocity.y == 0.0F,
-        "Navigation avoidance must provide deterministic separation for coincident agents");
-    steeringAgent.destination = { 0.25F, 0.0F, 0.0F };
-    kb::tests::Require(kb::scene::ComputeNavSteering(steeringAgent, {}, {}, 0.25F).arrived,
-        "Navigation steering did not stop inside the agent stopping distance");
-    steeringAgent.velocity = { 1.0F, 0.0F, 0.0F };
-    steeringAgent.remainingDistance = 4.5F;
-    steeringAgent.pathStatus = kb::scene::NavPathStatus::Pending;
-    kb::tests::Require(steeringAgent.destination.x == 0.25F && steeringAgent.velocity.x == 1.0F &&
-            steeringAgent.remainingDistance == 4.5F && steeringAgent.pathStatus == kb::scene::NavPathStatus::Pending,
+    kb::scene::NavAgent runtimeAgent;
+    runtimeAgent.destination = { 0.25F, 0.0F, 0.0F };
+    runtimeAgent.velocity = { 1.0F, 0.0F, 0.0F };
+    runtimeAgent.remainingDistance = 4.5F;
+    runtimeAgent.pathStatus = kb::scene::NavPathStatus::Pending;
+    kb::tests::Require(runtimeAgent.destination.x == 0.25F && runtimeAgent.velocity.x == 1.0F &&
+            runtimeAgent.remainingDistance == 4.5F && runtimeAgent.pathStatus == kb::scene::NavPathStatus::Pending,
         "Navigation agent runtime state must expose destination, velocity, remaining distance and path status without moving physics state");
     kb::scene::PerceptionFilter perception{ .observerTeam = 1U, .maxResults = 8U, .range = 12.0F };
     kb::tests::Require(perception.IsValid() && !perception.AcceptsTeam(1U) && perception.AcceptsTeam(2U),
@@ -5127,6 +5053,119 @@ void RunMinimalGameplaySceneReplayTest() {
         "Minimal gameplay scene replay fixture did not execute its recorded gameplay inputs");
 }
 
+// An ability without a duration ends on the next Advance, so the caster can activate a different ability afterwards.
+void RunGameplayAbilityEndsAndNextActivatesTest() {
+    kb::gameplay::GameplayAbilities abilities;
+    kb::gameplay::GameplayModules modules;
+    const kb::scene::SceneEntity caster{11U};
+    const kb::gameplay::GameplayAbilityDefinition shout{ .id = kb::gameplay::GameplayTag("shout"), .cooldownSeconds = 1.0F, .targetRule = kb::gameplay::AbilityTargetRule::Self };
+    const kb::gameplay::GameplayAbilityDefinition taunt{ .id = kb::gameplay::GameplayTag("taunt"), .targetRule = kb::gameplay::AbilityTargetRule::Self };
+    kb::tests::Require(abilities.Activate(shout, caster, {}, caster, {}, modules) && abilities.IsActive(caster) &&
+            !abilities.Activate(taunt, caster, {}, caster, {}, modules),
+        "Gameplay ability did not stay active until the next Advance");
+    abilities.Advance(0.25F);
+    kb::tests::Require(!abilities.IsActive(caster), "Gameplay ability without a duration never ended");
+    kb::tests::Require(abilities.Activate(taunt, caster, {}, caster, {}, modules) && abilities.IsActive(caster),
+        "Caster could not activate a second ability after the first one ended");
+    abilities.Advance(0.0F);
+    kb::tests::Require(!abilities.IsActive(caster) && !abilities.Activate(shout, caster, {}, caster, {}, modules),
+        "Ended gameplay ability did not keep its cooldown");
+    abilities.Advance(1.0F);
+    kb::tests::Require(abilities.Activate(shout, caster, {}, caster, {}, modules), "Gameplay ability cooldown never expired");
+}
+
+void RunGameplayAbilityDurationAndCooldownTest() {
+    kb::gameplay::GameplayAbilities abilities;
+    kb::gameplay::GameplayModules modules;
+    const kb::scene::SceneEntity caster{21U};
+    const kb::gameplay::GameplayTagId stamina = kb::gameplay::GameplayTag("stamina");
+    kb::tests::Require(modules.SetAttribute(caster, stamina, { .current = 10.0F, .minimum = 0.0F, .maximum = 10.0F }),
+        "Ability lifetime fixture could not set its cost attribute");
+    const kb::gameplay::GameplayAbilityDefinition dash{ .id = kb::gameplay::GameplayTag("dash"), .cooldownSeconds = 2.0F, .costAttribute = stamina, .cost = 3.0F, .targetRule = kb::gameplay::AbilityTargetRule::Self, .durationSeconds = 1.0F };
+    const kb::gameplay::GameplayAbilityDefinition blink{ .id = kb::gameplay::GameplayTag("blink"), .targetRule = kb::gameplay::AbilityTargetRule::Self };
+
+    // The ability runs for its duration; its cost is committed once, at activation.
+    kb::tests::Require(abilities.Activate(dash, caster, {}, caster, {}, modules) && modules.Attribute(caster, stamina)->current == 7.0F &&
+            abilities.Active(caster).has_value() && abilities.Active(caster)->id == dash.id && abilities.Active(caster)->remainingSeconds == 1.0F &&
+            abilities.CooldownRemaining(caster, dash.id) == 0.0F && !abilities.Activate(blink, caster, {}, caster, {}, modules),
+        "Timed gameplay ability did not activate exclusively with its committed cost");
+    abilities.Advance(0.5F);
+    kb::tests::Require(abilities.IsActive(caster) && abilities.Active(caster)->remainingSeconds == 0.5F &&
+            abilities.CooldownRemaining(caster, dash.id) == 0.0F && modules.Attribute(caster, stamina)->current == 7.0F,
+        "Timed gameplay ability ended early or started its cooldown while still active");
+    abilities.Advance(0.5F);
+    kb::tests::Require(!abilities.IsActive(caster) && !abilities.Active(caster).has_value() && abilities.CooldownRemaining(caster, dash.id) == 2.0F,
+        "Timed gameplay ability did not end when its duration elapsed or did not start its cooldown");
+    kb::tests::Require(abilities.Activate(blink, caster, {}, caster, {}, modules), "Caster could not activate another ability after the timed one ended");
+    abilities.Advance(1.0F);
+    kb::tests::Require(!abilities.IsActive(caster) && abilities.CooldownRemaining(caster, dash.id) == 1.0F && !abilities.Activate(dash, caster, {}, caster, {}, modules),
+        "Gameplay ability cooldown did not tick after the ability ended");
+    abilities.Advance(1.0F);
+    kb::tests::Require(abilities.CooldownRemaining(caster, dash.id) == 0.0F && abilities.Activate(dash, caster, {}, caster, {}, modules) &&
+            modules.Attribute(caster, stamina)->current == 4.0F,
+        "Gameplay ability did not become available again when its cooldown expired");
+
+    // A step longer than the remaining duration ends the ability and spends the leftover time on its cooldown.
+    abilities.Advance(2.5F);
+    kb::tests::Require(!abilities.IsActive(caster) && abilities.CooldownRemaining(caster, dash.id) == 0.5F,
+        "Gameplay ability did not carry the leftover step time into its cooldown");
+    abilities.Advance(0.5F);
+
+    // Cancel ends early and starts the full cooldown from the moment of cancellation.
+    kb::tests::Require(abilities.Activate(dash, caster, {}, caster, {}, modules), "Gameplay ability could not be reactivated for the cancel case");
+    abilities.Advance(0.75F);
+    kb::tests::Require(abilities.Cancel(caster) && !abilities.IsActive(caster) && abilities.CooldownRemaining(caster, dash.id) == 2.0F &&
+            !abilities.Cancel(caster) && !abilities.Complete(caster),
+        "Cancelled gameplay ability did not start its cooldown when it was cancelled");
+
+    // An ability without a fixed duration runs until it reports completion.
+    const kb::gameplay::GameplayAbilityDefinition channel{ .id = kb::gameplay::GameplayTag("channel"), .cooldownSeconds = 1.0F, .targetRule = kb::gameplay::AbilityTargetRule::Self, .durationSeconds = kb::gameplay::kGameplayAbilityUntilCompleted };
+    kb::tests::Require(abilities.Activate(channel, caster, {}, caster, {}, modules), "Open-ended gameplay ability did not activate");
+    abilities.Advance(1000.0F);
+    kb::tests::Require(abilities.IsActive(caster) && abilities.CooldownRemaining(caster, channel.id) == 0.0F,
+        "Open-ended gameplay ability ended without reporting completion");
+    kb::tests::Require(abilities.Complete(caster) && !abilities.IsActive(caster) && abilities.CooldownRemaining(caster, channel.id) == 1.0F &&
+            !abilities.Activate(channel, caster, {}, caster, {}, modules),
+        "Completed gameplay ability did not end or did not start its cooldown");
+
+    // Durations must be zero, positive, or explicitly open-ended.
+    kb::gameplay::GameplayAbilityDefinition invalid = blink;
+    invalid.durationSeconds = -1.0F;
+    kb::tests::Require(!abilities.Activate(invalid, caster, {}, caster, {}, modules), "Gameplay ability accepted a negative duration");
+    invalid.durationSeconds = std::numeric_limits<float>::quiet_NaN();
+    kb::tests::Require(!abilities.Activate(invalid, caster, {}, caster, {}, modules) && abilities.Activate(blink, caster, {}, caster, {}, modules),
+        "Gameplay ability accepted a NaN duration");
+}
+
+// Remove must clear every module store, not only the first one that held data for the entity.
+void RunGameplayModulesRemoveClearsEveryStoreTest() {
+    kb::gameplay::GameplayModules modules;
+    const kb::scene::SceneEntity entity{31U};
+    const kb::scene::SceneEntity pickup{32U};
+    const kb::scene::SceneEntity other{33U};
+    const kb::gameplay::GameplayTagId mana = kb::gameplay::GameplayTag("mana");
+    const kb::gameplay::GameplayTagId hand = kb::gameplay::GameplayTag("hand");
+    kb::tests::Require(
+        modules.AddHealth(entity, { .current = 5.0F, .maximum = 10.0F }) &&
+            modules.SetAttribute(entity, mana, { .current = 3.0F, .minimum = 0.0F, .maximum = 5.0F }) &&
+            modules.AddItems(entity, 7U, 2U) && modules.Equip(entity, hand, 7U) &&
+            modules.RegisterPickup(entity, { .item = 8U, .quantity = 1U }) &&
+            modules.AddHealth(other, { .current = 1.0F, .maximum = 1.0F }) && modules.AddItems(other, 7U, 1U),
+        "Gameplay module remove fixture could not populate every store");
+    kb::tests::Require(modules.Remove(entity), "Gameplay modules did not report removing a populated entity");
+    kb::tests::Require(
+        !modules.Health(entity).has_value() && !modules.Attribute(entity, mana).has_value() &&
+            modules.ItemCount(entity, 7U) == 0U && !modules.Equipped(entity, hand).has_value() &&
+            !modules.CollectPickup(entity, pickup),
+        "Gameplay modules Remove left stale attribute, inventory, equipment, or pickup data");
+    kb::tests::Require(modules.Health(other).has_value() && modules.ItemCount(other, 7U) == 1U,
+        "Gameplay modules Remove touched another entity");
+    kb::tests::Require(!modules.Remove(entity), "Gameplay modules reported removing an entity with no data");
+    kb::tests::Require(modules.SetAttribute(entity, mana, { .current = 1.0F, .minimum = 0.0F, .maximum = 5.0F }) && modules.Remove(entity) &&
+            !modules.Attribute(entity, mana).has_value(),
+        "Gameplay modules Remove did not report clearing an entity that only had attributes");
+}
+
 void RunLifecycleSoakTest() {
     constexpr std::size_t kSpawnDestroyCycles = 256U;
     constexpr std::size_t kLoadUnloadCycles = 64U;
@@ -5258,6 +5297,8 @@ void RunGameInstanceLifetimeTest() {
     kb::tests::Require(storage.Write("save/atomic", "old") && std::filesystem::create_directories(storageRoot / "save/atomic.tmp", storageError) && !storage.Write("save/atomic", "new") && storage.Read("save/atomic") == std::optional<std::string>{ "old" }, "Atomic user storage write failure modified the prior value");
     std::filesystem::remove_all(storageRoot, storageError);
     kb::tests::Require(kb::platform::IsSandboxStorageKey("saves/profile.bin") && !kb::platform::IsSandboxStorageKey("../outside") && !kb::platform::IsSandboxStorageKey("C:\\outside") && !kb::platform::IsSandboxStorageKey("/outside"), "User storage sandbox accepted a filesystem escape");
+    static_assert(kb::platform::IsUserStorageSlotName("Slot_01-a") && !kb::platform::IsUserStorageSlotName("") && !kb::platform::IsUserStorageSlotName("..") && !kb::platform::IsUserStorageSlotName("a/b") && !kb::platform::IsUserStorageSlotName("a\\b") && !kb::platform::IsUserStorageSlotName("C:x") && !kb::platform::IsUserStorageSlotName("slot.kbsave") && !kb::platform::IsUserStorageSlotName("con") && !kb::platform::IsUserStorageSlotName("Com7") && kb::platform::IsUserStorageSlotName("CONSOLE") && kb::platform::IsUserStorageSlotName("COMA"));
+    kb::tests::Require(kb::platform::IsUserStorageSlotName(std::string(kb::platform::kMaxUserStorageSlotNameBytes, 's')) && !kb::platform::IsUserStorageSlotName(std::string(kb::platform::kMaxUserStorageSlotNameBytes + 1U, 's')), "User storage slot names did not enforce their length limit");
     constexpr kb::platform::PlatformCapabilities platformCapabilities{ .flags = static_cast<std::uint32_t>(kb::platform::PlatformCapability::Locale) | static_cast<std::uint32_t>(kb::platform::PlatformCapability::UserDataPath) };
     static_assert(platformCapabilities.Has(kb::platform::PlatformCapability::Locale));
     kb::tests::Require(platformCapabilities.Has(kb::platform::PlatformCapability::UserDataPath) && !platformCapabilities.Has(kb::platform::PlatformCapability::Clipboard), "Platform capabilities did not fail closed for unavailable services");
@@ -5583,6 +5624,9 @@ void RunEngineLibraryTests() {
     RunAiBlackboardTest();
     RunGoapBenchmarkDecisionTest();
     RunMinimalGameplaySceneReplayTest();
+    RunGameplayAbilityEndsAndNextActivatesTest();
+    RunGameplayAbilityDurationAndCooldownTest();
+    RunGameplayModulesRemoveClearsEveryStoreTest();
     RunLifecycleSoakTest();
     RunGameInstanceLifetimeTest();
 }

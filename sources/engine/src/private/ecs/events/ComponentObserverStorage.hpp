@@ -10,6 +10,8 @@ struct ecs_world_t;
 
 namespace kb::ecs {
 
+class WorldRegistrySet;
+
 class ComponentObserverStorage {
 public:
     [[nodiscard]] static ObserverId Create(
@@ -20,7 +22,8 @@ public:
         RawComponentObserverVisitor visitor,
         void* context,
         ComponentObserverContextFree contextFree,
-        bool yieldExisting) noexcept;
+        bool yieldExisting,
+        WorldRegistrySet* observerRegistry) noexcept;
 
     static void Destroy(ecs_world_t* world, ObserverId observer) noexcept;
 };

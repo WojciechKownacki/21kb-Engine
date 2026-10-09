@@ -107,7 +107,8 @@ constexpr std::uint64_t kBuiltInParticleQuadMeshContentHash = 0x8371'C0DE'0001UL
 void RuntimeMeshResourceEnsurer::Ensure(
     const RuntimeRenderResourceEnsureContext& context,
     RuntimeMeshResourceMap& meshes,
-    RuntimeMaterialResourceMap& embeddedMaterials) {
+    RuntimeMaterialResourceMap& embeddedMaterials,
+    RuntimeContentStreamer& streamer) {
     kb::assets::AssetManager& manager = context.scene.Assets().Manager();
 
     const auto ensureMorphMesh = [&](const MeshRenderProxyDesc& proxy) {
@@ -516,6 +517,12 @@ void RuntimeMeshResourceEnsurer::Ensure(
             .dynamicTerrainLayerUpdates = !asset->dynamicTerrainLayerWeightUpdates.empty(),
         };
         context.sceneRenderer.ResourceMap().BindMesh(meshAssetId, handle);
+        // A packaged mesh with streamed levels of detail was created from its coarsest level;
+        // the finer levels stream.
+        if (asset->streaming.has_value()) {
+            streamer.TrackMesh(runtimeKey, handle, asset.Shared(), manager.RuntimePack(),
+                materialSlots.empty() ? asset->materialSlots : materialSlots);
+        }
     };
 
     std::unordered_set<std::uint64_t> ensuredMeshAssetIds;
@@ -542,6 +549,10 @@ void RuntimeMeshResourceEnsurer::Ensure(
         }
     }
     for (const auto& [entityId, proxy] : context.renderScene.GeometrySwarmProxies()) {
+        static_cast<void>(entityId);
+        ensureMeshOnce(proxy.desc.meshAssetId);
+    }
+    for (const auto& [entityId, proxy] : context.renderScene.SpaceStrokeProxies()) {
         static_cast<void>(entityId);
         ensureMeshOnce(proxy.desc.meshAssetId);
     }

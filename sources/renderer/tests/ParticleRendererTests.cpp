@@ -361,6 +361,88 @@ void TestAllBlendAndOutputContracts() {
         "far mesh, particle batch, and near mesh did not interleave on the shared view-depth key");
 }
 
+// A translucent mesh emitter is drawn back to front (or by its other sort mode), an opaque one keeps the snapshot
+// order; the spin of a particle turns its instance about the emitter's Z axis.
+void TestMeshBatchBuilderOrdersTranslucentAndSpins() {
+    kb::render::RenderResourceRegistry resources;
+    kb::render::RenderMaterialDesc translucentDesc{};
+    translucentDesc.alphaMode = kb::render::RenderMaterialAlphaMode::Blend;
+    kb::render::SceneRenderResourceMap bindings;
+    bindings.BindMaterial(3010U, resources.RegisterMaterial(translucentDesc));
+    bindings.BindMaterial(3011U, resources.RegisterMaterial(kb::render::RenderMaterialDesc{}));
+
+    const auto build = [&](std::uint64_t materialAssetId, kb::particles::ParticleRenderSortMode sort) {
+        kb::particles::ParticleRenderEmitterRecord emitter = Emitter(0U, 3U, sort);
+        emitter.output = kb::particles::ParticleRenderOutput::Mesh;
+        emitter.meshAssetId = 4010U;
+        emitter.materialAssetId = materialAssetId;
+        emitter.localBasisQuaternionSnorm = {0, 0, 0, 32'767};
+        std::array<kb::particles::ParticleRenderRecord, 3U> particles{Particle(1U, 0.0F, 1.0F, 30000U), Particle(2U, 0.0F, 3.0F, 10000U), Particle(3U, 0.0F, 2.0F, 50000U)};
+        particles[0].rotationRadians = 1.5707964F;
+        kb::render::SceneRenderCamera camera{};
+        camera.view = {1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F};
+        const std::array emitters{emitter};
+        kb::render::ParticleMeshBatchBuilder builder;
+        builder.Build(*Snapshot(emitters, particles), &camera, &resources, &bindings);
+        std::vector<std::uint64_t> ids;
+        std::array<float, 16> turned{};
+        for (const auto& batch : builder.Batches()) {
+            for (const auto& instance : batch.instances) {
+                ids.push_back(instance.entityId);
+                if (instance.entityId == 1U) turned = instance.model;
+            }
+        }
+        return std::pair{ids, turned};
+    };
+    using Sort = kb::particles::ParticleRenderSortMode;
+    const auto backToFront = build(3010U, Sort::BackToFront);
+    Require(backToFront.first == std::vector<std::uint64_t>{2U, 3U, 1U}, "a translucent mesh emitter was not drawn back to front");
+    Require(build(3010U, Sort::FrontToBack).first == std::vector<std::uint64_t>{1U, 3U, 2U}, "front to back order is wrong");
+    Require(build(3010U, Sort::Age).first == std::vector<std::uint64_t>{3U, 1U, 2U}, "age order is wrong (oldest first)");
+    Require(build(3011U, Sort::BackToFront).first == std::vector<std::uint64_t>{1U, 2U, 3U}, "an opaque mesh emitter must keep the snapshot order");
+    Require(build(3010U, Sort::None).first == std::vector<std::uint64_t>{1U, 2U, 3U}, "sort mode None must keep the snapshot order");
+    // A mesh that follows its velocity (here +x): its Y axis is the velocity, X = (0, 0, -1) and Z = (0, -1, 0); a particle
+    // that stands still keeps the emitter's basis.
+    {
+        kb::particles::ParticleRenderEmitterRecord emitter = Emitter(0U, 2U, Sort::None);
+        emitter.output = kb::particles::ParticleRenderOutput::Mesh;
+        emitter.alignment = kb::particles::ParticleRenderAlignment::Velocity;
+        emitter.meshAssetId = 4010U;
+        emitter.localBasisQuaternionSnorm = {0, 0, 0, 32'767};
+        std::array<kb::particles::ParticleRenderRecord, 2U> particles{Particle(1U, 0.0F, 1.0F, 0U), Particle(2U, 0.0F, 2.0F, 0U)};
+        particles[1].velocity = {};
+        const std::array emitters{emitter};
+        kb::render::ParticleMeshBatchBuilder builder;
+        builder.Build(*Snapshot(emitters, particles));
+        const auto& moving = builder.Batches().front().instances[0].model;
+        const auto& still = builder.Batches().front().instances[1].model;
+        Require(std::fabs(moving[4] - 1.0F) < 0.001F && std::fabs(moving[2] + 1.0F) < 0.001F && std::fabs(moving[9] + 1.0F) < 0.001F,
+                "a mesh following its +x velocity did not get Y = velocity, X = -Z and Z = -Y");
+        Require(std::fabs(still[0] - 1.0F) < 0.001F && std::fabs(still[5] - 1.0F) < 0.001F && std::fabs(still[10] - 1.0F) < 0.001F,
+                "a standing particle must keep the emitter's basis");
+    }
+    // A turn about Y alone: the Z axis becomes X (and the X axis becomes -Z).
+    {
+        kb::particles::ParticleRenderEmitterRecord emitter = Emitter(0U, 1U, Sort::None);
+        emitter.output = kb::particles::ParticleRenderOutput::Mesh;
+        emitter.meshAssetId = 4010U;
+        emitter.localBasisQuaternionSnorm = {0, 0, 0, 32'767};
+        std::array<kb::particles::ParticleRenderRecord, 1U> particles{Particle(1U, 0.0F, 1.0F, 0U)};
+        particles[0].rotationYSnorm = kb::particles::PackParticleAngle(1.5707964F);
+        const std::array emitters{emitter};
+        kb::render::ParticleMeshBatchBuilder builder;
+        builder.Build(*Snapshot(emitters, particles));
+        const auto& model = builder.Batches().front().instances.front().model;
+        Require(std::fabs(model[2] + 1.0F) < 0.001F && std::fabs(model[8] - 1.0F) < 0.001F && std::fabs(model[0]) < 0.001F,
+                "a turn about Y did not carry the mesh X axis to -Z and the Z axis to X");
+    }
+    // A quarter turn about Z: the X axis becomes Y and the Y axis becomes -X.
+    const std::array<float, 16>& turned = backToFront.second;
+    Require(std::fabs(turned[0]) < 0.001F && std::fabs(turned[1] - 1.0F) < 0.001F && std::fabs(turned[4] + 1.0F) < 0.001F &&
+                std::fabs(turned[5]) < 0.001F && std::fabs(turned[10] - 1.0F) < 0.001F,
+            "the spin of a particle did not turn its mesh instance about the Z axis");
+}
+
 void TestMeshBatchBuilderInstancesLodShadowAndExclusion() {
     kb::particles::ParticleRenderEmitterRecord meshEmitter = Emitter(
         0U, 3U, kb::particles::ParticleRenderSortMode::None);
@@ -636,6 +718,7 @@ int main() {
         TestCapacitySplitNoProxyGrowthTwoViewsAndNoAllocation();
         TestAllBlendAndOutputContracts();
         TestMeshBatchBuilderInstancesLodShadowAndExclusion();
+        TestMeshBatchBuilderOrdersTranslucentAndSpins();
         TestStripGeometryHistoryOrderAndFixedStepDeterminism();
         TestStripGeometryCapacityIsHardAndDiagnostic();
         TestTrailHistoryCapacityIsHardAndDiagnostic();

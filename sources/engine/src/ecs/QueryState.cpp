@@ -25,6 +25,23 @@ thread_local QueryWorkerContext tCurrentQueryWorkerContext{};
 thread_local QueryBatchExecutionScratch tBatchExecutionScratch{};
 thread_local bool tBatchExecutionScratchInUse = false;
 
+inline constexpr std::size_t kMaxKeptQueryStateBlocks = 256U;
+
+struct QueryStateBlocks {
+    QueryStateBlocks() {
+        blocks.reserve(kMaxKeptQueryStateBlocks);
+    }
+
+    std::mutex mutex;
+    std::vector<void*> blocks;
+};
+
+// Never destroyed: a query state may be freed during static destruction.
+[[nodiscard]] QueryStateBlocks& KeptQueryStateBlocks() {
+    static QueryStateBlocks* const blocks = new QueryStateBlocks{};
+    return *blocks;
+}
+
 class ScopedQueryWorkerContext {
 public:
     explicit ScopedQueryWorkerContext(WorkerContext workerContext) noexcept
@@ -487,6 +504,12 @@ void QueryState::PrepareMutableBatchExecution(QueryExecutionSettings settings, Q
         EndQueryTelemetryTiming(telemetryCounters_, settings, prepareStartedAt));
 }
 
+bool QueryState::RefreshMutableChunksAfterAppends(std::uint64_t structuralVersion, QueryBatchExecutionScratch& scratch, std::size_t& firstChangedRecord) const {
+    return IsValid() && nativeStorage_->RefreshMutableQueryRecordsAfterAppends(
+        plan_->ComponentIds(), plan_->RequiredComponentIds(), plan_->ExcludedComponentIds(),
+        structuralVersion, scratch.mutableRecords_, firstChangedRecord);
+}
+
 void QueryState::ForEach(QueryRawVisitor visitor, void* context) const {
     if (!IsValid() || visitor == nullptr) {
         return;
@@ -497,10 +520,11 @@ void QueryState::ForEach(QueryRawVisitor visitor, void* context) const {
 
     auto visit = [this, visitor, context](QueryBatchExecutionScratch& scratch) {
         PrepareReadRecords(QueryExecutionSettings{}, scratch, false);
+        const auto versionSnapshots = SnapshotRecordVersions(std::span<const QueryTableDispatchRecord>{ scratch.records_.data(), scratch.records_.size() });
 
         QueryComponentPointerBlock rowComponents{};
         for (const QueryTableDispatchRecord& record : scratch.records_) {
-            if (plan_->HasChangeFilters() && !RecordChanged(record)) {
+            if (!RecordChanged(record.nativeArchetypeIndex, versionSnapshots)) {
                 continue;
             }
             for (std::size_t row = 0; row < record.entityCount; ++row) {
@@ -510,8 +534,8 @@ void QueryState::ForEach(QueryRawVisitor visitor, void* context) const {
                 }
                 visitor(Entity{ record.entityIds[row] }, rowComponents.data(), context);
             }
-            CommitRecordVersions(record);
         }
+        CommitRecordVersions(versionSnapshots);
     };
 
     if (!tBatchExecutionScratchInUse) {
@@ -549,6 +573,7 @@ void QueryState::ForEachBatch(QueryExecutionSettings settings, QueryRawBatchVisi
 
     const auto prepareStartedAt = BeginQueryTelemetryTiming(telemetryCounters_, settings);
     PrepareReadRecords(settings, scratch, false);
+    const auto versionSnapshots = SnapshotRecordVersions(std::span<const QueryTableDispatchRecord>{ scratch.records_.data(), scratch.records_.size() });
 
     if (IsDeterministicExecution(settings)) {
         std::sort(scratch.records_.begin(), scratch.records_.end(), [](const QueryTableDispatchRecord& left, const QueryTableDispatchRecord& right) {
@@ -593,8 +618,7 @@ void QueryState::ForEachBatch(QueryExecutionSettings settings, QueryRawBatchVisi
         std::size_t telemetryEntityCount = 0;
         for (std::size_t recordIndex = 0; recordIndex < scratch.records_.size(); ++recordIndex) {
             const QueryTableDispatchRecord& record = scratch.records_[recordIndex];
-            if (plan_->HasChangeFilters() && !RecordChanged(record)) {
-                CommitRecordVersions(record);
+            if (!RecordChanged(record.nativeArchetypeIndex, versionSnapshots)) {
                 continue;
             }
             const std::size_t parallelStep = splitParallelRanges ? maxBatchSize : record.entityCount;
@@ -615,7 +639,6 @@ void QueryState::ForEachBatch(QueryExecutionSettings settings, QueryRawBatchVisi
                 });
                 telemetryEntityCount += count;
             }
-            CommitRecordVersions(record);
         }
         auto chunkJob = [&records = scratch.records_, componentSizes = plan_->ComponentSizes(), &workItems = scratch.workItems_, visitor, context, prefetchDistance = settings.prefetchDistance](WorkerContext workerContext, const WorkerPoolChunk& chunk) {
             const ScopedQueryWorkerContext scopedWorker{ workerContext };
@@ -625,6 +648,7 @@ void QueryState::ForEachBatch(QueryExecutionSettings settings, QueryRawBatchVisi
         const auto kernelStartedAt = BeginQueryTelemetryTiming(telemetryCounters_, settings);
         settings.workerPool->ParallelForChunks(scratch.chunks_, chunkJob);
         const std::uint64_t kernelElapsedNanoseconds = EndQueryTelemetryTiming(telemetryCounters_, settings, kernelStartedAt);
+        CommitRecordVersions(versionSnapshots);
         RecordQueryExecutionTelemetry(
             telemetryCounters_,
             telemetryMutex_,
@@ -643,8 +667,7 @@ void QueryState::ForEachBatch(QueryExecutionSettings settings, QueryRawBatchVisi
     std::size_t telemetryBatchCount = 0;
     const auto kernelStartedAt = BeginQueryTelemetryTiming(telemetryCounters_, settings);
     for (const QueryTableDispatchRecord& record : scratch.records_) {
-        if (plan_->HasChangeFilters() && !RecordChanged(record)) {
-            CommitRecordVersions(record);
+        if (!RecordChanged(record.nativeArchetypeIndex, versionSnapshots)) {
             continue;
         }
         telemetryEntityCount += record.entityCount;
@@ -658,9 +681,9 @@ void QueryState::ForEachBatch(QueryExecutionSettings settings, QueryRawBatchVisi
             settings.prefetchDistance,
             visitor,
             context);
-        CommitRecordVersions(record);
     }
     const std::uint64_t kernelElapsedNanoseconds = EndQueryTelemetryTiming(telemetryCounters_, settings, kernelStartedAt);
+    CommitRecordVersions(versionSnapshots);
     RecordQueryExecutionTelemetry(
         telemetryCounters_,
         telemetryMutex_,
@@ -700,6 +723,7 @@ void QueryState::ForEachMutableBatch(QueryExecutionSettings settings, QueryRawMu
 
     const auto prepareStartedAt = BeginQueryTelemetryTiming(telemetryCounters_, settings);
     PrepareMutableRecords(settings, scratch, false);
+    const auto versionSnapshots = SnapshotRecordVersions(std::span<const MutableQueryTableDispatchRecord>{ scratch.mutableRecords_.data(), scratch.mutableRecords_.size() });
 
     if (IsDeterministicExecution(settings)) {
         std::sort(scratch.mutableRecords_.begin(), scratch.mutableRecords_.end(), [](const MutableQueryTableDispatchRecord& left, const MutableQueryTableDispatchRecord& right) {
@@ -758,8 +782,7 @@ void QueryState::ForEachMutableBatch(QueryExecutionSettings settings, QueryRawMu
         std::size_t telemetryEntityCount = 0;
         for (std::size_t recordIndex = 0; recordIndex < scratch.mutableRecords_.size(); ++recordIndex) {
             const MutableQueryTableDispatchRecord& record = scratch.mutableRecords_[recordIndex];
-            if (plan_->HasChangeFilters() && !RecordChanged(record)) {
-                CommitRecordVersions(record);
+            if (!RecordChanged(record.nativeArchetypeIndex, versionSnapshots)) {
                 continue;
             }
             const std::size_t parallelStep = splitParallelRanges ? maxBatchSize : record.entityCount;
@@ -786,24 +809,29 @@ void QueryState::ForEachMutableBatch(QueryExecutionSettings settings, QueryRawMu
             const QueryBatchWorkItem& item = workItems[chunk.index];
             DispatchMutableRecordBatch(records[item.recordIndex], componentSizes, item.offset, item.count, prefetchDistance, dispatchVisitor, dispatchContext);
         };
-        const auto kernelStartedAt = BeginQueryTelemetryTiming(telemetryCounters_, settings);
-        settings.workerPool->ParallelForChunks(scratch.chunks_, chunkJob);
-        const std::uint64_t kernelElapsedNanoseconds = EndQueryTelemetryTiming(telemetryCounters_, settings, kernelStartedAt);
-
-        for (const QueryBatchWorkItem& item : scratch.workItems_) {
-            const MutableQueryTableDispatchRecord& record = scratch.mutableRecords_[item.recordIndex];
-            nativeStorage_->MarkArchetypeChunkComponentsModified(
-                record.nativeArchetypeIndex,
-                record.nativeChunkIndex,
-                item.offset,
-                item.count,
-                plan_->ComponentIds());
-        }
-        for (const MutableQueryTableDispatchRecord& record : scratch.mutableRecords_) {
-            if (!plan_->HasChangeFilters() || RecordChanged(record)) {
-                CommitRecordVersions(record);
+        const auto publishWrites = [this, &scratch] {
+            for (const QueryBatchWorkItem& item : scratch.workItems_) {
+                const MutableQueryTableDispatchRecord& record = scratch.mutableRecords_[item.recordIndex];
+                nativeStorage_->MarkArchetypeChunkComponentsModified(
+                    record.nativeArchetypeIndex,
+                    record.nativeChunkIndex,
+                    item.offset,
+                    item.count,
+                    plan_->ComponentIds());
             }
+        };
+        const auto kernelStartedAt = BeginQueryTelemetryTiming(telemetryCounters_, settings);
+        try {
+            settings.workerPool->ParallelForChunks(scratch.chunks_, chunkJob);
+        } catch (...) {
+            // The pool joins before propagating a callback failure. Any scheduled range
+            // may contain partial writes, so publish them without consuming the snapshot.
+            publishWrites();
+            throw;
         }
+        const std::uint64_t kernelElapsedNanoseconds = EndQueryTelemetryTiming(telemetryCounters_, settings, kernelStartedAt);
+        publishWrites();
+        CommitRecordVersions(versionSnapshots);
         RecordQueryExecutionTelemetry(
             telemetryCounters_,
             telemetryMutex_,
@@ -822,30 +850,39 @@ void QueryState::ForEachMutableBatch(QueryExecutionSettings settings, QueryRawMu
     std::size_t telemetryBatchCount = 0;
     const auto kernelStartedAt = BeginQueryTelemetryTiming(telemetryCounters_, settings);
     for (const MutableQueryTableDispatchRecord& record : scratch.mutableRecords_) {
-        if (plan_->HasChangeFilters() && !RecordChanged(record)) {
-            CommitRecordVersions(record);
+        if (!RecordChanged(record.nativeArchetypeIndex, versionSnapshots)) {
             continue;
         }
         telemetryEntityCount += record.entityCount;
         telemetryBatchCount += (record.entityCount + maxBatchSize - 1U) / maxBatchSize;
-        QueryTableBatchDispatcher::DispatchMutable(
-            record.entityIds,
-            record.entityCount,
-            plan_->ComponentSizes(),
-            record.fieldComponents,
-            maxBatchSize,
-            settings.prefetchDistance,
-            dispatchVisitor,
-            dispatchContext);
+        try {
+            QueryTableBatchDispatcher::DispatchMutable(
+                record.entityIds,
+                record.entityCount,
+                plan_->ComponentSizes(),
+                record.fieldComponents,
+                maxBatchSize,
+                settings.prefetchDistance,
+                dispatchVisitor,
+                dispatchContext);
+        } catch (...) {
+            nativeStorage_->MarkArchetypeChunkComponentsModified(
+                record.nativeArchetypeIndex,
+                record.nativeChunkIndex,
+                0U,
+                record.entityCount,
+                plan_->ComponentIds());
+            throw;
+        }
         nativeStorage_->MarkArchetypeChunkComponentsModified(
             record.nativeArchetypeIndex,
             record.nativeChunkIndex,
             0U,
             record.entityCount,
             plan_->ComponentIds());
-        CommitRecordVersions(record);
     }
     const std::uint64_t kernelElapsedNanoseconds = EndQueryTelemetryTiming(telemetryCounters_, settings, kernelStartedAt);
+    CommitRecordVersions(versionSnapshots);
     RecordQueryExecutionTelemetry(
         telemetryCounters_,
         telemetryMutex_,
@@ -951,48 +988,89 @@ void QueryState::RefreshRecordMetadata(std::span<MutableQueryTableDispatchRecord
     }
 }
 
-bool QueryState::RecordChanged(const QueryTableDispatchRecord& record) const {
-    if (!plan_->HasChangeFilters()) {
+template <typename Record>
+QueryState::ChangeVersionSnapshots QueryState::SnapshotRecordVersions(std::span<const Record> records) const {
+    ChangeVersionSnapshots snapshots;
+    if (!plan_->HasChangeFilters() || records.empty()) {
+        return snapshots;
+    }
+
+    snapshots.emplace();
+    for (const Record& record : records) {
+        for (ComponentId componentId : plan_->ChangedComponentIds()) {
+            const ChangeVersionKey key{ .archetypeIndex = record.nativeArchetypeIndex, .componentId = componentId };
+            auto [entry, inserted] = snapshots->try_emplace(key);
+            if (!inserted) {
+                continue;
+            }
+            ChangeVersionSnapshot& snapshot = entry->second;
+            snapshot.version = nativeStorage_->ArchetypeComponentVersion(record.nativeArchetypeIndex, componentId);
+            if (observedVersions_.has_value()) {
+                const auto observed = observedVersions_->find(key);
+                if (observed != observedVersions_->end()) {
+                    snapshot.previousObservation = observed->second;
+                }
+            }
+            snapshot.changed = !snapshot.previousObservation.has_value() || *snapshot.previousObservation != snapshot.version;
+        }
+    }
+    return snapshots;
+}
+
+bool QueryState::RecordChanged(std::size_t archetypeIndex, const ChangeVersionSnapshots& snapshots) const {
+    if (!snapshots.has_value()) {
         return true;
     }
     for (ComponentId componentId : plan_->ChangedComponentIds()) {
-        const std::uint64_t version = nativeStorage_->ArchetypeComponentVersion(record.nativeArchetypeIndex, componentId);
-        const ChangeVersionKey key{ .archetypeIndex = record.nativeArchetypeIndex, .componentId = componentId };
-        const auto observed = observedVersions_.find(key);
-        if (observed == observedVersions_.end() || observed->second != version) {
+        const ChangeVersionKey key{ .archetypeIndex = archetypeIndex, .componentId = componentId };
+        if (snapshots->at(key).changed) {
             return true;
         }
     }
     return false;
 }
 
-bool QueryState::RecordChanged(const MutableQueryTableDispatchRecord& record) const {
-    if (!plan_->HasChangeFilters()) {
-        return true;
+void QueryState::CommitRecordVersions(const ChangeVersionSnapshots& snapshots) const {
+    if (!snapshots.has_value()) {
+        return;
     }
-    for (ComponentId componentId : plan_->ChangedComponentIds()) {
-        const std::uint64_t version = nativeStorage_->ArchetypeComponentVersion(record.nativeArchetypeIndex, componentId);
-        const ChangeVersionKey key{ .archetypeIndex = record.nativeArchetypeIndex, .componentId = componentId };
-        const auto observed = observedVersions_.find(key);
-        if (observed == observedVersions_.end() || observed->second != version) {
-            return true;
+    if (!observedVersions_.has_value()) {
+        observedVersions_.emplace();
+    }
+    for (const auto& [key, snapshot] : *snapshots) {
+        auto [observed, inserted] = observedVersions_->try_emplace(key, snapshot.version);
+        if (!inserted && snapshot.previousObservation.has_value() && observed->second == *snapshot.previousObservation) {
+            // A nested execution may already have consumed a newer snapshot. Only
+            // replace the observation captured at entry; never consume live writes.
+            observed->second = snapshot.version;
         }
     }
-    return false;
 }
 
-void QueryState::CommitRecordVersions(const QueryTableDispatchRecord& record) const {
-    for (ComponentId componentId : plan_->ChangedComponentIds()) {
-        observedVersions_[ChangeVersionKey{ .archetypeIndex = record.nativeArchetypeIndex, .componentId = componentId }] =
-            nativeStorage_->ArchetypeComponentVersion(record.nativeArchetypeIndex, componentId);
+void* QueryState::operator new(std::size_t size) {
+    if (size == sizeof(QueryState)) {
+        QueryStateBlocks& kept = KeptQueryStateBlocks();
+        const std::lock_guard lock{ kept.mutex };
+        if (!kept.blocks.empty()) {
+            void* block = kept.blocks.back();
+            kept.blocks.pop_back();
+            return block;
+        }
     }
+    return ::operator new(size);
 }
 
-void QueryState::CommitRecordVersions(const MutableQueryTableDispatchRecord& record) const {
-    for (ComponentId componentId : plan_->ChangedComponentIds()) {
-        observedVersions_[ChangeVersionKey{ .archetypeIndex = record.nativeArchetypeIndex, .componentId = componentId }] =
-            nativeStorage_->ArchetypeComponentVersion(record.nativeArchetypeIndex, componentId);
+void QueryState::operator delete(void* pointer, std::size_t size) noexcept {
+    if (pointer != nullptr && size == sizeof(QueryState)) {
+        QueryStateBlocks& kept = KeptQueryStateBlocks();
+        const std::lock_guard lock{ kept.mutex };
+        if (kept.blocks.size() < kMaxKeptQueryStateBlocks) {
+            kept.blocks.push_back(pointer);
+            return;
+        }
     }
+    // The analyzer reaches here on a path from a null QueryState; a real pointer came from operator new above.
+    ::operator delete(pointer); // NOLINT(clang-analyzer-cplusplus.NewDelete)
 }
 
 void DestroyQueryState(QueryState* state) noexcept {
@@ -1027,6 +1105,10 @@ void PrepareQueryStateMutableBatchExecution(const QueryState* state, QueryExecut
     if (state != nullptr) {
         state->PrepareMutableBatchExecution(settings, scratch);
     }
+}
+
+bool RefreshQueryStateMutableChunksAfterAppends(const QueryState* state, std::uint64_t structuralVersion, QueryBatchExecutionScratch& scratch, std::size_t& firstChangedRecord) {
+    return state != nullptr && state->RefreshMutableChunksAfterAppends(structuralVersion, scratch, firstChangedRecord);
 }
 
 void ForEachQueryStateBatch(const QueryState* state, QueryExecutionSettings settings, QueryRawBatchVisitor visitor, void* context) {

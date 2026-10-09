@@ -959,6 +959,9 @@ std::string BuildGraphFragmentWrapperSource(
     wrapper += "uniform vec4 u_time;\n";
     wrapper += "uniform vec4 u_dynamicParameter;\n";
     wrapper += "uniform vec4 u_materialParams;\n";
+    // Positions arrive camera-relative (docs/large_worlds.md); this offset turns them into the world positions the
+    // graph reads (the render origin, wrapped to a period that keeps them exact in float).
+    wrapper += "uniform vec4 u_renderOriginOffset;\n";
     wrapper += "\n// pass:" + std::string{ pass } + "\n\n";
     wrapper += shader.source;
     wrapper += "\nvoid main()\n{\n";
@@ -968,7 +971,7 @@ std::string BuildGraphFragmentWrapperSource(
     wrapper += "    ctx.normal = normalize(v_normal);\n";
     wrapper += "    ctx.tangent = normalize(v_tangent);\n";
     wrapper += "    ctx.bitangent = normalize(v_bitangent);\n";
-    wrapper += "    ctx.worldPos = v_worldPos;\n";
+    wrapper += "    ctx.worldPos = v_worldPos + u_renderOriginOffset.xyz;\n";
     if (shadowPass) {
         wrapper += "    ctx.viewDir = vec3(0.0, 0.0, 1.0);\n";
     } else {
@@ -982,13 +985,13 @@ std::string BuildGraphFragmentWrapperSource(
     wrapper += "    ctx.screenPosition = gl_FragCoord.xy / max(u_viewRect.zw, vec2(1.0, 1.0));\n";
     // MAT-76 object-space inputs interpolated from the vertex shader.
     wrapper += "    ctx.localPosition = v_objectLocalPos.xyz;\n";
-    wrapper += "    ctx.objectPosition = v_objectWorldPos.xyz;\n";
+    wrapper += "    ctx.objectPosition = v_objectWorldPos.xyz + u_renderOriginOffset.xyz;\n";
     // MAT-77 per-instance scalars carried in the free .w lanes of the object-space varyings.
     wrapper += "    ctx.perInstanceRandom = v_objectLocalPos.w;\n";
     wrapper += "    ctx.objectRadius = v_objectWorldPos.w;\n";
     wrapper += "    ctx.perInstanceFadeAmount = v_shadowFlags.y;\n";
     wrapper += "    ctx.perInstanceCustomData = v_objectOrientation.w;\n";
-    wrapper += "    ctx.objectBounds = vec4(v_objectWorldPos.xyz, max(v_objectWorldPos.w, 0.0));\n";
+    wrapper += "    ctx.objectBounds = vec4(v_objectWorldPos.xyz + u_renderOriginOffset.xyz, max(v_objectWorldPos.w, 0.0));\n";
     wrapper += "    ctx.objectOrientation = dot(v_objectOrientation.xyz, v_objectOrientation.xyz) > 0.0001 ? normalize(v_objectOrientation.xyz) : vec3(0.0, 0.0, 1.0);\n";
     wrapper += "    ctx.preSkinnedPosition = v_objectLocalPos.xyz;\n";
     wrapper += "    ctx.preSkinnedNormal = dot(v_preSkinnedNormal, v_preSkinnedNormal) > 0.0001 ? normalize(v_preSkinnedNormal) : vec3(0.0, 0.0, 1.0);\n";
@@ -1002,7 +1005,7 @@ std::string BuildGraphFragmentWrapperSource(
         wrapper += "    ctx.cameraPosition = vec3(0.0, 0.0, 0.0);\n";
         wrapper += "    ctx.lightVector = vec3(0.0, 1.0, 0.0);\n";
     } else {
-        wrapper += "    ctx.cameraPosition = u_cameraPosition.xyz;\n";
+        wrapper += "    ctx.cameraPosition = u_cameraPosition.xyz + u_renderOriginOffset.xyz;\n";
         wrapper += "    ctx.lightVector = (u_lightParams.x > 0.5) ? normalize(-u_lightDirKind[0].xyz) : vec3(0.0, 1.0, 0.0);\n";
     }
     wrapper += "    MaterialSurface surface = EvaluateMaterialGraph(ctx);\n";
@@ -1073,7 +1076,8 @@ std::string BuildGraphVertexWrapperSource(const RenderMaterialGraphShaderSource&
     vs += "#include <bgfx_shader.sh>\n";
     vs += "uniform mat4 u_shadowViewProj;\n";
     vs += "uniform vec4 u_time;\n";
-    vs += "uniform vec4 u_dynamicParameter;\n\n";
+    vs += "uniform vec4 u_dynamicParameter;\n";
+    vs += "uniform vec4 u_renderOriginOffset;\n\n";
     vs += shader.source;
     vs += "\nvoid main()\n{\n";
     vs += "    float instanceRandom = i_data0.w;\n";
@@ -1099,7 +1103,7 @@ std::string BuildGraphVertexWrapperSource(const RenderMaterialGraphShaderSource&
     vs += "    ctx.normal = vsNormal;\n";
     vs += "    ctx.tangent = vsTangent;\n";
     vs += "    ctx.bitangent = vsBitangent;\n";
-    vs += "    ctx.worldPos = worldPos.xyz;\n";
+    vs += "    ctx.worldPos = worldPos.xyz + u_renderOriginOffset.xyz;\n";
     vs += "    ctx.viewDir = vec3(0.0, 0.0, 1.0);\n";
     vs += "    ctx.vertexColor = a_color0 * vec4(i_data4.rgb, abs(i_data4.w));\n";
     vs += "    ctx.time = u_time.x;\n";
@@ -1107,12 +1111,12 @@ std::string BuildGraphVertexWrapperSource(const RenderMaterialGraphShaderSource&
     vs += "    ctx.dynamicParameter = u_dynamicParameter;\n";
     vs += "    ctx.screenPosition = vec2(0.0, 0.0);\n";
     vs += "    ctx.localPosition = a_position;\n";
-    vs += "    ctx.objectPosition = objectWorldPos;\n";
+    vs += "    ctx.objectPosition = objectWorldPos + u_renderOriginOffset.xyz;\n";
     vs += "    ctx.perInstanceRandom = instanceRandom;\n";
     vs += "    ctx.objectRadius = instanceRadius;\n";
     vs += "    ctx.perInstanceFadeAmount = instanceFadeAmount;\n";
     vs += "    ctx.perInstanceCustomData = instanceCustomData;\n";
-    vs += "    ctx.objectBounds = vec4(objectWorldPos, max(instanceRadius, 0.0));\n";
+    vs += "    ctx.objectBounds = vec4(objectWorldPos + u_renderOriginOffset.xyz, max(instanceRadius, 0.0));\n";
     vs += "    ctx.objectOrientation = objectOrientation;\n";
     vs += "    ctx.preSkinnedPosition = a_position;\n";
     vs += "    ctx.preSkinnedNormal = preSkinnedNormal;\n";

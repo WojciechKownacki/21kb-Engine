@@ -2,6 +2,7 @@
 #include "scene/SceneComponentMutationService.hpp"
 #include "scene/SceneComponentQueryService.hpp"
 #include "scene/SceneEntityService.hpp"
+#include "scene/SceneHistoryService.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/prefab/ScenePrefabDirtyTracker.hpp"
 
@@ -16,10 +17,12 @@ const RigidbodyComponent* SceneComponentQueryService::TryGetRigidbody(const Scen
 }
 
 RigidbodyComponent* SceneComponentMutationService::TryGetRigidbody(Scene& scene, SceneEntity entity) noexcept {
+    SceneHistoryService::NoteObjectChanging(scene, entity);
     return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.Rigidbodies().TryGet(entity) : nullptr;
 }
 
 void SceneComponentMutationService::SetRigidbody(Scene& scene, SceneEntity entity, const RigidbodyComponent& rigidbody) {
+    SceneHistoryService::NoteObjectChanging(scene, entity);
     if (SceneEntityService::IsAlive(scene, entity)) {
         SceneState& state = SceneAccess::State(scene);
         state.componentStorage.Rigidbodies().Set(entity, rigidbody);
@@ -28,6 +31,7 @@ void SceneComponentMutationService::SetRigidbody(Scene& scene, SceneEntity entit
 }
 
 void SceneComponentMutationService::RemoveRigidbody(Scene& scene, SceneEntity entity) noexcept {
+    SceneHistoryService::NoteObjectChanging(scene, entity);
     if (SceneEntityService::IsAlive(scene, entity)) {
         SceneState& state = SceneAccess::State(scene);
         state.componentStorage.Rigidbodies().Remove(entity);

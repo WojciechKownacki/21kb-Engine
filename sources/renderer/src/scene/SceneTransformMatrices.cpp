@@ -47,9 +47,13 @@ struct Basis {
 } // namespace
 
 std::array<float, 16> SceneTransformMatrices::Model(const kb::scene::TransformComponent& transform) noexcept {
+    return Model(transform, transform.worldPosition);
+}
+
+std::array<float, 16> SceneTransformMatrices::Model(const kb::scene::TransformComponent& transform, kb::math::Vec3 translation) noexcept {
     const Basis basis = BasisFromQuat(transform.worldRotation);
     const kb::scene::Vec3& scale = transform.worldScale;
-    const kb::scene::Vec3& position = transform.worldPosition;
+    const kb::scene::Vec3& position = translation;
 
     return {
         basis.xx * scale.x,

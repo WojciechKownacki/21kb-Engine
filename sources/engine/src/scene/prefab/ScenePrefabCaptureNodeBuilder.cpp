@@ -3,9 +3,11 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneObject.hpp"
+#include "engine/scene/SceneTransforms.hpp"
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/prefab/ScenePrefabComponentSnapshot.hpp"
+#include "scene/prefab/ScenePrefabHasher.hpp"
 #include "scene/prefab/ScenePrefabOverrideDetector.hpp"
 
 namespace kb::scene {
@@ -27,6 +29,7 @@ void ApplyNestedPrefabMetadata(Scene& scene, SceneObject object, ScenePrefabNode
     node.nestedPrefabGuid = prefabRecord->guid;
     const ScenePrefab& baseline = instance->BaselineOr(prefabRecord->prefab);
     node.nestedPrefabOverrides = ScenePrefabOverrideDetector::Detect(scene, baseline, *instance).properties;
+    node.nestedPrefabContentHash = ScenePrefabHasher::Hash(baseline);
 }
 
 } // namespace
@@ -41,6 +44,7 @@ ScenePrefabNodeDesc ScenePrefabCaptureNodeBuilder::Build(Scene& scene, SceneObje
         .visibility = scene.Components().Visibility().Get(object.Entity()),
         .components = ScenePrefabComponentSnapshot::Capture(scene, object),
     };
+    node.SetLocalTranslation(scene.Transforms().LocalTranslation(object.Entity()));
     ApplyNestedPrefabMetadata(scene, object, node);
     return node;
 }

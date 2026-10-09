@@ -1969,6 +1969,67 @@ void TestComponentRateCapacityAndFollowTransformContracts() {
     followSystem.OnDestroy(followContext);
 }
 
+// Particles of an owner ten thousand kilometres out, simulated around a simulation origin there, move exactly like
+// those of an owner at the world origin (a float world position there holds whole metres only); moving the origin
+// keeps their world positions.
+void TestFarSimulationOrigin() {
+    const auto run = [](const kb::math::DVec3& origin, std::vector<kb::particles::ParticleRuntimeState>& before,
+                         std::vector<kb::particles::ParticleRuntimeState>& after, kb::math::DVec3& snapshotOrigin) {
+        Fixture fixture(Fixture::MakeEffect(60.0F, 64U));
+        fixture.scene.Transforms().SetLocalTranslation(fixture.owner, origin + kb::math::DVec3{ 0.25, 0.5, 0.0 });
+        fixture.scene.Runtime().SynchronizeTransforms();
+        fixture.scene.Components().ParticleEffects().Set(fixture.owner, {.effectAssetId = fixture.effectAssetId});
+        kb::particles::ParticlePlayback::SetSimulationOrigin(fixture.scene, origin);
+        kb::particle_plugin::ParticleSceneSystem system;
+        kb::scene::SceneSystemContext context{fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds};
+        system.OnCreate(context);
+        for (int step = 0; step < 30; ++step) system.OnFixedUpdate(context);
+        const std::uint64_t instanceId = kb::particles::ParticlePlayback::LiveInstanceIds(fixture.scene).front();
+        const auto states = kb::particles::ParticlePlayback::LiveParticleStates(fixture.scene, instanceId);
+        before.assign(states.begin(), states.end());
+        kb::particles::ParticlePlayback::SetSimulationOrigin(fixture.scene, origin + kb::math::DVec3{ 1024.0, 0.0, -2048.0 });
+        system.OnFixedUpdate(context);
+        const auto moved = kb::particles::ParticlePlayback::LiveParticleStates(fixture.scene, instanceId);
+        after.assign(moved.begin(), moved.end());
+        const auto snapshot = kb::particles::ParticlePlayback::ReadRenderSnapshot(fixture.scene);
+        Require(snapshot != nullptr, "the far particle fixture published no render snapshot");
+        snapshotOrigin = snapshot->Origin();
+        system.OnDestroy(context);
+    };
+    const kb::math::DVec3 farOrigin{ 10'000'000.0, 0.0, 10'000'000.0 };
+    std::vector<kb::particles::ParticleRuntimeState> nearBefore;
+    std::vector<kb::particles::ParticleRuntimeState> nearAfter;
+    std::vector<kb::particles::ParticleRuntimeState> farBefore;
+    std::vector<kb::particles::ParticleRuntimeState> farAfter;
+    kb::math::DVec3 nearSnapshotOrigin{};
+    kb::math::DVec3 farSnapshotOrigin{};
+    run({}, nearBefore, nearAfter, nearSnapshotOrigin);
+    run(farOrigin, farBefore, farAfter, farSnapshotOrigin);
+    Require(nearBefore.size() == 30U && farBefore.size() == nearBefore.size(), "the far particle fixture did not emit");
+    for (std::size_t index = 0U; index < nearBefore.size(); ++index) {
+        Require(farBefore[index].position.x == nearBefore[index].position.x &&
+                farBefore[index].position.y == nearBefore[index].position.y &&
+                farBefore[index].position.z == nearBefore[index].position.z,
+            "particles simulated around a far simulation origin must move as they do at the world origin");
+    }
+    Require(farAfter.size() == nearAfter.size() && nearAfter.size() > nearBefore.size() &&
+            farSnapshotOrigin == farOrigin + kb::math::DVec3{ 1024.0, 0.0, -2048.0 },
+        "moving the simulation origin changed the particles or was not published with the snapshot");
+    const float step = kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds;
+    for (std::size_t index = 0U; index < nearAfter.size(); ++index) {
+        Require(farAfter[index].position.x == nearAfter[index].position.x &&
+                farAfter[index].position.z == nearAfter[index].position.z,
+            "particles must move with a far simulation origin as they do with a near one");
+        if (index >= nearBefore.size()) continue;
+        // In the moved space a live particle is 1024 m nearer in x and 2048 m farther in z, one step further on.
+        const kb::math::Vec3 expected = nearBefore[index].position + nearBefore[index].velocity * step;
+        Require(std::abs(nearAfter[index].position.x + 1024.0F - expected.x) <= 2.0e-4F &&
+                std::abs(nearAfter[index].position.y - expected.y) <= 2.0e-4F &&
+                std::abs(nearAfter[index].position.z - 2048.0F - expected.z) <= 2.0e-4F,
+            "moving the simulation origin must keep the world positions of live particles");
+    }
+}
+
 void TestComponentBindingCapacityIsAtomic() {
     const auto populate = [](Fixture& fixture, std::size_t count) {
         std::vector<kb::scene::SceneEntity> entities;
@@ -2666,9 +2727,270 @@ void TestGpuEmitterRouting() {
     Require(released, "Releasing an instance must release its GPU emitter state");
 }
 
+// An emitter with a collision plane is eligible for the GPU path too: the plane travels with the emitter
+// parameters (the kernel bounces particles off it and off the scene depth); a sub-emitter still needs the CPU.
+void TestGpuEmitterCollisionRouting() {
+    const auto firstCommand = [](bool withSubEmitter) {
+        auto effect = Fixture::MakeEffect(600.0F, 200'000U);
+        effect.backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualPreferred;
+        AddModule(effect.emitters[0], 1U, kb::scene::ParticleModuleType::Gravity,
+            kb::scene::ParticleGravityModule{ .acceleration = { 0.0F, -2.0F, 0.0F }, .sceneGravityScale = 0.0F });
+        AddModule(effect.emitters[0], 2U, kb::scene::ParticleModuleType::CollisionPlane,
+            kb::scene::ParticleCollisionPlaneModule{
+                .normal = { 0.0F, 1.0F, 0.0F }, .distance = 1.5F, .restitution = 0.4F, .friction = 0.1F, .maxEventsPerStep = 4U });
+        if (withSubEmitter) {
+            kb::scene::ParticleEmitterAsset target = effect.emitters[0];
+            target.emitterId = 2U;
+            target.authoringOrder = 1U;
+            target.name = "Target";
+            target.modules.clear();
+            target.spawn.rateOverTime.keyframes = { kb::math::CurveKeyframe{ .time = 0.0F, .value = 0.0F } };
+            effect.emitters.push_back(std::move(target));
+            AddModule(effect.emitters[0], 3U, kb::scene::ParticleModuleType::SubEmitter,
+                kb::scene::ParticleSubEmitterModule{ .targetEmitterId = 2U });
+        }
+        Fixture fixture{ effect };
+        kb::particle_plugin::CpuParticleBackend backend;
+        backend.Warmup();
+        const kb::particles::ParticleRuntimeResult created = backend.Create(fixture.scene, fixture.effectAssetId, fixture.owner);
+        Require(created.Succeeded() && backend.Play(fixture.scene, created.instanceId).Succeeded(), "collision routing fixture could not play");
+        kb::particles::ParticlePlayback::SetGpuEmitterConsumer(fixture.scene, true);
+        for (int step = 0; step < 10; ++step) {
+            Require(backend.Step(fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(), "collision routing step failed");
+        }
+        std::vector<kb::particles::ParticleGpuEmitterCommand> commands;
+        kb::particles::ParticlePlayback::DrainGpuEmitterCommands(fixture.scene, commands);
+        const std::size_t cpuLive = backend.Query(fixture.scene, created.instanceId).liveParticleCount;
+        kb::particles::ParticleGpuEmitterCommand source{};
+        for (const kb::particles::ParticleGpuEmitterCommand& command : commands) {
+            if (command.key.emitterId == 1U) source = command;
+        }
+        return std::pair{ source, cpuLive };
+    };
+    const auto [onGpu, gpuCpuLive] = firstCommand(false);
+    Require(onGpu.hasParams && onGpu.params.hasPlane && onGpu.params.sceneDepthCollision &&
+            onGpu.params.plane.distance == 1.5F && onGpu.params.plane.restitution == 0.4F &&
+            onGpu.params.plane.friction == 0.1F && onGpu.params.plane.normal.y == 1.0F && gpuCpuLive == 0U,
+        "An emitter with a collision plane must run on the GPU with its plane");
+    const auto [onCpu, cpuLive] = firstCommand(true);
+    Require(!onCpu.hasParams && cpuLive > 0U,
+        "An emitter with a plane and a death sub-emitter must stay on the CPU: the death position is not closed form");
+}
+
+// A local-space emitter is eligible for the GPU path: its birth records are in the owner's frame (emitter
+// offset, rotation-free velocity scaled back by the owner scale) and a world matrix follows every step;
+// a local-space emitter with a collision plane stays on the CPU because planes are world-space.
+void TestGpuLocalSpaceEmitterRouting() {
+    const auto run = [](bool withPlane) {
+        auto effect = Fixture::MakeEffect(600.0F, 200'000U);
+        effect.backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualPreferred;
+        effect.emitters[0].simulationSpace = kb::scene::ParticleSimulationSpace::Local;
+        effect.emitters[0].localPosition = { 0.0F, 1.0F, 0.0F };
+        if (withPlane) {
+            AddModule(effect.emitters[0], 1U, kb::scene::ParticleModuleType::CollisionPlane,
+                kb::scene::ParticleCollisionPlaneModule{ .normal = { 0.0F, 1.0F, 0.0F }, .maxEventsPerStep = 4U });
+        }
+        Fixture fixture{ effect };
+        kb::particle_plugin::CpuParticleBackend backend;
+        backend.Warmup();
+        const kb::particles::ParticleRuntimeResult created = backend.Create(fixture.scene, fixture.effectAssetId, fixture.owner);
+        Require(created.Succeeded() && backend.Play(fixture.scene, created.instanceId).Succeeded(), "local routing fixture could not play");
+        kb::particles::ParticlePlayback::SetGpuEmitterConsumer(fixture.scene, true);
+        for (int step = 0; step < 10; ++step) {
+            Require(backend.Step(fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(), "local routing step failed");
+        }
+        std::vector<kb::particles::ParticleGpuEmitterCommand> commands;
+        kb::particles::ParticlePlayback::DrainGpuEmitterCommands(fixture.scene, commands);
+        return std::pair{ commands, backend.Query(fixture.scene, created.instanceId).liveParticleCount };
+    };
+    const auto [commands, cpuLive] = run(false);
+    std::size_t spawns = 0U;
+    std::size_t matrices = 0U;
+    bool localFlag = false;
+    for (const kb::particles::ParticleGpuEmitterCommand& command : commands) {
+        localFlag = localFlag || (command.hasParams && command.params.localSpace);
+        matrices += command.hasWorldMatrix ? 1U : 0U;
+        for (const kb::particles::ParticleGpuSpawn& spawn : command.spawns) {
+            Require(spawn.position.y == 1.0F && spawn.position.x == 0.0F, "A local-space spawn record must be in the owner's frame");
+            ++spawns;
+        }
+    }
+    Require(localFlag && spawns > 0U && cpuLive == 0U && matrices >= 10U,
+        "A local-space emitter must run on the GPU with a world matrix every step");
+    const auto [planeCommands, planeCpuLive] = run(true);
+    Require(planeCommands.empty() && planeCpuLive > 0U, "A local-space emitter with a collision plane must stay on the CPU");
+}
+
+// Every particle carries an angle drawn at birth and turns by its angular velocity: with fixed values the published
+// rotation is angle + rate x age exactly; with a range the particles differ from each other.
+void TestCpuParticleSpin() {
+    const auto publish = [](kb::math::Vec3 rotationMin, kb::math::Vec3 rotationMax, kb::math::Vec3 rateMin, kb::math::Vec3 rateMax) {
+        auto effect = Fixture::MakeEffect(600.0F, 64U);
+        effect.emitters[0].spawn.initialRotationMinDegrees = rotationMin;
+        effect.emitters[0].spawn.initialRotationMaxDegrees = rotationMax;
+        effect.emitters[0].spawn.angularVelocityMinDegrees = rateMin;
+        effect.emitters[0].spawn.angularVelocityMaxDegrees = rateMax;
+        Fixture fixture(std::move(effect));
+        fixture.scene.Components().ParticleEffects().Set(fixture.owner, { .effectAssetId = fixture.effectAssetId });
+        kb::particle_plugin::ParticleSceneSystem system;
+        kb::scene::SceneSystemContext context{ fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds };
+        system.OnCreate(context);
+        for (int step = 0; step < 20; ++step) system.OnFixedUpdate(context);
+        const auto snapshot = kb::particles::ParticlePlayback::ReadRenderSnapshot(fixture.scene);
+        Require(snapshot && snapshot->Particles().size() > 4U, "spin fixture published no particles");
+        struct Angles { float age; float x; float y; float z; };
+        std::vector<Angles> rotations;
+        for (const auto& particle : snapshot->Particles()) {
+            rotations.push_back({ static_cast<float>(particle.normalizedAgeUnorm) / 65535.0F * 2.0F,
+                kb::particles::UnpackParticleAngle(particle.rotationXSnorm), kb::particles::UnpackParticleAngle(particle.rotationYSnorm),
+                particle.rotationRadians });
+        }
+        return rotations;
+    };
+    constexpr float kPi = 3.14159265F;
+    // Z turns by 90 deg + 180 deg/s, Y by -45 deg + 90 deg/s, X by 30 deg and no velocity.
+    for (const auto& angles : publish({ 30.0F, -45.0F, 90.0F }, { 30.0F, -45.0F, 90.0F }, { 0.0F, 90.0F, 180.0F }, { 0.0F, 90.0F, 180.0F })) {
+        Require(std::abs(angles.z - (0.5F * kPi + kPi * angles.age)) < 0.02F, "a fixed spin must be angle + rate x age about Z");
+        Require(std::abs(angles.y - (-0.25F * kPi + 0.5F * kPi * angles.age)) < 0.02F, "a fixed spin must be angle + rate x age about Y");
+        Require(std::abs(angles.x - (kPi / 6.0F)) < 0.02F, "a fixed angle without velocity must stay put about X");
+    }
+    const auto spread = publish({ 0.0F, 0.0F, 0.0F }, { 0.0F, 0.0F, 360.0F }, {}, {});
+    float lowest = 100.0F;
+    float highest = -100.0F;
+    for (const auto& angles : spread) {
+        const float rotation = angles.z;
+        Require(rotation >= -0.001F && rotation <= 2.0F * kPi + 0.001F, "a random angle must stay inside its range");
+        lowest = std::min(lowest, rotation);
+        highest = std::max(highest, rotation);
+    }
+    Require(highest - lowest > 1.0F, "particles of a spin range must not all start at the same angle");
+}
+
+// Mesh and trail outputs run on the GPU too: the mesh draw carries the mesh and material of the emitter, the trail
+// the segment count and spacing (one fewer segment than samples, at the CPU path's sample cadence); a trail of a
+// local-space emitter stays on the CPU because its path is not the closed form.
+void TestGpuMeshAndTrailRouting() {
+    const auto run = [](kb::scene::ParticleOutputType type, bool local) {
+        auto effect = Fixture::MakeEffect(600.0F, 1'000U);
+        effect.backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualPreferred;
+        auto& output = effect.emitters[0].output;
+        output.type = type;
+        output.material.assetId = 72U;
+        if (type == kb::scene::ParticleOutputType::Mesh) {
+            output.mesh.assetId = 75U;
+            output.payload = kb::scene::ParticleMeshOutput{ .castsShadow = true, .receivesShadow = false };
+        } else {
+            output.payload = kb::scene::ParticleTrailOutput{ .sampleIntervalSeconds = 0.05F, .maxSamplesPerParticle = 8U, .width = 0.5F };
+        }
+        if (local) effect.emitters[0].simulationSpace = kb::scene::ParticleSimulationSpace::Local;
+        Fixture fixture{ effect };
+        Require(fixture.scene.Assets().Manager().RegisterAsset({
+                    .id = kb::assets::AssetId{ 75U }, .type = "RenderMesh", .name = "Particle Test Mesh",
+                    .virtualPath = "/Game/Meshes/ParticleTest.obj", .physicalPath = "ParticleTest.obj", .contentHash = 1U }),
+            "particle mesh metadata registration failed");
+        kb::particle_plugin::CpuParticleBackend backend;
+        backend.Warmup();
+        const kb::particles::ParticleRuntimeResult created = backend.Create(fixture.scene, fixture.effectAssetId, fixture.owner);
+        Require(created.Succeeded() && backend.Play(fixture.scene, created.instanceId).Succeeded(), "mesh/trail routing fixture could not play");
+        kb::particles::ParticlePlayback::SetGpuEmitterConsumer(fixture.scene, true);
+        for (int step = 0; step < 10; ++step) {
+            Require(backend.Step(fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(), "mesh/trail routing step failed");
+        }
+        std::vector<kb::particles::ParticleGpuEmitterCommand> commands;
+        kb::particles::ParticlePlayback::DrainGpuEmitterCommands(fixture.scene, commands);
+        return commands;
+    };
+    const auto meshCommands = run(kb::scene::ParticleOutputType::Mesh, false);
+    bool mesh = false;
+    for (const kb::particles::ParticleGpuEmitterCommand& command : meshCommands) {
+        mesh = mesh || (command.hasParams && command.params.output == kb::particles::ParticleRenderOutput::Mesh &&
+            command.params.meshAssetId == 75U && command.params.materialAssetId == 72U &&
+            command.params.castsShadow && !command.params.receivesShadow);
+    }
+    Require(mesh, "A mesh emitter must run on the GPU with its mesh, material and shadow flags");
+    const auto trailCommands = run(kb::scene::ParticleOutputType::Trail, false);
+    bool trail = false;
+    for (const kb::particles::ParticleGpuEmitterCommand& command : trailCommands) {
+        trail = trail || (command.hasParams && command.params.output == kb::particles::ParticleRenderOutput::Trail &&
+            command.params.trailSegments == 7U && std::abs(command.params.trailSegmentSeconds - 0.05F) < 0.0001F &&
+            command.params.trailWidth == 0.5F);
+    }
+    Require(trail, "A trail emitter must run on the GPU with its segment count, spacing and width");
+    Require(run(kb::scene::ParticleOutputType::Trail, true).empty(), "A local-space trail must stay on the CPU");
+}
+
+// Birth and death events of a GPU particle are queued by the backend itself, so sub-emitters work on the
+// GPU: one parent born by a manual emit dies 2 s later at its closed-form position (no acceleration, so
+// start + velocity * lifetime), and its death sub-emitter spawns child records there; a collision-triggered sub-emitter
+// would need the GPU to report the collision, so that emitter stays on the CPU.
+void TestGpuSubEmitterEvents() {
+    const auto run = [](kb::scene::ParticleEventTrigger trigger, int steps) {
+        auto effect = Fixture::MakeEffect(0.0F, 1024U);
+        effect.backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualPreferred;
+        kb::scene::ParticleEmitterAsset child = effect.emitters[0];
+        child.emitterId = 2U;
+        child.authoringOrder = 1U;
+        child.name = "Child";
+        child.modules.clear();
+        effect.emitters.push_back(std::move(child));
+        AddModule(effect.emitters[0], 1U, kb::scene::ParticleModuleType::SubEmitter,
+            kb::scene::ParticleSubEmitterModule{ .targetEmitterId = 2U, .trigger = trigger, .count = 3U });
+        RuntimeFixture runtime(std::move(effect));
+        kb::scene::Scene& scene = runtime.fixture.scene;
+        kb::particles::ParticlePlayback::SetGpuEmitterConsumer(scene, true);
+        Require(kb::particles::ParticlePlayback::Play(scene, runtime.instanceId).Succeeded(), "sub-emitter fixture could not play");
+        // The first step tells the backend which scene its GPU records go to.
+        static_cast<void>(scene.Runtime().Update(kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds));
+        Require(kb::particles::ParticlePlayback::Emit(scene, runtime.instanceId, 1U).Succeeded(), "sub-emitter fixture could not emit");
+        for (int step = 0; step < steps; ++step) {
+            static_cast<void>(scene.Runtime().Update(kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds));
+        }
+        std::vector<kb::particles::ParticleGpuEmitterCommand> commands;
+        kb::particles::ParticlePlayback::DrainGpuEmitterCommands(scene, commands);
+        return std::pair{ commands, kb::particles::ParticlePlayback::Query(scene, runtime.instanceId).liveParticleCount };
+    };
+    const auto [commands, cpuLive] = run(kb::scene::ParticleEventTrigger::Death, 150);
+    std::vector<kb::particles::ParticleGpuSpawn> parents;
+    std::vector<kb::particles::ParticleGpuSpawn> children;
+    for (const kb::particles::ParticleGpuEmitterCommand& command : commands) {
+        auto& target = command.key.emitterId == 1U ? parents : children;
+        target.insert(target.end(), command.spawns.begin(), command.spawns.end());
+    }
+    Require(parents.size() == 1U && children.size() == 3U && cpuLive == 0U,
+        "A death sub-emitter of a GPU emitter must spawn its children on the GPU");
+    const kb::particles::ParticleGpuSpawn& parent = parents.front();
+    for (const kb::particles::ParticleGpuSpawn& child : children) {
+        Require(std::abs(child.position.x - (parent.position.x + parent.velocity.x * parent.lifetime)) < 0.001F &&
+                std::abs(child.position.y - (parent.position.y + parent.velocity.y * parent.lifetime)) < 0.001F &&
+                std::abs(child.position.z - (parent.position.z + parent.velocity.z * parent.lifetime)) < 0.001F &&
+                child.birthTime >= parent.birthTime + 2.0F && child.birthTime < parent.birthTime + 2.1F,
+            "A death sub-emitter child must appear where the parent dies, when it dies");
+    }
+    // A birth sub-emitter spawns its children at the parent's birth record, a step later.
+    const auto [birthCommands, birthCpuLive] = run(kb::scene::ParticleEventTrigger::Birth, 30);
+    std::vector<kb::particles::ParticleGpuSpawn> birthParents;
+    std::vector<kb::particles::ParticleGpuSpawn> birthChildren;
+    for (const kb::particles::ParticleGpuEmitterCommand& command : birthCommands) {
+        auto& target = command.key.emitterId == 1U ? birthParents : birthChildren;
+        target.insert(target.end(), command.spawns.begin(), command.spawns.end());
+    }
+    Require(birthParents.size() == 1U && birthChildren.size() == 3U && birthCpuLive == 0U &&
+            std::abs(birthChildren.front().position.x - birthParents.front().position.x) < 0.001F &&
+            birthChildren.front().birthTime < birthParents.front().birthTime + 0.1F,
+        "A birth sub-emitter of a GPU emitter must spawn its children at the parent's birth");
+    const auto [collisionCommands, collisionCpuLive] = run(kb::scene::ParticleEventTrigger::Collision, 30);
+    Require(collisionCommands.empty() && collisionCpuLive > 0U,
+        "An emitter with a collision-triggered sub-emitter must stay on the CPU");
+}
+
 int main() {
     try {
+        TestGpuSubEmitterEvents();
+        TestGpuMeshAndTrailRouting();
+        TestCpuParticleSpin();
+        TestGpuLocalSpaceEmitterRouting();
         TestGpuEmitterRouting();
+        TestGpuEmitterCollisionRouting();
         TestSharedImmutableCompilerArtifact();
         TestAuthoredEmitterOrderDrivesRuntime();
         TestValidationAndLifecycle();
@@ -2694,6 +3016,7 @@ int main() {
         TestNoAllocationPerFixedStep();
         TestComponentReconciliationAndOwnerPolicies();
         TestComponentRateCapacityAndFollowTransformContracts();
+        TestFarSimulationOrigin();
         TestEditorStyleScenePulseFollowsOwner();
         TestEditorAndPlayModeShareRenderSnapshotRevision();
         TestPlayModeDiscoversComponentAddedAfterSystemCreation();

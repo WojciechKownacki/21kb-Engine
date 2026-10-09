@@ -53,9 +53,11 @@ public:
     void Warmup();
     void ReleaseScene(std::uint64_t sceneId) noexcept;
     void ReleaseAllScenes() noexcept;
+    // `renderOffset` (ParticleRenderOffset) is added to every particle position.
     [[nodiscard]] ParticleStripBuildResult Build(
         const kb::particles::ParticleRenderSnapshot& snapshot,
-        const SceneRenderCamera& camera) noexcept;
+        const SceneRenderCamera& camera,
+        kb::math::Vec3 renderOffset = {}) noexcept;
 
 private:
     struct TrailHistory {
@@ -65,6 +67,8 @@ private:
         std::uint64_t lastSeenRevision = 0U;
         std::uint64_t lastSampleStep = 0U;
         std::uint32_t emitterRecordIndex = 0U;
+        // The simulation origin the samples are relative to.
+        kb::math::DVec3 origin{};
         std::array<kb::math::Vec3, kb::scene::kParticleEffectMaxTrailSamplesPerParticle> samples{};
         std::uint8_t firstSample = 0U;
         std::uint8_t sampleCount = 0U;

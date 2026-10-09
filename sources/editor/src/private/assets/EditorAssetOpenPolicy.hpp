@@ -12,6 +12,8 @@ public:
     EditorAssetOpenPolicy() = delete;
 
     [[nodiscard]] static bool IsSceneDocument(const kb::assets::AssetMetadata& metadata);
+    // A partitioned world opens in the scene view like a scene, one region at a time.
+    [[nodiscard]] static bool IsWorldDocument(const kb::assets::AssetMetadata& metadata);
     [[nodiscard]] static bool CanOpen(const kb::assets::AssetMetadata& metadata);
 };
 

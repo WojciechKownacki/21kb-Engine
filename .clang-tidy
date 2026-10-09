@@ -16,6 +16,24 @@ Checks: >
   -cppcoreguidelines-pro-type-reinterpret-cast,
   -cppcoreguidelines-pro-type-union-access,
   -readability-magic-numbers
-WarningsAsErrors: ''
-HeaderFilterRegex: '^(sources/engine|sources/editor)/'
+# Findings of these checks fail scripts/clang_tidy_gate.py; the rest stay advisory.
+WarningsAsErrors: >
+  bugprone-use-after-move,
+  bugprone-dangling-handle,
+  bugprone-undefined-memory-manipulation,
+  bugprone-unhandled-self-assignment,
+  bugprone-sizeof-expression,
+  bugprone-string-constructor,
+  bugprone-suspicious-memset-usage,
+  bugprone-not-null-terminated-result,
+  bugprone-unsafe-functions,
+  bugprone-infinite-loop,
+  bugprone-terminating-continue,
+  bugprone-unused-return-value,
+  bugprone-multiple-statement-macro,
+  clang-analyzer-core.*,
+  clang-analyzer-cplusplus.*,
+  clang-analyzer-security.*,
+  clang-analyzer-unix.*
+HeaderFilterRegex: '.*[/\\]sources[/\\](engine|editor|game|renderer|plugins|tools)[/\\].*'
 FormatStyle: file

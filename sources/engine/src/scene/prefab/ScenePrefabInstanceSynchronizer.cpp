@@ -38,7 +38,7 @@ namespace {
 }
 
 [[nodiscard]] ScenePrefabNodeDesc SnapshotNode(Scene& scene, SceneObject object, const ScenePrefabNodeDesc& baseline) {
-    return ScenePrefabNodeDesc{
+    ScenePrefabNodeDesc node{
         .name = scene.Entities().Name(object),
         .nestedPrefabGuid = baseline.nestedPrefabGuid,
         .nestedPrefabOverrides = baseline.nestedPrefabOverrides,
@@ -47,6 +47,8 @@ namespace {
         .visibility = scene.Components().Visibility().Get(object.Entity()),
         .components = ScenePrefabComponentSnapshot::Capture(scene, object),
     };
+    node.SetLocalTranslation(scene.Transforms().LocalTranslation(object.Entity()));
+    return node;
 }
 
 [[nodiscard]] bool ApplyStoredProperty(Scene& scene, ScenePrefabInstanceRecord& instance, const ScenePrefab& baseline, const ScenePrefabPropertyOverride& property) {
@@ -348,6 +350,16 @@ std::size_t ScenePrefabInstanceSynchronizer::Refresh(Scene& scene, ScenePrefabHa
     }
 
     return RefreshRecursive(scene, state.prefabs, state.prefabInstances, handle);
+}
+
+bool ScenePrefabInstanceSynchronizer::Rebase(Scene& scene, ScenePrefabInstanceRecord& instance, std::span<const ScenePrefabPropertyOverride> overrides) {
+    const ScenePrefab* baseline = instance.ResolvedPrefab();
+    if (baseline == nullptr || !RebuildTrackedObjects(scene, instance, *baseline, *baseline)) {
+        return false;
+    }
+    ScenePrefabOverrideReport stored;
+    stored.properties.assign(overrides.begin(), overrides.end());
+    return ApplyStoredProperties(scene, instance, *baseline, stored);
 }
 
 bool ScenePrefabInstanceSynchronizer::RefreshInstance(Scene& scene, ScenePrefabRegistry& registry, ScenePrefabInstanceRecord& instance) {

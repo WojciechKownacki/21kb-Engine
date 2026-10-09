@@ -2,6 +2,7 @@
 #include "scene/SceneComponentMutationService.hpp"
 #include "scene/SceneComponentQueryService.hpp"
 #include "scene/SceneEntityService.hpp"
+#include "scene/SceneHistoryService.hpp"
 #include "scene/SceneRenderProxyComponentMask.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/prefab/ScenePrefabDirtyTracker.hpp"
@@ -17,10 +18,12 @@ const RegionShapeComponent* SceneComponentQueryService::TryGetRegionShape(const 
 }
 
 RegionShapeComponent* SceneComponentMutationService::TryGetRegionShape(Scene& scene, SceneEntity entity) noexcept {
+    SceneHistoryService::NoteObjectChanging(scene, entity);
     return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.RegionShapes().TryGet(entity) : nullptr;
 }
 
 void SceneComponentMutationService::SetRegionShape(Scene& scene, SceneEntity entity, const RegionShapeComponent& shape) {
+    SceneHistoryService::NoteObjectChanging(scene, entity);
     if (SceneEntityService::IsAlive(scene, entity)) {
         SceneState& state = SceneAccess::State(scene);
         state.componentStorage.RegionShapes().Set(entity, shape);
@@ -30,6 +33,7 @@ void SceneComponentMutationService::SetRegionShape(Scene& scene, SceneEntity ent
 }
 
 void SceneComponentMutationService::RemoveRegionShape(Scene& scene, SceneEntity entity) noexcept {
+    SceneHistoryService::NoteObjectChanging(scene, entity);
     if (SceneEntityService::IsAlive(scene, entity)) {
         SceneState& state = SceneAccess::State(scene);
         state.componentStorage.RegionShapes().Remove(entity);

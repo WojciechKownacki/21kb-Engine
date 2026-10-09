@@ -3,6 +3,7 @@
 #include "engine/core/JsonValue.hpp"
 #include "packaging/EditorPackageInputValidation.hpp"
 #include "packaging/EditorPackageProcessEnvironment.hpp"
+#include "packaging/EditorSigningProcess.hpp"
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -25,6 +26,11 @@
 namespace kb::editor {
 namespace {
 
+using signing_process::Canonical;
+using signing_process::DirectChildOf;
+using signing_process::SamePath;
+using signing_process::ValidSession;
+
 constexpr std::size_t kMaximumOutputBytes = 1024U * 1024U;
 
 struct SigningRequest {
@@ -36,33 +42,6 @@ struct SigningRequest {
     std::filesystem::path inputApk;
     std::filesystem::path outputApk;
 };
-
-[[nodiscard]] std::filesystem::path Canonical(const std::filesystem::path& path) noexcept {
-    std::error_code error;
-    const std::filesystem::path result = std::filesystem::weakly_canonical(path, error);
-    return error ? std::filesystem::path{} : result;
-}
-
-[[nodiscard]] bool SamePath(const std::filesystem::path& left, const std::filesystem::path& right) noexcept {
-    const auto lhs = Canonical(left);
-    const auto rhs = Canonical(right);
-    if (lhs.empty() || rhs.empty()) return false;
-#if defined(_WIN32)
-    return _wcsicmp(lhs.c_str(), rhs.c_str()) == 0;
-#else
-    return lhs == rhs;
-#endif
-}
-
-[[nodiscard]] bool DirectChildOf(const std::filesystem::path& root, const std::filesystem::path& child) noexcept {
-    return !Canonical(root).empty() && SamePath(Canonical(child).parent_path(), root);
-}
-
-[[nodiscard]] bool ValidSession(std::string_view value) noexcept {
-    return value.size() == 32U && std::ranges::all_of(value, [](char character) {
-        return std::isdigit(static_cast<unsigned char>(character)) != 0 || (character >= 'a' && character <= 'f');
-    });
-}
 
 [[nodiscard]] const std::string* StringMember(const kb::core::JsonValue& object, std::string_view name) noexcept {
     const kb::core::JsonValue* value = object.Find(name);
@@ -159,59 +138,8 @@ struct SigningRequest {
 #endif
 
 #if defined(_WIN32)
-class ScopedHandle final {
-public:
-    ScopedHandle() = default;
-    explicit ScopedHandle(HANDLE value) noexcept : value_(value) {}
-    ~ScopedHandle() { if (value_ != nullptr && value_ != INVALID_HANDLE_VALUE) CloseHandle(value_); }
-    ScopedHandle(const ScopedHandle&) = delete;
-    ScopedHandle& operator=(const ScopedHandle&) = delete;
-    ScopedHandle(ScopedHandle&& other) noexcept : value_(std::exchange(other.value_, nullptr)) {}
-    ScopedHandle& operator=(ScopedHandle&& other) noexcept {
-        if (this != &other) {
-            if (value_ != nullptr && value_ != INVALID_HANDLE_VALUE) CloseHandle(value_);
-            value_ = std::exchange(other.value_, nullptr);
-        }
-        return *this;
-    }
-    [[nodiscard]] HANDLE Get() const noexcept { return value_; }
-    [[nodiscard]] explicit operator bool() const noexcept { return value_ != nullptr && value_ != INVALID_HANDLE_VALUE; }
-private:
-    HANDLE value_ = nullptr;
-};
-
-[[nodiscard]] ScopedHandle Guard(const std::filesystem::path& path, bool directory, DWORD access, DWORD share) noexcept {
-    ScopedHandle handle{ CreateFileW(path.c_str(), access, share, nullptr, OPEN_EXISTING,
-        FILE_FLAG_OPEN_REPARSE_POINT | (directory ? FILE_FLAG_BACKUP_SEMANTICS : 0U), nullptr) };
-    if (!handle) return {};
-    FILE_ATTRIBUTE_TAG_INFO info{};
-    if (!GetFileInformationByHandleEx(handle.Get(), FileAttributeTagInfo, &info, sizeof(info)) ||
-        (info.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0U ||
-        (((info.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0U) != directory)) return {};
-    return handle;
-}
-
-[[nodiscard]] std::wstring Quote(std::wstring_view argument) {
-    std::wstring result{ L'\"' };
-    std::size_t slashes = 0U;
-    for (wchar_t character : argument) {
-        if (character == L'\\') { ++slashes; continue; }
-        if (character == L'\"') result.append((slashes * 2U) + 1U, L'\\');
-        else result.append(slashes, L'\\');
-        slashes = 0U;
-        result.push_back(character);
-    }
-    result.append(slashes * 2U, L'\\');
-    result.push_back(L'\"');
-    return result;
-}
-
-[[nodiscard]] bool WriteSecret(HANDLE pipe, std::string_view secret) noexcept {
-    DWORD written = 0U;
-    if (!WriteFile(pipe, secret.data(), static_cast<DWORD>(secret.size()), &written, nullptr) || written != secret.size()) return false;
-    constexpr char newline = '\n';
-    return WriteFile(pipe, &newline, 1U, &written, nullptr) && written == 1U;
-}
+using signing_process::Guard;
+using signing_process::ScopedHandle;
 
 [[nodiscard]] bool WriteResponse(const std::filesystem::path& path, std::string_view session) {
     kb::core::JsonValue response = kb::core::JsonValue::MakeObject();
@@ -250,10 +178,7 @@ bool EditorAndroidSigningBroker::IsTrustedJavaExecutable(const std::filesystem::
 }
 
 void EditorAndroidSigningBroker::SecureClear(std::string& value) noexcept {
-    if (value.capacity() > value.size()) value.resize(value.capacity(), '\0');
-    volatile char* bytes = value.empty() ? nullptr : value.data();
-    for (std::size_t index = 0U; index < value.size(); ++index) bytes[index] = '\0';
-    value.clear();
+    signing_process::SecureClear(value);
 }
 
 EditorAndroidSigningResult EditorAndroidSigningBroker::Execute(
@@ -306,79 +231,19 @@ EditorAndroidSigningResult EditorAndroidSigningBroker::Execute(
         return result;
     }
 
-    SECURITY_ATTRIBUTES security{ sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE };
-    HANDLE inputReadRaw = nullptr, inputWriteRaw = nullptr, outputReadRaw = nullptr, outputWriteRaw = nullptr;
-    if (!CreatePipe(&inputReadRaw, &inputWriteRaw, &security, 0U) || !CreatePipe(&outputReadRaw, &outputWriteRaw, &security, 0U) ||
-        !SetHandleInformation(inputWriteRaw, HANDLE_FLAG_INHERIT, 0U) || !SetHandleInformation(outputReadRaw, HANDLE_FLAG_INHERIT, 0U)) {
-        if (inputReadRaw) CloseHandle(inputReadRaw); if (inputWriteRaw) CloseHandle(inputWriteRaw);
-        if (outputReadRaw) CloseHandle(outputReadRaw); if (outputWriteRaw) CloseHandle(outputWriteRaw);
-        clearSecrets(); result.message = "Secure signer pipes could not be created."; return result;
-    }
-    ScopedHandle inputRead{ inputReadRaw }, inputWrite{ inputWriteRaw }, outputRead{ outputReadRaw }, outputWrite{ outputWriteRaw };
     std::vector<std::wstring> arguments{ L"-classpath", request->apksignerJar.wstring(), L"com.android.apksigner.ApkSignerTool",
         L"sign", L"--pass-encoding", L"utf-8", L"--debuggable-apk-permitted", L"false", L"--alignment-preserved", L"true",
         L"--v4-signing-enabled", L"false", L"--ks", expectedKeystore.wstring(), L"--ks-key-alias", std::wstring{ expectedAlias.begin(), expectedAlias.end() },
         L"--ks-pass", L"stdin", L"--key-pass", L"stdin", L"--out", request->outputApk.wstring(), request->inputApk.wstring() };
-    std::wstring command = Quote(trustedJava.wstring());
-    for (const std::wstring& argument : arguments) { command.push_back(L' '); command += Quote(argument); }
-    STARTUPINFOEXW startup{}; startup.StartupInfo.cb = sizeof(startup); startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
-    startup.StartupInfo.hStdInput = inputRead.Get(); startup.StartupInfo.hStdOutput = outputWrite.Get(); startup.StartupInfo.hStdError = outputWrite.Get();
-    SIZE_T attributeBytes = 0U;
-    static_cast<void>(InitializeProcThreadAttributeList(nullptr, 1U, 0U, &attributeBytes));
-    std::vector<unsigned char> attributeStorage(attributeBytes);
-    startup.lpAttributeList = reinterpret_cast<PPROC_THREAD_ATTRIBUTE_LIST>(attributeStorage.data());
-    std::array<HANDLE, 2> inheritedHandles{ inputRead.Get(), outputWrite.Get() };
-    const bool attributeListInitialized =
-        InitializeProcThreadAttributeList(startup.lpAttributeList, 1U, 0U, &attributeBytes) != FALSE;
-    const bool attributesReady = attributeListInitialized &&
-        UpdateProcThreadAttribute(startup.lpAttributeList, 0U, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
-            inheritedHandles.data(), sizeof(inheritedHandles), nullptr, nullptr);
-    std::optional<std::vector<wchar_t>> environment = package_process::BuildSanitizedEnvironment();
-    if (!attributesReady || !environment.has_value()) {
-        if (attributeListInitialized) DeleteProcThreadAttributeList(startup.lpAttributeList);
-        clearSecrets(); result.message = "Signer process isolation could not be configured."; return result;
-    }
-    PROCESS_INFORMATION process{};
-    if (!CreateProcessW(trustedJava.c_str(), command.data(), nullptr, nullptr, TRUE,
-            CREATE_NO_WINDOW | CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT,
-            environment->data(), jobRoot.c_str(), &startup.StartupInfo, &process)) {
-        SecureZeroMemory(environment->data(), environment->size() * sizeof(wchar_t));
-        DeleteProcThreadAttributeList(startup.lpAttributeList);
-        clearSecrets(); result.message = "ApkSignerTool could not be started."; return result;
-    }
-    SecureZeroMemory(environment->data(), environment->size() * sizeof(wchar_t));
-    DeleteProcThreadAttributeList(startup.lpAttributeList);
-    ScopedHandle processHandle{ process.hProcess }, threadHandle{ process.hThread };
-    if (processJob != nullptr && !AssignProcessToJobObject(static_cast<HANDLE>(processJob), processHandle.Get())) {
-        TerminateProcess(processHandle.Get(), ERROR_PROCESS_ABORTED); clearSecrets();
-        result.message = "ApkSignerTool could not join the package process job."; return result;
-    }
-    if (ResumeThread(threadHandle.Get()) == static_cast<DWORD>(-1)) {
-        TerminateProcess(processHandle.Get(), ERROR_PROCESS_ABORTED);
-        clearSecrets();
-        result.message = "ApkSignerTool process could not be resumed.";
+    signing_process::SignerRun run = signing_process::RunSigner(trustedJava, arguments, jobRoot,
+        { &storePassword, &keyPassword }, processJob, std::chrono::seconds{ 180 }, kMaximumOutputBytes);
+    clearSecrets();
+    result.toolOutput = std::move(run.output);
+    if (!run.started) {
+        result.message = run.error.empty() ? "ApkSignerTool could not be started." : run.error;
         return result;
     }
-    inputRead = ScopedHandle{};
-    outputWrite = ScopedHandle{};
-    const bool wrote = WriteSecret(inputWrite.Get(), storePassword) && WriteSecret(inputWrite.Get(), keyPassword);
-    clearSecrets();
-    inputWrite = ScopedHandle{};
-    if (!wrote) TerminateProcess(processHandle.Get(), ERROR_WRITE_FAULT);
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{ 180 };
-    DWORD wait = WAIT_TIMEOUT;
-    while ((wait = WaitForSingleObject(processHandle.Get(), 50U)) == WAIT_TIMEOUT && std::chrono::steady_clock::now() < deadline) {
-        DWORD available = 0U;
-        while (PeekNamedPipe(outputRead.Get(), nullptr, 0U, nullptr, &available, nullptr) && available > 0U) {
-            std::array<char, 4096> buffer{}; DWORD read = 0U;
-            if (!ReadFile(outputRead.Get(), buffer.data(), std::min<DWORD>(available, static_cast<DWORD>(buffer.size())), &read, nullptr) || read == 0U) break;
-            if (result.toolOutput.size() + read > kMaximumOutputBytes) { TerminateProcess(processHandle.Get(), ERROR_BUFFER_OVERFLOW); break; }
-            result.toolOutput.append(buffer.data(), read);
-        }
-    }
-    if (wait == WAIT_TIMEOUT) { TerminateProcess(processHandle.Get(), ERROR_TIMEOUT); WaitForSingleObject(processHandle.Get(), 5000U); }
-    DWORD exitCode = 1U; GetExitCodeProcess(processHandle.Get(), &exitCode);
-    result.succeeded = wrote && wait != WAIT_TIMEOUT && exitCode == 0U && std::filesystem::is_regular_file(request->outputApk) &&
+    result.succeeded = run.secretsWritten && !run.timedOut && run.exitCode == 0U && std::filesystem::is_regular_file(request->outputApk) &&
         WriteResponse(responseFile, request->session);
     result.message = result.succeeded ? "Android release package signed." : "ApkSignerTool rejected or did not publish the signed package.";
     if (!result.succeeded) std::filesystem::remove(request->outputApk, filesystemError);

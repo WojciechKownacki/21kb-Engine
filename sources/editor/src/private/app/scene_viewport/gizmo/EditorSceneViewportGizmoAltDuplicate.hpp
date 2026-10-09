@@ -11,7 +11,8 @@ class EditorSceneViewportGizmoAltDuplicate {
 public:
     EditorSceneViewportGizmoAltDuplicate() = delete;
 
-    [[nodiscard]] static bool DuplicateForTranslateDrag(EditorSceneContext& sceneContext, std::optional<kb::scene::Vec3>& targetPosition);
+    [[nodiscard]] static bool DuplicateForTranslateDrag(
+        EditorSceneContext& sceneContext, const kb::math::DVec3& viewportOrigin, std::optional<kb::scene::Vec3>& targetPosition);
 };
 
 } // namespace kb::editor

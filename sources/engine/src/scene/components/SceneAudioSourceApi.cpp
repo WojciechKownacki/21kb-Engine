@@ -2,6 +2,7 @@
 #include "scene/SceneComponentMutationService.hpp"
 #include "scene/SceneComponentQueryService.hpp"
 #include "scene/SceneEntityService.hpp"
+#include "scene/SceneHistoryService.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/prefab/ScenePrefabDirtyTracker.hpp"
 
@@ -16,10 +17,12 @@ const AudioSourceComponent* SceneComponentQueryService::TryGetAudioSource(const 
 }
 
 AudioSourceComponent* SceneComponentMutationService::TryGetAudioSource(Scene& scene, SceneEntity entity) noexcept {
+    SceneHistoryService::NoteObjectChanging(scene, entity);
     return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.AudioSources().TryGet(entity) : nullptr;
 }
 
 void SceneComponentMutationService::SetAudioSource(Scene& scene, SceneEntity entity, const AudioSourceComponent& audioSource) {
+    SceneHistoryService::NoteObjectChanging(scene, entity);
     if (SceneEntityService::IsAlive(scene, entity)) {
         SceneState& state = SceneAccess::State(scene);
         state.componentStorage.AudioSources().Set(entity, audioSource);
@@ -28,6 +31,7 @@ void SceneComponentMutationService::SetAudioSource(Scene& scene, SceneEntity ent
 }
 
 void SceneComponentMutationService::RemoveAudioSource(Scene& scene, SceneEntity entity) noexcept {
+    SceneHistoryService::NoteObjectChanging(scene, entity);
     if (SceneEntityService::IsAlive(scene, entity)) {
         SceneState& state = SceneAccess::State(scene);
         state.componentStorage.AudioSources().Remove(entity);

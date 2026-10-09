@@ -1,6 +1,13 @@
 #include "engine/scene/ScenePrefabs.hpp"
 
+#include "scene/SceneAccess.hpp"
+#include "scene/SceneState.hpp"
+#include "scene/prefab/ScenePrefabRecord.hpp"
 #include "scene/prefab/ScenePrefabRegistryFacade.hpp"
+#include "scene/prefab/io/ScenePrefabAssetService.hpp"
+
+#include <algorithm>
+#include <vector>
 
 #include <utility>
 
@@ -20,6 +27,42 @@ bool ScenePrefabs::Contains(ScenePrefabHandle handle) const noexcept {
 
 std::string ScenePrefabs::Guid(ScenePrefabHandle handle) const {
     return ScenePrefabRegistryFacade::Guid(scene_, handle);
+}
+
+std::filesystem::path ScenePrefabs::SourcePath(ScenePrefabHandle handle) const {
+    const ScenePrefabRecord* record = SceneAccess::State(scene_).prefabs.FindRecord(handle);
+    return record == nullptr ? std::filesystem::path{} : std::filesystem::path{ record->sourcePath };
+}
+
+ScenePrefabHandle ScenePrefabs::FindLoaded(const std::filesystem::path& path) const {
+    return SceneAccess::State(scene_).prefabs.FindBySourcePath(ScenePrefabAssetService::SourcePathOf(path));
+}
+
+bool ScenePrefabs::UsesPrefab(ScenePrefabHandle prefab, ScenePrefabHandle used) const {
+    const ScenePrefabRegistry& registry = SceneAccess::State(scene_).prefabs;
+    std::vector<ScenePrefabHandle> pending{ prefab };
+    std::vector<ScenePrefabHandle> visited;
+    while (!pending.empty()) {
+        const ScenePrefabHandle handle = pending.back();
+        pending.pop_back();
+        if (handle == used) {
+            return true;
+        }
+        const ScenePrefabRecord* record = registry.FindRecord(handle);
+        if (record == nullptr || std::ranges::find(visited, handle) != visited.end()) {
+            continue;
+        }
+        visited.push_back(handle);
+        if (record->kind == ScenePrefabRecordKind::Variant) {
+            pending.push_back(record->basePrefab);
+        }
+        for (const ScenePrefabNodeDesc& node : record->prefab.Nodes()) {
+            if (!node.nestedPrefabGuid.empty()) {
+                pending.push_back(registry.FindByGuid(node.nestedPrefabGuid));
+            }
+        }
+    }
+    return false;
 }
 
 std::size_t ScenePrefabs::RegisteredCount() const noexcept {

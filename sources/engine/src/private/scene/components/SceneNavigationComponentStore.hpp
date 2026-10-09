@@ -22,6 +22,12 @@ public:
     void SetNavObstacle(SceneEntity entity, const NavObstacle& component);
     void RemoveNavObstacle(SceneEntity entity) noexcept;
     void MarkNavObstacleModified(SceneEntity entity) noexcept;
+    [[nodiscard]] bool HasNavLink(SceneEntity entity) const noexcept;
+    [[nodiscard]] const NavLink* TryGetNavLink(SceneEntity entity) const noexcept;
+    [[nodiscard]] NavLink* TryGetNavLink(SceneEntity entity) noexcept;
+    void SetNavLink(SceneEntity entity, const NavLink& component);
+    void RemoveNavLink(SceneEntity entity) noexcept;
+    void MarkNavLinkModified(SceneEntity entity) noexcept;
 private:
     kb::ecs::World* world_ = nullptr;
 };

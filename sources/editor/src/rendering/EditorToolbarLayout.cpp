@@ -19,27 +19,31 @@ constexpr int kDropdownTopGap = 4;
 constexpr int kDropdownWidth = 230;
 constexpr int kDropdownRowHeight = 30;
 
-constexpr std::array<EditorMenuDescriptor, 5> kMenus{{
+constexpr std::array<EditorMenuDescriptor, 6> kMenus{{
     { EditorMenuCommand::File, "File", 54 },
     { EditorMenuCommand::Edit, "Edit", 54 },
     { EditorMenuCommand::Layout, "Layout", 72 },
     { EditorMenuCommand::Options, "Options", 82 },
+    { EditorMenuCommand::World, "World", 68 },
     { EditorMenuCommand::Help, "Help", 58 },
 }};
 
 // The Layout menu is missing here on purpose: its rows are the layouts a project
 // holds, so they are built when the menu opens rather than fixed by the build.
-constexpr std::array<std::array<std::string_view, 5>, 5> kDropdownRows{{
-    { "New Scene", "Open Scene...", "Save", "Save As...", "Build Game" },
-    { "Undo", "Redo", "Duplicate", "Plugins", "" },
-    { "", "", "", "", "" },
-    { "Renderer", "Project Settings", "Editor Settings", "", "" },
-    { "Documentation", "Report Issue", "Release Notes", "About", "" },
+constexpr std::array<std::array<std::string_view, 11>, 6> kDropdownRows{{
+    { "New Scene", "Open Scene...", "Save", "Save As...", "Build Game", "", "", "", "", "", "" },
+    { "Undo", "Redo", "Duplicate", "Plugins", "", "", "", "", "", "", "" },
+    { "", "", "", "", "", "", "", "", "", "", "" },
+    { "Renderer", "Project Settings", "Editor Settings", "", "", "", "", "", "", "", "" },
+    { "Load Cells Near Camera", "Load All Cells", "Unload All Cells", "Build World and HLODs",
+      "Show or Hide Cell Grid", "Convert Scene to World", "Add Data Layer...", "Cycle Selection Data Layer",
+      "Toggle Selection Always Loaded", "Bake Navigation Mesh", "Show or Hide Navigation Mesh" },
+    { "Documentation", "Report Issue", "Release Notes", "About", "", "", "", "", "", "", "" },
 }};
 
 // How many of those rows each menu actually shows. Layout counts zero here: its
 // length comes from the project, not from the build.
-constexpr std::array<int, 5> kDropdownRowCounts{ 5, 4, 0, 3, 4 };
+constexpr std::array<int, 6> kDropdownRowCounts{ 5, 4, 0, 3, 11, 4 };
 
 // The Layout menu is the only one whose length the project decides, so the row
 // geometry has to have room for the longest one the menu model can produce.
@@ -74,7 +78,7 @@ static_assert(EditorMenuRects::MaximumRows >= EditorLayoutMenuModel::MaximumRows
 
 } // namespace
 
-const std::array<EditorMenuDescriptor, 5>& EditorToolbarLayout::MenuDescriptors() noexcept {
+const std::array<EditorMenuDescriptor, 6>& EditorToolbarLayout::MenuDescriptors() noexcept {
     return kMenus;
 }
 
@@ -102,6 +106,9 @@ EditorMenuRects EditorToolbarLayout::ResolveMenu(
             break;
         case EditorMenuCommand::Options:
             menu.options = item;
+            break;
+        case EditorMenuCommand::World:
+            menu.world = item;
             break;
         case EditorMenuCommand::Help:
             menu.help = item;
@@ -161,6 +168,9 @@ EditorMenuCommand EditorToolbarLayout::HitTestMenu(const EditorMenuRects& rects,
     if (PointInRect(rects.options, x, y)) {
         return EditorMenuCommand::Options;
     }
+    if (PointInRect(rects.world, x, y)) {
+        return EditorMenuCommand::World;
+    }
     if (PointInRect(rects.help, x, y)) {
         return EditorMenuCommand::Help;
     }
@@ -204,8 +214,10 @@ int EditorToolbarLayout::MenuIndex(EditorMenuCommand menu) noexcept {
         return 2;
     case EditorMenuCommand::Options:
         return 3;
-    case EditorMenuCommand::Help:
+    case EditorMenuCommand::World:
         return 4;
+    case EditorMenuCommand::Help:
+        return 5;
     case EditorMenuCommand::None:
     default:
         return -1;
@@ -222,6 +234,8 @@ RECT EditorToolbarLayout::MenuRectByCommand(const EditorMenuRects& rects, Editor
         return rects.layout;
     case EditorMenuCommand::Options:
         return rects.options;
+    case EditorMenuCommand::World:
+        return rects.world;
     case EditorMenuCommand::Help:
         return rects.help;
     case EditorMenuCommand::None:

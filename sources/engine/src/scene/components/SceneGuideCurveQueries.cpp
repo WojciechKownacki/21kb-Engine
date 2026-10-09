@@ -45,4 +45,15 @@ bool SceneGuideCurveEvaluate(const Scene& scene, SceneEntity entity, float param
     tangent=kb::math::Normalize(kb::math::Rotate(transform->worldRotation,{localTangent.x*transform->worldScale.x,localTangent.y*transform->worldScale.y,localTangent.z*transform->worldScale.z}));
     return IsFinite(position) && IsFinite(tangent);
 }
+
+bool SceneGuideCurveEvaluate(const Scene& scene, SceneEntity entity, float parameter, kb::math::DVec3& position, Vec3& tangent) noexcept {
+    const GuideCurveComponent* curve=scene.Components().GuideCurves().TryGet(entity);
+    const TransformComponent* transform=scene.Transforms().TryGet(entity);
+    Vec3 localPosition{}, localTangent{};
+    if (curve==nullptr || transform==nullptr || !GuideCurveEvaluateLocal(*curve,parameter,localPosition,localTangent) || !IsFinite(transform->worldPosition) || !IsFinite(transform->worldScale)) return false;
+    const Vec3 offset=kb::math::Rotate(transform->worldRotation,{localPosition.x*transform->worldScale.x,localPosition.y*transform->worldScale.y,localPosition.z*transform->worldScale.z});
+    position=scene.Transforms().WorldTranslation(entity,*transform)+offset;
+    tangent=kb::math::Normalize(kb::math::Rotate(transform->worldRotation,{localTangent.x*transform->worldScale.x,localTangent.y*transform->worldScale.y,localTangent.z*transform->worldScale.z}));
+    return IsFinite(offset) && IsFinite(tangent);
+}
 } // namespace kb::scene

@@ -2,6 +2,7 @@
 #include "scene/SceneComponentMutationService.hpp"
 #include "scene/SceneComponentQueryService.hpp"
 #include "scene/SceneEntityService.hpp"
+#include "scene/SceneHistoryService.hpp"
 #include "scene/SceneRenderProxyComponentMask.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/hierarchy/SceneHierarchyCache.hpp"
@@ -19,10 +20,12 @@ const VisibilityComponent* SceneComponentQueryService::TryGetVisibility(const Sc
 }
 
 VisibilityComponent* SceneComponentMutationService::TryGetVisibility(Scene& scene, SceneEntity entity) noexcept {
+    SceneHistoryService::NoteObjectChanging(scene, entity);
     return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.Visibility().TryGet(entity) : nullptr;
 }
 
 void SceneComponentMutationService::SetVisibility(Scene& scene, SceneEntity entity, const VisibilityComponent& visibility) {
+    SceneHistoryService::NoteObjectChanging(scene, entity);
     if (SceneEntityService::IsAlive(scene, entity)) {
         SceneState& state = SceneAccess::State(scene);
         const bool wasHidden = SceneRenderProxyMaskHas(

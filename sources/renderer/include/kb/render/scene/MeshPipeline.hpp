@@ -16,6 +16,10 @@
 #include <unordered_map>
 #include <vector>
 
+namespace kb::scene {
+class ScenePortalVisibility;
+}
+
 namespace kb::render {
 
 class SceneMeshBatchCommandCache;
@@ -55,6 +59,10 @@ struct MeshDrawCommand {
     RenderSkinningPaletteHandle currentSkinningPalette{};
     RenderSkinningPaletteHandle previousSkinningPalette{};
     std::vector<SceneRenderMeshInstance> instances;
+    // Instances produced on the GPU (a compute-written buffer in the mesh instance layout): drawn as they are,
+    // `instances` then holds one placeholder that only identifies the source.
+    bgfx::DynamicVertexBufferHandle gpuInstanceBuffer = BGFX_INVALID_HANDLE;
+    std::uint32_t gpuInstanceCount = 0U;
     // Nonzero only for a successfully validated, retained instance list.
     std::uint64_t instanceRevision = 0U;
     std::uint64_t sourceBatchId = 0U;
@@ -72,6 +80,9 @@ struct MeshPipelineBuildDesc {
     const RenderMaterialResource* resolvedMaterialResource = nullptr;
     const SceneRenderCamera* camera = nullptr;
     std::span<const SceneRenderVisibilityBlocker> visibilityBlockers{};
+    // Instances whose bounds centre lies only in visibility cells the camera cannot see are culled
+    // (shadow and gizmo passes excepted). Null culls nothing by cell.
+    const kb::scene::ScenePortalVisibility* portalVisibility = nullptr;
     SceneRenderDiagnostics* diagnostics = nullptr;
     std::uint32_t maxDrawCommands = 0;
     std::uint32_t maxVisibleInstances = 0;
@@ -111,6 +122,28 @@ struct MeshPipelineTransparentInstanceRef {
     float viewDepth = 0.0F;
 };
 
+// Clears a scratch map into its kept nodes, which EmplaceKeptNode reuses: a build that inserts no more entries
+// than an earlier one allocates no node.
+template <typename Map>
+void ClearKeepingNodes(Map& map, std::vector<typename Map::node_type>& nodes) {
+    while (!map.empty()) {
+        nodes.push_back(map.extract(map.begin()));
+    }
+}
+
+template <typename Map>
+void EmplaceKeptNode(Map& map, std::vector<typename Map::node_type>& nodes, const typename Map::key_type& key, const typename Map::mapped_type& value) {
+    if (nodes.empty()) {
+        map.emplace(key, value);
+        return;
+    }
+    typename Map::node_type node = std::move(nodes.back());
+    nodes.pop_back();
+    node.key() = key;
+    node.mapped() = value;
+    map.insert(std::move(node));
+}
+
 struct MeshPipelineBuildResult {
     std::vector<MeshDrawCommand> commands;
     std::vector<MeshDrawCommand> transparentSourceCommands;
@@ -123,6 +156,8 @@ struct MeshPipelineBuildResult {
     // Per-build cache for resource resolution shared by every instance using one material.
     // It is renderer-owned scratch and cleared at the next BuildInto call.
     std::unordered_map<std::uint64_t, MeshPipelineMaterialResolution> materialResolutionScratch;
+    std::vector<std::unordered_map<MeshCommandLookupKey, std::size_t, MeshCommandLookupKeyHash>::node_type> commandLookupNodes;
+    std::vector<std::unordered_map<std::uint64_t, MeshPipelineMaterialResolution>::node_type> materialResolutionNodes;
     // Renderer-owned frame cache. It holds only the resolved level, never authored
     // component data; caller reuse preserves hysteresis across submissions.
     std::unordered_map<std::uint64_t, std::uint8_t> detailSwitchLevels;

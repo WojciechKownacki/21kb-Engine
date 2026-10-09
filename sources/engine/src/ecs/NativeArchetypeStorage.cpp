@@ -1,6 +1,8 @@
 #include "engine/ecs/NativeArchetypeStorage.hpp"
 
+#include "ecs/GeometricReserve.hpp"
 #include "ecs/NativeArchetypeLayout.hpp"
+#include "ecs/NoInitAllocator.hpp"
 
 #include <algorithm>
 #include <array>
@@ -302,7 +304,8 @@ private:
 struct NativeChunk {
     NativeChunkBuffer payload;
     NativeSidePayloadBuffer sidePayload;
-    std::vector<Entity> entities;
+    // Rows past rowCount are never read, so a new chunk does not clear its entity slots.
+    std::vector<Entity, NoInitAllocator<Entity>> entities;
     std::vector<std::uint64_t> dirtyRowWords;
     std::vector<std::size_t> dirtyRowCounts;
     std::size_t rowCount = 0;
@@ -518,28 +521,15 @@ public:
             (chunk.dirtyRowCounts.capacity() * sizeof(std::size_t));
     }
     [[nodiscard]] std::size_t NewChunkAcquiresForAppend(std::size_t entityCount) const noexcept {
-        if (entityCount == 0U || layout_.capacity == 0U) {
-            return 0U;
-        }
-
-        std::size_t remaining = entityCount;
-        if (liveEntities_ == 0U && !chunks_.empty()) {
-            for (const NativeChunk& chunk : chunks_) {
-                const std::size_t available = layout_.capacity > chunk.rowCount ? layout_.capacity - chunk.rowCount : 0U;
-                if (available >= remaining) {
-                    return 0U;
-                }
-                remaining -= available;
-            }
-        } else if (!chunks_.empty()) {
-            const std::size_t available = layout_.capacity > chunks_.back().rowCount ? layout_.capacity - chunks_.back().rowCount : 0U;
-            if (available >= remaining) {
-                return 0U;
-            }
-            remaining -= available;
-        }
-
-        return (remaining + layout_.capacity - 1U) / layout_.capacity;
+        if (entityCount == 0U || layout_.capacity == 0U) return 0U;
+        const std::size_t activeChunks = liveEntities_ == 0U ? 0U : (liveEntities_ - 1U) / layout_.capacity + 1U;
+        const std::size_t tailRows = liveEntities_ % layout_.capacity;
+        const std::size_t tailAvailable = tailRows == 0U ? 0U : layout_.capacity - tailRows;
+        if (entityCount <= tailAvailable) return 0U;
+        const std::size_t remaining = entityCount - tailAvailable;
+        const std::size_t requiredChunks = remaining / layout_.capacity + static_cast<std::size_t>(remaining % layout_.capacity != 0U);
+        const std::size_t retainedChunks = chunks_.size() > activeChunks ? chunks_.size() - activeChunks : 0U;
+        return requiredChunks > retainedChunks ? requiredChunks - retainedChunks : 0U;
     }
 
     [[nodiscard]] bool HasComponent(ComponentId componentId) const noexcept {
@@ -584,13 +574,16 @@ public:
         if (componentVersions_.empty()) {
             componentVersions_.resize(layout_.columns.size(), 1U);
         }
-        if (chunks_.empty() || chunks_.back().rowCount == layout_.capacity) {
+        const std::size_t chunkIndex = liveEntities_ / layout_.capacity;
+        assert(chunkIndex <= chunks_.size());
+        if (chunkIndex == chunks_.size()) {
             chunks_.emplace_back(*pool_, layout_.capacity, layout_.columns.size(), DirtyWordCount(), layout_.sidePayloadBytes);
         }
-        EntityLocation location{ .chunk = chunks_.size() - 1U, .row = chunks_.back().rowCount };
-        chunks_.back().entities[location.row] = entity;
+        NativeChunk& chunk = chunks_[chunkIndex];
+        EntityLocation location{ .chunk = chunkIndex, .row = chunk.rowCount };
+        chunk.entities[location.row] = entity;
         ZeroRow(location);
-        ++chunks_.back().rowCount;
+        ++chunk.rowCount;
         ++liveEntities_;
         ++version_;
         MarkAllComponentRowsDirty(location.chunk, location.row, 1U);
@@ -607,23 +600,13 @@ public:
             componentVersions_.resize(layout_.columns.size(), 1U);
         }
         std::size_t consumed = 0;
-        const bool reuseRetainedChunks = liveEntities_ == 0U && !chunks_.empty();
-        std::size_t retainedChunkCursor = 0U;
         while (consumed < entities.size()) {
-            std::size_t chunkIndex = chunks_.size();
-            if (reuseRetainedChunks) {
-                while (retainedChunkCursor < chunks_.size() && chunks_[retainedChunkCursor].rowCount == layout_.capacity) {
-                    ++retainedChunkCursor;
-                }
-                if (retainedChunkCursor < chunks_.size()) {
-                    chunkIndex = retainedChunkCursor++;
-                }
-            } else if (!chunks_.empty() && chunks_.back().rowCount < layout_.capacity) {
-                chunkIndex = chunks_.size() - 1U;
-            }
+            // Logical rows form a dense prefix even while later physical chunks
+            // remain retained after ClearRetainingCapacity.
+            const std::size_t chunkIndex = liveEntities_ / layout_.capacity;
+            assert(chunkIndex <= chunks_.size());
             if (chunkIndex == chunks_.size()) {
                 chunks_.emplace_back(*pool_, layout_.capacity, layout_.columns.size(), DirtyWordCount(), layout_.sidePayloadBytes);
-                chunkIndex = chunks_.size() - 1U;
             }
 
             NativeChunk& chunk = chunks_[chunkIndex];
@@ -660,23 +643,13 @@ public:
             componentVersions_.resize(layout_.columns.size(), 1U);
         }
         std::size_t consumed = 0;
-        const bool reuseRetainedChunks = liveEntities_ == 0U && !chunks_.empty();
-        std::size_t retainedChunkCursor = 0U;
         while (consumed < entities.size()) {
-            std::size_t chunkIndex = chunks_.size();
-            if (reuseRetainedChunks) {
-                while (retainedChunkCursor < chunks_.size() && chunks_[retainedChunkCursor].rowCount == layout_.capacity) {
-                    ++retainedChunkCursor;
-                }
-                if (retainedChunkCursor < chunks_.size()) {
-                    chunkIndex = retainedChunkCursor++;
-                }
-            } else if (!chunks_.empty() && chunks_.back().rowCount < layout_.capacity) {
-                chunkIndex = chunks_.size() - 1U;
-            }
+            // Logical rows form a dense prefix even while later physical chunks
+            // remain retained after ClearRetainingCapacity.
+            const std::size_t chunkIndex = liveEntities_ / layout_.capacity;
+            assert(chunkIndex <= chunks_.size());
             if (chunkIndex == chunks_.size()) {
                 chunks_.emplace_back(*pool_, layout_.capacity, layout_.columns.size(), DirtyWordCount(), layout_.sidePayloadBytes);
-                chunkIndex = chunks_.size() - 1U;
             }
 
             NativeChunk& chunk = chunks_[chunkIndex];
@@ -724,8 +697,9 @@ public:
             throw std::out_of_range("Invalid native ECS row location");
         }
 
-        NativeChunk& lastChunk = chunks_.back();
-        EntityLocation last{ .chunk = chunks_.size() - 1U, .row = lastChunk.rowCount - 1U };
+        const std::size_t lastChunkIndex = (liveEntities_ - 1U) / layout_.capacity;
+        NativeChunk& lastChunk = chunks_[lastChunkIndex];
+        EntityLocation last{ .chunk = lastChunkIndex, .row = lastChunk.rowCount - 1U };
         Entity movedEntity{};
         if (location.chunk != last.chunk || location.row != last.row) {
             CopyRow(last, location);
@@ -742,7 +716,7 @@ public:
             ++componentVersion;
         }
 
-        if (lastChunk.rowCount == 0) {
+        if (lastChunk.rowCount == 0 && lastChunkIndex + 1U == chunks_.size()) {
             chunks_.pop_back();
         }
         return movedEntity;
@@ -837,6 +811,7 @@ public:
             std::fill(chunk.dirtyRowWords.begin(), chunk.dirtyRowWords.end(), 0ULL);
             std::fill(chunk.dirtyRowCounts.begin(), chunk.dirtyRowCounts.end(), 0U);
         }
+        std::ranges::fill(dirtyRowTotals_, 0U);
         liveEntities_ = 0U;
         version_ += removedCount;
         for (std::uint64_t& componentVersion : componentVersions_) {
@@ -1198,9 +1173,30 @@ public:
         }
     }
 
+    // Flags rows a bulk writer wrote, whose version it moves once with MarkComponentsModified.
+    void MarkComponentRowsWritten(ComponentId componentId, std::size_t chunkIndex, std::size_t firstRow, std::size_t count) {
+        MarkComponentRowsDirty(componentId, chunkIndex, firstRow, count);
+    }
+
     [[nodiscard]] void* TryGetComponentData(EntityLocation location, ComponentId componentId) {
         const ComponentLayout* column = FindColumn(componentId);
         return column == nullptr ? nullptr : ComponentData(location, *column);
+    }
+
+    [[nodiscard]] void* TryGetComponentDataMarkModified(EntityLocation location, ComponentId componentId) {
+        const ComponentLayout* column = FindColumn(componentId);
+        if (column == nullptr) {
+            return nullptr;
+        }
+        const std::size_t index = static_cast<std::size_t>(column - layout_.columns.data());
+        ++componentVersions_[index];
+        ++version_;
+        NativeChunk& chunk = chunks_[location.chunk];
+        std::uint64_t& word = DirtyWords(chunk, index)[location.row / 64U];
+        const std::uint64_t bit = std::uint64_t{ 1 } << (location.row % 64U);
+        AddDirtyRowCount(chunk, index, (word & bit) == 0U ? 1U : 0U);
+        word |= bit;
+        return ComponentData(location, *column);
     }
 
     [[nodiscard]] void* ComponentData(EntityLocation location, ComponentId componentId) {
@@ -1272,6 +1268,15 @@ private:
     }
 
     [[nodiscard]] const ComponentLayout* FindColumn(ComponentId componentId) const noexcept {
+        // An archetype has a few columns: a scan of the sorted ids beats a binary search on every row access.
+        if (layout_.columns.size() <= 8U) {
+            for (const ComponentLayout& column : layout_.columns) {
+                if (column.type.id >= componentId) {
+                    return column.type.id == componentId ? &column : nullptr;
+                }
+            }
+            return nullptr;
+        }
         const auto match = std::lower_bound(
             layout_.columns.begin(),
             layout_.columns.end(),
@@ -1371,7 +1376,7 @@ private:
         ValidateRowRange(chunkIndex, firstRow, count);
         const std::size_t componentIndex = ComponentColumnIndex(componentId);
         NativeChunk& chunk = chunks_[chunkIndex];
-        chunk.dirtyRowCounts[componentIndex] += SetDirtyBits(DirtyWords(chunk, componentIndex), firstRow, count);
+        AddDirtyRowCount(chunk, componentIndex, SetDirtyBits(DirtyWords(chunk, componentIndex), firstRow, count));
     }
 
     void MarkComponentRowsDirtyByIndex(std::size_t componentIndex, std::size_t chunkIndex, std::size_t firstRow, std::size_t count) {
@@ -1383,7 +1388,7 @@ private:
             throw std::out_of_range("Native ECS component column index is unavailable");
         }
         NativeChunk& chunk = chunks_[chunkIndex];
-        chunk.dirtyRowCounts[componentIndex] += SetDirtyBits(DirtyWords(chunk, componentIndex), firstRow, count);
+        AddDirtyRowCount(chunk, componentIndex, SetDirtyBits(DirtyWords(chunk, componentIndex), firstRow, count));
     }
 
     void MarkComponentAllLiveRowsDirty(ComponentId componentId) {
@@ -1392,7 +1397,7 @@ private:
             if (chunk.rowCount == 0U) {
                 continue;
             }
-            chunk.dirtyRowCounts[componentIndex] += SetDirtyBits(DirtyWords(chunk, componentIndex), 0U, chunk.rowCount);
+            AddDirtyRowCount(chunk, componentIndex, SetDirtyBits(DirtyWords(chunk, componentIndex), 0U, chunk.rowCount));
         }
     }
 
@@ -1403,7 +1408,7 @@ private:
         ValidateRowRange(chunkIndex, firstRow, count);
         NativeChunk& chunk = chunks_[chunkIndex];
         for (std::size_t componentIndex = 0U; componentIndex < layout_.columns.size(); ++componentIndex) {
-            chunk.dirtyRowCounts[componentIndex] += SetDirtyBits(DirtyWords(chunk, componentIndex), firstRow, count);
+            AddDirtyRowCount(chunk, componentIndex, SetDirtyBits(DirtyWords(chunk, componentIndex), firstRow, count));
         }
     }
 
@@ -1414,7 +1419,7 @@ private:
         ValidateRowRange(chunkIndex, firstRow, count);
         NativeChunk& chunk = chunks_[chunkIndex];
         for (std::size_t componentIndex = 0U; componentIndex < layout_.columns.size(); ++componentIndex) {
-            chunk.dirtyRowCounts[componentIndex] -= ClearDirtyBits(DirtyWords(chunk, componentIndex), firstRow, count);
+            RemoveDirtyRowCount(chunk, componentIndex, ClearDirtyBits(DirtyWords(chunk, componentIndex), firstRow, count));
         }
     }
 
@@ -1431,7 +1436,44 @@ private:
         }
     }
 
+    // The dirty rows of a component in the whole table: a clean table is skipped without visiting its chunks. Rows
+    // dropped with their chunk stay counted, so the total never falls below the rows still flagged.
+    void AddDirtyRowCount(NativeChunk& chunk, std::size_t componentIndex, std::size_t count) {
+        chunk.dirtyRowCounts[componentIndex] += count;
+        if (dirtyRowTotals_.size() <= componentIndex) {
+            dirtyRowTotals_.resize(layout_.columns.size(), 0U);
+        }
+        dirtyRowTotals_[componentIndex] += count;
+    }
+
+    void RemoveDirtyRowCount(NativeChunk& chunk, std::size_t componentIndex, std::size_t count) noexcept {
+        if (count == 0U) {
+            return;
+        }
+        chunk.dirtyRowCounts[componentIndex] -= count;
+        dirtyRowTotals_[componentIndex] -= count;
+    }
+
 public:
+    void NoteComponentWritten(ComponentId componentId) {
+        TouchComponent(componentId);
+    }
+
+    [[nodiscard]] void* TryGetComponentDataNoteWritten(EntityLocation location, ComponentId componentId) {
+        const ComponentLayout* column = FindColumn(componentId);
+        if (column == nullptr) {
+            return nullptr;
+        }
+        ++componentVersions_[static_cast<std::size_t>(column - layout_.columns.data())];
+        ++version_;
+        return ComponentData(location, *column);
+    }
+
+    [[nodiscard]] std::size_t ComponentDirtyTotal(ComponentId componentId) const {
+        const std::size_t componentIndex = ComponentColumnIndex(componentId);
+        return componentIndex < dirtyRowTotals_.size() ? dirtyRowTotals_[componentIndex] : 0U;
+    }
+
     [[nodiscard]] std::size_t ComponentDirtyCount(std::size_t chunkIndex, ComponentId componentId) const {
         if (chunkIndex >= chunks_.size()) {
             throw std::out_of_range("Invalid native ECS chunk index");
@@ -1480,7 +1522,7 @@ public:
         ValidateRowRange(chunkIndex, firstRow, resolvedCount);
         const std::size_t componentIndex = ComponentColumnIndex(componentId);
         NativeChunk& chunk = chunks_[chunkIndex];
-        chunk.dirtyRowCounts[componentIndex] -= ClearDirtyBits(DirtyWords(chunk, componentIndex), firstRow, resolvedCount);
+        RemoveDirtyRowCount(chunk, componentIndex, ClearDirtyBits(DirtyWords(chunk, componentIndex), firstRow, resolvedCount));
     }
 
 private:
@@ -1553,6 +1595,7 @@ private:
     }
 
     NativeChunkPool* pool_ = nullptr;
+    std::vector<std::size_t> dirtyRowTotals_;
     std::vector<NativeComponentType> types_;
     ComponentSignature signature_;
     ArchetypeLayout layout_;
@@ -1842,12 +1885,18 @@ public:
         tableIndicesByHash_.reserve(config.reserveArchetypes);
     }
 
+    void SetEntityIndexAvailabilityPolicy(EntityIndexAvailabilityPolicy policy, void* context) noexcept {
+        entityIndexAvailabilityPolicy_ = policy;
+        entityIndexAvailabilityContext_ = context;
+    }
+
     [[nodiscard]] Entity CreateEntity(std::span<const NativeComponentValue> components) {
-        const std::vector<NativeComponentType> types = NormalizeTypes(components);
+        std::vector<NativeComponentType>& types = createTypesScratch_;
+        NormalizeTypesInto(components, types);
         const std::size_t tableIndex = FindOrCreateTable(types);
         ArchetypeTable& table = tables_[tableIndex];
         EnsureChunkCommitBudget(table.NewChunkAcquiresForAppend(1U));
-        freeEntityIndices_.reserve(freeEntityIndices_.size() + 1U);
+        ReserveGeometric(freeEntityIndices_, freeEntityIndices_.size() + 1U);
         const Entity entity = AllocateEntity();
         bool rowAdded = false;
         EntityLocation location{};
@@ -1891,16 +1940,21 @@ public:
         EnsureChunkCommitBudget(tables_[tableIndex].NewChunkAcquiresForAppend(count));
         const std::size_t originalTableLiveEntities = tables_[tableIndex].LiveEntities();
         const std::size_t originalRecordCount = records_.size();
-        AllocateEntities(entities, count);
+        const bool preserveFreeOrder = entityIndexAvailabilityPolicy_ != nullptr;
+        std::vector<std::uint32_t> originalFreeIndices;
+        AllocateEntities(entities, count, preserveFreeOrder ? &originalFreeIndices : nullptr);
         try {
             AppendEntitiesToTable(tableIndex, entities, components, true);
         } catch (...) {
             tables_[tableIndex].RollbackAppendedRows(originalTableLiveEntities);
+            // Restore exact free-slot order, including skipped backend slots.
+            // New placeholders disappear together with the resized records.
+            if (preserveFreeOrder) freeEntityIndices_ = std::move(originalFreeIndices);
             for (Entity entity : entities) {
                 const std::uint32_t recordIndex = EntityIndex(entity);
                 if (recordIndex < originalRecordCount) {
                     records_[recordIndex].alive = false;
-                    freeEntityIndices_.push_back(recordIndex);
+                    if (!preserveFreeOrder) freeEntityIndices_.push_back(recordIndex);
                 }
             }
             records_.resize(originalRecordCount);
@@ -1926,6 +1980,9 @@ public:
         const std::vector<NativeComponentType> types = NormalizeTypes(components);
         if (ResolveAliveEntity(StripEntityGeneration(entity)).IsValid()) {
             throw std::invalid_argument("Native ECS cannot adopt an already live entity");
+        }
+        if (!EntityIndexAvailable(StripEntityGeneration(entity))) {
+            throw std::invalid_argument("Native ECS cannot adopt a backend-owned entity index");
         }
 
         const std::size_t tableIndex = FindOrCreateTable(types);
@@ -1983,6 +2040,9 @@ public:
             if (ResolveAliveEntity(StripEntityGeneration(entity)).IsValid()) {
                 throw std::invalid_argument("Native ECS cannot bulk adopt an already live entity index");
             }
+            if (!EntityIndexAvailable(StripEntityGeneration(entity))) {
+                throw std::invalid_argument("Native ECS cannot bulk adopt a backend-owned entity index");
+            }
             needsStrippedExternalSlots = needsStrippedExternalSlots || StripEntityGeneration(entity) != entity.Id();
             contiguousIds = contiguousIds && entity.Id() == expectedEntityId;
             ++expectedEntityId;
@@ -2010,7 +2070,7 @@ public:
         const std::size_t originalTableLiveEntities = tables_[tableIndex].LiveEntities();
         const std::size_t originalRecordCount = records_.size();
 
-        records_.reserve(records_.size() + entities.size());
+        ReserveGeometric(records_, records_.size() + entities.size());
         const Entity::IdType rangeFirstId = entities.front().Id();
         const Entity::IdType rangeLastIdExclusive = rangeFirstId + entities.size();
         const std::optional<std::size_t> reusableExternalRangeIndex = FindReusableExternalRangeIndex(rangeFirstId, rangeLastIdExclusive);
@@ -2018,7 +2078,7 @@ public:
             (reusableExternalRangeIndex.has_value() || !ExternalRangeOverlaps(rangeFirstId, rangeLastIdExclusive));
 
         if (registerExternalRange) {
-            externalRecordRanges_.reserve(externalRecordRanges_.size() + 1U);
+            ReserveGeometric(externalRecordRanges_, externalRecordRanges_.size() + 1U);
         } else {
             entitySlots_.reserve(entitySlots_.size() + entities.size());
         }
@@ -2128,7 +2188,7 @@ public:
         const std::uint32_t recordIndex = RecordIndex(entity);
         EntityRecord& record = LiveRecord(entity);
         if (record.ownsGeneratedId) {
-            freeEntityIndices_.reserve(freeEntityIndices_.size() + 1U);
+            ReserveGeometric(freeEntityIndices_, freeEntityIndices_.size() + 1U);
         }
         ArchetypeTable& table = tables_[record.location.table];
         const Entity movedEntity = table.RemoveAt(record.location);
@@ -2207,7 +2267,7 @@ public:
 
         movedEntitiesScratch_.reserve(entities.size());
         removedRowsScratch_.reserve(entities.size());
-        freeEntityIndices_.reserve(freeEntityIndices_.size() + entities.size());
+        ReserveGeometric(freeEntityIndices_, freeEntityIndices_.size() + entities.size());
 
         if (singleTable) {
             tables_[firstTableIndex].RemoveMany(singleTableLocations, movedEntitiesScratch_, removedRowsScratch_);
@@ -2352,6 +2412,7 @@ public:
         }
         Migrate(entity, record, sourceIndex, EdgeKind::Add, singleEdgeIdsScratch_, targetTypes, components);
         BumpStructuralVersion();
+        migrationVersion_ = structuralVersion_;
     }
 
     void AddComponents(std::span<const Entity> entities, std::span<const NativeBulkComponentColumn> components) {
@@ -2420,6 +2481,7 @@ public:
                 components);
         }
         BumpStructuralVersion(entities.size());
+        migrationVersion_ = structuralVersion_;
     }
 
     void RemoveComponents(Entity entity, std::span<const ComponentId> componentIds) {
@@ -2566,6 +2628,20 @@ public:
         tables_[archetypeIndex].MarkComponentsModified(chunkIndex, firstRow, count, componentIds);
     }
 
+    void NoteComponentWritten(std::size_t archetypeIndex, ComponentId componentId) {
+        if (archetypeIndex >= tables_.size()) {
+            throw std::out_of_range("Native ECS archetype index is invalid");
+        }
+        tables_[archetypeIndex].NoteComponentWritten(componentId);
+    }
+
+    [[nodiscard]] std::size_t ArchetypeComponentDirtyCount(std::size_t archetypeIndex, ComponentId componentId) const {
+        if (archetypeIndex >= tables_.size()) {
+            throw std::out_of_range("Native ECS archetype index is invalid");
+        }
+        return tables_[archetypeIndex].ComponentDirtyTotal(componentId);
+    }
+
     [[nodiscard]] std::size_t ComponentDirtyCount(std::size_t archetypeIndex, std::size_t chunkIndex, ComponentId componentId) const {
         if (archetypeIndex >= tables_.size()) {
             throw std::out_of_range("Native ECS archetype index is invalid");
@@ -2612,6 +2688,47 @@ public:
         if (!index.has_value()) return nullptr;
         EntityRecord& record = records_[*index];
         return tables_[record.location.table].TryGetComponentData(record.location, componentId);
+    }
+
+    [[nodiscard]] void* TryGetMutableComponentDataMarkModified(Entity entity, ComponentId componentId) {
+        const auto index = FindLiveRecordIndex(entity);
+        if (!index.has_value()) return nullptr;
+        EntityRecord& record = records_[*index];
+        return tables_[record.location.table].TryGetComponentDataMarkModified(record.location, componentId);
+    }
+
+    [[nodiscard]] void* TryGetMutableComponentDataNoteWritten(Entity entity, ComponentId componentId) {
+        const auto index = FindLiveRecordIndex(entity);
+        if (!index.has_value()) return nullptr;
+        EntityRecord& record = records_[*index];
+        return tables_[record.location.table].TryGetComponentDataNoteWritten(record.location, componentId);
+    }
+
+    [[nodiscard]] void* TryGetMutableComponentRow(Entity entity, ComponentId componentId, NativeComponentRows& row) {
+        const auto index = FindLiveRecordIndex(entity);
+        if (!index.has_value()) return nullptr;
+        const EntityLocation location = records_[*index].location;
+        void* data = tables_[location.table].TryGetComponentData(location, componentId);
+        if (data != nullptr) {
+            row = NativeComponentRows{ .archetypeIndex = location.table, .chunkIndex = location.chunk, .firstRow = location.row, .count = 1U };
+        }
+        return data;
+    }
+
+    void MarkComponentRowsModified(ComponentId componentId, std::span<const NativeComponentRows> runs) {
+        const ComponentId componentIds[]{ componentId };
+        std::size_t touchedArchetype = std::numeric_limits<std::size_t>::max();
+        for (const NativeComponentRows& run : runs) {
+            if (run.archetypeIndex >= tables_.size()) {
+                throw std::out_of_range("Native ECS archetype index is invalid");
+            }
+            if (run.archetypeIndex != touchedArchetype) {
+                tables_[run.archetypeIndex].MarkComponentsModified(run.chunkIndex, run.firstRow, run.count, componentIds);
+                touchedArchetype = run.archetypeIndex;
+            } else {
+                tables_[run.archetypeIndex].MarkComponentRowsWritten(componentId, run.chunkIndex, run.firstRow, run.count);
+            }
+        }
     }
 
     [[nodiscard]] const void* TryGetComponentData(Entity entity, ComponentId componentId) const {
@@ -2800,6 +2917,82 @@ public:
                 records.push_back(record);
             }
         }
+    }
+
+    [[nodiscard]] bool IsAppendOnlySince(std::uint64_t version) const noexcept {
+        return version != 0U && version <= structuralVersion_ && removalVersion_ <= version && migrationVersion_ <= version;
+    }
+
+    [[nodiscard]] bool RefreshMutableQueryRecordsAfterAppends(
+        std::span<const ComponentId> componentIds,
+        std::span<const ComponentId> requiredComponentIds,
+        std::span<const ComponentId> excludedComponentIds,
+        std::uint64_t structuralVersion,
+        std::vector<MutableQueryTableDispatchRecord>& records,
+        std::size_t& firstChangedRecord) {
+        if (!IsAppendOnlySince(structuralVersion) || componentIds.empty() || componentIds.size() > kQueryExecutionScratchMaxTerms) {
+            return false;
+        }
+        firstChangedRecord = records.size();
+        if (structuralVersion == structuralVersion_) {
+            return true;
+        }
+        StackComponentIdSet requiredIds;
+        StackComponentIdSet excludedIds;
+        if (!requiredIds.AssignUnion(componentIds, requiredComponentIds) || !excludedIds.Assign(excludedComponentIds)) {
+            return false;
+        }
+        const auto requiredSignature = signatureRegistry_.TryBuild(requiredIds.Values());
+        if (!requiredSignature.has_value()) {
+            return true;
+        }
+        for (std::size_t tableIndex = 0U; tableIndex < tables_.size(); ++tableIndex) {
+            ArchetypeTable& table = tables_[tableIndex];
+            if (table.LiveEntities() == 0U || !table.Matches(*requiredSignature) || HasExcludedComponent(table, excludedIds.Values())) {
+                continue;
+            }
+            const auto end = std::upper_bound(records.begin(), records.end(), tableIndex,
+                [](std::size_t index, const MutableQueryTableDispatchRecord& record) { return index < record.nativeArchetypeIndex; });
+            std::size_t insertIndex = static_cast<std::size_t>(end - records.begin());
+            std::size_t firstNewChunk = 0U;
+            if (insertIndex != 0U && records[insertIndex - 1U].nativeArchetypeIndex == tableIndex) {
+                MutableQueryTableDispatchRecord& last = records[insertIndex - 1U];
+                const std::size_t rowCount = table.ChunkRowCount(last.nativeChunkIndex);
+                if (last.entityCount != rowCount) {
+                    last.entityCount = rowCount;
+                    for (std::size_t field = 0U; field < componentIds.size(); ++field) {
+                        last.componentVersions[field] = table.ComponentVersionOrZero(componentIds[field]);
+                        last.componentDirtyCounts[field] = table.ComponentDirtyCount(last.nativeChunkIndex, componentIds[field]);
+                    }
+                    firstChangedRecord = std::min(firstChangedRecord, insertIndex - 1U);
+                }
+                firstNewChunk = last.nativeChunkIndex + 1U;
+            }
+            for (std::size_t chunkIndex = firstNewChunk; chunkIndex < table.ChunkCount(); ++chunkIndex) {
+                const std::size_t rowCount = table.ChunkRowCount(chunkIndex);
+                if (rowCount == 0U) {
+                    continue;
+                }
+                MutableQueryTableDispatchRecord record{
+                    .entityIds = table.ChunkEntityIds(chunkIndex),
+                    .entityCount = rowCount,
+                    .nativeArchetypeIndex = tableIndex,
+                    .nativeChunkIndex = chunkIndex,
+                    .firstEntityId = table.ChunkEntityIds(chunkIndex)[0],
+                };
+                for (std::size_t field = 0U; field < componentIds.size(); ++field) {
+                    record.fieldComponents[field] = table.MutableComponentColumnData(chunkIndex, componentIds[field]);
+                    record.componentVersions[field] = table.ComponentVersionOrZero(componentIds[field]);
+                    record.componentDirtyCounts[field] = table.ComponentDirtyCount(chunkIndex, componentIds[field]);
+                }
+                firstChangedRecord = std::min(firstChangedRecord, insertIndex);
+                records.insert(records.begin() + static_cast<std::ptrdiff_t>(insertIndex++), record);
+            }
+        }
+        for (std::size_t index = firstChangedRecord; index < records.size(); ++index) {
+            records[index].sequence = index;
+        }
+        return true;
     }
 
     [[nodiscard]] std::uint64_t ArchetypeVersion(Entity entity) const {
@@ -3287,10 +3480,16 @@ private:
         return false;
     }
 
+    [[nodiscard]] bool EntityIndexAvailable(Entity::IdType strippedId) const noexcept {
+        return entityIndexAvailabilityPolicy_ == nullptr
+            || entityIndexAvailabilityPolicy_(strippedId, entityIndexAvailabilityContext_);
+    }
+
     [[nodiscard]] Entity AllocateEntity() {
         for (std::size_t offset = freeEntityIndices_.size(); offset > 0U; --offset) {
             const std::uint32_t index = freeEntityIndices_[offset - 1U];
-            if (ResolveAliveEntity(PackEntity(index, 0U).Id()).IsValid()) {
+            const auto strippedId = PackEntity(index, 0U).Id();
+            if (ResolveAliveEntity(strippedId).IsValid() || !EntityIndexAvailable(strippedId)) {
                 continue;
             }
             freeEntityIndices_.erase(freeEntityIndices_.begin() + static_cast<std::ptrdiff_t>(offset - 1U));
@@ -3306,11 +3505,23 @@ private:
             if (records_.size() > std::numeric_limits<std::uint32_t>::max() - kGeneratedEntityIndexBase) {
                 throw std::runtime_error("Native ECS entity capacity exceeded");
             }
-            if (!ResolveAliveEntity(PackEntity(static_cast<std::uint32_t>(records_.size()), 0U).Id()).IsValid()) {
+            const std::uint32_t index = static_cast<std::uint32_t>(records_.size());
+            const auto strippedId = PackEntity(index, 0U).Id();
+            const bool backendAvailable = EntityIndexAvailable(strippedId);
+            if (!ResolveAliveEntity(strippedId).IsValid() && backendAvailable) {
                 break;
             }
+            if (!backendAvailable) {
+                // Reserve before growing records so a blocked slot is always
+                // retained for reuse once its backend owner is actually dead.
+                ReserveGeometric(freeEntityIndices_, freeEntityIndices_.size() + 1U);
+            }
             records_.push_back(EntityRecord{});
+            if (!backendAvailable) freeEntityIndices_.push_back(index);
         }
+        // A failed row append must be able to return this new slot without
+        // allocating, even after retaining several backend-blocked slots.
+        ReserveGeometric(freeEntityIndices_, freeEntityIndices_.size() + 1U);
         const std::uint32_t index = static_cast<std::uint32_t>(records_.size());
         Entity entity = PackEntity(index, 0U);
         records_.push_back(EntityRecord{
@@ -3323,12 +3534,17 @@ private:
         return entity;
     }
 
-    void AllocateEntities(std::vector<Entity>& entities, std::size_t count) {
+    void AllocateEntities(std::vector<Entity>& entities, std::size_t count,
+        std::vector<std::uint32_t>* originalFreeIndicesForAppend = nullptr) {
         if (count == 0U) {
             return;
         }
 
         entities.clear();
+        if (entityIndexAvailabilityPolicy_ != nullptr) {
+            AllocateAvailableEntities(entities, count, originalFreeIndicesForAppend);
+            return;
+        }
         if (!entitySlots_.empty() || !externalRecordRanges_.empty() || !strippedEntitySlots_.empty()) {
             const std::size_t originalRecordCount = records_.size();
             const std::size_t originalLiveCount = liveEntities_;
@@ -3361,7 +3577,7 @@ private:
             throw std::runtime_error("Native ECS entity capacity exceeded");
         }
         entities.reserve(count);
-        records_.reserve(records_.size() + remainingCount);
+        ReserveGeometric(records_, records_.size() + remainingCount);
         entities.resize(count);
         const std::uint32_t firstIndex = static_cast<std::uint32_t>(records_.size());
         records_.resize(records_.size() + remainingCount);
@@ -3386,6 +3602,65 @@ private:
             entities[reusedCount + offset] = entity;
         }
         liveEntities_ += count;
+    }
+
+    void AllocateAvailableEntities(std::vector<Entity>& entities, std::size_t count,
+        std::vector<std::uint32_t>* originalFreeIndicesForAppend) {
+        const std::size_t originalRecordCount = records_.size();
+        const std::size_t originalLiveCount = liveEntities_;
+        auto originalFreeIndices = freeEntityIndices_;
+        entities.reserve(count);
+        try {
+            // Inspect each retained free slot at most once in this batch.
+            for (std::size_t offset = freeEntityIndices_.size(); offset > 0U && entities.size() < count; --offset) {
+                const std::uint32_t index = freeEntityIndices_[offset - 1U];
+                const auto strippedId = PackEntity(index, 0U).Id();
+                if (ResolveAliveEntity(strippedId).IsValid() || !EntityIndexAvailable(strippedId)) continue;
+                EntityRecord& record = records_[index];
+                record.alive = true;
+                record.ownsGeneratedId = true;
+                record.entity = PackEntity(index, record.generation);
+                entities.push_back(record.entity);
+                ++liveEntities_;
+            }
+            std::erase_if(freeEntityIndices_, [this](std::uint32_t index) {
+                return records_[index].alive && records_[index].ownsGeneratedId;
+            });
+            // Keep the existing bulk order for selected LIFO recycled slots.
+            std::reverse(entities.begin(), entities.end());
+
+            const std::size_t remainingCount = count - entities.size();
+            constexpr std::size_t maxGeneratedRecords = std::numeric_limits<std::uint32_t>::max() - kGeneratedEntityIndexBase + 1U;
+            if (remainingCount != 0U && (records_.size() > maxGeneratedRecords || remainingCount > maxGeneratedRecords - records_.size())) {
+                throw std::runtime_error("Native ECS entity capacity exceeded");
+            }
+            if (remainingCount != 0U) ReserveGeometric(records_, records_.size() + remainingCount);
+            while (entities.size() < count) {
+                if (records_.size() >= maxGeneratedRecords) throw std::runtime_error("Native ECS entity capacity exceeded");
+                const std::uint32_t index = static_cast<std::uint32_t>(records_.size());
+                const Entity entity = PackEntity(index, 0U);
+                const bool backendAvailable = EntityIndexAvailable(entity.Id());
+                if (ResolveAliveEntity(entity.Id()).IsValid() || !backendAvailable) {
+                    if (!backendAvailable) ReserveGeometric(freeEntityIndices_, freeEntityIndices_.size() + 1U);
+                    records_.push_back(EntityRecord{});
+                    if (!backendAvailable) freeEntityIndices_.push_back(index);
+                    continue;
+                }
+                records_.push_back(EntityRecord{.generation = 0U, .alive = true, .ownsGeneratedId = true, .entity = entity});
+                entities.push_back(entity);
+                ++liveEntities_;
+            }
+            // Transfer the existing backup without another copy so a later
+            // row-append failure can restore interleaved skipped slots exactly.
+            if (originalFreeIndicesForAppend != nullptr) *originalFreeIndicesForAppend = std::move(originalFreeIndices);
+        } catch (...) {
+            for (Entity entity : entities) records_[EntityIndex(entity)].alive = false;
+            records_.resize(originalRecordCount);
+            freeEntityIndices_ = std::move(originalFreeIndices);
+            liveEntities_ = originalLiveCount;
+            entities.clear();
+            throw;
+        }
     }
 
     [[nodiscard]] std::uint32_t AllocateExternalRecord(Entity entity) {
@@ -3447,7 +3722,7 @@ private:
             return;
         }
         const std::size_t removedCount = liveEntities_;
-        freeEntityIndices_.reserve(freeEntityIndices_.size() + removedCount);
+        ReserveGeometric(freeEntityIndices_, freeEntityIndices_.size() + removedCount);
         for (ArchetypeTable& table : tables_) {
             if (retainCapacity) {
                 table.RemoveAllRetainingCapacity();
@@ -3683,6 +3958,7 @@ private:
     std::unordered_map<std::size_t, BulkMigrationGroup> migrationGroupsScratch_;
     std::vector<Entity> adoptedEntitiesScratch_;
     std::vector<BulkAppendRange> appendRangesScratch_;
+    std::vector<NativeComponentType> createTypesScratch_;
     std::vector<EntityLocation> targetLocationsScratch_;
     std::vector<std::pair<Entity, EntityLocation>> movedEntitiesScratch_;
     std::vector<std::size_t> removedRowsScratch_;
@@ -3692,6 +3968,9 @@ private:
     std::vector<ComponentId> singleEdgeIdsScratch_;
     std::uint64_t structuralVersion_ = 1;
     std::uint64_t removalVersion_ = 0;
+    std::uint64_t migrationVersion_ = 0;
+    EntityIndexAvailabilityPolicy entityIndexAvailabilityPolicy_ = nullptr;
+    void* entityIndexAvailabilityContext_ = nullptr;
 };
 
 NativeArchetypeStorage::NativeArchetypeStorage(WorldConfig config)
@@ -3710,6 +3989,10 @@ NativeArchetypeStorage& NativeArchetypeStorage::operator=(NativeArchetypeStorage
         impl_ = std::exchange(other.impl_, nullptr);
     }
     return *this;
+}
+
+void NativeArchetypeStorage::SetEntityIndexAvailabilityPolicy(EntityIndexAvailabilityPolicy policy, void* context) noexcept {
+    impl_->SetEntityIndexAvailabilityPolicy(policy, context);
 }
 
 Entity NativeArchetypeStorage::CreateEntity(std::span<const NativeComponentValue> components) {
@@ -3797,6 +4080,18 @@ void NativeArchetypeStorage::MarkArchetypeChunkComponentsModified(
     impl_->MarkArchetypeChunkComponentsModified(archetypeIndex, chunkIndex, firstRow, count, componentIds);
 }
 
+void* NativeArchetypeStorage::TryGetMutableComponentDataNoteWritten(Entity entity, ComponentId componentId) {
+    return impl_->TryGetMutableComponentDataNoteWritten(entity, componentId);
+}
+
+void NativeArchetypeStorage::NoteComponentWritten(std::size_t archetypeIndex, ComponentId componentId) {
+    impl_->NoteComponentWritten(archetypeIndex, componentId);
+}
+
+std::size_t NativeArchetypeStorage::ArchetypeComponentDirtyCount(std::size_t archetypeIndex, ComponentId componentId) const {
+    return impl_->ArchetypeComponentDirtyCount(archetypeIndex, componentId);
+}
+
 std::size_t NativeArchetypeStorage::ComponentDirtyCount(std::size_t archetypeIndex, std::size_t chunkIndex, ComponentId componentId) const {
     return impl_->ComponentDirtyCount(archetypeIndex, chunkIndex, componentId);
 }
@@ -3829,6 +4124,18 @@ const void* NativeArchetypeStorage::ComponentData(Entity entity, ComponentId com
 
 void* NativeArchetypeStorage::TryGetMutableComponentData(Entity entity, ComponentId componentId) {
     return impl_->TryGetMutableComponentData(entity, componentId);
+}
+
+void* NativeArchetypeStorage::TryGetMutableComponentRow(Entity entity, ComponentId componentId, NativeComponentRows& row) {
+    return impl_->TryGetMutableComponentRow(entity, componentId, row);
+}
+
+void NativeArchetypeStorage::MarkComponentRowsModified(ComponentId componentId, std::span<const NativeComponentRows> runs) {
+    impl_->MarkComponentRowsModified(componentId, runs);
+}
+
+void* NativeArchetypeStorage::TryGetMutableComponentDataMarkModified(Entity entity, ComponentId componentId) {
+    return impl_->TryGetMutableComponentDataMarkModified(entity, componentId);
 }
 
 const void* NativeArchetypeStorage::TryGetComponentData(Entity entity, ComponentId componentId) const {
@@ -3869,6 +4176,21 @@ void NativeArchetypeStorage::CollectMutableQueryRecords(
     std::span<const ComponentId> excludedComponentIds,
     std::vector<MutableQueryTableDispatchRecord>& records) {
     impl_->CollectMutableQueryRecords(componentIds, requiredComponentIds, excludedComponentIds, records);
+}
+
+bool NativeArchetypeStorage::IsAppendOnlySince(std::uint64_t structuralVersion) const noexcept {
+    return impl_ != nullptr && impl_->IsAppendOnlySince(structuralVersion);
+}
+
+bool NativeArchetypeStorage::RefreshMutableQueryRecordsAfterAppends(
+    std::span<const ComponentId> componentIds,
+    std::span<const ComponentId> requiredComponentIds,
+    std::span<const ComponentId> excludedComponentIds,
+    std::uint64_t structuralVersion,
+    std::vector<MutableQueryTableDispatchRecord>& records,
+    std::size_t& firstChangedRecord) {
+    return impl_ != nullptr && impl_->RefreshMutableQueryRecordsAfterAppends(
+        componentIds, requiredComponentIds, excludedComponentIds, structuralVersion, records, firstChangedRecord);
 }
 
 void NativeArchetypeStorage::CaptureChunkedSnapshot(std::span<const ComponentTypeInfo> componentTypes, ChunkedWorldSnapshot& snapshot) const {

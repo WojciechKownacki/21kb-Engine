@@ -21,6 +21,7 @@
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/entities/SceneEntityCounter.hpp"
+#include "scene/hierarchy/SceneHierarchyCache.hpp"
 #include "scene/ui/SceneUIGroupTransitions.hpp"
 
 #include <algorithm>
@@ -283,6 +284,9 @@ class FrameBuilder {
     }
 
     [[nodiscard]] bool Build(SceneUIFrame& output) {
+        // An element is several KB, so the caller's previous frame lends its storage to this one.
+        frame_.elements = std::move(output.elements);
+        frame_.elements.clear();
         if (SceneEntityCounter::CountWithComponent(state_.world, state_.world.Component<UICanvas>()) == 0U) {
             output = std::move(frame_);
             return true;
@@ -292,8 +296,9 @@ class FrameBuilder {
         IncludeHierarchy<UIToggle>();
         IncludeHierarchy<UISlider>();
         IncludeHierarchy<UIProgressBar>();
-        const std::vector<SceneEntity> roots = scene_.Hierarchy().RootEntities();
-        std::vector<SceneEntity> pending(roots.begin(), roots.end());
+        // Only the roots above UI objects hold UI, walked in the order of the scene's root list.
+        std::ranges::sort(uiRoots_, {}, [this](SceneEntity root) { return SceneHierarchyCache::RootSequence(state_, root); });
+        std::vector<SceneEntity> pending(uiRoots_.begin(), uiRoots_.end());
         while (!pending.empty()) {
             const SceneEntity entity = pending.back();
             pending.pop_back();
@@ -320,7 +325,7 @@ class FrameBuilder {
             for (std::size_t index = 0U; index < scene_.Hierarchy().ChildCount(entity); ++index)
                 pending.push_back(scene_.Hierarchy().ChildAt(entity, index));
         }
-        for (const SceneEntity root : roots)
+        for (const SceneEntity root : uiRoots_)
             SearchForCanvas(root);
         if (valid_)
             AppendTooltip();
@@ -346,8 +351,12 @@ class FrameBuilder {
         const_cast<kb::ecs::World&>(state_.world).CreateQuery<Component>().ForEach(
             [](SceneEntity entity, const Component&, void* context) {
                 auto& builder = *static_cast<FrameBuilder*>(context);
-                while (entity.IsValid() && builder.uiHierarchy_.insert(entity.Id()).second)
-                    entity = builder.scene_.Hierarchy().Parent(entity);
+                while (entity.IsValid() && builder.uiHierarchy_.insert(entity.Id()).second) {
+                    const SceneEntity parent = builder.scene_.Hierarchy().Parent(entity);
+                    if (!parent.IsValid() && SceneHierarchyCache::RootSequence(builder.state_, entity) != 0U)
+                        builder.uiRoots_.push_back(entity);
+                    entity = parent;
+                }
             }, this);
     }
 
@@ -1025,6 +1034,8 @@ class FrameBuilder {
         }
         const float width = Width(rect);
         const float height = Height(rect);
+        // Projected from the canvas' double-precision position: a canvas far from the origin stays steady on screen.
+        const kb::math::DVec3 placementTranslation = scene_.Transforms().WorldTranslation(entity, *placement);
         const std::size_t first = frame_.elements.size();
         Arrange(entity, {0.0F, 0.0F, width, height}, {0.0F, 0.0F, width, height}, entity, 1.0F, canvas.sortingOrder, false,
                 {}, {}, {});
@@ -1035,7 +1046,7 @@ class FrameBuilder {
                                        -(point.y - height * rect.pivot.y) / canvas.pixelsPerUnit * placement->worldScale.y,
                                        0.0F};
             const SceneRenderScreenPoint screen = SceneRenderFeedback::WorldToScreen(
-                scene_, placement->worldPosition + kb::math::Rotate(placement->worldRotation, local));
+                scene_, placementTranslation + kb::math::Rotate(placement->worldRotation, local));
             visible = visible && screen.valid && screen.viewDepth > 0.0F;
             return Vec2{screen.screenX, screen.screenY};
         };
@@ -1169,6 +1180,7 @@ class FrameBuilder {
     const Scene& scene_;
     const SceneState& state_;
     std::unordered_set<std::uint64_t> uiHierarchy_;
+    std::vector<SceneEntity> uiRoots_;
     SceneUIComponentQueries ui_;
     Vec2 viewport_{};
     // The player owning the canvas being laid out, and the soft edge of the mask around it.
@@ -2419,6 +2431,8 @@ bool SceneUIQueries::BuildFrame(float viewportWidth, float viewportHeight, Scene
         return false;
     const SceneState& state = SceneAccess::State(scene_);
     SceneUIFrame frame;
+    frame.elements = std::move(output.elements);
+    frame.elements.clear();
     if (SceneEntityCounter::CountWithComponent(state.world, state.world.Component<UICanvas>()) == 0U) {
         frame.viewportSize = {viewportWidth, viewportHeight};
     } else if (!FrameBuilder{scene_, {viewportWidth, viewportHeight}}.Build(frame)) {

@@ -176,6 +176,7 @@ RenderProxyId RenderScene::UpsertMesh(const MeshRenderProxyDesc& desc) {
     MeshRenderProxy& proxy = it->second;
     if (inserted) {
         meshContentRevision_ = NextContentRevision();
+        meshSetVersion_ = NextContentRevision();
         if (!sortedMeshProxies_.dirty) {
             if (sortedMeshProxies_.proxies.empty() ||
                 desc.entityId > sortedMeshProxies_.proxies.back()->desc.entityId) {
@@ -366,6 +367,7 @@ bool RenderScene::RemoveMesh(std::uint64_t entityId) noexcept {
     if (!RemoveMeshInstance(found->second)) InvalidateDrawGroups();
     else meshContentRevision_ = NextContentRevision();
     meshes_.erase(found);
+    meshSetVersion_ = NextContentRevision();
     sortedMeshProxies_.dirty = true;
     return true;
 }
@@ -463,6 +465,7 @@ std::uint32_t RenderScene::RemoveMeshesNotInSorted(std::span<const std::uint64_t
         }
         if (!RemoveMeshInstance(it->second)) InvalidateDrawGroups();
         it = meshes_.erase(it);
+        meshSetVersion_ = NextContentRevision();
         ++removed;
     }
     if (removed != 0U) {
@@ -579,6 +582,57 @@ const RenderScene::LightProxyMap& RenderScene::LightProxies() const noexcept {
     return lights_;
 }
 const RenderScene::VisibilityBlockerProxyMap& RenderScene::VisibilityBlockerProxies() const noexcept { return visibilityBlockers_; }
+
+kb::math::DVec3 RenderScene::RenderOriginFor(const kb::math::DVec3& eye, const RenderOriginPolicy& policy) const noexcept {
+    const bool finite = std::isfinite(eye.x) && std::isfinite(eye.y) && std::isfinite(eye.z);
+    if (!finite || (std::abs(eye.x - renderOrigin_.x) <= policy.rebaseDistance && std::abs(eye.y - renderOrigin_.y) <= policy.rebaseDistance &&
+        std::abs(eye.z - renderOrigin_.z) <= policy.rebaseDistance)) {
+        return renderOrigin_;
+    }
+    const double step = policy.gridStep > 0.0 ? policy.gridStep : 1.0;
+    return kb::math::DVec3{ std::round(eye.x / step) * step, std::round(eye.y / step) * step, std::round(eye.z / step) * step };
+}
+
+bool RenderScene::SetRenderOrigin(const kb::math::DVec3& origin) {
+    if (origin == renderOrigin_) return false;
+    const kb::math::DVec3 previous = renderOrigin_;
+    renderOrigin_ = origin;
+    ++renderOriginRevision_;
+    // No pulled transform matches a world version of UINT64_MAX: the next pull re-derives every proxy.
+    constexpr std::uint64_t kStale = UINT64_MAX;
+    for (auto& [entityId, proxy] : meshes_) proxy.pulledWorldVersion = kStale;
+    for (auto& [entityId, proxy] : cameras_) proxy.pulledWorldVersion = kStale;
+    for (auto& [entityId, proxy] : lights_) proxy.pulledWorldVersion = kStale;
+    for (auto& [entityId, proxy] : visibilityBlockers_) proxy.pulledWorldVersion = kStale;
+    for (auto& [entityId, proxy] : geometrySwarms_) proxy.pulledWorldVersion = kStale;
+    for (auto& [entityId, proxy] : surfaceCasts_) proxy.pulledWorldVersion = kStale;
+    for (auto& [entityId, proxy] : spaceStrokes_) proxy.pulledWorldVersion = kStale;
+    lightContentRevision_ = NextContentRevision();
+    InvalidateDrawGroups();
+    for (const auto& [listenerId, listener] : renderOriginListeners_) {
+        static_cast<void>(listenerId);
+        if (listener) listener(previous, renderOrigin_);
+    }
+    return true;
+}
+
+std::uint64_t RenderScene::AddRenderOriginListener(RenderOriginListener listener) {
+    const std::uint64_t listenerId = nextRenderOriginListenerId_++;
+    renderOriginListeners_.emplace_back(listenerId, std::move(listener));
+    return listenerId;
+}
+
+void RenderScene::RemoveRenderOriginListener(std::uint64_t listenerId) noexcept {
+    std::erase_if(renderOriginListeners_, [listenerId](const auto& entry) { return entry.first == listenerId; });
+}
+
+void RenderScene::SetPortalVisibility(std::optional<kb::scene::ScenePortalVisibility> visibility) {
+    portalVisibility_ = std::move(visibility);
+}
+
+const kb::scene::ScenePortalVisibility* RenderScene::PortalVisibility() const noexcept {
+    return portalVisibility_.has_value() && portalVisibility_->Active() ? &*portalVisibility_ : nullptr;
+}
 const RenderScene::GeometrySwarmProxyMap& RenderScene::GeometrySwarmProxies() const noexcept { return geometrySwarms_; }
 const RenderScene::SurfaceCastProxyMap& RenderScene::SurfaceCastProxies() const noexcept { return surfaceCasts_; }
 const RenderScene::SpaceStrokeProxyMap& RenderScene::SpaceStrokeProxies() const noexcept { return spaceStrokes_; }
@@ -960,8 +1014,10 @@ RenderScene::TransformUpdateOutcome RenderScene::ApplyMeshTransform(std::uint64_
     if (proxyIt == meshes_.end()) {
         return TransformUpdateOutcome::NotFound;
     }
+    return ApplyMeshTransform(entityId, proxyIt->second, model);
+}
 
-    MeshRenderProxy& proxy = proxyIt->second;
+RenderScene::TransformUpdateOutcome RenderScene::ApplyMeshTransform(std::uint64_t entityId, MeshRenderProxy& proxy, const std::array<float, 16>& model, bool markGroupChanged) {
     proxy.desc.model = model; // source of truth, always current
 
     // Fast path: clean cache + a location stamped by the current build. Single
@@ -973,7 +1029,7 @@ RenderScene::TransformUpdateOutcome RenderScene::ApplyMeshTransform(std::uint64_
             group.instances[proxy.instanceIndexInGroup].entityId == entityId) {
             group.instances[proxy.instanceIndexInGroup].model = model;
             // Parallel affine publication writes disjoint instances in the same page.
-            std::atomic_ref<std::uint64_t>(group.contentRevision).store(NextContentRevision(), std::memory_order_relaxed);
+            if (markGroupChanged) std::atomic_ref<std::uint64_t>(group.contentRevision).store(NextContentRevision(), std::memory_order_relaxed);
             proxy.dirty |= RenderProxyDirtyFlag::Transform;
             return TransformUpdateOutcome::InPlace;
         }
@@ -981,6 +1037,12 @@ RenderScene::TransformUpdateOutcome RenderScene::ApplyMeshTransform(std::uint64_
 
     proxy.dirty |= RenderProxyDirtyFlag::Transform;
     return TransformUpdateOutcome::Fallback;
+}
+
+void RenderScene::MarkDrawGroupContentChanged(std::uint32_t groupIndex) noexcept {
+    if (groupIndex < drawGroups_.size()) {
+        drawGroups_[groupIndex].contentRevision = NextContentRevision();
+    }
 }
 
 void RenderScene::InvalidateDrawGroupsIfFallback(TransformUpdateOutcome outcome) noexcept {
@@ -999,21 +1061,30 @@ void RenderScene::AddTransformUpdateCounts(std::uint64_t inPlace, std::uint64_t 
 }
 
 bool RenderScene::UpdateMeshTransform(std::uint64_t entityId, const std::array<float, 16>& model) {
-    const TransformUpdateOutcome outcome = ApplyMeshTransform(entityId, model);
+    const auto proxyIt = meshes_.find(entityId);
+    if (proxyIt == meshes_.end()) {
+        return false;
+    }
+    UpdateMeshTransform(entityId, proxyIt->second, model);
+    return true;
+}
+
+void RenderScene::UpdateMeshTransform(std::uint64_t entityId, const MeshRenderProxy& proxy, const std::array<float, 16>& model) {
+    // The proxy is one of meshes_, found through the const lookup.
+    const TransformUpdateOutcome outcome = ApplyMeshTransform(entityId, const_cast<MeshRenderProxy&>(proxy), model);
     switch (outcome) {
     case TransformUpdateOutcome::NotFound:
-        return false;
+        return;
     case TransformUpdateOutcome::InPlace:
         meshContentRevision_ = NextContentRevision();
         if (!surfaceCasts_.empty()) drawGroupsDirty_ = true;
         ++transformInPlaceUpdateCount_;
-        return true;
+        return;
     case TransformUpdateOutcome::Fallback:
         ++transformFallbackUpdateCount_;
         InvalidateDrawGroups();
-        return true;
+        return;
     }
-    return false;
 }
 
 } // namespace kb::render

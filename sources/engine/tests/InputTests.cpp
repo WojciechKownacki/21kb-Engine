@@ -534,6 +534,23 @@ void TestLegacyInputRecordingWithoutTextLoads() {
         "Legacy recordings should migrate with empty text input");
 }
 
+// A recording states its frame count before its frames, and a frame is well over a
+// hundred bytes in memory. This header (found by fuzzing, fuzz/corpus/input) claims
+// four million frames and carries one; it must be refused before room is made.
+void TestInputRecordingFrameCountIsNotAllocatedAhead() {
+    std::vector<std::uint8_t> bytes = EncodeInputRecording(InputRecording{InputFrameSnapshot{}});
+    constexpr std::size_t countOffset = InputAssetFormat::RecordingMagic.size() + sizeof(std::uint32_t);
+    constexpr std::uint32_t claimedFrames = 4'000'000U;
+    for (std::size_t index = 0U; index < sizeof(std::uint32_t); ++index) {
+        bytes[countOffset + index] = static_cast<std::uint8_t>((claimedFrames >> (8U * index)) & 0xFFU);
+    }
+    BeginAllocationTally();
+    const InputAssetLoadResult<InputRecording> loaded = DecodeInputRecording(bytes);
+    const AllocationTally tally = EndAllocationTally();
+    Require(!loaded.succeeded, "A recording shorter than its frame count was accepted");
+    Require(tally.bytes < 1024U * 1024U, "A recording's frame count was allocated before its frames were read");
+}
+
 // LIB-118: proves the named priority bands (Gameplay < UI < Console <
 // DebugOverlay) hold under the REAL InputMappingContextStack consumption
 // mechanism, not just as declared constants - four contexts, each binding the
@@ -1082,6 +1099,7 @@ void RunInputTests() {
     TestPressedStateResetsWhenDeviceGoesQuiet();
     TestInputRecordingDeterministicReplay();
     TestLegacyInputRecordingWithoutTextLoads();
+    TestInputRecordingFrameCountIsNotAllocatedAhead();
 }
 
 } // namespace kb::tests

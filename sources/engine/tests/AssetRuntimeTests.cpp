@@ -16,6 +16,7 @@
 #include "engine/assets/ImportedAsset.hpp"
 #include "engine/assets/ImportedAssetLoader.hpp"
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
+#include "engine/assets/streaming/BackgroundLoadService.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssetMeta.hpp"
 #include "engine/scene/SceneAssets.hpp"
@@ -34,6 +35,7 @@
 #include "engine/script/ScriptBehaviourAsset.hpp"
 #include "engine/script/ScriptBehaviourBindingService.hpp"
 #include "engine/visual/VisualGraphTypes.hpp"
+#include "scene/asset/io/SceneAssetReader.hpp"
 #include "scene/assets/SceneAssetLoader.hpp"
 #include "scene/assets/ScenePrefabAssetLoader.hpp"
 #include "scene/prefab/io/ScenePrefabAssetWriter.hpp"
@@ -67,6 +69,22 @@
 #endif
 
 namespace {
+
+// Waits on wall-clock time rather than an iteration count, so a machine loaded by
+// parallel test runs cannot starve the async worker past the check.
+template <typename Done, typename Step>
+void SpinUntil(Done&& done, Step&& step) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{ 10 };
+    while (!done() && std::chrono::steady_clock::now() < deadline) {
+        step();
+        std::this_thread::yield();
+    }
+}
+
+template <typename Done>
+void SpinUntil(Done&& done) {
+    SpinUntil(std::forward<Done>(done), [] {});
+}
 
 class TextAssetLoader final : public kb::assets::IAssetLoader {
 public:
@@ -504,9 +522,7 @@ void RunAssetManagerTrueAsyncLoadTest() {
         "Async load must remain pending while the loader is blocked");
     kb::tests::Require(!manager.IsLoaded(id), "Async request committed a payload before the worker completed");
 
-    for (std::size_t spin = 0; spin < 1000000U && !gate->entered.load(std::memory_order_acquire); ++spin) {
-        std::this_thread::yield();
-    }
+    SpinUntil([&] { return gate->entered.load(std::memory_order_acquire); });
     const bool workerEntered = gate->entered.load(std::memory_order_acquire);
     if (!workerEntered) {
         releasePromise.set_value();
@@ -519,18 +535,11 @@ void RunAssetManagerTrueAsyncLoadTest() {
         "Owner-thread pump blocked or fabricated completion while I/O was pending");
 
     releasePromise.set_value();
-    for (std::size_t spin = 0; spin < 1000000U && manager.AsyncLoadStatus(id) == kb::assets::AsyncAssetLoadStatus::Pending; ++spin) {
-        manager.PumpAsyncLoads();
-        std::this_thread::yield();
-    }
+    SpinUntil([&] { return !(manager.AsyncLoadStatus(id) == kb::assets::AsyncAssetLoadStatus::Pending); }, [&] { manager.PumpAsyncLoads(); });
     kb::tests::Require(manager.AsyncLoadStatus(id) == kb::assets::AsyncAssetLoadStatus::Completed,
         "Async worker result was not committed on the owner thread");
-    for (std::size_t spin = 0; spin < 1000000U &&
-            manager.AsyncLoadStatus(queuedMetadata->id) == kb::assets::AsyncAssetLoadStatus::Pending;
-         ++spin) {
-        manager.PumpAsyncLoads();
-        std::this_thread::yield();
-    }
+    SpinUntil([&] { return manager.AsyncLoadStatus(queuedMetadata->id) != kb::assets::AsyncAssetLoadStatus::Pending; },
+        [&] { manager.PumpAsyncLoads(); });
     kb::tests::Require(manager.AsyncLoadStatus(queuedMetadata->id) == kb::assets::AsyncAssetLoadStatus::Completed,
         "The bounded async queue did not execute its second request");
     const kb::assets::AssetHandle<std::string> typedOwner = manager.AcquireLoaded<std::string>(id);
@@ -552,20 +561,70 @@ void RunAssetManagerTrueAsyncLoadTest() {
     kb::tests::Require(cancelManager.DiscoverMountedAssets() == 3U, "Cancellation assets were not discovered");
     const kb::assets::AssetMetadata* cancelMetadata = cancelManager.Registry().FindByPath("/Game/Text/Cancelled.gated");
     kb::tests::Require(cancelMetadata != nullptr && cancelManager.RequestLoadAsync(cancelMetadata->id), "Cancellation request could not start");
-    for (std::size_t spin = 0; spin < 1000000U && !cancelGate->entered.load(std::memory_order_acquire); ++spin) {
-        std::this_thread::yield();
-    }
+    SpinUntil([&] { return cancelGate->entered.load(std::memory_order_acquire); });
     const bool cancellationWorkerEntered = cancelGate->entered.load(std::memory_order_acquire);
     static_cast<void>(cancelManager.Unload(cancelMetadata->id));
     cancelReleasePromise.set_value();
     kb::tests::Require(cancellationWorkerEntered, "Cancellation loader never entered its worker");
-    for (std::size_t spin = 0; spin < 1000000U && cancelManager.AsyncLoadStatus(cancelMetadata->id) == kb::assets::AsyncAssetLoadStatus::Pending; ++spin) {
-        cancelManager.PumpAsyncLoads();
-        std::this_thread::yield();
-    }
+    SpinUntil([&] { return cancelManager.AsyncLoadStatus(cancelMetadata->id) != kb::assets::AsyncAssetLoadStatus::Pending; },
+        [&] { cancelManager.PumpAsyncLoads(); });
     kb::tests::Require(cancelManager.AsyncLoadStatus(cancelMetadata->id) == kb::assets::AsyncAssetLoadStatus::NotRequested &&
             !cancelManager.IsLoaded(cancelMetadata->id),
         "Unload during an async request must invalidate the worker result before owner-thread commit");
+}
+
+// Asynchronous loads are jobs of the engine's one background load service: a blocked loader
+// holds one worker, while streaming reads and other users' jobs keep running, and destroying the
+// manager drops its queued loads and waits for the running one without a thread of its own.
+void RunAssetManagerAsyncLoadsShareBackgroundServiceTest() {
+    ResetTestRoot();
+    const std::filesystem::path assetsRoot = TestRoot() / "SharedServiceProject" / "Assets";
+    WriteTextFile(assetsRoot / "Text" / "Blocked.gated", "blocked payload");
+    WriteTextFile(assetsRoot / "Text" / "Dropped.gated", "dropped payload");
+
+    const std::shared_ptr<kb::assets::streaming::BackgroundLoadService> service =
+        kb::assets::streaming::BackgroundLoadService::Shared();
+    const kb::assets::streaming::BackgroundLoadServiceStats before = service->Stats();
+    std::promise<void> releasePromise;
+    auto gate = std::make_shared<AsyncLoaderGate>();
+    gate->release = releasePromise.get_future().share();
+    auto manager = std::make_unique<kb::assets::AssetManager>();
+    kb::tests::Require(manager->RegisterLoader(std::make_unique<GatedTextAssetLoader>(gate)) &&
+            manager->Mounts().Mount("Game", assetsRoot) && manager->DiscoverMountedAssets() == 2U,
+        "Shared-service fixture could not be registered");
+    const kb::assets::AssetId blocked = manager->Registry().FindByPath("/Game/Text/Blocked.gated")->id;
+    const kb::assets::AssetId dropped = manager->Registry().FindByPath("/Game/Text/Dropped.gated")->id;
+    kb::tests::Require(manager->RequestLoadAsync(blocked), "Shared-service async request was rejected");
+    SpinUntil([&] { return gate->entered.load(std::memory_order_acquire); });
+    const bool entered = gate->entered.load(std::memory_order_acquire);
+    if (!entered) {
+        releasePromise.set_value();
+    }
+    kb::tests::Require(entered, "The async loader never ran on the background load service");
+    kb::tests::Require(service->Stats().peakJobsRunning >= 1U, "The async loader did not run as a background job");
+    kb::tests::Require(manager->RequestLoadAsync(dropped), "A second async request was rejected");
+
+    // Other users of the service are not held up by the blocked loader.
+    const kb::assets::streaming::BackgroundRequestHandle read =
+        service->Read(assetsRoot / "Text" / "Blocked.gated", 0U, 7U, 0);
+    const kb::assets::streaming::BackgroundRequestHandle job = service->Run([](std::string&) { return true; }, 0);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{ 30 };
+    const bool readDone = kb::assets::streaming::BackgroundLoadService::WaitUntilDone(read, deadline);
+    const bool jobDone = kb::assets::streaming::BackgroundLoadService::WaitUntilDone(job, deadline);
+    const bool readMatches = readDone && read->State() == kb::assets::streaming::BackgroundRequestState::Completed &&
+        std::string(read->Bytes().begin(), read->Bytes().end()) == "blocked";
+
+    // Destroying the manager cancels the queued load before waiting for the blocked one.
+    std::thread owner{ [&manager] { manager.reset(); } };
+    SpinUntil([&] { return service->Stats().cancelled > before.cancelled; });
+    const bool queuedCancelled = service->Stats().cancelled > before.cancelled;
+    releasePromise.set_value();
+    owner.join();
+    kb::tests::Require(readMatches && jobDone, "A blocked asset loader held up other users of the background load service");
+    kb::tests::Require(queuedCancelled && gate->loadCount == 1U,
+        "Destroying the manager ran a queued load instead of cancelling it");
+    kb::tests::Require(service->Stats().jobsRun >= before.jobsRun + 2U,
+        "The async load did not complete as a job of the shared service");
 }
 
 void RunAssetManagerAsyncDependencyValidationTest() {
@@ -586,8 +645,7 @@ void RunAssetManagerAsyncDependencyValidationTest() {
         .virtualPath = "/Game/Text/Dependency.txt", .physicalPath = "Dependency.txt"};
     kb::tests::Require(manager.RegisterAsset(dependency), "Validation dependency registration failed");
     const bool accepted = manager.RequestLoadAsync(id);
-    for (unsigned spin = 0U; spin < 1000000U && !gate->entered.load(std::memory_order_acquire); ++spin)
-        std::this_thread::yield();
+    SpinUntil([&] { return gate->entered.load(std::memory_order_acquire); });
     const bool workerEntered = gate->validatedOnWorker.load(std::memory_order_acquire);
     // Mutation while validation is blocked must not race its immutable view or
     // let an obsolete dependency closure publish into the canonical cache.
@@ -595,10 +653,7 @@ void RunAssetManagerAsyncDependencyValidationTest() {
     release.set_value();
     kb::tests::Require(accepted && workerEntered, "Async request performed dependency validation on its owner thread");
     const auto pump = [&] {
-        for (unsigned spin = 0U; spin < 1000000U && manager.AsyncLoadStatus(id) == kb::assets::AsyncAssetLoadStatus::Pending; ++spin) {
-            manager.PumpAsyncLoads();
-            std::this_thread::yield();
-        }
+        SpinUntil([&] { return !(manager.AsyncLoadStatus(id) == kb::assets::AsyncAssetLoadStatus::Pending); }, [&] { manager.PumpAsyncLoads(); });
     };
     pump();
     kb::tests::Require(manager.AsyncLoadStatus(id) == kb::assets::AsyncAssetLoadStatus::Failed &&
@@ -638,10 +693,7 @@ void RunAssetManagerAsyncLoaderReplacementTest() {
         "Replacement-test same-type loader registration failed");
     kb::tests::Require(manager.Revision() != revisionBeforeReplacement,
         "Replacing an asset loader must invalidate cached compatibility diagnostics");
-    for (std::size_t spin = 0; spin < 1000000U && manager.AsyncLoadStatus(id) == kb::assets::AsyncAssetLoadStatus::Pending; ++spin) {
-        manager.PumpAsyncLoads();
-        std::this_thread::yield();
-    }
+    SpinUntil([&] { return !(manager.AsyncLoadStatus(id) == kb::assets::AsyncAssetLoadStatus::Pending); }, [&] { manager.PumpAsyncLoads(); });
     kb::tests::Require(manager.AsyncLoadStatus(id) == kb::assets::AsyncAssetLoadStatus::Completed,
         "Replacing a loader discarded an active async request instead of restarting it");
     const kb::assets::AssetHandle<std::string> loaded = manager.AcquireLoaded<std::string>(id);
@@ -2011,6 +2063,48 @@ void RunSceneAssetDependencyDamagedSidecarTest() {
     }
 }
 
+// A scene file's node count is a claim the nodes have yet to back up. This header
+// promises 160305 nodes, several kilobytes each, and then ends; reading it must
+// fail without first making room for all of them. Found by fuzzing
+// (fuzz/corpus/scene).
+void RunSceneAssetDeclaredNodeCountIsNotReservedTest() {
+    const std::vector<std::uint8_t> bytes{
+        0x32, 0x31, 0x4B, 0x42, 0x53, 0x43, 0x4E, 0x00, 0x28, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x32, 0x31, 0x72, 0x02, 0x00,
+    };
+    kb::tests::BeginAllocationTally();
+    const kb::scene::SceneDocumentLoadResult result = kb::scene::SceneAssetReader::Read(bytes);
+    const kb::tests::AllocationTally tally = kb::tests::EndAllocationTally();
+    kb::tests::Require(!result.succeeded, "A scene that ends before its declared nodes was accepted");
+    kb::tests::Require(tally.bytes < 32U * 1024U * 1024U,
+        "A scene's declared node count was reserved before its nodes were read");
+}
+
+// Older scenes kept dropdown options as child objects, and the readers convert them
+// before validating the hierarchy. A dropdown node naming itself as its parent (found
+// by fuzzing, fuzz/corpus/scene) became an option of its own dropdown: converting it
+// cleared the dropdown mid-loop and read past the list of options.
+void RunLegacyDropdownConversionIgnoresSelfParentTest() {
+    kb::scene::ScenePrefab prefab;
+    kb::scene::ScenePrefabNodeDesc owner{};
+    owner.stableId = 1U;
+    owner.components.ui.dropdown.emplace();
+    const std::uint32_t ownerIndex = prefab.AddNode(std::move(owner));
+    prefab.TryGetMutableNode(ownerIndex)->parentNode = ownerIndex;
+    kb::scene::ScenePrefabNodeDesc option{};
+    option.stableId = 2U;
+    option.parentNode = ownerIndex;
+    option.components.ui.text.emplace();
+    static_cast<void>(prefab.AddNode(std::move(option)));
+
+    kb::scene::SceneAssetReader::ConvertChildDropdownOptions(prefab);
+    const kb::scene::ScenePrefabNodeDesc* converted = prefab.TryGetNode(ownerIndex);
+    kb::tests::Require(converted != nullptr && converted->components.ui.dropdown.has_value() &&
+            converted->components.ui.dropdown->optionCount == 1U,
+        "A self-parented dropdown node was converted into an option of itself");
+}
+
 void RunSceneAssetDependencyStaleSidecarTest() {
     ResetTestRoot();
     const std::filesystem::path projectRoot = TestRoot() / "StaleSidecarProject";
@@ -2412,6 +2506,7 @@ void RunAssetRuntimeTests() {
     RunAssetManagerRuntimePublicationTest();
     RunAssetManagerLoadOpaqueTest();
     RunAssetManagerTrueAsyncLoadTest();
+    RunAssetManagerAsyncLoadsShareBackgroundServiceTest();
     RunAssetManagerAsyncDependencyValidationTest();
     RunAssetManagerAsyncLoaderReplacementTest();
     RunAssetManagerNewLoaderPreservesRetainedAssetsTest();
@@ -2427,6 +2522,8 @@ void RunAssetRuntimeTests() {
     RunSceneAssetDependencyWithoutSidecarTest();
     RunPackagedSceneDoesNotRequireLooseMetaTest();
     RunSceneAssetDependencyDamagedSidecarTest();
+    RunSceneAssetDeclaredNodeCountIsNotReservedTest();
+    RunLegacyDropdownConversionIgnoresSelfParentTest();
     RunSceneAssetDependencyStaleSidecarTest();
     RunSceneAssetDependencyChangesAfterDiscoveryTest();
     RunSceneAssetDependencyIgnoresScanOrderTest();

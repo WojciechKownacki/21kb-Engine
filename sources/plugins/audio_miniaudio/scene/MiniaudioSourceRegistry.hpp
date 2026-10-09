@@ -23,6 +23,7 @@ class SceneSystemContext;
 
 namespace kb::audio_miniaudio {
 
+class MiniaudioAudioSpace;
 class MiniaudioBusRegistry;
 class MiniaudioClipResolver;
 class MiniaudioOcclusionSampler;
@@ -43,6 +44,10 @@ public:
 
     void StopAll() noexcept;
     void ReleaseNativeResources() noexcept;
+    // Positions go to the mixer relative to this audio space (world space without one).
+    void SetAudioSpace(const MiniaudioAudioSpace* space) noexcept { audioSpace_ = space; }
+    // Moves the positions kept from earlier ticks with an audio origin move (MiniaudioAudioSpace::Follow).
+    void ShiftPositions(kb::scene::Vec3 shift) noexcept;
 
     [[nodiscard]] kb::audio::AudioSourceControlResult PlaySource(
         ma_engine& engine,
@@ -98,6 +103,7 @@ private:
     };
 
     static void SyncSourceFromTransform(kb::scene::SceneEntity entity, const kb::scene::TransformComponent& transform, void* context);
+    const MiniaudioAudioSpace* audioSpace_ = nullptr;
 
     void SyncSource(
         ma_engine& engine,
@@ -117,7 +123,7 @@ private:
         const SoundSignature& signature,
         const ResolvedAudioClip& clip,
         const kb::scene::AudioSourceComponent& source,
-        const kb::scene::TransformComponent& transform,
+        const kb::scene::Vec3& position,
         const kb::scene::Vec3& velocity,
         ma_sound_group* group);
 

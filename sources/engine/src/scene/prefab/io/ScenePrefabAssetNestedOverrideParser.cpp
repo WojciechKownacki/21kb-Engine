@@ -58,7 +58,9 @@ bool ScenePrefabAssetNestedOverrideParser::Parse(const ScenePrefabAssetFieldMap&
     }
 
     std::size_t overrideCount = 0;
-    if (!ScenePrefabAssetFieldParser::ParseNumber(count->second, overrideCount)) {
+    // Every override is spelled out in fields of its own, so a count beyond the node's
+    // fields is a claim nothing backs, refused before room is made for it.
+    if (!ScenePrefabAssetFieldParser::ParseNumber(count->second, overrideCount) || overrideCount > fields.size()) {
         return false;
     }
 

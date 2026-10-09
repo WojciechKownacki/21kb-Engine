@@ -39,6 +39,7 @@ add_executable(kb_editor WIN32
     src/app/EditorAssetBrowserThumbnailScaleDragHandler.cpp
     src/app/EditorAssetDropActionMenu.cpp
     src/app/EditorAssetProjectFilesDropActionExecutor.cpp
+    src/app/EditorKeyState.cpp
     src/app/EditorTextInputShortcuts.cpp
     src/app/console/EditorConsolePointerController.cpp
     src/app/cursor/EditorInternalSplitterCursorController.cpp
@@ -64,6 +65,8 @@ add_executable(kb_editor WIN32
     src/packaging/EditorAndroidSigningBroker.cpp
     src/packaging/EditorPackageProcessEnvironment.cpp
     src/packaging/EditorProjectIconTransaction.cpp
+    src/packaging/EditorSigningProcess.cpp
+    src/packaging/EditorWindowsSigningBroker.cpp
     src/app/inspector/EditorInspectorPointerController.cpp
     src/app/plugins/EditorPluginsPointerController.cpp
     src/app/EditorWindowLifecycleHandler.cpp
@@ -324,6 +327,7 @@ add_executable(kb_editor WIN32
     src/private/app/EditorAssetBrowserThumbnailScaleDragHandler.hpp
     src/private/app/EditorAssetDropActionMenu.hpp
     src/private/app/EditorAssetProjectFilesDropActionExecutor.hpp
+    src/private/app/EditorKeyState.hpp
     src/private/app/EditorTextInputShortcuts.hpp
     src/private/app/console/EditorConsolePointerController.hpp
     src/private/app/cursor/EditorInternalSplitterCursorController.hpp
@@ -615,6 +619,8 @@ add_executable(kb_editor WIN32
     src/private/packaging/EditorPackageProcessEnvironment.hpp
     src/private/packaging/EditorProjectIconTransaction.hpp
     src/private/packaging/EditorProjectPackageService.hpp
+    src/private/packaging/EditorSigningProcess.hpp
+    src/private/packaging/EditorWindowsSigningBroker.hpp
     src/private/platform/win32/EditorBuildGameFileDialog.hpp
     src/private/rendering/BuildGamePanelLayout.hpp
     src/private/rendering/BuildGamePanelModel.hpp
@@ -884,6 +890,11 @@ add_executable(kb_editor WIN32
     src/private/scene/ParticleEditorBakeHostCommand.hpp
     src/scene/ParticleEditorBakeHostCommand.cpp
     src/scene/EditorSceneDocumentLifecycle.cpp
+    src/private/scene/EditorWorldPartition.hpp
+    src/scene/EditorWorldPartition.cpp
+    src/scene/EditorSceneWorldPartition.cpp
+    src/scene/EditorNavigation.cpp
+    src/scene/EditorSceneNavigation.cpp
     src/scene/EditorSceneHierarchyActions.cpp
     src/scene/EditorSceneMaterialAssetActions.cpp
     src/scene/EditorSceneMeshAssetActions.cpp
@@ -1073,6 +1084,9 @@ if(TARGET kb_terrain_editor_plugin)
 endif()
 
 target_link_libraries(kb_editor PRIVATE user32 gdi32 gdiplus ole32 dwmapi msimg32 comdlg32 shell32 xinput)
+target_link_libraries(kb_editor PRIVATE kb_crash_reporting)
+# Build Game signs Windows packages with the signer shipped beside the editor.
+add_dependencies(kb_editor kb_authenticode_signer)
 target_compile_definitions(kb_editor PRIVATE
     "KB_EDITOR_ENGINE_ROOT=\"${CMAKE_SOURCE_DIR}\""
     "KB_EDITOR_BUILD_ROOT=\"${CMAKE_BINARY_DIR}\""
@@ -1146,12 +1160,16 @@ if(BUILD_TESTING)
         src/packaging/EditorAndroidSigningBroker.cpp
         src/packaging/EditorPackageProcessEnvironment.cpp
         src/packaging/EditorProjectIconTransaction.cpp
+        src/packaging/EditorSigningProcess.cpp
+        src/packaging/EditorWindowsSigningBroker.cpp
     )
     target_include_directories(kb_editor_build_game_tests PRIVATE include src/private)
+    add_dependencies(kb_editor_build_game_tests kb_authenticode_signer)
     target_compile_definitions(kb_editor_build_game_tests PRIVATE
         "KB_EDITOR_BUILD_GAME_TEST_ROOT=\"${CMAKE_BINARY_DIR}/editor-build-game-test-scratch\""
+        "KB_AUTHENTICODE_SIGNER=\"$<TARGET_FILE:kb_authenticode_signer>\""
     )
-    target_link_libraries(kb_editor_build_game_tests PRIVATE kb_engine ole32 shell32)
+    target_link_libraries(kb_editor_build_game_tests PRIVATE kb_engine kb_crash_reporting ole32 shell32 wintrust crypt32)
     add_test(NAME kb_editor_build_game_tests COMMAND $<TARGET_FILE:kb_editor_build_game_tests>)
     set_tests_properties(kb_editor_build_game_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
     kb_apply_quality_gates(kb_editor_build_game_tests)
@@ -1305,6 +1323,8 @@ if(BUILD_TESTING)
         src/private/scene/EditorMeshImportArtifacts.hpp
         src/scene/EditorMeshImportArtifacts.cpp
         src/scene/EditorSceneSelectionPivot.cpp
+        src/scene/EditorSceneHierarchyActions.cpp
+        src/scene/EditorHierarchyObjectFactory.cpp
         src/scene/EditorSceneAudioAssetActions.cpp
         src/scene/EditorSceneCommandController.cpp
         src/scene/EditorSceneViewportStateStore.cpp
@@ -1426,6 +1446,20 @@ if(BUILD_TESTING)
             --selftest-task "SELFTEST-UI-Anchors")
     set_tests_properties(kb_editor_ui_anchors_headless PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;ui")
+    add_test(NAME kb_editor_world_partition_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessWorldPartitionScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-World-Partition")
+    set_tests_properties(kb_editor_world_partition_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;world" TIMEOUT 180)
+    add_test(NAME kb_editor_navigation_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessNavigationScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-Navigation")
+    set_tests_properties(kb_editor_navigation_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;navigation" TIMEOUT 180)
 
     add_test(
         NAME kb_editor_headless_automation_scenario
@@ -1460,6 +1494,8 @@ if(BUILD_TESTING)
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
             LABELS "editor;particle;headless"
             TIMEOUT 180
+            # The scenario asserts save and play-transition time budgets, so it runs alone like the other performance gates.
+            RUN_SERIAL TRUE
     )
 
     kb_apply_quality_gates(kb_editor_tests)

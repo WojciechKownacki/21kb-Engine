@@ -9,6 +9,7 @@
 #include <bx/error.h>
 #include <bx/readerwriter.h>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <fstream>
@@ -391,6 +392,8 @@ TextureBakeOutput BakeTextureBytes(
     // level it was given. Padding here is what makes the tail levels defined, and a buffer that
     // is written level by level in full is what makes two runs byte-identical.
     std::vector<std::uint8_t> blocks(encodedSize, 0U);
+    std::vector<std::size_t> levelOffsets;
+    levelOffsets.reserve(chain->mipCount + 1U);
     std::vector<std::uint8_t> paddedLevel;
     std::size_t levelSourceOffset = 0U;
     std::size_t levelDestinationOffset = 0U;
@@ -411,6 +414,7 @@ TextureBakeOutput BakeTextureBytes(
             output.status = TextureBakeStatus::EncodeFailed;
             return output;
         }
+        levelOffsets.push_back(levelDestinationOffset);
 
         CopyLevelIntoBlockAlignedBuffer(
             chain->rgba8.data() + levelSourceOffset, levelWidth, levelHeight, paddedWidth, paddedHeight, paddedLevel);
@@ -439,9 +443,29 @@ TextureBakeOutput BakeTextureBytes(
         output.status = TextureBakeStatus::EncodeFailed;
         return output;
     }
+    levelOffsets.push_back(blocks.size());
 
+    // Every level whose larger edge is above the tail edge streams in a block of its own, so a
+    // texture loads with its tail and sharpens as the larger levels arrive. The primary block
+    // then holds a small header naming the full chain, followed by a KTX container of the tail.
+    std::uint32_t streamedMipCount = 0U;
+    while (streamedMipCount < chain->mipCount &&
+        std::max<std::uint32_t>(std::max<std::uint32_t>(1U, width >> streamedMipCount),
+            std::max<std::uint32_t>(1U, height >> streamedMipCount)) > kStreamedTextureTailEdge) {
+        ++streamedMipCount;
+    }
     std::vector<std::uint8_t> primaryBlock;
-    primaryBlock.reserve(blocks.size() + 128U);
+    primaryBlock.reserve(blocks.size() - levelOffsets[streamedMipCount] + 128U);
+    if (streamedMipCount != 0U) {
+        primaryBlock.insert(primaryBlock.end(), kStreamedTextureMagic.begin(), kStreamedTextureMagic.end());
+        const std::array<std::uint8_t, 12U> header{
+            1U, 0U, 0U, 0U,
+            static_cast<std::uint8_t>(width & 0xFFU), static_cast<std::uint8_t>(width >> 8U),
+            static_cast<std::uint8_t>(height & 0xFFU), static_cast<std::uint8_t>(height >> 8U),
+            chain->mipCount, static_cast<std::uint8_t>(streamedMipCount), 0U, 0U,
+        };
+        primaryBlock.insert(primaryBlock.end(), header.begin(), header.end());
+    }
     {
         BlockWriter writer{ primaryBlock };
         bx::Error writeError;
@@ -449,18 +473,24 @@ TextureBakeOutput BakeTextureBytes(
             &writer,
             bimgFormat,
             false,
-            width,
-            height,
+            static_cast<std::uint32_t>(std::max<std::uint32_t>(1U, width >> streamedMipCount)),
+            static_cast<std::uint32_t>(std::max<std::uint32_t>(1U, height >> streamedMipCount)),
             1U,
-            chain->mipCount,
+            static_cast<std::uint8_t>(chain->mipCount - streamedMipCount),
             1U,
             settings.colorSpace == RenderTextureAssetColorSpace::Srgb,
-            blocks.data(),
+            blocks.data() + levelOffsets[streamedMipCount],
             &writeError);
         if (!writeError.isOk() || primaryBlock.empty()) {
             output.status = TextureBakeStatus::EncodeFailed;
             return output;
         }
+    }
+    std::vector<std::vector<std::uint8_t>> streamedMips;
+    streamedMips.reserve(streamedMipCount);
+    for (std::uint32_t level = 0U; level < streamedMipCount; ++level) {
+        streamedMips.emplace_back(blocks.begin() + static_cast<std::ptrdiff_t>(levelOffsets[level]),
+            blocks.begin() + static_cast<std::ptrdiff_t>(levelOffsets[level + 1U]));
     }
 
     BakedAssetDescriptor descriptor{};
@@ -477,6 +507,19 @@ TextureBakeOutput BakeTextureBytes(
         output.status = TextureBakeStatus::SinkRejected;
         return output;
     }
+    for (std::uint32_t level = 0U; level < streamedMipCount; ++level) {
+        const std::string blockName = BakedTextureMipBlockName(level);
+        kb::assets::bake::BakedAssetBlock block{};
+        block.name = blockName;
+        block.residency = kb::assets::bake::BakedAssetBlockResidency::Streaming;
+        block.alignmentBytes = profile.packageBlockAlignmentBytes;
+        output.sinkStatus = sink.WriteAuxiliaryBlock(block, streamedMips[level]);
+        if (output.sinkStatus != BakedAssetSinkStatus::Success) {
+            sink.AbortAsset();
+            output.status = TextureBakeStatus::SinkRejected;
+            return output;
+        }
+    }
     output.sinkStatus = sink.CommitAsset();
     if (output.sinkStatus != BakedAssetSinkStatus::Success) {
         sink.AbortAsset();
@@ -490,6 +533,7 @@ TextureBakeOutput BakeTextureBytes(
     output.height = height;
     output.mipCount = chain->mipCount;
     output.primaryBlock = std::move(primaryBlock);
+    output.streamedMips = std::move(streamedMips);
     return output;
 }
 

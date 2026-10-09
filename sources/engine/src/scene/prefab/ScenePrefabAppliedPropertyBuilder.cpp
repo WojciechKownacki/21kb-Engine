@@ -5,6 +5,7 @@
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneUIComponentSet.hpp"
+#include "scene/prefab/ScenePrefabOverrideValueFormatter.hpp"
 #include "scene/ui/SceneUIComponentTextCodec.hpp"
 
 #include <sstream>
@@ -123,7 +124,7 @@ bool ScenePrefabAppliedPropertyBuilder::Build(Scene& scene, std::uint32_t nodeIn
     if (StartsWith(propertyPath, "transform.")) {
         const TransformComponent transform = scene.Transforms().Get(object);
         if (propertyPath == "transform.localPosition") {
-            property.value = ToString(transform.localPosition);
+            property.value = ScenePrefabOverrideValueFormatter::ToString(scene.Transforms().LocalTranslation(object.Entity(), transform));
             return true;
         }
         if (propertyPath == "transform.localRotation") {

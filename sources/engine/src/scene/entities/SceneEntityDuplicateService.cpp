@@ -6,6 +6,8 @@
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "scene/SceneAccess.hpp"
+#include "scene/SceneState.hpp"
+#include "scene/transform/SceneTransformPrecision.hpp"
 
 namespace kb::scene {
 namespace {
@@ -39,6 +41,10 @@ SceneObject DuplicateBranch(Scene& scene, SceneObject source, SceneObject parent
         .transform = scene.Transforms().Get(source),
         .visibility = scene.Components().Visibility().Get(source.Entity()),
     });
+    if (const TransformComponent* row = scene.Transforms().TryGet(source.Entity()); row != nullptr) {
+        SceneState& state = SceneAccess::State(scene);
+        SceneTransformPrecision::StoreLocalResidual(state, duplicate.Entity(), SceneTransformPrecision::LocalResidual(state, source.Entity(), *row));
+    }
     CopyOptionalComponents(scene, source, duplicate);
 
     for (const SceneEntity child : scene.Hierarchy().ChildEntities(source.Entity())) {

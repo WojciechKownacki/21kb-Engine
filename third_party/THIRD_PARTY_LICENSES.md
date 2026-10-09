@@ -2,6 +2,12 @@
 
 This directory contains external dependencies used by 21kb-Engine.
 
+`third_party_manifest.json` is the complete, machine-readable inventory of every third-party
+component compiled into, linked into or shipped with a 21kb product, with its license, copyright
+and license text. Packaging builds each player's `THIRD_PARTY_NOTICES.txt`, `Licenses/` directory
+and CycloneDX SBOM (`sbom.cdx.json`) from it; `scripts/third_party_notices.py --product engine`
+builds the same for the editor and tools. Add a dependency there before it is built into a product.
+
 ## bgfx
 
 - Repository: https://github.com/bkaradzic/bgfx
@@ -74,6 +80,47 @@ substantial portions of the software.
 Jolt Physics copyright and permission notices must be included in all copies or
 substantial portions of the software.
 
+## Monocypher
+
+- Website: https://monocypher.org
+- Release: `4.0.2`, fetched by CMake from
+  `https://monocypher.org/download/monocypher-4.0.2.tar.gz` at a pinned SHA-256
+- Files used: `src/monocypher.c`, `src/optional/monocypher-ed25519.c`
+- License selected: BSD 2-Clause (dual licensed with CC0 1.0)
+- License file: `third_party/licenses/monocypher-4.0.2.txt`
+
+Monocypher provides the engine's signatures, hashes, message authentication and
+authenticated encryption. For binary distributions the BSD copyright notice,
+license conditions and disclaimer are reproduced with the shipped licenses.
+
+## Zstandard
+
+- Repository: https://github.com/facebook/zstd
+- Release: `1.5.7`, fetched by CMake from
+  `https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz` at a pinned SHA-256
+- Files used: `lib/common`, `lib/compress` and `lib/decompress` (no legacy formats, no
+  dictionary builder, no assembly decoder)
+- License selected: BSD 3-Clause (dual licensed with GPLv2)
+- License file: `third_party/licenses/zstd-1.5.7.txt`
+
+Zstandard compresses the blocks of asset packs. For binary distributions the BSD
+copyright notice, license conditions and disclaimer are reproduced with the shipped
+licenses.
+
+## Recast & Detour
+
+- Repository: https://github.com/recastnavigation/recastnavigation
+- Release: `1.6.0`, fetched by CMake from
+  `https://github.com/recastnavigation/recastnavigation/archive/refs/tags/v1.6.0.tar.gz` at a pinned SHA-256
+- Files used: `Recast/Source`, `Detour/Source`, the path corridor, local boundary, obstacle
+  avoidance and proximity grid of `DetourCrowd/Source`, and `DetourTileCache/Source/DetourTileCacheBuilder.cpp`
+- License: Zlib
+- License file: `third_party/licenses/recastnavigation-1.6.0.txt`
+
+Recast generates the navigation meshes the engine bakes from scene geometry; Detour stores them
+as tiles, answers path queries and moves agents along path corridors. The Zlib notice is
+reproduced with the shipped licenses.
+
 ## etcpak
 
 - Repository: https://github.com/wolfpld/etcpak
@@ -124,6 +171,57 @@ Lucide copyright and permission notices must be included in all copies.
 - License file: `sources/editor/content/EditorShell/Fonts/DejaVu-LICENSE.txt`
 
 DejaVu font copyright and license notices must be retained with the font files.
+
+## Components bundled with bgfx, bx and bimg
+
+Compiled into every player:
+
+- TinySTL (BSD 2-Clause), inside bx
+- Arm ASTC Encoder (Apache 2.0)
+- TinyEXR (with OpenEXR code) (BSD 3-Clause; text in `licenses/tinyexr.txt`)
+- miniz (MIT)
+- LodePNG (zlib)
+- stb (stb_image, stb_truetype) (MIT or Unlicense)
+- meshoptimizer (MIT), also compiled into the renderer's mesh baker
+- cgltf (with jsmn) (MIT), the glTF reader
+
+21kb patches cgltf, bimg and stb_image in place to harden them against malformed files; each change is
+marked with a `21kb:` comment and described under `modified` in `third_party_manifest.json`.
+- DirectX-Headers (MIT), Windows players
+- Khronos API headers (OpenGL, OpenGL ES, EGL, Vulkan) (MIT and Apache 2.0; text in `licenses/khronos.txt`)
+- RenderDoc in-application API header (MIT; text in `licenses/renderdoc.txt`)
+- Dawn and Tint (WebGPU) (BSD 3-Clause), WebGPU players
+- AndroidX AppCompat, Games Activity and their AndroidX dependencies (Apache 2.0), Android players
+
+Compiled only into the editor, the cooker and the shader compiler:
+
+- edtaa3 (MIT)
+- Android ETC1 encoder (Apache 2.0)
+- Image Quality Assessment (IQA) (BSD 2-Clause)
+- libsquish (MIT)
+- NVIDIA Texture Tools (BC6H/BC7 codecs) (MIT and Apache 2.0)
+- PVRTC codec (BSD 2-Clause)
+- fcpp (BSD 2-Clause)
+- GLSL Optimizer (MIT)
+- glslang (BSD 3-Clause, BSD 2-Clause, MIT and Apache 2.0)
+- SPIRV-Cross (Apache 2.0)
+- SPIRV-Tools (Apache 2.0)
+- Tint (WGSL shader compiler) (BSD 3-Clause)
+
+## Lua
+
+- Website: https://www.lua.org
+- Version: 5.4.8, fetched at configure time with a pinned SHA-256 (root `CMakeLists.txt`)
+- License: MIT
+- License file: `third_party/licenses/lua-5.4.8.txt`
+
+## Editor icons
+
+- Fluent UI System Icons (MIT), `third_party/fluentui-system-icons`
+- Fluent UI toolbar icons (MIT), `third_party/luizengine-fluentui-toolbar`
+- Devicon (MIT), `third_party/devicon`
+
+Box2D is vendored but not built into any product.
 
 ## Notes
 

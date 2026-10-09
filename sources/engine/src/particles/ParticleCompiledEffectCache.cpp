@@ -71,6 +71,8 @@ void WriteEffect(std::vector<std::uint8_t>& bytes, const ParticleCompiledEffect&
         WriteBool(bytes, e.enabled); WriteUInt8(bytes, static_cast<std::uint8_t>(e.mode)); WriteUInt32(bytes, e.maxParticles);
         WriteVec3(bytes, e.localPosition); WriteQuat(bytes, e.localRotation); WriteInitialVelocity(bytes, e.initialVelocity);
         WriteFloat(bytes, e.lifetimeMin); WriteFloat(bytes, e.lifetimeMax); WriteFloat(bytes, e.prewarmSeconds);
+        WriteVec3(bytes, e.spinMinRadians); WriteVec3(bytes, e.spinMaxRadians);
+        WriteVec3(bytes, e.spinRateMinRadians); WriteVec3(bytes, e.spinRateMaxRadians);
         WriteUInt8(bytes, e.rateKeyCount); WriteUInt8(bytes, e.burstCount);
         for (std::uint8_t index = 0U; index < e.rateKeyCount; ++index) WriteCurveKey(bytes, e.rateKeys[index]);
         for (std::uint8_t index = 0U; index < e.burstCount; ++index) {
@@ -186,7 +188,8 @@ bool ReadEffect(Reader& reader, ParticleCompiledEffect& effect) {
             !reader.Bool(e.enabled) || !reader.U8(mode) || mode > static_cast<std::uint8_t>(kb::scene::ParticleSpawnMode::Burst) ||
             !reader.U32(e.maxParticles) || !reader.Vec3(e.localPosition) || !reader.Quat(e.localRotation) ||
             !reader.InitialVelocity(e.initialVelocity) || !reader.F(e.lifetimeMin) || !reader.F(e.lifetimeMax) ||
-            !reader.F(e.prewarmSeconds) || !reader.U8(e.rateKeyCount) || e.rateKeyCount > kb::scene::kParticleEffectMaxCurveKeys ||
+            !reader.F(e.prewarmSeconds) || !reader.Vec3(e.spinMinRadians) || !reader.Vec3(e.spinMaxRadians) ||
+            !reader.Vec3(e.spinRateMinRadians) || !reader.Vec3(e.spinRateMaxRadians) || !reader.U8(e.rateKeyCount) || e.rateKeyCount > kb::scene::kParticleEffectMaxCurveKeys ||
             !reader.U8(e.burstCount) || e.burstCount > kb::scene::kParticleEffectMaxBursts) return false;
         e.outputType = static_cast<kb::scene::ParticleOutputType>(output); e.blendMode = static_cast<kb::scene::ParticleBlendMode>(blend);
         e.sortMode = static_cast<kb::scene::ParticleSortMode>(sort); e.alignment = static_cast<kb::scene::ParticleAlignment>(alignment);

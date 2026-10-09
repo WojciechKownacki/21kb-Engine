@@ -6,14 +6,11 @@
 #include "engine/assets/AssetMountTable.hpp"
 #include "engine/assets/IAssetLoader.hpp"
 
-#include <condition_variable>
-#include <deque>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
-#include <thread>
 #include <typeindex>
 #include <unordered_map>
 #include <vector>
@@ -25,6 +22,9 @@ class AssetRuntimeLoadService;
 class AssetRegistrySnapshotCache;
 namespace bake {
 class RuntimeAssetPack;
+}
+namespace streaming {
+class BackgroundLane;
 }
 
 // LIB-158: how the runtime cache retains a loaded asset's payload.
@@ -345,11 +345,14 @@ private:
         std::shared_ptr<AsyncPreparedState> state;
     };
 
-    void StartAsyncWorker();
-    void StopAsyncWorker() noexcept;
+    // Asynchronous loads run as jobs of one lane of the engine's background load service, so a
+    // manager's loaders run one at a time and never on the owner thread.
+    void QueueAsyncLoad(AsyncLoadJob job);
+    // Cancels the queued loads and waits for the one running, so the caller may change the
+    // loaders or the registry.
+    void StopAsyncLoads() noexcept;
     void RestartAsyncLoads();
     void PrepareAsyncLoad(AsyncLoadJob job) noexcept;
-    void RunAsyncWorker() noexcept;
     [[nodiscard]] std::shared_ptr<void> LoadUntyped(AssetId id, std::type_index expectedType);
 
     template <typename T>
@@ -376,11 +379,7 @@ private:
     std::unordered_map<std::uint64_t, AsyncLoadRecord> asyncLoads_;
     std::unordered_map<std::uint64_t, std::string> asyncLoadErrors_;
     std::unordered_map<std::uint64_t, std::uint64_t> asyncLoadGenerations_;
-    std::mutex asyncWorkerMutex_;
-    std::condition_variable asyncWorkerWake_;
-    std::deque<AsyncLoadJob> asyncWorkerQueue_;
-    bool asyncWorkerStopping_ = false;
-    std::thread asyncWorker_;
+    std::unique_ptr<streaming::BackgroundLane> asyncLane_;
     mutable std::string lastError_;
     std::uint64_t revision_ = 1;
     mutable std::uint64_t cachedVirtualFoldersRevision_ = 0;

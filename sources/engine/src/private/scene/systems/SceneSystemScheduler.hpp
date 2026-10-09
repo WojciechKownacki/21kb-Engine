@@ -28,7 +28,9 @@ public:
     [[nodiscard]] bool RequiresFixedStep() const noexcept;
     [[nodiscard]] std::size_t Size() const noexcept { return systems_.size(); }
     void BeginFrame(Scene& scene, float deltaSeconds);
+    void EndUpdate(Scene& scene, float deltaSeconds);
     void Update(Scene& scene, float deltaSeconds, SceneUpdatePhase phase);
+    void FixedStepBegin(Scene& scene, float fixedDeltaSeconds);
     void FixedUpdate(Scene& scene, float fixedDeltaSeconds, SceneFixedUpdatePhase phase);
     void Shutdown(Scene& scene) noexcept;
 

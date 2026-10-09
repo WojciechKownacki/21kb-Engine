@@ -9,11 +9,13 @@
 #include "kb/render/resources/RenderMeshAssetBuilder.hpp"
 #include "kb/render/resources/RenderResourceRegistry.hpp"
 #include "kb/render/scene/RenderInstanceBuffer.hpp"
+#include "kb/render/shadow/PointShadowUniforms.hpp"
 
 #include <bgfx/bgfx.h>
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstring>
 #include <cstdint>
 #include <cstdio>
@@ -117,10 +119,11 @@ struct ForwardRenderProbe {
 [[nodiscard]] bool CookShaderSource(
     const std::filesystem::path& source,
     const std::filesystem::path& output,
-    std::string_view type) {
+    std::string_view type,
+    std::string_view profile = "s_5_0") {
     std::ostringstream command;
     command << '"' << '"' << KB_TEST_GRAPH_SHADERC_PATH << '"'
-        << " --type " << type << " --platform windows --profile s_5_0"
+        << " --type " << type << " --platform windows --profile " << profile
         << " -f \"" << source.generic_string() << '"'
         << " -o \"" << output.generic_string() << '"'
         << " --varyingdef \"" << KB_TEST_GRAPH_SHADER_VARYING_DEF << '"'
@@ -374,12 +377,12 @@ struct ForwardRenderProbe {
 
 class ForwardRenderHarness {
 public:
-    [[nodiscard]] bool Init() {
+    [[nodiscard]] bool Init(bgfx::RendererType::Enum renderer = bgfx::RendererType::Direct3D11) {
 #if defined(_WIN32)
         window_ = CreateWindowExW(0, L"STATIC", L"mat08", WS_OVERLAPPEDWINDOW, 0, 0, 64, 64, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
 #endif
         bgfx::Init init;
-        init.type = bgfx::RendererType::Direct3D11;
+        init.type = renderer;
         init.resolution.width = 64U;
         init.resolution.height = 64U;
         init.resolution.reset = BGFX_RESET_NONE;
@@ -445,6 +448,22 @@ public:
             lightColorIntensity[2] = 1.0F;
             lightColorIntensity[3] = 9.0F;
         }
+        if (pointShadowBinding_ != nullptr) {
+            lightParams = { 1.0F, 0.0F, 0.0F, 0.0F };
+            ambient = { 0.0F, 0.0F, 0.0F, 1.0F };
+            environmentZenith = { 0.0F, 0.0F, 0.0F, 1.0F };
+            environmentGround = { 0.0F, 0.0F, 0.0F, 1.0F };
+            envParams = { 0.0F, 0.0F, 0.0F, 0.0F };
+            lightDirKind[3] = 1.0F; // point light 3 m above the quad, at the origin of its plane
+            lightPositionRange[0] = pointShadowBinding_->positionRange[0];
+            lightPositionRange[1] = pointShadowBinding_->positionRange[1];
+            lightPositionRange[2] = pointShadowBinding_->positionRange[2];
+            lightPositionRange[3] = pointShadowBinding_->positionRange[3];
+            lightColorIntensity[0] = 1.0F;
+            lightColorIntensity[1] = 1.0F;
+            lightColorIntensity[2] = 1.0F;
+            lightColorIntensity[3] = 12.0F;
+        }
         // u_time.x = time (MAT-72); .y = per-instance random, .z = object radius (MAT-77 proof lanes).
         const std::array<float, 4U> timeConstants{ time, instanceRandom, objectRadius, 0.0F };
         const std::array<float, 4U> dynamicParameter{ dynamicR, dynamicG, dynamicB, dynamicA };
@@ -465,6 +484,10 @@ public:
         bgfx::setUniform(uTime_, timeConstants.data());
         bgfx::setUniform(uDynamicParameter_, dynamicParameter.data());
         bgfx::setUniform(uMaterialParams_, materialParams.data());
+        if (pointShadowBinding_ != nullptr) {
+            const std::array<float, ScenePointShadowBinding::kMaxLights> lightSlots{ 0.0F, -1.0F, -1.0F, -1.0F };
+            pointShadowUniforms_.Set(pointShadowBinding_, lightSlots, pointShadowAtlas_, PointShadowUniforms::kGraphSamplerStage);
+        }
         if (bgfx::isValid(graphUniform) && graphUniformValue != nullptr) {
             bgfx::setUniform(graphUniform, graphUniformValue->data());
         }
@@ -661,7 +684,18 @@ public:
         return ProbeAt(RenderPixels(program, sampler, texture, time), 32U, 32U);
     }
 
+    // Lights the next renders with one point light above the quad whose shadow atlas is `atlas`;
+    // pass a null binding to go back to the default lighting.
+    void SetPointShadow(const ScenePointShadowBinding* binding, bgfx::TextureHandle atlas) {
+        if (!pointShadowUniforms_.IsValid()) {
+            pointShadowUniforms_.Create();
+        }
+        pointShadowBinding_ = binding;
+        pointShadowAtlas_ = atlas;
+    }
+
     void Shutdown() {
+        pointShadowUniforms_.Destroy();
         bgfx::destroy(uSceneDepth_);
         bgfx::destroy(uSceneColor_);
         bgfx::destroy(uMaterialParams_);
@@ -711,6 +745,9 @@ private:
     bgfx::UniformHandle uMaterialParams_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle uSceneColor_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle uSceneDepth_ = BGFX_INVALID_HANDLE;
+    PointShadowUniforms pointShadowUniforms_{};
+    const ScenePointShadowBinding* pointShadowBinding_ = nullptr;
+    bgfx::TextureHandle pointShadowAtlas_ = BGFX_INVALID_HANDLE;
 };
 
 void RunTerrainLayerWeightTextureUpdatesGpuTest() {
@@ -1669,6 +1706,72 @@ void RunForwardGraphRenderTest() {
     Require(static_cast<std::uint32_t>(dielectric.r) + dielectric.g + dielectric.b > static_cast<std::uint32_t>(metal.r) + metal.g + metal.b + 30U,
         "KBMAT-MAT08: A metallic surface must change the BRDF and render darker than the dielectric surface");
 
+    harness.Shutdown();
+}
+
+// A graph material must darken under a point-light shadow like the builtin material does. The shadow
+// atlas is filled by hand: stored depth 0 is the (reverse-z) far plane, so nothing occludes; stored
+// depth 1 is the near plane, so everything between it and the light is occluded.
+void RunForwardGraphPointShadowTest() {
+    const std::filesystem::path cacheDir = std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "a3_point_shadow";
+    std::error_code error;
+    std::filesystem::remove_all(cacheDir, error);
+    std::filesystem::create_directories(cacheDir, error);
+    const std::filesystem::path vsBin = cacheDir / "vs_graph_probe.bin";
+    Require(CookHarnessVertexShader(vsBin), "A3: harness vertex shader must cook");
+    const std::vector<std::uint8_t> vsBytes = ReadAllBytes(vsBin);
+
+    RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+    RenderMaterialGraphNode white{ .id = 2U, .kind = RenderMaterialGraphNodeKind::ConstantColor, .positionX = 40, .positionY = 40 };
+    white.parameter.defaultValueHint = "0.9 0.9 0.9 1";
+    graph.nodes.push_back(white);
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantColor, 2U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+    const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(graph, RenderMaterialGraphBuildContext{ .assetId = 0x0A30U });
+    Require(compiled.Succeeded(), "A3: point shadow graph must compile");
+    const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Dxbc };
+    const RenderMaterialGraphShaderArtifactResult cooked = CookRenderMaterialGraphShaderArtifact(compiled.shader, backends, CookRequest(cacheDir.generic_string()));
+    Require(cooked.Succeeded() && cooked.artifact.has_value(), "A3: point shadow graph must cook");
+
+    ForwardRenderHarness harness;
+    Require(harness.Init(), "A3: a Direct3D11 device is required to prove graph point shadows");
+    const bgfx::ProgramHandle program = BuildGraphProgram(vsBytes, *cooked.artifact);
+    Require(bgfx::isValid(program), "A3: point shadow graph program must link");
+
+    constexpr std::uint32_t kTile = 8U;
+    constexpr std::uint32_t kAtlasWidth = kTile * ScenePointShadowBinding::kFaceCount;
+    constexpr std::uint32_t kAtlasHeight = kTile * ScenePointShadowBinding::kMaxLights;
+    const auto makeAtlas = [&](float storedDepth) {
+        const std::vector<float> texels(static_cast<std::size_t>(kAtlasWidth) * kAtlasHeight, storedDepth);
+        return bgfx::createTexture2D(static_cast<std::uint16_t>(kAtlasWidth), static_cast<std::uint16_t>(kAtlasHeight), false, 1U,
+            bgfx::TextureFormat::R32F, BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT | BGFX_SAMPLER_MIP_POINT,
+            bgfx::copy(texels.data(), static_cast<std::uint32_t>(texels.size() * sizeof(float))));
+    };
+    const bgfx::TextureHandle openAtlas = makeAtlas(0.0F);
+    const bgfx::TextureHandle blockedAtlas = makeAtlas(1.0F);
+    Require(bgfx::isValid(openAtlas) && bgfx::isValid(blockedAtlas), "A3: shadow atlas textures must be created");
+
+    ScenePointShadowBinding binding{};
+    binding.lightCount = 1U;
+    binding.entityId[0] = 1U;
+    binding.positionRange = { 0.0F, 0.0F, 3.0F, 20.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F };
+    binding.depthParams = { 0.1F, 0.01F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F };
+    binding.atlas = { 1.0F / kAtlasWidth, 1.0F / kAtlasHeight, static_cast<float>(kTile), std::tan(47.5F * 3.14159265F / 180.0F) };
+    binding.strength = 1.0F;
+
+    binding.depthTexture = openAtlas;
+    harness.SetPointShadow(&binding, openAtlas);
+    const ForwardRenderProbe lit = harness.Render(program, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE);
+    binding.depthTexture = blockedAtlas;
+    harness.SetPointShadow(&binding, blockedAtlas);
+    const ForwardRenderProbe shadowed = harness.Render(program, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE);
+    harness.SetPointShadow(nullptr, BGFX_INVALID_HANDLE);
+    std::fprintf(stderr, "graph_point_shadow lit=%u,%u,%u shadowed=%u,%u,%u\n", lit.r, lit.g, lit.b, shadowed.r, shadowed.g, shadowed.b);
+    Require(lit.r > 40U, "A3: the graph material must be lit by the point light when nothing occludes it");
+    Require(static_cast<std::uint32_t>(shadowed.r) * 4U < lit.r, "A3: an occluded point light must darken the graph material");
+
+    bgfx::destroy(blockedAtlas);
+    bgfx::destroy(openAtlas);
+    bgfx::destroy(program);
     harness.Shutdown();
 }
 
@@ -4943,6 +5046,7 @@ void RunGraphForwardGpuRenderTests() {
     RunDeferredGBufferTextureNormalMapReadbackProofTest();
     RunForwardGraphRenderTest();
     RunForwardGraphNormalMapLightingTest();
+    RunForwardGraphPointShadowTest();
     RunForwardGraphAcceptanceSuiteTest();
     RunForwardGraphOrganizationNodesRenderTest();
     RunForwardGraphTimeAnimationTest();
@@ -4986,9 +5090,116 @@ void RunGraphForwardGpuRenderTests() {
 #endif
 }
 
+#if defined(KB_TEST_GRAPH_SHADERC_PATH)
+// The committed Vulkan and OpenGL binaries of the skinned vertex stages, executed on those
+// backends: the same palette deformation readback as SMA-38, with the vertex shader under test
+// loaded from prebuilt_shaders/<profile> instead of cooked for Direct3D. A backend this machine
+// cannot create a device for is reported and skipped; a backend that runs must pass.
+void RunPrebuiltSkinnedShadersOnVulkanAndOpenGlTest() {
+    struct Backend {
+        bgfx::RendererType::Enum renderer;
+        const char* profileDirectory;
+        const char* shadercProfile;
+    };
+    constexpr std::array<Backend, 2U> backends{
+        Backend{ bgfx::RendererType::Vulkan, "spirv", "spirv" },
+        Backend{ bgfx::RendererType::OpenGL, "glsl", "120" },
+    };
+    const std::filesystem::path prebuilt =
+        std::filesystem::path{ KB_RENDERER_TEST_SOURCE_ROOT } / "sources" / "renderer" / "prebuilt_shaders";
+    const std::filesystem::path cacheDir = std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "prebuilt_skinned_backends";
+    std::error_code error;
+    std::filesystem::remove_all(cacheDir, error);
+    std::filesystem::create_directories(cacheDir, error);
+    const auto writeFragment = [&](std::string_view name, std::string_view input, std::string_view body) {
+        const std::filesystem::path source = cacheDir / (std::string{ name } + ".sc");
+        std::ofstream output{ source, std::ios::binary | std::ios::trunc };
+        output << "$input " << input << "\n#include <bgfx_shader.sh>\nvoid main() { " << body << " }\n";
+        return source;
+    };
+    const std::filesystem::path baseFragment = writeFragment("fs_skinned_probe",
+        "v_normal, v_color0, v_texcoord0, v_worldPos, v_shadowPos, v_shadowFlags, v_tangent, v_bitangent, v_objectLocalPos, v_objectWorldPos, v_objectOrientation, v_preSkinnedNormal",
+        "gl_FragColor = vec4((v_worldPos.x - v_objectLocalPos.x) * 0.5 + 0.5, 0.0, 0.0, 1.0);");
+    const std::filesystem::path shadowFragment = writeFragment("fs_skinned_shadow_probe", "v_color0, v_texcoord0", "gl_FragColor = vec4(v_texcoord0.x, 0.0, 0.0, 1.0);");
+    const std::filesystem::path motionFragment = writeFragment("fs_skinned_motion_probe", "v_currentClip, v_previousClip",
+        "float velocityX = v_currentClip.x / v_currentClip.w - v_previousClip.x / v_previousClip.w; gl_FragColor = vec4(velocityX * 0.5 + 0.5, 0.0, 0.0, 1.0);");
+    const std::array<std::tuple<const char*, const char*, std::filesystem::path, bool>, 4U> variants{{
+        { "base_gbuffer_selection", "vs_mesh_skinned_instanced.sc.bin", baseFragment, false },
+        { "depth_shadow", "vs_mesh_shadow_skinned_instanced.sc.bin", shadowFragment, false },
+        { "motion_vectors", "vs_mesh_skinned_motion_vectors_instanced.sc.bin", motionFragment, true },
+        { "static_motion_vectors", "vs_mesh_motion_vectors_instanced.sc.bin", motionFragment, true },
+    }};
+    for (const Backend& backend : backends) {
+        ForwardRenderHarness harness;
+        const bool initialized = harness.Init(backend.renderer);
+        if (!initialized || bgfx::getRendererType() != backend.renderer) {
+            std::fprintf(stderr, "prebuilt skinned shaders on %s: skipped, no %s device on this machine\n",
+                bgfx::getRendererName(backend.renderer), bgfx::getRendererName(backend.renderer));
+            if (initialized) {
+                harness.Shutdown();
+            }
+            continue;
+        }
+        const bgfx::UniformHandle paletteSampler = bgfx::createUniform("s_skinningPalette", bgfx::UniformType::Sampler);
+        const bgfx::UniformHandle paletteInfo = bgfx::createUniform("u_skinningPaletteInfo", bgfx::UniformType::Vec4);
+        const bgfx::UniformHandle previousPaletteSampler = bgfx::createUniform("s_previousSkinningPalette", bgfx::UniformType::Sampler);
+        const bgfx::UniformHandle previousPaletteInfo = bgfx::createUniform("u_previousSkinningPaletteInfo", bgfx::UniformType::Vec4);
+        const bgfx::UniformHandle previousViewProjection = bgfx::createUniform("u_motionPreviousViewProjection", bgfx::UniformType::Mat4);
+        const bgfx::UniformHandle shadowViewProjection = bgfx::createUniform("u_shadowViewProj", bgfx::UniformType::Mat4);
+        for (const auto& [name, vertexBinaryName, fragmentSource, motionVectors] : variants) {
+            const std::vector<std::uint8_t> vertexBytes = ReadAllBytes(prebuilt / backend.profileDirectory / vertexBinaryName);
+            const std::filesystem::path fragmentBinary =
+                cacheDir / (std::string{ name } + "." + backend.profileDirectory + ".fs.bin");
+            Require(!vertexBytes.empty(), "a prebuilt skinned vertex shader is missing for a backend under test");
+            Require(CookShaderSource(fragmentSource, fragmentBinary, "fragment", backend.shadercProfile),
+                "the skinned probe fragment shader must cook for the backend under test");
+            const std::vector<std::uint8_t> fragmentBytes = ReadAllBytes(fragmentBinary);
+            const bgfx::ShaderHandle vertex = bgfx::createShader(bgfx::copy(vertexBytes.data(), static_cast<std::uint32_t>(vertexBytes.size())));
+            const bgfx::ShaderHandle fragment = bgfx::createShader(bgfx::copy(fragmentBytes.data(), static_cast<std::uint32_t>(fragmentBytes.size())));
+            const bgfx::ProgramHandle program = bgfx::createProgram(vertex, fragment, true);
+            Require(bgfx::isValid(program),
+                (std::string{ "prebuilt skinned shader did not link on " } + bgfx::getRendererName(backend.renderer) + ": " + name).c_str());
+            const ForwardRenderProbe pixel = harness.RenderSkinnedProbe(program,
+                paletteSampler, paletteInfo, previousPaletteSampler, previousPaletteInfo,
+                previousViewProjection, shadowViewProjection, motionVectors);
+            // The palette halves x: at the probe pixel the deformed position (and, against the
+            // identity previous palette, the velocity) encodes to red 62 of 255. The static
+            // motion vector stage does not skin, so its velocity is zero: red 128. An undrawn
+            // black target is outside every band.
+            const std::string_view variant{ name };
+            const bool expected = variant == "depth_shadow"
+                ? pixel.r > 230U && pixel.g < 8U && pixel.b < 8U
+                : variant == "static_motion_vectors"
+                    ? pixel.r > 110U && pixel.r < 145U && pixel.g < 8U && pixel.b < 8U
+                    : pixel.r > 40U && pixel.r < 90U && pixel.g < 8U && pixel.b < 8U;
+            Require(expected,
+                (std::string{ "prebuilt skinned shader deformed wrongly on " } + bgfx::getRendererName(backend.renderer) +
+                 ": " + name + " rgb=" + std::to_string(pixel.r) + "," + std::to_string(pixel.g) + "," +
+                 std::to_string(pixel.b)).c_str());
+            bgfx::destroy(program);
+        }
+        bgfx::destroy(shadowViewProjection);
+        bgfx::destroy(previousViewProjection);
+        bgfx::destroy(previousPaletteInfo);
+        bgfx::destroy(previousPaletteSampler);
+        bgfx::destroy(paletteInfo);
+        bgfx::destroy(paletteSampler);
+        harness.Shutdown();
+        std::fprintf(stderr, "prebuilt skinned shaders on %s: palette deformation verified\n",
+            bgfx::getRendererName(backend.renderer));
+    }
+}
+#endif
+
 void RunSkinnedMeshGpuReadbackTests() {
 #if defined(KB_TEST_GRAPH_SHADERC_PATH)
     RunSkinnedMeshPassGpuReadbackTest();
+#endif
+}
+
+void RunPrebuiltBackendShaderGpuTests() {
+#if defined(KB_TEST_GRAPH_SHADERC_PATH)
+    RunPrebuiltSkinnedShadersOnVulkanAndOpenGlTest();
 #endif
 }
 

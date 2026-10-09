@@ -397,13 +397,17 @@ struct MaterialShaderQualifier final {
         }
     }
 
-    for (const kb::assets::bake::AssetPackArtifactEntry& artifact : pack->Artifacts()) {
-        for (const kb::assets::bake::AssetPackBlockEntry& block : artifact.blocks) {
-            const kb::assets::bake::AssetPackReadStatus status =
-                pack->ReadArtifactBlock(artifact.key, block.name, bytes);
-            if (status != kb::assets::bake::AssetPackReadStatus::Success) {
-                return Failure("runtime asset payload validation failed: " +
-                    std::string{ kb::assets::bake::ToString(status) });
+    // Every block of every pack of the set, including blocks a later patch replaced: a pack that
+    // ships a damaged block is a damaged pack whether or not the block is still answered.
+    for (std::uint32_t container = 0U; container < pack->ContainerCount(); ++container) {
+        for (const kb::assets::bake::AssetPackArtifactEntry& artifact : pack->ContainerArtifacts(container)) {
+            for (const kb::assets::bake::AssetPackBlockEntry& block : artifact.blocks) {
+                const kb::assets::bake::AssetPackReadStatus status =
+                    pack->ReadContainerBlock(container, artifact, block.name, bytes);
+                if (status != kb::assets::bake::AssetPackReadStatus::Success) {
+                    return Failure("runtime asset payload validation failed: " +
+                        std::string{ kb::assets::bake::ToString(status) });
+                }
             }
         }
     }
@@ -418,7 +422,7 @@ struct MaterialShaderQualifier final {
                     ": " + std::string{ kb::assets::bake::ToString(readStatus) });
             }
             if (artifact.encoding == kb::assets::bake::RuntimeArtifactEncoding::BakedTexture) {
-                if (payload.blocks.size() != 1U ||
+                if (payload.blocks.empty() ||
                     payload.blocks.front().name !=
                         kb::assets::bake::kBakedAssetPrimaryBlockName) {
                     return Failure("baked texture block layout is corrupt for " +
@@ -432,6 +436,32 @@ struct MaterialShaderQualifier final {
                         texture.gpuBlocks->format, artifact.qualifier)) {
                     return Failure("baked texture payload is corrupt for " +
                         DescribeAsset(asset));
+                }
+                // A texture with streamed mips carries exactly one streaming block per streamed
+                // level, in order, and the levels must compose with the tail into the full chain.
+                const std::uint32_t streamed =
+                    texture.streaming.has_value() ? texture.streaming->streamedMipCount : 0U;
+                if (payload.blocks.size() != 1U + streamed) {
+                    return Failure("baked texture block layout is corrupt for " +
+                        DescribeAsset(asset));
+                }
+                if (streamed != 0U) {
+                    std::vector<std::span<const std::uint8_t>> levels;
+                    for (std::uint32_t level = 0U; level < streamed; ++level) {
+                        const kb::assets::bake::RuntimeAssetPayloadBlock& block = payload.blocks[1U + level];
+                        if (block.name != kb::render::bake::BakedTextureMipBlockName(level) ||
+                            block.residency != kb::assets::bake::BakedAssetBlockResidency::Streaming) {
+                            return Failure("baked texture mip layout is corrupt for " +
+                                DescribeAsset(asset));
+                        }
+                        levels.emplace_back(block.bytes);
+                    }
+                    RenderTextureAssetData full{};
+                    if (!kb::render::bake::ComposeBakedTextureLevels(texture, levels, full) ||
+                        full.width != texture.streaming->width || full.height != texture.streaming->height) {
+                        return Failure("baked texture mips do not compose for " +
+                            DescribeAsset(asset));
+                    }
                 }
             } else if (artifact.encoding ==
                        kb::assets::bake::RuntimeArtifactEncoding::BakedMesh) {

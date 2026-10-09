@@ -19,6 +19,10 @@ namespace {
 
 constexpr std::array<std::uint8_t, 8U> kMagic{ '2', '1', 'K', 'B', 'R', 'M', 'F', 0U };
 constexpr std::array<std::uint8_t, 8U> kSourceMagic{ '2', '1', 'K', 'B', 'S', 'R', 'C', 0U };
+// The word after the version: once reserved and zero, now flags. Bit 0 marks a partial manifest;
+// bit 1 says the tombstone lists follow the auxiliary files.
+constexpr std::uint32_t kPartialManifestFlag = 1U;
+constexpr std::uint32_t kTombstonesManifestFlag = 2U;
 constexpr std::uint64_t kMaxManifestBytes = 64ULL * 1024ULL * 1024ULL;
 constexpr std::uint32_t kMaxDescriptorTargetPlatforms =
     kb::project::ProjectDescriptorFormat::MaxTargetPlatformCount;
@@ -223,6 +227,10 @@ private:
     if (!IsValidDescriptor(manifest.descriptor) || !IsValidSettings(manifest.settings)) {
         return RuntimeAssetManifestStatus::InvalidProject;
     }
+    // Only a partial manifest -- a patch's -- takes content away.
+    if (!manifest.partial && (!manifest.removedAssets.empty() || !manifest.removedAuxiliaryFiles.empty())) {
+        return RuntimeAssetManifestStatus::InvalidAsset;
+    }
 
     std::ranges::sort(manifest.assets, [](const RuntimeAssetManifestEntry& lhs, const RuntimeAssetManifestEntry& rhs) {
         return std::tie(lhs.id.value, lhs.virtualPath) < std::tie(rhs.id.value, rhs.virtualPath);
@@ -278,8 +286,8 @@ private:
 
     const auto defaultMap = std::ranges::find(
         manifest.assets, manifest.settings.defaultMap, &RuntimeAssetManifestEntry::virtualPath);
-    if (defaultMap == manifest.assets.end() || defaultMap->type != "Scene" ||
-        !defaultMap->runtimeLoadable) {
+    if (defaultMap == manifest.assets.end() ? !manifest.partial
+                                            : (defaultMap->type != "Scene" || !defaultMap->runtimeLoadable)) {
         return RuntimeAssetManifestStatus::InvalidProject;
     }
 
@@ -288,6 +296,33 @@ private:
         if (!IsPackVirtualPath(file.virtualPath) || file.contentHash == 0U ||
             (file.artifactDigest.high == 0U && file.artifactDigest.low == 0U) ||
             !virtualPaths.insert(file.virtualPath).second) {
+            return RuntimeAssetManifestStatus::DuplicateEntry;
+        }
+    }
+
+    // Tombstones never take away what the same manifest brings.
+    if (manifest.removedAssets.size() > kMaxAssets || manifest.removedAuxiliaryFiles.size() > kMaxAuxiliaryFiles) {
+        return RuntimeAssetManifestStatus::TooLarge;
+    }
+    std::ranges::sort(manifest.removedAssets, {}, &AssetId::value);
+    for (std::size_t index = 0U; index < manifest.removedAssets.size(); ++index) {
+        const AssetId removed = manifest.removedAssets[index];
+        if (!removed.IsValid() || assetIds.contains(removed.value)) {
+            return RuntimeAssetManifestStatus::InvalidAsset;
+        }
+        if (index != 0U && manifest.removedAssets[index - 1U] == removed) {
+            return RuntimeAssetManifestStatus::DuplicateEntry;
+        }
+    }
+    std::ranges::sort(manifest.removedAuxiliaryFiles);
+    for (std::size_t index = 0U; index < manifest.removedAuxiliaryFiles.size(); ++index) {
+        const std::string& removed = manifest.removedAuxiliaryFiles[index];
+        const bool listedFile = std::ranges::binary_search(
+            manifest.auxiliaryFiles, removed, {}, &RuntimeAuxiliaryFileEntry::virtualPath);
+        if (!IsPackVirtualPath(removed) || listedFile) {
+            return RuntimeAssetManifestStatus::InvalidAsset;
+        }
+        if (index != 0U && manifest.removedAuxiliaryFiles[index - 1U] == removed) {
             return RuntimeAssetManifestStatus::DuplicateEntry;
         }
     }
@@ -432,7 +467,9 @@ RuntimeAssetManifestStatus EncodeRuntimeAssetManifest(
     std::vector<std::uint8_t> bytes;
     bytes.insert(bytes.end(), kMagic.begin(), kMagic.end());
     PutUInt32(bytes, kRuntimeAssetManifestVersion);
-    PutUInt32(bytes, 0U);
+    // Flags. Zero for a complete manifest, which keeps its bytes what they always were.
+    const bool tombstones = !canonical.removedAssets.empty() || !canonical.removedAuxiliaryFiles.empty();
+    PutUInt32(bytes, (canonical.partial ? kPartialManifestFlag : 0U) | (tombstones ? kTombstonesManifestFlag : 0U));
     PutString(bytes, canonical.targetProfileId);
     PutUInt64(bytes, canonical.targetProfileHash);
     EncodeDescriptor(bytes, canonical.descriptor);
@@ -470,6 +507,16 @@ RuntimeAssetManifestStatus EncodeRuntimeAssetManifest(
         PutUInt64(bytes, file.artifactDigest.high);
         PutUInt64(bytes, file.artifactDigest.low);
     }
+    if (tombstones) {
+        PutUInt32(bytes, static_cast<std::uint32_t>(canonical.removedAssets.size()));
+        for (const AssetId removed : canonical.removedAssets) {
+            PutUInt64(bytes, removed.value);
+        }
+        PutUInt32(bytes, static_cast<std::uint32_t>(canonical.removedAuxiliaryFiles.size()));
+        for (const std::string& removed : canonical.removedAuxiliaryFiles) {
+            PutString(bytes, removed);
+        }
+    }
     if (bytes.size() > kMaxManifestBytes || bytes.size() > kMaxAssetPackBlockBytes) {
         return RuntimeAssetManifestStatus::TooLarge;
     }
@@ -497,11 +544,12 @@ RuntimeAssetManifestStatus DecodeRuntimeAssetManifest(
     if (version != kRuntimeAssetManifestVersion) {
         return RuntimeAssetManifestStatus::UnsupportedVersion;
     }
-    if (!reader.ReadUInt32(reserved) || reserved != 0U ||
+    if (!reader.ReadUInt32(reserved) || (reserved & ~(kPartialManifestFlag | kTombstonesManifestFlag)) != 0U ||
         !reader.ReadString(manifest.targetProfileId, kMaxShortStringBytes) ||
         !reader.ReadUInt64(manifest.targetProfileHash)) {
         return RuntimeAssetManifestStatus::Malformed;
     }
+    manifest.partial = (reserved & kPartialManifestFlag) != 0U;
     const RuntimeAssetManifestStatus descriptorStatus = DecodeDescriptor(reader, manifest.descriptor);
     if (descriptorStatus != RuntimeAssetManifestStatus::Success) {
         return descriptorStatus;
@@ -571,6 +619,34 @@ RuntimeAssetManifestStatus DecodeRuntimeAssetManifest(
     for (RuntimeAuxiliaryFileEntry& file : manifest.auxiliaryFiles) {
         if (!reader.ReadString(file.virtualPath, kMaxPathBytes) || !reader.ReadUInt64(file.contentHash) ||
             !reader.ReadUInt64(file.artifactDigest.high) || !reader.ReadUInt64(file.artifactDigest.low)) {
+            return RuntimeAssetManifestStatus::Malformed;
+        }
+    }
+    if ((reserved & kTombstonesManifestFlag) != 0U) {
+        std::uint32_t removedAssetCount = 0U;
+        countStatus = ReadBoundedCount(reader, removedAssetCount, kMaxAssets, 8U);
+        if (countStatus != RuntimeAssetManifestStatus::Success) {
+            return countStatus;
+        }
+        manifest.removedAssets.resize(removedAssetCount);
+        for (AssetId& removed : manifest.removedAssets) {
+            if (!reader.ReadUInt64(removed.value)) {
+                return RuntimeAssetManifestStatus::Malformed;
+            }
+        }
+        std::uint32_t removedFileCount = 0U;
+        countStatus = ReadBoundedCount(reader, removedFileCount, kMaxAuxiliaryFiles, 4U);
+        if (countStatus != RuntimeAssetManifestStatus::Success) {
+            return countStatus;
+        }
+        manifest.removedAuxiliaryFiles.resize(removedFileCount);
+        for (std::string& removed : manifest.removedAuxiliaryFiles) {
+            if (!reader.ReadString(removed, kMaxPathBytes)) {
+                return RuntimeAssetManifestStatus::Malformed;
+            }
+        }
+        // The flag promises tombstones; an empty pair of lists would be a second encoding of none.
+        if (manifest.removedAssets.empty() && manifest.removedAuxiliaryFiles.empty()) {
             return RuntimeAssetManifestStatus::Malformed;
         }
     }

@@ -10,6 +10,9 @@ namespace kb::editor {
 namespace {
 
 constexpr wchar_t kSceneDialogFilter[] = L"21KB Scene (*.21kbscene)\0*.21kbscene\0All Files (*.*)\0*.*\0";
+// Opening also accepts partitioned worlds, which the editor edits in the same scene view.
+constexpr wchar_t kOpenDialogFilter[] =
+    L"21KB Scene or World (*.21kbscene;*.21kbworld)\0*.21kbscene;*.21kbworld\0All Files (*.*)\0*.*\0";
 constexpr wchar_t kSceneDefaultExtension[] = L"21kbscene";
 
 [[nodiscard]] std::filesystem::path WithSceneExtension(std::filesystem::path path) {
@@ -36,7 +39,7 @@ std::optional<std::filesystem::path> EditorSceneFileDialog::Open(HWND owner, con
     OPENFILENAMEW openFileName{};
     openFileName.lStructSize = sizeof(openFileName);
     openFileName.hwndOwner = owner;
-    openFileName.lpstrFilter = kSceneDialogFilter;
+    openFileName.lpstrFilter = kOpenDialogFilter;
     openFileName.lpstrFile = fileBuffer.data();
     openFileName.nMaxFile = static_cast<DWORD>(fileBuffer.size());
     openFileName.lpstrInitialDir = initialDir.empty() ? nullptr : initialDir.c_str();

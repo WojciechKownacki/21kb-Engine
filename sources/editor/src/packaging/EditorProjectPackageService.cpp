@@ -2,7 +2,9 @@
 #include "packaging/EditorAndroidSigningBroker.hpp"
 #include "packaging/EditorPackageInputValidation.hpp"
 #include "packaging/EditorPackageProcessEnvironment.hpp"
+#include "packaging/EditorWindowsSigningBroker.hpp"
 #include "engine/packaging/PackagingTargetCatalog.hpp"
+#include "engine/platform/CrashReporting.hpp"
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -31,6 +33,7 @@ struct RequestSecretsGuard {
     ~RequestSecretsGuard() {
         EditorAndroidSigningBroker::SecureClear(request.androidStorePassword);
         EditorAndroidSigningBroker::SecureClear(request.androidKeyPassword);
+        EditorAndroidSigningBroker::SecureClear(request.windowsCertificatePassword);
     }
 };
 
@@ -146,15 +149,14 @@ struct RequestSecretsGuard {
 
 EditorProjectPackageService::~EditorProjectPackageService() {
     Cancel();
-    if (worker_.joinable()) {
-        worker_.join();
-    }
+    // Waits for the job's process to be torn down.
+    lane_.reset();
 }
 
 bool EditorProjectPackageService::Start(EditorPackageRequest request, std::string& error) {
     RequestSecretsGuard requestSecrets{ request };
     error.clear();
-    JoinFinishedWorker();
+    ReleaseFinishedJob();
     {
         std::scoped_lock lock{ mutex_ };
         if (snapshot_.state == EditorPackageJobState::Running) {
@@ -195,6 +197,29 @@ bool EditorProjectPackageService::Start(EditorPackageRequest request, std::strin
         if (!request.applicationIcon.empty() &&
             !package_input::IsValidProjectPngIcon(request.projectFile, request.applicationIcon)) {
             error = "The application icon must be an existing PNG inside the project.";
+            return false;
+        }
+        const bool windowsSigning = !request.windowsCertificateThumbprint.empty() || !request.windowsCertificateFile.empty();
+        if (windowsSigning &&
+            (targetSpec->target != kb::packaging::PackagingTarget::WindowsX64 || request.configuration != "Release" ||
+             (!request.windowsCertificateThumbprint.empty() && !request.windowsCertificateFile.empty()) ||
+             (!request.windowsCertificateThumbprint.empty() &&
+              !package_input::IsValidCertificateThumbprint(request.windowsCertificateThumbprint)) ||
+             (!request.windowsCertificateFile.empty() &&
+              (!request.windowsCertificateFile.is_absolute() || request.windowsCertificatePassword.empty() ||
+               !std::filesystem::is_regular_file(request.windowsCertificateFile, filesystemError) || filesystemError)))) {
+            error = "Windows Release signing needs either a certificate thumbprint or an existing PFX file and its password.";
+            return false;
+        }
+        if (!request.windowsTimestampUrl.empty() &&
+            (!windowsSigning || !package_input::IsValidTimestampUrl(request.windowsTimestampUrl))) {
+            error = "The timestamp URL must be an http:// or https:// address used with a signing certificate.";
+            return false;
+        }
+        if (!request.crashReportUploadUrl.empty() &&
+            (targetSpec->target != kb::packaging::PackagingTarget::WindowsX64 ||
+             !kb::platform::IsAllowedCrashUploadEndpoint(request.crashReportUploadUrl))) {
+            error = "Crash reports upload only from Windows packages, over HTTPS or to this machine.";
             return false;
         }
         if (targetSpec->needsAndroidMetadata &&
@@ -250,7 +275,17 @@ bool EditorProjectPackageService::Start(EditorPackageRequest request, std::strin
         cancelRequested_ = false;
     }
     try {
-        worker_ = std::thread{ &EditorProjectPackageService::Run, this, std::move(request) };
+        if (lane_ == nullptr) {
+            lane_ = std::make_unique<kb::assets::streaming::BackgroundLane>(
+                kb::assets::streaming::BackgroundLoadService::Shared(), kb::assets::streaming::BackgroundJobClass::Long);
+        }
+        kb::assets::streaming::BackgroundRequestHandle job =
+            lane_->Run([this, request = std::move(request)](std::string&) mutable {
+                Run(std::move(request));
+                return true;
+            });
+        std::scoped_lock lock{ mutex_ };
+        job_ = std::move(job);
     } catch (const std::system_error& exception) {
         std::scoped_lock lock{ mutex_ };
         snapshot_ = EditorPackageSnapshot{};
@@ -267,6 +302,12 @@ void EditorProjectPackageService::Cancel() noexcept {
         return;
     }
     cancelRequested_ = true;
+    // A job no worker has taken yet never starts its process.
+    if (lane_ != nullptr && job_ != nullptr && lane_->Service().Cancel(job_)) {
+        snapshot_.state = EditorPackageJobState::Cancelled;
+        snapshot_.status = "Package job cancelled.";
+        return;
+    }
 #if defined(_WIN32)
     HANDLE job = static_cast<HANDLE>(processJob_);
     if (job != nullptr) {
@@ -361,7 +402,26 @@ std::vector<std::wstring> EditorProjectPackageService::BuildArguments(const Edit
     if (!request.applicationIcon.empty()) {
         append(L"--application-icon", request.applicationIcon);
     }
+    if (!request.releaseSigningKey.empty()) {
+        append(L"--signing-key", request.releaseSigningKey);
+    }
     const kb::packaging::PackagingTargetSpec* targetSpec = kb::packaging::FindPackagingTarget(request.targetId);
+    if (targetSpec != nullptr && targetSpec->target == kb::packaging::PackagingTarget::WindowsX64 &&
+        !request.crashReportUploadUrl.empty()) {
+        appendText(L"--crash-report-url", request.crashReportUploadUrl);
+    }
+    if (targetSpec != nullptr && targetSpec->target == kb::packaging::PackagingTarget::WindowsX64) {
+        // The certificate is named; its password never is. A PFX is signed through the
+        // SIGNING_REQUEST the package script sends back to this process.
+        if (!request.windowsCertificateThumbprint.empty()) {
+            appendText(L"--windows-sign-thumbprint", request.windowsCertificateThumbprint);
+        } else if (!request.windowsCertificateFile.empty()) {
+            append(L"--windows-sign-pfx", request.windowsCertificateFile);
+        }
+        if (!request.windowsTimestampUrl.empty()) {
+            appendText(L"--windows-timestamp-url", request.windowsTimestampUrl);
+        }
+    }
     if (targetSpec != nullptr && targetSpec->needsAndroidMetadata) {
         appendText(L"--android-application-id", request.androidApplicationId);
         appendText(L"--android-version-code", std::to_string(request.androidVersionCode));
@@ -534,6 +594,28 @@ void EditorProjectPackageService::Run(EditorPackageRequest request) {
             pending.erase(0U, newline + 1U);
             if (!line.empty() && line.back() == '\r') line.pop_back();
             const EditorPackageProtocolEvent protocol = ParseProtocolLine(line);
+            if (protocol.kind == EditorPackageProtocolEvent::Kind::SigningRequest && targetSpec != nullptr &&
+                targetSpec->target == kb::packaging::PackagingTarget::WindowsX64) {
+                if (request.configuration != "Release" || request.windowsCertificateFile.empty() || signingRequestSeen) {
+                    ApplyProtocolLine("DIAGNOSTIC|Error|Unexpected or duplicate Windows signing request.");
+                    static_cast<void>(TerminateJobObject(job, ERROR_ACCESS_DENIED));
+                    continue;
+                }
+                signingRequestSeen = true;
+                EditorWindowsSigningResult signing;
+                try {
+                    signing = EditorWindowsSigningBroker::Execute(
+                        protocol.signingRequestFile, protocol.signingResponseFile,
+                        request.buildRoot / "package-jobs", request.windowsCertificateFile, request.windowsTimestampUrl,
+                        EditorWindowsSigningBroker::DefaultSigner(), request.windowsCertificatePassword, job);
+                } catch (const std::exception&) {
+                    EditorAndroidSigningBroker::SecureClear(request.windowsCertificatePassword);
+                    signing.message = "Windows signing failed while validating the isolated request.";
+                }
+                ApplyProtocolLine(std::string{ "DIAGNOSTIC|" } + (signing.succeeded ? "Info|" : "Error|") + signing.message);
+                if (!signing.succeeded) static_cast<void>(TerminateJobObject(job, ERROR_ACCESS_DENIED));
+                continue;
+            }
             if (protocol.kind == EditorPackageProtocolEvent::Kind::SigningRequest) {
                 if (request.configuration != "Release" || targetSpec == nullptr ||
                     !targetSpec->needsAndroidMetadata || signingRequestSeen) {
@@ -588,6 +670,8 @@ void EditorProjectPackageService::Run(EditorPackageRequest request) {
     } else if (targetSpec != nullptr && targetSpec->needsAndroidMetadata &&
         request.configuration == "Release" && !signingRequestSeen) {
         Finish(EditorPackageJobState::Failed, "Android Release completed without a signing request.");
+    } else if (!request.windowsCertificateFile.empty() && !signingRequestSeen) {
+        Finish(EditorPackageJobState::Failed, "Windows Release completed without asking for its certificate.");
     } else if (!hasResult) {
         Finish(EditorPackageJobState::Failed, "Package process completed without a RESULT directory.");
     } else if (!ResultMatchesRequest(request, resultDirectory)) {
@@ -640,14 +724,11 @@ void EditorProjectPackageService::Finish(EditorPackageJobState state, std::strin
     }
 }
 
-void EditorProjectPackageService::JoinFinishedWorker() {
-    bool finished = false;
-    {
-        std::scoped_lock lock{ mutex_ };
-        finished = snapshot_.state != EditorPackageJobState::Running;
-    }
-    if (finished && worker_.joinable()) {
-        worker_.join();
+void EditorProjectPackageService::ReleaseFinishedJob() {
+    // The lane runs one job at a time, so a new job never overlaps the end of the last one.
+    std::scoped_lock lock{ mutex_ };
+    if (snapshot_.state != EditorPackageJobState::Running) {
+        job_.reset();
     }
 }
 

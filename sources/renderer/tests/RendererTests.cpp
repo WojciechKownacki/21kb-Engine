@@ -1,17 +1,44 @@
+#include "RendererTestSupport.hpp"
+
 #include <cstdlib>
 #include <cstdio>
 #include <exception>
 #include <string_view>
 
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <Windows.h>
+#include <psapi.h>
+#endif
+
 namespace kb::render::tests {
+
+std::size_t PeakCommittedBytes() noexcept {
+#if defined(_WIN32)
+    PROCESS_MEMORY_COUNTERS counters{};
+    counters.cb = sizeof(counters);
+    return GetProcessMemoryInfo(GetCurrentProcess(), &counters, sizeof(counters)) != FALSE ? counters.PeakPagefileUsage : 0U;
+#else
+    return 0U;
+#endif
+}
+
 void RunGraphForwardGpuRenderTests();
 void RunSceneLightGridTests();
 void RunSceneLightGridGpuTests();
 void RunSkinnedMeshGpuReadbackTests();
+void RunPrebuiltBackendShaderGpuTests();
 void RunFinalCompositePassTests();
 void RunPostProcessChainTests();
 void RunRenderFramePipelineTests();
 void RunRenderResourceRegistryTests();
+void RunAssetImportCatalogCoverageTests();
+void RunGltfExternalResourceTests();
 void RunRuntimeAssetShaderProviderTests();
 void RunRuntimeAssetPackValidationTests();
 void RunPackagedMaterialRuntimeTests();
@@ -46,9 +73,12 @@ void RunSceneRenderExtractorTests();
 void RunShaderManifestTests();
 void RunShaderPrewarmParseTests();
 void RunMeshBakeTests();
+void RunWorldHlodMeshBakerTests();
 void RunTextureBakeTests();
+void RunRuntimeContentStreamingTests();
 void RunPackagedWebGpuTextureFallbackTestOnly();
 void RunScreenUIDrawBatchTests();
+void RunLargeWorldRenderTests();
 }
 
 int main(int argc, char** argv) {
@@ -80,8 +110,16 @@ int main(int argc, char** argv) {
         kb::render::tests::RunMeshBakeTests();
         return EXIT_SUCCESS;
     }
+    if (argc == 2 && std::string_view{ argv[1] } == "world-hlod") {
+        kb::render::tests::RunWorldHlodMeshBakerTests();
+        return EXIT_SUCCESS;
+    }
     if (argc == 2 && std::string_view{ argv[1] } == "texture-bake") {
         kb::render::tests::RunTextureBakeTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "content-streaming") {
+        kb::render::tests::RunRuntimeContentStreamingTests();
         return EXIT_SUCCESS;
     }
     if (argc == 2 && std::string_view{ argv[1] } == "webgpu-texture-fallback") {
@@ -102,6 +140,14 @@ int main(int argc, char** argv) {
     }
     if (argc == 2 && std::string_view{ argv[1] } == "screen-ui-batch") {
         kb::render::tests::RunScreenUIDrawBatchTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "gltf-external") {
+        kb::render::tests::RunGltfExternalResourceTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "import-catalog") {
+        kb::render::tests::RunAssetImportCatalogCoverageTests();
         return EXIT_SUCCESS;
     }
     if (argc == 2 && std::string_view{ argv[1] } == "resource-registry") {
@@ -136,6 +182,10 @@ int main(int argc, char** argv) {
         kb::render::tests::RunGraphForwardGpuRenderTests();
         return EXIT_SUCCESS;
     }
+    if (argc == 2 && std::string_view{ argv[1] } == "backend-shader-gpu") {
+        kb::render::tests::RunPrebuiltBackendShaderGpuTests();
+        return EXIT_SUCCESS;
+    }
     if (argc == 2 && std::string_view{ argv[1] } == "skinned-gpu-readback") {
         kb::render::tests::RunSkinnedMeshGpuReadbackTests();
         return EXIT_SUCCESS;
@@ -146,6 +196,10 @@ int main(int argc, char** argv) {
     }
     if (argc == 2 && std::string_view{ argv[1] } == "exposure-meter") {
         kb::render::tests::RunSceneExposureMeterTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "large-world") {
+        kb::render::tests::RunLargeWorldRenderTests();
         return EXIT_SUCCESS;
     }
     if (argc == 2 && std::string_view{ argv[1] } == "scene-sync") {
@@ -250,6 +304,8 @@ int main(int argc, char** argv) {
     kb::render::tests::RunPostProcessChainTests();
     kb::render::tests::RunRenderFramePipelineTests();
     kb::render::tests::RunRenderResourceRegistryTests();
+    kb::render::tests::RunAssetImportCatalogCoverageTests();
+    kb::render::tests::RunGltfExternalResourceTests();
     kb::render::tests::RunRuntimeAssetShaderProviderTests();
     kb::render::tests::RunRuntimeAssetPackValidationTests();
     kb::render::tests::RunRenderMaterialTypeSchemaTests();
@@ -264,12 +320,15 @@ int main(int argc, char** argv) {
     kb::render::tests::RunSceneExposureMeterTests();
     kb::render::tests::RunSceneDepthPolicyTests();
     kb::render::tests::RunRenderSceneSyncTests();
+    kb::render::tests::RunLargeWorldRenderTests();
     kb::render::tests::RunSceneRenderTargetFormatTests();
     kb::render::tests::RunSceneRenderExtractorTests();
     kb::render::tests::RunShaderManifestTests();
     kb::render::tests::RunShaderPrewarmParseTests();
     kb::render::tests::RunScreenUIDrawBatchTests();
     kb::render::tests::RunMeshBakeTests();
+    kb::render::tests::RunWorldHlodMeshBakerTests();
     kb::render::tests::RunTextureBakeTests();
+    kb::render::tests::RunRuntimeContentStreamingTests();
     return EXIT_SUCCESS;
 }

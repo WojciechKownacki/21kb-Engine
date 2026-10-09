@@ -108,6 +108,24 @@ void EditorCommandStack::Clear() noexcept {
     partitions_.clear();
 }
 
+void EditorCommandStack::RemapEntities(EditorCommandHistoryKey key, std::span<const kb::scene::SceneEntityRemap> remap) {
+    HistoryPartition* partition = FindPartition(key);
+    if (partition == nullptr || remap.empty()) {
+        return;
+    }
+    EditorEntityRemap replacements;
+    replacements.reserve(remap.size());
+    for (const kb::scene::SceneEntityRemap& entry : remap) {
+        replacements.insert_or_assign(entry.from.Id(), entry.to);
+    }
+    for (const std::unique_ptr<IEditorCommand>& command : partition->undoStack) {
+        command->RemapEntities(replacements);
+    }
+    for (const std::unique_ptr<IEditorCommand>& command : partition->redoStack) {
+        command->RemapEntities(replacements);
+    }
+}
+
 void EditorCommandStack::Clear(EditorCommandHistoryKey key) noexcept {
     const auto found = std::ranges::find(partitions_, key, &HistoryPartition::key);
     if (found != partitions_.end()) {

@@ -150,6 +150,9 @@ ScenePrefabNodeComponents ScenePrefabComponentSnapshot::Capture(Scene& scene, Sc
     if (const NavObstacle* navObstacle = sceneComponents.NavObstacles().TryGet(entity)) {
         components.navObstacle = *navObstacle;
     }
+    if (const NavLink* navLink = sceneComponents.NavLinks().TryGet(entity)) {
+        components.navLink = *navLink;
+    }
 
     return components;
 }

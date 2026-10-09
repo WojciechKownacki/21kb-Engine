@@ -1,6 +1,7 @@
 #include "engine/ecs/SystemScheduler.hpp"
 #include "engine/math/EngineMath.hpp"
 #include "engine/scene/SceneSystem.hpp"
+#include "ecs/GeometricReserve.hpp"
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneIterationService.hpp"
 #include "scene/SceneRuntimeService.hpp"
@@ -10,8 +11,11 @@
 #include "scene/components/SceneComponentRegistry.hpp"
 #include "scene/systems/SceneSystemScheduler.hpp"
 #include "scene/transform/SceneTransformHierarchySystem.hpp"
+#include "scene/transform/SceneTransformPrecision.hpp"
+#include "engine/ecs/NativeArchetypeStorage.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -25,24 +29,26 @@ namespace {
 
 void SynchronizeTransformHierarchy(SceneState& state) {
     SceneTransformHierarchySystem{}.Update(state);
-    if ((state.fixedTransformTopologyVersion != state.hierarchyTopologyVersion || state.fixedTransformRootAppendEpoch != state.hierarchyRootAppendEpoch) ||
-        state.lastTransformHierarchyUpdatedCount == 0U) return;
-    for (const SceneEntity entity : state.transformHierarchyUpdatedEntitiesScratch) {
-        const auto sample = std::ranges::lower_bound(state.fixedTransformSamples, entity, {}, &SceneState::FixedTransformSample::entity);
-        if (sample == state.fixedTransformSamples.end() || sample->entity != entity) continue;
-        const TransformComponent* current = state.componentStorage.Transforms().TryGet(entity);
-        if (current == nullptr) continue;
-        auto& value = state.fixedTransformValues[sample->valueIndex];
+    if (state.fixedTransformValues.empty()) return;
+    // Each pose record takes the pose the sync composed for its entity (a new world version).
+    for (std::size_t index = 0U; index < state.fixedTransformValues.size(); ++index) {
+        auto& value = state.fixedTransformValues[index];
+        const TransformComponent* current = state.componentStorage.Transforms().TryGet(value.entity);
+        if (current == nullptr || current->worldDirty || current->worldVersion == value.current.worldVersion) continue;
+        const kb::math::DVec3 currentWorld = SceneTransformPrecision::WorldTranslation(state, value.entity, *current);
         if (state.fixedTransformCapturing) {
             if (!value.touched) {
                 value.previous = value.current;
+                value.previousWorld = value.currentWorld;
                 value.touched = true;
-                state.fixedTransformTouched.push_back(sample->valueIndex);
+                state.fixedTransformTouched.push_back(index);
             }
         } else {
             value.previous = *current;
+            value.previousWorld = currentWorld;
         }
         value.current = *current;
+        value.currentWorld = currentWorld;
     }
 }
 
@@ -118,47 +124,80 @@ using kb::math::Normalize;
 
 // Keep a pose cache across ticks. Only hierarchy writes refresh it; a static
 // world pays for one initial capture instead of two full copies every substep.
-void RebuildFixedTransformSamples(Scene& scene, SceneState& state, bool preservePrevious) {
+void RebuildFixedTransformSamples(Scene&, SceneState& state, bool preservePrevious) {
     auto oldSamples = std::move(state.fixedTransformSamples);
     auto oldValues = std::move(state.fixedTransformValues);
     state.fixedTransformSamples.clear();
+    state.fixedTransformDenseValueIndex.clear();
     state.fixedTransformValues.clear();
     state.fixedTransformTouched.clear();
     state.fixedTransformSamples.reserve(oldSamples.size());
     state.fixedTransformValues.reserve(oldValues.size());
-    struct Context {
-        SceneState& state;
-        const std::vector<SceneState::FixedTransformSample>& oldSamples;
-        const std::vector<SceneState::FixedTransformValues>& oldValues;
-        bool preserve;
-    } context{state, oldSamples, oldValues, preservePrevious};
-    SceneIterationService::ForEachTransform(scene, [](SceneEntity entity, const TransformComponent& current, void* raw) {
-        auto& context = *static_cast<Context*>(raw);
+    // The interpolated entities: the explicit ones and every entity with a physics body, controller or joint.
+    std::vector<SceneEntity>& candidates = state.fixedTransformCandidatesScratch;
+    candidates.clear();
+    for (const SceneEntity::IdType id : state.interpolatedEntities) candidates.push_back(SceneEntity{ id });
+    std::vector<kb::ecs::QueryTableDispatchRecord> records;
+    for (const std::uint64_t componentId : { state.components.RigidbodyComponentId(), state.components.CharacterControllerComponentId(), state.components.JointComponentId() }) {
+        if (componentId == 0U) continue;
+        records.clear();
+        const std::array<kb::ecs::ComponentId, 1U> ids{ componentId };
+        state.world.NativeStorage().CollectQueryRecords(ids, {}, {}, records);
+        for (const kb::ecs::QueryTableDispatchRecord& record : records) {
+            for (std::size_t row = 0U; row < record.entityCount; ++row) candidates.push_back(SceneEntity{ record.entityIds[row] });
+        }
+    }
+    std::ranges::sort(candidates, {}, &SceneEntity::Id);
+    candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
+    for (const SceneEntity entity : candidates) {
+        const TransformComponent* live = state.componentStorage.Transforms().TryGet(entity);
+        if (live == nullptr) continue;
+        const TransformComponent& current = *live;
+        const kb::math::DVec3 currentWorld = SceneTransformPrecision::WorldTranslation(state, entity, current);
         TransformComponent previous = current;
-        if (context.preserve) {
-            const auto old = std::ranges::lower_bound(context.oldSamples, entity, {}, &SceneState::FixedTransformSample::entity);
-            if (old != context.oldSamples.end() && old->entity == entity) {
-                const auto& value = context.oldValues[old->valueIndex];
+        kb::math::DVec3 previousWorld = currentWorld;
+        if (preservePrevious) {
+            const auto old = std::ranges::lower_bound(oldSamples, entity, {}, &SceneState::FixedTransformSample::entity);
+            if (old != oldSamples.end() && old->entity == entity) {
+                const auto& value = oldValues[old->valueIndex];
                 previous = value.touched ? value.previous : value.current;
+                previousWorld = value.touched ? value.previousWorld : value.currentWorld;
             }
         }
-        const std::size_t index = context.state.fixedTransformValues.size();
-        context.state.fixedTransformSamples.push_back({entity, index});
-        context.state.fixedTransformValues.push_back({previous, current, context.preserve});
-        if (context.preserve) context.state.fixedTransformTouched.push_back(index);
-    }, &context);
+        const std::size_t index = state.fixedTransformValues.size();
+        state.fixedTransformSamples.push_back({entity, index});
+        state.fixedTransformValues.push_back({previous, current, preservePrevious, entity, previousWorld, currentWorld});
+        if (preservePrevious) state.fixedTransformTouched.push_back(index);
+    }
     std::ranges::sort(state.fixedTransformSamples, {}, &SceneState::FixedTransformSample::entity);
-    state.fixedTransformTopologyVersion = state.hierarchyTopologyVersion;
-    state.fixedTransformRootAppendEpoch = state.hierarchyRootAppendEpoch;
+    state.fixedTransformDenseValueIndex.clear();
+    for (std::size_t index = 0U; index < state.fixedTransformValues.size(); ++index) {
+        const std::uint32_t denseIndex = kb::ecs::GeneratedEntityIndex(state.fixedTransformValues[index].entity);
+        if (denseIndex == kb::ecs::kInvalidGeneratedEntityIndex) continue;
+        if (state.fixedTransformDenseValueIndex.size() <= denseIndex) {
+            state.fixedTransformDenseValueIndex.resize(static_cast<std::size_t>(denseIndex) + 1U, SceneState::kNoFixedTransformValue);
+        }
+        state.fixedTransformDenseValueIndex[denseIndex] = static_cast<std::uint32_t>(index);
+    }
+    state.fixedTransformRecordsBuilt = true;
+    state.fixedTransformStructuralVersion = state.world.NativeStorage().StructuralVersion();
+    state.fixedTransformInterpolationVersion = state.interpolatedEntitiesVersion;
+}
+
+// The records list the interpolated entities of the current storage.
+[[nodiscard]] bool FixedTransformRecordsCurrent(const SceneState& state) noexcept {
+    return state.fixedTransformRecordsBuilt && state.fixedTransformStructuralVersion == state.world.NativeStorage().StructuralVersion() &&
+        state.fixedTransformInterpolationVersion == state.interpolatedEntitiesVersion;
 }
 
 void CaptureFixedStepStart(Scene& scene, SceneState& state) {
-    if ((state.fixedTransformTopologyVersion != state.hierarchyTopologyVersion || state.fixedTransformRootAppendEpoch != state.hierarchyRootAppendEpoch) || state.fixedTransformSamples.empty()) {
+    if (!FixedTransformRecordsCurrent(state)) {
         RebuildFixedTransformSamples(scene, state, false);
     }
     for (const std::size_t index : state.fixedTransformTouched) {
         auto& value = state.fixedTransformValues[index];
         value.previous = value.current;
+        value.previousWorld = value.currentWorld;
         value.touched = false;
     }
     state.fixedTransformTouched.clear();
@@ -166,7 +205,7 @@ void CaptureFixedStepStart(Scene& scene, SceneState& state) {
 }
 
 void CaptureFixedStepEnd(Scene& scene, SceneState& state) {
-    if ((state.fixedTransformTopologyVersion != state.hierarchyTopologyVersion || state.fixedTransformRootAppendEpoch != state.hierarchyRootAppendEpoch)) {
+    if (!FixedTransformRecordsCurrent(state)) {
         RebuildFixedTransformSamples(scene, state, true);
     }
     state.fixedTransformCapturing = false;
@@ -232,10 +271,10 @@ void SceneRuntimeService::SetFixedStepSettings(Scene& scene, SceneRuntimeFixedSt
     state.fixedInterpolationAlpha = 0.0F;
     state.lastFixedStepCount = 0U;
     state.fixedTransformSamples.clear();
+    state.fixedTransformDenseValueIndex.clear();
     state.fixedTransformValues.clear();
     state.fixedTransformTouched.clear();
-    state.fixedTransformTopologyVersion = 0U;
-    state.fixedTransformRootAppendEpoch = 0U;
+    state.fixedTransformRecordsBuilt = false;
     state.fixedTransformCapturing = false;
 }
 
@@ -331,6 +370,7 @@ const kb::ecs::SystemSchedulerTrace& SceneRuntimeService::LastEcsProfilerTrace(c
 
 SceneRuntimeHotPathReport SceneRuntimeService::HotPathReport(const Scene& scene) noexcept {
     const SceneState& state = SceneAccess::State(scene);
+    const SceneTransformRenderProxyCounts renderProxyCounts = CountSceneTransformRenderProxyUpdates(state);
     return SceneRuntimeHotPathReport{
         .transformHierarchyUsesBatchPath = true,
         .transformHierarchyUsesKernelContract = true,
@@ -341,12 +381,12 @@ SceneRuntimeHotPathReport SceneRuntimeService::HotPathReport(const Scene& scene)
         .runtimeFixedCaptureEndNanoseconds = state.lastRuntimeFixedCaptureEndNanoseconds,
         .transformTopologicalBatchCount = state.transformTopology.Levels().size(),
         .transformTopologicalBatchBuildCount = state.transformTopology.BuildCount(),
-        .transformRenderProxyUpdateCount = state.transformRenderProxyUpdateEntities.size(),
-        .transformRenderProxyMeshRendererCount = state.transformRenderProxyMeshRendererIndices.size(),
-        .transformRenderProxyVisibleMeshRendererCount = state.transformRenderProxyVisibleMeshRendererIndices.size(),
-        .transformRenderProxyCameraCount = state.transformRenderProxyCameraIndices.size(),
-        .transformRenderProxyLightCount = state.transformRenderProxyLightIndices.size(),
-        .transformRenderProxyIdentityAffineFastPathCount = state.lastTransformRenderProxyIdentityAffineFastPathCount,
+        .transformRenderProxyUpdateCount = renderProxyCounts.updated,
+        .transformRenderProxyMeshRendererCount = renderProxyCounts.meshRenderers,
+        .transformRenderProxyVisibleMeshRendererCount = renderProxyCounts.visibleMeshRenderers,
+        .transformRenderProxyCameraCount = renderProxyCounts.cameras,
+        .transformRenderProxyLightCount = renderProxyCounts.lights,
+        .transformRenderProxyIdentityAffineFastPathCount = renderProxyCounts.identityAffine,
         .transformHierarchyInspectedCount = state.lastTransformHierarchyInspectedCount,
         .transformHierarchyUpdatedCount = state.lastTransformHierarchyUpdatedCount,
         .transformHierarchyRootFastPathCount = state.lastTransformHierarchyRootFastPathCount,
@@ -402,11 +442,28 @@ std::optional<TransformComponent> SceneRuntimeService::InterpolatedTransform(con
     return std::nullopt;
 }
 
+std::optional<kb::math::DVec3> SceneRuntimeService::InterpolatedWorldTranslation(const Scene& scene, SceneEntity entity) noexcept {
+    const SceneState& state = SceneAccess::State(scene);
+    if (!state.world.IsAlive(entity)) return std::nullopt;
+    const auto sample = std::ranges::lower_bound(state.fixedTransformSamples, entity, {}, &SceneState::FixedTransformSample::entity);
+    if (sample != state.fixedTransformSamples.end() && sample->entity == entity) {
+        const auto& values = state.fixedTransformValues[sample->valueIndex];
+        const double alpha = static_cast<double>(state.fixedInterpolationAlpha);
+        return values.previousWorld + (values.currentWorld - values.previousWorld) * alpha;
+    }
+    if (const TransformComponent* current = SceneTransformService::TryGet(scene, entity); current != nullptr) {
+        return SceneTransformPrecision::WorldTranslation(state, entity, *current);
+    }
+    return std::nullopt;
+}
+
 std::span<const SceneEntity> SceneRuntimeService::TransformRenderProxyUpdateEntities(const Scene& scene) noexcept {
+    EnsureSceneTransformRenderProxyLists(SceneAccess::State(scene));
     return SceneAccess::State(scene).transformRenderProxyUpdateEntities;
 }
 
 std::span<const WorldTransformAffine3x4> SceneRuntimeService::TransformRenderProxyWorldAffine3x4(const Scene& scene) noexcept {
+    EnsureSceneTransformRenderProxyLists(SceneAccess::State(scene));
     return SceneAccess::State(scene).transformRenderProxyWorldAffine3x4;
 }
 
@@ -448,41 +505,24 @@ bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
     if (state.mode == SceneMode::PrefabPrivate) {
         state.lastFixedStepCount = 0U;
         state.fixedInterpolationAlpha = 0.0F;
-        state.transformRenderProxyUpdateEntities.clear();
-        state.transformRenderProxyWorldAffine3x4.clear();
-        state.transformRenderProxyMeshRendererIndices.clear();
-        state.transformRenderProxyVisibleMeshRendererIndices.clear();
-        state.transformRenderProxyCameraIndices.clear();
-        state.transformRenderProxyLightIndices.clear();
+        BeginSceneTransformRenderProxyUpdates(state);
         state.renderProxyUpdateEntities.clear();
         state.renderProxyUpdateEntityIds.clear();
-        state.lastTransformRenderProxyIdentityAffineFastPathCount = 0U;
         synchronizeTransforms();
         PublishRuntimeSnapshot(state);
+        state.transformUpdatesResetPending = true;
         state.lastRuntimeUpdateNanoseconds = nanosecondsSince(updateStart);
         return false;
     }
 
     const SceneRuntimeFixedStepSettings fixed = state.fixedStepSettings;
     state.lastFixedStepCount = 0U;
-    state.transformRenderProxyUpdateEntities.clear();
-    state.transformRenderProxyWorldAffine3x4.clear();
-    state.transformRenderProxyMeshRendererIndices.clear();
-    state.transformRenderProxyVisibleMeshRendererIndices.clear();
-    state.transformRenderProxyCameraIndices.clear();
-    state.transformRenderProxyLightIndices.clear();
+    BeginSceneTransformRenderProxyUpdates(state);
     state.renderProxyUpdateEntities.clear();
     state.renderProxyUpdateEntityIds.clear();
-    state.lastTransformRenderProxyIdentityAffineFastPathCount = 0U;
-    state.transformRenderProxyUpdateEntities.reserve(HierarchyTrackedSlotCount(state));
-    state.transformRenderProxyWorldAffine3x4.reserve(HierarchyTrackedSlotCount(state));
-    state.transformRenderProxyMeshRendererIndices.reserve(HierarchyTrackedSlotCount(state));
-    state.transformRenderProxyVisibleMeshRendererIndices.reserve(HierarchyTrackedSlotCount(state));
-    state.transformRenderProxyCameraIndices.reserve(HierarchyTrackedSlotCount(state));
-    state.transformRenderProxyLightIndices.reserve(HierarchyTrackedSlotCount(state));
-    state.renderProxyUpdateEntities.reserve(HierarchyTrackedSlotCount(state));
+    kb::ecs::ReserveGeometric(state.renderProxyUpdateEntities, HierarchyTrackedSlotCount(state));
     state.renderProxyUpdateEntityIds.reserve(HierarchyTrackedSlotCount(state));
-    state.renderProxyDirtyTraversalScratch.reserve(HierarchyTrackedSlotCount(state));
+    kb::ecs::ReserveGeometric(state.renderProxyDirtyTraversalScratch, HierarchyTrackedSlotCount(state));
 
     SceneStreamingService::Pump(scene);
     synchronizeTransforms();
@@ -494,6 +534,7 @@ bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
         state.fixedStepAccumulatorSeconds += clampedDelta;
         while (state.fixedStepAccumulatorSeconds >= fixed.fixedDeltaSeconds &&
             state.lastFixedStepCount < fixed.maxFixedStepsPerFrame) {
+            state.sceneSystemScheduler.FixedStepBegin(scene, fixed.fixedDeltaSeconds);
             synchronizeTransforms();
             const auto stepStart = Clock::now();
             const auto captureStart = stepStart;
@@ -530,10 +571,10 @@ bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
         state.fixedStepAccumulatorSeconds = 0.0F;
         state.fixedInterpolationAlpha = 0.0F;
         state.fixedTransformSamples.clear();
+        state.fixedTransformDenseValueIndex.clear();
         state.fixedTransformValues.clear();
         state.fixedTransformTouched.clear();
-        state.fixedTransformTopologyVersion = 0U;
-        state.fixedTransformRootAppendEpoch = 0U;
+        state.fixedTransformRecordsBuilt = false;
         state.fixedTransformCapturing = false;
     }
 
@@ -545,6 +586,8 @@ bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
     const bool progressed = state.world.Progress(deltaSeconds);
     synchronizeTransforms();
     PublishRuntimeSnapshot(state);
+    state.sceneSystemScheduler.EndUpdate(scene, deltaSeconds);
+    state.transformUpdatesResetPending = true;
     state.lastRuntimeUpdateNanoseconds = nanosecondsSince(updateStart);
     return progressed;
 }

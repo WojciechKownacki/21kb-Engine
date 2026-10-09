@@ -5,6 +5,8 @@
 #include "packaging/EditorAndroidSigningBroker.hpp"
 #include "packaging/EditorProjectIconTransaction.hpp"
 #include "packaging/EditorProjectPackageService.hpp"
+#include "packaging/EditorSigningProcess.hpp"
+#include "packaging/EditorWindowsSigningBroker.hpp"
 #include "rendering/BuildGamePanelLayout.hpp"
 #include "rendering/BuildGamePanelModel.hpp"
 #include "settings/EditorBuildGameSettingsStore.hpp"
@@ -17,6 +19,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -26,6 +29,9 @@
 #define NOMINMAX
 #include <Windows.h>
 #include <winioctl.h>
+#include <wincrypt.h>
+#include <wintrust.h>
+#include <softpub.h>
 #endif
 
 namespace {
@@ -134,6 +140,19 @@ void SchemaAndValidationTest() {
     const auto linux = kb::editor::BuildGamePanelModel::Sections(LinuxX64, false);
     Require(HasField(linux, BuildGameField::LinuxHost) && HasField(linux, BuildGameField::LinuxHostKey) &&
         HasField(linux, BuildGameField::LinuxIdentity), "Linux schema misses SSH build-host configuration");
+    Require(HasField(windows, BuildGameField::CrashReportUrl) && !HasField(linux, BuildGameField::CrashReportUrl) &&
+        !HasField(webGpu, BuildGameField::CrashReportUrl), "Only the Windows player may offer a crash report endpoint");
+    const auto windowsRelease = kb::editor::BuildGamePanelModel::Sections(WindowsX64, true);
+    Require(HasField(windowsRelease, BuildGameField::WindowsCertificateThumbprint) &&
+            HasField(windowsRelease, BuildGameField::WindowsCertificateFile) &&
+            HasField(windowsRelease, BuildGameField::WindowsCertificatePassword) &&
+            HasField(windowsRelease, BuildGameField::WindowsTimestampUrl) &&
+            !HasField(windows, BuildGameField::WindowsCertificateFile) && !HasField(linux, BuildGameField::WindowsCertificateFile),
+        "Only a Windows Release offers Authenticode signing");
+    Require(kb::editor::BuildGamePanelModel::IsSecret(BuildGameField::WindowsCertificatePassword) &&
+            kb::editor::BuildGamePanelModel::IsSecret(BuildGameField::AndroidKeyPassword) &&
+            !kb::editor::BuildGamePanelModel::IsSecret(BuildGameField::WindowsCertificateThumbprint),
+        "Signing passwords are not all treated as secrets");
     Require(kb::editor::BuildGamePanelModel::Sections(static_cast<kb::packaging::PackagingTarget>(255), false).empty(),
         "Invalid target silently used another target schema");
 
@@ -243,6 +262,46 @@ void SchemaAndValidationTest() {
     }
     Require(!kb::editor::BuildGamePanelModel::Validate(WindowsX64, project, local, false, true).canBuild,
         "BUILD remained enabled during an active job");
+    std::string urlError;
+    Require(!kb::editor::BuildGamePanelModel::ApplyText(BuildGameField::CrashReportUrl, "http://crash.example.com/submit",
+                WindowsX64, project, local, urlError) && project.crashReportUploadUrl.empty(),
+        "A plain HTTP crash report endpoint was accepted");
+    Require(kb::editor::BuildGamePanelModel::ApplyText(BuildGameField::CrashReportUrl, " https://crash.example.com/submit ",
+                WindowsX64, project, local, urlError) &&
+            project.crashReportUploadUrl == "https://crash.example.com/submit" &&
+            kb::editor::BuildGamePanelModel::Validate(WindowsX64, project, local, false, false).canBuild,
+        "An HTTPS crash report endpoint was not accepted");
+    project.crashReportUploadUrl = "http://192.168.1.2/submit";
+    Require(!kb::editor::BuildGamePanelModel::Validate(WindowsX64, project, local, false, false).canBuild,
+        "BUILD accepted a crash report endpoint the game would refuse");
+    Require(kb::editor::BuildGamePanelModel::ApplyText(BuildGameField::CrashReportUrl, "", WindowsX64, project, local, urlError) &&
+            project.crashReportUploadUrl.empty(),
+        "Clearing the crash report endpoint failed");
+
+    Require(kb::editor::BuildGamePanelModel::ApplyText(BuildGameField::WindowsCertificateThumbprint,
+                "ab cd ef 01 23 45 67 89 ab cd ef 01 23 45 67 89 ab cd ef 01", WindowsX64, project, local, urlError) &&
+            local.For(WindowsX64).windowsCertificateThumbprint == "ABCDEF0123456789ABCDEF0123456789ABCDEF01" &&
+            kb::editor::BuildGamePanelModel::Validate(WindowsX64, project, local, true, false).canBuild,
+        "A pasted certificate thumbprint was not normalized and accepted");
+    Require(!kb::editor::BuildGamePanelModel::ApplyText(BuildGameField::WindowsCertificateThumbprint, "1234",
+                WindowsX64, project, local, urlError),
+        "A certificate thumbprint of the wrong length was accepted");
+    Require(!kb::editor::BuildGamePanelModel::ApplyText(BuildGameField::WindowsTimestampUrl, "ftp://timestamp.example.com",
+                WindowsX64, project, local, urlError) &&
+            kb::editor::BuildGamePanelModel::ApplyText(BuildGameField::WindowsTimestampUrl, "http://timestamp.example.com/rfc3161",
+                WindowsX64, project, local, urlError),
+        "Timestamp URL validation is wrong");
+    local.For(WindowsX64).windowsCertificateFile = "C:/Signing/release.pfx";
+    Require(!kb::editor::BuildGamePanelModel::Validate(WindowsX64, project, local, true, false).canBuild,
+        "BUILD accepted both a store certificate and a certificate file");
+    local.For(WindowsX64).windowsCertificateThumbprint.clear();
+    Require(!kb::editor::BuildGamePanelModel::Validate(WindowsX64, project, local, true, false, true, true, false).canBuild &&
+            kb::editor::BuildGamePanelModel::Validate(WindowsX64, project, local, true, false, true, true, true).canBuild,
+        "BUILD ignored a missing certificate password");
+    Require(kb::editor::BuildGamePanelModel::Validate(WindowsX64, project, local, false, false, true, true, false).canBuild,
+        "A Development build was held back by Release signing settings");
+    local.For(WindowsX64).windowsCertificateFile.clear();
+    local.For(WindowsX64).windowsTimestampUrl.clear();
 
     std::string pasted = "old";
     bool selectAll = true;
@@ -275,6 +334,7 @@ void SettingsRoundTripTest() {
     project.androidApplicationId = "com.publisher.product";
     project.androidVersionCode = 42U;
     project.androidLabel = "Product Android";
+    project.crashReportUploadUrl = "https://crash.example.com/api/minidump";
     std::string saveError;
     const auto projectPath = kb::project::ProjectSettingsStore::FilePath(root);
     Require(kb::project::ProjectSettingsStore::Save(projectPath, project, saveError), "Project packaging settings save failed");
@@ -374,6 +434,7 @@ void SettingsRoundTripTest() {
     local.linuxEngineRoot = "/opt/21kb";
     local.linuxDisplay = ":1";
     local.linuxIdentity = "C:/Keys/linux-builder";
+    local.releaseSigningKey = "C:/Keys/game.kbkey";
     local.For(kb::packaging::PackagingTarget::AndroidAstcArm64).outputDirectory = "C:/Output";
     local.For(kb::packaging::PackagingTarget::AndroidAstcArm64).launchAfterBuild = true;
     local.For(kb::packaging::PackagingTarget::AndroidAstcArm64).androidKeystore = "C:/Keys/release.jks";
@@ -434,6 +495,13 @@ void ProtocolAndArgumentsTest() {
         "Android Release argv misses packaging metadata");
     Require(!has(L"secret-store") && !has(L"secret-key"), "Signing secret leaked into argv");
     Require(!has(L"--application-icon"), "Empty application icon emitted a dangling argv option");
+    Require(!has(L"--signing-key"), "Empty release signing key emitted a dangling argv option");
+    request.releaseSigningKey = "C:/Keys/game.kbkey";
+    const auto signedArguments = kb::editor::EditorProjectPackageService::BuildArguments(request);
+    const auto signingKey = std::ranges::find(signedArguments, std::wstring_view{ L"--signing-key" });
+    Require(signingKey != signedArguments.end() && std::next(signingKey) != signedArguments.end() &&
+            std::filesystem::path{ *std::next(signingKey) } == request.releaseSigningKey,
+        "Release signing key path was not passed to packaging");
     Require(kb::editor::EditorProjectPackageService::ResultMatchesRequest(request, request.outputDirectory),
         "Exact RESULT directory was rejected");
     Require(!kb::editor::EditorProjectPackageService::ResultMatchesRequest(request, "C:/Output/Other"),
@@ -470,6 +538,36 @@ void ProtocolAndArgumentsTest() {
     linux.linuxDisplay = ":1";
     linux.linuxIdentity = "C:/Keys/linux-builder";
     const auto linuxArguments = kb::editor::EditorProjectPackageService::BuildArguments(linux);
+    Require(std::ranges::find(linuxArguments, L"--crash-report-url") == linuxArguments.end(),
+        "A non-Windows package was given a crash report endpoint");
+    kb::editor::EditorPackageRequest windows = request;
+    windows.targetId = "Windows.x64";
+    windows.configuration = "Development";
+    windows.crashReportUploadUrl = "https://crash.example.com/submit";
+    const auto windowsArguments = kb::editor::EditorProjectPackageService::BuildArguments(windows);
+    const auto endpoint = std::ranges::find(windowsArguments, L"--crash-report-url");
+    Require(endpoint != windowsArguments.end() && std::next(endpoint) != windowsArguments.end() &&
+            *std::next(endpoint) == L"https://crash.example.com/submit",
+        "Windows argv misses the project's crash report endpoint");
+    const auto optionValue = [](const std::vector<std::wstring>& arguments, std::wstring_view option) -> std::wstring {
+        const auto found = std::ranges::find(arguments, option);
+        return found != arguments.end() && std::next(found) != arguments.end() ? *std::next(found) : std::wstring{};
+    };
+    windows.configuration = "Release";
+    windows.windowsCertificateThumbprint = "ABCDEF0123456789ABCDEF0123456789ABCDEF01";
+    windows.windowsTimestampUrl = "http://timestamp.example.com/rfc3161";
+    const auto storeArguments = kb::editor::EditorProjectPackageService::BuildArguments(windows);
+    Require(optionValue(storeArguments, L"--windows-sign-thumbprint") == L"ABCDEF0123456789ABCDEF0123456789ABCDEF01" &&
+            optionValue(storeArguments, L"--windows-timestamp-url") == L"http://timestamp.example.com/rfc3161" &&
+            std::ranges::find(storeArguments, L"--windows-sign-pfx") == storeArguments.end(),
+        "Windows argv misses the store certificate signing options");
+    windows.windowsCertificateThumbprint.clear();
+    windows.windowsCertificateFile = "C:/Signing/release.pfx";
+    windows.windowsCertificatePassword = "secret-certificate";
+    const auto pfxArguments = kb::editor::EditorProjectPackageService::BuildArguments(windows);
+    Require(optionValue(pfxArguments, L"--windows-sign-pfx") == std::filesystem::path{ "C:/Signing/release.pfx" }.wstring() &&
+            std::ranges::find(pfxArguments, L"secret-certificate") == pfxArguments.end(),
+        "Windows argv misses the certificate file or leaked its password");
     for (const std::wstring_view option : { L"--linux-host", L"--linux-user", L"--linux-host-key", L"--linux-port",
              L"--linux-engine-root", L"--linux-display", L"--linux-identity" }) {
         Require(std::ranges::find(linuxArguments, option) != linuxArguments.end(), "Linux argv misses an SSH option");
@@ -502,6 +600,135 @@ void ProcessEnvironmentTest() {
         "Android signing broker accepted a request-controlled Java executable");
 }
 
+struct TestCertificate {
+    std::filesystem::path pfx;
+    std::string thumbprint;
+};
+
+// A throwaway code-signing certificate made in memory by .NET and exported to a PFX
+// in the test's scratch directory. Nothing is added to any certificate store and
+// no trust setting changes; the password reaches PowerShell on standard input.
+[[nodiscard]] TestCertificate CreateTestCertificate(const std::filesystem::path& directory, std::string password) {
+    const std::filesystem::path pfx = directory / "SigningTest.pfx";
+    std::string script =
+        "$ErrorActionPreference='Stop';"
+        "$password=[Console]::In.ReadLine();"
+        "$key=[System.Security.Cryptography.RSACng]::new(2048);"
+        "$request=[System.Security.Cryptography.X509Certificates.CertificateRequest]::new('CN=21kb Signing Test',$key,"
+        "[System.Security.Cryptography.HashAlgorithmName]::SHA256,[System.Security.Cryptography.RSASignaturePadding]::Pkcs1);"
+        "$usage=[System.Security.Cryptography.OidCollection]::new();"
+        "[void]$usage.Add([System.Security.Cryptography.Oid]::new('1.3.6.1.5.5.7.3.3'));"
+        "$request.CertificateExtensions.Add([System.Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension]::new($usage,$false));"
+        "$certificate=$request.CreateSelfSigned([DateTimeOffset]::UtcNow.AddMinutes(-5),[DateTimeOffset]::UtcNow.AddDays(1));"
+        "[System.IO.File]::WriteAllBytes('" + pfx.string() + "',"
+        "$certificate.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Pfx,$password));"
+        "Write-Output ('THUMBPRINT=' + $certificate.Thumbprint)";
+    wchar_t system[MAX_PATH]{};
+    Require(GetSystemDirectoryW(system, MAX_PATH) != 0U, "System directory is unavailable");
+    const std::filesystem::path powershell = std::filesystem::path{ system } / "WindowsPowerShell" / "v1.0" / "powershell.exe";
+    kb::editor::signing_process::SignerRun run = kb::editor::signing_process::RunSigner(powershell,
+        { L"-NoProfile", L"-NonInteractive", L"-Command", std::wstring{ script.begin(), script.end() } },
+        directory, { &password }, nullptr, std::chrono::seconds{ 120 }, 64U * 1024U);
+    const std::size_t marker = run.output.find("THUMBPRINT=");
+    if (run.exitCode != 0U || marker == std::string::npos || !std::filesystem::is_regular_file(pfx)) {
+        std::cerr << run.error << run.output << '\n';
+    }
+    Require(run.exitCode == 0U && marker != std::string::npos, "The test certificate could not be created");
+    return TestCertificate{ pfx, run.output.substr(marker + 11U, 40U) };
+}
+
+// The signer recorded in an image's Authenticode signature, or empty when it has none
+// that still matches the image. The test root is not trusted, which is expected here.
+[[nodiscard]] std::wstring SignerSubject(const std::filesystem::path& image) {
+    WINTRUST_FILE_INFO file{};
+    file.cbStruct = sizeof(file);
+    file.pcwszFilePath = image.c_str();
+    WINTRUST_DATA data{};
+    data.cbStruct = sizeof(data);
+    data.dwUIChoice = WTD_UI_NONE;
+    data.fdwRevocationChecks = WTD_REVOKE_NONE;
+    data.dwUnionChoice = WTD_CHOICE_FILE;
+    data.pFile = &file;
+    data.dwStateAction = WTD_STATEACTION_VERIFY;
+    data.dwProvFlags = WTD_CACHE_ONLY_URL_RETRIEVAL;
+    GUID action = WINTRUST_ACTION_GENERIC_VERIFY_V2;
+    const LONG status = WinVerifyTrust(static_cast<HWND>(INVALID_HANDLE_VALUE), &action, &data);
+    std::wstring subject;
+    if (status == ERROR_SUCCESS || static_cast<HRESULT>(status) == CERT_E_UNTRUSTEDROOT ||
+        static_cast<HRESULT>(status) == CERT_E_CHAINING) {
+        CRYPT_PROVIDER_DATA* provider = WTHelperProvDataFromStateData(data.hWVTStateData);
+        CRYPT_PROVIDER_SGNR* signer = provider != nullptr ? WTHelperGetProvSignerFromChain(provider, 0U, FALSE, 0U) : nullptr;
+        if (signer != nullptr && signer->csCertChain > 0U) {
+            wchar_t name[256]{};
+            CertGetNameStringW(signer->pasCertChain[0].pCert, CERT_NAME_SIMPLE_DISPLAY_TYPE, 0U, nullptr, name, 256U);
+            subject = name;
+        }
+    }
+    data.dwStateAction = WTD_STATEACTION_CLOSE;
+    static_cast<void>(WinVerifyTrust(static_cast<HWND>(INVALID_HANDLE_VALUE), &action, &data));
+    return subject;
+}
+
+void WindowsSigningBrokerTest() {
+    const std::filesystem::path root = std::filesystem::path{ KB_EDITOR_BUILD_GAME_TEST_ROOT } / "windows-signing";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    const std::filesystem::path jobsRoot = root / "package-jobs";
+    const std::filesystem::path jobRoot = jobsRoot / "job";
+    const std::filesystem::path images = jobRoot / "authenticode";
+    std::filesystem::create_directories(images);
+    std::filesystem::create_directories(root / "certificate");
+    const TestCertificate certificate = CreateTestCertificate(root / "certificate", "test-only-password-7Q");
+    // Any real image will do; the signer itself is one.
+    const std::filesystem::path image = images / "0000-Player.exe";
+    std::filesystem::copy_file(KB_AUTHENTICODE_SIGNER, image);
+    Require(SignerSubject(image).empty(), "The unsigned fixture already carries a signature");
+
+    const auto writeRequest = [&](const std::filesystem::path& listed, const std::filesystem::path& pfx) {
+        const std::filesystem::path request = jobRoot / "windows-signing-request.json";
+        std::ofstream stream{ request, std::ios::binary | std::ios::trunc };
+        const auto json = [](const std::filesystem::path& path) {
+            std::string text = path.generic_string();
+            return text;
+        };
+        stream << "{\"schema\":1,\"kind\":\"windows-authenticode\",\"session\":\"0123456789abcdef0123456789abcdef\","
+               << "\"certificate\":\"" << json(pfx) << "\",\"timestampUrl\":\"\",\"files\":[\"" << json(listed) << "\"]}";
+        return request;
+    };
+    const std::filesystem::path response = jobRoot / "windows-signing-response.json";
+
+    // A file outside the job's image folder is refused, and the password is cleared.
+    const std::filesystem::path outside = jobRoot / "Outside.exe";
+    std::filesystem::copy_file(KB_AUTHENTICODE_SIGNER, outside);
+    std::string password = "test-only-password-7Q";
+    kb::editor::EditorWindowsSigningResult refused = kb::editor::EditorWindowsSigningBroker::Execute(
+        writeRequest(outside, certificate.pfx), response, jobsRoot, certificate.pfx, "", KB_AUTHENTICODE_SIGNER, password, nullptr);
+    Require(!refused.succeeded && password.empty() && SignerSubject(outside).empty(),
+        "The signing broker signed a file outside the package job or kept the password");
+    password = "test-only-password-7Q";
+    refused = kb::editor::EditorWindowsSigningBroker::Execute(
+        writeRequest(image, root / "other.pfx"), response, jobsRoot, certificate.pfx, "", KB_AUTHENTICODE_SIGNER, password, nullptr);
+    Require(!refused.succeeded && password.empty(), "The signing broker accepted a certificate the author did not select");
+    password = "wrong-password";
+    refused = kb::editor::EditorWindowsSigningBroker::Execute(
+        writeRequest(image, certificate.pfx), response, jobsRoot, certificate.pfx, "", KB_AUTHENTICODE_SIGNER, password, nullptr);
+    Require(!refused.succeeded && !std::filesystem::exists(response) && SignerSubject(image).empty(),
+        "The signing broker reported success for a wrong PFX password");
+
+    password = "test-only-password-7Q";
+    const kb::editor::EditorWindowsSigningResult signedResult = kb::editor::EditorWindowsSigningBroker::Execute(
+        writeRequest(image, certificate.pfx), response, jobsRoot, certificate.pfx, "", KB_AUTHENTICODE_SIGNER, password, nullptr);
+    if (!signedResult.succeeded) std::cerr << signedResult.message << '\n' << signedResult.toolOutput << '\n';
+    Require(signedResult.succeeded && password.empty(), "The signing broker did not sign a valid request");
+    Require(signedResult.signerThumbprint == certificate.thumbprint, "The signing broker reported a different signer");
+    Require(signedResult.toolOutput.find("test-only-password") == std::string::npos, "The signer echoed the password");
+    Require(SignerSubject(image) == L"21kb Signing Test", "The signed image does not carry the test certificate's signature");
+    std::ifstream responseStream{ response, std::ios::binary };
+    const std::string responseText((std::istreambuf_iterator<char>{ responseStream }), std::istreambuf_iterator<char>{});
+    Require(responseText.find(certificate.thumbprint) != std::string::npos, "The signing response does not name the signer");
+    std::filesystem::remove_all(root, error);
+}
+
 void GeometryTest() {
     const RECT content{ 0, 0, 1280, 720 };
     const auto layout = kb::editor::BuildGamePanelLayout::Resolve(content);
@@ -526,6 +753,7 @@ int main() {
         ProtocolAndArgumentsTest();
 #if defined(_WIN32)
         ProcessEnvironmentTest();
+        WindowsSigningBrokerTest();
         GeometryTest();
 #endif
         std::cout << "Editor build game tests passed.\n";

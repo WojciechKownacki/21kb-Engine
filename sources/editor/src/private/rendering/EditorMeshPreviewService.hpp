@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/assets/AssetMetadata.hpp"
+#include "engine/assets/streaming/BackgroundLoadService.hpp"
 #include "rendering/EditorMeshPreviewTypes.hpp"
 
 #include <cstdint>
@@ -22,6 +23,9 @@ namespace kb::editor {
 
 class EditorMeshPreviewService {
 public:
+    // Waits for the preview jobs still pending.
+    ~EditorMeshPreviewService();
+
     [[nodiscard]] const EditorMeshThumbnailImage* ThumbnailFor(const kb::assets::AssetMetadata& metadata);
     [[nodiscard]] const EditorMeshThumbnailImage* ThumbnailFor(kb::assets::AssetManager& manager, const kb::assets::AssetMetadata& metadata);
     [[nodiscard]] const EditorMeshThumbnailImage* PreviewFor(const kb::assets::AssetMetadata& metadata);
@@ -97,6 +101,9 @@ private:
         std::shared_ptr<const kb::scene::SkeletalMeshAsset> mesh);
     void StoreCompletedPreview(Entry& entry, const EditorMeshPreviewSettings& settings, EditorMeshThumbnailImage image);
 
+    // Entry loads and preview rasterization run as long jobs of the engine's background service.
+    std::shared_ptr<kb::assets::streaming::BackgroundLoadService> background_ =
+        kb::assets::streaming::BackgroundLoadService::Shared();
     std::unordered_map<std::uint64_t, Entry> entries_;
     std::vector<PendingEntry> pendingEntries_;
     std::vector<PendingPreview> pendingPreviews_;

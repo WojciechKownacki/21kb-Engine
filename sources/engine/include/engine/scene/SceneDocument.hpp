@@ -3,6 +3,7 @@
 #include "engine/scene/SceneAudioOcclusionAccess.hpp"
 #include "engine/scene/ScenePrefab.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -45,7 +46,14 @@ struct SceneDocument {
     //      animation, image fill, localized and fitted text, soft masks, radio groups, sprite-swap
     //      states, tooltips, drag and drop, event targets, slider and progress widgets, elastic and
     //      snapping scroll views, and input content types with placeholders.
-    static constexpr std::uint32_t CurrentFileVersion = 40U;
+    // v41: a prefab instance root persists which prefab node each object below it stands for and the
+    //      content hash of its prefab, and its overrides persist the stable ids of the nodes they
+    //      target and refer to.
+    // v42: node local translations persist as float64 (large world coordinates); older files store float32
+    //      and load unchanged.
+    static constexpr std::uint32_t CurrentFileVersion = 42U;
+    static constexpr std::uint32_t PrefabNodeIdentityFileVersion = 41U;
+    static constexpr std::uint32_t DoubleTranslationFileVersion = 42U;
 
     std::uint32_t fileVersion = CurrentFileVersion;
     std::string guid;
@@ -56,6 +64,13 @@ struct SceneDocument {
     std::string audioMixerSnapshot;
     AudioOcclusionSettings audioOcclusionSettings{};
     ScenePrefab worldPrefab;
+
+    // A document saved before PrefabNodeIdentityFileVersion links its prefab instances to their prefabs by
+    // object name, which a rename or a move inside an instance can defeat; saving it again records node ids.
+    [[nodiscard]] bool LinksPrefabInstancesByName() const {
+        return fileVersion < PrefabNodeIdentityFileVersion &&
+            std::ranges::any_of(worldPrefab.Nodes(), [](const ScenePrefabNodeDesc& node) { return !node.nestedPrefabGuid.empty(); });
+    }
 };
 
 } // namespace kb::scene

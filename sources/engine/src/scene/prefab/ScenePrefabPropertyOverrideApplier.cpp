@@ -1,4 +1,5 @@
 #include "scene/prefab/ScenePrefabPropertyOverrideApplier.hpp"
+#include "scene/prefab/ScenePrefabOverrideValueFormatter.hpp"
 #include "scene/ui/SceneUIComponentTextCodec.hpp"
 
 #include <cmath>
@@ -81,7 +82,10 @@ bool ScenePrefabPropertyOverrideApplier::Apply(ScenePrefabNodeDesc& node, const 
         return true;
     }
     if (property.propertyPath == "transform.localPosition") {
-        return ParseVec3(property.value, node.transform.localPosition);
+        kb::math::DVec3 translation{};
+        if (!ScenePrefabOverrideValueFormatter::Parse(property.value, translation)) return false;
+        node.SetLocalTranslation(translation);
+        return true;
     }
     if (property.propertyPath == "transform.localRotation") {
         return ParseQuat(property.value, node.transform.localRotation);

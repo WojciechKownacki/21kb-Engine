@@ -1,5 +1,7 @@
 #include "engine/platform/UserStorage.hpp"
 
+#include "engine/assets/streaming/BackgroundLoadService.hpp"
+
 #include <algorithm>
 #include <fstream>
 #if defined(_WIN32)
@@ -10,7 +12,16 @@ namespace kb::platform {
 
 UserStorage::UserStorage(std::filesystem::path root, std::uintmax_t quotaBytes)
     : root_(std::move(root)), quotaBytes_(quotaBytes) {
-    std::filesystem::create_directories(root_);
+    // The root is created by the first Write: a host that never persists
+    // anything leaves no directory behind, and an unwritable root fails that
+    // Write instead of throwing out of the host's start-up.
+}
+
+UserStorage::~UserStorage() {
+    std::lock_guard lock{ writesMutex_ };
+    if (writes_ != nullptr) {
+        writes_->Drain();
+    }
 }
 
 std::filesystem::path UserStorage::PathFor(std::string_view key) const {
@@ -61,6 +72,19 @@ std::optional<std::string> UserStorage::Read(std::string_view key) const {
 }
 bool UserStorage::Delete(std::string_view key) { const std::filesystem::path path = PathFor(key); if (path.empty()) return false; std::lock_guard lock{ mutex_ }; std::error_code error; return std::filesystem::remove(path, error); }
 std::vector<std::string> UserStorage::List() const { std::lock_guard lock{ mutex_ }; std::vector<std::string> result; std::error_code error; for (std::filesystem::recursive_directory_iterator iterator(root_, error), end; iterator != end && !error; iterator.increment(error)) if (iterator->is_regular_file(error)) result.push_back(std::filesystem::relative(iterator->path(), root_, error).generic_string()); std::ranges::sort(result); return result; }
-std::future<bool> UserStorage::WriteAsync(std::string key, std::string data) { return std::async(std::launch::async, [this, key = std::move(key), data = std::move(data)] { return Write(key, data); }); }
+std::future<bool> UserStorage::WriteAsync(std::string key, std::string data) {
+    auto write = std::make_shared<std::packaged_task<bool()>>([this, key = std::move(key), data = std::move(data)] { return Write(key, data); });
+    std::future<bool> result = write->get_future();
+    std::lock_guard lock{ writesMutex_ };
+    if (writes_ == nullptr) {
+        writes_ = std::make_unique<kb::assets::streaming::BackgroundLane>(
+            kb::assets::streaming::BackgroundLoadService::Shared(), kb::assets::streaming::BackgroundJobClass::Long);
+    }
+    static_cast<void>(writes_->Run([write](std::string&) {
+        (*write)();
+        return true;
+    }));
+    return result;
+}
 
 } // namespace kb::platform

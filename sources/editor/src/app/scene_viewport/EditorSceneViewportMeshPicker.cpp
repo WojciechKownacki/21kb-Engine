@@ -49,11 +49,14 @@ struct OverlayPickCandidate {
     }
 };
 
+// Picking works in viewport space: the ray, the projected positions and the published bounds are relative to
+// `origin`, the camera's viewport origin (zero for a ray in world space).
 struct NearestPickContext {
     EditorSceneViewportRay ray{};
     EditorSceneViewportPickResult result{};
     const kb::scene::Scene* scene = nullptr;
     const EditorViewportCameraState* camera = nullptr;
+    kb::math::DVec3 origin{};
     RECT renderArea{};
     ScreenPoint mouse{};
     OverlayPickCandidate overlayPick{};
@@ -62,6 +65,7 @@ struct NearestPickContext {
 struct RectPickContext {
     const kb::scene::Scene* scene = nullptr;
     const EditorViewportCameraState* camera = nullptr;
+    kb::math::DVec3 origin{};
     RECT renderArea{};
     RECT selectionRect{};
     std::vector<kb::scene::SceneEntity> entities;
@@ -95,8 +99,9 @@ struct RectPickContext {
 using kb::math::Normalize;
 using kb::math::Rotate;
 
-[[nodiscard]] kb::scene::Vec3 ResolveWorldPosition(const kb::scene::TransformComponent& transform) noexcept {
-    return transform.worldPosition;
+[[nodiscard]] kb::scene::Vec3 ResolveViewportPosition(
+    const kb::scene::Scene& scene, kb::scene::SceneEntity entity, const kb::scene::TransformComponent& transform, const kb::math::DVec3& origin) noexcept {
+    return EditorSceneViewportMath::ViewportPosition(scene, entity, transform, origin);
 }
 
 [[nodiscard]] kb::scene::Quat ResolveWorldRotation(const kb::scene::TransformComponent& transform) noexcept {
@@ -271,9 +276,10 @@ void ConsiderOverlayIconPick(NearestPickContext& pick, kb::scene::SceneEntity en
     return distance > 0.0F;
 }
 
-[[nodiscard]] bool HitTransformBox(const EditorSceneViewportRay& ray, const kb::scene::TransformComponent& transform, float& distance) noexcept {
+[[nodiscard]] bool HitTransformBox(
+    const EditorSceneViewportRay& ray, const kb::scene::TransformComponent& transform, kb::scene::Vec3 position, float& distance) noexcept {
     const kb::scene::Quat worldRotation = ResolveWorldRotation(transform);
-    const kb::scene::Vec3 localOrigin = InverseRotate(worldRotation, EditorSceneViewportMath::Sub(ray.origin, transform.worldPosition));
+    const kb::scene::Vec3 localOrigin = InverseRotate(worldRotation, EditorSceneViewportMath::Sub(ray.origin, position));
     const kb::scene::Vec3 localDirection = InverseRotate(worldRotation, ray.direction);
     const kb::scene::Vec3 extent = BoxExtent(transform);
 
@@ -312,7 +318,7 @@ void PickNearestVisitor(kb::scene::SceneEntity entity, const kb::scene::Transfor
     }
     float distance = 0.0F;
     const kb::scene::SceneRenderBounds bounds =
-        pick.scene != nullptr ? kb::scene::SceneRenderFeedback::WorldBounds(*pick.scene, entity)
+        pick.scene != nullptr ? kb::scene::SceneRenderFeedback::BoundsRelativeTo(*pick.scene, entity, pick.origin)
                               : kb::scene::SceneRenderBounds{};
     // Tightest available shape wins. The published box is preferred; the sphere covers a mesh
     // whose box the renderer could not resolve; and before the first submit, or in a headless
@@ -323,7 +329,8 @@ void PickNearestVisitor(kb::scene::SceneEntity entity, const kb::scene::Transfor
     } else if (bounds.IsValid()) {
         hit = HitBoundsSphere(pick.ray, bounds, distance);
     } else {
-        hit = HitTransformBox(pick.ray, transform, distance);
+        hit = HitTransformBox(pick.ray, transform,
+            pick.scene != nullptr ? ResolveViewportPosition(*pick.scene, entity, transform, pick.origin) : transform.worldPosition, distance);
     }
     if (!hit) {
         return;
@@ -342,7 +349,7 @@ void PickNearestLightVisitor(kb::scene::SceneEntity entity, const kb::scene::Tra
         return;
     }
 
-    const kb::scene::Vec3 position = ResolveWorldPosition(transform);
+    const kb::scene::Vec3 position = ResolveViewportPosition(*pick.scene, entity, transform, pick.origin);
     const EditorViewportCameraAxes cameraAxes = pick.camera->Axes();
     const float cameraDistance = EditorSceneViewportMath::Dot(EditorSceneViewportMath::Sub(position, cameraAxes.position), cameraAxes.forward);
     if (cameraDistance <= 0.0F) {
@@ -420,8 +427,8 @@ void PickNearestParticleVisitor(
         !kb::scene::ResolveVisibility(*pick.scene, entity).visible) {
         return;
     }
-    const kb::scene::Vec3 position = ResolveWorldPosition(
-        pick.scene->Transforms().Get(entity));
+    const kb::scene::Vec3 position = ResolveViewportPosition(
+        *pick.scene, entity, pick.scene->Transforms().Get(entity), pick.origin);
     const EditorViewportCameraAxes cameraAxes = pick.camera->Axes();
     const float cameraDistance = EditorSceneViewportMath::Dot(
         EditorSceneViewportMath::Sub(position, cameraAxes.position),
@@ -471,7 +478,7 @@ void PickNearestEntityVisitor(kb::scene::SceneEntity entity, const kb::scene::Tr
         return;
     }
 
-    const kb::scene::Vec3 position = ResolveWorldPosition(transform);
+    const kb::scene::Vec3 position = ResolveViewportPosition(*pick.scene, entity, transform, pick.origin);
     const EditorViewportCameraAxes cameraAxes = pick.camera->Axes();
     const float cameraDistance = EditorSceneViewportMath::Dot(
         EditorSceneViewportMath::Sub(position, cameraAxes.position), cameraAxes.forward);
@@ -532,12 +539,13 @@ void ConsiderRectTransform(
     kb::scene::SceneEntity entity,
     const kb::scene::TransformComponent& transform,
     RectPickContext& pick) {
-    if (pick.scene == nullptr || !kb::scene::ResolveVisibility(*pick.scene, entity).visible) {
+    if (pick.scene == nullptr || pick.camera == nullptr || !kb::scene::ResolveVisibility(*pick.scene, entity).visible) {
         return;
     }
     float screenX = 0.0F;
     float screenY = 0.0F;
-    if (!EditorSceneViewportMath::WorldToScreen(*pick.camera, pick.renderArea, transform.worldPosition, screenX, screenY)) {
+    if (!EditorSceneViewportMath::WorldToScreen(*pick.camera, pick.renderArea,
+            ResolveViewportPosition(*pick.scene, entity, transform, pick.origin), screenX, screenY)) {
         return;
     }
 
@@ -551,7 +559,7 @@ void PickRectVisitor(kb::scene::SceneEntity entity, const kb::scene::TransformCo
     if (pick.scene != nullptr && pick.camera != nullptr &&
         kb::scene::ResolveVisibility(*pick.scene, entity).visible) {
         const kb::scene::SceneRenderBounds bounds =
-            kb::scene::SceneRenderFeedback::WorldBounds(*pick.scene, entity);
+            kb::scene::SceneRenderFeedback::BoundsRelativeTo(*pick.scene, entity, pick.origin);
         if (bounds.HasBox()) {
             // The box already contains the origin, so a rectangle that misses the box cannot
             // contain the origin either - there is nothing for the origin test to add here.
@@ -586,7 +594,8 @@ void PickRectParticleVisitor(
     }
     float screenX = 0.0F;
     float screenY = 0.0F;
-    if (EditorSceneViewportMath::WorldToScreen(*pick.camera, pick.renderArea, transform->worldPosition, screenX, screenY) &&
+    if (EditorSceneViewportMath::WorldToScreen(*pick.camera, pick.renderArea,
+            ResolveViewportPosition(*pick.scene, entity, *transform, pick.origin), screenX, screenY) &&
         ContainsPoint(pick.selectionRect, screenX, screenY)) {
         pick.entities.push_back(entity);
     }
@@ -607,9 +616,10 @@ void Deduplicate(std::vector<kb::scene::SceneEntity>& entities) {
 
 } // namespace
 
-EditorSceneViewportPickResult EditorSceneViewportMeshPicker::PickNearest(kb::scene::Scene& scene, const EditorSceneViewportRay& ray) {
+EditorSceneViewportPickResult EditorSceneViewportMeshPicker::PickNearest(
+    kb::scene::Scene& scene, const EditorSceneViewportRay& ray, const kb::math::DVec3& origin) {
     scene.Runtime().SynchronizeTransforms();
-    NearestPickContext context{.ray = ray, .scene = &scene};
+    NearestPickContext context{.ray = ray, .scene = &scene, .origin = origin};
     scene.Components().Visitors().ForEachMeshRenderer(&PickNearestVisitor, &context);
     return context.result;
 }
@@ -626,6 +636,7 @@ EditorSceneViewportPickResult EditorSceneViewportMeshPicker::PickNearest(
         .ray = ray,
         .scene = &scene,
         .camera = &camera,
+        .origin = camera.ViewportOrigin(),
         .renderArea = renderArea,
         .mouse = ScreenPoint{screenX, screenY},
     };
@@ -653,6 +664,7 @@ std::vector<kb::scene::SceneEntity> EditorSceneViewportMeshPicker::PickInsideRec
     RectPickContext context{
         .scene = &scene,
         .camera = &camera,
+        .origin = camera.ViewportOrigin(),
         .renderArea = renderArea,
         .selectionRect = NormalizeRect(selectionRect),
     };

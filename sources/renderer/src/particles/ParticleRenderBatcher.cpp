@@ -1,5 +1,7 @@
 #include "kb/render/particles/ParticleRenderBatcher.hpp"
 
+#include "kb/render/particles/ParticleRenderSpace.hpp"
+
 #include "kb/render/scene/TransparentDepthKey.hpp"
 
 #include <algorithm>
@@ -62,14 +64,14 @@ namespace {
     return dx * dx + dy * dy + dz * dz;
 }
 
-[[nodiscard]] ParticleGpuInstance Pack(const kb::particles::ParticleRenderRecord& source) noexcept {
+[[nodiscard]] ParticleGpuInstance Pack(const kb::particles::ParticleRenderRecord& source, kb::math::Vec3 offset) noexcept {
     const auto color = [&](unsigned shift) noexcept {
         return static_cast<float>((source.packedColor >> shift) & 0xFFU) / 255.0F;
     };
     return {
-        .positionSize = {source.position.x, source.position.y, source.position.z, source.size},
-        .previousPositionRotation = {
-            source.previousPosition.x, source.previousPosition.y, source.previousPosition.z, source.rotationRadians},
+        .positionSize = {source.position.x + offset.x, source.position.y + offset.y, source.position.z + offset.z, source.size},
+        .previousPositionRotation = {source.previousPosition.x + offset.x, source.previousPosition.y + offset.y,
+            source.previousPosition.z + offset.z, source.rotationRadians},
         .velocityStretch = {source.velocity.x, source.velocity.y, source.velocity.z, source.stretch},
         .color = {color(0U), color(8U), color(16U), color(24U)},
         .frameAgeIdentity = {
@@ -120,7 +122,10 @@ void ParticleRenderBatcher::Warmup(std::uint32_t particleCapacity) {
 
 ParticleRenderBatchBuildResult ParticleRenderBatcher::Build(
     const kb::particles::ParticleRenderSnapshot& snapshot,
-    const SceneRenderCamera& camera) noexcept {
+    const SceneRenderCamera& renderCamera,
+    kb::math::Vec3 renderOffset) noexcept {
+    // Draw order is decided in particle space; the packed positions are offset into render space.
+    const SceneRenderCamera camera = ParticleSpaceCamera(renderCamera, renderOffset);
     orderScratch_.clear();
     instanceScratch_.clear();
     batchScratch_.clear();
@@ -213,7 +218,7 @@ ParticleRenderBatchBuildResult ParticleRenderBatcher::Build(
             const std::uint32_t drawCount = std::min(remaining, kParticleGpuInstancesPerDraw);
             const std::uint32_t firstInstance = static_cast<std::uint32_t>(instanceScratch_.size());
             for (std::uint32_t index = 0U; index < drawCount; ++index) {
-                instanceScratch_.push_back(Pack(particles[orderScratch_[orderOffset + index]]));
+                instanceScratch_.push_back(Pack(particles[orderScratch_[orderOffset + index]], renderOffset));
             }
             const float batchViewDepth = drawCount == 0U ? 0.0F :
                 ViewDepth(camera, particles[orderScratch_[orderOffset]]);

@@ -161,6 +161,9 @@ bool EditorLeftButtonDoubleClickRouter::Handle(HWND messageWindow, int x, int y)
     if (assetResult == EditorAssetBrowserDoubleClickResult::MaterialEditorOpened) {
         static_cast<void>(dockModel_.Commands().ActivatePanelKind(DockPanelKind::MaterialEditor, DockArea::Center));
     }
+    if (assetResult == EditorAssetBrowserDoubleClickResult::PrefabEditorOpened) {
+        static_cast<void>(dockModel_.Commands().ActivatePanelKind(DockPanelKind::Scene, DockArea::Center));
+    }
 
     const std::optional<RECT> animatorEditorContent = EditorPanelContentResolver::Resolve(
         DockPanelKind::AnimatorEditor, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);

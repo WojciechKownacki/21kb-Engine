@@ -9,7 +9,8 @@ public:
     static void Ensure(
         const RuntimeRenderResourceEnsureContext& context,
         RuntimeMeshResourceMap& meshes,
-        RuntimeMaterialResourceMap& embeddedMaterials);
+        RuntimeMaterialResourceMap& embeddedMaterials,
+        RuntimeContentStreamer& streamer);
 };
 
 } // namespace kb::render

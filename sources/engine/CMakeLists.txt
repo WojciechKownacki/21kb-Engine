@@ -39,17 +39,24 @@ add_library(kb_engine STATIC
     include/engine/assets/AssetReference.hpp
     include/engine/assets/AssetRegistry.hpp
     include/engine/assets/ImportedAsset.hpp
+    include/engine/assets/GltfExternalResources.hpp
     include/engine/assets/ImportedAssetHeaderReader.hpp
     include/engine/assets/ImportedAssetLoader.hpp
     include/engine/assets/IAssetLoader.hpp
     include/engine/assets/bake/AssetBakeKey.hpp
     include/engine/assets/bake/AssetPack.hpp
     include/engine/assets/bake/AssetPackReader.hpp
+    include/engine/assets/bake/AssetPackSeal.hpp
+    include/engine/assets/bake/AssetPackSet.hpp
+    include/engine/assets/bake/AssetPackTools.hpp
     include/engine/assets/bake/AssetPackWriter.hpp
     include/engine/assets/bake/BakeTargetProfile.hpp
     include/engine/assets/bake/BakedAssetSink.hpp
     include/engine/assets/bake/RuntimeAssetManifest.hpp
     include/engine/assets/bake/RuntimeAssetPack.hpp
+    include/engine/assets/streaming/BackgroundLoadService.hpp
+    include/engine/assets/streaming/PackBlockStream.hpp
+    include/engine/assets/streaming/StreamingResidency.hpp
     include/engine/math/EngineMath.hpp
     include/engine/network/NetworkModel.hpp
     include/engine/network/NetworkObject.hpp
@@ -66,9 +73,13 @@ add_library(kb_engine STATIC
     include/engine/platform/PlatformCapabilities.hpp
     include/engine/platform/PlatformServices.hpp
     include/engine/platform/UserStorage.hpp
+    include/engine/platform/CrashReportConsent.hpp
     include/engine/platform/SettingsTransaction.hpp
     include/engine/platform/PlatformAdapters.hpp
     include/engine/platform/PlatformLocale.hpp
+    include/engine/security/Crypto.hpp
+    include/engine/security/ReleaseKeys.hpp
+    include/engine/security/ReleaseManifest.hpp
     include/engine/project/ProjectDescriptorMeta.hpp
     include/engine/project/ProjectDescriptorReader.hpp
     include/engine/project/ProjectDescriptorWriter.hpp
@@ -199,6 +210,17 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneHierarchyAccess.hpp
     include/engine/scene/SceneHistory.hpp
     include/engine/scene/SceneLoadedContent.hpp
+    include/engine/navigation/NavGeometryCollector.hpp
+    include/engine/navigation/NavMeshAsset.hpp
+    include/engine/navigation/NavMeshBuild.hpp
+    include/engine/world/WorldCellBuilder.hpp
+    include/engine/world/WorldCellIndex.hpp
+    include/engine/world/WorldDescriptor.hpp
+    include/engine/world/WorldEditSession.hpp
+    include/engine/world/WorldObjectFile.hpp
+    include/engine/world/WorldPackChunks.hpp
+    include/engine/world/WorldPartitionGrid.hpp
+    include/engine/world/WorldPartitionRuntime.hpp
     include/engine/scene/InputComponent.hpp
     include/engine/scene/SceneInputActivation.hpp
     include/engine/scene/SceneInputComponents.hpp
@@ -289,10 +311,15 @@ add_library(kb_engine STATIC
     include/engine/ui/visual/UIRawImage.hpp
     include/engine/ui/visual/UISprite.hpp
     include/engine/ui/visual/UIText.hpp
+    include/engine/ui/visual/UITextLineBreaking.hpp
     include/engine/scene/SceneLocalization.hpp
+    include/engine/scene/SceneNavigation.hpp
+    include/engine/scene/ScenePortalVisibility.hpp
+    include/engine/scene/SceneCrashReportConsent.hpp
     include/engine/localization/LocalizationCatalog.hpp
     include/engine/localization/LocalizationCatalogIO.hpp
     include/engine/localization/LocalizationCatalogAssetLoader.hpp
+    include/engine/localization/PluralRules.hpp
     include/engine/scene/SceneAnimators.hpp
     include/engine/scene/TimelineAsset.hpp
     include/engine/scene/TimelineAssetIO.hpp
@@ -421,6 +448,7 @@ add_library(kb_engine STATIC
     include/engine/script/ScriptAnimatorApi.hpp
     include/engine/script/ScriptTimelineApi.hpp
     include/engine/script/ScriptPostProcessApi.hpp
+    include/engine/script/ScriptNavigationApi.hpp
     include/engine/script/ScriptPhysicsApi.hpp
     include/engine/script/ScriptRendererApi.hpp
     include/engine/script/ScriptLifecycle.hpp
@@ -545,16 +573,25 @@ add_library(kb_engine STATIC
     src/assets/AssetPathUtilities.cpp
     src/assets/AssetRegistry.cpp
     src/assets/AssetRuntimeLoadService.cpp
+    src/assets/GltfExternalResources.cpp
     src/assets/ImportedAssetHeaderReader.cpp
     src/assets/ImportedAssetLoader.cpp
     src/assets/bake/AssetBakeKey.cpp
     src/assets/bake/AssetPack.cpp
+    src/assets/bake/AssetPackCompression.cpp
     src/assets/bake/AssetPackReader.cpp
+    src/assets/bake/AssetPackSeal.cpp
+    src/assets/bake/AssetPackSet.cpp
+    src/assets/bake/AssetPackTools.cpp
     src/assets/bake/AssetPackWriter.cpp
     src/assets/bake/BakeTargetProfile.cpp
     src/assets/bake/BakedAssetSink.cpp
     src/assets/bake/RuntimeAssetManifest.cpp
     src/assets/bake/RuntimeAssetPack.cpp
+    src/assets/streaming/BackgroundLoadService.cpp
+    src/assets/streaming/PackBlockStream.cpp
+    src/assets/streaming/StreamingResidency.cpp
+    src/private/assets/bake/AssetPackCompression.hpp
     src/private/assets/bake/BakeStorePath.hpp
     src/project/ProjectDescriptorBinaryIO.cpp
     src/project/ProjectDescriptorIntegrity.cpp
@@ -656,6 +693,10 @@ add_library(kb_engine STATIC
     src/network/NetworkObject.cpp
     src/platform/FileSystemPath.cpp
     src/platform/UserStorage.cpp
+    src/platform/CrashReportConsent.cpp
+    src/security/Crypto.cpp
+    src/security/ReleaseKeys.cpp
+    src/security/ReleaseManifest.cpp
     src/network/ReplicationSchema.cpp
     src/network/Rpc.cpp
     src/gameplay/GameFlow.cpp
@@ -703,9 +744,11 @@ add_library(kb_engine STATIC
     src/scene/SceneTimelineService.cpp
     src/scene/SceneAnimatorService.cpp
     src/scene/SceneLocalizationService.cpp
+    src/scene/SceneCrashReportConsent.cpp
     src/scene/modules/SceneLocalization.cpp
     src/localization/LocalizationCatalogIO.cpp
     src/localization/LocalizationCatalogAssetLoader.cpp
+    src/localization/PluralRules.cpp
     src/scene/ParticleEffectAssetIO.cpp
     src/scene/ParticleEffectAssetLoader.cpp
     src/scene/ParticleEffectAssetMigration.cpp
@@ -767,6 +810,7 @@ add_library(kb_engine STATIC
     src/scene/SceneUI.cpp
     src/scene/ui/SceneUIHierarchyPresets.cpp
     src/ui/UIComponentValidation.cpp
+    src/ui/UITextLineBreaking.cpp
     src/ui/UIComponentCatalog.cpp
     src/ui/UIComponentPropertyCatalog.cpp
     src/scene/asset/io/components/SceneAssetUIComponentCodec.cpp
@@ -842,7 +886,22 @@ add_library(kb_engine STATIC
         src/scene/components/SceneLensEchoApi.cpp
         src/scene/components/SceneLensEchoStorage.cpp
       src/scene/SceneContentInstanceService.cpp
+    src/navigation/NavMeshCrowd.cpp
+    src/navigation/NavGeometryCollector.cpp
+    src/navigation/NavMeshAsset.cpp
+    src/navigation/NavMeshBuilder.cpp
+    src/navigation/NavMeshRuntime.cpp
+    src/world/WorldAssetLoaders.cpp
+    src/world/WorldCellBuilder.cpp
+    src/world/WorldCellIndex.cpp
+    src/world/WorldDescriptor.cpp
+    src/world/WorldEditSession.cpp
+    src/world/WorldObjectFile.cpp
+    src/world/WorldObjectSplit.cpp
+    src/world/WorldPackChunks.cpp
+    src/world/WorldStreamingService.cpp
     src/scene/components/SceneTransformApi.cpp
+    src/scene/components/SceneTransformPrecisionApi.cpp
     src/scene/components/SceneTransformStorage.cpp
     src/scene/components/SceneTransformIteration.cpp
     src/scene/components/SceneVisibilityApi.cpp
@@ -936,6 +995,8 @@ add_library(kb_engine STATIC
     src/scene/systems/SceneSystemScheduler.cpp
     src/scene/systems/AnimatorSceneSystem.cpp
     src/scene/systems/TimelineSceneSystem.cpp
+    src/scene/navigation/SceneNavigationRuntime.cpp
+    src/scene/components/ScenePortalVisibility.cpp
     src/scene/systems/SceneSystemTransformAccess.cpp
     src/scene/prefab/ScenePrefab.cpp
     src/scene/prefab/ScenePrefabAppliedPropertyBuilder.cpp
@@ -959,6 +1020,7 @@ add_library(kb_engine STATIC
     src/scene/prefab/ScenePrefabInstanceSynchronizer.cpp
     src/scene/prefab/ScenePrefabInstanceTopology.cpp
     src/scene/prefab/ScenePrefabInstanceFacade.cpp
+    src/scene/prefab/ScenePrefabInstanceRelinker.cpp
     src/scene/prefab/ScenePrefabLightOverrideReporter.cpp
     src/scene/prefab/ScenePrefabMeshRendererOverrideReporter.cpp
     src/scene/prefab/ScenePrefabRegisteredInstantiationService.cpp
@@ -1033,9 +1095,12 @@ add_library(kb_engine STATIC
     src/scene/assets/ScenePrefabAssetLoader.cpp
     src/scene/transform/SceneTransformBranchUpdater.cpp
     src/scene/transform/SceneTransformHierarchySystem.cpp
+    src/scene/transform/ExactRootNormalize4.cpp
     src/scene/transform/SceneTransformTopologyCache.cpp
     src/scene/transform/SceneTransformLeafBatchUpdater.cpp
     src/scene/transform/SceneTransformRootCollector.cpp
+    src/scene/transform/SceneTransformResiduals.cpp
+    src/scene/transform/SceneTransformPrecision.cpp
     src/math/EngineMath.cpp
     src/scene/transform/QuatMath.cpp
     src/scene/transform/TransformMath.cpp
@@ -1089,6 +1154,7 @@ add_library(kb_engine STATIC
     src/script/ScriptAnimatorApi.cpp
     src/script/ScriptTimelineApi.cpp
     src/script/ScriptPostProcessApi.cpp
+    src/script/ScriptNavigationApi.cpp
     src/script/ScriptPhysicsApi.cpp
     src/script/ScriptRendererApi.cpp
     src/script/ScriptLifecycle.cpp
@@ -1200,6 +1266,12 @@ add_library(kb_engine STATIC
         src/private/scene/components/SceneLensEchoComponentStore.hpp
       src/private/scene/SceneContentInstanceService.hpp
       src/private/scene/systems/ContentInstanceSceneSystem.hpp
+    src/private/navigation/NavMeshCrowd.hpp
+    src/private/navigation/NavMeshRuntime.hpp
+    src/private/world/WorldAssetLoaders.hpp
+    src/private/world/WorldObjectSplit.hpp
+    src/private/world/WorldPartitionState.hpp
+    src/private/world/WorldTextFormat.hpp
     src/private/scene/components/SceneTransformComponentStore.hpp
     src/private/scene/components/SceneVisibilityComponentStore.hpp
     src/private/scene/entities/SceneEntityCounter.hpp
@@ -1281,6 +1353,7 @@ add_library(kb_engine STATIC
     src/private/scene/prefab/ScenePrefabInstanceSynchronizer.hpp
     src/private/scene/prefab/ScenePrefabInstanceTopology.hpp
     src/private/scene/prefab/ScenePrefabInstanceFacade.hpp
+    src/private/scene/prefab/ScenePrefabInstanceRelinker.hpp
     src/private/scene/prefab/ScenePrefabLightOverrideReporter.hpp
     src/private/scene/prefab/ScenePrefabMeshRendererOverrideReporter.hpp
     src/private/scene/prefab/ScenePrefabRegisteredInstantiationService.hpp
@@ -1360,6 +1433,8 @@ add_library(kb_engine STATIC
     src/private/scene/systems/SceneSystemScheduler.hpp
     src/private/scene/systems/AnimatorSceneSystem.hpp
     src/private/scene/systems/TimelineSceneSystem.hpp
+    src/private/scene/systems/NavigationSceneSystem.hpp
+    src/private/scene/navigation/SceneNavigationState.hpp
     src/private/scene/SceneTimelineService.hpp
     src/private/scene/systems/SceneSystemMutableTransformIteration.hpp
     src/private/scene/transform/QuatMath.hpp
@@ -1531,7 +1606,27 @@ if(WIN32)
         src/platform/win32/Win32InputKeyMap.cpp
         src/platform/win32/Win32XInputHapticsBackend.cpp
     )
-    target_link_libraries(kb_engine PRIVATE user32 xinput)
+    target_link_libraries(kb_engine PRIVATE user32 xinput bcrypt)
+
+    # Crash capture shared by the game and the editor. dbghelp and version are
+    # loaded from System32 by the reporter's own thread, and WinHTTP is delay-loaded,
+    # so installing the reporter maps no extra library on the starting thread.
+    add_library(kb_crash_reporting STATIC
+        include/engine/platform/CrashReporting.hpp
+        src/platform/win32/Win32CrashReporter.cpp
+        src/platform/win32/Win32CrashReportStore.cpp
+        src/platform/win32/Win32MinidumpPaths.cpp
+        src/platform/win32/Win32MinidumpPaths.hpp
+    )
+    target_include_directories(kb_crash_reporting PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    target_link_libraries(kb_crash_reporting PRIVATE winhttp bcrypt shell32 ole32)
+    if(MSVC)
+        target_link_libraries(kb_crash_reporting INTERFACE delayimp)
+        target_link_options(kb_crash_reporting INTERFACE /DELAYLOAD:winhttp.dll /DELAYLOAD:bcrypt.dll)
+    endif()
+    kb_apply_quality_gates(kb_crash_reporting)
+    # The player's crash report choices are script-visible settings (ScriptSaveApi).
+    target_link_libraries(kb_engine PRIVATE kb_crash_reporting)
 endif()
 
 if(NOT WIN32)
@@ -1550,7 +1645,10 @@ target_link_libraries(kb_engine
     PRIVATE
         flecs::flecs_static
         kb_lua
+        kb_monocypher
+        kb_recast
         kb_ufbx
+        kb_zstd
 )
 
 if(KB_ENGINE_ENABLE_NATIVE_AVX2)
@@ -1565,6 +1663,31 @@ if(KB_ENGINE_ENABLE_NATIVE_AVX2)
 endif()
 
 kb_apply_quality_gates(kb_engine)
+
+if(MSVC)
+    # Under AddressSanitizer this test translation unit exceeds the default object-file section limit.
+    set_property(SOURCE tests/ScriptRuntimeTests.cpp APPEND PROPERTY COMPILE_OPTIONS /bigobj)
+endif()
+
+if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+    # The isolated helper observes FP controls; engine/oracle/vendor flags stay unchanged.
+    set_property(SOURCE src/scene/transform/ExactRootNormalize4.cpp APPEND PROPERTY COMPILE_OPTIONS /GL-)
+endif()
+
+if(KB_ENGINE_TRANSFORM_LTO AND CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+    # Limit the experiment to these engine TUs; consumer code stays native.
+    set_property(SOURCE
+        src/scene/transform/SceneTransformHierarchySystem.cpp
+        src/scene/transform/TransformMath.cpp
+        src/scene/transform/QuatMath.cpp
+        APPEND PROPERTY COMPILE_OPTIONS "$<$<CONFIG:Release>:/GL>"
+    )
+    # kb_engine is static; final EXE/DLL consumers perform the LTCG link.
+    target_link_options(kb_engine INTERFACE
+        "$<$<CONFIG:Release>:/LTCG>"
+        "$<$<CONFIG:Release>:/INCREMENTAL:NO>"
+    )
+endif()
 
 if(NOT CMAKE_CROSSCOMPILING)
     # Host-side release gate used before platform packaging. It deliberately
@@ -1642,6 +1765,7 @@ if(BUILD_TESTING)
         tests/AssetRuntimeTests.cpp
         tests/AssetBakeTests.cpp
         tests/AssetPackTests.cpp
+        tests/ContentStreamingTests.cpp
         tests/SaveGameTests.cpp
         tests/EcsConfigTests.cpp
         tests/EcsEventTests.cpp
@@ -1668,8 +1792,15 @@ if(BUILD_TESTING)
         tests/SkeletalMeshAssetTests.cpp
         tests/TimelineRuntimeTests.cpp
         tests/LocalizationTests.cpp
+        tests/LargeWorldTests.cpp
         tests/SceneHierarchyTests.cpp
         tests/SceneUITests.cpp
+        tests/UITextLineBreakingTests.cpp
+        tests/CrashReportConsentTests.cpp
+        tests/NavigationMeshTests.cpp
+        tests/NavigationRuntimeTests.cpp
+        tests/PortalVisibilityTests.cpp
+        tests/MotionSkeletonRuleTests.cpp
         tests/ScenePrefabCaptureTests.cpp
         tests/ScenePrefabInstantiationTests.cpp
         tests/ScenePrefabTestSuites.hpp
@@ -1685,10 +1816,12 @@ if(BUILD_TESTING)
         tests/TestSuites.hpp
         tests/TestSupport.hpp
         tests/VisualGraphTests.cpp
+        tests/WorldPartitionTests.cpp
         tests/InputTests.cpp
         tests/EngineModuleTests.cpp
         tests/EngineLibraryTests.cpp
         tests/EngineMathTests.cpp
+        tests/SecurityTests.cpp
     )
 
     target_link_libraries(kb_engine_tests
@@ -1706,6 +1839,29 @@ if(BUILD_TESTING)
 
     add_test(NAME kb_engine_tests COMMAND $<TARGET_FILE:kb_engine_tests>)
     set_tests_properties(kb_engine_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+    # Machine-independent performance gates: each compares two measurements taken in the same run. They
+    # run alone, as other tests competing for the CPU in between would skew one measurement and not the other.
+    foreach(kb_perf_suite physics-step-spikes scene-transform-bench agents-frame)
+        add_test(NAME kb_engine_${kb_perf_suite} COMMAND $<TARGET_FILE:kb_engine_tests> ${kb_perf_suite})
+        set_tests_properties(kb_engine_${kb_perf_suite} PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+            LABELS "performance"
+            RUN_SERIAL TRUE
+            TIMEOUT 300
+        )
+    endforeach()
+    # The step-spike gate lengthens its frames while other load slows the physics step down.
+    set_tests_properties(kb_engine_physics-step-spikes PROPERTIES TIMEOUT 600)
+    # The crowd budget is absolute (1000 agents within 8 ms per navigation step in an optimised
+    # build), with headroom for a slower machine; it also requires level of detail to pay off.
+    add_test(NAME kb_engine_navigation-crowd-bench COMMAND $<TARGET_FILE:kb_engine_tests> navigation-crowd-bench)
+    set_tests_properties(kb_engine_navigation-crowd-bench PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        LABELS "performance"
+        RUN_SERIAL TRUE
+        TIMEOUT 300
+    )
 
     kb_apply_quality_gates(kb_engine_tests)
 
@@ -1779,6 +1935,33 @@ if(BUILD_TESTING)
 
     kb_apply_quality_gates(kb_library_safety_tests)
 
+    if(WIN32)
+        # The helper is the process that crashes: a console program, so the test
+        # never opens a window, and one that links nothing but the reporter.
+        add_executable(kb_crash_reporting_test_helper tests/CrashReportingTestHelper.cpp)
+        target_link_libraries(kb_crash_reporting_test_helper PRIVATE kb_crash_reporting)
+        kb_apply_quality_gates(kb_crash_reporting_test_helper)
+
+        add_executable(kb_crash_reporting_tests
+            tests/CrashReportingTests.cpp
+            tests/TestSupport.hpp
+        )
+        target_link_libraries(kb_crash_reporting_tests PRIVATE kb_crash_reporting kb_engine ws2_32 dbghelp)
+        add_dependencies(kb_crash_reporting_tests kb_crash_reporting_test_helper)
+        target_compile_definitions(kb_crash_reporting_tests PRIVATE
+            "KB_CRASH_REPORTING_TEST_HELPER=\"$<TARGET_FILE:kb_crash_reporting_test_helper>\""
+            "KB_CRASH_REPORTING_TEST_ROOT=\"${CMAKE_BINARY_DIR}/crash-reporting-test-scratch\""
+            "KB_CRASH_REPORTING_PRIVACY_NOTICE=\"${CMAKE_SOURCE_DIR}/platform/windows/CRASH_REPORTS.txt\""
+        )
+        add_test(NAME kb_crash_reporting_tests COMMAND $<TARGET_FILE:kb_crash_reporting_tests>)
+        set_tests_properties(kb_crash_reporting_tests PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+            LABELS "platform;safety"
+            TIMEOUT 300
+        )
+        kb_apply_quality_gates(kb_crash_reporting_tests)
+    endif()
+
     function(kb_add_ecs_test_target target_name)
         add_executable(${target_name}
             ${ARGN}
@@ -1814,6 +1997,53 @@ if(BUILD_TESTING)
         tests/EcsSnapshotTests.cpp
     )
     set_tests_properties(kb_ecs_api_tests PROPERTIES LABELS "ecs;api;debug")
+    target_include_directories(kb_ecs_api_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/private)
+
+    kb_add_ecs_test_target(kb_ecs_observer_identity_tests tests/EcsObserverIdentityTests.cpp)
+    kb_add_ecs_test_target(kb_ecs_cascade_owner_tests tests/EcsCascadeOwnerTests.cpp)
+    kb_add_ecs_test_target(kb_ecs_native_allocation_policy_tests tests/EcsNativeAllocationPolicyTests.cpp)
+    kb_add_ecs_test_target(kb_ecs_retained_chunk_prefix_tests tests/EcsRetainedChunkPrefixTests.cpp)
+    set_tests_properties(kb_ecs_retained_chunk_prefix_tests PROPERTIES LABELS "ecs;storage;correctness")
+    set_tests_properties(kb_ecs_observer_identity_tests kb_ecs_cascade_owner_tests kb_ecs_native_allocation_policy_tests
+        PROPERTIES LABELS "ecs;lifecycle;correctness")
+    if(MSVC)
+        add_executable(kb_ecs_native_allocation_fault_tests tests/EcsNativeAllocationPolicyTests.cpp)
+        target_link_libraries(kb_ecs_native_allocation_fault_tests PRIVATE kb_engine flecs::flecs_static)
+        target_compile_definitions(kb_ecs_native_allocation_fault_tests PRIVATE KB_NATIVE_POLICY_FAULT_INJECTION)
+        kb_apply_quality_gates(kb_ecs_native_allocation_fault_tests)
+        add_test(NAME kb_ecs_native_allocation_fault_tests COMMAND $<TARGET_FILE:kb_ecs_native_allocation_fault_tests> fault-recovery 128)
+        set_tests_properties(kb_ecs_native_allocation_fault_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "ecs;lifecycle;correctness;allocation-failure")
+    endif()
+
+    kb_add_ecs_test_target(kb_scene_transform_extra_column_tests
+        tests/SceneTransformExtraColumnTests.cpp
+    )
+    set_tests_properties(kb_scene_transform_extra_column_tests PROPERTIES LABELS "ecs;scene;transform;correctness")
+
+    kb_add_ecs_test_target(kb_scene_transform_cpu_reference_tests
+        tests/SceneTransformCpuReferenceTests.cpp
+        tests/SceneTransformCpuReferenceOracle.cpp
+    )
+    # Keep the independently ordered scalar oracle outside whole-program optimization.
+    set_property(TARGET kb_scene_transform_cpu_reference_tests PROPERTY INTERPROCEDURAL_OPTIMIZATION FALSE)
+    if(MSVC)
+        target_compile_options(kb_scene_transform_cpu_reference_tests PRIVATE /GL-)
+        set_property(SOURCE tests/SceneTransformCpuReferenceOracle.cpp APPEND PROPERTY COMPILE_OPTIONS /GL-)
+    endif()
+    set_tests_properties(kb_scene_transform_cpu_reference_tests PROPERTIES LABELS "ecs;scene;transform;correctness;reference")
+
+    kb_add_ecs_test_target(kb_scene_transform_scratch_tests
+        tests/SceneTransformScratchTests.cpp
+    )
+    target_compile_definitions(kb_scene_transform_scratch_tests PRIVATE KB_SCENE_TRANSFORM_SCRATCH_STANDALONE)
+    target_include_directories(kb_scene_transform_scratch_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/private)
+    set_tests_properties(kb_scene_transform_scratch_tests PROPERTIES LABELS "ecs;scene;transform;correctness")
+
+    kb_add_ecs_test_target(kb_scene_transform_local_batch_tests
+        tests/SceneTransformLocalBatchTests.cpp
+    )
+    target_compile_definitions(kb_scene_transform_local_batch_tests PRIVATE KB_SCENE_TRANSFORM_LOCAL_BATCH_STANDALONE)
+    set_tests_properties(kb_scene_transform_local_batch_tests PROPERTIES LABELS "ecs;scene;transform;correctness")
 
     kb_add_ecs_test_target(kb_ecs_scheduler_correctness_tests
         tests/EcsSchedulerCorrectnessTestMain.cpp

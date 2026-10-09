@@ -12,7 +12,9 @@ extern "C" {
 #include <lua.h>
 }
 
+#include <algorithm>
 #include <array>
+#include <initializer_list>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -60,6 +62,20 @@ int LuaCallFunction(lua_State* state) {
     std::vector<ScriptFunctionArgument> arguments;
     if (lua_gettop(state) >= 2 && lua_istable(state, 2) != 0) {
         arguments = ArgumentsFromTable(state, 2);
+        // A Double input keeps the Lua number whole (ArgumentsFromTable narrows numbers to float).
+        const ScriptFunctionSignature* signature =
+            context->Functions() != nullptr ? context->Functions()->FindSignature(functionName) : nullptr;
+        if (signature != nullptr) {
+            for (ScriptFunctionArgument& argument : arguments) {
+                const auto pin = std::ranges::find_if(signature->inputs, [&argument](const ScriptFunctionPin& input) {
+                    return input.name == argument.name;
+                });
+                if (pin == signature->inputs.end() || pin->type != ScriptValueType::Double) continue;
+                lua_getfield(state, 2, argument.name.c_str());
+                if (lua_type(state, -1) == LUA_TNUMBER) argument.value = ScriptValue{ static_cast<double>(lua_tonumber(state, -1)) };
+                lua_pop(state, 1);
+            }
+        }
     }
     const ScriptFunctionCallResult result = context->CallFunction(functionName, arguments);
     if (!result.Succeeded()) {
@@ -1590,6 +1606,38 @@ int LuaSceneLoadProgress(lua_State* state) {
     return 1;
 }
 
+int LuaSceneSetDataLayerActive(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const char* layer = luaL_checkstring(state, 1);
+    const bool active = lua_toboolean(state, 2) != 0;
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("layer", ScriptValue{ std::string{ layer } }),
+        Arg("active", ScriptValue{ active }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("Scene.SetDataLayerActive", arguments);
+    lua_pushboolean(state, result.Output("set").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaSceneIsDataLayerActive(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const char* layer = luaL_checkstring(state, 1);
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("layer", ScriptValue{ std::string{ layer } }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("Scene.IsDataLayerActive", arguments);
+    lua_pushboolean(state, result.Output("active").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
 int LuaUICreate(lua_State* state) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
     if (context == nullptr) {
@@ -1786,6 +1834,88 @@ int LuaTransformTranslate(lua_State* state) {
     const ScriptFunctionCallResult result = context->CallFunction("Transform.Translate", arguments);
     lua_pushboolean(state, result.Output("moved").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
     return 1;
+}
+
+// The precise Transform functions read Lua numbers as doubles (ArgumentsFromTable would narrow them to float).
+[[nodiscard]] double LuaNumberField(lua_State* state, int table, const char* name, bool& present) {
+    lua_getfield(state, table, name);
+    present = lua_isnumber(state, -1) != 0;
+    const double value = present ? static_cast<double>(lua_tonumber(state, -1)) : 0.0;
+    lua_pop(state, 1);
+    return value;
+}
+
+[[nodiscard]] std::vector<ScriptFunctionArgument> PreciseEntityXyzArguments(lua_State* state) {
+    std::vector<ScriptFunctionArgument> arguments;
+    if (lua_istable(state, 1) != 0) {
+        lua_getfield(state, 1, "entity");
+        arguments.push_back(Arg("entity", ScriptValue{ static_cast<std::uint64_t>(luaL_checkinteger(state, -1)), ScriptValueType::Entity }));
+        lua_pop(state, 1);
+        for (const char* axis : { "x", "y", "z" }) {
+            bool present = false;
+            const double value = LuaNumberField(state, 1, axis, present);
+            if (present) arguments.push_back(Arg(axis, ScriptValue{ value }));
+        }
+        return arguments;
+    }
+    arguments.push_back(Arg("entity", ScriptValue{ static_cast<std::uint64_t>(luaL_checkinteger(state, 1)), ScriptValueType::Entity }));
+    arguments.push_back(Arg("x", ScriptValue{ static_cast<double>(luaL_checknumber(state, 2)) }));
+    arguments.push_back(Arg("y", ScriptValue{ static_cast<double>(luaL_checknumber(state, 3)) }));
+    arguments.push_back(Arg("z", ScriptValue{ static_cast<double>(luaL_checknumber(state, 4)) }));
+    return arguments;
+}
+
+int LuaPrecisePositionQuery(lua_State* state, const char* function) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+    const auto entity = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const std::vector<ScriptFunctionArgument> arguments{ Arg("entity", ScriptValue{ entity, ScriptValueType::Entity }) };
+    const ScriptFunctionCallResult result = context->CallFunction(function, arguments);
+    if (!result.Succeeded() || !result.Output("found").value_or(ScriptValue{ false }).AsBool()) {
+        lua_pushnil(state);
+        return 1;
+    }
+    lua_createtable(state, 0, 3);
+    for (const char* axis : { "x", "y", "z" }) {
+        lua_pushnumber(state, static_cast<lua_Number>(result.Output(axis).value_or(ScriptValue{ 0.0 }).AsDouble()));
+        lua_setfield(state, -2, axis);
+    }
+    return 1;
+}
+
+int LuaPrecisePositionCommand(lua_State* state, const char* function) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const ScriptFunctionCallResult result = context->CallFunction(function, PreciseEntityXyzArguments(state));
+    lua_pushboolean(state, result.Output("moved").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaTransformGetPrecisePosition(lua_State* state) {
+    return LuaPrecisePositionQuery(state, "Transform.GetPrecisePosition");
+}
+
+int LuaTransformSetPrecisePosition(lua_State* state) {
+    return LuaPrecisePositionCommand(state, "Transform.SetPrecisePosition");
+}
+
+int LuaTransformTranslatePrecise(lua_State* state) {
+    return LuaPrecisePositionCommand(state, "Transform.TranslatePrecise");
+}
+
+int LuaTransformGetPreciseWorldPosition(lua_State* state) {
+    return LuaPrecisePositionQuery(state, "Transform.GetPreciseWorldPosition");
+}
+
+int LuaTransformSetPreciseWorldPosition(lua_State* state) {
+    return LuaPrecisePositionCommand(state, "Transform.SetPreciseWorldPosition");
 }
 
 int LuaTimeDelta(lua_State* state) {
@@ -2725,6 +2855,74 @@ int LuaPointerRay(lua_State* state) {
     return 1;
 }
 
+// Navigation.* take either one table of named arguments or positional numbers, and return a
+// table of the function's outputs (SetAreaCost: whether the cost was applied).
+int LuaNavigationCall(lua_State* state, const char* function, std::initializer_list<const char*> positional, int required) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+    std::vector<ScriptFunctionArgument> arguments;
+    if (lua_istable(state, 1) != 0) {
+        arguments = ArgumentsFromTable(state, 1);
+    } else {
+        int index = 1;
+        for (const char* name : positional) {
+            if (index > required && lua_isnoneornil(state, index)) break;
+            const std::string_view pin{ name };
+            if (pin == "profile" || pin == "areaMask" || pin == "index" || pin == "area") {
+                arguments.push_back(Arg(name, ScriptValue{ static_cast<int>(luaL_checkinteger(state, index)) }));
+            } else {
+                arguments.push_back(Arg(name, ScriptValue{ static_cast<float>(luaL_checknumber(state, index)) }));
+            }
+            ++index;
+        }
+    }
+    const ScriptFunctionCallResult result = context->CallFunction(function, arguments);
+    if (!result.Succeeded()) {
+        return PushCallError(state, result, "navigation query failed");
+    }
+    lua_createtable(state, 0, static_cast<int>(result.outputs.size()));
+    for (const ScriptFunctionArgument& output : result.outputs) {
+        PucLuaValueBridge::Push(state, output.value);
+        lua_setfield(state, -2, output.name.c_str());
+    }
+    return 1;
+}
+
+int LuaNavigationFindPath(lua_State* state) {
+    return LuaNavigationCall(state, "Navigation.FindPath", { "startX", "startY", "startZ", "endX", "endY", "endZ", "profile", "areaMask" }, 6);
+}
+
+int LuaNavigationPathCorner(lua_State* state) {
+    return LuaNavigationCall(state, "Navigation.PathCorner", { "index" }, 1);
+}
+
+int LuaNavigationRaycast(lua_State* state) {
+    return LuaNavigationCall(state, "Navigation.Raycast", { "startX", "startY", "startZ", "endX", "endY", "endZ", "profile", "areaMask" }, 6);
+}
+
+int LuaNavigationNearestPoint(lua_State* state) {
+    return LuaNavigationCall(state, "Navigation.NearestPoint", { "x", "y", "z", "profile", "areaMask" }, 3);
+}
+
+int LuaNavigationSetAreaCost(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("area", ScriptValue{ static_cast<int>(luaL_checkinteger(state, 1)) }),
+        Arg("cost", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("Navigation.SetAreaCost", arguments);
+    lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
 int LuaInputPriorityConstant(lua_State* state, std::string_view functionName) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
     if (context == nullptr) {
@@ -3069,6 +3267,18 @@ int LuaLocalizationFormatPlural(lua_State* state) {
     return 1;
 }
 
+int LuaLocalizationFormatPluralNumber(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) return luaL_error(state, "lua script execution context is not available");
+    const ScriptFunctionCallResult result = CallLocalization(*context, "Localization.FormatPluralNumber", {
+        Arg("key", ScriptValue{ std::string{ luaL_checkstring(state, 1) } }),
+        Arg("number", ScriptValue{ std::string{ luaL_checkstring(state, 2) } }),
+    });
+    if (!result.Succeeded()) return PushCallError(state, result, "Localization plural formatting failed");
+    PucLuaValueBridge::Push(state, result.Output("text").value_or(ScriptValue{ std::string{} }));
+    return 1;
+}
+
 // LIB-010: SetClosure's `function` is a runtime value (123 call sites each
 // pass a different one), so it cannot become PucLuaSafeCall's compile-time
 // template parameter without touching every call site. Instead this
@@ -3094,7 +3304,7 @@ void SetClosure(lua_State* state, const char* name, lua_CFunction function, Scri
 // marshalling.  Their position follows ScriptApiCatalog::LuaBindingDefinitions
 // excluding Task and global bindings; table and Lua field names deliberately
 // live only in that catalog.
-constexpr std::array<lua_CFunction, 177> kCatalogBindingAdapters{ {
+constexpr auto kCatalogBindingAdapters = std::to_array<lua_CFunction>({
     &LuaAudioPlay,
     &LuaAudioSetMixer,
     &LuaAudioActiveMixer,
@@ -3184,6 +3394,8 @@ constexpr std::array<lua_CFunction, 177> kCatalogBindingAdapters{ {
     &LuaSceneGetActive,
     &LuaSceneFind,
     &LuaSceneLoadProgress,
+    &LuaSceneSetDataLayerActive,
+    &LuaSceneIsDataLayerActive,
     &LuaUICreate,
     &LuaUIAddComponent,
     &LuaUIRemoveComponent,
@@ -3198,6 +3410,11 @@ constexpr std::array<lua_CFunction, 177> kCatalogBindingAdapters{ {
     &LuaTransformGetPosition,
     &LuaTransformSetPosition,
     &LuaTransformTranslate,
+    &LuaTransformGetPrecisePosition,
+    &LuaTransformSetPrecisePosition,
+    &LuaTransformTranslatePrecise,
+    &LuaTransformGetPreciseWorldPosition,
+    &LuaTransformSetPreciseWorldPosition,
     &LuaPhysicsRaycast,
     &LuaPhysicsAddForce,
     &LuaPhysicsAddImpulse,
@@ -3267,12 +3484,18 @@ constexpr std::array<lua_CFunction, 177> kCatalogBindingAdapters{ {
     &LuaLocalizationLanguage,
     &LuaLocalizationTranslate,
     &LuaLocalizationFormatPlural,
+    &LuaLocalizationFormatPluralNumber,
     &LuaPointerPosition,
     &LuaPointerDelta,
     &LuaPointerButton,
     &LuaPointerScroll,
     &LuaPointerRay,
-} };
+    &LuaNavigationFindPath,
+    &LuaNavigationPathCorner,
+    &LuaNavigationRaycast,
+    &LuaNavigationNearestPoint,
+    &LuaNavigationSetAreaCost,
+});
 
 [[nodiscard]] std::size_t CountCatalogTableBindings(std::string_view tableName) noexcept {
     std::size_t count = 0;

@@ -32,6 +32,10 @@ struct SceneViewportToolbarRects {
     RECT snapStepButton{};
     RECT rotationSnapButton{};
     RECT twoDButton{};
+    // Shown and clickable only while a prefab is open in prefab edit mode.
+    RECT prefabName{};
+    RECT prefabSaveButton{};
+    RECT prefabCloseButton{};
     RECT dropdownPanel{};
     std::array<RECT, 6U> dropdownItems{};
     RECT renderArea{};
@@ -71,6 +75,7 @@ public:
     [[nodiscard]] static TerrainViewportToolbarRects ResolveTerrainTools(const RECT& content) noexcept;
     static void RecordFrameMilliseconds(double milliseconds) noexcept;
     static void Paint(HDC dc, const RECT& content, const EditorTheme& theme, const EditorViewportPreviewState& state);
+    static void PaintPrefabEditBar(HDC dc, const RECT& content, const EditorTheme& theme, const EditorSceneContext& sceneContext);
     static void PaintTerrainTools(
         HDC dc,
         const RECT& content,

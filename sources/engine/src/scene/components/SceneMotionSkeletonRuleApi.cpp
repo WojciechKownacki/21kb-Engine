@@ -2,6 +2,7 @@
 #include "scene/SceneComponentMutationService.hpp"
 #include "scene/SceneComponentQueryService.hpp"
 #include "scene/SceneEntityService.hpp"
+#include "scene/SceneHistoryService.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/prefab/ScenePrefabDirtyTracker.hpp"
 
@@ -14,9 +15,11 @@ const MotionSkeletonRuleComponent* SceneComponentQueryService::TryGetMotionSkele
     return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.MotionSkeletonRules().TryGet(entity) : nullptr;
 }
 MotionSkeletonRuleComponent* SceneComponentMutationService::TryGetMotionSkeletonRule(Scene& scene, SceneEntity entity) noexcept {
+    SceneHistoryService::NoteObjectChanging(scene, entity);
     return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.MotionSkeletonRules().TryGet(entity) : nullptr;
 }
 bool SceneComponentMutationService::SetMotionSkeletonRule(Scene& scene, SceneEntity entity, const MotionSkeletonRuleComponent& rule) {
+    SceneHistoryService::NoteObjectChanging(scene, entity);
     if (!SceneEntityService::IsAlive(scene, entity) || !IsMotionSkeletonRuleComponentPersistable(rule)) return false;
     SceneState& state = SceneAccess::State(scene);
     state.componentStorage.MotionSkeletonRules().Set(entity, rule);
@@ -24,6 +27,7 @@ bool SceneComponentMutationService::SetMotionSkeletonRule(Scene& scene, SceneEnt
     return true;
 }
 void SceneComponentMutationService::RemoveMotionSkeletonRule(Scene& scene, SceneEntity entity) noexcept {
+    SceneHistoryService::NoteObjectChanging(scene, entity);
     if (!SceneEntityService::IsAlive(scene, entity)) return;
     SceneState& state = SceneAccess::State(scene);
     state.componentStorage.MotionSkeletonRules().Remove(entity);

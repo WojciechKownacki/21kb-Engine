@@ -136,7 +136,8 @@ public:
     }
 
 private:
-    std::vector<QueryReductionSlot<T>> slots_{ QueryReductionSlot<T>{} };
+    // Sized, not brace-initialized: an initializer_list would put an over-aligned temporary on the stack.
+    std::vector<QueryReductionSlot<T>> slots_ = std::vector<QueryReductionSlot<T>>(1U);
 };
 
 } // namespace kb::ecs

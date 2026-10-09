@@ -9,6 +9,8 @@
 #include "kb/render/SceneGBuffer.hpp"
 #include "kb/render/frame/EditorRenderPassSubmitter.hpp"
 #include "kb/render/gi/SceneGiHistory.hpp"
+#include "kb/render/gi/SceneGiResolvePass.hpp"
+#include "kb/render/gi/SceneGiVoxelGrid.hpp"
 #include "kb/render/frame/FinalCompositePass.hpp"
 #include "kb/render/frame/RenderFramePipeline.hpp"
 #include "kb/render/frame/RenderFrameState.hpp"
@@ -28,6 +30,7 @@
 #include "kb/render/shadow/ShadowMapResource.hpp"
 
 #include "engine/scene/SceneRenderFeedback.hpp"
+#include "engine/scene/SceneUI.hpp"
 
 #include <cstdint>
 #include <array>
@@ -44,6 +47,7 @@ class BgfxContext;
 class EcsRenderSceneSynchronizer;
 class RenderScene;
 class RenderSurface;
+class RendererRelativeOverlays;
 class RendererScreenCapture;
 class ScreenUIRenderer;
 class SceneParticleRenderSynchronizer;
@@ -227,6 +231,10 @@ public:
     [[nodiscard]] const std::optional<ScenePostProcessSettings>& LastResolvedPostProcessSettings() const noexcept;
     [[nodiscard]] RuntimeSceneResourceStats RuntimeResourceStats() const noexcept;
     [[nodiscard]] MaterialProgramRegistryStats MaterialProgramStats() const noexcept;
+    // Streaming of the finer mip levels and levels of detail of packaged textures and meshes:
+    // the GPU memory budget, I/O and per-frame upload limits, and what it is doing.
+    void ConfigureContentStreaming(const RuntimeContentStreamingSettings& settings);
+    [[nodiscard]] RuntimeContentStreamingStats ContentStreamingStats() const;
     void ReserveRuntimeSceneResources(const RuntimeSceneResourceReserveDesc& desc);
     void SetDefaultSceneDrawBudget(SceneRenderDrawBudget drawBudget) noexcept;
     [[nodiscard]] SceneRenderDrawBudget DefaultSceneDrawBudget() const noexcept;
@@ -258,9 +266,17 @@ public:
     [[nodiscard]] bool RuntimeAssetDiscoveryEnabled() const noexcept;
     void ReleaseScene(const kb::scene::Scene& scene) noexcept;
     void ReleaseAllScenes() noexcept;
+    // When the render origin of a scene follows its viewing camera (docs/large_worlds.md).
+    void SetRenderOriginPolicy(const RenderOriginPolicy& policy) noexcept;
+    [[nodiscard]] const RenderOriginPolicy& CurrentRenderOriginPolicy() const noexcept;
 
 private:
+    // Moves the scene's render origin to the viewing camera when it went too far, re-expresses the submit's
+    // world-space camera and overlays in render space, then submits.
     [[nodiscard]] bool SubmitSceneToViewport(const kb::scene::Scene& scene, const RenderSceneSubmitDesc& desc, const RenderViewportPlan& viewportPlan);
+    [[nodiscard]] bool SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene, const RenderSceneSubmitDesc& desc, const RenderViewportPlan& viewportPlan);
+    // True when the render origin moved.
+    [[nodiscard]] bool UpdateRenderOrigin(const kb::scene::Scene& scene, RenderScene& renderScene, const RenderSceneSubmitDesc& desc);
     [[nodiscard]] RenderScene& RenderSceneFor(const kb::scene::Scene& scene);
     void ApplyRuntimeSceneResourceReserve();
     struct TemporalViewportState {
@@ -270,6 +286,8 @@ private:
         std::array<float, 16> previousViewProjection{};
         std::array<float, 2> previousJitter{};
         bool hasHistory = false;
+        // The render origin previousViewProjection works relative to.
+        kb::math::DVec3 renderOrigin{};
     };
     [[nodiscard]] TemporalViewportState& TemporalStateFor(RenderViewportId viewportId, std::uint32_t viewportIndex);
     std::unique_ptr<BgfxContext> context_;
@@ -279,10 +297,15 @@ private:
     // Lazily created worker pool that parallelizes the columnar render-sync (H6).
     std::unique_ptr<kb::ecs::WorkerPool> renderSyncWorkerPool_;
     RenderSceneStore renderSceneStore_;
+    RenderOriginPolicy renderOriginPolicy_{};
+    // Render-space copies of the editor overlays of a camera-relative submit (created on first use).
+    std::unique_ptr<RendererRelativeOverlays> relativeOverlays_;
     std::unique_ptr<SceneRenderer> sceneRenderer_;
     std::unique_ptr<ScenePostProcessRenderer> scenePostProcessRenderer_;
     std::unique_ptr<FinalCompositePass> finalCompositePass_;
     std::unique_ptr<SceneDeferredLightingPass> deferredLightingPass_;
+    SceneGiResolvePass giResolvePass_;
+    SceneGiVoxelGrid giVoxelGrid_;
     SceneRenderTarget defaultSceneTarget_;
     // G-buffer commands are consumed asynchronously by bgfx. Reusing one allocation for
     // differently-sized viewports in the same frame destroys attachments still referenced by an
@@ -294,6 +317,9 @@ private:
     ShadowMapResource defaultShadowMap_;
     ShadowMapResource defaultPointShadowMap_;
     RenderFramePipeline framePipeline_;
+    // The frame plan depends only on the viewports: it is rebuilt when they change.
+    RenderFramePlan framePlan_;
+    std::vector<RenderViewportDesc> framePlanViewports_;
     RenderFrameState frameState_;
     EditorRenderPassSubmitter editorPassSubmitter_;
     PostProcessChain postProcessChain_;
@@ -311,6 +337,8 @@ private:
     // entries vector with the scene's stored frame, so both sides keep their capacity and
     // the steady state allocates nothing per frame.
     kb::scene::SceneRenderVisibilityFrame sceneRenderVisibilityScratch_{};
+    // The screen UI frame of a SubmitSceneToViewport, whose elements keep their capacity for the next one.
+    kb::scene::SceneUIFrame screenUIFrameScratch_{};
     // LIB-145: the async screen-capture controller (frame-gated blit+readTexture+PNG, see
     // RendererScreenCapture.hpp).
     std::unique_ptr<RendererScreenCapture> screenCapture_;

@@ -20,6 +20,7 @@ namespace kb::particle_editor {
 enum class ParticleEditorProperty : std::uint16_t {
     SpawnRateCurve, SpawnBurstsSummary, SpawnLifetimeMin, SpawnLifetimeMax, SpawnSpeedMin, SpawnSpeedMax, SpawnDirection,
     SpawnSpreadDegrees, SpawnRandomization, SpawnPrewarmSeconds, SpawnStartColor, SpawnStartSize,
+    SpawnRotationMin, SpawnRotationMax, SpawnAngularVelocityMin, SpawnAngularVelocityMax,
     OutputBlend, OutputSort, OutputDepthTest, OutputDepthWrite, OutputSoftParticles,
     OutputAntiAliasing, OutputAlignment, FlipbookColumns, FlipbookRows,
     FlipbookFramesPerSecond, FlipbookLooping, OutputVelocityScale, OutputMinimumLength,
@@ -60,7 +61,7 @@ struct ParticleEditorPropertyRow {
 };
 
 [[nodiscard]] constexpr bool IsParticleEditorSpawnProperty(ParticleEditorProperty property) noexcept {
-    return property <= ParticleEditorProperty::SpawnStartSize;
+    return property <= ParticleEditorProperty::SpawnAngularVelocityMax;
 }
 
 [[nodiscard]] constexpr bool IsParticleEditorOutputProperty(ParticleEditorProperty property) noexcept {

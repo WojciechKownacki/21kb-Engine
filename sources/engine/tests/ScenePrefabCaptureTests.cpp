@@ -2,15 +2,22 @@
 #include "TestSupport.hpp"
 
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
+#include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/ScenePrefab.hpp"
 #include "engine/scene/ScenePrefabCaptureSettings.hpp"
+#include "engine/scene/ScenePrefabPrivateScene.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 
+#include <algorithm>
+#include <array>
+#include <chrono>
 #include <filesystem>
 #include <string>
 #include <system_error>
@@ -355,6 +362,432 @@ void RunPrefabCreateAssetRegistersSourceInstanceTest() {
     std::filesystem::remove(prefabPath, removeError);
 }
 
+// A prefab created from an instance root nests the old prefab and takes the instance over; one created
+// from an instance child takes that subtree out of the outer instance. Either way every object keeps
+// exactly one owner.
+void RunPrefabCreateAssetFromInstanceKeepsOneOwnerTest() {
+    const std::filesystem::path directory = std::filesystem::temp_directory_path() / "21kb_engine_prefab_one_owner";
+    std::error_code removeError;
+    std::filesystem::remove_all(directory, removeError);
+    std::filesystem::create_directories(directory);
+
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject root = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Owner Root" });
+    const kb::scene::SceneObject child = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Owner Child", .parent = root });
+    const kb::scene::ScenePrefabHandle inner = scene.Prefabs().CreateAsset(root, "Inner", directory / "Inner.kbprefab");
+    const kb::scene::ScenePrefabInstanceHandle innerInstance = scene.Prefabs().RootInstance(root);
+    kb::tests::Require(inner.IsValid() && innerInstance.IsValid(), "One-owner setup did not create the inner prefab instance");
+
+    const kb::scene::ScenePrefabHandle outer = scene.Prefabs().CreateAsset(root, "Outer", directory / "Outer.kbprefab");
+    const kb::scene::ScenePrefabInstanceHandle outerInstance = scene.Prefabs().RootInstance(root);
+    kb::tests::Require(outer.IsValid() && outerInstance.IsValid() && scene.Prefabs().SourcePrefab(outerInstance) == outer,
+        "Prefab created from an instance root did not take the instance over");
+    kb::tests::Require(!scene.Prefabs().IsInstance(innerInstance), "Prefab created from an instance root left the old instance record");
+    kb::tests::Require(scene.Prefabs().RefreshInstances(inner) == 0U, "Old prefab still lists an instance after its root was taken over");
+    std::uint32_t childNode = 99U;
+    kb::tests::Require(scene.Prefabs().ContainingInstance(child, childNode) == outerInstance && childNode == 1U, "Instance child did not move to the new prefab instance");
+    kb::tests::Require(scene.Prefabs().Get(outer).Nodes()[0].nestedPrefabGuid == scene.Prefabs().Guid(inner), "Prefab created from an instance root does not nest the old prefab");
+
+    const kb::scene::ScenePrefabHandle part = scene.Prefabs().CreateAsset(child, "Part", directory / "Part.kbprefab");
+    const kb::scene::ScenePrefabInstanceHandle partInstance = scene.Prefabs().RootInstance(child);
+    kb::tests::Require(part.IsValid() && partInstance.IsValid(), "Prefab created from an instance child is not linked");
+    kb::tests::Require(scene.Prefabs().ContainingInstance(child, childNode) == partInstance && childNode == 0U, "Instance child still belongs to the outer instance");
+    kb::tests::Require(scene.Prefabs().RootInstance(root) == outerInstance, "Outer instance lost its root when a child became a prefab");
+    bool childMissing = false;
+    bool childAdded = false;
+    for (const kb::scene::ScenePrefabPropertyOverride& property : scene.Prefabs().Overrides(outerInstance).properties) {
+        childMissing = childMissing || (property.nodeIndex == 1U && property.flag == kb::scene::ScenePrefabOverrideFlag::MissingObject);
+        childAdded = childAdded || (property.nodeIndex == 0U && property.flag == kb::scene::ScenePrefabOverrideFlag::AddedChild);
+    }
+    kb::tests::Require(childMissing && childAdded, "Outer instance does not report the child it gave up to the new prefab");
+
+    std::filesystem::remove_all(directory, removeError);
+}
+
+// A .kbprefab changed on disk by someone else is the same asset: loading it again keeps the guid stored
+// in the file and the loaded prefab, and RefreshInstances brings existing instances to the new content.
+void RunPrefabReloadOfChangedFileKeepsGuidTest() {
+    const std::filesystem::path prefabPath = std::filesystem::temp_directory_path() / "21kb_engine_prefab_reload_changed.kbprefab";
+    std::error_code removeError;
+    std::filesystem::remove(prefabPath, removeError);
+
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject root = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Barrel" });
+    static_cast<void>(scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Band", .parent = root }));
+    const kb::scene::ScenePrefabHandle handle = scene.Prefabs().CreateAsset(root, "Barrel", prefabPath);
+    kb::tests::Require(handle.IsValid(), "Reload setup did not create the prefab asset");
+    const std::string guid = scene.Prefabs().Guid(handle);
+    const kb::scene::ScenePrefabInstanceHandle instance = scene.Prefabs().RootInstance(root);
+
+    {
+        kb::scene::Scene writer;
+        const kb::scene::ScenePrefabHandle written = writer.Prefabs().Load(prefabPath);
+        const kb::scene::ScenePrefabInstance writerInstance = writer.Prefabs().Instantiate(written);
+        kb::scene::TransformComponent transform = writer.Transforms().Get(writerInstance.RootObject());
+        transform.localPosition.x = 4.0F;
+        writer.Transforms().Set(writerInstance.RootObject(), transform);
+        kb::tests::Require(writer.Prefabs().ApplyOverrides(writerInstance.Handle(), prefabPath), "Reload setup did not write the changed prefab");
+    }
+
+    const kb::scene::ScenePrefabHandle reloaded = scene.Prefabs().Load(prefabPath);
+    kb::tests::Require(reloaded == handle && scene.Prefabs().Guid(reloaded) == guid, "Reloading a changed prefab file gave it a new identity");
+    kb::tests::Require(scene.Prefabs().RegisteredCount() == 1U, "Reloading a changed prefab file registered a second prefab");
+    kb::tests::Require(scene.Prefabs().RefreshInstances(reloaded) == 1U, "Existing instance was not refreshed from the changed prefab");
+    kb::tests::Require(kb::tests::NearlyEqual(scene.Transforms().Get(root).localPosition.x, 4.0F), "Existing instance did not take the changed prefab content");
+    kb::tests::Require(scene.Prefabs().Overrides(instance).properties.empty(), "Refreshed instance reports the new prefab content as overrides");
+
+    std::filesystem::remove(prefabPath, removeError);
+}
+
+// Spawning a captured prefab at runtime makes plain objects; only document loads and editor restores
+// ask for the instances named in it to be linked to their prefabs again.
+void RunRuntimeSpawnDoesNotLinkPrefabInstancesTest() {
+    kb::scene::Scene scene;
+    kb::scene::ScenePrefab fx;
+    static_cast<void>(fx.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Fx" }));
+    const kb::scene::ScenePrefabHandle fxHandle = scene.Prefabs().Register("Fx", std::move(fx));
+    kb::scene::ScenePrefab bullet;
+    const std::uint32_t bulletRoot = bullet.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Bullet" });
+    const std::uint32_t bulletFx = bullet.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Fx", .nestedPrefabGuid = scene.Prefabs().Guid(fxHandle), .parentNode = bulletRoot });
+
+    const kb::scene::ScenePrefabInstance spawned = scene.Prefabs().Instantiate(bullet);
+    kb::tests::Require(spawned.ObjectCount() == 2U && !scene.Prefabs().RootInstance(spawned.ObjectAt(bulletFx)).IsValid(),
+        "A runtime spawn created a prefab instance record");
+    const kb::scene::ScenePrefabInstance restored = scene.Prefabs().Instantiate(bullet, kb::scene::ScenePrefabInstantiationSettings{ .linkPrefabInstances = true });
+    kb::tests::Require(scene.Prefabs().SourcePrefab(scene.Prefabs().RootInstance(restored.ObjectAt(bulletFx))) == fxHandle,
+        "A linked instantiation did not link the nested prefab instance");
+}
+
+// A destroyed instance child leaves a missing node behind. The entity that reuses its slot is not that
+// node, and an undone delete still finds its node after the slot was reused in between.
+void RunDestroyedInstanceChildSlotReuseTest() {
+    kb::scene::Scene scene;
+    kb::scene::ScenePrefab prefab;
+    const std::uint32_t rootNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Crate" });
+    const std::uint32_t lidNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Lid", .parentNode = rootNode });
+    const kb::scene::ScenePrefabHandle handle = scene.Prefabs().Register("Crate", std::move(prefab));
+    const kb::scene::ScenePrefabInstance crate = scene.Prefabs().Instantiate(handle);
+    const kb::scene::SceneEntity lid = crate.ObjectAt(lidNode).Entity();
+
+    scene.Entities().Destroy(lid);
+    const kb::scene::SceneObject plain = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Plain" });
+    kb::tests::Require((plain.Entity().Id() & 0xFFFFFFFFULL) == (lid.Id() & 0xFFFFFFFFULL), "Slot reuse setup: the new object did not reuse the destroyed child's slot");
+    std::uint32_t node = 99U;
+    kb::tests::Require(!scene.Prefabs().ContainingInstance(plain, node).IsValid(), "An entity reusing a destroyed instance child's slot was taken for the prefab node");
+
+    const kb::scene::ScenePrefabInstance other = scene.Prefabs().Instantiate(handle);
+    scene.Entities().Destroy(other.RootObject());
+    const kb::scene::SceneObject restored = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lid", .parent = crate.RootObject() });
+    const std::array<kb::scene::SceneEntity, 1> destroyed{ lid };
+    const std::array<kb::scene::SceneObject, 1> recreated{ restored };
+    scene.Prefabs().RelinkRestoredObjects(destroyed, recreated);
+    kb::tests::Require(scene.Prefabs().ContainingInstance(restored, node) == crate.Handle() && node == lidNode,
+        "An undone delete was not put back into its instance after the slot was reused");
+}
+
+// Objects keep their prefab node through a save and reopen by identity, not by name or place: an
+// added child named like a prefab node stays added, and a node moved inside the instance stays its node.
+void RequireCrateNodeIdentity(kb::scene::Scene& scene, const char* phase) {
+    const std::string prefix = std::string{ phase } + ": ";
+    const kb::scene::SceneObject crate = scene.Hierarchy().RootObjects().front();
+    const kb::scene::ScenePrefabInstanceHandle instance = scene.Prefabs().RootInstance(crate);
+    kb::tests::Require(instance.IsValid(), (prefix + "crate lost its prefab link").c_str());
+    bool originalLid = false;
+    bool addedLid = false;
+    bool movedHinge = false;
+    for (const kb::scene::SceneObject child : scene.Hierarchy().Children(crate)) {
+        std::uint32_t node = 99U;
+        const kb::scene::ScenePrefabInstanceHandle owner = scene.Prefabs().ContainingInstance(child, node);
+        const float x = scene.Transforms().Get(child).localPosition.x;
+        originalLid = originalLid || (scene.Entities().Name(child) == "Lid" && x == 1.0F && owner == instance && node == 1U);
+        addedLid = addedLid || (scene.Entities().Name(child) == "Lid" && x == 9.0F && !owner.IsValid());
+        movedHinge = movedHinge || (scene.Entities().Name(child) == "Hinge" && owner == instance && node == 2U);
+    }
+    kb::tests::Require(originalLid, (prefix + "the original Lid is not prefab node 1").c_str());
+    kb::tests::Require(addedLid, (prefix + "the added child named Lid was taken for a prefab node").c_str());
+    kb::tests::Require(movedHinge, (prefix + "the Hinge moved inside the instance fell out of it").c_str());
+}
+
+void RunPrefabInstanceNodeIdentitySurvivesReopenTest() {
+    const std::filesystem::path projectRoot = std::filesystem::temp_directory_path() / "21kb_engine_prefab_identity_project";
+    std::error_code removeError;
+    std::filesystem::remove_all(projectRoot, removeError);
+    std::filesystem::create_directories(projectRoot / "Assets");
+    const std::filesystem::path scenePath = projectRoot / "Assets" / "Identity.21kbscene";
+    {
+        kb::scene::Scene scene;
+        kb::tests::Require(scene.Assets().MountProject(projectRoot), "Identity project mount failed");
+        const kb::scene::SceneObject crate = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Crate" });
+        const kb::scene::SceneObject lid = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+            .name = "Lid", .parent = crate, .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 1.0F, 0.0F, 0.0F } } });
+        const kb::scene::SceneObject hinge = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Hinge", .parent = lid });
+        kb::tests::Require(scene.Prefabs().CreateAsset(crate, "Crate", projectRoot / "Assets" / "Crate.kbprefab").IsValid(), "Identity prefab was not created");
+
+        static_cast<void>(scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+            .name = "Lid", .parent = crate, .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 9.0F, 0.0F, 0.0F } } }));
+        kb::tests::Require(scene.Hierarchy().SetParent(lid, kb::scene::SceneObject{}) && scene.Hierarchy().SetParent(lid, crate) &&
+            scene.Hierarchy().SetParent(hinge, crate), "Identity setup could not move the instance nodes");
+        RequireCrateNodeIdentity(scene, "before save");
+        kb::tests::Require(kb::scene::SceneDocumentService::Save(scene, scenePath, "Identity"), "Identity scene was not saved");
+
+        const kb::scene::SceneDocument document = kb::scene::SceneDocumentService::Capture(scene, "Identity");
+        kb::tests::Require(kb::scene::SceneDocumentService::LoadIntoScene(scene, document), "Identity document did not reload in place");
+        RequireCrateNodeIdentity(scene, "in-place reload");
+    }
+    {
+        kb::scene::Scene reopened;
+        kb::tests::Require(reopened.Assets().MountProject(projectRoot), "Identity reopen project mount failed");
+        static_cast<void>(reopened.Assets().Discover());
+        kb::tests::Require(kb::scene::SceneDocumentService::LoadFileIntoScene(reopened, scenePath), "Identity scene did not reopen");
+        RequireCrateNodeIdentity(reopened, "reopen");
+    }
+    std::filesystem::remove_all(projectRoot, removeError);
+}
+
+// A scene keeps the prefab content of the day it was saved. Reopened after the prefab changed, its
+// instance shows the prefab as it is now plus only its own overrides, so Apply cannot undo the change.
+void RunReopenedInstanceFollowsChangedPrefabTest() {
+    const std::filesystem::path projectRoot = std::filesystem::temp_directory_path() / "21kb_engine_prefab_rebase_project";
+    std::error_code removeError;
+    std::filesystem::remove_all(projectRoot, removeError);
+    std::filesystem::create_directories(projectRoot / "Assets");
+    const std::filesystem::path prefabPath = projectRoot / "Assets" / "Crate.kbprefab";
+    const std::filesystem::path scenePath = projectRoot / "Assets" / "Rebase.21kbscene";
+    {
+        kb::scene::Scene scene;
+        kb::tests::Require(scene.Assets().MountProject(projectRoot), "Rebase project mount failed");
+        const kb::scene::SceneObject crate = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Crate" });
+        static_cast<void>(scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lid", .parent = crate }));
+        kb::tests::Require(scene.Prefabs().CreateAsset(crate, "Crate", prefabPath).IsValid(), "Rebase prefab was not created");
+        kb::scene::TransformComponent transform = scene.Transforms().Get(crate);
+        transform.localPosition.z = 5.0F;
+        scene.Transforms().Set(crate, transform);
+        kb::tests::Require(kb::scene::SceneDocumentService::Save(scene, scenePath, "Rebase"), "Rebase scene was not saved");
+    }
+    {
+        kb::scene::Scene editor;
+        const kb::scene::ScenePrefabInstance edited = editor.Prefabs().Instantiate(editor.Prefabs().Load(prefabPath));
+        kb::scene::TransformComponent lid = editor.Transforms().Get(edited.ObjectAt(1U));
+        lid.localPosition.x = 4.0F;
+        editor.Transforms().Set(edited.ObjectAt(1U), lid);
+        static_cast<void>(editor.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Handle", .parent = edited.RootObject() }));
+        kb::tests::Require(editor.Prefabs().ApplyOverrides(edited.Handle(), prefabPath), "Rebase setup could not change the prefab");
+    }
+    kb::scene::Scene reopened;
+    kb::tests::Require(reopened.Assets().MountProject(projectRoot), "Rebase reopen project mount failed");
+    static_cast<void>(reopened.Assets().Discover());
+    kb::tests::Require(kb::scene::SceneDocumentService::LoadFileIntoScene(reopened, scenePath), "Rebase scene did not reopen");
+    const kb::scene::SceneObject crate = reopened.Hierarchy().RootObjects().front();
+    const kb::scene::ScenePrefabInstanceHandle instance = reopened.Prefabs().RootInstance(crate);
+    std::vector<std::string> names;
+    float lidX = 0.0F;
+    for (const kb::scene::SceneObject child : reopened.Hierarchy().Children(crate)) {
+        names.push_back(reopened.Entities().Name(child));
+        if (names.back() == "Lid") {
+            lidX = reopened.Transforms().Get(child).localPosition.x;
+        }
+    }
+    kb::tests::Require(instance.IsValid() && lidX == 4.0F, "Reopened instance did not take the prefab's changed value");
+    kb::tests::Require(std::ranges::count(names, std::string{ "Handle" }) == 1, "Reopened instance did not get the node the prefab gained");
+    kb::tests::Require(reopened.Transforms().Get(crate).localPosition.z == 5.0F, "Reopened instance lost its own override");
+    const kb::scene::ScenePrefabOverrideReport overrides = reopened.Prefabs().Overrides(instance);
+    kb::tests::Require(overrides.properties.size() == 1U && overrides.properties.front().nodeIndex == 0U,
+        "Reopened instance reports the prefab's own change as an override");
+    std::filesystem::remove_all(projectRoot, removeError);
+}
+
+// A prefab edited in its private scene and saved keeps the prefabs it nests; an edit made inside a nested
+// prefab becomes an override of it rather than a flattened copy.
+void RunPrivateSceneSaveKeepsNestedPrefabTest() {
+    kb::scene::Scene scene;
+    kb::scene::ScenePrefab wheel;
+    const std::uint32_t wheelRoot = wheel.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Wheel" });
+    static_cast<void>(wheel.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Hub", .parentNode = wheelRoot }));
+    const kb::scene::ScenePrefabHandle wheelHandle = scene.Prefabs().Register("Wheel", std::move(wheel));
+    const kb::scene::SceneObject car = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Car" });
+    static_cast<void>(scene.Prefabs().Instantiate(wheelHandle, kb::scene::ScenePrefabInstantiationSettings{ .parent = car }));
+    const kb::scene::ScenePrefabHandle carHandle = scene.Prefabs().CaptureRegistered(car, "Car");
+    const std::string wheelGuid = scene.Prefabs().Guid(wheelHandle);
+    kb::tests::Require(scene.Prefabs().Get(carHandle).Nodes()[1].nestedPrefabGuid == wheelGuid, "Nested save setup: Car does not nest Wheel");
+
+    kb::scene::ScenePrefabPrivateScene edit = scene.Prefabs().OpenPrivateScene(carHandle);
+    kb::tests::Require(edit.IsValid() && edit.ObjectCount() == 3U, "Nested save setup: Car did not open in a private scene");
+    edit.EditScene().Entities().SetName(edit.ObjectAt(2U), "BigHub");
+    kb::tests::Require(edit.Apply(), "Saving the edited Car failed");
+
+    const kb::scene::ScenePrefab saved = scene.Prefabs().Get(carHandle);
+    kb::tests::Require(saved.Nodes()[1].nestedPrefabGuid == wheelGuid, "Saving the edited Car dropped its nested Wheel");
+    kb::tests::Require(std::ranges::any_of(saved.Nodes()[1].nestedPrefabOverrides, [](const kb::scene::ScenePrefabPropertyOverride& property) {
+        return property.propertyPath == "name" && property.value == "BigHub";
+    }), "The edit inside the nested Wheel was not saved as its override");
+    const kb::scene::ScenePrefabInstance placed = scene.Prefabs().Instantiate(carHandle);
+    kb::tests::Require(placed.ObjectCount() == 3U && scene.Entities().Name(placed.ObjectAt(2U)) == "BigHub", "A new Car does not show the nested edit");
+}
+
+// A variant edited in its private scene saves the edit as its own overrides and leaves its base alone.
+void RunPrivateSceneSaveOfVariantTest() {
+    kb::scene::Scene scene;
+    kb::scene::ScenePrefab crate;
+    const std::uint32_t crateRoot = crate.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Crate" });
+    static_cast<void>(crate.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Lid", .parentNode = crateRoot }));
+    const kb::scene::ScenePrefabHandle base = scene.Prefabs().Register("Crate", std::move(crate));
+    const kb::scene::ScenePrefabHandle red = scene.Prefabs().RegisterVariant("RedCrate", base, {
+        kb::scene::ScenePrefabPropertyOverride{ .nodeIndex = 0U, .propertyPath = "name", .value = "RedCrate", .flag = kb::scene::ScenePrefabOverrideFlag::Name },
+    });
+    kb::scene::ScenePrefabPrivateScene edit = scene.Prefabs().OpenPrivateScene(red);
+    kb::tests::Require(edit.IsValid() && edit.EditScene().Entities().Name(edit.RootObject()) == "RedCrate", "The variant did not open in a private scene");
+    kb::scene::TransformComponent transform = edit.EditScene().Transforms().Get(edit.RootObject());
+    transform.localPosition.x = 7.0F;
+    edit.EditScene().Transforms().Set(edit.RootObject(), transform);
+    kb::tests::Require(edit.Apply(), "Saving the edited variant failed");
+
+    const kb::scene::ScenePrefab saved = scene.Prefabs().Get(red);
+    kb::tests::Require(scene.Prefabs().AssetType(red) == kb::scene::ScenePrefabAssetType::Variant &&
+        saved.Nodes()[0].name == "RedCrate" && saved.Nodes()[0].transform.localPosition.x == 7.0F, "The variant did not take the edit");
+    kb::tests::Require(scene.Prefabs().Get(base).Nodes()[0].transform.localPosition.x == 0.0F, "Saving the variant changed its base");
+}
+
+// The instance change revision moves with every change to an instance's objects, and only then.
+void RunInstanceChangeRevisionTest() {
+    kb::scene::Scene scene;
+    kb::scene::ScenePrefab crate;
+    const std::uint32_t crateRoot = crate.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Crate" });
+    static_cast<void>(crate.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Lid", .parentNode = crateRoot }));
+    const kb::scene::ScenePrefabInstance placed = scene.Prefabs().Instantiate(scene.Prefabs().Register("Crate", std::move(crate)));
+    const kb::scene::SceneObject loose = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Loose" });
+
+    const std::uint64_t before = scene.Prefabs().InstanceChangeRevision();
+    kb::scene::TransformComponent transform = scene.Transforms().Get(loose);
+    transform.localPosition.x = 1.0F;
+    scene.Transforms().Set(loose, transform);
+    kb::tests::Require(scene.Prefabs().InstanceChangeRevision() == before, "Moving an object outside any instance moved the instance change revision");
+    static_cast<void>(scene.Prefabs().Overrides(placed.Handle()));
+    kb::tests::Require(scene.Prefabs().InstanceChangeRevision() == before, "Reading overrides moved the instance change revision");
+
+    transform = scene.Transforms().Get(placed.ObjectAt(1U));
+    transform.localPosition.x = 2.0F;
+    scene.Transforms().Set(placed.ObjectAt(1U), transform);
+    const std::uint64_t moved = scene.Prefabs().InstanceChangeRevision();
+    kb::tests::Require(moved != before, "Moving an instance's object did not move the instance change revision");
+    scene.Transforms().Set(placed.ObjectAt(1U), transform);
+    kb::tests::Require(scene.Prefabs().InstanceChangeRevision() != moved, "A second change to an already changed object did not move the instance change revision");
+}
+
+// Capturing a scene grows linearly with its prefab instances: four times the instances take about four
+// times as long, where re-reserving the node list per root made it sixteen times.
+void RunSceneCaptureScalesLinearlyTest() {
+    const auto captureMs = [](std::size_t count) {
+        kb::scene::Scene scene;
+        kb::scene::ScenePrefab crate;
+        const std::uint32_t crateRoot = crate.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Crate" });
+        static_cast<void>(crate.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Lid", .parentNode = crateRoot }));
+        static_cast<void>(scene.Prefabs().InstantiateMany(scene.Prefabs().Register("Crate", std::move(crate)), count));
+        double best = 0.0;
+        for (int run = 0; run < 3; ++run) {
+            const auto start = std::chrono::steady_clock::now();
+            const kb::scene::SceneDocument document = kb::scene::SceneDocumentService::Capture(scene, "Scale");
+            const double elapsed = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+            kb::tests::Require(document.worldPrefab.NodeCount() == count * 2U, "Scene capture lost prefab instance nodes");
+            best = run == 0 ? elapsed : std::min(best, elapsed);
+        }
+        return best;
+    };
+    const double small = captureMs(2000U);
+    const double large = captureMs(8000U);
+    kb::tests::Require(large < small * 9.0 + 5.0, "Scene capture grows faster than linearly with its prefab instances");
+}
+
+// A scene file older than prefab node ids links its instances by object name; one from now on does not,
+// and an older file without instances has nothing to link.
+void RunLegacyDocumentLinksByNameTest() {
+    kb::scene::Scene scene;
+    kb::scene::ScenePrefab crate;
+    static_cast<void>(crate.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Crate" }));
+    static_cast<void>(scene.Prefabs().Instantiate(scene.Prefabs().Register("Crate", std::move(crate))));
+    kb::scene::SceneDocument withInstance = kb::scene::SceneDocumentService::Capture(scene, "Legacy");
+    kb::tests::Require(!withInstance.LinksPrefabInstancesByName(), "A current scene document claims to link prefab instances by name");
+    withInstance.fileVersion = kb::scene::SceneDocument::PrefabNodeIdentityFileVersion - 1U;
+    kb::tests::Require(withInstance.LinksPrefabInstancesByName(), "An older scene document with a prefab instance is not flagged");
+
+    kb::scene::Scene plainScene;
+    static_cast<void>(plainScene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Plain" }));
+    kb::scene::SceneDocument plain = kb::scene::SceneDocumentService::Capture(plainScene, "Plain");
+    plain.fileVersion = kb::scene::SceneDocument::PrefabNodeIdentityFileVersion - 1U;
+    kb::tests::Require(!plain.LinksPrefabInstancesByName(), "An older scene document without prefab instances is flagged");
+}
+
+// A scene file keeps an instance only as the prefab guid on its root node. Reopening the file in a
+// fresh scene, and reloading the captured document in place (how Play mode stops), must link the
+// instance, its node mapping and its overrides again.
+void RequireRelinkedCrate(kb::scene::Scene& scene, const std::string& prefabGuid, const char* phase) {
+    const std::string prefix = std::string{ phase } + ": ";
+    const std::vector<kb::scene::SceneObject> roots = scene.Hierarchy().RootObjects();
+    kb::tests::Require(roots.size() == 1U && scene.Entities().Name(roots.front()) == "Crate", (prefix + "scene did not reload the crate root").c_str());
+    const kb::scene::SceneObject root = roots.front();
+    const kb::scene::ScenePrefabInstanceHandle instance = scene.Prefabs().RootInstance(root);
+    kb::tests::Require(instance.IsValid(), (prefix + "crate root lost its prefab instance").c_str());
+    kb::tests::Require(scene.Prefabs().Guid(scene.Prefabs().SourcePrefab(instance)) == prefabGuid, (prefix + "crate instance links the wrong prefab").c_str());
+
+    const std::vector<kb::scene::SceneObject> children = scene.Hierarchy().Children(root);
+    kb::tests::Require(children.size() == 2U, (prefix + "crate children were not reloaded").c_str());
+    std::uint32_t lidNode = 99U;
+    kb::tests::Require(scene.Entities().Name(children[0]) == "Open Lid" && scene.Prefabs().ContainingInstance(children[0], lidNode) == instance && lidNode == 1U,
+        (prefix + "renamed lid did not map to its prefab node").c_str());
+    std::uint32_t noteNode = 99U;
+    kb::tests::Require(scene.Entities().Name(children[1]) == "Note" && !scene.Prefabs().ContainingInstance(children[1], noteNode).IsValid(),
+        (prefix + "added child was linked as a prefab node").c_str());
+
+    bool renamedLid = false;
+    bool missingHinge = false;
+    bool addedChild = false;
+    for (const kb::scene::ScenePrefabPropertyOverride& property : scene.Prefabs().Overrides(instance).properties) {
+        renamedLid = renamedLid || (property.nodeIndex == 1U && property.propertyPath == "name" && property.value == "Open Lid");
+        missingHinge = missingHinge || (property.nodeIndex == 2U && property.flag == kb::scene::ScenePrefabOverrideFlag::MissingObject);
+        addedChild = addedChild || (property.nodeIndex == 0U && property.flag == kb::scene::ScenePrefabOverrideFlag::AddedChild);
+    }
+    kb::tests::Require(renamedLid && missingHinge && addedChild, (prefix + "crate overrides were not kept").c_str());
+}
+
+void RunPrefabInstanceLinkSurvivesSceneReopenTest() {
+    const std::filesystem::path projectRoot = std::filesystem::temp_directory_path() / "21kb_engine_prefab_relink_project";
+    std::error_code removeError;
+    std::filesystem::remove_all(projectRoot, removeError);
+    std::filesystem::create_directories(projectRoot / "Assets");
+    const std::filesystem::path prefabPath = projectRoot / "Assets" / "Crate.kbprefab";
+    const std::filesystem::path scenePath = projectRoot / "Assets" / "Relink.21kbscene";
+
+    std::string prefabGuid;
+    {
+        kb::scene::Scene scene;
+        kb::tests::Require(scene.Assets().MountProject(projectRoot), "Relink project mount failed");
+        const kb::scene::SceneObject root = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Crate" });
+        const kb::scene::SceneObject lid = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lid", .parent = root });
+        const kb::scene::SceneObject hinge = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Hinge", .parent = lid });
+        const kb::scene::ScenePrefabHandle prefab = scene.Prefabs().CreateAsset(root, "Crate", prefabPath);
+        kb::tests::Require(prefab.IsValid(), "Relink prefab asset was not created");
+        prefabGuid = scene.Prefabs().Guid(prefab);
+
+        scene.Entities().SetName(lid, "Open Lid");
+        scene.Entities().Destroy(hinge);
+        static_cast<void>(scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Note", .parent = root }));
+        kb::tests::Require(kb::scene::SceneDocumentService::Save(scene, scenePath, "Relink"), "Relink scene was not saved");
+
+        const kb::scene::SceneDocument document = kb::scene::SceneDocumentService::Capture(scene, "Relink");
+        kb::tests::Require(kb::scene::SceneDocumentService::LoadIntoScene(scene, document), "Relink document did not reload in place");
+        RequireRelinkedCrate(scene, prefabGuid, "in-place reload");
+    }
+    {
+        kb::scene::Scene reopened;
+        kb::tests::Require(reopened.Assets().MountProject(projectRoot), "Relink reopen project mount failed");
+        static_cast<void>(reopened.Assets().Discover());
+        kb::tests::Require(reopened.Prefabs().RegisteredCount() == 0U, "Reopened scene should start without loaded prefabs");
+        kb::tests::Require(kb::scene::SceneDocumentService::LoadFileIntoScene(reopened, scenePath), "Relink scene did not reopen");
+        RequireRelinkedCrate(reopened, prefabGuid, "reopen");
+    }
+
+    std::filesystem::remove_all(projectRoot, removeError);
+}
+
 void RunPrefabVariantAssetRoundTripTest() {
     const std::filesystem::path basePath = std::filesystem::temp_directory_path() / "21kb_engine_prefab_variant_base.kbprefab";
     const std::filesystem::path variantPath = std::filesystem::temp_directory_path() / "21kb_engine_prefab_variant_roundtrip.kbprefab";
@@ -681,6 +1114,18 @@ void RunScenePrefabCaptureTests() {
     run("RunPrefabCaptureTest", RunPrefabCaptureTest);
     run("RunPrefabAssetRoundTripTest", RunPrefabAssetRoundTripTest);
     run("RunPrefabCreateAssetRegistersSourceInstanceTest", RunPrefabCreateAssetRegistersSourceInstanceTest);
+    run("RunPrefabCreateAssetFromInstanceKeepsOneOwnerTest", RunPrefabCreateAssetFromInstanceKeepsOneOwnerTest);
+    run("RunPrefabReloadOfChangedFileKeepsGuidTest", RunPrefabReloadOfChangedFileKeepsGuidTest);
+    run("RunPrefabInstanceLinkSurvivesSceneReopenTest", RunPrefabInstanceLinkSurvivesSceneReopenTest);
+    run("RunPrefabInstanceNodeIdentitySurvivesReopenTest", RunPrefabInstanceNodeIdentitySurvivesReopenTest);
+    run("RunReopenedInstanceFollowsChangedPrefabTest", RunReopenedInstanceFollowsChangedPrefabTest);
+    run("RunPrivateSceneSaveKeepsNestedPrefabTest", RunPrivateSceneSaveKeepsNestedPrefabTest);
+    run("RunPrivateSceneSaveOfVariantTest", RunPrivateSceneSaveOfVariantTest);
+    run("RunRuntimeSpawnDoesNotLinkPrefabInstancesTest", RunRuntimeSpawnDoesNotLinkPrefabInstancesTest);
+    run("RunDestroyedInstanceChildSlotReuseTest", RunDestroyedInstanceChildSlotReuseTest);
+    run("RunInstanceChangeRevisionTest", RunInstanceChangeRevisionTest);
+    run("RunSceneCaptureScalesLinearlyTest", RunSceneCaptureScalesLinearlyTest);
+    run("RunLegacyDocumentLinksByNameTest", RunLegacyDocumentLinksByNameTest);
     run("RunPrefabVariantAssetRoundTripTest", RunPrefabVariantAssetRoundTripTest);
     run("RunPrefabParentOverrideAssetRoundTripTest", RunPrefabParentOverrideAssetRoundTripTest);
     run("RunPrefabVariantAddedChildAssetRoundTripTest", RunPrefabVariantAddedChildAssetRoundTripTest);

@@ -3152,7 +3152,7 @@ void DrawDetailsPanel(
         case MaterialEditorDetailsItemKind::ParentRow: {
             const MaterialEditorInstanceParentChainRow& row = rows.instanceParentRows[item.index];
             text = (row.current ? "* " : "  ") + row.label;
-            color = row.current ? RGB(234, 225, 255) : RGB(201, 193, 222);
+            color = row.current ? RGB(230, 230, 230) : RGB(198, 198, 198);
             weight = row.current ? FW_SEMIBOLD : FW_NORMAL;
             break;
         }

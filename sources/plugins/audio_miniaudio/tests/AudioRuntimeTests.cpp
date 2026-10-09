@@ -19,12 +19,14 @@
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneObject.hpp"
+#include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneSystemContext.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "playback/MiniaudioVoicePool.hpp"
 #include "runtime/MiniaudioEngine.hpp"
 #include "runtime/MiniaudioPlaybackBackend.hpp"
 #include "runtime/MiniaudioSound.hpp"
+#include "scene/MiniaudioAudioSpace.hpp"
 #include "scene/MiniaudioBusRegistry.hpp"
 #include "scene/MiniaudioListenerSynchronizer.hpp"
 #include "scene/MiniaudioSourceRegistry.hpp"
@@ -325,6 +327,77 @@ void RunSpatialDistanceAttenuationOutputTest() {
         "Spatial attenuation probe did not render audible near-field output");
     Require(farEnergy > 0.0 && farEnergy < nearEnergy * 0.12,
         "Spatial attenuation did not reduce far-field output energy");
+}
+
+// Output energy of a spatial source `distance` metres along +x from a listener at `listenerPosition`, with the
+// listener, source and mixer working through an audio space (docs/large_worlds.md).
+[[nodiscard]] double MeasureAudioSpaceOutputEnergy(const std::filesystem::path& clipPath, const kb::math::DVec3& listenerPosition, double distance) {
+    kb::audio_miniaudio::MiniaudioEngine engine;
+    engine.Initialize(true);
+    kb::scene::Scene scene;
+    RegisterClip(scene, 8002U, clipPath);
+    const kb::scene::SceneObject listener = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Listener" });
+    scene.Transforms().SetLocalTranslation(listener.Entity(), listenerPosition);
+    scene.Components().AudioListeners().Set(listener.Entity(), kb::scene::AudioListenerComponent{ .primary = true });
+    const kb::scene::SceneObject source = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Source" });
+    scene.Transforms().SetLocalTranslation(source.Entity(), listenerPosition + kb::math::DVec3{ distance, 0.0, 0.0 });
+    scene.Components().AudioSources().Set(source.Entity(), kb::scene::AudioSourceComponent{
+        .clipAssetId = 8002U, .volume = 1.0F, .loop = true, .spatial = true, .autoplay = true, .spatialBlend = 1.0F,
+        .attenuationModel = kb::audio::AudioAttenuationModel::Inverse, .minDistance = 2.0F, .maxDistance = 64.0F,
+        .rolloff = 1.0F, .dopplerFactor = 0.0F,
+    });
+    scene.Runtime().SynchronizeTransforms();
+
+    kb::scene::SceneSystemContext context{ scene, 1.0F / 60.0F };
+    kb::audio_miniaudio::MiniaudioAudioSpace space;
+    kb::audio_miniaudio::MiniaudioListenerSynchronizer listenerSynchronizer;
+    const kb::audio_miniaudio::MiniaudioListenerSynchronizer::State state = listenerSynchronizer.Sync(engine.Native(), context, &space);
+    Require(state.active && std::abs(state.position.x) <= 1024.0F && std::abs(state.position.z) <= 1024.0F,
+        "The listener was not placed near the audio origin");
+    kb::audio_miniaudio::MiniaudioClipResolver resolver;
+    kb::audio_miniaudio::MiniaudioBusRegistry buses;
+    kb::audio_miniaudio::MiniaudioSourceRegistry sources;
+    sources.SetAudioSpace(&space);
+    sources.Sync(engine.Native(), context, resolver, buses, nullptr, state.position, true);
+    std::array<float, 4096U * 2U> output{};
+    ma_uint64 framesRead = 0U;
+    const ma_result readResult = ma_engine_read_pcm_frames(&engine.Native(), output.data(), output.size() / 2U, &framesRead);
+    Require((readResult == MA_SUCCESS || readResult == MA_AT_END) && framesRead > 0U, "The audio space probe could not render output frames");
+    double energy = 0.0;
+    for (std::size_t sample = 0U; sample < static_cast<std::size_t>(framesRead) * 2U; ++sample) {
+        energy += std::abs(static_cast<double>(output[sample]));
+    }
+    return energy;
+}
+
+// A listener ten thousand kilometres out hears a source 12.6 m away exactly as one near the origin does (in float
+// the two positions would round to whole metres), and moving the audio origin with the listener keeps its velocity.
+void RunFarListenerAudioSpaceTest() {
+    const std::filesystem::path clipPath = FixturePath(FixtureFor(".wav"));
+    const double nearEnergy = MeasureAudioSpaceOutputEnergy(clipPath, kb::math::DVec3{ 0.4, 0.0, 0.0 }, 12.6);
+    const double farEnergy = MeasureAudioSpaceOutputEnergy(clipPath, kb::math::DVec3{ 10'000'000.4, 0.0, 10'000'000.0 }, 12.6);
+    Require(nearEnergy > 1.0 && std::abs(farEnergy - nearEnergy) <= nearEnergy * 0.005,
+        "A far listener did not hear a far source at its true distance");
+
+    kb::audio_miniaudio::MiniaudioEngine engine;
+    engine.Initialize(true);
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject listener = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Moving Listener" });
+    scene.Components().AudioListeners().Set(listener.Entity(), kb::scene::AudioListenerComponent{});
+    const kb::math::DVec3 start{ 10'000'000.0 + 1023.5 - std::fmod(10'000'000.0, 1024.0), 0.0, 0.0 };
+    scene.Transforms().SetLocalTranslation(listener.Entity(), start);
+    kb::audio_miniaudio::MiniaudioAudioSpace space;
+    static_cast<void>(space.Follow(start - kb::math::DVec3{ 1023.5, 0.0, 0.0 }));
+    kb::audio_miniaudio::MiniaudioListenerSynchronizer synchronizer;
+    kb::scene::SceneSystemContext first{ scene, 0.5F };
+    Require(synchronizer.Sync(engine.Native(), first, &space).active, "The moving far listener was not selected");
+    const kb::math::DVec3 origin = space.Origin();
+    scene.Transforms().SetLocalTranslation(listener.Entity(), start + kb::math::DVec3{ 2.0, 0.0, 0.0 });
+    kb::scene::SceneSystemContext second{ scene, 0.5F };
+    const kb::audio_miniaudio::MiniaudioListenerSynchronizer::State moved = synchronizer.Sync(engine.Native(), second, &space);
+    Require(space.Origin() != origin && moved.shift.x != 0.0F, "The audio origin did not follow the listener past its rebase distance");
+    Require(Near(ma_engine_listener_get_velocity(&engine.Native(), 0U).x, 4.0F),
+        "Moving the audio origin with the listener produced a velocity spike");
 }
 
 void RunAdvertisedFormatDecodeTest() {
@@ -1389,7 +1462,8 @@ void RunVoiceStateTest(const std::filesystem::path& clipPath) {
     kb::audio_miniaudio::MiniaudioSound* endedSound = pool.SoundForTesting(ended.voiceId);
     Require(endedSound != nullptr && endedSound->SeekSeconds(2.0F) == MA_SUCCESS,
         "Finite one-shot could not seek to its natural end");
-    for (std::uint32_t attempt = 0U; attempt < 100U && !endedSound->AtEnd(); ++attempt) {
+    for (const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{ 10 };
+         std::chrono::steady_clock::now() < deadline && !endedSound->AtEnd();) {
         std::this_thread::sleep_for(std::chrono::milliseconds{ 2 });
     }
     Require(endedSound->AtEnd(), "Finite one-shot did not reach its natural end");
@@ -1405,7 +1479,8 @@ void RunVoiceStateTest(const std::filesystem::path& clipPath) {
         .spatial = false,
     }, resolver, nullptr);
     Require(naturallyEnded.Succeeded(), "Finite one-shot could not start for natural completion verification");
-    for (std::uint32_t attempt = 0U; attempt < 1000U && pool.IsVoicePlaying(naturallyEnded.voiceId); ++attempt) {
+    for (const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{ 10 };
+         std::chrono::steady_clock::now() < deadline && pool.IsVoicePlaying(naturallyEnded.voiceId);) {
         std::this_thread::sleep_for(std::chrono::milliseconds{ 2 });
     }
     Require(!pool.IsVoicePlaying(naturallyEnded.voiceId),
@@ -2437,6 +2512,9 @@ int RunTests(int argc, char** argv) {
     }
     if (filter.empty() || filter == "listener-attached") {
         RunListenerAndAttachedVelocityTest(clipPath);
+    }
+    if (filter.empty() || filter == "large-world") {
+        RunFarListenerAudioSpaceTest();
     }
     if (filter.empty() || filter == "source-routing") {
         RunSourceLifecycleAndRoutingTest(clipPath);

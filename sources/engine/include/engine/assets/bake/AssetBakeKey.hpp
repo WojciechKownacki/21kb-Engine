@@ -59,7 +59,8 @@ struct AssetBakeDigest {
 
 // A wider checksum for persisted payloads. It uses the same deterministic,
 // machine-independent two-lane digest as AssetBakeKey. This detects storage and
-// transfer corruption; package signing remains the authentication boundary.
+// transfer corruption only; the Ed25519 seal of a pack (AssetPackSeal.hpp) is the
+// authentication boundary.
 [[nodiscard]] AssetBakeDigest HashBakeDigest(std::span<const std::uint8_t> bytes) noexcept;
 
 // Identity of one baked artifact.

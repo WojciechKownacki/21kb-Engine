@@ -3,8 +3,11 @@
 #include "engine/scene/ParticleEffectAssetSchema.hpp"
 #include "kb/render/ViewIdPolicy.hpp"
 #include "kb/render/particles/ParticleGpuRenderer.hpp"
+#include "kb/render/particles/ParticleRenderSpace.hpp"
 #include "scene/lighting/SceneLightingPacker.hpp"
 #include "scene/submit/SceneMeshDrawCommandSubmitter.hpp"
+
+#include "kb/render/scene/TransparentDepthKey.hpp"
 
 #include <algorithm>
 #include <array>
@@ -120,6 +123,7 @@ SceneRenderSubmitStats SceneMeshSubmitter::ValidateResourcesInto(
         .resourceMap = &resourceMap,
         .camera = camera,
         .visibilityBlockers = visibilityBlockers,
+        .portalVisibility = renderScene.PortalVisibility(),
         .diagnostics = diagnostics,
         .maxDrawCommands = drawBudget.maxDrawCommands,
         .maxVisibleInstances = drawBudget.maxVisibleInstances,
@@ -184,7 +188,8 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
     bool terrainLayersOnly,
     std::array<float, 16> motionVectorPreviousViewProjection,
     ParticleGpuRenderer* particleRenderer,
-    const kb::particles::ParticleRenderSnapshot* particleSnapshot) const {
+    const kb::particles::ParticleRenderSnapshot* particleSnapshot,
+    std::span<const ParticleGpuMeshDraw> gpuMeshDraws) const {
     SceneRenderSubmitStats stats{};
     if (!IsInitialized()) {
         return stats;
@@ -202,8 +207,10 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
     std::vector<SceneRenderVisibilityBlocker> visibilityBlockers;
     BuildVisibilityBlockerInputs(renderScene, visibilityBlockers);
     SceneMeshBatchBuilder::BuildInto(drawGroups, meshBatchSubmissionScratch_);
+    const kb::math::Vec3 particleOffset = particleSnapshot != nullptr
+        ? ParticleRenderOffset(particleSnapshot->Origin(), renderScene.RenderOrigin()) : kb::math::Vec3{};
     if (particleSnapshot != nullptr) {
-        particleMeshBatchBuilder_.Build(*particleSnapshot);
+        particleMeshBatchBuilder_.Build(*particleSnapshot, camera, &resources, &resourceMap, particleOffset);
         const auto& particleMeshBatches = particleMeshBatchBuilder_.Batches();
         meshBatchSubmissionScratch_.insert(
             meshBatchSubmissionScratch_.end(), particleMeshBatches.begin(), particleMeshBatches.end());
@@ -225,6 +232,14 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
         SceneLightingPacker::AssignPointShadowSlots(lighting, shadowMap->point);
     }
     const std::array<float, 4> cameraPosition = SceneLightingPacker::CameraPosition(camera);
+    // Material graphs read world positions as render-space positions plus the render origin wrapped to
+    // kMaterialWorldPeriodMeters: exact world coordinates near the world origin, and seamless for any world-aligned
+    // pattern whose period divides it farther out, where a float could not hold the full coordinate.
+    constexpr double kMaterialWorldPeriodMeters = 8192.0;
+    const kb::math::DVec3& renderOrigin = renderScene.RenderOrigin();
+    const std::array<float, 4> renderOriginOffset{ static_cast<float>(std::fmod(renderOrigin.x, kMaterialWorldPeriodMeters)),
+        static_cast<float>(std::fmod(renderOrigin.y, kMaterialWorldPeriodMeters)),
+        static_cast<float>(std::fmod(renderOrigin.z, kMaterialWorldPeriodMeters)), 0.0F };
     if (detailSwitchScene_ != &renderScene) {
         pipelineScratch_.detailSwitchLevels.clear();
         pipelineScratch_.detailSwitchPreviousLevels.clear();
@@ -234,7 +249,7 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
     auto& reuse = passCommandReuse_.at(static_cast<std::size_t>(pass));
     auto& batchReuse = passBatchCommandReuse_.at(static_cast<std::size_t>(pass));
     const bool reuseAllowed = pass != MeshPassType::BaseTransparent && selectedEntityIds.empty() &&
-        renderScene.VisibilityBlockerProxyCount() == 0U &&
+        renderScene.VisibilityBlockerProxyCount() == 0U && renderScene.PortalVisibility() == nullptr &&
         (particleSnapshot == nullptr || particleSnapshot->Emitters().empty());
     const SceneMeshCommandReuseKey reuseKey{
         .sceneRevision = renderScene.MeshContentRevision(),
@@ -262,6 +277,7 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
         .resourceMap = &resourceMap,
         .camera = camera,
         .visibilityBlockers = visibilityBlockers,
+        .portalVisibility = renderScene.PortalVisibility(),
         .diagnostics = diagnostics,
         .maxDrawCommands = drawBudget.maxDrawCommands,
         .maxVisibleInstances = drawBudget.maxVisibleInstances,
@@ -276,6 +292,100 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
             committedKey.detailSwitchHistoryRevision = pipelineScratch_.detailSwitchHistoryRevision;
             reuse.Commit(committedKey, pipelineScratch_.commands, pipelineScratch_.stats);
         }
+    }
+    // Mesh particles simulated on the GPU join this pass's commands for the submission only: the same pipeline
+    // resolves their material, state and pass membership; their instances are the emitters' GPU buffers.
+    const std::size_t regularCommandCount = pipelineScratch_.commands.size();
+    gpuMeshCommandScratch_.clear();
+    struct DropGpuMeshCommands {
+        std::vector<MeshDrawCommand>& commands;
+        std::size_t keep;
+        ~DropGpuMeshCommands() {
+            if (commands.size() > keep) commands.erase(commands.begin() + static_cast<std::ptrdiff_t>(keep), commands.end());
+        }
+    } dropGpuMeshCommands{ pipelineScratch_.commands, regularCommandCount };
+    if (!gpuMeshDraws.empty()) {
+        gpuMeshInstanceScratch_.clear();
+        gpuMeshInstanceScratch_.reserve(gpuMeshDraws.size());
+        gpuMeshBatchScratch_.clear();
+        for (std::size_t index = 0U; index < gpuMeshDraws.size(); ++index) {
+            const ParticleGpuMeshDraw& draw = gpuMeshDraws[index];
+            if (draw.count == 0U || !bgfx::isValid(draw.instances)) continue;
+            SceneRenderMeshInstance placeholder{};
+            placeholder.entityId = index + 1U; // identifies the draw after the pipeline merged equal meshes
+            placeholder.meshAssetId = draw.meshAssetId;
+            placeholder.materialAssetId = draw.materialAssetId;
+            placeholder.model = { 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F };
+            placeholder.castsShadow = draw.castsShadow;
+            placeholder.receivesShadow = draw.receivesShadow;
+            gpuMeshInstanceScratch_.push_back(placeholder);
+        }
+        for (const SceneRenderMeshInstance& placeholder : gpuMeshInstanceScratch_) {
+            gpuMeshBatchScratch_.push_back(SceneMeshBatch{
+                .meshAssetId = placeholder.meshAssetId,
+                .materialAssetId = placeholder.materialAssetId,
+                .sourceDrawGroupIndex = 0U,
+                .instances = std::span<const SceneRenderMeshInstance>{ &placeholder, 1U },
+            });
+        }
+        if (pass == MeshPassType::BaseTransparent) {
+            std::erase_if(gpuMeshBatchScratch_, [&resources, &resourceMap](const SceneMeshBatch& batch) {
+                return IsOpaqueNonTerrainBatch(batch, resources, resourceMap);
+            });
+        }
+        if (!gpuMeshBatchScratch_.empty()) {
+            MeshPipelineProcessor::BuildInto(MeshPipelineBuildDesc{
+                .pass = pass,
+                .meshBatches = &gpuMeshBatchScratch_,
+                .resources = &resources,
+                .resourceMap = &resourceMap,
+                .diagnostics = diagnostics,
+                .maxDrawCommands = drawBudget.maxDrawCommands,
+                .maxVisibleInstances = drawBudget.maxVisibleInstances,
+                .maxDroppedInstances = drawBudget.maxDroppedInstances,
+                .terrainLayersOnly = terrainLayersOnly,
+            }, gpuMeshScratch_);
+            for (const MeshDrawCommand& command : gpuMeshScratch_.commands) {
+                for (const SceneRenderMeshInstance& instance : command.instances) {
+                    const std::size_t drawIndex = static_cast<std::size_t>(instance.entityId) - 1U;
+                    if (drawIndex >= gpuMeshDraws.size()) continue;
+                    MeshDrawCommand gpuCommand = command;
+                    gpuCommand.instances.assign(1U, instance);
+                    gpuCommand.instanceRevision = 0U;
+                    gpuCommand.gpuInstanceBuffer = gpuMeshDraws[drawIndex].instances;
+                    gpuCommand.gpuInstanceCount = gpuMeshDraws[drawIndex].count;
+                    if (pass == MeshPassType::BaseTransparent) {
+                        // A translucent emitter is placed among the other translucent draws by the depth of its origin
+                        // (the particles inside it are ordered on the GPU).
+                        const auto& origin = gpuMeshDraws[drawIndex].origin;
+                        const float viewDepth = camera == nullptr ? 0.0F
+                            : camera->view[2] * origin[0] + camera->view[6] * origin[1] + camera->view[10] * origin[2] + camera->view[14];
+                        gpuCommand.depthBucket = QuantizeTransparentViewDepth(viewDepth);
+                        gpuMeshCommandScratch_.push_back(std::move(gpuCommand));
+                    } else {
+                        pipelineScratch_.commands.push_back(std::move(gpuCommand));
+                    }
+                }
+            }
+        }
+    }
+    // The translucent pass draws the regular commands (already ordered far to near by depth bucket) merged with the
+    // GPU emitters by the same key; every other pass has the GPU commands appended.
+    const std::vector<MeshDrawCommand>* submitCommands = &pipelineScratch_.commands;
+    if (!gpuMeshCommandScratch_.empty()) {
+        std::stable_sort(gpuMeshCommandScratch_.begin(), gpuMeshCommandScratch_.end(),
+            [](const MeshDrawCommand& lhs, const MeshDrawCommand& rhs) { return lhs.depthBucket > rhs.depthBucket; });
+        mergedCommandScratch_.clear();
+        mergedCommandScratch_.reserve(pipelineScratch_.commands.size() + gpuMeshCommandScratch_.size());
+        std::size_t gpuIndex = 0U;
+        for (const MeshDrawCommand& regular : pipelineScratch_.commands) {
+            while (gpuIndex < gpuMeshCommandScratch_.size() && gpuMeshCommandScratch_[gpuIndex].depthBucket > regular.depthBucket) {
+                mergedCommandScratch_.push_back(gpuMeshCommandScratch_[gpuIndex++]);
+            }
+            mergedCommandScratch_.push_back(regular);
+        }
+        while (gpuIndex < gpuMeshCommandScratch_.size()) mergedCommandScratch_.push_back(gpuMeshCommandScratch_[gpuIndex++]);
+        submitCommands = &mergedCommandScratch_;
     }
     stats = pipelineScratch_.stats;
     stats.sceneLightCount = lightingStats.sceneLightCount;
@@ -331,6 +441,7 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
         .sceneColorTexture = sceneColorTexture,
         .motionVectorPreviousViewProjection = motionVectorPreviousViewProjection,
         .skinningPaletteAllocator = skinningPaletteAllocator_,
+        .renderOriginOffset = renderOriginOffset,
         .passResources = passResources_,
         .instanceBufferPool = &instanceBuffers_,
         .diagnostics = diagnostics,
@@ -339,12 +450,12 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
     };
 
     if (pass == MeshPassType::BaseTransparent && particleRenderer != nullptr && particleSnapshot != nullptr) {
-        const ParticleRenderBatchBuildResult& particleBuild = particleRenderer->Build(*particleSnapshot, *camera);
+        const ParticleRenderBatchBuildResult& particleBuild = particleRenderer->Build(*particleSnapshot, *camera, particleOffset);
         static_cast<void>(particleRenderer->PrepareVisualSimulation(viewId, *particleSnapshot));
-        const ParticleStripBuildResult& stripBuild = particleRenderer->BuildStrips(*particleSnapshot, *camera);
+        const ParticleStripBuildResult& stripBuild = particleRenderer->BuildStrips(*particleSnapshot, *camera, particleOffset);
         transparentSubmissionScratch_.clear();
-        for (std::uint32_t index = 0U; index < pipelineScratch_.commands.size(); ++index) {
-            const MeshDrawCommand& command = pipelineScratch_.commands[index];
+        for (std::uint32_t index = 0U; index < submitCommands->size(); ++index) {
+            const MeshDrawCommand& command = (*submitCommands)[index];
             transparentSubmissionScratch_.push_back(TransparentDrawOrderEntry{
                 .source = TransparentDrawSource::Mesh,
                 .depthBucket = command.depthBucket,
@@ -402,7 +513,7 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
         for (const TransparentDrawOrderEntry& entry : transparentSubmissionScratch_) {
             if (entry.source == TransparentDrawSource::Mesh) {
                 submitMeshCommands(std::span<const MeshDrawCommand>{
-                    &pipelineScratch_.commands[entry.sourceIndex], 1U});
+                    &(*submitCommands)[entry.sourceIndex], 1U});
                 continue;
             }
             if (entry.source == TransparentDrawSource::Particle && particleBuild.Succeeded()) {
@@ -428,7 +539,7 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
             }
         }
     } else {
-        submitMeshCommands(pipelineScratch_.commands);
+        submitMeshCommands(*submitCommands);
     }
 
     return stats;

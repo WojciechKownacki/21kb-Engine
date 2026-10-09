@@ -13,6 +13,8 @@ struct ScenePrefabAssetReadResult;
 
 class ScenePrefabAssetService {
 public:
+    // The one spelling of an asset file's path that a loaded prefab records as its source.
+    [[nodiscard]] static std::string SourcePathOf(const std::filesystem::path& path);
     ScenePrefabAssetService() = delete;
 
     [[nodiscard]] static bool Save(Scene& scene, ScenePrefabHandle handle, const std::filesystem::path& path);

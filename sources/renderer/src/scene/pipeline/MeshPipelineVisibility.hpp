@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/scene/ScenePortalVisibility.hpp"
 #include "kb/render/scene/MeshPipeline.hpp"
 
 #include <array>
@@ -38,6 +39,8 @@ public:
         const RenderBoundsSphere& bounds,
         std::span<const SceneRenderVisibilityBlocker> blockers) noexcept;
     [[nodiscard]] static std::uint16_t DepthBucket(float depth) noexcept;
+    // The camera's culling view-projection, position and layers as the portal visibility pass takes them.
+    [[nodiscard]] static kb::scene::ScenePortalCamera PortalCamera(const SceneRenderCamera& camera) noexcept;
     [[nodiscard]] static std::uint8_t SelectLodLevel(
         const RenderMeshResource* mesh,
         const SceneRenderMeshInstance& instance,

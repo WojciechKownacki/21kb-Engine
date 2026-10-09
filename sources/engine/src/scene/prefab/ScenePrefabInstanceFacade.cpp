@@ -1,13 +1,18 @@
 #include "scene/prefab/ScenePrefabInstanceFacade.hpp"
 
 #include "engine/scene/ScenePrefabs.hpp"
+#include "scene/prefab/ScenePrefabInstanceRelinker.hpp"
 #include "scene/prefab/ScenePrefabInstantiationService.hpp"
 #include "scene/prefab/ScenePrefabRegisteredInstantiationService.hpp"
 
 namespace kb::scene {
 
 ScenePrefabInstance ScenePrefabInstanceFacade::Instantiate(Scene& scene, const ScenePrefab& prefab, const ScenePrefabInstantiationSettings& settings) {
-    return ScenePrefabInstantiationService::Instantiate(scene, prefab, settings);
+    ScenePrefabInstance instance = ScenePrefabInstantiationService::Instantiate(scene, prefab, settings);
+    if (settings.linkPrefabInstances) {
+        ScenePrefabInstanceRelinker::Relink(scene, prefab, settings.parent, instance);
+    }
+    return instance;
 }
 
 ScenePrefabInstance ScenePrefabInstanceFacade::Instantiate(Scene& scene, ScenePrefabHandle handle, const ScenePrefabInstantiationSettings& settings) {

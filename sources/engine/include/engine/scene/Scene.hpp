@@ -54,6 +54,7 @@ class SceneLoadedContentQueries;
 class SceneLocalization;
 class SceneMaterialInstanceQueries;
 class SceneMaterialInstances;
+class SceneNavigation;
 class SceneParticleSystemQueries;
 class SceneParticleSystems;
 class ScenePrefabs;
@@ -117,6 +118,8 @@ public:
     [[nodiscard]] SceneLoadedContentQueries LoadedContent() const noexcept;
     [[nodiscard]] SceneLocalization Localization() noexcept;
     [[nodiscard]] SceneLocalization Localization() const noexcept;
+    [[nodiscard]] SceneNavigation Navigation() noexcept;
+    [[nodiscard]] SceneNavigation Navigation() const noexcept;
     [[nodiscard]] SceneTimers Timers() noexcept;
     [[nodiscard]] SceneTasks Tasks() noexcept;
     [[nodiscard]] SceneTagCatalog Tags() noexcept;
@@ -148,6 +151,7 @@ public:
     [[nodiscard]] bool IsModuleActive(std::string_view name) const noexcept;
     [[nodiscard]] std::size_t ActiveModuleCount() const noexcept;
     [[nodiscard]] std::span<const std::string> ModuleDiagnostics() const noexcept;
+    [[nodiscard]] std::span<const std::string> ModuleWarnings() const noexcept;
     [[nodiscard]] kb::input::InputSubsystem& Input() noexcept;
     [[nodiscard]] const kb::input::InputSubsystem& Input() const noexcept;
     // Independent input state for a specific local user (LIB-115). Lazily creates

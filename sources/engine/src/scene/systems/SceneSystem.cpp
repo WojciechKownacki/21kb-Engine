@@ -10,11 +10,19 @@ void SceneSystem::OnFrameStart(SceneSystemContext& context) {
     static_cast<void>(context);
 }
 
+void SceneSystem::OnUpdateEnd(SceneSystemContext& context) {
+    static_cast<void>(context);
+}
+
 void SceneSystem::OnUpdate(SceneSystemContext& context) {
     static_cast<void>(context);
 }
 
 void SceneSystem::OnFixedUpdate(SceneSystemContext& context) {
+    static_cast<void>(context);
+}
+
+void SceneSystem::OnFixedStepBegin(SceneSystemContext& context) {
     static_cast<void>(context);
 }
 

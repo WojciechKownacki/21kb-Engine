@@ -133,6 +133,14 @@ struct ParticleSpawnAsset {
     float prewarmSeconds = 0.0F;
     kb::math::Color startColor{1.0F, 1.0F, 1.0F, 1.0F};
     float startSize = 1.0F;
+    // Every particle draws a random initial angle and angular velocity per axis from these ranges at birth and
+    // turns by angle + velocity x age (degrees, degrees per second). Z is the spin of a billboard about the view
+    // axis; a mesh particle is turned by the three angles as Euler angles (Z after Y after X, in the emitter's
+    // frame), so a tumbling rock needs X and Y as well.
+    kb::math::Vec3 initialRotationMinDegrees{};
+    kb::math::Vec3 initialRotationMaxDegrees{};
+    kb::math::Vec3 angularVelocityMinDegrees{};
+    kb::math::Vec3 angularVelocityMaxDegrees{};
 };
 
 struct ParticleInitialVelocityModule {

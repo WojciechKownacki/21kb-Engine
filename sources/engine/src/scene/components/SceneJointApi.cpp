@@ -2,6 +2,7 @@
 #include "scene/SceneComponentMutationService.hpp"
 #include "scene/SceneComponentQueryService.hpp"
 #include "scene/SceneEntityService.hpp"
+#include "scene/SceneHistoryService.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/prefab/ScenePrefabDirtyTracker.hpp"
 
@@ -16,10 +17,12 @@ const JointComponent* SceneComponentQueryService::TryGetJoint(const Scene& scene
 }
 
 JointComponent* SceneComponentMutationService::TryGetJoint(Scene& scene, SceneEntity entity) noexcept {
+    SceneHistoryService::NoteObjectChanging(scene, entity);
     return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.Joints().TryGet(entity) : nullptr;
 }
 
 void SceneComponentMutationService::SetJoint(Scene& scene, SceneEntity entity, const JointComponent& joint) {
+    SceneHistoryService::NoteObjectChanging(scene, entity);
     if (SceneEntityService::IsAlive(scene, entity)) {
         SceneState& state = SceneAccess::State(scene);
         state.componentStorage.Joints().Set(entity, joint);
@@ -28,6 +31,7 @@ void SceneComponentMutationService::SetJoint(Scene& scene, SceneEntity entity, c
 }
 
 void SceneComponentMutationService::RemoveJoint(Scene& scene, SceneEntity entity) noexcept {
+    SceneHistoryService::NoteObjectChanging(scene, entity);
     if (SceneEntityService::IsAlive(scene, entity)) {
         SceneState& state = SceneAccess::State(scene);
         state.componentStorage.Joints().Remove(entity);

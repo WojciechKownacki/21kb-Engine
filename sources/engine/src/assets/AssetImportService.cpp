@@ -4,6 +4,8 @@
 #include "assets/AssetPathUtilities.hpp"
 #include "engine/assets/AssetImportCatalog.hpp"
 #include "engine/assets/AssetManager.hpp"
+#include "engine/assets/GltfExternalResources.hpp"
+#include "engine/assets/ImportedAsset.hpp"
 
 #include <algorithm>
 #include <array>
@@ -12,6 +14,7 @@
 #include <iterator>
 #include <limits>
 #include <optional>
+#include <span>
 #include <string>
 #include <system_error>
 
@@ -21,6 +24,10 @@ namespace {
 constexpr std::array<char, 8> AssetMagic{ '2', '1', 'K', 'B', 'A', 'S', 'T', '\0' };
 constexpr std::array<char, 8> MetaMagic{ '2', '1', 'K', 'B', 'M', 'E', 'T', 'A' };
 constexpr std::uint32_t ImportFormatVersion = 1U;
+// An asset container that also carries the files its source referenced (ImportedAssetResource):
+// the version-1 header and names, then a resource table, then the payload.
+constexpr std::uint32_t ImportContainerWithResourcesVersion = 2U;
+constexpr std::uint64_t FnvPrime = 1099511628211ULL;
 [[nodiscard]] std::string SanitizeStem(std::string name) {
     for (char& character : name) {
         const unsigned char value = static_cast<unsigned char>(character);
@@ -138,13 +145,73 @@ void WriteU64(std::ostream& output, std::uint64_t value) {
     return output.good() && !input.bad();
 }
 
+[[nodiscard]] bool WriteResources(std::ostream& output, std::span<const ImportedAssetResource> resources) {
+    WriteU32(output, static_cast<std::uint32_t>(resources.size()));
+    for (const ImportedAssetResource& resource : resources) {
+        if (!WriteString(output, resource.uri)) {
+            return false;
+        }
+        WriteU64(output, static_cast<std::uint64_t>(resource.bytes.size()));
+        output.write(reinterpret_cast<const char*>(resource.bytes.data()), static_cast<std::streamsize>(resource.bytes.size()));
+    }
+    return output.good();
+}
+
+// The source hash of a document together with the files it references, so a changed .bin makes
+// a .gltf import stale even when the .gltf itself is unchanged.
+[[nodiscard]] std::uint64_t HashWithResources(std::uint64_t hash, std::span<const ImportedAssetResource> resources) {
+    const auto mix = [&hash](const void* data, std::size_t size) {
+        const auto* bytes = static_cast<const unsigned char*>(data);
+        for (std::size_t index = 0U; index < size; ++index) {
+            hash ^= bytes[index];
+            hash *= FnvPrime;
+        }
+    };
+    for (const ImportedAssetResource& resource : resources) {
+        mix(resource.uri.data(), resource.uri.size());
+        const unsigned char separator = 0U;
+        mix(&separator, 1U);
+        mix(resource.bytes.data(), resource.bytes.size());
+    }
+    return hash;
+}
+
+[[nodiscard]] bool IsGltfModel(const std::filesystem::path& sourcePath, AssetImportCategory category) {
+    const std::string extension = AssetPathUtilities::LowerExtension(sourcePath.extension());
+    return category == AssetImportCategory::Model && (extension == ".gltf" || extension == ".glb");
+}
+
+[[nodiscard]] std::optional<std::vector<ImportedAssetResource>> CollectSourceResources(
+    const std::filesystem::path& sourcePath,
+    AssetImportCategory category,
+    std::string& error) {
+    if (!IsGltfModel(sourcePath, category)) {
+        return std::vector<ImportedAssetResource>{};
+    }
+    std::ifstream input{ sourcePath, std::ios::binary };
+    if (!input.is_open()) {
+        error = "Source file could not be read.";
+        return std::nullopt;
+    }
+    const std::string document{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+    if (input.bad()) {
+        error = "Source file could not be read.";
+        return std::nullopt;
+    }
+    return CollectGltfExternalBuffers(
+        std::span<const std::uint8_t>{ reinterpret_cast<const std::uint8_t*>(document.data()), document.size() },
+        sourcePath.parent_path(),
+        &error);
+}
+
 [[nodiscard]] bool WriteAssetContainer(
     const std::filesystem::path& outputPath,
     const std::filesystem::path& sourcePath,
     AssetImportCategory category,
     std::uint64_t sourceSize,
     std::uint64_t sourceHash,
-    std::uint16_t importOptions) {
+    std::uint16_t importOptions,
+    std::span<const ImportedAssetResource> resources) {
     const std::filesystem::path tempPath = outputPath.string() + ".tmp";
     bool wrote = false;
     {
@@ -153,13 +220,14 @@ void WriteU64(std::ostream& output, std::uint64_t value) {
             return false;
         }
         output.write(AssetMagic.data(), static_cast<std::streamsize>(AssetMagic.size()));
-        WriteU32(output, ImportFormatVersion);
+        WriteU32(output, resources.empty() ? ImportFormatVersion : ImportContainerWithResourcesVersion);
         WriteU16(output, static_cast<std::uint16_t>(category));
         WriteU16(output, importOptions);
         WriteU64(output, sourceSize);
         WriteU64(output, sourceHash);
         wrote = WriteString(output, sourcePath.filename().string())
             && WriteString(output, sourcePath.extension().string())
+            && (resources.empty() || WriteResources(output, resources))
             && CopyPayload(output, sourcePath)
             && output.good();
     }
@@ -248,7 +316,7 @@ struct ImportedAssetHeader {
     if (!input.read(magic.data(), static_cast<std::streamsize>(magic.size())) ||
         magic != AssetMagic ||
         !ReadU32(input, version) ||
-        version != ImportFormatVersion ||
+        (version != ImportFormatVersion && version != ImportContainerWithResourcesVersion) ||
         !ReadU16(input, category) ||
         !ReadU16(input, flags) ||
         !ReadU64(input, header.sourceSize) ||
@@ -334,7 +402,15 @@ struct ImportedAssetHeader {
         return result;
     }
 
-    result.sourceHash = AssetFileSystem::HashFile(sourcePath);
+    std::string resourceError;
+    const std::optional<std::vector<ImportedAssetResource>> resources =
+        CollectSourceResources(sourcePath, result.category, resourceError);
+    if (!resources.has_value()) {
+        result.error = resourceError.empty() ? std::string{ "Referenced source files could not be read." } : resourceError;
+        result.status = AssetImportItemStatus::Failed;
+        return result;
+    }
+    result.sourceHash = HashWithResources(AssetFileSystem::HashFile(sourcePath), *resources);
     const std::uint64_t sourceSize = static_cast<std::uint64_t>(std::filesystem::file_size(sourcePath, error));
     if (error) {
         result.error = "Source file could not be measured.";
@@ -365,7 +441,7 @@ struct ImportedAssetHeader {
     const std::string runtimeType{ RuntimeAssetType(result.category) };
     result.id = MakeAssetId(NormalizeAssetPath(result.virtualPath) + ":" + runtimeType);
 
-    if (!WriteAssetContainer(result.assetPhysicalPath, sourcePath, result.category, sourceSize, result.sourceHash, importOptions)) {
+    if (!WriteAssetContainer(result.assetPhysicalPath, sourcePath, result.category, sourceSize, result.sourceHash, importOptions, *resources)) {
         result.error = "Imported asset container could not be written.";
         result.status = AssetImportItemStatus::Failed;
         return result;

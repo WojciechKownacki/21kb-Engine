@@ -95,8 +95,12 @@ namespace {
 
 } // namespace
 
+std::string ScenePrefabAssetService::SourcePathOf(const std::filesystem::path& path) {
+    return CanonicalSourcePath(path);
+}
+
 bool ScenePrefabAssetService::Save(Scene& scene, ScenePrefabHandle handle, const std::filesystem::path& path) {
-    const ScenePrefabRecord* record = SceneAccess::State(scene).prefabs.FindRecord(handle);
+    ScenePrefabRecord* record = SceneAccess::State(scene).prefabs.FindMutableRecord(handle);
     if (record == nullptr) {
         return false;
     }
@@ -104,7 +108,7 @@ bool ScenePrefabAssetService::Save(Scene& scene, ScenePrefabHandle handle, const
         return false;
     }
 
-    return ScenePrefabAssetWriter::Write(
+    const bool written = ScenePrefabAssetWriter::Write(
         path,
         ScenePrefabAssetWriteDesc{
             .kind = record->kind == ScenePrefabRecordKind::Template ? ScenePrefabAssetKind::Template : ScenePrefabAssetKind::Variant,
@@ -115,6 +119,12 @@ bool ScenePrefabAssetService::Save(Scene& scene, ScenePrefabHandle handle, const
             .overrides = &record->variantOverrides,
             .addedChildren = &record->variantAddedChildren,
         });
+    // A prefab first written by this scene now lives in that file, which is what tells a reload of
+    // the same file apart from a copy that declares the same guid.
+    if (written && record->sourcePath.empty()) {
+        record->sourcePath = CanonicalSourcePath(path);
+    }
+    return written;
 }
 
 ScenePrefabHandle ScenePrefabAssetService::Load(Scene& scene, const std::filesystem::path& path) {

@@ -197,6 +197,11 @@ ParticleCompileResult ParticleEffectCompiler::Compile(const kb::scene::ParticleE
         destination.lifetimeMin = source.spawn.lifetimeMin;
         destination.lifetimeMax = source.spawn.lifetimeMax;
         destination.prewarmSeconds = source.spawn.prewarmSeconds;
+        constexpr float kRadiansPerDegree = 0.017453292F;
+        destination.spinMinRadians = source.spawn.initialRotationMinDegrees * kRadiansPerDegree;
+        destination.spinMaxRadians = source.spawn.initialRotationMaxDegrees * kRadiansPerDegree;
+        destination.spinRateMinRadians = source.spawn.angularVelocityMinDegrees * kRadiansPerDegree;
+        destination.spinRateMaxRadians = source.spawn.angularVelocityMaxDegrees * kRadiansPerDegree;
         destination.rateKeyCount = static_cast<std::uint8_t>(source.spawn.rateOverTime.keyframes.size());
         destination.burstCount = static_cast<std::uint8_t>(source.spawn.bursts.size());
         for (std::size_t index = 0U; index < source.spawn.rateOverTime.keyframes.size(); ++index) {

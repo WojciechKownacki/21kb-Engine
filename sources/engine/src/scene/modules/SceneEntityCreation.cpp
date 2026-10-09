@@ -1,6 +1,7 @@
 #include "engine/scene/SceneEntities.hpp"
 
 #include "scene/SceneEntityService.hpp"
+#include "scene/entities/SceneEntityCreationService.hpp"
 
 #include <utility>
 
@@ -16,6 +17,10 @@ SceneObject SceneEntities::CreateObject(SceneObjectDesc desc) {
 
 std::vector<SceneObject> SceneEntities::CreateObjects(std::span<const SceneObjectDesc> descs) {
     return SceneEntityService::CreateObjects(scene_, descs);
+}
+
+std::vector<SceneObject> SceneEntities::CreateObjects(std::span<const SceneObjectDesc> descs, std::span<const kb::ecs::World::BulkComponentView> components) {
+    return SceneEntityCreationService::CreateObjects(scene_, descs, components);
 }
 
 SceneEntity SceneEntities::CreateEntity() {

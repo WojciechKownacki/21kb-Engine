@@ -9,7 +9,7 @@
 namespace kb::scene {
 
 inline void MarkScenePrefabNodeDirty(SceneState& state, SceneEntity entity) {
-    if (state.suppressPrefabDirtyTracking) {
+    if (state.suppressPrefabDirtyTracking || state.prefabInstances.Count() == 0U) {
         return;
     }
 

@@ -39,6 +39,7 @@ struct EditorMenuRects {
     RECT edit{};
     RECT layout{};
     RECT options{};
+    RECT world{};
     RECT help{};
     RECT dropdown{};
     std::array<RECT, MaximumRows> dropdownRows{};

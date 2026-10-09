@@ -3810,8 +3810,15 @@ bool EditorSceneContext::CompleteMaterialGraphPinConnection(
     }
     const std::uint32_t fromNodeId = materialGraphPendingConnectionOutput_ ? materialGraphPendingConnectionNodeId_ : nodeId;
     const std::uint32_t toNodeId = materialGraphPendingConnectionOutput_ ? nodeId : materialGraphPendingConnectionNodeId_;
-    std::string fromPin = materialGraphPendingConnectionOutput_ ? materialGraphPendingConnectionPin_ : std::move(pin);
-    std::string toPin = materialGraphPendingConnectionOutput_ ? std::move(pin) : materialGraphPendingConnectionPin_;
+    std::string fromPin;
+    std::string toPin;
+    if (materialGraphPendingConnectionOutput_) {
+        fromPin = materialGraphPendingConnectionPin_;
+        toPin = std::move(pin);
+    } else {
+        fromPin = std::move(pin);
+        toPin = materialGraphPendingConnectionPin_;
+    }
     const bool ownsTransaction = materialGraphPendingConnectionOwnsTransaction_;
     ClearMaterialGraphPinConnectionState();
     if (!materialEditor_.WorkingCopy().has_value()) {

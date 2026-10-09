@@ -52,6 +52,7 @@ void SceneRenderVisibilityPublisher::BuildFrame(
     outFrame.viewportHeight = viewportHeight;
     outFrame.cameraValid = camera != nullptr;
     outFrame.view = camera != nullptr ? camera->view : std::array<float, 16>{};
+    outFrame.renderOrigin = renderScene.RenderOrigin();
     outFrame.projection = camera != nullptr ? camera->projection : std::array<float, 16>{};
     for (std::size_t planeIndex = 0U; planeIndex < outFrame.frustumPlanes.size(); ++planeIndex) {
         const MeshPipelineFrustumPlane& plane = frustum.planes[planeIndex];
@@ -96,6 +97,9 @@ void SceneRenderVisibilityPublisher::BuildFrame(
 
             const bool passesMask = (proxy->desc.layer & cullingMask) != 0U;
             const bool insideFrustum = MeshPipelineVisibility::IsInsideFrustum(frustum, worldBounds);
+            const bool portalHidden = renderScene.PortalVisibility() != nullptr &&
+                renderScene.PortalVisibility()->Hides(
+                    kb::math::Vec3{ worldBounds.center[0], worldBounds.center[1], worldBounds.center[2] }, proxy->desc.layer);
             // The box is an addition, not a replacement: a mesh whose box the renderer could not
             // resolve keeps a valid sphere and zero half-extents, and consumers fall back to it.
             kb::math::Vec3 worldBoxHalfExtents{};
@@ -109,7 +113,7 @@ void SceneRenderVisibilityPublisher::BuildFrame(
                     .radius = worldBounds.radius,
                     .halfExtents = worldBoxHalfExtents,
                 },
-                .visible = proxy->desc.visible && passesMask && insideFrustum,
+                .visible = proxy->desc.visible && passesMask && insideFrustum && !portalHidden,
             };
         }
     };

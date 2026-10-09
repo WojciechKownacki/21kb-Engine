@@ -276,7 +276,7 @@ public:
             for (std::size_t offset = 0U; offset < record.entityCount; offset += resolvedRangeSize) {
                 const std::size_t count = record.entityCount - offset < resolvedRangeSize ? record.entityCount - offset : resolvedRangeSize;
                 Chunk chunk{ record.entityIds + offset, count, MakeComponentPointers(record, offset), rangeIndex++, MakeComponentDirtyCounts(record) };
-                std::forward<Kernel>(kernel)(chunk);
+                kernel(chunk);
                 ++stats.ranges;
                 stats.entities += count;
                 stats.maxRangeSize = count > stats.maxRangeSize ? count : stats.maxRangeSize;
@@ -715,6 +715,24 @@ public:
         return true;
     }
 
+    // Refresh the same source query after appends. Retained chunks keep their metadata snapshots;
+    // dirty-range iteration reads current counts from storage.
+    // A migration or removal falls back to a full rebuild before any stored pointer is used.
+    [[nodiscard]] bool RefreshAfterAppends(const Query<ComponentTypes...>& query) {
+        if (!valid_) {
+            return Rebuild(query, settings_);
+        }
+        std::size_t firstChangedRecord = 0U;
+        if (!query.RefreshMutableChunksAfterAppends(cachedStructuralVersion_, scratch_, firstChangedRecord)) {
+            return Rebuild(query, settings_);
+        }
+        if (firstChangedRecord < scratch_.mutableRecords_.size()) {
+            BuildCachedRangePlan(cachedRangeSize_, firstChangedRecord);
+        }
+        cachedStructuralVersion_ = query.StructuralVersion();
+        return true;
+    }
+
     [[nodiscard]] bool IsValid() const noexcept {
         return valid_;
     }
@@ -767,7 +785,7 @@ public:
                 continue;
             }
             MutableChunk chunk{ record.entityIds, record.entityCount, MakeComponentPointers(record, 0U), rangeIndex++, MakeComponentDirtyCounts(record) };
-            std::forward<Kernel>(kernel)(chunk);
+            kernel(chunk);
         }
     }
 
@@ -784,7 +802,7 @@ public:
             }
             MutableChunk chunk{ record.entityIds, record.entityCount, MakeComponentPointers(record, 0U),
                 rangeIndex++, MakeCurrentComponentDirtyCounts(storage, record) };
-            std::forward<Kernel>(kernel)(chunk);
+            kernel(chunk);
         }
     }
 
@@ -804,7 +822,7 @@ public:
             for (std::size_t offset = 0U; offset < record.entityCount; offset += resolvedRangeSize) {
                 const std::size_t count = record.entityCount - offset < resolvedRangeSize ? record.entityCount - offset : resolvedRangeSize;
                 MutableChunk chunk{ record.entityIds + offset, count, MakeComponentPointers(record, offset), rangeIndex++, MakeComponentDirtyCounts(record) };
-                std::forward<Kernel>(kernel)(chunk);
+                kernel(chunk);
                 ++stats.ranges;
                 stats.entities += count;
                 stats.maxRangeSize = count > stats.maxRangeSize ? count : stats.maxRangeSize;
@@ -875,6 +893,22 @@ public:
         return stats;
     }
 
+    // The rows of the query's tables flagged for the component, from one count per table (an upper bound, as
+    // NativeArchetypeStorage::ArchetypeComponentDirtyCount is).
+    template <std::size_t DirtyComponentIndex>
+    [[nodiscard]] std::size_t DirtyRowCount(const NativeArchetypeStorage& storage) const {
+        std::size_t rows = 0U;
+        std::size_t countedArchetype = std::numeric_limits<std::size_t>::max();
+        for (const MutableQueryTableDispatchRecord& record : scratch_.mutableRecords_) {
+            if (record.nativeArchetypeIndex == countedArchetype) {
+                continue;
+            }
+            countedArchetype = record.nativeArchetypeIndex;
+            rows += storage.ArchetypeComponentDirtyCount(countedArchetype, componentIds_[DirtyComponentIndex]);
+        }
+        return valid_ ? rows : 0U;
+    }
+
     template <std::size_t DirtyComponentIndex, typename Kernel>
     UnsafeHotDirtyRangeDispatchStats ForEachDirtyMutableRange(
         NativeArchetypeStorage& storage,
@@ -891,47 +925,71 @@ public:
         const std::size_t resolvedRangeSize = ResolveRangeSize(maxRangeSize);
         stats.requestedRangeSize = maxRangeSize;
         std::size_t rangeIndex = 0U;
-        for (const MutableQueryTableDispatchRecord& record : scratch_.mutableRecords_) {
-            if (record.entityCount == 0U) {
+        // Storage keeps an upper bound of dirty rows per archetype. A sparse tail scan stops only after
+        // accounting for all of them, then visits the selected records in their original order.
+        auto groupBegin = scratch_.mutableRecords_.begin();
+        while (groupBegin != scratch_.mutableRecords_.end()) {
+            const std::size_t archetypeIndex = groupBegin->nativeArchetypeIndex;
+            const auto groupEnd = std::upper_bound(groupBegin, scratch_.mutableRecords_.end(), archetypeIndex,
+                [](std::size_t index, const MutableQueryTableDispatchRecord& record) { return index < record.nativeArchetypeIndex; });
+            const std::size_t dirtyRows = storage.ArchetypeComponentDirtyCount(archetypeIndex, componentIds_[DirtyComponentIndex]);
+            const auto originalBegin = groupBegin;
+            auto first = groupBegin;
+            groupBegin = groupEnd;
+            if (dirtyRows == 0U) {
                 continue;
             }
-            if (storage.ComponentDirtyCount(record.nativeArchetypeIndex, record.nativeChunkIndex, componentIds_[DirtyComponentIndex]) == 0U) {
-                continue;
+            if ((dirtyRows - 1U) / resolvedRangeSize < 4U) {
+                std::size_t remaining = dirtyRows;
+                first = groupEnd;
+                while (first != originalBegin && remaining != 0U) {
+                    --first;
+                    remaining -= std::min(remaining, storage.ComponentDirtyCount(archetypeIndex, first->nativeChunkIndex, componentIds_[DirtyComponentIndex]));
+                }
             }
-
-            rangesScratch.clear();
-            static_cast<void>(storage.CollectComponentDirtyRanges(
-                record.nativeArchetypeIndex,
-                record.nativeChunkIndex,
-                componentIds_[DirtyComponentIndex],
-                resolvedRangeSize,
-                rangesScratch));
-            if (!rangesScratch.empty()) {
-                ++stats.chunks;
-            }
-            for (const NativeComponentDirtyRange& range : rangesScratch) {
-                if (range.count == 0U || range.dirtyCount == 0U) {
+            for (auto current = first; current != groupEnd; ++current) {
+                const MutableQueryTableDispatchRecord& record = *current;
+                if (record.entityCount == 0U) {
                     continue;
                 }
-                MutableChunk chunk{
-                    record.entityIds + range.begin,
-                    range.count,
-                    MakeComponentPointers(record, range.begin),
-                    rangeIndex++,
-                    MakeCurrentComponentDirtyCounts(storage, record),
-                };
-                std::forward<Kernel>(kernel)(chunk, range.dirtyCount);
-                ++stats.ranges;
-                stats.entities += range.count;
-                stats.dirtyRows += range.dirtyCount;
-                stats.maxRangeSize = range.count > stats.maxRangeSize ? range.count : stats.maxRangeSize;
-                if (clearDirtyAfterVisit) {
-                    storage.ClearComponentDirtyRows(
-                        record.nativeArchetypeIndex,
-                        record.nativeChunkIndex,
-                        componentIds_[DirtyComponentIndex],
-                        range.begin,
-                        range.count);
+                if (storage.ComponentDirtyCount(record.nativeArchetypeIndex, record.nativeChunkIndex, componentIds_[DirtyComponentIndex]) == 0U) {
+                    continue;
+                }
+
+                rangesScratch.clear();
+                static_cast<void>(storage.CollectComponentDirtyRanges(
+                    record.nativeArchetypeIndex,
+                    record.nativeChunkIndex,
+                    componentIds_[DirtyComponentIndex],
+                    resolvedRangeSize,
+                    rangesScratch));
+                if (!rangesScratch.empty()) {
+                    ++stats.chunks;
+                }
+                for (const NativeComponentDirtyRange& range : rangesScratch) {
+                    if (range.count == 0U || range.dirtyCount == 0U) {
+                        continue;
+                    }
+                    MutableChunk chunk{
+                        record.entityIds + range.begin,
+                        range.count,
+                        MakeComponentPointers(record, range.begin),
+                        rangeIndex++,
+                        MakeCurrentComponentDirtyCounts(storage, record),
+                    };
+                    kernel(chunk, range.dirtyCount);
+                    ++stats.ranges;
+                    stats.entities += range.count;
+                    stats.dirtyRows += range.dirtyCount;
+                    stats.maxRangeSize = range.count > stats.maxRangeSize ? range.count : stats.maxRangeSize;
+                    if (clearDirtyAfterVisit) {
+                        storage.ClearComponentDirtyRows(
+                            record.nativeArchetypeIndex,
+                            record.nativeChunkIndex,
+                            componentIds_[DirtyComponentIndex],
+                            range.begin,
+                            range.count);
+                    }
                 }
             }
         }
@@ -1030,18 +1088,26 @@ private:
         std::size_t dirtyCount = 0U;
     };
 
-    void BuildCachedRangePlan(std::size_t rangeSize) {
+    void BuildCachedRangePlan(std::size_t rangeSize, std::size_t firstChangedRecord = 0U) {
         cachedRangeSize_ = rangeSize == 0U ? kDefaultQueryExecutionGrainSize : rangeSize;
         cachedWorkerCountLimit_ = std::numeric_limits<std::size_t>::max();
-        scratch_.workItems_.clear();
-        scratch_.chunks_.clear();
-        std::size_t workItemCount = 0U;
-        for (const MutableQueryTableDispatchRecord& record : scratch_.mutableRecords_) {
+        const auto firstChangedItem = std::lower_bound(scratch_.workItems_.begin(), scratch_.workItems_.end(), firstChangedRecord,
+            [](const QueryBatchWorkItem& item, std::size_t recordIndex) { return item.recordIndex < recordIndex; });
+        const std::size_t retainedItems = static_cast<std::size_t>(firstChangedItem - scratch_.workItems_.begin());
+        scratch_.workItems_.resize(retainedItems);
+        scratch_.chunks_.resize(retainedItems);
+        std::size_t workItemCount = retainedItems;
+        for (std::size_t recordIndex = firstChangedRecord; recordIndex < scratch_.mutableRecords_.size(); ++recordIndex) {
+            const MutableQueryTableDispatchRecord& record = scratch_.mutableRecords_[recordIndex];
             workItemCount += record.entityCount == 0U ? 0U : ((record.entityCount - 1U) / cachedRangeSize_) + 1U;
         }
-        scratch_.workItems_.reserve(workItemCount);
-        scratch_.chunks_.reserve(workItemCount);
-        for (std::size_t recordIndex = 0U; recordIndex < scratch_.mutableRecords_.size(); ++recordIndex) {
+        if (workItemCount > scratch_.workItems_.capacity()) {
+            scratch_.workItems_.reserve(std::max(workItemCount, scratch_.workItems_.capacity() + scratch_.workItems_.capacity() / 2U));
+        }
+        if (workItemCount > scratch_.chunks_.capacity()) {
+            scratch_.chunks_.reserve(std::max(workItemCount, scratch_.chunks_.capacity() + scratch_.chunks_.capacity() / 2U));
+        }
+        for (std::size_t recordIndex = firstChangedRecord; recordIndex < scratch_.mutableRecords_.size(); ++recordIndex) {
             const MutableQueryTableDispatchRecord& record = scratch_.mutableRecords_[recordIndex];
             for (std::size_t offset = 0U; offset < record.entityCount; offset += cachedRangeSize_) {
                 const std::size_t count = record.entityCount - offset < cachedRangeSize_ ? record.entityCount - offset : cachedRangeSize_;

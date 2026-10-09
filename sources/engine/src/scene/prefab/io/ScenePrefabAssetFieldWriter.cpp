@@ -3,7 +3,10 @@
 #include "scene/prefab/io/ScenePrefabAssetComponentWriter.hpp"
 #include "scene/prefab/io/ScenePrefabAssetEscaper.hpp"
 #include "scene/prefab/io/ScenePrefabAssetFormat.hpp"
+#include "scene/transform/SceneTransformResiduals.hpp"
 
+#include <array>
+#include <charconv>
 #include <ostream>
 #include <string>
 #include <string_view>
@@ -13,6 +16,19 @@ namespace {
 
 void WriteVec3(std::ostream& output, std::string_view key, Vec3 value) {
     output << key << '=' << value.x << ' ' << value.y << ' ' << value.z << '\n';
+}
+
+// The shortest text of each float, which reads back as exactly the same value.
+void WriteExactVec3(std::ostream& output, std::string_view key, Vec3 value) {
+    const std::array<float, 3U> components{ value.x, value.y, value.z };
+    output << key << '=';
+    for (std::size_t index = 0U; index < components.size(); ++index) {
+        std::array<char, 32> buffer{};
+        const std::to_chars_result result = std::to_chars(buffer.data(), buffer.data() + buffer.size(), components[index]);
+        if (index != 0U) output << ' ';
+        output.write(buffer.data(), result.ptr - buffer.data());
+    }
+    output << '\n';
 }
 
 void WriteQuat(std::ostream& output, std::string_view key, Quat value) {
@@ -42,7 +58,11 @@ void ScenePrefabAssetFieldWriter::WriteNode(std::ostream& output, const ScenePre
         WriteNestedOverride(output, index, node.nestedPrefabOverrides[index]);
     }
     output << ScenePrefabAssetFormat::ParentKey << '=' << (node.parentNode == ScenePrefabNodeDesc::NoParent ? -1 : static_cast<int>(node.parentNode)) << '\n';
-    WriteVec3(output, ScenePrefabAssetFormat::LocalPositionKey, node.transform.localPosition);
+    // The translation round-trips exactly: its float view, and the part below float precision when it has one.
+    WriteExactVec3(output, ScenePrefabAssetFormat::LocalPositionKey, node.transform.localPosition);
+    if (const Vec3 residual = FittingResidual(node.transform.localPosition, node.localPositionResidual); !IsZero(residual)) {
+        WriteExactVec3(output, ScenePrefabAssetFormat::LocalPositionResidualKey, residual);
+    }
     WriteQuat(output, ScenePrefabAssetFormat::LocalRotationKey, node.transform.localRotation);
     WriteVec3(output, ScenePrefabAssetFormat::LocalScaleKey, node.transform.localScale);
     const VisibilityMode visibilityMode = node.visibility.visible

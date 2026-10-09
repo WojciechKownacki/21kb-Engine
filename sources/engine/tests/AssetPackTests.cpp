@@ -3,9 +3,11 @@
 
 #include "engine/assets/bake/AssetPack.hpp"
 #include "engine/assets/bake/AssetPackReader.hpp"
+#include "engine/assets/bake/AssetPackSeal.hpp"
 #include "engine/assets/bake/AssetPackWriter.hpp"
 #include "engine/assets/bake/BakeTargetProfile.hpp"
 #include "engine/assets/bake/RuntimeAssetManifest.hpp"
+#include "engine/security/ReleaseKeys.hpp"
 
 #include "assets/bake/BakeStorePath.hpp"
 
@@ -1902,6 +1904,186 @@ void TwoWritersOnOnePackDoNotForgeEachOthersBytes() {
     PurgeDirectory(root);
 }
 
+[[nodiscard]] kb::security::ReleaseSigningKey TestSigningKey() {
+    kb::security::ReleaseSigningKey key;
+    Require(kb::security::GenerateReleaseSigningKey(key), "The test release signing key could not be generated");
+    return key;
+}
+
+[[nodiscard]] bake::AssetPackTrust TrustOnly(const kb::security::ReleaseSigningKey& key) {
+    bake::AssetPackTrust trust{};
+    trust.requiredSigner = key.publicKey;
+    return trust;
+}
+
+[[nodiscard]] bake::AssetPackReadStatus MountStatus(const std::filesystem::path& path, const bake::AssetPackTrust& trust) {
+    bake::AssetPackReader reader;
+    return reader.Mount(path, bake::AssetPackAccess::Ranged, trust);
+}
+
+// Red when: a pack signed with the release key is not served exactly as written in every access
+// mode, when a packaged reader accepts an unsigned pack or one signed by another key, or when a
+// single flipped bit in the header, the index, the seal or a block survives.
+void ASealedPackIsVerifiedAndRefusedWhenTampered() {
+    const std::filesystem::path root = TestRoot() / "sealed";
+    PurgeDirectory(root);
+    std::filesystem::create_directories(root);
+
+    const bake::BakeTargetProfile profile = bake::WindowsX64BakeTargetProfile();
+    const std::filesystem::path unsignedPack = root / "unsigned.kbpack";
+    const std::vector<WrittenArtifact> expected = BakeSamplePack(unsignedPack, profile);
+    const std::vector<std::uint8_t> unsignedBytes = ReadFileBytes(unsignedPack);
+    const std::filesystem::path signedPack = root / "signed.kbpack";
+    WriteFileBytes(signedPack, unsignedBytes);
+
+    const kb::security::ReleaseSigningKey key = TestSigningKey();
+    std::string error;
+    Require(bake::SealAssetPack(signedPack, key, nullptr, error), "An intact pack could not be sealed");
+    Require(!bake::SealAssetPack(signedPack, key, nullptr, error), "A sealed pack was sealed a second time");
+    const std::vector<std::uint8_t> signedBytes = ReadFileBytes(signedPack);
+    Require(signedBytes.size() > unsignedBytes.size() &&
+            std::equal(unsignedBytes.begin(), unsignedBytes.end(), signedBytes.begin()),
+        "Sealing an unencrypted pack changed a byte of the unsigned layout");
+
+    for (const bake::AssetPackAccess access : { bake::AssetPackAccess::Ranged, bake::AssetPackAccess::WholeFile }) {
+        bake::AssetPackReader reader;
+        Require(reader.Mount(signedPack, access, TrustOnly(key)) == bake::AssetPackReadStatus::Success,
+            "A pack sealed by the release key was refused");
+        Require(reader.Seal() != nullptr && reader.Seal()->signer == key.publicKey && !reader.Seal()->encrypted,
+            "The mounted seal does not name its signer");
+        RequireMountedPackMatches(reader, expected, "A sealed pack did not serve the blocks it was baked with");
+    }
+    {
+        bake::AssetPackReader reader;
+        Require(reader.MountMemory(signedBytes, TrustOnly(key)) == bake::AssetPackReadStatus::Success,
+            "A sealed pack mapped in memory was refused");
+        RequireMountedPackMatches(reader, expected, "A sealed pack in memory did not serve its blocks");
+        bake::AssetPackReader development;
+        Require(development.MountMemory(signedBytes) == bake::AssetPackReadStatus::Success,
+            "A development reader refused an intact sealed pack");
+    }
+
+    Require(MountStatus(unsignedPack, TrustOnly(key)) == bake::AssetPackReadStatus::Unsigned,
+        "A packaged reader accepted an unsigned pack");
+    Require(MountStatus(unsignedPack, {}) == bake::AssetPackReadStatus::Success,
+        "A development reader refused an unsigned pack");
+    const kb::security::ReleaseSigningKey otherKey = TestSigningKey();
+    Require(MountStatus(signedPack, TrustOnly(otherKey)) == bake::AssetPackReadStatus::UntrustedSigner,
+        "A pack signed by another key was accepted");
+
+    const std::filesystem::path tampered = root / "tampered.kbpack";
+    const auto flipAndMount = [&](std::size_t offset, const bake::AssetPackTrust& trust) {
+        std::vector<std::uint8_t> bytes = signedBytes;
+        bytes[offset] ^= 0x01U;
+        WriteFileBytes(tampered, bytes);
+        return MountStatus(tampered, trust);
+    };
+    const std::vector<ObservedArtifact> observed = ObservePack(unsignedBytes);
+    const ObservedBlock& block = observed.front().blocks.front();
+    // A bit in the index (a block's digest), in the header's padding, in a seal entry, and in the
+    // signature itself: each must be refused at mount, packaged or not.
+    for (const std::size_t offset : { block.storedBytesFieldOffset + 12U, std::size_t{ 200U },
+             unsignedBytes.size() + 120U, signedBytes.size() - 1U }) {
+        Require(flipAndMount(offset, TrustOnly(key)) == bake::AssetPackReadStatus::SignatureInvalid,
+            "A single flipped bit in a sealed catalogue was not refused by a packaged reader");
+        Require(flipAndMount(offset, {}) == bake::AssetPackReadStatus::SignatureInvalid,
+            "A single flipped bit in a sealed catalogue was not refused by a development reader");
+    }
+    // A bit in a block mounts (the catalogue is intact) and is refused when that block is read.
+    {
+        std::vector<std::uint8_t> bytes = signedBytes;
+        bytes[static_cast<std::size_t>(block.offset)] ^= 0x01U;
+        WriteFileBytes(tampered, bytes);
+        bake::AssetPackReader reader;
+        Require(reader.Mount(tampered, bake::AssetPackAccess::Ranged, TrustOnly(key)) == bake::AssetPackReadStatus::Success,
+            "A payload bit flip damaged the sealed catalogue");
+        const bake::AssetPackArtifactEntry* artifact = reader.FindArtifact(observed.front().key);
+        std::vector<std::uint8_t> payload;
+        Require(artifact != nullptr &&
+                reader.ReadBlock(*artifact, block.name, payload) == bake::AssetPackReadStatus::PayloadCorrupt &&
+                payload.empty(),
+            "A flipped bit in a sealed block was returned");
+    }
+    // A cut seal is not a seal; an appended tail that is not a seal is not this pack.
+    {
+        std::vector<std::uint8_t> bytes = signedBytes;
+        bytes.resize(bytes.size() - 1U);
+        WriteFileBytes(tampered, bytes);
+        Require(MountStatus(tampered, TrustOnly(key)) == bake::AssetPackReadStatus::SealCorrupt,
+            "A truncated seal was accepted");
+        bytes = unsignedBytes;
+        bytes.insert(bytes.end(), 160U, 0x5AU);
+        WriteFileBytes(tampered, bytes);
+        Require(MountStatus(tampered, TrustOnly(key)) == bake::AssetPackReadStatus::SizeMismatch,
+            "Bytes appended to an unsigned pack were taken for a seal");
+    }
+
+    PurgeDirectory(root);
+}
+
+// Red when: an encrypted pack leaves a block readable in the file, cannot be read back with its
+// key, can be read without it or with another, or serves a block whose ciphertext was changed.
+void AnEncryptedPackRoundTrips() {
+    const std::filesystem::path root = TestRoot() / "encrypted";
+    PurgeDirectory(root);
+    std::filesystem::create_directories(root);
+
+    const bake::BakeTargetProfile profile = bake::WindowsX64BakeTargetProfile();
+    const std::filesystem::path packPath = root / "encrypted.kbpack";
+    const std::vector<WrittenArtifact> expected = BakeSamplePack(packPath, profile);
+    const std::vector<std::uint8_t> plainBytes = ReadFileBytes(packPath);
+
+    const kb::security::ReleaseSigningKey key = TestSigningKey();
+    kb::security::AeadKey contentKey;
+    Require(kb::security::SecureRandom(contentKey.Span()), "The test content key could not be generated");
+    std::string error;
+    Require(bake::SealAssetPack(packPath, key, &contentKey, error), "An intact pack could not be encrypted");
+    const std::vector<std::uint8_t> sealedBytes = ReadFileBytes(packPath);
+
+    const std::vector<ObservedArtifact> observed = ObservePack(plainBytes);
+    for (const ObservedArtifact& artifact : observed) {
+        for (const ObservedBlock& block : artifact.blocks) {
+            const auto begin = static_cast<std::ptrdiff_t>(block.offset);
+            const auto end = begin + static_cast<std::ptrdiff_t>(block.storedBytes);
+            Require(!std::equal(plainBytes.begin() + begin, plainBytes.begin() + end, sealedBytes.begin() + begin) ||
+                    block.storedBytes == 1U,
+                "An encrypted pack still stores a block in the clear");
+        }
+    }
+
+    bake::AssetPackTrust trust = TrustOnly(key);
+    trust.contentKey = contentKey;
+    for (const bake::AssetPackAccess access : { bake::AssetPackAccess::Ranged, bake::AssetPackAccess::WholeFile }) {
+        bake::AssetPackReader reader;
+        Require(reader.Mount(packPath, access, trust) == bake::AssetPackReadStatus::Success,
+            "An encrypted pack was refused with its key");
+        Require(reader.Seal() != nullptr && reader.Seal()->encrypted, "An encrypted pack does not say it is encrypted");
+        RequireMountedPackMatches(reader, expected, "An encrypted pack did not decrypt to the blocks it was baked with");
+    }
+    Require(MountStatus(packPath, TrustOnly(key)) == bake::AssetPackReadStatus::ContentKeyMissing,
+        "An encrypted pack mounted without its content key");
+    bake::AssetPackTrust wrongKey = TrustOnly(key);
+    wrongKey.contentKey.emplace();
+    Require(kb::security::SecureRandom(wrongKey.contentKey->Span()), "The wrong content key could not be generated");
+    Require(MountStatus(packPath, wrongKey) == bake::AssetPackReadStatus::ContentKeyMismatch,
+        "An encrypted pack mounted with another content key");
+
+    const ObservedBlock& block = observed.front().blocks.front();
+    std::vector<std::uint8_t> bytes = sealedBytes;
+    bytes[static_cast<std::size_t>(block.offset)] ^= 0x01U;
+    WriteFileBytes(packPath, bytes);
+    bake::AssetPackReader reader;
+    Require(reader.Mount(packPath, bake::AssetPackAccess::Ranged, trust) == bake::AssetPackReadStatus::Success,
+        "A ciphertext bit flip damaged the encrypted catalogue");
+    const bake::AssetPackArtifactEntry* artifact = reader.FindArtifact(observed.front().key);
+    std::vector<std::uint8_t> payload;
+    Require(artifact != nullptr && reader.ReadBlock(*artifact, block.name, payload) == bake::AssetPackReadStatus::PayloadCorrupt,
+        "A modified encrypted block was decrypted and returned");
+
+    reader.Unmount();
+    PurgeDirectory(root);
+}
+
 } // namespace
 
 void RunAssetPackTests() {
@@ -1922,6 +2104,8 @@ void RunAssetPackTests() {
     BorrowedPackageMemoryUsesTheValidatedReaderPath();
     AligningAnOffsetRefusesToWrap();
     TwoWritersOnOnePackDoNotForgeEachOthersBytes();
+    ASealedPackIsVerifiedAndRefusedWhenTampered();
+    AnEncryptedPackRoundTrips();
     PurgeDirectory(TestRoot());
 }
 

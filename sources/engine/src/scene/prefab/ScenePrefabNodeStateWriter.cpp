@@ -19,6 +19,7 @@
 #include "scene/SceneState.hpp"
 #include "scene/hierarchy/SceneHierarchyCache.hpp"
 #include "scene/prefab/ScenePrefabOptionalComponentMask.hpp"
+#include "scene/transform/SceneTransformPrecision.hpp"
 
 #include <optional>
 #include <string_view>
@@ -167,6 +168,11 @@ namespace {
         lhs.height == rhs.height && lhs.area == rhs.area && lhs.carve == rhs.carve && lhs.enabled == rhs.enabled;
 }
 
+[[nodiscard]] bool Equals(const NavLink& lhs, const NavLink& rhs) noexcept {
+    return Equals(lhs.start, rhs.start) && Equals(lhs.end, rhs.end) && lhs.radius == rhs.radius && lhs.kind == rhs.kind &&
+        lhs.area == rhs.area && lhs.bidirectional == rhs.bidirectional && lhs.enabled == rhs.enabled;
+}
+
 [[nodiscard]] bool Equals(const AuxFrameComponent& lhs, const AuxFrameComponent& rhs) noexcept {
     return lhs.mode == rhs.mode && lhs.imageTargetId == rhs.imageTargetId && lhs.width == rhs.width && lhs.height == rhs.height &&
         Equals(lhs.mirrorPlaneNormal, rhs.mirrorPlaneNormal) && lhs.mirrorPlaneOffset == rhs.mirrorPlaneOffset && lhs.enabled == rhs.enabled;
@@ -305,6 +311,7 @@ ScenePrefabNodeStateWriterContext::ScenePrefabNodeStateWriterContext(Scene& scen
     , deformedGeometries(scene.Components().DeformedGeometries())
     , navAgents(scene.Components().NavAgents())
     , navObstacles(scene.Components().NavObstacles())
+    , navLinks(scene.Components().NavLinks())
     , ui(scene.Components().UI()) {
     state.suppressPrefabDirtyTracking = true;
 }
@@ -327,8 +334,10 @@ void ScenePrefabNodeStateWriter::Write(ScenePrefabNodeStateWriterContext& contex
         static_cast<void>(context.hierarchy.SetParent(entity, parent.Entity()));
     }
 
-    if (const TransformComponent* currentTransform = context.transforms.TryGet(entity); currentTransform == nullptr || !HasSameLocalTransform(*currentTransform, node.transform)) {
+    if (const TransformComponent* currentTransform = context.transforms.TryGet(entity); currentTransform == nullptr || !HasSameLocalTransform(*currentTransform, node.transform) ||
+        context.transforms.LocalTranslation(entity, *currentTransform) != node.LocalTranslation()) {
         context.transforms.Set(entity, node.transform);
+        SceneTransformPrecision::StoreLocalResidual(context.state, entity, FittingResidual(node.transform.localPosition, node.localPositionResidual));
     }
 
     if (const VisibilityComponent* currentVisibility = context.visibility.TryGet(entity); currentVisibility == nullptr || !Equals(*currentVisibility, node.visibility)) {
@@ -408,6 +417,7 @@ void ScenePrefabNodeStateWriter::Write(ScenePrefabNodeStateWriterContext& contex
     }
     WriteOptionalComponent(context.navAgents, entity, node.components.navAgent);
     WriteOptionalComponent(context.navObstacles, entity, node.components.navObstacle);
+    WriteOptionalComponent(context.navLinks, entity, node.components.navLink);
 }
 
 } // namespace kb::scene

@@ -27,7 +27,7 @@ constexpr std::array kLifecycleEvents{
 // PucLuaFunctionApi and PucLuaTaskApi install module tables directly from this
 // list.  The names and each wrapper's return shape therefore stay true to the
 // callable sandbox and generated stubs cannot drift from it.
-constexpr std::array<ScriptApiCatalogLuaBindingDefinition, 185> kLuaBindings{ {
+constexpr auto kLuaBindings = std::to_array<ScriptApiCatalogLuaBindingDefinition>({
     { "Audio", "Play", "Audio.Play", ScriptApiCatalogLuaReturnKind::SingleOutput, "voice" },
     { "Audio", "SetMixer", "Audio.SetMixer", ScriptApiCatalogLuaReturnKind::SingleOutput, "assigned" },
     { "Audio", "ActiveMixer", "Audio.ActiveMixer", ScriptApiCatalogLuaReturnKind::Default, "" },
@@ -117,6 +117,8 @@ constexpr std::array<ScriptApiCatalogLuaBindingDefinition, 185> kLuaBindings{ {
     { "Scene", "GetActive", "Scene.GetActive", ScriptApiCatalogLuaReturnKind::SingleOutput, "id" },
     { "Scene", "Find", "Scene.Find", ScriptApiCatalogLuaReturnKind::SingleOutput, "id" },
     { "Scene", "LoadProgress", "Scene.LoadProgress", ScriptApiCatalogLuaReturnKind::SingleOutput, "progress" },
+    { "Scene", "SetDataLayerActive", "Scene.SetDataLayerActive", ScriptApiCatalogLuaReturnKind::SingleOutput, "set" },
+    { "Scene", "IsDataLayerActive", "Scene.IsDataLayerActive", ScriptApiCatalogLuaReturnKind::SingleOutput, "active" },
     { "UI", "Create", "UI.Create", ScriptApiCatalogLuaReturnKind::SingleOutput, "entity" },
     { "UI", "AddComponent", "UI.AddComponent", ScriptApiCatalogLuaReturnKind::SingleOutput, "added" },
     { "UI", "RemoveComponent", "UI.RemoveComponent", ScriptApiCatalogLuaReturnKind::SingleOutput, "removed" },
@@ -131,6 +133,11 @@ constexpr std::array<ScriptApiCatalogLuaBindingDefinition, 185> kLuaBindings{ {
     { "Transform", "GetPosition", "Transform.GetPosition", ScriptApiCatalogLuaReturnKind::GuardedTable, "found" },
     { "Transform", "SetPosition", "Transform.SetPosition", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Transform", "Translate", "Transform.Translate", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "Transform", "GetPrecisePosition", "Transform.GetPrecisePosition", ScriptApiCatalogLuaReturnKind::GuardedTable, "found" },
+    { "Transform", "SetPrecisePosition", "Transform.SetPrecisePosition", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "Transform", "TranslatePrecise", "Transform.TranslatePrecise", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "Transform", "GetPreciseWorldPosition", "Transform.GetPreciseWorldPosition", ScriptApiCatalogLuaReturnKind::GuardedTable, "found" },
+    { "Transform", "SetPreciseWorldPosition", "Transform.SetPreciseWorldPosition", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Physics", "Raycast", "Physics.Raycast", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
     { "Physics", "AddForce", "Physics.AddForce", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Physics", "AddImpulse", "Physics.AddImpulse", ScriptApiCatalogLuaReturnKind::Default, "" },
@@ -200,6 +207,7 @@ constexpr std::array<ScriptApiCatalogLuaBindingDefinition, 185> kLuaBindings{ {
     { "Localization", "Language", "Localization.Language", ScriptApiCatalogLuaReturnKind::SingleOutput, "language" },
     { "Localization", "Translate", "Localization.Translate", ScriptApiCatalogLuaReturnKind::SingleOutput, "text" },
     { "Localization", "FormatPlural", "Localization.FormatPlural", ScriptApiCatalogLuaReturnKind::SingleOutput, "text" },
+    { "Localization", "FormatPluralNumber", "Localization.FormatPluralNumber", ScriptApiCatalogLuaReturnKind::SingleOutput, "text" },
     { "Pointer", "Position", "Pointer.Position", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
     { "Pointer", "Delta", "Pointer.Delta", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
     { "Pointer", "Button", "Pointer.Button", ScriptApiCatalogLuaReturnKind::Default, "" },
@@ -212,8 +220,13 @@ constexpr std::array<ScriptApiCatalogLuaBindingDefinition, 185> kLuaBindings{ {
     { "Task", "WaitScene", "Task.WaitScene", ScriptApiCatalogLuaReturnKind::SingleOutput, "task" },
     { "Task", "IsRunning", "Task.IsRunning", ScriptApiCatalogLuaReturnKind::SingleOutput, "running" },
     { "Task", "Cancel", "Task.Cancel", ScriptApiCatalogLuaReturnKind::SingleOutput, "cancelled" },
+    { "Navigation", "FindPath", "Navigation.FindPath", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
+    { "Navigation", "PathCorner", "Navigation.PathCorner", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
+    { "Navigation", "Raycast", "Navigation.Raycast", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
+    { "Navigation", "NearestPoint", "Navigation.NearestPoint", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
+    { "Navigation", "SetAreaCost", "Navigation.SetAreaCost", ScriptApiCatalogLuaReturnKind::SingleOutput, "applied" },
     { "", "Log", "Log", ScriptApiCatalogLuaReturnKind::Default, "" },
-} };
+});
 
 [[nodiscard]] std::vector<ScriptApiPin> ToApiPins(const std::vector<ScriptFunctionPin>& pins) {
     std::vector<ScriptApiPin> converted;

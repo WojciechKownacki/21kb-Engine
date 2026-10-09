@@ -3,6 +3,7 @@
 #include "engine/project/ProjectDescriptor.hpp"
 
 #include <chrono>
+#include <cstdint>
 #include <cstddef>
 #include <filesystem>
 #include <iosfwd>
@@ -18,6 +19,14 @@ class Scene;
 
 namespace kb::assets::bake {
 class RuntimeAssetPack;
+struct AssetPackTrust;
+enum class RuntimeAssetPackStatus : std::uint8_t;
+}
+
+namespace kb::security {
+struct InstalledRelease;
+struct TrustAnchor;
+struct TrustAnchorLookup;
 }
 
 
@@ -77,6 +86,14 @@ inline void ResetRuntimeDeltaOrigin(
 [[nodiscard]] std::filesystem::path ExecutableDirectory();
 #endif
 
+// The name the packaging step stages the cooked package under, beside the player.
+inline constexpr std::string_view kPackagedGameFileName = "Game.kbpack";
+
+// True for a shipped game, which runs only its own package and refuses the development switches and
+// loose project content that would load anything else: a player carrying a release trust anchor, or a
+// Windows player the packaging step staged beside its own kPackagedGameFileName.
+[[nodiscard]] bool IsShippedGamePlayer();
+
 // Converts a native path for logs without changing the path used for I/O.
 [[nodiscard]] std::string NarrowForDiagnostics(const std::filesystem::path& path);
 
@@ -86,6 +103,48 @@ inline void ResetRuntimeDeltaOrigin(
     const std::filesystem::path& projectPath,
     std::string_view sceneOverride,
     GameProjectRuntime& runtime,
+    std::ostream& err);
+
+// What a runtime asset pack must satisfy on this player. A player carrying a trust anchor (a
+// packaged release) requires packs sealed by its release key and decrypts them with its content
+// key; a player without one (a development player) accepts an unsigned pack. False, with a
+// diagnostic, for an anchor that is present but damaged -- never a silent downgrade.
+[[nodiscard]] bool ResolvePackagedAssetPackTrust(
+    const kb::security::TrustAnchorLookup& anchor,
+    kb::assets::bake::AssetPackTrust& trust,
+    std::ostream& err);
+
+// Startup check of a packaged release installed in `root`: its signed manifest must verify
+// against the anchor's release key and product, every critical file must be listed, and the
+// running `executable` -- and the pack set index, when the release has one -- must hash to its
+// listed digest. Applies the manifest's anti-rollback policy
+// with state in `securityRoot`, then installs the release for native module loading. Null, with a
+// diagnostic, when the release must not run.
+[[nodiscard]] std::shared_ptr<const kb::security::InstalledRelease> VerifyPackagedRelease(
+    const kb::security::TrustAnchor& anchor,
+    const std::filesystem::path& root,
+    const std::filesystem::path& executable,
+    const std::filesystem::path& securityRoot,
+    std::ostream& err);
+
+// True when the mounted pack is the very pack the release manifest lists at `packPath`, compared
+// by the digest its seal signs, so the pack is never hashed a second time. For a pack set every
+// further pack (chunk or patch) must likewise be the one listed at its own path.
+[[nodiscard]] bool PackBelongsToRelease(
+    const kb::security::InstalledRelease& release,
+    const std::filesystem::path& packPath,
+    const kb::assets::bake::RuntimeAssetPack& pack,
+    std::ostream& err);
+
+// Authenticates this player's save files with the per-game secret of its trust anchor. Saves are bound to
+// the game, not to one machine, so they move with the player between computers, through cloud saves and
+// across reinstalls.
+void ConfigurePackagedSaveIntegrity(const kb::security::TrustAnchor& anchor, std::ostream& err);
+
+// One line naming why a runtime asset pack was refused, in words a player can act on.
+void ReportRuntimePackageRefusal(
+    const kb::assets::bake::RuntimeAssetPack& pack,
+    kb::assets::bake::RuntimeAssetPackStatus status,
     std::ostream& err);
 
 // Platform package hosts may already own a zero-copy/memory-mapped pack (Android APK assets,

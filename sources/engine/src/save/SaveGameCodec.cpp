@@ -6,11 +6,28 @@
 #include <algorithm>
 #include <array>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 namespace kb::save {
 namespace {
+
+// The domain includes its terminating NUL, which separates it from what follows it.
+constexpr std::string_view kMacDomain{ "21KB-SAVE-V3\0", 13U };
+
+// HMAC over everything in the file but the HMAC field: the header in front of it and the
+// payload behind it, so neither the version, the size, the hash nor a payload byte can change.
+[[nodiscard]] kb::security::Sha512Digest SaveMac(
+    const SaveGameIntegrity& integrity,
+    std::span<const std::uint8_t> header,
+    std::span<const std::uint8_t> payload) noexcept {
+    kb::security::HmacSha512Hasher mac{ integrity.key.Span() };
+    mac.Update(std::span{ reinterpret_cast<const std::uint8_t*>(kMacDomain.data()), kMacDomain.size() });
+    mac.Update(header);
+    mac.Update(payload);
+    return mac.Finish();
+}
 
 [[nodiscard]] bool IsKnownType(std::uint8_t tag) noexcept {
     return tag <= static_cast<std::uint8_t>(SaveValueType::AssetRef);
@@ -93,7 +110,8 @@ void WriteScalar(std::vector<std::uint8_t>& out, const SaveValue& value) {
 
 } // namespace
 
-std::vector<std::uint8_t> SaveGameCodec::Encode(const SaveGame& save, std::uint32_t schemaVersion, SaveDomain domain) {
+std::vector<std::uint8_t> SaveGameCodec::Encode(
+    const SaveGame& save, std::uint32_t schemaVersion, SaveDomain domain, const SaveGameIntegrity& integrity) {
     std::vector<std::uint8_t> payload;
     SaveGameBinaryIO::WriteUInt8(payload, static_cast<std::uint8_t>(domain));
     SaveGameBinaryIO::WriteUInt32(payload, static_cast<std::uint32_t>(save.Entries().size()));
@@ -121,11 +139,20 @@ std::vector<std::uint8_t> SaveGameCodec::Encode(const SaveGame& save, std::uint3
         SaveGameBinaryIO::WriteUInt64(bytes, static_cast<std::uint64_t>(payload.size()));
         SaveGameBinaryIO::WriteUInt64(bytes, IntegrityHash(payload));
     }
+    if (schemaVersion >= SaveGameFormat::kFirstAuthenticatedSchemaVersion) {
+        const kb::security::Sha512Digest mac = SaveMac(integrity, bytes, payload);
+        SaveGameBinaryIO::WriteRaw(bytes, mac.data(), mac.size());
+    }
     SaveGameBinaryIO::WriteRaw(bytes, payload.data(), payload.size());
     return bytes;
 }
 
-SaveGameLoadResult SaveGameCodec::Decode(std::span<const std::uint8_t> bytes, std::uint32_t targetVersion, SaveDomain expectedDomain, std::span<const SaveGameMigration> migrations) {
+SaveGameLoadResult SaveGameCodec::Decode(
+    std::span<const std::uint8_t> bytes,
+    std::uint32_t targetVersion,
+    SaveDomain expectedDomain,
+    std::span<const SaveGameMigration> migrations,
+    const SaveGameIntegrity& integrity) {
     const auto fail = [](SaveGameLoadStatus status, std::string diagnostic) {
         return SaveGameLoadResult{ .status = status, .save = {}, .diagnostic = std::move(diagnostic) };
     };
@@ -147,24 +174,36 @@ SaveGameLoadResult SaveGameCodec::Decode(std::span<const std::uint8_t> bytes, st
         return fail(SaveGameLoadStatus::UnsupportedVersion, "save schema version is unsupported");
     }
 
+    const bool authenticated = schemaVersion >= SaveGameFormat::kFirstAuthenticatedSchemaVersion;
+    if (!authenticated && !integrity.acceptUnauthenticatedLegacySaves) {
+        return fail(SaveGameLoadStatus::Tampered, "save predates authenticated saves and this game no longer accepts those");
+    }
     constexpr std::size_t kLegacyHeaderBytes = SaveGameFormat::kMagic.size() + sizeof(std::uint32_t);
     constexpr std::size_t kIntegrityHeaderBytes = kLegacyHeaderBytes + sizeof(std::uint64_t) + sizeof(std::uint64_t);
+    const std::size_t headerBytes = kIntegrityHeaderBytes + (authenticated ? kb::security::kSha512Bytes : 0U);
     std::span<const std::uint8_t> payload;
     if (schemaVersion >= 2U) {
         std::uint64_t payloadSize = 0U;
         std::uint64_t expectedHash = 0U;
-        if (!headerReader.ReadUInt64(payloadSize) || !headerReader.ReadUInt64(expectedHash)) {
+        kb::security::Sha512Digest expectedMac{};
+        if (!headerReader.ReadUInt64(payloadSize) || !headerReader.ReadUInt64(expectedHash) ||
+            (authenticated && !headerReader.ReadRaw(expectedMac.data(), expectedMac.size()))) {
             return fail(SaveGameLoadStatus::Corrupt, "save integrity header is truncated");
         }
         if (payloadSize > SaveGameFormat::kMaxSerializedBytes) {
             return fail(SaveGameLoadStatus::TooLarge, "declared save payload exceeds the 16 MiB serialized-size limit");
         }
-        if (payloadSize != bytes.size() - kIntegrityHeaderBytes) {
+        if (payloadSize != bytes.size() - headerBytes) {
             return fail(SaveGameLoadStatus::Corrupt, "declared save payload size does not match the file length");
         }
-        payload = bytes.subspan(kIntegrityHeaderBytes);
+        payload = bytes.subspan(headerBytes);
         if (IntegrityHash(payload) != expectedHash) {
             return fail(SaveGameLoadStatus::IntegrityMismatch, "save payload integrity hash does not match");
+        }
+        if (authenticated &&
+            !kb::security::ConstantTimeEqual(SaveMac(integrity, bytes.first(kIntegrityHeaderBytes), payload), expectedMac)) {
+            return fail(SaveGameLoadStatus::Tampered,
+                "save was modified outside the game or written by another installation");
         }
     } else {
         payload = bytes.subspan(kLegacyHeaderBytes);
@@ -217,12 +256,14 @@ SaveGameLoadResult SaveGameCodec::Decode(std::span<const std::uint8_t> bytes, st
 
     SaveGameLoadResult result{ .status = SaveGameLoadStatus::Ok, .save = {}, .diagnostic = {} };
     result.save.SetEntries(std::move(entries));
+    result.migrated = !authenticated;
     return result;
 }
 
 std::span<const SaveGameMigration> BuiltInSaveGameMigrations() {
     static const std::vector<SaveGameMigration> kMigrations{
         SaveGameMigration{ .fromVersion = 1U, .toVersion = 2U, .kind = SaveGameMigrationKind::NoOp },
+        SaveGameMigration{ .fromVersion = 2U, .toVersion = 3U, .kind = SaveGameMigrationKind::NoOp },
     };
     return kMigrations;
 }

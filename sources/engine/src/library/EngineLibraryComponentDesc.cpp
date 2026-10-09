@@ -119,6 +119,11 @@ const std::vector<LibraryComponentDesc>& EngineLibraryComponentRegistry::Catalog
             .serializable = true,
         },
         LibraryComponentDesc{
+            .name = "NavLink",
+            .id = ComputeLibraryComponentId("NavLink"),
+            .serializable = true,
+        },
+        LibraryComponentDesc{
             .name = "Tags",
             .id = ComputeLibraryComponentId("Tags"),
             .serializable = true,

@@ -21,6 +21,7 @@ public:
     [[nodiscard]] static std::optional<std::filesystem::path> SelectPng(HWND owner);
     [[nodiscard]] static std::optional<std::filesystem::path> SelectKeystore(HWND owner);
     [[nodiscard]] static std::optional<std::filesystem::path> SelectIdentity(HWND owner);
+    [[nodiscard]] static std::optional<std::filesystem::path> SelectCertificate(HWND owner);
 };
 #endif
 

@@ -224,6 +224,12 @@ std::optional<std::string> InspectorPanelTextBuilder::Build(const EditorSceneCon
             "\nArea: " + std::to_string(obstacle->area) +
             "\nCarve: " + std::string{ obstacle->carve ? "true" : "false" };
     }
+    if (const kb::scene::NavLink* link = sceneContext.Scene().Components().NavLinks().TryGet(selected); link != nullptr) {
+        text += "\n\nNav Link\nKind: " + std::string{ link->kind == kb::scene::NavLinkKind::Jump ? "Jump" : link->kind == kb::scene::NavLinkKind::Ladder ? "Ladder" : "Walk" } +
+            "\nRadius: " + std::to_string(link->radius) +
+            "\nBoth Ways: " + std::string{ link->bidirectional ? "true" : "false" } +
+            "\nEnabled: " + std::string{ link->enabled ? "true" : "false" };
+    }
 
     if (const kb::scene::RigidbodyComponent* rigidbody = sceneContext.Scene().Components().Rigidbodies().TryGet(selected); rigidbody != nullptr) {
         InspectorRigidbodyTextBuilder{}.Append(text, *rigidbody);

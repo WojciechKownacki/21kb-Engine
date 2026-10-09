@@ -14,8 +14,9 @@ namespace kb::scene {
 void ScenePrefabTransformOverrideReporter::Append(Scene& scene, const ScenePrefabNodeDesc& node, std::uint32_t nodeIndex, SceneObject object, ScenePrefabOverrideReport& report) {
     const SceneEntity entity = object.Entity();
     const TransformComponent transform = scene.Transforms().Get(entity);
-    if (!ScenePrefabOverrideValueFormatter::Equal(transform.localPosition, node.transform.localPosition)) {
-        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "transform.localPosition", ScenePrefabOverrideValueFormatter::ToString(transform.localPosition), ScenePrefabOverrideFlag::Transform);
+    if (const kb::math::DVec3 translation = scene.Transforms().LocalTranslation(entity, transform);
+        !ScenePrefabOverrideValueFormatter::Equal(translation, node.LocalTranslation())) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "transform.localPosition", ScenePrefabOverrideValueFormatter::ToString(translation), ScenePrefabOverrideFlag::Transform);
     }
     if (!ScenePrefabOverrideValueFormatter::Equal(transform.localRotation, node.transform.localRotation)) {
         ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "transform.localRotation", ScenePrefabOverrideValueFormatter::ToString(transform.localRotation), ScenePrefabOverrideFlag::Transform);

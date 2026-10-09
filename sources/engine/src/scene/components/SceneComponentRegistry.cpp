@@ -571,7 +571,8 @@ SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
     , motionSkeletonRuleComponentId_(RegisterSceneComponent<MotionSkeletonRuleComponent>(world, MotionSkeletonRuleComponent::StableId))
     , deformedGeometryComponentId_(RegisterSceneComponent<DrawD3DeformedGeometryComponent>(world, DrawD3DeformedGeometryComponent::StableId))
     , navAgentComponentId_(RegisterSceneComponent<NavAgent>(world, "kb.scene.NavAgent"))
-    , navObstacleComponentId_(RegisterSceneComponent<NavObstacle>(world, "kb.scene.NavObstacle")) {
+    , navObstacleComponentId_(RegisterSceneComponent<NavObstacle>(world, "kb.scene.NavObstacle"))
+    , navLinkComponentId_(RegisterSceneComponent<NavLink>(world, "kb.scene.NavLink")) {
     RegisterPhysicsReflection(world);
     RegisterAudioReflection(world);
     RegisterLightReflection(world);
@@ -679,5 +680,6 @@ std::uint64_t SceneComponentRegistry::MotionSkeletonRuleComponentId() const noex
 std::uint64_t SceneComponentRegistry::DeformedGeometryComponentId() const noexcept { return deformedGeometryComponentId_; }
 std::uint64_t SceneComponentRegistry::NavAgentComponentId() const noexcept { return navAgentComponentId_; }
 std::uint64_t SceneComponentRegistry::NavObstacleComponentId() const noexcept { return navObstacleComponentId_; }
+std::uint64_t SceneComponentRegistry::NavLinkComponentId() const noexcept { return navLinkComponentId_; }
 
 } // namespace kb::scene

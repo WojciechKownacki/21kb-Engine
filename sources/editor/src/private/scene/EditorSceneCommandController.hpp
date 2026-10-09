@@ -1,5 +1,6 @@
 #pragma once
 
+#include "commands/EditorSceneHistoryCommand.hpp"
 #include "scene/EditorHierarchyRow.hpp"
 
 #include <functional>
@@ -48,12 +49,13 @@ public:
     [[nodiscard]] bool BeginTransaction(std::string label);
     [[nodiscard]] bool CommitTransaction();
     void CancelTransaction();
-    [[nodiscard]] bool Execute(std::string label, Mutation mutation);
+    [[nodiscard]] bool Execute(std::string label, Mutation mutation, EditorSceneHistoryCommand::AssetFile assetFile = {});
 
 private:
     [[nodiscard]] std::vector<EditorHierarchyRow> HierarchyRows() const;
     void NormalizeHierarchySelectionAfterSceneRestore();
     void NotifySceneChanged(bool documentChanged);
+    void RemapRecreatedEntities();
 
     kb::scene::Scene& scene_;
     EditorCommandStack& commandStack_;

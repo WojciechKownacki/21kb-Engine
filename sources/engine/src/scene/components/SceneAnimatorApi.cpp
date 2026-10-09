@@ -2,6 +2,7 @@
 #include "scene/SceneComponentMutationService.hpp"
 #include "scene/SceneComponentQueryService.hpp"
 #include "scene/SceneEntityService.hpp"
+#include "scene/SceneHistoryService.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/prefab/ScenePrefabDirtyTracker.hpp"
 
@@ -14,15 +15,18 @@ const Animator* SceneComponentQueryService::TryGetAnimator(const Scene& scene, S
     return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.Animators().TryGet(entity) : nullptr;
 }
 Animator* SceneComponentMutationService::TryGetAnimator(Scene& scene, SceneEntity entity) noexcept {
+    SceneHistoryService::NoteObjectChanging(scene, entity);
     return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.Animators().TryGet(entity) : nullptr;
 }
 void SceneComponentMutationService::SetAnimator(Scene& scene, SceneEntity entity, const Animator& animator) {
+    SceneHistoryService::NoteObjectChanging(scene, entity);
     if (!SceneEntityService::IsAlive(scene, entity)) return;
     SceneState& state = SceneAccess::State(scene);
     state.componentStorage.Animators().Set(entity, animator);
     MarkScenePrefabNodeDirty(state, entity);
 }
 void SceneComponentMutationService::RemoveAnimator(Scene& scene, SceneEntity entity) noexcept {
+    SceneHistoryService::NoteObjectChanging(scene, entity);
     if (!SceneEntityService::IsAlive(scene, entity)) return;
     SceneState& state = SceneAccess::State(scene);
     state.componentStorage.Animators().Remove(entity);

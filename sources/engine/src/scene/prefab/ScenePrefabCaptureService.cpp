@@ -1,10 +1,13 @@
 #include "scene/prefab/ScenePrefabCaptureService.hpp"
 
 #include "engine/ui/UIEntityReferences.hpp"
+#include "scene/SceneAccess.hpp"
+#include "scene/SceneState.hpp"
 #include "scene/prefab/ScenePrefabCaptureValidator.hpp"
 #include "scene/prefab/ScenePrefabCaptureTraversal.hpp"
 #include "scene/prefab/ScenePrefabHierarchyCounter.hpp"
 
+#include <algorithm>
 #include <unordered_map>
 #include <vector>
 
@@ -64,6 +67,35 @@ void ResolveEntityReferences(ScenePrefab& prefab, std::span<const SceneEntity> c
     }
 }
 
+// An instance root records which prefab node each object of its subtree stands for, so instantiating the
+// capture again links every object back to its own node, also after renames and moves inside the instance.
+void RecordNestedNodeIds(Scene& scene, ScenePrefab& prefab, std::span<const SceneEntity> capturedEntities) {
+    const ScenePrefabInstanceRegistry& instances = SceneAccess::State(scene).prefabInstances;
+    const std::uint32_t nodeCount = static_cast<std::uint32_t>(std::min(prefab.NodeCount(), capturedEntities.size()));
+    for (std::uint32_t root = 0U; root < nodeCount; ++root) {
+        if (prefab.Nodes()[root].nestedPrefabGuid.empty()) {
+            continue;
+        }
+        const ScenePrefabInstanceHandle instance = instances.FindRootInstance(SceneAccess::MakeObject(scene, capturedEntities[root]));
+        if (!instance.IsValid()) {
+            continue;
+        }
+        // Capture adds a subtree depth first: it is the run of nodes whose parents lie inside it.
+        std::vector<std::uint64_t> nodeIds;
+        for (std::uint32_t node = root; node < nodeCount; ++node) {
+            const std::uint32_t parentNode = prefab.Nodes()[node].parentNode;
+            if (node != root && (parentNode < root || parentNode >= node)) {
+                break;
+            }
+            std::uint32_t nodeIndex = 0U;
+            std::uint64_t nodeId = ScenePrefabNodeDesc::InvalidStableId;
+            const ScenePrefabInstanceHandle owner = instances.FindContainingInstance(SceneAccess::MakeObject(scene, capturedEntities[node]), nodeIndex, nodeId);
+            nodeIds.push_back(owner == instance ? nodeId : ScenePrefabNodeDesc::InvalidStableId);
+        }
+        prefab.TryGetMutableNode(root)->nestedPrefabNodeIds = std::move(nodeIds);
+    }
+}
+
 } // namespace
 
 ScenePrefab ScenePrefabCaptureService::Capture(Scene& scene, SceneObject root, const ScenePrefabCaptureSettings& settings) {
@@ -74,14 +106,24 @@ ScenePrefab ScenePrefabCaptureService::CaptureRoots(Scene& scene, std::span<cons
     ScenePrefab prefab;
     std::vector<SceneEntity> capturedEntities;
 
+    // Reserved once for every root: reserving per root grows the node list by exactly one root each time,
+    // which copies every node captured so far once per root.
+    std::vector<SceneObject> capturable;
+    capturable.reserve(roots.size());
+    std::size_t nodeCount = 0U;
     for (const SceneObject root : roots) {
-        if (!ScenePrefabCaptureValidator::CanCapture(scene, root)) {
-            continue;
+        if (ScenePrefabCaptureValidator::CanCapture(scene, root)) {
+            capturable.push_back(root);
+            nodeCount += ScenePrefabHierarchyCounter::Count(root, settings);
         }
-        prefab.Reserve(prefab.NodeCount() + ScenePrefabHierarchyCounter::Count(root, settings));
+    }
+    prefab.Reserve(nodeCount);
+    capturedEntities.reserve(nodeCount);
+    for (const SceneObject root : capturable) {
         ScenePrefabCaptureTraversal::Append(scene, root, settings, prefab, ScenePrefabNodeDesc::NoParent, capturedEntities);
     }
     ResolveEntityReferences(prefab, capturedEntities);
+    RecordNestedNodeIds(scene, prefab, capturedEntities);
     return prefab;
 }
 

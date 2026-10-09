@@ -5,6 +5,9 @@ on:
     branches: [Release, main, master, "1.0"]
   pull_request:
   workflow_dispatch:
+  schedule:
+    # Weekly: the clang-tidy gate over every first-party source.
+    - cron: '0 3 * * 1'
 
 permissions:
   contents: read
@@ -23,7 +26,7 @@ jobs:
             build_editor: "ON"
             build_renderer: "ON"
             sanitizer: "OFF"
-            targets: "kb_21kb_particle_asset_tests;kb_21kb_particle_snapshot_tests;kb_21kb_particle_stage2_tests;kb_21kb_particle_cpu_backend_tests;kb_21kb_particle_editor_tests;kb_engine_tests;kb_audio_runtime_tests;kb_engine_library_tests;kb_library_benchmarks;kb_library_safety_tests;kb_ecs_api_tests;kb_ecs_scheduler_correctness_tests;kb_ecs_deterministic_replay_tests;kb_ecs_stress_tests;kb_ecs_snapshot_scale_tests;kb_renderer_tests;kb_21kb_particle_renderer_tests;kb_skeletal_animator_benchmarks;kb_terrain_editor_tests;kb_editor_particle_authoring_tests;kb_editor_particle_bake_host_tests;kb_editor_tests;kb_editor_material_graph_canvas_tests;kb_game_core_tests;kb_game_tests;kb_editor_build_game_tests;kb_standalone_player;kb_editor;kb_cli;kb_cli_tests"
+            targets: "kb_21kb_particle_asset_tests;kb_21kb_particle_snapshot_tests;kb_21kb_particle_stage2_tests;kb_21kb_particle_cpu_backend_tests;kb_21kb_particle_editor_tests;kb_engine_tests;kb_audio_runtime_tests;kb_engine_library_tests;kb_library_benchmarks;kb_library_safety_tests;kb_ecs_api_tests;kb_ecs_scheduler_correctness_tests;kb_ecs_deterministic_replay_tests;kb_ecs_stress_tests;kb_ecs_snapshot_scale_tests;kb_renderer_tests;kb_21kb_particle_renderer_tests;kb_skeletal_animator_benchmarks;kb_terrain_editor_tests;kb_editor_particle_authoring_tests;kb_editor_particle_bake_host_tests;kb_editor_tests;kb_editor_material_graph_canvas_tests;kb_game_core_tests;kb_game_tests;kb_editor_build_game_tests;kb_crash_reporting_tests;kb_standalone_player;kb_editor;kb_cli;kb_cli_tests"
             api_compat_check: "ON"
             test_regex: ""
           - name: Windows MSVC ASan
@@ -131,3 +134,123 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
           }
+
+      # Packaging scripts: the package contract, platform staging, third-party notices and SBOM.
+      - name: Packaging script tests
+        if: matrix.name == 'Windows MSVC'
+        shell: pwsh
+        run: |
+          python -m unittest discover -s scripts/tests
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+  clang-tidy:
+    name: clang-tidy gate
+    runs-on: windows-2025-vs2026
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@v6
+        with:
+            submodules: recursive
+            fetch-depth: 0
+
+      # Ninja with the MSVC environment gives the compile database the gate reads.
+      - name: Configure with a compile database
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath
+          cmd /c "call `"$vs\VC\Auxiliary\Build\vcvars64.bat`" >nul && cmake -S . -B build/tidy -G Ninja -DCMAKE_BUILD_TYPE=Release -DKB_BUILD_EDITOR=ON -DKB_BUILD_GRAPH_SHADERC=OFF -DCMAKE_EXPORT_COMPILE_COMMANDS=ON"
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+      # Pushes and pull requests check what they change; the weekly run checks every source.
+      - name: clang-tidy
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath
+          $base = "${{ github.event.before }}"
+          if ("${{ github.event_name }}" -eq "pull_request") {
+            $base = "${{ github.event.pull_request.base.sha }}"
+          }
+          $scope = ""
+          if ("${{ github.event_name }}" -ne "schedule" -and "${{ github.event_name }}" -ne "workflow_dispatch" -and
+              $base -and $base -ne "0000000000000000000000000000000000000000" -and (git cat-file -e "$base^{commit}" 2>$null)) {
+            $scope = "--changed-since $base"
+          }
+          cmd /c "call `"$vs\VC\Auxiliary\Build\vcvars64.bat`" >nul && python scripts/clang_tidy_gate.py --build-dir build/tidy --jobs 4 $scope"
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+  # libFuzzer harnesses for the readers of untrusted files (fuzz/). Replays every
+  # committed seed and regression input, then gives each harness a minute of fresh
+  # inputs; any crash, leak, hang or AddressSanitizer report fails the job.
+  fuzz:
+    name: Fuzz untrusted-input readers
+    runs-on: windows-2025-vs2026
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@v6
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: advice.defaultBranchName
+          GIT_CONFIG_VALUE_0: "false"
+        with:
+            submodules: recursive
+
+      - name: Configure
+        shell: pwsh
+        run: |
+          cmake -S . -B build/fuzz -G "Visual Studio 18 2026" `
+            -DKB_BUILD_FUZZERS=ON -DKB_ENABLE_SANITIZERS=ON -DKB_BUILD_EDITOR=OFF `
+            -DKB_BUILD_GRAPH_SHADERC=OFF -DKB_STRICT_OWN_WARNINGS=ON
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+      - name: Build fuzzers
+        shell: pwsh
+        run: |
+          cmake --build build/fuzz --config Release --parallel 4 --target kb_fuzzers
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+      - name: Replay corpora
+        shell: pwsh
+        run: |
+          ctest --test-dir build/fuzz -C Release -L fuzz --output-on-failure
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+      - name: Fuzz each reader for 60 seconds
+        shell: pwsh
+        run: |
+          $failed = @()
+          New-Item -ItemType Directory -Force build/fuzz/artifacts | Out-Null
+          foreach ($corpus in Get-ChildItem fuzz/corpus -Directory) {
+            $name = $corpus.Name
+            $work = "build/fuzz/work/$name"
+            New-Item -ItemType Directory -Force $work | Out-Null
+            & "build/fuzz/fuzz/Release/kb_fuzz_$name.exe" $work $corpus.FullName `
+              -max_total_time=60 -timeout=10 -rss_limit_mb=3072 -malloc_limit_mb=2048 `
+              "-artifact_prefix=build/fuzz/artifacts/$name-"
+            if ($LASTEXITCODE -ne 0) {
+              $failed += $name
+            }
+          }
+          if ($failed.Count -ne 0) {
+            Write-Error "Fuzzing found failures in: $($failed -join ', ')"
+            exit 1
+          }
+
+      - name: Keep failing inputs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts
+          path: build/fuzz/artifacts
+          if-no-files-found: ignore

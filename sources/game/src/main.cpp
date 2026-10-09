@@ -5,9 +5,12 @@
 #include "engine/input/InputHaptics.hpp"
 #include "engine/input/InputSubsystem.hpp"
 #include "engine/modules/IEngineModule.hpp"
+#include "engine/platform/UserStorage.hpp"
+#include "engine/platform/CrashReporting.hpp"
 #include "engine/platform/win32/Win32InputCollector.hpp"
 #include "engine/platform/win32/Win32XInputHapticsBackend.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneCrashReportConsent.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneLoadedContent.hpp"
 #include "engine/scene/SceneRenderFeedback.hpp"
@@ -27,8 +30,10 @@
 #endif
 #include <Windows.h>
 #include <shellapi.h>
+#include <ShlObj.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -41,6 +46,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -112,6 +118,31 @@ struct GameFrameProfile {
 
 [[nodiscard]] bool HasPrefix(std::wstring_view value, std::wstring_view prefix) noexcept {
     return value.size() >= prefix.size() && value.substr(0U, prefix.size()) == prefix;
+}
+
+// Switches that load content other than the game's own package, pick a scene
+// the game did not start in, or write files where the command line says. Only
+// a development player accepts them; a shipped game refuses them.
+constexpr std::array<std::wstring_view, 7U> kDevelopmentSwitches{
+    L"--project=",
+    L"--scene=",
+    L"--profile-fixed-step",
+    L"--profile-lighting=",
+    L"--profile-file=",
+    L"--screenshot-file=",
+    L"--screenshot-frame=",
+};
+
+// Names the first development switch on the command line, or returns nothing.
+[[nodiscard]] std::wstring_view FirstDevelopmentSwitch(int argc, wchar_t** argv) noexcept {
+    for (int index = 1; index < argc; ++index) {
+        for (const std::wstring_view option : kDevelopmentSwitches) {
+            if (HasPrefix(argv[index], option)) {
+                return option.substr(0U, option.find(L'='));
+            }
+        }
+    }
+    return {};
 }
 
 // Read straight off the wide argument. Converting it to a narrow string first
@@ -256,6 +287,33 @@ struct GameFrameProfile {
     return std::filesystem::path{ runtime.gameName }.wstring();
 }
 
+// Where scripts persist saves and settings. A loose project keeps them beside
+// itself, like the editor's play mode; a packaged game may be installed where
+// the player cannot write, so it uses its own directory under the per-user
+// local application data folder, named after the game.
+[[nodiscard]] std::filesystem::path GameUserStorageRoot(const kb::game::GameProjectRuntime& runtime) {
+    if (!runtime.IsPackaged()) {
+        return runtime.projectRoot / "Saves";
+    }
+    std::string directory = runtime.gameName.substr(0U, kb::platform::kMaxUserStorageSlotNameBytes);
+    for (char& character : directory) {
+        if (!kb::platform::IsUserStorageSlotName(std::string_view{ &character, 1U })) {
+            character = '_';
+        }
+    }
+    if (!kb::platform::IsUserStorageSlotName(directory)) {
+        directory = "21kbGame";
+    }
+    PWSTR localData = nullptr;
+    if (FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData, KF_FLAG_CREATE, nullptr, &localData)) || localData == nullptr) {
+        CoTaskMemFree(localData);
+        return {};
+    }
+    std::filesystem::path root{ localData };
+    CoTaskMemFree(localData);
+    return root / directory / "Saves";
+}
+
 int RunGame(const GameOptions& options) {
     if (options.fullscreen &&
         SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) == 0 &&
@@ -330,7 +388,11 @@ int RunGame(const GameOptions& options) {
         renderer.SetDefaultSceneLightingConfig(lighting);
     }
 
-    auto scriptModuleOwner = std::make_unique<kb::script::ScriptModule>();
+    const std::filesystem::path userStorageRoot = GameUserStorageRoot(projectRuntime);
+    kb::script::ScriptModuleOptions scriptOptions;
+    scriptOptions.runtimeOptions.userStorageRoot = userStorageRoot;
+    scriptOptions.runtimeOptions.disableFailingBehaviours = true;
+    auto scriptModuleOwner = std::make_unique<kb::script::ScriptModule>(std::move(scriptOptions));
     kb::script::ScriptModule* scriptModule = scriptModuleOwner.get();
     std::vector<std::unique_ptr<kb::modules::IEngineModule>> staticModules;
     staticModules.push_back(std::move(scriptModuleOwner));
@@ -370,6 +432,27 @@ int RunGame(const GameOptions& options) {
               << " gpu_device=" << renderer.CapabilityReport().deviceId << '\n';
     std::cout.flush();
 
+    // A packaged game that sends crash reports asks the player first, on the first launch, and keeps the
+    // answer with the player's settings; reports from earlier runs leave only after a yes. A development
+    // run of a loose project keeps whatever consent the report folder already holds.
+    std::optional<kb::platform::UserStorage> consentStorage;
+    std::unique_ptr<kb::scene::CrashReportConsentFlow> crashReportConsent;
+    if (projectRuntime.IsPackaged() && !userStorageRoot.empty()) {
+        consentStorage.emplace(userStorageRoot, kb::script::kDefaultScriptUserStorageQuotaBytes);
+        crashReportConsent = std::make_unique<kb::scene::CrashReportConsentFlow>(*consentStorage, kb::scene::CrashReportConsentHooks{
+            .applyConsent = [](bool granted) {
+                const std::filesystem::path directory = kb::platform::CrashReporter::ReportDirectory();
+                return !directory.empty() && kb::platform::SetCrashUploadConsent(directory, granted);
+            },
+            .startUpload = [started = false]() mutable {
+                if (!started) started = kb::platform::CrashReporter::StartPendingUpload();
+            },
+        });
+        static_cast<void>(crashReportConsent->Begin(scene, !kb::platform::ConfiguredCrashUploadEndpoint().empty()));
+    } else {
+        static_cast<void>(kb::platform::CrashReporter::StartPendingUpload());
+    }
+
     std::ofstream profileOutput;
     std::vector<GameFrameProfile> profileRows;
     if (!options.profilePath.empty()) {
@@ -389,6 +472,21 @@ int RunGame(const GameOptions& options) {
     std::uint32_t renderedFrames = 0U;
     std::uint32_t submittedFrames = 0U;
     bool runtimeClean = true;
+    // A shipped game outlives faults in its content. Each distinct script,
+    // scene-system or render error is logged once with the entity and asset it
+    // concerns; the script host disables the failing behaviour, the renderer
+    // draws with its error material or skips a draw it has no mesh for, and the
+    // loop carries on. Only losing the graphics device ends the run early. The
+    // exit code still reports that the run was not clean.
+    std::unordered_set<std::string> reportedErrors;
+    std::size_t degradedErrors = 0U;
+    const auto reportError = [&](std::string message) {
+        runtimeClean = false;
+        if (reportedErrors.insert(message).second) {
+            ++degradedErrors;
+            std::cerr << "kb_game: " << message << '\n';
+        }
+    };
     kb::game::RuntimeSceneFrameSync renderSceneSync;
     auto previousTick = std::chrono::steady_clock::now();
     while (window.PumpMessages() && !scene.Runtime().ShouldQuit()) {
@@ -423,18 +521,13 @@ int RunGame(const GameOptions& options) {
             static_cast<float>(window.Height())));
         renderSceneSync.BeforeUpdate(scene);
         static_cast<void>(scene.Runtime().Update(deltaSeconds));
-        for (const std::string& error : scene.Runtime().DrainSceneSystemErrors()) {
-            std::cerr << "kb_game: scene runtime failed: " << error << '\n';
-            runtimeClean = false;
+        for (std::string& error : scene.Runtime().DrainSceneSystemErrors()) {
+            reportError("scene runtime error: " + std::move(error));
         }
         if (scriptActive) {
-            for (const std::string& error : scriptModule->Host()->DrainSceneSystemDiagnostics()) {
-                std::cerr << "kb_game: script runtime failed: " << error << '\n';
-                runtimeClean = false;
+            for (std::string& error : scriptModule->Host()->DrainSceneSystemDiagnostics()) {
+                reportError("script error: " + std::move(error));
             }
-        }
-        if (!runtimeClean) {
-            break;
         }
         const auto profileSimulationEnd = !options.profilePath.empty()
             ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
@@ -523,22 +616,27 @@ int RunGame(const GameOptions& options) {
                 .renderCameraValid = renderCamera.valid,
             });
         }
-        if (!submitted || renderErrors) {
-            std::cerr << "kb_game: renderer could not submit the scene cleanly; accepted=" << submitted
-                      << " missing-resources=" << renderStats.HasMissingResources()
-                      << " dropped-instances=" << renderStats.droppedInstanceCount << '\n';
+        if (!submitted) {
+            reportError("renderer did not accept the scene; the frame was not drawn");
+        }
+        if (renderStats.droppedInstanceCount != 0U) {
+            reportError("renderer dropped instances from the frame");
+        }
+        if (renderErrors) {
             for (const auto& event : renderer.LastSceneDiagnostics().events) {
-                if (event.severity == kb::render::SceneRenderDiagnosticSeverity::Error) {
-                    std::cerr << "kb_game: render error kind=" << static_cast<unsigned>(event.kind)
-                              << " entity=" << event.entityId << " mesh=" << event.meshAssetId
-                              << " material=" << event.materialAssetId << " texture=" << event.textureAssetId
-                              << " profile=" << event.postProcessProfileAssetId << '\n';
+                if (event.severity != kb::render::SceneRenderDiagnosticSeverity::Info) {
+                    reportError(std::string{ event.severity == kb::render::SceneRenderDiagnosticSeverity::Error ? "render error" : "render warning" }
+                        + " kind=" + std::to_string(static_cast<unsigned>(event.kind))
+                        + " entity=" + std::to_string(event.entityId) + " mesh=" + std::to_string(event.meshAssetId)
+                        + " material=" + std::to_string(event.materialAssetId) + " texture=" + std::to_string(event.textureAssetId)
+                        + " profile=" + std::to_string(event.postProcessProfileAssetId)
+                        + "; drawn with the fallback material or skipped");
                 }
             }
-            runtimeClean = false;
-            break;
         }
-        ++submittedFrames;
+        if (submitted) {
+            ++submittedFrames;
+        }
         ++renderedFrames;
         if (options.frameLimit != 0U && renderedFrames >= options.frameLimit) {
             break;
@@ -602,7 +700,8 @@ int RunGame(const GameOptions& options) {
               << " shutdown=" << (shutdownClean ? "clean" : "incomplete")
               << " rendered=" << submittedFrames
               << " ticks=" << scene.Runtime().FrameIndex()
-              << " simulated=" << scene.Runtime().ElapsedSeconds() << '\n';
+              << " simulated=" << scene.Runtime().ElapsedSeconds()
+              << " errors=" << degradedErrors << '\n';
     std::cout.flush();
     return shutdownClean && runtimeClean ? EXIT_SUCCESS : EXIT_FAILURE;
 }
@@ -610,6 +709,12 @@ int RunGame(const GameOptions& options) {
 } // namespace
 
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
+    // First, so any crash after this point leaves a minidump in the player's
+    // crash report folder instead of ending the game without a trace. Reports
+    // earlier runs left wait until RunGame knows the player's answer.
+    kb::platform::CrashReporterOptions crashReporterOptions;
+    crashReporterOptions.uploadPendingReports = false;
+    static_cast<void>(kb::platform::CrashReporter::Install(crashReporterOptions));
     // Nothing below may let an exception escape: this is a windowed process, so
     // an escaped exception ends in abort() behind a modal dialog that no player
     // and no automated run can dismiss.
@@ -621,6 +726,16 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
             std::cerr << "kb_game: command line could not be read\n";
             return EXIT_FAILURE;
         }
+        const bool shipped = kb::game::IsShippedGamePlayer();
+        const std::wstring_view developmentSwitch =
+            shipped ? FirstDevelopmentSwitch(argc, argv) : std::wstring_view{};
+        if (!developmentSwitch.empty()) {
+            std::cerr << "kb_game: " << kb::game::NarrowForDiagnostics(developmentSwitch)
+                      << " is a development option; a packaged game runs only its own "
+                      << kb::game::kPackagedGameFileName << '\n';
+            LocalFree(argv);
+            return EXIT_FAILURE;
+        }
         const bool parsed = ParseArguments(argc, argv, options);
         LocalFree(argv);
         if (!parsed) {
@@ -628,6 +743,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         }
         // A packaged game keeps its project beside the executable, so an
         // argument-less launch starts the project's own ProjectSettings::defaultMap.
+        // A shipped game never names any other project.
         if (options.projectPath.empty()) {
             options.projectPath = kb::game::ExecutableDirectory();
         }

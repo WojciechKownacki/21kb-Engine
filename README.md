@@ -86,7 +86,7 @@ state machines, scripts and game builds.
 | **Lighting paths** | Forward, clustered Forward+, and Deferred with a four target GBuffer |
 | **Shadows** | Cascaded directional shadows with stable cascades and PCF filtering, skinned casters included |
 | **Post processing** | Bloom, TAA with motion vectors, FXAA, ACES tonemapping, GPU histogram auto exposure |
-| **GPU driven** | Compute instance culling and indirect draw, with per frame reporting of the path actually taken |
+| **GPU culling** | Optional compute pass that frustum culls mesh instances into a GPU visibility list on backends with compute shaders. Draws are still culled and submitted from the CPU: indirect draw and meshlet submit are not implemented, and the capability report and per frame stats name the path that ran |
 | **Materials** | Node based Material Graph compiled to shaders, with function inlining, variant keys and a cook cache |
 | **Shaders** | One source, prebuilt for Direct3D 11, Direct3D 12, Vulkan, Metal, OpenGL and OpenGL ES. The build refuses to configure if any target is missing |
 | **Textures** | Bakers for BC1, BC3, BC5, BC7, ASTC 4x4 and ETC2 |
@@ -204,6 +204,10 @@ cmake --build --preset dev --target kb_editor
 ```
 
 Requires Visual Studio 2022 and CMake. The editor is written to `build/bin/Debug/kb_editor.exe`.
+
+## Security
+
+Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md), not in public issues.
 
 ## License
 

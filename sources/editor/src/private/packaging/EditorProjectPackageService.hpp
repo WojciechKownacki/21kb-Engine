@@ -1,11 +1,13 @@
 #pragma once
 
+#include "engine/assets/streaming/BackgroundLoadService.hpp"
+
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <string_view>
-#include <thread>
 #include <vector>
 
 namespace kb::editor {
@@ -66,6 +68,9 @@ struct EditorPackageRequest {
     std::string version;
     std::string executableName;
     std::filesystem::path applicationIcon;
+    std::filesystem::path releaseSigningKey;
+    // Windows only: written into the package for the game's crash report upload.
+    std::string crashReportUploadUrl;
     std::string androidApplicationId;
     std::uint32_t androidVersionCode = 1U;
     std::string androidLabel;
@@ -73,6 +78,12 @@ struct EditorPackageRequest {
     std::string androidKeyAlias;
     std::string androidStorePassword;
     std::string androidKeyPassword;
+    // Windows Authenticode, Release only: a store certificate by thumbprint, or a PFX
+    // file whose password reaches the signer through EditorWindowsSigningBroker.
+    std::string windowsCertificateThumbprint;
+    std::filesystem::path windowsCertificateFile;
+    std::string windowsCertificatePassword;
+    std::string windowsTimestampUrl;
     std::filesystem::path emsdkRoot;
     std::string linuxHost;
     std::string linuxUser;
@@ -116,11 +127,13 @@ private:
     void Run(EditorPackageRequest request);
     void ApplyProtocolLine(std::string_view line);
     void Finish(EditorPackageJobState state, std::string status);
-    void JoinFinishedWorker();
+    void ReleaseFinishedJob();
 
     mutable std::mutex mutex_;
     EditorPackageSnapshot snapshot_{};
-    std::thread worker_;
+    // A package job is a long job of the engine's background service.
+    std::unique_ptr<kb::assets::streaming::BackgroundLane> lane_;
+    kb::assets::streaming::BackgroundRequestHandle job_;
     void* processJob_ = nullptr;
     bool cancelRequested_ = false;
 };

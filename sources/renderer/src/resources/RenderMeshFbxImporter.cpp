@@ -129,7 +129,15 @@ template <typename T>
         }
         raw.assign(encoded.begin(), encoded.begin() + static_cast<std::ptrdiff_t>(outputBytes));
     } else if (encoding == 1U) {
-        raw.resize(outputBytes);
+        // The declared length is only a claim until the bytes inflate to it. Deflate
+        // expands at most 1032:1, so a length the compressed bytes cannot reach is
+        // refused before anything is allocated, and inflating may not run past it.
+        constexpr std::uint64_t kMaximumDeflateExpansion = 1032U;
+        if (outputBytes > static_cast<std::uint64_t>(encodedByteCount) * kMaximumDeflateExpansion) {
+            return {};
+        }
+        LodePNGDecompressSettings settings = lodepng_default_decompress_settings;
+        settings.max_output_size = outputBytes;
         unsigned char* decompressed = nullptr;
         std::size_t decompressedSize = 0U;
         const unsigned result = lodepng_zlib_decompress(
@@ -137,7 +145,7 @@ template <typename T>
             &decompressedSize,
             reinterpret_cast<const unsigned char*>(encoded.data()),
             encodedByteCount,
-            &lodepng_default_decompress_settings);
+            &settings);
         if (result != 0U || decompressed == nullptr || decompressedSize != outputBytes) {
             std::free(decompressed);
             return {};
@@ -535,13 +543,21 @@ void AppendTriangle(RenderMeshAssetData& asset, Bounds3 bounds, Vec3 a, Vec3 b, 
     }
     const std::uint32_t controlPointCount = static_cast<std::uint32_t>(geometry.vertices.size() / 3U);
 
+    // A material index can name a slot the file never defines, and every slot up to
+    // the highest one is built, so a file listing index 65536 once asked for 65537
+    // slots. No mesh needs anywhere near this many.
+    constexpr std::uint32_t kMaximumMaterialSlots = 1024U;
     std::uint32_t slotCount = 1U;
     if (desc.importMaterialSlots) {
-        slotCount = std::max<std::uint32_t>(1U, static_cast<std::uint32_t>(geometry.materialNames.size()));
+        slotCount = std::max<std::uint32_t>(1U, static_cast<std::uint32_t>(
+            std::min<std::size_t>(geometry.materialNames.size(), kMaximumMaterialSlots + 1U)));
         for (const std::int32_t materialIndex : geometry.materialIndices) {
             if (materialIndex >= 0) {
-                slotCount = std::max(slotCount, static_cast<std::uint32_t>(materialIndex) + 1U);
+                slotCount = std::max(slotCount, std::min(static_cast<std::uint32_t>(materialIndex), kMaximumMaterialSlots) + 1U);
             }
+        }
+        if (slotCount > kMaximumMaterialSlots) {
+            return std::nullopt;
         }
     }
     std::vector<std::vector<std::array<Vec3, 3U>>> trianglesBySlot(slotCount);

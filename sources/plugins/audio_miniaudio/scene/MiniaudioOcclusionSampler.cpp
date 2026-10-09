@@ -16,7 +16,8 @@ constexpr float kArrivalEpsilon = 0.05F;
 
 } // namespace
 
-void MiniaudioOcclusionSampler::BeginTick(const kb::scene::AudioOcclusionSettings& settings) noexcept {
+void MiniaudioOcclusionSampler::BeginTick(const kb::scene::AudioOcclusionSettings& settings, const kb::math::DVec3& origin) noexcept {
+    origin_ = origin;
     seenThisTick_.clear();
     budgetLeft_ = settings.maxRaycastsPerTick;
     // Rotating fairness: when last tick had more requests than budget, later ticks start
@@ -72,7 +73,7 @@ float MiniaudioOcclusionSampler::Sample(
 
     std::array<kb::scene::PhysicsCastResult, 8U> storage{};
     kb::library::ArrayNonAlloc<kb::scene::PhysicsCastResult> results{ std::span<kb::scene::PhysicsCastResult>{ storage } };
-    kb::scene::RaycastAllNonAlloc(scene, listenerPosition, toSource * (1.0F / distance), distance - kArrivalEpsilon, settings.layerMask, results);
+    kb::scene::RaycastAllNonAllocPrecise(scene, origin_ + listenerPosition, toSource * (1.0F / distance), distance - kArrivalEpsilon, settings.layerMask, results);
     bool occluded = false;
     for (std::size_t index = 0U; index < results.Count(); ++index) {
         if (storage[index].hit && storage[index].entity.Id() != excludeEntityId) {

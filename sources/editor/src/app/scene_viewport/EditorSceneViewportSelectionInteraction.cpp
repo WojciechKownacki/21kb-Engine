@@ -1,4 +1,5 @@
 #include "app/scene_viewport/EditorSceneViewportSelectionInteraction.hpp"
+#include "app/EditorKeyState.hpp"
 
 #if defined(_WIN32)
 #include "app/scene_viewport/EditorSceneViewportHitResolver.hpp"
@@ -16,7 +17,7 @@ namespace {
 constexpr int kBoxSelectionStartThresholdPixels = 4;
 
 [[nodiscard]] bool CtrlDown() noexcept {
-    return (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+    return EditorKeyDown(VK_CONTROL);
 }
 
 [[nodiscard]] EditorSceneViewportSelectionMode CurrentSelectionMode() noexcept {

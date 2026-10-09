@@ -70,6 +70,10 @@ public:
     // dependency cycles). Empty on a clean resolve.
     [[nodiscard]] const std::vector<std::string>& Diagnostics() const noexcept;
 
+    // Notes that do not stop a module from loading, such as a native module loaded without a
+    // signed release to verify it against.
+    [[nodiscard]] const std::vector<std::string>& Warnings() const noexcept;
+
 private:
     [[nodiscard]] bool IsEnabledByProject(const EngineModuleMetadata& metadata) const;
     void LoadProjectPluginModules();
@@ -80,6 +84,7 @@ private:
     std::vector<std::unique_ptr<IEngineModule>> candidates_;
     std::vector<IEngineModule*> active_; // resolved load order, non-owning
     std::vector<std::string> diagnostics_;
+    std::vector<std::string> warnings_;
     std::size_t projectPluginCandidateStart_ = 0U;
     bool hasProjectPluginCandidates_ = false;
     bool loaded_ = false;

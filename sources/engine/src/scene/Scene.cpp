@@ -12,6 +12,7 @@
 #include "engine/localization/LocalizationCatalogAssetLoader.hpp"
 #include "engine/input/InputModule.hpp"
 #include "engine/modules/EngineModuleHost.hpp"
+#include "engine/navigation/NavMeshAsset.hpp"
 #include "engine/particles/ParticlePlayback.hpp"
 #include "engine/project/ParticleProjectPolicy.hpp"
 #include "engine/project/ProjectDescriptor.hpp"
@@ -38,8 +39,10 @@
 
 #include "scene/systems/AnimatorSceneSystem.hpp"
 #include "scene/systems/TimelineSceneSystem.hpp"
+#include "scene/systems/NavigationSceneSystem.hpp"
 #include "scene/systems/ContentInstanceSceneSystem.hpp"
 #include "scene/ui/SceneUISystem.hpp"
+#include "world/WorldAssetLoaders.hpp"
 
 #include <array>
 #include <atomic>
@@ -51,6 +54,13 @@ namespace kb::scene {
 namespace {
 
 std::atomic<std::uint64_t> g_nextSceneId{ 1U };
+
+// A scene's transform rows are swept every frame: 64 KB chunks halve the per-chunk work of those passes.
+[[nodiscard]] kb::ecs::WorldConfig DefaultSceneWorldConfig() noexcept {
+    kb::ecs::WorldConfig config;
+    config.chunkSizeProfile = kb::ecs::ChunkSizeProfile::Chunk64KB;
+    return config;
+}
 
 } // namespace
 
@@ -73,7 +83,7 @@ Scene::Scene(
     kb::project::ProjectDescriptor descriptor,
     std::vector<std::unique_ptr<kb::modules::IEngineModule>> staticModules,
     SceneMode mode)
-    : Scene(std::move(descriptor), std::move(staticModules), kb::ecs::WorldConfig{}, mode) {}
+    : Scene(std::move(descriptor), std::move(staticModules), DefaultSceneWorldConfig(), mode) {}
 
 Scene::Scene(
     kb::project::ProjectDescriptor descriptor,
@@ -104,6 +114,9 @@ Scene::Scene(
     const bool registeredAnimatorControllerLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::AnimatorControllerAssetLoader>());
     const bool registeredTimelineLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::TimelineAssetLoader>());
     const bool registeredLocalizationLoader = state_->assets.RegisterLoader(std::make_unique<kb::localization::LocalizationCatalogAssetLoader>());
+    const bool registeredWorldLoader = state_->assets.RegisterLoader(std::make_unique<kb::world::WorldDescriptorAssetLoader>());
+    const bool registeredWorldCellsLoader = state_->assets.RegisterLoader(std::make_unique<kb::world::WorldCellIndexAssetLoader>());
+    const bool registeredNavMeshLoader = state_->assets.RegisterLoader(std::make_unique<kb::navigation::NavMeshAssetLoader>());
     static_cast<void>(registeredPrefabLoader);
     static_cast<void>(registeredSceneLoader);
     static_cast<void>(registeredLuaScriptLoader);
@@ -124,6 +137,9 @@ Scene::Scene(
     static_cast<void>(registeredAnimatorControllerLoader);
     static_cast<void>(registeredTimelineLoader);
     static_cast<void>(registeredLocalizationLoader);
+    static_cast<void>(registeredWorldLoader);
+    static_cast<void>(registeredWorldCellsLoader);
+    static_cast<void>(registeredNavMeshLoader);
 
     if (mode == SceneMode::PrefabPrivate) {
         return;
@@ -159,6 +175,7 @@ Scene::Scene(
     state_->sceneSystemScheduler.Add(std::make_unique<AnimatorSceneSystem>(), *this);
     state_->sceneSystemScheduler.Add(std::make_unique<TimelineSceneSystem>(), *this);
     state_->sceneSystemScheduler.Add(std::make_unique<ContentInstanceSceneSystem>(), *this);
+    state_->sceneSystemScheduler.Add(std::make_unique<NavigationSceneSystem>(), *this);
 }
 
 Scene::~Scene() {
@@ -244,6 +261,12 @@ std::size_t Scene::ActiveModuleCount() const noexcept {
 std::span<const std::string> Scene::ModuleDiagnostics() const noexcept {
     return moduleHost_ != nullptr
         ? std::span<const std::string>{ moduleHost_->Diagnostics() }
+        : std::span<const std::string>{};
+}
+
+std::span<const std::string> Scene::ModuleWarnings() const noexcept {
+    return moduleHost_ != nullptr
+        ? std::span<const std::string>{ moduleHost_->Warnings() }
         : std::span<const std::string>{};
 }
 

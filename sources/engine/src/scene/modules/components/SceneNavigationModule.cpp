@@ -19,6 +19,7 @@ void Scene##Name##Components::MarkModified(SceneEntity entity) noexcept { SceneC
 
 KB_NAVIGATION_MODULE(NavAgent, NavAgent)
 KB_NAVIGATION_MODULE(NavObstacle, NavObstacle)
+KB_NAVIGATION_MODULE(NavLink, NavLink)
 
 #undef KB_NAVIGATION_MODULE
 

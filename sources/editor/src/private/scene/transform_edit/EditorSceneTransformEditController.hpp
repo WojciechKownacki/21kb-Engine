@@ -18,6 +18,8 @@ public:
     EditorSceneTransformEditController(kb::scene::Scene& scene, EditorSceneTransformEditSession& session) noexcept;
 
     [[nodiscard]] EditorSceneTransformEditApplyResult ApplyPrimaryPosition(kb::scene::Vec3 position);
+    // Moves every edited entity by `delta` from where the edit started, in double precision.
+    [[nodiscard]] EditorSceneTransformEditApplyResult ApplyPositionDelta(const kb::math::DVec3& delta);
     [[nodiscard]] EditorSceneTransformEditApplyResult ApplyPrimaryRotation(kb::scene::Vec3 rotation);
     [[nodiscard]] EditorSceneTransformEditApplyResult ApplyRotationDelta(kb::scene::Quat delta);
     [[nodiscard]] EditorSceneTransformEditApplyResult ApplyPrimaryScale(kb::scene::Vec3 scale);

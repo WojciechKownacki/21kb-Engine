@@ -64,6 +64,12 @@ namespace {
     return panel;
 }
 
+// Everything but the everyday panels starts closed; this opens one the way a double click or menu row does.
+void OpenPanelOnDemand(kb::editor::EditorDockModel& model, kb::editor::DockPanelKind kind) {
+    kb::editor::tests::Require(model.Commands().ActivatePanelKind(kind, kb::editor::DockArea::Center),
+        "A closed panel should open on demand");
+}
+
 [[nodiscard]] const kb::editor::DockLeafLayout* FindLeafForPanel(const kb::editor::DockLayout& layout, std::uint32_t panelId) noexcept {
     const kb::editor::DockPanelLayout* panel = FindPanelLayout(layout, panelId);
     if (panel == nullptr) {
@@ -122,9 +128,13 @@ void RunTabActivationPreservesOrderTest() {
 void RunClosePanelRemovesTabFromLayoutTest() {
     kb::editor::EditorDockModel model;
     const kb::editor::DockLayout initialLayout = BuildDefaultLayout(model);
-    const kb::editor::DockPanelLayout* sceneLayout = FindPanelLayout(initialLayout, 2U);
-    const kb::editor::DockPanelLayout* scriptLayout = FindPanelLayout(initialLayout, 8U);
-    kb::editor::tests::Require(sceneLayout != nullptr && scriptLayout != nullptr, "Scene and Script Editor should start in the center leaf");
+    kb::editor::tests::Require(FindPanelLayout(initialLayout, 8U) == nullptr, "Script Editor should start closed");
+    kb::editor::tests::Require(model.Commands().ActivatePanelKind(kb::editor::DockPanelKind::ScriptEditor, kb::editor::DockArea::Center),
+        "Opening the closed Script Editor should succeed");
+    const kb::editor::DockLayout openedLayout = BuildDefaultLayout(model);
+    const kb::editor::DockPanelLayout* sceneLayout = FindPanelLayout(openedLayout, 2U);
+    const kb::editor::DockPanelLayout* scriptLayout = FindPanelLayout(openedLayout, 8U);
+    kb::editor::tests::Require(sceneLayout != nullptr && scriptLayout != nullptr, "Scene and Script Editor should be in the center leaf");
     kb::editor::tests::Require(sceneLayout->leafId == scriptLayout->leafId, "Scene and Script Editor should share a tab group");
 
     kb::editor::tests::Require(model.Commands().ClosePanel(8U), "Closing Script Editor tab should succeed");
@@ -357,6 +367,7 @@ void RunDefaultWorkspaceRegistersMaterialEditorPanelTest() {
     // KBMAT-0201: the dedicated Material Editor panel ships as part of the default workspace.
     kb::editor::EditorDockModel model;
     const kb::editor::DockPanel* panel = RequirePanel(model, 10U);
+    OpenPanelOnDemand(model, kb::editor::DockPanelKind::MaterialEditor);
     kb::editor::tests::Require(panel->kind == kb::editor::DockPanelKind::MaterialEditor, "Default workspace should register a Material Editor panel");
     kb::editor::tests::Require(panel->title == "Material Editor", "Material Editor panel should have the expected title");
 
@@ -375,6 +386,7 @@ void RunMaterialEditorPanelActivationTest() {
     // tab to front (the exact operation the router performs on double-click of a .kbmat).
     kb::editor::EditorDockModel model;
     const kb::editor::DockPanel* panel = RequirePanel(model, 10U);
+    OpenPanelOnDemand(model, kb::editor::DockPanelKind::MaterialEditor);
     kb::editor::tests::Require(panel->kind == kb::editor::DockPanelKind::MaterialEditor, "Material Editor panel should be registered");
 
     model.Commands().ActivatePanel(10U);
@@ -385,6 +397,7 @@ void RunMaterialEditorPanelActivationTest() {
 
 void RunClosedMaterialEditorReopensInCenterDockTest() {
     kb::editor::EditorDockModel model;
+    OpenPanelOnDemand(model, kb::editor::DockPanelKind::MaterialEditor);
     const kb::editor::DockLayout initialLayout = BuildDefaultLayout(model);
     const kb::editor::DockLeafLayout* sceneLeaf = FindLeafForPanel(initialLayout, 2U);
     kb::editor::tests::Require(sceneLeaf != nullptr, "Scene View leaf should exist before reopening Material Editor");
@@ -403,6 +416,33 @@ void RunClosedMaterialEditorReopensInCenterDockTest() {
     kb::editor::tests::Require(scene != nullptr && reopened->leafId == scene->leafId, "Reopened Material Editor should return to the center workspace group");
 }
 
+void RunWorldMenuTest() {
+    // The pointer handler acts on World rows by index; the labels must stay in that order.
+    using kb::editor::EditorMenuCommand;
+    using kb::editor::EditorToolbarLayout;
+    kb::editor::tests::Require(EditorToolbarLayout::FixedRowCount(EditorMenuCommand::World) == 11,
+        "The World menu lists its region, build, selection and navigation commands");
+    kb::editor::tests::Require(EditorToolbarLayout::DropdownLabel(EditorMenuCommand::World, 0) == "Load Cells Near Camera" &&
+            EditorToolbarLayout::DropdownLabel(EditorMenuCommand::World, 3) == "Build World and HLODs" &&
+            EditorToolbarLayout::DropdownLabel(EditorMenuCommand::World, 4) == "Show or Hide Cell Grid" &&
+            EditorToolbarLayout::DropdownLabel(EditorMenuCommand::World, 6) == "Add Data Layer..." &&
+            EditorToolbarLayout::DropdownLabel(EditorMenuCommand::World, 8) == "Toggle Selection Always Loaded" &&
+            EditorToolbarLayout::DropdownLabel(EditorMenuCommand::World, 9) == "Bake Navigation Mesh" &&
+            EditorToolbarLayout::DropdownLabel(EditorMenuCommand::World, 10) == "Show or Hide Navigation Mesh",
+        "World menu rows must match the rows the pointer handler executes");
+    kb::editor::tests::Require(EditorToolbarLayout::FixedRowCount(EditorMenuCommand::Help) == 4 &&
+            EditorToolbarLayout::DropdownLabel(EditorMenuCommand::Help, 3) == "About",
+        "Adding the World menu must not move the Help rows");
+    const RECT bar{ 0, 0, 1200, 28 };
+    const kb::editor::EditorMenuRects menus = EditorToolbarLayout::ResolveMenu(bar, EditorMenuCommand::World, 11);
+    const int worldX = (menus.world.left + menus.world.right) / 2;
+    const int worldY = (menus.world.top + menus.world.bottom) / 2;
+    kb::editor::tests::Require(menus.world.left >= menus.options.right && menus.help.left >= menus.world.right &&
+            EditorToolbarLayout::HitTestMenu(menus, worldX, worldY) == EditorMenuCommand::World &&
+            menus.dropdownRowCount == 11,
+        "The World menu sits between Options and Help and opens its eleven rows");
+}
+
 void RunBuildGameMenuAndWorkspaceActivationTest() {
     // The panel is only ever reached through File > Build Game, so the row has to be
     // there and has to be the one the handler acts on.
@@ -415,6 +455,7 @@ void RunBuildGameMenuAndWorkspaceActivationTest() {
 
     kb::editor::EditorDockModel model;
     const kb::editor::DockPanel* panel = RequirePanel(model, 16U);
+    OpenPanelOnDemand(model, kb::editor::DockPanelKind::BuildGame);
     kb::editor::tests::Require(
         panel->kind == kb::editor::DockPanelKind::BuildGame && panel->title == "Build Game",
         "Default workspace should register the Build Game panel");
@@ -446,6 +487,7 @@ void RunBuildGameMenuAndWorkspaceActivationTest() {
 void RunSkeletalMeshEditorWorkspaceActivationTest() {
     kb::editor::EditorDockModel model;
     const kb::editor::DockPanel* panel = RequirePanel(model, 11U);
+    OpenPanelOnDemand(model, kb::editor::DockPanelKind::SkeletalMeshEditor);
     kb::editor::tests::Require(
         panel->kind == kb::editor::DockPanelKind::SkeletalMeshEditor &&
             panel->title == "Skeletal Mesh Editor",
@@ -478,6 +520,7 @@ void RunSkeletalMeshEditorWorkspaceActivationTest() {
 void RunAnimationClipEditorWorkspaceActivationTest() {
     kb::editor::EditorDockModel model;
     const kb::editor::DockPanel* panel = RequirePanel(model, 12U);
+    OpenPanelOnDemand(model, kb::editor::DockPanelKind::AnimationClipEditor);
     kb::editor::tests::Require(
         panel != nullptr && panel->kind == kb::editor::DockPanelKind::AnimationClipEditor,
         "Animation Clip Editor should be registered as a typed dock panel");
@@ -499,6 +542,7 @@ void RunAnimationClipEditorWorkspaceActivationTest() {
 void RunAnimatorEditorWorkspaceActivationTest() {
     kb::editor::EditorDockModel model;
     const kb::editor::DockPanel* panel = RequirePanel(model, 13U);
+    OpenPanelOnDemand(model, kb::editor::DockPanelKind::AnimatorEditor);
     kb::editor::tests::Require(
         panel != nullptr && panel->kind == kb::editor::DockPanelKind::AnimatorEditor,
         "Animator Editor should be registered as a typed dock panel");
@@ -682,6 +726,7 @@ void RunClosedUtilityPanelsReopenInRightDockTest() {
             panel != model.Queries().Panels().end(),
             "Utility panel should be registered in the default workspace");
         const std::uint32_t panelId = panel->id;
+        OpenPanelOnDemand(model, kind);
 
         kb::editor::tests::Require(
             model.Commands().ClosePanel(panelId),
@@ -927,6 +972,7 @@ void RunLayoutMenuModelTest() {
 void RunParticleEditorWorkspaceAndSessionPersistenceTest() {
     kb::editor::EditorDockModel model;
     const kb::editor::DockPanel* panel = RequirePanel(model, 14U);
+    OpenPanelOnDemand(model, kb::editor::DockPanelKind::ParticleEditor);
     kb::editor::tests::Require(
         panel->kind == kb::editor::DockPanelKind::ParticleEditor &&
             panel->title == "21kb Particle System",
@@ -1395,6 +1441,7 @@ void RunEditorDockingTests() {
     RunClosedMaterialEditorReopensInCenterDockTest();
     RunClosedUtilityPanelsReopenInRightDockTest();
     RunBuildGameMenuAndWorkspaceActivationTest();
+    RunWorldMenuTest();
     RunSkeletalMeshEditorWorkspaceActivationTest();
     RunAnimationClipEditorWorkspaceActivationTest();
     RunAnimatorEditorWorkspaceActivationTest();

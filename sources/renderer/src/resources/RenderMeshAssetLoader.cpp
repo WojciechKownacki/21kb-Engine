@@ -54,8 +54,13 @@ namespace {
         reinterpret_cast<const std::uint8_t*>(imported.payload.data()),
         imported.payload.size(),
     };
-    std::optional<RenderMeshAssetData> mesh =
-        RenderMeshAssetBuilder::LoadGltf(payload, {});
+    // A .gltf import carries its external buffers; the source folder is not consulted.
+    const auto* const resources = imported.resources.empty() ? nullptr : imported.resources.data();
+    const auto resourceCount = static_cast<std::uint32_t>(imported.resources.size());
+    std::optional<RenderMeshAssetData> mesh = RenderMeshAssetBuilder::LoadGltf(payload, {}, RenderMeshGltfImportDesc{
+        .externalResources = resources,
+        .externalResourceCount = resourceCount,
+    });
     if (mesh.has_value() &&
         (imported.importOptions & kb::assets::kAssetImportOptionMeshImportMaterials) != 0U) {
         std::vector<RenderMeshAssetMaterialBinding> bindings;
@@ -72,6 +77,8 @@ namespace {
         mesh = RenderMeshAssetBuilder::LoadGltf(payload, {}, RenderMeshGltfImportDesc{
             .materialBindings = bindings.data(),
             .materialBindingCount = static_cast<std::uint32_t>(bindings.size()),
+            .externalResources = resources,
+            .externalResourceCount = resourceCount,
         });
     }
     return mesh;
@@ -186,7 +193,7 @@ struct MeshFragmentBounds {
         const kb::assets::bake::AssetPackFragmentEntry& fragment = fragments[chunkIndex];
         if (block.name != blockName ||
             block.residency != kb::assets::bake::BakedAssetBlockResidency::Streaming ||
-            block.storedBytes != chunk.size() || fragment.offset != block.offset ||
+            block.uncompressedBytes != chunk.size() || fragment.offset != block.offset ||
             fragment.bytes != block.storedBytes) {
             return false;
         }
@@ -318,10 +325,121 @@ struct MeshFragmentBounds {
     return firstVertex == assetVertexCount;
 }
 
+// Checks the chunks of the levels that were read -- the last ones of the mesh, from
+// `firstChunk` on -- against the fragments the pack declares for them.
+[[nodiscard]] bool ValidateStreamedMeshFragments(
+    std::span<const RenderMeshChunkFragment> fragments,
+    std::uint32_t firstChunk,
+    std::span<const std::vector<std::uint8_t>> chunks,
+    const RenderMeshAssetData& asset) {
+    if (firstChunk > fragments.size() || chunks.size() != fragments.size() - firstChunk) {
+        return false;
+    }
+    const std::uint64_t assetVertexCount = !asset.tangentVertices.empty()
+        ? asset.tangentVertices.size()
+        : asset.vertices.size();
+    std::uint64_t firstVertex = 0U;
+    for (std::size_t index = 0U; index < chunks.size(); ++index) {
+        const std::vector<std::uint8_t>& chunk = chunks[index];
+        if (chunk.size() < 24U) {
+            return false;
+        }
+        const RenderMeshChunkFragment& fragment = fragments[firstChunk + index];
+        const std::uint32_t clusterCount = ReadLittleUInt32(chunk, 0U);
+        const std::uint32_t vertexCount = ReadLittleUInt32(chunk, 4U);
+        if (fragment.clusterCount != clusterCount || firstVertex > assetVertexCount ||
+            vertexCount > assetVertexCount - firstVertex) {
+            return false;
+        }
+        const MeshFragmentBounds expected = BoundsOfVertexRange(
+            asset, static_cast<std::uint32_t>(firstVertex), vertexCount);
+        if (fragment.boundsMin != expected.low || fragment.boundsMax != expected.high) {
+            return false;
+        }
+        firstVertex += vertexCount;
+    }
+    return firstVertex == assetVertexCount;
+}
+
+// A packaged mesh whose finer levels hold enough geometry to be worth streaming loads with its
+// coarsest level only; everything needed to add the others is kept with it.
+[[nodiscard]] std::optional<RenderMeshAssetData> LoadStreamedMeshPayload(
+    const kb::assets::AssetLoadRequest& request,
+    const kb::assets::bake::RuntimeAssetPayload& payload,
+    const kb::render::bake::BakedMeshLayout& layout,
+    std::string& error) {
+    RenderMeshStreamingLayout streaming{};
+    streaming.artifact = payload.digest;
+    streaming.primaryBlock = std::make_shared<const std::vector<std::uint8_t>>(payload.blocks.front().bytes);
+    for (const kb::render::bake::BakedMeshLodLayout& level : layout.lods) {
+        streaming.lodFirstChunk.push_back(level.firstChunk);
+        streaming.lodChunkCount.push_back(level.chunkCount);
+        streaming.lodGeometryBytes.push_back(level.geometryBytes);
+        streaming.lodErrors.push_back(level.error);
+    }
+    if (payload.blocks.size() != layout.chunkCount + 1U) {
+        error = "Baked mesh chunk sequence is incomplete";
+        return std::nullopt;
+    }
+    for (std::uint32_t chunkIndex = 0U; chunkIndex < layout.chunkCount; ++chunkIndex) {
+        const kb::assets::bake::RuntimeAssetPayloadBlock& block = payload.blocks[chunkIndex + 1U];
+        if (block.name != kb::render::bake::BakedMeshChunkBlockName(chunkIndex) ||
+            block.residency != kb::assets::bake::BakedAssetBlockResidency::Streaming || !block.fragment.has_value()) {
+            error = "Baked mesh chunk sequence is incomplete";
+            return std::nullopt;
+        }
+        streaming.fragments.push_back(RenderMeshChunkFragment{
+            .boundsMin = block.fragment->boundsMin,
+            .boundsMax = block.fragment->boundsMax,
+            .clusterCount = block.fragment->clusterCount,
+        });
+    }
+    const std::uint32_t coarsest = static_cast<std::uint32_t>(layout.lods.size() - 1U);
+    std::vector<std::vector<std::uint8_t>> chunks(layout.lods[coarsest].chunkCount);
+    for (std::uint32_t index = 0U; index < chunks.size(); ++index) {
+        if (request.runtimePack->ReadArtifactBlock(payload.digest,
+                kb::render::bake::BakedMeshChunkBlockName(layout.lods[coarsest].firstChunk + index), chunks[index]) !=
+            kb::assets::bake::AssetPackReadStatus::Success) {
+            error = "Baked mesh chunk could not be read";
+            return std::nullopt;
+        }
+    }
+    RenderMeshAssetData asset{};
+    if (!AssembleStreamedMeshLevels(streaming, coarsest, chunks, asset)) {
+        error = "Baked mesh payload is malformed";
+        return std::nullopt;
+    }
+    return asset;
+}
+
 [[nodiscard]] std::optional<RenderMeshAssetData> LoadBakedMeshPayload(
     const kb::assets::AssetLoadRequest& request,
     std::string& error) {
     kb::assets::bake::RuntimeAssetPayload payload{};
+    // The primary block first: it says how the levels of detail lie in the chunks, and with that
+    // whether the mesh streams.
+    if (!request.ReadPackagedPayloadBlocks(
+            kb::assets::bake::RuntimeArtifactEncoding::BakedMesh, {},
+            [](const kb::assets::bake::AssetPackBlockEntry&) { return false; }, payload, error) ||
+        payload.blocks.empty() || payload.blocks.front().name != kb::assets::bake::kBakedAssetPrimaryBlockName) {
+        if (error.empty()) {
+            error = "Baked mesh has no primary block";
+        }
+        return std::nullopt;
+    }
+    kb::render::bake::BakedMeshLayout layout{};
+    if (!kb::render::bake::ReadBakedMeshLayout(payload.blocks.front().bytes, layout)) {
+        error = "Baked mesh payload is malformed";
+        return std::nullopt;
+    }
+    std::uint64_t streamedBytes = 0U;
+    for (std::size_t level = 0U; level + 1U < layout.lods.size(); ++level) {
+        streamedBytes += layout.lods[level].geometryBytes;
+    }
+    if (layout.lods.size() > 1U && streamedBytes >= kStreamedMeshMinimumBytes) {
+        return LoadStreamedMeshPayload(request, payload, layout, error);
+    }
+    payload = {};
     if (!request.ReadPackagedPayload(
             kb::assets::bake::RuntimeArtifactEncoding::BakedMesh, {}, payload, error) ||
         payload.blocks.empty()) {
@@ -357,6 +475,42 @@ struct MeshFragmentBounds {
 }
 
 } // namespace
+
+bool AssembleStreamedMeshLevels(
+    const RenderMeshStreamingLayout& layout,
+    std::uint32_t firstLod,
+    std::span<const std::vector<std::uint8_t>> chunks,
+    RenderMeshAssetData& out) {
+    try {
+        if (layout.primaryBlock == nullptr || firstLod >= layout.lodFirstChunk.size()) {
+            return false;
+        }
+        RenderMeshAssetData asset{};
+        if (!kb::render::bake::ReadBakedMeshLods(*layout.primaryBlock, firstLod, chunks, asset) ||
+            !ValidateStreamedMeshFragments(layout.fragments, layout.lodFirstChunk[firstLod], chunks, asset)) {
+            return false;
+        }
+        RenderMeshAssetFinalizer::EnsureTangentVertexStorage(asset);
+        asset.streaming = RenderMeshStreamingLayout{
+            .artifact = layout.artifact,
+            .firstLod = firstLod,
+            .lodFirstChunk = layout.lodFirstChunk,
+            .lodChunkCount = layout.lodChunkCount,
+            .lodGeometryBytes = layout.lodGeometryBytes,
+            .lodErrors = layout.lodErrors,
+            .primaryBlock = layout.primaryBlock,
+            .fragments = layout.fragments,
+            .chunks = std::vector<std::vector<std::uint8_t>>(chunks.begin(), chunks.end()),
+        };
+        asset.RefreshDesc();
+        out = std::move(asset);
+        return true;
+    } catch (const std::bad_alloc&) {
+        return false;
+    } catch (const std::length_error&) {
+        return false;
+    }
+}
 
 std::string_view RenderMeshAssetLoader::Type() const noexcept {
     return "RenderMesh";

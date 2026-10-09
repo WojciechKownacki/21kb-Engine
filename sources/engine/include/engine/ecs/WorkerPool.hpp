@@ -127,7 +127,7 @@ private:
 
 class WorkerPool {
 public:
-    WorkerPool() = default;
+    WorkerPool() noexcept;
     explicit WorkerPool(WorkerPoolConfig config);
     ~WorkerPool();
 

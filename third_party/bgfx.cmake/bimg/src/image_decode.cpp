@@ -135,7 +135,9 @@ namespace bimg
 
 		static uint8_t pngMagic[] = { 0x89, 0x50, 0x4E, 0x47, 0x0d, 0x0a };
 
-		if (0 != bx::memCmp(_data, pngMagic, sizeof(pngMagic) ) )
+		// 21kb: a buffer shorter than the signature is not a PNG and must not be read past.
+		if (_size < sizeof(pngMagic)
+		||  0 != bx::memCmp(_data, pngMagic, sizeof(pngMagic) ) )
 		{
 			return NULL;
 		}
@@ -524,7 +526,9 @@ namespace bimg
 
 		static uint8_t exrMagic[] = { 0x76, 0x2f, 0x31, 0x01 };
 
-		if (0 != bx::memCmp(_data, exrMagic, sizeof(exrMagic) ) )
+		// 21kb: a buffer shorter than the signature is not an EXR and must not be read past.
+		if (_size < sizeof(exrMagic)
+		||  0 != bx::memCmp(_data, exrMagic, sizeof(exrMagic) ) )
 		{
 			return NULL;
 		}

@@ -86,7 +86,8 @@ private:
 [[nodiscard]] std::unique_ptr<IEngineModule> LoadDynamicModule(
     const kb::project::ProjectPluginReference& plugin,
     EngineModuleLoader& loader,
-    std::vector<std::string>& diagnostics) {
+    std::vector<std::string>& diagnostics,
+    std::vector<std::string>& warnings) {
     const std::filesystem::path path = plugin.binaryPath;
     EngineModuleLoadResult loaded = loader.Load(EngineModuleLoadDesc{
         .key = plugin.name.empty() ? path.stem().string() : plugin.name,
@@ -96,6 +97,7 @@ private:
         .shadowCopyDirectoryName = "21kb_engine_modules",
         .diagnosticLabel = "engine module plugin",
     });
+    warnings.insert(warnings.end(), loaded.warnings.begin(), loaded.warnings.end());
     if (!loaded.Succeeded()) {
         diagnostics.insert(diagnostics.end(), loaded.errors.begin(), loaded.errors.end());
         return nullptr;
@@ -280,7 +282,7 @@ void EngineModuleHost::LoadProjectPluginModules() {
         if (!plugin.enabled || plugin.binaryPath.empty() || staticModuleNames.contains(plugin.name)) {
             continue;
         }
-        std::unique_ptr<IEngineModule> module = LoadDynamicModule(plugin, moduleLoader_, diagnostics_);
+        std::unique_ptr<IEngineModule> module = LoadDynamicModule(plugin, moduleLoader_, diagnostics_, warnings_);
         if (module != nullptr) {
             candidates_.push_back(std::move(module));
         }
@@ -302,6 +304,7 @@ void EngineModuleHost::Load(kb::ecs::World& world) {
     }
     loaded_ = true;
     diagnostics_.clear();
+    warnings_.clear();
 
     LoadProjectPluginModules();
 
@@ -388,6 +391,10 @@ std::size_t EngineModuleHost::ActiveCount() const noexcept {
 
 const std::vector<std::string>& EngineModuleHost::Diagnostics() const noexcept {
     return diagnostics_;
+}
+
+const std::vector<std::string>& EngineModuleHost::Warnings() const noexcept {
+    return warnings_;
 }
 
 } // namespace kb::modules

@@ -171,6 +171,37 @@ struct MeshBakeOutput {
     std::span<const std::vector<std::uint8_t>> chunks,
     RenderMeshAssetData& out);
 
+// Reads only the levels of detail from `firstLod` down: `chunks` are the chunks of those levels,
+// in order. The result's level 0 is the baked level `firstLod`, and its sections, clusters,
+// vertices and indices are those levels' alone, so a renderer that holds it draws the finest
+// level it has. The mesh bounds are the full mesh's, so they do not change as levels arrive.
+// Hostile-input safe in the same way as ReadBakedMesh.
+[[nodiscard]] bool ReadBakedMeshLods(
+    std::span<const std::uint8_t> primaryBlock,
+    std::uint32_t firstLod,
+    std::span<const std::vector<std::uint8_t>> chunks,
+    RenderMeshAssetData& out);
+
+// What content streaming needs to know about a baked mesh before reading its geometry: which
+// chunks each level of detail is made of, what its geometry occupies once decoded, and its
+// simplification error in the mesh's own units (0 for level 0).
+struct BakedMeshLodLayout {
+    std::uint32_t firstChunk = 0U;
+    std::uint32_t chunkCount = 0U;
+    std::uint64_t geometryBytes = 0U;
+    float error = 0.0F;
+};
+
+struct BakedMeshLayout {
+    std::vector<BakedMeshLodLayout> lods;
+    std::uint32_t chunkCount = 0U;
+    RenderBoundsSphere bounds{};
+};
+
+// Reads the layout from the primary block alone. False for a block that is not one this baker
+// wrote; a block that passes still has to pass ReadBakedMesh or ReadBakedMeshLods.
+[[nodiscard]] bool ReadBakedMeshLayout(std::span<const std::uint8_t> primaryBlock, BakedMeshLayout& out);
+
 // Verifies the target-dependent promises that are intentionally not part of generic payload
 // decoding: index width and the maximum encoded streaming-fragment size. Call after (or beside)
 // ReadBakedMesh when accepting a package for a concrete target profile.

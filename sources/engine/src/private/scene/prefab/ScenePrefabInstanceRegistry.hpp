@@ -156,6 +156,17 @@ struct ScenePrefabInstanceRecord {
     }
 };
 
+// Scene history keeps what it needs to undo an instance change. The registry reports each record right before it
+// changes or removes it (null when the handle names no live record); records registered afterwards are found with
+// HandlesSince.
+class ScenePrefabInstanceJournal {
+public:
+    virtual void BeforeChange(ScenePrefabInstanceHandle handle, const ScenePrefabInstanceRecord* record) noexcept = 0;
+
+protected:
+    ~ScenePrefabInstanceJournal() = default;
+};
+
 class ScenePrefabInstanceRegistry {
 public:
     [[nodiscard]] ScenePrefabInstanceHandle Register(ScenePrefabHandle prefab, std::string prefabGuid, SceneObject rootParent, std::vector<SceneObject> objects, ScenePrefab resolvedPrefab);
@@ -213,11 +224,21 @@ public:
     [[nodiscard]] std::span<const std::uint32_t> DirtyNodes(ScenePrefabInstanceHandle handle) const noexcept;
     [[nodiscard]] bool TopologyDirty(ScenePrefabInstanceHandle handle) const noexcept;
     void ClearDirtyNodes(ScenePrefabInstanceHandle handle) noexcept;
+    // Moves on every change marked on an instance's objects, so a reader can tell whether to look again.
+    [[nodiscard]] std::uint64_t ChangeRevision() const noexcept;
     [[nodiscard]] std::size_t Count() const noexcept;
     void ReindexObjects(ScenePrefabInstanceHandle handle, std::span<const SceneObject> oldObjects) noexcept;
+    // An instance keeps a destroyed object in its node slot (a missing node), but the lookup
+    // index must not, or the next entity to reuse that slot would be taken for the prefab node.
+    void ForgetDestroyedObject(SceneEntity entity) noexcept;
     [[nodiscard]] bool UpdateSource(ScenePrefabInstanceHandle handle, ScenePrefabHandle prefab, std::string prefabGuid);
     [[nodiscard]] bool Remove(ScenePrefabInstanceHandle handle) noexcept;
     void Clear() noexcept;
+    // Null detaches the journal.
+    void SetJournal(ScenePrefabInstanceJournal* journal) noexcept;
+    // The id the next registered instance receives; the live instances registered since are HandlesSince(id).
+    [[nodiscard]] std::uint64_t NextHandleId() const noexcept;
+    [[nodiscard]] std::vector<ScenePrefabInstanceHandle> HandlesSince(std::uint64_t firstId) const;
 
 private:
     struct ObjectIndexEntry {
@@ -233,8 +254,12 @@ private:
     void IndexDensePreparedObjectSpan(ScenePrefabInstanceHandle handle, std::span<const SceneObject> objects) noexcept;
     void IndexDensePreparedObjects(ScenePrefabInstanceHandle handle, const ScenePrefabInstanceRecord& record) noexcept;
     void UnindexObjects(ScenePrefabInstanceHandle handle, std::span<const SceneObject> objects) noexcept;
+    void ReleaseObjects(std::span<const SceneObject> objects);
     void RemoveFromPrefabIndex(ScenePrefabHandle prefab, ScenePrefabInstanceHandle handle) noexcept;
     void EnsureRecordSlot(ScenePrefabInstanceHandle handle);
+    // FindMutable without reporting to the journal, for the bookkeeping that history does not restore.
+    [[nodiscard]] ScenePrefabInstanceRecord* MutableRecord(ScenePrefabInstanceHandle handle) noexcept;
+    void NoteChange(ScenePrefabInstanceHandle handle) noexcept;
     void EnsureRecordSlots(std::uint64_t firstId, std::size_t count);
     [[nodiscard]] std::uint64_t NodeIdFor(ScenePrefabInstanceHandle handle, std::uint32_t nodeIndex) const noexcept;
     [[nodiscard]] bool RecordSlotAlive(ScenePrefabInstanceHandle handle) const noexcept;
@@ -244,6 +269,8 @@ private:
     std::vector<ScenePrefabInstanceRecord> records_;
     std::vector<std::uint8_t> recordAlive_;
     std::size_t liveRecordCount_ = 0;
+    std::uint64_t changeRevision_ = 0U;
+    ScenePrefabInstanceJournal* journal_ = nullptr;
     std::map<ScenePrefabHandle, std::vector<ScenePrefabInstanceHandle>> prefabIndex_;
     std::vector<ScenePrefabInstanceHandle> denseRootIndex_;
     std::vector<ObjectIndexEntry> denseObjectIndex_;

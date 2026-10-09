@@ -1,5 +1,6 @@
 #include "rendering/BuildGamePanelModel.hpp"
 #include "packaging/EditorPackageInputValidation.hpp"
+#include "engine/platform/CrashReporting.hpp"
 
 #include <algorithm>
 #include <array>
@@ -18,6 +19,13 @@ constexpr std::array<BuildGameRowSpec, 3> kDesktopApplicationRows{{
     { BuildGameField::ProductName, "Product name", BuildGameRowKind::Text, true },
     { BuildGameField::ExecutableName, "Executable name", BuildGameRowKind::Text, true },
     { BuildGameField::ApplicationIcon, "Application icon", BuildGameRowKind::IconPicker, false },
+}};
+// The Windows player is the one host with crash reports, so only it offers an endpoint.
+constexpr std::array<BuildGameRowSpec, 4> kWindowsApplicationRows{{
+    { BuildGameField::ProductName, "Product name", BuildGameRowKind::Text, true },
+    { BuildGameField::ExecutableName, "Executable name", BuildGameRowKind::Text, true },
+    { BuildGameField::ApplicationIcon, "Application icon", BuildGameRowKind::IconPicker, false },
+    { BuildGameField::CrashReportUrl, "Crash report URL", BuildGameRowKind::Text, false },
 }};
 constexpr std::array<BuildGameRowSpec, 3> kWebApplicationRows{{
     { BuildGameField::ProductName, "Product name", BuildGameRowKind::Text, true },
@@ -39,6 +47,14 @@ constexpr std::array<BuildGameRowSpec, 4> kReleaseSigningRows{{
     { BuildGameField::AndroidKeyAlias, "Key alias", BuildGameRowKind::Text, true },
     { BuildGameField::AndroidStorePassword, "Keystore password", BuildGameRowKind::Password, true },
     { BuildGameField::AndroidKeyPassword, "Key password", BuildGameRowKind::Password, true },
+}};
+// Authenticode is optional: an unsigned Release still builds. With a certificate,
+// every shipped image must carry a verified signature or the package fails.
+constexpr std::array<BuildGameRowSpec, 4> kWindowsSigningRows{{
+    { BuildGameField::WindowsCertificateThumbprint, "Certificate thumbprint", BuildGameRowKind::Text, false },
+    { BuildGameField::WindowsCertificateFile, "Certificate file", BuildGameRowKind::FilePicker, false },
+    { BuildGameField::WindowsCertificatePassword, "Certificate password", BuildGameRowKind::Password, false },
+    { BuildGameField::WindowsTimestampUrl, "Timestamp URL", BuildGameRowKind::Text, false },
 }};
 constexpr std::array<BuildGameRowSpec, 4> kOutputRows{{
     { BuildGameField::OutputDirectory, "Output directory", BuildGameRowKind::FolderPicker, true },
@@ -149,7 +165,9 @@ std::vector<BuildGameSectionSpec> BuildGamePanelModel::Sections(kb::packaging::P
         ? std::span<const BuildGameRowSpec>{ kAndroidApplicationRows }
         : targetSpec->family == kb::packaging::PackagingTargetFamily::Web
             ? std::span<const BuildGameRowSpec>{ kWebApplicationRows }
-            : std::span<const BuildGameRowSpec>{ kDesktopApplicationRows };
+            : target == kb::packaging::PackagingTarget::WindowsX64
+                ? std::span<const BuildGameRowSpec>{ kWindowsApplicationRows }
+                : std::span<const BuildGameRowSpec>{ kDesktopApplicationRows };
     std::vector<BuildGameSectionSpec> sections{
         { BuildGameSection::Project, "PROJECT", kProjectRows },
         { BuildGameSection::Application, targetSpec->needsAndroidMetadata ? "ANDROID APPLICATION" :
@@ -158,6 +176,8 @@ std::vector<BuildGameSectionSpec> BuildGamePanelModel::Sections(kb::packaging::P
     };
     if (targetSpec->needsAndroidMetadata && release)
         sections.push_back({ BuildGameSection::Signing, "SIGNING", kReleaseSigningRows });
+    if (target == kb::packaging::PackagingTarget::WindowsX64 && release)
+        sections.push_back({ BuildGameSection::Signing, "SIGNING", kWindowsSigningRows });
     if (targetSpec->family == kb::packaging::PackagingTargetFamily::Web)
         sections.push_back({ BuildGameSection::Toolchain, "WEB TOOLCHAIN", kWebToolchainRows });
     if (targetSpec->target == kb::packaging::PackagingTarget::LinuxX64)
@@ -197,6 +217,15 @@ std::string BuildGamePanelModel::Value(BuildGameField field, kb::packaging::Pack
     case BuildGameField::LinuxEngineRoot: return local.linuxEngineRoot;
     case BuildGameField::LinuxDisplay: return local.linuxDisplay;
     case BuildGameField::LinuxIdentity: return local.linuxIdentity.empty() ? "Optional - select private key..." : local.linuxIdentity.generic_string();
+    case BuildGameField::CrashReportUrl:
+        return project.crashReportUploadUrl.empty() ? "Optional - players' crash reports stay local" : project.crashReportUploadUrl;
+    case BuildGameField::WindowsCertificateThumbprint:
+        return targetSettings.windowsCertificateThumbprint.empty() ? "Optional - SHA-1 of a certificate in your store" : targetSettings.windowsCertificateThumbprint;
+    case BuildGameField::WindowsCertificateFile:
+        return targetSettings.windowsCertificateFile.empty() ? "Optional - select PFX..." : targetSettings.windowsCertificateFile.generic_string();
+    case BuildGameField::WindowsCertificatePassword: return "Entered for one build only";
+    case BuildGameField::WindowsTimestampUrl:
+        return targetSettings.windowsTimestampUrl.empty() ? "Optional - RFC 3161 timestamp service" : targetSettings.windowsTimestampUrl;
     case BuildGameField::None: break;
     }
     return {};
@@ -204,7 +233,7 @@ std::string BuildGamePanelModel::Value(BuildGameField field, kb::packaging::Pack
 
 BuildGameValidation BuildGamePanelModel::Validate(kb::packaging::PackagingTarget target,
     const kb::project::ProjectSettings& project, const EditorBuildGameSettings& local,
-    bool release, bool jobRunning, bool hasStorePassword, bool hasKeyPassword) {
+    bool release, bool jobRunning, bool hasStorePassword, bool hasKeyPassword, bool hasCertificatePassword) {
     if (jobRunning) return { false, "A package job is running." };
     if (Trimmed(project.name).empty()) return { false, Missing("Project name") };
     if (!ValidText(Trimmed(project.gameName), 128U)) return { false, "Product name must contain 1-128 printable characters." };
@@ -229,6 +258,9 @@ BuildGameValidation BuildGamePanelModel::Validate(kb::packaging::PackagingTarget
         if (!ValidText(Trimmed(project.androidLabel), 128U))
             return { false, "Android application label must contain 1-128 printable characters." };
     }
+    if (spec->target == kb::packaging::PackagingTarget::WindowsX64 && !Trimmed(project.crashReportUploadUrl).empty() &&
+        !kb::platform::IsAllowedCrashUploadEndpoint(Trimmed(project.crashReportUploadUrl)))
+        return { false, "Crash report URL must use HTTPS, or HTTP to 127.0.0.1 or ::1." };
     const EditorBuildGameTargetSettings& targetSettings = local.For(target);
     if (release && spec->needsAndroidMetadata) {
         if (targetSettings.androidKeystore.empty()) return { false, Missing("Android keystore") };
@@ -236,6 +268,17 @@ BuildGameValidation BuildGamePanelModel::Validate(kb::packaging::PackagingTarget
             return { false, "Android key alias must use 1-128 ASCII letters, digits, dots, dashes, or underscores." };
         if (!hasStorePassword) return { false, Missing("Android keystore password") };
         if (!hasKeyPassword) return { false, Missing("Android key password") };
+    }
+    if (release && spec->target == kb::packaging::PackagingTarget::WindowsX64) {
+        if (!targetSettings.windowsCertificateThumbprint.empty() && !targetSettings.windowsCertificateFile.empty())
+            return { false, "Sign with a certificate thumbprint or a certificate file, not both." };
+        if (!targetSettings.windowsCertificateThumbprint.empty() &&
+            !package_input::IsValidCertificateThumbprint(targetSettings.windowsCertificateThumbprint))
+            return { false, "Certificate thumbprint must be 40 hexadecimal digits." };
+        if (!targetSettings.windowsCertificateFile.empty() && !hasCertificatePassword)
+            return { false, Missing("Certificate password") };
+        if (!targetSettings.windowsTimestampUrl.empty() && !package_input::IsValidTimestampUrl(targetSettings.windowsTimestampUrl))
+            return { false, "Timestamp URL must be an http:// or https:// address." };
     }
     if (targetSettings.outputDirectory.empty()) return { false, Missing("Output directory") };
     if (local.builderExecutable.empty()) return { false, Missing("Builder executable") };
@@ -308,12 +351,40 @@ bool BuildGamePanelModel::ApplyText(BuildGameField field, std::string_view value
     case BuildGameField::LinuxEngineRoot: local.linuxEngineRoot = text; return true;
     case BuildGameField::LinuxDisplay: local.linuxDisplay = text; return true;
     case BuildGameField::OutputDirectory: local.For(target).outputDirectory = text; return true;
+    case BuildGameField::WindowsCertificateThumbprint: {
+        std::string thumbprint;
+        for (const char character : text) {
+            if (character != ' ' && character != ':') thumbprint.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(character))));
+        }
+        if (!thumbprint.empty() && !package_input::IsValidCertificateThumbprint(thumbprint)) {
+            error = "Certificate thumbprint must be 40 hexadecimal digits.";
+            return false;
+        }
+        local.For(target).windowsCertificateThumbprint = thumbprint;
+        return true;
+    }
+    case BuildGameField::WindowsTimestampUrl:
+        if (!text.empty() && !package_input::IsValidTimestampUrl(text)) {
+            error = "Timestamp URL must be an http:// or https:// address.";
+            return false;
+        }
+        local.For(target).windowsTimestampUrl = text;
+        return true;
+    case BuildGameField::CrashReportUrl:
+        if (!text.empty() && !kb::platform::IsAllowedCrashUploadEndpoint(text)) {
+            error = "Crash report URL must use HTTPS, or HTTP to 127.0.0.1 or ::1.";
+            return false;
+        }
+        project.crashReportUploadUrl = text;
+        return true;
     case BuildGameField::None:
     case BuildGameField::ProjectName:
     case BuildGameField::ApplicationIcon:
     case BuildGameField::AndroidKeystore:
     case BuildGameField::AndroidStorePassword:
     case BuildGameField::AndroidKeyPassword:
+    case BuildGameField::WindowsCertificateFile:
+    case BuildGameField::WindowsCertificatePassword:
     case BuildGameField::LinuxIdentity:
     case BuildGameField::LaunchAfterBuild:
         error = "The selected field is not text-editable.";

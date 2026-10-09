@@ -5,7 +5,9 @@
 #include "engine/assets/AssetMemoryInputStream.hpp"
 #include "engine/assets/bake/AssetPackReader.hpp"
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
+#include "engine/assets/streaming/BackgroundLoadService.hpp"
 #include "kb/render/bake/TextureBaker.hpp"
+#include "resources/TextureContainerMagic.hpp"
 
 #include <bimg/decode.h>
 #include <bx/allocator.h>
@@ -17,9 +19,7 @@
 #include <cstddef>
 #include <charconv>
 #include <cctype>
-#include <condition_variable>
 #include <cstdlib>
-#include <deque>
 #include <fstream>
 #include <istream>
 #include <limits>
@@ -30,7 +30,6 @@
 #include <string>
 #include <string_view>
 #include <system_error>
-#include <thread>
 #include <unordered_set>
 
 namespace kb::render {
@@ -232,8 +231,37 @@ template <typename T>
     return bytes;
 }
 
+// The widest or tallest texture any backend accepts. An image states its own size
+// and the decoders allocate for that size before reading a pixel, so a larger
+// statement is refused before decoding. The stb decoders inside bimg enforce the
+// same bound themselves (STBI_MAX_DIMENSIONS in the top-level CMakeLists.txt).
+constexpr std::uint32_t kMaximumDecodedTextureExtent = 16384U;
+
+[[nodiscard]] bool StatesOversizedImage(const void* data, std::uint32_t size) {
+    // Container formats (DDS, KTX, PVR): bimg reads their header without allocating.
+    bimg::ImageContainer header{};
+    bx::Error headerError;
+    if (TextureContainerKindOf(data, size) != TextureContainerKind::None && bimg::imageParse(header, data, size, &headerError)) {
+        return header.m_width > kMaximumDecodedTextureExtent || header.m_height > kMaximumDecodedTextureExtent ||
+            header.m_depth > kMaximumDecodedTextureExtent;
+    }
+    // PNG states its size in the IHDR chunk, which must come first; lodepng, which
+    // bimg decodes PNG with, does not bound it.
+    constexpr std::array<std::uint8_t, 8U> kPngSignature{ 0x89U, 0x50U, 0x4EU, 0x47U, 0x0DU, 0x0AU, 0x1AU, 0x0AU };
+    const auto* bytes = static_cast<const std::uint8_t*>(data);
+    if (size < 24U || !std::equal(kPngSignature.begin(), kPngSignature.end(), bytes)) {
+        return false;
+    }
+    const auto bigEndian = [bytes](std::size_t offset) {
+        return (static_cast<std::uint32_t>(bytes[offset]) << 24U) | (static_cast<std::uint32_t>(bytes[offset + 1U]) << 16U) |
+            (static_cast<std::uint32_t>(bytes[offset + 2U]) << 8U) | static_cast<std::uint32_t>(bytes[offset + 3U]);
+    };
+    return bigEndian(16U) > kMaximumDecodedTextureExtent || bigEndian(20U) > kMaximumDecodedTextureExtent;
+}
+
 [[nodiscard]] std::optional<RenderTextureAssetData> LoadImageBytes(const void* data, std::size_t size) {
-    if (data == nullptr || size == 0U || size > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
+    if (data == nullptr || size == 0U || size > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max()) ||
+        StatesOversizedImage(data, static_cast<std::uint32_t>(size))) {
         return std::nullopt;
     }
 
@@ -522,7 +550,25 @@ void StoreDecodedTexture(
     if (!kb::render::bake::ReadBakedTexture(primaryBlock, asset)) {
         return std::nullopt;
     }
-    return asset;
+    if (!asset.streaming.has_value()) {
+        return asset;
+    }
+    // A pack opened as a file is read whole: the streamed levels join the tail here.
+    std::vector<std::vector<std::uint8_t>> levelBytes(asset.streaming->streamedMipCount);
+    std::vector<std::span<const std::uint8_t>> levels;
+    for (std::uint32_t level = 0U; level < asset.streaming->streamedMipCount; ++level) {
+        if (pack.ReadBlock(*texture, kb::render::bake::BakedTextureMipBlockName(level), levelBytes[level]) !=
+            kb::assets::bake::AssetPackReadStatus::Success) {
+            return std::nullopt;
+        }
+        levels.emplace_back(levelBytes[level]);
+    }
+    RenderTextureAssetData full{};
+    if (!kb::render::bake::ComposeBakedTextureLevels(asset, levels, full)) {
+        return std::nullopt;
+    }
+    full.streaming.reset();
+    return full;
 }
 
 [[nodiscard]] std::optional<RenderTextureAssetData> LoadBakedTexturePayload(
@@ -551,12 +597,15 @@ void StoreDecodedTexture(
             continue;
         }
         foundVariant = true;
+        // The primary block only: a texture with streamed mips loads with its tail, and content
+        // streaming brings the larger levels in when they are on screen.
         kb::assets::bake::RuntimeAssetPayload payload{};
-        if (!request.ReadPackagedPayload(
+        if (!request.ReadPackagedPayloadBlocks(
                 kb::assets::bake::RuntimeArtifactEncoding::BakedTexture,
                 qualifier,
+                [](const kb::assets::bake::AssetPackBlockEntry&) { return false; },
                 payload,
-                error) || payload.blocks.size() != 1U ||
+                error) || payload.blocks.empty() ||
             payload.blocks.front().name != kb::assets::bake::kBakedAssetPrimaryBlockName) {
             if (error.empty()) {
                 error = "Packaged texture payload shape is invalid";
@@ -570,6 +619,14 @@ void StoreDecodedTexture(
             error = "Packaged texture encoding does not match its manifest qualifier";
             return std::nullopt;
         }
+        const std::uint32_t streamedLevels = texture.streaming.has_value() ? texture.streaming->streamedMipCount : 0U;
+        if (payload.blocks.size() != 1U + streamedLevels) {
+            error = "Packaged texture payload shape is invalid";
+            return std::nullopt;
+        }
+        if (texture.streaming.has_value()) {
+            texture.streaming->artifact = payload.digest;
+        }
         const RenderTextureColorSpace requiredColorSpace =
             texture.colorSpace == RenderTextureAssetColorSpace::Linear
                 ? RenderTextureColorSpace::Linear
@@ -582,6 +639,28 @@ void StoreDecodedTexture(
         }
     }
     if (decodeFallback.has_value()) {
+        // The CPU decode needs the real level 0, so a texture with streamed mips is completed
+        // from its pack first.
+        if (decodeFallback->streaming.has_value()) {
+            std::vector<std::vector<std::uint8_t>> levelBytes(decodeFallback->streaming->streamedMipCount);
+            std::vector<std::span<const std::uint8_t>> levels;
+            for (std::uint32_t level = 0U; level < decodeFallback->streaming->streamedMipCount; ++level) {
+                if (request.runtimePack->ReadArtifactBlock(decodeFallback->streaming->artifact,
+                        kb::render::bake::BakedTextureMipBlockName(level), levelBytes[level]) !=
+                    kb::assets::bake::AssetPackReadStatus::Success) {
+                    error = "Packaged texture fallback could not read its streamed mips";
+                    return std::nullopt;
+                }
+                levels.emplace_back(levelBytes[level]);
+            }
+            RenderTextureAssetData full{};
+            if (!kb::render::bake::ComposeBakedTextureLevels(*decodeFallback, levels, full)) {
+                error = "Packaged texture fallback mips do not compose";
+                return std::nullopt;
+            }
+            full.streaming.reset();
+            decodeFallback = std::move(full);
+        }
         std::optional<RenderTextureAssetData> decoded = DecodeRenderTextureToRgba8(*decodeFallback);
         if (decoded.has_value()) {
             return decoded;
@@ -612,75 +691,58 @@ void StoreDecodedTexture(
     return RenderTextureAssetLoader::LoadTexture(input);
 }
 
-// ---- Async decode worker -------------------------------------------------------------------------------
+// ---- Async decode --------------------------------------------------------------------------------------
 // Decoding a large image is ~1s in a Debug build, and it used to happen synchronously on the render thread the
 // first time a texture was referenced (opening a material, or picking a texture in the Image Texture node) -
-// that was the 1-2s freeze. The decode now runs on a single background worker that just populates the cache
-// above; the render thread asks TryAcquireDecodedTexture and, on a miss, queues the decode and carries on, so
-// the texture streams in a frame or two later instead of stalling. One worker keeps decodes serialized (they are
-// bimg-bound, not parallelism-bound) and the cache mutex already makes the hand-off safe.
+// that was the 1-2s freeze. The decode now runs as a job of the engine's background load service that just
+// populates the cache above; the render thread asks TryAcquireDecodedTexture and, on a miss, queues the decode
+// and carries on, so the texture streams in a frame or two later instead of stalling. The decodes share one
+// lane, so they stay serialized (they are bimg-bound, not parallelism-bound), and the cache mutex already makes
+// the hand-off safe.
 struct AsyncTextureDecodeState {
     std::mutex mutex;
-    std::condition_variable wake;
-    std::deque<std::string> queue;
     std::unordered_set<std::string> pending;
-    std::thread worker;
-    bool stop = false;
+    std::unique_ptr<kb::assets::streaming::BackgroundLane> lane;
+    bool closed = false;
 };
 
-void AsyncTextureDecodeWork(AsyncTextureDecodeState* state) {
-    for (;;) {
-        std::string path;
-        {
-            std::unique_lock<std::mutex> lock{ state->mutex };
-            state->wake.wait(lock, [state] { return state->stop || !state->queue.empty(); });
-            if (state->stop) {
-                return;
+void DecodeTextureInBackground(AsyncTextureDecodeState* state, const std::string& path) {
+    std::error_code writeTimeError;
+    const std::filesystem::path fsPath{ path };
+    const std::filesystem::file_time_type writeTime = std::filesystem::last_write_time(fsPath, writeTimeError);
+    std::error_code sizeError;
+    const std::uintmax_t fileSize = std::filesystem::file_size(fsPath, sizeError);
+    if (!writeTimeError && !sizeError && fileSize > 0U && !LookupDecodedTexture(path, writeTime, fileSize)) {
+        if (std::optional<RenderTextureAssetData> decoded = DecodeTextureFile(fsPath); decoded.has_value()) {
+            {
+                std::lock_guard<std::mutex> lock{ DecodedTextureCacheMutex() };
+                ++DecodedTextureDecodeCounter();
             }
-            path = std::move(state->queue.front());
-            state->queue.pop_front();
-        }
-        std::error_code writeTimeError;
-        const std::filesystem::path fsPath{ path };
-        const std::filesystem::file_time_type writeTime = std::filesystem::last_write_time(fsPath, writeTimeError);
-        std::error_code sizeError;
-        const std::uintmax_t fileSize = std::filesystem::file_size(fsPath, sizeError);
-        if (!writeTimeError && !sizeError && fileSize > 0U && !LookupDecodedTexture(path, writeTime, fileSize)) {
-            if (std::optional<RenderTextureAssetData> decoded = DecodeTextureFile(fsPath); decoded.has_value()) {
-                {
-                    std::lock_guard<std::mutex> lock{ DecodedTextureCacheMutex() };
-                    ++DecodedTextureDecodeCounter();
-                }
-                StoreDecodedTexture(
-                    path, writeTime, fileSize, std::make_shared<const RenderTextureAssetData>(*decoded),
-                    RetainedTextureBytes(*decoded));
-            }
-        }
-        {
-            std::lock_guard<std::mutex> lock{ state->mutex };
-            state->pending.erase(path);
+            StoreDecodedTexture(
+                path, writeTime, fileSize, std::make_shared<const RenderTextureAssetData>(*decoded),
+                RetainedTextureBytes(*decoded));
         }
     }
+    std::lock_guard<std::mutex> lock{ state->mutex };
+    state->pending.erase(path);
 }
 
 AsyncTextureDecodeState& AsyncTextureDecode() {
     static AsyncTextureDecodeState* state = [] {
         // Force the decoded-texture cache singletons to exist BEFORE this atexit is registered, so at process
-        // exit the handler (which stops+joins the worker) runs before those cache singletons are torn down -
-        // the worker touches the cache, so it must be stopped first.
+        // exit the handler (which closes the lane: queued decodes are dropped, a running one is waited for) runs
+        // before those cache singletons are torn down - a decode touches the cache, so it must be done first.
         static_cast<void>(DecodedTextureCacheMutex());
-        auto* created = new AsyncTextureDecodeState(); // process-lifetime; the worker is joined by the atexit below
-        created->worker = std::thread(AsyncTextureDecodeWork, created);
+        auto* created = new AsyncTextureDecodeState(); // process-lifetime; the lane is closed by the atexit below
         static_cast<void>(std::atexit([] {
             AsyncTextureDecodeState& live = AsyncTextureDecode();
+            std::unique_ptr<kb::assets::streaming::BackgroundLane> lane;
             {
                 std::lock_guard<std::mutex> lock{ live.mutex };
-                live.stop = true;
+                live.closed = true;
+                lane = std::move(live.lane);
             }
-            live.wake.notify_all();
-            if (live.worker.joinable()) {
-                live.worker.join();
-            }
+            lane.reset();
         }));
         return created;
     }();
@@ -690,10 +752,19 @@ AsyncTextureDecodeState& AsyncTextureDecode() {
 void QueueAsyncTextureDecode(const std::string& key) {
     AsyncTextureDecodeState& state = AsyncTextureDecode();
     std::lock_guard<std::mutex> lock{ state.mutex };
-    if (state.pending.insert(key).second) {
-        state.queue.push_back(key);
-        state.wake.notify_one();
+    if (state.closed || !state.pending.insert(key).second) {
+        return;
     }
+    // The lane, and with it the shared service, is opened by the first decode; until then a process that never
+    // streams a texture starts no thread for it.
+    if (state.lane == nullptr) {
+        state.lane = std::make_unique<kb::assets::streaming::BackgroundLane>(
+            kb::assets::streaming::BackgroundLoadService::Shared());
+    }
+    static_cast<void>(state.lane->Run([statePointer = &state, key](std::string&) {
+        DecodeTextureInBackground(statePointer, key);
+        return true;
+    }));
 }
 
 // Opt-in, off by default. The runtime texture ensurer only streams (async) when this is set - which the editor
@@ -783,6 +854,8 @@ std::optional<RenderTextureAssetData> DecodeRenderTextureToRgba8(const RenderTex
 
     RenderTextureAssetData decoded = asset;
     decoded.gpuBlocks.reset();
+    // Decoded pixels are no longer the baked levels a streamed mip would be appended to.
+    decoded.streaming.reset();
     decoded.mipCount = 1U;
     decoded.rgba8.assign(static_cast<std::size_t>(asset.width) * asset.height * 4U, 0U);
 

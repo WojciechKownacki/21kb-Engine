@@ -774,7 +774,8 @@ void EditorMeshPreviewService::QueueSkeletalEntryLoad(
     try {
         pendingEntries_.push_back(PendingEntry{
             .metadata = metadata,
-            .future = std::async(std::launch::async, [metadata]() -> std::optional<Entry> {
+            .future = kb::assets::streaming::RunForFuture(*background_, kb::assets::streaming::BackgroundJobClass::Long,
+                [metadata]() -> std::optional<Entry> {
                 std::optional<EditorMeshPreviewGeometry> geometry = LoadSkeletalMeshGeometry(metadata);
                 if (!geometry.has_value() || geometry->positions.size() < 3U) return std::nullopt;
                 Entry entry;
@@ -810,7 +811,8 @@ void EditorMeshPreviewService::QueueSkeletalEntryBuild(
     try {
         pendingEntries_.push_back(PendingEntry{
             .metadata = metadata,
-            .future = std::async(std::launch::async, [metadata, mesh = std::move(mesh)]() -> std::optional<Entry> {
+            .future = kb::assets::streaming::RunForFuture(*background_, kb::assets::streaming::BackgroundJobClass::Long,
+                [metadata, mesh = std::move(mesh)]() -> std::optional<Entry> {
                 std::optional<EditorMeshPreviewGeometry> geometry = ExtractSkeletalMeshGeometry(*mesh);
                 if (!geometry.has_value() || geometry->positions.size() < 3U) return std::nullopt;
                 Entry entry;
@@ -855,7 +857,8 @@ bool EditorMeshPreviewService::QueueSkeletalPreview(
             .metadata = metadata,
             .materialContentHash = entry.materialContentHash,
             .settings = settings,
-            .future = std::async(std::launch::async, [geometry = std::move(geometry), settings, eventId, assetId = metadata.id.value]() {
+            .future = kb::assets::streaming::RunForFuture(*background_, kb::assets::streaming::BackgroundJobClass::Long,
+                [geometry = std::move(geometry), settings, eventId, assetId = metadata.id.value]() {
                 const auto renderStart = std::chrono::steady_clock::now();
                 EditorMeshThumbnailImage image = EditorMeshPreviewRasterizer::Render(
                     geometry, kEditorMeshPreviewSize, settings);
@@ -905,6 +908,19 @@ void EditorMeshPreviewService::StoreCompletedPreview(
         .settings = settings,
         .image = std::move(image),
     });
+}
+
+EditorMeshPreviewService::~EditorMeshPreviewService() {
+    for (PendingEntry& pending : pendingEntries_) {
+        if (pending.future.valid()) {
+            pending.future.wait();
+        }
+    }
+    for (PendingPreview& pending : pendingPreviews_) {
+        if (pending.future.valid()) {
+            pending.future.wait();
+        }
+    }
 }
 
 EditorMeshPreviewService& EditorMeshPreviewCache() {

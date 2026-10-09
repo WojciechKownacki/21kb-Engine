@@ -14,29 +14,14 @@ struct ExtensionCategory {
     AssetImportCategory category = AssetImportCategory::Unknown;
 };
 
+// Model and texture extensions are only the ones a runtime decoder reads: the mesh loader
+// (OBJ, glTF, GLB, FBX) and the texture loader (bimg: PNG, JPEG, TGA, BMP, DDS, KTX, HDR,
+// OpenEXR, PSD, GIF). AssetImportCatalogCoverageTests imports a fixture of every one.
 constexpr std::array KnownExtensionsBeforeAudio{
     ExtensionCategory{ ".fbx", AssetImportCategory::Model },
     ExtensionCategory{ ".gltf", AssetImportCategory::Model },
     ExtensionCategory{ ".glb", AssetImportCategory::Model },
     ExtensionCategory{ ".obj", AssetImportCategory::Model },
-    ExtensionCategory{ ".dae", AssetImportCategory::Model },
-    ExtensionCategory{ ".3ds", AssetImportCategory::Model },
-    ExtensionCategory{ ".blend", AssetImportCategory::Model },
-    ExtensionCategory{ ".max", AssetImportCategory::Model },
-    ExtensionCategory{ ".ma", AssetImportCategory::Model },
-    ExtensionCategory{ ".mb", AssetImportCategory::Model },
-    ExtensionCategory{ ".usd", AssetImportCategory::Model },
-    ExtensionCategory{ ".usda", AssetImportCategory::Model },
-    ExtensionCategory{ ".usdc", AssetImportCategory::Model },
-    ExtensionCategory{ ".usdz", AssetImportCategory::Model },
-    ExtensionCategory{ ".abc", AssetImportCategory::Model },
-    ExtensionCategory{ ".stl", AssetImportCategory::Model },
-    ExtensionCategory{ ".ply", AssetImportCategory::Model },
-    ExtensionCategory{ ".x", AssetImportCategory::Model },
-    ExtensionCategory{ ".lwo", AssetImportCategory::Model },
-    ExtensionCategory{ ".c4d", AssetImportCategory::Model },
-    ExtensionCategory{ ".ase", AssetImportCategory::Model },
-    ExtensionCategory{ ".smd", AssetImportCategory::Model },
     ExtensionCategory{ ".png", AssetImportCategory::Texture },
     ExtensionCategory{ ".jpg", AssetImportCategory::Texture },
     ExtensionCategory{ ".jpeg", AssetImportCategory::Texture },
@@ -46,14 +31,7 @@ constexpr std::array KnownExtensionsBeforeAudio{
     ExtensionCategory{ ".hdr", AssetImportCategory::Texture },
     ExtensionCategory{ ".exr", AssetImportCategory::Texture },
     ExtensionCategory{ ".ktx", AssetImportCategory::Texture },
-    ExtensionCategory{ ".ktx2", AssetImportCategory::Texture },
-    ExtensionCategory{ ".basis", AssetImportCategory::Texture },
-    ExtensionCategory{ ".webp", AssetImportCategory::Texture },
-    ExtensionCategory{ ".tif", AssetImportCategory::Texture },
-    ExtensionCategory{ ".tiff", AssetImportCategory::Texture },
     ExtensionCategory{ ".psd", AssetImportCategory::Texture },
-    ExtensionCategory{ ".svg", AssetImportCategory::Texture },
-    ExtensionCategory{ ".ico", AssetImportCategory::Texture },
     ExtensionCategory{ ".gif", AssetImportCategory::Texture },
 };
 

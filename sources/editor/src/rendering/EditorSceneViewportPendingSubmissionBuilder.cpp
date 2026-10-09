@@ -117,6 +117,8 @@ render::RenderSceneSubmitDesc EditorSceneBgfxViewport::PendingSubmissionBuilder:
             .clearTarget = clearTarget,
         },
         .cameraOverride = present.settings.cameraOverride,
+        .cameraOverrideEye = present.settings.cameraOverrideEye,
+        .overlayOrigin = present.settings.overlayOrigin,
         .postProcessSettings = present.settings.postProcessSettings,
         .lightingConfig = present.settings.lightingConfig,
         .materialGraphContext = present.settings.materialGraphContext,

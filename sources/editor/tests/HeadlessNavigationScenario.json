@@ -1,0 +1,47 @@
+{
+  "schema": "21kb.editor-automation/v1",
+  "steps": [
+    { "op": "new_scene" },
+    {
+      "op": "write_file",
+      "path": "Assets/Meshes/Plate.obj",
+      "content": "v -6 0 -6\nv 6 0 -6\nv 6 0 6\nv -6 0 6\nvn 0 1 0\nusemtl stone\nf 1//1 4//1 3//1\nf 1//1 3//1 2//1\n"
+    },
+    { "op": "discover_assets" },
+    { "op": "create_entity", "id": "floor", "name": "Floor" },
+    { "op": "set_entity_position", "entity": "floor", "x": 0, "y": -0.5, "z": 0 },
+    { "op": "add_component", "entity": "floor", "component": "Collider" },
+    { "op": "set_property", "entity": "floor", "component": "Collider", "property": "boxSize.x", "value": 20 },
+    { "op": "set_property", "entity": "floor", "component": "Collider", "property": "boxSize.z", "value": 20 },
+    { "op": "create_mesh_entity", "id": "plate", "asset": "/Game/Meshes/Plate.obj" },
+    { "op": "set_entity_position", "entity": "plate", "x": 0, "y": 1, "z": 20 },
+    { "op": "create_entity", "id": "jump", "name": "Jump" },
+    { "op": "set_entity_position", "entity": "jump", "x": 0, "y": 0, "z": 9 },
+    { "op": "add_component", "entity": "jump", "component": "NavLink" },
+    { "op": "set_property", "entity": "jump", "component": "NavLink", "property": "end.y", "value": 1 },
+    { "op": "set_property", "entity": "jump", "component": "NavLink", "property": "end.z", "value": 6 },
+    { "op": "assert_property", "entity": "jump", "component": "NavLink", "property": "kind", "value": 0 },
+    { "op": "save_scene", "path": "Assets/Scenes/Nav.21kbscene" },
+
+    { "op": "navmesh_bake" },
+    { "op": "assert_file", "path": "Assets/Scenes/Nav.21kbnavmesh", "min_size": 64 },
+    { "op": "assert_navmesh", "path": "Assets/Scenes/Nav.21kbscene", "min_tiles": 2, "profiles": 1, "min_area": 400, "max_area": 520, "min_drawn_triangles": 4 },
+    { "op": "assert_navmesh_matches_tools", "path": "Assets/Scenes/Nav.21kbscene" },
+    { "op": "capture_scene_viewport", "checkpoint": "navmesh-shown" },
+    { "op": "navmesh_set_visible", "visible": false },
+    { "op": "capture_scene_viewport", "checkpoint": "navmesh-hidden" },
+    { "op": "assert_capture_color_difference", "with": "navmesh-shown", "without": "navmesh-hidden", "color": [35, 127, 167], "tolerance": 40, "min_pixels": 100 },
+    { "op": "navmesh_set_visible", "visible": true },
+
+    { "op": "create_entity", "id": "agent", "name": "Agent" },
+    { "op": "set_entity_position", "entity": "agent", "x": 0, "y": 0, "z": -6 },
+    { "op": "add_component", "entity": "agent", "component": "NavAgent" },
+    { "op": "set_property", "entity": "agent", "component": "NavAgent", "property": "destination.y", "value": 1 },
+    { "op": "set_property", "entity": "agent", "component": "NavAgent", "property": "destination.z", "value": 20 },
+    { "op": "save_scene" },
+    { "op": "play" },
+    { "op": "assert_agent_reaches", "entity": "agent", "x": 0, "z": 20, "tolerance": 0.3, "timeout_ms": 30000 },
+    { "op": "stop" },
+    { "op": "assert_no_errors" }
+  ]
+}

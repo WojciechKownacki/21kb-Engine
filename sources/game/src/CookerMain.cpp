@@ -1,7 +1,9 @@
 #include "ProjectCooker.hpp"
 
+#include <charconv>
 #include <filesystem>
 #include <exception>
+#include <system_error>
 #include <iostream>
 #include <string>
 #include <string_view>
@@ -13,7 +15,8 @@ void PrintUsage() {
                  "--target <profile> --output <file.kbpack> "
                  "[--shaderc <executable>] "
                  "[--engine-root <directory>] [--cache <directory>] "
-                 "[--runtime-modules-output <directory>] [--reuse-pack <file.kbpack>]\n";
+                 "[--runtime-modules-output <directory>] [--reuse-pack <file.kbpack>] "
+                 "[--pack-compression-level <0-19>]\n";
 }
 
 [[nodiscard]] bool ReadValue(int argc, char** argv, int& index, std::string& out) {
@@ -47,6 +50,14 @@ int main(int argc, char** argv) {
             request.runtimeModulesOutputDirectory = std::filesystem::path{ value };
         } else if (option == "--reuse-pack" && ReadValue(argc, argv, index, value)) {
             request.reusePackPath = std::filesystem::path{ value };
+        } else if (option == "--pack-compression-level" && ReadValue(argc, argv, index, value)) {
+            int level = -1;
+            const auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), level);
+            if (error != std::errc{} || end != value.data() + value.size() || level < 0 || level > 19) {
+                PrintUsage();
+                return 2;
+            }
+            request.packCompressionLevel = level;
         } else {
             PrintUsage();
             return 2;
