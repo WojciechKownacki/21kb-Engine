@@ -407,6 +407,14 @@ void ActivatePanel(
             case 8:
                 changed = sceneContext.ToggleSelectedObjectAlwaysLoaded();
                 break;
+            case 9:
+                changed = sceneContext.BakeNavigation();
+                break;
+            case 10:
+                sceneContext.SetNavigationMeshVisible(!sceneContext.Navigation().Visible());
+                sceneContext.Console().Info("Navigation", sceneContext.Navigation().Visible() ? "Navigation mesh shown." : "Navigation mesh hidden.");
+                changed = true;
+                break;
             default:
                 break;
             }

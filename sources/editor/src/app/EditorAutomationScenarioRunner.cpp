@@ -81,6 +81,11 @@
 #include "engine/visual/VisualGraphDebugSession.hpp"
 #include "engine/world/WorldCellIndex.hpp"
 #include "engine/world/WorldPartitionRuntime.hpp"
+#include "engine/navigation/NavGeometryCollector.hpp"
+#include "engine/navigation/NavMeshAsset.hpp"
+#include "engine/scene/SceneNavigation.hpp"
+#include "engine/scene/SceneTransforms.hpp"
+#include "kb/render/world/NavMeshBakeTool.hpp"
 #include "kb/render/world/WorldBuildTool.hpp"
 #include "project/EditorProjectPaths.hpp"
 #include "scene/EditorPluginCatalog.hpp"
@@ -969,6 +974,100 @@ ReadScriptValue(
     return std::nullopt;
 }
 
+// Navigation operations: baking a scene's navigation mesh, its debug view and agents walking on it.
+[[nodiscard]] std::optional<StepOutcome> ExecuteNavigationStep(
+    ScenarioState& state, const JsonValue& step, std::string_view operation) {
+    std::string error;
+    EditorSceneContext& context = state.context;
+    if (operation == "navmesh_bake") {
+        return StepOutcome{ context.BakeNavigation(), std::to_string(context.Navigation().TriangleCount()) + " triangle(s) shown" };
+    }
+    if (operation == "navmesh_set_visible") {
+        const auto visible = BoolMember(step, "visible", error);
+        if (!visible) return StepOutcome{ false, error };
+        context.SetNavigationMeshVisible(*visible);
+        return StepOutcome{ context.Navigation().Visible() == *visible, *visible ? "navigation mesh shown" : "navigation mesh hidden" };
+    }
+    if (operation == "assert_navmesh") {
+        // `path` names the scene; its navigation mesh lies beside it.
+        const auto path = StringMember(step, "path", error);
+        if (!path) return StepOutcome{ false, error };
+        const auto resolved = ResolveProjectPath(*path, error);
+        if (!resolved) return StepOutcome{ false, error };
+        const std::filesystem::path navPath = resolved->extension() == kb::navigation::NavMeshAsset::Extension
+            ? *resolved : kb::navigation::SceneNavMeshPath(*resolved);
+        const kb::navigation::NavMeshAssetReadResult read = kb::navigation::NavMeshAssetIO::Read(navPath);
+        if (!read.succeeded) return StepOutcome{ false, read.error };
+        const auto asset = std::make_shared<const kb::navigation::NavMeshAsset>(read.asset);
+        const std::vector<kb::math::DVec3> triangles = kb::navigation::NavMeshAssetTriangles(asset, 0U);
+        double area = 0.0;
+        for (std::size_t index = 0U; index + 2U < triangles.size(); index += 3U) {
+            const kb::math::DVec3 a = triangles[index + 1U] - triangles[index];
+            const kb::math::DVec3 b = triangles[index + 2U] - triangles[index];
+            area += std::fabs(a.x * b.z - a.z * b.x) * 0.5;
+        }
+        const std::size_t drawn = context.Navigation().TriangleCount();
+        const auto minTiles = UInt32Member(step, "min_tiles", error, false);
+        const auto profiles = UInt32Member(step, "profiles", error, false);
+        const auto minArea = NumberMember(step, "min_area", error, false);
+        const auto maxArea = NumberMember(step, "max_area", error, false);
+        const auto minDrawn = UInt32Member(step, "min_drawn_triangles", error, false);
+        if (!error.empty()) return StepOutcome{ false, error };
+        const bool matched = (!minTiles || read.asset.tiles.size() >= *minTiles) && (!profiles || read.asset.settings.profiles.size() == *profiles) &&
+            (!minArea || area >= *minArea) && (!maxArea || area <= *maxArea) && (!minDrawn || drawn >= *minDrawn);
+        return StepOutcome{ matched, "tiles=" + std::to_string(read.asset.tiles.size()) + " profiles=" + std::to_string(read.asset.settings.profiles.size()) +
+            " area=" + std::to_string(area) + " drawn_triangles=" + std::to_string(drawn) };
+    }
+    if (operation == "assert_navmesh_matches_tools") {
+        // Bakes the scene again from a copy of the project's content, the way kb_cli does, and
+        // requires the same bytes as the editor's navigation mesh.
+        const auto path = StringMember(step, "path", error);
+        if (!path) return StepOutcome{ false, error };
+        const auto resolved = ResolveProjectPath(*path, error);
+        if (!resolved) return StepOutcome{ false, error };
+        const std::filesystem::path assets = EditorProjectPaths::AssetsRoot();
+        const std::filesystem::path relative = resolved->lexically_relative(assets);
+        if (relative.empty() || *relative.begin() == "..") return StepOutcome{ false, "the scene is not inside the project's content" };
+        const std::filesystem::path copy = state.automation.ArtifactRoot() / "navmesh-bake-tools";
+        std::error_code code;
+        std::filesystem::remove_all(copy, code);
+        std::filesystem::copy(assets, copy, std::filesystem::copy_options::recursive, code);
+        if (code) return StepOutcome{ false, "project content could not be copied: " + code.message() };
+        const kb::navigation::NavSceneBakeResult baked = kb::render::BakeSceneNavMeshFromContentRoot(copy, copy / relative,
+            kb::navigation::SceneNavMeshSettings(*resolved));
+        if (!baked.succeeded) return StepOutcome{ false, baked.error };
+        const std::vector<std::uint8_t> tool = kb::navigation::NavMeshAssetIO::Serialize(baked.asset);
+        std::ifstream input{ kb::navigation::SceneNavMeshPath(*resolved), std::ios::binary };
+        const std::vector<std::uint8_t> editor{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+        return StepOutcome{ !tool.empty() && tool == editor, std::to_string(editor.size()) + " byte(s), " + (tool == editor ? "identical" : "different") };
+    }
+    if (operation == "assert_agent_reaches") {
+        const auto alias = StringMember(step, "entity", error);
+        const auto x = NumberMember(step, "x", error);
+        const auto z = NumberMember(step, "z", error);
+        const double tolerance = NumberMember(step, "tolerance", error, false).value_or(0.25);
+        const double timeout = NumberMember(step, "timeout_ms", error, false).value_or(10000.0);
+        if (!alias || !x || !z || !error.empty()) return StepOutcome{ false, error };
+        const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
+        if (!context.Scene().Entities().IsAlive(entity)) return StepOutcome{ false, "entity alias is not alive" };
+        const auto distance = [&] {
+            const kb::math::DVec3 position = context.Scene().Transforms().WorldTranslation(entity);
+            return std::hypot(position.x - *x, position.z - *z);
+        };
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::duration<double, std::milli>(timeout);
+        while (distance() > tolerance && state.playMode.IsPlaying() && std::chrono::steady_clock::now() < deadline) {
+            if (!state.automation.StepRuntime(1U, 1.0F / 60.0F, false, false, false)) {
+                return StepOutcome{ false, "Play mode could not advance" };
+            }
+        }
+        const kb::scene::NavAgent* agent = context.Scene().Components().NavAgents().TryGet(entity);
+        return StepOutcome{ distance() <= tolerance, "distance=" + std::to_string(distance()) + " status=" +
+            std::to_string(agent != nullptr ? static_cast<int>(agent->pathStatus) : -1) + " navmesh_tiles=" +
+            std::to_string(context.Scene().Navigation().NavMeshTileCount()) };
+    }
+    return std::nullopt;
+}
+
 [[nodiscard]] StepOutcome ExecuteStep(
     ScenarioState& state, const JsonValue& step) {
     std::string error;
@@ -979,6 +1078,9 @@ ReadScriptValue(
     if (!operation.has_value()) return { false, error };
     if (std::optional<StepOutcome> world = ExecuteWorldStep(state, step, *operation)) {
         return *world;
+    }
+    if (std::optional<StepOutcome> navigation = ExecuteNavigationStep(state, step, *operation)) {
+        return *navigation;
     }
 
     if (*operation == "verify_prefab_round_trip") {

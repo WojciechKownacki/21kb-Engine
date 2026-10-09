@@ -599,6 +599,31 @@ void AppendWorldPartitionGrid(
     }
 }
 
+// Outlines the polygons of the baked navigation mesh, relative to the viewport origin.
+void AppendNavigationMesh(
+    const EditorSceneContext& sceneContext,
+    const kb::math::DVec3& origin,
+    std::vector<kb::render::PhysicsDebugLine>& lines) {
+    if (!sceneContext.Navigation().Visible()) {
+        return;
+    }
+    const auto relative = [&origin](const std::array<float, 3U>& point) {
+        return std::array<float, 3U>{
+            static_cast<float>(static_cast<double>(point[0]) - origin.x),
+            static_cast<float>(static_cast<double>(point[1]) - origin.y),
+            static_cast<float>(static_cast<double>(point[2]) - origin.z),
+        };
+    };
+    for (const EditorWorldGridLine& line : sceneContext.Navigation().Lines()) {
+        lines.push_back(kb::render::PhysicsDebugLine{
+            .from = relative(line.from),
+            .to = relative(line.to),
+            .color = line.color,
+            .alpha = 0.9F,
+        });
+    }
+}
+
 [[nodiscard]] std::vector<kb::render::PhysicsDebugLine> BuildPhysicsDebugLines(const EditorSceneContext& sceneContext, const kb::math::DVec3& origin) {
     std::vector<kb::render::PhysicsDebugLine> lines;
     if (kb::scene::PhysicsDebugDraw::IsEnabled(sceneContext.Scene())) {
@@ -616,6 +641,7 @@ void AppendWorldPartitionGrid(
     }
     AppendTerrainBrushRing(sceneContext, origin, lines);
     AppendWorldPartitionGrid(sceneContext, origin, lines);
+    AppendNavigationMesh(sceneContext, origin, lines);
     return lines;
 }
 
