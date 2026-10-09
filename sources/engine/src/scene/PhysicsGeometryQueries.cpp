@@ -129,6 +129,10 @@ using kb::math::Rotate;
 struct RaycastAllVisitorContext {
     Scene* scene = nullptr;
     kb::math::DVec3 origin{};
+    // Set when the ray starts near the world origin in a scene without double-precision translations: colliders
+    // are then tested in float world space, as they always were.
+    bool floatWorld = false;
+    Vec3 floatOrigin{};
     Vec3 direction{};
     float maxDistance = 0.0F;
     std::uint32_t layerMask = kPhysicsAllLayers;
@@ -179,13 +183,19 @@ void RaycastAllVisitor(SceneEntity entity, const TransformComponent& transform, 
     if (collider == nullptr || (collider->layer & context->layerMask) == 0U) {
         return;
     }
-    // The collider is tested relative to the ray origin, so the test keeps float precision far from the world origin.
-    TransformComponent relative = transform;
-    relative.worldPosition = kb::math::RelativeTo(context->scene->Transforms().WorldTranslation(entity, transform), context->origin);
     float distance = 0.0F;
     Vec3 normal{};
-    if (!IntersectRayCollider(Vec3{}, context->direction, context->maxDistance, *collider, relative, distance, normal)) {
-        return;
+    if (context->floatWorld) {
+        if (!IntersectRayCollider(context->floatOrigin, context->direction, context->maxDistance, *collider, transform, distance, normal)) {
+            return;
+        }
+    } else {
+        // The collider is tested relative to the ray origin, so the test keeps float precision far from the world origin.
+        TransformComponent relative = transform;
+        relative.worldPosition = kb::math::RelativeTo(context->scene->Transforms().WorldTranslation(entity, transform), context->origin);
+        if (!IntersectRayCollider(Vec3{}, context->direction, context->maxDistance, *collider, relative, distance, normal)) {
+            return;
+        }
     }
     const kb::math::DVec3 point = context->origin + context->direction * distance;
     // Maintain the closest Capacity() hits while visiting. Transform
@@ -195,7 +205,7 @@ void RaycastAllVisitor(SceneEntity entity, const TransformComponent& transform, 
         .hit = true,
         .entity = entity,
         .distance = distance,
-        .point = kb::math::ToVec3(point),
+        .point = context->floatWorld ? context->floatOrigin + context->direction * distance : kb::math::ToVec3(point),
         .normal = normal,
         .worldPoint = point,
     });
@@ -281,15 +291,23 @@ void RaycastAllNonAllocPrecise(Scene& scene, const kb::math::DVec3& origin, Vec3
     if (kb::math::Length(normalizedDirection) <= 0.000001F || maxDistance <= 0.0F) {
         return;
     }
+    scene.Runtime().SynchronizeTransforms();
+    // Below this distance from the world origin a float ray origin is finer than a quarter of a millimetre.
+    constexpr double kFloatWorldLimit = 2048.0;
+    const Vec3 floatOrigin = kb::math::ToVec3(origin);
+    const bool floatWorld = kb::math::ToDVec3(floatOrigin) == origin && std::abs(origin.x) < kFloatWorldLimit &&
+        std::abs(origin.y) < kFloatWorldLimit && std::abs(origin.z) < kFloatWorldLimit &&
+        !scene.Transforms().HasDoublePrecisionTranslations();
     RaycastAllVisitorContext context{
         .scene = &scene,
         .origin = origin,
+        .floatWorld = floatWorld,
+        .floatOrigin = floatOrigin,
         .direction = normalizedDirection,
         .maxDistance = maxDistance,
         .layerMask = layerMask,
         .results = &results,
     };
-    scene.Runtime().SynchronizeTransforms();
     scene.Transforms().ForEach(&RaycastAllVisitor, &context);
     // InsertBoundedCastResult keeps the caller-owned buffer sorted without
     // temporary storage or a post-query allocation.
