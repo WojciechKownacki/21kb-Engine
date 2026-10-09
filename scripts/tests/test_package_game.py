@@ -303,11 +303,18 @@ class PackageGameTests(unittest.TestCase):
             ], rules)
             self.assertEqual(4, len(pack_set.new_packs))
 
-    def test_world_region_chunks_are_windows_only_and_not_patches(self) -> None:
+    def test_world_region_chunks_need_a_signed_release_and_no_patch(self) -> None:
         base = dict(pack_compression_level=9, pack_chunk=[], pack_chunk_world_regions=True, patch_from=None,
                     patch_level=None, encrypt_pack=False)
-        with self.assertRaises(package_game.PackagingError):
-            package_game._validate_content_packaging(argparse.Namespace(target="Linux.x64", **base))
+        for target in ("Windows.x64", "Linux.x64"):
+            package_game._validate_content_packaging(argparse.Namespace(target=target, **base))
+        for target in ("Android.ASTC.arm64", "WebGL.wasm32"):
+            with self.assertRaises(package_game.PackagingError):
+                package_game._validate_content_packaging(argparse.Namespace(target=target, **base))
+        with tempfile.TemporaryDirectory() as previous:
+            with self.assertRaises(package_game.PackagingError):
+                package_game._validate_content_packaging(argparse.Namespace(
+                    target="Windows.x64", **{**base, "patch_from": Path(previous), "patch_level": 2}))
 
     def test_windows_cook_requests_custom_module_staging(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_text:
