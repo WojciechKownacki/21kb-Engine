@@ -44,10 +44,21 @@ Commands:
                  content-key --out <file>
                  anchor --key <key file> --product <id> [--content-key <file>]
                         --out <file>
-  pack         Sign (and optionally encrypt) an asset pack, or verify one.
+  pack         Sign (and optionally encrypt) an asset pack, or verify one;
+               inspect, recompress, split and patch packs and pack sets.
                  sign --key <key file> [--content-key <file>] <pack.kbpack>
                  verify [--anchor <file> | --public-key <hex>
                         [--content-key <file>]] <pack.kbpack>
+                 info <pack.kbpack>
+                 compress [--level <0-19>] <input.kbpack> <output.kbpack>
+                 split --base <base.kbpack> --chunk <label>=<prefix>[,...]
+                       [--chunk ...] [--level <0-19>] [--index <file>]
+                       <cooked.kbpack>
+                 patch --current <Game.kbpackset | Game.kbpack>
+                       --patch-level <n> --output <patch.kbpack>
+                       [--label <label>] [--level <0-19>] <new-cook.kbpack>
+                 set-verify [--anchor <file> | --public-key <hex>]
+                            <Game.kbpackset>
   release      Sign the manifest of a finished release directory, or verify one
                against the trust anchor of the player it ships.
                  sign --key <key file> --dir <dir> --product <id>

@@ -41,6 +41,16 @@ std::optional<std::string> ArgumentList::Option(std::string_view name) const {
     return std::nullopt;
 }
 
+std::vector<std::string> ArgumentList::Options(std::string_view name) const {
+    std::vector<std::string> values;
+    for (const auto& [key, value] : options_) {
+        if (key == name) {
+            values.push_back(value);
+        }
+    }
+    return values;
+}
+
 bool ArgumentList::Flag(std::string_view name) const noexcept {
     return std::any_of(flags_.begin(), flags_.end(), [name](const std::string& flag) {
         return flag == name;

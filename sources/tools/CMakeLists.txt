@@ -3,6 +3,7 @@ add_library(kb_cli_core STATIC
     src/CliCommon.cpp
     src/CliImportCommand.cpp
     src/CliMcpCommand.cpp
+    src/CliPackSetCommands.cpp
     src/CliRunCommand.cpp
     src/CliSceneCommands.cpp
     src/CliSecurityCommands.cpp

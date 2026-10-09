@@ -31,6 +31,8 @@ public:
     ArgumentList(std::span<const std::string> arguments, std::span<const std::string_view> flagNames = {});
 
     [[nodiscard]] std::optional<std::string> Option(std::string_view name) const;
+    // Every value of an option that may be given more than once, in command-line order.
+    [[nodiscard]] std::vector<std::string> Options(std::string_view name) const;
     [[nodiscard]] bool Flag(std::string_view name) const noexcept;
     [[nodiscard]] const std::vector<std::string>& Positionals() const noexcept;
     [[nodiscard]] const std::vector<std::string>& Errors() const noexcept;

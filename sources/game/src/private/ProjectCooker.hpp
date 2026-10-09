@@ -18,6 +18,8 @@ struct ProjectCookRequest {
     // places this directory below the sealed runtime root after a successful cook.
     std::filesystem::path runtimeModulesOutputDirectory;
     std::filesystem::path reusePackPath;
+    // zstd level for the pack's blocks, 1..19; 0 stores every block as baked.
+    int packCompressionLevel = 0;
 };
 
 struct ProjectCookResult {

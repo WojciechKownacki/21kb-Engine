@@ -2322,7 +2322,12 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
         return Failure(std::move(error));
     }
     const ScopedCookPackCandidate packCandidateCleanup{ packCandidatePath };
-    asset_bake::AssetPackWriter writer{ packCandidatePath, profile };
+    asset_bake::AssetPackWriterOptions packOptions{};
+    if (request.packCompressionLevel != 0) {
+        packOptions.compression = asset_bake::AssetPackBlockCompression::Zstd;
+        packOptions.compressionLevel = request.packCompressionLevel;
+    }
+    asset_bake::AssetPackWriter writer{ packCandidatePath, profile, packOptions };
     asset_bake::RuntimeAssetManifest manifest{};
     manifest.targetProfileId = std::string{ profile.identifier };
     manifest.targetProfileHash = asset_bake::BakeTargetProfileFingerprint(profile);

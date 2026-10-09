@@ -3,7 +3,9 @@
 
 #include "engine/assets/AssetId.hpp"
 #include "engine/assets/AssetMetadata.hpp"
+#include "engine/assets/bake/AssetPackReader.hpp"
 #include "engine/assets/bake/AssetPackWriter.hpp"
+#include "engine/assets/bake/RuntimeAssetManifest.hpp"
 #include "engine/assets/bake/BakeTargetProfile.hpp"
 #include "engine/input/InputAssetIO.hpp"
 #include "engine/input/InputKey.hpp"
@@ -2299,6 +2301,160 @@ void WriteSamplePack(const std::filesystem::path& path) {
         "kb_cli release test pack could not be written");
 }
 
+// A complete runtime pack: a start map, a shared prop and one prop per world cell, each a source
+// file, plus the runtime manifest naming them.
+void WriteRuntimeCook(const std::filesystem::path& path, std::string_view propText, bool withLamp) {
+    namespace bake = kb::assets::bake;
+    const bake::BakeTargetProfile profile = bake::WindowsX64BakeTargetProfile();
+    bake::AssetPackWriter writer{ path, profile };
+    const auto store = [&](std::string_view bytes, std::string_view type, std::string_view salt) {
+        std::vector<std::uint8_t> payload;
+        if (type == bake::kSourceAssetTypeId) {
+            Require(bake::EncodeRuntimeSourceBlob(
+                        std::span{ reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size() }, payload),
+                "kb_cli pack set source could not be encoded");
+        } else {
+            payload.assign(bytes.begin(), bytes.end());
+        }
+        bake::AssetBakeKey key{};
+        key.sourceContentHash = bake::HashBakeBytes(payload) | 1U;
+        key.bakerId = "CliPackSet";
+        key.bakerVersion = "1";
+        key.targetProfileId = std::string{ profile.identifier };
+        key.targetProfileHash = bake::BakeTargetProfileFingerprint(profile);
+        key.settingsHash = bake::HashBakeBytes(std::span{ reinterpret_cast<const std::uint8_t*>(salt.data()), salt.size() }) | 1U;
+        Require(writer.BeginAsset({ .key = key, .assetTypeId = std::string{ type } }) == bake::BakedAssetSinkStatus::Success &&
+                writer.WritePrimaryBlock(payload, profile.packageBlockAlignmentBytes) == bake::BakedAssetSinkStatus::Success &&
+                writer.CommitAsset() == bake::BakedAssetSinkStatus::Success,
+            "kb_cli pack set artifact could not be stored");
+        return key.Digest();
+    };
+    bake::RuntimeAssetManifest manifest{};
+    manifest.targetProfileId = std::string{ profile.identifier };
+    manifest.targetProfileHash = bake::BakeTargetProfileFingerprint(profile);
+    manifest.descriptor.targetPlatforms = { "Windows" };
+    manifest.settings.name = "CliPackSet";
+    manifest.settings.defaultMap = "/Game/Maps/Start.21kbscene";
+    const auto addAsset = [&](std::string virtualPath, std::string type, std::string text) {
+        // Text that compresses, as real content does.
+        std::string content;
+        while (content.size() < 4096U) {
+            content += text + '\n';
+        }
+        bake::RuntimeAssetManifestEntry entry{};
+        entry.id = kb::assets::MakeAssetId(virtualPath + ":" + type);
+        entry.type = type;
+        entry.name = std::filesystem::path{ virtualPath }.stem().string();
+        entry.virtualPath = virtualPath;
+        entry.sourceExtension = std::filesystem::path{ virtualPath }.extension().string();
+        entry.contentHash = bake::HashBakeBytes(std::span{ reinterpret_cast<const std::uint8_t*>(content.data()), content.size() });
+        entry.artifacts.push_back({ .digest = store(content, bake::kSourceAssetTypeId, virtualPath),
+            .encoding = bake::RuntimeArtifactEncoding::SourceBytes });
+        manifest.assets.push_back(std::move(entry));
+    };
+    addAsset("/Game/Maps/Start.21kbscene", "Scene", "start map");
+    addAsset("/Game/Props/Rock.kbdata", "DataTable", std::string{ propText });
+    addAsset("/Game/Cells/0_0/Tree.kbdata", "DataTable", "tree in cell 0 0");
+    addAsset("/Game/Cells/0_1/Bush.kbdata", "DataTable", "bush in cell 0 1");
+    if (withLamp) {
+        addAsset("/Game/Props/Lamp.kbdata", "DataTable", "lamp");
+    }
+    std::vector<std::uint8_t> manifestBytes;
+    Require(bake::EncodeRuntimeAssetManifest(manifest, manifestBytes) == bake::RuntimeAssetManifestStatus::Success,
+        "kb_cli pack set manifest could not be encoded");
+    static_cast<void>(store(std::string_view{ reinterpret_cast<const char*>(manifestBytes.data()), manifestBytes.size() },
+        bake::kRuntimeManifestAssetTypeId, "manifest"));
+    Require(writer.Finish() == bake::BakedAssetSinkStatus::Success, "kb_cli pack set cook could not be published");
+}
+
+// pack info, compress, split, patch and set-verify: a cooked pack splits into a base and cell
+// chunks with an index, a patch cut from the next cook carries the change, and the whole sealed
+// set verifies against the anchor while a set with an unsigned or tampered member does not.
+void RunPackSetCommandTests() {
+    const std::filesystem::path root = ReleaseTestRoot() / "PackSet";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root / "Out", error);
+    Require(!error, "kb_cli pack set test root could not be prepared");
+    const std::string cook = (root / "cook.kbpack").string();
+    WriteRuntimeCook(cook, "rock", false);
+
+    const CommandRun info = Run(&kb::cli::RunPackCommand, { "info", cook });
+    Require(info.exitCode == 0 && Contains(info.output, "format 3") && Contains(info.output, "role base") &&
+            Contains(info.output, "compressed-blocks 0"),
+        "pack info did not describe an uncompressed base pack");
+    const std::string compressed = (root / "cook.zstd.kbpack").string();
+    const CommandRun compressRun = Run(&kb::cli::RunPackCommand, { "compress", "--level", "5", cook, compressed });
+    Require(compressRun.exitCode == 0 && Contains(Run(&kb::cli::RunPackCommand, { "info", compressed }).output, "role base") &&
+            !Contains(Run(&kb::cli::RunPackCommand, { "info", compressed }).output, "compressed-blocks 0"),
+        "pack compress did not compress the pack");
+    Require(Run(&kb::cli::RunPackCommand, { "compress", "--level", "40", cook, compressed + ".x" }).exitCode == 1,
+        "pack compress accepted an impossible level");
+
+    const std::string base = (root / "Out" / "Game.kbpack").string();
+    const std::string index = (root / "Out" / "Game.kbpackset").string();
+    const CommandRun split = Run(&kb::cli::RunPackCommand,
+        { "split", "--base", base, "--chunk", "cell_0_0=/Game/Cells/0_0/", "--chunk", "cell_0_1=/Game/Cells/0_1/",
+          "--index", index, cook });
+    Require(split.exitCode == 0 && std::filesystem::exists(root / "Out" / "Game.cell_0_0.kbpack") &&
+            std::filesystem::exists(root / "Out" / "Game.cell_0_1.kbpack"),
+        ("pack split did not write the base and the chunks: " + split.output).c_str());
+    Require(Contains(Run(&kb::cli::RunPackCommand, { "info", (root / "Out" / "Game.cell_0_1.kbpack").string() }).output,
+                "role chunk"),
+        "a split chunk is not a chunk pack");
+
+    const std::string next = (root / "next.kbpack").string();
+    WriteRuntimeCook(next, "rock, fixed", true);
+    const std::string patch = (root / "Out" / "Game.patch-0001.kbpack").string();
+    const CommandRun patchRun = Run(&kb::cli::RunPackCommand,
+        { "patch", "--current", index, "--patch-level", "1", "--label", "patch-0001", "--output", patch, next });
+    Require(patchRun.exitCode == 0 && Contains(patchRun.output, "1 changed, 1 added"),
+        ("pack patch did not carry exactly the change: " + patchRun.output).c_str());
+    Require(Run(&kb::cli::RunPackCommand,
+                { "patch", "--current", index, "--patch-level", "1", "--output", patch + ".again", cook }).exitCode == 1,
+        "pack patch wrote a patch that changes nothing");
+    {
+        std::ofstream output{ index, std::ios::binary | std::ios::app };
+        output << "patch 1 patch-0001 Game.patch-0001.kbpack\n";
+    }
+
+    const std::string key = (root / "Keys" / "set.kbkey").string();
+    const std::string anchor = (root / "anchor.bin").string();
+    Require(Run(&kb::cli::RunKeysCommand, { "generate", "--out", key }).exitCode == 0 &&
+            Run(&kb::cli::RunKeysCommand, { "anchor", "--key", key, "--product", "Example.Set", "--out", anchor }).exitCode == 0,
+        "the pack set release key could not be prepared");
+    const CommandRun unsignedSet = Run(&kb::cli::RunPackCommand, { "set-verify", "--anchor", anchor, index });
+    Require(unsignedSet.exitCode == 1 && Contains(unsignedSet.output, "Unsigned"), "set-verify accepted unsigned packs");
+    for (const char* member : { "Game.kbpack", "Game.cell_0_0.kbpack", "Game.cell_0_1.kbpack", "Game.patch-0001.kbpack" }) {
+        Require(Run(&kb::cli::RunPackCommand, { "sign", "--key", key, (root / "Out" / member).string() }).exitCode == 0,
+            "a pack set member could not be sealed");
+    }
+    const CommandRun verified = Run(&kb::cli::RunPackCommand, { "set-verify", "--anchor", anchor, index });
+    Require(verified.exitCode == 0 && Contains(verified.output, "4 packs") && Contains(verified.output, "5 assets"),
+        ("set-verify refused an intact sealed pack set: " + verified.output).c_str());
+
+    std::vector<std::uint8_t> bytes;
+    {
+        std::ifstream input{ patch, std::ios::binary };
+        bytes.assign(std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{});
+    }
+    {
+        // A byte inside a block: padding between blocks is covered by the release manifest's file
+        // hash, not by the pack seal.
+        kb::assets::bake::AssetPackReader reader;
+        Require(reader.Mount(patch) == kb::assets::bake::AssetPackReadStatus::Success, "the sealed patch did not mount");
+        const kb::assets::bake::AssetPackBlockEntry& block = reader.Artifacts().front().blocks.front();
+        bytes[static_cast<std::size_t>(block.offset + block.storedBytes / 2U)] ^= 0x01U;
+    }
+    {
+        std::ofstream output{ patch, std::ios::binary | std::ios::trunc };
+        output.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    }
+    Require(Run(&kb::cli::RunPackCommand, { "set-verify", "--anchor", anchor, index }).exitCode == 1,
+        "set-verify accepted a tampered patch");
+    std::filesystem::remove_all(root, error);
+}
+
 // A Linux player as packaging leaves it: a 64-bit ELF image whose ".kb_trust_anchor" section is
 // the 1024-byte slot holding `anchor` (nothing for an unfilled slot).
 [[nodiscard]] std::vector<std::uint8_t> MakeLinuxPlayer(std::span<const std::uint8_t> anchor) {
@@ -2562,6 +2718,7 @@ int main() {
     RunMcpCommandTests();
     RunKeyAndPackCommandTests();
     RunWorldCommandTests();
+    RunPackSetCommandTests();
     // Keep the production physics fixture on disk after the test process so
     // the built kb_cli executable can be run against it as a separate-process
     // runtime verification.

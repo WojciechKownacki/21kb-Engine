@@ -392,7 +392,22 @@ int RunPackCommand(const ArgumentList& arguments, CommandIo io) {
     if (action == "verify") {
         return RunPackVerify(arguments, io);
     }
-    return Fail(io, "pack expects sign or verify");
+    if (action == "info") {
+        return RunPackInfoCommand(arguments, io);
+    }
+    if (action == "compress") {
+        return RunPackCompressCommand(arguments, io);
+    }
+    if (action == "split") {
+        return RunPackSplitCommand(arguments, io);
+    }
+    if (action == "patch") {
+        return RunPackPatchCommand(arguments, io);
+    }
+    if (action == "set-verify") {
+        return RunPackSetVerifyCommand(arguments, io);
+    }
+    return Fail(io, "pack expects sign, verify, info, compress, split, patch or set-verify");
 }
 
 } // namespace kb::cli

@@ -6,6 +6,7 @@
 #include "engine/assets/bake/AssetPackReader.hpp"
 #include "engine/assets/bake/AssetPackSeal.hpp"
 #include "engine/assets/bake/AssetPackSet.hpp"
+#include "engine/assets/bake/AssetPackTools.hpp"
 #include "engine/assets/bake/AssetPackWriter.hpp"
 #include "engine/assets/bake/BakeTargetProfile.hpp"
 #include "engine/assets/bake/RuntimeAssetManifest.hpp"
@@ -1096,6 +1097,115 @@ void ReleaseManifestBindsEveryPackOfASet() {
     Purge(root);
 }
 
+// Red when: a cooked pack cannot be split into a base and chunk packs that mount as one set with
+// the same content, when a patch cut from a new cook does not carry exactly what changed, or
+// when a patch that does not raise the patch level, or changes nothing, is written.
+void PackToolsSplitRepackAndPatch() {
+    const std::filesystem::path root = Root() / "tools";
+    Purge(root);
+    std::filesystem::create_directories(root);
+    const bake::BakeTargetProfile profile = bake::WindowsX64BakeTargetProfile();
+
+    // One complete cook, uncompressed, as an older cooker wrote it.
+    const std::filesystem::path cook = root / "cook.kbpack";
+    SetPack full{};
+    full.assets = { kStartMap, kRock, kTree, kCellProp };
+    full.auxiliaryFiles = { { "/Game/Config/Balance.ini", "health=100" } };
+    WriteSetPack(cook, full, false);
+
+    bake::AssetPackWriterOptions compressed{};
+    compressed.compression = bake::AssetPackBlockCompression::Zstd;
+    bake::AssetPackToolReport repacked{};
+    std::string error;
+    {
+        const bool succeeded = bake::RepackAssetPack(cook, root / "cook.zstd.kbpack", compressed, repacked, error);
+        Require(succeeded, error.c_str());
+    }
+    Require(repacked.compressedBlocks == 0U || repacked.storedBytes < repacked.payloadBytes,
+        "Recompressing a pack made it larger");
+    {
+        bake::RuntimeAssetPack pack;
+        Require(pack.Mount(root / "cook.zstd.kbpack", profile) == bake::RuntimeAssetPackStatus::Success &&
+                ReadAssetText(pack, kCellProp) == kCellProp.content,
+            "A recompressed pack lost content");
+    }
+
+    // Split by world cell.
+    const std::filesystem::path base = root / "Game.kbpack";
+    const std::filesystem::path chunk = root / "Game.cell_0_0.kbpack";
+    const std::vector<bake::AssetPackChunkRule> rules{ { .label = "cell_0_0", .virtualPathPrefixes = { "/Game/Cells/0_0/" },
+        .output = chunk } };
+    bake::AssetPackSplitReport split{};
+    {
+        const bool succeeded = bake::SplitRuntimeAssetPack(cook, base, rules, bake::AssetPackBlockCompression::Zstd, 9, split, error);
+        Require(succeeded, error.c_str());
+    }
+    Require(split.chunkAssets == std::vector<std::uint64_t>{ 1U }, "The split moved the wrong number of assets");
+    {
+        bake::RuntimeAssetPack alone;
+        Require(alone.Mount(base, profile) == bake::RuntimeAssetPackStatus::Success && alone.FindAsset(kCellProp.virtualPath) == nullptr,
+            "The base still carries split-off content");
+        alone.Unmount();
+        bake::RuntimeAssetPack set;
+        Require(set.MountSet(std::vector<bake::RuntimeAssetPackMount>{ { .path = base },
+                    { .path = chunk, .role = bake::AssetPackRole::Chunk, .label = "cell_0_0" } },
+                    profile) == bake::RuntimeAssetPackStatus::Success &&
+                ReadAssetText(set, kCellProp) == kCellProp.content && ReadAssetText(set, kRock) == kRock.content,
+            "A split pack set does not read as the original cook");
+    }
+    const std::vector<bake::AssetPackChunkRule> badRules{ { .label = "map", .virtualPathPrefixes = { "/Game/Maps/" },
+        .output = root / "Game.map.kbpack" } };
+    Require(!bake::SplitRuntimeAssetPack(cook, root / "bad.kbpack", badRules, bake::AssetPackBlockCompression::None, 9, split, error),
+        "The default map was split off its base");
+    WriteText(root / bake::kAssetPackSetFileName, "21kb-pack-set 1\nbase Game.kbpack\nchunk cell_0_0 Game.cell_0_0.kbpack\n");
+
+    // The next cook changes the rock and adds a lamp.
+    const std::filesystem::path nextCook = root / "next.kbpack";
+    SetPack next = full;
+    next.assets = { kStartMap, kRockPatched, kTree, kCellProp, kNewInPatch };
+    next.gameName = "Patched once";
+    WriteSetPack(nextCook, next);
+    bake::AssetPackPatchReport patchReport{};
+    bake::AssetPackPatchRequest request{
+        .current = root / bake::kAssetPackSetFileName,
+        .next = nextCook,
+        .output = root / "Game.patch-0001.kbpack",
+        .label = "patch-0001",
+        .patchLevel = 1U,
+    };
+    {
+        const bool succeeded = bake::BuildAssetPackPatch(request, patchReport, error);
+        Require(succeeded, error.c_str());
+    }
+    Require(patchReport.changedAssets == 1U && patchReport.addedAssets == 1U && patchReport.removedAssets == 0U &&
+            patchReport.changedFiles == 0U && patchReport.settingsChanged,
+        "The patch does not carry exactly what changed");
+    {
+        bake::AssetPackReader reader;
+        Require(reader.Mount(request.output) == bake::AssetPackReadStatus::Success &&
+                reader.Header().role == bake::AssetPackRole::Patch && reader.Header().patchLevel == 1U &&
+                reader.Header().baseIdentity == IdentityOf(base),
+            "The patch does not name its base and level");
+    }
+    WriteText(root / bake::kAssetPackSetFileName,
+        "21kb-pack-set 1\nbase Game.kbpack\nchunk cell_0_0 Game.cell_0_0.kbpack\npatch 1 patch-0001 Game.patch-0001.kbpack\n");
+    {
+        bake::RuntimeAssetPack set;
+        Require(set.MountSetIndex(root / bake::kAssetPackSetFileName, profile) == bake::RuntimeAssetPackStatus::Success &&
+                ReadAssetText(set, kRock) == kRockPatched.content && ReadAssetText(set, kNewInPatch) == kNewInPatch.content &&
+                ReadAssetText(set, kCellProp) == kCellProp.content && set.Manifest().settings.gameName == "Patched once",
+            "Base, chunk and patch do not read as the new cook");
+    }
+    Require(!bake::BuildAssetPackPatch(request, patchReport, error) && error.find("patch level") != std::string::npos,
+        "A patch that does not raise the patch level was written");
+    request.patchLevel = 2U;
+    request.label = "patch-0002";
+    request.output = root / "Game.patch-0002.kbpack";
+    Require(!bake::BuildAssetPackPatch(request, patchReport, error) && error.find("changes nothing") != std::string::npos,
+        "An empty patch was written");
+    Purge(root);
+}
+
 // ---- Asynchronous I/O -------------------------------------------------------------------------
 
 // Red when: queued reads are not served highest priority first, a re-prioritised read keeps its
@@ -1429,6 +1539,7 @@ void RunContentStreamingTests() {
     PackSetsMergeChunksAndApplyPatchesInOrder();
     PackSetsRefuseForeignAndInconsistentPacks();
     ReleaseManifestBindsEveryPackOfASet();
+    PackToolsSplitRepackAndPatch();
     AsyncReadsFollowPriorityAndReturnExactRanges();
     StreamingStaysWithinItsBudget();
     PackBlocksStreamAsynchronously();

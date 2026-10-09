@@ -48,6 +48,7 @@ add_library(kb_engine STATIC
     include/engine/assets/bake/AssetPackReader.hpp
     include/engine/assets/bake/AssetPackSeal.hpp
     include/engine/assets/bake/AssetPackSet.hpp
+    include/engine/assets/bake/AssetPackTools.hpp
     include/engine/assets/bake/AssetPackWriter.hpp
     include/engine/assets/bake/BakeTargetProfile.hpp
     include/engine/assets/bake/BakedAssetSink.hpp
@@ -576,6 +577,7 @@ add_library(kb_engine STATIC
     src/assets/bake/AssetPackReader.cpp
     src/assets/bake/AssetPackSeal.cpp
     src/assets/bake/AssetPackSet.cpp
+    src/assets/bake/AssetPackTools.cpp
     src/assets/bake/AssetPackWriter.cpp
     src/assets/bake/BakeTargetProfile.cpp
     src/assets/bake/BakedAssetSink.cpp

@@ -94,6 +94,13 @@ public:
     [[nodiscard]] BakedAssetSinkStatus CommitAsset() override;
     void AbortAsset() noexcept override;
 
+    // Copies one whole artifact of a mounted pack into this pack: the same key, type, block
+    // names, residency, alignment and streaming fragments, every block verified on the way out of
+    // `source` and stored in this writer's form (compressed or not). This is how a pack is
+    // recompressed, split into chunks or cut down to a patch, where only the digest of the
+    // original bake key survives. `source` must have been baked for this writer's profile.
+    [[nodiscard]] BakedAssetSinkStatus CopyArtifact(AssetPackReader& source, const AssetPackArtifactEntry& artifact);
+
     // Assembles and publishes the pack. Refuses while an artifact is still open, because
     // publishing then would silently drop it. After Success the writer takes no more work.
     [[nodiscard]] BakedAssetSinkStatus Finish();
