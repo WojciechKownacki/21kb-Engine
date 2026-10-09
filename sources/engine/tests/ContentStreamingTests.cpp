@@ -1905,8 +1905,13 @@ void LongJobsNeverTakeLoadCapacity() {
     }, 0);
     Require(spinUntil([&] { return loadEntered.load(); }), "A load job never started");
     releaseLong = true;
-    Require(wait(looseLong) && looseRan && wait(longJobs[2]) &&
-            std::ranges::all_of(longJobs, [](const auto& job) { return job->State() == streaming::BackgroundRequestState::Completed; }),
+    // Every long job is waited for: the two released ones finish on their own schedule, and
+    // either may still be returning when the third and the loose one, which start on the first
+    // freed worker, are already done.
+    Require(wait(looseLong) && looseRan &&
+            std::ranges::all_of(longJobs, [&](const auto& job) {
+                return wait(job) && job->State() == streaming::BackgroundRequestState::Completed;
+            }),
         "Long work waited for a blocked load job");
     Require(longPeak.load() == 2, "A long lane ran more jobs than its concurrency");
     releaseLoad = true;
