@@ -32,6 +32,8 @@ void RunLocalizationTests();
 void RunUITextLineBreakingTests();
 void RunCrashReportConsentTests();
 void RunNavigationRuntimeTests();
+void RunNavigationMeshTests();
+void RunNavigationCrowdBenchmark();
 void RunPortalVisibilityTests();
 void RunMotionSkeletonRuleTests();
 void RunWorldPartitionTests();

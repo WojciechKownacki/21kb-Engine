@@ -1,11 +1,19 @@
 #pragma once
 
+#include "engine/math/DVec3.hpp"
 #include "engine/math/EngineMath.hpp"
 #include "engine/scene/Navigation.hpp"
+#include "engine/scene/SceneNavigation.hpp"
 
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <vector>
+
+namespace kb::navigation {
+class NavCrowd;
+class NavMeshRuntime;
+}
 
 namespace kb::scene {
 
@@ -22,11 +30,28 @@ struct NavAgentRuntimeRecord {
     std::size_t nextCorner = 0U;
 };
 
+// A navigation mesh asset a ContentInstance of kind NavigationMesh places in the scene.
+struct PlacedNavMeshRecord {
+    std::uint64_t assetId = 0U;
+    // SceneNavigation::AddNavMesh handle once the asset is loaded and added; 0 before.
+    std::uint64_t handle = 0U;
+    bool requested = false;
+    bool failed = false;
+};
+
 // The scene's navigation graph and the per-agent runtime the navigation system keeps across steps.
 struct SceneNavigationState {
     NavMesh mesh{};
     std::map<std::uint64_t, NavAgentRuntimeRecord> agents;
     float stepAccumulator = 0.0F;
+    // Polygon navigation meshes and the crowd moving agents over them (created on first use).
+    std::shared_ptr<kb::navigation::NavMeshRuntime> polygons;
+    std::shared_ptr<kb::navigation::NavCrowd> crowd;
+    NavCrowdSettings crowdSettings{};
+    std::vector<kb::math::DVec3> crowdFocuses;
+    bool crowdFocusesSet = false;
+    // Keyed by the ContentInstance owner's entity id.
+    std::map<std::uint64_t, PlacedNavMeshRecord> placedMeshes;
 };
 
 } // namespace kb::scene

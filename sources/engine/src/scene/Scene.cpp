@@ -12,6 +12,7 @@
 #include "engine/localization/LocalizationCatalogAssetLoader.hpp"
 #include "engine/input/InputModule.hpp"
 #include "engine/modules/EngineModuleHost.hpp"
+#include "engine/navigation/NavMeshAsset.hpp"
 #include "engine/particles/ParticlePlayback.hpp"
 #include "engine/project/ParticleProjectPolicy.hpp"
 #include "engine/project/ProjectDescriptor.hpp"
@@ -115,6 +116,7 @@ Scene::Scene(
     const bool registeredLocalizationLoader = state_->assets.RegisterLoader(std::make_unique<kb::localization::LocalizationCatalogAssetLoader>());
     const bool registeredWorldLoader = state_->assets.RegisterLoader(std::make_unique<kb::world::WorldDescriptorAssetLoader>());
     const bool registeredWorldCellsLoader = state_->assets.RegisterLoader(std::make_unique<kb::world::WorldCellIndexAssetLoader>());
+    const bool registeredNavMeshLoader = state_->assets.RegisterLoader(std::make_unique<kb::navigation::NavMeshAssetLoader>());
     static_cast<void>(registeredPrefabLoader);
     static_cast<void>(registeredSceneLoader);
     static_cast<void>(registeredLuaScriptLoader);
@@ -137,6 +139,7 @@ Scene::Scene(
     static_cast<void>(registeredLocalizationLoader);
     static_cast<void>(registeredWorldLoader);
     static_cast<void>(registeredWorldCellsLoader);
+    static_cast<void>(registeredNavMeshLoader);
 
     if (mode == SceneMode::PrefabPrivate) {
         return;

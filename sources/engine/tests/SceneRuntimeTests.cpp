@@ -97,6 +97,10 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunCrashReportConsentTests();
     } else if (suite == "navigation-runtime") {
         kb::tests::RunNavigationRuntimeTests();
+    } else if (suite == "navigation-mesh") {
+        kb::tests::RunNavigationMeshTests();
+    } else if (suite == "navigation-crowd-bench") {
+        kb::tests::RunNavigationCrowdBenchmark();
     } else if (suite == "portal-visibility") {
         kb::tests::RunPortalVisibilityTests();
     } else if (suite == "motion-skeleton-rule") {
@@ -138,6 +142,7 @@ void RunAllSuites() {
     kb::tests::RunLocalizationTests();
     kb::tests::RunCrashReportConsentTests();
     kb::tests::RunNavigationRuntimeTests();
+    kb::tests::RunNavigationMeshTests();
     kb::tests::RunPortalVisibilityTests();
     kb::tests::RunMotionSkeletonRuleTests();
     kb::tests::RunWorldPartitionTests();
