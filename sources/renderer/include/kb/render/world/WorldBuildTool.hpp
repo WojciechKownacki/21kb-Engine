@@ -11,10 +11,10 @@ class AssetManager;
 
 namespace kb::render {
 
-// The one world build every tool runs: cells, cell index and HLOD proxy meshes, with the
-// meshes resolved through `assets`. The editor passes its scene's asset manager, kb_cooker
-// the manager it cooks from; both mount the project's content root as /Game, so a world
-// built by either produces byte-identical output.
+// The one world build every tool runs: cells, cell index, HLOD proxy meshes and (when the world
+// enables navigation) the cells' navigation meshes, with the meshes resolved through `assets`.
+// The editor passes its scene's asset manager, kb_cooker the manager it cooks from; both mount
+// the project's content root as /Game, so a world built by either produces byte-identical output.
 [[nodiscard]] kb::world::WorldBuildResult BuildWorldWithHlod(
     kb::assets::AssetManager& assets, const std::filesystem::path& descriptorPath);
 [[nodiscard]] kb::world::WorldBuildResult BuildAllWorldsWithHlod(

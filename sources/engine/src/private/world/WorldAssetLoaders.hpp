@@ -17,8 +17,8 @@ public:
         const kb::assets::AssetMetadata& metadata, const kb::assets::AssetRegistry& registry) const override;
 };
 
-// "WorldCells": the built cell index. Depends on every cell scene, HLOD mesh and
-// HLOD material it names.
+// "WorldCells": the built cell index. Depends on every cell scene, navigation mesh,
+// HLOD mesh and HLOD material it names.
 class WorldCellIndexAssetLoader final : public kb::assets::IAssetLoader {
 public:
     [[nodiscard]] std::string_view Type() const noexcept override;

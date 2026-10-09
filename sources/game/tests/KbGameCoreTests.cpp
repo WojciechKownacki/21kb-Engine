@@ -34,6 +34,7 @@
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/SceneUI.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
+#include "engine/scene/SceneNavigation.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/world/WorldCellIndex.hpp"
 #include "engine/world/WorldDescriptor.hpp"
@@ -1191,6 +1192,8 @@ struct PartitionedWorldFixture {
     descriptor.dataLayers = { { .name = "night", .initiallyActive = false } };
     descriptor.hlod = { .enabled = true, .range = 512.0, .triangleRatio = 0.5 };
     descriptor.regionCells = regionCells;
+    // A ground collider under the first three cells gives every build navigation meshes to carry.
+    descriptor.navigation.enabled = true;
     std::string error;
     Require(kb::world::WorldDescriptorIO::Write(descriptorPath, descriptor, error), "World fixture descriptor could not be written");
     const auto writeObject = [&](const std::string& name, double x, const std::string& layer) {
@@ -1215,6 +1218,23 @@ struct PartitionedWorldFixture {
         writeObject("Rock" + std::to_string(index), index * 64.0 + 10.0, {});
     }
     writeObject("Lamp", 12.0, "night");
+    {
+        kb::world::WorldObjectFile ground;
+        ground.header.guid = kb::world::MakeDeterministicWorldObjectGuid("Ground");
+        ground.header.name = "Ground";
+        ground.header.position = { 96.0, -0.25, 10.0 };
+        ground.header.nodeCount = 1U;
+        kb::scene::ScenePrefabNodeDesc node;
+        node.stableId = kb::world::WorldObjectStableId(ground.header.guid, 0U);
+        node.name = "Ground";
+        node.transform.localPosition = { 96.0F, -0.25F, 10.0F };
+        node.components.collider = kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Box, .boxSize = { 192.0F, 0.5F, 20.0F } };
+        static_cast<void>(ground.prefab.AddNode(node));
+        const std::vector<std::uint8_t> bytes = kb::world::WorldObjectFileIO::Serialize(ground, error);
+        Require(!bytes.empty() && kb::world::WorldObjectFileIO::WriteBytes(
+            descriptorPath.parent_path() / "Forest.objects" / (ground.header.guid + ".21kbobject"), bytes, error),
+            "World fixture ground could not be written");
+    }
     std::uint64_t worldId = 0U;
     {
         kb::scene::Scene authored;
@@ -1277,6 +1297,10 @@ void RunWorldBuildAgreementTest() {
         return file.first.ends_with(".obj") && Mentions(file.second, "usemtl slot0");
     }));
     Require(proxies == 3U, "kb_cli did not write the three HLOD proxies");
+    const std::size_t navMeshes = static_cast<std::size_t>(std::ranges::count_if(fromCli, [](const auto& file) {
+        return file.first.ends_with(".21kbnavmesh");
+    }));
+    Require(navMeshes == 3U, "kb_cli did not write a navigation mesh for each cell over the ground");
     Require(fromCli == fromCook, "kb_cli and kb_cooker built the same world differently");
 }
 
@@ -1294,7 +1318,7 @@ void RunPartitionedWorldCookTest() {
         kb::game::ProjectCookRequest{ .projectPath = fixture.root, .targetProfileId = "Windows.x64", .outputPackPath = packPath },
         diagnostics);
     Require(cooked.succeeded, cooked.error.c_str());
-    Require(Mentions(diagnostics.str(), "built 1 partitioned world(s): 4 cells, 3 HLOD proxies"),
+    Require(Mentions(diagnostics.str(), "built 1 partitioned world(s): 4 cells, 3 HLOD proxies, 3 navigation meshes"),
         "The cooker did not build the partitioned world before collecting assets");
 
     auto pack = std::make_shared<bake::RuntimeAssetPack>();
@@ -1306,7 +1330,8 @@ void RunPartitionedWorldCookTest() {
         Require(manager.MountRuntimePack(pack), "Partitioned world package registry mount failed");
         for (const char* path : { "/Game/Worlds/Forest.21kbworld", "/Game/Worlds/Forest.cells/Forest.21kbcells",
                  "/Game/Worlds/Forest.cells/base/r_0_0/c_0_0.21kbscene", "/Game/Worlds/Forest.cells/base/r_0_0/c_2_0.21kbscene",
-                 "/Game/Worlds/Forest.cells/layer.night/r_0_0/c_0_0.21kbscene", "/Game/Worlds/Forest.cells/hlod/r_0_0/h_1_0.obj" }) {
+                 "/Game/Worlds/Forest.cells/layer.night/r_0_0/c_0_0.21kbscene", "/Game/Worlds/Forest.cells/hlod/r_0_0/h_1_0.obj",
+                 "/Game/Worlds/Forest.cells/nav/r_0_0/n_0_0.21kbnavmesh", "/Game/Worlds/Forest.cells/nav/r_0_0/n_2_0.21kbnavmesh" }) {
             Require(manager.Registry().FindByPath(path) != nullptr, (std::string{ "The package is missing " } + path).c_str());
         }
         Require(manager.Registry().FindByPath("/Game/Worlds/Forest.cells/hlod/r_0_0/h_1_0.obj")->type == "RenderMesh",
@@ -1326,6 +1351,15 @@ void RunPartitionedWorldCookTest() {
         Require(world.CellState(owner.Entity(), { 2, 0 }) == kb::world::WorldCellState::Unloaded &&
                 world.CellState(owner.Entity(), { 0, 0 }, "night") == kb::world::WorldCellState::Unloaded,
             "The packaged world streamed cells outside the source or an inactive layer");
+        // The cell's navigation tiles stream out of the package with it.
+        while (!world.IsNavMeshLoaded(owner.Entity(), { 0, 0 }) && Clock::now() < deadline) {
+            static_cast<void>(runtime.Runtime().Update(1.0F / 60.0F));
+            std::this_thread::yield();
+        }
+        Require(world.IsNavMeshLoaded(owner.Entity(), { 0, 0 }) && !world.IsNavMeshLoaded(owner.Entity(), { 2, 0 }),
+            "The packaged world did not stream the navigation tiles of its first cell");
+        const kb::scene::NavPathResult path = runtime.Navigation().FindPath(kb::math::DVec3{ 3.0, 0.0, 4.0 }, kb::math::DVec3{ 50.0, 0.0, 4.0 });
+        Require(path.status == kb::scene::NavPathStatus::Complete, "Agents cannot find a path over the packaged navigation tiles");
     }
     pack->Unmount();
 
@@ -1451,6 +1485,7 @@ void RunChunkedWorldPackageTest() {
     const std::optional<std::uint32_t> last = containerOf("/Game/Worlds/Forest.cells/base/r_2_0/c_2_0.21kbscene");
     Require(first.has_value() && last.has_value() && *first != 0U && *last != 0U && *first != *last &&
             containerOf("/Game/Worlds/Forest.cells/hlod/r_2_0/h_2_0.obj") == last &&
+            containerOf("/Game/Worlds/Forest.cells/nav/r_2_0/n_2_0.21kbnavmesh") == last &&
             containerOf("/Game/Worlds/Forest.cells/layer.night/r_0_0/c_0_0.21kbscene") == first &&
             containerOf("/Game/Worlds/Forest.cells/Forest.21kbcells") == std::optional<std::uint32_t>{ 0U },
         "Each region's cells and proxy must live in that region's chunk, the index in the base");

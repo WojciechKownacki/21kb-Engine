@@ -2,6 +2,7 @@
 
 #include "engine/assets/AssetManager.hpp"
 #include "engine/ecs/Query.hpp"
+#include "engine/navigation/NavMeshAsset.hpp"
 #include "engine/ecs/UnsafeHotQuery.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/Scene.hpp"
@@ -9,6 +10,7 @@
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneLoadedContent.hpp"
+#include "engine/scene/SceneNavigation.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/StreamFocusComponent.hpp"
@@ -110,7 +112,25 @@ void HideHlod(scene::Scene& scene, WorldPartitionState& state, WorldRuntimeInsta
     world.visibleHlods.erase(visible);
 }
 
+void ReleaseNavMesh(scene::Scene& scene, WorldPartitionState& state, WorldRuntimeInstance& world, std::size_t index) noexcept {
+    WorldNavMeshRuntime& runtime = world.navMeshes[index];
+    if (runtime.handle != 0U) {
+        static_cast<void>(scene::SceneNavigation{ scene }.RemoveNavMesh(runtime.handle));
+        if (world.index) {
+            Record(state, WorldStreamingEventKind::NavMeshUnloaded, world, world.index->navMeshes[index].coord, false, {});
+        }
+    }
+    runtime = {};
+}
+
 void Release(scene::Scene& scene, WorldPartitionState& state, WorldRuntimeInstance& world) noexcept {
+    for (std::size_t index = 0U; index < world.navMeshes.size(); ++index) {
+        try {
+            ReleaseNavMesh(scene, state, world, index);
+        } catch (...) {
+            world.navMeshes[index] = {};
+        }
+    }
     for (std::size_t unit = 0U; unit < world.units.size(); ++unit) {
         WorldUnitRuntime& runtime = world.units[unit];
         if (runtime.loadedSceneId != 0U && (runtime.state == WorldCellState::Loading || runtime.state == WorldCellState::Loaded)) {
@@ -147,6 +167,11 @@ void BuildLookup(WorldRuntimeInstance& world) {
     for (std::size_t hlod = 0U; hlod < index.hlods.size(); ++hlod) {
         world.hlodByCoord.emplace(index.hlods[hlod].coord, hlod);
     }
+    world.navMeshPaths.clear();
+    for (const WorldCellNavMesh& navMesh : index.navMeshes) {
+        world.navMeshPaths.push_back(ResolveWorldCellPath(world.indexVirtualPath, navMesh.mesh));
+    }
+    world.navMeshes.assign(index.navMeshes.size(), WorldNavMeshRuntime{});
 }
 
 // Resolves the world asset to its built cell index and requests the index on the
@@ -407,6 +432,69 @@ void StreamCells(scene::Scene& scene, WorldPartitionState& state, WorldRuntimeIn
     return false;
 }
 
+// A cell's navigation tiles follow the same radii as its objects: requested inside a source's
+// load radius, released outside every unload radius.
+void StreamNavMeshes(scene::Scene& scene, WorldPartitionState& state, WorldRuntimeInstance& world, const std::vector<Source>& sources) {
+    const WorldCellIndex& index = *world.index;
+    if (index.navMeshes.empty()) {
+        return;
+    }
+    const WorldPartitionGrid grid{ index.cellSize };
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    bool pumped = false;
+    for (std::size_t item = 0U; item < index.navMeshes.size(); ++item) {
+        const WorldCellNavMesh& desc = index.navMeshes[item];
+        bool wanted = false;
+        bool retained = false;
+        for (const Source& source : sources) {
+            const double distanceSquared = grid.DistanceSquared(desc.coord, source.position.x, source.position.z);
+            wanted = wanted || distanceSquared <= source.loadRadius * source.loadRadius;
+            retained = retained || distanceSquared <= source.unloadRadius * source.unloadRadius;
+        }
+        WorldNavMeshRuntime& runtime = world.navMeshes[item];
+        if ((runtime.handle != 0U || runtime.loading) && !retained) {
+            ReleaseNavMesh(scene, state, world, item);
+            continue;
+        }
+        if (runtime.failed || runtime.handle != 0U) {
+            continue;
+        }
+        if (!runtime.loading) {
+            if (!wanted) continue;
+            const kb::assets::AssetMetadata* metadata = manager.Registry().FindByPath(world.navMeshPaths[item]);
+            if (metadata == nullptr || !manager.LoadAsync<kb::navigation::NavMeshAsset>(metadata->id)) {
+                runtime.failed = true;
+                world.lastFailure = world.navMeshPaths[item] + ": the navigation mesh could not be requested";
+                continue;
+            }
+            runtime.assetId = metadata->id;
+            runtime.loading = true;
+        }
+        if (!pumped) {
+            manager.PumpAsyncLoads();
+            pumped = true;
+        }
+        const kb::assets::AssetHandle<kb::navigation::NavMeshAsset> handle = manager.AcquireLoaded<kb::navigation::NavMeshAsset>(runtime.assetId);
+        if (!handle.IsLoaded()) {
+            if (manager.AsyncLoadStatus(runtime.assetId) == kb::assets::AsyncAssetLoadStatus::Failed) {
+                runtime.loading = false;
+                runtime.failed = true;
+                world.lastFailure = world.navMeshPaths[item] + ": " + manager.AsyncLoadError(runtime.assetId);
+            }
+            continue;
+        }
+        std::string error;
+        runtime.loading = false;
+        runtime.handle = scene::SceneNavigation{ scene }.AddNavMesh(handle.Shared(), &error);
+        if (runtime.handle == 0U) {
+            runtime.failed = true;
+            world.lastFailure = world.navMeshPaths[item] + ": " + error;
+            continue;
+        }
+        Record(state, WorldStreamingEventKind::NavMeshLoaded, world, desc.coord, false, {});
+    }
+}
+
 void StreamHlods(scene::Scene& scene, WorldPartitionState& state, WorldRuntimeInstance& world, const std::vector<Source>& sources) {
     const WorldCellIndex& index = *world.index;
     if (index.hlods.empty() || index.hlodRange <= 0.0) {
@@ -532,6 +620,10 @@ void WorldStreamingService::Synchronize(scene::Scene& scene, std::span<const Wor
         std::size_t pending = 0U;
         StreamCells(scene, state, world, sources, start, requests, pending, resident);
         StreamHlods(scene, state, world, sources);
+        StreamNavMeshes(scene, state, world, sources);
+        for (const WorldNavMeshRuntime& navMesh : world.navMeshes) {
+            stats.loadedNavMeshes += navMesh.handle != 0U ? 1U : 0U;
+        }
         for (const WorldUnitRuntime& unit : world.units) {
             stats.loadedUnits += unit.state == WorldCellState::Loaded ? 1U : 0U;
             stats.loadingUnits += unit.state == WorldCellState::Loading ? 1U : 0U;
@@ -683,6 +775,19 @@ WorldCellState WorldPartitionRuntime::PersistentState(scene::SceneEntity world, 
 bool WorldPartitionRuntime::IsHlodVisible(scene::SceneEntity world, WorldCellCoord coord) const {
     const WorldRuntimeInstance* instance = FindWorld(scene_, world);
     return instance != nullptr && instance->visibleHlods.contains(coord);
+}
+
+bool WorldPartitionRuntime::IsNavMeshLoaded(scene::SceneEntity world, WorldCellCoord coord) const {
+    const WorldRuntimeInstance* instance = FindWorld(scene_, world);
+    if (instance == nullptr) {
+        return false;
+    }
+    for (std::size_t item = 0U; item < instance->navMeshes.size(); ++item) {
+        if (instance->index->navMeshes[item].coord == coord) {
+            return instance->navMeshes[item].handle != 0U;
+        }
+    }
+    return false;
 }
 
 std::vector<WorldCellCoord> WorldPartitionRuntime::LoadedCells(scene::SceneEntity world) const {

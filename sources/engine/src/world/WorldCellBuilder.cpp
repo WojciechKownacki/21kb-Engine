@@ -1,5 +1,7 @@
 #include "engine/world/WorldCellBuilder.hpp"
 
+#include "engine/navigation/NavGeometryCollector.hpp"
+#include "engine/navigation/NavMeshAsset.hpp"
 #include "engine/scene/SceneDocument.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/world/WorldDescriptor.hpp"
@@ -150,6 +152,57 @@ void CollectHlodInstances(const WorldObjectFile& object, const WorldPartitionGri
     }
 }
 
+// Bakes the static geometry of the base layer (always-loaded objects included) and writes one
+// navigation mesh per cell with the tiles whose centre lies in the cell.
+[[nodiscard]] std::string BuildNavigation(const WorldDescriptor& descriptor, const std::vector<WorldObjectFile>& objects,
+    const WorldPartitionGrid& grid, std::int64_t regionCells, kb::navigation::INavGeometrySource* geometrySource,
+    const std::filesystem::path& staging, WorldCellIndex& index, WorldBuildReport& report) {
+    const kb::navigation::NavMeshBuildSettings& settings = descriptor.navigation.build;
+    kb::navigation::NavGeometry geometry;
+    kb::navigation::NavGeometryCollectStats stats;
+    for (const WorldObjectFile& object : objects) {
+        if (object.header.dataLayer.empty()) {
+            kb::navigation::CollectNavGeometry(object.prefab.Nodes(), settings, geometrySource, geometry, stats);
+        }
+    }
+    if (stats.unresolved != 0U) {
+        report.warnings.push_back("navigation: " + std::to_string(stats.unresolved) + " mesh(es) could not be read and were left out");
+    }
+    kb::navigation::NavMeshBakeResult baked = kb::navigation::NavMeshBuilder::Bake(settings, geometry);
+    if (!baked.succeeded) {
+        return "navigation bake failed: " + baked.error;
+    }
+    report.navBakeMilliseconds = baked.stats.milliseconds;
+    std::map<WorldCellCoord, kb::navigation::NavMeshAsset> cells;
+    const double tileSize = settings.TileWorldSize();
+    for (kb::navigation::NavTile& tile : baked.tiles) {
+        const std::optional<WorldCellCoord> cell = grid.CellOf((static_cast<double>(tile.coord.x) + 0.5) * tileSize,
+            (static_cast<double>(tile.coord.z) + 0.5) * tileSize);
+        if (!cell.has_value()) {
+            continue;
+        }
+        kb::navigation::NavMeshAsset& asset = cells[*cell];
+        asset.settings = settings;
+        asset.tiles.push_back(std::move(tile));
+    }
+    for (auto& [coord, asset] : cells) {
+        // The bake sorted its tiles by profile and coordinate; each cell keeps that order.
+        const std::string relative = "nav/" + RegionDirectory(coord, regionCells) + "/n_" + std::to_string(coord.x) + "_" + std::to_string(coord.z) +
+            std::string{ kb::navigation::NavMeshAsset::Extension };
+        std::string error;
+        if (!kb::navigation::NavMeshAssetIO::Write(staging / std::filesystem::path{ relative }, asset, error)) {
+            return "could not write the navigation mesh of cell " + std::to_string(coord.x) + "," + std::to_string(coord.z) + ": " + error;
+        }
+        std::error_code code;
+        const std::uint64_t bytes = std::filesystem::file_size(staging / std::filesystem::path{ relative }, code);
+        report.writtenBytes += code ? 0U : bytes;
+        report.navTileCount += asset.tiles.size();
+        index.navMeshes.push_back({ .coord = coord, .mesh = relative, .tileCount = static_cast<std::uint32_t>(asset.tiles.size()) });
+    }
+    report.navMeshCount = index.navMeshes.size();
+    return {};
+}
+
 [[nodiscard]] bool ReplaceDirectory(const std::filesystem::path& staging, const std::filesystem::path& target, std::string& error) {
     std::error_code code;
     std::filesystem::remove_all(target, code);
@@ -168,6 +221,11 @@ void CollectHlodInstances(const WorldObjectFile& object, const WorldPartitionGri
 } // namespace
 
 WorldBuildResult WorldCellBuilder::Build(const std::filesystem::path& descriptorPath, IWorldHlodBaker* hlodBaker) {
+    return Build(descriptorPath, hlodBaker, nullptr);
+}
+
+WorldBuildResult WorldCellBuilder::Build(const std::filesystem::path& descriptorPath, IWorldHlodBaker* hlodBaker,
+    kb::navigation::INavGeometrySource* navigationGeometry) {
     const WorldDescriptorReadResult descriptorRead = WorldDescriptorIO::Read(descriptorPath);
     if (!descriptorRead.succeeded) {
         return Failure(descriptorRead.error);
@@ -335,6 +393,11 @@ WorldBuildResult WorldCellBuilder::Build(const std::filesystem::path& descriptor
             .sourceTriangleCount = hlod.sourceTriangleCount,
         });
     }
+    if (descriptor.navigation.enabled) {
+        if (std::string failed = BuildNavigation(descriptor, objects, grid, regionCells, navigationGeometry, staging, index, report); !failed.empty()) {
+            return Failure(std::move(failed));
+        }
+    }
     std::string error;
     const std::filesystem::path indexPath = staging / WorldPaths::CellIndexPath(descriptorPath).filename();
     if (!WorldCellIndexIO::Write(indexPath, index, error)) {
@@ -350,6 +413,11 @@ WorldBuildResult WorldCellBuilder::Build(const std::filesystem::path& descriptor
 }
 
 WorldBuildResult WorldCellBuilder::BuildAll(const std::filesystem::path& root, IWorldHlodBaker* hlodBaker, std::size_t& builtWorlds) {
+    return BuildAll(root, hlodBaker, nullptr, builtWorlds);
+}
+
+WorldBuildResult WorldCellBuilder::BuildAll(const std::filesystem::path& root, IWorldHlodBaker* hlodBaker,
+    kb::navigation::INavGeometrySource* navigationGeometry, std::size_t& builtWorlds) {
     builtWorlds = 0U;
     std::vector<std::filesystem::path> descriptors;
     std::error_code code;
@@ -364,7 +432,7 @@ WorldBuildResult WorldCellBuilder::BuildAll(const std::filesystem::path& root, I
     std::ranges::sort(descriptors);
     WorldBuildResult total{ .succeeded = true, .report = {}, .error = {} };
     for (const std::filesystem::path& descriptor : descriptors) {
-        WorldBuildResult built = Build(descriptor, hlodBaker);
+        WorldBuildResult built = Build(descriptor, hlodBaker, navigationGeometry);
         if (!built.succeeded) {
             built.error = descriptor.generic_string() + ": " + built.error;
             return built;
@@ -373,6 +441,9 @@ WorldBuildResult WorldCellBuilder::BuildAll(const std::filesystem::path& root, I
         total.report.objectCount += built.report.objectCount;
         total.report.unitCount += built.report.unitCount;
         total.report.hlodCount += built.report.hlodCount;
+        total.report.navMeshCount += built.report.navMeshCount;
+        total.report.navTileCount += built.report.navTileCount;
+        total.report.navBakeMilliseconds += built.report.navBakeMilliseconds;
         total.report.writtenBytes += built.report.writtenBytes;
         total.report.warnings.insert(total.report.warnings.end(), built.report.warnings.begin(), built.report.warnings.end());
     }

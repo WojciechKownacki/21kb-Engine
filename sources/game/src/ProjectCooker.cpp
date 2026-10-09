@@ -2224,7 +2224,7 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
         }
         if (builtWorlds != 0U) {
             diagnostics << "built " << builtWorlds << " partitioned world(s): " << worlds.report.unitCount << " cells, "
-                        << worlds.report.hlodCount << " HLOD proxies\n";
+                        << worlds.report.hlodCount << " HLOD proxies, " << worlds.report.navMeshCount << " navigation meshes\n";
             for (const std::string& warning : worlds.report.warnings) {
                 diagnostics << "warning: " << warning << '\n';
             }

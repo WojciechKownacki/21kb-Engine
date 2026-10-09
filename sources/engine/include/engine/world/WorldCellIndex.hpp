@@ -38,6 +38,15 @@ struct WorldCellHlod {
     std::uint32_t sourceTriangleCount = 0U;
 };
 
+// The navigation tiles of one cell: a navigation mesh asset with the tiles whose centre lies in
+// the cell, for every agent profile.
+struct WorldCellNavMesh {
+    WorldCellCoord coord{};
+    // Navigation mesh path relative to the index file's directory.
+    std::string mesh;
+    std::uint32_t tileCount = 0U;
+};
+
 // Built index of a partitioned world. Produced by WorldCellBuilder next to the
 // cell scenes; the runtime streams exclusively from it.
 struct WorldCellIndex {
@@ -56,6 +65,7 @@ struct WorldCellIndex {
     std::vector<WorldDataLayerDesc> dataLayers;
     std::vector<WorldCellUnit> units;
     std::vector<WorldCellHlod> hlods;
+    std::vector<WorldCellNavMesh> navMeshes;
 };
 
 struct WorldCellIndexReadResult {

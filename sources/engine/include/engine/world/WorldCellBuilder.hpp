@@ -10,6 +10,10 @@
 #include <string>
 #include <vector>
 
+namespace kb::navigation {
+class INavGeometrySource;
+}
+
 namespace kb::world {
 
 // One mesh placed in a cell, as the HLOD baker sees it.
@@ -54,6 +58,10 @@ struct WorldBuildReport {
     std::size_t objectCount = 0U;
     std::size_t unitCount = 0U;
     std::size_t hlodCount = 0U;
+    // Navigation meshes written (one per cell with walkable tiles) and the tiles they hold.
+    std::size_t navMeshCount = 0U;
+    std::size_t navTileCount = 0U;
+    double navBakeMilliseconds = 0.0;
     std::uint64_t writtenBytes = 0U;
     std::vector<std::string> warnings;
 };
@@ -66,15 +74,22 @@ struct WorldBuildResult {
 
 // Turns a world's object files into the streamable build: one cell scene per
 // (cell, data layer), one persistent scene per layer for always-loaded objects,
-// an HLOD mesh per cell when a baker is given, and the cell index. The output
-// directory is replaced as a whole, so stale cells never survive a rebuild.
+// an HLOD mesh per cell when a baker is given, a navigation mesh per cell when the
+// world enables navigation, and the cell index. The output directory is replaced
+// as a whole, so stale cells never survive a rebuild.
 class WorldCellBuilder {
 public:
     WorldCellBuilder() = delete;
 
     [[nodiscard]] static WorldBuildResult Build(const std::filesystem::path& descriptorPath, IWorldHlodBaker* hlodBaker);
+    // `navigationGeometry` resolves the meshes the navigation bake reads; without it only
+    // primitive colliders take part.
+    [[nodiscard]] static WorldBuildResult Build(const std::filesystem::path& descriptorPath, IWorldHlodBaker* hlodBaker,
+        kb::navigation::INavGeometrySource* navigationGeometry);
     // Builds every .21kbworld below `root`; stops at the first failure.
     [[nodiscard]] static WorldBuildResult BuildAll(const std::filesystem::path& root, IWorldHlodBaker* hlodBaker, std::size_t& builtWorlds);
+    [[nodiscard]] static WorldBuildResult BuildAll(const std::filesystem::path& root, IWorldHlodBaker* hlodBaker,
+        kb::navigation::INavGeometrySource* navigationGeometry, std::size_t& builtWorlds);
 };
 
 } // namespace kb::world

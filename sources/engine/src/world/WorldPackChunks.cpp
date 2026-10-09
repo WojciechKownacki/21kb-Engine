@@ -81,6 +81,9 @@ WorldRegionChunksResult CollectWorldRegionChunks(const std::filesystem::path& co
         for (const WorldCellHlod& hlod : index.index.hlods) {
             add(hlod.coord, hlod.mesh);
         }
+        for (const WorldCellNavMesh& navMesh : index.index.navMeshes) {
+            add(navMesh.coord, navMesh.mesh);
+        }
         const std::string stem = LabelStem(index.index.worldName);
         for (const auto& [region, prefixes] : regions) {
             const std::string suffix = ".r_" + std::to_string(std::get<0>(region)) + "_" + std::to_string(std::get<1>(region));

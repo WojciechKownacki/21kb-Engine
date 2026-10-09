@@ -6,6 +6,7 @@
 #include "world/WorldTextFormat.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <fstream>
 #include <iterator>
 #include <set>
@@ -61,6 +62,68 @@ namespace {
     return true;
 }
 
+// The shortest text that reads back as the same float.
+[[nodiscard]] std::string FloatNumber(float value) {
+    char buffer[32];
+    const auto [end, error] = std::to_chars(buffer, buffer + sizeof(buffer), std::isfinite(value) ? value : 0.0F);
+    return error == std::errc{} ? std::string{ buffer, end } : std::string{ "0" };
+}
+
+[[nodiscard]] bool WritesNavigation(const WorldNavigationSettings& navigation) {
+    return navigation.enabled || !(navigation.build == kb::navigation::NavMeshBuildSettings{});
+}
+
+[[nodiscard]] std::string ParseNavigation(const kb::core::JsonValue& object, WorldNavigationSettings& navigation) {
+    if (object.GetKind() != kb::core::JsonValue::Kind::Object) {
+        return "world navigation must be an object";
+    }
+    const auto readBool = [&](std::string_view key, bool& value) {
+        if (object.Find(key) == nullptr) return true;
+        const std::optional<bool> parsed = text::Bool(object, key);
+        if (!parsed.has_value()) return false;
+        value = *parsed;
+        return true;
+    };
+    const auto readFloat = [](const kb::core::JsonValue& source, std::string_view key, float& value) {
+        if (source.Find(key) == nullptr) return true;
+        const std::optional<double> parsed = text::Double(source, key);
+        if (!parsed.has_value() || std::fabs(*parsed) > 1.0e6) return false;
+        value = static_cast<float>(*parsed);
+        return true;
+    };
+    kb::navigation::NavMeshBuildSettings& build = navigation.build;
+    if (!readBool("enabled", navigation.enabled) || !readBool("renderMeshes", build.renderMeshes) || !readBool("colliders", build.colliders)) {
+        return "world navigation enabled, renderMeshes and colliders must be booleans";
+    }
+    if (!readFloat(object, "cellSize", build.cellSize) || !readFloat(object, "cellHeight", build.cellHeight) ||
+        !readFloat(object, "edgeMaxError", build.edgeMaxError)) {
+        return "world navigation cellSize, cellHeight and edgeMaxError must be numbers";
+    }
+    if (object.Find("tileCells") != nullptr) {
+        const std::optional<std::int64_t> tileCells = text::Int(object, "tileCells", 1, 1 << 16);
+        if (!tileCells.has_value()) return "world navigation tileCells must be a whole number";
+        build.tileCells = static_cast<std::uint32_t>(*tileCells);
+    }
+    if (const kb::core::JsonValue* agents = object.Find("agents"); agents != nullptr) {
+        if (agents->GetKind() != kb::core::JsonValue::Kind::Array || agents->Size() > kb::navigation::NavMeshBuildSettings::MaxProfiles) {
+            return "world navigation agents must be an array of at most 8 agent profiles";
+        }
+        build.profiles.clear();
+        for (std::size_t index = 0U; index < agents->Size(); ++index) {
+            const kb::core::JsonValue& agent = *agents->At(index);
+            const std::string* name = agent.GetKind() == kb::core::JsonValue::Kind::Object ? text::String(agent, "name") : nullptr;
+            kb::navigation::NavAgentProfile profile;
+            if (name == nullptr || !readFloat(agent, "radius", profile.radius) || !readFloat(agent, "height", profile.height) ||
+                !readFloat(agent, "maxClimb", profile.maxClimb) || !readFloat(agent, "maxSlope", profile.maxSlopeDegrees)) {
+                return "every world navigation agent needs a name and numeric radius, height, maxClimb and maxSlope";
+            }
+            profile.name = *name;
+            build.profiles.push_back(std::move(profile));
+        }
+    }
+    return {};
+}
+
 } // namespace
 
 const WorldDataLayerDesc* WorldDescriptor::FindDataLayer(std::string_view layer) const noexcept {
@@ -111,6 +174,11 @@ std::string WorldDescriptorIO::Validate(const WorldDescriptor& descriptor) {
     }
     if (!std::isfinite(descriptor.hlod.triangleRatio) || descriptor.hlod.triangleRatio <= 0.0 || descriptor.hlod.triangleRatio > 1.0) {
         return "HLOD triangle ratio must be in (0, 1]";
+    }
+    if (WritesNavigation(descriptor.navigation)) {
+        if (std::string invalid = kb::navigation::ValidateNavMeshBuildSettings(descriptor.navigation.build); !invalid.empty()) {
+            return "world navigation: " + invalid;
+        }
     }
     if (descriptor.tagDefinitions.size() > 256U) {
         return "world declares more than 256 tags";
@@ -192,6 +260,11 @@ WorldDescriptorReadResult WorldDescriptorIO::Parse(std::string_view source) {
             descriptor.hlod.triangleRatio = *ratio;
         }
     }
+    if (const kb::core::JsonValue* navigation = root.Find("navigation"); navigation != nullptr) {
+        if (std::string invalid = ParseNavigation(*navigation, descriptor.navigation); !invalid.empty()) {
+            return { .succeeded = false, .descriptor = {}, .error = std::move(invalid) };
+        }
+    }
     if (const kb::core::JsonValue* tags = root.Find("tags"); tags != nullptr) {
         if (tags->GetKind() != kb::core::JsonValue::Kind::Array) {
             return { .succeeded = false, .descriptor = {}, .error = "world tags must be an array of strings" };
@@ -249,6 +322,28 @@ std::string WorldDescriptorIO::Serialize(const WorldDescriptor& descriptor) {
     out += descriptor.hlod.enabled ? "true" : "false";
     out += ", \"range\": " + text::Number(descriptor.hlod.range);
     out += ", \"triangleRatio\": " + text::Number(descriptor.hlod.triangleRatio) + "}";
+    if (WritesNavigation(descriptor.navigation)) {
+        const kb::navigation::NavMeshBuildSettings& build = descriptor.navigation.build;
+        out += ",\n  \"navigation\": {\"enabled\": ";
+        out += descriptor.navigation.enabled ? "true" : "false";
+        out += ", \"cellSize\": " + FloatNumber(build.cellSize);
+        out += ", \"cellHeight\": " + FloatNumber(build.cellHeight);
+        out += ", \"tileCells\": " + std::to_string(build.tileCells);
+        out += ", \"edgeMaxError\": " + FloatNumber(build.edgeMaxError);
+        out += build.renderMeshes ? ", \"renderMeshes\": true" : ", \"renderMeshes\": false";
+        out += build.colliders ? ", \"colliders\": true" : ", \"colliders\": false";
+        out += ",\n    \"agents\": [";
+        for (std::size_t index = 0U; index < build.profiles.size(); ++index) {
+            const kb::navigation::NavAgentProfile& profile = build.profiles[index];
+            out += index == 0U ? "\n      {\"name\": " : ",\n      {\"name\": ";
+            text::AppendQuoted(out, profile.name);
+            out += ", \"radius\": " + FloatNumber(profile.radius);
+            out += ", \"height\": " + FloatNumber(profile.height);
+            out += ", \"maxClimb\": " + FloatNumber(profile.maxClimb);
+            out += ", \"maxSlope\": " + FloatNumber(profile.maxSlopeDegrees) + "}";
+        }
+        out += "\n    ]}";
+    }
     out += ",\n  \"tags\": [";
     for (std::size_t index = 0U; index < descriptor.tagDefinitions.size(); ++index) {
         if (index != 0U) out += ", ";

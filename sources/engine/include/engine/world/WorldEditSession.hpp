@@ -83,6 +83,8 @@ public:
     [[nodiscard]] bool SetObjectAlwaysLoaded(scene::SceneEntity root, bool alwaysLoaded, std::string& error);
     // Adds a data layer to the world; the world file is rewritten on the next Save.
     [[nodiscard]] bool DeclareDataLayer(std::string_view name, bool initiallyActive, std::string& error);
+    // Replaces the world's navigation settings; saved with the descriptor on the next save.
+    [[nodiscard]] bool SetNavigation(const WorldNavigationSettings& navigation, std::string& error);
 
     // Guids of the scene's root objects in hierarchy order; new roots become objects.
     [[nodiscard]] std::vector<std::string> RootObjectGuids();

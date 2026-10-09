@@ -579,6 +579,23 @@ bool WorldEditSession::DeclareDataLayer(std::string_view name, bool initiallyAct
     return true;
 }
 
+bool WorldEditSession::SetNavigation(const WorldNavigationSettings& navigation, std::string& error) {
+    error.clear();
+    if (!impl_) {
+        error = "no world is open";
+        return false;
+    }
+    WorldDescriptor updated = impl_->descriptor;
+    updated.navigation = navigation;
+    if (std::string invalid = WorldDescriptorIO::Validate(updated); !invalid.empty()) {
+        error = std::move(invalid);
+        return false;
+    }
+    impl_->descriptor = std::move(updated);
+    impl_->descriptorDirty = true;
+    return true;
+}
+
 std::vector<std::string> WorldEditSession::RootObjectGuids() {
     std::vector<std::string> guids;
     if (!impl_) return guids;

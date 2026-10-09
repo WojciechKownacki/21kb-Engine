@@ -1,6 +1,7 @@
 #include "world/WorldAssetLoaders.hpp"
 
 #include "engine/assets/AssetRegistry.hpp"
+#include "engine/navigation/NavMeshAsset.hpp"
 #include "engine/world/WorldCellIndex.hpp"
 #include "engine/world/WorldDescriptor.hpp"
 #include "world/WorldTextFormat.hpp"
@@ -48,6 +49,9 @@ struct IndexReferences {
     };
     for (const WorldCellUnit& unit : index.units) {
         resolve(unit.scene, "Scene", true);
+    }
+    for (const WorldCellNavMesh& navMesh : index.navMeshes) {
+        resolve(navMesh.mesh, kb::navigation::NavMeshAsset::AssetType, true);
     }
     for (const WorldCellHlod& hlod : index.hlods) {
         resolve(hlod.mesh, "RenderMesh", false);

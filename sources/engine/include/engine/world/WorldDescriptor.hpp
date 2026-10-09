@@ -1,5 +1,7 @@
 #pragma once
 
+#include "engine/navigation/NavMeshBuild.hpp"
+
 #include <cstdint>
 #include <filesystem>
 #include <string>
@@ -26,6 +28,15 @@ struct WorldHlodSettings {
     double triangleRatio = 0.25;
 };
 
+// Navigation mesh baking of a world. When enabled, every world build bakes the static geometry
+// of the base layer and the always-loaded objects into navigation tiles and writes one navigation
+// mesh per cell, holding the tiles whose centre lies in the cell; the cells' tiles stream with
+// them (docs/navigation.md).
+struct WorldNavigationSettings {
+    bool enabled = false;
+    kb::navigation::NavMeshBuildSettings build;
+};
+
 // The authored world (map) file: a small text document that names the object
 // directory and the partition policy. It never lists objects itself, so two
 // people adding objects to one world touch different files only.
@@ -48,6 +59,7 @@ struct WorldDescriptor {
     std::string objectsDirectory;
     std::vector<WorldDataLayerDesc> dataLayers;
     WorldHlodSettings hlod;
+    WorldNavigationSettings navigation;
     std::vector<std::string> tagDefinitions{ "Player", "Enemy", "Monster", "AI", "NPC", "Collision" };
 
     [[nodiscard]] const WorldDataLayerDesc* FindDataLayer(std::string_view layer) const noexcept;
