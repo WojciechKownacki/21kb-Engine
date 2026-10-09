@@ -64,7 +64,7 @@ void RuntimeRenderResourceCache::EnsureSceneResources(const RuntimeRenderResourc
 }
 
 void RuntimeRenderResourceCache::EnsureMeshResources(const RuntimeRenderResourceEnsureContext& context) {
-    RuntimeMeshResourceEnsurer::Ensure(context, meshes_, embeddedMaterials_);
+    RuntimeMeshResourceEnsurer::Ensure(context, meshes_, embeddedMaterials_, streamer_);
 }
 
 void RuntimeRenderResourceCache::EnsureMaterialResources(const RuntimeRenderResourceEnsureContext& context) {
@@ -72,14 +72,20 @@ void RuntimeRenderResourceCache::EnsureMaterialResources(const RuntimeRenderReso
 }
 
 void RuntimeRenderResourceCache::EnsureTextureResources(const RuntimeRenderResourceEnsureContext& context) {
-    RuntimeTextureResourceEnsurer::Ensure(context, materials_, embeddedMaterials_, textures_);
+    RuntimeTextureResourceEnsurer::Ensure(context, materials_, embeddedMaterials_, textures_, streamer_);
+}
+
+void RuntimeRenderResourceCache::UpdateStreaming(const RuntimeContentStreamingFrame& frame, SceneRenderer& sceneRenderer) {
+    streamer_.Update(frame, sceneRenderer, textures_, meshes_);
 }
 
 void RuntimeRenderResourceCache::ReleaseScene(kb::scene::Scene& scene, SceneRenderer* sceneRenderer) noexcept {
+    streamer_.ReleaseScene(scene.Id());
     RuntimeRenderResourceLifecycle::ReleaseScene(scene, sceneRenderer, meshes_, materials_, embeddedMaterials_, textures_);
 }
 
 void RuntimeRenderResourceCache::DestroyAll(SceneRenderer* sceneRenderer) noexcept {
+    streamer_.ReleaseAll();
     RuntimeRenderResourceLifecycle::DestroyAll(sceneRenderer, meshes_, materials_, embeddedMaterials_, textures_);
 }
 

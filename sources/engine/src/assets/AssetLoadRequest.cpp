@@ -101,4 +101,24 @@ bool AssetLoadRequest::ReadPackagedPayload(
     return true;
 }
 
+bool AssetLoadRequest::ReadPackagedPayloadBlocks(
+    bake::RuntimeArtifactEncoding encoding,
+    std::string_view qualifier,
+    const std::function<bool(const bake::AssetPackBlockEntry&)>& include,
+    bake::RuntimeAssetPayload& out,
+    std::string& error) const {
+    error.clear();
+    if (runtimePack == nullptr) {
+        error = "Asset load request is not backed by a runtime package";
+        return false;
+    }
+    const bake::RuntimeAssetPackStatus status =
+        runtimePack->ReadAssetPayloadBlocks(metadata.id, encoding, qualifier, include, out);
+    if (status != bake::RuntimeAssetPackStatus::Success) {
+        error = "Packaged asset read failed: " + std::string{ bake::ToString(status) };
+        return false;
+    }
+    return true;
+}
+
 } // namespace kb::assets

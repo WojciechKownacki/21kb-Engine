@@ -76,6 +76,7 @@ add_library(kb_renderer STATIC
     include/kb/render/resources/RenderResources.hpp
     include/kb/render/resources/RenderTextureAssetLoader.hpp
     include/kb/render/resources/detail/RenderResourceSlotPool.hpp
+    include/kb/render/runtime/RuntimeContentStreamer.hpp
     include/kb/render/runtime/RuntimeFrameResourceReferences.hpp
     include/kb/render/runtime/RuntimeMaterialResolver.hpp
     include/kb/render/runtime/RuntimeMaterialParameterValidation.hpp
@@ -258,6 +259,7 @@ add_library(kb_renderer STATIC
     src/resources/RenderTextureAssetLoader.cpp
     src/resources/RenderTextureResourceBuilder.cpp
     src/resources/RenderTextureResourceBuilder.hpp
+    src/runtime/RuntimeContentStreamer.cpp
     src/runtime/RuntimeFrameResourceReferences.cpp
     src/runtime/RuntimeMaterialGraphDependencyLoader.cpp
     src/runtime/RuntimeMaterialGraphDependencyLoader.hpp
@@ -777,6 +779,7 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
         tests/MeshBakeTests.cpp
         tests/TextureBakeTests.cpp
         tests/WorldHlodMeshBakerTests.cpp
+        tests/RuntimeContentStreamingTests.cpp
     )
 
     target_link_libraries(kb_renderer_tests

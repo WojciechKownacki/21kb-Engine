@@ -1,5 +1,6 @@
 #pragma once
 
+#include "kb/render/runtime/RuntimeContentStreamer.hpp"
 #include "kb/render/runtime/RuntimeFrameResourceReferences.hpp"
 #include "kb/render/runtime/RuntimeRenderResourceCacheTypes.hpp"
 
@@ -73,11 +74,22 @@ public:
 
     [[nodiscard]] RuntimeRenderResourceCacheStats Stats() const noexcept;
 
+    // Streams the finer levels of the packaged textures and meshes this cache created; see
+    // RuntimeContentStreamer. Called once per submitted view, after EnsureSceneResources.
+    void UpdateStreaming(const RuntimeContentStreamingFrame& frame, SceneRenderer& sceneRenderer);
+    [[nodiscard]] RuntimeContentStreamer& Streamer() noexcept {
+        return streamer_;
+    }
+    [[nodiscard]] const RuntimeContentStreamer& Streamer() const noexcept {
+        return streamer_;
+    }
+
 private:
     RuntimeMeshResourceMap meshes_;
     RuntimeMaterialResourceMap materials_;
     RuntimeMaterialResourceMap embeddedMaterials_;
     RuntimeTextureResourceMap textures_;
+    RuntimeContentStreamer streamer_;
 
     void EnsureMeshResources(const RuntimeRenderResourceEnsureContext& context);
     void EnsureMaterialResources(const RuntimeRenderResourceEnsureContext& context);
