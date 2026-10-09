@@ -27,7 +27,7 @@ constexpr std::array kLifecycleEvents{
 // PucLuaFunctionApi and PucLuaTaskApi install module tables directly from this
 // list.  The names and each wrapper's return shape therefore stay true to the
 // callable sandbox and generated stubs cannot drift from it.
-constexpr std::array<ScriptApiCatalogLuaBindingDefinition, 193> kLuaBindings{ {
+constexpr auto kLuaBindings = std::to_array<ScriptApiCatalogLuaBindingDefinition>({
     { "Audio", "Play", "Audio.Play", ScriptApiCatalogLuaReturnKind::SingleOutput, "voice" },
     { "Audio", "SetMixer", "Audio.SetMixer", ScriptApiCatalogLuaReturnKind::SingleOutput, "assigned" },
     { "Audio", "ActiveMixer", "Audio.ActiveMixer", ScriptApiCatalogLuaReturnKind::Default, "" },
@@ -226,7 +226,7 @@ constexpr std::array<ScriptApiCatalogLuaBindingDefinition, 193> kLuaBindings{ {
     { "Navigation", "NearestPoint", "Navigation.NearestPoint", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
     { "Navigation", "SetAreaCost", "Navigation.SetAreaCost", ScriptApiCatalogLuaReturnKind::SingleOutput, "applied" },
     { "", "Log", "Log", ScriptApiCatalogLuaReturnKind::Default, "" },
-} };
+});
 
 [[nodiscard]] std::vector<ScriptApiPin> ToApiPins(const std::vector<ScriptFunctionPin>& pins) {
     std::vector<ScriptApiPin> converted;

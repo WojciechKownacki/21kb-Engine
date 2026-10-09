@@ -3304,7 +3304,7 @@ void SetClosure(lua_State* state, const char* name, lua_CFunction function, Scri
 // marshalling.  Their position follows ScriptApiCatalog::LuaBindingDefinitions
 // excluding Task and global bindings; table and Lua field names deliberately
 // live only in that catalog.
-constexpr std::array<lua_CFunction, 185> kCatalogBindingAdapters{ {
+constexpr auto kCatalogBindingAdapters = std::to_array<lua_CFunction>({
     &LuaAudioPlay,
     &LuaAudioSetMixer,
     &LuaAudioActiveMixer,
@@ -3495,7 +3495,7 @@ constexpr std::array<lua_CFunction, 185> kCatalogBindingAdapters{ {
     &LuaNavigationRaycast,
     &LuaNavigationNearestPoint,
     &LuaNavigationSetAreaCost,
-} };
+});
 
 [[nodiscard]] std::size_t CountCatalogTableBindings(std::string_view tableName) noexcept {
     std::size_t count = 0;
