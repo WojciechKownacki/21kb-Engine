@@ -89,7 +89,8 @@ startup a packaged player:
 
 1. verifies the manifest against its trust anchor and product id;
 2. refuses an unlisted executable, native module or pack anywhere in its directory (a planted
-   `version.dll` is named in the error), and a listed one that is missing or has another size;
+   `version.dll` is named in the error), and a listed one that is missing or has another size; a
+   file without an extension counts as an executable, as a Linux player has none;
 3. hashes its own executable against the manifest;
 4. binds every mounted pack to the release through the pack's seal digest, so no pack is hashed
    a second time. A game made of several packs also ships `Game.kbpackset`, a critical file the
@@ -175,9 +176,8 @@ players of a loose project do not ask.
   runs in packaged mode: it refuses a pack its release key did not sign, authenticates saves with
   the per-game secret and, like a Windows player, verifies the signed release manifest at startup
   -- its own image (found through `/proc/self/exe`), the pack set index, every pack, shared
-  libraries (`.so`) and anti-rollback. The player itself has no extension, so the startup check
-  hashes it by name but does not treat other extensionless files as executables;
-  `kb_cli release verify` still reports any file the manifest does not list. An ELF file carries
+  libraries (`.so`) and every file without an extension, which it refuses unless the manifest
+  lists it, exactly as a Windows player refuses an unlisted `.exe` or `.dll`. An ELF file carries
   no code signature, so anyone who can write the player can also replace its anchor and with it
   the key the manifest is checked against. Distribute through a channel that signs the whole
   download.
