@@ -11,7 +11,7 @@ The pieces, bottom up:
 | Pack format, block compression | `engine/assets/bake/AssetPack.hpp`, `AssetPackWriter.hpp`, `AssetPackReader.hpp`, `src/private/assets/bake/AssetPackCompression.hpp` |
 | Pack sets (base, chunks, patches) | `engine/assets/bake/AssetPackSet.hpp`, `RuntimeAssetPack.hpp` |
 | Pack tools | `engine/assets/bake/AssetPackTools.hpp`, `kb_cli pack …` |
-| Background loading (reads, asset loads, texture decodes) | `engine/assets/streaming/BackgroundLoadService.hpp`, `PackBlockStream.hpp` |
+| Background work (reads, loads, decodes, long jobs) | `engine/assets/streaming/BackgroundLoadService.hpp`, `PackBlockStream.hpp` |
 | Residency under a budget | `engine/assets/streaming/StreamingResidency.hpp` |
 | Texture and mesh streaming | `kb/render/runtime/RuntimeContentStreamer.hpp` and the texture and mesh bakers and loaders |
 | Packaging | `scripts/package_game.py` |
@@ -174,13 +174,14 @@ releases carry every earlier key forward.
 
 ## Background loading
 
-Everything the engine loads in the background goes through one service,
-`BackgroundLoadService`: one pool of threads in the process (3 by default) serves the content
-streamer's pack block reads, the asset manager's asynchronous loads (`RequestLoadAsync`,
-`LoadAsync<T>`) and the renderer's texture decodes (`RequestAsyncTextureDecode`). Each user takes
-the instance `BackgroundLoadService::Shared()` hands out; the threads start with the first user
-and are joined when the last one lets it go. Frame compute stays on the ECS worker pool, which
-never waits for a disk.
+Everything the engine and the editor do in the background goes through one service,
+`BackgroundLoadService`: one set of threads in the process, owned by the service, serves the
+content streamer's pack block reads, the asset manager's asynchronous loads (`RequestLoadAsync`,
+`LoadAsync<T>`), the renderer's texture decodes (`RequestAsyncTextureDecode`), scene preparation
+for streamed content, screenshot encoding, asynchronous user-storage writes and the editor's
+long work: asset imports, material graph cooks, packaging, particle thumbnails and mesh
+previews. Each user takes the instance `BackgroundLoadService::Shared()` hands out; the threads
+start with the first user and are joined when the last one lets go.
 
 The service runs two kinds of request.
 
@@ -193,32 +194,58 @@ worker: `ReadPackBlockAsync` verifies the block's seal hash, decrypts and decomp
 The service keeps a file open once read; the streamer lets go of its packs' files when it
 releases its resources.
 
-**Jobs** are callables that load or decode something: an asset loader with its dependency
-validation, an image decoder. A job may take long or block on its own I/O, so at most two run
-at once (`jobWorkers`) and, with more than one worker, never on every worker: one worker always
-stays free for reads, so a slow or blocked loader cannot starve streaming. Under that limit a
-free worker takes a waiting job before reads, so a busy stream cannot starve the jobs either.
-Jobs submitted to a **lane** run one at a time, highest priority first. Each `AssetManager`
-opens a lane on its first asynchronous request (its loaders run one at a time, as they always
-have), and texture decodes share one. A lane's owner cancels what it queued and waits for its
-one running job: the asset manager does so before it changes its loaders or its registry and
-when it is destroyed, the texture decoder at process exit. No job outlives what it uses, and no
-thread outlives the last user of the service.
+**Jobs** are callables, in two classes with separate workers:
 
-Requests of either kind can be re-prioritised or cancelled until a worker takes them. Nothing
-waits for a result: the render thread polls read handles, `AssetManager::PumpAsyncLoads` commits
-finished asset loads on the owner thread, and a decoded texture lands in the cache that
-`TryAcquireDecodedTexture` reads. On the suite's machine a 2 MiB compressed, sealed block streams
-in about 1 ms from a file and 0.4 ms from a pack mounted in memory.
+- **Load jobs** produce something a frame is waiting for: an asset loader with its dependency
+  validation, an image decoder, a streamed scene's preparation. They run on the load workers
+  (3 by default), which also serve the reads. At most two load workers run jobs at once
+  (`jobWorkers`), so one always stays free for reads and a slow or blocked loader cannot starve
+  streaming; under that limit a free load worker takes a waiting job before reads, so a busy
+  stream cannot starve the jobs either.
+- **Long jobs** run for seconds to minutes or wait for another process: imports, cooks,
+  packaging, thumbnail and preview rendering, PNG encoding, storage writes, the release of a
+  large decoded document. They run only on the long workers, which never take a read or a load
+  job, so long work can never occupy the capacity that loads and streaming rely on, and a
+  blocked load cannot hold up long work. Long workers start when long work first needs one, up
+  to `longJobWorkers` (8): a game that never runs long work never starts one.
 
-Why one service, grown from the streaming I/O pool: the engine used to run three background
-loaders, a thread per asset manager, a texture decode thread and the streaming I/O pool. The I/O
-pool already had what the other two either lacked or repeated: priorities, cancellation,
-re-prioritisation, completion handles and the platform read path. Adding jobs and lanes to it
-removed the two single-thread queues and left the read path, which the streaming priority and
-budget tests pin down, as it was. Moving the loaders onto the ECS worker pool instead was
-rejected: that pool runs each frame's systems, and a loader blocked on a disk or a lock would
-stall the frame.
+Jobs submitted to a **lane** run at most the lane's concurrency at a time (one unless stated),
+highest priority first. Each `AssetManager` opens a load lane on its first asynchronous request
+(its loaders run one at a time, as they always have); texture decodes share one load lane; the
+editor's importer, packager and material cook service and the renderer's screenshot encoder
+each own a long lane, and the particle thumbnail service a long lane of two. A lane's owner can cancel what it queued
+and wait for what it has running, which is what every owner does before it changes what its
+jobs use and when it is destroyed; `Drain` instead waits for everything queued, which user
+storage uses so no requested write is lost. `RunForFuture` hands a job's result back through a
+`std::future` for code that polls one, such as scene preparation and mesh previews. No job
+outlives what it uses, and no thread outlives the last user of the service.
+
+Requests of either kind can be re-prioritised or cancelled until a worker takes them. Nothing on
+the owner's thread waits for a result: the render thread polls read handles,
+`AssetManager::PumpAsyncLoads` commits finished asset loads on the owner thread, and a decoded
+texture lands in the cache that `TryAcquireDecodedTexture` reads. On the suite's machine a
+2 MiB compressed, sealed block streams in about 1 ms from a file and 0.4 ms from a pack mounted
+in memory.
+
+Why one service, grown from the streaming I/O pool: the engine used to start threads in many
+places (a thread per asset manager, a texture decode thread, the streaming I/O pool, a thread
+per import, package job, material cook service and screenshot encoder, two thumbnail threads,
+and `std::async` for scene preparation, mesh previews and storage writes). The I/O pool already
+had what the others either lacked or repeated: priorities, cancellation, re-prioritisation,
+completion handles and the platform read path. Adding jobs, lanes and the long class to it
+removed every other owner and left the read path, which the streaming priority and budget tests
+pin down, as it was. Three kinds of thread stay outside it on purpose, because none of them is
+background work:
+
+- The **ECS worker pool** runs each frame's systems in parallel and is joined within the frame.
+  A loader blocked on a disk or a lock there would stall the frame, so no load runs on it.
+- The **Jolt step driver** pipelines the physics step with the rest of the frame: it is part
+  of the fixed-step simulation, joined by every entry point that touches the physics world, and
+  has to start a step the moment the frame asks for one.
+- The **crash reporter** threads must work in a process that may be corrupted: the reporter
+  thread is created up front and only waits to write a dump, and old reports are uploaded on a
+  detached thread so the reporter stays free. Neither may depend on a pool, a lock or a heap
+  that the crash could have damaged.
 
 ## Residency and budgets
 
