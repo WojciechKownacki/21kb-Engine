@@ -623,6 +623,7 @@ kb::particles::ParticleRuntimeResult CpuParticleBackend::Step(
         std::abs(fixedDeltaSeconds - kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds) > 0.0000001F) {
         return Result(kb::particles::ParticleRuntimeStatus::InvalidRequest);
     }
+    FollowSimulationOrigin(kb::particles::ParticlePlayback::SimulationOrigin(scene));
     for (std::uint32_t denseIndex = 0U; denseIndex < denseInstanceCount_; ++denseIndex) {
         reloadRestarted_[denseIndex] = 0U;
     }
@@ -661,6 +662,28 @@ kb::particles::ParticleRuntimeResult CpuParticleBackend::Step(
     FlushGpuSpawns();
     ProcessOwnerLifecycle(scene);
     return Result(kb::particles::ParticleRuntimeStatus::Success);
+}
+
+void CpuParticleBackend::FollowSimulationOrigin(const kb::math::DVec3& origin) noexcept {
+    if (origin == simulationOrigin_) return;
+    // The origin moves by whole grid steps, so the shift is exact for positions near it. GPU particles already
+    // handed to the renderer keep the origin their commands carried.
+    const kb::math::Vec3 shift = kb::math::ToVec3(simulationOrigin_ - origin);
+    simulationOrigin_ = origin;
+    for (kb::math::Vec3& position : particlePositions_) position = position + shift;
+    for (kb::math::Vec3& position : particlePreviousPositions_) position = position + shift;
+    for (std::uint32_t denseIndex = 0U; denseIndex < denseInstanceCount_; ++denseIndex) {
+        ownerTransforms_[denseIndex].position = ownerTransforms_[denseIndex].position + shift;
+    }
+    for (std::vector<InternalEvent>* events : { &currentEvents_, &nextEvents_, &prewarmCurrentEvents_, &prewarmNextEvents_ }) {
+        for (InternalEvent& event : *events) event.position = event.position + shift;
+    }
+    for (ScheduledGpuEvent& scheduled : gpuScheduledEvents_) scheduled.event.position = scheduled.event.position + shift;
+}
+
+float CpuParticleBackend::PlaneDistance(const kb::scene::ParticleCollisionPlaneModule& plane) const noexcept {
+    return static_cast<float>(static_cast<double>(plane.distance) - (static_cast<double>(plane.normal.x) * simulationOrigin_.x +
+        static_cast<double>(plane.normal.y) * simulationOrigin_.y + static_cast<double>(plane.normal.z) * simulationOrigin_.z));
 }
 
 kb::particles::ParticleRuntimeResult CpuParticleBackend::Simulate(
@@ -1495,7 +1518,7 @@ void CpuParticleBackend::ExecuteForcesAndIntegrate(
             const kb::scene::ParticleCollisionPlaneModule& collision =
                 std::get<kb::scene::ParticleCollisionPlaneModule>(module.payload);
             const float signedDistance = kb::math::Dot(collision.normal, particlePositions_[index]) -
-                collision.distance;
+                PlaneDistance(collision);
             if (signedDistance >= 0.0F) continue;
             particlePositions_[index] = particlePositions_[index] - collision.normal * signedDistance;
             const float normalVelocity = kb::math::Dot(velocity, collision.normal);
@@ -1892,6 +1915,7 @@ kb::particles::ParticleRenderSnapshotResult CpuParticleBackend::PublishRenderSna
     return kb::particles::ParticlePlayback::PublishRenderSnapshot(scene, *this, {
         .revision = ++renderSnapshotRevision_,
         .fixedStepIndex = fixedStepIndex,
+        .origin = simulationOrigin_,
         .emitters = std::span<const kb::particles::ParticleRenderEmitterRecord>{
             renderEmitterScratch_.data(), emitterRecordCount},
         .particles = std::span<const kb::particles::ParticleRenderRecord>{
@@ -1906,6 +1930,7 @@ kb::particles::ParticleRenderSnapshotResult CpuParticleBackend::PublishRenderTom
         .revision = ++renderSnapshotRevision_,
         .fixedStepIndex = fixedStepIndex,
         .tombstone = true,
+        .origin = simulationOrigin_,
     });
 }
 
@@ -2005,7 +2030,7 @@ kb::particles::ParticleGpuEmitterParams CpuParticleBackend::BuildGpuParams(
         } else if (module.type == kb::scene::ParticleModuleType::CollisionPlane) {
             const auto& plane = std::get<kb::scene::ParticleCollisionPlaneModule>(module.payload);
             params.plane = {
-                .normal = plane.normal, .distance = plane.distance, .restitution = plane.restitution, .friction = plane.friction };
+                .normal = plane.normal, .distance = PlaneDistance(plane), .restitution = plane.restitution, .friction = plane.friction };
             params.hasPlane = true;
         }
     }
@@ -2136,6 +2161,7 @@ void CpuParticleBackend::FlushGpuSpawns() noexcept {
         command.hasParams = true;
         command.params = BuildGpuParams(pending.denseIndex, pending.emitterIndex);
         command.spawns = std::move(pending.spawns);
+        command.simulationOrigin = simulationOrigin_;
         kb::particles::ParticlePlayback::QueueGpuEmitterCommand(*gpuScene_, std::move(command));
     }
     gpuPending_.clear();
@@ -2157,6 +2183,7 @@ void CpuParticleBackend::FlushGpuSpawns() noexcept {
             kb::particles::ParticleGpuEmitterCommand command{};
             command.key = { MakeInstanceId(denseToSlot_[denseIndex], slotGenerations_[denseToSlot_[denseIndex]]), effect.emitters[emitterIndex].emitterId };
             command.simTime = gpuSimTime_;
+            command.simulationOrigin = simulationOrigin_;
             if (local) {
                 command.hasWorldMatrix = true;
                 command.worldMatrix = { axisX.x, axisX.y, axisX.z, 0.0F, axisY.x, axisY.y, axisY.z, 0.0F,
@@ -2191,6 +2218,7 @@ void CpuParticleBackend::QueueGpuRelease(std::uint64_t instanceId, std::uint32_t
         command.simTime = gpuSimTime_;
         command.release = release;
         command.clear = !release;
+        command.simulationOrigin = simulationOrigin_;
         kb::particles::ParticlePlayback::QueueGpuEmitterCommand(*gpuScene_, std::move(command));
     }
 }

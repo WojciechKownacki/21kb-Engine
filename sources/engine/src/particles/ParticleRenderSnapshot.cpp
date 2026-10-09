@@ -142,6 +142,7 @@ std::uint64_t ParticleRenderSnapshot::Revision() const noexcept { return storage
 std::uint64_t ParticleRenderSnapshot::SceneId() const noexcept { return storage_->header.sceneId; }
 std::uint64_t ParticleRenderSnapshot::BackendEpoch() const noexcept { return storage_->header.backendEpoch; }
 std::uint64_t ParticleRenderSnapshot::FixedStepIndex() const noexcept { return storage_->header.fixedStepIndex; }
+const kb::math::DVec3& ParticleRenderSnapshot::Origin() const noexcept { return storage_->header.origin; }
 bool ParticleRenderSnapshot::IsTombstone() const noexcept { return storage_->header.tombstone; }
 std::span<const ParticleRenderEmitterRecord> ParticleRenderSnapshot::Emitters() const noexcept {
     return {reinterpret_cast<const ParticleRenderEmitterRecord*>(storage_->payload.get()), storage_->emitterCount};
@@ -246,6 +247,7 @@ ParticleRenderSnapshotResult ParticleRenderSnapshotChannel::Publish(
         .backendEpoch = backendEpoch,
         .fixedStepIndex = desc.fixedStepIndex,
         .tombstone = desc.tombstone,
+        .origin = desc.origin,
     };
     impl_->latestKind = desc.tombstone ? Impl::LatestKind::Terminal : Impl::LatestKind::Payload;
     impl_->latestSlot = freeSlot;

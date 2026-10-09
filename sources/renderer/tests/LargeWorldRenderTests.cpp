@@ -13,12 +13,16 @@
 #include "kb/render/DisplayConfig.hpp"
 #include "kb/render/RenderSurface.hpp"
 #include "kb/render/Renderer.hpp"
+#include "kb/render/particles/ParticleRenderBatcher.hpp"
+#include "kb/render/particles/ParticleRenderSpace.hpp"
+#include "kb/render/particles/ParticleStripGeometryBuilder.hpp"
 #include "kb/render/scene/EcsRenderSceneSynchronizer.hpp"
 #include "kb/render/scene/RenderScene.hpp"
 
 #include <bgfx/bgfx.h>
 #include <bx/math.h>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -188,12 +192,103 @@ void RunRendererFollowsFarCameraTest() {
     renderer.Shutdown();
 }
 
+[[nodiscard]] kb::particles::ParticleRenderEmitterRecord ParticleEmitter(
+    kb::particles::ParticleRenderOutput output, std::uint32_t count) noexcept {
+    return kb::particles::ParticleRenderEmitterRecord{
+        .instanceId = 1U, .effectAssetId = 2U, .emitterId = 3U, .assetGeneration = 4U, .materialAssetId = 5U,
+        .firstParticle = 0U, .particleCount = count,
+        .liveParticleCount = count, .output = output, .sort = kb::particles::ParticleRenderSortMode::BackToFront,
+        .status = kb::particles::ParticleRenderEmitterStatus::Playing, .trailSampleIntervalSeconds = 1.0F / 60.0F,
+        .trailMinimumDistance = 0.0F, .trailMaxSamplesPerParticle = 4U, .trailWidth = 0.5F,
+    };
+}
+
+[[nodiscard]] kb::particles::ParticleRenderRecord ParticleAt(std::uint64_t id, kb::math::Vec3 position) noexcept {
+    return kb::particles::ParticleRenderRecord{ .position = position, .previousPosition = position, .particleId = id };
+}
+
+// Particle snapshots are relative to the particle simulation origin: drawn with a render origin elsewhere, they are
+// offset into render space (sorted as they would be there), and trails keep their world positions when the
+// simulation origin moves.
+void RunParticleRenderSpaceTest() {
+    const DVec3 simulationOrigin{ kFar, 0.0, kFar };
+    const DVec3 renderOrigin{ kFar - 1024.0, 0.0, kFar };
+    const kb::math::Vec3 offset = ParticleRenderOffset(simulationOrigin, renderOrigin);
+    Require(offset.x == 1024.0F && offset.y == 0.0F && offset.z == 0.0F, "The particle render offset is wrong");
+
+    SceneRenderCamera camera{};
+    camera.view = { 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, -1024.5F, 0.0F, 0.0F, 1.0F };
+    camera.projection = camera.view;
+    const std::array emitters{ ParticleEmitter(kb::particles::ParticleRenderOutput::Billboard, 3U) };
+    const std::array particleSpace{ ParticleAt(1U, { 0.25F, 0.0F, -3.0F }), ParticleAt(2U, { -0.5F, 1.0F, -9.0F }),
+        ParticleAt(3U, { 0.75F, 0.0F, -6.0F }) };
+    std::array renderSpace = particleSpace;
+    for (kb::particles::ParticleRenderRecord& particle : renderSpace) {
+        particle.position = particle.position + offset;
+        particle.previousPosition = particle.previousPosition + offset;
+    }
+    kb::particles::ParticleRenderSnapshotChannel simulationChannel;
+    kb::particles::ParticleRenderSnapshotChannel renderChannel;
+    Require(simulationChannel.Warmup(7U).Succeeded() && renderChannel.Warmup(8U).Succeeded() &&
+            simulationChannel.Publish(1U, { .revision = 1U, .fixedStepIndex = 1U, .origin = simulationOrigin,
+                .emitters = emitters, .particles = particleSpace }).Succeeded() &&
+            renderChannel.Publish(1U, { .revision = 1U, .fixedStepIndex = 1U, .origin = renderOrigin,
+                .emitters = emitters, .particles = renderSpace }).Succeeded(),
+        "The particle snapshots could not be published");
+    const auto simulationSnapshot = simulationChannel.Read();
+    Require(simulationSnapshot->Origin() == simulationOrigin, "A particle snapshot lost its simulation origin");
+    ParticleRenderBatcher offsetBatcher;
+    ParticleRenderBatcher renderBatcher;
+    offsetBatcher.Warmup(8U);
+    renderBatcher.Warmup(8U);
+    const ParticleRenderBatchBuildResult offsetBuild = offsetBatcher.Build(*simulationSnapshot, camera, offset);
+    const ParticleRenderBatchBuildResult renderBuild = renderBatcher.Build(*renderChannel.Read(), camera);
+    Require(offsetBuild.Succeeded() && renderBuild.Succeeded() && offsetBuild.instances.size() == 3U &&
+            renderBuild.instances.size() == 3U && offsetBuild.batches.size() == 1U &&
+            offsetBuild.batches[0].transparentDepthBucket == renderBuild.batches[0].transparentDepthBucket,
+        "Offset particles were not batched as render-space particles are");
+    for (std::size_t index = 0U; index < 3U; ++index) {
+        Require(offsetBuild.instances[index].positionSize == renderBuild.instances[index].positionSize &&
+                offsetBuild.instances[index].previousPositionRotation == renderBuild.instances[index].previousPositionRotation,
+            "Offset particles were not drawn, in order, where render-space particles are");
+    }
+
+    // A trail sampled before and after the simulation origin moved 1024 m along x spans the metre its particle
+    // moved, not the jump of the origin.
+    const std::array trailEmitters{ ParticleEmitter(kb::particles::ParticleRenderOutput::Trail, 1U) };
+    ParticleStripGeometryBuilder strips;
+    strips.Warmup();
+    kb::particles::ParticleRenderSnapshotChannel trailChannel;
+    Require(trailChannel.Warmup(9U).Succeeded(), "The trail snapshot channel could not be warmed up");
+    const std::array before{ ParticleAt(11U, { 0.0F, 0.0F, -4.0F }) };
+    Require(trailChannel.Publish(1U, { .revision = 1U, .fixedStepIndex = 1U, .origin = renderOrigin,
+                .emitters = trailEmitters, .particles = before }).Succeeded() &&
+            strips.Build(*trailChannel.Read(), camera).Succeeded(),
+        "The first trail sample could not be built");
+    const DVec3 movedOrigin = renderOrigin + DVec3{ 1024.0, 0.0, 0.0 };
+    const std::array after{ ParticleAt(11U, { -1023.0F, 0.0F, -4.0F }) };
+    Require(trailChannel.Publish(1U, { .revision = 2U, .fixedStepIndex = 2U, .origin = movedOrigin,
+                .emitters = trailEmitters, .particles = after }).Succeeded(),
+        "The second trail sample could not be published");
+    const ParticleStripBuildResult trail = strips.Build(*trailChannel.Read(), camera, ParticleRenderOffset(movedOrigin, renderOrigin));
+    Require(trail.Succeeded() && trail.vertices.size() == 4U, "The trail did not keep its samples across the origin move");
+    float minimumX = trail.vertices[0].x;
+    float maximumX = trail.vertices[0].x;
+    for (const ParticleStripVertex& vertex : trail.vertices) {
+        minimumX = std::min(minimumX, vertex.x);
+        maximumX = std::max(maximumX, vertex.x);
+    }
+    Require(std::fabs(minimumX) <= 1.0e-4F && std::fabs(maximumX - 1.0F) <= 1.0e-4F,
+        "A trail sampled across a simulation origin move must stay where its particle went");
+}
+
 } // namespace
 
 void RunLargeWorldRenderTests() {
     RunRenderOriginPolicyTest();
     RunCameraRelativeSyncTest();
     RunRendererFollowsFarCameraTest();
+    RunParticleRenderSpaceTest();
 }
 
 } // namespace kb::render::tests

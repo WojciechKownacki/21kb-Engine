@@ -113,6 +113,9 @@ struct ParticleGpuEmitterCommand {
     std::array<float, 4> orientation{ 0.0F, 0.0F, 0.0F, 1.0F };
     std::array<float, 3> origin{ 0.0F, 0.0F, 0.0F };
     std::vector<ParticleGpuSpawn> spawns;
+    // The simulation origin (ParticlePlayback::SimulationOrigin) the positions, world matrix and collision plane
+    // of this command are relative to.
+    kb::math::DVec3 simulationOrigin{};
 };
 
 } // namespace kb::particles

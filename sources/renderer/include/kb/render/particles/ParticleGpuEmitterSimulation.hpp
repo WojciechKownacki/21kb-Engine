@@ -45,8 +45,12 @@ public:
     void Shutdown() noexcept;
     [[nodiscard]] bool IsReady() const noexcept;
 
+    // The render origin of the scene's frame: records, owner matrices and planes are kept relative to it. When it
+    // moves, the live particles of world-space emitters (whose records cannot be moved on the GPU) are cleared;
+    // their emitters go on emitting.
+    void SetRenderOrigin(std::uint64_t sceneId, const kb::math::DVec3& renderOrigin) noexcept;
     // Applies one frame of drained commands for a scene: creates emitters, uploads spawn records,
-    // releases emitters.
+    // releases emitters. Positions are carried from each command's simulation origin to the render origin.
     void Apply(std::uint64_t sceneId, std::span<const kb::particles::ParticleGpuEmitterCommand> commands) noexcept;
     // Moves the scene render clock forward by the frame time, never more than one fixed step away
     // from the newest simulated time.
@@ -115,6 +119,7 @@ private:
     struct SceneClock {
         double latest = 0.0;
         double now = 0.0;
+        kb::math::DVec3 renderOrigin{};
         std::vector<Draw> draws;
     };
 
@@ -131,6 +136,7 @@ private:
     // whose material is translucent (an opaque mesh is depth-tested and needs no order).
     [[nodiscard]] static bool NeedsSort(const kb::particles::ParticleGpuEmitterParams& params, bool translucentMaterial) noexcept;
 
+    std::vector<kb::particles::ParticleGpuSpawn> spawnScratch_;
     bgfx::ProgramHandle program_ = BGFX_INVALID_HANDLE;
     // Optional: without it (e.g. no variant for this backend) colliding emitters use the closed-form kernel.
     bgfx::ProgramHandle collideProgram_ = BGFX_INVALID_HANDLE;

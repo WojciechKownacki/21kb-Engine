@@ -1969,6 +1969,67 @@ void TestComponentRateCapacityAndFollowTransformContracts() {
     followSystem.OnDestroy(followContext);
 }
 
+// Particles of an owner ten thousand kilometres out, simulated around a simulation origin there, move exactly like
+// those of an owner at the world origin (a float world position there holds whole metres only); moving the origin
+// keeps their world positions.
+void TestFarSimulationOrigin() {
+    const auto run = [](const kb::math::DVec3& origin, std::vector<kb::particles::ParticleRuntimeState>& before,
+                         std::vector<kb::particles::ParticleRuntimeState>& after, kb::math::DVec3& snapshotOrigin) {
+        Fixture fixture(Fixture::MakeEffect(60.0F, 64U));
+        fixture.scene.Transforms().SetLocalTranslation(fixture.owner, origin + kb::math::DVec3{ 0.25, 0.5, 0.0 });
+        fixture.scene.Runtime().SynchronizeTransforms();
+        fixture.scene.Components().ParticleEffects().Set(fixture.owner, {.effectAssetId = fixture.effectAssetId});
+        kb::particles::ParticlePlayback::SetSimulationOrigin(fixture.scene, origin);
+        kb::particle_plugin::ParticleSceneSystem system;
+        kb::scene::SceneSystemContext context{fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds};
+        system.OnCreate(context);
+        for (int step = 0; step < 30; ++step) system.OnFixedUpdate(context);
+        const std::uint64_t instanceId = kb::particles::ParticlePlayback::LiveInstanceIds(fixture.scene).front();
+        const auto states = kb::particles::ParticlePlayback::LiveParticleStates(fixture.scene, instanceId);
+        before.assign(states.begin(), states.end());
+        kb::particles::ParticlePlayback::SetSimulationOrigin(fixture.scene, origin + kb::math::DVec3{ 1024.0, 0.0, -2048.0 });
+        system.OnFixedUpdate(context);
+        const auto moved = kb::particles::ParticlePlayback::LiveParticleStates(fixture.scene, instanceId);
+        after.assign(moved.begin(), moved.end());
+        const auto snapshot = kb::particles::ParticlePlayback::ReadRenderSnapshot(fixture.scene);
+        Require(snapshot != nullptr, "the far particle fixture published no render snapshot");
+        snapshotOrigin = snapshot->Origin();
+        system.OnDestroy(context);
+    };
+    const kb::math::DVec3 farOrigin{ 10'000'000.0, 0.0, 10'000'000.0 };
+    std::vector<kb::particles::ParticleRuntimeState> nearBefore;
+    std::vector<kb::particles::ParticleRuntimeState> nearAfter;
+    std::vector<kb::particles::ParticleRuntimeState> farBefore;
+    std::vector<kb::particles::ParticleRuntimeState> farAfter;
+    kb::math::DVec3 nearSnapshotOrigin{};
+    kb::math::DVec3 farSnapshotOrigin{};
+    run({}, nearBefore, nearAfter, nearSnapshotOrigin);
+    run(farOrigin, farBefore, farAfter, farSnapshotOrigin);
+    Require(nearBefore.size() == 30U && farBefore.size() == nearBefore.size(), "the far particle fixture did not emit");
+    for (std::size_t index = 0U; index < nearBefore.size(); ++index) {
+        Require(farBefore[index].position.x == nearBefore[index].position.x &&
+                farBefore[index].position.y == nearBefore[index].position.y &&
+                farBefore[index].position.z == nearBefore[index].position.z,
+            "particles simulated around a far simulation origin must move as they do at the world origin");
+    }
+    Require(farAfter.size() == nearAfter.size() && nearAfter.size() > nearBefore.size() &&
+            farSnapshotOrigin == farOrigin + kb::math::DVec3{ 1024.0, 0.0, -2048.0 },
+        "moving the simulation origin changed the particles or was not published with the snapshot");
+    const float step = kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds;
+    for (std::size_t index = 0U; index < nearAfter.size(); ++index) {
+        Require(farAfter[index].position.x == nearAfter[index].position.x &&
+                farAfter[index].position.z == nearAfter[index].position.z,
+            "particles must move with a far simulation origin as they do with a near one");
+        if (index >= nearBefore.size()) continue;
+        // In the moved space a live particle is 1024 m nearer in x and 2048 m farther in z, one step further on.
+        const kb::math::Vec3 expected = nearBefore[index].position + nearBefore[index].velocity * step;
+        Require(std::abs(nearAfter[index].position.x + 1024.0F - expected.x) <= 2.0e-4F &&
+                std::abs(nearAfter[index].position.y - expected.y) <= 2.0e-4F &&
+                std::abs(nearAfter[index].position.z - 2048.0F - expected.z) <= 2.0e-4F,
+            "moving the simulation origin must keep the world positions of live particles");
+    }
+}
+
 void TestComponentBindingCapacityIsAtomic() {
     const auto populate = [](Fixture& fixture, std::size_t count) {
         std::vector<kb::scene::SceneEntity> entities;
@@ -2955,6 +3016,7 @@ int main() {
         TestNoAllocationPerFixedStep();
         TestComponentReconciliationAndOwnerPolicies();
         TestComponentRateCapacityAndFollowTransformContracts();
+        TestFarSimulationOrigin();
         TestEditorStyleScenePulseFollowsOwner();
         TestEditorAndPlayModeShareRenderSnapshotRevision();
         TestPlayModeDiscoversComponentAddedAfterSystemCreation();

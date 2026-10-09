@@ -86,9 +86,11 @@ struct TransparentDrawOrderEntry {
 class ParticleRenderBatcher final {
 public:
     void Warmup(std::uint32_t particleCapacity);
+    // `renderOffset` (ParticleRenderOffset) is added to every particle position.
     [[nodiscard]] ParticleRenderBatchBuildResult Build(
         const kb::particles::ParticleRenderSnapshot& snapshot,
-        const SceneRenderCamera& camera) noexcept;
+        const SceneRenderCamera& camera,
+        kb::math::Vec3 renderOffset = {}) noexcept;
 
     [[nodiscard]] std::uint32_t Capacity() const noexcept;
 

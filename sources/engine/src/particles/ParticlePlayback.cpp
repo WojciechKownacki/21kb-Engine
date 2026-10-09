@@ -253,6 +253,14 @@ std::span<const ParticleRuntimeState> ParticlePlayback::LiveParticleStates(
     return scratch;
 }
 
+void ParticlePlayback::SetSimulationOrigin(kb::scene::Scene& scene, const kb::math::DVec3& origin) noexcept {
+    kb::scene::SceneAccess::State(scene).particleSimulationOrigin = origin;
+}
+
+const kb::math::DVec3& ParticlePlayback::SimulationOrigin(const kb::scene::Scene& scene) noexcept {
+    return kb::scene::SceneAccess::State(scene).particleSimulationOrigin;
+}
+
 void ParticlePlayback::SetGpuEmitterConsumer(kb::scene::Scene& scene, bool present) noexcept {
     kb::scene::SceneAccess::State(scene).particleGpuEmitterConsumer = present;
 }

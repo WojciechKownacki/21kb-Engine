@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/math/DVec3.hpp"
 #include "engine/math/EngineMath.hpp"
 #include "engine/scene/ParticleEffectAssetSchema.hpp"
 
@@ -200,6 +201,8 @@ struct ParticleRenderSnapshotHeader {
     std::uint64_t fixedStepIndex = 0U;
     bool tombstone = false;
     std::uint8_t reserved[7]{};
+    // The simulation origin the positions of the snapshot are relative to (ParticlePlayback::SimulationOrigin).
+    kb::math::DVec3 origin{};
 };
 
 static_assert(std::is_trivially_copyable_v<ParticleRenderSnapshotHeader>);
@@ -236,6 +239,7 @@ struct ParticleRenderSnapshotPublishDesc {
     std::uint64_t revision = 0U;
     std::uint64_t fixedStepIndex = 0U;
     bool tombstone = false;
+    kb::math::DVec3 origin{};
     std::span<const ParticleRenderEmitterRecord> emitters;
     std::span<const ParticleRenderRecord> particles;
 };
@@ -256,6 +260,8 @@ public:
     [[nodiscard]] std::uint64_t BackendEpoch() const noexcept;
     [[nodiscard]] std::uint64_t FixedStepIndex() const noexcept;
     [[nodiscard]] bool IsTombstone() const noexcept;
+    // World position the record positions are relative to.
+    [[nodiscard]] const kb::math::DVec3& Origin() const noexcept;
     [[nodiscard]] std::span<const ParticleRenderEmitterRecord> Emitters() const noexcept;
     [[nodiscard]] std::span<const ParticleRenderRecord> Particles() const noexcept;
 

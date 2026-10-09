@@ -152,10 +152,11 @@ void SceneRenderer::DispatchGpuParticleEmitters(
         resources_, resourceMap_);
 }
 
-void SceneRenderer::SyncGpuParticleEmitters(kb::scene::Scene& scene, float frameDeltaSeconds, std::uint64_t frameIndex) {
+void SceneRenderer::SyncGpuParticleEmitters(
+    kb::scene::Scene& scene, float frameDeltaSeconds, std::uint64_t frameIndex, const kb::math::DVec3& renderOrigin) {
     if (particleRenderer_ == nullptr || !particleRenderer_->GpuEmittersReady()) return;
     gpuParticleSceneId_ = scene.Id();
-    particleRenderer_->SyncGpuEmitters(scene, frameDeltaSeconds, frameIndex);
+    particleRenderer_->SyncGpuEmitters(scene, frameDeltaSeconds, frameIndex, renderOrigin);
 }
 
 void SceneRenderer::ReleaseParticleScene(std::uint64_t sceneId) noexcept {
