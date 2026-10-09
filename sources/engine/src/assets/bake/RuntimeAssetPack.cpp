@@ -343,6 +343,28 @@ RuntimeAssetPackStatus RuntimeAssetPack::FinishMount(
         if (patch) {
             settingsSource = &container.manifest;
         }
+        // A patch's tombstones take assets and files out of the packs before it; each must name
+        // something those packs hold. Only a patch may carry them.
+        if (!patch && (!container.manifest.removedAssets.empty() || !container.manifest.removedAuxiliaryFiles.empty())) {
+            return refuse(RuntimeAssetPackStatus::PackSetInvalid);
+        }
+        for (const AssetId removed : container.manifest.removedAssets) {
+            const auto byId = slotById.find(removed.value);
+            if (byId == slotById.end()) {
+                return refuse(RuntimeAssetPackStatus::PackSetInvalid);
+            }
+            slotByPath.erase(slots[byId->second].entry->virtualPath);
+            slots[byId->second].entry = nullptr;
+            slotById.erase(byId);
+        }
+        for (const std::string& removed : container.manifest.removedAuxiliaryFiles) {
+            const auto existing = fileSlotByPath.find(removed);
+            if (existing == fileSlotByPath.end()) {
+                return refuse(RuntimeAssetPackStatus::PackSetInvalid);
+            }
+            fileSlots[existing->second].entry = nullptr;
+            fileSlotByPath.erase(existing);
+        }
         for (const RuntimeAssetManifestEntry& asset : container.manifest.assets) {
             const auto byId = slotById.find(asset.id.value);
             const auto byPath = slotByPath.find(asset.virtualPath);

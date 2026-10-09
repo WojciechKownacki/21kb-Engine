@@ -77,7 +77,13 @@ struct RuntimeAssetManifest {
     kb::project::ProjectSettings settings{};
     std::vector<RuntimeAssetManifestEntry> assets;
     std::vector<RuntimeAuxiliaryFileEntry> auxiliaryFiles;
-
+    // Tombstones, only in a partial manifest: the assets (by id) and auxiliary files (by path) a
+    // patch takes out of the packs mounted before it. They are part of the manifest block, so the
+    // pack's seal signs them like every other entry. A removed asset id may not be one of this
+    // manifest's assets, nor a removed file path one of its auxiliary files; a removed file's path
+    // may be an asset's here, when a file became an asset.
+    std::vector<AssetId> removedAssets;
+    std::vector<std::string> removedAuxiliaryFiles;
 };
 
 enum class RuntimeAssetManifestStatus : std::uint8_t {

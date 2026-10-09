@@ -86,7 +86,14 @@ patch 1 patch-0001 Game.patch-0001.kbpack
   manifests are partial; the default map and every dependency are checked across the whole set.
 - **Patches** replace every asset they list (same id or same virtual path) together with its
   artifacts, replace auxiliary files of the same path and supply the project settings. Later
-  patches win. A patch cannot remove an asset.
+  patches win.
+- **Tombstones.** A patch's manifest may also list asset ids and auxiliary file paths to
+  remove. They are applied before the patch's own entries, so an asset removed by one patch can
+  come back in a later one, and a file can become an asset of the same path. Each tombstone must
+  name something the packs before it hold (`PackSetInvalid` otherwise), only a patch may carry
+  them, and dependencies are checked after removal, so a removal that strands an asset depending
+  on the removed one is refused (`DependencyMissing`). The tombstones live in the patch's
+  manifest block, which the seal signs like every other block.
 - A packaged player mounts the set when `Game.kbpackset` sits beside `Game.kbpack`, and the
   single pack otherwise. Mounting is all or nothing.
 
@@ -189,7 +196,7 @@ far camera with a small budget evicts both back to their floors.
 | `kb_cli pack info <pack>` | Format, role, label, patch level, identities, compressed blocks, sizes, seal |
 | `kb_cli pack compress [--level n] <in> <out>` | Rewrites a pack with another compression level |
 | `kb_cli pack split --base <base> --chunk <label>=<prefix>[,…] [--index <set>] <cooked>` | Splits a cooked pack into a base and chunk packs by virtual path prefix |
-| `kb_cli pack patch --current <set or pack> --patch-level n --output <patch> <new cook>` | Builds a patch pack with what the new cook changed |
+| `kb_cli pack patch --current <set or pack> --patch-level n --output <patch> <new cook>` | Builds a patch pack with what the new cook changed, added and dropped (tombstones) |
 | `kb_cli pack set-verify [--anchor <file>] <Game.kbpackset>` | Mounts a set as the player does and reads every block |
 
 Split and patch output is unsealed; sign each pack with `kb_cli pack sign` afterwards.

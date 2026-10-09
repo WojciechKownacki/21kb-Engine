@@ -81,17 +81,20 @@ struct AssetPackPatchRequest {
 struct AssetPackPatchReport {
     std::uint64_t changedAssets = 0U;
     std::uint64_t addedAssets = 0U;
-    // Assets `current` has and `next` does not. A patch cannot take content away, so they stay;
-    // packaging reports them.
+    // Assets and auxiliary files `current` has and `next` does not: the patch carries a tombstone
+    // for each, so they are gone once it mounts. An asset `next` holds at the same virtual path
+    // under another id is replaced by path instead and does not count here.
     std::uint64_t removedAssets = 0U;
+    std::uint64_t removedFiles = 0U;
     std::uint64_t changedFiles = 0U;
     bool settingsChanged = false;
     AssetPackToolReport pack;
 };
 
 // Writes a patch pack with every asset and auxiliary file of `next` that `current` lacks or
-// holds differently, together with their artifacts and the project settings of `next`. Refuses
-// when nothing changed, when the profiles differ, or when the patch level does not go up.
+// holds differently, together with their artifacts and the project settings of `next`, and a
+// tombstone for every asset and file `next` no longer has. Refuses when nothing changed, when the
+// profiles differ, or when the patch level does not go up.
 [[nodiscard]] bool BuildAssetPackPatch(
     const AssetPackPatchRequest& request,
     AssetPackPatchReport& report,

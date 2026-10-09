@@ -82,7 +82,8 @@ struct RuntimeAssetBlockLocation {
 // Within a set, assets are looked up in one merged manifest. A chunk adds assets and may not
 // redefine one the base or another chunk already has. A patch replaces every asset it lists
 // (same id or same virtual path) together with its artifacts, replaces auxiliary files of the
-// same path, and supplies the project settings; later patches win over earlier ones.
+// same path, removes the assets and files its tombstones name, and supplies the project settings;
+// later patches win over earlier ones.
 // Dependencies and the default map are checked across the whole set. A chunk or patch must
 // name the mounted base's catalogue identity, so packs from another cook never mix.
 class RuntimeAssetPack final {

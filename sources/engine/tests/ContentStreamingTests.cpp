@@ -658,6 +658,9 @@ struct SetPack {
     std::string gameName = "Base";
     std::vector<SetAsset> assets;
     std::vector<std::pair<std::string, std::string>> auxiliaryFiles;
+    // Tombstones the pack's manifest carries.
+    std::vector<SetAsset> removedAssets;
+    std::vector<std::string> removedFiles;
 };
 
 [[nodiscard]] kb::assets::AssetId SetAssetId(const SetAsset& asset) {
@@ -721,6 +724,10 @@ void WriteSetPack(const std::filesystem::path& path, const SetPack& description,
             .artifactDigest = store(blob, bake::kSourceAssetTypeId, virtualPath),
         });
     }
+    for (const SetAsset& removed : description.removedAssets) {
+        manifest.removedAssets.push_back(SetAssetId(removed));
+    }
+    manifest.removedAuxiliaryFiles = description.removedFiles;
     std::vector<std::uint8_t> manifestBytes;
     Require(bake::EncodeRuntimeAssetManifest(manifest, manifestBytes) == bake::RuntimeAssetManifestStatus::Success,
         "A pack set manifest did not encode");
@@ -1206,6 +1213,183 @@ void PackToolsSplitRepackAndPatch() {
     Purge(root);
 }
 
+// Red when: a patch cannot take an asset or an auxiliary file out of a set -- the removed asset
+// must be gone by id and by path, a later patch must be able to bring it back, and the patch tool
+// must write a tombstone for what a new cook dropped -- or when tombstones are accepted where they
+// cannot be honoured (a base or chunk, a removal of something the set does not hold, a removal
+// that strands a dependency), or when a sealed patch whose tombstones were edited mounts.
+void PatchesRemoveAssetsThroughSignedTombstones() {
+    const std::filesystem::path root = Root() / "tombstones";
+    Purge(root);
+    std::filesystem::create_directories(root);
+    const bake::BakeTargetProfile profile = bake::WindowsX64BakeTargetProfile();
+
+    // The manifest encoding: tombstones round-trip in a partial manifest and nowhere else.
+    {
+        bake::RuntimeAssetManifest manifest{};
+        manifest.targetProfileId = std::string{ profile.identifier };
+        manifest.targetProfileHash = bake::BakeTargetProfileFingerprint(profile);
+        manifest.partial = true;
+        manifest.descriptor.targetPlatforms = { "Windows" };
+        manifest.settings.name = "PackSet";
+        manifest.settings.defaultMap = kStartMap.virtualPath;
+        manifest.removedAssets = { SetAssetId(kTree), SetAssetId(kRock) };
+        manifest.removedAuxiliaryFiles = { "/Game/Config/Balance.ini" };
+        std::vector<std::uint8_t> bytes;
+        Require(bake::EncodeRuntimeAssetManifest(manifest, bytes) == bake::RuntimeAssetManifestStatus::Success,
+            "A manifest with tombstones did not encode");
+        bake::RuntimeAssetManifest decoded{};
+        Require(bake::DecodeRuntimeAssetManifest(bytes, decoded) == bake::RuntimeAssetManifestStatus::Success &&
+                decoded.removedAuxiliaryFiles == manifest.removedAuxiliaryFiles && decoded.removedAssets.size() == 2U &&
+                std::ranges::is_sorted(decoded.removedAssets, {}, &kb::assets::AssetId::value),
+            "Tombstones did not round-trip");
+        // Truncating the tombstone lists leaves a manifest that promises them and holds none.
+        Require(bake::DecodeRuntimeAssetManifest(std::span{ bytes }.first(bytes.size() - 1U), decoded) ==
+                    bake::RuntimeAssetManifestStatus::Malformed,
+            "A truncated tombstone list decoded");
+        bake::RuntimeAssetManifest complete = manifest;
+        complete.partial = false;
+        complete.removedAssets.clear();
+        Require(bake::EncodeRuntimeAssetManifest(complete, bytes) == bake::RuntimeAssetManifestStatus::InvalidAsset,
+            "A complete manifest carried a tombstone");
+        bake::RuntimeAssetManifest contradictory = manifest;
+        contradictory.removedAuxiliaryFiles.clear();
+        contradictory.auxiliaryFiles.push_back(bake::RuntimeAuxiliaryFileEntry{
+            .virtualPath = "/Game/Config/Balance.ini", .contentHash = 1U, .artifactDigest = { 1U, 1U } });
+        contradictory.removedAuxiliaryFiles = { "/Game/Config/Balance.ini" };
+        Require(bake::EncodeRuntimeAssetManifest(contradictory, bytes) == bake::RuntimeAssetManifestStatus::InvalidAsset,
+            "A manifest both removed and listed one file");
+        bake::RuntimeAssetManifest duplicate = manifest;
+        duplicate.removedAssets.push_back(SetAssetId(kTree));
+        Require(bake::EncodeRuntimeAssetManifest(duplicate, bytes) == bake::RuntimeAssetManifestStatus::DuplicateEntry,
+            "A manifest removed one asset twice");
+    }
+
+    // A set: base, a chunk depending on the rock, a patch removing the tree and a file.
+    const PackSetFixture fixture = BuildPackSet(root);
+    const std::filesystem::path removal = root / "Game.patch-0003.kbpack";
+    SetPack removing{};
+    removing.role = bake::AssetPackRole::Patch;
+    removing.label = "patch-0003";
+    removing.patchLevel = 3U;
+    removing.baseIdentity = fixture.baseIdentity;
+    removing.gameName = "Tree removed";
+    removing.removedAssets = { kTree, kNewInPatch };
+    removing.removedFiles = { "/Game/Config/Balance.ini" };
+    WriteSetPack(removal, removing);
+    std::vector<bake::RuntimeAssetPackMount> mounts = FullSet(fixture);
+    mounts.push_back({ .path = removal, .role = bake::AssetPackRole::Patch, .label = "patch-0003", .patchLevel = 3U });
+    bake::RuntimeAssetPack pack;
+    Require(pack.MountSet(mounts, profile) == bake::RuntimeAssetPackStatus::Success, "A patch with tombstones did not mount");
+    std::vector<std::uint8_t> file;
+    Require(pack.FindAsset(SetAssetId(kTree)) == nullptr && pack.FindAsset(kTree.virtualPath) == nullptr &&
+            pack.FindAsset(SetAssetId(kNewInPatch)) == nullptr &&
+            pack.ReadAuxiliaryFile("/Game/Config/Balance.ini", file) != bake::RuntimeAssetPackStatus::Success,
+        "A removed asset or file is still visible after its patch mounted");
+    Require(ReadAssetText(pack, kRockPatchedAgain) == kRockPatchedAgain.content && ReadAssetText(pack, kCellProp) == kCellProp.content &&
+            pack.Manifest().assets.size() == 3U,
+        "A patch's tombstones took more than they name");
+    pack.Unmount();
+
+    // A later patch may bring a removed asset back.
+    const std::filesystem::path restore = root / "Game.patch-0004.kbpack";
+    SetPack restoring{};
+    restoring.role = bake::AssetPackRole::Patch;
+    restoring.label = "patch-0004";
+    restoring.patchLevel = 4U;
+    restoring.baseIdentity = fixture.baseIdentity;
+    restoring.assets = { kTree };
+    WriteSetPack(restore, restoring);
+    std::vector<bake::RuntimeAssetPackMount> restored = mounts;
+    restored.push_back({ .path = restore, .role = bake::AssetPackRole::Patch, .label = "patch-0004", .patchLevel = 4U });
+    Require(pack.MountSet(restored, profile) == bake::RuntimeAssetPackStatus::Success && ReadAssetText(pack, kTree) == kTree.content,
+        "A later patch could not bring a removed asset back");
+    pack.Unmount();
+
+    // Tombstones the set cannot honour.
+    const auto refusedWith = [&](const SetPack& description, bake::RuntimeAssetPackStatus expected, const char* message) {
+        const std::filesystem::path path = root / ("Game." + description.label + ".kbpack");
+        WriteSetPack(path, description);
+        std::vector<bake::RuntimeAssetPackMount> candidate = FullSet(fixture);
+        const bool chunk = description.role == bake::AssetPackRole::Chunk;
+        candidate.insert(chunk ? candidate.begin() + 2 : candidate.end(),
+            { .path = path, .role = description.role, .label = description.label, .patchLevel = description.patchLevel });
+        Require(pack.MountSet(candidate, profile) == expected, message);
+    };
+    SetPack unknown = removing;
+    unknown.label = "patch-0005";
+    unknown.patchLevel = 5U;
+    unknown.removedAssets = { SetAsset{ "/Game/Props/Never.kbdata", "DataTable", "", {} } };
+    unknown.removedFiles.clear();
+    refusedWith(unknown, bake::RuntimeAssetPackStatus::PackSetInvalid, "A tombstone for an asset the set lacks was accepted");
+    SetPack stranding = unknown;
+    stranding.removedAssets = { kRock };
+    refusedWith(stranding, bake::RuntimeAssetPackStatus::DependencyMissing, "A removal that strands a dependency was accepted");
+    SetPack chunkRemoving{};
+    chunkRemoving.role = bake::AssetPackRole::Chunk;
+    chunkRemoving.label = "cell_9_9";
+    chunkRemoving.baseIdentity = fixture.baseIdentity;
+    chunkRemoving.assets = { SetAsset{ "/Game/Cells/9_9/Prop.kbdata", "DataTable", "far prop", {} } };
+    chunkRemoving.removedAssets = { kTree };
+    refusedWith(chunkRemoving, bake::RuntimeAssetPackStatus::PackSetInvalid, "A chunk carrying a tombstone was accepted");
+
+    // Sealed: the tombstones are part of the signed manifest block.
+    const kb::security::ReleaseSigningKey key = NewKey();
+    for (const std::filesystem::path& member : { fixture.base, fixture.chunk, fixture.patch1, fixture.patch2, removal }) {
+        Seal(member, key);
+    }
+    Require(pack.MountSet(mounts, profile, bake::AssetPackAccess::Ranged, TrustOnly(key)) == bake::RuntimeAssetPackStatus::Success &&
+            pack.FindAsset(kTree.virtualPath) == nullptr,
+        "A sealed patch with tombstones did not mount under its release key");
+    pack.Unmount();
+    std::vector<std::uint8_t> sealed = ReadFileBytes(removal);
+    std::uint64_t manifestOffset = 0U;
+    {
+        bake::AssetPackReader reader;
+        Require(reader.Mount(removal) == bake::AssetPackReadStatus::Success, "The sealed removal patch did not mount");
+        for (const bake::AssetPackArtifactEntry& artifact : reader.Artifacts()) {
+            if (artifact.assetTypeId == bake::kRuntimeManifestAssetTypeId) {
+                manifestOffset = artifact.blocks.front().offset;
+            }
+        }
+    }
+    Require(manifestOffset != 0U, "The removal patch has no manifest block");
+    sealed[static_cast<std::size_t>(manifestOffset) + 4U] ^= 0x20U;
+    WriteFileBytes(removal, sealed);
+    Require(pack.MountSet(mounts, profile, bake::AssetPackAccess::Ranged, TrustOnly(key)) != bake::RuntimeAssetPackStatus::Success &&
+            pack.RefusedContainer() == 4U,
+        "A sealed patch whose manifest block was edited mounted");
+
+    // The patch tool writes the tombstones: the next cook drops the tree and the balance file.
+    const std::filesystem::path cook = root / "cook.kbpack";
+    SetPack full{};
+    full.assets = { kStartMap, kRock, kTree };
+    full.auxiliaryFiles = { { "/Game/Config/Balance.ini", "health=100" } };
+    WriteSetPack(cook, full);
+    const std::filesystem::path nextCook = root / "next.kbpack";
+    SetPack next{};
+    next.assets = { kStartMap, kRock };
+    WriteSetPack(nextCook, next);
+    bake::AssetPackPatchReport report{};
+    std::string error;
+    const bake::AssetPackPatchRequest request{
+        .current = cook, .next = nextCook, .output = root / "Game.patch-0010.kbpack", .label = "patch-0010", .patchLevel = 10U };
+    {
+        const bool succeeded = bake::BuildAssetPackPatch(request, report, error);
+        Require(succeeded, error.c_str());
+    }
+    Require(report.removedAssets == 1U && report.removedFiles == 1U && report.addedAssets == 0U && report.changedAssets == 0U,
+        "A patch of a cook that only dropped content does not carry the tombstones");
+    Require(pack.MountSet(std::vector<bake::RuntimeAssetPackMount>{ { .path = cook },
+                { .path = request.output, .role = bake::AssetPackRole::Patch, .label = "patch-0010", .patchLevel = 10U } },
+                profile) == bake::RuntimeAssetPackStatus::Success &&
+            pack.FindAsset(kTree.virtualPath) == nullptr && ReadAssetText(pack, kRock) == kRock.content &&
+            pack.ReadAuxiliaryFile("/Game/Config/Balance.ini", file) != bake::RuntimeAssetPackStatus::Success,
+        "A patch cut from a cook that dropped an asset does not remove it");
+    pack.Unmount();
+    Purge(root);
+}
+
 // ---- Asynchronous I/O -------------------------------------------------------------------------
 
 // Red when: queued reads are not served highest priority first, a re-prioritised read keeps its
@@ -1540,6 +1724,7 @@ void RunContentStreamingTests() {
     PackSetsRefuseForeignAndInconsistentPacks();
     ReleaseManifestBindsEveryPackOfASet();
     PackToolsSplitRepackAndPatch();
+    PatchesRemoveAssetsThroughSignedTombstones();
     AsyncReadsFollowPriorityAndReturnExactRanges();
     StreamingStaysWithinItsBudget();
     PackBlocksStreamAsynchronously();
