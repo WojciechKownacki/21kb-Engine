@@ -70,8 +70,8 @@ authored. Data layer objects of a world are not baked: switch them with obstacle
 
 Both resolve meshes with the cooker's runtime loaders over the project's content root mounted as
 `/Game`, so the editor and kb_cli write identical bytes (checked by the editor's headless
-navigation scenario). Tiles are built in parallel; the result does not depend on the thread
-count.
+navigation scenario). Tiles are built in parallel on the engine's worker pool
+(`kb::ecs::WorkerPool`, at most 8 workers); the result is the same as a serial bake.
 
 A scene uses its mesh through the ContentInstance: while the scene plays, the navigation system
 loads the asset on the asset worker and adds its tiles. The ContentInstance's transform does not
@@ -204,7 +204,7 @@ detail makes a large crowd cheaper.
 
 | Test | Covers |
 | --- | --- |
-| `kb_engine_tests navigation-mesh` | Settings validation; the asset format (round trip, truncation, refusal of escaping connections and unknown areas); bakes independent of thread count; walkable area of a floor; slopes (30 vs 60 degrees) and steps (0.3 vs 0.6 m); carving obstacles (blocked, around, rotated, removed) with an agent walking around; geometry rebuilt at runtime; area costs and masks; two agent sizes through a doorway; jump and ladder links (one-way, disabled) crossed by agents; far from the world origin; a 1200-agent crowd replaying exactly; crowd level of detail; NavLink save/load and scripts; a scene's ContentInstance placing its mesh; a world's tiles streaming in and out with its cells. |
+| `kb_engine_tests navigation-mesh` | Settings validation; the asset format (round trip, truncation, refusal of escaping connections and unknown areas); bakes on the worker pool identical to serial ones; walkable area of a floor; slopes (30 vs 60 degrees) and steps (0.3 vs 0.6 m); carving obstacles (blocked, around, rotated, removed) with an agent walking around; geometry rebuilt at runtime; area costs and masks; two agent sizes through a doorway; jump and ladder links (one-way, disabled) crossed by agents; far from the world origin; a 1200-agent crowd replaying exactly; crowd level of detail; NavLink save/load and scripts; a scene's ContentInstance placing its mesh; a world's tiles streaming in and out with its cells. |
 | `kb_engine_navigation-crowd-bench` | Crowd step budget for 1000 agents and the level-of-detail gain at 5000. |
 | `kb_cli_tests` | `kb_cli navmesh bake` and `info` (colliders, imported meshes, profiles, kept settings) and `world build` with navigation and region chunks. |
 | `kb_editor_navigation_headless` | Editor bake of a scene with a floor collider, an imported mesh and a jump link; identical bytes to the kb_cli bake; the outline drawn in the scene view; an agent crossing the link in Play mode. |

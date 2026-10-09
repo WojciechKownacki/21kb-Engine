@@ -2,6 +2,7 @@
 #include "TestSuites.hpp"
 
 #include "engine/assets/AssetManager.hpp"
+#include "engine/ecs/WorkerPool.hpp"
 #include "engine/math/DVec3.hpp"
 #include "engine/navigation/NavGeometryCollector.hpp"
 #include "engine/navigation/NavMeshAsset.hpp"
@@ -96,8 +97,9 @@ void AddQuad(nav::NavGeometry& geometry, Vec3 a, Vec3 b, Vec3 c, Vec3 d) {
     geometry.Add(std::move(chunk));
 }
 
-[[nodiscard]] nav::NavMeshAsset BakeGeometry(const nav::NavGeometry& geometry, const nav::NavMeshBuildSettings& settings = Settings(), std::uint32_t threads = 0U) {
-    const nav::NavMeshBakeResult baked = nav::NavMeshBuilder::Bake(settings, geometry, threads);
+[[nodiscard]] nav::NavMeshAsset BakeGeometry(const nav::NavGeometry& geometry, const nav::NavMeshBuildSettings& settings = Settings(),
+    kb::ecs::WorkerPool* workers = nullptr) {
+    const nav::NavMeshBakeResult baked = nav::NavMeshBuilder::Bake(settings, geometry, workers);
     Check(baked.succeeded, "the navigation bake must succeed: " + baked.error);
     nav::NavMeshAsset asset;
     asset.settings = settings;
@@ -223,9 +225,12 @@ void TestBakeIsDeterministic() {
     nav::NavGeometry geometry;
     nav::NavGeometryCollectStats stats;
     nav::CollectNavGeometry(nodes, Settings(), nullptr, geometry, stats);
-    const std::vector<std::uint8_t> single = nav::NavMeshAssetIO::Serialize(BakeGeometry(geometry, Settings(), 1U));
-    const std::vector<std::uint8_t> parallel = nav::NavMeshAssetIO::Serialize(BakeGeometry(geometry, Settings(), 4U));
-    Check(!single.empty() && single == parallel, "a bake gives the same bytes whatever the number of threads");
+    const std::vector<std::uint8_t> serial = nav::NavMeshAssetIO::Serialize(BakeGeometry(geometry, Settings()));
+    kb::ecs::WorkerPool workers{ kb::ecs::WorkerPoolConfig{ .workerCount = 4U, .collectDispatchTelemetry = true } };
+    const std::vector<std::uint8_t> parallel = nav::NavMeshAssetIO::Serialize(BakeGeometry(geometry, Settings(), &workers));
+    const kb::ecs::WorkerPoolDispatchTelemetry telemetry = workers.DispatchTelemetry();
+    Check(telemetry.dispatchCount == 1U && telemetry.lastWorkItemCount > 1U, "a bake given the engine's worker pool builds its tiles on it");
+    Check(!serial.empty() && serial == parallel, "a bake gives the same bytes on the worker pool as without one");
 }
 
 void TestWalkableAreaOfAFloor() {

@@ -10,6 +10,10 @@
 #include <string>
 #include <vector>
 
+namespace kb::ecs {
+class WorkerPool;
+}
+
 namespace kb::navigation {
 
 // One agent size a navigation mesh is generated for. Every profile has tiles of its own: walls are
@@ -149,9 +153,9 @@ public:
     [[nodiscard]] static bool BuildTile(const NavMeshBuildSettings& settings, std::uint32_t profile, NavTileCoord coord,
         const NavGeometry& geometry, NavTile& tile, std::string& error);
 
-    // Every tile of every profile the geometry touches. Tiles are built on up to `workerThreads`
-    // threads (0 picks one per core, at most 8); the result does not depend on the thread count.
-    [[nodiscard]] static NavMeshBakeResult Bake(const NavMeshBuildSettings& settings, const NavGeometry& geometry, std::uint32_t workerThreads = 0U);
+    // Every tile of every profile the geometry touches. Tiles are built in parallel on the workers of
+    // `workers` when it is running, else one after another; the result does not depend on it.
+    [[nodiscard]] static NavMeshBakeResult Bake(const NavMeshBuildSettings& settings, const NavGeometry& geometry, kb::ecs::WorkerPool* workers = nullptr);
 };
 
 } // namespace kb::navigation
