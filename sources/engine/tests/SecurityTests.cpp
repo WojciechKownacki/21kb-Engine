@@ -562,6 +562,15 @@ void RunReleaseManifestTests() {
     Require(modified.status == kb::security::ReleaseManifestStatus::UnlistedFile && modified.detail == "version.dll",
         "an unlisted native module beside the player must be refused");
     std::filesystem::remove(release / "version.dll");
+    // A file without an extension may be an executable (a Linux player has none): unlisted, it
+    // is refused at startup like a planted DLL, at any depth.
+    WriteBytes(release / "Licenses" / "helper", "\x7F" "ELF planted");
+    modified = kb::security::VerifyInstalledRelease(release, key.publicKey, "Publisher.Game", executable);
+    Require(modified.status == kb::security::ReleaseManifestStatus::UnlistedFile && modified.detail == "Licenses/helper" &&
+            kb::security::IsCriticalReleaseFile("Game") && kb::security::IsCriticalReleaseFile(".hidden") &&
+            !kb::security::IsCriticalReleaseFile("Licenses/notice.txt"),
+        "an unlisted file without an extension must be refused at startup");
+    std::filesystem::remove(release / "Licenses" / "helper");
 
     WriteBytes(release / "Licenses" / "notice with spaces.txt", "license text, edited");
     Require(kb::security::VerifyInstalledRelease(release, key.publicKey, "Publisher.Game", executable).status ==

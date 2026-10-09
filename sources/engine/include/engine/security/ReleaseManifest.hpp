@@ -85,7 +85,9 @@ enum class ReleaseManifestStatus : std::uint8_t {
 [[nodiscard]] bool IsValidContentVersion(std::string_view version) noexcept;
 
 // Executables, native modules, asset packs and the pack set index that orders them: the files a
-// player refuses to run with unless the manifest lists them with matching contents.
+// player refuses to run with unless the manifest lists them with matching contents. A file without
+// an extension is an executable as far as this check knows -- a Linux player and anything it
+// could run look like that -- so it is critical on every platform.
 [[nodiscard]] bool IsCriticalReleaseFile(const std::filesystem::path& relativePath);
 
 // Streams a file through SHA-512. False if it cannot be read.

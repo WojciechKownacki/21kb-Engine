@@ -955,6 +955,22 @@ void RunPackSetPackagingTests() {
                 Mentions(planted.str(), "UnlistedFile") && Mentions(planted.str(), "libplanted.so"),
             "A Linux release with a planted shared library was allowed to start");
         std::filesystem::remove(linuxRoot / "libplanted.so", linuxError);
+        // A stray file without an extension -- an executable on Linux -- is refused like an unlisted
+        // DLL on Windows, beside the player or deeper; a listed one is part of the release.
+        for (const std::filesystem::path stray : { linuxRoot / "helper", linuxRoot / "Licenses" / "run-me" }) {
+            WriteTextFile(stray, elf + "stray");
+            std::ostringstream strayErrors;
+            Require(kb::game::VerifyPackagedRelease(anchor, linuxRoot, linuxRoot / "Game", securityRoot, strayErrors) == nullptr &&
+                    Mentions(strayErrors.str(), "UnlistedFile") &&
+                    Mentions(strayErrors.str(), stray.lexically_relative(linuxRoot).generic_string()),
+                "A Linux release with a stray file without an extension was allowed to start");
+            std::filesystem::remove(stray, linuxError);
+        }
+        WriteTextFile(linuxRoot / "Licenses" / "COPYING", "license text without an extension");
+        signLinux();
+        std::ostringstream listedErrors;
+        Require(kb::game::VerifyPackagedRelease(anchor, linuxRoot, linuxRoot / "Game", securityRoot, listedErrors) != nullptr,
+            ("A Linux release whose extension-less files are all listed was refused: " + listedErrors.str()).c_str());
         std::filesystem::remove(linuxRoot / "release.kbmanifest", linuxError);
         std::ostringstream withoutManifest;
         Require(kb::game::VerifyPackagedRelease(anchor, linuxRoot, linuxRoot / "Game", securityRoot, withoutManifest) == nullptr,

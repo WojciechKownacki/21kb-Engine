@@ -170,8 +170,8 @@ bool IsCriticalReleaseFile(const std::filesystem::path& relativePath) {
     std::ranges::transform(extension, extension.begin(), [](char value) {
         return value >= 'A' && value <= 'Z' ? static_cast<char>(value - 'A' + 'a') : value;
     });
-    return extension == ".exe" || extension == ".dll" || extension == ".so" || extension == ".dylib" ||
-        extension == ".kbpack" || extension == ".kbpackset";
+    return extension.empty() || extension == ".exe" || extension == ".dll" || extension == ".so" ||
+        extension == ".dylib" || extension == ".kbpack" || extension == ".kbpackset";
 }
 
 bool HashFileSha512(const std::filesystem::path& path, Sha512Digest& digest, std::uint64_t& size) {
