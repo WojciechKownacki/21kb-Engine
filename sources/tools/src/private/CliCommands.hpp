@@ -22,6 +22,7 @@ namespace kb::cli {
 [[nodiscard]] int RunPackCompressCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunPackSplitCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunPackPatchCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunPackSetKeysCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunPackSetVerifyCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunReleaseCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunWorldCommand(const ArgumentList& arguments, CommandIo io);

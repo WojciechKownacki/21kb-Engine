@@ -16,6 +16,8 @@ constexpr std::uint32_t kSealEncrypted = 1U << 0U;
 // The domain includes its terminating NUL, which separates it from what follows it.
 constexpr std::string_view kSealSignatureDomain{ "21KB-PACK-SEAL-V1\0", 18U };
 constexpr std::string_view kContentKeyIdDomain = "21KB-PACK-CONTENT-KEY-ID";
+// Associated data of a wrapped pack content key (WrapAssetPackContentKey).
+constexpr std::string_view kWrappedKeyDomain = "21KB-PACK-CONTENT-KEY-WRAP";
 
 void PutUInt32(std::vector<std::uint8_t>& bytes, std::uint32_t value) {
     for (std::uint32_t shift = 0U; shift < 32U; shift += 8U) {
@@ -144,6 +146,42 @@ std::array<std::uint8_t, 16U> AssetPackContentKeyId(const kb::security::AeadKey&
     return id;
 }
 
+bool WrapAssetPackContentKey(
+    const kb::security::AeadKey& releaseKey,
+    const kb::security::AeadKey& packKey,
+    WrappedAssetPackKey& out) {
+    kb::security::AeadNonce nonce{};
+    if (!kb::security::SecureRandom(nonce)) {
+        return false;
+    }
+    kb::security::AeadKey sealed = packKey;
+    kb::security::AeadTag tag{};
+    kb::security::AeadEncryptInPlace(sealed.Span(), tag, releaseKey, nonce,
+        std::span{ reinterpret_cast<const std::uint8_t*>(kWrappedKeyDomain.data()), kWrappedKeyDomain.size() });
+    std::copy(nonce.begin(), nonce.end(), out.begin());
+    std::copy(sealed.Span().begin(), sealed.Span().end(), out.begin() + kb::security::kAeadNonceBytes);
+    std::copy(tag.begin(), tag.end(), out.begin() + kb::security::kAeadNonceBytes + kb::security::kAeadKeyBytes);
+    return true;
+}
+
+bool UnwrapAssetPackContentKey(
+    const kb::security::AeadKey& releaseKey,
+    const WrappedAssetPackKey& wrapped,
+    kb::security::AeadKey& out) {
+    kb::security::AeadNonce nonce{};
+    kb::security::AeadTag tag{};
+    kb::security::AeadKey key{};
+    std::copy_n(wrapped.begin(), nonce.size(), nonce.begin());
+    std::copy_n(wrapped.begin() + kb::security::kAeadNonceBytes, kb::security::kAeadKeyBytes, key.data());
+    std::copy_n(wrapped.begin() + kb::security::kAeadNonceBytes + kb::security::kAeadKeyBytes, tag.size(), tag.begin());
+    if (!kb::security::AeadDecryptInPlace(key.Span(), tag, releaseKey, nonce,
+            std::span{ reinterpret_cast<const std::uint8_t*>(kWrappedKeyDomain.data()), kWrappedKeyDomain.size() })) {
+        return false;
+    }
+    out = key;
+    return true;
+}
+
 kb::security::AeadNonce AssetPackBlockNonce(const std::array<std::uint8_t, 16U>& salt, std::uint64_t blockOffset) noexcept {
     kb::security::AeadNonce nonce{};
     std::copy(salt.begin(), salt.end(), nonce.begin());
@@ -154,6 +192,15 @@ kb::security::AeadNonce AssetPackBlockNonce(const std::array<std::uint8_t, 16U>&
 }
 
 bool ReadAssetPackSealDigest(const std::filesystem::path& path, kb::security::Sha512Digest& digest, std::string& error) {
+    AssetPackSeal seal{};
+    return ReadAssetPackSeal(path, seal, digest, error);
+}
+
+bool ReadAssetPackSeal(
+    const std::filesystem::path& path,
+    AssetPackSeal& seal,
+    kb::security::Sha512Digest& digest,
+    std::string& error) {
     std::ifstream raw{ path, std::ios::binary };
     std::error_code sizeError;
     const std::uintmax_t size = std::filesystem::file_size(path, sizeError);
@@ -171,7 +218,7 @@ bool ReadAssetPackSealDigest(const std::filesystem::path& path, kb::security::Sh
     std::vector<std::uint8_t> indexBytes;
     std::vector<std::uint8_t> fragmentBytes;
     std::vector<std::uint8_t> sealBytes;
-    AssetPackSeal seal{};
+    seal = {};
     if (!ReadExact(raw, header.indexOffset, header.indexBytes, indexBytes) ||
         !ReadExact(raw, header.fragmentIndexOffset, header.fragmentIndexBytes, fragmentBytes) ||
         !ReadExact(raw, header.fileBytes, size - header.fileBytes, sealBytes) ||

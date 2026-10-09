@@ -415,6 +415,44 @@ TrustAnchorLookup ReadTrustAnchorFromExecutable(const std::filesystem::path& exe
 #endif
 }
 
+TrustAnchorLookup FindReleaseTrustAnchor(const std::filesystem::path& releaseDirectory) {
+    std::error_code error;
+    std::vector<std::filesystem::path> players;
+    for (std::filesystem::directory_iterator iterator{ releaseDirectory, error }, end; !error && iterator != end;
+         iterator.increment(error)) {
+        std::error_code statusError;
+        if (!iterator->is_regular_file(statusError) || statusError) {
+            continue;
+        }
+        // A Windows .exe, or a Linux ELF player (which has no extension).
+        bool player = iterator->path().extension() == ".exe";
+        if (!player) {
+            std::ifstream input{ iterator->path(), std::ios::binary };
+            std::array<char, 4U> magic{};
+            input.read(magic.data(), static_cast<std::streamsize>(magic.size()));
+            player = input.gcount() == 4 && magic[0] == '\x7F' && magic[1] == 'E' && magic[2] == 'L' && magic[3] == 'F';
+        }
+        if (player) {
+            players.push_back(iterator->path());
+        }
+    }
+    if (error) {
+        return InvalidLookup("release directory could not be listed");
+    }
+    // Directory order is the file system's; the result must not depend on it.
+    std::ranges::sort(players);
+    for (const std::filesystem::path& player : players) {
+        TrustAnchorLookup lookup = ReadTrustAnchorFromExecutable(player);
+        if (lookup.state == TrustAnchorLookup::State::Invalid) {
+            lookup.error = player.filename().string() + ": " + lookup.error;
+        }
+        if (lookup.state != TrustAnchorLookup::State::Absent) {
+            return lookup;
+        }
+    }
+    return TrustAnchorLookup{};
+}
+
 std::filesystem::path DefaultUserSecurityRoot(std::string_view productId) {
     if (!IsValidProductId(productId)) {
         return {};

@@ -1,9 +1,11 @@
 #pragma once
 
 #include "engine/assets/bake/AssetPack.hpp"
+#include "engine/assets/bake/AssetPackSeal.hpp"
 
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -20,7 +22,10 @@
 //     patch 1 patch-0001 Game.patch-0001.kbpack
 //
 // One line per pack, in mount order: exactly one base, first; then the chunks; then the patches
-// in strictly ascending patch level. Paths are relative to the index, '/'-separated, and name a
+// in strictly ascending patch level. After the packs, a `key <wrapped key> <path>` line may give
+// a pack its own content key, wrapped under the release's anchor key (WrapAssetPackContentKey,
+// 144 hexadecimal digits): the packs of an earlier release that a patch release ships again stay
+// encrypted under their own keys, at most one line per pack. Paths are relative to the index, '/'-separated, and name a
 // .kbpack inside the index's directory tree. Every pack also states its role, label and patch
 // level in its own (sealed) header; the mount refuses an index and a pack that disagree.
 //
@@ -47,6 +52,9 @@ struct AssetPackSetEntry {
     std::uint32_t patchLevel = 0U;
     // Relative to the index file's directory, '/'-separated.
     std::string path;
+    // The pack's content key wrapped under the release's anchor key, when the pack is encrypted
+    // under a key other than the anchor's.
+    std::optional<WrappedAssetPackKey> wrappedContentKey;
 
     [[nodiscard]] bool operator==(const AssetPackSetEntry&) const noexcept = default;
 };
@@ -61,14 +69,15 @@ enum class AssetPackSetStatus : std::uint8_t {
     Success,
     // The index file is missing or could not be read.
     Unreadable,
-    // Not an index, a line that does not parse, a path that is not a relative .kbpack path.
+    // Not an index, a line that does not parse, a path that is not a relative .kbpack path, a
+    // key line before a pack line or for a pack the index does not list.
     Malformed,
     // Longer than kMaxAssetPackSetFileBytes or names more than kMaxAssetPackSetPacks packs.
     TooLarge,
     // No base, a base that is not first, a chunk after a patch, patch levels that do not
     // strictly ascend.
     OrderInvalid,
-    // Two packs with the same path or the same label.
+    // Two packs with the same path or the same label, or two keys for one pack.
     Duplicate,
 };
 

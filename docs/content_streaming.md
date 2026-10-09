@@ -116,6 +116,34 @@ the release through its seal digest, so:
 `kb_cli pack set-verify --anchor <anchor> Game.kbpackset` mounts a set the way the player does and
 reads every block of every pack.
 
+### Encrypted pack sets
+
+Every release's trust anchor carries a fresh content key, and the packs a release seals are
+encrypted under it. A patch release ships the packs of the release it patches byte for byte, so
+they stay encrypted under the keys they were sealed with. Its pack set index gives each of them a
+key line:
+
+```
+key <144 hexadecimal digits> Game.kbpack
+```
+
+The digits are the pack's own content key encrypted with XChaCha20-Poly1305 under the new
+release's anchor key (a random nonce, the key, the tag). The player unwraps it with its anchor
+key and mounts the pack with the result; the unwrapped key must have the id the pack's signed
+seal records, so a key line cannot be moved to another pack, and one that was altered or made
+under another release's key does not unwrap (`ContentKeyMismatch`). A key line before a pack
+line, for a pack the index does not list, or a second one for the same pack is refused. The index
+itself is signed through the release manifest.
+
+`kb_cli pack set-keys [--content-key <new release key>] --previous-release <dir> Game.kbpackset`
+writes exactly the key lines an index needs: it reads each pack's seal, finds the key it was
+encrypted under among the keys of the previous release (the content key in its player's anchor,
+and every key line of its index, unwrapped with that one) and wraps it under the new key. A pack
+sealed under the new key, or not encrypted, gets no line. `kb_cli pack patch --current-release
+<dir>` reads the current content with the keys of that release's player. Packaging runs both for
+every `--patch-from` release, so patches and `--encrypt-pack` combine, and chains of patch
+releases carry every earlier key forward.
+
 ## Asynchronous reads
 
 `AsyncFileReader` is a pool of dedicated I/O threads (2 by default) that serves read requests
@@ -196,7 +224,8 @@ far camera with a small budget evicts both back to their floors.
 | `kb_cli pack info <pack>` | Format, role, label, patch level, identities, compressed blocks, sizes, seal |
 | `kb_cli pack compress [--level n] <in> <out>` | Rewrites a pack with another compression level |
 | `kb_cli pack split --base <base> --chunk <label>=<prefix>[,…] [--index <set>] <cooked>` | Splits a cooked pack into a base and chunk packs by virtual path prefix |
-| `kb_cli pack patch --current <set or pack> --patch-level n --output <patch> <new cook>` | Builds a patch pack with what the new cook changed, added and dropped (tombstones) |
+| `kb_cli pack patch --current <set or pack> [--current-release <dir>] --patch-level n --output <patch> <new cook>` | Builds a patch pack with what the new cook changed, added and dropped (tombstones) |
+| `kb_cli pack set-keys [--content-key <file>] --previous-release <dir> <Game.kbpackset>` | Writes the key lines of packs encrypted under an earlier release's keys |
 | `kb_cli pack set-verify [--anchor <file>] <Game.kbpackset>` | Mounts a set as the player does and reads every block |
 
 Split and patch output is unsealed; sign each pack with `kb_cli pack sign` afterwards.
@@ -221,8 +250,7 @@ stage, index and packs included.
 
 - Packaging produces pack sets and patches for Windows packages only, the platform with a
   release manifest; other targets ship one pack.
-- `--patch-from` cannot be combined with `--encrypt-pack` (every release gets a new content key,
-  so the reused packs could not be decrypted) or with `--pack-chunk` (a patch keeps the chunks of
-  the release it patches).
+- `--patch-from` cannot be combined with `--pack-chunk` (a patch keeps the chunks of the release
+  it patches).
 - Only packaged content streams. A loose project in the editor or a development player loads
   full mip chains and every level of detail.

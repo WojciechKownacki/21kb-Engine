@@ -1,6 +1,7 @@
 #include "engine/assets/bake/AssetPackSet.hpp"
 
 #include "engine/assets/bake/AssetBakeKey.hpp"
+#include "engine/security/Crypto.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -152,6 +153,11 @@ std::string EncodeAssetPackSetIndex(const AssetPackSetIndex& index) {
         }
         text += '\n';
     }
+    for (const AssetPackSetEntry& entry : index.packs) {
+        if (entry.wrappedContentKey.has_value()) {
+            text += "key " + kb::security::ToHex(*entry.wrappedContentKey) + ' ' + entry.path + '\n';
+        }
+    }
     return text;
 }
 
@@ -164,6 +170,7 @@ AssetPackSetStatus ParseAssetPackSetIndex(std::string_view text, AssetPackSetInd
     }
     AssetPackSetIndex index{};
     bool headerSeen = false;
+    bool keysSeen = false;
     for (std::string_view rest = text; !rest.empty();) {
         const std::size_t end = rest.find('\n');
         std::string_view line = rest.substr(0U, end);
@@ -180,6 +187,26 @@ AssetPackSetStatus ParseAssetPackSetIndex(std::string_view text, AssetPackSetInd
         }
         AssetPackSetEntry entry{};
         const std::string_view kind = TakeField(line);
+        if (kind == "key") {
+            // `key <wrapped key> <path>`: the path is the rest of the line and names a listed pack.
+            WrappedAssetPackKey wrapped{};
+            if (!kb::security::TryParseHex(TakeField(line), wrapped)) {
+                return AssetPackSetStatus::Malformed;
+            }
+            const auto pack = std::ranges::find(index.packs, line, &AssetPackSetEntry::path);
+            if (pack == index.packs.end()) {
+                return AssetPackSetStatus::Malformed;
+            }
+            if (pack->wrappedContentKey.has_value()) {
+                return AssetPackSetStatus::Duplicate;
+            }
+            pack->wrappedContentKey = wrapped;
+            keysSeen = true;
+            continue;
+        }
+        if (keysSeen) {
+            return AssetPackSetStatus::Malformed;
+        }
         if (kind == "base") {
             entry.role = AssetPackRole::Base;
         } else if (kind == "chunk") {

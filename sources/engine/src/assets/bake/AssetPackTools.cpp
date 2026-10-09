@@ -7,6 +7,7 @@
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
 
 #include <algorithm>
+#include <fstream>
 #include <map>
 #include <set>
 #include <string_view>
@@ -325,10 +326,13 @@ bool BuildAssetPackPatch(const AssetPackPatchRequest& request, AssetPackPatchRep
         return value >= 'A' && value <= 'Z' ? static_cast<char>(value - 'A' + 'a') : value;
     });
     const RuntimeAssetPackStatus currentStatus = extension == kAssetPackSetFileExtension
-        ? current.MountSetIndex(request.current, profile)
-        : current.Mount(request.current, profile);
+        ? current.MountSetIndex(request.current, profile, AssetPackAccess::Ranged, request.currentTrust)
+        : current.Mount(request.current, profile, AssetPackAccess::Ranged, request.currentTrust);
     if (currentStatus != RuntimeAssetPackStatus::Success) {
         error = "the current content does not mount for this profile: " + std::string{ ToString(currentStatus) };
+        if (currentStatus == RuntimeAssetPackStatus::ContainerRejected) {
+            error += " (" + std::string{ ToString(current.ContainerStatus()) } + ")";
+        }
         return false;
     }
     for (std::uint32_t container = 0U; container < current.ContainerCount(); ++container) {
@@ -402,6 +406,65 @@ bool BuildAssetPackPatch(const AssetPackPatchRequest& request, AssetPackPatchRep
     current.Unmount();
     next.Unmount();
     return WriteRuntimePack(nextSource, profile, patch, options, request.output, report.pack, error);
+}
+
+bool RewrapAssetPackSetKeys(
+    const std::filesystem::path& indexPath,
+    const kb::security::AeadKey* releaseKey,
+    std::span<const kb::security::AeadKey> knownKeys,
+    AssetPackSetKeyReport& report,
+    std::string& error) {
+    report = {};
+    AssetPackSetIndex index{};
+    if (const AssetPackSetStatus status = ReadAssetPackSetIndex(indexPath, index); status != AssetPackSetStatus::Success) {
+        error = "the pack set index is refused: " + std::string{ ToString(status) };
+        return false;
+    }
+    const std::optional<std::array<std::uint8_t, 16U>> releaseKeyId =
+        releaseKey == nullptr ? std::nullopt : std::optional{ AssetPackContentKeyId(*releaseKey) };
+    for (AssetPackSetEntry& entry : index.packs) {
+        ++report.packs;
+        AssetPackSeal seal{};
+        kb::security::Sha512Digest digest{};
+        if (!ReadAssetPackSeal(ResolveAssetPackSetPath(indexPath, entry.path), seal, digest, error)) {
+            error = entry.path + ": " + error;
+            return false;
+        }
+        entry.wrappedContentKey.reset();
+        if (!seal.encrypted) {
+            continue;
+        }
+        ++report.encryptedPacks;
+        if (releaseKeyId.has_value() && kb::security::ConstantTimeEqual(*releaseKeyId, seal.contentKeyId)) {
+            continue;
+        }
+        const auto key = std::ranges::find_if(knownKeys, [&seal](const kb::security::AeadKey& candidate) {
+            return kb::security::ConstantTimeEqual(AssetPackContentKeyId(candidate), seal.contentKeyId);
+        });
+        if (key == knownKeys.end()) {
+            error = entry.path + " is encrypted under a content key none of the known keys matches";
+            return false;
+        }
+        if (releaseKey == nullptr) {
+            error = entry.path + " is encrypted, and a release without a content key cannot carry its key";
+            return false;
+        }
+        WrappedAssetPackKey wrapped{};
+        if (!WrapAssetPackContentKey(*releaseKey, *key, wrapped)) {
+            error = "the system random number generator is unavailable";
+            return false;
+        }
+        entry.wrappedContentKey = wrapped;
+        ++report.wrappedKeys;
+    }
+    const std::string text = EncodeAssetPackSetIndex(index);
+    std::ofstream output{ indexPath, std::ios::binary | std::ios::trunc };
+    output.write(text.data(), static_cast<std::streamsize>(text.size()));
+    if (text.empty() || !output.good()) {
+        error = "the pack set index could not be written: " + indexPath.string();
+        return false;
+    }
+    return true;
 }
 
 } // namespace kb::assets::bake

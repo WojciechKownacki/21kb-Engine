@@ -76,6 +76,61 @@ void PrintReport(CommandIo io, const std::filesystem::path& path, const bake::As
     return true;
 }
 
+// The trust a release directory's player carries: its release key, and the content key that
+// decrypts its packs -- for reading the content of an earlier release.
+[[nodiscard]] bool LoadReleaseTrust(const std::filesystem::path& release, kb::security::TrustAnchor& anchor, std::string& error) {
+    kb::security::TrustAnchorLookup lookup = kb::security::FindReleaseTrustAnchor(release);
+    if (lookup.state == kb::security::TrustAnchorLookup::State::Invalid) {
+        error = lookup.error;
+        return false;
+    }
+    if (lookup.state != kb::security::TrustAnchorLookup::State::Present) {
+        error = "no player in " + release.string() + " carries a trust anchor";
+        return false;
+    }
+    anchor = std::move(lookup.anchor);
+    return true;
+}
+
+// Every content key a release's packs are encrypted under: its anchor's, and those its pack set
+// index wraps under that one.
+[[nodiscard]] bool CollectReleaseContentKeys(
+    const std::filesystem::path& release,
+    std::vector<kb::security::AeadKey>& keys,
+    std::string& error) {
+    kb::security::TrustAnchor anchor{};
+    if (!LoadReleaseTrust(release, anchor, error)) {
+        return false;
+    }
+    if (!anchor.packContentKey.has_value()) {
+        return true;
+    }
+    keys.push_back(*anchor.packContentKey);
+    const std::filesystem::path indexPath = release / std::filesystem::path{ bake::kAssetPackSetFileName };
+    std::error_code existsError;
+    if (!std::filesystem::is_regular_file(indexPath, existsError)) {
+        return true;
+    }
+    bake::AssetPackSetIndex index{};
+    if (const bake::AssetPackSetStatus status = bake::ReadAssetPackSetIndex(indexPath, index);
+        status != bake::AssetPackSetStatus::Success) {
+        error = indexPath.string() + " is refused: " + std::string{ bake::ToString(status) };
+        return false;
+    }
+    for (const bake::AssetPackSetEntry& entry : index.packs) {
+        if (!entry.wrappedContentKey.has_value()) {
+            continue;
+        }
+        kb::security::AeadKey key{};
+        if (!bake::UnwrapAssetPackContentKey(*anchor.packContentKey, *entry.wrappedContentKey, key)) {
+            error = "the key of " + entry.path + " in " + indexPath.string() + " does not unwrap with its player's key";
+            return false;
+        }
+        keys.push_back(key);
+    }
+    return true;
+}
+
 } // namespace
 
 int RunPackInfoCommand(const ArgumentList& arguments, CommandIo io) {
@@ -201,7 +256,8 @@ int RunPackPatchCommand(const ArgumentList& arguments, CommandIo io) {
     const std::optional<std::string> levelText = arguments.Option("--patch-level");
     if (arguments.Positionals().size() != 2U || !current.has_value() || !output.has_value() || !levelText.has_value()) {
         return Fail(io, "pack patch expects --current <Game.kbpackset | Game.kbpack> --patch-level <n> "
-                        "--output <patch.kbpack> [--label <label>] [--level <0-19>] <new-cook.kbpack>");
+                        "--output <patch.kbpack> [--label <label>] [--level <0-19>] [--current-release <dir>] "
+                        "<new-cook.kbpack>");
     }
     std::string error;
     bake::AssetPackPatchRequest request{};
@@ -219,6 +275,15 @@ int RunPackPatchCommand(const ArgumentList& arguments, CommandIo io) {
     request.label = arguments.Option("--label").value_or("patch-" + std::to_string(request.patchLevel));
     request.compression = level == 0 ? bake::AssetPackBlockCompression::None : bake::AssetPackBlockCompression::Zstd;
     request.compressionLevel = level == 0 ? 9 : level;
+    if (const std::optional<std::string> release = arguments.Option("--current-release"); release.has_value()) {
+        // The current content is read the way its own player reads it.
+        kb::security::TrustAnchor anchor{};
+        if (!LoadReleaseTrust(*release, anchor, error)) {
+            return Fail(io, error);
+        }
+        request.currentTrust.requiredSigner = anchor.releaseKey;
+        request.currentTrust.contentKey = std::move(anchor.packContentKey);
+    }
     bake::AssetPackPatchReport report{};
     if (!bake::BuildAssetPackPatch(request, report, error)) {
         return Fail(io, error);
@@ -228,6 +293,38 @@ int RunPackPatchCommand(const ArgumentList& arguments, CommandIo io) {
            << " files changed, " << report.removedFiles << " files removed"
            << (report.settingsChanged ? ", project settings" : "") << '\n';
     PrintReport(io, request.output, report.pack);
+    return 0;
+}
+
+int RunPackSetKeysCommand(const ArgumentList& arguments, CommandIo io) {
+    if (arguments.Positionals().size() != 2U) {
+        return Fail(io, "pack set-keys expects [--content-key <file>] [--previous-release <dir> ...] <Game.kbpackset>");
+    }
+    std::string error;
+    std::optional<kb::security::AeadKey> releaseKey;
+    if (const std::optional<std::string> keyPath = arguments.Option("--content-key"); keyPath.has_value()) {
+        std::ifstream input{ *keyPath, std::ios::binary };
+        std::string text{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+        releaseKey.emplace();
+        const bool decoded = !text.empty() && kb::security::DecodePackContentKey(text, *releaseKey, error);
+        kb::security::SecureWipe(std::span{ reinterpret_cast<std::uint8_t*>(text.data()), text.size() });
+        if (!decoded) {
+            return Fail(io, error.empty() ? "could not read " + *keyPath : error);
+        }
+    }
+    std::vector<kb::security::AeadKey> knownKeys;
+    for (const std::string& release : arguments.Options("--previous-release")) {
+        if (!CollectReleaseContentKeys(release, knownKeys, error)) {
+            return Fail(io, error);
+        }
+    }
+    const std::filesystem::path indexPath{ arguments.Positionals()[1] };
+    bake::AssetPackSetKeyReport report{};
+    if (!bake::RewrapAssetPackSetKeys(indexPath, releaseKey.has_value() ? &*releaseKey : nullptr, knownKeys, report, error)) {
+        return Fail(io, error);
+    }
+    io.out << indexPath.string() << ": " << report.packs << " packs, " << report.encryptedPacks << " encrypted, "
+           << report.wrappedKeys << " with their own key\n";
     return 0;
 }
 
@@ -246,15 +343,21 @@ int RunPackSetVerifyCommand(const ArgumentList& arguments, CommandIo io) {
         status != bake::AssetPackSetStatus::Success) {
         return Fail(io, "pack set index refused: " + std::string{ bake::ToString(status) });
     }
-    bake::AssetPackReader base;
-    if (base.Mount(bake::ResolveAssetPackSetPath(indexPath, index.packs.front().path)) != bake::AssetPackReadStatus::Success) {
-        return Fail(io, "the base pack does not mount");
+    // The profile comes from the base's header alone: an encrypted base does not mount without
+    // its content key, which may be a wrapped one the set mount below unwraps.
+    bake::AssetPackHeader baseHeader{};
+    {
+        std::ifstream input{ bake::ResolveAssetPackSetPath(indexPath, index.packs.front().path), std::ios::binary };
+        std::vector<std::uint8_t> headerBytes(static_cast<std::size_t>(bake::kAssetPackHeaderBytes));
+        input.read(reinterpret_cast<char*>(headerBytes.data()), static_cast<std::streamsize>(headerBytes.size()));
+        if (!input.good() || bake::DecodeAssetPackHeader(headerBytes, baseHeader) != bake::AssetPackReadStatus::Success) {
+            return Fail(io, "the base pack is not readable");
+        }
     }
     bake::BakeTargetProfile profile{};
-    if (!bake::TryFindBakeTargetProfile(base.Header().targetProfileId, profile)) {
+    if (!bake::TryFindBakeTargetProfile(baseHeader.targetProfileId, profile)) {
         return Fail(io, "the base pack names an unknown target profile");
     }
-    base.Unmount();
     bake::RuntimeAssetPack set;
     if (const bake::RuntimeAssetPackStatus status = set.MountSetIndex(indexPath, profile, bake::AssetPackAccess::Ranged, trust);
         status != bake::RuntimeAssetPackStatus::Success) {

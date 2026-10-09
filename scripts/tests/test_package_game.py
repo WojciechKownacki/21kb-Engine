@@ -520,7 +520,6 @@ class PackageGameTests(unittest.TestCase):
                 ({"patch_level": 4}, "needs --patch-from"),
                 ({"patch_from": previous, "target": "Linux.x64"}, "Windows players only"),
                 ({"patch_from": previous, "pack_chunk": ["cell=/Game/A/"]}, "keeps the chunks"),
-                ({"patch_from": previous, "encrypt_pack": True}, "fresh content key"),
                 ({"patch_from": previous, "release_number": 12}, "higher than the patched release's 12"),
                 ({"patch_from": previous, "patch_level": 3}, "higher than the release's patch level 3"),
                 ({"patch_from": root}, "signed Windows release"),
@@ -646,8 +645,9 @@ class PackageGameTests(unittest.TestCase):
             commands = [[str(value) for value in call.args[0]] for call in checked.call_args_list]
             patch = cook / "Game.patch-0001.kbpack"
             self.assertEqual(
-                [str(kb_cli), "pack", "patch", "--current", str(previous / "Game.kbpackset"), "--patch-level", "1",
-                 "--label", "patch-0001", "--level", "0", "--output", str(patch), str(pack)],
+                [str(kb_cli), "pack", "patch", "--current", str(previous / "Game.kbpackset"), "--current-release",
+                 str(previous), "--patch-level", "1", "--label", "patch-0001", "--level", "0", "--output", str(patch),
+                 str(pack)],
                 commands[0],
             )
             self.assertEqual([str(patch)], [command[-3] for command in commands if command[1:3] == ["pack", "sign"]])
@@ -658,7 +658,74 @@ class PackageGameTests(unittest.TestCase):
             self.assertEqual(b"base pack", (stage / "Game.kbpack").read_bytes())
             self.assertEqual((previous / "Game.cell.kbpack").read_bytes(), (stage / "Game.cell.kbpack").read_bytes())
             self.assertEqual(b"patch", (stage / "Game.patch-0001.kbpack").read_bytes())
+            self.assertEqual(
+                [str(kb_cli), "pack", "set-keys", "--previous-release", str(previous), str(stage / "Game.kbpackset")],
+                commands[-2],
+            )
             self.assertEqual(["pack", "set-verify"], commands[-1][1:3])
+
+    def test_encrypted_patch_release_wraps_the_keys_of_the_packs_it_ships_again(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_text:
+            root = Path(temporary_text)
+            job = root / "job"
+            cook = job / "cook"
+            stage = root / "stage"
+            cook.mkdir(parents=True)
+            stage.mkdir()
+            pack = cook / "Game.kbpack"
+            pack.write_bytes(b"new cook")
+            previous = self._previous_release(
+                root, 7, "21kb-pack-set 1\nbase Game.kbpack\npatch 1 patch-0001 Game.patch-0001.kbpack\n"
+                f"key {'ab' * 72} Game.kbpack\n"
+            )
+            kb_cli = root / "kb_cli.exe"
+            key = root / "game.kbkey"
+            key.write_bytes(b"key")
+            args = self._content_args(root, signing_key=key, patch_from=previous, encrypt_pack=True)
+            package_game._validate_content_packaging(args)
+            self.assertEqual(2, args.patch_level)
+            self.assertEqual(
+                [("base", "", 0, "Game.kbpack"), ("patch", "patch-0001", 1, "Game.patch-0001.kbpack")],
+                args.patch_base_entries,
+            )
+
+            def run(arguments: list[object], **_kwargs: object) -> object:
+                argv = [str(value) for value in arguments]
+                if argv[1:3] == ["pack", "patch"]:
+                    Path(argv[argv.index("--output") + 1]).write_bytes(b"patch")
+                return mock.MagicMock()
+
+            with mock.patch.object(package_game, "_build_targets"), \
+                    mock.patch.object(package_game, "_build_tool_path", return_value=kb_cli), \
+                    mock.patch.object(package_game, "emit_diagnostic"), \
+                    mock.patch.object(package_game, "run_checked", side_effect=run) as checked:
+                pack_set = package_game._build_pack_set(args, Path("cmake.exe"), pack, job)
+                package_game._sign_pack(args, Path("cmake.exe"), pack_set, job)
+                package_game._stage_pack_set(args, pack, stage, job)
+
+            commands = [[str(value) for value in call.args[0]] for call in checked.call_args_list]
+            content_key = str(job / "pack-content.key")
+            patch = cook / "Game.patch-0002.kbpack"
+            self.assertIn("--current-release", commands[0])
+            self.assertEqual(
+                [str(kb_cli), "pack", "sign", "--content-key", content_key, str(patch), "--key", str(key)],
+                next(command for command in commands if command[1:3] == ["pack", "sign"]),
+            )
+            # The new index lists the packs only; set-keys writes the key lines under the new key.
+            self.assertEqual(
+                "21kb-pack-set 1\nbase Game.kbpack\npatch 1 patch-0001 Game.patch-0001.kbpack\n"
+                "patch 2 patch-0002 Game.patch-0002.kbpack\n",
+                (stage / "Game.kbpackset").read_text(encoding="utf-8"),
+            )
+            self.assertEqual(
+                [str(kb_cli), "pack", "set-keys", "--content-key", content_key, "--previous-release", str(previous),
+                 str(stage / "Game.kbpackset")],
+                commands[-2],
+            )
+            self.assertEqual(
+                [str(kb_cli), "pack", "set-verify", "--anchor", str(job / "trust-anchor.bin"), str(stage / "Game.kbpackset")],
+                commands[-1],
+            )
 
     def test_single_pack_package_is_staged_without_a_pack_set_index(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_text:

@@ -63,6 +63,10 @@ struct RuntimeAssetPackMount {
     AssetPackRole role = AssetPackRole::Base;
     std::string label;
     std::uint32_t patchLevel = 0U;
+    // The pack's own content key, wrapped under the trust's content key (the release's anchor
+    // key), for a pack encrypted under another key. Without one the pack is read with the
+    // trust's content key itself.
+    std::optional<WrappedAssetPackKey> wrappedContentKey;
 };
 
 // Where one block of a mounted artifact lies: which pack of the set, and its validated entry.
