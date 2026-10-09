@@ -262,6 +262,7 @@ class PackageGameTests(unittest.TestCase):
                 configuration="Development",
                 engine_root=root / "engine",
                 target="Windows.x64",
+                pack_compression_level=7,
             )
             with mock.patch.object(package_game, "_find_optional_build_tool", return_value=None), \
                     mock.patch.object(package_game, "run_checked") as run:
@@ -276,6 +277,7 @@ class PackageGameTests(unittest.TestCase):
             command = run.call_args_list[0].args[0]
             output_option = command.index("--runtime-modules-output")
             self.assertEqual(job / "cook" / "RuntimeModules", command[output_option + 1])
+            self.assertEqual("7", command[command.index("--pack-compression-level") + 1])
             self.assertEqual(job / "cook" / "Game.kbpack", pack)
 
     @staticmethod
@@ -401,6 +403,223 @@ class PackageGameTests(unittest.TestCase):
             with mock.patch.object(package_game, "run_checked") as run:
                 package_game._sign_release(unsigned, stage, job)
             run.assert_not_called()
+
+    @staticmethod
+    def _content_args(root: Path, **overrides: object) -> argparse.Namespace:
+        values: dict[str, object] = {
+            "build_root": root / "build",
+            "configuration": "Release",
+            "engine_root": root / "engine",
+            "target": "Windows.x64",
+            "product_id": "Publisher.Game",
+            "signing_key": None,
+            "signing_broker": None,
+            "encrypt_pack": False,
+            "release_number": 20,
+            "pack_compression_level": package_game.DEFAULT_PACK_COMPRESSION_LEVEL,
+            "pack_chunk": [],
+            "patch_from": None,
+            "patch_level": None,
+        }
+        values.update(overrides)
+        return argparse.Namespace(**values)
+
+    @staticmethod
+    def _previous_release(root: Path, release: int, index: str | None) -> Path:
+        previous = root / "release-previous"
+        previous.mkdir()
+        (previous / "Game.kbpack").write_bytes(b"base pack")
+        (previous / "release.kbmanifest").write_text(
+            "21kb-release-manifest 1\nproduct Publisher.Game\ncontent-version 1.0\n"
+            f"release {release}\nanti-rollback 1\nsignature {'0' * 128}\n",
+            encoding="utf-8",
+        )
+        if index is not None:
+            (previous / package_game.PACK_SET_INDEX).write_text(index, encoding="utf-8")
+            for line in index.splitlines()[2:]:
+                (previous / line.rsplit(" ", 1)[1]).write_bytes(line.encode("utf-8"))
+        return previous
+
+    def test_content_packaging_options_are_validated(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_text:
+            root = Path(temporary_text)
+            chunked = self._content_args(root, pack_chunk=["cell_0_0=/Game/Cells/0_0/,/Game/Layers/Night/"])
+            package_game._validate_content_packaging(chunked)
+            self.assertEqual([("cell_0_0", ("/Game/Cells/0_0/", "/Game/Layers/Night/"))], chunked.pack_chunk_rules)
+            self.assertIsNone(chunked.patch_base_entries)
+            previous = self._previous_release(
+                root, 12, "21kb-pack-set 1\nbase Game.kbpack\nchunk cell Game.cell.kbpack\n"
+                "patch 3 patch-0003 Game.patch-0003.kbpack\n"
+            )
+            for refused, message in (
+                ({"pack_compression_level": 20}, "0 \\(off\\) to 19"),
+                ({"pack_compression_level": -1}, "0 \\(off\\) to 19"),
+                ({"pack_chunk": ["cell"]}, "LABEL="),
+                ({"pack_chunk": ["../x=/Game/Cells/"]}, "LABEL="),
+                ({"pack_chunk": ["cell=Game/Cells/"]}, "virtual path"),
+                ({"pack_chunk": ["cell=/Game/../Secrets/"]}, "virtual path"),
+                ({"pack_chunk": ["cell=/Game/A/", "cell=/Game/B/"]}, "its own label"),
+                ({"pack_chunk": ["cell=/Game/A/"], "target": "Linux.x64"}, "Windows players only"),
+                ({"patch_level": 4}, "needs --patch-from"),
+                ({"patch_from": previous, "target": "Linux.x64"}, "Windows players only"),
+                ({"patch_from": previous, "pack_chunk": ["cell=/Game/A/"]}, "keeps the chunks"),
+                ({"patch_from": previous, "encrypt_pack": True}, "fresh content key"),
+                ({"patch_from": previous, "release_number": 12}, "higher than the patched release's 12"),
+                ({"patch_from": previous, "patch_level": 3}, "higher than the release's patch level 3"),
+                ({"patch_from": root}, "signed Windows release"),
+            ):
+                with self.assertRaisesRegex(PackagingError, message):
+                    package_game._validate_content_packaging(self._content_args(root, **refused))
+
+            patch = self._content_args(root, patch_from=previous)
+            package_game._validate_content_packaging(patch)
+            self.assertEqual(4, patch.patch_level)
+            self.assertEqual(
+                [("base", "", 0, "Game.kbpack"), ("chunk", "cell", 0, "Game.cell.kbpack"),
+                 ("patch", "patch-0003", 3, "Game.patch-0003.kbpack")],
+                patch.patch_base_entries,
+            )
+            (previous / "Game.cell.kbpack").unlink()
+            with self.assertRaisesRegex(PackagingError, "missing Game.cell.kbpack"):
+                package_game._validate_content_packaging(self._content_args(root, patch_from=previous))
+            (previous / package_game.PACK_SET_INDEX).write_text("21kb-pack-set 1\nbase ../Game.kbpack\n", encoding="utf-8")
+            with self.assertRaisesRegex(PackagingError, "unexpected file"):
+                package_game._validate_content_packaging(self._content_args(root, patch_from=previous))
+
+        parsed = package_game._parse_arguments([
+            "--project", "missing", "--target", "Windows.x64", "--configuration", "Release", "--output", "out",
+            "--engine-root", ".", "--build-root", "build", "--product-name", "Game", "--publisher", "Studio",
+            "--version", "1.0", "--executable-name", "Game",
+        ])
+        self.assertEqual(9, parsed.pack_compression_level)
+        self.assertEqual([], parsed.pack_chunk)
+        self.assertIsNone(parsed.patch_from)
+
+    def test_chunked_pack_set_is_split_sealed_and_staged_as_one_verified_set(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_text:
+            root = Path(temporary_text)
+            job = root / "job"
+            cook = job / "cook"
+            stage = root / "stage"
+            cook.mkdir(parents=True)
+            stage.mkdir()
+            pack = cook / "Game.kbpack"
+            pack.write_bytes(b"cooked")
+            kb_cli = root / "kb_cli.exe"
+            key = root / "game.kbkey"
+            key.write_bytes(b"key")
+            args = self._content_args(root, signing_key=key, pack_chunk=["cell_0_0=/Game/Cells/0_0/", "night=/Game/Layers/Night/"])
+            package_game._validate_content_packaging(args)
+
+            def run(arguments: list[object], **_kwargs: object) -> object:
+                argv = [str(value) for value in arguments]
+                if argv[1:3] == ["pack", "split"]:
+                    self.assertEqual(b"cooked", Path(argv[-1]).read_bytes())
+                    base = Path(argv[argv.index("--base") + 1])
+                    base.write_bytes(b"base")
+                    for spec in (argv[position + 1] for position, value in enumerate(argv) if value == "--chunk"):
+                        base.with_name(f"Game.{spec.split('=')[0]}.kbpack").write_bytes(spec.encode("utf-8"))
+                    Path(argv[argv.index("--index") + 1]).write_text(
+                        "21kb-pack-set 1\nbase Game.kbpack\nchunk cell_0_0 Game.cell_0_0.kbpack\n"
+                        "chunk night Game.night.kbpack\n", encoding="utf-8")
+                return mock.MagicMock()
+
+            with mock.patch.object(package_game, "_build_targets"), \
+                    mock.patch.object(package_game, "_build_tool_path", return_value=kb_cli), \
+                    mock.patch.object(package_game, "emit_diagnostic"), \
+                    mock.patch.object(package_game, "run_checked", side_effect=run) as checked:
+                pack_set = package_game._build_pack_set(args, Path("cmake.exe"), pack, job)
+                package_game._sign_pack(args, Path("cmake.exe"), pack_set, job)
+                package_game._stage_pack_set(args, pack, stage, job)
+
+            commands = [[str(value) for value in call.args[0]] for call in checked.call_args_list]
+            self.assertEqual(
+                [str(kb_cli), "pack", "split", "--base", str(pack), "--level", "9", "--index",
+                 str(cook / "Game.kbpackset"), "--chunk", "cell_0_0=/Game/Cells/0_0/", "--chunk",
+                 "night=/Game/Layers/Night/", str(cook / "unsplit" / "Game.kbpack")],
+                commands[0],
+            )
+            signed = [command[-3] for command in commands if command[1:3] == ["pack", "sign"]]
+            verified = [command[-1] for command in commands if command[1:3] == ["pack", "verify"]]
+            every_pack = [str(pack), str(cook / "Game.cell_0_0.kbpack"), str(cook / "Game.night.kbpack")]
+            self.assertEqual(every_pack, signed)
+            self.assertEqual(every_pack, verified)
+            self.assertEqual(
+                [str(kb_cli), "pack", "set-verify", "--anchor", str(job / "trust-anchor.bin"), str(stage / "Game.kbpackset")],
+                commands[-1],
+            )
+            self.assertEqual(
+                ["Game.cell_0_0.kbpack", "Game.kbpack", "Game.kbpackset", "Game.night.kbpack"],
+                sorted(path.name for path in stage.iterdir()),
+            )
+            self.assertEqual(b"base", (stage / "Game.kbpack").read_bytes())
+
+    def test_patch_release_ships_the_patched_packs_unchanged_and_seals_only_the_patch(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_text:
+            root = Path(temporary_text)
+            job = root / "job"
+            cook = job / "cook"
+            stage = root / "stage"
+            cook.mkdir(parents=True)
+            stage.mkdir()
+            pack = cook / "Game.kbpack"
+            pack.write_bytes(b"new cook")
+            previous = self._previous_release(root, 7, "21kb-pack-set 1\nbase Game.kbpack\nchunk cell Game.cell.kbpack\n")
+            kb_cli = root / "kb_cli.exe"
+            key = root / "game.kbkey"
+            key.write_bytes(b"key")
+            args = self._content_args(root, signing_key=key, patch_from=previous, pack_compression_level=0)
+            package_game._validate_content_packaging(args)
+            self.assertEqual(1, args.patch_level)
+
+            def run(arguments: list[object], **_kwargs: object) -> object:
+                argv = [str(value) for value in arguments]
+                if argv[1:3] == ["pack", "patch"]:
+                    Path(argv[argv.index("--output") + 1]).write_bytes(b"patch")
+                return mock.MagicMock()
+
+            with mock.patch.object(package_game, "_build_targets"), \
+                    mock.patch.object(package_game, "_build_tool_path", return_value=kb_cli), \
+                    mock.patch.object(package_game, "emit_diagnostic"), \
+                    mock.patch.object(package_game, "run_checked", side_effect=run) as checked:
+                pack_set = package_game._build_pack_set(args, Path("cmake.exe"), pack, job)
+                package_game._sign_pack(args, Path("cmake.exe"), pack_set, job)
+                package_game._stage_pack_set(args, pack, stage, job)
+
+            commands = [[str(value) for value in call.args[0]] for call in checked.call_args_list]
+            patch = cook / "Game.patch-0001.kbpack"
+            self.assertEqual(
+                [str(kb_cli), "pack", "patch", "--current", str(previous / "Game.kbpackset"), "--patch-level", "1",
+                 "--label", "patch-0001", "--level", "0", "--output", str(patch), str(pack)],
+                commands[0],
+            )
+            self.assertEqual([str(patch)], [command[-3] for command in commands if command[1:3] == ["pack", "sign"]])
+            self.assertEqual(
+                "21kb-pack-set 1\nbase Game.kbpack\nchunk cell Game.cell.kbpack\npatch 1 patch-0001 Game.patch-0001.kbpack\n",
+                (stage / "Game.kbpackset").read_text(encoding="utf-8"),
+            )
+            self.assertEqual(b"base pack", (stage / "Game.kbpack").read_bytes())
+            self.assertEqual((previous / "Game.cell.kbpack").read_bytes(), (stage / "Game.cell.kbpack").read_bytes())
+            self.assertEqual(b"patch", (stage / "Game.patch-0001.kbpack").read_bytes())
+            self.assertEqual(["pack", "set-verify"], commands[-1][1:3])
+
+    def test_single_pack_package_is_staged_without_a_pack_set_index(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_text:
+            root = Path(temporary_text)
+            job = root / "job"
+            stage = root / "stage"
+            job.mkdir()
+            stage.mkdir()
+            pack = job / "Game.kbpack"
+            pack.write_bytes(b"pack")
+            args = self._content_args(root)
+            package_game._validate_content_packaging(args)
+            with mock.patch.object(package_game, "run_checked") as run:
+                pack_set = package_game._build_pack_set(args, Path("cmake.exe"), pack, job)
+                package_game._stage_pack_set(args, pack, stage, job)
+            run.assert_not_called()
+            self.assertEqual((pack,), pack_set.new_packs)
+            self.assertEqual(["Game.kbpack"], [path.name for path in stage.iterdir()])
 
     def test_default_product_id_is_a_portable_name(self) -> None:
         self.assertEqual("Acme-Studio.My-Game", package_game._default_product_id("Acme Studio", "My Game!"))
