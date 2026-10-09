@@ -19,6 +19,9 @@
 #include "engine/scene/PhysicsLayersAssetIO.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneUIComponents.hpp"
+#include "engine/world/WorldCellIndex.hpp"
+#include "engine/world/WorldDescriptor.hpp"
+#include "engine/world/WorldObjectFile.hpp"
 
 #include <algorithm>
 #include <array>
@@ -2510,6 +2513,42 @@ void RunMcpCommandTests() {
 
 } // namespace
 
+void RunWorldCommandTests() {
+    const std::filesystem::path root = TestRoot() / "world";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    Require(!error, "kb_cli world test root could not be prepared");
+    {
+        kb::scene::Scene scene;
+        for (int index = 0; index < 3; ++index) {
+            kb::scene::SceneObjectDesc desc{ .name = "Rock" + std::to_string(index) };
+            desc.transform.localPosition = { static_cast<float>(index) * 100.0F, 0.0F, 0.0F };
+            static_cast<void>(scene.Entities().CreateObject(desc));
+        }
+        Require(kb::scene::SceneDocumentService::Save(scene, root / "Level.21kbscene", "Level"), "kb_cli world test scene could not be saved");
+    }
+    const std::string rootText = root.string();
+    const CommandRun usage = Run(&kb::cli::RunWorldCommand, { "migrate", "--scene", "Level.21kbscene" });
+    Require(usage.exitCode == 1 && Contains(usage.output, "--out"), "world migrate accepted a missing --out");
+    const CommandRun migrate = Run(&kb::cli::RunWorldCommand, {
+        "migrate", "--project", rootText, "--scene", "Level.21kbscene", "--out", "Level.21kbworld", "--cell-size", "64" });
+    Require(migrate.exitCode == 0 && Contains(migrate.output, "migrated 3 objects"), "world migrate failed");
+    Require(kb::world::WorldObjectFileIO::List(root / "Level.objects").size() == 3U, "world migrate did not write one file per object");
+    const kb::world::WorldDescriptorReadResult descriptor = kb::world::WorldDescriptorIO::Read(root / "Level.21kbworld");
+    Require(descriptor.succeeded && descriptor.descriptor.cellSize == 64.0, "world migrate did not apply the cell size");
+    const CommandRun again = Run(&kb::cli::RunWorldCommand, {
+        "migrate", "--project", rootText, "--scene", "Level.21kbscene", "--out", "Level.21kbworld" });
+    Require(again.exitCode == 1 && Contains(again.output, "already exists"), "world migrate overwrote an existing world");
+    const CommandRun build = Run(&kb::cli::RunWorldCommand, { "build", "--project", rootText, "--world", "Level.21kbworld" });
+    Require(build.exitCode == 0 && Contains(build.output, "built 3 cells from 3 objects"), "world build failed");
+    const kb::world::WorldCellIndexReadResult index =
+        kb::world::WorldCellIndexIO::Read(kb::world::WorldPaths::CellIndexPath(root / "Level.21kbworld"));
+    Require(index.succeeded && index.index.units.size() == 3U, "world build did not write the cell index");
+    const CommandRun unknown = Run(&kb::cli::RunWorldCommand, { "explode" });
+    Require(unknown.exitCode == 1, "world accepted an unknown subcommand");
+}
+
 int main() {
     RunMiniJsonTests();
     RunArgumentListTests();
@@ -2522,6 +2561,7 @@ int main() {
     RunApiCheckCommandTests();
     RunMcpCommandTests();
     RunKeyAndPackCommandTests();
+    RunWorldCommandTests();
     // Keep the production physics fixture on disk after the test process so
     // the built kb_cli executable can be run against it as a separate-process
     // runtime verification.

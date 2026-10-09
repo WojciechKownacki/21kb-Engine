@@ -54,6 +54,12 @@ Commands:
                       --content-version <version> --release <number>
                       [--anti-rollback]
                  verify [--anchor <file>] <dir>
+  world        Convert a single-file scene into a partitioned world (one file
+               per object), or build a world's streaming cells.
+                 migrate --scene <file.21kbscene> --out <file.21kbworld>
+                         [--cell-size <metres>] [--project <dir>]
+                 build --world <file.21kbworld> [--project <dir>]
+               (HLOD proxies are built by the editor and by kb_cooker.)
 
 Scene paths may be physical (relative to the project root) or virtual
 ("/Game/Scenes/Main.21kbscene", requires --project).
@@ -120,6 +126,9 @@ int main(int argc, char** argv) {
     }
     if (command == "release") {
         return kb::cli::RunReleaseCommand(arguments, io);
+    }
+    if (command == "world") {
+        return kb::cli::RunWorldCommand(arguments, io);
     }
     if (command == "help" || command == "--help" || command == "-h") {
         std::cout << kUsage;
