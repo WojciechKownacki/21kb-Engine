@@ -149,15 +149,14 @@ struct RequestSecretsGuard {
 
 EditorProjectPackageService::~EditorProjectPackageService() {
     Cancel();
-    if (worker_.joinable()) {
-        worker_.join();
-    }
+    // Waits for the job's process to be torn down.
+    lane_.reset();
 }
 
 bool EditorProjectPackageService::Start(EditorPackageRequest request, std::string& error) {
     RequestSecretsGuard requestSecrets{ request };
     error.clear();
-    JoinFinishedWorker();
+    ReleaseFinishedJob();
     {
         std::scoped_lock lock{ mutex_ };
         if (snapshot_.state == EditorPackageJobState::Running) {
@@ -276,7 +275,17 @@ bool EditorProjectPackageService::Start(EditorPackageRequest request, std::strin
         cancelRequested_ = false;
     }
     try {
-        worker_ = std::thread{ &EditorProjectPackageService::Run, this, std::move(request) };
+        if (lane_ == nullptr) {
+            lane_ = std::make_unique<kb::assets::streaming::BackgroundLane>(
+                kb::assets::streaming::BackgroundLoadService::Shared(), kb::assets::streaming::BackgroundJobClass::Long);
+        }
+        kb::assets::streaming::BackgroundRequestHandle job =
+            lane_->Run([this, request = std::move(request)](std::string&) mutable {
+                Run(std::move(request));
+                return true;
+            });
+        std::scoped_lock lock{ mutex_ };
+        job_ = std::move(job);
     } catch (const std::system_error& exception) {
         std::scoped_lock lock{ mutex_ };
         snapshot_ = EditorPackageSnapshot{};
@@ -293,6 +302,12 @@ void EditorProjectPackageService::Cancel() noexcept {
         return;
     }
     cancelRequested_ = true;
+    // A job no worker has taken yet never starts its process.
+    if (lane_ != nullptr && job_ != nullptr && lane_->Service().Cancel(job_)) {
+        snapshot_.state = EditorPackageJobState::Cancelled;
+        snapshot_.status = "Package job cancelled.";
+        return;
+    }
 #if defined(_WIN32)
     HANDLE job = static_cast<HANDLE>(processJob_);
     if (job != nullptr) {
@@ -709,14 +724,11 @@ void EditorProjectPackageService::Finish(EditorPackageJobState state, std::strin
     }
 }
 
-void EditorProjectPackageService::JoinFinishedWorker() {
-    bool finished = false;
-    {
-        std::scoped_lock lock{ mutex_ };
-        finished = snapshot_.state != EditorPackageJobState::Running;
-    }
-    if (finished && worker_.joinable()) {
-        worker_.join();
+void EditorProjectPackageService::ReleaseFinishedJob() {
+    // The lane runs one job at a time, so a new job never overlaps the end of the last one.
+    std::scoped_lock lock{ mutex_ };
+    if (snapshot_.state != EditorPackageJobState::Running) {
+        job_.reset();
     }
 }
 
