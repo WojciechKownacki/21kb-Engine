@@ -26,6 +26,11 @@ public:
     // hands a click on a row to the toolbar's own menu handling.
     [[nodiscard]] static EditorHeadlessPopupCheckResult VerifyToolbarMenuOverlay(
         EditorSceneContext& sceneContext, EditorSceneBgfxViewport& viewport);
+    // Opens the Inspector's Add Component browser for the selected entity, clicks
+    // its search box and types into it with key messages, both to the editor window
+    // and to the browser popup, and checks that the search filters the components.
+    [[nodiscard]] static EditorHeadlessPopupCheckResult VerifyAddComponentSearchInput(
+        EditorSceneContext& sceneContext, EditorSceneBgfxViewport& viewport);
 #endif
 };
 

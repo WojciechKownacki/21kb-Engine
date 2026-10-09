@@ -192,6 +192,24 @@ LRESULT CALLBACK EditorOverlayPopupWindow::WindowProc(HWND window, UINT message,
             popup->client_->PaintOverlay(reinterpret_cast<HDC>(wparam), client);
         }
         return 0;
+    case WM_MOUSEACTIVATE:
+        // WS_EX_NOACTIVATE only keeps a click from bringing the popup to the
+        // foreground over another application. While the editor is the foreground
+        // application a click activates the popup anyway unless it refuses here,
+        // and the activated popup takes the keyboard focus with it: every key typed
+        // after clicking into it - the Add Component search box - went to a window
+        // that has no use for keys. The popup never activates; its owner keeps
+        // activation and the keyboard.
+        return MA_NOACTIVATE;
+    case WM_KEYDOWN:
+    case WM_KEYUP:
+    case WM_CHAR:
+        // Should the popup ever hold the keyboard, its keys are its owner's: the
+        // owner's message routing is what edits text and runs shortcuts.
+        if (popup != nullptr && popup->owner_ != nullptr && IsWindow(popup->owner_) != 0) {
+            return SendMessageW(popup->owner_, message, wparam, lparam);
+        }
+        break;
     case WM_SETCURSOR:
         SetCursor(LoadCursorW(nullptr, MAKEINTRESOURCEW(32512)));
         return TRUE;

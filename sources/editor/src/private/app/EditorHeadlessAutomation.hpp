@@ -174,6 +174,9 @@ public:
     // A toolbar menu opened on a real editor window drops down in a popup above the
     // window and its scene viewport, paints its rows and passes clicks back.
     [[nodiscard]] bool VerifyToolbarMenuOverlay();
+    // Clicking the Add Component browser's search box on a real editor window and
+    // typing filters the components, whether the keys reach the window or the popup.
+    [[nodiscard]] bool VerifyAddComponentSearchInput();
     [[nodiscard]] bool CaptureEditorScene(std::string_view checkpoint, bool editorOverlaysEnabled = true);
     // The Scene panel's viewport exactly as the editor presents it: its own camera and the
     // production present settings, editor overlays included (grid lines, the world cell grid).

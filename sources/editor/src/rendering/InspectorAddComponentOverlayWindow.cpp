@@ -15,8 +15,11 @@ constexpr wchar_t kOverlayClassName[] = L"KBEditorInspectorAddComponentOverlay";
 [[nodiscard]] RECT ResolveScreenBounds(HWND owner, RECT ownerBounds) noexcept {
     RECT result = EditorOverlayPopupWindow::OwnerClientToScreen(owner, ownerBounds);
 
+    // Kept on the monitor it is on; a browser whose inspector is on no monitor at
+    // all stays with its inspector instead of jumping onto the nearest one.
     MONITORINFO monitor{ sizeof(monitor) };
-    if (GetMonitorInfoW(MonitorFromRect(&result, MONITOR_DEFAULTTONEAREST), &monitor) != 0) {
+    const HMONITOR onMonitor = MonitorFromRect(&result, MONITOR_DEFAULTTONULL);
+    if (onMonitor != nullptr && GetMonitorInfoW(onMonitor, &monitor) != 0) {
         if (result.right > monitor.rcWork.right) {
             OffsetRect(&result, monitor.rcWork.right - result.right, 0);
         }

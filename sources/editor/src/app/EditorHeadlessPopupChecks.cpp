@@ -3,17 +3,20 @@
 #if defined(_WIN32)
 #include "app/EditorWindowMessageContext.hpp"
 #include "app/EditorWindowMessageRouter.hpp"
+#include "inspection/InspectorAddComponentBrowserModel.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
 #include "rendering/EditorOverlayPopupWindow.hpp"
 #include "rendering/EditorToolbarLayout.hpp"
 #include "rendering/EditorToolbarMenuOverlayWindow.hpp"
 #include "rendering/EditorToolbarRenderer.hpp"
+#include "rendering/InspectorPanelRenderer.hpp"
 #include "rendering/MainWindowBackBufferPainter.hpp"
 #include "scene/EditorSceneContext.hpp"
 
 #include <bx/math.h>
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cstdint>
 #include <optional>
@@ -26,6 +29,7 @@ namespace {
 
 constexpr wchar_t kEditorWindowClassName[] = L"KBEditorHeadlessEditorWindow";
 constexpr wchar_t kViewportWindowClassName[] = L"KBEditorSceneBgfxViewport";
+constexpr wchar_t kAddComponentWindowClassName[] = L"KBEditorInspectorAddComponentOverlay";
 constexpr int kWindowWidth = 1280;
 constexpr int kWindowHeight = 760;
 constexpr int kOffscreen = -12000;
@@ -376,6 +380,26 @@ struct ClientPixels {
     return succeeded;
 }
 
+// Key presses as the keyboard delivers them to the window with keyboard focus:
+// WM_KEYDOWN/WM_KEYUP, turned into WM_CHAR by TranslateMessage in the pump.
+void TypeKeys(const EditorWindowUnderTest& editor, HWND target, std::string_view letters) {
+    for (const char letter : letters) {
+        const auto key = static_cast<UINT>(std::toupper(static_cast<unsigned char>(letter)));
+        const UINT scanCode = MapVirtualKeyW(key, MAPVK_VK_TO_VSC);
+        PostMessageW(target, WM_KEYDOWN, key, static_cast<LPARAM>(1U | (scanCode << 16U)));
+        PostMessageW(target, WM_KEYUP, key, static_cast<LPARAM>(1U | (scanCode << 16U) | (3U << 30U)));
+    }
+    editor.Pump();
+}
+
+[[nodiscard]] std::string Lower(std::string_view text) {
+    std::string lower{ text };
+    for (char& character : lower) {
+        character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
+    }
+    return lower;
+}
+
 [[nodiscard]] POINT MenuItemCenter(EditorWindowUnderTest& editor, EditorMenuCommand menu) {
     const EditorMenuRects rects = EditorToolbarRenderer::ResolveMenu(ToRect(editor.Layout().menu), EditorMenuCommand::None, 0);
     return Center(EditorToolbarLayout::MenuRectByCommand(rects, menu));
@@ -454,6 +478,124 @@ EditorHeadlessPopupCheckResult EditorHeadlessPopupChecks::VerifyToolbarMenuOverl
     result.succeeded = succeeded;
     if (succeeded) {
         detail = "world,layout";
+    }
+    return result;
+}
+
+EditorHeadlessPopupCheckResult EditorHeadlessPopupChecks::VerifyAddComponentSearchInput(
+    EditorSceneContext& sceneContext, EditorSceneBgfxViewport& viewport) {
+    EditorHeadlessPopupCheckResult result{};
+    if (!sceneContext.Scene().Entities().IsAlive(sceneContext.SelectedEntity())) {
+        result.detail = "no-selected-entity";
+        return result;
+    }
+    EditorWindowUnderTest editor(sceneContext, viewport);
+    if (!editor.Create()) {
+        result.detail = "editor-window-not-created";
+        return result;
+    }
+    if (!editor.ActivePanel(DockPanelKind::Inspector).has_value()) {
+        result.detail = "no-inspector-panel";
+        return result;
+    }
+
+    InspectorPanelState& inspector = sceneContext.Inspector();
+    if (!inspector.IsAddComponentBrowserOpen()) {
+        inspector.ToggleAddComponentBrowser();
+    }
+    // The browser opens with its search box active; ending that here makes the
+    // click below the thing that starts it.
+    inspector.EndTextEdit();
+    InvalidateRect(editor.Window(), nullptr, FALSE);
+    editor.Pump();
+    const HWND browser = FindOwnedPopup(editor.Window(), kAddComponentWindowClassName);
+    if (browser == nullptr || IsWindowVisible(browser) == 0) {
+        inspector.CloseAddComponentBrowser();
+        result.detail = "no-browser-popup";
+        return result;
+    }
+
+    std::string& detail = result.detail;
+    bool succeeded = true;
+    // A click must leave activation, and with it the keyboard, with the editor
+    // window. WS_EX_NOACTIVATE alone only keeps the popup from taking the
+    // foreground from another application; inside the active editor a click
+    // activates the popup unless it answers WM_MOUSEACTIVATE with MA_NOACTIVATE.
+    if (SendMessageW(browser, WM_MOUSEACTIVATE, reinterpret_cast<WPARAM>(editor.Window()),
+            MAKELPARAM(HTCLIENT, WM_LBUTTONDOWN)) != MA_NOACTIVATE) {
+        detail += "browser-activates-on-click;";
+        succeeded = false;
+    }
+
+    RECT client{};
+    GetClientRect(browser, &client);
+    std::optional<POINT> searchPoint;
+    for (int y = client.top; y < client.bottom && !searchPoint.has_value(); ++y) {
+        const int x = (client.left + client.right) / 2;
+        if (InspectorPanelRenderer::HitTestAddComponentOverlay(client, sceneContext, x, y).property ==
+            InspectorPropertyId::AddComponentSearch) {
+            searchPoint = POINT{ x, y + 4 };
+        }
+    }
+    if (!searchPoint.has_value()) {
+        detail += "no-search-box;";
+        succeeded = false;
+    } else {
+        editor.Click(browser, *searchPoint);
+    }
+    if (inspector.EditedProperty() != InspectorPropertyId::AddComponentSearch) {
+        detail += "click-did-not-start-search;";
+        succeeded = false;
+    }
+
+    // Typed with the editor window holding the keyboard, as it does after the click...
+    TypeKeys(editor, editor.Window(), "me");
+    // ...and into the popup itself, which hands keys to the window it belongs to.
+    TypeKeys(editor, browser, "sh");
+    const std::string typed = inspector.EditedProperty() == InspectorPropertyId::AddComponentSearch
+        ? Lower(inspector.EditBuffer())
+        : std::string{};
+    if (typed != "mesh") {
+        detail += "search-text=" + typed + ";";
+        succeeded = false;
+    }
+    const auto pluginEnabled = [&sceneContext](std::string_view pluginId) {
+        return sceneContext.IsProjectPluginEnabled(pluginId);
+    };
+    const std::vector<AddComponentRow> filtered = InspectorAddComponentBrowserModel::Rows({}, typed, pluginEnabled);
+    const bool meshRendererListed = std::ranges::any_of(filtered, [](const AddComponentRow& row) {
+        return row.label == "Mesh Renderer";
+    });
+    if (typed.empty() || !meshRendererListed ||
+        filtered.size() >= InspectorAddComponentBrowserModel::Rows({}, "e", pluginEnabled).size()) {
+        detail += "search-not-filtered;";
+        succeeded = false;
+    }
+    // The popup lists what the search found: its first list row is the first match.
+    if (!filtered.empty()) {
+        bool firstRowShown = false;
+        for (int y = client.top; y < client.bottom && !firstRowShown; ++y) {
+            const InspectorPanelRenderer::Hit hit = InspectorPanelRenderer::HitTestAddComponentOverlay(
+                client, sceneContext, (client.left + client.right) / 2, y);
+            firstRowShown = hit.property == InspectorPropertyId::AddComponentOption && hit.index == 0;
+        }
+        if (!firstRowShown) {
+            detail += "filtered-row-not-listed;";
+            succeeded = false;
+        }
+    }
+
+    inspector.CloseAddComponentBrowser();
+    InvalidateRect(editor.Window(), nullptr, FALSE);
+    editor.Pump();
+    if (IsWindowVisible(browser) != 0) {
+        detail += "browser-not-closed;";
+        succeeded = false;
+    }
+
+    result.succeeded = succeeded;
+    if (succeeded) {
+        detail = "click,type-window,type-popup,filtered";
     }
     return result;
 }
