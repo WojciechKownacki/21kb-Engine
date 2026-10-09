@@ -107,6 +107,20 @@ Zstandard compresses the blocks of asset packs. For binary distributions the BSD
 copyright notice, license conditions and disclaimer are reproduced with the shipped
 licenses.
 
+## Recast & Detour
+
+- Repository: https://github.com/recastnavigation/recastnavigation
+- Release: `1.6.0`, fetched by CMake from
+  `https://github.com/recastnavigation/recastnavigation/archive/refs/tags/v1.6.0.tar.gz` at a pinned SHA-256
+- Files used: `Recast/Source`, `Detour/Source`, the path corridor, local boundary, obstacle
+  avoidance and proximity grid of `DetourCrowd/Source`, and `DetourTileCache/Source/DetourTileCacheBuilder.cpp`
+- License: Zlib
+- License file: `third_party/licenses/recastnavigation-1.6.0.txt`
+
+Recast generates the navigation meshes the engine bakes from scene geometry; Detour stores them
+as tiles, answers path queries and moves agents along path corridors. The Zlib notice is
+reproduced with the shipped licenses.
+
 ## etcpak
 
 - Repository: https://github.com/wolfpld/etcpak

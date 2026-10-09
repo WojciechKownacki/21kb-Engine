@@ -1634,6 +1634,7 @@ target_link_libraries(kb_engine
         flecs::flecs_static
         kb_lua
         kb_monocypher
+        kb_recast
         kb_ufbx
         kb_zstd
 )
