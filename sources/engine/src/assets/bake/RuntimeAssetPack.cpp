@@ -118,15 +118,14 @@ RuntimeAssetPackStatus RuntimeAssetPack::MountMemory(
     const AssetPackTrust& trust) {
     Unmount();
     refusedContainer_ = 0U;
-    Container container{
-        .reader = std::make_unique<AssetPackReader>(),
-        .readMutex = std::make_unique<std::mutex>(),
-    };
+    Container& container = containers_.emplace_back();
+    container.reader = std::make_unique<AssetPackReader>();
+    container.readMutex = std::make_unique<std::mutex>();
     containerStatus_ = container.reader->MountMemory(bytes, trust);
     if (containerStatus_ != AssetPackReadStatus::Success) {
+        Unmount();
         return RuntimeAssetPackStatus::ContainerRejected;
     }
-    containers_.push_back(std::move(container));
     const std::array<RuntimeAssetPackMount, 1U> base{ RuntimeAssetPackMount{} };
     return FinishMount(base, profile);
 }
@@ -143,11 +142,10 @@ RuntimeAssetPackStatus RuntimeAssetPack::MountSet(
     }
     containers_.reserve(packs.size());
     for (std::size_t index = 0U; index < packs.size(); ++index) {
-        Container container{
-            .path = packs[index].path,
-            .reader = std::make_unique<AssetPackReader>(),
-            .readMutex = std::make_unique<std::mutex>(),
-        };
+        Container& container = containers_.emplace_back();
+        container.path = packs[index].path;
+        container.reader = std::make_unique<AssetPackReader>();
+        container.readMutex = std::make_unique<std::mutex>();
         // A pack with its own content key gets it unwrapped with the release's key; one that
         // does not unwrap is a key for another release (or an altered one).
         AssetPackTrust packTrust = trust;
@@ -169,7 +167,6 @@ RuntimeAssetPackStatus RuntimeAssetPack::MountSet(
             refusedContainer_ = static_cast<std::uint32_t>(index);
             return RuntimeAssetPackStatus::ContainerRejected;
         }
-        containers_.push_back(std::move(container));
     }
     return FinishMount(packs, profile);
 }
