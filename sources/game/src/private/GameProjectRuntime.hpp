@@ -116,7 +116,8 @@ inline constexpr std::string_view kPackagedGameFileName = "Game.kbpack";
 
 // Startup check of a packaged release installed in `root`: its signed manifest must verify
 // against the anchor's release key and product, every critical file must be listed, and the
-// running `executable` must hash to its listed digest. Applies the manifest's anti-rollback policy
+// running `executable` -- and the pack set index, when the release has one -- must hash to its
+// listed digest. Applies the manifest's anti-rollback policy
 // with state in `securityRoot`, then installs the release for native module loading. Null, with a
 // diagnostic, when the release must not run.
 [[nodiscard]] std::shared_ptr<const kb::security::InstalledRelease> VerifyPackagedRelease(
@@ -127,7 +128,8 @@ inline constexpr std::string_view kPackagedGameFileName = "Game.kbpack";
     std::ostream& err);
 
 // True when the mounted pack is the very pack the release manifest lists at `packPath`, compared
-// by the digest its seal signs, so the pack is never hashed a second time.
+// by the digest its seal signs, so the pack is never hashed a second time. For a pack set every
+// further pack (chunk or patch) must likewise be the one listed at its own path.
 [[nodiscard]] bool PackBelongsToRelease(
     const kb::security::InstalledRelease& release,
     const std::filesystem::path& packPath,

@@ -32,6 +32,13 @@ constexpr std::size_t kHeaderFragmentCountOffset = 88U;
 constexpr std::size_t kHeaderFragmentAlignmentOffset = 92U;
 constexpr std::size_t kHeaderProfileIdLengthOffset = 96U;
 constexpr std::size_t kHeaderProfileIdOffset = 97U;
+// Format 3: the pack's role in a set, in what format 2 left as zero padding after the profile id.
+constexpr std::size_t kHeaderRoleOffset = 168U;
+constexpr std::size_t kHeaderLabelLengthOffset = 169U;
+constexpr std::size_t kHeaderLabelOffset = 170U;
+constexpr std::size_t kHeaderPatchLevelOffset = 236U;
+constexpr std::size_t kHeaderBaseIdentityHighOffset = 240U;
+constexpr std::size_t kHeaderBaseIdentityLowOffset = 248U;
 
 void PutUInt32(std::vector<std::uint8_t>& bytes, std::uint32_t value) {
     for (std::uint32_t shift = 0U; shift < 32U; shift += 8U) {
@@ -184,6 +191,30 @@ std::string_view ToString(AssetPackReadStatus status) noexcept {
     return "Unknown";
 }
 
+std::string_view ToString(AssetPackRole role) noexcept {
+    switch (role) {
+    case AssetPackRole::Base:
+        return "base";
+    case AssetPackRole::Chunk:
+        return "chunk";
+    case AssetPackRole::Patch:
+        return "patch";
+    }
+    return "unknown";
+}
+
+AssetBakeDigest AssetPackCatalogIdentity(
+    std::span<const std::uint8_t> header,
+    std::span<const std::uint8_t> artifactIndex,
+    std::span<const std::uint8_t> fragmentIndex) {
+    std::vector<std::uint8_t> catalog;
+    catalog.reserve(header.size() + artifactIndex.size() + fragmentIndex.size());
+    catalog.insert(catalog.end(), header.begin(), header.end());
+    catalog.insert(catalog.end(), artifactIndex.begin(), artifactIndex.end());
+    catalog.insert(catalog.end(), fragmentIndex.begin(), fragmentIndex.end());
+    return HashBakeDigest(catalog);
+}
+
 bool TryAlignAssetPackOffset(std::uint64_t value, std::uint32_t alignment, std::uint64_t& out) noexcept {
     if (!store::IsPowerOfTwo(alignment)) {
         return false;
@@ -282,10 +313,21 @@ AssetPackReadStatus DecodeAssetPackIndex(
             }
             // A method this build cannot undo must not be answered with the stored bytes; that
             // would hand a caller compressed data it thinks is a payload.
-            if (compression != static_cast<std::uint8_t>(AssetPackBlockCompression::None)) {
-                return AssetPackReadStatus::IndexCorrupt;
-            }
-            if (block.storedBytes != block.uncompressedBytes) {
+            if (compression == static_cast<std::uint8_t>(AssetPackBlockCompression::None)) {
+                if (block.storedBytes != block.uncompressedBytes) {
+                    return AssetPackReadStatus::IndexCorrupt;
+                }
+            } else if (compression == static_cast<std::uint8_t>(AssetPackBlockCompression::Zstd)) {
+                // A compressed block exists only because it is smaller; one that claims to
+                // inflate past the block ceiling is a decompression bomb, refused before a read.
+                // A mapping hands out the bytes as they lie in the file, so a Mapped block is
+                // never stored compressed.
+                if (block.storedBytes >= block.uncompressedBytes ||
+                    block.uncompressedBytes > kMaxAssetPackBlockBytes ||
+                    residency == static_cast<std::uint8_t>(BakedAssetBlockResidency::Mapped)) {
+                    return AssetPackReadStatus::IndexCorrupt;
+                }
+            } else {
                 return AssetPackReadStatus::IndexCorrupt;
             }
             if (block.storedBytes == 0U || !store::IsPowerOfTwo(block.alignmentBytes)) {
@@ -442,6 +484,15 @@ std::vector<std::uint8_t> EncodeAssetPackHeader(const AssetPackHeader& header) {
     const std::size_t profileIdLength = std::min<std::size_t>(header.targetProfileId.size(), kMaxBakeCacheNameBytes);
     bytes[kHeaderProfileIdLengthOffset] = static_cast<std::uint8_t>(profileIdLength);
     std::memcpy(bytes.data() + kHeaderProfileIdOffset, header.targetProfileId.data(), profileIdLength);
+    if (header.formatVersion >= 3U) {
+        bytes[kHeaderRoleOffset] = static_cast<std::uint8_t>(header.role);
+        const std::size_t labelLength = std::min<std::size_t>(header.label.size(), kMaxBakeCacheNameBytes);
+        bytes[kHeaderLabelLengthOffset] = static_cast<std::uint8_t>(labelLength);
+        std::memcpy(bytes.data() + kHeaderLabelOffset, header.label.data(), labelLength);
+        PokeUInt32(bytes, kHeaderPatchLevelOffset, header.patchLevel);
+        PokeUInt64(bytes, kHeaderBaseIdentityHighOffset, header.baseIdentity.high);
+        PokeUInt64(bytes, kHeaderBaseIdentityLowOffset, header.baseIdentity.low);
+    }
     return bytes;
 }
 
@@ -455,7 +506,8 @@ AssetPackReadStatus DecodeAssetPackHeader(std::span<const std::uint8_t> bytes, A
 
     AssetPackHeader header{};
     header.formatVersion = PeekUInt32(bytes, kHeaderFormatVersionOffset);
-    if (header.formatVersion != kAssetPackFormatVersion) {
+    if (header.formatVersion < kAssetPackOldestReadableFormatVersion ||
+        header.formatVersion > kAssetPackFormatVersion) {
         return AssetPackReadStatus::UnsupportedVersion;
     }
     header.headerBytes = PeekUInt32(bytes, kHeaderHeaderBytesOffset);
@@ -480,6 +532,41 @@ AssetPackReadStatus DecodeAssetPackHeader(std::span<const std::uint8_t> bytes, A
         reinterpret_cast<const char*>(bytes.data() + kHeaderProfileIdOffset), profileIdLength);
     if (!IsValidBakeCacheName(header.targetProfileId)) {
         return AssetPackReadStatus::HeaderCorrupt;
+    }
+    if (header.formatVersion >= 3U) {
+        // The padding around these fields is written as zeros and, like the rest of the fixed
+        // header, covered by a seal's signature; a reader acts only on the fields themselves.
+        const std::uint8_t role = bytes[kHeaderRoleOffset];
+        const std::uint8_t labelLength = bytes[kHeaderLabelLengthOffset];
+        if (role > static_cast<std::uint8_t>(AssetPackRole::Patch) || labelLength > kMaxBakeCacheNameBytes) {
+            return AssetPackReadStatus::HeaderCorrupt;
+        }
+        header.role = static_cast<AssetPackRole>(role);
+        header.label.assign(reinterpret_cast<const char*>(bytes.data() + kHeaderLabelOffset), labelLength);
+        header.patchLevel = PeekUInt32(bytes, kHeaderPatchLevelOffset);
+        header.baseIdentity.high = PeekUInt64(bytes, kHeaderBaseIdentityHighOffset);
+        header.baseIdentity.low = PeekUInt64(bytes, kHeaderBaseIdentityLowOffset);
+        const bool hasBase = header.baseIdentity.high != 0U || header.baseIdentity.low != 0U;
+        if (!header.label.empty() && !IsValidBakeCacheName(header.label)) {
+            return AssetPackReadStatus::HeaderCorrupt;
+        }
+        switch (header.role) {
+        case AssetPackRole::Base:
+            if (header.patchLevel != 0U || hasBase) {
+                return AssetPackReadStatus::HeaderCorrupt;
+            }
+            break;
+        case AssetPackRole::Chunk:
+            if (header.patchLevel != 0U || !hasBase || header.label.empty()) {
+                return AssetPackReadStatus::HeaderCorrupt;
+            }
+            break;
+        case AssetPackRole::Patch:
+            if (header.patchLevel == 0U || !hasBase || header.label.empty()) {
+                return AssetPackReadStatus::HeaderCorrupt;
+            }
+            break;
+        }
     }
     // Nothing but a zero fingerprint would let a pack claim a profile whose content nobody can
     // invalidate, which is the defect AssetBakeKey::targetProfileHash exists to close.

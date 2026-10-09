@@ -34,6 +34,10 @@ struct ReleaseSigningKey;
 // layout unchanged. The digest in the entry is of the stored (encrypted) bytes, so tampering is
 // refused before anything is decrypted. The index stays readable: it carries only names, sizes
 // and digests, and the browser host fetches it with one range request.
+//
+// A COMPRESSED block is sealed as stored: compressed first, then encrypted, and the SHA-512 is of
+// that result. A reader checks the digest, decrypts and only then decompresses, so the decoder
+// never sees a byte the signature does not cover.
 namespace kb::assets::bake {
 
 inline constexpr std::string_view kAssetPackSealMagic = "21KBSEAL";

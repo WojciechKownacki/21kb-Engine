@@ -32,8 +32,8 @@
 //     the bytes AFTER content coding, so a host that puts gzip or br on the container makes
 //     every offset in it unaddressable. The compression method therefore lives in the index,
 //     one field per block, and the container itself must be served and stored uncompressed.
-//     The method is recorded even though this stage implements none, because adding one later
-//     must not mean re-baking content.
+//     A compressed block is one self-contained zstd frame, so any block can still be fetched
+//     and decoded on its own: random access survives compression.
 //  2. EVERY BLOCK IS ALIGNED to the target profile's packageBlockAlignmentBytes (256 in every
 //     shipped profile). Vulkan's required-limits table caps the uniform, storage and texel
 //     buffer offset alignments at 256, so a 256-aligned block offset is a legal buffer offset
@@ -44,8 +44,9 @@
 //     16 KiB-page Android device). Residency Mapped is a placement hint, not a promise that a
 //     mapping will exist: Emscripten's mmap copies, so a reader must never assume it mapped.
 //  4. A BLOCK HAS A CEILING (kMaxAssetPackBlockBytes) so that one range request fits a wasm32
-//     budget, and the pack itself has one (kMaxAssetPackBytes) so that "read the whole file"
-//     is a budgeted fallback rather than an assumption.
+//     budget, and a pack that is read whole has one (kMaxWholeFileAssetPackBytes) so that "read
+//     the whole file" is a budgeted fallback rather than an assumption. A pack read by ranges
+//     only has the much larger kMaxAssetPackBytes; every offset is 64-bit.
 //  5. THE STREAMING FRAGMENT BOUNDARY IS THE BAKER'S. A cluster group may not straddle a
 //     fragment, offsets inside a fragment are relative to it, and load priority is computed
 //     from the fragment's bounds -- all of which the baker decides, so the header carries the
@@ -58,8 +59,11 @@ namespace kb::assets::bake {
 // First bytes of every pack. Eight bytes, no terminator.
 inline constexpr std::string_view kAssetPackMagic = "21KBPACK";
 
-// Bumped whenever the layout below stops being readable by the previous reader.
-inline constexpr std::uint32_t kAssetPackFormatVersion = 2U;
+// Bumped whenever the layout below stops being readable by the previous reader. Version 3 added
+// the pack's role in a pack set (role, label, patch level, base identity) to the fixed header
+// and zstd block compression; a version-2 pack still mounts, as a base pack.
+inline constexpr std::uint32_t kAssetPackFormatVersion = 3U;
+inline constexpr std::uint32_t kAssetPackOldestReadableFormatVersion = 2U;
 
 // The fixed header occupies a whole alignment unit, so the index starts at a block-aligned
 // offset like everything else in the file.
@@ -68,12 +72,27 @@ inline constexpr std::uint64_t kAssetPackHeaderBytes = 256U;
 // Extension of a published pack.
 inline constexpr std::string_view kAssetPackFileExtension = ".kbpack";
 
-// How one block's bytes are stored. Recorded per block in the index; see rule 1 above. Only
-// None is implemented, and a reader must refuse a method it does not know rather than hand
-// back bytes it did not decode.
+// How one block's bytes are stored. Recorded per block in the index; see rule 1 above. A reader
+// must refuse a method it does not know rather than hand back bytes it did not decode.
 enum class AssetPackBlockCompression : std::uint8_t {
     // Stored as written. storedBytes == uncompressedBytes.
     None = 0U,
+    // One zstd frame that declares its content size, which must equal uncompressedBytes;
+    // storedBytes < uncompressedBytes. Never used for a Mapped block, whose bytes a mapping hands
+    // out as they lie in the file.
+    Zstd = 1U,
+};
+
+// What a pack is to the set of packs a game mounts (format 3; a format-2 pack is a Base).
+enum class AssetPackRole : std::uint8_t {
+    // The pack a set starts from. Its runtime manifest is complete: it names the default map.
+    Base = 0U,
+    // Content split off the base, by world cell or data layer for example. Mounted beside the
+    // base; it adds assets and never replaces one.
+    Chunk = 1U,
+    // Replaces assets of the packs mounted before it and may add new ones. Patches mount in
+    // ascending patch level, after every chunk.
+    Patch = 2U,
 };
 
 // Largest single block a pack may hold. It is the guaranteed floor of Vulkan's
@@ -83,14 +102,18 @@ enum class AssetPackBlockCompression : std::uint8_t {
 // twice at the worst moment.
 inline constexpr std::uint64_t kMaxAssetPackBlockBytes = 128ULL * 1024ULL * 1024ULL;
 
-// Largest pack a reader will mount. 1.5 GB is the ceiling for a unit that has to be shippable
-// as an install-time asset pack, and it is what makes the mandatory "fetch the whole file"
-// fallback a budget rather than a hope.
-inline constexpr std::uint64_t kMaxAssetPackBytes = 1536ULL * 1024ULL * 1024ULL;
+// Largest pack a reader mounts by ranges: 1 TiB. Every offset and length in the format is
+// 64-bit, so the ceiling only bounds what a hostile header can make a reader believe.
+inline constexpr std::uint64_t kMaxAssetPackBytes = 1024ULL * 1024ULL * 1024ULL * 1024ULL;
+
+// Largest pack a reader holds in memory (AssetPackAccess::WholeFile, MountMemory). 1.5 GB is the
+// ceiling for a unit that has to be shippable as an install-time asset pack, and it is what
+// makes the mandatory "fetch the whole file" fallback a budget rather than a hope.
+inline constexpr std::uint64_t kMaxWholeFileAssetPackBytes = 1536ULL * 1024ULL * 1024ULL;
 
 // Ceiling on the index itself, so a hostile header cannot make a reader allocate at will
 // before a single byte of it has been validated. At the encoding below this is room for
-// something over a million blocks -- far past any pack that fits kMaxAssetPackBytes.
+// something over a million blocks.
 inline constexpr std::uint64_t kMaxAssetPackIndexBytes = 64ULL * 1024ULL * 1024ULL;
 
 // The fragment catalogue is read before any fragment is useful, so it has the same bounded
@@ -168,6 +191,14 @@ struct AssetPackHeader {
     // Alignment every fragment's first byte satisfies. At least the package alignment, because
     // a fragment is a block and a block already has that floor.
     std::uint32_t fragmentAlignmentBytes = 0U;
+    // The pack's place in a pack set (format 3). A base has no patch level and no base
+    // identity; a chunk and a patch name the base they were cooked against by its catalogue
+    // identity (AssetPackCatalogIdentity) and carry a label; a patch has a patch level >= 1.
+    // All of it lies in the header, so a seal signs it.
+    AssetPackRole role = AssetPackRole::Base;
+    std::string label;
+    std::uint32_t patchLevel = 0U;
+    AssetBakeDigest baseIdentity{};
 };
 
 enum class AssetPackReadStatus : std::uint8_t {
@@ -194,7 +225,8 @@ enum class AssetPackReadStatus : std::uint8_t {
     BlockTooLarge,
     // A block's bytes do not match the digest protected by the index checksum.
     PayloadCorrupt,
-    // The pack claims more than kMaxAssetPackBytes.
+    // The pack claims more than kMaxAssetPackBytes, or more than kMaxWholeFileAssetPackBytes
+    // for a reader that has to hold it in memory.
     PackTooLarge,
     // Nothing in this pack carries that key.
     ArtifactNotFound,
@@ -259,6 +291,16 @@ enum class AssetPackReadStatus : std::uint8_t {
 // Reads it back and rejects everything the format forbids on sight, so a caller never acts on
 // a header field it has not validated.
 [[nodiscard]] AssetPackReadStatus DecodeAssetPackHeader(std::span<const std::uint8_t> bytes, AssetPackHeader& out);
+
+// Identity of a pack's catalogue: a digest of the raw fixed header, artifact index and fragment
+// index. Sealing and encryption leave all three untouched, so it is the same before and after.
+// A chunk or patch records its base's identity, which binds it to exactly that base.
+[[nodiscard]] AssetBakeDigest AssetPackCatalogIdentity(
+    std::span<const std::uint8_t> header,
+    std::span<const std::uint8_t> artifactIndex,
+    std::span<const std::uint8_t> fragmentIndex);
+
+[[nodiscard]] std::string_view ToString(AssetPackRole role) noexcept;
 
 // Rounds `value` up to the next multiple of `alignment`, which must be a power of two.
 // Returns false rather than wrapping: a hostile index can name an offset one below 2^64.
