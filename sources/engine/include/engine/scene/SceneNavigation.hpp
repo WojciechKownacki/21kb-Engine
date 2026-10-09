@@ -22,30 +22,34 @@ namespace kb::scene {
 
 class Scene;
 
-// How the crowd moving agents over polygon navigation meshes spends its time. Agents closer than
-// `nearDistance` to a level-of-detail focus (SetCrowdFocuses, else every enabled Stream Focus;
-// without any focus every agent is near) update every navigation step with full avoidance; the
-// others update every `farUpdateInterval` steps with the time that passed, steering and separating
-// without sampling velocities.
-struct NavCrowdSettings {
+// How the crowd (DetourCrowd) moving agents over polygon navigation meshes spends its time. Agents
+// closer than `nearDistance` to a level-of-detail focus (SetCrowdFocuses, else every enabled Stream
+// Focus; without any focus every agent is near) avoid neighbours and walls by sampling velocities,
+// keep apart from neighbours and shorten their paths every step; the others only follow their path
+// corridors and shorten them every `farPathOptimizationInterval` steps.
+struct NavigationCrowdSettings {
     float nearDistance = 60.0F;
-    std::uint32_t farUpdateInterval = 4U;
-    // Full path searches per step; agents waiting for one stand still and report a Pending path.
-    std::uint32_t maxPathSearchesPerStep = 64U;
-    // Neighbours an agent avoids and keeps apart from, within this many of its radii.
+    std::uint32_t farPathOptimizationInterval = 4U;
+    // Destinations handed to the crowd per step; agents waiting for theirs stand still and report a
+    // Pending path.
+    std::uint32_t maxPathRequestsPerStep = 64U;
+    // Neighbours (at most 6) and walls an agent reacts to lie within this many of its radii.
     float neighbourRangeRadii = 12.0F;
-    std::uint32_t maxNeighbours = 6U;
     float separationWeight = 2.0F;
     bool avoidance = true;
 };
 
-struct NavCrowdStats {
+struct NavigationCrowdStats {
+    // Agents walking the polygon meshes, split by level of detail.
     std::size_t agents = 0U;
-    std::size_t nearUpdates = 0U;
-    std::size_t farUpdates = 0U;
-    std::size_t pathSearches = 0U;
+    std::size_t nearAgents = 0U;
+    std::size_t farAgents = 0U;
+    // Destinations handed to the crowd in the last step, and agents whose path is not planned yet.
+    std::size_t pathRequests = 0U;
     std::size_t waitingForPath = 0U;
     std::size_t onLinks = 0U;
+    // Candidate velocities the crowd sampled to avoid collisions.
+    std::size_t velocitySamples = 0U;
     // Wall time of the last navigation step.
     double milliseconds = 0.0;
 };
@@ -138,9 +142,9 @@ public:
     void SetAreaCost(NavAreaId area, float cost) noexcept;
     [[nodiscard]] float AreaCost(NavAreaId area) const noexcept;
 
-    void ConfigureCrowd(const NavCrowdSettings& settings);
-    [[nodiscard]] NavCrowdSettings CrowdSettings() const noexcept;
-    [[nodiscard]] NavCrowdStats CrowdStats() const noexcept;
+    void ConfigureCrowd(const NavigationCrowdSettings& settings);
+    [[nodiscard]] NavigationCrowdSettings CrowdSettings() const noexcept;
+    [[nodiscard]] NavigationCrowdStats CrowdStats() const noexcept;
     // World positions agents update fully around; replaces the Stream Focus entities as foci.
     void SetCrowdFocuses(std::vector<kb::math::DVec3> focuses);
     // True while the agent is crossing an off-mesh link.

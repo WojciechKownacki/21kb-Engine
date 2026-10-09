@@ -564,28 +564,49 @@ void TestCrowdIsDeterministic() {
     Check(moved > kAgents * 9U / 10U, "the crowd makes its way: " + std::to_string(moved) + " of 1200 agents moved");
 }
 
+struct LevelOfDetailRun {
+    std::size_t nearAgents = 0U;
+    std::size_t farAgents = 0U;
+    std::size_t velocitySamples = 0U;
+    Vec3 near{};
+    Vec3 far{};
+};
+
+// One agent near (-40, -40) and one near (40, 40) walk 2 s; `focuses` are the level-of-detail foci.
+[[nodiscard]] LevelOfDetailRun RunLevelOfDetail(const std::shared_ptr<const nav::NavMeshAsset>& arena, std::vector<DVec3> focuses) {
+    scene::Scene scene;
+    static_cast<void>(scene.Navigation().AddNavMesh(arena));
+    scene.Navigation().ConfigureCrowd(scene::NavigationCrowdSettings{ .nearDistance = 20.0F, .farPathOptimizationInterval = 4U });
+    scene.Navigation().SetCrowdFocuses(std::move(focuses));
+    const scene::SceneEntity near = AddAgent(scene, DVec3{ -40.0, 0.0, -42.0 }, Vec3{ -40.0F, 0.0F, -20.0F });
+    const scene::SceneEntity far = AddAgent(scene, DVec3{ 40.0, 0.0, 38.0 }, Vec3{ 40.0F, 0.0F, 20.0F });
+    LevelOfDetailRun run;
+    for (int frame = 0; frame < 120; ++frame) {
+        static_cast<void>(scene.Runtime().Update(kFrame));
+        const scene::NavigationCrowdStats stats = scene.Navigation().CrowdStats();
+        run.nearAgents += stats.nearAgents;
+        run.farAgents += stats.farAgents;
+        run.velocitySamples += stats.velocitySamples;
+    }
+    run.near = Position(scene, near);
+    run.far = Position(scene, far);
+    return run;
+}
+
 void TestCrowdLevelOfDetail() {
     constexpr double kHalf = 60.0;
     const auto arena = std::make_shared<const nav::NavMeshAsset>(CrowdArena(kHalf));
-    scene::Scene scene;
-    static_cast<void>(scene.Navigation().AddNavMesh(arena));
-    scene.Navigation().ConfigureCrowd(scene::NavCrowdSettings{ .nearDistance = 20.0F, .farUpdateInterval = 4U });
-    scene.Navigation().SetCrowdFocuses({ DVec3{ -40.0, 0.0, -40.0 } });
-    const scene::SceneEntity near = AddAgent(scene, DVec3{ -40.0, 0.0, -42.0 }, Vec3{ -40.0F, 0.0F, -20.0F });
-    const scene::SceneEntity far = AddAgent(scene, DVec3{ 40.0, 0.0, 38.0 }, Vec3{ 40.0F, 0.0F, 20.0F });
-    std::size_t nearUpdates = 0U;
-    std::size_t farUpdates = 0U;
-    for (int frame = 0; frame < 120; ++frame) {
-        static_cast<void>(scene.Runtime().Update(kFrame));
-        nearUpdates += scene.Navigation().CrowdStats().nearUpdates;
-        farUpdates += scene.Navigation().CrowdStats().farUpdates;
-    }
-    Check(nearUpdates >= 110U && farUpdates >= 25U && farUpdates <= 35U, "far agents update once every four steps: near " +
-        std::to_string(nearUpdates) + ", far " + std::to_string(farUpdates));
-    Check(Horizontal(Position(scene, near), { -40.0F, 0.0F, -42.0F }) > 4.0F && Horizontal(Position(scene, far), { 40.0F, 0.0F, 38.0F }) > 4.0F,
+    const LevelOfDetailRun detailed = RunLevelOfDetail(arena, { DVec3{ -40.0, 0.0, -40.0 }, DVec3{ 40.0, 0.0, 40.0 } });
+    const LevelOfDetailRun reduced = RunLevelOfDetail(arena, { DVec3{ -40.0, 0.0, -40.0 } });
+    Check(detailed.nearAgents == 240U && detailed.farAgents == 0U && reduced.nearAgents == 120U && reduced.farAgents == 120U,
+        "agents within the near distance of a focus are near, the others far: near " + std::to_string(reduced.nearAgents) + ", far " +
+            std::to_string(reduced.farAgents));
+    Check(reduced.velocitySamples > 0U && reduced.velocitySamples * 3U < detailed.velocitySamples * 2U,
+        "far agents do not sample avoidance velocities: " + std::to_string(reduced.velocitySamples) + " of " + std::to_string(detailed.velocitySamples));
+    Check(Horizontal(reduced.near, { -40.0F, 0.0F, -42.0F }) > 4.0F && Horizontal(reduced.far, { 40.0F, 0.0F, 38.0F }) > 4.0F,
         "near and far agents both make progress");
-    Check(Horizontal(Position(scene, near), { -40.0F, 0.0F, -20.0F }) < 18.0F && Horizontal(Position(scene, far), { 40.0F, 0.0F, 20.0F }) < 18.0F,
-        "a far agent covers about as much ground in its larger steps");
+    Check(std::fabs(Horizontal(reduced.far, { 40.0F, 0.0F, 20.0F }) - Horizontal(detailed.far, { 40.0F, 0.0F, 20.0F })) < 0.5F,
+        "a far agent with nothing to avoid covers the same ground as a near one");
 }
 
 void TestNavLinkPersists() {

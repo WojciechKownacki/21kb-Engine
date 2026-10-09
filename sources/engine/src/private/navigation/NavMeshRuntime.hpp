@@ -13,6 +13,7 @@
 #include <memory>
 #include <optional>
 #include <set>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -58,7 +59,7 @@ struct NavRuntimeLink {
 }
 
 // Filters polygons by the engine's 32 navigation areas (Detour area = area id + 1) and applies the
-// scene's area costs.
+// scene's area costs. Used for queries; crowds filter by polygon flags (NavMeshRuntime::FilterSlot).
 class NavAreaFilter final : public dtQueryFilter {
 public:
     NavAreaFilter() noexcept;
@@ -140,6 +141,19 @@ public:
     [[nodiscard]] float AreaCost(kb::scene::NavAreaId area) const noexcept;
     void ConfigureFilter(NavAreaFilter& filter, kb::scene::NavAreaMask areas) const noexcept;
 
+    // A crowd filters polygons by their 16 flag bits only, so every area mask its members use gets a
+    // slot: polygon flag bit `slot` is set on the polygons whose area is in the slot's mask. Slot 0
+    // always holds every area. Returns -1 when all slots hold other masks.
+    static constexpr int kCrowdFilterCount = 16;
+    [[nodiscard]] int FilterSlot(kb::scene::NavAreaMask areas);
+    // Frees the slots of masks no longer in use (`used` sorted).
+    void KeepFilterSlots(std::span<const kb::scene::NavAreaMask> used);
+    // Admits the polygons of a slot, with the scene's area costs.
+    void ConfigureCrowdFilter(dtQueryFilter& filter, int slot) const noexcept;
+    // Raised whenever the Detour mesh of a profile is created anew (a new origin, more tile slots);
+    // a crowd walking the old one must start over.
+    [[nodiscard]] std::uint64_t MeshGeneration(std::uint32_t profile) const noexcept;
+
     // Queries in the mesh's space. `extents` is the half size of the box searched for the nearest
     // polygon around a point.
     [[nodiscard]] std::optional<std::pair<dtPolyRef, kb::math::Vec3>> Nearest(std::uint32_t profile, kb::math::Vec3 position,
@@ -180,9 +194,12 @@ private:
         std::unique_ptr<dtNavMesh, MeshDeleter> mesh;
         std::unique_ptr<dtNavMeshQuery, QueryDeleter> query;
         int capacity = 0;
+        std::uint64_t generation = 0U;
     };
 
     [[nodiscard]] bool CreateMesh(std::uint32_t profile, int capacity);
+    [[nodiscard]] unsigned short PolygonFlags(unsigned char areaCode) const noexcept;
+    void RefreshPolygonFlags();
     void PlaceAll(std::uint32_t profile);
     void Place(const TileKey& key, TileSlot& slot);
     void Unplace(const TileKey& key, TileSlot& slot);
@@ -204,6 +221,9 @@ private:
     std::map<std::uint64_t, std::uint32_t> linkUserIds_;
     std::uint32_t nextLinkUserId_ = 1U;
     std::array<float, kb::scene::kNavAreaCount> costs_{};
+    // Area mask per crowd filter slot; 0 marks a free slot.
+    std::array<kb::scene::NavAreaMask, kCrowdFilterCount> filterMasks_{ kb::scene::kAllNavAreas };
+    std::uint64_t nextGeneration_ = 1U;
     std::uint64_t nextHandle_ = 1U;
     std::uint64_t revision_ = 1U;
     std::size_t rebuilds_ = 0U;

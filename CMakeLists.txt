@@ -519,8 +519,8 @@ if(NOT TARGET kb_zstd)
     kb_apply_fuzz_instrumentation(kb_zstd)
 endif()
 
-# Navigation mesh generation (Recast), tiled navigation meshes and path queries (Detour), path
-# corridors and local avoidance (DetourCrowd) and the compact layers a tile is rebuilt from when
+# Navigation mesh generation (Recast), tiled navigation meshes and path queries (Detour), the
+# crowd moving agents over them (DetourCrowd) and the compact layers a tile is rebuilt from when
 # obstacles change (DetourTileCache builder). Only the libraries of the official release tarball
 # are compiled; its own CMake project (demo, tests) is never added. Polygon references are 64-bit
 # so a streamed world can hold millions of tiles, and query filters are virtual so the engine's
@@ -552,9 +552,11 @@ if(NOT TARGET kb_recast)
         ${kb_recast_SOURCE_DIR}/Detour/Source/DetourNavMeshBuilder.cpp
         ${kb_recast_SOURCE_DIR}/Detour/Source/DetourNavMeshQuery.cpp
         ${kb_recast_SOURCE_DIR}/Detour/Source/DetourNode.cpp
+        ${kb_recast_SOURCE_DIR}/DetourCrowd/Source/DetourCrowd.cpp
         ${kb_recast_SOURCE_DIR}/DetourCrowd/Source/DetourLocalBoundary.cpp
         ${kb_recast_SOURCE_DIR}/DetourCrowd/Source/DetourObstacleAvoidance.cpp
         ${kb_recast_SOURCE_DIR}/DetourCrowd/Source/DetourPathCorridor.cpp
+        ${kb_recast_SOURCE_DIR}/DetourCrowd/Source/DetourPathQueue.cpp
         ${kb_recast_SOURCE_DIR}/DetourCrowd/Source/DetourProximityGrid.cpp
         ${kb_recast_SOURCE_DIR}/DetourTileCache/Source/DetourTileCacheBuilder.cpp
     )
