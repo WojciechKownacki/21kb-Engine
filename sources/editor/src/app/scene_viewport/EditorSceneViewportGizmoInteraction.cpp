@@ -43,8 +43,11 @@ bool EditorSceneViewportGizmoInteraction::BeginDrag(
     EditorSceneContext& sceneContext) {
     const std::optional<EditorSceneViewportHit> hit =
         EditorSceneViewportHitResolver::ResolveRay(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext);
-    std::optional<kb::scene::Vec3> targetPosition = EditorSceneViewportGizmoTargetResolver::SelectedTarget(sceneContext);
-    if (!hit.has_value() || !targetPosition.has_value()) {
+    if (!hit.has_value()) {
+        return false;
+    }
+    std::optional<kb::scene::Vec3> targetPosition = EditorSceneViewportGizmoTargetResolver::SelectedTarget(sceneContext, hit->origin);
+    if (!targetPosition.has_value()) {
         return false;
     }
 
@@ -55,7 +58,7 @@ bool EditorSceneViewportGizmoInteraction::BeginDrag(
         kb::scene::Vec3 centerStart{};
         const kb::scene::Vec3 planeNormal = camera.Axes().forward;
         if (EditorSceneViewportGizmoDragSolver::PlaneDragPosition(hit->ray, *targetPosition, planeNormal, centerStart)) {
-            if (!EditorSceneViewportGizmoAltDuplicate::DuplicateForTranslateDrag(sceneContext, targetPosition)) {
+            if (!EditorSceneViewportGizmoAltDuplicate::DuplicateForTranslateDrag(sceneContext, hit->origin, targetPosition)) {
                 return false;
             }
             if (!EditorSceneViewportGizmoDragSolver::PlaneDragPosition(hit->ray, *targetPosition, planeNormal, centerStart)) {
@@ -66,6 +69,7 @@ bool EditorSceneViewportGizmoInteraction::BeginDrag(
             }
             gizmo.ClearDragPointer();
             EditorSceneViewportGizmoDragState::StartCenterDrag(gizmo, *targetPosition, planeNormal, centerStart);
+            gizmo.dragOrigin = hit->origin;
             return true;
         }
     }
@@ -76,7 +80,7 @@ bool EditorSceneViewportGizmoInteraction::BeginDrag(
         return false;
     }
 
-    if (!EditorSceneViewportGizmoAltDuplicate::DuplicateForTranslateDrag(sceneContext, targetPosition)) {
+    if (!EditorSceneViewportGizmoAltDuplicate::DuplicateForTranslateDrag(sceneContext, hit->origin, targetPosition)) {
         return false;
     }
 
@@ -93,6 +97,7 @@ bool EditorSceneViewportGizmoInteraction::BeginDrag(
         ? EditorSceneViewportGizmoRotationDrag::ScreenAngleFromCenter(camera, hit->renderArea, *targetPosition, hit->localX, hit->localY)
         : 0.0F;
     EditorSceneViewportGizmoDragState::StartAxisDrag(gizmo, *targetPosition, axis, drag, screenAngle);
+    gizmo.dragOrigin = hit->origin;
     return true;
 }
 
@@ -192,10 +197,15 @@ bool EditorSceneViewportGizmoInteraction::UpdateActiveDrag(
         return EndDrag(sceneContext);
     }
 
-    const std::optional<EditorSceneViewportHit> hit =
+    std::optional<EditorSceneViewportHit> hit =
         EditorSceneViewportHitResolver::ResolveRay(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext);
     if (!hit.has_value()) {
         return true;
+    }
+    // The drag's positions are relative to the viewport origin it started with: express the ray there too.
+    if (hit->origin != sceneContext.Gizmo().dragOrigin) {
+        hit->ray.origin = EditorSceneViewportMath::Add(hit->ray.origin, kb::math::RelativeTo(hit->origin, sceneContext.Gizmo().dragOrigin));
+        hit->origin = sceneContext.Gizmo().dragOrigin;
     }
 
     const kb::scene::SceneEntity selected = sceneContext.SelectedEntity();
@@ -227,7 +237,8 @@ bool EditorSceneViewportGizmoInteraction::UpdateHover(
 
     const std::optional<EditorSceneViewportHit> hit =
         EditorSceneViewportHitResolver::ResolveRay(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext);
-    const std::optional<kb::scene::Vec3> targetPosition = EditorSceneViewportGizmoTargetResolver::SelectedTarget(sceneContext);
+    const std::optional<kb::scene::Vec3> targetPosition = hit.has_value()
+        ? EditorSceneViewportGizmoTargetResolver::SelectedTarget(sceneContext, hit->origin) : std::nullopt;
     int hoveredAxis = -1;
     if (hit.has_value() && targetPosition.has_value()) {
         const EditorViewportCameraState& camera = sceneContext.ViewportCamera(hit->panelId);

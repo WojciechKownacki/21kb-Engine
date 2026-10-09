@@ -24,7 +24,7 @@ bool EditorMaterialAssetSceneDropHandler::Drop(
         return false;
     }
 
-    const EditorSceneViewportPickResult pick = EditorSceneViewportMeshPicker::PickNearest(sceneContext.Scene(), hit->ray);
+    const EditorSceneViewportPickResult pick = EditorSceneViewportMeshPicker::PickNearest(sceneContext.Scene(), hit->ray, hit->origin);
     if (!pick.IsValid()) {
         return false;
     }

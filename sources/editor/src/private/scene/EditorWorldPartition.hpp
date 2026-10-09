@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/math/DVec3.hpp"
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/world/WorldCellBuilder.hpp"
 #include "engine/world/WorldEditSession.hpp"
@@ -49,12 +50,13 @@ public:
 
     [[nodiscard]] bool GridVisible() const noexcept;
     void SetGridVisible(bool visible) noexcept;
-    // Outlines of loaded and occupied cells around (x, z), at height `y`.
-    [[nodiscard]] std::vector<EditorWorldGridLine> GridLines(double x, double y, double z) const;
+    // Outlines of loaded and occupied cells around (x, z), at height `y`, relative to `origin` (a viewport origin;
+    // zero for world positions).
+    [[nodiscard]] std::vector<EditorWorldGridLine> GridLines(double x, double y, double z, const kb::math::DVec3& origin = {}) const;
     // The viewport's per-frame copy of GridLines: recomputed after InvalidateGrid, when the
     // camera enters another cell, or a quarter of a second after the last computation, so
     // a large world does not walk all of its objects every frame.
-    [[nodiscard]] const std::vector<EditorWorldGridLine>& CachedGridLines(double x, double y, double z) const;
+    [[nodiscard]] const std::vector<EditorWorldGridLine>& CachedGridLines(double x, double y, double z, const kb::math::DVec3& origin = {}) const;
     void InvalidateGrid() const noexcept;
 
     [[nodiscard]] std::size_t LoadAround(double x, double z, std::int64_t radiusCells, std::string& error);
@@ -74,6 +76,7 @@ private:
     bool gridVisible_ = true;
     mutable std::vector<EditorWorldGridLine> cachedLines_;
     mutable std::optional<kb::world::WorldCellCoord> cachedCell_;
+    mutable kb::math::DVec3 cachedOrigin_{};
     mutable std::chrono::steady_clock::time_point cachedAt_{};
     mutable bool cacheValid_ = false;
 };

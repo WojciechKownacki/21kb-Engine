@@ -19,6 +19,10 @@ kb::scene::SceneEntity EditorSceneTransformEditSession::Primary() const noexcept
 }
 
 kb::scene::Vec3 EditorSceneTransformEditSession::TargetStart() const noexcept {
+    return kb::math::ToVec3(targetStart_);
+}
+
+const kb::math::DVec3& EditorSceneTransformEditSession::TargetStartPrecise() const noexcept {
     return targetStart_;
 }
 
@@ -47,7 +51,7 @@ const EditorSceneObjectTransformChange* EditorSceneTransformEditSession::Primary
 void EditorSceneTransformEditSession::Begin(
     std::string label,
     kb::scene::SceneEntity primary,
-    kb::scene::Vec3 targetStart,
+    const kb::math::DVec3& targetStart,
     std::vector<EditorSceneObjectTransformChange> changes) {
     label_ = std::move(label);
     primary_ = primary;

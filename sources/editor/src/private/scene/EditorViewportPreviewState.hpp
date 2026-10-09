@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/math/DVec3.hpp"
 #include "engine/scene/TransformComponent.hpp"
 
 #include <cstddef>
@@ -109,6 +110,10 @@ public:
     [[nodiscard]] kb::scene::Vec3 SnapPosition(kb::scene::Vec3 position) const noexcept;
     [[nodiscard]] kb::scene::Vec3 SnapGroundPosition(kb::scene::Vec3 position) const noexcept;
     [[nodiscard]] kb::scene::Vec3 SnapPositionAxis(kb::scene::Vec3 position, int axis) const noexcept;
+    // Snapping of world positions given in double precision.
+    [[nodiscard]] kb::math::DVec3 SnapPosition(const kb::math::DVec3& position) const noexcept;
+    [[nodiscard]] kb::math::DVec3 SnapGroundPosition(const kb::math::DVec3& position) const noexcept;
+    [[nodiscard]] kb::math::DVec3 SnapPositionAxis(const kb::math::DVec3& position, int axis) const noexcept;
     [[nodiscard]] float SnapRotationRadians(float radians) const noexcept;
 
     [[nodiscard]] std::uint32_t RenderWidthForPanel(std::uint32_t panelWidth) const noexcept;

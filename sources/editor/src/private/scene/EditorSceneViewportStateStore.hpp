@@ -34,6 +34,8 @@ struct EditorSceneGizmoState {
     float dragStartTargetX = 0.0F;
     float dragStartTargetY = 0.0F;
     float dragStartTargetZ = 0.0F;
+    // The viewport origin the drag's viewport-space positions (start target, plane points) are relative to.
+    kb::math::DVec3 dragOrigin{};
     float dragStartScreenAngle = 0.0F;
     float centerPlaneNx = 0.0F;
     float centerPlaneNy = 0.0F;
@@ -95,6 +97,7 @@ public:
     // TickFocusAnimations). Returns true once it has (re)framed at least one
     // camera.
     [[nodiscard]] bool FocusAllCamerasOn(const kb::scene::Vec3& target, float radius, float durationSeconds) noexcept;
+    [[nodiscard]] bool FocusAllCamerasOn(const kb::math::DVec3& target, float radius, float durationSeconds) noexcept;
     // Advances any in-progress camera focus animations by deltaSeconds; returns
     // true while at least one camera is still animating (so the frame loop keeps
     // presenting instead of parking).

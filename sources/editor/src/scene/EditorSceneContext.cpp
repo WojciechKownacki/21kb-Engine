@@ -1842,7 +1842,7 @@ bool EditorSceneContext::IsAnyInlineTextEditActive() const noexcept {
 bool EditorSceneContext::FrameSelectedEntitiesInViewport() noexcept {
     const kb::scene::SceneEntity primary = SelectedEntity();
     const std::vector<kb::scene::SceneEntity>& selected = SelectedHierarchyEntities();
-    const std::optional<kb::scene::Vec3> center = EditorSceneSelectionPivot::Resolve(*scene_, selected, primary);
+    const std::optional<kb::math::DVec3> center = EditorSceneSelectionPivot::ResolvePrecise(*scene_, selected, primary);
     if (!center.has_value()) {
         return false;
     }
@@ -1859,11 +1859,7 @@ bool EditorSceneContext::FrameSelectedEntitiesInViewport() noexcept {
         if (transform == nullptr) {
             continue;
         }
-        const kb::scene::Vec3 delta{
-            transform->localPosition.x - center->x,
-            transform->localPosition.y - center->y,
-            transform->localPosition.z - center->z,
-        };
+        const kb::scene::Vec3 delta = kb::math::RelativeTo(scene_->Transforms().LocalTranslation(entity, *transform), *center);
         maxSpread = std::max(maxSpread, std::sqrt(delta.x * delta.x + delta.y * delta.y + delta.z * delta.z));
     }
 
@@ -3255,6 +3251,13 @@ bool EditorSceneContext::InstantiatePrefabAssetAt(
     const std::filesystem::path& path,
     const std::filesystem::path& virtualPath,
     kb::scene::Vec3 position) {
+    return InstantiatePrefabAssetAt(path, virtualPath, kb::math::ToDVec3(position));
+}
+
+bool EditorSceneContext::InstantiatePrefabAssetAt(
+    const std::filesystem::path& path,
+    const std::filesystem::path& virtualPath,
+    const kb::math::DVec3& position) {
     return CreatePrefabAssetEntity(path, virtualPath, position, true).IsValid();
 }
 
@@ -3262,6 +3265,14 @@ kb::scene::SceneEntity EditorSceneContext::CreatePrefabAssetEntity(
     const std::filesystem::path& path,
     const std::filesystem::path& virtualPath,
     kb::scene::Vec3 position,
+    bool logCreation) {
+    return CreatePrefabAssetEntity(path, virtualPath, kb::math::ToDVec3(position), logCreation);
+}
+
+kb::scene::SceneEntity EditorSceneContext::CreatePrefabAssetEntity(
+    const std::filesystem::path& path,
+    const std::filesystem::path& virtualPath,
+    const kb::math::DVec3& position,
     bool logCreation) {
     if (pendingSceneTransactionLabel_.has_value()) {
         console_.Warning("Edit", "Scene command ignored while another scene transaction is active.");
@@ -3274,9 +3285,7 @@ kb::scene::SceneEntity EditorSceneContext::CreatePrefabAssetEntity(
         return {};
     }
 
-    kb::scene::TransformComponent transform = scene_->Transforms().Get(*root);
-    transform.localPosition = position;
-    scene_->Transforms().Set(*root, transform);
+    scene_->Transforms().SetLocalTranslation(*root, position);
     scene_->Runtime().SynchronizeTransforms();
     if (!logCreation) {
         SelectEntity(*root);
@@ -3296,16 +3305,27 @@ kb::scene::SceneEntity EditorSceneContext::CreatePrefabAssetEntity(
 }
 
 kb::scene::SceneEntity EditorSceneContext::CreateMeshAssetEntity(kb::assets::AssetId assetId) {
-    return CreateMeshAssetEntity(assetId, {}, true);
+    return CreateMeshAssetEntity(assetId, kb::math::DVec3{}, true);
 }
 
 kb::scene::SceneEntity EditorSceneContext::CreateParticleEffectEntity(kb::assets::AssetId assetId) {
-    return CreateParticleEffectEntity(assetId, {}, true);
+    return CreateParticleEffectEntity(assetId, kb::math::DVec3{}, true);
 }
 
 kb::scene::SceneEntity EditorSceneContext::CreateParticleEffectEntity(
     kb::assets::AssetId assetId,
     kb::scene::Vec3 position,
+    bool logCreation) {
+    return CreateParticleEffectEntity(assetId, kb::math::ToDVec3(position), logCreation);
+}
+
+kb::scene::SceneEntity EditorSceneContext::CreateMeshAssetEntity(kb::assets::AssetId assetId, kb::scene::Vec3 position, bool logCreation) {
+    return CreateMeshAssetEntity(assetId, kb::math::ToDVec3(position), logCreation);
+}
+
+kb::scene::SceneEntity EditorSceneContext::CreateParticleEffectEntity(
+    kb::assets::AssetId assetId,
+    const kb::math::DVec3& position,
     bool logCreation) {
     if (!assetId.IsValid()) {
         console_.Warning("Particles", "Particle Effect entity creation ignored for invalid asset.");
@@ -3327,9 +3347,7 @@ kb::scene::SceneEntity EditorSceneContext::CreateParticleEffectEntity(
         if (!entity.IsValid()) {
             return kb::scene::SceneEntity{};
         }
-        kb::scene::TransformComponent authoredTransform = scene_->Transforms().Get(entity);
-        authoredTransform.localPosition = position;
-        scene_->Transforms().Set(entity, authoredTransform);
+        scene_->Transforms().SetLocalTranslation(entity, position);
         scene_->Runtime().SynchronizeTransforms();
         scene_->Components().ParticleEffects().Set(entity, kb::scene::ParticleEffectComponent{
             .effectAssetId = assetId.value,
@@ -3381,7 +3399,7 @@ kb::scene::SceneEntity EditorSceneContext::CreateParticleEffectEntity(
     return entity;
 }
 
-kb::scene::SceneEntity EditorSceneContext::CreateMeshAssetEntity(kb::assets::AssetId assetId, kb::scene::Vec3 position, bool logCreation) {
+kb::scene::SceneEntity EditorSceneContext::CreateMeshAssetEntity(kb::assets::AssetId assetId, const kb::math::DVec3& position, bool logCreation) {
     if (!assetId.IsValid()) {
         console_.Warning("Assets", "Mesh entity creation ignored for invalid asset.");
         return {};
@@ -3435,10 +3453,14 @@ kb::scene::SceneEntity EditorSceneContext::CreateMeshAssetEntity(kb::assets::Ass
     }
 
     const auto createEntity = [this, assetId, skeletonAssetId, skeletonCompatibilitySignature, metadata, position, isSkeletalMesh]() {
-        return isSkeletalMesh
+        const kb::scene::SceneEntity entity = isSkeletalMesh
             ? EditorSceneMeshAssetActions::CreateSkeletalMeshEntity(
-                *scene_, assetId, skeletonAssetId, skeletonCompatibilitySignature, metadata->name, position)
-            : EditorSceneMeshAssetActions::CreateMeshEntity(*scene_, assetId, metadata->name, position);
+                *scene_, assetId, skeletonAssetId, skeletonCompatibilitySignature, metadata->name, kb::math::ToVec3(position))
+            : EditorSceneMeshAssetActions::CreateMeshEntity(*scene_, assetId, metadata->name, kb::math::ToVec3(position));
+        if (entity.IsValid() && scene_->Transforms().LocalTranslation(entity) != position) {
+            scene_->Transforms().SetLocalTranslation(entity, position);
+        }
+        return entity;
     };
 
     kb::scene::SceneEntity entity{};
@@ -5661,10 +5683,10 @@ bool EditorSceneContext::BeginSelectedTransformEdit(std::string label) {
         return false;
     }
 
-    const kb::scene::Vec3 targetStart = EditorSceneSelectionPivot::Resolve(
+    const kb::math::DVec3 targetStart = EditorSceneSelectionPivot::ResolvePrecise(
         *scene_,
         hierarchySelection_.SelectedEntities(),
-        primary).value_or(scene_->Transforms().Get(primary).localPosition);
+        primary).value_or(scene_->Transforms().LocalTranslation(primary));
     activeTransformEdit_.Begin(std::move(label), primary, targetStart, std::move(changes));
     return true;
 }
@@ -5673,6 +5695,16 @@ bool EditorSceneContext::ApplyActiveTransformEditPrimaryPosition(kb::scene::Vec3
     const EditorSceneTransformEditApplyResult result =
         EditorSceneTransformEditController{ *scene_, activeTransformEdit_ }.ApplyPrimaryPosition(position);
     return FinalizeActiveTransformEditApply(result.changed, result.touched);
+}
+
+bool EditorSceneContext::ApplyActiveTransformEditPositionDelta(const kb::math::DVec3& delta) {
+    const EditorSceneTransformEditApplyResult result =
+        EditorSceneTransformEditController{ *scene_, activeTransformEdit_ }.ApplyPositionDelta(delta);
+    return FinalizeActiveTransformEditApply(result.changed, result.touched);
+}
+
+const kb::math::DVec3& EditorSceneContext::ActiveTransformEditTargetStart() const noexcept {
+    return activeTransformEdit_.TargetStartPrecise();
 }
 
 bool EditorSceneContext::ApplyActiveTransformEditPrimaryRotation(kb::scene::Vec3 rotation) {

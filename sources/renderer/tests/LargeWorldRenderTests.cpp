@@ -18,6 +18,7 @@
 #include "kb/render/particles/ParticleStripGeometryBuilder.hpp"
 #include "kb/render/scene/EcsRenderSceneSynchronizer.hpp"
 #include "kb/render/scene/RenderScene.hpp"
+#include "renderer/RendererRenderOrigin.hpp"
 
 #include <bgfx/bgfx.h>
 #include <bx/math.h>
@@ -284,11 +285,28 @@ void RunParticleRenderSpaceTest() {
 
 } // namespace
 
+// A host working relative to its own origin hands its overlays over in that space (overlayOrigin); the renderer
+// re-expresses them relative to its render origin in double precision.
+void RunOverlayOriginTest() {
+    RenderSceneSubmitDesc desc{};
+    desc.overlayOrigin = DVec3{ kFar, 0.0, kFar };
+    desc.editorGizmo.targetPosition = { 0.25F, 1.0F, -0.5F };
+    const std::array<PhysicsDebugLine, 1> lines{ PhysicsDebugLine{ .from = { 0.125F, 0.0F, 0.0F }, .to = { 0.0F, 0.0F, 0.375F } } };
+    desc.physicsDebugLines = lines;
+    RendererRelativeOverlays overlays;
+    overlays.Apply(desc, DVec3{ kFar - 1024.0, 0.0, kFar });
+    Require(desc.editorGizmo.targetPosition == std::array<float, 3>{ 1024.25F, 1.0F, -0.5F } &&
+            desc.physicsDebugLines.size() == 1U && desc.physicsDebugLines[0].from == std::array<float, 3>{ 1024.125F, 0.0F, 0.0F } &&
+            desc.physicsDebugLines[0].to == std::array<float, 3>{ 1024.0F, 0.0F, 0.375F },
+        "Overlays relative to a host origin were not re-expressed relative to the render origin");
+}
+
 void RunLargeWorldRenderTests() {
     RunRenderOriginPolicyTest();
     RunCameraRelativeSyncTest();
     RunRendererFollowsFarCameraTest();
     RunParticleRenderSpaceTest();
+    RunOverlayOriginTest();
 }
 
 } // namespace kb::render::tests

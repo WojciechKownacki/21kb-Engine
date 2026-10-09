@@ -15,6 +15,8 @@ public:
     [[nodiscard]] const std::string& LabelOrDefault() const noexcept;
     [[nodiscard]] kb::scene::SceneEntity Primary() const noexcept;
     [[nodiscard]] kb::scene::Vec3 TargetStart() const noexcept;
+    // The pivot the edit started from, in double precision.
+    [[nodiscard]] const kb::math::DVec3& TargetStartPrecise() const noexcept;
     [[nodiscard]] std::vector<EditorSceneObjectTransformChange>& Changes() noexcept;
     [[nodiscard]] const std::vector<EditorSceneObjectTransformChange>& Changes() const noexcept;
     [[nodiscard]] EditorSceneObjectTransformChange* PrimaryChange() noexcept;
@@ -23,14 +25,14 @@ public:
     void Begin(
         std::string label,
         kb::scene::SceneEntity primary,
-        kb::scene::Vec3 targetStart,
+        const kb::math::DVec3& targetStart,
         std::vector<EditorSceneObjectTransformChange> changes);
     void Clear() noexcept;
 
 private:
     std::string label_;
     kb::scene::SceneEntity primary_{};
-    kb::scene::Vec3 targetStart_{};
+    kb::math::DVec3 targetStart_{};
     std::vector<EditorSceneObjectTransformChange> changes_;
 };
 

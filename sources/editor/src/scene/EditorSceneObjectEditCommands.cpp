@@ -10,6 +10,7 @@
 #include "engine/scene/SceneUIComponentSet.hpp"
 #include "engine/ui/UIEntityReferences.hpp"
 #include "scene/EditorSceneContext.hpp"
+#include "scene/transform_edit/EditorSceneTransformEditApplier.hpp"
 #include "scene/transform_edit/EditorSceneTransformEquality.hpp"
 
 #include <unordered_map>
@@ -162,12 +163,9 @@ bool EditorSceneTransformDeltaCommand::Apply(bool after) {
         }
 
         const kb::scene::TransformComponent& target = after ? change.after : change.before;
-        const kb::scene::TransformComponent current = scene.Transforms().Get(change.entity);
-        if (EditorSceneTransformEquality::Same(current, target)) {
+        if (!EditorSceneTransformEditApplier::Write(scene, change.entity, target, after ? change.afterTranslation : change.beforeTranslation)) {
             continue;
         }
-
-        scene.Transforms().Set(change.entity, target);
         touched.push_back(change.entity);
         changed = true;
     }

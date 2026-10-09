@@ -18,6 +18,13 @@ struct EditorSceneTransformEditApplyResult {
     std::vector<kb::scene::SceneEntity> touched;
 };
 
+// What an edit sets on an entity: its transform and its local translation in double precision (whose float view
+// is transform.localPosition).
+struct EditorSceneTransformTarget {
+    kb::scene::TransformComponent transform{};
+    kb::math::DVec3 translation{};
+};
+
 class EditorSceneTransformEditApplier {
 public:
     EditorSceneTransformEditApplier() = delete;
@@ -39,15 +46,12 @@ public:
                 continue;
             }
 
-            const kb::scene::TransformComponent next = buildNext(change);
-            change.after = next;
-
-            const kb::scene::TransformComponent current = scene.Transforms().Get(change.entity);
-            if (EditorSceneTransformEquality::Same(current, next)) {
+            const EditorSceneTransformTarget next = buildNext(change);
+            change.after = next.transform;
+            change.afterTranslation = next.translation;
+            if (!Write(scene, change.entity, next.transform, next.translation)) {
                 continue;
             }
-
-            scene.Transforms().Set(change.entity, next);
             result.touched.push_back(change.entity);
             result.changed = true;
         }
@@ -57,6 +61,9 @@ public:
     [[nodiscard]] static EditorSceneTransformEditApplyResult RestoreBefore(
         kb::scene::Scene& scene,
         std::span<const EditorSceneObjectTransformChange> changes);
+    // Sets the transform and its double-precision local translation; false when the entity already had both.
+    static bool Write(kb::scene::Scene& scene, kb::scene::SceneEntity entity, const kb::scene::TransformComponent& transform,
+        const kb::math::DVec3& translation);
 };
 
 } // namespace kb::editor

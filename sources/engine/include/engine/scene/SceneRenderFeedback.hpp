@@ -187,6 +187,9 @@ public:
     // Invalid (radius 0) bounds for an untracked entity, an entity whose mesh resource had
     // no valid bounds at submit time, or when no frame was published yet.
     [[nodiscard]] static SceneRenderBounds WorldBounds(const Scene& scene, SceneEntity entity) noexcept;
+    // WorldBounds with the center relative to `origin`, computed in double precision (a host working relative to
+    // its own origin far from the world origin keeps the bounds exact).
+    [[nodiscard]] static SceneRenderBounds BoundsRelativeTo(const Scene& scene, SceneEntity entity, const kb::math::DVec3& origin) noexcept;
     // Sphere-vs-frustum test against the last published camera frustum (radius 0 = point
     // test). False when no frame was published yet or the last submit had no camera.
     [[nodiscard]] static bool TestFrustum(const Scene& scene, const kb::math::Vec3& center, float radius) noexcept;

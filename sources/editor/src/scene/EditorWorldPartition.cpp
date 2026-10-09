@@ -48,22 +48,23 @@ void EditorWorldPartition::InvalidateGrid() const noexcept {
     cacheValid_ = false;
 }
 
-const std::vector<EditorWorldGridLine>& EditorWorldPartition::CachedGridLines(double x, double y, double z) const {
+const std::vector<EditorWorldGridLine>& EditorWorldPartition::CachedGridLines(double x, double y, double z, const kb::math::DVec3& origin) const {
     constexpr std::chrono::milliseconds kRefreshInterval{ 250 };
     const auto now = std::chrono::steady_clock::now();
     const std::optional<kb::world::WorldCellCoord> cell = session_.IsOpen()
         ? kb::world::WorldPartitionGrid{ session_.CellSize() }.CellOf(x, z)
         : std::nullopt;
-    if (!cacheValid_ || cell != cachedCell_ || now - cachedAt_ >= kRefreshInterval) {
-        cachedLines_ = GridLines(x, y, z);
+    if (!cacheValid_ || cell != cachedCell_ || origin != cachedOrigin_ || now - cachedAt_ >= kRefreshInterval) {
+        cachedLines_ = GridLines(x, y, z, origin);
         cachedCell_ = cell;
+        cachedOrigin_ = origin;
         cachedAt_ = now;
         cacheValid_ = true;
     }
     return cachedLines_;
 }
 
-std::vector<EditorWorldGridLine> EditorWorldPartition::GridLines(double x, double y, double z) const {
+std::vector<EditorWorldGridLine> EditorWorldPartition::GridLines(double x, double y, double z, const kb::math::DVec3& origin) const {
     std::vector<EditorWorldGridLine> lines;
     if (!session_.IsOpen() || !gridVisible_) {
         return lines;
@@ -84,15 +85,15 @@ std::vector<EditorWorldGridLine> EditorWorldPartition::GridLines(double x, doubl
     if (ordered.size() > MaxGridCells) {
         ordered.resize(MaxGridCells);
     }
-    const float height = static_cast<float>(y);
+    const float height = static_cast<float>(y - origin.y);
     lines.reserve(ordered.size() * 4U);
     for (const auto& [distance, entry] : ordered) {
         static_cast<void>(distance);
         const auto& [cell, loaded] = entry;
-        const float minX = static_cast<float>(grid.MinX(cell));
-        const float minZ = static_cast<float>(grid.MinZ(cell));
-        const float maxX = static_cast<float>(grid.MinX(cell) + grid.CellSize());
-        const float maxZ = static_cast<float>(grid.MinZ(cell) + grid.CellSize());
+        const float minX = static_cast<float>(grid.MinX(cell) - origin.x);
+        const float minZ = static_cast<float>(grid.MinZ(cell) - origin.z);
+        const float maxX = static_cast<float>(grid.MinX(cell) + grid.CellSize() - origin.x);
+        const float maxZ = static_cast<float>(grid.MinZ(cell) + grid.CellSize() - origin.z);
         const std::array<float, 3U> color = loaded ? LoadedCellColor : UnloadedCellColor;
         lines.push_back({ { minX, height, minZ }, { maxX, height, minZ }, color });
         lines.push_back({ { maxX, height, minZ }, { maxX, height, maxZ }, color });

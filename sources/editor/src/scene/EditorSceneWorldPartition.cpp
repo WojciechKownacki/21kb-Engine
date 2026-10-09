@@ -94,7 +94,7 @@ bool EditorSceneContext::LoadWorldCellsNearCamera() {
         return false;
     }
     const kb::world::WorldPartitionGrid grid{ worldPartition_.Session().CellSize() };
-    const kb::scene::Vec3& position = ViewportCamera().Position();
+    const kb::math::DVec3& position = ViewportCamera().PrecisePosition();
     const std::optional<kb::world::WorldCellCoord> centre = grid.CellOf(position.x, position.z);
     if (!centre.has_value()) {
         console_.Warning("World", "The camera is outside the addressable world.");

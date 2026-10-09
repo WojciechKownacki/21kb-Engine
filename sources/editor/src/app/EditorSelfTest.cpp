@@ -38,6 +38,11 @@
 #include "rendering/EditorRenderBackendSettings.hpp"
 #include "scene/EditorPluginCatalog.hpp"
 #include "scene/EditorSceneContext.hpp"
+#include "app/scene_viewport/EditorSceneViewportGizmoDragSolver.hpp"
+#include "app/scene_viewport/gizmo/EditorSceneViewportGizmoDragState.hpp"
+#include "app/scene_viewport/gizmo/EditorSceneViewportGizmoDragUpdater.hpp"
+#include "app/scene_viewport/gizmo/EditorSceneViewportGizmoTargetResolver.hpp"
+#include "rendering/ScenePanelContentRenderer.hpp"
 #include "scene/EditorScriptAssetGateway.hpp"
 
 #include "engine/assets/AssetManager.hpp"
@@ -1478,6 +1483,86 @@ void RunSelectionTransformSuite(Report& report) {
     movedSecond = context.Scene().Transforms().Get(second);
     report.Check(std::abs(movedFirst.localPosition.x - 8.0F) < 0.001F, "Redo reapplies first entity transform");
     report.Check(std::abs(movedSecond.localPosition.x - 12.0F) < 0.001F, "Redo reapplies second entity transform");
+}
+
+// Ten thousand kilometres out a float holds whole metres only. The scene view renders from the editor camera's
+// precise eye with its overlays relative to the camera's viewport origin, and dragging the translate gizmo of an
+// entity there moves it by exactly the dragged distance, undoably (docs/large_worlds.md).
+void RunLargeWorldGizmoSuite(Report& report) {
+    constexpr double kFar = 1.0e7;
+    EditorSceneContext context;
+    kb::scene::Scene& scene = context.Scene();
+    const kb::math::DVec3 start{ kFar + 0.25, 1.0, kFar + 0.5 };
+    const kb::scene::SceneEntity crate = context.CreateHierarchyObject();
+    report.Check(crate.IsValid(), "Create a far entity");
+    scene.Transforms().SetLocalTranslation(crate, start);
+    scene.Runtime().SynchronizeTransforms();
+    context.SelectEntity(crate);
+    constexpr std::uint32_t kPanel = 1U;
+    EditorViewportCameraState& camera = context.ViewportCamera(kPanel);
+    camera.FocusOn(start, 1.0F, 0.0F);
+    const RECT renderArea{ 0, 0, 960, 540 };
+    const std::optional<kb::scene::Vec3> target =
+        EditorSceneViewportGizmoTargetResolver::SelectedTarget(context, camera.ViewportOrigin());
+    report.Check(target.has_value() && kb::math::Length((camera.ViewportOrigin() + *target) - start) <= 1.0e-4,
+        "The gizmo of a far entity stands exactly at the entity");
+    if (!target.has_value()) {
+        return;
+    }
+
+    const DockPanel panel{ .id = kPanel, .kind = DockPanelKind::Scene };
+    EditorRenderBackendSettings backendSettings;
+    const EditorSceneBgfxViewport::PresentSettings settings =
+        ScenePanelContentRenderer::BuildSettings(RECT{ 0, -34, 960, 540 }, panel, context, backendSettings);
+    report.Check(settings.cameraOverrideEye == std::optional<kb::math::DVec3>{ camera.PrecisePosition() } &&
+            settings.overlayOrigin == camera.ViewportOrigin() &&
+            std::abs(settings.editorGizmo.targetPosition[0] - target->x) <= 1.0e-4F &&
+            std::abs(settings.editorGizmo.targetPosition[2] - target->z) <= 1.0e-4F,
+        "A far scene view renders from the precise eye with overlays relative to the viewport origin");
+
+    const auto hitAt = [&](float x, float y) {
+        const EditorViewportCameraAxes axes = camera.Axes();
+        const float width = EditorSceneViewportMath::RectWidth(renderArea);
+        const float height = EditorSceneViewportMath::RectHeight(renderArea);
+        const float tanHalfFov = std::tan(EditorSceneViewportMath::DegreesToRadians(camera.VerticalFovDegrees()) * 0.5F);
+        const float ndcX = (x / width) * 2.0F - 1.0F;
+        const float ndcY = 1.0F - (y / height) * 2.0F;
+        const kb::scene::Vec3 direction = EditorSceneViewportMath::Normalize(EditorSceneViewportMath::Add(axes.forward,
+            EditorSceneViewportMath::Add(EditorSceneViewportMath::Mul(axes.right, ndcX * tanHalfFov * (width / height)),
+                EditorSceneViewportMath::Mul(axes.up, ndcY * tanHalfFov))));
+        return EditorSceneViewportHit{ .panelId = kPanel, .renderArea = renderArea,
+            .ray = EditorSceneViewportRay{ .origin = axes.position, .direction = direction }, .localX = x, .localY = y,
+            .origin = camera.ViewportOrigin() };
+    };
+    float screenX = 0.0F;
+    float screenY = 0.0F;
+    report.Check(EditorSceneViewportMath::WorldToScreen(camera, renderArea, *target, screenX, screenY),
+        "The far gizmo projects into the viewport");
+    EditorSceneGizmoAxisDrag drag{};
+    const bool begun = EditorSceneViewportGizmoDragSolver::BeginAxisDrag(hitAt(screenX, screenY), camera, *target, 0, drag) &&
+        context.BeginSelectedTransformEdit("Move Far Crate");
+    report.Check(begun, "A drag of the far gizmo's x axis starts");
+    if (!begun) {
+        return;
+    }
+    EditorSceneGizmoState& gizmo = context.Gizmo();
+    gizmo.toolMode = EditorTransformToolMode::Translate;
+    EditorSceneViewportGizmoDragState::StartAxisDrag(gizmo, *target, 0, drag, 0.0F);
+    gizmo.dragOrigin = camera.ViewportOrigin();
+    const EditorSceneViewportHit moved = hitAt(screenX + 37.0F, screenY);
+    kb::scene::Vec3 delta{};
+    report.Check(EditorSceneViewportGizmoDragSolver::AxisDragDelta(moved, *target, drag, delta) && std::abs(delta.x) > 0.05F,
+        "Dragging the far gizmo moves along its axis");
+    report.Check(EditorSceneViewportGizmoDragUpdater::Update(context, moved, *target), "The far drag updates");
+    EditorSceneViewportGizmoDragState::ClearActiveDrag(gizmo);
+    report.Check(context.CommitActiveTransformEdit(), "The far drag commits");
+    const kb::math::DVec3 after = scene.Transforms().LocalTranslation(crate);
+    report.Check(std::abs(after.x - (start.x + delta.x)) <= 1.0e-6 && after.y == start.y && after.z == start.z,
+        "Dragging a far entity's gizmo moves it by exactly the dragged distance");
+    report.Check(context.UndoSceneCommand() && scene.Transforms().LocalTranslation(crate) == start,
+        "Undoing a far drag restores the exact translation");
+    report.Check(context.RedoSceneCommand() && scene.Transforms().LocalTranslation(crate) == after,
+        "Redoing a far drag restores the exact dragged translation");
 }
 
 // The Inspector's material ball must be the live 3D preview surface, not a painted stand-in: the rect
@@ -6553,6 +6638,7 @@ int EditorSelfTest::Run(
     RunSuiteInScratch(report, "camera_inspector", &RunCameraInspectorSuite);
     RunSuiteInScratch(report, "hierarchy_commands", &RunHierarchyCommandSuite);
     RunSuiteInScratch(report, "selection_transform", &RunSelectionTransformSuite);
+    RunSuiteInScratch(report, "large_world_gizmo", &RunLargeWorldGizmoSuite);
     RunSuiteInScratch(report, "material_graph_context_menu", &RunMaterialGraphContextMenuSuite);
     RunSuiteInScratch(report, "material_graph_panel_canvas_hit_test", &RunMaterialGraphPanelCanvasHitTestSuite);
     RunSuiteInScratch(report, "material_graph_color_watcher", &RunMaterialGraphColorWatcherSuite);

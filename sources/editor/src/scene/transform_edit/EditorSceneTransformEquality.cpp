@@ -16,4 +16,9 @@ bool EditorSceneTransformEquality::Same(const kb::scene::TransformComponent& lhs
         Same(lhs.localScale, rhs.localScale);
 }
 
+bool EditorSceneTransformEquality::Same(const kb::scene::TransformComponent& lhs, const kb::math::DVec3& lhsTranslation,
+    const kb::scene::TransformComponent& rhs, const kb::math::DVec3& rhsTranslation) noexcept {
+    return Same(lhs, rhs) && lhsTranslation == rhsTranslation;
+}
+
 } // namespace kb::editor

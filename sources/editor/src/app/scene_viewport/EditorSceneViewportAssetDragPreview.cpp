@@ -51,7 +51,7 @@ void RestorePreviousSelection(EditorSceneContext& sceneContext, const EditorPoin
 [[nodiscard]] kb::scene::SceneEntity CreatePreview(
     EditorSceneContext& sceneContext,
     EditorPointerDragState& drag,
-    kb::scene::Vec3 position) {
+    const kb::math::DVec3& position) {
     CapturePreviousSelection(sceneContext, drag);
     if (drag.assetInstantiatesPrefab) {
         return sceneContext.CreatePrefabAssetEntity(
@@ -112,8 +112,8 @@ bool EditorSceneViewportAssetDragPreview::Update(
         return DestroyPreview(sceneContext, drag);
     }
 
-    const kb::scene::Vec3 position =
-        sceneContext.ViewportPreview(hit->panelId).SnapGroundPosition(hit->groundPosition);
+    const kb::math::DVec3 position =
+        sceneContext.ViewportPreview(hit->panelId).SnapGroundPosition(hit->origin + hit->groundPosition);
     if (!PreviewAlive(sceneContext, drag)) {
         drag.scenePlacementPreview = CreatePreview(sceneContext, drag, position);
         drag.scenePlacementPreviewCommitted = false;
@@ -152,8 +152,8 @@ bool EditorSceneViewportAssetDragPreview::Commit(
         return false;
     }
 
-    const kb::scene::Vec3 position =
-        sceneContext.ViewportPreview(hit->panelId).SnapGroundPosition(hit->groundPosition);
+    const kb::math::DVec3 position =
+        sceneContext.ViewportPreview(hit->panelId).SnapGroundPosition(hit->origin + hit->groundPosition);
     if (!PreviewAlive(sceneContext, drag)) {
         drag.scenePlacementPreview = CreatePreview(sceneContext, drag, position);
         if (!PreviewAlive(sceneContext, drag)) {

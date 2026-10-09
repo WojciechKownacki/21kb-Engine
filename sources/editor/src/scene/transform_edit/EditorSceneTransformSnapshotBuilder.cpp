@@ -32,10 +32,13 @@ std::vector<EditorSceneObjectTransformChange> EditorSceneTransformSnapshotBuilde
         if (transform == nullptr) {
             continue;
         }
+        const kb::math::DVec3 translation = scene.Transforms().LocalTranslation(entity, *transform);
         changes.push_back(EditorSceneObjectTransformChange{
             .entity = entity,
             .before = *transform,
             .after = *transform,
+            .beforeTranslation = translation,
+            .afterTranslation = translation,
         });
     }
     return changes;

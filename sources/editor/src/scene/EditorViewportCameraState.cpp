@@ -11,8 +11,8 @@ namespace {
 // LIB-042/LIB-043: kb::scene::Vec3 is now an alias to kb::math::Vec3 (see
 // TransformComponent.hpp), which already provides Length/Normalize/Cross —
 // this file's own copies used to be a second definition and would now be
-// an ambiguous overload via ADL against kb::math's. Sub/Mul have no
-// kb::math equivalent yet, so they stay local.
+// an ambiguous overload via ADL against kb::math's. Mul has no
+// kb::math equivalent yet, so it stays local.
 using kb::math::Cross;
 using kb::math::Length;
 using kb::math::Normalize;
@@ -37,10 +37,6 @@ constexpr float kFlightVelocityEpsilon = 0.0001F;
     return kb::math::ToRadians(kb::math::Degrees{ degrees }).Value();
 }
 
-[[nodiscard]] kb::scene::Vec3 Sub(kb::scene::Vec3 a, kb::scene::Vec3 b) noexcept {
-    return kb::scene::Vec3{ a.x - b.x, a.y - b.y, a.z - b.z };
-}
-
 [[nodiscard]] kb::scene::Vec3 Mul(kb::scene::Vec3 value, float scale) noexcept {
     return kb::scene::Vec3{ value.x * scale, value.y * scale, value.z * scale };
 }
@@ -49,14 +45,26 @@ constexpr float kFlightVelocityEpsilon = 0.0001F;
     return kb::scene::Vec3{ a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t };
 }
 
+[[nodiscard]] kb::math::DVec3 Lerp(const kb::math::DVec3& a, const kb::math::DVec3& b, float t) noexcept {
+    return a + (b - a) * static_cast<double>(t);
+}
+
 [[nodiscard]] float DirectionSign(bool positive, bool negative) noexcept {
     return (positive ? 1.0F : 0.0F) - (negative ? 1.0F : 0.0F);
 }
 
 } // namespace
 
-const kb::scene::Vec3& EditorViewportCameraState::Position() const noexcept {
+kb::scene::Vec3 EditorViewportCameraState::Position() const noexcept {
+    return kb::math::ToVec3(position_);
+}
+
+const kb::math::DVec3& EditorViewportCameraState::PrecisePosition() const noexcept {
     return position_;
+}
+
+const kb::math::DVec3& EditorViewportCameraState::ViewportOrigin() const noexcept {
+    return viewportOrigin_;
 }
 
 float EditorViewportCameraState::YawDegrees() const noexcept {
@@ -107,7 +115,7 @@ EditorViewportCameraAxes EditorViewportCameraState::Axes() const noexcept {
     const kb::scene::Vec3 right = Normalize(kb::scene::Vec3{ std::cos(yaw), 0.0F, -std::sin(yaw) });
     const kb::scene::Vec3 up = Normalize(Cross(forward, right));
     return EditorViewportCameraAxes{
-        .position = position_,
+        .position = kb::math::RelativeTo(position_, viewportOrigin_),
         .forward = forward,
         .right = right,
         .up = up,
@@ -256,18 +264,23 @@ void EditorViewportCameraState::SetViewAngles(float yawDegrees, float pitchDegre
 }
 
 void EditorViewportCameraState::FocusOn(const kb::scene::Vec3& target, float radius, float durationSeconds) noexcept {
+    FocusOn(kb::math::ToDVec3(target), radius, durationSeconds);
+}
+
+void EditorViewportCameraState::FocusOn(const kb::math::DVec3& target, float radius, float durationSeconds) noexcept {
     const float safeRadius = std::max(0.25F, radius);
     const float halfFov = DegreesToRadians(std::clamp(verticalFovDegrees_, 1.0F, 179.0F) * 0.5F);
     const float tanHalf = std::max(0.05F, std::tan(halfFov));
     const EditorViewportCameraAxes axes = Axes();
-    const kb::scene::Vec3 targetPivot = target;
+    const kb::math::DVec3 targetPivot = target;
     const float targetDistance = std::max(kMinOrbitDistance, (safeRadius / tanHalf) * 1.3F);
-    const kb::scene::Vec3 targetPosition = Sub(targetPivot, Mul(axes.forward, targetDistance));
+    const kb::math::DVec3 targetPosition = targetPivot - Mul(axes.forward, targetDistance);
     if (durationSeconds <= 0.0F) {
         focusAnimating_ = false;
         orbitPivot_ = targetPivot;
         orbitDistance_ = targetDistance;
         position_ = targetPosition;
+        FollowViewportOrigin();
         return;
     }
     focusStartPosition_ = position_;
@@ -302,6 +315,7 @@ bool EditorViewportCameraState::TickFocus(float deltaSeconds) noexcept {
     position_ = Lerp(focusStartPosition_, focusTargetPosition_, eased);
     orbitPivot_ = Lerp(focusStartPivot_, focusTargetPivot_, eased);
     orbitDistance_ = focusStartDistance_ + (focusTargetDistance_ - focusStartDistance_) * eased;
+    FollowViewportOrigin();
     return true;
 }
 
@@ -315,7 +329,8 @@ void EditorViewportCameraState::ClampPitch() noexcept {
 
 void EditorViewportCameraState::MoveLocal(float right, float up, float forward) noexcept {
     const EditorViewportCameraAxes axes = Axes();
-    position_ = position_ + Mul(axes.right, right) + Mul(axes.up, up) + Mul(axes.forward, forward);
+    position_ = position_ + (Mul(axes.right, right) + Mul(axes.up, up) + Mul(axes.forward, forward));
+    FollowViewportOrigin();
 }
 
 void EditorViewportCameraState::ResetOrbitPivot() noexcept {
@@ -325,7 +340,18 @@ void EditorViewportCameraState::ResetOrbitPivot() noexcept {
 
 void EditorViewportCameraState::UpdateOrbitPosition() noexcept {
     const EditorViewportCameraAxes axes = Axes();
-    position_ = Sub(orbitPivot_, Mul(axes.forward, orbitDistance_));
+    position_ = orbitPivot_ - Mul(axes.forward, orbitDistance_);
+    FollowViewportOrigin();
+}
+
+void EditorViewportCameraState::FollowViewportOrigin() noexcept {
+    if (std::abs(position_.x - viewportOrigin_.x) <= kViewportRebaseDistance &&
+        std::abs(position_.y - viewportOrigin_.y) <= kViewportRebaseDistance &&
+        std::abs(position_.z - viewportOrigin_.z) <= kViewportRebaseDistance) {
+        return;
+    }
+    viewportOrigin_ = kb::math::DVec3{ std::round(position_.x / kViewportGridStep) * kViewportGridStep,
+        std::round(position_.y / kViewportGridStep) * kViewportGridStep, std::round(position_.z / kViewportGridStep) * kViewportGridStep };
 }
 
 } // namespace kb::editor
