@@ -5,6 +5,7 @@
 #include "engine/world/WorldEditSession.hpp"
 
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -50,6 +51,11 @@ public:
     void SetGridVisible(bool visible) noexcept;
     // Outlines of loaded and occupied cells around (x, z), at height `y`.
     [[nodiscard]] std::vector<EditorWorldGridLine> GridLines(double x, double y, double z) const;
+    // The viewport's per-frame copy of GridLines: recomputed after InvalidateGrid, when the
+    // camera enters another cell, or a quarter of a second after the last computation, so
+    // a large world does not walk all of its objects every frame.
+    [[nodiscard]] const std::vector<EditorWorldGridLine>& CachedGridLines(double x, double y, double z) const;
+    void InvalidateGrid() const noexcept;
 
     [[nodiscard]] std::size_t LoadAround(double x, double z, std::int64_t radiusCells, std::string& error);
     // Builds the open world's cells and HLOD proxies; `assets` resolves the meshes.
@@ -66,6 +72,10 @@ private:
     kb::world::WorldEditSession session_;
     std::vector<std::string> reloadOrder_;
     bool gridVisible_ = true;
+    mutable std::vector<EditorWorldGridLine> cachedLines_;
+    mutable std::optional<kb::world::WorldCellCoord> cachedCell_;
+    mutable std::chrono::steady_clock::time_point cachedAt_{};
+    mutable bool cacheValid_ = false;
 };
 
 } // namespace kb::editor

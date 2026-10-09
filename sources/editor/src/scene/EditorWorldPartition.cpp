@@ -13,12 +13,14 @@ namespace kb::editor {
 
 bool EditorWorldPartition::Open(kb::scene::Scene& scene, const std::filesystem::path& descriptorPath, std::string& error) {
     reloadOrder_.clear();
+    InvalidateGrid();
     return session_.Open(scene, descriptorPath, error);
 }
 
 void EditorWorldPartition::Close() noexcept {
     session_.Close();
     reloadOrder_.clear();
+    InvalidateGrid();
 }
 
 bool EditorWorldPartition::IsOpen() const noexcept {
@@ -39,6 +41,26 @@ bool EditorWorldPartition::GridVisible() const noexcept {
 
 void EditorWorldPartition::SetGridVisible(bool visible) noexcept {
     gridVisible_ = visible;
+    InvalidateGrid();
+}
+
+void EditorWorldPartition::InvalidateGrid() const noexcept {
+    cacheValid_ = false;
+}
+
+const std::vector<EditorWorldGridLine>& EditorWorldPartition::CachedGridLines(double x, double y, double z) const {
+    constexpr std::chrono::milliseconds kRefreshInterval{ 250 };
+    const auto now = std::chrono::steady_clock::now();
+    const std::optional<kb::world::WorldCellCoord> cell = session_.IsOpen()
+        ? kb::world::WorldPartitionGrid{ session_.CellSize() }.CellOf(x, z)
+        : std::nullopt;
+    if (!cacheValid_ || cell != cachedCell_ || now - cachedAt_ >= kRefreshInterval) {
+        cachedLines_ = GridLines(x, y, z);
+        cachedCell_ = cell;
+        cachedAt_ = now;
+        cacheValid_ = true;
+    }
+    return cachedLines_;
 }
 
 std::vector<EditorWorldGridLine> EditorWorldPartition::GridLines(double x, double y, double z) const {

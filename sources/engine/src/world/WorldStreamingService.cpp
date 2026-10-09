@@ -19,7 +19,9 @@
 #include <algorithm>
 #include <chrono>
 #include <limits>
+#include <iterator>
 #include <stdexcept>
+#include <tuple>
 
 namespace kb::world {
 namespace {

@@ -593,6 +593,7 @@ bool EditorSceneContext::SaveSceneToPath(const std::filesystem::path& path) {
             static_cast<void>(assets.RefreshAsset(descriptor->id));
         }
         const kb::world::WorldSaveStats stats = worldPartition_.Session().LastSaveStats();
+        worldPartition_.InvalidateGrid();
         ClearSceneDocumentDirty();
         autosave_.ResetInterval();
         console_.Info("World", "Saved world " + currentScenePath_.generic_string() + ": " + std::to_string(stats.written) + " object file(s) written, " +
