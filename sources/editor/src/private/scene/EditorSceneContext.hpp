@@ -38,6 +38,7 @@
 #include "scene/EditorPlayModeSelectionSnapshot.hpp"
 #include "scene/EditorSceneViewportStateStore.hpp"
 #include "scene/EditorUIRectDragState.hpp"
+#include "scene/EditorNavigation.hpp"
 #include "scene/EditorWorldPartition.hpp"
 #include "scene/AnimationPreviewContext.hpp"
 #include "scene/AnimationClipTimelineState.hpp"
@@ -312,6 +313,16 @@ public:
     [[nodiscard]] bool UnloadAllWorldCells();
     // Saves pending edits, then builds the cells and HLOD proxies of the open world.
     [[nodiscard]] bool BuildOpenWorld();
+    // Bakes the navigation mesh: for a scene, saves it, writes <scene>.21kbnavmesh and places it
+    // with a Navigation Mesh ContentInstance; for a world, enables navigation in the world file
+    // and builds the world, which bakes one navigation mesh per cell.
+    [[nodiscard]] bool BakeNavigation();
+    [[nodiscard]] EditorNavigation& Navigation() noexcept;
+    [[nodiscard]] const EditorNavigation& Navigation() const noexcept;
+    // Shows or hides the outline of the baked navigation mesh in the scene view.
+    void SetNavigationMeshVisible(bool visible);
+    // Reloads the outline from the open scene's or world's baked navigation meshes.
+    void RefreshNavigationView();
     // Converts the saved scene being edited into <scene>.21kbworld next to it and opens it.
     [[nodiscard]] bool ConvertCurrentSceneToWorld(
         double cellSize = 128.0, EditorDirtySceneResolution dirtyResolution = EditorDirtySceneResolution::Save);
@@ -1550,6 +1561,7 @@ private:
     EditorAutosaveState autosave_;
     EditorPlayModeSceneSession playModeSceneSession_;
     EditorWorldPartition worldPartition_;
+    EditorNavigation navigation_;
     std::uint64_t playModeRenderTopologyVersion_ = 0U;
     std::size_t playModeRootCount_ = 0U;
     std::uint64_t playModeRootAppendEpoch_ = 0U;

@@ -30,20 +30,20 @@ constexpr std::array<EditorMenuDescriptor, 6> kMenus{{
 
 // The Layout menu is missing here on purpose: its rows are the layouts a project
 // holds, so they are built when the menu opens rather than fixed by the build.
-constexpr std::array<std::array<std::string_view, 9>, 6> kDropdownRows{{
-    { "New Scene", "Open Scene...", "Save", "Save As...", "Build Game", "", "", "", "" },
-    { "Undo", "Redo", "Duplicate", "Plugins", "", "", "", "", "" },
-    { "", "", "", "", "", "", "", "", "" },
-    { "Renderer", "Project Settings", "Editor Settings", "", "", "", "", "", "" },
+constexpr std::array<std::array<std::string_view, 11>, 6> kDropdownRows{{
+    { "New Scene", "Open Scene...", "Save", "Save As...", "Build Game", "", "", "", "", "", "" },
+    { "Undo", "Redo", "Duplicate", "Plugins", "", "", "", "", "", "", "" },
+    { "", "", "", "", "", "", "", "", "", "", "" },
+    { "Renderer", "Project Settings", "Editor Settings", "", "", "", "", "", "", "", "" },
     { "Load Cells Near Camera", "Load All Cells", "Unload All Cells", "Build World and HLODs",
       "Show or Hide Cell Grid", "Convert Scene to World", "Add Data Layer...", "Cycle Selection Data Layer",
-      "Toggle Selection Always Loaded" },
-    { "Documentation", "Report Issue", "Release Notes", "About", "", "", "", "", "" },
+      "Toggle Selection Always Loaded", "Bake Navigation Mesh", "Show or Hide Navigation Mesh" },
+    { "Documentation", "Report Issue", "Release Notes", "About", "", "", "", "", "", "", "" },
 }};
 
 // How many of those rows each menu actually shows. Layout counts zero here: its
 // length comes from the project, not from the build.
-constexpr std::array<int, 6> kDropdownRowCounts{ 5, 4, 0, 3, 9, 4 };
+constexpr std::array<int, 6> kDropdownRowCounts{ 5, 4, 0, 3, 11, 4 };
 
 // The Layout menu is the only one whose length the project decides, so the row
 // geometry has to have room for the longest one the menu model can produce.
