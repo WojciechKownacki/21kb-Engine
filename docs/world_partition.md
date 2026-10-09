@@ -41,6 +41,7 @@ Assets/Worlds/
     base/persistent.21kbscene       always-loaded objects of the base layer
     layer.night/r_0_-1/c_3_-1.21kbscene   "night" layer of cell (3, -1)
     hlod/r_0_0/h_0_0.obj            HLOD proxy of cell (0, 0)
+    nav/r_0_0/n_0_0.21kbnavmesh     navigation tiles of cell (0, 0), when the world enables navigation
 ```
 
 The world file is plain text with one entry per line, for example:
@@ -70,6 +71,7 @@ The world file is plain text with one entry per line, for example:
 | `hlod.enabled` | Build HLOD proxies and show them at runtime. |
 | `hlod.range` | Proxies are shown for unloaded cells closer than this many metres to a streaming source; `0` never shows them. |
 | `hlod.triangleRatio` | Fraction of the merged triangles the simplifier aims to keep, greater than 0 and at most 1. |
+| `navigation` | Optional. With `"enabled": true` every build bakes one navigation mesh per cell; the section also holds the bake settings and agent profiles ([navigation.md](navigation.md)). |
 
 Because a world file never names its objects, adding, moving or deleting objects only adds,
 changes or removes object files. Two people working on different objects never edit the same
@@ -209,6 +211,10 @@ renderer's mesh loaders and HLOD baker), over the project's content root mounted
 world built from the editor, the command line or a cook is byte-identical: cell scenes, cell index
 and HLOD proxies. A kb_cli configured without the renderer (`KB_BUILD_RENDERER=OFF`) has no mesh
 geometry and builds the cells and the index only, and says so.
+
+When the world enables navigation, the build also bakes the static geometry of the base layer
+into navigation tiles and writes one navigation mesh per cell; the cell index lists them and they
+stream with their cells ([navigation.md](navigation.md)).
 
 The build fails with a message naming the object when an object uses an undeclared data layer,
 links to a node no object of the world contains, is linked to an object in another layer, or lies

@@ -146,7 +146,10 @@ queries.
 agent destinations, `SceneNavigation::NearestNode` and `SceneNavigation::AgentPath` are in
 the graph's space (world position minus the origin). Agents read and write their
 transforms in double precision, so a graph built around a far region moves its agents with
-float precision there. The default origin (zero) keeps graphs in world space.
+float precision there. The default origin (zero) keeps graphs in world space. Baked polygon
+navigation meshes ([navigation.md](navigation.md)) are placed around the same origin: their tiles
+are stored relative to their own corners and positioned against `NavMesh::origin` when added, so
+agents and queries far out keep float precision near it.
 
 ## Particles
 
