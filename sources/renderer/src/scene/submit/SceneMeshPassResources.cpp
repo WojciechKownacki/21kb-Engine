@@ -341,6 +341,7 @@ bool SceneMeshPassResources::Initialize() {
     materialFlagsUniform_ = bgfx::createUniform("u_materialFlags", bgfx::UniformType::Vec4);
     materialUvTransformUniform_ = bgfx::createUniform("u_materialUvTransform", bgfx::UniformType::Vec4);
     cameraPositionUniform_ = bgfx::createUniform("u_cameraPosition", bgfx::UniformType::Vec4);
+    renderOriginOffsetUniform_ = bgfx::createUniform("u_renderOriginOffset", bgfx::UniformType::Vec4);
     timeUniform_ = bgfx::createUniform("u_time", bgfx::UniformType::Vec4);
     dynamicParameterUniform_ = bgfx::createUniform("u_dynamicParameter", bgfx::UniformType::Vec4);
     lightDirKindUniform_ = bgfx::createUniform("u_lightDirKind", bgfx::UniformType::Vec4, kMaxSceneForwardPlusLights);
@@ -500,6 +501,10 @@ void SceneMeshPassResources::Shutdown() {
     if (bgfx::isValid(shadowSampler_)) {
         bgfx::destroy(shadowSampler_);
         shadowSampler_ = BGFX_INVALID_HANDLE;
+    }
+    if (bgfx::isValid(renderOriginOffsetUniform_)) {
+        bgfx::destroy(renderOriginOffsetUniform_);
+        renderOriginOffsetUniform_ = BGFX_INVALID_HANDLE;
     }
     if (bgfx::isValid(cameraPositionUniform_)) {
         bgfx::destroy(cameraPositionUniform_);
@@ -1065,6 +1070,7 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
             lightGrid_.Bind(desc.lighting.lightGrid, 0U);
         bgfx::setUniform(materialParamsUniform_, graphMaterialParams.data());
         bgfx::setUniform(cameraPositionUniform_, desc.cameraPosition.data());
+        bgfx::setUniform(renderOriginOffsetUniform_, desc.renderOriginOffset.data());
         bgfx::setUniform(timeUniform_, desc.frameTime.data());
         bgfx::setUniform(dynamicParameterUniform_, desc.dynamicParameter.data());
         bgfx::setUniform(lightDirKindUniform_, desc.lighting.dirKind.data(), kMaxSceneForwardPlusLights);

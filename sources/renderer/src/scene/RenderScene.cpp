@@ -583,6 +583,49 @@ const RenderScene::LightProxyMap& RenderScene::LightProxies() const noexcept {
 }
 const RenderScene::VisibilityBlockerProxyMap& RenderScene::VisibilityBlockerProxies() const noexcept { return visibilityBlockers_; }
 
+kb::math::DVec3 RenderScene::RenderOriginFor(const kb::math::DVec3& eye, const RenderOriginPolicy& policy) const noexcept {
+    const bool finite = std::isfinite(eye.x) && std::isfinite(eye.y) && std::isfinite(eye.z);
+    if (!finite || (std::abs(eye.x - renderOrigin_.x) <= policy.rebaseDistance && std::abs(eye.y - renderOrigin_.y) <= policy.rebaseDistance &&
+        std::abs(eye.z - renderOrigin_.z) <= policy.rebaseDistance)) {
+        return renderOrigin_;
+    }
+    const double step = policy.gridStep > 0.0 ? policy.gridStep : 1.0;
+    return kb::math::DVec3{ std::round(eye.x / step) * step, std::round(eye.y / step) * step, std::round(eye.z / step) * step };
+}
+
+bool RenderScene::SetRenderOrigin(const kb::math::DVec3& origin) {
+    if (origin == renderOrigin_) return false;
+    const kb::math::DVec3 previous = renderOrigin_;
+    renderOrigin_ = origin;
+    ++renderOriginRevision_;
+    // No pulled transform matches a world version of UINT64_MAX: the next pull re-derives every proxy.
+    constexpr std::uint64_t kStale = UINT64_MAX;
+    for (auto& [entityId, proxy] : meshes_) proxy.pulledWorldVersion = kStale;
+    for (auto& [entityId, proxy] : cameras_) proxy.pulledWorldVersion = kStale;
+    for (auto& [entityId, proxy] : lights_) proxy.pulledWorldVersion = kStale;
+    for (auto& [entityId, proxy] : visibilityBlockers_) proxy.pulledWorldVersion = kStale;
+    for (auto& [entityId, proxy] : geometrySwarms_) proxy.pulledWorldVersion = kStale;
+    for (auto& [entityId, proxy] : surfaceCasts_) proxy.pulledWorldVersion = kStale;
+    for (auto& [entityId, proxy] : spaceStrokes_) proxy.pulledWorldVersion = kStale;
+    lightContentRevision_ = NextContentRevision();
+    InvalidateDrawGroups();
+    for (const auto& [listenerId, listener] : renderOriginListeners_) {
+        static_cast<void>(listenerId);
+        if (listener) listener(previous, renderOrigin_);
+    }
+    return true;
+}
+
+std::uint64_t RenderScene::AddRenderOriginListener(RenderOriginListener listener) {
+    const std::uint64_t listenerId = nextRenderOriginListenerId_++;
+    renderOriginListeners_.emplace_back(listenerId, std::move(listener));
+    return listenerId;
+}
+
+void RenderScene::RemoveRenderOriginListener(std::uint64_t listenerId) noexcept {
+    std::erase_if(renderOriginListeners_, [listenerId](const auto& entry) { return entry.first == listenerId; });
+}
+
 void RenderScene::SetPortalVisibility(std::optional<kb::scene::ScenePortalVisibility> visibility) {
     portalVisibility_ = std::move(visibility);
 }

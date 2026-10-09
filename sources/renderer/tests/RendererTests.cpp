@@ -78,6 +78,7 @@ void RunTextureBakeTests();
 void RunRuntimeContentStreamingTests();
 void RunPackagedWebGpuTextureFallbackTestOnly();
 void RunScreenUIDrawBatchTests();
+void RunLargeWorldRenderTests();
 }
 
 int main(int argc, char** argv) {
@@ -195,6 +196,10 @@ int main(int argc, char** argv) {
     }
     if (argc == 2 && std::string_view{ argv[1] } == "exposure-meter") {
         kb::render::tests::RunSceneExposureMeterTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "large-world") {
+        kb::render::tests::RunLargeWorldRenderTests();
         return EXIT_SUCCESS;
     }
     if (argc == 2 && std::string_view{ argv[1] } == "scene-sync") {
@@ -315,6 +320,7 @@ int main(int argc, char** argv) {
     kb::render::tests::RunSceneExposureMeterTests();
     kb::render::tests::RunSceneDepthPolicyTests();
     kb::render::tests::RunRenderSceneSyncTests();
+    kb::render::tests::RunLargeWorldRenderTests();
     kb::render::tests::RunSceneRenderTargetFormatTests();
     kb::render::tests::RunSceneRenderExtractorTests();
     kb::render::tests::RunShaderManifestTests();

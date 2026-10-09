@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/math/DVec3.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
 #include "engine/scene/SceneUI.hpp"
 #include "kb/render/frame/RenderViewportDesc.hpp"
@@ -159,6 +160,9 @@ struct RenderSceneSubmitDesc {
         float minorSpacingMeters = 1.0F;
         std::uint32_t majorEvery = 10U;
         bool visible = true;
+        // The world position of the camera's space origin (the renderer sets the render origin here when it renders
+        // camera-relative): grid lines stay on whole world coordinates and the axes on the world axes.
+        kb::math::DVec3 worldOffset{};
     };
 
     struct EditorGizmoDesc {
@@ -181,7 +185,11 @@ struct RenderSceneSubmitDesc {
     RenderSceneTargetBinding target{};
     RenderPostProcessTargetBinding postProcess{};
     RenderFinalCompositeTargetBinding finalComposite{};
+    // A world-space camera (view in world coordinates); the renderer makes it relative to its render origin.
     std::optional<SceneRenderCamera> cameraOverride{};
+    // The double-precision world position of cameraOverride's eye. Far from the origin the view matrix alone carries
+    // its translation in float; with this the render-space view is rebuilt exactly (docs/large_worlds.md).
+    std::optional<kb::math::DVec3> cameraOverrideEye{};
     std::optional<ScenePostProcessSettings> postProcessSettings{};
     SceneRenderDrawBudget drawBudget{};
     SceneRenderLightingConfig lightingConfig{};

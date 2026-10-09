@@ -29,6 +29,14 @@ void SceneTransformService::SetLocalTranslation(Scene& scene, SceneEntity entity
     SceneTransformPrecision::StoreLocalResidual(SceneAccess::State(scene), entity, residual);
 }
 
+bool SceneTransformQueries::HasDoublePrecisionTranslations() const noexcept {
+    return !SceneAccess::State(scene_).transformResiduals.Empty();
+}
+
+bool SceneTransforms::HasDoublePrecisionTranslations() const noexcept {
+    return !SceneAccess::State(scene_).transformResiduals.Empty();
+}
+
 kb::math::DVec3 SceneTransformQueries::LocalTranslation(SceneEntity entity) const noexcept {
     return SceneTransformService::LocalTranslation(scene_, entity, SceneTransformService::TryGet(scene_, entity));
 }

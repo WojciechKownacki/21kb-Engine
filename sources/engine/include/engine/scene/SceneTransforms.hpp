@@ -104,6 +104,9 @@ public:
     // The same for a row the caller already holds (TryGet, a visitor), without a second lookup.
     [[nodiscard]] kb::math::DVec3 LocalTranslation(SceneEntity entity, const TransformComponent& transform) const noexcept;
     [[nodiscard]] kb::math::DVec3 WorldTranslation(SceneEntity entity, const TransformComponent& transform) const noexcept;
+    // False while every translation in the scene is exactly its float view (nothing far from the origin): readers
+    // can then use localPosition/worldPosition as they are.
+    [[nodiscard]] bool HasDoublePrecisionTranslations() const noexcept;
 
 private:
     const Scene& scene_;
@@ -142,6 +145,9 @@ public:
     // The same for a row the caller already holds (TryGet, a visitor), without a second lookup.
     [[nodiscard]] kb::math::DVec3 LocalTranslation(SceneEntity entity, const TransformComponent& transform) const noexcept;
     [[nodiscard]] kb::math::DVec3 WorldTranslation(SceneEntity entity, const TransformComponent& transform) const noexcept;
+    // False while every translation in the scene is exactly its float view (nothing far from the origin): readers
+    // can then use localPosition/worldPosition as they are.
+    [[nodiscard]] bool HasDoublePrecisionTranslations() const noexcept;
     // Writes the entity's local translation in double precision, the way Set writes a transform (versions, world
     // composition, dirty tracking). Float writes of localPosition keep a stored residual while it fits.
     void SetLocalTranslation(SceneEntity entity, const kb::math::DVec3& translation);

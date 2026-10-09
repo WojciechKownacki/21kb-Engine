@@ -1034,6 +1034,8 @@ class FrameBuilder {
         }
         const float width = Width(rect);
         const float height = Height(rect);
+        // Projected from the canvas' double-precision position: a canvas far from the origin stays steady on screen.
+        const kb::math::DVec3 placementTranslation = scene_.Transforms().WorldTranslation(entity, *placement);
         const std::size_t first = frame_.elements.size();
         Arrange(entity, {0.0F, 0.0F, width, height}, {0.0F, 0.0F, width, height}, entity, 1.0F, canvas.sortingOrder, false,
                 {}, {}, {});
@@ -1044,7 +1046,7 @@ class FrameBuilder {
                                        -(point.y - height * rect.pivot.y) / canvas.pixelsPerUnit * placement->worldScale.y,
                                        0.0F};
             const SceneRenderScreenPoint screen = SceneRenderFeedback::WorldToScreen(
-                scene_, placement->worldPosition + kb::math::Rotate(placement->worldRotation, local));
+                scene_, placementTranslation + kb::math::Rotate(placement->worldRotation, local));
             visible = visible && screen.valid && screen.viewDepth > 0.0F;
             return Vec2{screen.screenX, screen.screenY};
         };

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/math/DVec3.hpp"
 #include "engine/particles/ParticleRenderSnapshot.hpp"
 #include "engine/scene/ScenePortalVisibility.hpp"
 
@@ -10,6 +11,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -276,6 +278,17 @@ struct RenderSceneStats {
     std::uint64_t transformFallbackUpdateCount = 0;
 };
 
+// Camera-relative rendering (docs/large_worlds.md): the render origin follows the viewing camera once the camera is
+// further than rebaseDistance from it along any axis, and moves to the camera position rounded to gridStep.
+struct RenderOriginPolicy {
+    double rebaseDistance = 1024.0;
+    double gridStep = 1024.0;
+};
+
+// Told about every render origin move, with the origin before and after it: systems that keep float positions
+// relative to the origin (GPU particle state, history samples) shift them by previous - current.
+using RenderOriginListener = std::function<void(const kb::math::DVec3& previous, const kb::math::DVec3& current)>;
+
 class RenderScene {
 public:
     struct ResourceGroupCoverage {
@@ -304,6 +317,18 @@ public:
     [[nodiscard]] RenderProxyId UpsertGeometrySwarm(const GeometrySwarmRenderProxyDesc& desc);
     [[nodiscard]] RenderProxyId UpsertSurfaceCast(const SurfaceCastRenderProxyDesc& desc);
     [[nodiscard]] RenderProxyId UpsertSpaceStroke(const SpaceStrokeRenderProxyDesc& desc);
+    // Every position the proxies hold (model matrices, camera and light positions) is the entity's double-precision
+    // world translation minus this origin, rounded to float. It starts at (0, 0, 0).
+    [[nodiscard]] const kb::math::DVec3& RenderOrigin() const noexcept { return renderOrigin_; }
+    // Changes whenever the origin moves.
+    [[nodiscard]] std::uint64_t RenderOriginRevision() const noexcept { return renderOriginRevision_; }
+    // The origin a viewer at `eye` renders with under `policy`: the current one while the eye is close enough to it.
+    [[nodiscard]] kb::math::DVec3 RenderOriginFor(const kb::math::DVec3& eye, const RenderOriginPolicy& policy) const noexcept;
+    // Moves the origin. Every proxy transform is stale afterwards: the next transform pull re-derives all of them
+    // (EcsRenderSceneSynchronizer), and the draw groups are rebuilt. False when the origin is unchanged.
+    bool SetRenderOrigin(const kb::math::DVec3& origin);
+    [[nodiscard]] std::uint64_t AddRenderOriginListener(RenderOriginListener listener);
+    void RemoveRenderOriginListener(std::uint64_t listenerId) noexcept;
     void SetWorldBackdrop(std::optional<SceneRenderWorldBackdrop> backdrop) noexcept;
     [[nodiscard]] const std::optional<SceneRenderWorldBackdrop>& WorldBackdrop() const noexcept;
     void SetAmbientRadiance(std::optional<SceneRenderAmbientRadiance> ambientRadiance) noexcept;
@@ -482,6 +507,10 @@ private:
     mutable std::uint64_t drawGroupBuildVersion_ = 1U;
     std::uint64_t transformInPlaceUpdateCount_ = 0;
     std::uint64_t transformFallbackUpdateCount_ = 0;
+    kb::math::DVec3 renderOrigin_{};
+    std::uint64_t renderOriginRevision_ = 0U;
+    std::vector<std::pair<std::uint64_t, RenderOriginListener>> renderOriginListeners_;
+    std::uint64_t nextRenderOriginListenerId_ = 1U;
 };
 
 } // namespace kb::render

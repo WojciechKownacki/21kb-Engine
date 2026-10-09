@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/math/DVec3.hpp"
 #include "engine/math/EngineMath.hpp"
 #include "engine/scene/RegionShapeComponent.hpp"
 #include "engine/scene/SceneEntity.hpp"
@@ -22,6 +23,9 @@ struct ScenePortalCamera {
     std::array<float, 16> viewProjection{};
     // Only cells whose membership mask shares a bit with this one take part.
     std::uint32_t membershipMask = 0xFFFFFFFFU;
+    // The world position `position` and `viewProjection` are relative to (a render origin near the camera,
+    // docs/large_worlds.md). The cells are placed relative to it too, and Hides takes points relative to it.
+    kb::math::DVec3 origin{};
 };
 
 // One VisibilityCell taking part in a pass, with the world placement of its RegionShape.

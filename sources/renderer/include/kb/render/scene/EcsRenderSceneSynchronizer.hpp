@@ -184,7 +184,8 @@ private:
     mutable std::unordered_set<std::uint64_t> transformResolving_;
     mutable std::size_t transformPrecomputedReadCount_ = 0;
     mutable std::size_t transformResolvedFallbackCount_ = 0;
-    struct HistoryRibbonSample { std::array<float, 3> position{}; double timeSeconds = 0.0; };
+    // Samples keep the double-precision world position: the render origin may move between them.
+    struct HistoryRibbonSample { kb::math::DVec3 position{}; double timeSeconds = 0.0; };
     struct HistoryRibbonState {
         std::vector<HistoryRibbonSample> samples;
         std::vector<std::uint64_t> generatedMeshEntityIds;
