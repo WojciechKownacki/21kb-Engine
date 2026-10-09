@@ -4,19 +4,22 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "kb/render/runtime/RuntimeRenderAssetDiscovery.hpp"
+#include "kb/render/world/RenderNavGeometrySource.hpp"
 #include "kb/render/world/WorldHlodMeshBaker.hpp"
 
 namespace kb::render {
 
 kb::world::WorldBuildResult BuildWorldWithHlod(kb::assets::AssetManager& assets, const std::filesystem::path& descriptorPath) {
     WorldHlodMeshBaker baker{ assets };
-    return kb::world::WorldCellBuilder::Build(descriptorPath, &baker);
+    RenderNavGeometrySource navigation{ assets };
+    return kb::world::WorldCellBuilder::Build(descriptorPath, &baker, &navigation);
 }
 
 kb::world::WorldBuildResult BuildAllWorldsWithHlod(
     kb::assets::AssetManager& assets, const std::filesystem::path& root, std::size_t& builtWorlds) {
     WorldHlodMeshBaker baker{ assets };
-    return kb::world::WorldCellBuilder::BuildAll(root, &baker, builtWorlds);
+    RenderNavGeometrySource navigation{ assets };
+    return kb::world::WorldCellBuilder::BuildAll(root, &baker, &navigation, builtWorlds);
 }
 
 kb::world::WorldBuildResult BuildWorldFromContentRoot(const std::filesystem::path& contentRoot, const std::filesystem::path& descriptorPath) {

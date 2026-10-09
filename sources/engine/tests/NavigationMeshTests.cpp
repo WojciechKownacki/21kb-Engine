@@ -603,6 +603,102 @@ void TestPlacedNavigationMesh() {
     std::filesystem::remove_all(root);
 }
 
+[[nodiscard]] kb::world::WorldObjectFile FloorObject(const std::string& key, double minX, double maxX, double minZ, double maxZ) {
+    kb::world::WorldObjectFile object;
+    object.header.guid = kb::world::MakeDeterministicWorldObjectGuid(key);
+    object.header.name = key;
+    object.header.position = { (minX + maxX) * 0.5, -0.25, (minZ + maxZ) * 0.5 };
+    scene::ScenePrefabNodeDesc root = Slab(minX, maxX, minZ, maxZ, 0.0);
+    root.stableId = kb::world::WorldObjectStableId(object.header.guid, 0U);
+    root.name = key;
+    static_cast<void>(object.prefab.AddNode(std::move(root)));
+    object.header.nodeCount = 1U;
+    return object;
+}
+
+void TestTilesStreamWithCells() {
+    // Four 32 m cells in a row, each with its own floor slab; the strip stays inside the first row of
+    // tiles' cells (tile centres at z = 6.4 and 19.2).
+    const std::filesystem::path root = FreshDirectory("stream");
+    const std::filesystem::path descriptorPath = root / "Worlds" / "Strip.21kbworld";
+    kb::world::WorldDescriptor descriptor;
+    descriptor.guid = "strip-world";
+    descriptor.name = "Strip";
+    descriptor.cellSize = 32.0;
+    descriptor.objectsDirectory = "Strip.objects";
+    descriptor.hlod.enabled = false;
+    descriptor.navigation.enabled = true;
+    descriptor.navigation.build = Settings();
+    std::string error;
+    Check(kb::world::WorldDescriptorIO::Write(descriptorPath, descriptor, error), "the world must write: " + error);
+    const kb::world::WorldDescriptorReadResult reread = kb::world::WorldDescriptorIO::Read(descriptorPath);
+    Check(reread.succeeded && reread.descriptor.navigation.enabled && reread.descriptor.navigation.build == descriptor.navigation.build,
+        "a world's navigation settings read back exactly: " + reread.error);
+    const std::filesystem::path objects = kb::world::WorldPaths::ObjectsDirectory(descriptorPath, descriptor);
+    for (int cell = 0; cell < 4; ++cell) {
+        const kb::world::WorldObjectFile floor = FloorObject("floor" + std::to_string(cell), cell * 32.0, cell * 32.0 + 32.0, 2.0, 22.0);
+        const std::vector<std::uint8_t> bytes = kb::world::WorldObjectFileIO::Serialize(floor, error);
+        Check(!bytes.empty() && kb::world::WorldObjectFileIO::WriteBytes(objects / (floor.header.guid + ".21kbobject"), bytes, error),
+            "a floor object must write: " + error);
+    }
+    const kb::world::WorldBuildResult built = kb::world::WorldCellBuilder::Build(descriptorPath, nullptr);
+    Check(built.succeeded, "the world builds with navigation: " + built.error);
+    const kb::world::WorldCellIndexReadResult index = kb::world::WorldCellIndexIO::Read(kb::world::WorldPaths::CellIndexPath(descriptorPath));
+    Check(index.succeeded && index.index.navMeshes.size() == 4U && built.report.navMeshCount == 4U && built.report.navTileCount > 0U,
+        "every cell with walkable ground gets a navigation mesh: " + std::to_string(index.index.navMeshes.size()));
+    const kb::world::WorldBuildResult again = kb::world::WorldCellBuilder::Build(descriptorPath, nullptr);
+    const kb::world::WorldCellIndexReadResult rebuilt = kb::world::WorldCellIndexIO::Read(kb::world::WorldPaths::CellIndexPath(descriptorPath));
+    Check(again.succeeded && rebuilt.succeeded && rebuilt.index.navMeshes.size() == 4U, "a rebuild writes the navigation meshes again");
+
+    scene::Scene scene;
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    Check(manager.Mounts().Mount("Game", root) && manager.DiscoverMountedAssets() > 0U, "the world project must mount");
+    const kb::assets::AssetMetadata* world = manager.Registry().FindByPath("/Game/Worlds/Strip.21kbworld");
+    const kb::assets::AssetMetadata* cellIndex = manager.Registry().FindByPath("/Game/Worlds/Strip.cells/Strip.21kbcells");
+    const kb::assets::AssetMetadata* firstNav = manager.Registry().FindByPath("/Game/Worlds/Strip.cells/" + index.index.navMeshes.front().mesh);
+    Check(world != nullptr && cellIndex != nullptr && firstNav != nullptr &&
+        std::ranges::find(cellIndex->dependencies, firstNav->id) != cellIndex->dependencies.end(),
+        "the cell index depends on the cells' navigation meshes, so packaging carries them");
+    const scene::SceneObject owner = scene.Entities().CreateObject(scene::SceneObjectDesc{ .name = "World" });
+    scene.Components().ContentInstances().Set(owner.Entity(), scene::ContentInstanceComponent{
+        .assetId = world->id.value, .kind = scene::ContentInstanceKind::PartitionedWorld });
+    kb::world::WorldPartitionRuntime runtime{ scene };
+    const std::uint64_t source = runtime.AddSource({ .position = { 16.0, 0.0, 16.0 }, .loadRadius = 40.0, .unloadRadius = 60.0, .priority = 0 });
+    const auto settle = [&](auto&& done) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{ 30 };
+        while (!done() && std::chrono::steady_clock::now() < deadline) {
+            static_cast<void>(scene.Runtime().Update(kFrame));
+            std::this_thread::yield();
+        }
+        return done();
+    };
+    Check(settle([&] { return runtime.IsNavMeshLoaded(owner.Entity(), { 0, 0 }) && runtime.IsNavMeshLoaded(owner.Entity(), { 1, 0 }); }),
+        "the navigation tiles of cells near the source stream in");
+    Check(!runtime.IsNavMeshLoaded(owner.Entity(), { 3, 0 }) && runtime.Stats().loadedNavMeshes == 2U, "far cells keep their tiles out");
+    Check(Path(scene, { 4.0F, 0.0F, 16.0F }, { 60.0F, 0.0F, 16.0F }).status == scene::NavPathStatus::Complete,
+        "a path crosses the border between two streamed cells");
+    Check(Path(scene, { 4.0F, 0.0F, 16.0F }, { 120.0F, 0.0F, 16.0F }).status == scene::NavPathStatus::Failed,
+        "nothing is known about unstreamed cells");
+    const scene::SceneEntity agent = AddAgent(scene, DVec3{ 4.0, 0.0, 16.0 }, Vec3{ 120.0F, 0.0F, 16.0F }, 0.4F, 8.0F);
+
+    Check(runtime.UpdateSource(source, { .position = { 112.0, 0.0, 16.0 }, .loadRadius = 40.0, .unloadRadius = 60.0, .priority = 0 }), "move the source");
+    Check(settle([&] {
+        return runtime.IsNavMeshLoaded(owner.Entity(), { 3, 0 }) && runtime.IsNavMeshLoaded(owner.Entity(), { 2, 0 }) &&
+            !runtime.IsNavMeshLoaded(owner.Entity(), { 0, 0 });
+    }), "tiles follow the source: new cells stream in, cells left behind stream out");
+    Check(Path(scene, { 70.0F, 0.0F, 16.0F }, { 120.0F, 0.0F, 16.0F }).status == scene::NavPathStatus::Complete,
+        "paths use the newly streamed cells");
+    static_cast<void>(agent);
+    std::vector<kb::world::WorldStreamingEvent> events = runtime.DrainEvents();
+    Check(std::ranges::any_of(events, [](const kb::world::WorldStreamingEvent& event) { return event.kind == kb::world::WorldStreamingEventKind::NavMeshLoaded; }) &&
+        std::ranges::any_of(events, [](const kb::world::WorldStreamingEvent& event) { return event.kind == kb::world::WorldStreamingEventKind::NavMeshUnloaded; }),
+        "loading and unloading tiles is reported as streaming events");
+    scene.Runtime().SetPlaying(false);
+    static_cast<void>(scene.Runtime().Update(kFrame));
+    Check(!scene.Navigation().HasNavMesh(), "stopping play removes the world's tiles");
+    std::filesystem::remove_all(root);
+}
+
 } // namespace
 
 void RunNavigationMeshTests() {
@@ -619,6 +715,7 @@ void RunNavigationMeshTests() {
     TestCrowdLevelOfDetail();
     TestNavLinkPersists();
     TestPlacedNavigationMesh();
+    TestTilesStreamWithCells();
 }
 
 // Crowd cost on this machine, for the performance gate: 1000 agents must step well inside a frame.

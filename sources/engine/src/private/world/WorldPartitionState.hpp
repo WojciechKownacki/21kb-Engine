@@ -26,6 +26,15 @@ struct WorldUnitRuntime {
     std::uint64_t loadedSceneId = 0U;
 };
 
+// A cell's navigation mesh: requested from the asset manager, then added to the scene's navigation.
+struct WorldNavMeshRuntime {
+    kb::assets::AssetId assetId{};
+    bool loading = false;
+    bool failed = false;
+    // SceneNavigation::AddNavMesh handle while the tiles are in the scene.
+    std::uint64_t handle = 0U;
+};
+
 // Runtime of one placed world. Everything here is derived: it can be dropped
 // and rebuilt from the ContentInstanceComponent and the built cell index.
 struct WorldRuntimeInstance {
@@ -45,6 +54,8 @@ struct WorldRuntimeInstance {
     std::vector<WorldUnitRuntime> units;
     std::unordered_map<WorldCellCoord, std::size_t, WorldCellCoordHash> hlodByCoord;
     std::map<WorldCellCoord, scene::SceneEntity> visibleHlods;
+    std::vector<std::string> navMeshPaths;
+    std::vector<WorldNavMeshRuntime> navMeshes;
 };
 
 struct WorldPartitionState {

@@ -101,6 +101,12 @@ std::string WorldCellIndexIO::Validate(const WorldCellIndex& index) {
             return "cell index HLOD uses more than 8 material slots";
         }
     }
+    std::set<WorldCellCoord> navMeshes;
+    for (const WorldCellNavMesh& navMesh : index.navMeshes) {
+        if (!IsSafeRelativeFile(navMesh.mesh) || !IsSerializableCellCoord(navMesh.coord) || !navMeshes.insert(navMesh.coord).second) {
+            return "cell index navigation mesh entry is invalid or repeated";
+        }
+    }
     return {};
 }
 
@@ -194,6 +200,24 @@ WorldCellIndexReadResult WorldCellIndexIO::Parse(std::string_view source) {
         }
         index.hlods.push_back(std::move(hlod));
     }
+    if (const JsonValue* navMeshes = root.Find("navMeshes"); navMeshes != nullptr) {
+        if (navMeshes->GetKind() != JsonValue::Kind::Array) {
+            return { .succeeded = false, .index = {}, .error = "cell index navMeshes must be an array" };
+        }
+        index.navMeshes.reserve(navMeshes->Size());
+        for (std::size_t item = 0U; item < navMeshes->Size(); ++item) {
+            const JsonValue& entry = *navMeshes->At(item);
+            WorldCellNavMesh navMesh;
+            const std::string* mesh = entry.GetKind() == JsonValue::Kind::Object ? text::String(entry, "mesh") : nullptr;
+            const std::optional<std::int64_t> tiles = mesh != nullptr ? text::Int(entry, "tiles", 0, kMaxCount) : std::nullopt;
+            if (mesh == nullptr || !tiles || !ReadCoord(entry, navMesh.coord)) {
+                return { .succeeded = false, .index = {}, .error = "cell index navigation mesh " + std::to_string(item) + " is invalid" };
+            }
+            navMesh.mesh = *mesh;
+            navMesh.tileCount = static_cast<std::uint32_t>(std::min<std::int64_t>(*tiles, UINT32_MAX));
+            index.navMeshes.push_back(std::move(navMesh));
+        }
+    }
     if (std::string invalid = Validate(index); !invalid.empty()) {
         return { .succeeded = false, .index = {}, .error = std::move(invalid) };
     }
@@ -259,6 +283,17 @@ std::string WorldCellIndexIO::Serialize(const WorldCellIndex& index) {
         out += ", \"sourceTriangles\": " + std::to_string(hlod.sourceTriangleCount) + "}";
     }
     out += index.hlods.empty() ? "]" : "\n  ]";
+    if (!index.navMeshes.empty()) {
+        out += ",\n  \"navMeshes\": [";
+        for (std::size_t item = 0U; item < index.navMeshes.size(); ++item) {
+            const WorldCellNavMesh& navMesh = index.navMeshes[item];
+            out += item == 0U ? "\n    {" : ",\n    {";
+            out += "\"x\": " + text::Integer(navMesh.coord.x) + ", \"z\": " + text::Integer(navMesh.coord.z) + ", \"mesh\": ";
+            text::AppendQuoted(out, navMesh.mesh);
+            out += ", \"tiles\": " + std::to_string(navMesh.tileCount) + "}";
+        }
+        out += "\n  ]";
+    }
     out += "\n}\n";
     return out;
 }

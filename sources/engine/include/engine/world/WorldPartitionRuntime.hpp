@@ -57,6 +57,9 @@ enum class WorldStreamingEventKind : std::uint8_t {
     LoadFailed,
     HlodShown,
     HlodHidden,
+    // A cell's navigation tiles joined or left the scene's navigation.
+    NavMeshLoaded,
+    NavMeshUnloaded,
 };
 
 struct WorldStreamingEvent {
@@ -74,6 +77,7 @@ struct WorldStreamingStats {
     std::size_t unloadingUnits = 0U;
     std::size_t failedUnits = 0U;
     std::size_t visibleHlods = 0U;
+    std::size_t loadedNavMeshes = 0U;
     std::size_t requestsThisFrame = 0U;
     std::uint64_t residentBytes = 0U;
     double milliseconds = 0.0;
@@ -119,6 +123,10 @@ public:
     [[nodiscard]] WorldCellState CellState(scene::SceneEntity world, WorldCellCoord coord, std::string_view dataLayer = {}) const;
     [[nodiscard]] WorldCellState PersistentState(scene::SceneEntity world, std::string_view dataLayer = {}) const;
     [[nodiscard]] bool IsHlodVisible(scene::SceneEntity world, WorldCellCoord coord) const;
+    // True while the navigation tiles of the cell are part of the scene's navigation. A cell's
+    // tiles load while a source's load radius reaches the cell and stay until its unload radius
+    // no longer does, like the cell's objects.
+    [[nodiscard]] bool IsNavMeshLoaded(scene::SceneEntity world, WorldCellCoord coord) const;
     // Coordinates of loaded spatial units of `world` (any layer), sorted.
     [[nodiscard]] std::vector<WorldCellCoord> LoadedCells(scene::SceneEntity world) const;
     [[nodiscard]] WorldStreamingStats Stats() const;
