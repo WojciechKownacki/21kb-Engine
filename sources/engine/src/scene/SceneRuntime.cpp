@@ -11,6 +11,7 @@
 #include "scene/components/SceneComponentRegistry.hpp"
 #include "scene/systems/SceneSystemScheduler.hpp"
 #include "scene/transform/SceneTransformHierarchySystem.hpp"
+#include "scene/transform/SceneTransformPrecision.hpp"
 #include "engine/ecs/NativeArchetypeStorage.hpp"
 
 #include <algorithm>
@@ -34,16 +35,20 @@ void SynchronizeTransformHierarchy(SceneState& state) {
         auto& value = state.fixedTransformValues[index];
         const TransformComponent* current = state.componentStorage.Transforms().TryGet(value.entity);
         if (current == nullptr || current->worldDirty || current->worldVersion == value.current.worldVersion) continue;
+        const kb::math::DVec3 currentWorld = SceneTransformPrecision::WorldTranslation(state, value.entity, *current);
         if (state.fixedTransformCapturing) {
             if (!value.touched) {
                 value.previous = value.current;
+                value.previousWorld = value.currentWorld;
                 value.touched = true;
                 state.fixedTransformTouched.push_back(index);
             }
         } else {
             value.previous = *current;
+            value.previousWorld = currentWorld;
         }
         value.current = *current;
+        value.currentWorld = currentWorld;
     }
 }
 
@@ -148,17 +153,20 @@ void RebuildFixedTransformSamples(Scene&, SceneState& state, bool preservePrevio
         const TransformComponent* live = state.componentStorage.Transforms().TryGet(entity);
         if (live == nullptr) continue;
         const TransformComponent& current = *live;
+        const kb::math::DVec3 currentWorld = SceneTransformPrecision::WorldTranslation(state, entity, current);
         TransformComponent previous = current;
+        kb::math::DVec3 previousWorld = currentWorld;
         if (preservePrevious) {
             const auto old = std::ranges::lower_bound(oldSamples, entity, {}, &SceneState::FixedTransformSample::entity);
             if (old != oldSamples.end() && old->entity == entity) {
                 const auto& value = oldValues[old->valueIndex];
                 previous = value.touched ? value.previous : value.current;
+                previousWorld = value.touched ? value.previousWorld : value.currentWorld;
             }
         }
         const std::size_t index = state.fixedTransformValues.size();
         state.fixedTransformSamples.push_back({entity, index});
-        state.fixedTransformValues.push_back({previous, current, preservePrevious, entity});
+        state.fixedTransformValues.push_back({previous, current, preservePrevious, entity, previousWorld, currentWorld});
         if (preservePrevious) state.fixedTransformTouched.push_back(index);
     }
     std::ranges::sort(state.fixedTransformSamples, {}, &SceneState::FixedTransformSample::entity);
@@ -189,6 +197,7 @@ void CaptureFixedStepStart(Scene& scene, SceneState& state) {
     for (const std::size_t index : state.fixedTransformTouched) {
         auto& value = state.fixedTransformValues[index];
         value.previous = value.current;
+        value.previousWorld = value.currentWorld;
         value.touched = false;
     }
     state.fixedTransformTouched.clear();
@@ -429,6 +438,21 @@ std::optional<TransformComponent> SceneRuntimeService::InterpolatedTransform(con
     }
     if (const TransformComponent* current = SceneTransformService::TryGet(scene, entity); current != nullptr) {
         return *current;
+    }
+    return std::nullopt;
+}
+
+std::optional<kb::math::DVec3> SceneRuntimeService::InterpolatedWorldTranslation(const Scene& scene, SceneEntity entity) noexcept {
+    const SceneState& state = SceneAccess::State(scene);
+    if (!state.world.IsAlive(entity)) return std::nullopt;
+    const auto sample = std::ranges::lower_bound(state.fixedTransformSamples, entity, {}, &SceneState::FixedTransformSample::entity);
+    if (sample != state.fixedTransformSamples.end() && sample->entity == entity) {
+        const auto& values = state.fixedTransformValues[sample->valueIndex];
+        const double alpha = static_cast<double>(state.fixedInterpolationAlpha);
+        return values.previousWorld + (values.currentWorld - values.previousWorld) * alpha;
+    }
+    if (const TransformComponent* current = SceneTransformService::TryGet(scene, entity); current != nullptr) {
+        return SceneTransformPrecision::WorldTranslation(state, entity, *current);
     }
     return std::nullopt;
 }

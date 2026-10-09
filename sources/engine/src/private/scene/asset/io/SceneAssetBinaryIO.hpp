@@ -91,6 +91,15 @@ public:
         return true;
     }
 
+    [[nodiscard]] bool ReadDouble(double& output) {
+        std::uint64_t bits = 0U;
+        if (!ReadUInt64(bits)) {
+            return false;
+        }
+        output = std::bit_cast<double>(bits);
+        return true;
+    }
+
     [[nodiscard]] bool ReadString(std::string& output, std::uint32_t maxBytes = SceneAssetFormat::MaxStringBytes) {
         std::uint32_t length = 0U;
         if (!ReadUInt32(length) || length > maxBytes || Remaining() < length) {
@@ -146,6 +155,10 @@ inline void WriteUInt64(std::vector<std::uint8_t>& output, std::uint64_t value) 
 
 inline void WriteFloat(std::vector<std::uint8_t>& output, float value) {
     WriteUInt32(output, std::bit_cast<std::uint32_t>(value));
+}
+
+inline void WriteDouble(std::vector<std::uint8_t>& output, double value) {
+    WriteUInt64(output, std::bit_cast<std::uint64_t>(value));
 }
 
 inline void WriteString(std::vector<std::uint8_t>& output, std::string_view value) {

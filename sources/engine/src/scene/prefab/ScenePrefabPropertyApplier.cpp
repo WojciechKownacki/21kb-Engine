@@ -20,7 +20,7 @@ bool ScenePrefabPropertyApplier::Apply(Scene& scene, ScenePrefabNodeDesc& node, 
     if (ScenePrefabPropertyPath::IsTransform(propertyPath)) {
         const TransformComponent transform = scene.Transforms().Get(object);
         if (propertyPath == "transform.localPosition") {
-            node.transform.localPosition = transform.localPosition;
+            node.SetLocalTranslation(scene.Transforms().LocalTranslation(object.Entity(), transform));
         } else if (propertyPath == "transform.localRotation") {
             node.transform.localRotation = transform.localRotation;
         } else if (propertyPath == "transform.localScale") {

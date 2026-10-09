@@ -51,6 +51,8 @@ struct ScenePrefabAssetFormat {
     static constexpr std::string_view NodeStableIdKey = "id";
     static constexpr std::string_view ParentKey = "parent";
     static constexpr std::string_view LocalPositionKey = "localPosition";
+    // Optional: the part of the local translation below float precision (TransformComponent::localPositionResidual).
+    static constexpr std::string_view LocalPositionResidualKey = "localPositionResidual";
     static constexpr std::string_view LocalRotationKey = "localRotation";
     static constexpr std::string_view LocalScaleKey = "localScale";
     static constexpr std::string_view VisibleKey = "visible";

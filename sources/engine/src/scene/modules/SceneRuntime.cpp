@@ -60,6 +60,10 @@ std::optional<TransformComponent> SceneRuntimeQueries::InterpolatedTransform(Sce
     return SceneRuntimeService::InterpolatedTransform(scene_, entity);
 }
 
+std::optional<kb::math::DVec3> SceneRuntimeQueries::InterpolatedWorldTranslation(SceneEntity entity) const noexcept {
+    return SceneRuntimeService::InterpolatedWorldTranslation(scene_, entity);
+}
+
 std::span<const SceneEntity> SceneRuntimeQueries::TransformRenderProxyUpdateEntities() const noexcept {
     return SceneRuntimeService::TransformRenderProxyUpdateEntities(scene_);
 }
@@ -205,6 +209,10 @@ SceneRuntimeHotPathReport SceneRuntime::HotPathReport() const noexcept {
 
 std::optional<TransformComponent> SceneRuntime::InterpolatedTransform(SceneEntity entity) const noexcept {
     return SceneRuntimeService::InterpolatedTransform(scene_, entity);
+}
+
+std::optional<kb::math::DVec3> SceneRuntime::InterpolatedWorldTranslation(SceneEntity entity) const noexcept {
+    return SceneRuntimeService::InterpolatedWorldTranslation(scene_, entity);
 }
 
 std::span<const SceneEntity> SceneRuntime::TransformRenderProxyUpdateEntities() const noexcept {

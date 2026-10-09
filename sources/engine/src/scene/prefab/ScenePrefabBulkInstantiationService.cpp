@@ -14,6 +14,7 @@
 #include "scene/prefab/ScenePrefabBakedData.hpp"
 #include "scene/prefab/ScenePrefabNameResolver.hpp"
 #include "scene/prefab/ScenePrefabValidator.hpp"
+#include "scene/transform/SceneTransformPrecision.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -917,6 +918,21 @@ void ResolvePrefabReferences(Scene& scene, std::span<const ScenePrefabNodeDesc> 
     }
 }
 
+// A node whose translation is finer than float precision gives that part to its entity in every instance.
+void ApplyTranslationResiduals(Scene& scene, std::span<const ScenePrefabNodeDesc> nodes,
+    std::span<const SceneEntity> entities, std::size_t instanceCount) {
+    if (std::ranges::none_of(nodes, [](const ScenePrefabNodeDesc& node) {
+        return !IsZero(FittingResidual(node.transform.localPosition, node.localPositionResidual));
+    })) return;
+    SceneState& state = SceneAccess::State(scene);
+    for (std::size_t instance = 0U; instance < instanceCount; ++instance) {
+        for (std::size_t index = 0U; index < nodes.size(); ++index) {
+            const Vec3 residual = FittingResidual(nodes[index].transform.localPosition, nodes[index].localPositionResidual);
+            if (!IsZero(residual)) SceneTransformPrecision::StoreLocalResidual(state, entities[EntityIndex(instance, index, nodes.size())], residual);
+        }
+    }
+}
+
 [[nodiscard]] std::vector<ScenePrefabInstance> BuildInstances(
     Scene& scene,
     std::span<const ScenePrefabNodeDesc> nodes,
@@ -1022,6 +1038,7 @@ void ResolvePrefabReferences(Scene& scene, std::span<const ScenePrefabNodeDesc> 
         const std::uint64_t entityCreateNanoseconds = ElapsedNanoseconds(createStart, PrefabStatsClock::now());
         SceneHistoryService::NoteObjectsCreated(scene, entities);
         ResolvePrefabReferences(scene, nodes, std::span<const SceneEntity>{ entities }, count);
+        ApplyTranslationResiduals(scene, nodes, std::span<const SceneEntity>{ entities }, count);
 
         const kb::ecs::NativeEcsStorageStats afterStorage = state.world.NativeStorageStats();
         std::uint64_t instanceObjectSlabNanoseconds = 0;
@@ -1087,6 +1104,7 @@ void ResolvePrefabReferences(Scene& scene, std::span<const ScenePrefabNodeDesc> 
     }
     SceneHistoryService::NoteObjectsCreated(scene, resolvedEntities);
     ResolvePrefabReferences(scene, nodes, std::span<const SceneEntity>{ resolvedEntities }, count);
+    ApplyTranslationResiduals(scene, nodes, std::span<const SceneEntity>{ resolvedEntities }, count);
 
     std::uint64_t instanceObjectSlabNanoseconds = 0;
     std::uint64_t hierarchyRecordNanoseconds = 0;

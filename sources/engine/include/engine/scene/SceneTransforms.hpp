@@ -28,6 +28,8 @@ public:
     // Writes the row's local transform with the result of Transforms().Set followed by the transform sync: a row
     // without parent or children gets its world transform here; any other row is left to the next sync.
     void SetLocal(std::size_t row, const Vec3& position, const Quat& rotation, const Vec3& scale);
+    // SetLocal with a double-precision translation (see SceneTransforms::SetLocalTranslation).
+    void SetLocal(std::size_t row, const kb::math::DVec3& translation, const Quat& rotation, const Vec3& scale);
     // Applies already computed local TRS values to consecutive rows. Bounds are checked before any write;
     // an empty span at Count() is valid. On return each row has SetLocal's immediate/deferred state.
     // Payloads are copied in groups of up to four before each group's writes; no whole-span snapshot is promised.
@@ -95,6 +97,14 @@ public:
     [[nodiscard]] bool ReadNonAlloc(std::span<const SceneEntity> entities, std::span<TransformComponent> transforms) const noexcept;
     void ForEach(ConstTransformVisitor visitor, void* context = nullptr) const;
 
+    // Double-precision translations (docs/large_worlds.md). localPosition/worldPosition are these rounded to float;
+    // a missing entity reads as zero. The world translation is fresh after the transform sync, like worldPosition.
+    [[nodiscard]] kb::math::DVec3 LocalTranslation(SceneEntity entity) const noexcept;
+    [[nodiscard]] kb::math::DVec3 WorldTranslation(SceneEntity entity) const noexcept;
+    // The same for a row the caller already holds (TryGet, a visitor), without a second lookup.
+    [[nodiscard]] kb::math::DVec3 LocalTranslation(SceneEntity entity, const TransformComponent& transform) const noexcept;
+    [[nodiscard]] kb::math::DVec3 WorldTranslation(SceneEntity entity, const TransformComponent& transform) const noexcept;
+
 private:
     const Scene& scene_;
 };
@@ -124,6 +134,17 @@ public:
 
     void ForEach(ConstTransformVisitor visitor, void* context = nullptr) const;
     void ForEachMutable(MutableTransformVisitor visitor, void* context = nullptr);
+
+    // Double-precision translations (docs/large_worlds.md). localPosition/worldPosition are these rounded to float;
+    // a missing entity reads as zero. The world translation is fresh after the transform sync, like worldPosition.
+    [[nodiscard]] kb::math::DVec3 LocalTranslation(SceneEntity entity) const noexcept;
+    [[nodiscard]] kb::math::DVec3 WorldTranslation(SceneEntity entity) const noexcept;
+    // The same for a row the caller already holds (TryGet, a visitor), without a second lookup.
+    [[nodiscard]] kb::math::DVec3 LocalTranslation(SceneEntity entity, const TransformComponent& transform) const noexcept;
+    [[nodiscard]] kb::math::DVec3 WorldTranslation(SceneEntity entity, const TransformComponent& transform) const noexcept;
+    // Writes the entity's local translation in double precision, the way Set writes a transform (versions, world
+    // composition, dirty tracking). Float writes of localPosition keep a stored residual while it fits.
+    void SetLocalTranslation(SceneEntity entity, const kb::math::DVec3& translation);
 
     // Runs body(range) on the scene's worker threads over every chunk of the rows that have a transform and every
     // component of `extraComponents`, and returns when all are done, with the same result as Set of the written

@@ -133,6 +133,8 @@ public:
     [[nodiscard]] const kb::ecs::SystemSchedulerTrace& LastEcsProfilerTrace() const noexcept;
     [[nodiscard]] SceneRuntimeHotPathReport HotPathReport() const noexcept;
     [[nodiscard]] std::optional<TransformComponent> InterpolatedTransform(SceneEntity entity) const noexcept;
+    // The double-precision world translation of InterpolatedTransform (docs/large_worlds.md).
+    [[nodiscard]] std::optional<kb::math::DVec3> InterpolatedWorldTranslation(SceneEntity entity) const noexcept;
     [[nodiscard]] std::span<const SceneEntity> TransformRenderProxyUpdateEntities() const noexcept;
     [[nodiscard]] std::span<const WorldTransformAffine3x4> TransformRenderProxyWorldAffine3x4() const noexcept;
     [[nodiscard]] std::span<const SceneEntity> RenderProxyUpdateEntities() const noexcept;
@@ -231,6 +233,8 @@ public:
     [[nodiscard]] const kb::ecs::SystemSchedulerTrace& LastEcsProfilerTrace() const noexcept;
     [[nodiscard]] SceneRuntimeHotPathReport HotPathReport() const noexcept;
     [[nodiscard]] std::optional<TransformComponent> InterpolatedTransform(SceneEntity entity) const noexcept;
+    // The double-precision world translation of InterpolatedTransform (docs/large_worlds.md).
+    [[nodiscard]] std::optional<kb::math::DVec3> InterpolatedWorldTranslation(SceneEntity entity) const noexcept;
     [[nodiscard]] std::span<const SceneEntity> TransformRenderProxyUpdateEntities() const noexcept;
     [[nodiscard]] std::span<const WorldTransformAffine3x4> TransformRenderProxyWorldAffine3x4() const noexcept;
     [[nodiscard]] std::span<const SceneEntity> RenderProxyUpdateEntities() const noexcept;

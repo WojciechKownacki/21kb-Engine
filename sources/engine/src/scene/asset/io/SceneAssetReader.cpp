@@ -81,8 +81,16 @@ using SceneAssetBinaryIO::ReadAllBytes;
         return false;
     }
 
-    if (!input.ReadUInt32(output.parentNode) ||
-        !SceneAssetPrimitiveCodec::ReadVec3(input, output.transform.localPosition) ||
+    if (!input.ReadUInt32(output.parentNode)) {
+        return false;
+    }
+    // Files older than SceneDocument::DoubleTranslationFileVersion store the local translation as float32.
+    kb::math::DVec3 translation{};
+    const bool translationRead = fileVersion >= SceneDocument::DoubleTranslationFileVersion
+        ? SceneAssetPrimitiveCodec::ReadDVec3(input, translation)
+        : SceneAssetPrimitiveCodec::ReadVec3(input, output.transform.localPosition);
+    if (fileVersion >= SceneDocument::DoubleTranslationFileVersion) output.SetLocalTranslation(translation);
+    if (!translationRead ||
         !SceneAssetPrimitiveCodec::ReadQuat(input, output.transform.localRotation) ||
         !SceneAssetPrimitiveCodec::ReadVec3(input, output.transform.localScale) ||
         !input.ReadBool(visible) ||

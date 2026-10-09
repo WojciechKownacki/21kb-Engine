@@ -3,6 +3,7 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneObject.hpp"
+#include "engine/scene/SceneTransforms.hpp"
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/prefab/ScenePrefabComponentSnapshot.hpp"
@@ -43,6 +44,7 @@ ScenePrefabNodeDesc ScenePrefabCaptureNodeBuilder::Build(Scene& scene, SceneObje
         .visibility = scene.Components().Visibility().Get(object.Entity()),
         .components = ScenePrefabComponentSnapshot::Capture(scene, object),
     };
+    node.SetLocalTranslation(scene.Transforms().LocalTranslation(object.Entity()));
     ApplyNestedPrefabMetadata(scene, object, node);
     return node;
 }
