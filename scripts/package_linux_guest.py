@@ -209,6 +209,32 @@ def _run_linux_first_frame(stage: Path, executable_name: str, xvfb: str) -> str:
         return _run([xvfb, "-a", runtime / executable_name, "--frames=1"], runtime, 180)
 
 
+def _prove_release(stage: Path, executable_name: str, configuration: str, engine_fingerprint: str, xvfb: str) -> bytes:
+    """Runs the first frame of a finished, signed release exactly as it ships and returns the build
+    receipt that records it: the player, its base pack and the proof."""
+    player = stage / executable_name
+    pack = stage / "Game.kbpack"
+    if not player.is_file() or player.read_bytes()[:4] != b"\x7fELF":
+        raise GuestError("Linux release does not contain an ELF player")
+    if not pack.is_file():
+        raise GuestError("Linux release does not contain Game.kbpack")
+    dependencies = _run(["ldd", player], stage, 120)
+    if "not found" in dependencies:
+        raise GuestError("Linux player has unresolved shared-library dependencies")
+    smoke = _run_linux_first_frame(stage, executable_name, xvfb)
+    if "frames=1" not in smoke or "rendered=1" not in smoke or "shutdown=clean" not in smoke:
+        raise GuestError("Linux player did not prove a clean first frame")
+    receipt = {
+        "schema": 1,
+        "configuration": configuration,
+        "engineSha256": engine_fingerprint,
+        "executableSha256": _sha256(player),
+        "assetPackSha256": _sha256(pack),
+        "firstFrame": True,
+    }
+    return (json.dumps(receipt, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+
+
 def _load_json(path: Path) -> dict[str, object]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
@@ -464,6 +490,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--archive", type=Path)
+    mode.add_argument("--prove-archive", type=Path)
     mode.add_argument("--launch-archive", type=Path)
     parser.add_argument("--engine-root", type=Path)
     parser.add_argument("--configuration", choices=("Debug", "Release"))
@@ -476,55 +503,45 @@ def main() -> int:
         if args.launch_archive is not None:
             _launch_package(args)
             return 0
-        if args.engine_root is None or args.configuration is None or args.engine_fingerprint is None or args.output is None:
-            raise GuestError("Linux build mode requires engine root, configuration, fingerprint, and output")
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_. -]{0,79}", args.executable_name):
             raise GuestError("executable name is invalid")
+        if args.prove_archive is not None:
+            # The packaging host signed the release; its first frame is proved as it ships.
+            if args.configuration is None or args.engine_fingerprint is None or args.output is None:
+                raise GuestError("Linux proof mode requires configuration, fingerprint, and output")
+            xvfb = shutil.which("xvfb-run")
+            if xvfb is None:
+                raise GuestError("Linux build machine requires xvfb-run")
+            with tempfile.TemporaryDirectory(prefix="21kb-linux-proof-") as temporary_text:
+                stage = Path(temporary_text) / "release"
+                stage.mkdir()
+                _extract_input(args.prove_archive.resolve(strict=True), stage)
+                receipt = _prove_release(stage, args.executable_name, args.configuration, args.engine_fingerprint, xvfb)
+            args.output.absolute().write_bytes(receipt)
+            return 0
+        if args.engine_root is None or args.configuration is None or args.engine_fingerprint is None or args.output is None:
+            raise GuestError("Linux build mode requires engine root, configuration, fingerprint, and output")
         engine = args.engine_root.resolve(strict=True)
         cmake = shutil.which("cmake")
         ninja = shutil.which("ninja")
-        xvfb = shutil.which("xvfb-run")
-        if cmake is None or ninja is None or xvfb is None:
-            raise GuestError("Linux build machine requires cmake, ninja, and xvfb-run")
+        if cmake is None or ninja is None:
+            raise GuestError("Linux build machine requires cmake and ninja")
         game = _build_linux_player(engine, args.configuration, args.engine_fingerprint, cmake)
         with tempfile.TemporaryDirectory(prefix="21kb-linux-package-") as temporary_text:
             temporary = Path(temporary_text)
             incoming = temporary / "incoming"
             incoming.mkdir()
             _extract_input(args.archive.resolve(strict=True), incoming)
-            pack = incoming / "Game.kbpack"
-            if not pack.is_file():
-                raise GuestError("Linux package input does not contain Game.kbpack")
             stage = temporary / "result"
             stage.mkdir()
             player = stage / args.executable_name
             shutil.copy2(game, player)
             player.chmod(player.stat().st_mode | 0o111)
-            # Before the first-frame proof and the receipt: both describe the player as shipped.
+            # The player as shipped: the packaging host adds the packs, the notices and the signed
+            # release manifest, and then asks for the first-frame proof (--prove-archive).
             _embed_trust_anchor(incoming, player)
-            shutil.copy2(pack, stage / "Game.kbpack")
-            # The packaging host adds the third-party notices and SBOM to the returned player.
             if player.read_bytes()[:4] != b"\x7fELF":
                 raise GuestError("built Linux player does not contain an ELF header")
-            dependencies = _run(["ldd", player], stage, 120)
-            if "not found" in dependencies:
-                raise GuestError("Linux player has unresolved shared-library dependencies")
-            smoke = _run_linux_first_frame(stage, args.executable_name, xvfb)
-            if "frames=1" not in smoke or "rendered=1" not in smoke or "shutdown=clean" not in smoke:
-                raise GuestError("Linux player did not prove a clean first frame")
-            receipt = {
-                "schema": 1,
-                "configuration": args.configuration,
-                "engineSha256": args.engine_fingerprint,
-                "executableSha256": _sha256(player),
-                "assetPackSha256": _sha256(stage / "Game.kbpack"),
-                "firstFrame": True,
-            }
-            (stage / "linux-build.receipt.json").write_text(
-                json.dumps(receipt, sort_keys=True, separators=(",", ":")) + "\n",
-                encoding="utf-8",
-                newline="\n",
-            )
             _create_archive(stage, args.output.absolute())
         return 0
     except (GuestError, OSError, subprocess.TimeoutExpired, tarfile.TarError) as error:

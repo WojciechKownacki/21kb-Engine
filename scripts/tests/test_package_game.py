@@ -517,17 +517,17 @@ class PackageGameTests(unittest.TestCase):
                 ({"pack_chunk": ["cell=Game/Cells/"]}, "virtual path"),
                 ({"pack_chunk": ["cell=/Game/../Secrets/"]}, "virtual path"),
                 ({"pack_chunk": ["cell=/Game/A/", "cell=/Game/B/"]}, "its own label"),
-                ({"pack_chunk": ["cell=/Game/A/"], "target": "Linux.x64"}, "Windows players only"),
+                ({"pack_chunk": ["cell=/Game/A/"], "target": "WebGL.wasm32"}, "Windows and Linux players only"),
                 ({"pack_chunk_cells": ["east=/Game/Worlds/Forest.21kbworld@2:0..1:0"]}, "out of order"),
                 ({"pack_chunk_cells": ["east=Game/Worlds/Forest.21kbworld"]}, "LABEL=/Game/WORLD"),
                 ({"pack_chunk_cells": ["east=/Game/Worlds/Forest.21kbworld#bad layer"]}, "LABEL=/Game/WORLD"),
                 ({"pack_chunk_cells": ["east=/Game/Worlds/Forest.21kbscene"]}, "LABEL=/Game/WORLD"),
                 ({"patch_level": 4}, "needs --patch-from"),
-                ({"patch_from": previous, "target": "Linux.x64"}, "Windows players only"),
+                ({"patch_from": previous, "target": "Android.ETC2.arm64"}, "Windows and Linux players only"),
                 ({"patch_from": previous, "pack_chunk": ["cell=/Game/A/"]}, "keeps the chunks"),
                 ({"patch_from": previous, "release_number": 12}, "higher than the patched release's 12"),
                 ({"patch_from": previous, "patch_level": 3}, "higher than the release's patch level 3"),
-                ({"patch_from": root}, "signed Windows release"),
+                ({"patch_from": root}, "signed Windows or Linux release"),
             ):
                 with self.assertRaisesRegex(PackagingError, message):
                     package_game._validate_content_packaging(self._content_args(root, **refused))
@@ -535,6 +535,12 @@ class PackageGameTests(unittest.TestCase):
             patch = self._content_args(root, patch_from=previous)
             package_game._validate_content_packaging(patch)
             self.assertEqual(4, patch.patch_level)
+            # A Linux release verifies its signed manifest like a Windows one, so it takes pack
+            # sets and patches too.
+            linux = self._content_args(root, patch_from=previous, target="Linux.x64")
+            package_game._validate_content_packaging(linux)
+            self.assertEqual(4, linux.patch_level)
+            package_game._validate_content_packaging(self._content_args(root, target="Linux.x64", pack_chunk=["cell=/Game/A/"]))
             self.assertEqual(
                 [("base", "", 0, "Game.kbpack"), ("chunk", "cell", 0, "Game.cell.kbpack"),
                  ("patch", "patch-0003", 3, "Game.patch-0003.kbpack")],
@@ -869,6 +875,123 @@ class PackageGameTests(unittest.TestCase):
                 package_game._extract_linux_result(archive_path, destination)
             self.assertFalse((root / "escape").exists())
 
+    def test_remote_linux_release_is_signed_on_the_host_before_the_guest_proves_its_first_frame(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_text:
+            root = Path(temporary_text)
+            engine = root / "engine"
+            (engine / "scripts").mkdir(parents=True)
+            for helper in ("package_linux_guest.py", "elf_trust_anchor.py", "package_contract.py"):
+                (engine / "scripts" / helper).write_text("# helper\n", encoding="utf-8")
+            job = root / "job"
+            (job / "cook").mkdir(parents=True)
+            stage = root / "linux-stage"
+            stage.mkdir()
+            pack = job / "cook" / "Game.kbpack"
+            pack.write_bytes(b"base")
+            (job / "cook" / "Game.cell.kbpack").write_bytes(b"chunk")
+            anchor = job / "trust-anchor.bin"
+            anchor.write_bytes(b"anchor")
+            kb_cli = root / "kb_cli.exe"
+            signing = package_game.ReleaseSigning(kb_cli, root / "game.kbkey", None)
+            args = self._content_args(
+                root, target="Linux.x64", configuration="Release", engine_root=engine, executable_name="Game",
+                engine_fingerprint="f" * 64, linux_host="builder.example", linux_user="packager",
+                linux_host_key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample", linux_port=22,
+                linux_engine_root="/srv/21kb", linux_identity=None, trust_anchor=anchor, release_signing=signing,
+                version="1.0", release_number=5, anti_rollback=False,
+                pack_set=package_game.PackSet(
+                    (pack,), ((pack, "Game.kbpack"), (job / "cook" / "Game.cell.kbpack", "Game.cell.kbpack")),
+                    "21kb-pack-set 1\nbase Game.kbpack\nchunk cell Game.cell.kbpack\n",
+                ),
+            )
+            events: list[str] = []
+
+            def run(arguments: list[object], **_kwargs: object) -> object:
+                argv = [str(value) for value in arguments]
+                tool = Path(argv[0]).name
+                if tool == "ssh" and "--archive" in argv[-1]:
+                    events.append("build")
+                    self.assertNotIn("Game.kbpack", argv[-1])
+                elif tool == "ssh" and "--prove-archive" in argv[-1]:
+                    events.append("prove")
+                elif tool == "scp" and argv[-2].endswith("result.tar.gz"):
+                    player = root / "player"
+                    player.mkdir()
+                    (player / "Game").write_bytes(b"\x7fELF\x02\x01\x01" + bytes(11) + (62).to_bytes(2, "little") + b"player")
+                    package_game._create_deterministic_tar(player, Path(argv[-1]), executable_name="Game")
+                elif tool == "scp" and argv[-2].endswith("linux-build.receipt.json"):
+                    Path(argv[-1]).write_bytes(package_game._linux_build_receipt(args, stage))
+                elif tool == "scp" and any(value.endswith("linux-release.tar.gz") for value in argv):
+                    with tarfile.open(Path(argv[-2]), "r:gz") as archive:
+                        names = archive.getnames()
+                    self.assertIn("release.kbmanifest", names)
+                    self.assertIn("Game.kbpackset", names)
+                    self.assertIn("Game.cell.kbpack", names)
+                elif argv[1:3] == ["release", "sign"]:
+                    events.append("sign")
+                    (stage / "release.kbmanifest").write_text("signed\n", encoding="utf-8")
+                elif argv[1:3] == ["pack", "set-verify"]:
+                    events.append("set-verify")
+                return mock.MagicMock()
+
+            # The returned player's anchor slot is read with the ELF helper its own tests cover.
+            with mock.patch.object(package_game, "_required_executable", side_effect=lambda name: root / name), \
+                    mock.patch.object(package_game, "_stage_licenses") as licenses, \
+                    mock.patch.object(package_game, "read_trust_anchor", return_value=b"anchor"), \
+                    mock.patch.object(package_game, "emit_diagnostic"), \
+                    mock.patch.object(package_game, "run_checked", side_effect=run):
+                package_game._stage_linux_remote(args, pack, stage, job)
+                package_game._verify_linux_stage(stage, args)
+
+            self.assertEqual(["build", "set-verify", "sign", "prove"], events)
+            licenses.assert_called_once_with(args, stage)
+            self.assertEqual(
+                ["Game", "Game.cell.kbpack", "Game.kbpack", "Game.kbpackset", "linux-build.receipt.json",
+                 "release.kbmanifest"],
+                sorted(path.name for path in stage.iterdir()),
+            )
+            receipt = json.loads((stage / "linux-build.receipt.json").read_text(encoding="utf-8"))
+            self.assertTrue(receipt["firstFrame"])
+
+            # A signed Linux release must carry its manifest when it comes back.
+            (stage / "release.kbmanifest").unlink()
+            with self.assertRaisesRegex(PackagingError, "signed release manifest"):
+                package_game._verify_linux_stage(stage, args)
+
+    def test_linux_guest_proves_the_first_frame_of_the_release_it_is_given(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_text:
+            stage = Path(temporary_text) / "release"
+            stage.mkdir()
+            (stage / "Game").write_bytes(b"\x7fELF player")
+            (stage / "Game.kbpack").write_bytes(b"pack")
+            (stage / "release.kbmanifest").write_text("signed\n", encoding="utf-8")
+            seen: list[list[object]] = []
+
+            def run(arguments: list[object], cwd: Path, timeout: int) -> str:
+                seen.append(arguments)
+                if arguments[0] == "ldd":
+                    return "linux-vdso.so.1\n"
+                self.assertTrue((cwd / "release.kbmanifest").is_file())
+                return "frames=1 rendered=1 shutdown=clean"
+
+            with mock.patch.object(package_linux_guest, "_run", side_effect=run):
+                receipt = json.loads(package_linux_guest._prove_release(stage, "Game", "Release", "e" * 64, "xvfb-run"))
+            self.assertEqual("ldd", seen[0][0])
+            self.assertEqual("xvfb-run", seen[1][0])
+            self.assertEqual(
+                {"schema": 1, "configuration": "Release", "engineSha256": "e" * 64,
+                 "executableSha256": package_linux_guest._sha256(stage / "Game"),
+                 "assetPackSha256": package_linux_guest._sha256(stage / "Game.kbpack"), "firstFrame": True},
+                receipt,
+            )
+
+            def failing(arguments: list[object], cwd: Path, timeout: int) -> str:
+                return "linux-vdso.so.1\n" if arguments[0] == "ldd" else "frames=0"
+
+            with mock.patch.object(package_linux_guest, "_run", side_effect=failing):
+                with self.assertRaisesRegex(package_linux_guest.GuestError, "clean first frame"):
+                    package_linux_guest._prove_release(stage, "Game", "Release", "e" * 64, "xvfb-run")
+
     def test_linux_guest_smoke_cannot_add_runtime_artifacts_to_result_archive(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_text:
             root = Path(temporary_text)
@@ -942,6 +1065,8 @@ class PackageGameTests(unittest.TestCase):
 
             write_archive(0o755)
             package_game._verify_linux_release_archive(archive_path, "Game")
+            with self.assertRaisesRegex(PackagingError, "signed release manifest"):
+                package_game._verify_linux_release_archive(archive_path, "Game", signed=True)
 
     def test_linux_runtime_rejects_a_non_executable_player_before_hashing(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_text:

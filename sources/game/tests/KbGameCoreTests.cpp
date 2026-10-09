@@ -903,6 +903,64 @@ void RunPackSetPackagingTests() {
                 kb::game::PackBelongsToRelease(*installed, release / "Game.kbpack", pack, releaseErrors),
             "The release's own pack set was not bound to its manifest");
     }
+
+    // The same release laid out for Linux: an ELF player without an extension beside the same
+    // packs and index. The player verifies it the same way -- its own image hashed, the index
+    // hashed, every pack bound by its seal -- and refuses a modified player, a planted shared
+    // library and a missing manifest.
+    {
+        const std::filesystem::path linuxRoot = TestRoot() / "pack_set_release_linux";
+        std::error_code linuxError;
+        std::filesystem::remove_all(linuxRoot, linuxError);
+        std::filesystem::create_directories(linuxRoot / "Licenses", linuxError);
+        for (const char* member : { "Game.kbpack", "Game.cell_0_0.kbpack", "Game.patch-0001.kbpack", "Game.kbpackset" }) {
+            std::filesystem::copy_file(release / member, linuxRoot / member, linuxError);
+        }
+        Require(!linuxError, "The Linux release fixture could not be staged");
+        const std::string elf{ "\x7F" "ELF\x02\x01\x01 player image" };
+        WriteTextFile(linuxRoot / "Game", elf);
+        WriteTextFile(linuxRoot / "Licenses" / "notice.txt", "notices");
+        const auto signLinux = [&] {
+            std::filesystem::remove(linuxRoot / "release.kbmanifest", linuxError);
+            kb::security::ReleaseManifest manifest{};
+            manifest.productId = anchor.productId;
+            manifest.contentVersion = "2.0.0";
+            manifest.releaseNumber = 2U;
+            {
+                const bool succeeded = kb::security::BuildReleaseManifest(linuxRoot, manifest, error);
+                Require(succeeded, error.c_str());
+            }
+            WriteTextFile(linuxRoot / "release.kbmanifest", kb::security::SignReleaseManifest(manifest, key));
+        };
+        signLinux();
+        std::ostringstream linuxErrors;
+        const auto linuxRelease = kb::game::VerifyPackagedRelease(anchor, linuxRoot, linuxRoot / "Game", securityRoot, linuxErrors);
+        Require(linuxRelease != nullptr, linuxErrors.str().c_str());
+        {
+            bake::RuntimeAssetPack pack;
+            Require(pack.MountSetIndex(linuxRoot / "Game.kbpackset", bake::WindowsX64BakeTargetProfile(),
+                        bake::AssetPackAccess::Ranged, trust) == bake::RuntimeAssetPackStatus::Success &&
+                    kb::game::PackBelongsToRelease(*linuxRelease, linuxRoot / "Game.kbpack", pack, linuxErrors),
+                "A Linux release's pack set was not bound to its manifest");
+        }
+        WriteTextFile(linuxRoot / "Game", elf + "patched");
+        std::ostringstream modified;
+        Require(kb::game::VerifyPackagedRelease(anchor, linuxRoot, linuxRoot / "Game", securityRoot, modified) == nullptr &&
+                Mentions(modified.str(), "Game"),
+            "A modified Linux player was allowed to start");
+        WriteTextFile(linuxRoot / "Game", elf);
+        WriteTextFile(linuxRoot / "libplanted.so", "planted");
+        std::ostringstream planted;
+        Require(kb::game::VerifyPackagedRelease(anchor, linuxRoot, linuxRoot / "Game", securityRoot, planted) == nullptr &&
+                Mentions(planted.str(), "UnlistedFile") && Mentions(planted.str(), "libplanted.so"),
+            "A Linux release with a planted shared library was allowed to start");
+        std::filesystem::remove(linuxRoot / "libplanted.so", linuxError);
+        std::filesystem::remove(linuxRoot / "release.kbmanifest", linuxError);
+        std::ostringstream withoutManifest;
+        Require(kb::game::VerifyPackagedRelease(anchor, linuxRoot, linuxRoot / "Game", securityRoot, withoutManifest) == nullptr,
+            "A Linux release without its manifest was allowed to start");
+        std::filesystem::remove_all(linuxRoot, linuxError);
+    }
     // The older patch is sealed by the same key and mounts -- and is not this release's.
     std::filesystem::copy_file(work / "Game.patch-0001.kbpack", release / "Game.patch-0001.kbpack",
         std::filesystem::copy_options::overwrite_existing);

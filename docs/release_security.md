@@ -62,7 +62,7 @@ key (`UntrustedSigner`), modified anywhere in its catalogue or seal (`SignatureI
 when it is read (`PayloadCorrupt`). The same holds for every chunk and patch pack of a pack set:
 the player passes its trust anchor to each pack it mounts.
 
-`--encrypt-pack` (Windows packages) additionally encrypts every block in place with
+`--encrypt-pack` (Windows and Linux packages) additionally encrypts every block in place with
 XChaCha20-Poly1305 under a fresh content key; the nonce is the seal's random salt followed by the
 block offset and the tag sits in the block's seal entry, so the layout and every offset are
 unchanged. The index stays readable. The content key has to ship inside the player to be usable,
@@ -73,12 +73,16 @@ wrapped under the new release's content key (see [content_streaming.md](content_
 
 ## Release manifest
 
-Once every file of a Windows release is final, packaging runs
+Once every file of a Windows or Linux release is final, packaging runs
 `kb_cli release sign --dir <stage> --product <id> --content-version <version> --release <n>` and
 then `kb_cli release verify <stage>`, which takes the release key from the trust anchor inside the
 staged player. `release.kbmanifest` lists every file with its size and SHA-512, records for each
 pack the digest its seal signs, and is signed with the release key. **Authenticode signing has to
-happen before this step**: it changes the executable's bytes.
+happen before this step**: it changes the executable's bytes. A Linux release is signed on the
+packaging host, which holds the key: the Linux build machine builds the player and fills its
+anchor slot, the host adds the packs and notices and signs the manifest, and the build machine
+then proves the first frame of the release exactly as it ships (`package_linux_guest.py
+--prove-archive`), with the manifest in place.
 
 The release number (`--release-number`, default: the packaging time in seconds) only grows. At
 startup a packaged player:
@@ -168,11 +172,15 @@ players of a loose project do not ask.
 - **Android**: the anchor is an APK asset, protected by the APK signature. Encryption is not
   offered (the Gradle build validates the pack on the host without the content key).
 - **Linux**: the trust anchor is the player's `.kb_trust_anchor` ELF section, so a Linux player
-  runs in packaged mode: it refuses a pack its release key did not sign and authenticates saves
-  with the per-game secret. An ELF file carries no code signature, so anyone who can write the
-  player can also replace its anchor, and Linux packages get no release manifest: the startup
-  check of the installed file set is Windows only. Distribute through a channel that signs the
-  whole download.
+  runs in packaged mode: it refuses a pack its release key did not sign, authenticates saves with
+  the per-game secret and, like a Windows player, verifies the signed release manifest at startup
+  -- its own image (found through `/proc/self/exe`), the pack set index, every pack, shared
+  libraries (`.so`) and anti-rollback. The player itself has no extension, so the startup check
+  hashes it by name but does not treat other extensionless files as executables;
+  `kb_cli release verify` still reports any file the manifest does not list. An ELF file carries
+  no code signature, so anyone who can write the player can also replace its anchor and with it
+  the key the manifest is checked against. Distribute through a channel that signs the whole
+  download.
 - **The browser**: a WebAssembly module carries no section packaging can write after the
   build, so a web player has no trust anchor and runs like a development player: a sealed pack
   is still checked for integrity against the key it names, but nothing stops a replaced pack
