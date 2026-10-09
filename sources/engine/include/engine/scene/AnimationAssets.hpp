@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -260,6 +261,9 @@ struct AnimatorIkTarget {
     Quat worldRotation{};
     float positionWeight = 1.0F;
     float rotationWeight = 1.0F;
+    // The target's world position in double precision, for targets far from the world origin
+    // (docs/large_worlds.md); when set, worldPosition is not used.
+    std::optional<kb::math::DVec3> preciseWorldPosition{};
 };
 
 struct AnimatorStateInfo {
