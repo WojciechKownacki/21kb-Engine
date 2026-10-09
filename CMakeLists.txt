@@ -370,6 +370,9 @@ set(TARGET_VIEWER OFF CACHE BOOL "Do not build Jolt viewer" FORCE)
 set(JPH_USE_DX12 OFF CACHE BOOL "Do not build Jolt DirectX compute support" FORCE)
 set(JPH_USE_VK OFF CACHE BOOL "Do not build Jolt Vulkan compute support" FORCE)
 set(JPH_USE_MTL OFF CACHE BOOL "Do not build Jolt Metal compute support" FORCE)
+# World positions are double precision (docs/large_worlds.md). Jolt publishes JPH_DOUBLE_PRECISION as a PUBLIC
+# definition of its target, so every target that links Jolt and includes its headers compiles the same RVec3.
+set(DOUBLE_PRECISION ON CACHE BOOL "Build Jolt with double-precision world positions" FORCE)
 add_subdirectory(third_party/jolt/Build third_party/jolt EXCLUDE_FROM_ALL)
 if(TARGET Jolt AND NOT WIN32)
     set_target_properties(Jolt PROPERTIES POSITION_INDEPENDENT_CODE ON)

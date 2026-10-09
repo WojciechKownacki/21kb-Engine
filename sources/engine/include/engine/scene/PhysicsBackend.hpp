@@ -46,6 +46,8 @@ struct PhysicsCastResult {
     float distance = 0.0F;
     Vec3 point{};
     Vec3 normal{};
+    // The hit point in double precision; `point` is it rounded to float.
+    kb::math::DVec3 worldPoint{};
 };
 
 struct PhysicsOverlapResult {
@@ -61,6 +63,8 @@ struct PhysicsClosestPointResult {
     bool found = false;
     Vec3 point{};
     float distance = 0.0F;
+    // The closest point in double precision; `point` is it rounded to float.
+    kb::math::DVec3 worldPoint{};
 };
 
 // A layer mask matching every layer (31 bits set, not 32 - the top bit is
@@ -139,6 +143,43 @@ public:
     // distance; ties are deterministic by entity id.
     virtual void CastShapeAll(const PhysicsShapeDesc& shape, Vec3 origin, Vec3 direction, float maxDistance, std::uint32_t layerMask, kb::library::ArrayNonAlloc<PhysicsCastResult>& results) const noexcept = 0;
     virtual void OverlapShapeAll(const PhysicsShapeDesc& shape, Vec3 center, std::uint32_t layerMask, kb::library::ArrayNonAlloc<PhysicsOverlapResult>& results) const noexcept = 0;
+
+    // Double-precision query origins for worlds that extend far from the origin (docs/large_worlds.md). Each
+    // behaves as its float counterpart above; results carry their points in double precision (`worldPoint`).
+    // The defaults round the origin to float and forward, for backends whose simulation is single precision.
+    [[nodiscard]] virtual PhysicsCastResult CastShapePrecise(const PhysicsShapeDesc& shape, const kb::math::DVec3& origin, Vec3 direction, float maxDistance, std::uint32_t layerMask) const noexcept {
+        PhysicsCastResult result = CastShape(shape, kb::math::ToVec3(origin), direction, maxDistance, layerMask);
+        result.worldPoint = kb::math::ToDVec3(result.point);
+        return result;
+    }
+    [[nodiscard]] virtual PhysicsOverlapResult OverlapShapePrecise(const PhysicsShapeDesc& shape, const kb::math::DVec3& center, std::uint32_t layerMask) const noexcept {
+        return OverlapShape(shape, kb::math::ToVec3(center), layerMask);
+    }
+    [[nodiscard]] virtual PhysicsClosestPointResult ClosestPointPrecise(SceneEntity entity, const kb::math::DVec3& point, std::uint32_t layerMask) const noexcept {
+        PhysicsClosestPointResult result = ClosestPoint(entity, kb::math::ToVec3(point), layerMask);
+        result.worldPoint = kb::math::ToDVec3(result.point);
+        return result;
+    }
+    virtual void RaycastAllPrecise(const kb::math::DVec3& origin, Vec3 direction, float maxDistance, std::uint32_t layerMask,
+        kb::library::ArrayNonAlloc<PhysicsCastResult>& results) const noexcept {
+        RaycastAll(kb::math::ToVec3(origin), direction, maxDistance, layerMask, results);
+        for (std::size_t index = 0U; index < results.Count(); ++index) {
+            PhysicsCastResult hit = *results.GetAt(index);
+            hit.worldPoint = kb::math::ToDVec3(hit.point);
+            [[maybe_unused]] const bool written = results.SetAt(index, hit);
+        }
+    }
+    virtual void CastShapeAllPrecise(const PhysicsShapeDesc& shape, const kb::math::DVec3& origin, Vec3 direction, float maxDistance, std::uint32_t layerMask, kb::library::ArrayNonAlloc<PhysicsCastResult>& results) const noexcept {
+        CastShapeAll(shape, kb::math::ToVec3(origin), direction, maxDistance, layerMask, results);
+        for (std::size_t index = 0U; index < results.Count(); ++index) {
+            PhysicsCastResult hit = *results.GetAt(index);
+            hit.worldPoint = kb::math::ToDVec3(hit.point);
+            [[maybe_unused]] const bool written = results.SetAt(index, hit);
+        }
+    }
+    virtual void OverlapShapeAllPrecise(const PhysicsShapeDesc& shape, const kb::math::DVec3& center, std::uint32_t layerMask, kb::library::ArrayNonAlloc<PhysicsOverlapResult>& results) const noexcept {
+        OverlapShapeAll(shape, kb::math::ToVec3(center), layerMask, results);
+    }
 
     // LIB-129: applies a named-layer interaction matrix to this backend's
     // real collision response (unlike ColliderComponent::layer's existing
@@ -248,6 +289,8 @@ struct PendingCollisionEvent {
     Vec3 normal{};
     bool isTrigger = false;
     PhysicsContactPhase phase = PhysicsContactPhase::Enter;
+    // The contact point in double precision; `point` is it rounded to float.
+    kb::math::DVec3 worldPoint{};
 };
 
 class PhysicsBackend final {
@@ -279,6 +322,15 @@ public:
     // registered, same convention as every other facade method above.
     static void CastShapeAll(Scene& scene, const PhysicsShapeDesc& shape, Vec3 origin, Vec3 direction, float maxDistance, std::uint32_t layerMask, kb::library::ArrayNonAlloc<PhysicsCastResult>& results) noexcept;
     static void OverlapShapeAll(Scene& scene, const PhysicsShapeDesc& shape, Vec3 center, std::uint32_t layerMask, kb::library::ArrayNonAlloc<PhysicsOverlapResult>& results) noexcept;
+
+    // Double-precision query origins (see IPhysicsBackend::RaycastAllPrecise and the others).
+    static void RaycastAllPrecise(Scene& scene, const kb::math::DVec3& origin, Vec3 direction, float maxDistance, std::uint32_t layerMask,
+        kb::library::ArrayNonAlloc<PhysicsCastResult>& results) noexcept;
+    [[nodiscard]] static PhysicsCastResult CastShapePrecise(Scene& scene, const PhysicsShapeDesc& shape, const kb::math::DVec3& origin, Vec3 direction, float maxDistance, std::uint32_t layerMask = kPhysicsAllLayers) noexcept;
+    [[nodiscard]] static PhysicsOverlapResult OverlapShapePrecise(Scene& scene, const PhysicsShapeDesc& shape, const kb::math::DVec3& center, std::uint32_t layerMask = kPhysicsAllLayers) noexcept;
+    [[nodiscard]] static PhysicsClosestPointResult ClosestPointPrecise(Scene& scene, SceneEntity entity, const kb::math::DVec3& point, std::uint32_t layerMask = kPhysicsAllLayers) noexcept;
+    static void CastShapeAllPrecise(Scene& scene, const PhysicsShapeDesc& shape, const kb::math::DVec3& origin, Vec3 direction, float maxDistance, std::uint32_t layerMask, kb::library::ArrayNonAlloc<PhysicsCastResult>& results) noexcept;
+    static void OverlapShapeAllPrecise(Scene& scene, const PhysicsShapeDesc& shape, const kb::math::DVec3& center, std::uint32_t layerMask, kb::library::ArrayNonAlloc<PhysicsOverlapResult>& results) noexcept;
 
     // LIB-127: QueueCollisionEvent is called by a physics plugin (e.g.
     // kb_physics_jolt_plugin's contact listener), never by script code.
@@ -345,5 +397,7 @@ public:
 // simulation, primitive colliders remain queryable from their authored poses.
 // Results are bounded, nearest first, with one hit per entity.
 void RaycastAllNonAlloc(Scene& scene, Vec3 origin, Vec3 direction, float maxDistance, std::uint32_t layerMask, kb::library::ArrayNonAlloc<PhysicsCastResult>& results);
+// RaycastAllNonAlloc from a double-precision origin; hits carry double-precision points (`worldPoint`).
+void RaycastAllNonAllocPrecise(Scene& scene, const kb::math::DVec3& origin, Vec3 direction, float maxDistance, std::uint32_t layerMask, kb::library::ArrayNonAlloc<PhysicsCastResult>& results);
 
 } // namespace kb::scene

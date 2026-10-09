@@ -128,6 +128,45 @@ void PhysicsBackend::OverlapShapeAll(Scene& scene, const PhysicsShapeDesc& shape
     }
 }
 
+void PhysicsBackend::RaycastAllPrecise(Scene& scene, const kb::math::DVec3& origin, Vec3 direction, float maxDistance, std::uint32_t layerMask,
+    kb::library::ArrayNonAlloc<PhysicsCastResult>& results) noexcept {
+    results.Clear();
+    if (auto* backend = FindBackend(scene)) backend->RaycastAllPrecise(origin, direction, maxDistance, layerMask, results);
+}
+
+PhysicsCastResult PhysicsBackend::CastShapePrecise(Scene& scene, const PhysicsShapeDesc& shape, const kb::math::DVec3& origin, Vec3 direction, float maxDistance, std::uint32_t layerMask) noexcept {
+    IPhysicsBackend* backend = FindBackend(scene);
+    return backend != nullptr ? backend->CastShapePrecise(shape, origin, direction, maxDistance, layerMask) : PhysicsCastResult{};
+}
+
+PhysicsOverlapResult PhysicsBackend::OverlapShapePrecise(Scene& scene, const PhysicsShapeDesc& shape, const kb::math::DVec3& center, std::uint32_t layerMask) noexcept {
+    IPhysicsBackend* backend = FindBackend(scene);
+    return backend != nullptr ? backend->OverlapShapePrecise(shape, center, layerMask) : PhysicsOverlapResult{};
+}
+
+PhysicsClosestPointResult PhysicsBackend::ClosestPointPrecise(Scene& scene, SceneEntity entity, const kb::math::DVec3& point, std::uint32_t layerMask) noexcept {
+    IPhysicsBackend* backend = FindBackend(scene);
+    return backend != nullptr ? backend->ClosestPointPrecise(entity, point, layerMask) : PhysicsClosestPointResult{};
+}
+
+void PhysicsBackend::CastShapeAllPrecise(Scene& scene, const PhysicsShapeDesc& shape, const kb::math::DVec3& origin, Vec3 direction, float maxDistance, std::uint32_t layerMask, kb::library::ArrayNonAlloc<PhysicsCastResult>& results) noexcept {
+    IPhysicsBackend* backend = FindBackend(scene);
+    if (backend != nullptr) {
+        backend->CastShapeAllPrecise(shape, origin, direction, maxDistance, layerMask, results);
+    } else {
+        results.Clear();
+    }
+}
+
+void PhysicsBackend::OverlapShapeAllPrecise(Scene& scene, const PhysicsShapeDesc& shape, const kb::math::DVec3& center, std::uint32_t layerMask, kb::library::ArrayNonAlloc<PhysicsOverlapResult>& results) noexcept {
+    IPhysicsBackend* backend = FindBackend(scene);
+    if (backend != nullptr) {
+        backend->OverlapShapeAllPrecise(shape, center, layerMask, results);
+    } else {
+        results.Clear();
+    }
+}
+
 void PhysicsBackend::QueueCollisionEvent(Scene& scene, PendingCollisionEvent event) {
     SceneAccess::State(scene).pendingCollisionEvents.push_back(std::move(event));
 }

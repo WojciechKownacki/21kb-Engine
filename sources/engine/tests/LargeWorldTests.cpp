@@ -1,8 +1,14 @@
 #include "TestSuites.hpp"
 #include "TestSupport.hpp"
 
+#include "engine/library/EngineLibraryCollections.hpp"
 #include "engine/math/DVec3.hpp"
+#include "engine/project/ProjectDescriptor.hpp"
+#include "engine/scene/ColliderComponent.hpp"
+#include "engine/scene/PhysicsBackend.hpp"
+#include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneDocument.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneEntities.hpp"
@@ -14,6 +20,7 @@
 #include "engine/scene/SceneTransforms.hpp"
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cmath>
 #include <cstdint>
@@ -376,6 +383,69 @@ void RunVersion41SceneMigrationTest() {
         "A migrated version 41 scene changed its translation when saved as a current file");
 }
 
+
+// Jolt runs in double precision: a box falling onto a floor at (1e7, 0, 1e7) lands where it was dropped, reports its
+// contact there, and rays find both with sub-millimetre hit points.
+void RunFarPhysicsTest() {
+    if (std::filesystem::path{ KB_PHYSICS_JOLT_PLUGIN_PATH }.empty()) {
+        return;
+    }
+    kb::project::ProjectDescriptor descriptor;
+    descriptor.disableEnginePluginsByDefault = true;
+    descriptor.plugins.push_back(kb::project::ProjectPluginReference{ .name = "Physics.Jolt", .binaryPath = KB_PHYSICS_JOLT_PLUGIN_PATH, .enabled = true });
+    kb::scene::Scene scene{ std::move(descriptor) };
+    kb::scene::PhysicsBackend::SetStepPipelining(scene, false);
+    kb::scene::PhysicsBackend::SetCollisionEventConsumer(scene, true);
+
+    const kb::scene::SceneObject floor = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Far Floor" });
+    scene.Transforms().SetLocalTranslation(floor.Entity(), DVec3{ kFar, -0.5, kFar });
+    scene.Components().Rigidbodies().Set(floor.Entity(), kb::scene::RigidbodyComponent{ .bodyType = kb::scene::RigidbodyBodyType::Static });
+    scene.Components().Colliders().Set(floor.Entity(), kb::scene::ColliderComponent{
+        .shape = kb::scene::ColliderShape::Box, .boxSize = kb::scene::Vec3{ 10.0F, 1.0F, 10.0F }, .layer = 0x1U });
+
+    const DVec3 drop{ kFar + 0.25, 4.0, kFar - 0.125 };
+    const kb::scene::SceneObject box = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Far Box" });
+    scene.Transforms().SetLocalTranslation(box.Entity(), drop);
+    scene.Components().Rigidbodies().Set(box.Entity(), kb::scene::RigidbodyComponent{ .bodyType = kb::scene::RigidbodyBodyType::Dynamic, .mass = 1.0F });
+    scene.Components().Colliders().Set(box.Entity(), kb::scene::ColliderComponent{
+        .shape = kb::scene::ColliderShape::Box, .boxSize = kb::scene::Vec3{ 1.0F, 1.0F, 1.0F }, .layer = 0x2U });
+
+    bool touched = false;
+    DVec3 contact{};
+    std::vector<kb::scene::PendingCollisionEvent> events;
+    for (int step = 0; step < 150; ++step) {
+        static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+        kb::scene::PhysicsBackend::DrainPendingCollisionEvents(scene, events);
+        for (const kb::scene::PendingCollisionEvent& event : events) {
+            if (!touched && event.target == box.Entity() && event.phase == kb::scene::PhysicsContactPhase::Enter) {
+                touched = true;
+                contact = event.worldPoint;
+            }
+        }
+    }
+    scene.Runtime().SynchronizeTransforms();
+    const DVec3 rest = scene.Transforms().WorldTranslation(box.Entity());
+    // Jolt keeps a resting box a couple of centimetres inside what it stands on (penetration slop).
+    Require(std::abs(rest.y - 0.5) <= 0.05, "A far box did not come to rest on the far floor");
+    Require(std::abs(rest.x - drop.x) <= 0.001 && std::abs(rest.z - drop.z) <= 0.001, "A far box drifted while falling straight down");
+    Require(touched && std::abs(contact.y) <= 0.05 && std::abs(contact.x - drop.x) <= 0.5 + 0.001 && std::abs(contact.z - drop.z) <= 0.5 + 0.001,
+        "The contact between the far box and the far floor was not reported where they touch");
+
+    std::array<kb::scene::PhysicsCastResult, 4U> storage{};
+    kb::library::ArrayNonAlloc<kb::scene::PhysicsCastResult> hits{ std::span<kb::scene::PhysicsCastResult>(storage) };
+    const DVec3 boxRayOrigin{ rest.x + 0.0003, 10.0, rest.z - 0.0002 };
+    kb::scene::RaycastAllNonAllocPrecise(scene, boxRayOrigin, kb::scene::Vec3{ 0.0F, -1.0F, 0.0F }, 20.0F, 0x7FFFFFFFU, hits);
+    Require(hits.Count() == 2U && hits.GetAt(0U)->entity == box.Entity() && hits.GetAt(1U)->entity == floor.Entity(),
+        "A ray at the far box did not hit the box and then the floor");
+    const DVec3 boxHit = hits.GetAt(0U)->worldPoint;
+    Require(std::abs(boxHit.x - boxRayOrigin.x) <= 1e-6 && std::abs(boxHit.z - boxRayOrigin.z) <= 1e-6 && std::abs(boxHit.y - (rest.y + 0.5)) <= 0.001,
+        "A ray hit on the far box lost precision");
+    const DVec3 floorRayOrigin{ kFar - 2.0004, 5.0, kFar + 3.0001 };
+    kb::scene::RaycastAllNonAllocPrecise(scene, floorRayOrigin, kb::scene::Vec3{ 0.0F, -1.0F, 0.0F }, 20.0F, 0x1U, hits);
+    Require(hits.Count() == 1U && std::abs(hits.GetAt(0U)->worldPoint.x - floorRayOrigin.x) <= 1e-6 &&
+            std::abs(hits.GetAt(0U)->worldPoint.z - floorRayOrigin.z) <= 1e-6 && std::abs(hits.GetAt(0U)->worldPoint.y) <= 1e-4,
+        "A ray hit on the far floor lost precision");
+}
 } // namespace
 
 namespace kb::tests {
@@ -389,6 +459,7 @@ void RunLargeWorldTests() {
     RunFarPrefabAndDuplicateTest();
     RunFarSceneDocumentRoundTripTest();
     RunVersion41SceneMigrationTest();
+    RunFarPhysicsTest();
 }
 
 } // namespace kb::tests

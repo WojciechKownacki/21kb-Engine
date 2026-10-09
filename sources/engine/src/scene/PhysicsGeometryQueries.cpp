@@ -128,7 +128,7 @@ using kb::math::Rotate;
 
 struct RaycastAllVisitorContext {
     Scene* scene = nullptr;
-    Vec3 origin{};
+    kb::math::DVec3 origin{};
     Vec3 direction{};
     float maxDistance = 0.0F;
     std::uint32_t layerMask = kPhysicsAllLayers;
@@ -179,11 +179,15 @@ void RaycastAllVisitor(SceneEntity entity, const TransformComponent& transform, 
     if (collider == nullptr || (collider->layer & context->layerMask) == 0U) {
         return;
     }
+    // The collider is tested relative to the ray origin, so the test keeps float precision far from the world origin.
+    TransformComponent relative = transform;
+    relative.worldPosition = kb::math::RelativeTo(context->scene->Transforms().WorldTranslation(entity, transform), context->origin);
     float distance = 0.0F;
     Vec3 normal{};
-    if (!IntersectRayCollider(context->origin, context->direction, context->maxDistance, *collider, transform, distance, normal)) {
+    if (!IntersectRayCollider(Vec3{}, context->direction, context->maxDistance, *collider, relative, distance, normal)) {
         return;
     }
+    const kb::math::DVec3 point = context->origin + context->direction * distance;
     // Maintain the closest Capacity() hits while visiting. Transform
     // iteration order is not a distance order, so merely ignoring PushBack
     // failures would retain whichever bodies happened to be visited first.
@@ -191,8 +195,9 @@ void RaycastAllVisitor(SceneEntity entity, const TransformComponent& transform, 
         .hit = true,
         .entity = entity,
         .distance = distance,
-        .point = context->origin + context->direction * distance,
+        .point = kb::math::ToVec3(point),
         .normal = normal,
+        .worldPoint = point,
     });
 }
 
@@ -256,6 +261,14 @@ bool IntersectRayCollider(
 void RaycastAllNonAlloc(Scene& scene, Vec3 origin, Vec3 direction, float maxDistance, std::uint32_t layerMask, kb::library::ArrayNonAlloc<PhysicsCastResult>& results) {
     if (PhysicsBackend::HasBackend(scene)) {
         PhysicsBackend::RaycastAll(scene, origin, direction, maxDistance, layerMask, results);
+        return;
+    }
+    RaycastAllNonAllocPrecise(scene, kb::math::ToDVec3(origin), direction, maxDistance, layerMask, results);
+}
+
+void RaycastAllNonAllocPrecise(Scene& scene, const kb::math::DVec3& origin, Vec3 direction, float maxDistance, std::uint32_t layerMask, kb::library::ArrayNonAlloc<PhysicsCastResult>& results) {
+    if (PhysicsBackend::HasBackend(scene)) {
+        PhysicsBackend::RaycastAllPrecise(scene, origin, direction, maxDistance, layerMask, results);
         return;
     }
     results.Clear();
