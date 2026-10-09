@@ -11,6 +11,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <optional>
 #include <utility>
 
 namespace kb::navigation {
@@ -350,6 +351,10 @@ bool NavMeshBuilder::BuildTile(const NavMeshBuildSettings& settings, std::uint32
     return BuildTileFromTriangles(settings, profile, coord, geometry, triangles, tile, error);
 }
 
+std::size_t NavMeshBuilder::DefaultBakeWorkerCount() noexcept {
+    return std::min<std::size_t>(8U, kb::ecs::WorkerPool::DefaultWorkerCount());
+}
+
 NavMeshBakeResult NavMeshBuilder::Bake(const NavMeshBuildSettings& settings, const NavGeometry& geometry, kb::ecs::WorkerPool* workers) {
     const auto start = std::chrono::steady_clock::now();
     NavMeshBakeResult result;
@@ -386,13 +391,19 @@ NavMeshBakeResult NavMeshBuilder::Bake(const NavMeshBuildSettings& settings, con
             failed.store(true);
         }
     };
-    if (workers != nullptr && workers->Running() && workers->WorkerCount() > 1U && jobs.size() > 1U) {
+    if (jobs.size() == 1U) {
+        build(0U);
+    } else if (jobs.size() > 1U) {
+        // Without a running pool from the caller the bake starts the engine's own for its duration.
+        std::optional<kb::ecs::WorkerPool> local;
+        if (workers == nullptr || !workers->Running()) {
+            local.emplace(kb::ecs::WorkerPoolConfig{ .workerCount = DefaultBakeWorkerCount() });
+            workers = &*local;
+        }
         // One tile per chunk: tiles differ widely in cost, so the pool balances them one by one.
         workers->ParallelForChunks(jobs.size(), 1U, [&build](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk& chunk) {
             for (std::size_t job = chunk.begin; job < chunk.begin + chunk.count; ++job) build(job);
         });
-    } else {
-        for (std::size_t job = 0U; job < jobs.size(); ++job) build(job);
     }
     for (std::size_t job = 0U; job < jobs.size(); ++job) {
         if (!errors[job].empty()) {

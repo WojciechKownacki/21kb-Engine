@@ -4,11 +4,9 @@
 #include "engine/assets/CollisionMeshAsset.hpp"
 #include "engine/assets/TerrainAsset.hpp"
 #include "engine/assets/TerrainAssetIO.hpp"
-#include "engine/ecs/WorkerPool.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/ScenePrefabNode.hpp"
 
-#include <algorithm>
 #include <array>
 #include <cmath>
 #include <string>
@@ -271,9 +269,7 @@ NavSceneBakeResult BakeSceneNavMesh(const std::filesystem::path& scenePath, cons
     }
     NavGeometry geometry;
     CollectNavGeometry(loaded.document.worldPrefab.Nodes(), settings, source, geometry, result.geometry);
-    // Tiles are built on the engine's workers (at most 8: each holds a tile's voxels while it runs).
-    kb::ecs::WorkerPool workers{ kb::ecs::WorkerPoolConfig{ .workerCount = std::min<std::size_t>(8U, kb::ecs::WorkerPool::DefaultWorkerCount()) } };
-    NavMeshBakeResult baked = NavMeshBuilder::Bake(settings, geometry, &workers);
+    NavMeshBakeResult baked = NavMeshBuilder::Bake(settings, geometry);
     if (!baked.succeeded) {
         result.error = std::move(baked.error);
         return result;
