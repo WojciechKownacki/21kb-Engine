@@ -7239,6 +7239,77 @@ void RunScriptPhysicsCollisionTriggerEventDispatchTest() {
 // the exact pose that was requested — a round-trip through the real
 // inverse math (kb::math::Inverse, ScriptTransformApi::SetWorldPose), not
 // just "it compiles".
+// Ten thousand kilometres out a float holds whole metres only; the precise Transform functions read and write
+// translations there to the micrometre, from Lua (whose numbers are doubles) and directly, while the float
+// functions keep working.
+void RunTransformApiPreciseTranslationTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Precise transform API test host did not initialize");
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene, .deltaSeconds = 0.016F };
+
+    // A child of a turned parent far out: its world position is back-solved in double precision.
+    const kb::scene::SceneObject parent = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Far Parent" });
+    scene.Transforms().SetLocalTranslation(parent.Entity(), kb::math::DVec3{ 1.0e7, 0.0, 1.0e7 });
+    kb::scene::TransformComponent parentTransform = scene.Transforms().Get(parent.Entity());
+    parentTransform.localRotation = kb::math::Quat{ 0.0F, 0.7071068F, 0.0F, 0.7071068F };
+    scene.Transforms().Set(parent.Entity(), parentTransform);
+    const kb::scene::SceneObject child = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Far Child" });
+    kb::tests::Require(scene.Hierarchy().SetParent(child.Entity(), parent.Entity()), "Precise transform API test could not parent its child");
+    const std::vector<kb::script::ScriptFunctionArgument> setChildWorld{
+        kb::script::ScriptFunctionArgument{ "entity", kb::script::ScriptValue{ child.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ "x", kb::script::ScriptValue{ 1.0e7 + 1.25 } },
+        kb::script::ScriptFunctionArgument{ "y", kb::script::ScriptValue{ 0.5 } },
+        kb::script::ScriptFunctionArgument{ "z", kb::script::ScriptValue{ 1.0e7 + 0.375 } },
+    };
+    kb::tests::Require(host.Functions().Call("Transform.SetPreciseWorldPosition", setChildWorld, context).Output("moved")->AsBool(),
+        "Transform.SetPreciseWorldPosition direct call failed");
+    const std::span<const kb::script::ScriptFunctionArgument> childOnly{ setChildWorld.data(), 1U };
+    const kb::script::ScriptFunctionCallResult childWorld = host.Functions().Call("Transform.GetPreciseWorldPosition", childOnly, context);
+    kb::tests::Require(childWorld.Output("found")->AsBool() && std::abs(childWorld.Output("x")->AsDouble() - (1.0e7 + 1.25)) <= 1.0e-6 &&
+            std::abs(childWorld.Output("y")->AsDouble() - 0.5) <= 1.0e-6 && std::abs(childWorld.Output("z")->AsDouble() - (1.0e7 + 0.375)) <= 1.0e-6,
+        "A child placed far out by Transform.SetPreciseWorldPosition is not where it was put");
+
+    const kb::assets::AssetId luaAsset{ 8811U };
+    const kb::scene::SceneObject caller = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Far Caller" });
+    scene.Components().Behaviours().Set(caller.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = luaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const kb::script::PucLuaLoadResult loaded = host.LuaRuntime().LoadScript(luaAsset, R"(
+function Tick(self, dt)
+    local entity = World.Spawn({ name = "LuaFar", x = 0.0, y = 0.0, z = 0.0 })
+    Transform.SetPrecisePosition(entity, 10000000.25, 1.5, 10000000.125)
+    Transform.TranslatePrecise(entity, 0.001, 0.0, -0.002)
+    local position = Transform.GetPrecisePosition(entity)
+    local world = Transform.GetPreciseWorldPosition(entity)
+    SetShared("far.entity", entity)
+    SetShared("far.dx", position.x - 10000000.0)
+    SetShared("far.dz", position.z - 10000000.0)
+    SetShared("far.worldDx", world.x - 10000000.0)
+    Transform.SetPreciseWorldPosition({ entity = entity, x = 10000000.5, y = 2.0, z = 9999999.75 })
+    local moved = Transform.GetPreciseWorldPosition(entity)
+    SetShared("far.movedDx", moved.x - 10000000.0)
+    SetShared("far.movedDz", moved.z - 10000000.0)
+    SetShared("far.floatX", Transform.GetPosition(entity).x)
+end
+)", "FarTransform.lua");
+    kb::tests::Require(loaded.succeeded, "Precise transform Lua script did not load");
+    const kb::script::ScriptRuntimeExecutionResult tick = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.016F);
+    kb::tests::Require(tick.Succeeded(), "Precise transform Lua script failed");
+    const auto shared = [&host](const char* key) { return static_cast<double>(host.SharedState().Get(key)->AsFloat()); };
+    kb::tests::Require(std::abs(shared("far.dx") - 0.251) <= 1.0e-6 && std::abs(shared("far.dz") - 0.123) <= 1.0e-6 &&
+            std::abs(shared("far.worldDx") - 0.251) <= 1.0e-6,
+        "Lua lost precision setting, moving or reading a far translation");
+    kb::tests::Require(std::abs(shared("far.movedDx") - 0.5) <= 1.0e-6 && std::abs(shared("far.movedDz") + 0.25) <= 1.0e-6,
+        "Lua Transform.SetPreciseWorldPosition did not put the entity where it asked");
+    const kb::scene::SceneEntity luaEntity{ static_cast<std::uint64_t>(host.SharedState().Get("far.entity")->AsInt()) };
+    kb::tests::Require(scene.Transforms().LocalTranslation(luaEntity) == kb::math::DVec3{ 10000000.5, 2.0, 9999999.75 },
+        "The far translation Lua set is not the scene's translation");
+    kb::tests::Require(shared("far.floatX") == 10000000.0, "Transform.GetPosition must keep returning the float view");
+}
+
 void RunTransformApiLocalAndWorldPoseTest() {
     kb::scene::Scene scene;
     kb::script::ScriptRuntimeHost host{ scene };
@@ -16455,6 +16526,7 @@ void RunScriptRuntimeTests() {
     RunScriptEventBusReachesVisualGraphCustomEventTest();
     RunVisualGraphFilteredEventRuntimeTest();
     RunTransformApiLocalAndWorldPoseTest();
+    RunTransformApiPreciseTranslationTest();
     RunTransformApiParentAndHierarchyTest();
     RunTransformApiChildIterationTest();
     RunTransformApiRotateLookAtAndPointConversionTest();

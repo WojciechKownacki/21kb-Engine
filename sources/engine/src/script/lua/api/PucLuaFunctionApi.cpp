@@ -1820,6 +1820,88 @@ int LuaTransformTranslate(lua_State* state) {
     return 1;
 }
 
+// The precise Transform functions read Lua numbers as doubles (ArgumentsFromTable would narrow them to float).
+[[nodiscard]] double LuaNumberField(lua_State* state, int table, const char* name, bool& present) {
+    lua_getfield(state, table, name);
+    present = lua_isnumber(state, -1) != 0;
+    const double value = present ? static_cast<double>(lua_tonumber(state, -1)) : 0.0;
+    lua_pop(state, 1);
+    return value;
+}
+
+[[nodiscard]] std::vector<ScriptFunctionArgument> PreciseEntityXyzArguments(lua_State* state) {
+    std::vector<ScriptFunctionArgument> arguments;
+    if (lua_istable(state, 1) != 0) {
+        lua_getfield(state, 1, "entity");
+        arguments.push_back(Arg("entity", ScriptValue{ static_cast<std::uint64_t>(luaL_checkinteger(state, -1)), ScriptValueType::Entity }));
+        lua_pop(state, 1);
+        for (const char* axis : { "x", "y", "z" }) {
+            bool present = false;
+            const double value = LuaNumberField(state, 1, axis, present);
+            if (present) arguments.push_back(Arg(axis, ScriptValue{ value }));
+        }
+        return arguments;
+    }
+    arguments.push_back(Arg("entity", ScriptValue{ static_cast<std::uint64_t>(luaL_checkinteger(state, 1)), ScriptValueType::Entity }));
+    arguments.push_back(Arg("x", ScriptValue{ static_cast<double>(luaL_checknumber(state, 2)) }));
+    arguments.push_back(Arg("y", ScriptValue{ static_cast<double>(luaL_checknumber(state, 3)) }));
+    arguments.push_back(Arg("z", ScriptValue{ static_cast<double>(luaL_checknumber(state, 4)) }));
+    return arguments;
+}
+
+int LuaPrecisePositionQuery(lua_State* state, const char* function) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+    const auto entity = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const std::vector<ScriptFunctionArgument> arguments{ Arg("entity", ScriptValue{ entity, ScriptValueType::Entity }) };
+    const ScriptFunctionCallResult result = context->CallFunction(function, arguments);
+    if (!result.Succeeded() || !result.Output("found").value_or(ScriptValue{ false }).AsBool()) {
+        lua_pushnil(state);
+        return 1;
+    }
+    lua_createtable(state, 0, 3);
+    for (const char* axis : { "x", "y", "z" }) {
+        lua_pushnumber(state, static_cast<lua_Number>(result.Output(axis).value_or(ScriptValue{ 0.0 }).AsDouble()));
+        lua_setfield(state, -2, axis);
+    }
+    return 1;
+}
+
+int LuaPrecisePositionCommand(lua_State* state, const char* function) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const ScriptFunctionCallResult result = context->CallFunction(function, PreciseEntityXyzArguments(state));
+    lua_pushboolean(state, result.Output("moved").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaTransformGetPrecisePosition(lua_State* state) {
+    return LuaPrecisePositionQuery(state, "Transform.GetPrecisePosition");
+}
+
+int LuaTransformSetPrecisePosition(lua_State* state) {
+    return LuaPrecisePositionCommand(state, "Transform.SetPrecisePosition");
+}
+
+int LuaTransformTranslatePrecise(lua_State* state) {
+    return LuaPrecisePositionCommand(state, "Transform.TranslatePrecise");
+}
+
+int LuaTransformGetPreciseWorldPosition(lua_State* state) {
+    return LuaPrecisePositionQuery(state, "Transform.GetPreciseWorldPosition");
+}
+
+int LuaTransformSetPreciseWorldPosition(lua_State* state) {
+    return LuaPrecisePositionCommand(state, "Transform.SetPreciseWorldPosition");
+}
+
 int LuaTimeDelta(lua_State* state) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
     if (context == nullptr) {
@@ -3138,7 +3220,7 @@ void SetClosure(lua_State* state, const char* name, lua_CFunction function, Scri
 // marshalling.  Their position follows ScriptApiCatalog::LuaBindingDefinitions
 // excluding Task and global bindings; table and Lua field names deliberately
 // live only in that catalog.
-constexpr std::array<lua_CFunction, 180> kCatalogBindingAdapters{ {
+constexpr std::array<lua_CFunction, 185> kCatalogBindingAdapters{ {
     &LuaAudioPlay,
     &LuaAudioSetMixer,
     &LuaAudioActiveMixer,
@@ -3244,6 +3326,11 @@ constexpr std::array<lua_CFunction, 180> kCatalogBindingAdapters{ {
     &LuaTransformGetPosition,
     &LuaTransformSetPosition,
     &LuaTransformTranslate,
+    &LuaTransformGetPrecisePosition,
+    &LuaTransformSetPrecisePosition,
+    &LuaTransformTranslatePrecise,
+    &LuaTransformGetPreciseWorldPosition,
+    &LuaTransformSetPreciseWorldPosition,
     &LuaPhysicsRaycast,
     &LuaPhysicsAddForce,
     &LuaPhysicsAddImpulse,
