@@ -1618,6 +1618,7 @@ target_link_libraries(kb_engine
         kb_lua
         kb_monocypher
         kb_ufbx
+        kb_zstd
 )
 
 if(KB_ENGINE_ENABLE_NATIVE_AVX2)

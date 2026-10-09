@@ -470,6 +470,52 @@ if(NOT TARGET kb_monocypher)
     endif()
 endif()
 
+# Per-block compression of .kbpack containers. Only the single-threaded compressor and the
+# decompressor of the official release tarball are built; the legacy formats, the dictionary
+# builder and the hand-written x86-64 assembly decoder are left out, so the library compiles
+# the same way on every compiler and platform the engine targets.
+FetchContent_Declare(
+    kb_zstd
+    URL https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz
+    URL_HASH SHA256=eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3
+)
+FetchContent_MakeAvailable(kb_zstd)
+if(NOT TARGET kb_zstd)
+    add_library(kb_zstd STATIC
+        ${kb_zstd_SOURCE_DIR}/lib/common/debug.c
+        ${kb_zstd_SOURCE_DIR}/lib/common/entropy_common.c
+        ${kb_zstd_SOURCE_DIR}/lib/common/error_private.c
+        ${kb_zstd_SOURCE_DIR}/lib/common/fse_decompress.c
+        ${kb_zstd_SOURCE_DIR}/lib/common/pool.c
+        ${kb_zstd_SOURCE_DIR}/lib/common/threading.c
+        ${kb_zstd_SOURCE_DIR}/lib/common/xxhash.c
+        ${kb_zstd_SOURCE_DIR}/lib/common/zstd_common.c
+        ${kb_zstd_SOURCE_DIR}/lib/compress/fse_compress.c
+        ${kb_zstd_SOURCE_DIR}/lib/compress/hist.c
+        ${kb_zstd_SOURCE_DIR}/lib/compress/huf_compress.c
+        ${kb_zstd_SOURCE_DIR}/lib/compress/zstd_compress.c
+        ${kb_zstd_SOURCE_DIR}/lib/compress/zstd_compress_literals.c
+        ${kb_zstd_SOURCE_DIR}/lib/compress/zstd_compress_sequences.c
+        ${kb_zstd_SOURCE_DIR}/lib/compress/zstd_compress_superblock.c
+        ${kb_zstd_SOURCE_DIR}/lib/compress/zstd_double_fast.c
+        ${kb_zstd_SOURCE_DIR}/lib/compress/zstd_fast.c
+        ${kb_zstd_SOURCE_DIR}/lib/compress/zstd_lazy.c
+        ${kb_zstd_SOURCE_DIR}/lib/compress/zstd_ldm.c
+        ${kb_zstd_SOURCE_DIR}/lib/compress/zstd_opt.c
+        ${kb_zstd_SOURCE_DIR}/lib/compress/zstd_preSplit.c
+        ${kb_zstd_SOURCE_DIR}/lib/decompress/huf_decompress.c
+        ${kb_zstd_SOURCE_DIR}/lib/decompress/zstd_ddict.c
+        ${kb_zstd_SOURCE_DIR}/lib/decompress/zstd_decompress.c
+        ${kb_zstd_SOURCE_DIR}/lib/decompress/zstd_decompress_block.c
+    )
+    target_include_directories(kb_zstd PUBLIC ${kb_zstd_SOURCE_DIR}/lib)
+    target_compile_definitions(kb_zstd PRIVATE ZSTD_DISABLE_ASM=1 ZSTD_LEGACY_SUPPORT=0)
+    if(NOT WIN32)
+        set_target_properties(kb_zstd PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    endif()
+    kb_apply_fuzz_instrumentation(kb_zstd)
+endif()
+
 add_subdirectory(sources/engine engine)
 add_subdirectory(sources/tools tools)
 add_subdirectory(sources/plugins/physics_jolt physics_jolt)
