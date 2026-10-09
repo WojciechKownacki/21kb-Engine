@@ -121,12 +121,18 @@ void AppendWireCapsule(std::vector<PhysicsDebugLineDesc>& lines, Vec3 center, fl
     }
 }
 
-using CollectContext = std::pair<const Scene*, std::vector<PhysicsDebugLineDesc>*>;
+struct CollectContext {
+    const Scene* scene = nullptr;
+    std::vector<PhysicsDebugLineDesc>* lines = nullptr;
+    // Lines are relative to this world position.
+    kb::math::DVec3 origin{};
+};
 
 void CollectShapesVisitor(SceneEntity entity, const TransformComponent& transform, void* rawContext) {
     auto* context = static_cast<CollectContext*>(rawContext);
-    const Scene& scene = *context->first;
-    std::vector<PhysicsDebugLineDesc>& output = *context->second;
+    const Scene& scene = *context->scene;
+    std::vector<PhysicsDebugLineDesc>& output = *context->lines;
+    const Vec3 position = kb::math::RelativeTo(scene.Transforms().WorldTranslation(entity, transform), context->origin);
 
     const float scaleX = NonZeroAbs(transform.worldScale.x);
     const float scaleY = NonZeroAbs(transform.worldScale.y);
@@ -134,7 +140,7 @@ void CollectShapesVisitor(SceneEntity entity, const TransformComponent& transfor
 
     if (const ColliderComponent* collider = scene.Components().Colliders().TryGet(entity)) {
         const Vec3 color = collider->trigger ? kColliderTriggerColor : kColliderSolidColor;
-        const Vec3 center = transform.worldPosition + Rotate(transform.worldRotation, Vec3{
+        const Vec3 center = position + Rotate(transform.worldRotation, Vec3{
             collider->center.x * transform.worldScale.x,
             collider->center.y * transform.worldScale.y,
             collider->center.z * transform.worldScale.z,
@@ -179,18 +185,20 @@ void CollectShapesVisitor(SceneEntity entity, const TransformComponent& transfor
     }
 
     if (const CharacterControllerComponent* character = scene.Components().CharacterControllers().TryGet(entity)) {
-        const Vec3 center = transform.worldPosition + Rotate(transform.worldRotation, character->center);
+        const Vec3 center = position + Rotate(transform.worldRotation, character->center);
         const float radius = character->radius * std::max(scaleX, scaleZ);
         const float height = character->height * scaleY;
         AppendWireCapsule(output, center, radius, std::max(0.0F, (height * 0.5F) - radius), transform.worldRotation, kCharacterColor, kShapeAlpha);
     }
 
     if (const JointComponent* joint = scene.Components().Joints().TryGet(entity)) {
-        const Vec3 ownerAnchor = transform.worldPosition + Rotate(transform.worldRotation, joint->anchor);
-        Vec3 connectedAnchor = joint->connectedAnchor; // World position already when connectedEntity is invalid (LIB-130).
+        const Vec3 ownerAnchor = position + Rotate(transform.worldRotation, joint->anchor);
+        // World position already when connectedEntity is invalid (LIB-130).
+        Vec3 connectedAnchor = kb::math::RelativeTo(kb::math::ToDVec3(joint->connectedAnchor), context->origin);
         if (joint->connectedEntity.IsValid()) {
             if (const TransformComponent* connectedTransform = scene.Transforms().TryGet(joint->connectedEntity)) {
-                connectedAnchor = connectedTransform->worldPosition + Rotate(connectedTransform->worldRotation, joint->connectedAnchor);
+                connectedAnchor = kb::math::RelativeTo(scene.Transforms().WorldTranslation(joint->connectedEntity, *connectedTransform), context->origin) +
+                    Rotate(connectedTransform->worldRotation, joint->connectedAnchor);
             }
         }
         AppendLine(output, ownerAnchor, connectedAnchor, kJointColor, kJointAlpha);
@@ -219,16 +227,22 @@ PhysicsDebugQueryTrace PhysicsDebugDraw::QueryTrace(const Scene& scene) noexcept
 }
 
 std::vector<PhysicsDebugLineDesc> PhysicsDebugDraw::CollectLines(const Scene& scene) {
+    return CollectLines(scene, kb::math::DVec3{});
+}
+
+std::vector<PhysicsDebugLineDesc> PhysicsDebugDraw::CollectLines(const Scene& scene, const kb::math::DVec3& origin) {
     std::vector<PhysicsDebugLineDesc> lines;
-    CollectContext context{ &scene, &lines };
+    CollectContext context{ .scene = &scene, .lines = &lines, .origin = origin };
     scene.Transforms().ForEach(&CollectShapesVisitor, &context);
 
     const PhysicsDebugQueryTrace trace = QueryTrace(scene);
     if (trace.valid) {
         const Vec3 color = trace.hit ? kQueryHitColor : kQueryMissColor;
-        AppendLine(lines, trace.origin, trace.endpoint, color, 1.0F);
+        const Vec3 traceOrigin = kb::math::RelativeTo(kb::math::ToDVec3(trace.origin), origin);
+        const Vec3 traceEndpoint = kb::math::RelativeTo(kb::math::ToDVec3(trace.endpoint), origin);
+        AppendLine(lines, traceOrigin, traceEndpoint, color, 1.0F);
         if (trace.hit) {
-            AppendLine(lines, trace.endpoint, trace.endpoint + trace.normal * 0.3F, kQueryHitColor, 1.0F);
+            AppendLine(lines, traceEndpoint, traceEndpoint + trace.normal * 0.3F, kQueryHitColor, 1.0F);
         }
     }
     return lines;
